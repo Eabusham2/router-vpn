@@ -13,6 +13,9 @@ RVDNS_EXPORT uint32_t rvdns_abi(void);
 RVDNS_EXPORT struct rvdns *rvdns_create(uint16_t loopback_tcp_port);
 RVDNS_EXPORT int rvdns_anchor(struct rvdns *, const char *, uint32_t);
 RVDNS_EXPORT int rvdns_insecure(struct rvdns *, const char *, uint32_t);
+/* IN A/AAAA answers or an exact-name CNAME query used solely for alias RR proof.
+ * A CNAME proof may authenticate a synthesized CNAME through its DNAME RRset;
+ * it never authorizes adoption of the target's addresses or trust policy. */
 RVDNS_EXPORT int rvdns_start(struct rvdns *, const char *, uint32_t, uint16_t);
 RVDNS_EXPORT int rvdns_fd(struct rvdns *);
 RVDNS_EXPORT int rvdns_process(struct rvdns *);

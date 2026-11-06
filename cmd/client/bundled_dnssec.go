@@ -15,8 +15,8 @@ import (
 
 const bundledDNSSECLibrary = "libroutervpn_dnssec.so"
 const bundledDNSSECReceiptName = "DNSSEC-VALIDATOR.json"
-const bundledDNSSECShimSHA = "127065a183608a719c2644985fec7448bc2e8b18432b99474431e419e48a4f3b"
-const bundledDNSSECHeaderSHA = "42e88fcb0881444e4bae3d197636538c1c5472ad54c677051a2b3d98c1c32e3d"
+const bundledDNSSECShimSHA = "e23fa88ed8b52922a71dbfd0018d42e93b9f76420a21c6e6835dfd7652c1fc6e"
+const bundledDNSSECHeaderSHA = "7182ea1e70b2b710cb6573d1d31ae4d19dbf8741a93bd952b9a293c1f5c7e930"
 const bundledDNSSECBuilderSHA = "b6dbb564dec73d1e242a435831bc5e453dd2e2722dd96303765089f2ec8aa872"
 const bundledDNSSECLockSHA = "e7a2ef2ccf5a71970e7118daf2fb6433149acfc7e4c2ed74f775fb235392ead9"
 

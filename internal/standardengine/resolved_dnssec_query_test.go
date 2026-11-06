@@ -94,3 +94,24 @@ func FuzzResolvedDNSSECQuestion(f *testing.F) {
 		_, _ = ResolvedDNSSECQuestionFromWire("vpn.signed.example.", 1, wire)
 	})
 }
+
+func TestResolvedDNSSECAliasQueryAuthority(t *testing.T) {
+	for _, kind := range []uint16{1, 28, 5, 39, 43, 48, 255} {
+		for _, name := range []string{"alias.signed.example.", "signed.example.", "example.", ".", "target.signed.example.", "outside.example.net."} {
+			wire := resolvedDNSSECWire(name, kind, true)
+			row, err := ResolvedDNSSECAliasQuestionFromWire("alias.signed.example", wire)
+			ancestor := name == "alias.signed.example." || name == "signed.example." || name == "example." || name == "."
+			want := kind == 5 && name == "alias.signed.example." || (kind == 43 || kind == 48) && ancestor
+			if (err == nil) != want || want && (row.Name != name || row.Type != kind) {
+				t.Fatal("alias proof changed original query authority", name, kind, row, err)
+			}
+			if kind == 5 {
+				for _, original := range []uint16{1, 28, 5} {
+					if _, err := ResolvedDNSSECQuestionFromWire("alias.signed.example", original, wire); err == nil {
+						t.Fatal("ordinary address API acquired alias proof")
+					}
+				}
+			}
+		}
+	}
+}

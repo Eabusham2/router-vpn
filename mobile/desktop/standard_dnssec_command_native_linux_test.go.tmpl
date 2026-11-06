@@ -88,7 +88,7 @@ func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) {
 	if json.Unmarshal(line, &info) != nil || info.Port < 1 || info.Anchor == "" {
 		t.Fatal("actual signed authority omitted endpoint/anchor")
 	}
-	for _, scenario := range []string{"secure", "bogus", "proven-unsigned", "captured-nta", "missing-signature", "foreign-terminal-receipt", "closed-terminal-channel"} {
+	for _, scenario := range []string{"secure", "bogus", "proven-unsigned", "captured-nta", "missing-signature", "cname-proof", "dname-proof", "cross-name-proof", "tampered-cname", "tampered-dname", "foreign-terminal-receipt", "closed-terminal-channel"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -103,6 +103,10 @@ func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) {
 				name = "unsigned.signed.test."
 			}
 			capture := standardengine.DNSSECCapture{Schema: 1, Session: strings.Repeat("a", 32), DeadlineNS: time.Now().Add(8 * time.Second).UnixNano(), PlanSHA256: strings.Repeat("b", 64), Name: name, Type: 1, Anchors: []string{info.Anchor}}
+			aliasName := map[string]string{"cname-proof": "alias.signed.test.", "dname-proof": "host.branch.signed.test.", "cross-name-proof": "crossalias.signed.test.", "tampered-cname": "tampered-alias.signed.test.", "tampered-dname": "host.badbranch.signed.test."}[scenario]
+			if aliasName != "" {
+				capture.Name, capture.Type = aliasName, 5
+			}
 			if scenario == "captured-nta" {
 				capture.Insecure = []string{"signed.test."}
 				// Match the shipping plan: an original NTA shadows positive exports
@@ -237,7 +241,7 @@ func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) {
 						t.Fatal("original terminal receipt/exit", written, sendErr, waitErr, output.String())
 					}
 					want := uint32(1)
-					if scenario == "bogus" || scenario == "missing-signature" {
+					if scenario == "bogus" || scenario == "missing-signature" || scenario == "tampered-cname" || scenario == "tampered-dname" {
 						want = 3
 					}
 					if scenario == "proven-unsigned" || scenario == "captured-nta" {
@@ -252,7 +256,7 @@ func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) {
 					t.Fatal("foreign child stream kind")
 				}
 				queried++
-				if _, err = standardengine.ResolvedDNSSECQuestionFromWire(name, 1, message.Packet); err != nil {
+				if _, err = capture.Question(message.Packet); err != nil {
 					t.Fatal(err)
 				}
 				connection, err := (&net.Dialer{}).DialContext(ctx, "tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(info.Port)))

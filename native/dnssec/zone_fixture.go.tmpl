@@ -33,6 +33,16 @@ func main() {
    m.Ns=append(sign([]dns.RR{rr("signed.test. 60 IN SOA ns.signed.test. hostmaster.signed.test. 1 60 60 60 60")},false),sign([]dns.RR{rr("child.signed.test. 60 IN NSEC expired.signed.test. NS RRSIG NSEC")},false)...)
   } else if name=="host.child.signed.test." && question.Qtype==dns.TypeA {
    m.Answer=[]dns.RR{rr(name+" 60 IN A 192.0.2.11")}
+  } else if (name=="alias.signed.test." || name=="badalias.signed.test." || name=="crossalias.signed.test." || name=="tampered-alias.signed.test.") && question.Qtype==dns.TypeCNAME {
+   target:="good.signed.test.";if name=="badalias.signed.test." {target="bogus.signed.test."};if name=="crossalias.signed.test." {target="outside.example.net."}
+   record:=rr(name+" 60 IN CNAME "+target);signed:=sign([]dns.RR{record},false)
+   if name=="tampered-alias.signed.test." {record.(*dns.CNAME).Target="bogus.signed.test."}
+   m.Answer=signed
+  } else if (name=="host.branch.signed.test." || name=="host.badbranch.signed.test.") && question.Qtype==dns.TypeCNAME {
+   owner:="branch.signed.test.";if name=="host.badbranch.signed.test." {owner="badbranch.signed.test."}
+   record:=rr(owner+" 60 IN DNAME outside.example.net.");signed:=sign([]dns.RR{record},false)
+   if name=="host.badbranch.signed.test." {record.(*dns.DNAME).Target="changed.example.net."}
+   m.Answer=append(signed,rr(name+" 60 IN CNAME host."+record.(*dns.DNAME).Target))
   } else if name=="alias.signed.test." && question.Qtype==dns.TypeA {
    m.Answer=append(sign([]dns.RR{rr(name+" 60 IN CNAME good.signed.test.")},false),sign([]dns.RR{rr("good.signed.test. 60 IN A 192.0.2.9")},false)...)
   } else if name=="badalias.signed.test." && question.Qtype==dns.TypeA {

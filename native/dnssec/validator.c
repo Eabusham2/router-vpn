@@ -83,7 +83,7 @@ static void done(void *arg,int error,struct ub_result *r) {
     ub_resolve_free(r);
 }
 int rvdns_start(struct rvdns *v,const char *s,uint32_t n,uint16_t type) {
-    if(!v||v->started||!name_ok(s,n)||(type!=1&&type!=28)) return -1;
+    if(!v||v->started||!name_ok(s,n)||(type!=1&&type!=28&&type!=5)) return -1;
     char name[255]; memcpy(name,s,n); name[n]=0; v->started=1;
     int err=ub_resolve_async(v->ctx,name,type,1,v,done,&v->id);
     if(err) { v->result[1]=RVDNS_ERROR; v->result[7]=(uint32_t)err; return -1; }

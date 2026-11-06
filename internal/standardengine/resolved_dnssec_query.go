@@ -11,9 +11,23 @@ import (
 // socket authority. A CNAME/DNAME target needs its own captured original plan;
 // neither a sibling name nor an arbitrary type inherits the first name's grant.
 func ResolvedDNSSECQuestionFromWire(originalName string, originalType uint16, wire []byte) (ResolvedDNSSECQuestion, error) {
+	if originalType != 1 && originalType != 28 {
+		return ResolvedDNSSECQuestion{}, errors.New("address validation requires captured A or AAAA type")
+	}
+	return resolvedDNSSECQuestionFromWire(originalName, originalType, wire)
+}
+
+// ResolvedDNSSECAliasQuestionFromWire permits only an exact-name CNAME proof
+// and its DS/DNSKEY ancestors. A and AAAA queries, including the original name,
+// remain forbidden. The validated alias target needs a separate captured plan.
+func ResolvedDNSSECAliasQuestionFromWire(originalName string, wire []byte) (ResolvedDNSSECQuestion, error) {
+	return resolvedDNSSECQuestionFromWire(originalName, 5, wire)
+}
+
+func resolvedDNSSECQuestionFromWire(originalName string, originalType uint16, wire []byte) (ResolvedDNSSECQuestion, error) {
 	bad := errors.New("DNSSEC query escaped its captured name, type or bounded wire shape")
 	var result ResolvedDNSSECQuestion
-	if !ResolvedName(originalName, false) || originalType != 1 && originalType != 28 || len(wire) < 17 || len(wire) > 12+255+4+11 {
+	if !ResolvedName(originalName, false) || originalType != 1 && originalType != 28 && originalType != 5 || len(wire) < 17 || len(wire) > 12+255+4+11 {
 		return result, bad
 	}
 	if wire[2] != 1 || wire[3]&^byte(0x30) != 0 || binary.BigEndian.Uint16(wire[4:6]) != 1 || binary.BigEndian.Uint16(wire[6:8]) != 0 || binary.BigEndian.Uint16(wire[8:10]) != 0 || binary.BigEndian.Uint16(wire[10:12]) > 1 {
@@ -64,7 +78,7 @@ func ResolvedDNSSECQuestionFromWire(originalName string, originalType uint16, wi
 	}
 	originalName = strings.ToLower(strings.TrimSuffix(originalName, ".")) + "."
 	switch result.Type {
-	case 1, 28:
+	case 1, 28, 5:
 		if result.Type != originalType || result.Name != originalName {
 			return ResolvedDNSSECQuestion{}, bad
 		}

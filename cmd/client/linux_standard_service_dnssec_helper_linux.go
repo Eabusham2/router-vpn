@@ -402,6 +402,9 @@ func (c *linuxDNSSECChild) Validate(ctx context.Context, exchange func(context.C
 		if err = common.ValidateDNSForwardQuery(message.Packet); err != nil {
 			return verdict, err
 		}
+		if _, err = c.capture.Question(message.Packet); err != nil {
+			return verdict, err
+		}
 		total += len(message.Packet)
 		if total > standardengine.MaxDNSSECExchangeBytes {
 			return verdict, errors.New("validator original broker byte budget exhausted")

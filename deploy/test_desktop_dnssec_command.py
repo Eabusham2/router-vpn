@@ -15,7 +15,7 @@ spec=importlib.util.spec_from_file_location('dnssec_namespace_gate', ROOT/'deplo
 G=importlib.util.module_from_spec(spec);spec.loader.exec_module(G)
 TEMPLATES=(*G.TEMPLATES,'standard_dnssec_command_linux.go.tmpl','standard_dnssec_command_native_linux_test.go.tmpl')
 PARENT='TestRouterVPNDNSSECAuthenticatedCommand'
-CASES=(PARENT,*(PARENT+'/'+case for case in ('secure','bogus','proven-unsigned','captured-nta','missing-signature','foreign-terminal-receipt','closed-terminal-channel')))
+CASES=(PARENT,*(PARENT+'/'+case for case in ('secure','bogus','proven-unsigned','captured-nta','missing-signature','cname-proof','dname-proof','cross-name-proof','tampered-cname','tampered-dname','foreign-terminal-receipt','closed-terminal-channel')))
 
 def execute(source,bundle,target,go='go'):
     host='linux/'+{'x86_64':'amd64','aarch64':'arm64','arm64':'arm64'}.get(platform.machine(),'')

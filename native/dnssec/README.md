@@ -1,10 +1,10 @@
 # Pinned DNSSEC validator prerequisite
 
-This directory supplies a private Linux C ABI, not shipping DNSSEC policy or a
-network authority. It is not yet loaded by the native runtime. The authenticated
-Go child, original-daemon trust capture, namespace isolation, loopback broker,
-parent bootstrap grants and exact source/anchor lifetime checks must be composed
-and tested before enabling it.
+This directory supplies the private Linux C ABI loaded by the authenticated
+validator child. The original-daemon trust capture, namespace isolation,
+loopback broker, protected parent queries and exact source/anchor lifetime
+checks are separate owners. The library grants no network authority or resolver
+policy by itself. Native installed acceptance remains a separate required gate.
 
 The build uses libunbound 1.26.2 and the repository's exact pinned OpenSSL commit.
 Both static archives are linked into a private shared object. Only the ten
@@ -33,8 +33,12 @@ Network isolation remains the authenticated owner's responsibility.
 Before `start`, the caller may supply up to 32 explicit anchors (4096 bytes each,
 32768 total) and 32 explicit insecure domains. Inputs are copied synchronously;
 no Go-owned pointer survives a call. Domain names must be lowercase absolute
-ASCII DNS names. Only IN A and AAAA requests are accepted. One query is permitted
-per context. Once started, the trust inputs cannot change.
+ASCII DNS names. IN A and AAAA requests validate address answers. An exact-name
+IN CNAME request validates only the original alias RRset; this also authenticates
+a synthesized CNAME through its signed DNAME. It does not follow or authorize the
+target's address lookup. The parent must capture the target's own route and
+trust inputs before accepting its addresses. Other types remain rejected. One
+query is permitted per context. Once started, the trust inputs cannot change.
 
 `fd` supplies the library result notification descriptor. `process` consumes a
 ready notification and invokes only an internal C callback. No callback enters
@@ -59,9 +63,10 @@ handles are destroyed.
 Explicit libunbound anchors and `domain-insecure` inputs are not a claim of
 systemd-resolved policy equivalence. In particular a positive trust anchor can
 override an insecure domain in libunbound, whereas captured systemd global and
-per-link negative anchors use different precedence. The parent adapter must
-resolve that difference and capture newly needed CNAME/island trust before
-creating a new immutable context. This prerequisite does not enable that adapter.
+per-link negative anchors use different precedence. The parent adapter
+resolves that difference for direct address answers. Alias RR proof and target
+recapture must be composed separately; supporting CNAME queries in this library
+does not establish that caller integration or complete allow-downgrade parity.
 
 ## Build and offline tests
 

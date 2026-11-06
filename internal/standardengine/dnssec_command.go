@@ -26,7 +26,7 @@ type DNSSECCapture struct {
 
 func (c DNSSECCapture) Canonical() ([]byte, error) {
 	bad := errors.New("DNSSEC capture escaped original bounded immutable inputs")
-	if c.Schema != 1 || !resolvedDigest(c.Session, 16) || c.DeadlineNS <= 0 || !resolvedDigest(c.PlanSHA256, 32) || !ResolvedName(c.Name, false) || c.Name != strings.ToLower(c.Name) || !strings.HasSuffix(c.Name, ".") || c.Type != 1 && c.Type != 28 || len(c.Anchors) > 32 || len(c.Insecure) > 32 {
+	if c.Schema != 1 || !resolvedDigest(c.Session, 16) || c.DeadlineNS <= 0 || !resolvedDigest(c.PlanSHA256, 32) || !ResolvedName(c.Name, false) || c.Name != strings.ToLower(c.Name) || !strings.HasSuffix(c.Name, ".") || c.Type != 1 && c.Type != 28 && c.Type != 5 || len(c.Anchors) > 32 || len(c.Insecure) > 32 {
 		return nil, bad
 	}
 	total := 0
@@ -65,6 +65,16 @@ func DecodeDNSSECCapture(raw []byte, expected string) (DNSSECCapture, error) {
 		return DNSSECCapture{}, errors.New("DNSSEC sealed capture identity changed")
 	}
 	return c, nil
+}
+
+// Question binds each child callback to the immutable operation's purpose.
+// Alias proof cannot acquire even an original-name A/AAAA query; ordinary
+// address validation cannot acquire a CNAME proof capability from wire bytes.
+func (c DNSSECCapture) Question(wire []byte) (ResolvedDNSSECQuestion, error) {
+	if c.Type == 5 {
+		return ResolvedDNSSECAliasQuestionFromWire(c.Name, wire)
+	}
+	return ResolvedDNSSECQuestionFromWire(c.Name, c.Type, wire)
 }
 
 type DNSSECFrame struct {

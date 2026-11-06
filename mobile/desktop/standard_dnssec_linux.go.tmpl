@@ -402,7 +402,7 @@ func routerVPNValidateIsolatedDNSSEC(ctx context.Context, api *routerVPNDNSSECAP
 	if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 2*time.Minute || ctx.Err() != nil {
 		return verdict, errors.New("DNSSEC validation lost original bounded deadline")
 	}
-	if len(spec.Name) > 254 || spec.Name != strings.ToLower(spec.Name) || !strings.HasSuffix(spec.Name, ".") || !standardengine.ResolvedName(spec.Name, false) || (spec.Type != 1 && spec.Type != 28) || len(spec.Anchors) > 32 || len(spec.Insecure) > 32 {
+	if len(spec.Name) > 254 || spec.Name != strings.ToLower(spec.Name) || !strings.HasSuffix(spec.Name, ".") || !standardengine.ResolvedName(spec.Name, false) || (spec.Type != 1 && spec.Type != 28 && spec.Type != 5) || len(spec.Anchors) > 32 || len(spec.Insecure) > 32 {
 		return verdict, errors.New("DNSSEC immutable query or trust export exceeds ABI bounds")
 	}
 	anchorBytes := 0

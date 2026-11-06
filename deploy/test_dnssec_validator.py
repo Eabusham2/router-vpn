@@ -83,6 +83,7 @@ def main():
                             assert packet and header[7]==0
                             if name=='absent.signed.test.': assert header[2:5]==[3,0,1]
                             elif qtype==28: assert header[2:5]==[0,0,0]
+                            elif qtype==5: assert header[2:5]==[0,1,0]
                             else:
                                 assert header[2:5]==[0,1,0]
                                 assert bytes([192,0,2,11 if name=='host.child.signed.test.' else 9]) in packet
@@ -95,7 +96,8 @@ def main():
                 try:
                     for bad in (b'UPPER.signed.test.',b'no-final-dot',b'a..signed.test.',b'\x00.signed.test.'):
                         assert lib.rvdns_start(v,bad,len(bad),1)==-1
-                    assert lib.rvdns_start(v,b'good.signed.test.',17,15)==-1
+                    for unsupported in (15,39,255):
+                        assert lib.rvdns_start(v,b'good.signed.test.',17,unsupported)==-1
                     assert lib.rvdns_anchor(v,b'X'*4097,4097)==-1
                     assert lib.rvdns_insecure(v,b'bad\n.',5)==-1
                     print('PASS malformed and oversized inputs',flush=True)
@@ -113,6 +115,21 @@ def main():
                 resolve('unsigned.signed.test.',2,insecure='unsigned.signed.test.')
                 resolve('unsigned.signed.test.',3)
                 resolve('localhost.',4)
+                # CNAME queries prove the original alias link without following
+                # its target. This also verifies a synthesized CNAME against its
+                # signed DNAME. An independently bogus destination does not make
+                # a correctly signed alias false: the parent must separately
+                # capture and validate the target's policy before adoption.
+                alias_offset=Path(log.name).stat().st_size
+                for name,want in (('alias.signed.test.',1),('badalias.signed.test.',1),
+                                  ('crossalias.signed.test.',1),('tampered-alias.signed.test.',3),
+                                  ('host.branch.signed.test.',1),('host.badbranch.signed.test.',3)):
+                    resolve(name,want,5)
+                alias_queries=Path(log.name).read_text()[alias_offset:]
+                assert not any(line.split()[-1] in ('1','28') for line in alias_queries.splitlines()), 'alias proof followed an address target'
+                assert not any('query '+name in alias_queries for name in ('good.signed.test.','bogus.signed.test.','outside.example.net.','host.outside.example.net.','host.changed.example.net.')), 'alias proof inherited target query authority'
+                assert 'query host.branch.signed.test. 5' in alias_queries and 'query signed.test. 48' in alias_queries, 'DNAME proof omitted original question or signing key'
+                print('PASS separate CNAME/DNAME proof without target queries',flush=True)
                 before=len(list(Path('/proc/self/task').iterdir()))
                 v=new()
                 try:

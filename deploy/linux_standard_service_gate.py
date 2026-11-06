@@ -669,3 +669,7 @@ AUXILIARY['resolved-dnssec-caller']=('./cmd/client',{
  'TestResolvedDNSSECAliasDiscoveredBeforeVerdict':()})
 AUXILIARY_TESTS['cmd/client/linux_standard_service_resolved_validate_linux_test.go']='resolved-dnssec-caller'
 AUXILIARY['resolved-command'][1]['TestResolvedFixedCommandDNSSECSequenceBudget']=()
+
+# Exact-name alias proof remains distinct from address query authority.
+AUXILIARY['resolved-dnssec-query'][1]['TestResolvedDNSSECAliasQueryAuthority']=()
+AUXILIARY['dnssec-child-protocol'][1]['TestDNSSECCapturedAliasPurpose']=()

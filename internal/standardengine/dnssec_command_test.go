@@ -103,3 +103,31 @@ func TestDNSSECFrameTampering(t *testing.T) {
 		t.Fatal("other original capture admitted")
 	}
 }
+
+func TestDNSSECCapturedAliasPurpose(t *testing.T) {
+	base := DNSSECCapture{Schema: 1, Session: strings.Repeat("a", 32), DeadlineNS: 1, PlanSHA256: strings.Repeat("b", 64), Name: "alias.signed.example.", Type: 5}
+	raw, err := base.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, err := DecodeDNSSECCapture(raw, SHA256(raw))
+	if err != nil || retained.Type != 5 {
+		t.Fatal("exact alias purpose lost in sealed capture", err)
+	}
+	for _, kind := range []uint16{1, 28, 5, 39, 43, 48} {
+		wire := resolvedDNSSECWire(base.Name, kind, true)
+		_, err := retained.Question(wire)
+		if (err == nil) != (kind == 5 || kind == 43 || kind == 48) {
+			t.Fatal("alias purpose acquired a different query", kind, err)
+		}
+	}
+	changed := retained
+	changed.Type = 1
+	other, err := changed.Canonical()
+	if err != nil || SHA256(other) == SHA256(raw) {
+		t.Fatal("address and alias captures share an identity", err)
+	}
+	if _, err = DecodeDNSSECCapture(other, SHA256(raw)); err == nil {
+		t.Fatal("address capture adopted an alias operation digest")
+	}
+}
