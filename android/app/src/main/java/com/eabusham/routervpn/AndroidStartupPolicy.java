@@ -72,7 +72,7 @@ final class AndroidStartupPolicy {
                         Map<String,Object> preferences, Map<String,byte[]> files,String lastExecution,AndroidMultihopRuntime.StartupCapture lastMultihop)throws Exception {
             if(ordinaryEntry!=null&&(entry!=null||external==null&&exit==null
                     ||external!=null&&ordinaryEntry.id.equals(external.id)||exit!=null&&ordinaryEntry.id.equals(exit.id)
-                    ||external==null&&(!AndroidImportedRouterPath.supports(entryMode,exitMode)||!entryMode.equals(ordinaryEntry.protocol)||!"local".equals(execution))))
+                    ||external==null&&(!AndroidImportedRouterPath.supports(entryMode,exitMode)||!entryMode.equals(AndroidExternalPolicy.protocol(ordinaryEntry.protocol))||!"local".equals(execution))))
                 throw new IllegalArgumentException("Startup must retain two distinct exact path owners.");
             this.mode=mode;this.node=node;this.entry=entry;this.exit=exit;this.entryMode=entryMode;this.exitMode=exitMode;
             this.execution=execution;this.source=source;this.lastRaw=lastRaw;this.lastExecution=lastExecution;this.selectedID=selectedID;this.activeID=activeID;
@@ -174,7 +174,7 @@ final class AndroidStartupPolicy {
                     ||!Arrays.asList("local","server","auto").contains(execution))
                 throw new IllegalStateException("The saved multihop startup path is incomplete; it cannot become a single-node connection.");
             if(ordinaryEntry!=null){
-                if(!selected.equals(exit.id)||!entryMode.equals(ordinaryEntry.protocol))throw new IllegalStateException("The imported startup path lost its selected final node or entry transport.");
+                if(!selected.equals(exit.id)||!entryMode.equals(AndroidExternalPolicy.protocol(ordinaryEntry.protocol)))throw new IllegalStateException("The imported startup path lost its selected final node or entry transport.");
                 AndroidImportedRouterPath.compile(ordinaryEntry,AndroidImportedRouterPath.finalBundle(exit.file),exitMode,execution);
             }else files.putIfAbsent(entry.id,AndroidPrivateFileStore.read(entry.file,AndroidNodeStore.MAX_BUNDLE));
             files.putIfAbsent(exit.id,AndroidPrivateFileStore.read(exit.file,AndroidNodeStore.MAX_BUNDLE));
