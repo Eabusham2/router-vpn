@@ -493,6 +493,24 @@ func (c *Controller) candidate(execution routechoice.Execution) routechoice.Cand
 func (c *Controller) event(event routechoice.Event) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if event.Stage == "activation-failed" {
+		// Only the original active comparison can retire its own previously
+		// measured candidate. A late event cannot alter completed progress.
+		if c.generation.Load() != 1 || c.progress.Complete || event.Result == nil ||
+			event.Candidate != c.candidate(event.Candidate.Execution) ||
+			event.Result.Candidate != event.Candidate || event.Result.Eligible ||
+			event.Result.ScoreMS != nil || event.Result.Failure == "" {
+			return
+		}
+		for i := range c.progress.Measurements {
+			if c.progress.Measurements[i].Candidate == event.Candidate {
+				c.progress.Measurements[i] = *event.Result
+				c.progress.Stage = event.Stage
+				return
+			}
+		}
+		return
+	}
 	c.progress.Stage = event.Stage
 	if event.Stage == "measured" && event.Result != nil {
 		c.progress.Measurements = append(c.progress.Measurements, *event.Result)
@@ -500,6 +518,17 @@ func (c *Controller) event(event routechoice.Event) {
 }
 func (c *Controller) failed(message string) {
 	c.mu.Lock()
+	if !c.progress.Complete {
+		// Partial trials are not eligible after cancellation or failed
+		// activation. Completed selected measurements remain historical.
+		for i := range c.progress.Measurements {
+			row := &c.progress.Measurements[i]
+			row.Eligible, row.ScoreMS = false, nil
+			if row.Failure == "" {
+				row.Failure = message
+			}
+		}
+	}
 	c.progress.Complete = true
 	c.progress.Stage = "failed"
 	c.progress.Failure = message
