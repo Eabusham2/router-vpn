@@ -73,7 +73,7 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	if selection.Protocol == "socks5" {
 		finalLayer := predecessorText(exit.profile, "start_layer")
 		if entryMeta.StartLayer != "" && entryMeta.StartLayer != "off" ||
-			finalLayer != "" && finalLayer != "off" && exitMode != "shadowsocks" && exitMode != "hysteria2" {
+			finalLayer != "" && finalLayer != "off" && exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong" {
 			return nil, errors.New("imported SOCKS5 requires its ordinary entry and a captured supported paired-final layer")
 		}
 	}

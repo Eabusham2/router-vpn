@@ -24,6 +24,13 @@ class ImportedEntryVerdicts(unittest.TestCase):
  def test_skip(self):
   expected,events=self.sample();events[-1]['Action']='skip'
   with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
+ def test_packet_layer_verdicts(self):
+  expected=gate.names({'TestRouterVPNImportedSOCKSPacketLayersNativeTraffic':gate.SOCKS_PACKET_LAYER_PEERS})
+  self.assertEqual(len(expected),94)
+  events=[{'Action':a,'Test':n} for n in sorted(expected) for a in ('run','pass')]
+  gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
+  for mutation in (events[:-1],events+[events[-1]],events[:-1]+[dict(events[-1],Action='skip')]):
+   with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
  def test_shipping_invocations(self):
   self.assertIn("test_mobile_imported_entry.py'),str(vendor),'--android'",(ROOT/'deploy/test_android_multihop_pinned.py').read_text())
   self.assertIn('"deploy/test_mobile_imported_entry.py", source, "--native-peers"',(ROOT/'deploy/test_desktop_node_physical.py').read_text())

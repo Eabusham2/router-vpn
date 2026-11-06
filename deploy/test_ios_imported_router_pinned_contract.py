@@ -38,12 +38,12 @@ class ImportedGate(unittest.TestCase):
         self.assertEqual(len(nested),54)
         self.assertFalse(nested & (original | packet | packet_final))
         socks={"socks5--final-"+mode+".json" for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong")}
-        socks |= {"socks5--final-"+mode+"--"+layer+".json" for mode in ("shadowsocks","hysteria2") for layer in G.LAYERS if layer!="off"}
+        socks |= {"socks5--final-"+mode+"--"+layer+".json" for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for layer in G.LAYERS if layer!="off"}
         self.assertFalse(socks & (original | packet | packet_final | nested))
         self.assertEqual(G.NAMES, original | packet | packet_final | nested | socks)
         self.assertEqual(len(ss), 11)
         self.assertEqual(len(hy), 9)
-        self.assertEqual(len(self.events()), 201)
+        self.assertEqual(len(self.events()), 207)
 
     def test_exact_verdicts(self):
         G.require_verdicts(self.encode(self.events()))

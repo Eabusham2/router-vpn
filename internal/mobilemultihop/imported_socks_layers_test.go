@@ -68,6 +68,7 @@ func TestImportedEntrySOCKSLayerBoundaries(t *testing.T) {
 				source[5] = source[3]
 			case "packet-final-layer":
 				source = importedSOCKSLayerFixture(t, "wg", "aes-256-gcm")
+				source[5] = ""
 			case "entry-layer":
 				capture := externalTestRead(t, source[1])
 				externalTestAddLayer(capture["profile"].(map[string]any), "aes-256-gcm", "203.0.113.20", "10.93.0.1", "i")

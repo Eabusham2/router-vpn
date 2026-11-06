@@ -21,6 +21,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	SOCKS "github.com/sagernet/sing-box/protocol/socks"
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
@@ -40,6 +41,14 @@ import (
 // independent cryptographic packet providers. Only captured physical
 // tuples are mapped to private sockets; no device TUN/OS protection is inferred.
 func TestRouterVPNImportedSOCKSPacketFinalNativeTraffic(t *testing.T) {
+	desktopImportedSOCKSPacketLayers(t, "")
+}
+func TestRouterVPNImportedSOCKSPacketLayersNativeTraffic(t *testing.T) {
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		t.Run(layer, func(t *testing.T) { desktopImportedSOCKSPacketLayers(t, layer) })
+	}
+}
+func desktopImportedSOCKSPacketLayers(t *testing.T, layer string) {
 	directory := os.Getenv("ROUTERVPN_IMPORTED_ENTRY_FIXTURES")
 	if directory == "" {
 		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES") == "1" {
@@ -53,11 +62,21 @@ func TestRouterVPNImportedSOCKSPacketFinalNativeTraffic(t *testing.T) {
 			if mode != "wg" {
 				faults = append(faults, "final-awg-parameter")
 			}
+			if layer != "" {
+				faults = append(faults, "layer-key")
+				if layer == "aes-256-gcm+xor-whitening" {
+					faults = append(faults, "whitening")
+				}
+			}
 			for _, fault := range faults {
 				t.Run(fault, func(t *testing.T) {
 					ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 8*time.Second)
 					defer cancel()
-					raw, err := os.ReadFile(filepath.Join(directory, "socks5--final-"+mode+".json"))
+					suffix := ""
+					if layer != "" {
+						suffix = "--" + layer
+					}
+					raw, err := os.ReadFile(filepath.Join(directory, "socks5--final-"+mode+suffix+".json"))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -130,7 +149,15 @@ func TestRouterVPNImportedSOCKSPacketFinalNativeTraffic(t *testing.T) {
 						}
 					}
 					firstRaw, lastRaw := byTag["entry-wg"], byTag[mobilemultihop.LocalTag]
-					if firstRaw == nil || lastRaw == nil || lastRaw["detour"] != "entry-wg" {
+					outerRaw := byTag[mobilemultihop.NativeStartLayerTag]
+					expectedDetour := "entry-wg"
+					if layer != "" {
+						expectedDetour = mobilemultihop.NativeStartLayerTag
+						if outerRaw == nil || outerRaw["detour"] != "entry-wg" {
+							t.Fatal("original outer layer missing")
+						}
+					}
+					if firstRaw == nil || lastRaw == nil || lastRaw["detour"] != expectedDetour {
 						t.Fatal("actual endpoint closure/final detour missing")
 					}
 					var meta mobilemultihop.Metadata
@@ -162,7 +189,7 @@ func TestRouterVPNImportedSOCKSPacketFinalNativeTraffic(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					dnsServer := &dns.Server{PacketConn: packet, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+					dnsServer := &dns.Server{PacketConn: packet, UDPSize: 4096, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
 						r := new(dns.Msg).SetReply(q)
 						r.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 1}, A: net.ParseIP("93.184.216.34")}}
 						_ = w.WriteMsg(r)
@@ -196,10 +223,27 @@ func TestRouterVPNImportedSOCKSPacketFinalNativeTraffic(t *testing.T) {
 						}
 						parameters, backend = desktopDarwinAmneziaBackend(t, desktopExternalInstalledAWGRequest{peerRequest, values})
 					}
+					observed := &desktopNestedIPObservation{target: netip.MustParseAddrPort(dnsTarget).Addr()}
+					originalBackend := backend
+					backend = func(c context.Context, device wg.Device, bind *desktopDarwinWGBind, ipc string) (desktopDarwinWGDevice, error) {
+						return originalBackend(c, &desktopNestedObservedDevice{Device: device, observed: observed}, bind, ipc)
+					}
 					peer := desktopInstalledPacketDevice(t, finalServer, peerRequest, netip.MustParseAddr("127.0.0.1"), parameters, backend, rules, true)
 					defer peer.close()
 					target := net.JoinHostPort(entryPeer["address"].(string), fmt.Sprint(int(entryPeer["port"].(float64))))
 					physical := peer.address
+					var outerPeer *desktopExternalInstalledSSPeer
+					if outerRaw != nil {
+						if entryPeer["address"] != "10.77.0.1" {
+							t.Fatal("packet layer lost captured private Router API destination")
+						}
+						layerServer := newServer([]desktopNodeLayerRoute{{Network: "udp", Destination: target, Physical: physical}})
+						value := desktopImportedSOCKSLayerProvider(t, layerServer, outerRaw, layer, fault)
+						outerPeer = &value
+						defer value.close()
+						target = net.JoinHostPort(outerRaw["server"].(string), fmt.Sprint(int(outerRaw["server_port"].(float64))))
+						physical = value.address
+					}
 					entryServer := newServer([]desktopNodeLayerRoute{{Network: "udp", Destination: target, Physical: physical}, {Network: "tcp", Destination: "1.1.1.1:443", Physical: public.Listener.Addr().String()}})
 					socksEntry, socksPeer := desktopStartImportedSOCKSProvider(t, entryServer, firstRaw["password"].(string), fault)
 					defer socksEntry.close()
@@ -237,6 +281,8 @@ func TestRouterVPNImportedSOCKSPacketFinalNativeTraffic(t *testing.T) {
 							var options Options
 							_ = json.Unmarshal(raw, &options)
 							out, e = NewEndpoint(owned, nil, log.NewNOPFactory().Logger(), value["tag"].(string), options)
+						case "shadowsocks", "routervpn-aes-xor":
+							out = desktopSSReferenceLayerClient(t, owned, value["tag"].(string), value["detour"].(string), value["server"].(string), uint16(value["server_port"].(float64)), layer, value["password"].(string))
 						case "socks":
 							var options option.SOCKSOutboundOptions
 							_ = json.Unmarshal(raw, &options)
@@ -256,6 +302,9 @@ func TestRouterVPNImportedSOCKSPacketFinalNativeTraffic(t *testing.T) {
 						return out
 					}
 					first := create(firstRaw)
+					if outerRaw != nil {
+						create(outerRaw)
+					}
 					final := create(lastRaw)
 					defer func() {
 						if err := final.(io.Closer).Close(); err != nil {
@@ -336,6 +385,16 @@ func TestRouterVPNImportedSOCKSPacketFinalNativeTraffic(t *testing.T) {
 						_ = connection.SetDeadline(deadline)
 						query := new(dns.Msg)
 						query.SetQuestion("example.com.", dns.TypeA)
+						if positive && layer != "" {
+							query.SetEdns0(4096, false)
+							query.IsEdns0().Option = append(query.IsEdns0().Option, &dns.EDNS0_PADDING{})
+							initial, _ := query.Pack()
+							capacity := int(lastRaw["mtu"].(float64)) - 28
+							if capacity < len(initial) {
+								t.Fatal("packet MTU cannot carry selected DNS")
+							}
+							query.IsEdns0().Option[0].(*dns.EDNS0_PADDING).Padding = make([]byte, capacity-len(initial))
+						}
 						wire, _ := query.Pack()
 						_, failure = connection.Write(wire)
 						buffer := make([]byte, 4096)
@@ -371,7 +430,29 @@ func TestRouterVPNImportedSOCKSPacketFinalNativeTraffic(t *testing.T) {
 					}
 					socksEntry.close()
 					rawPackets, plainTCP, plainUDP := peer.stats()
-					blockedFinal := blockedEntry || fault == "relay-route" || fault == "control-eof" || fault == "final-private-key" || fault == "final-public-key" || fault == "final-psk" || fault == "final-awg-parameter" || fault == "final-route"
+					if outerPeer != nil {
+						stats := outerPeer.stats()
+						if stats.Streams != 0 {
+							t.Fatal("packet wrapper forwarded TCP", stats)
+						}
+						if positive && (stats.PhysicalUDP == 0 || stats.Packets == 0 || stats.AuthUDP != 0) {
+							t.Fatal("packet wrapper bypassed", stats)
+						}
+						if fault == "layer-key" || fault == "whitening" {
+							if stats.AuthUDP == 0 || stats.Packets != 0 || rawPackets != 0 {
+								t.Fatal("unauthenticated outer packet reached final", stats, rawPackets)
+							}
+						}
+					}
+					if positive && layer != "" {
+						observed.mu.Lock()
+						count, maximum, invalid := observed.count, observed.maximum, observed.invalid
+						observed.mu.Unlock()
+						if count == 0 || invalid || maximum != int(lastRaw["mtu"].(float64)) {
+							t.Fatal("layered packet capacity or fragmentation changed", count, maximum, invalid)
+						}
+					}
+					blockedFinal := fault == "layer-key" || fault == "whitening" || blockedEntry || fault == "relay-route" || fault == "control-eof" || fault == "final-private-key" || fault == "final-public-key" || fault == "final-psk" || fault == "final-awg-parameter" || fault == "final-route"
 					if lower.calls.Load() == 0 {
 						t.Fatal("original physical proxy owner bypassed")
 					}
