@@ -125,6 +125,9 @@ func windowsSSEntryHostFixture(t *testing.T, protocol, kill string) (*desktopWin
 	for _, v := range []common.RouterProfile{p, e} {
 		f.base.a.profiles.Profiles = append(f.base.a.profiles.Profiles, v)
 	}
+	// Protection settings act on the selected saved profile, independently of
+	// the physical entry used by this connection. Select the final as the UI does.
+	f.base.a.profiles.SelectedID = p.ID
 	if err := f.base.a.persistProfilesLocked(); err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +259,7 @@ func TestDesktopWindowsExternalSSEntrySpeedLabRestoresBothSources(t *testing.T) 
 				response = httptest.NewRecorder()
 				synctest.Wait()
 				a.speedLabRun(response, httptest.NewRequest(http.MethodPost, "/api/speed-lab/run", bytes.NewReader(body)).WithContext(ctx))
-				if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "context canceled") || ctx.Err() == nil || !a.state.Connected || len(f.children) != 3 {
+				if response.Code != http.StatusConflict || strings.TrimSpace(response.Body.String()) != errConnectionOperationCancelled.Error() || ctx.Err() == nil || !a.state.Connected || len(f.children) != 3 {
 					t.Fatal("temporary cancellation lost composed restore", response.Code, response.Body.String(), a.state, len(f.children))
 				}
 				trial, restored := f.children[1], f.children[2]
@@ -312,9 +315,17 @@ func TestDesktopWindowsExternalSSEntryAlwaysOffRetriesOriginalOwner(t *testing.T
 				if joined.Code != http.StatusOK || k.target == nil || k.locked || a.nodeProtection.active != nil || f.children[0].Alive() == nil {
 					t.Fatal("paired Disconnect lost retained Always or original join", joined.Code, joined.Body.String())
 				}
+				// Selecting the physical entry must not authorize changing the
+				// final profile's retained protection.
+				a.profiles.SelectedID = e.ID
+				wrong := ownedProtectionGet(t, a)
+				if wrong.ProfileID != e.ID || wrong.ProtectionProfileID != p.ID || wrong.Message != "Protection still belongs to another node. Select that node to turn its kill switch off." {
+					t.Fatal("different selected profile hid original protection mismatch", wrong)
+				}
+				a.profiles.SelectedID = p.ID
 				before := cloneRouterProfileStore(a.profiles)
 				captured := ownedProtectionGet(t, a)
-				if captured.ProfileID != p.ID || captured.ProtectionProfileID != p.ID || captured.EffectivePolicy != "always" {
+				if captured.ProfileID != p.ID || captured.ProtectionProfileID != p.ID || captured.EffectivePolicy != "always" || captured.Message != "" {
 					t.Fatal("paired retained protection belongs to physical entry instead of final", captured)
 				}
 				off.closeFail = true
