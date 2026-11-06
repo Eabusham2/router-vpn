@@ -877,6 +877,29 @@ still requires execution. Modeled dependency bytes are not a validator binary,
 cryptographic test result, native architecture proof or installed DNS acceptance.
 Production DNSSEC checks were not modified.
 
+### Generated Apple app fixture retains its qualified CryptoKit dependency
+
+[The c602 iOS job](https://github.com/Eabusham2/router-vpn/actions/runs/42220221012/job/127900661526)
+failed before Xcode compilation in `test_ios_owned_strategy_app.py`.
+Its generated `AppTests.swift` could not resolve the two
+`CryptoKit.SHA256.hash` calls used by the shipping configured SS source/key
+validation. The fixture strips all source imports while retaining
+`#if canImport(CryptoKit)`; that condition is true on the Apple host, so the
+qualified implementation was compiled without importing its module.
+
+The fixture shim now carries the same conditional CryptoKit import as the
+shipping source. Its existing unqualified strategy-digest double remains
+separate from the module-qualified production SHA-256 calls. The generated
+shipping source, all eight mutation definitions, execution limits and
+production source/key validation are unchanged. Platforms without CryptoKit
+retain the production validator's explicit refusal for this operation.
+
+Root and independent Astra source reviews confirmed the import-stripping cause
+and matched the generated fixture dependency to the shipping conditional import.
+Only the shim import and its explanatory comment changed. No local Swift
+execution was available; the app fixture, its negative controls, and subsequent
+Xcode app/PacketTunnel build remain separate CI results to obtain.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.

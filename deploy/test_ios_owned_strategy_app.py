@@ -20,9 +20,12 @@ spec = importlib.util.spec_from_file_location('max_app_readiness', ROOT / 'deplo
 MAX = importlib.util.module_from_spec(spec); spec.loader.exec_module(MAX)
 SHIM = r'''
 import Foundation
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
 
-// Only the CryptoKit boundary is replaced on this offline fixture. Its digest
-// remains deterministic and input-sensitive; production always uses SHA-256.
+// The unqualified strategy digest remains a deterministic fixture double.
+// Qualified CryptoKit.SHA256 calls use the real framework when available.
 enum SHA256 {
     static func hash(data: Data) -> [UInt8] {
         var h: UInt64 = 14695981039346656037
