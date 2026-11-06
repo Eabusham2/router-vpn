@@ -24,7 +24,9 @@ jobs:
           go-version: '1.24.x'
           cache: false
       - name: Compile and test shared source contracts
-        run: go test ./cmd/client ./internal/common
+        # The complete controller suite already takes over nine minutes in CI.
+        # Keep all cases and their explicit operation deadlines unchanged.
+        run: go test ./cmd/client ./internal/common -timeout=15m
       - name: Test safe-upgrade generated credential preservation
         run: |
           python3 server/scripts/test_preserve_generated_state.py

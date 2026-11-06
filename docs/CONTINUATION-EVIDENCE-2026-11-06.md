@@ -976,6 +976,36 @@ was available. The earlier Xray result is actual evidence; the repaired SS
 consumer fixture still needs its own execution result. This does not add a
 dependency or substitute a JSON implementation in the shipped Android app.
 
+### Bound the complete Go suite separately from its operation deadlines
+
+Two bab34 workflows reached Go's default ten-minute package alarm:
+[Multihop job 127921401276](https://github.com/Eabusham2/router-vpn/actions/runs/42226553468/job/127921401276)
+ended at 600.024 seconds while its current ViaEntry leaf was one second old;
+[Release gap job 127921567146](https://github.com/Eabusham2/router-vpn/actions/runs/42226553522/job/127921567146)
+ended at 600.027 seconds in a different, newly started Speed Lab leaf.
+Neither log identifies the same stalled test. Earlier complete c602 runs passed
+in
+[547.867 seconds](https://github.com/Eabusham2/router-vpn/actions/runs/42220221024/job/127900246657)
+and
+[565.829 seconds](https://github.com/Eabusham2/router-vpn/actions/runs/42220220780/job/127900299457),
+already close to the aggregate limit. No client/shared Go source or module
+dependency change was introduced between those checkpoints by the fixture work.
+
+Only the two observed workflow commands now append `-timeout=15m` to the same
+complete `go test ./cmd/client ./internal/common` invocation. Fifteen minutes
+is an explicit bounded allowance for the whole package, not a new product
+latency or connection deadline. Every test and negative case remains selected;
+the five-second Speed Lab proof context, ViaEntry request/cleanup limits and
+all other operation deadlines retain their source values. The existing full
+audit command prefix is also preserved. Other workflows were not changed
+without a corresponding failure.
+
+Root and two Astra reviews checked the failed stacks, earlier successful
+durations, workflow contents and audit marker. Apart from the appended package
+budget and its comment, the workflows are byte-identical. No local execution
+was available; the complete suites must still pass under the recorded bound,
+and a future test-specific stall must be investigated as such.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.
