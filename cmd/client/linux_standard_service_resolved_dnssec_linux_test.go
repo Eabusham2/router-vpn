@@ -39,6 +39,30 @@ func (o *resolvedDNSSECOwnerFixture) anchorScoped(ctx, original context.Context,
 	}
 	return row, ctx.Err()
 }
+func (o *resolvedDNSSECOwnerFixture) rootDSScoped(ctx, original context.Context, index int32, name string) (standardengine.ResolvedRootDSDecision, error) {
+	anchor, err := o.anchorScoped(ctx, original, index, ".", 43)
+	if err != nil {
+		return standardengine.ResolvedRootDSDecision{}, err
+	}
+	routes, err := o.policy.ResolvedRoutes(name)
+	if err != nil {
+		return standardengine.ResolvedRootDSDecision{}, err
+	}
+	var result standardengine.ResolvedRootDSDecision
+	for _, route := range routes {
+		if route.Index == index && route.CurrentDNS != nil {
+			result = standardengine.ResolvedRootDSDecision{PolicySHA256: anchor.PolicySHA256, Name: name, Index: index, DNSSEC: route.DNSSEC, Selected: *route.CurrentDNS, Outcome: "no-trust-anchor"}
+		}
+	}
+	if result.DNSSEC == "allow-downgrade" {
+		result.Outcome = "synthetic-unsigned"
+	}
+	if anchor.Present {
+		result.Outcome = "positive"
+		result.Root = &anchor
+	}
+	return result, nil
+}
 func TestResolvedDNSSECCollectorOriginalOwner(t *testing.T) {
 	for _, name := range []string{"all-suffixes-and-absence", "absent-anchor-changed", "daemon-lost", "local-decision-changed", "cancelled-original"} {
 		t.Run(name, func(t *testing.T) {

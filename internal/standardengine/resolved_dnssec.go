@@ -30,6 +30,8 @@ type ResolvedDNSSECPlan struct {
 	questions         []ResolvedDNSSECQuestion
 	inputs            ResolvedDNSSECInputs
 	explicitInsecure  bool
+	rootDecision      []byte
+	emptyRootTrust    bool
 }
 
 func resolvedDNSSECRoute(policy ResolvedPolicy, name string, index int32) (ResolvedRoute, error) {
@@ -129,6 +131,9 @@ func resolvedDNSSECText(rr []byte, name string, kind uint16) (string, error) {
 // exact question/scope's immutable original trust inputs; a newly discovered
 // CNAME/DNAME target requires another captured plan and fresh validator context.
 func BuildResolvedDNSSECPlan(policy ResolvedPolicy, name string, index int32, observations []ResolvedAnchorResult) (*ResolvedDNSSECPlan, error) {
+	return buildResolvedDNSSECPlan(policy, name, index, observations, nil)
+}
+func buildResolvedDNSSECPlan(policy ResolvedPolicy, name string, index int32, observations []ResolvedAnchorResult, root *ResolvedRootDSDecision) (*ResolvedDNSSECPlan, error) {
 	route, err := resolvedDNSSECRoute(policy, name, index)
 	if err != nil {
 		return nil, err
@@ -142,13 +147,42 @@ func BuildResolvedDNSSECPlan(policy ResolvedPolicy, name string, index int32, ob
 	if err != nil {
 		return nil, err
 	}
-	if len(observations) != len(questions) {
+	expected := len(questions)
+	if root != nil {
+		if !root.Matches(policy, name, index) {
+			return nil, errors.New("typed root decision changed original policy/scope")
+		}
+		expected--
+	}
+	if len(observations) != expected {
 		return nil, errors.New("DNSSEC plan omitted present or absent suffix observation")
 	}
 	p := &ResolvedDNSSECPlan{policy: bytes.Clone(raw), name: strings.ToLower(strings.TrimSuffix(name, ".")), mode: route.DNSSEC, index: index, questions: questions}
 	positiveDS := map[string]bool{}
-	for i, observation := range observations {
-		q := questions[i]
+	material := make([]ResolvedAnchorResult, 0, len(questions))
+	cursor := 0
+	for _, q := range questions {
+		if root != nil && q.Name == "." && q.Type == 43 {
+			raw, err := root.Canonical()
+			if err != nil {
+				return nil, err
+			}
+			p.rootDecision = bytes.Clone(raw)
+			tagged, err := json.Marshal(struct {
+				RootDS json.RawMessage `json:"root_ds"`
+			}{raw})
+			if err != nil {
+				return nil, err
+			}
+			p.observations = append(p.observations, tagged)
+			if root.Root != nil {
+				material = append(material, *root.Root)
+				positiveDS[""] = true
+			}
+			continue
+		}
+		observation := observations[cursor]
+		cursor++
 		body, err := observation.Canonical()
 		if err != nil {
 			return nil, err
@@ -157,10 +191,16 @@ func BuildResolvedDNSSECPlan(policy ResolvedPolicy, name string, index int32, ob
 			return nil, errors.New("DNSSEC observation changed original policy, scope or suffix")
 		}
 		p.observations = append(p.observations, bytes.Clone(body))
+		material = append(material, observation)
 		if observation.Present && q.Type == 43 {
 			positiveDS[strings.TrimSuffix(q.Name, ".")] = true
 		}
 	}
+	anyPositive := false
+	for _, observation := range material {
+		anyPositive = anyPositive || observation.Present
+	}
+	p.emptyRootTrust = root != nil && root.Outcome == "synthetic-unsigned" && !anyPositive
 	global := resolvedDNSSECSet(route.GlobalNegativeTrustAnchors)
 	link := map[string]bool{}
 	if route.Index != 0 {
@@ -180,7 +220,7 @@ func BuildResolvedDNSSECPlan(policy ResolvedPolicy, name string, index int32, ob
 	// Omit only positive inputs whose owner is explicitly shadowed under the
 	// original daemon's NTA rules. Their full observations remain in the plan and
 	// must still be rechecked, so suppression cannot conceal store changes.
-	for _, observation := range observations {
+	for _, observation := range material {
 		if !observation.Present || resolvedDNSSECNegative(observation.Name, global, link, positiveDS) {
 			continue
 		}
@@ -191,6 +231,9 @@ func BuildResolvedDNSSECPlan(policy ResolvedPolicy, name string, index int32, ob
 			}
 			p.inputs.TrustAnchors = append(p.inputs.TrustAnchors, text)
 		}
+	}
+	if root != nil && root.Outcome == "synthetic-unsigned" && anyPositive && len(p.inputs.TrustAnchors) == 0 {
+		return nil, errors.New("synthetic root cannot discard captured positive trust islands")
 	}
 	wire := struct {
 		Schema             int
@@ -250,7 +293,7 @@ func (p *ResolvedDNSSECPlan) MatchesPolicy(policy ResolvedPolicy) bool {
 	return err == nil && bytes.Equal(raw, p.policy)
 }
 func (p *ResolvedDNSSECPlan) Recheck(observations []ResolvedAnchorResult) error {
-	if p == nil || len(observations) != len(p.observations) {
+	if p == nil || len(p.rootDecision) != 0 || len(observations) != len(p.observations) {
 		return errors.New("DNSSEC recheck omitted original loaded-store observations")
 	}
 	for i, r := range observations {
@@ -274,7 +317,7 @@ func (p *ResolvedDNSSECPlan) ValidatorInputs() (ResolvedDNSSECInputs, error) {
 	if p == nil {
 		return ResolvedDNSSECInputs{}, errors.New("missing original DNSSEC plan")
 	}
-	if len(p.inputs.TrustAnchors) == 0 && !p.explicitInsecure {
+	if len(p.inputs.TrustAnchors) == 0 && !p.explicitInsecure && !p.emptyRootTrust {
 		return ResolvedDNSSECInputs{}, errors.New("original trust-store absence is not an insecure-domain decision")
 	}
 	if len(p.inputs.TrustAnchors) > 32 || len(p.inputs.InsecureDomains) > 32 {

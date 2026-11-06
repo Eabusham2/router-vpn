@@ -757,3 +757,17 @@ AUXILIARY['resolved-downgrade-shipping']=('./cmd/client',{
  'group-close-failed','cancelled-after-terminal','foreign-scope'),
  'TestResolvedDowngradeCohortBound':()})
 AUXILIARY_TESTS['cmd/client/linux_standard_service_resolved_downgrade_cohort_linux_test.go']='resolved-downgrade-shipping'
+
+# Every original trust observation includes its explicit root-only decision.
+SOURCE.update({'internal/standardengine/resolved_dnssec_root.go',
+ 'internal/standardengine/resolved_dnssec_root_test.go',
+ 'cmd/client/linux_standard_service_resolved_dnssec_root_linux_test.go'})
+AUXILIARY['resolved-dnssec-root-plan']=('./internal/standardengine',{
+ 'TestResolvedDNSSECRootDecisionPlan':('synthetic-empty','strict-missing','root-positive',
+ 'closer-ds','closer-dnskey','root-dnskey','shadowed-positive','omitted-observation',
+ 'changed-decision','ordinary-recheck')})
+AUXILIARY['resolved-dnssec-root-collector']=('./cmd/client',{
+ 'TestResolvedDNSSECTypedRootCollector':('zero-anchor','strict-no-trust',
+ 'root-owner-lost','root-changed','final-recheck')})
+AUXILIARY_TESTS.update({'internal/standardengine/resolved_dnssec_root_test.go':'resolved-dnssec-root-plan',
+ 'cmd/client/linux_standard_service_resolved_dnssec_root_linux_test.go':'resolved-dnssec-root-collector'})

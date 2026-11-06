@@ -14,6 +14,7 @@ import (
 type linuxResolvedDNSSECOwner interface {
 	observeScoped(context.Context, context.Context, string) (standardengine.ResolvedPolicy, standardengine.ResolvedLocalResult, error)
 	anchorScoped(context.Context, context.Context, int32, string, uint16) (standardengine.ResolvedAnchorResult, error)
+	rootDSScoped(context.Context, context.Context, int32, string) (standardengine.ResolvedRootDSDecision, error)
 }
 
 func observeResolvedDNSSECPolicy(ctx, original context.Context, owner linuxResolvedDNSSECOwner, policy standardengine.ResolvedPolicy, name string) error {
@@ -37,25 +38,8 @@ func observeResolvedDNSSECPolicy(ctx, original context.Context, owner linuxResol
 	}
 	return ctx.Err()
 }
-func collectResolvedDNSSECAnchors(ctx, original context.Context, owner linuxResolvedDNSSECOwner, index int32, questions []standardengine.ResolvedDNSSECQuestion) ([]standardengine.ResolvedAnchorResult, error) {
-	rows := make([]standardengine.ResolvedAnchorResult, 0, len(questions))
-	for _, question := range questions {
-		// A cancelled competing scope never strands the shared helper halfway
-		// through an authenticated anchor frame. Original cancellation/deadline
-		// still bounds the frame; no physical DNS or deadline renewal occurs here.
-		observation, err := owner.anchorScoped(ctx, original, index, question.Name, question.Type)
-		if err != nil {
-			return nil, err
-		}
-		if err = ctx.Err(); err != nil {
-			return nil, err
-		}
-		rows = append(rows, observation)
-	}
-	return rows, nil
-}
 
-// captureLinuxResolvedDNSSECPlan captures a prerequisite only. The caller must
+// captureLinuxResolvedDNSSECPlan retains the typed original trust decision. The caller must
 // supply the same live owner at recheck and separately join its native validator
 // and protected group before adopting any cryptographic result.
 func captureLinuxResolvedDNSSECPlan(ctx, original context.Context, owner linuxResolvedDNSSECOwner, policy standardengine.ResolvedPolicy, name string, index int32) (*standardengine.ResolvedDNSSECPlan, error) {
@@ -66,11 +50,11 @@ func captureLinuxResolvedDNSSECPlan(ctx, original context.Context, owner linuxRe
 	if err != nil {
 		return nil, err
 	}
-	rows, err := collectResolvedDNSSECAnchors(ctx, original, owner, index, questions)
+	root, rows, err := collectResolvedDNSSECWithRoot(ctx, original, owner, index, name, questions)
 	if err != nil {
 		return nil, err
 	}
-	plan, err := standardengine.BuildResolvedDNSSECPlan(policy, name, index, rows)
+	plan, err := standardengine.BuildResolvedDNSSECPlanWithRootDS(policy, name, index, root, rows)
 	if err != nil {
 		return nil, err
 	}
@@ -86,12 +70,44 @@ func recheckLinuxResolvedDNSSECPlan(ctx, original context.Context, owner linuxRe
 	if err := observeResolvedDNSSECPolicy(ctx, original, owner, policy, plan.Name()); err != nil {
 		return err
 	}
-	rows, err := collectResolvedDNSSECAnchors(ctx, original, owner, plan.Index(), plan.Questions())
+	root, rows, err := collectResolvedDNSSECWithRoot(ctx, original, owner, plan.Index(), plan.Name(), plan.Questions())
 	if err != nil {
 		return err
 	}
-	if err = plan.Recheck(rows); err != nil {
+	if err = plan.RecheckWithRootDS(root, rows); err != nil {
 		return err
 	}
 	return observeResolvedDNSSECPolicy(ctx, original, owner, policy, plan.Name())
+}
+
+func collectResolvedDNSSECWithRoot(ctx, original context.Context, owner linuxResolvedDNSSECOwner, index int32, name string, questions []standardengine.ResolvedDNSSECQuestion) (standardengine.ResolvedRootDSDecision, []standardengine.ResolvedAnchorResult, error) {
+	var root standardengine.ResolvedRootDSDecision
+	var rows []standardengine.ResolvedAnchorResult
+	found := false
+	for _, q := range questions {
+		if q.Name == "." && q.Type == 43 {
+			if found {
+				return root, nil, errors.New("duplicate original root DS question")
+			}
+			found = true
+			observed, err := owner.rootDSScoped(ctx, original, index, name)
+			if err != nil {
+				return root, nil, err
+			}
+			root = observed
+		} else {
+			observed, err := owner.anchorScoped(ctx, original, index, q.Name, q.Type)
+			if err != nil {
+				return root, nil, err
+			}
+			rows = append(rows, observed)
+		}
+		if err := ctx.Err(); err != nil {
+			return root, nil, err
+		}
+	}
+	if !found {
+		return root, nil, errors.New("DNSSEC collection omitted typed original root DS")
+	}
+	return root, rows, nil
 }

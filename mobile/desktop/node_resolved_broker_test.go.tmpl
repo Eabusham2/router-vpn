@@ -234,6 +234,9 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 			if writeErr != nil {
 				return nil, "", writeErr
 			}
+			if name == "." && request.Body[3] == uint16(43) {
+				return []any{"original strict root has no DS trust anchor"}, "org.freedesktop.resolve1.NoTrustAnchor", nil
+			}
 			return []any{"no original positive trust source"}, "org.freedesktop.resolve1.NoSource", nil
 		case "ResolveHostname":
 			if destination != ":1.77" || len(request.Body) != 4 || request.Body[0] != int32(0) || (request.Body[1] != "node.transport-bootstrap.invalid" && !(alias != "" && request.Body[1] == "node.alias-bootstrap.invalid")) || request.Body[2] != int32(0) || request.Body[3] != uint64(1<<15|1<<12|1<<8) {

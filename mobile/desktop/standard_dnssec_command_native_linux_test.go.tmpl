@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/miekg/dns"
 	"github.com/sagernet/sing-box/routervpn/linuxprocess"
 	"github.com/sagernet/sing-box/routervpn/standardengine"
 	"io"
@@ -88,18 +89,18 @@ func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) {
 	if json.Unmarshal(line, &info) != nil || info.Port < 1 || info.Anchor == "" {
 		t.Fatal("actual signed authority omitted endpoint/anchor")
 	}
-	for _, scenario := range []string{"secure", "bogus", "proven-unsigned", "captured-nta", "missing-signature", "cname-proof", "dname-proof", "cross-name-proof", "tampered-cname", "tampered-dname", "foreign-terminal-receipt", "closed-terminal-channel"} {
+	for _, scenario := range []string{"secure", "bogus", "proven-unsigned", "captured-nta", "missing-signature", "cname-proof", "dname-proof", "cross-name-proof", "tampered-cname", "tampered-dname", "foreign-terminal-receipt", "closed-terminal-channel", "zero-anchor-unsigned", "zero-anchor-signed", "zero-anchor-tampered", "positive-island-secure", "positive-island-bogus", "positive-island-missing-signature"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			name := "good.signed.test."
-			if scenario == "bogus" || scenario == "captured-nta" {
+			if scenario == "bogus" || scenario == "captured-nta" || scenario == "zero-anchor-tampered" || scenario == "positive-island-bogus" {
 				name = "bogus.signed.test."
 			}
 			if scenario == "proven-unsigned" {
 				name = "host.child.signed.test."
 			}
-			if scenario == "missing-signature" {
+			if scenario == "missing-signature" || scenario == "zero-anchor-unsigned" || scenario == "positive-island-missing-signature" {
 				name = "unsigned.signed.test."
 			}
 			capture := standardengine.DNSSECCapture{Schema: 1, Session: strings.Repeat("a", 32), DeadlineNS: time.Now().Add(8 * time.Second).UnixNano(), PlanSHA256: strings.Repeat("b", 64), Name: name, Type: 1, Anchors: []string{info.Anchor}}
@@ -112,6 +113,15 @@ func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) {
 				// Match the shipping plan: an original NTA shadows positive exports
 				// for the covered subtree; retaining both would change Unbound precedence.
 				capture.Anchors = nil
+			}
+			if strings.HasPrefix(scenario, "zero-anchor-") || strings.HasPrefix(scenario, "positive-island-") {
+				plan := dnssecCommandRootPlan(t, name, info.Anchor, strings.HasPrefix(scenario, "positive-island-"))
+				inputs, err := plan.ValidatorInputs()
+				if err != nil {
+					t.Fatal(err)
+				}
+				capture.Anchors, capture.Insecure = inputs.TrustAnchors, inputs.InsecureDomains
+				capture.PlanSHA256 = standardengine.SHA256(plan.Canonical())
 			}
 			raw, err := capture.Canonical()
 			if err != nil {
@@ -241,10 +251,10 @@ func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) {
 						t.Fatal("original terminal receipt/exit", written, sendErr, waitErr, output.String())
 					}
 					want := uint32(1)
-					if scenario == "bogus" || scenario == "missing-signature" || scenario == "tampered-cname" || scenario == "tampered-dname" {
+					if scenario == "bogus" || scenario == "missing-signature" || scenario == "tampered-cname" || scenario == "tampered-dname" || scenario == "positive-island-bogus" || scenario == "positive-island-missing-signature" {
 						want = 3
 					}
-					if scenario == "proven-unsigned" || scenario == "captured-nta" {
+					if scenario == "proven-unsigned" || scenario == "captured-nta" || strings.HasPrefix(scenario, "zero-anchor-") {
 						want = 2
 					}
 					if message.State != want {
@@ -294,4 +304,53 @@ func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) {
 			t.Fatal(fmt.Errorf("original validator query budget exhausted"))
 		})
 	}
+}
+
+// A source fixture proves the explicit typed policy-to-sealed-child boundary;
+// actual retained-daemon decisions are tested independently by OriginalBroker.
+func dnssecCommandRootPlan(t *testing.T, name, anchor string, island bool) *standardengine.ResolvedDNSSECPlan {
+	t.Helper()
+	name = strings.TrimSuffix(name, ".")
+	server := standardengine.ResolvedDNS{Address: "192.0.2.53"}
+	policy := standardengine.ResolvedPolicy{Schema: 1, Authority: standardengine.ResolvedAuthority{BusID: strings.Repeat("a", 32), UniqueOwner: ":1.42", PID: 42, NamespaceInode: 9, PhysicalSHA256: strings.Repeat("b", 64)}, LLMNRHostname: "original-host", Manager: standardengine.ResolvedScope{DNS: []standardengine.ResolvedDNS{server}, CurrentDNS: &server, DNSSEC: "allow-downgrade", DNSOverTLS: "no"}}
+	raw, err := policy.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := standardengine.SHA256(raw)
+	root := standardengine.ResolvedRootDSDecision{PolicySHA256: digest, Name: name, DNSSEC: "allow-downgrade", Selected: server, Outcome: "synthetic-unsigned"}
+	questions, err := standardengine.ResolvedDNSSECQuestions(policy, name, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []standardengine.ResolvedAnchorResult
+	for _, q := range questions {
+		if q.Name == "." && q.Type == 43 {
+			continue
+		}
+		row := standardengine.ResolvedAnchorResult{PolicySHA256: digest, Name: q.Name, Type: q.Type}
+		if island && q.Name == "signed.test" && q.Type == 48 {
+			record, err := dns.NewRR(anchor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire := make([]byte, 8192)
+			n, err := dns.PackRR(record, wire, 0, nil, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			row.Present = true
+			row.Flags = standardengine.ResolvedAnchorFlags
+			row.Records = [][]byte{wire[:n]}
+		}
+		rows = append(rows, row)
+	}
+	plan, err := standardengine.BuildResolvedDNSSECPlanWithRootDS(policy, name, 0, root, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = plan.RecheckWithRootDS(root, rows); err != nil {
+		t.Fatal(err)
+	}
+	return plan
 }
