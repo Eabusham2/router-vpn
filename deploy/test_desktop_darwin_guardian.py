@@ -41,6 +41,7 @@ READBACK_CASES = ('PFReadbackCompleteWithinCapturedBudget', 'PFReadbackFailureAn
                   'PFReadbackQueuedCommandCancellation', 'PFReadbackCommandSlotJoinsCleanup',
                   'PFReadbackForeignBranches')
 SOCKS_CASES = ('SOCKSAssociations',)
+SEPARATE_CASES = ('SocketRetirementReusesCapacity',)+SOCKS_CASES
 SOCKS_LEAVES = ('original-kernel-identity', 'stale-control-permit', 'expired-control-permit',
                 'derived-expiry', 'sibling-claim', 'child-before-parent', 'joined-sibling-isolation')
 PROBE_CASES = ('FilterOnlyRetirement', 'NativeFilterProjection', 'BaselineTransition', 'ReferenceOwnership')
@@ -54,6 +55,15 @@ def native_case_name(case):
     if case in CASES+SOCKS_CASES:
         return 'TestDesktopDarwinGuardianKernel'+case
     raise ValueError('Darwin native gate requires a known complete test identity')
+
+
+def native_test_arguments(case=None):
+    # Capacity reuse intentionally exercises more than one complete slot set.
+    # Give it its own original fixture lifetime instead of spending the shared
+    # suite's deadline before later ownership boundaries can run.
+    selector = '^('+native_case_name(case)+'|TestDesktopPFABIRejectsUnprovedKernel)$' if case else '^Test(DesktopDarwinGuardian|DesktopPFReadback|DesktopPFABI)'
+    excluded = [] if case else ['-test.skip=^('+'|'.join(native_case_name(name) for name in SEPARATE_CASES)+')$']
+    return ['-test.run='+selector, *excluded, '-test.v', '-test.count=1', '-test.timeout=12m']
 
 
 def checked_sources(source: Path):
@@ -442,11 +452,8 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
         if match is None:
             raise ValueError('PF did not return an owned enable-reference token')
         token = match[1]
-        selector = '^('+native_case_name(case)+'|TestDesktopPFABIRejectsUnprovedKernel)$' if case else '^Test(DesktopDarwinGuardian|DesktopPFReadback|DesktopPFABI)'
         started = True
-        excluded = [] if case else ['-test.skip=^TestDesktopDarwinGuardianKernelSOCKSAssociations$']
-        process = subprocess.Popen([str(binary), '-test.run='+selector, *excluded, '-test.v',
-                                    '-test.count=1', '-test.timeout=12m'],
+        process = subprocess.Popen([str(binary), *native_test_arguments(case)],
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    start_new_session=True,
                                    env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL': 'C',
@@ -550,9 +557,11 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
             command = [sudo, '-n', '--', *command]
         output = reported_run(command, cwd=source, timeout=850, sudo=sudo)
         if case is None:
-            association_output = reported_run(command+['--case', 'SOCKSAssociations'], cwd=source, timeout=850, sudo=sudo)
-            require_socks_verdicts(association_output)
-            output += association_output
+            for separate in SEPARATE_CASES:
+                separate_output = reported_run(command+['--case', separate], cwd=source, timeout=850, sudo=sudo)
+                if separate in SOCKS_CASES:
+                    require_socks_verdicts(separate_output)
+                output += separate_output
         elif case in SOCKS_CASES:
             require_socks_verdicts(output)
         wanted = (case,) if case else CASES+READBACK_CASES+SOCKS_CASES

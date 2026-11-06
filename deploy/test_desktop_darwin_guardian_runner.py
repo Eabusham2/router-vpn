@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -484,14 +485,33 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
             with self.subTest(failure=failure), self.assertRaises(ValueError):
                 self.gate.require_socks_verdicts('\n'.join(lines+[failure]))
 
-    def test_default_gate_runs_separate_owned_private_fixture_and_requires_its_verdicts(self):
+    def test_every_required_case_has_one_bounded_fixture_selection(self):
         gate = self.gate
-        original = ['--- PASS: '+gate.native_case_name(name)+' (0.01s)' for name in gate.CASES+gate.READBACK_CASES]
+        cases = gate.CASES+gate.READBACK_CASES+gate.SOCKS_CASES
+        selected = []
+        for case in (None,)+gate.SEPARATE_CASES:
+            arguments = gate.native_test_arguments(case)
+            self.assertIn('-test.timeout=12m', arguments)
+            self.assertIn('-test.count=1', arguments)
+            run = next(argument.removeprefix('-test.run=') for argument in arguments if argument.startswith('-test.run='))
+            skip = next((argument.removeprefix('-test.skip=') for argument in arguments if argument.startswith('-test.skip=')), None)
+            selected += [name for name in cases if re.search(run, gate.native_case_name(name)) and
+                         (skip is None or not re.search(skip, gate.native_case_name(name)))]
+            self.assertRegex('TestDesktopPFABIRejectsUnprovedKernel', run)
+        self.assertCountEqual(selected, cases)
+        self.assertEqual(len(selected), len(set(selected)))
+        with self.assertRaises(ValueError):
+            gate.native_test_arguments('unregistered-case')
+
+    def test_default_gate_runs_separate_owned_fixtures_and_requires_every_verdict(self):
+        gate = self.gate
+        original = ['--- PASS: '+gate.native_case_name(name)+' (0.01s)' for name in gate.CASES+gate.READBACK_CASES
+                    if name not in gate.SEPARATE_CASES]
         original += ['--- PASS: TestDesktopPFABIRejectsUnprovedKernel (0.01s)']
         original += ['--- PASS: TestDesktopDarwinGuardian'+name+' (0.01s)' for name in
                      ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope', 'UIDAbsenceWait', 'UIDObserverProtocol')]
         original += ['--- PASS: TestDesktopDarwinGuardianKernelTCPAndUDP/'+network+' (0.01s)' for network in ('tcp4', 'udp4', 'tcp6', 'udp6')]
-        for missing in (False, True):
+        for missing in (None, 'SocketRetirementReusesCapacity', 'SOCKSAssociations'):
             calls = []
             def run(command, **kwargs):
                 calls.append(command)
@@ -499,8 +519,11 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
                     Path(command[command.index('-o')+1]).write_bytes(b'runner invocation fixture only')
                     return ''
                 if '--case' in command:
-                    self.assertEqual(command[-2:], ['--case', 'SOCKSAssociations'])
-                    return '\n'.join(self.verdicts()[1:] if missing else self.verdicts())+'\n'
+                    self.assertEqual(kwargs['timeout'], 850)
+                    case = command[-1]
+                    self.assertIn(case, gate.SEPARATE_CASES)
+                    verdicts = self.verdicts() if case in gate.SOCKS_CASES else ['--- PASS: '+gate.native_case_name(case)+' (0.01s)']
+                    return '\n'.join(verdicts[1:] if missing == case else verdicts)+'\n'
                 return '\n'.join(original)+'\n'
             with self.subTest(missing=missing), mock.patch.object(gate.platform, 'system', return_value='Darwin'), mock.patch.dict(os.environ, {'GOOS': 'darwin'}), mock.patch.object(gate.UID, 'compiler_toolchain', side_effect=lambda source, go, env: ('fixture-go', env)), mock.patch.object(gate.UID, 'privilege_tool', return_value=None), mock.patch.object(gate, 'reported_run', side_effect=run), contextlib.redirect_stdout(io.StringIO()):
                 if missing:
@@ -508,9 +531,10 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
                         gate.execute(ROOT)
                 else:
                     gate.execute(ROOT)
-            self.assertEqual(len(calls), 3)
+            self.assertEqual(len(calls), 4)
             self.assertNotIn('--case', calls[1])
-            self.assertEqual(calls[2], calls[1]+['--case', 'SOCKSAssociations'])
+            for command, case in zip(calls[2:], gate.SEPARATE_CASES):
+                self.assertEqual(command, calls[1]+['--case', case])
 
     def test_mutation_requires_exact_assertion_and_join_without_timeout_or_race(self):
         witness = 'SOCKS control retired before its original UDP descriptor'
