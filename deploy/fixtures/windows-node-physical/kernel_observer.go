@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"syscall"
@@ -123,12 +124,60 @@ func DesktopWindowsNodeCompositionSnapshot(ctx context.Context) (DesktopWindowsN
 			actual, err := p.identity.InspectSocket(ctx, creation)
 			if err != nil || actual.Local != request.Local || actual.Protocol != protocol ||
 				!desktopWindowsNodeCompositionPeerMatches(request.Network, actual.Remote, request.Remote, actual.PeerConnected) {
-				return result, errors.Join(err, errors.New("Node composition permit is not its actual isolated transport endpoint"))
+				cause := errors.Join(err, errors.New("Node composition permit is not its actual isolated transport endpoint"))
+				return result, desktopWindowsNodeFailedInspection(ctx, p.identity, creation, cause)
 			}
 			result.Grants = append(result.Grants, request)
 		}
 		return result, nil
 	})
+}
+
+// This test-only observation runs after the original complete proof failed.
+// It preserves that failure and never retries admission, changes a grant,
+// connects a socket, or closes an owner. Each read below describes only its
+// own observation; observations cannot be combined into a successful proof.
+func desktopWindowsNodeFailedInspection(ctx context.Context, identity *DesktopWindowsSocketIdentity, creation DesktopSocketCreation, cause error) error {
+	if identity == nil {
+		return errors.Join(cause, errors.New("Node failed inspection has no original identity"))
+	}
+	diagnostic := identity.call(ctx, true, func() error {
+		record := identity.sockets[creation.SocketID]
+		if record == nil || record.creation != creation {
+			return errors.New("Node failed inspection original socket record retired")
+		}
+		observe := func(raw syscall.RawConn, sourceErr error) string {
+			if sourceErr != nil || raw == nil {
+				return fmt.Sprintf("source_error=%v", errors.Join(sourceErr, errors.New("no retained raw owner")))
+			}
+			var protocol syscall.WSAProtocolInfo
+			var protocolErr error
+			controlErr := raw.Control(func(handle uintptr) {
+				protocol, protocolErr = desktopWindowsSocketProtocolInfo(syscall.Handle(handle))
+			})
+			endpoint, endpointErr := desktopWindowsALEEndpoint(raw)
+			return fmt.Sprintf("protocol=%d/%d/%d protocol_error=%v endpoint=%x endpoint_error=%v", protocol.AddressFamily, protocol.SocketType, protocol.Protocol, errors.Join(controlErr, protocolErr), endpoint, endpointErr)
+		}
+		observeSource := func(source DesktopSocketNative) string {
+			if source == nil {
+				return "source_absent"
+			}
+			raw, err := source.SyscallConn()
+			return observe(raw, err)
+		}
+		phase, operation, imported := "none", "none", "absent"
+		if connection := record.connect; connection != nil {
+			phase = fmt.Sprint(connection.phase)
+			if connection.operation != nil {
+				operation = fmt.Sprint(connection.operation.Err())
+			}
+			if connection.io != nil {
+				imported = observe(desktopWindowsRaw{connection.io}, nil)
+			}
+		}
+		return fmt.Errorf("Node failed inspection observation network=%s phase=%s operation=%s original={%s} returned={%s} imported={%s}", creation.Network, phase, operation, observeSource(record.original), observeSource(record.returned), imported)
+	})
+	return errors.Join(cause, diagnostic)
 }
 
 func DesktopWindowsNodeCompositionVerifyPrepared(ctx context.Context, target DesktopWindowsProtectionTarget) error {
