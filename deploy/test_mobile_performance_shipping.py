@@ -14,6 +14,9 @@ class Shipping(unittest.TestCase):
     def test_shared_policy_is_built_byte_exactly(self):
         with tempfile.TemporaryDirectory() as tmp:
             vendor=Path(tmp);(vendor/'go.mod').write_text('module github.com/sagernet/sing-box\n')
+            # Preserve this upstream directory while native transport preparation
+            # is doubled; the real projection installs the instance observer here.
+            (vendor/'daemon').mkdir()
             with mock.patch.object(PREPARE.HY2_DEADLINES,'prepare') as hy2_prepare, mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'), mock.patch.object(PREPARE.OPENVPN_CLOSE,'prepare') as openvpn_prepare, mock.patch.object(PREPARE.OPENVPN_REMOTE,'prepare') as openvpn_remote_prepare, mock.patch.object(PREPARE.EXTERNAL_POLICY,'prepare') as external_prepare,mock.patch.object(PREPARE.AMNEZIA,'prepare'),mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare,mock.patch.object(PREPARE.COMPOSITE,'prepare') as composite_prepare:
                 PREPARE.prepare(vendor)
                 hy2_prepare.assert_called_once_with(vendor.resolve())
@@ -24,6 +27,10 @@ class Shipping(unittest.TestCase):
                 openvpn_prepare.assert_called_once_with(vendor.resolve())
                 openvpn_remote_prepare.assert_called_once_with(vendor.resolve())
                 external_prepare.assert_called_once_with(vendor.resolve())
+            for observer in ('instance_context','instance_context_test'):
+                source=ROOT/'mobile/daemon'/(observer+'.go.tmpl')
+                self.assertIn(source,PREPARE.inputs())
+                self.assertEqual((vendor/'daemon'/('routervpn_'+observer+'.go')).read_bytes(),source.read_bytes())
             for source in (ROOT/'internal/mobileperf').glob('*.go'):
                 expected=source.read_text().replace('"router-vpn/internal/','"github.com/sagernet/sing-box/experimental/libbox/routervpn/')
                 self.assertEqual(expected,(vendor/'experimental/libbox/routervpn/mobileperf'/source.name).read_text())
