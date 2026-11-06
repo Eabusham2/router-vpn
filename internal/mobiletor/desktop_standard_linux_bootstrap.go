@@ -45,6 +45,8 @@ type desktopLinuxStandardBootstrap struct {
 	grantLive      bool
 	upstream       *DesktopLinuxBootstrapDNSUpstream
 	group          *DesktopLinuxBootstrapDNSGroup
+	groupJoined    bool
+	groupPinned    bool
 }
 type desktopLinuxBootstrapRoute struct {
 	Interface net.Interface

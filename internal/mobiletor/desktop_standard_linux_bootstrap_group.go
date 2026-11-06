@@ -38,10 +38,14 @@ type DesktopLinuxBootstrapDNSGroup struct {
 	active                    int
 	initialDescriptors        int
 	inventoryBytes            int
+	admitted                  int
 }
 
 const desktopLinuxBootstrapGroupActive = 257
 const desktopLinuxBootstrapGroupTotal = 514
+
+// Historical admission stays bounded even after exact retired members recycle.
+const desktopLinuxBootstrapGroupAdmissions = 3 * desktopLinuxBootstrapGroupActive
 const desktopLinuxBootstrapGroupGrantBytes = 4096
 const desktopLinuxBootstrapGroupInventory = (2 << 20) - (64 << 10)
 
@@ -179,7 +183,7 @@ func (g *DesktopLinuxBootstrapDNSGroup) capacity() error {
 	return g.capacityFor(len(descriptors), limit.Cur)
 }
 func (g *DesktopLinuxBootstrapDNSGroup) capacityFor(descriptors int, limit uint64) error {
-	if g.active >= desktopLinuxBootstrapGroupActive || len(g.members) >= desktopLinuxBootstrapGroupTotal || g.inventoryBytes+desktopLinuxBootstrapGroupGrantBytes > desktopLinuxBootstrapGroupInventory {
+	if g.admitted >= desktopLinuxBootstrapGroupAdmissions || g.active >= desktopLinuxBootstrapGroupActive || len(g.members) >= desktopLinuxBootstrapGroupTotal || g.inventoryBytes+desktopLinuxBootstrapGroupGrantBytes > desktopLinuxBootstrapGroupInventory {
 		return errors.New("bootstrap group exhausted bounded cohort inventory")
 	}
 	reserved := g.initialDescriptors + 2*(len(g.members)+1)

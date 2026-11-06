@@ -18,13 +18,31 @@ import (
 	"router-vpn/internal/desktopnetwork"
 )
 
-// Exchange retains its original socket/grant until group Close. A failed reply
-// never cancels sibling scopes. The caller validates replies and cancels losing
+// Exchange retains its original socket/grant until joined exact retirement
+// or group Close. A failed reply never cancels sibling scopes. The caller validates replies and cancels losing
 // query contexts only after choosing a usable answer, then must Close the group.
 func (g *DesktopLinuxBootstrapDNSGroup) Exchange(query context.Context, upstream DesktopLinuxBootstrapDNSUpstream, question []byte) ([]byte, error) {
 	return g.exchangeAttempt(query, upstream, question, nil)
 }
 func (g *DesktopLinuxBootstrapDNSGroup) exchangeAttempt(query context.Context, upstream DesktopLinuxBootstrapDNSUpstream, question []byte, attempt *desktopLinuxBootstrapTLSAttempt) (answer []byte, failure error) {
+	var t *desktopLinuxStandardBootstrap
+	// Registered first: no member is recyclable until all later IO/cancellation
+	// callbacks have joined and the immutable response/error is final.
+	defer func() {
+		if t == nil {
+			return
+		}
+		g.mu.Lock()
+		t.groupJoined = true
+		var unavailable *desktopLinuxBootstrapTLSUnavailable
+		if !errors.As(failure, &unavailable) {
+			t.groupPinned = false
+		}
+		g.active--
+		g.mu.Unlock()
+		g.wg.Done()
+	}()
+
 	if g == nil || query == nil || g.ctx == nil || g.owner == nil || g.owner.baseline == nil {
 		return nil, errors.New("bootstrap group omitted original query")
 	}
@@ -59,6 +77,10 @@ func (g *DesktopLinuxBootstrapDNSGroup) exchangeAttempt(query context.Context, u
 		g.mu.Unlock()
 		return nil, errors.New("bootstrap group no longer admits queries")
 	}
+	if err := g.retireJoined(ctx); err != nil {
+		g.mu.Unlock()
+		return nil, err
+	}
 	if err := g.capacity(); err != nil {
 		g.mu.Unlock()
 		return nil, err
@@ -75,13 +97,13 @@ func (g *DesktopLinuxBootstrapDNSGroup) exchangeAttempt(query context.Context, u
 		g.mu.Unlock()
 		return nil, e
 	}
-	t := &desktopLinuxStandardBootstrap{route: route, remote: upstream.Endpoint, network: upstream.socketNetwork(), upstream: &upstream, group: g}
+	t = &desktopLinuxStandardBootstrap{groupPinned: attempt != nil, route: route, remote: upstream.Endpoint, network: upstream.socketNetwork(), upstream: &upstream, group: g}
 	g.members = append(g.members, t)
 	g.inventoryBytes += desktopLinuxBootstrapGroupGrantBytes
 	g.active++
+	g.admitted++
 	g.wg.Add(1)
 	g.mu.Unlock()
-	defer func() { g.mu.Lock(); g.active--; g.mu.Unlock(); g.wg.Done() }()
 	b, lease, network := g.owner.baseline, g.lease, t.network
 	var random [4]byte
 	if _, e = rand.Read(random[:]); e != nil {

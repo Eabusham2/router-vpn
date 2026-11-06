@@ -238,6 +238,7 @@ func bootstrapOpportunisticNativeClient(mode string) (failure error) {
 	if err != nil {
 		return err
 	}
+	initialInventory := group.inventoryBytes
 	name := "resolver.example"
 	if mode == "tls-empty-sni" {
 		name = ""
@@ -320,6 +321,15 @@ func bootstrapOpportunisticNativeClient(mode string) (failure error) {
 	}
 	if mode == "stale-grant" && !strings.Contains(err.Error(), "finite permit") {
 		return errors.Join(err, errors.New("stale permit was not the actual fallback refusal"))
+	}
+	if mode == "fallback-truncated" {
+		group.mu.Lock()
+		retained := len(group.members)
+		bytes := group.inventoryBytes
+		group.mu.Unlock()
+		if retained != 1 || bytes != initialInventory+desktopLinuxBootstrapGroupGrantBytes {
+			return errors.New("joined earlier attempts did not recycle original receipts and inventory")
+		}
 	}
 	if err = group.Close(ctx); err != nil {
 		return err

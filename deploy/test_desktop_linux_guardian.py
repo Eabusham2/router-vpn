@@ -54,6 +54,7 @@ BOOTSTRAP_UPSTREAM_NATIVE = ('udp-port', 'tcp-port', 'tls-name', 'tls-ip', 'tls-
 BOOTSTRAP_GROUP_NATIVE = ('overlap','loser-cancel','close-active','invalid-first','unknown-receipt','stale-generation')
 BOOTSTRAP_OPPORTUNISTIC_NATIVE = ('tls-selfsigned','tls-empty-sni','strict-selfsigned','fallback-udp','fallback-tcp','fallback-default','fallback-truncated','after-tls','cancel','owner-loss','stale-grant')
 BOOTSTRAP_PARSER += ('OpportunisticCapturedPolicy', 'OpportunisticCapturedPolicy/udp', 'OpportunisticCapturedPolicy/tcp', 'OpportunisticRejectsForeignPolicy', *(f'OpportunisticRejectsForeignPolicy/{case}' for case in ('strict','plain','unset','missing-current','changed-current','wrong-route','bad-network','missing-authority')), 'OpportunisticTLSIdentityBoundary', *(f'OpportunisticTLSIdentityBoundary/{case}' for case in ('captured-sni','empty-sni','strict-rejects')), 'OpportunisticFailureBoundary')
+BOOTSTRAP_PARSER += ('GroupRecyclingRetainsAuthority', *(f'GroupRecyclingRetainsAuthority/{case}' for case in ('active','joined-pinned','unknown-creation','poisoned-creation')), 'GroupRecyclingKeepsAdmissionBound')
 BOOTSTRAP_PARSER += ('GroupOriginalGeneration', *(f'GroupOriginalGeneration/{case}' for case in ('original','partial','wrong-owner','foreign-generation','rejected','unsent')), 'GroupCapacity','GroupInventory', *(f'GroupInventory/{case}' for case in ('extra-rule','missing-set','duplicate-rule','retired-reappears')), 'GroupRejectsDetachedCapability','GroupFailedJoinRetainsOwner','GroupNativeInventoryBudget')
 
 BOOTSTRAP_PARSER += ('UpstreamPreservesExactTransport', *(f'UpstreamPreservesExactTransport/{network}/192.0.2.53:{port}' for network in ('udp','tcp','tls') for port in (53,853,5353)), 'UpstreamRejectsDowngrades', *(f'UpstreamRejectsDowngrades/{case}' for case in ('plain-with-name','unknown-transport','zero-port','negative-link','huge-link','loopback','mapped','multicast','zone','name-port','name-path','name-wildcard','name-space','name-empty-label')), 'UpstreamTLSProvesIdentityAndFraming', *(f'UpstreamTLSProvesIdentityAndFraming/{case}' for case in ('captured-sni','captured-ip-no-sni','wrong-sni','wrong-ip','untrusted-root')), 'UpstreamTLSCancellationJoins')
@@ -62,6 +63,7 @@ STANDARD_SOURCE_FILES = frozenset({'desktop_standard_linux_bootstrap.go', 'deskt
                                   'desktop_standard_linux_protection_test.go',
                                   'desktop_standard_linux_protection_native_test.go', 'desktop_standard_linux_absence_test.go'})
 STANDARD_SOURCE_FILES |= frozenset('desktop_standard_linux_bootstrap_group'+suffix+'.go' for suffix in ('','_exchange','_test','_native_test'))
+STANDARD_SOURCE_FILES |= frozenset('desktop_standard_linux_bootstrap_group_retire'+suffix+'.go' for suffix in ('','_test'))
 STANDARD_SOURCE_FILES |= frozenset('desktop_standard_linux_bootstrap_opportunistic'+suffix+'.go' for suffix in ('','_test','_native_test'))
 STANDARD_SOURCE_FILES |= frozenset({'desktop_standard_linux_bootstrap_netlink.go', 'desktop_standard_linux_bootstrap_netlink_test.go', 'desktop_standard_linux_bootstrap_netlink_native_test.go'})
 BOOTSTRAP_GRANT_FILES = tuple('desktop_standard_linux_bootstrap_grant_'+suffix+'.go' for suffix in ('wire','receipt','transport','observe','wire_test','native_test'))
@@ -524,6 +526,7 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'conditional baseline generation': 'stale ruleset generation did not reject the actual conditional transaction',
         'conditional bootstrap generation': 'stale bootstrap generation did not reject the actual conditional transaction',
         'finite bootstrap kernel membership': 'actual kernel packet verdict kernel-expiry false',
+        'joined bootstrap receipt recycling': 'joined earlier attempts did not recycle original receipts and inventory',
         'opportunistic captured TLS policy': 'actual owned opportunistic client',
         'concurrent bootstrap scope overlap': 'group peer overlap failed',
         'bootstrap group original generation': 'group adopted a fresh generation without original ledger receipt',
@@ -552,6 +555,9 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'SOCKS joined UDP retirement': 'native TCP permit retired before its original UDP descriptor',
     }
     mutations = (
+        ('joined bootstrap receipt recycling', 'StandardBootstrapOpportunistic', 'desktop_standard_linux_bootstrap_group_retire.go', (
+            ('if !t.groupJoined || t.groupPinned {', 'if true || !t.groupJoined || t.groupPinned {'),
+        )),
         ('opportunistic captured TLS policy', 'StandardBootstrapOpportunistic', 'desktop_standard_linux_bootstrap_opportunistic.go', (
             ('InsecureSkipVerify: true', 'InsecureSkipVerify: false'),
         )),

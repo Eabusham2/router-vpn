@@ -211,6 +211,9 @@ func (g *DesktopLinuxBootstrapDNSGroup) ExchangeOpportunistic(query context.Cont
 	if !errors.As(err, &unavailable) || query.Err() != nil || g.ctx.Err() != nil {
 		return nil, err
 	}
+	// This original failed attempt cannot be reclaimed by a sibling while
+	// the helper guard and live-permit proof are pending.
+	defer g.unpin(unavailable.member)
 	if check := current(query); check != nil {
 		return nil, errors.Join(err, check)
 	}
@@ -221,6 +224,7 @@ func (g *DesktopLinuxBootstrapDNSGroup) ExchangeOpportunistic(query context.Cont
 	if !errors.As(confirmed, &stillUnavailable) {
 		return nil, confirmed
 	}
+	g.unpin(unavailable.member)
 	answer, err = g.Exchange(query, plain, question)
 	if err != nil {
 		return nil, err

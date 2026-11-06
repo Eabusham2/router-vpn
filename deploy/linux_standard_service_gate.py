@@ -601,3 +601,7 @@ AUXILIARY_TESTS.update({
 # Exact selected opportunistic TLS-first transport and native negative controls.
 SOURCE.update('internal/mobiletor/desktop_standard_linux_bootstrap_opportunistic'+suffix+'.go'
  for suffix in ('','_test','_native_test'))
+
+# Joined original-member retirement keeps finite cohort resources reusable.
+SOURCE.update('internal/mobiletor/desktop_standard_linux_bootstrap_group_retire'+suffix+'.go'
+ for suffix in ('','_test'))
