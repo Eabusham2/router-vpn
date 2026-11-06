@@ -205,10 +205,10 @@ public final class ImportedRouterTest {
  public static void main(String[] args)throws Exception{
   Libbox.compiler=args[0];Path root=Path.of(args[1]),fixtures=Path.of(args[2]);retainedStaging(Files.createTempDirectory(root,"retained-staging-"));List<Path> all;
   try(var rows=Files.list(fixtures)){all=rows.filter(p->p.toString().endsWith(".json")).sorted().toList();}
-  check(all.size()==192,"the complete proxy/packet independent entry/final layer matrix is incomplete");
+  check(all.size()==195,"the complete proxy/packet independent entry/final layer matrix is incomplete");
   String phase=args[3];boolean packet=phase.startsWith("packet-");boolean socks=phase.equals("socks5");
   check(List.of("socks5","shadowsocks","hysteria2","packet-wireguard--final-shadowsocks","packet-wireguard--final-hysteria2","packet-amneziawg--final-shadowsocks","packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong","wg","awg2-fast","awg2-strong").contains(phase),"unknown original matrix phase");
-  List<Path> selected=all.stream().filter(p->{String name=p.getFileName().toString();return socks?name.startsWith("socks5--"):packet?name.startsWith(phase+"--"):phase.equals("shadowsocks")?!name.startsWith("socks5--")&&!name.startsWith("packet-")&&!name.startsWith("final-"):name.startsWith("final-"+phase+"--");}).toList();check(selected.size()==(socks?2:packet?9:20),"incomplete entry/final phase");for(Path p:selected)one(root,p);
+  List<Path> selected=all.stream().filter(p->{String name=p.getFileName().toString();return socks?name.startsWith("socks5--"):packet?name.startsWith(phase+"--"):phase.equals("shadowsocks")?!name.startsWith("socks5--")&&!name.startsWith("packet-")&&!name.startsWith("final-"):name.startsWith("final-"+phase+"--");}).toList();check(selected.size()==(socks?5:packet?9:20),"incomplete entry/final phase");for(Path p:selected)one(root,p);
   System.out.println("Android imported-entry original sources: "+checks+" checks; "+phase+", "+selected.size()+" original independent layer graphs");
  }
 }'''
@@ -226,7 +226,7 @@ def main():
         fixtures = temp / "fixtures"
         fixtures.mkdir()
         env = dict(os.environ, ROUTERVPN_IMPORTED_ENTRY_FIXTURES=str(fixtures))
-        subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedEntry(SOCKSPairedFinalGraphs|PairedFinal(CompleteLayers|PolicyAndCipherOwnership)|HysteriaPairedFinalCompleteLayers|HysteriaFinalCompleteGraphs|PacketCompleteGraphs|PacketFinalCompleteGraphs|NestedPacketCompleteGraphs)$", "-count=1"], cwd=ROOT, env=env, check=True, timeout=120)
+        subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedEntry(SOCKS(PairedFinalGraphs|PacketFinalGraphs)|PairedFinal(CompleteLayers|PolicyAndCipherOwnership)|HysteriaPairedFinalCompleteLayers|HysteriaFinalCompleteGraphs|PacketCompleteGraphs|PacketFinalCompleteGraphs|NestedPacketCompleteGraphs)$", "-count=1"], cwd=ROOT, env=env, check=True, timeout=120)
         module = next(line.split()[1] for line in (ROOT / "go.mod").read_text().splitlines() if line.startswith("module "))
         helper = E.GO.replace('switch args[0]{', 'switch args[0]{'+GO_CASE).replace("github.com/Eabusham2/router-vpn", module)
         (temp / "main.go").write_text(helper)

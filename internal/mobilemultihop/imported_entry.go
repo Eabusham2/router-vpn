@@ -18,7 +18,7 @@ type importedEntry struct {
 // NewImportedEntry composes an imported SOCKS5, SS2022, Hysteria2, WireGuard or AmneziaWG predecessor and a paired
 // Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. Packet-to-packet
 // composition requires the complete configured data/control envelope. SOCKS5 currently
-// supports SS/HY2 finals with both independent Start Layers Off. Compilation proves neither identity.
+// supports these paired finals with both independent Start Layers Off. Compilation proves neither identity.
 func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (*Controller, error) {
 	bad := errors.New("imported entry requires a captured standalone SOCKS5, SS2022, Hysteria2, WireGuard or AmneziaWG source and paired SS/HY2/WG/AWG final in Local execution")
 	var selection externalPolicyCapture
@@ -26,9 +26,6 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 		return nil, bad
 	}
 
-	if selection.Protocol == "socks5" && exitMode != "shadowsocks" && exitMode != "hysteria2" {
-		return nil, bad
-	}
 	// An imported operator address is a public-path proof, never a paired API.
 	for _, key := range []string{"node_proof_id", "router_api", "api_token"} {
 		if v := selection.Profile[key]; v != nil && v != "" {

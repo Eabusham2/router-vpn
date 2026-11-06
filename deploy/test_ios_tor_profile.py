@@ -719,7 +719,6 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   hyBase["outbounds"]=[["type":"hysteria2","tag":"proxy","server":"192.0.2.44","server_port":8443,"password":" exact paired HY2 secret ","tls":["enabled":true,"server_name":"final.example.test","certificate_path":"final-trust.pem"]],["type":"direct","tag":"direct"]]
   let hyAssets=["sing-box.json":try json(hyBase).base64EncodedString(),"final-trust.pem":certificate]
   for finalMode in ["shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"] {for (entryLayer,finalLayer,kind,method) in cases {
-   if kind=="socks5" && !["shadowsocks","hysteria2"].contains(finalMode) { continue }
    let packetFinal=["wg","awg2-fast","awg2-strong"].contains(finalMode)
    let entryKey=Data(repeating:105,count:method=="2022-blake3-aes-128-gcm" ? 16:32).base64EncodedString()
    var imported:[String:Any]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.88","shadowsocks":["server":"203.0.113.20","port":443,"method":method,"password":entryKey]]
@@ -930,7 +929,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   defer{RouterVPNTorTestClose()}
   try importedRouterGraphs()
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY"]=="1" {
-   print("Apple imported Router graph: PASS (192 graphs: preserved190 plus2 SOCKS5 paired finals with configured MTU bounds; shipping Swift inputs and actual Go compiler; no native network proof)")
+   print("Apple imported Router graph: PASS (195 graphs: preserved190 plus5 SOCKS5 paired finals with configured MTU bounds; shipping Swift inputs and actual Go compiler; no native network proof)")
    return
   }
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_OPENVPN_PROBES_ONLY"]=="1" {

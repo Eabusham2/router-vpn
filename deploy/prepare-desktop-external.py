@@ -113,6 +113,7 @@ PEER_TEMPLATES = {
     'node_external_amnezia_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_amnezia_installed_test.go',
     'node_imported_router_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_router_entry_test.go',
     'node_imported_socks_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_socks_entry_test.go',
+    'node_imported_socks_packet_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_socks_packet_test.go',
     'node_imported_hysteria_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_hysteria_entry_test.go',
     'node_imported_nested_packet_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_nested_packet_test.go',
     'node_imported_packet_final_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_packet_final_test.go',
@@ -715,7 +716,7 @@ def copy_encrypted_peer_templates(vendor):
             prefix = b'//go:build linux && !android && routervpn_linux_node_composition\n\n' + prefix
         elif name in ('node_external_hysteria_layer_installed_test.go.tmpl', 'node_external_wireguard_installed_test.go.tmpl', 'node_external_amnezia_installed_test.go.tmpl', 'node_external_openvpn_installed_test.go.tmpl'):
             prefix = b'//go:build (linux && !android) || (darwin && routervpn_darwin_external_host)\n\n' + prefix
-        elif name in ('node_wg_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl', 'node_external_ss_entry_linux_test.go.tmpl', 'node_imported_packet_test.go.tmpl', 'node_imported_packet_final_test.go.tmpl', 'node_imported_nested_packet_test.go.tmpl'):
+        elif name in ('node_wg_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl', 'node_external_ss_entry_linux_test.go.tmpl', 'node_imported_packet_test.go.tmpl', 'node_imported_packet_final_test.go.tmpl', 'node_imported_nested_packet_test.go.tmpl', 'node_imported_socks_packet_test.go.tmpl'):
             prefix = b'//go:build linux && !android\n\n' + prefix
         if path.is_symlink():
             raise ValueError('Desktop encrypted peer test is a symlink: ' + name)

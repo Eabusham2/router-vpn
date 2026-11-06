@@ -51,7 +51,7 @@ func TestImportedEntrySOCKSPairedFinalGraphs(t *testing.T) {
 }
 
 func TestImportedEntrySOCKSRejectsChangedSource(t *testing.T) {
-	for _, fault := range []string{"username", "password", "server", "port", "version", "paired-identity", "packet-final", "server-execution", "entry-layer", "final-layer"} {
+	for _, fault := range []string{"username", "password", "server", "port", "version", "paired-identity", "unsupported-final", "server-execution", "entry-layer", "final-layer"} {
 		t.Run(fault, func(t *testing.T) {
 			s := importedSOCKSFixture(t, "shadowsocks")
 			graph, capture, profile := externalTestRead(t, s[0]), externalTestRead(t, s[1]), externalTestRead(t, s[4])
@@ -65,8 +65,8 @@ func TestImportedEntrySOCKSRejectsChangedSource(t *testing.T) {
 				entry["version"] = "4a"
 			case "paired-identity":
 				capture["profile"].(map[string]any)["node_proof_id"] = "invented"
-			case "packet-final":
-				s[2] = "wg"
+			case "unsupported-final":
+				s[2] = "max"
 			case "entry-layer":
 				externalTestAddLayer(capture["profile"].(map[string]any), "aes-256-gcm", "203.0.113.20", "10.93.0.1", "i")
 			case "final-layer":

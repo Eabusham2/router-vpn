@@ -165,7 +165,7 @@ enum IOSRuntimeSelector {
         let importedPacket = ["wireguard", "amneziawg"].contains(entryMode) &&
             ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(mode) &&
             (profile.multihopExecution ?? "local") == "local"
-        let importedSOCKS = entryMode == "socks5" && ["shadowsocks", "hysteria2"].contains(mode) && (profile.multihopExecution ?? "local") == "local"
+        let importedSOCKS = entryMode == "socks5" && ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(mode) && (profile.multihopExecution ?? "local") == "local"
         guard multihopModeIDs.contains(entryMode) || importedPacket || importedSOCKS else {
             throw IOSRuntimeSelectionError.unsupportedMode("Choose an exact native multihop entry transport.")
         }

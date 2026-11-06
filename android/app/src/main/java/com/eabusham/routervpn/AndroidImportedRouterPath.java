@@ -18,7 +18,7 @@ final class AndroidImportedRouterPath {
             "exit_profile", "exit_start", "dns_bootstrap", "source_sha256"};
 
     static boolean supports(String entryProtocol, String finalMode) {
-        if ("socks5".equals(entryProtocol)) return Arrays.asList("shadowsocks", "hysteria2").contains(finalMode);
+        if ("socks5".equals(entryProtocol)) return Arrays.asList("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong").contains(finalMode);
         boolean proxyEntry = Arrays.asList("shadowsocks", "hysteria2").contains(entryProtocol);
         return (proxyEntry || Arrays.asList("wireguard", "amneziawg").contains(entryProtocol))
                 && (Arrays.asList("shadowsocks", "hysteria2").contains(finalMode)
