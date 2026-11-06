@@ -482,6 +482,21 @@ func TestDesktopWindowsExternalSSEntryPersistedLayerSources(t *testing.T) {
 		t.Run(variant, func(t *testing.T) {
 			f, p, e := windowsSSEntryHostFixture(t, variant, "always")
 			a := f.base.a
+			// The shared import fixture uses JSON numbers. This regression must
+			// explicitly start with Go integers to exercise the representation
+			// change at persistence without changing normal imported sources.
+			for i := range a.profiles.Profiles {
+				profile := &a.profiles.Profiles[i]
+				if profile.External == nil || profile.External.StartLayer == nil {
+					continue
+				}
+				transport := profile.External.StartLayer.Transport
+				port, ok := transport["server_port"].(float64)
+				if !ok || port < 1 || port > 65535 || port != float64(int(port)) {
+					t.Fatal("shared fixture has no exact JSON port")
+				}
+				transport["server_port"] = int(port)
+			}
 			expected := cloneRouterProfileStore(a.profiles)
 			// Exercise the exact persistence boundary without a native network grant.
 			if err := a.persistProfilesLocked(); err != nil {
