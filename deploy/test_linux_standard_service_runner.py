@@ -29,6 +29,7 @@ class StandardServiceGateTests(unittest.TestCase):
                     'internal/mobiletor/desktop_standard_linux_bootstrap_netlink_native_test.go',
                     'internal/linuxprocess/bootstrap_cleanup_gate_linux_native_test.go',
                     'internal/dnsmeasure/transport_bootstrap.go'}
+        required.update('internal/mobiletor/desktop_standard_linux_bootstrap_grant_'+suffix+'.go' for suffix in ('wire','receipt','transport','observe','wire_test','native_test'))
         self.assertTrue(required.issubset(gate.SOURCE))
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -45,6 +46,7 @@ class StandardServiceGateTests(unittest.TestCase):
         guardian=importlib.util.module_from_spec(spec);spec.loader.exec_module(guardian)
         self.assertIn('StandardBootstrapSocket', guardian.STANDARD_KERNEL_CASES)
         self.assertIn('StandardBootstrapConditionalRemoval', guardian.STANDARD_KERNEL_CASES)
+        self.assertIn('StandardBootstrapFiniteGrant', guardian.STANDARD_KERNEL_CASES)
         output='\n'.join('--- PASS: TestLinuxStandardBootstrap'+case+' (0.01s)' for case in guardian.BOOTSTRAP_PARSER)
         guardian.require_socks_verdicts(output,'TestLinuxStandardBootstrap',guardian.BOOTSTRAP_PARSER)
         for line in output.splitlines():
@@ -56,6 +58,16 @@ class StandardServiceGateTests(unittest.TestCase):
         for line in output.splitlines():
             for bad in (output.replace(line,'',1), output+'\n'+line, output.replace(line,line.replace('PASS','SKIP')), output.replace(line,line.replace('PASS','FAIL'))):
                 with self.assertRaises(ValueError): guardian.require_socks_verdicts(bad,prefix,guardian.BOOTSTRAP_REMOVAL_NATIVE)
+
+    def test_finite_bootstrap_kernel_verdicts_are_mandatory(self):
+        spec=importlib.util.spec_from_file_location('finite_bootstrap_guardian',ROOT/'deploy/test_desktop_linux_guardian.py')
+        guardian=importlib.util.module_from_spec(spec);spec.loader.exec_module(guardian)
+        prefix='TestDesktopLinuxGuardianKernelStandardBootstrapFiniteGrant/'
+        output='\n'.join('--- PASS: '+prefix+case+' (0.01s)' for case in guardian.BOOTSTRAP_FINITE_NATIVE)
+        guardian.require_socks_verdicts(output,prefix,guardian.BOOTSTRAP_FINITE_NATIVE)
+        for line in output.splitlines():
+            for bad in (output.replace(line,'',1), output+'\n'+line, output.replace(line,line.replace('PASS','SKIP')), output.replace(line,line.replace('PASS','FAIL'))):
+                with self.assertRaises(ValueError): guardian.require_socks_verdicts(bad,prefix,guardian.BOOTSTRAP_FINITE_NATIVE)
 
     def test_bootstrap_removal_uses_original_observed_generation(self):
         source=(ROOT/'internal/mobiletor/desktop_standard_linux_bootstrap.go').read_text()

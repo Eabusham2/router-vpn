@@ -34,7 +34,7 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
                 'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession', 'NodeProcessWitness', 'NodeCreationJournalReceipt', 'NodeSourceJoin', 'NodeRetiredSuccession', 'NodeRunning', 'SOCKSAssociation')
-STANDARD_KERNEL_CASES = ('StandardProtectionCreator', 'StandardReplacementCannotBeDeleted', 'StandardScopedAbsence', 'StandardNodeTransfer', 'NodeStandardTransfer', 'StandardImageTransfer', 'StandardBootstrapSocket', 'StandardBootstrapConditionalRemoval')
+STANDARD_KERNEL_CASES = ('StandardProtectionCreator', 'StandardReplacementCannotBeDeleted', 'StandardScopedAbsence', 'StandardNodeTransfer', 'NodeStandardTransfer', 'StandardImageTransfer', 'StandardBootstrapSocket', 'StandardBootstrapConditionalRemoval', 'StandardBootstrapFiniteGrant')
 STANDARD_PARSER_CASES = ('ImageTransferUnknownResultRetainsOriginalPin', 'ImageTransferPolicy', 'ImageTransferOriginalEndpointInventory', 'ImageTransferCancellationKeepsOriginalPins', 'CreationReceiptRetainsExactEndpointPolicy', 'CreationScopeAndPartialAuthority', 'ScopedAbsenceNeverClaimsNodeOrMalformedAbsence', 'NodeTransferRejectsChangedInventory', 'NodeTransferUnknownResultRetainsPins')
 STANDARD_TRANSFER_INVENTORY = ('original', 'session', 'handle', 'uid', 'baseline', 'home-lan', 'unknown-field', 'noncanonical', 'widened-baseline')
 STANDARD_TRANSFER_UNKNOWN = ('unknown-removal', 'cancelled-finish', 'closed-creator')
@@ -49,10 +49,14 @@ BOOTSTRAP_PARSER = ('CloseJoinsOriginalObjects', 'CloseJoinsOriginalObjects/conn
 BOOTSTRAP_PARSER += ('TypedQueryOptions', *(f'TypedQueryOptions/{case}' for case in ('default','ad','edns','ad-edns','edns-payload','edns-version','edns-size','unknown-flag','maximum','maximum-edns','overlong','overlong-edns')), 'QueryCannotRenewOriginal', *(f'QueryCannotRenewOriginal/{case}' for case in ('nil-original','nil-query','unbounded-original','unbounded-query','renewed-query','cancelled-original','cancelled-query')))
 BOOTSTRAP_PARSER += ('ConditionalDeleteWire', 'ConditionalDeleteRejectsInvalidScope', *(f'ConditionalDeleteRejectsInvalidScope/{case}' for case in ('generation','handle','imprecise-handle','unowned-table','table-suffix','table-nul','zero-sequence','sequence-wrap','missing-endpoint')), 'ConditionalDeleteRetainsUnknownCommit', *(f'ConditionalDeleteRetainsUnknownCommit/{case}' for case in ('begin','command','foreign-commit','original-commit')))
 BOOTSTRAP_REMOVAL_NATIVE = ('stale-ruleset', 'same-handle-replacement', 'cancelled', 'committed', 'retired-handle', 'closed-endpoint')
+BOOTSTRAP_FINITE_NATIVE = ('kernel-expiry', 'late-original-receipts', 'wrong-endpoint', 'generation-change', 'same-handle-replacement')
+BOOTSTRAP_PARSER += ('GrantKernelBoundWire', 'GrantRequiresOriginalEchoAndCommit', *(f'GrantRequiresOriginalEchoAndCommit/{case}' for case in ('sequence','port','userspace','truncated','extra','timeout','set-name','rule-scope','early-ack','duplicate')), 'GrantPartialRecoveryKeepsSameRequests', 'GrantKeepsOriginalEndpoint', 'GrantInventoryKeepsExpiredObjectsOwned', *(f'GrantInventoryKeepsExpiredObjectsOwned/{case}' for case in ('set-replaced','extra-element','renewed-timeout','unpaired-rule','unpaired-set','survived-retirement')), 'GrantDeadlineDoesNotRenew', 'GrantSequenceReservationNeverReuses', *(f'GrantSequenceReservationNeverReuses/{case}' for case in ('unsent','rejected','committed')))
 STANDARD_SOURCE_FILES = frozenset({'desktop_standard_linux_bootstrap.go', 'desktop_standard_linux_bootstrap_test.go', 'desktop_standard_linux_bootstrap_native_test.go', 'desktop_standard_service_transfer_linux.go', 'desktop_standard_service_transfer_linux_test.go', 'desktop_standard_service_transfer_native_linux_test.go', 'desktop_standard_node_reverse_transfer_linux.go', 'desktop_standard_node_reverse_transfer_linux_test.go', 'desktop_standard_node_reverse_transfer_native_linux_test.go', 'desktop_standard_node_transfer_linux.go', 'desktop_standard_node_transfer_linux_test.go', 'desktop_standard_node_transfer_native_linux_test.go', 'desktop_standard_linux_protection.go',
                                   'desktop_standard_linux_protection_test.go',
                                   'desktop_standard_linux_protection_native_test.go', 'desktop_standard_linux_absence_test.go'})
 STANDARD_SOURCE_FILES |= frozenset({'desktop_standard_linux_bootstrap_netlink.go', 'desktop_standard_linux_bootstrap_netlink_test.go', 'desktop_standard_linux_bootstrap_netlink_native_test.go'})
+BOOTSTRAP_GRANT_FILES = tuple('desktop_standard_linux_bootstrap_grant_'+suffix+'.go' for suffix in ('wire','receipt','transport','observe','wire_test','native_test'))
+STANDARD_SOURCE_FILES |= frozenset(BOOTSTRAP_GRANT_FILES)
 KERNEL_CASES += STANDARD_KERNEL_CASES
 KERNEL_GROUPS = (('sockets', KERNEL_CASES[:15]),
                  ('retained', KERNEL_CASES[15:KERNEL_CASES.index('SOCKSAssociation')]),
@@ -461,6 +465,7 @@ def execute(source: Path, go='go', *, env=None):
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernel', STANDARD_KERNEL_CASES)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapSocket/', ('original', 'cancel-after-grant', 'tcp-original', 'tcp-cancel-after-grant'))
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapConditionalRemoval/', BOOTSTRAP_REMOVAL_NATIVE)
+        require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapFiniteGrant/', BOOTSTRAP_FINITE_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardImageTransfer/', IMAGE_TRANSFER_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelNodeStandardTransfer/', REVERSE_TRANSFER_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardNodeTransfer/', STANDARD_TRANSFER_NATIVE)
@@ -505,6 +510,9 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'reserved standard initial absence': 'standard policy was invisible to global absence',
         'conditional baseline generation': 'stale ruleset generation did not reject the actual conditional transaction',
         'conditional bootstrap generation': 'stale bootstrap generation did not reject the actual conditional transaction',
+        'finite bootstrap kernel membership': 'actual kernel packet verdict kernel-expiry false',
+        'bootstrap original transaction replay': 'creation was replayed or changed original generation',
+        'bootstrap original endpoint capability': 'another real endpoint adopted original handles',
         'original baseline table handle': 'retired handle deleted or adopted a same-name replacement',
         'committed baseline receipt': 'substituted for committed batch receipt',
         'uncertain baseline receipt': 'semantic receipt failure left its original endpoint reusable',
@@ -525,6 +533,16 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'SOCKS joined UDP retirement': 'native TCP permit retired before its original UDP descriptor',
     }
     mutations = (
+        ('finite bootstrap kernel membership', 'StandardBootstrapFiniteGrant', 'desktop_standard_linux_bootstrap_grant_wire.go', (
+            ('bootstrapExpr("lookup", bootstrapString(1, set), bootstrapU32(2, 1), bootstrapU32(4, 1), bootstrapU32(5, 0))', 'bootstrapMeta(3)'),
+        )),
+        ('bootstrap original transaction replay', 'StandardBootstrapFiniteGrant', 'desktop_standard_linux_bootstrap_grant_transport.go', (
+            ('if !g.sent {\n\t\tif !g.originalDeadline', 'if true {\n\t\tif !g.originalDeadline'),
+            ('if !g.originalDeadline.IsZero() && !time.Now().Add(g.duration).Before(g.originalDeadline) {', 'if false {'),
+        )),
+        ('bootstrap original endpoint capability', 'StandardBootstrapFiniteGrant', 'desktop_standard_linux_bootstrap_grant_receipt.go', (
+            ('g.owner == n && g.file != nil && g.file == n.file && g.port != 0 && g.port == n.port', 'n.file != nil'),
+        )),
         ('conditional bootstrap generation', 'StandardBootstrapConditionalRemoval', 'desktop_standard_linux_bootstrap_netlink.go', (
             ('binary.BigEndian.PutUint32(gen[:], generation)', 'binary.BigEndian.PutUint32(gen[:], 0)'),
         )),

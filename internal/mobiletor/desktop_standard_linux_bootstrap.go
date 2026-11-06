@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,18 +27,21 @@ import (
 // The original standard creator owns this socket and every acknowledged rule.
 // It is deliberately not reconstructible from a reply, tuple, or rule label.
 type desktopLinuxStandardBootstrap struct {
-	conn       net.Conn
-	local      netip.AddrPort
-	network    string
-	connected  bool
-	file       *os.File
-	socket     desktopLinuxKernelSocket
-	route      desktopLinuxBootstrapRoute
-	remote     netip.AddrPort
-	mark       uint32
-	expression []any
-	handle     uint64
-	attempted  bool
+	conn           net.Conn
+	local          netip.AddrPort
+	network        string
+	connected      bool
+	file           *os.File
+	socket         desktopLinuxKernelSocket
+	route          desktopLinuxBootstrapRoute
+	remote         netip.AddrPort
+	mark           uint32
+	expression     []any
+	handle         uint64
+	attempted      bool
+	grant, removal *desktopLinuxBootstrapGrant
+	retired        bool
+	grantLive      bool
 }
 type desktopLinuxBootstrapRoute struct {
 	Interface net.Interface
@@ -211,16 +215,33 @@ func (t *desktopLinuxStandardBootstrap) currentSocket(ctx context.Context) error
 func (t *desktopLinuxStandardBootstrap) inventory(b *DesktopLinuxNodeBaseline, rows []map[string]any) (bool, error) {
 	var filtered []map[string]any
 	present := false
+	setPresent := false
+	t.grantLive = false
 	for _, row := range rows {
+		if t.grant != nil {
+			if set, ok := row["set"].(map[string]any); ok && desktopLinuxNumber(set["handle"]) == t.grant.setHandle {
+				if setPresent || t.retired {
+					return false, errors.New("bootstrap timer set duplicated or survived committed retirement")
+				}
+				if err := t.inventoryGrantSet(b, set); err != nil {
+					return false, err
+				}
+				setPresent = true
+				continue
+			}
+		}
 		rule, _ := row["rule"].(map[string]any)
 		if desktopLinuxNumber(rule["handle"]) == t.handle && t.handle != 0 {
-			if present || !desktopLinuxProtectionKeys(rule, "family", "table", "chain", "handle", "expr") || rule["family"] != "inet" || rule["table"] != b.nft.table() || rule["chain"] != "output" || !reflect.DeepEqual(desktopLinuxSetNormalized(rule["expr"]), desktopLinuxSetNormalized(t.expression)) {
+			if present || !desktopLinuxProtectionKeys(rule, "family", "table", "chain", "handle", "expr") || rule["family"] != "inet" || rule["table"] != b.nft.table() || rule["chain"] != "output" || t.grant == nil && !reflect.DeepEqual(desktopLinuxSetNormalized(rule["expr"]), desktopLinuxSetNormalized(t.expression)) || t.retired {
 				return false, errors.New("bootstrap grant was replaced")
 			}
 			present = true
 			continue
 		}
 		filtered = append(filtered, desktopLinuxSetNormalized(row).(map[string]any))
+	}
+	if t.grant != nil && (present != setPresent || !t.retired && !present) {
+		return false, errors.New("bootstrap exact rule and timer set did not remain paired")
 	}
 	n := *b.nft
 	n.Baseline = map[uint64]any{}
@@ -245,6 +266,14 @@ func (t *desktopLinuxStandardBootstrap) observeGeneration(ctx context.Context, b
 	before, e := b.netlink.generation(ctx)
 	if e != nil {
 		return false, 0, e
+	}
+	if t.grant != nil && !t.retired {
+		if before != t.grant.generation() {
+			return false, 0, errors.New("bootstrap grant changed since original atomic creation")
+		}
+		if e = t.observeNativeGrant(ctx, b); e != nil {
+			return false, 0, e
+		}
 	}
 	rows, e := desktopLinuxNFTReadTable(ctx, b.nft.table())
 	if e != nil {
@@ -274,8 +303,29 @@ func (p *DesktopLinuxStandardProtection) cleanupBootstrapLocked(ctx context.Cont
 	if e := desktopLinuxStandardLease(lease); e != nil {
 		return e
 	}
+	if t.grant != nil {
+		if t.grant.sent && !t.grant.complete() {
+			if e := b.netlink.bootstrapExchange(ctx, t.grant); e != nil && !t.grant.complete() {
+				return e
+			}
+		}
+		if t.grant.complete() && !t.grant.rejected {
+			t.handle = t.grant.ruleHandle
+		}
+		if !t.grant.sent || t.grant.rejected {
+			t.attempted = false
+		}
+	}
 	if t.attempted && t.handle == 0 {
 		return errors.New("bootstrap retains an unacknowledged grant and original socket")
+	}
+	if t.removal != nil && t.removal.sent && !t.removal.complete() {
+		if e := b.netlink.bootstrapExchange(ctx, t.removal); e != nil && !t.removal.complete() {
+			return e
+		}
+	}
+	if t.removal != nil && t.removal.complete() && !t.removal.rejected {
+		t.retired = true
 	}
 	if t.handle != 0 {
 		present, generation, e := t.observeGeneration(ctx, b)
@@ -286,7 +336,22 @@ func (p *DesktopLinuxStandardProtection) cleanupBootstrapLocked(ctx context.Cont
 			if e = desktopLinuxStandardLease(lease); e != nil {
 				return e
 			}
-			acknowledged, _, commandErr := b.netlink.deleteBootstrapRule(ctx, generation, b.nft.table(), t.handle)
+			var acknowledged bool
+			var commandErr error
+			if t.grant != nil {
+				if t.removal == nil || t.removal.rejected {
+					t.removal, commandErr = b.netlink.newBootstrapRemoval(generation, t.grant)
+				}
+				if commandErr == nil {
+					commandErr = b.netlink.bootstrapExchange(ctx, t.removal)
+					acknowledged = t.removal.complete() && !t.removal.rejected
+				}
+				if acknowledged {
+					t.retired = true
+				}
+			} else {
+				acknowledged, _, commandErr = b.netlink.deleteBootstrapRule(ctx, generation, b.nft.table(), t.handle)
+			}
 			if !acknowledged {
 				return errors.Join(commandErr, errors.New("bootstrap retains its original uncommitted removal"))
 			}
@@ -502,7 +567,7 @@ func (p *DesktopLinuxStandardProtection) BootstrapDNSExchangeScoped(original, qu
 		return nil, e
 	}
 	present, e := t.observe(ctx, b)
-	if e != nil || !present {
+	if e != nil || !present || t.grant != nil && !t.grantLive {
 		return nil, errors.Join(e, errors.New("bootstrap grant changed before response adoption"))
 	}
 	return answer, ctx.Err()
@@ -548,29 +613,50 @@ func (t *desktopLinuxStandardBootstrap) prepareSocket(ctx context.Context, fd in
 	if e = desktopLinuxStandardLease(lease); e != nil {
 		return e
 	}
-	if _, e = b.observe(ctx, false); e != nil {
+	generation, e := b.observe(ctx, false)
+	if e != nil {
 		return e
 	}
 	if e = t.currentSocket(ctx); e != nil {
 		return e
 	}
-	request := map[string]any{"nftables": []any{map[string]any{"add": map[string]any{"rule": map[string]any{"family": "inet", "table": b.nft.table(), "chain": "output", "expr": t.expression}}}}}
-	body, _ := json.Marshal(request)
-	t.attempted = true
-	raw, e := desktopLinuxNFTCommandFiles(ctx, []string{"-a", "-e", "-j", "-f", "-"}, string(body), []*os.File{lease})
+	var id [9]byte
+	if _, e = rand.Read(id[:]); e != nil {
+		return e
+	}
+	set := "rvb_" + hex.EncodeToString(id[:])
+	rule, e := desktopLinuxBootstrapRuleWire(t.route, t.local, t.remote, t.mark, t.network, set)
 	if e != nil {
 		return e
 	}
-	t.handle, e = desktopLinuxBootstrapEcho(raw, request)
+	deadline, bounded := ctx.Deadline()
+	if !bounded {
+		return errors.New("bootstrap lost original bounded creation")
+	}
+	t.grant, e = b.netlink.newBootstrapGrant(generation, b.nft.table(), set, rule, t.mark, deadline)
 	if e != nil {
 		return e
+	}
+	t.attempted = true
+	e = b.netlink.bootstrapExchange(ctx, t.grant)
+	if t.grant.complete() && !t.grant.rejected {
+		t.handle = t.grant.ruleHandle
+	}
+	if e != nil || !t.grant.complete() || t.grant.rejected {
+		return errors.Join(e, errors.New("bootstrap creation lacks original object and commit receipts"))
+	}
+	// Reserve is admission evidence, not proof of an absolute kernel deadline.
+	// Kernel scheduling can delay a relative timeout's start. No query adopts a
+	// late receipt; the exact retained socket and frozen kernel TTL remain bounded.
+	if !time.Now().Add(t.grant.duration).Before(deadline) {
+		return errors.New("bootstrap receipt arrived outside original processing reserve")
 	}
 	if b.nft.Baseline[t.handle] != nil || t.handle == b.nft.ChainHandle {
 		return errors.New("bootstrap echo reused an original handle")
 	}
 	present, e := t.observe(ctx, b)
-	if e != nil || !present {
-		return errors.Join(e, errors.New("bootstrap grant lacks exact readback"))
+	if e != nil || !present || !t.grantLive {
+		return errors.Join(e, errors.New("bootstrap grant lacks exact live readback"))
 	}
 	return t.currentSocket(ctx)
 }
@@ -642,4 +728,8 @@ func desktopLinuxBootstrapQuestion(q []byte) error {
 		return bad
 	}
 	return nil
+}
+
+func (t *desktopLinuxStandardBootstrap) observeNativeGrant(ctx context.Context, b *DesktopLinuxNodeBaseline) error {
+	return b.netlink.observeBootstrapGrant(ctx, t.grant)
 }

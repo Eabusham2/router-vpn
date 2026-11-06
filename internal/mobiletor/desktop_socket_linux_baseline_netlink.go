@@ -25,9 +25,10 @@ const (
 	desktopLinuxNFTBatchEnd      = 0x11
 )
 
-// This retained endpoint can only observe a ruleset generation and delete an
-// original table handle conditional on that generation. It cannot flush a
-// ruleset, delete by name, or create/adopt a replacement owner. Linux's UAPI
+// This retained endpoint observes generations and removes original handles
+// conditional on that generation. Its scoped bootstrap transaction additionally
+// creates one finite tuple permit and retains its original echo/commit receipts.
+// It cannot flush a ruleset, delete by name, or adopt a replacement owner. Linux's UAPI
 // uses native-endian headers and network-endian attribute payloads.
 type desktopLinuxBaselineNetlink struct {
 	mu        sync.Mutex
@@ -35,6 +36,7 @@ type desktopLinuxBaselineNetlink struct {
 	port      uint32
 	seq       uint32
 	uncertain error
+	bootstrap *desktopLinuxBootstrapGrant
 }
 
 func desktopLinuxOpenBaselineNetlink() (_ *desktopLinuxBaselineNetlink, failure error) {
@@ -112,7 +114,7 @@ func desktopLinuxBaselineReply(data []byte, source syscall.Sockaddr, flags int, 
 // deadline. Keep a complete receipt even if cancellation races with delivery;
 // an acknowledged mutation must never be replayed after a late failure.
 func (n *desktopLinuxBaselineNetlink) exchange(ctx context.Context, request []byte, expected ...uint32) (reply *syscall.NetlinkMessage, sent bool, failure error) {
-	if n.file == nil || n.port == 0 || n.uncertain != nil || ctx == nil || ctx.Err() != nil || len(request) == 0 || len(request) > 4096 {
+	if n.file == nil || n.port == 0 || n.uncertain != nil || n.bootstrap != nil || ctx == nil || ctx.Err() != nil || len(request) == 0 || len(request) > 4096 {
 		return nil, false, errors.Join(n.uncertain, errors.New("Linux baseline netlink operation lost its live original endpoint"))
 	}
 	deadline := time.Now().Add(2 * time.Second)

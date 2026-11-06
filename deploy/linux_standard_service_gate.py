@@ -517,3 +517,16 @@ AUXILIARY.update({'system-bootstrap': ('./internal/systembootstrap',
                                                          'source-change')})})
 
 AUXILIARY_TESTS.update({'internal/systembootstrap/config_linux_test.go': 'system-bootstrap'})
+
+# Original bootstrap mutation receipts, finite kernel permits, and mandatory native proof.
+SOURCE.update('internal/mobiletor/desktop_standard_linux_bootstrap_grant_'+suffix+'.go' for suffix in ('wire','receipt','transport','observe','wire_test','native_test'))
+
+# Original read-only daemon authority, namespace provenance and fixed helper.
+SOURCE.update('internal/standardengine/resolved_'+name+'.go' for name in ('policy','policy_test','protocol','protocol_test','local','local_test','command','command_test'))
+SOURCE.update({'internal/desktopnetwork/observer_linux.go','internal/desktopnetwork/resolved_links_linux.go','internal/desktopnetwork/resolved_links_linux_test.go','mobile/desktop/sing_tun_resolver_linux.go.tmpl','mobile/desktop/sing_tun_resolver_linux_test.go.tmpl','mobile/desktop/sing_tun_resolved_authority_linux.go.tmpl','mobile/desktop/sing_tun_resolved_authority_linux_test.go.tmpl','mobile/desktop/standard_resolved_linux.go.tmpl','mobile/desktop/standard_resolved_linux_test.go.tmpl','deploy/prepare-desktop-mtu.py','deploy/test_desktop_network_cohort.py'})
+AUXILIARY.update({
+ 'resolved-local':('./internal/standardengine',{'TestResolvedLocalOriginalDaemonVerdicts':()}),
+ 'resolved-command':('./internal/standardengine',{'TestResolvedFixedCommandCaptureAndRequests':(),'TestResolvedFixedCommandWholePolicyFrames':('missing','reorder','digest','capture','sequence','unknown','foreign-name')}),
+ 'resolved-namespace':('./internal/desktopnetwork',{'TestResolvedNamespaceDescriptorProvenance':()}),
+})
+AUXILIARY_TESTS.update({'internal/standardengine/resolved_local_test.go':'resolved-local','internal/standardengine/resolved_command_test.go':'resolved-command'})

@@ -284,6 +284,7 @@ def check_verdict_inventory():
                           ('TestLinuxStandard', GUARDIAN.STANDARD_PARSER_CASES),
                           ('TestDesktopLinuxGuardianKernel', GUARDIAN.STANDARD_KERNEL_CASES),
                           ('TestDesktopLinuxGuardianKernelStandardBootstrapConditionalRemoval/', GUARDIAN.BOOTSTRAP_REMOVAL_NATIVE),
+                          ('TestDesktopLinuxGuardianKernelStandardBootstrapFiniteGrant/', GUARDIAN.BOOTSTRAP_FINITE_NATIVE),
                           ('TestDesktopLinuxSOCKS', GUARDIAN.SOCKS_PARSER_CASES),
                           ('TestDesktopLinuxGuardianKernelSOCKSAssociation/', GUARDIAN.SOCKS_CASES),
                           ('TestDesktopLinuxRunningSOCKS', GUARDIAN.RUNNING_SOCKS_PARSER_CASES),
