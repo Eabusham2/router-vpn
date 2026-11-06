@@ -1955,3 +1955,17 @@ Before that owner compile failure, the same 1084c897 job passed startup's 310 ch
 At the same 1084c897 source, root separately read actual Windows ALL logs from run [42281254609](https://github.com/Eabusham2/router-vpn/actions/runs/42281254609). ARM64 job [128110591193](https://github.com/Eabusham2/router-vpn/actions/runs/42281254609/job/128110591193) completed all 26 positive markers and eight causal controls with its receipt at 19:41:19 UTC. AMD64 job [128110591474](https://github.com/Eabusham2/router-vpn/actions/runs/42281254609/job/128110591474) passed the positive suite and first six controls, then was cancelled at 19:45:12 before the last two. It is not a complete AMD64 pass. Actual WFP/PQ and authenticated packaged launch remain separate mandatory gates.
 
 The latest published release read during this work remains the 745b3e41 prerelease with twelve assets. Neither the older completed checks nor this source repair establish release publication for this continuation.
+
+## Windows paired entry-layer startup fixture: complete saved selection and response contract
+
+The complete fixture correction is source-reviewed at `ce68c1feabd4b210eab5abaab2c030599bd1e979`, child of the incomplete `6381e93b` proposal. Root and the independent reviewer checked the final full 72,274-byte file, Git blob `094ece7f5182db5f7c34ff0ec38f4bb2fc4fe227`, and its three-line delta against current main. The earlier 6381-only clearance is superseded: it omitted the response endpoint needed by the next production validator and was never published to main.
+
+The observed e4207fb8 complete-engine run [42277993788](https://github.com/Eabusham2/router-vpn/actions/runs/42277993788), AMD64 job 128103052696 and ARM64 job 128103052633, rejected the router-entry-aes and router-entry-aes-xor startup fixtures after the earlier original Home DNS fix. The error was the real external paired-execution guard requiring a captured Router entry, authenticated exit and response endpoint. Root read both actual failure logs; passing the earlier constructor boundary was not counted as a passing test leaf.
+
+Within only the Router-layer branch, the fixture now declares multihop_enabled, its original entry ID, the original final profile ID and normalized final protocol. Its separate final response contract is HTTPS at `198.51.100.240/captured-response`, with the explicit valid TLS name `captured-response.example`. The literal address matches the captured final transport. This is a fixture contract, not an observed network response, and it is not the selected DNS resolver.
+
+The bounded full constructor trace includes externalRelaySelection, ExternalSelection, final transport and response validation, authenticated request construction, original predecessor credentials/node proof, DNS/MTU derivation, DesktopCapture, exact Windows paired Server row reconstruction and sealed startup socket metadata. No further missing fixture field was found for either entry-layer variant.
+
+Original WG keys and peer identity, independently captured AES/XOR entry assets, final SS key, private API, selected HTTPS DNS at 192.168.50.53:5443, assertions and timeouts remain unchanged. No production guard is relaxed. This startup fixture uses the real compilers without instantiating an encrypted provider or OS constructor; actual complete-engine and native ownership gates remain separate.
+
+The local executor remains unavailable. Both architecture reruns and all existing causal controls remain required; source review is not a native pass or release acceptance.

@@ -251,7 +251,10 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 		}
 		transport["server"] = "198.51.100.240"
 		private["shadowsocks"].(map[string]any)["server"] = transport["server"]
+		private["response_probe"] = map[string]any{"url": "https://198.51.100.240/captured-response", "server_name": "captured-response.example"}
 		profile["multihop_execution"], profile["multihop_entry_mode"] = "server", "wg"
+		profile["multihop_enabled"], profile["multihop_entry_id"] = true, entry["id"]
+		profile["multihop_exit_id"], profile["multihop_exit_mode"] = profile["id"], protocol
 		selection["entry"], selection["entry_tag"], selection["predecessor_config"] = entry, "external-entry", node.Config()
 	}
 	if entrySelected || ssEntry {
