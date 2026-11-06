@@ -8,7 +8,7 @@ base=importlib.util.module_from_spec(spec);spec.loader.exec_module(base)
 FIXTURE=base.TEST[base.TEST.index('func json('):base.TEST.index('@main struct Tests')]
 TEST=r"""
 import Foundation
-func sipBundle(_ dns: String = "home", host: String = "1.1.1.1") throws -> ClientBundle {
+func sipBundle(_ dns: String = "home", host: String = "") throws -> ClientBundle {
     var bundle = try fixture(dns:dns)
     bundle.routerProfiles[0].dnsHost = host
     let helper: [String:Any] = ["server":"192.0.2.1","server_port":10443,"password":Data(repeating:7,count:32).base64EncodedString(),"method":"2022-blake3-aes-256-gcm","local_address":"127.0.0.1","local_port":1092,"mode":"tcp_only","plugin":"v2ray-plugin","plugin_opts":"tls;host=vpn.example.com;path=/shadowsocks"]
@@ -29,7 +29,8 @@ func obj(_ value: String) throws -> [String:Any] { try JSONSerialization.jsonObj
     @MainActor static func reject(_ label: String,_ operation: () throws -> Void) {do{try operation();fatalError("accepted "+label)}catch{checks+=1}}
     @MainActor static func main() throws {
         for dns in ["home","custom","dot","doh","doh3","rescue"] {
-            for host in ["1.1.1.1","resolver.example.com"] {
+            let hosts = dns == "home" ? ["10.77.0.1","fd77:77::1"] : ["1.1.1.1","resolver.example.com"]
+            for host in hosts {
                 let original=try sipBundle(dns,host:host), patched=try IOSDNSRuntimePolicy.patch(original)
                 let selected=try IOSRuntimeSelector.selectRaw(bundle:patched,rawProfileID:"ss-v2ray")
                 try check("native Libbox selection",selected.engine == .libbox && selected.rawProfileID == "ss-v2ray")
@@ -50,7 +51,16 @@ func obj(_ value: String) throws -> [String:Any] { try JSONSerialization.jsonObj
                     try check("compatible encrypted DNS leg",server["detour"] as? String == expected)
                 }
                 try check("selected DNS transport preserved",servers.last?["type"] as? String == ["home":"udp","custom":"udp","dot":"tls","doh":"https","doh3":"h3","rescue":"udp"][dns])
+                if dns == "home" { try check("captured Home resolver preserved",servers.last?["server"] as? String == host) }
                 try check("repeated patch stable",IOSDNSRuntimePolicy.patch(patched).profiles == patched.profiles)
+            }
+        }
+        for host in ["1.1.1.1","resolver.example.com","10.78.0.1","fd78:78::1"] {
+            do {
+                _ = try IOSDNSRuntimePolicy.patch(sipBundle("home",host:host))
+                fatalError("accepted public or foreign Home resolver " + host)
+            } catch let error as NSError {
+                try check("Home ownership rejects the resolver itself",error.domain == "RouterVPN.HomeDNS")
             }
         }
         for (field,value) in [("plugin","/bin/foreign-helper"),("method","none"),("password","invalid"),("plugin_opts","host=vpn.example.com;path=/x"),("plugin_opts","tls;host=vpn.example.com;path=/x;insecure"),("plugin_opts","tls;host=vpn.example.com;path=/x;tls"),("local_address","0.0.0.0")] {
