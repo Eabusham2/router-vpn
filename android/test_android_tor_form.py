@@ -791,7 +791,9 @@ public final class TorFormHarness {
  }
  static CheckBox startupCheck(AlertDialog dialog){for(View view:views(dialog.view))if(view instanceof CheckBox&&((CheckBox)view).getText().toString().startsWith("Auto-connect this saved external path"))return (CheckBox)view;throw new AssertionError("Missing external startup control");}
  static String withoutLocation(AndroidStandardExitStore.Entry entry)throws Exception{
-  JSONObject value=new JSONObject(AndroidStandardExitStore.snapshot(entry));for(String key:List.of("location","latitude","longitude"))value.remove(key);return value.toString();
+  // Preserve the shipping serializer's exact field order; parsing/removing JSON
+  // keys can reorder unrelated HashMap collisions after the location keys grow it.
+  AndroidStandardExitStore.Entry value=AndroidStandardExitStore.copy(entry);value.location="";value.latitude=null;value.longitude=null;return AndroidStandardExitStore.snapshot(value);
  }
  static AlertDialog locationForm(StandardExitActivity activity,AndroidStandardExitStore.Entry entry)throws Exception{
   invoke(activity,"showExitActions",entry);AlertDialog actions=AlertDialog.last;
@@ -974,6 +976,10 @@ def main():
         # These controls establish that the Activity/Go checks fail for the
         # original behavior; neither working source nor positive classes change.
         controls = (
+            ("external-location-private-source", "StandardExitActivity.java",
+             'next.location=location.getText().toString();',
+             'next.location=location.getText().toString();next.password+="unowned-location-change";',
+             "location edit changed private credentials, policy or captured input"),
             ("external-location-save", "AndroidStandardExitStore.java",
              'writeLocation(o,e);return o;',
              'return o;',
