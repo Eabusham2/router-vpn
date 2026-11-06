@@ -242,7 +242,7 @@ func (c *linuxResolvedAliasChain) Query(ctx context.Context, name string, questi
 	}
 	for _, route := range routes {
 		if route.DNSSEC == "yes" || route.DNSSEC == "allow-downgrade" {
-			return o.exchangeResolvedDNSSECName(ctx, policy, c.network, name, question, aliasProof, c.remember, resolvedPrivateTLDSlot(len(c.checks), aliasProof))
+			return o.exchangeResolvedDNSSECName(ctx, policy, c.network, name, question, aliasProof, c.remember, resolvedPrivateTLDSlot(len(c.checks), aliasProof), resolvedPrivateDeepSlot(len(c.checks), aliasProof))
 		}
 	}
 	if aliasProof {

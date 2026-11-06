@@ -91,7 +91,7 @@ func resolvedValidatedPacket(question []byte, v standardengine.DNSSECVerdict, al
 	return answer, nil
 }
 
-func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSECName(ctx context.Context, policy standardengine.ResolvedPolicy, network, name string, question []byte, aliasProof bool, remember func(func(context.Context) error), allowPrivate bool) ([]byte, error) {
+func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSECName(ctx context.Context, policy standardengine.ResolvedPolicy, network, name string, question []byte, aliasProof bool, remember func(func(context.Context) error), allowPrivate, allowDeep bool) ([]byte, error) {
 	resolver := o.original.resolver
 	if network != "udp" && network != "tcp" {
 		return nil, errors.New("DNSSEC caller changed original transport")
@@ -157,6 +157,10 @@ func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSECName(ctx context.Cont
 		return nil, err
 	}
 	var private *resolvedPrivateCandidates
+	var deep *resolvedPrivateDeepCandidates
+	if allowDeep && !aliasProof {
+		deep = &resolvedPrivateDeepCandidates{}
+	}
 	if allowPrivate && !aliasProof {
 		private = &resolvedPrivateCandidates{}
 	}
@@ -243,6 +247,7 @@ func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSECName(ctx context.Cont
 					}, compatibility)
 				if terminalErr != nil {
 					private.retain(policy, plan, question, verdict, validationErr)
+					deep.retain(policy, plan, question, verdict, validationErr)
 				}
 				return answer, terminalErr
 			}
@@ -275,10 +280,13 @@ func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSECName(ctx context.Cont
 	if check := o.Current(ctx); check != nil {
 		return nil, &resolvedAliasAuthorityError{errors.Join(err, check)}
 	}
-	return resolvePrivateTLDAfterOriginal(ctx, answer, err, private, func(rows []resolvedPrivateCandidate) ([]byte, error) {
+	answer, err = resolvePrivateTLDAfterOriginal(ctx, answer, err, private, func(rows []resolvedPrivateCandidate) ([]byte, error) {
 		// Spend the auxiliary slot only now; normal winners never spend it.
 		remember(finalCheck)
 		return o.exchangeResolvedPrivateTLD(ctx, policy, network, question, rows, finalCheck)
+	})
+	return resolvePrivateDeepAfterOriginal(ctx, answer, err, deep, func(rows []resolvedPrivateDeepCandidate) ([]byte, error) {
+		return o.exchangeResolvedPrivateDeep(ctx, policy, network, question, rows, finalCheck, remember)
 	})
 }
 

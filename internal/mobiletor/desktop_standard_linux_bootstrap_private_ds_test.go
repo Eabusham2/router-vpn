@@ -165,6 +165,21 @@ func TestLinuxStandardBootstrapPrivateDSJoinedChain(t *testing.T) {
 			if q.matches(g, u, root) == nil {
 				t.Fatal("root admitted by DS owner")
 			}
+
+			denial := append([]byte(nil), root...)
+			denial[2], denial[3] = 0x81, 0x83
+			verdict := standardengine.DNSSECVerdict{State: 1, RCode: 3, NXDomain: 1, Packet: denial}
+			rg.closed = false
+			if err = rg.CheckPrivateDSRootVerdict(chain, root, verdict); err != nil {
+				t.Fatal("inert preview rejected", err)
+			}
+			if _, err = rg.CompletePrivateDSProof(chain, root, verdict); err == nil {
+				t.Fatal("preview adopted before original root join")
+			}
+			rg.closed = true
+			if _, err = rg.CompletePrivateDSProof(chain, root, verdict); err != nil {
+				t.Fatal("joined proof rejected", err)
+			}
 			clone := *chain
 			rb.privateChains[0] = &clone
 			if q.matches(rg, u, root) == nil {

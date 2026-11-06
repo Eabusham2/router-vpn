@@ -889,3 +889,19 @@ AUXILIARY['resolved-private-ds-transport']=('./internal/mobiletor',{
  'TestLinuxStandardBootstrapPrivateDSRejectsOrdinary':(),
  'TestLinuxStandardBootstrapPrivateDSHeldOwnerCancellation':()})
 AUXILIARY_TESTS['internal/mobiletor/desktop_standard_linux_bootstrap_private_ds_test.go']='resolved-private-ds-transport'
+
+# Shipping deep private candidates require two joined auxiliary owners.
+SOURCE.update({'cmd/client/linux_standard_service_resolved_private_deep_linux.go',
+ 'cmd/client/linux_standard_service_resolved_private_deep_linux_test.go'})
+AUXILIARY['resolved-private-deep-shipping']=('./cmd/client',{
+ 'TestResolvedPrivateDeepRootShipping':('secure','nxdomain','nodata','positive-sibling',
+ 'invalid-sibling','incomplete-chain','positive-ds','signed-ds','bogus-root',
+ 'insecure-root','nodata-root','child-error','retire-error','close-error','stale-plan',
+ 'physical-current-loss','cancelled','foreign-candidate','completion-error'),
+ 'TestResolvedPrivateDeepDependencyRetirement':('complete','partial-sibling',
+ 'incomplete','close-error','stale-plan','physical-current-loss','cancelled','seal-error'),
+ 'TestResolvedPrivateDeepContinuation':('proved','normal-positive','normal-negative',
+ 'capacity','alias-purpose','original-retirement','authority-loss','cancelled',
+ 'validator-error','metadata','secure-state','old-depth'),
+ 'TestResolvedPrivateDeepNormalTerminalBoundary':()})
+AUXILIARY_TESTS['cmd/client/linux_standard_service_resolved_private_deep_linux_test.go']='resolved-private-deep-shipping'

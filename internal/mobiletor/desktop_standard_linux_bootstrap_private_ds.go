@@ -240,3 +240,14 @@ func (g *DesktopLinuxBootstrapDNSGroup) CompletePrivateDSProof(c *DesktopLinuxPr
 	}
 	return c.capability.Complete(c.replies, question, verdict)
 }
+
+// CheckPrivateDSRootVerdict is an inert classification check while sibling
+// workers run. It grants no completed proof: CompletePrivateDSProof still
+// requires the exact root group to have successfully retired before adoption.
+func (g *DesktopLinuxBootstrapDNSGroup) CheckPrivateDSRootVerdict(c *DesktopLinuxPrivateDSChain, question []byte, verdict standardengine.DNSSECVerdict) error {
+	if g == nil || c == nil || g.dnssec == nil || g.dnssec.privateDS != 2 || g.dnssec.privateChains[c.capability.Index()] != c {
+		return errors.New("private DS root classification lost original chain")
+	}
+	_, err := c.capability.Complete(c.replies, question, verdict)
+	return err
+}
