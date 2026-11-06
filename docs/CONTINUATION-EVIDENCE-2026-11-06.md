@@ -758,6 +758,12 @@ was changed.
 
 These GitHub publications were verified by normal-parent commit reads, compare-and-swap updates of main, and exact source readback. They are source-reviewed remote publications; no local build result is claimed after the workspace became unavailable. The broader unpublished source drafts and live/device acceptance items remain open.
 
+### Exact-current native successes and the remaining SOCKS exchange failure
+
+At `7f94ebdbf6e11150c5828e56c5073722c5213e60`, Linux generated-command/TUN run `42211427100` passed on AMD64 and ARM64. The actual six-case suites include selected DNS and encrypted TUN traffic, captured MTU and rollback, resolver failure, wrong key, and pre-ACK close. MTU policy job `127871330656` also passed its shared race, Android fixture and shipping checks. Paired native OpenVPN job `127871326142` in authoritative run `42211427108` passed actual native owners, mapped TCP/UDP AES and AES+XOR Local/Server paths and replay/ownership controls, and uploaded its exact-SHA artifact. These are bounded results; the Windows external-OpenVPN WFP composition, complete release, physical devices and private deployment remain separate.
+
+Windows SOCKS `home-lan-off` failed in ARM64 job `127855163138` at `40567e35` and AMD64 job `127872067780` at `7f94ebdb`. Each independent provider receipt recorded an association but no UDP client or payload. The original DNS exchange error is discarded before the shared generic failure and cancellation, so those receipts do not establish where packet delivery failed. This increment adds a pass-through diagnostic at the original exchange: it captures the same router method and logger, calls once with identical arguments, and returns the exact answer/error. It logs only a fixed class and numeric errno, never raw errors, requests, answers, addresses or credentials. Classifier cases cover wrapped errors and errors that panic if rendered. No resolver, grant, LAN policy, deadline, cache behavior, proof check, return or cleanup is relaxed. Local execution remains unavailable; compilation, classifier execution and the existing complete Windows SOCKS acceptance remain required.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.

@@ -6,12 +6,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
@@ -546,6 +549,33 @@ func (e *routerVPNExternalNativeEngine) Dial(ctx context.Context, tag, address s
 	}
 	return connection, nil
 }
+func routerVPNExternalDNSFailureCode(err error) (string, uint64) {
+	var nativeErrno syscall.Errno
+	hasErrno := errors.As(err, &nativeErrno)
+	code := uint64(0)
+	if hasErrno {
+		code = uint64(nativeErrno)
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled", code
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline", code
+	case errors.Is(err, net.ErrClosed):
+		return "closed", code
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return "eof", code
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return "timeout", code
+	}
+	if hasErrno {
+		return "syscall", code
+	}
+	return "other", code
+}
+
 func (e *routerVPNExternalNativeEngine) DNSProof(parent context.Context, tunTag string) error {
 	if _, err := e.IdentityContext(parent); err != nil {
 		return err
@@ -558,7 +588,18 @@ func (e *routerVPNExternalNativeEngine) DNSProof(parent context.Context, tunTag 
 	ctx = adapter.WithContext(ctx, &adapter.InboundContext{Inbound: tunTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
 	// Uses the actual selected DNS router. Supplying a transport override here
 	// would bypass routing and could conceal a policy regression.
-	if err := routerVPNStrategyDNSExchange(ctx, e.box.dnsRouter.Exchange); err != nil {
+	// Preserve the original exchange result before the public proof sanitizes it.
+	// Only fixed diagnostic classes and numeric errno reach the captured logger.
+	selectedExchange, proofLogger := e.box.dnsRouter.Exchange, e.box.logger
+	exchange := func(exchangeContext context.Context, question *dns.Msg, options adapter.DNSQueryOptions) (*dns.Msg, error) {
+		answer, err := selectedExchange(exchangeContext, question, options)
+		if err != nil {
+			class, errno := routerVPNExternalDNSFailureCode(err)
+			proofLogger.ErrorContext(exchangeContext, "routervpn external DNS proof stage=exchange class=", class, " errno=", errno)
+		}
+		return answer, err
+	}
+	if err := routerVPNStrategyDNSExchange(ctx, exchange); err != nil {
 		return err
 	}
 	if _, err := e.IdentityContext(ctx); err != nil {

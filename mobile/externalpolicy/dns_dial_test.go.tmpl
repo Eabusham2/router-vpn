@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -358,6 +360,51 @@ func TestRouterVPNDNSServiceRetiresAlreadyClosedActualNativeAdapterSocket(t *tes
 			}
 			if err := service.Close(); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+type routerVPNDNSDiagnosticNoTextError struct{}
+
+func (routerVPNDNSDiagnosticNoTextError) Error() string {
+	panic("DNS failure diagnostic rendered error text")
+}
+
+type routerVPNDNSDiagnosticTimeoutError struct{ routerVPNDNSDiagnosticNoTextError }
+
+func (routerVPNDNSDiagnosticTimeoutError) Timeout() bool   { return true }
+func (routerVPNDNSDiagnosticTimeoutError) Temporary() bool { return false }
+
+func TestRouterVPNDNSProofFailureCode(t *testing.T) {
+	native := &net.OpError{
+		Op: "read", Net: "udp",
+		Source: &net.UDPAddr{IP: net.IPv4(10, 0, 0, 2), Port: 49152},
+		Addr:   &net.UDPAddr{IP: net.IPv4(10, 0, 0, 53), Port: 5353},
+		Err:    fmt.Errorf("private-auth=never-render-this: %w", syscall.EACCES),
+	}
+	cases := []struct {
+		name  string
+		err   error
+		class string
+		code  uint64
+	}{
+		{"wrapped-native", native, "syscall", uint64(syscall.EACCES)},
+		{"canceled", fmt.Errorf("private-path: %w", context.Canceled), "canceled", 0},
+		{"canceled-with-errno", errors.Join(context.Canceled, native), "canceled", uint64(syscall.EACCES)},
+		{"deadline", fmt.Errorf("private-path: %w", context.DeadlineExceeded), "deadline", 0},
+		{"closed", fmt.Errorf("private-path: %w", net.ErrClosed), "closed", 0},
+		{"eof", fmt.Errorf("private-path: %w", io.EOF), "eof", 0},
+		{"unexpected-eof", fmt.Errorf("private-path: %w", io.ErrUnexpectedEOF), "eof", 0},
+		{"timeout-without-text", &net.OpError{Op: "read", Net: "udp", Err: routerVPNDNSDiagnosticTimeoutError{}}, "timeout", 0},
+		{"unknown-without-text", routerVPNDNSDiagnosticNoTextError{}, "other", 0},
+		{"unknown-private-text", errors.New("private-auth=never-render-this"), "other", 0},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			class, code := routerVPNExternalDNSFailureCode(test.err)
+			if class != test.class || code != test.code {
+				t.Fatalf("diagnostic class/code = %q/%d, want %q/%d", class, code, test.class, test.code)
 			}
 		})
 	}
