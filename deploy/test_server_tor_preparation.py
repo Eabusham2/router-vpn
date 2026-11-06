@@ -66,6 +66,9 @@ class ServerTorPreparation(unittest.TestCase):
         users={name:raw for name,raw in content.items() if b'desktopnetwork' in raw and name not in supplied}
         symbols={'routervpn/mobiletor/padding_lease.go':{b'LockContext'},
                  'routervpn/mobiletor/server_client.go':{b'LockContext'},
+                 'routervpn/mobiletor/desktop_standard_linux_bootstrap_group.go':{b'LockContext'},
+                 'routervpn/mobiletor/desktop_standard_linux_bootstrap_group_exchange.go':{b'LockContext'},
+                 'routervpn/mobiletor/desktop_standard_linux_bootstrap_opportunistic.go':{b'LockContext'},
                  'routervpn/mobiletor/desktop_standard_linux_bootstrap.go':{b'InterfaceContext',b'InterfacesContext'}}
         self.assertEqual(set(users),set(symbols))
         exports=set(re.findall(rb'func (\w+)\(',b'\n'.join(supplied.values())))
@@ -126,6 +129,29 @@ class ServerTorPreparation(unittest.TestCase):
                 b'"github.com/sagernet/sing-box/routervpn/linuxprocess"')
             self.assertEqual(content['routervpn/mobiletor/'+name],expected)
 
+    def test_standard_engine_projection_is_exact_and_closed(self):
+        content=PREP.copies()
+        originals={p.name:p.read_bytes() for p in (ROOT/'internal/standardengine').glob('*.go')
+                   if not p.name.endswith('_test.go')}
+        expected={name:raw.replace(b'"router-vpn/internal/common"',
+                    b'"github.com/sagernet/sing-box/routervpn/common"') for name,raw in originals.items()}
+        actual={name.removeprefix('routervpn/standardengine/'):raw for name,raw in content.items()
+                if name.startswith('routervpn/standardengine/')}
+        self.assertEqual(actual,expected)
+        source=(ROOT/'internal/mobiletor/desktop_standard_linux_bootstrap_opportunistic.go').read_bytes()
+        expected=source.replace(b'"router-vpn/internal/common"', b'"github.com/sagernet/sing-box/routervpn/common"').replace(
+            b'"router-vpn/internal/desktopnetwork"', b'"github.com/sagernet/sing-box/routervpn/desktopnetwork"').replace(
+            b'"router-vpn/internal/standardengine"', b'"github.com/sagernet/sing-box/routervpn/standardengine"')
+        self.assertEqual(content['routervpn/mobiletor/desktop_standard_linux_bootstrap_opportunistic.go'],expected)
+        original=PREP.TOR.rewrite
+        def foreign(raw):
+            return original(raw).replace(b'"router-vpn/internal/standardengine"', b'"router-vpn/internal/uncaptured-standardengine"')
+        with mock.patch.object(PREP.TOR,'rewrite',side_effect=foreign):
+            with self.assertRaisesRegex(ValueError,'shared import closure is incomplete'):
+                PREP.copies()
+        declared=set(PREP.inputs())
+        self.assertTrue(all(ROOT/'internal/standardengine'/name in declared for name in originals))
+
     def test_actual_bounded_network_and_creator_projection_compiles(self):
         # Use shipping copy/rewrite functions, including the shared relay lease
         # dependency closure. No observer, TUN owner, or replacement parser is
@@ -143,7 +169,7 @@ class ServerTorPreparation(unittest.TestCase):
                 target=module/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(raw)
             for name in ('desktop_network_interface_linux_test.go','desktop_network_dump_linux_test.go'):
                 (module/'routervpn/desktopnetwork'/name).write_bytes((ROOT/'internal/desktopnetwork'/name).read_bytes())
-            subprocess.run(['go','test','-p=2','-race','-count=1','./routervpn/desktopnetwork','./routervpn/mobiletor'],
+            subprocess.run(['go','test','-p=2','-race','-count=1','./routervpn/desktopnetwork','./routervpn/mobiletor','./routervpn/standardengine'],
                            cwd=module,check=True,timeout=120)
             # Recreate the actual old helper-only closure. The retained
             # bootstrap source must fail to compile, never bind to a fallback.
