@@ -24,8 +24,9 @@ func desktopSSProvisionLayer(profile *common.RouterProfile, mode, private string
 	} else {
 		server = profile.External.Shadowsocks.Server
 	}
+	// Imported map values use JSON numeric types so persistence preserves the exact source.
 	profile.External.StartLayer = &common.ExternalStartLayer{Mode: mode, API: "http://" + private + ":8787", Transport: map[string]any{
-		"type": "shadowsocks", "tag": "private-start-layer", "server": server, "server_port": port,
+		"type": "shadowsocks", "tag": "private-start-layer", "server": server, "server_port": float64(port),
 		"method": common.StartLayerAES256GCMTransport, "password": desktopSSEntryKey(desktopSSEntryMethods[1], seed),
 	}}
 }
