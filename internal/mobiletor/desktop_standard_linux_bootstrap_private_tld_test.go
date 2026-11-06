@@ -3,10 +3,12 @@
 package mobiletor
 
 import (
+	"context"
 	"net/netip"
 	"router-vpn/internal/standardengine"
 	"strings"
 	"testing"
+	"time"
 )
 
 func bootstrapPrivateTLDFixture(t *testing.T, transport string) (standardengine.ResolvedPolicy, *standardengine.ResolvedDNSSECPlan, *standardengine.ResolvedPrivateTLDProof) {
@@ -86,6 +88,59 @@ func TestLinuxStandardBootstrapPrivateTLDPurpose(t *testing.T) {
 			}
 			if _, err = desktopLinuxBindPrivateTLD(p, []*standardengine.ResolvedPrivateTLDProof{proof, proof}); err == nil {
 				t.Fatal("duplicated scope accepted")
+			}
+		})
+	}
+}
+
+func TestLinuxStandardBootstrapPrivateTLDRejectsOrdinary(t *testing.T) {
+	for _, scenario := range []string{"direct", "opportunistic", "mixed-direct", "mixed-opportunistic"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			deadline, _ := ctx.Deadline()
+			p, plan, proof := bootstrapPrivateTLDFixture(t, "opportunistic")
+			binding, err := desktopLinuxBindPrivateTLD(p, []*standardengine.ResolvedPrivateTLDProof{proof})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mixed := strings.HasPrefix(scenario, "mixed-")
+			if mixed {
+				binding, err = desktopLinuxBindDNSSEC(p, []*standardengine.ResolvedDNSSECPlan{plan}, 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			group := &DesktopLinuxBootstrapDNSGroup{ctx: ctx, deadline: deadline, dnssec: binding}
+			selected, err := NewDesktopLinuxOpportunisticDNS(p, "node.example", 0, "udp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			secure, _, err := selected.upstreams()
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire := bootstrapDNSSECWire("node.example", 1)
+			wire[3] = 0
+			wire[11] = 0
+			wire = wire[:len(wire)-11]
+			if strings.HasSuffix(scenario, "opportunistic") {
+				_, err = group.ExchangeOpportunistic(ctx, selected, wire, func(context.Context) error { return nil })
+			} else {
+				_, err = group.Exchange(ctx, secure, wire)
+			}
+			if err == nil {
+				t.Fatal("ordinary method entered private proof cohort")
+			}
+			want := "private-TLD group requires its original typed proof"
+			if mixed {
+				want = "bootstrap group omitted original query"
+			}
+			if err.Error() != want {
+				t.Fatal("purpose boundary changed outside exact admission", scenario, err)
+			}
+			if group.admitted != 0 || group.active != 0 || len(group.members) != 0 {
+				t.Fatal("refused ordinary query allocated a physical member")
 			}
 		})
 	}

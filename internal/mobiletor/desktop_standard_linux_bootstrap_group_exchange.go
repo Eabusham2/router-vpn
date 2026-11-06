@@ -28,6 +28,11 @@ func (g *DesktopLinuxBootstrapDNSGroup) exchangeAttempt(query context.Context, u
 	return g.exchangeOwnedAttempt(query, upstream, question, attempt, nil)
 }
 func (g *DesktopLinuxBootstrapDNSGroup) exchangeOwnedAttempt(query context.Context, upstream DesktopLinuxBootstrapDNSUpstream, question []byte, attempt *desktopLinuxBootstrapTLSAttempt, dnssec *DesktopLinuxBootstrapDNSSECQuestion) (answer []byte, failure error) {
+	// A private-TLD cohort has no mixed ordinary address scopes. Neither the
+	// direct nor opportunistic public API may bypass its original proof token.
+	if g != nil && g.dnssec != nil && g.dnssec.privateTLD && dnssec == nil {
+		return nil, errors.New("private-TLD group requires its original typed proof")
+	}
 	var t *desktopLinuxStandardBootstrap
 	// Registered first: no member is recyclable until all later IO/cancellation
 	// callbacks have joined and the immutable response/error is final.

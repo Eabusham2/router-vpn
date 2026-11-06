@@ -804,7 +804,8 @@ AUXILIARY['resolved-private-tld-candidate']=('./internal/systembootstrap',{
  'TestResolvedPrivateTLDCandidate':('address','ipv6','signed','alias','dname','foreign',
  'negative','empty','deep','bad-size','truncated','foreign-class')})
 AUXILIARY['resolved-private-tld-transport']=('./internal/mobiletor',{
- 'TestLinuxStandardBootstrapPrivateTLDPurpose':('no','yes','opportunistic')})
+ 'TestLinuxStandardBootstrapPrivateTLDPurpose':('no','yes','opportunistic'),
+ 'TestLinuxStandardBootstrapPrivateTLDRejectsOrdinary':('direct','opportunistic','mixed-direct','mixed-opportunistic')})
 AUXILIARY_TESTS.update({
  'internal/standardengine/resolved_private_tld_test.go':'resolved-private-tld',
  'internal/systembootstrap/resolved_private_tld_linux_test.go':'resolved-private-tld-candidate',
