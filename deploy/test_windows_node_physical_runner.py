@@ -196,7 +196,7 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
         root = self.workspace / "repository"
         mobile = root / "mobile/desktop"
         mobile.mkdir(parents=True)
-        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_ss_entry_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_hysteria2_test.go.tmpl"
         original = source.read_bytes()
@@ -426,7 +426,7 @@ class OrdinarySOCKSScope(unittest.TestCase):
         root = self.workspace / "repository"
         mobile = root / "mobile/desktop"
         mobile.mkdir(parents=True)
-        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_ss_entry_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_socks_test.go.tmpl"
         original = source.read_bytes()
@@ -546,7 +546,7 @@ class OrdinaryPacketScope(unittest.TestCase):
         root = self.workspace / "repository"
         mobile = root / "mobile/desktop"
         mobile.mkdir(parents=True)
-        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_ss_entry_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_packet_test.go.tmpl"
         original = source.read_bytes()
@@ -731,6 +731,78 @@ class OrdinaryOpenVPNScope(unittest.TestCase):
                     self.workspace = previous
 
 
+class OrdinarySSEntryScope(unittest.TestCase):
+    setUp = OrdinaryHysteria2Scope.setUp
+
+    def test_each_alias_and_transport_verdict_is_unique_and_mandatory(self):
+        self.assertEqual(GATE.EXTERNAL_SS_ENTRY_NETWORKS, ("shadowsocks", "http-connect", "https-connect"))
+        self.assertEqual(len(GATE.EXTERNAL_SS_ENTRY_LEAVES), 13)
+        for network in GATE.EXTERNAL_SS_ENTRY_NETWORKS:
+            required = GATE.EXTERNAL_SS_ENTRY_CASES[network]
+            complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
+            with contextlib.redirect_stdout(io.StringIO()):
+                GATE.report_external_ss_entry(0, complete, network)
+            bad = [(1, complete)]
+            bad += [(0, complete + value + "\n") for value in ("--- SKIP: hidden (0.1s)", "DATA RACE", "panic: crash", "fatal error: crash", "[build failed]", "--- FAIL: hidden (0.1s)", "FAIL")]
+            for case in required:
+                verdict = "--- PASS: " + case + " (0.01s)\n"
+                bad += [(0, complete.replace(verdict, "")), (0, complete.replace(verdict, "expected: " + verdict)), (0, complete + verdict)]
+            for status, output in bad:
+                with self.subTest(network=network), contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(ValueError, "required native result"):
+                        GATE.report_external_ss_entry(status, output, network)
+
+    def dispatch(self, fault=None):
+        calls = []
+        def run(command, **kwargs):
+            command = tuple(map(str, command)); calls.append((command, kwargs["timeout"]))
+            if "-c" in command:
+                Path(command[command.index("-o") + 1]).write_bytes(b"captured-ss_entry-image")
+                return (1, "compile failed") if fault == "compile" else (0, "")
+            binary = Path(command[0])
+            if binary.parent.name == "external-ss-entry":
+                expression = next(value.removeprefix("-test.run=") for value in command if value.startswith("-test.run="))
+                network = next(network for network in GATE.EXTERNAL_SS_ENTRY_NETWORKS if expression.endswith("/^" + network + "$"))
+                required = GATE.EXTERNAL_SS_ENTRY_CASES[network]
+                if fault == "image":
+                    binary.write_bytes(b"foreign image")
+                if fault == "leaf":
+                    required = required[:-1]
+                return 0, "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
+            label = binary.parent.name.removeprefix("external-ss-entry-")
+            witness = "ordinary token bypassed actual external WFP UDP deny: independent peer marker" if label == "ordinary-udp-deny" else "actual SS entry source skipped its durable WFP intent"
+            self.assertIn("-test.run=^" + GATE.EXTERNAL_SS_ENTRY_ROOT + "$/^shadowsocks$/^always$", command)
+            output = "--- FAIL: " + GATE.EXTERNAL_SS_ENTRY_ROOT + "/shadowsocks/always (0.01s)\n" + witness
+            if fault == "prefix": output = "expected: " + output
+            if fault == "duplicate": output += "\n" + output
+            if fault == "panic": output += "\npanic: deadline"
+            if fault == "witness": output = output.replace(witness, "unrelated failure")
+            if fault == "mutant-image": binary.write_bytes(b"foreign negative image")
+            return (0 if fault == label else 1), output
+        with patch.object(GATE.BOOT.IDENTITY, "run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+            GATE.execute_external_ss_entry(self.source, self.workspace, ["go", "test", "-c", "-mod=readonly", "-race"], {})
+        return calls
+
+    def test_ss_entry_builds_are_separate_and_all_native_cases_and_controls_execute(self):
+        calls = self.dispatch()
+        self.assertEqual([timeout for _, timeout in calls], [600, 195, 195, 195, 600, 75, 600, 75])
+        self.assertEqual(len({command[0] for command, timeout in calls if timeout == 195}), 1)
+
+    def test_native_ss_entry_rejects_spoofed_controls_changed_images_and_omitted_results(self):
+        for fault, message in (("compile", "compilation failed"), ("image", "native executable changed"), ("leaf", "required native result"),
+                               ("ordinary-udp-deny", "exact defect"), ("missing-durable-intent", "exact defect"),
+                               ("prefix", "exact defect"), ("duplicate", "exact defect"), ("panic", "exact defect"), ("witness", "exact defect"), ("mutant-image", "negative executable changed")):
+            with self.subTest(fault=fault):
+                previous = self.workspace
+                self.workspace = previous / fault
+                self.workspace.mkdir()
+                try:
+                    with self.assertRaisesRegex(ValueError, message):
+                        self.dispatch(fault)
+                finally:
+                    self.workspace = previous
+
+
 class NativePhaseOrchestration(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="windows-phase-parser-")
@@ -782,7 +854,7 @@ class NativePhaseOrchestration(unittest.TestCase):
             try:
                 result = GATE.execute_partitioned(self.source, self.env, run)
             except BaseException:
-                self.assertNotIn("all six native phases", stdout.getvalue())
+                self.assertNotIn("all seven native phases", stdout.getvalue())
                 self.assertEqual(len(calls), 2 if fault == "child-failure" else 1)
                 raise
         return calls, result, stdout.getvalue()
@@ -790,10 +862,10 @@ class NativePhaseOrchestration(unittest.TestCase):
     def test_packaging_requires_all_serial_exact_source_and_executable_receipts(self):
         calls, results, output = self.dispatch()
         self.assertEqual(tuple(calls), GATE.PHASES)
-        self.assertEqual(len(set(calls)), 6)
-        self.assertEqual(len(results), 6)
-        self.assertIn("all six native phases and their controls passed", output)
-        self.assertEqual([len(row["executables"]) for row in results], [3, 6, 3, 7, 3, 3])
+        self.assertEqual(len(set(calls)), 7)
+        self.assertEqual(len(results), 7)
+        self.assertIn("all seven native phases and their controls passed", output)
+        self.assertEqual([len(row["executables"]) for row in results], [3, 6, 3, 7, 3, 3, 3])
 
     def test_partial_wrong_target_changed_source_or_missing_images_never_complete(self):
         for fault in ("missing", "source", "phase", "target", "image", "unrelated-image", "mutated-source", "oversized"):
@@ -822,7 +894,7 @@ class NativePhaseOrchestration(unittest.TestCase):
         with patch.object(GATE, "execute", side_effect=child), contextlib.redirect_stdout(io.StringIO()):
             results = original(self.source)
         self.assertEqual(tuple(calls), GATE.PHASES)
-        self.assertEqual(len(results), 6)
+        self.assertEqual(len(results), 7)
         calls.clear()
         def failed(source, go, **kwargs):
             calls.append(kwargs["phase"])

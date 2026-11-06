@@ -111,6 +111,7 @@ def inputs():
                              ROOT/'deploy/test_windows_protection_observation.py',
                              ROOT/'deploy/test_windows_node_physical.py',
                              ROOT/'deploy/test_windows_node_physical_runner.py',
+                             ROOT/'deploy/test_windows_external_provider_join.py',
                              ROOT/'deploy/test_windows_node_pq.py',
                              ROOT/'deploy/test_windows_node_pq_runner.py',
                              ROOT/'deploy/test_windows_node_max.py',
@@ -774,6 +775,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                     env=env, timeout=600)
                 run([sys.executable, ROOT/'deploy/test_windows_protection_observation.py', source],
                     env=env, timeout=600)
+                run([sys.executable, ROOT/'deploy/test_windows_external_provider_join.py'], cwd=ROOT, env=env)
                 run([sys.executable, ROOT/'deploy/test_windows_node_physical_runner.py'], cwd=ROOT, env=env)
                 # Each actual native phase owns its original compiler/test bounds.
                 # A full package requires all source-bound phase receipts.

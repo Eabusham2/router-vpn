@@ -1,0 +1,499 @@
+//go:build windows && routervpn_windows_node_composition
+
+package box
+
+import (
+	"bytes"
+	"context"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	shadowsocks "github.com/sagernet/sing-shadowsocks"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	"github.com/sagernet/sing/common/buf"
+	B "github.com/sagernet/sing/common/bufio"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"io"
+	"net"
+	"os"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+const desktopWFPSSEntryFinal = "198.51.100.240:8388"
+
+type desktopExternalWFPSSEntryRequest struct{ Method, Final string }
+
+func desktopWFPSSEntryPassword(method string, value byte) string {
+	size := 32
+	if method == "2022-blake3-aes-128-gcm" {
+		size = 16
+	}
+	return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{value}, size))
+}
+func TestRouterVPNDesktopExternalWindowsSSEntryPeer(t *testing.T) {
+	desktopExternalWFPRunPeer(t, "ss-entry")
+}
+
+func desktopWFPSSEntryAuthError(err error) bool {
+	for i := 0; err != nil && i < 16; i++ {
+		if _, joined := err.(interface{ Unwrap() []error }); joined {
+			return false
+		}
+		next := errors.Unwrap(err)
+		if next == nil {
+			return err.Error() == "cipher: message authentication failed" || err.Error() == "chacha20poly1305: message authentication failed"
+		}
+		err = next
+	}
+	return false
+}
+
+type desktopWFPSSEntryForward struct {
+	*desktopExternalIntegrationPeer
+	entryProof                 *desktopExternalIntegrationPeer
+	target                     string
+	final                      string
+	streams, packets, rejected atomic.Int32
+}
+
+func (h *desktopWFPSSEntryForward) NewConnection(ctx context.Context, c net.Conn, m M.Metadata) error {
+	if m.Destination.String() == "1.1.1.1:443" {
+		return h.entryProof.serve(c, m.Destination.String())
+	}
+	if m.Destination.String() != desktopWFPSSEntryFinal {
+		h.rejected.Add(1)
+		return errors.New("SS entry rejected uncaptured final")
+	}
+	remote, err := (&net.Dialer{}).DialContext(ctx, "tcp", h.target)
+	if err != nil {
+		return err
+	}
+	defer remote.Close()
+	stop := context.AfterFunc(h.ctx, func() { _ = c.Close(); _ = remote.Close() })
+	defer stop()
+	h.streams.Add(1)
+	done := make(chan struct{})
+	go func() { _, _ = io.Copy(remote, c); _ = remote.Close(); _ = c.Close(); close(done) }()
+	_, _ = io.Copy(c, remote)
+	_ = remote.Close()
+	_ = c.Close()
+	<-done
+	return nil
+}
+func (h *desktopWFPSSEntryForward) NewPacketConnection(ctx context.Context, c N.PacketConn, m M.Metadata) error {
+	if h.final != "shadowsocks" || m.Destination.String() != desktopWFPSSEntryFinal {
+		h.rejected.Add(1)
+		return errors.New("SS entry rejected unowned UDP final")
+	}
+	h.mu.Lock()
+	if h.closing {
+		h.mu.Unlock()
+		return net.ErrClosed
+	}
+	h.packetConnections[c] = true
+	h.workers.Add(1)
+	h.mu.Unlock()
+	defer func() { _ = c.Close(); h.mu.Lock(); delete(h.packetConnections, c); h.mu.Unlock(); h.workers.Done() }()
+	remote, err := (&net.Dialer{}).DialContext(ctx, "udp", h.target)
+	if err != nil {
+		return err
+	}
+	defer remote.Close()
+	stop := context.AfterFunc(h.ctx, func() { _ = c.Close(); _ = remote.Close() })
+	defer stop()
+	h.packets.Add(1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			body := buf.NewPacket()
+			n, e := remote.Read(body.FreeBytes())
+			if e != nil {
+				body.Release()
+				_ = c.Close()
+				return
+			}
+			body.Truncate(n)
+			if e = c.WritePacket(body, m.Destination); e != nil {
+				_ = c.Close()
+				return
+			}
+		}
+	}()
+	for {
+		body := buf.NewPacket()
+		dst, e := c.ReadPacket(body)
+		if e == nil && dst != m.Destination {
+			e = errors.New("SS entry destination changed")
+		}
+		if e == nil {
+			_, e = remote.Write(body.Bytes())
+		}
+		body.Release()
+		if e != nil {
+			break
+		}
+	}
+	_ = remote.Close()
+	<-done
+	return nil
+}
+
+// The entry and final are independent pinned services in the retained provider
+// executable. Entry TLS proof terminates here; only the captured final tuple
+// is forwardable after entry AEAD.
+type desktopWFPSSEntryFinalHandler struct {
+	*desktopExternalIntegrationPeer
+}
+
+func (h *desktopWFPSSEntryFinalHandler) NewPacketConnection(ctx context.Context, c N.PacketConn, m M.Metadata) error {
+	var result error
+	h.NewPacketConnectionEx(ctx, c, m.Source, m.Destination, func(e error) { result = e })
+	return result
+}
+func desktopExternalWFPStartSSEntryPeer(t *testing.T, p *desktopExternalIntegrationPeer, observed *desktopExternalWFPDatagrams, r desktopExternalWFPRequest) *desktopWFPSSEntryForward {
+	t.Helper()
+	selected := r.SSEntry
+	if selected == nil || (selected.Final != "shadowsocks" && selected.Final != "http-connect" && selected.Final != "https-connect") {
+		t.Fatal("unowned SS final")
+	}
+	switch selected.Method {
+	case "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305":
+	default:
+		t.Fatal("unowned SS entry cipher")
+	}
+	p.protocol = selected.Final
+	listener, e := net.Listen("tcp4", observed.LocalAddr().String())
+	if e != nil {
+		t.Fatal(e)
+	}
+	p.listener = listener
+	finalUDP, e := net.ListenPacket("udp4", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	finalTCP, e := net.Listen("tcp4", finalUDP.LocalAddr().String())
+	if e != nil {
+		_ = finalUDP.Close()
+		t.Fatal(e)
+	}
+	p.closeProtocol = func() { _ = finalTCP.Close(); _ = finalUDP.Close() }
+	entryProof := &desktopExternalIntegrationPeer{ctx: p.ctx, certificate: p.certificate, badIP: r.Fault != "entry-exit"}
+	forward := &desktopWFPSSEntryForward{entryProof: entryProof, desktopExternalIntegrationPeer: p, target: finalTCP.Addr().String(), final: selected.Final}
+	entryPassword := desktopWFPSSEntryPassword(selected.Method, 31)
+	if r.Fault == "entry-key" {
+		entryPassword = desktopWFPSSEntryPassword(selected.Method, 32)
+	}
+	entry, e := shadowaead_2022.NewServiceWithPassword(selected.Method, entryPassword, 60, forward, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	finalPassword := desktopWFPSSEntryPassword(selected.Method, 41)
+	if r.Fault == "final-key" {
+		finalPassword = desktopWFPSSEntryPassword(selected.Method, 42)
+		p.badAuth = true
+	}
+	var final shadowsocks.Service
+	if selected.Final == "shadowsocks" {
+		final, e = shadowaead_2022.NewServiceWithPassword(selected.Method, finalPassword, 60, &desktopWFPSSEntryFinalHandler{p}, nil)
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	accept := func(l net.Listener, ss shadowsocks.Service, outer bool) {
+		p.workers.Add(1)
+		go func() {
+			defer p.workers.Done()
+			for {
+				c, e := l.Accept()
+				if e != nil {
+					return
+				}
+				p.mu.Lock()
+				if p.closing {
+					p.mu.Unlock()
+					_ = c.Close()
+					return
+				}
+				p.connections[c] = true
+				p.workers.Add(1)
+				p.mu.Unlock()
+				go func() {
+					defer p.workers.Done()
+					defer func() { _ = c.Close(); p.mu.Lock(); delete(p.connections, c); p.mu.Unlock() }()
+					_ = c.SetDeadline(time.Now().Add(15 * time.Second))
+					if outer {
+						p.accepted.Add(1)
+					}
+					if ss != nil {
+						err := ss.NewConnection(p.ctx, c, M.Metadata{Source: M.SocksaddrFromNet(c.RemoteAddr())})
+						if desktopWFPSSEntryAuthError(err) {
+							p.authFailures.Add(1)
+						}
+						p.recordFailure(err)
+					} else {
+						p.recordFailure(p.connect(c))
+					}
+				}()
+			}
+		}()
+	}
+	packets := func(pc net.PacketConn, ss shadowsocks.Service) {
+		p.workers.Add(1)
+		go func() {
+			defer p.workers.Done()
+			reader := B.NewPacketConn(pc)
+			for {
+				body := buf.NewPacket()
+				from, e := reader.ReadPacket(body)
+				if e != nil {
+					body.Release()
+					return
+				}
+				if e = ss.NewPacket(p.ctx, reader, body, M.Metadata{Source: from}); e != nil {
+					body.Release()
+					if desktopWFPSSEntryAuthError(e) {
+						p.authFailures.Add(1)
+					}
+					p.recordFailure(e)
+				}
+			}
+		}()
+	}
+	accept(listener, entry, true)
+	accept(finalTCP, final, false)
+	// CONNECT exposes TCP only; a provider-side echo is still independent evidence
+	// for the ordinary WFP UDP deny oracle.
+	packets(observed, entry)
+	if final != nil {
+		packets(finalUDP, final)
+	}
+	return forward
+}
+
+func desktopExternalWFPSSEntryOriginal(t *testing.T, p *desktopExternalWFPReference, method, final, kill string) (*mobilemultihop.ExternalPolicy, string, string) {
+	t.Helper()
+	entry := map[string]any{"id": "captured-ss-entry", "node_kind": "external", "external": map[string]any{"protocol": "shadowsocks", "expected_public_ip": "203.0.113.89", "shadowsocks": map[string]any{"server": p.local.String(), "port": int(p.remote.Port()), "method": method, "password": desktopWFPSSEntryPassword(method, 31)}}}
+	transport := map[string]any{"type": "shadowsocks", "tag": mobilemultihop.ExternalFinalTag, "server": "198.51.100.240", "server_port": 8388, "method": method, "password": desktopWFPSSEntryPassword(method, 41)}
+	external := map[string]any{"protocol": final, "expected_public_ip": desktopExternalIntegrationIP}
+	dnsProtocol := "udp"
+	if final == "shadowsocks" {
+		external["shadowsocks"] = map[string]any{"server": "198.51.100.240", "port": 8388, "method": transport["method"], "password": transport["password"]}
+	} else {
+		dnsProtocol = "tcp"
+		transport = map[string]any{"type": "http", "tag": mobilemultihop.ExternalFinalTag, "server": "198.51.100.240", "server_port": 8388, "username": desktopExternalIntegrationUser, "password": desktopExternalIntegrationPassword}
+		settings := map[string]any{"host": "198.51.100.240", "port": 8388, "username": desktopExternalIntegrationUser, "password": desktopExternalIntegrationPassword}
+		if final == "https-connect" {
+			transport["tls"] = map[string]any{"enabled": true, "server_name": "captured-proxy.example"}
+			settings["tls_server_name"] = "captured-proxy.example"
+		}
+		external[strings.ReplaceAll(final, "-", "_")] = settings
+	}
+	profile := map[string]any{"id": "captured-ss-final", "node_kind": "external", "external": external, "dns_mode": "custom", "dns_protocol": dnsProtocol, "dns_host": "192.168.50.53", "dns_port": 5353, "mtu_policy": "manual", "manual_mtu": 1280, "home_lan_access": false, "ipv6_mode": "off", "kill_switch_policy": kill}
+	transport["detour"] = "external-entry"
+	entryTransport := map[string]any{"type": "shadowsocks", "tag": "external-entry", "server": p.local.String(), "server_port": int(p.remote.Port()), "method": method, "password": desktopWFPSSEntryPassword(method, 31)}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "rvpn-ss-" + desktopExternalWFPNonce(t)[:16], "address": []string{"172.29.93.1/30", "fd29:93::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "outbounds": []any{entryTransport, transport}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "auto_detect_interface": true}}
+	capture := map[string]any{"schema": 1, "exit_id": profile["id"], "protocol": final, "expected_public_ip": desktopExternalIntegrationIP, "profile": profile, "entry": entry, "entry_tag": "external-entry"}
+	raw, _ := json.Marshal(graph)
+	saved, _ := json.Marshal(capture)
+	original, e := mobilemultihop.NewExternalPolicy(string(raw), string(saved))
+	if e != nil {
+		t.Fatal(e)
+	}
+	return original, string(raw), string(saved)
+}
+func desktopExternalWFPSSEntrySnapshot(t *testing.T, f *desktopExternalWFPFixture, p *desktopExternalWFPReference, final string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	// Hold a real final DNS TCP conversation while observing its entry grant.
+	// Completed public proofs close their short-lived TCP sockets, so their old
+	// grants must never be mistaken for currently owned WFP authority.
+	c, e := f.proof.engine.Dial(ctx, mobilemultihop.ExternalFinalTag, desktopExternalIntegrationDNS)
+	if e != nil {
+		t.Fatal("SS entry live grant conversation", e)
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(3 * time.Second))
+	dns := &mDNS.Conn{Conn: c}
+	q := new(mDNS.Msg)
+	q.SetQuestion("example.com.", mDNS.TypeA)
+	if e = dns.WriteMsg(q); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = dns.ReadMsg(); e != nil {
+		t.Fatal(e)
+	}
+	actual, e := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	if e != nil || actual.Closed || actual.Target != f.prepared || actual.TunnelLUID != f.tun.luid || actual.Owner.Kind != "windows-isolated-token" || !actual.Options.RetainBaselineForHandoff || actual.TunnelName != f.tun.options.InterfaceName || actual.TunnelIndex != uint32(f.tun.index) || len(actual.Grants) == 0 {
+		t.Fatal("SS entry lost actual WFP/TUN capture", e)
+	}
+	for _, grant := range actual.Grants {
+		if grant.Remote != p.remote || grant.Local.Addr() != p.local || grant.Capture != f.prepared.Capture || grant.Binding.Owner != actual.Owner || grant.Sequence == 0 || grant.Network != "tcp" && grant.Network != "udp" || final != "shadowsocks" && grant.Network != "tcp" {
+			t.Fatal("SS final escaped captured entry WFP authority")
+		}
+	}
+}
+func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
+	ca := newDesktopExternalIntegrationCA(t)
+	roots := x509.NewCertPool()
+	certificate, e := x509.ParseCertificate(ca.der)
+	if e != nil {
+		t.Fatal(e)
+	}
+	roots.AddCert(certificate)
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+	x509.SetFallbackRoots(roots)
+	for _, final := range []string{"shadowsocks", "http-connect", "https-connect"} {
+		t.Run(final, func(t *testing.T) {
+			for _, name := range []string{"on-connect", "always", "cipher-aes128", "cipher-chacha20", "successor-and-original-restore", "reject/entry-key", "reject/entry-exit", "reject/final-key", "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused"} {
+				t.Run(name, func(t *testing.T) {
+					method := "2022-blake3-aes-256-gcm"
+					if name == "cipher-aes128" {
+						method = "2022-blake3-aes-128-gcm"
+					}
+					if name == "cipher-chacha20" {
+						method = "2022-blake3-chacha20-poly1305"
+					}
+					fault := strings.TrimPrefix(name, "reject/")
+					if !strings.HasPrefix(name, "reject/") {
+						fault = ""
+					}
+					if name == "cancelled-proof" {
+						fault = "held"
+					}
+					p := desktopExternalWFPStartReferenceProtocol(t, ca, fault, "ss-entry/"+final+"/"+method)
+					kill := "always"
+					if name == "on-connect" {
+						kill = name
+					}
+					original, source, capture := desktopExternalWFPSSEntryOriginal(t, p, method, final, kill)
+					var retained mobiletor.DesktopWindowsProtectionTarget
+					desktopExternalWFPCleanup(t, &retained)
+					prove := func(f *desktopExternalWFPFixture) {
+						raw, e := f.proof.Run()
+						var value mobilemultihop.ExternalProofResult
+						meta := f.policy.Metadata()
+						if e != nil || json.Unmarshal([]byte(raw), &value) != nil || value.SessionID != meta.SessionID || value.SourceSHA256 != meta.OriginalSourceSHA256 || value.ConfigSHA256 != meta.OriginalConfigSHA256 || meta.RootTag != "external-entry" || !value.DNSProven || !value.EntryProven || value.IP != desktopExternalIntegrationIP || !f.proof.Healthy() || !f.network.Current() {
+							t.Fatal("SS entry final path proof failed", e)
+						}
+						stats := p.call(t, "stats", "")
+						if stats.SSEntryPublic == 0 || stats.SSEntryTLS == 0 || stats.SSEntryTCP == 0 || stats.DNS == 0 || stats.TLS == 0 || stats.Public == 0 || final == "shadowsocks" && (stats.SSEntryUDP == 0 || stats.UDPDNS == 0) || final != "shadowsocks" && (stats.SSEntryUDP != 0 || stats.UDPDNS != 0) {
+							t.Fatal("SS entry bypassed independent encrypted final or selected DNS", stats)
+						}
+						desktopExternalWFPSSEntrySnapshot(t, f, p, final)
+					}
+					if name == "foreign-predecessor" {
+						first := desktopExternalWFPBox(t, original, source, capture, nil, false)
+						first.start(t)
+						prove(first)
+						retained = first.drain(t)
+						foreign := retained
+						foreign.Capture.SourceSHA256 = strings.Repeat("f", 64)
+						next := desktopExternalWFPBox(t, original, source, capture, &foreign, false)
+						if e := next.box.RouterVPNStrategyStart(); e == nil || next.admitted != 0 || next.network.Current() {
+							t.Fatal("SS entry adopted foreign predecessor")
+						}
+						return
+					}
+					f := desktopExternalWFPBox(t, original, source, capture, nil, name == "commit-refused")
+					if name == "commit-refused" {
+						if e := f.box.RouterVPNStrategyStart(); e == nil || f.admitted != 0 || f.network.SocketCurrent() {
+							t.Fatal("SS entry bypassed durable original barrier", e)
+						}
+						return
+					}
+					f.start(t)
+					if strings.HasPrefix(name, "reject/") || name == "cancelled-proof" {
+						type result struct {
+							raw string
+							err error
+						}
+						done := make(chan result, 1)
+						go func() { raw, e := f.proof.Run(); done <- result{raw, e} }()
+						if name == "reject/entry-key" || name == "reject/final-key" {
+							limit := time.NewTimer(10 * time.Second)
+							defer limit.Stop()
+							for p.call(t, "stats", "").AuthFailures == 0 {
+								select {
+								case outcome := <-done:
+									t.Fatal("SS credential proof ended without native authentication rejection", outcome.err)
+								case <-limit.C:
+									f.proof.Cancel()
+									t.Fatal("SS credential rejection not observed")
+								case <-time.After(10 * time.Millisecond):
+								}
+							}
+							f.proof.Cancel()
+						}
+						if name == "cancelled-proof" {
+							limit := time.NewTimer(10 * time.Second)
+							defer limit.Stop()
+							for p.call(t, "stats", "").Public != 1 {
+								select {
+								case <-limit.C:
+									f.proof.Cancel()
+									t.Fatal("SS proof did not reach held authenticated response")
+								case <-time.After(10 * time.Millisecond):
+								}
+							}
+							f.proof.Cancel()
+							p.call(t, "release", "")
+						}
+						select {
+						case outcome := <-done:
+							if outcome.err == nil || outcome.raw != "" || f.proof.Healthy() || f.network.Current() {
+								t.Fatal("rejected SS proof acquired authority")
+							}
+						case <-time.After(12 * time.Second):
+							f.proof.Cancel()
+							t.Fatal("SS rejection failed to join")
+						}
+						stats := p.call(t, "stats", "")
+						if name == "reject/entry-exit" && (stats.SSEntryPublic != 1 || stats.SSEntryTLS != 1 || stats.SSEntryTCP != 0 || stats.DNS != 0) {
+							t.Fatal("wrong entry IP reached final path", stats)
+						}
+						if name == "reject/entry-key" && (stats.SSEntryPublic != 0 || stats.SSEntryTCP != 0 || stats.DNS != 0) {
+							t.Fatal("wrong entry credential reached inner proof", stats)
+						}
+						if name != "reject/entry-key" && stats.SSEntryPublic != 1 {
+							t.Fatal("final rejection omitted independent entry proof", stats)
+						}
+						if name == "cancelled-proof" {
+							if stats.Public != 1 || stats.Attempts != 1 || stats.TLS != 1 {
+								t.Fatal("cancelled SS proof replayed held request", stats)
+							}
+						} else if stats.Public != 0 && name != "reject/exit" {
+							t.Fatal("failed SS path reached public proof", stats)
+						}
+						retained = f.drain(t)
+						return
+					}
+					prove(f)
+					oracle := desktopExternalWFPStartReference(t, ca, "")
+					desktopExternalWFPRequireBlocked(t, oracle)
+					retained = f.drain(t)
+					desktopExternalWFPRequireBlocked(t, oracle)
+					if name == "successor-and-original-restore" {
+						previous := retained
+						next := desktopExternalWFPBox(t, original, source, capture, &previous, false)
+						next.start(t)
+						prove(next)
+						if next.original != original || next.source != source || next.capture != capture || next.prepared.Capture.SessionID == previous.Capture.SessionID || f.proof.Healthy() {
+							t.Fatal("SS restore replaced original imported graph")
+						}
+						retained = next.drain(t)
+					}
+				})
+			}
+		})
+	}
+}

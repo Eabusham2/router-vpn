@@ -40,6 +40,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	HTTP "github.com/sagernet/sing-box/protocol/http"
 	HY "github.com/sagernet/sing-box/protocol/hysteria2"
 	OVPN "github.com/sagernet/sing-box/protocol/openvpn"
 	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
@@ -65,31 +66,33 @@ const desktopExternalWFPLimit = 64 << 10
 const desktopExternalWFPProbePrefix = "routervpn-ordinary-wfp:"
 
 type desktopExternalWFPRequest struct {
-	Layer                                        *desktopExternalWFPLayerRequest  `json:"layer,omitempty"`
-	Packet                                       *desktopExternalWFPPacketRequest `json:"packet,omitempty"`
-	Schema                                       int                              `json:"schema"`
-	Operation                                    string                           `json:"operation"`
-	Address                                      string                           `json:"address,omitempty"`
-	Fault                                        string                           `json:"fault,omitempty"`
+	SSEntry                                      *desktopExternalWFPSSEntryRequest `json:"ss_entry,omitempty"`
+	Layer                                        *desktopExternalWFPLayerRequest   `json:"layer,omitempty"`
+	Packet                                       *desktopExternalWFPPacketRequest  `json:"packet,omitempty"`
+	Schema                                       int                               `json:"schema"`
+	Operation                                    string                            `json:"operation"`
+	Address                                      string                            `json:"address,omitempty"`
+	Fault                                        string                            `json:"fault,omitempty"`
 	Certificate, Key, ProxyCertificate, ProxyKey []byte
 	Nonce                                        string `json:"nonce,omitempty"`
 }
 
 type desktopExternalWFPReply struct {
-	LayerLatencyDNS, LayerLatencyTLS, LayerLatencyRequests     int32  `json:",omitempty"`
-	LayerMode, InnerAddress                                    string `json:",omitempty"`
-	LayerPackets, LayerAccepted, LayerForwarded, LayerRejected int32  `json:",omitempty"`
-	Schema                                                     int    `json:"schema"`
-	Address                                                    string `json:"address"`
-	AppID                                                      []byte `json:"app_id"`
-	Nonce                                                      string `json:"nonce,omitempty"`
-	Observed                                                   int    `json:"observed"`
-	Packets, DNS, UDPDNS, TLS, Public, Attempts                int32
-	Closed                                                     bool                                 `json:"closed"`
-	TCP, Rejected, AuthFailures                                int32                                `json:",omitempty"`
-	ProbeUDP                                                   string                               `json:"probe_udp,omitempty"`
-	SOCKSRefusals                                              []desktopExternalSOCKSRefusalReceipt `json:"socks_refusals,omitempty"`
-	SOCKS                                                      []desktopExternalSOCKSWFPReceipt     `json:"socks,omitempty"`
+	SSEntryTCP, SSEntryUDP, SSEntryRejected, SSEntryPublic, SSEntryTLS int32
+	LayerLatencyDNS, LayerLatencyTLS, LayerLatencyRequests             int32  `json:",omitempty"`
+	LayerMode, InnerAddress                                            string `json:",omitempty"`
+	LayerPackets, LayerAccepted, LayerForwarded, LayerRejected         int32  `json:",omitempty"`
+	Schema                                                             int    `json:"schema"`
+	Address                                                            string `json:"address"`
+	AppID                                                              []byte `json:"app_id"`
+	Nonce                                                              string `json:"nonce,omitempty"`
+	Observed                                                           int    `json:"observed"`
+	Packets, DNS, UDPDNS, TLS, Public, Attempts                        int32
+	Closed                                                             bool                                 `json:"closed"`
+	TCP, Rejected, AuthFailures                                        int32                                `json:",omitempty"`
+	ProbeUDP                                                           string                               `json:"probe_udp,omitempty"`
+	SOCKSRefusals                                                      []desktopExternalSOCKSRefusalReceipt `json:"socks_refusals,omitempty"`
+	SOCKS                                                              []desktopExternalSOCKSWFPReceipt     `json:"socks,omitempty"`
 }
 
 func desktopExternalWFPAddress(t *testing.T) netip.Addr {
@@ -214,7 +217,7 @@ func desktopExternalWFPReadCapturedRequest(input *bufio.Reader, layer bool) (des
 		return request, err
 	}
 	var trailing any
-	if decoder.Decode(&trailing) != io.EOF || request.Schema != 1 || request.Layer != nil && (!layer || request.Packet != nil) || request.Operation != "start" && (request.Packet != nil || request.Layer != nil) {
+	if decoder.Decode(&trailing) != io.EOF || request.Schema != 1 || request.Layer != nil && (!layer || request.Packet != nil) || request.SSEntry != nil && (request.Packet != nil || request.Layer != nil) || request.Operation != "start" && (request.Packet != nil || request.Layer != nil || request.SSEntry != nil) {
 		return request, errors.New("external peer request changed its exact schema")
 	}
 	return request, nil
@@ -239,6 +242,9 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 	if err != nil || request.Operation != "start" || request.Address != desktopExternalWFPAddress(t).String() || request.Nonce != "" {
 		t.Fatal("external peer did not receive its exact initial capture", err)
 	}
+	if (protocol == "ss-entry") != (request.SSEntry != nil) {
+		t.Fatal("SS entry reference changed captured family")
+	}
 	if (protocol == "hysteria2-layer") != (request.Layer != nil) {
 		t.Fatal("HY2 layer reference changed its captured graph family")
 	}
@@ -251,6 +257,10 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 		}
 		switch request.Fault {
 		case "", "password", "trust", "dns", "exit", "held":
+		case "entry-key", "entry-exit", "final-key":
+			if protocol != "ss-entry" {
+				t.Fatal("unowned SS entry credential fault")
+			}
 		case "layer-key", "whitening":
 			if request.Layer == nil || request.Fault == "whitening" && request.Layer.Mode != "aes-256-gcm+xor-whitening" {
 				t.Fatal("unowned HY2 layer negative")
@@ -284,6 +294,7 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 	}
 	var protocolErr error
 	var layer *desktopExternalHysteriaLayerPeer
+	var ssEntry *desktopWFPSSEntryForward
 	address, innerAddress, layerMode := packet.LocalAddr().String(), "", ""
 	closed := false
 	closePeer := func() {
@@ -295,6 +306,10 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 	defer closePeer()
 	if protocol == "packet" {
 		desktopExternalWFPStartPacketPeer(t, peer, request.Packet, request.Fault)
+		clear(request.Key)
+		clear(request.ProxyKey)
+	} else if protocol == "ss-entry" {
+		ssEntry = desktopExternalWFPStartSSEntryPeer(t, peer, observed, request)
 		clear(request.Key)
 		clear(request.ProxyKey)
 	} else {
@@ -367,6 +382,11 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 		reply := desktopExternalWFPReply{Schema: 1, Address: address, AppID: appID, Nonce: nonce, Observed: count,
 			Packets: observed.packets.Load(), DNS: peer.dnsQueries.Load(), UDPDNS: peer.udpQueries.Load(), TLS: peer.tlsHandshakes.Load(), Public: peer.publicRequests.Load(), Attempts: peer.publicAttempts.Load(), Closed: isClosed,
 			LayerMode: layerMode, InnerAddress: innerAddress}
+		reply.AuthFailures = peer.authFailures.Load()
+		if ssEntry != nil {
+			reply.SSEntryPublic, reply.SSEntryTLS = ssEntry.entryProof.publicRequests.Load(), ssEntry.entryProof.tlsHandshakes.Load()
+			reply.SSEntryTCP, reply.SSEntryUDP, reply.SSEntryRejected = ssEntry.streams.Load(), ssEntry.packets.Load(), ssEntry.rejected.Load()
+		}
 		if layer != nil {
 			reply.LayerPackets, reply.LayerAccepted, reply.LayerForwarded, reply.LayerRejected = layer.raw.Load(), layer.authenticated.Load(), layer.forwarded.Load(), layer.rejected.Load()
 		}
@@ -471,7 +491,7 @@ type desktopExternalWFPReference struct {
 	input       io.WriteCloser
 	output      *os.File
 	reader      *bufio.Reader
-	diagnostics bytes.Buffer
+	diagnostics desktopExternalWFPDiagnostics
 	done        chan error
 	cancel      context.CancelFunc
 	local       netip.Addr
@@ -507,7 +527,11 @@ func (p *desktopExternalWFPReference) read() (desktopExternalWFPReply, error) {
 	case <-time.After(12 * time.Second):
 		p.cancel()
 		_ = p.output.Close()
-		<-done
+		select {
+		case <-done:
+		case <-time.After(12 * time.Second):
+			return desktopExternalWFPReply{}, errors.New("original external peer acknowledgement reader failed to reap")
+		}
 		return desktopExternalWFPReply{}, errors.New("external peer acknowledgement did not join")
 	}
 }
@@ -527,6 +551,96 @@ func (p *desktopExternalWFPReference) call(t *testing.T, operation, nonce string
 	return reply
 }
 
+// The cleanup receipt has already been authenticated. Drain only the original
+// pipe, concurrently with waiting for that same process; final Go test output
+// must never block the provider's exit or become an unbounded diagnostic sink.
+func desktopExternalWFPJoinOutput(reader io.Reader, closeOutput func() error, process <-chan error, cancel func(), bound time.Duration) error {
+	const maximum = 256 << 10
+	drained := make(chan error, 1)
+	go func() {
+		n, err := io.Copy(io.Discard, io.LimitReader(reader, maximum+1))
+		if n > maximum {
+			err = errors.Join(err, errors.New("external provider final output exceeded bound"))
+		}
+		drained <- err
+	}()
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	var failure error
+	stopped := false
+	stop := func() {
+		if !stopped {
+			stopped = true
+			cancel()
+			_ = closeOutput()
+		}
+	}
+	for drained != nil || process != nil {
+		select {
+		case err := <-drained:
+			drained = nil
+			failure = errors.Join(failure, err)
+			if err != nil {
+				stop()
+			}
+		case err := <-process:
+			process = nil
+			failure = errors.Join(failure, err)
+			if err != nil {
+				stop()
+			}
+		case <-timer.C:
+			failure = errors.Join(failure, errors.New("external provider process/output did not join"))
+			stop()
+			// Cancellation terminates the original process and closing its own pipe
+			// releases the sole reader. Bound reaping too; never wait forever after kill.
+			reap := time.NewTimer(bound)
+			defer reap.Stop()
+			for drained != nil || process != nil {
+				select {
+				case err := <-drained:
+					drained = nil
+					failure = errors.Join(failure, err)
+				case err := <-process:
+					process = nil
+					failure = errors.Join(failure, err)
+				case <-reap.C:
+					return errors.Join(failure, errors.New("external provider original reader/process failed to reap"))
+				}
+			}
+		}
+	}
+	return failure
+}
+
+type desktopExternalWFPDiagnostics struct {
+	mu       sync.Mutex
+	data     []byte
+	overflow bool
+}
+
+func (d *desktopExternalWFPDiagnostics) Write(p []byte) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	size := len(p)
+	remaining := (64 << 10) - len(d.data)
+	if len(p) > remaining {
+		p = p[:remaining]
+		d.overflow = true
+	}
+	d.data = append(d.data, p...)
+	return size, nil
+}
+func (d *desktopExternalWFPDiagnostics) String() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	value := string(d.data)
+	if d.overflow {
+		value += "\n[external provider diagnostics exceeded bound]"
+	}
+	return value
+}
+
 func (p *desktopExternalWFPReference) close() error {
 	if p.closed {
 		return nil
@@ -534,16 +648,11 @@ func (p *desktopExternalWFPReference) close() error {
 	p.closed = true
 	failure := p.input.Close()
 	reply, err := p.read()
-	if err != nil || !reply.Closed || reply.Address != p.remote.String() || !bytes.Equal(reply.AppID, p.initial.AppID) {
+	if err != nil || reply.Schema != 1 || !reply.Closed || reply.Nonce != "" || reply.Address != p.remote.String() || !bytes.Equal(reply.AppID, p.initial.AppID) || reply.ProbeUDP != p.initial.ProbeUDP || reply.LayerMode != p.initial.LayerMode || reply.InnerAddress != p.initial.InnerAddress {
 		failure = errors.Join(failure, err, errors.New("external provider did not acknowledge joined cleanup"))
-	}
-	select {
-	case err := <-p.done:
-		failure = errors.Join(failure, err)
-	case <-time.After(12 * time.Second):
 		p.cancel()
-		failure = errors.Join(failure, <-p.done, errors.New("external provider process did not join"))
 	}
+	failure = errors.Join(failure, desktopExternalWFPJoinOutput(p.reader, p.output.Close, p.done, p.cancel, 12*time.Second))
 	failure = errors.Join(failure, p.output.Close())
 	p.cancel()
 	return failure
@@ -570,6 +679,8 @@ func desktopExternalWFPStartReferenceCaptured(t *testing.T, ca *desktopExternalI
 		peerTest = "TestRouterVPNDesktopExternalWindowsPacketPeer"
 	} else if protocol == "hysteria2-layer" {
 		peerTest = "TestRouterVPNDesktopExternalWindowsHysteria2LayerPeer"
+	} else if strings.HasPrefix(protocol, "ss-entry/") {
+		peerTest = "TestRouterVPNDesktopExternalWindowsSSEntryPeer"
 	} else if protocol != "hysteria2" {
 		t.Fatal("unknown native external reference protocol")
 	}
@@ -625,6 +736,13 @@ func desktopExternalWFPStartReferenceCaptured(t *testing.T, ca *desktopExternalI
 		}
 	}
 	request := desktopExternalWFPRequest{Schema: 1, Operation: "start", Address: p.local.String(), Fault: fault, Certificate: public, Key: key, ProxyCertificate: proxy, ProxyKey: proxyKey}
+	if strings.HasPrefix(protocol, "ss-entry/") {
+		parts := strings.Split(protocol, "/")
+		if len(parts) != 3 {
+			t.Fatal("SS entry reference selection malformed")
+		}
+		request.SSEntry = &desktopExternalWFPSSEntryRequest{Final: parts[1], Method: parts[2]}
+	}
 	if protocol == "wireguard" || protocol == "awg2-fast" || protocol == "awg2-strong" {
 		request.Packet, p.packet = desktopExternalWFPPacketKeys(t, protocol)
 	}
@@ -907,6 +1025,7 @@ func desktopExternalWFPBox(t *testing.T, original *mobilemultihop.ExternalPolicy
 	outs := outbound.NewRegistry()
 	HY.RegisterOutbound(outs)
 	SS.RegisterOutbound(outs)
+	HTTP.RegisterOutbound(outs)
 	WH.RegisterOutbound(outs)
 	routervpndesktoppt.RegisterExternalSOCKSOutbound(outs)
 	routervpndesktoppt.RegisterExternalPhysicalOutbound(outs)
@@ -978,6 +1097,9 @@ func (f *desktopExternalWFPFixture) start(t *testing.T) {
 	t.Helper()
 	if err := f.box.RouterVPNStrategyStart(); err != nil {
 		if f.committed != 1 {
+			if f.policy.Metadata().RootTag == "external-entry" {
+				t.Fatal("actual SS entry source skipped its durable WFP intent", err)
+			}
 			if f.policy.Metadata().Protocol == "wireguard" || f.policy.Metadata().Protocol == "amneziawg" {
 				t.Fatal("actual packet source skipped its durable WFP intent", err)
 			}

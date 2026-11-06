@@ -80,6 +80,8 @@ jobs:
       - name: Verify test-only native firewall scope
         shell: pwsh
         run: |
+          python deploy/test_windows_external_provider_join.py
+          if ($LASTEXITCODE -ne 0) { throw 'Original provider process/reader join failed' }
           python deploy/test_windows_node_physical_runner.py
           if ($LASTEXITCODE -ne 0) { throw 'Native Node scope/source boundary failed' }
       - name: Prove actual WFP, encrypted peers and exact native reversal

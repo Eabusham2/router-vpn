@@ -72,6 +72,11 @@ EXTERNAL_OPENVPN_CASES = {network: (EXTERNAL_OPENVPN_ROOT, EXTERNAL_OPENVPN_ROOT
 EXTERNAL_OPENVPN_ALIAS = "TestRouterVPNDesktopExternalWindowsOpenVPNAlias"
 EXTERNAL_OPENVPN_ALIAS_CASES = (EXTERNAL_OPENVPN_ALIAS, EXTERNAL_OPENVPN_ALIAS + "/refuse-existing-address",
     *(EXTERNAL_OPENVPN_ALIAS + "/reject-" + field for field in ("address", "luid", "index", "creation", "prefix", "skip-source", "prefix-origin", "suffix-origin")))
+EXTERNAL_SS_ENTRY_ROOT = "TestRouterVPNDesktopExternalWindowsSSEntryWFP"
+EXTERNAL_SS_ENTRY_NETWORKS = ("shadowsocks", "http-connect", "https-connect")
+EXTERNAL_SS_ENTRY_LEAVES = ("on-connect", "always", "cipher-aes128", "cipher-chacha20", "successor-and-original-restore", "reject/entry-key", "reject/entry-exit", "reject/final-key", "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")
+EXTERNAL_SS_ENTRY_CASES = {network: (EXTERNAL_SS_ENTRY_ROOT, EXTERNAL_SS_ENTRY_ROOT + "/" + network,
+    *(EXTERNAL_SS_ENTRY_ROOT + "/" + network + "/" + leaf for leaf in EXTERNAL_SS_ENTRY_LEAVES)) for network in EXTERNAL_SS_ENTRY_NETWORKS}
 IPC_CASES = tuple("TestRouterVPNDesktopNodeWindowsWFPLoopbackIPC/" + network
                   for network in ("tcp4", "tcp6", "udp4", "udp6"))
 LOOPBACK_SOURCE = '''\t\tif len(p.fixtureScope) == 0 {
@@ -457,6 +462,50 @@ def execute_external_openvpn(source, workspace, build, captured):
         print("Rejected actual ordinary OpenVPN native control: " + label, flush=True)
 
 
+def report_external_ss_entry(status, output, network):
+    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    required = EXTERNAL_SS_ENTRY_CASES.get(network, ())
+    if not required or status or any(not exact_native_verdict(output, "PASS", case) for case in required) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
+        raise ValueError("Ordinary Windows SS entry omitted its required native result: " + network)
+
+
+def execute_external_ss_entry(source, workspace, build, captured):
+    directory = workspace / "external-ss-entry"
+    directory.mkdir()
+    selected = external_overlay(source, directory)
+    binary = directory / "external-ss-entry.test.exe"
+    status, output = BOOT.IDENTITY.run([*build, "-overlay=" + str(selected), "-o", binary, "."], cwd=source, env=captured, timeout=600)
+    if status:
+        raise ValueError("Actual ordinary Windows SS entry compilation failed:\n" + output[-32768:])
+    digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    for network in EXTERNAL_SS_ENTRY_NETWORKS:
+        expression = "^" + EXTERNAL_SS_ENTRY_ROOT + "$/^" + network + "$"
+        duration = 180
+        status, output = BOOT.IDENTITY.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"], cwd=source, env=captured, timeout=duration + 15)
+        report_external_ss_entry(status, output, network)
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+            raise ValueError("Actual ordinary SS entry native executable changed")
+    for label, witness in (
+            ("ordinary-udp-deny", "ordinary token bypassed actual external WFP UDP deny: independent peer marker"),
+            ("missing-durable-intent", "actual SS entry source skipped its durable WFP intent")):
+        changed = workspace / ("external-ss-entry-" + label)
+        changed.mkdir()
+        selected = external_overlay(source, changed, label)
+        candidate = changed / "external-ss-entry.test.exe"
+        status, output = BOOT.IDENTITY.run([*build, "-overlay=" + str(selected), "-o", candidate, "."], cwd=source, env=captured, timeout=600)
+        if status:
+            raise ValueError("Actual ordinary SS entry control did not compile: " + label + "\n" + output[-16384:])
+        candidate_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        leaf = EXTERNAL_SS_ENTRY_ROOT + "/shadowsocks/always"
+        expression = "/".join("^" + part + "$" for part in leaf.split("/"))
+        status, output = BOOT.IDENTITY.run([candidate, "-test.run=" + expression, "-test.count=1", "-test.timeout=60s", "-test.v"], cwd=source, env=captured, timeout=75)
+        if status == 0 or not exact_native_verdict(output, "FAIL", leaf) or witness not in output or socks_native_aborted(output):
+            raise ValueError("Actual ordinary SS entry control missed its exact defect: " + label + "\n" + output[-16384:])
+        if hashlib.sha256(candidate.read_bytes()).hexdigest() != candidate_digest:
+            raise ValueError("Actual ordinary SS entry negative executable changed")
+        print("Rejected actual ordinary SS entry native control: " + label, flush=True)
+
+
 def mutants(source):
     factory = "routervpn/desktoppt/node_physical_windows.go"
     lower = "routervpn/desktoppt/node_physical.go"
@@ -481,7 +530,7 @@ def mutants(source):
 # Independent parent observations: every inner compiler, test and cleanup bound
 # remains unchanged. The old single1200s parent could expire during its own
 #1200s baseline, before the four external suites and production controls.
-PHASES = ("node-baseline", "node-controls", "external-hysteria2", "external-socks", "external-packet", "external-openvpn")
+PHASES = ("node-baseline", "node-controls", "external-hysteria2", "external-socks", "external-packet", "external-openvpn", "external-ss-entry")
 # Compiler selection has two 180s observations. Node references retain their
 # 300s whitening build, 30+600s Xray build, 300s dependency verification and two
 # 1800s checksum-verified Cronet module reads. These are parent sums, not new
@@ -489,6 +538,7 @@ PHASES = ("node-baseline", "node-controls", "external-hysteria2", "external-sock
 _PHASE_COMMON = 2 * 180 + 90 + 60
 _PHASE_REFERENCES = 300 + 30 + 600 + 300 + 2 * 1800
 PHASE_TIMEOUTS = {
+    "external-ss-entry": _PHASE_COMMON + 600 + 3 * 195 + 2 * (600 + 75),
     "node-baseline": _PHASE_COMMON + _PHASE_REFERENCES + 600 + 1215,
     "node-controls": _PHASE_COMMON + _PHASE_REFERENCES + 4 * (600 + 105),
     "external-hysteria2": _PHASE_COMMON + 600 + 3 * 195 + 2 * (600 + 75),
@@ -497,6 +547,7 @@ PHASE_TIMEOUTS = {
     "external-openvpn": _PHASE_COMMON + 600 + 75 + 3 * 195 + 2 * (600 + 75),
 }
 _PHASE_IMAGES = {
+    "external-ss-entry": tuple("external-ss-entry" + suffix + "/external-ss-entry.test.exe" for suffix in ("", "-ordinary-udp-deny", "-missing-durable-intent")),
     "node-baseline": ("start-layer-relay.exe", "xray-reference.exe", "baseline/node-kernel.test.exe"),
     "node-controls": ("start-layer-relay.exe", "xray-reference.exe", *(name + "/node-negative.test.exe" for name in
                       ("legacy-adoption", "late-handshake", "ordinary-udp-deny", "missing-loopback-ipc"))),
@@ -567,7 +618,7 @@ def execute_partitioned(source, env, run):
                 raise ValueError("Windows physical source changed during native phase")
             results.append(value)
     validate_phase_set(results)
-    print("Actual Windows physical composition: all six native phases and their controls passed", flush=True)
+    print("Actual Windows physical composition: all seven native phases and their controls passed", flush=True)
     return results
 
 
@@ -579,7 +630,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             raise ValueError("A complete Windows physical run cannot emit a partial phase receipt")
         results = [execute(source, go, prospective=prospective, env=env, bootstrap_only=bootstrap_only, phase=name) for name in PHASES]
         validate_phase_set(results)
-        print("Actual Windows physical composition: all six native phases and their controls passed", flush=True)
+        print("Actual Windows physical composition: all seven native phases and their controls passed", flush=True)
         return results
     if prospective or platform.system() != "Windows" or not BOOT.IDENTITY.ctypes.windll.shell32.IsUserAnAdmin():
         raise ValueError("WFP encrypted Node composition requires actual admitted Windows execution")
@@ -696,6 +747,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 "external-socks": execute_external_socks,
                 "external-packet": execute_external_packet,
                 "external-openvpn": execute_external_openvpn,
+                "external-ss-entry": execute_external_ss_entry,
             }
             external[phase](source, workspace, build, captured)
         executables = {path.relative_to(workspace).as_posix(): executable_digest(path)
