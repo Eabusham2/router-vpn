@@ -1,55 +1,106 @@
 package libbox
 
 import (
- "encoding/json"
- "errors"
- "io"
- "strings"
- "context"
- "net"
- "github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
- "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
- M "github.com/sagernet/sing/common/metadata"
+	"context"
+	"encoding/json"
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"io"
+	"net"
+	"strings"
 )
 
 // RouterHopMeasurement retains one native engine and its frozen node metadata.
 // Callers can only start/cancel bounded measurements, never request an arbitrary
 // address, change an outbound, or retrieve node tokens through the public status.
-type RouterHopMeasurement struct { service *hopmeasure.Service }
-func NewRouterHopMeasurement(server *CommandServer, metadata string)(*RouterHopMeasurement,error){
- if server==nil||server.StartedService==nil||server.StartedService.Instance()==nil||server.StartedService.Instance().Box()==nil{return nil,errors.New("native hop measurement engine is not running")}
- if len(metadata)>16384{return nil,errors.New("oversized frozen hop metadata")}
- var m mobilemultihop.Metadata
- dec:=json.NewDecoder(strings.NewReader(metadata));dec.DisallowUnknownFields()
- if dec.Decode(&m)!=nil{return nil,errors.New("invalid frozen hop metadata")};var extra any;if dec.Decode(&extra)!=io.EOF{return nil,errors.New("trailing hop metadata")}
- if m.EntryID==m.ExitID||m.EntryNodeID==m.ExitNodeID{return nil,errors.New("distinct hop identities required")}
- engine:=&routerHopMeasurementEngine{core:&routerMultihopEngine{server:server,instance:server.StartedService.Instance().Box()}}
- service,err:=hopmeasure.New(engine,[]hopmeasure.Hop{
-  {ID:m.EntryID,Role:"entry",Tag:m.EntryTag,API:m.EntryAPI,Token:m.EntryToken,Proof:m.EntryNodeID},
-  {ID:m.ExitID,Role:"exit",Tag:"proxy",API:m.ExitAPI,Token:m.ExitToken,Proof:m.ExitNodeID},
- });if err!=nil{return nil,err};return &RouterHopMeasurement{service},nil
+type RouterHopMeasurement struct{ service *hopmeasure.Service }
+
+func NewRouterHopMeasurement(server *CommandServer, metadata string) (*RouterHopMeasurement, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), routerMultihopObservationTimeout)
+	defer cancel()
+	core, err := routerCapturedMultihopEngine(ctx, server)
+	if err != nil {
+		return nil, err
+	}
+	if len(metadata) > 16384 {
+		return nil, errors.New("oversized frozen hop metadata")
+	}
+	var m mobilemultihop.Metadata
+	dec := json.NewDecoder(strings.NewReader(metadata))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&m) != nil {
+		return nil, errors.New("invalid frozen hop metadata")
+	}
+	var extra any
+	if dec.Decode(&extra) != io.EOF {
+		return nil, errors.New("trailing hop metadata")
+	}
+	if m.EntryID == m.ExitID || m.EntryNodeID == m.ExitNodeID {
+		return nil, errors.New("distinct hop identities required")
+	}
+	engine := &routerHopMeasurementEngine{core: core}
+	service, err := hopmeasure.New(engine, []hopmeasure.Hop{
+		{ID: m.EntryID, Role: "entry", Tag: m.EntryTag, API: m.EntryAPI, Token: m.EntryToken, Proof: m.EntryNodeID},
+		{ID: m.ExitID, Role: "exit", Tag: "proxy", API: m.ExitAPI, Token: m.ExitToken, Proof: m.ExitNodeID},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &RouterHopMeasurement{service}, nil
 }
-func (m *RouterHopMeasurement) Start(request string, bytes int64)error{
- if bytes<65536||bytes>hopmeasure.MaxBytes{return errors.New("hop transfer size is outside the bounded range")}
- return m.service.Start(request,int(bytes))
+func (m *RouterHopMeasurement) Start(request string, bytes int64) error {
+	if bytes < 65536 || bytes > hopmeasure.MaxBytes {
+		return errors.New("hop transfer size is outside the bounded range")
+	}
+	return m.service.Start(request, int(bytes))
 }
-func (m *RouterHopMeasurement) StartLatency(request, exitID string)error{return m.service.StartLatency(request,exitID)}
-func (m *RouterHopMeasurement) Cancel(request string){m.service.Cancel(request)}
-func (m *RouterHopMeasurement) Drain(request string)error{return m.service.Drain(request)}
-func (m *RouterHopMeasurement) StatusJSON()string{return m.service.StatusJSON()}
-func (m *RouterHopMeasurement) Close()error{return m.service.Close()}
-func (m *RouterHopMeasurement) NetworkChanged(){m.service.Invalidate()}
-type routerHopMeasurementEngine struct{core *routerMultihopEngine}
-func(e *routerHopMeasurementEngine)Identity()string{
- identity:=e.core.Identity();if identity==""{return ""}
- // A selector switch makes previously measured data stale even if the server
- // and visible entry/exit names have not changed.
- return identity+":"+e.core.Selected()
+func (m *RouterHopMeasurement) StartLatency(request, exitID string) error {
+	return m.service.StartLatency(request, exitID)
 }
-func(e *routerHopMeasurementEngine)Dial(ctx context.Context,tag,address string)(net.Conn,error){
- if e.core.Identity()==""{return nil,errors.New("native measurement owner changed")}
- if tag!="proxy"&&tag!="entry-wg"&&tag!="routervpn-hop-entry"{return nil,errors.New("unowned measurement outbound")}
- host,_,err:=net.SplitHostPort(address);if err!=nil||net.ParseIP(strings.Trim(host,"[]"))==nil{return nil,errors.New("measurement must use the paired literal API")}
- outbound,ok:=e.core.instance.Outbound().Outbound(tag);if !ok{return nil,errors.New("measurement outbound is missing")}
- return outbound.DialContext(ctx,"tcp",M.ParseSocksaddr(address))
+func (m *RouterHopMeasurement) Cancel(request string)      { m.service.Cancel(request) }
+func (m *RouterHopMeasurement) Drain(request string) error { return m.service.Drain(request) }
+func (m *RouterHopMeasurement) StatusJSON() string         { return m.service.StatusJSON() }
+func (m *RouterHopMeasurement) Close() error               { return m.service.Close() }
+func (m *RouterHopMeasurement) NetworkChanged()            { m.service.Invalidate() }
+
+type routerHopMeasurementEngine struct{ core *routerMultihopEngine }
+
+func (e *routerHopMeasurementEngine) Identity() string {
+	ctx, cancel := context.WithTimeout(context.Background(), routerMultihopObservationTimeout)
+	defer cancel()
+	identity, _ := e.IdentityContext(ctx)
+	return identity
+}
+func (e *routerHopMeasurementEngine) IdentityContext(ctx context.Context) (string, error) {
+	identity, err := e.core.IdentityContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	selected, err := e.core.SelectedContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	if current, err := e.core.IdentityContext(ctx); err != nil || current != identity {
+		return "", errors.Join(err, errors.New("native measurement owner changed"))
+	}
+	return identity + ":" + selected, nil
+}
+func (e *routerHopMeasurementEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if tag != "proxy" && tag != "entry-wg" && tag != "routervpn-hop-entry" {
+		return nil, errors.New("unowned measurement outbound")
+	}
+	original, err := e.IdentityContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	connection, err := e.core.dialOwned(ctx, tag, address)
+	current, observeErr := e.IdentityContext(ctx)
+	if err != nil || observeErr != nil || current != original || ctx.Err() != nil {
+		if connection != nil {
+			err = errors.Join(err, connection.Close())
+		}
+		return nil, errors.Join(err, observeErr, ctx.Err(), errors.New("native measurement owner changed during dial"))
+	}
+	return connection, nil
 }

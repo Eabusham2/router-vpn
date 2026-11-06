@@ -28,10 +28,16 @@ func (m *RouterMultihop) Metadata() string     { return m.controller.Metadata() 
 func (m *RouterMultihop) SourceSHA256() string { return m.controller.SourceSHA256() }
 func (m *RouterMultihop) MTUProfile() string   { return m.controller.MTUProfile() }
 func (m *RouterMultihop) NewHopMeasurement(server *CommandServer) (*RouterHopMeasurement, error) {
-	if m == nil || !m.Healthy() || server == nil || server.StartedService == nil || server.StartedService.Instance() == nil || server.StartedService.Instance().Box() == nil {
+	if m == nil || !m.Healthy() {
 		return nil, errors.New("imported hop measurement has no successful original native owner")
 	}
-	engine := &routerHopMeasurementEngine{core: &routerMultihopEngine{server: server, instance: server.StartedService.Instance().Box()}}
+	ctx, cancel := context.WithTimeout(context.Background(), routerMultihopObservationTimeout)
+	defer cancel()
+	core, err := routerCapturedMultihopEngine(ctx, server)
+	if err != nil {
+		return nil, err
+	}
+	engine := &routerHopMeasurementEngine{core: core}
 	service, err := m.controller.NewImportedHopMeasurement(engine)
 	if err != nil {
 		return nil, err
@@ -42,10 +48,12 @@ func (m *RouterMultihop) NewMTU(server *CommandServer, platform RouterMTUPlatfor
 	if m == nil || !m.Healthy() || m.SourceSHA256() == "" {
 		return nil, errors.New("imported MTU requires its proved captured graph")
 	}
-	if server == nil || server.StartedService == nil || server.StartedService.Instance() == nil || server.StartedService.Instance().Box() == nil {
-		return nil, errors.New("imported MTU native owner missing")
+	ctx, cancel := context.WithTimeout(context.Background(), routerMultihopObservationTimeout)
+	defer cancel()
+	engine, err := routerCapturedMultihopEngine(ctx, server)
+	if err != nil {
+		return nil, err
 	}
-	engine := &routerMultihopEngine{server: server, instance: server.StartedService.Instance().Box()}
 	if !m.controller.MatchesEngine(engine) {
 		return nil, errors.New("imported MTU belongs to another native instance")
 	}
@@ -62,14 +70,14 @@ func (m *RouterMultihop) NewMTU(server *CommandServer, platform RouterMTUPlatfor
 	return mtu, nil
 }
 func (e *routerMultihopEngine) DNSProof(ctx context.Context) error {
-	if e.Identity() == "" {
-		return errors.New("imported DNS owner retired")
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return err
 	}
 	if err := e.instance.RouterVPNStrategyDNSProofContext(ctx); err != nil {
 		return err
 	}
-	if e.Identity() == "" {
-		return errors.New("imported DNS owner changed")
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return err
 	}
 	return ctx.Err()
 }
@@ -174,6 +182,13 @@ func (e *routerMultihopEngine) SelectedContext(ctx context.Context) (string, err
 	selected := selector.Now()
 	if _, err := e.IdentityContext(ctx); err != nil {
 		return "", err
+	}
+	current, present, err := adapter.RouterVPNOutboundContext(ctx, e.instance.Outbound(), mobilemultihop.SelectorTag)
+	if err != nil {
+		return "", err
+	}
+	if !present || current != owner || selector.Now() != selected {
+		return "", errors.New("native selector changed during observation")
 	}
 	return selected, ctx.Err()
 }

@@ -31,6 +31,8 @@ for protocol in ("http-connect","https-connect"):
  row=protocol+"--2022-blake3-aes-256-gcm--home"
  CONNECT_PEERS += [row+"/"+fault for fault in ("entry-auth","entry-route","final-key","final-route","dns-route","final-identity","wrong-entry-ip","cancel","close-owner","mtu-refusal","mtu-cancel","mtu-successor")]
  if protocol=="https-connect":CONNECT_PEERS += [row+"/"+fault for fault in ("sni","trust")]
+CONTEXT_CORE={'TestImportedOwnerContextRetiresHeldControllerRead':['identity','selection'],'TestImportedStartupCloseJoinsAdmittedIdentityRead':[],'TestImportedProofContextUsesAdmittedReader':['entry-proof','private-proof','owner-check','measurement-proof'],'TestImportedMeasurementClosesLateOriginalConnection':['cancel','hop-owner','controller-owner']}
+CONTEXT_NATIVE={'TestRouterNativeProofContextRetiresHeldReads':['identity','dial','dns','hop-identity','hop-dial','capture','selected','manager-dial','manager-selected'],'TestRouterNativeProofDialClosesLateConnection':['cancel','instance-replaced','outbound-replaced','connection-and-error']}
 FILES=OPENVPN.FILES|CONNECT_FILES|SOCKS_FILES|NESTED_FILES|PACKET_FINAL_FILES|PACKET_FILES|BASE_FILES|{"final-hysteria2--"+name for name in BASE_FILES}
 CORE={
  "TestImportedEntryCONNECTGraphs":CONNECT_ROWS,
@@ -120,6 +122,8 @@ def checked_sources(vendor,peers):
  if peers:
   files['mobile/desktop/node_imported_openvpn_test.go.tmpl']='protocol/routervpnamnezia/routervpn_imported_openvpn_test.go'
   files['mobile/desktop/node_external_openvpn_installed_test.go.tmpl']='protocol/routervpnamnezia/routervpn_desktop_external_openvpn_installed_test.go'
+ if not peers:
+  files.update({'mobile/routervpn_multihop_bridge.go.tmpl':'experimental/libbox/routervpn_multihop_bridge.go','mobile/routervpn_hop_measurement.go.tmpl':'experimental/libbox/routervpn_hop_measurement.go','mobile/routervpn_multihop_context_test.go.tmpl':'experimental/libbox/routervpn_multihop_context_test.go'})
  for source,target in files.items():
   path=vendor/target
   if path.is_symlink() or not path.is_file() or path.read_bytes()!=(ROOT/source).read_bytes():raise ValueError('Changed native imported-entry source: '+target)
@@ -157,6 +161,7 @@ def run(vendor,peers=False,android=False):
   env['ROUTERVPN_IMPORTED_OPENVPN_FIXTURES']=str(fixtures);env['ROUTERVPN_REQUIRE_IMPORTED_OPENVPN_FIXTURES']='1'
   execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^TestImportedOpenVPN','-count=1','-timeout=60s'],ROOT,env,names(OPENVPN.CORE))
   execute(['go','test','-mod=readonly','-race','-json','./internal/nativeopenvpn','-run','^TestOpenVPNNativeLayerMapSingleHostKeepsOriginalIdentity$','-count=1','-timeout=20s'],ROOT,env,names(OPENVPN.POLICY_CORE))
+  execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^('+'|'.join(CONTEXT_CORE)+')$','-count=1','-timeout=20s'],ROOT,env,names(CONTEXT_CORE))
   if {p.name for p in fixtures.iterdir()}!=FILES:raise ValueError('Incomplete captured imported source matrix')
   groups={'TestRouterImportedEntryPairedFinalNativeGraphs':sorted(FILES)}
   if android:
@@ -169,6 +174,7 @@ def run(vendor,peers=False,android=False):
   base=['go','test','-mod=readonly','-json','-ldflags=-checklinkname=0','-tags',tags]
   selector='^('+'|'.join(groups)+')$'
   if not peers:execute(base+['./experimental/libbox','-run',selector,'-count=1','-timeout=90s'],vendor,env,names(groups))
+  if not peers:execute(base+['./experimental/libbox','-run','^('+'|'.join(CONTEXT_NATIVE)+')$','-count=1','-timeout=30s'],vendor,env,names(CONTEXT_NATIVE),timeout=90)
   if peers:
    # Keep each expanded protocol matrix within the existing finite native
    # timeout. Exact inventories are still mandatory for every process.

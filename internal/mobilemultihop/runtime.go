@@ -80,7 +80,7 @@ func (c *Controller) exchangeBounded(ctx context.Context, tag, method, target, t
 }
 func healthURL(raw string) string { u, _ := url.Parse(raw); u.Path = "/health"; return u.String() }
 func (c *Controller) prove(ctx context.Context, tag, api, token, node string) (time.Duration, error) {
-	if e := c.requireValid(); e != nil {
+	if e := c.requireValidContext(ctx); e != nil {
 		return 0, e
 	}
 	data, elapsed, e := c.exchange(ctx, tag, "GET", healthURL(api), token, nil)
@@ -95,7 +95,7 @@ func (c *Controller) prove(ctx context.Context, tag, api, token, node string) (t
 	if exactJSON(data, &response, 8192) != nil || !response.OK || response.NodeID != node || response.Proof != "router-vpn-private-agent-v1" {
 		return 0, errors.New("candidate returned the wrong node proof")
 	}
-	return elapsed, c.requireValid()
+	return elapsed, c.requireValidContext(ctx)
 }
 func (c *Controller) leaseRequest(ctx context.Context, method string, body []byte) ([]byte, error) {
 	target, _ := url.Parse(c.meta.EntryAPI)
@@ -109,7 +109,7 @@ func (c *Controller) leaseRequest(ctx context.Context, method string, body []byt
 func (c *Controller) acquire(ctx context.Context) error {
 	c.leaseMu.Lock()
 	defer c.leaseMu.Unlock()
-	if err := c.requireValid(); err != nil {
+	if err := c.requireValidContext(ctx); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -175,7 +175,7 @@ func (c *Controller) acquire(ctx context.Context) error {
 	}
 	// Discovery can finish after a network switch without cancelling its HTTP
 	// response. Never use that stale catalog to authorize a new mutation.
-	if err := c.requireValid(); err != nil {
+	if err := c.requireValidContext(ctx); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -211,7 +211,7 @@ func (c *Controller) acquire(ctx context.Context) error {
 	return e
 }
 func (c *Controller) renewLocked(ctx context.Context) error {
-	if err := c.requireValid(); err != nil {
+	if err := c.requireValidContext(ctx); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -225,7 +225,7 @@ func (c *Controller) renewLocked(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
-	if err := c.requireValid(); err != nil {
+	if err := c.requireValidContext(ctx); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -387,8 +387,11 @@ func (s *trial) ProbeExternal(ctx context.Context, target string) (time.Duration
 			allowed = true
 		}
 	}
-	if !allowed || s.Identity() == "" {
-		return 0, errors.New("unapproved or stale external probe")
+	if !allowed {
+		return 0, errors.New("unapproved external probe")
+	}
+	if err := s.owner.requireValidContext(ctx); err != nil {
+		return 0, err
 	}
 	if err := s.checkOpenVPNRemote(ctx); err != nil {
 		return 0, err
@@ -400,7 +403,7 @@ func (s *trial) ProbeExternal(ctx context.Context, target string) (time.Duration
 	if err := s.checkOpenVPNRemote(ctx); err != nil {
 		return 0, err
 	}
-	return elapsed, s.owner.requireValid()
+	return elapsed, s.owner.requireValidContext(ctx)
 }
 func (s *trial) Close(context.Context) error {
 	if s.candidate.Execution == routechoice.Server {
@@ -432,7 +435,7 @@ func (c *Controller) executionBudgets() (time.Duration, time.Duration) {
 
 func (d driver) Open(ctx context.Context, candidate routechoice.Candidate) (routechoice.Session, error) {
 	c := d.owner
-	if e := c.requireValid(); e != nil {
+	if e := c.requireValidContext(ctx); e != nil {
 		return nil, e
 	}
 	if candidate != c.candidate(candidate.Execution) {
@@ -449,8 +452,15 @@ func (d driver) Open(ctx context.Context, candidate routechoice.Candidate) (rout
 		if err := c.engine.Select(s.tag); err != nil {
 			return s, err
 		}
-		if c.engine.Selected() != s.tag || c.requireValid() != nil || ctx.Err() != nil {
+		selected, err := c.selectionContext(ctx)
+		if err != nil {
+			return s, err
+		}
+		if selected != s.tag {
 			return s, errors.New("external candidate selection retired")
+		}
+		if err := c.requireValidContext(ctx); err != nil {
+			return s, err
 		}
 	}
 	if c.hasImportedOpenVPN() {
@@ -480,13 +490,38 @@ func (c *Controller) Run(parent context.Context, engine Engine) error {
 	c.runDone = make(chan struct{})
 	done := c.runDone
 	c.engine = engine
-	c.engineID = engine.Identity()
 	c.mu.Unlock()
 	defer close(done)
 	defer cancel()
+	var identity string
+	var err error
+	if _, ok := engine.(interface {
+		IdentityContext(context.Context) (string, error)
+	}); ok {
+		identity, err = externalObservedIdentity(ctx, engine)
+	} else if c.imported != nil {
+		err = errors.New("imported engine has no bounded identity observation")
+	} else {
+		identity = engine.Identity()
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	c.mu.Lock()
+	if c.generation.Load() != 1 && err == nil {
+		err = errors.New("multihop owner retired during identity capture")
+	}
+	if err == nil {
+		c.engineID = identity
+	}
+	c.mu.Unlock()
+	if err != nil {
+		c.failed("Native owner observation failed")
+		c.invalidate()
+		return err
+	}
 	var active routechoice.Session
 	var result routechoice.Result
-	var err error
 	options := routechoice.Options{Targets: Targets, StartupTimeout: startupBudget, ProbeTimeout: 2500 * time.Millisecond, CleanupTimeout: 10 * time.Second, Preferred: routechoice.Local, Notify: c.event}
 	if c.meta.Execution == "auto" {
 		result, active, err = routechoice.Compare(ctx, []routechoice.Candidate{c.candidate(routechoice.Local), c.candidate(routechoice.Server)}, driver{c}, options)
@@ -521,7 +556,7 @@ func (c *Controller) Run(parent context.Context, engine Engine) error {
 		}
 	}
 	if err == nil {
-		err = c.requireValid()
+		err = c.requireValidContext(ctx)
 	}
 	if err == nil && ctx.Err() != nil {
 		err = ctx.Err()
@@ -532,13 +567,17 @@ func (c *Controller) Run(parent context.Context, engine Engine) error {
 			tag = ServerTag
 		}
 		err = engine.Select(tag)
-		if err == nil && engine.Selected() != tag {
-			err = errors.New("native selector did not retain the proved winner")
+		if err == nil {
+			var selected string
+			selected, err = c.selectionContext(ctx)
+			if err == nil && selected != tag {
+				err = errors.New("native selector did not retain the proved winner")
+			}
 		}
 		// Selection may synchronously deliver a cancellation/network callback.
 		// The pre-selection proof cannot authorize publication after that boundary.
 		if err == nil {
-			err = c.requireValid()
+			err = c.requireValidContext(ctx)
 		}
 		if err == nil {
 			err = ctx.Err()
@@ -590,7 +629,7 @@ func (c *Controller) leaseFresh() bool {
 }
 
 func (c *Controller) Healthy() bool {
-	if c.hasImportedOpenVPN() {
+	if c.imported != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 		defer cancel()
 		return c.HealthyContext(ctx) == nil

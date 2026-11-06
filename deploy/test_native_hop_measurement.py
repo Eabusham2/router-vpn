@@ -10,10 +10,34 @@ import tempfile
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
+def native_function(source, signature):
+    start=source.index(signature)
+    following=re.search(r'^func ',source[start+len(signature):],re.M)
+    return source[start:start+len(signature)+following.start()] if following else source[start:]
+
+def require_owned_hop_path(test, bridge, common):
+    identity=native_function(bridge,'func (e *routerHopMeasurementEngine) IdentityContext(')
+    dial=native_function(bridge,'func (e *routerHopMeasurementEngine) Dial(')
+    owned=native_function(common,'func (e *routerMultihopEngine) dialOwned(')
+    test.assertIn('e.core.SelectedContext(ctx)',identity)
+    test.assertEqual(identity.count('e.core.IdentityContext(ctx)'),2)
+    test.assertIn('e.core.dialOwned(ctx, tag, address)',dial)
+    test.assertLess(dial.index('original, err := e.IdentityContext(ctx)'),dial.index('e.core.dialOwned(ctx, tag, address)'))
+    test.assertLess(dial.index('e.core.dialOwned(ctx, tag, address)'),dial.index('current, observeErr := e.IdentityContext(ctx)'))
+    for marker in ('current != original','connection.Close()'):test.assertIn(marker,dial)
+    test.assertEqual(owned.count('adapter.RouterVPNOutboundContext(ctx, e.instance.Outbound(), tag)'),2)
+    test.assertEqual(owned.count('e.IdentityContext(ctx)'),2)
+    test.assertIn('outbound.DialContext(ctx, "tcp", M.ParseSocksaddr(address))',owned)
+    test.assertLess(owned.index('adapter.RouterVPNOutboundContext(ctx'),owned.index('outbound.DialContext(ctx'))
+    for marker in ('current != outbound','connection.Close()','ctx.Err()'):test.assertIn(marker,owned)
+    for source in (bridge,common):
+        test.assertNotIn('net.Dial(',source)
+        test.assertNotIn('http.DefaultClient',source)
+
 class Tests(unittest.TestCase):
     def test_both_platforms_build_the_same_tested_service(self):
         copier=(ROOT/'deploy/prepare-mobile-multihop.py').read_text()
-        for marker in ('hopmeasure','routervpn_hop_measurement.go.tmpl','routervpn_hop_measurement.go'):
+        for marker in ('hopmeasure','routervpn_hop_measurement.go.tmpl','routervpn_hop_measurement.go','routervpn_multihop_bridge.go.tmpl','routervpn_multihop_bridge.go'):
             self.assertIn(marker,copier)
         for path in ('ios/RouterVPN/prepare-libbox.sh','android/build-sing-box-libbox.sh'):
             source=(ROOT/path).read_text()
@@ -31,10 +55,25 @@ class Tests(unittest.TestCase):
             self.assertNotIn('-run TestRouterMultihop -count=1',source)
 
         bridge=(ROOT/'mobile/routervpn_hop_measurement.go.tmpl').read_text()
-        for marker in ('e.core.Selected()', 'outbound.DialContext(ctx', 'service.Invalidate()', 'hopmeasure.New(engine'):
+        for marker in ('service.Invalidate()', 'hopmeasure.New(engine'):
             self.assertIn(marker,bridge)
-        self.assertNotIn('net.Dial(',bridge)
-        self.assertNotIn('http.DefaultClient',bridge)
+        common=(ROOT/'mobile/routervpn_multihop_bridge.go.tmpl').read_text()
+        require_owned_hop_path(self,bridge,common)
+    def test_owned_hop_call_path_rejects_bypassed_observation_and_retirement(self):
+        bridge=(ROOT/'mobile/routervpn_hop_measurement.go.tmpl').read_text()
+        common=(ROOT/'mobile/routervpn_multihop_bridge.go.tmpl').read_text()
+        for target,old,new in (
+            ('hop','e.core.SelectedContext(ctx)','e.core.Selected()'),
+            ('hop','e.core.dialOwned(ctx, tag, address)','net.Dial("tcp", address)'),
+            ('common','adapter.RouterVPNOutboundContext(ctx, e.instance.Outbound(), tag)','e.instance.Outbound().Outbound(tag)'),
+            ('common','current != outbound','false'),
+            ('common','connection.Close()','nil'),
+        ):
+            with self.subTest(target=target,removed=old):
+                self.assertIn(old,bridge if target=='hop' else common)
+                changed_bridge=bridge.replace(old,new) if target=='hop' else bridge
+                changed_common=common.replace(old,new) if target=='common' else common
+                with self.assertRaises(AssertionError):require_owned_hop_path(self,changed_bridge,changed_common)
     def test_ios_real_provider_gate_and_saved_graph(self):
         provider=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
         start=provider.index('private func startMultihop')

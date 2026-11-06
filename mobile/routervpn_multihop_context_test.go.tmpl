@@ -1,0 +1,165 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"reflect"
+	"sync"
+	"testing"
+	"time"
+	"unsafe"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	O "github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// Only the fixture accesses private fields, checking the exact pinned type.
+// Production observation still uses the original native methods and mutexes.
+func routerProofField[T any](t *testing.T, owner any, name string) *T {
+	t.Helper()
+	field := reflect.ValueOf(owner).Elem().FieldByName(name)
+	if !field.IsValid() || !field.CanAddr() || field.Type() != reflect.TypeFor[T]() {
+		t.Fatal("pinned native field changed", name)
+	}
+	return (*T)(unsafe.Pointer(field.UnsafeAddr()))
+}
+func routerProofNativeOwner(t *testing.T) (*routerMultihopEngine, *daemon.StartedService, *O.Manager, *O.Registry) {
+	t.Helper()
+	registry := O.NewRegistry()
+	manager := O.NewManager(log.NewNOPFactory().Logger(), registry, nil, "")
+	native := new(box.Box)
+	*routerProofField[*O.Manager](t, native, "outbound") = manager
+	instance := new(daemon.Instance)
+	*routerProofField[*box.Box](t, instance, "instance") = native
+	started := daemon.NewStartedService(daemon.ServiceOptions{Context: context.Background(), LogMaxLines: 16})
+	t.Cleanup(started.Close)
+	*routerProofField[*daemon.Instance](t, started, "instance") = instance
+	return &routerMultihopEngine{server: &CommandServer{StartedService: started}, instance: native}, started, manager, registry
+}
+func TestRouterNativeProofContextRetiresHeldReads(t *testing.T) {
+	for _, phase := range []string{"identity", "dial", "dns", "hop-identity", "hop-dial", "capture", "selected", "manager-dial", "manager-selected"} {
+		t.Run(phase, func(t *testing.T) {
+			core, started, manager, _ := routerProofNativeOwner(t)
+			held := routerProofField[sync.RWMutex](t, started, "serviceAccess")
+			if phase == "manager-dial" || phase == "manager-selected" {
+				held = routerProofField[sync.RWMutex](t, manager, "access")
+			}
+			held.Lock()
+			var once sync.Once
+			release := func() { once.Do(held.Unlock) }
+			defer release()
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				var err error
+				hop := &routerHopMeasurementEngine{core: core}
+				switch phase {
+				case "identity":
+					_, err = core.IdentityContext(ctx)
+				case "dial", "manager-dial":
+					_, err = core.Dial(ctx, mobilemultihop.LocalTag, "1.1.1.1:443")
+				case "dns":
+					err = core.DNSProof(ctx)
+				case "hop-identity":
+					_, err = hop.IdentityContext(ctx)
+				case "hop-dial":
+					_, err = hop.Dial(ctx, "entry-wg", "1.1.1.1:443")
+				case "capture":
+					_, err = routerCapturedMultihopEngine(ctx, core.server)
+				case "selected", "manager-selected":
+					_, err = core.SelectedContext(ctx)
+				}
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("native read lost original caller deadline", err)
+				}
+			case <-time.After(time.Second):
+				release()
+				<-done
+				t.Fatal("native read waited on original mutex after caller expired")
+			}
+			release()
+			if identity, err := core.IdentityContext(context.Background()); err != nil || identity == "" {
+				t.Fatal("cancelled read retired the original native instance", err)
+			}
+		})
+	}
+}
+
+type routerProofDialOutbound struct {
+	O.Adapter
+	dial func(context.Context) (net.Conn, error)
+}
+
+func (o *routerProofDialOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("unowned packet route in TCP proof fixture")
+}
+func (o *routerProofDialOutbound) DialContext(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
+	return o.dial(ctx)
+}
+func TestRouterNativeProofDialClosesLateConnection(t *testing.T) {
+	for _, fault := range []string{"cancel", "instance-replaced", "outbound-replaced", "connection-and-error"} {
+		t.Run(fault, func(t *testing.T) {
+			core, started, manager, registry := routerProofNativeOwner(t)
+			original, peer := net.Pipe()
+			defer original.Close()
+			defer peer.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			replacement := &routerProofDialOutbound{Adapter: O.NewAdapter("proof-fixture", mobilemultihop.LocalTag, []string{"tcp"}, nil)}
+			first := &routerProofDialOutbound{Adapter: O.NewAdapter("proof-fixture", mobilemultihop.LocalTag, []string{"tcp"}, nil)}
+			selected := first
+			O.Register[struct{}](registry, "proof-fixture", func(context.Context, adapter.Router, log.ContextLogger, string, struct{}) (adapter.Outbound, error) {
+				return selected, nil
+			})
+			if err := manager.Create(ctx, nil, log.NewNOPFactory().Logger(), mobilemultihop.LocalTag, "proof-fixture", nil); err != nil {
+				t.Fatal(err)
+			}
+			first.dial = func(context.Context) (net.Conn, error) {
+				switch fault {
+				case "cancel":
+					cancel()
+				case "instance-replaced":
+					lock := routerProofField[sync.RWMutex](t, started, "serviceAccess")
+					lock.Lock()
+					*routerProofField[*daemon.Instance](t, started, "instance") = new(daemon.Instance)
+					lock.Unlock()
+				case "outbound-replaced":
+					selected = replacement
+					if err := manager.Create(ctx, nil, log.NewNOPFactory().Logger(), mobilemultihop.LocalTag, "proof-fixture", nil); err != nil {
+						t.Fatal(err)
+					}
+				case "connection-and-error":
+					return original, errors.New("original dial failure")
+				}
+				return original, nil
+			}
+			connection, err := core.Dial(ctx, mobilemultihop.LocalTag, "1.1.1.1:443")
+			if connection != nil || err == nil {
+				t.Fatal("retired native dial returned original connection", err)
+			}
+			_ = peer.SetReadDeadline(time.Now().Add(time.Second))
+			_, readErr := peer.Read(make([]byte, 1))
+			if !errors.Is(readErr, io.EOF) {
+				t.Fatal("original returned connection was not closed", readErr)
+			}
+			if fault == "outbound-replaced" {
+				actual, found, err := manager.RouterVPNOutboundContext(context.Background(), mobilemultihop.LocalTag)
+				if err != nil || !found || actual != replacement {
+					t.Fatal("late dial touched replacement outbound", err)
+				}
+			}
+		})
+	}
+}

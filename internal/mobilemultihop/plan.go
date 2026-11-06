@@ -486,6 +486,11 @@ func (c *Controller) invalidate() {
 }
 func (c *Controller) NetworkChanged() { c.invalidate() }
 func (c *Controller) valid() bool {
+	if c.imported != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		return c.requireValidContext(ctx) == nil
+	}
 	return c.engine != nil && c.engine.Identity() != "" && c.engine.Identity() == c.engineID && c.generation.Load() == 1
 }
 func (c *Controller) candidate(execution routechoice.Execution) routechoice.Candidate {
@@ -540,4 +545,79 @@ func (c *Controller) requireValid() error {
 		return fmt.Errorf("mobile multihop session or network changed")
 	}
 	return nil
+}
+
+// Native engines expose a cancellable read of their original owner. Imported
+// proofs require it; older non-native paired engines keep their prior contract.
+func (c *Controller) requireValidContext(ctx context.Context) error {
+	if c == nil {
+		return errors.New("multihop owner retired")
+	}
+	if err := externalObservationLock(ctx, &c.mu); err != nil {
+		return err
+	}
+	engine, expected := c.engine, c.engineID
+	c.mu.Unlock()
+	if engine == nil || c.generation.Load() != 1 {
+		return errors.New("multihop owner retired")
+	}
+	var identity string
+	var err error
+	if _, ok := engine.(interface {
+		IdentityContext(context.Context) (string, error)
+	}); ok {
+		identity, err = externalObservedIdentity(ctx, engine)
+	} else if c.imported != nil {
+		return errors.New("imported engine has no bounded identity observation")
+	} else {
+		// Preserve the existing non-native paired engine contract.
+		identity = engine.Identity()
+	}
+	if err != nil {
+		return err
+	}
+	if err = externalObservationLock(ctx, &c.mu); err != nil {
+		return err
+	}
+	defer c.mu.Unlock()
+	if identity == "" || identity != expected || c.engine != engine || c.engineID != expected || c.generation.Load() != 1 {
+		return errors.New("multihop owner changed")
+	}
+	return ctx.Err()
+}
+
+func (c *Controller) selectionContext(ctx context.Context) (string, error) {
+	if c == nil {
+		return "", errors.New("multihop owner retired")
+	}
+	if err := externalObservationLock(ctx, &c.mu); err != nil {
+		return "", err
+	}
+	engine := c.engine
+	c.mu.Unlock()
+	if engine == nil || c.generation.Load() != 1 {
+		return "", errors.New("multihop owner retired")
+	}
+	var selected string
+	var err error
+	if _, ok := engine.(interface {
+		SelectedContext(context.Context) (string, error)
+	}); ok {
+		selected, err = externalObservedSelection(ctx, engine)
+	} else if c.imported != nil {
+		return "", errors.New("imported engine has no bounded selector observation")
+	} else {
+		selected = engine.Selected()
+	}
+	if err != nil {
+		return "", err
+	}
+	if err = externalObservationLock(ctx, &c.mu); err != nil {
+		return "", err
+	}
+	defer c.mu.Unlock()
+	if c.engine != engine || c.generation.Load() != 1 {
+		return "", errors.New("multihop owner changed")
+	}
+	return selected, ctx.Err()
 }

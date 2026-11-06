@@ -175,3 +175,23 @@ func TestImportedEntryRuntimeLocalSelectionRetiresWithOriginalOwner(t *testing.T
 type importedHopInput struct{ *importedProofEngine }
 
 func (e *importedHopInput) Identity() string { return e.id + ":" + e.selected }
+
+func (e *importedProofEngine) IdentityContext(ctx context.Context) (string, error) {
+	return e.id, ctx.Err()
+}
+func (e *importedProofEngine) SelectedContext(ctx context.Context) (string, error) {
+	return e.selected, ctx.Err()
+}
+func (e *importedHopInput) IdentityContext(ctx context.Context) (string, error) {
+	return e.id + ":" + e.selected, ctx.Err()
+}
+func (e *importedNoDNS) IdentityContext(ctx context.Context) (string, error) {
+	return e.Engine.(interface {
+		IdentityContext(context.Context) (string, error)
+	}).IdentityContext(ctx)
+}
+func (e *importedNoDNS) SelectedContext(ctx context.Context) (string, error) {
+	return e.Engine.(interface {
+		SelectedContext(context.Context) (string, error)
+	}).SelectedContext(ctx)
+}

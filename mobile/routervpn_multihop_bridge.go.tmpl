@@ -3,13 +3,14 @@ package libbox
 import (
 	"context"
 	"errors"
-	"fmt"
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/protocol/group"
 	M "github.com/sagernet/sing/common/metadata"
 	"net"
 	"strings"
+	"time"
 )
 
 // RouterMultihop is bound into the ONE existing Go runtime on each mobile OS.
@@ -111,11 +112,30 @@ func (m *RouterMultihop) NetworkChanged() { m.controller.NetworkChanged() }
 func (m *RouterMultihop) Healthy() bool   { return m.controller.Healthy() }
 func (m *RouterMultihop) Close() error    { return m.controller.Close() }
 func (m *RouterMultihop) Run(server *CommandServer) error {
-	if server == nil || server.StartedService == nil || server.StartedService.Instance() == nil || server.StartedService.Instance().Box() == nil {
-		return errors.New("native multihop engine is not running")
+	ctx, cancel := context.WithTimeout(context.Background(), routerMultihopObservationTimeout)
+	engine, err := routerCapturedMultihopEngine(ctx, server)
+	cancel()
+	if err != nil {
+		return err
 	}
-	engine := &routerMultihopEngine{server: server, instance: server.StartedService.Instance().Box()}
 	return m.controller.Run(context.Background(), engine)
+}
+func routerCapturedMultihopEngine(ctx context.Context, server *CommandServer) (*routerMultihopEngine, error) {
+	if ctx == nil || server == nil || server.StartedService == nil {
+		return nil, errors.New("native multihop engine is not running")
+	}
+	instance, err := server.StartedService.RouterVPNInstanceContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if instance == nil || instance.Box() == nil {
+		return nil, errors.New("native multihop engine is not running")
+	}
+	engine := &routerMultihopEngine{server: server, instance: instance.Box()}
+	if _, err := engine.IdentityContext(ctx); err != nil {
+		return nil, err
+	}
+	return engine, nil
 }
 
 type routerMultihopEngine struct {
@@ -123,43 +143,80 @@ type routerMultihopEngine struct {
 	instance *box.Box
 }
 
+// Match the existing native proof-observation policy without detached readers.
+const routerMultihopObservationTimeout = 1500 * time.Millisecond
+
 func (e *routerMultihopEngine) Identity() string {
-	current := e.server.StartedService.Instance()
-	if current == nil || current.Box() != e.instance {
-		return ""
-	}
-	return fmt.Sprintf("%p", e.instance)
+	ctx, cancel := context.WithTimeout(context.Background(), routerMultihopObservationTimeout)
+	defer cancel()
+	identity, _ := e.IdentityContext(ctx)
+	return identity
 }
 func (e *routerMultihopEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
-	if e.Identity() == "" {
-		return nil, errors.New("native multihop instance changed")
-	}
 	if tag != mobilemultihop.LocalTag && tag != mobilemultihop.ServerTag && tag != "entry-wg" && tag != "routervpn-hop-entry" {
 		return nil, errors.New("unowned outbound tag")
+	}
+	return e.dialOwned(ctx, tag, address)
+}
+func (e *routerMultihopEngine) dialOwned(ctx context.Context, tag, address string) (net.Conn, error) {
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return nil, err
 	}
 	host, _, err := net.SplitHostPort(address)
 	if err != nil || net.ParseIP(strings.Trim(host, "[]")) == nil {
 		return nil, errors.New("routed probes require a literal destination")
 	}
-	outbound, ok := e.instance.Outbound().Outbound(tag)
-	if !ok {
+	outbound, found, err := adapter.RouterVPNOutboundContext(ctx, e.instance.Outbound(), tag)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
 		return nil, errors.New("native candidate outbound is missing")
 	}
-	return outbound.DialContext(ctx, "tcp", M.ParseSocksaddr(address))
-}
-func (e *routerMultihopEngine) selector() (*group.Selector, error) {
-	if e.Identity() == "" {
-		return nil, errors.New("native multihop instance changed")
+	connection, err := outbound.DialContext(ctx, "tcp", M.ParseSocksaddr(address))
+	identityErr := error(nil)
+	if _, identityErr = e.IdentityContext(ctx); identityErr == nil {
+		var current adapter.Outbound
+		current, found, identityErr = adapter.RouterVPNOutboundContext(ctx, e.instance.Outbound(), tag)
+		if identityErr == nil && (!found || current != outbound) {
+			identityErr = errors.New("native dial outbound owner changed")
+		}
 	}
-	outbound, ok := e.instance.Outbound().Outbound(mobilemultihop.SelectorTag)
-	if !ok {
+	if err != nil || identityErr != nil || ctx.Err() != nil {
+		if connection != nil {
+			err = errors.Join(err, connection.Close())
+		}
+		return nil, errors.Join(err, identityErr, ctx.Err())
+	}
+	if connection == nil {
+		return nil, errors.New("native outbound returned no connection")
+	}
+	return connection, nil
+}
+func (e *routerMultihopEngine) selectorContext(ctx context.Context) (*group.Selector, error) {
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return nil, err
+	}
+	outbound, found, err := adapter.RouterVPNOutboundContext(ctx, e.instance.Outbound(), mobilemultihop.SelectorTag)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
 		return nil, errors.New("multihop selector missing")
 	}
 	selector, ok := outbound.(*group.Selector)
 	if !ok {
 		return nil, errors.New("unowned native selector")
 	}
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return nil, err
+	}
 	return selector, nil
+}
+func (e *routerMultihopEngine) selector() (*group.Selector, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), routerMultihopObservationTimeout)
+	defer cancel()
+	return e.selectorContext(ctx)
 }
 func (e *routerMultihopEngine) Select(tag string) error {
 	if tag != mobilemultihop.LocalTag && tag != mobilemultihop.ServerTag {
@@ -175,11 +232,10 @@ func (e *routerMultihopEngine) Select(tag string) error {
 	return nil
 }
 func (e *routerMultihopEngine) Selected() string {
-	selector, err := e.selector()
-	if err != nil {
-		return ""
-	}
-	return selector.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), routerMultihopObservationTimeout)
+	defer cancel()
+	selected, _ := e.SelectedContext(ctx)
+	return selected
 }
 
 // RouterApplyNativeXrayDevicePolicy preserves one encrypted dual-transport owner.

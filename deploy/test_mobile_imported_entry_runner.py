@@ -85,6 +85,13 @@ class ImportedEntryVerdicts(unittest.TestCase):
   gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
   for mutation in (events[:-1],events+[events[-1]],events[:-1]+[dict(events[-1],Action='skip')]):
    with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
+ def test_context_owner_verdicts_are_required(self):
+  self.assertEqual(len(gate.names(gate.CONTEXT_CORE)),13)
+  expected=gate.names(gate.CONTEXT_NATIVE)
+  self.assertEqual(len(expected),15)
+  events=[{'Action':a,'Test':n} for n in sorted(expected) for a in ('run','pass')]
+  gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
+  with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,events[:-1])),expected)
  def test_shipping_invocations(self):
   self.assertIn("test_mobile_imported_entry.py'),str(vendor),'--android'",(ROOT/'deploy/test_android_multihop_pinned.py').read_text())
   self.assertIn('"deploy/test_mobile_imported_entry.py", source, "--native-peers"',(ROOT/'deploy/test_desktop_node_physical.py').read_text())

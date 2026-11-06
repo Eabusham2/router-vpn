@@ -260,10 +260,18 @@ capacity must satisfy the complete compiled entry envelope. Any subsequent
 receipt or MTU change, including an increase, revokes the old proof and its
 measurement factories; revalidation captures a new owner. A cancelled measurement
 cannot publish a result and does not by itself retire an otherwise unchanged
-path. The new native receipt/capacity observation uses bounded original-instance
-and endpoint reads. This does not establish boundedness of every generic proof
-call: existing engine `Identity()` and controller `requireValid()` paths still
-reach a separate unbounded instance read and need a focused follow-up.
+path. Native receipt/capacity, public/private proof and selected DNS observations,
+plus the imported hop engine's `IdentityContext` and `Dial` methods, retain the
+actual caller context through instance, selector and outbound readback.
+Contextless native identity queries use the existing 1,500 ms observation bound.
+A connection returned after cancellation or original owner replacement is closed
+before the operation returns; it cannot be handed to a replacement owner. Startup
+publishes its cancellation owner before observing native identity and joins that
+read on Close. This does not make every shared hop measurement observation use its
+operation context: `hopmeasure.Service` still has contextless `Identity()` calls,
+including calls under its admission/status lock. The ordinary MTU adapter retains
+its separate context-bound readback and rollback contract, while external/Tor
+constructors, proof callbacks and Tor lease observations remain follow-ups.
 
 The complete compiled graph supplies the MTU plan. For a nested packet final,
 `internal/awgpolicy` accounts for the actual IPv4/IPv6 carrier, 16-byte transport
