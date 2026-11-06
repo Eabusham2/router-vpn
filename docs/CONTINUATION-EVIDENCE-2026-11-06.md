@@ -747,6 +747,17 @@ new native/package/image/compose release, production signing, private deployment
 or physical-device acceptance. No router, AdGuard or private server configuration
 was changed.
 
+### Remote native follow-up after workspace disconnection
+
+- `40567e35d625a6620d3bc3e43dce4142d938f0c5` published the two source-contract fixture corrections described above. Its Multihop contract workflow `42206637830`, attempt 1, completed successfully on that exact commit. This is the bounded workflow result, not a full release.
+- Concurrent `20f1e423a90c039cf0380d7821c57e55d720fee1` supplied the optional MTU context-capture availability contract. The MTU policy job `127862467552` in run `42208772950` passed on descendant `2a164e3fab1ad4a7130b033f2be393d901f30066`, including the shared race packages and Android/performance shipping checks. The Apple job in that run was cancelled as main advanced; the whole workflow is not recorded as successful.
+- The Linux AMD64 and ARM64 native jobs `127860854329` and `127860854456` at `20f1e423` both reached the routing-runner receipt check and failed its obsolete `27 != 15` expectation. `09ad1cb89aa7919f47bc4c6b0cc552cc690ecdde` changes only the expected shared/native MTU verdict counts from 15/7 to 27/8. Missing, duplicate and foreign verdict controls remain required. Local execution was unavailable; native verification after that change remains required.
+- `503caa850da968b463e6ab4aec3d4eebb042ee2c` fixes the diagnosed Windows Server fixture registry omission. The actual packet job `127855162775` at `40567e35` reported `default DNS server fallback: transport type not found: local` before traffic proof. The fixture now registers the same local transport that the pinned packaged core includes. The compiled external relay still rejects domain targets and uses destinations resolved by the captured client's selected DNS policy. Existing Server/Compare/DNS/credential/retirement cases are preserved and must execute successfully after this repair; earlier negative passes during the common startup failure are not independent causal evidence.
+- The same Windows run's OpenVPN job `127855162880` failed during child provider startup. The strict reply reader discarded a child test failure line and printed a nil ReadSlice error. This increment adds safe startup-phase diagnostics without relaxing the reply protocol, transport checks, retries or native negative cases. This does not yet establish the provider's root cause or a working OpenVPN path.
+- The separate SS forward-buffer overflow is confirmed in actual Windows job `127855163058` at `40567e35`: the packet writer requires 42 bytes of header space. It is distinct from the earlier published 16-byte DNS-reply tailroom repair. Its draft remains unpublished with incomplete required validation as recorded above.
+
+These GitHub publications were verified by normal-parent commit reads, compare-and-swap updates of main, and exact source readback. They are source-reviewed remote publications; no local build result is claimed after the workspace became unavailable. The broader unpublished source drafts and live/device acceptance items remain open.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.

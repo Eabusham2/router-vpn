@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -34,10 +35,19 @@ func TestRouterVPNDesktopExternalWindowsOpenVPNPeer(t *testing.T) {
 	if raw == "" {
 		return
 	}
+	// Go test failures use stdout, which is the provider's JSON reply pipe.
+	// Report only the fixed phase on the separately inherited stderr.
+	phase := "capture-shape"
+	defer func() {
+		if t.Failed() {
+			fmt.Fprintf(os.Stderr, "routervpn-openvpn-peer phase=%s class=test-failure\n", phase)
+		}
+	}()
 	values := strings.Split(raw, ",")
 	if len(values) != 5 {
 		t.Fatal("OpenVPN peer lost captured alias identity")
 	}
+	phase = "capture-fields"
 	luid, e1 := strconv.ParseUint(values[0], 10, 64)
 	index, e2 := strconv.ParseUint(values[1], 10, 32)
 	created, e3 := strconv.ParseInt(values[2], 10, 64)
@@ -46,18 +56,22 @@ func TestRouterVPNDesktopExternalWindowsOpenVPNPeer(t *testing.T) {
 	if e1 != nil || e2 != nil || e3 != nil || e4 != nil || e5 != nil {
 		t.Fatal("OpenVPN peer malformed alias capture")
 	}
+	phase = "alias-readback"
 	alias, err := winipcfg.LUID(luid).IPAddress(desktopExternalOpenVPNAlias)
 	if err != nil || alias.InterfaceIndex != uint32(index) || alias.CreationTimeStamp != created || alias.CreationTimeStamp == 0 || !alias.SkipAsSource || alias.OnLinkPrefixLength != 32 || alias.DadState != winipcfg.DadStatePreferred {
 		t.Fatal("OpenVPN peer alias creation was replaced", err)
 	}
+	phase = "carrier-readback"
 	carrier, err := winipcfg.LUID(luid).IPAddress(original)
 	if err != nil || carrier.CreationTimeStamp != originalCreated || carrier.SkipAsSource || carrier.DadState != winipcfg.DadStatePreferred || desktopExternalWFPAddress(t) != original {
 		t.Fatal("OpenVPN peer original physical carrier changed", err)
 	}
+	phase = "executable-identity"
 	appID, err := mobiletor.DesktopWindowsNodeCompositionAppID()
 	if err != nil || len(appID) == 0 {
 		t.Fatal("OpenVPN peer lost actual executable identity", err)
 	}
+	phase = "provider-serve"
 	if err := desktopOpenVPNReferenceServeOwned(desktopExternalOpenVPNAlias.String(), appID); err != nil {
 		t.Fatal(err)
 	}

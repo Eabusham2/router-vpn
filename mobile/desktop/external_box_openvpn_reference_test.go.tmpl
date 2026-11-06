@@ -246,16 +246,27 @@ func desktopOpenVPNReferenceServe(address string) (failure error) {
 }
 
 func desktopOpenVPNReferenceServeOwned(address string, appID []byte) (failure error) {
+	// stdout belongs to strict JSON replies; keep startup failures on stderr.
+	// Emit fixed phase names and optional numeric errno without error text.
+	fail := func(phase string, err error) error {
+		var errno syscall.Errno
+		if errors.As(err, &errno) {
+			fmt.Fprintf(os.Stderr, "routervpn-openvpn-provider phase=%s class=syscall errno=%d\n", phase, uint64(errno))
+		} else {
+			fmt.Fprintf(os.Stderr, "routervpn-openvpn-provider phase=%s class=error\n", phase)
+		}
+		return err
+	}
 	reader := json.NewDecoder(io.LimitReader(os.Stdin, 512<<10))
 	reader.DisallowUnknownFields()
 	var request desktopOpenVPNCompositionPeerInput
 	if err := reader.Decode(&request); err != nil || request.Schema != 1 || request.Network != "tcp" && request.Network != "udp" ||
 		request.Control != "tls-auth" && request.Control != "tls-crypt" || request.Fault != "" && request.Fault != "held-proof" && request.Fault != "dns" {
-		return errors.New("provider lost complete captured request")
+		return fail("request", errors.New("provider lost complete captured request"))
 	}
 	public, err := tls.X509KeyPair([]byte(request.PublicCertificate), []byte(request.PublicKey))
 	if err != nil {
-		return errors.New("provider lost captured public TLS identity")
+		return fail("public-tls-identity", errors.New("provider lost captured public TLS identity"))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	peer := &desktopExternalIntegrationPeer{protocol: "openvpn", certificate: public, ctx: ctx, cancel: cancel,
@@ -279,15 +290,15 @@ func desktopOpenVPNReferenceServeOwned(address string, appID []byte) (failure er
 	}()
 	peer.listener, err = net.Listen("tcp4", address+":0")
 	if err != nil {
-		return err
+		return fail("public-listener", err)
 	}
 	latency, err = net.Listen("tcp4", address+":0")
 	if err != nil {
-		return err
+		return fail("latency-listener", err)
 	}
 	peer.packet, err = net.ListenPacket("udp4", address+":0")
 	if err != nil {
-		return err
+		return fail("dns-listener", err)
 	}
 	desktopOpenVPNCompositionServeStream(peer, peer.listener, "1.1.1.1:443")
 	desktopOpenVPNCompositionServeStream(peer, latency, desktopExternalLatencyAddress)
@@ -295,13 +306,13 @@ func desktopOpenVPNReferenceServeOwned(address string, appID []byte) (failure er
 	used := make(map[int]bool)
 	unavailable, err := desktopOpenVPNCompositionPort(address, used)
 	if err != nil {
-		return err
+		return fail("unavailable-port-reservation", err)
 	}
 	var port int
 	for attempt := 0; attempt < 16; attempt++ {
 		port, err = desktopOpenVPNCompositionPort(address, used)
 		if err != nil {
-			return err
+			return fail("provider-port-reservation", err)
 		}
 		control := map[string]any{"type": strings.ReplaceAll(request.Control, "-", "_"), "key": []string{request.ControlKey}}
 		if request.Control == "tls-auth" {
@@ -324,7 +335,7 @@ func desktopOpenVPNReferenceServeOwned(address string, appID []byte) (failure er
 				rule("tcp", "93.184.216.34", 443, latency.Addr().(*net.TCPAddr).Port), map[string]any{"action": "reject"}}}}
 		provider, err = desktopOpenVPNCompositionProviderBox(ctx, graph)
 		if err != nil {
-			return err
+			return fail("native-provider-build", err)
 		}
 		if err = provider.Start(); err == nil {
 			break
@@ -332,11 +343,11 @@ func desktopOpenVPNReferenceServeOwned(address string, appID []byte) (failure er
 		closeErr := provider.Close()
 		provider = nil
 		if closeErr != nil || !errors.Is(err, syscall.EADDRINUSE) {
-			return errors.Join(err, closeErr)
+			return fail("native-provider-start", errors.Join(err, closeErr))
 		}
 	}
 	if provider == nil {
-		return errors.New("actual OpenVPN provider could not bind")
+		return fail("provider-bind-exhausted", errors.New("actual OpenVPN provider could not bind"))
 	}
 	reply := func() desktopOpenVPNCompositionPeerReply {
 		return desktopOpenVPNCompositionPeerReply{Schema: 1, Network: request.Network, AppID: appID,
@@ -346,7 +357,7 @@ func desktopOpenVPNReferenceServeOwned(address string, appID []byte) (failure er
 	}
 	writer := json.NewEncoder(os.Stdout)
 	if err := writer.Encode(reply()); err != nil {
-		return err
+		return fail("initial-receipt", err)
 	}
 	var release sync.Once
 	for {
