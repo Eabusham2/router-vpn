@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -17,6 +19,71 @@ spec.loader.exec_module(mod)
 class SetupCenterGuideTests(unittest.TestCase):
     def setUp(self):
         self.guide = mod.GUIDE_PANEL
+
+    def test_actual_guide_lifecycle_with_unavailable_or_invalid_browser_storage(self):
+        script = self.guide.split("<script>", 1)[1].split("</script>", 1)[0]
+        harness = r'''
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const source = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+function boot(raw, {readDenied=false, writeDenied=false}={}) {
+ const nodes=new Map(), timers=[], writes=[];
+ const steps=Array.from({length:9},()=>({active:false,classList:{toggle(_name,on){this.owner.active=on}}}));
+ for(const step of steps)step.classList.owner=step;
+ const node=id=>{
+  if(!nodes.has(id))nodes.set(id,{open:false,style:{},events:{},textContent:'',
+   addEventListener(name,fn){this.events[name]=fn},
+   querySelectorAll(){return steps},showModal(){this.open=true},close(){this.open=false}});
+  return nodes.get(id);
+ };
+ const storage={getItem(){if(readDenied)throw new Error('SecurityError');return raw},
+  setItem(key,value){if(writeDenied)throw new Error('QuotaExceededError');writes.push([key,value]);raw=value}};
+ vm.runInNewContext(source,{document:{getElementById:node},localStorage:storage,
+  setTimeout(fn){timers.push(fn)},Date,JSON,Number,Math});
+ for(const fn of timers)fn();
+ return {node,steps,writes,timers,stored:()=>raw,
+  click(name){node('rvpn-guide-'+name).events.click()},
+  step(){return steps.findIndex(s=>s.active)}};
+}
+for(const raw of [null,'null','[]','0','true','"saved"','{bad',
+ '{"step":3,"completed":"false"}','{"step":-3}', '{"step":1.5}']) {
+ const ui=boot(raw);
+ assert.equal(ui.node('rvpn-full-guide').open,true,'first-run guide failed for '+raw);
+ assert.equal(ui.step(),raw==='{"step":3,"completed":"false"}'?3:0);
+ ui.click('next');ui.click('close');assert.equal(ui.node('rvpn-full-guide').open,false);
+ ui.click('open');assert.equal(ui.node('rvpn-full-guide').open,true);
+}
+for(const options of [{readDenied:true},{writeDenied:true},{readDenied:true,writeDenied:true}]) {
+ const ui=boot(null,options);
+ assert.equal(ui.node('rvpn-full-guide').open,true);
+ assert.match(ui.node('rvpn-guide-counter').textContent,/this visit/);
+ assert.doesNotMatch(ui.node('rvpn-guide-counter').textContent,/saved on this browser/);
+ ui.click('next');assert.equal(ui.step(),1);
+ let prevented=false;
+ ui.node('rvpn-full-guide').events.cancel({preventDefault(){prevented=true}});
+ assert.equal(prevented,true);assert.equal(ui.node('rvpn-full-guide').open,false);
+ ui.click('open');assert.equal(ui.step(),1);ui.click('back');assert.equal(ui.step(),0);
+ for(let i=0;i<9;i++)ui.click('next');
+ assert.equal(ui.node('rvpn-full-guide').open,false);
+ ui.click('open');ui.click('restart');assert.equal(ui.step(),0);
+ assert.equal(ui.node('rvpn-full-guide').open,true);
+}
+const resumed=boot('{"step":4,"completed":false}');
+assert.equal(resumed.step(),4);assert.match(resumed.node('rvpn-guide-counter').textContent,/saved on this browser/);
+resumed.click('next');resumed.click('close');
+assert.equal(boot(resumed.stored()).step(),5);
+const done=boot('{"step":8,"completed":false}');done.click('next');
+assert.equal(JSON.parse(done.stored()).completed,true);
+const later=boot(done.stored());assert.equal(later.timers.length,0);
+later.click('open');assert.equal(later.node('rvpn-full-guide').open,true);
+later.click('restart');assert.equal(JSON.parse(later.stored()).completed,false);
+assert.equal(later.step(),0);assert.equal(boot(later.stored()).node('rvpn-full-guide').open,true);
+assert.equal(boot('{"step":999,"completed":false}').step(),8);
+console.log('Actual Full Guide storage, resume, close, finish and restart lifecycle passed');
+'''
+        result = subprocess.run(["node", "-e", harness], input=json.dumps(script), text=True,
+                                capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_first_run_persistence_completion_resume_and_independent_access(self):
         for marker in (

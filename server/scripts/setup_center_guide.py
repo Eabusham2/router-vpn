@@ -132,10 +132,11 @@ GUIDE_PANEL = r'''
 <script>
 (()=>{
  const KEY='routervpn.setup-guide.v1',dlg=document.getElementById('rvpn-full-guide'),open=document.getElementById('rvpn-guide-open'),back=document.getElementById('rvpn-guide-back'),next=document.getElementById('rvpn-guide-next'),close=document.getElementById('rvpn-guide-close'),restart=document.getElementById('rvpn-guide-restart'),bar=document.getElementById('rvpn-guide-bar'),counter=document.getElementById('rvpn-guide-counter'),steps=[...dlg.querySelectorAll('.rg-step')];
- const read=()=>{try{return JSON.parse(localStorage.getItem(KEY)||'{}')}catch(_){return{}}};
+ let persistent=true;
+ const read=()=>{let raw;try{raw=localStorage.getItem(KEY)}catch(_){persistent=false;return{}}try{const saved=JSON.parse(raw||'{}');return saved&&typeof saved==='object'&&!Array.isArray(saved)?{step:saved.step,completed:saved.completed===true}:{}}catch(_){return{}}};
  let state=read(); if(!Number.isInteger(state.step))state.step=0; state.step=Math.max(0,Math.min(steps.length-1,state.step));
- const save=()=>localStorage.setItem(KEY,JSON.stringify({step:state.step,completed:!!state.completed,updatedAt:new Date().toISOString()}));
- function render(){steps.forEach((x,i)=>x.classList.toggle('active',i===state.step));back.disabled=state.step===0;next.textContent=state.step===steps.length-1?'Finish setup guide':'Next';counter.textContent=`Step ${state.step+1} of ${steps.length} • progress is saved on this browser`;bar.style.width=`${((state.step+1)/steps.length)*100}%`;save()}
+ const save=()=>{if(!persistent)return;try{localStorage.setItem(KEY,JSON.stringify({step:state.step,completed:!!state.completed,updatedAt:new Date().toISOString()}))}catch(_){persistent=false}};
+ function render(){steps.forEach((x,i)=>x.classList.toggle('active',i===state.step));back.disabled=state.step===0;next.textContent=state.step===steps.length-1?'Finish setup guide':'Next';save();counter.textContent=`Step ${state.step+1} of ${steps.length} • ${persistent?'progress is saved on this browser':'progress is kept for this visit'}`;bar.style.width=`${((state.step+1)/steps.length)*100}%`}
  function show(){render();if(!dlg.open)dlg.showModal()}
  open.addEventListener('click',show); back.addEventListener('click',()=>{if(state.step>0){state.step--;render()}}); close.addEventListener('click',()=>{save();dlg.close()}); restart.addEventListener('click',()=>{state={step:0,completed:false};render()}); next.addEventListener('click',()=>{if(state.step<steps.length-1){state.step++;render();return}state.completed=true;state.step=0;save();dlg.close()});
  dlg.addEventListener('cancel',e=>{e.preventDefault();save();dlg.close()});
