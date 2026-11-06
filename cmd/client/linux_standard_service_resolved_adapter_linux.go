@@ -59,19 +59,29 @@ func (o *linuxBootBootstrapExchange) PreflightResolvedName(ctx context.Context, 
 // The transport primitive receives only this exact selected tuple. DNSSEC is
 // deliberately not inferred from AD: local validation for validating modes is
 // still required before those policies can be executed by this adapter.
-func resolvedSelectedUpstream(policy standardengine.ResolvedPolicy, name, network string) (mobiletor.DesktopLinuxBootstrapDNSUpstream, error) {
-	var upstream mobiletor.DesktopLinuxBootstrapDNSUpstream
+func resolvedSelectedUpstreams(policy standardengine.ResolvedPolicy, name, network string) ([]mobiletor.DesktopLinuxBootstrapDNSUpstream, error) {
 	if network != "udp" && network != "tcp" {
-		return upstream, errors.New("resolved caller changed captured DNS transport")
+		return nil, errors.New("resolved caller changed captured DNS transport")
 	}
 	routes, err := policy.ResolvedRoutes(name)
 	if err != nil {
-		return upstream, err
+		return nil, err
 	}
-	if len(routes) != 1 {
-		return upstream, errors.New("resolved equal-best scopes require parallel original-scope resolution")
+	if len(routes) == 0 || len(routes) > 257 {
+		return nil, errors.New("resolved scope count exceeds original bound")
 	}
-	route := routes[0]
+	upstreams := make([]mobiletor.DesktopLinuxBootstrapDNSUpstream, 0, len(routes))
+	for _, route := range routes {
+		upstream, err := resolvedRouteUpstream(route, network)
+		if err != nil {
+			return nil, err
+		}
+		upstreams = append(upstreams, upstream)
+	}
+	return upstreams, nil
+}
+func resolvedRouteUpstream(route standardengine.ResolvedRoute, network string) (mobiletor.DesktopLinuxBootstrapDNSUpstream, error) {
+	var upstream mobiletor.DesktopLinuxBootstrapDNSUpstream
 	if route.DNSSEC != "no" {
 		return upstream, errors.New("original resolved DNSSEC policy requires local validation before scoped admission")
 	}
@@ -116,14 +126,24 @@ func (o *linuxBootBootstrapExchange) exchangeResolved(ctx context.Context, netwo
 	if local.Local {
 		return nil, errors.New("original daemon supplied a local answer before upstream admission")
 	}
-	upstream, err := resolvedSelectedUpstream(policy, o.resolvedName, network)
+	upstreams, err := resolvedSelectedUpstreams(policy, o.resolvedName, network)
 	if err != nil {
 		return nil, err
 	}
 	if err = o.Current(ctx); err != nil {
 		return nil, err
 	}
-	answer, err := o.native.BootstrapDNSExchangeUpstream(o.operation, ctx, o.lease.lock, upstream, question)
+	group, err := o.native.BeginBootstrapDNSGroup(o.operation, o.lease.lock)
+	if err != nil {
+		return nil, err
+	}
+	// Current enters the same native baseline gate retained by this group.
+	// It must run only before Begin and after joined Close, never in a worker.
+	answer, err := resolveOriginalScopes(ctx, group, upstreams, question)
+	var unjoined *resolvedGroupRetirementError
+	if errors.As(err, &unjoined) {
+		return nil, err
+	}
 	// The live owner is checked after every physical exchange, even a failed
 	// one. Neither an answer nor a cached policy hash masks original-owner loss.
 	_, after, observed := resolver.helper.observe(ctx, o.resolvedName)

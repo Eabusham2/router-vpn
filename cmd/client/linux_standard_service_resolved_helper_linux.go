@@ -9,7 +9,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"router-vpn/internal/desktopnetwork"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 // policy never recreates its process, authenticated channel or daemon owner.
 // Callers retain the partial owner on every error and join Close before retry.
 type linuxResolvedHelper struct {
+	mu                                                            sync.Mutex
 	failure                                                       error
 	sources                                                       *linuxStandardEngine
 	image, capture, padding, parentDirectory, childChannel, pidfd *os.File
@@ -159,7 +162,14 @@ func startLinuxResolvedHelper(ctx context.Context, root, session, name string) (
 // successful RPC to its already captured transaction deadline. The cancellation
 // bridge was installed before source verification or child creation.
 func (h *linuxResolvedHelper) retainCompleted(ctx context.Context) error {
-	if err := h.current(ctx); err != nil {
+	if h == nil {
+		return errors.New("resolved helper absent")
+	}
+	if err := desktopnetwork.LockContext(ctx, &h.mu); err != nil {
+		return err
+	}
+	defer h.mu.Unlock()
+	if err := h.currentLocked(ctx); err != nil {
 		return err
 	}
 	return h.retainObservationLifetime(ctx)
@@ -185,6 +195,16 @@ func (h *linuxResolvedHelper) retainObservationLifetime(ctx context.Context) err
 }
 
 func (h *linuxResolvedHelper) current(ctx context.Context) error {
+	if h == nil {
+		return errors.New("resolved helper absent")
+	}
+	if err := desktopnetwork.LockContext(ctx, &h.mu); err != nil {
+		return err
+	}
+	defer h.mu.Unlock()
+	return h.currentLocked(ctx)
+}
+func (h *linuxResolvedHelper) currentLocked(ctx context.Context) error {
 	if h == nil || h.closed || h.original == nil || h.original.Err() != nil || h.failure != nil || h.peer == nil || h.joined == nil || ctx == nil || ctx.Err() != nil {
 		return errors.New("resolved helper lost its original live operation")
 	}
@@ -202,6 +222,13 @@ func (h *linuxResolvedHelper) current(ctx context.Context) error {
 // observe consumes the original sequence-zero greeting once, then asks that
 // same helper to recheck the original daemon, full policy and local-only name.
 func (h *linuxResolvedHelper) observe(ctx context.Context, name string) (standardengine.ResolvedPolicy, standardengine.ResolvedLocalResult, error) {
+	if h == nil {
+		return standardengine.ResolvedPolicy{}, standardengine.ResolvedLocalResult{}, errors.New("resolved helper absent")
+	}
+	if err := desktopnetwork.LockContext(ctx, &h.mu); err != nil {
+		return standardengine.ResolvedPolicy{}, standardengine.ResolvedLocalResult{}, err
+	}
+	defer h.mu.Unlock()
 	policy, local, err := h.readObservation(ctx, name)
 	if err != nil && h != nil {
 		h.failure = errors.Join(h.failure, err)
@@ -215,11 +242,11 @@ func (h *linuxResolvedHelper) readObservation(ctx context.Context, name string) 
 		return policy, local, errors.New("resolved observation omitted exact question")
 	}
 	if h != nil && h.policy == nil && name != h.name {
-		if _, _, err := h.observe(ctx, h.name); err != nil {
+		if _, _, err := h.readObservation(ctx, h.name); err != nil {
 			return policy, local, err
 		}
 	}
-	if err := h.current(ctx); err != nil {
+	if err := h.currentLocked(ctx); err != nil {
 		return policy, local, err
 	}
 	if h.policy != nil {
@@ -268,7 +295,7 @@ func (h *linuxResolvedHelper) readObservation(ctx context.Context, name string) 
 	if err != nil {
 		return policy, local, err
 	}
-	if err = h.current(ctx); err != nil {
+	if err = h.currentLocked(ctx); err != nil {
 		return policy, local, err
 	}
 	if h.policy == nil {
@@ -289,6 +316,16 @@ func (h *linuxResolvedHelper) closeFile(f *os.File) error {
 }
 
 func (h *linuxResolvedHelper) Close(ctx context.Context) error {
+	if h == nil {
+		return nil
+	}
+	if err := desktopnetwork.LockContext(ctx, &h.mu); err != nil {
+		return err
+	}
+	defer h.mu.Unlock()
+	return h.closeLocked(ctx)
+}
+func (h *linuxResolvedHelper) closeLocked(ctx context.Context) error {
 	if h == nil {
 		return nil
 	}
@@ -399,16 +436,23 @@ func resolvedSignalOriginal(file *os.File) error {
 // anchor returns a loaded trust-store observation from the same live helper.
 // It does not itself validate any upstream DNSSEC chain.
 func (h *linuxResolvedHelper) anchor(ctx context.Context, index int32, name string, kind uint16) (result standardengine.ResolvedAnchorResult, failure error) {
+	if h == nil {
+		return result, errors.New("resolved helper absent")
+	}
+	if err := desktopnetwork.LockContext(ctx, &h.mu); err != nil {
+		return result, err
+	}
+	defer h.mu.Unlock()
 	defer func() {
 		if failure != nil && h != nil {
 			h.failure = errors.Join(h.failure, failure)
 		}
 	}()
-	if err := h.current(ctx); err != nil {
+	if err := h.currentLocked(ctx); err != nil {
 		return result, err
 	}
 	if h.policy == nil {
-		if _, _, err := h.observe(ctx, h.name); err != nil {
+		if _, _, err := h.readObservation(ctx, h.name); err != nil {
 			return result, err
 		}
 	}
@@ -445,5 +489,5 @@ func (h *linuxResolvedHelper) anchor(ctx context.Context, index int32, name stri
 	if err != nil {
 		return result, err
 	}
-	return result, h.current(ctx)
+	return result, h.currentLocked(ctx)
 }

@@ -99,6 +99,9 @@ func bootHostnameFixtureDNS(answer, countFile, mode string) error {
 		}
 		return original, nil
 	}
+	if mode == "parallel" {
+		return bootHostnameParallelDNS(reply, countFile)
+	}
 	errorsOut := make(chan error, 2)
 	if mode != "tcp" {
 		conn, e := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP(bootHostnameFixtureResolver), Port: 53})
@@ -188,6 +191,9 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 	}
 	if scenario == "service-boot-hostname-truncated" {
 		mode = "truncated"
+	}
+	if scenario == "service-boot-resolved-parallel" {
+		mode = "parallel"
 	}
 	hostsOnly := scenario == "service-boot-hosts"
 	resolved := linuxHostTUNResolvedCase(scenario)
@@ -301,11 +307,18 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 			body, e := os.ReadFile(countFile)
 			count, parse := strconv.Atoi(string(body))
 			minimum := 2
-			if mode == "truncated" {
+			if mode == "truncated" || mode == "parallel" {
 				minimum = 4
 			}
 			if e != nil || parse != nil || count < minimum {
 				t.Error("public Node Connect omitted actual A/AAAA bootstrap", e, parse, count)
+			}
+			if mode == "parallel" {
+				b, err := os.ReadFile(countFile + ".parallel")
+				n, parse := strconv.Atoi(string(b))
+				if err != nil || parse != nil || n < 2 {
+					t.Error("independent physical DNS scopes missed barrier", err, parse, n)
+				}
 			}
 			cancel()
 			_ = dns.Wait()
@@ -345,4 +358,95 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 	if e = os.WriteFile(asset, body, 0600); e != nil {
 		t.Fatal(e)
 	}
+}
+
+// Each socket must receive the same original question before either scope may
+// answer. The global scope returns NXDOMAIN first; the independent link scope
+// then returns the usable answer. Serial scope imitation cannot pass this gate.
+func bootHostnameParallelDNS(reply func([]byte, bool) ([]byte, error), countFile string) error {
+	type pair struct {
+		seen         map[int]bool
+		arrived      chan struct{}
+		negativeSent chan struct{}
+	}
+	var mu sync.Mutex
+	pairs := map[string]*pair{}
+	completed := 0
+	errorsOut := make(chan error, 2)
+	for _, port := range []int{53, 2053} {
+		conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP(bootHostnameFixtureResolver), Port: port})
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+		go func(port int, conn *net.UDPConn) {
+			for {
+				buffer := make([]byte, 1024)
+				n, remote, err := conn.ReadFromUDP(buffer)
+				if err != nil {
+					errorsOut <- err
+					return
+				}
+				query := buffer[:n]
+				mu.Lock()
+				key := string(query)
+				p := pairs[key]
+				if p == nil {
+					p = &pair{seen: map[int]bool{}, arrived: make(chan struct{}), negativeSent: make(chan struct{})}
+					pairs[key] = p
+				}
+				if p.seen[port] {
+					mu.Unlock()
+					errorsOut <- errors.New("duplicate original scope query")
+					return
+				}
+				p.seen[port] = true
+				if len(p.seen) == 2 {
+					close(p.arrived)
+				}
+				mu.Unlock()
+				select {
+				case <-p.arrived:
+				case <-time.After(3 * time.Second):
+					errorsOut <- errors.New("equal-best resolver scopes were serialized")
+					return
+				}
+				answer, err := reply(query, false)
+				if err != nil {
+					errorsOut <- err
+					return
+				}
+				if port == 53 {
+					answer = append([]byte(nil), query...)
+					answer[2] = 0x81
+					answer[3] = 0x83
+				} else {
+					select {
+					case <-p.negativeSent:
+					case <-time.After(3 * time.Second):
+						errorsOut <- errors.New("global negative omitted")
+						return
+					}
+				}
+				if _, err = conn.WriteToUDP(answer, remote); err != nil {
+					errorsOut <- err
+					return
+				}
+				if port == 53 {
+					close(p.negativeSent)
+				} else {
+					mu.Lock()
+					completed++
+					err = os.WriteFile(countFile+".parallel", []byte(strconv.Itoa(completed)), 0600)
+					mu.Unlock()
+					if err != nil {
+						errorsOut <- err
+						return
+					}
+				}
+			}
+		}(port, conn)
+	}
+	fmt.Println("ready")
+	return <-errorsOut
 }

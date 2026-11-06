@@ -78,6 +78,15 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 		Address []byte
 	}
 	selected := dns{0, unix.AF_INET, []byte{198, 19, 0, 53}, 53, ""}
+	parallel := os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_PARALLEL") == "1"
+	var link dns
+	if parallel {
+		iface, err := net.InterfaceByName("rvpn-test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		link = dns{int32(iface.Index), unix.AF_INET, []byte{198, 19, 0, 53}, 2053, ""}
+	}
 	model := func(request *dbus.Message) ([]any, string, error) {
 		member, _ := request.Headers[dbus.FieldMember].Value().(string)
 		destination, _ := request.Headers[dbus.FieldDestination].Value().(string)
@@ -90,6 +99,9 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 		case "AddMatch", "RemoveMatch":
 			return nil, "", nil
 		case "GetLink":
+			if parallel && len(request.Body) == 1 && request.Body[0] == link.Index {
+				return []any{dbus.ObjectPath(fmt.Sprintf("/org/freedesktop/resolve1/link/_%d", link.Index))}, "", nil
+			}
 			return []any{"no configured link"}, "org.freedesktop.resolve1.NoSuchLink", nil
 		case "GetAll":
 			if destination != ":1.77" {
@@ -99,6 +111,29 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 				"DNSEx": dbus.MakeVariant([]dns{selected}), "FallbackDNSEx": dbus.MakeVariant([]dns{}), "CurrentDNSServerEx": dbus.MakeVariant(selected),
 				"Domains": dbus.MakeVariant([]domain{}), "LLMNRHostname": dbus.MakeVariant("original-resolved"),
 				"LLMNR": dbus.MakeVariant("no"), "MulticastDNS": dbus.MakeVariant("no"), "DNSOverTLS": dbus.MakeVariant("no"), "DNSSEC": dbus.MakeVariant("no"), "DNSSECNegativeTrustAnchors": dbus.MakeVariant([]string{}),
+			}
+			if parallel {
+				if len(request.Body) != 1 {
+					return nil, "", errors.New("unknown scope properties")
+				}
+				if request.Body[0] == "org.freedesktop.resolve1.Manager" {
+					values["DNSEx"] = dbus.MakeVariant([]dns{selected, link})
+				} else {
+					type linkDNS struct {
+						Family     int32
+						Address    []byte
+						Port       uint16
+						ServerName string
+					}
+					row := linkDNS{link.Family, link.Address, link.Port, link.ServerName}
+					values["DNSEx"] = dbus.MakeVariant([]linkDNS{row})
+					values["CurrentDNSServerEx"] = dbus.MakeVariant(row)
+					values["Domains"] = dbus.MakeVariant([]struct {
+						Name        string
+						RoutingOnly bool
+					}{})
+					values["DefaultRoute"] = dbus.MakeVariant(true)
+				}
 			}
 			return []any{values}, "", nil
 		case "SetLinkDomains", "SetLinkDefaultRoute", "SetLinkDNS":

@@ -24,8 +24,12 @@ func TestResolvedAdapterSelectedUpstream(t *testing.T) {
 			p.Manager.DNSOverTLS = row.mode
 			p.Manager.DNS[0].Port = row.port
 			p.Manager.CurrentDNS = &p.Manager.DNS[0]
-			got, err := resolvedSelectedUpstream(p, "vpn.example", row.network)
-			if err != nil || got.Endpoint.Port() != row.want || got.Endpoint.Addr().String() != "192.0.2.53" || got.InterfaceIndex != 0 {
+			rows, err := resolvedSelectedUpstreams(p, "vpn.example", row.network)
+			if err != nil || len(rows) != 1 {
+				t.Fatal(rows, err)
+			}
+			got := rows[0]
+			if got.Endpoint.Port() != row.want || got.Endpoint.Addr().String() != "192.0.2.53" || got.InterfaceIndex != 0 {
 				t.Fatalf("captured tuple lost: %+v %v", got, err)
 			}
 			if row.mode == "yes" {
@@ -46,8 +50,12 @@ func TestResolvedAdapterSelectedUpstream(t *testing.T) {
 		p.Manager.Domains = link.Domains
 		p.Manager.CurrentDNS = &s
 		p.Links = []standardengine.ResolvedScope{link}
-		got, err := resolvedSelectedUpstream(p, "vpn.example", "udp")
-		if err != nil || got.InterfaceIndex != 7 {
+		rows, err := resolvedSelectedUpstreams(p, "vpn.example", "udp")
+		if err != nil || len(rows) != 1 {
+			t.Fatal(rows, err)
+		}
+		got := rows[0]
+		if got.InterfaceIndex != 7 {
 			t.Fatalf("lost original selected link: %+v %v", got, err)
 		}
 	})
@@ -58,19 +66,25 @@ func TestResolvedAdapterSelectedUpstream(t *testing.T) {
 		"opportunistic-tls": func(p *standardengine.ResolvedPolicy) { p.Manager.DNSOverTLS = "opportunistic" },
 		"unknown-tls":       func(p *standardengine.ResolvedPolicy) { p.Manager.DNSOverTLS = "" },
 		"missing-selection": func(p *standardengine.ResolvedPolicy) { p.Manager.CurrentDNS = nil },
-		"parallel-scopes": func(p *standardengine.ResolvedPolicy) {
-			s := p.Manager.DNS[0]
-			s.Index = 7
-			p.Manager.DNS = append(p.Manager.DNS, s)
-			p.Links = []standardengine.ResolvedScope{{Index: 7, DNS: []standardengine.ResolvedDNS{s}, CurrentDNS: &s, DefaultRoute: true}}
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := resolvedAdapterPolicy()
 			mutate(&p)
-			if _, err := resolvedSelectedUpstream(p, "vpn.example", "udp"); err == nil {
+			if _, err := resolvedSelectedUpstreams(p, "vpn.example", "udp"); err == nil {
 				t.Fatal("unsupported original policy silently downgraded")
 			}
 		})
 	}
+	t.Run("parallel-scopes", func(t *testing.T) {
+		p := resolvedAdapterPolicy()
+		server := p.Manager.DNS[0]
+		server.Index = 7
+		p.Manager.DNS = append(p.Manager.DNS, server)
+		p.Links = []standardengine.ResolvedScope{{Index: 7, DNS: []standardengine.ResolvedDNS{server}, CurrentDNS: &server, DefaultRoute: true}}
+		rows, err := resolvedSelectedUpstreams(p, "vpn.example", "udp")
+		if err != nil || len(rows) != 2 || rows[0].InterfaceIndex == rows[1].InterfaceIndex {
+			t.Fatal("equal-best scopes were lost", rows, err)
+		}
+	})
+
 }

@@ -582,3 +582,18 @@ SOURCE.update({'cmd/client/linux_standard_service_resolved_namespace_native_test
 AUXILIARY['resolved-helper'][1]['TestResolvedObservationTransactionLifetime'] = (
  'successful-rpc-retirement-keeps-original-deadline', 'cancelled-original-cannot-transfer',
  'original-deadline-expires-after-rpc', 'failed-helper-cannot-transfer')
+
+# Equal-best original resolver scopes, joined winner adoption and serialized helper frames.
+SOURCE.update({'cmd/client/linux_standard_service_resolved_group_linux.go',
+ 'cmd/client/linux_standard_service_resolved_group_linux_test.go',
+ 'internal/systembootstrap/resolved_response_linux.go',
+ 'internal/systembootstrap/resolved_response_linux_test.go'})
+AUXILIARY['resolved-group']=('./cmd/client',{
+ 'TestResolvedGroupIndependentScopes':('parallel-winner-joins-loser','negative-cannot-cancel-positive',
+  'invalid-cannot-cancel-positive','all-negative','cleanup-failure','cancelled-original','udp-truncation-original-tcp'),
+ 'TestResolvedHelperFrameLockIsBounded':()})
+AUXILIARY['resolved-response']=('./internal/systembootstrap',{
+ 'TestResolvedResponseScopeWinner':('address','no-data','negative','wrong-id','truncated','alias-cycle')})
+AUXILIARY_TESTS.update({
+ 'cmd/client/linux_standard_service_resolved_group_linux_test.go':'resolved-group',
+ 'internal/systembootstrap/resolved_response_linux_test.go':'resolved-response'})
