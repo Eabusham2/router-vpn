@@ -626,8 +626,11 @@ func (a *adminMutationServer) applyPolicy() error {
 
 func (a *adminMutationServer) applyPolicyLocked() error {
 	const table = "router_vpn_admin"
-	_ = nftScript("delete table inet " + table + "\n")
 	var b strings.Builder
+	// add is idempotent and makes deletion valid on first initialization.
+	// Keep the entire replacement in one nft transaction: failed admission
+	// must not remove the prior bans, LAN policy or forwarding guard.
+	fmt.Fprintf(&b, "add table inet %s\ndelete table inet %s\n", table, table)
 	fmt.Fprintf(&b, "add table inet %s\n", table)
 	fmt.Fprintf(&b, "add chain inet %s input { type filter hook input priority -10; policy accept; }\n", table)
 	fmt.Fprintf(&b, "add chain inet %s forward { type filter hook forward priority -10; policy accept; }\n", table)

@@ -217,6 +217,10 @@ func serverControlServicePorts(reserved []int) []int {
 
 func renderServerControlRules(table, inputInterface string, paused bool, servicePorts []int) string {
 	var b strings.Builder
+	// Establish an absent table and replace this owned table in the same
+	// transaction. Never commit deletion separately from its replacement:
+	// a rejected update must leave the previous Stop guard installed.
+	fmt.Fprintf(&b, "add table inet %s\ndelete table inet %s\n", table, table)
 	fmt.Fprintf(&b, "add table inet %s\n", table)
 	fmt.Fprintf(&b, "add chain inet %s input { type filter hook input priority -20; policy accept; }\n", table)
 	if !paused {
@@ -237,7 +241,6 @@ func (s *adminServerControl) apply() error {
 }
 
 func (s *adminServerControl) applyLocked() error {
-	_ = nftScript("delete table inet " + serverControlTable + "\n")
 	return nftScript(renderServerControlRules(serverControlTable, s.cfg.WANInterface, s.state.Paused, serverControlServicePorts(s.cfg.ReservedPorts)))
 }
 
