@@ -84,11 +84,8 @@ func resolveOriginalDNSSECDowngradePurpose(ctx context.Context, policy standarde
 		if err != nil {
 			return err
 		}
-		// v257 resets BadOpt/RRSIGMissing and failure counters on private grace
-		// expiry. PacketDoOff is sticky until explicit feature reset; therefore
-		// only this observed incompatibility can authorize this continuation.
-		if !state.Matches(policy, name, index) || !state.AllowsCurrentIncompatibility() || !state.Row.PacketDoOff {
-			return errors.New("original server has no stable observed DO incompatibility")
+		if !resolvedStableCompatibility(state, policy, name, index) {
+			return errors.New("original server has no stable observed incompatibility")
 		}
 		raw, err := state.Canonical()
 		if err != nil {
@@ -160,4 +157,40 @@ func resolveOriginalDNSSECDowngradePurpose(ctx context.Context, policy standarde
 	answer = bytes.Clone(answer)
 	answer[3] &^= 0x20 // Compatibility acceptance never grants authenticated data.
 	return answer, nil
+}
+
+// The monitor's current support flag alone cannot predict private grace expiry.
+// v257 resolved-dns-server.c:425–446 consults that timer only below the policy's
+// best level. At exactly best, other feature-selection branches preserve BadOpt
+// and RRSIGMissing (counter reset:236–255,580–588), so support remains false.
+// PacketDoOff retains its independent sticky-until-reset admission. Every use
+// still requires the original whole-state digest before and after owned IO and
+// again after joined cleanup and at adoption; this is not a general State3 rule.
+func resolvedStableCompatibility(state standardengine.ResolvedServerState, policy standardengine.ResolvedPolicy, name string, index int32) bool {
+	if !state.Matches(policy, name, index) || !state.AllowsCurrentIncompatibility() {
+		return false
+	}
+	routes, err := policy.ResolvedRoutes(name)
+	if err != nil {
+		return false
+	}
+	dnsOverTLS := ""
+	for _, route := range routes {
+		if route.Index == index && route.CurrentDNS != nil && *route.CurrentDNS == state.Selected && route.DNSSEC == "allow-downgrade" {
+			dnsOverTLS = route.DNSOverTLS
+		}
+	}
+	var best string
+	switch dnsOverTLS {
+	case "no":
+		best = "UDP+EDNS0+DO"
+	case "yes", "opportunistic":
+		best = "TLS+EDNS0+DO"
+	default:
+		return false
+	}
+	if state.Row.PacketDoOff {
+		return true
+	}
+	return (state.Row.PacketBadOpt || state.Row.PacketRRSIGMissing) && state.Row.PossibleFeatureLevel == best
 }

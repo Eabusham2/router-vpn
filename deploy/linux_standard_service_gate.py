@@ -771,3 +771,15 @@ AUXILIARY['resolved-dnssec-root-collector']=('./cmd/client',{
  'root-owner-lost','root-changed','final-recheck')})
 AUXILIARY_TESTS.update({'internal/standardengine/resolved_dnssec_root_test.go':'resolved-dnssec-root-plan',
  'cmd/client/linux_standard_service_resolved_dnssec_root_linux_test.go':'resolved-dnssec-root-collector'})
+
+# Best-level incompatibility cannot enter the original daemon's grace reset.
+SOURCE.add('cmd/client/linux_standard_service_resolved_downgrade_best_linux_test.go')
+AUXILIARY['resolved-downgrade-best']=('./cmd/client',{
+ 'TestResolvedDowngradeBestLevelShipping':('address-badopt','alias-badopt',
+ 'address-rrsig','alias-rrsig','tls-badopt','tls-rrsig','opportunistic-badopt',
+ 'opportunistic-rrsig','lowered-badopt','lowered-rrsig','above-best','wrong-tls-best',
+ 'tcp-only','strict-dnssec','unknown-level','validator-error','reset-during-query',
+ 'reset-on-join','lowered-on-join','reset-before-adoption','lowered-before-adoption'),
+ 'TestResolvedBestLevelOriginalBinding':('original','foreign-policy','foreign-name',
+ 'foreign-scope','foreign-server','changed-tls','unknown-tls')})
+AUXILIARY_TESTS['cmd/client/linux_standard_service_resolved_downgrade_best_linux_test.go']='resolved-downgrade-best'
