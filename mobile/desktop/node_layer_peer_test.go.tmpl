@@ -234,17 +234,20 @@ func (s *desktopNodeLayerServer) NewConnection(_ context.Context, connection net
 		}
 		defer s.leave(peer)
 		s.plainTCP.Add(1)
+		// Interrupt the raw I/O first. The authenticated connection lazily publishes
+		// its response writer, so its decorated Close must follow both copy joins.
+		interrupt := func() { _ = peer.Close(); _ = connection.SetDeadline(time.Now()) }
+		retired := make(chan struct{})
+		stop := context.AfterFunc(s.ctx, func() { defer close(retired); interrupt() })
 		joined := make(chan struct{})
-		go func() {
-			defer close(joined)
-			_, _ = io.Copy(peer, connection)
-			_ = peer.Close()
-			_ = connection.Close()
-		}()
+		go func() { defer close(joined); _, _ = io.Copy(peer, connection); interrupt() }()
 		_, err = io.Copy(connection, peer)
-		_ = peer.Close()
-		_ = connection.Close()
+		interrupt()
 		<-joined
+		if !stop() {
+			<-retired
+		}
+		_ = connection.Close()
 		return err
 	}
 	if !desktopNodeLayerEcho(metadata.Destination) {
@@ -3323,4 +3326,108 @@ func desktopExternalIndependentPacketKeys(entry, final *desktopExternalInstalled
 		seen[key] = true
 	}
 	return true
+}
+
+// Deterministically overlap the first response publication with EOF/cancellation.
+// A decorated Close before both copy directions join violates the provider owner.
+type desktopNodeFirstResponseConn struct {
+	net.Conn
+	ctx                           context.Context
+	cancelCase                    bool
+	entered, interrupted, written chan struct{}
+	enterOnce, interruptOnce      sync.Once
+	writing, premature            atomic.Bool
+	closes                        atomic.Int64
+}
+
+func (c *desktopNodeFirstResponseConn) Read(p []byte) (int, error) {
+	select {
+	case <-c.entered:
+	case <-c.ctx.Done():
+		return 0, c.ctx.Err()
+	}
+	if c.cancelCase {
+		<-c.ctx.Done()
+		return 0, c.ctx.Err()
+	}
+	return 0, io.EOF
+}
+func (c *desktopNodeFirstResponseConn) Write(p []byte) (int, error) {
+	c.writing.Store(true)
+	c.enterOnce.Do(func() { close(c.entered) })
+	<-c.interrupted
+	c.writing.Store(false)
+	close(c.written)
+	return 0, net.ErrClosed
+}
+func (c *desktopNodeFirstResponseConn) SetDeadline(time.Time) error {
+	c.interruptOnce.Do(func() { close(c.interrupted) })
+	return nil
+}
+func (c *desktopNodeFirstResponseConn) Close() error {
+	c.closes.Add(1)
+	select {
+	case <-c.written:
+	default:
+		c.premature.Store(true)
+	}
+	if c.writing.Load() {
+		c.premature.Store(true)
+	}
+	_ = c.SetDeadline(time.Now())
+	return c.Conn.Close()
+}
+func TestRouterVPNDesktopLayerFirstResponseRetirement(t *testing.T) {
+	for _, cause := range []string{"eof", "cancel"} {
+		t.Run(cause, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			peerDone := make(chan struct{})
+			go func() {
+				defer close(peerDone)
+				c, e := listener.Accept()
+				if e != nil {
+					return
+				}
+				defer c.Close()
+				_, _ = c.Write([]byte("first authenticated response"))
+			}()
+			raw, other := net.Pipe()
+			defer other.Close()
+			conn := &desktopNodeFirstResponseConn{Conn: raw, ctx: ctx, cancelCase: cause == "cancel", entered: make(chan struct{}), interrupted: make(chan struct{}), written: make(chan struct{})}
+			server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: "10.99.0.1:443", Physical: listener.Addr().String()}}}
+			done := make(chan error, 1)
+			go func() {
+				done <- server.NewConnection(ctx, conn, M.Metadata{Destination: M.ParseSocksaddr("10.99.0.1:443")})
+			}()
+			select {
+			case <-conn.entered:
+			case <-ctx.Done():
+				t.Fatal("original first response never entered")
+			}
+			if cause == "cancel" {
+				cancel()
+			}
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("original copy workers did not join")
+			}
+			<-peerDone
+			if conn.premature.Load() || conn.closes.Load() != 1 || conn.writing.Load() {
+				t.Fatal("decorated Close raced first response or lost single owner", conn.closes.Load())
+			}
+			server.mu.Lock()
+			remaining := len(server.connections)
+			server.mu.Unlock()
+			if remaining != 0 {
+				t.Fatal("original raw peer retained")
+			}
+		})
+	}
 }

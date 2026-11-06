@@ -435,6 +435,12 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string, entrySelection
 					faults = append(faults, "entry-whitening")
 				}
 			}
+			if entryLayer != "" && layer != "" {
+				faults = []string{"success", "entry-key", "auth-downgrade", "relay-route", "control-eof", "final-private-key", "final-public-key", "final-psk", "final-route", "dns-route", "final-identity", "entry-public-ip", "entry-private"}
+				if mode != "wg" {
+					faults = append(faults, "final-awg-parameter")
+				}
+			}
 			for _, fault := range faults {
 				t.Run(fault, func(t *testing.T) {
 					ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 8*time.Second)
@@ -445,6 +451,9 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string, entrySelection
 					}
 					if entryLayer != "" {
 						suffix = "--entry-" + entryLayer
+						if layer != "" {
+							suffix = "--" + entryLayer + "--" + layer
+						}
 					}
 					raw, err := os.ReadFile(filepath.Join(directory, "socks5--final-"+mode+suffix+".json"))
 					if err != nil {
@@ -856,6 +865,13 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string, entrySelection
 					blockedFinal := fault == "layer-key" || fault == "whitening" || blockedEntry || fault == "relay-route" || fault == "control-eof" || fault == "final-private-key" || fault == "final-public-key" || fault == "final-psk" || fault == "final-awg-parameter" || fault == "final-route"
 					if entryCarrier != nil {
 						stats := entryCarrier.peer.stats()
+						if positive && layer != "" && entryLayer != "" {
+							bound, err := mobilemultihop.ImportedSOCKSPacketBounds(plan.Config())
+							maximum := entryCarrier.ciphertext.maximum.Load()
+							if err != nil || entryCarrier.ciphertext.count.Load() == 0 || maximum <= int64(lastRaw["mtu"].(float64)) || maximum+int64(bound.IPUDPBytes) > int64(max(bound.DataMax, bound.ControlMax)) {
+								t.Fatal("actual both-layer ciphertext escaped configured, unmeasured serialization bound", maximum, bound, err)
+							}
+						}
 						if positive && (stats.Streams == 0 || stats.Packets == 0 || entryCarrier.retired.Load() == 0) {
 							t.Fatal("entrylayer or original association retirement bypassed", stats)
 						}
@@ -891,5 +907,17 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string, entrySelection
 func TestRouterVPNImportedSOCKSEntryLayersPacketNativeTraffic(t *testing.T) {
 	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 		t.Run(layer, func(t *testing.T) { desktopImportedSOCKSPacketLayers(t, "", layer) })
+	}
+}
+
+func TestRouterVPNImportedSOCKSBothLayersPacketAESNativeTraffic(t *testing.T) {
+	desktopImportedSOCKSBothPacketLayers(t, "aes-256-gcm")
+}
+func TestRouterVPNImportedSOCKSBothLayersPacketXORNativeTraffic(t *testing.T) {
+	desktopImportedSOCKSBothPacketLayers(t, "aes-256-gcm+xor-whitening")
+}
+func desktopImportedSOCKSBothPacketLayers(t *testing.T, entry string) {
+	for _, final := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		t.Run(final, func(t *testing.T) { desktopImportedSOCKSPacketLayers(t, final, entry) })
 	}
 }

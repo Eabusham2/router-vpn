@@ -24,6 +24,8 @@ def socks_label(mode,a,b):
 SOCKS_FILES={'socks5--final-'+socks_label(mode,a,b)+'.json' for mode in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong') for a in LAYERS for b in LAYERS}
 FILES=SOCKS_FILES|NESTED_FILES|PACKET_FINAL_FILES|PACKET_FILES|BASE_FILES|{"final-hysteria2--"+name for name in BASE_FILES}
 CORE={
+ 'TestImportedEntrySOCKSBothLayerMTURetention':[mode+"/"+entry+"/"+final for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for entry in LAYERS[1:] for final in LAYERS[1:]],
+ 'TestImportedEntrySOCKSBothLayerBounds':["ipv6-carrier","port53-control","entry-eih","final-eih","invalid-key","missing-final-layer","changed-entry-owner"],
  'TestImportedEntrySOCKSEntryLayers':[mode+"/"+layer for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for layer in LAYERS[1:]],
  'TestImportedEntrySOCKSEntryLayerAuthority':["missing-provision","foreign-outer","public-private-target","mode-mismatch","unused-provision","both-layers","invented-proof","retained-source"],
  'TestImportedEntrySOCKSPacketFinalLayers':[mode+"/"+layer for mode in ("wg","awg2-fast","awg2-strong") for layer in LAYERS[1:]],
@@ -75,6 +77,11 @@ SOCKS_PEERS += socks_layer_peers(('shadowsocks','hysteria2'))
 SOCKS_PACKET_PEERS += socks_layer_peers(('wg','awg2-fast','awg2-strong'))
 
 SOCKS_LAYER_PEERS=[mode+'/'+layer+'/'+fault for mode in ('shadowsocks','hysteria2') for layer in LAYERS[1:] for fault in (('success','wrong-entry-ip','entry-auth','auth-downgrade','relay-route','control-eof','final-key','final-route','dns-route','final-identity') + (('layer-key',) if mode=='hysteria2' else ()) + (('whitening',) if layer==LAYERS[2] else ()))] + [mode+'/'+layer for mode in ('shadowsocks','hysteria2') for layer in LAYERS[1:]]
+
+SOCKS_BOTH_PROXY_PEERS=[mode+"/"+entry+"/"+final+"/"+fault for mode in ("shadowsocks","hysteria2") for entry in LAYERS[1:] for final in LAYERS[1:] for fault in ("wrong-entry-ip","entry-auth","auth-downgrade","relay-route","control-eof","final-key","final-route","dns-route","final-identity","entry-private")] + [mode+"/"+entry+"/"+final for mode in ("shadowsocks","hysteria2") for entry in LAYERS[1:] for final in LAYERS[1:]]
+def socks_both_packet_peers(entry):
+ return [final+"/"+mode+"/"+fault for final in LAYERS[1:] for mode in ("wg","awg2-fast","awg2-strong") for fault in (("success","entry-key","auth-downgrade","relay-route","control-eof","final-private-key","final-public-key","final-psk","final-route","dns-route","final-identity","entry-public-ip","entry-private") + (("final-awg-parameter",) if mode!="wg" else ()))] + [final+"/"+mode for final in LAYERS[1:] for mode in ("wg","awg2-fast","awg2-strong")] + list(LAYERS[1:])
+SOCKS_BOTH_GROUPS={'TestRouterVPNImportedSOCKSBothLayersProxyNativeTraffic':SOCKS_BOTH_PROXY_PEERS, 'TestRouterVPNImportedSOCKSBothLayersPacketAESNativeTraffic':socks_both_packet_peers(LAYERS[1]), 'TestRouterVPNImportedSOCKSBothLayersPacketXORNativeTraffic':socks_both_packet_peers(LAYERS[2])}
 
 NESTED_PEERS=['success-ipv6-carrier','success-wg-wg','success-awg-fast-wg','success-awg-strong-awg','success-final-layer','success-entry-layer','success-both-layers','final-private-key','final-public-key','final-psk','final-awg-parameter','entry-key','entry-public-key','entry-psk','entry-awg-parameter','entry-layer-key','outer-layer-key','final-route','dns-route','final-identity','entry-public-ip']
 PACKET_FINAL_PEERS=['success-wg-ss','success-awg-fast-ss','success-awg-strong-hy2','success-final-layer','final-private-key','final-public-key','final-psk','final-awg-parameter','entry-key','entry-sni','entry-trust','outer-layer-key','final-route','dns-route','final-identity','entry-public-ip']
@@ -148,13 +155,16 @@ def run(vendor,peers=False,android=False):
   if peers:
    # Keep each expanded protocol matrix within the existing finite native
    # timeout. Exact inventories are still mandatory for every process.
-   groups={'TestRouterVPNImportedSOCKSPairedFinalLayersNativeTraffic':SOCKS_LAYER_PEERS,'TestRouterVPNImportedSOCKSPacketFinalNativeTraffic':SOCKS_PACKET_PEERS,'TestRouterVPNDesktopLayerInitialPacketRetirement':['original-packet-and-blocked-reader-join','concurrent-initial-read-and-retirement'],'TestRouterVPNImportedSOCKSLayerRelayRetirement':['retiring-worker-root-close','replacement-owner','foreign-and-closed'],'TestRouterVPNImportedSOCKSPairedFinalNativeTraffic':SOCKS_PEERS,'TestRouterVPNImportedNestedPacketNativeTraffic':NESTED_PEERS,'TestRouterVPNImportedPacketFinalNativeTraffic':PACKET_FINAL_PEERS,'TestRouterVPNImportedPacketNativeTraffic':PACKET_PEERS,'TestRouterVPNImportedEntryPairedFinalNativeTraffic':PEERS,'TestRouterVPNImportedHysteriaPairedFinalNativeTraffic':HYSTERIA_PEERS,'TestRouterVPNImportedHysteriaFinalNativeTraffic':FINAL_HYSTERIA_PEERS}
+   groups={'TestRouterVPNImportedSOCKSPairedFinalLayersNativeTraffic':SOCKS_LAYER_PEERS,'TestRouterVPNImportedSOCKSPacketFinalNativeTraffic':SOCKS_PACKET_PEERS,'TestRouterVPNDesktopLayerInitialPacketRetirement':['original-packet-and-blocked-reader-join','concurrent-initial-read-and-retirement'],'TestRouterVPNDesktopLayerFirstResponseRetirement':['eof','cancel'],'TestRouterVPNImportedSOCKSLayerRelayRetirement':['retiring-worker-root-close','replacement-owner','foreign-and-closed'],'TestRouterVPNImportedSOCKSPairedFinalNativeTraffic':SOCKS_PEERS,'TestRouterVPNImportedNestedPacketNativeTraffic':NESTED_PEERS,'TestRouterVPNImportedPacketFinalNativeTraffic':PACKET_FINAL_PEERS,'TestRouterVPNImportedPacketNativeTraffic':PACKET_PEERS,'TestRouterVPNImportedEntryPairedFinalNativeTraffic':PEERS,'TestRouterVPNImportedHysteriaPairedFinalNativeTraffic':HYSTERIA_PEERS,'TestRouterVPNImportedHysteriaFinalNativeTraffic':FINAL_HYSTERIA_PEERS}
    for selected in ({'TestRouterVPNImportedSOCKSPairedFinalNativeTraffic','TestRouterVPNImportedSOCKSPairedFinalLayersNativeTraffic'}, {'TestRouterVPNImportedSOCKSPacketFinalNativeTraffic'}, set(groups)-{'TestRouterVPNImportedSOCKSPairedFinalNativeTraffic','TestRouterVPNImportedSOCKSPairedFinalLayersNativeTraffic','TestRouterVPNImportedSOCKSPacketFinalNativeTraffic'}):
     subset={name:groups[name] for name in sorted(selected)}
     execute(base+['-race','./protocol/routervpnamnezia','-run','^('+'|'.join(subset)+')$','-count=1','-timeout=90s'],vendor,env,names(subset))
 
   if peers:execute(base+['-race','./protocol/routervpnamnezia','-run','^TestRouterVPNImportedSOCKSPacketLayersNativeTraffic$','-count=1','-timeout=90s'],vendor,env,names({'TestRouterVPNImportedSOCKSPacketLayersNativeTraffic':SOCKS_PACKET_LAYER_PEERS}))
   if peers:execute(base+['-race','./protocol/routervpnamnezia','-run','^TestRouterVPNImportedSOCKSEntryLayers(Proxy|Packet)NativeTraffic$','-count=1','-timeout=90s'],vendor,env,names({'TestRouterVPNImportedSOCKSEntryLayersProxyNativeTraffic':SOCKS_ENTRY_PROXY_PEERS,'TestRouterVPNImportedSOCKSEntryLayersPacketNativeTraffic':SOCKS_ENTRY_PACKET_PEERS}))
+  if peers:
+   for parent,leaves in SOCKS_BOTH_GROUPS.items():
+    execute(base+['-race','./protocol/routervpnamnezia','-run','^'+parent+'$','-count=1','-timeout=90s'],vendor,env,names({parent:leaves}))
  checked_sources(vendor,peers)
  print('Exact imported-entry source, independent layers, distinct proofs, selected DNS and native verdicts passed; no OS device grant inferred.')
 if __name__=='__main__':

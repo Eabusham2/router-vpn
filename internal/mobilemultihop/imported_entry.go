@@ -274,6 +274,15 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 		meta.PacketControlMax = strconv.Itoa(nested.ControlMax)
 		meta.PacketMTUState = "configured-unmeasured"
 	}
+	if selection.Protocol == "socks5" && awgpolicy.WireGuardFamily(exitMode) && entryMeta.StartLayer != "" && entryMeta.StartLayer != "off" && meta.ExitStartLayer != "" && meta.ExitStartLayer != "off" {
+		bound, failure := ImportedSOCKSPacketBounds(string(encoded))
+		if failure != nil {
+			return nil, failure
+		}
+		meta.SOCKSDatagramBoundState = "configured-unmeasured"
+		meta.SOCKSDatagramDataMax = strconv.Itoa(bound.DataMax)
+		meta.SOCKSDatagramControlMax = strconv.Itoa(bound.ControlMax)
+	}
 	metadata, _ := json.Marshal(meta)
 	source, _ := json.Marshal([]string{"routervpn-imported-entry-v1", entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap})
 	c := &Controller{meta: meta, config: string(encoded), progress: Progress{Stage: "prepared", Measurements: []routechoice.Measurement{}}, imported: &importedEntry{source: externalDigest(source), metadata: string(metadata), profile: profile, publicIP: selection.ExpectedPublicIP}}

@@ -584,7 +584,7 @@ func desktopImportedSOCKSOuter(t *testing.T, graph map[string]map[string]any, st
 	t.Fatal("original layer closure cycle")
 	return nil
 }
-func desktopImportedSOCKSLayerProvider(t *testing.T, server *desktopNodeLayerServer, raw map[string]any, fault string) desktopExternalInstalledSSPeer {
+func desktopImportedSOCKSLayerProvider(t *testing.T, server *desktopNodeLayerServer, raw map[string]any, fault string, observation ...*desktopImportedDatagramObservation) desktopExternalInstalledSSPeer {
 	password := raw["password"].(string)
 	var stream func(net.Conn) net.Conn
 	var packet func(net.PacketConn) net.PacketConn
@@ -595,6 +595,16 @@ func desktopImportedSOCKSLayerProvider(t *testing.T, server *desktopNodeLayerSer
 		}
 		stream = func(c net.Conn) net.Conn { return &desktopSSLayerStream{Conn: c, key: key} }
 		packet = func(c net.PacketConn) net.PacketConn { return &desktopSSLayerPacket{PacketConn: c, key: key} }
+	}
+	if len(observation) == 1 {
+		decorate := packet
+		packet = func(c net.PacketConn) net.PacketConn {
+			var observed net.PacketConn = &desktopImportedObservedPacket{PacketConn: c, observation: observation[0]}
+			if decorate != nil {
+				observed = decorate(observed)
+			}
+			return observed
+		}
 	}
 	if strings.HasSuffix(fault, "layer-key") {
 		password = desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'z')
@@ -893,9 +903,10 @@ func TestRouterVPNImportedSOCKSPairedFinalLayersNativeTraffic(t *testing.T) {
 // Each UDP mapping belongs to the original authenticated SOCKS control; retiring
 // that control cancels and joins its encrypted forwarding before its revoker returns.
 type desktopImportedSOCKSEntryLayer struct {
-	peer    desktopExternalInstalledSSPeer
-	routes  *desktopImportedSOCKSLayerRoutes
-	retired atomic.Int64
+	peer       desktopExternalInstalledSSPeer
+	routes     *desktopImportedSOCKSLayerRoutes
+	retired    atomic.Int64
+	ciphertext desktopImportedDatagramObservation
 }
 
 func desktopStartImportedSOCKSEntryLayer(t *testing.T, ctx context.Context, socks *desktopExternalInstalledSOCKSPeer, raw map[string]any, privateTarget, physical, mode, fault string) *desktopImportedSOCKSEntryLayer {
@@ -925,7 +936,7 @@ func desktopStartImportedSOCKSEntryLayer(t *testing.T, ctx context.Context, sock
 	if fault == "entry-whitening" {
 		providerFault = "whitening"
 	}
-	owner.peer = desktopImportedSOCKSLayerProvider(t, server, raw, providerFault)
+	owner.peer = desktopImportedSOCKSLayerProvider(t, server, raw, providerFault, &owner.ciphertext)
 	return owner
 }
 func (o *desktopImportedSOCKSEntryLayer) close(t *testing.T) {
@@ -963,6 +974,9 @@ func desktopImportedSOCKSEntryOnlyTraffic(t *testing.T, finalMode string, select
 	}
 	if entryLayer != "" {
 		suffix = "--entry-" + entryLayer
+		if layer != "" {
+			suffix = "--" + entryLayer + "--" + layer
+		}
 	}
 	directory := os.Getenv("ROUTERVPN_IMPORTED_ENTRY_FIXTURES")
 	if directory == "" {
@@ -991,6 +1005,9 @@ func desktopImportedSOCKSEntryOnlyTraffic(t *testing.T, finalMode string, select
 		if entryLayer == "aes-256-gcm+xor-whitening" {
 			faults = append(faults, "entry-whitening")
 		}
+	}
+	if entryLayer != "" && layer != "" {
+		faults = []string{"wrong-entry-ip", "entry-auth", "auth-downgrade", "relay-route", "control-eof", "final-key", "final-route", "dns-route", "final-identity", "entry-private"}
 	}
 	for _, fault := range faults {
 		t.Run(fault, func(t *testing.T) {
@@ -1376,5 +1393,50 @@ func desktopImportedSOCKSEntryOnlyTraffic(t *testing.T, finalMode string, select
 				t.Fatal("foreign final key gained decrypted traffic")
 			}
 		})
+	}
+}
+
+// Observe raw encrypted datagrams below the optional whitening transform.
+type desktopImportedDatagramObservation struct {
+	maximum atomic.Int64
+	count   atomic.Int64
+}
+
+func (o *desktopImportedDatagramObservation) record(n int) {
+	o.count.Add(1)
+	for {
+		old := o.maximum.Load()
+		if int64(n) <= old || o.maximum.CompareAndSwap(old, int64(n)) {
+			return
+		}
+	}
+}
+
+type desktopImportedObservedPacket struct {
+	net.PacketConn
+	observation *desktopImportedDatagramObservation
+}
+
+func (p *desktopImportedObservedPacket) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, a, e := p.PacketConn.ReadFrom(b)
+	if e == nil {
+		p.observation.record(n)
+	}
+	return n, a, e
+}
+func (p *desktopImportedObservedPacket) WriteTo(b []byte, a net.Addr) (int, error) {
+	n, e := p.PacketConn.WriteTo(b, a)
+	if e == nil {
+		p.observation.record(n)
+	}
+	return n, e
+}
+func TestRouterVPNImportedSOCKSBothLayersProxyNativeTraffic(t *testing.T) {
+	for _, mode := range []string{"shadowsocks", "hysteria2"} {
+		for _, entry := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, final := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				t.Run(mode+"/"+entry+"/"+final, func(t *testing.T) { desktopImportedSOCKSEntryOnlyTraffic(t, mode, final, entry) })
+			}
+		}
 	}
 }
