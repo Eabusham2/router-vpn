@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -296,6 +297,100 @@ func TestDesktopTorComparisonCloseWaitExpiryCannotRetirePendingNativeClose(t *te
 	_ = launch.directoryRoot.Remove("comparison-release.fixture")
 }
 
+// The directory-retirement fixture pauses the native child, so it cannot echo
+// Close. Observe the original client publication, including its completed file
+// write, before cancelling the wait; elapsed disk time is not evidence of issue.
+func cancelDesktopTorComparisonAfterClosePublication(t *testing.T, parent context.Context, launch *desktopNodeLaunch, c *desktopTorComparisonClient) mobiletor.DesktopTorCompareRequest {
+	t.Helper()
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	done := make(chan struct{})
+	var closeErr error
+	go func() {
+		defer close(done)
+		closeErr = c.Close(ctx)
+	}()
+	defer func() { cancel(); <-done }()
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		c.mu.Lock()
+		last := c.last
+		c.mu.Unlock()
+		if last != nil && last.request.Action == mobiletor.DesktopTorCompareClose {
+			select {
+			case <-last.issued:
+				raw, err := readDesktopRuntimeSnapshot(launch.directoryRoot, mobiletor.DesktopTorCompareRequestFile, mobiletor.DesktopTorCompareFileLimit)
+				var published mobiletor.DesktopTorCompareRequest
+				if err != nil || decodeRelayControlJSON(raw, &published) != nil || published != last.request {
+					t.Fatal("Close did not publish its exact request in the captured directory", err)
+				}
+				cancel()
+				<-done
+				if !errors.Is(closeErr, context.Canceled) || !c.claimed() || c.nativeJoined() {
+					t.Fatal("cancelled Close discarded its unacknowledged original owner", closeErr)
+				}
+				return published
+			default:
+			}
+		}
+		select {
+		case <-done:
+			t.Fatal("Close returned before the captured publication was observed", closeErr)
+		case <-parent.Done():
+			t.Fatal("Close did not publish before the fixture deadline", parent.Err())
+		case <-tick.C:
+		}
+	}
+}
+
+func TestDesktopTorComparisonCloseExpiryBeforePublicationRetainsOriginalClaim(t *testing.T) {
+	a, launch, c, control := desktopTorComparisonFixtureWithControl(t, "tor-compare-directory-retire")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c.Prepare(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pauseDesktopTorFixturePublications(t, ctx, launch, control)
+	c.mu.Lock()
+	prepared := c.last
+	c.mu.Unlock()
+	// Hold the real publication lock: Cancel's retained writer cannot complete,
+	// so a short Close must expire before it can issue any new request. This
+	// reproduces the prior fixture's invalid timing assumption deterministically.
+	func() {
+		launch.workspaceMu.Lock()
+		defer launch.workspaceMu.Unlock()
+		c.Cancel()
+		short, shortCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer shortCancel()
+		if err := c.Close(short); !errors.Is(err, context.DeadlineExceeded) || !c.claimed() || c.nativeJoined() {
+			t.Fatal("pre-publication expiry discarded the original native claim", err)
+		}
+		c.mu.Lock()
+		last, cancelled := c.last, c.cancelDone
+		c.mu.Unlock()
+		if last != prepared {
+			t.Fatal("Close fabricated a new action before cancellation publication joined")
+		}
+		select {
+		case <-cancelled:
+			t.Fatal("blocked cancellation publication was reported complete")
+		default:
+		}
+		if _, err := launch.directoryRoot.Stat(mobiletor.DesktopTorCompareRequestFile); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("pre-publication expiry unexpectedly left a Close request", err)
+		}
+	}()
+	if replacement, err := newDesktopTorComparisonClient(a, launch, c.base.Target); err == nil || replacement != nil {
+		t.Fatal("expired Close admitted a replacement before original native drain")
+	}
+	published := cancelDesktopTorComparisonAfterClosePublication(t, ctx, launch, c)
+	if published.Sequence != prepared.request.Sequence+1 || published.RequestID != prepared.request.RequestID || published.Generation != prepared.request.Generation {
+		t.Fatal("retry lost the exact original comparison claim")
+	}
+}
+
 func TestDesktopTorComparisonCleanupFollowsOnlyCapturedDirectory(t *testing.T) {
 	_, launch, c, control := desktopTorComparisonFixtureWithControl(t, "tor-compare-directory-retire")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -318,14 +413,10 @@ func TestDesktopTorComparisonCleanupFollowsOnlyCapturedDirectory(t *testing.T) {
 	if result, err := c.ProbeExternal(ctx, c.base.Target); err == nil || result != 0 {
 		t.Fatal("renamed old runtime adopted a measurement", result, err)
 	}
-	short, shortCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer shortCancel()
-	if err := c.Close(short); err == nil || !c.claimed() || c.nativeJoined() {
-		t.Fatal("replaced directory or unacknowledged process exit discarded the old owner", err)
-	}
+	published := cancelDesktopTorComparisonAfterClosePublication(t, ctx, launch, c)
 	oldClose, err := readDesktopRuntimeSnapshot(launch.directoryRoot, mobiletor.DesktopTorCompareRequestFile, mobiletor.DesktopTorCompareFileLimit)
 	var captured mobiletor.DesktopTorCompareRequest
-	if err != nil || decodeRelayControlJSON(oldClose, &captured) != nil || captured != c.last.request || captured.Action != mobiletor.DesktopTorCompareClose {
+	if err != nil || decodeRelayControlJSON(oldClose, &captured) != nil || captured != published || captured.Action != mobiletor.DesktopTorCompareClose {
 		t.Fatal("cleanup did not address the original pinned workspace", err)
 	}
 	raw, err := os.ReadFile(sentinel)
