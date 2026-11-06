@@ -1375,3 +1375,62 @@ The two actual Windows Server/WFP causal controls and complete native packet
 execution remain pending exact-source CI. No all-platform release, private
 deployment, or physical-device acceptance is established by these local
 results. The larger requirement ledger remains open.
+
+
+## 2026-11-06 17:44 UTC — Windows paired entry with independent final Start Layers
+
+Seven exact reviewed files from `3b3c39ee8c89e063e71b3db63cd89799484382e5`
+(tree `6cd3caa8ac2d837f7325e9007ba715f82427991f`, following
+`e86535ed8c9d2efd9359ff0f96911d8e47fad310` on `de796794`) form this
+bounded source implementation. This is fresh work against current source;
+the unavailable historical twenty-file draft was not reconstructed.
+
+The shared compiler already generated independent final layers for the paired
+WireGuard-entry graph. Four Windows integration gates rejected that result:
+the adapter's Off-only/three-row assumption, the client profile predicate,
+physical-policy adoption, and protection selection. These gates now retain a
+paired WG entry with its layer Off and an SS2022 final with its independently
+captured AES-256-GCM or AES-256-GCM + XOR whitening layer, across Local,
+Server and Compare. The entry-layer restriction remains an unfinished scope
+item; this change does not claim independent entry-layer delivery.
+
+The adapter derives expected inner and optional outer rows only from the
+original sealed profile, using the existing transport compiler and
+`WrapStartLayer`. It requires complete row equality, unique exact tags and
+row counts, original credentials and tuples, the entry detour, authenticated
+relay credentials, and the captured selector. Candidate rows cannot provide
+their own expected authority and are not resealed. Physical preparation and
+protection selection retain that exact typed policy and source/config/session
+identity. The published Server cleanup implementation is unchanged.
+
+Actual Go 1.26.3 race-instrumented validation, with the existing 60-second test
+bounds:
+
+- Shared Windows Router policy suite: nine parent and 109 subtest verdicts
+  passed; package time 2.920 seconds.
+- New client source/protection/measurement-capture/restoration suite: four
+  parent and 102 subtest verdicts passed; package time 8.215 seconds.
+- Existing Off Server/Local/Compare source and restoration regressions: five
+  parent and twenty-five subtest verdicts passed; package time 1.652 seconds.
+- An isolated overlay removed only the exact inner/outer row comparison.
+  AES and AES+XOR with substituted inner and outer keys produced exactly four
+  intended credential-substitution failures, without panic, race or timeout.
+
+These are test verdict counts, not a requirement denominator. The client
+matrix covers both final layer choices, all three inner SS2022 ciphers, both
+required protection settings, Local/Server/Compare, and restoration of an
+already-proved winner with a fresh session/lease proposal. Source replacement
+controls and failure when the restored physical policy is missing remain.
+Actual tests first exposed the old rejection, then the additional missing
+physical-adoption and protection-selection gates; all assertions were kept.
+
+Independent source review accepted both exact revisions. The final seven
+source hashes and `git diff --check` passed. The frozen verification manifest
+SHA256 is `b64ca845411b7816cb4cd439c7dff655c40af9bb8dc7e86bab4f3b2817e92212`.
+
+No encrypted SS provider or native Windows WFP operation was executed for
+these new layered scenarios. Native wrong-key, selected-DNS, cancellation,
+restoration and original-owner cleanup acceptance remains required. Existing
+native Off fixtures cannot establish the new final-layer scenarios. This
+source milestone does not close the broader native, release, device or
+deployment ledger.

@@ -9,7 +9,7 @@ import (
 // physical adapter and original execution controller must independently retain
 // the paired assets, authenticated proposal and live lease before activation.
 func desktopWindowsExternalRouterServerProfile(profile common.RouterProfile, restored string) bool {
-	if !desktopExternalSS2022Profile(profile) || profile.StartLayer != "" && profile.StartLayer != common.StartLayerOff ||
+	if !desktopExternalSS2022Profile(profile) ||
 		profile.MultihopExecution != "server" || restored != "" && restored != "server" ||
 		profile.MultihopEntryMode != "" && profile.MultihopEntryMode != "wg" {
 		return false

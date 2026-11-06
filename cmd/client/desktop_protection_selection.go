@@ -45,10 +45,10 @@ func desktopProtectionSelectionFor(node *mobilemultihop.DesktopNodePolicy, exter
 	server := err == nil && (capture.Execution == "server" || capture.Execution == "local" || capture.Execution == "auto") && capture.PredecessorSHA256 != "" && capture.EntryNodeID != "" &&
 		validProfileID(capture.EntryID) && capture.EntryID != capture.ExitID && capture.EntryTag == "external-entry" &&
 		meta.RootTag == capture.EntryTag && meta.RootType == "wireguard" && capture.Protocol == "shadowsocks" &&
-		capture.StartLayer == "" && capture.EntryStartLayer == ""
+		(capture.StartLayer == "" || multihoprelay.ValidLayerMode(capture.StartLayer)) && capture.EntryStartLayer == ""
 	if err != nil || meta.TargetOS != "windows" || !validProfileID(capture.ExitID) ||
 		!paired && !server && (capture.EntryID != "" || capture.EntryTag != "") || !server && (capture.PredecessorSHA256 != "" || capture.Execution != "") ||
-		!desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) && !(paired && layeredPair) || capture.EntryStartLayer != "" && !(paired && layeredPair) || meta.SOCKSUDPAssociationRequired != (meta.Protocol == "socks5") ||
+		!desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) && !(paired && layeredPair) && !server || capture.EntryStartLayer != "" && !(paired && layeredPair) || meta.SOCKSUDPAssociationRequired != (meta.Protocol == "socks5") ||
 		meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" ||
 		meta.Protocol != "shadowsocks" && meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "hysteria2" && meta.Protocol != "socks5" && meta.Protocol != "wireguard" && meta.Protocol != "amneziawg" && meta.Protocol != "openvpn" {
 		return empty, errors.Join(err, errors.New("native protection has no supported captured Windows external policy"))
