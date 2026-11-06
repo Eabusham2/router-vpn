@@ -824,6 +824,19 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     return result
 
 
+def standalone(go="go", *, phase="complete", receipt_path=None):
+    """Prepare the original pinned core for one phase or the complete inventory."""
+    if phase not in ("complete", *PHASES):
+        raise ValueError("Unknown Windows physical phase")
+    if phase == "complete" and receipt_path is not None:
+        raise ValueError("A complete Windows physical run cannot emit a partial phase receipt")
+
+    def selected(source, compiler, **kwargs):
+        return execute(source, compiler, phase=phase, receipt_path=receipt_path, **kwargs)
+
+    return BOOT.standalone(go, native_test=selected)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, nargs="?")
@@ -833,9 +846,9 @@ if __name__ == "__main__":
     parser.add_argument("--receipt", type=Path)
     args = parser.parse_args()
     if args.standalone:
-        if args.source is not None or args.phase != "complete" or args.receipt is not None:
-            parser.error("--standalone owns its complete prepared core")
-        BOOT.standalone(args.go, native_test=execute)
+        if args.source is not None:
+            parser.error("--standalone owns its fresh pinned source")
+        standalone(args.go, phase=args.phase, receipt_path=args.receipt)
     elif args.source is None:
         parser.error("a prepared core or --standalone is required")
     else:

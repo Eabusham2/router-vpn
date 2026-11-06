@@ -57,15 +57,22 @@ concurrency:
 
 jobs:
   native-node-kernel:
-    name: Actual WFP encrypted Node on ${{ matrix.runner }}
+    name: Actual WFP ${{ matrix.phase }} on ${{ matrix.runner }}
     runs-on: ${{ matrix.runner }}
-    # Run 41395919673 passed the native matrix and 3/4 compiled controls on
-    # both architectures before the old 20m job cap interrupted the last one.
+    # The complete seven-phase process exceeded 30m on both architectures.
+    # Keep each existing phase bounded and require all fourteen receipts below.
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix:
-        runner: [windows-latest, windows-11-arm]
+        architecture: [amd64, arm64]
+        phase: [node-baseline, node-controls, external-hysteria2, external-socks, external-packet, external-openvpn, external-ss-entry]
+        include:
+          - architecture: amd64
+            runner: windows-latest
+          - architecture: arm64
+            runner: windows-11-arm
     steps:
       - uses: actions/checkout@v4
         with:
@@ -84,13 +91,49 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Original provider process/reader join failed' }
           python deploy/test_windows_node_physical_runner.py
           if ($LASTEXITCODE -ne 0) { throw 'Native Node scope/source boundary failed' }
+          python deploy/test_windows_node_physical_ci_runner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Complete native CI receipt boundary failed' }
       - name: Prove actual WFP, encrypted peers and exact native reversal
         shell: pwsh
         run: |
           # Real BFE and WG/AWG in distinct retained executable processes.
           # TUN stays harmless; no route, node/DNS or device claim is inferred.
-          python deploy/test_windows_node_physical.py --standalone
+          python deploy/test_windows_node_physical_ci.py --architecture '${{ matrix.architecture }}' --phase '${{ matrix.phase }}' --receipt '${{ runner.temp }}/windows-physical-${{ matrix.architecture }}-${{ matrix.phase }}.json'
           if ($LASTEXITCODE -ne 0) { throw 'Actual WFP encrypted Node composition failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-physical-${{ matrix.architecture }}-${{ matrix.phase }}
+          path: ${{ runner.temp }}/windows-physical-${{ matrix.architecture }}-${{ matrix.phase }}.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+  native-node-complete:
+    name: Complete WFP encrypted Node matrix
+    needs: native-node-kernel
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Require every original native phase job
+        env:
+          NATIVE_RESULT: ${{ needs.native-node-kernel.result }}
+        run: |
+          python -c 'import os; assert os.environ["NATIVE_RESULT"] == "success", "Every original Windows native phase job must succeed"'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: windows-physical-*
+          path: ${{ runner.temp }}/windows-physical-receipts
+          merge-multiple: true
+      - name: Verify both complete phase inventories and original source identities
+        env:
+          NATIVE_RESULT: ${{ needs.native-node-kernel.result }}
+        run: python deploy/test_windows_node_physical_ci.py --aggregate '${{ runner.temp }}/windows-physical-receipts' --needs-result "$NATIVE_RESULT"
   native-node-composition:
     name: Captured Node startup on ${{ matrix.runner }}
     runs-on: ${{ matrix.runner }}
