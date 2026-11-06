@@ -30,7 +30,7 @@ final class AndroidConnectionProfileStore {
     private static final String[] POLICY_KEYS={
             "home_lan_access","home_lan_cidrs","kill_switch","kill_switch_policy","ipv6_mode","base_tunnel","base_fallback","start_layer",
             "auto_require_encrypted","auto_require_obfuscation","mtu_policy","manual_mtu",
-            "daita_enabled","jumbo_tun","socks_enabled","startup_mode","auto_connect","dns_mode","dns_protocol","dns_host",
+            "daita_enabled","daita_rate_kbps","jumbo_tun","socks_enabled","startup_mode","auto_connect","dns_mode","dns_protocol","dns_host",
             "dns_port","dns_server_name","dns_path","fastest_dns_host","fastest_dns_name","fastest_dns_latency_ms","dns_results","dns_bootstrap"
     };
     private static final String[] SELECTION_KEYS={SELECTED_KIND,SELECTED_ID,MODE_KEY,CUSTOM_KEY,MULTI_ON,MULTI_ENTRY,MULTI_EXIT,MULTI_MODE,MULTI_ENTRY_KIND,"multihop_execution","multihop_entry_mode"};
@@ -357,6 +357,11 @@ final class AndroidConnectionProfileStore {
         JSONObject profile=selectedProfile(readBundle(nodes.file(id))),policy=new JSONObject();
         if(profile==null)throw new IllegalStateException("The Router node has no selected profile.");
         for(String key:POLICY_KEYS)if(profile.has(key))policy.put(key,profile.get(key));
+        // Null in a saved Router policy captures the runtime default (absence).
+        // An omitted saved field belongs to an older profile and is not ours to reset.
+        // Never accept null from the linked runtime source itself.
+        if(profile.has("daita_rate_kbps")&&profile.isNull("daita_rate_kbps"))throw new IllegalArgumentException("Router cover rate must be 0 or 32–192 kbps, or omitted for the runtime default.");
+        if(!profile.has("daita_rate_kbps"))policy.put("daita_rate_kbps",JSONObject.NULL);
         String profileId=profile.optString("id","").trim();if(profileId.isEmpty()||profileId.length()>256)throw new IllegalStateException("The Router node has no bounded selected profile identity.");
         return new NodePolicy(profileId,AndroidConnectionProfilePolicy.router(policy,POLICY_KEYS));
     }
@@ -371,8 +376,12 @@ final class AndroidConnectionProfileStore {
         JSONObject policy=AndroidConnectionProfilePolicy.router(saved,POLICY_KEYS);
         // New captures own absence/defaults too. Older rows never captured the
         // expanded policy, so they may only replace the fields they recorded.
-        if(!profileId.isEmpty())for(String key:POLICY_KEYS)profile.remove(key);
-        for(Iterator<String> keys=policy.keys();keys.hasNext();){String key=keys.next();profile.put(key,policy.get(key));}
+        if(!profileId.isEmpty())for(String key:POLICY_KEYS)if(!"daita_rate_kbps".equals(key)||policy.has(key))profile.remove(key);
+        for(Iterator<String> keys=policy.keys();keys.hasNext();){
+            String key=keys.next();
+            if("daita_rate_kbps".equals(key)&&policy.isNull(key))profile.remove(key);
+            else profile.put(key,policy.get(key));
+        }
         AndroidNodeStore.validateBundle(bundle);byte[] updatedBundle=bundle.toString().getBytes(StandardCharsets.UTF_8);
         if(!id.equals(AndroidNodeStore.deriveId(bundle,updatedBundle)))throw new IllegalStateException("This legacy Router node has no stable proof-bound identity. Re-import its current bundle before restoring policy.");
         NodeUpdate existing=updates.get(id);

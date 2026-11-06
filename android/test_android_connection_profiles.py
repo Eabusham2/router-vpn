@@ -605,6 +605,49 @@ public final class ConnectionProfilesHarness {
    invalid.getJSONObject("external_policy").put("manual_mtu",9000).put("jumbo_tun","true");f.row(invalid);before=new State(f);rejected(()->f.store.load(saved.id),"typed Tor Jumbo choice");before.same(f,"wrong Jumbo type must preserve private nodes");
   }
  }
+ static void setRouterRate(Fixture f,AndroidNodeStore.Node node,Object rate,String token,boolean enabled)throws Exception{
+  JSONObject bundle=bundle(node),profile=AndroidProfileSelection.selectedRouterProfile(bundle);
+  if(rate==null)profile.remove("daita_rate_kbps");else profile.put("daita_rate_kbps",rate);
+  profile.put("api_token",token).put("daita_enabled",enabled);
+  f.nodes.importBundle(bundle.toString().getBytes(StandardCharsets.UTF_8));
+ }
+ static void routerRateProfiles(Path root)throws Exception{
+  for(Integer rate:new Integer[]{null,0,32,64,192})for(boolean enabled:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);Integer exitRate=rate==null?64:null;
+   setRouterRate(f,f.first,rate,"entry-old-private",enabled);setRouterRate(f,f.second,exitRate,"exit-old-private",enabled);f.nodes.select(f.first.id);
+   f.prefs.edit().putBoolean("multihop_on",true).putString("multihop_entry",f.first.id).putString("multihop_exit",f.second.id).putString("multihop_exit_mode","hysteria2").putString("multihop_entry_mode","wg").putString("multihop_execution","local").commit();
+   var saved=f.store.add("Captured Router rates");JSONObject row=f.row();
+   for(String key:List.of("policy","entry_policy","exit_policy")){
+    JSONObject policy=row.getJSONObject(key);Integer wanted=key.equals("exit_policy")?exitRate:rate;
+    check(policy.has("daita_rate_kbps")&&(wanted==null?policy.isNull("daita_rate_kbps"):policy.getInt("daita_rate_kbps")==wanted),"Add omitted Router rate or captured default: "+key);
+   }
+   check(!row.toString().contains("entry-old-private")&&!row.toString().contains("exit-old-private"),"rate capture copied linked credentials");
+   String entryAssets=bundle(f.first).getJSONObject("profiles").toString(),exitAssets=bundle(f.second).getJSONObject("profiles").toString();
+   setRouterRate(f,f.first,128,"entry-current-private",!enabled);setRouterRate(f,f.second,160,"exit-current-private",!enabled);f.otherSelection();f.store.load(saved.id);
+   JSONObject restoredEntry=profile(f.first),restoredExit=profile(f.second);
+   check(rate==null?!restoredEntry.has("daita_rate_kbps"):restoredEntry.getInt("daita_rate_kbps")==rate,"Load did not restore entry rate/default");
+   check(exitRate==null?!restoredExit.has("daita_rate_kbps"):restoredExit.getInt("daita_rate_kbps")==exitRate,"Load did not restore independent exit rate/default");
+   check(restoredEntry.getBoolean("daita_enabled")==enabled&&restoredExit.getBoolean("daita_enabled")==enabled,"saved dormant rate changed padding enablement");
+   check(restoredEntry.getString("api_token").equals("entry-current-private")&&restoredExit.getString("api_token").equals("exit-current-private"),"rate restore replaced current linked credentials");
+   check(entryAssets.equals(bundle(f.first).getJSONObject("profiles").toString())&&exitAssets.equals(bundle(f.second).getJSONObject("profiles").toString()),"rate restore replaced private protocol assets");
+   check(f.nodes.activeId().equals(f.first.id)&&f.prefs.getString("selected_id","").equals(f.first.id)&&f.prefs.getBoolean("multihop_on",false),"rate restore changed selected path identity");
+   setRouterRate(f,f.first,96,"entry-current-private",false);setRouterRate(f,f.second,48,"exit-current-private",false);f.nodes.select(f.first.id);f.store.update(saved.id,"Updated independent rates");
+   setRouterRate(f,f.first,144,"entry-newer-private",true);setRouterRate(f,f.second,176,"exit-newer-private",true);f.otherSelection();f.store.load(saved.id);
+   check(profile(f.first).getInt("daita_rate_kbps")==96&&profile(f.second).getInt("daita_rate_kbps")==48,"Update did not capture independent Router rates");
+   check(!profile(f.first).getBoolean("daita_enabled")&&!profile(f.second).getBoolean("daita_enabled")&&profile(f.first).getString("api_token").equals("entry-newer-private")&&profile(f.second).getString("api_token").equals("exit-newer-private"),"Update/Load changed dormant state or current credentials");
+   row=f.row();for(String key:List.of("policy","entry_policy","exit_policy"))row.getJSONObject(key).remove("daita_rate_kbps");f.row(row);
+   setRouterRate(f,f.first,128,"entry-newer-private",false);setRouterRate(f,f.second,160,"exit-newer-private",false);f.otherSelection();f.store.load(saved.id);
+   check(profile(f.first).has("daita_rate_kbps")&&profile(f.second).has("daita_rate_kbps")&&profile(f.first).getInt("daita_rate_kbps")==128&&profile(f.second).getInt("daita_rate_kbps")==160,"legacy uncaptured rate was deleted or overwritten");
+  }
+  for(Object invalid:List.of(-1,31,193,64.5,true,"64")){
+   Fixture f=new Fixture(root);var saved=f.store.add("Valid default");JSONObject row=f.row();row.getJSONObject("policy").put("daita_rate_kbps",invalid);f.row(row);State before=new State(f);
+   rejected(()->f.store.load(saved.id),"invalid saved Router rate "+invalid);before.same(f,"invalid rate rejected before mutation");
+  }
+  for(Object invalid:List.of(-1,31,193,64.5,true,"64",JSONObject.NULL)){
+   Fixture f=new Fixture(root);setRouterRate(f,f.first,invalid,"unchanged-private",true);f.nodes.select(f.first.id);State before=new State(f);
+   rejected(()->f.store.add("Invalid runtime rate"),"invalid source Router rate "+invalid);before.same(f,"invalid source rate never wrote profile");
+  }
+ }
  static void routerRoundtrip(Path root)throws Exception{
   Fixture f=new Fixture(root);f.prefs.edit().putString("mode","custom:captured").putString("custom_presets","[{\"name\":\"captured\",\"layers\":[\"hysteria2\",\"shadowsocks\"]}]").putBoolean("multihop_on",true).putString("multihop_entry",f.first.id).putString("multihop_exit",f.second.id).putString("multihop_exit_mode","hysteria2").putString("multihop_execution","auto").putString("multihop_entry_mode","wg").commit();
   var r=f.store.add("Router graph");f.changeNode(f.first);f.changeNode(f.second);f.otherSelection();f.store.load(r.id);
@@ -709,14 +752,14 @@ public final class ConnectionProfilesHarness {
   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=f.exits.get("external-a");exit.policy.put("kill_switch","false");rejected(()->f.exits.save(exit),"string kill switch");
   exit.policy.put("kill_switch",false).put("kill_switch_policy","unknown");rejected(()->f.exits.save(exit),"unknown kill policy");
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("imported-summary")){importedSummary(root);System.out.println("Android actual imported summary: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-preferences")){profilePreferences(root);System.out.println("Android profile preferences: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-apply")){profileApply(root);System.out.println("Android profile apply: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-rollback")){profileRollback(root);System.out.println("Android profile rollback: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&List.of("imported-router","imported-wireguard-router","imported-amneziawg-router","imported-final-wg","imported-final-awg2-fast","imported-final-awg2-strong","imported-nested-wg","imported-nested-awg2-fast","imported-nested-awg2-strong").contains(args[1])){if(args[1].equals("imported-wireguard-router"))importedProtocols=List.of("wireguard");if(args[1].equals("imported-amneziawg-router"))importedProtocols=List.of("amneziawg");if(args[1].startsWith("imported-nested-")){importedProtocols=List.of("wireguard","amneziawg");importedFinalModes=List.of(args[1].substring("imported-nested-".length()));}if(args[1].startsWith("imported-final-"))importedFinalModes=List.of(args[1].substring("imported-final-".length()));importedRouterRoundtrip(root);importedRouterInvalid(root);importedRouterRollback(root);importedRouterProduct(root);packetFinalBoundaries(root);System.out.println("Android "+args[1]+" actual persistence: "+checks+" checks across "+cases+" isolated cases passed (pure compiler boundary doubled)");return;}if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}ordinaryTorRoundtrip(root);ordinaryTorInvalid(root);ordinaryTorRollback(root);ordinarySchemaMigration(root);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);torExecutionProfiles(root);torPaddingProfiles(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("router-rates")){routerRateProfiles(root);torPaddingProfiles(root);System.out.println("Android Router captured rates: "+checks+" checks across "+cases+" isolated cases passed");return;}if(args.length>1&&args[1].equals("imported-summary")){importedSummary(root);System.out.println("Android actual imported summary: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-preferences")){profilePreferences(root);System.out.println("Android profile preferences: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-apply")){profileApply(root);System.out.println("Android profile apply: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-rollback")){profileRollback(root);System.out.println("Android profile rollback: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&List.of("imported-router","imported-wireguard-router","imported-amneziawg-router","imported-final-wg","imported-final-awg2-fast","imported-final-awg2-strong","imported-nested-wg","imported-nested-awg2-fast","imported-nested-awg2-strong").contains(args[1])){if(args[1].equals("imported-wireguard-router"))importedProtocols=List.of("wireguard");if(args[1].equals("imported-amneziawg-router"))importedProtocols=List.of("amneziawg");if(args[1].startsWith("imported-nested-")){importedProtocols=List.of("wireguard","amneziawg");importedFinalModes=List.of(args[1].substring("imported-nested-".length()));}if(args[1].startsWith("imported-final-"))importedFinalModes=List.of(args[1].substring("imported-final-".length()));importedRouterRoundtrip(root);importedRouterInvalid(root);importedRouterRollback(root);importedRouterProduct(root);packetFinalBoundaries(root);System.out.println("Android "+args[1]+" actual persistence: "+checks+" checks across "+cases+" isolated cases passed (pure compiler boundary doubled)");return;}if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}ordinaryTorRoundtrip(root);ordinaryTorInvalid(root);ordinaryTorRollback(root);ordinarySchemaMigration(root);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);torExecutionProfiles(root);torPaddingProfiles(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
 }
 '''
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case-family", choices=("all", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary"), default="all")
+    parser.add_argument("--case-family", choices=("all", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary"), default="all")
     args = parser.parse_args()
     jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
     if not jar.is_file():
@@ -755,6 +798,29 @@ def main():
         data.mkdir()
         env = os.environ.copy(); env["ROUTERVPN_PROFILE_COMPILER"] = str(compiler);env["ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-aes-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-xor-client.json")
         # Each complete case family retains the original finite JVM budget.
+        if args.case_family in ("all", "router-rates"):
+            subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), "router-rates"], env=env, check=True, timeout=180)
+            original_store = (app / "AndroidConnectionProfileStore.java").read_text()
+            copy_rate = 'for(String key:POLICY_KEYS)if(profile.has(key))policy.put(key,profile.get(key));'
+            default_rate = 'if(!profile.has("daita_rate_kbps"))policy.put("daita_rate_kbps",JSONObject.NULL);'
+            legacy_rate = 'if(!"daita_rate_kbps".equals(key)||policy.has(key))profile.remove(key);'
+            for marker in (copy_rate, default_rate, legacy_rate):
+                assert original_store.count(marker) == 1, "Original rate ownership boundary changed: " + marker
+            controls = (
+                ("capture", original_store.replace(copy_rate, copy_rate.replace('profile.has(key)', 'profile.has(key)&&!"daita_rate_kbps".equals(key)')).replace(default_rate, ''), "Add omitted Router rate or captured default"),
+                ("legacy", original_store.replace(legacy_rate, 'profile.remove(key);'), "legacy uncaptured rate was deleted or overwritten"),
+            )
+            for name, changed, witness in controls:
+                negative = work / ("rate-negative-" + name); shutil.copytree(classes, negative)
+                mutation = work / ("rate-source-" + name) / "AndroidConnectionProfileStore.java"; mutation.parent.mkdir(); mutation.write_text(changed)
+                classpath = str(negative) + os.pathsep + str(jar)
+                subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", classpath, "-d", str(negative), str(mutation)], check=True, timeout=60)
+                result = subprocess.run(["java", "-cp", classpath, "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), "router-rates"], env=env, capture_output=True, text=True, timeout=180)
+                if result.returncode == 0 or witness not in result.stderr:
+                    raise AssertionError("Router rate causal control missed its exact defect: " + name + "\n" + result.stderr)
+                print("Android Router rate causal control rejected: " + name)
+            if args.case_family == "router-rates":
+                return
         if args.case_family in ("all", "imported-router", "packet-finals", "imported-summary"):
             subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), "imported-summary"], env=env, check=True, timeout=180)
             if args.case_family == "imported-summary":

@@ -32,8 +32,12 @@ final class AndroidConnectionProfilePolicy {
             }else if("dns_port".equals(key))integer(value,0,65535,key);
             else if("manual_mtu".equals(key))integer(value,0,9000,key);
             else if("daita_rate_kbps".equals(key)){
-                integer(value,0,192,key);
-                if(((Number)value).intValue()!=0&&((Number)value).intValue()<32)throw new IllegalArgumentException("Saved Tor cover rate must be 0 or 32–192 kbps.");
+                // Router captures distinguish an absent runtime default (null)
+                // from legacy omission. Tor retains its existing zero/default form.
+                if(external||value!=JSONObject.NULL){
+                    integer(value,0,192,key);
+                    if(((Number)value).intValue()!=0&&((Number)value).intValue()<32)throw new IllegalArgumentException("Saved cover rate must be 0 or 32–192 kbps.");
+                }
             }
             else if("fastest_dns_latency_ms".equals(key))number(value,key);
             else if("home_lan_cidrs".equals(key))strings(value,64,128,key);
