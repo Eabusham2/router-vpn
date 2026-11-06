@@ -848,6 +848,35 @@ and all execution deadlines remain unchanged. The workflow's existing self-path
 also schedules this correction. Scheduling evidence is separate from a passing
 provider fixture or native network verdict.
 
+### Completed notices fixture captures its DNSSEC dependency boundary
+
+[The exact c602 source-audit job](https://github.com/Eabusham2/router-vpn/actions/runs/42220221127/job/127900721659)
+completed the preceding native-toolchain suite with **59 tests, OK**, in
+258.662 seconds at 13:06:16 UTC. The next command,
+`deploy/test_desktop_native_dependencies.py`, ran 18 tests and failed two
+Linux subcases: its deliberately modeled host entered the real DNSSEC producer,
+which correctly rejected the foreign native architecture. This was not a
+production DNSSEC verification failure.
+
+The existing completed-build/notices fixture now models that producer and
+verifier explicitly, with exact owned dummy payload bytes. The real outer
+builder, staging, complete payload receipt, actual PT notices, `N.reuse`
+verification and atomic publication remain exercised. Assertions require the
+captured Linux target, producer arguments and environment, the namespace and
+command checks in order before the final compiler, their exact arguments and
+900-second wrapper limits, the sealed library hash/size linker values, and
+verification of the staged and published payloads. Other targets must make no
+DNSSEC calls. The 18-test inventory and remaining methods are unchanged.
+Grouped patches preserve the previous static nesting depth.
+
+Validation before publication was root review plus an independent Astra review
+against the production builder and verifier call sites, with exact original
+method/file-boundary checks. Local Python execution remained unavailable.
+The earlier 59-test success is actual CI evidence; the corrected 18-test suite
+still requires execution. Modeled dependency bytes are not a validator binary,
+cryptographic test result, native architecture proof or installed DNS acceptance.
+Production DNSSEC checks were not modified.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.

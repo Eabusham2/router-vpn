@@ -153,9 +153,9 @@ class NativeBuildDiagnostics(unittest.TestCase):
         self.assertNotIn('EARLY_STDERR', report)
 
     def test_completed_builder_stages_and_seals_actual_pt_notices_for_every_target(self):
-        # Only expensive compiler/native dependency operations are doubled.
-        # The actual builder stages notices, seals receipt hashes, verifies its
-        # payload and atomically publishes the resulting bundle directory.
+        # Compiler and native dependency boundaries are modeled. The actual
+        # builder stages notices, seals the complete payload hashes, verifies
+        # its outer receipt and atomically publishes the bundle directory.
         for target in N.TARGETS:
             with self.subTest(target=target), tempfile.TemporaryDirectory(prefix='native-notice-build-') as temporary:
                 root = Path(temporary).resolve()
@@ -165,12 +165,37 @@ class NativeBuildDiagnostics(unittest.TestCase):
                 system, arch = target.split('/')
                 env = {'GOOS': system, 'GOARCH': arch, 'CGO_ENABLED': '1', 'CGO_LDFLAGS': ''}
                 compiled = []
+                dnssec_destination = None
+                dnssec_payloads = {name: ('modeled DNSSEC payload: '+name+'\n').encode()
+                                   for name in N.DNSSEC.names(target)}
+                dnssec_builds, dnssec_verifications, dnssec_gates = [], [], []
+                namespace_gate = str(ROOT/'deploy/test_desktop_dnssec_namespace.py')
+                command_gate = str(ROOT/'deploy/test_desktop_dnssec_command.py')
 
                 def run(command, **kwargs):
                     args = [str(value) for value in command]
                     if args == ['go', 'env', 'GOVERSION']:
                         return N.TOOLCHAIN
+                    if len(args) > 1 and args[1] in (namespace_gate, command_gate):
+                        self.assertEqual(system, 'linux')
+                        self.assertIsNotNone(dnssec_destination)
+                        self.assertFalse(compiled, 'DNSSEC gate ran after the shipping compiler')
+                        expected = ([str(source), str(dnssec_destination), target] if args[1] == namespace_gate else
+                                    ['--source', str(source), '--bundle', str(dnssec_destination), '--target', target])
+                        self.assertEqual(args, [sys.executable, args[1], *expected])
+                        self.assertEqual(kwargs['cwd'], ROOT)
+                        self.assertIs(kwargs['env'], env)
+                        self.assertEqual(kwargs['timeout'], 900)
+                        dnssec_gates.append(args[1])
+                        self.assertEqual(dnssec_gates, [namespace_gate, command_gate][:len(dnssec_gates)])
+                        return ''
                     if args[:2] == ['go', 'build']:
+                        self.assertEqual(dnssec_gates, [namespace_gate, command_gate] if system == 'linux' else [])
+                        if system == 'linux':
+                            library = N.payload(dnssec_payloads[N.DNSSEC.LIBRARY])
+                            flags = next(arg for arg in args if arg.startswith('-ldflags='))
+                            self.assertIn(' -X main.routerVPNDNSSECSHA='+library['sha256'], flags)
+                            self.assertIn(' -X main.routerVPNDNSSECBytes='+str(library['size']), flags)
                         output = Path(args[args.index('-o')+1])
                         prefix = image(target) if target.startswith('windows/') else b'fixture native engine\n'
                         output.write_bytes(prefix+N.marker(N.digest()).encode())
@@ -191,6 +216,41 @@ class NativeBuildDiagnostics(unittest.TestCase):
                     for name in ('ROSENPASS-LICENSE-MIT', 'ROSENPASS-LICENSE-APACHE'):
                         (stage/name).write_text('bounded Rosenpass fixture license\n')
 
+                def build_dnssec(selected, output, **options):
+                    nonlocal dnssec_destination
+                    self.assertEqual(system, 'linux')
+                    self.assertEqual(selected, target)
+                    self.assertEqual(options, {'compiled': None, 'env': env})
+                    self.assertIs(options['env'], env)
+                    self.assertIsNone(dnssec_destination)
+                    self.assertFalse(compiled)
+                    output = Path(output)
+                    self.assertEqual(output.parent.parent, root)
+                    self.assertEqual(output.name, 'dnssec-bundle')
+                    self.assertFalse(output.exists())
+                    output.mkdir()
+                    # Only this modeled dependency's exact owned bytes cross
+                    # into the real outer staging and receipt checks below.
+                    for name, body in dnssec_payloads.items():
+                        (output/name).write_bytes(body)
+                    dnssec_destination = output
+                    dnssec_builds.append((selected, output))
+                    return output
+
+                def verify_dnssec(directory, selected):
+                    self.assertEqual(system, 'linux')
+                    self.assertEqual(selected, target)
+                    self.assertIsNotNone(dnssec_destination)
+                    self.assertEqual(len(compiled), 1)
+                    self.assertLess(len(dnssec_verifications), 2)
+                    directory = Path(directory)
+                    expected = dnssec_destination.parent/'bundle' if not dnssec_verifications else root/'bundle'
+                    self.assertEqual(directory, expected)
+                    actual = {name: N.regular(directory/name, N.DNSSEC.bound(name, selected))
+                              for name in N.DNSSEC.names(selected)}
+                    self.assertEqual(actual, dnssec_payloads)
+                    dnssec_verifications.append((directory, selected))
+
                 with patch.object(N, 'environment', return_value=env), patch.object(N, 'run', side_effect=run), \
                      patch.object(N, 'pristine'), patch.object(N.PQ, 'verify', return_value={'native_static_libs': []}), \
                      patch.object(N.POLICY, 'prepare_native'), patch.object(N.PERFORMANCE, 'prepare'), \
@@ -198,8 +258,9 @@ class NativeBuildDiagnostics(unittest.TestCase):
                      patch.object(N.POLICY.AMNEZIA, 'verify'), patch.object(N, 'stage_cronet', side_effect=cronet), \
                      patch.object(N, 'stage_pq_licenses', side_effect=pq_licenses), \
                      patch.object(N.TOR, 'build', side_effect=lambda selected, output, **kwargs: TOR_FIXTURE.write(output, selected)), \
-                     patch.object(N.platform, 'system', return_value='FixtureOS'), \
-                     patch.object(N.platform, 'machine', return_value='fixture'), contextlib.redirect_stdout(io.StringIO()):
+                     patch.multiple(N.DNSSEC, build=build_dnssec, verify=verify_dnssec), \
+                     patch.multiple(N.platform, system=lambda: 'FixtureOS', machine=lambda: 'fixture'), \
+                     contextlib.redirect_stdout(io.StringIO()):
                     result = N.build(target, root/'bundle', source=source, xray=root/'xray', pq=root/'pq')
                     receipt = N.reuse(result, target)
                 raw = (result/'TOR-PT-NOTICES.json').read_bytes()
@@ -207,6 +268,15 @@ class NativeBuildDiagnostics(unittest.TestCase):
                 self.assertGreater(len(raw), 256*1024)
                 self.assertEqual(receipt['files']['TOR-PT-NOTICES.json'], N.payload(raw))
                 self.assertEqual(len(compiled), 1)
+                if system == 'linux':
+                    self.assertEqual(dnssec_builds, [(target, dnssec_destination)])
+                    self.assertEqual(dnssec_verifications, [(compiled[0].parent, target), (result, target)])
+                    self.assertEqual(dnssec_gates, [namespace_gate, command_gate])
+                    for name, body in dnssec_payloads.items():
+                        self.assertEqual((result/name).read_bytes(), body)
+                        self.assertEqual(receipt['files'][name], N.payload(body))
+                else:
+                    self.assertEqual((dnssec_builds, dnssec_verifications, dnssec_gates), ([], [], []))
 
 PE, OPTIONAL, HEADER = 0x80, 0x98, 0x200
 SECTIONS = OPTIONAL+240
