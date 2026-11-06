@@ -123,6 +123,13 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    try reject("HY2 selection rejects "+fault){try hyModel.saveIOSMultihop(enabled:true,entryID:hysteria.id,exitID:paired.id,exitMode:"shadowsocks",execution:execution,entryMode:mode)}
    try check("rejected HY2 selection keeps original saved graph",hyModel.writes==hyWrites && encoded(hyModel.bundle!)==savedHY)
   }
+  var socks=try profile("imported-socks","external","socks5");socks.apiToken="";socks.dnsMode="home"
+  let socksBundle=bundle(socks),socksModel=RouterVPNModel();socksModel.bundle=finalBundle
+  IOSNodeBundleStore.shared.nodes=[socks.id:try encoded(socksBundle),paired.id:try encoded(finalBundle)]
+  try check("SOCKS picker offers captured SS final",socksModel.iosImportedRouterFinalModes(entryMode:"socks5",exitID:paired.id).contains("shadowsocks"))
+  try socksModel.saveIOSMultihop(enabled:true,entryID:socks.id,exitID:paired.id,exitMode:"shadowsocks",execution:"local",entryMode:"socks5")
+  let socksCaptured=try socksModel.iosMultihopEntryBundle(for:socksModel.bundle!)
+  try check("SOCKS selection retains complete original source and exact authentication",socksCaptured.routerProfiles==socksBundle.routerProfiles && socksCaptured.profiles==socksBundle.profiles && socksCaptured.routerProfiles[0].external?.socks5==socks.external?.socks5 && socksModel.bundle?.routerProfiles[0].multihopEntryMode=="socks5")
   var packetEntries:[RouterProfile]=[]
   for kind in ["wireguard","amneziawg"] {
    var node=try profile("imported-"+kind,"external",kind);node.apiToken="";node.dnsMode="home";node.external?.socks5=nil
@@ -152,7 +159,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    }
   }
   finalBundle.profiles["hysteria2"]=["sing-box.json":try encoded(["outbounds":[["type":"hysteria2","tag":"proxy","server":"192.0.2.44","server_port":8443,"password":" exact paired final password ","tls":["enabled":true,"server_name":"final.example.test","certificate_path":"final.pem"]]]]).base64EncodedString(),"final.pem":Data("original paired certificate bytes".utf8).base64EncodedString()]
-  for originalEntry in [imported,hysteria]+packetEntries {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+  for originalEntry in [imported,hysteria,socks]+packetEntries {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
    var selectedFinal=finalBundle;selectedFinal.routerProfiles[0].startLayer=layer
    let model=RouterVPNModel();model.bundle=selectedFinal
    IOSNodeBundleStore.shared.nodes=[originalEntry.id:try encoded(bundle(originalEntry)),paired.id:try encoded(selectedFinal)]
@@ -170,13 +177,13 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
     try check("HY2 final failed selection is transactional",refused.writes==0 && encoded(refused.bundle!)==saved)
    }
   }}
-  for mode in ["wg","awg2-fast","awg2-strong"] {for originalEntry in [imported,hysteria]+packetEntries {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+  for mode in ["wg","awg2-fast","awg2-strong"] {for originalEntry in [imported,hysteria,socks]+packetEntries {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
    var selectedFinal=finalBundle;selectedFinal.routerProfiles[0].startLayer=layer
    selectedFinal.profiles[mode]=[mode=="wg" ? "wg.conf":"awg.conf":Data(("captured original "+mode+" credentials").utf8).base64EncodedString()]
    let model=RouterVPNModel();model.bundle=selectedFinal
    IOSNodeBundleStore.shared.nodes=[originalEntry.id:try encoded(bundle(originalEntry)),paired.id:try encoded(selectedFinal)]
    try check("actual picker offers captured packet final assets",model.iosImportedRouterFinalModes(entryMode:originalEntry.external!.protocolName,exitID:paired.id).contains(mode))
-   try check("actual picker refuses unsupported imported proxy family",!model.iosImportedRouterFinalModes(entryMode:"socks5",exitID:paired.id).contains(mode))
+   try check("actual picker refuses unsupported imported proxy family",!model.iosImportedRouterFinalModes(entryMode:"http-connect",exitID:paired.id).contains(mode))
    try model.saveIOSMultihop(enabled:true,entryID:originalEntry.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:originalEntry.external!.protocolName)
    let captured=try model.iosMultihopEntryBundle(for:model.bundle!)
    try check("packet final save keeps paired raw assets DNS and independent layer",model.bundle?.profiles==selectedFinal.profiles && model.bundle?.routerProfiles[0].dnsMode=="home" && model.bundle?.routerProfiles[0].startLayer==layer && model.bundle?.routerProfiles[0].multihopExitMode==mode && captured.routerProfiles==[originalEntry])
@@ -185,7 +192,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
     var changed=selectedFinal,first=originalEntry,execution="local"
     if fault=="missing-final-assets"{changed.profiles.removeValue(forKey:mode)}
     else if fault=="missing-layer-assets"{changed.profiles.removeValue(forKey:"shadowsocks")}
-    else if fault=="unsupported-entry"{first=try profile("unsupported-entry","external","socks5");first.apiToken=""}
+    else if fault=="unsupported-entry"{first=try profile("unsupported-entry","external","http-connect");first.apiToken=""}
     else{execution=fault}
     let refused=RouterVPNModel();refused.bundle=changed
     IOSNodeBundleStore.shared.nodes=[first.id:try encoded(bundle(first)),paired.id:try encoded(changed)]
@@ -505,9 +512,9 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
 
 def validate_imported_picker(view):
     entries = view[view.index('    private var nodes:'):view.index('    private var exitNodes:')]
-    if ('["wireguard", "amneziawg", "hysteria2"].contains($0.external?.protocolName ?? "")' not in entries
+    if ('["wireguard", "amneziawg", "hysteria2", "socks5"].contains($0.external?.protocolName ?? "")' not in entries
             or 'IOSImportedEntryMultihop.methods.contains' not in entries):
-        raise ValueError('Paired finals must expose exact WG/AWG/HY2 and SS2022 imported entries')
+        raise ValueError('Paired finals must expose exact WG/AWG/HY2/SOCKS5 and SS2022 imported entries')
     branch = view[view.index('                    if externalEntryProtocol != nil {'):]
     branch = branch[:branch.index('                    } else {')]
     for required in ('Picker("Exit transport", selection: $exitMode)',
