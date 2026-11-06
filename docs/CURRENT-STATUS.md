@@ -6,7 +6,7 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 6 product continuation through `df96e9cc`
+## November 6 product continuation through `81f1e4f5`
 
 The full original scope remains the historical 356-item requirement index,
 C1–C7, the later 32-item product/breakage request, the later map-first prompt,
@@ -19,13 +19,13 @@ records the source locators, published units, checks and remaining boundaries.
 This continuation initially found live `main` at `8f05dbe6`, already 1,352
 commits ahead of the historical `745b3e41` release with no divergence. The
 published product units recorded here extend through
-[`df96e9ccc24086d9bcae589f2cac475a0dbab73d`](https://github.com/Eabusham2/router-vpn/commit/df96e9ccc24086d9bcae589f2cac475a0dbab73d).
+[`81f1e4f58f6a299a694bfeeaef1f97740efa0690`](https://github.com/Eabusham2/router-vpn/commit/81f1e4f58f6a299a694bfeeaef1f97740efa0690).
 An active separate workspace was preserved; work used isolated checkouts and
 live-main reconciliation. This is an evidence cutoff, not a frozen-head or
 completed-release claim.
 Concurrent [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e)
 subsequently updates three Linux resolver compatibility files and is preserved
-with separately attributed contributor evidence; it is not one of these 52 units.
+with separately attributed contributor evidence; it is not one of these 56 units.
 The publisher also preserved concurrent
 [`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d),
 eleven Linux private-domain DNSSEC files, with separate contributor evidence.
@@ -33,6 +33,34 @@ This ledger does not claim independent execution of that unit.
 Concurrent [`090c09ec`](https://github.com/Eabusham2/router-vpn/commit/090c09ec54f875ad0bf0031a3b6da5d3a254dc4f)
 subsequently adds joined resolver-owner handling before private-domain fallback.
 It was preserved before `35725083`; its contributor evidence is separate.
+
+### Newer published units 53–56
+
+`cc2c192e` retains the actual Windows wrong-exit proof error; its root cause
+remains open. `97c7c9ba` binds native MTU observations to the original caller and
+keeps the original rollback allowance. Shared MTU tests pass 131 race verdicts,
+with actual source projection and a rejected old-behavior control. Its 24-case
+native inventory remains unexecuted locally after a compiler-killed attempt.
+
+`607e168e` publishes cancellable imported proof/native-hop ownership and late
+connection cleanup. The core passes 676 race verdicts, including thirteen new
+context cases, and actual preparation plus the Swift hop-renderer gate pass.
+A fresh full normal Libbox build stops in killed Tailscale compiler processes
+before producing a binary: fifteen native proof cases and the MTU group remain
+pending, and all owned build processes are joined. Shared hop-service callbacks
+and ordinary external/Tor construction retain their separate implementation gaps.
+
+`81f1e4f5` repairs a real Apple saved-profile rejection of existing imported
+entries with paired-router finals. Actual Add/Load/Update/Delete and failure
+handling pass 1,365 store/model checks; restoring the original guard reproduces
+the exact error. Native graph admission remains mandatory. This does not itself
+expand CONNECT transport capability or prove physical Apple acceptance.
+
+Concurrent source-binding, SS reply-buffer, Apple compile-fixture and Windows
+diagnostic work was preserved before publication. At 10:29:00 UTC the newest
+listed release was still the older `745b3e41` twelve-asset prerelease. The newer
+source needs its own complete exact-SHA native/package/image/publication evidence;
+no signing, private deployment or device acceptance is inferred from these units.
 
 ### Newer published units 41–52
 

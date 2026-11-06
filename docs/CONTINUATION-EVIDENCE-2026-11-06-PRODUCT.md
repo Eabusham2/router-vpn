@@ -6,12 +6,12 @@ This ledger supplements [the earlier November 6 ledger](CONTINUATION-EVIDENCE-20
 and [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md). It does not replace
 the original requirements or cancel an unfinished requirement. The recorded
 published product work below ends at
-[`df96e9ccc24086d9bcae589f2cac475a0dbab73d`](https://github.com/Eabusham2/router-vpn/commit/df96e9ccc24086d9bcae589f2cac475a0dbab73d).
+[`81f1e4f58f6a299a694bfeeaef1f97740efa0690`](https://github.com/Eabusham2/router-vpn/commit/81f1e4f58f6a299a694bfeeaef1f97740efa0690).
 This is a source/evidence cutoff, not a claim that the branch stops moving or
 that this revision has completed its release gates.
 Concurrent [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e)
 subsequently updates three Linux resolver compatibility files and is preserved
-with separately attributed contributor evidence; it is not one of these 52 units.
+with separately attributed contributor evidence; it is not one of these 56 units.
 The publisher also preserved concurrent
 [`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d),
 eleven Linux private-domain DNSSEC files, with separate contributor evidence.
@@ -192,6 +192,22 @@ through DNS and Xray preparation, applying resolver changes only to the verified
 runtime projection. It and its separate contributor evidence are preserved;
 the pending CONNECT host work must compose with those newer source boundaries.
 
+### Units 53–56: native observations and complete Apple profiles
+
+| Published commit | Change and requirement connection | Observed verification | Remaining boundary |
+|---|---|---|---|
+| [`cc2c192e`](https://github.com/Eabusham2/router-vpn/commit/cc2c192e2b976eb7a55fbfdb203f5884e5ff1601) | The actual Windows SOCKS wrong-exit negative retains its original `proof.Run()` error before checking authenticated provider phases. | Forty Python-only runner cases pass in 0.522 seconds; formatting and diff checks pass. The original production refusal, phase counters and native limits are unchanged. | This adds three diagnostic lines and does not repair the unexplained Windows proof failure. An initial whole-runner attempt used the wrong Go toolchain for two helper cases and is not counted as a 42-case pass. |
+| [`97c7c9ba`](https://github.com/Eabusham2/router-vpn/commit/97c7c9badd50c6e4460cd62be790d7f2e17cbfde) | Native MTU capture retains the actual caller through owner, service and inbound-manager observations; canceled post-mutation readback retains the original cleanup allowance for rollback. Late sockets and health results cannot adopt a changed path. Legacy cache behavior is preserved while an available context capability is used. | Full shared MTU race suite passes 131 verdicts in 57 parents (2.232 seconds); six actual projection tests and eleven retained/strategy composition checks pass. Removing context-owner adoption fails the intended assertion; exact source restoration passes. | The selective native race compiler was killed after 174.620 seconds before any binary or native verdict. No OOM cause is established. Native inventory is 24 verdicts, still unexecuted locally at this cutoff. Synchronous platform capture/mutation callbacks and ordinary external/Tor construction retain separately recorded boundaries. |
+| [`607e168e`](https://github.com/Eabusham2/router-vpn/commit/607e168efdb73fe0362be2ec546c56648a2a7fe4) | Imported proof startup publishes cancellation before native identity; subsequent identity/selection/DNS/hop observations retain their caller and captured owner. A connection returned after cancellation, native-instance change, outbound replacement or alongside an error is closed before return. | Shared core passes 676 race verdicts in 48 parents at the reconciled `95ca574c` candidate (13.634 seconds), including all thirteen new context cases. Both old-source causal controls reject with exact restoration. Sixteen runner tests and the existing five-test native-hop source/actual Swift-renderer gate pass with no skips; five source bypass controls reject. Fresh complete preparation retains 3,343 native and 914 Xray records, closure `d4cfe4171e4b7c38ff800157d0d20f00b949534ea80e833f3c270c63e3c23ffb`. | The normal full Libbox compiler was killed in three Tailscale packages after 338.418 seconds, before a binary or native execution; it did not time out and all owned descendants were joined. The mandatory fifteen native proof verdicts and the twenty-four MTU verdicts remain unexecuted locally. Shared hop-service admission/status callbacks, ordinary external/Tor constructors and legacy Tor lease observations remain separate source follow-ups. |
+| [`81f1e4f5`](https://github.com/Eabusham2/router-vpn/commit/81f1e4f58f6a299a694bfeeaef1f97740efa0690) | Apple saved profiles permit existing imported SOCKS5, HTTP CONNECT, HTTPS CONNECT and bounded OpenVPN entries when the final node is a paired router. The real graph-support validator remains authoritative before adoption; source kind is no longer incorrectly inferred from the final node. | Actual Swift store/model suite passes 1,365 checks for Add/Load/Update/Delete, exact DNS/MTU/base/layers, current credential references, failed durable-store rollback and unknown/unsupported/foreign/missing-source refusals. Reinstating the original guard exits at the exact reproduced paired-final error. | Storage and app/native boundaries are explicit doubles. This is the complete-profile prerequisite for already supported graphs, not admission of new CONNECT UoT capability or physical Apple execution. |
+
+Before these publications, the publisher re-read `main` and preserved concurrent
+`c1f71b14` Android/shared SS source binding, `7b516259` native SS DNS reply headroom,
+`6e903116` Apple provider compile-fixture source helpers, and Windows diagnostic
+changes `0978f794`/`e2a43e58`. Their contributor evidence remains separately
+attributed. Every changed parent path of units 55 and 56 matched the newer
+branch before normal-ancestry publication; no older snapshot was restored.
+
 ## Published independent SOCKS layers — reconciled final evidence
 
 This twenty-fifth unit replaces the earlier unpublished integration row. The
@@ -277,6 +293,19 @@ before publishing `e0b769ff`. This ledger records reconciliation, not independen
 validation of that contributor unit.
 
 ## Current CI and publication evidence
+
+At **2026-11-06 10:29:00 UTC**, the release-list read still returned only the
+October 24 `745b3e41` prerelease as the newest entry, with twelve assets. The
+current source cutoff is `81f1e4f5`; no complete release for it is established.
+The immediately preceding exact-SHA run queries returned 24 attempts for
+`cc2c192e` (three successful, one queued and twenty cancelled) and 25 for
+`97c7c9ba` (seven successful, three queued, one in progress and fourteen
+cancelled). The native MTU run
+[42200354609](https://github.com/Eabusham2/router-vpn/actions/runs/42200354609)
+was queued and native Xray
+[42200354592](https://github.com/Eabusham2/router-vpn/actions/runs/42200354592)
+was in progress at that read. These historical revision-specific states do not
+certify the later proof/profile source or publication.
 
 The complete 22-gate map-first source/shipping check passes on a frozen, clean
 `fd48f71c` checkout. At that same SHA, both the
@@ -713,7 +742,7 @@ The complete original scope remains open. Apple captured per-hop profile
 restoration, the persisted Start Layer fixture correction and macOS Performance
 cancellation are now published with the bounded evidence in their rows. Other
 original native UI, settings, Methods, recovery and graph requirements retain
-their individual closure obligations; these fifty-two units are not a replacement scope.
+their individual closure obligations; these fifty-six units are not a replacement scope.
 
 The concrete Apple Home DNS substitution gap reported at `8fdc2ef7` is repaired
 in `5b32bcf5` with the bounded evidence above. Intentional UDP/53 for Fastest node
