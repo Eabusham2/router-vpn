@@ -491,6 +491,9 @@ def source():
     text += "\nextension RouterVPNModel {\n" + "\n".join(declaration(external, key) for key in declarations) + "\n}\n"
     capture = (APP / "IOSDNSMeasurementClient.swift").read_text()
     text += capture[capture.index("@MainActor struct IOSDNSMeasurementCapture"):capture.index("private final class IOSDNSMeasurementReply")]
+    # Imported capture validation calls the actual Start Layer declaration.
+    # Keep its conditional CryptoKit import outside the fixture import stripping.
+    text += "\n" + (APP / "IOSMultihopStartLayer.swift").read_text()
     for name in ("Models.swift", "IOSSessionIdentity.swift", "IOSNodeLatencyStatistics.swift", "IOSNodeUsage.swift", "IOSNodeUsageAccounting.swift",
                  "IOSMultihopExecution.swift", "IOSSpeedLabOwnership.swift", "IOSMTUMeasurementGate.swift",
                  "IOSMTUControl.swift", "IOSSpeedLabPersistenceJournal.swift", "IOSSpeedLabTunnel.swift",

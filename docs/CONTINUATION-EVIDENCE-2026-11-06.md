@@ -1682,3 +1682,31 @@ The execution workspace disconnected during follow-up validation; no parser,
 Windows compilation or device result is inferred from an unfinished process.
 This publication is a tested source/capture unit, not complete multihop,
 all-platform, release or deployment acceptance.
+
+
+## Current Apple and Android regression-fixture repairs
+
+Exact `e7a9d65e06eeee6502c55e37c71c7260819a0e0d` release jobs
+[iOS/iPadOS 128075169220](https://github.com/Eabusham2/router-vpn/actions/runs/42270932446/job/128075169220)
+and [Android 128075169476](https://github.com/Eabusham2/router-vpn/actions/runs/42270932446/job/128075169476)
+failed in their existing host fixtures. The publisher read both actual failure
+logs: the Apple comparison fixture omitted `IOSMultihopStartLayer`, and the
+Android CONNECT profile fixture required a `TCP only` caption that the current
+product summary no longer renders.
+
+The reviewed correction `ea6c503436bb194a589b5d7c426dc68ee26af2f6` is applied over
+`c8a0ba7c02d2b5700e9ad7ec89e05919f006d08f`, preserving its unrelated source.
+
+- Apple includes the complete shipping `IOSMultihopStartLayer.swift`
+  declaration outside the existing import-stripping loop. Its conditional
+  CryptoKit import remains intact; no replacement validator is introduced.
+  The six existing comparison mutations and operation bounds remain unchanged.
+- Android compares the exact captured entry/final names and HTTP/HTTPS CONNECT,
+  Shadowsocks and Local labels. Its explicit saved TCP DNS/Off policy,
+  credential references, refusal, source identity and rollback assertions
+  remain unchanged. This fixture does not claim configured-UoT acceptance.
+
+Both complete candidate files were read back and proved to differ from the
+current source only at those exact boundaries. Independent source review is
+clear. The executor is unavailable at this checkpoint, so no repaired Java or
+Swift execution is claimed; the exact-SHA CI reruns remain required.
