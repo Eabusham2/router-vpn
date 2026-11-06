@@ -136,6 +136,7 @@ def inputs():
                              *sorted((ROOT/'deploy/fixtures/windows-physical-bootstrap').glob('*.go')),
                              *sorted((ROOT/'deploy/fixtures/windows-node-physical').glob('*.go')),
                              ROOT/'deploy/test_desktop_linux_guardian.py',
+                             ROOT/'deploy/test_desktop_dnssec_namespace.py',
                              ROOT/'deploy/test_desktop_command_retirement.py',
                              ROOT/'deploy/test_linux_node_child_control.py',
                              ROOT/'deploy/test_linux_node_child_control_runner.py',
@@ -847,6 +848,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             validator = DNSSEC.build(target, temp/'dnssec-bundle', compiled=dnssec_compiled, env=env)
             for name in DNSSEC.names(target):
                 shutil.copyfile(validator/name, stage/name)
+            run([sys.executable, ROOT/'deploy/test_desktop_dnssec_namespace.py',
+                 source, validator, target], cwd=ROOT, env=env, timeout=900)
         ldflags = '-s -w -buildid= -checklinkname=0 -X github.com/sagernet/sing-box/constant.Version='+marker(policy)
         if target.startswith('linux/'):
             validator_library = payload(regular(stage/DNSSEC.LIBRARY, DNSSEC.bound(DNSSEC.LIBRARY, target)))

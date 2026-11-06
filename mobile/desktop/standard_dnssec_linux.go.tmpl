@@ -1,0 +1,492 @@
+//go:build linux && with_purego
+
+package main
+
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/ebitengine/purego"
+	"github.com/sagernet/sing-box/routervpn/common"
+	"github.com/sagernet/sing-box/routervpn/linuxprocess"
+	"github.com/sagernet/sing-box/routervpn/standardengine"
+	"golang.org/x/sys/unix"
+)
+
+// Embedded by the same native producer which verifies the pinned private ELF.
+// Loading this library grants no resolver, anchor, or physical socket authority.
+var routerVPNDNSSECSHA string
+var routerVPNDNSSECBytes string
+
+type routerVPNDNSSECAPI struct {
+	mu       sync.Mutex
+	handle   uintptr
+	active   int
+	abi      func() uint32
+	create   func(uint16) uintptr
+	anchor   func(uintptr, string, uint32) int32
+	insecure func(uintptr, string, uint32) int32
+	start    func(uintptr, string, uint32, uint16) int32
+	fd       func(uintptr) int32
+	process  func(uintptr) int32
+	cancel   func(uintptr) int32
+	result   func(uintptr, *uint32, uint32, *byte, uint32) int32
+	destroy  func(uintptr)
+}
+
+func routerVPNLoadDNSSEC(file *os.File) (*routerVPNDNSSECAPI, error) {
+	size, err := strconv.ParseInt(routerVPNDNSSECBytes, 10, 64)
+	if err != nil {
+		return nil, errors.New("DNSSEC library has no compiled size")
+	}
+	if err = linuxprocess.SetCloseOnExec(file); err != nil {
+		return nil, err
+	}
+	if err = standardengine.VerifyLibrary(file, size, routerVPNDNSSECSHA); err != nil {
+		return nil, err
+	}
+	handle, err := purego.Dlopen(fmt.Sprintf("/proc/self/fd/%d", file.Fd()), purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return nil, err
+	}
+	api := &routerVPNDNSSECAPI{handle: handle}
+	fields := []struct {
+		name   string
+		target any
+	}{
+		{"abi", &api.abi}, {"create", &api.create}, {"anchor", &api.anchor}, {"insecure", &api.insecure},
+		{"start", &api.start}, {"fd", &api.fd}, {"process", &api.process}, {"cancel", &api.cancel},
+		{"result", &api.result}, {"destroy", &api.destroy},
+	}
+	for _, field := range fields {
+		symbol, e := purego.Dlsym(handle, "rvdns_"+field.name)
+		if e != nil {
+			_ = purego.Dlclose(handle)
+			return nil, e
+		}
+		purego.RegisterFunc(field.target, symbol)
+	}
+	if api.abi() != 1 {
+		_ = purego.Dlclose(handle)
+		return nil, errors.New("DNSSEC private ABI changed")
+	}
+	if err = standardengine.VerifyLibrary(file, size, routerVPNDNSSECSHA); err != nil {
+		_ = purego.Dlclose(handle)
+		return nil, err
+	}
+	return api, nil
+}
+func (api *routerVPNDNSSECAPI) retain() error {
+	if api == nil {
+		return errors.New("DNSSEC native library absent")
+	}
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if api.handle == 0 || api.active >= 257 {
+		return errors.New("DNSSEC native library is closed or at capacity")
+	}
+	api.active++
+	return nil
+}
+func (api *routerVPNDNSSECAPI) release() { api.mu.Lock(); api.active--; api.mu.Unlock() }
+func (api *routerVPNDNSSECAPI) Close() error {
+	if api == nil {
+		return nil
+	}
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if api.active != 0 {
+		return errors.New("DNSSEC native workers still own the library")
+	}
+	if api.handle == 0 {
+		return nil
+	}
+	if err := purego.Dlclose(api.handle); err != nil {
+		return err
+	}
+	api.handle = 0
+	return nil
+}
+
+type routerVPNDNSSECSpec struct {
+	Name              string
+	Type              uint16
+	Anchors, Insecure []string
+}
+type routerVPNDNSSECVerdict struct {
+	State, RCode, HaveData, NXDomain, TTL uint32
+	Packet                                []byte
+}
+type routerVPNDNSSECIsolated struct {
+	api               *routerVPNDNSSECAPI
+	native            uintptr
+	namespace         *os.File
+	original, private os.FileInfo
+	listener          *net.TCPListener
+	ctx               context.Context
+	cancel            context.CancelFunc
+	mu                sync.Mutex
+	connections       map[net.Conn]bool
+	queries, bytes    int
+	failure           error
+	workers           sync.WaitGroup
+	acceptDone        chan struct{}
+}
+
+// Only this dedicated locked goroutine enters the fresh namespace. The native
+// async worker is created by start(), while that thread is still isolated. The
+// Go runtime thread is restored through its retained original descriptor before
+// reuse; a restoration failure leaves it locked so goroutine exit destroys it.
+func routerVPNDNSSECNamespace(s *routerVPNDNSSECIsolated, spec routerVPNDNSSECSpec) error {
+	result := make(chan error, 1)
+	go func() {
+		var err error
+		// Send only after all descriptor and namespace restoration defers finish.
+		// Receiving the result is the caller's ownership-transfer barrier.
+		defer func() { result <- err }()
+		runtime.LockOSThread()
+		original, err := os.Open("/proc/thread-self/ns/net")
+		if err != nil {
+			runtime.UnlockOSThread()
+			return
+		}
+		defer func() { err = errors.Join(err, original.Close()) }()
+		s.original, err = original.Stat()
+		if err != nil {
+			runtime.UnlockOSThread()
+			return
+		}
+		if err = unix.Unshare(unix.CLONE_NEWNET); err != nil {
+			runtime.UnlockOSThread()
+			return
+		}
+		defer func() {
+			restore := unix.Setns(int(original.Fd()), unix.CLONE_NEWNET)
+			if restore == nil {
+				check, e := os.Stat("/proc/thread-self/ns/net")
+				if e != nil || !os.SameFile(check, s.original) {
+					restore = errors.New("DNSSEC original namespace restoration was not proved")
+				}
+			}
+			if restore == nil {
+				runtime.UnlockOSThread()
+			}
+			err = errors.Join(err, restore)
+		}()
+		s.namespace, err = os.Open("/proc/thread-self/ns/net")
+		if err != nil {
+			return
+		}
+		s.private, err = s.namespace.Stat()
+		if err != nil {
+			return
+		}
+		if os.SameFile(s.private, s.original) {
+			err = errors.New("DNSSEC worker did not enter a distinct network namespace")
+			return
+		}
+		descriptor, e := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+		if e != nil {
+			err = e
+			return
+		}
+		defer unix.Close(descriptor)
+		request, e := unix.NewIfreq("lo")
+		if e != nil {
+			err = e
+			return
+		}
+		if err = unix.IoctlIfreq(descriptor, unix.SIOCGIFFLAGS, request); err != nil {
+			return
+		}
+		if request.Uint16()&unix.IFF_LOOPBACK == 0 {
+			err = errors.New("DNSSEC isolated interface is not loopback")
+			return
+		}
+		request.SetUint16(request.Uint16() | unix.IFF_UP)
+		if err = unix.IoctlIfreq(descriptor, unix.SIOCSIFFLAGS, request); err != nil {
+			return
+		}
+		s.listener, err = net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		if err != nil {
+			return
+		}
+		s.native = s.api.create(uint16(s.listener.Addr().(*net.TCPAddr).Port))
+		if s.native == 0 {
+			err = errors.New("DNSSEC private context creation failed")
+			return
+		}
+		for _, anchor := range spec.Anchors {
+			if s.api.anchor(s.native, anchor, uint32(len(anchor))) != 0 {
+				err = errors.New("DNSSEC captured anchor export refused")
+				return
+			}
+		}
+		for _, domain := range spec.Insecure {
+			if s.api.insecure(s.native, domain, uint32(len(domain))) != 0 {
+				err = errors.New("DNSSEC captured negative trust policy refused")
+				return
+			}
+		}
+		if s.ctx.Err() != nil {
+			err = s.ctx.Err()
+			return
+		}
+		if s.api.start(s.native, spec.Name, uint32(len(spec.Name)), spec.Type) != 0 {
+			err = errors.New("DNSSEC private query start failed")
+			return
+		}
+	}()
+	// A C call can block. The authenticated owning process must enforce its
+	// original hard pidfd deadline; no early return pretends this worker joined.
+	return <-result
+}
+
+func (s *routerVPNDNSSECIsolated) fail(err error) {
+	if err == nil || s.ctx.Err() != nil {
+		return
+	}
+	s.mu.Lock()
+	s.failure = errors.Join(s.failure, err)
+	s.mu.Unlock()
+	s.cancel()
+}
+func (s *routerVPNDNSSECIsolated) serve(exchange func(context.Context, []byte) ([]byte, error)) {
+	defer close(s.acceptDone)
+	for {
+		conn, err := s.listener.AcceptTCP()
+		if err != nil {
+			if s.ctx.Err() == nil {
+				s.fail(err)
+			}
+			return
+		}
+		s.mu.Lock()
+		if s.ctx.Err() != nil || len(s.connections) >= 8 {
+			s.mu.Unlock()
+			conn.Close()
+			s.fail(errors.New("DNSSEC broker exceeded original connection bound"))
+			return
+		}
+		s.connections[conn] = true
+		s.workers.Add(1)
+		s.mu.Unlock()
+		go func() {
+			defer s.workers.Done()
+			defer func() { conn.Close(); s.mu.Lock(); delete(s.connections, conn); s.mu.Unlock() }()
+			deadline, _ := s.ctx.Deadline()
+			if err := conn.SetDeadline(deadline); err != nil {
+				s.fail(err)
+				return
+			}
+			for {
+				var header [2]byte
+				if _, err := io.ReadFull(conn, header[:]); err != nil {
+					if !errors.Is(err, io.EOF) && s.ctx.Err() == nil {
+						s.fail(err)
+					}
+					return
+				}
+				size := int(binary.BigEndian.Uint16(header[:]))
+				if size < 12 {
+					s.fail(errors.New("DNSSEC broker received a short query"))
+					return
+				}
+				question := make([]byte, size)
+				if _, err := io.ReadFull(conn, question); err != nil {
+					s.fail(err)
+					return
+				}
+				if err := common.ValidateDNSForwardQuery(question); err != nil {
+					s.fail(err)
+					return
+				}
+				s.mu.Lock()
+				s.queries++
+				s.bytes += len(question)
+				bounded := s.queries <= 256 && s.bytes <= 8<<20
+				s.mu.Unlock()
+				if !bounded {
+					s.fail(errors.New("DNSSEC broker exceeded original query/byte bound"))
+					return
+				}
+				answer, err := exchange(s.ctx, question)
+				if err != nil {
+					s.fail(err)
+					return
+				}
+				if err = common.ValidateDNSForwardResponse(question, answer); err != nil {
+					s.fail(err)
+					return
+				}
+				if s.ctx.Err() != nil {
+					return
+				}
+				s.mu.Lock()
+				s.bytes += len(answer)
+				bounded = s.bytes <= 8<<20
+				s.mu.Unlock()
+				if !bounded {
+					s.fail(errors.New("DNSSEC broker exceeded original answer bound"))
+					return
+				}
+				binary.BigEndian.PutUint16(header[:], uint16(len(answer)))
+				frame := append(header[:], answer...)
+				for len(frame) > 0 {
+					n, err := conn.Write(frame)
+					if err != nil {
+						s.fail(err)
+						return
+					}
+					if n == 0 {
+						s.fail(io.ErrShortWrite)
+						return
+					}
+					frame = frame[n:]
+				}
+			}
+		}()
+	}
+}
+func (s *routerVPNDNSSECIsolated) close() error {
+	s.cancel()
+	if s.listener != nil {
+		_ = s.listener.Close()
+	}
+	s.mu.Lock()
+	for c := range s.connections {
+		_ = c.Close()
+	}
+	s.mu.Unlock()
+	if s.acceptDone != nil {
+		<-s.acceptDone
+	}
+	s.workers.Wait()
+	if s.native != 0 {
+		// Both functions join the original pthread; no shared object is unloaded
+		// until these actual calls return. The owning process bounds a stuck call.
+		_ = s.api.cancel(s.native)
+		s.api.destroy(s.native)
+		s.native = 0
+	}
+	var err error
+	if s.namespace != nil {
+		err = s.namespace.Close()
+		s.namespace = nil
+	}
+	s.mu.Lock()
+	err = errors.Join(err, s.failure)
+	s.mu.Unlock()
+	return err
+}
+
+// This primitive is policy-neutral: it takes immutable exported trust inputs
+// and reaches only the caller's broker. The authenticated parent must supply
+// original policy/anchor checks and owned physical queries, and interpret the
+// secure/insecure/bogus verdict before enabling a shipping connection.
+func routerVPNValidateIsolatedDNSSEC(ctx context.Context, api *routerVPNDNSSECAPI, spec routerVPNDNSSECSpec, exchange func(context.Context, []byte) ([]byte, error)) (verdict routerVPNDNSSECVerdict, failure error) {
+	if ctx == nil || exchange == nil {
+		return verdict, errors.New("DNSSEC validation omitted original owner")
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 2*time.Minute || ctx.Err() != nil {
+		return verdict, errors.New("DNSSEC validation lost original bounded deadline")
+	}
+	if len(spec.Name) > 254 || spec.Name != strings.ToLower(spec.Name) || !strings.HasSuffix(spec.Name, ".") || !standardengine.ResolvedName(spec.Name, false) || (spec.Type != 1 && spec.Type != 28) || len(spec.Anchors) > 32 || len(spec.Insecure) > 32 {
+		return verdict, errors.New("DNSSEC immutable query or trust export exceeds ABI bounds")
+	}
+	anchorBytes := 0
+	for _, anchor := range spec.Anchors {
+		if len(anchor) == 0 || len(anchor) > 4096 {
+			return verdict, errors.New("DNSSEC captured anchor exceeds ABI bounds")
+		}
+		anchorBytes += len(anchor)
+		if anchorBytes > 32768 {
+			return verdict, errors.New("DNSSEC captured anchors exceed aggregate ABI bound")
+		}
+	}
+	for _, domain := range spec.Insecure {
+		if len(domain) > 254 || domain != strings.ToLower(domain) || !strings.HasSuffix(domain, ".") || !standardengine.ResolvedName(domain, true) {
+			return verdict, errors.New("DNSSEC captured negative trust domain exceeds ABI bounds")
+		}
+	}
+	spec.Anchors = append([]string(nil), spec.Anchors...)
+	spec.Insecure = append([]string(nil), spec.Insecure...)
+	if err := api.retain(); err != nil {
+		return verdict, err
+	}
+	defer api.release()
+	operation, cancel := context.WithDeadline(ctx, deadline)
+	s := &routerVPNDNSSECIsolated{api: api, ctx: operation, cancel: cancel, connections: make(map[net.Conn]bool)}
+	defer func() {
+		failure = errors.Join(failure, s.close(), ctx.Err())
+		if failure != nil {
+			verdict = routerVPNDNSSECVerdict{}
+		}
+	}()
+	if err := routerVPNDNSSECNamespace(s, spec); err != nil {
+		return verdict, err
+	}
+	s.acceptDone = make(chan struct{})
+	go s.serve(exchange)
+	done := make(chan struct{})
+	stop := context.AfterFunc(operation, func() {
+		_ = s.listener.Close()
+		s.mu.Lock()
+		for c := range s.connections {
+			_ = c.Close()
+		}
+		s.mu.Unlock()
+		close(done)
+	})
+	defer func() {
+		if !stop() {
+			<-done
+		}
+	}()
+	descriptor := api.fd(s.native)
+	if descriptor < 0 {
+		return verdict, errors.New("DNSSEC private worker has no notification descriptor")
+	}
+	for {
+		if err := operation.Err(); err != nil {
+			return verdict, err
+		}
+		var fields [8]uint32
+		packet := make([]byte, 65535)
+		state := api.result(s.native, &fields[0], 8, &packet[0], uint32(len(packet)))
+		if (state != 0 && state != 1) || fields[0] != 1 || fields[1] > 5 || fields[3] > 1 || fields[4] > 1 || fields[6] > uint32(len(packet)) || (state == 0) != (fields[1] == 0) {
+			return verdict, errors.New("DNSSEC private result violated its ABI")
+		}
+		if state == 1 {
+			if fields[1] == 0 || fields[1] == 4 || fields[1] == 5 || fields[7] != 0 {
+				return verdict, errors.New("DNSSEC private validation did not produce a verdict")
+			}
+			verdict = routerVPNDNSSECVerdict{State: fields[1], RCode: fields[2], HaveData: fields[3], NXDomain: fields[4], TTL: fields[5], Packet: append([]byte(nil), packet[:fields[6]]...)}
+			return verdict, nil
+		}
+		descriptors := []unix.PollFd{{Fd: descriptor, Events: unix.POLLIN}}
+		n, err := unix.Poll(descriptors, 25)
+		if err != nil && !errors.Is(err, unix.EINTR) {
+			return verdict, err
+		}
+		if n > 0 {
+			if descriptors[0].Revents&(unix.POLLERR|unix.POLLNVAL) != 0 {
+				return verdict, errors.New("DNSSEC private notification failed")
+			}
+			if api.process(s.native) != 0 {
+				return verdict, errors.New("DNSSEC private worker processing failed")
+			}
+		}
+	}
+}

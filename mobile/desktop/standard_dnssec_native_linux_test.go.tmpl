@@ -1,0 +1,251 @@
+//go:build linux && with_purego && routervpn_dnssec_native
+
+package main
+
+import (
+	"bufio"
+	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
+)
+
+func dnssecNativeNamespaces(t *testing.T) map[string]int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := map[string]int{}
+	for _, entry := range entries {
+		ns, err := os.Readlink("/proc/self/task/" + entry.Name() + "/ns/net")
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		result[ns]++
+	}
+	return result
+}
+func dnssecNativeSeal(t *testing.T, raw []byte) *os.File {
+	t.Helper()
+	fd, err := unix.MemfdCreate("actual-pinned-validator", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := os.NewFile(uintptr(fd), "actual-pinned-validator")
+	t.Cleanup(func() { file.Close() })
+	if _, err = file.Write(raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = unix.FcntlInt(file.Fd(), unix.F_ADD_SEALS, unix.F_SEAL_SEAL|unix.F_SEAL_WRITE|unix.F_SEAL_GROW|unix.F_SEAL_SHRINK); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+func TestRouterVPNDNSSECIsolatedNative(t *testing.T) {
+	path := os.Getenv("ROUTERVPN_DNSSEC_NATIVE_LIBRARY")
+	peerPath := os.Getenv("ROUTERVPN_DNSSEC_NATIVE_PEER")
+	if path == "" || peerPath == "" {
+		t.Fatal("actual pinned library and independent signed peer are required")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	routerVPNDNSSECSHA, routerVPNDNSSECBytes = hex.EncodeToString(sum[:]), strconv.Itoa(len(raw))
+	original, err := os.Readlink("/proc/self/ns/net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := dnssecNativeNamespaces(t)
+	if len(baseline) != 1 || baseline[original] == 0 {
+		t.Fatal("fixture begins outside one original network namespace", baseline)
+	}
+	peer := exec.Command(peerPath)
+	peer.Stderr = io.Discard
+	stdin, err := peer.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := peer.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = peer.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		stdin.Close()
+		done := make(chan error, 1)
+		go func() { done <- peer.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			peer.Process.Kill()
+			<-done
+			t.Error("independent signed authority did not join")
+		}
+	})
+	line, err := bufio.NewReader(stdout).ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info struct {
+		Port   int    `json:"port"`
+		Anchor string `json:"anchor"`
+	}
+	if json.Unmarshal(line, &info) != nil || info.Port < 1 || info.Anchor == "" {
+		t.Fatal("signed peer omitted actual endpoint and anchor")
+	}
+	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(info.Port))
+	sealed := dnssecNativeSeal(t, raw)
+	api, err := routerVPNLoadDNSSEC(sealed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := api.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	for _, name := range []string{"good.signed.test.", "bogus.signed.test.", "cancel.signed.test."} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var count atomic.Int32
+			exchange := func(ctx context.Context, q []byte) ([]byte, error) {
+				count.Add(1)
+				found := 0
+				for ns, n := range dnssecNativeNamespaces(t) {
+					if ns != original {
+						found += n
+					}
+				}
+				if found != 1 {
+					return nil, errors.New("actual validator pthread is not alone in its private network namespace")
+				}
+				if err := api.Close(); err == nil {
+					return nil, errors.New("active native context permitted library unload")
+				}
+				if name == "cancel.signed.test." {
+					cancel()
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}
+				dialer := net.Dialer{Timeout: time.Second}
+				conn, err := dialer.DialContext(ctx, "tcp4", address)
+				if err != nil {
+					return nil, err
+				}
+				defer conn.Close()
+				deadline, _ := ctx.Deadline()
+				conn.SetDeadline(deadline)
+				var header [2]byte
+				binary.BigEndian.PutUint16(header[:], uint16(len(q)))
+				if _, err = conn.Write(append(header[:], q...)); err != nil {
+					return nil, err
+				}
+				if _, err = io.ReadFull(conn, header[:]); err != nil {
+					return nil, err
+				}
+				answer := make([]byte, binary.BigEndian.Uint16(header[:]))
+				_, err = io.ReadFull(conn, answer)
+				return answer, err
+			}
+			verdict, err := routerVPNValidateIsolatedDNSSEC(ctx, api, routerVPNDNSSECSpec{Name: name, Type: 1, Anchors: []string{info.Anchor}}, exchange)
+			if count.Load() == 0 {
+				t.Fatal("validator did not reach actual owned broker")
+			}
+			if name == "cancel.signed.test." {
+				if !errors.Is(err, context.Canceled) || len(verdict.Packet) != 0 {
+					t.Fatal("cancelled validator retained answer", verdict, err)
+				}
+			} else {
+				want := uint32(1)
+				if name == "bogus.signed.test." {
+					want = 3
+				}
+				if err != nil || verdict.State != want || len(verdict.Packet) < 12 {
+					t.Fatal("actual isolated signature verdict", verdict.State, err)
+				}
+			}
+			// This observes actual pthread namespace ownership after C cancellation,
+			// destruction, broker closure and joined Go handlers, not a mocked counter.
+			now := dnssecNativeNamespaces(t)
+			if len(now) != 1 || now[original] == 0 {
+				t.Fatal("retired C worker or Go thread retained private namespace", now)
+			}
+		})
+	}
+	if err := api.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("unsealed-refusal", func(t *testing.T) {
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		if loaded, err := routerVPNLoadDNSSEC(f); err == nil {
+			loaded.Close()
+			t.Fatal("ambient unsealed validator loaded")
+		}
+	})
+	t.Run("compiled-seal-refusal", func(t *testing.T) {
+		old := routerVPNDNSSECSHA
+		routerVPNDNSSECSHA = string(make([]byte, 64))
+		defer func() { routerVPNDNSSECSHA = old }()
+		if loaded, err := routerVPNLoadDNSSEC(sealed); err == nil {
+			loaded.Close()
+			t.Fatal("validator ignored compiled identity")
+		}
+	})
+	for _, name := range []string{"anchor-length", "anchor-total", "negative-domain-length"} {
+		t.Run(name, func(t *testing.T) {
+			spec := routerVPNDNSSECSpec{Name: "good.signed.test.", Type: 1}
+			switch name {
+			case "anchor-length":
+				spec.Anchors = []string{strings.Repeat("x", 4097)}
+			case "anchor-total":
+				for i := 0; i < 9; i++ {
+					spec.Anchors = append(spec.Anchors, strings.Repeat("x", 4096))
+				}
+			case "negative-domain-length":
+				spec.Insecure = []string{strings.Repeat("label.", 43)}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			// Bounds must be enforced before obtaining a library owner or entering
+			// another namespace, not after a narrowing cast into the C ABI.
+			_, err := routerVPNValidateIsolatedDNSSEC(ctx, nil, spec, func(context.Context, []byte) ([]byte, error) {
+				t.Fatal("invalid immutable trust input reached physical broker")
+				return nil, errors.New("unexpected broker")
+			})
+			if err == nil || !strings.Contains(err.Error(), "ABI bound") {
+				t.Fatal("invalid immutable trust input reached library admission", err)
+			}
+		})
+	}
+	if _, err := os.Stat(filepath.Clean(path)); err != nil {
+		t.Fatal("fixture unexpectedly changed source package", err)
+	}
+}
