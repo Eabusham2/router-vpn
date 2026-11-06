@@ -72,6 +72,16 @@ func startLinuxResolvedHelper(ctx context.Context, root, session, name string) (
 	if err != nil {
 		return h, err
 	}
+	// Shipping initialization loads Cronet before fixed-command dispatch.
+	// Preserve the original verified library through the same sealed FD ABI
+	// as the standard engine; a memfd image has no ambient sibling library.
+	h.sources.library, err = sealLegacyExitFile("resolved-original-library", h.sources.librarySource, 128<<20)
+	if err != nil {
+		return h, err
+	}
+	if err = standardengine.VerifyLibrary(h.sources.library, h.sources.libraryExpected.Size, h.sources.libraryExpected.SHA256); err != nil {
+		return h, err
+	}
 	h.capture, err = sealLegacyExitFile("resolved-original-capture", strings.NewReader(string(raw)), 2048)
 	if err != nil {
 		return h, err
@@ -97,8 +107,8 @@ func startLinuxResolvedHelper(ctx context.Context, root, session, name string) (
 	}
 	pidfd := -1
 	h.command = exec.Command("/proc/self/fd/3", "routervpn-resolved-policy", "--capture-sha256", h.captureSHA)
-	h.command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
-	h.command.ExtraFiles = []*os.File{h.image, h.padding, h.padding, h.padding, h.childChannel, h.parentDirectory, h.capture}
+	h.command.Env = h.sources.environment([]string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"})
+	h.command.ExtraFiles = []*os.File{h.image, h.padding, h.padding, h.sources.library, h.childChannel, h.parentDirectory, h.capture}
 	h.command.Stdout, h.command.Stderr = io.Discard, io.Discard
 	h.command.SysProcAttr = &syscall.SysProcAttr{PidFD: &pidfd}
 	if err = h.command.Start(); err != nil {
@@ -301,7 +311,7 @@ func (h *linuxResolvedHelper) Close(ctx context.Context) error {
 	}
 	files := []*os.File{h.image, h.capture, h.padding, h.parentDirectory, h.childChannel, h.pidfd}
 	if h.sources != nil {
-		files = append(files, h.sources.manifest, h.sources.imageSource, h.sources.librarySource)
+		files = append(files, h.sources.manifest, h.sources.imageSource, h.sources.librarySource, h.sources.library)
 	}
 	for _, f := range files {
 		if err := h.closeFile(f); err != nil {
