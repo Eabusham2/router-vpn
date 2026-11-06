@@ -206,6 +206,7 @@ func desktopSocketRevokeControlled(ctx context.Context, policy DesktopSocketPoli
 // constructing a generic source/tuple record does not enable strict protection.
 // Public Direct strict admission stays closed until those adapters are wired.
 type DesktopSocketBroker struct {
+	retirement     desktopRetirementState
 	ctx            context.Context
 	cancel         context.CancelFunc
 	capture        DesktopSocketCapture
@@ -225,6 +226,7 @@ type DesktopSocketBroker struct {
 }
 
 type desktopSocket struct {
+	retirement   desktopRetirementState
 	ctx          context.Context
 	cancel       context.CancelFunc
 	broker       *DesktopSocketBroker
@@ -780,22 +782,28 @@ func (b *DesktopSocketBroker) Cancel() {
 	}
 	b.joinOnce.Do(func() {
 		go func() {
+			b.retirement.phase.Store(1)
 			b.workers.Wait()
+			b.retirement.phase.Store(2)
 			for _, socket := range sockets {
 				<-socket.done
 			}
 			if b.source != nil {
+				b.retirement.phase.Store(3)
 				for {
 					ctx, cancel := context.WithTimeout(context.Background(), desktopSocketControlWait)
 					err := b.source.Close(ctx)
 					cancel()
+					b.retirement.failure(err)
 					if err == nil {
 						break
 					}
 					time.Sleep(100 * time.Millisecond)
 				}
 			}
+			b.retirement.phase.Store(4)
 			<-b.monitor
+			b.retirement.phase.Store(5)
 			close(b.joined)
 		}()
 	})
@@ -836,7 +844,9 @@ func (s *desktopSocket) stop() {
 }
 
 func (s *desktopSocket) drain() {
+	s.retirement.phase.Store(retirementOperation)
 	<-s.operation
+	s.retirement.phase.Store(retirementChildren)
 	// No child can attach after stop marked this control retired. Join every
 	// association before removing or releasing the original TCP authority.
 	s.mu.Lock()
@@ -863,9 +873,12 @@ func (s *desktopSocket) drain() {
 		peers = append(peers, peer)
 	}
 	s.mu.Unlock()
+	s.retirement.phase.Store(retirementIO)
 	s.io.Wait()
 	for _, peer := range peers {
+		s.retirement.phase.Store(retirementPeerOwner)
 		peer.op.Lock()
+		s.retirement.phase.Store(retirementRevoke)
 		for peer.request.Sequence != 0 {
 			err := desktopSocketRevokeControlled(context.Background(), s.policy(), peer.request)
 			if err == nil {
@@ -876,11 +889,13 @@ func (s *desktopSocket) drain() {
 			}
 			s.mu.Lock()
 			s.lastFailure = err
+			s.retirement.failure(err)
 			s.mu.Unlock()
 			time.Sleep(100 * time.Millisecond)
 		}
 		peer.op.Unlock()
 	}
+	s.retirement.phase.Store(retirementConnection)
 	for {
 		var err error
 		if s.conn != nil {
@@ -894,26 +909,33 @@ func (s *desktopSocket) drain() {
 		}
 		s.mu.Lock()
 		s.lastFailure = err
+		s.retirement.failure(err)
 		s.mu.Unlock()
 		time.Sleep(100 * time.Millisecond)
 	}
+	s.retirement.phase.Store(retirementKeeper)
 	if s.keeper != nil {
 		for {
 			if err := s.keeper.Close(); err == nil {
 				break
+			} else {
+				s.retirement.failure(err)
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
+	s.retirement.phase.Store(retirementFile)
 	if s.sourceFile != nil {
 		for {
 			err := s.sourceFile.Close()
 			if err == nil || errors.Is(err, os.ErrClosed) {
 				break
 			}
+			s.retirement.failure(err)
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
+	s.retirement.phase.Store(retirementNative)
 	if s.sourceNative != nil {
 		for {
 			err := s.sourceNative.Close()
@@ -922,10 +944,12 @@ func (s *desktopSocket) drain() {
 			}
 			s.mu.Lock()
 			s.lastFailure = err
+			s.retirement.failure(err)
 			s.mu.Unlock()
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
+	s.retirement.phase.Store(retirementRelease)
 	if source, ok := s.broker.source.(DesktopSocketSourceRelease); ok && (s.sourceFile != nil || s.sourceNative != nil) {
 		request := DesktopSocketCreation{Capture: s.broker.capture, Binding: s.binding, SocketID: s.id, Network: s.network}
 		for {
@@ -935,6 +959,7 @@ func (s *desktopSocket) drain() {
 			}
 			s.mu.Lock()
 			s.lastFailure = err
+			s.retirement.failure(err)
 			s.mu.Unlock()
 			time.Sleep(100 * time.Millisecond)
 		}
@@ -942,6 +967,7 @@ func (s *desktopSocket) drain() {
 	s.broker.mu.Lock()
 	delete(s.broker.sockets, s)
 	s.broker.mu.Unlock()
+	s.retirement.phase.Store(retirementDone)
 	close(s.done)
 	if s.parent != nil {
 		s.parent.mu.Lock()
@@ -970,6 +996,6 @@ func (b *DesktopSocketBroker) Close(ctx context.Context) error {
 	case <-b.joined:
 		return nil
 	case <-wait.Done():
-		return errors.Join(wait.Err(), errors.New("desktop physical kernel permits/sockets remain retained"))
+		return errors.Join(wait.Err(), errors.New("desktop physical kernel permits/sockets remain retained"), b.retirementSnapshot())
 	}
 }
