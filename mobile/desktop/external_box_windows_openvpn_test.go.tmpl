@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -17,6 +19,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,8 +31,203 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
 	OVPN "github.com/sagernet/sing-box/protocol/openvpn"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
+
+type desktopExternalOpenVPNUnavailableTCP struct {
+	mu       sync.Mutex
+	handle   syscall.Handle
+	address  netip.AddrPort
+	closed   bool
+	closeErr error
+}
+
+func (r *desktopExternalOpenVPNUnavailableTCP) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.closed {
+		r.closed = true
+		r.closeErr = errors.Join(syscall.Closesocket(r.handle), windows.WSACleanup())
+	}
+	return r.closeErr
+}
+
+func (r *desktopExternalOpenVPNUnavailableTCP) current() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return net.ErrClosed
+	}
+	address, err := syscall.Getsockname(r.handle)
+	if err != nil {
+		return err
+	}
+	bound, ok := address.(*syscall.SockaddrInet4)
+	if !ok || bound.Port == 0 ||
+		netip.AddrPortFrom(netip.AddrFrom4(bound.Addr), uint16(bound.Port)) != r.address {
+		return errors.New("unavailable TCP reservation changed its original tuple")
+	}
+	for _, option := range []struct{ name, want int }{
+		{syscall.SO_REUSEADDR, 0},
+		{-5, 1},     // SO_EXCLUSIVEADDRUSE.
+		{0x0002, 0}, // SO_ACCEPTCONN: this socket must never listen.
+	} {
+		value, err := syscall.GetsockoptInt(r.handle, syscall.SOL_SOCKET, option.name)
+		if err != nil || value != option.want {
+			return errors.Join(err, errors.New("unavailable TCP reservation changed its exclusive non-listening state"))
+		}
+	}
+	return nil
+}
+
+// Own the TCP refusal endpoint for the entire original provider lifetime.
+// No UDP socket, listener or closed-listener port discovery is involved.
+func desktopExternalOpenVPNBindUnavailableTCP(address netip.AddrPort) (*desktopExternalOpenVPNUnavailableTCP, error) {
+	if !address.Addr().Is4() || address.Addr().IsUnspecified() || address.Addr().IsMulticast() {
+		return nil, errors.New("unavailable TCP reservation requires its captured IPv4 address")
+	}
+	var startup windows.WSAData
+	if err := windows.WSAStartup(0x202, &startup); err != nil {
+		return nil, os.NewSyscallError("WSAStartup", err)
+	}
+	handle, err := windows.WSASocket(
+		syscall.AF_INET, syscall.SOCK_STREAM, syscall.IPPROTO_TCP,
+		nil, 0, 0x01|0x80, // WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT.
+	)
+	if err != nil {
+		return nil, errors.Join(os.NewSyscallError("socket", err), windows.WSACleanup())
+	}
+	r := &desktopExternalOpenVPNUnavailableTCP{handle: syscall.Handle(handle)}
+	fail := func(operation string, err error) (*desktopExternalOpenVPNUnavailableTCP, error) {
+		return nil, errors.Join(os.NewSyscallError(operation, err), r.Close())
+	}
+	if err := syscall.SetsockoptInt(r.handle, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 0); err != nil {
+		return fail("setsockopt", err)
+	}
+	if err := syscall.SetsockoptInt(r.handle, syscall.SOL_SOCKET, -5, 1); err != nil {
+		return fail("setsockopt", err)
+	}
+	if err := syscall.Bind(r.handle, &syscall.SockaddrInet4{
+		Addr: address.Addr().As4(),
+		Port: int(address.Port()),
+	}); err != nil {
+		return fail("bind", err)
+	}
+	bound, err := syscall.Getsockname(r.handle)
+	if err != nil {
+		return fail("getsockname", err)
+	}
+	actual, ok := bound.(*syscall.SockaddrInet4)
+	if !ok || actual.Port == 0 || netip.AddrFrom4(actual.Addr) != address.Addr() ||
+		address.Port() != 0 && actual.Port != int(address.Port()) {
+		return fail("getsockname", errors.New("unavailable TCP reservation lost its exact captured bind"))
+	}
+	r.address = netip.AddrPortFrom(address.Addr(), uint16(actual.Port))
+	if err := r.current(); err != nil {
+		return fail("getsockopt", err)
+	}
+	return r, nil
+}
+
+func desktopExternalOpenVPNReserveUnavailableTCP(address string, used map[int]bool) (int, io.Closer, error) {
+	ip, err := netip.ParseAddr(address)
+	if err != nil {
+		return 0, nil, err
+	}
+	for attempt := 0; attempt < 128; attempt++ {
+		reservation, err := desktopExternalOpenVPNBindUnavailableTCP(netip.AddrPortFrom(ip, 0))
+		if err != nil {
+			return 0, nil, &net.OpError{Op: "bind", Net: "tcp4", Err: err}
+		}
+		port := int(reservation.address.Port())
+		if used[port] {
+			if err := reservation.Close(); err != nil {
+				return 0, nil, err
+			}
+			continue
+		}
+		used[port] = true
+		return port, reservation, nil
+	}
+	return 0, nil, errors.New("unavailable TCP reservation has no distinct owned port")
+}
+
+func desktopExternalWFPOpenVPNReservationControl(t *testing.T, alias *desktopExternalWindowsAlias) {
+	t.Helper()
+	if err := alias.readback(); err != nil {
+		t.Fatal(err)
+	}
+	used := make(map[int]bool)
+	port, closer, err := desktopExternalOpenVPNReserveUnavailableTCP(
+		desktopExternalOpenVPNAlias.String(), used,
+	)
+	if err != nil {
+		t.Fatal("actual unavailable TCP reservation failed", err)
+	}
+	reservation, ok := closer.(*desktopExternalOpenVPNUnavailableTCP)
+	if !ok || reservation == nil || port == 0 || !used[port] {
+		if closer != nil {
+			_ = closer.Close()
+		}
+		t.Fatal("actual unavailable TCP reservation lost its original owner")
+	}
+	t.Cleanup(func() {
+		if err := reservation.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := reservation.current(); err != nil {
+		t.Fatal("actual unavailable TCP reservation is not retained", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	connection, dialErr := (&net.Dialer{}).DialContext(ctx, "tcp4", reservation.address.String())
+	if connection != nil {
+		_ = connection.Close()
+	}
+	if connection != nil || !errors.Is(dialErr, syscall.Errno(10061)) {
+		t.Fatal("actual owned non-listening TCP endpoint did not refuse connection", dialErr)
+	}
+	if err := reservation.current(); err != nil {
+		t.Fatal("refused connection retired its original reservation", err)
+	}
+
+	foreign, bindErr := desktopExternalOpenVPNBindUnavailableTCP(reservation.address)
+	if foreign != nil {
+		_ = foreign.Close()
+	}
+	if foreign != nil ||
+		(!errors.Is(bindErr, syscall.Errno(10013)) && !errors.Is(bindErr, syscall.Errno(10048))) {
+		t.Fatal("original unavailable TCP tuple was not exclusively retained", bindErr)
+	}
+
+	if err := reservation.Close(); err != nil {
+		t.Fatal("original unavailable TCP reservation did not close", err)
+	}
+	if !errors.Is(reservation.current(), net.ErrClosed) {
+		t.Fatal("retired unavailable TCP reservation stayed current")
+	}
+	replacement, err := desktopExternalOpenVPNBindUnavailableTCP(reservation.address)
+	if err != nil {
+		t.Fatal("released unavailable TCP tuple could not be rebound", err)
+	}
+	t.Cleanup(func() {
+		if err := replacement.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := reservation.Close(); err != nil {
+		t.Fatal("repeated original unavailable TCP close changed result", err)
+	}
+	if err := replacement.current(); err != nil {
+		t.Fatal("repeated original close retired replacement TCP owner", err)
+	}
+	if err := alias.readback(); err != nil {
+		t.Fatal("TCP reservation changed its captured alias", err)
+	}
+}
 
 func TestRouterVPNDesktopExternalWindowsOpenVPNPeer(t *testing.T) {
 	raw := os.Getenv("ROUTERVPN_OPENVPN_WFP_PEER")
@@ -72,7 +271,11 @@ func TestRouterVPNDesktopExternalWindowsOpenVPNPeer(t *testing.T) {
 		t.Fatal("OpenVPN peer lost actual executable identity", err)
 	}
 	phase = "provider-serve"
-	if err := desktopOpenVPNReferenceServeOwned(desktopExternalOpenVPNAlias.String(), appID); err != nil {
+	if err := desktopOpenVPNReferenceServeOwned(
+		desktopExternalOpenVPNAlias.String(),
+		appID,
+		desktopExternalOpenVPNReserveUnavailableTCP,
+	); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -730,6 +730,8 @@ class OrdinaryOpenVPNScope(unittest.TestCase):
 
     def test_each_alias_and_transport_verdict_is_unique_and_mandatory(self):
         self.assertEqual(GATE.EXTERNAL_OPENVPN_NETWORKS, ("tcp", "udp", "mixed"))
+        self.assertIn(GATE.EXTERNAL_OPENVPN_ALIAS + "/unavailable-tcp-reservation", GATE.EXTERNAL_OPENVPN_ALIAS_CASES)
+        self.assertEqual(len(GATE.EXTERNAL_OPENVPN_ALIAS_CASES), 11)
         self.assertEqual(GATE.EXTERNAL_OPENVPN_LEAVES, ("on-connect", "always", "successor-and-original-restore", "reject/trust", "reject/control-key", "reject/dns", "cancelled-proof", "foreign-predecessor", "commit-refused"))
         for network in ("alias", *GATE.EXTERNAL_OPENVPN_NETWORKS):
             required = GATE.EXTERNAL_OPENVPN_ALIAS_CASES if network == "alias" else GATE.EXTERNAL_OPENVPN_CASES[network]

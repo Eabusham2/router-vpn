@@ -171,6 +171,9 @@ func desktopExternalCreateAlias(t *testing.T) *desktopExternalWindowsAlias {
 
 func TestRouterVPNDesktopExternalWindowsOpenVPNAlias(t *testing.T) {
 	a := desktopExternalCreateAlias(t)
+	t.Run("unavailable-tcp-reservation", func(t *testing.T) {
+		desktopExternalWFPOpenVPNReservationControl(t, a)
+	})
 	t.Run("refuse-existing-address", func(t *testing.T) {
 		if _, err := desktopExternalAliasPhysical(a.original.Address.Addr()); err == nil {
 			t.Fatal("existing alias was adopted")

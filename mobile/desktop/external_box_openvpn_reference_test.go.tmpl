@@ -245,7 +245,12 @@ func desktopOpenVPNReferenceServe(address string) (failure error) {
 	return desktopOpenVPNReferenceServeOwned(address, nil)
 }
 
-func desktopOpenVPNReferenceServeOwned(address string, appID []byte) (failure error) {
+type desktopOpenVPNUnavailableReservation func(string, map[int]bool) (int, io.Closer, error)
+
+func desktopOpenVPNReferenceServeOwned(address string, appID []byte, unavailableReservation ...desktopOpenVPNUnavailableReservation) (failure error) {
+	if len(unavailableReservation) > 1 || len(unavailableReservation) == 1 && unavailableReservation[0] == nil {
+		return errors.New("OpenVPN unavailable reservation is not captured")
+	}
 	// stdout belongs to strict JSON replies; keep startup failures on stderr.
 	// Emit only fixed labels and the original numeric errno, never error text.
 	fail := func(phase string, err error) error {
@@ -292,6 +297,7 @@ func desktopOpenVPNReferenceServeOwned(address string, appID []byte) (failure er
 		peer.publicEntered, peer.publicRelease = make(chan struct{}), make(chan struct{})
 	}
 	var provider *Box
+	var unavailableOwner io.Closer
 	var latency net.Listener
 	defer func() {
 		cancel()
@@ -302,6 +308,9 @@ func desktopOpenVPNReferenceServeOwned(address string, appID []byte) (failure er
 			_ = latency.Close()
 		}
 		peer.close()
+		if unavailableOwner != nil {
+			failure = errors.Join(failure, unavailableOwner.Close())
+		}
 	}()
 	peer.listener, err = net.Listen("tcp4", address+":0")
 	if err != nil {
@@ -319,7 +328,16 @@ func desktopOpenVPNReferenceServeOwned(address string, appID []byte) (failure er
 	desktopOpenVPNCompositionServeStream(peer, latency, desktopExternalLatencyAddress)
 	desktopOpenVPNCompositionServeDNS(peer)
 	used := make(map[int]bool)
-	unavailable, err := desktopOpenVPNCompositionPort(address, used)
+	var unavailable int
+	if len(unavailableReservation) == 1 {
+		unavailable, unavailableOwner, err = unavailableReservation[0](address, used)
+		if err == nil && (unavailableOwner == nil || unavailable < 1 || unavailable > 65535 || !used[unavailable]) {
+			err = errors.New("OpenVPN unavailable reservation lost its captured owner")
+		}
+	} else {
+		// Existing non-Windows fixtures retain their original allocation.
+		unavailable, err = desktopOpenVPNCompositionPort(address, used)
+	}
 	if err != nil {
 		return fail("unavailable-port-reservation", err)
 	}

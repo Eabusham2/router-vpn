@@ -1077,3 +1077,18 @@ The complete source audit is a source and executable-contract result. Native rel
 
 Evidence: [completed source audit](https://github.com/Eabusham2/router-vpn/actions/runs/42229778982/job/127932408608), [standalone Android cancellation](https://github.com/Eabusham2/router-vpn/actions/runs/42229596587/job/127931769287), [complete native Xray validation](https://github.com/Eabusham2/router-vpn/actions/runs/42229596513/job/127932639050), [Server AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/42226553516/job/127927707983), [Server ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/42226553516/job/127927707569), [Windows native identity and MTU](https://github.com/Eabusham2/router-vpn/actions/runs/42226553579/job/127923331079).
 
+
+## 2026-11-06 — Owned unavailable TCP reservation for Windows OpenVPN
+
+The AMD64 native OpenVPN job on `bab34e59` (127927707989) passed all nine TCP and all nine UDP leaves, then its first mixed-transport positive leaf. Eight later mixed leaves failed during fixture startup with `unavailable-port-reservation errno=10013 network=udp4 operation=bind`. The unavailable TCP address allocator unnecessarily probed UDP and returned a port after closing both temporary listeners. This is separate from the pending-connector inspection in the wrong-control-key case.
+
+The Windows fixture now retains an exclusive IPv4 TCP socket bound to the unavailable port without calling listen. It owns its Winsock lifetime, verifies the exact bound address and non-listening state, and keeps the reservation until the corresponding provider and reference peer have closed. There is no UDP probe for this unavailable TCP candidate. The production provider-port allocator and non-Windows fixture default are unchanged.
+
+A mandatory native alias leaf checks the actual refused TCP connection, rejects a competing bind while the original reservation is owned, releases and rebinds the exact port, and verifies that closing the retired owner again cannot close its replacement. Close is synchronized and idempotent. The reservation callback is private to this fixture invocation; it cannot change an unrelated test's allocator.
+
+All 27 existing TCP, UDP and mixed-transport verdicts and the strict ALE/WFP ownership controls remain mandatory. The alias inventory increases from ten to eleven and keeps the existing rejection of missing, duplicate, counterfeit-prefix, failing, skipped and race-affected output. This change does not reinterpret a pending connector, accept an incomplete native snapshot, or claim the wrong-key witness failure is solved.
+
+Validation before publication: root and two independent Astra reviews of the exact candidate; pinned Windows syscall signatures and Winsock constants checked against their primary source; original provider allocator and existing transport-case bodies confirmed unchanged; preparer inputs and phase hashes checked to include the actual modified templates and runners. The complete five-file candidate was also independently read from an unreferenced review commit. No local compile, native execution or new causal-control pass is claimed for this change. Exact new Windows runs remain required.
+
+Evidence: [AMD64 native OpenVPN run](https://github.com/Eabusham2/router-vpn/actions/runs/42226553516/job/127927707989). The existing Server lease cleanup and pending mixed wrong-key inspection failures remain open independently.
+

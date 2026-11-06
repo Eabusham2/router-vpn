@@ -70,7 +70,7 @@ EXTERNAL_OPENVPN_LEAVES = ("on-connect", "always", "successor-and-original-resto
 EXTERNAL_OPENVPN_CASES = {network: (EXTERNAL_OPENVPN_ROOT, EXTERNAL_OPENVPN_ROOT + "/" + network,
     *(EXTERNAL_OPENVPN_ROOT + "/" + network + "/" + leaf for leaf in EXTERNAL_OPENVPN_LEAVES)) for network in EXTERNAL_OPENVPN_NETWORKS}
 EXTERNAL_OPENVPN_ALIAS = "TestRouterVPNDesktopExternalWindowsOpenVPNAlias"
-EXTERNAL_OPENVPN_ALIAS_CASES = (EXTERNAL_OPENVPN_ALIAS, EXTERNAL_OPENVPN_ALIAS + "/refuse-existing-address",
+EXTERNAL_OPENVPN_ALIAS_CASES = (EXTERNAL_OPENVPN_ALIAS, EXTERNAL_OPENVPN_ALIAS + "/unavailable-tcp-reservation", EXTERNAL_OPENVPN_ALIAS + "/refuse-existing-address",
     *(EXTERNAL_OPENVPN_ALIAS + "/reject-" + field for field in ("address", "luid", "index", "creation", "prefix", "skip-source", "prefix-origin", "suffix-origin")))
 EXTERNAL_SERVER_ROOT = "TestRouterVPNDesktopExternalWindowsRouterServerWFP"
 EXTERNAL_SERVER_ASSOCIATION = "TestRouterVPNDesktopExternalWindowsRouterAssociationRetirement"
