@@ -1710,3 +1710,29 @@ Both complete candidate files were read back and proved to differ from the
 current source only at those exact boundaries. Independent source review is
 clear. The executor is unavailable at this checkpoint, so no repaired Java or
 Swift execution is claimed; the exact-SHA CI reruns remain required.
+
+
+## Windows independent-entry-layer fixture: restore original Home DNS
+
+The exact `e7a9d65e` complete Windows native-engine jobs
+[AMD64 128083504163](https://github.com/Eabusham2/router-vpn/actions/runs/42270932334/job/128083504163)
+and [ARM64 128083504096](https://github.com/Eabusham2/router-vpn/actions/runs/42270932334/job/128083504096)
+both failed before native startup in
+`TestRouterVPNExternalPhysicalStartupSocketPhase/router-entry-aes` and
+`router-entry-aes-xor`. Actual logs reported:
+`WireGuard exit requires one literal selected DNS resolver`.
+
+The new fixture's original `wg.conf` omitted DNS, while its independently
+captured Router profile already selected Home resolver `10.77.0.1`.
+Reviewed correction `6fd482190d5541260a2c510259de3fe79a7d554c` adds exactly
+`DNS = 10.77.0.1` to that original Interface section. It changes one fixture
+line only. Credentials, endpoints, fingerprinting, layers, startup checks,
+native verdict inventory and missing-eager controls remain intact.
+
+The production single-resolver guard in `internal/mobilemultihop/wireguard.go`
+and its existing missing/multiple-resolver negative controls are unchanged.
+The publisher compared complete original/review file bytes and confirmed
+this is the sole substitution; independent source review is clear.
+No new Windows execution is claimed while the executor is unavailable.
+Both actual startup leaves and their native causal controls remain required
+at the resulting published SHA.

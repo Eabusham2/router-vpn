@@ -243,7 +243,7 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 		entry := map[string]any{"id": "captured-router-entry", "node_kind": "router-vpn", "node_proof_id": fmt.Sprintf("%x", sha256.Sum256([]byte("router-vpn-node-proof-v1\n"+key(18)))),
 			"endpoint": host, "router_api": "http://10.77.0.1:8787", "api_token": "original-entry-token", "start_layer": routerLayer,
 			"dns_mode": "home", "adguard_ipv4": "10.77.0.1", "ipv6_mode": "on", "home_lan_access": true, "mtu_policy": "auto"}
-		wg := "[Interface]\nPrivateKey = " + key(17) + "\nAddress = 10.77.0.2/32\nMTU = 1420\n\n[Peer]\nPublicKey = " + key(18) + "\nPresharedKey = " + key(19) + "\nEndpoint = " + net.JoinHostPort(host, "51820") + "\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25\n"
+		wg := "[Interface]\nPrivateKey = " + key(17) + "\nAddress = 10.77.0.2/32\nDNS = 10.77.0.1\nMTU = 1420\n\n[Peer]\nPublicKey = " + key(18) + "\nPresharedKey = " + key(19) + "\nEndpoint = " + net.JoinHostPort(host, "51820") + "\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25\n"
 		aes := encoded(map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": host, "server_port": port, "method": mobilemultihop.NativeStartLayerMethod, "password": key(23)}}})
 		node, err := mobilemultihop.NewNodeProfile("wg", encoded(map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(wg))}), encoded(entry), encoded(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(aes))}), "")
 		if err != nil {
