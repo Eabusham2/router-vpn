@@ -8,7 +8,7 @@ original requirements. The live starting branch was
 1,294 commits ahead of the older published `745b3e41` release. Old patches were
 not replayed over that history. The published units below retain normal
 `main` ancestry through
-[`64d58c6e862e552ddbf24e5a0c9348cb579b8b34`](https://github.com/Eabusham2/router-vpn/commit/64d58c6e862e552ddbf24e5a0c9348cb579b8b34).
+[`3ba9b7bf4ae05a08e33bbbd747bdcae99f385174`](https://github.com/Eabusham2/router-vpn/commit/3ba9b7bf4ae05a08e33bbbd747bdcae99f385174).
 Each remote tree was compared with the locally tested committed tree, and the
 remote branch was read back before adoption. A saved patch, local commit or API
 schema was not counted as a successful push.
@@ -40,7 +40,7 @@ overlapping lists are not added into a completion denominator.
 
 | Requirement / correction | Platforms and shipping paths | Executable evidence | Remaining boundary |
 |---|---|---|---|
-| Router/custom entry and final roles; original #214–224; native single VPN owner | Android `AndroidImportedRouter*` helpers and multihop host; Apple PacketTunnel/imported runtime; `internal/mobilemultihop/imported_entry.go` | 205 preserved/extended source graphs, actual Java and Swift exports, pinned native parsing and encrypted peers | Other imported/final families, Server/Compare for this direction, complete native device/network acceptance |
+| Router/custom entry and final roles; original #214–224; native single VPN owner | Android `AndroidImportedRouter*` helpers and multihop host; Apple PacketTunnel/imported runtime; `internal/mobilemultihop/imported_entry.go` | 235 preserved/extended source graphs, actual Java and Swift exports, pinned native parsing and encrypted peers; subsequent rows retain their exact source and verdict counts | Other imported/final families, Server/Compare for this direction, complete native device/network acceptance |
 | Original #229–240, Auto/Fixed/Retest/Cancel and later packet-envelope limits | `internal/awgpolicy/packet_*`, `internal/mobilemtu`, mobile compiler/metadata | Race tests; complete data/control/cookie/junk/Start Layer bounds; Fixed overflow rejection; full-size decrypted IPv4/IPv6 peer observations | Effective configured cap is explicitly unmeasured; physical PMTU, transitions and Jumbo acceptance remain separate |
 | Original #200–224/#337, exact captured ownership and full temporary-test restoration | Windows retained desktop host, `desktop_external_owned_sources.go`, independent entry/final captures | Shared/client race tests, two architecture test-binary builds, 53 mandatory native leaves and two causal mutations | Hosted WFP runtime and physical acceptance remain separate; the exact Speed Lab/Always-to-Off fixture failures below now have published corrections |
 | Selected DNS/Home AdGuard, LAN/IPv6 and original resolver authority | `internal/standardengine/resolved_*`, retained native resolver helper, finite kernel grants and parallel equal-best scope caller | Canonical bounded frames, original-daemon local-only preflight, exact upstream port/TLS/link transport and active trust-anchor codec/race tests | Installed privileged composition and kernel execution remain unaccepted; captured DNSSEC child/cohort, cross-domain alias caller, bounded authenticated compatibility fallback and typed root collector are published; remaining semantic branches and installed native acceptance are still required |
@@ -236,8 +236,8 @@ DNS and captured request changes, the 235-graph independent SOCKS layer unit
 fixture corrections and Darwin bounded cleanup `14724aaf`. The older local
 sixteen-file 235-graph draft was compared against the newer upstream source and
 not replayed. Upstream preserves stronger relay ownership and its existing
-verdict inventory. A separate additive mobile verification increment remained
-unpublished at this document's source cutoff.
+verdict inventory. The separate additive mobile packet-bound and retirement
+increment is now published in `e4be2492`, with its exact evidence below.
 
 The Darwin native Intel failure at `a5000cc3`, attempt 2,
 [run 42167793365/job 127740178604](https://github.com/Eabusham2/router-vpn/actions/runs/42167793365/job/127740178604),
@@ -252,7 +252,46 @@ local full runner remains bounded by Unix-socket EPERM; no complete local or
 macOS-native pass is inferred. A functionally equivalent local one-file draft
 was not published over that stronger upstream change.
 
-**Latest exact-source observation:** at **2026-11-06 06:48:05 UTC**, the
+### Additive mobile bounds and private-domain negative answers
+
+| Published commit | Delivered behavior and focused evidence | Remaining boundary |
+|---|---|---|
+| [`e4be2492`](https://github.com/Eabusham2/router-vpn/commit/e4be249231643daf20bc2653fe328ce0293654d7) | Preserves all 235 imported SOCKS graphs and 651 upstream native verdicts, adds configured packet-envelope bounds for both Start Layers, and joins both original raw peer workers before closing the decorated authenticated connection. All 925 mandatory native verdicts pass, comprising the preserved 651, 271 added bounds/ownership cases and three retirement regression verdicts. Actual Apple exports pass 5,466 checks with 236 pinned parser verdicts; Android passes 17,565 checks with 472 combined parser verdicts. All seventeen portable controls and the original NAT causal prerequisite pass. | The initial 922-verdict run exposed a real independent-peer first-response race and is retained as a failed run. Its premature-close mutant is rejected after the repair. Configured MTU bounds remain explicitly unmeasured: this is not physical PMTU, device Retest, VPN extension or network-transition acceptance. |
+| [`0a1fab52`](https://github.com/Eabusham2/router-vpn/commit/0a1fab52418fb4fdcc474bfbf1d49e24c9763310) | Adds two installed private-domain cases: independent root-signed private-TLD denial, with and without an unrelated retained NTA. The peer owns the signing key; the original broker receives only the public root DS and serves both D-Bus and monitor observations. A compiled-peer causal variant changes signed NXDOMAIN to signed NODATA and must fail the exact denial predicate. The controller and pinned native peer compile, all 47 runner tests pass in 124.226s, and the final five causal/cleanup checks pass in 0.076s. | Actual privileged installed execution remains mandatory. This environment has neither root nor usable passwordless sudo. The causal checker requires exit 1 plus original account-cleanup and namespace-child join receipts; a later crash, timeout or retirement error cannot count as an expected rejection. |
+| [`61e7cdeb`](https://github.com/Eabusham2/router-vpn/commit/61e7cdeb76b4836399754ce3019dacae8be4f2e8) | Adds a distinct inert constructor for unsigned original NXDOMAIN/NODATA A/AAAA candidates at the existing exact two-label boundary. The positive constructor still rejects negative answers; complete framing, absent answer/alias/signature records, copy ownership and cleared AD remain required. The actual authenticated child passes the original eighteen cases in 23.12s, eight private-domain cases in 9.75s and four new negative cases in 6.09s. Premature clean child exit is rejected. | This prerequisite alone did not activate negative retention in the shipping caller. Its four child cases run in a separate mandatory process with the unchanged 55-second test and 65-second wrapper limits. |
+| [`3ba9b7bf`](https://github.com/Eabusham2/router-vpn/commit/3ba9b7bf4ae05a08e33bbbd747bdcae99f385174) | Retains original negatives only after successful natural child retirement, State 3 and exact packet/verdict agreement. The ordinary cohort still joins before auxiliary proof. Both NXDOMAIN and NODATA wait for an eligible positive equal-best scope instead of cancelling it. The exact isolated complete `TestResolved` race suite passes in 2.580s and two inventory checks in 0.129s. Restoring the old NOERROR classifier fails the intended positive-sibling witness. | Existing scope, cohort, query and deadline bounds are unchanged. This proves the bounded caller source, not deeper-name semantics or installed kernel/device execution. Installed original-negative acceptance is the next separate fixture increment. |
+
+Newer concurrent changes were compared and preserved rather than replayed:
+`e7d2b366` repairs the Apple Home DNS serialization whitelist; `f97d9d60`
+repairs the Rosenpass fixture's borrowed-key observation; `e9810710` targets
+the Android rollback fixture's exact shared lock; and `dc4ab1c1` partitions
+Windows Speed Lab into three bounded groups while preserving the Router Server
+release inventory. The exact clean upstream Windows gate passes all nineteen
+local tests in 0.270s. Its 250 source parent names are selected exactly once;
+this is workflow coverage, not Windows execution. The later documentation
+commit `03dc520f` was preserved before publishing `3ba9b7bf`.
+
+The Windows physical run at `64d58c6e`,
+[42176531078](https://github.com/Eabusham2/router-vpn/actions/runs/42176531078),
+failed ordinary Shadowsocks selected-DNS admission on both architectures.
+The shared fixture selector had switched that ordinary TCP-only DNS fixture
+to UDP. Concurrent `8a71c473` restores its TCP selection and admits SS UDP
+only in the separate packet receiver whose provider actually serves it. That
+exact source correction was inspected and preserved. Actual Windows rerun
+acceptance, the historical socket identity finding and the additional original
+relay challenge/stop-receipt provider correction remain separate obligations.
+
+**Latest exact-source observation:** at **2026-11-06 07:17:24 UTC**, the
+all-events query for `3ba9b7bf4ae05a08e33bbbd747bdcae99f385174` returned
+28 runs: four successful, seventeen cancelled, three pending, three queued and
+one running. Its authoritative
+[release run 42179599971](https://github.com/Eabusham2/router-vpn/actions/runs/42179599971)
+was cancelled, attempt 1; newer `main` was `8a71c473` when read immediately
+afterwards. The release collection still ended with the October 24 `745b3e41`
+prerelease and twelve assets. No new complete release or manual workflow retry
+is claimed.
+
+**Earlier exact-source observation:** at **2026-11-06 06:48:05 UTC**, the
 all-events Actions query for `64d58c6e862e552ddbf24e5a0c9348cb579b8b34`
 returned **34 runs: three successful, sixteen queued, twelve pending and three
 running**. The authoritative
@@ -384,8 +423,7 @@ not a full runtime test pass.
    unsupported imported families, broader Start Layer compositions and applicable
    Server/Compare execution. Mobile SOCKS5 to paired SS/HY/WG/AWG Local paths and retained desktop SS-entry
    independent layers to SS/HY2 are now published as bounded increments. All five
-   paired mobile finals support Off, AES-256-GCM, and AES-256-GCM + XOR whitening behind ordinary SOCKS; SOCKS entry
-   layers and Server/Compare remain open for this direction. Wider
+   paired mobile finals support Off, AES-256-GCM, and AES-256-GCM + XOR whitening behind ordinary SOCKS; the independent entry/final layer matrix and its bounded packet envelopes are now published. Server/Compare remain open for this imported-entry direction. Wider
    graph/mode coverage must still be implemented and verified. Safe refusal is
    unfinished scope, not delivery.
 5. Perform real-device permission, selected-path DNS/leak, reconnect, network
