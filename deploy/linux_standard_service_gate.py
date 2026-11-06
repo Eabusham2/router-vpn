@@ -878,3 +878,14 @@ AUXILIARY['resolved-private-deep-candidate']=('./internal/systembootstrap',{
 AUXILIARY_TESTS.update({'internal/common/dns_private_dependency_test.go':'resolved-private-ds-wire',
  'internal/standardengine/resolved_private_ds_test.go':'resolved-private-ds-authority',
  'internal/systembootstrap/resolved_private_deep_linux_test.go':'resolved-private-deep-candidate'})
+
+# Protected dependency receipts cannot be manufactured from wire-only models.
+SOURCE.update({'internal/mobiletor/desktop_standard_linux_bootstrap_private_ds.go',
+ 'internal/mobiletor/desktop_standard_linux_bootstrap_private_ds_test.go'})
+AUXILIARY['resolved-private-ds-transport']=('./internal/mobiletor',{
+ 'TestLinuxStandardBootstrapPrivateDSPurpose':('host.node.example','node.example'),
+ 'TestLinuxStandardBootstrapPrivateDSJoinedChain':('original','unjoined','expired',
+ 'foreign-group','foreign-authority','reversed','missing','positive'),
+ 'TestLinuxStandardBootstrapPrivateDSRejectsOrdinary':(),
+ 'TestLinuxStandardBootstrapPrivateDSHeldOwnerCancellation':()})
+AUXILIARY_TESTS['internal/mobiletor/desktop_standard_linux_bootstrap_private_ds_test.go']='resolved-private-ds-transport'

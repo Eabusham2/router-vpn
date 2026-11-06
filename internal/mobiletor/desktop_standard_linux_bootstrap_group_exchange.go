@@ -33,6 +33,9 @@ func (g *DesktopLinuxBootstrapDNSGroup) exchangeOwnedAttempt(query context.Conte
 	if g != nil && g.dnssec != nil && g.dnssec.privateTLD && dnssec == nil {
 		return nil, errors.New("private-TLD group requires its original typed proof")
 	}
+	if g != nil && g.dnssec != nil && g.dnssec.privateDS != 0 && dnssec == nil {
+		return nil, errors.New("private DS group requires its original typed dependency")
+	}
 	var t *desktopLinuxStandardBootstrap
 	// Registered first: no member is recyclable until all later IO/cancellation
 	// callbacks have joined and the immutable response/error is final.

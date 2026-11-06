@@ -20,12 +20,14 @@ const desktopLinuxBootstrapDNSSECQueries = int(standardengine.MaxDNSSECQueries)
 // group reservation. It does not turn ordinary address-query admission into a
 // general DNS proxy, and cannot be installed on an already active group.
 type desktopLinuxBootstrapDNSSECBinding struct {
-	privateTLD bool
-	policy     []byte
-	name       string
-	kind       uint16
-	plans      map[int32]string
-	admissions int
+	privateTLD    bool
+	privateDS     uint8 // 1: exact DS dependencies; 2: joined-chain root proof
+	privateChains map[int32]*DesktopLinuxPrivateDSChain
+	policy        []byte
+	name          string
+	kind          uint16
+	plans         map[int32]string
+	admissions    int
 }
 
 func desktopLinuxBindDNSSEC(policy standardengine.ResolvedPolicy, plans []*standardengine.ResolvedDNSSECPlan, kind uint16) (*desktopLinuxBootstrapDNSSECBinding, error) {
@@ -104,6 +106,8 @@ func (p *DesktopLinuxStandardProtection) BeginBootstrapDNSSECAliasGroup(original
 // an ordinary Exchange call or changed by editing the caller's byte slice.
 type DesktopLinuxBootstrapDNSSECQuestion struct {
 	privateTLD    *standardengine.ResolvedPrivateTLDProof
+	privateDS     *standardengine.ResolvedPrivateDSDependencies
+	privateChain  *DesktopLinuxPrivateDSChain
 	policy, wire  []byte
 	name, planSHA string
 	index         int32
@@ -191,7 +195,13 @@ func (q *DesktopLinuxBootstrapDNSSECQuestion) matches(g *DesktopLinuxBootstrapDN
 	if q == nil || g == nil || g.dnssec == nil || (q.privateTLD != nil) != g.dnssec.privateTLD || q.name != g.dnssec.name || q.kind != g.dnssec.kind || q.planSHA == "" || g.dnssec.plans[q.index] != q.planSHA || !bytes.Equal(q.policy, g.dnssec.policy) || !bytes.Equal(wire, q.wire) {
 		return errors.New("DNSSEC query lost its original admitted group/plan")
 	}
-	if q.privateTLD != nil {
+	if q.privateDS != nil {
+		if err := q.matchesPrivateDS(g, wire); err != nil {
+			return err
+		}
+	} else if g.dnssec.privateDS != 0 {
+		return errors.New("private DS group requires its original dependency purpose")
+	} else if q.privateTLD != nil {
 		if standardengine.ResolvedPolicySHA256(q.privateTLD.Canonical()) != q.planSHA {
 			return errors.New("private-TLD query changed original proof binding")
 		}
