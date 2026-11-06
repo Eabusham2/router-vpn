@@ -53,11 +53,14 @@ WORKSPACE_SCOPES = (
     ('^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)', ''),
     ('^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)', ''),
     ('^TestDesktopWindowsExternalSSEntry', ''),
+    ('^TestDesktopWindowsExternalRouterServer', ''),
     ('^TestDesktopTorMTU', ''),
     ('^TestDesktopTor(Comparison|Compare|PublicCompare)', ''),
     ('^TestDesktopTorOrdinary', ''),
     ('^TestDesktopTor', '^TestDesktopTor(MTU|Comparison|Compare|PublicCompare|Ordinary)'),
-    ('^TestSpeedLab', ''),
+    ('^TestSpeedLabTor(Comparison|Compare)', ''),
+    ('^TestSpeedLabTor', '^TestSpeedLabTor(Comparison|Compare)'),
+    ('^TestSpeedLab', '^TestSpeedLabTor'),
 )
 
 
@@ -492,7 +495,12 @@ class WindowsReleaseGateTests(unittest.TestCase):
                          ("Run = '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)'", "Run = '^$'"),
                          ("Run = '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)'", "Run = '^$'"),
                          ("Run = '^TestDesktopWindowsExternalSSEntry'", "Run = '^$'"),
+                         ("Run = '^TestDesktopWindowsExternalRouterServer'", "Run = '^$'"),
+                         ("Run = '^TestSpeedLabTor(Comparison|Compare)'", "Run = '^$'"),
+                         ("Run = '^TestSpeedLabTor'", "Run = '^$'"),
                          ("Run = '^TestSpeedLab'", "Run = '^$'"),
+                         ("Skip = '^TestSpeedLabTor(Comparison|Compare)'", "Skip = '^TestSpeedLabTor'"),
+                         ("Skip = '^TestSpeedLabTor'", "Skip = '^TestSpeedLab'"),
                          ("Skip = '^TestDesktopTor(MTU|Comparison|Compare|PublicCompare|Ordinary)'", "Skip = '^TestDesktopTor'"),
                          ("Run = '^TestDesktopTor(Comparison|Compare|PublicCompare)'", "Run = '^$'"),
                          ("Run = '^TestDesktopTorOrdinary'", "Run = '^$'"),
@@ -504,13 +512,15 @@ class WindowsReleaseGateTests(unittest.TestCase):
     def test_workspace_partition_preserves_every_current_native_test_once(self):
         # The former broad Tor invocation reached its 180s aggregate after
         # steady completed cases; the active leaf had run only one second.
-        # Scan all source declarations (including platform variants) so newly
+        # Speed Lab likewise completed 69 parents before its shared budget
+        # expired. Scan all declarations (including platform variants) so newly
         # added tests inherit exactly one group without a stale allowlist.
         original = (
             '^TestDesktopRuntimeWorkspace', '^TestDesktopDNS',
             '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)',
             '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)',
             '^TestDesktopWindowsExternalSSEntry',
+            '^TestDesktopWindowsExternalRouterServer',
             '^TestDesktopTor', '^TestSpeedLab',
         )
         names = set()
@@ -535,6 +545,13 @@ class WindowsReleaseGateTests(unittest.TestCase):
             'TestDesktopWindowsExternalSSEntryActivationCapturesBothSources',
             'TestDesktopWindowsExternalSSEntrySpeedLabRestoresBothSources',
             'TestDesktopWindowsExternalSSEntryAlwaysOffRetriesOriginalOwner',
+            'TestDesktopWindowsExternalRouterServerPublicLifecycle',
+            'TestDesktopWindowsExternalRouterServerRestoresOriginal',
+            'TestDesktopWindowsExternalRouterServerSources',
+            'TestSpeedLabTorCompareRestoresOriginalProvedExecutionWithoutReselection',
+            'TestSpeedLabTorShippingPrepareStartAndRestoreExactNativePath',
+            'TestSpeedLabTorPreparedTrialRejectsStaleAdmissionBeforeStop',
+            'TestSpeedLabCapturedTunnelCancellationJoinsLateDial',
         ):
             self.assertIn(name, expected)
 

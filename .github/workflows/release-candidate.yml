@@ -254,13 +254,18 @@ jobs:
             @{ Run = '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)'; Skip = '' },
             @{ Run = '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)'; Skip = '' },
             @{ Run = '^TestDesktopWindowsExternalSSEntry'; Skip = '' },
+            @{ Run = '^TestDesktopWindowsExternalRouterServer'; Skip = '' },
             # Native job 125676324275 exhausted the broad Tor package budget
             # while its active restore leaf had run only 1s. Keep 180s per group.
             @{ Run = '^TestDesktopTorMTU'; Skip = '' },
             @{ Run = '^TestDesktopTor(Comparison|Compare|PublicCompare)'; Skip = '' },
             @{ Run = '^TestDesktopTorOrdinary'; Skip = '' },
             @{ Run = '^TestDesktopTor'; Skip = '^TestDesktopTor(MTU|Comparison|Compare|PublicCompare|Ordinary)' },
-            @{ Run = '^TestSpeedLab'; Skip = '' }
+            # Native job 127732013613 completed 69 Speed Lab parents before
+            # its shared 180s expired. Keep every case and the same bound.
+            @{ Run = '^TestSpeedLabTor(Comparison|Compare)'; Skip = '' },
+            @{ Run = '^TestSpeedLabTor'; Skip = '^TestSpeedLabTor(Comparison|Compare)' },
+            @{ Run = '^TestSpeedLab'; Skip = '^TestSpeedLabTor' }
           )
           foreach ($scope in $scopes) {
             $arguments = @('test', '-v', '-count=1', '-timeout=180s', './cmd/client', '-run', $scope.Run)

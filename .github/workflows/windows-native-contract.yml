@@ -449,7 +449,11 @@ jobs:
             @{ Run = '^TestDesktopTor(Comparison|Compare|PublicCompare)'; Skip = '' },
             @{ Run = '^TestDesktopTorOrdinary'; Skip = '' },
             @{ Run = '^TestDesktopTor'; Skip = '^TestDesktopTor(MTU|Comparison|Compare|PublicCompare|Ordinary)' },
-            @{ Run = '^TestSpeedLab'; Skip = '' }
+            # Native job 127732013613 completed 69 Speed Lab parents before
+            # its shared 180s expired. Keep every case and the same bound.
+            @{ Run = '^TestSpeedLabTor(Comparison|Compare)'; Skip = '' },
+            @{ Run = '^TestSpeedLabTor'; Skip = '^TestSpeedLabTor(Comparison|Compare)' },
+            @{ Run = '^TestSpeedLab'; Skip = '^TestSpeedLabTor' }
           )
           foreach ($scope in $scopes) {
             $arguments = @('test', '-v', '-count=1', '-timeout=180s', './cmd/client', '-run', $scope.Run)
