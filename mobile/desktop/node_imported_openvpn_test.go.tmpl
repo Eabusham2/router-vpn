@@ -1,0 +1,703 @@
+//go:build linux && !android && routervpn_openvpn_remote_test
+
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	HY "github.com/sagernet/sing-box/protocol/hysteria2"
+	OV "github.com/sagernet/sing-box/protocol/openvpn"
+	OVL "github.com/sagernet/sing-box/protocol/routervpnopenvpnlayers"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	WG "github.com/sagernet/sing-box/protocol/wireguard"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
+)
+
+func TestRouterVPNImportedOpenVPNTCPNativeTraffic(t *testing.T) {
+	desktopImportedOpenVPNMatrix(t, "tcp")
+}
+func TestRouterVPNImportedOpenVPNUDPNativeTraffic(t *testing.T) {
+	desktopImportedOpenVPNMatrix(t, "udp")
+}
+func desktopImportedOpenVPNMatrix(t *testing.T, network string) {
+	for _, mode := range []string{"shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"} {
+		for _, entryLayer := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, finalLayer := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				label := mode + "/" + entryLayer + "/" + finalLayer
+				t.Run(label, func(t *testing.T) { desktopImportedOpenVPNTraffic(t, network, mode, entryLayer, finalLayer) })
+			}
+		}
+	}
+}
+
+// Compile the exact imported source with this independent provider's genuine
+// credentials before starting the native graph. Only terminal captured tuples
+// map to private loopback listeners. This is userspace encrypted composition,
+// not an operating-system interface or physical-policy acceptance fixture.
+func desktopImportedOpenVPNTraffic(t *testing.T, network, mode, entryLayer, finalLayer string, scenarios ...string) {
+	fault := ""
+	if len(scenarios) > 0 {
+		fault = scenarios[0]
+	}
+	directory := os.Getenv("ROUTERVPN_IMPORTED_OPENVPN_FIXTURES")
+	if directory == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_OPENVPN_FIXTURES") == "1" {
+			t.Fatal("required original OpenVPN sources absent")
+		}
+		t.Skip("mandatory native gate supplies captured sources")
+	}
+	name := "openvpn--" + network + "--final-" + mode + "--" + entryLayer + "--" + finalLayer + ".json"
+	raw, err := os.ReadFile(filepath.Join(directory, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var args []string
+	if json.Unmarshal(raw, &args) != nil || len(args) != 9 {
+		t.Fatal("original OpenVPN capture invalid")
+	}
+	compile := func() *mobilemultihop.Controller {
+		t.Helper()
+		p, e := mobilemultihop.NewImportedEntry(args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+		if e != nil {
+			t.Fatal(e)
+		}
+		return p
+	}
+	original := compile()
+	if original.SourceSHA256() != args[7] || original.Config() != args[8] {
+		t.Fatal("original compiler capture drift")
+	}
+	ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 12*time.Second)
+	defer cancel()
+	encode := base64.StdEncoding.EncodeToString
+	marshal := func(v any) string {
+		b, e := json.Marshal(v)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return string(b)
+	}
+	var assets map[string]string
+	if json.Unmarshal([]byte(args[3]), &assets) != nil {
+		t.Fatal("paired assets absent")
+	}
+	var providerKey, consumerKey *ecdh.PrivateKey
+	var secret []byte
+	var finalCert tls.Certificate
+	if mode == "hysteria2" {
+		var ca string
+		finalCert, ca = desktopImportedFinalCertificate(t)
+		b, e := base64.StdEncoding.DecodeString(assets["sing-box.json"])
+		if e != nil {
+			t.Fatal(e)
+		}
+		var g map[string]any
+		if json.Unmarshal(b, &g) != nil {
+			t.Fatal("paired HY source absent")
+		}
+		g["outbounds"].([]any)[0].(map[string]any)["tls"].(map[string]any)["server_name"] = "captured-final.example"
+		assets["sing-box.json"] = encode([]byte(marshal(g)))
+		assets["cert.pem"] = encode([]byte(ca))
+	} else if mode != "shadowsocks" {
+		providerKey, err = ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		consumerKey, err = ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		secret = make([]byte, 32)
+		if _, err = rand.Read(secret); err != nil {
+			t.Fatal(err)
+		}
+		defer clear(secret)
+		asset := "awg.conf"
+		if mode == "wg" {
+			asset = "wg.conf"
+		}
+		b, e := base64.StdEncoding.DecodeString(assets[asset])
+		if e != nil {
+			t.Fatal(e)
+		}
+		lines := strings.Split(string(b), "\n")
+		for i, line := range lines {
+			field, _, ok := strings.Cut(line, "=")
+			if !ok {
+				continue
+			}
+			switch strings.TrimSpace(field) {
+			case "PrivateKey":
+				lines[i] = "PrivateKey = " + encode(consumerKey.Bytes())
+			case "PublicKey":
+				lines[i] = "PublicKey = " + encode(providerKey.PublicKey().Bytes())
+			case "PresharedKey":
+				lines[i] = "PresharedKey = " + encode(secret)
+			case "Address":
+				lines[i] = "Address = 10.79.0.2/32, fd79:79::2/128"
+			}
+		}
+		assets[asset] = encode([]byte(strings.Join(lines, "\n")))
+		if mode == "wg" {
+			var profile map[string]any
+			_ = json.Unmarshal([]byte(args[4]), &profile)
+			hash := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + encode(providerKey.PublicKey().Bytes())))
+			profile["node_proof_id"] = hex.EncodeToString(hash[:])
+			args[4] = marshal(profile)
+		}
+	}
+	args[3] = marshal(assets)
+	plan := compile()
+	graph := map[string]any{}
+	_ = json.Unmarshal([]byte(plan.Config()), &graph)
+	byTag := desktopImportedSOCKSGraph(graph)
+	last := byTag[mobilemultihop.LocalTag]
+	var meta mobilemultihop.Metadata
+	_ = json.Unmarshal([]byte(plan.Metadata()), &meta)
+	if meta.EntryAPI != "" || meta.EntryToken != "" || meta.EntryNodeID != "" {
+		t.Fatal("imported transport invented paired authority")
+	}
+	paired := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" || r.Header.Get("Authorization") != "Bearer "+meta.ExitToken {
+			http.Error(w, "foreign", 403)
+			return
+		}
+		fmt.Fprintf(w, `{"ok":true,"node_id":%q,"proof":"router-vpn-private-agent-v1"}`, meta.ExitNodeID)
+	}))
+	defer paired.Close()
+	publicCert, publicCA := desktopImportedFinalCertificate(t)
+	public := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "1.1.1.1" || r.URL.Path != "/cdn-cgi/trace" {
+			http.Error(w, "foreign", 403)
+			return
+		}
+		fmt.Fprintln(w, "ip=203.0.113.88")
+	}))
+	public.TLS = &tls.Config{Certificates: []tls.Certificate{publicCert}, MinVersion: tls.VersionTLS12}
+	public.StartTLS()
+	defer public.Close()
+	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsServer := &dns.Server{PacketConn: packet, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		r := new(dns.Msg).SetReply(q)
+		r.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 1}, A: net.ParseIP("93.184.216.34")}}
+		_ = w.WriteMsg(r)
+	})}
+	dnsDone := make(chan error, 1)
+	go func() { dnsDone <- dnsServer.ActivateAndServe() }()
+	defer func() { _ = dnsServer.Shutdown(); _ = packet.Close(); <-dnsDone }()
+	selected := graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)
+	if selected["type"] != "udp" || selected["detour"] != "proxy" {
+		t.Fatal("selected UDP DNS escaped final")
+	}
+	dnsPort := 53
+	if raw, present := selected["server_port"]; present {
+		port, ok := raw.(float64)
+		if !ok || port < 1 || port > 65535 || port != float64(int(port)) {
+			t.Fatal("selected resolver port invalid")
+		}
+		dnsPort = int(port)
+	}
+	dnsTarget := net.JoinHostPort(selected["server"].(string), fmt.Sprint(dnsPort))
+	newServer := func(routes []desktopNodeLayerRoute) *desktopNodeLayerServer {
+		c, stop := context.WithCancel(ctx)
+		t.Cleanup(stop)
+		return &desktopNodeLayerServer{ctx: c, cancel: stop, connections: map[io.Closer]bool{}, routes: routes}
+	}
+	finalServer := newServer([]desktopNodeLayerRoute{{Network: "tcp", Destination: "10.77.0.1:8787", Physical: paired.Listener.Addr().String()}, {Network: "udp", Destination: dnsTarget, Physical: packet.LocalAddr().String()}})
+	var target, physical string
+	if mode == "shadowsocks" {
+		peer := desktopImportedSOCKSLayerProvider(t, finalServer, last, "")
+		defer peer.close()
+		target, physical = desktopImportedSOCKSAddress(last), peer.address
+	} else if mode == "hysteria2" {
+		p, e := net.ListenPacket("udp4", "127.0.0.1:0")
+		if e != nil {
+			t.Fatal(e)
+		}
+		stop := desktopStartImportedFinalHysteria(t, finalServer, p, finalCert, last["password"].(string), last["obfs"].(map[string]any)["password"].(string), &desktopExternalHysteriaObservation{})
+		defer stop()
+		target, physical = desktopImportedSOCKSAddress(last), p.LocalAddr().String()
+	} else {
+		rules := map[string]desktopReferenceRule{}
+		for _, r := range finalServer.routes {
+			a := netip.MustParseAddrPort(r.Destination)
+			rules[r.Network+"/"+r.Destination] = desktopReferenceRule{Network: r.Network, Address: a.Addr().String(), Port: int(a.Port()), Target: r.Physical}
+		}
+		request := desktopExternalInstalledWGRequest{PrivateKey: encode(providerKey.Bytes()), ClientPublicKey: encode(consumerKey.PublicKey().Bytes()), PresharedKey: encode(secret)}
+		parameters, backend := "", startDesktopDarwinWGDevice
+		if mode != "wg" {
+			values := map[string]string{}
+			for k, v := range last["amnezia"].(map[string]any) {
+				values[k] = v.(string)
+			}
+			parameters, backend = desktopDarwinAmneziaBackend(t, desktopExternalInstalledAWGRequest{request, values})
+		}
+		peer := desktopInstalledPacketDevice(t, finalServer, request, netip.MustParseAddr("127.0.0.1"), parameters, backend, rules, true)
+		defer peer.close()
+		originalPeer := last["peers"].([]any)[0].(map[string]any)
+		target, physical = net.JoinHostPort(originalPeer["address"].(string), fmt.Sprint(int(originalPeer["port"].(float64)))), peer.address
+	}
+	target, physical, verifyFinal := desktopImportedSOCKSInstallFinal(t, ctx, byTag, last, target, physical, "success")
+	defer verifyFinal()
+	routes := []desktopNodeLayerRoute{{Network: "udp", Destination: target, Physical: physical}, {Network: "tcp", Destination: "1.1.1.1:443", Physical: public.Listener.Addr().String()}}
+	if mode == "shadowsocks" {
+		routes = append(routes, desktopNodeLayerRoute{Network: "tcp", Destination: target, Physical: physical})
+	}
+	// The true provider negotiates this exact1500-byte inner port. The compiler's
+	// complete final control/data envelopes must fit it; no capacity is fabricated.
+	parent := newServer(nil)
+	loopback := netip.MustParseAddr("127.0.0.1")
+	providerCapture := &desktopOpenVPNProviderCapture{Remote: netip.MustParseAddrPort("203.0.113.24:1194"), MTU: 1500, Routes: routes}
+	if fault == "fallback" {
+		providerCapture.FallbackPort = 1193
+	}
+	entry := startDesktopInstalledOpenVPNProviderCaptured(t, parent, desktopExternalInstalledPeerRequest{OpenVPNNetwork: network, OpenVPNFallback: fault == "fallback"}, "", "", loopback, loopback, true, 2, providerCapture)
+	defer entry.close()
+	var source, capture map[string]any
+	_ = json.Unmarshal([]byte(args[0]), &source)
+	_ = json.Unmarshal([]byte(args[1]), &capture)
+	profile := capture["profile"].(map[string]any)
+	external := profile["external"].(map[string]any)
+	external["openvpn"] = map[string]any{"config": entry.profile, "username": entry.username, "password": entry.password}
+	compiled, err := nativeopenvpn.CompileProfile(nativeopenvpn.Profile{Config: entry.profile, Username: entry.username, Password: entry.password}, "custom-exit", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source["endpoints"] = []any{compiled}
+	args[0], args[1] = marshal(source), marshal(capture)
+	nativePlan := compile()
+	nativeGraph := map[string]any{}
+	_ = json.Unmarshal([]byte(nativePlan.Config()), &nativeGraph)
+	nativeTags := desktopImportedSOCKSGraph(nativeGraph)
+	if !reflect.DeepEqual(last, nativeTags[mobilemultihop.LocalTag]) {
+		t.Fatal("entry credentials mutated independent paired final")
+	}
+	byTag = nativeTags
+	last = byTag[mobilemultihop.LocalTag]
+	firstRaw := byTag["entry-wg"]
+	outer := desktopImportedSOCKSOuter(t, byTag, firstRaw, "")
+	virtual, originalPhysical := entry.address, entry.entryRoutes[0].Target
+	var refused func() bool
+	if outer["tag"] != firstRaw["tag"] {
+		if outer["type"] != nativeopenvpn.LayerMapType {
+			t.Fatal("OpenVPN public remote was not retained by original layer mapper")
+		}
+		mapping := outer["layers"].(map[string]any)["203.0.113.24"].(map[string]any)
+		api, parseErr := url.Parse(mapping["api"].(string))
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		capturedRemotes, e := nativeopenvpn.Remotes(firstRaw)
+		if e != nil {
+			t.Fatal(e)
+		}
+		privateRoutes := []desktopNodeLayerRoute{}
+		for _, remote := range capturedRemotes {
+			found := ""
+			for _, route := range entry.entryRoutes {
+				if route.Address == remote.Host && route.Port == remote.Port && route.Network == remote.Network {
+					found = route.Target
+				}
+			}
+			if found == "" {
+				t.Fatal("mapper lost an original provider listener")
+			}
+			privateRoutes = append(privateRoutes, desktopNodeLayerRoute{Network: remote.Network, Destination: net.JoinHostPort(api.Hostname(), fmt.Sprint(remote.Port)), Physical: found})
+		}
+		layerServer := newServer(privateRoutes)
+		layerRaw := map[string]any{}
+		_ = json.Unmarshal([]byte(marshal(mapping["transport"])), &layerRaw)
+		if outer["mode"] == "aes-256-gcm+xor-whitening" {
+			layerRaw["type"] = "routervpn-aes-xor"
+			layerRaw["server_port"] = float64(8389)
+		}
+		layer := desktopImportedSOCKSLayerProvider(t, layerServer, layerRaw, fault)
+		if fault == "entry-layer-key" || fault == "entry-whitening" {
+			refused = func() bool {
+				stats := layer.stats()
+				return stats.AuthTCP+stats.AuthUDP > 0 && stats.Streams+stats.Packets == 0
+			}
+		}
+		if fault == "private-target" {
+			changed := *api
+			changed.Host = "10.93.0.254:8443"
+			mapping["api"] = changed.String()
+			refused = func() bool { return layerServer.rejectedUDP.Load() > 0 }
+		}
+		defer layer.close()
+		virtual, originalPhysical = desktopImportedSOCKSAddress(layerRaw), layer.address
+		outer["detour"] = "captured-physical"
+	} else {
+		firstRaw["detour"] = "captured-physical"
+	}
+	lower := &desktopImportedOpenVPNPhysical{desktopSSReferenceLower: &desktopSSReferenceLower{virtual: virtual, original: originalPhysical}, network: network}
+	if fault == "fallback" && entryLayer == "off" {
+		lower.fallbackVirtual = net.JoinHostPort(entry.entryRoutes[1].Address, fmt.Sprint(entry.entryRoutes[1].Port))
+		lower.fallbackPhysical = entry.entryRoutes[1].Target
+	}
+	foreignNetwork := "tcp"
+	if network == "tcp" {
+		foreignNetwork = "udp"
+	}
+	unexpected, refusal := lower.DialContext(ctx, foreignNetwork, M.ParseSocksaddr(virtual))
+	if unexpected != nil {
+		_ = unexpected.Close()
+	}
+	if refusal == nil || lower.calls.Load() != 0 || lower.denied.Load() != 1 {
+		t.Fatal("physical owner admitted a different captured transport")
+	}
+	manager := &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}}
+	owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
+	owned = service.ContextWith[adapter.NetworkManager](owned, &desktopImportedPacketNetwork{})
+	ingress := &desktopImportedOpenVPNIngress{t: t}
+	owned = service.ContextWith[adapter.Router](owned, ingress)
+	defer func() {
+		if ingress.active.Load() != 0 {
+			t.Error("native entry routed unsolicited traffic before retirement")
+		}
+	}()
+	if outer["tag"] != firstRaw["tag"] {
+		mapper := desktopImportedOpenVPNNative(t, owned, outer)
+		manager.owners[outer["tag"].(string)] = mapper
+		before := lower.calls.Load()
+		for _, probe := range []struct{ network, address string }{
+			{network, "203.0.113.25:1194"}, {network, "203.0.113.24:1195"},
+			{network, "10.93.0.1:1194"}, {foreignNetwork, "203.0.113.24:1194"},
+		} {
+			connection, e := mapper.DialContext(ctx, probe.network, M.ParseSocksaddr(probe.address))
+			if connection != nil {
+				_ = connection.Close()
+			}
+			if e == nil || lower.calls.Load() != before {
+				t.Fatal("original OpenVPN mapper admitted foreign public/private identity", probe)
+			}
+		}
+	}
+	if fault == "entry-auth" {
+		firstRaw["password"] = "foreign-independent-openvpn-password"
+		refused = func() bool { return entry.stats().authFailures > 0 }
+	}
+	first := desktopImportedOpenVPNNative(t, owned, firstRaw).(*OV.ClientEndpoint)
+	defer func() {
+		ingress.retiring.Store(true)
+		if e := first.Close(); e != nil {
+			t.Error("original OpenVPN owner retirement failed", e)
+		}
+	}()
+	manager.owners["entry-wg"] = first
+	defer func() {
+		for tag, owner := range manager.owners {
+			if tag != "entry-wg" && tag != "captured-physical" {
+				if closer, ok := owner.(io.Closer); ok {
+					_ = closer.Close()
+				}
+			}
+		}
+	}()
+	for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+		if e := first.Start(stage); e != nil {
+			t.Fatal(e)
+		}
+	}
+	limit := 3 * time.Second
+	if fault == "fallback" {
+		// Use the original native fallback fixture's six-second proof budget:
+		// the supervisor waits 1s after refusal and 2s after address exhaustion.
+		limit = 6 * time.Second
+	}
+	deadline := time.Now().Add(limit)
+	var receipt nativeopenvpn.RemoteReceipt
+	var mtu uint32
+	for {
+		receipt, mtu, err = first.RouterVPNConnectedCapacityContext(ctx)
+		if refused != nil {
+			if err == nil {
+				t.Fatal("rejected entry gained authenticated receipt", fault, receipt)
+			}
+			if refused() {
+				stats := entry.stats()
+				if stats.streams != 0 || stats.packets != 0 {
+					t.Fatal("rejected entry gained decrypted final traffic", fault, stats)
+				}
+				return
+			}
+		}
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("original encrypted entry did not authenticate", err, entry.stats())
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if !receipt.Matches(firstRaw) || !receipt.Matches(compiled) {
+		t.Fatal("authenticated native receipt lost its exact original public tuple", receipt)
+	}
+	if fault == "fallback" {
+		stats := entry.stats()
+		if stats.fallbackAttempts < 1 || stats.firstSequence == 0 || stats.finalSequence <= stats.firstSequence || receipt.Generation < 2 || receipt.Port != 1194 {
+			t.Fatal("native fallback did not refuse the first captured TCP listener before authenticating the original final", receipt, stats)
+		}
+	}
+	if mtu != 1500 || receipt.Generation == 0 {
+		t.Fatal("native entry lost exact negotiated capacity", receipt, mtu)
+	}
+	desktopImportedSOCKSNativeLayers(t, owned, manager, byTag, firstRaw, last)
+	final := desktopImportedOpenVPNNative(t, owned, last)
+	defer func() { ingress.retiring.Store(true); _ = final.(io.Closer).Close() }()
+	if lifecycle, ok := final.(adapter.Lifecycle); ok {
+		for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+			if e := lifecycle.Start(stage); e != nil {
+				t.Fatal(e)
+			}
+		}
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(publicCA)) {
+		t.Fatal("public root absent")
+	}
+	publicTransport := &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "captured-final.example", MinVersion: tls.VersionTLS12}, DialContext: func(c context.Context, n, a string) (net.Conn, error) {
+		return first.DialContext(c, n, M.ParseSocksaddr(a))
+	}}
+	defer publicTransport.CloseIdleConnections()
+	proofCtx, stop := context.WithTimeout(ctx, 2*time.Second)
+	defer stop()
+	request, _ := http.NewRequestWithContext(proofCtx, "GET", "https://1.1.1.1/cdn-cgi/trace", nil)
+	response, err := (&http.Client{Transport: publicTransport}).Do(request)
+	if err != nil {
+		t.Fatal("entry public proof did not traverse original encrypted entry", err)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1024))
+	_ = response.Body.Close()
+	if err != nil || strings.TrimSpace(string(body)) != "ip=203.0.113.88" {
+		t.Fatal("entry public identity rejected", err)
+	}
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(c context.Context, n, a string) (net.Conn, error) {
+		return final.DialContext(c, n, M.ParseSocksaddr(a))
+	}}
+	defer transport.CloseIdleConnections()
+	request, _ = http.NewRequestWithContext(proofCtx, "GET", meta.ExitAPI+"/health", nil)
+	request.Header.Set("Authorization", "Bearer "+meta.ExitToken)
+	response, err = (&http.Client{Transport: transport}).Do(request)
+	if err != nil {
+		t.Fatal("paired private proof did not traverse encrypted final", err)
+	}
+	var proof struct {
+		OK    bool   `json:"ok"`
+		Node  string `json:"node_id"`
+		Proof string `json:"proof"`
+	}
+	err = json.NewDecoder(response.Body).Decode(&proof)
+	_ = response.Body.Close()
+	if err != nil || !proof.OK || proof.Node != meta.ExitNodeID || proof.Proof != "router-vpn-private-agent-v1" {
+		t.Fatal("paired proof lost original authority", err)
+	}
+	c, err := final.DialContext(proofCtx, "udp", M.ParseSocksaddr(dnsTarget))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+	question := new(dns.Msg).SetQuestion("captured.example.", dns.TypeA)
+	wire, _ := question.Pack()
+	if _, err = c.Write(wire); err != nil {
+		t.Fatal(err)
+	}
+	answer := make([]byte, 4096)
+	n, err := c.Read(answer)
+	if err != nil {
+		t.Fatal("selected UDP DNS did not traverse encrypted final", err)
+	}
+	reply := new(dns.Msg)
+	if reply.Unpack(answer[:n]) != nil || len(reply.Answer) != 1 || reply.Answer[0].(*dns.A).A.String() != "93.184.216.34" {
+		t.Fatal("selected final resolver response changed")
+	}
+	after, capacity, err := first.RouterVPNConnectedCapacityContext(ctx)
+	if err != nil || after != receipt || capacity != mtu {
+		t.Fatal("paired proof changed original entry authority", err)
+	}
+	if lower.denied.Load() != 1 {
+		t.Fatal("native path attempted an unselected physical transport")
+	}
+	stats := entry.stats()
+	if stats.streams == 0 || stats.packets == 0 || network == "tcp" && stats.connections == 0 || network == "udp" && stats.physicalUDP == 0 {
+		t.Fatal("actual OpenVPN encrypted/decrypted transport missing", stats)
+	}
+}
+
+func desktopImportedOpenVPNNative(t *testing.T, ctx context.Context, raw map[string]any) adapter.Outbound {
+	t.Helper()
+	body, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag := raw["tag"].(string)
+	var out adapter.Outbound
+	switch raw["type"] {
+	case nativeopenvpn.LayerMapType:
+		fields := map[string]any{}
+		for key, value := range raw {
+			if key != "tag" && key != "type" {
+				fields[key] = value
+			}
+		}
+		body, err = json.Marshal(fields)
+		var o OVL.Options
+		if err == nil {
+			err = json.Unmarshal(body, &o)
+		}
+		if err == nil {
+			out, err = OVL.NewOutbound(ctx, nil, log.NewNOPFactory().Logger(), tag, o)
+		}
+	case "openvpn-client":
+		var o option.OpenVPNClientEndpointOptions
+		err = json.Unmarshal(body, &o)
+		if err == nil {
+			out, err = OV.NewClientEndpoint(ctx, service.FromContext[adapter.Router](ctx), log.NewNOPFactory().Logger(), tag, o)
+		}
+	case "wireguard":
+		var o option.WireGuardEndpointOptions
+		err = json.Unmarshal(body, &o)
+		if err == nil {
+			out, err = WG.NewEndpoint(ctx, nil, log.NewNOPFactory().Logger(), tag, o)
+		}
+	case mobilemultihop.AmneziaType:
+		var o Options
+		err = json.Unmarshal(body, &o)
+		if err == nil {
+			out, err = NewEndpoint(ctx, nil, log.NewNOPFactory().Logger(), tag, o)
+		}
+	case "hysteria2":
+		var o option.Hysteria2OutboundOptions
+		err = json.Unmarshal(body, &o)
+		if err == nil {
+			out, err = HY.NewOutbound(ctx, nil, log.NewNOPFactory().Logger(), tag, o)
+		}
+	case "shadowsocks":
+		var o option.ShadowsocksOutboundOptions
+		err = json.Unmarshal(body, &o)
+		if err == nil {
+			out, err = SS.NewOutbound(ctx, nil, log.NewNOPFactory().Logger(), tag, o)
+		}
+	case "routervpn-aes-xor":
+		out = desktopImportedSOCKSNativeLayer(t, ctx, raw)
+	default:
+		t.Fatal("unknown captured native owner", raw["type"])
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// Preserve the captured original protocol as well as address. A UDP import
+// cannot silently use a TCP socket, or the converse, at the physical boundary.
+type desktopImportedOpenVPNPhysical struct {
+	*desktopSSReferenceLower
+	network                           string
+	fallbackVirtual, fallbackPhysical string
+	denied                            atomic.Int64
+}
+
+func (d *desktopImportedOpenVPNPhysical) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network != d.network {
+		d.denied.Add(1)
+		return nil, errors.New("OpenVPN original physical transport changed")
+	}
+	if d.fallbackVirtual != "" && destination.String() == d.fallbackVirtual {
+		d.calls.Add(1)
+		return (&net.Dialer{}).DialContext(ctx, network, d.fallbackPhysical)
+	}
+	return d.desktopSSReferenceLower.DialContext(ctx, network, destination)
+}
+
+// The shipping Box supplies an inbound router. This direct userspace fixture
+// has no inbound application service: retire late datagrams on their original
+// native callback, and reject any such routing during the active proof path.
+type desktopImportedOpenVPNIngress struct {
+	adapter.Router
+	t        *testing.T
+	retiring atomic.Bool
+	active   atomic.Int64
+}
+
+func (r *desktopImportedOpenVPNIngress) reject(ctx context.Context, closer io.Closer, done N.CloseHandlerFunc) {
+	if !r.retiring.Load() && ctx.Err() == nil {
+		r.active.Add(1)
+	}
+	err := closer.Close()
+	if done != nil {
+		done(err)
+	}
+}
+func (r *desktopImportedOpenVPNIngress) RouteConnectionEx(ctx context.Context, c net.Conn, _ adapter.InboundContext, done N.CloseHandlerFunc) {
+	r.reject(ctx, c, done)
+}
+func (r *desktopImportedOpenVPNIngress) RoutePacketConnectionEx(ctx context.Context, c N.PacketConn, _ adapter.InboundContext, done N.CloseHandlerFunc) {
+	r.reject(ctx, c, done)
+}
+
+func TestRouterVPNImportedOpenVPNNativeFailover(t *testing.T) {
+	for _, layer := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		t.Run(layer, func(t *testing.T) { desktopImportedOpenVPNTraffic(t, "tcp", "shadowsocks", layer, "off", "fallback") })
+	}
+}
+
+func TestRouterVPNImportedOpenVPNNativeRefusals(t *testing.T) {
+	for _, network := range []string{"tcp", "udp"} {
+		for _, layer := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			faults := []string{"entry-auth"}
+			if layer != "off" {
+				faults = append(faults, "entry-layer-key")
+				if network == "udp" {
+					faults = append(faults, "private-target")
+				}
+			}
+			if layer == "aes-256-gcm+xor-whitening" {
+				faults = append(faults, "entry-whitening")
+			}
+			for _, fault := range faults {
+				t.Run(network+"/"+layer+"/"+fault, func(t *testing.T) { desktopImportedOpenVPNTraffic(t, network, "shadowsocks", layer, "off", fault) })
+			}
+		}
+	}
+}

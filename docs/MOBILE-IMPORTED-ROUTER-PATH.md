@@ -14,11 +14,13 @@ implement this Local direction for the following captured sources:
 | WireGuard or AmneziaWG | Shadowsocks or Hysteria2 | 36 |
 | WireGuard or AmneziaWG | WireGuard, AmneziaWG Fast or AmneziaWG Strong | 54 |
 | SOCKS5 | Shadowsocks, Hysteria2, WireGuard, AmneziaWG Fast, AmneziaWG Strong | 45 |
+| OpenVPN, TCP or UDP outer transport | Shadowsocks, Hysteria2, WireGuard, AmneziaWG Fast, AmneziaWG Strong | 90 |
 | HTTP CONNECT or HTTPS CONNECT | Shadowsocks 2022, both Start Layers Off, captured Home/custom literal TCP DNS | 12 |
 
-The 247 captured cases retain the existing 235 proxy/packet/SOCKS5 cases and
-add twelve CONNECT cases: two entry protocols, three SS2022 final ciphers and
-two selected literal TCP DNS policies. Each SOCKS5 final supports all nine independent entry/final
+The 337 captured cases retain all 247 published proxy/packet/SOCKS5/CONNECT
+cases and add 90 OpenVPN cases: two original outer networks, five paired finals
+and nine independent entry/final layer pairs. The twelve retained CONNECT cases
+use two entry protocols, three SS2022 final ciphers and two selected literal TCP DNS policies. Each SOCKS5 final supports all nine independent entry/final
 Start Layer pairs. The earlier five pairs with both layers Off, four
 SOCKS5-to-SS/Hysteria pairs with only a final layer, six SOCKS5-to-WG/AWG
 pairs with only a final layer, and ten pairs with only an entry layer remain
@@ -74,6 +76,17 @@ Start Layer requires the paired final's own original assets. A missing layer
 provision, a provision belonging to the other node, or a changed credential
 prevents construction. No second system VPN is started.
 
+An OpenVPN entry retains its exact inline profile, ordered public remotes,
+original TCP/UDP network, TLS trust, username/password and bounded supported
+profile directives. It uses the existing userspace native packet endpoint in the
+same graph. System-device mode, scripts and unsupported profile directives remain
+refused. An enabled entry layer uses the existing source-validated per-remote
+layer map even for one remote; the authenticated receipt continues to name the
+original public remote, while only the owned physical transport reaches the
+captured private service. The final's independent source and credentials remain
+separate. No Router API, response-probe authority or second system VPN is
+invented for the imported entry.
+
 A CONNECT entry retains its original proxy address, port and credentials;
 HTTPS also retains the original TLS name and trust. The paired SS2022 final
 keeps its separate credentials and all three supported ciphers. This initial
@@ -101,7 +114,7 @@ limitations, not merely missing credentials, live access or physical tests.
 |---|---|---|
 | Imported HTTP/HTTPS CONNECT → paired Shadowsocks with datagrams or Start Layers | The implemented Local SS2022 path requires both layers Off, exact selected literal TCP DNS and no `udp_over_tcp` field in the original final. Default Home UDP, other DNS transports and layered CONNECT remain unimplemented. | Capture authenticated service authority for any compatible datagram transport, preserve the exact selected DNS policy and independently provisioned layers, and prove the real encrypted graph before extending admission. |
 | Imported HTTP/HTTPS CONNECT → paired Hysteria2/WG/AWG | The same admission excludes these paths. HTTP CONNECT is TCP-only; these final transports require datagrams. Existing external composition correctly rejects a TCP-only predecessor for a UDP-required exit. | An implemented compatible transport design is required. No UDP association, UDP-over-TCP capability or supported final may be invented from successful TCP CONNECT. |
-| Other imported entry protocols and paired final families | The imported constructor and both mobile host adapters admit the seven entry labels and five paired final modes in this document, subject to each entry's specific bounds. The ordinary external protocol catalogue additionally supports OpenVPN; Trojan/VLESS are not in that catalogue. | Implement and validate the particular protocol/source capture, encrypted graph, credential/reference ownership, restoration and native path before offering it. New protocols need their own import/admission work; existing standalone support is not proof of this direction. |
+| Other imported entry protocols and paired final families | The imported constructor and both mobile host adapters admit the eight entry labels and five paired final modes in this document, subject to each entry's specific bounds. OpenVPN now has the bounded Local composition described here; Trojan/VLESS are not in the ordinary external catalogue. | Implement and validate the particular protocol/source capture, encrypted graph, credential/reference ownership, restoration and native path before offering it. New protocols need their own import/admission work; existing standalone support is not proof of this direction. |
 | Imported entry → paired final with Server or Compare | The constructor requires captured Local execution; both host adapters enforce Local and restoration deliberately does not invent a Compare winner. | Design actual execution and proof authority, measurement/comparison and restore semantics for this direction. An ordinary imported entry has no paired Router API/token; a public-address proof cannot grant server-side authority. |
 
 Any extension of CONNECT→SS must retain the final-selected Home/custom DNS
@@ -126,7 +139,7 @@ stages.
 
 Android's multihop editor lists eligible imported entries alongside Router
 entries. Choosing an imported SS2022, Hysteria2, WireGuard, AmneziaWG, SOCKS5,
-HTTP CONNECT or HTTPS CONNECT entry allows
+HTTP CONNECT, HTTPS CONNECT or OpenVPN entry allows
 selection of its paired Router final and an eligible complete transport from
 the table above. The picker
 compiles each offered choice from captured sources and retains the final-file
@@ -241,6 +254,17 @@ entry outbound; it does not relax general hop validation. Network changes,
 owner replacement, or retirement revoke those factories and their retained
 operations.
 
+OpenVPN path authority captures the exact authenticated public remote,
+generation, connection timestamp and negotiated native PortMTU. The initial
+capacity must satisfy the complete compiled entry envelope. Any subsequent
+receipt or MTU change, including an increase, revokes the old proof and its
+measurement factories; revalidation captures a new owner. A cancelled measurement
+cannot publish a result and does not by itself retire an otherwise unchanged
+path. The new native receipt/capacity observation uses bounded original-instance
+and endpoint reads. This does not establish boundedness of every generic proof
+call: existing engine `Identity()` and controller `requireValid()` paths still
+reach a separate unbounded instance read and need a focused follow-up.
+
 The complete compiled graph supplies the MTU plan. For a nested packet final,
 `internal/awgpolicy` accounts for the actual IPv4/IPv6 carrier, 16-byte transport
 padding, AWG data/control parameters and the selected authenticated outer layer.
@@ -296,6 +320,18 @@ context before and after receiving. A retired native UDP error becomes
 read cannot publish a packet into a successor. The lifecycle regression covers
 both native close errors and late success, using the actual bind implementation.
 
+OpenVPN native peer fixtures execute all 90 TCP/UDP, final and independent-layer
+combinations with actual TLS/authenticated entry traffic, paired private proof
+and final-owned UDP DNS. Three additional real TCP failovers retain ordered
+first-remote refusal and successful original-public-remote receipt through Off,
+AES and XOR entry layers. Fourteen negative cases require observed native
+password, independent layer authentication/whitening or private-route refusal,
+with no authenticated receipt or decrypted final traffic; a timeout is failure.
+Foreign public host/port, private identity substitution and network changes are
+also rejected by the actual layer mapper before physical dialing. These are
+userspace encrypted-protocol and ownership results, not operating-system
+interface or physical-policy acceptance.
+
 ## Executable gates and evidence limits
 
 The shared compiler/runtime race tests cover the independent
@@ -305,8 +341,8 @@ strict paired-final admission,
 public-entry/private-final/DNS proof, full Run-to-Healthy measurement ownership,
 retirement, and malformed or forged source rejection.
 
-`deploy/test_mobile_imported_entry.py` consumes the exact 247 shared source
-fixtures and the 247 emitted by the actual Android helper. The pinned
+`deploy/test_mobile_imported_entry.py` consumes the exact 337 shared source
+fixtures and the 337 emitted by the actual Android helper. The pinned
 libbox constructor must reproduce their original config and source digest.
 Its actual native parser, MTU profile reader, and MTU planner must accept them.
 The required fixture gate rejects missing, skipped, duplicated, foreign, or
@@ -315,9 +351,9 @@ across the implemented entry and final families, including the complete SOCKS5
 layer matrix and Hysteria2 finals behind their actual AES transport. Every
 group and negative case in the runner's explicit inventory must execute and
 pass once. The expanded groups run separately under the unchanged finite
-native-test deadlines. All 247 layer/cipher graphs separately require the
+native-test deadlines. All 337 layer/cipher graphs separately require the
 native parser and typed MTU planner; the shared and Android source matrices
-require 496 exact native verdicts in total. This does not claim physical mobile
+require 676 exact native verdicts in total. This does not claim physical mobile
 TUN traffic for every layer combination. Removing the final outer-edge ownership or bypassing actual
 native TLS verification is rejected by the corresponding causal controls.
 Dropping the captured packet endpoint or bypassing the final detour also fails
@@ -337,7 +373,7 @@ covers every shipping Java source; the actual SDK/AAR APK build remains separate
 required.
 
 `deploy/test_ios_imported_router_pinned.py` is mandatory in Apple smoke and
-release preparation. It consumes the actual Swift-produced 247-graph matrix
+release preparation. It consumes the actual Swift-produced 337-graph matrix
 and requires native parser verdicts for all of it. Swift harnesses cover
 selection, profiles, restoration, typed MTU, and PacketTunnel composition.
 The local Swift 6.4.2 harness executes actual selection, save and graph-building

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Parse 247 actual Swift-built imported-entry graphs in pinned Libbox.
+"""Parse 337 actual Swift-built imported-entry graphs in pinned Libbox.
 
 This is an executable host/compiler composition gate, not a device traffic test.
 """
@@ -42,6 +42,10 @@ NAMES |= {"socks5--final-"+mode+"--"+entry+"--"+final+".json"
           and entry != "off" and final != "off"}
 
 NAMES |= {"connect--"+p+"--"+m+"--"+d+".json" for p in ("http-connect","https-connect") for m in ("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305") for d in ("home","custom")}
+NAMES |= {"openvpn--"+transport+"--final-"+mode+"--"+entry+"--"+final+".json"
+          for transport in ("tcp", "udp")
+          for mode in ("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong")
+          for entry in LAYERS for final in LAYERS}
 
 def digest():
     paths = {Path(__file__).resolve(), ROOT/'ios/RouterVPN/prepare-libbox.sh', ROOT/'go.mod'}
@@ -59,7 +63,7 @@ def digest():
 
 def require_matrix(root):
     if root.is_symlink() or not root.is_dir() or {p.name for p in root.iterdir()} != NAMES:
-        raise ValueError('Apple imported matrix must contain exactly 247 original host graphs')
+        raise ValueError('Apple imported matrix must contain exactly 337 original host graphs')
     for name in NAMES:
         info = (root/name).lstat()
         if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 4*1024*1024:
@@ -82,8 +86,8 @@ def require_verdicts(raw):
                 completed.append(test)
             else:
                 package_passes += 1
-    if len(completed) != 248 or set(completed) != expected or package_passes != 1:
-        raise ValueError('Native Apple imported proof requires all 248 exact passing verdicts')
+    if len(completed) != 338 or set(completed) != expected or package_passes != 1:
+        raise ValueError('Native Apple imported proof requires all 338 exact passing verdicts')
 
 
 def run(vendor):
@@ -107,7 +111,7 @@ def run(vendor):
         subprocess.run([sys.executable, str(ROOT/'deploy/test_ios_tor_profile.py')], cwd=ROOT, env=env, check=True, timeout=420)
         require_matrix(graphs)
         result = subprocess.run(['go', 'test', '-json', '-mod=readonly', '-ldflags=-checklinkname=0',
-            '-tags', 'with_quic,with_wireguard,with_gvisor', './experimental/libbox', '-run', '^'+PARENT+'$',
+            '-tags', 'with_quic,with_wireguard,with_gvisor,with_openvpn', './experimental/libbox', '-run', '^'+PARENT+'$',
             '-count=1', '-timeout=180s'], cwd=vendor, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
         if result.returncode:
             print(result.stdout+result.stderr, file=sys.stderr)
@@ -115,7 +119,7 @@ def run(vendor):
         require_verdicts(result.stdout)
         if before != digest():
             raise ValueError('Apple imported source changed during its executable proof')
-    print('Apple imported Router: 247 actual Swift graph exports parsed by pinned Libbox; 248 exact native verdicts passed')
+    print('Apple imported Router: 337 actual Swift graph exports parsed by pinned Libbox; 338 exact native verdicts passed')
 
 
 def main():

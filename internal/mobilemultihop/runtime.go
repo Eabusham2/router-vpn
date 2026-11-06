@@ -316,10 +316,11 @@ func (c *Controller) renew() {
 }
 
 type trial struct {
-	owner         *Controller
-	candidate     routechoice.Candidate
-	tag           string
-	openvpnRemote *nativeopenvpn.RemoteReceipt
+	owner           *Controller
+	candidate       routechoice.Candidate
+	tag             string
+	openvpnRemote   *nativeopenvpn.RemoteReceipt
+	openvpnEntryMTU uint32
 }
 
 func (s *trial) Identity() string {
@@ -340,14 +341,23 @@ func (s *trial) Verify(ctx context.Context) error {
 		return s.checkOpenVPNRemote(ctx)
 	}
 	if c.imported != nil {
+		if err := s.checkOpenVPNRemote(ctx); err != nil {
+			return err
+		}
 		if err := c.verifyImportedEntry(ctx); err != nil {
+			return err
+		}
+		if err := s.checkOpenVPNRemote(ctx); err != nil {
 			return err
 		}
 	} else if _, e := c.prove(ctx, c.meta.EntryTag, c.meta.EntryAPI, c.meta.EntryToken, c.meta.EntryNodeID); e != nil {
 		return e
 	}
 	_, e := c.prove(ctx, s.tag, c.meta.ExitAPI, c.meta.ExitToken, c.meta.ExitNodeID)
-	return e
+	if e != nil {
+		return e
+	}
+	return s.checkOpenVPNRemote(ctx)
 }
 func (s *trial) ProbeLast(ctx context.Context) (time.Duration, error) {
 	c := s.owner
@@ -361,7 +371,14 @@ func (s *trial) ProbeLast(ctx context.Context) (time.Duration, error) {
 		}
 		return elapsed, s.checkOpenVPNRemote(ctx)
 	}
-	return c.prove(ctx, s.tag, c.meta.ExitAPI, c.meta.ExitToken, c.meta.ExitNodeID)
+	if err := s.checkOpenVPNRemote(ctx); err != nil {
+		return 0, err
+	}
+	elapsed, err := c.prove(ctx, s.tag, c.meta.ExitAPI, c.meta.ExitToken, c.meta.ExitNodeID)
+	if err != nil {
+		return 0, err
+	}
+	return elapsed, s.checkOpenVPNRemote(ctx)
 }
 func (s *trial) ProbeExternal(ctx context.Context, target string) (time.Duration, error) {
 	allowed := false
@@ -436,7 +453,13 @@ func (d driver) Open(ctx context.Context, candidate routechoice.Candidate) (rout
 			return s, errors.New("external candidate selection retired")
 		}
 	}
-	if c.openvpnResponses != nil {
+	if c.hasImportedOpenVPN() {
+		state, err := c.awaitImportedOpenVPN(ctx)
+		if err != nil {
+			return s, err
+		}
+		s.openvpnRemote, s.openvpnEntryMTU = &state.Remote, state.MTU
+	} else if c.requiresOpenVPNRemote() {
 		receipt, err := c.awaitOpenVPNRemote(ctx, s.tag)
 		if err != nil {
 			return s, err
@@ -523,14 +546,14 @@ func (c *Controller) Run(parent context.Context, engine Engine) error {
 		if err == nil && result.Winner.Execution == routechoice.Server && !c.leaseFresh() {
 			err = errors.New("proved server lease expired before activation")
 		}
-		if err == nil && c.openvpnResponses != nil {
+		if err == nil && c.requiresOpenVPNRemote() {
 			selected, ok := active.(*trial)
 			if !ok || selected.openvpnRemote == nil {
 				err = errors.New("selected OpenVPN candidate lost its connected remote proof")
 			} else {
 				err = selected.checkOpenVPNRemote(ctx)
 				if err == nil {
-					c.openvpnActive.Store(&openVPNRemoteState{tag: tag, receipt: *selected.openvpnRemote, deadline: time.Now().Add(openVPNRemoteFreshness)})
+					c.openvpnActive.Store(&openVPNRemoteState{tag: tag, receipt: *selected.openvpnRemote, entryMTU: selected.openvpnEntryMTU, deadline: time.Now().Add(openVPNRemoteFreshness)})
 				}
 			}
 		}
@@ -556,7 +579,7 @@ func (c *Controller) Run(parent context.Context, engine Engine) error {
 	if result.Winner.Execution == routechoice.Server {
 		c.renew()
 	}
-	if c.openvpnResponses != nil {
+	if c.requiresOpenVPNRemote() {
 		c.watchOpenVPNRemote()
 	}
 	return nil
@@ -567,6 +590,11 @@ func (c *Controller) leaseFresh() bool {
 }
 
 func (c *Controller) Healthy() bool {
+	if c.hasImportedOpenVPN() {
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		return c.HealthyContext(ctx) == nil
+	}
 	c.mu.Lock()
 	engine, identity, outcome := c.engine, c.engineID, c.progress.Execution
 	complete := c.progress.Complete && c.progress.Stage == "selected"

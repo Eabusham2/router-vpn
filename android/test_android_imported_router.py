@@ -64,7 +64,8 @@ public final class ImportedRouterTest {
    if(transport.has("persistent_keepalive_interval"))e.wgKeepalive=transport.getInt("persistent_keepalive_interval");
    for(String key:List.of("addresses","allowed_ips","dns")){JSONArray values=transport.optJSONArray(key);List<String> into=key.equals("addresses")?e.wgAddresses:key.equals("allowed_ips")?e.wgAllowedIps:e.wgDns;for(int i=0;values!=null&&i<values.length();i++)into.add(values.getString(i));}
    if(e.protocol.equals("amneziawg"))e.awgParameters=object(transport.getJSONObject("parameters").toString());
-  }else if(List.of("socks5","http-connect","https-connect").contains(e.protocol)){e.server=transport.getString("host");e.serverPort=transport.getInt("port");e.username=transport.getString("username");e.password=transport.getString("password");e.tlsServerName=transport.optString("tls_server_name","");}
+  }else if(e.protocol.equals("openvpn")){e.openVPNConfig=transport.getString("config");e.username=transport.optString("username","");e.password=transport.optString("password","");e.openVPNPairing=external.optJSONObject("openvpn_pairing");e.openVPNResponseProbes=external.optJSONObject("openvpn_response_probes");e.openVPNStartLayers=external.optJSONObject("openvpn_start_layers");}
+  else if(List.of("socks5","http-connect","https-connect").contains(e.protocol)){e.server=transport.getString("host");e.serverPort=transport.getInt("port");e.username=transport.getString("username");e.password=transport.getString("password");e.tlsServerName=transport.optString("tls_server_name","");}
   else{e.server=transport.getString("server");e.serverPort=transport.getInt("port");e.method=transport.optString("method","");e.secret=transport.getString("password");e.tlsServerName=transport.optString("tls_server_name","");}
   e.policy=object(profile.toString());for(String name:List.of("external","id","node_kind"))e.policy.remove(name);
   e.startLayer=external.optJSONObject("start_layer");AndroidStandardExitStore.validate(e);return e;
@@ -121,6 +122,30 @@ public final class ImportedRouterTest {
    check(dns.getString("type").equals("tcp")&&dns.getString("server").equals(saved.getString("dns_host"))&&dns.getInt("server_port")==saved.getInt("dns_port")&&dns.getString("detour").equals("proxy"),"CONNECT changed exact saved DNS");
    for(String execution:List.of("server","auto"))reject("CONNECT unsupported execution",()->AndroidImportedRouterPath.compile(e,b,finalMode,execution));
    for(String field:List.of("username","password"))reject("CONNECT replaced source "+field,()->{JSONObject changed=object(c.input),capture=object(changed.getString("entry_capture"));capture.getJSONObject("profile").getJSONObject("external").getJSONObject(AndroidExternalPolicy.protocol(e.protocol).replace("-","_")).put(field,"foreign");changed.put("entry_capture",capture.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
+  }
+  if(e.protocol.equals("openvpn")){
+   JSONObject captured=object(raw.getString("entry_capture")).getJSONObject("profile").getJSONObject("external").getJSONObject("openvpn");JSONObject first=null;JSONArray endpoints=graph.getJSONArray("endpoints");for(int i=0;i<endpoints.length();i++)if(endpoints.getJSONObject(i).optString("tag").equals("entry-wg"))first=endpoints.getJSONObject(i);
+   check(captured.getString("config").equals(e.openVPNConfig)&&captured.getString("username").equals(e.username)&&captured.getString("password").equals(e.password),"OpenVPN original inline source or whitespace credentials changed");
+   check(first!=null&&first.getString("type").equals("openvpn-client")&&!first.getBoolean("system")&&first.getInt("mtu")==1500&&first.getString("username").equals(e.username)&&first.getString("password").equals(e.password),"OpenVPN native endpoint or independent MTU changed");
+   check(first.getString("network").equals(fixture.getFileName().toString().split("--")[1]),"OpenVPN original TCP/UDP transport changed");
+   String layer=e.policy.optString("start_layer","off");if(layer.isEmpty())layer="off";
+   check(first.getString("server").equals("203.0.113.24")&&first.getInt("server_port")==1194&&first.has("detour")==!layer.equals("off"),"OpenVPN original peer or owned layer changed");
+   if(!layer.equals("off")){
+    JSONObject mapping=null;JSONArray outs=graph.getJSONArray("outbounds");for(int i=0;i<outs.length();i++)if(outs.getJSONObject(i).optString("tag").equals(first.getString("detour")))mapping=outs.getJSONObject(i);
+    check(mapping!=null&&mapping.getString("type").equals("routervpn-openvpn-layer-map")&&mapping.getString("mode").equals(layer)&&!mapping.has("detour"),"OpenVPN original identity lost owned layer map");
+    JSONArray remotes=mapping.getJSONArray("remotes");JSONObject remote=remotes.getJSONObject(0),owners=mapping.getJSONObject("layers");
+    check(remotes.length()==1&&remote.getString("host").equals("203.0.113.24")&&remote.getInt("port")==1194&&remote.getString("network").equals(first.getString("network"))&&owners.length()==1&&owners.getJSONObject("203.0.113.24").toString().equals(e.startLayer.toString()),"OpenVPN layer map changed original remote or private owner");
+    check(object(raw.getString("entry_capture")).getJSONObject("profile").getJSONObject("external").getJSONObject("start_layer").toString().equals(e.startLayer.toString()),"OpenVPN captured private layer changed");
+    AndroidStandardExitStore.Entry missing=AndroidStandardExitStore.copy(e);missing.startLayer=null;reject("OpenVPN missing own layer",()->AndroidImportedRouterPath.compile(missing,b,finalMode,"local"));
+   }
+   if(layer.equals("off")){
+    AndroidStandardExitStore.Entry multi=AndroidStandardExitStore.copy(e);multi.openVPNConfig+="remote 203.0.113.25 1194\n";
+    AndroidExternalPolicy.Captured capturedMulti=AndroidExternalPolicy.captureImportedEntry(multi);JSONObject endpoint=object(capturedMulti.source).getJSONArray("endpoints").getJSONObject(0);JSONArray remotes=endpoint.getJSONArray("servers");
+    check(remotes.length()==2&&remotes.getJSONObject(0).getString("server").equals("203.0.113.24")&&remotes.getJSONObject(1).getString("server").equals("203.0.113.25")&&!endpoint.has("server"),"OpenVPN fallback capture collapsed original remote list");
+    check(object(capturedMulti.capture).getJSONObject("profile").getJSONObject("external").getJSONObject("openvpn").getString("config").equals(multi.openVPNConfig),"OpenVPN multi-remote raw source was normalized away");
+   }
+   for(String unavailable:List.of("server","auto"))reject("OpenVPN cannot authorize "+unavailable,()->AndroidImportedRouterPath.compile(e,b,finalMode,unavailable));
+   for(String field:List.of("config","username","password"))reject("changed OpenVPN source "+field,()->{JSONObject changed=object(c.input),capture=object(changed.getString("entry_capture"));capture.getJSONObject("profile").getJSONObject("external").getJSONObject("openvpn").put(field,"foreign");changed.put("entry_capture",capture.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
   }
   if(e.protocol.equals("socks5")){
    JSONObject captured=object(raw.getString("entry_capture")).getJSONObject("profile").getJSONObject("external").getJSONObject("socks5");JSONObject first=null;JSONArray out=graph.getJSONArray("outbounds");for(int i=0;i<out.length();i++)if(out.getJSONObject(i).optString("tag").equals("entry-wg"))first=out.getJSONObject(i);
@@ -223,10 +248,10 @@ public final class ImportedRouterTest {
  public static void main(String[] args)throws Exception{
   Libbox.compiler=args[0];Path root=Path.of(args[1]),fixtures=Path.of(args[2]);retainedStaging(Files.createTempDirectory(root,"retained-staging-"));List<Path> all;
   try(var rows=Files.list(fixtures)){all=rows.filter(p->p.toString().endsWith(".json")).sorted().toList();}
-  check(all.size()==247,"the complete proxy/packet independent entry/final layer matrix is incomplete");
-  String phase=args[3];boolean connect=phase.startsWith("connect--");boolean packet=phase.startsWith("packet-");boolean socks=phase.startsWith("socks5--final-");
-  check(List.of("connect--http-connect","connect--https-connect","socks5--final-shadowsocks","socks5--final-hysteria2","socks5--final-wg","socks5--final-awg2-fast","socks5--final-awg2-strong","shadowsocks","hysteria2","packet-wireguard--final-shadowsocks","packet-wireguard--final-hysteria2","packet-amneziawg--final-shadowsocks","packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong","wg","awg2-fast","awg2-strong").contains(phase),"unknown original matrix phase");
-  List<Path> selected=all.stream().filter(p->{String name=p.getFileName().toString();return connect?name.startsWith(phase+"--"):socks?(name.equals(phase+".json")||name.startsWith(phase+"--")):packet?name.startsWith(phase+"--"):phase.equals("shadowsocks")?!name.startsWith("connect--")&&!name.startsWith("socks5--")&&!name.startsWith("packet-")&&!name.startsWith("final-"):name.startsWith("final-"+phase+"--");}).toList();check(selected.size()==(connect?6:socks?9:packet?9:20),"incomplete entry/final phase");for(Path p:selected)one(root,p);
+  check(all.size()==337,"the complete proxy/packet independent entry/final layer matrix is incomplete");
+  String phase=args[3];boolean openvpn=phase.startsWith("openvpn--");boolean connect=phase.startsWith("connect--");boolean packet=phase.startsWith("packet-");boolean socks=phase.startsWith("socks5--final-");
+  check(List.of("openvpn--tcp--final-shadowsocks","openvpn--tcp--final-hysteria2","openvpn--tcp--final-wg","openvpn--tcp--final-awg2-fast","openvpn--tcp--final-awg2-strong","openvpn--udp--final-shadowsocks","openvpn--udp--final-hysteria2","openvpn--udp--final-wg","openvpn--udp--final-awg2-fast","openvpn--udp--final-awg2-strong","connect--http-connect","connect--https-connect","socks5--final-shadowsocks","socks5--final-hysteria2","socks5--final-wg","socks5--final-awg2-fast","socks5--final-awg2-strong","shadowsocks","hysteria2","packet-wireguard--final-shadowsocks","packet-wireguard--final-hysteria2","packet-amneziawg--final-shadowsocks","packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong","wg","awg2-fast","awg2-strong").contains(phase),"unknown original matrix phase");
+  List<Path> selected=all.stream().filter(p->{String name=p.getFileName().toString();return openvpn?name.startsWith(phase+"--"):connect?name.startsWith(phase+"--"):socks?(name.equals(phase+".json")||name.startsWith(phase+"--")):packet?name.startsWith(phase+"--"):phase.equals("shadowsocks")?!name.startsWith("openvpn--")&&!name.startsWith("connect--")&&!name.startsWith("socks5--")&&!name.startsWith("packet-")&&!name.startsWith("final-"):name.startsWith("final-"+phase+"--");}).toList();check(selected.size()==(openvpn?9:connect?6:socks?9:packet?9:20),"incomplete entry/final phase");for(Path p:selected)one(root,p);
   System.out.println("Android imported-entry original sources: "+checks+" checks; "+phase+", "+selected.size()+" original independent layer graphs");
  }
 }'''
@@ -245,6 +270,7 @@ def main():
         fixtures.mkdir()
         env = dict(os.environ, ROUTERVPN_IMPORTED_ENTRY_FIXTURES=str(fixtures))
         subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedEntry(CONNECTGraphs|SOCKS(PairedFinalGraphs|PairedFinalLayers|PacketFinalLayers|EntryLayers|PacketFinalGraphs)|PairedFinal(CompleteLayers|PolicyAndCipherOwnership)|HysteriaPairedFinalCompleteLayers|HysteriaFinalCompleteGraphs|PacketCompleteGraphs|PacketFinalCompleteGraphs|NestedPacketCompleteGraphs)$", "-count=1"], cwd=ROOT, env=env, check=True, timeout=120)
+        subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedOpenVPNCompleteLayerMatrix$", "-count=1", "-timeout=20s"], cwd=ROOT, env=dict(os.environ,ROUTERVPN_IMPORTED_OPENVPN_FIXTURES=str(fixtures)), check=True, timeout=30)
         module = next(line.split()[1] for line in (ROOT / "go.mod").read_text().splitlines() if line.startswith("module "))
         helper = E.GO.replace('switch args[0]{', 'switch args[0]{'+GO_CASE).replace("github.com/Eabusham2/router-vpn", module)
         (temp / "main.go").write_text(helper)
@@ -284,7 +310,7 @@ def main():
         private.mkdir()
         command=["java", "-cp", os.pathsep.join((str(classes), str(jar))), "com.eabusham.routervpn.ImportedRouterTest", str(temp / "compiler"), str(private), str(fixtures)]
         # Preserve the original finite bound for each complete final-mode family.
-        for final_mode in ("connect--http-connect", "connect--https-connect", "socks5--final-shadowsocks", "socks5--final-hysteria2", "socks5--final-wg", "socks5--final-awg2-fast", "socks5--final-awg2-strong", "shadowsocks", "hysteria2", "packet-wireguard--final-shadowsocks", "packet-wireguard--final-hysteria2", "packet-amneziawg--final-shadowsocks", "packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong", "wg", "awg2-fast", "awg2-strong"):
+        for final_mode in ("openvpn--tcp--final-shadowsocks","openvpn--tcp--final-hysteria2","openvpn--tcp--final-wg","openvpn--tcp--final-awg2-fast","openvpn--tcp--final-awg2-strong","openvpn--udp--final-shadowsocks","openvpn--udp--final-hysteria2","openvpn--udp--final-wg","openvpn--udp--final-awg2-fast","openvpn--udp--final-awg2-strong","connect--http-connect", "connect--https-connect", "socks5--final-shadowsocks", "socks5--final-hysteria2", "socks5--final-wg", "socks5--final-awg2-fast", "socks5--final-awg2-strong", "shadowsocks", "hysteria2", "packet-wireguard--final-shadowsocks", "packet-wireguard--final-hysteria2", "packet-amneziawg--final-shadowsocks", "packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong", "wg", "awg2-fast", "awg2-strong"):
             subprocess.run(command+[final_mode], check=True, timeout=180)
         source=app/"AndroidImportedRouterPath.java"
         original=source.read_text()

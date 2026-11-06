@@ -17,7 +17,7 @@ type LayerMap struct {
 }
 
 func (mapping LayerMap) Validate() error {
-	if !validStartLayerMode(mapping.Mode) || len(mapping.Remotes) < 2 || len(mapping.Remotes) > 16 || len(mapping.Layers) < 2 || len(mapping.Layers) > 16 || mapping.Detour != "" && !startLayerIdent(mapping.Detour) {
+	if !validStartLayerMode(mapping.Mode) || len(mapping.Remotes) < 1 || len(mapping.Remotes) > 16 || len(mapping.Layers) < 1 || len(mapping.Layers) > 16 || mapping.Detour != "" && !startLayerIdent(mapping.Detour) {
 		return errStartLayers
 	}
 	hosts := map[string]bool{}
@@ -54,7 +54,7 @@ func (mapping *LayerMap) UnmarshalJSON(raw []byte) error {
 		}
 	}
 	remotes, ok := fields["remotes"].([]any)
-	if !ok || len(remotes) < 2 || len(remotes) > 16 {
+	if !ok || len(remotes) < 1 || len(remotes) > 16 {
 		return errStartLayers
 	}
 	for _, rawRemote := range remotes {

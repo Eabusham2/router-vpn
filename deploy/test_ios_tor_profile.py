@@ -68,7 +68,7 @@ GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile
  case "tor-server-mtu-authority":var predecessor *mobiletor.PredecessorProof;predecessor,err=mobiletor.NewPredecessorProof(r.Source);if err==nil{value,err=mobiletor.ServerMTUAuthority(r.Config,r.Policy,r.Node,predecessor)}
  case "tor-mtu-authority":var predecessor *mobiletor.PredecessorProof;if r.Source!=""{predecessor,err=mobiletor.NewPredecessorProof(r.Source)};if err==nil{value,err=mobiletor.MTUAuthorityWithPredecessor(r.Config,r.Policy,r.Node,predecessor)}
  case "imported-final-baseline":var plan *mobilemultihop.NodeProfile;plan,err=mobilemultihop.NewNodeProfile(r.Mode,r.Files,r.Policy,r.Source,"");if err==nil{value=plan.Config()}
- case "imported-router","imported-router-metadata","imported-router-source":var a map[string]string;err=json.Unmarshal([]byte(r.Config),&a);if err==nil{var plan *mobilemultihop.Controller;plan,err=mobilemultihop.NewImportedEntry(a["config"],a["capture"],a["mode"],a["files"],a["profile"],a["start"],"");if err==nil{value=plan.Config();if r.Op=="imported-router-metadata"{value=plan.Metadata()};if r.Op=="imported-router-source"{value=plan.SourceSHA256()};err=plan.Close()}}
+ case "imported-router","imported-router-metadata","imported-router-source":var a map[string]string;err=json.Unmarshal([]byte(r.Config),&a);if err==nil{var plan *mobilemultihop.Controller;plan,err=mobilemultihop.NewImportedEntry(a["config"],a["capture"],a["mode"],a["files"],a["profile"],a["start"],a["dns"]);if err==nil{value=plan.Config();if r.Op=="imported-router-metadata"{value=plan.Metadata()};if r.Op=="imported-router-source"{value=plan.SourceSHA256()};err=plan.Close()}}
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "external-validate-transport":err=mobilemultihop.ValidateExternalTransport(r.Config,r.Policy);value="checked"
  case "external-validate-dns":err=mobilemultihop.ValidateExternalDNS(r.Config,r.Policy);value="checked"
@@ -990,9 +990,10 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
  @MainActor static func run()throws {
   defer{RouterVPNTorTestClose()}
   try importedRouterGraphs()
+  try importedOpenVPNRouterGraphs()
   try importedCONNECTGraphs()
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY"]=="1" {
-   print("Apple imported Router graph: PASS (247 graphs: complete independent SOCKS5 layers with original and compatible case names; \(checks) shipping Swift/actual Go compiler checks; no native network proof)")
+   print("Apple imported Router graph: PASS (337 graphs: preserved247 and90 original OpenVPN TCP/UDP layer captures; \(checks) shipping Swift/actual Go compiler checks; no native network proof)")
    return
   }
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_OPENVPN_PROBES_ONLY"]=="1" {
@@ -1048,6 +1049,73 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try check("complete direct and private enabled padding matrix",paddingGraphs==464)
   try ordinaryTorPredecessors(padding:true)
   try check("complete enabled padding matrix",paddingGraphs==528)
+ }
+ @MainActor static func importedOpenVPNRouterGraphs()throws {
+  guard let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_OPENVPN_SOURCES"] else { throw NSError(domain:"fixture",code:1,userInfo:[NSLocalizedDescriptionKey:"Original OpenVPN source matrix is required"] ) }
+  let files=try FileManager.default.contentsOfDirectory(at:URL(fileURLWithPath:directory),includingPropertiesForKeys:nil).filter{$0.pathExtension=="json"}.sorted{$0.lastPathComponent<$1.lastPathComponent}
+  var expected=Set<String>()
+  for transport in ["tcp","udp"] {for mode in ["shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"] {for first in layers {for last in layers {expected.insert("openvpn--"+transport+"--final-"+mode+"--"+first+"--"+last+".json")}}}}
+  try check("OpenVPN exact original TCP/UDP independent layer inventory",files.count==90 && Set(files.map{$0.lastPathComponent})==expected)
+  for file in files {
+   let source=try JSONSerialization.jsonObject(with:Data(contentsOf:file)) as! [String]
+   let capture=try object(Data(source[1].utf8)),entry=capture["profile"] as! [String:Any],external=entry["external"] as! [String:Any],original=external["openvpn"] as! [String:Any]
+   var final=try object(Data(source[4].utf8));let mode=source[2]
+   final["multihop_enabled"]=true;final["multihop_entry_id"]=entry["id"];final["multihop_entry_mode"]="openvpn";final["multihop_exit_id"]=final["id"];final["multihop_exit_mode"]=mode;final["multihop_execution"]="local"
+   var maps=[mode:try JSONDecoder().decode([String:String].self,from:Data(source[3].utf8))]
+   if !source[5].isEmpty {maps["shadowsocks"]=try JSONDecoder().decode([String:String].self,from:Data(source[5].utf8))}
+   try IOSImportedEntryMultihop.validate(entry:entry,final:final)
+   let raw=try RouterVPNExternalExitBuilder.importedRouterSource(profile:entry),last=try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:maps)
+   let saved=try object(Data(raw.capture.utf8))["profile"] as! [String:Any]
+   try check("OpenVPN host capture retains exact source and saved policy",try json(saved)==json(entry))
+   var originalStart="";if !source[5].isEmpty {originalStart=try text(object(Data(source[5].utf8)))}
+   try check("OpenVPN final capture retains exact own raw assets",try json(object(Data(last.files.utf8)))==json(object(Data(source[3].utf8))) && last.start==originalStart)
+   let args=["config":raw.config,"capture":raw.capture,"mode":mode,"files":last.files,"start":last.start,"profile":try text(final),"dns":source[6]]
+   let encoded=try bridge(["Op":"imported-router","Config":text(args)]),graph=try object(Data(encoded.utf8)),native=try tagged(graph,"entry-wg")
+   try check("OpenVPN userspace endpoint owns original credentials and MTU",native["type"] as? String=="openvpn-client" && native["system"] as? Bool==false && native["mtu"] as? Int==1500 && native["username"] as? String==original["username"] as? String && native["password"] as? String==original["password"] as? String)
+   let parts=file.lastPathComponent.components(separatedBy:"--"),entryLayer=entry["start_layer"] as? String ?? "off"
+   try check("OpenVPN original outer TCP/UDP and peer preserved",native["network"] as? String==parts[1] && native["server_port"] as? Int==1194 && native["server"] as? String=="203.0.113.24")
+   if entryLayer != "off" && !entryLayer.isEmpty {
+    let mapping=try tagged(graph,native["detour"] as! String),remotes=mapping["remotes"] as! [[String:Any]],owners=mapping["layers"] as! [String:Any]
+    try check("OpenVPN public identity uses exact owned layer map",mapping["type"] as? String=="routervpn-openvpn-layer-map" && mapping["mode"] as? String==entryLayer && mapping["detour"]==nil && remotes.count==1 && remotes[0]["host"] as? String=="203.0.113.24" && remotes[0]["port"] as? Int==1194 && remotes[0]["network"] as? String==parts[1])
+    try check("OpenVPN mapped layer retains original private provision",try owners.count==1 && json(owners["203.0.113.24"]!)==json(external["start_layer"]!))
+   } else {try check("OpenVPN unlayered endpoint has no invented owner",native["detour"]==nil)}
+   let inbounds=graph["inbounds"] as! [[String:Any]],outbounds=graph["outbounds"] as! [[String:Any]]
+   try check("OpenVPN graph owns one TUN and no direct escape",inbounds.filter{$0["type"] as? String=="tun"}.count==1 && !outbounds.contains{$0["type"] as? String=="direct"})
+   let dns=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
+   try check("OpenVPN retains final Home resolver inside final path",dns[0]["server"] as? String==final["adguard_ipv4"] as? String && dns[0]["detour"] as? String=="proxy")
+   var selected=ClientBundle.empty,profile=final
+   profile["name"]="Captured final";profile["adguard_ipv6"]="";profile["socks_host"]="";profile["socks_port"]=0;profile["socks_username"]="";profile["socks_password"]=""
+   selected.routerProfiles=[try JSONDecoder().decode(RouterProfile.self,from:json(profile))];selected.selectedRouterID=final["id"] as! String;selected.profiles=maps
+   let selection=try IOSRuntimeSelector.selectMultihop(bundle:selected,rawProfileID:nil)
+   try check("OpenVPN public Connect preserves exact final and entry",selection.engine == .multihop && selection.rawProfileID==mode && selection.multihopEntryMode=="openvpn")
+   for execution in ["server","auto"] {
+    var bad=selected;bad.routerProfiles[0].multihopExecution=execution
+    reject("OpenVPN public Connect cannot invent "+execution){_ = try IOSRuntimeSelector.selectMultihop(bundle:bad,rawProfileID:nil)}
+    var badFinal=final;badFinal["multihop_execution"]=execution
+    reject("OpenVPN captured graph cannot invent "+execution){try IOSImportedEntryMultihop.validate(entry:entry,final:badFinal)}
+   }
+   for field in ["config","username","password"] {
+    var changed=entry,block=external,transport=original
+    transport[field]=field=="config" ? (original[field] as! String)+"remote 203.0.113.25 1194\n":" replacement "
+    block["openvpn"]=transport;changed["external"]=block
+    if entryLayer=="off" || entryLayer.isEmpty {
+     let replacement=try RouterVPNExternalExitBuilder.importedRouterSource(profile:changed)
+     try check("OpenVPN source change stays visible "+field,replacement.capture != raw.capture && replacement.config != raw.config)
+     if field=="config" {
+      let changedEndpoint=try tagged(object(Data(replacement.config.utf8)),"custom-exit")
+      let remotes=changedEndpoint["servers"] as? [[String:Any]] ?? []
+      try check("OpenVPN fallback capture retains every original remote",remotes.count==2 && remotes[0]["server"] as? String=="203.0.113.24" && remotes[1]["server"] as? String=="203.0.113.25" && changedEndpoint["server"]==nil)
+     }
+    }
+   }
+   var malformed=entry,block=external,transport=original;transport["config"]="";block["openvpn"]=transport;malformed["external"]=block
+   reject("OpenVPN malformed original source rejected"){_ = try RouterVPNExternalExitBuilder.importedRouterSource(profile:malformed)}
+   if entryLayer != "off" && !entryLayer.isEmpty {
+    var missing=entry,block=external;block.removeValue(forKey:"start_layer");missing["external"]=block
+    reject("OpenVPN private layer provision cannot be borrowed"){_ = try RouterVPNExternalExitBuilder.importedRouterSource(profile:missing)}
+   }
+   if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS"] {try Data(encoded.utf8).write(to:URL(fileURLWithPath:output).appendingPathComponent(file.lastPathComponent))}
+  }
  }
  @MainActor static func main() {
   do{try run()}catch{FileHandle.standardError.write(Data(("FAIL Apple Tor: "+error.localizedDescription+"\n").utf8));exit(1)}
@@ -1627,7 +1695,10 @@ def main():
             command += ['-lNetwork']
         command += ['-Xlinker', '-rpath', '-Xlinker', str(work), *map(str, sources), str(source), '-o', str(work / 'tests')]
         subprocess.run(command, check=True, timeout=180)
-        environment = dict(os.environ)
+        openvpn_sources = work / 'imported-openvpn-sources'
+        openvpn_sources.mkdir()
+        subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedOpenVPNCompleteLayerMatrix$','-count=1','-timeout=20s'], cwd=ROOT, env=dict(os.environ, ROUTERVPN_IMPORTED_OPENVPN_FIXTURES=str(openvpn_sources)), check=True, timeout=30)
+        environment = dict(os.environ, ROUTERVPN_IOS_IMPORTED_OPENVPN_SOURCES=str(openvpn_sources))
         environment.pop('ROUTERVPN_IOS_OPENVPN_PROBES_ONLY', None)
         environment.pop('ROUTERVPN_IOS_PADDING_ONLY', None)
         environment.pop('ROUTERVPN_IOS_LOCAL_PADDING_GRAPHS', None)

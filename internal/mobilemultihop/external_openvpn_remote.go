@@ -23,9 +23,23 @@ type openVPNRemoteState struct {
 	tag      string
 	receipt  nativeopenvpn.RemoteReceipt
 	deadline time.Time
+	entryMTU uint32
 }
 
 func (c *Controller) readOpenVPNRemote(ctx context.Context, tag string) (nativeopenvpn.RemoteReceipt, error) {
+	if c.hasImportedOpenVPN() {
+		if tag != LocalTag {
+			return nativeopenvpn.RemoteReceipt{}, errors.New("imported OpenVPN requires its original Local owner")
+		}
+		state, err := c.readImportedOpenVPN(ctx)
+		if err != nil {
+			return nativeopenvpn.RemoteReceipt{}, err
+		}
+		if active := c.openvpnActive.Load(); active != nil && (active.receipt != state.Remote || active.entryMTU != state.MTU) {
+			return nativeopenvpn.RemoteReceipt{}, errors.New("imported OpenVPN transport or capacity changed")
+		}
+		return state.Remote, nil
+	}
 	bad := errors.New("OpenVPN connected remote is unavailable or no longer belongs to the captured candidate")
 	if c.openvpnResponses == nil || ctx.Err() != nil || c.requireValid() != nil || c.engine.Selected() != tag {
 		return nativeopenvpn.RemoteReceipt{}, bad
@@ -100,11 +114,14 @@ func (c *Controller) awaitOpenVPNRemote(ctx context.Context, tag string) (native
 }
 
 func (s *trial) checkOpenVPNRemote(ctx context.Context) error {
-	if s.owner.openvpnResponses == nil {
+	if !s.owner.requiresOpenVPNRemote() {
 		return nil
 	}
 	if s.openvpnRemote == nil {
 		return errors.New("OpenVPN candidate has no connected remote receipt")
+	}
+	if s.owner.hasImportedOpenVPN() {
+		return s.owner.checkImportedOpenVPN(ctx, *s.openvpnRemote, s.openvpnEntryMTU)
 	}
 	actual, err := s.owner.readOpenVPNRemote(ctx, s.tag)
 	if err != nil || actual != *s.openvpnRemote {
@@ -114,12 +131,17 @@ func (s *trial) checkOpenVPNRemote(ctx context.Context) error {
 }
 
 func (c *Controller) openVPNRemoteHealthy(tag string) bool {
-	if c.openvpnResponses == nil {
+	if !c.requiresOpenVPNRemote() {
 		return true
 	}
 	active := c.openvpnActive.Load()
 	if active == nil || active.tag != tag || !time.Now().Before(active.deadline) {
 		return false
+	}
+	if c.hasImportedOpenVPN() {
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		return c.checkImportedOpenVPN(ctx, active.receipt, active.entryMTU) == nil
 	}
 	if tag == LocalTag {
 		engine, ok := c.engine.(OpenVPNRemoteEngine)
@@ -136,10 +158,27 @@ func (c *Controller) openVPNRemoteHealthy(tag string) bool {
 // candidate must answer a fresh authenticated native query; its health cache is
 // never sufficient for publishing a new MTU or Speed Lab result.
 func (c *Controller) VerifyCurrentPath(ctx context.Context) error {
+	if c.hasImportedOpenVPN() {
+		if err := c.HealthyContext(ctx); err != nil {
+			return err
+		}
+		active := c.openvpnActive.Load()
+		if active == nil {
+			return errors.New("imported OpenVPN active proof missing")
+		}
+		if err := c.checkImportedOpenVPN(ctx, active.receipt, active.entryMTU); err != nil {
+			return err
+		}
+		if !c.refreshOpenVPNRemote(active) {
+			c.invalidate()
+			return errors.New("imported OpenVPN proof expired during measurement")
+		}
+		return c.HealthyContext(ctx)
+	}
 	if !c.Healthy() || ctx.Err() != nil {
 		return errors.New("captured external path is no longer proved")
 	}
-	if c.openvpnResponses == nil {
+	if !c.requiresOpenVPNRemote() {
 		return nil
 	}
 	active := c.openvpnActive.Load()
@@ -157,10 +196,10 @@ func (c *Controller) VerifyCurrentPath(ctx context.Context) error {
 func (c *Controller) refreshOpenVPNRemote(captured *openVPNRemoteState) bool {
 	for {
 		current := c.openvpnActive.Load()
-		if captured == nil || current == nil || current.tag != captured.tag || current.receipt != captured.receipt || !c.valid() || !time.Now().Before(current.deadline) {
+		if captured == nil || current == nil || current.tag != captured.tag || current.receipt != captured.receipt || current.entryMTU != captured.entryMTU || c.generation.Load() != 1 || (!c.hasImportedOpenVPN() && !c.valid()) || !time.Now().Before(current.deadline) {
 			return false
 		}
-		next := &openVPNRemoteState{tag: current.tag, receipt: current.receipt, deadline: time.Now().Add(openVPNRemoteFreshness)}
+		next := &openVPNRemoteState{tag: current.tag, receipt: current.receipt, entryMTU: current.entryMTU, deadline: time.Now().Add(openVPNRemoteFreshness)}
 		if c.openvpnActive.CompareAndSwap(current, next) {
 			return true
 		}
@@ -185,7 +224,7 @@ func (c *Controller) watchOpenVPNRemote() {
 			case <-ticker.C:
 			}
 			active := c.openvpnActive.Load()
-			if active == nil || !c.valid() {
+			if active == nil || c.generation.Load() != 1 || (!c.hasImportedOpenVPN() && !c.valid()) {
 				return
 			}
 			child, stop := context.WithTimeout(ctx, 1500*time.Millisecond)

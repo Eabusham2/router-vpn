@@ -180,6 +180,36 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
     try check("CONNECT rejected save leaves original stored selection",refused.writes==0 && encoded(refused.bundle!)==unchanged)
    }
   }
+  for network in ["tcp","udp"] {
+   var ovpn=try profile("imported-openvpn-"+network,"external","openvpn");ovpn.apiToken="";ovpn.dnsMode="home";ovpn.external?.socks5=nil
+   ovpn.external?.openVPN=ExternalOpenVPNConfig(config:"client\ndev tun\nproto "+network+"\nremote 198.51.100.8 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+String(repeating:"ab",count:32)+"\ntun-mtu 1500\n",username:" exact user ",password:" exact secret ")
+  for finalMode in ["shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"] {for entryLayer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {for finalLayer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+   var source=ovpn;source.startLayer=entryLayer
+   if entryLayer != "off" {
+    source.external?.startLayer=try JSONDecoder().decode(ExternalStartLayer.self,from:encoded(["mode":entryLayer,"api":"http://10.93.0.1:8787","transport":["type":"shadowsocks","tag":"private-start-layer","server":"198.51.100.8","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:106,count:32).base64EncodedString()]]))
+   }
+   let original=bundle(source);var final=finalBundle;final.routerProfiles[0].startLayer=finalLayer
+   final.profiles["hysteria2"]=["sing-box.json":Data("native readiness is separately exercised by shipping compiler fixture".utf8).base64EncodedString()]
+   for mode in ["awg2-fast","awg2-strong"]{final.profiles[mode]=["awg.conf":Data("captured native peer fixture boundary".utf8).base64EncodedString()]}
+   let model=RouterVPNModel();model.bundle=final
+   IOSNodeBundleStore.shared.nodes=[source.id:try encoded(original),paired.id:try encoded(final)]
+   try check("OpenVPN picker keeps provisioned final "+finalMode,model.iosImportedRouterFinalModes(entryMode:"openvpn",exitID:paired.id).contains(finalMode))
+   try model.saveIOSMultihop(enabled:true,entryID:source.id,exitID:paired.id,exitMode:finalMode,execution:"local",entryMode:"openvpn")
+   let captured=try model.iosMultihopEntryBundle(for:model.bundle!)
+   try check("OpenVPN layer selection preserves both independent sources",captured.routerProfiles==original.routerProfiles && captured.profiles==original.profiles && model.bundle?.profiles==final.profiles && captured.routerProfiles[0].startLayer==entryLayer && model.bundle?.routerProfiles[0].startLayer==finalLayer)
+   try check("OpenVPN layers never borrow paired credentials",captured.apiToken.isEmpty && captured.routerAPI.isEmpty && captured.nodeProofID.isEmpty && model.bundle?.routerProfiles[0].apiToken==paired.apiToken && captured.routerProfiles[0].external?.openVPN==ovpn.external?.openVPN)
+   let before=try encoded(model.bundle!),writes=model.writes
+   for execution in ["server","auto"] {
+    try reject("OpenVPN layers cannot add execution authority "+execution){try model.saveIOSMultihop(enabled:true,entryID:source.id,exitID:paired.id,exitMode:finalMode,execution:execution,entryMode:"openvpn")}
+    try check("unavailable OpenVPN execution leaves exact saved selection",model.writes==writes && encoded(model.bundle!)==before)
+   }
+   if entryLayer != "off" {
+    var missing=source;missing.external?.startLayer=nil;IOSNodeBundleStore.shared.nodes[source.id]=try encoded(bundle(missing))
+    try reject("OpenVPN selection requires matching provisioned entry layer"){_ = try model.iosMultihopEntryBundle(for:model.bundle!)}
+    try check("missing OpenVPN provision cannot alter selection",model.writes==writes && encoded(model.bundle!)==before)
+   }
+  }}}
+  }
   var packetEntries:[RouterProfile]=[]
   for kind in ["wireguard","amneziawg"] {
    var node=try profile("imported-"+kind,"external",kind);node.apiToken="";node.dnsMode="home";node.external?.socks5=nil
@@ -562,7 +592,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
 
 def validate_imported_picker(view):
     entries = view[view.index('    private var nodes:'):view.index('    private var exitNodes:')]
-    if ('["wireguard", "amneziawg", "hysteria2", "socks5", "http-connect", "https-connect"].contains($0.external?.protocolName ?? "")' not in entries
+    if ('["wireguard", "amneziawg", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains($0.external?.protocolName ?? "")' not in entries
             or 'IOSImportedEntryMultihop.methods.contains' not in entries):
         raise ValueError('Paired finals must expose exact WG/AWG/HY2/SOCKS5, CONNECT and SS2022 imported entries')
     branch = view[view.index('                    if externalEntryProtocol != nil {'):]

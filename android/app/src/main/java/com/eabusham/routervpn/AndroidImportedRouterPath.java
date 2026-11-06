@@ -20,7 +20,7 @@ final class AndroidImportedRouterPath {
     static boolean supports(String entryProtocol, String finalMode) {
         entryProtocol = AndroidExternalPolicy.protocol(entryProtocol);
         if (Arrays.asList("http-connect", "https-connect").contains(entryProtocol)) return "shadowsocks".equals(finalMode);
-        if ("socks5".equals(entryProtocol)) return Arrays.asList("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong").contains(finalMode);
+        if (Arrays.asList("socks5", "openvpn").contains(entryProtocol)) return Arrays.asList("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong").contains(finalMode);
         boolean proxyEntry = Arrays.asList("shadowsocks", "hysteria2").contains(entryProtocol);
         return (proxyEntry || Arrays.asList("wireguard", "amneziawg").contains(entryProtocol))
                 && (Arrays.asList("shadowsocks", "hysteria2").contains(finalMode)
@@ -28,9 +28,9 @@ final class AndroidImportedRouterPath {
     }
 
     static void requireEntry(AndroidStandardExitStore.Entry entry) throws Exception {
-        if (entry == null || !Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg", "socks5", "http-connect", "https-connect").contains(AndroidExternalPolicy.protocol(entry.protocol))
+        if (entry == null || !Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "openvpn").contains(AndroidExternalPolicy.protocol(entry.protocol))
                 || "shadowsocks".equals(entry.protocol) && !Arrays.asList("2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305").contains(entry.method)) {
-            throw new IllegalArgumentException("This imported entry path requires Shadowsocks 2022, Hysteria2, WireGuard, AmneziaWG, SOCKS5 or a TCP-only HTTP/HTTPS CONNECT entry.");
+            throw new IllegalArgumentException("This imported entry path requires Shadowsocks 2022, Hysteria2, WireGuard, AmneziaWG, SOCKS5, OpenVPN or a TCP-only HTTP/HTTPS CONNECT entry.");
         }
         AndroidStandardExitStore.validate(entry);
     }
@@ -91,7 +91,7 @@ final class AndroidImportedRouterPath {
                 }
                 JSONObject selected = new JSONObject(metadata);
                 String entryMode = new JSONObject(input.getString("entry_capture")).getString("protocol");
-                if (!Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg", "socks5", "http-connect", "https-connect").contains(entryMode)
+                if (!Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "openvpn").contains(entryMode)
                         || !"external".equals(selected.getString("entry_kind")) || !"local".equals(selected.getString("execution"))
                         || !entryMode.equals(selected.getString("entry_mode")) || !input.getString("exit_mode").equals(selected.getString("exit_mode"))
                         || !supports(entryMode, selected.getString("exit_mode"))) {

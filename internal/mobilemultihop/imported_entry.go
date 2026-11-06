@@ -13,18 +13,20 @@ import (
 // imported transport and paired final sources. Metadata cannot create it.
 type importedEntry struct {
 	source, metadata, profile, publicIP string
+	openvpnTransport                    map[string]any
+	openvpnMTU                          uint32
 }
 
-// NewImportedEntry composes an imported SOCKS5, SS2022, Hysteria2, WireGuard or AmneziaWG predecessor and a paired
+// NewImportedEntry composes an imported SOCKS5, SS2022, Hysteria2, WireGuard, AmneziaWG or OpenVPN predecessor and a paired
 // Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. Packet-to-packet
 // composition requires the complete configured data/control envelope. SOCKS5 currently
 // supports these paired finals with independently provisioned Start Layers.
 // HTTP/HTTPS CONNECT permits only an unlayered SS2022 final with captured TCP DNS;
 // other datagrams are refused. Compilation proves neither identity.
 func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (*Controller, error) {
-	bad := errors.New("imported entry requires a captured standalone SOCKS5, SS2022, Hysteria2, WireGuard, AmneziaWG or HTTP/HTTPS CONNECT source and a compatible paired final in Local execution")
+	bad := errors.New("imported entry requires a captured standalone SOCKS5, SS2022, Hysteria2, WireGuard, AmneziaWG, OpenVPN or HTTP/HTTPS CONNECT source and a compatible paired final in Local execution")
 	var selection externalPolicyCapture
-	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5" && selection.Protocol != "http-connect" && selection.Protocol != "https-connect") || selection.Profile["node_kind"] != "external" || (exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
+	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5" && selection.Protocol != "http-connect" && selection.Protocol != "https-connect" && selection.Protocol != "openvpn") || selection.Profile["node_kind"] != "external" || (exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
 		return nil, bad
 	}
 
@@ -81,6 +83,11 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	if json.Unmarshal([]byte(entry.Config()), &first) != nil || json.Unmarshal([]byte(exit.Config()), &last) != nil {
 		return nil, bad
 	}
+	if selection.Protocol == "openvpn" {
+		if err := importedOpenVPNLayerGraph(first, selection); err != nil {
+			return nil, err
+		}
+	}
 	// All predecessor edges were checked by ExternalPolicy; copy only its actual
 	// transport closure. Its DNS and proof listener are not application policy.
 	names := map[string]string{ExternalFinalTag: "entry-wg"}
@@ -118,6 +125,9 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	}
 	if connectEntry {
 		expectedType = "http"
+	}
+	if selection.Protocol == "openvpn" {
+		expectedType = externalOpenVPNType
 	}
 	if selection.Protocol == "amneziawg" {
 		expectedType = AmneziaType
@@ -161,7 +171,7 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 		return nil, errors.New("paired packet final and Start Layer belong to different node endpoints")
 	}
 	var nested *awgpolicy.PacketEnvelope
-	if (selection.Protocol == "wireguard" || selection.Protocol == "amneziawg") && awgpolicy.WireGuardFamily(exitMode) {
+	if (selection.Protocol == "wireguard" || selection.Protocol == "amneziawg" || selection.Protocol == "openvpn") && awgpolicy.WireGuardFamily(exitMode) {
 		var layer map[string]any
 		if outer != nil && predecessorText(final, "detour") != "" {
 			layer = outer
@@ -303,6 +313,16 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	metadata, _ := json.Marshal(meta)
 	source, _ := json.Marshal([]string{"routervpn-imported-entry-v1", entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap})
 	c := &Controller{meta: meta, config: string(encoded), progress: Progress{Stage: "prepared", Measurements: []routechoice.Measurement{}}, imported: &importedEntry{source: externalDigest(source), metadata: string(metadata), profile: profile, publicIP: selection.ExpectedPublicIP}}
+	if selection.Protocol == "openvpn" {
+		// The exact compiled endpoint retains public remote identity through its
+		// captured layer mapper. The complete original import and independent
+		// private transport mapping remain in the source fingerprint above.
+		c.imported.openvpnTransport = predecessorCopy(original)
+		if entryMTU < 1280 {
+			return nil, errors.New("imported OpenVPN entry lost its captured packet capacity")
+		}
+		c.imported.openvpnMTU = uint32(entryMTU)
+	}
 	c.generation.Store(1)
 	return c, nil
 }

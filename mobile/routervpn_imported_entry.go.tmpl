@@ -3,7 +3,11 @@ package libbox
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/protocol/group"
 )
 
 func NewRouterImportedEntryMultihop(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (*RouterMultihop, error) {
@@ -87,4 +91,88 @@ func RouterImportedEntryMTUProfile(plan *RouterMultihop) string {
 		return ""
 	}
 	return plan.MTUProfile()
+}
+
+// ImportedOpenVPNStateContext reads only the original entry endpoint of this
+// retained Box. The final selector cannot substitute its own capacity/receipt.
+func (e *routerMultihopEngine) ImportedOpenVPNStateContext(ctx context.Context, tag string) (mobilemultihop.ImportedOpenVPNState, error) {
+	empty := mobilemultihop.ImportedOpenVPNState{}
+	if ctx == nil {
+		return empty, errors.New("imported OpenVPN observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return empty, err
+	}
+	if tag != "entry-wg" {
+		return empty, errors.New("imported OpenVPN owner is unavailable")
+	}
+	owner, found, err := adapter.RouterVPNOutboundContext(ctx, e.instance.Outbound(), tag)
+	if err != nil {
+		return empty, err
+	}
+	endpoint, ok := owner.(interface {
+		RouterVPNConnectedCapacityContext(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error)
+	})
+	if !found || !ok {
+		return empty, errors.New("imported OpenVPN owner has no bounded connected capacity")
+	}
+	receipt, mtu, err := endpoint.RouterVPNConnectedCapacityContext(ctx)
+	if err != nil {
+		return empty, err
+	}
+	current, found, err := adapter.RouterVPNOutboundContext(ctx, e.instance.Outbound(), tag)
+	if err != nil {
+		return empty, err
+	}
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return empty, err
+	}
+	if !found || current != owner {
+		return empty, errors.New("imported OpenVPN observation owner changed")
+	}
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
+	return mobilemultihop.ImportedOpenVPNState{Remote: receipt, MTU: mtu}, nil
+}
+
+func (e *routerMultihopEngine) IdentityContext(ctx context.Context) (string, error) {
+	if ctx == nil {
+		return "", errors.New("native multihop observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if e == nil || e.server == nil || e.server.StartedService == nil || e.instance == nil {
+		return "", errors.New("native multihop owner is unavailable")
+	}
+	current, err := e.server.StartedService.RouterVPNInstanceContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	if current == nil || current.Box() != e.instance {
+		return "", errors.New("native multihop instance changed")
+	}
+	return fmt.Sprintf("%p", e.instance), nil
+}
+func (e *routerMultihopEngine) SelectedContext(ctx context.Context) (string, error) {
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return "", err
+	}
+	owner, found, err := adapter.RouterVPNOutboundContext(ctx, e.instance.Outbound(), mobilemultihop.SelectorTag)
+	if err != nil {
+		return "", err
+	}
+	selector, ok := owner.(*group.Selector)
+	if !found || !ok {
+		return "", errors.New("native multihop selector missing")
+	}
+	selected := selector.Now()
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return "", err
+	}
+	return selected, ctx.Err()
 }

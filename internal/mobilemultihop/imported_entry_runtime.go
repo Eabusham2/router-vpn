@@ -78,7 +78,15 @@ func (e *importedMeasurementEngine) VerifyMeasurement(ctx context.Context) error
 	if e.Identity() == "" {
 		return errors.New("imported measurement retired")
 	}
-	return (&trial{owner: e.owner, tag: LocalTag}).Verify(ctx)
+	proof := &trial{owner: e.owner, tag: LocalTag}
+	if e.owner.hasImportedOpenVPN() {
+		active := e.owner.openvpnActive.Load()
+		if active == nil || active.tag != LocalTag {
+			return errors.New("imported measurement lost its original OpenVPN proof")
+		}
+		proof.openvpnRemote, proof.openvpnEntryMTU = &active.receipt, active.entryMTU
+	}
+	return proof.Verify(ctx)
 }
 
 func (c *Controller) MatchesEngine(engine Engine) bool {

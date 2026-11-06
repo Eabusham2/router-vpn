@@ -80,12 +80,36 @@ func startDesktopInstalledOpenVPNProvider(t *testing.T, parent *desktopNodeLayer
 }
 func startDesktopInstalledOpenVPNProviderCapacity(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledPeerRequest, dnsAddress, publicAddress string, physical, clientAddress netip.Addr, final bool, maxClients int) desktopExternalInstalledOpenVPNPeer {
 	t.Helper()
+	return startDesktopInstalledOpenVPNProviderCaptured(t, parent, request, dnsAddress, publicAddress, physical, clientAddress, final, maxClients, nil)
+}
+
+// An imported-entry witness supplies only immutable exact private destinations
+// through this original native provider. Ordinary provider fixtures retain all
+// previous services, capacities, authentication and cleanup behavior.
+type desktopOpenVPNProviderCapture struct {
+	Remote       netip.AddrPort
+	FallbackPort uint16
+	MTU          int
+	Routes       []desktopNodeLayerRoute
+}
+
+func startDesktopInstalledOpenVPNProviderCaptured(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledPeerRequest, dnsAddress, publicAddress string, physical, clientAddress netip.Addr, final bool, maxClients int, captured *desktopOpenVPNProviderCapture) desktopExternalInstalledOpenVPNPeer {
+	t.Helper()
 	if maxClients != 1 && maxClients != 2 {
 		t.Fatal("OpenVPN provider fixture requires one session or one bounded reconnect slot")
 	}
 	mtu := 1400
 	if final {
 		mtu = 1280
+	}
+	if captured != nil {
+		if !final || !physical.IsLoopback() || physical != clientAddress || !captured.Remote.IsValid() || !captured.Remote.Addr().IsGlobalUnicast() || captured.Remote.Addr().IsLoopback() || captured.Remote.Port() == 0 || captured.MTU < 1280 || captured.MTU > 1500 || len(captured.Routes) < 1 || len(captured.Routes) > 4 {
+			t.Fatal("imported OpenVPN provider lost its bounded private source")
+		}
+		if request.OpenVPNFallback != (captured.FallbackPort != 0) || captured.FallbackPort == captured.Remote.Port() || request.OpenVPNFallback && request.OpenVPNNetwork != "tcp" {
+			t.Fatal("imported OpenVPN fallback lacks its original bounded TCP tuple")
+		}
+		mtu = captured.MTU
 	}
 	var err error
 	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -130,12 +154,24 @@ func startDesktopInstalledOpenVPNProviderCapacity(t *testing.T, parent *desktopN
 	if latency, ok := parent.route("tcp", "203.0.113.54:443"); ok {
 		services = append(services, struct{ network, destination, target string }{"tcp", "203.0.113.54:443", latency})
 	}
+	if captured != nil {
+		services = nil
+		for _, route := range captured.Routes {
+			if route.Network != "tcp" && route.Network != "udp" {
+				t.Fatal("imported OpenVPN provider has foreign service transport")
+			}
+			services = append(services, struct{ network, destination, target string }{route.Network, route.Destination, route.Physical})
+		}
+	}
 	for _, route := range services {
 		destination, e := netip.ParseAddrPort(route.destination)
 		target, targetErr := netip.ParseAddrPort(route.target)
 		if e != nil || targetErr != nil || !target.Addr().IsLoopback() || target.Port() == 0 {
 			cancel()
 			t.Fatal("OpenVPN provider lost its fixed owned service")
+		}
+		if _, duplicate := rules[route.network+"/"+route.destination]; duplicate {
+			t.Fatal("OpenVPN provider duplicate captured service")
 		}
 		rules[route.network+"/"+route.destination] = desktopReferenceRule{Network: route.network, Address: destination.Addr().String(), Port: int(destination.Port()), Target: route.target}
 	}
@@ -293,11 +329,19 @@ func startDesktopInstalledOpenVPNProviderCapacity(t *testing.T, parent *desktopN
 	}()
 	entryRoutes := []desktopReferenceRule{}
 	if final {
-		entryRoutes = append(entryRoutes, desktopReferenceRule{Network: request.OpenVPNNetwork, Address: "198.51.100.240", Port: 8388, Target: address})
-		address = "198.51.100.240:8388"
+		remote := netip.MustParseAddrPort("198.51.100.240:8388")
+		if captured != nil {
+			remote = captured.Remote
+		}
+		entryRoutes = append(entryRoutes, desktopReferenceRule{Network: request.OpenVPNNetwork, Address: remote.Addr().String(), Port: int(remote.Port()), Target: address})
+		address = remote.String()
 		if unavailable != "" {
-			entryRoutes = append(entryRoutes, desktopReferenceRule{Network: "tcp", Address: "198.51.100.240", Port: 8387, Target: unavailable})
-			unavailable = "198.51.100.240:8387"
+			fallback := netip.MustParseAddrPort("198.51.100.240:8387")
+			if captured != nil {
+				fallback = netip.AddrPortFrom(captured.Remote.Addr(), captured.FallbackPort)
+			}
+			entryRoutes = append(entryRoutes, desktopReferenceRule{Network: "tcp", Address: fallback.Addr().String(), Port: int(fallback.Port()), Target: unavailable})
+			unavailable = fallback.String()
 		}
 	}
 	config := "# exact captured native OpenVPN import\r\nclient\ndev tun\nauth-user-pass\n"

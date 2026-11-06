@@ -1,0 +1,40 @@
+package daemon
+
+import (
+	"context"
+	"testing"
+	"time"
+)
+
+func TestRouterVPNInstanceObservationKeepsCallerAndOriginalOwner(t *testing.T) {
+	original, replacement := &Instance{}, &Instance{}
+	service := &StartedService{instance: original}
+	actual, err := service.RouterVPNInstanceContext(context.Background())
+	if err != nil || actual != original {
+		t.Fatal("native instance observation changed owner", err)
+	}
+	service.serviceAccess.Lock()
+	ctx, cancel := context.WithCancel(context.Background())
+	entered, done := make(chan struct{}), make(chan error, 1)
+	go func() { close(entered); _, err := service.RouterVPNInstanceContext(ctx); done <- err }()
+	<-entered
+	cancel()
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			service.serviceAccess.Unlock()
+			t.Fatal("read lost original cancellation", err)
+		}
+	case <-time.After(time.Second):
+		service.serviceAccess.Unlock()
+		t.Fatal("native instance read abandoned caller under replacement lock")
+	}
+	service.instance = replacement
+	service.serviceAccess.Unlock()
+	if result, err := service.RouterVPNInstanceContext(ctx); err != context.Canceled || result != nil {
+		t.Fatal("expired read adopted replacement owner")
+	}
+	if result, err := service.RouterVPNInstanceContext(context.Background()); err != nil || result != replacement {
+		t.Fatal("fresh owner read failed", err)
+	}
+}

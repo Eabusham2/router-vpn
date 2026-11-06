@@ -129,6 +129,7 @@ PEER_TEMPLATES = {
     'node_external_ss_connect_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_ss_connect_test.go',
     'node_external_openvpn_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_openvpn_installed_test.go',
     'node_openvpn_capacity_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_openvpn_capacity_test.go',
+    'node_imported_openvpn_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_openvpn_test.go',
     'node_external_wireguard_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_wireguard_installed_test.go',
     'node_darwin_external_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_darwin_external_peer_test.go',
     'node_external_latency_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_latency_peer_test.go',
@@ -721,7 +722,7 @@ def copy_encrypted_peer_templates(vendor):
             prefix = b'//go:build linux && routervpn_linux_node_composition\n\n' + prefix
         elif name == 'node_router_peer_linux_test.go.tmpl':
             prefix = b'//go:build linux && !android && routervpn_linux_node_composition\n\n' + prefix
-        elif name == 'node_openvpn_capacity_test.go.tmpl':
+        elif name in ('node_openvpn_capacity_test.go.tmpl', 'node_imported_openvpn_test.go.tmpl'):
             prefix = b'//go:build linux && !android && routervpn_openvpn_remote_test\n\n' + prefix
         elif name in ('node_external_hysteria_layer_installed_test.go.tmpl', 'node_external_wireguard_installed_test.go.tmpl', 'node_external_amnezia_installed_test.go.tmpl', 'node_external_openvpn_installed_test.go.tmpl'):
             prefix = b'//go:build (linux && !android) || (darwin && routervpn_darwin_external_host)\n\n' + prefix

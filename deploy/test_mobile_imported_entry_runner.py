@@ -47,7 +47,7 @@ class ImportedEntryVerdicts(unittest.TestCase):
   for mutation in (events[:-1],events+[events[-1]],events[:-1]+[dict(events[-1],Action='skip')]):
    with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
  def test_layered_fixture_inventory(self):
-  self.assertEqual(len(gate.FILES),247)
+  self.assertEqual(len(gate.FILES),337)
   self.assertEqual(len(gate.SOCKS_FILES),45)
   for mode in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong'):
    for layer in gate.LAYERS[1:]:
@@ -66,7 +66,7 @@ class ImportedEntryVerdicts(unittest.TestCase):
   for case in ('TestRouterVPNImportedSOCKSLayerRelayRetirement','retiring-worker-root-close','replacement-owner','foreign-and-closed'):
    self.assertIn(case,source)
  def test_both_layer_verdicts(self):
-  self.assertEqual(len(gate.FILES),247)
+  self.assertEqual(len(gate.FILES),337)
   expected=gate.names(gate.SOCKS_BOTH_GROUPS)
   self.assertEqual(len(expected),271)
   events=[{'Action':a,'Test':n} for n in sorted(expected) for a in ('run','pass')]
@@ -76,6 +76,15 @@ class ImportedEntryVerdicts(unittest.TestCase):
  def test_first_response_retirement_is_mandatory(self):
   source=(ROOT/'deploy/test_mobile_imported_entry.py').read_text()
   self.assertIn("'TestRouterVPNDesktopLayerFirstResponseRetirement':['eof','cancel']",source)
+ def test_openvpn_exact_inventory(self):
+  self.assertEqual(len(gate.OPENVPN.FILES),90)
+  self.assertEqual(len(gate.OPENVPN.REFUSALS),14)
+  self.assertEqual(len(gate.names(gate.OPENVPN.PEERS)),111)
+  expected=gate.names(gate.OPENVPN.PEERS)
+  events=[{'Action':a,'Test':n} for n in sorted(expected) for a in ('run','pass')]
+  gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
+  for mutation in (events[:-1],events+[events[-1]],events[:-1]+[dict(events[-1],Action='skip')]):
+   with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
  def test_shipping_invocations(self):
   self.assertIn("test_mobile_imported_entry.py'),str(vendor),'--android'",(ROOT/'deploy/test_android_multihop_pinned.py').read_text())
   self.assertIn('"deploy/test_mobile_imported_entry.py", source, "--native-peers"',(ROOT/'deploy/test_desktop_node_physical.py').read_text())

@@ -54,10 +54,15 @@ class ImportedGate(unittest.TestCase):
         connect={"connect--"+p+"--"+m+"--"+d+".json" for p in ("http-connect","https-connect") for m in ("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305") for d in ("home","custom")}
         self.assertEqual(len(connect),12)
         self.assertFalse(connect & (original | packet | packet_final | nested | socks | socks_layers))
-        self.assertEqual(G.NAMES, original | packet | packet_final | nested | socks | socks_layers | connect)
+        openvpn={"openvpn--"+transport+"--final-"+mode+"--"+a+"--"+b+".json" for transport in ("tcp","udp") for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for a in G.LAYERS for b in G.LAYERS}
+        previous= original | packet | packet_final | nested | socks | socks_layers | connect
+        self.assertEqual(len(previous),247)
+        self.assertEqual(len(openvpn),90)
+        self.assertFalse(previous & openvpn)
+        self.assertEqual(G.NAMES,previous | openvpn)
         self.assertEqual(len(ss), 11)
         self.assertEqual(len(hy), 9)
-        self.assertEqual(len(self.events()), 249)
+        self.assertEqual(len(self.events()), 339)
 
     def test_exact_verdicts(self):
         G.require_verdicts(self.encode(self.events()))

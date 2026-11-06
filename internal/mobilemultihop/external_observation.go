@@ -149,7 +149,15 @@ func (c *Controller) HealthyContext(ctx context.Context) error {
 	if selected != tag {
 		return errors.New("external execution selection changed")
 	}
-	if c.openvpnResponses != nil {
+	if c.hasImportedOpenVPN() {
+		active := c.openvpnActive.Load()
+		if active == nil || active.tag != tag || !time.Now().Before(active.deadline) {
+			return errors.New("imported OpenVPN observation expired")
+		}
+		if err := c.checkImportedOpenVPN(ctx, active.receipt, active.entryMTU); err != nil {
+			return err
+		}
+	} else if c.openvpnResponses != nil {
 		active := c.openvpnActive.Load()
 		if active == nil || active.tag != tag || !time.Now().Before(active.deadline) {
 			return errors.New("external OpenVPN observation expired")

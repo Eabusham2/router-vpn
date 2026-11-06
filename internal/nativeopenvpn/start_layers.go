@@ -100,7 +100,7 @@ func (layer StartLayer) Validate(host, selectedMode string) error {
 
 func (layers *StartLayers) UnmarshalJSON(raw []byte) error {
 	object, err := pairingObject(raw, MaxStartLayersBytes)
-	if err != nil || len(object) < 2 || len(object) > 16 {
+	if err != nil || len(object) < 1 || len(object) > 16 {
 		return errStartLayers
 	}
 	result := StartLayers{}

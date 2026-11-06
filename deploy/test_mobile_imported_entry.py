@@ -10,6 +10,8 @@ import sys
 import tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'deploy'))
+import mobile_imported_openvpn_cases as OPENVPN
 PIN='1ac1a339cb1223e9c70eae14c44411c75033c02d'
 LAYERS=('', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
 BASE_FILES={f'{a or "off"}--{b or "off"}.json' for a in LAYERS for b in LAYERS}|{'cipher-aes128.json','cipher-chacha20.json'}|{f'hysteria2--{a or "off"}--{b or "off"}.json' for a in LAYERS for b in LAYERS}
@@ -29,7 +31,7 @@ for protocol in ("http-connect","https-connect"):
  row=protocol+"--2022-blake3-aes-256-gcm--home"
  CONNECT_PEERS += [row+"/"+fault for fault in ("entry-auth","entry-route","final-key","final-route","dns-route","final-identity","wrong-entry-ip","cancel","close-owner","mtu-refusal","mtu-cancel","mtu-successor")]
  if protocol=="https-connect":CONNECT_PEERS += [row+"/"+fault for fault in ("sni","trust")]
-FILES=CONNECT_FILES|SOCKS_FILES|NESTED_FILES|PACKET_FINAL_FILES|PACKET_FILES|BASE_FILES|{"final-hysteria2--"+name for name in BASE_FILES}
+FILES=OPENVPN.FILES|CONNECT_FILES|SOCKS_FILES|NESTED_FILES|PACKET_FINAL_FILES|PACKET_FILES|BASE_FILES|{"final-hysteria2--"+name for name in BASE_FILES}
 CORE={
  "TestImportedEntryCONNECTGraphs":CONNECT_ROWS,
  "TestImportedEntryCONNECTBoundaries":["udp-dns","h3-dns","dot-dns","default-dns","hostname-dns","home-owner","entry-layer","final-layer","hy-final","wg-final","awg-final","legacy-cipher","uot-enabled","uot-disabled","uot-malformed","server-execution","retained-source"],
@@ -115,6 +117,9 @@ def require_verdicts(raw, expected):
 def checked_sources(vendor,peers):
  files={'mobile/routervpn_imported_entry.go.tmpl':'experimental/libbox/routervpn_imported_entry.go','mobile/routervpn_imported_entry_native_test.go.tmpl':'experimental/libbox/routervpn_imported_entry_native_test.go','mobile/strategy/box.go.tmpl':'routervpn_strategy_dns.go','mobile/mtu/bridge.go.tmpl':'experimental/libbox/routervpn_mtu_bridge.go'}
  if peers:files={'mobile/desktop/node_imported_connect_entry_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_connect_entry_test.go','mobile/desktop/node_external_ss_layers_test.go.tmpl':'protocol/routervpnamnezia/routervpn_desktop_node_external_ss_layers_test.go','mobile/desktop/node_imported_socks_packet_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_socks_packet_test.go','mobile/desktop/node_imported_socks_entry_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_socks_entry_test.go','mobile/desktop/node_imported_nested_packet_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_nested_packet_test.go','mobile/desktop/node_imported_packet_final_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_packet_final_test.go','mobile/desktop/node_imported_packet_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_packet_test.go','mobile/desktop/node_external_wireguard_installed_test.go.tmpl':'protocol/routervpnamnezia/routervpn_desktop_external_wireguard_installed_test.go','mobile/desktop/node_external_amnezia_installed_test.go.tmpl':'protocol/routervpnamnezia/routervpn_desktop_external_amnezia_installed_test.go','mobile/desktop/node_imported_hysteria_final_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_hysteria_final_test.go','mobile/desktop/node_imported_router_entry_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_router_entry_test.go','mobile/desktop/node_imported_hysteria_entry_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_hysteria_entry_test.go','mobile/desktop/node_layer_peer_test.go.tmpl':'protocol/routervpnamnezia/routervpn_desktop_node_layer_peer_test.go','mobile/desktop/node_external_ss_entry_test.go.tmpl':'protocol/routervpnamnezia/routervpn_desktop_external_ss_entry_test.go'}
+ if peers:
+  files['mobile/desktop/node_imported_openvpn_test.go.tmpl']='protocol/routervpnamnezia/routervpn_imported_openvpn_test.go'
+  files['mobile/desktop/node_external_openvpn_installed_test.go.tmpl']='protocol/routervpnamnezia/routervpn_desktop_external_openvpn_installed_test.go'
  for source,target in files.items():
   path=vendor/target
   if path.is_symlink() or not path.is_file() or path.read_bytes()!=(ROOT/source).read_bytes():raise ValueError('Changed native imported-entry source: '+target)
@@ -149,6 +154,9 @@ def run(vendor,peers=False,android=False):
  with tempfile.TemporaryDirectory(prefix='routervpn-imported-entry-') as temporary:
   fixtures=Path(temporary)/'sources';fixtures.mkdir();env['ROUTERVPN_IMPORTED_ENTRY_FIXTURES']=str(fixtures);env['ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES']='1'
   execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^TestImportedEntry','-count=1','-timeout=60s'],ROOT,env,names(CORE))
+  env['ROUTERVPN_IMPORTED_OPENVPN_FIXTURES']=str(fixtures);env['ROUTERVPN_REQUIRE_IMPORTED_OPENVPN_FIXTURES']='1'
+  execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^TestImportedOpenVPN','-count=1','-timeout=60s'],ROOT,env,names(OPENVPN.CORE))
+  execute(['go','test','-mod=readonly','-race','-json','./internal/nativeopenvpn','-run','^TestOpenVPNNativeLayerMapSingleHostKeepsOriginalIdentity$','-count=1','-timeout=20s'],ROOT,env,names(OPENVPN.POLICY_CORE))
   if {p.name for p in fixtures.iterdir()}!=FILES:raise ValueError('Incomplete captured imported source matrix')
   groups={'TestRouterImportedEntryPairedFinalNativeGraphs':sorted(FILES)}
   if android:
@@ -174,6 +182,10 @@ def run(vendor,peers=False,android=False):
   if peers:
    for parent,leaves in SOCKS_BOTH_GROUPS.items():
     execute(base+['-race','./protocol/routervpnamnezia','-run','^'+parent+'$','-count=1','-timeout=90s'],vendor,env,names({parent:leaves}))
+  if peers:
+   for parent,leaves in OPENVPN.PEERS.items():
+    native=base.copy();native[native.index(tags)]=tags+',routervpn_openvpn_remote_test'
+    execute(native+['-race','./protocol/routervpnamnezia','-run','^'+parent+'$','-count=1','-timeout=60s'],vendor,env,names({parent:leaves}),timeout=90)
  checked_sources(vendor,peers)
  print('Exact imported-entry source, independent layers, distinct proofs, selected DNS and native verdicts passed; no OS device grant inferred.')
 if __name__=='__main__':

@@ -1,0 +1,75 @@
+package libbox
+
+import (
+	"encoding/json"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// This matrix exercises the actual native compiler/parser only. Mobile host
+// admission remains separately gated on encrypted peers and shipping callbacks.
+func TestRouterImportedOpenVPNNativeGraphs(t *testing.T) {
+	root := os.Getenv("ROUTERVPN_IMPORTED_OPENVPN_FIXTURES")
+	if root == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_OPENVPN_FIXTURES") == "1" {
+			t.Fatal("required original OpenVPN sources absent")
+		}
+		t.Skip("bounded OpenVPN source gate supplies exact compiler captures")
+	}
+	expected := map[string]bool{}
+	for _, network := range []string{"tcp", "udp"} {
+		for _, mode := range []string{"shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"} {
+			for _, a := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				for _, b := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+					expected["openvpn--"+network+"--final-"+mode+"--"+a+"--"+b+".json"] = true
+				}
+			}
+		}
+	}
+	files, err := os.ReadDir(root)
+	if err != nil || len(files) != len(expected) {
+		t.Fatal("incomplete OpenVPN capture matrix", err)
+	}
+	for _, file := range files {
+		t.Run(file.Name(), func(t *testing.T) {
+			if !expected[file.Name()] || file.IsDir() || file.Type()&os.ModeSymlink != 0 {
+				t.Fatal("foreign original OpenVPN source")
+			}
+			raw, err := os.ReadFile(filepath.Join(root, file.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var source []string
+			if json.Unmarshal(raw, &source) != nil || len(source) != 9 {
+				t.Fatal("invalid original OpenVPN capture")
+			}
+			plan, err := NewRouterImportedEntryMultihop(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.SourceSHA256() != source[7] || plan.Config() != source[8] {
+				t.Fatal("native compiler changed original captured graph")
+			}
+			if err := CheckConfig(plan.Config()); err != nil {
+				t.Fatal("actual native parser rejected OpenVPN paired graph", err)
+			}
+			if _, err := mobilemtu.ReadProfile(plan.MTUProfile()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := mobilemtu.NewPlan(plan.Config(), 1280); err != nil {
+				t.Fatal(err)
+			}
+			if plan.Healthy() {
+				t.Fatal("compiled graph manufactured readiness")
+			}
+			if _, err := plan.NewHopMeasurement(nil); err == nil {
+				t.Fatal("unstarted OpenVPN acquired measurement")
+			}
+			if _, err := plan.NewMTU(nil, nil); err == nil {
+				t.Fatal("unstarted OpenVPN acquired MTU ownership")
+			}
+		})
+	}
+}
