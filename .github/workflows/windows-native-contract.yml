@@ -278,6 +278,14 @@ jobs:
           ./client/test-windows-async-actions.ps1
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/test-windows-async-actions.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 async action regressions failed' }
+      - name: Composed Advanced Performance request ownership and active hop capture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          foreach($shell in @('pwsh','powershell.exe')){
+            python deploy/test_windows_performance.py --shell $shell
+            if($LASTEXITCODE -ne 0){throw "Composed Performance ownership failed in $shell"}
+          }
       - name: Composed Windows Help and main-control bindings
         shell: pwsh
         run: |

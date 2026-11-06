@@ -226,27 +226,80 @@ function ShowExternalComparison{
  $S.Timer.Interval=[TimeSpan]::FromMilliseconds(200);$S.Timer.Add_Tick({TickExternalComparison $S}.GetNewClosure());$S.Timer.Start();StartExternalComparisonRequest $S 'offer' '/api/speed-lab/external-comparison';$D.Show()
 }
 
-function ShowUnifiedPerformance{
- [xml]$PX=@"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Router VPN Performance" Width="760" Height="470" MinWidth="600" MinHeight="380" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Text="Latency &amp; path performance" FontSize="23" FontWeight="Bold"/><TextBlock Grid.Row="1" Margin="0,8,0,12" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Live RTT uses the current private tunnel. Real path speed transfers authenticated bounded data to the active exit. Routed hop speed independently transfers to the selected entry and exit private agents through the active multihop graph; unreachable hops report their real error. Auto MTU is a separate optimizer."/><TextBox Name="Result" Grid.Row="2" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Background="#101A2B" Foreground="#E8ECF8" Padding="10"/><WrapPanel Grid.Row="3" Margin="0,12,0,0"><Button Name="Live" Content="Live path RTT" Margin="4" Padding="11,6"/><Button Name="Durable" Content="50-sample selected node" Margin="4" Padding="11,6"/><Button Name="Speed" Content="Real path speed" Margin="4" Padding="11,6"/><Button Name="HopSpeed" Content="Routed hop speeds" Margin="4" Padding="11,6"/><Button Name="Mtu" Content="Throughput + Auto MTU" Margin="4" Padding="11,6"/><Button Name="External" Content="Compare external / connect fastest" Margin="4" Padding="11,6"/><Button Name="Close" Content="Close" Margin="4" Padding="11,6"/></WrapPanel></Grid></Window>
-"@
- $Reader=New-Object System.Xml.XmlNodeReader $PX;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window;$Result=$D.FindName('Result');$D.Tag=$null
- $Buttons=@($D.FindName('Live'),$D.FindName('Durable'),$D.FindName('Speed'),$D.FindName('HopSpeed'),$D.FindName('Mtu'))
- $RunPerf={param([string]$Label,[string]$Path,$Body,[int]$Timeout,[int]$Depth,[bool]$RefreshAfter)
-  if(UnifiedAsyncBusy){$Result.Text='Another Router VPN action is still running.';return}
-  foreach($B in $Buttons){$B.IsEnabled=$false};$Result.Text=$Label+' running…';$D.Tag='owned'
-  $Success={param($R)$Result.Text=($R|ConvertTo-Json -Depth $Depth);if($RefreshAfter){RefreshProduct}}.GetNewClosure()
-  $Failure={param($E)$Result.Text=$E}.GetNewClosure()
-  $Finally={foreach($B in $Buttons){$B.IsEnabled=$true};$D.Tag=$null}.GetNewClosure()
-  if(-not(StartUnifiedApiAsync $Label $Path 'POST' $Body $Timeout $Success $Failure $Finally)){foreach($B in $Buttons){$B.IsEnabled=$true};$D.Tag=$null}
+$script:UnifiedPerformancePanel=$null
+function UnifiedPerformanceOwned($State,$Token){
+ return -not$State.Closed-and[object]::ReferenceEquals($State.Current,$Token)-and[object]::ReferenceEquals($State.Task,$script:UnifiedAsyncTask)
+}
+function SetUnifiedPerformanceIdle($State){
+ if($State.Closed){return};foreach($B in $State.Buttons){$B.IsEnabled=$true};$State.Cancel.IsEnabled=$false
+}
+function CancelUnifiedPerformance($State){
+ $State.Pending=$null;$State.Timer.Stop()
+ if($null-ne$State.Current-and$null-ne$State.Task-and[object]::ReferenceEquals($State.Task,$script:UnifiedAsyncTask)-and(UnifiedAsyncBusy)){
+  [void](CancelUnifiedApiAsync $false)
+  if(-not$State.Closed){$State.Result.Text='Cancelling this request; controller cleanup may still be pending.'}
+ }elseif($null-eq$State.Current){SetUnifiedPerformanceIdle $State}
+}
+function CloseUnifiedPerformance($State){
+ $State.Closed=$true;CancelUnifiedPerformance $State
+ # The actual async owner retains the request and callbacks until completion.
+ if($null-eq$State.Current-and[object]::ReferenceEquals($script:UnifiedPerformancePanel,$State)){$script:UnifiedPerformancePanel=$null}
+}
+function FinishUnifiedPerformanceRequest($State,$Token){
+ if(-not[object]::ReferenceEquals($State.Current,$Token)){return}
+ $State.Current=$null;$State.Task=$null
+ if($State.Closed){$State.Pending=$null;if([object]::ReferenceEquals($script:UnifiedPerformancePanel,$State)){$script:UnifiedPerformancePanel=$null};return}
+ if($null-ne$State.Pending){$State.Timer.Start()}else{SetUnifiedPerformanceIdle $State}
+}
+function StartUnifiedPerformanceRequest($State,[string]$Label,[string]$Path,$Body,[int]$Timeout,[int]$Depth,[bool]$RefreshAfter,[bool]$HopPreflight=$false){
+ if($State.Closed-or$null-ne$State.Current-or$null-ne$State.Pending){return $false}
+ if(UnifiedAsyncBusy){$State.Result.Text='Another Router VPN action is still running.';return $false}
+ $Token=[object]::new();$State.Current=$Token;$State.Task=$null
+ foreach($B in $State.Buttons){$B.IsEnabled=$false};$State.Cancel.IsEnabled=$true;$State.Result.Text=$Label
+ $Success={param($R)
+  if(-not(UnifiedPerformanceOwned $State $Token)){return}
+  if($HopPreflight){
+   $connected=$R.PSObject.Properties['connected'];$entry=$R.PSObject.Properties['entry_id'];$exit=$R.PSObject.Properties['exit_id']
+   if($null-eq$connected-or$connected.Value-isnot[bool]-or-not$connected.Value-or$null-eq$entry-or$null-eq$exit-or$entry.Value-isnot[string]-or$exit.Value-isnot[string]-or[string]::IsNullOrWhiteSpace($entry.Value)-or[string]::IsNullOrWhiteSpace($exit.Value)-or$entry.Value-ceq$exit.Value){throw 'Connect an actual multihop graph with different entry and exit nodes first.'}
+   # Capture this status response once. The controller revalidates the active
+   # graph on POST and throughout measurement; GET/POST is not atomic.
+   $State.Pending=@{entry_id=[string]$entry.Value;exit_id=[string]$exit.Value;bytes=4194304}
+   $State.Result.Text='Active multihop captured; waiting for the status request to retire…'
+  }else{$State.Result.Text=($R|ConvertTo-Json -Depth $Depth);if($RefreshAfter){RefreshProduct}}
  }.GetNewClosure()
- $D.FindName('Live').Add_Click({&$RunPerf 'Measuring live RTT…' '/api/connection/live-latency' @{samples=5} 12 6 $false})
- $D.FindName('Durable').Add_Click({try{$P=SelectedNode;&$RunPerf 'Testing 50-sample node latency…' '/api/profile/latency' @{id=[string]$P.id;samples=50} 180 6 $true}catch{$Result.Text=$_.Exception.Message}})
- $D.FindName('Speed').Add_Click({&$RunPerf 'Testing real path speed…' '/api/connection/speed-test' @{bytes=8388608} 45 8 $false})
- $D.FindName('HopSpeed').Add_Click({try{$Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue;if(-not$Entry-or-not$Exit-or$Entry-eq$Exit){throw 'Choose different multihop entry and exit nodes first.'};&$RunPerf 'Testing routed hop speeds…' '/api/multihop/speed-test' @{entry_id=$Entry;exit_id=$Exit;bytes=4194304} 70 10 $false}catch{$Result.Text=$_.Exception.Message}})
- $D.FindName('Mtu').Add_Click({Show-RouterVPNMTUDialog -BaseUrl $BaseUrl -Owner $D})
- $D.FindName('External').Add_Click({$D.Close();ShowExternalComparison})
- $D.FindName('Close').Add_Click({if([string]$D.Tag-eq'owned'-and(UnifiedAsyncBusy)){[void](CancelUnifiedApiAsync $false)};$D.Close()})
+ $Failure={param($E)if(UnifiedPerformanceOwned $State $Token){$State.Result.Text=$E}}.GetNewClosure()
+ $Finally={FinishUnifiedPerformanceRequest $State $Token}.GetNewClosure()
+ $Method=if($HopPreflight){'GET'}else{'POST'}
+ $Started=StartUnifiedApiAsync $Label $Path $Method $Body $Timeout $Success $Failure $Finally
+ if($Started-and[object]::ReferenceEquals($State.Current,$Token)){$State.Task=$script:UnifiedAsyncTask;if($State.Closed){CancelUnifiedPerformance $State}}
+ if(-not$Started-and[object]::ReferenceEquals($State.Current,$Token)){$State.Current=$null;$State.Task=$null;SetUnifiedPerformanceIdle $State}
+ return $Started
+}
+function ContinueUnifiedPerformanceHop($State){
+ $State.Timer.Stop();$Body=$State.Pending;$State.Pending=$null
+ if($State.Closed-or$null-eq$Body){return}
+ if($null-ne$State.Current-or(UnifiedAsyncBusy)){$State.Result.Text='The captured hop request was superseded by another action. Run it again.';if($null-eq$State.Current){SetUnifiedPerformanceIdle $State};return}
+ [void](StartUnifiedPerformanceRequest $State 'Testing routed hop speeds…' '/api/multihop/speed-test' $Body 70 10 $false)
+}
+function ShowUnifiedPerformance{
+ if($null-ne$script:UnifiedPerformancePanel){if(-not$script:UnifiedPerformancePanel.Closed){[void]$script:UnifiedPerformancePanel.Dialog.Activate();return};if($null-ne$script:UnifiedPerformancePanel.Current){Log 'The previous Performance request is still retiring.';return}}
+ [xml]$PX=@"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Router VPN Performance" Width="760" Height="470" MinWidth="600" MinHeight="380" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Text="Latency &amp; path performance" FontSize="23" FontWeight="Bold"/><TextBlock Grid.Row="1" Margin="0,8,0,12" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Live RTT uses the current private tunnel. Real path speed transfers authenticated bounded data to the active exit. Routed hop speed independently transfers to the selected entry and exit private agents through the active multihop graph; unreachable hops report their real error. Auto MTU is a separate optimizer."/><TextBox Name="Result" Grid.Row="2" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Background="#101A2B" Foreground="#E8ECF8" Padding="10"/><WrapPanel Grid.Row="3" Margin="0,12,0,0"><Button Name="Live" Content="Live path RTT" Margin="4" Padding="11,6"/><Button Name="Durable" Content="50-sample selected node" Margin="4" Padding="11,6"/><Button Name="Speed" Content="Real path speed" Margin="4" Padding="11,6"/><Button Name="HopSpeed" Content="Routed hop speeds" Margin="4" Padding="11,6"/><Button Name="Mtu" Content="Throughput + Auto MTU" Margin="4" Padding="11,6"/><Button Name="External" Content="Compare external / connect fastest" Margin="4" Padding="11,6"/><Button Name="CancelTest" Content="Cancel test" Margin="4" Padding="11,6" IsEnabled="False"/><Button Name="Close" Content="Close" Margin="4" Padding="11,6"/></WrapPanel></Grid></Window>
+"@
+ $Reader=New-Object System.Xml.XmlNodeReader $PX;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window
+ $State=[pscustomobject]@{Dialog=$D;Result=$D.FindName('Result');Cancel=$D.FindName('CancelTest');Buttons=@();Current=$null;Task=$null;Pending=$null;Closed=$false;Timer=(New-Object Windows.Threading.DispatcherTimer)}
+ $State.Buttons=@($D.FindName('Live'),$D.FindName('Durable'),$D.FindName('Speed'),$D.FindName('HopSpeed'),$D.FindName('Mtu'),$D.FindName('External'))
+ $script:UnifiedPerformancePanel=$State
+ $State.Timer.Interval=[TimeSpan]::FromMilliseconds(50);$State.Timer.Add_Tick({ContinueUnifiedPerformanceHop $State}.GetNewClosure())
+ $D.FindName('Live').Add_Click({[void](StartUnifiedPerformanceRequest $State 'Measuring live RTT…' '/api/connection/live-latency' @{samples=5} 12 6 $false)}.GetNewClosure())
+ $D.FindName('Durable').Add_Click({try{$P=SelectedNode;[void](StartUnifiedPerformanceRequest $State 'Testing 50-sample node latency…' '/api/profile/latency' @{id=[string]$P.id;samples=50} 180 6 $true)}catch{if(-not$State.Closed){$State.Result.Text=$_.Exception.Message}}}.GetNewClosure())
+ $D.FindName('Speed').Add_Click({[void](StartUnifiedPerformanceRequest $State 'Testing real path speed…' '/api/connection/speed-test' @{bytes=8388608} 45 8 $false)}.GetNewClosure())
+ $D.FindName('HopSpeed').Add_Click({[void](StartUnifiedPerformanceRequest $State 'Checking the active multihop graph…' '/api/multihop/status' $null 5 10 $false $true)}.GetNewClosure())
+ $D.FindName('Mtu').Add_Click({Show-RouterVPNMTUDialog -BaseUrl $BaseUrl -Owner $D}.GetNewClosure())
+ $D.FindName('External').Add_Click({$D.Close();ShowExternalComparison}.GetNewClosure())
+ $D.FindName('CancelTest').Add_Click({CancelUnifiedPerformance $State}.GetNewClosure())
+ $D.FindName('Close').Add_Click({$D.Close()}.GetNewClosure())
+ $D.Add_Closed({CloseUnifiedPerformance $State}.GetNewClosure())
  [void]$D.ShowDialog()
 }
 (Control 'UnifiedFastestNode').Add_SelectionChanged({

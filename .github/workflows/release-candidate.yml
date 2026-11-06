@@ -302,6 +302,11 @@ jobs:
           & $asyncTest -Root $root.FullName
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $asyncTest -Root $root.FullName
           if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 packaged async lifecycle tests failed'}
+          $performanceTest=Join-Path $root.FullName 'client\test-windows-performance.ps1'
+          if(-not(Test-Path -LiteralPath $performanceTest)){throw 'shipped Windows package missing Performance ownership regression tests'}
+          & $performanceTest -Root $root.FullName
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $performanceTest -Root $root.FullName
+          if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 packaged Performance ownership tests failed'}
           $runtimeTest=Join-Path $root.FullName 'client\test-windows-runtime-install.ps1'
           & $runtimeTest -SourceRoot $root.FullName
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runtimeTest -SourceRoot $root.FullName
