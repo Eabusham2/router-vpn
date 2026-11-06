@@ -816,7 +816,9 @@ class OpenVPNWitnessCompilerScope(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="windows-openvpn-witness-")
         self.addCleanup(self.temporary.cleanup)
-        self.workspace = Path(self.temporary.name)
+        # Compose resolves the real source before validating its exact overlay
+        # keys. Windows TEMP may use the same profile through a short alias.
+        self.workspace = Path(self.temporary.name).resolve()
         self.source = self.workspace / "core"
         self.source.mkdir()
         self.directory = self.workspace / "compiler"
@@ -895,6 +897,20 @@ class OpenVPNWitnessCompilerScope(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unowned OpenVPN box witness"):
             self.compose()
         self.assertIn("another owner", target.read_text())
+
+    def test_missing_original_native_observer_is_rejected(self):
+        target = str(self.source / "routervpn/mobiletor/desktop_socket_windows_node_composition_overlay.go")
+        del self.native[target]
+        self.existing.write_text(json.dumps({"Replace": self.native}))
+        with self.assertRaisesRegex(ValueError, "original strict native observer"):
+            self.compose()
+
+    def test_changed_original_native_observer_is_rejected(self):
+        target = str(self.source / "routervpn/mobiletor/desktop_socket_windows_node_composition_overlay.go")
+        original = Path(self.native[target])
+        original.write_bytes(original.read_bytes() + b"\n// another native observer\n")
+        with self.assertRaisesRegex(ValueError, "native observer changed before bounded acquisition"):
+            self.compose()
 
     def test_mac_callback_control_changes_only_both_original_hook_guards(self):
         mapping = self.compose("missing-mac-callback")
@@ -1060,7 +1076,7 @@ class NativePhaseOrchestration(unittest.TestCase):
         self.assertEqual(len(set(calls)), 7)
         self.assertEqual(len(results), 7)
         self.assertIn("all seven native phases and their controls passed", output)
-        self.assertEqual([len(row["executables"]) for row in results], [3, 6, 3, 7, 3, 3, 3])
+        self.assertEqual([len(row["executables"]) for row in results], [3, 6, 3, 7, 3, 5, 3])
 
     def test_partial_wrong_target_changed_source_or_missing_images_never_complete(self):
         for fault in ("missing", "source", "phase", "target", "image", "unrelated-image", "mutated-source", "oversized"):

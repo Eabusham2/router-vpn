@@ -1222,3 +1222,21 @@ Validation before publication: an Astra agent traced the actual timeout stack an
 
 Evidence: [actual AMD64 packet timeout](https://github.com/Eabusham2/router-vpn/actions/runs/42238149378/job/127961121154). The separate ARM64 job passed all three ordinary packet-family suites before reaching the independently tracked Server lease-cleanup defect: [ARM64 packet and Server job](https://github.com/Eabusham2/router-vpn/actions/runs/42238149378/job/127961121533).
 
+
+## Windows native preflight fixture correction — November 6, 2026
+
+Current-source evidence: Windows physical composition run [42248724369](https://github.com/Eabusham2/router-vpn/actions/runs/42248724369), source `df24940ec1e9fac935ab896f183acfa3e5c4965d`, failed in the shared scope/source preflight before the affected native phases could execute. The directly read AMD64 node-baseline job was [128010294640](https://github.com/Eabusham2/router-vpn/actions/runs/42248724369/job/128010294640). Its runner reported 48 tests with three failures and three errors. No OpenVPN witness or executable-copy native pass is inferred from this attempt.
+
+The OpenVPN witness fixture already supplied the original native observer mapping, but built its keys from an unresolved temporary path. On Windows, the temporary directory can use a short user-profile alias; the composition helper independently resolves the real source path before requiring the exact observer key. The fixture now resolves its temporary workspace before deriving every captured path. The helper's exact-key and original-byte checks are unchanged. Two added cases explicitly reject a missing observer mapping and changed observer source.
+
+The independent packaging expectation now requires five OpenVPN executable receipts: the original image and all four controls. The existing manifest already required those five images; the stale test expected three. Other phase counts and all negative receipt cases are preserved.
+
+Validation before publication: root and an independent Astra reviewer compared the exact candidate with the current runner and composition helper; all changed bytes were fetched back from the review commit. There are now 50 runner test methods. No local Python or native execution is claimed while the execution workspace is unavailable. Fresh exact-source CI remains required.
+
+### Separately observed completed checks
+
+- The requirement-closure workflow on `df24940e`, [42248724078](https://github.com/Eabusham2/router-vpn/actions/runs/42248724078), completed successfully. The actual job log includes root `go test ./...` and that workflow's selected audits; it does not execute every generated Box/native composition fixture.
+- Windows native contract run [42240610019](https://github.com/Eabusham2/router-vpn/actions/runs/42240610019) on `e7178b18` completed successfully, including job `127972588957` and both command-ownership architecture jobs. The prior MTU stage completed. This is distinct from the still-failing or pending physical/bootstrap packet and OpenVPN phases.
+- Darwin guardian run [42243235694](https://github.com/Eabusham2/router-vpn/actions/runs/42243235694) on `44999fe7`: the Intel positive socket-retirement case passed, but the per-socket descriptor-retirement mutation lost a control reply at socket 35 and failed cleanup before its expected capacity assertion. A more direct retained-tuple regression is under review; neither the full guardian gate nor a complete release is established.
+
+The Windows Server lease-cleanup production unit is still unpublished and undergoing exact-source/native-inventory review. Broader source, native, release, signing, deployment and physical-device requirements remain open as recorded above.
