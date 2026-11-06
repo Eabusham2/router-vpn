@@ -425,6 +425,30 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
         self.assertEqual(call.call_count, 3)
         self.assertFalse(any('-alias' in item.args[0] or 'delete' in item.args[0] for item in call.call_args_list))
 
+    def test_default_derived_host_cache_requires_unchanged_parent_without_route_delete(self):
+        clone = dict(self.before, destination=self.address,
+                     flags='<UP,GATEWAY,HOST,DONE,WASCLONED,IFSCOPE,IFREF,GLOBAL>')
+        for fault in ('none', 'gateway', 'interface', 'destination', 'flags', 'parent'):
+            with self.subTest(fault=fault):
+                observed, parent = dict(clone), dict(self.before)
+                if fault == 'gateway': observed['gateway'] = '192.0.2.2'
+                if fault == 'interface': observed['interface'] = 'en1'
+                if fault == 'destination': observed['destination'] = '10.254.77.11'
+                if fault == 'flags': observed['flags'] = observed['flags'][:-1] + ',REJECT>'
+                if fault == 'parent': parent['gateway'] = '192.0.2.2'
+                replies = [(self.absent, ''), (self.absent, ''), (self.route(observed), ''),
+                           (self.route(parent), '')]
+                with mock.patch.object(self.gate, 'system', side_effect=replies) as call:
+                    if fault == 'none':
+                        self.gate.retire_private_alias(self.address, self.before, self.owned)
+                    else:
+                        with self.assertRaises(ValueError):
+                            self.gate.retire_private_alias(self.address, self.before, self.owned)
+                commands = [item.args[0] for item in call.call_args_list]
+                self.assertFalse(any('delete' in cmd or '-alias' in cmd for cmd in commands))
+                if fault in ('none', 'parent'):
+                    self.assertEqual(commands[-1], ['/sbin/route', '-n', 'get', 'default'])
+
     def test_changed_pre_removal_route_is_bounded_and_diagnostic_failure_preserves_refusal(self):
         observed = dict(self.owned, gateway='x'*1000)
         for broken in (False, True):

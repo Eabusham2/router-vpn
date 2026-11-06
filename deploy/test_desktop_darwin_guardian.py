@@ -178,6 +178,22 @@ def retire_private_alias(address, original, captured):
         output, _ = system(['/sbin/route', '-n', 'get', address])
         restored = native_route(output)
         observed.update(restored)
+        # Darwin may clone the restored default route into a host lookup after
+        # the alias is removed. That cache is not an owned alias route and must
+        # never be deleted. Admit only its exact default-derived identity, then
+        # independently prove that the captured default itself is unchanged.
+        flags = set(restored['flags'].strip('<>').split(','))
+        cloned = (restored['destination'] == address and
+                  restored.get('mask', '255.255.255.255') == '255.255.255.255' and
+                  restored.get('gateway') == original.get('gateway') and
+                  restored['interface'] == original['interface'] and
+                  restored['interface'] != 'lo0' and
+                  {'UP', 'GATEWAY', 'HOST', 'DONE', 'WASCLONED'} <= flags and
+                  flags <= {'UP', 'GATEWAY', 'HOST', 'DONE', 'WASCLONED',
+                            'IFSCOPE', 'IFREF', 'GLOBAL'})
+        if cloned:
+            output, _ = system(['/sbin/route', '-n', 'get', 'default'])
+            restored = native_route(output)
         require_default_route(restored)
         if restored != original:
             raise ValueError('Private alias retirement lost its original route identity')
