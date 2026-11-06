@@ -70,8 +70,12 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	if selection.ExitID == exit.profile["id"] {
 		return nil, bad
 	}
-	if selection.Protocol == "socks5" && (entryMeta.StartLayer != "" && entryMeta.StartLayer != "off" || predecessorText(exit.profile, "start_layer") != "" && predecessorText(exit.profile, "start_layer") != "off") {
-		return nil, errors.New("imported SOCKS5 paired-final path currently requires both independent Start Layers Off")
+	if selection.Protocol == "socks5" {
+		finalLayer := predecessorText(exit.profile, "start_layer")
+		if entryMeta.StartLayer != "" && entryMeta.StartLayer != "off" ||
+			finalLayer != "" && finalLayer != "off" && exitMode != "shadowsocks" && exitMode != "hysteria2" {
+			return nil, errors.New("imported SOCKS5 requires its ordinary entry and a captured supported paired-final layer")
+		}
 	}
 	if raw := exit.profile["multihop_execution"]; raw != nil && raw != "" && raw != "local" {
 		return nil, bad

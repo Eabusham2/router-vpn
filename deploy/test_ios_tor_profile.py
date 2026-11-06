@@ -712,7 +712,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   for kind in ["wireguard","amneziawg"] {
    cases += layers.flatMap { first in layers.map { (first,$0,kind,"") } }
   }
-  cases.append(("off","off","socks5",""))
+  cases += layers.map { ("off",$0,"socks5","") }
   let composite=try object(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[3])))
   let certificate=((composite["profiles"] as! [String:[String:String]])["split"]!)["cert.pem"]!
   var hyBase=base
@@ -720,6 +720,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   let hyAssets=["sing-box.json":try json(hyBase).base64EncodedString(),"final-trust.pem":certificate]
   for finalMode in ["shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"] {for (entryLayer,finalLayer,kind,method) in cases {
    let packetFinal=["wg","awg2-fast","awg2-strong"].contains(finalMode)
+   if kind=="socks5" && packetFinal && finalLayer != "off" {continue}
    let entryKey=Data(repeating:105,count:method=="2022-blake3-aes-128-gcm" ? 16:32).base64EncodedString()
    var imported:[String:Any]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.88","shadowsocks":["server":"203.0.113.20","port":443,"method":method,"password":entryKey]]
    if kind == "socks5" {imported=["protocol":kind,"expected_public_ip":"203.0.113.88","socks5":["host":"203.0.113.20","port":1080,"username":"captured-native-user","password":" exact SOCKS secret "]]}
@@ -918,7 +919,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    }
    if let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS"] {
     let name: String
-    if kind=="socks5" {name="socks5--final-"+finalMode+".json"}
+    if kind=="socks5" {name="socks5--final-"+finalMode+(finalLayer=="off" ? "":"--"+finalLayer)+".json"}
     else if ["wireguard","amneziawg"].contains(kind) {name="packet-"+kind+"--final-"+finalMode+"--"+entryLayer+"--"+finalLayer+".json"}
     else {name=(packetFinal ? "final-"+finalMode+"--":finalMode=="hysteria2" ? "final-hysteria2--":"") + (kind=="hysteria2" ? "hysteria2--"+entryLayer+"--"+finalLayer+".json" : entryLayer+"--"+finalLayer+"--"+method+".json")}
     try Data(encoded.utf8).write(to:URL(fileURLWithPath:directory).appendingPathComponent(name))
@@ -929,7 +930,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   defer{RouterVPNTorTestClose()}
   try importedRouterGraphs()
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY"]=="1" {
-   print("Apple imported Router graph: PASS (195 graphs: preserved190 plus5 SOCKS5 paired finals with configured MTU bounds; shipping Swift inputs and actual Go compiler; no native network proof)")
+   print("Apple imported Router graph: PASS (199 graphs: preserved195 plus4 captured SOCKS5 paired SS/HY final layers with configured MTU bounds; shipping Swift inputs and actual Go compiler; no native network proof)")
    return
   }
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_OPENVPN_PROBES_ONLY"]=="1" {

@@ -24,7 +24,7 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 		t.Skip("exact generated compiler sources supplied by native mobile gate")
 	}
 	entries, err := os.ReadDir(root)
-	if err != nil || len(entries) != 195 {
+	if err != nil || len(entries) != 199 {
 		t.Fatal("incomplete original layer matrix", err)
 	}
 	expected := map[string]bool{"cipher-aes128.json": true, "cipher-chacha20.json": true}
@@ -54,6 +54,11 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 	}
 	for _, final := range []string{"shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"} {
 		expected["socks5--final-"+final+".json"] = true
+	}
+	for _, final := range []string{"shadowsocks", "hysteria2"} {
+		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			expected["socks5--final-"+final+"--"+layer+".json"] = true
+		}
 	}
 	for _, entry := range entries {
 		t.Run(entry.Name(), func(t *testing.T) {
@@ -108,8 +113,12 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 			}
 			if strings.HasPrefix(layerName, "socks5--final-") {
 				expectedMode = "socks5"
-				expectedFinal = strings.TrimSuffix(strings.TrimPrefix(layerName, "socks5--final-"), ".json")
+				parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(layerName, "socks5--final-"), ".json"), "--")
+				expectedFinal = parts[0]
 				layerName = "off--off.json"
+				if len(parts) == 2 {
+					layerName = "off--" + parts[1] + ".json"
+				}
 			}
 			if metadata["exit_mode"] != expectedFinal {
 				t.Fatal("captured final transport mode changed")
@@ -191,6 +200,11 @@ func TestRouterImportedEntryAppleNativeGraphs(t *testing.T) {
 	}
 	for _, final := range []string{"shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"} {
 		expected["socks5--final-"+final+".json"] = true
+	}
+	for _, final := range []string{"shadowsocks", "hysteria2"} {
+		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			expected["socks5--final-"+final+"--"+layer+".json"] = true
+		}
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != len(expected) {

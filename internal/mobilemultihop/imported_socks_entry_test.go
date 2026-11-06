@@ -70,7 +70,7 @@ func TestImportedEntrySOCKSRejectsChangedSource(t *testing.T) {
 			case "entry-layer":
 				externalTestAddLayer(capture["profile"].(map[string]any), "aes-256-gcm", "203.0.113.20", "10.93.0.1", "i")
 			case "final-layer":
-				profile["start_layer"] = "aes-256-gcm"
+				profile["start_layer"] = "foreign-layer"
 			case "server-execution":
 				profile["multihop_execution"] = "server"
 			}
