@@ -361,4 +361,8 @@ subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_native_tor_graph_
 subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_mobile_external_graphs_contract.py")],
                cwd=ROOT.parent, check=True)
 
+# Actual generated service metadata must survive the shipping private store and capture.
+subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_ss_service_host_capture.py"), "--platform", "android"],
+               cwd=ROOT, check=True, timeout=300)
+
 print("Android runtime truth contract: PASS")

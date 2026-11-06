@@ -131,6 +131,7 @@ if platform.system() == 'Darwin':
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_performance_bridge.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_start_layer.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_entry_start_capture.py')], check=True, timeout=150)
+    subprocess.run([sys.executable, str(root / 'deploy/test_ss_service_host_capture.py'), '--platform', 'apple'], check=True, timeout=300)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_native_base_start_layer.py')], check=True, timeout=240)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_disconnect_ownership.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_multihop_graph.py')], check=True, timeout=150)
