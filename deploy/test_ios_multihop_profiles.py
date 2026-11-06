@@ -21,6 +21,7 @@ try check("legacy stays ordinary single node", !legacy.multihopEnabled)
 try check("legacy has no fabricated entry", legacy.multihopEntryID == nil && legacy.multihopExitID == nil && legacy.multihopExitMode == nil)
 try check("legacy IPv6 default preserved", legacy.ipv6Mode == "on")
 try check("legacy SMART default preserved", legacy.startupMode == "smart-auto")
+try check("legacy does not fabricate captured Home DNS", !legacy.homeDNSCaptured)
 var graph = legacy
 graph.multihopEnabled = true
 graph.multihopEntryID = "home-entry"
@@ -63,11 +64,14 @@ for mode in ["awg2-pq-unknown", "tor", "tor-bridge"] {
 let encoded = try JSONEncoder().encode(graph)
 let restored = try JSONDecoder().decode(IOSConnectionSafePreferences.self, from: encoded)
 try check("all non-secret preferences round trip", restored == graph)
+var capturedHome = graph; capturedHome.homeDNSCaptured = true
+let capturedHomeRestored = try JSONDecoder().decode(IOSConnectionSafePreferences.self, from: JSONEncoder().encode(capturedHome))
+try check("explicit captured Home DNS survives serialization", capturedHomeRestored == capturedHome && capturedHomeRestored.homeDNSCaptured)
 let object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
 let expectedKeys: Set<String> = [
     "homeLANAccess", "killSwitch", "killSwitchPolicy", "ipv6Mode", "baseTunnel", "baseFallback", "startLayer",
     "autoRequireEncrypted", "autoRequireObfuscation", "mtuPolicy", "manualMTU", "daitaEnabled", "jumboTUN", "startupMode", "autoConnect",
-    "dnsMode", "dnsProtocol", "dnsHost", "dnsPort", "dnsServerName", "dnsPath",
+    "dnsMode", "dnsProtocol", "dnsHost", "dnsPort", "dnsServerName", "dnsPath", "homeDNSCaptured",
     "multihopEnabled", "multihopEntryID", "multihopExitID", "multihopExitMode"
 ]
 try check("exact non-secret serialization whitelist", Set(object.keys) == expectedKeys)
