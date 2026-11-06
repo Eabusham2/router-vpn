@@ -17,9 +17,14 @@ import (
 // Its caller must pass the original Validate error, retain all partial owners,
 // and still join the complete cohort and recheck trust/physical policy before
 // adopting an answer. An IPC, cancellation or retirement failure is never a
-// compatibility observation. This function does not activate the continuation
-// in the shipping caller by itself.
+// compatibility observation. The shipping terminal dispatcher retains a cohort
+// ledger so this observation
+// is rechecked after joined cleanup and again at final alias adoption.
 func resolveOriginalDNSSECDowngrade(ctx context.Context, policy standardengine.ResolvedPolicy, plan *standardengine.ResolvedDNSSECPlan, network string, question []byte, verdict standardengine.DNSSECVerdict, validationError error, group resolvedDNSSECExchangeGroup, current func(context.Context) error, observe func(context.Context) (standardengine.ResolvedServerState, error)) ([]byte, error) {
+	return resolveOriginalDNSSECDowngradePurpose(ctx, policy, plan, network, question, verdict, validationError, group, current, observe, false, nil)
+}
+
+func resolveOriginalDNSSECDowngradePurpose(ctx context.Context, policy standardengine.ResolvedPolicy, plan *standardengine.ResolvedDNSSECPlan, network string, question []byte, verdict standardengine.DNSSECVerdict, validationError error, group resolvedDNSSECExchangeGroup, current func(context.Context) error, observe func(context.Context) (standardengine.ResolvedServerState, error), aliasProof bool, retain func(func(context.Context) error) error) ([]byte, error) {
 	if validationError != nil {
 		return nil, validationError
 	}
@@ -36,6 +41,9 @@ func resolveOriginalDNSSECDowngrade(ctx context.Context, policy standardengine.R
 	if err != nil {
 		parsed, err = standardengine.ResolvedDNSSECQuestionFromWire(plan.Name(), 28, question)
 	}
+	if aliasProof {
+		parsed, err = standardengine.ResolvedDNSSECAliasQuestionFromWire(plan.Name(), question)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +51,7 @@ func resolveOriginalDNSSECDowngrade(ctx context.Context, policy standardengine.R
 	// target answer under the original owner's possibly unrelated policy.
 	if alias, err := resolvedDNSSECHasAlias(verdict.Packet); err != nil {
 		return nil, err
-	} else if alias {
+	} else if alias && !aliasProof {
 		return nil, &resolvedDNSSECAliasProofRequired{Packet: bytes.Clone(verdict.Packet)}
 	}
 	routes, err := policy.ResolvedRoutes(plan.Name())
@@ -60,8 +68,12 @@ func resolveOriginalDNSSECDowngrade(ctx context.Context, policy standardengine.R
 	if selected == nil || selected.DNSSEC != "allow-downgrade" || selected.CurrentDNS == nil {
 		return nil, errors.New("downgrade lost original selected validating route")
 	}
-	var original []byte
-	guard := func(check context.Context) error {
+	// Retained guards keep only the original question identity and state digest,
+	// not the full anchor plan from every prior alias cohort.
+	name, index := plan.Name(), plan.Index()
+	var originalDigest string
+	var guard func(context.Context) error
+	guard = func(check context.Context) error {
 		if err := check.Err(); err != nil {
 			return err
 		}
@@ -75,16 +87,21 @@ func resolveOriginalDNSSECDowngrade(ctx context.Context, policy standardengine.R
 		// v257 resets BadOpt/RRSIGMissing and failure counters on private grace
 		// expiry. PacketDoOff is sticky until explicit feature reset; therefore
 		// only this observed incompatibility can authorize this continuation.
-		if !state.Matches(policy, plan.Name(), plan.Index()) || !state.AllowsCurrentIncompatibility() || !state.Row.PacketDoOff {
+		if !state.Matches(policy, name, index) || !state.AllowsCurrentIncompatibility() || !state.Row.PacketDoOff {
 			return errors.New("original server has no stable observed DO incompatibility")
 		}
 		raw, err := state.Canonical()
 		if err != nil {
 			return err
 		}
-		if original == nil {
-			original = raw
-		} else if !bytes.Equal(original, raw) {
+		if originalDigest == "" {
+			originalDigest = standardengine.SHA256(raw)
+			if retain != nil {
+				if err := retain(guard); err != nil {
+					return err
+				}
+			}
+		} else if originalDigest != standardengine.SHA256(raw) {
 			return errors.New("original server compatibility state changed during continuation")
 		}
 		return check.Err()
@@ -92,7 +109,12 @@ func resolveOriginalDNSSECDowngrade(ctx context.Context, policy standardengine.R
 	if err = guard(ctx); err != nil {
 		return nil, err
 	}
-	typed, err := mobiletor.NewDesktopLinuxBootstrapDNSSECQuestion(policy, plan, parsed.Type, question)
+	var typed *mobiletor.DesktopLinuxBootstrapDNSSECQuestion
+	if aliasProof {
+		typed, err = mobiletor.NewDesktopLinuxBootstrapDNSSECAliasQuestion(policy, plan, question)
+	} else {
+		typed, err = mobiletor.NewDesktopLinuxBootstrapDNSSECQuestion(policy, plan, parsed.Type, question)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -123,8 +145,14 @@ func resolveOriginalDNSSECDowngrade(ctx context.Context, policy standardengine.R
 	if err != nil {
 		return nil, err
 	}
-	if alias {
+	if alias && !aliasProof {
 		return nil, &resolvedDNSSECAliasProofRequired{Packet: bytes.Clone(answer)}
+	}
+	if aliasProof {
+		step, check := systembootstrap.ResolvedAliasStep(question, answer)
+		if check != nil || step == nil {
+			return nil, errors.Join(check, errors.New("compatibility response omitted exact original alias proof"))
+		}
 	}
 	if _, err = systembootstrap.ResolvedResponseSuccess(question, answer); err != nil {
 		return nil, err

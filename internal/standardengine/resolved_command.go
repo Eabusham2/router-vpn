@@ -11,10 +11,12 @@ import (
 // has at most 257 scopes, 256 validator queries with 4 live policy guards each,
 // and three complete trust observations: capture, joined-cohort recheck, and
 // final chain adoption (256 DS/DNSKEY suffix results plus 2 policy reads each).
+// Compatibility adds at most 16 requests per scope: six protected continuation
+// guards plus the joined and final checks, each reading policy and server state.
 // Two cohort observations and 11 greeting/preflight/retirement frames bring the
 // bound below 1<<30. The original two-minute deadline never renews; no frame
 // history or extra query authority is created by this finite sequence budget.
-const resolvedCompleteRequestBudget uint64 = 32*7*2*5*(257*(256*4+3*(256+2))+2) + 11
+const resolvedCompleteRequestBudget uint64 = 32*7*2*5*(257*(256*4+3*(256+2)+16)+2) + 11
 const MaxResolvedRequests uint32 = 1 << 30
 
 // The fixed resolver helper receives these bytes through the existing sealed

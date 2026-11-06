@@ -134,7 +134,16 @@ func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSECName(ctx context.Cont
 	if err != nil {
 		return nil, err
 	}
-	remember(finalCheck)
+	compatibility, err := newResolvedDowngradeCohort(plans)
+	if err != nil {
+		return nil, err
+	}
+	remember(func(check context.Context) error {
+		if err := finalCheck(check); err != nil {
+			return err
+		}
+		return compatibility.Recheck(check)
+	})
 	if err = o.Current(ctx); err != nil {
 		return nil, err
 	}
@@ -222,10 +231,11 @@ func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSECName(ctx context.Cont
 					}
 					return resolvedDNSSECOriginalReply(answer, err)
 				})
-				if err != nil {
-					return nil, err
-				}
-				return resolvedValidatedPacket(question, verdict, aliasProof)
+				index := plan.Index()
+				return resolveResolvedTerminal(work, policy, plan, network, question, verdict, err, aliasProof, group, current,
+					func(check context.Context) (standardengine.ResolvedServerState, error) {
+						return resolver.helper.serverStateScoped(check, o.operation, index, name)
+					}, compatibility)
 			}
 		}
 		if err != nil {
@@ -242,7 +252,7 @@ func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSECName(ctx context.Cont
 			return step != nil, err
 		}
 	}
-	answer, err := resolveOriginalScopesClassified(ctx, group, scopes, question, resolver.closeDNSSECChildren, classify)
+	answer, err := resolveResolvedCompatibilityCohort(ctx, group, scopes, question, resolver.closeDNSSECChildren, classify, compatibility)
 	var retained *resolvedGroupRetirementError
 	if errors.As(err, &retained) {
 		return nil, err

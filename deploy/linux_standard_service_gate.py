@@ -746,3 +746,14 @@ AUXILIARY['resolved-root-ds']=('./internal/standardengine',{
 AUXILIARY['resolved-root-ds-owner']=('./cmd/client',{'TestResolvedRootDSCancelledAdmission':()})
 AUXILIARY_TESTS.update({'internal/standardengine/resolved_root_ds_test.go':'resolved-root-ds',
  'cmd/client/linux_standard_service_resolved_root_ds_linux_test.go':'resolved-root-ds-owner'})
+
+# Shipping compatibility retains exact server state through joined adoption.
+SOURCE.update({'cmd/client/linux_standard_service_resolved_downgrade_cohort_linux.go',
+ 'cmd/client/linux_standard_service_resolved_downgrade_cohort_linux_test.go'})
+AUXILIARY['resolved-downgrade-shipping']=('./cmd/client',{
+ 'TestResolvedDowngradeShippingCohort':('address','alias-proof','alias-no-link',
+ 'validator-error','terminal-retirement-error','bogus-without-compatibility',
+ 'strict','secure','state-changed-on-join','state-changed-before-adoption',
+ 'group-close-failed','cancelled-after-terminal','foreign-scope'),
+ 'TestResolvedDowngradeCohortBound':()})
+AUXILIARY_TESTS['cmd/client/linux_standard_service_resolved_downgrade_cohort_linux_test.go']='resolved-downgrade-shipping'
