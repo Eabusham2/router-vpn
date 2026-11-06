@@ -160,8 +160,11 @@ func TestExternalPacketExecutionCompareRepeatsWithFreshAttemptAndExactScore(t *t
 				if len(attempts) != 2 || attempts[0].ExternalAttempt == attempts[1].ExternalAttempt || attempts[0].SessionID != attempts[1].SessionID || attempts[0].Password != attempts[1].Password || attempts[0].ExternalFingerprint != attempts[1].ExternalFingerprint {
 					t.Fatal("winner repeat reused retired attempt or changed captured graph")
 				}
-				if targets[LocalTag][1] != targets[ServerTag][1] || targets[ServerTag][1] != targets[ServerTag][3] {
+				if len(targets[LocalTag]) != 1 || len(targets[ServerTag]) != 2 || targets[LocalTag][0] != targets[ServerTag][0] || targets[ServerTag][0] != targets[ServerTag][1] {
 					t.Fatal("packet candidates used different external targets")
+				}
+				if len(engine.proofNonces[LocalTag]) != 1 || len(engine.proofNonces[ServerTag]) != 3 {
+					t.Fatal("packet candidates lost their independent public proof nonces")
 				}
 				if _, err := engine.manager.Create(context.Background(), netip.MustParseAddr("10.77.0.2"), attempts[0]); err == nil {
 					t.Fatal("old trial attempt replaced retained winner")

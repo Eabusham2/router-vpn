@@ -115,8 +115,11 @@ func TestOpenVPNMappedLayersCompareAndRestoreKeepExactProvedOwner(t *testing.T) 
 					if want == "server" {
 						winnerTag = ServerTag
 					}
-					if len(e.probeTargets[LocalTag]) < 2 || len(e.probeTargets[ServerTag]) < 2 || len(e.probeTargets[winnerTag]) < 4 || e.probeTargets[LocalTag][1] != e.probeTargets[ServerTag][1] || e.probeTargets[winnerTag][1] != e.probeTargets[winnerTag][3] {
+					if len(e.probeTargets[LocalTag]) < 1 || len(e.probeTargets[ServerTag]) < 1 || len(e.probeTargets[winnerTag]) < 2 || e.probeTargets[LocalTag][0] != e.probeTargets[ServerTag][0] || e.probeTargets[winnerTag][0] != e.probeTargets[winnerTag][1] {
 						t.Error("Compare changed shared external endpoint or skipped winner reproof")
+					}
+					if len(e.proofNonces[LocalTag]) < 1 || len(e.proofNonces[ServerTag]) < 1 || len(e.proofNonces[winnerTag]) < 3 {
+						t.Error("Compare lost independent public proof nonce receipts")
 					}
 				}
 				before := len(e.leaseRequests)

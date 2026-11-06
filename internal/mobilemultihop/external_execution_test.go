@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net"
@@ -170,6 +171,8 @@ type externalExecutionEngine struct {
 	public, node               map[string]*httptest.Server
 	nodeCalls, dnsCalls        map[string]int
 	probeTargets               map[string][]string
+	publicProof                map[string]*httptest.Server
+	proofNonces                map[string][]string
 	badDNS, badPublic, badNode map[string]bool
 	closeFailure               bool
 	errors                     []string
@@ -271,6 +274,8 @@ func (e *externalExecutionEngine) Dial(ctx context.Context, tag, address string)
 		e.mu.Unlock()
 	} else if address == "1.1.1.1:80" || address == "1.0.0.1:80" {
 		server = e.public[tag]
+	} else if address == "1.1.1.1:443" {
+		server = e.publicProof[tag]
 	}
 	if server == nil {
 		return nil, errors.New("unowned test route")
@@ -305,6 +310,7 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 		t.Fatal(err)
 	}
 	e := &externalExecutionEngine{identity: "one-external-box", selected: LocalTag, policy: policy, manager: m, runner: runner, public: map[string]*httptest.Server{}, node: map[string]*httptest.Server{}, nodeCalls: map[string]int{}, dnsCalls: map[string]int{}, probeTargets: map[string][]string{}, badDNS: map[string]bool{}, badPublic: map[string]bool{}, badNode: map[string]bool{}}
+	e.publicProof, e.proofNonces = map[string]*httptest.Server{}, map[string][]string{}
 	if multihoprelay.OpenVPNRemoteRequired(exit) {
 		e.remotes = map[string]nativeopenvpn.RemoteReceipt{
 			LocalTag:  {Remote: nativeopenvpn.Remote{Host: "203.0.113.20", Port: 1194, Network: "udp"}, Generation: 1, ConnectedAt: time.Now().UnixMilli()},
@@ -343,7 +349,11 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 			}
 			if layerCapability != "" {
 				for _, capability := range result["exits"].([]map[string]string) {
-					if layerCapability == "missing" { delete(capability, "openvpn_layers") } else { capability["openvpn_layers"] = layerCapability }
+					if layerCapability == "missing" {
+						delete(capability, "openvpn_layers")
+					} else {
+						capability["openvpn_layers"] = layerCapability
+					}
 				}
 			}
 			if r.URL.RawQuery == "external_packet=1" {
@@ -432,7 +442,8 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 		_ = json.NewEncoder(w).Encode(map[string]any{"node_id": node, "session_id": q.SessionID, "stopped": true})
 	}))
 	t.Cleanup(e.entry.Close)
-	pool := x509.NewCertPool()
+	proofCertificate, proofTrust := externalPublicProofCertificate(t, "1.1.1.1")
+	pool := proofTrust.RootCAs.Clone()
 	for _, tag := range []string{LocalTag, ServerTag} {
 		tag := tag
 		e.node[tag] = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -466,30 +477,60 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 		}))
 		pool.AddCert(e.node[tag].Certificate())
 		t.Cleanup(e.node[tag].Close)
-		e.public[tag] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			e.mu.Lock()
-			e.probeTargets[tag] = append(e.probeTargets[tag], r.Host+r.URL.Path)
-			bad := e.badPublic[tag]
-			if r.Header.Get("Authorization") != "" {
-				e.errors = append(e.errors, "private token leaked")
+		publicHandler := func(proof bool) http.HandlerFunc {
+			return func(w http.ResponseWriter, r *http.Request) {
+				e.mu.Lock()
+				invalid := r.Method != http.MethodGet || r.Header.Get("Authorization") != ""
+				if proof {
+					nonce := r.URL.Query().Get("routervpn_proof")
+					decoded, err := hex.DecodeString(nonce)
+					invalid = invalid || r.TLS == nil || r.Host != "1.1.1.1" || r.URL.Path != "/cdn-cgi/trace" ||
+						err != nil || len(decoded) != 16 || len(r.URL.Query()) != 1 ||
+						r.Header.Get("Cache-Control") != "no-store" || r.Header.Get("Accept-Encoding") != "identity"
+					for _, prior := range e.proofNonces {
+						for _, old := range prior {
+							invalid = invalid || nonce == old
+						}
+					}
+					if !invalid {
+						e.proofNonces[tag] = append(e.proofNonces[tag], nonce)
+					}
+				} else {
+					invalid = invalid || r.URL.RawQuery != ""
+					if !invalid {
+						e.probeTargets[tag] = append(e.probeTargets[tag], r.Host+r.URL.Path)
+					}
+				}
+				bad, hook := e.badPublic[tag], e.onPublic
+				if invalid {
+					e.errors = append(e.errors, "public proof/measurement changed its exact TLS, nonce, target or credential scope")
+				}
+				e.mu.Unlock()
+				if invalid {
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
+				if hook != nil {
+					hook(tag)
+				}
+				if tag == LocalTag {
+					time.Sleep(10 * time.Millisecond)
+				} else {
+					time.Sleep(2 * time.Millisecond)
+				}
+				ip := policy.capture.ExpectedPublicIP
+				if bad {
+					ip = "203.0.113.99"
+				}
+				_, _ = w.Write([]byte("ip=" + ip + "\n"))
 			}
-			hook := e.onPublic
-			e.mu.Unlock()
-			if hook != nil {
-				hook(tag)
-			}
-			if tag == LocalTag {
-				time.Sleep(10 * time.Millisecond)
-			} else {
-				time.Sleep(2 * time.Millisecond)
-			}
-			ip := policy.capture.ExpectedPublicIP
-			if bad {
-				ip = "203.0.113.99"
-			}
-			_, _ = w.Write([]byte("ip=" + ip + "\n"))
-		}))
+		}
+		e.public[tag] = httptest.NewServer(publicHandler(false))
 		t.Cleanup(e.public[tag].Close)
+		e.publicProof[tag] = httptest.NewUnstartedServer(publicHandler(true))
+		e.publicProof[tag].TLS = &tls.Config{Certificates: []tls.Certificate{proofCertificate}, MinVersion: tls.VersionTLS12}
+		e.publicProof[tag].StartTLS()
+		t.Cleanup(e.publicProof[tag].Close)
 	}
 	e.trust = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	t.Cleanup(func() { _ = m.Close(context.Background()) })
@@ -518,14 +559,10 @@ func externalExecutionCapturedRequest(t *testing.T, source, capture, restored st
 		t.Fatal(err)
 	}
 	r.execution.externalResponseTLS = e.trust
-	// Production echo origins remain verified HTTPS. This loopback routing fixture
-	// tests real request/response/ownership through each captured candidate.
+	// Both trial and final address proofs execute the strict TLS/nonce primitive
+	// against a separately routed encrypted peer with private test-only roots.
 	r.public = func(ctx context.Context, tag, expected string) error {
-		body, err := externalProofHTTP(ctx, e.Dial, tag, Targets[0], "", nil)
-		if err != nil {
-			return err
-		}
-		return externalTraceAddress(body, expected)
+		return proveExternalPublicIP(ctx, e.Dial, tag, expected, e.trust)
 	}
 	t.Cleanup(func() { _ = r.Close() })
 	return r, e
@@ -555,11 +592,14 @@ func TestExternalExecutionRunsOwnedLeaseExactScoreRepeatAndPolicyProof(t *testin
 	if e.nodeCalls[ServerTag] < 2 || e.nodeCalls[LocalTag] != 1 || e.dnsCalls[LocalTag] < 1 || e.dnsCalls[ServerTag] < 2 || len(e.errors) > 0 {
 		t.Fatal("missing repeat winner or independent policy proof", e.nodeCalls, e.dnsCalls, e.errors)
 	}
-	// Each trial independently proves its public exit at public-a, then probes
-	// the selected random target. The final winner repeats both operations.
+	// Address proofs have separate fresh-nonce receipts. Only actual response
+	// measurements are counted against the one shared random target.
 	local, server := e.probeTargets[LocalTag], e.probeTargets[ServerTag]
-	if len(local) != 2 || len(server) != 5 || local[0] != "1.1.1.1/public-a" || local[1] != server[1] || server[1] != server[3] {
+	if len(local) != 1 || len(server) != 2 || local[0] != server[0] || server[0] != server[1] {
 		t.Fatal("comparison or winner repeat changed the common endpoint", e.probeTargets)
+	}
+	if len(e.proofNonces[LocalTag]) != 1 || len(e.proofNonces[ServerTag]) != 3 {
+		t.Fatal("trial and final public proofs lost their independent fresh nonces", e.proofNonces)
 	}
 	e.mu.Lock()
 	e.closeFailure = true

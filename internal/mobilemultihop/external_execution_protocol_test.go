@@ -180,8 +180,11 @@ func TestExternalExecutionNewProtocolsKeepLiveScoreAndRestorationLifecycle(t *te
 					}
 				}
 				if restored == "" {
-					if len(progress.Measurements) != 2 || engine.nodeCalls[ServerTag] < 2 || engine.probeTargets[LocalTag][1] != engine.probeTargets[ServerTag][1] || engine.probeTargets[ServerTag][1] != engine.probeTargets[ServerTag][3] {
+					if len(progress.Measurements) != 2 || engine.nodeCalls[ServerTag] < 2 || len(engine.probeTargets[LocalTag]) != 1 || len(engine.probeTargets[ServerTag]) != 2 || engine.probeTargets[LocalTag][0] != engine.probeTargets[ServerTag][0] || engine.probeTargets[ServerTag][0] != engine.probeTargets[ServerTag][1] {
 						t.Fatal("comparison failed to repeat both probes through the same chosen endpoint")
+					}
+					if len(engine.proofNonces[LocalTag]) != 1 || len(engine.proofNonces[ServerTag]) != 3 {
+						t.Fatal("comparison lost independent trial and final public proofs")
 					}
 				} else if len(engine.nodeCalls) != 1 {
 					t.Fatal("restoration trialed the other candidate")

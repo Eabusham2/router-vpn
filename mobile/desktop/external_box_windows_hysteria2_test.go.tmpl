@@ -1158,9 +1158,12 @@ func desktopExternalWFPBox(t *testing.T, original *mobilemultihop.ExternalPolicy
 	// The test owns the session lifetime. Individual proof and measurement
 	// operations retain their own deadlines; a shared 45-second session timer
 	// would retire a valid native path during the 90-second benchmark budget.
-	ctx, cancel := context.WithCancel(t.Context())
+	// testing cancels t.Context before invoking Cleanup. Keep this one owned
+	// session alive until its bounded proof/Box cleanup has attempted to join.
+	ctx, cancel := context.WithCancel(context.Background())
 	f := &desktopExternalWFPFixture{original: original, policy: policy, source: source, capture: capture, cancel: cancel}
 	t.Cleanup(func() {
+		defer cancel()
 		if err := f.close(); err != nil {
 			t.Error("external WFP native source did not join", err)
 		}

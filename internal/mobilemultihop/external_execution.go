@@ -263,8 +263,11 @@ func (c *Controller) verifyExternalTrial(ctx context.Context, tag string) error 
 	if err := engine.DNSProof(ctx, meta.TUNTag); err != nil {
 		return errors.New("external candidate selected DNS failed proof")
 	}
-	data, err := externalProofHTTP(ctx, engine.Dial, tag, Targets[0], "", nil)
-	if err != nil || externalTraceAddress(data, c.external.capture.ExpectedPublicIP) != nil || c.engine.Selected() != tag {
+	// A trial's address proof is independent of the randomly selected response
+	// measurement. Reuse the final proof's fresh nonce and strict TLS/IO path.
+	// The existing package-private peer TLS roots remain nil in shipping hosts.
+	err := proveExternalPublicIP(ctx, engine.Dial, tag, c.external.capture.ExpectedPublicIP, c.externalResponseTLS)
+	if err != nil || c.engine.Selected() != tag {
 		return errors.New("external candidate public exit proof failed")
 	}
 	return c.requireValid()

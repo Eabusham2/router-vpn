@@ -90,9 +90,13 @@ func TestOpenVPNMappedComparisonUsesEachActualRemoteAndRestoresProvedExecution(t
 			}
 			if restored == "" {
 				local, server := e.probeTargets[LocalTag], e.probeTargets[ServerTag]
-				if len(local) != 2 || len(server) != 5 || local[1] != server[1] || server[1] != server[3] {
+				if len(local) != 1 || len(server) != 2 || local[0] != server[0] || server[0] != server[1] {
 					e.mu.Unlock()
 					t.Fatal("Compare changed its one external endpoint", local, server)
+				}
+				if len(e.proofNonces[LocalTag]) != 1 || len(e.proofNonces[ServerTag]) != 3 {
+					e.mu.Unlock()
+					t.Fatal("Compare lost original public proof nonce receipts")
 				}
 			}
 			e.mu.Unlock()
@@ -143,7 +147,7 @@ func TestOpenVPNMappedGenerationChangeDisqualifiesEachProofBoundary(t *testing.T
 					e.mu.Lock()
 					count := len(e.probeTargets[tag])
 					e.mu.Unlock()
-					if count == 2 {
+					if count == 1 {
 						mappedOpenVPNChange(e, tag)
 					}
 				}
