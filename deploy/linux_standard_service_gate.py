@@ -718,3 +718,14 @@ AUXILIARY['resolved-alias-caller']=('./cmd/client',{
 AUXILIARY_TESTS.update({'internal/systembootstrap/resolved_alias_linux_test.go':'resolved-alias-wire',
  'cmd/client/linux_standard_service_resolved_alias_linux_test.go':'resolved-alias-caller'})
 CORE['BootHostnameAliasFixtureWire']=('dnssec-cname','dnssec-dname')
+
+# Bounded compatibility continuation; shipping caller activation is separate.
+SOURCE.update({'cmd/client/linux_standard_service_resolved_downgrade_linux.go',
+ 'cmd/client/linux_standard_service_resolved_downgrade_linux_test.go'})
+AUXILIARY['resolved-downgrade']=('./cmd/client',{
+ 'TestResolvedDowngradeOriginalIncompatibility':('udp','tcp','strict-tls','opportunistic',
+ 'validator-error','retained-child','secure','strict-dnssec','bad-opt-only',
+ 'missing-rrsig-only','tcp-failure-only','changed-server','changed-state','lost-daemon',
+ 'cancelled','transport-error','changed-answer','original-alias','fallback-alias',
+ 'reset-do','cancelled-before')})
+AUXILIARY_TESTS['cmd/client/linux_standard_service_resolved_downgrade_linux_test.go']='resolved-downgrade'
