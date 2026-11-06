@@ -11,6 +11,11 @@ on:
       - 'android/test_android_multihop_contract.py'
       - 'android/test_android_multihop_graph.py'
       - 'android/test_android_home_dns.py'
+      - 'android/test_android_router_dns_retest.py'
+      - 'android/test_android_tor_form.py'
+      - 'android/test_android_connection_profiles.py'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidRouterDNSRetest.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidTelemetryIO.java'
       - 'android/test_android_pq_selection.py'
       - 'android/test_android_max_selection.py'
       - 'android/test_android_naive_multihop.py'
@@ -38,6 +43,11 @@ on:
       - 'android/test_android_multihop_contract.py'
       - 'android/test_android_multihop_graph.py'
       - 'android/test_android_home_dns.py'
+      - 'android/test_android_router_dns_retest.py'
+      - 'android/test_android_tor_form.py'
+      - 'android/test_android_connection_profiles.py'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidRouterDNSRetest.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidTelemetryIO.java'
       - 'android/test_android_pq_selection.py'
       - 'android/test_android_max_selection.py'
       - 'android/test_android_naive_multihop.py'
@@ -78,6 +88,7 @@ jobs:
           python3 android/test_android_multihop_contract.py
           python3 android/test_android_multihop_modes.py
           python3 android/test_android_home_dns.py
+          python3 android/test_android_router_dns_retest.py
           python3 android/test_android_multihop_graph.py
           python3 android/test_android_pq_selection.py
           python3 android/test_android_max_selection.py

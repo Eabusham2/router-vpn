@@ -18,6 +18,10 @@ import java.util.List;
 /** App-private bounded Router VPN node store. IDs are locally derived, never trusted path input. */
 final class AndroidNodeStore {
     private static final Object STORE_LOCK = new Object();
+    // Process-local publication epoch: advance before writes/rollback so an
+    // old measurement cannot revive after change-away/back or a failed restore.
+    // All access used for DNS authority is under the shared writer lock.
+    private static long selectionGeneration;
     static final int MAX_NODES = 24;
     static final int MAX_BUNDLE = 32 * 1024 * 1024;
     static final int MAX_PROFILE_SCHEMA = 4;
@@ -38,11 +42,13 @@ final class AndroidNodeStore {
         @Override public String toString() { return name + (endpoint.isEmpty() ? "" : " — " + endpoint); }
     }
 
-    /** Exact active-node identity + compatibility bundle used only for transaction rollback. */
+    /** Exact active-node identity/source for rollback and owned DNS result adoption. */
     static final class SelectionSnapshot {
         final String id;
         final byte[] activeBundle;
+        final long generation;
         SelectionSnapshot(String id, byte[] activeBundle) {
+            this.generation = selectionGeneration;
             this.id = id == null ? "" : id;
             this.activeBundle = activeBundle == null ? null : activeBundle.clone();
         }
@@ -78,6 +84,7 @@ final class AndroidNodeStore {
         byte[] previousNode = snapshotOptional(target);
         boolean nodeAdopted = false;
         try {
+            selectionGeneration++;
             atomicWrite(target, bytes);
             nodeAdopted = true;
             selectInternal(id);
@@ -108,6 +115,24 @@ final class AndroidNodeStore {
         // Reentrant on this instance and the shared writer lock; import keeps
         // its original strict decoder, validation and partial-write rollback.
         return importBundle(updated);
+    } }
+
+    /** DNS result adoption must retain the same active node and exact private source. */
+    synchronized void requireDNSBenchmarkSource(SelectionSnapshot source) throws Exception { synchronized (STORE_LOCK) {
+        if (source == null || source.generation != selectionGeneration || !safeId(source.id) || source.activeBundle == null
+                || !source.id.equals(activeId())
+                || !java.util.Arrays.equals(snapshotOptional(activeBundleFile()), source.activeBundle)
+                || !java.util.Arrays.equals(snapshotOptional(nodeFile(source.id)), source.activeBundle)) {
+            throw new IllegalStateException("Selected Router VPN node or source changed during DNS Retest; measurement was not persisted.");
+        }
+    } }
+
+    synchronized SelectionSnapshot applyDNSBenchmark(SelectionSnapshot source, byte[] updated) throws Exception { synchronized (STORE_LOCK) {
+        requireDNSBenchmarkSource(source);
+        // Shared writer lock spans identity/source validation and the existing
+        // strict import/selection transaction, including its rollback handling.
+        applyProfileBundle(source.id, source.activeBundle, updated);
+        return snapshotSelection();
     } }
 
     synchronized List<Node> list() throws Exception {
@@ -143,6 +168,7 @@ final class AndroidNodeStore {
         File activeBundle = activeBundleFile();
         byte[] previousActiveBundle = active ? snapshotOptional(activeBundle) : null;
         boolean mutated = false;
+        selectionGeneration++;
         try {
             if (previousNode != null) {
                 AndroidPrivateFileStore.remove(nodeFile, MAX_BUNDLE);
@@ -202,6 +228,7 @@ final class AndroidNodeStore {
         if (!id.equals(deriveId(bundle, original))) throw new IllegalStateException("Profile rollback changed the original Router identity.");
         // Selection is a separate retained publication. Re-importing here would
         // select this node and overwrite an independently adopted active source.
+        selectionGeneration++;
         atomicWrite(target, original);
     } }
 
@@ -262,6 +289,7 @@ final class AndroidNodeStore {
         String previousId = activeId();
         boolean bundleAdopted = false;
         try {
+            selectionGeneration++;
             atomicWrite(activeBundle, bytes);
             bundleAdopted = true;
             if (!preferences().edit().putString(ACTIVE_ID, id).commit()) {
@@ -294,6 +322,7 @@ final class AndroidNodeStore {
     }
 
     private void rollbackSelection(File activeBundle, byte[] previousBundle, String previousId) throws Exception {
+        selectionGeneration++;
         Exception rollbackFailure = null;
         try { restoreFile(activeBundle, previousBundle); }
         catch (Exception error) { rollbackFailure = error; }

@@ -273,13 +273,16 @@ require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidProductParity.java",
     "final boolean policyBusy=AndroidVpnMutationGuard.isBusy(activity)",
     "save.setEnabled(!AndroidVpnMutationGuard.isBusy(activity))",
-    "final String openedNodeId=nodeStore.activeId()",
+    "final String openedNodeId=dnsSource[0].id",
     "requireDNSOwner(nodeStore,openedNodeId,openedProfileId,freshProfile)",
     "!nodeId.equals(store.activeId())",
     '!profileId.equals(current.optString("id",""))',
     "Selected Router VPN node or profile changed while DNS settings were open",
-    "persistBenchmark(nodeStore,openedProfileId,result)",
-    "JSONObject bundle=activeBundle(store),profile=selectedProfile(bundle)",
+    "persistBenchmark(nodeStore,captured,openedProfileId,result)",
+    "nodeStore.requireDNSBenchmarkSource(dnsSource[0])",
+    "measurement.adopt(job,()->dnsSource[0]=persistBenchmark",
+    "store.applyDNSBenchmark(source,resultBundle(source,expectedProfileId,result))",
+    "dialog.setOnDismissListener(x->measurement.close())",
     "measurement was not persisted",
 )
 
@@ -288,7 +291,7 @@ require(
 dns_body = (
     ROOT / "android/app/src/main/java/com/eabusham/routervpn/AndroidProductParity.java"
 ).read_text(encoding="utf-8")
-persist = dns_body.split("private static void persistBenchmark", 1)[1].split(
+persist = dns_body.split("private static byte[] resultBundle", 1)[1].split(
     "private static String dnsResultsText", 1
 )[0]
 if 'profile.put("dns_host"' in persist:

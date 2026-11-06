@@ -106,10 +106,12 @@ final class AndroidProductParity {
 
     static void showDNS(Activity activity, AndroidNodeStore nodeStore) {
         try {
-            JSONObject bundle=activeBundle(nodeStore); JSONObject profile=selectedProfile(bundle);
+            final AndroidNodeStore.SelectionSnapshot[] dnsSource={nodeStore.snapshotSelection()};
+            nodeStore.requireDNSBenchmarkSource(dnsSource[0]);
+            JSONObject bundle=new JSONObject(new String(dnsSource[0].activeBundle,StandardCharsets.UTF_8)); JSONObject profile=selectedProfile(bundle);
             if(profile==null) throw new IllegalStateException("Choose/link a Router VPN node first.");
             final String openedProfileId=profile.optString("id","");
-            final String openedNodeId=nodeStore.activeId();
+            final String openedNodeId=dnsSource[0].id;
             final boolean policyBusy=AndroidVpnMutationGuard.isBusy(activity);
             String[] modeValues={"home","fastest","custom","dot","doh","doh3","rescue"};
             String[] modeLabels={"Home AdGuard","Fastest measured","Custom UDP/TCP","DNS-over-TLS","DNS-over-HTTPS","DNS-over-HTTP/3","DNS Rescue"};
@@ -129,10 +131,30 @@ final class AndroidProductParity {
             if(policyBusy){mode.setEnabled(false);protocol.setEnabled(false);preset.setEnabled(false);host.setEnabled(false);port.setEnabled(false);server.setEnabled(false);path.setEnabled(false);body.addView(label(activity,"Disconnect or let the current VPN transition finish before changing persistent DNS policy. DNS Retest remains a measurement action.",12,false));}
             TextView benchmark=label(activity,dnsResultsText(profile),12,false);body.addView(benchmark);
             Button retest=new Button(activity);retest.setText("Retest DNS RTT from home node");retest.setAllCaps(false);body.addView(retest);
-            retest.setOnClickListener(v->{retest.setEnabled(false);benchmark.setText("Testing real A/AAAA DNS queries from the selected home node…");new Thread(()->{try{JSONObject result=benchmarkDNS(bundle,profile);persistBenchmark(nodeStore,openedProfileId,result);activity.runOnUiThread(()->{try{benchmark.setText(dnsResultsText(selectedProfile(activeBundle(nodeStore))));}catch(Exception e){benchmark.setText("DNS benchmark saved; reopen to refresh details.");}retest.setEnabled(true);});}catch(Exception error){activity.runOnUiThread(()->{benchmark.setText("DNS Retest failed: "+safe(error));retest.setEnabled(true);});}}).start();});
+            AndroidRouterDNSRetest measurement=new AndroidRouterDNSRetest();
+            Button cancel=new Button(activity);cancel.setText("Cancel DNS Retest");cancel.setEnabled(false);body.addView(cancel);
+            cancel.setOnClickListener(v->{measurement.cancel();benchmark.setText("Cancelling DNS Retest; waiting for the captured request to drain…");});
+            retest.setOnClickListener(v->{
+                retest.setEnabled(false);cancel.setEnabled(true);
+                benchmark.setText("Testing real A/AAAA DNS queries from the selected home node…");
+                try{final AndroidNodeStore.SelectionSnapshot captured=dnsSource[0];
+                    JSONObject capturedBundle=new JSONObject(new String(captured.activeBundle,StandardCharsets.UTF_8));
+                    JSONObject capturedProfile=selectedProfile(capturedBundle);
+                    measurement.start(nodeStore,captured,io->benchmarkDNS(capturedBundle,capturedProfile,io),(job,result,error)->activity.runOnUiThread(()->{
+                    if(activity.isFinishing()){measurement.close();return;}
+                    if(!measurement.visible(job))return;
+                    try{if(error!=null)throw new IllegalStateException("The captured DNS request did not complete.",error);
+                        measurement.adopt(job,()->dnsSource[0]=persistBenchmark(nodeStore,captured,openedProfileId,result));
+                        JSONObject saved=new JSONObject(new String(resultBundle(captured,openedProfileId,result),StandardCharsets.UTF_8));
+                        benchmark.setText(dnsResultsText(selectedProfile(saved)));
+                    }catch(Exception failure){benchmark.setText((error==null&&!job.cancelled?"DNS queries completed, but results were not saved. ":"DNS Retest failed or cancelled; measurement was not persisted. ")+safe(failure));}
+                    retest.setEnabled(true);cancel.setEnabled(false);
+                }));}catch(Exception failure){benchmark.setText("DNS Retest unavailable: "+safe(failure));retest.setEnabled(true);cancel.setEnabled(false);}
+            });
             ScrollView scroll=new ScrollView(activity);scroll.addView(body);
             AlertDialog dialog=new AlertDialog.Builder(activity).setTitle("DNS").setView(scroll).setPositiveButton("Save",null).setNeutralButton("Close",null).create();
             dialog.setOnShowListener(x->{Button save=dialog.getButton(AlertDialog.BUTTON_POSITIVE);save.setEnabled(!AndroidVpnMutationGuard.isBusy(activity));save.setOnClickListener(v->{if(AndroidVpnMutationGuard.isBusy(activity)){toast(activity,"VPN state changed; disconnect/finish before saving DNS policy.");return;}try{JSONObject fresh=activeBundle(nodeStore),freshProfile=selectedProfile(fresh);requireDNSOwner(nodeStore,openedNodeId,openedProfileId,freshProfile);String chosen=modeValues[mode.getSelectedItemPosition()];String proto=(String)protocol.getSelectedItem();applyDNS(nodeStore,fresh,chosen,proto,host.getText().toString(),parsePort(port.getText().toString()),server.getText().toString(),path.getText().toString());toast(activity,"DNS policy saved for the next connection: "+chosen.toUpperCase(Locale.US)+". Reconnect, then use runtime proof to confirm active DNS.");dialog.dismiss();}catch(Exception error){toast(activity,"DNS policy failed: "+safe(error));}});});
+            dialog.setOnDismissListener(x->measurement.close());
             dialog.show();
         }catch(Exception error){toast(activity,"DNS settings unavailable: "+safe(error));}
     }
@@ -170,10 +192,10 @@ final class AndroidProductParity {
         store.importBundle(bundle.toString().getBytes(StandardCharsets.UTF_8));
     }
 
-    private static JSONObject benchmarkDNS(JSONObject bundle,JSONObject profile)throws Exception{
+    private static JSONObject benchmarkDNS(JSONObject bundle,JSONObject profile,AndroidTelemetryIO io)throws Exception{
         String api=profile.optString("router_api",bundle.optString("routerAPI","")).trim();String token=profile.optString("api_token",bundle.optString("apiToken","")).trim();if(api.isEmpty()||token.isEmpty())throw new IllegalStateException("Selected node has no authenticated DNS benchmark path.");
         URI base=new URI(api);if(!"http".equalsIgnoreCase(base.getScheme()))throw new IllegalStateException("Android home-node DNS benchmark requires the private tunnel HTTP router-agent.");String host=base.getHost();if(host==null||host.isEmpty())throw new IllegalStateException("Router-agent host is invalid.");InetAddress address=InetAddress.getByName(host);if(!isPrivate(address))throw new IllegalStateException("DNS benchmark router-agent must resolve to a private address.");int port=base.getPort()>0?base.getPort():80;
-        try(Socket socket=new Socket()){socket.connect(new InetSocketAddress(address,port),8000);socket.setSoTimeout(45000);OutputStream out=socket.getOutputStream();String request="POST /api/dns/benchmark HTTP/1.1\r\nHost: "+host+"\r\nAuthorization: Bearer "+token+"\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";out.write(request.getBytes(StandardCharsets.US_ASCII));out.flush();byte[] response=readLimited(socket.getInputStream(),MAX_HTTP);return new JSONObject(decodeHttpBody(response));}
+        Socket socket=io.open();try{socket.connect(new InetSocketAddress(address,port),8000);socket.setSoTimeout(45000);OutputStream out=socket.getOutputStream();String request="POST /api/dns/benchmark HTTP/1.1\r\nHost: "+host+"\r\nAuthorization: Bearer "+token+"\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";out.write(request.getBytes(StandardCharsets.US_ASCII));out.flush();byte[] response=readLimited(socket.getInputStream(),MAX_HTTP);io.check();return new JSONObject(decodeHttpBody(response));}finally{io.release(socket);}
     }
 
     private static String decodeHttpBody(byte[] response)throws Exception{
@@ -190,7 +212,17 @@ final class AndroidProductParity {
     private static int parseContentLength(String headers)throws Exception{for(String line:headers.split("\r\n")){int colon=line.indexOf(':');if(colon>0&&"content-length".equalsIgnoreCase(line.substring(0,colon).trim())){long value=Long.parseLong(line.substring(colon+1).trim());if(value<0||value>Integer.MAX_VALUE)throw new IllegalStateException("Invalid DNS benchmark Content-Length.");return(int)value;}}return-1;}
     private static byte[] decodeChunked(byte[] data,int offset)throws Exception{ByteArrayOutputStream out=new ByteArrayOutputStream();int cursor=offset;while(true){int lineEnd=findCrlf(data,cursor);if(lineEnd<0)throw new IllegalStateException("DNS benchmark chunk header was truncated.");String line=new String(data,cursor,lineEnd-cursor,StandardCharsets.US_ASCII).trim();int semi=line.indexOf(';');if(semi>=0)line=line.substring(0,semi).trim();if(line.isEmpty())throw new IllegalStateException("DNS benchmark chunk size was empty.");long size=Long.parseLong(line,16);if(size<0||size>MAX_HTTP||out.size()+size>MAX_HTTP)throw new IllegalStateException("DNS benchmark chunked body exceeded safety limit.");cursor=lineEnd+2;if(size==0)return out.toByteArray();if(cursor+size+2>data.length)throw new IllegalStateException("DNS benchmark chunk body was truncated.");out.write(data,cursor,(int)size);cursor+=(int)size;if(data[cursor]!='\r'||data[cursor+1]!='\n')throw new IllegalStateException("DNS benchmark chunk framing was invalid.");cursor+=2;}}
 
-    private static void persistBenchmark(AndroidNodeStore store,String expectedProfileId,JSONObject result)throws Exception{JSONObject bundle=activeBundle(store),profile=selectedProfile(bundle);if(profile==null||expectedProfileId==null||!expectedProfileId.equals(profile.optString("id","")))throw new IllegalStateException("Selected Router VPN profile changed during DNS Retest; measurement was not persisted.");JSONArray results=result.optJSONArray("results");JSONObject winner=result.optJSONObject("winner");if(results!=null)profile.put("dns_results",results);if(winner!=null&&!winner.optString("address","").isEmpty()){profile.put("fastest_dns_host",winner.optString("address"));profile.put("fastest_dns_name",winner.optString("name"));profile.put("fastest_dns_latency_ms",winner.optDouble("latency_ms",0));}store.importBundle(bundle.toString().getBytes(StandardCharsets.UTF_8));}
+    private static byte[] resultBundle(AndroidNodeStore.SelectionSnapshot source,String expectedProfileId,JSONObject result)throws Exception{
+        JSONObject bundle=new JSONObject(new String(source.activeBundle,StandardCharsets.UTF_8)),profile=selectedProfile(bundle);
+        if(profile==null||expectedProfileId==null||!expectedProfileId.equals(profile.optString("id","")))throw new IllegalStateException("Captured Router VPN profile changed during DNS Retest; measurement was not persisted.");
+        JSONArray results=result.optJSONArray("results");JSONObject winner=result.optJSONObject("winner");
+        if(results!=null)profile.put("dns_results",results);
+        if(winner!=null&&!winner.optString("address","").isEmpty()){profile.put("fastest_dns_host",winner.optString("address"));profile.put("fastest_dns_name",winner.optString("name"));profile.put("fastest_dns_latency_ms",winner.optDouble("latency_ms",0));}
+        return bundle.toString().getBytes(StandardCharsets.UTF_8);
+    }
+    private static AndroidNodeStore.SelectionSnapshot persistBenchmark(AndroidNodeStore store,AndroidNodeStore.SelectionSnapshot source,String expectedProfileId,JSONObject result)throws Exception{
+        return store.applyDNSBenchmark(source,resultBundle(source,expectedProfileId,result));
+    }
     private static String dnsResultsText(JSONObject profile){if(profile==null)return "No Router VPN DNS profile.";StringBuilder out=new StringBuilder();out.append("Selected: ").append(profile.optString("dns_mode","home")).append(" • ").append(profile.optString("dns_host","profile/default"));String fastest=profile.optString("fastest_dns_host","");if(!fastest.isEmpty())out.append(String.format(Locale.US,"\nFastest measured: %s • %.2f ms • %s",profile.optString("fastest_dns_name",fastest),profile.optDouble("fastest_dns_latency_ms",0),fastest));JSONArray values=profile.optJSONArray("dns_results");if(values!=null){List<JSONObject> rows=new ArrayList<>();for(int i=0;i<values.length();i++){JSONObject r=values.optJSONObject(i);if(r!=null)rows.add(r);}rows.sort((a,b)->{boolean aw=a.optBoolean("working"),bw=b.optBoolean("working");if(aw!=bw)return aw?-1:1;return Double.compare(a.optDouble("latency_ms",Double.MAX_VALUE),b.optDouble("latency_ms",Double.MAX_VALUE));});for(JSONObject r:rows)out.append("\n").append(r.optString("name",r.optString("address"))).append(" • ").append(r.optString("address")).append(" • ").append(r.optBoolean("working")?String.format(Locale.US,"%.2f ms",r.optDouble("latency_ms",0)):"failed");}out.append("\n\nRTT = median real A/AAAA DNS query time from the selected home node, not ICMP ping. Saved policy applies on the next connection; runtime proof still decides active DNS.");return out.toString();}
 
     private static JSONObject activeBundle(AndroidNodeStore store)throws Exception{String id=store.activeId();if(id==null||id.isEmpty())throw new IllegalStateException("Pair/import and select a Router VPN node first.");return new JSONObject(new String(readLimited(store.file(id),MAX_BUNDLE),StandardCharsets.UTF_8));}
