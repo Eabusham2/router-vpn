@@ -438,12 +438,15 @@ def pt_notice_boundaries(root):
 
 
 def boundary_tests():
-    # Only Go's executable build metadata and the external codesign process are
-    # doubled here. The production PE parser, bounds, receipts, hashes, paths,
-    # copies and atomic replacement execute. --bundle uses an actual engine.
+    # This archive/promotion model doubles Go build metadata, codesign and the
+    # newly mandatory DNSSEC package verifier boundary. It cannot issue a real
+    # validator receipt: matching Linux producer gates independently run actual
+    # pinned crypto/Go/ELF verification. Bounds, hashes, inventories, copies and
+    # atomic replacement execute here; --bundle verifies the actual full engine.
     with tempfile.TemporaryDirectory(prefix='native-delivery-boundaries-') as temporary, \
             patch.object(BUILD, 'run', side_effect=object_metadata), \
-            patch.object(SIGN.BUILD, 'run', side_effect=object_metadata):
+            patch.object(SIGN.BUILD, 'run', side_effect=object_metadata), \
+            patch.object(BUILD.DNSSEC, 'verify', return_value=None) as dnssec_verifier:
         root = Path(temporary).resolve()
         for target in BUILD.TARGETS:
             slug = DELIVERY.slug(target)
@@ -533,6 +536,8 @@ def boundary_tests():
         signing_promotion_boundaries(root)
         windows_dependency_boundaries(root)
         pt_notice_boundaries(root)
+        check({call.args[1] for call in dnssec_verifier.call_args_list} == {'linux/amd64','linux/arm64'},
+              'archive delivery failed to invoke the mandatory Linux DNSSEC verifier')
     checkout_bytes_test()
     dependency_checkout_bytes_test()
     print(f'{checks} native delivery/signing boundary checks passed', flush=True)

@@ -38,6 +38,7 @@ PERFORMANCE = load('desktop_native_performance', 'prepare-mobile-performance.py'
 OPENVPN = load('desktop_native_openvpn', 'mobile_openvpn_close_policy.py')
 EXTERNAL = load('desktop_native_external', 'prepare-desktop-external.py')
 TOR = load('desktop_native_tor', 'build-desktop-tor.py')
+DNSSEC = load('desktop_native_dnssec', 'desktop-dnssec-bundle.py')
 BUILD_OWNER = load('desktop_windows_build_owner', 'windows_build_owner.py')
 PIN, VERSION, TOOLCHAIN = POLICY.CORE, '1.14.1', 'go1.26.3'
 TARGETS = tuple(PQ.TARGETS)
@@ -168,7 +169,7 @@ def inputs():
                              *sorted((ROOT/'mobile/rosenpass').glob('*.h')),
                              *sorted((ROOT/'mobile/rosenpass').glob('*.c')),
                              *sorted((ROOT/'mobile/rosenpass/src').rglob('*.rs')),
-                             *POLICY.inputs(), *TOR.inputs(),
+                             *POLICY.inputs(), *TOR.inputs(), *DNSSEC.inputs(),
                              *PERFORMANCE.inputs(), *OPENVPN.inputs(), *EXTERNAL.inputs(),
                              ROOT/'mobile/desktop/native_library.go.tmpl',
                              ROOT/'deploy/prepare-mobile-buffers.py',
@@ -252,10 +253,12 @@ def payload(raw):
 
 def expected_names(target):
     library = library_name(target)
-    return set(LICENSES)|{binary_name(target)}|({library} if library else set())|TOR.VERIFY.names(target)
+    return set(LICENSES)|{binary_name(target)}|({library} if library else set())|TOR.VERIFY.names(target)|DNSSEC.names(target)
 
 
 def payload_bound(name, target):
+    if name in DNSSEC.names(target):
+        return DNSSEC.bound(name, target)
     if name in TOR.VERIFY.names(target):
         return TOR.VERIFY.bound(name, target)
     if name == binary_name(target):
@@ -430,6 +433,8 @@ def reuse(directory, target, policy=None, env=None):
     if receipt != expected:
         raise ValueError('Native runtime differs from the exact source, target or payload receipt')
     TOR.VERIFY.verify(directory, target, source_root=ROOT, exact=False)
+    if target.startswith('linux/'):
+        DNSSEC.verify(directory, target)
     if marker(policy).encode() not in regular(directory/binary, MAX_BINARY):
         raise ValueError('Native runtime source fingerprint is missing')
     check_target(directory/binary, target, env)
@@ -645,7 +650,7 @@ def stage_pt_notices(stage):
     path.write_bytes(raw)
 
 
-def build(target, destination, *, source=None, xray=None, pq=None, cache=None, tor_compiled=None):
+def build(target, destination, *, source=None, xray=None, pq=None, cache=None, tor_compiled=None, dnssec_compiled=None):
     env, policy = environment(target, compiler=True), digest()
     native_acceptance = env.get('ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE', '')
     if native_acceptance not in ('', '1'):
@@ -664,6 +669,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             verify_installed_darwin_host(None, destination, target, env)
         elif platform.system() == 'Linux' and target == 'linux/'+{'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), ''):
             verify_linux_stock_dns(destination, target, env)
+            DNSSEC.test_native_bundle(destination, target, env)
         print('Reused verified complete native runtime '+target, flush=True)
         return destination
     if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:
@@ -837,7 +843,14 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                  '-ldflags=-checklinkname=0', '.', '-run', '^TestRouterVPNDesktop(Tor|External)',
                  '-count=1', '-timeout=180s' if target.startswith('linux/') else '-timeout=120s'],
                 cwd=source, env=env, timeout=600)
+        if target.startswith('linux/'):
+            validator = DNSSEC.build(target, temp/'dnssec-bundle', compiled=dnssec_compiled, env=env)
+            for name in DNSSEC.names(target):
+                shutil.copyfile(validator/name, stage/name)
         ldflags = '-s -w -buildid= -checklinkname=0 -X github.com/sagernet/sing-box/constant.Version='+marker(policy)
+        if target.startswith('linux/'):
+            validator_library = payload(regular(stage/DNSSEC.LIBRARY, DNSSEC.bound(DNSSEC.LIBRARY, target)))
+            ldflags += ' -X main.routerVPNDNSSECSHA='+validator_library['sha256']+' -X main.routerVPNDNSSECBytes='+str(validator_library['size'])
         if library_name(target):
             library = payload(regular(stage/library_name(target), MAX_LIBRARY))
             native_loader = source/'cmd/sing-box/routervpn_native_library.go'
@@ -892,5 +905,6 @@ if __name__ == '__main__':
     parser.add_argument('--pq', type=Path, help='verified desktop PQ link-input directory')
     parser.add_argument('--cache', type=Path, help='owned Rust incremental build cache')
     parser.add_argument('--tor-compiled', type=Path, help='exact Windows Tor compile artifact; accepted only after native tests')
+    parser.add_argument('--dnssec-compiled', type=Path, help='exact native Linux pinned validator build; verified and cryptographically tested before packaging')
     args = parser.parse_args()
-    build(args.target, args.destination, source=args.source, xray=args.xray, pq=args.pq, cache=args.cache, tor_compiled=args.tor_compiled)
+    build(args.target, args.destination, source=args.source, xray=args.xray, pq=args.pq, cache=args.cache, tor_compiled=args.tor_compiled, dnssec_compiled=args.dnssec_compiled)

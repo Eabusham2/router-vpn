@@ -190,6 +190,11 @@ jobs:
         with:
           key: complete-native-v1-${{ runner.os }}-${{ matrix.slug }}-${{ steps.policy.outputs.sha256 }}-${{ hashFiles('deploy/setup-desktop-native-toolchain.py', 'deploy/install-desktop-windows-toolchain.py') }}
           path: dist/native-runtime/${{ matrix.slug }}
+      - uses: actions/cache@v4
+        if: startsWith(matrix.target, 'linux/')
+        with:
+          key: pinned-dnssec-v1-${{ matrix.slug }}-${{ hashFiles('native/dnssec/sources.json', 'native/dnssec/validator.c', 'native/dnssec/validator.h', 'deploy/build-dnssec-validator.py', 'deploy/verify-dnssec-validator.py') }}
+          path: dist/.dnssec-cache
       - name: Build and validate the complete native engine
         shell: bash
         run: |
@@ -204,6 +209,9 @@ jobs:
             export ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE=1
           fi
           python3 deploy/build-native-runtime.py "${runtime_args[@]}"
+          if [[ '${{ matrix.target }}' == linux/* ]]; then
+            python3 deploy/test_desktop_dnssec_bundle.py --bundle 'dist/native-runtime/${{ matrix.slug }}' --target '${{ matrix.target }}'
+          fi
           python3 deploy/test_desktop_tor_package.py --package 'dist/native-runtime/${{ matrix.slug }}' --target '${{ matrix.target }}' --within-native
           python3 deploy/test_desktop_native_bundle.py 'dist/native-runtime/${{ matrix.slug }}' '${{ matrix.target }}'
           python3 deploy/test_native_runtime_delivery.py --bundle 'dist/native-runtime/${{ matrix.slug }}' --target '${{ matrix.target }}'

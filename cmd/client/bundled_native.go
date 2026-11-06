@@ -81,6 +81,9 @@ func validateNativeReceipt(raw []byte) (bundledNativeReceipt, error) {
 		}
 		if name != nativeBinaryName() && name != "libcronet.dll" && name != "libcronet.so" {
 			limit := nativeLicenseBound(name)
+			if dnssecLimit := bundledDNSSECPayloadBound(name, r.Target); dnssecLimit != 0 {
+				limit = dnssecLimit
+			}
 			if torLimit := bundledTorPayloadBound(name, r.Target); torLimit != 0 {
 				limit = torLimit
 			}
@@ -103,6 +106,13 @@ func validateNativeReceipt(raw []byte) (bundledNativeReceipt, error) {
 	for _, name := range append(append([]string{}, bundledTorRecords...), bundledTorBinaryName(r.Target)) {
 		if _, ok := r.Files[name]; !ok {
 			return r, bad
+		}
+	}
+	if runtime.GOOS == "linux" {
+		for _, name := range bundledDNSSECNames {
+			if r.Files[name].Size == 0 {
+				return r, bad
+			}
 		}
 	}
 	if runtime.GOOS == "linux" && r.Files["libcronet.so"].Size == 0 {
@@ -193,6 +203,11 @@ func verifyBundledNativeContext(ctx context.Context, root string) (string, error
 	}
 	if _, err := verifyBundledTorPayload(directory, receipt.Target); err != nil {
 		return "", err
+	}
+	if runtime.GOOS == "linux" {
+		if _, err := verifyBundledDNSSECPayload(directory, receipt.Target); err != nil {
+			return "", err
+		}
 	}
 	binary := filepath.Join(directory, nativeBinaryName())
 	metadata, err := buildinfo.ReadFile(binary)

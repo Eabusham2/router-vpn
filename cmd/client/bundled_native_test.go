@@ -85,6 +85,9 @@ func nativeReceiptFixture() bundledNativeReceipt {
 	}
 	if runtime.GOOS == "linux" {
 		r.Files["libcronet.so"] = bundledNativeFile{42, digest}
+		for _, name := range bundledDNSSECNames {
+			r.Files[name] = bundledNativeFile{42, digest}
+		}
 	}
 	if runtime.GOOS == "windows" {
 		r.Files["libcronet.dll"] = bundledNativeFile{42, digest}
