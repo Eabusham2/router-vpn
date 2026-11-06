@@ -1129,6 +1129,11 @@ func desktopExternalWFPBox(t *testing.T, original *mobilemultihop.ExternalPolicy
 		t.Fatal(err)
 	}
 	options.Log = &option.LogOptions{Disabled: true}
+	if policy.Metadata().Protocol == "socks5" {
+		// Keep the actual native DNS/socket error in CI; the public proof
+		// deliberately returns only a sanitized failure. No grant is changed.
+		options.Log = &option.LogOptions{Level: "error", DisableColor: true}
+	}
 	f.box, err = New(Options{Context: ctx, Options: options})
 	if err != nil {
 		t.Fatal(err)
