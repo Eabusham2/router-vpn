@@ -1,0 +1,227 @@
+package routervpnwhitening
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"errors"
+	"io"
+	"net"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/option"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// A CONNECT carrier has no packet lane. Keep that constraint at the physical
+// boundary while the real paired SS server authenticates and decodes UoT.
+type uotTCPUnderlay struct {
+	*testUnderlay
+	udpAttempts atomic.Int32
+}
+
+func (d *uotTCPUnderlay) DialContext(ctx context.Context, network string, target M.Socksaddr) (net.Conn, error) {
+	if network != "tcp" {
+		d.udpAttempts.Add(1)
+		return nil, errors.New("captured TCP carrier rejects physical UDP")
+	}
+	return d.testUnderlay.DialContext(ctx, network, target)
+}
+func (d *uotTCPUnderlay) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	d.udpAttempts.Add(1)
+	return nil, errors.New("captured TCP carrier has no packet listener")
+}
+func TestWhiteningUoTRequiresExplicitVersionTwo(t *testing.T) {
+	for _, value := range []option.UDPOverTCPOptions{{Enabled: false, Version: 2}, {Enabled: true, Version: 0}, {Enabled: true, Version: 1}, {Enabled: true, Version: 3}} {
+		options := detourOptions("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+		options.UDPOverTCP = &value
+		if validate(options) == nil {
+			t.Fatalf("accepted ambiguous UoT policy: %+v", value)
+		}
+	}
+}
+func TestWhiteningUoTActualPacketsRetainTCPAndOriginalOwner(t *testing.T) {
+	exerciseWhiteningUoT(t, runAESWhiteningServer)
+}
+func TestWhiteningUoTUserspacePacketsRetainTCPAndOriginalOwner(t *testing.T) {
+	exerciseWhiteningUoT(t, runUserspaceAESWhiteningServer)
+}
+func exerciseWhiteningUoT(t *testing.T, server func(*testing.T, string, string) (string, string)) {
+	tcp, udp := echoEndpoints(t)
+	address, password := server(t, tcp, udp)
+	underlay := &uotTCPUnderlay{testUnderlay: &testUnderlay{address: address}}
+	options := detourOptions(password)
+	options.Detour = ""
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	original, err := newOutbound(ctx, "original", options, underlay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if packet, failure := original.DialContext(ctx, "udp", M.ParseSocksaddr(udp)); failure == nil || packet != nil {
+		t.Fatal("ordinary UDP silently crossed a TCP-only carrier")
+	}
+	if err = original.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if underlay.udpAttempts.Load() != 1 {
+		t.Fatal("negative did not reach actual packet boundary")
+	}
+	options.UDPOverTCP = &option.UDPOverTCPOptions{Enabled: true, Version: 2}
+	h, err := newOutbound(ctx, "uot-original", options, underlay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+	// Both connected packet and unconnected packet APIs must carry datagrams,
+	// including sizes above the old low-memory buffer, through authenticated TCP.
+	for _, size := range []int{32, 9000, 17000} {
+		payload := bytes.Repeat([]byte{byte(size)}, size)
+		connection, failure := h.DialContext(ctx, "udp", M.ParseSocksaddr(udp))
+		if failure != nil {
+			t.Fatal(failure)
+		}
+		if err = connection.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if n, e := connection.Write(payload); e != nil || n != len(payload) {
+			t.Fatalf("UoT write: %d/%d %v", n, len(payload), e)
+		}
+		got := make([]byte, len(payload))
+		if n, e := connection.Read(got); e != nil || n != len(payload) || !bytes.Equal(got, payload) {
+			t.Fatalf("UoT datagram changed: %d/%d %v", n, len(payload), e)
+		}
+		_ = connection.Close()
+		packet, e := h.ListenPacket(ctx, M.ParseSocksaddr(udp))
+		if e != nil {
+			t.Fatal(e)
+		}
+		_ = packet.SetDeadline(time.Now().Add(5 * time.Second))
+		target, e := net.ResolveUDPAddr("udp", udp)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if n, e := packet.WriteTo(payload, target); e != nil || n != len(payload) {
+			t.Fatalf("UoT packet write: %d %v", n, e)
+		}
+		if n, from, e := packet.ReadFrom(got); e != nil || n != len(payload) || from.String() != udp || !bytes.Equal(got, payload) {
+			t.Fatalf("UoT packet response changed: %d %v %v", n, from, e)
+		}
+		_ = packet.Close()
+	}
+	// Ordinary authenticated TCP must remain unchanged under the UoT option.
+	stream, err := h.DialContext(ctx, "tcp", M.ParseSocksaddr(tcp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = stream.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err = stream.Write([]byte("tcp")); err != nil {
+		t.Fatal(err)
+	}
+	received := make([]byte, 3)
+	if _, err = io.ReadFull(stream, received); err != nil || string(received) != "tcp" {
+		t.Fatal("UoT changed ordinary TCP", err)
+	}
+	_ = stream.Close()
+	// A replacement uses the same carrier but has a different authenticated owner.
+	replacement, err := newOutbound(ctx, "uot-replacement", options, underlay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = replacement.Close() })
+	held, err := h.DialContext(ctx, "udp", M.ParseSocksaddr(udp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked := make(chan error, 1)
+	go func() { _, e := held.Read(make([]byte, 32)); blocked <- e }()
+	if err = h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case e := <-blocked:
+		if e == nil {
+			t.Fatal("closed UoT owner accepted packet")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("original UoT reader did not retire")
+	}
+	underlay.mu.Lock()
+	calls := underlay.calls
+	underlay.mu.Unlock()
+	if late, e := h.DialContext(ctx, "udp", M.ParseSocksaddr(udp)); e == nil || late != nil {
+		t.Fatal("retired UoT owner admitted a new stream")
+	}
+	underlay.mu.Lock()
+	unchanged := underlay.calls == calls
+	underlay.mu.Unlock()
+	if !unchanged {
+		t.Fatal("retired UoT owner reached carrier")
+	}
+	live, err := replacement.DialContext(ctx, "udp", M.ParseSocksaddr(udp))
+	if err != nil {
+		t.Fatal("old close cancelled replacement", err)
+	}
+	_ = live.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err = live.Write([]byte("owned")); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 5)
+	if n, e := live.Read(got); e != nil || n != 5 || string(got) != "owned" {
+		t.Fatal("replacement UoT packet failed", e)
+	}
+	_ = live.Close()
+	// Authentication is still SS2022; UoT cannot turn a bad key into clear UDP.
+	bad := options
+	bad.Password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+	if bad.Password == password {
+		bad.Password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{8}, 32))
+	}
+	wrong, err := newOutbound(ctx, "wrong-auth", bad, underlay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrong.Close() })
+	badPacket, err := wrong.DialContext(ctx, "udp", M.ParseSocksaddr(udp))
+	if err == nil {
+		_ = badPacket.SetDeadline(time.Now().Add(time.Second))
+		_, writeError := badPacket.Write([]byte("refused"))
+		if writeError == nil {
+			if _, readError := badPacket.Read(make([]byte, 32)); readError == nil {
+				t.Fatal("wrong SS key produced UoT data")
+			}
+		}
+		_ = badPacket.Close()
+	}
+	// Context cancellation owns a distinct stream and joins the blocked reader.
+	cancelledContext, stop := context.WithCancel(ctx)
+	cancelled, err := newOutbound(cancelledContext, "cancelled-owner", options, underlay)
+	if err != nil {
+		stop()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { stop(); _ = cancelled.Close() })
+	pending, err := cancelled.DialContext(cancelledContext, "udp", M.ParseSocksaddr(udp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readDone := make(chan error, 1)
+	go func() { _, e := pending.Read(make([]byte, 32)); readDone <- e }()
+	stop()
+	select {
+	case e := <-readDone:
+		if e == nil {
+			t.Fatal("cancelled UoT owner accepted packet")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled UoT read did not join")
+	}
+	if err = cancelled.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if underlay.udpAttempts.Load() != 1 {
+		t.Fatal("UoT escaped through physical UDP", underlay.udpAttempts.Load())
+	}
+}

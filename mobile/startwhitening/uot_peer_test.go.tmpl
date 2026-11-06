@@ -1,0 +1,189 @@
+package routervpnwhitening
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	U "github.com/sagernet/sing-box/common/uot"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// This provider runs the actual pinned SS2022 authentication and UoT decoder.
+// Only its post-decryption routing is an explicit loopback echo fixture. It
+// supplies no claim about Box/network-manager or physical policy admission.
+type uotPeerRouter struct {
+	adapter.ConnectionRouterEx
+	tcp, udp string
+}
+
+func (r *uotPeerRouter) RouteConnection(ctx context.Context, conn net.Conn, meta adapter.InboundContext) error {
+	if meta.Destination.String() != r.tcp {
+		return errors.New("provider refused foreign stream destination")
+	}
+	peer, err := (&net.Dialer{}).DialContext(ctx, "tcp", r.tcp)
+	if err != nil {
+		return err
+	}
+	defer peer.Close()
+	done := make(chan struct{})
+	go func() { defer close(done); _, _ = io.Copy(peer, conn); _ = peer.SetDeadline(time.Now()) }()
+	_, err = io.Copy(conn, peer)
+	_ = conn.SetDeadline(time.Now())
+	<-done
+	return err
+}
+func (r *uotPeerRouter) RoutePacketConnection(ctx context.Context, conn N.PacketConn, meta adapter.InboundContext) error {
+	if meta.Destination.String() != r.udp {
+		return errors.New("provider refused foreign UoT destination")
+	}
+	packet, ok := conn.(net.PacketConn)
+	if !ok {
+		return errors.New("pinned UoT packet API changed")
+	}
+	peer, err := (&net.Dialer{}).DialContext(ctx, "udp", r.udp)
+	if err != nil {
+		return err
+	}
+	defer peer.Close()
+	joined := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { defer close(joined); _ = peer.Close() })
+	defer func() {
+		if !stop() {
+			<-joined
+		}
+	}()
+	payload := make([]byte, 65535)
+	reply := make([]byte, 65535)
+	for {
+		n, target, e := packet.ReadFrom(payload)
+		if e != nil {
+			return e
+		}
+		if target.String() != r.udp {
+			return errors.New("provider refused foreign UoT packet")
+		}
+		if e = peer.SetDeadline(time.Now().Add(5 * time.Second)); e != nil {
+			return e
+		}
+		if written, e := peer.Write(payload[:n]); e != nil || written != n {
+			return errors.Join(e, io.ErrShortWrite)
+		}
+		count, e := peer.Read(reply)
+		if e != nil {
+			return e
+		}
+		if written, e := packet.WriteTo(reply[:count], target); e != nil || written != count {
+			return errors.Join(e, io.ErrShortWrite)
+		}
+	}
+}
+func (r *uotPeerRouter) RouteConnectionEx(ctx context.Context, conn net.Conn, meta adapter.InboundContext, close N.CloseHandlerFunc) {
+	err := r.RouteConnection(ctx, conn, meta)
+	_ = conn.Close()
+	if close != nil {
+		close(err)
+	}
+}
+func (r *uotPeerRouter) RoutePacketConnectionEx(ctx context.Context, conn N.PacketConn, meta adapter.InboundContext, close N.CloseHandlerFunc) {
+	err := r.RoutePacketConnection(ctx, conn, meta)
+	_ = conn.Close()
+	if close != nil {
+		close(err)
+	}
+}
+
+type uotAuthenticatedPeer struct{ router *U.Router }
+
+func (p *uotAuthenticatedPeer) NewConnection(ctx context.Context, conn net.Conn, meta M.Metadata) error {
+	return p.router.RouteConnection(ctx, conn, adapter.InboundContext{Source: meta.Source, Destination: meta.Destination})
+}
+func (*uotAuthenticatedPeer) NewPacketConnection(context.Context, N.PacketConn, M.Metadata) error {
+	return errors.New("provider accepts UoT TCP only")
+}
+func (*uotAuthenticatedPeer) NewError(context.Context, error) {}
+func runUserspaceAESWhiteningServer(t *testing.T, tcp, udp string) (string, string) {
+	t.Helper()
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	password := base64.StdEncoding.EncodeToString(key)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	peer := &uotAuthenticatedPeer{router: U.NewRouter(&uotPeerRouter{tcp: tcp, udp: udp}, log.NewNOPFactory().Logger())}
+	server, err := shadowaead_2022.NewServiceWithPassword(startwhitening.Method, password, 10, peer, nil)
+	if err != nil {
+		cancel()
+		_ = listener.Close()
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var workers sync.WaitGroup
+	closed := false
+	connections := map[net.Conn]bool{}
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		for {
+			conn, e := listener.Accept()
+			if e != nil {
+				return
+			}
+			mu.Lock()
+			if closed {
+				mu.Unlock()
+				_ = conn.Close()
+				return
+			}
+			connections[conn] = true
+			workers.Add(1)
+			mu.Unlock()
+			go func() {
+				defer workers.Done()
+				defer func() { _ = conn.Close(); mu.Lock(); delete(connections, conn); mu.Unlock() }()
+				_ = conn.SetDeadline(time.Now().Add(20 * time.Second))
+				_ = server.NewConnection(ctx, conn, M.Metadata{Source: M.SocksaddrFromNet(conn.RemoteAddr())})
+			}()
+		}
+	}()
+	t.Cleanup(func() {
+		mu.Lock()
+		closed = true
+		cancel()
+		_ = listener.Close()
+		for c := range connections {
+			_ = c.Close()
+		}
+		mu.Unlock()
+		workers.Wait()
+	})
+	relay, _ := freePair(t)
+	raw, err := json.Marshal(map[string]any{"inbounds": []any{map[string]any{"type": "shadowsocks", "method": startwhitening.Method, "password": password}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(t.TempDir(), "server-key.json")
+	if err = os.WriteFile(config, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	testProcess(t, os.Getenv("ROUTER_VPN_WHITENING_TEST_BINARY"), []string{"--mode", "server", "--listen", relay, "--target", listener.Addr().String(), "--key-config", config}, relay)
+	return relay, password
+}

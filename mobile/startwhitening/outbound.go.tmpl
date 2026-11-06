@@ -22,13 +22,15 @@ import (
 	"github.com/sagernet/sing/common/bufio"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/common/uot"
 )
 
 type Options struct {
 	option.ServerOptions
-	Detour   string `json:"detour,omitempty"`
-	Method   string `json:"method"`
-	Password string `json:"password"`
+	Detour     string                    `json:"detour,omitempty"`
+	Method     string                    `json:"method"`
+	Password   string                    `json:"password"`
+	UDPOverTCP *option.UDPOverTCPOptions `json:"udp_over_tcp,omitempty"`
 }
 
 func RegisterOutbound(registry *outbound.Registry) {
@@ -39,11 +41,12 @@ var _ adapter.Outbound = (*Outbound)(nil)
 
 type Outbound struct {
 	outbound.Adapter
-	owner  *startwhitening.Owner
-	dialer N.Dialer
-	method shadowsocks.Method
-	server M.Socksaddr
-	key    [32]byte
+	owner     *startwhitening.Owner
+	dialer    N.Dialer
+	method    shadowsocks.Method
+	server    M.Socksaddr
+	key       [32]byte
+	uotClient *uot.Client
 }
 
 func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options Options) (adapter.Outbound, error) {
@@ -65,6 +68,9 @@ var detourTag = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 var hostnameLabel = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 
 func validate(options Options) error {
+	if options.UDPOverTCP != nil && (!options.UDPOverTCP.Enabled || options.UDPOverTCP.Version != uot.Version) {
+		return errors.New("native AES+XOR UoT requires enabled version 2")
+	}
 	if options.Detour != "" {
 		if !detourTag.MatchString(options.Detour) {
 			return errors.New("invalid captured AES+XOR entry tag")
@@ -108,7 +114,14 @@ func newOutbound(ctx context.Context, tag string, options Options, d N.Dialer) (
 	if err != nil {
 		return nil, errors.New("native AES+XOR profile has invalid authenticated AES key material")
 	}
-	return &Outbound{Adapter: outbound.NewAdapterWithDialerOptions(startwhitening.Type, tag, []string{N.NetworkTCP, N.NetworkUDP}, option.DialerOptions{Detour: options.Detour}), owner: startwhitening.NewOwner(ctx), dialer: d, method: method, server: options.ServerOptions.Build(), key: key}, nil
+	h := &Outbound{Adapter: outbound.NewAdapterWithDialerOptions(startwhitening.Type, tag, []string{N.NetworkTCP, N.NetworkUDP}, option.DialerOptions{Detour: options.Detour}), owner: startwhitening.NewOwner(ctx), dialer: d, method: method, server: options.ServerOptions.Build(), key: key}
+	if options.UDPOverTCP != nil {
+		// The pinned UoT client requests a TCP stream to its protocol destination.
+		// That stream goes through our existing authenticated AES+XOR path and
+		// remains owned by the same cancellation/drain owner as ordinary TCP.
+		h.uotClient = &uot.Client{Dialer: h, Version: uot.Version}
+	}
+	return h, nil
 }
 func (h *Outbound) physical(ctx context.Context, network string) (*startwhitening.Conn, error) {
 	return h.owner.Open(ctx, h.key, network == N.NetworkUDP, func(ctx context.Context) (net.Conn, error) { return h.dialer.DialContext(ctx, network, h.server) })
@@ -152,6 +165,9 @@ func (h *Outbound) DialContext(ctx context.Context, network string, destination 
 		}
 		return startwhitening.OwnAuthenticatedStream(raw, cipher)
 	case N.NetworkUDP:
+		if h.uotClient != nil {
+			return h.uotClient.DialContext(ctx, network, destination)
+		}
 		raw, err := h.physical(ctx, N.NetworkUDP)
 		if err != nil {
 			return nil, err
@@ -166,6 +182,9 @@ func (h *Outbound) DialContext(ctx context.Context, network string, destination 
 	}
 }
 func (h *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	if h.uotClient != nil {
+		return h.uotClient.ListenPacket(ctx, destination)
+	}
 	ctx, metadata := adapter.ExtendContext(ctx)
 	metadata.Outbound = h.Tag()
 	metadata.Destination = destination
