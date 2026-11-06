@@ -30,6 +30,9 @@ P.GO = P.GO.replace(anchor, ''' case "max-compile":value,err=mobilemultihop.Comp
 # Compile the exact production pre-start assembly too. Only the unexercised
 # ordinary WG/AWG leaf parsers and OS/engine startup below the boundary are
 # excluded; selected-profile/proof validation and every MAX compiler call run.
+# Imported entry dispatch owns a separate asynchronous startup path, tested by
+# the imported-router gates. This paired-assembly fixture must refuse it, not
+# pretend the asynchronous handoff produced a paired Prepared value.
 provider = (ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
 def method(name, following):
     return provider[provider.index('    private func '+name+'('):provider.index('    private func '+following+'(')]
@@ -37,6 +40,17 @@ prepare = method('startMultihop', 'multihopWireGuardEndpoint')
 prepare = prepare[:prepare.index('        let strict = strictKillSwitchRequested(')]
 prepare = prepare.replace('private func startMultihop(', 'func prepare(', 1)
 prepare = prepare.replace(', completionHandler: @escaping (Error?) -> Void) throws {', ') throws -> Prepared {', 1)
+imported_dispatch = '''        if entryProfile["node_kind"] as? String == "external" {
+            try startImportedEntryMultihop(provider: provider, root: root, entryProfile: entryProfile,
+                                          finalProfile: selectedProfile, completionHandler: completionHandler)
+            return
+        }
+'''
+assert prepare.count(imported_dispatch) == 1
+prepare = prepare.replace(imported_dispatch, '''        if entryProfile["node_kind"] as? String == "external" {
+            throw tunnelError(50, "Imported entry dispatch requires its separate asynchronous startup fixture.")
+        }
+''', 1)
 prepare += '        return Prepared(files: finalFiles, metadata: hopMetadata, entryLayer: entryLayer.source, exitLayer: exitLayer.source, mtuProfile: mtuProfileData)\n    }\n'
 PROVIDER = r''' 
 @MainActor final class ProviderPreparation {
@@ -283,7 +297,7 @@ func maxCompose(_ config:String,_ metadata:String,_ entry:String,_ exit:String)t
   reject("ordinary entry still needs selected layer"){_ = try IOSMultihopStartLayer.requiredSource(metadata:text(ordinary),source:nil)}
   ordinary=try object(Data(meta.utf8));ordinary["exit_mode"]="wg"
   reject("MAX entry does not waive ordinary exit layer"){_ = try IOSMultihopStartLayer.requiredExitSource(metadata:text(ordinary),source:nil)}
-  for fault in ["entry-selection","entry-identity","exit-selection","raw-mode","missing-assets","mode","duplicate-entry"]{
+  for fault in ["entry-selection","entry-identity","exit-selection","raw-mode","missing-assets","mode","duplicate-entry","imported-entry"]{
    var (provider,root,exit)=try sourceRoots(fixtures,a,b,"auto")
    var entry=try object(provider["entryBundle"] as! Data)
    switch fault{
@@ -293,6 +307,7 @@ func maxCompose(_ config:String,_ metadata:String,_ entry:String,_ exit:String)t
    case "raw-mode":provider["rawProfileID"]="wg"
    case "missing-assets":entry["profiles"]=[String:String]()
    case "mode":exit["multihop_entry_mode"]="max"
+   case "imported-entry":var external=a.profile;external["node_kind"]="external";entry["routerProfiles"]=[external]
    default:entry["routerProfiles"]=[a.profile,a.profile]
    }
    provider["entryBundle"]=try json(entry)

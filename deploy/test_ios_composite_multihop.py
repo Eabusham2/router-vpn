@@ -255,7 +255,7 @@ func compositeCompose(_ config:String,_ metadata:String,_ entry:String,_ exit:St
      };g["outbounds"]=outputs;return try text(g)
     }}
    }
-   for fault in ["entry-selection","entry-proof","exit-selection","raw-mode","missing-helper","extra-helper","foreign-aes","layer","duplicate-entry","same-node"]{
+   for fault in ["entry-selection","entry-proof","exit-selection","raw-mode","missing-helper","extra-helper","foreign-aes","layer","duplicate-entry","same-node","imported-entry"]{
     var (provider,root,exit)=try sourceRoots(a,b,"auto"),entry=try object(provider["entryBundle"] as! Data)
     switch fault{
     case "entry-selection":entry["selectedRouterID"]="wrong"
@@ -263,6 +263,7 @@ func compositeCompose(_ config:String,_ metadata:String,_ entry:String,_ exit:St
     case "exit-selection":root["selectedRouterID"]="wrong"
     case "raw-mode":provider["rawProfileID"]="wg"
     case "duplicate-entry":entry["routerProfiles"]=[a.profile,a.profile]
+    case "imported-entry":var external=a.profile;external["node_kind"]="external";entry["routerProfiles"]=[external]
     case "layer":var p=a.profile;p["start_layer"]="xor";entry["routerProfiles"]=[p]
     case "same-node":exit["node_proof_id"]=a.profile["node_proof_id"];root["nodeProofId"]=a.profile["node_proof_id"]
     default:var profiles=entry["profiles"] as! [String:[String:String]]
