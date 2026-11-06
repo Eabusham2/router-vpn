@@ -611,3 +611,19 @@ AUXILIARY['resolved-group'][1].update({
  'TestResolvedFrameScopeCancellation':(),
  'TestResolvedGroupOpportunisticDispatch':('captured-policy','owner-changed','terminal-truncation-not-retried')})
 AUXILIARY['resolved-command'][1]['TestResolvedFixedCommandBoundedCohortSequence']=()
+
+# Original loaded DNSSEC trust inputs remain immutable and require full recheck.
+SOURCE.update({'internal/standardengine/resolved_dnssec.go',
+ 'internal/standardengine/resolved_dnssec_test.go',
+ 'cmd/client/linux_standard_service_resolved_dnssec_linux.go',
+ 'cmd/client/linux_standard_service_resolved_dnssec_linux_test.go'})
+AUXILIARY['resolved-dnssec-policy']=('./internal/standardengine',{
+ 'TestResolvedDNSSECOriginalNTASelection':('global-descendant-ds','global-descendant-dnskey','global-exact-negative','link-negative-overrides-ds','strict','allow-downgrade'),
+ 'TestResolvedDNSSECWireTextAndImmutableInputs':(),
+ 'TestResolvedDNSSECRechecksPresenceAndAbsence':('absent-became-present','present-disappeared','record-changed','missing','reordered','foreign-policy'),
+ 'TestResolvedDNSSECAbsenceAndCapacityRemainExplicit':()})
+AUXILIARY['resolved-dnssec-owner']=('./cmd/client',{
+ 'TestResolvedDNSSECCollectorOriginalOwner':('all-suffixes-and-absence','absent-anchor-changed','daemon-lost','local-decision-changed','cancelled-original'),
+ 'TestResolvedDNSSECAnchorCancelledAdmission':()})
+AUXILIARY_TESTS.update({'internal/standardengine/resolved_dnssec_test.go':'resolved-dnssec-policy',
+ 'cmd/client/linux_standard_service_resolved_dnssec_linux_test.go':'resolved-dnssec-owner'})

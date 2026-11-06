@@ -465,19 +465,31 @@ func resolvedSignalOriginal(file *os.File) error {
 
 // anchor returns a loaded trust-store observation from the same live helper.
 // It does not itself validate any upstream DNSSEC chain.
-func (h *linuxResolvedHelper) anchor(ctx context.Context, index int32, name string, kind uint16) (result standardengine.ResolvedAnchorResult, failure error) {
+func (h *linuxResolvedHelper) anchor(ctx context.Context, index int32, name string, kind uint16) (standardengine.ResolvedAnchorResult, error) {
+	return h.anchorScoped(ctx, ctx, index, name, kind)
+}
+func (h *linuxResolvedHelper) anchorScoped(admission, operation context.Context, index int32, name string, kind uint16) (result standardengine.ResolvedAnchorResult, failure error) {
 	if h == nil {
 		return result, errors.New("resolved helper absent")
 	}
-	if err := desktopnetwork.LockContext(ctx, &h.mu); err != nil {
+	if err := desktopnetwork.LockContext(admission, &h.mu); err != nil {
 		return result, err
 	}
 	defer h.mu.Unlock()
-	defer func() {
-		if failure != nil && h != nil {
-			h.failure = errors.Join(h.failure, failure)
-		}
-	}()
+	ctx, finish, err := resolvedFrameContext(admission, operation)
+	if err != nil {
+		return result, err
+	}
+	defer finish()
+	result, err = h.readAnchor(ctx, index, name, kind)
+	if err != nil {
+		h.failure = errors.Join(h.failure, err)
+	} else {
+		err = admission.Err()
+	}
+	return result, err
+}
+func (h *linuxResolvedHelper) readAnchor(ctx context.Context, index int32, name string, kind uint16) (result standardengine.ResolvedAnchorResult, failure error) {
 	if err := h.currentLocked(ctx); err != nil {
 		return result, err
 	}
