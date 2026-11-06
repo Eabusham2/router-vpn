@@ -395,8 +395,8 @@ def composed_home():
             target=root/name;target.parent.mkdir(parents=True,exist_ok=True)
             source=home_fixture.SOURCES[name]
             if name.endswith('HomeBoundaries.java'):
-                boundary=member(source,'final class AndroidExternalPolicy {')
-                source=source.replace(boundary,boundary[:-1]+member((JAVA/'AndroidExternalPolicy.java').read_text(),'    static String protocol(')+'}')
+                external=(JAVA/'AndroidExternalPolicy.java').read_text()
+                source=source.replace('// SHIPPING_EXTERNAL_POLICY_MEMBERS',member(external,'    static boolean supports(')+'\n'+member(external,'    static String protocol('))
             target.write_text(source)
         target=root/'android/content/Intent.java';target.write_text('package android.content;public class Intent{}')
         target=root/'android/util/Base64.java';target.parent.mkdir(parents=True)
