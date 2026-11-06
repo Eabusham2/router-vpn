@@ -8,7 +8,7 @@ original requirements. The live starting branch was
 1,294 commits ahead of the older published `745b3e41` release. Old patches were
 not replayed over that history. The published units below retain normal
 `main` ancestry through
-[`fdc0d78639e19a905c4b44e526ddbf5328ebeffd`](https://github.com/Eabusham2/router-vpn/commit/fdc0d78639e19a905c4b44e526ddbf5328ebeffd).
+[`64d58c6e862e552ddbf24e5a0c9348cb579b8b34`](https://github.com/Eabusham2/router-vpn/commit/64d58c6e862e552ddbf24e5a0c9348cb579b8b34).
 Each remote tree was compared with the locally tested committed tree, and the
 remote branch was read back before adoption. A saved patch, local commit or API
 schema was not counted as a successful push.
@@ -204,6 +204,68 @@ Concurrent upstream history was preserved, including
 commit subjects does not claim an independent audit of all their behavior.
 
 ## CI and release state at this checkpoint
+
+### Source delivery after the root-trust checkpoint
+
+The following published increments supersede only the corresponding older
+source gaps. They do not close other graph families, native execution, signing,
+physical devices or private deployment. The immutable source snapshots used
+for publication excluded unrelated concurrent drafts; each published tree was
+compared with the tested local commit before the remote branch was read back.
+
+| Published commit | Delivered behavior and focused evidence | Remaining boundary |
+|---|---|---|
+| [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e) | Binds resolver compatibility to the original best feature level: UDP+EDNS0+DO without DoT, or TLS+EDNS0+DO with required/opportunistic DoT, retaining the exact sticky PacketDoOff observation. Focused and legacy race checks pass in 1.069s/1.086s; inventory checks pass in 0.059s. | Lower, higher or unknown levels, strict DNSSEC and transient transport counters cannot authorize fallback. Installed original-monitor execution remains separate. |
+| [`ea460eae`](https://github.com/Eabusham2/router-vpn/commit/ea460eae005fb8ae7225c3dc17aa00dd991f2135) | Adds provisioned SOCKS entry Start Layers with paired final layers Off. The preserved 205 graphs expand to 215; shared/Apple/Android exports, 216 Apple and 432 combined Android parser verdicts, and 447 encrypted native verdicts pass. | This was the entry-only layer increment. The later concurrent `a08d7d6f` delivers both-enabled pairs and supersedes its graph-count boundary. |
+| [`ddbf7d3c`](https://github.com/Eabusham2/router-vpn/commit/ddbf7d3c80e7da97ec8900555b1f94fbbad882a1) | Derives the captured Windows physical lower policy for paired Router WG entry to an external SS2022 Server exit, retaining the complete selector and original lease/policy. Focused race checks pass in 8.035s and preparation projection passes. | This was a policy prerequisite; retained public host integration follows in `64d58c6e`. |
+| [`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d) | Captures an immutable private-domain DNSSEC proof tied to original policy/plan/candidate digests, two-label A/AAAA name, scope/resolver and purpose. Eighteen existing authenticated child cases and eight new secure/forged/expired/insecure/NODATA/wrong-name/NTA/alias cases pass; a premature clean child exit is rejected. Pure race checks pass in 1.056s/1.012s/1.033s and strict inventory/source checks pass. | It requires secure root NXDOMAIN and an unsigned positive original candidate, preserves unrelated NTAs, and excludes non-root positive trust islands. This prerequisite alone did not enable a caller. |
+| [`090c09ec`](https://github.com/Eabusham2/router-vpn/commit/090c09ec54f875ad0bf0031a3b6da5d3a254dc4f) | Wires the private-domain fallback only after the ordinary cohort and validator children join. The full original plan and physical owners are rechecked before a distinct auxiliary proof and again after its children/group join. Ordinary positive/negative answers win; failed auxiliary proof preserves the original error and never grants AD. Four focused parents/32 leaves pass under race in 1.313s, related resolver tests in 2.430s, and source/inventory checks in 0.074s. | The existing 32-slot budget and all deadlines remain unchanged; only the exception is unavailable without its extra slot. Installed privileged execution and deeper-name/other resolver semantics remain separate work. |
+| [`fe914aaf`](https://github.com/Eabusham2/router-vpn/commit/fe914aaf314b1188d602a4a464e2d2c002cb779f) | Refuses private-domain bootstrap groups without their typed denial proof before allocating a physical member. Related bootstrap/DNSSEC/private-TLD races pass in 1.080s; removing the guard fails the intended private direct/opportunistic cases while mixed ordinary controls pass. Inventory/source checks pass in 0.085s. | This closes a capability API gap without broadening ordinary DNSSEC authority; it is not installed kernel acceptance. |
+| [`64d58c6e`](https://github.com/Eabusham2/router-vpn/commit/64d58c6e862e552ddbf24e5a0c9348cb579b8b34) | Enables the retained Windows Router WG to external SS2022 Server host, both layers Off and On-connect/Always. It retains paired assets, entry identity, complete selector, final DNS/proof and source fingerprints. Restoration keeps the proved Server choice with a fresh authenticated relay session. Exact host/source restoration race tests pass in 1.209s, all 40 runner tests pass in 3.905s, and the final generated native composition crosscompiles for AMD64/ARM64. | Twenty-two native Server/association verdicts and ordinary-UDP/missing-durable-intent causal controls are mandatory in Windows CI, with a separate host scope. Actual WFP execution is unproved locally; public lifecycle reaches the real unavailable physical-network capture boundary. Local/Compare and broader graphs remain requirements. |
+
+The Windows independent provider uses the production relay lease manager, real
+WG and SS transports, selected final DNS and TLS proof. Its UDP workers belong
+to the original SOCKS control and process, with exact pointer checks before
+admission. Process/control retirement joins those workers before releasing the
+downstream association/listener. Compilation of that provider is not a passing
+Windows kernel test.
+
+Concurrent source through `04c3e2cb` was preserved, including Android/Apple Home
+DNS and captured request changes, the 235-graph independent SOCKS layer unit
+`a08d7d6f`, Windows duplicate ownership `80fefcc6`, Android comparison/form
+fixture corrections and Darwin bounded cleanup `14724aaf`. The older local
+sixteen-file 235-graph draft was compared against the newer upstream source and
+not replayed. Upstream preserves stronger relay ownership and its existing
+verdict inventory. A separate additive mobile verification increment remained
+unpublished at this document's source cutoff.
+
+The Darwin native Intel failure at `a5000cc3`, attempt 2,
+[run 42167793365/job 127740178604](https://github.com/Eabusham2/router-vpn/actions/runs/42167793365/job/127740178604),
+timed out after the selected-private SOCKS association assertion, while an
+unbounded per-connection cleanup blocked the original bounded broker cleanup.
+The missing original error text does not establish its underlying cause.
+Upstream `14724aaf` removes the redundant cleanup callbacks and retains bounded
+head/tail diagnostics. Independently rerunning its cleanup and timeout classes
+passes 13 tests in 1.588s, including the correct cleanup order and all three
+historical premature-Close variants as rejected causal controls. The prior
+local full runner remains bounded by Unix-socket EPERM; no complete local or
+macOS-native pass is inferred. A functionally equivalent local one-file draft
+was not published over that stronger upstream change.
+
+**Latest exact-source observation:** at **2026-11-06 06:48:05 UTC**, the
+all-events Actions query for `64d58c6e862e552ddbf24e5a0c9348cb579b8b34`
+returned **34 runs: three successful, sixteen queued, twelve pending and three
+running**. The authoritative
+[release run 42176531240](https://github.com/Eabusham2/router-vpn/actions/runs/42176531240)
+was push, attempt 1, pending. Windows native run 42176530971, Windows physical
+bootstrap run 42176531078 and Linux generated TUN run 42176530938 were pending.
+There was no failed run for that SHA at this read and no complete release.
+The releases collection still ended with the October 24 prerelease for
+`745b3e41e5a78d734391976af9b7cd0637660a0b`, containing twelve assets. No workflow
+was rerun or cancelled for this observation. The older snapshots below remain
+historical rather than the current release state.
+
+### Historical failure and release observations
 
 The authoritative release for `892eeb42`,
 [run 42141215053](https://github.com/Eabusham2/router-vpn/actions/runs/42141215053),
