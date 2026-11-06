@@ -17,7 +17,7 @@ func desktopExternalSSEntryOwnerWithFinal(owner *desktopExternalRuntime, final f
 		owner.profile.MultihopExecution != "" && owner.profile.MultihopExecution != "local" || owner.profile.MultihopEntryMode != "" {
 		return false
 	}
-	if owner.entry.StartLayer != "" && owner.entry.StartLayer != common.StartLayerOff && !desktopExternalSS2022Profile(owner.profile) {
+	if owner.entry.StartLayer != "" && owner.entry.StartLayer != common.StartLayerOff && !desktopExternalSSLayeredFinalProfile(owner.profile) {
 		return false
 	}
 	policy := desktopOwnedNodeProtectionPolicy(owner.profile)
@@ -36,15 +36,11 @@ func desktopExternalSS2022Profile(profile common.RouterProfile) bool {
 }
 
 func desktopExternalSSEntryFinalProfile(profile common.RouterProfile) bool {
-	if desktopExternalSS2022Profile(profile) {
+	if desktopExternalSSLayeredFinalProfile(profile) {
 		return true
 	}
 	if profile.NodeKind != "external" || profile.External == nil || profile.StartLayer != "" && profile.StartLayer != common.StartLayerOff || profile.External.StartLayer != nil {
 		return false
-	}
-	if profile.External.Protocol == "hysteria2" {
-		h := profile.External.Hysteria2
-		return h != nil && h.Server != "" && h.Port > 0 && h.Password != ""
 	}
 	return profile.External.Protocol == "http-connect" && profile.External.HTTPConnect != nil || profile.External.Protocol == "https-connect" && profile.External.HTTPSConnect != nil
 }
@@ -64,4 +60,16 @@ func desktopExternalSSCapturedLayer(profile common.RouterProfile) bool {
 	default:
 		return false
 	}
+}
+
+// Only these paired finals have independently authenticated native layer peers.
+func desktopExternalSSLayeredFinalProfile(profile common.RouterProfile) bool {
+	if desktopExternalSS2022Profile(profile) {
+		return true
+	}
+	if profile.NodeKind != "external" || profile.External == nil || profile.External.Protocol != "hysteria2" || !desktopExternalSSCapturedLayer(profile) {
+		return false
+	}
+	h := profile.External.Hysteria2
+	return h != nil && h.Server != "" && h.Port > 0 && h.Password != ""
 }

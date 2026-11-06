@@ -50,8 +50,20 @@ func TestRouterVPNDesktopInstalledSSHysteriaLoopbackReference(t *testing.T) {
 		t.Run("negative/"+fault, func(t *testing.T) { desktopSSHysteriaReference(t, child, methods[1], "hysteria2", fault) })
 	}
 }
-func desktopSSHysteriaReference(t *testing.T, child, method, protocol, fault string) {
+func desktopSSHysteriaReference(t *testing.T, child, method, protocol, fault string, layers ...string) {
 	t.Helper()
+	entryMode, finalMode := "", ""
+	if len(layers) != 0 {
+		if len(layers) != 2 {
+			t.Fatal("incomplete independent layer capture")
+		}
+		entryMode, finalMode = layers[0], layers[1]
+	}
+	entryLayerKey, finalLayerKey := desktopSSReferenceKey("2022-blake3-aes-256-gcm", 'a'), desktopSSReferenceKey("2022-blake3-aes-256-gcm", 'b')
+	finalVirtual := "198.51.100.240:8388"
+	if finalMode == "aes-256-gcm+xor-whitening" {
+		finalVirtual = "198.51.100.240:8389"
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	image, err := os.Executable()
@@ -87,6 +99,26 @@ func desktopSSHysteriaReference(t *testing.T, child, method, protocol, fault str
 	}()
 	entryPassword, finalPassword := desktopSSReferenceKey(method, 'i'), desktopSSReferenceKey("2022-blake3-aes-256-gcm", 'f')
 	request := desktopExternalInstalledPeerRequest{Schema: 1, Protocol: protocol, Address: "127.0.0.1", Password: finalPassword, ShadowsocksEntry: &desktopExternalInstalledSSRequest{Method: method, Password: entryPassword}}
+	if entryMode != "" {
+		request.SSEntryLayer = &desktopExternalInstalledLayerRequest{Mode: entryMode, Password: entryLayerKey}
+	}
+	if finalMode != "" {
+		request.SSFinalLayer = &desktopExternalInstalledLayerRequest{Mode: finalMode, Password: finalLayerKey}
+	}
+	for _, item := range []struct {
+		role    string
+		request *desktopExternalInstalledLayerRequest
+	}{{"entry", request.SSEntryLayer}, {"final", request.SSFinalLayer}} {
+		if item.request == nil {
+			continue
+		}
+		if fault == item.role+"-layer-key" {
+			item.request.Fault = "layer-key"
+		}
+		if fault == item.role+"-whitening" {
+			item.request.Fault = "whitening"
+		}
+	}
 	if err = json.NewEncoder(input).Encode(request); err != nil {
 		t.Fatal(err)
 	}
@@ -96,19 +128,41 @@ func desktopSSHysteriaReference(t *testing.T, child, method, protocol, fault str
 			t.Fatal("HY2 original provider readiness", e)
 		}
 		var reply desktopExternalInstalledPeerReply
-		if e = json.Unmarshal(raw, &reply); e != nil || reply.Schema != 1 || reply.Protocol != protocol || reply.Address != "198.51.100.240:8388" || reply.ShadowsocksEntry == nil || reply.ShadowsocksEntry.Method != method || reply.CA == "" {
+		if e = json.Unmarshal(raw, &reply); e != nil || reply.Schema != 1 || reply.Protocol != protocol || reply.Address != finalVirtual || reply.ShadowsocksEntry == nil || reply.ShadowsocksEntry.Method != method || reply.CA == "" {
 			t.Fatal("HY2 provider changed captured readiness", e)
 		}
 		a, e := netip.ParseAddrPort(reply.ShadowsocksEntry.Address)
 		if e != nil || !a.Addr().IsLoopback() || a.Port() == 0 {
 			t.Fatal("HY2 component lost original SS listener", e)
 		}
+		if (reply.SSEntryLayer != nil) != (entryMode != "") || (reply.SSFinalLayer != nil) != (finalMode != "") {
+			t.Fatal("HY2 layer receipt substituted owner")
+		}
+		if reply.SSFinalLayer != nil && (reply.SSFinalLayer.PhysicalTCP != 0 || reply.SSFinalLayer.Streams != 0) {
+			t.Fatal("HY2 final wrapper acquired TCP transport")
+		}
 		return reply
 	}
 	first := read()
-	lower := &desktopSSReferenceLower{virtual: "198.51.100.239:8388", original: first.ShadowsocksEntry.Address}
+	outerAddress := first.ShadowsocksEntry.Address
+	outerPort := uint16(8388)
+	if entryMode != "" {
+		outerAddress = first.SSEntryLayer.Address
+		if entryMode == "aes-256-gcm+xor-whitening" {
+			outerPort = 8389
+		}
+	}
+	lower := &desktopSSReferenceLower{virtual: netip.AddrPortFrom(netip.MustParseAddr("198.51.100.239"), outerPort).String(), original: outerAddress}
 	manager := &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}}
 	owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
+	entryHost, entryDetour, entryPort := "198.51.100.239", "captured-physical", uint16(8388)
+	var layerClients []adapter.Outbound
+	if entryMode != "" {
+		firstOuter := desktopSSReferenceLayerClient(t, owned, "captured-entry-layer", "captured-physical", entryHost, outerPort, entryMode, entryLayerKey)
+		layerClients = append(layerClients, firstOuter)
+		manager.owners["captured-entry-layer"] = firstOuter
+		entryHost, entryDetour, entryPort = "10.94.0.1", "captured-entry-layer", netip.MustParseAddrPort(first.ShadowsocksEntry.Address).Port()
+	}
 	selectedMethod := method
 	if fault == "entry-key" {
 		entryPassword = desktopSSReferenceKey(method, 'x')
@@ -116,7 +170,7 @@ func desktopSSHysteriaReference(t *testing.T, child, method, protocol, fault str
 	if fault == "entry-method" {
 		selectedMethod = "2022-blake3-chacha20-poly1305"
 	}
-	entry, err := SS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), "captured-entry", option.ShadowsocksOutboundOptions{DialerOptions: option.DialerOptions{Detour: "captured-physical"}, ServerOptions: option.ServerOptions{Server: "198.51.100.239", ServerPort: 8388}, Method: selectedMethod, Password: entryPassword})
+	entry, err := SS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), "captured-entry", option.ShadowsocksOutboundOptions{DialerOptions: option.DialerOptions{Detour: entryDetour}, ServerOptions: option.ServerOptions{Server: entryHost, ServerPort: entryPort}, Method: selectedMethod, Password: entryPassword})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,11 +218,18 @@ func desktopSSHysteriaReference(t *testing.T, child, method, protocol, fault str
 		return nil
 	}
 	entryErr := prove(entry, "203.0.113.77")
-	badEntry := fault == "entry-key" || fault == "entry-method"
+	badOuterEntry := fault == "entry-layer-key" || fault == "entry-whitening"
+	badEntry := fault == "entry-key" || fault == "entry-method" || badOuterEntry
 	if (entryErr != nil) != badEntry {
 		t.Fatal("original encrypted entry proof mismatch", fault, entryErr)
 	}
 	options := option.Hysteria2OutboundOptions{DialerOptions: option.DialerOptions{Detour: "captured-entry"}, ServerOptions: option.ServerOptions{Server: "198.51.100.240", ServerPort: 8388}, Password: finalPassword}
+	if finalMode != "" {
+		lastOuter := desktopSSReferenceLayerClient(t, owned, "captured-final-layer", "captured-entry", "198.51.100.240", netip.MustParseAddrPort(finalVirtual).Port(), finalMode, finalLayerKey)
+		layerClients = append(layerClients, lastOuter)
+		manager.owners["captured-final-layer"] = lastOuter
+		options.Detour, options.Server = "captured-final-layer", "10.93.0.1"
+	}
 	if protocol == "hysteria2" {
 		options.TLS = &option.OutboundTLSOptions{Enabled: true, ServerName: "captured-external.example", Certificate: []string{first.CA}}
 	}
@@ -182,6 +243,9 @@ func desktopSSHysteriaReference(t *testing.T, child, method, protocol, fault str
 		options.TLS.Certificate = []string{ca}
 	case "final-route":
 		options.Server = "198.51.100.241"
+		if finalMode != "" {
+			options.Server = "10.93.0.2"
+		}
 	}
 	final, err := HY.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), "captured-final", options)
 	if err != nil {
@@ -250,7 +314,7 @@ func desktopSSHysteriaReference(t *testing.T, child, method, protocol, fault str
 	if badEntry {
 		tick := time.NewTicker(10 * time.Millisecond)
 		defer tick.Stop()
-		for observed.ShadowsocksEntry.AuthTCP == 0 {
+		for (badOuterEntry && observed.SSEntryLayer.AuthTCP == 0) || (!badOuterEntry && observed.ShadowsocksEntry.AuthTCP == 0) {
 			select {
 			case <-ctx.Done():
 				t.Fatal("original HY2 rejection had no actual authentication witness", fault, ctx.Err())
@@ -262,10 +326,14 @@ func desktopSSHysteriaReference(t *testing.T, child, method, protocol, fault str
 			}
 		}
 	}
-	if observed.ShadowsocksEntry.PhysicalTCP < 1 {
+	if !badOuterEntry && observed.ShadowsocksEntry.PhysicalTCP < 1 {
 		t.Fatal("missing encrypted entry proof transport")
 	}
-	if badEntry {
+	if badOuterEntry {
+		if observed.SSEntryLayer.AuthTCP == 0 || observed.SSEntryLayer.Streams != 0 || observed.ShadowsocksEntry.PhysicalTCP != 0 || observed.ShadowsocksEntry.PhysicalUDP != 0 || observed.PhysicalUDP != 0 || observed.DNSQueries != 0 || observed.PublicReplies != 0 {
+			t.Fatal("failed entry wrapper reached HY2 or entry proof", observed)
+		}
+	} else if badEntry {
 		if observed.ShadowsocksEntry.AuthTCP == 0 || observed.ShadowsocksEntry.PublicReplies != 0 || observed.PhysicalUDP != 0 || observed.DNSQueries != 0 {
 			t.Fatal("bad entry reached HY2", observed)
 		}
@@ -290,8 +358,34 @@ func desktopSSHysteriaReference(t *testing.T, child, method, protocol, fault str
 			t.Fatal("foreign final tuple reached HY2", observed)
 		}
 	}
+	if fault == "" {
+		if first.SSEntryLayer != nil {
+			r := observed.SSEntryLayer
+			if r.PhysicalTCP == 0 || r.PhysicalUDP == 0 || r.Streams == 0 || r.Packets == 0 || r.AuthTCP != 0 || r.AuthUDP != 0 {
+				t.Fatal("entry wrapper missed independently encrypted transports", r)
+			}
+		}
+		if first.SSFinalLayer != nil {
+			r := observed.SSFinalLayer
+			if r.PhysicalUDP == 0 || r.Packets == 0 || r.PhysicalTCP != 0 || r.Streams != 0 || r.AuthUDP != 0 {
+				t.Fatal("HY2 wrapper is not independently authenticated UDP-only", r)
+			}
+		}
+	}
+	if fault == "final-layer-key" || fault == "final-whitening" {
+		r := observed.SSFinalLayer
+		if r == nil || r.AuthUDP == 0 || r.Packets != 0 || observed.PhysicalUDP != 0 {
+			t.Fatal("failed final wrapper reached original QUIC", observed)
+		}
+	}
 	if err = final.(io.Closer).Close(); err != nil {
 		t.Fatal("original HY2 client join", err)
+	}
+
+	for _, layer := range layerClients {
+		if err := layer.(io.Closer).Close(); err != nil {
+			t.Fatal("original layer client join", err)
+		}
 	}
 
 	_ = input.Close()
@@ -300,5 +394,24 @@ func desktopSSHysteriaReference(t *testing.T, child, method, protocol, fault str
 	joined = true
 	if err != nil || ctx.Err() != nil {
 		t.Fatal("HY2 provider did not join original workers", err, ctx.Err(), diagnostic.String())
+	}
+}
+
+func TestRouterVPNDesktopSSHysteriaIndependentLayersReference(t *testing.T) {
+	modes := []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"}
+	methods := []string{"2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"}
+	for methodIndex, method := range methods {
+		for a, entry := range modes {
+			for b, final := range modes {
+				t.Run(fmt.Sprintf("method%d/layer%d-layer%d", methodIndex, a, b), func(t *testing.T) {
+					desktopSSHysteriaReference(t, "ROUTERVPN_SS_HYSTERIA_COMPONENT_CHILD", method, "hysteria2", "", entry, final)
+				})
+			}
+		}
+	}
+	for _, fault := range []string{"entry-key", "entry-method", "password", "server-name", "trust", "final-route", "dns-route", "entry-layer-key", "final-layer-key", "entry-whitening", "final-whitening"} {
+		t.Run("negative/"+fault, func(t *testing.T) {
+			desktopSSHysteriaReference(t, "ROUTERVPN_SS_HYSTERIA_COMPONENT_CHILD", methods[1], "hysteria2", fault, modes[2], modes[2])
+		})
 	}
 }

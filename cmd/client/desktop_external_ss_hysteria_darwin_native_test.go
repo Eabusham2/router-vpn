@@ -27,6 +27,23 @@ var macOSExternalSSHysteriaCases = []string{
 	"ss-entry-aes256-hysteria-wrong-final-trust",
 	"ss-entry-aes256-hysteria-wrong-dns",
 	"ss-entry-aes256-hysteria-wrong-exit",
+	"ss-entry-aes256-hysteria-layers00-always",
+	"ss-entry-aes256-hysteria-layers01-always",
+	"ss-entry-aes256-hysteria-layers02-always",
+	"ss-entry-aes256-hysteria-layers10-always",
+	"ss-entry-aes256-hysteria-layers11-always",
+	"ss-entry-aes256-hysteria-layers12-always",
+	"ss-entry-aes256-hysteria-layers20-always",
+	"ss-entry-aes256-hysteria-layers21-always",
+	"ss-entry-aes256-hysteria-layers22-always",
+	"ss-entry-aes256-hysteria-layers22-wrong-entry-layer",
+	"ss-entry-aes256-hysteria-layers22-wrong-final-layer",
+	"ss-entry-aes256-hysteria-layers22-wrong-entry-whitening",
+	"ss-entry-aes256-hysteria-layers22-wrong-final-whitening",
+	"ss-entry-aes256-hysteria-layers22-wrong-entry-public",
+	"ss-entry-aes256-hysteria-layers22-wrong-dns",
+	"ss-entry-aes256-hysteria-layers22-wrong-exit",
+	"ss-entry-aes256-hysteria-layers22-wrong-final-trust",
 }
 
 func macOSExternalSSHysteriaScenario(scenario string) (entry, protocol, fault string, found bool) {
@@ -37,8 +54,12 @@ func macOSExternalSSHysteriaScenario(scenario string) (entry, protocol, fault st
 		parts := strings.Split(scenario, "-")
 		entry = macOSExternalSSEntryMethod(parts[2])
 		protocol = "hysteria2"
-		if len(parts) > 4 && parts[4] != "always" {
-			fault = strings.Join(parts[4:], "-")
+		index := 4
+		if len(parts) > index && strings.HasPrefix(parts[index], "layers") {
+			index++
+		}
+		if len(parts) > index && parts[index] != "always" {
+			fault = strings.Join(parts[index:], "-")
 		}
 		return entry, protocol, fault, true
 	}
@@ -69,6 +90,7 @@ func macOSExternalNativeSSHysteriaProfile(t *testing.T, p *macOSExternalNativePe
 	case "wrong-exit":
 		exit.External.ExpectedPublicIP = "203.0.113.89"
 	}
+	macOSSSLayerProfiles(t, p, &entry, exit)
 	if err := common.NormalizeRouterProfile(&entry); err != nil {
 		t.Fatal("SS HY2 entry rejected before native execution", err)
 	}
@@ -76,6 +98,10 @@ func macOSExternalNativeSSHysteriaProfile(t *testing.T, p *macOSExternalNativePe
 }
 func macOSExternalNativeSSHysteriaAuthority(t *testing.T, p *macOSExternalNativePeer, live macOSExternalNativeResult) {
 	t.Helper()
+	if _, _, layered := macOSSSLayerToken(p.name); layered {
+		macOSSSLayerAuthority(t, p, live)
+		return
+	}
 	host := "198.51.100.240"
 	if p.fault == "wrong-exit-address" {
 		host = "198.51.100.241"
@@ -95,6 +121,7 @@ func macOSExternalNativeSSHysteriaAuthority(t *testing.T, p *macOSExternalNative
 func macOSExternalNativeSSHysteriaProved(t *testing.T, p *macOSExternalNativePeer, live macOSExternalNativeResult, observed macOSExternalPeerReply) {
 	t.Helper()
 	macOSExternalNativeSSHysteriaAuthority(t, p, live)
+	macOSSSLayerProved(t, p, observed)
 	entry := observed.ShadowsocksEntry
 	ipv6 := "off"
 	if p.policy == "always" {
@@ -112,10 +139,12 @@ func macOSExternalNativeSSHysteriaRefused(t *testing.T, ctx context.Context, cli
 	}
 	observed := p.stats(t)
 	entry := observed.ShadowsocksEntry
-	if entry == nil || entry.PhysicalTCP < 1 {
+	if entry == nil || entry.PhysicalTCP < 1 && p.fault != "wrong-entry-layer" && p.fault != "wrong-entry-whitening" {
 		t.Fatal("HY2 negative omitted original encrypted entry", observed)
 	}
 	switch p.fault {
+	case "wrong-entry-layer", "wrong-final-layer", "wrong-entry-whitening", "wrong-final-whitening":
+		macOSSSLayerRefused(t, p, observed)
 	case "wrong-entry-key", "wrong-entry-method":
 		if entry.AuthTCP == 0 || entry.PublicReplies != 0 || entry.PhysicalUDP != 0 || observed.PhysicalUDP != 0 || observed.DNSQueries != 0 {
 			t.Fatal("bad entry reached HY2", observed)

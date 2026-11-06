@@ -34,6 +34,9 @@ POSITIVE_CASES += ('ss-entry-aes128-http', 'ss-entry-aes128-http-always', 'ss-en
 NEGATIVE_CASES += ('ss-entry-aes256-http-wrong-entry-key', 'ss-entry-aes256-https-wrong-entry-method', 'ss-entry-aes256-http-wrong-entry-public', 'ss-entry-aes256-http-wrong-exit-username', 'ss-entry-aes256-http-wrong-exit-key', 'ss-entry-aes256-http-wrong-exit-address', 'ss-entry-aes256-http-wrong-dns', 'ss-entry-aes256-http-wrong-exit', 'ss-entry-aes256-https-wrong-exit-username', 'ss-entry-aes256-https-wrong-exit-key', 'ss-entry-aes256-https-wrong-exit-server-name', 'ss-entry-aes256-https-wrong-trust')
 POSITIVE_CASES += ('ss-entry-aes128-hysteria', 'ss-entry-aes128-hysteria-always', 'ss-entry-aes256-hysteria', 'ss-entry-aes256-hysteria-always', 'ss-entry-chacha-hysteria', 'ss-entry-chacha-hysteria-always')
 NEGATIVE_CASES += ('ss-entry-aes256-hysteria-wrong-entry-key', 'ss-entry-aes256-hysteria-wrong-entry-method', 'ss-entry-aes256-hysteria-wrong-entry-public', 'ss-entry-aes256-hysteria-wrong-exit-key', 'ss-entry-aes256-hysteria-wrong-exit-address', 'ss-entry-aes256-hysteria-wrong-exit-server-name', 'ss-entry-aes256-hysteria-wrong-final-trust', 'ss-entry-aes256-hysteria-wrong-dns', 'ss-entry-aes256-hysteria-wrong-exit')
+POSITIVE_CASES += tuple('ss-entry-aes256-hysteria-layers%d%d-always' % (entry, final) for entry in range(3) for final in range(3))
+NEGATIVE_CASES += tuple('ss-entry-aes256-hysteria-layers22-' + fault for fault in ('wrong-entry-layer', 'wrong-final-layer', 'wrong-entry-whitening', 'wrong-final-whitening', 'wrong-entry-public', 'wrong-dns', 'wrong-exit', 'wrong-final-trust'))
+
 TEST = 'TestMacOSRetainedExternalNativeSealedProtocols'
 MTU_RECEIPT = 'actual sealed Darwin WireGuard MTU accepted: automatic changed utun, transferred bytes, original Cancel rollback joined, Retest committed and original runtime PF retained'
 POSITIVE_CASES += ('ss-entry-aes256-ss-chacha-layers00-always', 'ss-entry-aes256-ss-chacha-layers01-always', 'ss-entry-aes256-ss-chacha-layers02-always', 'ss-entry-aes256-ss-chacha-layers10-always', 'ss-entry-aes256-ss-chacha-layers11-always', 'ss-entry-aes256-ss-chacha-layers12-always', 'ss-entry-aes256-ss-chacha-layers20-always', 'ss-entry-aes256-ss-chacha-layers21-always', 'ss-entry-aes256-ss-chacha-layers22-always')
@@ -45,6 +48,7 @@ POLICY_TESTS += ('TestDesktopExternalSSEntryRetainsBothSourcesAndMeasurementOwne
 POLICY_TESTS += ('TestDesktopExternalSSCONNECTRetainsBothSourcesAndMeasurement', 'TestDesktopExternalSSCONNECTRestoreRetainsCompleteLocalGraph', 'TestDesktopExternalSSCONNECTPreservesUnavailableUDPAndUnsupportedGraphs')
 POLICY_TESTS += ('TestDesktopExternalSSHysteriaRetainsBothSourcesAndMeasurement', 'TestDesktopExternalSSHysteriaRestoreRetainsCompleteLocalGraph', 'TestDesktopExternalSSHysteriaRetainsOffLayerAndLocalScope')
 POLICY_TESTS += ('TestDesktopWindowsExternalSSEntryIndependentLayersSources', 'TestDesktopWindowsExternalSSEntryIndependentLayersRestore')
+POLICY_TESTS += ('TestDesktopWindowsExternalSSEntryHysteriaIndependentLayersSources', 'TestDesktopWindowsExternalSSEntryHysteriaIndependentLayersRestore')
 PEER_TAGS = 'with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego,routervpn_darwin_external_host'
 
 

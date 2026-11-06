@@ -18,8 +18,14 @@ func desktopSSProvisionLayer(profile *common.RouterProfile, mode, private string
 	if mode == common.StartLayerAES256GCMXOR {
 		port = 8389
 	}
+	server := ""
+	if profile.External.Protocol == "hysteria2" {
+		server = profile.External.Hysteria2.Server
+	} else {
+		server = profile.External.Shadowsocks.Server
+	}
 	profile.External.StartLayer = &common.ExternalStartLayer{Mode: mode, API: "http://" + private + ":8787", Transport: map[string]any{
-		"type": "shadowsocks", "tag": "private-start-layer", "server": profile.External.Shadowsocks.Server, "server_port": port,
+		"type": "shadowsocks", "tag": "private-start-layer", "server": server, "server_port": port,
 		"method": common.StartLayerAES256GCMTransport, "password": desktopSSEntryKey(desktopSSEntryMethods[1], seed),
 	}}
 }
@@ -111,7 +117,7 @@ func desktopSSLayerHostVariants() []string {
 	result := []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"}
 	for i := 0; i < 3; i++ {
 		for j := 0; j < 3; j++ {
-			result = append(result, fmt.Sprintf("shadowsocks-layers%d%d", i, j))
+			result = append(result, fmt.Sprintf("shadowsocks-layers%d%d", i, j), fmt.Sprintf("hysteria2-layers%d%d", i, j))
 		}
 	}
 	return result

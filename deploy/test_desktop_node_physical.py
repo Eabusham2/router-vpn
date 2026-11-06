@@ -126,9 +126,12 @@ SS_INDEPENDENT_LAYERS_SUITE = ("ss-independent-layers-reference", "./protocol/ro
      *(SS_INDEPENDENT_LAYERS_ROOT + "/negative/" + fault for fault in ("entry-key", "final-key", "entry-layer-key", "final-layer-key", "entry-whitening", "final-whitening", "entry-private", "final-private", "dns-route")), SS_INDEPENDENT_LAYERS_PROCESS_ROOT, *(SS_INDEPENDENT_LAYERS_PROCESS_ROOT + "/layer%d-layer%d" % (entry, final) for entry in range(3) for final in range(3))))
 
 SS_HYSTERIA_REFERENCE_ROOT = "TestRouterVPNDesktopInstalledSSHysteriaLoopbackReference"
-SS_HYSTERIA_REFERENCE_SUITE = ("ss-hysteria-two-hop-reference", "./protocol/routervpnamnezia", "^" + SS_HYSTERIA_REFERENCE_ROOT + "$",
+SS_HYSTERIA_LAYERS_ROOT = "TestRouterVPNDesktopSSHysteriaIndependentLayersReference"
+SS_HYSTERIA_REFERENCE_SUITE = ("ss-hysteria-two-hop-reference", "./protocol/routervpnamnezia", "^(" + SS_HYSTERIA_REFERENCE_ROOT + "|" + SS_HYSTERIA_LAYERS_ROOT + ")$",
     (SS_HYSTERIA_REFERENCE_ROOT, *(SS_HYSTERIA_REFERENCE_ROOT + "/method%d-hysteria2" % method for method in range(3)),
-     *(SS_HYSTERIA_REFERENCE_ROOT + "/negative/" + fault for fault in ("entry-key", "entry-method", "password", "server-name", "trust", "final-route", "dns-route"))))
+     *(SS_HYSTERIA_REFERENCE_ROOT + "/negative/" + fault for fault in ("entry-key", "entry-method", "password", "server-name", "trust", "final-route", "dns-route")), SS_HYSTERIA_LAYERS_ROOT,
+     *(SS_HYSTERIA_LAYERS_ROOT + "/method%d/layer%d-layer%d" % (method, entry, final) for method in range(3) for entry in range(3) for final in range(3)),
+     *(SS_HYSTERIA_LAYERS_ROOT + "/negative/" + fault for fault in ("entry-key", "entry-method", "password", "server-name", "trust", "final-route", "dns-route", "entry-layer-key", "final-layer-key", "entry-whitening", "final-whitening"))))
 STANDARD_MTU_SUITE = ("standard-mtu-original-reader", "./cmd/sing-box",
                       "^TestRouterVPNStandardMTUActualBox(KeepsOriginalReader|RequiresNativeClaim)$",
                       ("TestRouterVPNStandardMTUActualBoxKeepsOriginalReader", "TestRouterVPNStandardMTUActualBoxRequiresNativeClaim",

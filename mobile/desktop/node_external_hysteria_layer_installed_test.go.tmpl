@@ -54,6 +54,7 @@ type desktopExternalHysteriaLayerPeer struct {
 	workers                                 sync.WaitGroup
 	once                                    sync.Once
 	raw, authenticated, forwarded, rejected atomic.Int32
+	authFailures                            atomic.Uint32
 }
 
 type desktopExternalLayerWhiteningPacket struct {
@@ -85,9 +86,29 @@ func newDesktopExternalHysteriaLayerPeer(parent context.Context, outer net.Packe
 	if err != nil || local.Addr() != inner.Addr() || local == inner || mode == "aes-256-gcm+xor-whitening" && local.Port() != 8389 {
 		return nil, errors.New("HY2 layer reference changed its captured physical listener")
 	}
+	return desktopNewHysteriaLayerPeer(parent, outer, inner, netip.AddrPortFrom(netip.MustParseAddr("10.93.0.1"), inner.Port()), mode, password, fault)
+}
+
+// A nested SS entry maps one captured virtual final tuple to this loopback-only
+// UDP carrier. Its logical private port is independent of the retained HY2 UDP
+// listener's ephemeral port. This constructor grants no physical socket role.
+func newDesktopExternalSSHysteriaLayerPeer(parent context.Context, outer net.PacketConn, inner netip.AddrPort, mode, password, fault string) (*desktopExternalHysteriaLayerPeer, error) {
+	if parent == nil || parent.Err() != nil || outer == nil || !inner.IsValid() || !inner.Addr().IsLoopback() || inner.Port() == 0 || (mode != "aes-256-gcm" && mode != "aes-256-gcm+xor-whitening") {
+		return nil, errors.New("nested HY2 layer requires original loopback UDP owners")
+	}
+	local, err := netip.ParseAddrPort(outer.LocalAddr().String())
+	if err != nil || local.Addr() != inner.Addr() || local.Port() == 0 || local == inner {
+		return nil, errors.New("nested HY2 layer changed original loopback tuple")
+	}
+	return desktopNewHysteriaLayerPeer(parent, outer, inner, netip.MustParseAddrPort("10.93.0.1:8388"), mode, password, fault)
+}
+func desktopNewHysteriaLayerPeer(parent context.Context, outer net.PacketConn, inner, private netip.AddrPort, mode, password, fault string) (*desktopExternalHysteriaLayerPeer, error) {
+	if !desktopSS2022Credentials("2022-blake3-aes-256-gcm", password) || (fault != "" && fault != "layer-key" && !(fault == "whitening" && mode == "aes-256-gcm+xor-whitening")) {
+		return nil, errors.New("HY2 layer lost captured authentication")
+	}
 	ctx, cancel := context.WithCancel(parent)
 	p := &desktopExternalHysteriaLayerPeer{ctx: ctx, cancel: cancel, outer: outer, inner: inner,
-		private: M.SocksaddrFromNetIP(netip.AddrPortFrom(netip.MustParseAddr("10.93.0.1"), inner.Port())), connections: make(map[N.PacketConn]net.Conn)}
+		private: M.SocksaddrFromNetIP(private), connections: make(map[N.PacketConn]net.Conn)}
 	var packet net.PacketConn = outer
 	if mode == "aes-256-gcm+xor-whitening" {
 		key := sha256.Sum256([]byte("router-vpn-xor-whitening-v1\x00" + password))
@@ -119,6 +140,9 @@ func newDesktopExternalHysteriaLayerPeer(parent context.Context, outer net.Packe
 			}
 			p.raw.Add(1)
 			if err := service.NewPacket(ctx, reader, body, M.Metadata{Source: source}); err != nil {
+				if desktopSSAuthenticationFailure(err) {
+					p.authFailures.Add(1)
+				}
 				p.rejected.Add(1)
 				body.Release()
 			}
@@ -137,6 +161,7 @@ func (p *desktopExternalHysteriaLayerPeer) NewPacketConnection(_ context.Context
 		_ = connection.Close()
 		return errors.New("HY2 layer reference refused another private destination")
 	}
+	connection = desktopNodeOwnInitialPacket(connection)
 	p.mu.Lock()
 	if p.closing || len(p.connections) >= 16 {
 		p.mu.Unlock()
@@ -235,6 +260,26 @@ func (p *desktopExternalHysteriaLayerPeer) Close() error {
 }
 
 func init() {
+	desktopExternalInstalledSSHysteriaLayer = func(t *testing.T, ctx context.Context, inner netip.AddrPort, request desktopExternalInstalledLayerRequest) desktopExternalInstalledSSPeer {
+		t.Helper()
+		outer, err := net.ListenPacket("udp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		peer, err := newDesktopExternalSSHysteriaLayerPeer(ctx, outer, inner, request.Mode, request.Password, request.Fault)
+		if err != nil {
+			outer.Close()
+			t.Fatal(err)
+		}
+		return desktopExternalInstalledSSPeer{address: outer.LocalAddr().String(), close: func() {
+			if err := peer.Close(); err != nil {
+				t.Error("original nested HY2 UDP carrier join", err)
+			}
+		}, stats: func() desktopExternalInstalledSSReceipt {
+			return desktopExternalInstalledSSReceipt{Method: "2022-blake3-aes-256-gcm", Address: outer.LocalAddr().String(), PhysicalUDP: int64(peer.raw.Load()), Packets: int64(peer.authenticated.Load()), AuthUDP: peer.authFailures.Load()}
+		}}
+	}
+
 	desktopExternalInstalledHysteriaLayer = func(t *testing.T, ctx context.Context, inner netip.AddrPort, request desktopExternalInstalledLayerRequest) desktopExternalInstalledLayerPeer {
 		t.Helper()
 		port := "0"

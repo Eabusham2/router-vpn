@@ -48,7 +48,7 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 	if targetOS == "darwin" && !desktopExternalDarwinProtocol(capture.Protocol) {
 		return nil
 	}
-	layeredSSPair := desktopExternalSSEntryOwner(owner) && desktopExternalSS2022Profile(owner.profile)
+	layeredSSPair := desktopExternalSSEntryOwner(owner) && desktopExternalSSLayeredFinalProfile(owner.profile)
 	if capture.Protocol != "http-connect" && capture.Protocol != "https-connect" && capture.Protocol != "shadowsocks" && capture.Protocol != "hysteria2" && capture.Protocol != "socks5" &&
 		capture.Protocol != "wireguard" && capture.Protocol != "amneziawg" && capture.Protocol != "openvpn" ||
 		!entry && (capture.EntryID != "" || capture.EntryTag != "") || capture.PredecessorSHA256 != "" || capture.Execution != "" ||

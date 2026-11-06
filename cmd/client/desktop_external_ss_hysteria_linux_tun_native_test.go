@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
@@ -14,7 +15,7 @@ import (
 
 // Six original entry/final families, both retained protection lifecycles, and
 // independently observed original entry authentication and final HY2 TLS.
-var linuxHostTUNExternalSSHysteriaCases = []string{
+var linuxHostTUNExternalSSHysteriaCases = append([]string{
 	"external-ss128hy2-on-connect",
 	"external-ss256hy2-on-connect",
 	"external-sschachahy2-on-connect",
@@ -32,7 +33,20 @@ var linuxHostTUNExternalSSHysteriaCases = []string{
 	"external-ss256hy2-wrong-ca",
 	"external-ss256hy2-wrong-trust",
 	"external-ss256hy2-dns-failure",
-}
+}, linuxHostTUNSSHysteriaLayerCases...)
+
+var linuxHostTUNSSHysteriaLayerCases = func() []string {
+	var result []string
+	for a := 0; a < 3; a++ {
+		for b := 0; b < 3; b++ {
+			result = append(result, fmt.Sprintf("external-ss256hy2l%d%d-on-connect", a, b))
+		}
+	}
+	for _, action := range []string{"always", "always-off", "cancelled", "source", "entry-source", "replacement", "dns-failure", "wrong-entry-public", "wrong-entry-layer", "wrong-final-layer", "entry-whitening", "final-whitening"} {
+		result = append(result, "external-ss256hy2l22-"+action)
+	}
+	return result
+}()
 
 func linuxHostTUNExternalSSHysteria(scenario string) bool {
 	for _, candidate := range linuxHostTUNExternalSSHysteriaCases {
@@ -45,12 +59,17 @@ func linuxHostTUNExternalSSHysteria(scenario string) bool {
 func linuxHostTUNPrepareSSHysteriaPeer(t *testing.T, peer *linuxExternalTUNPeer, scenario string) {
 	t.Helper()
 	token, _, _ := strings.Cut(strings.TrimPrefix(scenario, "external-ss"), "-")
+	token, a, b, layered := linuxHostTUNSSLayerToken(token)
 	token = strings.TrimSuffix(token, "hy2")
 	method := linuxHostTUNSSMethod(token)
 	if method == "" || peer.protocol != "hysteria2" {
 		t.Fatal("unknown original SS HY2 pair")
 	}
 	peer.ssEntry = &linuxExternalTUNSSPair{entryMethod: method, entryPassword: linuxHostTUNSSKey(t, method)}
+	if layered {
+		peer.ssEntry.entryLayer = linuxSSLayerSelection{mode: linuxHostTUNSSLayerMode(a), key: linuxHostTUNSSKey(t, common.StartLayerAES256GCMTransport)}
+		peer.ssEntry.finalLayer = linuxSSLayerSelection{mode: linuxHostTUNSSLayerMode(b), key: linuxHostTUNSSKey(t, common.StartLayerAES256GCMTransport)}
+	}
 }
 func linuxHostTUNExternalSSHysteriaAuthority(native *desktopNodeLaunch) error {
 	bad := errors.New("Linux SS HY2 lost original TCP/UDP entry or final policy")
@@ -58,6 +77,9 @@ func linuxHostTUNExternalSSHysteriaAuthority(native *desktopNodeLaunch) error {
 		return bad
 	}
 	o := native.external
+	if o.entry.External.StartLayer != nil || o.profile.External.StartLayer != nil {
+		return linuxHostTUNSSLayerAuthority(native)
+	}
 	protocol := o.profile.External.Protocol
 	if protocol != "hysteria2" {
 		return bad
@@ -109,6 +131,29 @@ func linuxHostTUNExternalSSHysteriaAuthority(native *desktopNodeLaunch) error {
 	return nil
 }
 func TestDesktopLinuxInstalledSSHysteriaFixtureKeepsCompiledAuthority(t *testing.T) {
+	for a := 0; a < 3; a++ {
+		for b := 0; b < 3; b++ {
+			t.Run(fmt.Sprintf("layer%d-layer%d", a, b), func(t *testing.T) {
+				_, _, launch := desktopSSHysteriaLayerFixture(t, desktopSSEntryMethods[1], "", linuxHostTUNSSLayerMode(a), linuxHostTUNSSLayerMode(b), "always")
+				if err := prepareDesktopExternalPhysicalCaptured(launch, "linux"); err != nil {
+					t.Fatal(err)
+				}
+				if err := linuxHostTUNExternalSSHysteriaAuthority(launch); err != nil {
+					t.Fatal(err)
+				}
+				original := cloneRouterProfile(launch.external.profile)
+				launch.external.profile.External.Hysteria2.Password += "foreign"
+				if linuxHostTUNExternalSSHysteriaAuthority(launch) == nil {
+					t.Fatal("replacement HY2 credential adopted")
+				}
+				launch.external.profile = original
+				if err := linuxHostTUNExternalSSHysteriaAuthority(launch); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+
 	for _, method := range desktopSSEntryMethods {
 		for _, protocol := range []string{"hysteria2"} {
 			t.Run(method+"/"+protocol, func(t *testing.T) {

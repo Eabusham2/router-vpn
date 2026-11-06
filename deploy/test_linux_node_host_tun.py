@@ -179,6 +179,8 @@ CASES += EXTERNAL_SS_HYSTERIA_CASES
 SS_HYSTERIA_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledSSHysteriaFixtureKeepsCompiledAuthority'
 SS_HYSTERIA_AUTHORITY_CASES = (SS_HYSTERIA_AUTHORITY_ROOT, *(SS_HYSTERIA_AUTHORITY_ROOT + '/' + method + '/hysteria2'
     for method in ('2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305')))
+SS_HYSTERIA_AUTHORITY_CASES += tuple(SS_HYSTERIA_AUTHORITY_ROOT + "/layer%d-layer%d" % (a,b) for a in range(3) for b in range(3))
+
 def check_ss_hysteria_authority_verdict(output):
     NODE.require_native_verdicts(output, SS_HYSTERIA_AUTHORITY_CASES, 'installed SS HY2 entry authority')
 
@@ -197,7 +199,10 @@ ACTIVE_CASES += RESOLVED_CASES
 OFF_CASES += RESOLVED_CASES
 EXTERNAL_SS_LAYER_CASES = tuple('external-ss256ss256l%d%d-on-connect' % (entry, final) for entry in range(3) for final in range(3)) + tuple('external-ss256ss256l22-' + action for action in ('always', 'always-off', 'cancelled', 'source', 'entry-source', 'replacement', 'dns-failure', 'wrong-entry-public', 'wrong-entry-layer', 'wrong-final-layer', 'entry-whitening', 'final-whitening'))
 EXTERNAL_CASES += EXTERNAL_SS_LAYER_CASES
+EXTERNAL_SS_HYSTERIA_LAYER_CASES = tuple('external-ss256hy2l%d%d-on-connect' % (entry, final) for entry in range(3) for final in range(3)) + tuple('external-ss256hy2l22-' + action for action in ('always', 'always-off', 'cancelled', 'source', 'entry-source', 'replacement', 'dns-failure', 'wrong-entry-public', 'wrong-entry-layer', 'wrong-final-layer', 'entry-whitening', 'final-whitening'))
+EXTERNAL_CASES += EXTERNAL_SS_HYSTERIA_LAYER_CASES
 CASES += EXTERNAL_SS_LAYER_CASES
+CASES += EXTERNAL_SS_HYSTERIA_LAYER_CASES
 SS_ENTRY_AUTHORITY_CASES += tuple(SS_ENTRY_AUTHORITY_ROOT + '/layer%d-layer%d' % (entry, final) for entry in range(3) for final in range(3))
 
 
@@ -398,7 +403,7 @@ def check_verdict(output, case=None):
             verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
             if ss_entry_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
                 raise ValueError('Installed SS2022 graph omitted or duplicated original native completion: ' + value)
-        if value in EXTERNAL_SS_HYSTERIA_CASES:
+        if value in EXTERNAL_SS_HYSTERIA_CASES or value in EXTERNAL_SS_HYSTERIA_LAYER_CASES:
             verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
             if ss_hysteria_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
                 raise ValueError('Installed SS HY2 graph omitted or duplicated original native completion: ' + value)

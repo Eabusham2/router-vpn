@@ -1928,6 +1928,7 @@ type desktopExternalInstalledLayerPeer struct {
 	close   func() error
 }
 
+var desktopExternalInstalledSSHysteriaLayer func(*testing.T, context.Context, netip.AddrPort, desktopExternalInstalledLayerRequest) desktopExternalInstalledSSPeer
 var desktopExternalInstalledHysteriaLayer func(*testing.T, context.Context, netip.AddrPort, desktopExternalInstalledLayerRequest) desktopExternalInstalledLayerPeer
 
 type desktopExternalInstalledPacketEntryReceipt struct {
@@ -2774,7 +2775,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		if layer == nil {
 			continue
 		}
-		if request.ShadowsocksEntry == nil || request.Protocol != "shadowsocks" || request.Layer != nil || !desktopSS2022Credentials("2022-blake3-aes-256-gcm", layer.Password) || (layer.Mode != "aes-256-gcm" && layer.Mode != "aes-256-gcm+xor-whitening") || (layer.Fault != "" && layer.Fault != "layer-key" && !(layer.Fault == "whitening" && layer.Mode == "aes-256-gcm+xor-whitening")) {
+		if request.ShadowsocksEntry == nil || (request.Protocol != "shadowsocks" && request.Protocol != "hysteria2") || request.Protocol == "hysteria2" && desktopExternalInstalledSSHysteriaLayer == nil || request.Layer != nil || !desktopSS2022Credentials("2022-blake3-aes-256-gcm", layer.Password) || (layer.Mode != "aes-256-gcm" && layer.Mode != "aes-256-gcm+xor-whitening") || (layer.Fault != "" && layer.Fault != "layer-key" && !(layer.Fault == "whitening" && layer.Mode == "aes-256-gcm+xor-whitening")) {
 			t.Fatal("SS layer lost independently captured original pair")
 		}
 	}
@@ -3108,7 +3109,11 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 		finalPort := uint16(8388)
 		if layer := request.SSFinalLayer; layer != nil {
-			ssFinalLayer = desktopStartSSCapturedLayer(t, ctx, address, "10.93.0.1:8388", layer.Mode, layer.Password, layer.Fault, netip.MustParseAddr("127.0.0.1"), 0)
+			if request.Protocol == "hysteria2" {
+				ssFinalLayer = desktopExternalInstalledSSHysteriaLayer(t, ctx, netip.MustParseAddrPort(address), *layer)
+			} else {
+				ssFinalLayer = desktopStartSSCapturedLayer(t, ctx, address, "10.93.0.1:8388", layer.Mode, layer.Password, layer.Fault, netip.MustParseAddr("127.0.0.1"), 0)
+			}
 			address = ssFinalLayer.address
 			if layer.Mode == "aes-256-gcm+xor-whitening" {
 				finalPort = 8389

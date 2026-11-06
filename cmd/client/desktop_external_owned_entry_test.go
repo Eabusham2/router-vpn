@@ -118,7 +118,7 @@ func windowsSSEntryHostFixture(t *testing.T, protocol, kill string) (*desktopWin
 	layerModes := ""
 	if base, suffix, ok := strings.Cut(protocol, "-layers"); ok {
 		protocol, layerModes = base, suffix
-		if protocol != "shadowsocks" || len(layerModes) != 2 || layerModes[0] < '0' || layerModes[0] > '2' || layerModes[1] < '0' || layerModes[1] > '2' {
+		if protocol != "shadowsocks" && protocol != "hysteria2" || len(layerModes) != 2 || layerModes[0] < '0' || layerModes[0] > '2' || layerModes[1] < '0' || layerModes[1] > '2' {
 			t.Fatal("invalid captured layer fixture")
 		}
 	}
@@ -386,7 +386,11 @@ func TestDesktopWindowsExternalSSEntryAlwaysOffRetriesOriginalOwner(t *testing.T
 				if err != nil || json.Unmarshal(raw, &saved) != nil {
 					t.Fatal("paired Off saved result", err)
 				}
-				if err := common.NormalizeRouterProfileStore(&before); err != nil || !reflect.DeepEqual(before, saved) {
+				if err := common.NormalizeRouterProfileStore(&before); err != nil {
+					t.Fatal("paired Off expected sources are invalid", err)
+				}
+				equal, err := desktopSSEntryPersistedSourcesEqual(before, saved)
+				if err != nil || !equal {
 					t.Fatal("paired Off changed its persisted original sources", err)
 				}
 			})
@@ -453,5 +457,80 @@ func TestDesktopWindowsExternalSSEntryHysteriaPlatformBoundary(t *testing.T) {
 		if err := prepareDesktopExternalPhysicalCaptured(fresh, target); err != nil || fresh.external.physical == nil {
 			t.Fatal("SS HY2 lost captured platform owner", target)
 		}
+	}
+}
+
+// Persistence is JSON: interface-valued transport numbers decode as float64.
+// Keep the caller's preceding strict in-memory equality check; compare the file
+// with an independently encoded expected snapshot in the same representation.
+func desktopSSEntryPersistedSourcesEqual(expected, saved common.RouterProfileStore) (bool, error) {
+	raw, err := json.Marshal(expected)
+	if err != nil {
+		return false, err
+	}
+	var encoded common.RouterProfileStore
+	if err = json.Unmarshal(raw, &encoded); err != nil {
+		return false, err
+	}
+	return reflect.DeepEqual(encoded, saved), nil
+}
+func TestDesktopWindowsExternalSSEntryPersistedLayerSources(t *testing.T) {
+	for _, variant := range desktopSSLayerHostVariants() {
+		if !strings.Contains(variant, "-layers") {
+			continue
+		}
+		t.Run(variant, func(t *testing.T) {
+			f, p, e := windowsSSEntryHostFixture(t, variant, "always")
+			a := f.base.a
+			expected := cloneRouterProfileStore(a.profiles)
+			// Exercise the exact persistence boundary without a native network grant.
+			if err := a.persistProfilesLocked(); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(expected, a.profiles) {
+				t.Fatal("encoding mutated live sources")
+			}
+			raw, err := os.ReadFile(a.cfg.ProfilesFile)
+			var saved common.RouterProfileStore
+			if err != nil || json.Unmarshal(raw, &saved) != nil {
+				t.Fatal("stored profile decode", err)
+			}
+			if err = common.NormalizeRouterProfileStore(&expected); err != nil {
+				t.Fatal(err)
+			}
+			if same, err := desktopSSEntryPersistedSourcesEqual(expected, saved); err != nil || !same {
+				t.Fatal("original JSON source mismatch", err)
+			}
+			for i, original := range expected.Profiles {
+				if original.ID != p.ID && original.ID != e.ID || original.External == nil || original.External.StartLayer == nil {
+					continue
+				}
+				if _, ok := original.External.StartLayer.Transport["server_port"].(int); !ok {
+					t.Fatal("fixture lost original typed port")
+				}
+				if _, ok := saved.Profiles[i].External.StartLayer.Transport["server_port"].(float64); !ok {
+					t.Fatal("JSON did not expose its numeric representation")
+				}
+				if reflect.DeepEqual(original.External.StartLayer, saved.Profiles[i].External.StartLayer) {
+					t.Fatal("regression did not reproduce typed JSON mismatch")
+				}
+			}
+			for _, id := range []string{p.ID, e.ID} {
+				changed := cloneRouterProfileStore(saved)
+				for i := range changed.Profiles {
+					if changed.Profiles[i].ID == id {
+						selected := &changed.Profiles[i]
+						if selected.External.Protocol == "hysteria2" {
+							selected.External.Hysteria2.Password += "changed"
+						} else {
+							selected.External.Shadowsocks.Password = desktopSSEntryKey(selected.External.Shadowsocks.Method, 'z')
+						}
+					}
+				}
+				if same, err := desktopSSEntryPersistedSourcesEqual(expected, changed); err != nil || same {
+					t.Fatal("changed original credential survived persistence comparison", id, err)
+				}
+			}
+		})
 	}
 }

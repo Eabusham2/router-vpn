@@ -38,7 +38,7 @@ func desktopProtectionSelectionFor(node *mobilemultihop.DesktopNodePolicy, exter
 			entryKind = "routervpn-aes-xor"
 		}
 	}
-	layeredPair := capture.Protocol == "shadowsocks" && (capture.EntryStartLayer == "" || multihoprelay.ValidLayerMode(capture.EntryStartLayer)) && (capture.StartLayer == "" || multihoprelay.ValidLayerMode(capture.StartLayer))
+	layeredPair := (capture.Protocol == "shadowsocks" || capture.Protocol == "hysteria2") && (capture.EntryStartLayer == "" || multihoprelay.ValidLayerMode(capture.EntryStartLayer)) && (capture.StartLayer == "" || multihoprelay.ValidLayerMode(capture.StartLayer))
 	paired := err == nil && validProfileID(capture.EntryID) && capture.EntryID != capture.ExitID &&
 		capture.EntryTag == "external-entry" && capture.EntryNodeID == "" && meta.RootType == entryKind && meta.RootTag == entryRoot &&
 		(layeredPair || capture.StartLayer == "" && capture.EntryStartLayer == "") && (capture.Protocol == "shadowsocks" || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || capture.Protocol == "hysteria2")

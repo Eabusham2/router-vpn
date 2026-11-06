@@ -399,7 +399,7 @@ func desktopExternalEntryKind(original *ExternalPolicy, capture ExternalDesktopC
 		final, ok := original.capture.Profile["external"].(map[string]any)
 		if (capture.EntryStartLayer == "" || multihoprelay.ValidLayerMode(capture.EntryStartLayer)) &&
 			(capture.StartLayer == "" || multihoprelay.ValidLayerMode(capture.StartLayer)) &&
-			((capture.StartLayer == "" && capture.EntryStartLayer == "") || capture.Protocol == "shadowsocks") &&
+			((capture.StartLayer == "" && capture.EntryStartLayer == "") || capture.Protocol == "shadowsocks" || capture.Protocol == "hysteria2") &&
 			ok && desktopExternalSS2022Import(external) &&
 			(capture.Protocol == "shadowsocks" && desktopExternalSS2022Import(final) || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || capture.Protocol == "hysteria2") {
 			return "shadowsocks"

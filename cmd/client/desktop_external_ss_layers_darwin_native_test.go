@@ -38,10 +38,14 @@ type macOSSSLayerSelection struct {
 
 func macOSSSLayerToken(scenario string) (int, int, bool) {
 	parts := strings.Split(scenario, "-")
-	if len(parts) < 6 || !strings.HasPrefix(parts[5], "layers") {
+	index := 5
+	if len(parts) > 3 && parts[3] == "hysteria" {
+		index = 4
+	}
+	if len(parts) <= index || !strings.HasPrefix(parts[index], "layers") {
 		return 0, 0, false
 	}
-	digits := strings.TrimPrefix(parts[5], "layers")
+	digits := strings.TrimPrefix(parts[index], "layers")
 	if len(digits) != 2 || digits[0] < '0' || digits[0] > '2' || digits[1] < '0' || digits[1] > '2' {
 		return 0, 0, false
 	}
@@ -79,6 +83,9 @@ func macOSSSLayerRead(t *testing.T, p *macOSExternalNativePeer, reply macOSExter
 		entry bool
 	}{{&p.ssEntryLayer, reply.SSEntryLayer, true}, {&p.ssFinalLayer, reply.SSFinalLayer, false}} {
 		layer, r := item.layer, item.r
+		if !item.entry && p.protocol == "hysteria2" && r != nil && (r.PhysicalTCP != 0 || r.Streams != 0) {
+			t.Fatal("HY2 wrapper returned a forbidden TCP owner")
+		}
 		if layer.mode == "" || layer.mode == common.StartLayerOff {
 			if r != nil {
 				t.Fatal("Off acquired SS wrapper")
@@ -111,10 +118,20 @@ func macOSSSLayerProfiles(t *testing.T, p *macOSExternalNativePeer, entry, final
 		port := int(item.layer.address.Port())
 		if i == 1 {
 			port = int(p.address.Port())
-			item.profile.External.Shadowsocks.Port = 8388
+			if item.profile.External.Protocol == "hysteria2" {
+				item.profile.External.Hysteria2.Port = 8388
+			} else {
+				item.profile.External.Shadowsocks.Port = 8388
+			}
+		}
+		server := ""
+		if item.profile.External.Protocol == "hysteria2" {
+			server = item.profile.External.Hysteria2.Server
+		} else {
+			server = item.profile.External.Shadowsocks.Server
 		}
 		item.profile.StartLayer = item.layer.mode
-		item.profile.External.StartLayer = &common.ExternalStartLayer{Mode: item.layer.mode, API: "http://" + item.private + ":8787", Transport: map[string]any{"type": "shadowsocks", "tag": "captured-layer", "server": item.profile.External.Shadowsocks.Server, "server_port": port, "method": common.StartLayerAES256GCMTransport, "password": item.layer.key}}
+		item.profile.External.StartLayer = &common.ExternalStartLayer{Mode: item.layer.mode, API: "http://" + item.private + ":8787", Transport: map[string]any{"type": "shadowsocks", "tag": "captured-layer", "server": server, "server_port": port, "method": common.StartLayerAES256GCMTransport, "password": item.layer.key}}
 		if i == 0 && p.fault == "wrong-entry-layer" || i == 1 && p.fault == "wrong-final-layer" {
 			item.profile.External.StartLayer.Transport["password"] = macOSExternalNativeSSKey(t, common.StartLayerAES256GCMTransport)
 		}
@@ -145,7 +162,7 @@ func macOSSSLayerAuthority(t *testing.T, p *macOSExternalNativePeer, live macOSE
 	}
 }
 func macOSSSLayerProved(t *testing.T, p *macOSExternalNativePeer, reply macOSExternalPeerReply) {
-	for _, item := range []struct {
+	for index, item := range []struct {
 		layer macOSSSLayerSelection
 		r     *macOSExternalSSEntryReceipt
 	}{{p.ssEntryLayer, reply.SSEntryLayer}, {p.ssFinalLayer, reply.SSFinalLayer}} {
@@ -153,6 +170,12 @@ func macOSSSLayerProved(t *testing.T, p *macOSExternalNativePeer, reply macOSExt
 			continue
 		}
 		r := item.r
+		if index == 1 && p.protocol == "hysteria2" {
+			if r == nil || r.AuthUDP != 0 || r.PhysicalUDP == 0 || r.Packets == 0 || r.PhysicalTCP != 0 || r.Streams != 0 {
+				t.Fatal("HY2 layer lost UDP-only authenticated carrier", reply)
+			}
+			continue
+		}
 		if r == nil || r.AuthTCP != 0 || r.AuthUDP != 0 || r.PhysicalTCP == 0 || r.Streams == 0 || p.policy == "always" && (r.PhysicalUDP == 0 || r.Packets == 0) {
 			t.Fatal("SS layer never independently decrypted both transports", reply)
 		}

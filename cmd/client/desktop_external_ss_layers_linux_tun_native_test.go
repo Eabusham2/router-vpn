@@ -79,6 +79,9 @@ func linuxHostTUNSSLayerRead(t *testing.T, peer *linuxExternalTUNPeer, reply lin
 		entry   bool
 	}{{&peer.ssEntry.entryLayer, reply.SSEntryLayer, true}, {&peer.ssEntry.finalLayer, reply.SSFinalLayer, false}} {
 		layer, r := item.layer, item.receipt
+		if !item.entry && peer.protocol == "hysteria2" && r != nil && (r.PhysicalTCP != 0 || r.Streams != 0) {
+			t.Fatal("HY2 wrapper returned a forbidden TCP owner")
+		}
 		if layer.mode == "" || layer.mode == common.StartLayerOff {
 			if r != nil {
 				t.Fatal("Off acquired SS layer")
@@ -112,10 +115,20 @@ func linuxHostTUNSSLayerProfiles(t *testing.T, peer *linuxExternalTUNPeer, scena
 		port := int(item.layer.address.Port())
 		if i == 1 {
 			port = int(peer.address.Port())
-			item.p.External.Shadowsocks.Port = 8388
+			if item.p.External.Protocol == "hysteria2" {
+				item.p.External.Hysteria2.Port = 8388
+			} else {
+				item.p.External.Shadowsocks.Port = 8388
+			}
+		}
+		server := ""
+		if item.p.External.Protocol == "hysteria2" {
+			server = item.p.External.Hysteria2.Server
+		} else {
+			server = item.p.External.Shadowsocks.Server
 		}
 		item.p.StartLayer = item.layer.mode
-		item.p.External.StartLayer = &common.ExternalStartLayer{Mode: item.layer.mode, API: "http://" + item.private + ":8787", Transport: map[string]any{"type": "shadowsocks", "tag": "captured-layer", "server": item.p.External.Shadowsocks.Server, "server_port": port, "method": common.StartLayerAES256GCMTransport, "password": item.layer.key}}
+		item.p.External.StartLayer = &common.ExternalStartLayer{Mode: item.layer.mode, API: "http://" + item.private + ":8787", Transport: map[string]any{"type": "shadowsocks", "tag": "captured-layer", "server": server, "server_port": port, "method": common.StartLayerAES256GCMTransport, "password": item.layer.key}}
 		action := linuxHostTUNExternalAction(scenario)
 		if i == 0 && action == "wrong-entry-layer" || i == 1 && action == "wrong-final-layer" {
 			item.p.External.StartLayer.Transport["password"] = linuxHostTUNSSKey(t, common.StartLayerAES256GCMTransport)
@@ -153,6 +166,9 @@ func linuxHostTUNSSLayerStats(t *testing.T, peer *linuxExternalTUNPeer, action s
 			continue
 		}
 		r := item.r
+		if !item.entry && peer.protocol == "hysteria2" && r != nil && (r.PhysicalTCP != 0 || r.Streams != 0) {
+			t.Fatal("HY2 final wrapper acquired forbidden TCP", reply)
+		}
 		if r == nil {
 			t.Fatal("layer stats missing")
 		}

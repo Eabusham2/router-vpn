@@ -740,8 +740,10 @@ class OrdinarySSEntryScope(unittest.TestCase):
         expected_layers = {"layers/" + entry + "/" + final for entry in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening") for final in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")} | {"reject/"+fault for fault in ("entry-layer-key","final-layer-key","entry-whitening","final-whitening","entry-layer-inner","final-layer-inner")}
         self.assertEqual(set(GATE.EXTERNAL_SS_ENTRY_LAYER_LEAVES), expected_layers | {"receipt-identity", "retired-initial-packet"})
         self.assertEqual(len(GATE.EXTERNAL_SS_ENTRY_CASES["shadowsocks"]), 32)
-        self.assertEqual(len(GATE.EXTERNAL_SS_ENTRY_CASES["hysteria2"]), 16)
+        self.assertEqual(len(GATE.EXTERNAL_SS_ENTRY_CASES["hysteria2"]), 32)
         self.assertIn(GATE.EXTERNAL_SS_ENTRY_ROOT + "/hysteria2/reject/final-trust", GATE.EXTERNAL_SS_ENTRY_CASES["hysteria2"])
+        self.assertIn(GATE.EXTERNAL_SS_ENTRY_ROOT + "/hysteria2/final-wrapper-tcp-denied", GATE.EXTERNAL_SS_ENTRY_CASES["hysteria2"])
+        self.assertEqual(set(GATE.EXTERNAL_SS_ENTRY_LAYER_TRAFFIC_LEAVES), expected_layers)
         for network in GATE.EXTERNAL_SS_ENTRY_NETWORKS:
             required = GATE.EXTERNAL_SS_ENTRY_CASES[network]
             complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
