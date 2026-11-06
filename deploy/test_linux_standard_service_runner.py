@@ -108,6 +108,21 @@ class StandardServiceGateTests(unittest.TestCase):
             for bad in (output.replace(line,'',1),output+'\n'+line,output.replace(line,line.replace('PASS','SKIP')),output.replace(line,line.replace('PASS','FAIL'))):
                 with self.assertRaises(ValueError): guardian.require_socks_verdicts(bad,prefix,guardian.BOOTSTRAP_OPPORTUNISTIC_NATIVE)
 
+    def test_dnssec_bootstrap_verdicts_are_mandatory(self):
+        spec=importlib.util.spec_from_file_location('dnssec_bootstrap_guardian',ROOT/'deploy/test_desktop_linux_guardian.py')
+        guardian=importlib.util.module_from_spec(spec);spec.loader.exec_module(guardian)
+        self.assertIn('StandardBootstrapDNSSEC',guardian.STANDARD_KERNEL_CASES)
+        for suffix in ('','_test','_native_test'):
+            name='desktop_standard_linux_bootstrap_dnssec'+suffix+'.go'
+            self.assertIn(name,guardian.STANDARD_SOURCE_FILES)
+            self.assertIn('internal/mobiletor/'+name,gate.SOURCE)
+        prefix='TestDesktopLinuxGuardianKernelStandardBootstrapDNSSEC/'
+        output='\n'.join('--- PASS: '+prefix+case+' (0.01s)' for case in guardian.BOOTSTRAP_DNSSEC_NATIVE)
+        guardian.require_socks_verdicts(output,prefix,guardian.BOOTSTRAP_DNSSEC_NATIVE)
+        for line in output.splitlines():
+            for bad in (output.replace(line,'',1),output+'\n'+line,output.replace(line,line.replace('PASS','SKIP')),output.replace(line,line.replace('PASS','FAIL'))):
+                with self.assertRaises(ValueError): guardian.require_socks_verdicts(bad,prefix,guardian.BOOTSTRAP_DNSSEC_NATIVE)
+
     def test_bootstrap_removal_uses_original_observed_generation(self):
         source=(ROOT/'internal/mobiletor/desktop_standard_linux_bootstrap.go').read_text()
         start=source.index('func (p *DesktopLinuxStandardProtection) cleanupBootstrapLocked(')

@@ -288,6 +288,7 @@ def check_verdict_inventory():
                           ('TestDesktopLinuxGuardianKernelStandardBootstrapUpstream/', GUARDIAN.BOOTSTRAP_UPSTREAM_NATIVE),
                           ('TestDesktopLinuxGuardianKernelStandardBootstrapGroup/', GUARDIAN.BOOTSTRAP_GROUP_NATIVE),
                           ('TestDesktopLinuxGuardianKernelStandardBootstrapOpportunistic/', GUARDIAN.BOOTSTRAP_OPPORTUNISTIC_NATIVE),
+                          ('TestDesktopLinuxGuardianKernelStandardBootstrapDNSSEC/', GUARDIAN.BOOTSTRAP_DNSSEC_NATIVE),
                           ('TestDesktopLinuxSOCKS', GUARDIAN.SOCKS_PARSER_CASES),
                           ('TestDesktopLinuxGuardianKernelSOCKSAssociation/', GUARDIAN.SOCKS_CASES),
                           ('TestDesktopLinuxRunningSOCKS', GUARDIAN.RUNNING_SOCKS_PARSER_CASES),

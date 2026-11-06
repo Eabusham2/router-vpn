@@ -165,18 +165,26 @@ func (g *DesktopLinuxBootstrapDNSGroup) unavailableTLS(ctx context.Context, t *d
 // current must check original daemon/capture/operation, NOT acquire this group's
 // baseline gate (e.g. it must not call protection.Current).
 func (g *DesktopLinuxBootstrapDNSGroup) ExchangeOpportunistic(query context.Context, c *DesktopLinuxOpportunisticDNS, question []byte, current func(context.Context) error) ([]byte, error) {
-	if query == nil || current == nil || c == nil || desktopLinuxBootstrapQuestion(question) != nil {
+	return g.exchangeOpportunistic(query, c, question, current, nil)
+}
+func (g *DesktopLinuxBootstrapDNSGroup) exchangeOpportunistic(query context.Context, c *DesktopLinuxOpportunisticDNS, question []byte, current func(context.Context) error, dnssec *DesktopLinuxBootstrapDNSSECQuestion) ([]byte, error) {
+	if query == nil || current == nil || c == nil {
 		return nil, errors.New("opportunistic DNS requires original policy/current-owner guard")
 	}
-	var labels []string
-	for i := 12; question[i] != 0; {
-		length := int(question[i])
-		i++
-		labels = append(labels, string(question[i:i+length]))
-		i += length
-	}
-	if !strings.EqualFold(strings.Join(labels, "."), strings.TrimSuffix(c.name, ".")) {
-		return nil, errors.New("opportunistic DNS question changed original selected name")
+	if dnssec == nil {
+		if desktopLinuxBootstrapQuestion(question) != nil {
+			return nil, errors.New("opportunistic DNS requires original bounded address question")
+		}
+		var labels []string
+		for i := 12; question[i] != 0; {
+			length := int(question[i])
+			i++
+			labels = append(labels, string(question[i:i+length]))
+			i += length
+		}
+		if !strings.EqualFold(strings.Join(labels, "."), strings.TrimSuffix(c.name, ".")) {
+			return nil, errors.New("opportunistic DNS question changed original selected name")
+		}
 	}
 	deadline, ok := query.Deadline()
 	if !ok || query.Err() != nil || g == nil || g.ctx == nil || deadline.After(g.deadline) {
@@ -185,6 +193,14 @@ func (g *DesktopLinuxBootstrapDNSGroup) ExchangeOpportunistic(query context.Cont
 	secure, plain, err := c.upstreams()
 	if err != nil {
 		return nil, err
+	}
+	if dnssec != nil {
+		if err = dnssec.matches(g, secure, question); err != nil {
+			return nil, err
+		}
+		if err = dnssec.matches(g, plain, question); err != nil {
+			return nil, err
+		}
 	}
 	if err = current(query); err != nil {
 		return nil, err
@@ -200,7 +216,7 @@ func (g *DesktopLinuxBootstrapDNSGroup) ExchangeOpportunistic(query context.Cont
 	// Deliberately unauthenticated ONLY for captured opportunistic policy. Empty
 	// captured SNI remains empty; this is not the strict path's IP-SAN identity.
 	attempt := &desktopLinuxBootstrapTLSAttempt{config: c.tlsConfig(), deadline: time.Now().Add(budget)}
-	answer, err := g.exchangeAttempt(query, secure, question, attempt)
+	answer, err := g.exchangeOwnedAttempt(query, secure, question, attempt, dnssec)
 	if err == nil {
 		if check := current(query); check != nil {
 			return nil, check
@@ -225,7 +241,7 @@ func (g *DesktopLinuxBootstrapDNSGroup) ExchangeOpportunistic(query context.Cont
 		return nil, confirmed
 	}
 	g.unpin(unavailable.member)
-	answer, err = g.Exchange(query, plain, question)
+	answer, err = g.exchangeOwnedAttempt(query, plain, question, nil, dnssec)
 	if err != nil {
 		return nil, err
 	}
@@ -239,7 +255,7 @@ func (g *DesktopLinuxBootstrapDNSGroup) ExchangeOpportunistic(query context.Cont
 			return nil, err
 		}
 		plain.Network = "tcp"
-		answer, err = g.Exchange(query, plain, question)
+		answer, err = g.exchangeOwnedAttempt(query, plain, question, nil, dnssec)
 		if err != nil {
 			return nil, err
 		}

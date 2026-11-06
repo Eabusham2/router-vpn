@@ -655,3 +655,7 @@ AUXILIARY['dnssec-child-owner']=('./cmd/client',{
  'TestDNSSECCloseRetainsActiveCallback':()})
 AUXILIARY_TESTS.update({'internal/standardengine/dnssec_command_test.go':'dnssec-child-protocol',
  'cmd/client/linux_standard_service_dnssec_helper_linux_test.go':'dnssec-child-owner'})
+
+# Captured DNSSEC groups retain the original finite physical grant owner.
+SOURCE.update('internal/mobiletor/desktop_standard_linux_bootstrap_dnssec'+suffix+'.go'
+ for suffix in ('','_test','_native_test'))

@@ -124,6 +124,15 @@ func desktopLinuxBootstrapStreamExchange(connection net.Conn, question []byte) (
 	if connection == nil || desktopLinuxBootstrapQuestion(question) != nil {
 		return nil, errors.New("bootstrap stream omitted original bounded question")
 	}
+	return desktopLinuxBootstrapFramedExchange(connection, question, 16<<10)
+}
+
+// Callers first validate their own ordinary or typed DNSSEC question. Framing
+// alone never provides query authority or changes the ordinary response bound.
+func desktopLinuxBootstrapFramedExchange(connection net.Conn, question []byte, bound int) ([]byte, error) {
+	if connection == nil || len(question) < 12 || len(question) > 65535 || bound < 12 || bound > 65535 {
+		return nil, errors.New("bootstrap framed exchange exceeded captured bounds")
+	}
 	frame := make([]byte, len(question)+2)
 	binary.BigEndian.PutUint16(frame, uint16(len(question)))
 	copy(frame[2:], question)
@@ -142,7 +151,7 @@ func desktopLinuxBootstrapStreamExchange(connection net.Conn, question []byte) (
 		return nil, err
 	}
 	size := int(binary.BigEndian.Uint16(length[:]))
-	if size < 12 || size > 16<<10 {
+	if size < 12 || size > bound {
 		return nil, errors.New("bootstrap TCP answer exceeds bound")
 	}
 	answer := make([]byte, size)

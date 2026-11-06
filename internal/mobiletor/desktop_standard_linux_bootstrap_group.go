@@ -39,6 +39,7 @@ type DesktopLinuxBootstrapDNSGroup struct {
 	initialDescriptors        int
 	inventoryBytes            int
 	admitted                  int
+	dnssec                    *desktopLinuxBootstrapDNSSECBinding
 }
 
 const desktopLinuxBootstrapGroupActive = 257
@@ -50,6 +51,9 @@ const desktopLinuxBootstrapGroupGrantBytes = 4096
 const desktopLinuxBootstrapGroupInventory = (2 << 20) - (64 << 10)
 
 func (p *DesktopLinuxStandardProtection) BeginBootstrapDNSGroup(original context.Context, lease *os.File) (*DesktopLinuxBootstrapDNSGroup, error) {
+	return p.beginBootstrapDNSGroup(original, lease, nil)
+}
+func (p *DesktopLinuxStandardProtection) beginBootstrapDNSGroup(original context.Context, lease *os.File, dnssec *desktopLinuxBootstrapDNSSECBinding) (*DesktopLinuxBootstrapDNSGroup, error) {
 	if original == nil {
 		return nil, errors.New("bootstrap group omitted original operation")
 	}
@@ -96,6 +100,7 @@ func (p *DesktopLinuxStandardProtection) BeginBootstrapDNSGroup(original context
 	}
 	ctx, cancel := context.WithCancel(original)
 	g := &DesktopLinuxBootstrapDNSGroup{owner: p, lease: lease, original: original, ctx: ctx, cancel: cancel, deadline: deadline, generation: generation, acknowledged: map[*desktopLinuxBootstrapGrant]bool{}, reserved: true, inventoryBytes: 2*len(raw) + 4096, initialDescriptors: len(descriptors)}
+	g.dnssec = dnssec
 	p.bootstrap = &desktopLinuxStandardBootstrap{group: g}
 	p.bootstrapGroup.Store(g)
 	b.crossTransfer = "bootstrap"
@@ -183,7 +188,11 @@ func (g *DesktopLinuxBootstrapDNSGroup) capacity() error {
 	return g.capacityFor(len(descriptors), limit.Cur)
 }
 func (g *DesktopLinuxBootstrapDNSGroup) capacityFor(descriptors int, limit uint64) error {
-	if g.admitted >= desktopLinuxBootstrapGroupAdmissions || g.active >= desktopLinuxBootstrapGroupActive || len(g.members) >= desktopLinuxBootstrapGroupTotal || g.inventoryBytes+desktopLinuxBootstrapGroupGrantBytes > desktopLinuxBootstrapGroupInventory {
+	admissions := desktopLinuxBootstrapGroupAdmissions
+	if g.dnssec != nil {
+		admissions = g.dnssec.admissions
+	}
+	if g.admitted >= admissions || g.active >= desktopLinuxBootstrapGroupActive || len(g.members) >= desktopLinuxBootstrapGroupTotal || g.inventoryBytes+desktopLinuxBootstrapGroupGrantBytes > desktopLinuxBootstrapGroupInventory {
 		return errors.New("bootstrap group exhausted bounded cohort inventory")
 	}
 	reserved := g.initialDescriptors + 2*(len(g.members)+1)

@@ -34,7 +34,7 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
                 'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession', 'NodeProcessWitness', 'NodeCreationJournalReceipt', 'NodeSourceJoin', 'NodeRetiredSuccession', 'NodeRunning', 'SOCKSAssociation')
-STANDARD_KERNEL_CASES = ('StandardProtectionCreator', 'StandardReplacementCannotBeDeleted', 'StandardScopedAbsence', 'StandardNodeTransfer', 'NodeStandardTransfer', 'StandardImageTransfer', 'StandardBootstrapSocket', 'StandardBootstrapConditionalRemoval', 'StandardBootstrapFiniteGrant', 'StandardBootstrapUpstream', 'StandardBootstrapGroup', 'StandardBootstrapOpportunistic')
+STANDARD_KERNEL_CASES = ('StandardProtectionCreator', 'StandardReplacementCannotBeDeleted', 'StandardScopedAbsence', 'StandardNodeTransfer', 'NodeStandardTransfer', 'StandardImageTransfer', 'StandardBootstrapSocket', 'StandardBootstrapConditionalRemoval', 'StandardBootstrapFiniteGrant', 'StandardBootstrapUpstream', 'StandardBootstrapGroup', 'StandardBootstrapOpportunistic', 'StandardBootstrapDNSSEC')
 STANDARD_PARSER_CASES = ('ImageTransferUnknownResultRetainsOriginalPin', 'ImageTransferPolicy', 'ImageTransferOriginalEndpointInventory', 'ImageTransferCancellationKeepsOriginalPins', 'CreationReceiptRetainsExactEndpointPolicy', 'CreationScopeAndPartialAuthority', 'ScopedAbsenceNeverClaimsNodeOrMalformedAbsence', 'NodeTransferRejectsChangedInventory', 'NodeTransferUnknownResultRetainsPins')
 STANDARD_TRANSFER_INVENTORY = ('original', 'session', 'handle', 'uid', 'baseline', 'home-lan', 'unknown-field', 'noncanonical', 'widened-baseline')
 STANDARD_TRANSFER_UNKNOWN = ('unknown-removal', 'cancelled-finish', 'closed-creator')
@@ -53,6 +53,8 @@ BOOTSTRAP_FINITE_NATIVE = ('kernel-expiry', 'late-original-receipts', 'wrong-end
 BOOTSTRAP_UPSTREAM_NATIVE = ('udp-port', 'tcp-port', 'tls-name', 'tls-ip', 'tls-wrong-name', 'tls-untrusted', 'tls-timeout', 'wrong-link')
 BOOTSTRAP_GROUP_NATIVE = ('overlap','loser-cancel','close-active','invalid-first','unknown-receipt','stale-generation')
 BOOTSTRAP_OPPORTUNISTIC_NATIVE = ('tls-selfsigned','tls-empty-sni','strict-selfsigned','fallback-udp','fallback-tcp','fallback-default','fallback-truncated','after-tls','cancel','owner-loss','stale-grant')
+BOOTSTRAP_DNSSEC_NATIVE = ('udp-key','tcp-large','udp-truncated','tls-ds','tls-wrong-name','opportunistic-udp','opportunistic-tcp','owner-loss','ordinary-bypass','foreign-scope','wrong-response','recycled-queries')
+BOOTSTRAP_PARSER += ('DNSSECOriginalCapability', *(f'DNSSECOriginalCapability/{case}' for case in ('no','yes','opportunistic')), 'DNSSECRejectsForeignOwner', *(f'DNSSECRejectsForeignOwner/{case}' for case in ('port','address','link','tls-identity','transport','ordinary-group','changed-plan','missing-guard','direct-opportunistic','sibling','type')), 'DNSSECCompleteCohort', *(f'DNSSECCompleteCohort/{case}' for case in ('missing','duplicate','foreign-policy','other-name','wrong-type')), 'DNSSECFramedBounds', 'DNSSECBoundedCohort', *(f'DNSSECBoundedCohort/{case}' for case in ('history','active','retained','inventory','descriptors')))
 BOOTSTRAP_PARSER += ('OpportunisticCapturedPolicy', 'OpportunisticCapturedPolicy/udp', 'OpportunisticCapturedPolicy/tcp', 'OpportunisticRejectsForeignPolicy', *(f'OpportunisticRejectsForeignPolicy/{case}' for case in ('strict','plain','unset','missing-current','changed-current','wrong-route','bad-network','missing-authority')), 'OpportunisticTLSIdentityBoundary', *(f'OpportunisticTLSIdentityBoundary/{case}' for case in ('captured-sni','empty-sni','strict-rejects')), 'OpportunisticFailureBoundary')
 BOOTSTRAP_PARSER += ('GroupRecyclingRetainsAuthority', *(f'GroupRecyclingRetainsAuthority/{case}' for case in ('active','joined-pinned','unknown-creation','poisoned-creation')), 'GroupRecyclingKeepsAdmissionBound')
 BOOTSTRAP_PARSER += ('GroupOriginalGeneration', *(f'GroupOriginalGeneration/{case}' for case in ('original','partial','wrong-owner','foreign-generation','rejected','unsent')), 'GroupCapacity','GroupInventory', *(f'GroupInventory/{case}' for case in ('extra-rule','missing-set','duplicate-rule','retired-reappears')), 'GroupRejectsDetachedCapability','GroupFailedJoinRetainsOwner','GroupNativeInventoryBudget')
@@ -65,6 +67,7 @@ STANDARD_SOURCE_FILES = frozenset({'desktop_standard_linux_bootstrap.go', 'deskt
 STANDARD_SOURCE_FILES |= frozenset('desktop_standard_linux_bootstrap_group'+suffix+'.go' for suffix in ('','_exchange','_test','_native_test'))
 STANDARD_SOURCE_FILES |= frozenset('desktop_standard_linux_bootstrap_group_retire'+suffix+'.go' for suffix in ('','_test'))
 STANDARD_SOURCE_FILES |= frozenset('desktop_standard_linux_bootstrap_opportunistic'+suffix+'.go' for suffix in ('','_test','_native_test'))
+STANDARD_SOURCE_FILES |= frozenset('desktop_standard_linux_bootstrap_dnssec'+suffix+'.go' for suffix in ('','_test','_native_test'))
 STANDARD_SOURCE_FILES |= frozenset({'desktop_standard_linux_bootstrap_netlink.go', 'desktop_standard_linux_bootstrap_netlink_test.go', 'desktop_standard_linux_bootstrap_netlink_native_test.go'})
 BOOTSTRAP_GRANT_FILES = tuple('desktop_standard_linux_bootstrap_grant_'+suffix+'.go' for suffix in ('wire','receipt','transport','observe','wire_test','native_test'))
 STANDARD_SOURCE_FILES |= frozenset(BOOTSTRAP_GRANT_FILES)
@@ -72,7 +75,8 @@ STANDARD_SOURCE_FILES |= frozenset({'desktop_standard_linux_bootstrap_upstream.g
 KERNEL_CASES += STANDARD_KERNEL_CASES
 KERNEL_GROUPS = (('sockets', KERNEL_CASES[:15]),
                  ('retained', KERNEL_CASES[15:KERNEL_CASES.index('SOCKSAssociation')]),
-                 ('socks', ('SOCKSAssociation',)), ('standard', STANDARD_KERNEL_CASES))
+                 ('socks', ('SOCKSAssociation',)), ('standard', STANDARD_KERNEL_CASES[:-1]),
+                 ('dnssec', STANDARD_KERNEL_CASES[-1:]))
 SOCKS_CASES = ('private-ipv4', 'private-ipv6', 'public-cross-family', 'reject/future-control',
                'reject/changed-binding', 'reject/native-control-absent', 'reject/closed-control',
                'reject/plain-relay-bypass', 'reject/parent-before-child', 'reject/association-reuse')
@@ -481,6 +485,7 @@ def execute(source: Path, go='go', *, env=None):
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapUpstream/', BOOTSTRAP_UPSTREAM_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapGroup/', BOOTSTRAP_GROUP_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapOpportunistic/', BOOTSTRAP_OPPORTUNISTIC_NATIVE)
+        require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapDNSSEC/', BOOTSTRAP_DNSSEC_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardImageTransfer/', IMAGE_TRANSFER_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelNodeStandardTransfer/', REVERSE_TRANSFER_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardNodeTransfer/', STANDARD_TRANSFER_NATIVE)

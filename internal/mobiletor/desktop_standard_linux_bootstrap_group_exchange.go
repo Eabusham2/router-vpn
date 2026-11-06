@@ -25,6 +25,9 @@ func (g *DesktopLinuxBootstrapDNSGroup) Exchange(query context.Context, upstream
 	return g.exchangeAttempt(query, upstream, question, nil)
 }
 func (g *DesktopLinuxBootstrapDNSGroup) exchangeAttempt(query context.Context, upstream DesktopLinuxBootstrapDNSUpstream, question []byte, attempt *desktopLinuxBootstrapTLSAttempt) (answer []byte, failure error) {
+	return g.exchangeOwnedAttempt(query, upstream, question, attempt, nil)
+}
+func (g *DesktopLinuxBootstrapDNSGroup) exchangeOwnedAttempt(query context.Context, upstream DesktopLinuxBootstrapDNSUpstream, question []byte, attempt *desktopLinuxBootstrapTLSAttempt, dnssec *DesktopLinuxBootstrapDNSSECQuestion) (answer []byte, failure error) {
 	var t *desktopLinuxStandardBootstrap
 	// Registered first: no member is recyclable until all later IO/cancellation
 	// callbacks have joined and the immutable response/error is final.
@@ -47,7 +50,11 @@ func (g *DesktopLinuxBootstrapDNSGroup) exchangeAttempt(query context.Context, u
 		return nil, errors.New("bootstrap group omitted original query")
 	}
 	deadline, ok := query.Deadline()
-	if !ok || deadline.After(g.deadline) || query.Err() != nil || g.ctx.Err() != nil || upstream.Validate() != nil || desktopLinuxBootstrapQuestion(question) != nil {
+	questionError := desktopLinuxBootstrapQuestion(question)
+	if dnssec != nil {
+		questionError = dnssec.matches(g, upstream, question)
+	}
+	if !ok || deadline.After(g.deadline) || query.Err() != nil || g.ctx.Err() != nil || upstream.Validate() != nil || questionError != nil {
 		return nil, errors.New("bootstrap group query outside original bounds")
 	}
 	if attempt != nil && (upstream.Network != "tls" || attempt.config == nil || attempt.deadline.After(deadline) || !attempt.deadline.After(time.Now())) {
@@ -205,7 +212,11 @@ func (g *DesktopLinuxBootstrapDNSGroup) exchangeAttempt(query context.Context, u
 		}
 	}
 	if network == "tcp" {
-		answer, e = desktopLinuxBootstrapStreamExchange(connection, question)
+		if dnssec == nil {
+			answer, e = desktopLinuxBootstrapStreamExchange(connection, question)
+		} else {
+			answer, e = desktopLinuxBootstrapFramedExchange(connection, question, 65535)
+		}
 		if e != nil {
 			return nil, e
 		}
@@ -214,9 +225,13 @@ func (g *DesktopLinuxBootstrapDNSGroup) exchangeAttempt(query context.Context, u
 		if e != nil || n != len(question) {
 			return nil, errors.Join(e, io.ErrShortWrite)
 		}
-		buffer := make([]byte, (16<<10)+1)
+		bound := 16 << 10
+		if dnssec != nil {
+			bound = 65535
+		}
+		buffer := make([]byte, bound+1)
 		n, e = t.conn.Read(buffer)
-		if e != nil || n > 16<<10 {
+		if e != nil || n > bound {
 			return nil, errors.Join(e, errors.New("bootstrap UDP answer exceeds bound"))
 		}
 		answer = buffer[:n]
