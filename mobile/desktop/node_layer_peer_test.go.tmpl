@@ -256,7 +256,137 @@ func (s *desktopNodeLayerServer) NewConnection(_ context.Context, connection net
 
 func (*desktopNodeLayerServer) NewError(context.Context, error) {}
 
+// The pinned CachedPacketConn owns an unsynchronized initial packet. Take it
+// before publishing the connection to concurrent cancellation/retirement. Only
+// this bounded memory copy is locked; blocking transport reads remain closable.
+type desktopNodeOwnedInitialPacket struct {
+	N.PacketConn
+	mu     sync.Mutex
+	first  *N.PacketBuffer
+	closed bool
+}
+
+func desktopNodeOwnInitialPacket(connection N.PacketConn) N.PacketConn {
+	cached, ok := connection.(*bufio.CachedPacketConn)
+	if !ok {
+		return connection
+	}
+	first := cached.ReadCachedPacket()
+	if first != nil && first.Buffer == nil {
+		N.PutPacketBuffer(first)
+		first = nil
+	}
+	return &desktopNodeOwnedInitialPacket{PacketConn: connection, first: first}
+}
+func (c *desktopNodeOwnedInitialPacket) ReadPacket(body *buf.Buffer) (M.Socksaddr, error) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return M.Socksaddr{}, net.ErrClosed
+	}
+	if first := c.first; first != nil {
+		c.first = nil
+		destination := first.Destination
+		var err error
+		if first.Buffer != nil {
+			_, err = body.ReadOnceFrom(first.Buffer)
+			first.Buffer.Release()
+		}
+		N.PutPacketBuffer(first)
+		c.mu.Unlock()
+		return destination, err
+	}
+	c.mu.Unlock()
+	return c.PacketConn.ReadPacket(body)
+}
+func (c *desktopNodeOwnedInitialPacket) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	if first := c.first; first != nil {
+		c.first = nil
+		if first.Buffer != nil {
+			first.Buffer.Release()
+		}
+		N.PutPacketBuffer(first)
+	}
+	c.mu.Unlock()
+	return c.PacketConn.Close()
+}
+
+type desktopNodeInitialPacketTransport struct {
+	N.PacketConn
+	done    chan struct{}
+	reading chan struct{}
+	once    sync.Once
+}
+
+func (c *desktopNodeInitialPacketTransport) ReadPacket(*buf.Buffer) (M.Socksaddr, error) {
+	close(c.reading)
+	<-c.done
+	return M.Socksaddr{}, net.ErrClosed
+}
+func (c *desktopNodeInitialPacketTransport) Close() error {
+	c.once.Do(func() { close(c.done) })
+	return nil
+}
+func TestRouterVPNDesktopLayerInitialPacketRetirement(t *testing.T) {
+	destination := M.ParseSocksaddr("192.0.2.99:9999")
+	makeOwned := func() (N.PacketConn, *desktopNodeInitialPacketTransport) {
+		transport := &desktopNodeInitialPacketTransport{done: make(chan struct{}), reading: make(chan struct{})}
+		initial := buf.As([]byte("original authenticated packet"))
+		cached := bufio.NewCachedPacketConn(transport, initial, destination)
+		initial.Release()
+		return desktopNodeOwnInitialPacket(cached), transport
+	}
+	t.Run("original-packet-and-blocked-reader-join", func(t *testing.T) {
+		owned, transport := makeOwned()
+		body := buf.NewPacket()
+		defer body.Release()
+		got, err := owned.ReadPacket(body)
+		if err != nil || got != destination || string(body.Bytes()) != "original authenticated packet" {
+			t.Fatal("initial packet changed", got, err)
+		}
+		done := make(chan error, 1)
+		go func() { _, err := owned.ReadPacket(body); done <- err }()
+		<-transport.reading
+		if err := owned.Close(); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-done:
+			if !errors.Is(err, net.ErrClosed) {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("original blocking reader did not join")
+		}
+	})
+	t.Run("concurrent-initial-read-and-retirement", func(t *testing.T) {
+		for i := 0; i < 256; i++ {
+			owned, _ := makeOwned()
+			start := make(chan struct{})
+			done := make(chan struct{})
+			go func() { <-start; _ = owned.Close(); close(done) }()
+			close(start)
+			body := buf.NewPacket()
+			got, err := owned.ReadPacket(body)
+			if err == nil && (got != destination || string(body.Bytes()) != "original authenticated packet") {
+				t.Fatal("retirement corrupted original packet")
+			}
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatal(err)
+			}
+			body.Release()
+			<-done
+			if err := owned.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+}
+
 func (s *desktopNodeLayerServer) NewPacketConnection(_ context.Context, connection N.PacketConn, metadata M.Metadata) error {
+	connection = desktopNodeOwnInitialPacket(connection)
 	if !s.enter(connection) {
 		return net.ErrClosed
 	}
