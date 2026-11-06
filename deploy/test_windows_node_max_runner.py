@@ -347,9 +347,12 @@ class CapturedNativeCleanup(unittest.TestCase):
             path = Path(temporary) / 'cleanup_test.go'
             path.write_text(CAPTURED_CLEANUP_HARNESS + '\n' + helper + '\n' + retire)
             env = dict(os.environ, GOTOOLCHAIN='local')
+            # This outer budget includes cold native race compilation on hosted
+            # Windows. The compiled fixture still has its independent 15-second
+            # Go test deadline; granting compiler time cannot extend test time.
             result = subprocess.run(captured_cleanup_test_command(go, path, env),
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                    env=env, timeout=60)
+                                    env=env, timeout=600)
         self.assertEqual(result.returncode, 0, result.stdout)
         for case in ('captured', 'foreign-newer', 'partial', 'missing', 'read-failure',
                      'transaction-failure', 'close-failure', 'absence-failure'):
@@ -403,7 +406,7 @@ class CapturedNativeCleanup(unittest.TestCase):
                     self.assertEqual(command[:2], ['captured-go', 'test'])
                     self.assertEqual('-race' in command, arch == 'amd64')
                     self.assertEqual(command[2:-1], (['-race'] if arch == 'amd64' else []) + ['-count=1', '-timeout=15s', '-v'])
-                    self.assertEqual(kwargs['timeout'], 60)
+                    self.assertEqual(kwargs['timeout'], 600)
                     self.assertEqual(kwargs['env']['GOTOOLCHAIN'], 'local')
                     source = Path(command[-1]).read_text()
                     self.assertIn('func nodePQWFPCleanup(', source)
