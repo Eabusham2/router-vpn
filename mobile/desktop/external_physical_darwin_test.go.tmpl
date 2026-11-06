@@ -33,12 +33,10 @@ func TestRouterVPNExternalPhysicalDarwinCapturesPolicyAndRetainsLateOwner(t *tes
 				wantPrivate = wantPrivate[1:]
 			}
 			switch selected {
-			case "openvpn-tcp", "openvpn-mixed":
-				// The fixed fixture's first private remote is TCP; later remotes
-				// are distinct non-private addresses and cannot add LAN grants.
-				wantPrivate = wantPrivate[:1]
-			case "openvpn-udp":
-				wantPrivate = wantPrivate[1:]
+			case "openvpn-tcp", "openvpn-udp", "openvpn-mixed":
+				// Every imported provider remote is public and must not
+				// acquire a private physical destination grant.
+				wantPrivate = nil
 			}
 			if selected == "ss-entry-http" || selected == "ss-entry-https" {
 				wantPrivate = wantPrivate[:1]

@@ -803,9 +803,17 @@ func runExternalPhysicalFactoryProtocolCases(t *testing.T, protocols []string, p
 		for _, lan := range []bool{false, true} {
 			for _, ipv6 := range []string{"off", "on"} {
 				for _, kill := range []string{"on-connect", "always"} {
+					// Reuse only the immutable compiled profile; each fault below
+					// constructs and retires an independent native owner.
+					// Ordinary OpenVPN imports require public provider remotes;
+					// packet-entry variants retain their private entry address.
+					host := "192.168.50.7"
+					if strings.HasPrefix(protocol, "openvpn-") {
+						host = "198.18.0.2"
+					}
+					policy := externalPhysicalDeviceFixture(t, protocol, host, 8443, lan, runtime.GOOS, ipv6, kill)
 					for _, fault := range []string{"live", "during-index", "during-address", "during-mask", "during-down", "partial", "cancel"} {
 						t.Run(protocol+"/"+map[bool]string{false: "lan-off", true: "lan-on"}[lan]+"/ipv6-"+ipv6+"/"+kill+"/"+fault, func(t *testing.T) {
-							policy := externalPhysicalDeviceFixture(t, protocol, "192.168.50.7", 8443, lan, runtime.GOOS, ipv6, kill)
 							f := newExternalPhysicalFixture(t, policy)
 							if protocol == "socks5" {
 								var graph struct {
