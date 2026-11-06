@@ -46,6 +46,7 @@ type Capture struct {
 	ownerUID                                  uint32
 	strictParents                             bool
 	closed                                    bool
+	resolvedStub                              bool
 }
 
 func CaptureSystem(ctx context.Context, hostname string) (*Capture, error) {
@@ -255,7 +256,7 @@ func contentLines(body []byte) []string {
 func capture(ctx context.Context, hostname string, paths [3]string, ownerUID uint32) (*Capture, error) {
 	return capturePolicy(ctx, hostname, paths, ownerUID, false)
 }
-func capturePolicy(ctx context.Context, hostname string, paths [3]string, ownerUID uint32, strict bool) (result *Capture, failure error) {
+func capturePolicy(ctx context.Context, hostname string, paths [3]string, ownerUID uint32, strict bool, resolved ...bool) (result *Capture, failure error) {
 	if !validName(hostname) || strings.HasSuffix(strings.ToLower(strings.TrimSuffix(hostname, ".")), ".onion") {
 		return nil, errors.New("system bootstrap requires one ordinary outer endpoint hostname")
 	}
@@ -366,7 +367,10 @@ func capturePolicy(ctx context.Context, hostname string, paths [3]string, ownerU
 				return nil, errors.New("system bootstrap requires an exact literal DNS upstream")
 			}
 			if ip.IsLoopback() {
-				return nil, errors.New("system resolver stub requires its original split-DNS/transport authority; direct bootstrap cannot flatten it")
+				if len(resolved) != 1 || !resolved[0] || ip.String() != "127.0.0.53" {
+					return nil, errors.New("system resolver stub requires its original split-DNS/transport authority; direct bootstrap cannot flatten it")
+				}
+				c.resolvedStub = true
 			}
 			c.servers = append(c.servers, netip.AddrPortFrom(ip, 53))
 		case "domain", "search":
@@ -438,6 +442,9 @@ func capturePolicy(ctx context.Context, hostname string, paths [3]string, ownerU
 			return nil, fmt.Errorf("system DNS directive %q is unsupported", fields[0])
 		}
 	}
+	if c.resolvedStub && (len(c.servers) != 1 || c.servers[0].Addr().String() != "127.0.0.53") {
+		return nil, errors.New("resolved stub cannot be mixed with another original resolver")
+	}
 	if len(c.search) == 0 {
 		name, err := os.Hostname()
 		if err != nil {
@@ -503,3 +510,16 @@ func (c *Capture) RequiresDNS() bool {
 	}
 	return false
 }
+
+// CaptureSystemResolved retains the same protected NSS/hosts/resolv.conf
+// sources, admitting only the exact systemd stub as a distinct authority kind.
+// It grants no direct socket to that stub and reads no upstream substitute file.
+func CaptureSystemResolved(ctx context.Context, hostname string) (*Capture, error) {
+	for _, key := range []string{"LOCALDOMAIN", "RES_OPTIONS", "HOSTALIASES"} {
+		if os.Getenv(key) != "" {
+			return nil, fmt.Errorf("system bootstrap requires original unsupported %s resolver override", key)
+		}
+	}
+	return capturePolicy(ctx, hostname, [3]string{"/etc/nsswitch.conf", "/etc/hosts", "/etc/resolv.conf"}, 0, true, true)
+}
+func (c *Capture) ResolvedStub() bool { return c != nil && !c.closed && c.resolvedStub }

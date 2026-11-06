@@ -533,3 +533,40 @@ AUXILIARY_TESTS.update({'internal/standardengine/resolved_local_test.go':'resolv
 
 # Exact captured upstream transport, independently guarded by native cases.
 SOURCE.update('internal/mobiletor/desktop_standard_linux_bootstrap_upstream'+suffix+'.go' for suffix in ('','_test','_native_test'))
+
+# Original loaded DNSSEC trust anchors; no network/cache or file-state inference.
+SOURCE.update({'internal/standardengine/resolved_anchor.go','internal/standardengine/resolved_anchor_test.go','mobile/desktop/sing_tun_resolved_anchor_linux.go.tmpl','mobile/desktop/sing_tun_resolved_anchor_linux_test.go.tmpl'})
+AUXILIARY['resolved-anchor'] = ('./internal/standardengine', {
+ 'TestResolvedAnchorOriginalLoadedRecord': (),
+ 'TestResolvedAnchorAbsenceIsNotTrust': (),
+ 'TestResolvedAnchorRejectsUnprovenOrigin': ('upstream-ad-only','cache','network','synthesis','unsigned','empty','duplicate','compressed','wrong-type','wrong-class','truncated','absent-records'),
+})
+AUXILIARY_TESTS['internal/standardengine/resolved_anchor_test.go'] = 'resolved-anchor'
+
+# Original stub source handoff, live helper and exact captured upstream adapter.
+SOURCE.update({'cmd/client/linux_standard_service_resolved_helper_linux.go',
+ 'cmd/client/linux_standard_service_resolved_helper_linux_test.go',
+ 'cmd/client/linux_standard_service_resolved_adapter_linux.go',
+ 'cmd/client/linux_standard_service_resolved_adapter_linux_test.go',
+ 'internal/systembootstrap/resolved_linux_test.go',
+ 'internal/standardengine/resolved_anchor_command.go',
+ 'internal/standardengine/resolved_anchor_command_test.go',
+ 'internal/standardengine/resolved_route.go',
+ 'internal/standardengine/resolved_route_test.go'})
+AUXILIARY.update({
+ 'resolved-helper':('./cmd/client',{
+  'TestResolvedHelperBoundedOriginalLaunch':('nil','unbounded','cancelled','renewed'),
+  'TestResolvedHelperReadOnlyJoinedRetirement':('joined-error-is-not-observation-success','unjoined-owner-remains','failed-native-close-remains')}),
+ 'resolved-adapter':('./cmd/client',{'TestResolvedAdapterSelectedUpstream':('udp-explicit','tcp-explicit','udp-default','tls-explicit','tls-default','selected-link','dnssec-required','dnssec-downgrade','unknown-dnssec','opportunistic-tls','unknown-tls','missing-selection','parallel-scopes')}),
+ 'resolved-stub':('./internal/systembootstrap',{
+  'TestSystemBootstrapResolvedStubRemainsSeparate':('exact','mixed','reverse-mixed','other-loopback','duplicate'),
+  'TestSystemBootstrapResolvedLocalBeforePhysical':(),
+  'TestSystemBootstrapResolvedQuestionIdentity':()}),
+ 'resolved-route':('./internal/standardengine',{'TestResolvedRoutesOriginalScope':('longest-suffix','equal-best-remain-independent','default-route','root-route','local-not-globalized','fallback-without-eligible-default','selected-not-replaced','short-name-needs-search')}),
+ 'resolved-anchor-command':('./internal/standardengine',{'TestResolvedAnchorCommandOriginalWholeFrames':('missing','reorder','digest','sequence','unknown')})})
+AUXILIARY_TESTS.update({
+ 'cmd/client/linux_standard_service_resolved_helper_linux_test.go':'resolved-helper',
+ 'cmd/client/linux_standard_service_resolved_adapter_linux_test.go':'resolved-adapter',
+ 'internal/systembootstrap/resolved_linux_test.go':'resolved-stub',
+ 'internal/standardengine/resolved_route_test.go':'resolved-route',
+ 'internal/standardengine/resolved_anchor_command_test.go':'resolved-anchor-command'})

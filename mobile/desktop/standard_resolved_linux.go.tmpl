@@ -226,7 +226,30 @@ func routerVPNRunResolved(parent context.Context, expected string) (failure erro
 		if request.Action == "close" {
 			return nil
 		}
-		if err = routerVPNResolvedObserve(lifetime, authority, peer, expected, sequence, capture.Name); err != nil {
+		if request.Action == "anchor" {
+			anchor, err := authority.Anchor(lifetime, request.Index, request.Name, request.Type)
+			if err != nil {
+				return err
+			}
+			frames, err := standardengine.BuildResolvedAnchorFrames(expected, sequence, []byte(anchor))
+			if err != nil {
+				return err
+			}
+			for _, frame := range frames {
+				if err = peer.Send(lifetime, frame); err != nil {
+					return err
+				}
+			}
+			if err = peer.Current(lifetime); err != nil {
+				return err
+			}
+			continue
+		}
+		name := request.Name
+		if name == "" {
+			name = capture.Name
+		}
+		if err = routerVPNResolvedObserve(lifetime, authority, peer, expected, sequence, name); err != nil {
 			return err
 		}
 	}

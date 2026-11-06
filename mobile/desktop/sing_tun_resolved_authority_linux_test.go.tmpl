@@ -249,7 +249,7 @@ func (p *resolvedPhysicalFixture) ResolvedNamespace(ctx context.Context) (uint64
 // resolver properties and physical observer are modeled; this does not claim
 // a named system bus, host resolved daemon, or privileged Netlink acceptance.
 func TestRouterVPNNativeLinuxResolverResolvedAuthorityOriginalBroker(t *testing.T) {
-	for _, fault := range []string{"local-hosts", "local-synthetic", "no-local-source", "remote-error", "network-origin", "cache-origin", "unauthenticated", "policy-port", "physical-owner", "daemon-signal", "foreign-signal"} {
+	for _, fault := range append([]string{"local-hosts", "local-synthetic", "no-local-source", "remote-error", "network-origin", "cache-origin", "unauthenticated", "policy-port", "physical-owner", "daemon-signal", "foreign-signal"}, resolvedAnchorFaults...) {
 		t.Run(fault, func(t *testing.T) {
 			runtime.LockOSThread()
 			defer runtime.UnlockOSThread()
@@ -352,6 +352,15 @@ func TestRouterVPNNativeLinuxResolverResolvedAuthorityOriginalBroker(t *testing.
 				}
 				r.incoming(&dbus.Message{Type: dbus.TypeSignal, Headers: map[dbus.HeaderField]dbus.Variant{dbus.FieldSender: dbus.MakeVariant(sender)}})
 			}
+			if strings.HasPrefix(fault, "anchor-") {
+				kind := uint16(43)
+				if fault == "anchor-dnskey" || fault == "anchor-revoked" {
+					kind = 48
+				}
+				result, err := a.Anchor(ctx, 7, ".", kind)
+				resolvedAnchorAssert(t, a, fault, result, err, kind)
+				return
+			}
 			result, err := a.Preflight(ctx, "original-host.example")
 			positive := fault == "local-hosts" || fault == "local-synthetic" || fault == "no-local-source" || fault == "foreign-signal"
 			if !positive {
@@ -408,6 +417,8 @@ func resolvedAuthorityModel(fault string, changed *atomic.Bool) func(*dbus.Messa
 			}
 			properties := resolvedAuthorityProperties(manager, port)
 			return []any{properties}, "", nil
+		case "ResolveRecord":
+			return resolvedAnchorModel(request, fault, changed)
 		case "ResolveHostname":
 			if len(request.Body) != 4 || request.Body[0] != int32(0) || request.Body[1] != "original-host.example" || request.Body[2] != int32(unix.AF_UNSPEC) || request.Body[3] != uint64(1<<15|1<<12|1<<8) {
 				return nil, "", errors.New("preflight changed exact original local-only operation")

@@ -21,7 +21,7 @@ func TestResolvedFixedCommandCaptureAndRequests(t *testing.T) {
 		t.Fatal("noncanonical inherited capture accepted")
 	}
 	for _, action := range []string{"observe", "close"} {
-		r := ResolvedRequest{1, digest, 1, action}
+		r := ResolvedRequest{Schema: 1, CaptureSHA256: digest, Sequence: 1, Action: action}
 		body, err := r.Canonical()
 		if err != nil {
 			t.Fatal(err)
@@ -33,8 +33,21 @@ func TestResolvedFixedCommandCaptureAndRequests(t *testing.T) {
 			t.Fatal("replayed request accepted")
 		}
 	}
+	for _, name := range []string{"vpn.private.example", "original.example"} {
+		body, err := (ResolvedRequest{Schema: 1, CaptureSHA256: digest, Sequence: 2, Action: "observe", Name: name}).Canonical()
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := DecodeResolvedRequest(body, digest, 2)
+		if err != nil || request.Name != name {
+			t.Fatal("exact local preflight question lost", err)
+		}
+	}
+	if _, err := (ResolvedRequest{Schema: 1, CaptureSHA256: digest, Sequence: 2, Action: "close", Name: "unrelated.example"}).Canonical(); err == nil {
+		t.Fatal("close accepted question mutation")
+	}
 	for _, action := range []string{"resolve-public", "set-dns", "refresh-parent", ""} {
-		if _, err = (ResolvedRequest{1, digest, 1, action}).Canonical(); err == nil {
+		if _, err = (ResolvedRequest{Schema: 1, CaptureSHA256: digest, Sequence: 1, Action: action}).Canonical(); err == nil {
 			t.Fatal("mutable operation escaped fixed helper", action)
 		}
 	}

@@ -1,0 +1,126 @@
+//go:build linux
+
+package tun
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/godbus/dbus/v5"
+)
+
+var resolvedAnchorFaults = []string{"anchor-ds", "anchor-dnskey", "anchor-absent", "anchor-ad-only", "anchor-network", "anchor-cache", "anchor-name", "anchor-index", "anchor-type", "anchor-revoked", "anchor-policy-change", "anchor-error"}
+
+func resolvedAnchorModel(request *dbus.Message, fault string, changed *atomic.Bool) ([]any, string, error) {
+	kind := uint16(43)
+	if fault == "anchor-dnskey" || fault == "anchor-revoked" {
+		kind = 48
+	}
+	if len(request.Body) != 5 || request.Body[0] != int32(7) || request.Body[1] != "." || request.Body[2] != uint16(1) || request.Body[3] != kind || request.Body[4] != uint64(1|1<<5|1<<11|1<<12|1<<13|1<<15) {
+		return nil, "", errors.New("anchor changed exact no-network/no-cache original question")
+	}
+	if fault == "anchor-absent" {
+		return []any{"no original loaded anchor"}, "org.freedesktop.resolve1.NoSource", nil
+	}
+	if fault == "anchor-error" {
+		return []any{"not absence"}, "org.freedesktop.DBus.Error.UnknownMethod", nil
+	}
+	rr := []byte{0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0}
+	binary.BigEndian.PutUint16(rr[1:], kind)
+	data := append([]byte{0x4f, 0x66, 8, 2}, make([]byte, 32)...)
+	if kind == 48 {
+		data = []byte{1, 1, 3, 13, 1, 2, 3, 4}
+	}
+	if fault == "anchor-revoked" {
+		data[1] |= 0x80
+	}
+	binary.BigEndian.PutUint16(rr[9:], uint16(len(data)))
+	rr = append(rr, data...)
+	if fault == "anchor-name" {
+		rr = append([]byte{7, 'f', 'o', 'r', 'e', 'i', 'g', 'n'}, rr...)
+	}
+	flags := ResolvedAnchorFlags
+	if fault == "anchor-ad-only" {
+		flags = 1 << 9
+	}
+	if fault == "anchor-network" {
+		flags |= 1 << 23
+	}
+	if fault == "anchor-cache" {
+		flags |= 1 << 20
+	}
+	index := int32(0)
+	if fault == "anchor-index" {
+		index = 7
+	}
+	rowKind := kind
+	if fault == "anchor-type" {
+		rowKind = 48
+	}
+	if fault == "anchor-policy-change" {
+		changed.Store(true)
+	}
+	return []any{[]struct {
+		Index       int32
+		Class, Type uint16
+		Data        []byte
+	}{{index, 1, rowKind, rr}}, flags}, "", nil
+}
+
+func resolvedAnchorAssert(t *testing.T, a *RouterVPNResolvedAuthority, fault, result string, err error, kind uint16) {
+	t.Helper()
+	positive := fault == "anchor-ds" || fault == "anchor-dnskey" || fault == "anchor-absent"
+	if !positive {
+		if err == nil {
+			t.Fatal("causal anchor fault acquired trust", fault, result)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, e := DecodeResolvedAnchor([]byte(result), ResolvedPolicySHA256(a.policy), 7, ".", kind)
+	if e != nil || r.Present != (fault != "anchor-absent") {
+		t.Fatal("anchor detached from original query", e, r)
+	}
+}
+
+func TestRouterVPNNativeLinuxResolverResolvedAnchorWireCodec(t *testing.T) {
+	for _, fault := range []string{"anchor-ds", "anchor-dnskey", "anchor-ad-only", "anchor-network", "anchor-cache", "anchor-name", "anchor-index", "anchor-type", "anchor-revoked"} {
+		t.Run(fault, func(t *testing.T) {
+			kind := uint16(43)
+			if fault == "anchor-dnskey" || fault == "anchor-revoked" {
+				kind = 48
+			}
+			request := &dbus.Message{Body: []any{int32(7), ".", uint16(1), kind, uint64(1 | 1<<5 | 1<<11 | 1<<12 | 1<<13 | 1<<15)}}
+			var changed atomic.Bool
+			body, _, err := resolvedAnchorModel(request, fault, &changed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			message := &dbus.Message{Type: dbus.TypeMethodReply, Headers: map[dbus.HeaderField]dbus.Variant{dbus.FieldReplySerial: dbus.MakeVariant(uint32(1)), dbus.FieldSignature: dbus.MakeVariant(dbus.SignatureOf(body...))}, Body: body}
+			var buffer bytes.Buffer
+			if err = message.EncodeTo(&buffer, binary.LittleEndian); err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := dbus.DecodeMessage(&buffer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := ResolvedAnchorResult{PolicySHA256: strings.Repeat("ab", 32), Index: 7, Name: ".", Type: kind}
+			var rows []resolvedAnchorRow
+			if err = dbus.Store(decoded.Body, &rows, &result.Flags); err != nil {
+				t.Fatal(err)
+			}
+			err = resolvedAnchorRecords(&result, rows)
+			positive := fault == "anchor-ds" || fault == "anchor-dnskey"
+			if positive != (err == nil) {
+				t.Fatal("wire codec admitted foreign anchor or lost original", fault, err)
+			}
+		})
+	}
+}

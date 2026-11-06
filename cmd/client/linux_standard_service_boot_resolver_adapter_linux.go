@@ -14,11 +14,12 @@ import (
 // The service gate and original mutation lease remain held throughout policy
 // resolution. Callers receive typed answers, never a native socket or grant.
 type linuxBootBootstrapExchange struct {
-	operation context.Context
-	service   *linuxStandardService
-	original  *linuxStandardServiceBootBootstrap
-	lease     *legacyExitMutationLease
-	native    *legacyExitNativeProtection
+	operation    context.Context
+	service      *linuxStandardService
+	original     *linuxStandardServiceBootBootstrap
+	lease        *legacyExitMutationLease
+	native       *legacyExitNativeProtection
+	resolvedName string
 }
 
 func (o *linuxBootBootstrapExchange) Current(ctx context.Context) error {
@@ -30,6 +31,9 @@ func (o *linuxBootBootstrapExchange) Current(ctx context.Context) error {
 func (o *linuxBootBootstrapExchange) Exchange(ctx context.Context, network string, server netip.AddrPort, question []byte) ([]byte, error) {
 	if e := o.Current(ctx); e != nil {
 		return nil, e
+	}
+	if o.original.resolver.policy.ResolvedStub() {
+		return o.exchangeResolved(ctx, network, server, question)
 	}
 	permitted := false
 	for _, captured := range o.original.resolver.policy.Servers() {

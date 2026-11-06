@@ -38,10 +38,24 @@ type ResolvedRequest struct {
 	CaptureSHA256 string `json:"capture_sha256"`
 	Sequence      uint32 `json:"sequence"`
 	Action        string `json:"action"`
+	Name          string `json:"name,omitempty"`
+	Index         int32  `json:"index,omitempty"`
+	Type          uint16 `json:"type,omitempty"`
 }
 
 func (r ResolvedRequest) Canonical() ([]byte, error) {
-	if r.Schema != 1 || !resolvedDigest(r.CaptureSHA256, 32) || r.Sequence == 0 || r.Sequence > 64 || r.Action != "observe" && r.Action != "close" {
+	valid := r.Schema == 1 && resolvedDigest(r.CaptureSHA256, 32) && r.Sequence > 0 && r.Sequence <= 64
+	switch r.Action {
+	case "observe":
+		valid = valid && (r.Name == "" || ResolvedName(r.Name, false)) && r.Index == 0 && r.Type == 0
+	case "close":
+		valid = valid && r.Name == "" && r.Index == 0 && r.Type == 0
+	case "anchor":
+		valid = valid && ResolvedName(r.Name, true) && r.Index >= 0 && (r.Type == 43 || r.Type == 48)
+	default:
+		valid = false
+	}
+	if !valid {
 		return nil, errors.New("resolved request escaped fixed read-only protocol")
 	}
 	return json.Marshal(r)

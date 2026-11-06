@@ -1,0 +1,107 @@
+//go:build linux
+
+package tun
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"runtime"
+)
+
+// Anchor observes active DS/DNSKEY trust records from the original daemon,
+// including removal after revocation. It never infers loaded state from disk.
+// systemd v257 resolved-dns-transaction.c dns_transaction_prepare(): trust
+// anchors are checked before the NO_NETWORK gate. The reply's origin, rather
+// than upstream AD or a cached signature, authenticates this observation.
+// https://github.com/systemd/systemd/blob/v257/src/resolve/resolved-dns-transaction.c
+func (a *RouterVPNResolvedAuthority) Anchor(ctx context.Context, index int32, name string, kind uint16) (string, error) {
+	if a == nil || index < 0 || !ResolvedName(name, true) || (kind != 43 && kind != 48) {
+		return "", errors.New("anchor requires exact bounded original question")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	r := &a.native.routervpnResolver
+	if err := LockContext(ctx, &r.mu); err != nil {
+		return "", err
+	}
+	defer r.mu.Unlock()
+	if err := a.current(ctx); err != nil {
+		return "", err
+	}
+	if index != 0 {
+		found := false
+		for _, original := range a.links {
+			if original == index {
+				found = true
+			}
+		}
+		if !found {
+			return "", errors.New("anchor link outside original physical cohort")
+		}
+	}
+	raw, err := a.capturePolicy(ctx)
+	if err != nil || !bytes.Equal(raw, a.policy) {
+		return "", errors.Join(errors.New("anchor original policy changed"), err)
+	}
+	// DNS only, no CNAME, synthesis, cache, zone or network. Do not set
+	// NO_TRUST_ANCHOR or NO_VALIDATE. ResolveRecord always disables search.
+	const flags = uint64(1 | 1<<5 | 1<<11 | 1<<12 | 1<<13 | 1<<15)
+	if err = r.issue(ctx, r.unique, "/org/freedesktop/resolve1", "org.freedesktop.resolve1.Manager.ResolveRecord", false, index, name, uint16(1), kind, flags); err != nil {
+		return "", err
+	}
+	call, callErr := r.join(ctx)
+	result := ResolvedAnchorResult{PolicySHA256: ResolvedPolicySHA256(a.policy), Index: index, Name: name, Type: kind}
+	if callErr != nil {
+		// Only an authenticated original NoSource is absence. Timeouts, unsigned
+		// empty root fallback, NoTrustAnchor and malformed errors remain failures.
+		if resolvedRemoteErrorName(callErr) != "org.freedesktop.resolve1.NoSource" {
+			return "", callErr
+		}
+	} else {
+		var rows []resolvedAnchorRow
+		if err = call.call.Store(&rows, &result.Flags); err != nil {
+			return "", err
+		}
+		if err = resolvedAnchorRecords(&result, rows); err != nil {
+			return "", err
+		}
+	}
+	if err = r.clear(call); err != nil {
+		return "", err
+	}
+	if err = a.current(ctx); err != nil {
+		return "", err
+	}
+	raw, err = a.capturePolicy(ctx)
+	if err != nil || !bytes.Equal(raw, a.policy) {
+		return "", errors.Join(errors.New("anchor policy changed during observation"), err)
+	}
+	if err = a.current(ctx); err != nil {
+		return "", err
+	}
+	encoded, err := result.Canonical()
+	return string(encoded), err
+}
+
+type resolvedAnchorRow struct {
+	Index       int32
+	Class, Type uint16
+	Data        []byte
+}
+
+func resolvedAnchorRecords(result *ResolvedAnchorResult, rows []resolvedAnchorRow) error {
+	if len(rows) == 0 || len(rows) > 32 {
+		return errors.New("anchor response omitted bounded original records")
+	}
+	for _, row := range rows {
+		// Loaded anchors belong to the global manager; their record ifindex is zero.
+		if row.Index != 0 || row.Class != 1 || row.Type != result.Type {
+			return errors.New("anchor record has foreign class/type/interface")
+		}
+		result.Records = append(result.Records, append([]byte(nil), row.Data...))
+	}
+	result.Present = true
+	_, err := result.Canonical()
+	return err
+}

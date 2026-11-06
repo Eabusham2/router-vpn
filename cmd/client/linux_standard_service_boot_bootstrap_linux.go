@@ -120,7 +120,7 @@ func (s *linuxStandardService) cleanupBootBootstrapLocked(ctx context.Context, t
 		return e
 	}
 	if t.resolver != nil {
-		if e = t.resolver.close(); e != nil {
+		if e = t.resolver.closeContext(ctx); e != nil {
 			return e
 		}
 	}

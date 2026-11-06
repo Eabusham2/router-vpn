@@ -41,6 +41,14 @@ func (c *Capture) ResolveIPv6(ctx context.Context, owner Authority, ipv6 bool) (
 	if err := c.Current(ctx); err != nil {
 		return empty, err
 	}
+	var resolved ResolvedAuthority
+	if c.resolvedStub {
+		var ok bool
+		resolved, ok = owner.(ResolvedAuthority)
+		if !ok {
+			return empty, errors.New("resolved stub requires its retained live original daemon adapter")
+		}
+	}
 	var failure error
 	for _, method := range c.order {
 		if method == "files" {
@@ -68,7 +76,18 @@ func (c *Capture) ResolveIPv6(ctx context.Context, owner Authority, ipv6 bool) (
 			return empty, errors.New("system bootstrap has no original socket grant")
 		}
 		for _, name := range c.names() {
-			addresses, err := c.resolveName(ctx, name, owner, ipv6)
+			var addresses []netip.Addr
+			var err error
+			local := false
+			if resolved != nil {
+				addresses, local, err = resolved.PreflightResolvedName(ctx, name, ipv6 && !c.noAAAA)
+			}
+			if err != nil {
+				return empty, err
+			}
+			if !local {
+				addresses, err = c.resolveName(ctx, name, owner, ipv6)
+			}
 			if currentErr := owner.Current(ctx); currentErr != nil {
 				return empty, errors.Join(err, currentErr)
 			}
@@ -318,4 +337,34 @@ func addressesFor(query, response []byte) ([]netip.Addr, error) {
 		name = next
 	}
 	return nil, errors.New("captured DNS alias chain exceeds bound")
+}
+
+// ResolvedAuthority preflights each exact question after original NSS search
+// expansion, before c.resolveName can ask the retained scoped transport.
+type ResolvedAuthority interface {
+	Authority
+	PreflightResolvedName(context.Context, string, bool) ([]netip.Addr, bool, error)
+}
+
+// QuestionMatchesName admits only the generated original A/AAAA question,
+// including its captured AD/empty-EDNS options, never an arbitrary wire query.
+func QuestionMatchesName(question []byte, name string) bool {
+	if len(question) < 17 {
+		return false
+	}
+	actual, end, err := dnsName(question, 12)
+	if err != nil || actual != strings.ToLower(strings.TrimSuffix(name, ".")) || end+4 > len(question) {
+		return false
+	}
+	kind := binary.BigEndian.Uint16(question[end : end+2])
+	expected, err := queryFor(name, kind, question[3]&0x20 != 0, question[11] == 1)
+	if err != nil || len(expected) != len(question) {
+		return false
+	}
+	for i := 2; i < len(expected); i++ {
+		if expected[i] != question[i] {
+			return false
+		}
+	}
+	return true
 }
