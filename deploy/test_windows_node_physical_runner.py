@@ -569,7 +569,7 @@ class OrdinaryPacketScope(unittest.TestCase):
 
     def test_router_server_requires_every_unique_native_and_retirement_verdict(self):
         required = GATE.EXTERNAL_SERVER_CASES
-        self.assertEqual(len(required), 23)
+        self.assertEqual(len(required), 24)
         self.assertEqual(len(required), len(set(required)))
         self.assertIn(GATE.EXTERNAL_SERVER_ROOT + "/reject/psk", required)
         self.assertIn(GATE.EXTERNAL_SERVER_ROOT + "/successor-and-original-restore", required)

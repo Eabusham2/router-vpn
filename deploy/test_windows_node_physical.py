@@ -76,7 +76,7 @@ EXTERNAL_SERVER_ROOT = "TestRouterVPNDesktopExternalWindowsRouterServerWFP"
 EXTERNAL_SERVER_ASSOCIATION = "TestRouterVPNDesktopExternalWindowsRouterAssociationRetirement"
 EXTERNAL_SERVER_LEAVES = ("on-connect", "always", "successor-and-original-restore", "foreign-predecessor", "commit-refused", "reject/entry-token", "reject/entry-proof", "reject/private-key", "reject/psk", "reject/final-key", "reject/dns", "reject/exit", "reject/trust", "reject/lease-expired", "reject/lease-credentials", "cancelled-proof")
 EXTERNAL_SERVER_CASES = (EXTERNAL_SERVER_ROOT, *(EXTERNAL_SERVER_ROOT + "/" + leaf for leaf in EXTERNAL_SERVER_LEAVES), EXTERNAL_SERVER_ASSOCIATION,
-    *(EXTERNAL_SERVER_ASSOCIATION + "/" + leaf for leaf in ("api-original-challenge-and-stop-receipt", "close-joins-original-packet-worker", "control-close-joins-before-udp-tuple-release", "successor-retains-own-association", "handshake-cancel-joins-both-streams")))
+    *(EXTERNAL_SERVER_ASSOCIATION + "/" + leaf for leaf in ("api-original-challenge-and-stop-receipt", "lease-failure-diagnostic", "close-joins-original-packet-worker", "control-close-joins-before-udp-tuple-release", "successor-retains-own-association", "handshake-cancel-joins-both-streams")))
 EXTERNAL_LOCAL_ROOT = "TestRouterVPNDesktopExternalWindowsRouterLocalWFP"
 EXTERNAL_LOCAL_CASES = (EXTERNAL_LOCAL_ROOT, *(EXTERNAL_LOCAL_ROOT + "/" + leaf for leaf in EXTERNAL_SERVER_LEAVES if leaf not in ("reject/lease-expired", "reject/lease-credentials")))
 EXTERNAL_COMPARE_ROOT = "TestRouterVPNDesktopExternalWindowsRouterCompareWFP"

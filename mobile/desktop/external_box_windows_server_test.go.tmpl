@@ -49,13 +49,20 @@ const desktopWFPRouterServerFinal = "198.51.100.240:8388"
 const desktopWFPRouterServerToken = "original-router-server-private-token"
 
 type desktopWFPRouterServerRequest struct{ NodeID, Token string }
+type desktopWFPRouterLeaseDiagnostic struct {
+	Method                     string
+	Status                     int
+	OperationError, StartError string
+}
 type desktopWFPRouterServerReceipt struct {
+	Diagnostic                                                                                                 desktopWFPRouterLeaseDiagnostic
 	NodeID                                                                                                     string
 	Health, Discovery, Creates, Deletes, RelayTCP, RelayUDP, FinalTCP, FinalUDP, Responses, LocalTCP, LocalUDP int32
 	Live                                                                                                       bool
 	Lanes                                                                                                      [2]desktopWFPRouterLaneReceipt
 }
 type desktopWFPRouterServer struct {
+	diagnostic                                                                                                 desktopWFPRouterLeaseDiagnostic
 	peer                                                                                                       *desktopExternalIntegrationPeer
 	finalPeer                                                                                                  *desktopExternalIntegrationPeer
 	localPeer                                                                                                  *desktopExternalIntegrationPeer
@@ -189,14 +196,52 @@ func desktopWFPRouterServerInitialReceipt(q *desktopWFPRouterServerRequest, r *d
 	}
 	return *r == (desktopWFPRouterServerReceipt{NodeID: q.NodeID})
 }
+func desktopWFPRouterServerDiagnostic(reply desktopExternalWFPReply) desktopWFPRouterLeaseDiagnostic {
+	if reply.RouterServer == nil {
+		return desktopWFPRouterLeaseDiagnostic{OperationError: "original provider diagnostic unavailable"}
+	}
+	return reply.RouterServer.Diagnostic
+}
 func (r *desktopWFPRouterServer) receipt() *desktopWFPRouterServerReceipt {
 	r.mu.Lock()
 	p := r.process
 	r.mu.Unlock()
 	r.mu.Lock()
-	lanes := r.lanes
+	lanes, diagnostic := r.lanes, r.diagnostic
 	r.mu.Unlock()
-	return &desktopWFPRouterServerReceipt{r.request.NodeID, r.health.Load(), r.discovery.Load(), r.creates.Load(), r.deletes.Load(), r.relayTCP.Load(), r.relayUDP.Load(), r.finalTCP.Load(), r.finalUDP.Load(), r.responses.Load(), r.localTCP.Load(), r.localUDP.Load(), p != nil && p.Alive(), lanes}
+	return &desktopWFPRouterServerReceipt{diagnostic, r.request.NodeID, r.health.Load(), r.discovery.Load(), r.creates.Load(), r.deletes.Load(), r.relayTCP.Load(), r.relayUDP.Load(), r.finalTCP.Load(), r.finalUDP.Load(), r.responses.Load(), r.localTCP.Load(), r.localUDP.Load(), p != nil && p.Alive(), lanes}
+}
+
+// Diagnostics belong only to this independent test provider's original
+// operation. They never change its HTTP result or retry a lease/Box start.
+func (r *desktopWFPRouterServer) recordLeaseFailure(method string, status int, operation, start error, q multihoprelay.Request) {
+	clean := func(err error) string {
+		if err == nil {
+			return ""
+		}
+		value := err.Error()
+		final, _ := desktopWFPRouterServerExternal()["shadowsocks"].(map[string]any)
+		finalKey, _ := final["password"].(string)
+		for _, secret := range []string{r.request.Token, q.Username, q.Password, q.ExternalAuthentication, q.ExternalEpoch, q.ExternalAttempt, finalKey} {
+			if secret != "" {
+				value = strings.ReplaceAll(value, secret, "[redacted]")
+			}
+		}
+		if len(value) > 2048 {
+			const suffix = " [truncated]"
+			value = value[:2048-len(suffix)] + suffix
+		}
+		return value
+	}
+	operationText, startText := clean(operation), clean(start)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.diagnostic.Status == 0 && status >= 400 {
+		r.diagnostic.Method, r.diagnostic.Status, r.diagnostic.OperationError = method, status, operationText
+	}
+	if r.diagnostic.StartError == "" && startText != "" {
+		r.diagnostic.StartError = startText
+	}
 }
 
 // The independent Router owns a real relay Box compiled by the production
@@ -207,6 +252,7 @@ func (r *desktopWFPRouterServer) Start(ctx context.Context, raw []byte, lease mu
 	defer func() {
 		if failure != nil {
 			r.peer.recordFailure(failure)
+			r.recordLeaseFailure("", 0, nil, failure, lease.Request)
 		}
 	}()
 	if ctx.Err() != nil || r.peer.ctx.Err() != nil || lease.NodeID != r.request.NodeID || lease.Host != "10.78.0.1" {
@@ -648,6 +694,8 @@ func (r *desktopWFPRouterServer) api(ctx context.Context, c net.Conn) error {
 	}
 	defer request.Body.Close()
 	status := 200
+	var operationError error
+	var q multihoprelay.Request
 	var response any
 	if request.Host != desktopWFPRouterServerAPI || request.Header.Get("Authorization") != "Bearer "+r.request.Token || r.fault == "entry-token" {
 		status = 403
@@ -667,21 +715,23 @@ func (r *desktopWFPRouterServer) api(ctx context.Context, c net.Conn) error {
 			challenge, e := r.manager.PacketChallenge(netip.MustParseAddr("10.78.0.2"))
 			if e != nil {
 				status = 409
+				operationError = e
 			} else {
 				catalog["external_packet_challenge"] = challenge
 			}
 		}
 		response = catalog
 	} else {
-		var q multihoprelay.Request
 		decoder := json.NewDecoder(io.LimitReader(request.Body, 32<<10))
 		decoder.DisallowUnknownFields()
-		if decoder.Decode(&q) != nil {
+		if e := decoder.Decode(&q); e != nil {
+			operationError = e
 			status = 400
 		} else if request.Method == "PUT" {
 			lease, e := r.manager.Create(ctx, netip.MustParseAddr("10.78.0.2"), q)
 			if e != nil {
 				status = 409
+				operationError = e
 			} else {
 				r.creates.Add(1)
 				r.mu.Lock()
@@ -703,6 +753,7 @@ func (r *desktopWFPRouterServer) api(ctx context.Context, c net.Conn) error {
 		} else if request.Method == "DELETE" {
 			if e := r.manager.Delete(ctx, netip.MustParseAddr("10.78.0.2"), q); e != nil {
 				status = 409
+				operationError = e
 			} else {
 				r.deletes.Add(1)
 				response = map[string]any{"node_id": r.request.NodeID, "session_id": q.SessionID, "stopped": true}
@@ -710,6 +761,9 @@ func (r *desktopWFPRouterServer) api(ctx context.Context, c net.Conn) error {
 		} else {
 			status = 405
 		}
+	}
+	if status >= 400 {
+		r.recordLeaseFailure(request.Method, status, operationError, nil, q)
 	}
 	raw, _ := json.Marshal(response)
 	return (&http.Response{StatusCode: status, ProtoMajor: 1, ProtoMinor: 1, Header: http.Header{"Content-Type": []string{"application/json"}}, ContentLength: int64(len(raw)), Body: io.NopCloser(bytes.NewReader(raw)), Close: true}).Write(c)
@@ -731,6 +785,78 @@ func TestRouterVPNDesktopExternalWindowsRouterAssociationRetirement(t *testing.T
 		t.Cleanup(a.retire)
 		return r, a
 	}
+
+	t.Run("lease-failure-diagnostic", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		r := &desktopWFPRouterServer{peer: &desktopExternalIntegrationPeer{ctx: ctx}, request: desktopWFPRouterServerRequest{NodeID: strings.Repeat("a", 64), Token: desktopWFPRouterServerToken}}
+		exit, err := multihoprelay.ExternalSelection("selected-external-native", "shadowsocks", desktopWFPRouterServerExternal(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.manager, err = multihoprelay.New(multihoprelay.Config{ListenIP: "10.78.0.1", FirstPort: 26240, LastPort: 26271, TTLSeconds: 15, Exits: []multihoprelay.Exit{exit}}, r.request.NodeID, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.manager.Close(context.Background())
+		client, server := net.Pipe()
+		defer client.Close()
+		_ = client.SetDeadline(time.Now().Add(5 * time.Second))
+		done := make(chan error, 1)
+		go func() { defer server.Close(); done <- r.api(ctx, server) }()
+		request, err := http.NewRequest("PUT", "http://"+desktopWFPRouterServerAPI+"/api/multihop/lease", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+r.request.Token)
+		if err = request.Write(client); err != nil {
+			t.Fatal(err)
+		}
+		response, err := http.ReadResponse(bufio.NewReader(client), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil || response.StatusCode != 409 || string(body) != "null" {
+			t.Fatal("diagnostic changed original rejection", err, response.StatusCode)
+		}
+		if err = <-done; err != nil {
+			t.Fatal(err)
+		}
+		first := r.receipt().Diagnostic
+		if first.Method != "PUT" || first.Status != 409 || first.OperationError == "" || first.StartError != "" || r.creates.Load() != 0 {
+			t.Fatal("pre-Start manager failure absent", first)
+		}
+		_, err = r.Start(ctx, nil, multihoprelay.Lease{})
+		if err == nil || r.receipt().Diagnostic.StartError == "" {
+			t.Fatal("actual Start refusal absent")
+		}
+		q := multihoprelay.Request{Username: "private-user", Password: "private-password", ExternalAuthentication: "private-auth"}
+		other := &desktopWFPRouterServer{request: r.request}
+		final := desktopWFPRouterServerExternal()["shadowsocks"].(map[string]any)
+		finalKey := final["password"].(string)
+		other.recordLeaseFailure("PUT", 409, errors.New(r.request.Token+" "+q.Username+" "+q.Password+" "+q.ExternalAuthentication+" "+finalKey), nil, q)
+		captured := other.receipt().Diagnostic
+		for _, secret := range []string{r.request.Token, q.Username, q.Password, q.ExternalAuthentication, finalKey} {
+			if strings.Contains(captured.OperationError, secret) {
+				t.Fatal("diagnostic leaked captured credential")
+			}
+		}
+		long := &desktopWFPRouterServer{request: r.request}
+		long.recordLeaseFailure("PUT", 409, errors.New(strings.Repeat(q.Password+" diagnostic ", 300)), nil, q)
+		bounded := long.receipt().Diagnostic.OperationError
+		if len(bounded) > 2048 || !strings.HasSuffix(bounded, " [truncated]") || strings.Contains(bounded, q.Password) {
+			t.Fatal("diagnostic exceeded total bound or exposed credential")
+		}
+		if desktopWFPRouterServerDiagnostic(desktopExternalWFPReply{}).OperationError == "" || desktopWFPRouterServerDiagnostic(desktopExternalWFPReply{RouterServer: other.receipt()}) != captured {
+			t.Fatal("missing provider diagnostic masked original failure")
+		}
+		other.recordLeaseFailure("DELETE", 403, errors.New("later failure"), nil, q)
+		if other.receipt().Diagnostic != captured || r.receipt().Diagnostic.OperationError != first.OperationError {
+			t.Fatal("later operation replaced original diagnostic")
+		}
+	})
 	t.Run("api-original-challenge-and-stop-receipt", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
@@ -1227,7 +1353,7 @@ func desktopWFPTestRouterExecution(t *testing.T, execution string) {
 					case answer := <-done:
 						done <- answer
 						if fault == "held" || reply.AuthFailures == 0 && fault == "final-key" {
-							t.Fatal("proof ended before actual held/authentication witness", answer.err)
+							t.Fatal("proof ended before actual held/authentication witness", answer.err, desktopWFPRouterServerDiagnostic(peer.call(t, "stats", "")))
 						}
 						observed = true
 					case <-deadline.C:
@@ -1268,7 +1394,7 @@ func desktopWFPTestRouterExecution(t *testing.T, execution string) {
 			}
 			var proof mobilemultihop.ExternalProofResult
 			if proofErr != nil || json.Unmarshal([]byte(raw), &proof) != nil || proof.Execution != execution || !proof.EntryProven || proof.EntryNodeID != peer.initial.RouterServer.NodeID || !proof.DNSProven || proof.IP != desktopExternalIntegrationIP || !f.proof.Healthy() || !f.network.Current() {
-				t.Fatal("actual Server proof failed", proofErr)
+				t.Fatal("actual Server proof failed", proofErr, desktopWFPRouterServerDiagnostic(peer.call(t, "stats", "")))
 			}
 			reply := peer.call(t, "stats", "")
 			r := reply.RouterServer
