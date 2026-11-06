@@ -1736,3 +1736,27 @@ this is the sole substitution; independent source review is clear.
 No new Windows execution is claimed while the executor is unavailable.
 Both actual startup leaves and their native causal controls remain required
 at the resulting published SHA.
+
+
+## Android CONNECT chooser: explain current DNS and layer support
+
+The chooser still described the older TCP-only, both-layers-Off subset after
+configured final UDP-over-TCP and selected encrypted DNS support had shipped.
+The one-string correction is based on reviewed source object
+`51ff05283f33a54afc8d0d8e7aab687512419755`, with two plain-language refinements
+recommended by the independent reviewer.
+
+The text now identifies the paired SS2022 final and Off entry layer, selected
+TCP/TLS/HTTPS DNS, and the final Router node's required UDP-over-TCP service
+configuration for UDP/DoH3 and supported final AES/AES+XOR layers. It explains
+that a DNS hostname's saved lookup resolver needs a compatible transport and
+that the saved DNS selection is preserved. This matches
+`importedCONNECTCapture`, `importedCONNECTDNS` and
+`externalDNSValidateTransport` at parent
+`55712b0a966c8ad5b26830a560338172d539d73c`.
+
+Only the existing explanation in `ProductActivity.java` changes. Root compared
+the complete original and revised files: line 395 is the sole changed line,
+with no admission, runtime, fixture or assertion changes. Independent source
+review is clear. No execution is claimed for this wording-only correction;
+native builds and rendered-device acceptance remain separate evidence.
