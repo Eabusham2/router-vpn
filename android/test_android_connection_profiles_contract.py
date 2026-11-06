@@ -126,7 +126,7 @@ for marker in ('requireMutable("importing or replacing a Router VPN node")', 're
 # all durable boundaries; nested packet readiness still requires the actual captured compiler.
 assert store.count('AndroidImportedRouterPath.supports(') == 3, "imported pair validation missing from load/snapshot/readRows"
 product = read("ProductActivity.java")
-assert "Imported Shadowsocks 2022, Hysteria2, WireGuard and AmneziaWG entries can use a complete paired final transport. Packet finals require the captured entry capacity to fit their data and handshake envelope; Auto may reduce the final endpoint MTU, while Fixed overflow is refused. These configured bounds are not a measured path MTU." in product
+assert "Imported Shadowsocks 2022, Hysteria2, WireGuard, AmneziaWG and OpenVPN entries can use a complete paired final transport. Packet finals require the captured entry capacity to fit their data and handshake envelope; Auto may reduce the final endpoint MTU, while Fixed overflow is refused. These configured bounds are not a measured path MTU." in product
 chooser = product.split('private void chooseImportedRouterTransport(', 1)[1].split('private ', 1)[0]
 assert '"shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"' in chooser
 assert 'AndroidImportedRouterPath.compile(' in chooser
