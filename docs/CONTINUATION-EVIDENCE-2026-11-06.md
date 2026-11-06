@@ -573,6 +573,28 @@ and shared checks are mandatory in native Xray CI. Existing Android OS doubles
 remain explicit; a generated AAR, packaged application and device network run
 still require their separate native evidence.
 
+## Native SS reply fixture overflow
+
+Exact-source Windows phase run `42194825405`, SS-entry job `127815824195`,
+failed at `3f9701e3` because the independent DNS peer allocated prefix space
+and payload bytes but no trailing authentication-tag space. The pinned SS2022
+server then panicked while appending its 16-byte AEAD tag. This was a concrete
+fixture failure before the required native path proof, not a successful rejection
+or evidence that the complete SS graph worked.
+
+The peer now obtains both front and rear space from its actual wrapped writer
+and bounds both before allocation. `deploy/test_ss_packet_reply_headroom.py`
+extracts the complete fixture method and runs the pinned SS2022 client/server.
+Direct and CachedPacket/udpnat encrypted DNS replies decrypt to the original
+question and expected answer; a modified tag fails real authentication. The
+three-case race run passes in **1.013 seconds**. A separately executed old
+allocation reproduces the exact `serverPacketWriter.WritePacket` overflow
+requesting 16 bytes, and the regression runner then exits successfully.
+
+No production transport, firewall grant, rejection witness or native timeout is
+relaxed. The full Windows phase still needs execution at the repaired source;
+the local encrypted round trip does not stand in for WFP or device acceptance.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.

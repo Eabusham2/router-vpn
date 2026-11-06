@@ -1175,8 +1175,15 @@ func (p *desktopExternalIntegrationPeer) NewPacketConnection(ctx context.Context
 		if err != nil {
 			return err
 		}
-		reply := buf.NewSize(2048 + len(raw))
-		reply.Resize(2048, 0)
+		// Follow the actual wrapped writer: SS2022 appends its AEAD tag after
+		// prepending its session/address/padding header. Prefix space alone is
+		// insufficient even when the DNS payload is small.
+		front, rear := N.CalculateFrontHeadroom(connection), N.CalculateRearHeadroom(connection)
+		if front < 0 || rear < 0 || front > 4096 || rear > 4096 || len(raw) > 4096 {
+			return errors.New("selected UDP DNS reply exceeds bounded writer headroom")
+		}
+		reply := buf.NewSize(front + len(raw) + rear)
+		reply.Resize(front, 0)
 		_, _ = reply.Write(raw)
 		if err := connection.WritePacket(reply, destination); err != nil {
 			return err
