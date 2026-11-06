@@ -55,7 +55,10 @@ func (r *uotPeerRouter) RoutePacketConnection(ctx context.Context, conn N.Packet
 	if !ok {
 		return errors.New("pinned UoT packet API changed")
 	}
-	peer, err := (&net.Dialer{}).DialContext(ctx, "udp", r.udp)
+	// Keep the provider fixture on the same bounded UDP socket policy as
+	// the shipping Box and relay. Darwin otherwise rejects an atomic 17 KiB
+	// datagram when it exceeds the socket's default send buffer.
+	peer, err := (&net.Dialer{Control: startwhitening.UDPControl}).DialContext(ctx, "udp", r.udp)
 	if err != nil {
 		return err
 	}
@@ -160,7 +163,9 @@ func runUserspaceAESWhiteningServer(t *testing.T, tcp, udp string) (string, stri
 				defer workers.Done()
 				defer func() { _ = conn.Close(); mu.Lock(); delete(connections, conn); mu.Unlock() }()
 				_ = conn.SetDeadline(time.Now().Add(20 * time.Second))
-				_ = server.NewConnection(ctx, conn, M.Metadata{Source: M.SocksaddrFromNet(conn.RemoteAddr())})
+				if err := server.NewConnection(ctx, conn, M.Metadata{Source: M.SocksaddrFromNet(conn.RemoteAddr())}); err != nil {
+					t.Logf("userspace UoT provider closed: %v", err)
+				}
 			}()
 		}
 	}()
