@@ -25,6 +25,7 @@ sources. These rows do not by themselves establish native-package or device acce
 | OpenVPN, TCP or UDP outer transport | Shadowsocks, Hysteria2, WireGuard, AmneziaWG Fast, AmneziaWG Strong | 90 |
 | HTTP CONNECT or HTTPS CONNECT | Shadowsocks 2022, both Start Layers Off, captured Home/custom literal TCP DNS | 12 |
 | HTTP CONNECT or HTTPS CONNECT | REALITY/Vision, nine independent entry/final Start Layer pairs per protocol | 18, separate inventory |
+| WireGuard, AmneziaWG, OpenVPN TCP or OpenVPN UDP | REALITY/Vision, nine independent entry/final Start Layer pairs per original transport | 36, separate inventory |
 
 The original-source inventory now contains 346 captured cases: the earlier
 247 proxy/packet/SOCKS5/CONNECT cases, 90 OpenVPN cases, and nine separately
@@ -107,7 +108,7 @@ Start Layer requires the paired final's own original assets. A missing layer
 provision, a provision belonging to the other node, or a changed credential
 prevents construction. No second system VPN is started.
 
-The additional SOCKS5, Shadowsocks 2022, Hysteria2 and HTTP/HTTPS CONNECT to paired REALITY/Vision
+The additional WireGuard, AmneziaWG, OpenVPN, SOCKS5, Shadowsocks 2022, Hysteria2 and HTTP/HTTPS CONNECT to paired REALITY/Vision
 paths are Local and retain all nine independent Off/AES/AES+XOR entry/final
 layer choices for each imported protocol. The original
 paired-node compiler retains the final's complete VLESS/REALITY source and
@@ -122,8 +123,7 @@ The SS2022 inner transport requires exact 16-byte AES-128 or 32-byte AES-256/
 ChaCha20 keys as decoded by the shipping `sing-shadowsocks2` constructor. AES
 identity chains retain their original order; ChaCha20 accepts one key. The outer
 Start Layer keeps its separate established constructor and source rules.
-PQ REALITY, XHTTP, Split, MAX and packet/OpenVPN imported entries to this
-final, and Server/Compare for this direction remain
+PQ REALITY, XHTTP, Split, MAX and Server/Compare for this direction remain
 outside its implemented admission. Their safe rejection does not close those
 requirements.
 
@@ -222,7 +222,7 @@ limitations, not merely missing credentials, live access or physical tests.
 | Imported HTTP/HTTPS CONNECT → paired Shadowsocks with an entry Start Layer | Local independent entry Off/AES/XOR is admitted from that imported node’s original provision. Final AES/XOR and datagrams still require the final’s validated configured SS UoT-v2 service. Plain TCP/DoT/DoH retains final Off without that declaration. | Complete exact-SHA native release and device acceptance for the captured compositions; extend other graph directions separately. |
 | Imported HTTP/HTTPS CONNECT → paired REALITY/Vision | Local capture admits all nine independent layer pairs per protocol and derives VLESS stream authority from the exact paired final. Original plain Vision and explicit UDP-443 flows remain distinct. | Complete the separate exact-source parser and encrypted CONNECT/REALITY peer gates, then exact-SHA packaging and device acceptance. Source admission and the existing CONNECT-to-SS peer do not prove this final. |
 | Imported HTTP/HTTPS CONNECT → paired Hysteria2/WG/AWG | Admission still excludes these final modes. The existing configured SS UoT-v2 composition is specific to the paired SS final and does not automatically authorize other finals. | Implement the particular compatible carrier, source ownership and native graph for each final. A successful CONNECT stream or a service declaration for another final is insufficient. |
-| Other imported entry protocols and paired final families | The constructor and mobile hosts retain eight entry labels and five general paired final modes, with the additional SOCKS5, SS2022, Hysteria2 and HTTP/HTTPS CONNECT REALITY/Vision nine-layer matrices. Other Xray families and pairings remain excluded. Bounded OpenVPN Local is implemented; Trojan/VLESS are not ordinary imported catalogue entries. | Implement and validate each particular protocol/source capture, encrypted graph, credential/reference ownership, restoration and native path. Standalone support or these bounded Local REALITY paths do not prove another pairing. |
+| Other imported entry protocols and paired final families | The constructor and mobile hosts retain eight entry labels and five general paired final modes, with the additional SOCKS5, SS2022, Hysteria2, HTTP/HTTPS CONNECT, WG/AWG and OpenVPN REALITY/Vision nine-layer matrices. Other Xray families and pairings remain excluded. Bounded OpenVPN Local is implemented; Trojan/VLESS are not ordinary imported catalogue entries. | Implement and validate each particular protocol/source capture, encrypted graph, credential/reference ownership, restoration and native path. Standalone support or these bounded Local REALITY paths do not prove another pairing. |
 | Imported entry → paired final with Server or Compare | The constructor requires captured Local execution; both host adapters enforce Local and restoration deliberately does not invent a Compare winner. | Design actual execution and proof authority, measurement/comparison and restore semantics for this direction. An ordinary imported entry has no paired Router API/token; a public-address proof cannot grant server-side authority. |
 
 Any extension of CONNECT→SS must retain the final-selected Home/custom DNS
@@ -881,13 +881,86 @@ Local verification in this continuation passed the full 172 shared race
 verdicts and all nineteen shared native parser verdicts, using Go 1.26.3,
 core `1ac1a339cb1223e9c70eae14c44411c75033c02d` and prepared Xray
 `50231eaff98c`. Ten new runner tests and the eleven retained SS/HY2-REALITY
-runner tests passed. The local Android producer could not compile its Java 17
-target because this executor lacks the JDK release-symbol archive; an available
-Java 21 compiler module does not replace that contract. Swift is not installed
-here. The new actual Android and Apple native parser stages therefore remain
-pending hosted execution, not locally passed.
+runner tests passed. At that initial checkpoint, the Android producer could not
+compile its Java 17 target because the executor lacked the JDK release-symbol
+archive, and Swift was unavailable. Complete verified JDK and Swift toolchains
+were subsequently acquired for the packet increment below. Its actual results
+do not substitute for a separate CONNECT producer/native-parser execution.
 
 This parser increment does not close the separate encrypted CONNECT/REALITY
 peer, selected encrypted DNS, physical-interface, system-tunnel, package,
 signing, release or device requirements. Those retain their own original
 positive and negative controls.
+
+### November 7 resumed packet entry to REALITY source and parser gate
+
+WireGuard, AmneziaWG and the bounded OpenVPN TCP/UDP entry profiles now reach
+an independently paired ordinary REALITY/Vision final under explicit Local
+execution. This is a new source increment validated against the current pinned
+runtime, not a claim that the historical incomplete recovery patch passed.
+The existing userspace packet endpoint and Xray outbound live inside the same
+owned native graph. Android and Apple selection, preparation and restoration
+use the new admission without starting a second system VPN.
+
+The constructor retains the complete packet source: WG/AWG private and peer
+keys, PSK, addresses, AllowedIPs, keepalive, MTU and AWG parameters; or OpenVPN
+inline profile, original TCP/UDP remotes, credentials, trust and connected-state
+readback. Each role owns its independent Off, AES-256-GCM or AES-256-GCM + XOR
+Start Layer. The final retains its original VLESS credentials, REALITY keys,
+Vision flow and paired identity. Selected Home AdGuard and explicit DNS policies
+continue through that final; ordinary Vision's UDP-443 refusal remains distinct
+from an original asset explicitly provisioned for UDP 443. No SS UoT capability,
+paired entry token, invented final endpoint MTU or ordinary-network DNS proof
+is added.
+
+`deploy/test_mobile_imported_packet_xray.py` requires a separate inventory of
+36 private source captures, eight shared roots with 298 exact named verdicts,
+and 37 exact native parser verdicts for each source producer. Original primary
+346, CONNECT-layer 32, proxy-REALITY 18 and CONNECT-REALITY 18 inventories remain
+unchanged. Four actual Android phases each own nine exports and retain the
+Java 17 target, pinned JSON implementation and existing 240-second child bound.
+The Apple stage runs its actual Swift producer, requires all 36 original
+exports, checks the native reader against its shipping template before and
+after execution, and rejects changed files, skipped cases and incomplete
+verdicts. The real native parser checks the original userspace endpoint,
+independent layers, selected final resolver and Xray graph.
+
+Local Go 1.26.3 verification passed all 298 shared verdicts under `-race` and
+all 37 shared parser verdicts in pinned core
+`1ac1a339cb1223e9c70eae14c44411c75033c02d`, with prepared Xray `50231eaff98c`.
+Restoring the old packet rejection and bypassing the final's independently
+captured layer both failed at their intended causal witnesses. The retained
+SOCKS/REALITY scope cases now require the supported original packet entries
+and still reject fabricated paired authority; unrelated final-family refusals
+remain intact. The shared runtime cases retain actual HTTP identity proofs,
+explicit modeled native packet ownership, cancellation/replacement controls,
+and OpenVPN connected-remote, reader and MTU replacement checks. They do not
+claim real encrypted packet traffic.
+
+The complete official Temurin 21.0.13+9 JDK was checksum-verified and used with
+the unchanged Java 17 target. All four actual Android phases passed: WireGuard
+1,089 checks, AmneziaWG 1,206, OpenVPN TCP 1,044 and OpenVPN UDP 1,044. Every
+phase retained the five source/ownership causal controls. All 74 shared and
+actual-Android native parser verdicts passed, with no skips or failures.
+
+The official Swift 6.4.2 Debian distribution passed its detached release-key
+signature check. Its actual producer passed 931 shipping Swift/Go checks and
+exported all 36 original graphs. The pinned native reader then passed all 37
+Apple verdicts with exact before/after source, reader and export checks. The
+shipping picker/save/cold-capture fixture passed 186 checks for each of four
+packet groups, retaining the 3,231-check baseline, five existing REALITY groups
+at 115 checks each, 336 configured-CONNECT checks, and the original selected-DNS
+cases. Cross-host comparison normalizes only the WG/AWG omitted-versus-false
+`system` default in private fixture copies; true, malformed values, keys, MTUs,
+routes, remote fields and OpenVPN remain exact. No production graph bytes were
+changed for that comparison.
+
+The full shared package passed after retaining the original SOCKS/REALITY scope
+case names and adding explicit forged-pairing refusals to the newly admitted
+packet cases. Ten new runner controls and 66 retained imported-source,
+CONNECT, proxy and Apple inventory controls passed. Source/host and native
+parser evidence is now established for this increment. The separate actual
+encrypted packet/REALITY and selected-DNS reference stage, system-tunnel
+behavior, exact-SHA packages and physical-device acceptance remain required.
+Packet desktop admission and Server/Compare for this direction are separate
+unfinished requirements.

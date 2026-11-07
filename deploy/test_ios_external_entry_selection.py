@@ -192,10 +192,10 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    try check("REALITY source fingerprint retains asset "+asset,next != source)
   }
   let saved=try encoded(model.bundle!),writes=model.writes
-  for kind in ["openvpn","wireguard","amneziawg"] {
+  for kind in ["tor","reality-pq-vision","unknown"] {
    try check("REALITY unsupported entry remains refused "+kind,!IOSImportedEntryMultihop.supports(entry:kind,final:"reality-vision"))
   }
-  for kind in ["shadowsocks","hysteria2","http-connect","https-connect"]{try check("REALITY supports captured original proxy "+kind,IOSImportedEntryMultihop.supports(entry:kind,final:"reality-vision"))}
+  for kind in ["shadowsocks","hysteria2","http-connect","https-connect","wireguard","amneziawg","openvpn"]{try check("REALITY supports captured original entry "+kind,IOSImportedEntryMultihop.supports(entry:kind,final:"reality-vision"))}
   for mode in ["reality-pq-vision","reality-xhttp","split","max","max-tls-wg"] {
    try check("SOCKS unrelated final remains refused "+mode,!IOSImportedEntryMultihop.supports(entry:kind,final:mode))
   }
@@ -267,6 +267,88 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   try check("REALITY rejected alternatives do not replace saved owner",model.writes==writes && encoded(model.bundle!)==saved)
   print("PASS "+(kind=="socks5" ? "SOCKS":kind)+" REALITY host \(checks) checks")
  }
+ static func packetReality(_ directory:String,_ kind:String)throws {
+  guard ["wireguard","amneziawg","openvpn-tcp","openvpn-udp"].contains(kind) else {throw IOSImportedEntryMultihop.issue()}
+  for entryLayer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {for finalLayer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+  let file=URL(fileURLWithPath:directory).appendingPathComponent(kind+"--reality-vision--"+entryLayer+"--"+finalLayer+".json")
+  let source=try JSONDecoder().decode([String].self,from:Data(contentsOf:file))
+  try check("packet picker uses original independent layer source receipt",source.count==9 && source[2]=="reality-vision" && source[5].isEmpty==(finalLayer=="off"))
+  let capture=try JSONSerialization.jsonObject(with:Data(source[1].utf8)) as! [String:Any]
+  let mode=kind.hasPrefix("openvpn-") ? "openvpn":kind
+  try check("packet picker retains exact imported family",capture["protocol"] as? String==mode)
+  // Shared source captures contain transport policy, not display-only defaults.
+  // Fill only absent required model fields; keep every original field/asset.
+  func capturedProfile(_ raw:[String:Any])throws->RouterProfile {
+   var value=raw
+   let defaults:[String:Any]=["name":"Captured packet path","endpoint":"","router_api":"","api_token":"","adguard_ipv4":"","adguard_ipv6":"","socks_host":"","socks_port":0,"socks_username":"","socks_password":""]
+   for (key,fallback) in defaults where value[key]==nil {value[key]=fallback}
+   return try JSONDecoder().decode(RouterProfile.self,from:encoded(value))
+  }
+  let first=try capturedProfile(capture["profile"] as! [String:Any])
+  let paired=try capturedProfile(JSONSerialization.jsonObject(with:Data(source[4].utf8)) as! [String:Any])
+  var original=ClientBundle.empty;original.selectedRouterID=first.id;original.routerProfiles=[first];original.profiles=[:]
+  var final=ClientBundle.empty;final.selectedRouterID=paired.id;final.routerProfiles=[paired]
+  final.profiles=["reality-vision":try JSONDecoder().decode([String:String].self,from:Data(source[3].utf8))]
+  if !source[5].isEmpty {final.profiles["shadowsocks"]=try JSONDecoder().decode([String:String].self,from:Data(source[5].utf8))}
+  let model=RouterVPNModel();model.bundle=final
+  IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:try encoded(final)]
+  try check("packet REALITY picker requires original entry",model.iosImportedRouterFinalModes(entryMode:mode,exitID:paired.id,entryProfile:first).contains("reality-vision"))
+  try check("packet REALITY picker rejects absent entry",!model.iosImportedRouterFinalModes(entryMode:mode,exitID:paired.id).contains("reality-vision"))
+  try model.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:"reality-vision",execution:"local",entryMode:mode)
+  let held=try model.iosMultihopEntryBundle(for:model.bundle!)
+  try check("packet REALITY save preserves original keys routes MTU and OpenVPN source",held.routerProfiles==original.routerProfiles && held.profiles==original.profiles)
+  try check("packet REALITY save preserves paired assets DNS and authority",model.bundle!.profiles==final.profiles && model.bundle!.routerProfiles[0].dnsMode==paired.dnsMode && model.bundle!.routerProfiles[0].adGuardIPv4==paired.adGuardIPv4 && model.bundle!.routerProfiles[0].nodeProofID==paired.nodeProofID && model.bundle!.routerProfiles[0].apiToken==paired.apiToken)
+  try check("packet REALITY cannot invent private entry authority",held.apiToken.isEmpty && held.routerAPI.isEmpty && held.nodeProofID.isEmpty)
+  func hash(_ data:Data)->String{CryptoKit.SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()}
+  let configuration:[String:Any]=["engine":"multihop-libbox","mode":"reality-vision","bundle":try encoded(model.bundle!),"entryBundle":try encoded(original)]
+  let identity=try IOSMultihopExecution.Source(configuration:configuration,digest:hash)
+  try check("packet REALITY source binds exact Local roles",identity.entryID==first.id && identity.exitID==paired.id && identity.entryMode==mode && identity.exitMode=="reality-vision" && identity.requested=="local")
+  let receipt=try IOSMultihopExecution.StartupChoice(source:identity,execution:"local").encoded()
+  try check("packet REALITY startup receipt retains original sources",try IOSMultihopExecution.StartupChoice.decode(receipt,source:identity).source==identity)
+  let saved=try encoded(model.bundle!),writes=model.writes,cold=RouterVPNModel()
+  cold.bundle=try JSONDecoder().decode(ClientBundle.self,from:saved)
+  let coldEntry=try cold.iosMultihopEntryBundle(for:cold.bundle!)
+  let coldConfiguration:[String:Any]=["engine":"multihop-libbox","mode":"reality-vision","bundle":try encoded(cold.bundle!),"entryBundle":try encoded(original)]
+  try check("packet REALITY cold capture retains saved path",coldEntry.routerProfiles==original.routerProfiles && coldEntry.profiles==original.profiles && IOSMultihopExecution.Source(configuration:coldConfiguration,digest:hash)==identity)
+  for role in ["entry","final"] {
+   var changed=configuration
+   if role=="entry" {
+    var next=original
+    if mode=="wireguard" {next.routerProfiles[0].external?.wireGuard?.privateKey=Data(repeating:120,count:32).base64EncodedString()}
+    else if mode=="amneziawg" {next.routerProfiles[0].external?.amneziaWG?.privateKey=Data(repeating:120,count:32).base64EncodedString()}
+    else {next.routerProfiles[0].external?.openVPN?.password="foreign original password"}
+    changed["entryBundle"]=try encoded(next)
+   }else {
+    var next=model.bundle!
+    let originalAsset=Data(base64Encoded:next.profiles["reality-vision"]!["xray.json"]!)!
+    next.profiles["reality-vision"]!["xray.json"]=(originalAsset+Data("\n".utf8)).base64EncodedString()
+    changed["bundle"]=try encoded(next)
+   }
+   let replaced=try IOSMultihopExecution.Source(configuration:changed,digest:hash)
+   try check("packet REALITY fingerprints only replaced role "+role,role=="entry" ? replaced.entrySHA256 != identity.entrySHA256 && replaced.bundleSHA256==identity.bundleSHA256 : replaced.bundleSHA256 != identity.bundleSHA256 && replaced.entrySHA256==identity.entrySHA256)
+   try reject("packet REALITY cannot restore replaced original "+role){_ = try IOSMultihopExecution.StartupChoice.decode(receipt,source:replaced)}
+  }
+  for execution in ["server","auto"] {
+   try reject("packet REALITY picker refuses unsupported execution "+execution){try model.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:"reality-vision",execution:execution,entryMode:mode)}
+   try check("packet REALITY rejected execution preserves saved owner",model.writes==writes && encoded(model.bundle!)==saved)
+  }
+  if entryLayer != "off" {
+   var missing=first;missing.external?.startLayer=nil
+   var next=original;next.routerProfiles=[missing];IOSNodeBundleStore.shared.nodes[first.id]=try encoded(next)
+   try reject("packet REALITY captured entry needs its own original layer"){_ = try cold.iosMultihopEntryBundle(for:cold.bundle!)}
+   try check("packet REALITY missing entry layer preserves saved owner",model.writes==writes && encoded(model.bundle!)==saved)
+   IOSNodeBundleStore.shared.nodes[first.id]=try encoded(original)
+  }
+  if finalLayer != "off" {
+   var missing=final;missing.profiles.removeValue(forKey:"shadowsocks")
+   IOSNodeBundleStore.shared.nodes[paired.id]=try encoded(missing)
+   let refused=RouterVPNModel();refused.bundle=missing
+   try reject("packet REALITY captured final needs its own original layer"){try refused.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:"reality-vision",execution:"local",entryMode:mode)}
+   try check("packet REALITY missing final layer preserves saved owner",refused.writes==0 && encoded(refused.bundle!)==encoded(missing) && model.writes==writes && encoded(model.bundle!)==saved)
+  }
+  }}
+  print("PASS packet REALITY picker "+kind+" \(checks) checks")
+ }
  static func run()throws {
   defer { RouterVPNTorTestClose() }
   var imported=try profile("imported-first","external","shadowsocks");imported.apiToken="";imported.dnsMode="home"
@@ -276,6 +358,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   finalBundle.profiles["shadowsocks"]=["sing-box.json":try encoded(["outbounds":[["type":"shadowsocks","tag":"proxy","server":"192.0.2.44","server_port":443,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:8,count:32).base64EncodedString()]]]).base64EncodedString()]
   if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "socks-reality" {try reality(finalBundle,paired);return}
   if CommandLine.arguments.count == 5 && CommandLine.arguments[2] == "selected-dns" { try selectedDNS(finalBundle,paired,CommandLine.arguments[3],CommandLine.arguments[4]);return }
+  if CommandLine.arguments.count == 5 && CommandLine.arguments[2] == "packet-reality" {try packetReality(CommandLine.arguments[4],CommandLine.arguments[3]);return}
   if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "proxy-reality" {guard ["shadowsocks","hysteria2"].contains(CommandLine.arguments[3]) else {throw IOSImportedEntryMultihop.issue()};try reality(finalBundle,paired,CommandLine.arguments[3]);return}
   if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "connect-reality" {guard ["http-connect","https-connect"].contains(CommandLine.arguments[3]) else {throw IOSImportedEntryMultihop.issue()};try reality(finalBundle,paired,CommandLine.arguments[3]);return}
   if CommandLine.arguments.count == 4 { try configured(finalBundle,paired,CommandLine.arguments[2],CommandLine.arguments[3]);return }
@@ -849,19 +932,44 @@ def main():
             raise ValueError('Missing or foreign baseline Swift verdict: '+repr(baseline.stdout))
         print(baseline.stdout, end='', flush=True)
         reality = subprocess.run([str(work / 'test'), str(compiler), 'socks-reality'], env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
-        if reality.stdout != 'PASS SOCKS REALITY host 112 checks\n':
+        if reality.stdout != 'PASS SOCKS REALITY host 115 checks\n':
             raise ValueError('Missing or foreign SOCKS REALITY Swift verdict: '+repr(reality.stdout))
         print(reality.stdout, end='', flush=True)
         for kind in ('shadowsocks', 'hysteria2'):
             proxy = subprocess.run([str(work / 'test'), str(compiler), 'proxy-reality', kind], env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
-            if proxy.stdout != f'PASS {kind} REALITY host 112 checks\n':
+            if proxy.stdout != f'PASS {kind} REALITY host 115 checks\n':
                 raise ValueError('Missing or foreign encrypted REALITY Swift verdict: '+repr(proxy.stdout))
             print(proxy.stdout, end='', flush=True)
         for kind in ('http-connect', 'https-connect'):
             connect = subprocess.run([str(work / 'test'), str(compiler), 'connect-reality', kind], env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
-            if connect.stdout != f'PASS {kind} REALITY host 112 checks\n':
+            if connect.stdout != f'PASS {kind} REALITY host 115 checks\n':
                 raise ValueError('Missing or foreign CONNECT REALITY Swift verdict: '+repr(connect.stdout))
             print(connect.stdout, end='', flush=True)
+        packet_sources = work / 'packet-reality-sources'
+        packet_sources.mkdir()
+        kinds = ('wireguard', 'amneziawg', 'openvpn-tcp', 'openvpn-udp')
+        subprocess.run(['go', 'test', './internal/mobilemultihop', '-run',
+                        '^TestImportedPacketRealityVisionIndependentLayers$',
+                        '-count=1', '-timeout=30s'], cwd=ROOT, check=True, timeout=45,
+                       env=dict(os.environ, ROUTERVPN_IMPORTED_PACKET_XRAY_FIXTURES=str(packet_sources)))
+        layers = ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
+        expected = {kind+'--reality-vision--'+first+'--'+last+'.json' for kind in kinds for first in layers for last in layers}
+        if {path.name for path in packet_sources.iterdir()} != expected:
+            raise ValueError('Packet REALITY picker requires thirty-six exact original source captures')
+        originals = {}
+        for name in expected:
+            path = packet_sources / name
+            if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= 1 << 20:
+                raise ValueError('Packet REALITY picker source is not a bounded original file')
+            originals[name] = path.read_bytes()
+        for kind in kinds:
+            packet = subprocess.run([str(work/'test'), str(compiler), 'packet-reality', kind, str(packet_sources)],
+                                    env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
+            if packet.stdout != f'PASS packet REALITY picker {kind} 186 checks\n':
+                raise ValueError('Missing or foreign packet REALITY Swift verdict: '+repr(packet.stdout))
+            print(packet.stdout, end='', flush=True)
+        if any((packet_sources/name).read_bytes() != value for name,value in originals.items()):
+            raise ValueError('Packet REALITY picker changed its original source captures')
         # Each additional configured transport/layer runs with the original
         # process budget; all four DNS selections and refusal controls remain.
         for kind in ('http-connect', 'https-connect'):

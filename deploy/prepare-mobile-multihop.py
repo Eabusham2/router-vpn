@@ -57,6 +57,7 @@ def inputs():
     paths.append(ROOT/'mobile/daemon/instance_context_test.go.tmpl')
     paths.append(ROOT/'mobile/routervpn_imported_entry_native_test.go.tmpl')
     paths.append(ROOT/'mobile/routervpn_imported_openvpn_native_test.go.tmpl')
+    paths.append(ROOT/'mobile/routervpn_imported_packet_xray_native_test.go.tmpl')
     paths.append(ROOT/'mobile/routervpn_multihop_context_test.go.tmpl')
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
@@ -95,6 +96,7 @@ def prepare(vendor):
             (output/source.name).write_bytes(content)
     (root/'routervpn_imported_entry_native_test.go').write_bytes((ROOT/'mobile/routervpn_imported_entry_native_test.go.tmpl').read_bytes())
     (root/'routervpn_imported_openvpn_native_test.go').write_bytes((ROOT/'mobile/routervpn_imported_openvpn_native_test.go.tmpl').read_bytes())
+    (root/'routervpn_imported_packet_xray_native_test.go').write_bytes((ROOT/'mobile/routervpn_imported_packet_xray_native_test.go.tmpl').read_bytes())
     (root/'routervpn_multihop_context_test.go').write_bytes((ROOT/'mobile/routervpn_multihop_context_test.go.tmpl').read_bytes())
     (root/'routervpn_imported_entry.go').write_bytes((ROOT/'mobile/routervpn_imported_entry.go.tmpl').read_bytes())
     instance_context = vendor/'daemon/routervpn_instance_context.go'

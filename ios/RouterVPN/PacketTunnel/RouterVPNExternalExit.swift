@@ -191,9 +191,9 @@ enum RouterVPNExternalExitBuilder {
               let assets = profiles[mode], !assets.isEmpty else { throw error("The paired final transport lost its original assets.") }
         let layer = try IOSMultihopStartLayer.capture(profile: profile, profiles: profiles)
         if mode == "reality-vision" {
-            guard ["socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect"].contains(profile["multihop_entry_mode"] as? String ?? ""),
+            guard ["socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn"].contains(profile["multihop_entry_mode"] as? String ?? ""),
                   (profile["multihop_execution"] as? String ?? "local") == "local" else {
-                throw error("REALITY Vision requires a captured Local SOCKS5, Shadowsocks 2022, Hysteria2 or HTTP/HTTPS CONNECT entry and independently provisioned Start Layers.")
+                throw error("REALITY Vision requires a captured Local WireGuard, AmneziaWG, OpenVPN, SOCKS5, Shadowsocks 2022, Hysteria2 or HTTP/HTTPS CONNECT entry and independently provisioned Start Layers.")
             }
         }
         let files = try JSONSerialization.data(withJSONObject: assets, options: [.sortedKeys])

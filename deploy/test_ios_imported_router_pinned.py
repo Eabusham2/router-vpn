@@ -19,6 +19,7 @@ PARENT = 'TestRouterImportedEntryAppleNativeGraphs'
 CONNECT_LAYER_PARENT = 'TestRouterImportedCONNECTAppleLayerGraphs'
 PROXY_XRAY_PARENT = 'TestRouterImportedProxyRealityAppleGraphs'
 CONNECT_XRAY_PARENT = 'TestRouterImportedCONNECTRealityAppleGraphs'
+PACKET_XRAY_PARENT = 'TestRouterImportedPacketRealityAppleGraphs'
 PACKAGE = 'github.com/sagernet/sing-box/experimental/libbox'
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 LAYERS = ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
@@ -58,6 +59,9 @@ PROXY_XRAY_NAMES = {kind+'--reality-vision--'+entry+'--'+final+'.json'
 
 CONNECT_XRAY_NAMES = {kind+'--reality-vision--'+entry+'--'+final+'.json'
                       for kind in ('http-connect','https-connect') for entry in LAYERS for final in LAYERS}
+
+PACKET_XRAY_NAMES = {kind+'--reality-vision--'+entry+'--'+final+'.json'
+    for kind in ('wireguard','amneziawg','openvpn-tcp','openvpn-udp') for entry in LAYERS for final in LAYERS}
 
 
 def digest():
@@ -143,6 +147,41 @@ def run_connect_reality(vendor, workspace, env):
     return original
 
 
+def require_packet_reader(vendor):
+    reader = vendor/'experimental/libbox/routervpn_imported_packet_xray_native_test.go'
+    expected = ROOT/'mobile/routervpn_imported_packet_xray_native_test.go.tmpl'
+    if reader.is_symlink() or not reader.is_file() or reader.read_bytes() != expected.read_bytes():
+        raise ValueError('Apple packet REALITY native reader differs from shipping input')
+
+
+def run_packet_reality(vendor, workspace, env):
+    require_packet_reader(vendor)
+    graphs = workspace/'packet-reality'
+    graphs.mkdir()
+    roles = ('ROUTERVPN_APPLE_CONNECT_LAYER_FIXTURES', 'ROUTERVPN_APPLE_IMPORTED_PROXY_XRAY_FIXTURES',
+             'ROUTERVPN_APPLE_IMPORTED_PACKET_XRAY_FIXTURES', 'ROUTERVPN_APPLE_IMPORTED_CONNECT_XRAY_FIXTURES', 'ROUTERVPN_REQUIRE_IMPORTED_PROXY_XRAY_FIXTURES')
+    child = {key:value for key,value in env.items() if not key.startswith('ROUTERVPN_IOS_') and key not in roles}
+    child.update(ROUTERVPN_APPLE_IMPORTED_PACKET_XRAY_FIXTURES=str(graphs),
+                 ROUTERVPN_REQUIRE_IMPORTED_PACKET_XRAY_FIXTURES='1')
+    subprocess.run([sys.executable,str(ROOT/'deploy/test_ios_tor_profile.py')],
+                   cwd=ROOT,env=child,check=True,timeout=420)
+    require_matrix(graphs, PACKET_XRAY_NAMES)
+    original = {name:(graphs/name).read_bytes() for name in PACKET_XRAY_NAMES}
+    result = subprocess.run(['go','test','-json','-mod=readonly','-ldflags=-checklinkname=0',
+        '-tags','with_quic,with_wireguard,with_gvisor,with_openvpn','./experimental/libbox',
+        '-run','^'+PACKET_XRAY_PARENT+'$','-count=1','-timeout=180s'],
+        cwd=vendor,env=child,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=600)
+    if result.returncode:
+        print(result.stdout+result.stderr,file=sys.stderr)
+        raise ValueError('Pinned native Apple packet REALITY graph execution failed')
+    require_verdicts(result.stdout, PACKET_XRAY_PARENT, PACKET_XRAY_NAMES)
+    require_matrix(graphs, PACKET_XRAY_NAMES)
+    if any((graphs/name).read_bytes()!=raw for name,raw in original.items()):
+        raise ValueError('Actual Swift packet REALITY source changed during native parsing')
+    require_packet_reader(vendor)
+    return original
+
+
 def run(vendor):
     vendor = vendor.resolve(strict=True)
     if subprocess.check_output(['git', '-C', str(vendor), 'rev-parse', 'HEAD'], text=True).strip() != PIN:
@@ -154,7 +193,7 @@ def run(vendor):
     host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)
     env = host.host_environment()
     for key in tuple(env):
-        if key.startswith('ROUTERVPN_IOS_') or key in ('ROUTERVPN_APPLE_CONNECT_LAYER_FIXTURES', 'ROUTERVPN_APPLE_IMPORTED_PROXY_XRAY_FIXTURES', 'ROUTERVPN_APPLE_IMPORTED_CONNECT_XRAY_FIXTURES'):
+        if key.startswith('ROUTERVPN_IOS_') or key in ('ROUTERVPN_APPLE_CONNECT_LAYER_FIXTURES', 'ROUTERVPN_APPLE_IMPORTED_PROXY_XRAY_FIXTURES', 'ROUTERVPN_APPLE_IMPORTED_CONNECT_XRAY_FIXTURES', 'ROUTERVPN_APPLE_IMPORTED_PACKET_XRAY_FIXTURES'):
             env.pop(key)
     before = digest()
     with tempfile.TemporaryDirectory(prefix='routervpn-apple-imported-') as temporary:
@@ -203,9 +242,10 @@ def run(vendor):
         if any((proxy_graphs/name).read_bytes()!=raw for name,raw in original_proxy.items()):
             raise ValueError('Actual Swift proxy REALITY source changed during native parsing')
         run_connect_reality(vendor, Path(temporary), env)
+        run_packet_reality(vendor, Path(temporary), env)
         if before != digest():
             raise ValueError('Apple imported source changed during its executable proof')
-    print('Apple imported Router: '+str(len(NAMES))+' primary, 32 separate CONNECT layer, 18 separate proxy REALITY and 18 separate CONNECT REALITY Swift graph exports parsed by pinned Libbox; '+str(len(NAMES)+1)+', 33, 19 and 19 exact native verdicts passed')
+    print('Apple imported Router: '+str(len(NAMES))+' primary, 32 separate CONNECT layer, 18 separate proxy REALITY, 18 separate CONNECT REALITY and 36 separate packet REALITY Swift graph exports parsed by pinned Libbox; '+str(len(NAMES)+1)+', 33, 19, 19 and 37 exact native verdicts passed')
 
 
 def main():

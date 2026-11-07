@@ -1062,6 +1062,11 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
  }
  @MainActor static func run()throws {
   defer{RouterVPNTorTestClose()}
+  if ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_IMPORTED_PACKET_XRAY_FIXTURES"] != nil {
+   try importedPacketRealityGraphs()
+   print("Apple packet REALITY entries: PASS (36 separate original captures; \(checks) shipping Swift/actual Go checks; no native network proof)")
+   return
+  }
   if ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_IMPORTED_CONNECT_XRAY_FIXTURES"] != nil {
    try importedSOCKSRealityGraph(connects:true)
    print("Apple CONNECT REALITY entries: PASS (18 separate original captures; \(checks) shipping Swift/actual Go checks; no native network proof)")
@@ -1138,6 +1143,79 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try check("complete direct and private enabled padding matrix",paddingGraphs==464)
   try ordinaryTorPredecessors(padding:true)
   try check("complete enabled padding matrix",paddingGraphs==528)
+ }
+ @MainActor static func importedPacketRealityGraphs()throws {
+  guard let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_PACKET_XRAY_SOURCES"],let output=ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_IMPORTED_PACKET_XRAY_FIXTURES"] else {throw NSError(domain:"fixture",code:1)}
+  let files=try FileManager.default.contentsOfDirectory(at:URL(fileURLWithPath:directory),includingPropertiesForKeys:nil).sorted{$0.lastPathComponent<$1.lastPathComponent}
+  var expected=Set<String>()
+  for kind in ["wireguard","amneziawg","openvpn-tcp","openvpn-udp"] {for first in layers {for last in layers {expected.insert(kind+"--reality-vision--"+first+"--"+last+".json")}}}
+  try check("packet REALITY exact independent source inventory",files.count==36 && Set(files.map{$0.lastPathComponent})==expected)
+  for file in files {
+   let source=try JSONDecoder().decode([String].self,from:Data(contentsOf:file))
+   try check("packet REALITY keeps all original private inputs",source.count==9 && source[2]=="reality-vision")
+   let axes=file.deletingPathExtension().lastPathComponent.components(separatedBy:"--"),capture=try object(Data(source[1].utf8)),entry=capture["profile"] as! [String:Any],kind=capture["protocol"] as! String
+   try check("packet REALITY retains exact entry family",axes.count==4 && kind==(axes[0].hasPrefix("openvpn-") ? "openvpn":axes[0]))
+   var final=try object(Data(source[4].utf8))
+   final["multihop_enabled"]=true;final["multihop_entry_id"]=entry["id"];final["multihop_entry_mode"]=kind;final["multihop_exit_id"]=final["id"];final["multihop_exit_mode"]="reality-vision";final["multihop_execution"]="local"
+   let assets=try JSONDecoder().decode([String:String].self,from:Data(source[3].utf8))
+   var maps=["reality-vision":assets]
+   if !source[5].isEmpty {maps["shadowsocks"]=try JSONDecoder().decode([String:String].self,from:Data(source[5].utf8))}
+   try check("packet REALITY public picker admits exact Local final",IOSImportedEntryMultihop.supports(entry:kind,final:"reality-vision"))
+   try IOSImportedEntryMultihop.validate(entry:entry,final:final,profiles:maps)
+   let raw=try RouterVPNExternalExitBuilder.importedRouterSource(profile:entry),last=try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:maps)
+   try check("packet REALITY final capture keeps complete original assets",try json(object(Data(last.files.utf8)))==json(object(Data(source[3].utf8))) && last.mode=="reality-vision" && last.start.isEmpty==(axes[3]=="off"))
+   if axes[3] != "off" {try check("packet REALITY independently captured final layer",try json(object(Data(last.start.utf8)))==json(object(Data(source[5].utf8))))}
+   let args=["config":raw.config,"capture":raw.capture,"mode":last.mode,"files":last.files,"start":last.start,"profile":try text(final),"dns":source[6]]
+   let encoded=try bridge(["Op":"imported-router","Config":text(args)]),graph=try object(Data(encoded.utf8)),original=try object(Data(source[8].utf8))
+   let first=try tagged(graph,"entry-wg"),oldFirst=try tagged(original,"entry-wg"),lastNative=try tagged(graph,"routervpn-execution-local"),oldLast=try tagged(original,"routervpn-execution-local")
+   // Swift's WG-family builder omits the native false default while the shared
+   // source fixture can encode it explicitly. Compare that representation only;
+   // keys, routes, MTU, parameters, remote fields and OpenVPN stay byte-exact.
+   var comparableFirst=first,comparableOriginal=oldFirst
+   if ["wireguard","amneziawg"].contains(kind) {
+    if comparableFirst["system"]==nil {comparableFirst["system"]=false}
+    if comparableOriginal["system"]==nil {comparableOriginal["system"]=false}
+   }
+   try check("packet REALITY preserves complete original endpoint keys parameters remotes and MTU",try json(comparableFirst)==json(comparableOriginal) && (first["system"]==nil || first["system"] as? Bool==false) && (graph["endpoints"] as! [[String:Any]]).count==1)
+   try check("packet REALITY preserves exact original VLESS flow and final credentials",try json(lastNative)==json(oldLast) && lastNative["type"] as? String=="routervpn-xray" && lastNative["mode"] as? String=="reality-vision")
+   for role in [first,lastNative] {if let detour=role["detour"] as? String,detour != "entry-wg" {try check("packet REALITY preserves each independent outer layer",try json(tagged(graph,detour))==json(tagged(original,detour)))}}
+   if kind=="openvpn" {try check("packet REALITY retains original TCP or UDP OpenVPN transport",first["network"] as? String==String(axes[0].dropFirst("openvpn-".count)))}
+   let dns=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
+   try check("packet REALITY keeps default Home resolver through final",try json(graph["dns"]!)==json(original["dns"]!) && dns[0]["server"] as? String==final["adguard_ipv4"] as? String && dns[0]["detour"] as? String=="proxy")
+   let metadata=try object(Data(try bridge(["Op":"imported-router-metadata","Config":text(args)]).utf8))
+   try check("packet REALITY cannot manufacture paired entry or UoT authority",metadata["entry_kind"] as? String=="external" && metadata["entry_mode"] as? String==kind && metadata["execution"] as? String=="local" && metadata["entry_api"] as? String=="" && metadata["entry_node_id"] as? String=="" && metadata["entry_token"] as? String=="" && metadata["transport_capability"]==nil && metadata["packet_mtu_state"]==nil)
+   var selected=ClientBundle.empty,profile=final
+   profile["name"]="Captured final";profile["adguard_ipv6"]="";profile["socks_host"]="";profile["socks_port"]=0;profile["socks_username"]="";profile["socks_password"]=""
+   selected.routerProfiles=[try JSONDecoder().decode(RouterProfile.self,from:json(profile))];selected.selectedRouterID=final["id"] as! String;selected.profiles=maps
+   let selection=try IOSRuntimeSelector.selectMultihop(bundle:selected,rawProfileID:nil)
+   try check("packet REALITY shipping runtime chooses original imported family",selection.engine == .multihop && selection.rawProfileID=="reality-vision" && selection.multihopEntryMode==kind)
+   let external=entry["external"] as! [String:Any],auth=external[kind] as! [String:Any]
+   let entryBundle:[String:Any]=["selectedRouterID":entry["id"]!,"routerProfiles":[entry],"profiles":[String:[String:String]]()]
+   let configuration:[String:Any]=["engine":"multihop-libbox","mode":"reality-vision","bundle":try JSONEncoder().encode(selected),"entryBundle":try json(entryBundle)]
+   func sourceIdentity(_ value:[String:Any])throws->IOSMultihopExecution.Source {try IOSMultihopExecution.Source(configuration:value,digest:{SHA256.hash(data:$0).map{String(format:"%02x",$0)}.joined()})}
+   let identity=try sourceIdentity(configuration),receipt=try IOSMultihopExecution.StartupChoice(source:identity,execution:"local").encoded()
+   try check("packet REALITY restore retains both original source identities",try IOSMultihopExecution.StartupChoice.decode(receipt,source:identity).source==identity)
+   for role in ["entry","final"] {
+    var changed=configuration
+    if role=="entry" {var next=entry,ext=external,transport=auth;transport[kind=="openvpn" ? "password":"private_key"]=kind=="openvpn" ? "foreign-original-password":Data(repeating:120,count:32).base64EncodedString();ext[kind]=transport;next["external"]=ext;var bundle=entryBundle;bundle["routerProfiles"]=[next];changed["entryBundle"]=try json(bundle)}
+    else {var next=selected,files=assets;let text=String(decoding:Data(base64Encoded:files["xray.json"]!)!,as:UTF8.self);files["xray.json"]=Data((text+"\n").utf8).base64EncodedString();next.profiles["reality-vision"]=files;changed["bundle"]=try JSONEncoder().encode(next)}
+    let replaced=try sourceIdentity(changed)
+    reject("packet REALITY cannot restore a replaced original "+role){_ = try IOSMultihopExecution.StartupChoice.decode(receipt,source:replaced)}
+   }
+   if axes[2] != "off" {
+    var missing=entry,ext=external;ext.removeValue(forKey:"start_layer");missing["external"]=ext
+    reject("packet REALITY enabled entry requires its own provision"){_ = try RouterVPNExternalExitBuilder.importedRouterSource(profile:missing)}
+   }
+   if axes[3] != "off" {var missing=maps;missing.removeValue(forKey:"shadowsocks");reject("packet REALITY enabled final requires its own AES assets"){_ = try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:missing)}}
+   for execution in ["server","auto"] {
+    var changed=final;changed["multihop_execution"]=execution
+    reject("packet REALITY refuses unsupported execution "+execution){try IOSImportedEntryMultihop.validate(entry:entry,final:changed,profiles:maps)}
+    var saved=selected;saved.routerProfiles[0].multihopExecution=execution
+    reject("packet REALITY runtime refuses unsupported execution "+execution){_ = try IOSRuntimeSelector.selectMultihop(bundle:saved,rawProfileID:nil)}
+   }
+   for layer:Any in ["xor-only",true,NSNull()] {for role in ["entry","final"] {var first=entry,last=final;if role=="entry"{first["start_layer"]=layer}else{last["start_layer"]=layer};reject("packet REALITY refuses malformed layer "+role){try IOSImportedEntryMultihop.validate(entry:first,final:last,profiles:maps)}}}
+   try Data(encoded.utf8).write(to:URL(fileURLWithPath:output).appendingPathComponent(file.lastPathComponent),options:.withoutOverwriting)
+  }
  }
  @MainActor static func importedSOCKSRealityGraph(proxies:Bool=false,connects:Bool=false)throws {
   guard !(proxies && connects),let directory=ProcessInfo.processInfo.environment[connects ? "ROUTERVPN_IOS_IMPORTED_CONNECT_XRAY_SOURCES":proxies ? "ROUTERVPN_IOS_IMPORTED_PROXY_XRAY_SOURCES":"ROUTERVPN_IOS_IMPORTED_REALITY_SOURCES"] else {throw NSError(domain:"fixture",code:1)}
@@ -1929,6 +2007,13 @@ def main():
             raise ValueError('ROUTERVPN_APPLE_IMPORTED_CONNECT_XRAY_FIXTURES must name an existing empty owned directory')
         if proxy_output is not None or connect_output is not None or imported_output is not None or external_output is not None or args.output or args.padding_output or args.entry_output or args.openvpn_probes_only or os.environ.get('ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY') == '1':
             raise ValueError('CONNECT REALITY evidence is separate from established graph inventories')
+    packet_xray_output = os.environ.get('ROUTERVPN_APPLE_IMPORTED_PACKET_XRAY_FIXTURES')
+    if packet_xray_output is not None:
+        destination = Path(packet_xray_output)
+        if not packet_xray_output or not destination.is_dir() or destination.is_symlink() or any(destination.iterdir()):
+            raise ValueError('ROUTERVPN_APPLE_IMPORTED_PACKET_XRAY_FIXTURES must name an existing empty owned directory')
+        if connect_xray_output is not None or proxy_output is not None or connect_output is not None or imported_output is not None or external_output is not None or args.output or args.padding_output or args.entry_output or args.openvpn_probes_only or os.environ.get('ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY') == '1':
+            raise ValueError('Packet REALITY evidence is separate from established graph inventories')
     for tool in ('go', 'swiftc'):
         if not shutil.which(tool):
             raise RuntimeError(tool + ' is required')
@@ -1968,7 +2053,7 @@ def main():
         command = ['swiftc', '-swift-version', '6', '-module-cache-path', str(work / 'module-cache'), '-I', str(work), '-L', str(work), '-lWireGuardKit', '-lLibbox']
         # Shipping Apple uses platform CryptoKit. This separate portable gate
         # uses the existing bounded Go SHA-256 boundary, never a canned digest.
-        crypto_flags, crypto_env = CRYPTO.prepare(work / 'crypto') if connect_output is not None or proxy_output is not None or connect_xray_output is not None else ([], {})
+        crypto_flags, crypto_env = CRYPTO.prepare(work / 'crypto') if connect_output is not None or proxy_output is not None or connect_xray_output is not None or packet_xray_output is not None else ([], {})
         command += crypto_flags
         if platform.system() != 'Darwin':
             command += ['-lNetwork']
@@ -2009,6 +2094,11 @@ def main():
             connect_xray_sources.mkdir()
             subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedCONNECTRealityVisionIndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ, ROUTERVPN_IMPORTED_CONNECT_XRAY_FIXTURES=str(connect_xray_sources)), check=True, timeout=45)
             environment['ROUTERVPN_IOS_IMPORTED_CONNECT_XRAY_SOURCES'] = str(connect_xray_sources)
+        if packet_xray_output is not None:
+            packet_xray_sources = work / 'packet-reality-sources'
+            packet_xray_sources.mkdir()
+            subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedPacketRealityVisionIndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ, ROUTERVPN_IMPORTED_PACKET_XRAY_FIXTURES=str(packet_xray_sources)), check=True, timeout=45)
+            environment['ROUTERVPN_IOS_IMPORTED_PACKET_XRAY_SOURCES'] = str(packet_xray_sources)
         environment.pop('ROUTERVPN_IOS_OPENVPN_PROBES_ONLY', None)
         environment.pop('ROUTERVPN_IOS_PADDING_ONLY', None)
         environment.pop('ROUTERVPN_IOS_LOCAL_PADDING_GRAPHS', None)

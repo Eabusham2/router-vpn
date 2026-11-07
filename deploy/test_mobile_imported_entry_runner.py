@@ -273,9 +273,10 @@ class ImportedEntryVerdicts(unittest.TestCase):
     self.assertEqual(run.call_count,1)
  def test_android_cli_preserves_defaults_and_refuses_changed_selection(self):
   host=self.android_host()
-  self.assertEqual(host.selected_phases(),host.PRIMARY_PHASES+host.CONNECT_LAYER_PHASES+host.PROXY_XRAY_PHASES+host.CONNECT_XRAY_PHASES)
+  self.assertEqual(host.selected_phases(),host.PRIMARY_PHASES+host.CONNECT_LAYER_PHASES+host.PROXY_XRAY_PHASES+host.CONNECT_XRAY_PHASES+host.PACKET_XRAY_PHASES)
   self.assertEqual(host.PROXY_XRAY_PHASES,('proxy-reality--shadowsocks','proxy-reality--hysteria2'))
   self.assertEqual(host.CONNECT_XRAY_PHASES,('connect-reality--http-connect','connect-reality--https-connect'))
+  self.assertEqual(host.PACKET_XRAY_PHASES,('packet-reality--wireguard','packet-reality--amneziawg','packet-reality--openvpn-tcp','packet-reality--openvpn-udp'))
   for phases in ((),('foreign',),(host.PRIMARY_PHASES[0],)*2):
    with self.assertRaises(ValueError):host.selected_phases(phases)
   selected=(host.PRIMARY_PHASES[1],host.CONNECT_LAYER_PHASES[-1])

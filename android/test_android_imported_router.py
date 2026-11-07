@@ -249,7 +249,8 @@ public final class ImportedRouterTest {
    JSONObject captured=object(raw.getString("entry_capture")).getJSONObject("profile").getJSONObject("external").getJSONObject("openvpn");JSONObject first=null;JSONArray endpoints=graph.getJSONArray("endpoints");for(int i=0;i<endpoints.length();i++)if(endpoints.getJSONObject(i).optString("tag").equals("entry-wg"))first=endpoints.getJSONObject(i);
    check(captured.getString("config").equals(e.openVPNConfig)&&captured.getString("username").equals(e.username)&&captured.getString("password").equals(e.password),"OpenVPN original inline source or whitespace credentials changed");
    check(first!=null&&first.getString("type").equals("openvpn-client")&&!first.getBoolean("system")&&first.getInt("mtu")==1500&&first.getString("username").equals(e.username)&&first.getString("password").equals(e.password),"OpenVPN native endpoint or independent MTU changed");
-   check(first.getString("network").equals(fixture.getFileName().toString().split("--")[1]),"OpenVPN original TCP/UDP transport changed");
+   String[] sourceAxes=fixture.getFileName().toString().split("--");String wireNetwork=sourceAxes[0].equals("openvpn")?sourceAxes[1]:sourceAxes[0].replaceFirst("^openvpn-","");
+   check(List.of("tcp","udp").contains(wireNetwork)&&first.getString("network").equals(wireNetwork),"OpenVPN original TCP/UDP transport changed");
    String layer=e.policy.optString("start_layer","off");if(layer.isEmpty())layer="off";
    check(first.getString("server").equals("203.0.113.24")&&first.getInt("server_port")==1194&&first.has("detour")==!layer.equals("off"),"OpenVPN original peer or owned layer changed");
    if(!layer.equals("off")){
@@ -325,14 +326,14 @@ public final class ImportedRouterTest {
   if(finalMode.equals("reality-vision")){
    JSONObject assets=object(raw.getString("exit_files"));
    check(assets.toString().equals(object(args.getString(3)).toString())&&assets.has("xray.json")&&assets.has("sing-box.json"),"REALITY lost complete original Xray assets");
-   check(List.of("socks5","shadowsocks","hysteria2","http","https").contains(e.protocol)&&selected.getString("exit_mode").equals(finalMode),"REALITY expanded exact captured proxy");
+   check(List.of("socks5","shadowsocks","hysteria2","http","https","wireguard","amneziawg","openvpn").contains(e.protocol)&&selected.getString("exit_mode").equals(finalMode),"REALITY expanded exact captured entry");
    JSONObject finalNative=null,outer=null;JSONArray nativeOut=graph.getJSONArray("outbounds");for(int i=0;i<nativeOut.length();i++){JSONObject n=nativeOut.getJSONObject(i);if(n.optString("tag").equals("routervpn-execution-local"))finalNative=n;if(n.optString("tag").equals("start-layer-aes"))outer=n;}
    String finalLayer=profile(b).optString("start_layer","off");boolean layered=!List.of("","off").contains(finalLayer);
    check(finalNative!=null&&finalNative.getString("type").equals("routervpn-xray")&&finalNative.getString("mode").equals("reality-vision")&&finalNative.getString("detour").equals(layered?"start-layer-aes":"entry-wg"),"REALITY lost selected inner layer edge");
    check(layered?outer!=null&&outer.getString("detour").equals("entry-wg")&&!raw.getString("exit_start").isEmpty():outer==null&&raw.getString("exit_start").isEmpty(),"REALITY lost independent final layer provision");
    for(String mode:List.of("reality-pq-vision","reality-xhttp","split","max","max-tls-wg"))check(!AndroidImportedRouterPath.supports("socks5",mode),"REALITY admitted unsupported final "+mode);
-   for(String kind:List.of("openvpn","wireguard","amneziawg"))check(!AndroidImportedRouterPath.supports(kind,finalMode),"REALITY admitted unsupported entry "+kind);
-   for(String kind:List.of("shadowsocks","hysteria2","http-connect","https-connect"))check(AndroidImportedRouterPath.supports(kind,finalMode),"REALITY refused captured proxy "+kind);
+   for(String kind:List.of("openvpn","wireguard","amneziawg","shadowsocks","hysteria2","http-connect","https-connect"))check(AndroidImportedRouterPath.supports(kind,finalMode),"REALITY refused captured entry "+kind);
+   for(String kind:List.of("tor","reality-pq-vision","reality-xhttp","unknown"))check(!AndroidImportedRouterPath.supports(kind,finalMode),"REALITY admitted unsupported entry "+kind);
    JSONObject unprovisioned=object(b.toString());profile(unprovisioned).put("start_layer","aes-256-gcm");unprovisioned.getJSONObject("profiles").remove("shadowsocks");reject("REALITY final layer requires own provision",()->AndroidImportedRouterPath.compile(e,unprovisioned,finalMode,"local"));
    AndroidStandardExitStore.Entry unowned=AndroidStandardExitStore.copy(e);unowned.policy.put("start_layer","aes-256-gcm");unowned.startLayer=null;reject("REALITY entry layer requires own provision",()->AndroidImportedRouterPath.compile(unowned,b,finalMode,"local"));
    if(layered)reject("REALITY replaced final layer original bytes",()->{JSONObject changed=object(c.input);changed.put("exit_start",changed.getString("exit_start")+" ");AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
@@ -407,6 +408,14 @@ public final class ImportedRouterTest {
  }
  public static void main(String[] args)throws Exception{
   Libbox.compiler=args[0];Path root=Path.of(args[1]),fixtures=Path.of(args[2]);retainedStaging(Files.createTempDirectory(root,"retained-staging-"));List<Path> all;
+  if(args[3].startsWith("packet-reality--")){
+   String kind=args[3].substring("packet-reality--".length());check(List.of("wireguard","amneziawg","openvpn-tcp","openvpn-udp").contains(kind),"unknown packet REALITY entry phase");
+   Path sources=Path.of(System.getenv("ROUTERVPN_IMPORTED_PACKET_XRAY_SOURCES"));List<Path> paths;try(var entries=Files.list(sources)){paths=entries.sorted().toList();}
+   Set<String> expected=new HashSet<>();for(String protocol:List.of("wireguard","amneziawg","openvpn-tcp","openvpn-udp"))for(String first:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening"))for(String last:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening"))expected.add(protocol+"--reality-vision--"+first+"--"+last+".json");
+   check(paths.size()==36&&new HashSet<>(paths.stream().map(p->p.getFileName().toString()).toList()).equals(expected),"incomplete independent packet REALITY sources");for(Path p:paths)check(!Files.isSymbolicLink(p)&&Files.isRegularFile(p)&&Files.size(p)>0&&Files.size(p)<=32*1024*1024,"unowned packet REALITY source");
+   List<Path> selected=paths.stream().filter(p->p.getFileName().toString().startsWith(kind+"--")).toList();check(selected.size()==9,"incomplete independent packet REALITY phase");exportEnvironment="ROUTERVPN_ANDROID_IMPORTED_PACKET_XRAY_FIXTURES";for(Path p:selected)one(root,p);
+   System.out.println("Android packet REALITY entries: "+checks+" checks; "+kind+", "+selected.size()+" original independent layer graphs");return;
+  }
   if(args[3].startsWith("connect-reality--")){
    String kind=args[3].substring("connect-reality--".length());check(List.of("http-connect","https-connect").contains(kind),"unknown CONNECT REALITY entry phase");
    Path sources=Path.of(System.getenv("ROUTERVPN_IMPORTED_CONNECT_XRAY_SOURCES"));List<Path> paths;try(var entries=Files.list(sources)){paths=entries.sorted().toList();}
@@ -449,10 +458,11 @@ CONNECT_LAYER_PHASES = tuple('connect-entry-layers--'+kind+'--'+layer
 
 PROXY_XRAY_PHASES = ('proxy-reality--shadowsocks', 'proxy-reality--hysteria2')
 CONNECT_XRAY_PHASES = ('connect-reality--http-connect', 'connect-reality--https-connect')
+PACKET_XRAY_PHASES = tuple('packet-reality--'+kind for kind in ('wireguard','amneziawg','openvpn-tcp','openvpn-udp'))
 
 
 def selected_phases(phases=None):
-    allowed = PRIMARY_PHASES + CONNECT_LAYER_PHASES + PROXY_XRAY_PHASES + CONNECT_XRAY_PHASES
+    allowed = PRIMARY_PHASES + CONNECT_LAYER_PHASES + PROXY_XRAY_PHASES + CONNECT_XRAY_PHASES + PACKET_XRAY_PHASES
     selected = allowed if phases is None else tuple(phases)
     if not selected or any(phase not in allowed for phase in selected) or len(set(selected)) != len(selected):
         raise ValueError('Choose a nonempty, exact, duplicate-free imported-entry phase selection')
@@ -493,6 +503,17 @@ def main(phases=None):
                 other = Path(os.environ[key]).resolve()
                 if other == separate or other in separate.parents or separate in other.parents:
                     raise ValueError('CONNECT REALITY evidence requires separate non-overlapping inventories')
+    packet_xray_output = os.environ.get('ROUTERVPN_ANDROID_IMPORTED_PACKET_XRAY_FIXTURES')
+    if packet_xray_output is not None:
+        destination = Path(packet_xray_output)
+        if not packet_xray_output or not destination.is_dir() or destination.is_symlink() or any(destination.iterdir()):
+            raise ValueError('ROUTERVPN_ANDROID_IMPORTED_PACKET_XRAY_FIXTURES must name an existing empty owned directory')
+        separate = destination.resolve()
+        for key in ('ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES', 'ROUTERVPN_ANDROID_CONNECT_LAYER_FIXTURES', 'ROUTERVPN_ANDROID_IMPORTED_PROXY_XRAY_FIXTURES', 'ROUTERVPN_ANDROID_IMPORTED_CONNECT_XRAY_FIXTURES'):
+            if key in os.environ:
+                other = Path(os.environ[key]).resolve()
+                if other == separate or other in separate.parents or separate in other.parents:
+                    raise ValueError('Packet REALITY evidence requires separate non-overlapping inventories')
     for tool in ("java", "javac", "go"):
         if not shutil.which(tool):
             raise RuntimeError(f"{tool} is required; imported-entry tests cannot be skipped")
@@ -518,7 +539,11 @@ def main(phases=None):
         connect_xray_sources.mkdir()
         if any(phase in CONNECT_XRAY_PHASES for phase in phases):
             subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedCONNECTRealityVisionIndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ,ROUTERVPN_IMPORTED_CONNECT_XRAY_FIXTURES=str(connect_xray_sources)), check=True, timeout=45)
-        child_env = dict(os.environ, ROUTERVPN_CONNECT_LAYER_SOURCES=str(connect_sources), ROUTERVPN_IMPORTED_PROXY_XRAY_SOURCES=str(proxy_sources), ROUTERVPN_IMPORTED_CONNECT_XRAY_SOURCES=str(connect_xray_sources))
+        packet_xray_sources = temp / 'packet-reality'
+        packet_xray_sources.mkdir()
+        if any(phase in PACKET_XRAY_PHASES for phase in phases):
+            subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedPacketRealityVisionIndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ,ROUTERVPN_IMPORTED_PACKET_XRAY_FIXTURES=str(packet_xray_sources)), check=True, timeout=45)
+        child_env = dict(os.environ, ROUTERVPN_CONNECT_LAYER_SOURCES=str(connect_sources), ROUTERVPN_IMPORTED_PROXY_XRAY_SOURCES=str(proxy_sources), ROUTERVPN_IMPORTED_CONNECT_XRAY_SOURCES=str(connect_xray_sources), ROUTERVPN_IMPORTED_PACKET_XRAY_SOURCES=str(packet_xray_sources))
         module = next(line.split()[1] for line in (ROOT / "go.mod").read_text().splitlines() if line.startswith("module "))
         helper = E.GO.replace('switch args[0]{', 'switch args[0]{'+GO_CASE).replace("github.com/Eabusham2/router-vpn", module)
         (temp / "main.go").write_text(helper)
@@ -574,6 +599,7 @@ def main(phases=None):
         causal_env.pop("ROUTERVPN_ANDROID_CONNECT_LAYER_FIXTURES",None)
         causal_env.pop("ROUTERVPN_ANDROID_IMPORTED_PROXY_XRAY_FIXTURES",None)
         causal_env.pop("ROUTERVPN_ANDROID_IMPORTED_CONNECT_XRAY_FIXTURES",None)
+        causal_env.pop("ROUTERVPN_ANDROID_IMPORTED_PACKET_XRAY_FIXTURES",None)
         for old,new,assertion in controls:
             if original.count(old)!=1:raise AssertionError("Imported source ownership control changed")
             source.write_text(original.replace(old,new))
@@ -586,7 +612,7 @@ def main(phases=None):
 
 def cli(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--phase', action='append', choices=PRIMARY_PHASES + CONNECT_LAYER_PHASES + PROXY_XRAY_PHASES + CONNECT_XRAY_PHASES,
+    parser.add_argument('--phase', action='append', choices=PRIMARY_PHASES + CONNECT_LAYER_PHASES + PROXY_XRAY_PHASES + CONNECT_XRAY_PHASES + PACKET_XRAY_PHASES,
                         help='Run this exact bounded phase; repeat for several phases. The default runs every phase.')
     args = parser.parse_args(argv)
     try:

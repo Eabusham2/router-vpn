@@ -303,18 +303,25 @@ func TestImportedEntrySOCKSRealityVisionKeepsScope(t *testing.T) {
 				t.Fatal("unsupported-entry control did not begin with a valid original import", err)
 			}
 			plan, err := NewImportedEntry(graph, capture, source[2], source[3], source[4], source[5], source[6])
-			if protocol == "shadowsocks" || protocol == "hysteria2" || protocol == "http-connect" || protocol == "https-connect" {
-				if err != nil {
-					t.Fatal("REALITY refused a valid independently captured proxy", err)
+			if err != nil {
+				t.Fatal("REALITY refused a valid independently captured entry", err)
+			}
+			defer plan.Close()
+			if plan.meta.EntryMode != protocol || plan.meta.EntryKind != "external" || plan.meta.EntryAPI != "" || plan.meta.EntryToken != "" || plan.meta.EntryNodeID != "" {
+				t.Fatal("REALITY entry acquired a different transport or Router proof authority")
+			}
+			if (protocol == "http-connect" || protocol == "https-connect") && plan.meta.TransportCapability != "vless-stream" {
+				t.Fatal("CONNECT acquired the wrong captured transport capability")
+			}
+			if protocol == "wireguard" || protocol == "amneziawg" || protocol == "openvpn" {
+				// Keep the old named scope witnesses and prove the expanded
+				// packet admission still cannot manufacture Router ownership.
+				foreign := externalTestRead(t, capture)
+				foreign["profile"].(map[string]any)["api_token"] = "foreign-paired-authority"
+				if changed, err := NewImportedEntry(graph, externalTestJSON(t, foreign), source[2], source[3], source[4], source[5], source[6]); err == nil {
+					_ = changed.Close()
+					t.Fatal("packet REALITY entry acquired fabricated paired authority")
 				}
-				defer plan.Close()
-				if (protocol == "http-connect" || protocol == "https-connect") &&
-					(plan.meta.TransportCapability != "vless-stream" || plan.meta.EntryMode != protocol || plan.meta.EntryAPI != "" || plan.meta.EntryToken != "") {
-					t.Fatal("CONNECT acquired the wrong captured transport or Router proof authority")
-				}
-			} else if err == nil {
-				_ = plan.Close()
-				t.Fatal("REALITY admitted an unsupported imported protocol")
 			}
 		})
 	}

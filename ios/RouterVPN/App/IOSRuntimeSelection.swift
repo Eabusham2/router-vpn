@@ -163,10 +163,10 @@ enum IOSRuntimeSelector {
         // Imported packet labels are not paired raw profile IDs. The model
         // captures their independent entry bundle before provider startup.
         let importedPacket = ["wireguard", "amneziawg"].contains(entryMode) &&
-            ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(mode) &&
+            ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong", "reality-vision"].contains(mode) &&
             (profile.multihopExecution ?? "local") == "local"
         let importedSOCKS = ((["socks5", "openvpn"].contains(entryMode) && ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(mode)) ||
-            (entryMode == "socks5" && mode == "reality-vision")) && (profile.multihopExecution ?? "local") == "local"
+            (["socks5", "openvpn"].contains(entryMode) && mode == "reality-vision")) && (profile.multihopExecution ?? "local") == "local"
         let importedCONNECT = ["http-connect", "https-connect"].contains(entryMode) &&
             ["shadowsocks", "reality-vision"].contains(mode) && (profile.multihopExecution ?? "local") == "local"
         guard multihopModeIDs.contains(entryMode) || importedPacket || importedSOCKS || importedCONNECT else {

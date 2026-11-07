@@ -1,0 +1,303 @@
+package libbox
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+)
+
+func routerImportedPacketRealityNames() map[string]bool {
+	expected := map[string]bool{}
+	for _, kind := range []string{"wireguard", "amneziawg", "openvpn-tcp", "openvpn-udp"} {
+		for _, first := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, final := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				expected[kind+"--reality-vision--"+first+"--"+final+".json"] = true
+			}
+		}
+	}
+	return expected
+}
+func TestRouterImportedPacketRealitySourceGraphs(t *testing.T) {
+	routerImportedPacketRealitySources(t, "ROUTERVPN_IMPORTED_PACKET_XRAY_FIXTURES", false)
+}
+func TestRouterImportedPacketRealityAndroidSourceGraphs(t *testing.T) {
+	routerImportedPacketRealitySources(t, "ROUTERVPN_ANDROID_IMPORTED_PACKET_XRAY_FIXTURES", true)
+}
+func routerImportedPacketRealitySources(t *testing.T, environment string, android bool) {
+	root := os.Getenv(environment)
+	if root == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_PACKET_XRAY_FIXTURES") == "1" {
+			t.Fatal("required original packet REALITY captures absent")
+		}
+		t.Skip("separate packet REALITY source gate supplies exact captures")
+	}
+	expected := routerImportedPacketRealityNames()
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != len(expected) {
+		t.Fatal("incomplete independent packet REALITY capture matrix", err)
+	}
+	for _, entry := range entries {
+		t.Run(entry.Name(), func(t *testing.T) {
+			name := entry.Name()
+			if android {
+				if !strings.HasPrefix(name, "android-") {
+					t.Fatal("foreign Android packet REALITY capture")
+				}
+				name = strings.TrimPrefix(name, "android-")
+			}
+			info, err := entry.Info()
+			if err != nil || !expected[name] || entry.Type()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+				t.Fatal("unowned original packet REALITY capture", err)
+			}
+			raw, err := os.ReadFile(filepath.Join(root, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var source []string
+			if json.Unmarshal(raw, &source) != nil || len(source) != 9 {
+				t.Fatal("packet REALITY capture lost its exact nine-string receipt")
+			}
+			plan, err := NewRouterImportedEntryMultihop(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
+			if err != nil {
+				t.Fatal("native constructor rejected captured packet REALITY graph", err)
+			}
+			defer plan.Close()
+			if plan.SourceSHA256() != source[7] || plan.Config() != source[8] {
+				t.Fatal("packet REALITY constructor changed exact original source bytes")
+			}
+			axes := strings.Split(strings.TrimSuffix(name, ".json"), "--")
+			var meta map[string]string
+			normalize := func(value string) string {
+				if value == "" {
+					return "off"
+				}
+				return value
+			}
+			kind := axes[0]
+			if strings.HasPrefix(kind, "openvpn-") {
+				kind = "openvpn"
+			}
+			if json.Unmarshal([]byte(plan.Metadata()), &meta) != nil || len(axes) != 4 || meta["entry_kind"] != "external" || meta["entry_mode"] != kind || meta["exit_mode"] != "reality-vision" || meta["transport_capability"] != "" || meta["packet_mtu_state"] != "" || meta["entry_api"] != "" || meta["entry_node_id"] != "" || meta["entry_token"] != "" || normalize(meta["entry_start_layer"]) != axes[2] || normalize(meta["exit_start_layer"]) != axes[3] {
+				t.Fatal("packet REALITY constructor changed captured identity or layers")
+			}
+			routerImportedPacketRealityGraph(t, plan.Config(), axes)
+			if _, err := mobilemtu.ReadProfile(plan.MTUProfile()); err != nil {
+				t.Fatal("packet REALITY lost captured final MTU authority", err)
+			}
+			if _, err := mobilemtu.NewPlan(plan.Config(), 1280); err != nil {
+				t.Fatal("packet REALITY lost retained MTU plan", err)
+			}
+			if plan.Healthy() {
+				t.Fatal("packet REALITY compilation manufactured readiness")
+			}
+			if _, err := plan.NewHopMeasurement(nil); err == nil {
+				t.Fatal("unstarted packet REALITY graph gained measurement authority")
+			}
+			if _, err := plan.NewMTU(nil, nil); err == nil {
+				t.Fatal("unstarted packet REALITY graph gained MTU authority")
+			}
+		})
+	}
+}
+func TestRouterImportedPacketRealityAppleGraphs(t *testing.T) {
+	root := os.Getenv("ROUTERVPN_APPLE_IMPORTED_PACKET_XRAY_FIXTURES")
+	if root == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_PACKET_XRAY_FIXTURES") == "1" {
+			t.Fatal("required actual Swift packet REALITY graphs absent")
+		}
+		t.Skip("actual Swift packet REALITY gate supplies exact graphs")
+	}
+	expected := routerImportedPacketRealityNames()
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != len(expected) {
+		t.Fatal("incomplete actual Swift packet REALITY graph matrix", err)
+	}
+	for _, entry := range entries {
+		t.Run(entry.Name(), func(t *testing.T) {
+			info, err := entry.Info()
+			if err != nil || !expected[entry.Name()] || entry.Type()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+				t.Fatal("unowned Swift packet REALITY graph", err)
+			}
+			raw, err := os.ReadFile(filepath.Join(root, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			routerImportedPacketRealityGraph(t, string(raw), strings.Split(strings.TrimSuffix(entry.Name(), ".json"), "--"))
+		})
+	}
+}
+func routerImportedPacketRealityGraph(t *testing.T, raw string, axes []string) {
+	t.Helper()
+	var graph map[string]any
+	if len(axes) != 4 || axes[1] != "reality-vision" || json.Unmarshal([]byte(raw), &graph) != nil {
+		t.Fatal("packet REALITY lost its original layer axes")
+	}
+	expectedType := axes[0]
+	switch expectedType {
+	case "wireguard":
+	case "amneziawg":
+		expectedType = "routervpn-amneziawg"
+	case "openvpn-tcp", "openvpn-udp":
+		expectedType = "openvpn-client"
+	default:
+		t.Fatal("packet REALITY substituted another entry family")
+	}
+	endpoints, ok := graph["endpoints"].([]any)
+	if !ok || len(endpoints) != 1 {
+		t.Fatal("packet REALITY requires exactly one original userspace endpoint")
+	}
+	first, ok := endpoints[0].(map[string]any)
+	if !ok || first["tag"] != "entry-wg" || first["type"] != expectedType || (first["system"] != nil && first["system"] != false) {
+		t.Fatal("packet REALITY changed its original userspace packet owner")
+	}
+	if mtu, ok := first["mtu"].(float64); !ok || mtu < 1280 || mtu > 65535 {
+		t.Fatal("packet REALITY lost captured entry capacity")
+	}
+	var peer map[string]any
+	if strings.HasPrefix(axes[0], "openvpn-") {
+		if first["network"] != strings.TrimPrefix(axes[0], "openvpn-") || first["username"] != " captured user " || first["password"] != " captured secret " {
+			t.Fatal("packet REALITY changed original OpenVPN wire transport or credentials")
+		}
+	} else {
+		peers, ok := first["peers"].([]any)
+		if !ok || len(peers) != 1 {
+			t.Fatal("packet REALITY changed captured peer inventory")
+		}
+		peer, ok = peers[0].(map[string]any)
+		if !ok || first["private_key"] == "" || peer["public_key"] == "" || peer["pre_shared_key"] == "" {
+			t.Fatal("packet REALITY lost original private/public/PSK identity")
+		}
+		if axes[0] == "amneziawg" {
+			parameters, ok := first["amnezia"].(map[string]any)
+			if !ok {
+				t.Fatal("packet REALITY lost original AWG parameters")
+			}
+			for _, key := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"} {
+				if value, ok := parameters[key].(string); !ok || value == "" {
+					t.Fatal("packet REALITY lost captured AWG parameter", key)
+				}
+			}
+		}
+	}
+	rows, ok := graph["outbounds"].([]any)
+	expected := 2
+	for _, layer := range axes[2:] {
+		if layer != "off" {
+			expected++
+		}
+	}
+	if !ok || len(rows) != expected {
+		t.Fatal("packet REALITY changed its exact transport closure")
+	}
+	byTag := map[string]map[string]any{}
+	for _, value := range rows {
+		node, ok := value.(map[string]any)
+		if !ok {
+			t.Fatal("invalid packet REALITY outbound")
+		}
+		tag, ok := node["tag"].(string)
+		if !ok || tag == "" || byTag[tag] != nil || tag == "entry-wg" {
+			t.Fatal("duplicate packet REALITY owner")
+		}
+		byTag[tag] = node
+		if _, exists := node["udp_over_tcp"]; exists {
+			t.Fatal("packet REALITY acquired uncaptured SS UoT authority")
+		}
+	}
+	last, selector := byTag[mobilemultihop.LocalTag], byTag["proxy"]
+	if last == nil || last["type"] != "routervpn-xray" || last["mode"] != "reality-vision" || len(last) != 5 || selector == nil || selector["type"] != "selector" || selector["default"] != mobilemultihop.LocalTag {
+		t.Fatal("packet REALITY changed original final or selector roles")
+	}
+	selected, ok := selector["outbounds"].([]any)
+	if !ok || len(selected) != 1 || selected[0] != mobilemultihop.LocalTag {
+		t.Fatal("packet REALITY selector gained a bypass")
+	}
+	checkLayer := func(node map[string]any, mode string) {
+		expected := "shadowsocks"
+		if mode == "aes-256-gcm+xor-whitening" {
+			expected = "routervpn-aes-xor"
+		}
+		if node == nil || node["type"] != expected || node["method"] != mobilemultihop.NativeStartLayerMethod || node["password"] == "" {
+			t.Fatal("packet REALITY substituted a captured Start Layer")
+		}
+	}
+	var entryOuter map[string]any
+	if axes[2] == "off" {
+		if first["detour"] != nil {
+			t.Fatal("Off packet entry acquired another physical owner")
+		}
+	} else {
+		tag, _ := first["detour"].(string)
+		entryOuter = byTag[tag]
+		if entryOuter == nil || entryOuter["detour"] != nil {
+			t.Fatal("packet REALITY entry layer bypassed original physical ownership")
+		}
+		if strings.HasPrefix(axes[0], "openvpn-") {
+			if entryOuter["type"] != nativeopenvpn.LayerMapType {
+				t.Fatal("OpenVPN REALITY lost captured remote mapper")
+			}
+			payload := map[string]any{}
+			for key, value := range entryOuter {
+				if key != "type" && key != "tag" {
+					payload[key] = value
+				}
+			}
+			encoded, err := json.Marshal(payload)
+			var mapping nativeopenvpn.LayerMap
+			if err != nil || json.Unmarshal(encoded, &mapping) != nil || mapping.Validate() != nil || mapping.Mode != axes[2] || len(mapping.Remotes) != 1 || mapping.Remotes[0].Host != "203.0.113.24" || mapping.Remotes[0].Port != 1194 || mapping.Remotes[0].Network != strings.TrimPrefix(axes[0], "openvpn-") {
+				t.Fatal("OpenVPN REALITY changed original ordered control remote or layer provision")
+			}
+		} else {
+			checkLayer(entryOuter, axes[2])
+			if peer["address"] != "10.93.0.1" {
+				t.Fatal("packet REALITY lost captured private inner service")
+			}
+		}
+	}
+	if axes[3] == "off" {
+		if last["detour"] != "entry-wg" {
+			t.Fatal("Off REALITY final bypassed original packet endpoint")
+		}
+	} else {
+		tag, _ := last["detour"].(string)
+		finalOuter := byTag[tag]
+		checkLayer(finalOuter, axes[3])
+		if tag != mobilemultihop.NativeStartLayerTag || finalOuter["detour"] != "entry-wg" {
+			t.Fatal("REALITY layer bypassed original packet endpoint")
+		}
+		if entryOuter != nil && !strings.HasPrefix(axes[0], "openvpn-") && (entryOuter["password"] == finalOuter["password"] || entryOuter["server"] == finalOuter["server"] || entryOuter["tag"] == finalOuter["tag"]) {
+			t.Fatal("packet REALITY borrowed another hop's layer credentials")
+		}
+	}
+	route, ok := graph["route"].(map[string]any)
+	if !ok || route["final"] != "proxy" {
+		t.Fatal("packet REALITY changed route selection")
+	}
+	policy, ok := graph["dns"].(map[string]any)
+	if !ok {
+		t.Fatal("packet REALITY omitted selected DNS")
+	}
+	servers, ok := policy["servers"].([]any)
+	if !ok {
+		t.Fatal("packet REALITY omitted selected resolver")
+	}
+	found := false
+	for _, value := range servers {
+		server, ok := value.(map[string]any)
+		if ok && server["tag"] == policy["final"] {
+			found = server["type"] == "udp" && server["server"] == "192.168.50.133" && server["detour"] == "proxy"
+		}
+	}
+	if !found {
+		t.Fatal("packet REALITY substituted Home DNS or its final owner")
+	}
+	if err := CheckConfig(raw); err != nil {
+		t.Fatal("actual pinned parser rejected packet REALITY graph", err)
+	}
+}

@@ -425,7 +425,7 @@ public final class ProductActivity extends Activity {
             }
             original.require(null);finalSource.require(last.file);
             if(modes.isEmpty())throw new IllegalStateException("This paired node has no complete supported final transport for the selected entry and layers.");
-            choiceDialog("Final Router transport","Choose the final transport. SOCKS5, Shadowsocks 2022, Hysteria2 and HTTP/HTTPS CONNECT entries can use a paired REALITY Vision final. Both hops keep their original credentials and Start Layers; the final node supplies the selected DNS policy. This imported path uses Local execution.")
+            choiceDialog("Final Router transport","Choose the final transport. WireGuard, AmneziaWG, OpenVPN, SOCKS5, Shadowsocks 2022, Hysteria2 and HTTP/HTTPS CONNECT entries can use a paired REALITY Vision final. Both hops keep their original credentials and Start Layers; the final node supplies the selected DNS policy. This imported path uses Local execution.")
                 .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
                     try{
                         original.require(null);finalSource.require(last.file);
