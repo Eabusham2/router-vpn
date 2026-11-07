@@ -18,6 +18,21 @@ pairs. The 346 primary captures, 32 separate CONNECT captures and 18 separate
 SS2022/Hysteria2 captures remain distinct. Actual shared, Android and Swift
 source/parser inventories pass; these are not product completion counts.
 
+The additional CONNECT source increment admits HTTP/HTTPS entries to paired
+REALITY/Vision under Local execution, with eighteen separate captures covering
+all nine independent entry/final Start Layer pairs. The final's VLESS carrier
+retains original credentials, selected DNS and explicit Vision/UDP-443 flow;
+it does not borrow SS service authority or alter the twenty raw/sixteen logical
+modes. Android restoration and the Apple picker/save/cold-capture/public
+runtime selector now agree with the shared compiler. All 172 new and 433
+retained shared race verdicts pass. Each actual Android protocol phase passes
+1,184 checks; the actual Swift producer passes 943 checks, and prior host,
+configured-CONNECT and DNS suites remain passing. Fourteen source/test files
+match the executed checkpoint, and merged runner/shipping contracts pass.
+The new native parser and encrypted CONNECT/REALITY peer stages are a separate
+pending verification; source admission does not establish a new release or
+physical-device acceptance.
+
 The exact-`46d28632` hosted reference passed all 114 new encrypted SS2022/Hysteria2
 leaves and all 139 required named verdicts, including their parent and physical
 owner checks. The original twelve plus forty-two SOCKS/REALITY leaves also pass

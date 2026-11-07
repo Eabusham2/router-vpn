@@ -20,14 +20,18 @@ type importedEntry struct {
 	openvpnMTU                          uint32
 }
 
-// NewImportedEntry composes an imported SOCKS5, SS2022, Hysteria2, WireGuard, AmneziaWG or OpenVPN predecessor and a paired
-// Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. SOCKS5, SS2022 and Hysteria2 also support
-// the paired REALITY/Vision final with independently captured Start Layers.
+// NewImportedEntry composes a captured SOCKS5, SS2022, Hysteria2, WireGuard,
+// AmneziaWG, HTTP/HTTPS CONNECT or OpenVPN predecessor and a compatible paired
+// Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. SOCKS5, SS2022, Hysteria2
+// and HTTP/HTTPS CONNECT also support the paired REALITY/Vision final with
+// independently captured Start Layers.
 // Packet-to-packet
 // composition requires the complete configured data/control envelope. SOCKS5's
 // SS/Hysteria2/WG/AWG/REALITY finals retain independently provisioned Start Layers.
 // HTTP/HTTPS CONNECT retains TCP-only SS2022 unless the captured final supplies
-// exact configured UoT-v2 authority. Compilation proves neither live identity.
+// exact configured UoT-v2 authority. Its independently captured REALITY final
+// supplies VLESS datagrams over that stream without borrowing SS authority.
+// Compilation proves neither live identity.
 func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (*Controller, error) {
 	bad := errors.New("imported entry requires a captured standalone SOCKS5, SS2022, Hysteria2, WireGuard, AmneziaWG, OpenVPN or HTTP/HTTPS CONNECT source and a compatible paired final in Local execution")
 	var selection externalPolicyCapture
@@ -35,12 +39,12 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 		return nil, bad
 	}
 	socksXrayFinal := selection.Protocol == "socks5" && exitMode == "reality-vision"
-	proxyXrayFinal := socksXrayFinal || (selection.Protocol == "shadowsocks" || selection.Protocol == "hysteria2") && exitMode == "reality-vision"
+	connectEntry := selection.Protocol == "http-connect" || selection.Protocol == "https-connect"
+	proxyXrayFinal := socksXrayFinal || (selection.Protocol == "shadowsocks" || selection.Protocol == "hysteria2" || connectEntry) && exitMode == "reality-vision"
 	if selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5" && selection.Protocol != "http-connect" && selection.Protocol != "https-connect" && selection.Protocol != "openvpn") || selection.Profile["node_kind"] != "external" || (!proxyXrayFinal && exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
 		return nil, bad
 	}
 
-	connectEntry := selection.Protocol == "http-connect" || selection.Protocol == "https-connect"
 	// An imported operator address is a public-path proof, never a paired API.
 	for _, key := range []string{"node_proof_id", "router_api", "api_token"} {
 		if v := selection.Profile[key]; v != nil && v != "" {
@@ -180,9 +184,9 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 			return nil, err
 		}
 	}
-	connectUoT := false
+	connectCapability := ""
 	if connectEntry {
-		connectUoT, err = importedCONNECTCapture(last, final, entryMeta.StartLayer, exitMode, exit.profile, exitFiles)
+		connectCapability, err = importedCONNECTCapture(last, final, entryMeta.StartLayer, exitMode, exit.profile, exitFiles)
 		if err != nil {
 			return nil, err
 		}
@@ -295,7 +299,7 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	if json.Unmarshal([]byte(configured), &last) != nil {
 		return nil, bad
 	}
-	if connectEntry && !connectUoT {
+	if connectEntry && connectCapability == "tcp-only" {
 		route := last["route"].(map[string]any)
 		route["rules"] = append(route["rules"].([]any), map[string]any{"inbound": []string{tun["tag"].(string)}, "network": "udp", "action": "reject"})
 	}
@@ -321,10 +325,7 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	}
 	meta := Metadata{EntryKind: "external", EntryID: selection.ExitID, ExitID: predecessorText(exit.profile, "id"), ExitNodeID: predecessorText(exit.profile, "node_proof_id"), ExitAPI: predecessorText(exit.profile, "router_api"), ExitToken: predecessorText(exit.profile, "api_token"), EntryTag: "entry-wg", EntryMode: selection.Protocol, ExitMode: exitMode, Execution: "local", EntryStartLayer: entryMeta.StartLayer, ExitStartLayer: predecessorText(exit.profile, "start_layer")}
 	if connectEntry {
-		meta.TransportCapability = "tcp-only"
-		if connectUoT {
-			meta.TransportCapability = "uot-v2"
-		}
+		meta.TransportCapability = connectCapability
 	}
 	if nested != nil {
 		meta.EntryPacketMTU = strconv.Itoa(entryMTU)

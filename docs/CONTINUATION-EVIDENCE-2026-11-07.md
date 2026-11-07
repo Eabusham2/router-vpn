@@ -854,6 +854,55 @@ The prior-successful-proof and OS-TUN fixture models are explicit, not device
 acceptance. Ordinary proof execution's Run callbacks, desktop legacy callbacks
 and Tor's resident/padding/Server adoption remain separate unfinished work.
 
+### Captured CONNECT entries to paired REALITY/Vision
+
+The next source increment admits HTTP and HTTPS CONNECT as Local predecessors
+of a paired REALITY/Vision final. The complete original final is validated
+before its outer stream is attached to the captured CONNECT owner. The
+`vless-stream` capability derives from that final, never from an unrelated
+SS service declaration or a caller's metadata. Each entry/final pair retains
+independent Off, AES-256-GCM and AES-256-GCM plus XOR Start Layers, giving
+eighteen separate captures across the two CONNECT protocols. The earlier
+346 primary captures, thirty-two CONNECT-to-SS entry-layer captures and
+eighteen SS2022/Hysteria2-to-REALITY captures remain distinct and preserved.
+
+Entry authentication and HTTPS trust remain with the imported node; VLESS
+credentials, REALITY keys, exact flow and private proof remain with the paired
+final. Its Home/custom DNS, encrypted transport, endpoint and hostname
+bootstrap stay on that final path. Ordinary Vision retains its UDP-443
+refusal; DoH3 or QUIC on that port requires the final's explicitly provisioned
+UDP-443 flow. This does not rewrite imported settings or add a logical mode.
+Android admission/restoration and the Apple picker, save/cold capture, public
+runtime selector and PacketTunnel builder now accept the same captured path.
+Both original node proofs and selected DNS proof still precede Connected.
+
+At checkpoint `bbb369b9`, all 172 new shared verdicts and 433 retained
+CONNECT/SOCKS/SS2022/Hysteria2 verdicts pass under race instrumentation in
+62.286 seconds, with no failures, skips or duplicate verdicts. The original
+scope fixture retains both named HTTP/HTTPS cases and now checks their exact
+captured capability; all still-unsupported combinations remain negative
+controls. Each actual Android protocol phase exports nine original graphs
+and passes 1,184 checks plus all five causal source controls. The original
+twelve CONNECT-to-SS exports and 1,162 checks also pass.
+
+The actual Swift producer exports eighteen graphs and passes 943 checks,
+including thirty-six selected-DNS/flow/bootstrap cases through the shipping
+builders, public runtime selector and real shared compiler. The separate
+picker/save/cold-capture suite preserves its 3,231-check baseline and five
+112-check REALITY entry groups, along with the older configured-CONNECT and
+selected-DNS suites. Its native readiness and storage models remain explicit.
+These are source and host-composition results, not Xcode or device evidence.
+
+All fourteen source/test files in the unit match the executed checkpoint byte
+for byte. The documentation merge preserves the entire previously published
+measurement/MTU/context section unchanged. The existing Android runner's exact
+default-phase union now includes the two new CONNECT phases, retaining all
+earlier phase and malformed-selection checks. On merged main, twenty-eight
+runner checks pass in 0.293 seconds and four shipping checks in 0.336 seconds.
+No additional heavy compiler was started while the separate actual native
+parser and encrypted-peer attempt was running. That new native increment,
+exact-SHA all-platform packaging and device acceptance remain pending.
+
 ### Bounded Fastest fixture setup and latest native observations
 
 `TestFastestSelectionUsesTrackerBeforeAppLock` previously waited forever for

@@ -302,12 +302,18 @@ func TestImportedEntrySOCKSRealityVisionKeepsScope(t *testing.T) {
 			if _, err := NewExternalPolicy(graph, externalTestJSON(t, projection)); err != nil {
 				t.Fatal("unsupported-entry control did not begin with a valid original import", err)
 			}
-			_, err := NewImportedEntry(graph, capture, source[2], source[3], source[4], source[5], source[6])
-			if protocol == "shadowsocks" || protocol == "hysteria2" {
+			plan, err := NewImportedEntry(graph, capture, source[2], source[3], source[4], source[5], source[6])
+			if protocol == "shadowsocks" || protocol == "hysteria2" || protocol == "http-connect" || protocol == "https-connect" {
 				if err != nil {
-					t.Fatal("REALITY refused a valid independently captured encrypted proxy", err)
+					t.Fatal("REALITY refused a valid independently captured proxy", err)
+				}
+				defer plan.Close()
+				if (protocol == "http-connect" || protocol == "https-connect") &&
+					(plan.meta.TransportCapability != "vless-stream" || plan.meta.EntryMode != protocol || plan.meta.EntryAPI != "" || plan.meta.EntryToken != "") {
+					t.Fatal("CONNECT acquired the wrong captured transport or Router proof authority")
 				}
 			} else if err == nil {
+				_ = plan.Close()
 				t.Fatal("REALITY admitted an unsupported imported protocol")
 			}
 		})

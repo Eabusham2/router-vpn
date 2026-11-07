@@ -169,6 +169,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   if kind != "socks5"{first.external?.socks5=nil}
   if kind=="shadowsocks"{first.external?.shadowsocks=ExternalShadowsocksConfig(server:"198.51.100.8",port:443,method:"2022-blake3-aes-256-gcm",password:Data(repeating:109,count:32).base64EncodedString())}
   if kind=="hysteria2"{first.external?.hysteria2=ExternalHysteria2Config(server:"198.51.100.8",port:443,password:" exact original Hysteria secret ",tlsServerName:"captured-external.example")}
+  if ["http-connect","https-connect"].contains(kind){let original=ExternalHTTPConnectConfig(host:"198.51.100.8",port:8443,username:" exact original user ",password:" exact original CONNECT secret ",tlsServerName:kind=="https-connect" ? "captured-connect.example":nil);if kind=="https-connect"{first.external?.httpsConnect=original}else{first.external?.httpConnect=original}}
   let original=bundle(first)
   var final=finalBundle
   final.profiles["reality-vision"]=["sing-box.json":Data("captured wrapper readiness is checked by the separate Swift/Go producer".utf8).base64EncodedString(),"xray.json":Data("complete original private Xray source".utf8).base64EncodedString()]
@@ -191,10 +192,10 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    try check("REALITY source fingerprint retains asset "+asset,next != source)
   }
   let saved=try encoded(model.bundle!),writes=model.writes
-  for kind in ["http-connect","https-connect","openvpn","wireguard","amneziawg"] {
+  for kind in ["openvpn","wireguard","amneziawg"] {
    try check("REALITY unsupported entry remains refused "+kind,!IOSImportedEntryMultihop.supports(entry:kind,final:"reality-vision"))
   }
-  for kind in ["shadowsocks","hysteria2"]{try check("REALITY supports captured encrypted proxy "+kind,IOSImportedEntryMultihop.supports(entry:kind,final:"reality-vision"))}
+  for kind in ["shadowsocks","hysteria2","http-connect","https-connect"]{try check("REALITY supports captured original proxy "+kind,IOSImportedEntryMultihop.supports(entry:kind,final:"reality-vision"))}
   for mode in ["reality-pq-vision","reality-xhttp","split","max","max-tls-wg"] {
    try check("SOCKS unrelated final remains refused "+mode,!IOSImportedEntryMultihop.supports(entry:kind,final:mode))
   }
@@ -276,6 +277,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "socks-reality" {try reality(finalBundle,paired);return}
   if CommandLine.arguments.count == 5 && CommandLine.arguments[2] == "selected-dns" { try selectedDNS(finalBundle,paired,CommandLine.arguments[3],CommandLine.arguments[4]);return }
   if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "proxy-reality" {guard ["shadowsocks","hysteria2"].contains(CommandLine.arguments[3]) else {throw IOSImportedEntryMultihop.issue()};try reality(finalBundle,paired,CommandLine.arguments[3]);return}
+  if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "connect-reality" {guard ["http-connect","https-connect"].contains(CommandLine.arguments[3]) else {throw IOSImportedEntryMultihop.issue()};try reality(finalBundle,paired,CommandLine.arguments[3]);return}
   if CommandLine.arguments.count == 4 { try configured(finalBundle,paired,CommandLine.arguments[2],CommandLine.arguments[3]);return }
   let importedBundle=bundle(imported),mixed=RouterVPNModel();mixed.bundle=finalBundle
   IOSNodeBundleStore.shared.nodes=[imported.id:try encoded(importedBundle),paired.id:try encoded(finalBundle)]
@@ -855,6 +857,11 @@ def main():
             if proxy.stdout != f'PASS {kind} REALITY host 112 checks\n':
                 raise ValueError('Missing or foreign encrypted REALITY Swift verdict: '+repr(proxy.stdout))
             print(proxy.stdout, end='', flush=True)
+        for kind in ('http-connect', 'https-connect'):
+            connect = subprocess.run([str(work / 'test'), str(compiler), 'connect-reality', kind], env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
+            if connect.stdout != f'PASS {kind} REALITY host 112 checks\n':
+                raise ValueError('Missing or foreign CONNECT REALITY Swift verdict: '+repr(connect.stdout))
+            print(connect.stdout, end='', flush=True)
         # Each additional configured transport/layer runs with the original
         # process budget; all four DNS selections and refusal controls remain.
         for kind in ('http-connect', 'https-connect'):

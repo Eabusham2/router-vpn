@@ -6,20 +6,39 @@ import (
 	"router-vpn/internal/nativecomposite"
 )
 
-// CONNECT carries streams only. Datagram carriage requires the final node's
-// exact configured SS UoT-v2 authority; this is not a live receiver proof.
-// Without that authority the original TCP-only composition remains unchanged.
-func importedCONNECTCapture(graph, final map[string]any, entryLayer, mode string, profile map[string]any, files string) (bool, error) {
-	bad := errors.New("CONNECT requires its captured independent entry layer and SS final: TCP-only without service authority, or explicit UoT-v2 authority for UDP and final Start Layers")
+// CONNECT carries streams only. The independently validated REALITY final has
+// its own VLESS datagram carrier. SS instead requires the final node's exact
+// configured UoT-v2 authority; without it the existing TCP-only path remains.
+// None of these configured capabilities proves a live receiver or selected DNS.
+func importedCONNECTCapture(graph, final map[string]any, entryLayer, mode string, profile map[string]any, files string) (string, error) {
+	bad := errors.New("CONNECT requires its captured independent entry layer and a paired REALITY/Vision or SS2022 final with its own transport authority")
 	off := func(s string) bool { return s == "" || s == "off" }
 	// NewExternalPolicy has validated and retained this entry's independently
 	// provisioned wrapper. It does not supply the final's UoT or layer authority.
 	if !off(entryLayer) && entryLayer != "aes-256-gcm" && entryLayer != "aes-256-gcm+xor-whitening" {
-		return false, bad
+		return "", bad
+	}
+	if mode == "reality-vision" {
+		// NewNodeProfile and the exact Xray/layer validators run before this
+		// branch and before an outer CONNECT detour is attached. Derive this
+		// capability only from their real native VLESS final, never from an SS
+		// service claim, inline UoT option or a caller-supplied metadata label.
+		if final["type"] != "routervpn-xray" || final["mode"] != mode {
+			return "", bad
+		}
+		for _, key := range []string{"udp_over_tcp", "network"} {
+			if _, present := final[key]; present {
+				return "", bad
+			}
+		}
+		if err := importedCONNECTDNS(graph, true); err != nil {
+			return "", err
+		}
+		return "vless-stream", nil
 	}
 	assets, err := nodeProfileAssets(files)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	defer func() {
 		for _, data := range assets {
@@ -29,7 +48,7 @@ func importedCONNECTCapture(graph, final map[string]any, entryLayer, mode string
 	_, authorized := assets[nativecomposite.SSServiceAsset]
 	if authorized {
 		if err := ValidateCapturedSSService(files, predecessorText(profile, "node_proof_id")); err != nil {
-			return false, err
+			return "", err
 		}
 	}
 	layer := predecessorText(profile, "start_layer")
@@ -38,25 +57,25 @@ func importedCONNECTCapture(graph, final map[string]any, entryLayer, mode string
 		expectedType = "routervpn-aes-xor"
 	}
 	if mode != "shadowsocks" || final["type"] != expectedType || !importedSS2022Method(predecessorText(final, "method")) || predecessorText(final, "detour") != "" {
-		return false, bad
+		return "", bad
 	}
 	if !off(layer) && (!authorized || (layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening")) {
-		return false, bad
+		return "", bad
 	}
 	// Inline options never supply authority. The separately captured declaration
 	// is validated against the original six-field source before graph derivation.
 	if _, present := final["udp_over_tcp"]; present {
-		return false, bad
+		return "", bad
 	}
 	if err := importedCONNECTDNS(graph, authorized); err != nil {
-		return false, err
+		return "", err
 	}
 	if authorized {
 		final["udp_over_tcp"] = map[string]any{"enabled": true, "version": float64(2)}
-	} else {
-		final["network"] = "tcp"
+		return "uot-v2", nil
 	}
-	return authorized, nil
+	final["network"] = "tcp"
+	return "tcp-only", nil
 }
 
 // NewNodeProfile owns policy selection and bootstrap capture. This checks only

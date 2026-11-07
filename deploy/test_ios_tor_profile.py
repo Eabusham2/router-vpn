@@ -1062,6 +1062,11 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
  }
  @MainActor static func run()throws {
   defer{RouterVPNTorTestClose()}
+  if ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_IMPORTED_CONNECT_XRAY_FIXTURES"] != nil {
+   try importedSOCKSRealityGraph(connects:true)
+   print("Apple CONNECT REALITY entries: PASS (18 separate original captures; \(checks) shipping Swift/actual Go checks; no native network proof)")
+   return
+  }
   if ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_IMPORTED_PROXY_XRAY_FIXTURES"] != nil {
    try importedSOCKSRealityGraph(proxies:true)
    print("Apple encrypted REALITY entries: PASS (18 separate original captures; \(checks) shipping Swift/actual Go checks; no native network proof)")
@@ -1134,11 +1139,11 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try ordinaryTorPredecessors(padding:true)
   try check("complete enabled padding matrix",paddingGraphs==528)
  }
- @MainActor static func importedSOCKSRealityGraph(proxies:Bool=false)throws {
-  guard let directory=ProcessInfo.processInfo.environment[proxies ? "ROUTERVPN_IOS_IMPORTED_PROXY_XRAY_SOURCES":"ROUTERVPN_IOS_IMPORTED_REALITY_SOURCES"] else {throw NSError(domain:"fixture",code:1)}
+ @MainActor static func importedSOCKSRealityGraph(proxies:Bool=false,connects:Bool=false)throws {
+  guard !(proxies && connects),let directory=ProcessInfo.processInfo.environment[connects ? "ROUTERVPN_IOS_IMPORTED_CONNECT_XRAY_SOURCES":proxies ? "ROUTERVPN_IOS_IMPORTED_PROXY_XRAY_SOURCES":"ROUTERVPN_IOS_IMPORTED_REALITY_SOURCES"] else {throw NSError(domain:"fixture",code:1)}
   let files=try FileManager.default.contentsOfDirectory(at:URL(fileURLWithPath:directory),includingPropertiesForKeys:nil).filter{$0.pathExtension=="json"}.sorted{$0.lastPathComponent<$1.lastPathComponent}
   var expected=Set<String>()
-  if proxies {for kind in ["shadowsocks","hysteria2"] {for first in layers {for last in layers {expected.insert(kind+"--reality-vision--"+first+"--"+last+".json")}}}}
+  if proxies || connects {for kind in (connects ? ["http-connect","https-connect"]:["shadowsocks","hysteria2"]) {for first in layers {for last in layers {expected.insert(kind+"--reality-vision--"+first+"--"+last+".json")}}}}
   else {for first in layers {for last in layers {
    var name="socks5--final-reality-vision"
    if first=="off" && last != "off"{name += "--"+last}
@@ -1146,13 +1151,13 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    else if first != "off" && last != "off"{name += "--"+first+"--"+last}
    expected.insert(name+".json")
   }}}
-  try check("REALITY exact independent layer source inventory",files.count==(proxies ? 18:9) && Set(files.map{$0.lastPathComponent})==expected)
+  try check("REALITY exact independent layer source inventory",files.count==((proxies || connects) ? 18:9) && Set(files.map{$0.lastPathComponent})==expected)
   for file in files {
   let source=try JSONDecoder().decode([String].self,from:Data(contentsOf:file))
   try check("REALITY source retains exact seven arguments plus digest/config",source.count==9 && source[2]=="reality-vision")
   let capture=try object(Data(source[1].utf8)),entry=capture["profile"] as! [String:Any]
   let kind=capture["protocol"] as! String
-  try check("REALITY source retains selected imported protocol",(proxies ? ["shadowsocks","hysteria2"]:["socks5"]).contains(kind))
+  try check("REALITY source retains selected imported protocol",(connects ? ["http-connect","https-connect"]:proxies ? ["shadowsocks","hysteria2"]:["socks5"]).contains(kind))
   var final=try object(Data(source[4].utf8))
   let entryLayer=(entry["start_layer"] as? String).flatMap{$0.isEmpty ? nil:$0} ?? "off"
   let finalLayer=(final["start_layer"] as? String).flatMap{$0.isEmpty ? nil:$0} ?? "off"
@@ -1168,16 +1173,25 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   if finalLayer != "off"{try check("REALITY final layer retains its exact original AES map",try json(object(Data(last.start.utf8)))==json(object(Data(source[5].utf8))))}
   let args=["config":raw.config,"capture":raw.capture,"mode":last.mode,"files":last.files,"start":last.start,"profile":try text(final),"dns":source[6]]
   let encoded=try bridge(["Op":"imported-router","Config":text(args)]),graph=try object(Data(encoded.utf8)),first=try tagged(graph,"entry-wg"),lastNative=try tagged(graph,"routervpn-execution-local")
-  let external=entry["external"] as! [String:Any],auth=external[kind] as! [String:Any]
-  try check("REALITY final uses exact captured proxy authentication",first["type"] as? String==(kind=="socks5" ? "socks":kind) && first["password"] as? String==auth["password"] as? String && lastNative["type"] as? String=="routervpn-xray" && lastNative["mode"] as? String=="reality-vision")
+  let external=entry["external"] as! [String:Any],authKey=connects ? kind.replacingOccurrences(of:"-",with:"_"):kind,auth=external[authKey] as! [String:Any]
+  try check("REALITY final uses exact captured proxy authentication",first["type"] as? String==(connects ? "http":kind=="socks5" ? "socks":kind) && first["password"] as? String==auth["password"] as? String && lastNative["type"] as? String=="routervpn-xray" && lastNative["mode"] as? String=="reality-vision")
   if kind=="socks5"{try check("REALITY preserves original SOCKS username",first["username"] as? String==auth["username"] as? String)}
+  if connects {
+   let metadata=try object(Data(try bridge(["Op":"imported-router-metadata","Config":text(args)]).utf8))
+   try check("CONNECT REALITY derives VLESS stream authority without SS service",metadata["transport_capability"] as? String=="vless-stream" && assets["routervpn-ss-service.json"]==nil && first["username"] as? String==auth["username"] as? String && first["server_port"] as? Int==auth["port"] as? Int)
+   if kind=="https-connect"{let tls=first["tls"] as! [String:Any];try check("HTTPS REALITY retains original TLS identity",tls["enabled"] as? Bool==true && tls["insecure"] as? Bool != true && tls["server_name"] as? String==auth["tls_server_name"] as? String)}
+   else{try check("HTTP REALITY does not synthesize TLS",first["tls"]==nil)}
+   for outbound in graph["outbounds"] as! [[String:Any]]{try check("CONNECT REALITY cannot borrow SS UoT authority",outbound["udp_over_tcp"]==nil)}
+   var foreign=maps,changedAssets=assets;changedAssets["routervpn-ss-service.json"]=Data("foreign SS authority".utf8).base64EncodedString();foreign["reality-vision"]=changedAssets
+   reject("CONNECT REALITY rejects foreign service attached to original final"){try IOSImportedEntryMultihop.validate(entry:entry,final:final,profiles:foreign)}
+  }
   if kind=="shadowsocks"{try check("REALITY preserves original SS2022 method",first["method"] as? String==auth["method"] as? String)}
   if kind=="hysteria2"{let tls=first["tls"] as! [String:Any];try check("REALITY preserves original Hysteria TLS identity",tls["enabled"] as? Bool==true && tls["insecure"] as? Bool != true && tls["server_name"] as? String==auth["tls_server_name"] as? String)}
   let originalGraph=try object(Data(source[8].utf8)),originalNative=try tagged(originalGraph,"routervpn-execution-local")
   let originalXray=try object(Data((originalNative["config_json"] as! String).utf8)),compiledXray=try object(Data((lastNative["config_json"] as! String).utf8))
   try check("REALITY compiler retains exact original Xray credentials and captured private service",try json(originalXray)==json(compiledXray))
   if entryLayer=="off"{
-   try check("REALITY Off entry retains original physical owner",first["detour"]==nil && first["server"] as? String==auth[kind=="socks5" ? "host":"server"] as? String)
+   try check("REALITY Off entry retains original physical owner",first["detour"]==nil && first["server"] as? String==auth[(kind=="socks5" || connects) ? "host":"server"] as? String)
   }else{
    let provision=external["start_layer"] as! [String:Any],transport=provision["transport"] as! [String:Any],tag=first["detour"] as! String,outer=try tagged(graph,tag)
    try check("REALITY entry layer retains original key endpoint codec and bottom edge",outer["password"] as? String==transport["password"] as? String && outer["server"] as? String==transport["server"] as? String && outer["type"] as? String==(entryLayer=="aes-256-gcm+xor-whitening" ? "routervpn-aes-xor":"shadowsocks") && outer["detour"]==nil && first["server"] as? String==URL(string:provision["api"] as! String)?.host)
@@ -1203,7 +1217,8 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   selected.routerProfiles=[try JSONDecoder().decode(RouterProfile.self,from:json(profile))];selected.selectedRouterID=final["id"] as! String;selected.profiles=maps
   let selection=try IOSRuntimeSelector.selectMultihop(bundle:selected,rawProfileID:nil)
   try check("REALITY public runtime retains exact Local final",selection.engine == .multihop && selection.rawProfileID=="reality-vision" && selection.multihopEntryMode==kind)
-  if proxies {
+  if connects && entryLayer=="off" && finalLayer=="off"{try importedCONNECTRealityDNS(entry:entry,baseline:selected)}
+  if proxies || connects {
    let entryBundle:[String:Any]=["selectedRouterID":entry["id"]!,"routerProfiles":[entry],"profiles":[String:[String:String]]()]
    let configuration:[String:Any]=["engine":"multihop-libbox","mode":"reality-vision","bundle":try JSONEncoder().encode(selected),"entryBundle":try json(entryBundle)]
    func sourceIdentity(_ value:[String:Any])throws->IOSMultihopExecution.Source{try IOSMultihopExecution.Source(configuration:value,digest:{SHA256.hash(data:$0).map{String(format:"%02x",$0)}.joined()})}
@@ -1212,7 +1227,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    for execution in ["server","auto"]{var changed=selected;changed.routerProfiles[0].multihopExecution=execution;var value=configuration;value["bundle"]=try JSONEncoder().encode(changed);reject("REALITY actual captured proxy cannot acquire "+execution){_ = try sourceIdentity(value)}}
    for role in ["entry","final"] {
     var value=configuration
-    if role=="entry"{var replaced=entry,ext=external,transport=auth;transport["password"]="changed-original-secret";ext[kind]=transport;replaced["external"]=ext;var bundle=entryBundle;bundle["routerProfiles"]=[replaced];value["entryBundle"]=try json(bundle)}
+    if role=="entry"{var replaced=entry,ext=external,transport=auth;transport["password"]="changed-original-secret";ext[authKey]=transport;replaced["external"]=ext;var bundle=entryBundle;bundle["routerProfiles"]=[replaced];value["entryBundle"]=try json(bundle)}
     else{var changed=selected,files=assets;files["xray.json"]=files["xray.json"]!+" ";changed.profiles["reality-vision"]=files;value["bundle"]=try JSONEncoder().encode(changed)}
     reject("REALITY startup refuses substituted original "+role){_ = try IOSMultihopExecution.StartupChoice.decode(receipt,source:sourceIdentity(value))}
    }
@@ -1239,16 +1254,55 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    var changed=final;changed["multihop_execution"]=execution
    reject("REALITY refuses unsupported execution "+execution){try IOSImportedEntryMultihop.validate(entry:entry,final:changed,profiles:maps)}
    var saved=selected;saved.routerProfiles[0].multihopExecution=execution
-   if kind=="socks5"{reject("REALITY runtime refuses unsupported execution "+execution){_ = try IOSRuntimeSelector.selectMultihop(bundle:saved,rawProfileID:nil)}}
+   if kind=="socks5" || connects{reject("REALITY runtime refuses unsupported execution "+execution){_ = try IOSRuntimeSelector.selectMultihop(bundle:saved,rawProfileID:nil)}}
   }
   for name in ["xray.json","sing-box.json"] {
    var changed=assets;changed.removeValue(forKey:name);var missing=args;missing["files"]=try text(changed)
    reject("REALITY compiler requires original "+name){_ = try bridge(["Op":"imported-router","Config":text(missing)])}
   }
-  if let directory=ProcessInfo.processInfo.environment[proxies ? "ROUTERVPN_APPLE_IMPORTED_PROXY_XRAY_FIXTURES":"ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS"] {
+  if let directory=ProcessInfo.processInfo.environment[connects ? "ROUTERVPN_APPLE_IMPORTED_CONNECT_XRAY_FIXTURES":proxies ? "ROUTERVPN_APPLE_IMPORTED_PROXY_XRAY_FIXTURES":"ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS"] {
    try Data(encoded.utf8).write(to:URL(fileURLWithPath:directory).appendingPathComponent(file.lastPathComponent),options:.withoutOverwriting)
   }
   }
+ }
+ @MainActor static func importedCONNECTRealityDNS(entry:[String:Any],baseline:ClientBundle)throws {
+  let original=try object(JSONEncoder().encode(baseline.routerProfiles[0])),raw=try RouterVPNExternalExitBuilder.importedRouterSource(profile:entry)
+  let originalBytes=try json(object(JSONEncoder().encode(baseline))),entryBundle:[String:Any]=["selectedRouterID":entry["id"]!,"routerProfiles":[entry],"profiles":[String:[String:String]]()]
+  var cases=0
+  for flow in ["xtls-rprx-vision","xtls-rprx-vision-udp443"] {for transport in ["udp","tcp","tls","https","h3"] {for hostname in [false,true] {
+   if transport=="h3" && flow=="xtls-rprx-vision"{continue}
+   var final=original,maps=baseline.profiles,assets=maps["reality-vision"]!,xray=try object(Data(base64Encoded:maps["reality-vision"]!["xray.json"]!)!)
+   var outbounds=xray["outbounds"] as! [[String:Any]],out=outbounds[0],settings=out["settings"] as! [String:Any],peers=settings["vnext"] as! [[String:Any]],peer=peers[0],users=peer["users"] as! [[String:Any]]
+   users[0]["flow"]=flow;peer["users"]=users;peers[0]=peer;settings["vnext"]=peers;out["settings"]=settings;outbounds[0]=out;xray["outbounds"]=outbounds
+   assets["xray.json"]=try json(xray).base64EncodedString();maps["reality-vision"]=assets
+   let port=transport=="h3" ? 443:8853
+   final["dns_mode"]=["tls":"dot","https":"doh","h3":"doh3"][transport] ?? "custom";final["dns_protocol"]=transport;final["dns_host"]=hostname ? "resolver.example.net":"203.0.113.53";final["dns_port"]=port;final["dns_server_name"]="resolver.example.net";final["dns_path"]="/owned-dns-query"
+   var bootstrap=""
+   if hostname{let policy:[String:Any]=["server":["type":"udp","tag":"external-dns-bootstrap","server":"203.0.113.54","server_port":5354,"detour":"proxy"],"query":["server":"external-dns-bootstrap","timeout":"3s","disable_optimistic_cache":true]];final["dns_bootstrap"]=policy;bootstrap=try text(policy)}
+   try IOSImportedEntryMultihop.validate(entry:entry,final:final,profiles:maps)
+   let last=try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:maps),args=["config":raw.config,"capture":raw.capture,"mode":last.mode,"files":last.files,"start":last.start,"profile":try text(final),"dns":bootstrap]
+   let graph=try object(Data(bridge(["Op":"imported-router","Config":text(args)]).utf8)),dns=((graph["dns"] as! [String:Any])["servers"] as! [[String:Any]])[0]
+   try check("CONNECT REALITY keeps selected DNS type address port and final route",dns["type"] as? String==transport && dns["server"] as? String==final["dns_host"] as? String && dns["server_port"] as? Int==port && dns["detour"] as? String=="proxy")
+   if ["tls","https","h3"].contains(transport){try check("CONNECT REALITY keeps selected DNS TLS identity",(dns["tls"] as? [String:Any])?["server_name"] as? String=="resolver.example.net")}
+   if ["https","h3"].contains(transport){try check("CONNECT REALITY keeps selected DNS request path",dns["path"] as? String=="/owned-dns-query")}
+   let native=try object(Data((tagged(graph,"routervpn-execution-local")["config_json"] as! String).utf8)),nativeOut=(native["outbounds"] as! [[String:Any]])[0],nativePeer=((nativeOut["settings"] as! [String:Any])["vnext"] as! [[String:Any]])[0]
+   try check("CONNECT REALITY keeps explicit original flow assets",((nativePeer["users"] as! [[String:Any]])[0]["flow"] as? String)==flow && json(object(Data(last.files.utf8)))==json(assets))
+   var selected=baseline;selected.profiles=maps;selected.routerProfiles=[try JSONDecoder().decode(RouterProfile.self,from:json(final))]
+   let chosen=try IOSRuntimeSelector.selectMultihop(bundle:selected,rawProfileID:nil)
+   try check("CONNECT REALITY selected DNS reaches actual runtime selection",chosen.engine == .multihop && chosen.rawProfileID=="reality-vision")
+   let configuration:[String:Any]=["engine":"multihop-libbox","mode":"reality-vision","bundle":try JSONEncoder().encode(selected),"entryBundle":try json(entryBundle)]
+   func captured(_ value:[String:Any])throws->IOSMultihopExecution.Source{try IOSMultihopExecution.Source(configuration:value,digest:{SHA256.hash(data:$0).map{String(format:"%02x",$0)}.joined()})}
+   let identity=try captured(configuration),receipt=try IOSMultihopExecution.StartupChoice(source:identity,execution:"local").encoded()
+   try check("CONNECT REALITY selected DNS retains captured Local choice",try IOSMultihopExecution.StartupChoice.decode(receipt,source:identity).source==identity)
+   if hostname{
+    try check("CONNECT REALITY keeps complete selected bootstrap/query",try text(object(Data(args["dns"]!.utf8)))==text(final["dns_bootstrap"]!))
+    var changed=final,policy=final["dns_bootstrap"] as! [String:Any],server=policy["server"] as! [String:Any];server["server"]="203.0.113.99";policy["server"]=server;changed["dns_bootstrap"]=policy
+    var replacement=selected;replacement.routerProfiles=[try JSONDecoder().decode(RouterProfile.self,from:json(changed))];var next=configuration;next["bundle"]=try JSONEncoder().encode(replacement)
+    reject("CONNECT REALITY changed bootstrap cannot restore original choice"){_ = try IOSMultihopExecution.StartupChoice.decode(receipt,source:captured(next))}
+   }
+   cases+=1
+  }}}
+  try check("CONNECT REALITY selected DNS covers exact original choices without source mutation",cases==18 && json(object(JSONEncoder().encode(baseline)))==originalBytes)
  }
  @MainActor static func importedOpenVPNRouterGraphs()throws {
   guard let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_OPENVPN_SOURCES"] else { throw NSError(domain:"fixture",code:1,userInfo:[NSLocalizedDescriptionKey:"Original OpenVPN source matrix is required"] ) }
@@ -1868,6 +1922,13 @@ def main():
             raise ValueError('ROUTERVPN_APPLE_IMPORTED_PROXY_XRAY_FIXTURES must name an existing empty owned directory')
         if connect_output is not None or imported_output is not None or external_output is not None or args.output or args.padding_output or args.entry_output or args.openvpn_probes_only or os.environ.get('ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY') == '1':
             raise ValueError('Encrypted REALITY evidence is separate from established graph inventories')
+    connect_xray_output = os.environ.get('ROUTERVPN_APPLE_IMPORTED_CONNECT_XRAY_FIXTURES')
+    if connect_xray_output is not None:
+        destination = Path(connect_xray_output)
+        if not connect_xray_output or not destination.is_dir() or destination.is_symlink() or any(destination.iterdir()):
+            raise ValueError('ROUTERVPN_APPLE_IMPORTED_CONNECT_XRAY_FIXTURES must name an existing empty owned directory')
+        if proxy_output is not None or connect_output is not None or imported_output is not None or external_output is not None or args.output or args.padding_output or args.entry_output or args.openvpn_probes_only or os.environ.get('ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY') == '1':
+            raise ValueError('CONNECT REALITY evidence is separate from established graph inventories')
     for tool in ('go', 'swiftc'):
         if not shutil.which(tool):
             raise RuntimeError(tool + ' is required')
@@ -1907,7 +1968,7 @@ def main():
         command = ['swiftc', '-swift-version', '6', '-module-cache-path', str(work / 'module-cache'), '-I', str(work), '-L', str(work), '-lWireGuardKit', '-lLibbox']
         # Shipping Apple uses platform CryptoKit. This separate portable gate
         # uses the existing bounded Go SHA-256 boundary, never a canned digest.
-        crypto_flags, crypto_env = CRYPTO.prepare(work / 'crypto') if connect_output is not None or proxy_output is not None else ([], {})
+        crypto_flags, crypto_env = CRYPTO.prepare(work / 'crypto') if connect_output is not None or proxy_output is not None or connect_xray_output is not None else ([], {})
         command += crypto_flags
         if platform.system() != 'Darwin':
             command += ['-lNetwork']
@@ -1943,6 +2004,11 @@ def main():
             proxy_sources.mkdir()
             subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedProxyRealityVisionIndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ, ROUTERVPN_IMPORTED_PROXY_XRAY_FIXTURES=str(proxy_sources)), check=True, timeout=45)
             environment['ROUTERVPN_IOS_IMPORTED_PROXY_XRAY_SOURCES'] = str(proxy_sources)
+        if connect_xray_output is not None:
+            connect_xray_sources = work / 'connect-reality-sources'
+            connect_xray_sources.mkdir()
+            subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedCONNECTRealityVisionIndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ, ROUTERVPN_IMPORTED_CONNECT_XRAY_FIXTURES=str(connect_xray_sources)), check=True, timeout=45)
+            environment['ROUTERVPN_IOS_IMPORTED_CONNECT_XRAY_SOURCES'] = str(connect_xray_sources)
         environment.pop('ROUTERVPN_IOS_OPENVPN_PROBES_ONLY', None)
         environment.pop('ROUTERVPN_IOS_PADDING_ONLY', None)
         environment.pop('ROUTERVPN_IOS_LOCAL_PADDING_GRAPHS', None)
