@@ -746,14 +746,16 @@ func desktopPacketRealityNew(t *testing.T, kind, firstLayer, lastLayer, fault st
 	if openvpnPeer != nil {
 		f.openvpn = f.first.(*OV.ClientEndpoint)
 	}
+	// Packet endpoint startup may immediately launch receive workers whose
+	// detours read this same manager. Complete its immutable catalog first.
+	if lastLayer != "off" {
+		f.manager.owners[mobilemultihop.NativeStartLayerTag] = desktopImportedSOCKSNativeLayer(t, owned, byTag[mobilemultihop.NativeStartLayerTag])
+	}
 	for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
 		if err := f.first.(adapter.Lifecycle).Start(stage); err != nil {
 			f.startErr = err
 			return f
 		}
-	}
-	if lastLayer != "off" {
-		f.manager.owners[mobilemultihop.NativeStartLayerTag] = desktopImportedSOCKSNativeLayer(t, owned, byTag[mobilemultihop.NativeStartLayerTag])
 	}
 	finalCtx, cancelFinal := context.WithCancel(owned)
 	f.owned, f.cancelFinal = finalCtx, cancelFinal
