@@ -107,6 +107,8 @@ def inputs():
     files = list(dict.fromkeys([Path(__file__).resolve(), ROOT/'deploy/build-desktop-pq.py',
                              ROOT/'deploy/windows_build_owner.py',
                              ROOT/'deploy/test_windows_build_owner.py',
+                             ROOT/'deploy/test_desktop_pt_inventory.py',
+                             ROOT/'deploy/test_desktop_pt_inventory_runner.py',
                              ROOT/'deploy/build-mobile-pq.py', ROOT/'deploy/prepare-desktop-rosenpass.py',
                              ROOT/'deploy/setup-desktop-native-toolchain.py',
                              ROOT/'deploy/install-desktop-windows-toolchain.py',
@@ -752,9 +754,9 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './cmd/sing-box', '-run', '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
-            run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', './routervpn/desktoppt', '-run', '^Test(RouterVPN(DesktopTorPT|ExternalPhysical|NodePhysicalUnix|PhysicalFactory|PhysicalTunnel|LinuxPhysicalFactory|DarwinPhysicalFactory|WindowsPhysicalFactory)|DesktopTorNetworkOwner)',
-                 '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
+            run([sys.executable, ROOT/'deploy/test_desktop_pt_inventory.py', source,
+                 '--tags='+','.join(tags(target)), *(['--without-race'] if not race else [])],
+                cwd=source, env=env, timeout=600)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './routervpn/mobiletor', '-run', '^TestDesktopSocket',
                  '-count=1', '-timeout=60s'], cwd=source, env=env, timeout=120)

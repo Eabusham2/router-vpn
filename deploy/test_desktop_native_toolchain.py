@@ -27,6 +27,7 @@ spec = importlib.util.spec_from_file_location('desktop_native_build_test', ROOT/
 N = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(N)
 PHYSICAL = N.load('desktop_native_windows_physical_test', 'test_windows_node_physical.py')
+PT = N.load('desktop_native_pt_inventory_test', 'test_desktop_pt_inventory.py')
 
 
 def file(path, data=b'tool', executable=False):
@@ -40,6 +41,11 @@ def file(path, data=b'tool', executable=False):
 class NativeSocketUIDGate(unittest.TestCase):
     def test_matching_hosts_require_actual_unix_uid_or_windows_identity_gate(self):
         self.check_matching_hosts()
+
+    def test_failed_or_timed_out_desktop_pt_inventory_cannot_reach_later_gates_or_compilation(self):
+        for failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            with self.subTest(failure=failure.__name__):
+                self.check_matching_hosts(desktop_pt_failure=failure)
 
     def test_failed_or_timed_out_node_gate_cannot_reach_later_gates_or_compilation(self):
         for failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired):
@@ -86,7 +92,7 @@ class NativeSocketUIDGate(unittest.TestCase):
             with self.subTest(failure=failure.__name__):
                 self.check_matching_hosts(physical_failure=failure)
 
-    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None, darwin_route_failure=None, physical_failure=None, command_retirement_failure=None, socks_reference_failure=None, proxy_reference_failure=None, dns_reference_failure=None):
+    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None, darwin_route_failure=None, physical_failure=None, command_retirement_failure=None, socks_reference_failure=None, proxy_reference_failure=None, dns_reference_failure=None, desktop_pt_failure=None):
         class CompilerBoundary(Exception):
             pass
 
@@ -116,6 +122,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 socks_reference_errors = []
                 proxy_reference_errors = []
                 dns_reference_errors = []
+                desktop_pt_errors = []
                 references = {
                     str(ROOT/'deploy/test_mobile_imported_socks_xray.py'):
                         (['--reference-only'], socks_reference_failure, socks_reference_errors, 'SOCKS REALITY'),
@@ -133,6 +140,19 @@ class NativeSocketUIDGate(unittest.TestCase):
                         return N.TOOLCHAIN
                     if args[:2] == ['go', 'build']:
                         raise CompilerBoundary()
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_pt_inventory.py'):
+                        self.assertEqual(args[2:], [str(source.resolve()), '--tags='+','.join(N.tags(target)),
+                                                   *(['--without-race'] if target == 'windows/arm64' else [])])
+                        self.assertEqual(kwargs['cwd'], source.resolve())
+                        self.assertIs(kwargs['env'], env)
+                        self.assertEqual(kwargs['timeout'], 600)
+                        if desktop_pt_failure is not None:
+                            error = (desktop_pt_failure(43, args, output=b'original PT inventory failure')
+                                     if desktop_pt_failure is subprocess.CalledProcessError else
+                                     desktop_pt_failure(args, kwargs['timeout'], output=b'original PT inventory timeout'))
+                            desktop_pt_errors.append(error)
+                            raise error
+                        return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_socket_uid.py'):
                         self.assertIn(system, ('linux', 'darwin'))
                         self.assertEqual(args[2:], [str(source.resolve())])
@@ -483,7 +503,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                      patch.object(N.EXTERNAL, 'prepare'), patch.object(N.POLICY.AMNEZIA, 'verify'), \
                      patch.object(N.DNSSEC, 'build', side_effect=build_dnssec) as dnssec, \
                      patch.object(N, 'stage_cronet', side_effect=stage_cronet):
-                    expected_error = physical_failure or command_retirement_failure or darwin_route_failure or forwarder_failure or socks_reference_failure or proxy_reference_failure or dns_reference_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
+                    expected_error = desktop_pt_failure or physical_failure or command_retirement_failure or darwin_route_failure or forwarder_failure or socks_reference_failure or proxy_reference_failure or dns_reference_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
                                                           openvpn_failure if openvpn_failure is not None and system == 'linux' else CompilerBoundary)
                     with self.assertRaises(expected_error) as caught:
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
@@ -491,6 +511,12 @@ class NativeSocketUIDGate(unittest.TestCase):
                     dnssec.assert_called_once_with(target, dnssec_destination, compiled=None, env=env)
                 else:
                     dnssec.assert_not_called()
+                if desktop_pt_errors:
+                    self.assertEqual(len(desktop_pt_errors), 1)
+                    self.assertIs(caught.exception, desktop_pt_errors[0])
+                    self.assertEqual(calls[-1][1], str(ROOT/'deploy/test_desktop_pt_inventory.py'))
+                    self.assertFalse(any(args[:2] == ['go', 'build'] for args in calls))
+                    continue
                 if physical_failure:
                     phases = [args[4] for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_physical.py')]
                     self.assertEqual(phases, list(PHYSICAL.PHASES[:5]))
@@ -634,11 +660,14 @@ class NativeSocketUIDGate(unittest.TestCase):
                                    'mobile/pq/native_factory_real_test.go.tmpl', 'mobile/pq/native_traffic_test.go.tmpl',
                                    'mobile/desktop/node_pq_peer_test.go.tmpl', 'mobile/amnezia/pq_reference_fixture.go.tmpl'):
                     self.assertIn(ROOT/dependency, N.inputs())
-                native_factory = [args for args in calls if args[:2] == ['go', 'test'] and './routervpn/desktoppt' in args]
+                native_factory = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_pt_inventory.py')]
                 self.assertEqual(len(native_factory), 1)
-                selector = native_factory[0][native_factory[0].index('-run') + 1]
                 for name in ('CapturesPolicyAndRetainsLateOwner', 'RejectsUncapturedSourceBeforeConstructor', 'CloseJoinsLateFactoryAndRetriesSource'):
-                    self.assertRegex('TestRouterVPNNodePhysicalUnix' + name, selector)
+                    self.assertRegex('TestRouterVPNNodePhysicalUnix' + name, PT.SELECTION)
+                    if system != 'windows':
+                        self.assertIn('TestRouterVPNNodePhysicalUnix' + name, PT.expected_roots(system))
+                for name in ('test_desktop_pt_inventory.py', 'test_desktop_pt_inventory_runner.py'):
+                    self.assertIn(ROOT/'deploy'/name, N.inputs())
                 self.assertIn(ROOT/'go.mod', N.inputs())
                 self.assertIn(ROOT/'cmd/start-layer-relay/main.go', N.inputs())
                 if (ROOT/'go.sum').exists() or (ROOT/'go.sum').is_symlink():
@@ -782,10 +811,10 @@ class NativeSocketUIDGate(unittest.TestCase):
                 for dependency in ('deploy/test_desktop_darwin_route.py', 'deploy/test_desktop_darwin_route_runner.py',
                                    'mobile/desktop/sing_tun_route_darwin_test.go.tmpl'):
                     self.assertIn(ROOT/dependency, N.inputs())
-                physical = [args for args in calls if './routervpn/desktoppt' in args]
+                physical = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_pt_inventory.py')]
                 self.assertEqual(len(physical), 1)
-                self.assertIn('PhysicalFactory|PhysicalTunnel|LinuxPhysicalFactory', physical[0][physical[0].index('-run') + 1])
-                self.assertIn('DarwinPhysicalFactory|WindowsPhysicalFactory', physical[0][physical[0].index('-run') + 1])
+                self.assertIn('PhysicalFactory|PhysicalTunnel|LinuxPhysicalFactory', PT.SELECTION)
+                self.assertIn('DarwinPhysicalFactory|WindowsPhysicalFactory', PT.SELECTION)
 
 
 class NativeSetup(unittest.TestCase):
@@ -1125,11 +1154,14 @@ class DarwinNativeEnvironment(unittest.TestCase):
                     if args[:2] == ['go', 'build']:
                         commands.append((args, env.copy()))
                         raise CompilerBoundary()
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_pt_inventory.py'):
+                        self.assertEqual(args[2:], [str((root/'core').resolve()), '--tags='+','.join(N.tags(target))])
+                        self.assertEqual(kwargs['timeout'], 600)
+                        return ''
                     if args[:2] == ['go', 'test']:
                         package = args[args.index('-ldflags=-checklinkname=0')+1]
                         expected = {
                             './cmd/sing-box': '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU)',
-                            './routervpn/desktoppt': '^Test(RouterVPNDesktopTorPT|DesktopTorNetworkOwner)',
                             './routervpn/mobiletor': '^TestDesktopSocket',
                             './route': '^TestRouterVPNDesktopTorNetwork',
                             '.': '^TestRouterVPNDesktopTor',
