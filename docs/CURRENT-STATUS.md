@@ -1,10 +1,28 @@
 # Current implementation status
 
-Updated November 6, 2026 UTC. This file distinguishes published source,
+Updated November 7, 2026 UTC. This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
+
+## November 7 continuation through `20693f18`
+
+The [November 7 evidence ledger](CONTINUATION-EVIDENCE-2026-11-07.md) records
+fresh original-requirement recovery, preservation of the newer live branch,
+and the source/test corrections published during this continuation. Published
+`504e0fa3` adds all nine independent entry/final Start Layer pairs for Local
+SOCKS5 to paired REALITY/Vision, preserving every earlier graph. Published
+`bdb75197` adds bounded original-owner diagnostics for the unresolved native
+Darwin failure, and `20693f18` corrects the strict Unix source-copy fixture.
+An independent Ubuntu reference job runs the existing encrypted SOCKS/REALITY
+cases without waiting for Darwin prerequisites; all release gates remain.
+
+These units do not establish a new complete release. Other imported graph
+families, Server/Compare for that direction, exact-SHA native/package/image
+verification, physical/device acceptance and authorized private deployment
+retain their separate requirements. Older status passages below are dated
+history; the current source and newer ledger supersede their stale gap claims.
 
 ## November 6 product continuation through `765353ba`
 

@@ -72,7 +72,7 @@ implemented. A source inventory is a test inventory, not a product denominator.
 
 | Requirement / correction | Affected paths and platforms | Current executable or source evidence | Release/device evidence and actual remaining gap |
 |---|---|---|---|
-| Original native application and multihop scope; independent Start Layers from the current user correction | `internal/mobilemultihop/imported_entry.go`, Android imported-router preparation, Apple PacketTunnel/imported host, pinned native graph runtime | Starting `398cb513` admits Local SOCKS5 → paired REALITY/Vision with both layers Off. Other admitted SOCKS final families already have independent layers. | Independent layers on the REALITY pair are an active implementation task at this ledger cutoff; no uncommitted extension is counted as delivered. Other graph families and Server/Compare for this direction remain explicit requirements in `MOBILE-IMPORTED-ROUTER-PATH.md`. |
+| Original native application and multihop scope; independent Start Layers from the current user correction | `internal/mobilemultihop/imported_entry.go`, Android imported-router preparation, Apple PacketTunnel/imported host, pinned native graph runtime | Published `504e0fa3` admits all nine independent Off/AES/AES+XOR entry/final pairs for Local SOCKS5 → paired REALITY/Vision. All 338 earlier graph filenames remain and eight layer pairs are added. Actual Android and Swift captures, shared race checks and strict source/verdict inventories pass at that unit. | The desktop reference binaries compile, but local traffic execution stopped at denied Netlink interface inventory before traffic. Its original twelve and new forty-two native leaf verdicts remain mandatory. Other graph families and Server/Compare for this direction remain explicit requirements in `MOBILE-IMPORTED-ROUTER-PATH.md`. |
 | Original complete connection-state capture and exact proved restoration | `IOSMultihopExecution.swift` and its actual compiled fixture | `9031002c` supplies the real typed original-asset map. The corrected Swift fixture passes 2,047 checks and rejects five malformed maps; bypassing the source validator is caught by the causal control. | This is fixture repair, not a new production relaxation. Full Xcode, packaged and physical restoration evidence remains separate. |
 | Native shipping composition and mandatory original graph inventory | Apple source producer/pinned parser and desktop native runtime builder | `4dec2930` distinguishes Go compiler BuildEvents from TestEvents; `401a2123` makes the actual SOCKS/REALITY reference mandatory in the orchestration fixture. | Exact-SHA native parsing/builds must confirm the affected jobs. Python orchestration and reproduced event streams do not prove iOS or desktop traffic acceptance. |
 | Original protection/ownership, #200–224 and #337; authenticated Server lease retirement | Windows external Server fixture and native physical runner | `535e6481` completes retry/close/drain before reporting the deliberately broken stream-retirement result. `c522822d` retains every original Server/association child in three exact groups. | Actual Windows AMD64/ARM64 WFP execution remains required. All six lease causal controls and per-process limits remain mandatory. |
@@ -108,6 +108,57 @@ because CryptoKit was unavailable; it was not replaced with a fake module or
 counted as passing.
 
 ## Exact-SHA CI observation and remaining delivery
+
+### Later published source and independent reference execution
+
+[`504e0fa327594f357f4f542f005d098ee0bfa698`](https://github.com/Eabusham2/router-vpn/commit/504e0fa327594f357f4f542f005d098ee0bfa698)
+retains independent imported-entry and paired-final Start Layers for Local
+SOCKS5 to REALITY/Vision. The shared compiler uses each node's original source
+and attaches only the final's validated outermost edge to the captured entry.
+Actual Android preparation passes 948 checks for the nine layer pairs and five
+causal controls. The Swift producer passes 7,200 checks and exports all 346
+primary captures; its existing selection baseline passes 3,231 checks and the
+expanded REALITY host passes 112. Shared REALITY tests pass 88 exact race
+verdicts. Native reference compilation and exact-source checks pass, while
+local packet execution is blocked before traffic by Netlink inventory EPERM.
+None of those local results is substituted for a native traffic, package or
+device result.
+
+[`bdb7519786e24cea41eae4ee80c1d23b3d74c8d2`](https://github.com/Eabusham2/router-vpn/commit/bdb7519786e24cea41eae4ee80c1d23b3d74c8d2)
+records immutable original-socket admission loss and the original request's
+in-progress Darwin native-command phase. A separate owned nonblocking pipe
+accepts one bounded diagnostic write or drops it; callback completion is joined.
+PF, authentication, expiry and operation bounds remain unchanged. Seven focused
+runner checks, actual command/full-pipe regressions, rejected missing-observer
+and blocking-writer controls, shared race checks and both Darwin no-cgo
+architecture builds pass. The original native Darwin failures still need fresh
+logs; adding diagnostics is not their resolution.
+
+[`20693f1860e300d4fc5a70f38fb5da0669f5daed`](https://github.com/Eabusham2/router-vpn/commit/20693f1860e300d4fc5a70f38fb5da0669f5daed)
+corrects the Unix gate fixture to retain both owned socket and standard-exit
+source families using the shipping relocation. All nine tests pass again on
+the merged source, including exact missing/changed/linked-source rejections
+before privilege invocation. No production source check is relaxed.
+
+The independent `imported-socks-reality-native.yml` Ubuntu job invokes the same
+scoped desktop reference against clean, exact-pinned core/Xray preparations. It
+does not wait for Darwin release prerequisites. All original reference leaves,
+all additional independent-layer leaves, source identity and existing process
+bounds remain required; the authoritative release and mobile parser gates are
+unchanged. A successful reference is bounded encrypted-peer evidence, not a
+shipping host Connected result, Box DNS-router proof, OS TUN test or device
+acceptance.
+
+The final workflow's actual preparation shell passes from clean pinned sources
+with local Git mirrors replacing only download transport. It includes the
+shipping performance, OpenVPN-close and buffer preparations; omitting the
+performance step was reproduced as a missing generated service before this
+correction. Full module tidy and verification pass. The existing strict gate
+then accepts 2,255 prepared reference records and 914 prepared Xray records.
+All 15 reference-runner contracts and three relay-preparation tests pass.
+Independent review and YAML/shell checks cover the final recipe and trigger
+closure. This is preparation/verification evidence; actual hosted native
+reference execution remains pending.
 
 The initial `398cb513` failures were read at their exact source identity,
 including authoritative source audit job `128124355405`, iOS jobs
