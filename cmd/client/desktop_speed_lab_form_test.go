@@ -102,6 +102,16 @@ func TestDesktopSpeedLabPathFormCatalog(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "speed-lab-options.json"), catalog, 0600); err != nil {
 		t.Fatal(err)
 	}
+	// Main/profile Connect admits imported entries; the temporary Router-only
+	// Speed Lab form has its own smaller catalog. Exercise both actual APIs.
+	status := httptest.NewRecorder()
+	a.nativeMultihopStatus(status, httptest.NewRequest(http.MethodGet, "/api/multihop/status", nil))
+	if status.Code != http.StatusOK {
+		t.Fatal("main connection catalog failed", status.Body.String())
+	}
+	if err := os.WriteFile(filepath.Join(directory, "multihop-status.json"), status.Body.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestDesktopSpeedLabPathFormPayload(t *testing.T) {

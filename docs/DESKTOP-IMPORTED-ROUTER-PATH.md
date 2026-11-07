@@ -19,6 +19,22 @@ the existing Shadowsocks and Hysteria2 choices. Imported packet selections use
 the original `wireguard` or `amneziawg` protocol identity, independently of the
 paired-node `wg`, `awg2-fast` and `awg2-strong` choices.
 
+The main/profile catalog contains 24 explicit entry choices: the 19 paired
+Router transports plus the distinct `wireguard`, `amneziawg`, `socks5`,
+`http-connect` and `https-connect` imports. Full-profile Add/Load/Update and
+Connect serialization preserve those original IDs. Saving a choice does not
+grant a new execution mode; imported connection admission still requires Local
+and the original independent profiles.
+
+Speed Lab's **temporary Router multihop** chooser and resolver currently admit
+only the 19 paired Router entry transports. Selecting a new temporary imported
+entry to a paired final remains unfinished work. The form preserves a main
+profile's imported mode and rejects that unsupported temporary request instead
+of replacing it with WG. This boundary does not narrow **Current path**
+measurement of an already connected, captured imported graph. Native callback
+tests consume the real daily and temporary controller catalogs separately;
+catalog equality between those two workflows is not a capability contract.
+
 The desktop host admits original WireGuard, AmneziaWG, SOCKS5, Shadowsocks 2022,
 Hysteria2, HTTP CONNECT and HTTPS CONNECT entries. Its final transport catalog is Shadowsocks,
 Hysteria2, WireGuard, AmneziaWG Fast, AmneziaWG Strong and REALITY/Vision. A

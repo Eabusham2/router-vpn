@@ -56,6 +56,7 @@ $Fields=@{};foreach($Name in @('DAITA','Jumbo','Encrypted','Obfuscated')){$Field
 $D=[pscustomobject]@{Tag='initial';Fields=$Fields};$D|Add-Member ScriptMethod FindName {param($Name)return $this.Fields[$Name]}
 $SpeedLabOptions=@{nodes=@();router_vpn_entry_modes=@();execution_choices=@();updating=$false}
 $Opt=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Output 'speed-lab-options.json')|ConvertFrom-Json
+$MainCatalog=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Output 'multihop-status.json')|ConvertFrom-Json
 $RouterCombo=Combo @($Opt.nodes);$RouterCombo.SelectedValue='exit'
 $MultihopEntryCombo=Combo @($Opt.nodes);$MultihopEntryCombo.SelectedValue='entry'
 $MultihopExitCombo=Combo @($Opt.nodes);$MultihopExitCombo.SelectedValue='exit-router'
@@ -75,7 +76,11 @@ function StartUnifiedApiAsync($Label,$Path,$Method,$Body,$Timeout,$Success,$Fail
 & $Initializer $Opt
 Check ($Node.SelectedValue-ceq'exit'-and$Entry.SelectedValue-ceq'entry'-and$EntryMode.SelectedValue-ceq'awg2-strong'-and$Execution.SelectedValue-ceq'auto') 'Saved external path was replaced by unrelated defaults.'
 Check ($SpeedLabOptions.router_vpn_entry_modes.Count-eq19) 'Entry mode catalog was reduced.'
-Check ((@($MultihopEntryModeCombo.Items|ForEach-Object{[string]$_.Tag}|Where-Object{$_})-join',')-ceq(@($SpeedLabOptions.supported_entry_modes)-join',')) 'Main and runtime entry mode catalogs differ.'
+$MainEntries=@($MultihopEntryModeCombo.Items|ForEach-Object{[string]$_.Tag}|Where-Object{$_})
+$ImportedEntries=@('wireguard','amneziawg','socks5','http-connect','https-connect')
+Check ($MainEntries.Count-eq24-and(@($MainEntries|Sort-Object -Unique).Count-eq24)-and(@($MainEntries|Sort-Object)-join',')-ceq(@($MainCatalog.supported_entry_modes|Sort-Object)-join',')) 'Main and daily connection entry catalogs differ.'
+Check ((@($SpeedLabOptions.supported_entry_modes)-join',')-ceq(@($MainCatalog.paired_entry_modes)-join',')) 'Temporary Speed Lab and paired entry catalogs differ.'
+foreach($M in $ImportedEntries){Check ($M-cin$MainEntries-and$M-cnotin$SpeedLabOptions.supported_entry_modes) 'Imported entry lost its distinct main/profile authority.'}
 $Count=0
 function Emit([string]$Name){$script:Captured=$null;& $RunCallback;Check ($null-ne$script:Captured) ('Actual Run rejected '+$Name+': '+$Detail.Text);Check ($script:Captured.expected_selected_node_id-ceq$CapturedSpeedLabSelection.selectedNodeID) 'Run lost its captured main selection.';foreach($id in @($CapturedSpeedLabSelection.selectedNodeID,$script:Captured['node_id'],$script:Captured['entry_id'],$script:Captured['exit_id'])|Where-Object{$_}){Check ($script:Captured.expected_profile_tokens[$id]-cmatch'^[a-f0-9]{64}$') ('Run omitted exact identity for '+$id)};[IO.File]::WriteAllText((Join-Path $Output ($Name+'.json')),($script:Captured|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false));$script:Count++}
 function Reject([string]$Name){$script:Captured=$null;& $RunCallback;Check ($null-eq$script:Captured) ('Invalid path reached controller: '+$Name);$script:Count++}
@@ -160,6 +165,15 @@ foreach($M in @($SpeedLabOptions.supported_entry_modes)){foreach($E in @('local'
  Check ($D.Tag-ceq'ready'-and$EntryMode.SelectedValue-ceq$M) 'Captured main entry mode changed while options loaded.'
  Emit ('speed-lab-main-entry-'+$M+'-'+$E);Check ($script:Captured.entry_mode-ceq$M) 'Captured main entry mode changed before submission.'
 }}
+# Main/profile imports remain visible and exact. They can describe Current,
+# but cannot borrow a paired entry's temporary path by selecting Local/Server.
+foreach($M in $ImportedEntries){
+ $MultihopEntryModeCombo.SelectedValue=$M;$MainFields.UnifiedExecution.SelectedValue='local';$CapturedSpeedLabSelection=CaptureSpeedLabSelection
+ $D.Tag='owned-options';&$Initializer $RouterOpt
+ Check ($D.Tag-ceq'ready'-and$EntryMode.SelectedValue-ceq$M-and$MultihopEntryModeCombo.SelectedValue-ceq$M) 'Imported main selection was silently replaced.'
+ $Scope.SelectedValue='current';$script:Captured=$null;&$RunCallback;Check ($null-ne$script:Captured-and$script:Captured.scope-ceq'current') 'Imported main selection blocked Current request.'
+ $Scope.SelectedValue='temporary';foreach($E in @('local','server','auto')){$Execution.SelectedValue=$E;Reject ('Imported mode on paired temporary entry '+$M+' '+$E)}
+}
 $MultihopEntryModeCombo.SelectedValue='';$CapturedSpeedLabSelection=CaptureSpeedLabSelection;$D.Tag='owned-options';&$Initializer $RouterOpt
 Check ($D.Tag-ceq'ready'-and$EntryMode.SelectedValue-ceq'') 'Saved entry/base fallback disappeared.'
 $MultihopEntryModeCombo.SelectedValue='reality-xhttp';Reject 'main entry changed after Ready';$MultihopEntryModeCombo.SelectedValue=''

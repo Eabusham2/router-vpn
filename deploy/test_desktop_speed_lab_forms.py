@@ -98,6 +98,7 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Expected fixt
  g_signal_connect(s.node,"changed",G_CALLBACK(linux_speed_lab_path_changed_v19),&s);g_signal_connect(s.entry,"changed",G_CALLBACK(linux_speed_lab_path_changed_v19),&s);g_signal_connect(s.topology,"changed",G_CALLBACK(linux_speed_lab_path_changed_v19),&s);g_signal_connect(s.run,"clicked",G_CALLBACK(linux_speed_lab_run_v12),&s);
  check(linux_speed_lab_apply_options_v12(&s),"Actual options parser failed");s.options_ready=TRUE;
  check(strcmp(linux_speed_lab_active_id_v12(s.node),"exit")==0&&strcmp(linux_speed_lab_active_id_v12(s.entry),"entry")==0&&strcmp(linux_speed_lab_active_id_v12(s.entry_mode),"awg2-strong")==0&&strcmp(linux_speed_lab_active_id_v12(s.execution),"auto")==0,"Saved path defaults changed");
+ char*main_path=g_build_filename(argv[1],"multihop-status.json",NULL),*main_raw=NULL;check(g_file_get_contents(main_path,&main_raw,NULL,NULL),"Missing actual daily entry catalog");g_free(main_path);JsonNode*main_catalog=parse_json(main_raw);g_free(main_raw);check(main_catalog&&JSON_NODE_HOLDS_OBJECT(main_catalog),"Invalid daily entry catalog");JsonArray*main_entries=json_object_get_array_member(json_node_get_object(main_catalog),"supported_entry_modes");check(json_array_get_length(main_entries)==G_N_ELEMENTS(linux_multihop_entries_v23)&&G_N_ELEMENTS(linux_multihop_entries_v23)==24,"Main/profile catalog was reduced");for(guint i=0;i<G_N_ELEMENTS(linux_multihop_entries_v23);i++)check(linux_multihop_entry_advertised_v23(main_entries,linux_multihop_entries_v23[i].id),"Main/profile entry missing or duplicated");json_node_free(main_catalog);
  JsonArray*modes=linux_speed_lab_catalog_v19(&s,"router_vpn_entry_modes");check(json_array_get_length(modes)==19,"Mode catalog reduced");
  emit(&s,argv[1],"speed-lab-current");choose(s.scope,"temporary");
  const char*executions[]={"local","server","auto"};
@@ -169,6 +170,8 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Expected fixt
  entry_modes=linux_speed_lab_catalog_v19(&s,"supported_entry_modes");choose(s.exit_mode,"shadowsocks");for(guint i=0;i<json_array_get_length(entry_modes);i++){const char*mode=json_array_get_string_element(entry_modes,i);choose(s.entry_mode,mode);for(guint j=0;j<3;j++){choose(s.execution,executions[j]);char*name=g_strdup_printf("speed-lab-main-entry-%s-%s",mode,executions[j]);emit(&s,argv[1],name);g_free(name);}}
  staged_entry_mode="naive-h2";reject(&s);check(!linux_speed_lab_apply_options_v12(&s),"A delayed catalog accepted a replacement entry mode");staged_entry_mode="wg-pq";check(linux_speed_lab_apply_options_v12(&s),"Original captured entry mode did not recover");
  staged_mode="naive-h2";reject(&s);staged_mode="reality-pq-vision";staged_execution="server";reject(&s);staged_execution="auto";staged_entry="exit-router";reject(&s);staged_entry="entry";
+ const char*imported_entries[]={"wireguard","amneziawg","socks5","http-connect","https-connect"};
+ for(guint i=0;i<G_N_ELEMENTS(imported_entries);i++){staged_mode="shadowsocks";staged_execution="local";staged_entry_mode=imported_entries[i];linux_speed_lab_capture_selection_v19(&s);check(linux_speed_lab_apply_options_v12(&s),"Imported main options failed");check(g_strcmp0(linux_speed_lab_active_id_v12(s.entry_mode),imported_entries[i])==0,"Imported main mode silently changed");choose(s.scope,"current");char*current_imported=linux_speed_lab_request_body_v12(&s);check(current_imported!=NULL,"Imported main mode blocked Current");g_free(current_imported);choose(s.scope,"temporary");for(guint j=0;j<3;j++){choose(s.execution,executions[j]);reject(&s);}}
  staged_mode="missing-saved-exit";linux_speed_lab_capture_selection_v19(&s);check(linux_speed_lab_apply_options_v12(&s),"Unknown saved mode options failed");check(strcmp(linux_speed_lab_active_id_v12(s.exit_mode),"missing-saved-exit")==0,"Unknown saved exit was replaced");reject(&s);
  staged_mode="shadowsocks";staged_entry_mode="missing-saved-entry";linux_speed_lab_capture_selection_v19(&s);check(linux_speed_lab_apply_options_v12(&s),"Unknown saved entry options failed");check(strcmp(linux_speed_lab_active_id_v12(s.entry_mode),"missing-saved-entry")==0,"Unknown saved entry was replaced");reject(&s);
  staged_enabled=FALSE;gtk_combo_box_set_active(GTK_COMBO_BOX(app.router_combo),-1);linux_speed_lab_capture_selection_v19(&s);g_free(s.response.data);s.response.data=g_strdup("{\"nodes\":[],\"logical_modes\":[{\"id\":\"smart-auto\"}]}");check(linux_speed_lab_apply_options_v12(&s),"First-use empty node options failed");choose(s.scope,"temporary");choose(s.topology,"system-direct");char*empty_body=linux_speed_lab_request_body_v12(&s);check(empty_body!=NULL,"First-use System direct was blocked");JsonNode*empty_request=parse_json(empty_body);JsonObject*empty_object=json_node_get_object(empty_request);check(!obj_string(empty_object,"expected_selected_node_id")[0]&&json_object_get_size(json_object_get_object_member(empty_object,"expected_profile_tokens"))==0,"First-use System direct invented a node identity");json_node_free(empty_request);g_free(empty_body);s.closed=TRUE;g_clear_pointer(&captured,g_free);gtk_button_clicked(GTK_BUTTON(s.run));check(captured==NULL,"Closed Speed Lab issued a request");
@@ -256,6 +259,7 @@ func choose(_ popup:NSPopUpButton,_ value:String){guard let index=popup.items.fi
 let output=URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true)
 let originalOptions=try Data(contentsOf:output.appendingPathComponent("speed-lab-options.json"))
 let originalRoot=try JSONSerialization.jsonObject(with:originalOptions) as! [String:Any]
+let mainCatalog=try JSONSerialization.jsonObject(with:Data(contentsOf:output.appendingPathComponent("multihop-status.json"))) as! [String:Any]
 func product(_ id:String,_ mode:String="shadowsocks",_ execution:String="local",_ entryMode:String="")->ProductWindowController{
  let p=ProductWindowController();p.profiles=originalRoot["nodes"] as! [[String:Any]];p.routerIDs=p.profiles.map{$0["id"] as! String};p.multihopNodeIDs=p.profiles.filter{RouterVPNMacSpeedLabPathPolicy.kind($0)=="router-vpn"}.map{$0["id"] as! String}
  for node in p.profiles{if let id=node["id"] as? String,let token=node["profile_token"] as? String{p.multihopNodeTokens[id]=token}}
@@ -266,7 +270,11 @@ UserDefaults.standard.setVolatileDomain([macConnectionMultihopEnabledKey:true],f
 let mainProduct=product("exit"),f=Form(mainProduct);configure(f,originalOptions);f.loadOptions()
 check(f.selected(f.node)=="exit"&&f.selected(f.entry)=="entry"&&f.selected(f.entryMode)=="awg2-strong"&&f.selected(f.execution)=="auto","Saved path defaults changed")
 check(f.entryModes.count==19,"Reduced raw entry catalog")
-check(f.supportedEntryModes==RouterVPNNodeEntryModes.choices.map{$0.id}.filter{!$0.isEmpty},"Main and native entry mode catalogs differ")
+let mainEntries=RouterVPNNodeEntryModes.choices.map{$0.id}.filter{!$0.isEmpty}
+let importedEntries=["wireguard","amneziawg","socks5","http-connect","https-connect"]
+check(mainEntries.count==24&&Set(mainEntries).count==24&&mainEntries.sorted()==(mainCatalog["supported_entry_modes"] as! [String]).sorted(),"Main and daily connection entry catalogs differ")
+check(f.supportedEntryModes==mainCatalog["paired_entry_modes"] as! [String],"Temporary Speed Lab and paired entry catalogs differ")
+for mode in importedEntries{check(mainEntries.contains(mode) && !f.supportedEntryModes.contains(mode),"Imported entry lost its distinct main/profile authority")}
 check(f.exitModes==RouterVPNNodeExitModes.choices.map{$0.id},"UI and native exit catalogs differ")
 func emit(_ name:String)throws{f.captured=nil;f.runSpeedLab();check(f.captured != nil,f.detail.string);check(f.captured!["expected_selected_node_id"] as? String==f.capturedSelection.selectedNodeID,"Run lost its captured main selection");let tokens=f.captured!["expected_profile_tokens"] as? [String:String] ?? [:];for id in [f.capturedSelection.selectedNodeID]+["node_id","entry_id","exit_id"].compactMap({f.captured![$0] as? String}) where !id.isEmpty{check(tokens[id]?.count==64,"Run omitted exact identity for "+id)};try JSONSerialization.data(withJSONObject:f.captured!,options:[.sortedKeys]).write(to:output.appendingPathComponent(name+".json"))}
 func reject(_ label:String="",line:UInt=#line){f.captured=nil;f.runSpeedLab();check(f.captured==nil,"Invalid selection reached controller at \(line): \(label)")}
@@ -327,11 +335,20 @@ for mode in RouterVPNNodeExitModes.choices.map({$0.id}){for execution in ["local
  check(snapshot.optionsReady&&snapshot.selected(snapshot.topology)=="multihop"&&snapshot.selected(snapshot.entry)=="entry"&&snapshot.selected(snapshot.exit)=="exit-router"&&snapshot.selected(snapshot.exitMode)==mode&&snapshot.selected(snapshot.execution)==execution,"Disconnected whole-profile snapshot changed")
  choose(snapshot.scope,"temporary");snapshot.runSpeedLab();check(snapshot.captured != nil,snapshot.detail.string);try JSONSerialization.data(withJSONObject:snapshot.captured!,options:[.sortedKeys]).write(to:output.appendingPathComponent("speed-lab-multihop-"+mode+"-"+execution+".json"))
 }}
-for entryMode in RouterVPNNodeEntryModes.choices.map({$0.id}).filter({!$0.isEmpty}){for execution in ["local","server","auto"]{
+for entryMode in f.supportedEntryModes{for execution in ["local","server","auto"]{
  let owner=product("entry","shadowsocks",execution,entryMode),snapshot=Form(owner);configure(snapshot,routerOptions);snapshot.deferOptions=true;snapshot.loadOptions();snapshot.finishOptions()
  check(snapshot.optionsReady&&snapshot.selected(snapshot.entryMode)==entryMode,"Captured main entry changed while options loaded")
  choose(snapshot.scope,"temporary");snapshot.runSpeedLab();check(snapshot.captured?["entry_mode"] as? String==entryMode,snapshot.detail.string);try JSONSerialization.data(withJSONObject:snapshot.captured!,options:[.sortedKeys]).write(to:output.appendingPathComponent("speed-lab-main-entry-"+entryMode+"-"+execution+".json"))
 }}
+// The main import survives the options callback and Current request, while
+// temporary paired-node admission rejects it without choosing another mode.
+for entryMode in importedEntries {
+ let owner=product("entry","shadowsocks","local",entryMode),snapshot=Form(owner);configure(snapshot,routerOptions);snapshot.loadOptions()
+ check(snapshot.optionsReady&&snapshot.selected(snapshot.entryMode)==entryMode&&owner.multihopEntryModePopup.selectedItem?.representedObject as? String==entryMode,"Imported main selection was silently replaced")
+ choose(snapshot.scope,"current");snapshot.runSpeedLab();check(snapshot.captured?["scope"] as? String=="current","Imported main selection blocked Current request")
+ snapshot.request=nil;snapshot.cancelled=false;choose(snapshot.scope,"temporary")
+ for execution in ["local","server","auto"]{choose(snapshot.execution,execution);snapshot.captured=nil;snapshot.runSpeedLab();check(snapshot.captured==nil,"Imported mode borrowed paired temporary authority")}
+}
 do{let owner=product("entry","shadowsocks","auto"),snapshot=Form(owner);configure(snapshot,routerOptions);snapshot.loadOptions();check(snapshot.optionsReady&&snapshot.entryMode.selectedItem != nil&&snapshot.selected(snapshot.entryMode)=="","Saved entry/base fallback disappeared")}
 do{let owner=product("entry","shadowsocks","auto"),snapshot=Form(owner);configure(snapshot,routerOptions);snapshot.deferOptions=true;snapshot.loadOptions();choose(owner.multihopEntryModePopup,"max-quic-wg");snapshot.finishOptions();check(!snapshot.optionsReady&&snapshot.nodes.isEmpty,"Changed main entry accepted old options")}
 do{let owner=product("entry","naive-h2","auto"),snapshot=Form(owner);configure(snapshot,routerOptions);snapshot.deferOptions=true;snapshot.loadOptions();choose(owner.multihopExitModePopup,"reality-xhttp");snapshot.finishOptions();check(!snapshot.optionsReady && !snapshot.runButton.isEnabled && snapshot.nodes.isEmpty,"Replaced visible profile was adopted by stale options");snapshot.runSpeedLab();check(snapshot.captured==nil,"Stale options still allowed Run")}
@@ -378,7 +395,7 @@ def main():
             if args.platform=='linux': linux_form(directory)
             elif args.platform=='darwin': swift_form(directory)
             else: subprocess.run([shell,'-NoLogo','-NoProfile','-File',str(ROOT/'client/test-windows-speed-lab-paths.ps1'),'-Root',str(ROOT),'-Output',str(directory)],check=True,timeout=120)
-            subprocess.run(['go','test','-race','-count=1','./cmd/client','-run','^TestDesktopSpeedLabPathFormPayload$'],cwd=ROOT,env=env,check=True,timeout=180)
+            subprocess.run(['go','test','-race','-count=1','./cmd/client','-run','^(TestDesktopSpeedLabPathFormPayload|TestDesktopEntryCatalogContracts|TestDesktopEntryCatalogOriginalImportedAuthority)$'],cwd=ROOT,env=env,check=True,timeout=180)
     subprocess.run([sys.executable,str(ROOT/'deploy/test_desktop_external_comparison_forms.py'),'--platform',args.platform],check=True,timeout=600)
     print('Native '+args.platform+' Speed Lab forms -> exact captured Go paths: PASS',flush=True)
 
