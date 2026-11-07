@@ -115,12 +115,14 @@ func(c *Controller)run(){
  // Native packet transports retain this context as their connection owner.
  // Bound admission independently, then keep the admitted owner until run exits.
  dialContext,cancelDial:=context.WithCancel(c.ctx);defer cancelDial()
- deadline:=time.Now().Add(5*time.Second)
+ started:=time.Now()
+ deadline:=started.Add(5*time.Second)
  admission:=time.AfterFunc(5*time.Second,cancelDial)
  conn,err:=c.dial(dialContext)
  admitted:=admission.Stop()&&time.Now().Before(deadline)
  if !admitted||dialContext.Err()!=nil||err!=nil||conn==nil{
-  if conn!=nil{_ = conn.Close()};failure=errors.New("protected PQ peer transport could not open");return
+  failure=newDialAdmissionFailure(err,dialContext.Err(),admitted,conn!=nil,time.Since(started))
+  if conn!=nil{_ = conn.Close()};return
  }
  c.mu.Lock()
  if c.closing||c.ctx.Err()!=nil{c.mu.Unlock();_ = conn.Close();return}
