@@ -351,12 +351,20 @@ an expired final observation cannot publish a 50-sample result. The existing
 allowance is unchanged. Context-capable activity owners can retain that same
 caller through `BeginMeasurementContext`; legacy engines and activity callbacks
 keep their compatibility behavior and are not claimed to be interruptible.
+The paired and imported native hop factories now carry their original 1,500 ms
+constructor context through native instance/selector capture, controller health
+and the shared `NewContext` constructor. The imported constructor rechecks its
+proved original controller after the final identity callback and closes an
+unpublished service if that owner changed. Canceling the completed constructor
+does not cancel the returned service's independently owned later measurements.
+The exported mobile binding signatures and the shared contextless compatibility
+wrapper are unchanged. Exact caller and replacement controls run against the
+shared source and the pinned native instance/selector mutexes; successful network
+proof is an explicit fixture model, not physical tunnel acceptance.
 The ordinary MTU adapter retains its separate context-bound readback and rollback
-contract, while external/Tor constructors, proof callbacks and Tor lease
-observations remain follow-ups. Native factory adoption of the optional shared
-`NewContext` constructor must preserve the original caller separately from the
-returned service lifetime; the contextless constructor uses a 1,500 ms observation
-budget only for owners that support context-bound reads.
+contract. Ordinary external/Tor factories, proof callbacks and Tor lease
+observations remain separate follow-ups; this constructor increment does not
+close those paths.
 
 The complete compiled graph supplies the MTU plan. For a nested packet final,
 `internal/awgpolicy` accounts for the actual IPv4/IPv6 carrier, 16-byte transport

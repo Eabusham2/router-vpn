@@ -2,10 +2,15 @@ package libbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +22,8 @@ import (
 	"github.com/sagernet/sing-box/daemon"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
 	M "github.com/sagernet/sing/common/metadata"
 )
 
@@ -159,6 +166,191 @@ func TestRouterNativeProofDialClosesLateConnection(t *testing.T) {
 				if err != nil || !found || actual != replacement {
 					t.Fatal("late dial touched replacement outbound", err)
 				}
+			}
+		})
+	}
+}
+
+type routerConstructorCaller struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *routerConstructorCaller) Done() <-chan struct{} {
+	// The actual native cancellable mutex path consults Done only while its
+	// original mutex is held. This is a scheduling witness, not a fake reader.
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Done()
+}
+
+func routerConstructorImported(t *testing.T, core *routerMultihopEngine) *RouterMultihop {
+	t.Helper()
+	root := os.Getenv("ROUTERVPN_IMPORTED_ENTRY_FIXTURES")
+	if root == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES") == "1" {
+			t.Fatal("required original constructor source capture absent")
+		}
+		t.Skip("exact imported compiler source supplied by the mandatory native gate")
+	}
+	path := filepath.Join(root, "off--off.json")
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 8<<20 {
+		t.Fatal("unsafe original constructor source capture", err)
+	}
+	raw, err := os.ReadFile(path)
+	var source []string
+	if err != nil || json.Unmarshal(raw, &source) != nil || len(source) != 9 {
+		t.Fatal("invalid original constructor source capture", err)
+	}
+	plan, err := NewRouterImportedEntryMultihop(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
+	if err != nil || plan.SourceSHA256() != source[7] || plan.Config() != source[8] {
+		t.Fatal("constructor source differs from the actual shared compiler", err)
+	}
+	// The successful network proof is explicitly modeled; the source compiler,
+	// controller observations, original native Box/selector/mutexes and factory
+	// execute. This fixture neither starts a tunnel nor fabricates traffic proof.
+	*routerProofField[mobilemultihop.Engine](t, plan.controller, "engine") = core
+	*routerProofField[string](t, plan.controller, "engineID") = fmt.Sprintf("%p", core.instance)
+	*routerProofField[mobilemultihop.Progress](t, plan.controller, "progress") = mobilemultihop.Progress{Complete: true, Stage: "selected", Execution: "local"}
+	return plan
+}
+
+func TestRouterNativeHopConstructorsRetainCaller(t *testing.T) {
+	for _, kind := range []string{"paired", "imported"} {
+		t.Run(kind, func(t *testing.T) {
+			for _, phase := range []string{"current", "legacy", "nil", "cancel-before", "instance-held", "selector-held", "instance-replaced"} {
+				t.Run(phase, func(t *testing.T) {
+					core, started, manager, registry := routerProofNativeOwner(t)
+					group.RegisterSelector(registry)
+					if err := manager.Create(context.Background(), nil, log.NewNOPFactory().Logger(), mobilemultihop.SelectorTag, "selector", &option.SelectorOutboundOptions{Outbounds: []string{mobilemultihop.LocalTag}}); err != nil {
+						t.Fatal(err)
+					}
+					metadata, err := json.Marshal(mobilemultihop.Metadata{EntryID: "original-entry", ExitID: "original-exit", EntryNodeID: strings.Repeat("a", 64), ExitNodeID: strings.Repeat("b", 64), EntryTag: "entry-wg", EntryAPI: "http://10.77.0.1:8787", ExitAPI: "http://10.88.0.1:8787", EntryToken: "entry-fixture", ExitToken: "exit-fixture"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					var plan *RouterMultihop
+					if kind == "imported" {
+						plan = routerConstructorImported(t, core)
+					}
+					parent, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					caller := &routerConstructorCaller{Context: parent, entered: make(chan struct{})}
+					var held *sync.RWMutex
+					switch phase {
+					case "instance-held":
+						held = routerProofField[sync.RWMutex](t, started, "serviceAccess")
+					case "selector-held", "instance-replaced":
+						held = routerProofField[sync.RWMutex](t, manager, "access")
+					case "cancel-before":
+						cancel()
+					}
+					var once sync.Once
+					release := func() {
+						once.Do(func() {
+							if held != nil {
+								held.Unlock()
+							}
+						})
+					}
+					if held != nil {
+						held.Lock()
+					}
+					defer release()
+					type outcome struct {
+						measurement *RouterHopMeasurement
+						err         error
+					}
+					done := make(chan outcome, 1)
+					go func() {
+						ctx := context.Context(caller)
+						if phase == "nil" {
+							ctx = nil
+						}
+						var measurement *RouterHopMeasurement
+						var err error
+						if kind == "paired" {
+							if phase == "legacy" {
+								measurement, err = NewRouterHopMeasurement(core.server, string(metadata))
+							} else {
+								measurement, err = newRouterHopMeasurementContext(ctx, core.server, string(metadata))
+							}
+						} else {
+							if phase == "legacy" {
+								measurement, err = plan.NewHopMeasurement(core.server)
+							} else {
+								measurement, err = plan.newHopMeasurementContext(ctx, core.server)
+							}
+						}
+						done <- outcome{measurement, err}
+					}()
+					var replacement *daemon.Instance
+					if held != nil {
+						select {
+						case <-caller.entered:
+						case actual := <-done:
+							t.Fatal("native constructor bypassed its original held read", actual.err)
+						case <-time.After(time.Second):
+							cancel()
+							release()
+							<-done
+							t.Fatal("native constructor replaced its caller before the retained read")
+						}
+						if phase == "instance-replaced" {
+							replacement = new(daemon.Instance)
+							lock := routerProofField[sync.RWMutex](t, started, "serviceAccess")
+							lock.Lock()
+							*routerProofField[*daemon.Instance](t, started, "instance") = replacement
+							lock.Unlock()
+							release()
+						} else {
+							cancel()
+						}
+					}
+					var actual outcome
+					select {
+					case actual = <-done:
+					case <-time.After(time.Second):
+						cancel()
+						release()
+						<-done
+						t.Fatal("native constructor did not join its original cancelled reader")
+					}
+					release()
+					if phase == "current" || phase == "legacy" {
+						if actual.err != nil || actual.measurement == nil {
+							t.Fatal("current native constructor failed", actual.err)
+						}
+						cancel()
+						request := strings.Repeat("e", 32)
+						if err := actual.measurement.Start(request, 65536); err != nil {
+							t.Fatal("constructor deadline retired its returned native service", err)
+						}
+						actual.measurement.Cancel(request)
+						if err := actual.measurement.Close(); err != nil {
+							t.Fatal(err)
+						}
+					} else {
+						if actual.measurement != nil {
+							_ = actual.measurement.Close()
+						}
+						if actual.err == nil || actual.measurement != nil {
+							t.Fatal("native constructor published an expired or replaced owner")
+						}
+						if (phase == "cancel-before" || phase == "instance-held" || phase == "selector-held") && !errors.Is(actual.err, context.Canceled) {
+							t.Fatal("native constructor lost its original cancellation", actual.err)
+						}
+					}
+					if replacement != nil {
+						current, err := started.RouterVPNInstanceContext(context.Background())
+						if err != nil || current != replacement {
+							t.Fatal("expired constructor retired replacement native instance", err)
+						}
+					} else if _, err := core.IdentityContext(context.Background()); err != nil {
+						t.Fatal("constructor cancellation retired its original native instance", err)
+					}
+				})
 			}
 		})
 	}

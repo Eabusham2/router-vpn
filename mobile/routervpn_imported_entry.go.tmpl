@@ -28,17 +28,23 @@ func (m *RouterMultihop) Metadata() string     { return m.controller.Metadata() 
 func (m *RouterMultihop) SourceSHA256() string { return m.controller.SourceSHA256() }
 func (m *RouterMultihop) MTUProfile() string   { return m.controller.MTUProfile() }
 func (m *RouterMultihop) NewHopMeasurement(server *CommandServer) (*RouterHopMeasurement, error) {
-	if m == nil || !m.Healthy() {
-		return nil, errors.New("imported hop measurement has no successful original native owner")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), routerMultihopObservationTimeout)
 	defer cancel()
+	return m.newHopMeasurementContext(ctx, server)
+}
+func (m *RouterMultihop) newHopMeasurementContext(ctx context.Context, server *CommandServer) (*RouterHopMeasurement, error) {
+	if m == nil || m.controller == nil {
+		return nil, errors.New("imported hop measurement has no successful original native owner")
+	}
+	if err := m.controller.HealthyContext(ctx); err != nil {
+		return nil, err
+	}
 	core, err := routerCapturedMultihopEngine(ctx, server)
 	if err != nil {
 		return nil, err
 	}
 	engine := &routerHopMeasurementEngine{core: core}
-	service, err := m.controller.NewImportedHopMeasurement(engine)
+	service, err := m.controller.NewImportedHopMeasurementContext(ctx, engine)
 	if err != nil {
 		return nil, err
 	}

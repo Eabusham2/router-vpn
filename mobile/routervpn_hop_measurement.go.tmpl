@@ -19,6 +19,9 @@ type RouterHopMeasurement struct{ service *hopmeasure.Service }
 func NewRouterHopMeasurement(server *CommandServer, metadata string) (*RouterHopMeasurement, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), routerMultihopObservationTimeout)
 	defer cancel()
+	return newRouterHopMeasurementContext(ctx, server, metadata)
+}
+func newRouterHopMeasurementContext(ctx context.Context, server *CommandServer, metadata string) (*RouterHopMeasurement, error) {
 	core, err := routerCapturedMultihopEngine(ctx, server)
 	if err != nil {
 		return nil, err
@@ -40,7 +43,7 @@ func NewRouterHopMeasurement(server *CommandServer, metadata string) (*RouterHop
 		return nil, errors.New("distinct hop identities required")
 	}
 	engine := &routerHopMeasurementEngine{core: core}
-	service, err := hopmeasure.New(engine, []hopmeasure.Hop{
+	service, err := hopmeasure.NewContext(ctx, engine, []hopmeasure.Hop{
 		{ID: m.EntryID, Role: "entry", Tag: m.EntryTag, API: m.EntryAPI, Token: m.EntryToken, Proof: m.EntryNodeID},
 		{ID: m.ExitID, Role: "exit", Tag: "proxy", API: m.ExitAPI, Token: m.ExitToken, Proof: m.ExitNodeID},
 	})

@@ -55,7 +55,7 @@ class Tests(unittest.TestCase):
             self.assertNotIn('-run TestRouterMultihop -count=1',source)
 
         bridge=(ROOT/'mobile/routervpn_hop_measurement.go.tmpl').read_text()
-        for marker in ('service.Invalidate()', 'hopmeasure.New(engine'):
+        for marker in ('service.Invalidate()', 'hopmeasure.NewContext(ctx, engine'):
             self.assertIn(marker,bridge)
         common=(ROOT/'mobile/routervpn_multihop_bridge.go.tmpl').read_text()
         require_owned_hop_path(self,bridge,common)

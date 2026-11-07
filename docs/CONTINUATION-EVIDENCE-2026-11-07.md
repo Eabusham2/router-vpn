@@ -465,6 +465,11 @@ The fixture follow-up was published and read back as
 
 ### Explicit REALITY UDP/443 provisioning and captured-source support
 
+This source unit was published and read back as
+[`03152851f53b6ba723f11311dc33cc3236b7176b`](https://github.com/Eabusham2/router-vpn/commit/03152851f53b6ba723f11311dc33cc3236b7176b).
+All sixteen source/host/generation files exactly match the reviewed checkpoint;
+the publication also retains the current evidence and status documents.
+
 This source increment admits exactly the pinned engine's original
 `xtls-rprx-vision-udp443` client flow alongside ordinary Vision. It does not
 rewrite an imported flow, change server credentials/inbound flow, add a raw
@@ -510,6 +515,42 @@ its active Speed Lab test had run only one second. These observations do not
 identify a stuck production case. A local timing attempt instead stopped in
 an unbounded Fastest fixture setup wait after physical-interface capture was
 denied; that separate local boundary is not a passing full-suite result.
+
+### Preserve the original native hop-construction caller
+
+The shared imported constructor and both paired/imported native factories now
+use the original caller through engine capture, controller health, native
+identity/selection reads and `hopmeasure.NewContext`. The compatible legacy
+constructor creates one bounded caller and delegates to the context method;
+the exported mobile bindings retain their existing signatures. A returned
+service's later operations have their own lifetime, so the constructor's
+normal deferred cancellation does not retire a successful measurement.
+
+The original code was causally reproduced restarting its observation context
+at service creation. A second control showed that the final identity callback
+could replace the proved controller after its preceding health read. The new
+final health check rejects that replacement and closes the unpublished service.
+Restoring the context reset and removing only that final check each fail their
+specific retained-caller or replaced-controller assertion.
+
+All twenty-four exact shared context verdicts pass under race instrumentation,
+including the existing thirteen and eleven new constructor verdicts. All
+twenty-eight imported runner contracts and four existing shipping measurement
+contracts pass. Actual prepared source projection and identity checks pass.
+The new native fixture uses the actual pinned StartedService and selector
+mutexes for paired/imported calls, cancellation, held reads and instance
+replacement. Prior successful imported proof is an explicit fixture model.
+The gate retains all fifteen existing native context verdicts and requires
+seventeen new constructor verdicts, for an exact thirty-two; missing, duplicate,
+skipped or foreign verdicts remain failures.
+
+Local native execution did not complete. The first optional race compilation
+was killed in an upstream Tailscale compiler process before tests. The next
+single-worker non-race cold build reached the existing cold-process allowance
+without test output and was interrupted and joined with exit 130. Neither
+attempt establishes a native test pass, and no third cold retry was used to
+delay preservation. The required native inventory remains in CI. Ordinary
+external and Tor measurement factories are separate unfinished adoption paths.
 
 The initial `398cb513` failures were read at their exact source identity,
 including authoritative source audit job `128124355405`, iOS jobs

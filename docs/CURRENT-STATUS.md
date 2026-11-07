@@ -51,6 +51,14 @@ was corrected, and an intermittent wrong-DNS-name witness remains under
 investigation. Source publication does not certify that pending native gate.
 See [REALITY-UDP443.md](REALITY-UDP443.md) for the provision/update path.
 
+Paired and imported native hop measurement constructors now retain one caller
+deadline through engine capture, identity/selection checks and service creation.
+A final replaced-controller check closes an unpublished service, while a
+successfully returned measurement has its own later lifetime. Shared context
+regressions and causal controls pass. The exact thirty-two native context
+verdicts remain mandatory; local cold compilation did not reach those tests.
+Ordinary external and Tor constructors retain their separate open scope.
+
 These units do not establish a new complete release. Other imported graph
 families, Server/Compare for that direction, exact-SHA native/package/image
 verification, physical/device acceptance and authorized private deployment

@@ -35,8 +35,23 @@ func (c *Controller) verifyImportedEntry(ctx context.Context) error {
 func (c *Controller) NewImportedHopMeasurement(engine hopmeasure.Engine) (*hopmeasure.Service, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
-	if c == nil || c.imported == nil || engine == nil || c.HealthyContext(ctx) != nil {
+	return c.NewImportedHopMeasurementContext(ctx, engine)
+}
+
+// Keep all constructor observations inside the native caller's original budget.
+// A returned measurement owns its later operations independently of this call.
+func (c *Controller) NewImportedHopMeasurementContext(ctx context.Context, engine hopmeasure.Engine) (*hopmeasure.Service, error) {
+	if ctx == nil {
+		return nil, errors.New("imported hop measurement has no constructor caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if c == nil || c.imported == nil || engine == nil {
 		return nil, errors.New("imported hop measurement requires its successful original path")
+	}
+	if err := c.HealthyContext(ctx); err != nil {
+		return nil, err
 	}
 	identity, err := externalObservedIdentity(ctx, engine)
 	if err != nil {
@@ -53,7 +68,16 @@ func (c *Controller) NewImportedHopMeasurement(engine hopmeasure.Engine) (*hopme
 	if _, err := e.IdentityContext(ctx); err != nil {
 		return nil, err
 	}
-	return hopmeasure.New(e, []hopmeasure.Hop{{ID: c.meta.EntryID, Role: "entry", Tag: externalEntryTag, Kind: "public-path"}, {ID: c.meta.ExitID, Role: "exit", Tag: "proxy", Kind: "private-node", API: c.meta.ExitAPI, Token: c.meta.ExitToken, Proof: c.meta.ExitNodeID}})
+	service, err := hopmeasure.NewContext(ctx, e, []hopmeasure.Hop{{ID: c.meta.EntryID, Role: "entry", Tag: externalEntryTag, Kind: "public-path"}, {ID: c.meta.ExitID, Role: "exit", Tag: "proxy", Kind: "private-node", API: c.meta.ExitAPI, Token: c.meta.ExitToken, Proof: c.meta.ExitNodeID}})
+	if err != nil {
+		return nil, err
+	}
+	// The last measurement identity read may run a native callback. It cannot
+	// replace or retire the independently proved controller before publication.
+	if err := c.HealthyContext(ctx); err != nil {
+		return nil, errors.Join(err, service.Close())
+	}
+	return service, nil
 }
 
 type importedMeasurementEngine struct {
