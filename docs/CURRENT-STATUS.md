@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 The [resumed evidence ledger](CONTINUATION-EVIDENCE-2026-11-07-RESUMED.md)
 records another original-source reconciliation and the published coherent
-changes through `406ad098`. Windows child encoding, native MTU/test inventories,
+changes through `1a9e34d2`. Windows child encoding, native MTU/test inventories,
 Darwin route-prefix decoding, external proof execution and joined native
 selection now have focused executable evidence. The separate CONNECT/REALITY
 gate passes all 172 shared race verdicts and all 57 shared/actual-Android/
@@ -26,9 +26,22 @@ and retained-process acceptance. See [DESKTOP-IMPORTED-ROUTER-PATH.md](DESKTOP-I
 Published `2ff74fd3` adds WG/AWG and bounded OpenVPN TCP/UDP entries to paired
 REALITY under Local execution: 36 independent layer captures, 298 shared race
 verdicts and 111 native parser verdicts pass, including actual Android and Swift
-exports. Its encrypted packet reference and desktop packet adoption are
-separate work. `406ad098` repairs stale CI source expectations while checking
+exports. `e7c7f112` adds the required encrypted packet reference, and `24246537`
+adds desktop WG/AWG entries to all six bounded paired final transports with
+108 independent Start Layer configurations. Desktop OpenVPN entry remains
+unfinished. `406ad098` repairs stale CI source expectations while checking
 both paired/imported proof branches, original owners and selected-DNS admission.
+
+`a07f4fa4` and `dc95b0b0` keep Fastest, public-IP, DNS Retest and Speed Lab
+observations on their original caller and registered session tracker. Their
+focused race gates pass; already-entered recovery/file/persistence operations
+retain documented joined boundaries. `9dde1b50` repairs the CONNECT wrong-route
+403 expectation without admitting a foreign stream, and `a74f2e53` completes
+the packet fixture's outbound map before receive workers start. `1a9e34d2`
+uses an explicit native exec fixture for the macOS image-generation test,
+retaining its time bounds and strengthening identity checks. Actual native
+CI must still verify these changes. The newly discovered native main/temporary
+Speed Lab catalog mismatch is an active correction, not a published fix here.
 
 The encrypted CONNECT reference is implemented and registered, but local
 execution stopped at the required physical-interface guard because Netlink was
