@@ -607,6 +607,67 @@ class OrdinaryPacketScope(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "required native result"):
                 GATE.report_external_server(status, output)
 
+    def test_router_server_groups_retain_all_original_children_and_exact_verdicts(self):
+        groups = GATE.EXTERNAL_SERVER_GROUPS
+        self.assertEqual(tuple(groups), ("lifecycle", "rejection", "association"))
+        combined = []
+        for group, (expression, required) in groups.items():
+            combined.extend(required)
+            self.assertTrue(required)
+            self.assertEqual(len(required), len(set(required)))
+            # Go's slash-separated matcher admits a parent for its selected
+            # descendants; it must not move another child into this process.
+            matches = lambda case: all(re.search(pattern, part) for pattern, part in zip(expression.split("/"), case.split("/")))
+            self.assertEqual({case for case in GATE.EXTERNAL_SERVER_CASES if matches(case)}, set(required))
+            complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
+            with contextlib.redirect_stdout(io.StringIO()):
+                GATE.report_external_server(0, complete, group)
+                for case in required:
+                    line = "--- PASS: " + case + " (0.01s)\n"
+                    for output in (complete.replace(line, ""), complete + line, complete.replace(line, "expected: " + line)):
+                        with self.assertRaises(ValueError): GATE.report_external_server(0, output, group)
+                for foreign in set(GATE.EXTERNAL_SERVER_CASES) - set(required):
+                    with self.assertRaises(ValueError):
+                        GATE.report_external_server(0, complete + "--- PASS: " + foreign + " (0.01s)\n", group)
+                for suffix in ("--- SKIP: hidden", "DATA RACE", "panic: crash", "--- FAIL: hidden", "FAIL"):
+                    with self.assertRaises(ValueError): GATE.report_external_server(0, complete + suffix + "\n", group)
+                with self.assertRaises(ValueError): GATE.report_external_server(1, complete, group)
+        self.assertEqual(set(combined), set(GATE.EXTERNAL_SERVER_CASES))
+        self.assertEqual(combined.count(GATE.EXTERNAL_SERVER_ROOT), 2)
+        for case in set(combined) - {GATE.EXTERNAL_SERVER_ROOT}:
+            self.assertEqual(combined.count(case), 1, case)
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+            GATE.report_external_server(0, "", "unknown")
+
+    def test_actual_go_filter_executes_every_captured_server_child_in_one_group(self):
+        source = (ROOT / "mobile/desktop/external_box_windows_server_test.go.tmpl").read_text()
+        server = source[source.index("func desktopWFPTestRouterExecution("):source.index("func desktopWFPRouterServerLeaseStopRetry(")]
+        match = re.search(r'for _, name := range (\[\]string\{[^\n]+\})', server)
+        self.assertIsNotNone(match)
+        association = source.split("func " + GATE.EXTERNAL_SERVER_ASSOCIATION + "(", 1)[1].split("\nfunc ", 1)[0]
+        names = re.findall(r't\.Run\("([^"\n]+)"', association)
+        self.assertEqual(len(names), 6)
+        self.assertEqual(len(names), len(set(names)))
+        body = "package inventory\nimport \"testing\"\n"
+        body += "func " + GATE.EXTERNAL_SERVER_ROOT + "(t *testing.T){for _, name := range " + match.group(1) + "{t.Run(name,func(t *testing.T){})}}\n"
+        body += "func " + GATE.EXTERNAL_SERVER_ASSOCIATION + "(t *testing.T){for _, name := range []string{" + ",".join(json.dumps(name) for name in names) + "}{t.Run(name,func(t *testing.T){})}}\n"
+        compiler = shutil.which("go")
+        self.assertIsNotNone(compiler, "Go is required for actual native inventory selection")
+        with tempfile.TemporaryDirectory(prefix="windows-server-selection-") as directory:
+            folder = Path(directory)
+            path = folder / "inventory_test.go"
+            path.write_text(body)
+            binary = folder / ("inventory.test.exe" if os.name == "nt" else "inventory.test")
+            built = subprocess.run([compiler, "test", "-c", "-o", str(binary), str(path)],
+                                   capture_output=True, text=True, timeout=90,
+                                   env=dict(os.environ, GOTOOLCHAIN="local"))
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            for group, (expression, _) in GATE.EXTERNAL_SERVER_GROUPS.items():
+                result = subprocess.run([str(binary), "-test.run=" + expression, "-test.v", "-test.timeout=5s"],
+                                        capture_output=True, text=True, timeout=10)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    GATE.report_external_server(result.returncode, result.stdout + result.stderr, group)
+
     def test_all_shipping_lease_scope_results_are_mandatory(self):
         required = GATE.EXTERNAL_LEASE_UNIT_CASES
         self.assertEqual(len(GATE.EXTERNAL_LEASE_UNIT_ROOTS), 11)
@@ -756,9 +817,11 @@ class OrdinaryPacketScope(unittest.TestCase):
                     if fault == "local-leaf": required = required[:-1]
                     if fault == "local-image": binary.write_bytes(b"changed-local-image")
                     return 0, "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
-                if any(GATE.EXTERNAL_SERVER_ROOT in value for value in command):
+                if any(GATE.EXTERNAL_SERVER_ROOT in value or GATE.EXTERNAL_SERVER_ASSOCIATION in value for value in command):
                     self.assertEqual(kwargs["timeout"], 195)
-                    required = GATE.EXTERNAL_SERVER_CASES
+                    self.assertIn("-test.timeout=180s", command)
+                    selected = next(value.removeprefix("-test.run=") for value in command if value.startswith("-test.run="))
+                    required = next(required for expression, required in GATE.EXTERNAL_SERVER_GROUPS.values() if expression == selected)
                     if fault == "server-leaf": required = required[:-1]
                     if fault == "server-image": binary.write_bytes(b"changed-server-image")
                     return 0, "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
@@ -817,7 +880,7 @@ class OrdinaryPacketScope(unittest.TestCase):
 
     def test_packet_native_scope_and_lease_controls_keep_each_owned_image(self):
         calls = self.dispatch()
-        self.assertEqual([timeout for _, timeout in calls], [600, 75, 75, 195, 195, 195, 195, 195, 195, 600, 75, 75, 75, 75, 600, 75, 75, 75, 75] + [600, 75] * len(GATE.EXTERNAL_LEASE_CONTROLS))
+        self.assertEqual([timeout for _, timeout in calls], [600, 75, 75] + [195] * (5 + len(GATE.EXTERNAL_SERVER_GROUPS)) + [600, 75, 75, 75, 75, 600, 75, 75, 75, 75] + [600, 75] * len(GATE.EXTERNAL_LEASE_CONTROLS))
         self.assertEqual(len({command[command.index("-o") + 1] for command, _ in calls if "-c" in command}), 3 + len(GATE.EXTERNAL_LEASE_CONTROLS))
         self.assertEqual(len({command[0] for command, timeout in calls if timeout == 195}), 1)
 
@@ -1420,7 +1483,7 @@ class NativePhaseOrchestration(unittest.TestCase):
         self.assertEqual(GATE.PHASE_TIMEOUTS["node-baseline"], 2 * 180 + 90 + 60 + 300 + 30 + 600 + 300 + 3600 + 600 + 1215)
         self.assertEqual(GATE.PHASE_TIMEOUTS["node-controls"] - GATE.PHASE_TIMEOUTS["node-baseline"], 4 * (600 + 105) - 600 - 1215)
         self.assertEqual(GATE.PHASE_TIMEOUTS["external-socks"], 2 * 180 + 90 + 60 + 600 + 315 + 6 * (600 + 75))
-        self.assertEqual(GATE.PHASE_TIMEOUTS["external-packet"], 2 * 180 + 90 + 60 + 600 + 2 * 75 + 6 * 195 + 2 * (600 + 4 * 75) + len(GATE.EXTERNAL_LEASE_CONTROLS) * (600 + 75))
+        self.assertEqual(GATE.PHASE_TIMEOUTS["external-packet"], 2 * 180 + 90 + 60 + 600 + 2 * 75 + (5 + len(GATE.EXTERNAL_SERVER_GROUPS)) * 195 + 2 * (600 + 4 * 75) + len(GATE.EXTERNAL_LEASE_CONTROLS) * (600 + 75))
 
     def test_builder_calls_complete_phase_orchestrator_without_old_aggregate(self):
         source = (ROOT / "deploy/build-native-runtime.py").read_text()

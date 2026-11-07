@@ -117,6 +117,20 @@ EXTERNAL_SERVER_ASSOCIATION = "TestRouterVPNDesktopExternalWindowsRouterAssociat
 EXTERNAL_SERVER_LEAVES = ("on-connect", "always", "successor-and-original-restore", "foreign-predecessor", "commit-refused", "reject/entry-token", "reject/entry-proof", "reject/private-key", "reject/psk", "reject/final-key", "reject/dns", "reject/exit", "reject/trust", "reject/lease-expired", "reject/lease-credentials", "cancelled-proof", "lease-stop-retry")
 EXTERNAL_SERVER_CASES = (EXTERNAL_SERVER_ROOT, *(EXTERNAL_SERVER_ROOT + "/" + leaf for leaf in EXTERNAL_SERVER_LEAVES), EXTERNAL_SERVER_ASSOCIATION,
     *(EXTERNAL_SERVER_ASSOCIATION + "/" + leaf for leaf in ("api-original-challenge-and-stop-receipt", "lease-failure-diagnostic", "close-joins-original-packet-worker", "control-close-joins-before-udp-tuple-release", "successor-retains-own-association", "handshake-cancel-joins-both-streams")))
+# Server's sequential positive/rejection cases no longer share one process
+# alarm. Each original child appears once; only their Go parent verdict repeats.
+# Every command retains the original 180-second alarm and 195-second owner bound.
+EXTERNAL_SERVER_GROUPS = {
+    "lifecycle": (
+        "^" + EXTERNAL_SERVER_ROOT + "$/^(on-connect|always|successor-and-original-restore|foreign-predecessor|commit-refused|cancelled-proof|lease-stop-retry)$",
+        (EXTERNAL_SERVER_ROOT, *(EXTERNAL_SERVER_ROOT + "/" + leaf for leaf in EXTERNAL_SERVER_LEAVES if not leaf.startswith("reject/")))),
+    "rejection": (
+        "^" + EXTERNAL_SERVER_ROOT + "$/^reject$/^(entry-token|entry-proof|private-key|psk|final-key|dns|exit|trust|lease-expired|lease-credentials)$",
+        (EXTERNAL_SERVER_ROOT, *(EXTERNAL_SERVER_ROOT + "/" + leaf for leaf in EXTERNAL_SERVER_LEAVES if leaf.startswith("reject/")))),
+    "association": (
+        "^" + EXTERNAL_SERVER_ASSOCIATION + "$",
+        tuple(case for case in EXTERNAL_SERVER_CASES if case == EXTERNAL_SERVER_ASSOCIATION or case.startswith(EXTERNAL_SERVER_ASSOCIATION + "/"))),
+}
 EXTERNAL_LOCAL_ROOT = "TestRouterVPNDesktopExternalWindowsRouterLocalWFP"
 EXTERNAL_LOCAL_CASES = (EXTERNAL_LOCAL_ROOT, *(EXTERNAL_LOCAL_ROOT + "/" + leaf for leaf in EXTERNAL_SERVER_LEAVES if leaf not in ("reject/lease-expired", "reject/lease-credentials", "lease-stop-retry")))
 EXTERNAL_COMPARE_ROOT = "TestRouterVPNDesktopExternalWindowsRouterCompareWFP"
@@ -519,9 +533,11 @@ def report_external_packet(status, output, protocol):
         raise ValueError("Actual ordinary Windows packet endpoint omitted its required native result")
 
 
-def report_external_server(status, output):
+def report_external_server(status, output, group=None):
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
-    if status or any(not exact_native_verdict(output, "PASS", case) for case in EXTERNAL_SERVER_CASES) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
+    required = EXTERNAL_SERVER_CASES if group is None else EXTERNAL_SERVER_GROUPS.get(group, (None, ()))[1]
+    observed = re.findall(r"^\s*--- PASS: (\S+) \(", output, re.MULTILINE)
+    if not required or status or set(observed) != set(required) or any(not exact_native_verdict(output, "PASS", case) for case in required) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
         raise ValueError("Paired Windows Router Server omitted its required native result")
 
 
@@ -578,11 +594,11 @@ def execute_external_packet(source, workspace, build, captured):
         report_external_packet(status, output, protocol)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Actual ordinary packet native executable changed")
-    expression = "^(" + EXTERNAL_SERVER_ROOT + "|" + EXTERNAL_SERVER_ASSOCIATION + ")$"
-    status, output = BOOT.IDENTITY.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=180s", "-test.v"], cwd=source, env=captured, timeout=195)
-    report_external_server(status, output)
-    if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
-        raise ValueError("Paired Router Server native executable changed")
+    for group, (expression, _) in EXTERNAL_SERVER_GROUPS.items():
+        status, output = BOOT.IDENTITY.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=180s", "-test.v"], cwd=source, env=captured, timeout=195)
+        report_external_server(status, output, group)
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+            raise ValueError("Paired Router Server native executable changed")
     # A distinct process retains its own TLS trust root and the full Local budget.
     status, output = BOOT.IDENTITY.run([binary, "-test.run=^" + EXTERNAL_LOCAL_ROOT + "$", "-test.count=1", "-test.timeout=180s", "-test.v"], cwd=source, env=captured, timeout=195)
     report_external_local(status, output)
@@ -792,7 +808,7 @@ PHASE_TIMEOUTS = {
     "node-controls": _PHASE_COMMON + _PHASE_REFERENCES + 4 * (600 + 105),
     "external-hysteria2": _PHASE_COMMON + 600 + 3 * 195 + 2 * (600 + 75),
     "external-socks": _PHASE_COMMON + 600 + 315 + 6 * (600 + 75),
-    "external-packet": _PHASE_COMMON + 600 + 2 * 75 + 6 * 195 + 2 * (600 + 4 * 75) + len(EXTERNAL_LEASE_CONTROLS) * (600 + 75),
+    "external-packet": _PHASE_COMMON + 600 + 2 * 75 + (5 + len(EXTERNAL_SERVER_GROUPS)) * 195 + 2 * (600 + 4 * 75) + len(EXTERNAL_LEASE_CONTROLS) * (600 + 75),
     "external-openvpn": _PHASE_COMMON + 600 + 2 * 75 + 4 * 195 + 5 * (600 + 75),
 }
 _PHASE_IMAGES = {
