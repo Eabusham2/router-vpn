@@ -78,6 +78,7 @@ def inputs() -> list[Path]:
             ROOT / 'mobile/routervpn_multihop_native_test.go.tmpl',
             ROOT / 'mobile/routervpn_imported_entry_native_test.go.tmpl', ROOT / 'deploy/test_mobile_imported_entry.py', ROOT / 'deploy/test_mobile_imported_entry_runner.py',
             ROOT / 'deploy/test_mobile_imported_proxy_xray.py', ROOT / 'deploy/test_mobile_imported_proxy_xray_runner.py',
+            ROOT / 'deploy/test_mobile_imported_connect_xray.py', ROOT / 'deploy/test_mobile_imported_connect_xray_runner.py',
             ROOT / 'android/test_android_imported_router.py', java / 'AndroidImportedRouterPath.java', java / 'AndroidStandardExitStore.java', java / 'AndroidExternalPolicy.java', java / 'AndroidMultihopRuntime.java', java / 'AndroidUnifiedConnectionController.java', java / 'AndroidConnectionProfileStore.java',
             ROOT / 'android/test_android_composite_multihop.py', ROOT / 'android/test_android_max_multihop.py',
             ROOT / 'android/test_android_pq_selection.py', ROOT / 'deploy/testfixtures/composite/main.go',
@@ -195,6 +196,7 @@ def run(vendor: Path) -> None:
         # Keep it alive until every imported host producer has joined.
         subprocess.run([sys.executable,str(ROOT/'deploy/test_mobile_imported_entry.py'),str(vendor),'--android'],cwd=ROOT,env=env,check=True,timeout=1200)
         subprocess.run([sys.executable,str(ROOT/'deploy/test_mobile_imported_proxy_xray.py'),str(vendor),'--native-parsers','--android'],cwd=ROOT,env=env,check=True,timeout=1200)
+        subprocess.run([sys.executable,str(ROOT/'deploy/test_mobile_imported_connect_xray.py'),str(vendor),'--native-parsers','--android'],cwd=ROOT,env=env,check=True,timeout=1200)
     print('All 150 base, 48 entry-layer, 384 both-layer and 837 composite Android graphs passed the pinned native parser; negative controls rejected.')
 
 

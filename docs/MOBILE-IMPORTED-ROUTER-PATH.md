@@ -834,3 +834,40 @@ native parser and actual encrypted CONNECT/REALITY reference stages remain
 required before claiming that native increment verified. They do not establish
 OS tunnel behavior, an exact-SHA all-platform release, private deployment or
 physical-device acceptance.
+
+### November 7 resumed CONNECT native parser gate
+
+The resumed continuation reconstructs the missing parser gate from current
+published sources. It does not claim recovery of the unavailable fourteen-file
+native/reference worktree. The new
+`deploy/test_mobile_imported_connect_xray.py` keeps the eighteen CONNECT/REALITY
+captures separate from the primary 346, CONNECT-layer 32 and SS/HY2-REALITY 18
+inventories. Its eight shared roots require all 172 named verdicts; the pinned
+native reader separately requires nineteen verdicts for each of shared,
+actual Android and actual Swift captures. Both Android producers keep their
+separate empty directories, original 240-second bounds and owned JSON
+implementation. The Apple stage runs the actual Swift producer and checks the
+same captured bytes again after native parsing.
+
+The native parser checks the captured HTTP/HTTPS protocol, authentication,
+TLS validation, both independent Start Layers, selected Home DNS through the
+final, the sole Local selector and the real paired VLESS transport. It rejects
+an injected SS UoT capability. Source receipts bind the actual prepared native
+HTTP package and Xray source, and failures retain their original diagnostics.
+Missing, duplicated, foreign, skipped or changed-source verdicts cannot satisfy
+the gate. The established parser flags and deadlines remain unchanged.
+
+Local verification in this continuation passed the full 172 shared race
+verdicts and all nineteen shared native parser verdicts, using Go 1.26.3,
+core `1ac1a339cb1223e9c70eae14c44411c75033c02d` and prepared Xray
+`50231eaff98c`. Ten new runner tests and the eleven retained SS/HY2-REALITY
+runner tests passed. The local Android producer could not compile its Java 17
+target because this executor lacks the JDK release-symbol archive; an available
+Java 21 compiler module does not replace that contract. Swift is not installed
+here. The new actual Android and Apple native parser stages therefore remain
+pending hosted execution, not locally passed.
+
+This parser increment does not close the separate encrypted CONNECT/REALITY
+peer, selected encrypted DNS, physical-interface, system-tunnel, package,
+signing, release or device requirements. Those retain their own original
+positive and negative controls.

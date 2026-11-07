@@ -953,3 +953,241 @@ func routerImportedProxyRealityGraph(t *testing.T, raw string, axes []string) {
 		t.Fatal("actual pinned parser rejected proxy REALITY graph", err)
 	}
 }
+
+// CONNECT source receipts stay separate from every earlier imported inventory.
+func routerImportedCONNECTRealityNames() map[string]bool {
+	expected := map[string]bool{}
+	for _, kind := range []string{"http-connect", "https-connect"} {
+		for _, first := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, final := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				expected[kind+"--reality-vision--"+first+"--"+final+".json"] = true
+			}
+		}
+	}
+	return expected
+}
+func TestRouterImportedCONNECTRealitySourceGraphs(t *testing.T) {
+	routerImportedCONNECTRealitySources(t, "ROUTERVPN_IMPORTED_CONNECT_XRAY_FIXTURES", false)
+}
+func TestRouterImportedCONNECTRealityAndroidSourceGraphs(t *testing.T) {
+	routerImportedCONNECTRealitySources(t, "ROUTERVPN_ANDROID_IMPORTED_CONNECT_XRAY_FIXTURES", true)
+}
+func routerImportedCONNECTRealitySources(t *testing.T, environment string, android bool) {
+	root := os.Getenv(environment)
+	if root == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_CONNECT_XRAY_FIXTURES") == "1" {
+			t.Fatal("required original CONNECT REALITY captures absent")
+		}
+		t.Skip("separate CONNECT REALITY source gate supplies exact captures")
+	}
+	expected := routerImportedCONNECTRealityNames()
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != len(expected) {
+		t.Fatal("incomplete independent CONNECT REALITY capture matrix", err)
+	}
+	for _, entry := range entries {
+		t.Run(entry.Name(), func(t *testing.T) {
+			name := entry.Name()
+			if android {
+				if !strings.HasPrefix(name, "android-") {
+					t.Fatal("foreign Android CONNECT REALITY capture")
+				}
+				name = strings.TrimPrefix(name, "android-")
+			}
+			info, err := entry.Info()
+			if err != nil || !expected[name] || entry.Type()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+				t.Fatal("unowned original CONNECT REALITY capture", err)
+			}
+			raw, err := os.ReadFile(filepath.Join(root, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var source []string
+			if json.Unmarshal(raw, &source) != nil || len(source) != 9 {
+				t.Fatal("CONNECT REALITY capture lost its exact nine-string receipt")
+			}
+			plan, err := NewRouterImportedEntryMultihop(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
+			if err != nil {
+				t.Fatal("native constructor rejected captured CONNECT REALITY graph", err)
+			}
+			defer plan.Close()
+			if plan.SourceSHA256() != source[7] || plan.Config() != source[8] {
+				t.Fatal("CONNECT REALITY constructor changed exact original source bytes")
+			}
+			axes := strings.Split(strings.TrimSuffix(name, ".json"), "--")
+			var meta map[string]string
+			normalize := func(value string) string {
+				if value == "" {
+					return "off"
+				}
+				return value
+			}
+			if json.Unmarshal([]byte(plan.Metadata()), &meta) != nil || len(axes) != 4 || meta["entry_kind"] != "external" || meta["entry_mode"] != axes[0] || meta["exit_mode"] != "reality-vision" || meta["transport_capability"] != "vless-stream" || meta["entry_api"] != "" || meta["entry_node_id"] != "" || meta["entry_token"] != "" || normalize(meta["entry_start_layer"]) != axes[2] || normalize(meta["exit_start_layer"]) != axes[3] {
+				t.Fatal("CONNECT REALITY constructor changed captured identity or layers")
+			}
+			routerImportedCONNECTRealityGraph(t, plan.Config(), axes)
+			if _, err := mobilemtu.ReadProfile(plan.MTUProfile()); err != nil {
+				t.Fatal("CONNECT REALITY lost captured final MTU authority", err)
+			}
+			if _, err := mobilemtu.NewPlan(plan.Config(), 1280); err != nil {
+				t.Fatal("CONNECT REALITY lost retained MTU plan", err)
+			}
+			if plan.Healthy() {
+				t.Fatal("CONNECT REALITY compilation manufactured readiness")
+			}
+			if _, err := plan.NewHopMeasurement(nil); err == nil {
+				t.Fatal("unstarted CONNECT REALITY graph gained measurement authority")
+			}
+			if _, err := plan.NewMTU(nil, nil); err == nil {
+				t.Fatal("unstarted CONNECT REALITY graph gained MTU authority")
+			}
+		})
+	}
+}
+func TestRouterImportedCONNECTRealityAppleGraphs(t *testing.T) {
+	root := os.Getenv("ROUTERVPN_APPLE_IMPORTED_CONNECT_XRAY_FIXTURES")
+	if root == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_CONNECT_XRAY_FIXTURES") == "1" {
+			t.Fatal("required actual Swift CONNECT REALITY graphs absent")
+		}
+		t.Skip("actual Swift CONNECT REALITY gate supplies exact graphs")
+	}
+	expected := routerImportedCONNECTRealityNames()
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != len(expected) {
+		t.Fatal("incomplete actual Swift CONNECT REALITY graph matrix", err)
+	}
+	for _, entry := range entries {
+		t.Run(entry.Name(), func(t *testing.T) {
+			info, err := entry.Info()
+			if err != nil || !expected[entry.Name()] || entry.Type()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+				t.Fatal("unowned Swift CONNECT REALITY graph", err)
+			}
+			raw, err := os.ReadFile(filepath.Join(root, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			routerImportedCONNECTRealityGraph(t, string(raw), strings.Split(strings.TrimSuffix(entry.Name(), ".json"), "--"))
+		})
+	}
+}
+func routerImportedCONNECTRealityGraph(t *testing.T, raw string, axes []string) {
+	t.Helper()
+	var graph map[string]any
+	if len(axes) != 4 || axes[1] != "reality-vision" || json.Unmarshal([]byte(raw), &graph) != nil {
+		t.Fatal("CONNECT REALITY graph has no exact layer axes")
+	}
+	rows, ok := graph["outbounds"].([]any)
+	expected := 3
+	for _, layer := range axes[2:] {
+		if layer != "off" {
+			expected++
+		}
+	}
+	if !ok || len(rows) != expected {
+		t.Fatal("CONNECT REALITY graph lost its exact transport closure")
+	}
+	byTag := map[string]map[string]any{}
+	for _, value := range rows {
+		node, ok := value.(map[string]any)
+		if !ok {
+			t.Fatal("invalid CONNECT REALITY outbound")
+		}
+		tag, ok := node["tag"].(string)
+		if !ok || tag == "" || byTag[tag] != nil {
+			t.Fatal("duplicate CONNECT REALITY owner")
+		}
+		byTag[tag] = node
+	}
+	first, last, selector := byTag["entry-wg"], byTag[mobilemultihop.LocalTag], byTag["proxy"]
+	if first == nil || first["type"] != "http" || last == nil || last["type"] != "routervpn-xray" || last["mode"] != "reality-vision" || len(last) != 5 || selector == nil || selector["type"] != "selector" || selector["default"] != mobilemultihop.LocalTag {
+		t.Fatal("CONNECT REALITY changed original native roles")
+	}
+	username, userOK := first["username"].(string)
+	password, passwordOK := first["password"].(string)
+	if axes[0] != "http-connect" && axes[0] != "https-connect" || !userOK || username == "" || !passwordOK || password == "" {
+		t.Fatal("CONNECT REALITY lost the original stream protocol or authentication")
+	}
+	if axes[0] == "http-connect" {
+		if first["tls"] != nil {
+			t.Fatal("HTTP CONNECT acquired an uncaptured TLS owner")
+		}
+	} else {
+		tls, ok := first["tls"].(map[string]any)
+		name, nameOK := tls["server_name"].(string)
+		if !ok || tls["enabled"] != true || !nameOK || name == "" || tls["insecure"] == true {
+			t.Fatal("HTTPS CONNECT lost its captured name or certificate validation")
+		}
+	}
+	for _, node := range byTag {
+		if _, exists := node["udp_over_tcp"]; exists {
+			t.Fatal("CONNECT REALITY borrowed Shadowsocks UoT authority")
+		}
+	}
+	selected, ok := selector["outbounds"].([]any)
+	if !ok || len(selected) != 1 || selected[0] != mobilemultihop.LocalTag {
+		t.Fatal("CONNECT REALITY selector gained a bypass")
+	}
+	checkLayer := func(node map[string]any, mode string) {
+		expected := "shadowsocks"
+		if mode == "aes-256-gcm+xor-whitening" {
+			expected = "routervpn-aes-xor"
+		}
+		if node == nil || node["type"] != expected || node["method"] != mobilemultihop.NativeStartLayerMethod || node["password"] == "" {
+			t.Fatal("CONNECT REALITY substituted a captured Start Layer")
+		}
+	}
+	var entryOuter map[string]any
+	if axes[2] == "off" {
+		if first["detour"] != nil {
+			t.Fatal("Off proxy entry acquired a wrapper")
+		}
+	} else {
+		tag, _ := first["detour"].(string)
+		entryOuter = byTag[tag]
+		checkLayer(entryOuter, axes[2])
+		if entryOuter["detour"] != nil || first["server"] != "10.93.0.1" {
+			t.Fatal("CONNECT REALITY entry layer changed physical or inner owner")
+		}
+	}
+	if axes[3] == "off" {
+		if last["detour"] != "entry-wg" {
+			t.Fatal("Off final lost original imported entry")
+		}
+	} else {
+		tag, _ := last["detour"].(string)
+		finalOuter := byTag[tag]
+		checkLayer(finalOuter, axes[3])
+		if tag != mobilemultihop.NativeStartLayerTag || finalOuter["detour"] != "entry-wg" {
+			t.Fatal("CONNECT REALITY final layer bypassed original entry")
+		}
+		if entryOuter != nil && (entryOuter["password"] == finalOuter["password"] || entryOuter["server"] == finalOuter["server"] || entryOuter["tag"] == finalOuter["tag"]) {
+			t.Fatal("CONNECT REALITY layers borrowed independent credentials or owners")
+		}
+	}
+	route, ok := graph["route"].(map[string]any)
+	if !ok || route["final"] != "proxy" {
+		t.Fatal("CONNECT REALITY changed route selection")
+	}
+	policy, ok := graph["dns"].(map[string]any)
+	if !ok {
+		t.Fatal("CONNECT REALITY omitted selected DNS")
+	}
+	servers, ok := policy["servers"].([]any)
+	if !ok {
+		t.Fatal("CONNECT REALITY omitted selected resolver")
+	}
+	found := false
+	for _, value := range servers {
+		server, ok := value.(map[string]any)
+		if ok && server["tag"] == policy["final"] {
+			found = server["type"] == "udp" && server["server"] == "192.168.50.133" && server["detour"] == "proxy"
+		}
+	}
+	if !found {
+		t.Fatal("CONNECT REALITY substituted default Home DNS or its final owner")
+	}
+	if err := CheckConfig(raw); err != nil {
+		t.Fatal("actual pinned parser rejected CONNECT REALITY graph", err)
+	}
+}
