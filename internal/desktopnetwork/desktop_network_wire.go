@@ -5,9 +5,68 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"net"
 	"net/netip"
 	"sort"
 )
+
+// Darwin's radix masks are sockaddr-shaped byte prefixes, not necessarily
+// complete IP sockaddrs. XNU rtm_scrub keeps the trimmed length for GET/GET2
+// and rn_addmask may fill the pre-address header with ones. Use the original
+// destination width and fixed address offset; neither the mask family byte
+// nor the distance back from its trimmed end identifies the mask bytes.
+// This std-only decoder is also copied into the native TUN module.
+func desktopDarwinNetworkMask(addrs int32, data []byte, width int) (int, error) {
+	bad := fmt.Errorf("Darwin route has no complete contiguous native mask")
+	const netmaskIndex, addressCount = 2, 8
+	if width != 32 && width != 128 || uint32(addrs)&^uint32((1<<addressCount)-1) != 0 || addrs&(1<<netmaskIndex) == 0 || len(data) > 8192 {
+		return 0, bad
+	}
+	var record []byte
+	for index := 0; index < addressCount; index++ {
+		if addrs&(1<<index) == 0 {
+			continue
+		}
+		if len(data) < 4 {
+			return 0, bad
+		}
+		length := int(data[0])
+		padded := max(4, (length+3)&^3)
+		if padded > len(data) {
+			return 0, bad
+		}
+		if index == netmaskIndex {
+			record = data[:padded]
+		}
+		data = data[padded:]
+	}
+	if len(data) != 0 || record == nil {
+		return 0, bad
+	}
+	length := int(record[0])
+	if length == 0 {
+		return 0, nil
+	}
+	offset, maximum := 4, 16 // Darwin sockaddr_in.sin_addr / sizeof(sockaddr_in)
+	if width == 128 {
+		offset, maximum = 8, 28 // sockaddr_in6.sin6_addr / sizeof(sockaddr_in6)
+	}
+	if length <= offset || length > maximum {
+		return 0, bad
+	}
+	mask := make(net.IPMask, width/8)
+	copy(mask, record[offset:min(length, offset+len(mask))])
+	for _, value := range record[min(length, offset+len(mask)):length] {
+		if value != 0 { // A native scope or other suffix cannot become mask bits.
+			return 0, bad
+		}
+	}
+	ones, bits := mask.Size()
+	if bits != width {
+		return 0, bad
+	}
+	return ones, nil
+}
 
 // The supported desktop Linux architectures are little endian. These parsers
 // are also compiled on the other hosts so canonical receipts can be checked

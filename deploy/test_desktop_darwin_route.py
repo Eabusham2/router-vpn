@@ -38,6 +38,7 @@ TEMPLATE = 'sing_tun_route_darwin_test.go.tmpl'
 GROUPS = ('TestRouterVPNDarwinRouteConflictPreservesExisting', 'TestRouterVPNDarwinRouteOwnedAddAndRemove')
 INVENTORY_CASES = {
     'TestRouterVPNDarwinRouteDump2OriginalInventory': ('ipv4', 'ipv6'),
+    'TestRouterVPNDarwinRouteDump2CompactMasks': ('ipv4', 'ipv6'),
     'TestRouterVPNDarwinRouteDump2RefusesUnprovedCache': (
         'referenced', 'no-expiry', 'wrong-parent', 'foreign-interface', 'foreign-gateway',
         'missing-parent', 'duplicate-parent', 'ordinary-dump', 'truncated'),

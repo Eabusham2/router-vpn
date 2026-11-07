@@ -100,6 +100,51 @@ func TestRouterVPNDarwinRouteDump2OriginalInventory(t *testing.T) {
 	}
 }
 
+func TestRouterVPNDarwinRouteDump2CompactMasks(t *testing.T) {
+	for _, family := range []string{"ipv4", "ipv6"} {
+		t.Run(family, func(t *testing.T) {
+			_, _, originalObject := routerVPNDarwinDump2Objects(family)
+			address := netip.MustParsePrefix(originalObject.Destination).Addr()
+			size, offset := syscall.SizeofSockaddrInet4, 4
+			if family == "ipv6" {
+				size, offset = syscall.SizeofSockaddrInet6, 8
+			}
+			for bits := 0; bits <= address.BitLen(); bits++ {
+				object := originalObject
+				object.Flags &^= syscall.RTF_HOST
+				object.Destination = netip.PrefixFrom(address, bits).Masked().String()
+				wire := routerVPNDarwinDump2Wire(t, object, 0, 1, 0)
+				mask := append([]byte(nil), wire[len(wire)-size:]...)
+				wire = wire[:len(wire)-size]
+				if bits == 0 {
+					mask = make([]byte, 4)
+				} else {
+					length := offset + (bits+7)/8
+					mask = mask[:(length+3)&^3]
+					mask[0] = byte(length)
+					for index := 1; index < offset; index++ {
+						mask[index] = 0xff // XNU radix header, not sa_family.
+					}
+				}
+				wire = append(wire, mask...)
+				binary.LittleEndian.PutUint16(wire, uint16(len(wire)))
+				original := append([]byte(nil), wire...)
+				calls := 0
+				actual, err := routervpnDarwinNetworkObjectsFrom(func(kind, parameter int) ([]byte, error) {
+					calls++
+					if kind != syscall.NET_RT_DUMP2 || parameter != 0 || calls != 1 {
+						return nil, errors.New("compact mask changed its original inventory read")
+					}
+					return wire, nil
+				})
+				if err != nil || calls != 1 || len(actual) != 1 || actual[0] != object || !bytes.Equal(wire, original) {
+					t.Fatal("compact native mask changed exact route identity", bits, actual, err)
+				}
+			}
+		})
+	}
+}
+
 func TestRouterVPNDarwinRouteDump2RefusesUnprovedCache(t *testing.T) {
 	for _, fault := range []string{"referenced", "no-expiry", "wrong-parent", "foreign-interface", "foreign-gateway", "missing-parent", "duplicate-parent", "ordinary-dump", "truncated"} {
 		t.Run(fault, func(t *testing.T) {

@@ -5,7 +5,6 @@ package desktopnetwork
 import (
 	"encoding/binary"
 	"errors"
-	"net"
 	"net/netip"
 	"syscall"
 )
@@ -39,13 +38,8 @@ func ParseDesktopDarwinNetworkObject(message *syscall.RouteMessage) (DesktopNetw
 	}
 	bits := destination.BitLen()
 	if message.Header.Flags&syscall.RTF_HOST == 0 {
-		mask := DesktopDarwinNetworkAddress(addresses[syscall.RTAX_NETMASK])
-		if !mask.IsValid() || mask.BitLen() != bits {
-			return DesktopNetworkObject{}, bad
-		}
-		var size int
-		bits, size = net.IPMask(mask.AsSlice()).Size()
-		if size != destination.BitLen() {
+		bits, err = desktopDarwinNetworkMask(message.Header.Addrs, message.Data, bits)
+		if err != nil {
 			return DesktopNetworkObject{}, bad
 		}
 	}
