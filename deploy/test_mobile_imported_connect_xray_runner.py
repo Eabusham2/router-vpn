@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Require every captured proxy REALITY source and executable verdict."""
+"""Require every captured CONNECT REALITY source and executable verdict."""
 import ast
 import copy
+import contextlib
+import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import tempfile
 import sys
+import subprocess
 import unittest
 from unittest import mock
 
@@ -27,7 +31,8 @@ class CONNECTRealityInventory(unittest.TestCase):
         return [gate.IMPORTED.names(gate.CORE),
                 gate.IMPORTED.names({gate.SHARED_PARSER: sorted(gate.FILES)}),
                 gate.IMPORTED.names({gate.ANDROID_PARSER: ['android-' + name for name in sorted(gate.FILES)]}),
-                gate.IMPORTED.names({gate.APPLE_PARSER: sorted(gate.FILES)})]
+                gate.IMPORTED.names({gate.APPLE_PARSER: sorted(gate.FILES)}),
+                gate.IMPORTED.names(gate.PEERS) | set(gate.SUPPORT)]
 
     def test_exact_primary_and_separate_inventories(self):
         self.assertEqual(len(gate.IMPORTED.FILES), 346)
@@ -39,6 +44,13 @@ class CONNECTRealityInventory(unittest.TestCase):
         for kind in gate.KINDS:
             self.assertEqual(len([name for name in gate.FILES if name.startswith(kind + '--')]), 9)
         self.assertFalse(gate.FILES & gate.PROXY.FILES)
+        self.assertEqual({parent:len(gate.IMPORTED.names({parent:children})) for parent,children in gate.PEERS.items()}, {
+            'TestRouterVPNImportedHTTPRealityVisionNativeTraffic':72,
+            'TestRouterVPNImportedHTTPSRealityVisionNativeTraffic':74,
+            gate.DNS_PARENT:25})
+        native = gate.IMPORTED.names(gate.PEERS) | set(gate.SUPPORT)
+        self.assertEqual(len(native),173)
+        self.assertEqual(len([name for name in native if name.count('/')==2]),148)
         for expected in self.scopes():
             gate.SOCKS.require_verdicts(self.encode(self.events(expected)), 0, expected)
 
@@ -295,6 +307,155 @@ class CONNECTRealityShippingBoundaries(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     gate.execute(['original-command'],Path('original-source'),{}, {'TestRequired'},90)
                 observed.assert_called_once_with('original native failure\n',end='',flush=True)
+
+
+class CONNECTNativeExecution(unittest.TestCase):
+    def test_both_prepared_peer_sources_are_exact_and_separate_from_parsers(self):
+        for template, target in gate.PEER_COPIES:
+            for fault in ('missing', 'changed', 'symlink'):
+                with self.subTest(target=target, fault=fault), tempfile.TemporaryDirectory() as temporary:
+                    vendor = Path(temporary)
+                    for source, relative in gate.PEER_COPIES:
+                        path = vendor/relative
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes((ROOT/source).read_bytes())
+                    path = vendor/target
+                    if fault == 'missing': path.unlink()
+                    elif fault == 'changed': path.write_bytes(path.read_bytes()+b'\n// changed native peer\n')
+                    else:
+                        original = vendor/'foreign.go'
+                        original.write_bytes(path.read_bytes())
+                        path.unlink(); path.symlink_to(original)
+                    with mock.patch.object(gate.PROXY, 'checked_sources', return_value={}) as retained, \
+                         mock.patch.object(gate.subprocess, 'check_output') as git:
+                        with self.assertRaises(ValueError): gate.checked_sources(vendor, True)
+                        retained.assert_called_once_with(vendor, True)
+                        git.assert_not_called()
+
+    def test_reference_stage_keeps_one_native_image_exact_roots_and_original_failure(self):
+        parents = [*gate.SUPPORT, *gate.PEERS]
+        for failed in (None, *parents):
+            with self.subTest(failed=failed), tempfile.TemporaryDirectory() as temporary:
+                workspace = Path(temporary)
+                binary = workspace/'reference'
+                binary.write_bytes(b'original reference image')
+                digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+                source = {'original-reference': 'a'*64}
+                calls = []
+                error = subprocess.TimeoutExpired(['actual native command'], 195, output=b'original native timeout')
+                def execute(compiler, vendor, env, image, actual_digest, parent, expected, timeout=90):
+                    self.assertEqual(image, workspace/'native')
+                    self.assertEqual(actual_digest, 'b'*64)
+                    self.assertEqual(set(expected), {parent} if parent in gate.SUPPORT else gate.IMPORTED.names({parent:gate.PEERS[parent]}))
+                    self.assertEqual(timeout, 90 if parent in gate.SUPPORT else 180)
+                    calls.append(parent)
+                    if parent == failed: raise error
+                    return {'sha256': actual_digest, 'verdicts': list(expected)}
+                with mock.patch.object(gate, 'build_reference', return_value=(workspace/'xray', source, binary, digest, workspace/'overlay', {'owned': 'c'*64})), \
+                     mock.patch.object(gate, 'compile_image', return_value=(workspace/'native', 'b'*64)) as compile_native, \
+                     mock.patch.object(gate, 'execute_image', side_effect=execute), \
+                     mock.patch.object(gate.SOCKS, 'checked_xray', return_value=source) as recheck, \
+                     mock.patch.object(gate.SOCKS, 'check_reference_instrumentation') as instrumentation:
+                    if failed:
+                        with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                            gate.reference_stage('go', Path('core'), workspace, {})
+                        self.assertIs(caught.exception, error)
+                        recheck.assert_not_called(); instrumentation.assert_not_called()
+                    else:
+                        result = gate.reference_stage('go', Path('core'), workspace, {})
+                        self.assertEqual(set(result['support']), set(gate.SUPPORT))
+                        self.assertEqual(set(result['peers']), set(gate.PEERS))
+                        self.assertEqual(sum(len(r['verdicts']) for group in ('support','peers') for r in result[group].values()), 173)
+                        recheck.assert_called_once(); instrumentation.assert_called_once()
+                    compile_native.assert_called_once_with('go', Path('core'), workspace, {}, './protocol/routervpnamnezia', 'connect-reality-peers')
+                self.assertEqual(calls, parents[:parents.index(failed)+1] if failed else parents)
+
+    def test_reference_stage_rejects_changed_reference_source_image_or_instrumentation(self):
+        for fault in ('source', 'image', 'instrumentation'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temporary:
+                workspace = Path(temporary)
+                binary = workspace/'reference'
+                binary.write_bytes(b'original reference image')
+                digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+                source = {'original-reference': 'a'*64}
+                def execute(*args, **kwargs):
+                    if fault == 'image': binary.write_bytes(b'changed reference image')
+                    return {}
+                with mock.patch.object(gate, 'build_reference', return_value=(workspace/'xray', source, binary, digest, workspace/'overlay', {})), \
+                     mock.patch.object(gate, 'compile_image', return_value=(workspace/'native', 'b'*64)), \
+                     mock.patch.object(gate, 'execute_image', side_effect=execute), \
+                     mock.patch.object(gate.SOCKS, 'checked_xray', return_value={} if fault == 'source' else source), \
+                     mock.patch.object(gate.SOCKS, 'check_reference_instrumentation', side_effect=ValueError('changed instrumentation') if fault == 'instrumentation' else None):
+                    with self.assertRaises(ValueError): gate.reference_stage('go', Path('core'), workspace, {})
+
+    def test_complete_original_failure_and_timeout_output_survive(self):
+        diagnostic = 'first-cause\n'+'original detail\n'*3000+'last-cause\n'
+        timeout = subprocess.TimeoutExpired(['native'],105,output=diagnostic.encode(),stderr=b'original stderr\n')
+        with mock.patch.object(gate.SOCKS,'run_command',side_effect=timeout), contextlib.redirect_stdout(io.StringIO()) as shown:
+            with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                gate.run_command(['native'],Path('.'),{},105)
+        self.assertIs(caught.exception,timeout)
+        self.assertEqual(shown.getvalue(),diagnostic+'original stderr\n')
+
+    def test_native_image_keeps_original_flags_bounds_identity_and_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace=Path(temporary); image=workspace/'connect-native'
+            calls=[]
+            def compile_command(command,cwd,env,timeout):
+                calls.append((command,timeout))
+                image.write_bytes(b'original compiled image')
+                return 0,''
+            with mock.patch.object(gate,'run_command',side_effect=compile_command):
+                actual,digest=gate.compile_image('go',Path('core'),workspace,{'GOOS':'linux'},'./protocol/routervpnamnezia','connect-native')
+            self.assertEqual(actual,image)
+            self.assertEqual(calls,[(['go','test','-mod=readonly','-race','-c','-ldflags=-checklinkname=0','-tags',gate.SOCKS.TAGS,
+                                      '-o',image,'./protocol/routervpnamnezia'],600)])
+            parent=gate.SUPPORT[0]
+            output='\n'.join(json.dumps({'Action':action,'Test':parent}) for action in ('run','pass'))+'\n'
+            with mock.patch.object(gate,'run_command',return_value=(0,output)) as run, contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(gate.execute_image('go',Path('core'),{},image,digest,parent,(parent,),180),{'sha256':digest,'verdicts':[parent]})
+            self.assertEqual(run.call_args.args[-1],195)
+            self.assertIn('-test.timeout=180s',run.call_args.args[0])
+            image.write_bytes(b'changed compiled image')
+            with mock.patch.object(gate,'run_command') as run:
+                with self.assertRaisesRegex(ValueError,'changed before'):
+                    gate.execute_image('go',Path('core'),{},image,digest,parent,(parent,))
+                run.assert_not_called()
+            image.write_bytes(b'original compiled image')
+            failure='first native cause\n'+'x'*30000+'\nlast native cause\n'
+            with mock.patch.object(gate,'run_command',return_value=(1,failure)), contextlib.redirect_stdout(io.StringIO()) as shown:
+                with self.assertRaises(ValueError):
+                    gate.execute_image('go',Path('core'),{},image,digest,parent,(parent,))
+            self.assertEqual(shown.getvalue(),failure)
+
+    def test_reference_diagnostic_wrapper_restores_original_private_helper(self):
+        original=gate.SOCKS.run_command
+        original_verdicts=gate.SOCKS.require_verdicts
+        for timeout in (False,True):
+            error=subprocess.TimeoutExpired(['original-reference'],600,output=b'original timeout output\n')
+            def child(command,cwd,env,limit):
+                if timeout: raise error
+                return 1,'original reference failure\n'
+            def build(*args):
+                status,output=gate.SOCKS.run_command(['original-reference'],Path('.'),{},600)
+                raise ValueError('original reference failed')
+            with mock.patch.object(gate.SOCKS,'run_command',side_effect=child) as captured, \
+                 mock.patch.object(gate.SOCKS,'build_reference',side_effect=build), contextlib.redirect_stdout(io.StringIO()) as shown:
+                with self.assertRaises(subprocess.TimeoutExpired if timeout else ValueError) as caught:
+                    gate.build_reference('go',Path('core'),Path('owned'),{})
+                self.assertIs(gate.SOCKS.run_command,captured)
+                self.assertEqual(shown.getvalue(),'original timeout output\n' if timeout else 'original reference failure\n')
+                if timeout:self.assertIs(caught.exception,error)
+        self.assertIs(gate.SOCKS.run_command,original)
+        self.assertIs(gate.SOCKS.require_verdicts,original_verdicts)
+        def incomplete(*args):
+            status,output=gate.SOCKS.run_command(['original-reference'],Path('.'),{},600)
+            gate.SOCKS.require_verdicts(output,status,{'TestOriginalDetector'})
+        with mock.patch.object(gate.SOCKS,'run_command',return_value=(0,'original incomplete detector output\n')), \
+             mock.patch.object(gate.SOCKS,'build_reference',side_effect=incomplete), contextlib.redirect_stdout(io.StringIO()) as shown:
+            with self.assertRaises(ValueError): gate.build_reference('go',Path('core'),Path('owned'),{})
+            self.assertEqual(shown.getvalue(),'original incomplete detector output\n')
+        self.assertIs(gate.SOCKS.require_verdicts,original_verdicts)
 
 
 if __name__ == '__main__':

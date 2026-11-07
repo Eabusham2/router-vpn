@@ -270,8 +270,25 @@ func startDesktopNodeXrayServer(t *testing.T, mode string, ip netip.Addr, dnsAdd
 // The optional fixture-only proof route admits exactly 10.77.0.1:8787 to its
 // separately retained loopback listener. Existing reference callers keep the
 // same blocked default and gain no additional destination.
-func startDesktopNodeXrayServerWithProof(t *testing.T, mode string, ip netip.Addr, dnsAddress, proofAddress string) (*desktopNodeLayerServer, string) {
+type desktopNodeXrayDNSRoute struct {
+	network, server string
+	port            uint16
+	private         string
+}
+
+func startDesktopNodeXrayServerWithProof(t *testing.T, mode string, ip netip.Addr, dnsAddress, proofAddress string, selectedDNS ...desktopNodeXrayDNSRoute) (*desktopNodeLayerServer, string) {
 	t.Helper()
+	seenDNS := make(map[string]bool)
+	for _, route := range selectedDNS {
+		private, err := netip.ParseAddrPort(route.private)
+		tuple := route.network + "/" + fmt.Sprint(route.port)
+		if route.server != "198.51.100.53" ||
+			!(route.network == "tcp" && (route.port == 853 || route.port == 443) || route.network == "udp" && route.port == 443) ||
+			err != nil || !private.Addr().Is4() || !private.Addr().IsLoopback() || private.Port() == 0 || seenDNS[tuple] {
+			t.Fatal("Xray reference changed a captured selected-DNS route", err)
+		}
+		seenDNS[tuple] = true
+	}
 	if proofAddress != "" {
 		proof, err := netip.ParseAddrPort(proofAddress)
 		if err != nil || !proof.Addr().Is4() || !proof.Addr().IsLoopback() || proof.Port() == 0 {
@@ -445,6 +462,10 @@ func startDesktopNodeXrayServerWithProof(t *testing.T, mode string, ip netip.Add
 	}
 	if proofAddress != "" {
 		routes = append(routes, capturedRoute{"owned-private-proof", "tcp", proofAddress, "8787", []string{"10.77.0.1/32"}})
+	}
+	for index, route := range selectedDNS {
+		routes = append(routes, capturedRoute{"owned-selected-dns-" + fmt.Sprint(index), route.network, route.private,
+			fmt.Sprint(route.port), []string{route.server + "/32"}})
 	}
 	for _, route := range routes {
 		target := netip.MustParseAddrPort(route.redirect)

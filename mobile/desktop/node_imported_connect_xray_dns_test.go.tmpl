@@ -1,0 +1,688 @@
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/quic-go"
+	"github.com/sagernet/quic-go/http3"
+	"github.com/sagernet/sing-box/adapter"
+	transport "github.com/sagernet/sing-box/dns/transport"
+	dnsquic "github.com/sagernet/sing-box/dns/transport/quic"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	XR "github.com/sagernet/sing-box/protocol/routervpnxray"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+const desktopCONNECTXrayDNSName = "resolver.routervpn.test"
+const desktopCONNECTXrayDNSQuestion = "owned-query.routervpn.test."
+const desktopCONNECTXrayDNSPath = "/dns-query/captured"
+
+// This bounded protocol fixture runs the actual pinned DNS transports and
+// native Xray owner. Only the separately owned reference server maps the exact
+// selected DNS tuples to loopback. It does not grant an interface/TUN proof or
+// change the independent imported composition's physical interface guard.
+type desktopCONNECTXrayDNSResolver struct {
+	certificate string
+	routes      []desktopNodeXrayDNSRoute
+	hits        [4]atomic.Int64
+	requests    [4]atomic.Int64
+	tlsHello    [4]atomic.Int64
+	invalid     atomic.Int64
+	reuse       [2]atomic.Int64
+	reuseReady  chan struct{}
+	reuseOnce   sync.Once
+	cancelled   chan struct{}
+	entered     chan struct{}
+	enterOnce   sync.Once
+	cancelOnce  sync.Once
+}
+
+func desktopCONNECTXrayDNSCertificate(t *testing.T) (tls.Certificate, string) {
+	return desktopExternalInstalledPeerCertificate(t, false, desktopCONNECTXrayDNSName)
+}
+
+func desktopCONNECTXrayDNSReuseProbe(kind int, query *mDNS.Msg) (int, bool) {
+	// These are the exact A/AAAA connection-reuse probes in the pinned TLS
+	// transport. Application ID zero and every other transport stay separate.
+	if kind != 1 || query == nil || query.Response || query.Opcode != mDNS.OpcodeQuery || query.Rcode != 0 ||
+		query.Authoritative || query.Truncated || query.RecursionAvailable || !query.RecursionDesired ||
+		query.AuthenticatedData || query.CheckingDisabled || len(query.Question) != 1 ||
+		len(query.Answer) != 0 || len(query.Ns) != 0 || len(query.Extra) != 0 ||
+		query.Question[0].Name != desktopCONNECTXrayDNSQuestion || query.Question[0].Qclass != mDNS.ClassINET {
+		return 0, false
+	}
+	if query.Id == 1 && query.Question[0].Qtype == mDNS.TypeA {
+		return 0, true
+	}
+	if query.Id == 2 && query.Question[0].Qtype == mDNS.TypeAAAA {
+		return 1, true
+	}
+	return 0, false
+}
+
+func (p *desktopCONNECTXrayDNSResolver) answer(query *mDNS.Msg, probeAAAA bool) (*mDNS.Msg, bool) {
+	if query == nil || query.Response || len(query.Question) != 1 ||
+		(query.Question[0].Name != desktopCONNECTXrayDNSQuestion && query.Question[0].Name != "cancel."+desktopCONNECTXrayDNSQuestion) ||
+		query.Question[0].Qclass != mDNS.ClassINET || (query.Question[0].Qtype != mDNS.TypeA && !(probeAAAA && query.Question[0].Qtype == mDNS.TypeAAAA)) {
+		p.invalid.Add(1)
+		return nil, false
+	}
+	response := new(mDNS.Msg)
+	response.SetReply(query)
+	response.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: query.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 30}, A: net.IPv4(203, 0, 113, 77)}}
+	if probeAAAA {
+		response.Answer = []mDNS.RR{&mDNS.AAAA{Hdr: mDNS.RR_Header{Name: query.Question[0].Name, Rrtype: mDNS.TypeAAAA, Class: mDNS.ClassINET, Ttl: 30}, AAAA: net.ParseIP("2001:db8::77")}}
+	}
+	return response, true
+}
+
+func startDesktopCONNECTXrayDNSResolver(t *testing.T) *desktopCONNECTXrayDNSResolver {
+	t.Helper()
+	pair, certificate := desktopCONNECTXrayDNSCertificate(t)
+	p := &desktopCONNECTXrayDNSResolver{certificate: certificate, entered: make(chan struct{}), cancelled: make(chan struct{}), reuseReady: make(chan struct{})}
+	tlsConfig := func(kind int) *tls.Config {
+		return &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13,
+			GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { p.tlsHello[kind].Add(1); return nil, nil }}
+	}
+	{
+		const kind = 1
+		server := &mDNS.Server{Handler: mDNS.HandlerFunc(func(w mDNS.ResponseWriter, query *mDNS.Msg) {
+			p.requests[kind].Add(1)
+			slot, probe := desktopCONNECTXrayDNSReuseProbe(kind, query)
+			if kind == 1 && query.Id != 0 && !probe {
+				p.invalid.Add(1)
+				return
+			}
+			if response, valid := p.answer(query, probe && slot == 1); valid {
+				if !probe {
+					p.hits[kind].Add(1)
+				}
+				if err := w.WriteMsg(response); err == nil && probe {
+					p.reuse[slot].Add(1)
+					if p.reuse[0].Load() == 1 && p.reuse[1].Load() == 1 {
+						p.reuseOnce.Do(func() { close(p.reuseReady) })
+					}
+				}
+			}
+		})}
+		listener, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		server.Listener = tls.NewListener(listener, tlsConfig(kind))
+		started, joined := make(chan struct{}), make(chan error, 1)
+		server.NotifyStartedFunc = func() { close(started) }
+		go func() { joined <- server.ActivateAndServe() }()
+		select {
+		case <-started:
+		case err := <-joined:
+			t.Fatal("owned DNS peer did not start", err)
+		case <-time.After(time.Second):
+			t.Fatal("owned DNS peer startup did not finish")
+		}
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := server.ShutdownContext(ctx); err != nil {
+				t.Error("owned DNS peer did not retire", err)
+			}
+			select {
+			case <-joined:
+			case <-time.After(time.Second):
+				t.Error("owned DNS peer did not join")
+			}
+		})
+		p.routes = append(p.routes, desktopNodeXrayDNSRoute{network: "tcp", server: "198.51.100.53", port: 853, private: listener.Addr().String()})
+	}
+	for kind := 2; kind < 4; kind++ {
+		kind := kind
+		handler := http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			p.requests[kind].Add(1)
+			if request.Method != http.MethodPost || request.URL.Path != desktopCONNECTXrayDNSPath || request.Host != desktopCONNECTXrayDNSName ||
+				request.Header.Get("Content-Type") != "application/dns-message" || request.Header.Get("Accept") != "application/dns-message" ||
+				(kind == 3 && request.ProtoMajor != 3) {
+				http.Error(w, "captured DNS endpoint mismatch", http.StatusNotFound)
+				return
+			}
+			raw, err := io.ReadAll(io.LimitReader(request.Body, 65536))
+			query := new(mDNS.Msg)
+			if err != nil || len(raw) > 65535 || query.Unpack(raw) != nil {
+				p.invalid.Add(1)
+				http.Error(w, "invalid DNS wire request", 400)
+				return
+			}
+			response, valid := p.answer(query, false)
+			if !valid {
+				http.Error(w, "invalid original question", 400)
+				return
+			}
+			p.hits[kind].Add(1)
+			if query.Question[0].Name == "cancel."+desktopCONNECTXrayDNSQuestion {
+				p.enterOnce.Do(func() { close(p.entered) })
+				<-request.Context().Done()
+				p.cancelOnce.Do(func() { close(p.cancelled) })
+				return
+			}
+			body, err := response.Pack()
+			if err != nil {
+				p.invalid.Add(1)
+				http.Error(w, "invalid DNS wire response", 500)
+				return
+			}
+			w.Header().Set("Content-Type", "application/dns-message")
+			_, _ = w.Write(body)
+		})
+		if kind == 2 {
+			server := httptest.NewUnstartedServer(handler)
+			server.EnableHTTP2 = true
+			server.TLS = tlsConfig(kind)
+			server.StartTLS()
+			t.Cleanup(server.Close)
+			p.routes = append(p.routes, desktopNodeXrayDNSRoute{network: "tcp", server: "198.51.100.53", port: 443, private: server.Listener.Addr().String()})
+		} else {
+			packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := &http3.Server{Handler: handler, TLSConfig: tlsConfig(kind), QUICConfig: &quic.Config{DisablePathManager: true}}
+			joined := make(chan error, 1)
+			go func() { joined <- server.Serve(packet) }()
+			t.Cleanup(func() {
+				_ = server.Close()
+				_ = packet.Close()
+				select {
+				case <-joined:
+				case <-time.After(time.Second):
+					t.Error("original HTTP3 DNS server did not join")
+				}
+			})
+			p.routes = append(p.routes, desktopNodeXrayDNSRoute{network: "udp", server: "198.51.100.53", port: 443, private: packet.LocalAddr().String()})
+		}
+	}
+	return p
+}
+
+func desktopCONNECTXrayDNSExchange(ctx context.Context, resolver adapter.DNSTransport, name string) error {
+	query := new(mDNS.Msg)
+	query.SetQuestion(name, mDNS.TypeA)
+	query.Id = 0 // The selected DoH transports intentionally use DNS ID zero.
+	response, err := resolver.Exchange(ctx, query)
+	if err != nil {
+		return err
+	}
+	if response == nil || !response.Response || response.Rcode != mDNS.RcodeSuccess || response.Id != query.Id ||
+		len(response.Question) != 1 || response.Question[0] != query.Question[0] || len(response.Answer) != 1 {
+		return errors.New("selected DNS response did not match its original wire query")
+	}
+	answer, valid := response.Answer[0].(*mDNS.A)
+	if !valid || answer.Hdr.Name != name || !answer.A.Equal(net.IPv4(203, 0, 113, 77)) {
+		return errors.New("selected DNS response changed its original answer")
+	}
+	return nil
+}
+
+func TestRouterVPNImportedCONNECTRealityDoTProbeAdmission(t *testing.T) {
+	for index, qtype := range []uint16{mDNS.TypeA, mDNS.TypeAAAA} {
+		query := new(mDNS.Msg)
+		query.SetQuestion(desktopCONNECTXrayDNSQuestion, qtype)
+		query.Id = uint16(index + 1)
+		if slot, valid := desktopCONNECTXrayDNSReuseProbe(1, query); !valid || slot != index {
+			t.Fatal("original pinned TLS reuse probe rejected")
+		}
+		for _, kind := range []int{0, 2, 3} {
+			if _, valid := desktopCONNECTXrayDNSReuseProbe(kind, query); valid {
+				t.Fatal("another DNS transport borrowed the TLS probe identity")
+			}
+		}
+		for _, mutate := range []func(*mDNS.Msg){
+			func(q *mDNS.Msg) { q.Id = 0 }, func(q *mDNS.Msg) { q.Id = 3 },
+			func(q *mDNS.Msg) { q.Question[0].Qtype = mDNS.TypeTXT },
+			func(q *mDNS.Msg) { q.Question[0].Name = "foreign." + desktopCONNECTXrayDNSQuestion },
+			func(q *mDNS.Msg) { q.Question[0].Qclass = mDNS.ClassCHAOS },
+			func(q *mDNS.Msg) { q.Response = true }, func(q *mDNS.Msg) { q.RecursionDesired = false },
+			func(q *mDNS.Msg) { q.Question = nil }, func(q *mDNS.Msg) { q.SetEdns0(1232, false) },
+		} {
+			changed := query.Copy()
+			mutate(changed)
+			if _, valid := desktopCONNECTXrayDNSReuseProbe(1, changed); valid {
+				t.Fatal("foreign DNS shape or application ID counted as a reuse probe")
+			}
+		}
+	}
+	if _, valid := desktopCONNECTXrayDNSReuseProbe(1, nil); valid {
+		t.Fatal("missing DNS query counted as a reuse probe")
+	}
+}
+
+// Only this DNS registry slot may be removed by the wrong-owner control. The
+// captured DNS bytes and the entry's independent registry remain unchanged.
+type desktopCONNECTXrayDNSManager struct {
+	adapter.OutboundManager
+	mu    sync.RWMutex
+	owner adapter.Outbound
+}
+
+func (m *desktopCONNECTXrayDNSManager) Outbound(tag string) (adapter.Outbound, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if tag != "proxy" || m.owner == nil {
+		return nil, false
+	}
+	return m.owner, true
+}
+func (*desktopCONNECTXrayDNSManager) Default() adapter.Outbound { return nil }
+
+type desktopCONNECTXrayDNSFixture struct {
+	ctx              context.Context
+	final            adapter.Outbound
+	lower            *desktopImportedSOCKSXrayPhysical
+	manager          *desktopCONNECTXrayDNSManager
+	selected         []byte
+	source, captured []string
+	config           string
+	plan             *mobilemultihop.Controller
+	home             atomic.Int64
+	entry            *desktopNodeLayerServer
+}
+
+func desktopCONNECTXrayDNSOwner(t *testing.T, kind, name string, peer *desktopCONNECTXrayDNSResolver) *desktopCONNECTXrayDNSFixture {
+	t.Helper()
+	original := desktopImportedCONNECTXraySource(t, kind+"--reality-vision--off--off.json")
+	args := append([]string(nil), original[:7]...)
+	profile := desktopImportedSOCKSXrayObject(t, args[4])
+	f := &desktopCONNECTXrayDNSFixture{}
+	home, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	homeServer := &mDNS.Server{PacketConn: home, Handler: mDNS.HandlerFunc(func(w mDNS.ResponseWriter, q *mDNS.Msg) {
+		response := new(mDNS.Msg).SetReply(q)
+		if len(q.Question) != 1 || q.Question[0].Name != "example.com." || q.Question[0].Qtype != mDNS.TypeA {
+			response.Rcode = mDNS.RcodeRefused
+		} else {
+			f.home.Add(1)
+			response.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: "example.com.", Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 1}, A: net.IPv4(93, 184, 216, 34)}}
+		}
+		_ = w.WriteMsg(response)
+	})}
+	homeStarted, homeJoined := make(chan struct{}), make(chan error, 1)
+	homeServer.NotifyStartedFunc = func() { close(homeStarted) }
+	go func() { homeJoined <- homeServer.ActivateAndServe() }()
+	select {
+	case <-homeStarted:
+	case err := <-homeJoined:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("original Home DNS did not start")
+	}
+	t.Cleanup(func() {
+		_ = homeServer.Shutdown()
+		_ = home.Close()
+		select {
+		case <-homeJoined:
+		case <-time.After(time.Second):
+			t.Error("original Home DNS did not join")
+		}
+	})
+	// The actual original interface remains mandatory for imported native peers.
+	_, ip := desktopNodePeerInterface(t)
+	server, files := startDesktopNodeXrayServerWithProof(t, "reality-vision", ip, home.LocalAddr().String(), "", peer.routes...)
+	flow := "xtls-rprx-vision-udp443"
+	if name == "dot853" || name == "doh443" || name == "plain-vision-udp443" {
+		flow = "xtls-rprx-vision"
+	}
+	var assets map[string]string
+	if json.Unmarshal([]byte(files), &assets) != nil {
+		t.Fatal("original REALITY assets were lost")
+	}
+	raw, err := base64.StdEncoding.Strict().DecodeString(assets["xray.json"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	xray := desktopImportedSOCKSXrayObject(t, string(raw))
+	user := xray["outbounds"].([]any)[0].(map[string]any)["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)
+	user["flow"] = flow
+	assets["xray.json"] = base64.StdEncoding.EncodeToString([]byte(desktopImportedSOCKSXrayJSON(t, xray)))
+	// Capture the explicitly selected flow before the shared compiler sees it.
+	args[3] = desktopImportedSOCKSXrayJSON(t, assets)
+	profile["endpoint"] = ip.String()
+	transportKind, port := "h3", 443
+	if name == "dot853" {
+		transportKind, port = "tls", 853
+	}
+	if name == "doh443" {
+		transportKind = "https"
+	}
+	profile["dns_mode"], profile["dns_protocol"] = "custom", transportKind
+	profile["dns_host"], profile["dns_port"] = "198.51.100.53", port
+	profile["dns_server_name"], profile["dns_path"] = desktopCONNECTXrayDNSName, desktopCONNECTXrayDNSPath
+	switch name {
+	case "wrong-dns-sni":
+		profile["dns_server_name"] = "foreign.routervpn.test"
+	case "wrong-dns-route":
+		profile["dns_host"] = "198.51.100.54"
+	case "wrong-dns-port":
+		profile["dns_port"] = 444
+	case "wrong-dns-path":
+		profile["dns_path"] = "/uncaptured"
+	}
+	args[4] = desktopImportedSOCKSXrayJSON(t, profile)
+	f.source, f.captured = args, append([]string(nil), args...)
+	f.plan, err = mobilemultihop.NewImportedEntry(args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+	if err != nil {
+		t.Fatal("captured CONNECT selected DNS did not compile", err)
+	}
+	t.Cleanup(func() {
+		if err := f.plan.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	f.config = f.plan.Config()
+	graph := desktopImportedSOCKSXrayObject(t, f.config)
+	byTag := desktopImportedSOCKSGraph(graph)
+	firstRaw, finalRaw := byTag["entry-wg"], byTag[mobilemultihop.LocalTag]
+	if firstRaw == nil || finalRaw == nil || firstRaw["type"] != "http" || firstRaw["detour"] != nil ||
+		finalRaw["type"] != "routervpn-xray" || finalRaw["detour"] != "entry-wg" || finalRaw["mode"] != "reality-vision" {
+		t.Fatal("selected DNS changed the captured CONNECT to paired REALITY chain")
+	}
+	planned := desktopImportedSOCKSXrayObject(t, finalRaw["config_json"].(string))
+	plannedUser := planned["outbounds"].([]any)[0].(map[string]any)["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)
+	if plannedUser["flow"] != flow {
+		t.Fatal("selected DNS rewrote the captured ordinary/UDP443 flow")
+	}
+	selectedDNS := graph["dns"].(map[string]any)
+	for _, raw := range selectedDNS["servers"].([]any) {
+		selected := raw.(map[string]any)
+		if selected["tag"] == selectedDNS["final"] {
+			expected := map[string]any{"type": transportKind, "tag": selectedDNS["final"], "server": profile["dns_host"],
+				"server_port": profile["dns_port"], "detour": "proxy",
+				"tls": map[string]any{"enabled": true, "server_name": profile["dns_server_name"]}}
+			if transportKind != "tls" {
+				expected["path"] = profile["dns_path"]
+			}
+			if len(f.selected) != 0 || desktopImportedSOCKSXrayJSON(t, selected) != desktopImportedSOCKSXrayJSON(t, expected) {
+				t.Fatal("compiled selected DNS lost its unique captured route, port, path, TLS identity or owner")
+			}
+			f.selected = []byte(desktopImportedSOCKSXrayJSON(t, selected))
+		}
+	}
+	if len(f.selected) == 0 {
+		t.Fatal("captured CONNECT omitted its selected DNS")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	f.ctx = ctx
+	t.Cleanup(cancel)
+	entryCtx, entryCancel := context.WithCancel(context.Background())
+	f.entry = &desktopNodeLayerServer{ctx: entryCtx, cancel: entryCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{
+		{Network: "tcp", Destination: server.tcp.Addr().String(), Physical: server.tcp.Addr().String()},
+	}}
+	certificate, certificatePEM := desktopExternalInstalledPeerCertificate(t, false, "proxy.example.com")
+	var entryCertificate *tls.Certificate
+	if kind == "https-connect" {
+		entryCertificate = &certificate
+	}
+	entry := desktopStartImportedCONNECTPeer(t, f.entry, firstRaw["username"].(string), firstRaw["password"].(string), entryCertificate, nil, "")
+	f.lower = newDesktopImportedCONNECTXrayPhysical(M.ParseSocksaddr(desktopImportedSOCKSAddress(firstRaw)), entry.address)
+	t.Cleanup(func() {
+		if err := f.lower.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	manager := &desktopImportedSOCKSXrayManager{owners: map[string]adapter.Outbound{f.lower.Tag(): f.lower}}
+	owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(certificatePEM)) {
+		t.Fatal("original CONNECT trust missing")
+	}
+	owned = service.ContextWith[adapter.CertificateStore](owned, &desktopImportedHysteriaTrust{roots: roots})
+	firstCopy := make(map[string]any, len(firstRaw)+1)
+	for key, value := range firstRaw {
+		firstCopy[key] = value
+	}
+	firstCopy["detour"] = f.lower.Tag()
+	manager.owners["entry-wg"] = desktopImportedCONNECTXrayOutbound(t, owned, firstCopy)
+	var options XR.Options
+	if json.Unmarshal([]byte(desktopImportedSOCKSXrayJSON(t, finalRaw)), &options) != nil {
+		t.Fatal("selected DNS lost original final options")
+	}
+	f.final, err = XR.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), mobilemultihop.LocalTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.final.(io.Closer).Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := f.final.(adapter.Lifecycle).Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	f.manager = &desktopCONNECTXrayDNSManager{owner: f.final}
+	return f
+}
+
+func desktopCONNECTXrayDNSTransport(t *testing.T, f *desktopCONNECTXrayDNSFixture, peer *desktopCONNECTXrayDNSResolver, fault string) (adapter.DNSTransport, error) {
+	t.Helper()
+	raw := bytes.Clone(f.selected)
+	selected := desktopImportedSOCKSXrayObject(t, string(raw))
+	roots := x509.NewCertPool()
+	certificate := peer.certificate
+	if fault == "wrong-dns-trust" {
+		_, certificate = desktopCONNECTXrayDNSCertificate(t)
+	}
+	if !roots.AppendCertsFromPEM([]byte(certificate)) {
+		t.Fatal("captured DNS trust missing")
+	}
+	ctx := service.ContextWith[adapter.OutboundManager](f.ctx, f.manager)
+	ctx = service.ContextWith[adapter.CertificateStore](ctx, &desktopImportedHysteriaTrust{roots: roots})
+	logger := log.NewNOPFactory().Logger()
+	var result adapter.DNSTransport
+	var err error
+	switch selected["type"] {
+	case "tls":
+		var options option.RemoteTLSDNSServerOptions
+		if err = json.Unmarshal(raw, &options); err == nil {
+			result, err = transport.NewTLS(ctx, logger, "captured-selected-dns", options)
+		}
+	case "https", "h3":
+		var options option.RemoteHTTPSDNSServerOptions
+		if err = json.Unmarshal(raw, &options); err == nil {
+			if selected["type"] == "https" {
+				result, err = transport.NewHTTPS(ctx, logger, "captured-selected-dns", options)
+			} else {
+				result, err = dnsquic.NewHTTP3(ctx, logger, "captured-selected-dns", options)
+			}
+		}
+	default:
+		t.Fatal("uncaptured encrypted DNS transport")
+	}
+	if !bytes.Equal(raw, f.selected) {
+		t.Fatal("DNS constructor changed the exact selected graph bytes")
+	}
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() {
+		if err := result.Close(); err != nil {
+			t.Error("original selected DNS did not close", err)
+		}
+	})
+	if err := result.Start(adapter.StartStateStart); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func TestRouterVPNImportedCONNECTRealitySelectedDNS(t *testing.T) {
+	for _, kind := range []string{"http-connect", "https-connect"} {
+		t.Run(kind, func(t *testing.T) {
+			for _, name := range []string{"dot853", "doh443", "doh3-udp443", "plain-vision-udp443", "wrong-dns-sni", "wrong-dns-trust", "wrong-dns-route", "wrong-dns-port", "wrong-dns-path", "wrong-owner", "cancel-inflight"} {
+				t.Run(name, func(t *testing.T) { desktopCONNECTXrayDNSCase(t, kind, name) })
+			}
+		})
+	}
+}
+
+func desktopCONNECTXrayDNSCase(t *testing.T, protocol, name string) {
+	t.Helper()
+	peer := startDesktopCONNECTXrayDNSResolver(t)
+	f := desktopCONNECTXrayDNSOwner(t, protocol, name, peer)
+	kind := 3
+	if name == "dot853" {
+		kind = 1
+	}
+	if name == "doh443" {
+		kind = 2
+	}
+	if name == "plain-vision-udp443" {
+		ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+		ok, err := desktopImportedSOCKSXrayDNS(ctx, f.final, "192.168.50.133:53")
+		cancel()
+		if !ok || err != nil || f.home.Load() != 1 {
+			t.Fatal("ordinary Vision did not first prove original Home UDP53", err)
+		}
+	}
+	resolver, err := desktopCONNECTXrayDNSTransport(t, f, peer, name)
+	if err != nil {
+		t.Fatal("captured selected DNS failed before its actual encrypted exchange", err)
+	}
+	ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+	defer cancel()
+	if name == "wrong-owner" {
+		if err := desktopCONNECTXrayDNSExchange(ctx, resolver, desktopCONNECTXrayDNSQuestion); err != nil || peer.hits[3].Load() != 1 {
+			t.Fatal("wrong-owner control did not first prove its original captured owner", err)
+		}
+		if err := resolver.Close(); err != nil {
+			t.Fatal(err)
+		}
+		before := f.lower.calls.Load()
+		captured := bytes.Clone(f.selected)
+		f.manager.mu.Lock()
+		f.manager.owner = nil
+		f.manager.mu.Unlock()
+		replacement, err := desktopCONNECTXrayDNSTransport(t, f, peer, "")
+		if replacement == nil || err == nil || err.Error() != "outbound detour not found: proxy" ||
+			f.lower.calls.Load() != before || peer.hits[3].Load() != 1 || !bytes.Equal(captured, f.selected) {
+			t.Fatal("selected DNS did not reject its missing live owner during native Start", err)
+		}
+		if err := replacement.Close(); err != nil {
+			t.Fatal("rejected DNS transport did not close", err)
+		}
+	} else if name == "cancel-inflight" {
+		joined := make(chan error, 1)
+		go func() {
+			joined <- desktopCONNECTXrayDNSExchange(ctx, resolver, "cancel."+desktopCONNECTXrayDNSQuestion)
+		}()
+		select {
+		case <-peer.entered:
+		case err := <-joined:
+			t.Fatal("cancellation missed the original HTTP3 request", err)
+		case <-ctx.Done():
+			t.Fatal("original HTTP3 request was not entered")
+		}
+		cancel()
+		select {
+		case err := <-joined:
+			if err == nil {
+				t.Fatal("cancelled original DNS returned success")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("original DNS exchange did not join")
+		}
+		select {
+		case <-peer.cancelled:
+		case <-time.After(time.Second):
+			t.Fatal("original HTTP3 server did not observe cancellation")
+		}
+	} else {
+		err := desktopCONNECTXrayDNSExchange(ctx, resolver, desktopCONNECTXrayDNSQuestion)
+		positive := name == "dot853" || name == "doh443" || name == "doh3-udp443"
+		if positive {
+			if err != nil || peer.hits[kind].Load() != 1 {
+				t.Fatal("CONNECT selected DNS did not return its actual authenticated wire answer", err)
+			}
+			if kind == 1 {
+				select {
+				case <-peer.reuseReady:
+				case <-ctx.Done():
+					t.Fatal("DoT did not complete its exact pinned A/AAAA reuse probes")
+				}
+				if peer.reuse[0].Load() != 1 || peer.reuse[1].Load() != 1 || peer.requests[1].Load() != 3 {
+					t.Fatal("DoT probes replaced or duplicated the application query")
+				}
+			}
+		} else {
+			if err == nil || peer.hits[3].Load() != 0 {
+				t.Fatal("foreign selected DNS authority obtained an authenticated answer", err)
+			}
+			if name == "wrong-dns-sni" || name == "wrong-dns-trust" {
+				var cause *quic.TransportError
+				marker := "certificate signed by unknown authority"
+				if name == "wrong-dns-sni" {
+					marker = "not foreign.routervpn.test"
+				}
+				if !errors.As(err, &cause) || cause.Remote || uint64(cause.ErrorCode) < 0x100 || uint64(cause.ErrorCode) >= 0x200 ||
+					!strings.Contains(cause.ErrorMessage, marker) || peer.tlsHello[3].Load() == 0 || peer.requests[3].Load() != 0 {
+					t.Fatal("selected DNS TLS refusal lost its original typed QUIC certificate cause", err)
+				}
+			}
+			if name == "wrong-dns-path" && peer.requests[3].Load() != 1 {
+				t.Fatal("DNS path rejection did not reach its captured HTTP3 peer", err)
+			}
+			if (name == "wrong-dns-route" || name == "wrong-dns-port" || name == "plain-vision-udp443") && (peer.tlsHello[3].Load() != 0 || peer.requests[3].Load() != 0) {
+				t.Fatal("refused DNS route or ordinary Vision reached UDP443")
+			}
+		}
+	}
+	if err := resolver.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.final.(io.Closer).Close(); err != nil {
+		t.Fatal("original DNS final did not join", err)
+	}
+	drain, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	if err := f.lower.empty(drain); err != nil {
+		t.Fatal("CONNECT DNS owner did not drain before fixture teardown", err)
+	}
+	if f.lower.calls.Load() == 0 || f.entry.rawUDP.Load() != 0 || f.entry.plainUDP.Load() != 0 || peer.invalid.Load() != 0 ||
+		!reflect.DeepEqual(f.source, f.captured) || f.plan.Config() != f.config || f.plan.Healthy() {
+		t.Fatal("selected DNS escaped its original TCP entry or changed its capture")
+	}
+	for index := range peer.hits {
+		var wanted int64
+		if index == kind && (name == "dot853" || name == "doh443" || name == "doh3-udp443" || name == "wrong-owner" || name == "cancel-inflight") {
+			wanted = 1
+		}
+		if peer.hits[index].Load() != wanted {
+			t.Fatalf("CONNECT selected DNS borrowed another resolver: transport=%d hits=%d expected=%d", index, peer.hits[index].Load(), wanted)
+		}
+	}
+	wantedHome := int64(0)
+	if name == "plain-vision-udp443" {
+		wantedHome = 1
+	}
+	if f.home.Load() != wantedHome {
+		t.Fatal("CONNECT DNS replaced selected authority with Home DNS")
+	}
+}

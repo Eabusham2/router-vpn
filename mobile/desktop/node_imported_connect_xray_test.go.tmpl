@@ -1,0 +1,776 @@
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	HTTP "github.com/sagernet/sing-box/protocol/http"
+	XR "github.com/sagernet/sing-box/protocol/routervpnxray"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// Reconstructed native CONNECT reference: actual HTTP transport, captured paired
+// REALITY ownership and independent layer/proof boundaries. No host tunnel is granted.
+func TestRouterVPNImportedHTTPRealityVisionNativeTraffic(t *testing.T) {
+	desktopImportedCONNECTXrayCases(t, "http-connect")
+}
+func TestRouterVPNImportedHTTPSRealityVisionNativeTraffic(t *testing.T) {
+	desktopImportedCONNECTXrayCases(t, "https-connect")
+}
+
+func desktopImportedCONNECTXrayCases(t *testing.T, kind string) {
+	for _, first := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		for _, final := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(first+"--"+final, func(t *testing.T) {
+				original := desktopImportedCONNECTXraySource(t, kind+"--reality-vision--"+first+"--"+final+".json")
+				faults := []string{"success", "cancel", "close-owner", "replacement-owner"}
+				if first == "off" && final == "off" {
+					faults = append(faults, "entry-auth", "wrong-entry-ip", "final-reality-key", "final-user", "final-route", "dns-route", "final-identity", "final-token")
+					if kind == "https-connect" {
+						faults = append(faults, "entry-sni", "entry-trust")
+					}
+				}
+				if first != "off" {
+					faults = append(faults, "entry-layer-key")
+				}
+				if first == "aes-256-gcm+xor-whitening" {
+					faults = append(faults, "entry-layer-whitening")
+				}
+				if final != "off" {
+					faults = append(faults, "final-layer-key")
+				}
+				if final == "aes-256-gcm+xor-whitening" {
+					faults = append(faults, "final-layer-whitening")
+				}
+				for _, fault := range faults {
+					t.Run(fault, func(t *testing.T) { desktopImportedCONNECTXrayTraffic(t, original, kind, fault) })
+				}
+			})
+		}
+	}
+}
+func desktopImportedCONNECTXraySource(t *testing.T, name string) []string {
+	t.Helper()
+	directory := os.Getenv("ROUTERVPN_IMPORTED_CONNECT_XRAY_FIXTURES")
+	if directory == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_CONNECT_XRAY_FIXTURES") == "1" {
+			t.Fatal("required original CONNECT REALITY captures absent")
+		}
+		t.Skip("native reference gate supplies captured CONNECT REALITY sources")
+	}
+	path := filepath.Join(directory, name)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+		t.Fatal("original CONNECT REALITY capture is not a bounded regular file", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original []string
+	if json.Unmarshal(raw, &original) != nil || len(original) != 9 {
+		t.Fatal("original CONNECT REALITY capture lost its nine-string receipt")
+	}
+	plan, err := mobilemultihop.NewImportedEntry(original[0], original[1], original[2], original[3], original[4], original[5], original[6])
+	if err != nil || plan.SourceSHA256() != original[7] || plan.Config() != original[8] || plan.Healthy() {
+		t.Fatal("original CONNECT REALITY capture changed", err)
+	}
+	if err := plan.Close(); err != nil {
+		t.Fatal("compiler-only CONNECT capture did not close", err)
+	}
+	return original
+}
+
+func desktopImportedCONNECTXrayTraffic(t *testing.T, original []string, kind, fault string) {
+	t.Helper()
+	args := append([]string(nil), original[:7]...)
+	entryGraph := desktopImportedSOCKSXrayObject(t, args[0])
+	capture := desktopImportedSOCKSXrayObject(t, args[1])
+	profile := desktopImportedSOCKSXrayObject(t, args[4])
+	expectedIP, ok := capture["expected_public_ip"].(string)
+	entryLayer, _ := capture["profile"].(map[string]any)["start_layer"].(string)
+	finalLayer, _ := profile["start_layer"].(string)
+	if entryLayer == "off" {
+		entryLayer = ""
+	}
+	if finalLayer == "off" {
+		finalLayer = ""
+	}
+	validLayer := func(mode string) bool {
+		return mode == "" || mode == "aes-256-gcm" || mode == "aes-256-gcm+xor-whitening"
+	}
+	if !ok || expectedIP != "203.0.113.88" || args[2] != "reality-vision" || (args[5] == "") != (finalLayer == "") || args[6] != "" ||
+		profile["multihop_execution"] != "local" || !validLayer(entryLayer) || !validLayer(finalLayer) ||
+		profile["router_api"] != "http://10.77.0.1:8787" {
+		t.Fatal("imported CONNECT REALITY reference lost its exact Local independent-layer source")
+	}
+	token, tokenOK := profile["api_token"].(string)
+	node, nodeOK := profile["node_proof_id"].(string)
+	if !tokenOK || token == "" || !nodeOK || len(node) != 64 {
+		t.Fatal("imported CONNECT REALITY reference has no independent paired proof authority")
+	}
+
+	var publicRequests, dnsRequests, healthRequests, healthAuthorized atomic.Int64
+	var finalServer *desktopNodeLayerServer
+	var entry desktopExternalInstalledSSPeer
+	var entryRoute *desktopImportedProxyXrayRoutes
+	var entryCarrier, finalCarrier *desktopExternalInstalledSSPeer
+	var lower *desktopImportedSOCKSXrayPhysical
+	var originalPeer *desktopImportedCONNECTPeer
+	var retiredEntryCalls uint32
+	retirementChecked := false
+	completed := false
+	// Registered first so every original peer/process/listener has joined before
+	// these independent arrival counters are used as a negative witness.
+	t.Cleanup(func() {
+		if !completed {
+			return
+		}
+		observed := entry.stats()
+		if retirementChecked && entryRoute.calls.Load() != retiredEntryCalls {
+			t.Error("retired final owner opened an authenticated entry stream before original cleanup joined")
+		}
+		entryRejected := strings.HasPrefix(fault, "entry-layer-")
+		if lower.calls.Load() == 0 || observed.Packets != 0 ||
+			(observed.PhysicalUDP != 0 || !entryRejected && observed.PhysicalTCP == 0) {
+			t.Error("imported CONNECT REALITY changed the captured TCP or QUIC physical owner", observed)
+		}
+		earlyFailure := fault == "entry-auth" || fault == "entry-sni" || fault == "entry-trust" || fault == "wrong-entry-ip" || strings.HasPrefix(fault, "entry-layer-")
+		routeFailure := fault == "final-route" || strings.HasPrefix(fault, "final-layer-")
+		cipherFailure := fault == "final-reality-key" || fault == "final-user"
+		if earlyFailure || routeFailure {
+			if finalServer.rawTCP.Load() != 0 || dnsRequests.Load() != 0 || healthRequests.Load() != 0 {
+				t.Error("failed original entry reached the paired Xray proof path")
+			}
+		} else if finalServer.rawTCP.Load() == 0 {
+			t.Error("imported CONNECT REALITY negative did not reach the original ciphertext peer")
+		}
+		if cipherFailure && (dnsRequests.Load() != 0 || healthRequests.Load() != 0 || finalServer.plainTCP.Load() != 0 || finalServer.plainUDP.Load() != 0) {
+			t.Error("foreign original REALITY credential gained authenticated final payload")
+		}
+		if (fault == "entry-sni" || fault == "entry-trust") && originalPeer.tlsRefused.Load() == 0 {
+			t.Error("captured CONNECT TLS rejection was not observed by the original peer")
+		}
+		if fault == "entry-auth" && observed.AuthTCP == 0 {
+			t.Error("imported CONNECT REALITY negative has no actual transport authentication rejection")
+		}
+		if fault == "entry-auth" || fault == "entry-sni" || fault == "entry-trust" || strings.HasPrefix(fault, "entry-layer-") {
+			if publicRequests.Load() != 0 {
+				t.Error("rejected original proxy authentication reached the public proof")
+			}
+		} else if publicRequests.Load() != 1 {
+			t.Error("imported CONNECT REALITY omitted or repeated its independent public proof")
+		}
+		if fault == "dns-route" && (dnsRequests.Load() != 0 || healthRequests.Load() != 0) {
+			t.Error("uncaptured resolver route reached Home DNS or final proof")
+		}
+		if fault == "final-identity" || fault == "final-token" {
+			if dnsRequests.Load() != 1 || healthRequests.Load() != 1 {
+				t.Error("paired proof rejection did not reach the actual selected DNS and health listener")
+			}
+			wantAuth := int64(1)
+			if fault == "final-token" {
+				wantAuth = 0
+			}
+			if healthAuthorized.Load() != wantAuth {
+				t.Error("paired proof negative changed independent token acceptance")
+			}
+		}
+		for _, role := range []struct {
+			name string
+			peer *desktopExternalInstalledSSPeer
+		}{{"entry", entryCarrier}, {"final", finalCarrier}} {
+			if role.peer == nil {
+				continue
+			}
+			stats := role.peer.stats()
+			failed := strings.HasPrefix(fault, role.name+"-layer-")
+			if stats.PhysicalUDP != 0 || stats.Packets != 0 {
+				t.Error("imported CONNECT REALITY layer changed its captured transport", role.name, stats)
+			}
+			if failed {
+				if stats.AuthTCP == 0 || stats.Streams != 0 {
+					t.Error("imported CONNECT REALITY independent layer lacks actual AEAD rejection", role.name, stats)
+				}
+			} else if !earlyFailure && (stats.PhysicalTCP == 0 || stats.Streams == 0) {
+				t.Error("imported CONNECT REALITY skipped an independently captured layer", role.name, stats)
+			}
+		}
+		if fault == "success" || fault == "cancel" || fault == "close-owner" || fault == "replacement-owner" {
+			if dnsRequests.Load() != 1 || healthRequests.Load() != 1 || healthAuthorized.Load() != 1 ||
+				finalServer.plainTCP.Load() == 0 || finalServer.plainUDP.Load() == 0 || observed.Streams < 2 {
+				t.Error("imported CONNECT REALITY omitted actual final traffic, selected DNS or a distinct proof")
+			}
+		}
+	})
+
+	paired := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/health" || r.Host != "10.77.0.1:8787" {
+			http.Error(w, "foreign", http.StatusForbidden)
+			return
+		}
+		healthRequests.Add(1)
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			http.Error(w, "foreign", http.StatusForbidden)
+			return
+		}
+		healthAuthorized.Add(1)
+		replyNode := node
+		if fault == "final-identity" {
+			replyNode = strings.Repeat("f", 64)
+			if replyNode == node {
+				replyNode = strings.Repeat("e", 64)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": replyNode, "proof": "router-vpn-private-agent-v1"})
+	}))
+	t.Cleanup(paired.Close)
+	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsServer := &dns.Server{PacketConn: packet, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, query *dns.Msg) {
+		reply := new(dns.Msg)
+		reply.SetReply(query)
+		if len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != dns.TypeA {
+			reply.Rcode = dns.RcodeRefused
+		} else {
+			dnsRequests.Add(1)
+			reply.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 1}, A: net.ParseIP("93.184.216.34")}}
+		}
+		_ = w.WriteMsg(reply)
+	})}
+	dnsDone := make(chan error, 1)
+	go func() { dnsDone <- dnsServer.ActivateAndServe() }()
+	t.Cleanup(func() {
+		_ = dnsServer.Shutdown()
+		_ = packet.Close()
+		select {
+		case <-dnsDone:
+		case <-time.After(3 * time.Second):
+			t.Error("imported CONNECT REALITY original DNS listener did not join")
+		}
+	})
+	_, ip := desktopNodePeerInterface(t)
+	var files string
+	finalServer, files = startDesktopNodeXrayServerWithProof(t, "reality-vision", ip, packet.LocalAddr().String(), paired.Listener.Addr().String())
+	finalTarget := finalServer.tcp.Addr().String()
+	if fault == "final-reality-key" {
+		files = desktopNodeXrayAssets(t, files, "xray-reality-key")
+	} else if fault == "final-user" {
+		files = desktopNodeXrayAssets(t, files, "xray-user")
+	}
+	profile["endpoint"] = ip.String()
+	if finalLayer != "" {
+		var assets map[string]string
+		if json.Unmarshal([]byte(args[5]), &assets) != nil {
+			t.Fatal("missing original final layer assets")
+		}
+		raw, err := base64.StdEncoding.Strict().DecodeString(assets["sing-box.json"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		layerGraph := desktopImportedSOCKSXrayObject(t, string(raw))
+		layerGraph["outbounds"].([]any)[0].(map[string]any)["server"] = ip.String()
+		assets["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(desktopImportedSOCKSXrayJSON(t, layerGraph)))
+		args[5] = desktopImportedSOCKSXrayJSON(t, assets)
+	}
+	if fault == "final-route" {
+		var assets map[string]string
+		if json.Unmarshal([]byte(files), &assets) != nil {
+			t.Fatal("Xray original assets changed")
+		}
+		raw, err := base64.StdEncoding.Strict().DecodeString(assets["xray.json"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		graph := desktopImportedSOCKSXrayObject(t, string(raw))
+		graph["outbounds"].([]any)[0].(map[string]any)["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["address"] = "198.51.100.240"
+		assets["xray.json"] = base64.StdEncoding.EncodeToString([]byte(desktopImportedSOCKSXrayJSON(t, graph)))
+		files = desktopImportedSOCKSXrayJSON(t, assets)
+		profile["endpoint"] = "198.51.100.240"
+	}
+	if fault == "dns-route" {
+		profile["adguard_ipv4"] = "192.168.50.134"
+	}
+	if fault == "final-token" {
+		profile["api_token"] = token + "-foreign"
+	}
+	originalEntry := capture["profile"].(map[string]any)["external"].(map[string]any)[strings.ReplaceAll(kind, "-", "_")].(map[string]any)
+	originalFirst := entryGraph["outbounds"].([]any)[0].(map[string]any)
+	password, passwordOK := originalEntry["password"].(string)
+	username, usernameOK := originalEntry["username"].(string)
+	if !passwordOK || password == "" || !usernameOK || username == "" || capture["protocol"] != kind || originalFirst["type"] != "http" {
+		t.Fatal("imported CONNECT REALITY lost independent original transport credentials")
+	}
+	if fault == "entry-auth" {
+		foreign := password + "-foreign"
+		originalFirst["password"], originalEntry["password"] = foreign, foreign
+	}
+	if fault == "entry-sni" {
+		if kind != "https-connect" {
+			t.Fatal("TLS fault selected for a non-TLS entry")
+		}
+		originalFirst["tls"].(map[string]any)["server_name"] = "foreign-final.example"
+		originalEntry["tls_server_name"] = "foreign-final.example"
+	}
+	args[0], args[1], args[3], args[4] = desktopImportedSOCKSXrayJSON(t, entryGraph), desktopImportedSOCKSXrayJSON(t, capture), files, desktopImportedSOCKSXrayJSON(t, profile)
+	plan, err := mobilemultihop.NewImportedEntry(args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+	if err != nil {
+		t.Fatal("original imported CONNECT REALITY reference sources did not compile", err)
+	}
+	t.Cleanup(func() {
+		if err := plan.Close(); err != nil {
+			t.Error("captured CONNECT plan did not close", err)
+		}
+	})
+	graph := desktopImportedSOCKSXrayObject(t, plan.Config())
+	var firstRaw, finalRaw map[string]any
+	for _, value := range graph["outbounds"].([]any) {
+		row := value.(map[string]any)
+		if row["tag"] == "entry-wg" {
+			firstRaw = row
+		} else if row["tag"] == mobilemultihop.LocalTag {
+			finalRaw = row
+		}
+	}
+	byTag := desktopImportedSOCKSGraph(graph)
+	var entryOuter, finalOuter map[string]any
+	if firstRaw == nil || finalRaw == nil {
+		t.Fatal("imported CONNECT REALITY reference lost original roles")
+	}
+	if entryLayer != "" {
+		tag, _ := firstRaw["detour"].(string)
+		entryOuter = byTag[tag]
+		if entryOuter == nil || entryOuter["detour"] != nil || firstRaw["server"] != "10.93.0.1" {
+			t.Fatal("imported CONNECT REALITY lost independently provisioned entry layer")
+		}
+	} else if firstRaw["detour"] != nil {
+		t.Fatal("imported CONNECT REALITY Off entry acquired a layer")
+	}
+	finalDetour := "entry-wg"
+	if finalLayer != "" {
+		finalDetour = mobilemultihop.NativeStartLayerTag
+		finalOuter = byTag[finalDetour]
+		if finalOuter == nil || finalOuter["detour"] != "entry-wg" {
+			t.Fatal("imported CONNECT REALITY lost independently provisioned final layer")
+		}
+	}
+	if firstRaw["type"] != "http" || finalRaw["type"] != "routervpn-xray" || finalRaw["mode"] != "reality-vision" || finalRaw["detour"] != finalDetour || len(finalRaw) != 5 {
+		t.Fatal("imported CONNECT REALITY reference lost its exact native detour")
+	}
+	var meta mobilemultihop.Metadata
+	if json.Unmarshal([]byte(plan.Metadata()), &meta) != nil || meta.EntryKind != "external" || meta.EntryMode != kind ||
+		meta.TransportCapability != "vless-stream" || meta.ExitMode != "reality-vision" || meta.EntryAPI != "" || meta.EntryToken != "" || meta.ExitAPI != "http://10.77.0.1:8787" || meta.ExitNodeID != node {
+		t.Fatal("imported CONNECT REALITY reference changed captured proof ownership")
+	}
+	dnsOptions := graph["dns"].(map[string]any)
+	var selected map[string]any
+	for _, raw := range dnsOptions["servers"].([]any) {
+		server := raw.(map[string]any)
+		if server["tag"] == dnsOptions["final"] {
+			selected = server
+		}
+	}
+	wantedDNS := "192.168.50.133"
+	if fault == "dns-route" {
+		wantedDNS = "192.168.50.134"
+	}
+	if selected == nil || selected["type"] != "udp" || selected["server"] != wantedDNS || selected["detour"] != "proxy" {
+		t.Fatal("imported CONNECT REALITY reference changed the selected Home resolver")
+	}
+	if port, present := selected["server_port"]; present && port != float64(53) {
+		t.Fatal("imported CONNECT REALITY reference changed the selected DNS port")
+	}
+
+	certificate, ca := desktopExternalInstalledPeerCertificate(t, false, "proxy.example.com")
+	public := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.Host != "1.1.1.1" || r.URL.Path != "/cdn-cgi/trace" {
+			http.Error(w, "foreign", http.StatusForbidden)
+			return
+		}
+		publicRequests.Add(1)
+		answer := expectedIP
+		if fault == "wrong-entry-ip" {
+			answer = "203.0.113.89"
+		}
+		_, _ = fmt.Fprintln(w, "ip="+answer)
+	}))
+	public.TLS = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
+	public.StartTLS()
+	t.Cleanup(public.Close)
+	finalPhysical := finalTarget
+	if finalOuter != nil {
+		_, port, err := net.SplitHostPort(finalTarget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		layerCtx, layerCancel := context.WithCancel(context.Background())
+		server := &desktopNodeLayerServer{ctx: layerCtx, cancel: layerCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: net.JoinHostPort("10.77.0.1", port), Physical: finalTarget}}}
+		layerFault := ""
+		if strings.HasPrefix(fault, "final-layer-") {
+			layerFault = fault
+		}
+		peer := desktopImportedSOCKSLayerProvider(t, server, finalOuter, layerFault)
+		finalCarrier = &peer
+		t.Cleanup(peer.close)
+		finalTarget, finalPhysical = desktopImportedSOCKSAddress(finalOuter), peer.address
+	}
+	entryCtx, entryCancel := context.WithCancel(context.Background())
+	entryServer := &desktopNodeLayerServer{ctx: entryCtx, cancel: entryCancel, connections: map[io.Closer]bool{},
+		routes: []desktopNodeLayerRoute{
+			{Network: "tcp", Destination: finalTarget, Physical: finalPhysical},
+			{Network: "tcp", Destination: "1.1.1.1:443", Physical: public.Listener.Addr().String()},
+		}}
+	entryRoute = &desktopImportedProxyXrayRoutes{desktopImportedCONNECTRouter: desktopImportedCONNECTRouter{server: entryServer}}
+	entryServer.streamRouter = entryRoute
+	var entryCertificate *tls.Certificate
+	if kind == "https-connect" {
+		entryCertificate = &certificate
+		if fault == "entry-trust" {
+			foreign, _ := desktopExternalInstalledPeerCertificate(t, false, "proxy.example.com")
+			entryCertificate = &foreign
+		}
+	}
+	originalPeer = desktopStartImportedCONNECTPeer(t, entryServer, username, password, entryCertificate, nil, "")
+	entry = desktopExternalInstalledSSPeer{address: originalPeer.address, close: originalPeer.close, stats: func() desktopExternalInstalledSSReceipt {
+		return desktopExternalInstalledSSReceipt{Method: kind, Address: originalPeer.address, PhysicalTCP: entryServer.rawTCP.Load(),
+			PhysicalUDP: entryServer.rawUDP.Load(), Streams: entryServer.plainTCP.Load(), Packets: entryServer.plainUDP.Load(), AuthTCP: uint32(originalPeer.auth.Load())}
+	}}
+	physicalRaw, entryPhysical := firstRaw, entry.address
+	if entryOuter != nil {
+		layerCtx, layerCancel := context.WithCancel(context.Background())
+		server := &desktopNodeLayerServer{ctx: layerCtx, cancel: layerCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: desktopImportedSOCKSAddress(firstRaw), Physical: entry.address}}}
+		layerFault := ""
+		if strings.HasPrefix(fault, "entry-layer-") {
+			layerFault = fault
+		}
+		peer := desktopImportedSOCKSLayerProvider(t, server, entryOuter, layerFault)
+		entryCarrier = &peer
+		t.Cleanup(peer.close)
+		physicalRaw, entryPhysical = entryOuter, peer.address
+	}
+	entryTarget := M.ParseSocksaddr(desktopImportedSOCKSAddress(physicalRaw))
+	lower = newDesktopImportedCONNECTXrayPhysical(entryTarget, entryPhysical)
+	t.Cleanup(func() {
+		if err := lower.Close(); err != nil {
+			t.Error("imported CONNECT REALITY original physical cleanup failed", err)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	t.Cleanup(cancel)
+	nativeCtx, nativeCancel := context.WithCancel(ctx)
+	t.Cleanup(nativeCancel)
+	manager := &desktopImportedSOCKSXrayManager{owners: map[string]adapter.Outbound{lower.Tag(): lower}}
+	owned := service.ContextWith[adapter.OutboundManager](nativeCtx, manager)
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(ca)) {
+		t.Fatal("imported CONNECT REALITY public proof trust missing")
+	}
+	if kind == "https-connect" {
+		owned = service.ContextWith[adapter.CertificateStore](owned, &desktopImportedHysteriaTrust{roots: roots})
+	}
+	// Only the explicit fixture physical edge is rebound. The captured graph,
+	// independent credentials and the final entry-wg detour stay intact.
+	firstCopy := make(map[string]any, len(firstRaw)+1)
+	for key, value := range firstRaw {
+		firstCopy[key] = value
+	}
+	if entryOuter == nil {
+		firstCopy["detour"] = lower.Tag()
+	} else {
+		copy := make(map[string]any, len(entryOuter)+1)
+		for key, value := range entryOuter {
+			copy[key] = value
+		}
+		copy["detour"] = lower.Tag()
+		manager.owners[entryOuter["tag"].(string)] = desktopImportedSOCKSNativeLayer(t, owned, copy)
+	}
+	first := desktopImportedCONNECTXrayOutbound(t, owned, firstCopy)
+	manager.owners["entry-wg"] = first
+	if finalOuter != nil {
+		manager.owners[mobilemultihop.NativeStartLayerTag] = desktopImportedSOCKSNativeLayer(t, owned, finalOuter)
+	}
+	var finalOptions XR.Options
+	if json.Unmarshal([]byte(desktopImportedSOCKSXrayJSON(t, finalRaw)), &finalOptions) != nil {
+		t.Fatal("captured Xray options did not decode")
+	}
+	final, err := XR.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), mobilemultihop.LocalTag, finalOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := final.(io.Closer).Close(); err != nil {
+			t.Error("imported CONNECT REALITY original Xray cleanup failed", err)
+		}
+	})
+	if err := final.(adapter.Lifecycle).Start(adapter.StartStateStart); err != nil {
+		t.Fatal("actual captured Xray instance did not start", err)
+	}
+
+	publicOK, err := desktopImportedSOCKSXrayPublic(ctx, first, roots, expectedIP)
+	earlyFailure := fault == "entry-auth" || fault == "entry-sni" || fault == "entry-trust" || fault == "wrong-entry-ip" || strings.HasPrefix(fault, "entry-layer-")
+	if publicOK == earlyFailure {
+		t.Fatal("imported CONNECT REALITY independent entry proof changed", err)
+	}
+	if fault == "entry-sni" || fault == "entry-trust" {
+		var hostname x509.HostnameError
+		var authority x509.UnknownAuthorityError
+		if fault == "entry-sni" && !errors.As(err, &hostname) || fault == "entry-trust" && !errors.As(err, &authority) {
+			t.Fatal("captured CONNECT TLS rejection lost its typed certificate cause", err)
+		}
+	}
+
+	beforeFinal := entryRoute.calls.Load()
+	dnsOK, proofOK := false, false
+	if publicOK {
+		dnsOK, err = desktopImportedSOCKSXrayDNS(ctx, final, net.JoinHostPort(wantedDNS, "53"))
+		wantDNS := fault != "final-reality-key" && fault != "final-user" && fault != "final-route" && fault != "dns-route" && !strings.HasPrefix(fault, "final-layer-")
+		if dnsOK != wantDNS {
+			t.Fatal("imported CONNECT REALITY selected DNS did not follow its original authenticated chain", err)
+		}
+		if dnsOK {
+			proofOK, err = desktopImportedSOCKSXrayProof(ctx, final, meta.ExitAPI, meta.ExitNodeID, meta.ExitToken)
+			if proofOK != (fault != "final-identity" && fault != "final-token") {
+				t.Fatal("imported CONNECT REALITY independent paired proof changed", err)
+			}
+		}
+	}
+	success := fault == "success" || fault == "cancel" || fault == "close-owner" || fault == "replacement-owner"
+	if publicOK && entryRoute.calls.Load() <= beforeFinal {
+		t.Fatal("final REALITY traffic bypassed the original authenticated proxy entry")
+	}
+	if (publicOK && dnsOK && proofOK) != success || plan.Healthy() {
+		t.Fatal("imported CONNECT REALITY reference confused proof results with unstarted host readiness")
+	}
+	if success {
+		for _, network := range []string{"tcp", "udp"} {
+			if err := desktopImportedSOCKSXrayEcho(ctx, final, network); err != nil {
+				t.Fatal("actual imported CONNECT REALITY final payload failed", network, err)
+			}
+		}
+	}
+	var replacement adapter.Outbound
+	if fault == "replacement-owner" {
+		replacement, err = XR.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), mobilemultihop.LocalTag, finalOptions)
+		if err != nil {
+			t.Fatal("replacement final did not construct", err)
+		}
+		t.Cleanup(func() {
+			if err := replacement.(io.Closer).Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		if err := replacement.(adapter.Lifecycle).Start(adapter.StartStateStart); err != nil {
+			t.Fatal(err)
+		}
+		for _, network := range []string{"tcp", "udp"} {
+			if err := desktopImportedSOCKSXrayEcho(ctx, replacement, network); err != nil {
+				t.Fatal("replacement did not prove its own original traffic", network, err)
+			}
+		}
+	}
+	if fault == "cancel" || fault == "close-owner" || fault == "replacement-owner" {
+		held, err := final.DialContext(ctx, "tcp", M.ParseSocksaddr("192.0.2.99:9999"))
+		if err != nil {
+			t.Fatal("imported CONNECT REALITY original held stream did not open", err)
+		}
+		t.Cleanup(func() { _ = held.Close() })
+		if err := held.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if err := desktopImportedSOCKSXrayExchange(held); err != nil {
+			t.Fatal("imported CONNECT REALITY held stream was not an authenticated final route", err)
+		}
+		if fault == "cancel" {
+			nativeCancel()
+		} else if err := final.(io.Closer).Close(); err != nil {
+			t.Fatal("imported CONNECT REALITY original instance close failed", err)
+		}
+		_ = held.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var byteBuffer [1]byte
+		if n, err := held.Read(byteBuffer[:]); n != 0 || err == nil {
+			t.Fatal("imported CONNECT REALITY retired instance retained its original application stream")
+		} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+			t.Fatal("imported CONNECT REALITY retirement merely waited for the fixture deadline")
+		}
+		calls := lower.calls.Load()
+		retiredEntryCalls = entryRoute.calls.Load()
+		retirementChecked = true
+		rejected, err := final.DialContext(context.Background(), "tcp", M.ParseSocksaddr("192.0.2.99:9999"))
+		if rejected != nil {
+			_ = rejected.Close()
+		}
+		if rejected != nil || err == nil || lower.calls.Load() != calls || entryRoute.calls.Load() != retiredEntryCalls {
+			t.Fatal("imported CONNECT REALITY retired instance acquired another lower connection")
+		}
+	}
+	if replacement != nil {
+		for _, network := range []string{"tcp", "udp"} {
+			if err := desktopImportedSOCKSXrayEcho(ctx, replacement, network); err != nil {
+				t.Fatal("original retirement closed the replacement final", network, err)
+			}
+		}
+		if err := replacement.(io.Closer).Close(); err != nil {
+			t.Fatal("replacement final did not join", err)
+		}
+		retiredEntryCalls = entryRoute.calls.Load()
+	}
+	if err := final.(io.Closer).Close(); err != nil {
+		t.Fatal("imported CONNECT REALITY original instance did not join", err)
+	}
+	// Native HTTP has no Close method. Every captured CONNECT stream must
+	// already be drained by its original final/proof owner before the fixture
+	// descriptor registry is allowed to close.
+	drain, stopDrain := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stopDrain()
+	if err := lower.empty(drain); err != nil {
+		t.Fatal("imported CONNECT REALITY instance left its original physical streams", err)
+	}
+	completed = true
+}
+
+func desktopImportedCONNECTXrayOutbound(t *testing.T, ctx context.Context, raw map[string]any) adapter.Outbound {
+	t.Helper()
+	var options option.HTTPOutboundOptions
+	if raw["type"] != "http" || json.Unmarshal([]byte(desktopImportedSOCKSXrayJSON(t, raw)), &options) != nil {
+		t.Fatal("original CONNECT options changed their native HTTP protocol")
+	}
+	owner, err := HTTP.NewOutbound(ctx, nil, log.NewNOPFactory().Logger(), "entry-wg", options)
+	if err != nil {
+		t.Fatal("captured CONNECT native outbound did not construct", err)
+	}
+	return owner
+}
+
+func newDesktopImportedCONNECTXrayPhysical(expected M.Socksaddr, physical string) *desktopImportedSOCKSXrayPhysical {
+	return &desktopImportedSOCKSXrayPhysical{
+		Adapter:  outbound.NewAdapterWithDialerOptions("direct", "fixture-original-connect-physical", []string{"tcp"}, option.DialerOptions{}),
+		expected: expected, physical: physical, connections: map[*desktopImportedSOCKSXrayConnection]bool{}, changed: make(chan struct{}),
+	}
+}
+
+func TestRouterVPNImportedCONNECTRealityPhysicalOwner(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	joined := make(chan struct{})
+	var workers sync.WaitGroup
+	go func() {
+		defer close(joined)
+		for range 2 {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			workers.Add(1)
+			go func() { defer workers.Done(); defer connection.Close(); _, _ = io.Copy(connection, connection) }()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = listener.Close()
+		select {
+		case <-joined:
+		case <-time.After(time.Second):
+			t.Error("physical acceptor did not join")
+			return
+		}
+		done := make(chan struct{})
+		go func() { workers.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("physical TCP echo owners did not join")
+		}
+	})
+	destination := M.ParseSocksaddr("203.0.113.20:443")
+	owner := newDesktopImportedCONNECTXrayPhysical(destination, listener.Addr().String())
+	replacement := newDesktopImportedCONNECTXrayPhysical(destination, listener.Addr().String())
+	defer owner.Close()
+	defer replacement.Close()
+	for _, attempt := range []struct {
+		network     string
+		destination M.Socksaddr
+	}{
+		{"udp", destination}, {"tcp", M.ParseSocksaddr("203.0.113.21:443")}, {"tcp", M.ParseSocksaddr("203.0.113.20:444")},
+	} {
+		if connection, err := owner.DialContext(ctx, attempt.network, attempt.destination); connection != nil || err == nil {
+			t.Fatal("CONNECT physical owner widened its exact TCP tuple")
+		}
+	}
+	if packet, err := owner.ListenPacket(ctx, destination); packet != nil || err == nil || owner.calls.Load() != 0 {
+		t.Fatal("CONNECT entry borrowed physical UDP authority")
+	}
+	first, err := owner.DialContext(ctx, "tcp", destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := replacement.DialContext(ctx, "tcp", destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	defer second.Close()
+	for _, connection := range []net.Conn{first, second} {
+		if err := connection.SetDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if err := desktopImportedSOCKSXrayExchange(connection); err != nil {
+			t.Fatal("original physical TCP owner did not carry its bytes", err)
+		}
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.empty(ctx); err != nil {
+		t.Fatal("original native stream did not drain before physical retirement", err)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if connection, err := owner.DialContext(ctx, "tcp", destination); connection != nil || err == nil || owner.calls.Load() != 1 {
+		t.Fatal("retired CONNECT owner admitted another physical dial")
+	}
+	if err := desktopImportedSOCKSXrayExchange(second); err != nil {
+		t.Fatal("original retirement closed an independent replacement", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := replacement.empty(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_ = listener.Close()
+	select {
+	case <-joined:
+	case <-ctx.Done():
+		t.Fatal("physical support acceptor did not join")
+	}
+}

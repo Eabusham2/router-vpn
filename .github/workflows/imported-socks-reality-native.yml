@@ -69,6 +69,13 @@ jobs:
           set -euo pipefail
           python3 deploy/test_mobile_imported_proxy_xray.py \
             "$RUNNER_TEMP/routervpn-imported-socks-core" --reference-only
+      - name: Execute captured HTTP and HTTPS CONNECT REALITY references
+        shell: bash
+        timeout-minutes: 50
+        run: |
+          set -euo pipefail
+          python3 deploy/test_mobile_imported_connect_xray.py \
+            "$RUNNER_TEMP/routervpn-imported-socks-core" --reference-only
       - name: Execute captured native UDP443 selected DNS references
         shell: bash
         timeout-minutes: 50

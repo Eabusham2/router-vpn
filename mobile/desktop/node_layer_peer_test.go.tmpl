@@ -2260,7 +2260,7 @@ func (p *desktopExternalInstalledSOCKSPeer) refuse(connection net.Conn) error {
 	return nil
 }
 
-func desktopExternalInstalledPeerCertificate(t *testing.T, latency bool) (tls.Certificate, string) {
+func desktopExternalInstalledPeerCertificate(t *testing.T, latency bool, extraNames ...string) (tls.Certificate, string) {
 	t.Helper()
 	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -2285,6 +2285,7 @@ func desktopExternalInstalledPeerCertificate(t *testing.T, latency bool) (tls.Ce
 	if latency {
 		leaf.DNSNames = append(leaf.DNSNames, "speed.cloudflare.com")
 	}
+	leaf.DNSNames = append(leaf.DNSNames, extraNames...)
 	leafDER, err := x509.CreateCertificate(rand.Reader, leaf, root, &leafKey.PublicKey, rootKey)
 	if err != nil {
 		t.Fatal(err)
