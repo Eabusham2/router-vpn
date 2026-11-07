@@ -68,6 +68,7 @@ type speedLabPath struct {
 }
 
 type speedLabPathIdentity struct {
+	Tracker         *sessionTracker
 	Standard        speedLabStandardServiceIdentity
 	SessionID       string
 	StateToken      string
@@ -107,7 +108,9 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 	if identity, path, handled, err := captureStandardServiceSpeedLabCallerContext(ctx, a); handled {
 		return identity, path, err
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return speedLabPathIdentity{}, speedLabPath{}, err
+	}
 	st, command := a.state, a.cmd
 	profile, profileOK := a.profileByIDLocked(strings.TrimSpace(st.RouterID))
 	profile = cloneRouterProfile(profile)
@@ -115,11 +118,11 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 	if !st.Connected || strings.TrimSpace(st.Phase) != "connected" {
 		return speedLabPathIdentity{}, speedLabPath{}, errors.New("Speed Lab current-path test requires a stable connected VPN; choose system-direct or a temporary test path while disconnected")
 	}
-	session, err := captureAsyncMeasurementSession(a)
+	tracker, session, err := measurementSessionContext(ctx, a, nil)
 	if err != nil {
 		return speedLabPathIdentity{}, speedLabPath{}, err
 	}
-	if strings.TrimSpace(st.RouterID) == "" || session.RouterID != st.RouterID {
+	if session.ID == "" || !session.Connected || session.Phase != "connected" || session.PathProof != "passed" || strings.TrimSpace(st.RouterID) == "" || session.RouterID != st.RouterID {
 		return speedLabPathIdentity{}, speedLabPath{}, errors.New("active Speed Lab path identity is unavailable or disagrees with the session tracker")
 	}
 	if !profileOK {
@@ -129,11 +132,15 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 	if st.Mode == "multihop" && !graphOK {
 		return speedLabPathIdentity{}, speedLabPath{}, errors.New("active multihop graph identity is unavailable")
 	}
-	identity := speedLabPathIdentity{SessionID: session.ID, StateToken: mtuStateSnapshotToken(st), RouterID: st.RouterID, Graph: graph, GraphOK: graphOK && st.Mode == "multihop", Command: command, Network: physicalNetworkIdentity(), ProfileToken: liveMeasurementProfileToken(profile), Options: [3]bool{st.DAITA, st.Jumbo, st.Socks}}
+	network, err := physicalNetworkIdentityContext(ctx)
+	if err != nil {
+		return speedLabPathIdentity{}, speedLabPath{}, err
+	}
+	identity := speedLabPathIdentity{Tracker: tracker, SessionID: session.ID, StateToken: mtuStateSnapshotToken(st), RouterID: st.RouterID, Graph: graph, GraphOK: graphOK && st.Mode == "multihop", Command: command, Network: network, ProfileToken: liveMeasurementProfileToken(profile), Options: [3]bool{st.DAITA, st.Jumbo, st.Socks}}
 	if identity.Network == "" {
 		return speedLabPathIdentity{}, speedLabPath{}, errors.New("Speed Lab cannot capture the current physical network")
 	}
-	linuxPath, retainedLinux, err := captureDesktopLinuxNodePath(context.Background(), a, command)
+	linuxPath, retainedLinux, err := captureDesktopLinuxNodePath(ctx, a, command)
 	if err != nil {
 		return speedLabPathIdentity{}, speedLabPath{}, err
 	}
@@ -161,7 +168,9 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 		path.EntryID, path.ExitID = graph.EntryID, graph.ExitID
 		path.EntryMode = graph.EntryMode
 		path.Base, path.ExitMode, path.StartedAt, path.Execution = graph.Base, graph.ExitMode, graph.Started, graph.Execution
-		a.mu.Lock()
+		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+			return speedLabPathIdentity{}, speedLabPath{}, err
+		}
 		entry, entryOK := a.profileByIDLocked(graph.EntryID)
 		if entryOK {
 			path.EntryName = entry.Name
@@ -184,7 +193,7 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 				if launch.external != nil || profile.External == nil || !desktopTorProtocol(profile.External.Protocol) || !desktopTorRuntimeID(st.RuntimeMode) || launch.mode != st.RuntimeMode || desktopTorProfileRuntime(profile) != st.RuntimeMode {
 					return speedLabPathIdentity{}, speedLabPath{}, errors.New("active Tor Speed Lab owner belongs to a different path")
 				}
-				proof, err := a.readDesktopTorProof(launch)
+				proof, err := a.readDesktopTorProofContext(ctx, launch)
 				if err != nil {
 					return speedLabPathIdentity{}, speedLabPath{}, err
 				}
@@ -192,7 +201,9 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 				identity.TorEntry = launch.tor.predecessor
 				if entry := identity.TorEntry; entry != nil {
 					path.EntryID, path.EntryName, path.EntryMode = entry.entry.ID, entry.entry.Name, entry.mode
-					a.mu.Lock()
+					if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+						return speedLabPathIdentity{}, speedLabPath{}, err
+					}
 					current, exists := a.profileByIDLocked(entry.entry.ID)
 					identity.EntryToken = liveMeasurementProfileToken(current)
 					a.mu.Unlock()
@@ -207,7 +218,7 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 				if launch.external == nil || profile.External != nil && desktopTorProtocol(profile.External.Protocol) {
 					return speedLabPathIdentity{}, speedLabPath{}, errors.New("active external Speed Lab runtime has no matching proof owner")
 				}
-				proof, err := a.readDesktopExternalProof(launch)
+				proof, err := a.readDesktopExternalProofContext(ctx, launch)
 				if err != nil {
 					return speedLabPathIdentity{}, speedLabPath{}, err
 				}
@@ -217,7 +228,9 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 				if !launch.external.direct {
 					path.EntryID, path.EntryName = launch.external.entry.ID, launch.external.entry.Name
 					path.EntryMode = launch.external.profile.MultihopEntryMode
-					a.mu.Lock()
+					if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+						return speedLabPathIdentity{}, speedLabPath{}, err
+					}
 					entry, ok := a.profileByIDLocked(path.EntryID)
 					a.mu.Unlock()
 					if !ok {
@@ -232,7 +245,7 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 	} else if raw, exists := lookupDesktopNativeLaunch(a); exists {
 		launch, ok := raw.(*desktopNodeLaunch)
 		if ok && launch != nil && launch.ownedNode != nil {
-			proof, err := a.readDesktopOwnedNodeReady(launch, false)
+			proof, err := a.readDesktopOwnedNodeReadyContext(ctx, launch, false)
 			if err != nil || launch.command != command || launch.profileID != profile.ID || launch.external != nil || launch.tor != nil {
 				return speedLabPathIdentity{}, speedLabPath{}, errors.Join(err, errors.New("active Router Speed Lab path lost its exact native owner"))
 			}
@@ -265,11 +278,19 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 	if identity.Linux != nil && (identity.External != nil || identity.Tor != nil || identity.TorEntry != nil || identity.Node != nil || identity.GraphOK) {
 		return errors.New("Speed Lab identity mixes its retained Linux path with another native owner")
 	}
-	session := sessionTrackerFor(a).snapshot(0)
+	if identity.Tracker == nil {
+		return errors.New("Speed Lab lost its original session tracker")
+	}
+	_, session, err := measurementSessionContext(ctx, a, identity.Tracker)
+	if err != nil {
+		return err
+	}
 	if identity.SessionID == "" || session.ID != identity.SessionID || !session.Connected || session.Phase != "connected" || session.PathProof != "passed" || session.RouterID != identity.RouterID {
 		return errors.New("Speed Lab result became stale because the VPN session/path changed")
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	st, command := a.state, a.cmd
 	profile, profileOK := a.profileByIDLocked(identity.RouterID)
 	profileToken := liveMeasurementProfileToken(profile)
@@ -292,7 +313,11 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 	if !profileOK || profileToken != identity.ProfileToken || identity.EntryToken != "" && (!entryOK || entryToken != identity.EntryToken) {
 		return errors.New("Speed Lab result became stale because the captured node policy or credentials changed")
 	}
-	if identity.Network == "" || physicalNetworkIdentity() != identity.Network {
+	network, err := physicalNetworkIdentityContext(ctx)
+	if err != nil {
+		return err
+	}
+	if identity.Network == "" || network != identity.Network {
 		return errors.New("Speed Lab result became stale because the physical network changed")
 	}
 	if identity.GraphOK {
@@ -306,7 +331,7 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 		if !exists || current != identity.External {
 			return errors.New("Speed Lab result became stale because the native external owner changed")
 		}
-		proof, err := a.readDesktopExternalProof(identity.External)
+		proof, err := a.readDesktopExternalProofContext(ctx, identity.External)
 		if err != nil {
 			return err
 		}
@@ -319,7 +344,7 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 		if !exists || current != identity.Tor || identity.Tor.command != identity.Command || identity.Tor.profileID != identity.RouterID {
 			return errors.New("Speed Lab result became stale because the native Tor owner changed")
 		}
-		proof, err := a.readDesktopTorProof(identity.Tor)
+		proof, err := a.readDesktopTorProofContext(ctx, identity.Tor)
 		if err != nil {
 			return err
 		}
@@ -331,12 +356,12 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 		if raw, exists := lookupDesktopNativeLaunch(a); !exists || raw != identity.Node || identity.Node.command != identity.Command || identity.Node.profileID != identity.RouterID {
 			return errors.New("Speed Lab result belongs to a replacement native Router process")
 		}
-		proof, err := a.readDesktopOwnedNodeReady(identity.Node, false)
+		proof, err := a.readDesktopOwnedNodeReadyContext(ctx, identity.Node, false)
 		if err != nil || proof.SessionID != identity.NodeSession || proof.SourceSHA256 != identity.NodeSource || identity.NodeSession == "" || identity.NodeSource == "" {
 			return errors.Join(err, errors.New("Speed Lab result belongs to a changed native Router source"))
 		}
 	}
-	return validateDesktopLinuxNodePath(context.Background(), a, identity.Linux)
+	return errors.Join(validateDesktopLinuxNodePath(ctx, a, identity.Linux), ctx.Err())
 }
 
 func (a *app) speedLabSnapshotTemporary() (speedLabTemporarySnapshot, error) {

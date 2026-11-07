@@ -68,11 +68,25 @@ type desktopNodeMTUOwner struct {
 var errDesktopNodeMTUExpired = errors.New("captured native MTU lease expired and its original value was restored")
 
 func readDesktopNodeMTU(launch *desktopNodeLaunch) (desktopNodeMTURecord, error) {
+	return readDesktopNodeMTUWith(launch, readDesktopRuntimeFile)
+}
+
+func readDesktopNodeMTUContext(ctx context.Context, launch *desktopNodeLaunch) (desktopNodeMTURecord, error) {
+	if ctx == nil {
+		return desktopNodeMTURecord{}, errors.New("native TUN observation has no original caller")
+	}
+	record, err := readDesktopNodeMTUWith(launch, func(launch *desktopNodeLaunch, name string, limit int64) ([]byte, error) {
+		return readDesktopRuntimeFileContext(ctx, launch, name, limit)
+	})
+	return record, errors.Join(err, ctx.Err())
+}
+
+func readDesktopNodeMTUWith(launch *desktopNodeLaunch, read func(*desktopNodeLaunch, string, int64) ([]byte, error)) (desktopNodeMTURecord, error) {
 	var record desktopNodeMTURecord
 	if launch == nil || !desktopMTURequestPattern.MatchString(launch.mtuSession) || launch.external != nil {
 		return record, errors.New("ordinary node has no captured native TUN owner")
 	}
-	raw, err := readDesktopRuntimeFile(launch, "node-mtu-status.json", desktopNodeMTURecordLimit)
+	raw, err := read(launch, "node-mtu-status.json", desktopNodeMTURecordLimit)
 	if err != nil || decodeRelayControlJSON(raw, &record) != nil {
 		return record, errors.New("native TUN readback is unavailable")
 	}

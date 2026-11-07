@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"strings"
+
+	"router-vpn/internal/desktopnetwork"
 )
 
 // speedLabHopMeasurement is an independently measured view of one node inside
@@ -30,11 +32,13 @@ func measureSpeedLabMultihopHopsContext(ctx context.Context, a *app, identity sp
 	if !identity.GraphOK || strings.TrimSpace(identity.Graph.EntryID) == "" || strings.TrimSpace(identity.Graph.ExitID) == "" || identity.Graph.EntryID == identity.Graph.ExitID {
 		return nil, errors.New("Speed Lab per-hop measurement requires an exact active multihop graph")
 	}
-	if err := validateSpeedLabIdentity(a, identity); err != nil {
+	if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 		return nil, err
 	}
 
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
 	st := a.state
 	entry, entryOK := a.profileByIDLocked(identity.Graph.EntryID)
 	exit, exitOK := a.profileByIDLocked(identity.Graph.ExitID)
@@ -53,7 +57,9 @@ func measureSpeedLabMultihopHopsContext(ctx context.Context, a *app, identity sp
 		} else if role != "exit" {
 			return speedLabHopMeasurement{}, errors.New("unknown Speed Lab multihop role")
 		}
-		a.mu.Lock()
+		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+			return speedLabHopMeasurement{}, err
+		}
 		p, ok := a.profileByIDLocked(profileID)
 		a.mu.Unlock()
 		if !ok {
@@ -65,7 +71,7 @@ func measureSpeedLabMultihopHopsContext(ctx context.Context, a *app, identity sp
 		if err := ctx.Err(); err != nil {
 			return speedLabHopMeasurement{}, err
 		}
-		if err := validateSpeedLabIdentity(a, identity); err != nil {
+		if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 			return speedLabHopMeasurement{}, err
 		}
 		if latencyErr != nil {
@@ -78,7 +84,7 @@ func measureSpeedLabMultihopHopsContext(ctx context.Context, a *app, identity sp
 		if err := ctx.Err(); err != nil {
 			return speedLabHopMeasurement{}, err
 		}
-		if err := validateSpeedLabIdentity(a, identity); err != nil {
+		if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 			return speedLabHopMeasurement{}, err
 		}
 		if speedErr != nil {
@@ -100,7 +106,7 @@ func measureSpeedLabMultihopHopsContext(ctx context.Context, a *app, identity sp
 	if err != nil {
 		return nil, err
 	}
-	if err := validateSpeedLabIdentity(a, identity); err != nil {
+	if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 		return nil, err
 	}
 	return []speedLabHopMeasurement{entryHop, exitHop}, nil

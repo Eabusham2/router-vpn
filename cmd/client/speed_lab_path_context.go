@@ -12,6 +12,8 @@ const speedLabPathCheckInterval = 50 * time.Millisecond
 // in-flight HTTP work when the observed session/graph changes. This context owns
 // only measurement requests: stopping a test must never disconnect the VPN.
 func speedLabPathContext(parent context.Context, validate func() error) (context.Context, func(), error) {
+	// Compatibility only: an already-entered legacy callback is joined even
+	// after cancellation. Shipping contextual observers use WithCaller below.
 	if validate == nil {
 		return nil, nil, errors.New("Speed Lab path validation is required")
 	}
@@ -19,6 +21,9 @@ func speedLabPathContext(parent context.Context, validate func() error) (context
 }
 
 func speedLabPathContextWithCaller(parent context.Context, validate func(context.Context) error) (context.Context, func(), error) {
+	if parent == nil {
+		return nil, nil, errors.New("Speed Lab path observation has no original caller")
+	}
 	if err := context.Cause(parent); err != nil {
 		return nil, nil, err
 	}

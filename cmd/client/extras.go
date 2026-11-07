@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 )
 
 const faviconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#62d5ff"/><stop offset="1" stop-color="#7b68ff"/></linearGradient></defs><rect width="64" height="64" rx="16" fill="#0d1220"/><path d="M32 8 52 16v14c0 13-8.4 22.1-20 27C20.4 52.1 12 43 12 30V16l20-8Z" fill="url(#g)"/><path d="M24 32.5 29.5 38 41 25" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>`
@@ -339,6 +340,17 @@ func captureAsyncMeasurementSession(a *app) (connectionSession, error) {
 	return s, nil
 }
 
+func captureAsyncMeasurementSessionContext(ctx context.Context, a *app) (connectionSession, error) {
+	_, session, err := measurementSessionContext(ctx, a, nil)
+	if err != nil {
+		return connectionSession{}, err
+	}
+	if strings.TrimSpace(session.ID) == "" || !session.Connected || strings.TrimSpace(session.Phase) != "connected" || session.PathProof != "passed" {
+		return connectionSession{}, errors.New("current Router VPN session has not proved a stable connected path")
+	}
+	return session, ctx.Err()
+}
+
 func sameAsyncMeasurementSession(before, after connectionSession) bool {
 	return before.ID != "" && after.ID == before.ID && after.Connected && after.Phase == "connected" && after.PathProof == "passed" &&
 		after.RouterID == before.RouterID && after.ActualMode == before.ActualMode && after.ActualBase == before.ActualBase
@@ -349,7 +361,13 @@ func asyncMeasurementProfileToken(p common.RouterProfile) string {
 }
 
 func (a *app) activeAsyncMeasurementProfile() (common.RouterProfile, state, error) {
-	a.mu.Lock()
+	return a.activeAsyncMeasurementProfileContext(context.Background())
+}
+
+func (a *app) activeAsyncMeasurementProfileContext(ctx context.Context) (common.RouterProfile, state, error) {
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return common.RouterProfile{}, state{}, err
+	}
 	defer a.mu.Unlock()
 	st := a.state
 	if !st.Connected || strings.TrimSpace(st.Phase) != "connected" {
@@ -363,14 +381,24 @@ func (a *app) activeAsyncMeasurementProfile() (common.RouterProfile, state, erro
 	if !ok {
 		return common.RouterProfile{}, st, errors.New("active VPN node disappeared before live proof")
 	}
-	return p, st, nil
+	return cloneRouterProfile(p), st, ctx.Err()
 }
 
 func validateAsyncMeasurementProfile(a *app, p common.RouterProfile, st state, session connectionSession, token string) error {
-	if !sameAsyncMeasurementSession(session, sessionTrackerFor(a).snapshot(0)) {
+	return validateAsyncMeasurementProfileContext(context.Background(), a, p, st, session, token)
+}
+
+func validateAsyncMeasurementProfileContext(ctx context.Context, a *app, p common.RouterProfile, st state, session connectionSession, token string) error {
+	_, currentSession, err := measurementSessionContext(ctx, a, nil)
+	if err != nil {
+		return err
+	}
+	if !sameAsyncMeasurementSession(session, currentSession) {
 		return errors.New("VPN session/path changed while live proof was running")
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	if !a.state.Connected || mtuStateSnapshotToken(a.state) != mtuStateSnapshotToken(st) || strings.TrimSpace(a.state.RouterID) != p.ID {
 		return errors.New("active VPN node/mode/base/path changed while live proof was running")
@@ -379,7 +407,7 @@ func validateAsyncMeasurementProfile(a *app, p common.RouterProfile, st state, s
 	if !ok || asyncMeasurementProfileToken(current) != token {
 		return errors.New("active VPN profile or policy changed while live proof was running")
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
@@ -387,14 +415,14 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
 	}
-	targetProfile, stateAtStart, err := a.activeAsyncMeasurementProfile()
+	targetProfile, stateAtStart, err := a.activeAsyncMeasurementProfileContext(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	target := targetProfile.ID
 	targetAtStart := asyncMeasurementProfileToken(targetProfile)
-	sessionAtStart, sessionErr := captureAsyncMeasurementSession(a)
+	sessionAtStart, sessionErr := captureAsyncMeasurementSessionContext(r.Context(), a)
 	if sessionErr != nil {
 		http.Error(w, sessionErr.Error(), http.StatusConflict)
 		return
@@ -429,7 +457,7 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, lookupErr.Error(), http.StatusBadGateway)
 		return
 	}
-	if err := validateAsyncMeasurementProfile(a, targetProfile, stateAtStart, sessionAtStart, targetAtStart); err != nil {
+	if err := validateAsyncMeasurementProfileContext(measurementCtx, a, targetProfile, stateAtStart, sessionAtStart, targetAtStart); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
@@ -475,7 +503,7 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	p, stateAtStart, err := a.activeAsyncMeasurementProfile()
+	p, stateAtStart, err := a.activeAsyncMeasurementProfileContext(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -489,7 +517,7 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profileAtStart := asyncMeasurementProfileToken(p)
-	sessionAtStart, sessionErr := captureAsyncMeasurementSession(a)
+	sessionAtStart, sessionErr := captureAsyncMeasurementSessionContext(r.Context(), a)
 	if sessionErr != nil {
 		http.Error(w, sessionErr.Error(), http.StatusConflict)
 		return
@@ -560,7 +588,7 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if err := validateAsyncMeasurementProfile(a, p, stateAtStart, sessionAtStart, profileAtStart); err != nil {
+	if err := validateAsyncMeasurementProfileContext(measurementCtx, a, p, stateAtStart, sessionAtStart, profileAtStart); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}

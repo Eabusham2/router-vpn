@@ -26,14 +26,26 @@ EXPECTED = {
              'TestDesktopMTUViewContextCannotWaitForCapturedProof',
              'TestDesktopMTURetestContextIncludesHTTPAdmission',
              *['TestDesktopMTURetestContextIncludesHTTPAdmission/'+leaf
-               for leaf in ('application', 'suspension', 'view')]],
+               for leaf in ('application', 'suspension', 'view')],
+             'TestMeasurementObserverCallerAdmission',
+             *['TestMeasurementObserverCallerAdmission/'+method+'/'+boundary
+               for method in ('async', 'speed-capture', 'speed-validate', 'public-ip', 'dns')
+               for boundary in ('app', 'tracker')],
+             'TestMeasurementObserverJoinsHeldValidation',
+             *['TestMeasurementObserverJoinsHeldValidation/'+boundary for boundary in ('app', 'tracker')],
+             'TestMeasurementObserverRejectsIdenticalReplacementTracker',
+             'TestMeasurementAdoptionCancellationJoinsTransaction',
+             *['TestMeasurementAdoptionCancellationJoinsTransaction/'+when for when in ('before', 'during')],
+             'TestMeasurementTorObservationKeepsOriginalCaller',
+             'TestMeasurementOwnedNodeObservationCallerGates',
+             *['TestMeasurementOwnedNodeObservationCallerGates/'+boundary for boundary in ('app', 'workspace', 'host')]],
     NETWORK: ['TestNetworkInterfaceInventoryRetainsOriginalObservation',
               *['TestNetworkInterfaceInventoryRetainsOriginalObservation/'+leaf
                 for leaf in ('exact-fields', 'late-cancel', 'duplicate-index')]],
     PROCESS: ['TestProcessObservationExpiryAfterAdmissionPreservesWitness'],
     PROTECTION: ['TestNodeControlOriginalContextGatePreservesAdmission', 'TestNodeControlOriginalContextKeepsRealFailure'],
 }
-SELECTOR = '^Test(DesktopMTU(SnapshotOriginalContextAdmission|RunCreatesCallerContextBeforeSnapshot|ProofObservationRetainsMixedFailure|SnapshotRejectsOriginalSessionReplacement|ActualWritersKeepCallerDeadline|ViewContextCannotWaitForCapturedProof|RetestContextIncludesHTTPAdmission)|NetworkInterfaceInventoryRetainsOriginalObservation|ProcessObservationExpiryAfterAdmissionPreservesWitness|NodeControlOriginalContext(GatePreservesAdmission|KeepsRealFailure))$'
+SELECTOR = '^Test(DesktopMTU(SnapshotOriginalContextAdmission|RunCreatesCallerContextBeforeSnapshot|ProofObservationRetainsMixedFailure|SnapshotRejectsOriginalSessionReplacement|ActualWritersKeepCallerDeadline|ViewContextCannotWaitForCapturedProof|RetestContextIncludesHTTPAdmission)|Measurement(Observer(CallerAdmission|JoinsHeldValidation|RejectsIdenticalReplacementTracker)|AdoptionCancellationJoinsTransaction|TorObservationKeepsOriginalCaller|OwnedNodeObservationCallerGates)|NetworkInterfaceInventoryRetainsOriginalObservation|ProcessObservationExpiryAfterAdmissionPreservesWitness|NodeControlOriginalContext(GatePreservesAdmission|KeepsRealFailure))$'
 
 
 NATIVE_EXPECTED = {

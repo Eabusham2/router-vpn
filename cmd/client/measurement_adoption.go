@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"sync"
+
+	"router-vpn/internal/desktopnetwork"
 )
 
 type asyncMeasurementBindingKey struct{}
@@ -53,6 +55,18 @@ func (b *asyncMeasurementAdoption) sessionOwner() (*sessionTracker, error) {
 // Caller holds tracker.mu -> app.mu. Do not call snapshot or an app-locking
 // validation helper here: persistence must remain atomic with these checks.
 func (b *asyncMeasurementAdoption) validateLocked(current *connectionSession) error {
+	return b.validateLockedWithTor(current, func() error { return b.tor.currentLocked(b.owner) })
+}
+
+func (b *asyncMeasurementAdoption) validateLockedContext(ctx context.Context, current *connectionSession) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err := b.validateLockedWithTor(current, func() error { return b.tor.currentLockedContext(ctx, b.owner) })
+	return errors.Join(err, ctx.Err())
+}
+
+func (b *asyncMeasurementAdoption) validateLockedWithTor(current *connectionSession, torCurrent func() error) error {
 	a := b.owner
 	tracker, err := b.sessionOwner()
 	if err != nil {
@@ -87,7 +101,7 @@ func (b *asyncMeasurementAdoption) validateLocked(current *connectionSession) er
 		}
 	}
 	if b.tor != nil {
-		if err := b.tor.currentLocked(a); err != nil {
+		if err := torCurrent(); err != nil {
 			return err
 		}
 	}
@@ -106,10 +120,32 @@ func (b *asyncMeasurementAdoption) validate() error {
 	return b.validateLocked(tracker.session)
 }
 
+func (b *asyncMeasurementAdoption) validateContext(ctx context.Context) error {
+	tracker, err := b.sessionOwner()
+	if err != nil {
+		return err
+	}
+	if err := desktopnetwork.LockContext(ctx, &tracker.mu); err != nil {
+		return err
+	}
+	defer tracker.mu.Unlock()
+	if err := desktopnetwork.LockContext(ctx, &b.owner.mu); err != nil {
+		return err
+	}
+	defer b.owner.mu.Unlock()
+	return b.validateLockedContext(ctx, tracker.session)
+}
+
 // Acquire only after all HTTP work finishes. Never hold the operation lock
 // during probes, and never wait behind a connection/settings transaction.
 // The returned function releases app, tracker, and operation locks in reverse.
 func (a *app) beginAsyncMeasurementAdoption(ctx context.Context) (func(), error) {
+	if ctx == nil {
+		return nil, errors.New("live measurement adoption has no original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	binding, ok := ctx.Value(asyncMeasurementBindingKey{}).(*asyncMeasurementAdoption)
 	if !ok || binding == nil || binding.owner != a {
 		return nil, errors.New("live measurement has no matching immutable adoption binding")
@@ -118,18 +154,28 @@ func (a *app) beginAsyncMeasurementAdoption(ctx context.Context) (func(), error)
 	if err != nil {
 		return nil, err
 	}
+	// The general transaction may synchronously join protection recovery. It
+	// retains its compatibility contract; cancellation cannot detach it or
+	// authorize a later measurement write after it finally returns.
 	releaseOperation, err := a.beginNodeBoundOperation()
 	if err != nil {
 		return nil, err
 	}
-	tracker.mu.Lock()
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &tracker.mu); err != nil {
+		releaseOperation()
+		return nil, err
+	}
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		tracker.mu.Unlock()
+		releaseOperation()
+		return nil, err
+	}
 	release := func() { a.mu.Unlock(); tracker.mu.Unlock(); releaseOperation() }
 	if err := context.Cause(ctx); err != nil {
 		release()
 		return nil, err
 	}
-	if err := binding.validateLocked(tracker.session); err != nil {
+	if err := binding.validateLockedContext(ctx, tracker.session); err != nil {
 		release()
 		return nil, err
 	}

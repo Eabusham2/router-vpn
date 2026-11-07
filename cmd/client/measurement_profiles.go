@@ -1,21 +1,29 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"strings"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 )
 
 // A measurement depends on every node that owns its dataplane, even when it
 // only contacts the exit. Retain hashes rather than mutable profiles or secrets.
 // Supplied profiles are the exact snapshots the caller will use for requests.
 func captureMeasurementProfiles(a *app, st state, graph activeMultihopGraph, supplied ...common.RouterProfile) (map[string]string, error) {
+	return captureMeasurementProfilesContext(context.Background(), a, st, graph, supplied...)
+}
+
+func captureMeasurementProfilesContext(ctx context.Context, a *app, st state, graph activeMultihopGraph, supplied ...common.RouterProfile) (map[string]string, error) {
 	ids := []string{st.RouterID}
 	if st.Mode == "multihop" {
 		ids = []string{graph.EntryID, graph.ExitID}
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
 	defer a.mu.Unlock()
 	if st.Mode == "external-node" {
 		if value, found := lookupDesktopNativeLaunch(a); found {
@@ -57,7 +65,7 @@ func captureMeasurementProfiles(a *app, st state, graph activeMultihopGraph, sup
 			return nil, errors.New("captured measurement profile no longer belongs to the current path")
 		}
 	}
-	return tokens, nil
+	return tokens, ctx.Err()
 }
 
 // The caller holds app.mu, including when adopting a durable measurement.

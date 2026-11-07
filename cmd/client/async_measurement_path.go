@@ -13,6 +13,12 @@ import (
 // particular graph generation. End-of-request validation alone would still let
 // an old request keep using the network after disconnect or graph replacement.
 func asyncMeasurementPathContext(parent context.Context, a *app, p common.RouterProfile, st state, session connectionSession, token string) (context.Context, func(), func() error, error) {
+	if parent == nil {
+		return nil, nil, nil, errors.New("live measurement has no original caller")
+	}
+	if err := parent.Err(); err != nil {
+		return nil, nil, nil, err
+	}
 	graph, graphOK := getActiveMultihopGraph(a)
 	if st.Mode == "multihop" {
 		if err := validateActiveMultihopSpeedGraph(st, graph, graphOK, graph.EntryID, graph.ExitID); err != nil {
@@ -22,14 +28,14 @@ func asyncMeasurementPathContext(parent context.Context, a *app, p common.Router
 			return nil, nil, nil, errors.New("live measurement must belong to the active multihop exit")
 		}
 	}
-	profiles, err := captureMeasurementProfiles(a, st, graph, p)
+	profiles, err := captureMeasurementProfilesContext(parent, a, st, graph, p)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	if profiles[p.ID] != token {
 		return nil, nil, nil, errors.New("captured profile changed before live measurement")
 	}
-	tor, err := captureDesktopTorMeasurementBinding(a, st)
+	tor, err := captureDesktopTorMeasurementBindingContext(parent, a, st)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -40,12 +46,12 @@ func asyncMeasurementPathContext(parent context.Context, a *app, p common.Router
 	}
 	// The observer and terminal persistence use the exact same immutable
 	// binding. Stop cancels HTTP only; it never stops or replaces the VPN.
-	ctx, stop, err := speedLabPathContext(parent, binding.validate)
+	ctx, stop, err := speedLabPathContextWithCaller(parent, binding.validateContext)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	ctx = context.WithValue(ctx, asyncMeasurementBindingKey{}, binding)
-	return ctx, stop, binding.validate, nil
+	return ctx, stop, func() error { return binding.validateContext(ctx) }, nil
 }
 
 // Private API addresses can overlap across hops. Multihop DNS/public-exit

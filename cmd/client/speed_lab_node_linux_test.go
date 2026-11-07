@@ -282,7 +282,7 @@ func TestSpeedLabLinuxRejectsOmittedOrMixedIdentity(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			f := newLinuxSpeedLabPathFixture(t)
 			path := f.capture(t)
-			identity := speedLabPathIdentity{SessionID: "captured-linux-measurement", StateToken: mtuStateSnapshotToken(f.a.state),
+			identity := speedLabPathIdentity{Tracker: sessionTrackerFor(f.a), SessionID: "captured-linux-measurement", StateToken: mtuStateSnapshotToken(f.a.state),
 				RouterID: f.a.state.RouterID, Command: f.a.cmd, Network: f.h.network, ProfileToken: desktopOwnedNodeProfileToken(f.a.profiles.Profiles[0]),
 				Options: f.h.options, Linux: path}
 			switch scenario {
