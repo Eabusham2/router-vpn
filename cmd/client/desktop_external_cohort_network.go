@@ -10,8 +10,8 @@ import (
 )
 
 type desktopExternalComparisonNetwork interface {
-	Identity() string
-	Current() error
+	IdentityContext(context.Context) (string, error)
+	CurrentContext(context.Context) error
 	BeforeTransition(context.Context, speedLabPathIdentity) error
 	AfterTransition(context.Context, speedLabPathIdentity) error
 	RecordTransient(context.Context, *desktopNodeLaunch) error
@@ -39,7 +39,7 @@ func openDesktopExternalComparisonNetwork(ctx context.Context, a *app, initial s
 		return nil, errors.New("external comparison network requires the original Speed Lab transaction")
 	}
 	o := &desktopExternalCohortNetwork{app: a, owner: owner, current: initial, transient: make(map[*desktopNodeLaunch]string)}
-	if err := o.ownerCurrent(); err != nil {
+	if err := o.ownerCurrent(ctx); err != nil {
 		return nil, err
 	}
 	receipt, err := o.capture(ctx, initial)
@@ -54,7 +54,7 @@ func openDesktopExternalComparisonNetwork(ctx context.Context, a *app, initial s
 		}
 		return nil, err
 	}
-	if err = o.ownerCurrent(); err == nil {
+	if err = o.ownerCurrent(ctx); err == nil {
 		var again *desktopnetwork.DesktopNetworkReceipt
 		again, err = o.capture(ctx, initial)
 		if err == nil && networkReceiptIdentity(again) != networkReceiptIdentity(receipt) {
@@ -86,12 +86,14 @@ func parseDesktopCohortReceipt(raw, name string, index, mtu int) (*desktopnetwor
 	return &receipt, nil
 }
 
-func (o *desktopExternalCohortNetwork) ownerCurrent() error {
+func (o *desktopExternalCohortNetwork) ownerCurrent(ctx context.Context) error {
 	if o == nil || o.app == nil || o.owner == nil {
 		return errors.New("comparison network lost its original transaction")
 	}
 	a := o.app
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	if !a.speedLabOwnerCurrentLocked(o.owner) || a.cmd != o.owner.runtime {
 		return errors.New("comparison network belongs to a replacement application session")
@@ -103,12 +105,14 @@ func (o *desktopExternalCohortNetwork) capture(ctx context.Context, identity spe
 	if ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("native routing capture lost its caller")
 	}
-	if err := o.ownerCurrent(); err != nil {
+	if err := o.ownerCurrent(ctx); err != nil {
 		return nil, err
 	}
 	a := o.app
 	if identity == (speedLabPathIdentity{}) {
-		a.mu.Lock()
+		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+			return nil, err
+		}
 		off := a.cmd == nil && !a.state.Connected && o.owner.runtime == nil && a.speedLabOwnerCurrentLocked(o.owner)
 		a.mu.Unlock()
 		_, native := desktopNodeOwners.Load(a)
@@ -120,29 +124,29 @@ func (o *desktopExternalCohortNetwork) capture(ctx context.Context, identity spe
 		}
 		return nil, nil
 	}
-	if err := validateSpeedLabIdentity(a, identity); err != nil {
+	if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 		return nil, err
 	}
 	var receipt *desktopnetwork.DesktopNetworkReceipt
 	var err error
 	switch {
 	case identity.External != nil:
-		proof, e := a.readDesktopExternalProof(identity.External)
+		proof, e := a.readDesktopExternalProofContext(ctx, identity.External)
 		err = e
 		if err == nil {
 			receipt, err = parseDesktopCohortReceipt(proof.NetworkReceipt, "", 0, 0)
 		}
 	case identity.Tor != nil:
-		proof, e := a.readDesktopTorProof(identity.Tor)
+		proof, e := a.readDesktopTorProofContext(ctx, identity.Tor)
 		err = e
 		if err == nil {
 			receipt, err = parseDesktopCohortReceipt(proof.NetworkReceipt, proof.InterfaceName, proof.InterfaceIndex, proof.EffectiveMTU)
 		}
 	case identity.Node != nil:
-		_, err = a.readDesktopOwnedNodeReady(identity.Node, false)
+		_, err = a.readDesktopOwnedNodeReadyContext(ctx, identity.Node, false)
 		if err == nil {
 			var live desktopNodeMTURecord
-			live, err = readDesktopNodeMTU(identity.Node)
+			live, err = readDesktopNodeMTUContext(ctx, identity.Node)
 			if err == nil {
 				receipt, err = parseDesktopCohortReceipt(live.NetworkReceipt, live.Interface, live.Index, live.MTU)
 			}
@@ -155,33 +159,35 @@ func (o *desktopExternalCohortNetwork) capture(ctx context.Context, identity spe
 	if err != nil {
 		return nil, err
 	}
-	if err = validateSpeedLabIdentity(a, identity); err != nil {
+	if err = validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 		return nil, err
 	}
-	if err = o.ownerCurrent(); err != nil {
+	if err = o.ownerCurrent(ctx); err != nil {
 		return nil, err
 	}
 	return receipt, nil
 }
 
-func (o *desktopExternalCohortNetwork) Identity() string {
+func (o *desktopExternalCohortNetwork) IdentityContext(ctx context.Context) (string, error) {
 	if o == nil || o.tracker == nil {
-		return ""
+		return "", errors.New("comparison network observer identity is missing")
 	}
-	return o.tracker.Identity()
+	return o.tracker.IdentityContext(ctx)
 }
 
 // No app.mu or native-owner recapture here: the final selection guard calls
-// Current while holding its exact source/decision transaction locks.
-func (o *desktopExternalCohortNetwork) Current() error {
+// CurrentContext while holding its exact source/decision transaction locks.
+func (o *desktopExternalCohortNetwork) CurrentContext(ctx context.Context) error {
 	if o == nil || o.tracker == nil {
 		return errors.New("comparison network observer is missing")
 	}
-	return o.tracker.Current()
+	return o.tracker.CurrentContext(ctx)
 }
 
 func (o *desktopExternalCohortNetwork) BeforeTransition(ctx context.Context, identity speedLabPathIdentity) error {
-	o.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &o.mu); err != nil {
+		return err
+	}
 	defer o.mu.Unlock()
 	if o.transition || identity != o.current {
 		return errors.New("network transition replaced its last exact path checkpoint")
@@ -198,21 +204,25 @@ func (o *desktopExternalCohortNetwork) BeforeTransition(ctx context.Context, ide
 }
 
 func (o *desktopExternalCohortNetwork) RecordTransient(ctx context.Context, launch *desktopNodeLaunch) error {
-	o.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &o.mu); err != nil {
+		return err
+	}
 	defer o.mu.Unlock()
 	if !o.transition || ctx == nil || ctx.Err() != nil || launch == nil || launch.tor == nil || launch.external != nil || launch.ownedNode != nil {
 		return errors.New("transient routing receipt has no exact Tor comparison transition")
 	}
-	if err := o.ownerCurrent(); err != nil {
+	if err := o.ownerCurrent(ctx); err != nil {
 		return err
 	}
-	o.app.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &o.app.mu); err != nil {
+		return err
+	}
 	current := o.app.cmd == launch.command && o.owner.runtime == launch.command
 	o.app.mu.Unlock()
 	if !current {
 		return errors.New("transient routing receipt belongs to another native process")
 	}
-	proof, err := o.app.readDesktopTorProof(launch)
+	proof, err := o.app.readDesktopTorProofContext(ctx, launch)
 	if err != nil {
 		return err
 	}
@@ -224,45 +234,83 @@ func (o *desktopExternalCohortNetwork) RecordTransient(ctx context.Context, laun
 	if previous := o.transient[launch]; previous != "" && previous != key {
 		return errors.New("transient native routing receipt changed after its first proof")
 	}
-	if err = o.ownerCurrent(); err != nil {
+	if err = o.ownerCurrent(ctx); err != nil {
 		return err
 	}
-	if err = o.tracker.Record(*receipt); err != nil {
+	if err = o.tracker.RecordContext(ctx, *receipt); err != nil {
 		return err
 	}
 	o.transient[launch] = key
 	return nil
 }
 
-func desktopCohortLaunchJoined(launch *desktopNodeLaunch) error {
+func desktopCohortLaunchJoined(ctx context.Context, launch *desktopNodeLaunch) error {
 	if launch == nil {
 		return nil
 	}
 	acknowledged := false
 	switch {
 	case launch.tor != nil:
-		launch.tor.mu.Lock()
+		if err := desktopnetwork.LockContext(ctx, &launch.tor.mu); err != nil {
+			return err
+		}
 		acknowledged = launch.tor.stopAcknowledged
 		launch.tor.mu.Unlock()
 	case launch.external != nil:
-		launch.external.mu.Lock()
+		if err := desktopnetwork.LockContext(ctx, &launch.external.mu); err != nil {
+			return err
+		}
 		acknowledged = launch.external.stopAcknowledged
 		launch.external.mu.Unlock()
 	case launch.ownedNode != nil:
-		launch.workspaceMu.Lock()
+		if err := desktopnetwork.LockContext(ctx, &launch.workspaceMu); err != nil {
+			return err
+		}
 		acknowledged = launch.ownedNode.retired
 		launch.workspaceMu.Unlock()
 	default:
 		return errors.New("retired routing receipt has no original native runtime")
 	}
-	if !acknowledged || !desktopNodeProcessExited(launch) {
+	if !acknowledged {
 		return errors.New("routing transition has no acknowledged original native drain and join")
 	}
-	return nil
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Ordinary external runtimes own their own Wait channel. Opening the
+	// Router/Tor waiter here could reap the same process a second time.
+	var done <-chan struct{}
+	if launch.external != nil {
+		if launch.external.retained != nil {
+			observer, ok := launch.external.retained.(interface {
+				ProcessDoneContext(context.Context) (<-chan struct{}, error)
+			})
+			if !ok {
+				return errors.New("retired external process has no contextual join observation")
+			}
+			var err error
+			done, err = observer.ProcessDoneContext(ctx)
+			if err != nil {
+				return err
+			}
+		} else {
+			done = desktopExternalProcessDone(launch)
+		}
+	} else {
+		done = desktopNodeProcessDone(launch)
+	}
+	select {
+	case <-done:
+		return ctx.Err()
+	default:
+		return errors.New("routing transition has no acknowledged original native drain and join")
+	}
 }
 
 func (o *desktopExternalCohortNetwork) AfterTransition(ctx context.Context, identity speedLabPathIdentity) error {
-	o.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &o.mu); err != nil {
+		return err
+	}
 	defer o.mu.Unlock()
 	if !o.transition {
 		return errors.New("network completion has no original transition window")
@@ -280,14 +328,14 @@ func (o *desktopExternalCohortNetwork) AfterTransition(ctx context.Context, iden
 	}
 	for launch := range o.transient {
 		if launch != current {
-			if err := desktopCohortLaunchJoined(launch); err != nil {
+			if err := desktopCohortLaunchJoined(ctx, launch); err != nil {
 				return err
 			}
 		}
 	}
 	for _, launch := range []*desktopNodeLaunch{o.old.External, o.old.Tor, o.old.Node} {
 		if launch != nil && launch != current {
-			if err := desktopCohortLaunchJoined(launch); err != nil {
+			if err := desktopCohortLaunchJoined(ctx, launch); err != nil {
 				return err
 			}
 		}

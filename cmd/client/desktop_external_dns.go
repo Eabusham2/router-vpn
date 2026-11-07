@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/dnsmeasure"
 )
 
@@ -145,6 +146,17 @@ func (s desktopDNSSnapshot) current(a *app) error {
 		return err
 	}
 	a.mu.Lock()
+	defer a.mu.Unlock()
+	return s.currentLocked(a)
+}
+
+func (s desktopDNSSnapshot) currentContext(ctx context.Context, a *app) error {
+	if err := a.desktopDNSCurrentProofContext(ctx, s.launch); err != nil {
+		return err
+	}
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	return s.currentLocked(a)
 }

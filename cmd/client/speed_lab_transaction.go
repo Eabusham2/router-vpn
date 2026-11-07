@@ -234,7 +234,7 @@ func (a *app) beginSpeedLabTemporaryOperationExpectedContext(ctx context.Context
 			a.operationMu.Unlock()
 		}
 	}()
-	if err := guardViaEntryDecision(a); err != nil {
+	if err := guardViaEntryDecisionContext(ctx, a); err != nil {
 		return nil, speedLabTemporarySnapshot{}, nil, err
 	}
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
@@ -270,11 +270,12 @@ func (a *app) beginSpeedLabTemporaryOperationExpectedContext(ctx context.Context
 	}()
 	intent, cancelIntent := context.WithCancel(context.Background())
 	test, cancelTest := context.WithCancel(intent)
-	owner := &speedLabTemporaryOwner{intent: intent, cancelIntent: cancelIntent, test: test, cancelTest: cancelTest, current: test, runtime: snapshot.Runtime, network: physicalNetworkIdentity()}
-	if owner.network == "" {
+	network, networkErr := physicalNetworkIdentityContext(ctx)
+	owner := &speedLabTemporaryOwner{intent: intent, cancelIntent: cancelIntent, test: test, cancelTest: cancelTest, current: test, runtime: snapshot.Runtime, network: network}
+	if networkErr != nil || owner.network == "" {
 		cancelTest()
 		cancelIntent()
-		return nil, speedLabTemporarySnapshot{}, nil, errors.New("temporary Speed Lab could not capture the physical network")
+		return nil, speedLabTemporarySnapshot{}, nil, errors.Join(networkErr, errors.New("temporary Speed Lab could not capture the physical network"))
 	}
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
 		cancelTest()

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"strings"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -104,7 +106,7 @@ func (c *desktopExternalComparisonCohort) close() {
 	c.ID = ""
 }
 
-func (c *desktopExternalComparisonCohort) captureAssets(a *app, entry common.RouterProfile, mode string) error {
+func (c *desktopExternalComparisonCohort) captureAssets(ctx context.Context, a *app, entry common.RouterProfile, mode string) error {
 	if entry.ID == "" || entry.NodeKind == "external" || entry.External != nil {
 		return nil
 	}
@@ -113,6 +115,9 @@ func (c *desktopExternalComparisonCohort) captureAssets(a *app, entry common.Rou
 		modes = append(modes, "shadowsocks")
 	}
 	for _, selected := range modes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		directory, err := nativeGeneratedDir(clientRoot(a), entry.ID, selected)
 		if err != nil {
 			return err
@@ -134,6 +139,9 @@ func (c *desktopExternalComparisonCohort) captureAssets(a *app, entry common.Rou
 			}
 		}()
 		for name, raw := range assets {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			path := filepath.Join(directory, name)
 			info, err := desktopComparisonCaptureFileInfo(path)
 			if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
@@ -181,7 +189,13 @@ func desktopComparisonSameFile(before, after os.FileInfo) bool {
 }
 
 func captureDesktopExternalComparisonCohort(a *app, expected string) (*desktopExternalComparisonCohort, error) {
-	a.mu.Lock()
+	return captureDesktopExternalComparisonCohortContext(context.Background(), a, expected)
+}
+
+func captureDesktopExternalComparisonCohortContext(ctx context.Context, a *app, expected string) (*desktopExternalComparisonCohort, error) {
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
 	store := cloneRouterProfileStore(a.profiles)
 	a.mu.Unlock()
 	id, err := desktopComparisonCatalogToken(store)
@@ -202,6 +216,9 @@ func captureDesktopExternalComparisonCohort(a *app, expected string) (*desktopEx
 		}
 	}()
 	for _, p := range store.Profiles {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if p.NodeKind != "external" || p.External == nil {
 			continue
 		}
@@ -216,7 +233,7 @@ func captureDesktopExternalComparisonCohort(a *app, expected string) (*desktopEx
 			q.EntryMode, entryErr = desktopExternalEntryMode(p, entry, q.EntryMode, "")
 		}
 		if entryErr == nil {
-			entryErr = c.captureAssets(a, entry, q.EntryMode)
+			entryErr = c.captureAssets(ctx, a, entry, q.EntryMode)
 		}
 		if entryErr == nil {
 			candidate.entrySource, entryErr = startupExternalSourceToken(a, entry, q.EntryMode)
@@ -237,7 +254,7 @@ func captureDesktopExternalComparisonCohort(a *app, expected string) (*desktopEx
 		}
 		c.candidates = append(c.candidates, candidate)
 	}
-	if err := c.current(a, store.SelectedID); err != nil {
+	if err := c.currentContext(ctx, a, store.SelectedID); err != nil {
 		return nil, err
 	}
 	ok = true
@@ -245,16 +262,22 @@ func captureDesktopExternalComparisonCohort(a *app, expected string) (*desktopEx
 }
 
 func (c *desktopExternalComparisonCohort) current(a *app, selected string) error {
+	return c.currentContext(context.Background(), a, selected)
+}
+
+func (c *desktopExternalComparisonCohort) currentContext(ctx context.Context, a *app, selected string) error {
 	if c == nil || c.files == nil || c.ID == "" {
 		return errors.New("external comparison source cohort is retired")
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	err := c.currentLocked(a, selected)
 	a.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	return c.sourcesCurrent()
+	return c.sourcesCurrentContext(ctx)
 }
 
 func (c *desktopExternalComparisonCohort) currentLocked(a *app, selected string) error {
@@ -271,7 +294,17 @@ func (c *desktopExternalComparisonCohort) currentLocked(a *app, selected string)
 }
 
 func (c *desktopExternalComparisonCohort) sourcesCurrent() error {
+	return c.sourcesCurrentContext(context.Background())
+}
+
+func (c *desktopExternalComparisonCohort) sourcesCurrentContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	for _, file := range c.files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		info, err := os.Lstat(file.path)
 		if err != nil || !desktopComparisonSameFile(file.info, info) {
 			return errors.New("external comparison original entry source was replaced or edited")
@@ -287,7 +320,7 @@ func (c *desktopExternalComparisonCohort) sourcesCurrent() error {
 			return errors.New("external comparison private source bytes changed")
 		}
 	}
-	return nil
+	return ctx.Err()
 }
 
 // The private store remains an exact retained file capability across the
@@ -318,6 +351,13 @@ func captureDesktopComparisonStore(a *app, expected common.RouterProfileStore) (
 }
 
 func (s *desktopComparisonStoreOwner) current() error {
+	return s.currentContext(context.Background())
+}
+
+func (s *desktopComparisonStoreOwner) currentContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s == nil || s.info == nil {
 		return errors.New("external comparison private store authority is unavailable")
 	}
@@ -332,7 +372,7 @@ func (s *desktopComparisonStoreOwner) current() error {
 	if !equal || err != nil || !desktopComparisonSameFile(s.info, after) {
 		return errors.New("external comparison private store changed")
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (s *desktopComparisonStoreOwner) write(store common.RouterProfileStore) error {
@@ -340,7 +380,15 @@ func (s *desktopComparisonStoreOwner) write(store common.RouterProfileStore) err
 }
 
 func (s *desktopComparisonStoreOwner) writeChecked(store common.RouterProfileStore, extra func() error) error {
-	if err := s.current(); err != nil {
+	var check func(context.Context) error
+	if extra != nil {
+		check = func(context.Context) error { return extra() }
+	}
+	return s.writeCheckedContext(context.Background(), store, check)
+}
+
+func (s *desktopComparisonStoreOwner) writeCheckedContext(ctx context.Context, store common.RouterProfileStore, extra func(context.Context) error) error {
+	if err := s.currentContext(ctx); err != nil {
 		return err
 	}
 	raw, err := json.MarshalIndent(store, "", "  ")
@@ -351,11 +399,11 @@ func (s *desktopComparisonStoreOwner) writeChecked(store common.RouterProfileSto
 	raw = append(raw, '\n')
 	defer clear(raw)
 	published, err := atomicWritePrivateChecked(s.path, raw, func() error {
-		if err := s.current(); err != nil {
+		if err := s.currentContext(ctx); err != nil {
 			return err
 		}
 		if extra != nil {
-			return extra()
+			return extra(ctx)
 		}
 		return nil
 	})

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"time"
 
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/hopmeasure"
 )
 
@@ -104,7 +105,7 @@ func (a *app) runDesktopExternalComparisonWith(ctx context.Context, operation *d
 		return err
 	}
 	defer releaseMTU()
-	_, original, finishTemporary, err := a.beginSpeedLabTemporaryOperation()
+	_, original, finishTemporary, err := a.beginSpeedLabTemporaryOperationExpectedContext(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -114,7 +115,7 @@ func (a *app) runDesktopExternalComparisonWith(ctx context.Context, operation *d
 		return err
 	}
 	defer finishPersistence()
-	cohort, err := captureDesktopExternalComparisonCohort(a, operation.request.Cohort)
+	cohort, err := captureDesktopExternalComparisonCohortContext(ctx, a, operation.request.Cohort)
 	if err != nil {
 		return err
 	}
@@ -130,7 +131,7 @@ func (a *app) runDesktopExternalComparisonWith(ctx context.Context, operation *d
 	transaction := &desktopComparisonTransaction{a: a, operation: operation, cohort: cohort, store: store, runtime: runtime, original: original, currentID: original.Profiles.SelectedID,
 		checkpoint: desktopComparisonCheckpoint{command: original.Runtime, state: original.State, context: original.Owner.current}}
 	if original.State.Connected {
-		transaction.baseline, _, err = captureSpeedLabIdentity(a)
+		transaction.baseline, _, err = captureSpeedLabIdentityContext(ctx, a)
 		if err != nil || transaction.baseline.Command != original.Runtime {
 			return errors.Join(err, errors.New("external comparison original connection changed"))
 		}
@@ -143,7 +144,9 @@ func (a *app) runDesktopExternalComparisonWith(ctx context.Context, operation *d
 		}
 		return err
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return errors.Join(err, operation.retainNetworkCleanup(transaction.network))
+	}
 	original.Owner.cohortNetwork = transaction.network
 	a.mu.Unlock()
 	defer func() {
@@ -168,22 +171,6 @@ func (a *app) runDesktopExternalComparisonWith(ctx context.Context, operation *d
 	// parent intent, so its cancellation also forbids the original reconnect.
 	stopDisconnect := context.AfterFunc(original.Owner.intent, operation.cancel)
 	defer stopDisconnect()
-	cancelJoined := make(chan struct{})
-	stopCancellation := context.AfterFunc(ctx, func() {
-		a.mu.Lock()
-		cancel := original.Owner.cancelTest
-		owned := a.speedLabOwnerCurrentLocked(original.Owner)
-		a.mu.Unlock()
-		if owned {
-			cancel()
-		}
-		close(cancelJoined)
-	})
-	defer func() {
-		if !stopCancellation() {
-			<-cancelJoined
-		}
-	}()
 	defer func() {
 		if !transaction.committed {
 			failure = errors.Join(failure, transaction.restore())
@@ -250,7 +237,7 @@ func (a *app) runDesktopExternalComparisonWith(ctx context.Context, operation *d
 		transaction.currentID = candidate.ID
 		var path speedLabPathIdentity
 		if err == nil {
-			path, _, err = captureSpeedLabIdentity(a)
+			path, _, err = captureSpeedLabIdentityContext(trial, a)
 			if err == nil && path.RouterID != candidate.ID {
 				err = errors.New("external trial proved another node")
 			}
@@ -264,19 +251,19 @@ func (a *app) runDesktopExternalComparisonWith(ctx context.Context, operation *d
 		var measuredIdentity desktopDNSRuntimeIdentity
 		if err == nil {
 			operation.stage("measuring", candidate.ID)
-			result, err = a.measureDesktopComparisonLatency(trial, original.Owner, path, func() error { return transaction.current(trial, candidate.ID) }, operation.measuring)
+			result, err = a.measureDesktopComparisonLatency(trial, original.Owner, path, func(caller context.Context) error { return transaction.current(caller, candidate.ID) }, operation.measuring)
 		}
 		if err == nil {
 			// The winning restoration capture is made before this exact process
 			// is stopped, after all 50 native workers and sockets have drained.
 			var captured speedLabTemporarySnapshot
-			captured, err = a.speedLabSnapshotTemporary()
+			captured, err = a.speedLabSnapshotTemporaryContext(trial)
 			plan = captured.Plan
 			if err == nil && (captured.Runtime != path.Command || plan.external == nil && plan.tor == nil || plan.request.Execution != path.Execution) {
 				err = errors.New("external trial restoration capture differs from its measured execution")
 			}
 			if err == nil {
-				err = validateSpeedLabIdentity(a, path)
+				err = validateSpeedLabIdentityContext(trial, a, path)
 			}
 			if err == nil {
 				launch := path.External
@@ -305,10 +292,15 @@ func (a *app) runDesktopExternalComparisonWith(ctx context.Context, operation *d
 			clearSpeedLabRestorePlan(plan)
 			return errors.New("native external result has no valid common metric")
 		}
+		networkID, identityErr := transaction.network.IdentityContext(ctx)
+		if identityErr != nil || networkID == "" {
+			clearSpeedLabRestorePlan(plan)
+			return errors.Join(identityErr, errors.New("external candidate lost its original physical cohort identity"))
+		}
 		operation.mu.Lock()
 		row := &operation.view.Rows[index]
 		row.Status, row.Benchmark, row.MeasuredAt = "complete", cloneDesktopComparisonBenchmark(benchmark), time.Now().UnixMilli()
-		row.SourceSHA256, row.ConfigSHA256, row.NetworkSHA256 = measuredIdentity.source, measuredIdentity.config, transaction.network.Identity()
+		row.SourceSHA256, row.ConfigSHA256, row.NetworkSHA256 = measuredIdentity.source, measuredIdentity.config, networkID
 		row.Execution = path.Execution
 		operation.mu.Unlock()
 		if winnerIndex < 0 || benchmark.TrimmedMean < best || benchmark.TrimmedMean == best && candidate.ID < cohort.candidates[winnerIndex].ID {
@@ -361,7 +353,9 @@ func (a *app) recordDesktopComparisonTransient(ctx context.Context, launch *desk
 		return nil
 	}
 	owner, ok := raw.(*speedLabTemporaryOwner)
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	if !ok || !a.speedLabOwnerCurrentLocked(owner) || a.cmd != owner.runtime || launch == nil || a.cmd != launch.command {
 		a.mu.Unlock()
 		return errors.New("Tor transient lost its exact external comparison owner")
@@ -385,16 +379,27 @@ func (t *desktopComparisonTransaction) current(ctx context.Context, selected str
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := t.a.speedLabCheckOwner(t.original.Owner); err != nil {
+	if err := t.a.speedLabCheckOwnerContext(ctx, t.original.Owner); err != nil {
 		return err
 	}
-	if err := t.cohort.current(t.a, selected); err != nil {
+	if err := t.cohort.currentContext(ctx, t.a, selected); err != nil {
 		return err
 	}
-	if err := t.store.current(); err != nil {
+	if err := t.store.currentContext(ctx); err != nil {
 		return err
 	}
-	return t.network.Current()
+	if err := t.network.CurrentContext(ctx); err != nil {
+		return err
+	}
+	// The native observation runs outside app state locks. Revalidate the
+	// same source and temporary owner after it returns, never a fresh cohort.
+	if err := t.a.speedLabCheckOwnerContext(ctx, t.original.Owner); err != nil {
+		return err
+	}
+	if err := t.cohort.currentContext(ctx, t.a, selected); err != nil {
+		return err
+	}
+	return t.store.currentContext(ctx)
 }
 
 func (t *desktopComparisonTransaction) beginTrial(ctx context.Context) (context.Context, error) {
@@ -402,12 +407,14 @@ func (t *desktopComparisonTransaction) beginTrial(ctx context.Context) (context.
 		return nil, err
 	}
 	if t.checkpoint.path.Command != nil {
-		if err := validateSpeedLabIdentity(t.a, t.checkpoint.path); err != nil {
+		if err := validateSpeedLabIdentityContext(ctx, t.a, t.checkpoint.path); err != nil {
 			return nil, err
 		}
 	}
 	a, owner := t.a, t.original.Owner
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
 	defer a.mu.Unlock()
 	if !a.speedLabOwnerCurrentLocked(owner) || a.cmd != t.checkpoint.command || a.state != t.checkpoint.state || owner.current != t.checkpoint.context || !reflect.DeepEqual(a.profiles, t.original.Profiles) || owner.intent.Err() != nil || ctx.Err() != nil {
 		return nil, errors.New("external comparison cannot refresh a replaced original connection")
@@ -416,7 +423,9 @@ func (t *desktopComparisonTransaction) beginTrial(ctx context.Context) (context.
 	// The existing Tor Local/Server selection owns up to eight minutes;
 	// preserve that startup contract before the separate 100-second native50
 	// operation. Concrete native startups retain their own tighter deadlines.
-	trial, cancel := context.WithTimeout(owner.intent, 10*time.Minute)
+	// Each test inherits its real comparison caller. The separate owner intent
+	// still authorizes joined restoration after that caller is cancelled.
+	trial, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	owner.test, owner.cancelTest, owner.current = trial, cancel, trial
 	owner.mutated, owner.restored = false, false
 	a.connectionContext = trial
@@ -549,7 +558,7 @@ func (t *desktopComparisonTransaction) adopt(ctx context.Context, candidate desk
 		return err
 	}
 	t.currentID = candidate.ID
-	path, _, err := captureSpeedLabIdentity(t.a)
+	path, _, err := captureSpeedLabIdentityContext(trial, t.a)
 	if err == nil && (path.RouterID != candidate.ID || path.Execution != t.winner.request.Execution || path.External == nil && path.Tor == nil) {
 		err = errors.New("fresh winner proof changed its captured source or execution")
 	}
@@ -565,7 +574,7 @@ func (t *desktopComparisonTransaction) adopt(ctx context.Context, candidate desk
 	if err := verifySpeedLabPath(trial, t.a, path); err != nil {
 		return err
 	}
-	if err := validateSpeedLabIdentity(t.a, path); err != nil {
+	if err := validateSpeedLabIdentityContext(trial, t.a, path); err != nil {
 		return err
 	}
 	if err := t.current(ctx, candidate.ID); err != nil {
@@ -574,10 +583,21 @@ func (t *desktopComparisonTransaction) adopt(ctx context.Context, candidate desk
 	// Save one whole final selection with exactly one usage credit per distinct
 	// node in the adopted path. Temporary candidates/restorations never count.
 	a, owner := t.a, t.original.Owner
-	tracker := sessionTrackerFor(a)
-	tracker.mu.Lock() // existing tracker -> app order; retain the exact proof ID through rename
-	a.mu.Lock()
-	if tracker.session == nil || tracker.session.ID != path.SessionID || !tracker.session.Connected || tracker.session.PathProof != "passed" ||
+	tracker, _, err := measurementSessionContext(trial, a, path.Tracker)
+	if err != nil {
+		return err
+	}
+	// Retain the exact captured tracker through rename; never reacquire a
+	// replacement tracker merely because it advertises the same session ID.
+	if err := desktopnetwork.LockContext(trial, &tracker.mu); err != nil {
+		return err
+	}
+	if err := desktopnetwork.LockContext(trial, &a.mu); err != nil {
+		tracker.mu.Unlock()
+		return err
+	}
+	registered, registeredOK := sessionTrackers.Load(a)
+	if !registeredOK || registered != tracker || tracker.a != a || tracker.session == nil || tracker.session.ID != path.SessionID || !tracker.session.Connected || tracker.session.PathProof != "passed" ||
 		!a.speedLabOwnerCurrentLocked(owner) || a.cmd != path.Command || a.cmd != owner.runtime || mtuStateSnapshotToken(a.state) != path.StateToken || a.profiles.SelectedID != candidate.ID || owner.current != trial || trial.Err() != nil || ctx.Err() != nil {
 		a.mu.Unlock()
 		tracker.mu.Unlock()
@@ -593,19 +613,10 @@ func (t *desktopComparisonTransaction) adopt(ctx context.Context, candidate desk
 			p.LastUsedAt = usedAt
 		}
 	}
-	check := func() error {
-		if ctx.Err() != nil || trial.Err() != nil || !a.speedLabOwnerCurrentLocked(owner) || a.cmd != path.Command || a.cmd != owner.runtime || mtuStateSnapshotToken(a.state) != path.StateToken || owner.current != trial {
-			return errors.New("winner owner changed before durable adoption")
-		}
-		if err := t.cohort.currentLocked(a, candidate.ID); err != nil {
-			return err
-		}
-		if err := t.cohort.sourcesCurrent(); err != nil {
-			return err
-		}
-		return t.network.Current()
+	check := func(caller context.Context) error {
+		return t.adoptionCurrentLocked(caller, trial, path, candidate.ID, tracker)
 	}
-	if err = t.store.writeChecked(updated, check); err != nil && !desktopComparisonStoreCommitted(err) {
+	if err = t.store.writeCheckedContext(trial, updated, check); err != nil && !desktopComparisonStoreCommitted(err) {
 		a.mu.Unlock()
 		tracker.mu.Unlock()
 		return err
@@ -644,4 +655,31 @@ func (t *desktopComparisonTransaction) adopt(ctx context.Context, candidate desk
 		t.operation.warn("The proved winner is connected and selected, but startup Last could not be updated.")
 	}
 	return nil
+}
+
+// The caller retains the original tracker and app locks through the atomic
+// rename. Native observation must not borrow a replacement tracker/source that
+// appeared during its wait, even when a replacement repeats the same session ID.
+func (t *desktopComparisonTransaction) adoptionCurrentLocked(ctx, trial context.Context, path speedLabPathIdentity, selected string, tracker *sessionTracker) error {
+	a, owner := t.a, t.original.Owner
+	check := func() error {
+		registered, registeredOK := sessionTrackers.Load(a)
+		if !registeredOK || registered != tracker || tracker.a != a || tracker.session == nil || tracker.session.ID != path.SessionID || !tracker.session.Connected || tracker.session.PathProof != "passed" || ctx.Err() != nil || trial.Err() != nil || !a.speedLabOwnerCurrentLocked(owner) || a.cmd != path.Command || a.cmd != owner.runtime || mtuStateSnapshotToken(a.state) != path.StateToken || owner.current != trial {
+			return errors.New("winner owner changed before durable adoption")
+		}
+		if err := t.cohort.currentLocked(a, selected); err != nil {
+			return err
+		}
+		if err := t.cohort.sourcesCurrentContext(ctx); err != nil {
+			return err
+		}
+		return t.store.currentContext(ctx)
+	}
+	if err := check(); err != nil {
+		return err
+	}
+	if err := t.network.CurrentContext(ctx); err != nil {
+		return err
+	}
+	return check()
 }

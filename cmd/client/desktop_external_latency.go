@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/hopmeasure"
 )
 
@@ -47,7 +48,7 @@ type desktopLatencySnapshot struct {
 	// Public Retest never manufactures this authority or starts a second lease.
 	temporary *speedLabTemporaryOwner
 	path      speedLabPathIdentity
-	cohort    func() error
+	cohort    func(context.Context) error
 }
 
 type desktopLatencyOperation struct {
@@ -215,11 +216,15 @@ func (a *app) runDesktopLatencyMeasurement(ctx context.Context, operation *deskt
 		}
 	}
 	if err == nil {
-		err = operation.snapshot.current(a)
+		err = operation.snapshot.currentContext(ctx, a)
 	}
-	a.mu.Lock()
+	appLocked := false
 	if err == nil {
-		err = operation.snapshot.currentLocked(a)
+		err = desktopnetwork.LockContext(ctx, &a.mu)
+		appLocked = err == nil
+		if err == nil {
+			err = operation.snapshot.currentLocked(a)
+		}
 	}
 	operation.mu.Lock()
 	if err == nil && ctx.Err() == nil && !operation.invalid {
@@ -233,7 +238,9 @@ func (a *app) runDesktopLatencyMeasurement(ctx context.Context, operation *deskt
 		operation.status.Complete, operation.status.Drained = true, true
 	}
 	operation.mu.Unlock()
-	a.mu.Unlock()
+	if appLocked {
+		a.mu.Unlock()
+	}
 }
 
 func cloneDesktopLatencyStatus(status hopmeasure.Status) hopmeasure.Status {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"sync"
@@ -60,6 +61,18 @@ func (a *app) desktopDNSCurrentProof(launch *desktopNodeLaunch) error {
 		return err
 	}
 	_, err := a.readDesktopExternalProof(launch)
+	return err
+}
+
+func (a *app) desktopDNSCurrentProofContext(ctx context.Context, launch *desktopNodeLaunch) error {
+	if _, err := capturedDesktopDNSRuntime(launch); err != nil {
+		return err
+	}
+	if launch.tor != nil {
+		_, err := a.readDesktopTorProofContext(ctx, launch)
+		return err
+	}
+	_, err := a.readDesktopExternalProofContext(ctx, launch)
 	return err
 }
 

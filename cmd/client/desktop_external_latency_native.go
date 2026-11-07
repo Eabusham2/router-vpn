@@ -71,7 +71,11 @@ func decodeDesktopLatencyRecord(launch *desktopNodeLaunch, raw []byte) (desktopL
 }
 
 func readDesktopLatencyRecord(launch *desktopNodeLaunch) (desktopLatencyNativeRecord, error) {
-	raw, err := readDesktopRuntimeFile(launch, "latency-status.json", 64<<10)
+	return readDesktopLatencyRecordContext(context.Background(), launch)
+}
+
+func readDesktopLatencyRecordContext(ctx context.Context, launch *desktopNodeLaunch) (desktopLatencyNativeRecord, error) {
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, "latency-status.json", 64<<10)
 	if err != nil {
 		return desktopLatencyNativeRecord{}, err
 	}
@@ -98,6 +102,10 @@ func readDesktopLatencyDrainRecord(launch *desktopNodeLaunch) (desktopLatencyNat
 }
 
 func writeDesktopLatencyRequest(launch *desktopNodeLaunch, name string, request desktopLatencyNativeRequest) error {
+	return writeDesktopLatencyRequestContext(context.Background(), launch, name, request)
+}
+
+func writeDesktopLatencyRequestContext(ctx context.Context, launch *desktopNodeLaunch, name string, request desktopLatencyNativeRequest) error {
 	if name != "latency-request.json" && name != "latency-cancel.json" {
 		return errors.New("invalid native Latency command")
 	}
@@ -105,7 +113,7 @@ func writeDesktopLatencyRequest(launch *desktopNodeLaunch, name string, request 
 	if err != nil {
 		return err
 	}
-	writeErr := writeDesktopRuntimeFile(launch, name, raw, true)
+	writeErr := writeDesktopRuntimeFileContext(ctx, launch, name, raw, true)
 	if writeErr == nil {
 		return nil
 	}
@@ -116,7 +124,7 @@ func writeDesktopLatencyRequest(launch *desktopNodeLaunch, name string, request 
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		record, err := readDesktopLatencyRecord(launch)
+		record, err := readDesktopLatencyRecordContext(ctx, launch)
 		if err == nil && record.desktopLatencyNativeRequest == request && (name == "latency-request.json" || record.Status.Complete && record.Status.Drained && record.Status.Stage == "cancelled") {
 			return nil
 		}
@@ -124,6 +132,8 @@ func writeDesktopLatencyRequest(launch *desktopNodeLaunch, name string, request 
 			return writeErr
 		}
 		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-deadline.C:
 			return writeErr
 		case <-tick.C:
@@ -243,11 +253,14 @@ func (a *app) runDesktopLatencyNative(ctx context.Context, operation *desktopLat
 	if *owner.failed {
 		return result, errors.New("native Latency control was retired; reconnect before Retest")
 	}
-	initial, err := readDesktopLatencyRecord(launch)
+	initial, err := readDesktopLatencyRecordContext(ctx, launch)
+	if ctx.Err() != nil {
+		return result, ctx.Err()
+	}
 	if err != nil || !initial.Status.Complete || !initial.Status.Drained || initial.Generation != *owner.generation || *owner.generation == ^uint64(0) {
 		return result, errors.New("native Latency mailbox is unavailable or has another owner")
 	}
-	if err := operation.snapshot.current(a); err != nil {
+	if err := operation.snapshot.currentContext(ctx, a); err != nil {
 		return result, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -281,7 +294,7 @@ func (a *app) runDesktopLatencyNative(ctx context.Context, operation *desktopLat
 			<-tick.C
 		}
 	}()
-	if err := writeDesktopLatencyRequest(launch, "latency-request.json", request); err != nil {
+	if err := writeDesktopLatencyRequestContext(ctx, launch, "latency-request.json", request); err != nil {
 		*owner.failed = true
 		return result, err
 	}
@@ -291,10 +304,10 @@ func (a *app) runDesktopLatencyNative(ctx context.Context, operation *desktopLat
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		if err := operation.snapshot.current(a); err != nil {
+		if err := operation.snapshot.currentContext(ctx, a); err != nil {
 			return result, err
 		}
-		record, err := readDesktopLatencyRecord(launch)
+		record, err := readDesktopLatencyRecordContext(ctx, launch)
 		if err != nil {
 			return result, err
 		}
@@ -308,7 +321,7 @@ func (a *app) runDesktopLatencyNative(ctx context.Context, operation *desktopLat
 				if err := validateDesktopLatencyResults(launch, record.Status); err != nil {
 					return result, err
 				}
-				return record.Status, operation.snapshot.current(a)
+				return record.Status, operation.snapshot.currentContext(ctx, a)
 			}
 		} else if record.Generation+1 != request.Generation {
 			return result, errors.New("native Latency generation changed")

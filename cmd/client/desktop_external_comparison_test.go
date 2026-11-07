@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 )
 
 func TestDesktopExternalComparisonBenchmarkAllowsOnlyArithmeticRounding(t *testing.T) {
@@ -79,13 +80,17 @@ type desktopComparisonNetworkFixture struct {
 	closeError               error
 	closeCalls               int
 	starts, ends, transients int
-	check                    func() error
+	check                    func(context.Context) error
 	record                   func(context.Context, *desktopNodeLaunch) error
 }
 
-func (*desktopComparisonNetworkFixture) Identity() string { return strings.Repeat("a", 64) }
-func (n *desktopComparisonNetworkFixture) Current() error {
-	n.mu.Lock()
+func (*desktopComparisonNetworkFixture) IdentityContext(ctx context.Context) (string, error) {
+	return strings.Repeat("a", 64), ctx.Err()
+}
+func (n *desktopComparisonNetworkFixture) CurrentContext(ctx context.Context) error {
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return err
+	}
 	bad, open, closed, check := n.invalid, n.open, n.closed, n.check
 	n.mu.Unlock()
 	if bad != nil {
@@ -95,7 +100,7 @@ func (n *desktopComparisonNetworkFixture) Current() error {
 		return errors.New("fixture network is not in a settled cohort")
 	}
 	if check != nil {
-		return check()
+		return check(ctx)
 	}
 	return nil
 }
@@ -199,7 +204,7 @@ func TestDesktopExternalComparisonPostRenameHistoryInvalidationRetiresOnlyOwnIma
 			}
 			changed := false
 			foreign := []byte("{\"schema\":1, \"rows\": []}\n")
-			f.network.check = func() error {
+			f.network.check = func(context.Context) error {
 				info, err := os.Lstat(path)
 				if !changed && err == nil && (before == nil || !os.SameFile(before, info)) {
 					changed = true
@@ -238,7 +243,7 @@ func TestDesktopExternalComparisonLatchedNetworkChangeStillRestoresAndNeverScore
 	f := newDesktopComparisonFixture(t, true)
 	op, ctx := f.operation(false)
 	changed := false
-	f.network.check = func() error {
+	f.network.check = func(context.Context) error {
 		if !changed && op.snapshot().Stage == "measuring" {
 			changed = true
 			f.network.mu.Lock()
@@ -410,6 +415,7 @@ func (f *desktopComparisonFixture) startLaunch(launch *desktopNodeLaunch, id str
 	desktopNodeOwners.Delete(other)
 	launch.external.network = physicalNetworkIdentity()
 	launch.external.networkIdentity = physicalNetworkIdentity
+	launch.external.networkIdentityContext = physicalNetworkIdentityContext
 	if launch.external.network == "" {
 		return errors.New("fixture cannot read actual physical interface inventory")
 	}
@@ -677,7 +683,7 @@ func TestDesktopExternalComparisonPostProofPolicyOrOwnerReplacementCannotCommit(
 			op, ctx := f.operation(true)
 			checks, changed, stops := 0, false, 0
 			replacement := &exec.Cmd{}
-			f.network.check = func() error {
+			f.network.check = func(context.Context) error {
 				if op.snapshot().Stage == "reproving-winner" {
 					checks++
 				}
@@ -846,7 +852,7 @@ func TestDesktopExternalComparisonCohortSealsSharedAssetsAndBoundsBeforeStop(t *
 	}
 	bounded := &desktopExternalComparisonCohort{files: map[string]desktopExternalComparisonFile{}, bytes: desktopExternalComparisonBytes - 1}
 	defer bounded.close()
-	if err := bounded.captureAssets(a, entry, "wg"); !errors.Is(err, errDesktopComparisonSourceBound) {
+	if err := bounded.captureAssets(context.Background(), a, entry, "wg"); !errors.Is(err, errDesktopComparisonSourceBound) {
 		t.Fatal("aggregate source cap did not reject before Stop", err)
 	}
 	tooMany := cloneRouterProfileStore(a.profiles)
@@ -868,7 +874,7 @@ func TestDesktopExternalComparisonPostProofStoreReplacementIsPreserved(t *testin
 	op, ctx := f.operation(true)
 	checks := 0
 	changed := false
-	f.network.check = func() error {
+	f.network.check = func(context.Context) error {
 		if op.snapshot().Stage == "reproving-winner" {
 			checks++
 		}

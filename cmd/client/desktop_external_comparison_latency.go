@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/hopmeasure"
 )
 
@@ -32,21 +33,30 @@ func (s desktopLatencySnapshot) current(a *app) error {
 	if s.temporary == nil {
 		return s.desktopDNSSnapshot.current(a)
 	}
+	return s.currentContext(context.Background(), a)
+}
+
+func (s desktopLatencySnapshot) currentContext(ctx context.Context, a *app) error {
+	if s.temporary == nil {
+		return s.desktopDNSSnapshot.currentContext(ctx, a)
+	}
 	if s.cohort == nil {
 		return errors.New("external comparison has no captured source and network cohort")
 	}
-	if err := s.cohort(); err != nil {
+	if err := s.cohort(ctx); err != nil {
 		return err
 	}
-	if err := validateSpeedLabIdentity(a, s.path); err != nil {
+	if err := validateSpeedLabIdentityContext(ctx, a, s.path); err != nil {
 		return err
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	return s.currentLocked(a)
 }
 
-func captureDesktopComparisonLatency(a *app, temporary *speedLabTemporaryOwner, path speedLabPathIdentity, cohort func() error) (desktopLatencySnapshot, error) {
+func captureDesktopComparisonLatency(ctx context.Context, a *app, temporary *speedLabTemporaryOwner, path speedLabPathIdentity, cohort func(context.Context) error) (desktopLatencySnapshot, error) {
 	launch := path.External
 	if path.Tor != nil {
 		launch = path.Tor
@@ -55,7 +65,9 @@ func captureDesktopComparisonLatency(a *app, temporary *speedLabTemporaryOwner, 
 	if err != nil || temporary == nil || cohort == nil {
 		return desktopLatencySnapshot{}, errors.Join(err, errors.New("external comparison requires its exact native temporary owner"))
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return desktopLatencySnapshot{}, err
+	}
 	profile, entry, ok := a.dnsPolicySelectionLocked()
 	snapshot := desktopLatencySnapshot{desktopDNSSnapshot: desktopDNSSnapshot{launch: launch, session: identity.session,
 		profileID: profile.ID, profileToken: dnsPolicySelectionToken(profile, entry)}, temporary: temporary, path: path, cohort: cohort}
@@ -63,13 +75,15 @@ func captureDesktopComparisonLatency(a *app, temporary *speedLabTemporaryOwner, 
 	if !ok {
 		return desktopLatencySnapshot{}, errors.New("external comparison lost its saved DNS source")
 	}
-	return snapshot, snapshot.current(a)
+	return snapshot, snapshot.currentContext(ctx, a)
 }
 
 // The batch already holds beginSpeedLabRun, operationMu, the temporary owner
 // and the MTU lease. Keep those owners through the native mailbox's final drain.
-func (a *app) measureDesktopComparisonLatency(ctx context.Context, temporary *speedLabTemporaryOwner, path speedLabPathIdentity, cohort func() error, progress func(*desktopLatencyOperation)) (hopmeasure.Status, error) {
-	snapshot, err := captureDesktopComparisonLatency(a, temporary, path, cohort)
+func (a *app) measureDesktopComparisonLatency(ctx context.Context, temporary *speedLabTemporaryOwner, path speedLabPathIdentity, cohort func(context.Context) error, progress func(*desktopLatencyOperation)) (hopmeasure.Status, error) {
+	child, cancel := context.WithTimeout(ctx, 100*time.Second)
+	defer cancel()
+	snapshot, err := captureDesktopComparisonLatency(child, a, temporary, path, cohort)
 	if err != nil {
 		return hopmeasure.Status{}, err
 	}
@@ -77,8 +91,6 @@ func (a *app) measureDesktopComparisonLatency(ctx context.Context, temporary *sp
 	if err != nil {
 		return hopmeasure.Status{}, err
 	}
-	child, cancel := context.WithTimeout(ctx, 100*time.Second)
-	defer cancel()
 	operation := &desktopLatencyOperation{snapshot: snapshot, request: request, cancel: cancel, done: make(chan struct{}),
 		status: hopmeasure.Status{Request: request, Stage: "preparing", Results: []hopmeasure.Result{}}}
 	defer close(operation.done)
@@ -88,7 +100,7 @@ func (a *app) measureDesktopComparisonLatency(ctx context.Context, temporary *sp
 	}
 	result, err := a.runDesktopLatencyNative(child, operation)
 	if err == nil {
-		err = snapshot.current(a)
+		err = snapshot.currentContext(child, a)
 	}
 	if err != nil {
 		return hopmeasure.Status{}, err
