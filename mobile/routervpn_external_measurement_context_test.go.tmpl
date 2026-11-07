@@ -703,12 +703,12 @@ func TestRouterExternalProofContextOwnsNativeCapture(t *testing.T) {
 			if phase == "cancel-before" {
 				cancel()
 			}
-			var held *sync.RWMutex
+			var held sync.Locker
 			switch phase {
 			case "instance-held":
 				held = routerProofField[sync.RWMutex](t, started, "serviceAccess")
 			case "tun-held":
-				held = routerExternalMeasurementField[sync.RWMutex](t, native, "inbound", "access")
+				held = routerExternalMeasurementField[sync.Mutex](t, native, "inbound", "access")
 			case "outbound-held":
 				held = routerExternalMeasurementField[sync.RWMutex](t, native, "outbound", "access")
 			case "dns-held", "instance-replaced", "tun-replaced":
