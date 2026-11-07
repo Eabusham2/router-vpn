@@ -109,6 +109,7 @@ func TestDNSConstructorRetainsOriginalCallerAndSelectedEndpoint(t *testing.T) {
 					t.Fatal("DNS constructor changed selected resolver or invented a measurement")
 				}
 				cancel()
+				engine.observe = func(ctx context.Context) (string, error) { return original.Identity(), ctx.Err() }
 				original.selectFn = func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
 				original.dial = func(ctx context.Context, _ string) (net.Conn, error) { <-ctx.Done(); return nil, ctx.Err() }
 				if err := s.Start(firstRequest, "tcp"); err != nil {

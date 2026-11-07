@@ -62,6 +62,9 @@ CONTEXT_NATIVE['TestRouterExternalProofContextOwnsNativeCapture']=['current','le
 CONTEXT_CORE.update({'TestExternalDNSAuthorityLegacyKeepsOriginalBudget':[], 'TestExternalDNSAuthorityContextKeepsOriginalProof':['current','nil','cancel-before','health-held','path-held','final-held','path-replaced','final-replaced','unproved','source','session']})
 CONTEXT_DNS={'TestDNSConstructorRetainsOriginalCallerAndSelectedEndpoint':['current','nil','cancel-before','capture-held','recheck-held','owner-replaced','late-cancel','missing-observer','invalid-selected']}
 CONTEXT_NATIVE['TestRouterExternalDNSConstructorKeepsCapturedNativeOwner']=['current','legacy','nil','cancel-before','instance-held','engine-held','dns-held','instance-replaced','unproved','source-changed','dns-policy','session-changed','missing-observer']
+CONTEXT_DNS.update({'TestDNSPendingAdmissionKeepsCancellationAndScopeOwner':['identity-cancel','activity-cancel','recheck-cancel','late-scope-release','owner-replaced','close-admission','invalidate-admission'], 'TestDNSObservationKeepsOperationAndReplacementOwners':['successful-queries','watch-cancel','stale-status','cancelled-status']})
+CONTEXT_NATIVE['TestRouterExternalDNSOperationsKeepOriginalNativeContext']=['identity','verify','activity','selected-dns','catalog-dial','service-start','status','instance-replaced','activity-current','scope-busy','cancel-before']
+CONTEXT_DNS_BOX={'TestRouterVPNDNSNativeDialKeepsOriginalObservation':['capture-held','recheck-held','cancel-before'], 'TestRouterVPNDNSNativeDialRetainsLateSocketOnCancellationReplacementAndError':['caller','owner','native-error'], 'TestRouterVPNDNSNativeDialEnforcesFixedCatalogBeforeNativeRoute':[], 'TestRouterVPNDNSServiceRetainsActualNativeAdapterSocketAndActivityUntilCloseRetry':[], 'TestRouterVPNDNSServiceRetiresAlreadyClosedActualNativeAdapterSocket':['use_of_closed_network_connection','io:_read/write_on_closed_pipe']}
 FILES=OPENVPN.FILES|CONNECT_FILES|SOCKS_FILES|SOCKS_XRAY_FILES|NESTED_FILES|PACKET_FINAL_FILES|PACKET_FILES|BASE_FILES|{"final-hysteria2--"+name for name in BASE_FILES}
 CONNECT_DNS_ROWS=[p+"/"+l+"/"+t+"/"+a for p in ("http-connect","https-connect") for l in ("plain","off",*LAYERS[1:]) for t in ("tls","https","h3") for a in ("literal","hostname") if not(l=="plain" and t=="h3")]
 CONNECT_DNS_FILES={row.replace("/","--")+".json" for row in CONNECT_DNS_ROWS}
@@ -233,6 +236,7 @@ def checked_sources(vendor,peers):
  if not peers:
   files.update({'mobile/routervpn_multihop_bridge.go.tmpl':'experimental/libbox/routervpn_multihop_bridge.go','mobile/routervpn_hop_measurement.go.tmpl':'experimental/libbox/routervpn_hop_measurement.go','mobile/routervpn_multihop_context_test.go.tmpl':'experimental/libbox/routervpn_multihop_context_test.go'})
   files.update({'mobile/routervpn_external_measurement_bridge.go.tmpl':'experimental/libbox/routervpn_external_measurement_bridge.go','mobile/routervpn_external_measurement_context_test.go.tmpl':'experimental/libbox/routervpn_external_measurement_context_test.go','mobile/routervpn_external_policy_bridge.go.tmpl':'experimental/libbox/routervpn_external_policy_bridge.go','mobile/routervpn_dns_measurement.go.tmpl':'experimental/libbox/routervpn_dns_measurement.go','mobile/externalpolicy/measurement.go.tmpl':'routervpn_external_measurement.go','mobile/externalpolicy/dns_measurement.go.tmpl':'routervpn_dns_measurement.go','mobile/externalpolicy/mtu.go.tmpl':'routervpn_external_mtu.go','mobile/externalpolicy/box.go.tmpl':'routervpn_external_policy.go','mobile/daemon/instance_context.go.tmpl':'daemon/routervpn_instance_context.go','mobile/strategy/observation.go.tmpl':'adapter/routervpn_observation.go'})
+  files.update({'mobile/externalpolicy/dns_dial.go.tmpl':'routervpn_dns_dial.go', 'mobile/externalpolicy/dns_dial_test.go.tmpl':'routervpn_dns_dial_test.go'})
  for source,target in files.items():
   path=vendor/target
   if path.is_symlink() or not path.is_file() or path.read_bytes()!=(ROOT/source).read_bytes():raise ValueError('Changed native imported-entry source: '+target)
@@ -353,6 +357,7 @@ def run(vendor,peers=False,android=False):
   selector='^('+'|'.join(groups)+')$'
   if not peers:execute(base+['./experimental/libbox','-run',selector,'-count=1','-timeout=90s'],vendor,env,names(groups))
   if not peers:execute(base+['./experimental/libbox','-run','^('+'|'.join(CONTEXT_NATIVE)+')$','-count=1','-timeout=30s'],vendor,env,names(CONTEXT_NATIVE),timeout=90)
+  if not peers:execute(base+['.','-run','^('+'|'.join(CONTEXT_DNS_BOX)+')$','-count=1','-timeout=30s'],vendor,env,names(CONTEXT_DNS_BOX),timeout=90)
   if peers:
    # Keep each expanded protocol matrix within the existing finite native
    # timeout. Exact inventories are still mandatory for every process.

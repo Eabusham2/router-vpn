@@ -125,6 +125,81 @@ func (e *routerVPNExternalDNSMeasurementEngine) IdentityContext(ctx context.Cont
 	return identity + ":dns:" + e.session, ctx.Err()
 }
 
+// These explicit methods are required: promoted methods would observe the
+// embedded legacy receiver, losing the ordinary request's original caller.
+func (e *routerVPNExternalDNSMeasurementEngine) VerifyMeasurement(parent context.Context) error {
+	if parent == nil {
+		return errors.New("DNS path observation has no caller")
+	}
+	ctx, cancel := context.WithTimeout(parent, 1500*time.Millisecond)
+	defer cancel()
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return err
+	}
+	if err := e.external.VerifyCurrentPathContext(ctx); err != nil {
+		return err
+	}
+	_, err := e.IdentityContext(ctx)
+	return err
+}
+
+func (e *routerVPNExternalDNSMeasurementEngine) BeginMeasurement(parent context.Context) (context.Context, func(), error) {
+	if _, err := e.IdentityContext(parent); err != nil {
+		return nil, nil, err
+	}
+	release, err := e.external.activity.beginMeasurementContext(parent)
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel, err := e.external.request.MTULifetimeContext(parent, parent)
+	if err == nil {
+		_, err = e.IdentityContext(parent)
+	}
+	if err != nil || ctx == nil || ctx.Err() != nil {
+		if cancel != nil {
+			cancel()
+		}
+		release()
+		return nil, nil, errors.Join(err, parent.Err(), errors.New("DNS native proof retired during activity capture"))
+	}
+	var once sync.Once
+	return ctx, func() { once.Do(func() { cancel(); release() }) }, nil
+}
+
+func (e *routerVPNExternalDNSMeasurementEngine) Dial(ctx context.Context, address string) (net.Conn, error) {
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return nil, err
+	}
+	if !dnsmeasure.AllowedPublicAddress(address) {
+		return nil, errors.New("DNS destination is outside the captured comparison catalog")
+	}
+	host, _, _ := net.SplitHostPort(address)
+	ip, err := netip.ParseAddr(host)
+	if err != nil || ip.Is6() && !e.ipv6 {
+		return nil, errors.New("DNS destination is disabled by the captured IPv6 policy")
+	}
+	connection, err := e.core.DNSMeasurementDial(ctx, address)
+	_, observeErr := e.IdentityContext(ctx)
+	if err != nil || observeErr != nil || ctx.Err() != nil || connection == nil {
+		// Retain every late/error socket for the shared service's joined drain;
+		// a failed native Close cannot be discarded by this adapter.
+		return connection, errors.Join(ctx.Err(), errors.New("DNS native dial failed or became stale"))
+	}
+	return connection, nil
+}
+
+func (e *routerVPNExternalDNSMeasurementEngine) SelectedDNS(ctx context.Context) error {
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return err
+	}
+	err := e.core.DNSProof(ctx, e.core.tunTag)
+	_, observeErr := e.IdentityContext(ctx)
+	if err != nil || observeErr != nil || ctx.Err() != nil {
+		return errors.Join(ctx.Err(), errors.New("selected native DNS did not answer its live uncached question"))
+	}
+	return nil
+}
+
 func (s *Box) RouterVPNTorDNSMeasurement(proof *RouterVPNTorProofRequest, exitID string, current func() bool) (*dnsmeasure.Service, error) {
 	if s == nil || proof == nil || !proof.Healthy() || current == nil || !current() || !routerVPNTorMeasurementID.MatchString(exitID) {
 		return nil, errors.New("DNS measurement requires its successful native Tor proof")

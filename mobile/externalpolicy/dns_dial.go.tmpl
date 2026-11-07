@@ -14,10 +14,18 @@ import (
 // proof. A non-nil error-path socket is returned to the DNS service, which keeps
 // its proof activity until retrying the actual native Close succeeds.
 func (e *routerVPNExternalNativeEngine) DNSMeasurementDial(ctx context.Context, address string) (net.Conn, error) {
-	ctx,finish,err := e.beginData(ctx)
-	if err != nil { return nil,err }
+	if ctx == nil {
+		return nil, errors.New("DNS native dial has no caller")
+	}
+	ctx, finish, err := e.beginData(ctx)
+	if err != nil {
+		return nil, err
+	}
 	defer finish()
-	if ctx == nil || ctx.Err() != nil || e.Identity() == "" || !dnsmeasure.AllowedPublicAddress(address) {
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return nil, errors.Join(ctx.Err(), errors.New("DNS native destination or owner is unavailable"))
+	}
+	if !dnsmeasure.AllowedPublicAddress(address) {
 		return nil, errors.New("DNS native destination or owner is unavailable")
 	}
 	owner := e.routes[mobilemultihop.ExternalFinalTag]
@@ -26,9 +34,12 @@ func (e *routerVPNExternalNativeEngine) DNSMeasurementDial(ctx context.Context, 
 	}
 	connection, err := owner.DialContext(ctx, "tcp", M.ParseSocksaddr(address))
 	var ownershipErr error
-	if connection != nil { connection,ownershipErr = e.keepData(connection) }
-	if err != nil || ownershipErr != nil || connection == nil || ctx.Err() != nil || e.Identity() == "" {
-		return connection, errors.New("DNS native dial failed or became stale")
+	if connection != nil {
+		connection, ownershipErr = e.keepData(connection)
+	}
+	_, observeErr := e.IdentityContext(ctx)
+	if err != nil || ownershipErr != nil || connection == nil || ctx.Err() != nil || observeErr != nil {
+		return connection, errors.Join(ctx.Err(), errors.New("DNS native dial failed or became stale"))
 	}
 	return connection, nil
 }

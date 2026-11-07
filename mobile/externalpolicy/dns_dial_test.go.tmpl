@@ -107,6 +107,109 @@ type routerVPNDNSDialConnection struct {
 	closeOnce  sync.Once
 }
 
+type routerVPNDNSDialObservationContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *routerVPNDNSDialObservationContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Done()
+}
+
+func TestRouterVPNDNSNativeDialKeepsOriginalObservation(t *testing.T) {
+	for _, phase := range []string{"capture-held", "recheck-held", "cancel-before"} {
+		t.Run(phase, func(t *testing.T) {
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			caller := &routerVPNDNSDialObservationContext{Context: parent, entered: make(chan struct{})}
+			client, peer := net.Pipe()
+			defer peer.Close()
+			raw := &routerVPNDNSDialConnection{Conn: client}
+			defer func() { raw.allowClose.Store(true); _ = raw.Close() }()
+			var core *routerVPNExternalNativeEngine
+			var locked atomic.Bool
+			var calls atomic.Int32
+			engine, _, entryDials := newRouterVPNDNSDialFixture(t, func(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+				calls.Add(1)
+				if ctx != caller || network != "tcp" || address.String() != "1.1.1.1:53" {
+					return raw, errors.New("native DNS dial replaced original caller or destination")
+				}
+				if phase == "recheck-held" {
+					core.mu.Lock()
+					locked.Store(true)
+				}
+				return raw, nil
+			})
+			core = engine
+			release := func() {
+				if locked.Swap(false) {
+					engine.mu.Unlock()
+				}
+			}
+			defer release()
+			if phase == "capture-held" {
+				engine.mu.Lock()
+				locked.Store(true)
+			}
+			if phase == "cancel-before" {
+				cancel()
+			}
+			type result struct {
+				connection net.Conn
+				err        error
+			}
+			done := make(chan result, 1)
+			go func() {
+				connection, err := engine.DNSMeasurementDial(caller, "1.1.1.1:53")
+				done <- result{connection, err}
+			}()
+			if phase != "cancel-before" {
+				select {
+				case <-caller.entered:
+					cancel()
+				case actual := <-done:
+					t.Fatal("native DNS dial bypassed held original read", actual.err)
+				case <-time.After(time.Second):
+					cancel()
+					release()
+					<-done
+					t.Fatal("native DNS dial did not enter original observation")
+				}
+			}
+			var actual result
+			select {
+			case actual = <-done:
+			case <-time.After(time.Second):
+				cancel()
+				release()
+				<-done
+				t.Fatal("native DNS observation did not join cancellation")
+			}
+			if !errors.Is(actual.err, context.Canceled) {
+				t.Fatal("native DNS dial lost original cancellation", actual.err)
+			}
+			wantCalls := int32(0)
+			if phase == "recheck-held" {
+				wantCalls = 1
+				if actual.connection != raw {
+					t.Fatal("native DNS postcheck discarded retained socket")
+				}
+			} else if actual.connection != nil {
+				t.Fatal("cancelled DNS capture dialed a route")
+			}
+			if calls.Load() != wantCalls || entryDials.Load() != 0 || raw.closes.Load() != 0 {
+				t.Fatal("native DNS cancellation escaped its original socket/route owner")
+			}
+			release()
+			if _, err := engine.IdentityContext(context.Background()); err != nil {
+				t.Fatal("cancelled DNS read retired healthy native owner", err)
+			}
+		})
+	}
+}
+
 func (c *routerVPNDNSDialConnection) Close() error {
 	c.closes.Add(1)
 	c.closeOnce.Do(func() {
@@ -217,6 +320,9 @@ type routerVPNDNSRetainedActivity struct {
 }
 
 func (e *routerVPNDNSRetainedActivity) Identity() string { return e.core.Identity() }
+func (e *routerVPNDNSRetainedActivity) IdentityContext(ctx context.Context) (string, error) {
+	return e.core.IdentityContext(ctx)
+}
 func (e *routerVPNDNSRetainedActivity) BeginMeasurement(ctx context.Context) (context.Context, func(), error) {
 	e.started.Add(1)
 	return ctx, func() { e.released.Add(1) }, nil
@@ -371,7 +477,9 @@ func (routerVPNDNSDiagnosticNoTextError) Error() string {
 	panic("DNS failure diagnostic rendered error text")
 }
 
-type routerVPNDNSDiagnosticTimeoutError struct{ routerVPNDNSDiagnosticNoTextError }
+type routerVPNDNSDiagnosticTimeoutError struct {
+	routerVPNDNSDiagnosticNoTextError
+}
 
 func (routerVPNDNSDiagnosticTimeoutError) Timeout() bool   { return true }
 func (routerVPNDNSDiagnosticTimeoutError) Temporary() bool { return false }

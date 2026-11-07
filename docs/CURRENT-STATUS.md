@@ -69,6 +69,9 @@ The prior SOCKS and SS2022/Hysteria2 stages also passed. A separate exact-source
 Xray job passed all nineteen existing preservation verdicts and the actual
 libbox/Start Layer checks. Those jobs run on Ubuntu; they do not establish
 Apple system-tunnel or physical-device acceptance.
+The complete reference workflow also passed at published `0d4a3ecc`; its
+original log and receipt again agree on all thirty-seven native verdicts,
+the generation/shared/parser checks and the original-parser race control.
 The earlier standard wrong-name failure has no recovered original assertion
 and is not retrospectively attributed to this race. This exact-source protocol
 evidence does not certify a later commit or complete release. All ten native orchestration tests
@@ -111,9 +114,22 @@ ownership checks pass, alongside two causal overlays, twenty-eight runner and
 four shipping checks. All twelve unit files and the complete shared source
 tree match the executed checkpoint. The mandatory native inventory preserves
 fifty-seven and adds fourteen constructor cases, for seventy-one; actual
-native execution remains required. DNS admission and later operation/watch/
-status/dial/query contexts, proof execution callbacks and Tor's resident/
-padding/Server contexts retain their separate unfinished adoption work.
+native execution remains required.
+
+The subsequent ordinary external DNS operation increment keeps admission
+cancellable while native callbacks are held, joins its exact scope before
+replacement, and prevents delayed status from invalidating a newer request.
+Explicit native activity, path verification, catalog dial and selected-query
+methods retain that original caller and every late/error socket. All 104
+shared DNS package verdicts pass under race instrumentation, including the
+twenty-three mandatory context cases; three causal overlays, twenty-eight
+runner and four shipping checks pass. The 75-second request and five-second
+sample/drain limits are unchanged, with 1.5 seconds for the complete path
+observation. The native inventory now requires eighty-three libbox and
+thirteen separate Box DNS-operation verdicts; source projection/import closure
+passes, but native runtime execution remains required. Proof execution Run
+callbacks, desktop legacy callbacks and Tor's resident/padding/Server contexts
+retain their separate unfinished adoption work.
 
 The Fastest lock-order fixture now detects an actual handler return before
 probe admission and always cancels, releases and joins its original request.
@@ -121,8 +137,11 @@ The recorded unbounded setup wait can no longer hide that early response.
 Its lock-order and fifty-sample expectations remain. Local compiler processes
 were killed before the test ran. A later harness retaining every production
 file and this original fixture reached its 180-second compilation bound
-without test events. Matching hosted execution is still required, and no local
-execution pass is claimed.
+without test events. The later exact-`2cde2a34` hosted unfiltered source run
+passed the complete client package in 469.515 seconds, including this fixture.
+That whole job failed in the separate mapped OpenVPN fixture already corrected
+by `0d4a3ecc`; its original wrong-generation assertion remains unchanged.
+No local Fastest execution pass is claimed.
 
 These units do not establish a new complete release. Other imported graph
 families, Server/Compare for that direction, exact-SHA native/package/image

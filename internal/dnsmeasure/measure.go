@@ -18,6 +18,7 @@ import (
 const SampleTimeout = 5 * time.Second
 const MeasurementTimeout = 75 * time.Second
 const DrainTimeout = 5 * time.Second
+const ObservationTimeout = 1500 * time.Millisecond
 
 var requestID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var profileID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
@@ -34,8 +35,8 @@ type Engine interface {
 	SelectedDNS(context.Context) error
 }
 
-// ContextEngine retains the constructor's original caller while observing the
-// exact native path. Legacy engines remain available through New.
+// ContextEngine retains each caller while observing the exact native path.
+// Legacy engines remain supported without claiming bounded observation.
 type ContextEngine interface {
 	IdentityContext(context.Context) (string, error)
 }
@@ -82,9 +83,16 @@ type Service struct {
 	state       Status
 	cancel      context.CancelFunc
 	done        chan struct{}
+	pending     *measurementAdmission
 	connections map[*ownedConnection]struct{}
 	// Trusted certificate seam is deliberately not part of the mobile API.
 	testTLS *tls.Config
+}
+
+type measurementAdmission struct {
+	id     string
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 func New(engine Engine, description Description) (*Service, error) {
@@ -147,51 +155,141 @@ func (s *Service) status(id, transport, stage string) Status {
 	return Status{Schema: 1, Request: id, NodeID: s.description.NodeID, SessionID: s.description.SessionID, PublicTransport: transport, Stage: stage, Results: []Result{}}
 }
 func (s *Service) valid(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("DNS observation has no caller")
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	closed := s.closed
 	s.mu.Unlock()
-	if closed || s.engine.Identity() != s.identity {
+	if closed {
 		return ErrStale
 	}
-	return nil
-}
-func (s *Service) Start(id, transport string) error {
-	if !requestID.MatchString(id) || transport != "tcp" && transport != "tls" && transport != "https" {
-		return errors.New("DNS comparison requires a fresh nonce and TCP, DoT or DoH")
+	identity, err := observedIdentity(ctx, s.engine)
+	if err != nil {
+		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed || s.engine.Identity() != s.identity {
+	closed = s.closed
+	s.mu.Unlock()
+	if closed || identity != s.identity {
 		return ErrStale
+	}
+	return ctx.Err()
+}
+
+func observedIdentity(ctx context.Context, engine Engine) (string, error) {
+	if ctx == nil {
+		return "", errors.New("DNS observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	var identity string
+	var err error
+	if observer, ok := engine.(ContextEngine); ok {
+		identity, err = observer.IdentityContext(ctx)
+	} else {
+		identity = engine.Identity()
+	}
+	if err != nil || ctx.Err() != nil {
+		return "", errors.Join(err, ctx.Err())
+	}
+	if identity == "" {
+		return "", ErrStale
+	}
+	return identity, nil
+}
+
+func (s *Service) Start(id, transport string) error {
+	return s.StartContext(context.Background(), id, transport)
+}
+
+func (s *Service) StartContext(parent context.Context, id, transport string) error {
+	if parent == nil || !requestID.MatchString(id) || transport != "tcp" && transport != "tls" && transport != "https" {
+		return errors.New("DNS comparison requires a fresh nonce and TCP, DoT or DoH")
+	}
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(parent, MeasurementTimeout)
+	op := &measurementAdmission{id: id, cancel: cancel, done: make(chan struct{})}
+	accepted := false
+	var release func()
+	defer func() {
+		if !accepted {
+			cancel()
+			if release != nil {
+				release()
+			}
+			close(op.done)
+			s.mu.Lock()
+			if s.pending == op {
+				s.pending = nil
+			}
+			s.mu.Unlock()
+		}
+	}()
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return ErrStale
+	}
+	if s.pending != nil {
+		s.mu.Unlock()
+		return errors.New("DNS measurement still owns its native admission")
 	}
 	if s.done != nil {
 		select {
 		case <-s.done:
 		default:
+			s.mu.Unlock()
 			return errors.New("DNS measurement still owns its native workers")
 		}
 	}
 	if s.used[id] || len(s.used) >= 256 {
+		s.mu.Unlock()
 		return errors.New("DNS request was already used or its connection request budget is exhausted")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), MeasurementTimeout)
-	owned, release, err := s.engine.BeginMeasurement(ctx)
-	if err != nil || owned == nil || release == nil || owned.Err() != nil || s.engine.Identity() != s.identity {
-		cancel()
-		if release != nil {
-			release()
-		}
-		return errors.New("DNS measurement activity is busy or its proof retired")
+	// Publish cancellation and drain ownership before native observation. No
+	// service lock may prevent Cancel from retiring a held admission callback.
+	s.pending = op
+	s.mu.Unlock()
+	if err := s.valid(ctx); err != nil {
+		return err
+	}
+	var owned context.Context
+	var err error
+	owned, release, err = s.engine.BeginMeasurement(ctx)
+	if err != nil || owned == nil || release == nil {
+		return errors.Join(err, ctx.Err(), errors.New("DNS measurement activity is busy or its proof retired"))
+	}
+	if err := owned.Err(); err != nil {
+		return err
+	}
+	if err := s.valid(ctx); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.pending != op {
+		return ErrStale
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.used[id] || len(s.used) >= 256 {
+		return errors.New("DNS request was cancelled or its request budget is exhausted")
 	}
 	s.used[id] = true
-	s.cancel, s.done = cancel, make(chan struct{})
-	done := s.done
+	s.pending = nil
+	s.cancel, s.done = cancel, op.done
 	s.state = s.status(id, transport, "measuring")
+	accepted = true
 	go func() {
-		defer close(done)
+		defer close(op.done)
 		defer release()
 		defer cancel()
 		watchDone := make(chan struct{})
@@ -204,7 +302,7 @@ func (s *Service) Start(id, transport string) error {
 				case <-owned.Done():
 					return
 				case <-tick.C:
-					if s.engine.Identity() != s.identity {
+					if s.valid(owned) != nil {
 						cancel()
 						return
 					}
@@ -236,6 +334,10 @@ func (s *Service) Cancel(id string) {
 	if len(s.used) < 256 {
 		s.used[id] = true
 	}
+	if s.pending != nil && id == s.pending.id {
+		s.pending.cancel()
+		return
+	}
 	if id == s.state.Request && s.cancel != nil {
 		s.cancel()
 		s.state.Stage, s.state.Complete, s.state.Failure = "cancelled", true, "DNS measurement cancelled"
@@ -244,6 +346,11 @@ func (s *Service) Cancel(id string) {
 }
 func (s *Service) Drain(id string) error {
 	s.mu.Lock()
+	if s.pending != nil && id == s.pending.id {
+		done := s.pending.done
+		s.mu.Unlock()
+		return waitDrain(done)
+	}
 	if id != s.state.Request {
 		// Cancel-before-start permanently retires this nonce. An older accepted
 		// nonce can differ only after its previous workers actually drained.
@@ -273,6 +380,9 @@ func (s *Service) Invalidate() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
+	if s.pending != nil {
+		s.pending.cancel()
+	}
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -283,15 +393,44 @@ func (s *Service) Close() error {
 	s.Invalidate()
 	s.mu.Lock()
 	done := s.done
+	if s.pending != nil {
+		done = s.pending.done
+	}
 	s.mu.Unlock()
 	return waitDrain(done)
 }
 func (s *Service) StatusJSON() string {
-	if s.engine.Identity() != s.identity {
-		s.Invalidate()
+	ctx, cancel := context.WithTimeout(context.Background(), ObservationTimeout)
+	defer cancel()
+	return s.statusJSONContext(ctx)
+}
+
+func (s *Service) statusJSONContext(ctx context.Context) string {
+	s.mu.Lock()
+	request, done, pending := s.state.Request, s.done, s.pending
+	observe := !s.closed && s.state.Stage != "cancelled" && s.state.Stage != "invalidated"
+	s.mu.Unlock()
+	var identity string
+	var err error
+	if observe {
+		identity, err = observedIdentity(ctx, s.engine)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// A delayed read belongs only to its captured admission/worker. It cannot
+	// invalidate the next request or turn a pending scope into a drained result.
+	if observe && !s.closed && s.state.Stage != "cancelled" && s.state.Stage != "invalidated" &&
+		request == s.state.Request && done == s.done && pending == s.pending && (err != nil || identity != s.identity) {
+		s.closed = true
+		if s.pending != nil {
+			s.pending.cancel()
+		}
+		if s.cancel != nil {
+			s.cancel()
+		}
+		s.state.Stage, s.state.Complete, s.state.Failure = "invalidated", true, "The captured native DNS path is unavailable or changed"
+		s.state.Results = []Result{}
+	}
 	s.state.Drained = s.done == nil
 	if s.done != nil {
 		select {
@@ -299,6 +438,9 @@ func (s *Service) StatusJSON() string {
 			s.state.Drained = true
 		default:
 		}
+	}
+	if s.pending != nil {
+		s.state.Drained = false
 	}
 	data, _ := json.Marshal(s.state)
 	return string(data)

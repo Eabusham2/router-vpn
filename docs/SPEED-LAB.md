@@ -249,7 +249,25 @@ address, port, transport, server name, path and route remain those of the proved
 configuration; the public comparison catalog does not replace that selection.
 The context-aware shared constructor requires a real identity observer and
 rechecks its captured identity before returning. Existing contextless APIs remain
-available, and Tor's separate constructor is unchanged. DNS operation admission,
-watcher/status observation, native query/dial callbacks and retained socket drain
-have their own follow-on context/lifecycle verification; this constructor unit
-does not establish their completion or live DNS acceptance.
+available, and Tor's separate constructor is unchanged.
+
+Ordinary external DNS operations now publish a pending admission owner before
+reading native state. Cancel and Close can retire that caller while it waits for
+an identity or MTU-exclusion lock, and Drain retains the admission until its own
+callback and activity release join. Native reads run outside the service mutex.
+The shared watcher and result checks use the current operation's context; a late
+status read cannot invalidate a replacement request. A failed status observation
+reports an unavailable or changed path without claiming actual replacement.
+
+The ordinary native adapter explicitly carries each caller through activity,
+path verification, selected-DNS exchange and catalog-only final-route dials.
+The 1,500 ms path-observation allowance includes its first identity read; DNS
+requests, samples and drains retain their existing 75-second, 5-second and
+5-second bounds. Every late/error socket remains owned by the shared drain,
+including a native Close that must be retried, and native error details remain
+sanitized. Original proof, selected resolver and replacement VPN owners are not
+revoked merely because an observation is cancelled. The native manager/activity
+fixtures retain explicit OS-TUN and prior-proof models; they require real hosted
+native execution before they count as native evidence. Desktop callers that
+still supply legacy boolean callbacks and Tor's resident/padding/Server chain
+remain separate context-propagation work; these tests are not device acceptance.

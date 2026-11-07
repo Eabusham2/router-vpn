@@ -3,6 +3,7 @@ package libbox
 import (
 	"context"
 	"errors"
+	"net"
 	"reflect"
 	"strings"
 	"sync"
@@ -25,6 +26,223 @@ import (
 	"github.com/sagernet/sing-box/option"
 	SJ "github.com/sagernet/sing/common/json"
 )
+
+type routerDNSOperationKey struct{}
+
+func TestRouterExternalDNSOperationsKeepOriginalNativeContext(t *testing.T) {
+	for _, phase := range []string{"identity", "verify", "activity", "selected-dns", "catalog-dial", "service-start", "status", "instance-replaced", "activity-current", "scope-busy", "cancel-before"} {
+		t.Run(phase, func(t *testing.T) {
+			server, proof, shared, native := routerExternalMeasurementOwner(t)
+			measurement, err := RouterExternalCreateDNSMeasurement(server, proof, routerExternalMeasurementSource, routerExternalMeasurementCapture, "original-measurement-session")
+			if err != nil {
+				t.Fatal("actual native DNS service capture", err)
+			}
+			defer measurement.Close()
+			engine := *routerProofField[dnsmeasure.Engine](t, measurement.service, "engine")
+			observer, observed := engine.(dnsmeasure.ContextEngine)
+			boundary, verified := engine.(dnsmeasure.MeasurementBoundary)
+			if !observed || !verified {
+				t.Fatal("ordinary DNS service lost captured observation/proof methods")
+			}
+			parent, cancel := context.WithCancel(context.WithValue(context.Background(), routerDNSOperationKey{}, phase))
+			defer cancel()
+			caller := &routerConstructorCaller{Context: parent, entered: make(chan struct{})}
+			originalObserve := proof.currentContext
+			var legacy atomic.Int32
+			proof.current = func() bool { legacy.Add(1); return false }
+			admitted := make(chan struct{})
+			var admittedOnce sync.Once
+			proof.currentContext = func(ctx context.Context) error {
+				if phase == "status" {
+					deadline, ok := ctx.Deadline()
+					if !ok || time.Until(deadline) > dnsmeasure.ObservationTimeout {
+						return errors.New("DNS status lost bounded original observation")
+					}
+				} else if ctx.Value(routerDNSOperationKey{}) != phase {
+					return errors.New("DNS operation detached original caller")
+				}
+				if phase == "verify" {
+					deadline, ok := ctx.Deadline()
+					if !ok || time.Until(deadline) > 1500*time.Millisecond {
+						return errors.New("DNS path observation restarted its original deadline")
+					}
+				}
+				if phase == "service-start" || phase == "status" {
+					admittedOnce.Do(func() { close(admitted) })
+				}
+				return originalObserve(ctx)
+			}
+			activityLock := routerExternalMeasurementField[sync.Mutex](t, proof.request, "activity", "mu")
+			var heldRW *sync.RWMutex
+			var heldActivity bool
+			switch phase {
+			case "identity", "verify", "service-start", "status":
+				heldRW = routerExternalMeasurementField[sync.RWMutex](t, proof.request, "engine", "mu")
+			case "selected-dns":
+				heldRW = routerExternalMeasurementField[sync.RWMutex](t, native, "dnsTransport", "access")
+			case "catalog-dial":
+				heldRW = routerExternalMeasurementField[sync.RWMutex](t, native, "outbound", "access")
+			case "activity", "instance-replaced":
+				heldActivity = true
+			}
+			if heldRW != nil {
+				heldRW.Lock()
+			}
+			if heldActivity {
+				activityLock.Lock()
+			}
+			var once sync.Once
+			releaseLock := func() {
+				once.Do(func() {
+					if heldRW != nil {
+						heldRW.Unlock()
+					}
+					if heldActivity {
+						activityLock.Unlock()
+					}
+				})
+			}
+			defer releaseLock()
+			if phase == "scope-busy" {
+				activityLock.Lock()
+				*routerExternalMeasurementField[bool](t, proof.request, "activity", "changing") = true
+				activityLock.Unlock()
+				defer func() {
+					activityLock.Lock()
+					*routerExternalMeasurementField[bool](t, proof.request, "activity", "changing") = false
+					activityLock.Unlock()
+				}()
+			}
+			if phase == "cancel-before" {
+				cancel()
+			}
+			type result struct {
+				ctx     context.Context
+				release func()
+				status  string
+				err     error
+			}
+			done := make(chan result, 1)
+			go func() {
+				var actual result
+				switch phase {
+				case "identity":
+					_, actual.err = observer.IdentityContext(caller)
+				case "verify":
+					actual.err = boundary.VerifyMeasurement(caller)
+				case "selected-dns":
+					actual.err = engine.SelectedDNS(caller)
+				case "catalog-dial":
+					var connection net.Conn
+					connection, actual.err = engine.Dial(caller, "1.1.1.1:53")
+					if connection != nil {
+						actual.err = errors.Join(actual.err, connection.Close(), errors.New("held DNS observation opened a socket"))
+					}
+				case "service-start":
+					actual.err = measurement.service.StartContext(caller, "abcdef0123456789abcdef0123456789", "tcp")
+				case "status":
+					actual.status = measurement.StatusJSON()
+				default:
+					actual.ctx, actual.release, actual.err = engine.BeginMeasurement(caller)
+				}
+				done <- actual
+			}()
+			var replacement *daemon.Instance
+			if heldRW != nil || heldActivity {
+				entered := caller.entered
+				if phase == "service-start" || phase == "status" {
+					entered = admitted
+				}
+				select {
+				case <-entered:
+				case actual := <-done:
+					t.Fatal("native DNS operation bypassed its original held observation", actual.err)
+				case <-time.After(time.Second):
+					cancel()
+					releaseLock()
+					<-done
+					t.Fatal("native DNS operation did not enter original observation")
+				}
+				if phase == "instance-replaced" {
+					replacement = new(daemon.Instance)
+					*routerProofField[*box.Box](t, replacement, "instance") = native
+					lock := routerProofField[sync.RWMutex](t, server.StartedService, "serviceAccess")
+					lock.Lock()
+					*routerProofField[*daemon.Instance](t, server.StartedService, "instance") = replacement
+					lock.Unlock()
+					releaseLock()
+				} else if phase == "service-start" {
+					measurement.Cancel("abcdef0123456789abcdef0123456789")
+				} else if phase != "status" {
+					cancel()
+				}
+			}
+			var actual result
+			select {
+			case actual = <-done:
+			case <-time.After(2 * time.Second):
+				cancel()
+				releaseLock()
+				<-done
+				t.Fatal("native DNS operation failed to join its bounded observation")
+			}
+			if actual.release != nil {
+				defer actual.release()
+			}
+			releaseLock()
+			proof.currentContext = originalObserve
+			if phase == "activity-current" {
+				if actual.err != nil || actual.ctx == nil || actual.release == nil || actual.ctx.Err() != nil {
+					t.Fatal("original native DNS scope was not retained", actual.err)
+				}
+				activityLock.Lock()
+				count := *routerExternalMeasurementField[int](t, proof.request, "activity", "measurements")
+				activityLock.Unlock()
+				if count != 1 {
+					t.Fatal("actual native DNS activity was not captured", count)
+				}
+				cancel()
+				if actual.ctx.Err() == nil {
+					t.Fatal("native DNS scope escaped original operation cancellation")
+				}
+				actual.release()
+			} else if phase == "status" {
+				var status dnsmeasure.Status
+				if SJ.Unmarshal([]byte(actual.status), &status) != nil || status.Stage != "invalidated" || status.Failure == "" || len(status.Results) != 0 {
+					t.Fatal("unconfirmed native DNS status reported valid results", status)
+				}
+			} else {
+				if actual.err == nil || actual.ctx != nil || actual.release != nil {
+					t.Fatal("retired or busy DNS owner gained an activity", actual.err)
+				}
+				if phase != "instance-replaced" && phase != "scope-busy" && !errors.Is(actual.err, context.Canceled) {
+					t.Fatal("native DNS operation lost original cancellation", actual.err)
+				}
+			}
+			if phase == "service-start" {
+				if err := measurement.Drain("abcdef0123456789abcdef0123456789"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			activityLock.Lock()
+			count := *routerExternalMeasurementField[int](t, proof.request, "activity", "measurements")
+			changing := *routerExternalMeasurementField[bool](t, proof.request, "activity", "changing")
+			activityLock.Unlock()
+			if count != 0 || changing != (phase == "scope-busy") {
+				t.Fatal("DNS operation released another native activity", count, changing)
+			}
+			if replacement != nil {
+				current, err := server.StartedService.RouterVPNInstanceContext(context.Background())
+				if err != nil || current != replacement {
+					t.Fatal("old DNS operation changed replacement instance", err)
+				}
+			}
+			if legacy.Load() != 0 || (*routerProofField[context.Context](t, shared, "ctx")).Err() != nil || !routerProofField[atomic.Bool](t, shared, "succeeded").Load() {
+				t.Fatal("DNS operation used legacy proof or retired healthy VPN")
+			}
+		})
+	}
+}
 
 func TestRouterExternalDNSConstructorKeepsCapturedNativeOwner(t *testing.T) {
 	for _, phase := range []string{"current", "legacy", "nil", "cancel-before", "instance-held", "engine-held", "dns-held", "instance-replaced", "unproved", "source-changed", "dns-policy", "session-changed", "missing-observer"} {

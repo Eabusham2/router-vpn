@@ -642,6 +642,20 @@ remain separate from a complete release, and the reference receipt records
 no physical interface or device acceptance. A later commit requires its own
 matching native and release evidence.
 
+The same complete reference workflow later passed at published
+`0d4a3ecc2a292e88d7d0b7509928f532ed7814ea` in
+[run 42337616131](https://github.com/Eabusham2/router-vpn/actions/runs/42337616131).
+Its original job log and receipt again contain exactly one passing event for
+each of the thirty-seven selected-DNS verdicts, with no failure or skip.
+The thirteen generation, nineteen shared flow and six parser/ownership
+verdicts and original-parser race control also pass; the previous SOCKS and
+SS2022/Hysteria2 stages succeed. This source inventory has 2,204 files and
+SHA-256 `eddaa4dc14af6945c10e7b56e08ea1f7e493474d64a6a907a34147c3c5ab6dde`;
+the prepared core has 2,287 files and digest
+`894eeea47cc96e8fc8b34bce17bf744561e4c93bab83342904870976d94f7a98`.
+The receipt still explicitly excludes physical interface and device acceptance.
+It does not execute the separate new CONNECT or DNS-operation native cases.
+
 On merged main, the ten preparation, seven shared-runtime, five new parser
 runner and eight existing selected-DNS runner contracts all pass. The native
 repair's direct causal evidence is complete; exact-SHA platform builds,
@@ -799,6 +813,47 @@ unit covers the ordinary external constructor. DNS admission and later
 operation/watch/status/dial/query contexts, proof execution callbacks and
 Tor's resident/padding/Server paths remain separate unfinished work.
 
+### DNS admission, cancellation and original operation observations
+
+The next ordinary external DNS increment publishes a pending admission owner
+before observing the native engine. Identity and activity acquisition run
+outside the service mutex, so Cancel, Invalidate and Close can retire a held
+admission. Its original completion stays owned until scope release joins;
+another request cannot start over unfinished cleanup. Each accepted operation
+retains the original caller through identity, watch, query and result checks.
+A delayed status observation can affect only its captured admission or worker,
+and cannot invalidate a replacement request or manufacture a drained result.
+
+The native ordinary-external adapter explicitly implements activity capture,
+fresh path verification, catalog dials and selected DNS queries using those
+contexts. It does not rely on promoted legacy receiver methods. Non-nil late
+or error-path connections remain owned by the shared service's joined cleanup;
+private native error details remain sanitized. Observation expiry does not
+revoke a healthy VPN. The request, sample and drain limits remain 75, five and
+five seconds; the 1.5-second path observation budget now covers its first
+identity read as well as verification. An unconfirmed status read reports the
+path as unavailable or changed, rather than asserting a witnessed change.
+
+The complete `internal/dnsmeasure` package passes all 104 verdicts under race
+instrumentation in 3.062 seconds. The exact required context group passes
+twenty-three verdicts in 1.154 seconds. Three single-fault overlays restore
+legacy identity, acknowledge admission before scope release, and adopt stale
+status; each fails at its intended ownership assertion. All twenty-eight
+runner and four shipping contracts pass. Final native preparation, byte-exact
+source projection and actual pinned import closure also pass.
+
+All eleven unit files, the complete merged `internal` tree and `go.mod` match
+executed checkpoint `0c44afb4` exactly. The merged complete DNS race suite
+passes in 2.851 seconds, with twenty-eight
+runner checks in 0.370 seconds and four shipping checks in 0.545 seconds.
+The native gate retains its prior
+seventy-one libbox cases and adds twelve operation cases, for eighty-three;
+it also requires thirteen actual Box DNS-operation verdicts. Those native
+cases remain unexecuted locally and require matching hosted execution.
+The prior-successful-proof and OS-TUN fixture models are explicit, not device
+acceptance. Ordinary proof execution's Run callbacks, desktop legacy callbacks
+and Tor's resident/padding/Server adoption remain separate unfinished work.
+
 ### Bounded Fastest fixture setup and latest native observations
 
 `TestFastestSelectionUsesTrackerBeforeAppLock` previously waited forever for
@@ -820,6 +875,18 @@ all 344 original production Go files and the original Fastest fixture, omitting
 only unrelated test files; its 180-second compilation bound expired before
 any test event. All source hashes remained unchanged. This is another bounded
 local compile limit, not a runtime pass or a reason to narrow the shipping CI.
+
+The later exact-`2cde2a34` hosted
+[source-contract job](https://github.com/Eabusham2/router-vpn/actions/runs/42335944266/job/128292831706)
+ran the unfiltered `go test ./...` and passed the complete `cmd/client` package
+in 469.515 seconds, including this unchanged original fixture. The overall job
+and the separate Android contract failed in the mapped OpenVPN Speed Lab
+regression at `external_openvpn_remote_test.go:210`. That was the missing
+bounded selector/remote fixture already corrected in published `0d4a3ecc`;
+the original wrong-generation rejection assertion was not edited. Its final
+source compatibility run explicitly includes that named Speed Lab case and
+DNS Retest and passes in 7.687 seconds. A failed whole job is not relabeled
+successful merely because its client package passed.
 
 At the exact earlier `460918da` commit, the completed Apple Silicon native
 socket/PF job

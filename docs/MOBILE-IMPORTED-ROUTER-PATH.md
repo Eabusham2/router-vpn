@@ -368,9 +368,11 @@ described in [SPEED-LAB.md](SPEED-LAB.md). Ordinary proof construction now retai
 its own bounded native capture and independent returned request lifetime.
 The ordinary external mobile DNS constructor now retains its original caller
 through proof/source/selected-resolver capture and final native publication,
-without tying later DNS operations to the constructor's timeout. Ordinary
-external proof execution callbacks and DNS operation admission, observation and
-query/dial lifetimes, plus Tor resident/padding/Server proof and lease
+without tying later DNS operations to the constructor's timeout. Ordinary mobile
+DNS admission, watcher/status reads, activity and query/dial callbacks now retain
+their own operation contexts and joined socket/scope ownership. Ordinary
+external proof execution callbacks, desktop legacy boolean measurement callbacks,
+plus Tor resident/padding/Server proof and lease
 observations, remain separate context-propagation requirements.
 
 The complete compiled graph supplies the MTU plan. For a nested packet final,
