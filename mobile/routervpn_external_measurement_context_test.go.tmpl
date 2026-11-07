@@ -29,6 +29,274 @@ import (
 
 type routerDNSOperationKey struct{}
 
+type routerProofRunKey struct{}
+
+type routerProofRunCaller struct {
+	context.Context
+	entered func()
+}
+
+func (c *routerProofRunCaller) Done() <-chan struct{} {
+	c.entered()
+	return c.Context.Done()
+}
+
+// Network proof is explicitly modeled here. Every original Box, manager,
+// TUN, StartedService and identity callback still executes shipping methods.
+type routerExternalRunEngine struct {
+	owner    mobilemultihop.ExternalProofEngine
+	identity func(context.Context) (string, error)
+	dns      func(context.Context) error
+	legacy   atomic.Int32
+}
+
+func (e *routerExternalRunEngine) Identity() string { e.legacy.Add(1); return "unbounded-proof-reader" }
+func (e *routerExternalRunEngine) IdentityContext(ctx context.Context) (string, error) {
+	return e.identity(ctx)
+}
+func (e *routerExternalRunEngine) DNSProof(ctx context.Context, _ string) error { return e.dns(ctx) }
+func (e *routerExternalRunEngine) Dial(context.Context, string, string) (net.Conn, error) {
+	return nil, errors.New("native owner fixture forbids ambient proof sockets")
+}
+
+func TestRouterExternalProofRunKeepsOriginalNativeContext(t *testing.T) {
+	for _, phase := range []string{"current", "legacy", "nil", "cancel-before", "instance-held", "engine-held", "tun-held", "outbound-held", "dns-held", "instance-replaced", "tun-replaced", "dns-cancel", "exit-cancel", "delivery-cancel", "close", "owner-cancel", "health-held", "execution-held"} {
+		t.Run(phase, func(t *testing.T) {
+			server, proof, shared, native := routerExternalMeasurementOwner(t)
+			_, successor, _, _ := routerExternalMeasurementOwner(t)
+			started := server.StartedService
+			observer := phase == "health-held" || phase == "execution-held"
+			if !observer {
+				routerProofField[atomic.Bool](t, shared, "succeeded").Store(false)
+			}
+			parent, cancel := context.WithTimeout(context.WithValue(context.Background(), routerProofRunKey{}, phase), 2*time.Second)
+			defer cancel()
+			entered := make(chan struct{})
+			var enteredOnce sync.Once
+			enteredNative := func() { enteredOnce.Do(func() { close(entered) }) }
+			var legacy atomic.Int32
+			var dns, public atomic.Int32
+			var strict atomic.Bool
+			strict.Store(true)
+			check := func(ctx context.Context) error {
+				if !strict.Load() {
+					return ctx.Err()
+				}
+				deadline, bounded := ctx.Deadline()
+				if !bounded || time.Until(deadline) > 45*time.Second {
+					return errors.New("native proof lost its operation budget")
+				}
+				if phase != "legacy" && ctx.Value(routerProofRunKey{}) != phase {
+					return errors.New("native proof detached original caller")
+				}
+				return ctx.Err()
+			}
+			var held sync.Locker
+			switch phase {
+			case "instance-held":
+				held = routerProofField[sync.RWMutex](t, started, "serviceAccess")
+			case "engine-held", "health-held", "execution-held":
+				held = routerExternalMeasurementField[sync.RWMutex](t, proof.request, "engine", "mu")
+			case "tun-held":
+				held = routerExternalMeasurementField[sync.Mutex](t, native, "inbound", "access")
+			case "outbound-held":
+				held = routerExternalMeasurementField[sync.RWMutex](t, native, "outbound", "access")
+			case "dns-held", "instance-replaced", "tun-replaced":
+				held = routerExternalMeasurementField[sync.RWMutex](t, native, "dnsTransport", "access")
+			}
+			var releaseOnce sync.Once
+			release := func() {
+				releaseOnce.Do(func() {
+					if held != nil {
+						held.Unlock()
+					}
+				})
+			}
+			if held != nil {
+				held.Lock()
+			}
+			defer release()
+			originalObserve := proof.currentContext
+			proof.current = func() bool { legacy.Add(1); return false }
+			proof.currentContext = func(ctx context.Context) error {
+				if err := check(ctx); err != nil {
+					return err
+				}
+				if phase == "delivery-cancel" && routerProofField[atomic.Bool](t, shared, "succeeded").Load() {
+					enteredOnce.Do(func() { close(entered) })
+					<-ctx.Done()
+					return nil
+				}
+				if phase == "instance-held" {
+					return originalObserve(&routerProofRunCaller{Context: ctx, entered: enteredNative})
+				}
+				return originalObserve(ctx)
+			}
+			owner := *routerProofField[mobilemultihop.ExternalProofEngine](t, shared, "engine")
+			bounded, ok := owner.(interface {
+				IdentityContext(context.Context) (string, error)
+			})
+			if !ok {
+				t.Fatal("original native identity is not context-aware")
+			}
+			engine := &routerExternalRunEngine{owner: owner}
+			engine.identity = func(ctx context.Context) (string, error) {
+				if err := check(ctx); err != nil {
+					return "", err
+				}
+				if held != nil && phase != "instance-held" {
+					return bounded.IdentityContext(&routerProofRunCaller{Context: ctx, entered: enteredNative})
+				}
+				return bounded.IdentityContext(ctx)
+			}
+			engine.dns = func(ctx context.Context) error {
+				if err := check(ctx); err != nil {
+					return err
+				}
+				dns.Add(1)
+				if phase == "dns-cancel" || phase == "close" || phase == "owner-cancel" {
+					enteredOnce.Do(func() { close(entered) })
+					<-ctx.Done()
+				}
+				return nil
+			}
+			*routerProofField[mobilemultihop.ExternalProofEngine](t, shared, "engine") = engine
+			*routerProofField[func(context.Context, string, string) error](t, shared, "public") = func(ctx context.Context, tag, ip string) error {
+				if err := check(ctx); err != nil {
+					return err
+				}
+				if tag != mobilemultihop.ExternalFinalTag || ip != "203.0.113.88" {
+					return errors.New("wrong captured native exit")
+				}
+				public.Add(1)
+				if phase == "exit-cancel" {
+					enteredOnce.Do(func() { close(entered) })
+					<-ctx.Done()
+				}
+				return nil
+			}
+			if phase == "cancel-before" {
+				cancel()
+			}
+			type result struct {
+				raw string
+				err error
+			}
+			done := make(chan result, 1)
+			go func() {
+				var raw string
+				var err error
+				switch phase {
+				case "legacy":
+					raw, err = proof.Run()
+				case "nil":
+					raw, err = proof.runContext(nil)
+				case "health-held":
+					err = proof.healthyContext(parent)
+				case "execution-held":
+					raw, err = proof.request.ExecutionContext(parent)
+				default:
+					raw, err = proof.runContext(parent)
+				}
+				done <- result{raw, err}
+			}()
+			var replacement *daemon.Instance
+			var replacementTUN adapter.Inbound
+			waiting := held != nil || phase == "dns-cancel" || phase == "exit-cancel" || phase == "delivery-cancel" || phase == "close" || phase == "owner-cancel"
+			if waiting {
+				select {
+				case <-entered:
+				case actual := <-done:
+					t.Fatal("native Run bypassed original callback", actual.err)
+				case <-time.After(time.Second):
+					cancel()
+					release()
+					<-done
+					t.Fatal("native Run did not enter captured callback")
+				}
+				switch phase {
+				case "instance-replaced":
+					replacement = new(daemon.Instance)
+					*routerProofField[*box.Box](t, replacement, "instance") = native
+					lock := routerProofField[sync.RWMutex](t, started, "serviceAccess")
+					lock.Lock()
+					*routerProofField[*daemon.Instance](t, started, "instance") = replacement
+					lock.Unlock()
+					release()
+				case "tun-replaced":
+					if err := native.Inbound().Create(context.Background(), nil, log.NewNOPFactory().Logger(), "tun-in", C.TypeTun, &option.TunInboundOptions{}); err != nil {
+						cancel()
+						release()
+						<-done
+						t.Fatal(err)
+					}
+					replacementTUN, _ = native.Inbound().Get("tun-in")
+					release()
+				case "close":
+					if err := proof.Close(); err != nil {
+						t.Fatal("original native Run did not join", err)
+					}
+				case "owner-cancel":
+					proof.Cancel()
+				default:
+					cancel()
+				}
+			}
+			var actual result
+			select {
+			case actual = <-done:
+			case <-time.After(time.Second):
+				cancel()
+				release()
+				<-done
+				t.Fatal("native Run kept a detached callback")
+			}
+			release()
+			strict.Store(false)
+			proof.currentContext = originalObserve
+			engine.identity = bounded.IdentityContext
+			if legacy.Load() != 0 || engine.legacy.Load() != 0 {
+				t.Fatal("native proof used legacy boolean or identity callback")
+			}
+			if !successor.Healthy() {
+				t.Fatal("old native operation retired independent successor")
+			}
+			if phase == "current" || phase == "legacy" {
+				cancel()
+				if actual.err != nil || actual.raw == "" || dns.Load() != 1 || public.Load() != 1 || !proof.Healthy() {
+					t.Fatal("native operation lost required proof or retained lifetime", actual.err)
+				}
+			} else {
+				if actual.err == nil || actual.raw != "" {
+					t.Fatal("cancelled or replaced native operation published proof")
+				}
+				if observer {
+					if !proof.Healthy() {
+						t.Fatal("expired native observation retired healthy VPN")
+					}
+				} else if routerProofField[atomic.Bool](t, shared, "succeeded").Load() {
+					t.Fatal("failed native proof retained success")
+				}
+				if held != nil && (dns.Load() != 0 || public.Load() != 0) {
+					t.Fatal("held native owner reached DNS or exit traffic")
+				}
+			}
+			if replacement != nil {
+				current, err := started.RouterVPNInstanceContext(context.Background())
+				if err != nil || current != replacement {
+					t.Fatal("old proof changed replacement instance", err)
+				}
+			}
+			if replacementTUN != nil {
+				current, _ := native.Inbound().Get("tun-in")
+				if current != replacementTUN {
+					t.Fatal("old proof changed replacement TUN")
+				}
+			}
+		})
+	}
+}
+
 func TestRouterExternalDNSOperationsKeepOriginalNativeContext(t *testing.T) {
 	for _, phase := range []string{"identity", "verify", "activity", "selected-dns", "catalog-dial", "service-start", "status", "instance-replaced", "activity-current", "scope-busy", "cancel-before"} {
 		t.Run(phase, func(t *testing.T) {

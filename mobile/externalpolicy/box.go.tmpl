@@ -130,10 +130,23 @@ func (s *Box) RouterVPNExternalCreateProofContext(ctx context.Context, source, c
 	return &RouterVPNExternalProofRequest{request: request, engine: engine}, nil
 }
 func (r *RouterVPNExternalProofRequest) Run() (string, error) {
+	return r.RunObserved(nil)
+}
+func (r *RouterVPNExternalProofRequest) RunObserved(observe func(context.Context) error) (string, error) {
 	if r == nil || r.request == nil {
 		return "", errors.New("external native proof request is unavailable")
 	}
-	raw, err := r.request.Run()
+	raw, err := r.request.RunObserved(observe)
+	if err != nil {
+		r.Cancel()
+	}
+	return raw, err
+}
+func (r *RouterVPNExternalProofRequest) RunContext(ctx context.Context, observe func(context.Context) error) (string, error) {
+	if r == nil || r.request == nil {
+		return "", errors.New("external native proof request is unavailable")
+	}
+	raw, err := r.request.RunContext(ctx, observe)
 	if err != nil {
 		r.Cancel()
 	}
@@ -173,14 +186,9 @@ func (r *RouterVPNExternalProofRequest) VerifyCurrentPathContext(ctx context.Con
 	return err
 }
 func (r *RouterVPNExternalProofRequest) VerifyCurrentPath() error {
-	if r == nil || r.request == nil {
-		return errors.New("external proof is unavailable")
-	}
-	err := r.request.VerifyCurrentPath()
-	if err != nil {
-		r.Cancel()
-	}
-	return err
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	return r.VerifyCurrentPathContext(ctx)
 }
 func (r *RouterVPNExternalProofRequest) Close() error {
 	if r == nil || r.request == nil {
@@ -200,6 +208,12 @@ func (r *RouterVPNExternalProofRequest) Execution() string {
 		return ""
 	}
 	return r.request.Execution()
+}
+func (r *RouterVPNExternalProofRequest) ExecutionContext(ctx context.Context) (string, error) {
+	if r == nil || r.request == nil {
+		return "", errors.New("external proof is unavailable")
+	}
+	return r.request.ExecutionContext(ctx)
 }
 
 type routerVPNExternalNativeEngine struct {

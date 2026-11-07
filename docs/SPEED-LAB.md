@@ -237,8 +237,18 @@ Construction does not run or waive selected-DNS, entry or exit proof, and a new
 request cannot inherit an earlier successful request's state. Cancelled or
 replaced captures discard only their unpublished request; the replacement graph
 and earlier independently retained request remain owned by their own lifetimes.
-The existing proof execution callbacks retain their separate context-propagation
-work.
+Proof execution now also retains the original operation through native host
+admission, graph confirmation, connected OpenVPN observation, required entry
+proof, selected DNS, public exit and final delivery. Comparison capture checks
+the proof's original graph identity before starting candidates. Admission waits
+for the proof/controller mutexes are cancellable; cancellation revokes that
+proof's authority immediately and Close joins its own workers and lease.
+Comparison keeps its existing budget, followed by the separate 45-second
+network-proof allowance. A caller deadline can shorten both, but callbacks
+cannot replace it. Later health, path and execution observations use one bounded
+caller; an observation timeout leaves a healthy VPN retained, while actual
+owner or path replacement revokes proof authority. The comparison's trial/final
+selector mutations still require their separate context adoption.
 
 The ordinary external mobile DNS comparison constructor now keeps the same
 caller through successful-proof and current-path verification, exact source and

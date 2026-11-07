@@ -107,21 +107,22 @@ func routerExternalCreateProofContext(ctx context.Context, server *CommandServer
 	return &RouterExternalProofRequest{request: request, current: current, currentContext: currentContext}, nil
 }
 func (r *RouterExternalProofRequest) Run() (string, error) {
-	if r == nil || r.request == nil || r.current == nil || !r.current() {
+	if r == nil || r.request == nil || r.currentContext == nil {
 		if r != nil {
 			r.Cancel()
 		}
 		return "", errors.New("external native request retired")
 	}
-	result, err := r.request.Run()
-	if err != nil {
-		return "", err
+	return r.request.RunObserved(r.currentContext)
+}
+func (r *RouterExternalProofRequest) runContext(ctx context.Context) (string, error) {
+	if r == nil || r.request == nil || r.currentContext == nil {
+		if r != nil {
+			r.Cancel()
+		}
+		return "", errors.New("external native request retired")
 	}
-	if !r.current() || !r.request.Healthy() {
-		r.Cancel()
-		return "", errors.New("external native proof delivery retired")
-	}
-	return result, nil
+	return r.request.RunContext(ctx, r.currentContext)
 }
 func (r *RouterExternalProofRequest) Cancel() {
 	if r != nil && r.request != nil {
@@ -129,7 +130,9 @@ func (r *RouterExternalProofRequest) Cancel() {
 	}
 }
 func (r *RouterExternalProofRequest) Healthy() bool {
-	return r != nil && r.request != nil && r.current != nil && r.current() && r.request.Healthy()
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	return r.healthyContext(ctx) == nil
 }
 func (r *RouterExternalProofRequest) healthyContext(ctx context.Context) error {
 	if r == nil || r.request == nil || r.currentContext == nil {
@@ -156,8 +159,14 @@ func (r *RouterExternalProofRequest) ProgressJSON() string {
 	return r.request.ProgressJSON()
 }
 func (r *RouterExternalProofRequest) Execution() string {
-	if !r.Healthy() {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if r.healthyContext(ctx) != nil {
 		return ""
 	}
-	return r.request.Execution()
+	outcome, err := r.request.ExecutionContext(ctx)
+	if err != nil || r.currentContext(ctx) != nil {
+		return ""
+	}
+	return outcome
 }

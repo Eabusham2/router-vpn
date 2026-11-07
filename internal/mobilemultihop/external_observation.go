@@ -77,15 +77,18 @@ func externalObservedRemote(ctx context.Context, engine any, tag string) (native
 	return reader.OpenVPNRemoteContext(ctx, tag)
 }
 
-func (r *ExternalProofRequest) HealthyContext(ctx context.Context) error {
+func (r *ExternalProofRequest) currentContext(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("external proof observation has no caller")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if r == nil || r.ctx.Err() != nil || !r.succeeded.Load() {
-		return errors.New("external proof is no longer retained")
+	if r == nil {
+		return errors.New("external proof is unavailable")
+	}
+	if err := r.ctx.Err(); err != nil {
+		return err
 	}
 	identity, err := externalObservedIdentity(ctx, r.engine)
 	if err != nil {
@@ -94,6 +97,10 @@ func (r *ExternalProofRequest) HealthyContext(ctx context.Context) error {
 	if identity == "" || identity != r.identity {
 		return errors.New("external proof graph identity changed")
 	}
+	return errors.Join(ctx.Err(), r.ctx.Err())
+}
+
+func (r *ExternalProofRequest) localOpenVPNHealthyContext(ctx context.Context) error {
 	if r.openvpnTransport != nil {
 		expected := r.openvpnRemote.Load()
 		if expected == nil {
@@ -106,6 +113,28 @@ func (r *ExternalProofRequest) HealthyContext(ctx context.Context) error {
 		if actual != *expected {
 			return errors.New("external OpenVPN connected remote changed")
 		}
+		if err := r.currentContext(ctx); err != nil {
+			return err
+		}
+	}
+	return errors.Join(ctx.Err(), r.ctx.Err())
+}
+
+func (r *ExternalProofRequest) HealthyContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("external proof observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r == nil || !r.succeeded.Load() {
+		return errors.New("external proof is no longer retained")
+	}
+	if err := r.currentContext(ctx); err != nil {
+		return err
+	}
+	if err := r.localOpenVPNHealthyContext(ctx); err != nil {
+		return err
 	}
 	if r.execution != nil {
 		if err := r.execution.HealthyContext(ctx); err != nil {
@@ -116,6 +145,24 @@ func (r *ExternalProofRequest) HealthyContext(ctx context.Context) error {
 		return errors.New("external proof retired during observation")
 	}
 	return ctx.Err()
+}
+
+func (r *ExternalProofRequest) ExecutionContext(ctx context.Context) (string, error) {
+	if err := r.HealthyContext(ctx); err != nil {
+		return "", err
+	}
+	if r.execution == nil {
+		return "", nil
+	}
+	if err := externalObservationLock(ctx, &r.execution.mu); err != nil {
+		return "", err
+	}
+	outcome := r.execution.progress.Execution
+	r.execution.mu.Unlock()
+	if err := r.HealthyContext(ctx); err != nil {
+		return "", err
+	}
+	return outcome, nil
 }
 
 func (c *Controller) HealthyContext(ctx context.Context) error {
@@ -242,7 +289,7 @@ func (c *Controller) readOpenVPNRemoteContext(ctx context.Context, tag string) (
 // The original connection owner still joins its workers/leases in Close.
 func (r *ExternalProofRequest) VerifyCurrentPathContext(ctx context.Context) (failure error) {
 	defer func() {
-		if failure != nil && r != nil && !common.ObservationContextExpired(ctx, failure) {
+		if failure != nil && r != nil && r.succeeded.Load() && !common.ObservationContextExpired(ctx, failure) {
 			r.succeeded.Store(false)
 			r.cancel()
 			if r.execution != nil {
@@ -256,7 +303,13 @@ func (r *ExternalProofRequest) VerifyCurrentPathContext(ctx context.Context) (fa
 	if r.execution == nil {
 		return ctx.Err()
 	}
-	c := r.execution
+	return r.execution.verifyCurrentPathContext(ctx)
+}
+
+func (c *Controller) verifyCurrentPathContext(ctx context.Context) error {
+	if err := c.HealthyContext(ctx); err != nil {
+		return err
+	}
 	if c.openvpnResponses == nil {
 		return ctx.Err()
 	}

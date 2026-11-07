@@ -415,9 +415,13 @@ through proof/source/selected-resolver capture and final native publication,
 without tying later DNS operations to the constructor's timeout. Ordinary mobile
 DNS admission, watcher/status reads, activity and query/dial callbacks now retain
 their own operation contexts and joined socket/scope ownership. Ordinary
-external proof execution callbacks, desktop legacy boolean measurement callbacks,
-plus Tor resident/padding/Server proof and lease
-observations, remain separate context-propagation requirements.
+external proof execution now retains its original operation through native
+admission, original-graph comparison capture, connected OpenVPN observation,
+entry/DNS/exit proof and final native delivery. Proof and comparison admission
+mutexes obey cancellation, and a completed proof retains the VPN lifetime
+after its operation ends. The comparison's trial/final selector mutations,
+desktop legacy boolean measurement callbacks, plus Tor resident/padding/Server
+proof and lease observations remain separate context-propagation requirements.
 
 The complete compiled graph supplies the MTU plan. For a nested packet final,
 `internal/awgpolicy` accounts for the actual IPv4/IPv6 carrier, 16-byte transport

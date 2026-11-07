@@ -248,6 +248,14 @@ func (e *ordinaryOpenVPNRemoteEngine) OpenVPNRemote(tag string) (nativeopenvpn.R
 	return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
 }
 
+func (e *ordinaryOpenVPNRemoteEngine) OpenVPNRemoteContext(ctx context.Context, tag string) (nativeopenvpn.RemoteReceipt, error) {
+	if err := ctx.Err(); err != nil {
+		return nativeopenvpn.RemoteReceipt{}, err
+	}
+	receipt, err := e.OpenVPNRemote(tag)
+	return receipt, errors.Join(err, ctx.Err())
+}
+
 func TestOpenVPNMappedOrdinaryLocalRetainsActualRemoteWithoutCreatingSelector(t *testing.T) {
 	for _, boundary := range []string{"retained", "DNS", "exit", "wrong remote", "missing observer"} {
 		t.Run(boundary, func(t *testing.T) {

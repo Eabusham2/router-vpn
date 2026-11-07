@@ -498,7 +498,18 @@ func (d driver) Open(ctx context.Context, candidate routechoice.Candidate) (rout
 	return s, nil
 }
 func (c *Controller) Run(parent context.Context, engine Engine) error {
-	c.mu.Lock()
+	return c.runCaptured(parent, engine, "")
+}
+
+// A proof captured before this comparison may only admit its original graph.
+// Engine capture itself is a callback and cannot silently adopt a replacement.
+func (c *Controller) runCaptured(parent context.Context, engine Engine, expectedIdentity string) error {
+	if c == nil {
+		return errors.New("multihop controller is unavailable")
+	}
+	if err := externalObservationLock(parent, &c.mu); err != nil {
+		return err
+	}
 	if c.runDone != nil || engine == nil {
 		c.mu.Unlock()
 		return errors.New("multihop controller cannot be reused")
@@ -526,17 +537,26 @@ func (c *Controller) Run(parent context.Context, engine Engine) error {
 	if err == nil {
 		err = ctx.Err()
 	}
-	c.mu.Lock()
+	if err == nil && expectedIdentity != "" && identity != expectedIdentity {
+		err = errors.New("multihop graph changed before original proof execution")
+	}
+	if lockErr := externalObservationLock(ctx, &c.mu); lockErr != nil {
+		c.generation.Add(1)
+		return errors.Join(err, lockErr)
+	}
 	if c.generation.Load() != 1 && err == nil {
 		err = errors.New("multihop owner retired during identity capture")
 	}
 	if err == nil {
 		c.engineID = identity
+	} else {
+		c.generation.Add(1)
+		c.progress.Complete = true
+		c.progress.Stage = "failed"
+		c.progress.Failure = "Native owner observation failed"
 	}
 	c.mu.Unlock()
 	if err != nil {
-		c.failed("Native owner observation failed")
-		c.invalidate()
 		return err
 	}
 	var active routechoice.Session

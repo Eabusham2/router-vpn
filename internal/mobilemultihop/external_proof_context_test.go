@@ -161,6 +161,11 @@ func TestExternalProofConstructorRetainsCallerAndIndependentLifetime(t *testing.
 				if request.ctx.Err() != nil {
 					t.Fatal("constructor cancellation retired independent proof lifetime")
 				}
+				// Later Run/health observations own their own operation caller;
+				// the constructor's already-expired caller is no longer consulted.
+				engine.observe = func(ctx context.Context) (string, error) {
+					return "original-proof-constructor", ctx.Err()
+				}
 				var public atomic.Int32
 				// Network proof is an explicit model; actual Run sequencing and its
 				// required DNS/exit checks execute after the constructor has ended.
