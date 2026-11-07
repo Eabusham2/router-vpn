@@ -134,6 +134,7 @@ jobs:
         run: |
           bash -n client/install-macos-final.sh
           bash -n client/install-macos-complete.sh
+          python3 deploy/test_macos_image_identity.py
           python3 deploy/test_macos_installer_entry.py
           python3 deploy/test_macos_es_process_probe.py
           grep -Fq 'native AppKit app is the daily-use UI' client/install-macos-complete.sh

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Execute original-file and native main-image identity gates.
 
-Synthetic Mach-O records test bounded parsing only. Native tests execute copied
-Apple images and retain their original file identities through unlink; Linux
-execution does not claim to validate Apple's kernel or signature verifier.
+Synthetic Mach-O records test bounded parsing only. Native tests execute signed
+fixtures and copied Apple images, retaining original identities through unlink
+and exec; Linux execution does not validate Apple's kernel or signature verifier.
 """
 from __future__ import annotations
 
@@ -15,7 +15,10 @@ import io
 import json
 import os
 from pathlib import Path
+import platform
+import select
 import shutil
+import stat
 import struct
 import subprocess
 import sys
@@ -37,6 +40,162 @@ def load(source=None):
 
 
 M = load()
+
+
+NATIVE_EXEC_TRANSITION_PROGRAM = r"""
+#include <errno.h>
+#include <unistd.h>
+
+int main(int argc, char **argv) {
+    if (argc != 2 || argv[1][0] != '/') return 64;
+    if (write(STDOUT_FILENO, "R", 1) != 1) return 67;
+    char command = 0;
+    ssize_t count;
+    do { count = read(STDIN_FILENO, &command, 1); } while (count < 0 && errno == EINTR);
+    if (count != 1 || command != 'E') return 65;
+    char *const next[] = {argv[1], 0};
+    execv(argv[1], next);
+    return 66;
+}
+"""
+
+
+def native_exec_transition_seed(base, architecture):
+    """Build a direct executable with one explicit, parent-controlled exec.
+
+    No system shell or startup script owns an intermediate executable change.
+    Ordinary arm64/x86_64 are selected explicitly, as in the generation seed;
+    the copied Apple-signed sleep/cat tests remain separate native controls.
+    """
+    architectures = {'arm64': (0x0100000c, 0), 'x86_64': (0x01000007, 3)}
+    if architecture not in architectures:
+        raise RuntimeError('Native exec fixture has no supported ordinary architecture')
+    path = base/'native-exec-transition-seed'
+    if path.exists() or path.is_symlink():
+        raise RuntimeError('Native exec fixture seed already has an owner')
+    command = ['/usr/bin/xcrun', '--sdk', 'macosx', 'clang', '-arch', architecture,
+               '-O2', '-Wall', '-Wextra', '-Werror', '-x', 'c', '-', '-o', str(path)]
+    result = subprocess.run(command, input=NATIVE_EXEC_TRANSITION_PROGRAM, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+    if result.returncode:
+        raise RuntimeError('Native exec fixture compilation failed: '+(result.stdout + result.stderr)[-8000:])
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        info, header = os.fstat(descriptor), os.pread(descriptor, 32, 0)
+        if (not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111
+                or not os.path.samestat(info, path.lstat()) or len(header) != 32):
+            raise RuntimeError('Native exec fixture lacks its original executable file')
+        magic, cpu, subtype, kind, _, _, _, _ = struct.unpack('<IIIIIIII', header)
+        if magic != 0xfeedfacf or (cpu, subtype & 0x00ffffff) != architectures[architecture] or kind != 2:
+            raise RuntimeError('Native exec fixture is not the requested ordinary Mach-O executable')
+    finally:
+        os.close(descriptor)
+    return path
+
+
+class NativeExecBuild(unittest.TestCase):
+    def compile_fixture(self, architecture, *, actual=None, status=0):
+        with tempfile.TemporaryDirectory(prefix='native-exec-build-') as temporary:
+            commands = []
+            def compiler(command, **options):
+                commands.append((command, options))
+                if status == 0:
+                    cpu, subtype = actual or {'arm64': (0x0100000c, 0), 'x86_64': (0x01000007, 3)}[architecture]
+                    path = Path(command[-1])
+                    path.write_bytes(struct.pack('<IIIIIIII', 0xfeedfacf, cpu, subtype, 2, 0, 0, 0, 0))
+                    path.chmod(0o700)
+                return subprocess.CompletedProcess(command, status, '', 'compiler diagnostic')
+            with mock.patch.object(subprocess, 'run', side_effect=compiler):
+                path = native_exec_transition_seed(Path(temporary), architecture)
+            self.assertTrue(path.is_file())
+            return commands
+
+    def test_fixed_compiler_and_bounded_source_select_ordinary_architecture(self):
+        for architecture in ('arm64', 'x86_64'):
+            with self.subTest(architecture=architecture):
+                commands = self.compile_fixture(architecture)
+                self.assertEqual(len(commands), 1)
+                command, options = commands[0]
+                self.assertEqual(command[:6], ['/usr/bin/xcrun', '--sdk', 'macosx', 'clang', '-arch', architecture])
+                self.assertEqual(options['input'], NATIVE_EXEC_TRANSITION_PROGRAM)
+                self.assertEqual(options['timeout'], 30)
+                self.assertNotIn('shell', options)
+
+    def test_wrong_or_preview_architecture_cannot_supply_the_native_fixture(self):
+        for actual in ((0x0100000c, 2), (0x0100000c, 0x80000002), (0x01000007, 3)):
+            with self.subTest(actual=actual), self.assertRaisesRegex(RuntimeError, 'requested ordinary Mach-O'):
+                self.compile_fixture('arm64', actual=actual)
+        with self.assertRaisesRegex(RuntimeError, 'requested ordinary Mach-O'):
+            self.compile_fixture('x86_64', actual=(0x0100000c, 0))
+
+    def test_failed_compilation_is_not_retried_or_adopted(self):
+        with self.assertRaisesRegex(RuntimeError, 'compilation failed: compiler diagnostic'):
+            self.compile_fixture('x86_64', status=1)
+
+    def test_unknown_architecture_and_owned_output_never_invoke_compiler(self):
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(subprocess, 'run') as run:
+            base = Path(temporary)
+            with self.assertRaisesRegex(RuntimeError, 'supported ordinary architecture'):
+                native_exec_transition_seed(base, 'arm64e')
+            (base/'native-exec-transition-seed').write_bytes(b'original owner')
+            with self.assertRaisesRegex(RuntimeError, 'already has an owner'):
+                native_exec_transition_seed(base, 'x86_64')
+            run.assert_not_called()
+
+
+@unittest.skipUnless(sys.platform == 'linux', 'Linux fixture protocol; Darwin uses its actual native identity suite')
+class ExecTransitionProgram(unittest.TestCase):
+    """Actual Linux execution validates only the fixture's exec protocol."""
+    program = NATIVE_EXEC_TRANSITION_PROGRAM
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='native-exec-protocol-')
+        self.addCleanup(temporary.cleanup)
+        self.path = Path(temporary.name)/'exec-fixture'
+        compiler = shutil.which('cc')
+        self.assertIsNotNone(compiler, 'The fixture protocol gate requires an actual C compiler')
+        subprocess.run([compiler, '-O2', '-Wall', '-Wextra', '-Werror', '-x', 'c', '-', '-o', str(self.path)],
+                       input=self.program, text=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+
+    def launch(self):
+        child = subprocess.Popen([str(self.path), '/bin/cat'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        def cleanup():
+            if child.poll() is None: child.kill()
+            child.communicate(timeout=3)
+        self.addCleanup(cleanup)
+        ready, _, _ = select.select([child.stdout], [], [], 3)
+        self.assertTrue(ready, 'Native exec fixture did not announce its direct entry')
+        self.assertEqual(os.read(child.stdout.fileno(), 1), b'R')
+        return child
+
+    def test_program_execs_the_target_in_the_same_original_process(self):
+        child = self.launch()
+        executable = Path('/proc')/str(child.pid)/'exe'
+        self.assertEqual(executable.resolve(strict=True), self.path)
+        original = (Path('/proc')/str(child.pid)/'stat').read_text().rsplit(')', 1)[1].split()[19]
+        child.stdin.write(b'E'); child.stdin.flush()
+        deadline = time.monotonic() + 3
+        while True:
+            self.assertIsNone(child.poll(), 'Native fixture exited instead of executing its target')
+            try:
+                actual = executable.resolve(strict=True)
+            except FileNotFoundError:
+                self.fail('Native fixture disappeared instead of executing its target')
+            if actual == Path('/bin/cat').resolve(strict=True): break
+            self.assertLess(time.monotonic(), deadline, 'Native fixture did not exec its exact target')
+            time.sleep(0.01)
+        current = (Path('/proc')/str(child.pid)/'stat').read_text().rsplit(')', 1)[1].split()[19]
+        self.assertEqual(original, current, 'Fixture exec replaced its original PID/start identity')
+        output, failure = child.communicate(b'original-pipe\n', timeout=3)
+        self.assertEqual((child.returncode, output, failure), (0, b'original-pipe\n', b''))
+
+    def test_invalid_or_missing_trigger_cannot_execute_the_target(self):
+        for trigger in (b'', b'X'):
+            with self.subTest(trigger=trigger):
+                child = self.launch()
+                output, failure = child.communicate(trigger, timeout=3)
+                self.assertEqual(child.returncode, 65, 'Invalid trigger executed the target')
+                self.assertEqual((output, failure), (b'', b''))
 
 
 def directory(hash_type=2, identity=b'owned'):
@@ -370,12 +529,14 @@ class NativeMainImage(unittest.TestCase):
             child.communicate(timeout=3)
         self.addCleanup(cleanup)
         deadline = time.monotonic() + 3
+        observed = set()
         while time.monotonic() < deadline:
             self.assertIsNone(child.poll(), 'Original native fixture exited before capture')
             native, _, _ = self.installer.native_process_path(self.library, child.pid)
             if native == str(path): return child
+            observed.add(str(native))
             time.sleep(0.01)
-        self.fail('Original copied native fixture did not enter its exact executable')
+        self.fail('Original copied native fixture did not enter its exact executable; observed='+repr(sorted(observed)))
 
     def test_actual_copied_unlinked_main_image_keeps_its_original_code_identity(self):
         path, original = self.copy_image('/bin/sleep', 'owned-image')
@@ -420,9 +581,20 @@ class NativeMainImage(unittest.TestCase):
         self.assertIsNone(child.poll(), 'Wrong-generation control did not preserve its actual child')
 
     def test_actual_live_exec_invalidates_the_capture_without_lending_an_image(self):
-        path, _ = self.copy_image('/bin/sh', 'exec-transition-image')
-        child = self.launch(path, '-c', 'read line; exec /bin/cat')
+        seed = native_exec_transition_seed(self.base, platform.machine())
+        subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', '--timestamp=none',
+                        '--identifier', 'org.routervpn.fixture.exec-transition', str(seed)], check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        path, original_file = self.copy_image(seed, 'exec-transition-image')
+        target, target_file = self.copy_image('/bin/cat', 'exec-transition-target')
+        self.assertTrue(set(original_file['code_directory_hashes']).isdisjoint(target_file['code_directory_hashes']))
+        self.assertTrue(set(original_file['executable_uuids']).isdisjoint(target_file['executable_uuids']))
+        child = self.launch(path, str(target))
         original = self.image.native_unique(self.library, child.pid)
+        before = self.image.main_image_identity(self.library, child.pid, self.installer.native_process_state, system=self.system)
+        self.assertEqual((before['uniqueid'], before['idversion'], before['main_uuid']), original)
+        self.assertIn(before['code_directory_hash'], original_file['code_directory_hashes'])
+        self.assertIn(before['main_uuid'], original_file['executable_uuids'])
         calls = []
 
         def transition(pid, operation, output, size, token):
@@ -430,7 +602,8 @@ class NativeMainImage(unittest.TestCase):
             result = self.system.csops_audittoken(pid, operation, output, size, token)
             saved_error = ctypes.get_errno()
             self.assertEqual(result, 0, 'Original native image was not captured before exec')
-            child.stdin.write(b'exec\n'); child.stdin.flush()
+            self.assertEqual(ctypes.string_at(output, size).hex(), before['code_directory_hash'])
+            child.stdin.write(b'E'); child.stdin.flush()
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline:
                 self.assertIsNone(child.poll(), 'The original child exited instead of executing')
@@ -438,9 +611,11 @@ class NativeMainImage(unittest.TestCase):
                 if current != original:
                     self.assertEqual(current[0], original[0], 'Exec was replaced by a different process')
                     self.assertNotEqual(current[1], original[1], 'The actual exec generation did not advance')
-                    calls.append((original, current))
-                    ctypes.set_errno(saved_error)
-                    return result
+                    native, _, _ = self.installer.native_process_path(self.library, child.pid)
+                    if native == str(target):
+                        calls.append((original, current))
+                        ctypes.set_errno(saved_error)
+                        return result
                 time.sleep(0.01)
             self.fail('Original native child did not complete its requested exec within three seconds')
 
@@ -452,6 +627,12 @@ class NativeMainImage(unittest.TestCase):
         fresh = self.image.main_image_identity(self.library, child.pid, self.installer.native_process_state,
                                                system=self.system)
         self.assertEqual((fresh['uniqueid'], fresh['idversion'], fresh['main_uuid']), calls[0][1])
+        self.assertEqual(tuple(fresh[key] for key in ('pid', 'start_seconds', 'start_microseconds', 'uniqueid')),
+                         tuple(before[key] for key in ('pid', 'start_seconds', 'start_microseconds', 'uniqueid')))
+        self.assertIn(fresh['code_directory_hash'], target_file['code_directory_hashes'])
+        self.assertIn(fresh['main_uuid'], target_file['executable_uuids'])
+        self.assertNotIn(fresh['code_directory_hash'], original_file['code_directory_hashes'])
+        self.assertNotIn(fresh['main_uuid'], original_file['executable_uuids'])
         self.assertIsNone(child.poll(), 'Fresh capture did not retain the same live child')
 
 
@@ -485,7 +666,8 @@ def main():
             raise RuntimeError('Actual hosted main-image observation requires the installer privilege boundary')
         raise SystemExit(subprocess.run([sudo, '-n', '--', sys.executable, str(Path(__file__).resolve())]).returncode)
     before = hashlib.sha256(TARGET.read_bytes()).hexdigest()
-    suites = [ImageCapture, MainImageCapture]
+    suites = [ImageCapture, MainImageCapture, NativeExecBuild]
+    if sys.platform == 'linux': suites.append(ExecTransitionProgram)
     if sys.platform == 'darwin': suites.append(NativeMainImage)
     for case in suites:
         result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(case))
@@ -532,6 +714,24 @@ def main():
         if result.wasSuccessful() or result.errors or not result.failures:
             raise AssertionError('Image control did not fail its actual assertion: '+name)
         print('Rejected executed original-image defect: '+name, flush=True)
+    if sys.platform == 'linux':
+        # These mutations execute the same C source on Linux. They validate
+        # only the fixture protocol, never Darwin signature/kernel acceptance.
+        for name, needle, replacement, method, witness in (
+            ('omit-trigger-admission', "if (count != 1 || command != 'E') return 65;", '',
+             'test_invalid_or_missing_trigger_cannot_execute_the_target', 'Invalid trigger executed the target'),
+            ('omit-actual-exec', 'execv(argv[1], next);', '(void)next; return 0;',
+             'test_program_execs_the_target_in_the_same_original_process', 'instead of executing its target'),
+        ):
+            if NATIVE_EXEC_TRANSITION_PROGRAM.count(needle) != 1:
+                raise AssertionError('Exec fixture control lost its actual source seam: '+name)
+            broken = type('BrokenExecTransition', (ExecTransitionProgram,),
+                          {'program': NATIVE_EXEC_TRANSITION_PROGRAM.replace(needle, replacement, 1)})
+            output = io.StringIO()
+            result = unittest.TextTestRunner(stream=output).run(broken(method))
+            if result.wasSuccessful() or result.errors or not result.failures or witness not in output.getvalue():
+                raise AssertionError('Exec fixture defect lacked its intended executed assertion: '+name+'\n'+output.getvalue())
+            print('Rejected executed fixture-only exec defect: '+name, flush=True)
     if before != hashlib.sha256(TARGET.read_bytes()).hexdigest():
         raise RuntimeError('Original-image source changed during verification')
     if sys.platform == 'darwin': later_host_observation()
