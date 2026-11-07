@@ -1,0 +1,271 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+)
+
+// The constructor pins the original Box endpoint, source digest and application
+// TUN before authentication. The first connected observation additionally pins
+// the actual native transport generation and negotiated packet capacity. No
+// later reconnect, endpoint or reader replacement can establish a new owner.
+type routerVPNImportedOpenVPN struct {
+	mu      sync.Mutex
+	read    func(context.Context) (nativeopenvpn.PacketObservation, error)
+	current func(context.Context) error
+	tun     *routerVPNNodeMTU
+	record  routerVPNNodeMTURecord
+	inbound routerVPNDesktopMTUTUN
+	remote  nativeopenvpn.Remote
+	minimum uint32
+	state   *nativeopenvpn.PacketObservation
+	retired error
+	// Immutable timestamps retain Go's monotonic clock. The loop can inspect
+	// freshness even when a caller is waiting for this observer's mutex.
+	observedAt atomic.Pointer[time.Time]
+}
+
+func newRouterVPNImportedOpenVPN(ctx context.Context, instance *box.Box, raw []byte, tun *routerVPNNodeMTU) (*routerVPNImportedOpenVPN, error) {
+	if ctx == nil || instance == nil || tun == nil {
+		return nil, routerVPNExternalFailure
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(raw)
+	var graph map[string]any
+	if len(raw) == 0 || len(raw) > 4<<20 || hex.EncodeToString(digest[:]) != tun.record.Config || json.Unmarshal(raw, &graph) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	var entry map[string]any
+	rows, _ := graph["endpoints"].([]any)
+	for _, value := range rows {
+		candidate, ok := value.(map[string]any)
+		if ok && candidate["tag"] == "entry-wg" {
+			if entry != nil {
+				return nil, routerVPNExternalFailure
+			}
+			entry = candidate
+		}
+	}
+	if entry == nil || entry["type"] != "openvpn-client" {
+		return nil, ctx.Err()
+	}
+	remotes, err := nativeopenvpn.Remotes(entry)
+	mtu, ok := entry["mtu"].(float64)
+	if err != nil || len(remotes) != 1 || !ok || mtu < 1280 || mtu > 65535 || mtu != float64(uint32(mtu)) || entry["system"] != false {
+		return nil, routerVPNExternalFailure
+	}
+	first, found, err := adapter.RouterVPNOutboundContext(ctx, instance.Outbound(), "entry-wg")
+	if err != nil || !found {
+		return nil, errors.Join(err, routerVPNExternalFailure)
+	}
+	endpoint, ok := first.(interface {
+		RouterVPNConnectedCapacityContext(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error)
+	})
+	if !ok {
+		return nil, routerVPNExternalFailure
+	}
+	owner := &routerVPNImportedOpenVPN{tun: tun, record: tun.record, inbound: tun.inbound, remote: remotes[0], minimum: uint32(mtu)}
+	owner.current = func(call context.Context) error {
+		actual, found, err := adapter.RouterVPNOutboundContext(call, instance.Outbound(), "entry-wg")
+		if err != nil || !found || actual != first {
+			return errors.Join(err, routerVPNExternalFailure)
+		}
+		return call.Err()
+	}
+	owner.read = func(call context.Context) (nativeopenvpn.PacketObservation, error) {
+		receipt, capacity, err := endpoint.RouterVPNConnectedCapacityContext(call)
+		return nativeopenvpn.PacketObservation{Remote: receipt, MTU: capacity}, err
+	}
+	if err := owner.pinned(ctx); err != nil {
+		return nil, err
+	}
+	return owner, nil
+}
+
+// This check never waits for the connected-observation mutex. The mailbox can
+// therefore notice cancellation while its worker is inside a native status,
+// auth or packet-device read. It only reads immutable captured fields and the
+// loop's TUN record, which the joined mailbox keeps unchanged until return.
+func (owner *routerVPNImportedOpenVPN) pinned(ctx context.Context) error {
+	if owner == nil || ctx == nil || owner.tun == nil || owner.tun.engine == nil || owner.inbound == nil || owner.current == nil {
+		return routerVPNExternalFailure
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := owner.current(ctx); err != nil {
+		return err
+	}
+	r, original := owner.tun.record, owner.record
+	if r.Session != original.Session || r.Config != original.Config || r.Path != original.Path ||
+		r.Reader != original.Reader || r.Interface != original.Interface || r.Index != original.Index || r.MTU != original.MTU ||
+		r.Reader == 0 || r.Path == "" || r.MTU < 1280 || r.Active || r.Failure != "" || owner.tun.inbound != owner.inbound {
+		return routerVPNExternalFailure
+	}
+	actual, err := owner.tun.engine.CurrentContext(ctx)
+	if err != nil {
+		return err
+	}
+	if actual != owner.inbound {
+		return routerVPNExternalFailure
+	}
+	reader, ok := owner.inbound.(interface {
+		RouterVPNDesktopMTUInterfaceContext(context.Context) (string, int, int, error)
+	})
+	if !ok {
+		return routerVPNExternalFailure
+	}
+	name, index, mtu, err := reader.RouterVPNDesktopMTUInterfaceContext(ctx)
+	if err != nil {
+		return err
+	}
+	if name != original.Interface || index != original.Index || mtu != original.MTU {
+		return routerVPNExternalFailure
+	}
+	return owner.current(ctx)
+}
+
+func (owner *routerVPNImportedOpenVPN) observe(ctx context.Context) (nativeopenvpn.PacketObservation, error) {
+	empty := nativeopenvpn.PacketObservation{}
+	if owner == nil || ctx == nil || owner.read == nil {
+		return empty, routerVPNExternalFailure
+	}
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return empty, err
+	}
+	defer owner.mu.Unlock()
+	if owner.retired != nil {
+		return empty, owner.retired
+	}
+	fail := func(err error) (nativeopenvpn.PacketObservation, error) {
+		// A deadline controls this observation only. It neither replaces the
+		// initial receipt nor retires a healthy retained native connection.
+		if ctx.Err() != nil {
+			return empty, ctx.Err()
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return empty, err
+		}
+		owner.retired = err
+		return empty, err
+	}
+	if err := owner.pinned(ctx); err != nil {
+		return fail(err)
+	}
+	state, err := owner.read(ctx)
+	if err != nil {
+		if errors.Is(err, nativeopenvpn.ErrRemotePending) && owner.state == nil {
+			if err := owner.pinned(ctx); err != nil {
+				return fail(err)
+			}
+			return empty, nativeopenvpn.ErrRemotePending
+		}
+		if errors.Is(err, nativeopenvpn.ErrRemotePending) {
+			return fail(errors.New("original imported OpenVPN connection retired"))
+		}
+		return fail(err)
+	}
+	if err := owner.pinned(ctx); err != nil {
+		return fail(err)
+	}
+	if state.Validate() != nil || state.Remote.Remote != owner.remote || state.MTU < owner.minimum {
+		return fail(routerVPNExternalFailure)
+	}
+	if owner.state != nil && state != *owner.state {
+		return fail(errors.New("original imported OpenVPN connection or capacity changed"))
+	}
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
+	if owner.state == nil {
+		captured := state
+		owner.state = &captured
+	}
+	observed := time.Now()
+	owner.observedAt.Store(&observed)
+	return state, nil
+}
+
+// Periodic admission leaves room inside the existing two-second heartbeat
+// freshness contract for a busy native reader to recover. A stale read grants
+// no mailbox, MTU command or heartbeat publication. Only an actual successful
+// original-tuple observation advances observedAt; a deadline cannot renew it.
+func (owner *routerVPNImportedOpenVPN) refresh(parent context.Context) (bool, error) {
+	if owner == nil {
+		return true, nil
+	}
+	if parent == nil {
+		return false, routerVPNExternalFailure
+	}
+	limit := time.Now().Add(250 * time.Millisecond)
+	if observed := owner.observedAt.Load(); observed != nil && observed.Add(2*time.Second).Before(limit) {
+		limit = observed.Add(2 * time.Second)
+	}
+	ctx, cancel := context.WithDeadline(parent, limit)
+	defer cancel()
+	err := owner.tun.currentContext(ctx)
+	if err == nil {
+		_, err = owner.observe(ctx)
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) && parent.Err() == nil {
+		observed := owner.observedAt.Load()
+		if observed != nil && time.Since(*observed) < 2*time.Second {
+			return false, nil
+		}
+		return false, errors.New("original imported OpenVPN observation exceeded heartbeat freshness")
+	}
+	return err == nil, err
+}
+
+func (owner *routerVPNImportedOpenVPN) healthy(parent context.Context) error {
+	if owner == nil {
+		return nil
+	}
+	if parent == nil {
+		return routerVPNExternalFailure
+	}
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+	defer cancel()
+	_, err := owner.observe(ctx)
+	if errors.Is(err, nativeopenvpn.ErrRemotePending) {
+		// Only initial pending is allowed. observe marks post-capture loss
+		// terminal, so it must not retain the pending sentinel in that case.
+		return nil
+	}
+	return err
+}
+
+func (owner *routerVPNImportedOpenVPN) await(ctx context.Context) (nativeopenvpn.PacketObservation, error) {
+	if ctx == nil {
+		return nativeopenvpn.PacketObservation{}, routerVPNExternalFailure
+	}
+	for {
+		state, err := owner.observe(ctx)
+		if !errors.Is(err, nativeopenvpn.ErrRemotePending) {
+			return state, err
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nativeopenvpn.PacketObservation{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}

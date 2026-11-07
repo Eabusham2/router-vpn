@@ -8,12 +8,15 @@ import (
 	"errors"
 	"os"
 	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
 )
 
 // This narrow mailbox belongs to the already retained native Box. It grants no
 // socket, resolver, graph or NodeProfile authority. The original compiled DNS
 // router and its uncached native proof perform every exchange.
 type routerVPNImportedDNSRequest struct {
+	Operation  string `json:"operation,omitempty"`
 	Schema     int    `json:"schema"`
 	Session    string `json:"session_id"`
 	Config     string `json:"config_sha256"`
@@ -26,6 +29,7 @@ type routerVPNImportedDNSRequest struct {
 }
 
 type routerVPNImportedDNSResult struct {
+	OpenVPN *nativeopenvpn.PacketObservation `json:"openvpn,omitempty"`
 	routerVPNImportedDNSRequest
 	Status       string  `json:"status"`
 	Interface    string  `json:"interface"`
@@ -35,8 +39,18 @@ type routerVPNImportedDNSResult struct {
 }
 
 func routerVPNConsumeImportedDNS(parent context.Context, files *routerVPNExternalFiles, owner *routerVPNNodeMTU,
-	generation *uint64, proof func(context.Context) error) error {
+	generation *uint64, proof func(context.Context) error, observed ...*routerVPNImportedOpenVPN) error {
 	if parent == nil || parent.Err() != nil || files == nil || files.root == nil || owner == nil || generation == nil || proof == nil {
+		return routerVPNExternalFailure
+	}
+	var openVPN *routerVPNImportedOpenVPN
+	if len(observed) > 1 {
+		return routerVPNExternalFailure
+	}
+	if len(observed) == 1 {
+		openVPN = observed[0]
+	}
+	if openVPN != nil && openVPN.tun != owner {
 		return routerVPNExternalFailure
 	}
 	info, err := files.root.Lstat("node-dns-request.json")
@@ -50,6 +64,7 @@ func routerVPNConsumeImportedDNS(parent context.Context, files *routerVPNExterna
 		request.Session != owner.record.Session || request.Config != owner.record.Config || request.Path != owner.record.Path ||
 		request.Reader != owner.record.Reader || request.MTU != owner.record.MTU || !routerVPNExternalSession.MatchString(request.Request) ||
 		*generation == ^uint64(0) || request.Generation != *generation+1 || owner.record.Active || owner.record.Failure != "" ||
+		request.Operation != "" && (request.Operation != "openvpn-observe" || openVPN == nil) ||
 		request.Deadline <= now.UnixMilli() || request.Deadline > now.Add(6*time.Second).UnixMilli() {
 		return routerVPNExternalFailure
 	}
@@ -82,6 +97,7 @@ func routerVPNConsumeImportedDNS(parent context.Context, files *routerVPNExterna
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	var queryErr error
+	var observedState *nativeopenvpn.PacketObservation
 	var cancelInfo os.FileInfo
 	retired := false
 	joined := false
@@ -94,7 +110,28 @@ func routerVPNConsumeImportedDNS(parent context.Context, files *routerVPNExterna
 		cancelInfo, joined = candidate, true
 		cancel()
 	} else {
-		go func() { done <- proof(query) }()
+		go func() {
+			if openVPN != nil {
+				state, err := openVPN.await(query)
+				if err != nil {
+					done <- err
+					return
+				}
+				if request.Operation == "openvpn-observe" {
+					observedState = &state
+					done <- nil
+					return
+				}
+			}
+			// Connected packet capacity is not selected-DNS evidence. The
+			// original uncached native resolver must independently succeed,
+			// bracketed by the same entry connection when one is retained.
+			err := proof(query)
+			if err == nil && openVPN != nil {
+				_, err = openVPN.observe(query)
+			}
+			done <- err
+		}()
 	}
 	for !joined {
 		select {
@@ -109,7 +146,7 @@ func routerVPNConsumeImportedDNS(parent context.Context, files *routerVPNExterna
 				continue
 			}
 			if current(query) != nil {
-				retired = true
+				retired = query.Err() == nil
 				cancel()
 				continue
 			}
@@ -137,7 +174,10 @@ func routerVPNConsumeImportedDNS(parent context.Context, files *routerVPNExterna
 	} else if queryErr != nil || elapsed <= 0 {
 		status = "failed"
 	}
-	result := routerVPNImportedDNSResult{routerVPNImportedDNSRequest: request, Status: status,
+	if status != "passed" {
+		observedState = nil
+	}
+	result := routerVPNImportedDNSResult{OpenVPN: observedState, routerVPNImportedDNSRequest: request, Status: status,
 		Interface: owner.record.Interface, Index: owner.record.Index, ProvedAt: time.Now().UnixMilli(), Milliseconds: float64(elapsed.Nanoseconds()) / 1e6}
 	if files.publish("node-dns-result.json", result) != nil || current(parent) != nil {
 		return routerVPNExternalFailure

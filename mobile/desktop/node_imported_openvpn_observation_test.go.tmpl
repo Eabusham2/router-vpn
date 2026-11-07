@@ -1,0 +1,429 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"net"
+	"os"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	E "github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// These controls substitute endpoint readback and platform TUN only. The Box,
+// endpoint manager, constructor, original-owner checks and joined mailbox are
+// production. The separately required native test below supplies real TLS/data.
+type importedOpenVPNEndpointFixture struct {
+	tag  string
+	read func(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error)
+}
+
+func (e *importedOpenVPNEndpointFixture) Type() string                 { return "openvpn-client" }
+func (e *importedOpenVPNEndpointFixture) Tag() string                  { return e.tag }
+func (*importedOpenVPNEndpointFixture) Network() []string              { return []string{"tcp", "udp"} }
+func (*importedOpenVPNEndpointFixture) Dependencies() []string         { return nil }
+func (*importedOpenVPNEndpointFixture) Start(adapter.StartStage) error { return nil }
+func (*importedOpenVPNEndpointFixture) Close() error                   { return nil }
+func (*importedOpenVPNEndpointFixture) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+	return nil, errors.New("readback fixture cannot dial")
+}
+func (*importedOpenVPNEndpointFixture) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("readback fixture cannot resolve")
+}
+func (e *importedOpenVPNEndpointFixture) RouterVPNConnectedCapacityContext(ctx context.Context) (nativeopenvpn.RemoteReceipt, uint32, error) {
+	return e.read(ctx)
+}
+
+func importedOpenVPNStateFixture() nativeopenvpn.PacketObservation {
+	return nativeopenvpn.PacketObservation{Remote: nativeopenvpn.RemoteReceipt{Remote: nativeopenvpn.Remote{Host: "203.0.113.24", Port: 1194, Network: "udp"}, Generation: 1, ConnectedAt: 1700000000000}, MTU: 1500}
+}
+func importedOpenVPNBoxFixture(t *testing.T) (*box.Box, []byte, *routerVPNNodeMTU, *importedOpenVPNEndpointFixture) {
+	t.Helper()
+	registry := include.EndpointRegistry()
+	endpoint := &importedOpenVPNEndpointFixture{tag: "entry-wg"}
+	endpoint.read = func(ctx context.Context) (nativeopenvpn.RemoteReceipt, uint32, error) {
+		s := importedOpenVPNStateFixture()
+		return s.Remote, s.MTU, ctx.Err()
+	}
+	var created atomic.Int32
+	E.Register[option.OpenVPNClientEndpointOptions](registry, "openvpn-client", func(context.Context, adapter.Router, log.ContextLogger, string, option.OpenVPNClientEndpointOptions) (adapter.Endpoint, error) {
+		if created.Add(1) > 1 {
+			replacement := *endpoint
+			return &replacement, nil
+		}
+		return endpoint, nil
+	})
+	ctx := box.Context(context.Background(), include.InboundRegistry(), include.OutboundRegistry(), registry, include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	raw := []byte(`{"log":{"disabled":true},"endpoints":[{"type":"openvpn-client","tag":"entry-wg","system":false,"server":"203.0.113.24","server_port":1194,"network":"udp","mtu":1420}],"outbounds":[{"type":"direct","tag":"proxy"}],"route":{"final":"proxy"}}`)
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := instance.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	tun, _, _ := desktopNodeMTUFixture(t)
+	digest := sha256.Sum256(raw)
+	tun.record.Config = hex.EncodeToString(digest[:])
+	return instance, raw, tun, endpoint
+}
+func importedOpenVPNFixture(t *testing.T) (*routerVPNImportedOpenVPN, *box.Box, *importedOpenVPNEndpointFixture, []byte) {
+	t.Helper()
+	instance, raw, tun, endpoint := importedOpenVPNBoxFixture(t)
+	owner, err := newRouterVPNImportedOpenVPN(context.Background(), instance, raw, tun)
+	if err != nil || owner == nil {
+		t.Fatal("original observer not captured", err)
+	}
+	importedOpenVPNGuardFixture(owner)
+	return owner, instance, endpoint, raw
+}
+
+func importedOpenVPNGuardFixture(owner *routerVPNImportedOpenVPN) {
+	original := owner.tun.guardContext
+	owner.tun.guardContext = func(ctx context.Context) error {
+		if err := original(ctx); err != nil {
+			return err
+		}
+		return owner.pinned(ctx)
+	}
+}
+
+func TestRouterVPNImportedOpenVPNConstructor(t *testing.T) {
+	for _, fault := range []string{"original", "digest", "duplicate-entry", "system", "multiple-remotes", "nonliteral", "capacity", "expired", "replacement-before-ready"} {
+		t.Run(fault, func(t *testing.T) {
+			instance, raw, tun, endpoint := importedOpenVPNBoxFixture(t)
+			ctx := context.Background()
+			switch fault {
+			case "digest":
+				tun.record.Config = strings.Repeat("f", 64)
+			case "duplicate-entry":
+				raw = []byte(strings.Replace(string(raw), `],"outbounds"`, `,{"type":"direct","tag":"entry-wg"}],"outbounds"`, 1))
+			case "system":
+				raw = []byte(strings.Replace(string(raw), `"system":false`, `"system":true`, 1))
+			case "multiple-remotes":
+				raw = []byte(strings.Replace(string(raw), `"server":"203.0.113.24","server_port":1194`, `"servers":[{"server":"203.0.113.24","server_port":1194,"network":"udp"},{"server":"203.0.113.25","server_port":1194,"network":"udp"}]`, 1))
+			case "nonliteral":
+				raw = []byte(strings.Replace(string(raw), `203.0.113.24`, `provider.example`, 1))
+			case "capacity":
+				raw = []byte(strings.Replace(string(raw), `"mtu":1420`, `"mtu":1279`, 1))
+			case "expired":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			if fault != "digest" {
+				digest := sha256.Sum256(raw)
+				tun.record.Config = hex.EncodeToString(digest[:])
+			}
+			owner, err := newRouterVPNImportedOpenVPN(ctx, instance, raw, tun)
+			if fault != "original" && fault != "replacement-before-ready" {
+				if err == nil || owner != nil {
+					t.Fatal("unowned constructor admitted", fault)
+				}
+				if fault == "expired" && !errors.Is(err, context.Canceled) {
+					t.Fatal("constructor lost original cancellation", err)
+				}
+				return
+			}
+			if err != nil || owner == nil {
+				t.Fatal(err)
+			}
+			if fault == "replacement-before-ready" {
+				endpoint.read = func(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error) {
+					return nativeopenvpn.RemoteReceipt{}, 0, nativeopenvpn.ErrRemotePending
+				}
+				if _, err := owner.observe(ctx); !errors.Is(err, nativeopenvpn.ErrRemotePending) {
+					t.Fatal("initial pending changed", err)
+				}
+				if err := instance.Endpoint().Remove("entry-wg"); err != nil {
+					t.Fatal(err)
+				}
+				endpoint.read = func(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error) {
+					state := importedOpenVPNStateFixture()
+					return state.Remote, state.MTU, nil
+				}
+				if err := instance.Endpoint().Create(ctx, instance.Router(), log.NewNOPFactory().Logger(), "entry-wg", "openvpn-client", &option.OpenVPNClientEndpointOptions{}); err != nil {
+					t.Fatal(err)
+				}
+				// The manager is the real captured manager. A replacement under the same
+				// tag must fail even before the first successful native TLS observation.
+				if _, err := owner.observe(ctx); err == nil || errors.Is(err, nativeopenvpn.ErrRemotePending) {
+					t.Fatal("replacement endpoint acquired the original pending owner", err)
+				}
+				if owner.state != nil || owner.retired == nil {
+					t.Fatal("pending owner was recaptured")
+				}
+				return
+			}
+			state, err := owner.observe(ctx)
+			if err != nil || state != importedOpenVPNStateFixture() {
+				t.Fatal("original capacity not retained", state, err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNImportedOpenVPNOriginalTuple(t *testing.T) {
+	for _, fault := range []string{"generation", "remote", "port", "network", "connected-at", "capacity", "too-small", "pending", "reader", "reader-pointer", "interface", "index", "tun-mtu", "path", "source", "active", "failure"} {
+		t.Run(fault, func(t *testing.T) {
+			owner, _, endpoint, _ := importedOpenVPNFixture(t)
+			original, err := owner.observe(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			record := owner.tun.record
+			inbound := owner.tun.inbound
+			next := original
+			switch fault {
+			case "generation":
+				next.Remote.Generation++
+			case "remote":
+				next.Remote.Host = "203.0.113.25"
+			case "port":
+				next.Remote.Port++
+			case "network":
+				next.Remote.Network = "tcp"
+			case "connected-at":
+				next.Remote.ConnectedAt++
+			case "capacity":
+				next.MTU++
+			case "too-small":
+				next.MTU = 1280
+			case "reader":
+				owner.tun.record.Reader++
+			case "reader-pointer":
+				owner.tun.inbound = &desktopMTUTUNFixture{index: 17, mtu: 1420}
+			case "interface":
+				owner.tun.record.Interface = "foreign"
+			case "index":
+				owner.tun.record.Index++
+			case "tun-mtu":
+				owner.tun.record.MTU++
+			case "path":
+				owner.tun.record.Path = strings.Repeat("f", 64)
+			case "source":
+				owner.tun.record.Config = strings.Repeat("f", 64)
+			case "active":
+				owner.tun.record.Active = true
+			case "failure":
+				owner.tun.record.Failure = "unconfirmed"
+			}
+			endpoint.read = func(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error) {
+				if fault == "pending" {
+					return nativeopenvpn.RemoteReceipt{}, 0, nativeopenvpn.ErrRemotePending
+				}
+				return next.Remote, next.MTU, nil
+			}
+			if _, err := owner.observe(context.Background()); err == nil || errors.Is(err, nativeopenvpn.ErrRemotePending) {
+				t.Fatal("original tuple loss not terminal", fault, err)
+			}
+			owner.tun.record, owner.tun.inbound = record, inbound
+			endpoint.read = func(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error) {
+				return original.Remote, original.MTU, nil
+			}
+			if _, err := owner.observe(context.Background()); err == nil || owner.state == nil || *owner.state != original {
+				t.Fatal("retired child re-adopted a connection", fault, err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNImportedOpenVPNCallerContext(t *testing.T) {
+	for _, fault := range []string{"owner-held", "native-held", "late-success"} {
+		t.Run(fault, func(t *testing.T) {
+			owner, _, endpoint, _ := importedOpenVPNFixture(t)
+			original, err := owner.observe(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			observed := owner.observedAt.Load()
+			if observed == nil {
+				t.Fatal("original connected observation has no freshness")
+			}
+			type key struct{}
+			ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), key{}, "original"), 20*time.Millisecond)
+			defer cancel()
+			if fault == "owner-held" {
+				owner.mu.Lock()
+			} else {
+				endpoint.read = func(call context.Context) (nativeopenvpn.RemoteReceipt, uint32, error) {
+					expected, _ := ctx.Deadline()
+					actual, ok := call.Deadline()
+					if !ok || !actual.Equal(expected) || call.Value(key{}) != "original" {
+						t.Error("actual native observation lost caller")
+					}
+					<-call.Done()
+					if fault == "late-success" {
+						next := original
+						next.Remote.Generation++
+						return next.Remote, next.MTU, nil
+					}
+					return nativeopenvpn.RemoteReceipt{}, 0, call.Err()
+				}
+			}
+			_, err = owner.observe(ctx)
+			if fault == "owner-held" {
+				owner.mu.Unlock()
+			}
+			if !errors.Is(err, context.DeadlineExceeded) || owner.retired != nil || owner.state == nil || *owner.state != original || owner.observedAt.Load() != observed {
+				t.Fatal("expiry retired or replaced healthy connection", fault, err)
+			}
+			endpoint.read = func(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error) {
+				return original.Remote, original.MTU, nil
+			}
+			if state, err := owner.observe(context.Background()); err != nil || state != original {
+				t.Fatal("original connection could not resume observation", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNImportedOpenVPNMailbox(t *testing.T) {
+	for _, fault := range []string{"observe", "dns", "dns-failed", "reconnect-during-dns", "unknown-operation", "foreign-observer", "missing-observer"} {
+		t.Run(fault, func(t *testing.T) {
+			owner, _, endpoint, raw := importedOpenVPNFixture(t)
+			files, request := importedDNSFiles(t, owner.tun, raw)
+			tun := owner.tun
+			if fault == "observe" {
+				request.Operation = "openvpn-observe"
+			}
+			if fault == "unknown-operation" {
+				request.Operation = "unowned"
+			}
+			if fault == "foreign-observer" {
+				owner, _, _, _ = importedOpenVPNFixture(t)
+			}
+			if fault == "missing-observer" {
+				request.Operation, owner = "openvpn-observe", nil
+			}
+			importedDNSWrite(t, files, "node-dns-request.json", request)
+			calls := 0
+			var generation uint64
+			err := routerVPNConsumeImportedDNS(context.Background(), files, tun, &generation, func(context.Context) error {
+				calls++
+				if fault == "dns-failed" {
+					return errors.New("selected resolver refused")
+				}
+				if fault == "reconnect-during-dns" {
+					next := importedOpenVPNStateFixture()
+					next.Remote.Generation++
+					endpoint.read = func(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error) { return next.Remote, next.MTU, nil }
+				}
+				return nil
+			}, owner)
+			body, readErr := files.read("node-dns-result.json", 4096)
+			if fault == "unknown-operation" || fault == "foreign-observer" || fault == "missing-observer" {
+				if err == nil || readErr == nil || calls != 0 {
+					t.Fatal("unknown operation acquired proof")
+				}
+				return
+			}
+			var result routerVPNImportedDNSResult
+			if err != nil || readErr != nil || !routerVPNMTUStrict(body, &result) {
+				t.Fatal(err, readErr)
+			}
+			want := "passed"
+			if fault == "dns-failed" || fault == "reconnect-during-dns" {
+				want = "failed"
+			}
+			if result.Status != want || generation != 1 {
+				t.Fatal("observation lent DNS authority", result.Status, generation)
+			}
+			if fault == "observe" {
+				if calls != 0 || result.OpenVPN == nil || *result.OpenVPN != importedOpenVPNStateFixture() {
+					t.Fatal("observation used DNS or lost real readback")
+				}
+			} else if calls != 1 || result.OpenVPN != nil {
+				t.Fatal("DNS and packet receipt conflated", calls, result.OpenVPN)
+			}
+		})
+	}
+}
+
+func TestRouterVPNImportedOpenVPNCancellationJoins(t *testing.T) {
+	owner, _, endpoint, raw := importedOpenVPNFixture(t)
+	original, err := owner.observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, request := importedDNSFiles(t, owner.tun, raw)
+	request.Operation = "openvpn-observe"
+	importedDNSWrite(t, files, "node-dns-request.json", request)
+	entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	endpoint.read = func(ctx context.Context) (nativeopenvpn.RemoteReceipt, uint32, error) {
+		close(entered)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+		next := original
+		next.Remote.Generation++
+		return next.Remote, next.MTU, nil
+	}
+	var generation uint64
+	var dns atomic.Int32
+	done := make(chan error, 1)
+	go func() {
+		done <- routerVPNConsumeImportedDNS(context.Background(), files, owner.tun, &generation, func(context.Context) error { dns.Add(1); return nil }, owner)
+	}()
+	<-entered
+	importedDNSWrite(t, files, "node-dns-cancel.json", request)
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("mailbox cancellation blocked behind native observation")
+	}
+	select {
+	case err := <-done:
+		t.Fatal("native query returned before its worker joined", err)
+	default:
+	}
+	if _, err := files.root.Lstat("node-dns-result.json"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("receipt published before worker joined")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.read("node-dns-result.json", 4096)
+	var result routerVPNImportedDNSResult
+	if err != nil || !routerVPNMTUStrict(body, &result) || result.Status != "cancelled" || result.OpenVPN != nil || dns.Load() != 0 || owner.retired != nil || *owner.state != original {
+		t.Fatal("late success adopted after cancellation", err, result)
+	}
+	endpoint.read = func(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error) {
+		return original.Remote, original.MTU, nil
+	}
+	if state, err := owner.observe(context.Background()); err != nil || state != original {
+		t.Fatal("cancelled read retired original endpoint", err)
+	}
+}
+
+var importedOpenVPNNativeConnected func(*testing.T)
+
+func TestRouterVPNImportedOpenVPNNativeConnected(t *testing.T) {
+	if importedOpenVPNNativeConnected == nil {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_OPENVPN_OBSERVATION") == "1" {
+			t.Fatal("real imported OpenVPN observation requires native TLS/data fixtures")
+		}
+		t.Skip("requires with_openvpn and routervpn_openvpn_remote_test")
+	}
+	importedOpenVPNNativeConnected(t)
+}

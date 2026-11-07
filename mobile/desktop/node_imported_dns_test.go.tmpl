@@ -18,6 +18,7 @@ import (
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/common/dialer"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/log"
@@ -217,6 +218,11 @@ func TestRouterVPNImportedDNSNativeRouterIsUncached(t *testing.T) {
 	var failed atomic.Bool
 	var queries atomic.Int32
 	server := &dns.Server{Listener: listener, Net: "tcp", Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		peer, ok := w.RemoteAddr().(*net.TCPAddr)
+		if !ok || !peer.IP.Equal(net.IPv4(127, 0, 0, 1)) {
+			t.Error("selected native DNS lost its explicit loopback source")
+			return
+		}
 		queries.Add(1)
 		answer := new(dns.Msg).SetReply(q)
 		if failed.Load() {
@@ -238,7 +244,7 @@ func TestRouterVPNImportedDNSNativeRouterIsUncached(t *testing.T) {
 	ctx, cancel := context.WithCancel(box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry()))
 	defer cancel()
 	graph, _ := json.Marshal(map[string]any{"log": map[string]any{"disabled": true}, "inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in"}},
-		"outbounds": []any{map[string]any{"type": "direct", "tag": "proxy"}}, "dns": map[string]any{"servers": []any{map[string]any{"type": "tcp", "tag": "selected-dns", "server": "127.0.0.1", "server_port": listener.Addr().(*net.TCPAddr).Port, "detour": "proxy"}}, "final": "selected-dns"}, "route": map[string]any{"final": "proxy"}})
+		"outbounds": []any{map[string]any{"type": "direct", "tag": "proxy", "inet4_bind_address": "127.0.0.1"}}, "dns": map[string]any{"servers": []any{map[string]any{"type": "tcp", "tag": "selected-dns", "server": "127.0.0.1", "server_port": listener.Addr().(*net.TCPAddr).Port, "detour": "proxy"}}, "final": "selected-dns"}, "route": map[string]any{"final": "proxy"}})
 	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, graph)
 	if err != nil {
 		t.Fatal(err)
@@ -248,6 +254,12 @@ func TestRouterVPNImportedDNSNativeRouterIsUncached(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer instance.Close()
+	// The pinned DNS transport rejects a detour to an empty direct outbound.
+	// Keep an actual source-bound socket policy on the selected proxy, and
+	// exercise that same admission before unrelated host network startup.
+	if err := dialer.InitializeDetour(dialer.NewDetour(instance.Outbound(), "proxy", false)); err != nil {
+		t.Fatal("selected native DNS detour rejected", err)
+	}
 	if err := instance.RouterVPNStrategyStart(); err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,154 @@
+//go:build with_openvpn && routervpn_openvpn_remote_test
+
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"net"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	O "github.com/sagernet/sing-box/protocol/openvpn"
+)
+
+func init() { importedOpenVPNNativeConnected = testImportedOpenVPNNativeConnected }
+
+// The provider, original mutual TLS/data endpoint, Box endpoint manager,
+// connected capacity observation, selected DNS and mailbox are real. Only the
+// public physical tuple maps to loopback, and the application TUN readback is
+// the explicit platform fixture; this is not privileged TUN acceptance.
+func testImportedOpenVPNNativeConnected(t *testing.T) {
+	for _, network := range []string{"tcp", "udp"} {
+		t.Run(network, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var queries atomic.Int32
+			var denied atomic.Bool
+			server := &dns.Server{Listener: listener, Net: "tcp", Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+				queries.Add(1)
+				answer := new(dns.Msg).SetReply(q)
+				if denied.Load() {
+					answer.Rcode = dns.RcodeNameError
+				} else {
+					answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: net.ParseIP("93.184.216.34")}}
+				}
+				_ = w.WriteMsg(answer)
+			})}
+			dnsDone := make(chan error, 1)
+			go func() { dnsDone <- server.ActivateAndServe() }()
+			defer func() { _ = server.Shutdown(); <-dnsDone }()
+			pki := remoteNativeOpenVPNNativePKI(t)
+			port := remoteNativeProvider(t, pki, network, listener.Addr().(*net.TCPAddr).Port)
+			physical := &remoteNativePhysical{second: port, network: network}
+			profile := remoteNativeOpenVPNNativeProfile(pki, pki.local, pki.localKey, network, "")
+			profile.Config = strings.Replace(profile.Config, "remote 192.0.2.1 1194 ", "remote 192.0.2.2 1443 ", 1)
+			profile.Config = strings.Replace(profile.Config, "tun-mtu 1400", "tun-mtu 1280", 1)
+			endpoint, err := nativeopenvpn.CompileProfile(profile, "entry-wg", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			graph := map[string]any{"log": map[string]any{"disabled": true}, "endpoints": []any{endpoint},
+				"dns":   map[string]any{"servers": []any{map[string]any{"type": "tcp", "tag": "selected-dns", "server": "192.0.2.123", "server_port": 80, "detour": "entry-wg"}}, "final": "selected-dns"},
+				"route": map[string]any{"final": "entry-wg"}}
+			raw, _ := json.Marshal(graph)
+			instance, err := remoteNativeFactory(ctx, raw, physical, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := instance.Close(); !remoteNativeOnlyClosed(err) {
+					t.Error("actual retained child did not join", err)
+				}
+			}()
+			tun, _, _ := desktopNodeMTUFixture(t)
+			digest := sha256.Sum256(raw)
+			tun.record.Config = hex.EncodeToString(digest[:])
+			owner, err := newRouterVPNImportedOpenVPN(ctx, instance.Box, raw, tun)
+			if err != nil || owner == nil {
+				t.Fatal("actual native observer missing", err)
+			}
+			importedOpenVPNGuardFixture(owner)
+			if _, err := owner.observe(ctx); err != nativeopenvpn.ErrRemotePending || owner.state != nil {
+				t.Fatal("unstarted native endpoint gained admission", err)
+			}
+			if err := instance.Start(); err != nil {
+				t.Fatal(err)
+			}
+			connected, stop := context.WithTimeout(ctx, 5*time.Second)
+			original, err := owner.await(connected)
+			stop()
+			if err != nil {
+				t.Fatal("actual original native TLS/data state never admitted", err)
+			}
+			native, _ := instance.Endpoint().Get("entry-wg")
+			client := native.(*O.ClientEndpoint)
+			if original.Validate() != nil || !original.Remote.Matches(endpoint) || original.MTU != client.PortMTU() || original.MTU == 1280 || physical.calls.Load() == 0 {
+				t.Fatal("observation returned configured capacity instead of actual negotiated native readback", original, client.PortMTU(), physical.calls.Load())
+			}
+			files, request := importedDNSFiles(t, tun, raw)
+			var generation uint64
+			exchange := func(operation, want string, budget time.Duration) {
+				t.Helper()
+				request.Operation = operation
+				request.Generation = generation + 1
+				request.Request = strings.Repeat("a", 31) + string(rune('a'+request.Generation))
+				request.Deadline = time.Now().Add(budget).UnixMilli()
+				importedDNSWrite(t, files, "node-dns-request.json", request)
+				if err := routerVPNConsumeImportedDNS(ctx, files, tun, &generation, instance.RouterVPNStrategyDNSProofContext, owner); err != nil {
+					t.Fatal("actual native mailbox failed", err)
+				}
+				body, err := files.read("node-dns-result.json", 4096)
+				var result routerVPNImportedDNSResult
+				if err != nil || !routerVPNMTUStrict(body, &result) || result.Status != want {
+					t.Fatal("actual native operation did not produce its own result", operation, want, result, err)
+				}
+				if operation == "openvpn-observe" && want == "passed" {
+					if result.OpenVPN == nil || *result.OpenVPN != original {
+						t.Fatal("native mailbox lost original connected tuple")
+					}
+				} else if result.OpenVPN != nil {
+					t.Fatal("DNS/cancelled result borrowed packet observation")
+				}
+			}
+			exchange("openvpn-observe", "passed", 2*time.Second)
+			if queries.Load() != 0 {
+				t.Fatal("packet observation falsely ran selected DNS")
+			}
+			for _, want := range []string{"passed", "failed", "passed"} {
+				denied.Store(want == "failed")
+				before := queries.Load()
+				exchange("", want, 2*time.Second)
+				if queries.Load() <= before {
+					t.Fatal("selected DNS result reused cached or packet evidence", want)
+				}
+			}
+			release := client.RouterVPNTestHoldStatus()
+			func() {
+				defer release()
+				exchange("openvpn-observe", "cancelled", 20*time.Millisecond)
+			}()
+			if state, err := owner.observe(ctx); err != nil || state != original || owner.retired != nil {
+				t.Fatal("native read timeout retired healthy TLS/data connection", state, err)
+			}
+			client.RouterVPNTestRestart()
+			remoteNativeWait(t, func() bool {
+				next, capacity, err := client.RouterVPNConnectedCapacityContext(ctx)
+				return err == nil && next.Remote == original.Remote.Remote && next.Generation > original.Remote.Generation && capacity == original.MTU
+			}, "same-address native reconnect never established a new generation")
+			if _, err := owner.observe(ctx); err == nil || owner.retired == nil || *owner.state != original {
+				t.Fatal("original child recaptured actual reconnected native endpoint", err)
+			}
+		})
+	}
+}

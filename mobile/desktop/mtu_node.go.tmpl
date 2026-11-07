@@ -651,8 +651,37 @@ func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExtern
 	if err != nil {
 		return routerVPNExternalFailure
 	}
+	raw, err := files.read("sing-box.json", 4<<20)
+	if err != nil {
+		return routerVPNExternalFailure
+	}
+	capture, stopCapture := context.WithTimeout(observe, 2*time.Second)
+	openVPN, err := newRouterVPNImportedOpenVPN(capture, instance, raw, owner)
+	stopCapture()
+	if err != nil {
+		return err
+	}
+	if openVPN != nil {
+		owner.guardContext = func(call context.Context) error {
+			if err := guard(call); err != nil {
+				return err
+			}
+			return openVPN.pinned(call)
+		}
+		// Readiness and its selected native DNS exchange cannot precede the
+		// original entry's actual authenticated packet capacity.
+		connected, stopConnected := context.WithTimeout(observe, 5*time.Second)
+		_, err = openVPN.await(connected)
+		stopConnected()
+		if err != nil {
+			return err
+		}
+	}
 	if err := ready(); err != nil {
 		return routerVPNExternalFailure
+	}
+	if err := openVPN.healthy(observe); err != nil {
+		return err
 	}
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
@@ -662,14 +691,35 @@ func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExtern
 		if parent.Err() != nil || files.stopRequested(session, config) {
 			return nil
 		}
-		if owner.expire(time.Now()) != nil || owner.currentContext(observe) != nil {
+		if owner.expire(time.Now()) != nil || openVPN == nil && owner.currentContext(observe) != nil {
 			if parent.Err() != nil || files.stopRequested(session, config) {
 				return nil
 			}
 			return routerVPNExternalFailure
 		}
-		if err := routerVPNConsumeImportedDNS(observe, files, owner, &dnsGeneration, instance.RouterVPNStrategyDNSProofContext); err != nil {
+		fresh, err := openVPN.refresh(observe)
+		if err != nil {
+			if parent.Err() != nil || ctx.Err() != nil && files.stopRequested(session, config) {
+				return nil
+			}
 			return err
+		}
+		if !fresh {
+			select {
+			case <-parent.Done():
+				return nil
+			case <-ticker.C:
+			}
+			continue
+		}
+		previousDNSGeneration := dnsGeneration
+		if err := routerVPNConsumeImportedDNS(observe, files, owner, &dnsGeneration, instance.RouterVPNStrategyDNSProofContext, openVPN); err != nil {
+			return err
+		}
+		if openVPN != nil && dnsGeneration != previousDNSGeneration {
+			// A joined query may have used its complete budget. Observe the
+			// same entry afresh before publishing its next TUN heartbeat.
+			continue
 		}
 		var consumed os.FileInfo
 		if raw, readErr := files.read("node-mtu-request.json", 4096); readErr == nil {
