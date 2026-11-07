@@ -384,6 +384,18 @@ class NativePhysicalMutationVerdicts(unittest.TestCase):
 
 
 class NativeMTUVerdicts(unittest.TestCase):
+    def test_actual_manager_test_inventory_keeps_original_models_and_context_groups(self):
+        names = {name for path in (ROOT / 'mobile/mtu').glob('manager*_test.go.tmpl')
+                 for name in re.findall(r'^func (TestRouterVPNTun\w+)\(t \*testing\.T\)',
+                                        path.read_text(encoding='utf-8'), re.M)}
+        selected = {name for name in names if re.search(NODE.NATIVE_MTU_MODEL_SUITE[2], name)}
+        self.assertEqual(selected, set(NODE.NATIVE_MTU_MODEL_TESTS))
+        contexts = {name for family in ('mtu-manager-context', 'mtu-cleanup-context')
+                    for name in NODE.MTU_CONTEXT_VERDICTS[family] if '/' not in name}
+        self.assertFalse(selected & contexts)
+        self.assertEqual(names, selected | contexts)
+        self.assertTrue(contexts, 'Original admission and cleanup controls disappeared')
+
     def test_mtu_command_context_requires_every_original_verdict(self):
         parents = ["TestRouterVPNDesktopMTUCallerContextWaits", "TestRouterVPNDesktopMTUMailboxKeepsOriginalDeadline",
                    "TestRouterVPNDesktopMTUCacheExpiredSaveIsNotACommit", "TestRouterVPNDesktopMTURestoreContextCancelsAndReprovesOriginal"]
@@ -449,7 +461,7 @@ class NativeMTUVerdicts(unittest.TestCase):
 
     def test_owned_transaction_and_every_native_leaf_are_mandatory(self):
         suites = (("native-mtu-transaction", ".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$", (NODE.NATIVE_MTU_TEST,)),
-                  ("mtu-transaction-model", "./adapter/inbound", "^TestRouterVPNTun", NODE.NATIVE_MTU_MODEL_TESTS),
+                  NODE.NATIVE_MTU_MODEL_SUITE,
                   ("mtu-startup-budget", "./protocol/tun", "^TestRouterVPNMTUStartupReceiptKeepsOriginalOperation$", ("TestRouterVPNMTUStartupReceiptKeepsOriginalOperation",)))
         for suite in suites:
             if suite[0] == "mtu-startup-budget":

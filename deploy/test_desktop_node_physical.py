@@ -175,6 +175,10 @@ STANDARD_RESOLVED_SUITE = ("standard-resolved-observation", "./cmd/sing-box", "^
                            ("success", "lost-parent", "lost-daemon", "local-refusal", "wrong-local-name", "wrong-policy", "lost-send", "late-parent", "cancelled"))))
 NATIVE_MTU_CASES = ("full-search-and-winner", "failed-candidate-and-original-restore", "cancelled-work-and-fresh-stop")
 NATIVE_MTU_MODEL_TESTS = tuple("TestRouterVPNTun" + name for name in ("ReplacementAndRollback", "FailureDoesNotStartAnOverlappingReader", "InvalidationAndStaleCapture", "MutationIsSerialized", "TransactionRetainsOriginalAndPartialCandidateEvidence", "TransactionPreservesFailedConstructionAndRetry", "TransactionBoundsHistoryBeforeAcquisition", "TransactionCancelledAcquisitionAndNativeClose", "BorrowedPlatformKeepsCapturedRollback", "FullSearchRetainsEveryOriginalAttempt"))
+# Admission and cleanup context cases have their own mandatory exact suites.
+# Keep this transaction inventory disjoint when new manager tests are added.
+NATIVE_MTU_MODEL_SUITE = ("mtu-transaction-model", "./adapter/inbound",
+                        "^(" + "|".join(NATIVE_MTU_MODEL_TESTS) + ")$", NATIVE_MTU_MODEL_TESTS)
 
 NATIVE_RESOLVER_TESTS = tuple("TestRouterVPNNativeLinuxResolver" + name for name in (
     "DaemonCapability", "CredentialRefusals", "MutationNeedsOriginalReply", "LateReplyRetry",
@@ -1279,7 +1283,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         suites.append(("native-startup-command", "./cmd/sing-box", "^TestRouterVPNRawCommandOriginalStartupDeadline$", ("TestRouterVPNRawCommandOriginalStartupDeadline",)))
         suites.append(("mtu-cleanup-context", "./adapter/inbound", "^TestRouterVPNTunContext(RestoresOnlyWithOriginalCleanupAllowance|ControllerRestoresAfterUnusedCloseCancellation)$", ("TestRouterVPNTunContextRestoresOnlyWithOriginalCleanupAllowance", "TestRouterVPNTunContextControllerRestoresAfterUnusedCloseCancellation")))
         suites.append(("native-mtu-transaction", ".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$", (NATIVE_MTU_TEST,)))
-        suites.append(("mtu-transaction-model", "./adapter/inbound", "^TestRouterVPNTun", NATIVE_MTU_MODEL_TESTS))
+        suites.append(NATIVE_MTU_MODEL_SUITE)
         suites.append(("mtu-startup-budget", "./protocol/tun", "^TestRouterVPNMTUStartupReceiptKeepsOriginalOperation$", ("TestRouterVPNMTUStartupReceiptKeepsOriginalOperation",)))
         suites.append(("native-resolver-lifetime", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxResolver", NATIVE_RESOLVER_TESTS))
         suites.append(("native-dbus-rights", "github.com/godbus/dbus/v5", "^TestRouterVPNDBus", NATIVE_DBUS_TESTS))
