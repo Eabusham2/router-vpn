@@ -228,3 +228,14 @@ TUN and prior successful network proof modeled. Its native verdicts require
 matching-host execution; source projection is not native execution or device
 acceptance. Tor's resident, padding and Server proof chain remains a separate
 context-propagation requirement and is unchanged by this ordinary external unit.
+
+The ordinary external proof constructor also retains one caller through the
+initial StartedService read, every configured native TUN/outbound/DNS/service
+capture, final graph identity recheck and request publication. Its returned
+request is tied to the Box/VPN lifetime, not the temporary constructor deadline.
+Construction does not run or waive selected-DNS, entry or exit proof, and a new
+request cannot inherit an earlier successful request's state. Cancelled or
+replaced captures discard only their unpublished request; the replacement graph
+and earlier independently retained request remain owned by their own lifetimes.
+The existing proof execution callbacks and DNS measurement factories retain
+their separate context-propagation work.

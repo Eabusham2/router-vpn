@@ -216,6 +216,13 @@ func (e *externalExecutionEngine) Identity() string {
 	defer e.mu.Unlock()
 	return e.identity
 }
+func (e *externalExecutionEngine) IdentityContext(ctx context.Context) (string, error) {
+	if err := externalObservationLock(ctx, &e.mu); err != nil {
+		return "", err
+	}
+	defer e.mu.Unlock()
+	return e.identity, ctx.Err()
+}
 func (e *externalExecutionEngine) Selected() string {
 	e.mu.Lock()
 	defer e.mu.Unlock()

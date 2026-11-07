@@ -82,8 +82,18 @@ shared context verdicts pass under race instrumentation; twenty-eight runner
 and four shipping integration checks pass. The mandatory native inventory
 preserves the prior thirty-two and adds thirteen external cases. Prepared
 source/import closure passes, but those forty-five native verdicts still need
-matching hosted execution. Ordinary proof creation, DNS factories and Tor's
-resident/padding/Server contexts remain separately open.
+matching hosted execution.
+
+Ordinary external proof construction now also retains one caller through
+StartedService, native TUN, transport, DNS and helper capture and final owner
+readback. A returned request keeps the actual Box lifetime and remains
+unproved until its original network proof runs. All fifty-nine exact shared
+context verdicts and existing Local/Server/Compare/OpenVPN compatibility
+checks pass. The native inventory retains forty-five and adds twelve proof
+construction cases, for fifty-seven mandatory verdicts; source projection and
+import closure pass, with native execution still required. DNS factories,
+proof execution callbacks and Tor's resident/padding/Server contexts retain
+their separate unfinished adoption work.
 
 The Fastest lock-order fixture now detects an actual handler return before
 probe admission and always cancels, releases and joins its original request.

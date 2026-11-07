@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -290,6 +291,178 @@ func TestRouterExternalHopContextKeepsOriginalNativeOwner(t *testing.T) {
 			}
 			if legacy.Load() != 0 {
 				t.Fatal("external constructor used its legacy unbounded proof callback")
+			}
+		})
+	}
+}
+
+// The existing fixture's prior successful proof is modeled. Each new request
+// below is created by the real source parser, full native capture and public
+// bridge; construction must never inherit that older request's success flag.
+func TestRouterExternalProofContextOwnsNativeCapture(t *testing.T) {
+	for _, phase := range []string{"current", "legacy", "nil", "cancel-before", "instance-held", "tun-held", "outbound-held", "dns-held", "instance-replaced", "tun-replaced", "source-changed"} {
+		t.Run(phase, func(t *testing.T) {
+			server, previous, originalShared, native := routerExternalMeasurementOwner(t)
+			started := server.StartedService
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			caller := &routerConstructorCaller{Context: parent, entered: make(chan struct{})}
+			if phase == "cancel-before" {
+				cancel()
+			}
+			var held *sync.RWMutex
+			switch phase {
+			case "instance-held":
+				held = routerProofField[sync.RWMutex](t, started, "serviceAccess")
+			case "tun-held":
+				held = routerExternalMeasurementField[sync.RWMutex](t, native, "inbound", "access")
+			case "outbound-held":
+				held = routerExternalMeasurementField[sync.RWMutex](t, native, "outbound", "access")
+			case "dns-held", "instance-replaced", "tun-replaced":
+				held = routerExternalMeasurementField[sync.RWMutex](t, native, "dnsTransport", "access")
+			}
+			var once sync.Once
+			release := func() {
+				once.Do(func() {
+					if held != nil {
+						held.Unlock()
+					}
+				})
+			}
+			if held != nil {
+				held.Lock()
+			}
+			defer release()
+			type result struct {
+				proof *RouterExternalProofRequest
+				err   error
+			}
+			done := make(chan result, 1)
+			go func() {
+				ctx := context.Context(caller)
+				if phase == "nil" {
+					ctx = nil
+				}
+				source, capture := routerExternalMeasurementSource, routerExternalMeasurementCapture
+				if phase == "source-changed" {
+					source = strings.ReplaceAll(source, "captured-secret", "another-captured-secret")
+					capture = strings.ReplaceAll(capture, "captured-secret", "another-captured-secret")
+				}
+				var proof *RouterExternalProofRequest
+				var err error
+				if phase == "legacy" {
+					proof, err = RouterExternalCreateProof(server, source, capture, "next-proof-session")
+				} else {
+					proof, err = routerExternalCreateProofContext(ctx, server, source, capture, "next-proof-session")
+				}
+				done <- result{proof, err}
+			}()
+			var replacement *daemon.Instance
+			var replacementTUN adapter.Inbound
+			if held != nil {
+				select {
+				case <-caller.entered:
+				case actual := <-done:
+					t.Fatal("proof constructor bypassed held original native capture", actual.err)
+				case <-time.After(time.Second):
+					cancel()
+					release()
+					<-done
+					t.Fatal("proof capture did not retain original caller")
+				}
+				switch phase {
+				case "instance-replaced":
+					replacement = new(daemon.Instance)
+					*routerProofField[*box.Box](t, replacement, "instance") = native
+					lock := routerProofField[sync.RWMutex](t, started, "serviceAccess")
+					lock.Lock()
+					*routerProofField[*daemon.Instance](t, started, "instance") = replacement
+					lock.Unlock()
+					release()
+				case "tun-replaced":
+					if err := native.Inbound().Create(context.Background(), nil, log.NewNOPFactory().Logger(), "tun-in", C.TypeTun, &option.TunInboundOptions{}); err != nil {
+						release()
+						<-done
+						t.Fatal("actual replacement TUN could not be installed", err)
+					}
+					var found bool
+					replacementTUN, found = native.Inbound().Get("tun-in")
+					if !found || replacementTUN == nil {
+						release()
+						<-done
+						t.Fatal("replacement TUN disappeared")
+					}
+					release()
+				default:
+					cancel()
+				}
+			}
+			var actual result
+			select {
+			case actual = <-done:
+			case <-time.After(time.Second):
+				cancel()
+				release()
+				<-done
+				t.Fatal("native proof capture did not join original cancellation")
+			}
+			release()
+			if phase == "current" || phase == "legacy" {
+				if actual.err != nil || actual.proof == nil {
+					t.Fatal("original native graph could not create its proof", actual.err)
+				}
+				defer actual.proof.Close()
+				request := *routerProofField[*mobilemultihop.ExternalProofRequest](t, actual.proof.request, "request")
+				lifetime := *routerProofField[context.Context](t, request, "ctx")
+				cancel()
+				if lifetime.Err() != nil {
+					t.Fatal("constructor timeout became the proof lifetime")
+				}
+				if actual.proof.Healthy() || routerProofField[atomic.Bool](t, request, "started").Load() || routerProofField[atomic.Bool](t, request, "succeeded").Load() {
+					t.Fatal("native constructor borrowed or manufactured successful DNS/exit proof")
+				}
+				actual.proof.Cancel()
+				if lifetime.Err() == nil {
+					t.Fatal("original returned request did not own cancellation")
+				}
+			} else {
+				if actual.proof != nil {
+					_ = actual.proof.Close()
+				}
+				if actual.err == nil || actual.proof != nil {
+					t.Fatal("cancelled or replaced capture published a proof request", actual.err)
+				}
+				if phase == "cancel-before" || phase == "instance-held" || phase == "tun-held" || phase == "outbound-held" || phase == "dns-held" {
+					if !errors.Is(actual.err, context.Canceled) {
+						t.Fatal("native capture lost original cancellation", actual.err)
+					}
+				}
+			}
+			if (*routerProofField[context.Context](t, originalShared, "ctx")).Err() != nil {
+				t.Fatal("new constructor cancelled the previously retained proof")
+			}
+			if replacement != nil {
+				current, err := started.RouterVPNInstanceContext(context.Background())
+				if err != nil || current != replacement {
+					t.Fatal("retired constructor touched replacement instance", err)
+				}
+			}
+			if replacementTUN != nil {
+				current, found := native.Inbound().Get("tun-in")
+				if !found || current != replacementTUN {
+					t.Fatal("retired constructor touched replacement TUN")
+				}
+			}
+			if replacement != nil || replacementTUN != nil {
+				fresh, err := RouterExternalCreateProof(server, routerExternalMeasurementSource, routerExternalMeasurementCapture, "replacement-proof-session")
+				if err != nil || fresh == nil || fresh.Healthy() {
+					t.Fatal("replacement graph lost independent unproved ownership", err)
+				}
+				if err := fresh.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := previous.healthyContext(context.Background()); err != nil {
+				t.Fatal("bounded capture damaged the previous proved owner", err)
 			}
 		})
 	}

@@ -89,6 +89,18 @@ type routerVPNExternalPhysicalBinding interface {
 }
 
 func (s *Box) RouterVPNExternalCreateProof(source, capture, session string) (*RouterVPNExternalProofRequest, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	return s.RouterVPNExternalCreateProofContext(ctx, source, capture, session)
+}
+
+func (s *Box) RouterVPNExternalCreateProofContext(ctx context.Context, source, capture, session string) (*RouterVPNExternalProofRequest, error) {
+	if ctx == nil {
+		return nil, errors.New("external native proof has no constructor caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if s == nil || s.ctx == nil || s.ctx.Err() != nil || s.routerVPNExternalOptions == "" {
 		return nil, errors.New("external native Box is unavailable")
 	}
@@ -107,11 +119,11 @@ func (s *Box) RouterVPNExternalCreateProof(source, capture, session string) (*Ro
 	if err := json.Unmarshal([]byte(policy.Metadata()), &meta); err != nil {
 		return nil, errors.New("external native policy metadata invalid")
 	}
-	engine, err := s.routerVPNExternalEngine(meta.EntryTag, meta.TUNTag, compiled)
+	engine, err := s.routerVPNCapturedEngineContext(ctx, meta.EntryTag, meta.TUNTag, mobilemultihop.ExternalFinalTag, mobilemultihop.ExternalDNSTag, compiled)
 	if err != nil {
 		return nil, err
 	}
-	request, err := mobilemultihop.NewExternalProofRequest(s.ctx, policy, session, engine)
+	request, err := mobilemultihop.NewExternalProofRequestContext(ctx, s.ctx, policy, session, engine)
 	if err != nil {
 		return nil, err
 	}
@@ -295,10 +307,25 @@ func (s *Box) routerVPNExternalEngine(entryTag, tunTag string, compiled option.O
 }
 
 func (s *Box) routerVPNCapturedEngine(entryTag, tunTag, finalTag, dnsTag string, compiled option.Options) (*routerVPNExternalNativeEngine, error) {
-	if s.outbound == nil || s.dnsRouter == nil || s.dnsTransport == nil || s.inbound == nil || s.service == nil || tunTag == "" || compiled.DNS == nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	return s.routerVPNCapturedEngineContext(ctx, entryTag, tunTag, finalTag, dnsTag, compiled)
+}
+
+func (s *Box) routerVPNCapturedEngineContext(ctx context.Context, entryTag, tunTag, finalTag, dnsTag string, compiled option.Options) (*routerVPNExternalNativeEngine, error) {
+	if ctx == nil {
+		return nil, errors.New("external graph capture has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s == nil || s.ctx == nil || s.ctx.Err() != nil || s.outbound == nil || s.dnsRouter == nil || s.dnsTransport == nil || s.inbound == nil || s.service == nil || tunTag == "" || compiled.DNS == nil {
 		return nil, errors.New("external native route owners missing")
 	}
-	tun, ok := s.inbound.Get(tunTag)
+	tun, ok, err := adapter.RouterVPNInboundContext(ctx, s.inbound, tunTag)
+	if err != nil {
+		return nil, err
+	}
 	if !ok || tun == nil || tun.Type() != C.TypeTun || len(compiled.Inbounds) != 1 || compiled.Inbounds[0].Tag != tunTag {
 		return nil, errors.New("external native TUN owner missing")
 	}
@@ -315,7 +342,10 @@ func (s *Box) routerVPNCapturedEngine(entryTag, tunTag, finalTag, dnsTag string,
 		tags = append(tags, endpoint.Tag)
 	}
 	for _, tag := range tags {
-		owner, ok := s.outbound.Outbound(tag)
+		owner, ok, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, tag)
+		if err != nil {
+			return nil, err
+		}
 		if tag == "" || !ok || owner == nil {
 			return nil, errors.New("external native transport owner missing")
 		}
@@ -345,7 +375,10 @@ func (s *Box) routerVPNCapturedEngine(entryTag, tunTag, finalTag, dnsTag string,
 	}
 	dns := map[string]adapter.DNSTransport{}
 	for _, configured := range compiled.DNS.Servers {
-		owner, ok := s.dnsTransport.Transport(configured.Tag)
+		owner, ok, err := adapter.RouterVPNTransportContext(ctx, s.dnsTransport, configured.Tag)
+		if err != nil {
+			return nil, err
+		}
 		if configured.Tag == "" || !ok || owner == nil {
 			return nil, errors.New("external native DNS owner missing")
 		}
@@ -359,13 +392,20 @@ func (s *Box) routerVPNCapturedEngine(entryTag, tunTag, finalTag, dnsTag string,
 		if configured.Type == C.TypeOOMKiller {
 			continue
 		}
-		owner, ok := s.service.Get(configured.Tag)
+		owner, ok, err := adapter.RouterVPNServiceContext(ctx, s.service, configured.Tag)
+		if err != nil {
+			return nil, err
+		}
 		if configured.Tag == "" || !ok || owner == nil {
 			return nil, errors.New("external native helper owner missing")
 		}
 		services[configured.Tag] = owner
 	}
-	return &routerVPNExternalNativeEngine{box: s, tun: tun, tunTag: tunTag, dns: dns, owners: owners, routes: routes, services: services, entryTag: entryTag}, nil
+	engine := &routerVPNExternalNativeEngine{box: s, tun: tun, tunTag: tunTag, dns: dns, owners: owners, routes: routes, services: services, entryTag: entryTag}
+	if _, err := engine.IdentityContext(ctx); err != nil {
+		return nil, err
+	}
+	return engine, nil
 }
 func (e *routerVPNExternalNativeEngine) Identity() string {
 	if e == nil {

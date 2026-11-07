@@ -364,8 +364,10 @@ proof is an explicit fixture model, not physical tunnel acceptance.
 The ordinary MTU adapter retains its separate context-bound readback and rollback
 contract. The ordinary external hop factory now carries its own captured proof,
 native-instance and operation contexts through the separate authority path
-described in [SPEED-LAB.md](SPEED-LAB.md). Ordinary external proof creation and
-DNS measurement factories, plus Tor resident/padding/Server proof and lease
+described in [SPEED-LAB.md](SPEED-LAB.md). Ordinary proof construction now retains
+its own bounded native capture and independent returned request lifetime.
+Ordinary external proof execution callbacks and DNS measurement factories,
+plus Tor resident/padding/Server proof and lease
 observations, remain separate context-propagation requirements.
 
 The complete compiled graph supplies the MTU plan. For a nested packet final,

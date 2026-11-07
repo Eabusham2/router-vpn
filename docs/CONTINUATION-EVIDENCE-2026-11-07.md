@@ -563,6 +563,9 @@ the still-required full thirty-seven native verdicts.
 
 ### Synchronize the pinned Vision detector without retaining I/O locks
 
+The reviewed repair and evidence were published and read back as
+[`08f349d2ad06c91f01de65b5b4529e3521364463`](https://github.com/Eabusham2/router-vpn/commit/08f349d2ad06c91f01de65b5b4529e3521364463).
+
 The complete shared TLS detector now uses one per-state mutex. Writer padding
 decisions consume a coherent snapshot of all six detector fields. Reader
 admission and the public `XtlsFilterTls` entry use the same synchronization.
@@ -680,6 +683,41 @@ prepared import/dependency closure pass. No heavyweight native execution was
 performed for this unit, and its forty-five verdicts still require CI.
 Ordinary proof creation and DNS factories, plus Tor's resident, padding and
 Server contexts, retain separate unfinished adoption work.
+
+### Ordinary external proof constructor lifetime and captured native graph
+
+The compatible shared proof constructor now creates one bounded construction
+caller and delegates to an explicit caller/parent form. The mobile host and
+native Box pass that same caller through StartedService capture, original
+TUN/outbound/DNS/helper manager observations, exact graph identity and the
+final owner recheck. A cancelled or replaced constructor cannot publish its
+request. The request's actual lifetime derives from the original VPN Box,
+independently of construction; successful return still grants no DNS, entry
+or exit proof authority. The original proof execution remains required.
+
+All fifty-nine exact shared context verdicts pass under race instrumentation.
+Existing ordinary proof, Local/Server/Compare and OpenVPN compatibility checks
+pass in 9.236 seconds; twenty-eight runner and four shipping checks also pass.
+Three executed single-fault overlays reject using the old unbounded identity,
+removing final owner readback and borrowing the constructor's short lifetime,
+each at its intended assertion. Prepared source identity and actual import
+closure pass. Public mobile binding signatures remain unchanged.
+
+The merged integration's complete `internal` tree and `go.mod` match
+the executed checkpoint exactly, and all ten unit files match byte for byte.
+The merged twenty-eight runner contracts pass in 0.426 seconds and the four
+shipping checks pass. An additional root shared-package compile was killed
+before test execution; it is not recorded as another runtime pass and was
+not retried while the independent native protocol gate was running.
+
+The mandatory native inventory preserves all forty-five preceding verdicts
+and adds twelve proof-constructor cases, for fifty-seven. These fixtures use
+the actual pinned instance, TUN, outbound and DNS managers and deliberately
+hold or replace their original owners. They do not synthesize a successful
+network proof. No heavyweight native execution was attempted for this source
+unit; the complete matching native gate remains required in CI. DNS factories,
+proof execution callbacks and Tor's deeper resident/padding/Server chain are
+separate unfinished context adoption work.
 
 ### Bounded Fastest fixture setup and latest native observations
 

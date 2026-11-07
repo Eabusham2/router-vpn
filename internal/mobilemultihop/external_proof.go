@@ -67,10 +67,27 @@ type ExternalProofRequest struct {
 }
 
 func NewExternalProofRequest(parent context.Context, policy *ExternalPolicy, session string, engine ExternalProofEngine) (*ExternalProofRequest, error) {
-	if parent == nil || parent.Err() != nil || policy == nil || !exactID.MatchString(session) || engine == nil {
+	if parent == nil {
 		return nil, errors.New("external proof has no captured VPN owner")
 	}
-	identity := engine.Identity()
+	caller, cancel := context.WithTimeout(parent, 1500*time.Millisecond)
+	defer cancel()
+	return NewExternalProofRequestContext(caller, parent, policy, session, engine)
+}
+
+// caller owns construction only; parent retains the actual VPN lifetime. A
+// returned request must still perform its original DNS, entry and exit proof.
+func NewExternalProofRequestContext(caller, parent context.Context, policy *ExternalPolicy, session string, engine ExternalProofEngine) (*ExternalProofRequest, error) {
+	if caller == nil || parent == nil || policy == nil || !exactID.MatchString(session) || engine == nil {
+		return nil, errors.New("external proof has no captured VPN owner")
+	}
+	if err := errors.Join(caller.Err(), parent.Err()); err != nil {
+		return nil, err
+	}
+	identity, err := externalObservedIdentity(caller, engine)
+	if err != nil || caller.Err() != nil || parent.Err() != nil {
+		return nil, errors.Join(err, caller.Err(), parent.Err())
+	}
 	if identity == "" {
 		return nil, errors.New("external proof owner is already retired")
 	}
@@ -110,6 +127,11 @@ func NewExternalProofRequest(parent context.Context, policy *ExternalPolicy, ses
 	}
 	r.public = r.provePublic
 	r.private = r.provePrivateEntry
+	current, err := externalObservedIdentity(caller, engine)
+	if err != nil || caller.Err() != nil || parent.Err() != nil || current != identity {
+		cancel()
+		return nil, errors.Join(err, caller.Err(), parent.Err(), errors.New("external proof owner changed during capture"))
+	}
 	return r, nil
 }
 

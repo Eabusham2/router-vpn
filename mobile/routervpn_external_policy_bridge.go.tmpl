@@ -49,15 +49,30 @@ type RouterExternalProofRequest struct {
 // Factory captures the real Box before Run may block. Cancel only reaches
 // this request, even when the host has already replaced its StartedService.
 func RouterExternalCreateProof(server *CommandServer, source, capture, session string) (*RouterExternalProofRequest, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	return routerExternalCreateProofContext(ctx, server, source, capture, session)
+}
+
+func routerExternalCreateProofContext(ctx context.Context, server *CommandServer, source, capture, session string) (*RouterExternalProofRequest, error) {
+	if ctx == nil {
+		return nil, errors.New("external native proof has no constructor caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if server == nil || server.StartedService == nil {
 		return nil, errors.New("external native service unavailable")
 	}
 	started := server.StartedService
-	instance := started.Instance()
+	instance, err := started.RouterVPNInstanceContext(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if instance == nil || instance.Box() == nil {
 		return nil, errors.New("external native instance unavailable")
 	}
-	request, err := instance.Box().RouterVPNExternalCreateProof(source, capture, session)
+	request, err := instance.Box().RouterVPNExternalCreateProofContext(ctx, source, capture, session)
 	if err != nil {
 		return nil, err
 	}
@@ -85,9 +100,9 @@ func RouterExternalCreateProof(server *CommandServer, source, capture, session s
 		defer cancel()
 		return currentContext(ctx) == nil
 	}
-	if !current() {
+	if err := currentContext(ctx); err != nil {
 		request.Cancel()
-		return nil, errors.New("external native instance changed")
+		return nil, err
 	}
 	return &RouterExternalProofRequest{request: request, current: current, currentContext: currentContext}, nil
 }
