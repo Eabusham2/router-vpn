@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+import importlib.util
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
 errors: list[str] = []
+
+_native_spec = importlib.util.spec_from_file_location(
+    "routervpn_native_multihop_audit", Path(__file__).with_name("native_multihop_audit.py"))
+_native_module = importlib.util.module_from_spec(_native_spec)
+_native_spec.loader.exec_module(_native_module)
+native_multihop_proof_lanes = _native_module.native_multihop_proof_lanes
 
 
 def read(path: str) -> str:
@@ -77,23 +84,10 @@ def need_android_captured_transaction(path: str) -> None:
 
 
 def need_native_multihop_lanes(path: str) -> None:
-    body = re.sub(r'("(?:\\.|[^"\\])*")|`[^`]*`|//[^\n]*|/\*.*?\*/',
-                  lambda match: match.group(1) or "", read(path), flags=re.S)
-    for marker in ('nativeMultihopProofConfig(config, sel.Entry)',
-                   'private, err := nativeEntryPrivateOutbound(',
-                   'graph["outbounds"] = append(outs, private)',
-                   'graph["inbounds"] = append(ins,',
-                   '"tag": "multihop-entry-proof"',
-                   '"listen_port": nativeMultihopEntryProofPort',
-                   '"tag": "multihop-proof"',
-                   '"listen_port": nativeMultihopExitProofPort',
-                   'route["rules"] = append([]any{',
-                   '"inbound": []any{"multihop-entry-proof"}',
-                   '"outbound": "entry-private"',
-                   '"inbound": []any{"multihop-proof"}',
-                   '"outbound": "proxy"'):
-        if marker not in body:
-            errors.append(f"{path}: captured native proof lanes lost {marker!r}")
+    # Source-only evidence of both captured branches, including exact imported
+    # entry-wg versus paired entry-private routing; not a live traffic verdict.
+    if not native_multihop_proof_lanes(read(path), read("cmd/client/multihop_native_imported.go")):
+        errors.append(f"{path}: captured paired/imported native proof lanes lost their original compiler or routes")
 
 
 # Shared desktop controller: current path is identity-bound, temporary paths are

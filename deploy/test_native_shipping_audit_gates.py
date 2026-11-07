@@ -24,7 +24,9 @@ class NativeShippingAuditTests(unittest.TestCase):
                      and node.name in ("windows_owned_package", "retained_native_multihop_platform")]
         self.assertEqual(len(functions), 2)
         self.scope = {"all_markers": self.has, "none_markers": self.no,
-                      "body": self.body, "native_multihop_shipping_chain": _NATIVE.native_multihop_shipping_chain}
+                      "body": self.body, "native_multihop_shipping_chain": _NATIVE.native_multihop_shipping_chain,
+                      "native_multihop_proof_lanes": _NATIVE.native_multihop_proof_lanes,
+                      "native_multihop_proof_admission": _NATIVE.native_multihop_proof_admission}
         exec(compile(ast.Module(body=functions, type_ignores=[]), "native-shipping-predicates", "exec"), self.scope)
         self.legacy = {}
         for node in ast.walk(weighted):
@@ -60,12 +62,15 @@ class NativeShippingAuditTests(unittest.TestCase):
         self.assertIn(before, original)
         self.changes[path] = original.replace(before, after)
 
-    def assert_multihop_chain(self, expected):
+    def assert_multihop_scores(self, expected):
         for platform in ("windows", "darwin"):
             self.assertEqual(self.scope["retained_native_multihop_platform"](platform), expected)
             self.assertEqual(self.recovered["controller_multihop_platform"](platform), expected)
         for gate in self.legacy.values():
             self.assertEqual(gate(), expected)
+
+    def assert_multihop_chain(self, expected):
+        self.assert_multihop_scores(expected)
         # Exercise the actual backend audit hook, including its read/error path.
         backend = ast.parse((ROOT / "deploy/backend-session-transaction-audit.py").read_text())
         functions = [node for node in backend.body if isinstance(node, ast.FunctionDef)
@@ -79,6 +84,100 @@ class NativeShippingAuditTests(unittest.TestCase):
                  "native_multihop_shipping_chain": _NATIVE.native_multihop_shipping_chain}
         exec(compile(ast.Module(body=functions + invocations, type_ignores=[]), "backend-native-closure", "exec"), scope)
         self.assertEqual(not scope["errors"], expected)
+
+    def test_paired_and_imported_proof_calls_require_original_arguments(self):
+        changes = (
+            ("cmd/client/multihop_native_capture.go", "proveNativeMultihopCapture(ctx, sel, current, proveNativeMultihopLaneContext)",
+             "proveNativeMultihopCapture(ctx, sel, current, proveMultihopLaneNodeContext)"),
+            ("cmd/client/multihop_native_capture.go", "prove(ctx, sel.Entry, multihopEntryProofProxy)", "prove(ctx, sel.Exit, multihopEntryProofProxy)"),
+            ("cmd/client/multihop_native_capture.go", "prove(ctx, sel.Exit, multihopProofProxy)", "prove(ctx, sel.Entry, multihopProofProxy)"),
+            ("cmd/client/multihop_native_imported.go", 'if profile.NodeKind != "external" {', 'if profile.NodeKind == "external" {'),
+            ("cmd/client/multihop_native_imported.go", "proveMultihopLaneNodeContext(ctx, profile, proxy)", "proveMultihopLaneNodeContext(context.Background(), profile, proxy)"),
+            ("cmd/client/multihop_native_imported.go", "proxy != multihopEntryProofProxy", "proxy != multihopProofProxy"),
+            ("cmd/client/multihop_native_imported.go", "!desktopImportedEntryProtocol(profile.External.Protocol)", "false"),
+            ("cmd/client/multihop_native_imported.go", "newMultihopLaneHTTPClient(proxy, 2500*time.Millisecond)", "newMultihopLaneHTTPClient(multihopProofProxy, 2500*time.Millisecond)"),
+            ("cmd/client/multihop_native_imported.go", 'profile.External.ExpectedPublicIP, "imported entry", 3*time.Second', '"", "imported entry", 3*time.Second'),
+        )
+        for path, before, after in changes:
+            for replacement in (after, "/* " + before + " */", '"' + before.replace('"', '\\"') + '"'):
+                with self.subTest(path=path, before=before, replacement=replacement):
+                    self.changes.clear()
+                    self.replace(path, before, replacement)
+                    self.assert_multihop_scores(False)
+
+    def test_original_runtime_profile_and_context_guards_are_required(self):
+        path = "cmd/client/multihop_native_capture.go"
+        changes = (
+            ("a.nativeMultihopProofOwnerCurrent(sel, command)", "a.nativeMultihopProofOwnerCurrent(sel, other)"),
+            ("a.connectionOperationContextOrBackground(), nativeMultihopProofTimeout(sel)", "context.Background(), nativeMultihopProofTimeout(sel)"),
+            ("!a.ownsConnectionRuntime(command)", "false"),
+            ("a.profiles.SelectedID == sel.Control.ID", "true"),
+            ("nativeMultihopLiveProfilesCurrent(a, sel)", "true"),
+            ("ctx.Err() != nil || !current()", "false"),
+            ("!owns() || sel.Native == nil || sel.Native.validate(sel) != nil", "sel.Native == nil"),
+            ("ctx.Err() != nil || !owns() || sel.Native.validate(sel) != nil", "ctx.Err() != nil"),
+            ("err == nil && ctx.Err() == nil && owns() && sel.Native.validate(sel) == nil", "err == nil"),
+        )
+        for before, after in changes:
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\n"
+                self.assert_multihop_scores(False)
+
+    def test_imported_selected_dns_is_required_after_transport_before_admission(self):
+        capture = "cmd/client/multihop_native_capture.go"
+        dns = "cmd/client/multihop_native_imported_dns.go"
+        changes = (
+            (capture, "if sel.Native.imported {", "if !sel.Native.imported {"),
+            (capture, "a.proveImportedNativeDNS(ctx, sel, command)", "a.proveImportedNativeDNS(context.Background(), sel, command)"),
+            (capture, "a.proveImportedNativeDNS(ctx, sel, command)", "a.proveImportedNativeDNS(ctx, sel, other)"),
+            (dns, "owner.selection.Native != selection.Native", "false"),
+            (dns, "!owner.launch.importedEntry", "false"),
+            (dns, "!a.nativeMultihopProofOwnerCurrent(selection, command)", "false"),
+            (dns, "desktopNodeProcessExited(owner.launch)", "false"),
+            (dns, "actual != owner", "false"),
+            (dns, "expectedDNSSelection(selection.Exit)", "expectedDNSSelection(selection.Entry)"),
+            (dns, 'readDesktopRuntimeFileContext(ctx, owner.launch, "sing-box.json", 4<<20)', 'readDesktopRuntimeFileContext(ctx, other, "sing-box.json", 4<<20)'),
+            (dns, "verifySingBoxDNSConfigBytes(raw, selected)", "nil"),
+            (dns, "exchangeDesktopImportedDNS(parent, owner.launch, current)", "0, nil"),
+        )
+        for path, before, after in changes:
+            for replacement in (after, "/* " + before + " */"):
+                with self.subTest(path=path, before=before, replacement=replacement):
+                    self.changes.clear()
+                    self.replace(path, before, replacement)
+                    self.assert_multihop_scores(False)
+        self.changes.clear()
+        call = "if _, err := a.proveImportedNativeDNS(ctx, sel, command); err != nil {\n\t\t\treturn err\n\t\t}"
+        self.replace(capture, call, "return nil /* " + call + " */")
+        self.changes[capture] += "\nfunc unrelatedDNSWitness() { " + call + " }\n"
+        self.assert_multihop_scores(False)
+
+    def test_weighted_scores_require_both_graph_branches(self):
+        for path, before, after in (
+            ("cmd/client/multihop_native_capture.go", 'entryProofTag := "entry-wg"', 'entryProofTag := "entry-private"'),
+            ("cmd/client/multihop_native_capture.go", 'entryProofTag = "entry-private"', 'entryProofTag = "proxy"'),
+            ("cmd/client/multihop_native_imported.go", "nativeMultihopProofConfig(compiled.Config(), sel.Entry)", "nativeMultihopProofConfig(compiled.Config(), sel.Exit)"),
+        ):
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.assert_multihop_scores(False)
+
+    def test_proof_guards_accept_formatting_but_not_duplicate_functions(self):
+        path = "cmd/client/multihop_native_imported.go"
+        self.replace(path, "proveMultihopLaneNodeContext(ctx, profile, proxy)", "proveMultihopLaneNodeContext(\nctx, /* original */ profile, proxy)")
+        self.assert_multihop_scores(True)
+        for path, declaration in (
+            ("cmd/client/multihop_native_capture.go", "func (a *app) proveNativeMultihop(sel multihopSelection, command *exec.Cmd) error"),
+            ("cmd/client/multihop_native_imported.go", "func proveNativeMultihopLaneContext(ctx context.Context, profile common.RouterProfile, proxy string) error"),
+            ("cmd/client/multihop_native_imported_dns.go", "func (a *app) proveImportedNativeDNS(parent context.Context, selection multihopSelection, command *exec.Cmd) (float64, error)"),
+        ):
+            with self.subTest(declaration=declaration):
+                self.changes.clear()
+                self.changes[path] = self.body(path) + "\n" + declaration + " {}\n"
+                self.assert_multihop_scores(False)
 
     def test_exact_public_adapters_are_required_by_every_consumer(self):
         path = "cmd/client/multihop_native_routes.go"

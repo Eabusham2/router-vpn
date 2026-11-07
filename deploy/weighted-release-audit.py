@@ -16,6 +16,8 @@ _native_spec = importlib.util.spec_from_file_location(
 _native_module = importlib.util.module_from_spec(_native_spec)
 _native_spec.loader.exec_module(_native_module)
 native_multihop_shipping_chain = _native_module.native_multihop_shipping_chain
+native_multihop_proof_lanes = _native_module.native_multihop_proof_lanes
+native_multihop_proof_admission = _native_module.native_multihop_proof_admission
 
 
 def body(rel: str) -> str:
@@ -156,7 +158,12 @@ def retained_native_multihop_platform(platform: str) -> bool:
                         "return prepareOwnedNativeMultihopCommand(a, sel, nil)")
         and all_markers("cmd/client/multihop_native_capture.go", "mobilemultihop.NodeMultihopConfig",
                         "verifyBundledNative", "nativeMultihopEnvironment", "HOMEVPN_POLICY_PROFILE_ID",
-                        "proveMultihopLaneNodeContext", "captureNativeMultihopSelection")
+                        "captureNativeMultihopSelection")
+        and native_multihop_proof_lanes(body("cmd/client/multihop_native_capture.go"),
+                                       body("cmd/client/multihop_native_imported.go"))
+        and native_multihop_proof_admission(body("cmd/client/multihop_native_capture.go"),
+                                           body("cmd/client/multihop_native_imported.go"),
+                                           body("cmd/client/multihop_native_imported_dns.go"))
         and all_markers("cmd/client/multihop_native_launch.go",
                         "prepareOwnedNativeMultihopCommandContext(a.connectionOperationContextOrBackground(), a, sel, descriptor)",
                         "preflightOwnedNativeMultihopCommandContext(ctx, a, sel, descriptor)",

@@ -102,10 +102,13 @@ class SpeedLabAndroidTransactionAuditTests(unittest.TestCase):
 
 class SpeedLabNativeMultihopLaneAuditTests(unittest.TestCase):
     source = (Path(__file__).resolve().parents[1]/"cmd/client/multihop_native_capture.go").read_text()
+    imported = (Path(__file__).resolve().parents[1]/"cmd/client/multihop_native_imported.go").read_text()
 
-    def check_source(self, source):
+    def check_source(self, source, imported=None):
         errors = []
-        with patch.dict(NATIVE_CHECK.__globals__, {"read": lambda _: source, "errors": errors}):
+        def read(path):
+            return source if path == "fixture.go" else self.imported if imported is None else imported
+        with patch.dict(NATIVE_CHECK.__globals__, {"read": read, "errors": errors}):
             NATIVE_CHECK("fixture.go")
         return errors
 
@@ -123,11 +126,59 @@ class SpeedLabNativeMultihopLaneAuditTests(unittest.TestCase):
                        '"listen_port": nativeMultihopExitProofPort',
                        'route["rules"] = append([]any{',
                        '"inbound": []any{"multihop-entry-proof"}',
-                       '"outbound": "entry-private"',
+                       'entryProofTag = "entry-private"',
                        '"inbound": []any{"multihop-proof"}',
                        '"outbound": "proxy"'):
             with self.subTest(marker=marker):
+                self.assertIn(marker, self.source)
                 self.assertTrue(self.check_source(self.source.replace(marker, "removed")))
+
+    def test_wrong_paired_imported_branch_or_route_is_rejected(self):
+        changes = (
+            ('entry.NodeKind == "external" && entry.External != nil', 'entry.NodeKind != "external" && entry.External != nil'),
+            ('entryProofTag := "entry-wg"', 'entryProofTag := "entry-private"'),
+            ('if !imported {', 'if imported {'),
+            ('entryProofTag = "entry-private"', 'entryProofTag = "entry-wg"'),
+            ('"outbound": entryProofTag', '"outbound": "entry-private"'),
+            ('entry.SocksHost, entry.SocksPort, entry.SocksUsername, entry.SocksPassword', 'entry.SocksHost, entry.SocksPort, "", ""'),
+            ('nativeMultihopProofConfig(config, sel.Entry)', 'nativeMultihopProofConfig(config, sel.Exit)'),
+            ('captureDesktopImportedMultihop(ctx, root, sel, modes, lookup)', 'captureDesktopImportedMultihop(context.Background(), root, sel, modes, lookup)'),
+            ('proof["tag"] != "routervpn-proof"', 'proof["tag"] != "other-proof"'),
+            ('tun["strict_route"] != true', 'false'),
+            ('route["final"] != "proxy"', 'false'),
+        )
+        for before, after in changes:
+            with self.subTest(before=before):
+                self.assertIn(before, self.source)
+                changed = self.source.replace(before, after)
+                self.assertTrue(self.check_source(changed + "\n// " + before))
+
+    def test_imported_compiler_and_original_entry_are_required(self):
+        for before, after in (
+            ('mobilemultihop.NewImportedEntry(source, capture, sel.ExitMode, encodeDesktopNodeAssets(files), string(rawFinal), startJSON, bootstrap)', 'compileUnrelatedGraph()'),
+            ('nativeMultihopProofConfig(compiled.Config(), sel.Entry)', 'nativeMultihopProofConfig(compiled.Config(), sel.Exit)'),
+            ('c.configs[sel.ExitMode] = config', 'c.configs[sel.ExitMode] = other'),
+        ):
+            for replacement in (after, "/* " + before + " */", '"' + before + '"'):
+                with self.subTest(before=before, replacement=replacement):
+                    self.assertIn(before, self.imported)
+                    self.assertTrue(self.check_source(self.source, self.imported.replace(before, replacement)))
+
+    def test_branch_comments_and_unrelated_functions_cannot_supply_routes(self):
+        for marker in ('entryProofTag := "entry-wg"', 'entryProofTag = "entry-private"',
+                       'private, err = nativeEntryPrivateOutbound(entry.SocksHost, entry.SocksPort, entry.SocksUsername, entry.SocksPassword)',
+                       'graph["outbounds"] = append(outs, private)', '"outbound": entryProofTag'):
+            for witness in ('\n// ' + marker, '\n/* ' + marker + ' */', '\nvar fixture = `' + marker + '`',
+                            '\nfunc unrelatedSourceWitness() { ' + marker + ' }'):
+                with self.subTest(marker=marker, witness=witness):
+                    self.assertIn(marker, self.source)
+                    self.assertTrue(self.check_source(self.source.replace(marker, "removed") + witness))
+
+    def test_graph_guard_accepts_formatting_but_rejects_duplicate_definition(self):
+        changed = self.source.replace('entryProofTag := "entry-wg"', 'entryProofTag := /* captured imported entry */\n "entry-wg"')
+        self.assertEqual([], self.check_source(changed))
+        declaration = "func nativeMultihopProofConfig(config string, entry common.RouterProfile) (string, string, error)"
+        self.assertTrue(self.check_source(self.source + "\n" + declaration + " {}\n"))
 
     def test_comments_and_raw_fixtures_cannot_supply_a_proof_lane(self):
         marker = '"inbound": []any{"multihop-entry-proof"}'
