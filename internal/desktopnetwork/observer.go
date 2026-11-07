@@ -119,9 +119,7 @@ func OpenWithLifetime(initialization, lifetime context.Context, original *Deskto
 		err = t.initialize(initialization)
 	}
 	if err != nil {
-		t.mu.Lock()
 		t.failLocked(err)
-		t.mu.Unlock()
 		if cleanup := t.Close(); cleanup != nil {
 			return t, errors.Join(err, cleanup)
 		}
@@ -156,7 +154,9 @@ func (t *Tracker) initialize(ctx context.Context) error {
 	if err == nil {
 		err = t.native.Barrier(ctx)
 	}
-	t.mu.Lock()
+	if lockErr := LockContext(ctx, &t.mu); lockErr != nil {
+		return errors.Join(err, lockErr, t.failureError())
+	}
 	defer t.mu.Unlock()
 	if err != nil {
 		return err
@@ -281,12 +281,24 @@ func observationExpired(err error) bool {
 }
 
 func (t *Tracker) Identity() string {
-	if t == nil {
-		return ""
+	identity, _ := t.IdentityContext(context.Background())
+	return identity
+}
+
+// IdentityContext reads only the original frozen key. It does not refresh the
+// baseline or replace the separate current-observation requirement.
+func (t *Tracker) IdentityContext(ctx context.Context) (string, error) {
+	if t == nil || ctx == nil {
+		return "", errors.New("network observer identity has no caller or owner")
 	}
-	t.mu.Lock()
+	if err := LockContext(ctx, &t.mu); err != nil {
+		return "", err
+	}
 	defer t.mu.Unlock()
-	return t.identity
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return t.identity, nil
 }
 
 // Current never calls the application or its selection lock. This permits the
@@ -358,13 +370,18 @@ func (t *Tracker) CurrentContext(ctx context.Context) (result error) {
 
 func (t *Tracker) Begin(ctx context.Context, original *DesktopNetworkReceipt) (result error) {
 	defer t.reportFailure(&result)
-	if ctx == nil || ctx.Err() != nil {
+	if t == nil || ctx == nil {
 		return errors.New("network transition lost its caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := t.CurrentContext(ctx); err != nil {
 		return t.failLocked(err)
 	}
-	t.mu.Lock()
+	if err := LockContext(ctx, &t.mu); err != nil {
+		return errors.Join(err, t.failLocked(err))
+	}
 	defer t.mu.Unlock()
 	if ctx.Err() != nil || t.closed || t.closing || t.transition || t.failureError() != nil || receiptKey(original) != receiptKey(t.current) {
 		return t.failLocked(errors.New("network transition does not own its original native receipt"))
@@ -374,12 +391,23 @@ func (t *Tracker) Begin(ctx context.Context, original *DesktopNetworkReceipt) (r
 	return nil
 }
 
-func (t *Tracker) Record(receipt DesktopNetworkReceipt) (result error) {
+func (t *Tracker) Record(receipt DesktopNetworkReceipt) error {
+	if t == nil {
+		return errors.New("transient network receipt has no observer")
+	}
+	return t.RecordContext(t.ctx, receipt)
+}
+
+// RecordContext keeps the same bounded transition history and receipt identity
+// while admitting its actual caller through the original tracker lock.
+func (t *Tracker) RecordContext(ctx context.Context, receipt DesktopNetworkReceipt) (result error) {
 	defer t.reportFailure(&result)
-	if t == nil || receipt.Validate() != nil || receipt.TargetOS != runtime.GOOS {
+	if t == nil || ctx == nil || receipt.Validate() != nil || receipt.TargetOS != runtime.GOOS {
 		return errors.New("transient network receipt is malformed or for another platform")
 	}
-	t.mu.Lock()
+	if err := LockContext(ctx, &t.mu); err != nil {
+		return errors.Join(err, t.failureError())
+	}
 	defer t.mu.Unlock()
 	if t.closed || t.closing || !t.transition || t.retained != nil || t.failureError() != nil || t.ctx.Err() != nil {
 		return errors.New("transient network receipt has no current transition owner")
@@ -394,6 +422,9 @@ func (t *Tracker) Record(receipt DesktopNetworkReceipt) (result error) {
 			}
 			return nil
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	t.recorded = append(t.recorded, *cloneReceipt(&receipt))
 	return nil
@@ -482,7 +513,17 @@ func (t *Tracker) End(ctx context.Context, current *DesktopNetworkReceipt) (resu
 		err = t.native.Barrier(ctx)
 	}
 	_, key, projection := project(snapshot, current)
-	t.mu.Lock()
+	// Retain a native failure even when cancellation prevents lock admission.
+	// Begin/End keep their original stricter startup invalidation semantics.
+	if err != nil {
+		t.failLocked(err)
+	}
+	if projection != nil {
+		t.failLocked(projection)
+	}
+	if lockErr := LockContext(ctx, &t.mu); lockErr != nil {
+		return errors.Join(err, projection, lockErr, t.failLocked(lockErr))
+	}
 	defer t.mu.Unlock()
 	if ctx.Err() != nil || t.closed || t.closing || !t.transition || t.ctx.Err() != nil {
 		return t.failLocked(errors.New("native transition completion has no current observer"))
