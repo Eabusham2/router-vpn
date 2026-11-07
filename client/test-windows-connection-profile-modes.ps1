@@ -98,7 +98,7 @@ public sealed class ProfileModeOwner {
     }
     $MultihopExitModeCombo=$Owner.FindName('UnifiedExitMode');$execution=$Owner.FindName('UnifiedExecution')
     $MultihopEntryModeCombo=$Owner.FindName('UnifiedEntryMode');$MultihopEntryModeCombo.SelectedIndex=0
-    $ExpectedEntries=@('','wg','awg2-fast','awg2-strong','wg-pq','awg2-pq','shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','ss-v2ray','split','max','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg','socks5','http-connect','https-connect')
+    $ExpectedEntries=@('','wg','awg2-fast','awg2-strong','wg-pq','awg2-pq','shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','ss-v2ray','split','max','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg','wireguard','amneziawg','socks5','http-connect','https-connect')
     Check ((@($MultihopEntryModeCombo.Items|ForEach-Object{$_.Tag})-join',')-ceq($ExpectedEntries-join',')) 'Generated entry choices changed or disappeared'
     $ExpectedModes=@('shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','wg','awg2-fast','awg2-strong','ss-v2ray','split','max','wg-pq','awg2-pq','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg')
     $ExpectedExecutions=@('local','server','auto')
@@ -193,7 +193,7 @@ public sealed class ProfileModeOwner {
         Check ($null-eq$script:ConnectBody) 'Unavailable main entry reached Connect'
     }
     $MultihopExitModeCombo.SelectedIndex=0;$execution.SelectedIndex=0
-    foreach($BadEntry in @('stale-mode','WG','wg ', 'auto','wireguard')){
+    foreach($BadEntry in @('stale-mode','WG','wg ', 'auto','openvpn','WireGuard','amneziawg ')){
         $script:Loaded.multihop_exit_mode=$ExpectedModes[0];$script:Loaded.multihop_entry_mode=$BadEntry
         & $LoadCallback
         Check ($null-eq$MultihopEntryModeCombo.SelectedItem) 'Unsupported loaded entry silently became a valid mode'

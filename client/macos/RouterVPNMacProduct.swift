@@ -28,6 +28,8 @@ enum RouterVPNNodeEntryModes {
         ("max-tls-awg", "MAX TLS / AWG + PQ"),
         ("max-quic-wg", "MAX QUIC / WG + PQ"),
         ("max-quic-awg", "MAX QUIC / AWG + PQ"),
+        ("wireguard", "Imported WireGuard · Local only"),
+        ("amneziawg", "Imported AmneziaWG · Local only"),
         ("socks5", "Imported SOCKS5 · Local only"),
         ("http-connect", "Imported HTTP CONNECT · Local only"),
         ("https-connect", "Imported HTTPS CONNECT · Local only"),

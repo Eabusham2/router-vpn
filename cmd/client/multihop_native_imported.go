@@ -16,7 +16,7 @@ import (
 
 func desktopImportedEntryProtocol(protocol string) bool {
 	switch protocol {
-	case "socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect":
+	case "socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect", "wireguard", "amneziawg":
 		return true
 	}
 	return false

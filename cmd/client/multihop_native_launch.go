@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"router-vpn/internal/mobilemtu"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -97,6 +98,11 @@ func compileRetainedNativeMultihopLaunch(sel multihopSelection, descriptor *desk
 		data, err = restoreDesktopNodeTUNMTU(data, sel.restoreMTU)
 		if err != nil {
 			return nil, err
+		}
+		if sel.Native.imported && (sel.EntryMode == "wireguard" || sel.EntryMode == "amneziawg") {
+			if _, err := mobilemtu.NewPlan(string(data), sel.restoreMTU); err != nil {
+				return nil, errors.Join(errors.New("restored imported packet TUN exceeds its original captured envelope"), err)
+			}
 		}
 	}
 	sum := sha256.Sum256(data)

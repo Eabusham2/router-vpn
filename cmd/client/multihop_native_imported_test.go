@@ -29,6 +29,12 @@ func desktopImportedFixture(t *testing.T, protocol, finalMode string) (string, m
 		entry.External.Shadowsocks.Method = "2022-blake3-aes-256-gcm"
 		entry.External.Shadowsocks.Password = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("e", 32)))
 	}
+	if protocol == "wireguard" {
+		entry.External.WireGuard.MTU = 1500
+	}
+	if protocol == "amneziawg" {
+		entry.External.AmneziaWG.MTU = 1500
+	}
 	paired.Exit.DAITAEnabled = false
 	paired.Exit.MultihopEnabled, paired.Exit.MultihopEntryID, paired.Exit.MultihopExitID = true, entry.ID, paired.Exit.ID
 	paired.Exit.MultihopEntryMode, paired.Exit.MultihopExecution = protocol, "local"
@@ -232,7 +238,12 @@ func TestDesktopImportedPhysicalEnvironmentUsesOnlyActualLayerSockets(t *testing
 }
 
 func TestDesktopImportedSavedProfileAddLoadUpdateDelete(t *testing.T) {
-	root, sel := desktopImportedFixture(t, "socks5", "reality-vision")
+	desktopImportedSavedProfileAddLoadUpdateDelete(t, "socks5", "reality-vision")
+}
+
+func desktopImportedSavedProfileAddLoadUpdateDelete(t *testing.T, protocol, finalMode string) {
+	t.Helper()
+	root, sel := desktopImportedFixture(t, protocol, finalMode)
 	t.Setenv("HOMEVPN_ROOT", root)
 	t.Setenv("HOMEVPN_PORTABLE", "0")
 	manifest := filepath.Join(root, "runtime", "native", "NATIVE-RUNTIME.json")
@@ -248,28 +259,39 @@ func TestDesktopImportedSavedProfileAddLoadUpdateDelete(t *testing.T) {
 	if err := a.persistProfilesLocked(); err != nil {
 		t.Fatal(err)
 	}
-	body := map[string]any{"name": "Imported to paired final", "mode": "reality-vision", "multihop_enabled": true, "multihop_entry_id": sel.Entry.ID, "multihop_exit_id": sel.Exit.ID, "multihop_entry_mode": "", "multihop_exit_mode": sel.ExitMode, "multihop_execution": "local"}
+	logicalMode := finalMode
+	if finalMode == "wg" {
+		logicalMode = "base-raw"
+	}
+	body := map[string]any{"name": "Imported to paired final", "mode": logicalMode, "multihop_enabled": true, "multihop_entry_id": sel.Entry.ID, "multihop_exit_id": sel.Exit.ID, "multihop_entry_mode": "", "multihop_exit_mode": sel.ExitMode, "multihop_execution": "local"}
 	saved := postSetup(t, a, "/api/connection-profile/setup/save", body)
 	if saved.Code != http.StatusOK {
-		t.Fatal(saved.Code, saved.Body.String())
+		t.Fatal("save", saved.Code, saved.Body.String())
 	}
 	store, err := loadConnectionProfileStore(a)
 	if err != nil || len(store.Profiles) != 1 || len(store.Profiles[0].Hops) != 1 || store.Profiles[0].Hops[0].External == nil {
 		t.Fatal("save lost independent imported policy", err)
+	}
+	wantedPolicy, err := snapshotExternalConnectionPolicy(sel.Entry)
+	if err != nil || !reflect.DeepEqual(store.Profiles[0].Hops[0].External, wantedPolicy) {
+		t.Fatal("save changed independently captured imported policy", err)
 	}
 	id := store.Profiles[0].ID
 	a.profiles.Profiles[0].DNSMode = "rescue"
 	a.profiles.Profiles[1].MultihopEnabled = false
 	loaded := postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": id})
 	if loaded.Code != http.StatusOK {
-		t.Fatal(loaded.Code, loaded.Body.String())
+		t.Fatal("load", loaded.Code, loaded.Body.String())
 	}
 	if a.profiles.Profiles[0].DNSMode != "home" || !a.profiles.Profiles[1].MultihopEnabled || a.profiles.SelectedID != sel.Exit.ID || a.state.Connected {
 		t.Fatal("load lost original policy or changed connected state")
 	}
+	if !reflect.DeepEqual(a.profiles.Profiles[0].External, sel.Entry.External) || a.profiles.Profiles[1].APIToken != sel.Exit.APIToken {
+		t.Fatal("load mixed original entry credentials with the paired final")
+	}
 	body["id"], body["name"] = id, "Updated imported path"
 	if r := postSetup(t, a, "/api/connection-profile/setup/update", body); r.Code != http.StatusOK {
-		t.Fatal(r.Code, r.Body.String())
+		t.Fatal("update", r.Code, r.Body.String())
 	}
 	for _, execution := range []string{"server", "auto"} {
 		body["multihop_execution"] = execution
@@ -283,6 +305,9 @@ func TestDesktopImportedSavedProfileAddLoadUpdateDelete(t *testing.T) {
 	store, err = loadConnectionProfileStore(a)
 	if err != nil || len(store.Profiles) != 0 || len(a.profiles.Profiles) != 2 {
 		t.Fatal("delete removed linked original nodes", err)
+	}
+	if !reflect.DeepEqual(a.profiles.Profiles[0].External, sel.Entry.External) || a.profiles.Profiles[1].APIToken != sel.Exit.APIToken {
+		t.Fatal("delete changed independent node credentials")
 	}
 }
 
@@ -346,7 +371,12 @@ func TestDesktopImportedCaptureRejectsFinalIdentityMutationAndCancellation(t *te
 }
 
 func TestDesktopImportedEntryPublicProofWrongIdentityCancelAndReplacement(t *testing.T) {
-	root, original := desktopImportedFixture(t, "shadowsocks", "shadowsocks")
+	desktopImportedEntryPublicProofWrongIdentityCancelAndReplacement(t, "shadowsocks")
+}
+
+func desktopImportedEntryPublicProofWrongIdentityCancelAndReplacement(t *testing.T, protocol string) {
+	t.Helper()
+	root, original := desktopImportedFixture(t, protocol, "shadowsocks")
 	sel, err := captureNativeMultihopSelection(context.Background(), root, original, []string{original.ExitMode}, nil)
 	if err != nil {
 		t.Fatal(err)

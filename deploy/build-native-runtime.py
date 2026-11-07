@@ -110,6 +110,7 @@ def inputs():
                              ROOT/'deploy/test_desktop_pt_inventory.py',
                              ROOT/'deploy/test_desktop_pt_inventory_runner.py',
                              ROOT/'deploy/test_desktop_imported_runtime.py',
+                             ROOT/'deploy/test_desktop_imported_packet_runtime.py',
                              ROOT/'deploy/build-mobile-pq.py', ROOT/'deploy/prepare-desktop-rosenpass.py',
                              ROOT/'deploy/setup-desktop-native-toolchain.py',
                              ROOT/'deploy/install-desktop-windows-toolchain.py',
@@ -692,6 +693,74 @@ def verify_imported_desktop_configs(bundle, target, env):
     print('Native imported desktop: all26 original graphs accepted by the complete built engine; exact captured-controller verdicts passed. Physical-device acceptance remains separate.',flush=True)
 
 
+IMPORTED_PACKET_PROTOCOLS = ('wireguard', 'amneziawg')
+IMPORTED_PACKET_FINALS = ('shadowsocks', 'hysteria2', 'wg', 'awg2-fast', 'awg2-strong', 'reality-vision')
+IMPORTED_PACKET_GRAPH_TEST = 'TestDesktopImportedPacketGraphs'
+IMPORTED_PACKET_SOURCE_TEST = 'TestDesktopImportedPacketSourceOwnership'
+IMPORTED_PACKET_LIMIT_TEST = 'TestDesktopImportedPacketLimits'
+IMPORTED_PACKET_DNS_TEST = 'TestDesktopImportedPacketSelectedDNS'
+IMPORTED_PACKET_PROFILE_TEST = 'TestDesktopImportedPacketProfiles'
+IMPORTED_PACKET_PROOF_TEST = 'TestDesktopImportedPacketProof'
+IMPORTED_PACKET_LIFECYCLE_TEST = 'TestDesktopImportedPacketDailyConnectRestoreAndOwnedTeardown'
+IMPORTED_PACKET_SOURCE_CASES = ('private-key', 'peer-key', 'psk', 'address', 'allowed-ips', 'endpoint', 'keepalive',
+    'packet-mtu', 'parameters', 'public-exit', 'final-token', 'final-dns', 'entry-layer', 'final-layer')
+IMPORTED_PACKET_LIMIT_CASES = ('cancel', 'undersized-entry', 'fixed-overflow', 'missing-layer', 'server', 'auto', 'wrong-entry-mode', 'openvpn')
+IMPORTED_PACKET_FILES = {protocol+'--'+mode+'--'+entry+'--'+final+'.json'
+    for protocol in IMPORTED_PACKET_PROTOCOLS for mode in IMPORTED_PACKET_FINALS
+    for entry in IMPORTED_DESKTOP_LAYERS for final in IMPORTED_DESKTOP_LAYERS}
+
+
+def imported_desktop_packet_verdicts(target):
+    roots = (IMPORTED_PACKET_GRAPH_TEST, IMPORTED_PACKET_SOURCE_TEST, IMPORTED_PACKET_LIMIT_TEST,
+             IMPORTED_PACKET_DNS_TEST, IMPORTED_PACKET_PROFILE_TEST, IMPORTED_PACKET_PROOF_TEST)
+    expected = set(roots)
+    expected.update(IMPORTED_PACKET_GRAPH_TEST+'/'+protocol+'/'+mode+'/'+entry+'/'+final
+        for protocol in IMPORTED_PACKET_PROTOCOLS for mode in IMPORTED_PACKET_FINALS
+        for entry in IMPORTED_DESKTOP_LAYERS for final in IMPORTED_DESKTOP_LAYERS)
+    for root, cases in ((IMPORTED_PACKET_SOURCE_TEST,IMPORTED_PACKET_SOURCE_CASES),
+                        (IMPORTED_PACKET_LIMIT_TEST,IMPORTED_PACKET_LIMIT_CASES),
+                        (IMPORTED_PACKET_DNS_TEST,('home','dot','doh'))):
+        expected.update(root+'/'+protocol+'/'+case for protocol in IMPORTED_PACKET_PROTOCOLS for case in cases)
+    expected.update(root+'/'+protocol for root in (IMPORTED_PACKET_PROFILE_TEST,IMPORTED_PACKET_PROOF_TEST) for protocol in IMPORTED_PACKET_PROTOCOLS)
+    expected.update(IMPORTED_PACKET_PROOF_TEST+'/'+protocol+'/'+case for protocol in IMPORTED_PACKET_PROTOCOLS
+                    for case in ('wrong-public','cancel','replacement','success'))
+    if target.startswith('linux/'):
+        roots += (IMPORTED_PACKET_LIFECYCLE_TEST,)
+        expected.add(IMPORTED_PACKET_LIFECYCLE_TEST)
+        expected.update(IMPORTED_PACKET_LIFECYCLE_TEST+'/'+protocol for protocol in IMPORTED_PACKET_PROTOCOLS)
+        expected.update(IMPORTED_PACKET_LIFECYCLE_TEST+'/'+protocol+'/'+case for protocol in IMPORTED_PACKET_PROTOCOLS
+                        for case in ('success','public-proof','source-replaced'))
+    return roots, expected
+
+
+def verify_imported_desktop_packet_configs(bundle, target, env):
+    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
+        raise ValueError('Imported packet gate requires its matching completed native bundle')
+    bundle = Path(bundle).absolute()
+    original = reuse(bundle,target,env=env)
+    roots, expected = imported_desktop_packet_verdicts(target)
+    with tempfile.TemporaryDirectory(prefix='routervpn-imported-packet-') as directory:
+        fixtures = Path(directory)
+        child = {**env,'ROUTERVPN_IMPORTED_DESKTOP_PACKET_FIXTURES':directory}
+        if target.startswith('linux/'):
+            child['ROUTERVPN_REQUIRE_IMPORTED_DESKTOP_LIFECYCLE'] = '1'
+        output = run(['go','test','-json',*([] if target == 'windows/arm64' else ['-race']),
+            './cmd/client','-run','^('+'|'.join(roots)+')$','-count=1','-timeout=60s'],cwd=ROOT,env=child,timeout=300)
+        verify_imported_native_verdicts(output,'router-vpn/cmd/client',expected)
+        if {path.name for path in fixtures.iterdir()} != IMPORTED_PACKET_FILES:
+            raise ValueError('Imported packet gate lost its exact108 original graphs')
+        captured = {name:regular(fixtures/name,4<<20) for name in IMPORTED_PACKET_FILES}
+        for name in sorted(captured):
+            if regular(fixtures/name,4<<20) != captured[name]:
+                raise ValueError('Original packet graph changed before native parsing')
+            run([bundle/binary_name(target),'check','-c',fixtures/name],env=env,timeout=20)
+        if {path.name for path in fixtures.iterdir()} != IMPORTED_PACKET_FILES or any(regular(fixtures/name,4<<20) != raw for name,raw in captured.items()):
+            raise ValueError('Original packet graph changed during native parsing')
+    if reuse(bundle,target,env=env) != original:
+        raise ValueError('Completed bundle changed during imported packet proof')
+    print('Native imported packet desktop: all108 original graphs accepted by the completed production engine; exact source/proof/profile verdicts passed. Installed-device acceptance remains separate.',flush=True)
+
+
 def verify_linux_stock_dns(bundle, target, env):
     host = 'linux/'+{'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), '')
     if platform.system() != 'Linux' or target != host or env.get('GOOS') != 'linux' or env.get('GOARCH') != target.split('/')[1]:
@@ -843,6 +912,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             DNSSEC.test_native_bundle(destination, target, env)
         if target == native_host_target():
             verify_imported_desktop_configs(destination, target, env)
+            verify_imported_desktop_packet_configs(destination, target, env)
         print('Reused verified complete native runtime '+target, flush=True)
         return destination
     if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:
@@ -1080,6 +1150,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             if '--runtime-dir' not in help_output or '--session' not in help_output:
                 raise ValueError('Actual native engine omitted its captured external owner command')
             verify_imported_desktop_configs(stage, target, env)
+            verify_imported_desktop_packet_configs(stage, target, env)
             if target.startswith('linux/'):
                 verify_installed_linux_host(source, stage, target, env)
             elif target.startswith('darwin/'):

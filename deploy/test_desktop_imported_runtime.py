@@ -312,12 +312,15 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
                          patch.object(N,'reuse',return_value={'captured':'receipt'}) as receipt,patch.object(N,'native_host_target',return_value=target), \
                          patch.object(N,'verify_linux_stock_dns'),patch.object(N,'verify_installed_darwin_host'), \
                          patch.object(N.DNSSEC,'test_native_bundle'),patch.object(N,'run') as run, \
+                         patch.object(N,'verify_imported_desktop_packet_configs') as packet, \
                          patch.object(N,'verify_imported_desktop_configs',side_effect=failure) as gate,contextlib.redirect_stdout(stdout):
                         if failure is None: self.assertEqual(N.build(target,bundle),bundle)
                         else:
                             with self.assertRaises(type(failure)) as caught: N.build(target,bundle)
                             self.assertIs(caught.exception,failure)
                     gate.assert_called_once_with(bundle,target,env)
+                    if failure is None: packet.assert_called_once_with(bundle,target,env)
+                    else: packet.assert_not_called()
                     receipt.assert_called_once_with(bundle,target,'original',env)
                     run.assert_not_called()
                     self.assertEqual('Reused verified complete native runtime' in stdout.getvalue(),failure is None)

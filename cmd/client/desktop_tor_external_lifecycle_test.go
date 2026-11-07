@@ -220,6 +220,13 @@ func TestDesktopTorOrdinarySavedMetadataCannotGrantRouterModeOrReplaceCapture(t 
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &saved) != nil {
 		t.Fatal(response.Code, response.Body.String())
 	}
+	if saved.Profile.External == nil || saved.Profile.External.validate() != nil || saved.Profile.External.MultihopEntryMode != "socks5" {
+		t.Fatal("ordinary Tor source did not retain its valid original SOCKS5 predecessor")
+	}
+	capturedBytes, err := os.ReadFile(connectionProfileStorePath(f.a))
+	if err != nil {
+		t.Fatal(err)
+	}
 	meta, err := loadConnectionProfileSetupMeta(f.a)
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +239,7 @@ func TestDesktopTorOrdinarySavedMetadataCannotGrantRouterModeOrReplaceCapture(t 
 		}
 		before = desktopTorStoredProfile(t, f)
 	}
-	for _, mode := range []string{"http-connect", "wg", "SOCKS5", " socks5", "unknown"} {
+	for _, mode := range []string{"http-connect", "https-connect", "wireguard", "amneziawg", "openvpn", "wg", "SOCKS5", " socks5", "unknown"} {
 		meta.Entries[saved.Profile.ID] = connectionProfileSetupMeta{MultihopEntryMode: mode, MultihopExecution: "local"}
 		if err := persistConnectionProfileSetupMeta(f.a, meta); err != nil {
 			t.Fatal(err)
@@ -241,10 +248,22 @@ func TestDesktopTorOrdinarySavedMetadataCannotGrantRouterModeOrReplaceCapture(t 
 		if response.Code == http.StatusOK || !bytes.Equal(before, desktopTorStoredProfile(t, f)) {
 			t.Fatal("foreign/invalid mirror changed complete profile authority", mode)
 		}
+		afterCapture, err := os.ReadFile(connectionProfileStorePath(f.a))
+		if err != nil || !bytes.Equal(capturedBytes, afterCapture) {
+			t.Fatal("foreign selector metadata replaced the saved original capture", mode, err)
+		}
 	}
 	for _, mode := range []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "openvpn"} {
-		if _, err := normalizeConnectionProfileEntryMode(mode); err == nil {
-			t.Fatal("ordinary Tor metadata broadened Router entry selection", mode)
+		// General selector vocabulary is separate from authority over this
+		// saved Tor source. Imported entries can now precede a paired final;
+		// that does not let their metadata replace this captured SOCKS5 hop.
+		normalized, err := normalizeConnectionProfileEntryMode(mode)
+		if mode == "openvpn" {
+			if err == nil {
+				t.Fatal("unproved OpenVPN gained paired-final selection", mode)
+			}
+		} else if err != nil || normalized != mode {
+			t.Fatal("admitted original imported protocol lost its exact selector identity", mode, err)
 		}
 		captured := *saved.Profile.External
 		captured.Protocol = "shadowsocks"

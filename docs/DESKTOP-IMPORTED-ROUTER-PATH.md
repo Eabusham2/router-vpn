@@ -13,12 +13,14 @@ Select the independently paired Router VPN final as the main node. In the
 multihop controls, choose the original imported entry, that same paired final,
 Local execution and an admitted final transport. Entry mode can name the
 original import protocol, or use the saved selection when it agrees with that
-original profile. Windows, macOS and Linux include SOCKS5 and HTTP/HTTPS CONNECT
-in their native entry selectors alongside the existing Shadowsocks and Hysteria2
-choices.
+original profile. Windows, macOS and Linux include original imported WireGuard,
+AmneziaWG, SOCKS5 and HTTP/HTTPS CONNECT in their native entry selectors alongside
+the existing Shadowsocks and Hysteria2 choices. Imported packet selections use
+the original `wireguard` or `amneziawg` protocol identity, independently of the
+paired-node `wg`, `awg2-fast` and `awg2-strong` choices.
 
-The desktop host admits original SOCKS5, Shadowsocks 2022, Hysteria2, HTTP CONNECT
-and HTTPS CONNECT entries. Its final transport catalog is Shadowsocks,
+The desktop host admits original WireGuard, AmneziaWG, SOCKS5, Shadowsocks 2022,
+Hysteria2, HTTP CONNECT and HTTPS CONNECT entries. Its final transport catalog is Shadowsocks,
 Hysteria2, WireGuard, AmneziaWG Fast, AmneziaWG Strong and REALITY/Vision. A
 catalog entry alone does not promise that every cross-product can be compiled.
 The existing imported-entry compiler validates each original transport,
@@ -26,6 +28,7 @@ independent Start Layer, selected final resolver and physical socket graph.
 
 | Captured entry | Baseline desktop graph admission |
 |---|---|
+| WireGuard, AmneziaWG | All six listed paired final transports, with independently captured entry/final layers and sufficient original packet capacity |
 | Shadowsocks 2022, Hysteria2 | All six listed paired final transports |
 | SOCKS5 | REALITY/Vision; other compiler-supported graphs require an exactly bounded outer socket graph |
 | HTTP CONNECT, HTTPS CONNECT | Shadowsocks or REALITY/Vision with the original carrier and selected-DNS capability |
@@ -86,6 +89,22 @@ exact outer address, port and protocol tuples reach all three desktop hosts.
 Unix helpers require the captured node session and configuration digest plus
 the imported-path marker; a missing tuple list cannot fall back to broad
 endpoint permissions. Persisted protection retains the same exact tuples.
+
+WireGuard and AmneziaWG remain userspace endpoints inside the same native Box.
+The original private key, peer key, preshared key, addresses, AllowedIPs,
+keepalive, endpoint MTU and AWG parameters remain attached to the imported
+profile. Their physical permission is one original UDP peer tuple, or the
+independently provisioned original entry layer's UDP tuple. Neither the final
+peer, public proof destination nor DNS server gains a physical bypass.
+
+The original entry's configured packet capacity must contain the complete
+selected nested data and control envelopes, including AWG junk and both Start
+Layers. A saved 1280-byte entry can therefore reject a nested packet final.
+Admission never enlarges that original endpoint MTU. The restored TUN value is
+validated with the shared `mobilemtu.NewPlan` contract against the captured
+graph; it cannot expand the original packet envelope. This distinguishes the
+virtual interface size from captured packet capacity without imposing a new
+blanket Jumbo policy.
 
 A cancelled proof, changed original profile, changed paired source or replaced
 runtime cannot admit the old result. Failed startup uses the existing owned
@@ -159,6 +178,48 @@ timed-out verdict prevents successful completion; a root pass cannot replace
 its leaf results. Runner regressions exercise these failures, source template
 registration and failure propagation before build/reuse success.
 
+### Additional WireGuard and AmneziaWG gate
+
+The packet extension preserves the 26 graph, 57/61 host and 13 native DNS
+inventories above. `ROUTERVPN_IMPORTED_DESKTOP_PACKET_FIXTURES` names another
+existing private directory for exactly 108 complete desktop graph files:
+two original entry protocols, all six paired final transports, and all nine
+independent entry/final layer pairs. Missing output or an unwritable requested
+destination is fatal. Every graph retains one protected TUN, both original
+proof lanes, final-owned Home AdGuard DNS and one bounded outer UDP tuple.
+
+The additional exact host verdict inventory is:
+
+| Test root | Required verdicts, including its root |
+|---|---:|
+| `TestDesktopImportedPacketGraphs` | 109 |
+| `TestDesktopImportedPacketSourceOwnership` | 29 |
+| `TestDesktopImportedPacketLimits` | 17 |
+| `TestDesktopImportedPacketSelectedDNS` | 7 |
+| `TestDesktopImportedPacketProfiles` | 3 |
+| `TestDesktopImportedPacketProof` | 11 |
+| `TestDesktopImportedPacketDailyConnectRestoreAndOwnedTeardown` (Linux) | 9 |
+
+The source controls replace original keys, addresses, AllowedIPs, keepalive,
+endpoint, packet MTU, AWG parameters, expected public exit, paired token, final
+DNS and each independent layer. The limits reject cancellation, insufficient
+entry capacity, an overflowing fixed MTU, missing layer provisioning,
+Server/Compare, a paired entry-mode alias and OpenVPN. Home AdGuard, custom DoT
+and custom DoH retain the final's original transport, port, TLS name and path.
+The profile tests execute Add, Load, Update and Delete for both packet families.
+Public entry proof rejects the wrong address, cancellation and owner replacement.
+
+The production builder requires all 176 additional host verdicts on
+Windows/macOS or 185 on Linux, with the same mandatory physical-inventory flag
+for Linux lifecycle cases. It then executes the completed full-production
+CLI against all 108 original graphs. The exact bundle receipt and graph bytes
+must remain unchanged. Both new-build and reuse paths run this gate after the
+existing 26-graph gate and before successful completion. Runner regressions
+reject missing/duplicate/foreign/early verdicts, skips, failures, timeouts,
+changed or linked graph files and replaced bundle receipts. Existing shared
+native packet peer gates remain independently required; neither a parser pass
+nor a fixture-based controller proof substitutes for installed-device traffic.
+
 `ROUTERVPN_REQUIRE_IMPORTED_DESKTOP_LIFECYCLE=1` makes unavailable physical
 network inventory fatal. Without that release flag, the lifecycle test explicitly
 skips on hosts that deny the required interface inventory. This test retains
@@ -171,18 +232,27 @@ The November 7 development workspace passed the focused Go race suites, exact
 regressions. That supplementary CLI omitted the optional PQ tag because the
 workspace lacked the required Rust archive; none of these 26 graphs selects a
 PQ mode. The full production native CLI parser remains mandatory in the release
-gate. The lifecycle test could not run here because netlink interface inventory
+gate. The packet extension also passed all 176 additional non-lifecycle host
+verdicts under race detection and all 108 graph checks with that supplementary
+CLI, alongside the unchanged 57 baseline non-lifecycle verdicts. Those executions
+were on Linux; they do not establish Windows or macOS runtime acceptance.
+The lifecycle tests could not run here because netlink interface inventory
 was denied. The prepared native DNS mailbox and cancellation race cases passed;
 the real Box uncached-query case failed during network-manager startup because
 the workspace denied netlink sockets. That native query case remains mandatory
-in the production gate. Native GUI compilation was also unavailable locally: Swift,
-PowerShell and GTK development dependencies were absent. These are explicit
+in the production gate. Verified Linux Swift 6.4.2 is available and has executed
+the mobile source producers. The extracted desktop Swift profile callbacks also
+passed 3,068 behavioral checks with the new entries, and all 14 mutation
+controls were rejected; their widgets and scheduling remain explicit fixtures.
+The macOS SDK/AppKit build, PowerShell and GTK
+development dependencies remain unavailable locally. These are explicit
 remaining validation obligations, not successful installed-desktop acceptance.
 
 ## Remaining product scope
 
-The shared mobile compiler also supports imported WireGuard, AmneziaWG and
-OpenVPN entry families; this desktop admission does not yet expose them.
+The shared mobile compiler also supports imported OpenVPN entry families; this
+desktop admission does not expose them until its actual native Box retains the
+original connected remote, MTU and reader proof.
 Dynamic SOCKS UDP physical ownership remains unfinished. Additional paired final
 families, Server/Compare for this direction, and complete graph parity remain
 open requirements. Selected-path live proof, retained native lifecycle, package

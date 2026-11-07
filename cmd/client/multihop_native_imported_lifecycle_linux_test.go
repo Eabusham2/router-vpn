@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,11 @@ import (
 // multihop lifecycle test. Capture, staging, child/Stop join, DNS configuration,
 // runtime registries and restore selection are the real shipping paths.
 func TestDesktopImportedDailyConnectRestoreAndOwnedTeardown(t *testing.T) {
+	desktopImportedDailyConnectRestoreAndOwnedTeardown(t, "shadowsocks")
+}
+
+func desktopImportedDailyConnectRestoreAndOwnedTeardown(t *testing.T, protocol string) {
+	t.Helper()
 	if physicalNetworkIdentity() == "" {
 		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_DESKTOP_LIFECYCLE") == "1" {
 			t.Fatal("required imported desktop lifecycle cannot inventory a physical network")
@@ -29,9 +35,11 @@ func TestDesktopImportedDailyConnectRestoreAndOwnedTeardown(t *testing.T) {
 	for _, fault := range []string{"success", "public-proof", "source-replaced"} {
 		t.Run(fault, func(t *testing.T) {
 			f := newNativeMultihopFailureFixture(t, "on-connect")
-			entry, _ := desktopExternalNativeFixture(t, "shadowsocks")
+			entry, _ := desktopExternalNativeFixture(t, protocol)
 			entry.ID = "entry"
-			entry.External.Shadowsocks.Method = "2022-blake3-aes-256-gcm"
+			if protocol == "shadowsocks" {
+				entry.External.Shadowsocks.Method = "2022-blake3-aes-256-gcm"
+			}
 			final := cloneRouterProfile(f.a.profiles.Profiles[2])
 			final.DAITAEnabled = false
 			final.KillSwitch, final.KillSwitchPolicy = true, "on-connect"
@@ -62,7 +70,15 @@ func TestDesktopImportedDailyConnectRestoreAndOwnedTeardown(t *testing.T) {
 				}
 				if fault == "source-replaced" {
 					f.a.mu.Lock()
-					f.a.profiles.Profiles[0].External.Shadowsocks.Password = testWGKey('z')
+					changed := f.a.profiles.Profiles[0].External
+					switch protocol {
+					case "wireguard":
+						changed.WireGuard.PrivateKey = testWGKey('z')
+					case "amneziawg":
+						changed.AmneziaWG.PrivateKey = testWGKey('z')
+					default:
+						changed.Shadowsocks.Password = testWGKey('z')
+					}
 					f.a.mu.Unlock()
 					if f.a.nativeMultihopProofOwnerCurrent(captured, launch.command) {
 						t.Fatal("same-ID imported replacement still owns proof")
@@ -115,7 +131,7 @@ func TestDesktopImportedDailyConnectRestoreAndOwnedTeardown(t *testing.T) {
 			if r.Code != http.StatusOK || !f.a.state.Connected || f.a.state.RouterID != final.ID {
 				t.Fatal("daily imported path not admitted", r.Code, r.Body.String())
 			}
-			if f.a.profiles.Profiles[0].External.Shadowsocks.Password != entry.External.Shadowsocks.Password || f.a.profiles.Profiles[1].APIToken != final.APIToken {
+			if !reflect.DeepEqual(f.a.profiles.Profiles[0].External, entry.External) || f.a.profiles.Profiles[1].APIToken != final.APIToken {
 				t.Fatal("entry/final credentials changed")
 			}
 			// A true retained readback authorizes restoration of the old graph.

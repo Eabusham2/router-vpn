@@ -95,6 +95,8 @@ static const struct { const char *id; const char *label; } linux_multihop_entrie
     {"ss-v2ray", "SS/V2Ray"}, {"split", "Split"}, {"max", "MAX"},
     {"max-tls-wg", "Complete MAX TLS / WG"}, {"max-tls-awg", "Complete MAX TLS / AWG"},
     {"max-quic-wg", "Complete MAX QUIC / WG"}, {"max-quic-awg", "Complete MAX QUIC / AWG"},
+    {"wireguard", "Imported WireGuard - Local only"},
+    {"amneziawg", "Imported AmneziaWG - Local only"},
     {"socks5", "Imported SOCKS5 - Local only"},
     {"http-connect", "Imported HTTP CONNECT - Local only"},
     {"https-connect", "Imported HTTPS CONNECT - Local only"},

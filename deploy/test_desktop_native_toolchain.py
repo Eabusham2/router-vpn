@@ -1900,6 +1900,7 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
                  patch.object(N, 'reuse', return_value={}), patch.object(N, 'run', side_effect=run), \
                  patch.object(N, 'verify_linux_standard_configs') as configs, \
                  patch.object(N, 'verify_imported_desktop_configs') as imported, \
+                 patch.object(N, 'verify_imported_desktop_packet_configs') as packet, \
                  patch.object(N.DNSSEC, 'test_native_bundle', side_effect=dnssec_failure) as dnssec:
                 invoke = (lambda: N.build('linux/'+arch, bundle)) if reused else (lambda: N.verify_installed_linux_host(Path(temporary)/'core', bundle, 'linux/'+arch, env))
                 with contextlib.redirect_stdout(stdout):
@@ -1913,8 +1914,10 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
                         invoke()
             if reused and failure is None and not verdict_failure and dnssec_failure is None:
                 imported.assert_called_once_with(bundle, 'linux/'+arch, env)
+                packet.assert_called_once_with(bundle, 'linux/'+arch, env)
             else:
                 imported.assert_not_called()
+                packet.assert_not_called()
             if failure is not None or verdict_failure:
                 configs.assert_not_called()
             else:
