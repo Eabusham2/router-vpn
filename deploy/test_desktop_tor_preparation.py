@@ -216,6 +216,8 @@ class DesktopPTPreparation(unittest.TestCase):
             self.assertEqual(generated['routervpn/mobiletor/desktop_socket_broker_test.go'],
                              (ROOT/'internal/mobiletor/desktop_socket_broker_test.go').read_bytes())
             for name in ('desktop_socket_source_unix_test.go', 'desktop_socket_source_privileged_test.go',
+                         'desktop_socket_admission_observation.go', 'desktop_socket_native_observation.go',
+                         'desktop_socket_darwin_observation.go', 'desktop_socket_observation_test.go',
                          'desktop_socket_linux_guardian_test.go', 'desktop_socket_native_windows_test.go',
                          'desktop_socket_linux_node_running.go', 'desktop_socket_linux_node_running_test.go',
                          'desktop_socket_linux_node_running_native_test.go',

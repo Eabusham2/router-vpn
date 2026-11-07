@@ -227,6 +227,7 @@ type DesktopSocketBroker struct {
 
 type desktopSocket struct {
 	retirement   desktopRetirementState
+	admission    desktopSocketAdmissionObservation
 	ctx          context.Context
 	cancel       context.CancelFunc
 	broker       *DesktopSocketBroker
@@ -665,6 +666,7 @@ func (s *desktopSocket) apply(ctx context.Context, peer *desktopSocketPeer) erro
 	peer.mu.Unlock()
 	receipt, err := desktopSocketGrantControlled(ctx, s.policy(), request)
 	if err != nil || ctx.Err() != nil || !s.live() || !validDesktopSocketReceipt(receipt, request, time.Now()) {
+		s.recordAdmissionLoss("grant-readback", peer, err)
 		peer.mu.Lock()
 		// A cancellation while queued for native control never submitted the
 		// attempted sequence. Keep the original revoke identity in that exact
@@ -732,6 +734,7 @@ func (s *desktopSocket) refresh() {
 			continue
 		}
 		if !validDesktopSocketReceipt(receipt, receipt.Grant, time.Now()) {
+			s.recordAdmissionLoss("receipt-expired", peer, nil)
 			s.stop()
 			continue
 		}

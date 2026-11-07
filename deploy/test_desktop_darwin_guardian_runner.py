@@ -676,6 +676,14 @@ class DarwinOriginalControlLifetime(unittest.TestCase):
         regression.execute(ROOT)
 
 
+class DarwinOriginalReadbackObservation(unittest.TestCase):
+    def test_actual_command_retains_original_owner_while_native_boundary_is_pending(self):
+        spec = importlib.util.spec_from_file_location('darwin_original_observation', ROOT/'deploy/test_desktop_darwin_observation.py')
+        regression = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(regression)
+        regression.execute(ROOT)
+
+
 class DarwinSOCKSCleanupOwnership(unittest.TestCase):
     def test_actual_registration_reaches_bounded_owner_before_blocked_connection_close(self):
         source = (ROOT/'internal/mobiletor/desktop_socket_darwin_guardian_test.go').read_text()

@@ -101,11 +101,14 @@ func desktopDarwinCommand(ctx context.Context, path string, input []byte, args .
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	observation, finishObservation := desktopDarwinObserveReadback(ctx, filepath.Base(path), desktopDarwinReadbackReporter(ctx))
+	defer finishObservation()
 	release, err := desktopPFEnterCommand(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
+	observation.enter(desktopNativeObservationPath, 0)
 	if err := desktopDarwinProtectedPath(path, false); err != nil {
 		return nil, err
 	}
@@ -116,7 +119,12 @@ func desktopDarwinCommand(ctx context.Context, path string, input []byte, args .
 	output, diagnostics := desktopDarwinCommandBuffer{limit: 2 << 20}, desktopDarwinCommandBuffer{limit: 128 << 10}
 	command.Stdout, command.Stderr = &output, &diagnostics
 	started := time.Now()
-	err = command.Run()
+	observation.enter(desktopNativeObservationStart, 0)
+	err = command.Start()
+	if err == nil {
+		observation.enter(desktopNativeObservationWait, uint32(command.Process.Pid))
+		err = command.Wait()
+	}
 	if output.Len() > 2<<20 || diagnostics.Len() > 128<<10 {
 		return nil, errors.New("Darwin privileged command exceeded its readback bound")
 	}
@@ -191,6 +199,9 @@ func desktopDarwinAccountRecordContext(ctx context.Context, account string, uid 
 			if err != nil {
 				return errors.Join(err, errors.New("Darwin physical UID local search did not complete"))
 			}
+			observation, finishObservation := desktopDarwinObserveReadback(captured, "libinfo", desktopDarwinReadbackReporter(captured))
+			defer finishObservation()
+			observation.enter(desktopNativeObservationLibinfo, 0)
 			return desktopDarwinUIDSearchProof(search, account, uid, desktopDarwinUIDAccount(uid, account))
 		})
 	if err != nil {

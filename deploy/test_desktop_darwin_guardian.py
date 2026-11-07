@@ -534,6 +534,8 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         raise ValueError('The actual Darwin guardian gate requires a matching macOS host')
     source, package, before = checked_sources(source)
     if not {'desktop_socket_darwin_guardian_test.go', 'desktop_socket_darwin_kernel_cgo.go',
+            'desktop_socket_admission_observation.go', 'desktop_socket_native_observation.go',
+            'desktop_socket_darwin_observation.go', 'desktop_socket_observation_test.go',
             'desktop_socket_darwin_frame_test.go', 'desktop_socket_darwin_socks.go',
             'desktop_socket_darwin_socks_guardian.go', 'desktop_socket_darwin_socks_pf.go',
             'desktop_socket_darwin_pf.go', 'desktop_socket_darwin_state.go',

@@ -720,6 +720,8 @@ class NativeSocketUIDGate(unittest.TestCase):
                 darwin = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_guardian.py')]
                 self.assertEqual(len(darwin), 1 if system == 'darwin' else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_darwin_guardian.py', N.inputs())
+                for name in ('test_desktop_darwin_guardian_runner.py', 'test_desktop_darwin_observation.py'):
+                    self.assertIn(ROOT/'deploy'/name, N.inputs())
                 route_checks = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_route_runner.py')]
                 routes = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_route.py')]
                 self.assertEqual(len(route_checks), len(darwin))

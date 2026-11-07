@@ -168,6 +168,8 @@ def inputs():
                              ROOT/'deploy/test_linux_node_lifecycle.py',
                              ROOT/'deploy/test_linux_node_lifecycle_runner.py',
                              ROOT/'deploy/test_desktop_darwin_guardian.py',
+                             ROOT/'deploy/test_desktop_darwin_guardian_runner.py',
+                             ROOT/'deploy/test_desktop_darwin_observation.py',
                              ROOT/'deploy/test_desktop_darwin_route.py',
                              ROOT/'deploy/test_desktop_darwin_route_runner.py',
                              ROOT/'deploy/test_linux_guardian_namespace.py',

@@ -998,6 +998,9 @@ func desktopDarwinKernelTrace(t *testing.T, policy *DesktopDarwinSocketPolicy, b
 	if loss := policy.loss.Load(); loss != nil {
 		t.Logf("owned PF first loss: phase=%s observed_ms=%d lost_ms=%d age_ms=%d cause=%v", loss.Phase, loss.ObservedAt, loss.LostAt, loss.LostAt-loss.ObservedAt, loss.Cause)
 	}
+	if messages := desktopDarwinReadbackMessages(policy.observation); messages != "" {
+		t.Logf("owned native readback observations: %s", messages)
+	}
 	if broker != nil {
 		broker.mu.Lock()
 		var sockets []*desktopSocket
@@ -1006,6 +1009,9 @@ func desktopDarwinKernelTrace(t *testing.T, policy *DesktopDarwinSocketPolicy, b
 		}
 		broker.mu.Unlock()
 		for _, socket := range sockets {
+			if loss := socket.admission.first.Load(); loss != nil {
+				t.Logf("owned socket first admission loss: %s", loss)
+			}
 			socket.mu.Lock()
 			t.Logf("owned PF tuple: protocol=%s local=%s remote=%s closing=%t last_failure=%v", socket.network, socket.local, socket.remote, socket.closing, socket.lastFailure)
 			if socket.sourceFile != nil {
@@ -1500,14 +1506,33 @@ func desktopDarwinKernelPeerWithin(t *testing.T, network string, lifetime time.D
 
 func desktopDarwinExchange(t *testing.T, connection net.Conn) {
 	t.Helper()
+	failure := func(values ...any) {
+		t.Helper()
+		var socket *desktopSocket
+		switch owned := connection.(type) {
+		case *desktopSocketConn:
+			socket = owned.socket
+		case *desktopConnectedPacket:
+			socket = owned.packet.socket
+		}
+		if socket != nil {
+			// This retained connection remains the original owner even when
+			// asynchronous drain has already removed it from broker.sockets.
+			socket.recordAdmissionLoss("exchange", nil, nil)
+			t.Logf("owned exchange original admission loss: %s", socket.admission.first.Load())
+		}
+		t.Fatal(values...)
+	}
 	data := []byte("actual stateless PF owned bytes")
-	connection.SetDeadline(time.Now().Add(2 * time.Second))
+	if err := connection.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		failure("original exchange deadline", err)
+	}
 	if _, err := connection.Write(data); err != nil {
-		t.Fatal(err)
+		failure(err)
 	}
 	buffer := make([]byte, len(data))
 	if n, err := io.ReadFull(connection, buffer); err != nil || string(buffer) != string(data) {
-		t.Fatal("real owned physical reply", n, string(buffer[:n]), err)
+		failure("real owned physical reply", n, string(buffer[:n]), err)
 	}
 }
 

@@ -141,6 +141,7 @@ type DesktopDarwinSocketPolicy struct {
 	account     string
 	pf          *desktopDarwinPF
 	channel     *net.UnixConn
+	observation *os.File
 	command     *exec.Cmd
 	mu          desktopSocketControlMutex
 	sequence    uint64
@@ -186,18 +187,27 @@ func NewDesktopDarwinSocketPolicy(ctx context.Context, capture DesktopSocketCapt
 		child.Close()
 		return nil, err
 	}
-	command := exec.Command(executable, "routervpn-owned-socket-helper", "guardian")
-	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
-	command.Stderr = os.Stderr
-	command.ExtraFiles = []*os.File{child}
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := command.Start(); err != nil {
+	observation, observationChild, err := desktopDarwinObservationPipe()
+	if err != nil {
 		channel.Close()
 		child.Close()
 		return nil, err
 	}
+	command := exec.Command(executable, "routervpn-owned-socket-helper", "guardian")
+	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
+	command.Stderr = os.Stderr
+	command.ExtraFiles = []*os.File{child, observationChild}
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := command.Start(); err != nil {
+		channel.Close()
+		child.Close()
+		observation.Close()
+		observationChild.Close()
+		return nil, err
+	}
 	child.Close()
-	p := &DesktopDarwinSocketPolicy{capture: capture, options: options, channel: channel, command: command, joined: make(chan struct{}), monitorDone: make(chan struct{})}
+	observationChild.Close()
+	p := &DesktopDarwinSocketPolicy{capture: capture, options: options, channel: channel, observation: observation, command: command, joined: make(chan struct{}), monitorDone: make(chan struct{})}
 	go func() { p.joinErr = command.Wait(); p.lose("guardian-join", p.joinErr); close(p.joined) }()
 	request := desktopDarwinRequest{Operation: "prepare", Capture: capture, Options: options}
 	reply, file, err := p.call(ctx, request, nil, false)
@@ -414,6 +424,7 @@ func (p *DesktopDarwinSocketPolicy) Close(ctx context.Context) error {
 		case <-p.joined:
 			// Preparation could not transfer even one socket or install a tuple.
 			// The helper's managed UID remains quarantined on exceptional exit.
+			p.closeObservation()
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -427,6 +438,7 @@ func (p *DesktopDarwinSocketPolicy) Close(ctx context.Context) error {
 		// An interrupted owner never deletes its quarantined account. Successful
 		// kernel cleanup + creator/native descriptor join is sufficient to close
 		// the source; retaining the identity prevents accidental reuse.
+		p.closeObservation()
 		return nil
 	default:
 	}
@@ -454,7 +466,17 @@ func (p *DesktopDarwinSocketPolicy) Close(ctx context.Context) error {
 	if p.joinErr != nil {
 		return p.joinErr
 	}
-	return p.pf.allAbsent(ctx)
+	err = p.pf.allAbsent(ctx)
+	if err == nil {
+		p.closeObservation()
+	}
+	return err
+}
+
+func (p *DesktopDarwinSocketPolicy) closeObservation() {
+	if p.observation != nil {
+		p.observation.Close()
+	}
 }
 
 func (p *DesktopDarwinSocketPolicy) ReleaseSocket(ctx context.Context, c DesktopSocketCreation) error {

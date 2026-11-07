@@ -628,7 +628,7 @@ def prepare(vendor, go='go', *, env=None):
             if path.name.endswith('_test.go') and not (package == 'mobiletor' and (
                     path.name.startswith('desktop_standard_') or path.name in (
                     'desktop_socket_broker_test.go', 'desktop_socket_retirement_test.go', 'desktop_socket_socks_test.go', 'desktop_socket_account_readback_test.go', 'desktop_socket_source_unix_test.go', 'desktop_socket_native_windows_test.go',
-                    'desktop_socket_context_test.go', 'desktop_socket_windows_identity_current_test.go',
+                    'desktop_socket_context_test.go', 'desktop_socket_observation_test.go', 'desktop_socket_windows_identity_current_test.go',
                     'server_client_context_test.go', 'observation_context_test.go',
                     'padding_receipt_context_test.go', 'padding_lease_fixture_test.go', 'padding_control_test.go', 'control_test.go',
                     'desktop_socket_tcp_completion_test.go',
