@@ -232,10 +232,26 @@ func (f *routerVPNTorComparisonFiles) publish() error {
 	// still drains. Preserve those facts internally, but the controller's
 	// terminal flags describe a joined action, never merely its cancellation.
 	wire := f.record
+	if wire.Complete && (f.done != nil || len(f.inputs) != 0) {
+		return routerVPNTorFailure
+	}
 	if !wire.Complete {
 		wire.Cancelled, wire.Failed, wire.StopRequired, wire.Drained, wire.ResponseNS = false, false, false, false, 0
 	}
 	return f.files.publish(mobiletor.DesktopTorCompareStatusFile, wire)
+}
+
+// A terminal receipt admits the controller's next exclusive request. Retire
+// every exact captured request/cancel input before making that receipt visible;
+// a failed retirement must never acknowledge a free mailbox slot.
+func (f *routerVPNTorComparisonFiles) retireAndPublish() error {
+	if f.done != nil || !f.record.Complete {
+		return routerVPNTorFailure
+	}
+	if err := f.retire(); err != nil {
+		return err
+	}
+	return f.publish()
 }
 
 func (f *routerVPNTorComparisonFiles) cancelAction(cancelled bool) {
@@ -266,14 +282,12 @@ func (f *routerVPNTorComparisonFiles) cancellation() error {
 	})
 	if exists {
 		f.cancelAction(true)
-		if err := f.publish(); err != nil {
-			return err
-		}
 		// A completed action can acquire a later cancel before Close arrives.
-		// Retire only that captured file before admitting the next sequence.
+		// Retire only that captured file before publishing its terminal update.
 		if f.done == nil && f.record.Complete {
-			return f.retire()
+			return f.retireAndPublish()
 		}
+		return f.publish()
 	}
 	return nil
 }
@@ -312,10 +326,7 @@ func (f *routerVPNTorComparisonFiles) start(request mobiletor.DesktopTorCompareR
 	}
 	if f.record.Cancelled && request.Action != mobiletor.DesktopTorCompareClose {
 		f.record.Complete = true
-		if err := f.publish(); err != nil {
-			return err
-		}
-		return f.retire()
+		return f.retireAndPublish()
 	}
 	if request.Action == mobiletor.DesktopTorComparePrepare {
 		handle, err := f.owner.CreateComparison(request.Target)
@@ -325,10 +336,7 @@ func (f *routerVPNTorComparisonFiles) start(request mobiletor.DesktopTorCompareR
 			if handle != nil {
 				handle.Cancel()
 			}
-			if err := f.publish(); err != nil {
-				return err
-			}
-			return f.retire()
+			return f.retireAndPublish()
 		}
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), f.deadline)
@@ -401,10 +409,7 @@ func (f *routerVPNTorComparisonFiles) complete(outcome routerVPNTorComparisonOut
 			f.cancelAction(false)
 		}
 	}
-	if err := f.publish(); err != nil {
-		return err
-	}
-	return f.retire()
+	return f.retireAndPublish()
 }
 
 func (f *routerVPNTorComparisonFiles) tick() error {
@@ -474,9 +479,7 @@ func (f *routerVPNTorComparisonFiles) close(ctx context.Context) error {
 		// Whole-path stop has its own checked receipt and process join. It
 		// cannot turn a Prepare/Last request into an unissued Close action.
 		f.record.Drained = f.record.Action == mobiletor.DesktopTorCompareClose
-	}
-	if err := f.publish(); err != nil {
-		return err
+		return f.retireAndPublish()
 	}
 	return f.retire()
 }

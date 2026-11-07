@@ -1,0 +1,201 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func desktopTorComparisonJoinedOutcome(t *testing.T, f *routerVPNTorComparisonFiles) routerVPNTorComparisonOutcome {
+	t.Helper()
+	select {
+	case result := <-f.done:
+		return result
+	case <-time.After(time.Second):
+		t.Fatal("original comparison worker did not join")
+		return routerVPNTorComparisonOutcome{}
+	}
+}
+
+func desktopTorComparisonBlockPublication(t *testing.T, directory string) func() {
+	t.Helper()
+	path := filepath.Join(directory, "."+mobiletor.DesktopTorCompareStatusFile+".pending")
+	// An existing independent image denies the real exclusive publish open.
+	// This exposes ordering without delaying the worker or polling the status.
+	if err := os.WriteFile(path, []byte("original publication obstruction"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func desktopTorComparisonInputsRetired(t *testing.T, directory string, f *routerVPNTorComparisonFiles) {
+	t.Helper()
+	if len(f.inputs) != 0 {
+		t.Fatal("terminal publication was attempted before exact input retirement")
+	}
+	for _, name := range []string{mobiletor.DesktopTorCompareRequestFile, mobiletor.DesktopTorCompareCancelFile} {
+		if _, err := os.Stat(filepath.Join(directory, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("terminal publication left original command input occupied", name, err)
+		}
+	}
+}
+
+func TestRouterVPNDesktopTorComparisonRetiresBeforeTerminalPublication(t *testing.T) {
+	for _, action := range []string{"prepare", "verify", "last", "external", "close"} {
+		t.Run(action, func(t *testing.T) {
+			directory, f, _ := desktopTorComparisonMailbox(t)
+			sequence := uint64(1)
+			if action != "prepare" {
+				desktopTorComparisonInput(t, directory, mobiletor.DesktopTorCompareRequestFile, desktopTorComparisonRequestFor(f, 1, 1, "prepare"))
+				desktopTorComparisonComplete(t, f)
+				sequence++
+			}
+			request := desktopTorComparisonRequestFor(f, 1, sequence, action)
+			desktopTorComparisonInput(t, directory, mobiletor.DesktopTorCompareRequestFile, request)
+			if err := f.tick(); err != nil {
+				t.Fatal(err)
+			}
+			started := desktopTorComparisonWire(t, f)
+			if started.Complete || started.DesktopTorCompareRequest != request {
+				t.Fatal("initial exact start receipt was not preserved", started)
+			}
+			outcome := desktopTorComparisonJoinedOutcome(t, f)
+			unblock := desktopTorComparisonBlockPublication(t, directory)
+			if err := f.complete(outcome); err == nil {
+				t.Fatal("terminal publication overwrote an independent pending image")
+			}
+			desktopTorComparisonInputsRetired(t, directory, f)
+			if wire := desktopTorComparisonWire(t, f); wire != started {
+				t.Fatal("failed terminal publication changed visible start acknowledgment", wire)
+			}
+			unblock()
+			if err := f.publish(); err != nil {
+				t.Fatal(err)
+			}
+			if wire := desktopTorComparisonWire(t, f); !wire.Complete || wire.Failed || wire.DesktopTorCompareRequest != request {
+				t.Fatal("retired exact action did not publish its joined result", wire)
+			}
+			next := desktopTorComparisonRequestFor(f, 1, sequence+1, "close")
+			if action == "close" {
+				next = desktopTorComparisonRequestFor(f, 2, 1, "prepare")
+			}
+			path := filepath.Join(directory, mobiletor.DesktopTorCompareRequestFile)
+			input, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+			if err != nil {
+				t.Fatal("visible Complete did not admit immediate exclusive next input", err)
+			}
+			if err := input.Close(); err != nil {
+				t.Fatal(err)
+			}
+			desktopTorComparisonInput(t, directory, mobiletor.DesktopTorCompareRequestFile, next)
+			if err := f.tick(); err != nil {
+				t.Fatal("next original sequence raced terminal retirement", err)
+			}
+			if wire := desktopTorComparisonComplete(t, f); wire.DesktopTorCompareRequest != next || wire.Failed {
+				t.Fatal("next sequence lost its original comparison handle", wire)
+			}
+			if err := f.close(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+type desktopTorComparisonBlockedConstructor struct{ directory string }
+
+func (o desktopTorComparisonBlockedConstructor) CreateComparison(string) (mobiletor.Comparison, error) {
+	path := filepath.Join(o.directory, "."+mobiletor.DesktopTorCompareStatusFile+".pending")
+	if err := os.WriteFile(path, []byte("constructor publication obstruction"), 0600); err != nil {
+		return nil, err
+	}
+	return nil, errors.New("captured constructor failed before ownership")
+}
+
+func TestRouterVPNDesktopTorComparisonAllTerminalPathsRetireTheirInputs(t *testing.T) {
+	for _, boundary := range []string{"constructor-failure", "completed-cancel", "whole-close"} {
+		t.Run(boundary, func(t *testing.T) {
+			directory, f, _ := desktopTorComparisonMailbox(t)
+			request := desktopTorComparisonRequestFor(f, 1, 1, "prepare")
+			desktopTorComparisonInput(t, directory, mobiletor.DesktopTorCompareRequestFile, request)
+			if boundary == "constructor-failure" {
+				f.owner = desktopTorComparisonBlockedConstructor{directory: directory}
+				if err := f.tick(); err == nil {
+					t.Fatal("constructor terminal publication ignored obstruction")
+				}
+			} else {
+				desktopTorComparisonComplete(t, f)
+				desktopTorComparisonInput(t, directory, mobiletor.DesktopTorCompareCancelFile, request)
+				unblock := desktopTorComparisonBlockPublication(t, directory)
+				defer unblock()
+				if boundary == "completed-cancel" {
+					if err := f.cancellation(); err == nil {
+						t.Fatal("late cancellation publication ignored obstruction")
+					}
+				} else {
+					if _, ok := f.read(mobiletor.DesktopTorCompareCancelFile, func(candidate mobiletor.DesktopTorCompareRequest) bool { return candidate == request }); !ok {
+						t.Fatal("whole-close fixture did not retain exact cancel input")
+					}
+					if err := f.close(t.Context()); err == nil {
+						t.Fatal("whole-close terminal publication ignored obstruction")
+					}
+				}
+			}
+			desktopTorComparisonInputsRetired(t, directory, f)
+			wire := desktopTorComparisonWire(t, f)
+			if wire.Cancelled || wire.Failed || wire.Drained || boundary == "constructor-failure" && wire.Complete {
+				t.Fatal("failed publication exposed a new terminal result", wire)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorComparisonReplacementCannotReceiveTerminalReceipt(t *testing.T) {
+	directory, f, _ := desktopTorComparisonMailbox(t)
+	request := desktopTorComparisonRequestFor(f, 1, 1, "prepare")
+	desktopTorComparisonInput(t, directory, mobiletor.DesktopTorCompareRequestFile, request)
+	if err := f.tick(); err != nil {
+		t.Fatal(err)
+	}
+	started := desktopTorComparisonWire(t, f)
+	outcome := desktopTorComparisonJoinedOutcome(t, f)
+	path := filepath.Join(directory, mobiletor.DesktopTorCompareRequestFile)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := path + ".replacement"
+	if err := os.WriteFile(foreign, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(foreign, path); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.complete(outcome); err == nil {
+		t.Fatal("replacement input borrowed original worker completion")
+	}
+	if err := f.close(context.Background()); err == nil {
+		t.Fatal("whole-path cleanup acknowledged a replacement input")
+	}
+	actual, statErr := os.Stat(path)
+	readback, readErr := os.ReadFile(path)
+	if statErr != nil || readErr != nil || !os.SameFile(info, actual) || !bytes.Equal(raw, readback) {
+		t.Fatal("terminal retirement removed or changed a replacement input", statErr, readErr)
+	}
+	if wire := desktopTorComparisonWire(t, f); wire != started || wire.Complete {
+		t.Fatal("replacement input received terminal acknowledgment", wire)
+	}
+}
