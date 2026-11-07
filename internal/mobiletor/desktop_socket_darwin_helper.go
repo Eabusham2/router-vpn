@@ -153,7 +153,7 @@ func RunDesktopDarwinSocketHelper(role string) error {
 			}
 			return err
 		}
-		if next.Sequence != sequence+1 || next.Capture != g.capture || file != nil && next.Operation != "bind" && next.Operation != "tunnel" || next.SOCKS != nil && next.Operation != "socks-associate" {
+		if next.Sequence != sequence+1 || next.Capture != g.capture || file != nil && next.Operation != "bind" && next.Operation != "tunnel" || next.SOCKS != nil && next.Operation != "socks-associate" || next.Renewals != nil && next.Operation != "renew" || next.Operation == "renew" && !desktopDarwinRenewalFrame(next) {
 			if file != nil {
 				file.Close()
 			}
@@ -191,6 +191,8 @@ func RunDesktopDarwinSocketHelper(role string) error {
 			err = g.bind(ctx, next.Creation, file)
 		case "grant":
 			reply.Receipt, err = g.grant(ctx, next.Grant)
+		case "renew":
+			reply.Receipts, err = g.renew(ctx, next.Renewals)
 		case "revoke":
 			err = g.revoke(ctx, next.Grant)
 		case "release":
@@ -431,49 +433,65 @@ func (g *desktopDarwinGuardian) bind(ctx context.Context, c DesktopSocketCreatio
 	return nil
 }
 
-func (g *desktopDarwinGuardian) grant(ctx context.Context, grant DesktopSocketGrant) (DesktopSocketReceipt, error) {
+func (g *desktopDarwinGuardian) grantOwner(ctx context.Context, grant DesktopSocketGrant) (*desktopDarwinOwnedSocket, DesktopSocketGrant, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, DesktopSocketGrant{}, err
+	}
 	owned := g.sockets[grant.SocketID]
 	association, associated := g.socks[grant.SocketID]
 	if owned == nil || !owned.bound || grant.Capture != g.capture || grant.Binding != owned.creation.Binding || grant.Network != owned.creation.Network || grant.Sequence == 0 || !associated && !g.options.permits(grant.Network, grant.Remote) {
-		return DesktopSocketReceipt{}, errors.New("Darwin grant has no exact source owner")
+		return nil, DesktopSocketGrant{}, errors.New("Darwin grant has no exact source owner")
 	}
 	var control DesktopSocketGrant
 	if associated {
 		if grant.Network != "udp" || grant.Remote != association.Remote || grant.Binding != association.Binding {
-			return DesktopSocketReceipt{}, errors.New("Darwin SOCKS grant substituted its captured relay")
+			return nil, DesktopSocketGrant{}, errors.New("Darwin SOCKS grant substituted its captured relay")
 		}
 		var err error
 		_, control, err = g.socksControlSocket(association)
 		if err != nil {
-			return DesktopSocketReceipt{}, err
+			return nil, DesktopSocketGrant{}, err
 		}
 	}
 	identity, err := desktopDarwinSocketIdentity(owned.file)
 	if err != nil || identity != owned.identity {
-		return DesktopSocketReceipt{}, errors.New("Darwin grant lost its retained kernel socket")
+		return nil, DesktopSocketGrant{}, errors.New("Darwin grant lost its retained kernel socket")
 	}
 	local, err := desktopSocketLocal(int(owned.file.Fd()))
 	if err != nil || local != grant.Local || local.Addr() != grant.Binding.LocalAddress {
-		return DesktopSocketReceipt{}, errors.New("Darwin grant changed its actual bound tuple")
+		return nil, DesktopSocketGrant{}, errors.New("Darwin grant changed its actual bound tuple")
 	}
 	if err = desktopDarwinCheckInterface(DesktopDarwinSocketInterface{Name: grant.Binding.InterfaceName, Index: grant.Binding.InterfaceIndex, Address: grant.Binding.LocalAddress}); err != nil {
-		return DesktopSocketReceipt{}, err
+		return nil, DesktopSocketGrant{}, err
 	}
 	bound, err := desktopDarwinBoundInterface(int(owned.file.Fd()), identity.family)
 	if err != nil || bound != grant.Binding.InterfaceIndex {
-		return DesktopSocketReceipt{}, errors.New("Darwin grant lost its device binding")
+		return nil, DesktopSocketGrant{}, errors.New("Darwin grant lost its device binding")
 	}
 	for _, option := range []int{syscall.SO_REUSEADDR, syscall.SO_REUSEPORT} {
 		value, err := syscall.GetsockoptInt(int(owned.file.Fd()), syscall.SOL_SOCKET, option)
 		if err != nil || value != 0 {
-			return DesktopSocketReceipt{}, errors.New("Darwin grant socket permits address/port reuse")
+			return nil, DesktopSocketGrant{}, errors.New("Darwin grant socket permits address/port reuse")
 		}
 	}
 	key := grant.Remote.String()
 	previous, exists := owned.grants[key]
 	if exists && grant.Sequence <= previous.Sequence || !exists && len(owned.grants) >= DesktopSocketPeerLimit {
-		return DesktopSocketReceipt{}, errors.New("Darwin grant sequence/peer limit rejected")
+		return nil, DesktopSocketGrant{}, errors.New("Darwin grant sequence/peer limit rejected")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, DesktopSocketGrant{}, err
+	}
+	return owned, control, nil
+}
+
+func (g *desktopDarwinGuardian) grant(ctx context.Context, grant DesktopSocketGrant) (DesktopSocketReceipt, error) {
+	owned, control, err := g.grantOwner(ctx, grant)
+	if err != nil {
+		return DesktopSocketReceipt{}, err
+	}
+	association, associated := g.socks[grant.SocketID]
+	key := grant.Remote.String()
 	// Retain unknown application outcomes before touching the kernel. Revoke
 	// remains possible when acknowledgment/readback fails.
 	owned.grants[key] = grant

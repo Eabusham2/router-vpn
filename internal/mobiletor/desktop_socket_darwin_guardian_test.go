@@ -2788,6 +2788,33 @@ func TestDesktopDarwinGuardianKernelSOCKSAssociations(t *testing.T) {
 			second := controls[1].(*desktopSocketConn).socket
 			secondUDP := relays[1].(*desktopConnectedPacket).packet.socket
 			association := firstUDP.scopedPolicy.(*desktopDarwinSOCKSRelayPolicy).association
+			t.Run("group-renewal", func(t *testing.T) {
+				originalReadbacksEnd := time.Now().Add(DesktopSocketReadbackAge + 100*time.Millisecond)
+				receipts := desktopDarwinRenewOriginalGroup(t, broker, policy, []*desktopSocket{first, second, firstUDP, secondUDP})
+				if receipts[2].ExpiresAt > receipts[0].ExpiresAt || receipts[3].ExpiresAt > receipts[1].ExpiresAt {
+					t.Fatal("native grouped relay renewal exceeded its freshly proved original parent")
+				}
+				// A parent outside this group still supplies its own independently
+				// checked original kernel owner, receipt and PF expiry.
+				child := desktopDarwinRenewOriginalGroup(t, broker, policy, []*desktopSocket{firstUDP})[0]
+				first.mu.Lock()
+				parentPeer := first.peers[first.remote]
+				first.mu.Unlock()
+				parent, valid := parentPeer.snapshot()
+				if !valid || child.ExpiresAt > parent.ExpiresAt {
+					t.Fatal("native child-only renewal lost its retained original parent expiry")
+				}
+				timer := time.NewTimer(time.Until(originalReadbacksEnd))
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					t.Fatal("native group exceeded its original fixture lifetime", ctx.Err())
+				}
+				for _, connection := range append(append([]net.Conn{}, controls...), relays...) {
+					desktopDarwinExchange(t, connection)
+				}
+			})
 			// Counterfactual guardian records retain actual kernel descriptors;
 			// only the named authority field is changed in each negative. The
 			// successful packet path above used the independent real guardian.
@@ -2817,6 +2844,13 @@ func TestDesktopDarwinGuardianKernelSOCKSAssociations(t *testing.T) {
 				g.sockets[first.id].socksChild = firstUDP.id
 				return g
 			}
+			t.Run("renewal-authority", func(t *testing.T) {
+				desktopDarwinRenewalAuthorityControls(t, capture, first, firstUDP, second)
+			})
+			t.Run("renewal-frame", func(t *testing.T) {
+				g := capture()
+				desktopDarwinRenewalFrameControls(t, g.sockets[first.id].receipts[first.remote.String()])
+			})
 			t.Run("original-kernel-identity", func(t *testing.T) {
 				g := capture()
 				g.sockets[first.id].identity.socket ^= 1

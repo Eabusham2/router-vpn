@@ -13,15 +13,16 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 HEADER = r'''package probe
-import("context";"encoding/json";"errors";"fmt";"net";"os";"os/exec";"time")
+import("context";"encoding/json";"errors";"fmt";"io";"net";"os";"os/exec";"slices";"time")
 type DesktopSocketCapture struct{SessionID string}
 type DesktopSocketGrant struct{Sequence uint64}
-type desktopDarwinRequest struct{Operation string;Sequence uint64;Capture DesktopSocketCapture;Grant DesktopSocketGrant}
+type desktopDarwinRequest struct{Operation string;Sequence uint64;Capture DesktopSocketCapture;Grant DesktopSocketGrant;Renewals []DesktopSocketGrant}
 type desktopDarwinReply struct{Sequence uint64;Capture DesktopSocketCapture;Error string}
 type DesktopDarwinSocketPolicy struct{sequence uint64;capture DesktopSocketCapture;owner string;channel *net.UnixConn;command *exec.Cmd;current bool;loss string}
 func(p *DesktopDarwinSocketPolicy)Current(DesktopSocketCapture,string)bool{return p.current}
 func(p *DesktopDarwinSocketPolicy)lose(phase string,_ error){p.current=false;p.loss=phase}
-func desktopDarwinSend(c *net.UnixConn,r desktopDarwinRequest,_ *os.File)error{return json.NewEncoder(c).Encode(r)}
+var partialOperation string
+func desktopDarwinSend(c *net.UnixConn,r desktopDarwinRequest,_ *os.File)error{if r.Operation==partialOperation {if _,err:=c.Write([]byte{'p'});err!=nil{return err};return io.ErrShortWrite};return json.NewEncoder(c).Encode(r)}
 func desktopDarwinReceive(c *net.UnixConn,r *desktopDarwinReply,_ uint32,_ int)(*os.File,error){return nil,json.NewDecoder(c).Decode(r)}
 '''
 TEST = r'''package probe
@@ -30,6 +31,7 @@ func TestActualDarwinControlJoinedRejectedOperations(t *testing.T){
  for _,scenario:=range []struct{name,operation string;rejected,mismatch bool}{
   {"grant-rejected","grant",true,false},{"revoke-rejected","revoke",true,false},{"probe-rejected","probe",true,false},
   {"grant-success","grant",false,false},{"grant-mismatch","grant",false,true},{"revoke-mismatch","revoke",false,true},
+  {"renew-rejected","renew",true,false},{"renew-success","renew",false,false},{"renew-mismatch","renew",false,true},
  }{t.Run(scenario.name,func(t *testing.T){
   // Keep the Unix address below Darwin's native sun_path bound; t.TempDir
   // incorporates this long subtest name and can exceed that bound on macOS.
@@ -38,7 +40,7 @@ func TestActualDarwinControlJoinedRejectedOperations(t *testing.T){
   client,err:=net.DialUnix("unix",nil,listener.Addr().(*net.UnixAddr));if err!=nil{t.Fatal(err)}
   peer,err:=listener.AcceptUnix();if err!=nil{client.Close();t.Fatal(err)}
   observed:=make(chan desktopDarwinRequest,1);result:=make(chan error,1);joined:=make(chan struct{})
-  closes:=scenario.mismatch||(scenario.operation=="grant"||scenario.operation=="revoke")&&scenario.rejected
+  closes:=scenario.mismatch||(scenario.operation=="grant"||scenario.operation=="revoke"||scenario.operation=="renew")&&scenario.rejected
   go func(){defer close(joined);defer peer.Close();_ = peer.SetDeadline(time.Now().Add(2*time.Second))
    var q desktopDarwinRequest;if err:=json.NewDecoder(peer).Decode(&q);err!=nil{result<-err;return};observed<-q
    reply:=desktopDarwinReply{Sequence:q.Sequence,Capture:q.Capture};if scenario.rejected{reply.Error="captured "+q.Operation+" rejected before native completion"};if scenario.mismatch{reply.Sequence++}
@@ -59,11 +61,32 @@ func TestActualDarwinControlJoinedRejectedOperations(t *testing.T){
   if q.Sequence!=8||q.Grant!=attempted||p.sequence!=8{t.Fatal("sent request changed its attempted grant sequence")}
   var unsubmitted *desktopSocketGrantNotSubmitted
   if errors.As(failure,&unsubmitted){t.Fatal("sent grant result acquired an unsent rollback marker")}
+  var batchUnsubmitted *desktopSocketRenewalNotSubmitted;if errors.As(failure,&batchUnsubmitted){t.Fatal("sent renewal result acquired an unsent rollback marker")}
   if scenario.rejected||scenario.mismatch{if failure==nil||p.current||p.loss!="control-receive-"+scenario.operation{t.Fatal("rejected original request did not record source loss")}}else if failure!=nil||!p.current||p.loss!=""{t.Fatal("successful grant lost its original owner",failure)}
   if !closes{if _,err:=client.Write([]byte{'k'});err!=nil{t.Fatal("non-retiring rejection or success lost its original channel",err)};client.Close()}
   select{case err:=<-result:if err!=nil{t.Fatal(err)};case <-ctx.Done():t.Fatal("original control peer result did not join within its captured context",ctx.Err())}
  })}
 }
+func TestActualDarwinControlPartialSendRetiresOriginalPeer(t *testing.T){
+ for _,operation:=range []string{"grant","revoke","renew"}{t.Run(operation,func(t *testing.T){
+  directory,err:=os.MkdirTemp("","dcs-");if err!=nil{t.Fatal(err)};defer os.RemoveAll(directory)
+  listener,err:=net.ListenUnix("unix",&net.UnixAddr{Name:filepath.Join(directory,"control.sock"),Net:"unix"});if err!=nil{t.Fatal(err)};defer listener.Close()
+  client,err:=net.DialUnix("unix",nil,listener.Addr().(*net.UnixAddr));if err!=nil{t.Fatal(err)};defer client.Close()
+  peer,err:=listener.AcceptUnix();if err!=nil{t.Fatal(err)}
+  joined:=make(chan error,1)
+  go func(){defer peer.Close();_ = peer.SetDeadline(time.Now().Add(2*time.Second));body,err:=io.ReadAll(peer);if err!=nil||string(body)!="p"{joined<-errors.New("partial native frame did not retire and join its original peer");return};joined<-nil}()
+  p:=&DesktopDarwinSocketPolicy{sequence:7,capture:DesktopSocketCapture{"original"},channel:client,command:&exec.Cmd{Process:&os.Process{Pid:os.Getpid()}},current:true}
+  request:=desktopDarwinRequest{Operation:operation,Capture:p.capture,Grant:DesktopSocketGrant{Sequence:42},Renewals:[]DesktopSocketGrant{{Sequence:42}}}
+  partialOperation=operation;defer func(){partialOperation=""}()
+  _,file,failure:=p.callLocked(context.Background(),request,nil,true)
+  if file!=nil{file.Close();t.Fatal("partial frame transferred an unrelated descriptor")}
+  if !errors.Is(failure,io.ErrShortWrite)||p.current||p.loss!="control-send-"+operation||p.sequence!=8{t.Fatal("partial frame lost its original error or attempted sequence",failure)}
+  var grantUnsent *desktopSocketGrantNotSubmitted;var groupUnsent *desktopSocketRenewalNotSubmitted
+  if errors.As(failure,&grantUnsent)||errors.As(failure,&groupUnsent){t.Fatal("partial sent native frame acquired rollback authority")}
+  select{case err:=<-joined:if err!=nil{t.Fatal(err)};case <-time.After(3*time.Second):t.Fatal("partial native frame did not retire and join its original peer")}
+ })}
+}
+
 '''
 
 def sources(root):
@@ -74,7 +97,11 @@ def sources(root):
     method = policy[policy.index(start):policy.index(end)]
     marker = (root/'internal/mobiletor/desktop_socket_grant_admission.go').read_text()
     assert marker.startswith('package mobiletor\n')
-    return HEADER + marker.removeprefix('package mobiletor\n') + method
+    renewal = (root/'internal/mobiletor/desktop_socket_renewal.go').read_text()
+    begin, end = 'type desktopSocketRenewalNotSubmitted struct {', '// This shared control path'
+    assert renewal.count(begin) == 1 and renewal.count(end) == 1
+    batch_marker = renewal[renewal.index(begin):renewal.index(end)]
+    return HEADER + marker.removeprefix('package mobiletor\n') + batch_marker + method
 
 
 def execute(root=ROOT, go=None, mutations=True):
@@ -84,11 +111,14 @@ def execute(root=ROOT, go=None, mutations=True):
     original = sources(root)
     variants = [('baseline', original, None)]
     if mutations:
-        close = 'err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || (request.Operation == "grant" || request.Operation == "revoke") && reply.Error != ""'
+        close = 'err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || (request.Operation == "grant" || request.Operation == "revoke" || request.Operation == "renew") && reply.Error != ""'
         assert original.count(close) == 1, 'Native grant/revoke rejection lifetime boundary changed'
         variants += [
-            ('keep-rejected-grant', original.replace(close, 'err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || request.Operation == "revoke" && reply.Error != ""'), 'rejected grant retained its original peer'),
-            ('keep-rejected-revoke', original.replace(close, 'err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || request.Operation == "grant" && reply.Error != ""'), 'rejected revoke retained its original peer'),
+            ('keep-rejected-grant', original.replace(close, 'err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || (request.Operation == "revoke" || request.Operation == "renew") && reply.Error != ""'), 'rejected grant retained its original peer'),
+            ('keep-rejected-revoke', original.replace(close, 'err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || (request.Operation == "grant" || request.Operation == "renew") && reply.Error != ""'), 'rejected revoke retained its original peer'),
+            ('keep-rejected-renew', original.replace(close, 'err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || (request.Operation == "grant" || request.Operation == "revoke") && reply.Error != ""'), 'rejected renew retained its original peer'),
+            ('rollback-sent-renewal', original.replace('return reply, received, failure', 'return reply, received, desktopSocketUnsubmittedRenewals(request.Renewals, failure)'), 'sent renewal result acquired an unsent rollback marker'),
+            ('retain-partial-send', original.replace('\t\tp.channel.Close()\n\t\treturn desktopDarwinReply{}, nil, err', '\t\treturn desktopDarwinReply{}, nil, err'), 'partial native frame did not retire and join its original peer'),
             ('close-non-retiring-error', original.replace(close, 'err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || reply.Error != ""'), 'non-retiring rejection or success lost its original channel'),
             ('rollback-sent-result', original.replace('return reply, received, failure', 'return reply, received, desktopSocketUnsubmittedGrant(request.Grant, failure)'), 'sent grant result acquired an unsent rollback marker'),
         ]
@@ -101,7 +131,7 @@ def execute(root=ROOT, go=None, mutations=True):
             if witness:
                 if result.returncode == 0 or witness not in output or re.search(r'panic:|fatal error:|WARNING: DATA RACE|\[build failed\]', output):
                     raise AssertionError(label+': missing clean intended failure\n'+output)
-            elif result.returncode != 0 or len(re.findall(r'^--- PASS: TestActualDarwinControlJoinedRejectedOperations ', output, re.M)) != 1 or len(re.findall(r'^    --- PASS: TestActualDarwinControlJoinedRejectedOperations/', output, re.M)) != 6:
+            elif result.returncode != 0 or len(re.findall(r'^--- PASS: TestActualDarwinControlJoinedRejectedOperations ', output, re.M)) != 1 or len(re.findall(r'^    --- PASS: TestActualDarwinControlJoinedRejectedOperations/', output, re.M)) != 9 or len(re.findall(r'^--- PASS: TestActualDarwinControlPartialSendRetiresOriginalPeer ', output, re.M)) != 1 or len(re.findall(r'^    --- PASS: TestActualDarwinControlPartialSendRetiresOriginalPeer/', output, re.M)) != 3:
                 raise AssertionError('Actual original channel lifetime failed\n'+output)
             print('Darwin original control lifetime: '+label+' verified', flush=True)
 

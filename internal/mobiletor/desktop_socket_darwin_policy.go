@@ -592,7 +592,9 @@ func (p *DesktopDarwinSocketPolicy) callLocked(ctx context.Context, request desk
 		if ctx.Err() != nil {
 			failure = ctx.Err()
 		}
-		if request.Operation == "grant" {
+		if request.Operation == "renew" {
+			failure = desktopSocketUnsubmittedRenewals(request.Renewals, failure)
+		} else if request.Operation == "grant" {
 			failure = desktopSocketUnsubmittedGrant(request.Grant, failure)
 		}
 		return desktopDarwinReply{}, nil, failure
@@ -606,7 +608,9 @@ func (p *DesktopDarwinSocketPolicy) callLocked(ctx context.Context, request desk
 		deadline = d
 	}
 	if err := p.channel.SetDeadline(deadline); err != nil {
-		if request.Operation == "grant" {
+		if request.Operation == "renew" {
+			err = desktopSocketUnsubmittedRenewals(request.Renewals, err)
+		} else if request.Operation == "grant" {
 			err = desktopSocketUnsubmittedGrant(request.Grant, err)
 		}
 		return desktopDarwinReply{}, nil, err
@@ -615,6 +619,10 @@ func (p *DesktopDarwinSocketPolicy) callLocked(ctx context.Context, request desk
 	request.Sequence = p.sequence
 	if err := desktopDarwinSend(p.channel, request, file); err != nil {
 		p.lose("control-send-"+request.Operation, err)
+		// A short/failed write can have sent part of this exact frame. Keep
+		// attempted identities, close the shifted stream, and require original
+		// guardian join plus independent absence before releasing descriptors.
+		p.channel.Close()
 		return desktopDarwinReply{}, nil, err
 	}
 	var reply desktopDarwinReply
@@ -622,7 +630,7 @@ func (p *DesktopDarwinSocketPolicy) callLocked(ctx context.Context, request desk
 	if err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || reply.Error != "" {
 		failure := errors.Join(err, fmt.Errorf("Darwin physical guardian rejected or lost %s: %s", request.Operation, reply.Error))
 		p.lose("control-receive-"+request.Operation, failure)
-		if err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || (request.Operation == "grant" || request.Operation == "revoke") && reply.Error != "" {
+		if err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || (request.Operation == "grant" || request.Operation == "revoke" || request.Operation == "renew") && reply.Error != "" {
 			// A sent grant or revoke may have failed before or after native
 			// application. This generation is already invalid; keeping its
 			// channel alive can prevent retirement from reaching guardian join.

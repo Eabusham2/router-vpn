@@ -217,6 +217,7 @@ type DesktopSocketBroker struct {
 	currentContext func(context.Context) error
 	mu             sync.Mutex
 	closing        bool
+	renewing       bool
 	sockets        map[*desktopSocket]struct{}
 	workers        sync.WaitGroup
 	joined         chan struct{}
@@ -665,6 +666,10 @@ func (s *desktopSocket) apply(ctx context.Context, peer *desktopSocketPeer) erro
 	peer.applying = true
 	peer.mu.Unlock()
 	receipt, err := desktopSocketGrantControlled(ctx, s.policy(), request)
+	return s.finishApply(ctx, peer, previous, request, receipt, err)
+}
+
+func (s *desktopSocket) finishApply(ctx context.Context, peer *desktopSocketPeer, previous, request DesktopSocketGrant, receipt DesktopSocketReceipt, err error) error {
 	if err != nil || ctx.Err() != nil || !s.live() || !validDesktopSocketReceipt(receipt, request, time.Now()) {
 		s.recordAdmissionLoss("grant-readback", peer, err)
 		peer.mu.Lock()
@@ -709,6 +714,9 @@ func (b *DesktopSocketBroker) monitorOwned() {
 			sockets = append(sockets, s)
 		}
 		b.mu.Unlock()
+		if b.refreshRenewals(sockets) {
+			continue
+		}
 		for _, s := range sockets {
 			s.refresh()
 		}

@@ -47,7 +47,8 @@ READBACK_CASES = ('PFReadbackCompleteWithinCapturedBudget', 'PFReadbackFailureAn
 SOCKS_CASES = ('SOCKSAssociations',)
 SEPARATE_CASES = ('SocketRetirementReusesCapacity',)+SOCKS_CASES
 SOCKS_LEAVES = ('original-kernel-identity', 'stale-control-permit', 'expired-control-permit',
-                'derived-expiry', 'sibling-claim', 'child-before-parent', 'joined-sibling-isolation')
+                'derived-expiry', 'sibling-claim', 'child-before-parent', 'joined-sibling-isolation',
+                'group-renewal', 'renewal-authority', 'renewal-frame')
 PROBE_CASES = ('FilterOnlyRetirement', 'NativeFilterProjection', 'BaselineTransition', 'ReferenceOwnership')
 
 
@@ -534,6 +535,8 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         raise ValueError('The actual Darwin guardian gate requires a matching macOS host')
     source, package, before = checked_sources(source)
     if not {'desktop_socket_darwin_guardian_test.go', 'desktop_socket_darwin_kernel_cgo.go',
+            'desktop_socket_renewal.go', 'desktop_socket_renewal_test.go', 'desktop_socket_renewal_control_test.go',
+            'desktop_socket_darwin_renewal.go', 'desktop_socket_darwin_renewal_test.go',
             'desktop_socket_admission_observation.go', 'desktop_socket_native_observation.go',
             'desktop_socket_darwin_observation.go', 'desktop_socket_observation_test.go',
             'desktop_socket_darwin_frame_test.go', 'desktop_socket_darwin_socks.go',
@@ -826,8 +829,8 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
              ('if release && len(g.sockets) != 0 {', 'if false && release && len(g.sockets) != 0 {'),)),
         ('authenticated revoke channel retirement', 'StaleCaptureAndReplacement', 'authenticated revoke rejection kept its invalid original channel alive',
          'desktop_socket_darwin_policy.go', (
-             ('(request.Operation == "grant" || request.Operation == "revoke") && reply.Error != ""',
-              'request.Operation == "grant" && reply.Error != ""'),)),
+             ('(request.Operation == "grant" || request.Operation == "revoke" || request.Operation == "renew") && reply.Error != ""',
+              '(request.Operation == "grant" || request.Operation == "renew") && reply.Error != ""'),)),
     )
     if only_case is not None:
         mutations = tuple(value for value in mutations if value[1] == only_case)

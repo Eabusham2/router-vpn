@@ -72,11 +72,11 @@ implemented. A source inventory is a test inventory, not a product denominator.
 
 | Requirement / correction | Affected paths and platforms | Current executable or source evidence | Release/device evidence and actual remaining gap |
 |---|---|---|---|
-| Original native application and multihop scope; independent Start Layers from the current user correction | `internal/mobilemultihop/imported_entry.go`, Android imported-router preparation, Apple PacketTunnel/imported host, pinned native graph runtime | Published `504e0fa3` admits all nine independent Off/AES/AES+XOR entry/final pairs for Local SOCKS5 → paired REALITY/Vision. All 338 earlier graph filenames remain and eight layer pairs are added. Actual Android and Swift captures, shared race checks and strict source/verdict inventories pass at that unit. | The desktop reference binaries compile, but local traffic execution stopped at denied Netlink interface inventory before traffic. Its original twelve and new forty-two native leaf verdicts remain mandatory. Other graph families and Server/Compare for this direction remain explicit requirements in `MOBILE-IMPORTED-ROUTER-PATH.md`. |
+| Original native application and multihop scope; independent Start Layers from the current user correction | `internal/mobilemultihop/imported_entry.go`, Android imported-router preparation, Apple PacketTunnel/imported host, pinned native graph runtime | Published `504e0fa3` admits all nine independent Off/AES/AES+XOR entry/final pairs for Local SOCKS5 → paired REALITY/Vision. All 338 earlier graph filenames remain and eight layer pairs are added. Actual Android and Swift captures, shared race checks and strict source/verdict inventories pass at that unit. | The exact-`e3a9ee87` hosted reference now passes all twelve original and forty-two additional native leaves after the bounded detector-readiness correction. Local Netlink denial is not counted as a pass. OS tunnel, packaged and device acceptance remain separate; other graph families and Server/Compare for this direction remain requirements in `MOBILE-IMPORTED-ROUTER-PATH.md`. |
 | Original complete connection-state capture and exact proved restoration | `IOSMultihopExecution.swift` and its actual compiled fixture | `9031002c` supplies the real typed original-asset map. The corrected Swift fixture passes 2,047 checks and rejects five malformed maps; bypassing the source validator is caught by the causal control. | This is fixture repair, not a new production relaxation. Full Xcode, packaged and physical restoration evidence remains separate. |
 | Native shipping composition and mandatory original graph inventory | Apple source producer/pinned parser and desktop native runtime builder | `4dec2930` distinguishes Go compiler BuildEvents from TestEvents; `401a2123` makes the actual SOCKS/REALITY reference mandatory in the orchestration fixture. | Exact-SHA native parsing/builds must confirm the affected jobs. Python orchestration and reproduced event streams do not prove iOS or desktop traffic acceptance. |
 | Original protection/ownership, #200–224 and #337; authenticated Server lease retirement | Windows external Server fixture and native physical runner | `535e6481` completes retry/close/drain before reporting the deliberately broken stream-retirement result. `c522822d` retains every original Server/association child in three exact groups. | Actual Windows AMD64/ARM64 WFP execution remains required. All six lease causal controls and per-process limits remain mandatory. |
-| Actual native socket ownership and joined cleanup | Darwin guardian, PF policy, socket broker and original native fixtures | Current Intel failure logs distinguish a lost retirement probe from a separately closed sibling path during UDP exchange. ARM64 or older passes cannot close these Intel failures. | Root cause remains under investigation. Diagnostics must not accept `net.ErrClosed`, extend proof freshness or label a failed cleanup successful. |
+| Actual native socket ownership and joined cleanup | Darwin guardian, PF policy, socket broker and original native fixtures | The original Intel receipt-expiry failure is reproduced by retained TCP streams behind the actual broker FIFO with modeled native operation cost. This increment groups at most sixteen existing renewals and retains one outstanding group per broker; exact individual receipts, parent expiry, cancellation and native pre/post proof remain required. | The final portable broker race suite, both Darwin Go cross-compiles and focused runner contracts pass. The expanded native gate requires all 23 SOCKS verdicts. Actual Intel/ARM64 PF and Unix control execution remain required; local AF_UNIX denial is not native success. |
 | Original DNS, #229–240 MTU, 50-sample measurements, Compare and captured profiles | Shared and native shipping paths indexed by the existing reconciled/status/evidence documents | Exact policy/default/lifecycle contracts remain binding. This continuation does not change Home AdGuard, defaults, scoring, MTU or comparison restoration. | Current source and relevant executable/device evidence must be inspected for each remaining gap; no blanket closure is inferred from this turn's test repairs. |
 | Original map-first native product, Setup Center, Methods, administration and platform scope | Windows/macOS/Linux/Android/iPhone/iPad, qualified additional Unix packages, private server and router integration | Original source authority was recovered and preserved. Existing implementation is not rebuilt from a shortened handoff. | Full per-platform graph coverage, live interoperability, UI/DPI/orientation/accessibility, signing/distribution, private deployment and device/network acceptance remain distinct gates. |
 
@@ -246,6 +246,81 @@ Independent review and YAML/shell checks cover the final recipe and trigger
 closure. This is preparation/verification evidence; actual hosted native
 reference execution was pending at that preparation cutoff. The later
 `9217cb0` failure above supersedes that pending observation.
+
+### Hosted REALITY reference passed at the corrected source
+
+[`e3a9ee873584f725835022a10d3192dd198d1d87`](https://github.com/Eabusham2/router-vpn/commit/e3a9ee873584f725835022a10d3192dd198d1d87)
+published the detector-readiness correction. Its independent
+[reference run 42325730293](https://github.com/Eabusham2/router-vpn/actions/runs/42325730293)
+and job `128260901190` completed successfully for that exact SHA. The final
+receipt at `2026-11-07T01:52:58.9036717Z` records all nine captured layer pairs,
+all 12 original reference leaves and all 42 additional layer leaves. The
+corresponding exact inventories contain 13 and 51 verdicts including parent
+cases. The three detector tests and two parent startup/receipt tests also pass.
+
+The hosted receipt and an independent fresh local preparation agree on all
+2,259 prepared core records and 914 prepared Xray records. Their record digests
+are respectively
+`2f9bc20382fabf9af74de165f2e94d6d537b8386e202be928cbeeaeabd32c56a`
+and `2753839c7c09a4dbdc155ccf4333d64f27f49b2d8f5c930bb621e14e8327fc86`.
+The reference executable digest is
+`c0df3cd96bc0f8737b91202fb64665a2642134e55d0c9a2c10883c9843bfdf65`;
+the native peer image digest is
+`2a1d0b9bc95dc2af637bca8dab60c108e300bc4bc9d3a76acb7ebe6d2694ee0c`.
+The separately declared observer templates and overlay are verified before
+and after execution.
+
+This closes the previously failing bounded imported SOCKS5/REALITY reference,
+including real selected-DNS, independent key, cancellation and cleanup checks.
+Its receipt explicitly says `desktop-reference-only`, `native_reference: true`
+and `native_parser: false`. It does not establish mobile parser execution,
+OS tunnel policy, host Connected state, packaged-device acceptance, the
+separate Intel Darwin renewal gate or a complete release.
+
+### Bounded renewal of original Darwin socket permits
+
+The Intel failure was reproduced with the actual broker monitor, FIFO and eight
+retained TCP streams, using a modeled 650-millisecond native operation cost and
+two already queued 450-millisecond foreground operations. The former per-peer
+path loses receipt 1 while request 2 is applying at age 5,099 milliseconds.
+Every individual modeled operation remains within the unchanged native bound.
+This is causal queue evidence, not an emulated native PF pass.
+
+The broker now captures up to sixteen due, already authorized tuples in one
+renewal group. It retains one queued/running group per original broker. Later
+due peers remain unsubmitted until that original group and its peer I/O join;
+they then enter the same FIFO after preceding foreground requests. Every monitor
+pass checks original receipt expiry before that group guard. Initial grants and
+non-Darwin policy paths retain their existing behavior.
+
+The authenticated native guardian validates the exact existing descriptors,
+bindings, next sequences, original receipts, PF permits and SOCKS parents before
+retaining attempted identities. One complete native pre-readback, PF update and
+post-readback produces an individual receipt for each member. Roots precede
+derived UDP permits, whose expiry cannot exceed their original parent. A parent
+outside the group must still independently validate. Queued member cancellation
+keeps its matching unsent revoke identity; uncertain writes retain attempted
+identities. Partial, reordered, foreign or stale acknowledgments authorize none
+of the group. A failed/short frame write closes the original shifted channel.
+The five-second proof freshness, three-second control, two-second native bound,
+32 KiB frame limit and joined teardown requirements remain unchanged.
+
+The final shipping `^TestDesktopSocket` suite passes under race instrumentation
+in 20.498 seconds within its existing 60-second bound. Eight-stream, seventeen-
+stream rollover and staggered-receipt cases exchange real bytes after the first
+receipts expire and join exact cleanup. Removing only the one-group guard fails
+the rollover and staggered controls with four and six independently queued
+groups. Nineteen focused native-runner contracts pass. Both final Darwin
+AMD64/ARM64 tagged Go cross-compiles pass with `CGO_ENABLED=0`; these establish
+Go and fixture compilation, not native C/PF execution.
+
+The desktop preparation includes all new production and fixture sources. The
+native SOCKS gate preserves its original seventeen verdicts and adds grouped
+renewal, malformed-authority and maximum-frame checks for both address families,
+requiring all twenty-three. The portable Unix-channel fixture's baseline and
+seven source mutations compile, but local runtime is denied at AF_UNIX creation
+before every old and new case. Actual channel execution and the expanded native
+Intel/ARM64 PF gates remain required in exact-source CI.
 
 The initial `398cb513` failures were read at their exact source identity,
 including authoritative source audit job `128124355405`, iOS jobs

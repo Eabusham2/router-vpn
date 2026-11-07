@@ -27,7 +27,7 @@ func desktopDarwinObserveRequest(ctx context.Context, capture DesktopSocketCaptu
 
 func desktopDarwinObservationOperation(operation string) string {
 	switch operation {
-	case "probe", "create", "bind", "grant", "revoke", "release", "tunnel", "retire-tunnel", "finish", "socks-associate":
+	case "probe", "create", "bind", "grant", "renew", "revoke", "release", "tunnel", "retire-tunnel", "finish", "socks-associate":
 		return operation
 	default:
 		return "other"

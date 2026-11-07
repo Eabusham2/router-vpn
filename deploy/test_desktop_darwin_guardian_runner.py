@@ -510,9 +510,9 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
         names += [root+'/ipv'+family+'/'+leaf for family in ('4', '6') for leaf in self.gate.SOCKS_LEAVES]
         return ['--- PASS: '+name+' (0.01s)' for name in names]
 
-    def test_all_seventeen_actual_socks_verdicts_are_required_once(self):
+    def test_all_twenty_three_actual_socks_verdicts_are_required_once(self):
         lines = self.verdicts()
-        self.assertEqual(len(lines), 17)
+        self.assertEqual(len(lines), 23)
         self.gate.require_socks_verdicts('\n'.join(lines))
         for line in lines:
             for change in ('', line+'\n'+line, 'diagnostic '+line, line.replace('PASS', 'FAIL'), line.replace('PASS', 'SKIP')):

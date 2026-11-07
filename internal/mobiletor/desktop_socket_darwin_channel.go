@@ -22,6 +22,7 @@ type desktopDarwinRequest struct {
 	Options   DesktopDarwinSocketOptions
 	Creation  DesktopSocketCreation
 	Grant     DesktopSocketGrant
+	Renewals  []DesktopSocketGrant `json:",omitempty"`
 	SOCKS     *desktopDarwinSOCKSAssociation
 	Tunnel    string
 	Index     uint32
@@ -36,6 +37,7 @@ type desktopDarwinReply struct {
 	Account  string
 	PF       *desktopDarwinPF
 	Receipt  DesktopSocketReceipt
+	Receipts []DesktopSocketReceipt `json:",omitempty"`
 	Error    string
 }
 
