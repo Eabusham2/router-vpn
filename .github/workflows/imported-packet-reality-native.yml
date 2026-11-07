@@ -1,0 +1,64 @@
+name: Imported packet REALITY native reference
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/imported-packet-reality-native.yml'
+      - 'internal/**'
+      - 'mobile/**'
+      - 'android/**'
+      - 'ios/**'
+      - 'deploy/**'
+      - 'cmd/client/desktop_tor_comparison_native.go'
+      - 'cmd/client/multihop_exact_json.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'server/**'
+      - 'configs/client/**'
+permissions:
+  contents: read
+concurrency:
+  group: imported-packet-reality-native-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  imported-packet-reality-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GOTOOLCHAIN: go1.26.3
+      GOMAXPROCS: '2'
+      GOGC: '60'
+      GOMEMLIMIT: 2048MiB
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+      - name: Prepare the exact captured desktop reference sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          native_core="$RUNNER_TEMP/routervpn-imported-packet-core"
+          native_xray="$RUNNER_TEMP/routervpn-imported-packet-xray"
+          git init "$native_core"
+          git -C "$native_core" remote add origin https://github.com/SagerNet/sing-box.git
+          git -C "$native_core" fetch --depth=1 origin 1ac1a339cb1223e9c70eae14c44411c75033c02d
+          git -C "$native_core" checkout --detach FETCH_HEAD
+          git init "$native_xray"
+          git -C "$native_xray" remote add origin https://github.com/XTLS/Xray-core.git
+          git -C "$native_xray" fetch --depth=1 origin 50231eaff98ccc31b5cbd247a721c16e97fe5ec1
+          git -C "$native_xray" checkout --detach FETCH_HEAD
+          python3 deploy/prepare-relay-core.py "$native_core" "$native_xray"
+          python3 deploy/prepare-mobile-performance.py "$native_core"
+          python3 deploy/mobile_openvpn_close_policy.py "$native_core"
+          python3 deploy/prepare-desktop-external.py "$native_core"
+          python3 deploy/prepare-mobile-buffers.py "$native_core"
+          (cd "$native_core" && go mod tidy)
+      - name: Execute captured WG AWG and OpenVPN REALITY references
+        shell: bash
+        timeout-minutes: 50
+        run: |
+          set -euo pipefail
+          python3 deploy/test_native_imported_packet_xray.py \
+            "$RUNNER_TEMP/routervpn-imported-packet-core"

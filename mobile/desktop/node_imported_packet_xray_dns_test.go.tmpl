@@ -1,0 +1,188 @@
+//go:build linux && !android && routervpn_openvpn_remote_test
+
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/quic-go"
+)
+
+// Four native entry owners carry the same exact captured DNS protocols. The
+// common resolver proves wire answers and typed TLS failures independently from
+// entry authentication, the paired REALITY engine, and host/device readiness.
+func TestRouterVPNImportedPacketRealitySelectedDNS(t *testing.T) {
+	for _, kind := range []string{"wireguard", "amneziawg", "openvpn-tcp", "openvpn-udp"} {
+		t.Run(kind, func(t *testing.T) {
+			for _, name := range []string{"dot853", "doh443", "doh3-udp443", "plain-vision-udp443", "wrong-dns-sni", "wrong-dns-trust", "wrong-dns-route", "wrong-dns-port", "wrong-dns-path", "wrong-owner", "cancel-inflight"} {
+				t.Run(name, func(t *testing.T) { desktopPacketRealityDNSCase(t, kind, name) })
+			}
+		})
+	}
+}
+
+func desktopPacketRealityDNSCase(t *testing.T, protocol, name string) {
+	t.Helper()
+	var audit func()
+	t.Cleanup(func() {
+		if audit != nil {
+			audit()
+		}
+	})
+	peer := startDesktopCONNECTXrayDNSResolver(t)
+	f := desktopPacketRealityNew(t, protocol, "off", "off", name, peer)
+	if err := f.connectedEntry(f.ctx); err != nil {
+		t.Fatal("selected DNS lost its original authenticated packet entry", err)
+	}
+	// Reuse only the exact pinned selected-DNS constructor and certificate
+	// boundary. This fixture supplies its own actual packet/REALITY owner.
+	dnsOwner := &desktopCONNECTXrayDNSFixture{ctx: f.ctx, selected: bytes.Clone(f.selected), manager: &desktopCONNECTXrayDNSManager{owner: f.final}}
+	kind := 3
+	if name == "dot853" {
+		kind = 1
+	}
+	if name == "doh443" {
+		kind = 2
+	}
+	if name == "plain-vision-udp443" {
+		ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+		ok, err := desktopImportedSOCKSXrayDNS(ctx, f.final, "192.168.50.133:53")
+		cancel()
+		if !ok || err != nil || f.dns.Load() != 1 {
+			t.Fatal("ordinary Vision did not first prove original Home UDP53", err)
+		}
+	}
+	resolver, err := desktopCONNECTXrayDNSTransport(t, dnsOwner, peer, name)
+	if err != nil {
+		t.Fatal("captured selected DNS failed before its actual encrypted exchange", err)
+	}
+	ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+	defer cancel()
+	if name == "wrong-owner" {
+		if err := desktopCONNECTXrayDNSExchange(ctx, resolver, desktopCONNECTXrayDNSQuestion); err != nil || peer.hits[3].Load() != 1 {
+			t.Fatal("wrong-owner control did not first prove its original captured owner", err)
+		}
+		if err := resolver.Close(); err != nil {
+			t.Fatal(err)
+		}
+		before := f.lower.calls.Load()
+		captured := bytes.Clone(f.selected)
+		dnsOwner.manager.mu.Lock()
+		dnsOwner.manager.owner = nil
+		dnsOwner.manager.mu.Unlock()
+		replacement, err := desktopCONNECTXrayDNSTransport(t, dnsOwner, peer, "")
+		if replacement == nil || err == nil || err.Error() != "outbound detour not found: proxy" ||
+			f.lower.calls.Load() != before || peer.hits[3].Load() != 1 || !bytes.Equal(captured, f.selected) {
+			t.Fatal("selected DNS did not reject its missing live owner during native Start", err)
+		}
+		if err := replacement.Close(); err != nil {
+			t.Fatal("rejected DNS transport did not close", err)
+		}
+	} else if name == "cancel-inflight" {
+		joined := make(chan error, 1)
+		go func() {
+			joined <- desktopCONNECTXrayDNSExchange(ctx, resolver, "cancel."+desktopCONNECTXrayDNSQuestion)
+		}()
+		select {
+		case <-peer.entered:
+		case err := <-joined:
+			t.Fatal("cancellation missed the original HTTP3 request", err)
+		case <-ctx.Done():
+			t.Fatal("original HTTP3 request was not entered")
+		}
+		cancel()
+		select {
+		case err := <-joined:
+			if err == nil {
+				t.Fatal("cancelled original DNS returned success")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("original DNS exchange did not join")
+		}
+		select {
+		case <-peer.cancelled:
+		case <-time.After(time.Second):
+			t.Fatal("original HTTP3 server did not observe cancellation")
+		}
+	} else {
+		err := desktopCONNECTXrayDNSExchange(ctx, resolver, desktopCONNECTXrayDNSQuestion)
+		positive := name == "dot853" || name == "doh443" || name == "doh3-udp443"
+		if positive {
+			if err != nil || peer.hits[kind].Load() != 1 {
+				t.Fatal("packet REALITY selected DNS did not return its actual authenticated wire answer", err)
+			}
+			if kind == 1 {
+				select {
+				case <-peer.reuseReady:
+				case <-ctx.Done():
+					t.Fatal("DoT did not complete its exact pinned A/AAAA reuse probes")
+				}
+				if peer.reuse[0].Load() != 1 || peer.reuse[1].Load() != 1 || peer.requests[1].Load() != 3 {
+					t.Fatal("DoT probes replaced or duplicated the application query")
+				}
+			}
+		} else {
+			if err == nil || peer.hits[3].Load() != 0 {
+				t.Fatal("foreign selected DNS authority obtained an authenticated answer", err)
+			}
+			if name == "wrong-dns-sni" || name == "wrong-dns-trust" {
+				var cause *quic.TransportError
+				marker := "certificate signed by unknown authority"
+				if name == "wrong-dns-sni" {
+					marker = "not foreign.routervpn.test"
+				}
+				if !errors.As(err, &cause) || cause.Remote || uint64(cause.ErrorCode) < 0x100 || uint64(cause.ErrorCode) >= 0x200 ||
+					!strings.Contains(cause.ErrorMessage, marker) || peer.tlsHello[3].Load() == 0 || peer.requests[3].Load() != 0 {
+					t.Fatal("selected DNS TLS refusal lost its original typed QUIC certificate cause", err)
+				}
+			}
+			if name == "wrong-dns-path" && peer.requests[3].Load() != 1 {
+				t.Fatal("DNS path rejection did not reach its captured HTTP3 peer", err)
+			}
+			if (name == "wrong-dns-route" || name == "wrong-dns-port" || name == "plain-vision-udp443") && (peer.tlsHello[3].Load() != 0 || peer.requests[3].Load() != 0) {
+				t.Fatal("refused DNS route or ordinary Vision reached UDP443")
+			}
+		}
+	}
+	if err := resolver.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.recheckConnected(t)
+	if err := f.close(); err != nil {
+		t.Fatal("original selected DNS packet owners did not join", err)
+	}
+	drain, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	if err := f.lower.empty(drain); err != nil {
+		t.Fatal("packet REALITY DNS owner did not drain before fixture teardown", err)
+	}
+	audit = func() {
+		entry := f.entryStats()
+		if f.lower.calls.Load() == 0 || entry.raw == 0 || entry.tcp == 0 || entry.udp != 0 || peer.invalid.Load() != 0 ||
+			!reflect.DeepEqual(f.source, f.captured) || !bytes.Equal(dnsOwner.selected, f.selected) || f.plan.Config() != f.config || f.plan.Healthy() {
+			t.Fatal("selected DNS escaped its original packet entry or changed its capture")
+		}
+		for index := range peer.hits {
+			var wanted int64
+			if index == kind && (name == "dot853" || name == "doh443" || name == "doh3-udp443" || name == "wrong-owner" || name == "cancel-inflight") {
+				wanted = 1
+			}
+			if peer.hits[index].Load() != wanted {
+				t.Fatalf("packet REALITY selected DNS borrowed another resolver: transport=%d hits=%d expected=%d", index, peer.hits[index].Load(), wanted)
+			}
+		}
+		wantedHome := int64(0)
+		if name == "plain-vision-udp443" {
+			wantedHome = 1
+		}
+		if f.dns.Load() != wantedHome {
+			t.Fatal("packet REALITY DNS replaced selected authority with Home DNS")
+		}
+	}
+}
