@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,10 +50,23 @@ func fastestMeasuredResult(p common.RouterProfile) liveLatencyResult {
 func TestFastestSelectionUsesTrackerBeforeAppLock(t *testing.T) {
 	a, tracker := fastestAdoptionFixture(t)
 	measured, finish := make(chan struct{}), make(chan struct{})
+	joined := make(chan struct{})
+	finishProbe := sync.OnceFunc(func() { close(finish) })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		finishProbe()
+		select {
+		case <-joined:
+		case <-time.After(time.Second):
+			t.Error("Fastest selection fixture did not join its original request")
+		}
+	})
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
+		defer close(joined)
 		w := httptest.NewRecorder()
-		a.fastestProfileWithProbe(w, httptest.NewRequest(http.MethodPost, "/api/profile/fastest", strings.NewReader(`{}`)),
+		a.fastestProfileWithProbe(w, httptest.NewRequest(http.MethodPost, "/api/profile/fastest", strings.NewReader(`{}`)).WithContext(ctx),
 			func(_ context.Context, p common.RouterProfile, _ int) (liveLatencyResult, error) {
 				if p.ID == "b" {
 					close(measured)
@@ -62,11 +76,17 @@ func TestFastestSelectionUsesTrackerBeforeAppLock(t *testing.T) {
 			})
 		done <- w
 	}()
-	<-measured
+	select {
+	case <-measured:
+	case w := <-done:
+		t.Fatalf("Fastest selection returned before the captured probe: status=%d body=%s", w.Code, w.Body.String())
+	case <-time.After(time.Second):
+		t.Fatal("Fastest selection did not reach its captured probe")
+	}
 	// Emulate the observer holding tracker.mu before it reads app.mu. The
 	// selector must wait without acquiring app.mu in the opposite order.
 	tracker.mu.Lock()
-	close(finish)
+	finishProbe()
 	operationOwned, inverted := false, false
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {

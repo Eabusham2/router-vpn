@@ -37,7 +37,10 @@ the new renewal guard intercepted an intentional broken expiry-cap fixture
 before its expected assertion. The current fixture repair isolates that cap
 using a real original TCP parent and a copied shortened authority record;
 production grant and renewal checks remain unchanged. Its three new native
-verdicts and exact mutation witness still require the new commit's Darwin CI.
+verdicts and exact mutation witness passed in the `460918da` Apple Silicon
+native job, along with the existing controls. The Intel socket job was still
+running at the latest observation. These are exact-source hosted native
+results, not a later release or physical user-device acceptance.
 Earlier diagnostic-only passages below are history, not the current fix status.
 
 The explicit REALITY UDP/443 source increment adds an original client
@@ -76,6 +79,13 @@ preserves the prior thirty-two and adds thirteen external cases. Prepared
 source/import closure passes, but those forty-five native verdicts still need
 matching hosted execution. Ordinary proof creation, DNS factories and Tor's
 resident/padding/Server contexts remain separately open.
+
+The Fastest lock-order fixture now detects an actual handler return before
+probe admission and always cancels, releases and joins its original request.
+The recorded unbounded setup wait can no longer hide that early response.
+Its lock-order and fifty-sample expectations remain. Local compiler processes
+were killed before the focused test ran; matching hosted execution is still
+required, and no local execution pass is claimed.
 
 These units do not establish a new complete release. Other imported graph
 families, Server/Compare for that direction, exact-SHA native/package/image

@@ -513,6 +513,9 @@ denied; that separate local boundary is not a passing full-suite result.
 
 ### Mandatory REALITY selected-DNS gate and captured Vision race
 
+The gate and orchestration fixture were published and read back as
+[`d330dc66bf6a41bdba22d6dafe28447241d97879`](https://github.com/Eabusham2/router-vpn/commit/d330dc66bf6a41bdba22d6dafe28447241d97879).
+
 The separate native gate now requires thirteen actual generation transactions,
 nineteen shared flow verdicts and thirty-seven exact native verdicts. Its
 thirty-two traffic leaves cover standard and PQ REALITY with Home UDP/53,
@@ -596,6 +599,10 @@ external and Tor measurement factories are separate unfinished adoption paths.
 
 ### Ordinary external hop measurement caller and ownership
 
+The fifteen reviewed source/test files and evidence updates were published
+and read back as
+[`ab356ea4d34d542e13375a92f12db05132d54e29`](https://github.com/Eabusham2/router-vpn/commit/ab356ea4d34d542e13375a92f12db05132d54e29).
+
 The ordinary Android/iOS external hop factory captures the original
 StartedService, instance, successful proof and constructor context through
 source verification and publication. The shared and actual native measurement
@@ -628,6 +635,34 @@ prepared import/dependency closure pass. No heavyweight native execution was
 performed for this unit, and its forty-five verdicts still require CI.
 Ordinary proof creation and DNS factories, plus Tor's resident, padding and
 Server contexts, retain separate unfinished adoption work.
+
+### Bounded Fastest fixture setup and latest native observations
+
+`TestFastestSelectionUsesTrackerBeforeAppLock` previously waited forever for
+its probe callback even if the actual handler had already rejected physical
+interface capture. The recorded local full-suite attempt took the ten-minute
+package alarm at that wait. The fixture now selects between callback entry,
+the actual early response and a bounded setup deadline. Cleanup cancels the
+original request, releases its original probe exactly once and joins that
+request. Existing tracker/app lock order, operation ownership, successful
+selection and fifty-sample assertions are retained. Production selection code
+and production deadlines are unchanged.
+
+Formatting and whitespace checks pass. Neither focused local attempt reached
+test execution: the ordinary compile and a single-worker, low-memory compile
+were both killed in the `cmd/client` compiler. This is not a passing fixture
+verdict or proof of the cause of the compiler termination. The bounded fix is
+preserved for matching hosted execution without another cold local retry.
+
+At the exact earlier `460918da` commit, the completed Apple Silicon native
+socket/PF job
+[`128277517062`](https://github.com/Eabusham2/router-vpn/actions/runs/42331086894/job/128277517062)
+passed all twenty-three SOCKS association verdicts, the new derived-expiry
+root and IPv4/IPv6 verdicts, and its exact broken-expiry-cap negative control.
+The other kernel identity, permit, sibling, teardown, PF inspection and
+heartbeat controls also passed. Both standalone PF-anchor jobs passed.
+Intel socket job `128277517006` was still running at the last metadata read;
+the ARM result is not assigned to Intel or to a newer source identity.
 
 The initial `398cb513` failures were read at their exact source identity,
 including authoritative source audit job `128124355405`, iOS jobs
