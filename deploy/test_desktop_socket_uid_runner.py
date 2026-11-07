@@ -24,10 +24,14 @@ def passed():
 
 
 def copied(path):
-    # This real shared ACL import is relocated by the actual native preparer.
-    # The fixture keeps every other source byte intact.
-    return path.read_bytes().replace(b'"router-vpn/internal/common"',
-                                     b'"github.com/sagernet/sing-box/routervpn/common"')
+    # Preserve the real shared imports of both owned socket and standard-exit
+    # source families, using the same declared mapping as the actual preparer.
+    return GATE.PREP.relocated_shared_source(path.read_bytes())
+
+
+def owned_sources():
+    return sorted(path for pattern in ('desktop_socket_*.go', 'desktop_standard_*.go')
+                  for path in (ROOT/'internal/mobiletor').glob(pattern))
 
 
 class OwnedUIDRunner(unittest.TestCase):
@@ -37,7 +41,7 @@ class OwnedUIDRunner(unittest.TestCase):
         self.source = Path(self.temp.name)/'core'
         target = self.source/'routervpn/mobiletor'
         target.mkdir(parents=True)
-        for path in (ROOT/'internal/mobiletor').glob('desktop_socket_*.go'):
+        for path in owned_sources():
             (target/path.name).write_bytes(copied(path))
         self.toolchain = Path(self.temp.name)/'selected toolchain'
         self.compiler = self.toolchain/'bin/go'
@@ -136,7 +140,7 @@ class OwnedUIDRunner(unittest.TestCase):
              self.assertRaises(SharedStageComplete):
             GATE.PREP.prepare(source)
         _, records = GATE.checked_sources(source)
-        self.assertEqual(set(records), {path.name for path in (ROOT/'internal/mobiletor').glob('desktop_socket_*.go')})
+        self.assertEqual(set(records), {path.name for path in owned_sources()})
 
     def test_nonroot_build_compiles_normally_before_bounded_noprompt_sudo(self):
         with patch.object(GATE, 'privilege_tool', return_value='/usr/bin/sudo'):
@@ -160,21 +164,30 @@ class OwnedUIDRunner(unittest.TestCase):
         for fault in ('source-after-build', 'writable-binary', 'binary-after-run', 'source-after-run',
                       'missing-tests', 'skipped-test', 'missing-family'):
             with self.subTest(fault=fault):
-                for path in (ROOT/'internal/mobiletor').glob('desktop_socket_*.go'):
+                for path in owned_sources():
                     (self.source/'routervpn/mobiletor'/path.name).write_bytes(copied(path))
                 with self.assertRaises(ValueError):
                     self.execute(fault)
 
     def test_missing_or_changed_source_cannot_invoke_privilege(self):
-        path = self.source/'routervpn/mobiletor/desktop_socket_source_unix.go'
-        for fault in ('changed', 'missing', 'linked'):
-            with self.subTest(fault=fault), patch.object(GATE, 'run') as run:
-                if path.exists() or path.is_symlink(): path.unlink()
-                if fault == 'changed': path.write_bytes(b'changed source')
-                if fault == 'linked': path.symlink_to(ROOT/'internal/mobiletor'/path.name)
-                with self.assertRaises(ValueError):
-                    GATE.execute(self.source, '/captured/go', env={})
-                run.assert_not_called()
+        GATE.checked_sources(self.source)
+        for name in ('desktop_socket_source_unix.go', 'desktop_standard_linux_protection.go'):
+            original = ROOT/'internal/mobiletor'/name
+            path = self.source/'routervpn/mobiletor'/name
+            for fault in ('changed', 'missing', 'linked'):
+                with self.subTest(source=name, fault=fault), patch.object(GATE, 'run') as run:
+                    path.unlink()
+                    try:
+                        if fault == 'changed': path.write_bytes(b'changed source')
+                        if fault == 'linked': path.symlink_to(original)
+                        with self.assertRaises(ValueError) as caught:
+                            GATE.execute(self.source, '/captured/go', env={})
+                        self.assertIn(name, str(caught.exception))
+                        run.assert_not_called()
+                    finally:
+                        if path.exists() or path.is_symlink(): path.unlink()
+                        path.write_bytes(copied(original))
+                    GATE.checked_sources(self.source)
 
     def test_non_unix_or_cross_host_is_not_silently_skipped(self):
         with patch.object(GATE.platform, 'system', return_value='Windows'), patch.object(GATE, 'run') as run:
@@ -190,7 +203,7 @@ class OwnedUIDRunner(unittest.TestCase):
         fixture_root = Path(self.temp.name)/'source-repository'
         original = fixture_root/'internal/mobiletor'
         original.mkdir(parents=True)
-        for item in (ROOT/'internal/mobiletor').glob('desktop_socket_*.go'):
+        for item in owned_sources():
             (original/item.name).write_bytes(item.read_bytes())
         source = original/'desktop_socket_copy_mapping.go'
         source.write_bytes(b'package mobiletor\nimport "router-vpn/internal/common"\n// unrelated import text remains exact\n')
