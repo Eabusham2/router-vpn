@@ -44,6 +44,7 @@ def load(name, relative):
 P = load('tor_pq_compiler_fixture', 'deploy/test_ios_pq_selection.py')
 W = load('tor_wg_adapter_types', 'deploy/test_ios_wireguard_parser.py')
 A = load('tor_native_xray_fixture', 'android/test_android_multihop_graph.py')
+CRYPTO = load('tor_configured_service_crypto', 'deploy/ios_test_crypto_bridge.py')
 
 
 def replace_once(source, before, after):
@@ -704,6 +705,77 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    reject("two fixed sizes for one TUN"){_ = try ProviderPreparation().prepare(provider:provider,selectedProfile:mtu,strict:true)}
   }
  }
+ @MainActor static func importedCONNECTEntryLayerGraphs()throws {
+  guard let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_CONNECT_LAYER_SOURCES"],let output=ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_CONNECT_LAYER_FIXTURES"] else {throw NSError(domain:"fixture",code:1)}
+  let files=try FileManager.default.contentsOfDirectory(at:URL(fileURLWithPath:directory),includingPropertiesForKeys:nil).sorted{$0.lastPathComponent<$1.lastPathComponent}
+  var names=Set<String>()
+  for kind in ["http-connect","https-connect"] {for entryLayer in layers where entryLayer != "off" {for finalLayer in ["plain","off","aes-256-gcm","aes-256-gcm+xor-whitening"] {for policy in ["home","custom"] {names.insert(kind+"--"+entryLayer+"--"+finalLayer+"--"+policy+".json")}}}}
+  try check("CONNECT entry layers retain exact separate source inventory",files.count==32 && Set(files.map{$0.lastPathComponent})==names)
+  for file in files {
+   let source=try JSONDecoder().decode([String].self,from:Data(contentsOf:file))
+   try check("CONNECT layer source retains complete original receipt",source.count==9 && source[2]=="shadowsocks")
+   let capture=try object(Data(source[1].utf8)),entry=capture["profile"] as! [String:Any],external=entry["external"] as! [String:Any],kind=external["protocol"] as! String,layer=external["start_layer"] as! [String:Any],transport=layer["transport"] as! [String:Any],credentials=external[kind.replacingOccurrences(of:"-",with:"_")] as! [String:Any]
+   var final=try object(Data(source[4].utf8))
+   final["multihop_enabled"]=true;final["multihop_entry_id"]=entry["id"];final["multihop_entry_mode"]=kind;final["multihop_exit_id"]=final["id"];final["multihop_exit_mode"]="shadowsocks";final["multihop_execution"]="local"
+   let assets=try JSONDecoder().decode([String:String].self,from:Data(source[3].utf8)),maps=["shadowsocks":assets]
+   func compile(_ first:[String:Any],_ last:[String:Any],_ assets:[String:[String:String]])throws->String {
+    try IOSImportedEntryMultihop.validate(entry:first,final:last,profiles:assets)
+    let captured=try RouterVPNExternalExitBuilder.importedRouterSource(profile:first),selected=try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:last,profiles:assets)
+    let args=["config":captured.config,"capture":captured.capture,"mode":selected.mode,"files":selected.files,"start":selected.start,"profile":try text(last),"dns":source[6]]
+    return try bridge(["Op":"imported-router","Config":text(args)])
+   }
+   let encoded=try compile(entry,final,maps),graph=try object(Data(encoded.utf8)),first=try tagged(graph,"entry-wg"),end=try tagged(graph,"routervpn-execution-local"),outer=try tagged(graph,first["detour"] as! String),expected=try object(Data(source[8].utf8))
+   try check("CONNECT layer retains private inner service and exact authentication",first["type"] as? String=="http" && first["server"] as? String==URL(string:layer["api"] as! String)?.host && first["server_port"] as? Int==credentials["port"] as? Int && first["username"] as? String==credentials["username"] as? String && first["password"] as? String==credentials["password"] as? String)
+   try check("CONNECT layer retains its own outer credentials and physical owner",outer["server"] as? String==transport["server"] as? String && outer["password"] as? String==transport["password"] as? String && outer["detour"]==nil && outer["type"] as? String==(entry["start_layer"] as? String=="aes-256-gcm+xor-whitening" ? "routervpn-aes-xor":"shadowsocks") && outer["password"] as? String != end["password"] as? String)
+   if kind=="https-connect" {let tls=first["tls"] as! [String:Any];try check("CONNECT layer preserves original TLS identity",tls["enabled"] as? Bool==true && tls["server_name"] as? String==credentials["tls_server_name"] as? String && tls["insecure"]==nil)}
+   try check("CONNECT layers retain exact independent final and selected DNS",try json(end)==json(tagged(expected,"routervpn-execution-local")) && json(graph["dns"]!)==json(expected["dns"]!))
+   let raw=try RouterVPNExternalExitBuilder.importedRouterSource(profile:entry),last=try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:maps)
+   try check("CONNECT host capture preserves both original private inputs",try json(object(Data(raw.capture.utf8))["profile"]!)==json(entry) && json(object(Data(last.files.utf8)))==json(assets) && last.start==source[5])
+   let configured=assets["routervpn-ss-service.json"] != nil
+   if configured {
+    let uot=end["udp_over_tcp"] as! [String:Any]
+    try check("CONNECT entry layer retains captured final UoT service",end["network"]==nil && uot["enabled"] as? Bool==true && uot["version"] as? Int==2)
+    var wrong=assets;wrong["routervpn-ss-service.json"]=Data("{}".utf8).base64EncodedString()
+    reject("CONNECT entry wrapper cannot supply missing final authority"){_ = try compile(entry,final,["shadowsocks":wrong])}
+    for field in ["key_sha256","source_sha256"] {var claim=try object(Data(base64Encoded:assets["routervpn-ss-service.json"]!)!);claim[field]=String(repeating:"0",count:64);var changed=assets;changed["routervpn-ss-service.json"]=try json(claim).base64EncodedString();reject("CONNECT original final service binds actual SHA-256 "+field){_ = try compile(entry,final,["shadowsocks":changed])}}
+    var unused=assets;unused["unused-service.json"]=Data("{}".utf8).base64EncodedString();reject("CONNECT final service rejects unused source authority"){_ = try compile(entry,final,["shadowsocks":unused])}
+   }else{
+    try check("CONNECT entry layer grants no final datagram authority",end["network"] as? String=="tcp" && end["udp_over_tcp"]==nil)
+    for fault in ["dns","final-layer"] {var other=final;if fault=="dns"{other["dns_protocol"]="udp"}else{other["start_layer"]="aes-256-gcm"};reject("CONNECT wrapper does not invent final capability "+fault){_ = try compile(entry,other,maps)}}
+   }
+   var selected=ClientBundle.empty,profile=final;profile["name"]="Captured CONNECT final";profile["socks_port"]=0;profile["socks_username"]="";profile["socks_password"]=""
+   if profile["adguard_ipv6"]==nil{profile["adguard_ipv6"]=""}
+   selected.routerProfiles=[try JSONDecoder().decode(RouterProfile.self,from:json(profile))];selected.selectedRouterID=final["id"] as! String;selected.profiles=maps
+   let choice=try IOSRuntimeSelector.selectMultihop(bundle:selected,rawProfileID:nil)
+   try check("CONNECT public selector retains independently layered Local capture",choice.engine == .multihop && choice.rawProfileID=="shadowsocks" && choice.multihopEntryMode==kind)
+   let entryBundle:[String:Any]=["selectedRouterID":entry["id"]!,"routerProfiles":[entry],"profiles":[String:[String:String]]()]
+   let configuration:[String:Any]=["engine":"multihop-libbox","mode":"shadowsocks","bundle":try JSONEncoder().encode(selected),"entryBundle":try json(entryBundle)]
+   func sourceIdentity(_ configuration:[String:Any])throws->IOSMultihopExecution.Source {try IOSMultihopExecution.Source(configuration:configuration,digest:{SHA256.hash(data:$0).map{String(format:"%02x",$0)}.joined()})}
+   let identity=try sourceIdentity(configuration),receipt=try IOSMultihopExecution.StartupChoice(source:identity,execution:"local").encoded()
+   try check("CONNECT startup owner retains complete original layer sources",try IOSMultihopExecution.StartupChoice.decode(receipt,source:identity).source==identity)
+   for role in ["entry","final"] {
+    var changed=configuration
+    if role=="entry"{var replacement=entry,ext=external,provision=layer,outer=transport;outer["password"]=end["password"];provision["transport"]=outer;ext["start_layer"]=provision;replacement["external"]=ext;var bundle=entryBundle;bundle["routerProfiles"]=[replacement];changed["entryBundle"]=try json(bundle)}
+    else{var bundle=selected,files=assets,graph=try object(Data(base64Encoded:assets["sing-box.json"]!)!),outbounds=graph["outbounds"] as! [[String:Any]];for index in outbounds.indices where outbounds[index]["tag"] as? String=="proxy"{outbounds[index]["password"]=transport["password"]};graph["outbounds"]=outbounds;files["sing-box.json"]=try json(graph).base64EncodedString();bundle.profiles["shadowsocks"]=files;changed["bundle"]=try JSONEncoder().encode(bundle)}
+    reject("CONNECT refuses substituted "+role+" layer key on original owner"){_ = try IOSMultihopExecution.StartupChoice.decode(receipt,source:sourceIdentity(changed))}
+   }
+   for fault in ["missing-provision","mode-mismatch","borrowed-final","public-inner","unused-provision","unused-service","malformed-layer","invalid-layer"] {
+    var changed=entry,ext=external,provision=layer,outer=transport
+    if fault=="missing-provision"{ext.removeValue(forKey:"start_layer")}
+    else if fault=="mode-mismatch"{provision["mode"]=entry["start_layer"] as? String=="aes-256-gcm" ? "aes-256-gcm+xor-whitening":"aes-256-gcm";ext["start_layer"]=provision}
+    else if fault=="borrowed-final"{outer["server"]=final["endpoint"];provision["transport"]=outer;ext["start_layer"]=provision}
+    else if fault=="public-inner"{provision["api"]="http://203.0.113.20:8787";ext["start_layer"]=provision}
+    else if fault=="unused-provision"{changed["start_layer"]="off"}
+    else if fault=="unused-service"{outer["udp_over_tcp"]=["enabled":true,"version":2];provision["transport"]=outer;ext["start_layer"]=provision}
+    else if fault=="malformed-layer"{changed["start_layer"]=true}
+    else{changed["start_layer"]="xor-only"}
+    changed["external"]=ext
+    reject("CONNECT refuses unowned independent entry layer "+fault){_ = try compile(changed,final,maps)}
+   }
+   for execution in ["server","auto"] {var changed=final;changed["multihop_execution"]=execution;reject("CONNECT layers retain Local ownership "+execution){_ = try compile(entry,changed,maps)}}
+   try Data(encoded.utf8).write(to:URL(fileURLWithPath:output).appendingPathComponent(file.lastPathComponent),options:.withoutOverwriting)
+  }
+ }
  @MainActor static func importedCONNECTGraphs()throws {
   for kind in ["http-connect","https-connect"] {for method in ["2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305"] {for dnsMode in ["home","custom"] {
    let key=Data(repeating:115,count:method=="2022-blake3-aes-128-gcm" ? 16:32).base64EncodedString()
@@ -990,6 +1062,11 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
  }
  @MainActor static func run()throws {
   defer{RouterVPNTorTestClose()}
+  if ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_CONNECT_LAYER_FIXTURES"] != nil {
+   try importedCONNECTEntryLayerGraphs()
+   print("Apple CONNECT entry layers: PASS (32 separate original captures; \(checks) shipping Swift/actual Go checks; no native network proof)")
+   return
+  }
   try importedRouterGraphs()
   try importedOpenVPNRouterGraphs()
   try importedCONNECTGraphs()
@@ -1739,6 +1816,13 @@ def main():
         destination = Path(imported_output)
         if not imported_output or not destination.is_dir() or destination.is_symlink() or any(destination.iterdir()):
             raise ValueError('ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS must name an existing empty owned directory')
+    connect_output = os.environ.get('ROUTERVPN_APPLE_CONNECT_LAYER_FIXTURES')
+    if connect_output is not None:
+        destination = Path(connect_output)
+        if not connect_output or not destination.is_dir() or destination.is_symlink() or any(destination.iterdir()):
+            raise ValueError('ROUTERVPN_APPLE_CONNECT_LAYER_FIXTURES must name an existing empty owned directory')
+        if imported_output is not None or external_output is not None or args.output or args.padding_output or args.entry_output or args.openvpn_probes_only or os.environ.get('ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY') == '1':
+            raise ValueError('CONNECT entry layer evidence is separate from the established graph inventories')
     for tool in ('go', 'swiftc'):
         if not shutil.which(tool):
             raise RuntimeError(tool + ' is required')
@@ -1776,6 +1860,10 @@ def main():
         sources = [APP / name for name in ('Models.swift', 'IOSExternalExecution.swift', 'IOSMultihopExecution.swift', 'IOSHomeDNSPolicy.swift', 'IOSDNSRuntimePolicy.swift', 'IOSNativeXrayProfile.swift', 'IOSNativePQProfile.swift', 'IOSMultihopStartLayer.swift', 'IOSRuntimeSelection.swift')]
         sources += [TUN / name for name in ('WireGuardQuickConfig.swift', 'RouterVPNMultihopGraph.swift', 'RouterVPNMTUPolicy.swift', 'IOSStartLayer.swift', 'IOSXrayDevicePolicy.swift', 'RouterVPNExternalExit.swift')]
         command = ['swiftc', '-swift-version', '6', '-module-cache-path', str(work / 'module-cache'), '-I', str(work), '-L', str(work), '-lWireGuardKit', '-lLibbox']
+        # Shipping Apple uses platform CryptoKit. This separate portable gate
+        # uses the existing bounded Go SHA-256 boundary, never a canned digest.
+        crypto_flags, crypto_env = CRYPTO.prepare(work / 'crypto') if connect_output is not None else ([], {})
+        command += crypto_flags
         if platform.system() != 'Darwin':
             command += ['-lNetwork']
         command += ['-Xlinker', '-rpath', '-Xlinker', str(work), *map(str, sources), str(source), '-o', str(work / 'tests')]
@@ -1799,6 +1887,12 @@ def main():
         if {p.name for p in reality_sources.iterdir()} != reality_names:
             raise ValueError('Missing or foreign original SOCKS REALITY source capture')
         environment = dict(os.environ, ROUTERVPN_IOS_IMPORTED_OPENVPN_SOURCES=str(openvpn_sources), ROUTERVPN_IOS_IMPORTED_REALITY_SOURCES=str(reality_sources))
+        environment.update(crypto_env)
+        if connect_output is not None:
+            connect_sources = work / 'connect-entry-layer-sources'
+            connect_sources.mkdir()
+            subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedEntryCONNECTIndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ, ROUTERVPN_CONNECT_LAYER_FIXTURES=str(connect_sources)), check=True, timeout=45)
+            environment['ROUTERVPN_IOS_CONNECT_LAYER_SOURCES'] = str(connect_sources)
         environment.pop('ROUTERVPN_IOS_OPENVPN_PROBES_ONLY', None)
         environment.pop('ROUTERVPN_IOS_PADDING_ONLY', None)
         environment.pop('ROUTERVPN_IOS_LOCAL_PADDING_GRAPHS', None)

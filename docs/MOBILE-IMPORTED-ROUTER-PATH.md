@@ -41,7 +41,11 @@ executable configurations, not completed user requirements. The separately
 captured configured-CONNECT inventory adds 24 required cases, and the selected
 encrypted-DNS inventory adds 44 accepted captures plus four plain-carrier H3
 refusals. Those inventories remain separate from the 346 original-source files;
-they are not added into a product-completion denominator.
+they are not added into a product-completion denominator. Another separate
+32-capture CONNECT entry-layer inventory covers two entry protocols, two
+enabled entry layers, four final-service/layer states and two DNS policies.
+It retains the twelve original CONNECT cases and both existing configured-service
+and selected-DNS inventories.
 
 The later Android host correction `95f36b95` is required for the daily Connect,
 Home transition, startup and cold reattachment paths to use this capability
@@ -122,7 +126,11 @@ invented for the imported entry.
 A CONNECT entry retains its original proxy address, port and credentials;
 HTTPS also retains the original TLS name and trust. The paired SS2022 final
 keeps its separate credentials and all three supported ciphers. The imported
-entry Start Layer currently remains Off.
+entry supports Off or its own separately captured AES-256-GCM or AES-256-GCM +
+XOR whitening transport. The original proxy moves only to that entry
+provision’s validated private endpoint; the outer layer keeps its original
+public endpoint, independent key and codec. The final’s provision and
+credentials cannot grant or substitute entry-layer authority.
 
 Without the final's separately captured service declaration, the composition
 remains TCP-only with the final Start Layer Off. It supports compatible selected
@@ -158,7 +166,7 @@ limitations, not merely missing credentials, live access or physical tests.
 
 | Direction or capability | Current source boundary | Work still required |
 |---|---|---|
-| Imported HTTP/HTTPS CONNECT → paired Shadowsocks with an entry Start Layer | The entry remains Off. Final AES/XOR and compatible datagrams require the final's validated configured SS UoT-v2 service declaration. With both layers Off, plain TCP/DoT/DoH remains available without it. | Implement and validate independently provisioned entry-layer capture and routing without borrowing the final's credentials. Complete native and device evidence for the already-admitted configurations. |
+| Imported HTTP/HTTPS CONNECT → paired Shadowsocks with an entry Start Layer | Local independent entry Off/AES/XOR is admitted from that imported node’s original provision. Final AES/XOR and datagrams still require the final’s validated configured SS UoT-v2 service. Plain TCP/DoT/DoH retains final Off without that declaration. | Complete exact-SHA native release and device acceptance for the captured compositions; extend other graph directions separately. |
 | Imported HTTP/HTTPS CONNECT → paired Hysteria2/WG/AWG | Admission still excludes these final modes. The existing configured SS UoT-v2 composition is specific to the paired SS final and does not automatically authorize other finals. | Implement the particular compatible carrier, source ownership and native graph for each final. A successful CONNECT stream or a service declaration for another final is insufficient. |
 | Other imported entry protocols and paired final families | The constructor and mobile hosts retain eight entry labels and five general paired final modes, with the additional SOCKS5-only REALITY/Vision nine-layer matrix. Other Xray families and pairings remain excluded. Bounded OpenVPN Local is implemented; Trojan/VLESS are not ordinary imported catalogue entries. | Implement and validate each particular protocol/source capture, encrypted graph, credential/reference ownership, restoration and native path. Standalone support or the bounded SOCKS5/REALITY path does not prove another pairing. |
 | Imported entry → paired final with Server or Compare | The constructor requires captured Local execution; both host adapters enforce Local and restoration deliberately does not invent a Compare winner. | Design actual execution and proof authority, measurement/comparison and restore semantics for this direction. An ordinary imported entry has no paired Router API/token; a public-address proof cannot grant server-side authority. |
@@ -176,6 +184,15 @@ encrypted SS traffic, final-owned TCP DNS, auth/target/HTTPS trust rejection,
 public-entry/private-final proof, UDP refusal without service authority,
 unsupported finals, cancellation and restoration. Later configured-service and
 encrypted-DNS captures have their own mandatory source and parser inventories.
+The new independent-entry groups additionally drive real entry AES/whitening,
+HTTP/HTTPS CONNECT and final SS/AES/whitening peers. The configured final uses
+the pinned native UoT-v2 receiver for selected UDP DNS while every physical
+entry and final carrier remains TCP. The 32 success leaves and 62 rejection or
+retirement leaves run in two separately bounded native processes. They retain
+wrong-key, wrong-whitening, wrong-private-route, selected-DNS, both proof,
+HTTPS trust/name, cancellation and closed-entry-owner witnesses. These are
+reference protocol peers; they do not claim mobile TUN, Box DNS-router or device
+acceptance.
 The existing `node_external_ss_connect_test.go.tmpl` exercises **SS→CONNECT**,
 the reverse direction, and cannot certify CONNECT→SS. Actual Android/Swift
 capture, pinned native parsing, protocol-peer execution and physical acceptance
@@ -409,7 +426,10 @@ retirement, and malformed or forged source rejection.
 
 `deploy/test_mobile_imported_entry.py` now requires exactly 346 shared original
 source fixtures and 346 from the actual Android helper. Configured CONNECT and
-selected encrypted DNS are retained in their separate required directories. The pinned
+selected encrypted DNS are retained in their separate required directories.
+Independent CONNECT entry layers add 32 original source receipts and 32 actual
+Android receipts in their own mandatory directories, each with its own
+33-verdict native parser group. The pinned
 libbox constructor must reproduce their original config and source digest.
 Its actual native parser, MTU profile reader, and MTU planner must accept them.
 The required fixture gate rejects missing, skipped, duplicated, foreign, or
@@ -421,8 +441,9 @@ pass once. The expanded groups run separately under the unchanged finite
 native-test deadlines. All 346 original-source graphs retain the primary native-parser and typed-MTU
 requirements. The new SOCKS5/REALITY file additionally requires its focused
 native-parser root in the existing non-peer invocation. With the configured
-CONNECT and selected-DNS groups, the default non-peer inventory requires 418
-exact verdicts; the Android source group remains additional. These are required
+CONNECT, selected-DNS and independent-entry-layer groups, the default non-peer
+inventory retains every prior verdict and adds the 33 new CONNECT layer
+verdicts; the Android source groups remain additional. These are required
 inventories, not a statement that the new current-SHA invocations have passed. This does not claim physical mobile
 TUN traffic for every layer combination. Removing the final outer-edge ownership or bypassing actual
 native TLS verification is rejected by the corresponding causal controls.
@@ -444,7 +465,10 @@ required.
 
 `deploy/test_ios_imported_router_pinned.py` is mandatory in Apple smoke and
 release preparation. It now requires the actual Swift-produced 346-graph matrix
-and all 347 exact native verdicts, including the parent. The new full pinned
+and all 347 exact native verdicts, including the parent. A separate Swift
+producer invocation exports exactly 32 independent CONNECT entry-layer graphs
+and a separate pinned parser invocation requires all 33 corresponding
+verdicts. Neither group can satisfy or replace the other. The new full pinned
 invocation remains required even when a Swift-only producer or host fixture passes. Swift harnesses cover
 selection, profiles, restoration, typed MTU, and PacketTunnel composition.
 The local Swift 6.4.2 harness executes actual selection, save and graph-building
@@ -467,6 +491,38 @@ source-reviewed but unexecuted when published in fc261fd0. Current execution
 evidence must name the tested source identity. Passing this reference still does
 not prove Box DNS-router integration, the shipping host proof adapter, OS TUN
 behavior, a mobile Connected result or device acceptance.
+
+The independent CONNECT entry-layer increment was exercised locally with 184
+exact shared CONNECT race verdicts, including all 32 new captures and ten new
+source-authority refusals. The actual Android producer passed 3,072 checks for
+those 32 captures and 1,162 checks for the twelve retained CONNECT captures;
+its five existing causal controls still rejected the intended regressions.
+The complete Android producer exceeded its old aggregate 240-second wrapper
+before reaching the new layer cases. The repaired gate runs six disjoint phase
+groups, each retaining that 240-second process bound and every original
+180-second phase bound. Each group still runs all five causal recompilations.
+Fresh group exports must match their exact expected subsets before a
+non-overlapping union can reach the native parser. The actual six-group run
+completed in 586.005 seconds at the isolated `9b94d010` continuation base,
+retaining all 338 original source files and the separate 32 new files, with
+all 30 causal recompilations rejected at their intended assertions. The existing
+1200-second aggregate imported gate remains unchanged. The separately published
+eight REALITY layer captures must remain in the 346-file primary inventory
+when this increment is integrated; this historical local run does not replace
+that newer inventory.
+The actual Swift producer passed 769 checks for the 32 new captures. Whole
+Swift graphs and Android receipt configurations agreed for all 32 cases.
+A fresh exact-pinned mobile composition then passed all 99 required Libbox
+verdicts for the shared, Android and Swift 32-file groups and their parents.
+The shared and Android constructors reproduced the original seven-source
+SHA/config and retained native parser, typed-MTU and unproved-owner checks.
+Both mobile and peer prepared sources passed the exact shipping-source audit.
+The pinned native encrypted peer binary then passed all 51 original CONNECT
+verdicts, 62 HTTP-layer verdicts and 66 HTTPS-layer verdicts under the race
+detector. The two new groups include 32 success leaves and 62 rejection or
+retirement leaves. These observed peer results do not substitute for exact-SHA
+native application builds, publication, private deployment or physical-device
+acceptance.
 
 The following CONNECT results are historical evidence with explicit source
 cutoffs. They do not certify later configured UoT, selected encrypted DNS or

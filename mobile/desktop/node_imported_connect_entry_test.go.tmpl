@@ -3,6 +3,7 @@ package routervpnamnezia
 import (
 	STD "bufio"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -26,13 +27,16 @@ import (
 	"github.com/miekg/dns"
 	"github.com/sagernet/sing-box/adapter"
 	CERT "github.com/sagernet/sing-box/common/certificate"
+	UOT "github.com/sagernet/sing-box/common/uot"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	HTTP "github.com/sagernet/sing-box/protocol/http"
+	WH "github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
 	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
 )
 
@@ -252,6 +256,96 @@ func desktopStartImportedCONNECTPeer(t *testing.T, s *desktopNodeLayerServer, us
 	}()
 	return p
 }
+
+// Use the pinned UoT request parser and framing. Only its terminal route is
+// narrowed to the fixture's separately retained final proof and DNS endpoints.
+type desktopImportedCONNECTRouter struct{ server *desktopNodeLayerServer }
+
+var _ adapter.ConnectionRouterEx = (*desktopImportedCONNECTRouter)(nil)
+
+func (r *desktopImportedCONNECTRouter) RouteConnection(ctx context.Context, c net.Conn, m adapter.InboundContext) error {
+	return r.server.plainConnection(ctx, c, M.Metadata{Source: m.Source, Destination: m.Destination})
+}
+func (r *desktopImportedCONNECTRouter) RoutePacketConnection(ctx context.Context, c N.PacketConn, m adapter.InboundContext) error {
+	return r.server.NewPacketConnection(ctx, c, M.Metadata{Source: m.Source, Destination: m.Destination})
+}
+func (r *desktopImportedCONNECTRouter) RouteConnectionEx(ctx context.Context, c net.Conn, m adapter.InboundContext, done N.CloseHandlerFunc) {
+	err := r.RouteConnection(ctx, c, m)
+	if done != nil {
+		done(err)
+	}
+}
+func (r *desktopImportedCONNECTRouter) RoutePacketConnectionEx(ctx context.Context, c N.PacketConn, m adapter.InboundContext, done N.CloseHandlerFunc) {
+	err := r.RoutePacketConnection(ctx, c, m)
+	if done != nil {
+		done(err)
+	}
+}
+
+func TestRouterVPNImportedHTTPLayersNativeTraffic(t *testing.T) {
+	desktopImportedCONNECTLayerTraffic(t, "http-connect")
+}
+func TestRouterVPNImportedHTTPSLayersNativeTraffic(t *testing.T) {
+	desktopImportedCONNECTLayerTraffic(t, "https-connect")
+}
+func desktopImportedCONNECTLayerTraffic(t *testing.T, protocol string) {
+	directory := os.Getenv("ROUTERVPN_CONNECT_LAYER_FIXTURES")
+	if directory == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES") == "1" {
+			t.Fatal("required CONNECT independent layer captures absent")
+		}
+		t.Skip("mandatory native gate supplies exact independent layer captures")
+	}
+	expected := map[string]bool{}
+	for _, p := range []string{"http-connect", "https-connect"} {
+		for _, entry := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, final := range []string{"plain", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				for _, dns := range []string{"home", "custom"} {
+					expected[p+"--"+entry+"--"+final+"--"+dns+".json"] = true
+				}
+			}
+		}
+	}
+	files, err := os.ReadDir(directory)
+	if err != nil || len(files) != len(expected) {
+		t.Fatal("incomplete CONNECT independent layer source matrix", err)
+	}
+	for _, file := range files {
+		info, err := file.Info()
+		if err != nil || !expected[file.Name()] || !info.Mode().IsRegular() || file.Type()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > 8<<20 {
+			t.Fatal("foreign or unbounded CONNECT layer capture", err)
+		}
+		if !strings.HasPrefix(file.Name(), protocol+"--") {
+			continue
+		}
+		label := strings.TrimSuffix(file.Name(), ".json")
+		axes := strings.Split(label, "--")
+		raw, err := os.ReadFile(filepath.Join(directory, file.Name()))
+		var capture []string
+		if err != nil || json.Unmarshal(raw, &capture) != nil || len(capture) != 9 {
+			t.Fatal("incomplete CONNECT layer capture", err)
+		}
+		faults := []string{"success"}
+		if axes[3] == "home" {
+			faults = append(faults, "final-key")
+			if axes[2] == "aes-256-gcm+xor-whitening" {
+				faults = append(faults, "entry-auth", "entry-private", "entry-layer-key", "final-whitening", "final-route", "dns-route", "final-identity", "wrong-entry-ip", "cancel", "close-owner")
+				if axes[1] == "aes-256-gcm+xor-whitening" {
+					faults = append(faults, "entry-whitening")
+				}
+				if protocol == "https-connect" {
+					faults = append(faults, "sni", "trust")
+				}
+			}
+		}
+		t.Run(label, func(t *testing.T) {
+			for _, fault := range faults {
+				t.Run(fault, func(t *testing.T) { desktopImportedCONNECTTraffic(t, protocol, label, fault, capture) })
+			}
+		})
+	}
+}
+
 func TestRouterVPNImportedCONNECTNativeTraffic(t *testing.T) {
 	for _, protocol := range []string{"http-connect", "https-connect"} {
 		for _, method := range []string{"2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"} {
@@ -273,22 +367,32 @@ func TestRouterVPNImportedCONNECTNativeTraffic(t *testing.T) {
 		}
 	}
 }
-func desktopImportedCONNECTTraffic(t *testing.T, protocol, label, fault string) {
+func desktopImportedCONNECTTraffic(t *testing.T, protocol, label, fault string, layerCapture ...[]string) {
 	t.Helper()
-	directory := os.Getenv("ROUTERVPN_IMPORTED_ENTRY_FIXTURES")
-	if directory == "" {
-		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES") == "1" {
-			t.Fatal("required CONNECT captures absent")
-		}
-		t.Skip("mandatory native gate supplies exact captures")
-	}
-	data, err := os.ReadFile(filepath.Join(directory, "connect--"+label+".json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var args []string
-	if json.Unmarshal(data, &args) != nil || len(args) != 9 {
-		t.Fatal("captured CONNECT sources incomplete")
+	if len(layerCapture) == 1 {
+		args = append([]string(nil), layerCapture[0]...)
+		if len(args) != 9 {
+			t.Fatal("captured CONNECT layer inputs incomplete")
+		}
+		original, err := mobilemultihop.NewImportedEntry(args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+		if err != nil || original.SourceSHA256() != args[7] || original.Config() != args[8] {
+			t.Fatal("CONNECT reference lost original source receipt", err)
+		}
+	} else if len(layerCapture) == 0 {
+		directory := os.Getenv("ROUTERVPN_IMPORTED_ENTRY_FIXTURES")
+		if directory == "" {
+			if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES") == "1" {
+				t.Fatal("required CONNECT captures absent")
+			}
+			t.Skip("mandatory native gate supplies exact captures")
+		}
+		data, err := os.ReadFile(filepath.Join(directory, "connect--"+label+".json"))
+		if err != nil || json.Unmarshal(data, &args) != nil || len(args) != 9 {
+			t.Fatal("captured CONNECT sources incomplete", err)
+		}
+	} else {
+		t.Fatal("multiple CONNECT layer owners")
 	}
 	proxyCert, proxyCA := desktopExternalInstalledPeerCertificate(t, false)
 	if protocol == "https-connect" {
@@ -312,7 +416,16 @@ func desktopImportedCONNECTTraffic(t *testing.T, protocol, label, fault string) 
 	firstRaw, lastRaw := tagged["entry-wg"], tagged[mobilemultihop.LocalTag]
 	var meta mobilemultihop.Metadata
 	_ = json.Unmarshal([]byte(plan.Metadata()), &meta)
-	if meta.TransportCapability != "tcp-only" || firstRaw["type"] != "http" || firstRaw["detour"] != nil || lastRaw["detour"] != "entry-wg" || lastRaw["network"] != "tcp" {
+	configured := meta.TransportCapability == "uot-v2"
+	layered := meta.EntryStartLayer != "" && meta.EntryStartLayer != "off"
+	var entryOuter map[string]any
+	if layered {
+		entryOuter = tagged[firstRaw["detour"].(string)]
+		if entryOuter == nil || entryOuter["detour"] != nil || entryOuter["password"] == lastRaw["password"] {
+			t.Fatal("CONNECT reference lost independent wrapper")
+		}
+	}
+	if (!configured && meta.TransportCapability != "tcp-only") || firstRaw["type"] != "http" || (!layered && firstRaw["detour"] != nil) || lastRaw["detour"] != "entry-wg" || (!configured && lastRaw["network"] != "tcp") || (configured && !reflect.DeepEqual(lastRaw["udp_over_tcp"], map[string]any{"enabled": true, "version": float64(2)})) {
 		t.Fatal("captured CONNECT capability changed")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -329,12 +442,30 @@ func desktopImportedCONNECTTraffic(t *testing.T, protocol, label, fault string) 
 		fmt.Fprintf(w, `{"ok":true,"node_id":%q,"proof":"router-vpn-private-agent-v1"}`, id)
 	}))
 	defer paired.Close()
-	dnsListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	selected := graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)
+	dnsNetwork, _ := selected["type"].(string)
+	if (dnsNetwork != "tcp" && (!configured || dnsNetwork != "udp")) || selected["detour"] != "proxy" {
+		t.Fatal("selected CONNECT resolver lost final owner")
+	}
+	var dnsListener net.Listener
+	var dnsPacket net.PacketConn
+	var dnsPhysical string
+	if dnsNetwork == "udp" {
+		dnsPacket, err = net.ListenPacket("udp4", "127.0.0.1:0")
+		if err == nil {
+			dnsPhysical = dnsPacket.LocalAddr().String()
+		}
+	} else {
+		dnsListener, err = net.Listen("tcp4", "127.0.0.1:0")
+		if err == nil {
+			dnsPhysical = dnsListener.Addr().String()
+		}
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	var dnsCalls atomic.Int64
-	dnsServer := &dns.Server{Listener: dnsListener, Net: "tcp", Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+	dnsServer := &dns.Server{Listener: dnsListener, PacketConn: dnsPacket, Net: dnsNetwork, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
 		dnsCalls.Add(1)
 		r := new(dns.Msg).SetReply(q)
 		r.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 1}, A: net.ParseIP("93.184.216.34")}}
@@ -342,15 +473,31 @@ func desktopImportedCONNECTTraffic(t *testing.T, protocol, label, fault string) 
 	})}
 	dnsDone := make(chan error, 1)
 	go func() { dnsDone <- dnsServer.ActivateAndServe() }()
-	defer func() { _ = dnsServer.Shutdown(); _ = dnsListener.Close(); <-dnsDone }()
-	selected := graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)
-	if selected["type"] != "tcp" || selected["detour"] != "proxy" {
-		t.Fatal("TCP resolver lost final owner")
-	}
+	defer func() {
+		_ = dnsServer.Shutdown()
+		if dnsListener != nil {
+			_ = dnsListener.Close()
+		}
+		if dnsPacket != nil {
+			_ = dnsPacket.Close()
+		}
+		<-dnsDone
+	}()
 	dnsTarget := net.JoinHostPort(selected["server"].(string), fmt.Sprint(int(selected["server_port"].(float64))))
 	finalCtx, finalCancel := context.WithCancel(ctx)
-	finalServer := &desktopNodeLayerServer{ctx: finalCtx, cancel: finalCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: "10.77.0.1:8787", Physical: paired.Listener.Addr().String()}, {Network: "tcp", Destination: dnsTarget, Physical: dnsListener.Addr().String()}}}
-	final := desktopStartSSProvider(t, finalServer, lastRaw["method"].(string), lastRaw["password"].(string), netip.MustParseAddr("127.0.0.1"))
+	finalServer := &desktopNodeLayerServer{ctx: finalCtx, cancel: finalCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: "10.77.0.1:8787", Physical: paired.Listener.Addr().String()}, {Network: dnsNetwork, Destination: dnsTarget, Physical: dnsPhysical}}}
+	if configured {
+		finalServer.streamRouter = UOT.NewRouter(&desktopImportedCONNECTRouter{server: finalServer}, log.NewNOPFactory().Logger())
+	}
+	var finalWire func(net.Conn) net.Conn
+	if lastRaw["type"] == "routervpn-aes-xor" {
+		key := sha256.Sum256([]byte("router-vpn-xor-whitening-v1\x00" + lastRaw["password"].(string)))
+		if fault == "final-whitening" {
+			key[0] ^= 255
+		}
+		finalWire = func(c net.Conn) net.Conn { return &desktopSSLayerStream{Conn: c, key: key} }
+	}
+	final := desktopStartSSProviderTransport(t, finalServer, lastRaw["method"].(string), lastRaw["password"].(string), netip.MustParseAddr("127.0.0.1"), finalWire, nil)
 	defer final.close()
 	publicCert, publicCA := desktopExternalInstalledPeerCertificate(t, false)
 	public := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -376,6 +523,19 @@ func desktopImportedCONNECTTraffic(t *testing.T, protocol, label, fault string) 
 	entry := desktopStartImportedCONNECTPeer(t, entryServer, firstRaw["username"].(string), firstRaw["password"].(string), tlsCert, cancel, fault)
 	defer entry.close()
 	lower := &desktopImportedCONNECTLower{desktopSSReferenceLower: desktopSSReferenceLower{virtual: desktopImportedSOCKSAddress(firstRaw), original: entry.address}}
+	var entryLayerPeer desktopExternalInstalledSSPeer
+	if layered {
+		failure := ""
+		if fault == "entry-layer-key" {
+			failure = "layer-key"
+		}
+		if fault == "entry-whitening" {
+			failure = "whitening"
+		}
+		entryLayerPeer = desktopStartSSReferenceLayer(t, ctx, entry.address, desktopImportedSOCKSAddress(firstRaw), meta.EntryStartLayer, entryOuter["password"].(string), failure)
+		defer entryLayerPeer.close()
+		lower.virtual, lower.original = desktopImportedSOCKSAddress(entryOuter), entryLayerPeer.address
+	}
 	manager := &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}}
 	owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
 	if fault == "trust" {
@@ -387,11 +547,16 @@ func desktopImportedCONNECTTraffic(t *testing.T, protocol, label, fault string) 
 	}
 	defer store.Close()
 	owned = service.ContextWith[adapter.CertificateStore](owned, store)
-	firstRaw["detour"] = "captured-physical"
+	if layered {
+		tag := entryOuter["tag"].(string)
+		manager.owners[tag] = desktopSSReferenceLayerClient(t, owned, tag, "captured-physical", entryOuter["server"].(string), uint16(entryOuter["server_port"].(float64)), meta.EntryStartLayer, entryOuter["password"].(string))
+	} else {
+		firstRaw["detour"] = "captured-physical"
+	}
 	if fault == "entry-auth" {
 		firstRaw["password"] = "foreign-password"
 	}
-	if fault == "entry-route" {
+	if fault == "entry-route" || fault == "entry-private" {
 		firstRaw["server"] = "192.0.2.99"
 	}
 	if fault == "sni" {
@@ -413,17 +578,26 @@ func desktopImportedCONNECTTraffic(t *testing.T, protocol, label, fault string) 
 	if fault == "final-route" {
 		lastRaw["server"] = "192.0.2.99"
 	}
-	var finalOptions option.ShadowsocksOutboundOptions
 	body, _ = json.Marshal(lastRaw)
-	if err = json.Unmarshal(body, &finalOptions); err != nil {
-		t.Fatal(err)
+	var last adapter.Outbound
+	if lastRaw["type"] == "routervpn-aes-xor" {
+		var options WH.Options
+		if err = json.Unmarshal(body, &options); err != nil {
+			t.Fatal(err)
+		}
+		last, err = WH.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), mobilemultihop.LocalTag, options)
+	} else {
+		var options option.ShadowsocksOutboundOptions
+		if err = json.Unmarshal(body, &options); err != nil {
+			t.Fatal(err)
+		}
+		last, err = SS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), mobilemultihop.LocalTag, options)
 	}
-	last, err := SS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), mobilemultihop.LocalTag, finalOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer last.(io.Closer).Close()
-	// The selected DNS uses an actual TCP exchange through the encrypted final.
+	// Selected TCP or UoT-carried UDP DNS traverses the actual encrypted final.
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM([]byte(publicCA)) {
 		t.Fatal("public proof trust absent")
@@ -443,7 +617,7 @@ func desktopImportedCONNECTTraffic(t *testing.T, protocol, label, fault string) 
 	}
 	stop()
 	publicTransport.CloseIdleConnections()
-	entryBlocked := fault == "entry-auth" || fault == "entry-route" || fault == "sni" || fault == "trust" || fault == "cancel"
+	entryBlocked := fault == "entry-auth" || fault == "entry-route" || fault == "entry-private" || fault == "entry-layer-key" || fault == "entry-whitening" || fault == "sni" || fault == "trust" || fault == "cancel"
 	if entryOK != (!entryBlocked && fault != "wrong-entry-ip") {
 		t.Fatal("CONNECT public proof changed", fault, proofErr)
 	}
@@ -453,7 +627,7 @@ func desktopImportedCONNECTTraffic(t *testing.T, protocol, label, fault string) 
 	if fault == "close-owner" {
 		entry.close()
 	}
-	finalBlocked := entryBlocked || fault == "final-route" || fault == "final-key" || fault == "close-owner"
+	finalBlocked := entryBlocked || fault == "final-route" || fault == "final-key" || fault == "final-whitening" || fault == "close-owner"
 	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(c context.Context, n, a string) (net.Conn, error) {
 		return last.DialContext(c, n, M.ParseSocksaddr(a))
 	}}
@@ -482,30 +656,54 @@ func desktopImportedCONNECTTraffic(t *testing.T, protocol, label, fault string) 
 		dnsTarget = "192.168.50.134:5353"
 	}
 	requestCtx, stop = context.WithTimeout(ctx, 300*time.Millisecond)
-	connection, dnsErr := last.DialContext(requestCtx, "tcp", M.ParseSocksaddr(dnsTarget))
+	connection, dnsErr := last.DialContext(requestCtx, dnsNetwork, M.ParseSocksaddr(dnsTarget))
 	dnsOK := false
 	if dnsErr == nil {
 		deadline, _ := requestCtx.Deadline()
 		_ = connection.SetDeadline(deadline)
-		c := &dns.Conn{Conn: connection}
 		q := new(dns.Msg)
 		q.SetQuestion("example.com.", dns.TypeA)
-		dnsErr = c.WriteMsg(q)
-		if dnsErr == nil {
-			reply, e := c.ReadMsg()
-			dnsErr = e
-			dnsOK = e == nil && reply.Response && reply.Id == q.Id && len(reply.Answer) == 1
+		var reply *dns.Msg
+		if dnsNetwork == "udp" {
+			wire, packErr := q.Pack()
+			dnsErr = packErr
+			if dnsErr == nil {
+				var n int
+				n, dnsErr = connection.Write(wire)
+				if dnsErr == nil && n != len(wire) {
+					dnsErr = io.ErrShortWrite
+				}
+			}
+			if dnsErr == nil {
+				wire = make([]byte, 4096)
+				n, readErr := connection.Read(wire)
+				dnsErr = readErr
+				if dnsErr == nil {
+					reply = new(dns.Msg)
+					dnsErr = reply.Unpack(wire[:n])
+				}
+			}
+		} else {
+			c := &dns.Conn{Conn: connection}
+			dnsErr = c.WriteMsg(q)
+			if dnsErr == nil {
+				reply, dnsErr = c.ReadMsg()
+			}
+		}
+		if dnsErr == nil && reply != nil && reply.Response && reply.Id == q.Id && len(reply.Answer) == 1 {
+			answer, ok := reply.Answer[0].(*dns.A)
+			dnsOK = ok && answer.Hdr.Name == "example.com." && answer.A.Equal(net.ParseIP("93.184.216.34"))
 		}
 		_ = connection.Close()
 	}
 	stop()
 	if dnsOK != (!finalBlocked && fault != "dns-route") {
-		t.Fatal("selected TCP DNS changed", fault, dnsErr)
+		t.Fatal("selected final DNS changed", fault, dnsErr)
 	}
 	if (entryOK && finalOK && dnsOK) != (fault == "success" || strings.HasPrefix(fault, "mtu-")) {
 		t.Fatal("unproved path became eligible", fault)
 	}
-	if fault == "success" {
+	if fault == "success" && !configured {
 		for _, out := range []adapter.Outbound{first, last} {
 			c, e := out.DialContext(ctx, "udp", M.ParseSocksaddr("203.0.113.53:5353"))
 			if c != nil {
@@ -541,10 +739,17 @@ func desktopImportedCONNECTTraffic(t *testing.T, protocol, label, fault string) 
 	entry.close()
 	final.close()
 	cancel()
-	if lower.udp.Load() != 0 || entryServer.rawUDP.Load() != 0 || final.stats().PhysicalUDP != 0 || final.stats().Packets != 0 {
+	if layered {
+		entryLayerPeer.close()
+	}
+	if lower.udp.Load() != 0 || entryServer.rawUDP.Load() != 0 || final.stats().PhysicalUDP != 0 || (!configured && final.stats().Packets != 0) || (layered && entryLayerPeer.stats().PhysicalUDP != 0) {
 		t.Fatal("stream-only graph attempted physical UDP")
 	}
-	if fault == "success" && (entryServer.plainTCP.Load() < 3 || final.stats().Streams < 2 || dnsCalls.Load() == 0) {
+	minimumStreams := int64(2)
+	if dnsNetwork == "udp" {
+		minimumStreams = 1
+	}
+	if fault == "success" && (entryServer.plainTCP.Load() < 3 || final.stats().Streams < minimumStreams || dnsCalls.Load() == 0 || (dnsNetwork == "udp" && final.stats().Packets == 0) || (layered && entryLayerPeer.stats().Streams < 3)) {
 		t.Fatal("independent CONNECT/SS/TCP-DNS observations missing")
 	}
 	if fault == "entry-auth" && entry.auth.Load() == 0 {
@@ -556,8 +761,21 @@ func desktopImportedCONNECTTraffic(t *testing.T, protocol, label, fault string) 
 	if (fault == "sni" || fault == "trust") && entry.tlsRefused.Load() == 0 {
 		t.Fatal("HTTPS lacked independent TLS refusal")
 	}
-	if fault == "final-key" && (final.stats().AuthTCP == 0 || final.stats().Streams != 0) {
-		t.Fatal("wrong final key gained decrypted traffic")
+	if fault == "final-key" || fault == "final-whitening" {
+		observed := final.stats()
+		// A changed XOR key changes masking before SS can emit its typed AEAD
+		// error. Both refusals must reach the actual ciphertext peer and yield
+		// no decrypted stream or packet; retain the raw-SS typed-auth witness.
+		if observed.PhysicalTCP == 0 || observed.Streams != 0 || observed.Packets != 0 ||
+			(lastRaw["type"] != "routervpn-aes-xor" && observed.AuthTCP == 0) {
+			t.Fatal("wrong final key or whitening gained decrypted traffic", observed)
+		}
+	}
+	if fault == "entry-layer-key" || fault == "entry-whitening" {
+		observed := entryLayerPeer.stats()
+		if observed.PhysicalTCP == 0 || observed.Streams != 0 || observed.Packets != 0 || entryServer.rawTCP.Load() != 0 {
+			t.Fatal("unproved independent entry layer reached CONNECT", observed)
+		}
 	}
 	if entryBlocked && final.stats().PhysicalTCP != 0 {
 		t.Fatal("blocked entry reached final")

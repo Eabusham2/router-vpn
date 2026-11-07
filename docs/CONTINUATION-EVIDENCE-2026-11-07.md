@@ -109,6 +109,61 @@ counted as passing.
 
 ## Exact-SHA CI observation and remaining delivery
 
+### Independent CONNECT entry layers
+
+The next coherent source increment admits Local HTTP/HTTPS CONNECT to a paired
+Shadowsocks final with the imported node's independently provisioned Off,
+AES-256-GCM or AES-256-GCM + XOR entry layer. The entry wrapper retains its own
+credentials and HTTPS identity. It grants no final-node service authority:
+selected UDP DNS and enabled final layers still require that final's original,
+validated SS UoT-v2 declaration. Plain TCP/DoT/DoH retains final Off without it.
+Server/Compare and other final families are not silently admitted.
+
+The new 32 source captures remain separate from all 346 primary graphs,
+including the nine previously published SOCKS5/REALITY layer pairs, and from
+the existing configured-service and selected-DNS inventories. Shared CONNECT
+checks pass 184 exact race verdicts. Actual Android preparation passes 4,234
+focused checks, and Swift passes 769 checks for the new 32 captures; the complete
+graphs agree across both hosts. Actual pinned encrypted CONNECT peers pass 179
+verdicts, using the native UoT-v2 receiver and independent entry/final keys.
+Fresh mobile parsing passes 99 exact verdicts, and the Apple minimal-tag parser
+passes its separate 33-verdict invocation. These are bounded graph and peer
+results, not packaged mobile or device acceptance.
+
+The original monolithic Android producer timed out at its unchanged 240-second
+owner bound after 219 original exports, before reaching the new layer cases.
+The repaired orchestration runs six disjoint groups, retaining each 240-second
+process bound, every 180-second phase bound, all original phases, and all five
+causal recompilations per child. Exact regular-file subsets must form a complete,
+duplicate-free union before native parsing. Its actual run on the isolated
+`9b94d010` base passed in 586.005 seconds with 338 primary and 32 separate
+captures and all 30 causal controls. The merged source preserves the additional
+eight published REALITY captures; its third group contains 79 primary files.
+The 1,200-second aggregate gate remains unchanged. The historical 338-file run
+is not represented as an execution of the merged 346-file aggregate.
+
+### Fresh native failures after the diagnostic publication
+
+The independent reference at `9217cb0` failed in
+[run 42322804604](https://github.com/Eabusham2/router-vpn/actions/runs/42322804604),
+job `128251084723`: its original positive SOCKS5/REALITY case did not complete
+the selected Home DNS exchange within two seconds. Several later cases stopped
+at that same prerequisite. Pinned source shows asynchronous REALITY detector
+preparation and a five-second polling wait; a listener announcement alone does
+not establish detector completion. The correction and unchanged traffic proofs
+remain required. TLS diagnostics from background detection are not evidence
+that the captured client credentials were wrong.
+
+At `bdb7519`, Apple Silicon job `128248720491` passed the native single-filter
+PF lifetime gate. Intel job `128248720913` failed its separate
+`SOCKSAssociations/ipv4` baseline during the second UDP association's policy
+binding. The first original admission-loss record reports an expired five-second
+receipt while request 2 was applying and receipt 1 remained acknowledged;
+IPv6's seven child cases passed. Native queue/refresh ordering still needs
+resolution. Neither the Apple Silicon gate nor IPv6 substitutes for the failed
+Intel case. The `20693f1` authoritative run was subsequently cancelled by newer
+work; its cancelled/skipped jobs are not failures or successful release evidence.
+
 ### Later published source and independent reference execution
 
 [`504e0fa327594f357f4f542f005d098ee0bfa698`](https://github.com/Eabusham2/router-vpn/commit/504e0fa327594f357f4f542f005d098ee0bfa698)
@@ -158,7 +213,8 @@ then accepts 2,255 prepared reference records and 914 prepared Xray records.
 All 15 reference-runner contracts and three relay-preparation tests pass.
 Independent review and YAML/shell checks cover the final recipe and trigger
 closure. This is preparation/verification evidence; actual hosted native
-reference execution remains pending.
+reference execution was pending at that preparation cutoff. The later
+`9217cb0` failure above supersedes that pending observation.
 
 The initial `398cb513` failures were read at their exact source identity,
 including authoritative source audit job `128124355405`, iOS jobs

@@ -436,7 +436,7 @@ enum IOSImportedEntryMultihop {
             default: throw issue()
             }
             let transport = ["dot": "tls", "doh": "https", "doh3": "h3"][selected] ?? selected
-            guard ["", "off"].contains(entry["start_layer"] as? String ?? ""),
+            guard ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(entry["start_layer"] as? String ?? ""),
                   layers.contains(final["start_layer"] as? String ?? ""),
                   transports.contains(transport) else { throw issue() }
         }
@@ -484,6 +484,6 @@ enum IOSImportedEntryMultihop {
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ImportedEntry", code: 1, userInfo: [NSLocalizedDescriptionKey:
-            "Choose a Local imported entry and a different paired Router VPN final with their original settings. SOCKS5 to REALITY Vision retains each node's independently provisioned Start Layer. HTTP/HTTPS CONNECT requires SS2022 and an Off entry. Selected TCP, DoT and DoH DNS use the captured stream path. Captured UoT-v2 service authority additionally permits UDP/DoH3 and final AES or AES+XOR; without it, both layers must be Off. Resolver hostnames require their saved bootstrap through the same final. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
+            "Choose a Local imported entry and a different paired Router VPN final with their original settings. SOCKS5 to REALITY Vision retains each node's independently provisioned Start Layer. HTTP/HTTPS CONNECT requires SS2022 and retains its independently provisioned entry Start Layer. Selected TCP, DoT and DoH DNS use the captured stream path. Captured UoT-v2 service authority additionally permits UDP/DoH3 and final AES or AES+XOR; without it, the final layer must be Off. Resolver hostnames require their saved bootstrap through the same final. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
     }
 }

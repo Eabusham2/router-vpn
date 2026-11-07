@@ -118,6 +118,9 @@ func TestImportedEntryCONNECTBoundaries(t *testing.T) {
 				p["dns_host"] = "192.168.50.132"
 			case "entry-layer":
 				externalTestAddLayer(cap["profile"].(map[string]any), "aes-256-gcm", "203.0.113.20", "10.93.0.1", "i")
+				// Provisioned entry layers are supported; this negative keeps an
+				// outer transport belonging to a different imported node.
+				cap["profile"].(map[string]any)["external"].(map[string]any)["start_layer"].(map[string]any)["transport"].(map[string]any)["server"] = "203.0.113.99"
 				s[1] = externalTestJSON(t, cap)
 			case "final-layer":
 				p["start_layer"] = "aes-256-gcm"

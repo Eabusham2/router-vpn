@@ -165,6 +165,7 @@ type desktopNodeLayerServer struct {
 	tcp                                        net.Listener
 	udp                                        net.PacketConn
 	routes                                     []desktopNodeLayerRoute
+	streamRouter                               adapter.ConnectionRouterEx
 	ownedUDP                                   func(string) (string, context.Context, func(), bool)
 	dnsAddress                                 string
 	routerAddress                              string
@@ -212,7 +213,14 @@ func (s *desktopNodeLayerServer) route(network, destination string) (string, boo
 	return "", false
 }
 
-func (s *desktopNodeLayerServer) NewConnection(_ context.Context, connection net.Conn, metadata M.Metadata) error {
+func (s *desktopNodeLayerServer) NewConnection(ctx context.Context, connection net.Conn, metadata M.Metadata) error {
+	if s.streamRouter != nil {
+		return s.streamRouter.RouteConnection(ctx, connection, adapter.InboundContext{Source: metadata.Source, Destination: metadata.Destination})
+	}
+	return s.plainConnection(ctx, connection, metadata)
+}
+
+func (s *desktopNodeLayerServer) plainConnection(_ context.Context, connection net.Conn, metadata M.Metadata) error {
 	var target string
 	if s.routerAddress != "" && metadata.Destination.String() == desktopNodeRouterHealthTarget {
 		target = s.routerAddress

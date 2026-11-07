@@ -16,6 +16,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PARENT = 'TestRouterImportedEntryAppleNativeGraphs'
+CONNECT_LAYER_PARENT = 'TestRouterImportedCONNECTAppleLayerGraphs'
 PACKAGE = 'github.com/sagernet/sing-box/experimental/libbox'
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 LAYERS = ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
@@ -47,8 +48,12 @@ NAMES |= {"openvpn--"+transport+"--final-"+mode+"--"+entry+"--"+final+".json"
           for mode in ("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong")
           for entry in LAYERS for final in LAYERS}
 
+CONNECT_LAYER_NAMES = {p+'--'+entry+'--'+final+'--'+dns+'.json'
+                       for p in ('http-connect','https-connect') for entry in LAYERS[1:]
+                       for final in ('plain','off',*LAYERS[1:]) for dns in ('home','custom')}
+
 def digest():
-    paths = {Path(__file__).resolve(), ROOT/'ios/RouterVPN/prepare-libbox.sh', ROOT/'go.mod'}
+    paths = {Path(__file__).resolve(), ROOT/'ios/RouterVPN/prepare-libbox.sh', ROOT/'go.mod', ROOT/'deploy/ios_test_crypto_bridge.py'}
     for directory, pattern in [('ios/RouterVPN/App', '*.swift'), ('ios/RouterVPN/PacketTunnel', '*.swift'), ('internal', '*.go'), ('mobile', '*.go'), ('mobile', '*.tmpl')]:
         paths.update((ROOT/directory).rglob(pattern))
     paths.update((ROOT/'deploy').glob('test_ios_*.py'))
@@ -61,17 +66,17 @@ def digest():
     return result.hexdigest()
 
 
-def require_matrix(root):
-    if root.is_symlink() or not root.is_dir() or {p.name for p in root.iterdir()} != NAMES:
-        raise ValueError('Apple imported matrix must contain exactly 346 original host graphs')
-    for name in NAMES:
+def require_matrix(root, names=NAMES):
+    if root.is_symlink() or not root.is_dir() or {p.name for p in root.iterdir()} != names:
+        raise ValueError('Apple imported matrix must contain exactly '+str(len(names))+' original host graphs')
+    for name in names:
         info = (root/name).lstat()
         if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 4*1024*1024:
             raise ValueError('Apple imported graph is not an owned bounded regular file: '+name)
 
 
-def require_verdicts(raw):
-    expected = {PARENT} | {PARENT+'/'+name for name in NAMES}
+def require_verdicts(raw, parent=PARENT, names=NAMES):
+    expected = {parent} | {parent+'/'+name for name in names}
     completed = []
     package_passes = 0
     for line in raw.splitlines():
@@ -99,8 +104,8 @@ def require_verdicts(raw):
                 completed.append(test)
             else:
                 package_passes += 1
-    if len(completed) != 347 or set(completed) != expected or package_passes != 1:
-        raise ValueError('Native Apple imported proof requires all 347 exact passing verdicts')
+    if len(completed) != len(expected) or set(completed) != expected or package_passes != 1:
+        raise ValueError('Native Apple imported proof requires all '+str(len(expected))+' exact passing verdicts for '+parent)
 
 
 def run(vendor):
@@ -114,7 +119,7 @@ def run(vendor):
     host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)
     env = host.host_environment()
     for key in tuple(env):
-        if key.startswith('ROUTERVPN_IOS_'):
+        if key.startswith('ROUTERVPN_IOS_') or key == 'ROUTERVPN_APPLE_CONNECT_LAYER_FIXTURES':
             env.pop(key)
     before = digest()
     with tempfile.TemporaryDirectory(prefix='routervpn-apple-imported-') as temporary:
@@ -130,9 +135,24 @@ def run(vendor):
             print(result.stdout+result.stderr, file=sys.stderr)
             raise ValueError('Pinned native Apple imported graph execution failed')
         require_verdicts(result.stdout)
+        # CONNECT entry-layer captures have their own inventory and native
+        # verdicts. They cannot replace any primary imported graph receipt.
+        layer_graphs = Path(temporary)/'connect-layers'; layer_graphs.mkdir()
+        layer_env = {k:v for k,v in env.items() if not k.startswith('ROUTERVPN_IOS_')}
+        layer_env.update(ROUTERVPN_APPLE_CONNECT_LAYER_FIXTURES=str(layer_graphs),
+                         ROUTERVPN_REQUIRE_IOS_IMPORTED_ROUTER_GRAPHS='1')
+        subprocess.run([sys.executable, str(ROOT/'deploy/test_ios_tor_profile.py')], cwd=ROOT, env=layer_env, check=True, timeout=420)
+        require_matrix(layer_graphs, CONNECT_LAYER_NAMES)
+        layer_result = subprocess.run(['go', 'test', '-json', '-mod=readonly', '-ldflags=-checklinkname=0',
+            '-tags', 'with_quic,with_wireguard,with_gvisor,with_openvpn', './experimental/libbox', '-run', '^'+CONNECT_LAYER_PARENT+'$',
+            '-count=1', '-timeout=180s'], cwd=vendor, env=layer_env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
+        if layer_result.returncode:
+            print(layer_result.stdout+layer_result.stderr, file=sys.stderr)
+            raise ValueError('Pinned native Apple CONNECT layer graph execution failed')
+        require_verdicts(layer_result.stdout, CONNECT_LAYER_PARENT, CONNECT_LAYER_NAMES)
         if before != digest():
             raise ValueError('Apple imported source changed during its executable proof')
-    print('Apple imported Router: 346 actual Swift graph exports parsed by pinned Libbox; 347 exact native verdicts passed')
+    print('Apple imported Router: '+str(len(NAMES))+' primary and 32 separate CONNECT layer Swift graph exports parsed by pinned Libbox; '+str(len(NAMES)+1)+' and 33 exact native verdicts passed')
 
 
 def main():

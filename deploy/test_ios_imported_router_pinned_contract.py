@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location('apple_imported_gate', Path(__file__).with_name('test_ios_imported_router_pinned.py'))
 G = importlib.util.module_from_spec(spec); spec.loader.exec_module(G)
@@ -110,6 +111,39 @@ class ImportedGate(unittest.TestCase):
             else: events.pop()
             with self.subTest(change=change), self.assertRaises(ValueError):
                 G.require_verdicts(self.encode(events))
+
+    def test_portable_crypto_provider_is_in_source_digest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            for name in ('deploy/test_ios_imported_router_pinned.py','ios/RouterVPN/prepare-libbox.sh',
+                         'go.mod','deploy/ios_test_crypto_bridge.py','android/test_android_multihop_graph.py'):
+                target=root/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text('original')
+            with mock.patch.object(G,'ROOT',root),mock.patch.object(G,'__file__',str(root/'deploy/test_ios_imported_router_pinned.py')):
+                original=G.digest()
+                (root/'deploy/ios_test_crypto_bridge.py').write_text('changed actual SHA provider')
+                self.assertNotEqual(original,G.digest())
+
+    def test_connect_layer_matrix_and_verdicts_are_separate(self):
+        self.assertEqual(len(G.CONNECT_LAYER_NAMES),32)
+        self.assertFalse(G.CONNECT_LAYER_NAMES & G.NAMES)
+        expected={G.CONNECT_LAYER_PARENT} | {G.CONNECT_LAYER_PARENT+'/'+n for n in G.CONNECT_LAYER_NAMES}
+        self.assertEqual(len(expected),33)
+        events=[{'Package':G.PACKAGE,'Action':'pass','Test':n} for n in sorted(expected)] + [{'Package':G.PACKAGE,'Action':'pass'}]
+        G.require_verdicts(self.encode([self.build_output(),*events]),G.CONNECT_LAYER_PARENT,G.CONNECT_LAYER_NAMES)
+        for changed in (events[1:],events+[events[0]],events[:-1],events[:-2]+[dict(events[-2],Action='skip')]+events[-1:],events[:-2]+[dict(events[-2],Action='fail')]+events[-1:],self.events()):
+            with self.assertRaises(ValueError):G.require_verdicts(self.encode(changed),G.CONNECT_LAYER_PARENT,G.CONNECT_LAYER_NAMES)
+        with self.assertRaises(ValueError):G.require_verdicts(self.encode(events))
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            for name in G.CONNECT_LAYER_NAMES:(root/name).write_text('{}')
+            G.require_matrix(root,G.CONNECT_LAYER_NAMES)
+            with self.assertRaises(ValueError):G.require_matrix(root)
+            file=root/sorted(G.CONNECT_LAYER_NAMES)[0];file.unlink()
+            with self.assertRaises(ValueError):G.require_matrix(root,G.CONNECT_LAYER_NAMES)
+            file.symlink_to(root/sorted(G.CONNECT_LAYER_NAMES)[1])
+            with self.assertRaises(ValueError):G.require_matrix(root,G.CONNECT_LAYER_NAMES)
+            file.unlink();file.write_text('{}');(root/'foreign.json').write_text('{}')
+            with self.assertRaises(ValueError):G.require_matrix(root,G.CONNECT_LAYER_NAMES)
 
     def test_actual_file_matrix(self):
         with tempfile.TemporaryDirectory() as temp:

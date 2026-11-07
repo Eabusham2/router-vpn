@@ -550,3 +550,190 @@ func TestRouterImportedSOCKSRealityVisionNativeGraph(t *testing.T) {
 		t.Fatal("unstarted SOCKS REALITY graph gained MTU authority")
 	}
 }
+
+func routerImportedCONNECTLayerNames() map[string]bool {
+	expected := map[string]bool{}
+	for _, protocol := range []string{"http-connect", "https-connect"} {
+		for _, entry := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, final := range []string{"plain", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				for _, policy := range []string{"home", "custom"} {
+					expected[protocol+"--"+entry+"--"+final+"--"+policy+".json"] = true
+				}
+			}
+		}
+	}
+	return expected
+}
+
+func TestRouterImportedCONNECTLayerGraphs(t *testing.T) {
+	routerImportedCONNECTLayerSources(t, "ROUTERVPN_CONNECT_LAYER_FIXTURES", false)
+}
+func TestRouterImportedCONNECTAndroidLayerGraphs(t *testing.T) {
+	routerImportedCONNECTLayerSources(t, "ROUTERVPN_ANDROID_CONNECT_LAYER_FIXTURES", true)
+}
+func routerImportedCONNECTLayerSources(t *testing.T, environment string, android bool) {
+	root := os.Getenv(environment)
+	if root == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES") == "1" {
+			t.Fatal("required independent CONNECT layer captures absent")
+		}
+		t.Skip("original host/compiler layer captures supplied by native gate")
+	}
+	expected := routerImportedCONNECTLayerNames()
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != len(expected) {
+		t.Fatal("incomplete independent CONNECT layer matrix", err)
+	}
+	for _, entry := range entries {
+		t.Run(entry.Name(), func(t *testing.T) {
+			name := entry.Name()
+			if android {
+				if !strings.HasPrefix(name, "android-") {
+					t.Fatal("foreign Android CONNECT capture")
+				}
+				name = strings.TrimPrefix(name, "android-")
+			}
+			info, err := entry.Info()
+			if err != nil || !expected[name] || !info.Mode().IsRegular() || entry.Type()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > 8<<20 {
+				t.Fatal("unowned independent CONNECT capture", err)
+			}
+			raw, err := os.ReadFile(filepath.Join(root, entry.Name()))
+			var source []string
+			if err != nil || len(raw) > 8<<20 || json.Unmarshal(raw, &source) != nil || len(source) != 9 {
+				t.Fatal("invalid independent CONNECT source receipt", err)
+			}
+			plan, err := NewRouterImportedEntryMultihop(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
+			if err != nil {
+				t.Fatal("native constructor rejected original CONNECT layers", err)
+			}
+			defer plan.Close()
+			if plan.SourceSHA256() != source[7] || plan.Config() != source[8] {
+				t.Fatal("CONNECT layer constructor changed exact source authority")
+			}
+			axes := strings.Split(strings.TrimSuffix(name, ".json"), "--")
+			var meta map[string]string
+			var final map[string]any
+			if json.Unmarshal([]byte(plan.Metadata()), &meta) != nil || json.Unmarshal([]byte(source[4]), &final) != nil || len(axes) != 4 {
+				t.Fatal("missing CONNECT layer identities")
+			}
+			layer, capability := axes[2], "uot-v2"
+			if layer == "plain" {
+				layer = ""
+				capability = "tcp-only"
+			}
+			if meta["entry_kind"] != "external" || meta["entry_mode"] != axes[0] || meta["exit_mode"] != "shadowsocks" || meta["entry_start_layer"] != axes[1] || meta["exit_start_layer"] != layer || meta["transport_capability"] != capability || meta["execution"] != "local" || meta["entry_api"] != "" || meta["entry_token"] != "" || meta["entry_node_id"] != "" || final["dns_mode"] != axes[3] {
+				t.Fatal("CONNECT layer capture substituted selected roles or service authority")
+			}
+			routerImportedCONNECTLayerGraph(t, plan.Config(), axes)
+			if _, err := mobilemtu.ReadProfile(plan.MTUProfile()); err != nil {
+				t.Fatal("CONNECT layers lost captured MTU authority", err)
+			}
+			if _, err := mobilemtu.NewPlan(plan.Config(), 1280); err != nil {
+				t.Fatal("CONNECT layers lost original MTU graph", err)
+			}
+			if plan.Healthy() {
+				t.Fatal("unstarted CONNECT layers manufactured proof")
+			}
+			if _, err := plan.NewHopMeasurement(nil); err == nil {
+				t.Fatal("unproved CONNECT layers gained measurement authority")
+			}
+			if _, err := plan.NewMTU(nil, nil); err == nil {
+				t.Fatal("unproved CONNECT layers gained MTU authority")
+			}
+		})
+	}
+}
+
+func TestRouterImportedCONNECTAppleLayerGraphs(t *testing.T) {
+	root := os.Getenv("ROUTERVPN_APPLE_CONNECT_LAYER_FIXTURES")
+	if root == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IOS_IMPORTED_ROUTER_GRAPHS") == "1" {
+			t.Fatal("required actual Swift CONNECT layer graphs absent")
+		}
+		t.Skip("actual Swift-built layer graphs supplied by native gate")
+	}
+	expected := routerImportedCONNECTLayerNames()
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != len(expected) {
+		t.Fatal("incomplete actual Swift CONNECT layer matrix", err)
+	}
+	for _, entry := range entries {
+		t.Run(entry.Name(), func(t *testing.T) {
+			info, err := entry.Info()
+			if err != nil || !expected[entry.Name()] || !info.Mode().IsRegular() || entry.Type()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > 4<<20 {
+				t.Fatal("foreign Swift CONNECT layer graph", err)
+			}
+			raw, err := os.ReadFile(filepath.Join(root, entry.Name()))
+			if err != nil || len(raw) > 4<<20 {
+				t.Fatal("invalid Swift CONNECT layer graph", err)
+			}
+			axes := strings.Split(strings.TrimSuffix(entry.Name(), ".json"), "--")
+			routerImportedCONNECTLayerGraph(t, string(raw), axes)
+		})
+	}
+}
+
+func routerImportedCONNECTLayerGraph(t *testing.T, raw string, axes []string) {
+	t.Helper()
+	var graph map[string]any
+	if len(axes) != 4 || json.Unmarshal([]byte(raw), &graph) != nil {
+		t.Fatal("missing independent CONNECT layer graph")
+	}
+	rows, ok := graph["outbounds"].([]any)
+	if !ok || len(rows) != 4 {
+		t.Fatal("CONNECT layer graph lost its exact transport closure")
+	}
+	byTag := map[string]map[string]any{}
+	for _, value := range rows {
+		node, ok := value.(map[string]any)
+		if !ok {
+			t.Fatal("malformed CONNECT outbound")
+		}
+		tag, ok := node["tag"].(string)
+		if !ok || byTag[tag] != nil {
+			t.Fatal("duplicate CONNECT transport owner")
+		}
+		byTag[tag] = node
+	}
+	first, last := byTag["entry-wg"], byTag["routervpn-execution-local"]
+	if first == nil || last == nil || first["type"] != "http" || last["detour"] != "entry-wg" {
+		t.Fatal("CONNECT layers lost final-to-entry ownership")
+	}
+	tag, _ := first["detour"].(string)
+	outer := byTag[tag]
+	expected := "shadowsocks"
+	if axes[1] == "aes-256-gcm+xor-whitening" {
+		expected = "routervpn-aes-xor"
+	}
+	if outer == nil || outer["type"] != expected || outer["detour"] != nil || outer["password"] == last["password"] {
+		t.Fatal("CONNECT layers borrowed the final provision")
+	}
+	expected = "shadowsocks"
+	if axes[2] == "aes-256-gcm+xor-whitening" {
+		expected = "routervpn-aes-xor"
+	}
+	if last["type"] != expected {
+		t.Fatal("CONNECT final layer label changed")
+	}
+	if axes[2] == "plain" {
+		if last["network"] != "tcp" || last["udp_over_tcp"] != nil {
+			t.Fatal("CONNECT entry layer invented final datagram authority")
+		}
+	} else {
+		uot, ok := last["udp_over_tcp"].(map[string]any)
+		if !ok || len(uot) != 2 || uot["enabled"] != true || uot["version"] != float64(2) || last["network"] != nil {
+			t.Fatal("CONNECT final lost configured UoT-v2 authority")
+		}
+	}
+	dns := graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)
+	transport := "tcp"
+	if axes[2] != "plain" && axes[3] == "home" {
+		transport = "udp"
+	}
+	if dns["type"] != transport || dns["detour"] != "proxy" {
+		t.Fatal("CONNECT layers changed selected DNS transport or owner")
+	}
+	if err := CheckConfig(raw); err != nil {
+		t.Fatal("pinned native parser rejected CONNECT layers", err)
+	}
+}

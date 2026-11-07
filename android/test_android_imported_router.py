@@ -7,6 +7,7 @@ encrypted peer traffic are separate mandatory gates, which consume these exact
 Android-produced original source arrays when an export directory is supplied.
 """
 from pathlib import Path
+import argparse
 import importlib.util
 import os
 import shutil
@@ -54,9 +55,11 @@ HARNESS = r'''package com.eabusham.routervpn;
 import java.nio.file.*;import java.nio.charset.StandardCharsets;import java.util.*;import org.json.*;import io.nekohasekai.libbox.*;
 public final class ImportedRouterTest {
  static int checks;static void check(boolean ok,String reason){checks++;if(!ok)throw new AssertionError(reason);}
+ static String exportEnvironment="ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES";
  interface Work{void run()throws Exception;}
  static void reject(String label,Work work)throws Exception{boolean refused=false;try{work.run();}catch(Exception expected){refused=true;}check(refused,"accepted "+label);check(RouterMultihop.open==0,"owner leaked after "+label);}
  static JSONObject object(String s)throws Exception{return new JSONObject(s);}
+ static JSONObject outbound(JSONObject graph,String tag)throws Exception{JSONArray rows=graph.getJSONArray("outbounds");for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(tag.equals(row.optString("tag")))return row;}throw new AssertionError("missing captured outbound "+tag);}
  static AndroidStandardExitStore.Entry entry(JSONArray args)throws Exception{
   JSONObject capture=object(args.getString(1)),profile=capture.getJSONObject("profile"),external=profile.getJSONObject("external"),transport=external.getJSONObject(capture.getString("protocol").replace("-","_"));
   AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id=capture.getString("exit_id");e.name="Imported first";e.protocol=capture.getString("protocol");e.expectedPublicIp=capture.getString("expected_public_ip");
@@ -80,7 +83,7 @@ public final class ImportedRouterTest {
  }
  static JSONObject profile(JSONObject bundle)throws Exception{return bundle.getJSONArray("routerProfiles").getJSONObject(0);}
  static void export(String name,AndroidImportedRouterPath.Compiled c)throws Exception{
-  String directory=System.getenv("ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES");if(directory==null||directory.isEmpty())return;
+  String directory=System.getenv(exportEnvironment);if(directory==null||directory.isEmpty())return;
   JSONObject raw=object(c.input);JSONArray array=new JSONArray();
   for(String key:List.of("entry_config","entry_capture","exit_mode","exit_files","exit_profile","exit_start","dns_bootstrap"))array.put(raw.getString(key));
   array.put(c.source).put(c.config);Files.writeString(Path.of(directory).resolve("android-"+name),array.toString());
@@ -148,6 +151,35 @@ public final class ImportedRouterTest {
    reject("foreign configured CONNECT owner",()->AndroidImportedRouterPath.compile(entry,foreign,"shadowsocks","local"));
   }
  }
+ static void connectLayer(JSONArray source,AndroidStandardExitStore.Entry entry,JSONObject bundle,AndroidImportedRouterPath.Compiled compiled)throws Exception{
+  JSONObject graph=object(compiled.config),first=outbound(graph,"entry-wg"),last=outbound(graph,"routervpn-execution-local"),outer=outbound(graph,first.getString("detour")),provision=entry.startLayer,transport=provision.getJSONObject("transport"),expected=object(source.getString(8));
+  String layer=entry.policy.getString("start_layer");
+  check(first.getString("type").equals("http")&&first.getString("server").equals(new java.net.URI(provision.getString("api")).getHost())&&first.getInt("server_port")==entry.serverPort&&first.getString("username").equals(entry.username)&&first.getString("password").equals(entry.password),"CONNECT wrapper changed private service or authentication");
+  check(outer.getString("server").equals(transport.getString("server"))&&outer.getString("password").equals(transport.getString("password"))&&!outer.has("detour")&&outer.getString("type").equals(layer.equals("aes-256-gcm+xor-whitening")?"routervpn-aes-xor":"shadowsocks")&&!outer.getString("password").equals(last.getString("password")),"CONNECT wrapper borrowed another node's outer provision");
+  if(AndroidExternalPolicy.protocol(entry.protocol).equals("https-connect")){JSONObject tls=first.getJSONObject("tls");check(tls.getBoolean("enabled")&&tls.getString("server_name").equals(entry.tlsServerName)&&!tls.has("insecure"),"CONNECT wrapper changed original TLS identity");}
+  check(last.toString().equals(outbound(expected,"routervpn-execution-local").toString())&&graph.getJSONObject("dns").toString().equals(expected.getJSONObject("dns").toString()),"CONNECT wrapper changed exact final or selected DNS");
+  JSONObject assets=bundle.getJSONObject("profiles").getJSONObject("shadowsocks");boolean configured=assets.has("routervpn-ss-service.json");
+  if(configured){JSONObject uot=last.getJSONObject("udp_over_tcp");check(!last.has("network")&&uot.getBoolean("enabled")&&uot.getInt("version")==2,"CONNECT wrapper lost configured final service");JSONObject wrong=object(bundle.toString());wrong.getJSONObject("profiles").getJSONObject("shadowsocks").put("routervpn-ss-service.json",Base64.getEncoder().encodeToString("{}".getBytes(StandardCharsets.UTF_8)));reject("CONNECT wrapper cannot supply final authority",()->AndroidImportedRouterPath.compile(entry,wrong,"shadowsocks","local"));}
+  else{check(last.getString("network").equals("tcp")&&!last.has("udp_over_tcp"),"CONNECT wrapper granted unconfigured datagram authority");for(String fault:List.of("dns","final-layer")){JSONObject wrong=object(bundle.toString());profile(wrong).put(fault.equals("dns")?"dns_protocol":"start_layer",fault.equals("dns")?"udp":"aes-256-gcm");reject("CONNECT wrapper invented final "+fault,()->AndroidImportedRouterPath.compile(entry,wrong,"shadowsocks","local"));}}
+  if(configured){
+   for(String field:List.of("key_sha256","source_sha256")){JSONObject wrong=object(bundle.toString()),claim=object(new String(Base64.getDecoder().decode(assets.getString("routervpn-ss-service.json")),StandardCharsets.UTF_8));claim.put(field,"0".repeat(64));wrong.getJSONObject("profiles").getJSONObject("shadowsocks").put("routervpn-ss-service.json",Base64.getEncoder().encodeToString(claim.toString().getBytes(StandardCharsets.UTF_8)));reject("CONNECT configured service changed actual SHA-256 "+field,()->AndroidImportedRouterPath.compile(entry,wrong,"shadowsocks","local"));}
+   JSONObject unused=object(bundle.toString());unused.getJSONObject("profiles").getJSONObject("shadowsocks").put("unused-service.json",Base64.getEncoder().encodeToString("{}".getBytes(StandardCharsets.UTF_8)));reject("CONNECT final service has unused source authority",()->AndroidImportedRouterPath.compile(entry,unused,"shadowsocks","local"));
+  }
+  for(String fault:List.of("missing-provision","mode-mismatch","borrowed-final","public-inner","unused-provision","unused-service","malformed-layer","invalid-layer")){
+   AndroidStandardExitStore.Entry changed=AndroidStandardExitStore.copy(entry);
+   if(fault.equals("missing-provision"))changed.startLayer=null;
+   else if(fault.equals("mode-mismatch"))changed.startLayer.put("mode",layer.equals("aes-256-gcm")?"aes-256-gcm+xor-whitening":"aes-256-gcm");
+   else if(fault.equals("borrowed-final"))changed.startLayer.getJSONObject("transport").put("server",profile(bundle).getString("endpoint"));
+   else if(fault.equals("public-inner"))changed.startLayer.put("api","http://203.0.113.20:8787");
+   else if(fault.equals("unused-provision"))changed.policy.put("start_layer","off");
+   else if(fault.equals("unused-service"))changed.startLayer.getJSONObject("transport").put("udp_over_tcp",new JSONObject().put("enabled",true).put("version",2));
+   else if(fault.equals("malformed-layer"))changed.policy.put("start_layer",true);
+   else changed.policy.put("start_layer","xor-only");
+   reject("CONNECT unowned entry layer "+fault,()->AndroidImportedRouterPath.compile(changed,bundle,"shadowsocks","local"));
+  }
+  reject("CONNECT changed original layer key on restore",()->{JSONObject input=object(compiled.input),capture=object(input.getString("entry_capture"));capture.getJSONObject("profile").getJSONObject("external").getJSONObject("start_layer").getJSONObject("transport").put("password",Base64.getEncoder().encodeToString(new byte[32]));input.put("entry_capture",capture.toString());AndroidImportedRouterPath.prepareExecution(compiled.config,compiled.metadata,input.toString());});
+  reject("CONNECT substituted final transport key on restore",()->{JSONObject input=object(compiled.input),files=object(input.getString("exit_files")),raw=object(new String(Base64.getDecoder().decode(files.getString("sing-box.json")),StandardCharsets.UTF_8));outbound(raw,"proxy").put("password",transport.getString("password"));files.put("sing-box.json",Base64.getEncoder().encodeToString(raw.toString().getBytes(StandardCharsets.UTF_8)));input.put("exit_files",files.toString());AndroidImportedRouterPath.prepareExecution(compiled.config,compiled.metadata,input.toString());});
+ }
  static void one(Path root,Path fixture)throws Exception{
   JSONArray args=new JSONArray(Files.readString(fixture));String finalMode=args.getString(2);AndroidStandardExitStore.Entry e=entry(args);JSONObject b=bundle(args);
   String before=AndroidStandardExitStore.snapshot(e),beforeFinal=b.toString();AndroidImportedRouterPath.Compiled c=AndroidImportedRouterPath.compile(e,b,finalMode,"local");
@@ -155,10 +187,11 @@ public final class ImportedRouterTest {
   JSONObject selected=object(c.metadata),raw=object(c.input),graph=object(c.config);
   check(selected.getString("entry_kind").equals("external")&&selected.getString("entry_id").equals(e.id)&&selected.getString("exit_id").equals(profile(b).getString("id"))&&selected.getString("entry_mode").equals(AndroidMultihopRuntime.importedEntryMode(e))&&selected.getString("exit_mode").equals(finalMode),"host changed selected identities or transport");
   if(List.of("http","https").contains(e.protocol)){
-   check(selected.getString("transport_capability").equals("tcp-only"),"CONNECT capability was lost");
+   check(selected.getString("transport_capability").equals(b.getJSONObject("profiles").getJSONObject("shadowsocks").has("routervpn-ss-service.json")?"uot-v2":"tcp-only"),"CONNECT capability was lost");
+   if(e.startLayer!=null)connectLayer(args,e,b,c);
    if(fixture.getFileName().toString().contains("--2022-blake3-aes-256-gcm--home"))configuredCONNECT(e,b);
    JSONObject dns=graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0),saved=profile(b);
-   check(dns.getString("type").equals("tcp")&&dns.getString("server").equals(saved.getString("dns_host"))&&dns.getInt("server_port")==saved.getInt("dns_port")&&dns.getString("detour").equals("proxy"),"CONNECT changed exact saved DNS");
+   check(dns.getString("type").equals(saved.getString("dns_protocol"))&&dns.getString("server").equals(saved.getString("dns_host"))&&dns.getInt("server_port")==saved.getInt("dns_port")&&dns.getString("detour").equals("proxy"),"CONNECT changed exact saved DNS");
    for(String execution:List.of("server","auto"))reject("CONNECT unsupported execution",()->AndroidImportedRouterPath.compile(e,b,finalMode,execution));
    for(String field:List.of("username","password"))reject("CONNECT replaced source "+field,()->{JSONObject changed=object(c.input),capture=object(changed.getString("entry_capture"));capture.getJSONObject("profile").getJSONObject("external").getJSONObject(AndroidExternalPolicy.protocol(e.protocol).replace("-","_")).put(field,"foreign");changed.put("entry_capture",capture.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
   }
@@ -305,6 +338,14 @@ public final class ImportedRouterTest {
  }
  public static void main(String[] args)throws Exception{
   Libbox.compiler=args[0];Path root=Path.of(args[1]),fixtures=Path.of(args[2]);retainedStaging(Files.createTempDirectory(root,"retained-staging-"));List<Path> all;
+  if(args[3].startsWith("connect-entry-layers--")){
+   String phase=args[3].substring("connect-entry-layers--".length());Set<String> expected=new HashSet<>();for(String kind:List.of("http-connect","https-connect"))for(String layer:List.of("aes-256-gcm","aes-256-gcm+xor-whitening"))for(String last:List.of("plain","off","aes-256-gcm","aes-256-gcm+xor-whitening"))for(String policy:List.of("home","custom"))expected.add(kind+"--"+layer+"--"+last+"--"+policy+".json");
+   try(var rows=Files.list(Path.of(System.getenv("ROUTERVPN_CONNECT_LAYER_SOURCES")))){all=rows.sorted().toList();}
+   check(all.size()==32&&all.stream().map(p->p.getFileName().toString()).collect(java.util.stream.Collectors.toSet()).equals(expected),"CONNECT independent source inventory changed");
+   check(List.of("http-connect--aes-256-gcm","http-connect--aes-256-gcm+xor-whitening","https-connect--aes-256-gcm","https-connect--aes-256-gcm+xor-whitening").contains(phase),"unknown CONNECT entry layer phase");
+   List<Path> selected=all.stream().filter(p->p.getFileName().toString().startsWith(phase+"--")).toList();check(selected.size()==8,"incomplete CONNECT entry layer phase");exportEnvironment="ROUTERVPN_ANDROID_CONNECT_LAYER_FIXTURES";for(Path path:selected)one(root,path);
+   System.out.println("Android CONNECT entry layers: "+checks+" checks; "+phase+", "+selected.size()+" original independent source graphs");return;
+  }
   try(var rows=Files.list(fixtures)){all=rows.filter(p->p.toString().endsWith(".json")).sorted().toList();}
   check(all.size()==346,"the complete proxy/packet independent entry/final layer matrix is incomplete");
   String phase=args[3];boolean openvpn=phase.startsWith("openvpn--");boolean connect=phase.startsWith("connect--");boolean packet=phase.startsWith("packet-");boolean socks=phase.startsWith("socks5--final-");
@@ -315,7 +356,32 @@ public final class ImportedRouterTest {
 }'''
 
 
+PRIMARY_PHASES = ("openvpn--tcp--final-shadowsocks","openvpn--tcp--final-hysteria2","openvpn--tcp--final-wg","openvpn--tcp--final-awg2-fast","openvpn--tcp--final-awg2-strong","openvpn--udp--final-shadowsocks","openvpn--udp--final-hysteria2","openvpn--udp--final-wg","openvpn--udp--final-awg2-fast","openvpn--udp--final-awg2-strong","connect--http-connect", "connect--https-connect", "socks5--final-shadowsocks", "socks5--final-hysteria2", "socks5--final-wg", "socks5--final-awg2-fast", "socks5--final-awg2-strong", "socks5--final-reality-vision", "shadowsocks", "hysteria2", "packet-wireguard--final-shadowsocks", "packet-wireguard--final-hysteria2", "packet-amneziawg--final-shadowsocks", "packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong", "wg", "awg2-fast", "awg2-strong")
+CONNECT_LAYER_PHASES = tuple('connect-entry-layers--'+kind+'--'+layer
+    for kind in ('http-connect', 'https-connect')
+    for layer in ('aes-256-gcm', 'aes-256-gcm+xor-whitening'))
+
+
+def selected_phases(phases=None):
+    allowed = PRIMARY_PHASES + CONNECT_LAYER_PHASES
+    selected = allowed if phases is None else tuple(phases)
+    if not selected or any(phase not in allowed for phase in selected) or len(set(selected)) != len(selected):
+        raise ValueError('Choose a nonempty, exact, duplicate-free imported-entry phase selection')
+    return selected
+
+
 def main(phases=None):
+    phases = selected_phases(phases)
+    connect_output = os.environ.get('ROUTERVPN_ANDROID_CONNECT_LAYER_FIXTURES')
+    if connect_output is not None:
+        destination = Path(connect_output)
+        if not connect_output or not destination.is_dir() or destination.is_symlink() or any(destination.iterdir()):
+            raise ValueError('ROUTERVPN_ANDROID_CONNECT_LAYER_FIXTURES must name an existing empty owned directory')
+        primary_output = os.environ.get('ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES')
+        if primary_output is not None:
+            primary, separate = Path(primary_output).resolve(), destination.resolve()
+            if primary == separate or primary in separate.parents or separate in primary.parents:
+                raise ValueError('CONNECT entry layer evidence requires separate non-overlapping inventories')
     for tool in ("java", "javac", "go"):
         if not shutil.which(tool):
             raise RuntimeError(f"{tool} is required; imported-entry tests cannot be skipped")
@@ -329,6 +395,11 @@ def main(phases=None):
         env = dict(os.environ, ROUTERVPN_IMPORTED_ENTRY_FIXTURES=str(fixtures))
         subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedEntry(CONNECTGraphs|SOCKS(RealityVisionCapturedGraphs|RealityVisionIndependentLayers|PairedFinalGraphs|PairedFinalLayers|PacketFinalLayers|EntryLayers|PacketFinalGraphs)|PairedFinal(CompleteLayers|PolicyAndCipherOwnership)|HysteriaPairedFinalCompleteLayers|HysteriaFinalCompleteGraphs|PacketCompleteGraphs|PacketFinalCompleteGraphs|NestedPacketCompleteGraphs)$", "-count=1"], cwd=ROOT, env=env, check=True, timeout=120)
         subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedOpenVPNCompleteLayerMatrix$", "-count=1", "-timeout=20s"], cwd=ROOT, env=dict(os.environ,ROUTERVPN_IMPORTED_OPENVPN_FIXTURES=str(fixtures)), check=True, timeout=30)
+        connect_sources = temp / 'connect-entry-layers'
+        connect_sources.mkdir()
+        if any(phase in CONNECT_LAYER_PHASES for phase in phases):
+            subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedEntryCONNECTIndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ,ROUTERVPN_CONNECT_LAYER_FIXTURES=str(connect_sources)), check=True, timeout=45)
+        child_env = dict(os.environ, ROUTERVPN_CONNECT_LAYER_SOURCES=str(connect_sources))
         module = next(line.split()[1] for line in (ROOT / "go.mod").read_text().splitlines() if line.startswith("module "))
         helper = E.GO.replace('switch args[0]{', 'switch args[0]{'+GO_CASE).replace("github.com/Eabusham2/router-vpn", module)
         (temp / "main.go").write_text(helper)
@@ -368,8 +439,8 @@ def main(phases=None):
         private.mkdir()
         command=["java", "-cp", os.pathsep.join((str(classes), str(jar))), "com.eabusham.routervpn.ImportedRouterTest", str(temp / "compiler"), str(private), str(fixtures)]
         # Preserve the original finite bound for each complete final-mode family.
-        for final_mode in phases or ("openvpn--tcp--final-shadowsocks","openvpn--tcp--final-hysteria2","openvpn--tcp--final-wg","openvpn--tcp--final-awg2-fast","openvpn--tcp--final-awg2-strong","openvpn--udp--final-shadowsocks","openvpn--udp--final-hysteria2","openvpn--udp--final-wg","openvpn--udp--final-awg2-fast","openvpn--udp--final-awg2-strong","connect--http-connect", "connect--https-connect", "socks5--final-shadowsocks", "socks5--final-hysteria2", "socks5--final-wg", "socks5--final-awg2-fast", "socks5--final-awg2-strong", "socks5--final-reality-vision", "shadowsocks", "hysteria2", "packet-wireguard--final-shadowsocks", "packet-wireguard--final-hysteria2", "packet-amneziawg--final-shadowsocks", "packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong", "wg", "awg2-fast", "awg2-strong"):
-            subprocess.run(command+[final_mode], check=True, timeout=180)
+        for final_mode in phases:
+            subprocess.run(command+[final_mode], env=child_env, check=True, timeout=180)
         source=app/"AndroidImportedRouterPath.java"
         original=source.read_text()
         controls=(
@@ -381,6 +452,7 @@ def main(phases=None):
         )
         causal_env=dict(os.environ)
         causal_env.pop("ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES",None)
+        causal_env.pop("ROUTERVPN_ANDROID_CONNECT_LAYER_FIXTURES",None)
         for old,new,assertion in controls:
             if original.count(old)!=1:raise AssertionError("Imported source ownership control changed")
             source.write_text(original.replace(old,new))
@@ -391,5 +463,17 @@ def main(phases=None):
         source.write_text(original)
 
 
+def cli(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--phase', action='append', choices=PRIMARY_PHASES + CONNECT_LAYER_PHASES,
+                        help='Run this exact bounded phase; repeat for several phases. The default runs every phase.')
+    args = parser.parse_args(argv)
+    try:
+        phases = selected_phases(args.phase)
+    except ValueError as error:
+        parser.error(str(error))
+    main(phases=phases)
+
+
 if __name__ == "__main__":
-    main()
+    cli()

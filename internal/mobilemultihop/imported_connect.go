@@ -10,8 +10,13 @@ import (
 // exact configured SS UoT-v2 authority; this is not a live receiver proof.
 // Without that authority the original TCP-only composition remains unchanged.
 func importedCONNECTCapture(graph, final map[string]any, entryLayer, mode string, profile map[string]any, files string) (bool, error) {
-	bad := errors.New("CONNECT requires an Off entry and captured SS final: TCP-only without service authority, or explicit UoT-v2 authority for UDP and final Start Layers")
+	bad := errors.New("CONNECT requires its captured independent entry layer and SS final: TCP-only without service authority, or explicit UoT-v2 authority for UDP and final Start Layers")
 	off := func(s string) bool { return s == "" || s == "off" }
+	// NewExternalPolicy has validated and retained this entry's independently
+	// provisioned wrapper. It does not supply the final's UoT or layer authority.
+	if !off(entryLayer) && entryLayer != "aes-256-gcm" && entryLayer != "aes-256-gcm+xor-whitening" {
+		return false, bad
+	}
 	assets, err := nodeProfileAssets(files)
 	if err != nil {
 		return false, err
@@ -32,7 +37,7 @@ func importedCONNECTCapture(graph, final map[string]any, entryLayer, mode string
 	if authorized && layer == "aes-256-gcm+xor-whitening" {
 		expectedType = "routervpn-aes-xor"
 	}
-	if mode != "shadowsocks" || final["type"] != expectedType || !importedSS2022Method(predecessorText(final, "method")) || !off(entryLayer) || predecessorText(final, "detour") != "" {
+	if mode != "shadowsocks" || final["type"] != expectedType || !importedSS2022Method(predecessorText(final, "method")) || predecessorText(final, "detour") != "" {
 		return false, bad
 	}
 	if !off(layer) && (!authorized || (layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening")) {

@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -27,6 +28,23 @@ def socks_label(mode,a,b):
 SOCKS_FILES={'socks5--final-'+socks_label(mode,a,b)+'.json' for mode in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong') for a in LAYERS for b in LAYERS}
 SOCKS_XRAY_FILES={'socks5--final-'+socks_label('reality-vision',a,b)+'.json' for a in LAYERS for b in LAYERS}
 SOCKS_XRAY_PARSER='TestRouterImportedSOCKSRealityVisionNativeGraph'
+CONNECT_LAYER_ROWS=[p+"--"+entry+"--"+final+"--"+dns for p in ("http-connect","https-connect") for entry in LAYERS[1:] for final in ("plain","off",*LAYERS[1:]) for dns in ("home","custom")]
+CONNECT_LAYER_FILES={name+".json" for name in CONNECT_LAYER_ROWS}
+def connect_layer_peers(protocol):
+ rows=[]
+ for entry in LAYERS[1:]:
+  for final in ("plain","off",*LAYERS[1:]):
+   for dns in ("home","custom"):
+    label=protocol+"--"+entry+"--"+final+"--"+dns;faults=["success"]
+    if dns=="home":
+     faults.append("final-key")
+     if final==LAYERS[2]:
+      faults += ["entry-auth","entry-private","entry-layer-key","final-whitening","final-route","dns-route","final-identity","wrong-entry-ip","cancel","close-owner"]
+      if entry==LAYERS[2]:faults.append("entry-whitening")
+      if protocol=="https-connect":faults += ["sni","trust"]
+    rows += [label,*[label+"/"+fault for fault in faults]]
+ return rows
+CONNECT_LAYER_PEERS={"TestRouterVPNImportedHTTPLayersNativeTraffic":connect_layer_peers("http-connect"),"TestRouterVPNImportedHTTPSLayersNativeTraffic":connect_layer_peers("https-connect")}
 CONNECT_ROWS=[p+"--"+m+"--"+d for p in ("http-connect","https-connect") for m in ("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305") for d in ("home","custom")]
 CONNECT_FILES={"connect--"+row+".json" for row in CONNECT_ROWS}
 CONNECT_SERVICE_FILES={p+"--"+l+"--"+d+"--"+t+".json" for p in ("http-connect","https-connect") for l in ("off",*LAYERS[1:]) for d in ("home","custom") for t in ("udp","tcp")}
@@ -50,6 +68,8 @@ CORE={
  "TestImportedEntrySOCKSRealityVisionRetainsOriginalBytes":["entry-graph","entry-capture","final-assets","final-profile"],
  "TestImportedEntrySOCKSRealityVisionRequiresBothProofsAndDNS":["success","wrong-public-ip","wrong-paired-final","dns-failure","cancel-during-dns","missing-dns-capability","changed-owner"],
  "TestImportedEntrySOCKSRealityVisionRetainedRuntime":["close","network-change","replacement"],
+ "TestImportedEntryCONNECTIndependentLayers":CONNECT_LAYER_ROWS,
+ "TestImportedEntryCONNECTIndependentLayerRefusals":["missing-provision","foreign-outer","public-inside","mode-mismatch","unused-provision","borrowed-final-transport","invented-entry-api","server","compare","metadata-only"],
  "TestImportedEntryCONNECTSelectedEncryptedDNS":CONNECT_DNS_ROWS,
  "TestImportedEntryCONNECTSelectedDNSRefusals":["plain-h3","plain-udp-bootstrap","missing-bootstrap","foreign-bootstrap-route","foreign-query","hostname-bootstrap","unused-bootstrap","insecure-tls","changed-home","unknown-protocol"],
  "TestImportedEntryCONNECTSelectedDNSProviders":["plain-home-tls","plain-home-https","plain-rescue","uot-home-tls","uot-home-https","uot-home-h3","uot-rescue","uot-fastest"],
@@ -123,6 +143,66 @@ PACKET_PEERS=['success-wg-ss','success-awg-hy2','success-entry-layer','private-k
 FINAL_HYSTERIA_PEERS=['success-ss','success-hysteria','success-final-layer','final-password','final-sni','final-trust','outer-layer-key','final-route','dns-route','final-identity']
 HYSTERIA_PEERS=['success','password','sni','trust','final-key','final-route','dns-route','final-identity']
 PEERS=['success','entry-key','final-key','final-route','dns-route','final-identity']
+# Preserve the complete phase/receipt union under the existing per-process
+# budget. Each child still executes all five original causal recompilations.
+ANDROID_PHASE_GROUPS=(
+ tuple('openvpn--tcp--final-'+m for m in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong')),
+ tuple('openvpn--udp--final-'+m for m in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong')),
+ ('connect--http-connect','connect--https-connect','socks5--final-shadowsocks','socks5--final-hysteria2','socks5--final-reality-vision','shadowsocks','hysteria2'),
+ ('socks5--final-wg','socks5--final-awg2-fast','socks5--final-awg2-strong','wg','awg2-fast','awg2-strong'),
+ tuple('packet-'+entry+'--final-'+final for entry in ('wireguard','amneziawg') for final in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong')),
+ tuple('connect-entry-layers--'+protocol+'--'+layer for protocol in ('http-connect','https-connect') for layer in LAYERS[1:]),
+)
+def android_phase_files(phase):
+ if phase.startswith('connect-entry-layers--'):
+  axes=phase.split('--')
+  if len(axes)!=3 or axes[1] not in ('http-connect','https-connect') or axes[2] not in LAYERS[1:]:raise ValueError('Unknown Android CONNECT layer phase')
+  return set(),{'android-'+name for name in CONNECT_LAYER_FILES if name.startswith(axes[1]+'--'+axes[2]+'--')}
+ if phase=='shadowsocks':selected=BASE_FILES
+ elif phase in ('hysteria2','wg','awg2-fast','awg2-strong'):selected={name for name in FILES if name.startswith('final-'+phase+'--')}
+ elif phase in ('connect--http-connect','connect--https-connect'):selected={name for name in CONNECT_FILES if name.startswith(phase+'--')}
+ elif phase in {'socks5--final-'+m for m in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong','reality-vision')}:selected={name for name in FILES if name==phase+'.json' or name.startswith(phase+'--')}
+ elif phase in {'openvpn--'+p+'--final-'+m for p in ('tcp','udp') for m in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong')} or phase in {'packet-'+p+'--final-'+m for p in ('wireguard','amneziawg') for m in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong')}:selected={name for name in FILES if name.startswith(phase+'--')}
+ else:raise ValueError('Unknown Android imported phase: '+phase)
+ if not selected:raise ValueError('Empty Android imported phase: '+phase)
+ return {'android-'+name for name in selected},set()
+def android_group_inventory(groups=ANDROID_PHASE_GROUPS):
+ phases=[p for group in groups for p in group]
+ if len(groups)!=6 or any(not group for group in groups) or len(phases)!=37 or len(set(phases))!=len(phases):raise ValueError('Missing or duplicated Android phase owner')
+ primary=set();layers=set();result=[]
+ for group in groups:
+  original=set();independent=set()
+  for phase in group:
+   a,b=android_phase_files(phase)
+   if primary&a or layers&b:raise ValueError('Android phases duplicate original source receipts')
+   primary.update(a);layers.update(b);original.update(a);independent.update(b)
+  result.append((group,original,independent))
+ if primary!={'android-'+name for name in FILES} or layers!={'android-'+name for name in CONNECT_LAYER_FILES}:raise ValueError('Incomplete Android original/layer phase union')
+ return result
+def merge_android_exports(source,destination,expected):
+ if source.is_symlink() or not source.is_dir() or {p.name for p in source.iterdir()}!=expected:raise ValueError('Incomplete or foreign Android group exports')
+ for name in sorted(expected):
+  current=source/name;target=destination/name;info=current.lstat()
+  if not stat.S_ISREG(info.st_mode) or not 0<info.st_size<=8*1024*1024 or target.exists() or target.is_symlink():raise ValueError('Unowned or duplicated Android group export: '+name)
+ for name in sorted(expected):(source/name).rename(destination/name)
+def run_android_sources(temporary,env):
+ primary=temporary/'android';primary.mkdir()
+ layers=temporary/'android-layers';layers.mkdir()
+ for index,(phases,original,independent) in enumerate(android_group_inventory()):
+  batch=temporary/('android-group-'+str(index));batch.mkdir()
+  outputs=batch/'primary';outputs.mkdir()
+  separate=batch/'layers';separate.mkdir()
+  child_env=dict(env,ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES=str(outputs),ROUTERVPN_ANDROID_CONNECT_LAYER_FIXTURES=str(separate))
+  command=[sys.executable,str(ROOT/'android/test_android_imported_router.py')]
+  for phase in phases:command+=['--phase',phase]
+  subprocess.run(command,cwd=ROOT,env=child_env,check=True,timeout=240)
+  merge_android_exports(outputs,primary,original)
+  merge_android_exports(separate,layers,independent)
+  print('Android source group '+str(index+1)+': '+str(len(original))+' primary and '+str(len(independent))+' independent CONNECT receipts; all original causal controls retained')
+ if {p.name for p in primary.iterdir()}!={'android-'+name for name in FILES} or {p.name for p in layers.iterdir()}!={'android-'+name for name in CONNECT_LAYER_FILES}:raise ValueError('Incomplete joined Android source inventory')
+ env.update(ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES=str(primary),ROUTERVPN_ANDROID_CONNECT_LAYER_FIXTURES=str(layers))
+ return primary,layers
+
 def names(groups):
  return {name for parent,leaves in groups.items() for name in [parent,*[parent+'/'+leaf for leaf in leaves]]}
 def require_verdicts(raw, expected):
@@ -158,7 +238,7 @@ def checked_sources(vendor,peers):
   path=vendor/'experimental/libbox/routervpn/mobilemultihop'/source.name
   if path.is_symlink() or not path.is_file() or path.read_bytes()!=raw:raise ValueError('Changed native imported-entry compiler: '+source.name)
 def native_parser_groups(peers):
- groups={'TestRouterImportedEntryPairedFinalNativeGraphs':sorted(FILES),'TestRouterImportedCONNECTConfiguredServiceGraphs':sorted(CONNECT_SERVICE_FILES),'TestRouterImportedCONNECTSelectedDNSGraphs':sorted(CONNECT_DNS_FILES)}
+ groups={'TestRouterImportedEntryPairedFinalNativeGraphs':sorted(FILES),'TestRouterImportedCONNECTConfiguredServiceGraphs':sorted(CONNECT_SERVICE_FILES),'TestRouterImportedCONNECTSelectedDNSGraphs':sorted(CONNECT_DNS_FILES),'TestRouterImportedCONNECTLayerGraphs':sorted(CONNECT_LAYER_FILES)}
  if not peers:groups[SOCKS_XRAY_PARSER]=[]
  return groups
 
@@ -238,6 +318,7 @@ def run(vendor,peers=False,android=False):
   fixtures=Path(temporary)/'sources';fixtures.mkdir();env['ROUTERVPN_IMPORTED_ENTRY_FIXTURES']=str(fixtures);env['ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES']='1'
   service=Path(temporary)/'configured-service';service.mkdir();env['ROUTERVPN_CONNECT_SERVICE_FIXTURES']=str(service)
   selected_dns=Path(temporary)/'selected-dns';selected_dns.mkdir();env['ROUTERVPN_CONNECT_DNS_FIXTURES']=str(selected_dns)
+  layers=Path(temporary)/'independent-layers';layers.mkdir();env['ROUTERVPN_CONNECT_LAYER_FIXTURES']=str(layers)
   execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^TestImportedEntry','-count=1','-timeout=60s'],ROOT,env,names(CORE))
   run_socks_xray_controls(env)
   env['ROUTERVPN_IMPORTED_OPENVPN_FIXTURES']=str(fixtures);env['ROUTERVPN_REQUIRE_IMPORTED_OPENVPN_FIXTURES']='1'
@@ -245,15 +326,18 @@ def run(vendor,peers=False,android=False):
   execute(['go','test','-mod=readonly','-race','-json','./internal/nativeopenvpn','-run','^TestOpenVPNNativeLayerMapSingleHostKeepsOriginalIdentity$','-count=1','-timeout=20s'],ROOT,env,names(OPENVPN.POLICY_CORE))
   execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^('+'|'.join(CONTEXT_CORE)+')$','-count=1','-timeout=20s'],ROOT,env,names(CONTEXT_CORE))
   if {p.name for p in fixtures.iterdir()}!=FILES:raise ValueError('Incomplete captured imported source matrix')
+  if {p.name for p in layers.iterdir()}!=CONNECT_LAYER_FILES:raise ValueError('Incomplete independent CONNECT source matrix')
   if {p.name for p in service.iterdir()}!=CONNECT_SERVICE_FILES:raise ValueError('Incomplete configured CONNECT service matrix')
   if {p.name for p in selected_dns.iterdir()}!=CONNECT_DNS_FILES:raise ValueError('Incomplete selected CONNECT DNS matrix')
   groups=native_parser_groups(peers)
   if android:
-   folder=Path(temporary)/'android';folder.mkdir();env['ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES']=str(folder)
-   subprocess.run([sys.executable,str(ROOT/'android/test_android_imported_router.py')],cwd=ROOT,env=env,check=True,timeout=240)
+   folder,android_layers=run_android_sources(Path(temporary),env)
    exported={p.name for p in folder.iterdir()}
    if exported!={'android-'+name for name in FILES} or any(p.is_symlink() or not p.is_file() for p in folder.iterdir()):raise ValueError('Incomplete actual Android source matrix')
    groups['TestRouterImportedEntryAndroidSourceGraphs']=sorted(exported)
+   exported_layers={p.name for p in android_layers.iterdir()}
+   if exported_layers!={'android-'+name for name in CONNECT_LAYER_FILES} or any(p.is_symlink() or not p.is_file() for p in android_layers.iterdir()):raise ValueError('Incomplete actual Android independent CONNECT matrix')
+   groups['TestRouterImportedCONNECTAndroidLayerGraphs']=sorted(exported_layers)
   tags='with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego'
   base=['go','test','-mod=readonly','-json','-ldflags=-checklinkname=0','-tags',tags]
   selector='^('+'|'.join(groups)+')$'
@@ -266,6 +350,10 @@ def run(vendor,peers=False,android=False):
    for selected in ({'TestRouterVPNImportedSOCKSPairedFinalNativeTraffic','TestRouterVPNImportedSOCKSPairedFinalLayersNativeTraffic'}, {'TestRouterVPNImportedSOCKSPacketFinalNativeTraffic'}, set(groups)-{'TestRouterVPNImportedSOCKSPairedFinalNativeTraffic','TestRouterVPNImportedSOCKSPairedFinalLayersNativeTraffic','TestRouterVPNImportedSOCKSPacketFinalNativeTraffic'}):
     subset={name:groups[name] for name in sorted(selected)}
     execute(base+['-race','./protocol/routervpnamnezia','-run','^('+'|'.join(subset)+')$','-count=1','-timeout=90s'],vendor,env,names(subset))
+
+  if peers:
+   for parent,leaves in CONNECT_LAYER_PEERS.items():
+    execute(base+['-race','./protocol/routervpnamnezia','-run','^'+parent+'$','-count=1','-timeout=90s'],vendor,env,names({parent:leaves}))
 
   if peers:execute(base+['-race','./protocol/routervpnamnezia','-run','^TestRouterVPNImportedSOCKSPacketLayersNativeTraffic$','-count=1','-timeout=90s'],vendor,env,names({'TestRouterVPNImportedSOCKSPacketLayersNativeTraffic':SOCKS_PACKET_LAYER_PEERS}))
   if peers:execute(base+['-race','./protocol/routervpnamnezia','-run','^TestRouterVPNImportedSOCKSEntryLayers(Proxy|Packet)NativeTraffic$','-count=1','-timeout=90s'],vendor,env,names({'TestRouterVPNImportedSOCKSEntryLayersProxyNativeTraffic':SOCKS_ENTRY_PROXY_PEERS,'TestRouterVPNImportedSOCKSEntryLayersPacketNativeTraffic':SOCKS_ENTRY_PACKET_PEERS}))

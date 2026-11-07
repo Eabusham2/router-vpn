@@ -365,7 +365,7 @@ struct IOSMultihopView: View {
                         }
                         LabeledContent("Execution", value: "Local")
                         if ["http-connect", "https-connect"].contains(externalEntryProtocol ?? "") {
-                            Text("HTTP/HTTPS CONNECT uses SS2022. A captured Router UoT-v2 service enables UDP and final AES or AES+XOR; otherwise the path is TCP-only with both layers Off and selected DNS must use TCP, DoT or DoH. Resolver hostnames retain their saved bootstrap through the same final. Saved DNS is never changed automatically.")
+                            Text("HTTP/HTTPS CONNECT uses SS2022 and retains its independently provisioned entry Start Layer. A captured Router UoT-v2 service enables UDP and final AES or AES+XOR; otherwise the path is TCP-only with the final layer Off and selected DNS must use TCP, DoT or DoH. Resolver hostnames retain their saved bootstrap through the same final. Saved DNS is never changed automatically.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Text("The imported entry keeps its own public-address proof and Start Layer. The paired final node keeps its private identity, DNS and independent Start Layer.")
