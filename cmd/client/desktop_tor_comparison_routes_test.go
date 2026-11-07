@@ -49,8 +49,8 @@ func newDesktopTorPublicComparisonFixture(t *testing.T, kind string) *desktopTor
 		}
 		return cmd, err
 	}
-	f.driver.comparison = func(a *app, launch *desktopNodeLaunch, target string) (mobiletor.Comparison, error) {
-		client, err := newDesktopTorComparisonClient(a, launch, target)
+	f.driver.comparison = func(ctx context.Context, a *app, launch *desktopNodeLaunch, target string) (mobiletor.Comparison, error) {
+		client, err := newDesktopTorComparisonClientContext(ctx, a, launch, target)
 		if client == nil {
 			return nil, err
 		}

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"router-vpn/internal/mobilemtu"
 	"router-vpn/internal/mobiletor"
 )
 
@@ -45,10 +46,14 @@ type desktopTorComparisonAction struct {
 }
 
 func newDesktopTorComparisonClient(a *app, launch *desktopNodeLaunch, target string) (*desktopTorComparisonClient, error) {
+	return newDesktopTorComparisonClientContext(context.Background(), a, launch, target)
+}
+
+func newDesktopTorComparisonClientContext(ctx context.Context, a *app, launch *desktopNodeLaunch, target string) (*desktopTorComparisonClient, error) {
 	if a == nil || launch == nil || launch.tor == nil || !mobiletor.DesktopTorCompareTarget(target) {
 		return nil, errors.New("Tor comparison requires a captured native owner and approved target")
 	}
-	if _, err := a.readDesktopTorProof(launch); err != nil {
+	if _, err := a.readDesktopTorProofContext(ctx, launch); err != nil {
 		return nil, err
 	}
 	requestID, err := randomHex(16)
@@ -56,7 +61,9 @@ func newDesktopTorComparisonClient(a *app, launch *desktopNodeLaunch, target str
 		return nil, err
 	}
 	owner := launch.tor
-	owner.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return nil, err
+	}
 	if owner.comparison != nil || owner.comparisonGeneration == ^uint64(0) {
 		owner.mu.Unlock()
 		return nil, errors.New("the captured Tor comparison has not drained")
@@ -74,41 +81,74 @@ func newDesktopTorComparisonClient(a *app, launch *desktopNodeLaunch, target str
 	}
 	owner.comparison = client
 	owner.mu.Unlock()
-	if err := client.current(); err != nil {
-		client.Cancel()
+	if err := client.currentContext(ctx); err != nil {
+		_ = client.cancelContext(ctx)
 		return client, err
 	}
 	return client, nil
 }
 
 func (c *desktopTorComparisonClient) claimed() bool {
+	claimed, _ := c.claimedContext(context.Background())
+	return claimed
+}
+
+func (c *desktopTorComparisonClient) claimedContext(ctx context.Context) (bool, error) {
 	if c == nil || c.launch == nil || c.launch.tor == nil {
-		return false
+		return false, errors.New("Tor comparison has no captured claim")
 	}
 	owner := c.launch.tor
-	owner.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return false, err
+	}
 	defer owner.mu.Unlock()
-	return owner.comparison == c && owner.comparisonGeneration == c.base.Generation
+	return owner.comparison == c && owner.comparisonGeneration == c.base.Generation, ctx.Err()
 }
 
 func (c *desktopTorComparisonClient) current() error {
-	if !c.claimed() || c.life.Err() != nil {
+	return c.currentContext(context.Background())
+}
+
+func (c *desktopTorComparisonClient) currentContext(ctx context.Context) error {
+	claimed, err := c.claimedContext(ctx)
+	if err != nil {
+		return err
+	}
+	if !claimed || c.life.Err() != nil {
 		return errors.New("Tor comparison is cancelled or no longer owns its captured runtime")
 	}
-	_, err := c.app.readDesktopTorProof(c.launch)
-	return err
+	if _, err := c.app.readDesktopTorProofContext(ctx, c.launch); err != nil {
+		return err
+	}
+	// A proof observer can yield to a replacement. Retain the original claim
+	// after that actual observation before allowing any request or result.
+	claimed, err = c.claimedContext(ctx)
+	if err != nil {
+		return err
+	}
+	if !claimed || c.life.Err() != nil {
+		return errors.New("Tor comparison claim changed during native proof observation")
+	}
+	return ctx.Err()
 }
 
 func (c *desktopTorComparisonClient) Identity() string {
+	identity, _ := c.IdentityContext(context.Background())
+	return identity
+}
+
+func (c *desktopTorComparisonClient) IdentityContext(ctx context.Context) (string, error) {
 	if c == nil {
-		return ""
+		return "", errors.New("Tor comparison has no captured identity")
 	}
-	c.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &c.mu); err != nil {
+		return "", err
+	}
 	defer c.mu.Unlock()
-	if c.closed || c.cancelled || !c.prepared {
-		return ""
+	if c.closed || c.cancelled || c.life.Err() != nil || !c.prepared {
+		return "", errors.New("Tor comparison identity is not retained")
 	}
-	return c.identity
+	return c.identity, ctx.Err()
 }
 
 func (c *desktopTorComparisonClient) Prepare(ctx context.Context) error {
@@ -137,23 +177,25 @@ func (c *desktopTorComparisonClient) perform(parent context.Context, action, tar
 		return 0, errors.New("another captured Tor comparison action is still running")
 	}
 	defer c.operation.Unlock()
-	c.mu.Lock()
+	ctx, cancel := context.WithTimeout(parent, (mobiletor.DesktopTorCompareRequest{Action: action}).Budget())
+	stop := context.AfterFunc(c.life, cancel)
+	defer func() { stop(); cancel() }()
+	defer func() {
+		if failure != nil {
+			_ = c.cancelContext(ctx)
+		}
+	}()
+	if err := mobilemtu.LockContext(ctx, &c.mu); err != nil {
+		return 0, err
+	}
 	ready := !c.closed && !c.cancelled && (action == mobiletor.DesktopTorComparePrepare && !c.prepared && c.last == nil || action != mobiletor.DesktopTorComparePrepare && c.prepared)
 	c.mu.Unlock()
 	if !ready {
 		return 0, errors.New("Tor comparison action is not valid for this retained handle")
 	}
-	defer func() {
-		if failure != nil {
-			c.Cancel()
-		}
-	}()
-	if err := c.current(); err != nil {
+	if err := c.currentContext(ctx); err != nil {
 		return 0, err
 	}
-	ctx, cancel := context.WithTimeout(parent, (mobiletor.DesktopTorCompareRequest{Action: action}).Budget())
-	stop := context.AfterFunc(c.life, cancel)
-	defer func() { stop(); cancel() }()
 	request, err := c.issue(ctx, action, false)
 	if err != nil {
 		return 0, err
@@ -162,7 +204,7 @@ func (c *desktopTorComparisonClient) perform(parent context.Context, action, tar
 	if err != nil {
 		return 0, err
 	}
-	if err := c.current(); err != nil {
+	if err := c.currentContext(ctx); err != nil {
 		return 0, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -171,7 +213,9 @@ func (c *desktopTorComparisonClient) perform(parent context.Context, action, tar
 	if result.Failed || result.Cancelled || result.StopRequired || result.Drained {
 		return 0, errors.New("captured Tor comparison action failed; its owner is retained for cleanup")
 	}
-	c.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &c.mu); err != nil {
+		return 0, err
+	}
 	if c.cancelled || c.closed || c.life.Err() != nil || ctx.Err() != nil {
 		c.mu.Unlock()
 		return 0, errors.New("Tor comparison completed after cancellation")
@@ -189,7 +233,9 @@ func (c *desktopTorComparisonClient) issue(ctx context.Context, action string, c
 	}
 	request := c.base
 	request.Action, request.Sequence = action, 1
-	c.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &c.mu); err != nil {
+		return nil, err
+	}
 	if c.last != nil {
 		if c.last.result == nil || !c.last.result.Complete || c.last.request.Sequence == ^uint64(0) {
 			c.mu.Unlock()
@@ -217,16 +263,16 @@ func (c *desktopTorComparisonClient) issue(ctx context.Context, action string, c
 	raw, _ := json.Marshal(request)
 	var err error
 	if cleanup {
-		err = c.writeCleanup(mobiletor.DesktopTorCompareRequestFile, request)
+		err = c.writeCleanupContext(ctx, mobiletor.DesktopTorCompareRequestFile, request)
 	} else {
-		err = writeDesktopRuntimeFile(c.launch, mobiletor.DesktopTorCompareRequestFile, raw, true)
+		err = writeDesktopRuntimeFileContext(ctx, c.launch, mobiletor.DesktopTorCompareRequestFile, raw, true)
 	}
 	if err == nil {
 		return issued, nil
 	}
 	// The native loop may consume the request before the final file read. An
 	// exact echoed request acknowledges publication, never successful probing.
-	if record, readErr := c.read(cleanup); readErr == nil && record.DesktopTorCompareRequest == request {
+	if record, readErr := c.readContext(ctx, cleanup); readErr == nil && record.DesktopTorCompareRequest == request {
 		return issued, nil
 	}
 	return issued, err
@@ -260,12 +306,16 @@ func desktopTorComparisonStatus(raw []byte) (mobiletor.DesktopTorCompareStatus, 
 }
 
 func (c *desktopTorComparisonClient) read(cleanup bool) (mobiletor.DesktopTorCompareStatus, error) {
+	return c.readContext(context.Background(), cleanup)
+}
+
+func (c *desktopTorComparisonClient) readContext(ctx context.Context, cleanup bool) (mobiletor.DesktopTorCompareStatus, error) {
 	var raw []byte
 	var err error
 	if cleanup {
-		raw, err = c.readCleanup(mobiletor.DesktopTorCompareStatusFile)
+		raw, err = c.readCleanupContext(ctx, mobiletor.DesktopTorCompareStatusFile)
 	} else {
-		raw, err = readDesktopRuntimeFile(c.launch, mobiletor.DesktopTorCompareStatusFile, mobiletor.DesktopTorCompareFileLimit)
+		raw, err = readDesktopRuntimeFileContext(ctx, c.launch, mobiletor.DesktopTorCompareStatusFile, mobiletor.DesktopTorCompareFileLimit)
 	}
 	if err != nil {
 		return mobiletor.DesktopTorCompareStatus{}, err
@@ -280,24 +330,36 @@ func (c *desktopTorComparisonClient) await(ctx context.Context, action *desktopT
 		if err := ctx.Err(); err != nil {
 			return mobiletor.DesktopTorCompareStatus{}, err
 		}
-		if !c.claimed() {
+		claimed, err := c.claimedContext(ctx)
+		if err != nil {
+			return mobiletor.DesktopTorCompareStatus{}, err
+		}
+		if !claimed {
 			return mobiletor.DesktopTorCompareStatus{}, errors.New("Tor comparison claim was replaced")
 		}
-		if cleanup && c.nativeJoined() {
-			return mobiletor.DesktopTorCompareStatus{}, errors.New("captured Tor runtime has joined; retire through its checked terminal receipt")
+		if cleanup {
+			joined, err := c.nativeJoinedContext(ctx)
+			if err != nil {
+				return mobiletor.DesktopTorCompareStatus{}, err
+			}
+			if joined {
+				return mobiletor.DesktopTorCompareStatus{}, errors.New("captured Tor runtime has joined; retire through its checked terminal receipt")
+			}
 		}
 		if !cleanup {
-			if err := c.current(); err != nil {
+			if err := c.currentContext(ctx); err != nil {
 				return mobiletor.DesktopTorCompareStatus{}, err
 			}
 			if time.Now().UnixMilli() >= action.request.ExpiresAt {
 				return mobiletor.DesktopTorCompareStatus{}, context.DeadlineExceeded
 			}
 		}
-		record, err := c.read(cleanup)
+		record, err := c.readContext(ctx, cleanup)
 		if err == nil {
 			if record.DesktopTorCompareRequest == action.request {
-				c.mu.Lock()
+				if err := mobilemtu.LockContext(ctx, &c.mu); err != nil {
+					return record, err
+				}
 				identity := c.identity
 				c.mu.Unlock()
 				if identity != "" && record.IdentitySHA256 != identity {
@@ -332,29 +394,39 @@ func (c *desktopTorComparisonClient) await(ctx context.Context, action *desktopT
 // Cancel never blocks on file I/O or another action. Its retained worker waits
 // for any entered publication, then addresses only that exact native request.
 func (c *desktopTorComparisonClient) Cancel() {
+	_ = c.cancelContext(context.Background())
+}
+
+func (c *desktopTorComparisonClient) cancelContext(ctx context.Context) error {
 	if c == nil {
-		return
+		return nil
 	}
-	c.mu.Lock()
+	// Cancellation invalidates observations immediately. If caller admission
+	// expires, Close retains the exact claim and completes this bookkeeping
+	// under its own bounded cleanup context before admitting a new action.
+	c.cancel()
+	if err := mobilemtu.LockContext(ctx, &c.mu); err != nil {
+		return err
+	}
 	if c.cancelled || c.closed {
 		c.mu.Unlock()
-		return
+		return nil
 	}
 	c.cancelled = true
-	c.cancel()
 	last := c.last
 	c.cancelDone = make(chan struct{})
 	done := c.cancelDone
 	c.mu.Unlock()
 	if last == nil {
 		close(done)
-		return
+		return nil
 	}
 	go func() {
 		defer close(done)
 		<-last.issued
 		_ = c.writeCleanup(mobiletor.DesktopTorCompareCancelFile, last.request)
 	}()
+	return nil
 }
 
 // Close drains measurement resources only. The candidate separately owns its
@@ -367,9 +439,11 @@ func (c *desktopTorComparisonClient) Close(parent context.Context) error {
 	if parent == nil {
 		return errors.New("Tor comparison cleanup requires a bounded context")
 	}
-	c.Cancel()
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
+	if err := c.cancelContext(ctx); err != nil {
+		return err
+	}
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for !c.operation.TryLock() {
@@ -380,7 +454,9 @@ func (c *desktopTorComparisonClient) Close(parent context.Context) error {
 		}
 	}
 	defer c.operation.Unlock()
-	c.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &c.mu); err != nil {
+		return err
+	}
 	closed, done, last := c.closed, c.cancelDone, c.last
 	c.mu.Unlock()
 	if closed {
@@ -391,27 +467,35 @@ func (c *desktopTorComparisonClient) Close(parent context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	if !c.claimed() {
+	claimed, err := c.claimedContext(ctx)
+	if err != nil {
+		return err
+	}
+	if !claimed {
 		return errors.New("Tor comparison cleanup lost its exact native claim")
 	}
-	if last == nil || c.nativeJoined() {
-		return c.release(nil)
+	joined, err := c.nativeJoinedContext(ctx)
+	if err != nil {
+		return err
+	}
+	if last == nil || joined {
+		return c.releaseContext(ctx, nil)
 	}
 	if last.result == nil {
 		if last.request.Action != mobiletor.DesktopTorCompareClose {
 			// Retry an unacknowledged cancel on the same captured input. A
 			// completed local write is not a native cancellation receipt.
-			_ = c.writeCleanup(mobiletor.DesktopTorCompareCancelFile, last.request)
+			_ = c.writeCleanupContext(ctx, mobiletor.DesktopTorCompareCancelFile, last.request)
 		}
 		if _, err := c.await(ctx, last, true); err != nil {
-			if c.nativeJoined() {
-				return c.release(nil)
+			if joined, joinErr := c.nativeJoinedContext(ctx); joinErr == nil && joined {
+				return c.releaseContext(ctx, nil)
 			}
 			return err
 		}
 	}
 	if last.request.Action == mobiletor.DesktopTorCompareClose && last.result.Drained {
-		return c.release(last.result)
+		return c.releaseContext(ctx, last.result)
 	}
 	request, err := c.issue(ctx, mobiletor.DesktopTorCompareClose, true)
 	if err != nil {
@@ -419,29 +503,33 @@ func (c *desktopTorComparisonClient) Close(parent context.Context) error {
 	}
 	result, err := c.await(ctx, request, true)
 	if err != nil {
-		if c.nativeJoined() {
-			return c.release(nil)
+		if joined, joinErr := c.nativeJoinedContext(ctx); joinErr == nil && joined {
+			return c.releaseContext(ctx, nil)
 		}
 		return err
 	}
 	if !result.Drained || result.StopRequired {
 		return errors.New("native Tor comparison cleanup is pending; captured owner retained")
 	}
-	return c.release(&result)
+	return c.releaseContext(ctx, &result)
 }
 
-func (c *desktopTorComparisonClient) release(status *mobiletor.DesktopTorCompareStatus) error {
+func (c *desktopTorComparisonClient) releaseContext(ctx context.Context, status *mobiletor.DesktopTorCompareStatus) error {
 	owner := c.launch.tor
-	owner.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return err
+	}
 	defer owner.mu.Unlock()
 	if owner.comparison != c || owner.comparisonGeneration != c.base.Generation {
 		return errors.New("Tor comparison cleanup cannot release a replacement claim")
+	}
+	if err := mobilemtu.LockContext(ctx, &c.mu); err != nil {
+		return err
 	}
 	if status != nil {
 		copy := *status
 		owner.comparisonPrevious = &copy
 	}
-	c.mu.Lock()
 	c.closed = true
 	c.mu.Unlock()
 	owner.comparison = nil
@@ -451,30 +539,46 @@ func (c *desktopTorComparisonClient) release(status *mobiletor.DesktopTorCompare
 // Only a checked terminal native receipt AND the actual command Wait join
 // can substitute for an unavailable comparison receipt during whole-path stop.
 func (c *desktopTorComparisonClient) nativeJoined() bool {
+	joined, _ := c.nativeJoinedContext(context.Background())
+	return joined
+}
+
+func (c *desktopTorComparisonClient) nativeJoinedContext(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if !desktopNodeProcessExited(c.launch) {
-		return false
+		return false, nil
 	}
 	owner := c.launch.tor
-	owner.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return false, err
+	}
 	acknowledged := owner.stopAcknowledged
 	owner.mu.Unlock()
 	if acknowledged {
-		return true
+		return true, nil
 	}
-	raw, err := c.readCleanup("stopped.json")
+	raw, err := c.readCleanupContext(ctx, "stopped.json")
 	var record desktopExternalStop
 	return err == nil && decodeRelayControlJSON(raw, &record) == nil && record.Schema == 1 && record.Closed &&
-		record.SessionID == c.base.SessionID && record.SourceSHA256 == c.base.SourceSHA256
+		record.SessionID == c.base.SessionID && record.SourceSHA256 == c.base.SourceSHA256, ctx.Err()
 }
 
 // Cleanup can follow the pinned old directory after a rename. It cannot adopt
 // results, create a new comparison or address the replacement pathname.
 func (c *desktopTorComparisonClient) readCleanup(name string) ([]byte, error) {
+	return c.readCleanupContext(context.Background(), name)
+}
+
+func (c *desktopTorComparisonClient) readCleanupContext(ctx context.Context, name string) ([]byte, error) {
 	if name != mobiletor.DesktopTorCompareStatusFile && name != "stopped.json" {
 		return nil, errors.New("invalid Tor comparison cleanup record")
 	}
 	launch := c.launch
-	launch.workspaceMu.Lock()
+	if err := mobilemtu.LockContext(ctx, &launch.workspaceMu); err != nil {
+		return nil, err
+	}
 	defer launch.workspaceMu.Unlock()
 	if launch.directoryRoot == nil || launch.directoryInfo == nil {
 		return nil, errors.New("Tor comparison cleanup lost its captured directory")
@@ -487,14 +591,24 @@ func (c *desktopTorComparisonClient) readCleanup(name string) ([]byte, error) {
 }
 
 func (c *desktopTorComparisonClient) writeCleanup(name string, request mobiletor.DesktopTorCompareRequest) error {
+	return c.writeCleanupContext(context.Background(), name, request)
+}
+
+func (c *desktopTorComparisonClient) writeCleanupContext(ctx context.Context, name string, request mobiletor.DesktopTorCompareRequest) error {
+	claimed, err := c.claimedContext(ctx)
+	if err != nil {
+		return err
+	}
 	if name != mobiletor.DesktopTorCompareCancelFile && (name != mobiletor.DesktopTorCompareRequestFile || request.Action != mobiletor.DesktopTorCompareClose) ||
 		request.Schema != c.base.Schema || request.SessionID != c.base.SessionID || request.SourceSHA256 != c.base.SourceSHA256 || request.ConfigSHA256 != c.base.ConfigSHA256 ||
-		request.Generation != c.base.Generation || request.RequestID != c.base.RequestID || request.Target != c.base.Target || request.Sequence == 0 || !c.claimed() {
+		request.Generation != c.base.Generation || request.RequestID != c.base.RequestID || request.Target != c.base.Target || request.Sequence == 0 || !claimed {
 		return errors.New("Tor comparison cleanup cannot address another capture")
 	}
 	raw, _ := json.Marshal(request)
 	launch := c.launch
-	launch.workspaceMu.Lock()
+	if err := mobilemtu.LockContext(ctx, &launch.workspaceMu); err != nil {
+		return err
+	}
 	defer launch.workspaceMu.Unlock()
 	if launch.directoryRoot == nil || launch.directoryInfo == nil {
 		return errors.New("Tor comparison cleanup lost its captured directory")

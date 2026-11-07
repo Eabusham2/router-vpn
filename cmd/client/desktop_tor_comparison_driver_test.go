@@ -79,8 +79,8 @@ func newDesktopTorComparisonDriverFixture(t *testing.T, kind string) *desktopTor
 		}
 		return cmd, err
 	}
-	f.driver.comparison = func(a *app, launch *desktopNodeLaunch, target string) (mobiletor.Comparison, error) {
-		c, err := newDesktopTorComparisonClient(a, launch, target)
+	f.driver.comparison = func(ctx context.Context, a *app, launch *desktopNodeLaunch, target string) (mobiletor.Comparison, error) {
+		c, err := newDesktopTorComparisonClientContext(ctx, a, launch, target)
 		if c == nil {
 			return nil, err
 		}
@@ -274,8 +274,8 @@ func TestDesktopTorComparisonDriverCannotStopReplacementOrChangeTarget(t *testin
 func TestDesktopTorComparisonDriverTeardownFailurePreventsNextCandidate(t *testing.T) {
 	f := newDesktopTorComparisonDriverFixture(t, "tor-compare-driver")
 	create := f.driver.runtime.comparison
-	f.driver.runtime.comparison = func(a *app, launch *desktopNodeLaunch, target string) (mobiletor.Comparison, error) {
-		probe, err := create(a, launch, target)
+	f.driver.runtime.comparison = func(ctx context.Context, a *app, launch *desktopNodeLaunch, target string) (mobiletor.Comparison, error) {
+		probe, err := create(ctx, a, launch, target)
 		if fixture, ok := probe.(*desktopTorComparisonProbeFixture); ok {
 			fixture.closeFailure = true
 		}

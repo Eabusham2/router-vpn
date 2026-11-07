@@ -270,15 +270,15 @@ func (d *desktopTorComparisonDriver) OpenTarget(ctx context.Context, candidate r
 	}
 	create := runtime.comparison
 	if create == nil {
-		create = func(a *app, launch *desktopNodeLaunch, target string) (mobiletor.Comparison, error) {
-			captured, err := newDesktopTorComparisonClient(a, launch, target)
+		create = func(ctx context.Context, a *app, launch *desktopNodeLaunch, target string) (mobiletor.Comparison, error) {
+			captured, err := newDesktopTorComparisonClientContext(ctx, a, launch, target)
 			if captured == nil {
 				return nil, err // A typed nil must not become an owned interface.
 			}
 			return captured, err
 		}
 	}
-	session.probe, err = create(a, launch, target)
+	session.probe, err = create(ctx, a, launch, target)
 	if err != nil || session.probe == nil {
 		return session, errors.Join(err, errors.New("native Tor comparison could not retain its exact measurement owner"))
 	}
