@@ -37,5 +37,5 @@ func registerNativeMultihopDNSRuntime(a *app, sel multihopSelection, cmd *exec.C
 	if err != nil {
 		return err
 	}
-	return registerActiveDNSRuntimeConfig(a, sel.Exit.ID, sel.ExitMode, filepath.Join(dir, "sing-box.json"))
+	return registerActiveDNSRuntimeConfigKind(a, sel.Exit.ID, sel.ExitMode, filepath.Join(dir, "sing-box.json"), sel.Native != nil && sel.Native.imported)
 }

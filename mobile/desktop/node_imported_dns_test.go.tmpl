@@ -1,0 +1,275 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+)
+
+func importedDNSFiles(t *testing.T, owner *routerVPNNodeMTU, graph []byte) (*routerVPNExternalFiles, routerVPNImportedDNSRequest) {
+	t.Helper()
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "sing-box.json"), graph, 0600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(graph)
+	owner.record.Config = hex.EncodeToString(digest[:])
+	files, err := routerVPNOpenExternalFiles(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = files.root.Close() })
+	request := routerVPNImportedDNSRequest{Schema: 1, Session: owner.record.Session, Config: owner.record.Config, Path: owner.record.Path,
+		Reader: owner.record.Reader, MTU: owner.record.MTU, Request: strings.Repeat("d", 32), Generation: 1, Deadline: time.Now().Add(4 * time.Second).UnixMilli()}
+	return files, request
+}
+
+func importedDNSWrite(t *testing.T, files *routerVPNExternalFiles, name string, value any) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := files.root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.Write(raw)
+	closeErr := f.Close()
+	if err != nil || closeErr != nil {
+		t.Fatal(err, closeErr)
+	}
+}
+
+func TestRouterVPNImportedDNSMailbox(t *testing.T) {
+	for _, fault := range []string{"success", "dns-failed", "session", "config", "path", "reader", "deadline", "replay", "source-replaced", "owner-replaced"} {
+		t.Run(fault, func(t *testing.T) {
+			owner, _, valid := desktopNodeMTUFixture(t)
+			files, request := importedDNSFiles(t, owner, []byte(`{"original":"selected DNS"}`))
+			var generation uint64
+			switch fault {
+			case "success":
+				generation = 10000
+				request.Generation = generation + 1 // No arbitrary request-count retirement.
+			case "session":
+				request.Session = strings.Repeat("f", 32)
+			case "config":
+				request.Config = strings.Repeat("f", 64)
+			case "path":
+				request.Path = strings.Repeat("f", 64)
+			case "reader":
+				request.Reader++
+			case "deadline":
+				request.Deadline = time.Now().Add(-time.Second).UnixMilli()
+			case "replay":
+				generation = request.Generation
+			}
+			importedDNSWrite(t, files, "node-dns-request.json", request)
+			calls := 0
+			err := routerVPNConsumeImportedDNS(context.Background(), files, owner, &generation, func(ctx context.Context) error {
+				calls++
+				if deadline, ok := ctx.Deadline(); !ok || deadline.UnixMilli() != request.Deadline {
+					t.Error("native DNS lost original request deadline")
+				}
+				switch fault {
+				case "dns-failed":
+					return errors.New("original resolver failed")
+				case "source-replaced":
+					if err := files.root.Remove("sing-box.json"); err != nil {
+						t.Error(err)
+					}
+					importedDNSWrite(t, files, "sing-box.json", map[string]any{"foreign": true})
+				case "owner-replaced":
+					valid.Store(false)
+				}
+				return nil
+			})
+			body, readErr := files.read("node-dns-result.json", 4096)
+			if fault == "success" || fault == "dns-failed" {
+				var result routerVPNImportedDNSResult
+				if err != nil || readErr != nil || !routerVPNMTUStrict(body, &result) || result.routerVPNImportedDNSRequest != request || calls != 1 {
+					t.Fatal("original native query missing", err, readErr, calls)
+				}
+				want := "passed"
+				if fault == "dns-failed" {
+					want = "failed"
+				}
+				if result.Status != want || result.Reader != owner.record.Reader || result.Path != owner.record.Path || result.Milliseconds <= 0 {
+					t.Fatal("result lost original query", result)
+				}
+				if _, err := files.root.Lstat("node-dns-request.json"); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("query did not join request")
+				}
+			} else if err == nil || readErr == nil {
+				t.Fatal("unowned query produced a result", fault, err, readErr)
+			}
+			if fault != "success" && fault != "dns-failed" && fault != "source-replaced" && fault != "owner-replaced" && calls != 0 {
+				t.Fatal("invalid request reached DNS")
+			}
+		})
+	}
+	for _, failure := range []string{"active", "failed"} {
+		owner, _, _ := desktopNodeMTUFixture(t)
+		files, request := importedDNSFiles(t, owner, []byte(`{"captured":true}`))
+		if failure == "active" {
+			owner.record.Active = true
+		} else {
+			owner.record.Failure = "unconfirmed MTU"
+		}
+		importedDNSWrite(t, files, "node-dns-request.json", request)
+		var generation uint64
+		if err := routerVPNConsumeImportedDNS(context.Background(), files, owner, &generation, func(context.Context) error { t.Error("borrowed active MTU transaction"); return nil }); err == nil {
+			t.Fatal("unowned MTU transaction admitted", failure)
+		}
+	}
+}
+
+func TestRouterVPNImportedDNSCancellationJoins(t *testing.T) {
+	owner, _, _ := desktopNodeMTUFixture(t)
+	files, request := importedDNSFiles(t, owner, []byte(`{"captured":true}`))
+	importedDNSWrite(t, files, "node-dns-request.json", request)
+	importedDNSWrite(t, files, "node-dns-cancel.json", request)
+	var generation uint64
+	if err := routerVPNConsumeImportedDNS(context.Background(), files, owner, &generation, func(context.Context) error { t.Error("pre-cancelled request entered native DNS"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	previous, readErr := files.read("node-dns-result.json", 4096)
+	var previousResult routerVPNImportedDNSResult
+	if readErr != nil || !routerVPNMTUStrict(previous, &previousResult) || previousResult.Status != "cancelled" || previousResult.routerVPNImportedDNSRequest != request {
+		t.Fatal("pre-cancelled request did not drain without a query", readErr)
+	}
+	request.Request = strings.Repeat("e", 32)
+	request.Generation = generation + 1
+	importedDNSWrite(t, files, "node-dns-request.json", request)
+	entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- routerVPNConsumeImportedDNS(context.Background(), files, owner, &generation, func(ctx context.Context) error {
+			close(entered)
+			<-ctx.Done()
+			close(cancelled)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	importedDNSWrite(t, files, "node-dns-cancel.json", request)
+	<-cancelled
+	select {
+	case err := <-done:
+		t.Fatal("cancel abandoned entered native query", err)
+	default:
+	}
+	if actual, err := files.read("node-dns-result.json", 4096); err != nil || string(actual) != string(previous) {
+		t.Fatal("cancelled query published before worker join", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	raw, err := files.read("node-dns-result.json", 4096)
+	var result routerVPNImportedDNSResult
+	if err != nil || !routerVPNMTUStrict(raw, &result) || result.Status != "cancelled" {
+		t.Fatal("late success revived cancelled query", err, result.Status)
+	}
+	for _, name := range []string{"node-dns-request.json", "node-dns-cancel.json"} {
+		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("owned request not drained", name)
+		}
+	}
+}
+
+type importedDNSNativeTUN struct{ *desktopMTUTUNFixture }
+
+func (*importedDNSNativeTUN) Start(adapter.StartStage) error { return nil }
+func (*importedDNSNativeTUN) Close() error                   { return nil }
+
+// The platform TUN readback is an explicit fixture. The Box, DNS router, TCP
+// resolver exchange, cache controls and mailbox publication are shipping code.
+// Opposite consecutive upstream answers cannot be supplied by an OS lookup.
+func TestRouterVPNImportedDNSNativeRouterIsUncached(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failed atomic.Bool
+	var queries atomic.Int32
+	server := &dns.Server{Listener: listener, Net: "tcp", Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		queries.Add(1)
+		answer := new(dns.Msg).SetReply(q)
+		if failed.Load() {
+			answer.Rcode = dns.RcodeNameError
+		} else {
+			answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: net.ParseIP("93.184.216.34")}}
+		}
+		_ = w.WriteMsg(answer)
+	})}
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.ActivateAndServe() }()
+	t.Cleanup(func() { _ = server.Shutdown(); <-serverDone })
+	registry := include.InboundRegistry()
+	tun := &importedDNSNativeTUN{&desktopMTUTUNFixture{index: 17, mtu: 1420}}
+	inbound.Register[option.TunInboundOptions](registry, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+		tun.tag = tag
+		return tun, nil
+	})
+	ctx, cancel := context.WithCancel(box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry()))
+	defer cancel()
+	graph, _ := json.Marshal(map[string]any{"log": map[string]any{"disabled": true}, "inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in"}},
+		"outbounds": []any{map[string]any{"type": "direct", "tag": "proxy"}}, "dns": map[string]any{"servers": []any{map[string]any{"type": "tcp", "tag": "selected-dns", "server": "127.0.0.1", "server_port": listener.Addr().(*net.TCPAddr).Port, "detour": "proxy"}}, "final": "selected-dns"}, "route": map[string]any{"final": "proxy"}})
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close()
+	if err := instance.RouterVPNStrategyStart(); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := newRouterVPNNodeMTUContext(ctx, &routerVPNNodeMTUBox{instance: instance, tag: "tun-in"}, strings.Repeat("a", 32), strings.Repeat("b", 64), strings.Repeat("c", 64), func(ctx context.Context) error { return ctx.Err() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, request := importedDNSFiles(t, owner, graph)
+	var generation uint64
+	for index, want := range []string{"passed", "failed", "passed"} {
+		failed.Store(index == 1)
+		request.Request = strings.Repeat(string(rune('d'+index)), 32)
+		request.Generation = generation + 1
+		request.Deadline = time.Now().Add(4 * time.Second).UnixMilli()
+		importedDNSWrite(t, files, "node-dns-request.json", request)
+		if err := routerVPNConsumeImportedDNS(ctx, files, owner, &generation, instance.RouterVPNStrategyDNSProofContext); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := files.read("node-dns-result.json", 4096)
+		var result routerVPNImportedDNSResult
+		if err != nil || !routerVPNMTUStrict(raw, &result) || result.Status != want || queries.Load() != int32(index+1) {
+			t.Fatal("selected native resolver was cached or bypassed", err, result.Status, queries.Load())
+		}
+	}
+}

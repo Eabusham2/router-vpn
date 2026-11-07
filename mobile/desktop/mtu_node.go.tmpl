@@ -435,7 +435,7 @@ func routerVPNRunNodeMTUCaptured(parent context.Context, directory, session, con
 			return err
 		}
 	}
-	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-protection-retired.json", "stopped.json"} {
+	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json", "node-protection-retired.json", "stopped.json"} {
 		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 			return routerVPNExternalFailure
 		}
@@ -479,6 +479,7 @@ func routerVPNRunNodeMTUCaptured(parent context.Context, directory, session, con
 	defer func() {
 		stopped.Store(true)
 		readyRetired := files.remove("node-ready.json")
+		dnsRetired := files.remove("node-dns-result.json")
 		// Partial construction and Box teardown retain ownership until every
 		// close succeeds. Only then may the parent retire this workspace.
 		if runtime.GOOS == "linux" {
@@ -494,7 +495,7 @@ func routerVPNRunNodeMTUCaptured(parent context.Context, directory, session, con
 		}
 		// The exact entered handoff callback and its owned receipt must be
 		// retired before the command can acknowledge complete shutdown.
-		if admission.close() != nil || readyRetired != nil {
+		if admission.close() != nil || readyRetired != nil || dnsRetired != nil {
 			failure = routerVPNExternalFailure
 			return
 		}
@@ -656,6 +657,7 @@ func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExtern
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	var heartbeat time.Time
+	var dnsGeneration uint64
 	for {
 		if parent.Err() != nil || files.stopRequested(session, config) {
 			return nil
@@ -665,6 +667,9 @@ func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExtern
 				return nil
 			}
 			return routerVPNExternalFailure
+		}
+		if err := routerVPNConsumeImportedDNS(observe, files, owner, &dnsGeneration, instance.RouterVPNStrategyDNSProofContext); err != nil {
+			return err
 		}
 		var consumed os.FileInfo
 		if raw, readErr := files.read("node-mtu-request.json", 4096); readErr == nil {

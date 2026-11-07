@@ -162,14 +162,29 @@ def resolve_literal_endpoint(endpoint: str) -> list[ipaddress._BaseAddress]:
         ) from None
 
 
+def _captured_native_session() -> str:
+    """The imported Router-final path has its own retained node/config owner."""
+    external = os.environ.get("HOMEVPN_EXTERNAL_SESSION", "")
+    node = os.environ.get("HOMEVPN_NODE_SESSION", "")
+    required = os.environ.get("HOMEVPN_NODE_PHYSICAL_REQUIRED", "")
+    valid = lambda value, size: len(value) == size and all(c in "0123456789abcdef" for c in value)
+    if os.environ.get("HOMEVPN_STANDARD_ENGINE") == "native":
+        if not node and not required and valid(external, 32):
+            return external
+        if not external and required == "1" and valid(node, 32) and valid(os.environ.get("HOMEVPN_NODE_CONFIG_SHA256", ""), 64):
+            return node
+    raise RuntimeError("native physical tuples require a captured external session or imported node/config owner")
+
+
 def captured_endpoint_ips(endpoint: str) -> list[ipaddress._BaseAddress]:
     primary = resolve_literal_endpoint(endpoint)
     raw = os.environ.get("HOMEVPN_NATIVE_ENDPOINTS_JSON")
     if raw is None:
+        if os.environ.get("HOMEVPN_NODE_PHYSICAL_REQUIRED"):
+            raise RuntimeError("imported native node cannot fall back to an endpoint-wide exception")
         return primary
-    session = os.environ.get("HOMEVPN_EXTERNAL_SESSION", "")
-    if (len(raw) > 1024 or os.environ.get("HOMEVPN_STANDARD_ENGINE") != "native"
-            or len(session) != 32 or any(c not in "0123456789abcdef" for c in session)):
+    _captured_native_session()
+    if len(raw) > 1024:
         raise RuntimeError("native endpoint list has no captured external session")
     try:
         values = json.loads(raw)
@@ -230,10 +245,11 @@ def _unique_json_members(pairs):
 def captured_native_egress(endpoint_ips: list[ipaddress._BaseAddress]) -> list[dict[str, Any]] | None:
     raw = os.environ.get("HOMEVPN_NATIVE_EGRESS_JSON")
     if raw is None:
+        if os.environ.get("HOMEVPN_NODE_PHYSICAL_REQUIRED"):
+            raise RuntimeError("imported native node lost its required exact physical tuples")
         return None
-    session = os.environ.get("HOMEVPN_EXTERNAL_SESSION", "")
-    if (len(raw) > 4096 or os.environ.get("HOMEVPN_STANDARD_ENGINE") != "native"
-            or len(session) != 32 or any(c not in "0123456789abcdef" for c in session)):
+    _captured_native_session()
+    if len(raw) > 4096:
         raise RuntimeError("native egress has no captured external session")
     try:
         return validate_native_egress(json.loads(raw, object_pairs_hook=_unique_json_members), endpoint_ips)

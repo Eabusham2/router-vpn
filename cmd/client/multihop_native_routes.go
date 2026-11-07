@@ -63,6 +63,9 @@ func resolveNativeMultihopSelection(control common.RouterProfile, profiles []com
 	if !ok {
 		return multihopSelection{}, fmt.Errorf("exit node %q is not linked", exitID)
 	}
+	if entry.NodeKind == "external" {
+		return resolveDesktopImportedSelection(control, entry, exit, q)
+	}
 	// A layer belongs to its saved node. Both selected nodes are fully compiled
 	// below; a third control profile cannot supply a substitute layer.
 	if control.ID != entry.ID && control.ID != exit.ID {
@@ -141,7 +144,12 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"execution":                  graph.Execution,
 		"supported_executions":       []string{"local", "server", "auto"},
 		"supported_entry_bases":      []string{"wg", "awg"},
-		"supported_entry_modes":      mobilemultihop.NodeMultihopEntryModes(),
+		"supported_entry_modes":      append(mobilemultihop.NodeMultihopEntryModes(), "socks5", "http-connect", "https-connect"),
+		"paired_entry_modes":         mobilemultihop.NodeMultihopEntryModes(),
+		"imported_entry_executions":  []string{"local"},
+		"imported_entry_protocols":   []string{"socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect"},
+		"imported_final_modes":       []string{"shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong", "reality-vision"},
+		"imported_entry_constraint":  "Compatible captured graph and exact owned physical sockets required; dynamic SOCKS UDP relay paths remain unavailable",
 		"supported_exit_modes":       mobilemultihop.NodeMultihopExitModes(),
 		"standard_exit_capabilities": externalProfileProtocolCapabilities(),
 		"standard_exits":             standard,

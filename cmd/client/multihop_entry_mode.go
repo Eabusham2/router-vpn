@@ -8,6 +8,8 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
+var errPairedMultihopEntryMode = errors.New("paired Router VPN entry requires its own exact native transport")
+
 func desktopMultihopEntryModes() []string {
 	if runtime.GOOS == "linux" && !retainedNativeMultihopSelected() {
 		return []string{"wg"} // The legacy AWG script chooses its variant by base.
@@ -32,13 +34,16 @@ func resolveNativeMultihopEntryMode(control, entry common.RouterProfile, request
 	if mode == "" {
 		return "", resolveMultihopEntryBase(control, entry, base), nil
 	}
+	if !mobilemultihop.NodeMultihopEntryMode(mode) {
+		return "", "", errPairedMultihopEntryMode
+	}
 	return mode, desktopExternalEntryBase(mode), nil
 }
 
 // Empty is the legacy base/variant selection. It is kept distinct from every
 // explicit raw transport; malformed nonempty values never grant that fallback.
 func normalizeConnectionProfileEntryMode(value string) (string, error) {
-	if value == "" || mobilemultihop.NodeMultihopEntryMode(value) {
+	if value == "" || mobilemultihop.NodeMultihopEntryMode(value) || desktopImportedEntryProtocol(value) {
 		return value, nil
 	}
 	return "", errors.New("multihop_entry_mode must identify an exact supported native entry transport")

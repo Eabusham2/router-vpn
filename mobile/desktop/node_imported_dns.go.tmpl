@@ -1,0 +1,157 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"os"
+	"time"
+)
+
+// This narrow mailbox belongs to the already retained native Box. It grants no
+// socket, resolver, graph or NodeProfile authority. The original compiled DNS
+// router and its uncached native proof perform every exchange.
+type routerVPNImportedDNSRequest struct {
+	Schema     int    `json:"schema"`
+	Session    string `json:"session_id"`
+	Config     string `json:"config_sha256"`
+	Path       string `json:"path_id"`
+	Reader     uint64 `json:"reader"`
+	MTU        int    `json:"mtu"`
+	Request    string `json:"request_id"`
+	Generation uint64 `json:"generation"`
+	Deadline   int64  `json:"deadline_at"`
+}
+
+type routerVPNImportedDNSResult struct {
+	routerVPNImportedDNSRequest
+	Status       string  `json:"status"`
+	Interface    string  `json:"interface"`
+	Index        int     `json:"index"`
+	ProvedAt     int64   `json:"proved_at"`
+	Milliseconds float64 `json:"milliseconds"`
+}
+
+func routerVPNConsumeImportedDNS(parent context.Context, files *routerVPNExternalFiles, owner *routerVPNNodeMTU,
+	generation *uint64, proof func(context.Context) error) error {
+	if parent == nil || parent.Err() != nil || files == nil || files.root == nil || owner == nil || generation == nil || proof == nil {
+		return routerVPNExternalFailure
+	}
+	info, err := files.root.Lstat("node-dns-request.json")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	raw, readErr := files.read("node-dns-request.json", 4096)
+	var request routerVPNImportedDNSRequest
+	now := time.Now()
+	if err != nil || readErr != nil || !routerVPNMTUStrict(raw, &request) || request.Schema != 1 ||
+		request.Session != owner.record.Session || request.Config != owner.record.Config || request.Path != owner.record.Path ||
+		request.Reader != owner.record.Reader || request.MTU != owner.record.MTU || !routerVPNExternalSession.MatchString(request.Request) ||
+		*generation == ^uint64(0) || request.Generation != *generation+1 || owner.record.Active || owner.record.Failure != "" ||
+		request.Deadline <= now.UnixMilli() || request.Deadline > now.Add(6*time.Second).UnixMilli() {
+		return routerVPNExternalFailure
+	}
+	configInfo, err := files.root.Lstat("sing-box.json")
+	if err != nil {
+		return routerVPNExternalFailure
+	}
+	current := func(ctx context.Context) error {
+		if owner.currentContext(ctx) != nil || owner.record.Active || owner.record.Failure != "" || files.stopRequested(request.Session, request.Config) {
+			return routerVPNExternalFailure
+		}
+		actual, err := files.root.Lstat("node-dns-request.json")
+		again, readErr := files.read("node-dns-request.json", 4096)
+		configActual, configErr := files.root.Lstat("sing-box.json")
+		configRaw, configReadErr := files.read("sing-box.json", 4<<20)
+		digest := sha256.Sum256(configRaw)
+		if err != nil || readErr != nil || !os.SameFile(info, actual) || !bytes.Equal(raw, again) ||
+			configErr != nil || configReadErr != nil || !os.SameFile(configInfo, configActual) || hex.EncodeToString(digest[:]) != request.Config {
+			return routerVPNExternalFailure
+		}
+		return nil
+	}
+	if current(parent) != nil {
+		return routerVPNExternalFailure
+	}
+	query, cancel := context.WithDeadline(parent, time.UnixMilli(request.Deadline))
+	defer cancel()
+	done := make(chan error, 1)
+	started := time.Now()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	var queryErr error
+	var cancelInfo os.FileInfo
+	retired := false
+	joined := false
+	if candidate, statErr := files.root.Lstat("node-dns-cancel.json"); !errors.Is(statErr, os.ErrNotExist) {
+		body, readErr := files.read("node-dns-cancel.json", 4096)
+		var cancelled routerVPNImportedDNSRequest
+		if statErr != nil || readErr != nil || !routerVPNMTUStrict(body, &cancelled) || cancelled != request {
+			return routerVPNExternalFailure
+		}
+		cancelInfo, joined = candidate, true
+		cancel()
+	} else {
+		go func() { done <- proof(query) }()
+	}
+	for !joined {
+		select {
+		case queryErr = <-done:
+			joined = true
+		case <-query.Done():
+			cancel()
+			queryErr = <-done // No receipt or shutdown acknowledgement before the native query joins.
+			joined = true
+		case <-ticker.C:
+			if query.Err() != nil {
+				continue
+			}
+			if current(query) != nil {
+				retired = true
+				cancel()
+				continue
+			}
+			candidate, statErr := files.root.Lstat("node-dns-cancel.json")
+			if errors.Is(statErr, os.ErrNotExist) {
+				continue
+			}
+			body, readErr := files.read("node-dns-cancel.json", 4096)
+			var cancelled routerVPNImportedDNSRequest
+			if statErr != nil || readErr != nil || !routerVPNMTUStrict(body, &cancelled) || cancelled != request {
+				retired = true
+			} else {
+				cancelInfo = candidate
+			}
+			cancel()
+		}
+	}
+	elapsed := time.Since(started)
+	if retired || parent.Err() != nil || current(parent) != nil {
+		return routerVPNExternalFailure
+	}
+	status := "passed"
+	if query.Err() != nil || cancelInfo != nil {
+		status = "cancelled"
+	} else if queryErr != nil || elapsed <= 0 {
+		status = "failed"
+	}
+	result := routerVPNImportedDNSResult{routerVPNImportedDNSRequest: request, Status: status,
+		Interface: owner.record.Interface, Index: owner.record.Index, ProvedAt: time.Now().UnixMilli(), Milliseconds: float64(elapsed.Nanoseconds()) / 1e6}
+	if files.publish("node-dns-result.json", result) != nil || current(parent) != nil {
+		return routerVPNExternalFailure
+	}
+	if cancelInfo != nil {
+		actual, err := files.root.Lstat("node-dns-cancel.json")
+		if err != nil || !os.SameFile(cancelInfo, actual) || files.root.Remove("node-dns-cancel.json") != nil {
+			return routerVPNExternalFailure
+		}
+	}
+	actual, err := files.root.Lstat("node-dns-request.json")
+	if err != nil || !os.SameFile(info, actual) || files.root.Remove("node-dns-request.json") != nil {
+		return routerVPNExternalFailure
+	}
+	*generation = request.Generation
+	return nil
+}

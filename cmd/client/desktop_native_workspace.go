@@ -273,6 +273,7 @@ func desktopRuntimeOwnedFile(name string) bool {
 		"node-source.json", "node-protection-transfer.json", "node-protection-retired.json", ".node-protection-retired.json.pending",
 		"node-physical-handoff-ready.json", ".node-physical-handoff-ready.json.pending", "node-physical-handoff-ack.json",
 		"node-ready.json", ".node-ready.json.pending",
+		"node-dns-request.json", ".node-dns-request.json.pending", "node-dns-cancel.json", ".node-dns-cancel.json.pending", "node-dns-result.json", ".node-dns-result.json.pending",
 		"external-journal-capture.json", "external-protection-transfer.json", "external-protection-retired.json", ".external-protection-retired.json.pending",
 		"node-mtu-request.json", "node-mtu-status.json", ".node-mtu-status.json.pending":
 		return true

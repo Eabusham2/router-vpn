@@ -85,10 +85,13 @@ func desktopNodePhysicalEnvironment(environment []string, launch *desktopNodeLau
 		switch strings.ToUpper(name) {
 		case "HOMEVPN_STANDARD_ENGINE", "HOMEVPN_ENDPOINT", "HOMEVPN_EXTERNAL_SESSION",
 			"HOMEVPN_NODE_SESSION", "HOMEVPN_NODE_CONFIG_SHA256",
-			"HOMEVPN_NATIVE_ENDPOINTS_JSON", "HOMEVPN_NATIVE_EGRESS_JSON":
+			"HOMEVPN_NATIVE_ENDPOINTS_JSON", "HOMEVPN_NATIVE_EGRESS_JSON", "HOMEVPN_NODE_PHYSICAL_REQUIRED":
 			continue
 		}
 		clean = append(clean, value)
+	}
+	if launch.importedEntry {
+		clean = append(clean, "HOMEVPN_NODE_PHYSICAL_REQUIRED=1")
 	}
 	return append(clean, "HOMEVPN_STANDARD_ENGINE=native", "HOMEVPN_ENDPOINT="+capture.primary,
 		"HOMEVPN_NODE_SESSION="+capture.session, "HOMEVPN_NODE_CONFIG_SHA256="+capture.configSHA256,

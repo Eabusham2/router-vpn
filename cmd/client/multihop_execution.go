@@ -178,13 +178,16 @@ func (s *desktopExecutionSession) Identity() string {
 	if capture := s.selection.Native; capture != nil && (g.EntryMode != capture.entryMode || g.SourceSHA != capture.source || capture.validate(s.selection) != nil) {
 		return ""
 	}
+	if s.selection.Native != nil && s.selection.Native.imported && !s.driver.a.nativeMultihopProofOwnerCurrent(s.selection, s.command) {
+		return ""
+	}
 	return s.generation
 }
 func (s *desktopExecutionSession) Verify(ctx context.Context) error {
 	if s.Identity() == "" {
 		return errors.New("candidate no longer owns its network/session")
 	}
-	if err := proveMultihopLaneNodeContext(ctx, s.selection.Entry, multihopEntryProofProxy); err != nil {
+	if err := proveNativeMultihopLaneContext(ctx, s.selection.Entry, multihopEntryProofProxy); err != nil {
 		return err
 	}
 	if s.Identity() == "" {
@@ -195,6 +198,12 @@ func (s *desktopExecutionSession) Verify(ctx context.Context) error {
 	}
 	if s.Identity() == "" {
 		return errors.New("exit proof completed for a retired candidate")
+	}
+	if s.selection.Native != nil && s.selection.Native.imported {
+		_, err := s.driver.a.proveImportedNativeDNS(ctx, s.selection, s.command)
+		if err != nil || ctx.Err() != nil || s.Identity() == "" {
+			return errors.New("imported path final DNS or retained owner was not proved")
+		}
 	}
 	return nil
 }
@@ -282,6 +291,9 @@ func (s *desktopExecutionSession) Close(ctx context.Context) error {
 func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candidate) (routechoice.Session, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
+	}
+	if d.selection.Entry.NodeKind == "external" && c.Execution != routechoice.Local {
+		return nil, errors.New("ordinary imported entry supports only explicit Local execution")
 	}
 	if c.EntryID != d.selection.Entry.ID || c.ExitID != d.selection.Exit.ID || physicalNetworkIdentity() != d.network {
 		return nil, errors.New("comparison node/network changed")

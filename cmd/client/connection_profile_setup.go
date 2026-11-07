@@ -206,6 +206,19 @@ func validateConnectionProfileSetupGraphLocked(a *app, q connectionProfileSetupR
 	if !q.MultihopEnabled {
 		return nil
 	}
+	entry, entryOK := a.profileByIDLocked(q.MultihopEntryID)
+	if entryOK && entry.NodeKind == "external" {
+		control, ok := a.profileByIDLocked(a.profiles.SelectedID)
+		if !ok || !retainedNativeMultihopSelected() {
+			return errors.New("imported entry profile requires the selected paired final and retained native desktop runtime")
+		}
+		_, err := resolveNativeMultihopSelection(control, a.profiles.Profiles, multihopConnectRequest{EntryID: q.MultihopEntryID, ExitID: q.MultihopExitID,
+			EntryMode: q.MultihopEntryMode, ExitMode: q.MultihopExitMode, Execution: q.MultihopExecution})
+		return err
+	}
+	if q.MultihopEntryMode != "" && !mobilemultihop.NodeMultihopEntryMode(q.MultihopEntryMode) {
+		return errPairedMultihopEntryMode
+	}
 	for _, id := range []string{q.MultihopEntryID, q.MultihopExitID} {
 		hop, ok := a.profileByIDLocked(id)
 		if !ok || strings.EqualFold(strings.TrimSpace(hop.NodeKind), "external") || hop.External != nil {
@@ -282,7 +295,11 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 	}
 	if err := validateConnectionProfileSetupGraphLocked(a, q); err != nil && !externalSelected {
 		a.mu.Unlock()
-		http.Error(w, err.Error(), http.StatusConflict)
+		status := http.StatusConflict
+		if errors.Is(err, errPairedMultihopEntryMode) {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	oldProfiles, err := loadConnectionProfileStore(a)

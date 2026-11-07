@@ -509,7 +509,10 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 			}
 			for _, id := range []string{p.MultihopEntryID, p.MultihopExitID} {
 				hop, exists := a.profileByIDLocked(id)
-				if !exists || strings.EqualFold(strings.TrimSpace(hop.NodeKind), "external") || hop.External != nil {
+				importedEntry := exists && id == p.MultihopEntryID && p.MultihopExitID == node.ID && retainedNativeMultihopSelected() &&
+					hop.NodeKind == "external" && hop.External != nil && desktopImportedEntryProtocol(hop.External.Protocol) &&
+					(p.MultihopEntryMode == "" || p.MultihopEntryMode == hop.External.Protocol)
+				if !exists || !importedEntry && (strings.EqualFold(strings.TrimSpace(hop.NodeKind), "external") || hop.External != nil) {
 					http.Error(w, "saved multihop profile references a missing or non-Router VPN hop", http.StatusConflict)
 					return
 				}
@@ -526,6 +529,12 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
+	}
+	if entry, exists := a.profileByIDLocked(updated.MultihopEntryID); updated.MultihopEnabled && exists && entry.NodeKind == "external" {
+		if _, captured := hopUpdates[entry.ID]; !captured {
+			http.Error(w, "saved imported path lost its independently captured entry policy", http.StatusConflict)
+			return
+		}
 	}
 	old := cloneRouterProfileStore(a.profiles)
 	oldState := a.state

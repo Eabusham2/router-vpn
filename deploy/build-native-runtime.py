@@ -109,6 +109,7 @@ def inputs():
                              ROOT/'deploy/test_windows_build_owner.py',
                              ROOT/'deploy/test_desktop_pt_inventory.py',
                              ROOT/'deploy/test_desktop_pt_inventory_runner.py',
+                             ROOT/'deploy/test_desktop_imported_runtime.py',
                              ROOT/'deploy/build-mobile-pq.py', ROOT/'deploy/prepare-desktop-rosenpass.py',
                              ROOT/'deploy/setup-desktop-native-toolchain.py',
                              ROOT/'deploy/install-desktop-windows-toolchain.py',
@@ -546,6 +547,147 @@ def verify_linux_standard_configs(bundle, env):
             run([binary, 'check', '-c', Path(directory)/name], env=env, timeout=20)
     print('Native retained standard engine: all eighteen captured stock protocol/device graphs accepted by the actual built core', flush=True)
 
+
+IMPORTED_DESKTOP_GRAPH_TEST = 'TestDesktopImportedNativeCaptureExactGraphAndPhysicalSockets'
+IMPORTED_DESKTOP_LAYER_TEST = 'TestDesktopImportedExplicitLocalPreservesSavedExecutionAndLayers'
+IMPORTED_DESKTOP_LIFECYCLE_TEST = 'TestDesktopImportedDailyConnectRestoreAndOwnedTeardown'
+IMPORTED_DESKTOP_DNS_ROOTS = ('TestDesktopImportedDNSReceiptAdmission',
+    'TestDesktopImportedDNSCancellationWaitsForNativeJoin',
+    'TestDesktopImportedDNSCannotUseSuccessfulOSLookup',
+    'TestDesktopImportedDNSAtomicPublicationAndFreshHeartbeat')
+IMPORTED_DESKTOP_DNS_CASES = ('success', 'dns-failed', 'reader', 'source', 'owner', 'old-receipt')
+IMPORTED_NATIVE_DNS_ROOTS = ('TestRouterVPNImportedDNSMailbox',
+    'TestRouterVPNImportedDNSCancellationJoins', 'TestRouterVPNImportedDNSNativeRouterIsUncached')
+IMPORTED_NATIVE_DNS_CASES = ('success', 'dns-failed', 'session', 'config', 'path', 'reader',
+    'deadline', 'replay', 'source-replaced', 'owner-replaced')
+IMPORTED_NATIVE_DNS_PACKAGE = 'github.com/sagernet/sing-box/cmd/sing-box'
+IMPORTED_DESKTOP_LAYERS = ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
+IMPORTED_DESKTOP_PAIRS = tuple((entry, final) for entry in ('shadowsocks','hysteria2')
+    for final in ('shadowsocks','reality-vision','hysteria2','wg','awg2-fast','awg2-strong')) + tuple(
+    (entry, final) for entry in ('socks5','http-connect','https-connect') for final in ('shadowsocks','reality-vision'))
+IMPORTED_DESKTOP_FILES = {entry+'--'+final+'.json' for entry,final in IMPORTED_DESKTOP_PAIRS
+                          if (entry,final) != ('socks5','shadowsocks')} | {
+    'layers-'+entry+'--'+final+'.json' for entry in IMPORTED_DESKTOP_LAYERS for final in IMPORTED_DESKTOP_LAYERS}
+
+
+def native_host_target():
+    return platform.system().lower()+'/'+{
+        'x86_64':'amd64', 'amd64':'amd64', 'aarch64':'arm64', 'arm64':'arm64'}.get(platform.machine().lower(),'')
+
+
+def imported_desktop_verdicts(target):
+    roots = (IMPORTED_DESKTOP_GRAPH_TEST, IMPORTED_DESKTOP_LAYER_TEST, *IMPORTED_DESKTOP_DNS_ROOTS)
+    expected = set(roots)
+    expected.update(IMPORTED_DESKTOP_DNS_ROOTS[0]+'/'+case for case in IMPORTED_DESKTOP_DNS_CASES)
+    expected.update(IMPORTED_DESKTOP_GRAPH_TEST+'/'+entry+'/'+final for entry,final in IMPORTED_DESKTOP_PAIRS)
+    expected.update(IMPORTED_DESKTOP_LAYER_TEST+'/'+execution+'/'+entry+'/'+final
+                    for execution in ('local','server','auto')
+                    for entry in IMPORTED_DESKTOP_LAYERS for final in IMPORTED_DESKTOP_LAYERS)
+    if target.startswith('linux/'):
+        roots += (IMPORTED_DESKTOP_LIFECYCLE_TEST,)
+        expected.update((IMPORTED_DESKTOP_LIFECYCLE_TEST, *(IMPORTED_DESKTOP_LIFECYCLE_TEST+'/'+fault
+            for fault in ('success','public-proof','source-replaced'))))
+    return roots, expected
+
+
+def verify_imported_desktop_verdicts(output, target):
+    _, expected = imported_desktop_verdicts(target)
+    verify_imported_native_verdicts(output, 'router-vpn/cmd/client', expected)
+
+
+def imported_native_dns_verdicts():
+    return set(IMPORTED_NATIVE_DNS_ROOTS) | {IMPORTED_NATIVE_DNS_ROOTS[0]+'/'+case for case in IMPORTED_NATIVE_DNS_CASES}
+
+
+def verify_imported_native_verdicts(output, package, expected):
+    started, passed, active = set(), set(), set()
+    package_start = package_pass = 0
+    for line in output.splitlines():
+        event = json.loads(line, object_pairs_hook=unique_object)
+        if not isinstance(event,dict):
+            raise ValueError('Malformed imported desktop native verdict')
+        action, name = event.get('Action'), event.get('Test')
+        if 'WARNING: DATA RACE' in str(event.get('Output','')):
+            raise ValueError('Imported desktop native proof contains a data race')
+        if action == 'build-output':
+            if set(event) != {'ImportPath','Action','Output'} or not isinstance(event['ImportPath'],str) or not event['ImportPath'].strip() or not isinstance(event['Output'],str) or not event['Output']:
+                raise ValueError('Malformed imported desktop compiler output')
+            if package_pass:
+                raise ValueError('Imported desktop compiler output followed package completion')
+            continue
+        if event.get('Package') != package or action in ('fail','skip','build-fail') or package_pass:
+            raise ValueError('Imported desktop native proof failed, skipped or changed package')
+        if name is not None and (not isinstance(name,str) or name not in expected):
+            raise ValueError('Imported desktop verdict moved outside its exact inventory')
+        if action == 'start' and name is None:
+            if package_start:
+                raise ValueError('Imported desktop package duplicated its start')
+            package_start += 1
+        elif action == 'run' and name is not None:
+            ancestors = {candidate for candidate in expected if name.startswith(candidate+'/')}
+            if name in started or not package_start or not ancestors.issubset(active):
+                raise ValueError('Duplicate or late imported desktop case')
+            started.add(name); active.add(name)
+        elif action == 'pass':
+            if name is None:
+                if active or passed != expected or not package_start:
+                    raise ValueError('Imported desktop package passed before original cases joined')
+                package_pass += 1
+            else:
+                children = {candidate for candidate in expected if candidate.startswith(name+'/')}
+                if name not in active or name in passed or not children.issubset(passed):
+                    raise ValueError('Imported desktop case passed without its original run')
+                active.remove(name); passed.add(name)
+        elif action in ('output','pause','cont'):
+            if not package_start or name is not None and name not in active or action != 'output' and name is None:
+                raise ValueError('Imported desktop output has no active original owner')
+        else:
+            raise ValueError('Unknown imported desktop native event')
+    if started != expected or passed != expected or active or package_start != 1 or package_pass != 1:
+        raise ValueError('Imported desktop native proof requires every exact original verdict once')
+
+
+def verify_imported_desktop_native_dns(source, target, env):
+    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
+        raise ValueError('Imported native DNS gate requires the matching prepared native host')
+    # This is the same production package and complete build-tag selection as
+    # the command gate immediately before it, including the verified PQ archive.
+    command = ['go', 'test', '-json', *([] if target == 'windows/arm64' else ['-race']),
+        '-mod=readonly', '-tags='+','.join(tags(target)), '-ldflags=-checklinkname=0',
+        './cmd/sing-box', '-run', '^('+'|'.join(IMPORTED_NATIVE_DNS_ROOTS)+')$', '-count=1', '-timeout=60s']
+    output = run(command, cwd=source, env=env, timeout=300)
+    verify_imported_native_verdicts(output, IMPORTED_NATIVE_DNS_PACKAGE, imported_native_dns_verdicts())
+
+
+def verify_imported_desktop_configs(bundle, target, env):
+    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
+        raise ValueError('Imported desktop native gate requires its matching complete bundle')
+    bundle = Path(bundle).absolute()
+    original_bundle = reuse(bundle, target, env=env)
+    roots, _ = imported_desktop_verdicts(target)
+    with tempfile.TemporaryDirectory(prefix='routervpn-imported-desktop-') as directory:
+        fixtures = Path(directory)
+        child = {**env, 'ROUTERVPN_IMPORTED_DESKTOP_FIXTURES':directory}
+        if target.startswith('linux/'):
+            child['ROUTERVPN_REQUIRE_IMPORTED_DESKTOP_LIFECYCLE'] = '1'
+        command = ['go','test','-json', *([] if target == 'windows/arm64' else ['-race']),
+                   './cmd/client','-run','^('+'|'.join(roots)+')$','-count=1','-timeout=60s']
+        output = run(command, cwd=ROOT, env=child, timeout=300)
+        verify_imported_desktop_verdicts(output, target)
+        if {path.name for path in fixtures.iterdir()} != IMPORTED_DESKTOP_FILES:
+            raise ValueError('Imported desktop lost its exact twenty-six original graphs')
+        captured = {name:regular(fixtures/name,4<<20) for name in IMPORTED_DESKTOP_FILES}
+        for name in sorted(captured):
+            if regular(fixtures/name,4<<20) != captured[name]:
+                raise ValueError('Imported desktop graph changed before actual native parsing')
+            run([bundle/binary_name(target),'check','-c',fixtures/name],env=env,timeout=20)
+        if {path.name for path in fixtures.iterdir()} != IMPORTED_DESKTOP_FILES or any(regular(fixtures/name,4<<20) != raw for name,raw in captured.items()):
+            raise ValueError('Imported desktop original graph changed during native parsing')
+    if reuse(bundle,target,env=env) != original_bundle:
+        raise ValueError('Completed native bundle changed during imported desktop proof')
+    print('Native imported desktop: all26 original graphs accepted by the complete built engine; exact captured-controller verdicts passed. Physical-device acceptance remains separate.',flush=True)
+
+
 def verify_linux_stock_dns(bundle, target, env):
     host = 'linux/'+{'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), '')
     if platform.system() != 'Linux' or target != host or env.get('GOOS') != 'linux' or env.get('GOARCH') != target.split('/')[1]:
@@ -695,6 +837,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
         elif platform.system() == 'Linux' and target == 'linux/'+{'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), ''):
             verify_linux_stock_dns(destination, target, env)
             DNSSEC.test_native_bundle(destination, target, env)
+        if target == native_host_target():
+            verify_imported_desktop_configs(destination, target, env)
         print('Reused verified complete native runtime '+target, flush=True)
         return destination
     if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:
@@ -756,6 +900,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './cmd/sing-box', '-run', '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
+            verify_imported_desktop_native_dns(source, target, env)
             run([sys.executable, ROOT/'deploy/test_desktop_pt_inventory.py', source,
                  '--tags='+','.join(tags(target)), *(['--without-race'] if not race else [])],
                 cwd=source, env=env, timeout=600)
@@ -928,6 +1073,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             help_output = run([binary, 'routervpn-external', '--help'], env=env, timeout=20)
             if '--runtime-dir' not in help_output or '--session' not in help_output:
                 raise ValueError('Actual native engine omitted its captured external owner command')
+            verify_imported_desktop_configs(stage, target, env)
             if target.startswith('linux/'):
                 verify_installed_linux_host(source, stage, target, env)
             elif target.startswith('darwin/'):

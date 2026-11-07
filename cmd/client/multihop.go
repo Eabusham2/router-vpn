@@ -52,6 +52,8 @@ type multihopNodeSummary struct {
 	Location        string  `json:"location,omitempty"`
 	Endpoint        string  `json:"endpoint,omitempty"`
 	BaseTunnel      string  `json:"base_tunnel,omitempty"`
+	NodeKind        string  `json:"node_kind,omitempty"`
+	Protocol        string  `json:"protocol,omitempty"`
 	Latitude        float64 `json:"latitude,omitempty"`
 	Longitude       float64 `json:"longitude,omitempty"`
 	LatencyMedianMs float64 `json:"latency_median_ms,omitempty"`
@@ -60,14 +62,15 @@ type multihopNodeSummary struct {
 }
 
 type activeMultihopGraph struct {
-	Execution string
-	EntryID   string
-	ExitID    string
-	Base      string
-	EntryMode string
-	SourceSHA string
-	ExitMode  string
-	Started   time.Time
+	Execution     string
+	EntryID       string
+	ExitID        string
+	Base          string
+	EntryMode     string
+	SourceSHA     string
+	ImportedEntry bool
+	ExitMode      string
+	Started       time.Time
 }
 
 var activeMultihopGraphs sync.Map
@@ -78,6 +81,7 @@ func setActiveMultihopGraph(a *app, sel multihopSelection) {
 	}
 	if sel.Native != nil {
 		graph.EntryMode, graph.SourceSHA = sel.Native.entryMode, sel.Native.source
+		graph.ImportedEntry = sel.Native.imported
 	}
 	activeMultihopGraphs.Store(a, graph)
 	homeExitProofs.Delete(a)
@@ -122,9 +126,14 @@ func profileByID(profiles []common.RouterProfile, id string) (common.RouterProfi
 func multihopNodeSummaries(profiles []common.RouterProfile) []multihopNodeSummary {
 	out := make([]multihopNodeSummary, 0, len(profiles))
 	for _, p := range profiles {
+		protocol := ""
+		if p.External != nil {
+			protocol = p.External.Protocol
+		}
 		out = append(out, multihopNodeSummary{
 			ID: p.ID, ProfileToken: publicProfileToken(p), Name: p.Name, Location: p.Location, Endpoint: p.Endpoint,
 			BaseTunnel: p.BaseTunnel, Latitude: p.Latitude, Longitude: p.Longitude,
+			NodeKind: p.NodeKind, Protocol: protocol,
 			LatencyMedianMs: p.LatencyMedianMs, LatencyTrimmed: p.LatencyTrimmedMeanMs,
 			LatencyP90Ms: p.LatencyP90Ms,
 		})

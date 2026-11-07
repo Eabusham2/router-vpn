@@ -98,7 +98,7 @@ public sealed class ProfileModeOwner {
     }
     $MultihopExitModeCombo=$Owner.FindName('UnifiedExitMode');$execution=$Owner.FindName('UnifiedExecution')
     $MultihopEntryModeCombo=$Owner.FindName('UnifiedEntryMode');$MultihopEntryModeCombo.SelectedIndex=0
-    $ExpectedEntries=@('','wg','awg2-fast','awg2-strong','wg-pq','awg2-pq','shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','ss-v2ray','split','max','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg')
+    $ExpectedEntries=@('','wg','awg2-fast','awg2-strong','wg-pq','awg2-pq','shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','ss-v2ray','split','max','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg','socks5','http-connect','https-connect')
     Check ((@($MultihopEntryModeCombo.Items|ForEach-Object{$_.Tag})-join',')-ceq($ExpectedEntries-join',')) 'Generated entry choices changed or disappeared'
     $ExpectedModes=@('shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','wg','awg2-fast','awg2-strong','ss-v2ray','split','max','wg-pq','awg2-pq','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg')
     $ExpectedExecutions=@('local','server','auto')

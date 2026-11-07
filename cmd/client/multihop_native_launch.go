@@ -48,6 +48,9 @@ func compileRetainedNativeMultihopLaunch(sel multihopSelection, descriptor *desk
 	data := []byte(raw)
 	execution := "local"
 	if descriptor != nil {
+		if sel.Native.imported {
+			return nil, errors.New("ordinary imported entry cannot authorize Server or Compare execution")
+		}
 		// The exact authenticated Server graph is finalized before staging's
 		// source digest/session. No post-staging rewrite can bypass that owner.
 		data, err = compileDesktopExecutionConfig(data, *descriptor, sel)
@@ -108,7 +111,7 @@ func compileRetainedNativeMultihopLaunch(sel multihopSelection, descriptor *desk
 		clear(data)
 		return nil, err
 	}
-	return &desktopNodeLaunch{root: sel.Native.root, endpoint: physical.String(), profileID: sel.Exit.ID, policyProfileID: sel.Control.ID, mode: sel.ExitMode, config: data, metadata: metadata,
+	return &desktopNodeLaunch{root: sel.Native.root, endpoint: physical.String(), profileID: sel.Exit.ID, policyProfileID: sel.Control.ID, mode: sel.ExitMode, config: data, metadata: metadata, importedEntry: sel.Native.imported,
 		nodePhysicalEgress: append([]mobilemultihop.PhysicalEgress(nil), sel.Native.entryPhysical...)}, nil
 }
 
@@ -198,7 +201,7 @@ func preflightOwnedNativeMultihopCommandContext(ctx context.Context, a *app, sel
 // Called only after the previous runtime has drained. Preflight is separate so
 // an invalid native graph never requires stopping a usable connection first.
 func stageOwnedNativeMultihopCommand(a *app, sel multihopSelection, launch *desktopNodeLaunch) error {
-	if launch == nil || sel.Native == nil || sel.Native.validate(sel) != nil || launch.profileID != sel.Exit.ID || launch.policyProfileID != sel.Control.ID || launch.endpoint != sel.Native.endpoint {
+	if launch == nil || sel.Native == nil || sel.Native.validate(sel) != nil || launch.profileID != sel.Exit.ID || launch.policyProfileID != sel.Control.ID || launch.endpoint != sel.Native.endpoint || launch.importedEntry != sel.Native.imported {
 		return errors.New("native multihop source changed before staging")
 	}
 	if err := stageDesktopNodeLaunch(a, launch); err != nil {
@@ -207,7 +210,7 @@ func stageOwnedNativeMultihopCommand(a *app, sel multihopSelection, launch *desk
 	// The physical connection and firewall belong to ENTRY and CONTROL,
 	// respectively. The shared node launch's profile identity remains EXIT.
 	launch.command.Env = nativeNodeMTUEnvironment(nativeMultihopEnvironment(launch.root, sel), launch.mtuSession, launch.configSHA256)
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" || launch.importedEntry {
 		var err error
 		launch.command.Env, err = desktopNodePhysicalEnvironment(launch.command.Env, launch)
 		if err != nil {
@@ -259,7 +262,7 @@ func retireUnstartedNativeMultihop(launch *desktopNodeLaunch) error {
 }
 
 func sameMTUMultihopGraph(left, right activeMultihopGraph) bool {
-	return sameActiveMultihopGraph(left, right) && left.Execution == right.Execution && left.EntryMode == right.EntryMode && left.SourceSHA == right.SourceSHA
+	return sameActiveMultihopGraph(left, right) && left.Execution == right.Execution && left.EntryMode == right.EntryMode && left.SourceSHA == right.SourceSHA && left.ImportedEntry == right.ImportedEntry
 }
 
 func retireNativeMultihopGraph(a *app, launch *desktopNodeLaunch) {

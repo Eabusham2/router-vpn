@@ -11,9 +11,10 @@ import (
 )
 
 type activeDNSRuntimeIdentity struct {
-	ProfileID string
-	RuntimeID string
-	Config    string
+	ProfileID     string
+	RuntimeID     string
+	Config        string
+	ImportedEntry bool
 }
 
 var activeDNSRuntimeIdentities sync.Map // map[*app]activeDNSRuntimeIdentity
@@ -42,6 +43,10 @@ func runtimeConfigUnderPrivateRun(a *app, path string) (string, error) {
 }
 
 func registerActiveDNSRuntimeConfig(a *app, profileID, runtimeID, configPath string) error {
+	return registerActiveDNSRuntimeConfigKind(a, profileID, runtimeID, configPath, false)
+}
+
+func registerActiveDNSRuntimeConfigKind(a *app, profileID, runtimeID, configPath string, imported bool) error {
 	profileID = strings.TrimSpace(profileID)
 	runtimeID = strings.TrimSpace(runtimeID)
 	if !validProfileID(profileID) {
@@ -54,7 +59,7 @@ func registerActiveDNSRuntimeConfig(a *app, profileID, runtimeID, configPath str
 	if err != nil {
 		return err
 	}
-	activeDNSRuntimeIdentities.Store(a, activeDNSRuntimeIdentity{ProfileID: profileID, RuntimeID: runtimeID, Config: configPath})
+	activeDNSRuntimeIdentities.Store(a, activeDNSRuntimeIdentity{ProfileID: profileID, RuntimeID: runtimeID, Config: configPath, ImportedEntry: imported})
 	return nil
 }
 

@@ -28,6 +28,7 @@ func(fixtureTUN)Type()string{return "tun"}
 func(fixtureTUN)Tag()string{return "tun-in"}
 type fixtureBox struct{native *NativeTun;owner *routerVPNNodeMTU}
 func(b *fixtureBox)Inbound()*fixtureBox{return b}
+func(*fixtureBox)RouterVPNStrategyDNSProofContext(context.Context)error{panic("heartbeat fixture has no selected DNS request")}
 func fixtureInboundsContext(ctx context.Context,b *fixtureBox)([]fixtureInbound,error){return []fixtureInbound{fixtureTUN{}},ctx.Err()}
 type fixturePhysical struct{}
 func(*fixturePhysical)CurrentContext(ctx context.Context)error{return ctx.Err()}
@@ -45,6 +46,7 @@ func newRouterVPNNodeMTUContext(ctx context.Context,b *routerVPNNodeMTUBox,_,_,_
  o:=&routerVPNNodeMTU{native:b.instance.native,guard:guard};b.instance.owner=o;return o,guard(ctx)
 }
 func(o *routerVPNNodeMTU)currentContext(ctx context.Context)error{return o.guard(ctx)}
+func routerVPNConsumeImportedDNS(context.Context,*routerVPNExternalFiles,*routerVPNNodeMTU,*uint64,func(context.Context)error)error{return nil}
 func(*routerVPNNodeMTU)expire(time.Time)error{return nil}
 func(*routerVPNNodeMTU)command(routerVPNNodeMTUCommand)error{return errors.New("unexpected command")}
 func(o *routerVPNNodeMTU)DesktopNetworkReceiptContext(ctx context.Context)(string,error){raw,err:=o.native.RouterVPNDesktopNetworkReceiptContext(ctx);o.last=err;return raw,err}

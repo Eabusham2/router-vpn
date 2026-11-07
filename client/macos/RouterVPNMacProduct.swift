@@ -28,6 +28,9 @@ enum RouterVPNNodeEntryModes {
         ("max-tls-awg", "MAX TLS / AWG + PQ"),
         ("max-quic-wg", "MAX QUIC / WG + PQ"),
         ("max-quic-awg", "MAX QUIC / AWG + PQ"),
+        ("socks5", "Imported SOCKS5 · Local only"),
+        ("http-connect", "Imported HTTP CONNECT · Local only"),
+        ("https-connect", "Imported HTTPS CONNECT · Local only"),
     ]
     static func id(at index: Int) -> String? {
         choices.indices.contains(index) ? choices[index].id : nil
@@ -393,7 +396,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     }
     func advancedView() -> NSView {
         let s = NSStackView(); s.orientation = .vertical; s.spacing = 10; s.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        let note = NSTextField(wrappingLabelWithString: "Real multihop uses the captured entry mode and exit transport. External hops use the validated external-connect path in Nodes & Map. MTU opens a live progress panel for this connected path, with reported candidate measurements and cancellation that waits for rollback."); note.textColor = .secondaryLabelColor; s.addArrangedSubview(note)
+        let note = NSTextField(wrappingLabelWithString: "For an imported entry, select the paired final as the main node, choose Local and the entry's original protocol (or Use saved entry mode). Compatible SOCKS5, SS2022, Hysteria2 and HTTP(S) CONNECT entries use the paired final's DNS and identity. Unsupported graphs stay unavailable. MTU progress and cancellation belong to the connected path."); note.textColor = .secondaryLabelColor; s.addArrangedSubview(note)
         let selectors = NSStackView(); selectors.orientation = .horizontal; selectors.spacing = 8
         let entry = NSStackView(); entry.orientation = .vertical; entry.addArrangedSubview(label("Entry node")); entry.addArrangedSubview(multihopEntryPopup)
         let exit = NSStackView(); exit.orientation = .vertical; exit.addArrangedSubview(label("Exit node")); exit.addArrangedSubview(multihopExitPopup)

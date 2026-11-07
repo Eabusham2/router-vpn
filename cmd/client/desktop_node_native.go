@@ -36,6 +36,10 @@ type desktopNodeLaunch struct {
 	policyProfileID            string
 	nodePhysicalEgress         []mobilemultihop.PhysicalEgress
 	nodePhysicalCapture        *desktopNodePhysicalCapture
+	importedEntry              bool
+	importedDNSMu              sync.Mutex
+	importedDNSLast            string
+	importedDNSGeneration      uint64
 	ownedNode                  *desktopOwnedNodeRuntime
 	external                   *desktopExternalRuntime
 	tor                        *desktopTorRuntime
@@ -302,7 +306,7 @@ func desktopNativeEnvironmentForPackage(environment []string, root, profile, end
 	for _, entry := range result {
 		name, _, _ := strings.Cut(entry, "=")
 		name = strings.ToUpper(name)
-		if strings.HasPrefix(name, "HOMEVPN_EXTERNAL_PHYSICAL_") || name == "HOMEVPN_STANDARD_ENGINE" || name == "HOMEVPN_ROOT" || name == "HOMEVPN_PROFILE_ID" || name == "HOMEVPN_POLICY_PROFILE_ID" || name == "HOMEVPN_ENDPOINT" || name == "HOMEVPN_NATIVE_ENDPOINTS_JSON" || name == "HOMEVPN_NATIVE_EGRESS_JSON" || name == "HOMEVPN_NODE_SESSION" || name == "HOMEVPN_NODE_CONFIG_SHA256" {
+		if strings.HasPrefix(name, "HOMEVPN_EXTERNAL_PHYSICAL_") || name == "HOMEVPN_STANDARD_ENGINE" || name == "HOMEVPN_ROOT" || name == "HOMEVPN_PROFILE_ID" || name == "HOMEVPN_POLICY_PROFILE_ID" || name == "HOMEVPN_ENDPOINT" || name == "HOMEVPN_NATIVE_ENDPOINTS_JSON" || name == "HOMEVPN_NATIVE_EGRESS_JSON" || name == "HOMEVPN_NODE_SESSION" || name == "HOMEVPN_NODE_CONFIG_SHA256" || name == "HOMEVPN_NODE_PHYSICAL_REQUIRED" {
 			continue
 		}
 		clean = append(clean, entry)
@@ -429,7 +433,7 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) (resultErr error)
 	if launch.external != nil && launch.external.physical != nil {
 		endpoint = "" // The native owner grants sockets; no endpoint-wide allow rule.
 	}
-	if runtime.GOOS == "windows" && launch.external == nil && launch.ownedNode == nil {
+	if (runtime.GOOS == "windows" || launch.importedEntry) && launch.external == nil && launch.ownedNode == nil {
 		capture, err := captureDesktopNodePhysical(launch)
 		if err != nil {
 			return err
@@ -502,7 +506,7 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) (resultErr error)
 	cmd.Env = desktopNativeEnvironment(os.Environ(), root, launch.profileID, endpoint)
 	if launch.external == nil {
 		cmd.Env = nativeNodeMTUEnvironment(cmd.Env, launch.mtuSession, configSHA256)
-		if runtime.GOOS == "windows" {
+		if runtime.GOOS == "windows" || launch.importedEntry {
 			cmd.Env, err = desktopNodePhysicalEnvironment(cmd.Env, launch)
 			if err != nil {
 				return err

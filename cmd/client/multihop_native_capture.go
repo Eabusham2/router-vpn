@@ -33,9 +33,13 @@ type nativeMultihopCapture struct {
 	localPQIdentity                                          map[string]string
 	failures                                                 map[string]error
 	assets                                                   []viaEntryAsset
+	imported                                                 bool
 }
 
 func captureNativeMultihopSelection(ctx context.Context, root string, sel multihopSelection, modes []string, lookup applexray.Lookup) (multihopSelection, error) {
+	if sel.Entry.NodeKind == "external" {
+		return captureDesktopImportedMultihop(ctx, root, sel, modes, lookup)
+	}
 	if ctx == nil || ctx.Err() != nil || (sel.Base != "wg" && sel.Base != "awg" && sel.Base != "native") {
 		return sel, errors.New("native multihop requires a current captured entry selection")
 	}
@@ -227,7 +231,35 @@ func captureNativeMultihopForAppContext(parent context.Context, a *app, sel mult
 func (a *app) proveNativeMultihop(sel multihopSelection, command *exec.Cmd) error {
 	ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), nativeMultihopProofTimeout(sel))
 	defer cancel()
-	return proveNativeMultihopCapture(ctx, sel, func() bool { return a.ownsConnectionRuntime(command) }, proveMultihopLaneNodeContext)
+	current := func() bool { return a.nativeMultihopProofOwnerCurrent(sel, command) }
+	if err := proveNativeMultihopCapture(ctx, sel, current, proveNativeMultihopLaneContext); err != nil {
+		return err
+	}
+	if sel.Native.imported {
+		// Both transport identities are now proved, but public Connected is
+		// still false. Only the retained Box's uncached selected DNS query can
+		// admit this path; an OS resolver or a cached lookup supplies no proof.
+		if _, err := a.proveImportedNativeDNS(ctx, sel, command); err != nil {
+			return err
+		}
+	}
+	if ctx.Err() != nil || !current() {
+		return errors.New("native multihop proof completed for a retired source or runtime")
+	}
+	return nil
+}
+
+func (a *app) nativeMultihopProofOwnerCurrent(sel multihopSelection, command *exec.Cmd) bool {
+	if !a.ownsConnectionRuntime(command) || sel.Native == nil {
+		return false
+	}
+	if !sel.Native.imported {
+		return true
+	}
+	a.mu.Lock()
+	selected := a.profiles.SelectedID == sel.Control.ID
+	a.mu.Unlock()
+	return selected && nativeMultihopLiveProfilesCurrent(a, sel) && sel.Native.validate(sel) == nil
 }
 
 func proveNativeMultihopCapture(ctx context.Context, sel multihopSelection, owns func() bool, prove func(context.Context, common.RouterProfile, string) error) error {
@@ -264,6 +296,14 @@ func nativeMultihopProofConfig(config string, entry common.RouterProfile) (strin
 		return "", "", errors.New("captured native multihop graph is invalid")
 	}
 	ins, ok := graph["inbounds"].([]any)
+	imported := entry.NodeKind == "external" && entry.External != nil
+	if imported && ok && len(ins) == 2 {
+		proof, valid := ins[1].(map[string]any)
+		if !valid || len(proof) != 4 || proof["type"] != "mixed" || proof["tag"] != "routervpn-proof" || proof["listen"] != "127.0.0.1" || proof["listen_port"] != float64(1099) {
+			return "", "", errors.New("imported final proof listener differs from its compiler owner")
+		}
+		ins = ins[:1]
+	}
 	if !ok || len(ins) != 1 {
 		return "", "", errors.New("native multihop must own one full-device interface")
 	}
@@ -272,9 +312,15 @@ func nativeMultihopProofConfig(config string, entry common.RouterProfile) (strin
 		return "", "", errors.New("native multihop interface is not protected")
 	}
 	alias := nativeMultihopTUNAlias(tun, runtime.GOOS)
-	private, err := nativeEntryPrivateOutbound(entry.SocksHost, entry.SocksPort, entry.SocksUsername, entry.SocksPassword)
-	if err != nil {
-		return "", "", err
+	entryProofTag := "entry-wg"
+	var private map[string]any
+	if !imported {
+		var err error
+		private, err = nativeEntryPrivateOutbound(entry.SocksHost, entry.SocksPort, entry.SocksUsername, entry.SocksPassword)
+		if err != nil {
+			return "", "", err
+		}
+		entryProofTag = "entry-private"
 	}
 	outs, ok := graph["outbounds"].([]any)
 	if !ok {
@@ -294,13 +340,15 @@ func nativeMultihopProofConfig(config string, entry common.RouterProfile) (strin
 	if !ok {
 		return "", "", errors.New("native multihop policy routes are missing")
 	}
-	graph["outbounds"] = append(outs, private)
+	if !imported {
+		graph["outbounds"] = append(outs, private)
+	}
 	graph["inbounds"] = append(ins,
 		map[string]any{"type": "mixed", "tag": "multihop-entry-proof", "listen": "127.0.0.1", "listen_port": nativeMultihopEntryProofPort},
 		map[string]any{"type": "mixed", "tag": "multihop-proof", "listen": "127.0.0.1", "listen_port": nativeMultihopExitProofPort},
 	)
 	route["rules"] = append([]any{
-		map[string]any{"inbound": []any{"multihop-entry-proof"}, "outbound": "entry-private"},
+		map[string]any{"inbound": []any{"multihop-entry-proof"}, "outbound": entryProofTag},
 		map[string]any{"inbound": []any{"multihop-proof"}, "outbound": "proxy"},
 	}, rules...)
 	body, err := json.Marshal(graph)

@@ -95,6 +95,9 @@ static const struct { const char *id; const char *label; } linux_multihop_entrie
     {"ss-v2ray", "SS/V2Ray"}, {"split", "Split"}, {"max", "MAX"},
     {"max-tls-wg", "Complete MAX TLS / WG"}, {"max-tls-awg", "Complete MAX TLS / AWG"},
     {"max-quic-wg", "Complete MAX QUIC / WG"}, {"max-quic-awg", "Complete MAX QUIC / AWG"},
+    {"socks5", "Imported SOCKS5 - Local only"},
+    {"http-connect", "Imported HTTP CONNECT - Local only"},
+    {"https-connect", "Imported HTTPS CONNECT - Local only"},
 };
 
 static gboolean linux_multihop_entry_supported_v23(const char *mode) {
@@ -124,6 +127,7 @@ static gboolean linux_multihop_entry_advertised_v23(JsonArray *catalog, const ch
 }
 
 static void linux_multihop_entry_choices_v23(GtkWidget *combo, JsonArray *catalog, const char *selected) {
+    gtk_widget_set_tooltip_text(combo, "Imported entries require Local execution and the paired final selected as the main node. Choose the original import protocol or Use saved graph mode. Compatible paths retain the final DNS and proof; unsupported graphs remain unavailable.");
     gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(combo));
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), "", "Use saved graph mode / entry base");
     for (guint i = 0; i < G_N_ELEMENTS(linux_multihop_entries_v23); i++) {

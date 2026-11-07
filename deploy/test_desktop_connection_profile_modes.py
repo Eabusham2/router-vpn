@@ -179,7 +179,7 @@ settings.name.stringValue = "Saved \"whole\" path"
 let toggle = NSButton(); toggle.identifier = NSView.Identifier(rawValue: "unified-multihop-toggle")
 owner.window?.contentView?.subviews = [toggle]
 let selectedID = "private-node", entryID = "entry \"private\"", exitID = "exit \"private\""
-let expectedEntries = ["", "wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "ss-v2ray", "split", "max", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"]
+let expectedEntries = ["", "wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "ss-v2ray", "split", "max", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "socks5", "http-connect", "https-connect"]
 check(RouterVPNNodeEntryModes.choices.map { $0.id } == expectedEntries, "entry mode catalog changed or reduced")
 let sourceTokens = [selectedID: String(repeating: "a", count: 64), entryID: String(repeating: "b", count: 64), exitID: String(repeating: "c", count: 64)]
 @MainActor func catalogRows(_ ids: [String], tokens: [String: String] = sourceTokens) -> [[String: Any]] {

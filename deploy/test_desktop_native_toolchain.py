@@ -38,6 +38,19 @@ def file(path, data=b'tool', executable=False):
     return path
 
 
+def imported_native_dns_output():
+    """Model only the already separately tested native runner boundary."""
+    package = N.IMPORTED_NATIVE_DNS_PACKAGE
+    rows = [{'Package': package, 'Action': 'start'}]
+    names = N.imported_native_dns_verdicts()
+    for root in N.IMPORTED_NATIVE_DNS_ROOTS:
+        rows.append({'Package': package, 'Test': root, 'Action': 'run'})
+        rows.extend({'Package': package, 'Test': name, 'Action': action}
+                    for name in sorted(names) if name.startswith(root+'/') for action in ('run', 'pass'))
+        rows.append({'Package': package, 'Test': root, 'Action': 'pass'})
+    return '\n'.join(json.dumps(row) for row in rows+[{'Package': package, 'Action': 'pass'}])
+
+
 class NativeSocketUIDGate(unittest.TestCase):
     def test_matching_hosts_require_actual_unix_uid_or_windows_identity_gate(self):
         self.check_matching_hosts()
@@ -449,6 +462,12 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertIs(kwargs['env'], env)
                         self.assertEqual(kwargs['timeout'], 900)
                         return ''
+                    if args[:3] == ['go', 'test', '-json'] and '^('+'|'.join(N.IMPORTED_NATIVE_DNS_ROOTS)+')$' in args:
+                        self.assertEqual(kwargs['cwd'], source.resolve())
+                        self.assertIs(kwargs['env'], env)
+                        self.assertEqual(kwargs['timeout'], 300)
+                        self.assertIn('-tags='+','.join(N.tags(target)), args)
+                        return imported_native_dns_output()
                     if args[:2] in (['go', 'test'], ['go', 'mod']):
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_hysteria2_deadlines_pinned.py'):
@@ -1182,6 +1201,10 @@ class DarwinNativeEnvironment(unittest.TestCase):
                         self.assertEqual(kwargs['timeout'], 600)
                         return ''
                     if args[:2] == ['go', 'test']:
+                        if '-json' in args and '^('+'|'.join(N.IMPORTED_NATIVE_DNS_ROOTS)+')$' in args:
+                            self.assertEqual(kwargs['timeout'], 300)
+                            self.assertIn('-tags='+','.join(N.tags(target)), args)
+                            return imported_native_dns_output()
                         package = args[args.index('-ldflags=-checklinkname=0')+1]
                         expected = {
                             './cmd/sing-box': '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU)',
@@ -1851,6 +1874,7 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
                  patch.object(N, 'environment', return_value=env), patch.object(N, 'digest', return_value='source'), \
                  patch.object(N, 'reuse', return_value={}), patch.object(N, 'run', side_effect=run), \
                  patch.object(N, 'verify_linux_standard_configs') as configs, \
+                 patch.object(N, 'verify_imported_desktop_configs') as imported, \
                  patch.object(N.DNSSEC, 'test_native_bundle', side_effect=dnssec_failure) as dnssec:
                 invoke = (lambda: N.build('linux/'+arch, bundle)) if reused else (lambda: N.verify_installed_linux_host(Path(temporary)/'core', bundle, 'linux/'+arch, env))
                 with contextlib.redirect_stdout(stdout):
@@ -1862,6 +1886,10 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
                             self.assertIs(caught.exception, expected_failure)
                     else:
                         invoke()
+            if reused and failure is None and not verdict_failure and dnssec_failure is None:
+                imported.assert_called_once_with(bundle, 'linux/'+arch, env)
+            else:
+                imported.assert_not_called()
             if failure is not None or verdict_failure:
                 configs.assert_not_called()
             else:
