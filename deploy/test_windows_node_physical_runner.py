@@ -5,7 +5,9 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -836,6 +838,91 @@ class OrdinaryPacketScope(unittest.TestCase):
                         self.dispatch(fault)
                 finally:
                     self.workspace = previous
+
+
+class LeaseRetryFailureRecovery(unittest.TestCase):
+    def test_actual_fixture_defers_writable_stream_failure_until_original_retry_and_close(self):
+        source = (ROOT / "mobile/desktop/external_box_windows_server_test.go.tmpl").read_text()
+        helper = source[source.index("func desktopWFPRouterServerLeaseStopRetry("):]
+        start = helper.index("\tvar retirementFailure error\n")
+        end = helper.index("\n\tselect{\n\tcase <-cancelled:", start)
+        observed = helper[start:end]
+        retry = helper[helper.index("\tif err:=f.proof.Close();err==nil{"):]
+        self.assertTrue(retry.endswith("\n}\n"))
+        retry = retry[:-2]
+        failure = 'retirementFailure=fmt.Errorf("returned native data stream remained writable after lease cancellation: %d %v",n,err)'
+        self.assertEqual(observed.count(failure), 1)
+        # Run the actual observation and stop/retry/stream-close statements.
+        # Native WFP/quiescence and HTTP transport remain separate native gates;
+        # these explicit doubles test the fixture's FailNow and cleanup order.
+        header = r'''package leasefixture
+import("errors";"fmt";"net";"os";"testing")
+type originalStream struct{writable,closed,failClose bool}
+func(c *originalStream)Write(p []byte)(int,error){if c.writable{return len(p),nil};return 0,net.ErrClosed}
+func(c *originalStream)Close()error{if c.failClose{return errors.New("original stream refuses close")};c.closed=true;return nil}
+type originalProof struct{calls int;failRetry bool}
+func(p *originalProof)Close()error{p.calls++;if p.calls==1{return errors.New("original invalid stop receipt")};if p.failRetry{return errors.New("original retry refuses close")};return nil}
+type originalFixture struct{proof *originalProof;closed bool}
+type originalReceipt struct{Deletes int;Live,StopRequestsMatch bool}
+type originalReply struct{RouterServer *originalReceipt}
+type originalPeer struct{proof *originalProof}
+func(p *originalPeer)call(t *testing.T,method,body string)originalReply{t.Helper();if method!="stats"||body!=""{t.Fatal("fixture changed original peer request")};return originalReply{&originalReceipt{Deletes:p.proof.calls,StopRequestsMatch:true}}}
+func replay(t *testing.T,f *originalFixture,peer *originalPeer,connection *originalStream)error{
+ t.Helper()
+ defer connection.Close()
+ readback:=func()int{return 0}
+'''
+        check = r'''
+func TestOriginalLeaseFixtureRecovery(t *testing.T){
+ mode:=os.Getenv("ROUTERVPN_LEASE_FIXTURE_MODE")
+ connection:=&originalStream{writable:mode!="retired",failClose:mode=="stream-failure"}
+ f:=&originalFixture{proof:&originalProof{failRetry:mode=="retry-failure"}}
+ peer:=&originalPeer{proof:f.proof}
+ failure:=replay(t,f,peer,connection)
+ if f.proof.calls!=2||!connection.closed{t.Fatal("original fixture returned before stop retry and stream cleanup")}
+ if mode=="retired"&&failure!=nil||mode=="writable"&&failure==nil{t.Fatal("fixture changed the observed retirement result")}
+ if failure!=nil&&failure.Error()!="returned native data stream remained writable after lease cancellation: 7 <nil>"{t.Fatal("fixture lost exact original writable-stream witness",failure)}
+}
+'''
+        compiler = shutil.which("go")
+        self.assertIsNotNone(compiler, "Go is required for the original lease fixture recovery regression")
+        with tempfile.TemporaryDirectory(prefix="windows-lease-fixture-") as directory:
+            folder = Path(directory)
+            path = folder / "fixture_test.go"
+            binary = folder / ("fixture.test.exe" if os.name == "nt" else "fixture.test")
+            for variant in ("current", "original-fatal"):
+                observation = observed if variant == "current" else observed.replace(failure, 't.Fatal(fmt.Errorf("returned native data stream remained writable after lease cancellation: %d %v",n,err))')
+                path.write_text(header + observation + "\n" + retry + "}\n" + check)
+                built = subprocess.run([compiler, "test", "-c", "-o", str(binary), str(path)],
+                                       capture_output=True, text=True, timeout=90,
+                                       env=dict(os.environ, GOTOOLCHAIN="local"))
+                self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+                modes = ("retired", "writable", "retry-failure", "stream-failure") if variant == "current" else ("writable",)
+                for mode in modes:
+                    with self.subTest(variant=variant, mode=mode):
+                        result = subprocess.run([str(binary), "-test.run=^TestOriginalLeaseFixtureRecovery$", "-test.v", "-test.timeout=5s"],
+                                                capture_output=True, text=True, timeout=10,
+                                                env=dict(os.environ, ROUTERVPN_LEASE_FIXTURE_MODE=mode))
+                        output = result.stdout + result.stderr
+                        if variant == "current" and mode in ("retired", "writable"):
+                            self.assertEqual(result.returncode, 0, output)
+                            self.assertIn("--- PASS: TestOriginalLeaseFixtureRecovery (", output)
+                        else:
+                            self.assertNotEqual(result.returncode, 0, output)
+                            self.assertIn("--- FAIL: TestOriginalLeaseFixtureRecovery (", output)
+                            expected = "returned native data stream remained writable after lease cancellation" if variant == "original-fatal" else "same native Server stop could not retry" if mode == "retry-failure" else "original native data stream recovery did not join"
+                            self.assertIn(expected, output)
+                            if variant == "current":
+                                self.assertNotIn("returned native data stream remained writable after lease cancellation", output)
+                        for invalid in ("panic:", "fatal error:", "DATA RACE", "[build failed]", "fixture changed original peer request"):
+                            self.assertNotIn(invalid, output)
+        # The returned defect is published only after the unchanged native
+        # teardown and original lease/blocked-path observations in the caller.
+        caller = source[source.index("func desktopWFPTestRouterExecution("):source.index("func desktopWFPRouterServerLeaseStopRetry(")]
+        observed_at = caller.index("retirementFailure = desktopWFPRouterServerLeaseStopRetry(")
+        drained_at = caller.index("retained = f.drain(t)", observed_at)
+        blocked_at = caller.index("desktopExternalWFPRequireBlocked(t, peer)", drained_at)
+        self.assertGreater(caller.index("if retirementFailure != nil { t.Fatal(retirementFailure) }"), blocked_at)
 
 
 class OrdinaryOpenVPNScope(unittest.TestCase):

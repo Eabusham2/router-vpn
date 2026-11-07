@@ -148,7 +148,7 @@ EXTERNAL_LEASE_CLEANUP_FAILURES = (
     "external physical monitor did not join", "external default monitor did not join",
     "provider image writer did not close", "external provider cleanup",
     "external WFP native source did not join", "external cleanup has no exact retained owner",
-    "external exact retained cleanup",
+    "external exact retained cleanup", "original native data stream recovery did not join",
 )
 EXTERNAL_LEASE_CONTROLS = {
     "missing-lease-cancel-join": (

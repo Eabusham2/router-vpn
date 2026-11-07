@@ -1523,7 +1523,8 @@ func desktopWFPTestRouterExecution(t *testing.T, execution string) {
 			}
 			before := f.snapshot(t, peer)
 			desktopExternalWFPRequireBlocked(t, peer)
-			if name == "lease-stop-retry" { desktopWFPRouterServerLeaseStopRetry(t, f, peer, before) }
+			var retirementFailure error
+			if name == "lease-stop-retry" { retirementFailure = desktopWFPRouterServerLeaseStopRetry(t, f, peer, before) }
 			retained = f.drain(t)
 			reply = peer.call(t, "stats", "")
 			if reply.RouterServer.Live || execution == "server" && reply.RouterServer.Deletes == 0 || execution == "local" && (reply.RouterServer.Creates != 0 || reply.RouterServer.Deletes != 0) {
@@ -1584,6 +1585,9 @@ func desktopWFPTestRouterExecution(t *testing.T, execution string) {
 					}
 				}
 			}
+			// An intended negative witness is valid only after the original lease,
+			// data stream, native grants and TUN have completed their own cleanup.
+			if retirementFailure != nil { t.Fatal(retirementFailure) }
 		})
 	}
 }
@@ -1592,7 +1596,7 @@ func desktopWFPTestRouterExecution(t *testing.T, execution string) {
 // This positive native path keeps the production Box alive after an unverified
 // DELETE receipt, exactly as routerVPNExternalNative.Close does. It never opens
 // a second WG peer or sends cleanup over an ordinary-network socket.
-func desktopWFPRouterServerLeaseStopRetry(t *testing.T,f *desktopExternalWFPFixture,peer *desktopExternalWFPReference,before mobiletor.DesktopWindowsNodeCompositionReadback){
+func desktopWFPRouterServerLeaseStopRetry(t *testing.T,f *desktopExternalWFPFixture,peer *desktopExternalWFPReference,before mobiletor.DesktopWindowsNodeCompositionReadback) error {
 	t.Helper()
 	ctx,cancel:=context.WithTimeout(context.Background(),3*time.Second)
 	err:=mobiletor.DesktopWindowsNodeCompositionVerifyInertLeaseBarrier(ctx,f.prepared)
@@ -1626,8 +1630,12 @@ func desktopWFPRouterServerLeaseStopRetry(t *testing.T,f *desktopExternalWFPFixt
 	terminal:=owner.transition.Load()==routerVPNExternalLeaseTerminal
 	owner.mu.Unlock()
 	if !terminal||f.network.Current(){t.Fatal("held native terminal barrier retained ordinary proof admission")}
+	var retirementFailure error
 	if n,err:=connection.Write([]byte("retired"));n!=0||!errors.Is(err,net.ErrClosed){
-		t.Fatal("returned native data stream remained writable after lease cancellation",n,err)
+		// Preserve the exact defect, then exercise the same captured stop retry.
+		// FailNow here would leave the deliberately invalid first receipt for
+		// the generic one-shot cleanup and turn this into a cleanup failure.
+		retirementFailure=fmt.Errorf("returned native data stream remained writable after lease cancellation: %d %v",n,err)
 	}
 	select{
 	case <-cancelled:t.Fatal("native Cancel returned before the original held WFP barrier joined")
@@ -1709,4 +1717,8 @@ func desktopWFPRouterServerLeaseStopRetry(t *testing.T,f *desktopExternalWFPFixt
 	if second==nil||second.Deletes!=2||second.Live||!second.StopRequestsMatch{
 		t.Fatal("native retry replaced the exact authenticated stop request")
 	}
+	if err:=connection.Close();err!=nil&&!errors.Is(err,net.ErrClosed){
+		t.Fatal("original native data stream recovery did not join",err)
+	}
+	return retirementFailure
 }
