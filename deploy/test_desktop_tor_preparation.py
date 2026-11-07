@@ -266,6 +266,26 @@ class DesktopPTPreparation(unittest.TestCase):
         with patch.object(Path, 'read_text', changed), self.assertRaisesRegex(ValueError, 'receipt contract seam'):
             PREP.comparison_client_contract()
 
+    def test_native_selector_capture_keeps_exact_pinned_sources_and_mutation_rejection(self):
+        PREP.EXTERNAL.prepare(self.vendor, mobile=False)
+        originals = PREP.EXTERNAL.selection_sources(self.vendor)
+        self.assertEqual(set(originals), {'protocol/group/selector.go', 'common/interrupt/group.go'})
+        PREP.EXTERNAL.check_selection_sources(self.vendor)
+        for relative, (original, expected) in originals.items():
+            with self.subTest(source=relative):
+                self.assertEqual(original, ORIGINALS[relative])
+                self.assertNotEqual(original, expected)
+                path = self.vendor/relative
+                self.assertEqual(path.read_bytes(), expected)
+                path.write_bytes(expected+b'\n// independent changed native selector fixture\n')
+                before = snapshot(self.vendor)
+                with self.assertRaisesRegex(ValueError, 'changed native selection commit'):
+                    PREP.EXTERNAL.prepare(self.vendor, mobile=False)
+                self.assertEqual(snapshot(self.vendor), before)
+                path.write_bytes(expected)
+        PREP.EXTERNAL.prepare(self.vendor, mobile=False)
+        PREP.EXTERNAL.check_selection_sources(self.vendor)
+
     def test_native_node_construction_capture_preserves_shared_preparation(self):
         # Start from the actual pinned Box and apply the real External/Tor
         # preparation. The Node snapshot must remain distinct and must not
@@ -675,6 +695,7 @@ if __name__ == '__main__':
     ORIGINALS = {name: subprocess.check_output(['git', '-C', str(vendor), 'show', head+':'+name])
                  for name in ('include/registry.go', 'route/network.go', 'dns/transport_adapter.go', 'go.mod', 'go.sum', 'box.go',
                               'adapter/inbound/manager.go', 'adapter/outbound/manager.go', 'adapter/endpoint/manager.go',
-                              'adapter/service/manager.go', 'dns/transport_manager.go')}
+                              'adapter/service/manager.go', 'dns/transport_manager.go',
+                              'protocol/group/selector.go', 'common/interrupt/group.go', 'common/urltest/urltest.go')}
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(DesktopPTPreparation))
     raise SystemExit(not result.wasSuccessful())
