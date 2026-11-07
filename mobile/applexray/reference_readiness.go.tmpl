@@ -1,0 +1,136 @@
+// Declared instrumentation for the separately built native reference executable.
+// This file is never installed in the shipping client or production Xray build.
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/xtls/reality"
+)
+
+const routerVPNReferenceCapture = "ROUTER_VPN_XRAY_REFERENCE_DETECTOR_CAPTURE"
+
+// Every key is the pinned detector's exact target, SNI and ALPN selector. The
+// receipt records completion, including upstream's empty-slice fallback; it
+// does not attest to authentication or replace the actual DNS/payload proofs.
+// The pinned listener starts these probes asynchronously. Otherwise a first
+// authenticated request can enter its five-second pending-detector poll while
+// this fixture's two-second DNS deadline is already running. The parent waits
+// for this additional condition inside its existing five-second startup bound.
+func routerVPNReferenceDetectorKeys(raw []byte) ([]string, error) {
+	var config struct {
+		Inbounds []struct {
+			StreamSettings struct {
+				Security        string `json:"security"`
+				RealitySettings struct {
+					Target      string   `json:"target"`
+					ServerNames []string `json:"serverNames"`
+				} `json:"realitySettings"`
+			} `json:"streamSettings"`
+		} `json:"inbounds"`
+	}
+	if json.Unmarshal(raw, &config) != nil || len(config.Inbounds) != 1 {
+		return nil, errors.New("reference detector capture has no unique inbound")
+	}
+	stream := config.Inbounds[0].StreamSettings
+	if stream.Security != "reality" || stream.RealitySettings.Target == "" || len(stream.RealitySettings.ServerNames) == 0 {
+		return nil, errors.New("reference detector capture lost its REALITY target")
+	}
+	keys := make([]string, 0, len(stream.RealitySettings.ServerNames)*3)
+	seen := map[string]bool{}
+	for _, name := range stream.RealitySettings.ServerNames {
+		if name == "" || strings.ContainsAny(name, " \t\r\n") || seen[name] {
+			return nil, errors.New("reference detector capture has an invalid server name")
+		}
+		seen[name] = true
+		for alpn := 0; alpn < 3; alpn++ {
+			keys = append(keys, stream.RealitySettings.Target+" "+name+" "+strconv.Itoa(alpn))
+		}
+	}
+	sort.Strings(keys)
+	return keys, nil
+}
+
+func routerVPNReferenceDetectorSnapshot(keys []string, lookup func(string) (any, bool)) bool {
+	if len(keys) == 0 {
+		return false
+	}
+	for _, key := range keys {
+		value, exists := lookup(key)
+		lengths, finished := value.([]int)
+		if !exists || !finished {
+			return false
+		}
+		for _, length := range lengths {
+			if length < 5 || length > 65540 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func routerVPNReferenceDetectorsComplete(ctx context.Context, keys []string, lookup func(string) (any, bool)) bool {
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if routerVPNReferenceDetectorSnapshot(keys, lookup) {
+			return ctx.Err() == nil
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-tick.C:
+		}
+	}
+}
+
+func init() {
+	capture := os.Getenv(routerVPNReferenceCapture)
+	if capture == "" {
+		return
+	}
+	if len(capture) != 64 || len(os.Args) != 4 || os.Args[1] != "run" || os.Args[2] != "-c" {
+		return // No receipt is a startup failure for the captured reference parent.
+	}
+	file, err := os.Open(os.Args[3])
+	if err != nil {
+		return
+	}
+	info, err := file.Stat()
+	raw, readErr := io.ReadAll(io.LimitReader(file, (1<<20)+1))
+	_ = file.Close()
+	if err != nil || !info.Mode().IsRegular() || readErr != nil || len(raw) > 1<<20 || fmt.Sprintf("%x", sha256.Sum256(raw)) != capture {
+		return
+	}
+	keys, err := routerVPNReferenceDetectorKeys(raw)
+	clear(raw)
+	if err != nil {
+		return
+	}
+	encoded, err := json.Marshal(keys)
+	if err != nil {
+		return
+	}
+	tuples := fmt.Sprintf("%x", sha256.Sum256(encoded))
+	pid := os.Getpid()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if routerVPNReferenceDetectorsComplete(ctx, keys, func(key string) (any, bool) {
+			return reality.GlobalPostHandshakeRecordsLens.Load(key)
+		}) {
+			fmt.Printf("RouterVPN reference detector complete: pid=%d config=%s tuples=%s\n", pid, capture, tuples)
+		}
+	}()
+}

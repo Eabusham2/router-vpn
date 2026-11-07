@@ -2,6 +2,7 @@
 """Reject incomplete or misleading scoped SOCKS/REALITY native receipts."""
 import ast
 import copy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -18,6 +19,10 @@ spec.loader.exec_module(gate)
 
 
 class ScopedSOCKSRealityVerdicts(unittest.TestCase):
+    def scopes(self):
+        return (gate.CORE, gate.PEERS, gate.LAYER_CORE, gate.LAYER_PEERS,
+                gate.REFERENCE_DETECTOR_TESTS, gate.REFERENCE_STARTUP_TESTS)
+
     def events(self, expected):
         return [{"Action": action, "Test": name}
                 for name in sorted(expected) for action in ("run", "pass")]
@@ -30,7 +35,16 @@ class ScopedSOCKSRealityVerdicts(unittest.TestCase):
         self.assertEqual(len(gate.PEER_CASES), 12)
         self.assertEqual(len(gate.PEERS), 13)
         self.assertEqual(len(set(gate.PEERS)), 13)
-        for expected in (gate.CORE, gate.PEERS, gate.LAYER_CORE, gate.LAYER_PEERS):
+        self.assertEqual(gate.REFERENCE_DETECTOR_TESTS, (
+            "TestReferenceDetectorRequiresEveryCapturedCompletion",
+            "TestReferenceDetectorCancellationJoinsOriginalOwner",
+            "TestReferenceDetectorRejectsUncapturedConfiguration",
+        ))
+        self.assertEqual(gate.REFERENCE_STARTUP_TESTS, (
+            "TestRouterVPNDesktopNodeXrayStartupRecords",
+            "TestRouterVPNDesktopNodeXrayDetectorRecords",
+        ))
+        for expected in self.scopes():
             gate.require_verdicts(self.encode(self.events(expected)), 0, expected)
 
     def test_independent_layer_native_scope(self):
@@ -47,14 +61,14 @@ class ScopedSOCKSRealityVerdicts(unittest.TestCase):
             gate.require_verdicts(self.encode(self.events(gate.PEERS)), 0, gate.LAYER_PEERS)
 
     def test_every_case_is_mandatory(self):
-        for expected in (gate.CORE, gate.PEERS, gate.LAYER_CORE, gate.LAYER_PEERS):
+        for expected in self.scopes():
             for omitted in expected:
                 events = self.events(set(expected) - {omitted})
                 with self.subTest(omitted=omitted), self.assertRaises(ValueError):
                     gate.require_verdicts(self.encode(events), 0, expected)
 
     def test_duplicate_foreign_failed_and_skipped_cases(self):
-        for expected in (gate.CORE, gate.PEERS, gate.LAYER_CORE, gate.LAYER_PEERS):
+        for expected in self.scopes():
             events = self.events(expected)
             for mutation in (
                 events + [events[-1]],
@@ -122,6 +136,55 @@ class ScopedSOCKSRealityVerdicts(unittest.TestCase):
 
 
 class ScopedSOCKSRealitySourceContext(unittest.TestCase):
+    def test_reference_instrumentation_retains_exact_overlay_and_copies(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "pinned-xray"
+            (source / "main").mkdir(parents=True)
+            workspace = Path(temporary) / "owned-build"
+            workspace.mkdir()
+            overlay, records = gate.reference_instrumentation(source, workspace)
+            gate.check_reference_instrumentation(source, workspace, overlay, records)
+            original_overlay = overlay.read_bytes()
+            replacements = json.loads(original_overlay)["Replace"]
+            self.assertEqual(len(replacements), 2)
+            self.assertEqual(set(records), {
+                "mobile/applexray/reference_readiness.go.tmpl",
+                "mobile/applexray/reference_readiness_test.go.tmpl",
+                "overlay_sha256",
+            })
+            for target, copied in replacements.items():
+                target, copied = Path(target), Path(copied)
+                raw = copied.read_bytes()
+                for mutation in (b"", raw + b"\n// changed observer\n"):
+                    copied.write_bytes(mutation)
+                    with self.assertRaises(ValueError):
+                        gate.check_reference_instrumentation(source, workspace, overlay, records)
+                copied.unlink()
+                with self.assertRaises(ValueError):
+                    gate.check_reference_instrumentation(source, workspace, overlay, records)
+                copied.symlink_to(overlay)
+                with self.assertRaises(ValueError):
+                    gate.check_reference_instrumentation(source, workspace, overlay, records)
+                copied.unlink()
+                copied.write_bytes(raw)
+                target.write_bytes(raw)
+                with self.assertRaises(ValueError):
+                    gate.check_reference_instrumentation(source, workspace, overlay, records)
+                with self.assertRaises(ValueError):
+                    gate.reference_instrumentation(source, workspace)
+                target.unlink()
+            changed = json.loads(original_overlay)
+            changed["Replace"][str(source / "main/undeclared.go")] = str(workspace / "foreign.go")
+            overlay.write_text(json.dumps(changed))
+            with self.assertRaises(ValueError):
+                gate.check_reference_instrumentation(source, workspace, overlay, records)
+            # A new matching digest cannot authorize an undeclared build input.
+            changed_records = dict(records, overlay_sha256=hashlib.sha256(overlay.read_bytes()).hexdigest())
+            with self.assertRaises(ValueError):
+                gate.check_reference_instrumentation(source, workspace, overlay, changed_records)
+            overlay.write_bytes(original_overlay)
+            gate.check_reference_instrumentation(source, workspace, overlay, records)
+
     def prepared_templates(self, vendor):
         # Project from the official desktop mapping, not the gate's own list.
         # This source fixture installs no mobile bridge or libbox parser.

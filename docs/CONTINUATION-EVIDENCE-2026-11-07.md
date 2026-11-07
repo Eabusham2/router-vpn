@@ -142,6 +142,15 @@ eight published REALITY captures; its third group contains 79 primary files.
 The 1,200-second aggregate gate remains unchanged. The historical 338-file run
 is not represented as an execution of the merged 346-file aggregate.
 
+The merged increment was published and read back as
+[`cb2d62968e2ee43705e9ac054e63c0cd6647c26b`](https://github.com/Eabusham2/router-vpn/commit/cb2d62968e2ee43705e9ac054e63c0cd6647c26b).
+Before publication, actual merged Swift production code exported all 346 primary
+graphs with 7,200 checks and the separate 32 CONNECT graphs with 769 checks.
+Android's merged nine REALITY and 32 CONNECT phases passed 948 and 3,072 checks
+and all five causal recompilations. The combined CONNECT/REALITY shared race
+selection passed, as did 28 imported runner, eight Apple gate and 15 reference
+runner contracts. The tested local and remote trees were identical.
+
 ### Fresh native failures after the diagnostic publication
 
 The independent reference at `9217cb0` failed in
@@ -150,9 +159,31 @@ job `128251084723`: its original positive SOCKS5/REALITY case did not complete
 the selected Home DNS exchange within two seconds. Several later cases stopped
 at that same prerequisite. Pinned source shows asynchronous REALITY detector
 preparation and a five-second polling wait; a listener announcement alone does
-not establish detector completion. The correction and unchanged traffic proofs
-remain required. TLS diagnostics from background detection are not evidence
+not establish detector completion. The unchanged imported-path traffic proofs
+remain required after the reference correction below. TLS diagnostics from background detection are not evidence
 that the captured client credentials were wrong.
+
+The reference correction adds explicitly declared build-overlay instrumentation
+to the separately built reference CLI. It waits for all three pinned detector
+states for the exact original target and server name, accepting the upstream
+completed-empty fallback without calling it authentication. The parent requires
+the exact child PID, original configuration hash and tuple hash alongside the
+existing bind/start/live-process checks. The five-second startup, two-second
+traffic proof and three-second teardown bounds remain unchanged. Observer
+templates and overlay bytes are checked before and after the reference build
+and execution; shipping Xray sources and production authentication are unchanged.
+
+Three actual pinned observer tests and two actual desktop startup/receipt tests
+pass with race instrumentation. All 16 reference-runner contracts pass on the
+merged source. With the new launch helper, the existing real encrypted
+REALITY/Vision TCP/UDP test passes three repeats in 0.30, 0.26 and 0.25 seconds
+under a two-second context and socket deadlines. Substituting only the old
+helper reproduces failure of the first encrypted read at 2.22 seconds. Each run
+joins the exact original child and closes its owned log. The reference source
+closure retains all 914 prepared records plus the declared overlay. All original
+12 reference cases and 42 additional layer cases remain mandatory in hosted CI;
+these local loopback results do not waive the imported physical-path or device
+gates, which are blocked locally before traffic by denied Netlink inventory.
 
 At `bdb7519`, Apple Silicon job `128248720491` passed the native single-filter
 PF lifetime gate. Intel job `128248720913` failed its separate

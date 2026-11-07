@@ -9,6 +9,7 @@ import (
 	"crypto/elliptic"
 	"crypto/mlkem"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -27,6 +28,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -493,13 +496,16 @@ func startDesktopNodeXrayServerWithProof(t *testing.T, mode string, ip netip.Add
 }
 
 type desktopNodeXrayProcess struct {
-	command   *exec.Cmd
-	log       *os.File
-	done      chan struct{}
-	err       error // Published only by closing done after the actual Wait.
-	closeMu   sync.Mutex
-	joined    bool
-	logClosed bool
+	command          *exec.Cmd
+	log              *os.File
+	done             chan struct{}
+	err              error // Published only by closing done after the actual Wait.
+	closeMu          sync.Mutex
+	joined           bool
+	logClosed        bool
+	configuration    string
+	configurationSHA string
+	detectorTuples   string
 }
 
 func (p *desktopNodeXrayProcess) diagnostics() string {
@@ -557,6 +563,120 @@ func desktopNodeXrayStartupRecords(diagnostic, address string) bool {
 	return bound && started
 }
 
+func desktopNodeXrayDetectorTuples(server map[string]any) (string, error) {
+	inbounds, ok := server["inbounds"].([]any)
+	if !ok || len(inbounds) != 1 {
+		return "", errors.New("reference detector requires its unique captured inbound")
+	}
+	inbound, _ := inbounds[0].(map[string]any)
+	stream, _ := inbound["streamSettings"].(map[string]any)
+	settings, _ := stream["realitySettings"].(map[string]any)
+	target, _ := settings["target"].(string)
+	names, _ := settings["serverNames"].([]string)
+	if stream["security"] != "reality" || target == "" || len(names) == 0 {
+		return "", errors.New("reference detector lost its captured target or names")
+	}
+	keys := make([]string, 0, len(names)*3)
+	seen := map[string]bool{}
+	for _, name := range names {
+		if name == "" || strings.ContainsAny(name, " \t\r\n") || seen[name] {
+			return "", errors.New("reference detector changed its captured server names")
+		}
+		seen[name] = true
+		for alpn := 0; alpn < 3; alpn++ {
+			keys = append(keys, target+" "+name+" "+strconv.Itoa(alpn))
+		}
+	}
+	sort.Strings(keys)
+	raw, err := json.Marshal(keys)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(raw)), nil
+}
+
+func desktopNodeXrayDetectorRecord(diagnostic string, pid int, capture, tuples string) bool {
+	if pid <= 0 || len(capture) != 64 || len(tuples) != 64 {
+		return false
+	}
+	wanted := fmt.Sprintf("RouterVPN reference detector complete: pid=%d config=%s tuples=%s", pid, capture, tuples)
+	count := 0
+	for _, record := range strings.SplitAfter(diagnostic, "\n") {
+		if strings.HasSuffix(record, "\n") && strings.TrimSuffix(strings.TrimSuffix(record, "\n"), "\r") == wanted {
+			count++
+		}
+	}
+	return count == 1
+}
+
+func (p *desktopNodeXrayProcess) detectorsComplete(diagnostic string) bool {
+	if p.configurationSHA == "" {
+		return true // Existing ordinary reference binaries have no observer.
+	}
+	if !desktopNodeXrayDetectorRecord(diagnostic, p.command.Process.Pid, p.configurationSHA, p.detectorTuples) {
+		return false
+	}
+	info, err := os.Lstat(p.configuration)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+		return false
+	}
+	file, err := os.Open(p.configuration)
+	if err != nil {
+		return false
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, (1<<20)+1))
+	_ = file.Close()
+	defer clear(raw)
+	return err == nil && len(raw) <= 1<<20 && fmt.Sprintf("%x", sha256.Sum256(raw)) == p.configurationSHA
+}
+
+func TestRouterVPNDesktopNodeXrayDetectorRecords(t *testing.T) {
+	server := map[string]any{"inbounds": []any{map[string]any{"streamSettings": map[string]any{"security": "reality",
+		"realitySettings": map[string]any{"target": "127.0.0.1:24361", "serverNames": []string{"www.example.com"}}}}}}
+	tuples, err := desktopNodeXrayDetectorTuples(server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantedKeys := []string{"127.0.0.1:24361 www.example.com 0", "127.0.0.1:24361 www.example.com 1", "127.0.0.1:24361 www.example.com 2"}
+	wantedRaw, _ := json.Marshal(wantedKeys)
+	if tuples != fmt.Sprintf("%x", sha256.Sum256(wantedRaw)) {
+		t.Fatal("reference readiness changed the exact target/SNI/ALPN capture")
+	}
+	raw, _ := json.Marshal(server)
+	path := filepath.Join(t.TempDir(), "original-reference.json")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	p := &desktopNodeXrayProcess{command: &exec.Cmd{Process: &os.Process{Pid: 123}}, configuration: path,
+		configurationSHA: fmt.Sprintf("%x", sha256.Sum256(raw)), detectorTuples: tuples}
+	line := fmt.Sprintf("RouterVPN reference detector complete: pid=123 config=%s tuples=%s\n", p.configurationSHA, tuples)
+	if !p.detectorsComplete(line) || !p.detectorsComplete(strings.ReplaceAll(line, "\n", "\r\n")) {
+		t.Fatal("original complete detector receipt was rejected")
+	}
+	for name, value := range map[string]string{
+		"missing": "", "incomplete": strings.TrimSuffix(line, "\n"), "duplicate": line + line,
+		"foreign-child":  strings.Replace(line, "pid=123", "pid=124", 1),
+		"foreign-config": strings.Replace(line, p.configurationSHA, strings.Repeat("a", 64), 1),
+		"foreign-tuples": strings.Replace(line, tuples, strings.Repeat("b", 64), 1),
+	} {
+		if p.detectorsComplete(value) {
+			t.Error("unowned detector completion was accepted", name)
+		}
+	}
+	if err := os.WriteFile(path, append(raw, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if p.detectorsComplete(line) {
+		t.Fatal("receipt survived replacement of the captured child configuration")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if p.detectorsComplete(line) {
+		t.Fatal("receipt survived loss of the original child configuration")
+	}
+}
+
 func TestRouterVPNDesktopNodeXrayStartupRecords(t *testing.T) {
 	address := "127.0.0.1:40981"
 	for _, binding := range []string{"transport/internet/tcp: listening TCP on ", "transport/internet/splithttp: listening TCP for XHTTP on "} {
@@ -612,7 +732,7 @@ func (p *desktopNodeXrayProcess) ready(address string) (bool, error) {
 		// A TCP accept alone might belong to the port thief. These two records
 		// come from this captured child's private log and prove its actual bind
 		// and completed startup before the final live-process/socket checks.
-		if desktopNodeXrayStartupRecords(diagnostic, address) {
+		if desktopNodeXrayStartupRecords(diagnostic, address) && p.detectorsComplete(diagnostic) {
 			connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
 			if err == nil {
 				_ = connection.Close()
@@ -659,6 +779,16 @@ func launchDesktopNodeXray(binary, directory string, server map[string]any, rese
 			return nil, 0, err
 		}
 		command := exec.Command(binary, "run", "-c", path)
+		capture, tuples := "", ""
+		if os.Getenv("ROUTER_VPN_XRAY_REFERENCE_DETECTOR_READY") == "1" {
+			tuples, err = desktopNodeXrayDetectorTuples(server)
+			if err != nil {
+				_ = log.Close()
+				return nil, 0, err
+			}
+			capture = fmt.Sprintf("%x", sha256.Sum256(raw))
+			command.Env = append(os.Environ(), "ROUTER_VPN_XRAY_REFERENCE_DETECTOR_CAPTURE="+capture)
+		}
 		command.Stdout, command.Stderr = log, log
 		if err := reservation.Close(); err != nil {
 			_ = log.Close()
@@ -668,7 +798,8 @@ func launchDesktopNodeXray(binary, directory string, server map[string]any, rese
 			_ = log.Close()
 			return nil, 0, err
 		}
-		process := &desktopNodeXrayProcess{command: command, log: log, done: make(chan struct{})}
+		process := &desktopNodeXrayProcess{command: command, log: log, done: make(chan struct{}),
+			configuration: path, configurationSHA: capture, detectorTuples: tuples}
 		go func() { process.err = command.Wait(); close(process.done) }()
 		collision, err := process.ready(address)
 		if err == nil {

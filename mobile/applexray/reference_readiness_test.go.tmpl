@@ -1,0 +1,96 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"reflect"
+	"sync"
+	"testing"
+)
+
+func TestReferenceDetectorRequiresEveryCapturedCompletion(t *testing.T) {
+	raw := []byte(`{"inbounds":[{"streamSettings":{"security":"reality","realitySettings":{"target":"127.0.0.1:24361","serverNames":["www.example.com"]}}}]}`)
+	keys, err := routerVPNReferenceDetectorKeys(raw)
+	want := []string{"127.0.0.1:24361 www.example.com 0", "127.0.0.1:24361 www.example.com 1", "127.0.0.1:24361 www.example.com 2"}
+	if err != nil || !reflect.DeepEqual(keys, want) {
+		t.Fatal("reference changed its original target/SNI/ALPN tuple", keys, err)
+	}
+	var records sync.Map
+	lookup := func(key string) (any, bool) { return records.Load(key) }
+	for _, foreign := range []string{"127.0.0.1:24362 www.example.com ", "127.0.0.1:24361 foreign.example ", "127.0.0.1:24361 www.example.com 9"} {
+		for _, key := range keys {
+			records.Store(foreign+key[len(key)-1:], []int{48})
+		}
+	}
+	if routerVPNReferenceDetectorSnapshot(keys, lookup) {
+		t.Fatal("foreign detector completions admitted the original child")
+	}
+	for _, key := range keys {
+		records.Store(key, []int{48})
+	}
+	for _, key := range keys {
+		for _, state := range []any{nil, false, true, []uint{48}, []int{-1}, []int{65541}} {
+			records.Store(key, state)
+			if routerVPNReferenceDetectorSnapshot(keys, lookup) {
+				t.Fatal("premature or malformed detector state admitted the original child", key, state)
+			}
+		}
+		records.Delete(key)
+		if routerVPNReferenceDetectorSnapshot(keys, lookup) {
+			t.Fatal("a missing captured ALPN detector admitted the original child", key)
+		}
+		// The pinned detector uses an empty slice for completed fallback. This
+		// is completion only: actual DNS and paired proof still have to pass.
+		records.Store(key, []int{})
+		if !routerVPNReferenceDetectorSnapshot(keys, lookup) {
+			t.Fatal("completed upstream fallback was mistaken for a pending probe")
+		}
+		records.Store(key, []int{48})
+	}
+	if routerVPNReferenceDetectorSnapshot(nil, lookup) {
+		t.Fatal("an empty original capture was accepted")
+	}
+}
+
+func TestReferenceDetectorCancellationJoinsOriginalOwner(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var old, replacement sync.Map
+	old.Store("original", false)
+	replacement.Store("replacement", []int{})
+	entered := make(chan struct{})
+	var once sync.Once
+	joined := make(chan bool, 1)
+	go func() {
+		joined <- routerVPNReferenceDetectorsComplete(ctx, []string{"original"}, func(key string) (any, bool) {
+			once.Do(func() { close(entered) })
+			return old.Load(key)
+		})
+	}()
+	<-entered
+	cancel()
+	if <-joined {
+		t.Fatal("cancelled original observer retained replacement completion")
+	}
+	old.Store("original", []int{})
+	if routerVPNReferenceDetectorsComplete(ctx, []string{"original"}, func(key string) (any, bool) { return old.Load(key) }) {
+		t.Fatal("late completion revived the cancelled original observer")
+	}
+	if _, ok := replacement.Load("replacement"); !ok {
+		t.Fatal("original observer changed its replacement")
+	}
+}
+
+func TestReferenceDetectorRejectsUncapturedConfiguration(t *testing.T) {
+	for _, raw := range []string{`{}`, `{"inbounds":[]}`, `{"inbounds":[{},{}]}`,
+		`{"inbounds":[{"streamSettings":{"security":"tls","realitySettings":{"target":"127.0.0.1:1","serverNames":["www.example.com"]}}}]}`,
+		`{"inbounds":[{"streamSettings":{"security":"reality","realitySettings":{"target":"127.0.0.1:1","serverNames":["www.example.com","www.example.com"]}}}]}`,
+		`{"inbounds":[{"streamSettings":{"security":"reality","realitySettings":{"target":"127.0.0.1:1","serverNames":["www.example.com\nforeign"]}}}]}`} {
+		if !json.Valid([]byte(raw)) {
+			t.Fatal("negative capture is not a real configuration")
+		}
+		if _, err := routerVPNReferenceDetectorKeys([]byte(raw)); err == nil {
+			t.Fatal("uncaptured configuration gained a detector receipt", raw)
+		}
+	}
+}

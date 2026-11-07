@@ -30,6 +30,15 @@ PEER_CASES = (
     "final-identity", "final-token", "cancel", "close-owner",
 )
 PEERS = (PEER_PARENT,) + tuple(PEER_PARENT + "/" + name for name in PEER_CASES)
+REFERENCE_DETECTOR_TESTS = (
+    "TestReferenceDetectorRequiresEveryCapturedCompletion",
+    "TestReferenceDetectorCancellationJoinsOriginalOwner",
+    "TestReferenceDetectorRejectsUncapturedConfiguration",
+)
+REFERENCE_STARTUP_TESTS = (
+    "TestRouterVPNDesktopNodeXrayStartupRecords",
+    "TestRouterVPNDesktopNodeXrayDetectorRecords",
+)
 
 
 def module(name, filename):
@@ -244,6 +253,46 @@ def execute_image(compiler, vendor, env, image, digest, package, parent, expecte
     return {"sha256": digest, "verdicts": list(expected)}
 
 
+def reference_instrumentation(source, workspace):
+    # The pinned reference CLI stays byte-exact on disk. Declare the two extra
+    # files explicitly in the build overlay and bind every byte in its receipt.
+    replacements, records = {}, {}
+    for template, name in (("reference_readiness.go.tmpl", "routervpn_reference_readiness.go"),
+                           ("reference_readiness_test.go.tmpl", "routervpn_reference_readiness_test.go")):
+        original = ROOT / "mobile/applexray" / template
+        destination = workspace / name
+        target = source / "main" / name
+        if original.is_symlink() or not original.is_file() or target.exists() or target.is_symlink():
+            raise ValueError("Reference detector instrumentation lost its exact source boundary")
+        raw = original.read_bytes()
+        destination.write_bytes(raw)
+        replacements[str(target)] = str(destination)
+        records["mobile/applexray/" + template] = hashlib.sha256(raw).hexdigest()
+    overlay = workspace / "reference-detector-overlay.json"
+    overlay.write_text(json.dumps({"Replace": replacements}, sort_keys=True, separators=(",", ":")))
+    records["overlay_sha256"] = hashlib.sha256(overlay.read_bytes()).hexdigest()
+    return overlay, records
+
+
+def check_reference_instrumentation(source, workspace, overlay, records):
+    if overlay.is_symlink() or not overlay.is_file() or hashlib.sha256(overlay.read_bytes()).hexdigest() != records["overlay_sha256"]:
+        raise ValueError("Reference detector build overlay changed")
+    expected = {}
+    for template, name in (("reference_readiness.go.tmpl", "routervpn_reference_readiness.go"),
+                           ("reference_readiness_test.go.tmpl", "routervpn_reference_readiness_test.go")):
+        original = ROOT / "mobile/applexray" / template
+        copied = workspace / name
+        target = source / "main" / name
+        if original.is_symlink() or copied.is_symlink() or not copied.is_file() or target.exists() or target.is_symlink():
+            raise ValueError("Reference detector source identity changed")
+        raw = original.read_bytes()
+        if copied.read_bytes() != raw or hashlib.sha256(raw).hexdigest() != records["mobile/applexray/" + template]:
+            raise ValueError("Reference detector copied source changed")
+        expected[str(target)] = str(copied)
+    if json.loads(overlay.read_text()) != {"Replace": expected}:
+        raise ValueError("Reference detector overlay contains an undeclared source")
+
+
 def build_reference(compiler, vendor, workspace, env):
     status, output = run_command(
         [compiler, "list", "-m", "-mod=readonly", "-json", "github.com/xtls/xray-core"], vendor, env, 30)
@@ -253,14 +302,24 @@ def build_reference(compiler, vendor, workspace, env):
     if not source.is_absolute() or source.is_symlink():
         raise ValueError("Scoped SOCKS REALITY has no original prepared Xray directory")
     before = checked_xray(source)
+    overlay, instrumentation = reference_instrumentation(source, workspace)
+    status, output = run_command(
+        [compiler, "test", "-mod=readonly", "-race", "-json", "-overlay=" + str(overlay),
+         "-ldflags=-checklinkname=0", "./main", "-run", "^TestReferenceDetector", "-count=1", "-timeout=30s"],
+        source, env, 600)
+    require_verdicts(output, status, REFERENCE_DETECTOR_TESTS)
+    print(output, end="" if output.endswith("\n") else "\n", flush=True)
     binary = workspace / ("xray-reference.exe" if env["GOOS"] == "windows" else "xray-reference")
     status, output = run_command(
-        [compiler, "build", "-mod=readonly", "-race", "-trimpath", "-ldflags=-checklinkname=0", "-o", binary, "./main"],
+        [compiler, "build", "-mod=readonly", "-race", "-trimpath", "-overlay=" + str(overlay),
+         "-ldflags=-checklinkname=0", "-o", binary, "./main"],
         source, env, 600)
     if status or binary.is_symlink() or not binary.is_file() or checked_xray(source) != before:
         raise ValueError("Scoped SOCKS REALITY actual Xray reference did not build:\n" + output[-24000:])
+    check_reference_instrumentation(source, workspace, overlay, instrumentation)
     env["ROUTER_VPN_XRAY_TEST_BINARY"] = str(binary)
-    return source, before, binary, hashlib.sha256(binary.read_bytes()).hexdigest()
+    env["ROUTER_VPN_XRAY_REFERENCE_DETECTOR_READY"] = "1"
+    return source, before, binary, hashlib.sha256(binary.read_bytes()).hexdigest(), overlay, instrumentation
 
 
 def run(vendor):
@@ -309,18 +368,23 @@ def run(vendor):
         original_fixtures = captured_source_matrix(fixtures, original_fixture)
         receipt["fixture_sha256"] = hashlib.sha256(original_fixtures[FIXTURE]).hexdigest()
         receipt["layer_fixtures_sha256"] = {name: hashlib.sha256(raw).hexdigest() for name, raw in original_fixtures.items()}
-        xray, xray_before, reference, reference_digest = build_reference(compiler, vendor, workspace, env)
+        xray, xray_before, reference, reference_digest, overlay, instrumentation = build_reference(compiler, vendor, workspace, env)
         native, native_digest = compile_image(compiler, vendor, workspace, env, "./protocol/routervpnamnezia", "socks-reality-peers")
         if checked_sources(vendor) != before or checked_xray(xray) != xray_before:
             raise ValueError("Scoped SOCKS REALITY source changed during peer build")
+        receipt["reference_startup"] = execute_image(compiler, vendor, env, native, native_digest,
+            "routervpnamnezia", "TestRouterVPNDesktopNodeXray(Startup|Detector)Records", REFERENCE_STARTUP_TESTS)
         receipt["peer"] = execute_image(compiler, vendor, env, native, native_digest,
                                         "routervpnamnezia", PEER_PARENT, PEERS)
         receipt["peer_layers"] = execute_image(compiler, vendor, env, native, native_digest,
             "routervpnamnezia", LAYER_PEER_PARENT, LAYER_PEERS, timeout=180)
         if reference.is_symlink() or hashlib.sha256(reference.read_bytes()).hexdigest() != reference_digest or checked_xray(xray) != xray_before:
             raise ValueError("Scoped SOCKS REALITY reference source or executable changed during execution")
+        check_reference_instrumentation(xray, workspace, overlay, instrumentation)
         receipt["reference"] = {"pin": XRAY.XRAY_PIN, "sha256": reference_digest,
-                                "source_sha256": record_digest(xray_before), "source_count": len(xray_before)}
+                                "source_sha256": record_digest(xray_before), "source_count": len(xray_before),
+                                "detector_instrumentation": instrumentation,
+                                "detector_verdicts": list(REFERENCE_DETECTOR_TESTS)}
         receipt["native_reference"] = True
         if captured_source_matrix(fixtures, original_fixture) != original_fixtures or checked_sources(vendor) != before:
             raise ValueError("Scoped SOCKS REALITY original capture or shipping source changed during execution")
