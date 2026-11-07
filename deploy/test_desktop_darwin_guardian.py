@@ -44,7 +44,7 @@ READBACK_CASES = ('PFReadbackCompleteWithinCapturedBudget', 'PFReadbackFailureAn
                   'PFReadbackInventoryNewInspectionReadsAfterMutation',
                   'PFReadbackInventoryCancelledWaiterDoesNotDetachNativeOwner',
                   'PFReadbackInventoryCancellationAndFailureNeverBecomeEmptyProof')
-SOCKS_CASES = ('SOCKSAssociations',)
+SOCKS_CASES = ('SOCKSAssociations', 'SOCKSDerivedExpiry')
 SEPARATE_CASES = ('SocketRetirementReusesCapacity',)+SOCKS_CASES
 SOCKS_LEAVES = ('original-kernel-identity', 'stale-control-permit', 'expired-control-permit',
                 'derived-expiry', 'sibling-claim', 'child-before-parent', 'joined-sibling-isolation',
@@ -227,12 +227,18 @@ def retire_private_alias(address, original, captured):
         raise
 
 
-def require_socks_verdicts(output):
-    root = native_case_name('SOCKSAssociations')
+def require_socks_verdicts(output, case='SOCKSAssociations'):
+    if case not in SOCKS_CASES:
+        raise ValueError('SOCKS native boundary requires its exact registered case')
+    root = native_case_name(case)
     names = [root] + [root+'/ipv'+family for family in ('4', '6')]
-    names += [root+'/ipv'+family+'/'+leaf for family in ('4', '6') for leaf in SOCKS_LEAVES]
+    if case == 'SOCKSAssociations':
+        names += [root+'/ipv'+family+'/'+leaf for family in ('4', '6') for leaf in SOCKS_LEAVES]
     if re.search(r'(^|\n)(?:.*--- (?:FAIL|SKIP):|FAIL(?:\s|$)|SKIP(?:\s|$)|.*WARNING: DATA RACE|panic:|fatal error:)|\[build failed\]', output):
         raise ValueError('SOCKS native boundary contains a failed or incomplete verdict')
+    observed = re.findall(r'^\s*--- PASS: ('+re.escape(root)+r'(?:/[^\s]+)?) \([0-9]+(?:\.[0-9]+)?s\)$', output, re.M)
+    if set(observed) != set(names):
+        raise ValueError('SOCKS native boundary changed its exact verdict inventory')
     for name in names:
         if len(re.findall(r'^\s*--- PASS: '+re.escape(name)+r' \([0-9]+(?:\.[0-9]+)?s\)$', output, re.M)) != 1:
             raise ValueError('SOCKS native boundary did not execute exactly once: '+name)
@@ -578,10 +584,10 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
             for separate in SEPARATE_CASES:
                 separate_output = reported_run(command+['--case', separate], cwd=source, timeout=850, sudo=sudo)
                 if separate in SOCKS_CASES:
-                    require_socks_verdicts(separate_output)
+                    require_socks_verdicts(separate_output, separate)
                 output += separate_output
         elif case in SOCKS_CASES:
-            require_socks_verdicts(output)
+            require_socks_verdicts(output, case)
         wanted = (case,) if case else CASES+READBACK_CASES+SOCKS_CASES
         if any('--- PASS: '+native_case_name(name)+' (' not in output for name in wanted) or '--- SKIP:' in output:
             raise ValueError('Darwin guardian gate did not execute every required native boundary')
@@ -653,7 +659,7 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
     """Compile scoped, temporary broken versions and require their exact failure."""
     if platform.system() != 'Darwin':
         raise ValueError('Darwin guardian mutations require the actual native kernel')
-    if only_case not in (None, 'NativeFilterProjection', 'BaselineTransition', 'ReferenceOwnership', 'PFGenerationRetirement', 'SOCKSAssociations'):
+    if only_case not in (None, 'NativeFilterProjection', 'BaselineTransition', 'ReferenceOwnership', 'PFGenerationRetirement')+SOCKS_CASES:
         raise ValueError('Darwin guardian mutations require a known scoped positive case')
     if only_case is None:
         # The default guardian selector exercises the shipping loader. The
@@ -674,10 +680,11 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
          'desktop_socket_darwin_socks_pf.go', ((' || permit.Grant != control', ''),)),
         ('SOCKS original permit expiry', 'SOCKSAssociations', 'SOCKS authority accepted an expired original PF permit',
          'desktop_socket_darwin_socks_pf.go', ((' || !time.Now().Before(permit.Expires)', ''),)),
-        ('SOCKS derived expiry cap', 'SOCKSAssociations', 'SOCKS derived expiry exceeded its original control',
-         ('desktop_socket_darwin_socks_pf.go', 'desktop_socket_darwin_pf.go'), (
-             (('if until.Before(expires) {', 'if false && until.Before(expires) {'),),
-             (('if err != nil || expires.After(until) {', 'if err != nil || false && expires.After(until) {'),))),
+        # The exact native parent-only fixture reaches the cap independently.
+        # Initial grant and grouped renewal postchecks remain unmodified; a
+        # deliberately broken cap cannot retire a live child before this probe.
+        ('SOCKS derived expiry cap', 'SOCKSDerivedExpiry', 'SOCKS derived expiry exceeded its original control',
+         'desktop_socket_darwin_socks_pf.go', (('if until.Before(expires) {', 'if false && until.Before(expires) {'),)),
         ('SOCKS sibling pending claim', 'SOCKSAssociations', 'SOCKS sibling adopted another pending association',
          'desktop_socket_darwin_socks_guardian.go', (('if _, exists := g.socks[a.SocketID]; exists {', 'if _, exists := g.socks[a.SocketID]; false && exists {'),)),
         ('SOCKS child before parent', 'SOCKSAssociations', 'SOCKS control retired before its original UDP descriptor',

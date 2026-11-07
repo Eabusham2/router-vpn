@@ -504,10 +504,11 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
                     self.assertEqual(evidence['observed']['gateway'], 'x'*128)
                     self.assertLess(len(shown.getvalue()), 1200)
 
-    def verdicts(self):
-        root = self.gate.native_case_name('SOCKSAssociations')
+    def verdicts(self, case='SOCKSAssociations'):
+        root = self.gate.native_case_name(case)
         names = [root]+[root+'/ipv'+family for family in ('4', '6')]
-        names += [root+'/ipv'+family+'/'+leaf for family in ('4', '6') for leaf in self.gate.SOCKS_LEAVES]
+        if case == 'SOCKSAssociations':
+            names += [root+'/ipv'+family+'/'+leaf for family in ('4', '6') for leaf in self.gate.SOCKS_LEAVES]
         return ['--- PASS: '+name+' (0.01s)' for name in names]
 
     def test_all_twenty_three_actual_socks_verdicts_are_required_once(self):
@@ -521,6 +522,25 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
         for failure in ('WARNING: DATA RACE', 'panic: fixture', 'fatal error: fixture', 'FAIL package [build failed]'):
             with self.subTest(failure=failure), self.assertRaises(ValueError):
                 self.gate.require_socks_verdicts('\n'.join(lines+[failure]))
+
+    def test_independent_expiry_requires_exact_parent_root_and_both_families(self):
+        case = 'SOCKSDerivedExpiry'
+        lines = self.verdicts(case)
+        self.assertEqual(len(lines), 3)
+        output = '\n'.join(lines)
+        self.gate.require_socks_verdicts(output, case)
+        for line in lines:
+            for change in ('', line+'\n'+line, 'diagnostic '+line,
+                           line.replace('PASS', 'FAIL'), line.replace('PASS', 'SKIP')):
+                with self.subTest(line=line, change=change), self.assertRaises(ValueError):
+                    self.gate.require_socks_verdicts(output.replace(line, change, 1), case)
+        for changed in ('\n'.join(self.verdicts()), output.replace('/ipv6', '/ipv4'),
+                        output+'\n--- PASS: '+self.gate.native_case_name(case)+'/unexpected (0.01s)',
+                        output+'\nWARNING: DATA RACE', output+'\npanic: fixture'):
+            with self.subTest(output=changed), self.assertRaises(ValueError):
+                self.gate.require_socks_verdicts(changed, case)
+        with self.assertRaises(ValueError):
+            self.gate.require_socks_verdicts(output, 'TCPAndUDP')
 
     def test_every_required_case_has_one_bounded_fixture_selection(self):
         gate = self.gate
@@ -548,7 +568,7 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
         original += ['--- PASS: TestDesktopDarwinGuardian'+name+' (0.01s)' for name in
                      ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope', 'UIDAbsenceWait', 'UIDObserverProtocol')]
         original += ['--- PASS: TestDesktopDarwinGuardianKernelTCPAndUDP/'+network+' (0.01s)' for network in ('tcp4', 'udp4', 'tcp6', 'udp6')]
-        for missing in (None, 'SocketRetirementReusesCapacity', 'SOCKSAssociations'):
+        for missing in (None,)+gate.SEPARATE_CASES:
             calls = []
             def run(command, **kwargs):
                 calls.append(command)
@@ -559,7 +579,7 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
                     self.assertEqual(kwargs['timeout'], 850)
                     case = command[-1]
                     self.assertIn(case, gate.SEPARATE_CASES)
-                    verdicts = self.verdicts() if case in gate.SOCKS_CASES else ['--- PASS: '+gate.native_case_name(case)+' (0.01s)']
+                    verdicts = self.verdicts(case) if case in gate.SOCKS_CASES else ['--- PASS: '+gate.native_case_name(case)+' (0.01s)']
                     return '\n'.join(verdicts[1:] if missing == case else verdicts)+'\n'
                 return '\n'.join(original)+'\n'
             with self.subTest(missing=missing), mock.patch.object(gate.platform, 'system', return_value='Darwin'), mock.patch.dict(os.environ, {'GOOS': 'darwin'}), mock.patch.object(gate.UID, 'compiler_toolchain', side_effect=lambda source, go, env: ('fixture-go', env)), mock.patch.object(gate.UID, 'privilege_tool', return_value=None), mock.patch.object(gate, 'reported_run', side_effect=run), contextlib.redirect_stdout(io.StringIO()):
@@ -568,9 +588,12 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
                         gate.execute(ROOT)
                 else:
                     gate.execute(ROOT)
-            self.assertEqual(len(calls), 4)
+            expected = gate.SEPARATE_CASES
+            if missing in gate.SOCKS_CASES:
+                expected = expected[:expected.index(missing)+1]
+            self.assertEqual(len(calls), 2+len(expected))
             self.assertNotIn('--case', calls[1])
-            for command, case in zip(calls[2:], gate.SEPARATE_CASES):
+            for command, case in zip(calls[2:], expected):
                 self.assertEqual(command, calls[1]+['--case', case])
 
     def test_mutation_requires_exact_assertion_and_join_without_timeout_or_race(self):
@@ -591,9 +614,10 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
         tree = ast.parse(Path(self.gate.__file__).read_text())
         function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'execute_mutations')
         assignment = next(node for node in function.body if isinstance(node, ast.Assign) and any(isinstance(name, ast.Name) and name.id == 'mutations' for name in node.targets))
-        mutations = [value for value in ast.literal_eval(assignment.value) if value[1] == 'SOCKSAssociations']
+        mutations = [value for value in ast.literal_eval(assignment.value) if value[1] in self.gate.SOCKS_CASES]
         self.assertEqual(len(mutations), 6)
         self.assertEqual(len({value[0] for value in mutations}), 6)
+        self.assertEqual(sum(value[1] == 'SOCKSAssociations' for value in mutations), 5)
         test = (ROOT/'internal/mobiletor/desktop_socket_darwin_guardian_test.go').read_text()
         for label, _, witness, name, replacements in mutations:
             self.assertIn(witness, test)
@@ -603,6 +627,33 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
                 for old, new in edits:
                     self.assertEqual(raw.count(old), 1, label)
                     self.assertNotEqual(old, new)
+
+    def test_expiry_mutation_changes_only_cap_and_requires_its_own_assertion(self):
+        tree = ast.parse(Path(self.gate.__file__).read_text())
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'execute_mutations')
+        assignment = next(node for node in function.body if isinstance(node, ast.Assign) and any(isinstance(name, ast.Name) and name.id == 'mutations' for name in node.targets))
+        controls = [value for value in ast.literal_eval(assignment.value) if value[0] == 'SOCKS derived expiry cap']
+        self.assertEqual(len(controls), 1)
+        label, case, witness, name, changes = controls[0]
+        self.assertEqual(case, 'SOCKSDerivedExpiry')
+        self.assertIn(case, self.gate.SOCKS_CASES)
+        self.assertIn(case, self.gate.SEPARATE_CASES)
+        self.assertEqual(name, 'desktop_socket_darwin_socks_pf.go')
+        self.assertEqual(changes, (('if until.Before(expires) {', 'if false && until.Before(expires) {'),))
+        with tempfile.TemporaryDirectory(prefix='routervpn-expiry-mutation-') as directory:
+            overlay = self.gate.write_mutation_overlay(Path(directory), 0, ROOT/'internal/mobiletor', name, changes, label)
+            self.assertEqual(set(json.loads(overlay.read_text())['Replace']), {str(ROOT/'internal/mobiletor'/name)})
+        verdict = '--- FAIL: '+self.gate.native_case_name(case)+' (0.01s)'
+        output = '    fixture.go:1: '+witness+'\n'+verdict+'\nFAIL\n'
+        self.gate.require_mutation_failure(output, case, witness)
+        for replaced in ('Darwin renewed relay outlived its retained original control',
+                         'actual selected-private UDP association: context canceled'):
+            with self.subTest(witness=replaced), self.assertRaises(ValueError):
+                self.gate.require_mutation_failure(output.replace(witness, replaced), case, witness)
+        for failure in ('Darwin native broker did not drain', 'actual Darwin guardian close',
+                        'Native fixture cleanup retained its recovery record', 'test timed out', 'WARNING: DATA RACE'):
+            with self.subTest(failure=failure), self.assertRaises(ValueError):
+                self.gate.require_mutation_failure(output+failure, case, witness)
 
 
 class MacOSPythonDiscovery(unittest.TestCase):

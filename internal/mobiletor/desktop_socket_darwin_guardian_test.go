@@ -2726,6 +2726,54 @@ func TestDesktopDarwinGuardianChannelFragmentsAndDescriptorClosure(t *testing.T)
 	}
 }
 
+// Capture a real original TCP parent without creating a derived UDP socket.
+// This keeps the cap's causal mutant independent of the later grant/renewal
+// postchecks: those unchanged protections must not retire a broken live child
+// before the named cap assertion can execute. The copied expiry below is a
+// counterfactual authority record, never a substituted kernel/PF readback.
+func TestDesktopDarwinGuardianKernelSOCKSDerivedExpiry(t *testing.T) {
+	if !desktopDarwinTestFixture.PrivateIPv4 {
+		t.Fatal("SOCKS native expiry requires its explicit owned private alias fixture")
+	}
+	for _, family := range []string{"4", "6"} {
+		t.Run("ipv"+family, func(t *testing.T) {
+			remote := desktopDarwinKernelPeer(t, "tcp"+family)
+			policy := desktopDarwinKernelPolicy(t, []DesktopDarwinSocketDestination{{Network: "tcp", Address: remote}})
+			broker := desktopDarwinKernelBroker(t, policy)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			control, err := broker.DialContext(ctx, "tcp"+family, remote.String())
+			if err != nil {
+				t.Fatal("native expiry original TCP control", err)
+			}
+			// The original broker owns this descriptor and its bounded cleanup.
+			// A direct connection Close cleanup would run before that owner joins.
+			desktopDarwinExchange(t, control)
+			socket := control.(*desktopSocketConn).socket
+			socket.mu.Lock()
+			peer := socket.peers[socket.remote]
+			socket.mu.Unlock()
+			receipt, valid := peer.snapshot()
+			if !valid || !validDesktopSocketReceipt(receipt, receipt.Grant, time.Now()) {
+				t.Fatal("native expiry lost its original acknowledged permit")
+			}
+			if _, err := desktopDarwinSocketIdentity(socket.sourceFile); err != nil {
+				t.Fatal("native expiry lost its retained original kernel descriptor", err)
+			}
+			pf := *policy.pf
+			permit := desktopDarwinPFPermit{Grant: receipt.Grant, Expires: time.Now().Add(time.Second)}
+			pf.permits = map[string]desktopDarwinPFPermit{pf.key(receipt.Grant): permit}
+			until, err := pf.socksGrantExpiry(time.Now(), receipt.Grant)
+			if err != nil || !until.Equal(permit.Expires) {
+				t.Fatal("SOCKS derived expiry exceeded its original control", err)
+			}
+			if pf.permits[pf.key(receipt.Grant)] != permit {
+				t.Fatal("SOCKS derived expiry calculation changed its original authority record")
+			}
+		})
+	}
+}
+
 // The lower capability is exercised through the real broker/guardian/PF path.
 // The echo control represents the already authenticated native caller's TCP
 // object; full SOCKS protocol/Box admission remains a separate host gate.

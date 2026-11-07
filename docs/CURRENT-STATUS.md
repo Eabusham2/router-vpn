@@ -6,17 +6,39 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 7 continuation through `20693f18`
+## November 7 continuation: imported paths and native verification
 
 The [November 7 evidence ledger](CONTINUATION-EVIDENCE-2026-11-07.md) records
 fresh original-requirement recovery, preservation of the newer live branch,
 and the source/test corrections published during this continuation. Published
-`504e0fa3` adds all nine independent entry/final Start Layer pairs for Local
-SOCKS5 to paired REALITY/Vision, preserving every earlier graph. Published
-`bdb75197` adds bounded original-owner diagnostics for the unresolved native
-Darwin failure, and `20693f18` corrects the strict Unix source-copy fixture.
-An independent Ubuntu reference job runs the existing encrypted SOCKS/REALITY
-cases without waiting for Darwin prerequisites; all release gates remain.
+`cb2d6296` adds independently provisioned CONNECT entry layers. Published
+`46d28632` extends Local imported entries to paired REALITY/Vision: SOCKS5,
+SS2022 and Hysteria2 each retain all nine independent entry/final Start Layer
+pairs. The 346 primary captures, 32 separate CONNECT captures and 18 separate
+SS2022/Hysteria2 captures remain distinct. Actual shared, Android and Swift
+source/parser inventories pass; these are not product completion counts.
+
+The exact-`46d28632` hosted reference passed all 114 new encrypted SS2022/Hysteria2
+leaves and all 139 required named verdicts, including their parent and physical
+owner checks. The original twelve plus forty-two SOCKS/REALITY leaves also pass
+at this SHA. Actual source receipts match the merged prepared engines. These
+bounded protocol results do not establish system tunnel or device acceptance.
+
+Published `976c771d` addresses the reproduced Intel Darwin renewal queue failure
+with at most sixteen existing permits per group and one outstanding group per
+broker. Individual proof freshness, authenticated native pre/post readback,
+foreground FIFO order, cancellation and exact cleanup remain mandatory. The
+portable broker race suite and both Darwin Go cross-compiles pass; the native
+gate preserves the original seventeen SOCKS verdicts and now requires six
+additional grouped-renewal/authority/frame verdicts. Both actual Intel and
+Apple Silicon jobs at `976c771d` passed all twenty-three plus the original
+Unix-channel baseline and seven causal controls. The jobs later failed when
+the new renewal guard intercepted an intentional broken expiry-cap fixture
+before its expected assertion. The current fixture repair isolates that cap
+using a real original TCP parent and a copied shortened authority record;
+production grant and renewal checks remain unchanged. Its three new native
+verdicts and exact mutation witness still require the new commit's Darwin CI.
+Earlier diagnostic-only passages below are history, not the current fix status.
 
 These units do not establish a new complete release. Other imported graph
 families, Server/Compare for that direction, exact-SHA native/package/image

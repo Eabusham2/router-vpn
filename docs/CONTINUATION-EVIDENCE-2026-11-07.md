@@ -331,7 +331,10 @@ Intel/ARM64 PF gates remain required in exact-source CI.
 
 ### SS2022 and Hysteria2 entries to paired REALITY/Vision
 
-The next increment extends the existing Local imported graph to SS2022 and
+This unit was published and read back as
+[`46d28632e2352fbc43997442470ba194a5c5ce4f`](https://github.com/Eabusham2/router-vpn/commit/46d28632e2352fbc43997442470ba194a5c5ce4f),
+with the same tree as the reviewed and tested merged checkout.
+It extends the existing Local imported graph to SS2022 and
 Hysteria2 entries with a separately paired REALITY/Vision final. Each node keeps
 its original endpoint, credentials, provisioned Start Layer and codec. The
 final's original Xray compiler retains its validated inner edge; only its
@@ -406,6 +409,57 @@ through this flow. Home UDP port 53 and stream DoT/DoH use different paths.
 Explicit captured UDP-443 capability and actual selected-path proof are still
 required; no source rewrite or resolver substitution is authorized by this
 configuration-only result.
+
+### Exact-source encrypted reference completion at `46d28632`
+
+[Independent reference run 42329514042, job 128273164114](https://github.com/Eabusham2/router-vpn/actions/runs/42329514042/job/128273164114)
+completed successfully. The decoded actual job log contains all 139 required
+new native verdicts, including all 114 encrypted SS2022/Hysteria2 leaves and
+the physical UDP-owner support case, with no failed or skipped test events.
+The preserved SOCKS reference also passes its original twelve and additional
+forty-two leaves, with sixty-four parent-inclusive named verdicts. These are
+separate inventories, not a product-completion denominator.
+
+The actual original SOCKS receipt records 2,269 prepared records and digest
+`bc14e96eaad77a100311cf5e9939d08923c476a42b503d36615119e2f14249f3`.
+The new proxy receipt records the same 2,167 shipping inputs and digest
+`d8deec5a207e2eaaaca50d962189a7295e71eea97822dfcfb075a8a792d7d616`
+as the merged local preparation. Both execute the pinned reference binary
+`c0df3cd96bc0f8737b91202fb64665a2642134e55d0c9a2c10883c9843bfdf65`
+against all 914 original Xray records, digest
+`2753839c7c09a4dbdc155ccf4333d64f27f49b2d8f5c930bb621e14e8327fc86`.
+The native peer image is
+`de79852f8bad6caa0cf191602efc9cdd612b57e4f3486dfaf93add2382968551`.
+The receipts retain `desktop-reference-only` scope. Host connection state,
+system tunnel policy, physical devices and the full release remain separate.
+
+### Actual Darwin renewal result and isolated expiry-cap control
+
+At exact source `976c771d`, actual Intel job `128271252512` and Apple Silicon
+job `128271252703` both pass all twenty-three required socket/SOCKS verdicts,
+including grouped renewal, malformed authority and bounded frame coverage
+for IPv4 and IPv6. The actual Unix-channel baseline and all seven causal
+variants also pass. Intel's separate native filter job `128271252224` succeeds.
+The socket jobs still fail later: the intentionally removed derived-expiry
+cap is intercepted during live-child setup by the new renewal postcheck,
+which reports `Darwin renewed relay outlived its retained original control`.
+That is a negative-control reachability failure, not a passing whole job.
+
+The follow-up changes only the native test and its two runner files. A separate
+bounded `SOCKSDerivedExpiry` case creates and exchanges data through a real
+original TCP broker/guardian/PF owner, validates its acknowledged receipt and
+retained descriptor, and exercises the cap against a copied shortened parent
+expiry. It creates no live derived UDP child. The mutation now removes only
+the actual cap; initial grant and grouped renewal postchecks remain unchanged.
+All twenty-three original positive verdicts are retained. The new case must
+produce exactly its root, IPv4 and IPv6 verdicts before its causal mutation
+can count, and only the intended cap assertion with joined cleanup qualifies.
+
+Nineteen focused runner contracts and both Darwin AMD64/ARM64 tagged Go
+cross-compiles pass. The merged fifteen SOCKS runner contracts also pass.
+Cross-compilation is not native PF execution: the new case and its narrow
+mutation still require the new commit's actual Darwin CI. No production
+timeout, freshness bound, policy check or teardown requirement was changed.
 
 The initial `398cb513` failures were read at their exact source identity,
 including authoritative source audit job `128124355405`, iOS jobs
