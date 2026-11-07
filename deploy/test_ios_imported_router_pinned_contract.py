@@ -67,6 +67,33 @@ class ImportedGate(unittest.TestCase):
     def test_exact_verdicts(self):
         G.require_verdicts(self.encode(self.events()))
 
+    def build_output(self):
+        return {'ImportPath': G.PACKAGE+' ['+G.PACKAGE+'.test]', 'Action': 'build-output',
+                'Output': '# '+G.PACKAGE+'\nld: warning: fixture compiler diagnostic\n'}
+
+    def test_compiler_output_preserves_exact_native_verdicts(self):
+        G.require_verdicts(self.encode([self.build_output(), *self.events()]))
+        for events in ([self.build_output()], [self.build_output(), *self.events()[1:]],
+                       [self.build_output(), *self.events()[:-1]]):
+            with self.subTest(events=len(events)), self.assertRaises(ValueError):
+                G.require_verdicts(self.encode(events))
+
+    def test_build_failure_or_malformed_output_cannot_be_a_native_verdict(self):
+        for fault in ('build-fail', 'package', 'test', 'null-package', 'missing-path',
+                      'empty-path', 'wrong-path-type', 'missing-output', 'wrong-output-type'):
+            event = self.build_output()
+            if fault == 'build-fail': event['Action'] = 'build-fail'
+            elif fault == 'package': event['Package'] = G.PACKAGE
+            elif fault == 'test': event['Test'] = G.PARENT
+            elif fault == 'null-package': event['Package'] = None
+            elif fault == 'missing-path': event.pop('ImportPath')
+            elif fault == 'empty-path': event['ImportPath'] = ''
+            elif fault == 'wrong-path-type': event['ImportPath'] = [G.PACKAGE]
+            elif fault == 'missing-output': event.pop('Output')
+            else: event['Output'] = {'Action': 'pass', 'Test': G.PARENT}
+            with self.subTest(fault=fault), self.assertRaises(ValueError):
+                G.require_verdicts(self.encode([event, *self.events()]))
+
     def test_missing_duplicate_skipped_failed_and_foreign(self):
         for change in ('missing', 'duplicate', 'skip', 'fail', 'foreign', 'no-package'):
             events = self.events()

@@ -77,9 +77,22 @@ def require_verdicts(raw):
     package_passes = 0
     for line in raw.splitlines():
         event = json.loads(line)
+        if not isinstance(event, dict):
+            raise ValueError('Malformed native Apple imported event')
+        action, test = event.get('Action'), event.get('Test')
+        # go test -json interleaves BuildEvents and TestEvents. Successful
+        # compiler/linker diagnostics use ImportPath, not Package, and cannot
+        # provide any of the required native test or package verdicts.
+        if action == 'build-output':
+            if (set(event) != {'ImportPath', 'Action', 'Output'} or
+                    not isinstance(event['ImportPath'], str) or not event['ImportPath'].strip() or
+                    not isinstance(event['Output'], str) or not event['Output']):
+                raise ValueError('Malformed native Apple imported build output')
+            continue
+        if action == 'build-fail':
+            raise ValueError('Native Apple imported build failed')
         if event.get('Package') != PACKAGE:
             raise ValueError('Unexpected native package in Apple imported proof')
-        action, test = event.get('Action'), event.get('Test')
         if action in ('skip', 'fail'):
             raise ValueError('Native Apple imported proof skipped or failed')
         if action == 'pass':
