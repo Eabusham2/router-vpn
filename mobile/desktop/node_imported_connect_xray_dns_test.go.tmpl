@@ -8,12 +8,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -43,6 +43,7 @@ const desktopCONNECTXrayDNSPath = "/dns-query/captured"
 // change the independent imported composition's physical interface guard.
 type desktopCONNECTXrayDNSResolver struct {
 	certificate string
+	chain       [][]byte
 	routes      []desktopNodeXrayDNSRoute
 	hits        [4]atomic.Int64
 	requests    [4]atomic.Int64
@@ -100,6 +101,9 @@ func startDesktopCONNECTXrayDNSResolver(t *testing.T) *desktopCONNECTXrayDNSReso
 	t.Helper()
 	pair, certificate := desktopCONNECTXrayDNSCertificate(t)
 	p := &desktopCONNECTXrayDNSResolver{certificate: certificate, entered: make(chan struct{}), cancelled: make(chan struct{}), reuseReady: make(chan struct{})}
+	for _, raw := range pair.Certificate {
+		p.chain = append(p.chain, bytes.Clone(raw))
+	}
 	tlsConfig := func(kind int) *tls.Config {
 		return &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13,
 			GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { p.tlsHello[kind].Add(1); return nil, nil }}
@@ -239,6 +243,136 @@ func desktopCONNECTXrayDNSExchange(ctx context.Context, resolver adapter.DNSTran
 		return errors.New("selected DNS response changed its original answer")
 	}
 	return nil
+}
+
+// The pinned QUIC implementation retains a local TLS verifier as its wrapped
+// cause; ErrorMessage is deliberately empty for NewLocalCryptoError. Require
+// that typed verifier and the original peer chain, not its printable message.
+func desktopCONNECTXrayDNSCertificateRefused(err error, fault string, chain [][]byte) bool {
+	var transport *quic.TransportError
+	for depth := 0; err != nil && depth < 16; depth++ {
+		if original, ok := err.(*quic.TransportError); ok {
+			transport = original
+			break
+		}
+		if _, joined := err.(interface{ Unwrap() []error }); joined {
+			return false
+		}
+		err = errors.Unwrap(err)
+	}
+	if transport == nil || transport.Remote || !transport.ErrorCode.IsCryptoError() || len(chain) == 0 {
+		return false
+	}
+	var verification *tls.CertificateVerificationError
+	if !errors.As(transport, &verification) || len(verification.UnverifiedCertificates) != len(chain) {
+		return false
+	}
+	for index, certificate := range verification.UnverifiedCertificates {
+		if certificate == nil || !bytes.Equal(certificate.Raw, chain[index]) {
+			return false
+		}
+	}
+	switch fault {
+	case "wrong-dns-sni":
+		var name x509.HostnameError
+		return errors.As(verification.Err, &name) && name.Host == "foreign.routervpn.test" &&
+			name.Certificate != nil && bytes.Equal(name.Certificate.Raw, chain[0])
+	case "wrong-dns-trust":
+		var authority x509.UnknownAuthorityError
+		if errors.As(verification.Err, &authority) && authority.Cert != nil {
+			for _, raw := range chain {
+				if bytes.Equal(authority.Cert.Raw, raw) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func TestRouterVPNImportedCONNECTRealityDNSCertificateRefusal(t *testing.T) {
+	for _, fault := range []string{"captured", "wrong-dns-sni", "wrong-dns-trust"} {
+		func() {
+			peer := startDesktopCONNECTXrayDNSResolver(t)
+			root := x509.NewCertPool()
+			certificate := peer.certificate
+			if fault == "wrong-dns-trust" {
+				_, certificate = desktopCONNECTXrayDNSCertificate(t)
+			}
+			if !root.AppendCertsFromPEM([]byte(certificate)) {
+				t.Fatal("lost original DNS trust fixture")
+			}
+			name := desktopCONNECTXrayDNSName
+			if fault == "wrong-dns-sni" {
+				name = "foreign.routervpn.test"
+			}
+			transport := &http3.Transport{TLSClientConfig: &tls.Config{RootCAs: root, ServerName: name, MinVersion: tls.VersionTLS13},
+				QUICConfig: &quic.Config{DisablePathManager: true}}
+			defer transport.Close()
+			query := new(mDNS.Msg).SetQuestion(desktopCONNECTXrayDNSQuestion, mDNS.TypeA)
+			query.Id = 0
+			raw, err := query.Pack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+peer.routes[2].private+desktopCONNECTXrayDNSPath, bytes.NewReader(raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Host = desktopCONNECTXrayDNSName
+			request.Header.Set("Content-Type", "application/dns-message")
+			request.Header.Set("Accept", "application/dns-message")
+			response, err := transport.RoundTrip(request)
+			if fault == "captured" {
+				if err != nil || response == nil {
+					t.Fatal("original HTTP3 certificate did not authenticate", err)
+				}
+				defer response.Body.Close()
+				body, readErr := io.ReadAll(io.LimitReader(response.Body, 65536))
+				answer := new(mDNS.Msg)
+				if readErr != nil || response.StatusCode != http.StatusOK || answer.Unpack(body) != nil || !answer.Response ||
+					answer.Id != query.Id || len(answer.Answer) != 1 || peer.hits[3].Load() != 1 || peer.requests[3].Load() != 1 {
+					t.Fatal("original HTTP3 DNS certificate did not carry its wire answer", readErr)
+				}
+				return
+			}
+			if response != nil {
+				response.Body.Close()
+			}
+			if !desktopCONNECTXrayDNSCertificateRefused(err, fault, peer.chain) || peer.tlsHello[3].Load() == 0 ||
+				peer.requests[3].Load() != 0 || peer.hits[3].Load() != 0 {
+				t.Fatalf("original %s certificate refusal was lost: %T %v", fault, err, err)
+			}
+			if !desktopCONNECTXrayDNSCertificateRefused(fmt.Errorf("original DNS: %w", err), fault, peer.chain) {
+				t.Fatal("unary wrapper lost original verifier")
+			}
+			var original *quic.TransportError
+			if !errors.As(err, &original) {
+				t.Fatal("missing original QUIC error")
+			}
+			remote, nonCrypto := *original, *original
+			remote.Remote = true
+			nonCrypto.ErrorCode = quic.InternalError
+			for _, foreign := range []error{nil, context.DeadlineExceeded, errors.New(err.Error()),
+				&quic.TransportError{ErrorCode: original.ErrorCode, ErrorMessage: err.Error()},
+				errors.Join(context.Canceled, err), &remote, &nonCrypto} {
+				if desktopCONNECTXrayDNSCertificateRefused(foreign, fault, peer.chain) {
+					t.Fatal("foreign error borrowed original DNS certificate refusal", foreign)
+				}
+			}
+			other := "wrong-dns-sni"
+			if fault == other {
+				other = "wrong-dns-trust"
+			}
+			if desktopCONNECTXrayDNSCertificateRefused(err, other, peer.chain) ||
+				desktopCONNECTXrayDNSCertificateRefused(err, fault, nil) ||
+				desktopCONNECTXrayDNSCertificateRefused(err, fault, [][]byte{[]byte("foreign certificate")}) {
+				t.Fatal("foreign verifier or certificate borrowed original refusal")
+			}
+		}()
+	}
 }
 
 func TestRouterVPNImportedCONNECTRealityDoTProbeAdmission(t *testing.T) {
@@ -636,13 +770,7 @@ func desktopCONNECTXrayDNSCase(t *testing.T, protocol, name string) {
 				t.Fatal("foreign selected DNS authority obtained an authenticated answer", err)
 			}
 			if name == "wrong-dns-sni" || name == "wrong-dns-trust" {
-				var cause *quic.TransportError
-				marker := "certificate signed by unknown authority"
-				if name == "wrong-dns-sni" {
-					marker = "not foreign.routervpn.test"
-				}
-				if !errors.As(err, &cause) || cause.Remote || uint64(cause.ErrorCode) < 0x100 || uint64(cause.ErrorCode) >= 0x200 ||
-					!strings.Contains(cause.ErrorMessage, marker) || peer.tlsHello[3].Load() == 0 || peer.requests[3].Load() != 0 {
+				if !desktopCONNECTXrayDNSCertificateRefused(err, name, peer.chain) || peer.tlsHello[3].Load() == 0 || peer.requests[3].Load() != 0 {
 					t.Fatal("selected DNS TLS refusal lost its original typed QUIC certificate cause", err)
 				}
 			}

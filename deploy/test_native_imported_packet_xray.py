@@ -39,6 +39,7 @@ PEER_COPIES = (
 SUPPORT = {
     'TestRouterVPNImportedPacketRealityPhysicalOwner': ['tcp','udp'],
     'TestRouterVPNImportedCONNECTRealityDoTProbeAdmission': [],
+    'TestRouterVPNImportedCONNECTRealityDNSCertificateRefusal': [],
 }
 
 

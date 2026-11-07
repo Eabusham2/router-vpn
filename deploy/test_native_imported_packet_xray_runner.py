@@ -48,7 +48,8 @@ class PacketReferenceInventory(unittest.TestCase):
             'TestRouterVPNImportedOpenVPNUDPRealityNativeTraffic':73,
             gate.DNS_PARENT:49})
         expected=gate.CAPTURE.IMPORTED.names(gate.GROUPS)
-        self.assertEqual(len(expected),350)
+        self.assertEqual(len(expected),351)
+        self.assertIn('TestRouterVPNImportedCONNECTRealityDNSCertificateRefusal', gate.SUPPORT)
         self.assertEqual(sum(name.count('/')==2 for name in gate.CAPTURE.IMPORTED.names(gate.PEERS)),301)
         self.assertTrue(gate.TAGS.endswith(',routervpn_openvpn_remote_test'))
         gate.SOCKS.require_verdicts(self.events(expected),0,expected)
@@ -149,7 +150,7 @@ class PacketReferenceExecution(unittest.TestCase):
                             self.assertIs(caught.exception,failure);recheck.assert_not_called();instrumentation.assert_not_called()
                         else:
                             receipt=gate.reference_stage('go',Path('core'),workspace,{})
-                            self.assertEqual(sum(len(value['verdicts']) for group in ('support','peers') for value in receipt[group].values()),350)
+                            self.assertEqual(sum(len(value['verdicts']) for group in ('support','peers') for value in receipt[group].values()),351)
                             recheck.assert_called_once();instrumentation.assert_called_once()
                         compile_native.assert_called_once();discover.assert_called_once()
                     self.assertEqual(calls,parents[:parents.index(failed)+1] if failed else parents)

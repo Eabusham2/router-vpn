@@ -5,13 +5,9 @@ package routervpnamnezia
 import (
 	"bytes"
 	"context"
-	"errors"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
-
-	"github.com/sagernet/quic-go"
 )
 
 // Four native entry owners carry the same exact captured DNS protocols. The
@@ -132,13 +128,7 @@ func desktopPacketRealityDNSCase(t *testing.T, protocol, name string) {
 				t.Fatal("foreign selected DNS authority obtained an authenticated answer", err)
 			}
 			if name == "wrong-dns-sni" || name == "wrong-dns-trust" {
-				var cause *quic.TransportError
-				marker := "certificate signed by unknown authority"
-				if name == "wrong-dns-sni" {
-					marker = "not foreign.routervpn.test"
-				}
-				if !errors.As(err, &cause) || cause.Remote || uint64(cause.ErrorCode) < 0x100 || uint64(cause.ErrorCode) >= 0x200 ||
-					!strings.Contains(cause.ErrorMessage, marker) || peer.tlsHello[3].Load() == 0 || peer.requests[3].Load() != 0 {
+				if !desktopCONNECTXrayDNSCertificateRefused(err, name, peer.chain) || peer.tlsHello[3].Load() == 0 || peer.requests[3].Load() != 0 {
 					t.Fatal("selected DNS TLS refusal lost its original typed QUIC certificate cause", err)
 				}
 			}
