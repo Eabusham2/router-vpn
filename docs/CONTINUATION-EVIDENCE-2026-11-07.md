@@ -903,7 +903,43 @@ No additional heavy compiler was started while the separate actual native
 parser and encrypted-peer attempt was running. That new native increment,
 exact-SHA all-platform packaging and device acceptance remain pending.
 
+### Desktop daily-use admission remains distinct from shared support
+
+At published `31e4529e`, the desktop `cmd/client` production tree has no
+`NewImportedEntry` caller. `resolveNativeMultihopSelection` still requires
+paired Router VPN nodes for both roles, while the ordinary external handler
+requires an external final. Those two paths therefore do not admit an
+imported entry with a paired Router VPN final. The shared compiler and native
+reference tests do not close this daily-use desktop requirement. Protected
+native startup, both captured identities, selected final DNS, complete profile
+restoration and owned teardown require their actual desktop call-path work.
+
 ### Bounded Fastest fixture setup and latest native observations
+
+The exact-`0d4a3ecc` hosted
+[Android contract job](https://github.com/Eabusham2/router-vpn/actions/runs/42337616091/job/128298006809)
+and [recovered-requirements job](https://github.com/Eabusham2/router-vpn/actions/runs/42337616108/job/128298006924)
+both completed successfully. Each original log was independently read and
+contains that exact checkout identity. The Android job passed all seven shared
+race groups, including external/OpenVPN and controller/proof ownership. The
+requirements job passed the unfiltered `go test ./...`, including `cmd/client`
+in 538.135 seconds, `internal/dnsmeasure` in 0.827 seconds and
+`internal/mobilemultihop` in 90.578 seconds. These close the earlier mapped
+OpenVPN fixture failure at this source identity. The standalone Android
+contract is not an APK build or the separate libbox/Box native context gate.
+
+Both jobs also passed at published `31e4529e`; the original logs were
+independently read at
+[Android job 128302535380](https://github.com/Eabusham2/router-vpn/actions/runs/42339084286/job/128302535380)
+and [requirements job 128302603740](https://github.com/Eabusham2/router-vpn/actions/runs/42339084406/job/128302603740).
+The latter unfiltered run passed `cmd/client` in 468.377 seconds,
+`internal/dnsmeasure` in 0.706 seconds and `internal/mobilemultihop` in
+63.780 seconds. The separate custom-standard-exit
+[desktop job 128302536012](https://github.com/Eabusham2/router-vpn/actions/runs/42339084387/job/128302536012)
+hit the complete client package's ten-minute alarm. Its current
+`TestSpeedLabMeasurementConstructorsUseCapturedTunnel` had been running for
+one second. That observation does not establish a deadlock in this individual
+test. The complete run, native gates and release status remain separate.
 
 `TestFastestSelectionUsesTrackerBeforeAppLock` previously waited forever for
 its probe callback even if the actual handler had already rejected physical

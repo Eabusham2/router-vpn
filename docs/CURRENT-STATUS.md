@@ -158,6 +158,24 @@ That whole job failed in the separate mapped OpenVPN fixture already corrected
 by `0d4a3ecc`; its original wrong-generation assertion remains unchanged.
 No local Fastest execution pass is claimed.
 
+Both exact-`0d4a3ecc` hosted Android and recovered-requirements contract jobs
+subsequently passed. Both also passed at published `31e4529e`; their original
+logs were independently read. The latter unfiltered `go test ./...` passed
+the complete client package in 468.377 seconds. The mapped OpenVPN fixture
+blocker is closed at those SHAs. The separate `31e4529e` custom-standard-exit
+desktop job hit its complete package's ten-minute alarm while the current
+Speed Lab test had been running for only one second. This is not evidence of
+a deadlock in that individual test. APK builds, separate native context gates
+and the complete later release retain their own required evidence.
+
+Desktop daily-use admission remains a separate implementation gap at
+`31e4529e`: the paired multihop handler requires paired nodes in both roles,
+and External Connect requires an external final. Neither calls the shared
+imported-entry compiler for an imported entry with a paired Router VPN final.
+The actual protected startup, selected DNS, complete restore and teardown
+paths must be adopted before the shared/native reference support can be
+reported as desktop daily-use support.
+
 These units do not establish a new complete release. Other imported graph
 families, Server/Compare for that direction, exact-SHA native/package/image
 verification, physical/device acceptance and authorized private deployment

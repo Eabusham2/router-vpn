@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "created_utc": "2026-11-07",
+  "base_remote_sha": "31e4529e1e9772ddbed14682c6df51221fbed518",
+  "unavailable_environment": "ccarenv_b64_Y2NhcmVudl82YTk2MDZjNDgwOTQ4MTkxYWE1ODc4NjI1MTVhMjdlZQ",
+  "proof_run": {
+    "local_commit": "2be54140cba6eb38ba89df7717c5f52e157fb334",
+    "local_tree": "f44e7b7eccde6301c7f9b6c33a25a684efb25a96",
+    "local_parent": "0c44afb473a7ae5c63cf0747189d300c1c9cedac",
+    "published_equivalent_parent": "6a388afcf7f6252c49b4bbb87c49db68047d3502",
+    "worktree": "/workspace/scratch/router-vpn-external-proof-run-context-20261107",
+    "root_merge_worktree": "/workspace/scratch/router-vpn-continuation-20261106",
+    "root_merge_status": "cherry-pick --no-commit succeeded; 28 runner and 4 shipping checks passed; commit command was not reached after apply_patch failed during transport loss",
+    "required_shared_run_verdicts": 40,
+    "required_native_run_verdicts": 19,
+    "executed_new_shared_tests": 0,
+    "executed_new_native_tests": 0,
+    "files": {
+      "deploy/test_mobile_imported_entry.py": "5593d5991efa317a2f0099d48f1dc76d8f5ce6a763366c79a467f7f6360824ef",
+      "deploy/test_mobile_imported_entry_runner.py": "42f6e274cac95337a020ccc49b849cd79236b6862b80d4b0b1aaedaaa649dd84",
+      "docs/MOBILE-IMPORTED-ROUTER-PATH.md": "e6191d8c092dd0ede989e0a58302658ba75060e0c795d225fb4280a6b2a6b83f",
+      "docs/SPEED-LAB.md": "b8f411e42995e9dee9e523950cb1dda0cb48c9afdf17409101a01d4aa9e2cdd3",
+      "internal/mobilemultihop/external_observation.go": "8ce2cb5cef35b16c70545355d55fec74ad6db5697063a89582f708428daf9af2",
+      "internal/mobilemultihop/external_proof.go": "c4830a4350bd289065aca5cf190d30d7c5714f5f3d299dc2ca032853d03fb558",
+      "internal/mobilemultihop/external_proof_context_test.go": "558aaa3360cfc4b4e4fe08a79deb935895651cd39706b7a61347f84942137713",
+      "mobile/externalpolicy/box.go.tmpl": "3c803d104483226f6a418b340f77bfc015d67937491dea51dc6528fb42a1d012",
+      "mobile/routervpn_external_measurement_context_test.go.tmpl": "5e17b3b83f5cabb7e58f7a57c20869986613c22c6accebccd216165c8376aae1",
+      "mobile/routervpn_external_policy_bridge.go.tmpl": "2fe31a06619aa09d58fbbcbad6e59d8bc4964e1776402200130883e551ef428b",
+      "internal/mobilemultihop/external_proof_run_context_test.go": "f453ebd71f2c286e46934a0e716d7b702fad072c30d431108682784bee71cdff"
+    }
+  },
+  "native_connect": {
+    "worktree": "/workspace/scratch/efb65c817f35/connect-reality",
+    "last_verified_head": "bbb369b9eb03e88c5eb088ab5220dd542b5f4607",
+    "local_checkpoint_created": false,
+    "required_parser_verdicts": 57,
+    "required_peer_verdicts": 173,
+    "native_attempt": "600-second outer process timeout with no returned verdicts; original TimeoutExpired output object not saved; no retry",
+    "recovery_record": {
+      "path": "docs/recovery/CONNECT-REALITY-native-incomplete-bbb369b9-20261107.md",
+      "blob_sha": "d60b445b3a27de12c1ead22251481ae4c8ea9593",
+      "kind": "incomplete recorded facts and commands; not a full patch or verified implementation tree"
+    },
+    "pending_paths": [
+      ".github/workflows/imported-socks-reality-native.yml",
+      "deploy/build-native-runtime.py",
+      "deploy/prepare-desktop-external.py",
+      "deploy/test_android_multihop_pinned.py",
+      "deploy/test_desktop_native_toolchain.py",
+      "deploy/test_ios_imported_router_pinned.py",
+      "deploy/test_mobile_imported_entry_runner.py",
+      "deploy/test_mobile_imported_connect_xray.py",
+      "deploy/test_mobile_imported_connect_xray_runner.py",
+      "mobile/desktop/node_layer_peer_test.go.tmpl",
+      "mobile/desktop/node_xray_peer_test.go.tmpl",
+      "mobile/routervpn_imported_entry_native_test.go.tmpl",
+      "mobile/desktop/node_imported_connect_xray_test.go.tmpl",
+      "mobile/desktop/node_imported_connect_xray_dns_test.go.tmpl"
+    ]
+  },
+  "packet_reality": {
+    "worktree": "/workspace/scratch/efb65c817f35/packet-reality",
+    "base": "31e4529e1e9772ddbed14682c6df51221fbed518",
+    "local_checkpoint_created": false,
+    "proposed_separate_capture_inventory": 36,
+    "validation_passed": false,
+    "pending_sessions": [
+      31654,
+      78448
+    ],
+    "process_completion": "unconfirmed after executor became unavailable",
+    "successful_write_paths": [
+      "internal/mobilemultihop/imported_entry.go",
+      "android/app/src/main/java/com/eabusham/routervpn/AndroidImportedRouterPath.java",
+      "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
+      "ios/RouterVPN/App/IOSMultihopExecution.swift",
+      "ios/RouterVPN/App/IOSRuntimeSelection.swift",
+      "ios/RouterVPN/App/IOSMultihopView.swift",
+      "ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
+      "internal/mobilemultihop/imported_packet_xray_test.go"
+    ],
+    "unconfirmed_followup_path": "internal/mobilemultihop/imported_socks_xray_test.go",
+    "recovery_record": {
+      "path": "docs/recovery/packet-reality-31e4529e-prevalidation-partial-2026-11-07.txt",
+      "blob_sha": "61efaeb74e305e2509a7d73f6d8dd5c6792173ab",
+      "kind": "recorded prevalidation transformations and test patch; not confirmed final formatted contents"
+    }
+  },
+  "safety": "No force-push, private deployment, router change, signing operation, or physical-device acceptance was performed."
+}
