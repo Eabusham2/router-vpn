@@ -195,14 +195,33 @@ func (e *externalExecutionEngine) OpenVPNRemote(tag string) (nativeopenvpn.Remot
 	}
 	return e.remote(context.Background(), tag)
 }
+func (e *externalExecutionEngine) OpenVPNRemoteContext(ctx context.Context, tag string) (nativeopenvpn.RemoteReceipt, error) {
+	selected, err := e.SelectedContext(ctx)
+	if err != nil || selected != tag {
+		return nativeopenvpn.RemoteReceipt{}, errors.Join(err, errors.New("wrong native selector"))
+	}
+	receipt, err := e.remote(ctx, tag)
+	if err != nil {
+		return nativeopenvpn.RemoteReceipt{}, err
+	}
+	selected, err = e.SelectedContext(ctx)
+	if err != nil || selected != tag {
+		return nativeopenvpn.RemoteReceipt{}, errors.Join(err, errors.New("native selector changed"))
+	}
+	return receipt, ctx.Err()
+}
 func (e *externalExecutionEngine) remote(ctx context.Context, tag string) (nativeopenvpn.RemoteReceipt, error) {
-	e.mu.Lock()
+	if err := externalObservationLock(ctx, &e.mu); err != nil {
+		return nativeopenvpn.RemoteReceipt{}, err
+	}
 	hook := e.onRemote
 	e.mu.Unlock()
 	if hook != nil {
 		hook(ctx, tag)
 	}
-	e.mu.Lock()
+	if err := externalObservationLock(ctx, &e.mu); err != nil {
+		return nativeopenvpn.RemoteReceipt{}, err
+	}
 	defer e.mu.Unlock()
 	receipt, ok := e.remotes[tag]
 	if ctx.Err() != nil || !ok || e.identity == "" {
@@ -227,6 +246,13 @@ func (e *externalExecutionEngine) Selected() string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.selected
+}
+func (e *externalExecutionEngine) SelectedContext(ctx context.Context) (string, error) {
+	if err := externalObservationLock(ctx, &e.mu); err != nil {
+		return "", err
+	}
+	defer e.mu.Unlock()
+	return e.selected, ctx.Err()
 }
 func (e *externalExecutionEngine) Select(tag string) error {
 	e.mu.Lock()

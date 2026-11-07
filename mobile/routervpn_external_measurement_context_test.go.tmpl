@@ -17,6 +17,7 @@ import (
 	O "github.com/sagernet/sing-box/adapter/outbound"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/include"
@@ -24,6 +25,180 @@ import (
 	"github.com/sagernet/sing-box/option"
 	SJ "github.com/sagernet/sing/common/json"
 )
+
+func TestRouterExternalDNSConstructorKeepsCapturedNativeOwner(t *testing.T) {
+	for _, phase := range []string{"current", "legacy", "nil", "cancel-before", "instance-held", "engine-held", "dns-held", "instance-replaced", "unproved", "source-changed", "dns-policy", "session-changed", "missing-observer"} {
+		t.Run(phase, func(t *testing.T) {
+			server, proof, shared, native := routerExternalMeasurementOwner(t)
+			started := server.StartedService
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			caller := &routerConstructorCaller{Context: parent, entered: make(chan struct{})}
+			originalObserve := proof.currentContext
+			var first context.Context
+			var legacy atomic.Int32
+			proof.current = func() bool { legacy.Add(1); return false }
+			proof.currentContext = func(ctx context.Context) error {
+				if first == nil {
+					first = ctx
+				}
+				if ctx != first || phase != "legacy" && ctx != caller {
+					return errors.New("DNS native constructor replaced its original caller")
+				}
+				return originalObserve(ctx)
+			}
+			if phase == "unproved" {
+				routerProofField[atomic.Bool](t, shared, "succeeded").Store(false)
+			}
+			if phase == "missing-observer" {
+				proof.currentContext = nil
+			}
+			if phase == "cancel-before" {
+				cancel()
+			}
+			var held *sync.RWMutex
+			switch phase {
+			case "instance-held":
+				held = routerProofField[sync.RWMutex](t, started, "serviceAccess")
+			case "engine-held", "instance-replaced":
+				held = routerExternalMeasurementField[sync.RWMutex](t, proof.request, "engine", "mu")
+			case "dns-held":
+				held = routerExternalMeasurementField[sync.RWMutex](t, native, "dnsTransport", "access")
+			}
+			var once sync.Once
+			release := func() {
+				once.Do(func() {
+					if held != nil {
+						held.Unlock()
+					}
+				})
+			}
+			if held != nil {
+				held.Lock()
+			}
+			defer release()
+			type result struct {
+				measurement *RouterDNSMeasurement
+				err         error
+			}
+			done := make(chan result, 1)
+			go func() {
+				ctx := context.Context(caller)
+				if phase == "nil" {
+					ctx = nil
+				}
+				source, capture, session := routerExternalMeasurementSource, routerExternalMeasurementCapture, "original-measurement-session"
+				if phase == "source-changed" {
+					source += " "
+				}
+				if phase == "session-changed" {
+					session = "replacement-session"
+				}
+				if phase == "dns-policy" {
+					capture = strings.Replace(capture, `"dns_mode":"rescue"`, `"dns_mode":"custom","dns_protocol":"tcp","dns_host":"9.9.9.9","dns_port":5353`, 1)
+					if _, err := mobilemultihop.NewExternalPolicy(source, capture); err != nil {
+						done <- result{nil, errors.New("DNS alternate-policy fixture is malformed")}
+						return
+					}
+				}
+				var value *RouterDNSMeasurement
+				var err error
+				if phase == "legacy" {
+					value, err = RouterExternalCreateDNSMeasurement(server, proof, source, capture, session)
+				} else {
+					value, err = routerExternalCreateDNSMeasurementContext(ctx, server, proof, source, capture, session)
+				}
+				done <- result{value, err}
+			}()
+			var replacement *daemon.Instance
+			if held != nil {
+				select {
+				case <-caller.entered:
+				case actual := <-done:
+					t.Fatal("DNS constructor bypassed held original observation", actual.err)
+				case <-time.After(time.Second):
+					cancel()
+					release()
+					<-done
+					t.Fatal("DNS constructor did not enter original native caller")
+				}
+				if phase == "instance-replaced" {
+					replacement = new(daemon.Instance)
+					*routerProofField[*box.Box](t, replacement, "instance") = native
+					lock := routerProofField[sync.RWMutex](t, started, "serviceAccess")
+					lock.Lock()
+					*routerProofField[*daemon.Instance](t, started, "instance") = replacement
+					lock.Unlock()
+					release()
+				} else {
+					cancel()
+				}
+			}
+			var actual result
+			select {
+			case actual = <-done:
+			case <-time.After(time.Second):
+				cancel()
+				release()
+				<-done
+				t.Fatal("DNS constructor did not join original native cancellation")
+			}
+			release()
+			if phase == "current" || phase == "legacy" {
+				if actual.err != nil || actual.measurement == nil {
+					t.Fatal("DNS constructor lost captured successful native owner", actual.err)
+				}
+				defer actual.measurement.Close()
+				cancel()
+				proof.currentContext = originalObserve
+				engine := *routerProofField[dnsmeasure.Engine](t, actual.measurement.service, "engine")
+				observer, ok := engine.(dnsmeasure.ContextEngine)
+				if !ok {
+					t.Fatal("ordinary native DNS service omitted original-context identity")
+				}
+				if _, err := observer.IdentityContext(context.Background()); err != nil {
+					t.Fatal("constructor cancellation retired independent DNS service", err)
+				}
+				description := *routerProofField[dnsmeasure.Description](t, actual.measurement.service, "description")
+				expected := dnsmeasure.Description{NodeID: "selected-exit", SessionID: "original-measurement-session", RouteLabel: "Current external exit", IPv6Enabled: false, Selected: dnsmeasure.Endpoint{ID: "selected", Kind: "selected", Name: "Selected DNS", Address: "1.1.1.1", Port: 443, Transport: "https", ServerName: "cloudflare-dns.com", Path: "/dns-query", Route: "custom-exit", RouteLabel: "Selected DNS via custom-exit"}}
+				if description != expected {
+					t.Fatal("DNS constructor changed selected capture", description)
+				}
+				var status dnsmeasure.Status
+				if SJ.Unmarshal([]byte(actual.measurement.StatusJSON()), &status) != nil || status.Stage != "idle" || status.Request != "" || !status.Drained || len(status.Results) != 0 {
+					t.Fatal("DNS constructor manufactured query results or started work", status)
+				}
+			} else {
+				if actual.measurement != nil {
+					_ = actual.measurement.Close()
+				}
+				if actual.err == nil || actual.measurement != nil {
+					t.Fatal("DNS constructor published unproved, replaced or foreign capture", actual.err)
+				}
+				if strings.Contains(actual.err.Error(), "fixture is malformed") {
+					t.Fatal(actual.err)
+				}
+				if phase == "cancel-before" || phase == "instance-held" || phase == "engine-held" || phase == "dns-held" {
+					if !errors.Is(actual.err, context.Canceled) {
+						t.Fatal("DNS constructor lost original cancellation", actual.err)
+					}
+				}
+			}
+			if replacement != nil {
+				current, err := started.RouterVPNInstanceContext(context.Background())
+				if err != nil || current != replacement {
+					t.Fatal("old DNS constructor changed replacement owner", err)
+				}
+			}
+			if legacy.Load() != 0 {
+				t.Fatal("DNS constructor used legacy proof callback")
+			}
+			if phase != "unproved" && ((*routerProofField[context.Context](t, shared, "ctx")).Err() != nil || !routerProofField[atomic.Bool](t, shared, "succeeded").Load()) {
+				t.Fatal("DNS construction retired the healthy original proof")
+			}
+		})
+	}
+}
 
 const routerExternalMeasurementSource = `{"log":{"disabled":true},"inbounds":[{"type":"tun","tag":"tun-in","address":["172.29.93.1/30","fd29:93::1/126"],"mtu":1280,"auto_route":true,"strict_route":true,"stack":"system"}],"outbounds":[{"type":"socks","tag":"custom-exit","version":"5","server":"203.0.113.20","server_port":443,"username":"captured-user","password":"captured-secret"}],"route":{"final":"custom-exit","auto_detect_interface":true}}`
 const routerExternalMeasurementCapture = `{"schema":1,"exit_id":"selected-exit","protocol":"socks5","expected_public_ip":"203.0.113.88","profile":{"id":"selected-exit","node_kind":"external","external":{"protocol":"socks5","expected_public_ip":"203.0.113.88","socks5":{"host":"203.0.113.20","port":443,"username":"captured-user","password":"captured-secret"}},"dns_mode":"rescue","mtu_policy":"fixed","manual_mtu":1280,"home_lan_access":false,"ipv6_mode":"off"}}`

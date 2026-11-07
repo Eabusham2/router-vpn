@@ -237,5 +237,19 @@ Construction does not run or waive selected-DNS, entry or exit proof, and a new
 request cannot inherit an earlier successful request's state. Cancelled or
 replaced captures discard only their unpublished request; the replacement graph
 and earlier independently retained request remain owned by their own lifetimes.
-The existing proof execution callbacks and DNS measurement factories retain
-their separate context-propagation work.
+The existing proof execution callbacks retain their separate context-propagation
+work.
+
+The ordinary external mobile DNS comparison constructor now keeps the same
+caller through successful-proof and current-path verification, exact source and
+selected-resolver metadata, native instance/graph observation and publication.
+Its idle service does not inherit the temporary constructor deadline and does
+not start queries or manufacture measurements during capture. The selected DNS
+address, port, transport, server name, path and route remain those of the proved
+configuration; the public comparison catalog does not replace that selection.
+The context-aware shared constructor requires a real identity observer and
+rechecks its captured identity before returning. Existing contextless APIs remain
+available, and Tor's separate constructor is unchanged. DNS operation admission,
+watcher/status observation, native query/dial callbacks and retained socket drain
+have their own follow-on context/lifecycle verification; this constructor unit
+does not establish their completion or live DNS acceptance.

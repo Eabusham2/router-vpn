@@ -1,8 +1,10 @@
 package libbox
 
 import (
+	"context"
 	"errors"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+	"time"
 )
 
 // RouterDNSMeasurement owns only fixed-catalog resolver queries and the actual
@@ -10,23 +12,51 @@ import (
 type RouterDNSMeasurement struct{ service *dnsmeasure.Service }
 
 func RouterExternalCreateDNSMeasurement(server *CommandServer, proof *RouterExternalProofRequest, source, capture, session string) (*RouterDNSMeasurement, error) {
-	if server == nil || server.StartedService == nil || proof == nil || !proof.Healthy() {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	return routerExternalCreateDNSMeasurementContext(ctx, server, proof, source, capture, session)
+}
+
+func routerExternalCreateDNSMeasurementContext(ctx context.Context, server *CommandServer, proof *RouterExternalProofRequest, source, capture, session string) (*RouterDNSMeasurement, error) {
+	if ctx == nil {
+		return nil, errors.New("DNS measurement has no constructor caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if server == nil || server.StartedService == nil || proof == nil {
 		return nil, errors.New("DNS comparison has no successful external proof")
 	}
-	instance := server.StartedService.Instance()
-	if instance == nil || instance.Box() == nil {
-		return nil, errors.New("DNS native instance is unavailable")
+	if err := proof.healthyContext(ctx); err != nil {
+		return nil, err
 	}
-	current := func() bool {
-		return server.StartedService != nil && server.StartedService.Instance() == instance && proof.Healthy()
-	}
-	service, err := instance.Box().RouterVPNExternalDNSMeasurement(proof.request, source, capture, session, current)
+	started := server.StartedService
+	instance, err := started.RouterVPNInstanceContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if !current() {
-		_ = service.Close()
-		return nil, errors.New("DNS native instance changed")
+	if instance == nil || instance.Box() == nil {
+		return nil, errors.New("DNS native instance is unavailable")
+	}
+	current := func(ctx context.Context) error {
+		if server.StartedService != started {
+			return errors.New("DNS native service changed")
+		}
+		actual, err := started.RouterVPNInstanceContext(ctx)
+		if err != nil {
+			return err
+		}
+		if server.StartedService != started || actual != instance {
+			return errors.New("DNS native instance changed")
+		}
+		return proof.healthyContext(ctx)
+	}
+	service, err := instance.Box().RouterVPNExternalDNSMeasurementContext(ctx, proof.request, source, capture, session, current)
+	if err != nil {
+		return nil, err
+	}
+	if err := current(ctx); err != nil {
+		return nil, errors.Join(err, service.Close())
 	}
 	return &RouterDNSMeasurement{service: service}, nil
 }

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"time"
 
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
 	"github.com/sagernet/sing-box/option"
@@ -13,14 +14,42 @@ import (
 )
 
 func (s *Box) RouterVPNExternalDNSMeasurement(proof *RouterVPNExternalProofRequest, source, capture, session string, current func() bool) (*dnsmeasure.Service, error) {
-	if s == nil || proof == nil || proof.request == nil || proof.engine == nil || proof.engine.box != s || !proof.Healthy() || current == nil || !current() {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	// Retain the legacy host API. Mobile capture uses the context form so its
+	// actual StartedService observation shares the same original caller.
+	return s.RouterVPNExternalDNSMeasurementContext(ctx, proof, source, capture, session, func(ctx context.Context) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if current == nil || !current() {
+			return errors.New("DNS measurement host owner retired")
+		}
+		return ctx.Err()
+	})
+}
+
+func (s *Box) RouterVPNExternalDNSMeasurementContext(ctx context.Context, proof *RouterVPNExternalProofRequest, source, capture, session string, current func(context.Context) error) (*dnsmeasure.Service, error) {
+	if ctx == nil {
+		return nil, errors.New("DNS measurement has no constructor caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s == nil || proof == nil || proof.request == nil || proof.engine == nil || proof.engine.box != s || current == nil {
 		return nil, errors.New("DNS measurement native external proof is unavailable")
 	}
-	config, metadata, err := proof.request.DNSMeasurementAuthority(source, capture, session)
+	if err := current(ctx); err != nil {
+		return nil, err
+	}
+	if err := proof.HealthyContext(ctx); err != nil {
+		return nil, err
+	}
+	config, metadata, err := proof.request.DNSMeasurementAuthorityContext(ctx, source, capture, session)
 	if err != nil {
 		return nil, err
 	}
-	config, err = routerVPNExternalMeasurementConfig(proof, config)
+	config, err = routerVPNExternalMeasurementConfigContext(ctx, proof, config)
 	if err != nil {
 		return nil, err
 	}
@@ -39,13 +68,61 @@ func (s *Box) RouterVPNExternalDNSMeasurement(proof *RouterVPNExternalProofReque
 		DNSDetour     string `json:"dns_detour"`
 		IPv6Mode      string `json:"ipv6_mode"`
 	}
-	if json.Unmarshal([]byte(metadata), &meta) != nil || proof.engine.tunTag != meta.TUNTag || proof.engine.Identity() == "" {
+	if json.Unmarshal([]byte(metadata), &meta) != nil || proof.engine.tunTag != meta.TUNTag {
 		return nil, errors.New("DNS measurement lost its captured native TUN")
 	}
 	selected := dnsmeasure.Endpoint{ID: "selected", Name: "Selected DNS", Kind: "selected", Address: meta.DNSServer, Port: meta.DNSPort, Transport: meta.DNSProtocol, ServerName: meta.DNSServerName, Path: meta.DNSPath, Route: meta.DNSDetour, RouteLabel: "Selected DNS via " + meta.DNSDetour}
 	ipv6 := meta.IPv6Mode == "on" || meta.IPv6Mode == "auto"
-	engine := &routerVPNDNSMeasurementEngine{core: proof.engine, external: proof, current: current, session: session, ipv6: ipv6}
-	return dnsmeasure.New(engine, dnsmeasure.Description{NodeID: meta.ExitID, SessionID: session, RouteLabel: "Current external exit", Selected: selected, IPv6Enabled: ipv6})
+	legacyCurrent := func() bool {
+		caller, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		return current(caller) == nil
+	}
+	engine := &routerVPNExternalDNSMeasurementEngine{routerVPNDNSMeasurementEngine: &routerVPNDNSMeasurementEngine{core: proof.engine, external: proof, current: legacyCurrent, session: session, ipv6: ipv6}, currentContext: current}
+	return dnsmeasure.NewContext(ctx, engine, dnsmeasure.Description{NodeID: meta.ExitID, SessionID: session, RouteLabel: "Current external exit", Selected: selected, IPv6Enabled: ipv6})
+}
+
+// Ordinary external proof ownership has an original-context observer. Tor's
+// resident, padding and Server proof callbacks remain a distinct legacy path.
+type routerVPNExternalDNSMeasurementEngine struct {
+	*routerVPNDNSMeasurementEngine
+	currentContext func(context.Context) error
+}
+
+func (e *routerVPNExternalDNSMeasurementEngine) Identity() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	identity, _ := e.IdentityContext(ctx)
+	return identity
+}
+
+func (e *routerVPNExternalDNSMeasurementEngine) IdentityContext(ctx context.Context) (string, error) {
+	if ctx == nil {
+		return "", errors.New("DNS measurement identity has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if e == nil || e.routerVPNDNSMeasurementEngine == nil || e.core == nil || e.external == nil || e.currentContext == nil {
+		return "", errors.New("DNS measurement owner is unavailable")
+	}
+	if err := e.currentContext(ctx); err != nil {
+		return "", err
+	}
+	if err := e.external.HealthyContext(ctx); err != nil {
+		return "", err
+	}
+	identity, err := e.core.IdentityContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := e.currentContext(ctx); err != nil {
+		return "", err
+	}
+	if err := e.external.HealthyContext(ctx); err != nil {
+		return "", err
+	}
+	return identity + ":dns:" + e.session, ctx.Err()
 }
 
 func (s *Box) RouterVPNTorDNSMeasurement(proof *RouterVPNTorProofRequest, exitID string, current func() bool) (*dnsmeasure.Service, error) {

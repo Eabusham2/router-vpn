@@ -34,6 +34,12 @@ type Engine interface {
 	SelectedDNS(context.Context) error
 }
 
+// ContextEngine retains the constructor's original caller while observing the
+// exact native path. Legacy engines remain available through New.
+type ContextEngine interface {
+	IdentityContext(context.Context) (string, error)
+}
+
 // A native transport can reconnect while its enclosing VPN and TUN remain
 // alive. Retained external paths verify that generation at measurement and
 // result-adoption boundaries without relying on their background health cache.
@@ -85,6 +91,41 @@ func New(engine Engine, description Description) (*Service, error) {
 	if engine == nil || engine.Identity() == "" || !profileID.MatchString(description.NodeID) || !profileID.MatchString(description.SessionID) || !safeText(description.RouteLabel, 160) {
 		return nil, errors.New("DNS measurement requires a captured proved native connection")
 	}
+	return newService(engine, description, engine.Identity())
+}
+
+// NewContext captures an idle service without retaining this short-lived
+// constructor as the lifetime of later independently owned DNS requests.
+func NewContext(ctx context.Context, engine Engine, description Description) (*Service, error) {
+	if ctx == nil {
+		return nil, errors.New("DNS measurement constructor has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	observer, ok := engine.(ContextEngine)
+	if engine == nil || !ok {
+		return nil, errors.New("DNS measurement has no bounded identity observer")
+	}
+	identity, err := observer.IdentityContext(ctx)
+	if err != nil || ctx.Err() != nil || identity == "" {
+		return nil, errors.Join(err, ctx.Err(), ErrStale)
+	}
+	service, err := newService(engine, description, identity)
+	if err != nil {
+		return nil, err
+	}
+	current, err := observer.IdentityContext(ctx)
+	if err != nil || ctx.Err() != nil || current != identity {
+		return nil, errors.Join(err, ctx.Err(), ErrStale)
+	}
+	return service, nil
+}
+
+func newService(engine Engine, description Description, identity string) (*Service, error) {
+	if identity == "" || !profileID.MatchString(description.NodeID) || !profileID.MatchString(description.SessionID) || !safeText(description.RouteLabel, 160) {
+		return nil, errors.New("DNS measurement requires a captured proved native connection")
+	}
 	e := description.Selected
 	if e.ID != "selected" || e.Kind != "selected" || !safeText(e.Name, 160) || !safeText(e.Address, 253) || e.Port < 1 || e.Port > 65535 || !safeText(e.Route, 128) || !safeText(e.RouteLabel, 160) {
 		return nil, errors.New("selected DNS identity is incomplete")
@@ -95,7 +136,7 @@ func New(engine Engine, description Description) (*Service, error) {
 	if len(e.ServerName) > 253 || len(e.Path) > 2048 || strings.ContainsAny(e.ServerName+e.Path, "\r\n\x00") {
 		return nil, errors.New("selected DNS endpoint is invalid")
 	}
-	s := &Service{engine: engine, identity: engine.Identity(), description: description, used: map[string]bool{}, connections: map[*ownedConnection]struct{}{}}
+	s := &Service{engine: engine, identity: identity, description: description, used: map[string]bool{}, connections: map[*ownedConnection]struct{}{}}
 	s.state = s.status("", "", "idle")
 	return s, nil
 }

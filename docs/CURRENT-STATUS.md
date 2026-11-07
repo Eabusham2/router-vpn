@@ -60,10 +60,18 @@ detector and snapshots the writer's decision fields, with logging and network
 I/O outside the lock. All six actual native parser/ownership verdicts pass
 under race instrumentation; restoring only the original pinned parser
 reproduces the exact writer/parser race in both duplex cases. Merged source
-and runner checks also pass. The full selected-DNS rerun remains in progress.
+and runner checks also pass. A local full selected-DNS attempt stopped before
+test execution when the native linker and a dependency vet process were killed.
+The subsequent exact-`08f349d2` hosted reference passed all thirty-seven native
+verdicts, thirteen generation transactions, nineteen shared flow verdicts,
+six parser/ownership verdicts and the exact original-parser race control.
+The prior SOCKS and SS2022/Hysteria2 stages also passed. A separate exact-source
+Xray job passed all nineteen existing preservation verdicts and the actual
+libbox/Start Layer checks. Those jobs run on Ubuntu; they do not establish
+Apple system-tunnel or physical-device acceptance.
 The earlier standard wrong-name failure has no recovered original assertion
-and is not retrospectively attributed to this race. Source publication does
-not certify the pending native inventory. All ten native orchestration tests
+and is not retrospectively attributed to this race. This exact-source protocol
+evidence does not certify a later commit or complete release. All ten native orchestration tests
 pass after explicitly adding the two new mandatory stages and retaining
 their failure/timeout stop checks.
 See [REALITY-UDP443.md](REALITY-UDP443.md) for the provision/update path.
@@ -91,16 +99,30 @@ unproved until its original network proof runs. All fifty-nine exact shared
 context verdicts and existing Local/Server/Compare/OpenVPN compatibility
 checks pass. The native inventory retains forty-five and adds twelve proof
 construction cases, for fifty-seven mandatory verdicts; source projection and
-import closure pass, with native execution still required. DNS factories,
-proof execution callbacks and Tor's resident/padding/Server contexts retain
-their separate unfinished adoption work.
+import closure pass, with native execution still required.
+
+The ordinary external DNS service constructor now retains that original caller
+through successful proof, selected policy, native instance and final owner
+capture. All seventy-two exact shared context verdicts pass under race
+instrumentation on a focused harness containing every production file and the
+original test dependency closure; mandatory full-package CI is unchanged.
+The complete DNS package's ten constructor cases and existing transport and
+ownership checks pass, alongside two causal overlays, twenty-eight runner and
+four shipping checks. All twelve unit files and the complete shared source
+tree match the executed checkpoint. The mandatory native inventory preserves
+fifty-seven and adds fourteen constructor cases, for seventy-one; actual
+native execution remains required. DNS admission and later operation/watch/
+status/dial/query contexts, proof execution callbacks and Tor's resident/
+padding/Server contexts retain their separate unfinished adoption work.
 
 The Fastest lock-order fixture now detects an actual handler return before
 probe admission and always cancels, releases and joins its original request.
 The recorded unbounded setup wait can no longer hide that early response.
 Its lock-order and fifty-sample expectations remain. Local compiler processes
-were killed before the focused test ran; matching hosted execution is still
-required, and no local execution pass is claimed.
+were killed before the test ran. A later harness retaining every production
+file and this original fixture reached its 180-second compilation bound
+without test events. Matching hosted execution is still required, and no local
+execution pass is claimed.
 
 These units do not establish a new complete release. Other imported graph
 families, Server/Compare for that direction, exact-SHA native/package/image

@@ -127,9 +127,10 @@ class ImportedEntryVerdicts(unittest.TestCase):
   for mutation in (events[:-1],events+[events[-1]],events[:-1]+[dict(events[-1],Action='skip')]):
    with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
  def test_context_owner_verdicts_are_required(self):
-  self.assertEqual(len(gate.names(gate.CONTEXT_CORE)),59)
-  self.assertEqual(len(gate.names(gate.CONTEXT_NATIVE)),57)
-  for group in (gate.CONTEXT_CORE,gate.CONTEXT_NATIVE):
+  self.assertEqual(len(gate.names(gate.CONTEXT_CORE)),72)
+  self.assertEqual(len(gate.names(gate.CONTEXT_DNS)),10)
+  self.assertEqual(len(gate.names(gate.CONTEXT_NATIVE)),71)
+  for group in (gate.CONTEXT_CORE,gate.CONTEXT_DNS,gate.CONTEXT_NATIVE):
    expected=gate.names(group)
    events=[{'Action':a,'Test':n} for n in sorted(expected) for a in ('run','pass')]
    gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)

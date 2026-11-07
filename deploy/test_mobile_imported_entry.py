@@ -59,6 +59,9 @@ CONTEXT_CORE.update({'TestExternalMeasurementLegacyConstructorKeepsOriginalBudge
 CONTEXT_NATIVE['TestRouterExternalHopContextKeepsOriginalNativeOwner']=['current','legacy','nil','cancel-before','instance-held','engine-held','manager-held','instance-replaced','activity-held','unproved','source-changed','missing-observer']
 CONTEXT_CORE.update({'TestExternalProofLegacyConstructorKeepsOriginalBudget':[], 'TestExternalProofConstructorRetainsCallerAndIndependentLifetime':['current','nil-caller','nil-parent','cancel-before','parent-cancel-before','capture-held','recheck-held','owner-replaced','parent-retired-late','caller-retired-late','missing-bounded-reader']})
 CONTEXT_NATIVE['TestRouterExternalProofContextOwnsNativeCapture']=['current','legacy','nil','cancel-before','instance-held','tun-held','outbound-held','dns-held','instance-replaced','tun-replaced','source-changed']
+CONTEXT_CORE.update({'TestExternalDNSAuthorityLegacyKeepsOriginalBudget':[], 'TestExternalDNSAuthorityContextKeepsOriginalProof':['current','nil','cancel-before','health-held','path-held','final-held','path-replaced','final-replaced','unproved','source','session']})
+CONTEXT_DNS={'TestDNSConstructorRetainsOriginalCallerAndSelectedEndpoint':['current','nil','cancel-before','capture-held','recheck-held','owner-replaced','late-cancel','missing-observer','invalid-selected']}
+CONTEXT_NATIVE['TestRouterExternalDNSConstructorKeepsCapturedNativeOwner']=['current','legacy','nil','cancel-before','instance-held','engine-held','dns-held','instance-replaced','unproved','source-changed','dns-policy','session-changed','missing-observer']
 FILES=OPENVPN.FILES|CONNECT_FILES|SOCKS_FILES|SOCKS_XRAY_FILES|NESTED_FILES|PACKET_FINAL_FILES|PACKET_FILES|BASE_FILES|{"final-hysteria2--"+name for name in BASE_FILES}
 CONNECT_DNS_ROWS=[p+"/"+l+"/"+t+"/"+a for p in ("http-connect","https-connect") for l in ("plain","off",*LAYERS[1:]) for t in ("tls","https","h3") for a in ("literal","hostname") if not(l=="plain" and t=="h3")]
 CONNECT_DNS_FILES={row.replace("/","--")+".json" for row in CONNECT_DNS_ROWS}
@@ -229,19 +232,20 @@ def checked_sources(vendor,peers):
   files['mobile/desktop/node_external_openvpn_installed_test.go.tmpl']='protocol/routervpnamnezia/routervpn_desktop_external_openvpn_installed_test.go'
  if not peers:
   files.update({'mobile/routervpn_multihop_bridge.go.tmpl':'experimental/libbox/routervpn_multihop_bridge.go','mobile/routervpn_hop_measurement.go.tmpl':'experimental/libbox/routervpn_hop_measurement.go','mobile/routervpn_multihop_context_test.go.tmpl':'experimental/libbox/routervpn_multihop_context_test.go'})
-  files.update({'mobile/routervpn_external_measurement_bridge.go.tmpl':'experimental/libbox/routervpn_external_measurement_bridge.go','mobile/routervpn_external_measurement_context_test.go.tmpl':'experimental/libbox/routervpn_external_measurement_context_test.go','mobile/routervpn_external_policy_bridge.go.tmpl':'experimental/libbox/routervpn_external_policy_bridge.go','mobile/externalpolicy/measurement.go.tmpl':'routervpn_external_measurement.go','mobile/externalpolicy/mtu.go.tmpl':'routervpn_external_mtu.go','mobile/externalpolicy/box.go.tmpl':'routervpn_external_policy.go','mobile/daemon/instance_context.go.tmpl':'daemon/routervpn_instance_context.go','mobile/strategy/observation.go.tmpl':'adapter/routervpn_observation.go'})
+  files.update({'mobile/routervpn_external_measurement_bridge.go.tmpl':'experimental/libbox/routervpn_external_measurement_bridge.go','mobile/routervpn_external_measurement_context_test.go.tmpl':'experimental/libbox/routervpn_external_measurement_context_test.go','mobile/routervpn_external_policy_bridge.go.tmpl':'experimental/libbox/routervpn_external_policy_bridge.go','mobile/routervpn_dns_measurement.go.tmpl':'experimental/libbox/routervpn_dns_measurement.go','mobile/externalpolicy/measurement.go.tmpl':'routervpn_external_measurement.go','mobile/externalpolicy/dns_measurement.go.tmpl':'routervpn_dns_measurement.go','mobile/externalpolicy/mtu.go.tmpl':'routervpn_external_mtu.go','mobile/externalpolicy/box.go.tmpl':'routervpn_external_policy.go','mobile/daemon/instance_context.go.tmpl':'daemon/routervpn_instance_context.go','mobile/strategy/observation.go.tmpl':'adapter/routervpn_observation.go'})
  for source,target in files.items():
   path=vendor/target
   if path.is_symlink() or not path.is_file() or path.read_bytes()!=(ROOT/source).read_bytes():raise ValueError('Changed native imported-entry source: '+target)
  # The native core must run the same source compiler, not an old matching-name implementation.
  import importlib.util
  spec=importlib.util.spec_from_file_location('imported_mobile_projection',ROOT/'deploy/prepare-mobile-multihop.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
- for source in (ROOT/'internal/mobilemultihop').glob('*.go'):
-  if source.name=='core_config_test.go':continue
-  raw=m.OBSERVATION.rewrite(source.read_bytes())
-  for package in m.PACKAGES:raw=raw.replace(('"router-vpn/internal/'+package+'"').encode(),('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+package+'"').encode())
-  path=vendor/'experimental/libbox/routervpn/mobilemultihop'/source.name
-  if path.is_symlink() or not path.is_file() or path.read_bytes()!=raw:raise ValueError('Changed native imported-entry compiler: '+source.name)
+ for shared in ('mobilemultihop','dnsmeasure'):
+  for source in (ROOT/'internal'/shared).glob('*.go'):
+   if source.name=='core_config_test.go':continue
+   raw=m.OBSERVATION.rewrite(source.read_bytes())
+   for package in m.PACKAGES:raw=raw.replace(('"router-vpn/internal/'+package+'"').encode(),('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+package+'"').encode())
+   path=vendor/'experimental/libbox/routervpn'/shared/source.name
+   if path.is_symlink() or not path.is_file() or path.read_bytes()!=raw:raise ValueError('Changed native imported-entry compiler: '+shared+'/'+source.name)
 def native_parser_groups(peers):
  groups={'TestRouterImportedEntryPairedFinalNativeGraphs':sorted(FILES),'TestRouterImportedCONNECTConfiguredServiceGraphs':sorted(CONNECT_SERVICE_FILES),'TestRouterImportedCONNECTSelectedDNSGraphs':sorted(CONNECT_DNS_FILES),'TestRouterImportedCONNECTLayerGraphs':sorted(CONNECT_LAYER_FILES)}
  if not peers:groups[SOCKS_XRAY_PARSER]=[]
@@ -330,6 +334,7 @@ def run(vendor,peers=False,android=False):
   execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^TestImportedOpenVPN','-count=1','-timeout=60s'],ROOT,env,names(OPENVPN.CORE))
   execute(['go','test','-mod=readonly','-race','-json','./internal/nativeopenvpn','-run','^TestOpenVPNNativeLayerMapSingleHostKeepsOriginalIdentity$','-count=1','-timeout=20s'],ROOT,env,names(OPENVPN.POLICY_CORE))
   execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^('+'|'.join(CONTEXT_CORE)+')$','-count=1','-timeout=20s'],ROOT,env,names(CONTEXT_CORE))
+  execute(['go','test','-mod=readonly','-race','-json','./internal/dnsmeasure','-run','^('+'|'.join(CONTEXT_DNS)+')$','-count=1','-timeout=20s'],ROOT,env,names(CONTEXT_DNS))
   if {p.name for p in fixtures.iterdir()}!=FILES:raise ValueError('Incomplete captured imported source matrix')
   if {p.name for p in layers.iterdir()}!=CONNECT_LAYER_FILES:raise ValueError('Incomplete independent CONNECT source matrix')
   if {p.name for p in service.iterdir()}!=CONNECT_SERVICE_FILES:raise ValueError('Incomplete configured CONNECT service matrix')

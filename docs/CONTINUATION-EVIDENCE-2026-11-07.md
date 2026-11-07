@@ -602,7 +602,45 @@ unchanged before and after execution. This direct parser proof was captured
 on isolated source checkpoint `bd271c3a`; all fourteen reviewed unit blobs
 match the main integration. It does not assign that checkpoint's complete
 source receipt to a later commit or certify a whole packaged application.
-The full thirty-seven selected-DNS verdicts remain a separate running gate.
+At publication that separate selected-DNS gate was still running. Its local
+attempt subsequently ended before any of the thirty-seven protocol verdicts:
+the `routervpnxray.test` linker and `sing-tun` vet process were killed. No
+native client image was produced, so the nineteen existing Xray preservation
+verdicts also could not be executed with that image. The six parser verdicts,
+original-source race control and three reference-detector controls remain
+completed evidence; the unexecuted protocol cases are not marked passed.
+No additional cold compiler loop was started. Post-attempt verification found
+the frozen repository, prepared core and Xray source inventories unchanged.
+The complete attempt log SHA-256 is
+`5524dcbf61161cad1912fb6e8f781a0b1168d5ff9f3ee24ccf8d9bb33b84d9d6`.
+The subsequent exact-`08f349d2ad06c91f01de65b5b4529e3521364463`
+[hosted reference run](https://github.com/Eabusham2/router-vpn/actions/runs/42335645834)
+closes that protocol execution gap for this source. The original job log and
+its final receipt independently agree on thirty-seven unique required native
+verdicts, each with one pass and no failure or skip, including thirty-two
+traffic leaves. Thirteen generation transactions, nineteen shared flow
+verdicts, six native parser/ownership verdicts, the exact original-parser race
+control and three reference-detector controls also pass. All three native
+selected-DNS roots use the same executable SHA-256
+`d12795411cbbc3f2e795a451263dc361de8d692e344a56f93638e48d3339cd5e`.
+Its source inventory contains 2,201 files with digest
+`c9e579b2dfd6be460803f395c520f55171648e5abe5022c7ca8bcbf5403d7db6`;
+the prepared core and Xray digests are respectively
+`21cfb6dcb222ff500f7a170f573892be6b0f4c98c0d9781bd497add8c6ce1089`
+and `82adc946efce20bd9db19b5ead92de2c06e4e87fc07bcdf204e97f159a950423`.
+The previous SOCKS/REALITY and SS2022/Hysteria2 stages passed in the same run.
+
+The separate exact-source
+[Xray protocol and ownership workflow](https://github.com/Eabusham2/router-vpn/actions/runs/42335645760)
+also succeeded. Its original log contains all nineteen required existing
+Xray verdicts across the six roots, including the scoped-selector owner,
+encrypted TCP/UDP and completed-dial cleanup cases. The actual libbox and
+Start Layer traffic/wrong-key checks also passed. Despite the workflow's
+Apple name, these jobs run on Ubuntu; they do not establish an Apple system
+tunnel, signed package or physical-device result. Both workflows explicitly
+remain separate from a complete release, and the reference receipt records
+no physical interface or device acceptance. A later commit requires its own
+matching native and release evidence.
 
 On merged main, the ten preparation, seven shared-runtime, five new parser
 runner and eight existing selected-DNS runner contracts all pass. The native
@@ -719,6 +757,48 @@ unit; the complete matching native gate remains required in CI. DNS factories,
 proof execution callbacks and Tor's deeper resident/padding/Server chain are
 separate unfinished context adoption work.
 
+### Ordinary external DNS service constructor ownership
+
+The DNS constructor now carries its original caller through the actual native
+StartedService and instance, successful external proof, original policy and
+selected resolver, native graph identity and final owner readback. A cancelled
+or replaced constructor cannot publish a service. The selected resolver's
+address, port, encrypted transport, server name, path and exit detour retain
+the proved policy. A successfully returned idle service retains its own later
+request lifetime; the constructor does not grant fresh network proof.
+
+All seventy-two exact shared context verdicts pass under race instrumentation
+on the final source. That local focused harness includes all seventy original
+production Go files and the unchanged forty-eight-of-133 test-file dependency
+closure. No production or test bodies were copied or substituted, and the
+mandatory full-package CI remains unchanged. A full-package attempt passed
+before a compatibility fixture correction; the final-source full-package
+compile was killed before test execution. The focused final-source execution,
+not that failed compile, is the seventy-two-verdict evidence.
+
+The complete DNS package's ten constructor verdicts and selected/catalog
+transport, activity ownership, cancel-before-start and transport-boundary
+compatibility checks pass under race instrumentation. Existing mapped OpenVPN
+and ordinary direct proof compatibility passes in 7.687 seconds. The fixture
+now supplies its real bounded selected/remote observations so the original
+wrong-generation assertions are reached and preserved. Two single-fault
+overlays reject the old identity call and omitted final owner readback at
+their intended assertions. Twenty-eight runner and four shipping contracts,
+actual native source projection and prepared import closure pass.
+
+All twelve unit files, the complete merged `internal` subtree and `go.mod`
+match executed checkpoint `d1e02aeb` exactly. The merged complete
+`internal/dnsmeasure` race suite also passes in 2.590
+seconds; twenty-eight merged runner checks pass in 0.459 seconds and four
+shipping checks pass in 0.463 seconds. These merged runs preserve the same
+unit files and shared source tree. The native inventory preserves
+all fifty-seven preceding verdicts and adds fourteen DNS constructor cases,
+for seventy-one mandatory cases. Those native cases have not been executed
+locally; prepared imports alone do not establish their result. This source
+unit covers the ordinary external constructor. DNS admission and later
+operation/watch/status/dial/query contexts, proof execution callbacks and
+Tor's resident/padding/Server paths remain separate unfinished work.
+
 ### Bounded Fastest fixture setup and latest native observations
 
 `TestFastestSelectionUsesTrackerBeforeAppLock` previously waited forever for
@@ -735,7 +815,11 @@ Formatting and whitespace checks pass. Neither focused local attempt reached
 test execution: the ordinary compile and a single-worker, low-memory compile
 were both killed in the `cmd/client` compiler. This is not a passing fixture
 verdict or proof of the cause of the compiler termination. The bounded fix is
-preserved for matching hosted execution without another cold local retry.
+preserved for matching hosted execution. A subsequent focused harness kept
+all 344 original production Go files and the original Fastest fixture, omitting
+only unrelated test files; its 180-second compilation bound expired before
+any test event. All source hashes remained unchanged. This is another bounded
+local compile limit, not a runtime pass or a reason to narrow the shipping CI.
 
 At the exact earlier `460918da` commit, the completed Apple Silicon native
 socket/PF job

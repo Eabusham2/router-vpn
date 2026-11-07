@@ -366,8 +366,11 @@ contract. The ordinary external hop factory now carries its own captured proof,
 native-instance and operation contexts through the separate authority path
 described in [SPEED-LAB.md](SPEED-LAB.md). Ordinary proof construction now retains
 its own bounded native capture and independent returned request lifetime.
-Ordinary external proof execution callbacks and DNS measurement factories,
-plus Tor resident/padding/Server proof and lease
+The ordinary external mobile DNS constructor now retains its original caller
+through proof/source/selected-resolver capture and final native publication,
+without tying later DNS operations to the constructor's timeout. Ordinary
+external proof execution callbacks and DNS operation admission, observation and
+query/dial lifetimes, plus Tor resident/padding/Server proof and lease
 observations, remain separate context-propagation requirements.
 
 The complete compiled graph supplies the MTU plan. For a nested packet final,
