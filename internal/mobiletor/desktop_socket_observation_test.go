@@ -215,3 +215,50 @@ func TestDesktopDarwinReadbackObservationJoinsAndCannotAuthorize(t *testing.T) {
 		done()
 	}
 }
+
+func TestDesktopDarwinCreatorObservationKeepsOriginalDeadline(t *testing.T) {
+	for _, stage := range []struct {
+		phase uint32
+		name  string
+	}{{desktopNativeObservationPath, "protected-path"}, {desktopNativeObservationStart, "start"},
+		{desktopNativeObservationSend, "send"}, {desktopNativeObservationReceive, "receive"},
+		{desktopNativeObservationAcknowledge, "acknowledge"}, {desktopNativeObservationWait, "wait"},
+		{desktopNativeObservationAdopt, "adopt"}} {
+		t.Run(stage.name, func(t *testing.T) {
+			capture := desktopSocketFixtureCapture()
+			owner := DesktopSocketKernelOwner{Kind: "unix-isolated-uid", IdentitySHA256: strings.Repeat("b", 64), Generation: 9, ProcessID: 51}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			deadline, _ := ctx.Deadline()
+			original := desktopDarwinObserveRequest(ctx, capture, owner, 14, "create")
+			received := make(chan desktopDarwinReadbackSnapshot, 2)
+			observation, finish := desktopDarwinObserveReadback(original, "creator", func(snapshot desktopDarwinReadbackSnapshot) { received <- snapshot })
+			observation.enter(stage.phase, 71)
+			cancel()
+			// Finish immediately. Even if the timer callback has not run, the
+			// original expired stage must be reported once and joined here.
+			finish()
+			select {
+			case snapshot := <-received:
+				if snapshot.operation != "create" || snapshot.kind != "creator" || snapshot.phase != stage.phase || snapshot.child != 71 || snapshot.guardian != 51 || snapshot.sequence != 14 || !strings.Contains(snapshot.String(), "phase="+stage.name+" ") {
+					t.Fatal("creator diagnostic lost its original transfer stage", snapshot)
+				}
+				for _, secret := range []string{capture.SessionID, capture.SourceSHA256, capture.NetworkID, owner.IdentitySHA256} {
+					if strings.Contains(snapshot.String(), secret) {
+						t.Fatal("creator diagnostic exposed original private identity")
+					}
+				}
+			default:
+				t.Fatal("joined creator expiration omitted its original stage")
+			}
+			select {
+			case <-received:
+				t.Fatal("creator expiration was reported more than once")
+			default:
+			}
+			if after, _ := original.Deadline(); after != deadline || original.Err() != context.Canceled {
+				t.Fatal("creator diagnostic changed original deadline or cancellation")
+			}
+		})
+	}
+}

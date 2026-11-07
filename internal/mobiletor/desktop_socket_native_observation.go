@@ -3,6 +3,7 @@ package mobiletor
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -41,6 +42,10 @@ const (
 	desktopNativeObservationWait
 	desktopNativeObservationLibinfo
 	desktopNativeObservationDone
+	desktopNativeObservationSend
+	desktopNativeObservationReceive
+	desktopNativeObservationAcknowledge
+	desktopNativeObservationAdopt
 )
 
 type desktopDarwinReadbackObservation struct {
@@ -57,7 +62,7 @@ type desktopDarwinReadbackSnapshot struct {
 }
 
 func (s desktopDarwinReadbackSnapshot) String() string {
-	names := [...]string{"queued", "protected-path", "start", "wait", "libinfo", "done"}
+	names := [...]string{"queued", "protected-path", "start", "wait", "libinfo", "done", "send", "receive", "acknowledge", "adopt"}
 	phase := "unknown"
 	if s.phase < uint32(len(names)) {
 		phase = names[s.phase]
@@ -82,7 +87,7 @@ func desktopDarwinObserveReadback(ctx context.Context, kind string, report func(
 		return nil, func() {}
 	}
 	switch kind {
-	case "pfctl", "dscl", "ifconfig", "libinfo":
+	case "pfctl", "dscl", "ifconfig", "libinfo", "creator":
 	default:
 		kind = "other"
 	}
@@ -93,18 +98,30 @@ func desktopDarwinObserveReadback(ctx context.Context, kind string, report func(
 	observation := &desktopDarwinReadbackObservation{}
 	started := time.Now()
 	joined := make(chan struct{})
+	var once sync.Once
+	reportCurrent := func() {
+		once.Do(func() {
+			state := observation.state.Load()
+			snapshot.phase = uint32(state)
+			if snapshot.phase == desktopNativeObservationDone {
+				return
+			}
+			snapshot.child = uint32(state >> 32)
+			snapshot.elapsed = time.Since(started)
+			report(snapshot)
+		})
+	}
 	stop := context.AfterFunc(ctx, func() {
 		defer close(joined)
-		state := observation.state.Load()
-		snapshot.phase = uint32(state)
-		if snapshot.phase == desktopNativeObservationDone {
-			return
-		}
-		snapshot.child = uint32(state >> 32)
-		snapshot.elapsed = time.Since(started)
-		report(snapshot)
+		reportCurrent()
 	})
 	return observation, func() {
+		// A command can return its original cancellation before AfterFunc is
+		// scheduled. Retain that last stage once instead of marking it done
+		// and hiding the very expiration this observation was created for.
+		if ctx.Err() != nil {
+			reportCurrent()
+		}
 		observation.state.Store(uint64(desktopNativeObservationDone))
 		if !stop() {
 			<-joined

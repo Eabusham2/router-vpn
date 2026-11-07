@@ -304,6 +304,8 @@ func desktopDarwinCreator(channel *net.UnixConn, parent uint32) error {
 }
 
 func (g *desktopDarwinGuardian) create(ctx context.Context, c DesktopSocketCreation) (*os.File, error) {
+	observation, finishObservation := desktopDarwinObserveReadback(ctx, "creator", desktopDarwinReadbackReporter(ctx))
+	defer finishObservation()
 	if c.Capture != g.capture || c.Binding.Owner != g.owner || !desktopSocketHex(c.SocketID, 32) || c.Network != "tcp" && c.Network != "udp" || len(g.sockets) >= DesktopSocketLimit || g.sockets[c.SocketID] != nil {
 		return nil, errors.New("Darwin creator request changed ownership")
 	}
@@ -325,6 +327,7 @@ func (g *desktopDarwinGuardian) create(ctx context.Context, c DesktopSocketCreat
 	}
 	defer channel.Close()
 	defer child.Close()
+	observation.enter(desktopNativeObservationPath, 0)
 	executable, err := desktopDarwinExecutable()
 	if err != nil {
 		return nil, err
@@ -334,24 +337,29 @@ func (g *desktopDarwinGuardian) create(ctx context.Context, c DesktopSocketCreat
 	command.Stderr = os.Stderr
 	command.ExtraFiles = []*os.File{child}
 	command.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: g.uid, Gid: 65534, Groups: []uint32{}}}
+	observation.enter(desktopNativeObservationStart, 0)
 	if err = command.Start(); err != nil {
 		return nil, err
 	}
 	child.Close()
 	channel.SetDeadline(time.Now().Add(2 * time.Second))
 	request := desktopDarwinRequest{Operation: "create", Sequence: 1, Capture: g.capture, Creation: c}
+	observation.enter(desktopNativeObservationSend, uint32(command.Process.Pid))
 	err = desktopDarwinSend(channel, request, nil)
 	var reply desktopDarwinReply
 	var file *os.File
 	if err == nil {
+		observation.enter(desktopNativeObservationReceive, uint32(command.Process.Pid))
 		file, err = desktopDarwinReceive(channel, &reply, uint32(command.Process.Pid), g.uid)
 	}
 	if err == nil {
+		observation.enter(desktopNativeObservationAcknowledge, uint32(command.Process.Pid))
 		err = desktopDarwinSend(channel, desktopDarwinRequest{Operation: "created-ack", Sequence: 2, Capture: c.Capture, Creation: c}, nil)
 	}
 	if err != nil {
 		command.Process.Kill()
 	}
+	observation.enter(desktopNativeObservationWait, uint32(command.Process.Pid))
 	joinErr := command.Wait()
 	if err != nil || joinErr != nil || ctx.Err() != nil || file == nil || reply.Sequence != 1 || reply.Capture != g.capture || reply.Creation != c {
 		if file != nil {
@@ -359,6 +367,7 @@ func (g *desktopDarwinGuardian) create(ctx context.Context, c DesktopSocketCreat
 		}
 		return nil, errors.Join(err, joinErr, ctx.Err(), errors.New("Darwin isolated transfer did not join"))
 	}
+	observation.enter(desktopNativeObservationAdopt, uint32(command.Process.Pid))
 	return g.adoptCreatedSocket(ctx, c, file)
 }
 
