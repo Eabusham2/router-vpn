@@ -499,14 +499,9 @@ was updated with real client UUIDs instead of weakening source validation.
 On the merged main checkout, the shared race selection passes in 1.182 seconds
 and all thirteen generation cases pass in 57.317 seconds.
 
-The separate seven-file native gate increment is still under validation and
-is not included in this source checkpoint. Its actual protocol work has
-identified and corrected fixture accounting for the pinned DoT transport's
-specific A/AAAA connection-reuse probes. An intermittent wrong-DNS-name
-assertion still needs its original typed error and resolver counters; isolated
-reruns passing are not claimed as a repair. The final thirty-seven native
-verdicts, including thirty-two traffic leaves, remain required. No deadline,
-TLS trust check, owner check or selected-resolver requirement is relaxed.
+That source checkpoint intentionally excluded the separate seven-file native
+gate. The subsequent gate increment and its outstanding engine failure are
+recorded below; the source-only results do not certify that native inventory.
 
 At `460918da`, authoritative source job `128277601139` passed the unchanged
 Go source-contract step and proceeded to repository/product audits. The earlier
@@ -515,6 +510,53 @@ its active Speed Lab test had run only one second. These observations do not
 identify a stuck production case. A local timing attempt instead stopped in
 an unbounded Fastest fixture setup wait after physical-interface capture was
 denied; that separate local boundary is not a passing full-suite result.
+
+### Mandatory REALITY selected-DNS gate and captured Vision race
+
+The separate native gate now requires thirteen actual generation transactions,
+nineteen shared flow verdicts and thirty-seven exact native verdicts. Its
+thirty-two traffic leaves cover standard and PQ REALITY with Home UDP/53,
+DoT, DoH and DoH3, ordinary Vision's UDP/443 refusal, wrong DNS identity,
+trust, route, port and path, wrong REALITY key/owner, cancellation, close and
+replacement. The actual pinned DNS transports and native Xray owner exchange
+real protocol traffic; the TCP physical dialer and exact loopback reference
+DNS mapping are explicit fixture boundaries, not OS tunnel/device acceptance.
+The older SOCKS and SS2022/Hysteria2 reference gates remain mandatory.
+
+The pinned DoT implementation sends exact ID-1 A and ID-2 AAAA reuse probes.
+The fixture now admits only their original shapes, answers both families,
+counts them separately, and requires exactly one application response and no
+other resolver hits. Its admission control rejects foreign IDs, question
+shapes and transports. Both actual DoT regression cases passed under race
+instrumentation. Eight runner contracts pass, including preservation of the
+full original native failure events before strict verdict rejection and
+rejection of a changed executable. Generation inputs now schedule the same
+mandatory workflow and are included in its source receipts.
+
+A diagnostic native image ran forty TLS-negative invocations in 13.294 seconds.
+Thirty-eight passed. Two PQ wrong-name leaves passed their typed TLS rejection
+assertions but failed race detection: `VisionWriter.WriteMultiBuffer` read
+`TrafficState.NumberOfPacketToFilter` while `XtlsFilterTls`, called by the
+Vision reader, wrote it. The complete witness is retained in the continuation
+workspace; its diagnostic log SHA-256 is
+`fcf515c5e989eac45aaad1ed1412b56e507f0aedf2902f66f735a7cadd2cb2f7`.
+The repair must synchronize all shared TLS detector fields without holding
+that lock through network I/O or callbacks. It is a separate unfinished source
+unit. The earlier standard wrong-name failure lost its original assertion in
+the old output tail; this newer race is not claimed to explain that event.
+No speculative HTTP/3 patch, relaxed TLS assertion, skipped race check or
+increased timeout is used to manufacture a passing native result.
+
+The exact-`460918da` source log subsequently showed the Go client package
+passed in 556.917 seconds. Repository checks then failed because the desktop
+toolchain fixture did not recognize the already-added SS2022/Hysteria2 gate.
+That fixture now recognizes the exact SOCKS, proxy/REALITY and selected-DNS
+commands in order, requires their original environment and 3000-second parent
+bounds, and rejects unknown commands. Each new stage has both failure and
+timeout injections that must preserve the original exception and stop before
+later gates or compilation. All ten native orchestration tests passed in
+376.162 seconds. These tests model command/OS boundaries and do not replace
+the still-required full thirty-seven native verdicts.
 
 ### Preserve the original native hop-construction caller
 

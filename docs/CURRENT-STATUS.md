@@ -46,9 +46,18 @@ Installer/Portainer generation preserves each saved standard/PQ flow unless
 the user explicitly enables or disables the capability. Shared native and
 Swift compilers retain that original flow; XHTTP remains separate. The actual
 generation, private rebundle, rollback and readiness suites pass. The separate
-native selected-DNS gate is still being validated: its DoT reuse-probe fixture
-was corrected, and an intermittent wrong-DNS-name witness remains under
-investigation. Source publication does not certify that pending native gate.
+native selected-DNS gate now requires thirty-seven exact verdicts, including
+thirty-two standard/PQ traffic leaves, without replacing the older SOCKS and
+SS2022/Hysteria2 gates. Its DoT fixture distinguishes the pinned transport's
+exact A/AAAA reuse probes from application queries. A diagnostic run captured
+a real Xray Vision reader/writer race in shared TLS detector state; the typed
+TLS rejection assertions passed, but two PQ leaves failed race detection.
+The production synchronization repair and full native rerun remain pending.
+The earlier standard wrong-name failure has no recovered original assertion
+and is not retrospectively attributed to this race. Source publication does
+not certify the pending native inventory. All ten native orchestration tests
+pass after explicitly adding the two new mandatory stages and retaining
+their failure/timeout stop checks.
 See [REALITY-UDP443.md](REALITY-UDP443.md) for the provision/update path.
 
 Paired and imported native hop measurement constructors now retain one caller

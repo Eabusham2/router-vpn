@@ -127,6 +127,8 @@ def inputs():
                              ROOT/'deploy/test_mobile_imported_socks_xray_runner.py',
                              ROOT/'deploy/test_mobile_imported_proxy_xray.py',
                              ROOT/'deploy/test_mobile_imported_proxy_xray_runner.py',
+                             ROOT/'deploy/test_native_xray_udp443.py',
+                             ROOT/'deploy/test_native_xray_udp443_runner.py',
                              ROOT/'deploy/test_mobile_imported_entry.py',
                              ROOT/'deploy/test_mobile_imported_entry_runner.py',
                              ROOT/'deploy/mobile_imported_openvpn_cases.py',
@@ -774,6 +776,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                          source, '--reference-only'], env=env, timeout=3000)
                     run([sys.executable, ROOT/'deploy/test_mobile_imported_proxy_xray.py',
                          source, '--reference-only'], env=env, timeout=3000)
+                    run([sys.executable, ROOT/'deploy/test_native_xray_udp443.py',
+                         source], env=env, timeout=3000)
                 # The PQ matrix uses the same verified native archive and
                 # compiler cache, fresh KEM keys, and real packet/Start Layer
                 # peers. Native firewall/public admission remains separate.

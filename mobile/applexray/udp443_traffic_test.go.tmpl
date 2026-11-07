@@ -1,0 +1,727 @@
+//go:build routervpn_udp443_integration
+
+package routervpnxray
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/quic-go"
+	"github.com/sagernet/quic-go/http3"
+	"github.com/sagernet/sing-box/adapter"
+	transport "github.com/sagernet/sing-box/dns/transport"
+	dnsquic "github.com/sagernet/sing-box/dns/transport/quic"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+const nativeUDP443Name = "resolver.routervpn.test"
+const nativeUDP443Question = "owned-query.routervpn.test."
+const nativeUDP443Path = "/dns-query/captured"
+
+// This bounded protocol fixture runs the actual pinned DNS transports and
+// native Xray owner. Only the separately owned reference server maps the exact
+// selected DNS tuples to loopback. It does not grant an interface/TUN proof or
+// change the independent imported composition's physical interface guard.
+type nativeUDP443Resolver struct {
+	certificate string
+	routes      []loopbackXrayDNSRoute
+	hits        [4]atomic.Int64
+	requests    [4]atomic.Int64
+	tlsHello    [4]atomic.Int64
+	invalid     atomic.Int64
+	reuse       [2]atomic.Int64
+	reuseReady  chan struct{}
+	reuseOnce   sync.Once
+	cancelled   chan struct{}
+	entered     chan struct{}
+	enterOnce   sync.Once
+	cancelOnce  sync.Once
+}
+
+func nativeUDP443Certificate(t *testing.T) (tls.Certificate, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject: pkix.Name{CommonName: nativeUDP443Name}, DNSNames: []string{nativeUDP443Name},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, spec, spec, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	pair, err := tls.X509KeyPair(certificate, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
+	clear(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pair, string(certificate)
+}
+
+func nativeUDP443ReuseProbe(kind int, query *mDNS.Msg) (int, bool) {
+	// These are the exact A/AAAA connection-reuse probes in the pinned TLS
+	// transport. Application ID zero and every other transport stay separate.
+	if kind != 1 || query == nil || query.Response || query.Opcode != mDNS.OpcodeQuery || query.Rcode != 0 ||
+		query.Authoritative || query.Truncated || query.RecursionAvailable || !query.RecursionDesired ||
+		query.AuthenticatedData || query.CheckingDisabled || len(query.Question) != 1 ||
+		len(query.Answer) != 0 || len(query.Ns) != 0 || len(query.Extra) != 0 ||
+		query.Question[0].Name != nativeUDP443Question || query.Question[0].Qclass != mDNS.ClassINET {
+		return 0, false
+	}
+	if query.Id == 1 && query.Question[0].Qtype == mDNS.TypeA {
+		return 0, true
+	}
+	if query.Id == 2 && query.Question[0].Qtype == mDNS.TypeAAAA {
+		return 1, true
+	}
+	return 0, false
+}
+
+func (p *nativeUDP443Resolver) answer(query *mDNS.Msg, probeAAAA bool) (*mDNS.Msg, bool) {
+	if query == nil || query.Response || len(query.Question) != 1 ||
+		(query.Question[0].Name != nativeUDP443Question && query.Question[0].Name != "cancel."+nativeUDP443Question) ||
+		query.Question[0].Qclass != mDNS.ClassINET || (query.Question[0].Qtype != mDNS.TypeA && !(probeAAAA && query.Question[0].Qtype == mDNS.TypeAAAA)) {
+		p.invalid.Add(1)
+		return nil, false
+	}
+	response := new(mDNS.Msg)
+	response.SetReply(query)
+	response.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: query.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 30}, A: net.IPv4(203, 0, 113, 77)}}
+	if probeAAAA {
+		response.Answer = []mDNS.RR{&mDNS.AAAA{Hdr: mDNS.RR_Header{Name: query.Question[0].Name, Rrtype: mDNS.TypeAAAA, Class: mDNS.ClassINET, Ttl: 30}, AAAA: net.ParseIP("2001:db8::77")}}
+	}
+	return response, true
+}
+
+func startNativeUDP443Resolver(t *testing.T) *nativeUDP443Resolver {
+	t.Helper()
+	pair, certificate := nativeUDP443Certificate(t)
+	p := &nativeUDP443Resolver{certificate: certificate, entered: make(chan struct{}), cancelled: make(chan struct{}), reuseReady: make(chan struct{})}
+	tlsConfig := func(kind int) *tls.Config {
+		return &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13,
+			GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { p.tlsHello[kind].Add(1); return nil, nil }}
+	}
+	for kind := 0; kind < 2; kind++ {
+		kind := kind
+		server := &mDNS.Server{Handler: mDNS.HandlerFunc(func(w mDNS.ResponseWriter, query *mDNS.Msg) {
+			p.requests[kind].Add(1)
+			slot, probe := nativeUDP443ReuseProbe(kind, query)
+			if kind == 1 && query.Id != 0 && !probe {
+				p.invalid.Add(1)
+				return
+			}
+			if response, valid := p.answer(query, probe && slot == 1); valid {
+				if !probe {
+					p.hits[kind].Add(1)
+				}
+				if err := w.WriteMsg(response); err == nil && probe {
+					p.reuse[slot].Add(1)
+					if p.reuse[0].Load() == 1 && p.reuse[1].Load() == 1 {
+						p.reuseOnce.Do(func() { close(p.reuseReady) })
+					}
+				}
+			}
+		})}
+		var address string
+		if kind == 0 {
+			packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server.PacketConn = packet
+			address = packet.LocalAddr().String()
+		} else {
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server.Listener = tls.NewListener(listener, tlsConfig(kind))
+			address = listener.Addr().String()
+		}
+		started, joined := make(chan struct{}), make(chan error, 1)
+		server.NotifyStartedFunc = func() { close(started) }
+		go func() { joined <- server.ActivateAndServe() }()
+		select {
+		case <-started:
+		case err := <-joined:
+			t.Fatal("owned DNS peer did not start", err)
+		case <-time.After(time.Second):
+			t.Fatal("owned DNS peer startup did not finish")
+		}
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := server.ShutdownContext(ctx); err != nil {
+				t.Error("owned DNS peer did not retire", err)
+			}
+			select {
+			case <-joined:
+			case <-time.After(time.Second):
+				t.Error("owned DNS peer did not join")
+			}
+		})
+		route := loopbackXrayDNSRoute{network: "udp", server: "192.168.50.133", port: 53, private: address}
+		if kind == 1 {
+			route.network, route.server, route.port = "tcp", "198.51.100.53", 853
+		}
+		p.routes = append(p.routes, route)
+	}
+	for kind := 2; kind < 4; kind++ {
+		kind := kind
+		handler := http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			p.requests[kind].Add(1)
+			if request.Method != http.MethodPost || request.URL.Path != nativeUDP443Path || request.Host != nativeUDP443Name ||
+				request.Header.Get("Content-Type") != "application/dns-message" || request.Header.Get("Accept") != "application/dns-message" ||
+				(kind == 3 && request.ProtoMajor != 3) {
+				http.Error(w, "captured DNS endpoint mismatch", http.StatusNotFound)
+				return
+			}
+			raw, err := io.ReadAll(io.LimitReader(request.Body, 65536))
+			query := new(mDNS.Msg)
+			if err != nil || len(raw) > 65535 || query.Unpack(raw) != nil {
+				p.invalid.Add(1)
+				http.Error(w, "invalid DNS wire request", 400)
+				return
+			}
+			response, valid := p.answer(query, false)
+			if !valid {
+				http.Error(w, "invalid original question", 400)
+				return
+			}
+			p.hits[kind].Add(1)
+			if query.Question[0].Name == "cancel."+nativeUDP443Question {
+				p.enterOnce.Do(func() { close(p.entered) })
+				<-request.Context().Done()
+				p.cancelOnce.Do(func() { close(p.cancelled) })
+				return
+			}
+			body, err := response.Pack()
+			if err != nil {
+				p.invalid.Add(1)
+				http.Error(w, "invalid DNS wire response", 500)
+				return
+			}
+			w.Header().Set("Content-Type", "application/dns-message")
+			_, _ = w.Write(body)
+		})
+		if kind == 2 {
+			server := httptest.NewUnstartedServer(handler)
+			server.EnableHTTP2 = true
+			server.TLS = tlsConfig(kind)
+			server.StartTLS()
+			t.Cleanup(server.Close)
+			p.routes = append(p.routes, loopbackXrayDNSRoute{network: "tcp", server: "198.51.100.53", port: 443, private: server.Listener.Addr().String()})
+		} else {
+			packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := &http3.Server{Handler: handler, TLSConfig: tlsConfig(kind), QUICConfig: &quic.Config{DisablePathManager: true}}
+			joined := make(chan error, 1)
+			go func() { joined <- server.Serve(packet) }()
+			t.Cleanup(func() {
+				_ = server.Close()
+				_ = packet.Close()
+				select {
+				case <-joined:
+				case <-time.After(time.Second):
+					t.Error("original HTTP3 DNS server did not join")
+				}
+			})
+			p.routes = append(p.routes, loopbackXrayDNSRoute{network: "udp", server: "198.51.100.53", port: 443, private: packet.LocalAddr().String()})
+		}
+	}
+	return p
+}
+
+type nativeUDP443Physical struct {
+	endpoint string
+	mu       sync.Mutex
+	calls    int
+	denied   int
+	sockets  map[*nativeUDP443Socket]bool
+}
+type nativeUDP443Socket struct {
+	net.Conn
+	owner *nativeUDP443Physical
+	once  sync.Once
+}
+
+func (c *nativeUDP443Socket) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(func() { c.owner.mu.Lock(); delete(c.owner.sockets, c); c.owner.mu.Unlock() })
+	return err
+}
+func (p *nativeUDP443Physical) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network != "tcp" || destination.String() != "192.0.2.1:443" {
+		p.mu.Lock()
+		p.denied++
+		p.mu.Unlock()
+		return nil, errors.New("native DNS attempted an uncaptured physical socket")
+	}
+	connection, err := (&net.Dialer{}).DialContext(ctx, "tcp4", p.endpoint)
+	if err != nil {
+		return nil, err
+	}
+	captured := &nativeUDP443Socket{Conn: connection, owner: p}
+	p.mu.Lock()
+	p.calls++
+	p.sockets[captured] = true
+	p.mu.Unlock()
+	return captured, nil
+}
+func (p *nativeUDP443Physical) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	p.mu.Lock()
+	p.denied++
+	p.mu.Unlock()
+	return nil, errors.New("native DNS cannot open physical UDP")
+}
+func (p *nativeUDP443Physical) snapshot() (int, int, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls, len(p.sockets), p.denied
+}
+
+type nativeUDP443Manager struct {
+	adapter.OutboundManager
+	owner adapter.Outbound
+}
+
+func (m *nativeUDP443Manager) Outbound(tag string) (adapter.Outbound, bool) {
+	return m.owner, tag == "captured-xray"
+}
+func (*nativeUDP443Manager) Default() adapter.Outbound { return nil }
+
+func nativeUDP443Owner(t *testing.T, mode, endpoint string, raw []byte) (*Outbound, *nativeUDP443Physical) {
+	t.Helper()
+	captured := bytes.Clone(raw)
+	plan, err := applexray.Prepare(mode, captured)
+	if err != nil {
+		t.Fatal("original selected flow did not reach the actual native compiler", err)
+	}
+	if !bytes.Equal(raw, captured) {
+		t.Fatal("native compiler changed captured protocol bytes")
+	}
+	lifetime, retire := context.WithCancel(context.Background())
+	physical := &nativeUDP443Physical{endpoint: endpoint, sockets: map[*nativeUDP443Socket]bool{}}
+	b := &binding{ctx: lifetime, dialer: physical, server: plan.Server, sockets: map[*ownedConn]bool{}}
+	owner := &Outbound{ctx: context.WithValue(lifetime, bindingKey{}, b), cancel: retire, binding: b, plan: plan}
+	if err := owner.Start(adapter.StartStateStart); err != nil {
+		retire()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := owner.Close(); err != nil {
+			t.Error("original native DNS owner failed to close", err)
+		}
+		_, active, denied := physical.snapshot()
+		if active != 0 || denied != 0 {
+			t.Errorf("native DNS original physical ownership changed: active=%d denied=%d", active, denied)
+		}
+	})
+	return owner, physical
+}
+
+func nativeUDP443Transport(t *testing.T, p *nativeUDP443Resolver, owner *Outbound, kind int, fault string) (adapter.DNSTransport, error) {
+	t.Helper()
+	server, port := "198.51.100.53", 443
+	if kind == 0 {
+		server, port = "192.168.50.133", 53
+	}
+	if kind == 1 {
+		port = 853
+	}
+	selected := map[string]any{"server": server, "server_port": port, "detour": "captured-xray"}
+	if kind != 0 {
+		selected["tls"] = map[string]any{"enabled": true, "server_name": nativeUDP443Name, "certificate": []string{p.certificate}}
+	}
+	if kind >= 2 {
+		selected["path"] = nativeUDP443Path
+	}
+	switch fault {
+	case "wrong-dns-sni":
+		selected["tls"].(map[string]any)["server_name"] = "foreign.routervpn.test"
+	case "wrong-dns-trust":
+		_, other := nativeUDP443Certificate(t)
+		selected["tls"].(map[string]any)["certificate"] = []string{other}
+	case "wrong-dns-route":
+		selected["server"] = "198.51.100.54"
+	case "wrong-dns-port":
+		selected["server_port"] = 444
+	case "wrong-dns-path":
+		selected["path"] = "/uncaptured"
+	case "wrong-owner":
+		selected["detour"] = "replacement-xray"
+	}
+	raw, err := json.Marshal(selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	captured := bytes.Clone(raw)
+	ctx := service.ContextWith[adapter.OutboundManager](context.Background(), &nativeUDP443Manager{owner: owner})
+	logger := log.NewNOPFactory().NewLogger("captured-dns")
+	var result adapter.DNSTransport
+	switch kind {
+	case 0:
+		var options option.RemoteDNSServerOptions
+		if err = json.Unmarshal(raw, &options); err == nil {
+			result, err = transport.NewUDP(ctx, logger, "selected-dns", options)
+		}
+	case 1:
+		var options option.RemoteTLSDNSServerOptions
+		if err = json.Unmarshal(raw, &options); err == nil {
+			result, err = transport.NewTLS(ctx, logger, "selected-dns", options)
+		}
+	case 2, 3:
+		var options option.RemoteHTTPSDNSServerOptions
+		if err = json.Unmarshal(raw, &options); err == nil {
+			if kind == 2 {
+				result, err = transport.NewHTTPS(ctx, logger, "selected-dns", options)
+			} else {
+				result, err = dnsquic.NewHTTP3(ctx, logger, "selected-dns", options)
+			}
+		}
+	default:
+		t.Fatal("unknown selected DNS transport")
+	}
+	if !bytes.Equal(raw, captured) {
+		t.Fatal("native DNS constructor changed selected policy bytes")
+	}
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() {
+		if err := result.Close(); err != nil {
+			t.Error("selected DNS transport failed to close", err)
+		}
+	})
+	if err = result.Start(adapter.StartStateStart); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func nativeUDP443Exchange(ctx context.Context, resolver adapter.DNSTransport, name string) error {
+	query := new(mDNS.Msg)
+	query.SetQuestion(name, mDNS.TypeA)
+	query.Id = 0 // The selected DoH transports intentionally use DNS ID zero.
+	response, err := resolver.Exchange(ctx, query)
+	if err != nil {
+		return err
+	}
+	if response == nil || !response.Response || response.Rcode != mDNS.RcodeSuccess || response.Id != query.Id ||
+		len(response.Question) != 1 || response.Question[0] != query.Question[0] || len(response.Answer) != 1 {
+		return errors.New("selected DNS response did not match its original wire query")
+	}
+	answer, valid := response.Answer[0].(*mDNS.A)
+	if !valid || answer.Hdr.Name != name || !answer.A.Equal(net.IPv4(203, 0, 113, 77)) {
+		return errors.New("selected DNS response changed its original answer")
+	}
+	return nil
+}
+
+func TestNativeXraySelectedDNSUDP443(t *testing.T) {
+	installScopedDialer()
+	for _, mode := range []string{"reality-vision", "reality-pq-vision"} {
+		t.Run(mode, func(t *testing.T) {
+			for _, name := range []string{"home-udp53", "dot853", "doh443", "doh3-udp443", "plain-vision-udp443", "wrong-dns-sni", "wrong-dns-trust", "wrong-dns-route", "wrong-dns-port", "wrong-dns-path", "wrong-reality-key", "wrong-owner", "cancel-before-query", "cancel-inflight", "close-owner", "replacement-owner"} {
+				t.Run(name, func(t *testing.T) { nativeUDP443Case(t, mode, name) })
+			}
+		})
+	}
+}
+
+func nativeUDP443Case(t *testing.T, mode, name string) {
+	t.Helper()
+	peer := startNativeUDP443Resolver(t)
+	camouflage := loopbackCamouflage(t)
+	tcp, udp := loopbackEcho(t)
+	original, err := applexray.Object(nativeConfig(t, mode))
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := original["outbounds"].([]any)[0].(map[string]any)["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)
+	flow := "xtls-rprx-vision-udp443"
+	if name == "plain-vision-udp443" || name == "home-udp53" || name == "dot853" || name == "doh443" {
+		flow = "xtls-rprx-vision"
+	}
+	user["flow"] = flow
+	input, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, raw := startLoopbackXrayWithDNS(t, mode, camouflage, tcp, udp, input, peer.routes)
+	if name == "wrong-reality-key" {
+		object, err := applexray.Object(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		object["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)["realitySettings"].(map[string]any)["password"] = base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes())
+		raw, err = json.Marshal(object)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	captured := bytes.Clone(raw) // Exact ephemeral original, captured before Prepare/Start/query.
+	owner, physical := nativeUDP443Owner(t, mode, endpoint, captured)
+	plan, err := applexray.Object(owner.plan.JSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plannedFlow := plan["outbounds"].([]any)[0].(map[string]any)["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)["flow"]
+	if plannedFlow != flow {
+		t.Fatal("native compiler replaced the explicitly captured flow")
+	}
+	kind := 3
+	if name == "home-udp53" {
+		kind = 0
+	}
+	if name == "dot853" {
+		kind = 1
+	}
+	if name == "doh443" {
+		kind = 2
+	}
+	if name == "plain-vision-udp443" {
+		baseline, err := nativeUDP443Transport(t, peer, owner, 0, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err = nativeUDP443Exchange(ctx, baseline, nativeUDP443Question)
+		cancel()
+		if err != nil || peer.hits[0].Load() != 1 {
+			t.Fatal("plain Vision control did not first prove actual Home UDP53", err)
+		}
+		_ = baseline.Close()
+	}
+	resolver, err := nativeUDP443Transport(t, peer, owner, kind, name)
+	if name == "wrong-owner" {
+		if err == nil {
+			t.Fatal("selected DNS adopted an uncaptured native owner")
+		}
+		calls, _, _ := physical.snapshot()
+		if calls != 0 || peer.hits[3].Load() != 0 {
+			t.Fatal("unowned selected DNS reached a physical socket or resolver")
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal("captured DNS policy failed before actual execution", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if name == "cancel-before-query" {
+		cancel()
+	}
+	if name == "cancel-inflight" {
+		joined := make(chan error, 1)
+		go func() { joined <- nativeUDP443Exchange(ctx, resolver, "cancel."+nativeUDP443Question) }()
+		select {
+		case <-peer.entered:
+		case err := <-joined:
+			t.Fatal("inflight cancellation missed the actual HTTP3 DNS peer", err)
+		case <-ctx.Done():
+			t.Fatal("inflight cancellation missed the captured resolver")
+		}
+		cancel()
+		select {
+		case err := <-joined:
+			if err == nil {
+				t.Fatal("cancelled selected DNS returned success")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("cancelled HTTP3 DNS exchange did not join")
+		}
+		select {
+		case <-peer.cancelled:
+		case <-time.After(time.Second):
+			t.Fatal("actual HTTP3 request ignored captured cancellation")
+		}
+	} else {
+		err = nativeUDP443Exchange(ctx, resolver, nativeUDP443Question)
+		positive := name == "home-udp53" || name == "dot853" || name == "doh443" || name == "doh3-udp443" || name == "close-owner" || name == "replacement-owner"
+		if positive {
+			if err != nil || peer.hits[kind].Load() != 1 {
+				t.Fatalf("selected DNS did not return its authenticated wire response: err=%v kind=%d hits=%d requests=%d", err, kind, peer.hits[kind].Load(), peer.requests[kind].Load())
+			}
+			if kind == 1 {
+				select {
+				case <-peer.reuseReady:
+				case <-ctx.Done():
+					t.Fatal("original DoT reuse probes did not receive their exact A/AAAA responses")
+				}
+				if peer.reuse[0].Load() != 1 || peer.reuse[1].Load() != 1 || peer.requests[1].Load() != 3 {
+					t.Fatal("DoT connection-reuse probes changed or replaced application DNS authority")
+				}
+			}
+		} else {
+			if err == nil || peer.hits[3].Load() != 0 {
+				t.Fatal("wrong captured DNS authority reached an authenticated answer", err)
+			}
+			if name == "wrong-dns-sni" || name == "wrong-dns-trust" {
+				var certificateFailure *quic.TransportError
+				matched := errors.As(err, &certificateFailure)
+				var code uint64
+				if matched {
+					code = uint64(certificateFailure.ErrorCode)
+				}
+				if peer.tlsHello[3].Load() == 0 || !matched || code < 0x100 || code >= 0x200 ||
+					!strings.Contains(err.Error(), "certificate") {
+					t.Fatalf("DNS TLS negative did not reach actual certificate verification: type=%T err=%v quic=%t code=%x hello=%d requests=%d hits=%d", err, err, matched, code, peer.tlsHello[3].Load(), peer.requests[3].Load(), peer.hits[3].Load())
+				}
+			}
+			if name == "wrong-dns-path" && peer.requests[3].Load() != 1 {
+				t.Fatal("DNS path negative did not reach the original HTTP3 server", err)
+			}
+		}
+	}
+	before, _, denied := physical.snapshot()
+	if name != "cancel-before-query" && before == 0 {
+		t.Fatal("native DNS test bypassed its original encrypted TCP transport")
+	}
+	if denied != 0 || peer.invalid.Load() != 0 {
+		t.Fatal("selected DNS escaped its physical tuple or sent a fabricated wire query")
+	}
+	if name == "close-owner" || name == "replacement-owner" {
+		if err := owner.Close(); err != nil {
+			t.Fatal(err)
+		}
+		_, active, _ := physical.snapshot()
+		if active != 0 {
+			t.Fatal("original native owner retained physical sockets after close")
+		}
+		var replacement adapter.DNSTransport
+		if name == "replacement-owner" {
+			next, _ := nativeUDP443Owner(t, mode, endpoint, captured)
+			replacement, err = nativeUDP443Transport(t, peer, next, 3, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		hits := peer.hits[3].Load()
+		late, stop := context.WithTimeout(context.Background(), 2*time.Second)
+		err = nativeUDP443Exchange(late, resolver, nativeUDP443Question)
+		stop()
+		after, active, _ := physical.snapshot()
+		if err == nil || hits != peer.hits[3].Load() || after != before || active != 0 {
+			t.Fatal("retired DNS adopted a socket, resolver answer, or replacement owner", err)
+		}
+		if replacement != nil {
+			current, finish := context.WithTimeout(context.Background(), 2*time.Second)
+			err = nativeUDP443Exchange(current, replacement, nativeUDP443Question)
+			finish()
+			if err != nil || peer.hits[3].Load() != hits+1 {
+				t.Fatal("retired DNS cleanup closed its replacement owner", err)
+			}
+		}
+	}
+	if !bytes.Equal(raw, captured) {
+		t.Fatal("selected DNS changed original captured Xray configuration")
+	}
+	for index := range peer.hits {
+		var expected int64
+		if index == kind && (name == "home-udp53" || name == "dot853" || name == "doh443" || name == "doh3-udp443" || name == "close-owner" || name == "replacement-owner" || name == "cancel-inflight") {
+			expected = 1
+			if name == "replacement-owner" {
+				expected = 2
+			}
+		}
+		if index == 0 && name == "plain-vision-udp443" {
+			expected = 1
+		}
+		if peer.hits[index].Load() != expected {
+			t.Fatalf("selected DNS borrowed another resolver or transport: kind=%d hits=%d wanted=%d", index, peer.hits[index].Load(), expected)
+		}
+	}
+}
+
+func TestNativeXrayUDP443DetectorReceipt(t *testing.T) {
+	target, capture := "127.0.0.1:18443", strings.Repeat("a", 64)
+	keys, _ := json.Marshal([]string{target + " www.example.com 0", target + " www.example.com 1", target + " www.example.com 2"})
+	line := fmt.Sprintf("RouterVPN reference detector complete: pid=31 config=%s tuples=%x\n", capture, sha256.Sum256(keys))
+	if !loopbackXrayDetectorRecord([]byte(line), 31, capture, target) {
+		t.Fatal("original completion receipt rejected")
+	}
+	for _, changed := range []string{"", strings.TrimSuffix(line, "\n"), line + line, strings.Replace(line, "pid=31", "pid=32", 1), strings.Replace(line, capture, strings.Repeat("b", 64), 1), strings.Replace(line, "tuples=", "tuples=0", 1)} {
+		if loopbackXrayDetectorRecord([]byte(changed), 31, capture, target) {
+			t.Fatal("missing, premature or foreign reference completion accepted")
+		}
+	}
+	if loopbackXrayDetectorRecord([]byte(line), 31, capture, "127.0.0.1:19443") {
+		t.Fatal("foreign detector target adopted")
+	}
+}
+
+func TestNativeXrayUDP443DoTProbeAdmission(t *testing.T) {
+	for index, qtype := range []uint16{mDNS.TypeA, mDNS.TypeAAAA} {
+		query := new(mDNS.Msg)
+		query.SetQuestion(nativeUDP443Question, qtype)
+		query.Id = uint16(index + 1)
+		if slot, valid := nativeUDP443ReuseProbe(1, query); !valid || slot != index {
+			t.Fatal("original pinned TLS reuse probe rejected")
+		}
+		for _, kind := range []int{0, 2, 3} {
+			if _, valid := nativeUDP443ReuseProbe(kind, query); valid {
+				t.Fatal("another DNS transport borrowed the TLS probe identity")
+			}
+		}
+		for _, mutate := range []func(*mDNS.Msg){
+			func(q *mDNS.Msg) { q.Id = 0 }, func(q *mDNS.Msg) { q.Id = 3 },
+			func(q *mDNS.Msg) { q.Question[0].Qtype = mDNS.TypeTXT },
+			func(q *mDNS.Msg) { q.Question[0].Name = "foreign." + nativeUDP443Question },
+			func(q *mDNS.Msg) { q.Question[0].Qclass = mDNS.ClassCHAOS },
+			func(q *mDNS.Msg) { q.Response = true }, func(q *mDNS.Msg) { q.RecursionDesired = false },
+			func(q *mDNS.Msg) { q.Question = nil }, func(q *mDNS.Msg) { q.SetEdns0(1232, false) },
+		} {
+			changed := query.Copy()
+			mutate(changed)
+			if _, valid := nativeUDP443ReuseProbe(1, changed); valid {
+				t.Fatal("foreign DNS shape or application ID counted as a reuse probe")
+			}
+		}
+	}
+	if _, valid := nativeUDP443ReuseProbe(1, nil); valid {
+		t.Fatal("missing DNS query counted as a reuse probe")
+	}
+}

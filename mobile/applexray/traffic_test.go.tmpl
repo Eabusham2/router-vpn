@@ -8,6 +8,7 @@ import (
 	"crypto/elliptic"
 	"crypto/mlkem"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -25,6 +26,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -128,7 +131,23 @@ func loopbackEcho(t *testing.T) (string, string) {
 	}()
 	return tcp.Addr().String(), udp.LocalAddr().String()
 }
+
+type loopbackXrayDNSRoute struct {
+	network string
+	server  string
+	port    uint16
+	private string
+}
+
 func startLoopbackXray(t *testing.T, mode, camouflage, tcpEcho, udpEcho string, raw []byte) (string, []byte) {
+	t.Helper()
+	return startLoopbackXrayWithDNS(t, mode, camouflage, tcpEcho, udpEcho, raw, nil)
+}
+
+// Extra routes exist only in the separate reference process. They admit one
+// captured DNS tuple each to its retained loopback peer; existing callers keep
+// their original echo-only policy and gain no resolver or Internet fallback.
+func startLoopbackXrayWithDNS(t *testing.T, mode, camouflage, tcpEcho, udpEcho string, raw []byte, routes []loopbackXrayDNSRoute) (string, []byte) {
 	t.Helper()
 	binary := os.Getenv("ROUTER_VPN_XRAY_TEST_BINARY")
 	if binary == "" {
@@ -157,6 +176,11 @@ func startLoopbackXray(t *testing.T, mode, camouflage, tcpEcho, udpEcho string, 
 	user := outbound["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)
 	serverUser := map[string]any{"id": user["id"]}
 	if flow, ok := user["flow"]; ok {
+		if flow == "xtls-rprx-vision-udp443" {
+			// UDP443 is an explicit client choice; the actual server protocol
+			// always authenticates the ordinary Vision flow.
+			flow = "xtls-rprx-vision"
+		}
 		serverUser["flow"] = flow
 	}
 	decryption := "none"
@@ -196,6 +220,31 @@ func startLoopbackXray(t *testing.T, mode, camouflage, tcpEcho, udpEcho string, 
 		map[string]any{"action": "block", "blockDelay": "0-0"},
 	}}
 	server := map[string]any{"log": map[string]any{"loglevel": "debug"}, "inbounds": []any{map[string]any{"tag": "local-test-server", "listen": "127.0.0.1", "port": port, "protocol": "vless", "settings": map[string]any{"clients": []any{serverUser}, "decryption": decryption}, "streamSettings": serverStream}}, "outbounds": []any{map[string]any{"protocol": "freedom", "tag": "test-echo", "settings": echoPolicy}}}
+	if len(routes) != 0 {
+		outbounds := server["outbounds"].([]any)
+		var rules []any
+		seen := map[string]bool{}
+		for index, route := range routes {
+			selected, err := netip.ParseAddr(route.server)
+			private, privateErr := netip.ParseAddrPort(route.private)
+			identity := fmt.Sprintf("%s/%s/%d", route.network, route.server, route.port)
+			if err != nil || !selected.Is4() || selected.IsLoopback() || selected.IsUnspecified() || route.port == 0 ||
+				privateErr != nil || !private.Addr().Is4() || !private.Addr().IsLoopback() || private.Port() == 0 ||
+				(route.network != "tcp" && route.network != "udp") || seen[identity] {
+				t.Fatal("loopback Xray lost an exact separately owned DNS route")
+			}
+			seen[identity] = true
+			tag := fmt.Sprintf("captured-dns-%d", index)
+			outbounds = append(outbounds, map[string]any{"protocol": "freedom", "tag": tag, "settings": map[string]any{
+				"redirect": route.private, "finalRules": []any{
+					map[string]any{"action": "allow", "network": route.network, "ip": []string{"127.0.0.1/32"}, "port": fmt.Sprint(private.Port())},
+					map[string]any{"action": "block", "blockDelay": "0-0"},
+				}}})
+			rules = append(rules, map[string]any{"type": "field", "network": route.network, "ip": []string{route.server + "/32"}, "port": fmt.Sprint(route.port), "outboundTag": tag})
+		}
+		server["outbounds"] = outbounds
+		server["routing"] = map[string]any{"domainStrategy": "AsIs", "rules": rules}
+	}
 	config, err := json.Marshal(server)
 	if err != nil {
 		t.Fatal(err)
@@ -209,6 +258,11 @@ func startLoopbackXray(t *testing.T, mode, camouflage, tcpEcho, udpEcho string, 
 		t.Fatal(err)
 	}
 	command := exec.Command(binary, "run", "-c", path)
+	capture := ""
+	if os.Getenv("ROUTER_VPN_XRAY_REFERENCE_DETECTOR_READY") == "1" {
+		capture = fmt.Sprintf("%x", sha256.Sum256(config))
+		command.Env = append(os.Environ(), "ROUTER_VPN_XRAY_REFERENCE_DETECTOR_CAPTURE="+capture)
+	}
 	command.Stdout = log
 	command.Stderr = log
 	if err := command.Start(); err != nil {
@@ -242,8 +296,23 @@ func startLoopbackXray(t *testing.T, mode, camouflage, tcpEcho, udpEcho string, 
 		c, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
 		if err == nil {
 			c.Close()
-			ready = true
-			break
+			if capture == "" {
+				ready = true
+				break
+			}
+			diagnostic, readErr := os.ReadFile(log.Name())
+			original, sourceErr := os.ReadFile(path)
+			if readErr == nil && sourceErr == nil && bytes.Equal(original, config) &&
+				loopbackXrayDetectorRecord(diagnostic, command.Process.Pid, capture, camouflage) {
+				select {
+				case err := <-done:
+					done <- err
+					t.Fatal("original loopback Xray child exited during detector readiness", err)
+				default:
+				}
+				ready = true
+				break
+			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -255,6 +324,23 @@ func startLoopbackXray(t *testing.T, mode, camouflage, tcpEcho, udpEcho string, 
 		t.Fatal(err)
 	}
 	return address, normalized
+}
+
+func loopbackXrayDetectorRecord(diagnostic []byte, pid int, capture, camouflage string) bool {
+	if pid <= 0 || len(capture) != 64 || camouflage == "" {
+		return false
+	}
+	keys := []string{camouflage + " www.example.com 0", camouflage + " www.example.com 1", camouflage + " www.example.com 2"}
+	sort.Strings(keys)
+	raw, _ := json.Marshal(keys)
+	wanted := fmt.Sprintf("RouterVPN reference detector complete: pid=%d config=%s tuples=%x", pid, capture, sha256.Sum256(raw))
+	count := 0
+	for _, line := range strings.SplitAfter(string(diagnostic), "\n") {
+		if strings.HasSuffix(line, "\n") && strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r") == wanted {
+			count++
+		}
+	}
+	return count == 1
 }
 func TestNativeXrayEncryptedLoopbackTCPAndUDP(t *testing.T) {
 	installScopedDialer()
