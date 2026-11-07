@@ -22,7 +22,12 @@ import (
 func desktopImportedFixture(t *testing.T, protocol, finalMode string) (string, multihopSelection) {
 	t.Helper()
 	root, paired := nativeMultihopCapturedFixture(t, "wg", "off")
-	entry, _ := desktopExternalNativeFixture(t, protocol)
+	var entry common.RouterProfile
+	if protocol == "openvpn" {
+		entry = desktopImportedOpenVPNProfileFixture(t, "tcp")
+	} else {
+		entry, _ = desktopExternalNativeFixture(t, protocol)
+	}
 	entry.ID, entry.Name = "imported-entry", "Independent imported entry"
 	entry.DNSMode, entry.DNSProtocol, entry.DNSHost, entry.DNSPort = "home", "", "", 0
 	if protocol == "shadowsocks" {

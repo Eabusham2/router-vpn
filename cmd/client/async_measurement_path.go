@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 )
 
 // An asynchronous proof owns one immutable session and, for multihop, one
@@ -35,6 +36,15 @@ func asyncMeasurementPathContext(parent context.Context, a *app, p common.Router
 	if profiles[p.ID] != token {
 		return nil, nil, nil, errors.New("captured profile changed before live measurement")
 	}
+	if err := desktopnetwork.LockContext(parent, &a.mu); err != nil {
+		return nil, nil, nil, err
+	}
+	command := a.cmd
+	a.mu.Unlock()
+	imported, err := captureDesktopImportedOpenVPNRuntime(parent, a, command, graph)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	tor, err := captureDesktopTorMeasurementBindingContext(parent, a, st)
 	if err != nil {
 		return nil, nil, nil, err
@@ -42,7 +52,7 @@ func asyncMeasurementPathContext(parent context.Context, a *app, p common.Router
 	binding := &asyncMeasurementAdoption{
 		owner: a, session: session, stateToken: mtuStateSnapshotToken(st), profiles: profiles,
 		multihop: st.Mode == "multihop", graph: graph, generation: homeExitProofs.generation(a),
-		tor: tor,
+		tor: tor, importedOpenVPN: imported,
 	}
 	// The observer and terminal persistence use the exact same immutable
 	// binding. Stop cancels HTTP only; it never stops or replaces the VPN.

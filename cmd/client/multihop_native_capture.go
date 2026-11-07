@@ -17,6 +17,7 @@ import (
 
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemtu"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -34,6 +35,7 @@ type nativeMultihopCapture struct {
 	failures                                                 map[string]error
 	assets                                                   []viaEntryAsset
 	imported                                                 bool
+	openVPN                                                  *desktopImportedOpenVPNSpec
 }
 
 func captureNativeMultihopSelection(ctx context.Context, root string, sel multihopSelection, modes []string, lookup applexray.Lookup) (multihopSelection, error) {
@@ -231,7 +233,9 @@ func captureNativeMultihopForAppContext(parent context.Context, a *app, sel mult
 func (a *app) proveNativeMultihop(sel multihopSelection, command *exec.Cmd) error {
 	ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), nativeMultihopProofTimeout(sel))
 	defer cancel()
-	current := func() bool { return a.nativeMultihopProofOwnerCurrent(sel, command) }
+	current := func() bool {
+		return a.nativeMultihopProofOwnerCurrentContext(ctx, sel, command) && a.observeImportedOpenVPN(ctx, sel, command) == nil
+	}
 	if err := proveNativeMultihopCapture(ctx, sel, current, proveNativeMultihopLaneContext); err != nil {
 		return err
 	}
@@ -250,16 +254,29 @@ func (a *app) proveNativeMultihop(sel multihopSelection, command *exec.Cmd) erro
 }
 
 func (a *app) nativeMultihopProofOwnerCurrent(sel multihopSelection, command *exec.Cmd) bool {
-	if !a.ownsConnectionRuntime(command) || sel.Native == nil {
+	return a.nativeMultihopProofOwnerCurrentContext(context.Background(), sel, command)
+}
+
+func (a *app) nativeMultihopProofOwnerCurrentContext(ctx context.Context, sel multihopSelection, command *exec.Cmd) bool {
+	if ctx == nil || ctx.Err() != nil || sel.Native == nil || mobilemtu.LockContext(ctx, &a.mu) != nil {
+		return false
+	}
+	owned := command != nil && a.cmd == command && !a.closing
+	selected := a.profiles.SelectedID == sel.Control.ID
+	if sel.Native.imported {
+		for _, captured := range []common.RouterProfile{sel.Control, sel.Entry, sel.Exit} {
+			current, ok := a.profileByIDLocked(captured.ID)
+			owned = owned && ok && mtuProfileSnapshotToken(current) == mtuProfileSnapshotToken(captured)
+		}
+	}
+	a.mu.Unlock()
+	if !owned {
 		return false
 	}
 	if !sel.Native.imported {
 		return true
 	}
-	a.mu.Lock()
-	selected := a.profiles.SelectedID == sel.Control.ID
-	a.mu.Unlock()
-	return selected && nativeMultihopLiveProfilesCurrent(a, sel) && sel.Native.validate(sel) == nil
+	return selected && sel.Native.validate(sel) == nil && ctx.Err() == nil
 }
 
 func proveNativeMultihopCapture(ctx context.Context, sel multihopSelection, owns func() bool, prove func(context.Context, common.RouterProfile, string) error) error {

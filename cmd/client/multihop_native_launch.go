@@ -99,7 +99,7 @@ func compileRetainedNativeMultihopLaunch(sel multihopSelection, descriptor *desk
 		if err != nil {
 			return nil, err
 		}
-		if sel.Native.imported && (sel.EntryMode == "wireguard" || sel.EntryMode == "amneziawg") {
+		if sel.Native.imported && (sel.EntryMode == "wireguard" || sel.EntryMode == "amneziawg" || sel.EntryMode == "openvpn") {
 			if _, err := mobilemtu.NewPlan(string(data), sel.restoreMTU); err != nil {
 				return nil, errors.Join(errors.New("restored imported packet TUN exceeds its original captured envelope"), err)
 			}
@@ -117,8 +117,12 @@ func compileRetainedNativeMultihopLaunch(sel multihopSelection, descriptor *desk
 		clear(data)
 		return nil, err
 	}
-	return &desktopNodeLaunch{root: sel.Native.root, endpoint: physical.String(), profileID: sel.Exit.ID, policyProfileID: sel.Control.ID, mode: sel.ExitMode, config: data, metadata: metadata, importedEntry: sel.Native.imported,
-		nodePhysicalEgress: append([]mobilemultihop.PhysicalEgress(nil), sel.Native.entryPhysical...)}, nil
+	launch := &desktopNodeLaunch{root: sel.Native.root, endpoint: physical.String(), profileID: sel.Exit.ID, policyProfileID: sel.Control.ID, mode: sel.ExitMode, config: data, metadata: metadata, importedEntry: sel.Native.imported,
+		nodePhysicalEgress: append([]mobilemultihop.PhysicalEgress(nil), sel.Native.entryPhysical...)}
+	if sel.Native.openVPN != nil {
+		launch.importedOpenVPN = &desktopImportedOpenVPNRuntime{spec: *sel.Native.openVPN, notBefore: time.Now().UnixMilli()}
+	}
+	return launch, nil
 }
 
 func preflightRetainedNativeMultihop(ctx context.Context, binary string, launch *desktopNodeLaunch, run desktopExternalPreflightCommand) (failure error) {
@@ -283,6 +287,13 @@ func retireNativeMultihopGraph(a *app, launch *desktopNodeLaunch) {
 }
 
 func capturedNativeMultihopRuntime(a *app, command *exec.Cmd, graph activeMultihopGraph) (*nativeMultihopRuntime, error) {
+	return capturedNativeMultihopRuntimeContext(context.Background(), a, command, graph)
+}
+
+func capturedNativeMultihopRuntimeContext(ctx context.Context, a *app, command *exec.Cmd, graph activeMultihopGraph) (*nativeMultihopRuntime, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return nil, errors.New("multihop observation has no live original caller")
+	}
 	raw, found := nativeMultihopOwners.Load(a)
 	owner, ok := raw.(*nativeMultihopRuntime)
 	if !found || !ok || owner == nil || owner.launch == nil || owner.launch.command != command || !sameMTUMultihopGraph(owner.graph, graph) {
@@ -291,11 +302,15 @@ func capturedNativeMultihopRuntime(a *app, command *exec.Cmd, graph activeMultih
 	if current, found := desktopNodeOwners.Load(a); !found || current != owner.launch {
 		return nil, errors.New("multihop system TUN owner was replaced")
 	}
-	if owner.network == "" || physicalNetworkIdentity() != owner.network || owner.selection.Native == nil || owner.selection.Native.validate(owner.selection) != nil {
+	network, err := physicalNetworkIdentityContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if owner.network == "" || network != owner.network || owner.selection.Native == nil || owner.selection.Native.validate(owner.selection) != nil {
 		return nil, errors.New("multihop source or physical network changed")
 	}
 	if err := desktopExternalDirectoryCurrent(owner.launch); err != nil {
 		return nil, err
 	}
-	return owner, nil
+	return owner, ctx.Err()
 }

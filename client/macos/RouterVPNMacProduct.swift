@@ -33,6 +33,7 @@ enum RouterVPNNodeEntryModes {
         ("socks5", "Imported SOCKS5 · Local only"),
         ("http-connect", "Imported HTTP CONNECT · Local only"),
         ("https-connect", "Imported HTTPS CONNECT · Local only"),
+        ("openvpn", "Imported OpenVPN · Local only"),
     ]
     static func id(at index: Int) -> String? {
         choices.indices.contains(index) ? choices[index].id : nil

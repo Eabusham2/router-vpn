@@ -100,6 +100,7 @@ static const struct { const char *id; const char *label; } linux_multihop_entrie
     {"socks5", "Imported SOCKS5 - Local only"},
     {"http-connect", "Imported HTTP CONNECT - Local only"},
     {"https-connect", "Imported HTTPS CONNECT - Local only"},
+    {"openvpn", "Imported OpenVPN - Local only"},
 };
 
 static gboolean linux_multihop_entry_supported_v23(const char *mode) {

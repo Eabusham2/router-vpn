@@ -258,11 +258,7 @@ func TestDesktopTorOrdinarySavedMetadataCannotGrantRouterModeOrReplaceCapture(t 
 		// saved Tor source. Imported entries can now precede a paired final;
 		// that does not let their metadata replace this captured SOCKS5 hop.
 		normalized, err := normalizeConnectionProfileEntryMode(mode)
-		if mode == "openvpn" {
-			if err == nil {
-				t.Fatal("unproved OpenVPN gained paired-final selection", mode)
-			}
-		} else if err != nil || normalized != mode {
+		if err != nil || normalized != mode {
 			t.Fatal("admitted original imported protocol lost its exact selector identity", mode, err)
 		}
 		captured := *saved.Profile.External

@@ -1,23 +1,32 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemtu"
 )
 
 // Keep the actual proved graph and its frozen credentials. Recompiling from
 // current saved measurements would create another source identity and could
 // accidentally rerun the user's saved Compare choice instead of restoring it.
 func captureNativeMultihopRestore(a *app, command *exec.Cmd, graph activeMultihopGraph, control, entry, exit common.RouterProfile) (multihopSelection, error) {
-	owner, err := capturedNativeMultihopRuntime(a, command, graph)
+	return captureNativeMultihopRestoreContext(context.Background(), a, command, graph, control, entry, exit)
+}
+
+func captureNativeMultihopRestoreContext(ctx context.Context, a *app, command *exec.Cmd, graph activeMultihopGraph, control, entry, exit common.RouterProfile) (multihopSelection, error) {
+	owner, err := capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
 	if err != nil {
 		return multihopSelection{}, err
 	}
 	selection := owner.selection
-	if !nativeMultihopLiveProfilesCurrent(a, selection) {
+	if err := a.observeImportedOpenVPN(ctx, selection, command); err != nil {
+		return multihopSelection{}, err
+	}
+	if !nativeMultihopLiveProfilesCurrentContext(ctx, a, selection) {
 		return multihopSelection{}, errors.New("previous multihop node sources were relinked before restoration")
 	}
 	if graph.Execution != "local" && graph.Execution != "server" ||
@@ -49,12 +58,16 @@ func captureNativeMultihopRestore(a *app, command *exec.Cmd, graph activeMultiho
 		}
 		capturedRelay = relay
 	}
-	selection.restoreMTU, err = captureDesktopNodeRestoreMTU(owner.launch)
-	if err != nil {
+	record, err := readDesktopNodeMTUContext(ctx, owner.launch)
+	if err != nil || record.Active || record.Failure != "" {
+		return multihopSelection{}, errors.Join(err, errors.New("native restore lost its stable original TUN readback"))
+	}
+	selection.restoreMTU = record.MTU
+	if err := a.observeImportedOpenVPN(ctx, selection, command); err != nil {
 		return multihopSelection{}, err
 	}
-	current, err := capturedNativeMultihopRuntime(a, command, graph)
-	if err != nil || current != owner || !nativeMultihopLiveProfilesCurrent(a, selection) {
+	current, err := capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
+	if err != nil || current != owner || !nativeMultihopLiveProfilesCurrentContext(ctx, a, selection) {
 		return multihopSelection{}, errors.New("multihop owner or node sources changed while capturing live MTU restoration")
 	}
 	if capturedRelay != nil {
@@ -77,11 +90,15 @@ func captureNativeMultihopRestore(a *app, command *exec.Cmd, graph activeMultiho
 // lock; an older caller snapshot alone cannot bless replacement credentials.
 // The existing MTU identity excludes only the persisted EffectiveMTU value;
 // restoration uses the owned live readback, never that saved measurement.
+
 func nativeMultihopLiveProfilesCurrent(a *app, selection multihopSelection) bool {
-	if a == nil || selection.Native == nil {
+	return nativeMultihopLiveProfilesCurrentContext(context.Background(), a, selection)
+}
+
+func nativeMultihopLiveProfilesCurrentContext(ctx context.Context, a *app, selection multihopSelection) bool {
+	if ctx == nil || a == nil || selection.Native == nil || mobilemtu.LockContext(ctx, &a.mu) != nil {
 		return false
 	}
-	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, captured := range []common.RouterProfile{selection.Control, selection.Entry, selection.Exit} {
 		current, ok := a.profileByIDLocked(captured.ID)
@@ -89,5 +106,5 @@ func nativeMultihopLiveProfilesCurrent(a *app, selection multihopSelection) bool
 			return false
 		}
 	}
-	return true
+	return ctx.Err() == nil
 }

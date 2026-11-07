@@ -23,9 +23,14 @@ func TestDesktopEntryCatalogContracts(t *testing.T) {
 	final.ID = "exit"
 	a.profiles.Profiles = []common.RouterProfile{entry, final}
 	a.profiles.SelectedID = final.ID
-	imports := []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect"}
+	imports := []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "openvpn"}
 	for _, protocol := range imports {
-		original, _ := desktopExternalNativeFixture(t, protocol)
+		var original common.RouterProfile
+		if protocol == "openvpn" {
+			original = desktopImportedOpenVPNProfileFixture(t, "tcp")
+		} else {
+			original, _ = desktopExternalNativeFixture(t, protocol)
+		}
 		original.ID, original.Name = "imported-"+protocol, "Original "+protocol
 		a.profiles.Profiles = append(a.profiles.Profiles, original)
 	}
@@ -44,7 +49,7 @@ func TestDesktopEntryCatalogContracts(t *testing.T) {
 	slices.Sort(expected)
 	actual := slices.Clone(daily.Supported)
 	slices.Sort(actual)
-	if len(paired) != 19 || len(actual) != 24 || !reflect.DeepEqual(actual, expected) ||
+	if len(paired) != 19 || len(actual) != 25 || !reflect.DeepEqual(actual, expected) ||
 		!reflect.DeepEqual(daily.Paired, paired) || !reflect.DeepEqual(daily.Execution, []string{"local"}) {
 		t.Fatal("main/profile catalog lost original imported identities or paired execution boundaries")
 	}
@@ -83,7 +88,7 @@ func TestDesktopEntryCatalogContracts(t *testing.T) {
 }
 
 func TestDesktopEntryCatalogOriginalImportedAuthority(t *testing.T) {
-	for _, protocol := range []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect"} {
+	for _, protocol := range []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "openvpn"} {
 		t.Run(protocol, func(t *testing.T) {
 			root, original := desktopImportedFixture(t, protocol, "reality-vision")
 			before := mustImportedJSON(t, original)

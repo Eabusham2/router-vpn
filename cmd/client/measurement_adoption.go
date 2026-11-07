@@ -15,17 +15,18 @@ type asyncMeasurementBindingKey struct{}
 // observer. It contains profile hashes, never captured credentials or mutable
 // profile pointers. The owner check prevents another app from adopting it.
 type asyncMeasurementAdoption struct {
-	trackerOnce sync.Once
-	tracker     *sessionTracker
-	trackerErr  error
-	owner       *app
-	session     connectionSession
-	stateToken  string
-	profiles    map[string]string
-	multihop    bool
-	graph       activeMultihopGraph
-	generation  uint64
-	tor         *desktopTorMeasurementBinding
+	trackerOnce     sync.Once
+	tracker         *sessionTracker
+	trackerErr      error
+	owner           *app
+	session         connectionSession
+	stateToken      string
+	profiles        map[string]string
+	multihop        bool
+	graph           activeMultihopGraph
+	generation      uint64
+	tor             *desktopTorMeasurementBinding
+	importedOpenVPN *nativeMultihopRuntime
 }
 
 // speedLabPathContext runs validate synchronously before starting its observer.
@@ -99,6 +100,17 @@ func (b *asyncMeasurementAdoption) validateLockedWithTor(current *connectionSess
 		if !sameActiveMultihopGraph(graph, b.graph) {
 			return errors.New("multihop graph changed before live measurement adoption")
 		}
+		if graph.ImportedEntry && graph.EntryMode == "openvpn" {
+			owner := b.importedOpenVPN
+			raw, present := nativeMultihopOwners.Load(a)
+			if owner == nil || owner.launch == nil || owner.launch.importedOpenVPN == nil || owner.launch.importedOpenVPN.retired.Load() ||
+				!present || raw != owner || a.cmd != owner.launch.command {
+				return errors.New("live measurement lost its original imported OpenVPN child")
+			}
+			if raw, present := desktopNodeOwners.Load(a); !present || raw != owner.launch {
+				return errors.New("live measurement lost its imported OpenVPN TUN owner")
+			}
+		}
 	}
 	if b.tor != nil {
 		if err := torCurrent(); err != nil {
@@ -109,18 +121,15 @@ func (b *asyncMeasurementAdoption) validateLockedWithTor(current *connectionSess
 }
 
 func (b *asyncMeasurementAdoption) validate() error {
-	tracker, err := b.sessionOwner()
-	if err != nil {
-		return err
-	}
-	tracker.mu.Lock()
-	defer tracker.mu.Unlock()
-	b.owner.mu.Lock()
-	defer b.owner.mu.Unlock()
-	return b.validateLocked(tracker.session)
+	return b.validateContext(context.Background())
 }
 
 func (b *asyncMeasurementAdoption) validateContext(ctx context.Context) error {
+	if b.importedOpenVPN != nil {
+		if err := validateDesktopImportedOpenVPNRuntime(ctx, b.owner, b.importedOpenVPN); err != nil {
+			return err
+		}
+	}
 	tracker, err := b.sessionOwner()
 	if err != nil {
 		return err
@@ -149,6 +158,11 @@ func (a *app) beginAsyncMeasurementAdoption(ctx context.Context) (func(), error)
 	binding, ok := ctx.Value(asyncMeasurementBindingKey{}).(*asyncMeasurementAdoption)
 	if !ok || binding == nil || binding.owner != a {
 		return nil, errors.New("live measurement has no matching immutable adoption binding")
+	}
+	if binding.importedOpenVPN != nil {
+		if err := validateDesktopImportedOpenVPNRuntime(ctx, a, binding.importedOpenVPN); err != nil {
+			return nil, err
+		}
 	}
 	tracker, err := binding.sessionOwner()
 	if err != nil {

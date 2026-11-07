@@ -77,8 +77,8 @@ function StartUnifiedApiAsync($Label,$Path,$Method,$Body,$Timeout,$Success,$Fail
 Check ($Node.SelectedValue-ceq'exit'-and$Entry.SelectedValue-ceq'entry'-and$EntryMode.SelectedValue-ceq'awg2-strong'-and$Execution.SelectedValue-ceq'auto') 'Saved external path was replaced by unrelated defaults.'
 Check ($SpeedLabOptions.router_vpn_entry_modes.Count-eq19) 'Entry mode catalog was reduced.'
 $MainEntries=@($MultihopEntryModeCombo.Items|ForEach-Object{[string]$_.Tag}|Where-Object{$_})
-$ImportedEntries=@('wireguard','amneziawg','socks5','http-connect','https-connect')
-Check ($MainEntries.Count-eq24-and(@($MainEntries|Sort-Object -Unique).Count-eq24)-and(@($MainEntries|Sort-Object)-join',')-ceq(@($MainCatalog.supported_entry_modes|Sort-Object)-join',')) 'Main and daily connection entry catalogs differ.'
+$ImportedEntries=@('wireguard','amneziawg','socks5','http-connect','https-connect','openvpn')
+Check ($MainEntries.Count-eq25-and(@($MainEntries|Sort-Object -Unique).Count-eq25)-and(@($MainEntries|Sort-Object)-join',')-ceq(@($MainCatalog.supported_entry_modes|Sort-Object)-join',')) 'Main and daily connection entry catalogs differ.'
 Check ((@($SpeedLabOptions.supported_entry_modes)-join',')-ceq(@($MainCatalog.paired_entry_modes)-join',')) 'Temporary Speed Lab and paired entry catalogs differ.'
 foreach($M in $ImportedEntries){Check ($M-cin$MainEntries-and$M-cnotin$SpeedLabOptions.supported_entry_modes) 'Imported entry lost its distinct main/profile authority.'}
 $Count=0

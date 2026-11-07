@@ -564,7 +564,7 @@ func (a *app) speedLabCaptureRestorePlanContext(ctx context.Context, snapshot sp
 		}
 		selection.Control, selection.Entry, selection.Exit = cloneRouterProfile(selection.Control), cloneRouterProfile(selection.Entry), cloneRouterProfile(selection.Exit)
 		if retainedNativeMultihopSelected() {
-			selection, err = captureNativeMultihopRestore(a, snapshot.Runtime, graph, selection.Control, selection.Entry, selection.Exit)
+			selection, err = captureNativeMultihopRestoreContext(ctx, a, snapshot.Runtime, graph, selection.Control, selection.Entry, selection.Exit)
 			if err != nil {
 				return plan, err
 			}

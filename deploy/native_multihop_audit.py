@@ -113,7 +113,7 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
     """
     tokens, imported, dns = _tokens(source), _tokens(imported_source), _tokens(dns_source)
     admission = _function(tokens, "func (a *app) proveNativeMultihop(sel multihopSelection, command *exec.Cmd) error")
-    owner = _function(tokens, "func (a *app) nativeMultihopProofOwnerCurrent(sel multihopSelection, command *exec.Cmd) bool")
+    owner = _function(tokens, "func (a *app) nativeMultihopProofOwnerCurrentContext(ctx context.Context, sel multihopSelection, command *exec.Cmd) bool")
     proof = _function(tokens, "func proveNativeMultihopCapture(ctx context.Context, sel multihopSelection, owns func() bool, prove func(context.Context, common.RouterProfile, string) error) error")
     lane = _function(imported, "func proveNativeMultihopLaneContext(ctx context.Context, profile common.RouterProfile, proxy string) error")
     selected_dns = _function(dns, "func (a *app) proveImportedNativeDNS(parent context.Context, selection multihopSelection, command *exec.Cmd) (float64, error)")
@@ -121,7 +121,7 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
         admission == _tokens('''
             ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), nativeMultihopProofTimeout(sel))
             defer cancel()
-            current := func() bool { return a.nativeMultihopProofOwnerCurrent(sel, command) }
+            current := func() bool { return a.nativeMultihopProofOwnerCurrentContext(ctx, sel, command) && a.observeImportedOpenVPN(ctx, sel, command) == nil }
             if err := proveNativeMultihopCapture(ctx, sel, current, proveNativeMultihopLaneContext); err != nil { return err }
             if sel.Native.imported {
                 if _, err := a.proveImportedNativeDNS(ctx, sel, command); err != nil { return err }
@@ -130,12 +130,19 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
             return nil
         ''')
         and owner == _tokens('''
-            if !a.ownsConnectionRuntime(command) || sel.Native == nil { return false }
-            if !sel.Native.imported { return true }
-            a.mu.Lock()
+            if ctx == nil || ctx.Err() != nil || sel.Native == nil || mobilemtu.LockContext(ctx, &a.mu) != nil { return false }
+            owned := command != nil && a.cmd == command && !a.closing
             selected := a.profiles.SelectedID == sel.Control.ID
+            if sel.Native.imported {
+                for _, captured := range []common.RouterProfile{sel.Control, sel.Entry, sel.Exit} {
+                    current, ok := a.profileByIDLocked(captured.ID)
+                    owned = owned && ok && mtuProfileSnapshotToken(current) == mtuProfileSnapshotToken(captured)
+                }
+            }
             a.mu.Unlock()
-            return selected && nativeMultihopLiveProfilesCurrent(a, sel) && sel.Native.validate(sel) == nil
+            if !owned { return false }
+            if !sel.Native.imported { return true }
+            return selected && sel.Native.validate(sel) == nil && ctx.Err() == nil
         ''')
         and _ordered_once(proof,
             'if ctx.Err() != nil { return ctx.Err() }',
@@ -165,15 +172,15 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
                 return 0, errors.New("selected final DNS has no original imported graph")
             }
             graph, ok := getActiveMultihopGraph(a)
-            owner, err := capturedNativeMultihopRuntime(a, command, graph)
+            owner, err := capturedNativeMultihopRuntimeContext(parent, a, command, graph)
             if !ok || err != nil || owner.selection.Native != selection.Native || !owner.launch.importedEntry {
                 return 0, errors.New("selected final DNS has no retained original process")
             }
             current := func(ctx context.Context) error {
-                if ctx.Err() != nil || !a.nativeMultihopProofOwnerCurrent(selection, command) || desktopNodeProcessExited(owner.launch) {
+                if ctx.Err() != nil || !a.nativeMultihopProofOwnerCurrentContext(ctx, selection, command) || desktopNodeProcessExited(owner.launch) {
                     return errors.New("selected final DNS lost its current source or process")
                 }
-                actual, err := capturedNativeMultihopRuntime(a, command, graph)
+                actual, err := capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
                 if err != nil || actual != owner {
                     return errors.New("selected final DNS lost its original network generation")
                 }
@@ -183,7 +190,11 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
                 if err != nil { return err }
                 return verifySingBoxDNSConfigBytes(raw, selected)
             }
-            return exchangeDesktopImportedDNS(parent, owner.launch, current)
+            if err := a.observeImportedOpenVPN(parent, selection, command); err != nil { return 0, err }
+            elapsed, err := exchangeDesktopImportedDNS(parent, owner.launch, current)
+            if err != nil { return 0, err }
+            if err := a.observeImportedOpenVPN(parent, selection, command); err != nil { return 0, err }
+            return elapsed, parent.Err()
         ''')
     )
 

@@ -108,11 +108,13 @@ class NativeShippingAuditTests(unittest.TestCase):
     def test_original_runtime_profile_and_context_guards_are_required(self):
         path = "cmd/client/multihop_native_capture.go"
         changes = (
-            ("a.nativeMultihopProofOwnerCurrent(sel, command)", "a.nativeMultihopProofOwnerCurrent(sel, other)"),
+            ("a.nativeMultihopProofOwnerCurrentContext(ctx, sel, command)", "a.nativeMultihopProofOwnerCurrentContext(ctx, sel, other)"),
             ("a.connectionOperationContextOrBackground(), nativeMultihopProofTimeout(sel)", "context.Background(), nativeMultihopProofTimeout(sel)"),
-            ("!a.ownsConnectionRuntime(command)", "false"),
+            ("command != nil && a.cmd == command && !a.closing", "true"),
             ("a.profiles.SelectedID == sel.Control.ID", "true"),
-            ("nativeMultihopLiveProfilesCurrent(a, sel)", "true"),
+            ("mtuProfileSnapshotToken(current) == mtuProfileSnapshotToken(captured)", "true"),
+            ("mobilemtu.LockContext(ctx, &a.mu)", "mobilemtu.LockContext(context.Background(), &a.mu)"),
+            ("a.observeImportedOpenVPN(ctx, sel, command) == nil", "true"),
             ("ctx.Err() != nil || !current()", "false"),
             ("!owns() || sel.Native == nil || sel.Native.validate(sel) != nil", "sel.Native == nil"),
             ("ctx.Err() != nil || !owns() || sel.Native.validate(sel) != nil", "ctx.Err() != nil"),
@@ -134,13 +136,15 @@ class NativeShippingAuditTests(unittest.TestCase):
             (capture, "a.proveImportedNativeDNS(ctx, sel, command)", "a.proveImportedNativeDNS(ctx, sel, other)"),
             (dns, "owner.selection.Native != selection.Native", "false"),
             (dns, "!owner.launch.importedEntry", "false"),
-            (dns, "!a.nativeMultihopProofOwnerCurrent(selection, command)", "false"),
+            (dns, "!a.nativeMultihopProofOwnerCurrentContext(ctx, selection, command)", "false"),
             (dns, "desktopNodeProcessExited(owner.launch)", "false"),
             (dns, "actual != owner", "false"),
             (dns, "expectedDNSSelection(selection.Exit)", "expectedDNSSelection(selection.Entry)"),
             (dns, 'readDesktopRuntimeFileContext(ctx, owner.launch, "sing-box.json", 4<<20)', 'readDesktopRuntimeFileContext(ctx, other, "sing-box.json", 4<<20)'),
             (dns, "verifySingBoxDNSConfigBytes(raw, selected)", "nil"),
             (dns, "exchangeDesktopImportedDNS(parent, owner.launch, current)", "0, nil"),
+            (dns, "a.observeImportedOpenVPN(parent, selection, command)", "a.observeImportedOpenVPN(context.Background(), selection, command)"),
+            (dns, "a.observeImportedOpenVPN(parent, selection, command)", "nil"),
         )
         for path, before, after in changes:
             for replacement in (after, "/* " + before + " */"):

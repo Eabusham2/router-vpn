@@ -1901,6 +1901,8 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
                  patch.object(N, 'verify_linux_standard_configs') as configs, \
                  patch.object(N, 'verify_imported_desktop_configs') as imported, \
                  patch.object(N, 'verify_imported_desktop_packet_configs') as packet, \
+                 patch.object(N, 'verify_imported_desktop_openvpn_configs'), \
+                 patch.object(N, 'verify_imported_desktop_native_openvpn'), \
                  patch.object(N.DNSSEC, 'test_native_bundle', side_effect=dnssec_failure) as dnssec:
                 invoke = (lambda: N.build('linux/'+arch, bundle)) if reused else (lambda: N.verify_installed_linux_host(Path(temporary)/'core', bundle, 'linux/'+arch, env))
                 with contextlib.redirect_stdout(stdout):

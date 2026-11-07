@@ -111,6 +111,7 @@ def inputs():
                              ROOT/'deploy/test_desktop_pt_inventory_runner.py',
                              ROOT/'deploy/test_desktop_imported_runtime.py',
                              ROOT/'deploy/test_desktop_imported_packet_runtime.py',
+                             ROOT/'deploy/test_desktop_imported_openvpn_runtime.py',
                              ROOT/'deploy/build-mobile-pq.py', ROOT/'deploy/prepare-desktop-rosenpass.py',
                              ROOT/'deploy/setup-desktop-native-toolchain.py',
                              ROOT/'deploy/install-desktop-windows-toolchain.py',
@@ -761,6 +762,94 @@ def verify_imported_desktop_packet_configs(bundle, target, env):
     print('Native imported packet desktop: all108 original graphs accepted by the completed production engine; exact source/proof/profile verdicts passed. Installed-device acceptance remains separate.',flush=True)
 
 
+
+IMPORTED_OPENVPN_NETWORKS = ('tcp', 'udp')
+IMPORTED_OPENVPN_FILES = {network+'--'+mode+'--'+entry+'--'+final+'.json'
+    for network in IMPORTED_OPENVPN_NETWORKS for mode in IMPORTED_PACKET_FINALS
+    for entry in IMPORTED_DESKTOP_LAYERS for final in IMPORTED_DESKTOP_LAYERS}
+IMPORTED_OPENVPN_CASES = {
+    'Graphs': tuple(network+'/'+mode+'/'+entry+'/'+final
+        for network in IMPORTED_OPENVPN_NETWORKS for mode in IMPORTED_PACKET_FINALS
+        for entry in IMPORTED_DESKTOP_LAYERS for final in IMPORTED_DESKTOP_LAYERS),
+    'Profiles': (),
+    'PublicProof': ('wrong-public','cancel','replacement','success'),
+    'SelectedDNS': tuple(network+'/'+mode for network in IMPORTED_OPENVPN_NETWORKS for mode in ('home','dot','doh')),
+    'SourceOwnership': tuple(network+'/'+case for network in IMPORTED_OPENVPN_NETWORKS
+        for case in ('username','password','certificate','remote','port','packet-mtu','public-exit','entry-layer','final-layer','final-token','final-dns')),
+    'Limits': tuple(network+'/'+case for network in IMPORTED_OPENVPN_NETWORKS
+        for case in ('cancel','script','multiple-remotes','hostname','undersized-entry','fixed-overflow','missing-layer','server','auto','paired-mode','third-control')),
+    'ReceiptAdmission': ('success','failed','remote','port','network','capacity','missing-state','operation','reader','source','owner','old-connection','future-connection'),
+    'OriginalConnectionCannotRelatch': ('generation','connected-at','capacity'),
+    'CancellationJoinsNativeObservation': (),
+    'ContextOwnedLocks': ('observation','mailbox','workspace'),
+    'DNSOperationCannotBorrowObservation': (),
+}
+IMPORTED_OPENVPN_NATIVE_CASES = {
+    'Constructor': ('original','digest','duplicate-entry','system','multiple-remotes','nonliteral','capacity','expired','replacement-before-ready'),
+    'OriginalTuple': ('generation','remote','port','network','connected-at','capacity','too-small','pending','reader','reader-pointer','interface','index','tun-mtu','path','source','active','failure'),
+    'CallerContext': ('owner-held','native-held','late-success'),
+    'Mailbox': ('observe','dns','dns-failed','reconnect-during-dns','unknown-operation','foreign-observer','missing-observer'),
+    'CancellationJoins': (),
+    'NativeConnected': ('tcp','udp'),
+}
+
+
+def imported_desktop_openvpn_verdicts(target):
+    cases = dict(IMPORTED_OPENVPN_CASES)
+    if target.startswith('linux/'):
+        cases['DailyConnectRestoreAndOwnedTeardown'] = ('success','public-proof','source-replaced')
+    roots = tuple('TestDesktopImportedOpenVPN'+name for name in cases)
+    names = set(roots)
+    names.update('TestDesktopImportedOpenVPN'+name+'/'+case for name,children in cases.items() for case in children)
+    return roots,names
+
+
+def imported_native_openvpn_verdicts():
+    roots = tuple('TestRouterVPNImportedOpenVPN'+name for name in IMPORTED_OPENVPN_NATIVE_CASES)
+    return roots,set(roots) | {'TestRouterVPNImportedOpenVPN'+name+'/'+case
+        for name,children in IMPORTED_OPENVPN_NATIVE_CASES.items() for case in children}
+
+
+def verify_imported_desktop_native_openvpn(source, target, env):
+    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
+        raise ValueError('Imported OpenVPN observation gate requires its matching prepared native host')
+    roots,expected = imported_native_openvpn_verdicts()
+    child = {**env,'ROUTERVPN_REQUIRE_IMPORTED_OPENVPN_OBSERVATION':'1'}
+    command = ['go','test','-json',*([] if target == 'windows/arm64' else ['-race']),'-mod=readonly',
+        '-tags='+','.join([*tags(target),'routervpn_openvpn_remote_test']),'-ldflags=-checklinkname=0',
+        './cmd/sing-box','-run','^('+'|'.join(roots)+')$','-count=1','-timeout=120s']
+    output = run(command,cwd=source,env=child,timeout=300)
+    verify_imported_native_verdicts(output,IMPORTED_NATIVE_DNS_PACKAGE,expected)
+
+
+def verify_imported_desktop_openvpn_configs(bundle, target, env):
+    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
+        raise ValueError('Imported OpenVPN gate requires its matching completed native bundle')
+    bundle = Path(bundle).absolute()
+    original = reuse(bundle,target,env=env)
+    roots,expected = imported_desktop_openvpn_verdicts(target)
+    with tempfile.TemporaryDirectory(prefix='routervpn-imported-openvpn-') as directory:
+        fixtures = Path(directory)
+        child = {**env,'ROUTERVPN_IMPORTED_DESKTOP_OPENVPN_FIXTURES':directory}
+        if target.startswith('linux/'):
+            child['ROUTERVPN_REQUIRE_IMPORTED_DESKTOP_LIFECYCLE'] = '1'
+        output = run(['go','test','-json',*([] if target == 'windows/arm64' else ['-race']),
+            './cmd/client','-run','^('+'|'.join(roots)+')$','-count=1','-timeout=60s'],cwd=ROOT,env=child,timeout=300)
+        verify_imported_native_verdicts(output,'router-vpn/cmd/client',expected)
+        if {path.name for path in fixtures.iterdir()} != IMPORTED_OPENVPN_FILES:
+            raise ValueError('Imported OpenVPN gate lost its exact108 original graphs')
+        captured = {name:regular(fixtures/name,4<<20) for name in IMPORTED_OPENVPN_FILES}
+        for name in sorted(captured):
+            if regular(fixtures/name,4<<20) != captured[name]:
+                raise ValueError('Original OpenVPN graph changed before native parsing')
+            run([bundle/binary_name(target),'check','-c',fixtures/name],env=env,timeout=20)
+        if {path.name for path in fixtures.iterdir()} != IMPORTED_OPENVPN_FILES or any(regular(fixtures/name,4<<20) != raw for name,raw in captured.items()):
+            raise ValueError('Original OpenVPN graph changed during native parsing')
+    if reuse(bundle,target,env=env) != original:
+        raise ValueError('Completed bundle changed during imported OpenVPN proof')
+    print('Native imported OpenVPN desktop: all108 original TCP/UDP graphs accepted by the completed production engine; exact observation/source/profile verdicts passed. Installed-device acceptance remains separate.',flush=True)
+
+
 def verify_linux_stock_dns(bundle, target, env):
     host = 'linux/'+{'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), '')
     if platform.system() != 'Linux' or target != host or env.get('GOOS') != 'linux' or env.get('GOARCH') != target.split('/')[1]:
@@ -913,6 +1002,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
         if target == native_host_target():
             verify_imported_desktop_configs(destination, target, env)
             verify_imported_desktop_packet_configs(destination, target, env)
+            verify_imported_desktop_openvpn_configs(destination, target, env)
         print('Reused verified complete native runtime '+target, flush=True)
         return destination
     if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:
@@ -975,6 +1065,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                  '-ldflags=-checklinkname=0', './cmd/sing-box', '-run', '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
             verify_imported_desktop_native_dns(source, target, env)
+            verify_imported_desktop_native_openvpn(source, target, env)
             run([sys.executable, ROOT/'deploy/test_desktop_pt_inventory.py', source,
                  '--tags='+','.join(tags(target)), *(['--without-race'] if not race else [])],
                 cwd=source, env=env, timeout=600)
@@ -1151,6 +1242,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 raise ValueError('Actual native engine omitted its captured external owner command')
             verify_imported_desktop_configs(stage, target, env)
             verify_imported_desktop_packet_configs(stage, target, env)
+            verify_imported_desktop_openvpn_configs(stage, target, env)
             if target.startswith('linux/'):
                 verify_installed_linux_host(source, stage, target, env)
             elif target.startswith('darwin/'):

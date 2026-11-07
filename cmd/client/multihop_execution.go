@@ -187,17 +187,26 @@ func (s *desktopExecutionSession) Verify(ctx context.Context) error {
 	if s.Identity() == "" {
 		return errors.New("candidate no longer owns its network/session")
 	}
+	if err := s.driver.a.observeImportedOpenVPN(ctx, s.selection, s.command); err != nil {
+		return err
+	}
 	if err := proveNativeMultihopLaneContext(ctx, s.selection.Entry, multihopEntryProofProxy); err != nil {
 		return err
 	}
 	if s.Identity() == "" {
 		return errors.New("entry proof completed for a retired candidate")
 	}
+	if err := s.driver.a.observeImportedOpenVPN(ctx, s.selection, s.command); err != nil {
+		return err
+	}
 	if err := proveMultihopLaneNodeContext(ctx, s.selection.Exit, multihopProofProxy); err != nil {
 		return err
 	}
 	if s.Identity() == "" {
 		return errors.New("exit proof completed for a retired candidate")
+	}
+	if err := s.driver.a.observeImportedOpenVPN(ctx, s.selection, s.command); err != nil {
+		return err
 	}
 	if s.selection.Native != nil && s.selection.Native.imported {
 		_, err := s.driver.a.proveImportedNativeDNS(ctx, s.selection, s.command)
@@ -231,6 +240,9 @@ func (s *desktopExecutionSession) probe(ctx context.Context, target string, node
 	if identity == "" {
 		return 0, errors.New("unowned measurement")
 	}
+	if err := s.driver.a.observeImportedOpenVPN(ctx, s.selection, s.command); err != nil {
+		return 0, err
+	}
 	client, closeIdle, err := newMultihopLaneHTTPClient(multihopProofProxy, 2500*time.Millisecond)
 	if err != nil {
 		return 0, err
@@ -261,6 +273,9 @@ func (s *desktopExecutionSession) probe(ctx context.Context, target string, node
 		if err = validateSelectedNodeProof(*node, body); err != nil {
 			return 0, err
 		}
+	}
+	if err := s.driver.a.observeImportedOpenVPN(ctx, s.selection, s.command); err != nil {
+		return 0, err
 	}
 	return elapsed, nil
 }

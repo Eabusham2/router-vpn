@@ -179,7 +179,7 @@ settings.name.stringValue = "Saved \"whole\" path"
 let toggle = NSButton(); toggle.identifier = NSView.Identifier(rawValue: "unified-multihop-toggle")
 owner.window?.contentView?.subviews = [toggle]
 let selectedID = "private-node", entryID = "entry \"private\"", exitID = "exit \"private\""
-let expectedEntries = ["", "wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "ss-v2ray", "split", "max", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "wireguard", "amneziawg", "socks5", "http-connect", "https-connect"]
+let expectedEntries = ["", "wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "ss-v2ray", "split", "max", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "openvpn"]
 check(RouterVPNNodeEntryModes.choices.map { $0.id } == expectedEntries, "entry mode catalog changed or reduced")
 let sourceTokens = [selectedID: String(repeating: "a", count: 64), entryID: String(repeating: "b", count: 64), exitID: String(repeating: "c", count: 64)]
 @MainActor func catalogRows(_ ids: [String], tokens: [String: String] = sourceTokens) -> [[String: Any]] {
@@ -301,7 +301,7 @@ for invalid: String? in ["stale-mode", "", nil, "SHADOWSOCKS"] {
     settings.loadProfile()
     check(settings.status.stringValue.hasPrefix("Load failed:") && owner.captureConnectionProfileSelection() == settingsPrevious, "Settings Load accepted an unsupported exit")
 }
-for invalidEntry: Any in ["stale-mode", "WG", "wg ", "auto", "openvpn", "WireGuard", "amneziawg ", NSNull(), 7] {
+for invalidEntry: Any in ["stale-mode", "WG", "wg ", "auto", "OpenVPN", "WireGuard", "amneziawg ", NSNull(), 7] {
     choose(0, 0)
     var payload = loaded(try owner.connectionProfileSnapshot(name: "bad entry", id: nil))
     payload["multihop_entry_mode"] = invalidEntry

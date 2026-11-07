@@ -75,6 +75,7 @@ type speedLabPathIdentity struct {
 	RouterID        string
 	Graph           activeMultihopGraph
 	GraphOK         bool
+	ImportedOpenVPN *nativeMultihopRuntime
 	Command         *exec.Cmd
 	Network         string
 	ProfileToken    string
@@ -168,6 +169,10 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 		path.EntryID, path.ExitID = graph.EntryID, graph.ExitID
 		path.EntryMode = graph.EntryMode
 		path.Base, path.ExitMode, path.StartedAt, path.Execution = graph.Base, graph.ExitMode, graph.Started, graph.Execution
+		identity.ImportedOpenVPN, err = captureDesktopImportedOpenVPNRuntime(ctx, a, command, graph)
+		if err != nil {
+			return speedLabPathIdentity{}, speedLabPath{}, err
+		}
 		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
 			return speedLabPathIdentity{}, speedLabPath{}, err
 		}
@@ -265,6 +270,9 @@ func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
 }
 
 func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speedLabPathIdentity) error {
+	if identity.ImportedOpenVPN != nil && (!identity.GraphOK || !identity.Graph.ImportedEntry || identity.Graph.EntryMode != "openvpn" || identity.External != nil || identity.Tor != nil || identity.Node != nil || identity.Linux != nil) {
+		return errors.New("Speed Lab imported OpenVPN identity belongs to another topology")
+	}
 	if identity.Standard != nil {
 		ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		defer cancel()
@@ -324,6 +332,11 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 		current, ok := getActiveMultihopGraph(a)
 		if !ok || current != identity.Graph {
 			return errors.New("Speed Lab result became stale because the launched multihop graph changed")
+		}
+		if current.ImportedEntry && current.EntryMode == "openvpn" {
+			if err := validateDesktopImportedOpenVPNRuntime(ctx, a, identity.ImportedOpenVPN); err != nil {
+				return err
+			}
 		}
 	}
 	if identity.External != nil {

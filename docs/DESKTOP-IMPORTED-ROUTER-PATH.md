@@ -14,14 +14,14 @@ multihop controls, choose the original imported entry, that same paired final,
 Local execution and an admitted final transport. Entry mode can name the
 original import protocol, or use the saved selection when it agrees with that
 original profile. Windows, macOS and Linux include original imported WireGuard,
-AmneziaWG, SOCKS5 and HTTP/HTTPS CONNECT in their native entry selectors alongside
+AmneziaWG, bounded OpenVPN TCP/UDP, SOCKS5 and HTTP/HTTPS CONNECT in their native entry selectors alongside
 the existing Shadowsocks and Hysteria2 choices. Imported packet selections use
 the original `wireguard` or `amneziawg` protocol identity, independently of the
 paired-node `wg`, `awg2-fast` and `awg2-strong` choices.
 
-The main/profile catalog contains 24 explicit entry choices: the 19 paired
+The main/profile catalog contains 25 explicit entry choices: the 19 paired
 Router transports plus the distinct `wireguard`, `amneziawg`, `socks5`,
-`http-connect` and `https-connect` imports. Full-profile Add/Load/Update and
+`http-connect`, `https-connect` and `openvpn` imports. Full-profile Add/Load/Update and
 Connect serialization preserve those original IDs. Saving a choice does not
 grant a new execution mode; imported connection admission still requires Local
 and the original independent profiles.
@@ -36,7 +36,7 @@ tests consume the real daily and temporary controller catalogs separately;
 catalog equality between those two workflows is not a capability contract.
 
 The desktop host admits original WireGuard, AmneziaWG, SOCKS5, Shadowsocks 2022,
-Hysteria2, HTTP CONNECT and HTTPS CONNECT entries. Its final transport catalog is Shadowsocks,
+Hysteria2, HTTP CONNECT, HTTPS CONNECT and bounded OpenVPN entries. Its final transport catalog is Shadowsocks,
 Hysteria2, WireGuard, AmneziaWG Fast, AmneziaWG Strong and REALITY/Vision. A
 catalog entry alone does not promise that every cross-product can be compiled.
 The existing imported-entry compiler validates each original transport,
@@ -45,6 +45,7 @@ independent Start Layer, selected final resolver and physical socket graph.
 | Captured entry | Baseline desktop graph admission |
 |---|---|
 | WireGuard, AmneziaWG | All six listed paired final transports, with independently captured entry/final layers and sufficient original packet capacity |
+| OpenVPN TCP or UDP | The same six finals, with one original literal remote in a supported inline profile, fresh native connected-state observation, and sufficient actual packet capacity |
 | Shadowsocks 2022, Hysteria2 | All six listed paired final transports |
 | SOCKS5 | REALITY/Vision; other compiler-supported graphs require an exactly bounded outer socket graph |
 | HTTP CONNECT, HTTPS CONNECT | Shadowsocks or REALITY/Vision with the original carrier and selected-DNS capability |
@@ -220,7 +221,8 @@ The source controls replace original keys, addresses, AllowedIPs, keepalive,
 endpoint, packet MTU, AWG parameters, expected public exit, paired token, final
 DNS and each independent layer. The limits reject cancellation, insufficient
 entry capacity, an overflowing fixed MTU, missing layer provisioning,
-Server/Compare, a paired entry-mode alias and OpenVPN. Home AdGuard, custom DoT
+Server/Compare, a paired entry-mode alias and an OpenVPN label substituted onto
+a WireGuard/AWG profile without its original OpenVPN credentials. Home AdGuard, custom DoT
 and custom DoH retain the final's original transport, port, TLS name and path.
 The profile tests execute Add, Load, Update and Delete for both packet families.
 Public entry proof rejects the wrong address, cancellation and owner replacement.
@@ -243,6 +245,86 @@ the shipping compiler, staging, process/Stop join, private directory, graph
 registry and restoration transaction; installed-image and remote-proof
 boundaries use the existing retained-runtime fixture seams.
 
+### Additional bounded OpenVPN gate
+
+OpenVPN uses the original inline profile inside the same retained native Box.
+This admission requires exactly one literal TCP or UDP remote; scripts,
+multiple remotes, hostname remotes, a system OpenVPN interface and incomplete
+credentials are rejected. The original user/password bytes, certificate or
+fingerprint policy, remote, transport, entry packet capacity, expected public
+exit and independent Start Layer stay attached to that entry. No second VPN
+service or invented connected receipt is used.
+
+Before authentication, the native owner pins the exact Box endpoint pointer,
+configuration digest and application TUN reader. Its first successful native
+observation additionally pins the connected remote, native connection generation,
+connection timestamp and actual packet capacity. The observation reads the
+endpoint's existing authentication/ready state and live packet device; saved
+MTU is only the required lower bound. Reconnection, a replaced endpoint or TUN
+reader, changed remote/capacity, pending authentication after connection, or an
+active/failed MTU transaction invalidates that owner. A later successful read
+cannot replace the original tuple. A replacement child receives a fresh owner.
+
+The host uses the existing atomic private mailbox with the explicit
+`openvpn-observe` operation. It binds the response to the original process,
+source, session, physical network generation, request generation, nonce,
+caller deadline and TUN readback. Observation responses cannot substitute for
+DNS responses. Cancellation joins an entered operation and does not adopt a
+late success or retire a healthy connection solely because the caller stopped
+measuring. Entry/final proof, selected DNS, response measurements, Current-path
+Speed Lab, asynchronous measurement adoption and restore capture revalidate
+the original connected observation. The native loop also checks it around
+readiness, at heartbeat boundaries and around the actual selected-DNS query.
+The observation cost is excluded from response sample timing.
+
+Periodic native observation uses at most 250 ms and is capped by the last
+successful original-tuple observation plus the existing two-second heartbeat
+freshness bound. A brief timeout skips heartbeat, mailbox and MTU work and
+retries; it does not close a still-fresh healthy child. Only a real successful
+read advances freshness. Exceeding that bound or losing the original tuple
+fails closed. A completed query must reobserve before another heartbeat can
+publish. The portable actual-loop runner passes 15 race verdicts and rejects
+five causal mutations, including the old terminal-timeout behavior and stale
+publication. This extracted-loop evidence keeps its explicit native/OS fixture
+boundaries; the 44 native and 13 DNS production verdicts remain independent.
+
+`ROUTERVPN_IMPORTED_DESKTOP_OPENVPN_FIXTURES` is a separate required output
+directory. Exactly 108 files cover TCP/UDP, all six paired final transports and
+all nine independent entry/final Start Layer pairs. These graphs retain the
+original physical TCP or UDP tuple, one protected application TUN, both proof
+lanes and the paired final's selected DNS. The existing 26 proxy graphs and
+108 WireGuard/AWG graphs are unchanged.
+
+The separate host inventory has 192 verdicts on Windows/macOS and 196 on Linux:
+108 graph children, full-profile round trips, public-proof negatives, exact
+selected resolver tests, original-source replacement controls, bounded-admission
+negatives, private observation receipt negatives, no-relatch controls, joined
+cancellation, context-owned locks and the DNS/observation separation. The Linux
+increment retains the actual controller staging, child/Stop join and restoration
+fixture with the same mandatory physical-inventory flag. A native IPC fixture
+is explicit evidence for the host protocol, not for OpenVPN TLS traffic.
+
+The prepared native command has an additional exact 44-verdict inventory:
+constructor (10), original tuple (18), caller context (4), mailbox (8), joined
+cancellation (1) and actual TCP/UDP connected observations (3). It runs with
+all production tags plus `routervpn_openvpn_remote_test`, requires
+`ROUTERVPN_REQUIRE_IMPORTED_OPENVPN_OBSERVATION=1`, and rejects every missing,
+skipped, duplicate, foreign, failed or prematurely completed verdict. The
+actual connected fixture uses a real mutual-TLS/data peer and selected DNS;
+its platform TUN readback and mapped physical tuple remain explicit fixtures.
+The unchanged 13 native DNS verdicts run independently first.
+
+Fresh builds and reused complete bundles must then pass the exact host
+inventory and the full production CLI's `check -c` for all 108 OpenVPN graphs.
+Original bundle receipts and graph bytes must remain unchanged before and
+after parsing. Windows ARM64 preserves the existing race-toolchain exception;
+every other matching host runs race detection. Gate regressions prove that
+missing files/verdicts, symlinks, replacements, skips, errors and timeouts
+prevent build/reuse success. Source registration checks bind the observation
+implementation and both test templates to the actual native preparer. The
+release-candidate source job invokes all three imported runner suites and the
+complete heartbeat runner, including its new OpenVPN loop cases.
+
 The November 7 development workspace passed the focused Go race suites, exact
 26 graph checks with a freshly prepared pinned native CLI, and the Unix policy
 regressions. That supplementary CLI omitted the optional PQ tag because the
@@ -258,17 +340,32 @@ the real Box uncached-query case failed during network-manager startup because
 the workspace denied netlink sockets. That native query case remains mandatory
 in the production gate. Verified Linux Swift 6.4.2 is available and has executed
 the mobile source producers. The extracted desktop Swift profile callbacks also
-passed 3,068 behavioral checks with the new entries, and all 14 mutation
+passed 3,098 behavioral checks including the OpenVPN entry, and all 14 mutation
 controls were rejected; their widgets and scheduling remain explicit fixtures.
-The macOS SDK/AppKit build, PowerShell and GTK
-development dependencies remain unavailable locally. These are explicit
+The macOS SDK/AppKit build and PowerShell remain unavailable locally. Verified
+Debian GTK headers, runtime and Xvfb have been extracted, but the executor
+refuses Xvfb Unix sockets, so actual GTK execution remains unproved. These are explicit
 remaining validation obligations, not successful installed-desktop acceptance.
+
+The OpenVPN host extension also passed the exact combined 425 non-lifecycle
+race verdicts (57 original, 176 WireGuard/AWG, 192 OpenVPN), and the supplementary
+pinned CLI accepted all 108 newly emitted OpenVPN configurations. This parser
+still omits the optional PQ tag and does not establish full-production bundle
+acceptance. The native connected TCP/UDP and uncached-DNS cases compile but
+remain blocked here by native Box network-manager netlink startup. The exact
+native observation and DNS inventories remain mandatory in release builds.
 
 ## Remaining product scope
 
-The shared mobile compiler also supports imported OpenVPN entry families; this
-desktop admission does not expose them until its actual native Box retains the
-original connected remote, MTU and reader proof.
+The wider shared OpenVPN compiler supports additional remote arrangements.
+Desktop multiple-remote/failover and hostname-remote admission remain outside
+this bounded single-remote unit. Live imported-path automatic MTU discovery,
+Retest and cancellation of that MTU transaction remain unfinished. The public
+Retest route rejects this imported multihop owner before native mailbox work;
+initial automatic MTU transition also rejects an external entry. A validated
+fixed/captured TUN value, native packet-capacity observation, observation
+cancellation and fresh-child restoration do not implement that missing MTU
+workflow. Ordinary paired-node MTU reader replacement remains unaffected.
 Dynamic SOCKS UDP physical ownership remains unfinished. Additional paired final
 families, Server/Compare for this direction, and complete graph parity remain
 open requirements. Selected-path live proof, retained native lifecycle, package

@@ -249,7 +249,7 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
             and child.value.func.id == 'verify_imported_desktop_native_dns' for child in node.body))
         index = next(index for index,node in enumerate(owner.body) if isinstance(node,ast.Expr) and isinstance(node.value,ast.Call)
             and isinstance(node.value.func,ast.Name) and node.value.func.id == 'verify_imported_desktop_native_dns')
-        selected = ast.fix_missing_locations(ast.Module(body=copy.deepcopy(owner.body[index-1:index+2]),type_ignores=[]))
+        selected = ast.fix_missing_locations(ast.Module(body=copy.deepcopy(owner.body[index-1:index+3]),type_ignores=[]))
         for target in N.TARGETS:
             for fault in ('success','missing','skip','failure','timeout'):
                 with self.subTest(target=target,fault=fault):
@@ -265,7 +265,8 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
                         if fault == 'skip': events[-2]['Action'] = 'skip'
                         return self.output(events)
                     namespace = dict(source=Path('prepared-core'),target=target,env=env,race=[] if target == 'windows/arm64' else ['-race'],
-                        run=run,tags=N.tags,sys=N.sys,ROOT=ROOT,verify_imported_desktop_native_dns=N.verify_imported_desktop_native_dns)
+                        run=run,tags=N.tags,sys=N.sys,ROOT=ROOT,verify_imported_desktop_native_dns=N.verify_imported_desktop_native_dns,
+                        verify_imported_desktop_native_openvpn=lambda *args: None)
                     with patch.object(N,'native_host_target',return_value=target),patch.object(N,'run',side_effect=run):
                         if fault == 'success': exec(compile(selected,'actual native command and DNS gate','exec'),namespace)
                         else:
@@ -313,6 +314,7 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
                          patch.object(N,'verify_linux_stock_dns'),patch.object(N,'verify_installed_darwin_host'), \
                          patch.object(N.DNSSEC,'test_native_bundle'),patch.object(N,'run') as run, \
                          patch.object(N,'verify_imported_desktop_packet_configs') as packet, \
+                         patch.object(N,'verify_imported_desktop_openvpn_configs'), \
                          patch.object(N,'verify_imported_desktop_configs',side_effect=failure) as gate,contextlib.redirect_stdout(stdout):
                         if failure is None: self.assertEqual(N.build(target,bundle),bundle)
                         else:

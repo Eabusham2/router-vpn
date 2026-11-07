@@ -16,7 +16,7 @@ import (
 
 func desktopImportedEntryProtocol(protocol string) bool {
 	switch protocol {
-	case "socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect", "wireguard", "amneziawg":
+	case "socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn":
 		return true
 	}
 	return false
@@ -37,6 +37,11 @@ func resolveDesktopImportedSelection(control, entry, exit common.RouterProfile, 
 		q.Execution != "" && q.Execution != "local" || q.Execution == "" && control.MultihopExecution != "" && control.MultihopExecution != "local" ||
 		q.Base != "" && q.Base != "auto" && q.Base != "wg" && q.Base != "awg" {
 		return multihopSelection{}, bad
+	}
+	if entry.External.Protocol == "openvpn" {
+		if _, err := desktopImportedOpenVPNProfile(entry); err != nil {
+			return multihopSelection{}, err
+		}
 	}
 	mode := q.EntryMode
 	if mode == "" {
@@ -105,6 +110,12 @@ func captureDesktopImportedMultihop(ctx context.Context, root string, sel multih
 	c := &nativeMultihopCapture{root: root, entryID: sel.Entry.ID, exitID: sel.Exit.ID, base: sel.Base, entryMode: sel.EntryMode, entrySelection: sel.EntryMode,
 		controlToken: liveMeasurementProfileToken(sel.Control), entryToken: liveMeasurementProfileToken(sel.Entry), exitToken: liveMeasurementProfileToken(sel.Exit),
 		configs: map[string]string{}, localPacketPublic: map[string]string{}, localPQIdentity: map[string]string{}, failures: map[string]error{}, imported: true}
+	if sel.EntryMode == "openvpn" {
+		c.openVPN, err = desktopImportedOpenVPNProfile(sel.Entry)
+		if err != nil {
+			return sel, err
+		}
+	}
 	owned := map[string]map[string][]byte{}
 	defer func() {
 		for _, files := range owned {
@@ -186,6 +197,11 @@ func captureDesktopImportedMultihop(ctx context.Context, root string, sel multih
 		return sel, err
 	}
 	defer compiled.Close()
+	if c.openVPN != nil {
+		if err := capturedDesktopImportedOpenVPN(compiled.Config(), c.openVPN); err != nil {
+			return sel, err
+		}
+	}
 	c.entryPhysical, err = compiled.ImportedPhysicalEgress()
 	if err != nil {
 		return sel, err

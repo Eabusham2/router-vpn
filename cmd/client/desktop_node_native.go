@@ -40,6 +40,7 @@ type desktopNodeLaunch struct {
 	importedDNSMu              sync.Mutex
 	importedDNSLast            string
 	importedDNSGeneration      uint64
+	importedOpenVPN            *desktopImportedOpenVPNRuntime
 	ownedNode                  *desktopOwnedNodeRuntime
 	external                   *desktopExternalRuntime
 	tor                        *desktopTorRuntime
