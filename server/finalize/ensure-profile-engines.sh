@@ -13,6 +13,15 @@ XHTTP_PORT=${10:-11443}
 SS_V2RAY_PORT=${11:-12443}
 NAIVE_PORT=${12:-13443}
 REALITY_TARGET=${13:-www.microsoft.com:443}
+REALITY_CLIENT_FLOW=${REALITY_CLIENT_FLOW:-}
+case "$REALITY_CLIENT_FLOW" in
+  ''|xtls-rprx-vision|xtls-rprx-vision-udp443) ;;
+  *) echo 'Invalid REALITY_CLIENT_FLOW; use an empty value or an exact supported Vision flow.' >&2; exit 2 ;;
+esac
+export REALITY_CLIENT_FLOW
+if [[ -e "$BASE/config/xray/server.json" || -L "$BASE/config/xray/server.json" || -e "$BASE/config/xray/generated-secrets.json" || -L "$BASE/config/xray/generated-secrets.json" ]]; then
+  python3 /src/server/scripts/preserve-generated-state.py verify-xray-client-flow "$BASE" ''
+fi
 
 CONFIG="$BASE/config"
 GENERATED="$BASE/client-bundle/generated"
@@ -90,6 +99,9 @@ core_ready(){
   verified_json_tags "$CONFIG/xray/server.json" "$CONFIG/transports/server.json" || return 1
   # Rebuild stale listener/client ports together while preserving credentials.
   python3 /src/server/scripts/verify-reality-port.py "$BASE" "$REALITY_PORT" "$XRAY_PQ_PORT" || return 1
+  # A requested client capability must actually reach regenerated private
+  # bundles; an old readiness marker cannot suppress this explicit change.
+  python3 /src/server/scripts/preserve-generated-state.py verify-xray-client-flow "$BASE" "$REALITY_CLIENT_FLOW" || return 1
   # Existing installations also need the current configured SS declaration.
   # An endpoint change must refresh the paired client through the same generator.
   python3 /src/server/scripts/verify-ss-service.py "$BASE" "$ENDPOINT"

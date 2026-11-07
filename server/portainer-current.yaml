@@ -28,6 +28,8 @@ services:
       SSR_PORT: ${SSR_PORT:-15443}
       ROUTER_VPN_TLS_NAME: ${ROUTER_VPN_TLS_NAME:-}
       REALITY_TARGET: ${REALITY_TARGET:-www.microsoft.com:443}
+      # Empty preserves each saved client flow; opt in with xtls-rprx-vision-udp443.
+      REALITY_CLIENT_FLOW: ${REALITY_CLIENT_FLOW:-}
     restart: "no"
 
   finalize-current:
@@ -62,6 +64,7 @@ services:
       SSR_PORT: ${SSR_PORT:-15443}
       ROUTER_VPN_TLS_NAME: ${ROUTER_VPN_TLS_NAME:-}
       REALITY_TARGET: ${REALITY_TARGET:-www.microsoft.com:443}
+      REALITY_CLIENT_FLOW: ${REALITY_CLIENT_FLOW:-}
     restart: "no"
 
   router-agent:

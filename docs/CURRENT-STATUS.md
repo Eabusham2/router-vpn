@@ -40,6 +40,17 @@ production grant and renewal checks remain unchanged. Its three new native
 verdicts and exact mutation witness still require the new commit's Darwin CI.
 Earlier diagnostic-only passages below are history, not the current fix status.
 
+The explicit REALITY UDP/443 source increment adds an original client
+capability without changing the twenty raw profiles or sixteen logical modes.
+Installer/Portainer generation preserves each saved standard/PQ flow unless
+the user explicitly enables or disables the capability. Shared native and
+Swift compilers retain that original flow; XHTTP remains separate. The actual
+generation, private rebundle, rollback and readiness suites pass. The separate
+native selected-DNS gate is still being validated: its DoT reuse-probe fixture
+was corrected, and an intermittent wrong-DNS-name witness remains under
+investigation. Source publication does not certify that pending native gate.
+See [REALITY-UDP443.md](REALITY-UDP443.md) for the provision/update path.
+
 These units do not establish a new complete release. Other imported graph
 families, Server/Compare for that direction, exact-SHA native/package/image
 verification, physical/device acceptance and authorized private deployment

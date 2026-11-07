@@ -6,6 +6,11 @@ ADGUARD4=${3:?adguard ipv4}
 PQ_PORT=${4:-10443}
 TARGET=${5:-www.microsoft.com:443}
 REALITY_PORT=${6:-24443}
+REALITY_CLIENT_FLOW=${REALITY_CLIENT_FLOW:-}
+case "$REALITY_CLIENT_FLOW" in
+  ''|xtls-rprx-vision|xtls-rprx-vision-udp443) ;;
+  *) echo 'REALITY_CLIENT_FLOW must be empty, xtls-rprx-vision, or xtls-rprx-vision-udp443.' >&2; exit 2 ;;
+esac
 PRIVATE_BATCH=/src/server/scripts/atomic-private-batch.py
 xr(){ if command -v xray >/dev/null 2>&1; then xray "$@"; else docker run --rm -v "$BASE:$BASE" ghcr.io/xtls/xray-core:26.7.11 "$@"; fi; }
 sb(){ if command -v sing-box >/dev/null 2>&1; then sing-box "$@"; else docker run --rm -v "$BASE:$BASE" ghcr.io/sagernet/sing-box:v1.13.12 "$@"; fi; }
@@ -16,6 +21,8 @@ mkdir -p "$BASE/config/xray" \
 
 XRAY_SERVER="$BASE/config/xray/server.json"
 XRAY_SECRETS="$BASE/config/xray/generated-secrets.json"
+STD_CLIENT_FLOW=xtls-rprx-vision
+PQ_CLIENT_FLOW=xtls-rprx-vision
 if [[ -e "$XRAY_SERVER" || -e "$XRAY_SECRETS" ]]; then
   if ! PRESERVED=$(python3 /src/server/scripts/preserve-generated-state.py xray "$BASE"); then
     echo 'Existing Xray/REALITY identity is corrupt/incomplete; refusing silent credential rotation.' >&2
@@ -40,6 +47,14 @@ else
   PQ_SHORT_ID=$(openssl rand -hex 8)
 fi
 
+# Unset preserves each existing generated client's original capability. An
+# explicit choice changes only the client flow, never server credentials or the
+# inbound's ordinary Vision flow. Imported device bundles are not edited here.
+if [[ -n "$REALITY_CLIENT_FLOW" ]]; then
+  STD_CLIENT_FLOW=$REALITY_CLIENT_FLOW
+  PQ_CLIENT_FLOW=$REALITY_CLIENT_FLOW
+fi
+
 TARGET_HOST=${TARGET%:*}; TARGET_PORT=${TARGET##*:}
 [[ $TARGET_PORT =~ ^[0-9]+$ ]] || { TARGET_HOST=$TARGET; TARGET_PORT=443; }
 for v in STD_UUID PQ_UUID REALITY_PRIVATE REALITY_PASSWORD SERVER_DEC CLIENT_ENC STD_SHORT_ID PQ_SHORT_ID; do
@@ -48,9 +63,9 @@ done
 
 GEN_TMP=$(mktemp -d "$BASE/config/xray/.generate.XXXXXX")
 trap 'rm -rf "${GEN_TMP:-}"' EXIT
-python3 - "$BASE/config/xray/server.json" "$GEN_TMP" "$ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$PQ_PORT" "$TARGET_HOST" "$TARGET_PORT" "$STD_UUID" "$PQ_UUID" "$REALITY_PRIVATE" "$REALITY_PASSWORD" "$STD_SHORT_ID" "$PQ_SHORT_ID" "$SERVER_DEC" "$CLIENT_ENC" "$MLDSA_SEED" "$MLDSA_VERIFY" <<'PY'
+python3 - "$BASE/config/xray/server.json" "$GEN_TMP" "$ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$PQ_PORT" "$TARGET_HOST" "$TARGET_PORT" "$STD_UUID" "$PQ_UUID" "$REALITY_PRIVATE" "$REALITY_PASSWORD" "$STD_SHORT_ID" "$PQ_SHORT_ID" "$SERVER_DEC" "$CLIENT_ENC" "$MLDSA_SEED" "$MLDSA_VERIFY" "$STD_CLIENT_FLOW" "$PQ_CLIENT_FLOW" <<'PY'
 import json,os,pathlib,stat,sys
-(old_server,tmp,endpoint,dns,std_port,pq_port,target,tport,std_uuid,pq_uuid,rpriv,rpass,std_short,pq_short,sdec,cenc,mseed,mverify)=sys.argv[1:]
+(old_server,tmp,endpoint,dns,std_port,pq_port,target,tport,std_uuid,pq_uuid,rpriv,rpass,std_short,pq_short,sdec,cenc,mseed,mverify,std_flow,pq_flow)=sys.argv[1:]
 tmp=pathlib.Path(tmp); std_port,pq_port,tport=map(int,(std_port,pq_port,tport))
 kept=[]
 try:
@@ -82,11 +97,11 @@ server={
  "outbounds":[{"protocol":"freedom","tag":"direct"}]
 }
 
-def client_xray(uuid,port,encryption,short_id,socks_port):
+def client_xray(uuid,port,encryption,short_id,socks_port,flow):
     return {
       "log":{"loglevel":"warning"},
       "inbounds":[{"tag":"local-socks","listen":"127.0.0.1","port":socks_port,"protocol":"socks","settings":{"auth":"noauth","udp":True}}],
-      "outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":endpoint,"port":port,"users":[{"id":uuid,"flow":"xtls-rprx-vision","encryption":encryption}]}]},
+      "outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":endpoint,"port":port,"users":[{"id":uuid,"flow":flow,"encryption":encryption}]}]},
         "streamSettings":{"network":"raw","security":"reality","realitySettings":{"serverName":target,"fingerprint":"chrome","password":rpass,"shortId":short_id}}}]
     }
 
@@ -101,15 +116,16 @@ def wrapper(name,mtu,socks_port,v4,v6):
 
 values={
  "server.json":server,
- "reality-xray.json":client_xray(std_uuid,std_port,"none",std_short,1091),
+ "reality-xray.json":client_xray(std_uuid,std_port,"none",std_short,1091,std_flow),
  "reality-sing-box.json":wrapper("router-vpn-reality",1380,1091,"172.19.3.1/30","fdfe:dcba:9876:3::1/126"),
- "pq-xray.json":client_xray(pq_uuid,pq_port,cenc,pq_short,1090),
+ "pq-xray.json":client_xray(pq_uuid,pq_port,cenc,pq_short,1090,pq_flow),
  "pq-sing-box.json":wrapper("router-vpn-pq",1360,1090,"172.19.4.1/30","fdfe:dcba:9876:4::1/126"),
  "generated-secrets.json":{
    "target":f"{target}:{tport}",
    "reality_public_key":rpass,
    "standard_uuid":std_uuid,"standard_short_id":std_short,
    "pq_uuid":pq_uuid,"pq_short_id":pq_short,
+   "standard_client_flow":std_flow,"pq_client_flow":pq_flow,
    "vless_encryption":cenc,"mldsa65_verify":mverify
  },
 }

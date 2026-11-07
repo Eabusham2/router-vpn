@@ -18,14 +18,14 @@ base=importlib.util.module_from_spec(spec);spec.loader.exec_module(base)
 FIXTURE=base.TEST[base.TEST.index('func json('):base.TEST.index('@main struct Tests')]
 TEST=r'''
 import Foundation
-func xray(_ mode: String) throws -> Data {
-    var user: [String:Any] = ["id":"11111111-1111-4111-8111-111111111111","flow":"xtls-rprx-vision","encryption":"none"]
+func xray(_ mode: String, flow: String = "xtls-rprx-vision") throws -> Data {
+    var user: [String:Any] = ["id":"11111111-1111-4111-8111-111111111111","flow":flow,"encryption":"none"]
     var stream: [String:Any] = ["network":"raw","security":"reality","realitySettings":["serverName":"www.example.com","fingerprint":"chrome","password":"fixture-public-key","shortId":"0123456789abcdef"]]
     if ["reality-pq-vision","reality-xhttp","max"].contains(mode) { user["encryption"]="mlkem768x25519plus.native.0rtt.fixture" }
     if mode == "reality-xhttp" { user.removeValue(forKey:"flow");stream["network"]="xhttp";stream["xhttpSettings"]=["path":"/assets/sync","mode":"auto"];stream["finalmask"]=["tcp":[["type":"fragment","settings":["packets":"tlshello","length":"100-300","delay":"10-30","maxSplit":"3-7"]]]] }
     return try json(["log":["loglevel":"warning"],"inbounds":[["protocol":"socks","tag":"local","listen":"127.0.0.1","port":1090,"settings":["auth":"noauth","udp":true]]],"outbounds":[["tag":"proxy","protocol":"vless","settings":["vnext":[["address":"192.0.2.1","port":443,"users":[user]]]],"streamSettings":stream]]])
 }
-func xrayBundle(_ mode: String, dns: String = "home") throws -> ClientBundle {
+func xrayBundle(_ mode: String, dns: String = "home", flow: String = "xtls-rprx-vision") throws -> ClientBundle {
     var value = try fixture(dns:dns)
     let paired = mode == "split" || mode == "max"
     let tag = paired ? "tcp-stack" : "proxy"
@@ -36,7 +36,7 @@ func xrayBundle(_ mode: String, dns: String = "home") throws -> ClientBundle {
         config["outbounds"] = outgoing
         config["route"] = ["rules":[["network":"tcp","outbound":"tcp-stack"],["network":"udp","outbound":"udp-stack"]],"final":"tcp-stack"]
     }
-    var assets = ["xray.json":try xray(mode).base64EncodedString()]
+    var assets = ["xray.json":try xray(mode,flow:flow).base64EncodedString()]
     if mode != "reality-xhttp" { assets["sing-box.json"] = try json(config).base64EncodedString() }
     value.profiles[mode] = assets
     value.logicalModes.append(LogicalMode(id:mode,name:mode,description:"",baseSelector:false,fallback:false,variants:["native":mode]))
@@ -93,6 +93,50 @@ func xrayBundle(_ mode: String, dns: String = "home") throws -> ClientBundle {
             let servers = (graph["dns"] as! [String: Any])["servers"] as! [[String: Any]]
             try check("DNS bootstrap uses real datagram leg", servers.first?["type"] as? String == "udp" && servers.first?["detour"] as? String == "udp-stack")
             try check("TLS resolver uses real stream leg", servers.last?["type"] as? String == "tls" && servers.last?["detour"] as? String == "tcp-stack")
+        }
+        for mode in ["reality-vision", "reality-pq-vision", "split", "max"] {
+            for dns in ["home", "dot", "doh", "doh3"] {
+                let original = try xrayBundle(mode,dns:dns,flow:"xtls-rprx-vision-udp443")
+                let bytes = original.profiles[mode]!["xray.json"]!
+                let patched = try IOSDNSRuntimePolicy.patch(original)
+                let restored = try JSONDecoder().decode(ClientBundle.self,from:JSONEncoder().encode(patched))
+                let selected = try IOSRuntimeSelector.selectRaw(bundle:restored,rawProfileID:mode)
+                try check("UDP443 retains existing mode identity", selected.rawProfileID == mode && restored.logicalModes.map(\.id) == original.logicalModes.map(\.id))
+                try check("selected DNS never rewrites client capability", restored.profiles[mode]?["xray.json"] == bytes && selected.files["xray.json"] == Data(base64Encoded:bytes))
+                let graph = try JSONSerialization.jsonObject(with:selected.files["sing-box.json"]!) as! [String:Any]
+                let native = (graph["outbounds"] as! [[String:Any]]).filter { $0["type"] as? String == IOSNativeXrayProfile.nativeType }
+                try check("explicit native flow bytes survive cold restoration", native.count == 1 && native[0]["config_json"] as? String == String(data:Data(base64Encoded:bytes)!,encoding:.utf8))
+                let originalXray = try JSONSerialization.jsonObject(with:selected.files["xray.json"]!) as! [String:Any]
+                let settings = (originalXray["outbounds"] as! [[String:Any]])[0]["settings"] as! [String:Any]
+                let user = ((settings["vnext"] as! [[String:Any]])[0]["users"] as! [[String:Any]])[0]
+                try check("exact explicit UDP443 flow", user["flow"] as? String == "xtls-rprx-vision-udp443")
+                let servers = (graph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
+                let expectedType = ["home":"udp","dot":"tls","doh":"https","doh3":"h3"][dns]!
+                try check("UDP443 retains selected resolver transport", servers.last?["type"] as? String == expectedType)
+                let dual = mode == "split" || mode == "max"
+                try check("UDP443 retains selected resolver owner", servers.allSatisfy { server in
+                    let packet = ["udp","h3"].contains(server["type"] as? String ?? "")
+                    return server["detour"] as? String == (dual ? (packet ? "udp-stack" : "tcp-stack") : "proxy")
+                })
+                var substituted = restored
+                substituted.profiles[mode]?["xray.json"] = try xray(mode).base64EncodedString()
+                reject("plain flow cannot reuse a saved explicit UDP443 wrapper") { _ = try IOSRuntimeSelector.selectRaw(bundle:substituted,rawProfileID:mode) }
+            }
+            for flow in ["", "xtls-rprx-vision-udp443 ", "xtls-rprx-direct", "xtls-rprx-vision-udp", "XTLS-RPRX-VISION-UDP443"] {
+                let malformed = try xrayBundle(mode,flow:flow)
+                reject("malformed explicit flow") { _ = try IOSRuntimeSelector.selectRaw(bundle:malformed,rawProfileID:mode) }
+            }
+        }
+        for flow in ["xtls-rprx-vision", "xtls-rprx-vision-udp443"] {
+            var invalidXHTTP = try xrayBundle("reality-xhttp")
+            var source = try JSONSerialization.jsonObject(with:Data(base64Encoded:invalidXHTTP.profiles["reality-xhttp"]!["xray.json"]!)!) as! [String:Any]
+            var outgoing = source["outbounds"] as! [[String:Any]]
+            var settings = outgoing[0]["settings"] as! [String:Any]
+            var remotes = settings["vnext"] as! [[String:Any]]
+            var users = remotes[0]["users"] as! [[String:Any]]
+            users[0]["flow"] = flow;remotes[0]["users"] = users;settings["vnext"] = remotes;outgoing[0]["settings"] = settings;source["outbounds"] = outgoing
+            invalidXHTTP.profiles["reality-xhttp"]?["xray.json"] = try json(source).base64EncodedString()
+            reject("XHTTP still requires its original empty flow") { _ = try IOSRuntimeSelector.selectRaw(bundle:invalidXHTTP,rawProfileID:"reality-xhttp") }
         }
         var ordinary = try xrayBundle("reality-vision")
         ordinary.profiles["reality-pq-vision"] = ordinary.profiles["reality-vision"]

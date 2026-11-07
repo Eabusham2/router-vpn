@@ -30,14 +30,26 @@ class SSServiceReadiness(unittest.TestCase):
         self.key = base64.b64encode(b"s" * 32).decode()
         self.hy_password = "original-hysteria-password"
         self.generate("vpn.example")
+        standard_id = "11111111-1111-4111-8111-111111111111"
+        pq_id = "22222222-2222-4222-8222-222222222222"
         self.put("config/xray/server.json", {"inbounds": [
-            {"tag": "reality-in", "port": 24443},
-            {"tag": "pq-reality-in", "port": 10443},
+            {"tag": "reality-in", "port": 24443,
+             "settings": {"clients": [{"id": standard_id, "flow": "xtls-rprx-vision"}], "decryption": "none"},
+             "streamSettings": {"realitySettings": {"privateKey": "preserved-private-fixture", "shortIds": ["0011223344556677"]}}},
+            {"tag": "pq-reality-in", "port": 10443,
+             "settings": {"clients": [{"id": pq_id, "flow": "xtls-rprx-vision"}], "decryption": "mlkem768x25519plus.native.600s.fixture"},
+             "streamSettings": {"realitySettings": {"privateKey": "preserved-private-fixture", "shortIds": ["8899aabbccddeeff"]}}},
         ]})
-        self.put("config/xray/generated-secrets.json", {"identity": "existing"})
+        self.put("config/xray/generated-secrets.json", {
+            "standard_uuid": standard_id, "pq_uuid": pq_id,
+            "standard_short_id": "0011223344556677", "pq_short_id": "8899aabbccddeeff",
+            "reality_public_key": "preserved-public-fixture", "vless_encryption": "mlkem768x25519plus.native.0rtt.fixture",
+        })
         for mode, port in (("reality-vision", 24443), ("reality-pq-vision", 10443)):
+            identity = standard_id if mode == "reality-vision" else pq_id
             self.put(f"client-bundle/generated/{mode}/xray.json", {
-                "outbounds": [{"tag": "proxy", "settings": {"vnext": [{"port": port}]}}],
+                "outbounds": [{"tag": "proxy", "protocol": "vless", "settings": {"vnext": [{"port": port,
+                    "users": [{"id": identity, "flow": "xtls-rprx-vision"}]}]}}],
             })
             self.put(f"client-bundle/generated/{mode}/sing-box.json", {})
         self.put("config/.core-transports-xray-v2", b"core-transports-xray-v2\n")
@@ -59,6 +71,7 @@ class SSServiceReadiness(unittest.TestCase):
     def environment(self, image=None):
         result = dict(os.environ)
         result.pop("SING_BOX_IMAGE", None)
+        result.pop("REALITY_CLIENT_FLOW", None)
         if image is not None:
             result["SING_BOX_IMAGE"] = image
         return result
@@ -101,7 +114,7 @@ class SSServiceReadiness(unittest.TestCase):
         self.assertNotIn(self.hy_password, result.stdout + result.stderr)
         return result
 
-    def core(self, endpoint="vpn.example", image=None, *, omit_ss_gate=False):
+    def core(self, endpoint="vpn.example", image=None, *, omit_ss_gate=False, flow="", omit_flow_gate=False):
         # Run the actual shipping shell definitions, stopping before any rebuild
         # or external process. Only the immutable /src source location is mapped.
         source = (ROOT / "server/finalize/ensure-profile-engines.sh").read_text()
@@ -111,9 +124,15 @@ class SSServiceReadiness(unittest.TestCase):
             line = '  python3 ' + str(CHECK) + ' "$BASE" "$ENDPOINT"\n'
             self.assertEqual(source.count(line), 1)
             source = source.replace(line, "  return 0\n")
+        if omit_flow_gate:
+            line = '  python3 ' + str(HERE / 'preserve-generated-state.py') + ' verify-xray-client-flow "$BASE" "$REALITY_CLIENT_FLOW" || return 1\n'
+            self.assertEqual(source.count(line), 1)
+            source = source.replace(line, '')
         source += '\nif core_ready; then printf "ready\\n"; else printf "regenerate\\n"; fi\n'
+        environment = self.environment(image)
+        environment['REALITY_CLIENT_FLOW'] = flow
         result = subprocess.run(["bash", "-c", source, "ss-readiness", str(self.base), endpoint],
-                                env=self.environment(image), capture_output=True, text=True, timeout=15)
+                                env=environment, capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip()
 
@@ -121,6 +140,24 @@ class SSServiceReadiness(unittest.TestCase):
         self.assertEqual(self.verify().returncode, 0)
         self.assertEqual(self.core(), "ready")
         self.assertEqual(self.verify(image="").returncode, 0)
+
+    def test_explicit_vision_capability_invalidates_old_ready_marker(self):
+        before = self.snapshot()
+        self.assertEqual(self.core(flow="xtls-rprx-vision"), "ready")
+        self.assertEqual(self.core(flow="xtls-rprx-vision-udp443"), "regenerate")
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.core(flow="xtls-rprx-vision-udp443", omit_flow_gate=True), "ready")
+
+    def test_unset_vision_capability_retains_mixed_original_choices(self):
+        path = "client-bundle/generated/reality-vision/xray.json"
+        value = self.value(path)
+        value["outbounds"][0]["settings"]["vnext"][0]["users"][0]["flow"] = "xtls-rprx-vision-udp443"
+        self.put(path, value)
+        before = self.snapshot()
+        self.assertEqual(self.core(), "ready")
+        self.assertEqual(self.core(flow="xtls-rprx-vision-udp443"), "regenerate")
+        self.assertEqual(self.core(flow="xtls-rprx-vision"), "regenerate")
+        self.assertEqual(self.snapshot(), before)
 
     def test_old_marker_does_not_bypass_missing_declaration(self):
         (self.base / DECLARATION).unlink()

@@ -13,6 +13,15 @@ HY2_PORT=${HY2_PORT:-8443}
 SS_PORT=${SS_PORT:-8388}
 XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
 REALITY_TARGET=${REALITY_TARGET:-www.microsoft.com:443}
+REALITY_CLIENT_FLOW=${REALITY_CLIENT_FLOW:-}
+case "$REALITY_CLIENT_FLOW" in
+  ''|xtls-rprx-vision|xtls-rprx-vision-udp443) ;;
+  *) echo 'Invalid REALITY_CLIENT_FLOW; use an empty value or an exact supported Vision flow.' >&2; exit 2 ;;
+esac
+export REALITY_CLIENT_FLOW
+if [[ -e "$BASE/config/xray/server.json" || -L "$BASE/config/xray/server.json" || -e "$BASE/config/xray/generated-secrets.json" || -L "$BASE/config/xray/generated-secrets.json" ]]; then
+  python3 /src/server/scripts/preserve-generated-state.py verify-xray-client-flow "$BASE" ''
+fi
 PRIVATE_WRITE=/src/server/scripts/atomic-private-write.py
 PRIVATE_DIR=/src/server/scripts/private-directory.py
 VERIFIED_READ=/src/server/scripts/verified-regular-read.py

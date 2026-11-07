@@ -401,7 +401,7 @@ All 914 Xray records retain the previously recorded digest. The 2,167 shipping
 input records are unchanged before and after preparation, digest
 `d8deec5a207e2eaaaca50d962189a7295e71eea97822dfcfb075a8a792d7d616`.
 
-Read-only tracing of the next graph direction also identified a surviving
+Read-only tracing at `46d28632` also identified a surviving
 encrypted-DNS gap: the pinned Xray outbound rejects UDP destination port 443 for
 the exact captured `xtls-rprx-vision` flow currently admitted by the paired
 compiler. A parsed DoH3 selection therefore does not establish working DoH3
@@ -460,6 +460,56 @@ cross-compiles pass. The merged fifteen SOCKS runner contracts also pass.
 Cross-compilation is not native PF execution: the new case and its narrow
 mutation still require the new commit's actual Darwin CI. No production
 timeout, freshness bound, policy check or teardown requirement was changed.
+The fixture follow-up was published and read back as
+[`460918da4b34a06f9f4d5447498e5cafbcab5dc9`](https://github.com/Eabusham2/router-vpn/commit/460918da4b34a06f9f4d5447498e5cafbcab5dc9).
+
+### Explicit REALITY UDP/443 provisioning and captured-source support
+
+This source increment admits exactly the pinned engine's original
+`xtls-rprx-vision-udp443` client flow alongside ordinary Vision. It does not
+rewrite an imported flow, change server credentials/inbound flow, add a raw
+mode or add a logical picker entry. The shared compiler and actual Swift host
+retain the selected original bytes and reject an inconsistent saved wrapper;
+XHTTP still requires its own empty flow.
+
+The installer offers `keep/on/off`; its default is `keep`. Portainer forwards
+`REALITY_CLIENT_FLOW` to initialization and finalization. Empty preserves each
+saved standard/PQ choice independently, with ordinary Vision for a fresh
+generation. Explicit enable/disable changes generated client capability while
+retaining server identity. Older state recovers each original client's flow;
+saved capability can regenerate a missing client. Invalid or foreign flows,
+duplicate fields, ambiguous users, different UUIDs, redirected/non-private
+files and disagreement with saved state fail before authoritative adoption.
+Existing readiness markers cannot suppress an explicit requested change.
+
+The actual generator, preservation helper, private rebundle and atomic rollback
+suite passes all thirteen cases and sends generated bundles through the shared
+Go compiler. Engine command responses in that suite are explicit test doubles,
+not encrypted traffic evidence. The shared compiler's nineteen flow verdicts
+pass under race instrumentation. The actual Swift fixture passes 349 checks;
+the existing preservation, five port and six guide checks pass. Twelve SS
+readiness compatibility tests include actual `core_ready` execution and a
+causal control that removes the new flow gate. The old compatibility fixture
+was updated with real client UUIDs instead of weakening source validation.
+On the merged main checkout, the shared race selection passes in 1.182 seconds
+and all thirteen generation cases pass in 57.317 seconds.
+
+The separate seven-file native gate increment is still under validation and
+is not included in this source checkpoint. Its actual protocol work has
+identified and corrected fixture accounting for the pinned DoT transport's
+specific A/AAAA connection-reuse probes. An intermittent wrong-DNS-name
+assertion still needs its original typed error and resolver counters; isolated
+reruns passing are not claimed as a repair. The final thirty-seven native
+verdicts, including thirty-two traffic leaves, remain required. No deadline,
+TLS trust check, owner check or selected-resolver requirement is relaxed.
+
+At `460918da`, authoritative source job `128277601139` passed the unchanged
+Go source-contract step and proceeded to repository/product audits. The earlier
+`46d28632` job `128272661215` hit the ten-minute `cmd/client` package alarm while
+its active Speed Lab test had run only one second. These observations do not
+identify a stuck production case. A local timing attempt instead stopped in
+an unbounded Fastest fixture setup wait after physical-interface capture was
+denied; that separate local boundary is not a passing full-suite result.
 
 The initial `398cb513` failures were read at their exact source identity,
 including authoritative source audit job `128124355405`, iOS jobs

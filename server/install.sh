@@ -64,6 +64,13 @@ prompt OVERTLS_INTERNAL_PORT 'OverTLS loopback backend TCP port' '14444'
 prompt SSR_PORT 'ShadowsocksR legacy TCP and UDP port' '15443'
 prompt ROUTER_VPN_TLS_NAME 'Optional custom TLS hostname; blank auto-selects one when possible' ''
 prompt REALITY_TARGET 'REALITY camouflage target host:port' 'www.microsoft.com:443'
+prompt REALITY_CLIENT_CAPABILITY 'REALITY DoH3/QUIC on UDP 443 (keep/on/off)' 'keep'
+case "$REALITY_CLIENT_CAPABILITY" in
+  keep) REALITY_CLIENT_FLOW='' ;;
+  on) REALITY_CLIENT_FLOW=xtls-rprx-vision-udp443 ;;
+  off) REALITY_CLIENT_FLOW=xtls-rprx-vision ;;
+  *) echo 'Choose keep, on, or off for REALITY DoH3/QUIC support.' >&2; exit 2 ;;
+esac
 
 umask 077
 python3 "$PRIVATE_WRITE" "$ENV_FILE" <<ENV
@@ -87,6 +94,7 @@ OVERTLS_INTERNAL_PORT=$OVERTLS_INTERNAL_PORT
 SSR_PORT=$SSR_PORT
 ROUTER_VPN_TLS_NAME=$ROUTER_VPN_TLS_NAME
 REALITY_TARGET=$REALITY_TARGET
+REALITY_CLIENT_FLOW=$REALITY_CLIENT_FLOW
 ENV
 
 echo "Starting Router VPN release $RELEASE_SHA from exact published images..."

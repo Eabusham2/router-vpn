@@ -16,6 +16,8 @@ import (
 
 const MaxConfig = 4 * 1024 * 1024
 const Type = "routervpn-xray"
+const VisionFlow = "xtls-rprx-vision"
+const VisionUDP443Flow = "xtls-rprx-vision-udp443"
 
 // Plan retains the exact authenticated protocol and transport fields. Only the
 // obsolete local SOCKS ingress and diagnostic logging are removed; the native
@@ -285,7 +287,7 @@ func prepare(mode string, raw []byte, allowHostname bool) (Plan, error) {
 		if !strings.HasPrefix(text(x["path"]), "/") || x["mode"] != "auto" {
 			return plan, errors.New("unowned XHTTP path or mode")
 		}
-	} else if (network != "raw" && network != "tcp") || user["flow"] != "xtls-rprx-vision" {
+	} else if (network != "raw" && network != "tcp") || (user["flow"] != VisionFlow && user["flow"] != VisionUDP443Flow) {
 		return plan, errors.New("Vision graph must retain its native XTLS flow")
 	}
 	reality, e := object(stream["realitySettings"])

@@ -37,7 +37,8 @@ enum IOSNativeXrayProfile {
                 throw issue("XHTTP must retain its native transport rather than a substituted Vision flow.")
             }
         } else {
-            guard ["raw", "tcp"].contains(network), users[0]["flow"] as? String == "xtls-rprx-vision" else {
+            guard ["raw", "tcp"].contains(network),
+                  ["xtls-rprx-vision", "xtls-rprx-vision-udp443"].contains(users[0]["flow"] as? String ?? "") else {
                 throw issue("REALITY/Vision must retain its native XTLS flow.")
             }
         }
