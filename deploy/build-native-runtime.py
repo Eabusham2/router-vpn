@@ -63,11 +63,17 @@ MAX_BUILD_DIAGNOSTIC = 64*1024
 def run(command, *, cwd=None, env=None, timeout=1800):
     # Cargo/Go metadata is UTF-8 even on Windows. Keep stdout binary until the
     # child is joined; a locale reader thread must not discard its output.
+    # Python gates relay those native streams through redirected stdout. Give
+    # the original child and its descendants the same UTF-8 contract instead
+    # of letting a Windows code page recode a valid native diagnostic.
+    child_env = {key: value for key, value in (os.environ if env is None else env).items()
+                 if key.upper() != 'PYTHONIOENCODING'}
+    child_env['PYTHONIOENCODING'] = 'utf-8:strict'
     try:
         if os.name == 'nt':
-            completed = BUILD_OWNER.run(command, cwd=cwd, env=env, timeout=timeout)
+            completed = BUILD_OWNER.run(command, cwd=cwd, env=child_env, timeout=timeout)
         else:
-            completed = subprocess.run([str(arg) for arg in command], cwd=cwd, env=env,
+            completed = subprocess.run([str(arg) for arg in command], cwd=cwd, env=child_env,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                        timeout=timeout, check=True)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:

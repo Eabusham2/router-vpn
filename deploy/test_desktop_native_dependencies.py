@@ -94,6 +94,36 @@ class NativeCapturePartition(unittest.TestCase):
 
 
 class NativeBuildDiagnostics(unittest.TestCase):
+    def test_real_python_gate_keeps_utf8_through_nested_child(self):
+        with tempfile.TemporaryDirectory(prefix='native-utf8-') as temporary:
+            child = Path(temporary) / 'child.py'
+            child.write_text('import sys\nprint("proof\\u2026 \\u2192 caf\\u00e9")\n'
+                             'print("diagnostic\\u2026", file=sys.stderr)\n', encoding='ascii')
+            environment = dict(os.environ, PYTHONIOENCODING='cp1252',
+                               ROUTERVPN_DIAGNOSTIC_FIXTURE='captured')
+            original = environment.copy()
+            command = [sys.executable, '-c',
+                       'import os,subprocess,sys; '
+                       'assert os.environ["ROUTERVPN_DIAGNOSTIC_FIXTURE"] == "captured"; '
+                       'subprocess.run([sys.executable,sys.argv[1]],check=True)', str(child)]
+            diagnostic = io.StringIO()
+            with contextlib.redirect_stderr(diagnostic):
+                output = N.run(command, cwd=temporary, env=environment)
+            self.assertEqual(output, 'proof\u2026 \u2192 caf\u00e9')
+            self.assertEqual(diagnostic.getvalue().replace('\r\n', '\n'), 'diagnostic\u2026\n')
+            self.assertEqual(environment, original)
+
+    def test_real_python_gate_overrides_inherited_locale_without_mutation(self):
+        command = [sys.executable, '-c', 'print("captured\\u2026")']
+        with patch.dict(os.environ, {'PYTHONIOENCODING': 'cp1252'}):
+            self.assertEqual(N.run(command), 'captured\u2026')
+            self.assertEqual(os.environ['PYTHONIOENCODING'], 'cp1252')
+
+    def test_successful_native_metadata_still_rejects_malformed_utf8(self):
+        command = [sys.executable, '-c', 'import os; os.write(1,b"metadata\\x85")']
+        with self.assertRaises(UnicodeDecodeError):
+            N.run(command)
+
     def test_real_failed_child_preserves_failure_and_both_output_streams(self):
         command = [sys.executable, '-c', 'import os,sys; os.write(1,b"actual native assertion\\n"); os.write(2,b"compiler detail\\xff\\n"); sys.exit(7)']
         diagnostic = io.StringIO()
