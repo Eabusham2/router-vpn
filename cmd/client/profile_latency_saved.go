@@ -67,7 +67,11 @@ func (a *app) selectSavedLowestLatency(w http.ResponseWriter, r *http.Request) {
 	}
 	release, err := a.beginMutationOperation(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
+		if r.Context().Err() != nil {
+			http.Error(w, "saved selection cancelled", http.StatusRequestTimeout)
+		} else {
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
 		return
 	}
 	defer release()
