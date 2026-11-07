@@ -45,7 +45,8 @@ PEER_COPIES = (
     ('mobile/desktop/node_imported_connect_xray_test.go.tmpl', 'protocol/routervpnamnezia/routervpn_imported_connect_xray_test.go'),
     ('mobile/desktop/node_imported_connect_xray_dns_test.go.tmpl', 'protocol/routervpnamnezia/routervpn_imported_connect_xray_dns_test.go'),
 )
-SUPPORT = ('TestRouterVPNImportedCONNECTRealityPhysicalOwner', 'TestRouterVPNImportedCONNECTRealityDoTProbeAdmission')
+SUPPORT = ('TestRouterVPNImportedCONNECTRealityPhysicalOwner', 'TestRouterVPNImportedCONNECTRealityDoTProbeAdmission',
+           'TestRouterVPNImportedCONNECTRealityAuthenticatedRouteRefusal')
 
 
 def native_cases(kind):

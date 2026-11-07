@@ -49,7 +49,8 @@ class CONNECTRealityInventory(unittest.TestCase):
             'TestRouterVPNImportedHTTPSRealityVisionNativeTraffic':74,
             gate.DNS_PARENT:25})
         native = gate.IMPORTED.names(gate.PEERS) | set(gate.SUPPORT)
-        self.assertEqual(len(native),173)
+        self.assertEqual(len(native),174)
+        self.assertIn('TestRouterVPNImportedCONNECTRealityAuthenticatedRouteRefusal',gate.SUPPORT)
         self.assertEqual(len([name for name in native if name.count('/')==2]),148)
         for expected in self.scopes():
             gate.SOCKS.require_verdicts(self.encode(self.events(expected)), 0, expected)
@@ -365,7 +366,7 @@ class CONNECTNativeExecution(unittest.TestCase):
                         result = gate.reference_stage('go', Path('core'), workspace, {})
                         self.assertEqual(set(result['support']), set(gate.SUPPORT))
                         self.assertEqual(set(result['peers']), set(gate.PEERS))
-                        self.assertEqual(sum(len(r['verdicts']) for group in ('support','peers') for r in result[group].values()), 173)
+                        self.assertEqual(sum(len(r['verdicts']) for group in ('support','peers') for r in result[group].values()), 174)
                         recheck.assert_called_once(); instrumentation.assert_called_once()
                     compile_native.assert_called_once_with('go', Path('core'), workspace, {}, './protocol/routervpnamnezia', 'connect-reality-peers')
                 self.assertEqual(calls, parents[:parents.index(failed)+1] if failed else parents)

@@ -545,6 +545,7 @@ func desktopImportedCONNECTXrayTraffic(t *testing.T, original []string, kind, fa
 	}
 
 	beforeFinal := entryRoute.calls.Load()
+	beforeDenied := originalPeer.denied.Load()
 	dnsOK, proofOK := false, false
 	if publicOK {
 		dnsOK, err = desktopImportedSOCKSXrayDNS(ctx, final, net.JoinHostPort(wantedDNS, "53"))
@@ -560,8 +561,10 @@ func desktopImportedCONNECTXrayTraffic(t *testing.T, original []string, kind, fa
 		}
 	}
 	success := fault == "success" || fault == "cancel" || fault == "close-owner" || fault == "replacement-owner"
-	if publicOK && entryRoute.calls.Load() <= beforeFinal {
-		t.Fatal("final REALITY traffic bypassed the original authenticated proxy entry")
+	if publicOK {
+		if err := desktopImportedCONNECTXrayEntryObservation(fault, beforeFinal, entryRoute.calls.Load(), beforeDenied, originalPeer.denied.Load()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if (publicOK && dnsOK && proofOK) != success || plan.Healthy() {
 		t.Fatal("imported CONNECT REALITY reference confused proof results with unstarted host readiness")
@@ -651,6 +654,87 @@ func desktopImportedCONNECTXrayTraffic(t *testing.T, original []string, kind, fa
 		t.Fatal("imported CONNECT REALITY instance left its original physical streams", err)
 	}
 	completed = true
+}
+
+// CONNECT authenticates the request and rejects an uncaptured destination before
+// calling the stream router. A 403 is an observed entry refusal, not a missing
+// entry path. Every other attempted final still needs an actual routed stream.
+func desktopImportedCONNECTXrayEntryObservation(fault string, beforeRouted, afterRouted uint32, beforeDenied, afterDenied int64) error {
+	if fault == "final-route" {
+		if afterDenied <= beforeDenied || afterRouted != beforeRouted {
+			return errors.New("foreign REALITY route lacks its original authenticated CONNECT refusal")
+		}
+		return nil
+	}
+	if afterRouted <= beforeRouted || afterDenied != beforeDenied {
+		return errors.New("final REALITY traffic bypassed the original authenticated proxy entry")
+	}
+	return nil
+}
+
+func TestRouterVPNImportedCONNECTRealityAuthenticatedRouteRefusal(t *testing.T) {
+	for _, secured := range []bool{false, true} {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{},
+			routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: "198.51.100.20:443", Physical: "127.0.0.1:1"}}}
+		route := &desktopImportedProxyXrayRoutes{desktopImportedCONNECTRouter: desktopImportedCONNECTRouter{server: server}}
+		server.streamRouter = route
+		certificate, ca := desktopExternalInstalledPeerCertificate(t, false, "proxy.example.com")
+		var serverCertificate *tls.Certificate
+		if secured {
+			serverCertificate = &certificate
+		}
+		peer := desktopStartImportedCONNECTPeer(t, server, "original-user", "original-password", serverCertificate, nil, "")
+		lower := newDesktopImportedCONNECTXrayPhysical(M.ParseSocksaddr("203.0.113.20:443"), peer.address)
+		defer lower.Close()
+		manager := &desktopImportedSOCKSXrayManager{owners: map[string]adapter.Outbound{lower.Tag(): lower}}
+		owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
+		options := map[string]any{"type": "http", "server": "203.0.113.20", "server_port": 443,
+			"username": "original-user", "password": "original-password", "detour": lower.Tag()}
+		if secured {
+			roots := x509.NewCertPool()
+			if !roots.AppendCertsFromPEM([]byte(ca)) {
+				t.Fatal("original CONNECT refusal trust missing")
+			}
+			owned = service.ContextWith[adapter.CertificateStore](owned, &desktopImportedHysteriaTrust{roots: roots})
+			options["tls"] = map[string]any{"enabled": true, "server_name": "proxy.example.com"}
+		}
+		entry := desktopImportedCONNECTXrayOutbound(t, owned, options)
+		connection, err := entry.DialContext(ctx, "tcp", M.ParseSocksaddr("198.51.100.240:443"))
+		if connection != nil {
+			_ = connection.Close()
+		}
+		if connection != nil || err == nil || lower.calls.Load() != 1 || server.rawTCP.Load() != 1 || peer.auth.Load() != 0 || peer.tlsRefused.Load() != 0 || peer.denied.Load() != 1 || route.calls.Load() != 0 {
+			t.Fatal("actual authenticated CONNECT request did not reject its foreign destination before stream routing", secured, err)
+		}
+		if err := desktopImportedCONNECTXrayEntryObservation("final-route", 0, route.calls.Load(), 0, peer.denied.Load()); err != nil {
+			t.Fatal("actual CONNECT refusal was misclassified as entry bypass", secured, err)
+		}
+		for _, changed := range []struct {
+			fault                     string
+			beforeRouted, afterRouted uint32
+			beforeDenied, afterDenied int64
+		}{
+			{"final-route", 0, 0, 0, 0}, // no request reached its original peer
+			{"final-route", 0, 0, 1, 1}, // an old refusal cannot satisfy this request
+			{"final-route", 0, 1, 0, 1}, // a foreign route must never reach the stream router
+			{"success", 0, 0, 0, 1},     // a refusal cannot count as successful traversal
+			{"success", 0, 1, 0, 1},     // accepted traffic cannot hide a foreign refusal
+		} {
+			if desktopImportedCONNECTXrayEntryObservation(changed.fault, changed.beforeRouted, changed.afterRouted, changed.beforeDenied, changed.afterDenied) == nil {
+				t.Fatal("changed CONNECT arrival evidence was admitted", changed)
+			}
+		}
+		if err := lower.empty(ctx); err != nil {
+			t.Fatal("refused native CONNECT request retained its physical stream", err)
+		}
+		peer.close()
+		if err := lower.Close(); err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+	}
 }
 
 func desktopImportedCONNECTXrayOutbound(t *testing.T, ctx context.Context, raw map[string]any) adapter.Outbound {
