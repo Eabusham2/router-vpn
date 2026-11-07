@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 )
 
 type liveLatencyRequest struct {
@@ -160,8 +161,10 @@ func profileLatencyAtPort(ctx context.Context, p common.RouterProfile, port, sam
 	failed := 0
 	dialer := &net.Dialer{Timeout: 850 * time.Millisecond}
 	for i := 0; i < samples; i++ {
-		if current, ok := ctx.Value(fastestNetworkKey{}).(func() bool); ok && !current() {
-			return liveLatencyResult{}, errors.New("physical network changed during node sampling")
+		if current, ok := ctx.Value(fastestNetworkKey{}).(func(context.Context) error); ok {
+			if err := current(ctx); err != nil {
+				return liveLatencyResult{}, err
+			}
 		}
 		started := time.Now()
 		c, dialErr := dialer.DialContext(ctx, "tcp", net.JoinHostPort(p.Endpoint, fmt.Sprintf("%d", port)))
@@ -271,10 +274,10 @@ func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
 // The injected probe is a test seam; the HTTP route always uses the real TCP
 // measurement above. Keep networking outside the terminal adoption locks.
 func (a *app) fastestProfileWithProbe(w http.ResponseWriter, r *http.Request, probe func(context.Context, common.RouterProfile, int) (liveLatencyResult, error)) {
-	a.fastestProfileWithSources(w, r, probe, physicalNetworkIdentity)
+	a.fastestProfileWithSources(w, r, probe, physicalNetworkIdentityContext)
 }
 
-func (a *app) fastestProfileWithSources(w http.ResponseWriter, r *http.Request, probe func(context.Context, common.RouterProfile, int) (liveLatencyResult, error), networkIdentity func() string) {
+func (a *app) fastestProfileWithSources(w http.ResponseWriter, r *http.Request, probe func(context.Context, common.RouterProfile, int) (liveLatencyResult, error), networkIdentity func(context.Context) (string, error)) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -303,28 +306,49 @@ func (a *app) fastestProfileWithSources(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	started := time.Now()
-	networkAtStart := networkIdentity()
-	if networkAtStart == "" {
+	networkAtStart, networkErr := networkIdentity(ctx)
+	if ctx.Err() != nil {
+		http.Error(w, "fastest-node measurement was cancelled before selection", http.StatusRequestTimeout)
+		return
+	}
+	if networkErr != nil || networkAtStart == "" {
 		http.Error(w, "cannot capture the physical network for node measurement", http.StatusConflict)
 		return
 	}
 	var networkLost atomic.Bool
-	networkCurrent := func() bool {
+	networkCurrent := func(caller context.Context) error {
+		if err := caller.Err(); err != nil {
+			return err
+		}
 		if networkLost.Load() {
-			return false
+			return errors.New("physical network changed during fastest-node measurement")
 		}
-		if networkIdentity() != networkAtStart {
+		observed, err := networkIdentity(caller)
+		if err != nil || observed != networkAtStart {
 			networkLost.Store(true)
-			return false
+			return errors.Join(err, errors.New("physical network changed during fastest-node measurement"))
 		}
-		return !networkLost.Load()
+		if networkLost.Load() {
+			return errors.New("physical network changed during fastest-node measurement")
+		}
+		return caller.Err()
+	}
+	rejectObservation := func(err error) {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			http.Error(w, "fastest-node measurement was cancelled before selection", http.StatusRequestTimeout)
+		} else {
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
 	}
 	r = r.WithContext(context.WithValue(ctx, fastestNetworkKey{}, networkCurrent))
 	selectWinner := true
 	if q.Select != nil {
 		selectWinner = *q.Select
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		rejectObservation(err)
+		return
+	}
 	if a.state.Connected || profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()
 		http.Error(w, "disconnect before switching to the fastest node", http.StatusConflict)
@@ -335,7 +359,21 @@ func (a *app) fastestProfileWithSources(w http.ResponseWriter, r *http.Request, 
 	profiles := cloneRouterProfileStore(a.profiles).Profiles
 	profilesAtStart := fastestProfileSnapshotToken(profiles)
 	a.mu.Unlock()
-	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
+	tracker := sessionTrackerFor(a)
+	if err := desktopnetwork.LockContext(ctx, &tracker.mu); err != nil {
+		rejectObservation(err)
+		return
+	}
+	sessionAtStart := ""
+	if tracker.session != nil {
+		sessionAtStart = tracker.session.ID
+	}
+	registered, exists := sessionTrackers.Load(a)
+	tracker.mu.Unlock()
+	if !exists || registered != tracker || tracker.a != a {
+		rejectObservation(errors.New("VPN session tracker changed during fastest-node measurement"))
+		return
+	}
 	results := make([]liveLatencyResult, 0, len(profiles))
 	disqualified := make([]map[string]any, 0)
 	for _, p := range profiles {
@@ -346,8 +384,8 @@ func (a *app) fastestProfileWithSources(w http.ResponseWriter, r *http.Request, 
 		if kind != "router-vpn" {
 			continue
 		}
-		if !networkCurrent() {
-			http.Error(w, "physical network changed during fastest-node measurement", http.StatusConflict)
+		if err := networkCurrent(ctx); err != nil {
+			rejectObservation(err)
 			return
 		}
 		value, err := probe(r.Context(), p, q.Samples)
@@ -368,8 +406,8 @@ func (a *app) fastestProfileWithSources(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "no Router VPN node completed 50 valid TCP samples; no winner selected", http.StatusBadGateway)
 		return
 	}
-	if !networkCurrent() {
-		http.Error(w, "physical network changed during fastest-node measurement", http.StatusConflict)
+	if err := networkCurrent(ctx); err != nil {
+		rejectObservation(err)
 		return
 	}
 	sort.SliceStable(results, func(i, j int) bool {
@@ -389,23 +427,28 @@ func (a *app) fastestProfileWithSources(w http.ResponseWriter, r *http.Request, 
 	if selectWinner {
 		release, err := a.beginMutationOperation(r)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
+			rejectObservation(err)
 			return
 		}
 		defer release()
 	}
-	if !networkCurrent() {
-		http.Error(w, "physical network changed during fastest-node measurement", http.StatusConflict)
+	if err := networkCurrent(ctx); err != nil {
+		rejectObservation(err)
 		return
 	}
-	tracker := sessionTrackerFor(a)
-	tracker.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &tracker.mu); err != nil {
+		rejectObservation(err)
+		return
+	}
 	defer tracker.mu.Unlock()
 	currentSessionID := ""
 	if tracker.session != nil {
 		currentSessionID = tracker.session.ID
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		rejectObservation(err)
+		return
+	}
 	selectedID := a.profiles.SelectedID
 	var persistErr error
 	if r.Context().Err() != nil {
@@ -413,7 +456,8 @@ func (a *app) fastestProfileWithSources(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "fastest-node measurement was cancelled before selection", http.StatusRequestTimeout)
 		return
 	}
-	if currentSessionID != sessionAtStart {
+	registered, exists = sessionTrackers.Load(a)
+	if !exists || registered != tracker || tracker.a != a || currentSessionID != sessionAtStart {
 		a.mu.Unlock()
 		http.Error(w, "VPN session changed while fastest-node measurement was running", http.StatusConflict)
 		return

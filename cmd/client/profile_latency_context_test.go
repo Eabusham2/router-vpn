@@ -46,7 +46,7 @@ func TestProfileLatencyCancelledRequestCannotProbeOrPersist(t *testing.T) {
 // This observes a real contended save, rather than guessing how long the TCP
 // samples take. The caller owns app.mu only after an accepted connection proves
 // the handler has released its initial profile-read lock. A profileLatency frame
-// blocked in Mutex.Lock therefore identifies its terminal persistence boundary.
+// blocked in mutex admission therefore identifies its terminal persistence boundary.
 // Mutation ownership now checks shutdown/state before joining the save lock;
 // these guard frames occur only after all actual samples have completed.
 func waitProfileLatencySaveLock(t *testing.T, done <-chan struct{}) {
@@ -62,11 +62,15 @@ func waitProfileLatencySaveLock(t *testing.T, done <-chan struct{}) {
 			for _, record := range records[:count] {
 				frames := runtime.CallersFrames(record.Stack())
 				previous := ""
+				contextAdmission := false
 				for {
 					frame, more := frames.Next()
+					if strings.HasSuffix(frame.Function, "/desktopnetwork.lockContext") {
+						contextAdmission = true
+					}
 					// The handler must directly own the contended Lock frame;
 					// a mutex inside DialContext is still a measurement, not a save.
-					if (strings.HasSuffix(frame.Function, ".(*app).profileLatency") || strings.HasSuffix(frame.Function, ".(*app).controllerClosing") || strings.HasSuffix(frame.Function, ".(*app).beginProtectionAwareMutationOperation")) && (previous == "sync.(*Mutex).Lock" || previous == "internal/sync.(*Mutex).Lock" || previous == "internal/sync.(*Mutex).lockSlow") {
+					if (strings.HasSuffix(frame.Function, ".(*app).profileLatency") || strings.HasSuffix(frame.Function, ".(*app).controllerClosing") || strings.HasSuffix(frame.Function, ".(*app).beginProtectionAwareMutationOperation")) && (contextAdmission || previous == "sync.(*Mutex).Lock" || previous == "internal/sync.(*Mutex).Lock" || previous == "internal/sync.(*Mutex).lockSlow") {
 						return
 					}
 					if !more {

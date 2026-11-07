@@ -201,7 +201,11 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 	}
 	release, guardErr := a.beginMutationOperation(r)
 	if guardErr != nil {
-		http.Error(w, guardErr.Error(), http.StatusConflict)
+		if r.Context().Err() != nil {
+			http.Error(w, "durable node latency request was cancelled before persistence", http.StatusRequestTimeout)
+		} else {
+			http.Error(w, guardErr.Error(), http.StatusConflict)
+		}
 		return
 	}
 	defer release()

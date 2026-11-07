@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -659,8 +660,14 @@ func (a *app) viaEntryCandidatesValidate(w http.ResponseWriter, r *http.Request)
 // old receipts; a failed temporary cleanup blocks replacement until Cancel has
 // retired that exact owner. These helpers never acquire app.mu before c.mu.
 func guardViaEntryDecision(a *app) error {
+	return guardViaEntryDecisionContext(context.Background(), a)
+}
+
+func guardViaEntryDecisionContext(ctx context.Context, a *app) error {
 	c := viaEntryControlFor(a)
-	c.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &c.mu); err != nil {
+		return err
+	}
 	defer c.mu.Unlock()
 	if c.owner != nil {
 		if c.owner.running || !c.owner.drained {

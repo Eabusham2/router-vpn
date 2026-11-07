@@ -74,7 +74,7 @@ func TestFastestFiftyRequestCountAndMetricIsolation(t *testing.T) {
 			a.fastestProfileWithSources(w, httptest.NewRequest(http.MethodPost, "/api/profile/fastest", strings.NewReader(body)), func(_ context.Context, p common.RouterProfile, n int) (liveLatencyResult, error) {
 				calls++
 				return fastestFiftyConstant(p, 1), nil
-			}, func() string { return "physical-A" })
+			}, func(context.Context) (string, error) { return "physical-A", nil })
 			if w.Code != http.StatusBadRequest || calls != 0 || a.profiles.SelectedID != "a" {
 				t.Fatalf("invalid sample/metric request reached measurement: status=%d calls=%d", w.Code, calls)
 			}
@@ -91,7 +91,7 @@ func TestFastestFiftyRequestCountAndMetricIsolation(t *testing.T) {
 				t.Fatalf("mixed metric or incorrect count: node=%s count=%d", p.ID, n)
 			}
 			return fastestFiftyConstant(p, 5), nil
-		}, func() string { return "physical-A" })
+		}, func(context.Context) (string, error) { return "physical-A", nil })
 		if w.Code != http.StatusOK || calls != 2 || a.profiles.SelectedID != "a" {
 			t.Fatalf("complete read-only Router comparison failed: %d %s calls=%d", w.Code, w.Body.String(), calls)
 		}
@@ -120,7 +120,7 @@ func TestFastestFiftyRanksTrimmedMeanWithStableTiesAndNoPartialScore(t *testing.
 			v.TrimmedMs = 1
 		}
 		return v, nil
-	}, func() string { return "physical-A" })
+	}, func(context.Context) (string, error) { return "physical-A", nil })
 	var response struct {
 		Winner       liveLatencyResult   `json:"winner"`
 		Results      []liveLatencyResult `json:"results"`
@@ -149,7 +149,7 @@ func TestFastestFiftyRanksTrimmedMeanWithStableTiesAndNoPartialScore(t *testing.
 					return liveLatencyResult{}, errors.New("controlled refused node")
 				}
 				return v, nil
-			}, func() string { return "physical-A" })
+			}, func(context.Context) (string, error) { return "physical-A", nil })
 			if w.Code != http.StatusBadGateway || a.profiles.SelectedID != "a" {
 				t.Fatalf("invalid-only round selected a winner: %d %s", w.Code, w.Body.String())
 			}
@@ -193,8 +193,8 @@ func TestFastestFiftyDeepCaptureAndReadOnlyStaleness(t *testing.T) {
 						network = "physical-B"
 					case "transient network":
 						network = "physical-B"
-						current, ok := ctx.Value(fastestNetworkKey{}).(func() bool)
-						if !ok || current() {
+						current, ok := ctx.Value(fastestNetworkKey{}).(func(context.Context) error)
+						if !ok || current(ctx) == nil {
 							t.Fatal("sample failed to observe network replacement")
 						}
 						network = "physical-A"
@@ -206,7 +206,7 @@ func TestFastestFiftyDeepCaptureAndReadOnlyStaleness(t *testing.T) {
 					t.Fatal("probe received live mutable credentials or a shallow policy slice")
 				}
 				return fastestFiftyConstant(p, 5), nil
-			}, func() string { return network })
+			}, func(context.Context) (string, error) { return network, nil })
 			if w.Code == http.StatusOK {
 				t.Fatalf("stale/cancelled read-only round returned a winner: %s", w.Body.String())
 			}
@@ -231,7 +231,7 @@ func TestFastestFiftyReadOnlyRejectsActiveVPN(t *testing.T) {
 			a.fastestProfileWithSources(w, httptest.NewRequest(http.MethodPost, "/api/profile/fastest", strings.NewReader(`{"select":false}`)), func(_ context.Context, p common.RouterProfile, _ int) (liveLatencyResult, error) {
 				calls++
 				return fastestFiftyConstant(p, 1), nil
-			}, func() string { return "physical-A" })
+			}, func(context.Context) (string, error) { return "physical-A", nil })
 			if w.Code != http.StatusConflict || calls != 0 {
 				t.Fatalf("ambient VPN was admitted as direct TCP: status=%d probes=%d", w.Code, calls)
 			}
@@ -253,7 +253,7 @@ func TestFastestFiftyReadOnlyOwnsTrackerBeforeAppWithoutMutationLease(t *testing
 				<-finish
 			}
 			return fastestFiftyConstant(p, 5), nil
-		}, func() string { return "physical-A" })
+		}, func(context.Context) (string, error) { return "physical-A", nil })
 		done <- w
 	}()
 	select {
@@ -315,7 +315,12 @@ func TestFastestFiftyActualTCPAndObservedNetworkDrift(t *testing.T) {
 			}()
 			defer func() { _ = listener.Close(); <-joined }()
 			var networkReads atomic.Int32
-			ctx = context.WithValue(ctx, fastestNetworkKey{}, func() bool { return scenario != "network" || networkReads.Add(1) != 3 })
+			ctx = context.WithValue(ctx, fastestNetworkKey{}, func(context.Context) error {
+				if scenario == "network" && networkReads.Add(1) == 3 {
+					return errors.New("captured network changed")
+				}
+				return nil
+			})
 			p := common.RouterProfile{ID: "loopback-node", Endpoint: "127.0.0.1"}
 			started := time.Now()
 			result, err := profileLatencyAtPort(ctx, p, listener.Addr().(*net.TCPAddr).Port, 50)

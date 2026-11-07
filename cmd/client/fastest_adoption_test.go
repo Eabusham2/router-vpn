@@ -47,6 +47,12 @@ func fastestMeasuredResult(p common.RouterProfile) liveLatencyResult {
 	return profileLatencySummary(p, 443, values, 0)
 }
 
+// Adoption controls supply only a stable network identity. The shipping source
+// path, actual lock ownership and original request context remain under test.
+func fastestAdoptionRequest(a *app, w http.ResponseWriter, r *http.Request, probe func(context.Context, common.RouterProfile, int) (liveLatencyResult, error)) {
+	a.fastestProfileWithSources(w, r, probe, func(ctx context.Context) (string, error) { return "captured-adoption-network", ctx.Err() })
+}
+
 func TestFastestSelectionUsesTrackerBeforeAppLock(t *testing.T) {
 	a, tracker := fastestAdoptionFixture(t)
 	measured, finish := make(chan struct{}), make(chan struct{})
@@ -66,7 +72,7 @@ func TestFastestSelectionUsesTrackerBeforeAppLock(t *testing.T) {
 	go func() {
 		defer close(joined)
 		w := httptest.NewRecorder()
-		a.fastestProfileWithProbe(w, httptest.NewRequest(http.MethodPost, "/api/profile/fastest", strings.NewReader(`{}`)).WithContext(ctx),
+		fastestAdoptionRequest(a, w, httptest.NewRequest(http.MethodPost, "/api/profile/fastest", strings.NewReader(`{}`)).WithContext(ctx),
 			func(_ context.Context, p common.RouterProfile, _ int) (liveLatencyResult, error) {
 				if p.ID == "b" {
 					close(measured)
@@ -188,7 +194,7 @@ func TestFastestSelectionRejectsStaleStateAndPreservesRollback(t *testing.T) {
 				return fastestMeasuredResult(p), nil
 			}
 			w := httptest.NewRecorder()
-			a.fastestProfileWithProbe(w, httptest.NewRequest(http.MethodPost, "/api/profile/fastest", strings.NewReader(`{}`)).WithContext(ctx), probe)
+			fastestAdoptionRequest(a, w, httptest.NewRequest(http.MethodPost, "/api/profile/fastest", strings.NewReader(`{}`)).WithContext(ctx), probe)
 			wantStatus, wantSelected := http.StatusConflict, "a"
 			switch scenario {
 			case "working":
@@ -234,7 +240,7 @@ func TestFastestReadOnlyMeasurementDoesNotAcquireMutationOwnership(t *testing.T)
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
 	w := httptest.NewRecorder()
-	a.fastestProfileWithProbe(w, httptest.NewRequest(http.MethodPost, "/api/profile/fastest", strings.NewReader(`{"select":false}`)),
+	fastestAdoptionRequest(a, w, httptest.NewRequest(http.MethodPost, "/api/profile/fastest", strings.NewReader(`{"select":false}`)),
 		func(_ context.Context, p common.RouterProfile, _ int) (liveLatencyResult, error) {
 			return fastestMeasuredResult(p), nil
 		})

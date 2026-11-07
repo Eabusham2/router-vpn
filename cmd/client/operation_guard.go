@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 )
 
 type internalMutationContextKey struct{}
@@ -48,7 +49,12 @@ func (a *app) beginMutationOperation(r *http.Request) (func(), error) {
 }
 
 func (a *app) beginProtectionAwareMutationOperation(r *http.Request, allowOffRetry bool) (func(), error) {
-	if a.controllerClosing() {
+	if err := desktopnetwork.LockContext(r.Context(), &a.mu); err != nil {
+		return nil, err
+	}
+	closing := a.controllerClosingLocked()
+	a.mu.Unlock()
+	if closing {
 		return nil, errControllerClosing
 	}
 	if hasInternalMutationContext(r) && !allowOffRetry {
@@ -60,8 +66,11 @@ func (a *app) beginProtectionAwareMutationOperation(r *http.Request, allowOffRet
 	if !a.operationMu.TryLock() {
 		return nil, errors.New("another Router VPN connection or settings transaction is already in progress")
 	}
-	a.mu.Lock()
-	closing := a.controllerClosingLocked()
+	if err := desktopnetwork.LockContext(r.Context(), &a.mu); err != nil {
+		a.operationMu.Unlock()
+		return nil, err
+	}
+	closing = a.controllerClosingLocked()
 	busy := profileSettingsBusy(a.state.Connected, a.state.Phase)
 	a.mu.Unlock()
 	if closing {
@@ -78,7 +87,7 @@ func (a *app) beginProtectionAwareMutationOperation(r *http.Request, allowOffRet
 			return nil, err
 		}
 	}
-	if err := guardViaEntryDecision(a); err != nil {
+	if err := guardViaEntryDecisionContext(r.Context(), a); err != nil {
 		a.operationMu.Unlock()
 		return nil, err
 	}
