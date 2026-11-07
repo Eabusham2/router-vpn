@@ -29,6 +29,7 @@ SWIFT = r'''
   final["node_kind"]="router-vpn";final["node_proof_id"]=String(repeating:"a",count:64)
   final["router_api"]="http://10.77.0.1:8787";final["api_token"]="original paired final"
   final["start_layer"]="aes-256-gcm+xor-whitening";final["dns_mode"]="home"
+  root["profiles"]=["shadowsocks":["sing-box.json":"original captured final transport"],"shadowsocks-layer":["sing-box.json":"original captured final layer"]]
   root["routerProfiles"]=[final];config["bundle"]=try JSONSerialization.data(withJSONObject:root,options:.sortedKeys)
   let entry:[String:Any]=["id":"entry","node_kind":"external","start_layer":"aes-256-gcm","external":["protocol":"shadowsocks","expected_public_ip":"198.51.100.4","shadowsocks":["method":"2022-blake3-aes-256-gcm","server":"198.51.100.4","port":8388,"password":"original imported key"]]]
   config["entryBundle"]=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[entry]],options:.sortedKeys)
@@ -37,6 +38,12 @@ SWIFT = r'''
   let receipt=try IOSMultihopExecution.Capture(source:captured,execution:"local",session:UUID().uuidString,request:String(repeating:"e",count:32))
   let restored=try IOSMultihopExecution.Capture.decode(receipt.encoded(),source:captured)
   check("imported Local restore retains exact source",restored.source==captured && restored.execution=="local")
+  let malformedAssets:[Any]=[NSNull(),"untyped assets",["private":"exact exit credential bytes"],["shadowsocks":true],["shadowsocks":["sing-box.json":7]]]
+  for (index,assets) in malformedAssets.enumerated() {
+   var changed=config,body=root;body["profiles"]=assets
+   changed["bundle"]=try JSONSerialization.data(withJSONObject:body,options:.sortedKeys)
+   reject("imported source rejects malformed original asset map \(index)"){_ = try IOSMultihopExecution.Source(configuration:changed,digest:digest)}
+  }
   for fault in ["server","auto","fake-proof","fake-api","different-entry","legacy-ss","missing-public-ip","nested-entry","wrong-final","wrong-final-type","null-final-kind","missing-final-proof"] {
    var a=entry,b=final
    switch fault {
