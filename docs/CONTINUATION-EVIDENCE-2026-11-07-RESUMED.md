@@ -67,6 +67,12 @@ Creating Git objects alone was not counted as publication.
 | [`9dde1b50`](https://github.com/Eabusham2/router-vpn/commit/9dde1b50e2e038ba9b01abef941037b758dcefaf) | CONNECT wrong-route test recognizes the actual authenticated 403 before stream dispatch, requiring fresh refusal and zero routed foreign streams. Real HTTP and verified-TLS HTTPS outbounds pass the new support control and reject five invalid observations; restoring the old route-count assumption fails. All three support verdicts, sixteen CONNECT and eight packet runner controls pass. | The required encrypted CONNECT inventory is now 174 names with the original 148 traffic leaves preserved. Full hosted encrypted reference remains mandatory. |
 | [`a74f2e53`](https://github.com/Eabusham2/router-vpn/commit/a74f2e531d5b3de7d435f68e4a8abd79e2238336) | Completes the packet reference's immutable outbound map before native receive startup, correcting the hosted race between final-layer registration and original WG entry-layer detour lookup. The actual packet-tagged native race package compiles and all four support verdicts pass; eight runner controls pass. | The original 350-name inventory and race instrumentation remain mandatory. Full hosted traffic must verify the repaired order. |
 | [`1a9e34d2`](https://github.com/Eabusham2/router-vpn/commit/1a9e34d22b140838d9abacf283a60027dc9e0799) | Replaces the macOS fixture's copied-shell startup dependency with an explicit compiled/signed executable and same-PID exec of its captured target. Three-second bounds and production identity protections remain; before/after CodeDirectory, UUID, start identity and exact target checks are stronger. Twenty-two source/protocol tests, fifteen existing image mutants and two actual C-fixture mutants pass locally. | Linux proves the fixture protocol only. Actual Darwin signing/kernel tests and full installation acceptance remain mandatory. |
+| [`58129b29`](https://github.com/Eabusham2/router-vpn/commit/58129b2929339dad2c45288f4a6f96b7684f18cb) | Via-entry measurements retain the caller through actual lane, network, app/control and native admission. Receipt validation occurs outside the control lock, followed by exact-owner revalidation; Cancel can retire the original operation during observation. Fifty routed samples and joined cleanup remain. Fifty-three race verdicts and two old-behavior mutations pass. | One existing opt-in native test is not counted as a pass. Its supplementary native CLI attempt reaches actual Netlink refusal. Installed traffic remains separate. |
+| [`bdbd1fa7`](https://github.com/Eabusham2/router-vpn/commit/bdbd1fa7695ab4180f1262463eafdbdd04d1f1d2) | Native fixtures distinguish the actual 24-choice main/profile catalog from the 19-choice paired temporary catalog. Canonical imported identifiers are preserved. GTK consumes actual controller JSON; Swift Speed Lab and profile callbacks, Go payload consumers and eighteen form audits pass. | Temporary imported-entry Speed Lab is still unfinished. The actual GTK fixture compiles with verified dependencies, but the local X display cannot start because Unix sockets are denied; GTK and PowerShell execution remain hosted checks. |
+| [`3c4630aa`](https://github.com/Eabusham2/router-vpn/commit/3c4630aa968671f765dd533bbb0a3fb190753849) | Cohort tracker identity, receipt and transition admission use the caller's deadline while preserving latched native failure and joined cleanup. Seventy-five focused race verdicts and two causal old-lock controls pass. | This tracker prerequisite alone did not change every shipping comparison caller; the external integration is recorded below. |
+| [`92678123`](https://github.com/Eabusham2/router-vpn/commit/926781236d215810ae0cf7dc2cf7571b5b0abaed) | CONNECT and packet selected-DNS rejection checks read the pinned QUIC error's actual typed TLS verifier and original certificate chain. The former ErrorMessage-only assumption fails the new real HTTP/3 control. All seven native support verdicts pass under race; sixteen CONNECT and eight packet runner tests pass. | Mandatory reference inventories expand to 175 CONNECT and 351 packet names, preserving all original traffic leaves and no-request/no-answer checks. Complete hosted selected-DNS reruns remain required. |
+| [`d2ef8d5a`](https://github.com/Eabusham2/router-vpn/commit/d2ef8d5a4b684ce691afddef59c8ccf7c2c853af) | Cancelled saved-latency selection returns HTTP 408 at mutation admission instead of HTTP 409. Existing saved-selection/ranking/rollback and eligibility race tests pass; historical measurements are not changed. | This HTTP classification repair does not establish a fresh fastest-path measurement. |
+| [`bab5ec8d`](https://github.com/Eabusham2/router-vpn/commit/bab5ec8d1b23bcf570e9f0f4d266de68fb47fb80) | Shipping external comparison carries caller context through cohort/source checks, native latency mailbox, transition observations and exact-tracker durable adoption. Thirty-three focused race verdicts pass again on integrated main, including cancellation, original child drain and same-ID tracker/private-store/credential replacement. | Broader physical fixtures remain bounded by Netlink; the older Tor Local/Server driver and Tor terminal mailbox ordering are separate open work. Actual IPC controls do not establish installed TLS or physical-path acceptance. |
 
 ### Actual CONNECT producers and parsers after toolchain recovery
 
@@ -90,11 +96,11 @@ build, signing, notarization or distribution.
 
 | Requirement | Current shipping path / executable evidence | Actual remaining gap |
 |---|---|---|
-| Original #2–3, #5/#15, #200–224; captured lifecycle and actual path admission | Shared external proof, native Box/libbox bridges and joined selector, plus published Fastest/public-IP/DNS/Speed Lab caller-aware observation and adoption. Exact tracker and process capabilities are retained. | Via-entry/external comparison observer follow-on, other unclosed Tor/Server paths, complete device transitions and leak tests. Native side effects already entered must still join. |
+| Original #2–3, #5/#15, #200–224; captured lifecycle and actual path admission | Shared external proof, native Box/libbox bridges and joined selector, plus published Fastest/public-IP/DNS/Speed Lab/via-entry/external-comparison caller-aware observation and adoption. Exact tracker and process capabilities are retained. | Unclosed Tor Local/Server observer paths and Tor terminal mailbox ordering, complete device transitions and leak tests. Native side effects already entered must still join. |
 | Original #229–240; retained MTU owner and cancellation | Exact manager model and separate caller-context groups in `deploy/test_desktop_node_physical.py`; 23 native race verdicts. The expanded `deploy/test_desktop_mtu_client_context.py` has 51 exact test/subtest verdicts plus four package passes. | Physical-path measurement and readback for each applicable graph/device, not just configured interface size. |
 | Original #214–224 and August external entry/final additions | Shared imported compiler, mobile public host captures, separate CONNECT/packet REALITY native parser and encrypted reference registrations, and desktop proxy/WG/AWG entry adoption. | Complete hosted encrypted references and selected encrypted DNS, desktop OpenVPN entry, other graph families, Server/Compare in imported-entry direction and real devices. |
 | Original #160–168; selected DNS on the actual final path | Published desktop admission now performs the retained native exchange tied to the original session/configuration/path/reader/MTU. The OS-lookup substitution is rejected by a negative control. | Full native real-Box uncached query case cannot run under local Netlink restrictions; release and installed-path DNS acceptance remain mandatory. |
-| Complete profiles and map-first daily use | Published desktop imported proxy/WG/AWG controllers, native selectors, transactional Add/Load/Update/Delete and captured restore preserve the separate original node credentials and policy. | Native main/temporary Speed Lab catalog alignment is being corrected after actual CI. Temporary imported-entry Speed Lab selection, bounded desktop OpenVPN admission, full native package execution and broad all-platform UI/physical visual/accessibility acceptance remain separate. |
+| Complete profiles and map-first daily use | Published desktop imported proxy/WG/AWG controllers, native selectors, transactional Add/Load/Update/Delete and captured restore preserve the separate original node credentials and policy. Native fixtures now preserve the distinct actual main/profile and paired temporary catalogs. | Temporary imported-entry Speed Lab selection, bounded desktop OpenVPN admission, full native package execution and broad all-platform UI/physical visual/accessibility acceptance remain separate. |
 | Original native desktop delivery | UTF-8 build child contract, Darwin exact-prefix readback, exact desktop PT test inventories and original negative controls. | Current exact-SHA native jobs, complete packages/provenance and publication. Earlier releases do not close these. |
 | Original #285–291 and C6; production and deployment | Exact-SHA image-only/no-Docker-socket boundaries remain unchanged. | Current image/compose release and explicitly authorized private deployment; live ASUS forwarding and rollback checks. |
 | Full original + corrections + later requests | Original source scope and existing reconciled requirement/configuration documents remain authoritative. | All unclosed graph/platform, Methods, signing, off-LAN, provider, physical, visual and deployment evidence remains required; no completion percentage is asserted. |
@@ -121,9 +127,30 @@ reached and rejected its wrong destination before the fixture's stream counter;
 reported the actual outbound-map startup race corrected by `a74f2e53`.
 [Desktop runtime run 42407289670](https://github.com/Eabusham2/router-vpn/actions/runs/42407289670)
 failed native main/temporary-path catalog expectations after the desktop packet
-chooser expansion; its correction is not yet counted as published here.
+chooser expansion; `bdbd1fa7` publishes the fixture correction without claiming
+temporary imported-entry support.
 These observations do not establish a green current-SHA release. New exact-SHA
 native jobs must verify the repairs and every other required package/image gate.
+
+At `1a9e34d2`, [packet run 42408544975](https://github.com/Eabusham2/router-vpn/actions/runs/42408544975)
+passed all four encrypted traffic roots (WG, AWG, OpenVPN TCP and OpenVPN UDP),
+then failed eight selected-DNS wrong-name/trust assertions. The
+[CONNECT run 42408545124](https://github.com/Eabusham2/router-vpn/actions/runs/42408545124)
+passed HTTP and HTTPS encrypted traffic roots and failed four equivalent DNS
+assertions. `92678123` repairs the shared typed-error expectation. These are
+bounded reference milestones, not full native workflows or device acceptance.
+
+[Linux run 42407999232](https://github.com/Eabusham2/router-vpn/actions/runs/42407999232)
+also exposed a default-direct DNS fixture detour rejected by the pinned engine
+and a Tor comparison completion/retirement race. Both are active repairs at
+this checkpoint; no completed prerequisite or host OpenVPN admission is claimed.
+[MTU run 42409184533](https://github.com/Eabusham2/router-vpn/actions/runs/42409184533)
+reported the saved-selection cancellation response corrected by `d2ef8d5a`.
+
+The later exact-SHA query for `bab5ec8d` returned 28 runs: one successful,
+three running, eighteen queued and six pending. Authoritative
+[run 42411023434](https://github.com/Eabusham2/router-vpn/actions/runs/42411023434)
+was pending. This records the observed state, not a green release claim.
 
 The latest listed published prerelease at the earlier release query still targeted/tagged
 `745b3e41e5a78d734391976af9b7cd0637660a0b` with twelve assets (ten native
@@ -157,6 +184,9 @@ checks, not a claim that a log has been uploaded as a release asset.
 | `connect-refusal-evidence/old-route-counter.jsonl` | `9933babb8f32b2e61f48db423c3ecaeb85a03562985db26e6554c662080a490d` |
 | `packet-catalog-evidence/support-packet-tags.jsonl` | `d0f515b5f854fafcae9b753b91feea149cf9ef51d2d3ffb4bf8469cbe3666b41` |
 | `macos-image-fixture-integrated.log` | `d85e483bf02d0b8a972f673a3f75e5874ad07b909f535404abbcd6662993180b` |
+| `dns-refusal-evidence/support.jsonl` | `f4e7463b0fb8713fe48daa51354e10feccc5386b498d48c6434539e9f6cf553e` |
+| `dns-refusal-evidence/old-error-message.jsonl` | `3d7a9a021e6491b6020ae76707770c52deefdac1f0577e8a190e1c459437bbcd` |
+| `external-cohort-context-verified-race.jsonl` | `4ceb7517354f94bf63131bb4f5285e3b876a565a5f3eddf368c0ec85352720ac` |
 
 The complete CONNECT parser receipt binds 2,184 source inputs with digest
 `84680af58af2ecbf2465d2804f25425a9ceb8651bca4ec0fda89eb6000f412c2`,

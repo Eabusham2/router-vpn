@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 The [resumed evidence ledger](CONTINUATION-EVIDENCE-2026-11-07-RESUMED.md)
 records another original-source reconciliation and the published coherent
-changes through `1a9e34d2`. Windows child encoding, native MTU/test inventories,
+changes through `bab5ec8d`. Windows child encoding, native MTU/test inventories,
 Darwin route-prefix decoding, external proof execution and joined native
 selection now have focused executable evidence. The separate CONNECT/REALITY
 gate passes all 172 shared race verdicts and all 57 shared/actual-Android/
@@ -40,12 +40,28 @@ retain documented joined boundaries. `9dde1b50` repairs the CONNECT wrong-route
 the packet fixture's outbound map before receive workers start. `1a9e34d2`
 uses an explicit native exec fixture for the macOS image-generation test,
 retaining its time bounds and strengthening identity checks. Actual native
-CI must still verify these changes. The newly discovered native main/temporary
-Speed Lab catalog mismatch is an active correction, not a published fix here.
+CI must still verify these changes. `bdbd1fa7` repairs the native fixture catalog
+mismatch while preserving the actual 24 main/profile and 19 paired temporary
+choices. Temporary imported-entry Speed Lab remains a separate unfinished feature.
+
+`58129b29`, `3c4630aa` and `bab5ec8d` extend caller-bound admission through
+via-entry measurements, cohort trackers and shipping external comparisons.
+The integrated external comparison gate passes all 33 focused race verdicts,
+including original-process drainage and exact tracker/private-source adoption.
+Other Tor Local/Server observation and terminal-mailbox ordering work remains.
+`d2ef8d5a` corrects cancelled saved-selection HTTP status without changing
+historical measurements. `92678123` corrects selected-DNS certificate refusal
+checks using the actual typed TLS cause and captured certificate chain; seven
+real native support verdicts and the old-behavior negative control pass.
 
 The encrypted CONNECT reference is implemented and registered, but local
 execution stopped at the required physical-interface guard because Netlink was
-denied. Diagnostic changes for native PQ admission and Darwin creator timeouts
+denied. A later hosted run at `1a9e34d2` passed the HTTP/HTTPS CONNECT and all
+four packet-entry encrypted traffic roots, then reached the selected-DNS
+assertions repaired by `92678123`. Full hosted reruns remain mandatory. The
+real uncached-DNS fixture and OpenVPN observation lifetime are under active
+repair/review before desktop OpenVPN host admission. Diagnostic changes for
+native PQ admission and Darwin creator timeouts
 do not themselves close the underlying failures. Current exact-SHA release,
 remaining graph/platform features and physical/private acceptance remain
 distinct. The passages below retain their dated checkpoint meaning.
