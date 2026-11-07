@@ -70,7 +70,7 @@ func waitProfileLatencySaveLock(t *testing.T, done <-chan struct{}) {
 					}
 					// The handler must directly own the contended Lock frame;
 					// a mutex inside DialContext is still a measurement, not a save.
-					if (strings.HasSuffix(frame.Function, ".(*app).profileLatency") || strings.HasSuffix(frame.Function, ".(*app).controllerClosing") || strings.HasSuffix(frame.Function, ".(*app).beginProtectionAwareMutationOperation")) && (contextAdmission || previous == "sync.(*Mutex).Lock" || previous == "internal/sync.(*Mutex).Lock" || previous == "internal/sync.(*Mutex).lockSlow") {
+					if (strings.HasSuffix(frame.Function, ".(*app).profileLatencyWithNetwork") || strings.HasSuffix(frame.Function, ".(*app).controllerClosing") || strings.HasSuffix(frame.Function, ".(*app).beginProtectionAwareMutationOperation")) && (contextAdmission || previous == "sync.(*Mutex).Lock" || previous == "internal/sync.(*Mutex).Lock" || previous == "internal/sync.(*Mutex).lockSlow") {
 						return
 					}
 					if !more {

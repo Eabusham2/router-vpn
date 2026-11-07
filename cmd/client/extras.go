@@ -68,6 +68,10 @@ type latencyResponse struct {
 }
 
 func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
+	a.profileLatencyWithNetwork(w, r, physicalNetworkIdentityContext)
+}
+
+func (a *app) profileLatencyWithNetwork(w http.ResponseWriter, r *http.Request, networkIdentity func(context.Context) (string, error)) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -89,12 +93,36 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "durable node latency request was cancelled", http.StatusRequestTimeout)
 		return
 	}
-	networkAtStart := physicalNetworkIdentity()
-	if networkAtStart == "" {
+	rejectObservation := func(err error) {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			http.Error(w, "durable node latency request was cancelled", http.StatusRequestTimeout)
+		} else {
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
+	}
+	networkAtStart, networkErr := networkIdentity(ctx)
+	if ctx.Err() != nil {
+		rejectObservation(ctx.Err())
+		return
+	}
+	if networkErr != nil || networkAtStart == "" {
 		http.Error(w, "physical network metadata unavailable", http.StatusConflict)
 		return
 	}
-	a.mu.Lock()
+	networkCurrent := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		observed, err := networkIdentity(ctx)
+		if err != nil || observed != networkAtStart {
+			return errors.Join(err, errors.New("physical network metadata changed during direct benchmark"))
+		}
+		return ctx.Err()
+	}
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		rejectObservation(err)
+		return
+	}
 	if profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()
 		http.Error(w, "disconnect before direct node benchmark", http.StatusConflict)
@@ -105,7 +133,21 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 	pathAtStart := activeTelemetryPathToken(a.state)
 	selectionAtStart := a.profiles.SelectedID
 	a.mu.Unlock()
-	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
+	tracker := sessionTrackerFor(a)
+	if err := desktopnetwork.LockContext(ctx, &tracker.mu); err != nil {
+		rejectObservation(err)
+		return
+	}
+	sessionAtStart := ""
+	if tracker.session != nil {
+		sessionAtStart = tracker.session.ID
+	}
+	registered, retained := sessionTrackers.Load(a)
+	tracker.mu.Unlock()
+	if !retained || registered != tracker || tracker.a != a {
+		rejectObservation(errors.New("VPN session tracker changed during direct benchmark"))
+		return
+	}
 	if !ok {
 		http.Error(w, "unknown router profile", http.StatusNotFound)
 		return
@@ -134,8 +176,8 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 	failed := 0
 	dialer := &net.Dialer{Timeout: 1500 * time.Millisecond}
 	for i := 0; i < q.Samples; i++ {
-		if physicalNetworkIdentity() != networkAtStart {
-			http.Error(w, "physical network metadata changed during direct benchmark", http.StatusConflict)
+		if err := networkCurrent(); err != nil {
+			rejectObservation(err)
 			return
 		}
 		started := time.Now()
@@ -196,8 +238,8 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 		Complete:    failed == 0 && len(values) == q.Samples,
 	}
 
-	if physicalNetworkIdentity() != networkAtStart {
-		http.Error(w, "physical network metadata changed during direct benchmark", http.StatusConflict)
+	if err := networkCurrent(); err != nil {
+		rejectObservation(err)
 		return
 	}
 	release, guardErr := a.beginMutationOperation(r)
@@ -210,15 +252,25 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	tracker := sessionTrackerFor(a)
-	tracker.mu.Lock()
+	if err := networkCurrent(); err != nil {
+		rejectObservation(err)
+		return
+	}
+	if err := desktopnetwork.LockContext(ctx, &tracker.mu); err != nil {
+		rejectObservation(err)
+		return
+	}
 	defer tracker.mu.Unlock()
 	currentSessionID := ""
 	if tracker.session != nil {
 		currentSessionID = tracker.session.ID
 	}
-	a.mu.Lock()
-	if currentSessionID != sessionAtStart || a.profiles.SelectedID != selectionAtStart || activeTelemetryPathToken(a.state) != pathAtStart || profileSettingsBusy(a.state.Connected, a.state.Phase) {
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		rejectObservation(err)
+		return
+	}
+	registered, retained = sessionTrackers.Load(a)
+	if !retained || registered != tracker || tracker.a != a || currentSessionID != sessionAtStart || a.profiles.SelectedID != selectionAtStart || activeTelemetryPathToken(a.state) != pathAtStart || profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()
 		http.Error(w, "VPN or selection changed during direct benchmark", http.StatusConflict)
 		return
