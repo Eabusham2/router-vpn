@@ -23,7 +23,7 @@ func TestMultihopExecutionShippingOwners(t *testing.T) {
 		"ios/RouterVPN/App/IOSMultihopView.swift":                                                  {"multihopExecution", "server", "auto"},
 		"ios/RouterVPN/App/IOSConnectionProfilesView.swift":                                        {"multihopExecution", "forKey: .multihopExecution", "profile.multihopExecution = prefs.multihopExecution"},
 		"deploy/prepare-mobile-multihop.py":                                                        {"routechoice", "multihoprelay", "mobilemultihop"},
-		"mobile/routervpn_multihop_bridge.go.tmpl":                                                 {"SelectOutbound(tag)", "DialContext(ctx", "routerCapturedMultihopEngine(ctx, server)", "server.StartedService.RouterVPNInstanceContext(ctx)", "engine.IdentityContext(ctx)", "instance: instance.Box()", "context.WithTimeout(context.Background(), routerMultihopObservationTimeout)"},
+		"mobile/routervpn_multihop_bridge.go.tmpl":                                                 {"return e.SelectContext(ctx, tag)", "selector.RouterVPNSelectOutboundContext(ctx, tag, current)", "original != selector", "DialContext(ctx", "routerCapturedMultihopEngine(ctx, server)", "server.StartedService.RouterVPNInstanceContext(ctx)", "engine.IdentityContext(ctx)", "instance: instance.Box()", "context.WithTimeout(context.Background(), routerMultihopObservationTimeout)"},
 		"mobile/daemon/instance_context.go.tmpl":                                                   {"RouterVPNInstanceContext(ctx context.Context)", "adapter.RouterVPNRLockContext(ctx, &s.serviceAccess)", "defer s.serviceAccess.RUnlock()", "return s.instance, ctx.Err()"},
 		"server/scripts/provision-multihop-relays.py":                                              {"registry_lock", "check-multihop-registry", "native_wireguard"},
 	}
@@ -39,6 +39,9 @@ func TestMultihopExecutionShippingOwners(t *testing.T) {
 		}
 		if file == "mobile/routervpn_multihop_bridge.go.tmpl" && strings.Contains(string(body), "StartedService.Instance()") {
 			t.Error("native multihop observation must use its original bounded context, not the uncancellable instance getter")
+		}
+		if file == "mobile/routervpn_multihop_bridge.go.tmpl" && strings.Contains(string(body), "selector.SelectOutbound(") {
+			t.Error("native multihop selection must retain its original caller and selector owner through the joined native commit")
 		}
 	}
 }
