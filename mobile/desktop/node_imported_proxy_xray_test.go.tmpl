@@ -1,0 +1,879 @@
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	QUIC "github.com/sagernet/quic-go"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	HY "github.com/sagernet/sing-box/protocol/hysteria2"
+	XR "github.com/sagernet/sing-box/protocol/routervpnxray"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
+)
+
+// This separate reference retains the original SS2022 or QUIC/TLS entry,
+// independent Start Layers and the actual paired REALITY/Vision engine. Its
+// explicit test address boundary grants no OS tunnel or host Connected state.
+func TestRouterVPNImportedShadowsocksRealityVisionNativeTraffic(t *testing.T) {
+	desktopImportedProxyXrayCases(t, "shadowsocks")
+}
+func TestRouterVPNImportedHysteria2RealityVisionNativeTraffic(t *testing.T) {
+	desktopImportedProxyXrayCases(t, "hysteria2")
+}
+
+func desktopImportedProxyXrayCases(t *testing.T, kind string) {
+	for _, first := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		for _, final := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(first+"--"+final, func(t *testing.T) {
+				original := desktopImportedProxyXraySource(t, kind+"--reality-vision--"+first+"--"+final+".json")
+				faults := []string{"success", "cancel", "close-owner"}
+				if first == "off" && final == "off" {
+					faults = append(faults, "entry-auth", "wrong-entry-ip", "final-reality-key", "final-user", "final-route", "dns-route", "final-identity", "final-token")
+					if kind == "hysteria2" {
+						faults = append(faults, "entry-sni", "entry-trust")
+					}
+				}
+				if first != "off" {
+					faults = append(faults, "entry-layer-key")
+				}
+				if first == "aes-256-gcm+xor-whitening" {
+					faults = append(faults, "entry-layer-whitening")
+				}
+				if final != "off" {
+					faults = append(faults, "final-layer-key")
+				}
+				if final == "aes-256-gcm+xor-whitening" {
+					faults = append(faults, "final-layer-whitening")
+				}
+				for _, fault := range faults {
+					t.Run(fault, func(t *testing.T) { desktopImportedProxyXrayTraffic(t, original, kind, "", fault) })
+				}
+			})
+		}
+	}
+}
+func TestRouterVPNImportedShadowsocksRealityVisionMethods(t *testing.T) {
+	original := desktopImportedProxyXraySource(t, "shadowsocks--reality-vision--off--off.json")
+	for _, method := range []string{"2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"} {
+		t.Run(method, func(t *testing.T) {
+			for _, fault := range []string{"success", "entry-auth"} {
+				t.Run(fault, func(t *testing.T) { desktopImportedProxyXrayTraffic(t, original, "shadowsocks", method, fault) })
+			}
+		})
+	}
+}
+func desktopImportedProxyXraySource(t *testing.T, name string) []string {
+	t.Helper()
+	directory := os.Getenv("ROUTERVPN_IMPORTED_PROXY_XRAY_FIXTURES")
+	if directory == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_PROXY_XRAY_FIXTURES") == "1" {
+			t.Fatal("required original proxy REALITY captures absent")
+		}
+		t.Skip("native reference gate supplies captured proxy REALITY sources")
+	}
+	path := filepath.Join(directory, name)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+		t.Fatal("original proxy REALITY capture is not a bounded regular file", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original []string
+	if json.Unmarshal(raw, &original) != nil || len(original) != 9 {
+		t.Fatal("original proxy REALITY capture lost its nine-string receipt")
+	}
+	plan, err := mobilemultihop.NewImportedEntry(original[0], original[1], original[2], original[3], original[4], original[5], original[6])
+	if err != nil || plan.SourceSHA256() != original[7] || plan.Config() != original[8] || plan.Healthy() {
+		t.Fatal("original proxy REALITY capture changed", err)
+	}
+	return original
+}
+
+func desktopImportedProxyXrayTraffic(t *testing.T, original []string, kind, method, fault string) {
+	t.Helper()
+	args := append([]string(nil), original[:7]...)
+	entryGraph := desktopImportedSOCKSXrayObject(t, args[0])
+	capture := desktopImportedSOCKSXrayObject(t, args[1])
+	profile := desktopImportedSOCKSXrayObject(t, args[4])
+	expectedIP, ok := capture["expected_public_ip"].(string)
+	entryLayer, _ := capture["profile"].(map[string]any)["start_layer"].(string)
+	finalLayer, _ := profile["start_layer"].(string)
+	if entryLayer == "off" {
+		entryLayer = ""
+	}
+	if finalLayer == "off" {
+		finalLayer = ""
+	}
+	validLayer := func(mode string) bool {
+		return mode == "" || mode == "aes-256-gcm" || mode == "aes-256-gcm+xor-whitening"
+	}
+	if !ok || expectedIP != "203.0.113.88" || args[2] != "reality-vision" || (args[5] == "") != (finalLayer == "") || args[6] != "" ||
+		profile["multihop_execution"] != "local" || !validLayer(entryLayer) || !validLayer(finalLayer) ||
+		profile["router_api"] != "http://10.77.0.1:8787" {
+		t.Fatal("imported proxy REALITY reference lost its exact Local independent-layer source")
+	}
+	token, tokenOK := profile["api_token"].(string)
+	node, nodeOK := profile["node_proof_id"].(string)
+	if !tokenOK || token == "" || !nodeOK || len(node) != 64 {
+		t.Fatal("imported proxy REALITY reference has no independent paired proof authority")
+	}
+
+	var publicRequests, dnsRequests, healthRequests, healthAuthorized atomic.Int64
+	var finalServer *desktopNodeLayerServer
+	var entry desktopExternalInstalledSSPeer
+	var entryRoute *desktopImportedProxyXrayRoutes
+	var entryCarrier, finalCarrier *desktopExternalInstalledSSPeer
+	var lower *desktopImportedProxyXrayPhysical
+	var retiredEntryCalls uint32
+	retirementChecked := false
+	completed := false
+	// Registered first so every original peer/process/listener has joined before
+	// these independent arrival counters are used as a negative witness.
+	t.Cleanup(func() {
+		if !completed {
+			return
+		}
+		observed := entry.stats()
+		if retirementChecked && entryRoute.calls.Load() != retiredEntryCalls {
+			t.Error("retired final owner opened an authenticated entry stream before original cleanup joined")
+		}
+		entryRejected := strings.HasPrefix(fault, "entry-layer-")
+		if lower.calls.Load() == 0 || observed.Packets != 0 ||
+			kind == "shadowsocks" && (observed.PhysicalUDP != 0 || !entryRejected && observed.PhysicalTCP == 0) ||
+			kind == "hysteria2" && (observed.PhysicalTCP != 0 || !entryRejected && observed.PhysicalUDP == 0) {
+			t.Error("imported proxy REALITY changed the captured TCP or QUIC physical owner", observed)
+		}
+		earlyFailure := fault == "entry-auth" || fault == "entry-sni" || fault == "entry-trust" || fault == "wrong-entry-ip" || strings.HasPrefix(fault, "entry-layer-")
+		routeFailure := fault == "final-route" || strings.HasPrefix(fault, "final-layer-")
+		cipherFailure := fault == "final-reality-key" || fault == "final-user"
+		if earlyFailure || routeFailure {
+			if finalServer.rawTCP.Load() != 0 || dnsRequests.Load() != 0 || healthRequests.Load() != 0 {
+				t.Error("failed original entry reached the paired Xray proof path")
+			}
+		} else if finalServer.rawTCP.Load() == 0 {
+			t.Error("imported proxy REALITY negative did not reach the original ciphertext peer")
+		}
+		if cipherFailure && (dnsRequests.Load() != 0 || healthRequests.Load() != 0 || finalServer.plainTCP.Load() != 0 || finalServer.plainUDP.Load() != 0) {
+			t.Error("foreign original REALITY credential gained authenticated final payload")
+		}
+		if fault == "entry-auth" && (kind == "shadowsocks" && observed.AuthTCP == 0 || kind == "hysteria2" && observed.AuthUDP == 0) {
+			t.Error("imported proxy REALITY negative has no actual transport authentication rejection")
+		}
+		if fault == "entry-auth" || fault == "entry-sni" || fault == "entry-trust" || strings.HasPrefix(fault, "entry-layer-") {
+			if publicRequests.Load() != 0 {
+				t.Error("rejected original proxy authentication reached the public proof")
+			}
+		} else if publicRequests.Load() != 1 {
+			t.Error("imported proxy REALITY omitted or repeated its independent public proof")
+		}
+		if fault == "dns-route" && (dnsRequests.Load() != 0 || healthRequests.Load() != 0) {
+			t.Error("uncaptured resolver route reached Home DNS or final proof")
+		}
+		if fault == "final-identity" || fault == "final-token" {
+			if dnsRequests.Load() != 1 || healthRequests.Load() != 1 {
+				t.Error("paired proof rejection did not reach the actual selected DNS and health listener")
+			}
+			wantAuth := int64(1)
+			if fault == "final-token" {
+				wantAuth = 0
+			}
+			if healthAuthorized.Load() != wantAuth {
+				t.Error("paired proof negative changed independent token acceptance")
+			}
+		}
+		for _, role := range []struct {
+			name string
+			peer *desktopExternalInstalledSSPeer
+		}{{"entry", entryCarrier}, {"final", finalCarrier}} {
+			if role.peer == nil {
+				continue
+			}
+			stats := role.peer.stats()
+			failed := strings.HasPrefix(fault, role.name+"-layer-")
+			quicLayer := role.name == "entry" && kind == "hysteria2"
+			if quicLayer && (stats.PhysicalTCP != 0 || stats.Streams != 0) || !quicLayer && (stats.PhysicalUDP != 0 || stats.Packets != 0) {
+				t.Error("imported proxy REALITY layer changed its captured transport", role.name, stats)
+			}
+			if failed {
+				if quicLayer && (stats.AuthUDP == 0 || stats.Packets != 0) || !quicLayer && (stats.AuthTCP == 0 || stats.Streams != 0) {
+					t.Error("imported proxy REALITY independent layer lacks actual AEAD rejection", role.name, stats)
+				}
+			} else if !earlyFailure && (quicLayer && (stats.PhysicalUDP == 0 || stats.Packets == 0) || !quicLayer && (stats.PhysicalTCP == 0 || stats.Streams == 0)) {
+				t.Error("imported proxy REALITY skipped an independently captured layer", role.name, stats)
+			}
+		}
+		if fault == "success" || fault == "cancel" || fault == "close-owner" {
+			if dnsRequests.Load() != 1 || healthRequests.Load() != 1 || healthAuthorized.Load() != 1 ||
+				finalServer.plainTCP.Load() == 0 || finalServer.plainUDP.Load() == 0 || observed.Streams < 2 {
+				t.Error("imported proxy REALITY omitted actual final traffic, selected DNS or a distinct proof")
+			}
+		}
+	})
+
+	paired := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/health" || r.Host != "10.77.0.1:8787" {
+			http.Error(w, "foreign", http.StatusForbidden)
+			return
+		}
+		healthRequests.Add(1)
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			http.Error(w, "foreign", http.StatusForbidden)
+			return
+		}
+		healthAuthorized.Add(1)
+		replyNode := node
+		if fault == "final-identity" {
+			replyNode = strings.Repeat("f", 64)
+			if replyNode == node {
+				replyNode = strings.Repeat("e", 64)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": replyNode, "proof": "router-vpn-private-agent-v1"})
+	}))
+	t.Cleanup(paired.Close)
+	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsServer := &dns.Server{PacketConn: packet, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, query *dns.Msg) {
+		reply := new(dns.Msg)
+		reply.SetReply(query)
+		if len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != dns.TypeA {
+			reply.Rcode = dns.RcodeRefused
+		} else {
+			dnsRequests.Add(1)
+			reply.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 1}, A: net.ParseIP("93.184.216.34")}}
+		}
+		_ = w.WriteMsg(reply)
+	})}
+	dnsDone := make(chan error, 1)
+	go func() { dnsDone <- dnsServer.ActivateAndServe() }()
+	t.Cleanup(func() {
+		_ = dnsServer.Shutdown()
+		_ = packet.Close()
+		select {
+		case <-dnsDone:
+		case <-time.After(3 * time.Second):
+			t.Error("imported proxy REALITY original DNS listener did not join")
+		}
+	})
+	_, ip := desktopNodePeerInterface(t)
+	var files string
+	finalServer, files = startDesktopNodeXrayServerWithProof(t, "reality-vision", ip, packet.LocalAddr().String(), paired.Listener.Addr().String())
+	finalTarget := finalServer.tcp.Addr().String()
+	if fault == "final-reality-key" {
+		files = desktopNodeXrayAssets(t, files, "xray-reality-key")
+	} else if fault == "final-user" {
+		files = desktopNodeXrayAssets(t, files, "xray-user")
+	}
+	profile["endpoint"] = ip.String()
+	if finalLayer != "" {
+		var assets map[string]string
+		if json.Unmarshal([]byte(args[5]), &assets) != nil {
+			t.Fatal("missing original final layer assets")
+		}
+		raw, err := base64.StdEncoding.Strict().DecodeString(assets["sing-box.json"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		layerGraph := desktopImportedSOCKSXrayObject(t, string(raw))
+		layerGraph["outbounds"].([]any)[0].(map[string]any)["server"] = ip.String()
+		assets["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(desktopImportedSOCKSXrayJSON(t, layerGraph)))
+		args[5] = desktopImportedSOCKSXrayJSON(t, assets)
+	}
+	if fault == "final-route" {
+		var assets map[string]string
+		if json.Unmarshal([]byte(files), &assets) != nil {
+			t.Fatal("Xray original assets changed")
+		}
+		raw, err := base64.StdEncoding.Strict().DecodeString(assets["xray.json"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		graph := desktopImportedSOCKSXrayObject(t, string(raw))
+		graph["outbounds"].([]any)[0].(map[string]any)["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["address"] = "198.51.100.240"
+		assets["xray.json"] = base64.StdEncoding.EncodeToString([]byte(desktopImportedSOCKSXrayJSON(t, graph)))
+		files = desktopImportedSOCKSXrayJSON(t, assets)
+		profile["endpoint"] = "198.51.100.240"
+	}
+	if fault == "dns-route" {
+		profile["adguard_ipv4"] = "192.168.50.134"
+	}
+	if fault == "final-token" {
+		profile["api_token"] = token + "-foreign"
+	}
+	originalEntry := capture["profile"].(map[string]any)["external"].(map[string]any)[kind].(map[string]any)
+	originalFirst := entryGraph["outbounds"].([]any)[0].(map[string]any)
+	password, passwordOK := originalEntry["password"].(string)
+	if !passwordOK || password == "" || capture["protocol"] != kind || originalFirst["type"] != kind {
+		t.Fatal("imported proxy REALITY lost independent original transport credentials")
+	}
+	if method != "" {
+		if kind != "shadowsocks" || !desktopSS2022Credentials(method, desktopSSReferenceKey(method, 'm')) {
+			t.Fatal("uncaptured native Shadowsocks method")
+		}
+		password = desktopSSReferenceKey(method, 'm')
+		originalEntry["method"], originalFirst["method"] = method, method
+		originalEntry["password"], originalFirst["password"] = password, password
+	}
+	if fault == "entry-auth" {
+		foreign := "foreign-captured-hysteria-password"
+		if kind == "shadowsocks" {
+			foreign = desktopSSReferenceKey(originalEntry["method"].(string), 'z')
+		}
+		originalFirst["password"], originalEntry["password"] = foreign, foreign
+	}
+	if fault == "entry-sni" {
+		if kind != "hysteria2" {
+			t.Fatal("TLS fault selected for a non-TLS entry")
+		}
+		originalFirst["tls"].(map[string]any)["server_name"] = "foreign-final.example"
+		originalEntry["tls_server_name"] = "foreign-final.example"
+	}
+	args[0], args[1], args[3], args[4] = desktopImportedSOCKSXrayJSON(t, entryGraph), desktopImportedSOCKSXrayJSON(t, capture), files, desktopImportedSOCKSXrayJSON(t, profile)
+	plan, err := mobilemultihop.NewImportedEntry(args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+	if err != nil {
+		t.Fatal("original imported proxy REALITY reference sources did not compile", err)
+	}
+	graph := desktopImportedSOCKSXrayObject(t, plan.Config())
+	var firstRaw, finalRaw map[string]any
+	for _, value := range graph["outbounds"].([]any) {
+		row := value.(map[string]any)
+		if row["tag"] == "entry-wg" {
+			firstRaw = row
+		} else if row["tag"] == mobilemultihop.LocalTag {
+			finalRaw = row
+		}
+	}
+	byTag := desktopImportedSOCKSGraph(graph)
+	var entryOuter, finalOuter map[string]any
+	if firstRaw == nil || finalRaw == nil {
+		t.Fatal("imported proxy REALITY reference lost original roles")
+	}
+	if entryLayer != "" {
+		tag, _ := firstRaw["detour"].(string)
+		entryOuter = byTag[tag]
+		if entryOuter == nil || entryOuter["detour"] != nil || firstRaw["server"] != "10.93.0.1" {
+			t.Fatal("imported proxy REALITY lost independently provisioned entry layer")
+		}
+	} else if firstRaw["detour"] != nil {
+		t.Fatal("imported proxy REALITY Off entry acquired a layer")
+	}
+	finalDetour := "entry-wg"
+	if finalLayer != "" {
+		finalDetour = mobilemultihop.NativeStartLayerTag
+		finalOuter = byTag[finalDetour]
+		if finalOuter == nil || finalOuter["detour"] != "entry-wg" {
+			t.Fatal("imported proxy REALITY lost independently provisioned final layer")
+		}
+	}
+	if firstRaw["type"] != kind || finalRaw["type"] != "routervpn-xray" || finalRaw["mode"] != "reality-vision" || finalRaw["detour"] != finalDetour || len(finalRaw) != 5 {
+		t.Fatal("imported proxy REALITY reference lost its exact native detour")
+	}
+	var meta mobilemultihop.Metadata
+	if json.Unmarshal([]byte(plan.Metadata()), &meta) != nil || meta.EntryKind != "external" || meta.EntryMode != kind ||
+		meta.ExitMode != "reality-vision" || meta.EntryAPI != "" || meta.EntryToken != "" || meta.ExitAPI != "http://10.77.0.1:8787" || meta.ExitNodeID != node {
+		t.Fatal("imported proxy REALITY reference changed captured proof ownership")
+	}
+	dnsOptions := graph["dns"].(map[string]any)
+	var selected map[string]any
+	for _, raw := range dnsOptions["servers"].([]any) {
+		server := raw.(map[string]any)
+		if server["tag"] == dnsOptions["final"] {
+			selected = server
+		}
+	}
+	wantedDNS := "192.168.50.133"
+	if fault == "dns-route" {
+		wantedDNS = "192.168.50.134"
+	}
+	if selected == nil || selected["type"] != "udp" || selected["server"] != wantedDNS || selected["detour"] != "proxy" {
+		t.Fatal("imported proxy REALITY reference changed the selected Home resolver")
+	}
+	if port, present := selected["server_port"]; present && port != float64(53) {
+		t.Fatal("imported proxy REALITY reference changed the selected DNS port")
+	}
+
+	certificate, ca := desktopExternalInstalledPeerCertificate(t, false)
+	public := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.Host != "1.1.1.1" || r.URL.Path != "/cdn-cgi/trace" {
+			http.Error(w, "foreign", http.StatusForbidden)
+			return
+		}
+		publicRequests.Add(1)
+		answer := expectedIP
+		if fault == "wrong-entry-ip" {
+			answer = "203.0.113.89"
+		}
+		_, _ = fmt.Fprintln(w, "ip="+answer)
+	}))
+	public.TLS = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
+	public.StartTLS()
+	t.Cleanup(public.Close)
+	finalPhysical := finalTarget
+	if finalOuter != nil {
+		_, port, err := net.SplitHostPort(finalTarget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		layerCtx, layerCancel := context.WithCancel(context.Background())
+		server := &desktopNodeLayerServer{ctx: layerCtx, cancel: layerCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: net.JoinHostPort("10.77.0.1", port), Physical: finalTarget}}}
+		layerFault := ""
+		if strings.HasPrefix(fault, "final-layer-") {
+			layerFault = fault
+		}
+		peer := desktopImportedSOCKSLayerProvider(t, server, finalOuter, layerFault)
+		finalCarrier = &peer
+		t.Cleanup(peer.close)
+		finalTarget, finalPhysical = desktopImportedSOCKSAddress(finalOuter), peer.address
+	}
+	entryCtx, entryCancel := context.WithCancel(context.Background())
+	entryServer := &desktopNodeLayerServer{ctx: entryCtx, cancel: entryCancel, connections: map[io.Closer]bool{},
+		routes: []desktopNodeLayerRoute{
+			{Network: "tcp", Destination: finalTarget, Physical: finalPhysical},
+			{Network: "tcp", Destination: "1.1.1.1:443", Physical: public.Listener.Addr().String()},
+		}}
+	entryRoute = &desktopImportedProxyXrayRoutes{desktopImportedCONNECTRouter: desktopImportedCONNECTRouter{server: entryServer}}
+	entryServer.streamRouter = entryRoute
+	entry = desktopStartImportedProxyXrayProvider(t, kind, entryServer, firstRaw, password, certificate, fault)
+	physicalRaw, entryPhysical := firstRaw, entry.address
+	if entryOuter != nil {
+		layerCtx, layerCancel := context.WithCancel(context.Background())
+		server := &desktopNodeLayerServer{ctx: layerCtx, cancel: layerCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: map[string]string{"shadowsocks": "tcp", "hysteria2": "udp"}[kind], Destination: desktopImportedSOCKSAddress(firstRaw), Physical: entry.address}}}
+		layerFault := ""
+		if strings.HasPrefix(fault, "entry-layer-") {
+			layerFault = fault
+		}
+		peer := desktopImportedSOCKSLayerProvider(t, server, entryOuter, layerFault)
+		entryCarrier = &peer
+		t.Cleanup(peer.close)
+		physicalRaw, entryPhysical = entryOuter, peer.address
+	}
+	entryTarget := M.ParseSocksaddr(desktopImportedSOCKSAddress(physicalRaw))
+	physicalNetwork := map[string]string{"shadowsocks": "tcp", "hysteria2": "udp"}[kind]
+	lower = newDesktopImportedProxyXrayPhysical(entryTarget, entryPhysical, physicalNetwork)
+	t.Cleanup(func() {
+		if err := lower.Close(); err != nil {
+			t.Error("imported proxy REALITY original physical cleanup failed", err)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	t.Cleanup(cancel)
+	nativeCtx, nativeCancel := context.WithCancel(ctx)
+	t.Cleanup(nativeCancel)
+	manager := &desktopImportedSOCKSXrayManager{owners: map[string]adapter.Outbound{lower.Tag(): lower}}
+	owned := service.ContextWith[adapter.OutboundManager](nativeCtx, manager)
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(ca)) {
+		t.Fatal("imported proxy REALITY public proof trust missing")
+	}
+	if kind == "hysteria2" {
+		owned = service.ContextWith[adapter.CertificateStore](owned, &desktopImportedHysteriaTrust{roots: roots})
+	}
+	// Only the explicit fixture physical edge is rebound. The captured graph,
+	// independent credentials and the final entry-wg detour stay intact.
+	firstCopy := make(map[string]any, len(firstRaw)+1)
+	for key, value := range firstRaw {
+		firstCopy[key] = value
+	}
+	if entryOuter == nil {
+		firstCopy["detour"] = lower.Tag()
+	} else {
+		copy := make(map[string]any, len(entryOuter)+1)
+		for key, value := range entryOuter {
+			copy[key] = value
+		}
+		copy["detour"] = lower.Tag()
+		manager.owners[entryOuter["tag"].(string)] = desktopImportedSOCKSNativeLayer(t, owned, copy)
+	}
+	first := desktopImportedProxyXrayOutbound(t, owned, firstCopy)
+	var firstOnce sync.Once
+	var firstCloseErr error
+	closeFirst := func() error { firstOnce.Do(func() { firstCloseErr = first.(io.Closer).Close() }); return firstCloseErr }
+	t.Cleanup(func() {
+		if err := closeFirst(); err != nil {
+			t.Error("imported proxy REALITY original entry did not join", err)
+		}
+	})
+	manager.owners["entry-wg"] = first
+	if finalOuter != nil {
+		manager.owners[mobilemultihop.NativeStartLayerTag] = desktopImportedSOCKSNativeLayer(t, owned, finalOuter)
+	}
+	var finalOptions XR.Options
+	if json.Unmarshal([]byte(desktopImportedSOCKSXrayJSON(t, finalRaw)), &finalOptions) != nil {
+		t.Fatal("captured Xray options did not decode")
+	}
+	final, err := XR.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), mobilemultihop.LocalTag, finalOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := final.(io.Closer).Close(); err != nil {
+			t.Error("imported proxy REALITY original Xray cleanup failed", err)
+		}
+	})
+	if err := final.(adapter.Lifecycle).Start(adapter.StartStateStart); err != nil {
+		t.Fatal("actual captured Xray instance did not start", err)
+	}
+
+	publicOK, err := desktopImportedSOCKSXrayPublic(ctx, first, roots, expectedIP)
+	earlyFailure := fault == "entry-auth" || fault == "entry-sni" || fault == "entry-trust" || fault == "wrong-entry-ip" || strings.HasPrefix(fault, "entry-layer-")
+	if publicOK == earlyFailure {
+		t.Fatal("imported proxy REALITY independent entry proof changed", err)
+	}
+	if fault == "entry-sni" || fault == "entry-trust" {
+		var original *QUIC.TransportError
+		marker := "x509: certificate signed by unknown authority"
+		if fault == "entry-sni" {
+			marker = "x509: certificate is valid for captured-external.example, not foreign-final.example"
+		}
+		if !errors.As(err, &original) || original.Remote || !strings.Contains(original.ErrorMessage, "tls: failed to verify certificate: "+marker) {
+			t.Fatal("imported QUIC TLS refusal has no actual certificate cause", err)
+		}
+	}
+	beforeFinal := entryRoute.calls.Load()
+	dnsOK, proofOK := false, false
+	if publicOK {
+		dnsOK, err = desktopImportedSOCKSXrayDNS(ctx, final, net.JoinHostPort(wantedDNS, "53"))
+		wantDNS := fault != "final-reality-key" && fault != "final-user" && fault != "final-route" && fault != "dns-route" && !strings.HasPrefix(fault, "final-layer-")
+		if dnsOK != wantDNS {
+			t.Fatal("imported proxy REALITY selected DNS did not follow its original authenticated chain", err)
+		}
+		if dnsOK {
+			proofOK, err = desktopImportedSOCKSXrayProof(ctx, final, meta.ExitAPI, meta.ExitNodeID, meta.ExitToken)
+			if proofOK != (fault != "final-identity" && fault != "final-token") {
+				t.Fatal("imported proxy REALITY independent paired proof changed", err)
+			}
+		}
+	}
+	success := fault == "success" || fault == "cancel" || fault == "close-owner"
+	if publicOK && entryRoute.calls.Load() <= beforeFinal {
+		t.Fatal("final REALITY traffic bypassed the original authenticated proxy entry")
+	}
+	if (publicOK && dnsOK && proofOK) != success || plan.Healthy() {
+		t.Fatal("imported proxy REALITY reference confused proof results with unstarted host readiness")
+	}
+	if success {
+		for _, network := range []string{"tcp", "udp"} {
+			if err := desktopImportedSOCKSXrayEcho(ctx, final, network); err != nil {
+				t.Fatal("actual imported proxy REALITY final payload failed", network, err)
+			}
+		}
+	}
+	if fault == "cancel" || fault == "close-owner" {
+		held, err := final.DialContext(ctx, "tcp", M.ParseSocksaddr("192.0.2.99:9999"))
+		if err != nil {
+			t.Fatal("imported proxy REALITY original held stream did not open", err)
+		}
+		t.Cleanup(func() { _ = held.Close() })
+		if err := held.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if err := desktopImportedSOCKSXrayExchange(held); err != nil {
+			t.Fatal("imported proxy REALITY held stream was not an authenticated final route", err)
+		}
+		if fault == "cancel" {
+			nativeCancel()
+		} else if err := final.(io.Closer).Close(); err != nil {
+			t.Fatal("imported proxy REALITY original instance close failed", err)
+		}
+		_ = held.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var byteBuffer [1]byte
+		if n, err := held.Read(byteBuffer[:]); n != 0 || err == nil {
+			t.Fatal("imported proxy REALITY retired instance retained its original application stream")
+		} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+			t.Fatal("imported proxy REALITY retirement merely waited for the fixture deadline")
+		}
+		calls := lower.calls.Load()
+		retiredEntryCalls = entryRoute.calls.Load()
+		retirementChecked = true
+		rejected, err := final.DialContext(context.Background(), "tcp", M.ParseSocksaddr("192.0.2.99:9999"))
+		if rejected != nil {
+			_ = rejected.Close()
+		}
+		if rejected != nil || err == nil || lower.calls.Load() != calls {
+			t.Fatal("imported proxy REALITY retired instance acquired another lower connection")
+		}
+	}
+	if err := final.(io.Closer).Close(); err != nil {
+		t.Fatal("imported proxy REALITY original instance did not join", err)
+	}
+	// The QUIC entry owns one retained UDP association independently of the
+	// final VLESS streams. Close that exact native entry before checking drain;
+	// retiring the physical fixture first is forbidden and cannot mask a leak.
+	if err := closeFirst(); err != nil {
+		t.Fatal("original native entry did not close", err)
+	}
+	drain, stopDrain := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stopDrain()
+	if err := lower.empty(drain); err != nil {
+		t.Fatal("imported proxy REALITY instance left its original physical streams", err)
+	}
+	completed = true
+}
+
+// The callback counts requests only after the actual entry protocol has
+// decrypted them. The original route method still rejects every foreign tuple.
+type desktopImportedProxyXrayRoutes struct {
+	desktopImportedCONNECTRouter
+	calls atomic.Uint32
+}
+
+func (r *desktopImportedProxyXrayRoutes) RouteConnection(ctx context.Context, c net.Conn, m adapter.InboundContext) error {
+	r.calls.Add(1)
+	return r.server.plainConnection(ctx, c, M.Metadata{Source: m.Source, Destination: m.Destination})
+}
+func (r *desktopImportedProxyXrayRoutes) RouteConnectionEx(ctx context.Context, c net.Conn, m adapter.InboundContext, done N.CloseHandlerFunc) {
+	err := r.RouteConnection(ctx, c, m)
+	if done != nil {
+		done(err)
+	}
+}
+
+func desktopStartImportedProxyXrayProvider(t *testing.T, kind string, server *desktopNodeLayerServer, raw map[string]any, password string, certificate tls.Certificate, fault string) desktopExternalInstalledSSPeer {
+	t.Helper()
+	if kind == "shadowsocks" {
+		return desktopStartSSProvider(t, server, raw["method"].(string), password, netip.MustParseAddr("127.0.0.1"))
+	}
+	if kind != "hysteria2" {
+		t.Fatal("unknown original imported proxy provider")
+	}
+	if fault == "entry-trust" {
+		certificate, _ = desktopExternalInstalledPeerCertificate(t, false)
+	}
+	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := &desktopExternalHysteriaObservation{}
+	stop := startDesktopExternalInstalledHysteria2(t, server, packet, certificate, password, observation)
+	var once sync.Once
+	closePeer := func() {
+		once.Do(func() {
+			server.mu.Lock()
+			server.closing = true
+			connections := make([]io.Closer, 0, len(server.connections))
+			for connection := range server.connections {
+				connections = append(connections, connection)
+			}
+			server.mu.Unlock()
+			server.cancel()
+			stop()
+			for _, connection := range connections {
+				_ = connection.Close()
+			}
+			server.workers.Wait()
+		})
+	}
+	t.Cleanup(closePeer)
+	return desktopExternalInstalledSSPeer{address: packet.LocalAddr().String(), close: closePeer, stats: func() desktopExternalInstalledSSReceipt {
+		return desktopExternalInstalledSSReceipt{Method: kind, Address: packet.LocalAddr().String(), PhysicalTCP: server.rawTCP.Load(), PhysicalUDP: server.rawUDP.Load(), Streams: server.plainTCP.Load(), Packets: server.plainUDP.Load(), AuthUDP: observation.authFailures.Load()}
+	}}
+}
+
+func desktopImportedProxyXrayOutbound(t *testing.T, ctx context.Context, raw map[string]any) adapter.Outbound {
+	t.Helper()
+	body := []byte(desktopImportedSOCKSXrayJSON(t, raw))
+	var owner adapter.Outbound
+	var err error
+	switch raw["type"] {
+	case "shadowsocks":
+		var options option.ShadowsocksOutboundOptions
+		if json.Unmarshal(body, &options) != nil {
+			t.Fatal("original SS2022 options did not decode")
+		}
+		owner, err = SS.NewOutbound(ctx, nil, log.NewNOPFactory().Logger(), "entry-wg", options)
+	case "hysteria2":
+		var options option.Hysteria2OutboundOptions
+		if json.Unmarshal(body, &options) != nil {
+			t.Fatal("original Hysteria2 options did not decode")
+		}
+		owner, err = HY.NewOutbound(ctx, nil, log.NewNOPFactory().Logger(), "entry-wg", options)
+	default:
+		t.Fatal("original imported proxy changed its native protocol")
+	}
+	if err != nil {
+		t.Fatal("actual original imported proxy did not construct", err)
+	}
+	return owner
+}
+
+// Reuse the original independently tracked descriptor registry, extending only
+// the fixture's exact outer transport to UDP for a real QUIC entry. Cancellation
+// does not implicitly close this lower; native teardown must release its owner.
+type desktopImportedProxyXrayPhysical struct {
+	*desktopImportedSOCKSXrayPhysical
+	network string
+}
+
+func newDesktopImportedProxyXrayPhysical(expected M.Socksaddr, physical, network string) *desktopImportedProxyXrayPhysical {
+	return &desktopImportedProxyXrayPhysical{network: network, desktopImportedSOCKSXrayPhysical: &desktopImportedSOCKSXrayPhysical{
+		Adapter:  outbound.NewAdapterWithDialerOptions("direct", "fixture-original-proxy-physical", []string{network}, option.DialerOptions{}),
+		expected: expected, physical: physical, connections: map[*desktopImportedSOCKSXrayConnection]bool{}, changed: make(chan struct{}),
+	}}
+}
+func (p *desktopImportedProxyXrayPhysical) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	p.mu.Lock()
+	if p.closed || ctx.Err() != nil {
+		p.mu.Unlock()
+		return nil, errors.Join(ctx.Err(), net.ErrClosed)
+	}
+	if (p.network != "tcp" && p.network != "udp") || network != p.network || destination != p.expected {
+		p.mu.Unlock()
+		return nil, errors.New("imported proxy REALITY rejected an uncaptured physical transport or tuple")
+	}
+	p.pending++
+	p.signal()
+	p.mu.Unlock()
+	defer func() { p.mu.Lock(); p.pending--; p.signal(); p.mu.Unlock() }()
+	p.calls.Add(1)
+	raw, err := (&net.Dialer{}).DialContext(ctx, network+"4", p.physical)
+	if err != nil {
+		return nil, err
+	}
+	connection := &desktopImportedSOCKSXrayConnection{Conn: raw, owner: p.desktopImportedSOCKSXrayPhysical}
+	p.mu.Lock()
+	p.connections[connection] = true
+	retired := p.closed || ctx.Err() != nil
+	p.signal()
+	p.mu.Unlock()
+	if retired {
+		return nil, errors.Join(ctx.Err(), net.ErrClosed, connection.Close())
+	}
+	return connection, nil
+}
+func (p *desktopImportedProxyXrayPhysical) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	if p.network != "udp" {
+		return nil, errors.New("imported stream proxy has no physical UDP grant")
+	}
+	connection, err := p.DialContext(ctx, "udp", destination)
+	if err != nil {
+		return nil, err
+	}
+	return &desktopImportedProxyXrayPacket{Conn: connection, expected: p.expected}, nil
+}
+
+type desktopImportedProxyXrayPacket struct {
+	net.Conn
+	expected M.Socksaddr
+}
+
+func (p *desktopImportedProxyXrayPacket) ReadFrom(body []byte) (int, net.Addr, error) {
+	n, err := p.Read(body)
+	return n, p.expected.UDPAddr(), err
+}
+func (p *desktopImportedProxyXrayPacket) WriteTo(body []byte, address net.Addr) (int, error) {
+	if M.SocksaddrFromNet(address) != p.expected {
+		return 0, errors.New("original QUIC physical owner rejected a foreign destination")
+	}
+	return p.Write(body)
+}
+
+func TestRouterVPNImportedProxyRealityPhysicalOwner(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	server, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		body := make([]byte, 128)
+		for {
+			n, from, err := server.ReadFrom(body)
+			if err != nil {
+				return
+			}
+			_, _ = server.WriteTo(body[:n], from)
+		}
+	}()
+	defer func() { _ = server.Close(); <-done }()
+	destination := M.ParseSocksaddr("203.0.113.20:443")
+	owner := newDesktopImportedProxyXrayPhysical(destination, server.LocalAddr().String(), "udp")
+	replacement := newDesktopImportedProxyXrayPhysical(destination, server.LocalAddr().String(), "udp")
+	defer owner.Close()
+	defer replacement.Close()
+	if connection, err := owner.DialContext(ctx, "tcp", destination); connection != nil || err == nil {
+		t.Fatal("QUIC physical owner accepted a stream transport")
+	}
+	if connection, err := owner.DialContext(ctx, "udp", M.ParseSocksaddr("203.0.113.21:443")); connection != nil || err == nil {
+		t.Fatal("QUIC physical owner accepted a foreign tuple")
+	}
+	if owner.calls.Load() != 0 {
+		t.Fatal("rejected physical tuple reached a network dial")
+	}
+	original, err := owner.ListenPacket(ctx, destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := replacement.ListenPacket(ctx, destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newer.Close()
+	if _, err := original.WriteTo([]byte("foreign"), M.ParseSocksaddr("203.0.113.21:443").UDPAddr()); err == nil {
+		t.Fatal("QUIC datagram escaped captured destination")
+	}
+	owner.mu.Lock()
+	live := len(owner.connections)
+	owner.mu.Unlock()
+	if live != 1 {
+		t.Fatal("QUIC original descriptor was not independently tracked")
+	}
+	if err := original.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.empty(ctx); err != nil {
+		t.Fatal("original QUIC descriptor did not drain before fixture teardown", err)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.empty(ctx); err == nil {
+		t.Fatal("retired physical fixture fabricated native drain")
+	}
+	_ = newer.SetDeadline(time.Now().Add(time.Second))
+	if _, err := newer.WriteTo([]byte("replacement"), destination.UDPAddr()); err != nil {
+		t.Fatal("retiring original owner closed its replacement", err)
+	}
+	body := make([]byte, 128)
+	n, from, err := newer.ReadFrom(body)
+	if err != nil || string(body[:n]) != "replacement" || M.SocksaddrFromNet(from) != destination {
+		t.Fatal("replacement lost exact datagram payload or peer", err)
+	}
+	if err := newer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := replacement.empty(ctx); err != nil {
+		t.Fatal(err)
+	}
+}

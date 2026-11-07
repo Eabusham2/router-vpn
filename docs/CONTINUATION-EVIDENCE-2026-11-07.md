@@ -73,6 +73,7 @@ implemented. A source inventory is a test inventory, not a product denominator.
 | Requirement / correction | Affected paths and platforms | Current executable or source evidence | Release/device evidence and actual remaining gap |
 |---|---|---|---|
 | Original native application and multihop scope; independent Start Layers from the current user correction | `internal/mobilemultihop/imported_entry.go`, Android imported-router preparation, Apple PacketTunnel/imported host, pinned native graph runtime | Published `504e0fa3` admits all nine independent Off/AES/AES+XOR entry/final pairs for Local SOCKS5 → paired REALITY/Vision. All 338 earlier graph filenames remain and eight layer pairs are added. Actual Android and Swift captures, shared race checks and strict source/verdict inventories pass at that unit. | The exact-`e3a9ee87` hosted reference now passes all twelve original and forty-two additional native leaves after the bounded detector-readiness correction. Local Netlink denial is not counted as a pass. OS tunnel, packaged and device acceptance remain separate; other graph families and Server/Compare for this direction remain requirements in `MOBILE-IMPORTED-ROUTER-PATH.md`. |
+| Original imported/custom nodes in either hop role; independent Start Layers and selected final DNS | Shared imported compiler, Android daily connection/restore path, Apple selection and PacketTunnel, prepared Libbox and native reference gates | This increment adds Local SS2022 and Hysteria2 entries to paired REALITY/Vision, each with all nine independent layer pairs. All eighteen new captures remain separate from the existing 346 primary and 32 CONNECT sources. Actual shared/Android/Swift native parser inventories pass, with captured credential, DNS, MTU and proof ownership retained. | Actual desktop source compilation and the physical UDP/replacement-owner fixture pass. The 114 new encrypted reference leaves remain mandatory hosted evidence because local interface inventory denies execution before traffic. Other imported entries, Xray final families and Server/Compare remain actual source gaps, not merely device-access gaps. |
 | Original complete connection-state capture and exact proved restoration | `IOSMultihopExecution.swift` and its actual compiled fixture | `9031002c` supplies the real typed original-asset map. The corrected Swift fixture passes 2,047 checks and rejects five malformed maps; bypassing the source validator is caught by the causal control. | This is fixture repair, not a new production relaxation. Full Xcode, packaged and physical restoration evidence remains separate. |
 | Native shipping composition and mandatory original graph inventory | Apple source producer/pinned parser and desktop native runtime builder | `4dec2930` distinguishes Go compiler BuildEvents from TestEvents; `401a2123` makes the actual SOCKS/REALITY reference mandatory in the orchestration fixture. | Exact-SHA native parsing/builds must confirm the affected jobs. Python orchestration and reproduced event streams do not prove iOS or desktop traffic acceptance. |
 | Original protection/ownership, #200–224 and #337; authenticated Server lease retirement | Windows external Server fixture and native physical runner | `535e6481` completes retry/close/drain before reporting the deliberately broken stream-retirement result. `c522822d` retains every original Server/association child in three exact groups. | Actual Windows AMD64/ARM64 WFP execution remains required. All six lease causal controls and per-process limits remain mandatory. |
@@ -279,6 +280,12 @@ separate Intel Darwin renewal gate or a complete release.
 
 ### Bounded renewal of original Darwin socket permits
 
+This unit was published and read back as
+[`976c771d26ad70f0bbc01dec39b43e06e74c272c`](https://github.com/Eabusham2/router-vpn/commit/976c771d26ad70f0bbc01dec39b43e06e74c272c).
+The remote tree equals the tested local tree. All fifteen merged implementation
+files match the reviewed agent checkpoint; the merged renewal selection also
+passes under race instrumentation in 17.470 seconds.
+
 The Intel failure was reproduced with the actual broker monitor, FIFO and eight
 retained TCP streams, using a modeled 650-millisecond native operation cost and
 two already queued 450-millisecond foreground operations. The former per-peer
@@ -321,6 +328,84 @@ requiring all twenty-three. The portable Unix-channel fixture's baseline and
 seven source mutations compile, but local runtime is denied at AF_UNIX creation
 before every old and new case. Actual channel execution and the expanded native
 Intel/ARM64 PF gates remain required in exact-source CI.
+
+### SS2022 and Hysteria2 entries to paired REALITY/Vision
+
+The next increment extends the existing Local imported graph to SS2022 and
+Hysteria2 entries with a separately paired REALITY/Vision final. Each node keeps
+its original endpoint, credentials, provisioned Start Layer and codec. The
+final's original Xray compiler retains its validated inner edge; only its
+outermost edge is attached to the captured entry. Entry public-address proof,
+authenticated final-node proof and selected final DNS remain distinct. Android
+daily selection, connect and restoration, and Apple selection and PacketTunnel
+preparation, admit the same captured direction inside the existing system VPN.
+
+The SS2022 validator matches the shipping `sing-shadowsocks2` constructor:
+exact sixteen-byte AES-128 or thirty-two-byte AES-256/ChaCha keys, ordered AES
+identity chains and one ChaCha key. It does not substitute the outer layer's
+different constructor rules. Short, long, malformed and foreign credentials
+remain rejection controls. Hysteria2 retains actual QUIC/TLS, its original
+password and verified server identity.
+
+The separate eighteen-source inventory covers two entry protocols and all nine
+independent Off/AES/AES+XOR layer pairs. The existing 346 primary captures,
+32 CONNECT layer captures and other configured-service/DNS inventories remain
+required. Shared checks pass all 161 exact race verdicts. Actual Android phases
+pass 1,011 checks per transport and the original causal controls. Actual Swift
+passes 606 checks for the new captures; all eighteen complete graphs agree
+with Android. The pinned shared/Android parser passes all 38 exact verdicts.
+The full Apple pinned gate passes its 347, 33 and 19 verdict inventories for
+the primary, CONNECT and new REALITY sources respectively.
+
+The first new pure-parser invocation requested a cold whole-engine race build
+and reached its 600-second process limit before any native parser verdict. The
+construction/parser invocation now uses the established native-parser flags,
+while shared lifecycle and encrypted-peer race gates remain required. All 38
+shared/Android parser verdicts then pass with unchanged captures and checked
+sources before/after execution; the test and process bounds remain 90 and
+600 seconds. No runtime protection, negative case or source check was removed.
+
+The actual desktop native package compiles against the pinned engines. Its
+physical UDP-owner fixture passes under race instrumentation in 1.099 seconds,
+including foreign tuple/transport rejection, original drain and a surviving
+replacement owner. The new encrypted reference requires 114 leaves and 139
+named verdicts including parents and that owner fixture. It uses actual SS2022,
+QUIC/Hysteria2 and REALITY peers, independent layer credentials, selected DNS,
+separate proofs and stream-retirement counters that also cover QUIC association
+reuse. Both sampled full positives stopped locally at the unchanged Netlink
+interface guard before traffic. The independent hosted workflow and native
+release builder must execute the complete new reference; the earlier SOCKS
+reference success does not certify these new transports.
+
+Review also found that the Android parser driver deleted its fallback JSON JAR
+workspace before invoking the imported checks. Both unchanged bounded calls now
+finish inside that owned workspace. The actual driver regression verifies the
+same retained dependency and cleanup on success and either child failure; the
+old placement fails all three cases. Eleven new runner contracts, all twenty-
+eight original imported runner contracts and nine Apple parser contracts pass
+again on the merged source. Twenty-four feature files exactly match the agent
+checkpoint; the preparation script additionally preserves the published Darwin
+source-copy additions. The merged shared selection for both the new proxy and
+existing SOCKS/REALITY families passes under race instrumentation in 10.676 seconds.
+
+A fresh merged checkout passes the canonical relay, performance, OpenVPN-close,
+desktop and buffer preparations, module tidy and module verification. Both
+strict reference closures pass: 2,269 original SOCKS records with digest
+`bc14e96eaad77a100311cf5e9939d08923c476a42b503d36615119e2f14249f3`,
+and 2,270 new proxy records with digest
+`cc659cab7c5e77353c42218c08fddf0409e9e65158d84db53ab805786c45d79a`.
+All 914 Xray records retain the previously recorded digest. The 2,167 shipping
+input records are unchanged before and after preparation, digest
+`d8deec5a207e2eaaaca50d962189a7295e71eea97822dfcfb075a8a792d7d616`.
+
+Read-only tracing of the next graph direction also identified a surviving
+encrypted-DNS gap: the pinned Xray outbound rejects UDP destination port 443 for
+the exact captured `xtls-rprx-vision` flow currently admitted by the paired
+compiler. A parsed DoH3 selection therefore does not establish working DoH3
+through this flow. Home UDP port 53 and stream DoT/DoH use different paths.
+Explicit captured UDP-443 capability and actual selected-path proof are still
+required; no source rewrite or resolver substitution is authorized by this
+configuration-only result.
 
 The initial `398cb513` failures were read at their exact source identity,
 including authoritative source audit job `128124355405`, iOS jobs

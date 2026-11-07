@@ -20,7 +20,7 @@ final class AndroidImportedRouterPath {
     static boolean supports(String entryProtocol, String finalMode) {
         entryProtocol = AndroidExternalPolicy.protocol(entryProtocol);
         if (Arrays.asList("http-connect", "https-connect").contains(entryProtocol)) return "shadowsocks".equals(finalMode);
-        if ("socks5".equals(entryProtocol) && "reality-vision".equals(finalMode)) return true;
+        if (Arrays.asList("socks5", "shadowsocks", "hysteria2").contains(entryProtocol) && "reality-vision".equals(finalMode)) return true;
         if (Arrays.asList("socks5", "openvpn").contains(entryProtocol)) return Arrays.asList("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong").contains(finalMode);
         boolean proxyEntry = Arrays.asList("shadowsocks", "hysteria2").contains(entryProtocol);
         return (proxyEntry || Arrays.asList("wireguard", "amneziawg").contains(entryProtocol))
@@ -137,8 +137,8 @@ final class AndroidImportedRouterPath {
         // Non-SS finals take their outer Start Layer from this same paired
         // node's exact generated SS asset map, separately from the inner mode.
         String layer = AndroidStartLayer.selectedMode(exit);
-        if ("reality-vision".equals(exitMode) && !"socks5".equals(AndroidExternalPolicy.protocol(entry.protocol))) {
-            throw new IllegalArgumentException("REALITY Vision requires the captured Local SOCKS5 entry.");
+        if ("reality-vision".equals(exitMode) && !Arrays.asList("socks5", "shadowsocks", "hysteria2").contains(AndroidExternalPolicy.protocol(entry.protocol))) {
+            throw new IllegalArgumentException("REALITY Vision requires a captured Local SOCKS5, Shadowsocks 2022 or Hysteria2 entry.");
         }
         String exitStart = !"shadowsocks".equals(exitMode) && !"off".equals(layer)
                 ? exit.getJSONObject("profiles").getJSONObject("shadowsocks").toString() : "";

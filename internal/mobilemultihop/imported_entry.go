@@ -1,6 +1,7 @@
 package mobilemultihop
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"router-vpn/internal/applexray"
@@ -8,6 +9,7 @@ import (
 	"router-vpn/internal/mobileperf"
 	"router-vpn/internal/routechoice"
 	"strconv"
+	"strings"
 )
 
 // importedEntry is created only from the complete independently validated
@@ -19,7 +21,7 @@ type importedEntry struct {
 }
 
 // NewImportedEntry composes an imported SOCKS5, SS2022, Hysteria2, WireGuard, AmneziaWG or OpenVPN predecessor and a paired
-// Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. SOCKS5 also supports
+// Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. SOCKS5, SS2022 and Hysteria2 also support
 // the paired REALITY/Vision final with independently captured Start Layers.
 // Packet-to-packet
 // composition requires the complete configured data/control envelope. SOCKS5's
@@ -33,7 +35,8 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 		return nil, bad
 	}
 	socksXrayFinal := selection.Protocol == "socks5" && exitMode == "reality-vision"
-	if selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5" && selection.Protocol != "http-connect" && selection.Protocol != "https-connect" && selection.Protocol != "openvpn") || selection.Profile["node_kind"] != "external" || (!socksXrayFinal && exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
+	proxyXrayFinal := socksXrayFinal || (selection.Protocol == "shadowsocks" || selection.Protocol == "hysteria2") && exitMode == "reality-vision"
+	if selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5" && selection.Protocol != "http-connect" && selection.Protocol != "https-connect" && selection.Protocol != "openvpn") || selection.Profile["node_kind"] != "external" || (!proxyXrayFinal && exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
 		return nil, bad
 	}
 
@@ -142,6 +145,9 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	if original == nil || original["type"] != expectedType || selection.Protocol == "shadowsocks" && !importedSS2022Method(predecessorText(original, "method")) {
 		return nil, bad
 	}
+	if proxyXrayFinal && selection.Protocol == "shadowsocks" && !importedSS2022Credentials(predecessorText(original, "method"), predecessorText(original, "password")) {
+		return nil, bad
+	}
 	// Each transport has its own authenticated layer. Attach the final's outer
 	// edge, preserving an inner detour if its compiler produced one.
 	var final map[string]any
@@ -159,7 +165,7 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	if final == nil {
 		return nil, bad
 	}
-	if socksXrayFinal {
+	if proxyXrayFinal {
 		// The original paired-node compiler owns the complete VLESS/REALITY
 		// source and its separately captured same-node Start Layer. Validate
 		// that exact inner edge before attaching the final's outermost edge to
@@ -378,4 +384,29 @@ func (c *Controller) MTUProfile() string {
 
 func importedSS2022Method(method string) bool {
 	return method == "2022-blake3-aes-128-gcm" || method == "2022-blake3-aes-256-gcm" || method == "2022-blake3-chacha20-poly1305"
+}
+
+// Match the shipping sing-shadowsocks2 SS2022 constructor without rewriting
+// the original key text. AES supports identity chains; ChaCha has a single
+// PSK. Each key must have the exact cipher size. The outer Start Layer's
+// separate legacy constructor does not govern this imported inner transport.
+func importedSS2022Credentials(method, password string) bool {
+	if !importedSS2022Method(method) || password == "" || len(password) > 4096 {
+		return false
+	}
+	keys := strings.Split(password, ":")
+	if method == "2022-blake3-chacha20-poly1305" && len(keys) != 1 {
+		return false
+	}
+	size := 32
+	if method == "2022-blake3-aes-128-gcm" {
+		size = 16
+	}
+	for _, raw := range keys {
+		key, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil || len(key) != size {
+			return false
+		}
+	}
+	return true
 }

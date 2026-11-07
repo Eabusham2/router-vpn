@@ -117,6 +117,7 @@ PEER_TEMPLATES = {
     'node_imported_connect_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_connect_entry_test.go',
     'node_imported_socks_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_socks_entry_test.go',
     'node_imported_socks_xray_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_socks_xray_test.go',
+    'node_imported_proxy_xray_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_proxy_xray_test.go',
     'node_imported_socks_packet_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_socks_packet_test.go',
     'node_imported_hysteria_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_hysteria_entry_test.go',
     'node_imported_nested_packet_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_nested_packet_test.go',

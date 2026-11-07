@@ -125,6 +125,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_node_physical.py',
                              ROOT/'deploy/test_mobile_imported_socks_xray.py',
                              ROOT/'deploy/test_mobile_imported_socks_xray_runner.py',
+                             ROOT/'deploy/test_mobile_imported_proxy_xray.py',
+                             ROOT/'deploy/test_mobile_imported_proxy_xray_runner.py',
                              ROOT/'deploy/test_mobile_imported_entry.py',
                              ROOT/'deploy/test_mobile_imported_entry_runner.py',
                              ROOT/'deploy/mobile_imported_openvpn_cases.py',
@@ -769,6 +771,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                     # 1200s imported-peer and 1800s node gate envelopes.
                     # The separate mobile gate owns the libbox parser.
                     run([sys.executable, ROOT/'deploy/test_mobile_imported_socks_xray.py',
+                         source, '--reference-only'], env=env, timeout=3000)
+                    run([sys.executable, ROOT/'deploy/test_mobile_imported_proxy_xray.py',
                          source, '--reference-only'], env=env, timeout=3000)
                 # The PQ matrix uses the same verified native archive and
                 # compiler cache, fresh KEM keys, and real packet/Start Layer

@@ -129,7 +129,12 @@ func (e *importedSOCKSXrayProofEngine) join() {
 
 func importedSOCKSXrayProofFixture(t *testing.T, fault string) (*Controller, *importedSOCKSXrayProofEngine, *atomic.Int32) {
 	t.Helper()
-	plan := importedSOCKSXrayCompile(t, importedSOCKSXrayFixture(t))
+	return importedXraySourceProofFixture(t, importedSOCKSXrayFixture(t), fault)
+}
+
+func importedXraySourceProofFixture(t *testing.T, source []string, fault string) (*Controller, *importedSOCKSXrayProofEngine, *atomic.Int32) {
+	t.Helper()
+	plan := importedSOCKSXrayCompile(t, source)
 	certificate, trust := externalPublicProofCertificate(t, "1.1.1.1")
 	ip := "203.0.113.88"
 	if fault == "wrong-public-ip" {

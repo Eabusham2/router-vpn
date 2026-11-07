@@ -283,6 +283,9 @@ func TestImportedEntrySOCKSRealityVisionKeepsScope(t *testing.T) {
 			source := importedSOCKSXrayFixture(t)
 			var graph, capture string
 			switch protocol {
+			case "shadowsocks", "hysteria2":
+				entry := importedProxyXrayFixture(t, protocol, "off", "off")
+				graph, capture = entry[0], entry[1]
 			case "amneziawg":
 				entry := importedPacketFixture(t, protocol, "shadowsocks", "", "")
 				graph, capture = entry[0], entry[1]
@@ -299,8 +302,13 @@ func TestImportedEntrySOCKSRealityVisionKeepsScope(t *testing.T) {
 			if _, err := NewExternalPolicy(graph, externalTestJSON(t, projection)); err != nil {
 				t.Fatal("unsupported-entry control did not begin with a valid original import", err)
 			}
-			if _, err := NewImportedEntry(graph, capture, source[2], source[3], source[4], source[5], source[6]); err == nil {
-				t.Fatal("SOCKS REALITY admitted a different imported protocol")
+			_, err := NewImportedEntry(graph, capture, source[2], source[3], source[4], source[5], source[6])
+			if protocol == "shadowsocks" || protocol == "hysteria2" {
+				if err != nil {
+					t.Fatal("REALITY refused a valid independently captured encrypted proxy", err)
+				}
+			} else if err == nil {
+				t.Fatal("REALITY admitted an unsupported imported protocol")
 			}
 		})
 	}

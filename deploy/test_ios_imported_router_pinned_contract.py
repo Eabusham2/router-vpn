@@ -157,6 +157,33 @@ class ImportedGate(unittest.TestCase):
             file.unlink(); file.write_text('{}'); (root/'foreign.json').write_text('{}')
             with self.assertRaises(ValueError): G.require_matrix(root)
 
+    def test_proxy_reality_preserves_separate_eighteen_swift_native_graphs(self):
+        self.assertEqual(G.PROXY_XRAY_PARENT, 'TestRouterImportedProxyRealityAppleGraphs')
+        self.assertEqual(len(G.PROXY_XRAY_NAMES), 18)
+        self.assertFalse(G.PROXY_XRAY_NAMES & (G.NAMES | G.CONNECT_LAYER_NAMES))
+        expected = {G.PROXY_XRAY_PARENT} | {G.PROXY_XRAY_PARENT+'/'+name for name in G.PROXY_XRAY_NAMES}
+        events = [{'Package':G.PACKAGE, 'Action':'pass', 'Test':name} for name in sorted(expected)] + [
+            {'Package':G.PACKAGE, 'Action':'pass'}]
+        G.require_verdicts(self.encode(events), G.PROXY_XRAY_PARENT, G.PROXY_XRAY_NAMES)
+        for missing in range(len(events)):
+            with self.assertRaises(ValueError):
+                G.require_verdicts(self.encode(events[:missing]+events[missing+1:]), G.PROXY_XRAY_PARENT, G.PROXY_XRAY_NAMES)
+        for invalid in (events+[events[0]], self.events(), events[:-2]+[dict(events[-2], Action='skip')]+events[-1:]):
+            with self.assertRaises(ValueError):
+                G.require_verdicts(self.encode(invalid), G.PROXY_XRAY_PARENT, G.PROXY_XRAY_NAMES)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for name in G.PROXY_XRAY_NAMES:
+                (directory/name).write_text('{}')
+            G.require_matrix(directory, G.PROXY_XRAY_NAMES)
+            for name in G.PROXY_XRAY_NAMES:
+                path = directory/name
+                path.unlink()
+                with self.assertRaises(ValueError): G.require_matrix(directory, G.PROXY_XRAY_NAMES)
+                path.symlink_to(directory/'missing')
+                with self.assertRaises(ValueError): G.require_matrix(directory, G.PROXY_XRAY_NAMES)
+                path.unlink(); path.write_text('{}')
+
 
 if __name__ == '__main__':
     unittest.main()

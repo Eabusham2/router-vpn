@@ -21,6 +21,7 @@ sources. These rows do not by themselves establish native-package or device acce
 | WireGuard or AmneziaWG | WireGuard, AmneziaWG Fast or AmneziaWG Strong | 54 |
 | SOCKS5 | Shadowsocks, Hysteria2, WireGuard, AmneziaWG Fast, AmneziaWG Strong | 45 |
 | SOCKS5 | REALITY/Vision, nine independent entry/final Start Layer pairs | 9 |
+| Shadowsocks 2022 or Hysteria2 | REALITY/Vision, nine independent entry/final Start Layer pairs per protocol | 18, separate inventory |
 | OpenVPN, TCP or UDP outer transport | Shadowsocks, Hysteria2, WireGuard, AmneziaWG Fast, AmneziaWG Strong | 90 |
 | HTTP CONNECT or HTTPS CONNECT | Shadowsocks 2022, both Start Layers Off, captured Home/custom literal TCP DNS | 12 |
 
@@ -32,7 +33,7 @@ outer networks, five paired finals and nine independent entry/final layer pairs.
 The twelve retained baseline CONNECT cases use two entry protocols, three SS2022
 final ciphers and two selected literal TCP DNS policies. Each of the five
 non-Xray SOCKS5 finals supports all nine independent entry/final Start Layer
-pairs, as does the SOCKS5-only REALITY/Vision final. The earlier five pairs with both layers Off, four
+pairs, as does the SOCKS5 REALITY/Vision final. The earlier five pairs with both layers Off, four
 SOCKS5-to-SS/Hysteria pairs with only a final layer, six SOCKS5-to-WG/AWG
 pairs with only a final layer, and ten pairs with only an entry layer remain
 in the matrix. Twenty pairs with both layers enabled extended the published
@@ -44,7 +45,11 @@ refusals. Those inventories remain separate from the 346 original-source files;
 they are not added into a product-completion denominator. Another separate
 32-capture CONNECT entry-layer inventory covers two entry protocols, two
 enabled entry layers, four final-service/layer states and two DNS policies.
-It retains the twelve original CONNECT cases and both existing configured-service
+A separate 18-capture SS2022/Hysteria2 to REALITY/Vision inventory retains the
+346-file primary matrix and the independent CONNECT inventories unchanged.
+It covers two original encrypted entry protocols and nine entry/final Start Layer
+pairs for each. Its source and host evidence is recorded at the end of this file.
+The CONNECT inventory retains the twelve original CONNECT cases and both existing configured-service
 and selected-DNS inventories.
 
 The later Android host correction `95f36b95` is required for the daily Connect,
@@ -97,18 +102,23 @@ Start Layer requires the paired final's own original assets. A missing layer
 provision, a provision belonging to the other node, or a changed credential
 prevents construction. No second system VPN is started.
 
-The additional SOCKS5 to paired REALITY/Vision path is Local and retains all
-nine independent Off/AES/AES+XOR entry/final layer choices. The original
+The additional SOCKS5, Shadowsocks 2022 and Hysteria2 to paired REALITY/Vision
+paths are Local and retain all nine independent Off/AES/AES+XOR entry/final
+layer choices for each imported protocol. The original
 paired-node compiler retains the final's complete VLESS/REALITY source and
 validates either its exact unwrapped native transport or its exact owned
 `start-layer-aes` detour. It attaches only the final's outermost edge to the
-captured SOCKS5 entry. Each layer retains that node's original transport,
+captured imported entry. Each layer retains that node's original transport,
 private inner host, key and whitening choice; the imported layer's renamed
 closure cannot become the paired final's layer. Entry public-address proof, final authenticated
 private-node proof and selected final DNS remain independent. Android and Apple
 selection, preparation and restoration retain these same captured sources.
-PQ REALITY, XHTTP, Split, MAX, other imported entry protocols to this final,
-and Server/Compare for this direction remain
+The SS2022 inner transport requires exact 16-byte AES-128 or 32-byte AES-256/
+ChaCha20 keys as decoded by the shipping `sing-shadowsocks2` constructor. AES
+identity chains retain their original order; ChaCha20 accepts one key. The outer
+Start Layer keeps its separate established constructor and source rules.
+PQ REALITY, XHTTP, Split, MAX, packet/OpenVPN/CONNECT imported entries to this
+final, and Server/Compare for this direction remain
 outside its implemented admission. Their safe rejection does not close those
 requirements.
 
@@ -168,7 +178,7 @@ limitations, not merely missing credentials, live access or physical tests.
 |---|---|---|
 | Imported HTTP/HTTPS CONNECT → paired Shadowsocks with an entry Start Layer | Local independent entry Off/AES/XOR is admitted from that imported node’s original provision. Final AES/XOR and datagrams still require the final’s validated configured SS UoT-v2 service. Plain TCP/DoT/DoH retains final Off without that declaration. | Complete exact-SHA native release and device acceptance for the captured compositions; extend other graph directions separately. |
 | Imported HTTP/HTTPS CONNECT → paired Hysteria2/WG/AWG | Admission still excludes these final modes. The existing configured SS UoT-v2 composition is specific to the paired SS final and does not automatically authorize other finals. | Implement the particular compatible carrier, source ownership and native graph for each final. A successful CONNECT stream or a service declaration for another final is insufficient. |
-| Other imported entry protocols and paired final families | The constructor and mobile hosts retain eight entry labels and five general paired final modes, with the additional SOCKS5-only REALITY/Vision nine-layer matrix. Other Xray families and pairings remain excluded. Bounded OpenVPN Local is implemented; Trojan/VLESS are not ordinary imported catalogue entries. | Implement and validate each particular protocol/source capture, encrypted graph, credential/reference ownership, restoration and native path. Standalone support or the bounded SOCKS5/REALITY path does not prove another pairing. |
+| Other imported entry protocols and paired final families | The constructor and mobile hosts retain eight entry labels and five general paired final modes, with the additional SOCKS5, SS2022 and Hysteria2 REALITY/Vision nine-layer matrices. Other Xray families and pairings remain excluded. Bounded OpenVPN Local is implemented; Trojan/VLESS are not ordinary imported catalogue entries. | Implement and validate each particular protocol/source capture, encrypted graph, credential/reference ownership, restoration and native path. Standalone support or these bounded Local REALITY paths do not prove another pairing. |
 | Imported entry → paired final with Server or Compare | The constructor requires captured Local execution; both host adapters enforce Local and restoration deliberately does not invent a Compare winner. | Design actual execution and proof authority, measurement/comparison and restore semantics for this direction. An ordinary imported entry has no paired Router API/token; a public-address proof cannot grant server-side authority. |
 
 Any extension of CONNECT→SS must retain the final-selected Home/custom DNS
@@ -453,6 +463,17 @@ discovery, overwriting an inner final detour, and an outer Start Layer from a
 foreign node. Prepared native source retains the complete mobilemtu/mtuprobe
 import closure; copied test imports must compile in the actual pinned module.
 
+`deploy/test_mobile_imported_proxy_xray.py --native-parsers --android` adds
+separate SS2022/Hysteria2-to-REALITY source inventories. It requires all 161
+shared race-test verdicts, exactly 18 original shared source receipts and
+exactly 18 actual Android receipts. Each origin has its own 19-verdict pinned
+Libbox parser group, including the parent. The Android transports run in two
+separate owned export directories under their existing 240-second process
+bounds; a strict duplicate-free merge must retain the complete 18-file union.
+The original 346-file and CONNECT inventories cannot satisfy these groups.
+Before and after execution, the gate verifies captured bytes, the prepared
+mobile source and the production Xray module version and prepared source.
+
 Android gates exercise the actual helper, saved-profile store, permission
 controller, startup policy, multihop runtime, MTU session, node-usage recorder,
 and service composition with explicit OS/native boundaries. Deliberate source
@@ -468,7 +489,9 @@ release preparation. It now requires the actual Swift-produced 346-graph matrix
 and all 347 exact native verdicts, including the parent. A separate Swift
 producer invocation exports exactly 32 independent CONNECT entry-layer graphs
 and a separate pinned parser invocation requires all 33 corresponding
-verdicts. Neither group can satisfy or replace the other. The new full pinned
+verdicts. A third producer invocation exports the 18 SS2022/Hysteria2 REALITY
+graphs, with a separate 19-verdict pinned parser group. None of these groups
+can satisfy or replace another. The new full pinned
 invocation remains required even when a Swift-only producer or host fixture passes. Swift harnesses cover
 selection, profiles, restoration, typed MTU, and PacketTunnel composition.
 The local Swift 6.4.2 harness executes actual selection, save and graph-building
@@ -491,6 +514,22 @@ source-reviewed but unexecuted when published in fc261fd0. Current execution
 evidence must name the tested source identity. Passing this reference still does
 not prove Box DNS-router integration, the shipping host proof adapter, OS TUN
 behavior, a mobile Connected result or device acceptance.
+
+The separate `deploy/test_mobile_imported_proxy_xray.py --reference-only`
+stage retains all 18 SS2022/Hysteria2 REALITY layer pairs. Its exact encrypted
+peer inventory contains 114 leaves, or 139 named verdicts including the
+transport/method parents and the physical UDP ownership regression. The
+reference uses actual SS2022 or Hysteria2 entry peers and the captured paired
+REALITY/Vision final, selected Home DNS, separate public-entry/private-final
+proofs and TCP/UDP traffic. It rejects incorrect entry credentials, Hysteria2
+SNI/trust, final credentials/routes/identity, and independent layer keys or
+whitening. Cancellation and close must retire the original graph without
+closing a replacement owner. The Hysteria2 retirement witness counts decrypted
+entry streams as well as physical dials, since a live QUIC association can
+otherwise carry another stream without a new physical socket. This stage runs
+in the Linux native build and the independent hosted reference workflow; it
+retains the existing native interface guard and finite test deadlines. Its
+required inventory is separate from evidence that an invocation passed.
 
 The independent CONNECT entry-layer increment was exercised locally with 184
 exact shared CONNECT race verdicts, including all 32 new captures and ten new
@@ -585,3 +624,94 @@ Local verification completed on the feature source:
   unchanged. The original thirteen and new 51 native verdicts remain mandatory
   in CI; neither the new layer traffic nor physical mobile acceptance is claimed
   from this locally blocked execution.
+
+
+### November 7 SS2022/Hysteria2 to REALITY source and host checkpoint
+
+This increment adds Local imported Shadowsocks 2022 and Hysteria2 entries to a
+separately paired REALITY/Vision final. Both original imported protocols execute
+inside the existing single VPN owner. The shared compiler retains their original
+credentials, physical transport, TLS identity where applicable, and independently
+provisioned entry Start Layer. It attaches the final's outermost validated edge
+without replacing its original Xray assets or its separate final Start Layer.
+
+The 18 source receipts are exported through
+`ROUTERVPN_IMPORTED_PROXY_XRAY_FIXTURES`. The actual Android and Apple producers
+use `ROUTERVPN_ANDROID_IMPORTED_PROXY_XRAY_FIXTURES` and
+`ROUTERVPN_APPLE_IMPORTED_PROXY_XRAY_FIXTURES`. Names are
+`<shadowsocks|hysteria2>--reality-vision--<entry-layer>--<final-layer>.json`, using
+`off`, `aes-256-gcm` and `aes-256-gcm+xor-whitening`. They are separate from the
+346 primary captures and the 32 CONNECT entry-layer captures.
+
+Local verification on the source/host checkpoint:
+
+- Go 1.26.3 race execution passed 161 exact new verdicts and all 88 existing
+  SOCKS5/REALITY verdicts. The tests cover all 18 graphs, all three SS2022
+  methods, exact short/long/malformed-key refusals, AES identity-chain retention,
+  ChaCha chain refusal, original source bytes, selected plain/encrypted DNS and
+  captured hostname bootstrap, independent entry/final proofs, cancellation,
+  replacement ownership and teardown. These controller proof tests model native
+  handles; they are not encrypted native peer evidence.
+- The actual Android producer passed 2,022 new checks for all 18 sources,
+  alongside the retained 948 checks for all nine SOCKS5/REALITY sources. All
+  five existing source/cleanup causal recompilations failed at their required
+  witnesses. The combined invocation completed in 59.905 seconds under its
+  unchanged 240-second process bound, with unchanged 180-second phase bounds.
+- Swift 6.4.2 with the actual shared Go compiler passed 606 checks and exported
+  all 18 new graphs in 41.294 seconds. All 18 complete graph objects match the
+  corresponding actual Android graphs. The original Swift producer still
+  exported exactly 346 graphs and passed 7,218 checks in 49.056 seconds.
+- The actual Swift selection/save/capture fixture retained its 3,231 baseline
+  checks and 112 SOCKS5/REALITY checks, and passed 112 additional checks for each
+  SS2022 and Hysteria2 entry. All nine independent layer pairs pass through the
+  real picker, saved selection, cold source capture and original asset/key
+  fingerprints. Existing configured CONNECT checks and selected DNS cases also
+  pass. The portable cryptographic helper performs real SHA-256; OS storage and
+  native-readiness boundaries remain explicit doubles.
+
+Android daily selection, saved-profile loading, Connect, Startup Last and
+restoration return through the same original-source checks and shared compiler.
+Apple's captured `IOSMultihopExecution.Source` and PacketTunnel imported-entry
+startup validate the separate imported entry, paired final, requested/restored
+Local choice and both original asset maps before starting the shared native plan.
+The SS/Hysteria raw mode names also represent paired profiles, so their global
+selector is not incorrectly restricted; the captured imported source enforces
+this direction's Local-only boundary.
+
+The coordinated native fixture and build-gate integration was then checked on
+fresh pinned sources:
+
+- The actual Swift producer and pinned Libbox parser passed all three separate
+  inventories: 346 primary graphs with 347 exact verdicts, 32 CONNECT layer
+  graphs with 33 verdicts, and 18 SS2022/Hysteria2 REALITY graphs with 19 verdicts.
+  The native parser accepted the actual Swift graph bytes, rather than a
+  reconstructed copy of their expected configuration.
+- The new shared/Android gate passed all 161 shared race verdicts. Each of its
+  two separately owned Android phases passed 1,011 checks, exported exactly
+  nine captures, and rejected all five existing causal source mutations. Its
+  first Libbox attempt unnecessarily added race instrumentation to the pure
+  parser command and reached the unchanged 600-second subprocess bound before
+  emitting verdicts. Matching the established native parser flags then passed
+  all 38 exact shared/Android verdicts in 0.447 seconds of package execution.
+  The complete 18+18 captured files and repository/prepared source receipts
+  remained unchanged before and after that run. Shared lifecycle and encrypted
+  reference tests retain race instrumentation; no execution bound was raised.
+- The final 11 runner contracts passed. They include the two owned Android
+  export phases, exact parser flags/verdicts and the lifetime of the caller's
+  checksum-pinned fallback JSON JAR. Both imported producer gates now finish
+  inside that JAR's original temporary workspace. Restoring the old placement
+  is rejected after success, first-child failure and second-child failure;
+  normal cleanup is required in all three paths.
+- The complete desktop native peer package compiled. Its actual connected-UDP
+  ownership and replacement-owner regression passed with race instrumentation
+  in 1.099 seconds. A positive SS2022 case and a positive Hysteria2 case each
+  stopped before encrypted traffic at the retained Netlink interface inventory
+  with `operation not permitted`. The original guard remains
+  unchanged. These local results do not establish the new 114 encrypted peer
+  leaves; the complete hosted inventory remains mandatory.
+
+The parser compilation limit and native interface guard were not relaxed.
+The source/host, all three native parser origins, desktop compilation and
+physical socket-owner results remain distinct from the pending encrypted
+reference results. They also do not establish exact-SHA packages,
+a release, private deployment, OS tunnel behavior or physical mobile acceptance.

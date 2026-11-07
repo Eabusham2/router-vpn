@@ -393,7 +393,7 @@ enum IOSImportedEntryMultihop {
     static let methods: Set<String> = ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"]
     static func supports(entry: String, final: String) -> Bool {
         if ["http-connect", "https-connect"].contains(entry) { return final == "shadowsocks" }
-        if entry == "socks5" && final == "reality-vision" { return true }
+        if ["socks5", "shadowsocks", "hysteria2"].contains(entry) && final == "reality-vision" { return true }
         if ["socks5", "openvpn"].contains(entry) { return ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(final) }
         if ["shadowsocks", "hysteria2"].contains(final) {
             return ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(entry)
@@ -411,7 +411,7 @@ enum IOSImportedEntryMultihop {
         guard let imported = entry["external"] as? [String: Any],
               let kind = imported["protocol"] as? String, ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains(kind) else { throw issue() }
         if final["multihop_exit_mode"] as? String == "reality-vision" {
-            guard kind == "socks5",
+            guard ["socks5", "shadowsocks", "hysteria2"].contains(kind),
                   [entry, final].allSatisfy({ profile in
                       (profile["start_layer"] == nil || profile["start_layer"] is String) &&
                       ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(profile["start_layer"] as? String ?? "")
@@ -484,6 +484,6 @@ enum IOSImportedEntryMultihop {
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ImportedEntry", code: 1, userInfo: [NSLocalizedDescriptionKey:
-            "Choose a Local imported entry and a different paired Router VPN final with their original settings. SOCKS5 to REALITY Vision retains each node's independently provisioned Start Layer. HTTP/HTTPS CONNECT requires SS2022 and retains its independently provisioned entry Start Layer. Selected TCP, DoT and DoH DNS use the captured stream path. Captured UoT-v2 service authority additionally permits UDP/DoH3 and final AES or AES+XOR; without it, the final layer must be Off. Resolver hostnames require their saved bootstrap through the same final. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
+            "Choose a Local imported entry and a different paired Router VPN final with their original settings. SOCKS5, Shadowsocks 2022 and Hysteria2 entries can use a paired REALITY Vision final while retaining each node's independently provisioned Start Layer. HTTP/HTTPS CONNECT requires SS2022 and retains its independently provisioned entry Start Layer. Selected TCP, DoT and DoH DNS use the captured stream path. Captured UoT-v2 service authority additionally permits UDP/DoH3 and final AES or AES+XOR; without it, the final layer must be Off. Resolver hostnames require their saved bootstrap through the same final. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
     }
 }

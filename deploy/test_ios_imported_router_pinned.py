@@ -17,6 +17,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 PARENT = 'TestRouterImportedEntryAppleNativeGraphs'
 CONNECT_LAYER_PARENT = 'TestRouterImportedCONNECTAppleLayerGraphs'
+PROXY_XRAY_PARENT = 'TestRouterImportedProxyRealityAppleGraphs'
 PACKAGE = 'github.com/sagernet/sing-box/experimental/libbox'
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 LAYERS = ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
@@ -51,6 +52,8 @@ NAMES |= {"openvpn--"+transport+"--final-"+mode+"--"+entry+"--"+final+".json"
 CONNECT_LAYER_NAMES = {p+'--'+entry+'--'+final+'--'+dns+'.json'
                        for p in ('http-connect','https-connect') for entry in LAYERS[1:]
                        for final in ('plain','off',*LAYERS[1:]) for dns in ('home','custom')}
+PROXY_XRAY_NAMES = {kind+'--reality-vision--'+entry+'--'+final+'.json'
+                    for kind in ('shadowsocks','hysteria2') for entry in LAYERS for final in LAYERS}
 
 def digest():
     paths = {Path(__file__).resolve(), ROOT/'ios/RouterVPN/prepare-libbox.sh', ROOT/'go.mod', ROOT/'deploy/ios_test_crypto_bridge.py'}
@@ -119,7 +122,7 @@ def run(vendor):
     host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)
     env = host.host_environment()
     for key in tuple(env):
-        if key.startswith('ROUTERVPN_IOS_') or key == 'ROUTERVPN_APPLE_CONNECT_LAYER_FIXTURES':
+        if key.startswith('ROUTERVPN_IOS_') or key in ('ROUTERVPN_APPLE_CONNECT_LAYER_FIXTURES', 'ROUTERVPN_APPLE_IMPORTED_PROXY_XRAY_FIXTURES'):
             env.pop(key)
     before = digest()
     with tempfile.TemporaryDirectory(prefix='routervpn-apple-imported-') as temporary:
@@ -150,9 +153,26 @@ def run(vendor):
             print(layer_result.stdout+layer_result.stderr, file=sys.stderr)
             raise ValueError('Pinned native Apple CONNECT layer graph execution failed')
         require_verdicts(layer_result.stdout, CONNECT_LAYER_PARENT, CONNECT_LAYER_NAMES)
+        proxy_graphs = Path(temporary)/'proxy-reality'; proxy_graphs.mkdir()
+        proxy_env = {k:v for k,v in env.items() if not k.startswith('ROUTERVPN_IOS_')}
+        proxy_env.update(ROUTERVPN_APPLE_IMPORTED_PROXY_XRAY_FIXTURES=str(proxy_graphs),
+                         ROUTERVPN_REQUIRE_IMPORTED_PROXY_XRAY_FIXTURES='1')
+        subprocess.run([sys.executable, str(ROOT/'deploy/test_ios_tor_profile.py')], cwd=ROOT, env=proxy_env, check=True, timeout=420)
+        require_matrix(proxy_graphs, PROXY_XRAY_NAMES)
+        original_proxy = {name:(proxy_graphs/name).read_bytes() for name in PROXY_XRAY_NAMES}
+        proxy_result = subprocess.run(['go', 'test', '-json', '-mod=readonly', '-ldflags=-checklinkname=0',
+            '-tags', 'with_quic,with_wireguard,with_gvisor,with_openvpn', './experimental/libbox', '-run', '^'+PROXY_XRAY_PARENT+'$',
+            '-count=1', '-timeout=180s'], cwd=vendor, env=proxy_env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
+        if proxy_result.returncode:
+            print(proxy_result.stdout+proxy_result.stderr, file=sys.stderr)
+            raise ValueError('Pinned native Apple proxy REALITY graph execution failed')
+        require_verdicts(proxy_result.stdout, PROXY_XRAY_PARENT, PROXY_XRAY_NAMES)
+        require_matrix(proxy_graphs, PROXY_XRAY_NAMES)
+        if any((proxy_graphs/name).read_bytes()!=raw for name,raw in original_proxy.items()):
+            raise ValueError('Actual Swift proxy REALITY source changed during native parsing')
         if before != digest():
             raise ValueError('Apple imported source changed during its executable proof')
-    print('Apple imported Router: '+str(len(NAMES))+' primary and 32 separate CONNECT layer Swift graph exports parsed by pinned Libbox; '+str(len(NAMES)+1)+' and 33 exact native verdicts passed')
+    print('Apple imported Router: '+str(len(NAMES))+' primary, 32 separate CONNECT layer and 18 separate proxy REALITY Swift graph exports parsed by pinned Libbox; '+str(len(NAMES)+1)+', 33 and 19 exact native verdicts passed')
 
 
 def main():
