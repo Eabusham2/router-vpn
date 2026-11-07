@@ -46,6 +46,11 @@ class NativeSocketUIDGate(unittest.TestCase):
             with self.subTest(failure=failure.__name__):
                 self.check_matching_hosts(node_failure=failure)
 
+    def test_failed_or_timed_out_socks_reality_reference_cannot_reach_later_gates_or_compilation(self):
+        for failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            with self.subTest(failure=failure.__name__):
+                self.check_matching_hosts(socks_reference_failure=failure)
+
     def test_failed_or_timed_out_forwarder_gate_cannot_reach_transport_tests_or_compilation(self):
         for failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             with self.subTest(failure=failure.__name__):
@@ -71,7 +76,7 @@ class NativeSocketUIDGate(unittest.TestCase):
             with self.subTest(failure=failure.__name__):
                 self.check_matching_hosts(physical_failure=failure)
 
-    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None, darwin_route_failure=None, physical_failure=None, command_retirement_failure=None):
+    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None, darwin_route_failure=None, physical_failure=None, command_retirement_failure=None, socks_reference_failure=None):
         class CompilerBoundary(Exception):
             pass
 
@@ -81,6 +86,8 @@ class NativeSocketUIDGate(unittest.TestCase):
         if darwin_route_failure is not None:
             targets = tuple(target for target in targets if target.startswith('darwin/'))
         if command_retirement_failure is not None:
+            targets = tuple(target for target in targets if target.startswith('linux/'))
+        if socks_reference_failure is not None:
             targets = tuple(target for target in targets if target.startswith('linux/'))
         for target in targets:
             with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
@@ -96,6 +103,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 darwin_route_errors = []
                 physical_errors = []
                 command_retirement_errors = []
+                socks_reference_errors = []
                 dnssec_destination = None
 
                 def run(command, **kwargs):
@@ -263,6 +271,21 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         self.assertIn('-L'+str(root/'pq'), shlex.split(kwargs['env']['CGO_LDFLAGS']))
                         self.assertLessEqual(kwargs['timeout'], 1800)
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_mobile_imported_socks_xray.py'):
+                        self.assertEqual(system, 'linux')
+                        self.assertEqual(args[2:], [str(source.resolve()), '--reference-only'])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOARCH'], arch)
+                        self.assertEqual(kwargs['env']['CGO_ENABLED'], '1')
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertEqual(kwargs['timeout'], 3000)
+                        if socks_reference_failure is not None:
+                            error = (socks_reference_failure(43, args, output=b'captured SOCKS REALITY reference failure')
+                                     if socks_reference_failure is subprocess.CalledProcessError else
+                                     socks_reference_failure(args, kwargs['timeout'], output=b'captured SOCKS REALITY reference timeout'))
+                            socks_reference_errors.append(error)
+                            raise error
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_max_runner.py'):
                         self.assertIn(system, ('linux', 'windows'))
@@ -438,7 +461,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                      patch.object(N.EXTERNAL, 'prepare'), patch.object(N.POLICY.AMNEZIA, 'verify'), \
                      patch.object(N.DNSSEC, 'build', side_effect=build_dnssec) as dnssec, \
                      patch.object(N, 'stage_cronet', side_effect=stage_cronet):
-                    expected_error = physical_failure or command_retirement_failure or darwin_route_failure or forwarder_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
+                    expected_error = physical_failure or command_retirement_failure or darwin_route_failure or forwarder_failure or socks_reference_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
                                                           openvpn_failure if openvpn_failure is not None and system == 'linux' else CompilerBoundary)
                     with self.assertRaises(expected_error) as caught:
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
@@ -480,6 +503,22 @@ class NativeSocketUIDGate(unittest.TestCase):
                     self.assertEqual(len(node_errors), 1)
                     self.assertIs(caught.exception, node_errors[0], 'The original source-gate failure was replaced')
                     self.assertEqual(calls[-1], node[0], 'A failed source gate reached a later gate or shipping compilation')
+                    continue
+                socks_reference = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_mobile_imported_socks_xray.py')]
+                self.assertEqual(len(socks_reference), 1 if system == 'linux' else 0)
+                if socks_reference:
+                    node = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_physical.py')]
+                    self.assertEqual(len(node), 1)
+                    self.assertEqual(calls.index(socks_reference[0]), calls.index(node[0]) + 1)
+                for dependency in ('deploy/test_mobile_imported_socks_xray.py',
+                                   'deploy/test_mobile_imported_socks_xray_runner.py',
+                                   'mobile/desktop/node_imported_socks_xray_test.go.tmpl'):
+                    self.assertIn(ROOT/dependency, N.inputs())
+                if socks_reference_errors:
+                    self.assertEqual(len(socks_reference_errors), 1)
+                    self.assertIs(caught.exception, socks_reference_errors[0], 'The original SOCKS REALITY reference failure was replaced')
+                    self.assertEqual(calls[-1], socks_reference[0], 'Failed SOCKS REALITY reference reached a later gate or compiler')
+                    self.assertFalse(any(args[:2] == ['go', 'build'] for args in calls))
                     continue
                 if openvpn_failure and system == 'linux':
                     gate = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_external_openvpn.py')]
@@ -527,7 +566,8 @@ class NativeSocketUIDGate(unittest.TestCase):
                 node_pq = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_pq.py')]
                 self.assertEqual(len(node_pq), len(node))
                 if node_pq:
-                    self.assertEqual(calls.index(node_pq[0]), calls.index(node[0])+1)
+                    predecessor = socks_reference[0] if socks_reference else node[0]
+                    self.assertEqual(calls.index(node_pq[0]), calls.index(predecessor)+1)
                 max_runner = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_max_runner.py')]
                 max_graph = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_max.py')]
                 self.assertEqual(len(max_runner), len(node))
