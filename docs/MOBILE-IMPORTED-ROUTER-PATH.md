@@ -884,8 +884,21 @@ core `1ac1a339cb1223e9c70eae14c44411c75033c02d` and prepared Xray
 runner tests passed. At that initial checkpoint, the Android producer could not
 compile its Java 17 target because the executor lacked the JDK release-symbol
 archive, and Swift was unavailable. Complete verified JDK and Swift toolchains
-were subsequently acquired for the packet increment below. Its actual results
-do not substitute for a separate CONNECT producer/native-parser execution.
+were subsequently acquired. A separate CONNECT execution against source
+`2ff74fd3` now passes both actual Android producer phases: 1,220 checks and nine
+independent exports each, with all five existing causal controls per phase.
+The actual Swift producer passes 943 checks and emits its own eighteen graphs.
+The current native reader then passes all 38 shared/Android and nineteen Swift
+verdicts without skips. These are the 57 required parser verdicts, not encrypted
+traffic or OS-device verdicts. The 172 shared race verdicts also pass.
+
+The separate CONNECT execution used verified Temurin 21.0.13 with the unchanged
+Java 17 release target and official Swift 6.4.2 on Linux, Go 1.26.3 and the same
+pinned native core/Xray source. Its source receipt covers 2,200 inputs with
+SHA-256 `54418836ef4c28a4f43214770ddb1277671b202d0bb6bfb38830d477e3ee8f7b`.
+Actual captured files and prepared-source identities match before and after
+parsing. This host composition does not substitute for an Apple SDK build,
+signing or device acceptance.
 
 This parser increment does not close the separate encrypted CONNECT/REALITY
 peer, selected encrypted DNS, physical-interface, system-tunnel, package,

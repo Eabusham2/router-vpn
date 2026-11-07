@@ -9,16 +9,33 @@ completion of the current commit's packages, physical devices or deployment.
 ## November 7 resumed continuation
 
 The [resumed evidence ledger](CONTINUATION-EVIDENCE-2026-11-07-RESUMED.md)
-records another original-source reconciliation and eight published coherent
-units through `b63e9709`. Windows child encoding, native MTU/test inventories,
-Darwin route-prefix decoding and external proof execution ownership now have
-focused executable evidence. The separate CONNECT/REALITY native parser passes
-all 172 shared and nineteen shared-native verdicts; actual Android/Apple stages
-and encrypted peer/DNS references retain their own pending gates. The desktop
-imported-entry daily path is still under implementation review, including exact
-Unix socket permissions and a real final-owned DNS proof. Original scope,
-current release publication and physical/private acceptance remain distinct.
-The passages below retain their dated checkpoint meaning.
+records another original-source reconciliation and the published coherent
+changes through `406ad098`. Windows child encoding, native MTU/test inventories,
+Darwin route-prefix decoding, external proof execution and joined native
+selection now have focused executable evidence. The separate CONNECT/REALITY
+gate passes all 172 shared race verdicts and all 57 shared/actual-Android/
+actual-Swift native parser verdicts. Both actual Android producers pass 1,220
+checks each; the actual Swift producer passes 943. The original compiler
+availability limit is superseded by those executions, not by an assumption.
+
+Published `e105e71e` adds the desktop imported proxy entry to paired Router
+daily path, complete profiles, exact physical tuples and retained final-owned
+DNS admission. Its full production native CLI and thirteen-case uncached DNS
+gate remain mandatory; local Netlink restrictions prevented the real Box query
+and retained-process acceptance. See [DESKTOP-IMPORTED-ROUTER-PATH.md](DESKTOP-IMPORTED-ROUTER-PATH.md).
+Published `2ff74fd3` adds WG/AWG and bounded OpenVPN TCP/UDP entries to paired
+REALITY under Local execution: 36 independent layer captures, 298 shared race
+verdicts and 111 native parser verdicts pass, including actual Android and Swift
+exports. Its encrypted packet reference and desktop packet adoption are
+separate work. `406ad098` repairs stale CI source expectations while checking
+both paired/imported proof branches, original owners and selected-DNS admission.
+
+The encrypted CONNECT reference is implemented and registered, but local
+execution stopped at the required physical-interface guard because Netlink was
+denied. Diagnostic changes for native PQ admission and Darwin creator timeouts
+do not themselves close the underlying failures. Current exact-SHA release,
+remaining graph/platform features and physical/private acceptance remain
+distinct. The passages below retain their dated checkpoint meaning.
 
 ## November 7 continuation: imported paths and native verification
 
