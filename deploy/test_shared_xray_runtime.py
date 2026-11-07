@@ -21,22 +21,33 @@ class SharedRuntime(unittest.TestCase):
     def test_actual_shared_transform_is_deterministic(self):
         with tempfile.TemporaryDirectory() as temp:
             source=self.fixture(temp)
-            with mock.patch.object(SHARED,'checkout') as check:
+            with mock.patch.object(SHARED,'checkout') as check, APPLE.vision_fixture_policy(SHARED.VISION):
                 first=SHARED.prepare(source)
                 check.assert_called_once_with(source.resolve())
             before=self.snapshot(source)
-            with mock.patch.object(SHARED,'checkout'):second=SHARED.prepare(source)
+            with mock.patch.object(SHARED,'checkout'), APPLE.vision_fixture_policy(SHARED.VISION):second=SHARED.prepare(source)
             self.assertEqual(first,second);self.assertEqual(before,self.snapshot(source))
             self.assertIn('unsafe.Add(p, i.Offset)',(source/'proxy/vless/outbound/outbound.go').read_text())
             self.assertIn('func (c *fragmentConn) CloseWrite()', (source/'transport/internet/finalmask/fragment/conn.go').read_text())
             self.assertIn('buf.NewWithSize(65535)',(source/'proxy/freedom/freedom.go').read_text())
+            self.assertIn('tlsState := w.trafficState.filterVisionTLS(mb, w.ctx)', (source/SHARED.VISION.SOURCE).read_text())
+            self.assertEqual((source/SHARED.VISION_TEST_TARGET).read_bytes(), SHARED.VISION_TEST.read_bytes())
     def test_every_boundary_is_checked_before_any_write(self):
-        for bad in [*SHARED.DATAGRAMS.PATCHES,*SHARED.CONNECTIONS.PATCHES,'proxy/vless/outbound/outbound.go']:
+        for bad in [*SHARED.DATAGRAMS.PATCHES,*SHARED.CONNECTIONS.PATCHES,*SHARED.VISION.PATCHES,'proxy/vless/outbound/outbound.go']:
             with self.subTest(file=bad),tempfile.TemporaryDirectory() as temp:
                 source=self.fixture(temp);(source/bad).write_text('changed upstream boundary')
                 before=self.snapshot(source)
-                with mock.patch.object(SHARED,'checkout'),self.assertRaises(ValueError):SHARED.prepare(source)
+                with mock.patch.object(SHARED,'checkout'),APPLE.vision_fixture_policy(SHARED.VISION),self.assertRaises(ValueError):SHARED.prepare(source)
                 self.assertEqual(before,self.snapshot(source),'failed preparation changed another file')
+    def test_changed_or_linked_vision_fixture_is_rejected_before_writes(self):
+        for kind in ('changed', 'linked'):
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as temp:
+                source=self.fixture(temp);fixture=source/SHARED.VISION_TEST_TARGET
+                if kind == 'changed':fixture.write_bytes(b'foreign native regression')
+                else:fixture.symlink_to(SHARED.VISION_TEST)
+                before=self.snapshot(source)
+                with mock.patch.object(SHARED,'checkout'),APPLE.vision_fixture_policy(SHARED.VISION),self.assertRaises(ValueError):SHARED.prepare(source)
+                self.assertEqual(before,self.snapshot(source),'rejected regression changed another source')
     def test_wrong_revision_never_mutates_any_source(self):
         with tempfile.TemporaryDirectory() as temp:
             source=self.fixture(temp);before=self.snapshot(source)

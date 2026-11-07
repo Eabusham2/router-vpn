@@ -10,6 +10,7 @@ on:
       - 'internal/startwhitening/**'
       - 'deploy/xray_native_dialer_policy.py'
       - 'deploy/prepare-xray-runtime.py'
+      - 'deploy/xray_vision_policy.py'
       - 'deploy/xray_datagram_policy.py'
       - 'deploy/xray_connection_policy.py'
       - 'deploy/xray_datagram_policy.py'

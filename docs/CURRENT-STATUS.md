@@ -37,9 +37,9 @@ the new renewal guard intercepted an intentional broken expiry-cap fixture
 before its expected assertion. The current fixture repair isolates that cap
 using a real original TCP parent and a copied shortened authority record;
 production grant and renewal checks remain unchanged. Its three new native
-verdicts and exact mutation witness passed in the `460918da` Apple Silicon
-native job, along with the existing controls. The Intel socket job was still
-running at the latest observation. These are exact-source hosted native
+verdicts and exact mutation witness passed in both `460918da` Apple Silicon
+and Intel native jobs, along with the existing controls. Both standalone
+PF-anchor jobs also passed. These are exact-source hosted native
 results, not a later release or physical user-device acceptance.
 Earlier diagnostic-only passages below are history, not the current fix status.
 
@@ -55,7 +55,12 @@ SS2022/Hysteria2 gates. Its DoT fixture distinguishes the pinned transport's
 exact A/AAAA reuse probes from application queries. A diagnostic run captured
 a real Xray Vision reader/writer race in shared TLS detector state; the typed
 TLS rejection assertions passed, but two PQ leaves failed race detection.
-The production synchronization repair and full native rerun remain pending.
+The production synchronization repair serializes the complete shared TLS
+detector and snapshots the writer's decision fields, with logging and network
+I/O outside the lock. All six actual native parser/ownership verdicts pass
+under race instrumentation; restoring only the original pinned parser
+reproduces the exact writer/parser race in both duplex cases. Merged source
+and runner checks also pass. The full selected-DNS rerun remains in progress.
 The earlier standard wrong-name failure has no recovered original assertion
 and is not retrospectively attributed to this race. Source publication does
 not certify the pending native inventory. All ten native orchestration tests

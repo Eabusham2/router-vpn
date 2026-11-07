@@ -72,6 +72,34 @@ normalizes the explicit client suffix for the wire protocol. Private/public
 node proof, DNS proof, connection ownership, cancellation and teardown remain
 required before reporting a usable connection.
 
+## Shared Vision detector ownership
+
+The pinned engine's Vision reader and writer share one TLS detector. Native
+race instrumentation exposed an unsynchronized packet-budget read in the writer
+while the reader updated that detector. The runtime preparation now protects
+the complete detector transaction: packet budget, TLS classification, cipher,
+remaining ServerHello bytes and permission to switch to direct copying.
+
+Each state has its own lock. The writer captures one coherent detector result
+for its padding decisions; the reader checks the detector budget through the
+same synchronization. Existing direction-specific framing fields keep their
+reader or writer owner, and the user identity stays immutable. The public
+`XtlsFilterTls` entry remains available and uses the same protected parser.
+
+Only in-memory detection holds this lock. Underlying reads and writes, raw
+connection access, counters and padding run outside it. Parser diagnostics
+capture scalar arguments during detection and invoke the logger after unlock,
+so a diagnostic callback may reenter the parser. No handshake rule, cipher,
+authentication check, flow, packet bound or wire byte is changed.
+
+The preparation accepts only the complete original or complete synchronized
+`proxy.go` for the existing Xray pin. Partial changes and different source bytes
+are refused before preparation writes another file. The native regression uses
+actual Vision readers, writers and independent padding peers; its causal
+control restores only the original pinned parser and must expose the original
+race. Bounded blocked-I/O and isolated logger-callback cases also remain
+required. These checks supplement the selected-DNS protocol matrix.
+
 ## Verification boundaries
 
 The generation suite executes the actual generator, preservation reader,

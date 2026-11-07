@@ -129,6 +129,8 @@ def inputs():
                              ROOT/'deploy/test_mobile_imported_proxy_xray_runner.py',
                              ROOT/'deploy/test_native_xray_udp443.py',
                              ROOT/'deploy/test_native_xray_udp443_runner.py',
+                             ROOT/'deploy/test_xray_vision_state.py',
+                             ROOT/'deploy/test_xray_vision_state_runner.py',
                              ROOT/'deploy/test_mobile_imported_entry.py',
                              ROOT/'deploy/test_mobile_imported_entry_runner.py',
                              ROOT/'deploy/mobile_imported_openvpn_cases.py',

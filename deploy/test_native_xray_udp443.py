@@ -27,6 +27,7 @@ def module(name, filename):
 
 
 PROXY = module('udp443_proxy_receipts', 'test_mobile_imported_proxy_xray.py')
+VISION = module('udp443_vision_parser', 'test_xray_vision_state.py')
 SOCKS = PROXY.SOCKS
 MODES = ('reality-vision', 'reality-pq-vision')
 FLOWS = ('xtls-rprx-vision', 'xtls-rprx-vision-udp443')
@@ -81,7 +82,7 @@ GENERATION_CASES = (
 
 
 def inputs():
-    return sorted(set(PROXY.inputs()) | {ROOT / name for name in GENERATION} | {
+    return sorted(set(PROXY.inputs()) | set(VISION.inputs()) | {ROOT / name for name in GENERATION} | {
         Path(__file__).resolve(), ROOT / 'deploy/test_native_xray_udp443_runner.py',
         ROOT / '.github/workflows/imported-socks-reality-native.yml',
     })
@@ -174,6 +175,7 @@ def run(vendor):
                'shared_verdicts': sorted(SOCKS.IMPORTED.names(SHARED)),
                'generation_verdicts': generated,
                'physical_interface_proof': False, 'device_acceptance': False}
+    receipt['vision_parser'] = VISION.run(resolved[0], compiler, env)
     with tempfile.TemporaryDirectory(prefix='routervpn-native-xray-udp443-') as temporary:
         workspace = Path(temporary)
         xray, xray_before, reference, reference_digest, overlay, instrumentation = SOCKS.build_reference(compiler, vendor, workspace, env)

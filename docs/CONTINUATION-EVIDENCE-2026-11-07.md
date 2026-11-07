@@ -561,6 +561,51 @@ later gates or compilation. All ten native orchestration tests passed in
 376.162 seconds. These tests model command/OS boundaries and do not replace
 the still-required full thirty-seven native verdicts.
 
+### Synchronize the pinned Vision detector without retaining I/O locks
+
+The complete shared TLS detector now uses one per-state mutex. Writer padding
+decisions consume a coherent snapshot of all six detector fields. Reader
+admission and the public `XtlsFilterTls` entry use the same synchronization.
+Direction-owned framing fields retain their existing ownership; no mutex is
+copied. Parser logging copies scalar arguments while locked and invokes the
+logger after unlock. Network I/O, raw connection handling and callbacks remain
+outside the detector lock. The parser's original branches, flow, cipher,
+authentication and wire decisions are preserved.
+
+The shared preparer accepts only the exact original or exact complete patched
+`proxy.go` at Xray pin `50231eaff98ccc31b5cbd247a721c16e97fe5ec1`.
+Partial synchronization and source drift fail before writes. Runtime source
+receipts, Android input fingerprints, Apple preparation and native release
+inputs include both policy and actual regression template. The mandatory
+selected-DNS gate now executes the parser gate and retains its receipt before
+the existing protocol cases.
+
+All six actual native parser/ownership verdicts passed under Go 1.26.3 race
+instrumentation in 2.096 seconds. The fixture exchanges independently encoded
+Vision payloads through real readers/writers, checks datagram and TLS 1.3
+classification, blocks each underlying I/O direction while the opposite one
+continues, and uses an isolated child for logger reentry. The exact original
+parser overlay then reproduced the required `VisionWriter.WriteMultiBuffer` /
+`XtlsFilterTls` data race in both duplex leaves. Compiler errors, unrelated
+failures, missing/skipped cases and changed executables cannot satisfy it.
+
+The repaired image SHA-256 is
+`c7fa17ea05d00aaa5cc90229c5b12cac4d5293dc79db41cfbb45abd7b65d62ad`;
+the original-source control image is
+`ff7b35be2179ca28fd67ef3df9b7e6321389c4d450385fced7769d2411df3def`.
+The actual prepared Xray inventory contains 915 files with digest
+`82adc946efce20bd9db19b5ead92de2c06e4e87fc07bcdf204e97f159a950423`,
+unchanged before and after execution. This direct parser proof was captured
+on isolated source checkpoint `bd271c3a`; all fourteen reviewed unit blobs
+match the main integration. It does not assign that checkpoint's complete
+source receipt to a later commit or certify a whole packaged application.
+The full thirty-seven selected-DNS verdicts remain a separate running gate.
+
+On merged main, the ten preparation, seven shared-runtime, five new parser
+runner and eight existing selected-DNS runner contracts all pass. The native
+repair's direct causal evidence is complete; exact-SHA platform builds,
+remaining encrypted protocol matrices and release publication are separate.
+
 ### Preserve the original native hop-construction caller
 
 The shared imported constructor and both paired/imported native factories now
@@ -661,8 +706,12 @@ passed all twenty-three SOCKS association verdicts, the new derived-expiry
 root and IPv4/IPv6 verdicts, and its exact broken-expiry-cap negative control.
 The other kernel identity, permit, sibling, teardown, PF inspection and
 heartbeat controls also passed. Both standalone PF-anchor jobs passed.
-Intel socket job `128277517006` was still running at the last metadata read;
-the ARM result is not assigned to Intel or to a newer source identity.
+The subsequent completed
+[Intel socket job `128277517006`](https://github.com/Eabusham2/router-vpn/actions/runs/42331086894/job/128277517006)
+also passed those twenty-three association verdicts, the three derived-expiry
+verdicts and the exact cap mutation. Its original native log was read
+independently. All four jobs in this `460918da` Darwin workflow now report
+success; neither architecture's result is assigned to a newer source identity.
 
 The initial `398cb513` failures were read at their exact source identity,
 including authoritative source audit job `128124355405`, iOS jobs

@@ -185,6 +185,8 @@ def checked_xray(source):
         ["git", "-C", str(source), "ls-tree", "-r", "--name-only", XRAY.XRAY_PIN], text=True).splitlines()
     original = {name for name in original if name.endswith(".go") or name in ("go.mod", "go.sum")}
     generated = {
+        "proxy/routervpn_vision_state_test.go":
+            (ROOT / "mobile/applexray/vision_state_test.go.tmpl").read_bytes(),
         "core/routervpn_packet.go": (ROOT / "mobile/applexray/core_packet.go.tmpl").read_bytes(),
         "transport/internet/routervpn_scoped_dialer.go":
             (ROOT / "mobile/applexray/scoped_dialer.go.tmpl").read_text().replace("\n", os.linesep).encode(),
@@ -201,7 +203,7 @@ def checked_xray(source):
         raw = subprocess.check_output(["git", "-C", str(source), "show", XRAY.XRAY_PIN + ":" + relative])
         text = raw.decode()
         patched = False
-        for policy in (XRAY.SHARED.DATAGRAMS, XRAY.SHARED.CONNECTIONS):
+        for policy in (XRAY.SHARED.DATAGRAMS, XRAY.SHARED.CONNECTIONS, XRAY.SHARED.VISION):
             if relative in policy.PATCHES:
                 text = policy.patch_text(relative, text)
                 patched = True

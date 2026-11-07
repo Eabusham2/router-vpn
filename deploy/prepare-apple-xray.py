@@ -24,7 +24,7 @@ NATIVE_DIALER = importlib.util.module_from_spec(_native_spec)
 _native_spec.loader.exec_module(NATIVE_DIALER)
 
 def sources():
-    return sorted((ROOT/'internal/applexray').glob('*.go')) + sorted((ROOT/'mobile/applexray').glob('*.tmpl')) + NATIVE_DIALER.inputs() + [Path(__file__).resolve(), ROOT/'deploy/xray_datagram_policy.py', ROOT/'deploy/xray_connection_policy.py', ROOT/'deploy/prepare-xray-runtime.py']
+    return list(dict.fromkeys(sorted((ROOT/'internal/applexray').glob('*.go')) + sorted((ROOT/'mobile/applexray').glob('*.tmpl')) + NATIVE_DIALER.inputs() + [Path(__file__).resolve()] + SHARED.sources()))
 
 def digest():
     h = hashlib.sha256()

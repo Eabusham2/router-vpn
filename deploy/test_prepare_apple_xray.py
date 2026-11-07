@@ -2,6 +2,8 @@
 """Check deterministic native-engine composition; actual core builds run in CI."""
 from pathlib import Path
 from unittest import mock
+from contextlib import contextmanager
+import hashlib
 import importlib.util
 import tempfile
 import unittest
@@ -23,6 +25,22 @@ rawInput = (*bytes.Buffer)(unsafe.Pointer(p + r.Offset))
 '''
 VISION_INBOUND = VISION.replace('p = uintptr(unsafe.Pointer(utlsConn.Conn))\n', '').replace('\t\t\t', '\t\t\t\t')
 
+
+def vision_source_fixture(policy):
+    return '\n'.join((before + '\n') * count for before, _, count in policy.PATCHES[policy.SOURCE])
+
+
+@contextmanager
+def vision_fixture_policy(policy):
+    # This source is deliberately a compact boundary fixture. Only these unit
+    # tests substitute its two whole-source hashes; actual preparation and the
+    # native race gate require the complete original pinned proxy.go instead.
+    original = vision_source_fixture(policy)
+    prepared = policy.transformed(original)
+    with mock.patch.object(policy, 'SOURCE_SHA256', hashlib.sha256(original.encode()).hexdigest()), \
+            mock.patch.object(policy, 'PREPARED_SHA256', hashlib.sha256(prepared.encode()).hexdigest()):
+        yield original, prepared
+
 class Prepare(unittest.TestCase):
     def fixture(self,tmp):
         sing=Path(tmp)/'sing';xray=Path(tmp)/'xray'
@@ -38,9 +56,10 @@ class Prepare(unittest.TestCase):
         for name,pairs in MODULE.CONNECTIONS.PATCHES.items():
             path=xray/name;path.parent.mkdir(parents=True,exist_ok=True)
             path.write_text('\n'.join(old if old!='c.closed = true' else (old+'\n')*3 for old,_ in pairs))
+        (xray/MODULE.SHARED.VISION.SOURCE).write_text(vision_source_fixture(MODULE.SHARED.VISION))
         return sing,xray
     def run_prepare(self,sing,xray):
-        with mock.patch.object(MODULE,'checkout') as check, mock.patch.object(MODULE.SHARED,'checkout'), mock.patch.object(MODULE.NATIVE_DIALER,'prepare'):
+        with mock.patch.object(MODULE,'checkout') as check, mock.patch.object(MODULE.SHARED,'checkout'), mock.patch.object(MODULE.NATIVE_DIALER,'prepare'), vision_fixture_policy(MODULE.SHARED.VISION):
             MODULE.prepare(sing,xray)
             self.assertEqual(check.call_count,2)
     def test_deterministic_composition_and_instance_scope(self):
@@ -69,6 +88,7 @@ class Prepare(unittest.TestCase):
             self.assertLess(native.index('connectionErr := h.connections.Close()'), native.index('err := instance.Close()'))
             self.assertEqual((sing/'experimental/libbox/routervpn/applexray/connections.go').read_bytes(), (ROOT/'internal/applexray/connections.go').read_bytes())
             self.assertEqual((sing/'protocol/routervpnxray/nested_session_test.go').read_bytes(), (ROOT/'mobile/applexray/nested_session_test.go.tmpl').read_bytes())
+            self.assertEqual((xray/MODULE.SHARED.VISION_TEST_TARGET).read_bytes(), MODULE.SHARED.VISION_TEST.read_bytes())
     def test_nested_transport_fixtures_are_test_tagged_and_exact(self):
         with tempfile.TemporaryDirectory() as tmp:
             sing,xray=self.fixture(tmp);self.run_prepare(sing,xray)
@@ -132,7 +152,26 @@ class Prepare(unittest.TestCase):
             sing,xray=self.fixture(tmp);self.run_prepare(sing,xray)
             file=xray/'transport/internet/reality/reality.go'
             file.write_text(file.read_text().replace('_ = uConn.Close()','weakenedClose()'))
-            with mock.patch.object(MODULE,'checkout'),mock.patch.object(MODULE.SHARED,'checkout'), mock.patch.object(MODULE.NATIVE_DIALER,'prepare'),self.assertRaises(ValueError):MODULE.prepare(sing,xray)
+            with mock.patch.object(MODULE,'checkout'),mock.patch.object(MODULE.SHARED,'checkout'), mock.patch.object(MODULE.NATIVE_DIALER,'prepare'),vision_fixture_policy(MODULE.SHARED.VISION),self.assertRaises(ValueError):MODULE.prepare(sing,xray)
+
+
+class VisionStatePolicy(unittest.TestCase):
+    def test_whole_source_guard_and_complete_idempotence(self):
+        policy = MODULE.SHARED.VISION
+        self.assertEqual(len(policy.SOURCE_SHA256), 64)
+        self.assertEqual(len(policy.PREPARED_SHA256), 64)
+        with vision_fixture_policy(policy) as (original, prepared):
+            self.assertEqual(policy.patch_text(policy.SOURCE, original), prepared)
+            self.assertEqual(policy.patch_text(policy.SOURCE, prepared), prepared)
+            for changed in (original+'\nforeign', prepared+'\nforeign',
+                            prepared.replace('s.visionMu.Lock()', '', 1),
+                            prepared.replace('tlsState.EnableXtls', 'w.trafficState.EnableXtls', 1)):
+                with self.assertRaises(ValueError):
+                    policy.patch_text(policy.SOURCE, changed)
+            with self.assertRaises(ValueError):
+                policy.patch_text('unrelated.go', original)
+        with self.assertRaises(ValueError):
+            policy.patch_text(policy.SOURCE, original)
 
 class ScopedDialPolicy(unittest.TestCase):
     def test_exact_policy_and_partial_patch_rejection(self):

@@ -1,0 +1,313 @@
+package proxy
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/xtls/xray-core/common/buf"
+	xlog "github.com/xtls/xray-core/common/log"
+)
+
+var routerVPNVisionUUID = []byte("vision-state-key")
+
+type routerVPNVisionReadResult struct {
+	payload []byte
+	err     error
+}
+
+type routerVPNVisionReader struct {
+	payload []byte
+	entered chan struct{}
+	release <-chan struct{}
+}
+
+func (r *routerVPNVisionReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
+	if r.entered != nil {
+		close(r.entered)
+		<-r.release
+	}
+	return buf.MultiBuffer{buf.FromBytes(bytes.Clone(r.payload))}, nil
+}
+
+type routerVPNVisionWriter struct {
+	payload []byte
+	entered chan struct{}
+	release <-chan struct{}
+}
+
+func (w *routerVPNVisionWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
+	if w.entered != nil {
+		close(w.entered)
+		<-w.release
+	}
+	for _, b := range mb {
+		w.payload = append(w.payload, b.Bytes()...)
+	}
+	buf.ReleaseMulti(mb)
+	return nil
+}
+
+func routerVPNVisionEncoded(t *testing.T, payload []byte, uplink bool) []byte {
+	t.Helper()
+	sink := new(routerVPNVisionWriter)
+	writer := NewVisionWriter(sink, NewTrafficState(bytes.Clone(routerVPNVisionUUID)), uplink,
+		context.Background(), nil, nil, nil)
+	if err := writer.WriteMultiBuffer(buf.MultiBuffer{buf.FromBytes(bytes.Clone(payload))}); err != nil {
+		t.Fatal("independent Vision peer did not encode its original payload", err)
+	}
+	return bytes.Clone(sink.payload)
+}
+
+func routerVPNVisionRead(reader *VisionReader) routerVPNVisionReadResult {
+	mb, err := reader.ReadMultiBuffer()
+	var payload []byte
+	for _, b := range mb {
+		payload = append(payload, b.Bytes()...)
+	}
+	buf.ReleaseMulti(mb)
+	return routerVPNVisionReadResult{payload, err}
+}
+
+func routerVPNVisionServerHello() []byte {
+	// A complete TLS 1.3 ServerHello record: legacy version, empty session ID,
+	// AES-128-GCM, supported_versions and a 32-byte X25519 key share.
+	hello := make([]byte, 95)
+	copy(hello, []byte{0x16, 3, 3, 0, 90, 2, 0, 0, 86, 3, 3})
+	for i := 11; i < 43; i++ {
+		hello[i] = byte(i)
+	}
+	copy(hello[44:], []byte{0x13, 1, 0, 0, 46, 0, 0x2b, 0, 2, 3, 4, 0, 0x33, 0, 36, 0, 29, 0, 32})
+	for i := 63; i < len(hello); i++ {
+		hello[i] = byte(i)
+	}
+	return hello
+}
+
+func routerVPNVisionJoined(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Error("original Vision fixture operation did not join")
+	}
+}
+
+func TestRouterVPNVisionSharedParserDuplex(t *testing.T) {
+	for _, kind := range []string{"datagram", "tls13"} {
+		t.Run(kind, func(t *testing.T) {
+			for attempt := 0; attempt < 16; attempt++ {
+				downlink := []byte("captured downstream datagram")
+				if kind == "tls13" {
+					downlink = routerVPNVisionServerHello()
+				}
+				uplink := []byte("captured upstream datagram")
+				state := NewTrafficState(bytes.Clone(routerVPNVisionUUID))
+				reader := NewVisionReader(&routerVPNVisionReader{payload: routerVPNVisionEncoded(t, downlink, false)},
+					state, false, context.Background(), nil, nil, nil, nil)
+				release := make(chan struct{})
+				var releaseOnce sync.Once
+				sink := &routerVPNVisionWriter{entered: make(chan struct{}), release: release}
+				writer := NewVisionWriter(sink, state, true, context.Background(), nil, nil, nil)
+				ready := make(chan struct{})
+				readDone, writeDone := make(chan struct{}), make(chan struct{})
+				readResult, writeResult := make(chan routerVPNVisionReadResult, 1), make(chan error, 1)
+				go func() {
+					defer close(readDone)
+					<-ready
+					readResult <- routerVPNVisionRead(reader)
+				}()
+				go func() {
+					defer close(writeDone)
+					<-ready
+					writeResult <- writer.WriteMultiBuffer(buf.MultiBuffer{buf.FromBytes(bytes.Clone(uplink))})
+				}()
+				t.Cleanup(func() {
+					releaseOnce.Do(func() { close(release) })
+					routerVPNVisionJoined(t, readDone)
+					routerVPNVisionJoined(t, writeDone)
+				})
+				close(ready)
+				var received routerVPNVisionReadResult
+				select {
+				case received = <-readResult:
+				case <-time.After(2 * time.Second):
+					t.Fatal("original duplex Vision reader did not finish")
+				}
+				releaseOnce.Do(func() { close(release) })
+				select {
+				case err := <-writeResult:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("original duplex Vision writer did not finish")
+				}
+				if received.err != nil || !bytes.Equal(received.payload, downlink) {
+					t.Fatal("duplex parser changed its original downstream payload", received.err)
+				}
+				peer := NewVisionReader(&routerVPNVisionReader{payload: sink.payload},
+					NewTrafficState(bytes.Clone(routerVPNVisionUUID)), true, context.Background(), nil, nil, nil, nil)
+				decoded := routerVPNVisionRead(peer)
+				if decoded.err != nil || !bytes.Equal(decoded.payload, uplink) {
+					t.Fatal("duplex parser changed the payload decoded by the independent peer", decoded.err)
+				}
+				if kind == "datagram" && state.NumberOfPacketToFilter != 6 {
+					t.Fatal("duplex parser lost an original packet-budget update", state.NumberOfPacketToFilter)
+				}
+				if kind == "tls13" && (!state.IsTLS || !state.IsTLS12orAbove || !state.EnableXtls ||
+					state.Cipher != 0x1301 || state.RemainingServerHello != 0 || state.NumberOfPacketToFilter != 0) {
+					t.Fatal("duplex parser lost the captured TLS 1.3 classification")
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNVisionReadIOReleasesParser(t *testing.T) {
+	state := NewTrafficState(bytes.Clone(routerVPNVisionUUID))
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	reader := NewVisionReader(&routerVPNVisionReader{payload: routerVPNVisionEncoded(t, []byte("owned downlink"), false), entered: entered, release: release},
+		state, false, context.Background(), nil, nil, nil, nil)
+	readDone, writeDone := make(chan struct{}), make(chan struct{})
+	result := make(chan error, 1)
+	readResult := make(chan routerVPNVisionReadResult, 1)
+	go func() { defer close(readDone); readResult <- routerVPNVisionRead(reader) }()
+	t.Cleanup(func() {
+		once.Do(func() { close(release) })
+		routerVPNVisionJoined(t, readDone)
+		routerVPNVisionJoined(t, writeDone)
+	})
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		close(writeDone)
+		t.Fatal("owned underlying Vision read did not enter")
+	}
+	go func() {
+		defer close(writeDone)
+		writer := NewVisionWriter(new(routerVPNVisionWriter), state, true, context.Background(), nil, nil, nil)
+		result <- writer.WriteMultiBuffer(buf.MultiBuffer{buf.FromBytes([]byte("owned opposite write"))})
+	}()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked underlying read retained the shared parser lock")
+	}
+	once.Do(func() { close(release) })
+	select {
+	case received := <-readResult:
+		if received.err != nil || !bytes.Equal(received.payload, []byte("owned downlink")) {
+			t.Fatal("released original read changed its captured payload", received.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("released original read did not finish")
+	}
+}
+
+func TestRouterVPNVisionWriteIOReleasesParser(t *testing.T) {
+	state := NewTrafficState(bytes.Clone(routerVPNVisionUUID))
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	writer := NewVisionWriter(&routerVPNVisionWriter{entered: entered, release: release}, state, true, context.Background(), nil, nil, nil)
+	readDone, writeDone := make(chan struct{}), make(chan struct{})
+	result := make(chan routerVPNVisionReadResult, 1)
+	writeResult := make(chan error, 1)
+	go func() {
+		defer close(writeDone)
+		writeResult <- writer.WriteMultiBuffer(buf.MultiBuffer{buf.FromBytes([]byte("owned uplink"))})
+	}()
+	t.Cleanup(func() {
+		once.Do(func() { close(release) })
+		routerVPNVisionJoined(t, readDone)
+		routerVPNVisionJoined(t, writeDone)
+	})
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		close(readDone)
+		t.Fatal("owned underlying Vision write did not enter")
+	}
+	payload := []byte("owned opposite read")
+	reader := NewVisionReader(&routerVPNVisionReader{payload: routerVPNVisionEncoded(t, payload, false)}, state, false, context.Background(), nil, nil, nil, nil)
+	go func() { defer close(readDone); result <- routerVPNVisionRead(reader) }()
+	select {
+	case received := <-result:
+		if received.err != nil || !bytes.Equal(received.payload, payload) {
+			t.Fatal("original opposite read changed", received.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked underlying write retained the shared parser lock")
+	}
+	once.Do(func() { close(release) })
+	select {
+	case err := <-writeResult:
+		if err != nil {
+			t.Fatal("released original write failed", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("released original write did not finish")
+	}
+}
+
+type routerVPNVisionLogHandler struct {
+	state *TrafficState
+	calls int
+}
+
+func (h *routerVPNVisionLogHandler) Handle(message xlog.Message) {
+	if !strings.Contains(message.String(), "XtlsFilterTls found tls 1.3!") {
+		return
+	}
+	// An empty parser transaction produces no further log. It must be able to
+	// enter this exact state from the original diagnostic callback.
+	XtlsFilterTls(nil, h.state, context.Background())
+	h.calls++
+}
+
+func TestRouterVPNVisionFilterLoggingReleasesParser(t *testing.T) {
+	const childKey = "ROUTER_VPN_VISION_LOG_CHILD"
+	const witness = "RouterVPN Vision original parser callback reentered once"
+	if os.Getenv(childKey) == "1" {
+		state := NewTrafficState(bytes.Clone(routerVPNVisionUUID))
+		handler := &routerVPNVisionLogHandler{state: state}
+		// The isolated child owns this process's logger. The parent and every
+		// other native test retain their original global handler unchanged.
+		xlog.RegisterHandler(handler)
+		mb := buf.MultiBuffer{buf.FromBytes(routerVPNVisionServerHello())}
+		XtlsFilterTls(mb, state, context.Background())
+		buf.ReleaseMulti(mb)
+		if handler.calls != 1 || !state.EnableXtls {
+			t.Fatal("original parser callback did not retain TLS classification")
+		}
+		fmt.Println(witness)
+		return
+	}
+	image, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, image, "-test.run=^TestRouterVPNVisionFilterLoggingReleasesParser$", "-test.count=1", "-test.timeout=2s")
+	for _, item := range os.Environ() {
+		if !strings.HasPrefix(item, childKey+"=") {
+			command.Env = append(command.Env, item)
+		}
+	}
+	command.Env = append(command.Env, childKey+"=1")
+	output, err := command.CombinedOutput()
+	if err != nil || strings.Count(string(output), witness) != 1 || !strings.Contains(string(output), "PASS") {
+		t.Fatalf("isolated original parser logger did not reenter and join: %v\n%s", err, output)
+	}
+}
