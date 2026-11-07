@@ -20,10 +20,10 @@ type importedEntry struct {
 
 // NewImportedEntry composes an imported SOCKS5, SS2022, Hysteria2, WireGuard, AmneziaWG or OpenVPN predecessor and a paired
 // Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. SOCKS5 also supports
-// the paired REALITY/Vision final with both independently captured layers Off.
+// the paired REALITY/Vision final with independently captured Start Layers.
 // Packet-to-packet
 // composition requires the complete configured data/control envelope. SOCKS5's
-// SS/Hysteria2/WG/AWG finals retain independently provisioned Start Layers.
+// SS/Hysteria2/WG/AWG/REALITY finals retain independently provisioned Start Layers.
 // HTTP/HTTPS CONNECT retains TCP-only SS2022 unless the captured final supplies
 // exact configured UoT-v2 authority. Compilation proves neither live identity.
 func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (*Controller, error) {
@@ -85,9 +85,6 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 
 	if raw := exit.profile["multihop_execution"]; raw != nil && raw != "" && raw != "local" {
 		return nil, bad
-	}
-	if socksXrayFinal && ((entryMeta.StartLayer != "" && entryMeta.StartLayer != "off") || (predecessorText(exit.profile, "start_layer") != "" && predecessorText(exit.profile, "start_layer") != "off") || exitStart != "") {
-		return nil, errors.New("imported SOCKS REALITY/Vision requires both captured Start Layers Off")
 	}
 	var first, last map[string]any
 	if json.Unmarshal([]byte(entry.Config()), &first) != nil || json.Unmarshal([]byte(exit.Config()), &last) != nil {
@@ -164,9 +161,16 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	}
 	if socksXrayFinal {
 		// The original paired-node compiler owns the complete VLESS/REALITY
-		// source. Attach only this captured entry after validating the single
-		// exact native final; no imported physical override or helper is kept.
-		if err := applexray.ValidateSingleTransport(final, "reality-vision"); err != nil {
+		// source and its separately captured same-node Start Layer. Validate
+		// that exact inner edge before attaching the final's outermost edge to
+		// the independently captured entry; arbitrary detours are never stripped.
+		layer := predecessorText(exit.profile, "start_layer")
+		if layer == "" || layer == "off" {
+			err = applexray.ValidateSingleTransport(final, "reality-vision")
+		} else {
+			err = validateNestedXrayExit(final, "reality-vision", applexray.StartLayerTag)
+		}
+		if err != nil {
 			return nil, err
 		}
 	}

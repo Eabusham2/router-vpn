@@ -38,6 +38,20 @@ import (
 // tuple is mapped to the retained loopback peer. It does not grant an OS tunnel,
 // run the native host proof adapter or report the unstarted plan as Connected.
 func TestRouterVPNImportedSOCKSRealityVisionNativeTraffic(t *testing.T) {
+	original := desktopImportedSOCKSXraySource(t, "socks5--final-reality-vision.json")
+	for _, fault := range []string{
+		"success", "entry-auth", "auth-downgrade", "wrong-entry-ip",
+		"final-reality-key", "final-user", "final-route", "dns-route",
+		"final-identity", "final-token", "cancel", "close-owner",
+	} {
+		t.Run(fault, func(t *testing.T) {
+			desktopImportedSOCKSXrayTraffic(t, original, fault)
+		})
+	}
+}
+
+func desktopImportedSOCKSXraySource(t *testing.T, name string) []string {
+	t.Helper()
 	directory := os.Getenv("ROUTERVPN_IMPORTED_ENTRY_FIXTURES")
 	if directory == "" {
 		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES") == "1" {
@@ -45,7 +59,7 @@ func TestRouterVPNImportedSOCKSRealityVisionNativeTraffic(t *testing.T) {
 		}
 		t.Skip("exact compiler sources and pinned Xray reference supplied by native gate")
 	}
-	path := filepath.Join(directory, "socks5--final-reality-vision.json")
+	path := filepath.Join(directory, name)
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {
 		t.Fatal("original SOCKS REALITY source is not a retained file", err)
@@ -62,14 +76,45 @@ func TestRouterVPNImportedSOCKSRealityVisionNativeTraffic(t *testing.T) {
 	if err != nil || plan.SourceSHA256() != original[7] || plan.Config() != original[8] || plan.Healthy() {
 		t.Fatal("original SOCKS REALITY source receipt changed", err)
 	}
-	for _, fault := range []string{
-		"success", "entry-auth", "auth-downgrade", "wrong-entry-ip",
-		"final-reality-key", "final-user", "final-route", "dns-route",
-		"final-identity", "final-token", "cancel", "close-owner",
-	} {
-		t.Run(fault, func(t *testing.T) {
-			desktopImportedSOCKSXrayTraffic(t, original, fault)
-		})
+	return original
+}
+
+// Keep the original twelve Off/Off cases above. Every newly admitted layer pair
+// executes real AEAD/whitening peers and retires the original Xray stream owner.
+func TestRouterVPNImportedSOCKSRealityVisionLayerTraffic(t *testing.T) {
+	for _, entry := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		for _, final := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			if entry == "" && final == "" {
+				continue
+			}
+			label := "reality-vision"
+			if entry == "" {
+				label += "--" + final
+			} else if final == "" {
+				label += "--entry-" + entry
+			} else {
+				label += "--" + entry + "--" + final
+			}
+			t.Run(label, func(t *testing.T) {
+				original := desktopImportedSOCKSXraySource(t, "socks5--final-"+label+".json")
+				faults := []string{"success", "cancel", "close-owner"}
+				if entry != "" {
+					faults = append(faults, "entry-layer-key")
+				}
+				if entry == "aes-256-gcm+xor-whitening" {
+					faults = append(faults, "entry-layer-whitening")
+				}
+				if final != "" {
+					faults = append(faults, "final-layer-key")
+				}
+				if final == "aes-256-gcm+xor-whitening" {
+					faults = append(faults, "final-layer-whitening")
+				}
+				for _, fault := range faults {
+					t.Run(fault, func(t *testing.T) { desktopImportedSOCKSXrayTraffic(t, original, fault) })
+				}
+			})
+		}
 	}
 }
 
@@ -98,10 +143,21 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 	capture := desktopImportedSOCKSXrayObject(t, args[1])
 	profile := desktopImportedSOCKSXrayObject(t, args[4])
 	expectedIP, ok := capture["expected_public_ip"].(string)
-	if !ok || expectedIP != "203.0.113.88" || args[2] != "reality-vision" || args[5] != "" || args[6] != "" ||
-		profile["multihop_execution"] != "local" || profile["start_layer"] != "off" ||
+	entryLayer, _ := capture["profile"].(map[string]any)["start_layer"].(string)
+	finalLayer, _ := profile["start_layer"].(string)
+	if entryLayer == "off" {
+		entryLayer = ""
+	}
+	if finalLayer == "off" {
+		finalLayer = ""
+	}
+	validLayer := func(mode string) bool {
+		return mode == "" || mode == "aes-256-gcm" || mode == "aes-256-gcm+xor-whitening"
+	}
+	if !ok || expectedIP != "203.0.113.88" || args[2] != "reality-vision" || (args[5] == "") != (finalLayer == "") || args[6] != "" ||
+		profile["multihop_execution"] != "local" || !validLayer(entryLayer) || !validLayer(finalLayer) ||
 		profile["router_api"] != "http://10.77.0.1:8787" {
-		t.Fatal("SOCKS REALITY reference lost its exact Local/Off source")
+		t.Fatal("SOCKS REALITY reference lost its exact Local independent-layer source")
 	}
 	token, tokenOK := profile["api_token"].(string)
 	node, nodeOK := profile["node_proof_id"].(string)
@@ -113,6 +169,7 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 	var finalServer *desktopNodeLayerServer
 	var entry desktopExternalInstalledSSPeer // Existing wrapper; this peer is SOCKS only.
 	var socksPeer *desktopExternalInstalledSOCKSPeer
+	var entryCarrier, finalCarrier *desktopExternalInstalledSSPeer
 	var lower *desktopImportedSOCKSXrayPhysical
 	completed := false
 	// Registered first so every original peer/process/listener has joined before
@@ -122,11 +179,11 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 			return
 		}
 		observed := entry.stats()
-		if lower.calls.Load() == 0 || observed.PhysicalTCP == 0 || observed.PhysicalUDP != 0 || observed.Packets != 0 {
+		if lower.calls.Load() == 0 || (!strings.HasPrefix(fault, "entry-layer-") && observed.PhysicalTCP == 0) || observed.PhysicalUDP != 0 || observed.Packets != 0 {
 			t.Error("SOCKS REALITY did not retain its original TCP-only physical control")
 		}
-		earlyFailure := fault == "entry-auth" || fault == "auth-downgrade" || fault == "wrong-entry-ip"
-		routeFailure := fault == "final-route"
+		earlyFailure := fault == "entry-auth" || fault == "auth-downgrade" || fault == "wrong-entry-ip" || strings.HasPrefix(fault, "entry-layer-")
+		routeFailure := fault == "final-route" || strings.HasPrefix(fault, "final-layer-")
 		cipherFailure := fault == "final-reality-key" || fault == "final-user"
 		if earlyFailure || routeFailure {
 			if finalServer.rawTCP.Load() != 0 || dnsRequests.Load() != 0 || healthRequests.Load() != 0 {
@@ -144,7 +201,7 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 		if fault == "auth-downgrade" && socksPeer.rejected.Load() == 0 {
 			t.Error("SOCKS REALITY did not close its downgraded authentication owner")
 		}
-		if fault == "entry-auth" || fault == "auth-downgrade" {
+		if fault == "entry-auth" || fault == "auth-downgrade" || strings.HasPrefix(fault, "entry-layer-") {
 			if publicRequests.Load() != 0 {
 				t.Error("rejected SOCKS authentication reached the public proof")
 			}
@@ -164,6 +221,26 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 			}
 			if healthAuthorized.Load() != wantAuth {
 				t.Error("paired proof negative changed independent token acceptance")
+			}
+		}
+		for _, role := range []struct {
+			name string
+			peer *desktopExternalInstalledSSPeer
+		}{{"entry", entryCarrier}, {"final", finalCarrier}} {
+			if role.peer == nil {
+				continue
+			}
+			stats := role.peer.stats()
+			failed := strings.HasPrefix(fault, role.name+"-layer-")
+			if stats.PhysicalUDP != 0 || stats.Packets != 0 {
+				t.Error("SOCKS REALITY layer granted an unowned physical datagram")
+			}
+			if failed {
+				if stats.AuthTCP == 0 || stats.Streams != 0 {
+					t.Error("SOCKS REALITY independent layer lacks actual AEAD rejection", role.name, stats)
+				}
+			} else if !earlyFailure && (stats.PhysicalTCP == 0 || stats.Streams == 0) {
+				t.Error("SOCKS REALITY skipped an independently captured layer", role.name, stats)
 			}
 		}
 		if fault == "success" || fault == "cancel" || fault == "close-owner" {
@@ -231,6 +308,20 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 		files = desktopNodeXrayAssets(t, files, "xray-user")
 	}
 	profile["endpoint"] = ip.String()
+	if finalLayer != "" {
+		var assets map[string]string
+		if json.Unmarshal([]byte(args[5]), &assets) != nil {
+			t.Fatal("missing original final layer assets")
+		}
+		raw, err := base64.StdEncoding.Strict().DecodeString(assets["sing-box.json"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		layerGraph := desktopImportedSOCKSXrayObject(t, string(raw))
+		layerGraph["outbounds"].([]any)[0].(map[string]any)["server"] = ip.String()
+		assets["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(desktopImportedSOCKSXrayJSON(t, layerGraph)))
+		args[5] = desktopImportedSOCKSXrayJSON(t, assets)
+	}
 	if fault == "final-route" {
 		var assets map[string]string
 		if json.Unmarshal([]byte(files), &assets) != nil {
@@ -276,8 +367,29 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 			finalRaw = row
 		}
 	}
-	if firstRaw == nil || finalRaw == nil || firstRaw["type"] != "socks" || firstRaw["detour"] != nil ||
-		finalRaw["type"] != "routervpn-xray" || finalRaw["mode"] != "reality-vision" || finalRaw["detour"] != "entry-wg" || len(finalRaw) != 5 {
+	byTag := desktopImportedSOCKSGraph(graph)
+	var entryOuter, finalOuter map[string]any
+	if firstRaw == nil || finalRaw == nil {
+		t.Fatal("SOCKS REALITY reference lost original roles")
+	}
+	if entryLayer != "" {
+		tag, _ := firstRaw["detour"].(string)
+		entryOuter = byTag[tag]
+		if entryOuter == nil || entryOuter["detour"] != nil || firstRaw["server"] != "10.93.0.1" {
+			t.Fatal("SOCKS REALITY lost independently provisioned entry layer")
+		}
+	} else if firstRaw["detour"] != nil {
+		t.Fatal("SOCKS REALITY Off entry acquired a layer")
+	}
+	finalDetour := "entry-wg"
+	if finalLayer != "" {
+		finalDetour = mobilemultihop.NativeStartLayerTag
+		finalOuter = byTag[finalDetour]
+		if finalOuter == nil || finalOuter["detour"] != "entry-wg" {
+			t.Fatal("SOCKS REALITY lost independently provisioned final layer")
+		}
+	}
+	if firstRaw["type"] != "socks" || finalRaw["type"] != "routervpn-xray" || finalRaw["mode"] != "reality-vision" || finalRaw["detour"] != finalDetour || len(finalRaw) != 5 {
 		t.Fatal("SOCKS REALITY reference lost its exact native detour")
 	}
 	var meta mobilemultihop.Metadata
@@ -320,17 +432,47 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 	public.TLS = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
 	public.StartTLS()
 	t.Cleanup(public.Close)
+	finalPhysical := finalTarget
+	if finalOuter != nil {
+		_, port, err := net.SplitHostPort(finalTarget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		layerCtx, layerCancel := context.WithCancel(context.Background())
+		server := &desktopNodeLayerServer{ctx: layerCtx, cancel: layerCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: net.JoinHostPort("10.77.0.1", port), Physical: finalTarget}}}
+		layerFault := ""
+		if strings.HasPrefix(fault, "final-layer-") {
+			layerFault = fault
+		}
+		peer := desktopImportedSOCKSLayerProvider(t, server, finalOuter, layerFault)
+		finalCarrier = &peer
+		t.Cleanup(peer.close)
+		finalTarget, finalPhysical = desktopImportedSOCKSAddress(finalOuter), peer.address
+	}
 	entryCtx, entryCancel := context.WithCancel(context.Background())
 	entryServer := &desktopNodeLayerServer{ctx: entryCtx, cancel: entryCancel, connections: map[io.Closer]bool{},
 		routes: []desktopNodeLayerRoute{
-			{Network: "tcp", Destination: finalTarget, Physical: finalTarget},
+			{Network: "tcp", Destination: finalTarget, Physical: finalPhysical},
 			{Network: "tcp", Destination: "1.1.1.1:443", Physical: public.Listener.Addr().String()},
 		}}
 	entry, socksPeer = desktopStartImportedSOCKSProvider(t, entryServer, password, fault)
-	entryTarget := M.ParseSocksaddr(net.JoinHostPort(firstRaw["server"].(string), fmt.Sprint(int(firstRaw["server_port"].(float64)))))
+	physicalRaw, entryPhysical := firstRaw, entry.address
+	if entryOuter != nil {
+		layerCtx, layerCancel := context.WithCancel(context.Background())
+		server := &desktopNodeLayerServer{ctx: layerCtx, cancel: layerCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: desktopImportedSOCKSAddress(firstRaw), Physical: entry.address}}}
+		layerFault := ""
+		if strings.HasPrefix(fault, "entry-layer-") {
+			layerFault = fault
+		}
+		peer := desktopImportedSOCKSLayerProvider(t, server, entryOuter, layerFault)
+		entryCarrier = &peer
+		t.Cleanup(peer.close)
+		physicalRaw, entryPhysical = entryOuter, peer.address
+	}
+	entryTarget := M.ParseSocksaddr(desktopImportedSOCKSAddress(physicalRaw))
 	lower = &desktopImportedSOCKSXrayPhysical{
-		Adapter: outbound.NewAdapterWithDialerOptions("direct", "fixture-original-socks-control", []string{"tcp"}, option.DialerOptions{}),
-		expected: entryTarget, physical: entry.address, connections: map[*desktopImportedSOCKSXrayConnection]bool{}, changed: make(chan struct{}),
+		Adapter:  outbound.NewAdapterWithDialerOptions("direct", "fixture-original-socks-control", []string{"tcp"}, option.DialerOptions{}),
+		expected: entryTarget, physical: entryPhysical, connections: map[*desktopImportedSOCKSXrayConnection]bool{}, changed: make(chan struct{}),
 	}
 	t.Cleanup(func() {
 		if err := lower.Close(); err != nil {
@@ -349,7 +491,18 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 	}
 	// This is the explicit fixture physical boundary; the sealed compiler graph
 	// above remains untouched and the final keeps its actual entry-wg detour.
-	firstOptions.Detour = lower.Tag()
+	if entryOuter == nil {
+		firstOptions.Detour = lower.Tag()
+	} else {
+		// Preserve the compiled inner detour; only the outer physical tuple is
+		// rebound to the test's retained encrypted provider.
+		copy := make(map[string]any, len(entryOuter)+1)
+		for k, v := range entryOuter {
+			copy[k] = v
+		}
+		copy["detour"] = lower.Tag()
+		manager.owners[entryOuter["tag"].(string)] = desktopImportedSOCKSNativeLayer(t, owned, copy)
+	}
 	first, err := SOCKS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), "entry-wg", firstOptions)
 	if err != nil {
 		t.Fatal(err)
@@ -362,6 +515,9 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 		})
 	}
 	manager.owners["entry-wg"] = first
+	if finalOuter != nil {
+		manager.owners[mobilemultihop.NativeStartLayerTag] = desktopImportedSOCKSNativeLayer(t, owned, finalOuter)
+	}
 	var finalOptions XR.Options
 	if json.Unmarshal([]byte(desktopImportedSOCKSXrayJSON(t, finalRaw)), &finalOptions) != nil {
 		t.Fatal("captured Xray options did not decode")
@@ -384,7 +540,7 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 		t.Fatal("SOCKS REALITY public proof trust missing")
 	}
 	publicOK, err := desktopImportedSOCKSXrayPublic(ctx, first, roots, expectedIP)
-	earlyFailure := fault == "entry-auth" || fault == "auth-downgrade" || fault == "wrong-entry-ip"
+	earlyFailure := fault == "entry-auth" || fault == "auth-downgrade" || fault == "wrong-entry-ip" || strings.HasPrefix(fault, "entry-layer-")
 	if publicOK == earlyFailure {
 		t.Fatal("SOCKS REALITY independent entry proof changed", err)
 	}
@@ -392,7 +548,7 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 	dnsOK, proofOK := false, false
 	if publicOK {
 		dnsOK, err = desktopImportedSOCKSXrayDNS(ctx, final, net.JoinHostPort(wantedDNS, "53"))
-		wantDNS := fault != "final-reality-key" && fault != "final-user" && fault != "final-route" && fault != "dns-route"
+		wantDNS := fault != "final-reality-key" && fault != "final-user" && fault != "final-route" && fault != "dns-route" && !strings.HasPrefix(fault, "final-layer-")
 		if dnsOK != wantDNS {
 			t.Fatal("SOCKS REALITY selected DNS did not follow its original authenticated chain", err)
 		}
@@ -691,8 +847,8 @@ func (p *desktopImportedSOCKSXrayPhysical) Close() error {
 
 type desktopImportedSOCKSXrayConnection struct {
 	net.Conn
-	owner *desktopImportedSOCKSXrayPhysical
-	mu    sync.Mutex
+	owner  *desktopImportedSOCKSXrayPhysical
+	mu     sync.Mutex
 	closed bool
 }
 

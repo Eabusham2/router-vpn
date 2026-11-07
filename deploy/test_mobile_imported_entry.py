@@ -25,7 +25,7 @@ def socks_label(mode,a,b):
  if not b:return mode+'--entry-'+a
  return mode+'--'+(a or 'off')+'--'+(b or 'off')
 SOCKS_FILES={'socks5--final-'+socks_label(mode,a,b)+'.json' for mode in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong') for a in LAYERS for b in LAYERS}
-SOCKS_XRAY_FILES={'socks5--final-reality-vision.json'}
+SOCKS_XRAY_FILES={'socks5--final-'+socks_label('reality-vision',a,b)+'.json' for a in LAYERS for b in LAYERS}
 SOCKS_XRAY_PARSER='TestRouterImportedSOCKSRealityVisionNativeGraph'
 CONNECT_ROWS=[p+"--"+m+"--"+d for p in ("http-connect","https-connect") for m in ("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305") for d in ("home","custom")]
 CONNECT_FILES={"connect--"+row+".json" for row in CONNECT_ROWS}
@@ -44,7 +44,9 @@ CORE={
  "TestImportedEntrySOCKSRealityVisionCapturedGraphs":["default-home","explicit-off","custom-udp","custom-tcp","ipv6-off","lan-off","fixed-mtu"],
  "TestImportedEntrySOCKSRealityVisionEncryptedDNS":[p+"/"+a for p in ("tls","https","h3") for a in ("literal","hostname")],
  "TestImportedEntrySOCKSRealityVisionRejectsChangedSources":["entry-credential","entry-route","entry-version","fake-entry-proof","fake-entry-api","same-id","final-not-paired","missing-final-proof","missing-final-token","missing-xray","foreign-wrapper","xray-bypass","xray-plaintext","mode-mismatch","server","compare","unused-start","foreign-bootstrap"],
- "TestImportedEntrySOCKSRealityVisionKeepsScope":["final-"+p for p in ("reality-pq-vision","reality-xhttp","split","max")]+["entry-"+p for p in ("shadowsocks","hysteria2","wireguard","amneziawg","http-connect","https-connect","openvpn")]+[role+"-"+layer for layer in LAYERS[1:] for role in ("entry","final")],
+ "TestImportedEntrySOCKSRealityVisionKeepsScope":["final-"+p for p in ("reality-pq-vision","reality-xhttp","split","max")]+["entry-"+p for p in ("shadowsocks","hysteria2","wireguard","amneziawg","http-connect","https-connect","openvpn")],
+ "TestImportedEntrySOCKSRealityVisionIndependentLayers":[socks_label("reality-vision",a,b) for a in LAYERS for b in LAYERS],
+ "TestImportedEntrySOCKSRealityVisionLayerAuthority":["entry-missing","entry-mismatch","entry-foreign","entry-off-unused","entry-invalid","final-missing","final-foreign","final-off-unused","final-invalid","entry-detour","final-wrapper-detour","final-xray-bypass","server","compare"],
  "TestImportedEntrySOCKSRealityVisionRetainsOriginalBytes":["entry-graph","entry-capture","final-assets","final-profile"],
  "TestImportedEntrySOCKSRealityVisionRequiresBothProofsAndDNS":["success","wrong-public-ip","wrong-paired-final","dns-failure","cancel-during-dns","missing-dns-capability","changed-owner"],
  "TestImportedEntrySOCKSRealityVisionRetainedRuntime":["close","network-change","replacement"],
@@ -180,11 +182,11 @@ def socks_xray_controls():
    'socksXrayFinal := false',
    'TestImportedEntrySOCKSRealityVisionCapturedGraphs','default-home',
    'captured SOCKS REALITY/Vision graph was rejected'),
-  ('unowned-entry-layer','internal/mobilemultihop/imported_entry.go',
-   'if socksXrayFinal && ((entryMeta.StartLayer',
-   'if false && ((entryMeta.StartLayer',
-   'TestImportedEntrySOCKSRealityVisionKeepsScope','entry-aes-256-gcm',
-   'SOCKS REALITY Off-only boundary did not reject the provisioned layer'),
+  ('bypassed-final-layer','internal/mobilemultihop/imported_entry.go',
+   'outer["detour"] = "entry-wg"',
+   'final["detour"] = "entry-wg"',
+   'TestImportedEntrySOCKSRealityVisionIndependentLayers','reality-vision--aes-256-gcm',
+   'SOCKS REALITY final layer lost its original authenticated edge'),
   ('missing-imported-proof','internal/mobilemultihop/runtime.go',
    'if err := c.verifyImportedEntry(ctx); err != nil {',
    'if err := error(nil); err != nil {',

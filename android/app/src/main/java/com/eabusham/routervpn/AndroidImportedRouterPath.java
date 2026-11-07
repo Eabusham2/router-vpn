@@ -137,9 +137,8 @@ final class AndroidImportedRouterPath {
         // Non-SS finals take their outer Start Layer from this same paired
         // node's exact generated SS asset map, separately from the inner mode.
         String layer = AndroidStartLayer.selectedMode(exit);
-        if ("reality-vision".equals(exitMode) && (!"socks5".equals(AndroidExternalPolicy.protocol(entry.protocol))
-                || !Arrays.asList("", "off").contains(entry.policy.optString("start_layer", "off")) || !"off".equals(layer))) {
-            throw new IllegalArgumentException("SOCKS5 to REALITY Vision requires Local execution and both Start Layers Off.");
+        if ("reality-vision".equals(exitMode) && !"socks5".equals(AndroidExternalPolicy.protocol(entry.protocol))) {
+            throw new IllegalArgumentException("REALITY Vision requires the captured Local SOCKS5 entry.");
         }
         String exitStart = !"shadowsocks".equals(exitMode) && !"off".equals(layer)
                 ? exit.getJSONObject("profiles").getJSONObject("shadowsocks").toString() : "";

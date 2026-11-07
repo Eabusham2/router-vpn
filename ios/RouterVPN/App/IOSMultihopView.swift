@@ -20,8 +20,11 @@ extension RouterVPNModel {
             if mode == "reality-vision" {
                 guard let first = entryProfile, first.normalizedNodeKind == "external",
                       first.external?.protocolName == "socks5", first.id != exitID,
-                      ["", "off"].contains(first.startLayer ?? ""),
-                      ["", "off"].contains(profile.startLayer ?? "") else { return false }
+                      first.external?.matchesStartLayer(first.startLayer) == true else { return false }
+                if first.external?.startLayer != nil {
+                    do { try IOSExternalExecution.validateLayerDraft(first) }
+                    catch { return false }
+                }
             }
             do {
                 _ = try IOSMultihopStartLayer.capture(profile: original, profiles: selected.profiles)

@@ -192,8 +192,8 @@ enum RouterVPNExternalExitBuilder {
         let layer = try IOSMultihopStartLayer.capture(profile: profile, profiles: profiles)
         if mode == "reality-vision" {
             guard profile["multihop_entry_mode"] as? String == "socks5",
-                  (profile["multihop_execution"] as? String ?? "local") == "local", layer.mode == "off" else {
-                throw error("REALITY Vision requires the captured Local SOCKS5 entry and both Start Layers Off.")
+                  (profile["multihop_execution"] as? String ?? "local") == "local" else {
+                throw error("REALITY Vision requires the captured Local SOCKS5 entry and independently provisioned Start Layers.")
             }
         }
         let files = try JSONSerialization.data(withJSONObject: assets, options: [.sortedKeys])

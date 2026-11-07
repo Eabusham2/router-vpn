@@ -8,13 +8,18 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"router-vpn/internal/applexray"
 )
 
-func importedSOCKSXrayFixture(t *testing.T) []string {
+func importedSOCKSXrayFixture(t *testing.T, layers ...string) []string {
 	t.Helper()
-	source := importedSOCKSFixture(t, "reality-vision")
+	source := importedSOCKSFixture(t, "reality-vision", layers...)
 	profile := externalTestRead(t, source[4])
-	profile["multihop_execution"], profile["start_layer"] = "local", "off"
+	profile["multihop_execution"] = "local"
+	if profile["start_layer"] == "" {
+		profile["start_layer"] = "off"
+	}
 	source[4] = externalTestJSON(t, profile)
 	return source
 }
@@ -299,32 +304,7 @@ func TestImportedEntrySOCKSRealityVisionKeepsScope(t *testing.T) {
 			}
 		})
 	}
-	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
-		for _, role := range []string{"entry", "final"} {
-			t.Run(role+"-"+layer, func(t *testing.T) {
-				source := importedSOCKSXrayFixture(t)
-				if role == "entry" {
-					capture := externalTestRead(t, source[1])
-					externalTestAddLayer(capture["profile"].(map[string]any), layer, "203.0.113.20", "10.93.0.1", "i")
-					source[1] = externalTestJSON(t, capture)
-					projection := externalTestRead(t, source[1])
-					projection["profile"].(map[string]any)["dns_mode"] = "rescue"
-					if _, err := NewExternalPolicy(source[0], externalTestJSON(t, projection)); err != nil {
-						t.Fatal("layer control lost its valid provisioned entry", err)
-					}
-				} else {
-					files, profile, start := nodeProfileFixture(t, "reality-vision", layer)
-					source[3], source[4], source[5] = files, externalTestJSON(t, profile), start
-					if _, err := NewNodeProfile(source[2], source[3], source[4], source[5], source[6]); err != nil {
-						t.Fatal("layer control lost its valid provisioned final", err)
-					}
-				}
-				if _, err := NewImportedEntry(source[0], source[1], source[2], source[3], source[4], source[5], source[6]); err == nil || !strings.Contains(err.Error(), "requires both captured Start Layers Off") {
-					t.Fatal("SOCKS REALITY Off-only boundary did not reject the provisioned layer", err)
-				}
-			})
-		}
-	}
+
 }
 
 func TestImportedEntrySOCKSRealityVisionRetainsOriginalBytes(t *testing.T) {
@@ -340,6 +320,141 @@ func TestImportedEntrySOCKSRealityVisionRetainsOriginalBytes(t *testing.T) {
 			next := importedSOCKSXrayCompile(t, changed)
 			if next.SourceSHA256() == plan.SourceSHA256() || next.Config() != plan.Config() {
 				t.Fatal("equivalent graph replaced the exact captured source authority")
+			}
+		})
+	}
+}
+
+// Each role retains its own provision and the final layer is attached above the
+// original imported owner, never bypassed or substituted with the entry layer.
+func TestImportedEntrySOCKSRealityVisionIndependentLayers(t *testing.T) {
+	for _, row := range importedSOCKSLayerMatrix("reality-vision") {
+		t.Run(row.label, func(t *testing.T) {
+			source := importedSOCKSXrayFixture(t, row.entry, row.final)
+			selected, err := NewNodeProfile(source[2], source[3], source[4], source[5], source[6])
+			if err != nil {
+				t.Fatal("original REALITY layer source was invalid", err)
+			}
+			plan := importedSOCKSXrayCompile(t, source)
+			graph := externalTestRead(t, plan.Config())
+			graph["endpoints"] = []any{}
+			importedSOCKSAssertClosure(t, graph, row)
+			first, final := externalTestFind(t, graph, "entry-wg"), externalTestFind(t, graph, LocalTag)
+			selectedGraph := externalTestRead(t, selected.Config())
+			selectedGraph["endpoints"] = []any{}
+			original := externalTestFind(t, selectedGraph, "proxy")
+			if final["config_json"] != original["config_json"] || final["mode"] != "reality-vision" || final["type"] != "routervpn-xray" || len(final) != 5 {
+				t.Fatal("SOCKS REALITY layer changed exact native final credentials")
+			}
+			if row.final == "" {
+				if final["detour"] != "entry-wg" {
+					t.Fatal("SOCKS REALITY Off final changed original owner")
+				}
+			} else {
+				if final["detour"] != applexray.StartLayerTag {
+					t.Fatal("SOCKS REALITY final layer lost its original authenticated edge")
+				}
+				outer := externalTestFind(t, graph, applexray.StartLayerTag)
+				expected := externalTestFind(t, selectedGraph, applexray.StartLayerTag)
+				copy := predecessorCopy(outer)
+				delete(copy, "detour")
+				if outer["detour"] != "entry-wg" || !reflect.DeepEqual(copy, expected) {
+					t.Fatal("SOCKS REALITY final layer borrowed a different provision or owner")
+				}
+				if row.entry != "" {
+					entryOuter := externalTestFind(t, graph, first["detour"].(string))
+					if entryOuter["password"] == outer["password"] || entryOuter["server"] == outer["server"] || entryOuter["tag"] == outer["tag"] {
+						t.Fatal("SOCKS REALITY independent layers collapsed into one node")
+					}
+				}
+			}
+			if !reflect.DeepEqual(graph["dns"], selectedGraph["dns"]) || plan.meta.EntryStartLayer != row.entry || strings.TrimSuffix(plan.meta.ExitStartLayer, "off") != row.final || plan.meta.EntryAPI != "" || plan.meta.EntryToken != "" || plan.meta.Execution != "local" || plan.Healthy() {
+				t.Fatal("SOCKS REALITY layer changed DNS, captured policy, or proof ownership")
+			}
+			importedSOCKSXrayDevicePolicy(t, graph, "default-home")
+			for _, index := range []int{0, 1, 3, 4, 5} {
+				if source[index] == "" {
+					continue
+				}
+				changed := append([]string(nil), source...)
+				changed[index] += "\n"
+				next := importedSOCKSXrayCompile(t, changed)
+				if next.Config() != plan.Config() || next.SourceSHA256() == plan.SourceSHA256() {
+					t.Fatal("SOCKS REALITY layer lost original private source authority")
+				}
+			}
+			if _, err := New(plan.Config(), plan.Metadata()); err == nil {
+				t.Fatal("SOCKS REALITY layer public metadata acquired authority")
+			}
+			if directory := os.Getenv("ROUTERVPN_IMPORTED_ENTRY_FIXTURES"); directory != "" {
+				receipt := append(append([]string(nil), source...), plan.SourceSHA256(), plan.Config())
+				if err := os.WriteFile(filepath.Join(directory, "socks5--final-"+row.label+".json"), []byte(externalTestJSON(t, receipt)), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestImportedEntrySOCKSRealityVisionLayerAuthority(t *testing.T) {
+	for _, fault := range []string{"entry-missing", "entry-mismatch", "entry-foreign", "entry-off-unused", "entry-invalid", "final-missing", "final-foreign", "final-off-unused", "final-invalid", "entry-detour", "final-wrapper-detour", "final-xray-bypass", "server", "compare"} {
+		t.Run(fault, func(t *testing.T) {
+			source := importedSOCKSXrayFixture(t, "aes-256-gcm+xor-whitening", "aes-256-gcm")
+			_ = importedSOCKSXrayCompile(t, source)
+			capture, profile := externalTestRead(t, source[1]), externalTestRead(t, source[4])
+			entry := capture["profile"].(map[string]any)
+			external := entry["external"].(map[string]any)
+			switch fault {
+			case "entry-missing":
+				delete(external, "start_layer")
+			case "entry-mismatch":
+				entry["start_layer"] = "aes-256-gcm"
+			case "entry-foreign":
+				external["start_layer"].(map[string]any)["transport"].(map[string]any)["server"] = "203.0.113.99"
+			case "entry-off-unused":
+				entry["start_layer"] = "off"
+			case "entry-invalid":
+				entry["start_layer"] = "xor-only"
+			case "final-missing":
+				source[5] = ""
+			case "final-foreign":
+				assets := map[string]string{}
+				if json.Unmarshal([]byte(source[5]), &assets) != nil {
+					t.Fatal("missing original final layer")
+				}
+				raw, _ := base64.StdEncoding.DecodeString(assets["sing-box.json"])
+				graph := externalTestRead(t, string(raw))
+				graph["outbounds"].([]any)[0].(map[string]any)["server"] = "203.0.113.99"
+				assets["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(externalTestJSON(t, graph)))
+				source[5] = externalTestJSON(t, assets)
+			case "final-off-unused":
+				profile["start_layer"] = "off"
+			case "final-invalid":
+				profile["start_layer"] = "xor-only"
+			case "entry-detour":
+				graph := externalTestRead(t, source[0])
+				externalTestFind(t, graph, ExternalFinalTag)["detour"] = "foreign-owner"
+				source[0] = externalTestJSON(t, graph)
+			case "final-wrapper-detour", "final-xray-bypass":
+				assets, xray, _ := importedSOCKSXrayRaw(t, source[3])
+				if fault == "final-wrapper-detour" {
+					raw, _ := base64.StdEncoding.Strict().DecodeString(assets["sing-box.json"])
+					wrapper := externalTestRead(t, string(raw))
+					wrapper["outbounds"].([]any)[0].(map[string]any)["detour"] = "foreign-owner"
+					assets["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(externalTestJSON(t, wrapper)))
+				} else {
+					xray["routing"] = map[string]any{"domainStrategy": "AsIs"}
+					assets["xray.json"] = base64.StdEncoding.EncodeToString([]byte(externalTestJSON(t, xray)))
+				}
+				source[3] = externalTestJSON(t, assets)
+			case "server":
+				profile["multihop_execution"] = "server"
+			case "compare":
+				profile["multihop_execution"] = "auto"
+			}
+			source[1], source[4] = externalTestJSON(t, capture), externalTestJSON(t, profile)
+			if plan, err := NewImportedEntry(source[0], source[1], source[2], source[3], source[4], source[5], source[6]); err == nil || plan != nil {
+				t.Fatal("SOCKS REALITY accepted an unowned independent layer")
 			}
 		})
 	}

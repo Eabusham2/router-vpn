@@ -34,7 +34,7 @@ class ImportedEntryVerdicts(unittest.TestCase):
    with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
  def test_configured_connect_parser_is_separate_and_complete(self):
   self.assertEqual(len(gate.CONNECT_SERVICE_FILES),24)
-  self.assertEqual(len(gate.FILES),338)
+  self.assertEqual(len(gate.FILES),346)
   self.assertEqual(len(gate.names({'TestRouterVPNImportedCONNECTNativeTraffic':gate.CONNECT_PEERS})),51)
   self.assertEqual(len(gate.CORE['TestImportedEntryCONNECTServiceConfiguredGraphs']),24)
   expected=gate.names({'TestRouterImportedCONNECTConfiguredServiceGraphs':sorted(gate.CONNECT_SERVICE_FILES)})
@@ -58,7 +58,7 @@ class ImportedEntryVerdicts(unittest.TestCase):
   for mutation in (events[:-1],events+[events[-1]],events[:-1]+[dict(events[-1],Action='skip')]):
    with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
  def test_layered_fixture_inventory(self):
-  self.assertEqual(len(gate.FILES),338)
+  self.assertEqual(len(gate.FILES),346)
   self.assertEqual(len(gate.SOCKS_FILES),45)
   for mode in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong'):
    for layer in gate.LAYERS[1:]:
@@ -77,7 +77,7 @@ class ImportedEntryVerdicts(unittest.TestCase):
   for case in ('TestRouterVPNImportedSOCKSLayerRelayRetirement','retiring-worker-root-close','replacement-owner','foreign-and-closed'):
    self.assertIn(case,source)
  def test_both_layer_verdicts(self):
-  self.assertEqual(len(gate.FILES),338)
+  self.assertEqual(len(gate.FILES),346)
   expected=gate.names(gate.SOCKS_BOTH_GROUPS)
   self.assertEqual(len(expected),271)
   events=[{'Action':a,'Test':n} for n in sorted(expected) for a in ('run','pass')]
@@ -105,7 +105,7 @@ class ImportedEntryVerdicts(unittest.TestCase):
   with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,events[:-1])),expected)
  def test_selected_connect_dns_inventory(self):
   self.assertEqual(len(gate.CONNECT_DNS_FILES),44)
-  self.assertEqual(len(gate.FILES),338)
+  self.assertEqual(len(gate.FILES),346)
   self.assertEqual(len(gate.CONNECT_SERVICE_FILES),24)
   expected=gate.names({'TestRouterImportedCONNECTSelectedDNSGraphs':sorted(gate.CONNECT_DNS_FILES)})
   self.assertEqual(len(expected),45)
@@ -114,13 +114,13 @@ class ImportedEntryVerdicts(unittest.TestCase):
   for mutation in (events[:-1],events+[events[-1]],events[:-1]+[dict(events[-1],Action='skip')],events+[{'Action':'pass','Test':'foreign'}]):
    with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
  def test_socks_reality_scope_and_inventory(self):
-  self.assertEqual(gate.SOCKS_XRAY_FILES,{'socks5--final-reality-vision.json'})
-  self.assertEqual(len(gate.FILES),338)
+  self.assertEqual(gate.SOCKS_XRAY_FILES,{'socks5--final-'+gate.socks_label('reality-vision',a,b)+'.json' for a in gate.LAYERS for b in gate.LAYERS})
+  self.assertEqual(len(gate.FILES),346)
   self.assertEqual(len(gate.SOCKS_FILES),45)
   groups={p:v for p,v in gate.CORE.items() if p.startswith('TestImportedEntrySOCKSRealityVision')}
-  self.assertEqual(len(groups),7)
+  self.assertEqual(len(groups),9)
   expected=gate.names(groups)
-  self.assertEqual(len(expected),67)
+  self.assertEqual(len(expected),88)
   events=[{'Action':a,'Test':n} for n in sorted(expected) for a in ('run','pass')]
   gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
   for name in sorted(expected):
@@ -129,7 +129,7 @@ class ImportedEntryVerdicts(unittest.TestCase):
   for final in ('reality-pq-vision','reality-xhttp','split','max'):
    self.assertNotIn('socks5--final-'+final+'.json',gate.FILES)
   for layer in gate.LAYERS[1:]:
-   self.assertNotIn('socks5--final-reality-vision--'+layer+'.json',gate.FILES)
+   self.assertIn('socks5--final-reality-vision--'+layer+'.json',gate.FILES)
  def test_socks_reality_causal_receipts(self):
   controls=gate.socks_xray_controls()
   self.assertEqual(len(controls),3)
@@ -150,9 +150,9 @@ class ImportedEntryVerdicts(unittest.TestCase):
   groups=gate.native_parser_groups(False)
   self.assertEqual(groups[gate.SOCKS_XRAY_PARSER],[])
   self.assertEqual(groups['TestRouterImportedEntryPairedFinalNativeGraphs'],sorted(gate.FILES))
-  self.assertEqual(len(gate.FILES),338)
+  self.assertEqual(len(gate.FILES),346)
   expected=gate.names(groups)
-  self.assertEqual(len(expected),410)
+  self.assertEqual(len(expected),418)
   events=[{'Action':a,'Test':n} for n in sorted(expected) for a in ('run','pass')]
   gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
   missing=[e for e in events if e['Test']!=gate.SOCKS_XRAY_PARSER]

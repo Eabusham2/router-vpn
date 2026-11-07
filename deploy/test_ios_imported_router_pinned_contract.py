@@ -59,10 +59,16 @@ class ImportedGate(unittest.TestCase):
         self.assertEqual(len(previous),247)
         self.assertEqual(len(openvpn),90)
         self.assertFalse(previous & openvpn)
-        self.assertEqual(G.NAMES,previous | openvpn | {"socks5--final-reality-vision.json"})
+        reality={"socks5--final-reality-vision.json"}
+        reality|={"socks5--final-reality-vision--"+b+".json" for b in G.LAYERS[1:]}
+        reality|={"socks5--final-reality-vision--entry-"+a+".json" for a in G.LAYERS[1:]}
+        reality|={"socks5--final-reality-vision--"+a+"--"+b+".json" for a in G.LAYERS[1:] for b in G.LAYERS[1:]}
+        self.assertEqual(len(reality),9)
+        self.assertFalse(reality & (previous | openvpn))
+        self.assertEqual(G.NAMES,previous | openvpn | reality)
         self.assertEqual(len(ss), 11)
         self.assertEqual(len(hy), 9)
-        self.assertEqual(len(self.events()), 340)
+        self.assertEqual(len(self.events()), 348)
 
     def test_exact_verdicts(self):
         G.require_verdicts(self.encode(self.events()))

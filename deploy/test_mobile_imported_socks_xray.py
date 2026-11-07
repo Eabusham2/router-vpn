@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the desktop reference for captured Local/Off SOCKS5 -> REALITY/Vision.
+"""Run the desktop reference for captured Local SOCKS5 -> REALITY/Vision.
 
 The focused mobile parser is mandatory in the existing non-peer libbox gate.
 This separately bounded stage uses the prepared desktop source and executes only
@@ -43,6 +43,25 @@ IMPORTED = module("routervpn_socks_xray_imported", "test_mobile_imported_entry.p
 XRAY = module("routervpn_socks_xray_preparation", "prepare-apple-xray.py")
 DESKTOP = module("routervpn_socks_xray_desktop", "prepare-desktop-external.py")
 RELAY = DESKTOP.RELAY
+
+
+LAYER_CORE_PARENT = "TestImportedEntrySOCKSRealityVisionIndependentLayers"
+LAYER_CORE = (LAYER_CORE_PARENT,) + tuple(LAYER_CORE_PARENT + "/" + IMPORTED.socks_label("reality-vision", a, b)
+    for a in IMPORTED.LAYERS for b in IMPORTED.LAYERS)
+LAYER_PEER_PARENT = "TestRouterVPNImportedSOCKSRealityVisionLayerTraffic"
+LAYER_PEER_CASES = {}
+for entry in IMPORTED.LAYERS:
+    for final in IMPORTED.LAYERS:
+        if not entry and not final:
+            continue
+        faults = ["success", "cancel", "close-owner"]
+        if entry: faults.append("entry-layer-key")
+        if entry == "aes-256-gcm+xor-whitening": faults.append("entry-layer-whitening")
+        if final: faults.append("final-layer-key")
+        if final == "aes-256-gcm+xor-whitening": faults.append("final-layer-whitening")
+        LAYER_PEER_CASES[IMPORTED.socks_label("reality-vision", entry, final)] = faults
+LAYER_PEERS = tuple(sorted(IMPORTED.names({LAYER_PEER_PARENT:
+    [name for label, faults in LAYER_PEER_CASES.items() for name in [label, *(label + "/" + fault for fault in faults)]]})))
 
 
 def require_verdicts(raw, status, expected):
@@ -142,6 +161,15 @@ def checked_sources(vendor):
     return records
 
 
+def captured_source_matrix(fixtures, original):
+    if {path.name for path in fixtures.iterdir()} != IMPORTED.SOCKS_XRAY_FILES or any(path.is_symlink() or not path.is_file() for path in fixtures.iterdir()):
+        raise ValueError("Scoped SOCKS REALITY source exporter changed its exact nine-file scope")
+    captured = {name: (fixtures / name).read_bytes() for name in sorted(IMPORTED.SOCKS_XRAY_FILES)}
+    if captured[FIXTURE] != original:
+        raise ValueError("SOCKS REALITY layer export replaced the original Off/Off capture")
+    return captured
+
+
 def checked_xray(source):
     XRAY.checkout(source, XRAY.XRAY_PIN, "github.com/xtls/xray-core")
     original = subprocess.check_output(
@@ -202,13 +230,13 @@ def compile_image(compiler, vendor, workspace, env, package, name):
     return binary, hashlib.sha256(binary.read_bytes()).hexdigest()
 
 
-def execute_image(compiler, vendor, env, image, digest, package, parent, expected):
+def execute_image(compiler, vendor, env, image, digest, package, parent, expected, timeout=90):
     if image.is_symlink() or hashlib.sha256(image.read_bytes()).hexdigest() != digest:
         raise ValueError("Scoped SOCKS REALITY image changed before execution")
     status, output = run_command(
         [compiler, "tool", "test2json", "-t", "-p", package, image,
-         "-test.v", "-test.run=^" + parent + "$", "-test.count=1", "-test.timeout=90s"],
-        vendor, env, 105)
+         "-test.v", "-test.run=^" + parent + "$", "-test.count=1", "-test.timeout=" + str(timeout) + "s"],
+        vendor, env, timeout + 15)
     require_verdicts(output, status, expected)
     if image.is_symlink() or hashlib.sha256(image.read_bytes()).hexdigest() != digest:
         raise ValueError("Scoped SOCKS REALITY image changed during execution")
@@ -267,25 +295,37 @@ def run(vendor):
             ROOT, env, 240)
         require_verdicts(output, status, CORE)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
-        if {path.name for path in fixtures.iterdir()} != {FIXTURE} or (fixtures / FIXTURE).is_symlink():
-            raise ValueError("Scoped SOCKS REALITY source exporter changed its exact one-file scope")
+        if {path.name for path in fixtures.iterdir()} != {FIXTURE} or (fixtures / FIXTURE).is_symlink() or not (fixtures / FIXTURE).is_file():
+            raise ValueError("SOCKS REALITY original exporter changed its exact one-file scope")
         original_fixture = (fixtures / FIXTURE).read_bytes()
-        receipt["fixture_sha256"] = hashlib.sha256(original_fixture).hexdigest()
+        # Retain the original Off/Off exporter and require every independent
+        # layer capture from the shared compiler before executing native peers.
+        status, output = run_command(
+            [compiler, "test", "-mod=readonly", "-race", "-json", "./internal/mobilemultihop",
+             "-run", "^" + LAYER_CORE_PARENT + "$", "-count=1", "-timeout=30s"],
+            ROOT, env, 240)
+        require_verdicts(output, status, LAYER_CORE)
+        print(output, end="" if output.endswith("\n") else "\n", flush=True)
+        original_fixtures = captured_source_matrix(fixtures, original_fixture)
+        receipt["fixture_sha256"] = hashlib.sha256(original_fixtures[FIXTURE]).hexdigest()
+        receipt["layer_fixtures_sha256"] = {name: hashlib.sha256(raw).hexdigest() for name, raw in original_fixtures.items()}
         xray, xray_before, reference, reference_digest = build_reference(compiler, vendor, workspace, env)
         native, native_digest = compile_image(compiler, vendor, workspace, env, "./protocol/routervpnamnezia", "socks-reality-peers")
         if checked_sources(vendor) != before or checked_xray(xray) != xray_before:
             raise ValueError("Scoped SOCKS REALITY source changed during peer build")
         receipt["peer"] = execute_image(compiler, vendor, env, native, native_digest,
                                         "routervpnamnezia", PEER_PARENT, PEERS)
+        receipt["peer_layers"] = execute_image(compiler, vendor, env, native, native_digest,
+            "routervpnamnezia", LAYER_PEER_PARENT, LAYER_PEERS, timeout=180)
         if reference.is_symlink() or hashlib.sha256(reference.read_bytes()).hexdigest() != reference_digest or checked_xray(xray) != xray_before:
             raise ValueError("Scoped SOCKS REALITY reference source or executable changed during execution")
         receipt["reference"] = {"pin": XRAY.XRAY_PIN, "sha256": reference_digest,
                                 "source_sha256": record_digest(xray_before), "source_count": len(xray_before)}
         receipt["native_reference"] = True
-        if (fixtures / FIXTURE).read_bytes() != original_fixture or checked_sources(vendor) != before:
+        if captured_source_matrix(fixtures, original_fixture) != original_fixtures or checked_sources(vendor) != before:
             raise ValueError("Scoped SOCKS REALITY original capture or shipping source changed during execution")
     print(json.dumps(receipt, sort_keys=True), flush=True)
-    print("Scoped SOCKS/REALITY receipts cover only this Local/Off desktop reference. The mobile parser has its own required gate; OS/device and host Connected acceptance remain separate.", flush=True)
+    print("Scoped SOCKS/REALITY receipts cover only these nine Local independent-layer desktop graphs. The mobile parser has its own required gate; OS/device and host Connected acceptance remain separate.", flush=True)
     return receipt
 
 

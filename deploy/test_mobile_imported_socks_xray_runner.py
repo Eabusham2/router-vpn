@@ -30,18 +30,31 @@ class ScopedSOCKSRealityVerdicts(unittest.TestCase):
         self.assertEqual(len(gate.PEER_CASES), 12)
         self.assertEqual(len(gate.PEERS), 13)
         self.assertEqual(len(set(gate.PEERS)), 13)
-        for expected in (gate.CORE, gate.PEERS):
+        for expected in (gate.CORE, gate.PEERS, gate.LAYER_CORE, gate.LAYER_PEERS):
             gate.require_verdicts(self.encode(self.events(expected)), 0, expected)
 
+    def test_independent_layer_native_scope(self):
+        self.assertEqual(len(gate.LAYER_CORE), 10)
+        self.assertEqual(len(gate.LAYER_PEER_CASES), 8)
+        self.assertEqual(len(gate.LAYER_PEERS), 51)
+        self.assertEqual(sum(map(len, gate.LAYER_PEER_CASES.values())), 42)
+        for label, faults in gate.LAYER_PEER_CASES.items():
+            self.assertIn("success", faults)
+            self.assertIn("cancel", faults)
+            self.assertIn("close-owner", faults)
+            self.assertIn("socks5--final-"+label+".json", gate.IMPORTED.SOCKS_XRAY_FILES)
+        with self.assertRaises(ValueError):
+            gate.require_verdicts(self.encode(self.events(gate.PEERS)), 0, gate.LAYER_PEERS)
+
     def test_every_case_is_mandatory(self):
-        for expected in (gate.CORE, gate.PEERS):
+        for expected in (gate.CORE, gate.PEERS, gate.LAYER_CORE, gate.LAYER_PEERS):
             for omitted in expected:
                 events = self.events(set(expected) - {omitted})
                 with self.subTest(omitted=omitted), self.assertRaises(ValueError):
                     gate.require_verdicts(self.encode(events), 0, expected)
 
     def test_duplicate_foreign_failed_and_skipped_cases(self):
-        for expected in (gate.CORE, gate.PEERS):
+        for expected in (gate.CORE, gate.PEERS, gate.LAYER_CORE, gate.LAYER_PEERS):
             events = self.events(expected)
             for mutation in (
                 events + [events[-1]],
@@ -70,10 +83,31 @@ class ScopedSOCKSRealityVerdicts(unittest.TestCase):
                     self.encode(events + [{"Action": "output", "Output": output + "\n"}]), 0, gate.PEERS)
 
     def test_existing_full_source_matrix_is_retained(self):
-        self.assertEqual(len(gate.IMPORTED.FILES), 338)
-        self.assertEqual(gate.IMPORTED.SOCKS_XRAY_FILES, {gate.FIXTURE})
+        self.assertEqual(len(gate.IMPORTED.FILES), 346)
+        self.assertEqual(len(gate.IMPORTED.SOCKS_XRAY_FILES), 9)
         self.assertIn(gate.FIXTURE, gate.IMPORTED.FILES)
         self.assertEqual(len(gate.IMPORTED.SOCKS_FILES), 45)
+
+    def test_layer_export_cannot_replace_original_or_omit_any_capture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixtures = Path(temporary)
+            original = b"retained original Off/Off receipt"
+            for name in gate.IMPORTED.SOCKS_XRAY_FILES:
+                (fixtures / name).write_bytes(original if name == gate.FIXTURE else name.encode())
+            captured = gate.captured_source_matrix(fixtures, original)
+            self.assertEqual(set(captured), gate.IMPORTED.SOCKS_XRAY_FILES)
+            (fixtures / gate.FIXTURE).write_bytes(original + b" changed")
+            with self.assertRaises(ValueError): gate.captured_source_matrix(fixtures, original)
+            (fixtures / gate.FIXTURE).write_bytes(original)
+            for name in gate.IMPORTED.SOCKS_XRAY_FILES:
+                target = fixtures / name
+                raw = target.read_bytes(); target.unlink()
+                with self.assertRaises(ValueError): gate.captured_source_matrix(fixtures, original)
+                target.symlink_to(fixtures / gate.FIXTURE if name != gate.FIXTURE else fixtures / "missing")
+                with self.assertRaises(ValueError): gate.captured_source_matrix(fixtures, original)
+                target.unlink(); target.write_bytes(raw)
+            (fixtures / "foreign.json").write_bytes(b"foreign")
+            with self.assertRaises(ValueError): gate.captured_source_matrix(fixtures, original)
 
     def test_real_peer_boundaries_cannot_be_replaced_by_parser(self):
         for leaf in (
