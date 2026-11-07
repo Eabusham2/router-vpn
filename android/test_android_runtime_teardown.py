@@ -886,10 +886,45 @@ execution_timeout = re.search(r'(?m)^const executionBaseTimeout\s*=\s*(\d+)\s*\*
 if execution_timeout is None:
     execution_timeout = re.search(r'context.WithTimeout\(parent,\s*(\d+)\s*\*\s*time.Second\)', execution_source)
 proof_source = (ROOT / 'internal/mobilemultihop/external_proof.go').read_text()
-proof_timeout = re.search(r'context.WithTimeout\(r.ctx,\s*(\d+)\s*\*\s*time.Second\)', proof_source)
-assert execution_timeout and proof_timeout, 'shared execution/final proof deadline contract changed'
+
+
+def final_proof_budget_seconds(source):
+    # RunContext retains both the original caller and captured native owner.
+    # Read its final phase, not an unrelated observation/admission timeout or
+    # the former r.ctx-only proof that discarded the original caller.
+    runs = re.findall(r'(?ms)^func \(r \*ExternalProofRequest\) RunContext\(parent context.Context,.*?^\}', source)
+    assert len(runs) == 1, 'shared final proof RunContext is missing or ambiguous'
+    run = runs[0]
+    caller = re.search(r'(?m)^\s*operation, release := context.WithCancel\(parent\)\s*$', run)
+    owner = re.search(r'(?m)^\s*stop := context.AfterFunc\(r.ctx, release\)\s*$', run)
+    execution = re.search(r'r.execution.runCaptured\(operation, r.engine\.\(Engine\), r.identity\)', run)
+    deadlines = list(re.finditer(r'(?m)^\s*ctx, cancel := context.WithTimeout\(operation,\s*(\d+)\s*\*\s*time.Second\)\s*$', run))
+    assert caller and owner and execution and len(deadlines) == 1, 'shared final proof must retain its captured operation and one final deadline'
+    deadline = deadlines[0]
+    assert caller.start() < owner.start() < execution.start() < deadline.start(), 'shared execution and final proof must remain sequential'
+    return int(deadline[1])
+
+
+proof_timeout = final_proof_budget_seconds(proof_source)
+assert execution_timeout, 'shared execution deadline contract changed'
+# Keep the source check fail-closed: neither a detached parent nor the former
+# session-only deadline may supply the JVM's production budget witness.
+for label, before, after in (
+    ('original caller', 'operation, release := context.WithCancel(parent)', 'operation, release := context.WithCancel(r.ctx)'),
+    ('captured native owner', 'stop := context.AfterFunc(r.ctx, release)', 'stop := context.AfterFunc(context.Background(), release)'),
+    ('execution caller', 'r.execution.runCaptured(operation, r.engine.(Engine), r.identity)', 'r.execution.runCaptured(r.ctx, r.engine.(Engine), r.identity)'),
+    ('final proof caller', f'context.WithTimeout(operation, {proof_timeout}*time.Second)', f'context.WithTimeout(r.ctx, {proof_timeout}*time.Second)'),
+):
+    assert proof_source.count(before) == 1, (label, 'shared proof source mutation anchor drift')
+    try:
+        final_proof_budget_seconds(proof_source.replace(before, after))
+    except AssertionError as failure:
+        assert 'captured operation and one final deadline' in str(failure), (label, 'unrelated source-check failure', failure)
+    else:
+        raise AssertionError((label, 'lost proof owner supplied a startup budget'))
+    print('Android final-proof budget source control rejected: ' + label)
 HARNESS = HARNESS.replace('SHARED_EXECUTION_BUDGET_MS', str(int(execution_timeout[1]) * 1000) + 'L')
-HARNESS = HARNESS.replace('SHARED_FINAL_PROOF_BUDGET_MS', str(int(proof_timeout[1]) * 1000) + 'L')
+HARNESS = HARNESS.replace('SHARED_FINAL_PROOF_BUDGET_MS', str(proof_timeout * 1000) + 'L')
 runtime_source = (JAVA / 'AndroidStandardExitRuntime.java').read_text()
 assert 'long deadline=System.currentTimeMillis()+startTimeoutMillis(tor,execution);' in runtime_source, 'native startup must use the execution-specific deadline'
 
