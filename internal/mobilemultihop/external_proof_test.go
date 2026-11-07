@@ -29,6 +29,12 @@ func (e *externalProofFixture) Identity() string {
 	}
 	return ""
 }
+func (e *externalProofFixture) IdentityContext(ctx context.Context) (string, error) {
+	if ctx == nil {
+		return "", errors.New("fixture has no observation caller")
+	}
+	return e.Identity(), ctx.Err()
+}
 func (e *externalProofFixture) DNSProof(ctx context.Context, tag string) error {
 	return e.dns(ctx, tag)
 }

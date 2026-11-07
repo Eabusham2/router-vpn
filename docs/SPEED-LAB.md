@@ -203,3 +203,28 @@ The extension/service serializes requests and exposes only a bounded redacted
 status object. No settings, route, selected node or saved profile are changed.
 This measurement action does not extend the currently supported graph families
 or satisfy the separate arbitrary-hop/PQ/Tor implementation requirements.
+
+### Ordinary external measurement ownership
+
+The ordinary external Android/iOS hop factory retains its original StartedService,
+native instance, successful proof, source strings and session. One constructor
+caller covers native-instance observation, source/configuration verification and
+measurement publication. Later identity, activity and dial observations use each
+measurement operation's own caller. Cancelling a completed constructor does not
+cancel a returned service; cancelling an observation does not revoke a healthy
+original VPN proof. A demonstrated graph or connected OpenVPN remote replacement
+still invalidates the captured proof through the existing path verification.
+
+Activity acquisition shares the native MTU exclusion lock. Cancellation while
+that lock is held cannot admit a measurement afterward. A connection returned
+after cancellation, identity replacement or a dial error is closed by its original
+measurement owner before failure is returned. Source, selected DNS, public/private
+hop identity and the original sealed desktop configuration checks remain required.
+
+Shared race tests execute the compiler, retained proof and measurement lifecycle;
+their prior network proof is an explicit test model. The mandatory native fixture
+uses the actual pinned Box, managers, StartedService and locks, with only its OS
+TUN and prior successful network proof modeled. Its native verdicts require
+matching-host execution; source projection is not native execution or device
+acceptance. Tor's resident, padding and Server proof chain remains a separate
+context-propagation requirement and is unchanged by this ordinary external unit.

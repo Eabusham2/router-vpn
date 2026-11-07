@@ -1,25 +1,57 @@
 package libbox
 
-import "errors"
+import (
+	"context"
+	"errors"
+	"time"
+)
 
 func RouterExternalCreateHopMeasurement(server *CommandServer, proof *RouterExternalProofRequest, source, capture, session string) (*RouterHopMeasurement, error) {
-	if server == nil || server.StartedService == nil || proof == nil || !proof.Healthy() {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	return routerExternalCreateHopMeasurementContext(ctx, server, proof, source, capture, session)
+}
+
+func routerExternalCreateHopMeasurementContext(ctx context.Context, server *CommandServer, proof *RouterExternalProofRequest, source, capture, session string) (*RouterHopMeasurement, error) {
+	if ctx == nil {
+		return nil, errors.New("external measurement has no constructor caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if server == nil || server.StartedService == nil || proof == nil {
 		return nil, errors.New("external measurement has no successful native proof")
 	}
-	instance := server.StartedService.Instance()
-	if instance == nil || instance.Box() == nil {
-		return nil, errors.New("external measurement native instance unavailable")
+	if err := proof.healthyContext(ctx); err != nil {
+		return nil, err
 	}
-	current := func() bool {
-		return server.StartedService != nil && server.StartedService.Instance() == instance && proof.Healthy()
-	}
-	service, err := instance.Box().RouterVPNExternalHopMeasurement(proof.request, source, capture, session, current)
+	started := server.StartedService
+	instance, err := started.RouterVPNInstanceContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if !current() {
-		_ = service.Close()
-		return nil, errors.New("external measurement native instance changed")
+	if instance == nil || instance.Box() == nil {
+		return nil, errors.New("external measurement native instance unavailable")
+	}
+	current := func(ctx context.Context) error {
+		if server.StartedService != started {
+			return errors.New("external measurement native service changed")
+		}
+		actual, err := started.RouterVPNInstanceContext(ctx)
+		if err != nil {
+			return err
+		}
+		if server.StartedService != started || actual != instance {
+			return errors.New("external measurement native instance changed")
+		}
+		return proof.healthyContext(ctx)
+	}
+	service, err := instance.Box().RouterVPNExternalHopMeasurementContext(ctx, proof.request, source, capture, session, current)
+	if err != nil {
+		return nil, err
+	}
+	if err := current(ctx); err != nil {
+		return nil, errors.Join(err, service.Close())
 	}
 	return &RouterHopMeasurement{service: service}, nil
 }

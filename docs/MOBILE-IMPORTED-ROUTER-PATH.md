@@ -362,9 +362,11 @@ wrapper are unchanged. Exact caller and replacement controls run against the
 shared source and the pinned native instance/selector mutexes; successful network
 proof is an explicit fixture model, not physical tunnel acceptance.
 The ordinary MTU adapter retains its separate context-bound readback and rollback
-contract. Ordinary external/Tor factories, proof callbacks and Tor lease
-observations remain separate follow-ups; this constructor increment does not
-close those paths.
+contract. The ordinary external hop factory now carries its own captured proof,
+native-instance and operation contexts through the separate authority path
+described in [SPEED-LAB.md](SPEED-LAB.md). Ordinary external proof creation and
+DNS measurement factories, plus Tor resident/padding/Server proof and lease
+observations, remain separate context-propagation requirements.
 
 The complete compiled graph supplies the MTU plan. For a nested packet final,
 `internal/awgpolicy` accounts for the actual IPv4/IPv6 carrier, 16-byte transport

@@ -66,7 +66,16 @@ A final replaced-controller check closes an unpublished service, while a
 successfully returned measurement has its own later lifetime. Shared context
 regressions and causal controls pass. The exact thirty-two native context
 verdicts remain mandatory; local cold compilation did not reach those tests.
-Ordinary external and Tor constructors retain their separate open scope.
+The ordinary external hop constructor now retains the original StartedService,
+instance, successful proof and caller through publication. Its later activity,
+identity and dial checks use each measurement's caller, close late connections,
+and preserve a healthy VPN when only an observation expires. All forty-six
+shared context verdicts pass under race instrumentation; twenty-eight runner
+and four shipping integration checks pass. The mandatory native inventory
+preserves the prior thirty-two and adds thirteen external cases. Prepared
+source/import closure passes, but those forty-five native verdicts still need
+matching hosted execution. Ordinary proof creation, DNS factories and Tor's
+resident/padding/Server contexts remain separately open.
 
 These units do not establish a new complete release. Other imported graph
 families, Server/Compare for that direction, exact-SHA native/package/image

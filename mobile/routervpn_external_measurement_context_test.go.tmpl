@@ -1,0 +1,296 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+	"unsafe"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	O "github.com/sagernet/sing-box/adapter/outbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+)
+
+const routerExternalMeasurementSource = `{"log":{"disabled":true},"inbounds":[{"type":"tun","tag":"tun-in","address":["172.29.93.1/30","fd29:93::1/126"],"mtu":1280,"auto_route":true,"strict_route":true,"stack":"system"}],"outbounds":[{"type":"socks","tag":"custom-exit","version":"5","server":"203.0.113.20","server_port":443,"username":"captured-user","password":"captured-secret"}],"route":{"final":"custom-exit","auto_detect_interface":true}}`
+const routerExternalMeasurementCapture = `{"schema":1,"exit_id":"selected-exit","protocol":"socks5","expected_public_ip":"203.0.113.88","profile":{"id":"selected-exit","node_kind":"external","external":{"protocol":"socks5","expected_public_ip":"203.0.113.88","socks5":{"host":"203.0.113.20","port":443,"username":"captured-user","password":"captured-secret"}},"dns_mode":"rescue","mtu_policy":"fixed","manual_mtu":1280,"home_lan_access":false,"ipv6_mode":"off"}}`
+
+type routerExternalMeasurementTUN struct{ inbound.Adapter }
+
+func (*routerExternalMeasurementTUN) Start(adapter.StartStage) error { return nil }
+func (*routerExternalMeasurementTUN) Close() error                   { return nil }
+
+// Only this fixture inspects exact pinned private fields. Native capture,
+// identity, manager and activity observations still execute shipping methods.
+func routerExternalMeasurementField[T any](t *testing.T, owner any, names ...string) *T {
+	t.Helper()
+	field := reflect.ValueOf(owner)
+	for _, name := range names {
+		if field.Kind() == reflect.Pointer {
+			field = field.Elem()
+		}
+		if !field.IsValid() || field.Kind() != reflect.Struct {
+			t.Fatal("pinned external observation owner changed", names)
+		}
+		field = field.FieldByName(name)
+	}
+	if !field.IsValid() || !field.CanAddr() || field.Type() != reflect.TypeFor[T]() {
+		t.Fatal("pinned external observation field changed", names)
+	}
+	return (*T)(unsafe.Pointer(field.UnsafeAddr()))
+}
+
+func routerExternalMeasurementOwner(t *testing.T) (*CommandServer, *RouterExternalProofRequest, *mobilemultihop.ExternalProofRequest, *box.Box) {
+	t.Helper()
+	policy, err := mobilemultihop.NewExternalPolicy(routerExternalMeasurementSource, routerExternalMeasurementCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ins := include.InboundRegistry()
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+		return &routerExternalMeasurementTUN{inbound.NewAdapter(C.TypeTun, tag)}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx = box.Context(ctx, ins, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(policy.Config()))
+	if err != nil {
+		t.Fatal("actual native external parser", err)
+	}
+	native, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal("actual native external Box", err)
+	}
+	t.Cleanup(func() { _ = native.Close() })
+	started := daemon.NewStartedService(daemon.ServiceOptions{Context: context.Background(), LogMaxLines: 16})
+	instance := new(daemon.Instance)
+	*routerProofField[*box.Box](t, instance, "instance") = native
+	*routerProofField[*daemon.Instance](t, started, "instance") = instance
+	t.Cleanup(func() {
+		lock := routerProofField[sync.RWMutex](t, started, "serviceAccess")
+		lock.Lock()
+		*routerProofField[*daemon.Instance](t, started, "instance") = nil
+		lock.Unlock()
+		started.Close()
+	})
+	server := &CommandServer{StartedService: started}
+	proof, err := RouterExternalCreateProof(server, routerExternalMeasurementSource, routerExternalMeasurementCapture, "original-measurement-session")
+	if err != nil {
+		t.Fatal("actual native proof capture", err)
+	}
+	t.Cleanup(func() { _ = proof.Close() })
+	shared := *routerProofField[*mobilemultihop.ExternalProofRequest](t, proof.request, "request")
+	// This is an ownership fixture, not a successful network proof. Model only
+	// the already-proved state; source compilation, actual Box/TUN managers,
+	// StartedService and complete measurement constructors remain real.
+	routerProofField[atomic.Bool](t, shared, "succeeded").Store(true)
+	if err := proof.healthyContext(context.Background()); err != nil {
+		t.Fatal("captured native fixture is not current", err)
+	}
+	return server, proof, shared, native
+}
+
+func TestRouterExternalHopContextKeepsOriginalNativeOwner(t *testing.T) {
+	for _, phase := range []string{"current", "legacy", "nil", "cancel-before", "instance-held", "engine-held", "manager-held", "instance-replaced", "activity-held", "unproved", "source-changed", "missing-observer"} {
+		t.Run(phase, func(t *testing.T) {
+			server, proof, shared, native := routerExternalMeasurementOwner(t)
+			started := server.StartedService
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			caller := &routerConstructorCaller{Context: parent, entered: make(chan struct{})}
+			originalObserve := proof.currentContext
+			var first context.Context
+			var legacy atomic.Int32
+			proof.current = func() bool { legacy.Add(1); return false }
+			proof.currentContext = func(ctx context.Context) error {
+				if first == nil {
+					first = ctx
+				}
+				if ctx != first || phase != "legacy" && ctx != caller {
+					return errors.New("external native constructor replaced its original caller")
+				}
+				return originalObserve(ctx)
+			}
+			if phase == "unproved" {
+				routerProofField[atomic.Bool](t, shared, "succeeded").Store(false)
+			}
+			if phase == "missing-observer" {
+				proof.currentContext = nil
+			}
+			if phase == "cancel-before" {
+				cancel()
+			}
+			var held *sync.RWMutex
+			switch phase {
+			case "instance-held":
+				held = routerProofField[sync.RWMutex](t, started, "serviceAccess")
+			case "engine-held", "instance-replaced":
+				held = routerExternalMeasurementField[sync.RWMutex](t, proof.request, "engine", "mu")
+			case "manager-held":
+				manager, ok := native.Outbound().(*O.Manager)
+				if !ok {
+					t.Fatal("actual outbound manager changed")
+				}
+				held = routerProofField[sync.RWMutex](t, manager, "access")
+			}
+			var once sync.Once
+			release := func() {
+				once.Do(func() {
+					if held != nil {
+						held.Unlock()
+					}
+				})
+			}
+			if held != nil {
+				held.Lock()
+			}
+			defer release()
+			type result struct {
+				measurement *RouterHopMeasurement
+				err         error
+			}
+			done := make(chan result, 1)
+			go func() {
+				ctx := context.Context(caller)
+				if phase == "nil" {
+					ctx = nil
+				}
+				source := routerExternalMeasurementSource
+				if phase == "source-changed" {
+					source += " "
+				}
+				var value *RouterHopMeasurement
+				var err error
+				if phase == "legacy" {
+					value, err = RouterExternalCreateHopMeasurement(server, proof, source, routerExternalMeasurementCapture, "original-measurement-session")
+				} else {
+					value, err = routerExternalCreateHopMeasurementContext(ctx, server, proof, source, routerExternalMeasurementCapture, "original-measurement-session")
+				}
+				done <- result{value, err}
+			}()
+			var replacement *daemon.Instance
+			if held != nil {
+				select {
+				case <-caller.entered:
+				case actual := <-done:
+					t.Fatal("native constructor bypassed held original observation", actual.err)
+				case <-time.After(time.Second):
+					cancel()
+					release()
+					<-done
+					t.Fatal("native constructor did not enter original caller")
+				}
+				if phase == "instance-replaced" {
+					replacement = new(daemon.Instance)
+					*routerProofField[*box.Box](t, replacement, "instance") = native
+					lock := routerProofField[sync.RWMutex](t, started, "serviceAccess")
+					lock.Lock()
+					*routerProofField[*daemon.Instance](t, started, "instance") = replacement
+					lock.Unlock()
+					release()
+				} else {
+					cancel()
+				}
+			}
+			var actual result
+			select {
+			case actual = <-done:
+			case <-time.After(time.Second):
+				cancel()
+				release()
+				<-done
+				t.Fatal("native constructor did not join original cancellation")
+			}
+			release()
+			if phase == "current" || phase == "legacy" || phase == "activity-held" {
+				if actual.err != nil || actual.measurement == nil {
+					t.Fatal("captured external owner was not retained", actual.err)
+				}
+				defer actual.measurement.Close()
+				cancel()
+				proof.currentContext = originalObserve
+				engine := *routerProofField[hopmeasure.Engine](t, actual.measurement.service, "engine")
+				observer, observed := engine.(hopmeasure.ContextEngine)
+				scoped, hasScope := engine.(hopmeasure.ContextMeasurementScope)
+				if !observed || !hasScope {
+					t.Fatal("native service omitted context identity or activity")
+				}
+				if _, err := observer.IdentityContext(context.Background()); err != nil {
+					t.Fatal("completed constructor cancellation retired service lifetime", err)
+				}
+				if phase == "activity-held" {
+					lock := routerExternalMeasurementField[sync.Mutex](t, proof.request, "activity", "mu")
+					lock.Lock()
+					operation, stop := context.WithCancel(context.Background())
+					waiter := &routerConstructorCaller{Context: operation, entered: make(chan struct{})}
+					joined := make(chan error, 1)
+					go func() {
+						release, err := scoped.BeginMeasurementContext(waiter)
+						if release != nil {
+							release()
+						}
+						joined <- err
+					}()
+					select {
+					case <-waiter.entered:
+						stop()
+					case <-time.After(time.Second):
+						stop()
+						lock.Unlock()
+						<-joined
+						t.Fatal("activity did not retain original lock caller")
+					}
+					select {
+					case err := <-joined:
+						lock.Unlock()
+						if !errors.Is(err, context.Canceled) {
+							t.Fatal("activity lost original cancellation", err)
+						}
+					case <-time.After(time.Second):
+						lock.Unlock()
+						<-joined
+						t.Fatal("cancelled activity waited on the native mutex")
+					}
+				}
+				owned, err := scoped.BeginMeasurementContext(context.Background())
+				if err != nil || owned == nil {
+					t.Fatal("healthy native activity was damaged", err)
+				}
+				owned()
+			} else {
+				if actual.measurement != nil {
+					_ = actual.measurement.Close()
+				}
+				if actual.err == nil || actual.measurement != nil {
+					t.Fatal("retired, unproved or changed native owner created a measurement", actual.err)
+				}
+				if phase == "cancel-before" || phase == "instance-held" || phase == "engine-held" || phase == "manager-held" {
+					if !errors.Is(actual.err, context.Canceled) {
+						t.Fatal("native constructor lost original cancellation", actual.err)
+					}
+				}
+			}
+			if replacement != nil {
+				current, err := started.RouterVPNInstanceContext(context.Background())
+				if err != nil || current != replacement {
+					t.Fatal("old measurement touched replacement instance", err)
+				}
+			}
+			if legacy.Load() != 0 {
+				t.Fatal("external constructor used its legacy unbounded proof callback")
+			}
+		})
+	}
+}

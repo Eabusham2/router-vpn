@@ -39,7 +39,12 @@ type routerVPNExternalActivity struct {
 }
 
 func (a *routerVPNExternalActivity) beginMeasurement() (func(), error) {
-	a.mu.Lock()
+	return a.beginMeasurementContext(context.Background())
+}
+func (a *routerVPNExternalActivity) beginMeasurementContext(ctx context.Context) (func(), error) {
+	if err := adapter.RouterVPNLockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
 	if a.changing || a.measurements != 0 {
 		a.mu.Unlock()
 		return nil, errors.New("another external native operation still owns the TUN")

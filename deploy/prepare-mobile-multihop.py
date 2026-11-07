@@ -50,6 +50,7 @@ _observation_spec.loader.exec_module(OBSERVATION)
 def inputs():
     paths = [ROOT/'ios/RouterVPN/App/IOSHomeDNSPolicy.swift', ROOT/'deploy/test_ios_xray_exits.py', ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift', ROOT/'deploy/testfixtures/xray-entry/main.go', ROOT/'deploy/test_ios_multihop_graph.py', ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_external_policy_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
     paths.append(ROOT/'mobile/routervpn_external_measurement_bridge.go.tmpl')
+    paths.append(ROOT/'mobile/routervpn_external_measurement_context_test.go.tmpl')
     paths.append(ROOT/'mobile/routervpn_dns_measurement.go.tmpl')
     paths.append(ROOT/'mobile/routervpn_imported_entry.go.tmpl')
     paths.append(ROOT/'mobile/daemon/instance_context.go.tmpl')
@@ -106,6 +107,7 @@ def prepare(vendor):
     (root/'routervpn_multihop_bridge.go').write_bytes((ROOT/'mobile/routervpn_multihop_bridge.go.tmpl').read_bytes())
     (root/'routervpn_external_policy_bridge.go').write_bytes((ROOT/'mobile/routervpn_external_policy_bridge.go.tmpl').read_bytes())
     (root/'routervpn_external_measurement_bridge.go').write_bytes((ROOT/'mobile/routervpn_external_measurement_bridge.go.tmpl').read_bytes())
+    (root/'routervpn_external_measurement_context_test.go').write_bytes((ROOT/'mobile/routervpn_external_measurement_context_test.go.tmpl').read_bytes())
     (root/'routervpn_hop_measurement.go').write_bytes((ROOT/'mobile/routervpn_hop_measurement.go.tmpl').read_bytes())
     (root/'routervpn_dns_measurement.go').write_bytes((ROOT/'mobile/routervpn_dns_measurement.go.tmpl').read_bytes())
     (root/'routervpn_multihop_native_test.go').write_bytes((ROOT/'mobile/routervpn_multihop_native_test.go.tmpl').read_bytes())

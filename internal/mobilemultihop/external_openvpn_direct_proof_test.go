@@ -45,6 +45,13 @@ func (e *directOpenVPNProofEngine) OpenVPNRemote(tag string) (nativeopenvpn.Remo
 	}
 	return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
 }
+func (e *directOpenVPNProofEngine) OpenVPNRemoteContext(ctx context.Context, tag string) (nativeopenvpn.RemoteReceipt, error) {
+	if err := ctx.Err(); err != nil {
+		return nativeopenvpn.RemoteReceipt{}, err
+	}
+	receipt, err := e.OpenVPNRemote(tag)
+	return receipt, errors.Join(err, ctx.Err())
+}
 
 func directOpenVPNProofFixture(t *testing.T, network string) (*ExternalProofRequest, *directOpenVPNProofEngine, string, string, nativeopenvpn.RemoteReceipt) {
 	t.Helper()

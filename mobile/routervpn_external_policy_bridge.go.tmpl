@@ -1,9 +1,11 @@
 package libbox
 
 import (
+	"context"
 	"errors"
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"time"
 )
 
 // RouterCompileExternalPolicy applies the exact captured ordinary external
@@ -39,8 +41,9 @@ func RouterValidateExternalDNS(profile, entry string) error {
 }
 
 type RouterExternalProofRequest struct {
-	request *box.RouterVPNExternalProofRequest
-	current func() bool
+	request        *box.RouterVPNExternalProofRequest
+	current        func() bool
+	currentContext func(context.Context) error
 }
 
 // Factory captures the real Box before Run may block. Cancel only reaches
@@ -49,7 +52,8 @@ func RouterExternalCreateProof(server *CommandServer, source, capture, session s
 	if server == nil || server.StartedService == nil {
 		return nil, errors.New("external native service unavailable")
 	}
-	instance := server.StartedService.Instance()
+	started := server.StartedService
+	instance := started.Instance()
 	if instance == nil || instance.Box() == nil {
 		return nil, errors.New("external native instance unavailable")
 	}
@@ -57,12 +61,35 @@ func RouterExternalCreateProof(server *CommandServer, source, capture, session s
 	if err != nil {
 		return nil, err
 	}
-	current := func() bool { return server.StartedService != nil && server.StartedService.Instance() == instance }
+	currentContext := func(ctx context.Context) error {
+		if ctx == nil {
+			return errors.New("external native proof has no observation caller")
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if server.StartedService != started {
+			return errors.New("external native service changed")
+		}
+		actual, err := started.RouterVPNInstanceContext(ctx)
+		if err != nil {
+			return err
+		}
+		if server.StartedService != started || actual != instance {
+			return errors.New("external native instance changed")
+		}
+		return ctx.Err()
+	}
+	current := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		return currentContext(ctx) == nil
+	}
 	if !current() {
 		request.Cancel()
 		return nil, errors.New("external native instance changed")
 	}
-	return &RouterExternalProofRequest{request: request, current: current}, nil
+	return &RouterExternalProofRequest{request: request, current: current, currentContext: currentContext}, nil
 }
 func (r *RouterExternalProofRequest) Run() (string, error) {
 	if r == nil || r.request == nil || r.current == nil || !r.current() {
@@ -88,6 +115,18 @@ func (r *RouterExternalProofRequest) Cancel() {
 }
 func (r *RouterExternalProofRequest) Healthy() bool {
 	return r != nil && r.request != nil && r.current != nil && r.current() && r.request.Healthy()
+}
+func (r *RouterExternalProofRequest) healthyContext(ctx context.Context) error {
+	if r == nil || r.request == nil || r.currentContext == nil {
+		return errors.New("external native proof has no captured observation owner")
+	}
+	if err := r.currentContext(ctx); err != nil {
+		return err
+	}
+	if err := r.request.HealthyContext(ctx); err != nil {
+		return err
+	}
+	return r.currentContext(ctx)
 }
 func (r *RouterExternalProofRequest) Close() error {
 	if r == nil || r.request == nil {

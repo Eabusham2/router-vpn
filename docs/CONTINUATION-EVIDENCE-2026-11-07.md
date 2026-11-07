@@ -594,6 +594,41 @@ attempt establishes a native test pass, and no third cold retry was used to
 delay preservation. The required native inventory remains in CI. Ordinary
 external and Tor measurement factories are separate unfinished adoption paths.
 
+### Ordinary external hop measurement caller and ownership
+
+The ordinary Android/iOS external hop factory captures the original
+StartedService, instance, successful proof and constructor context through
+source verification and publication. The shared and actual native measurement
+engines retain each operation's caller through identity observation, native
+activity acquisition, selected-path verification and final dial readback.
+A cancelled or replaced operation cannot publish a late connection; its own
+connection is closed, including a connection returned alongside an error.
+Expired observation alone does not cancel the healthy underlying VPN proof.
+Original graph identity and connected OpenVPN remote checks remain enforced.
+
+Compatibility methods delegate to the context methods, while a successful
+measurement retains its independent later lifetime. The desktop binding adds
+only the bounded equivalent of its existing sealed-source translation; graph,
+DNS and proof authority are unchanged. Three executed causal overlays reject
+context reset, omitted final original-proof recheck and an unclosed late
+connection with their intended witnesses.
+
+All forty-six exact shared context verdicts pass under race instrumentation,
+along with existing external/OpenVPN ownership checks, twenty-eight runner
+contracts and four shipping integration checks. A merged-main external,
+OpenVPN and observation race selection passes in 4.224 seconds; the twenty-eight
+runner contracts pass in 0.245 seconds. The local shipping check ran four
+cases and explicitly skipped its separate Swift renderer case because Swift
+was not on that invocation's PATH; this is not a new Swift verdict.
+The exact native gate preserves its prior thirty-two cases and adds thirteen
+ordinary external ownership verdicts. Its new fixture uses the pinned Box,
+parser, managers, StartedService and native locks; prior successful network
+proof and OS TUN remain explicit fixture models. Source projection and actual
+prepared import/dependency closure pass. No heavyweight native execution was
+performed for this unit, and its forty-five verdicts still require CI.
+Ordinary proof creation and DNS factories, plus Tor's resident, padding and
+Server contexts, retain separate unfinished adoption work.
+
 The initial `398cb513` failures were read at their exact source identity,
 including authoritative source audit job `128124355405`, iOS jobs
 `128124354309` and `128124314967`, Windows jobs `128154670227`, `128154670428`,

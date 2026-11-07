@@ -16,14 +16,42 @@ import (
 )
 
 func (s *Box) RouterVPNExternalHopMeasurement(proof *RouterVPNExternalProofRequest, source, capture, session string, current func() bool) (*hopmeasure.Service, error) {
-	if s == nil || proof == nil || proof.request == nil || proof.engine == nil || proof.engine.box != s || !proof.Healthy() || current == nil || !current() {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	// Retain the legacy callback API. Native hosts use the context form below
+	// so their actual StartedService observation shares the original caller.
+	return s.RouterVPNExternalHopMeasurementContext(ctx, proof, source, capture, session, func(ctx context.Context) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if current == nil || !current() {
+			return errors.New("external measurement host owner retired")
+		}
+		return ctx.Err()
+	})
+}
+
+func (s *Box) RouterVPNExternalHopMeasurementContext(ctx context.Context, proof *RouterVPNExternalProofRequest, source, capture, session string, current func(context.Context) error) (*hopmeasure.Service, error) {
+	if ctx == nil {
+		return nil, errors.New("external measurement has no constructor caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s == nil || proof == nil || proof.request == nil || proof.engine == nil || proof.engine.box != s || current == nil {
 		return nil, errors.New("external measurement native proof is unavailable")
+	}
+	if err := current(ctx); err != nil {
+		return nil, err
+	}
+	if err := proof.HealthyContext(ctx); err != nil {
+		return nil, err
 	}
 	policy, err := mobilemultihop.NewExternalPolicy(source, capture)
 	if err != nil {
 		return nil, err
 	}
-	config, err := routerVPNExternalMeasurementConfig(proof, policy.Config())
+	config, err := routerVPNExternalMeasurementConfigContext(ctx, proof, policy.Config())
 	if err != nil {
 		return nil, err
 	}
@@ -42,11 +70,34 @@ func (s *Box) RouterVPNExternalHopMeasurement(proof *RouterVPNExternalProofReque
 	// Reuse the proof's sole authorized TUN transition owner. A measurement
 	// created before Auto-MTU remains usable afterward; arbitrary replacement
 	// still retires every exact native transport, DNS and interface witness.
-	if proof.engine.tunTag != meta.TUNTag || proof.engine.Identity() == "" {
+	if proof.engine.tunTag != meta.TUNTag {
 		return nil, errors.New("external measurement lost its captured native TUN")
 	}
 	engine := &routerVPNExternalMeasurementEngine{core: proof.engine, current: current, proof: proof, tunTag: meta.TUNTag, ipv6: meta.IPv6Mode != "off"}
-	return proof.request.NewHopMeasurement(source, capture, session, engine)
+	return proof.request.NewHopMeasurementContext(ctx, source, capture, session, engine)
+}
+
+func routerVPNExternalMeasurementConfigContext(ctx context.Context, proof *RouterVPNExternalProofRequest, original string) (string, error) {
+	if proof == nil || proof.engine == nil {
+		return "", errors.New("external measurement has no native configuration owner")
+	}
+	if err := proof.HealthyContext(ctx); err != nil {
+		return "", err
+	}
+	if err := adapter.RouterVPNRLockContext(ctx, &proof.engine.mu); err != nil {
+		return "", err
+	}
+	defer proof.engine.mu.RUnlock()
+	if proof.engine.physical != nil {
+		physical, ok := proof.engine.physical.(interface {
+			measurementConfigContext(context.Context, string) (string, error)
+		})
+		if !ok {
+			return "", errors.New("external physical measurement has no bounded configuration observation")
+		}
+		return physical.measurementConfigContext(ctx, original)
+	}
+	return original, ctx.Err()
 }
 
 func routerVPNExternalMeasurementConfig(proof *RouterVPNExternalProofRequest, original string) (string, error) {
@@ -63,67 +114,113 @@ func routerVPNExternalMeasurementConfig(proof *RouterVPNExternalProofRequest, or
 
 type routerVPNExternalMeasurementEngine struct {
 	core    *routerVPNExternalNativeEngine
-	current func() bool
+	current func(context.Context) error
 	proof   *RouterVPNExternalProofRequest
 	tunTag  string
 	ipv6    bool
 }
 
 func (e *routerVPNExternalMeasurementEngine) BeginMeasurement() (func(), error) {
-	if e.Identity() == "" {
-		return nil, errors.New("external measurement owner retired")
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	return e.BeginMeasurementContext(ctx)
+}
+func (e *routerVPNExternalMeasurementEngine) BeginMeasurementContext(ctx context.Context) (func(), error) {
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return nil, err
 	}
-	release, err := e.proof.activity.beginMeasurement()
+	release, err := e.proof.activity.beginMeasurementContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if e.Identity() == "" {
+	if _, err := e.IdentityContext(ctx); err != nil {
 		release()
-		return nil, errors.New("external measurement owner changed during capture")
+		return nil, err
 	}
 	return release, nil
 }
 
 func (e *routerVPNExternalMeasurementEngine) Identity() string {
-	if e == nil || e.current == nil || !e.current() || !e.proof.Healthy() {
-		return ""
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	identity, _ := e.IdentityContext(ctx)
+	return identity
+}
+func (e *routerVPNExternalMeasurementEngine) IdentityContext(ctx context.Context) (string, error) {
+	if ctx == nil {
+		return "", errors.New("external measurement has no observation caller")
 	}
-	return e.core.Identity()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if e == nil || e.core == nil || e.current == nil || e.proof == nil {
+		return "", errors.New("external measurement owner is unavailable")
+	}
+	if err := e.current(ctx); err != nil {
+		return "", err
+	}
+	if err := e.proof.HealthyContext(ctx); err != nil {
+		return "", err
+	}
+	identity, err := e.core.IdentityContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := e.current(ctx); err != nil {
+		return "", err
+	}
+	if err := e.proof.HealthyContext(ctx); err != nil {
+		return "", err
+	}
+	return identity, ctx.Err()
 }
 func (e *routerVPNExternalMeasurementEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
-	if e == nil || e.core == nil { return nil,errors.New("external measurement owner retired") }
-	ctx,finish,err := e.core.beginData(ctx)
-	if err != nil { return nil,err }
-	defer finish()
-	if e.Identity() == "" || ctx.Err() != nil {
+	if e == nil || e.core == nil {
 		return nil, errors.New("external measurement owner retired")
 	}
+	ctx, finish, err := e.core.beginData(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return nil, err
+	}
 	if address != hopmeasure.PublicAddress {
-		return e.core.Dial(ctx, tag, address)
+		return e.dialOwned(ctx, tag, address)
 	}
 	query, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	query = adapter.WithContext(query, &adapter.InboundContext{Inbound: e.tunTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
 	addresses, err := e.core.box.dnsRouter.Lookup(query, hopmeasure.PublicHost, adapter.DNSQueryOptions{})
-	if err != nil || e.Identity() == "" || ctx.Err() != nil {
-		return nil, errors.New("captured external DNS lookup failed")
+	_, observeErr := e.IdentityContext(ctx)
+	if err != nil || observeErr != nil || ctx.Err() != nil {
+		return nil, errors.Join(err, observeErr, ctx.Err(), errors.New("captured external DNS lookup failed"))
 	}
 	for _, ip := range addresses {
 		if !routerVPNPublicMeasurementAddress(ip) || ip.Is6() && !e.ipv6 {
 			continue
 		}
-		connection, err := e.core.Dial(ctx, tag, net.JoinHostPort(ip.String(), "443"))
-		if err == nil && connection != nil && e.Identity() != "" && ctx.Err() == nil {
+		connection, err := e.dialOwned(ctx, tag, net.JoinHostPort(ip.String(), "443"))
+		if err == nil && connection != nil {
 			return connection, nil
 		}
-		if connection != nil {
-			_ = connection.Close()
-		}
-		if e.Identity() == "" || ctx.Err() != nil {
-			break
+		if _, observeErr := e.IdentityContext(ctx); observeErr != nil {
+			return nil, errors.Join(err, observeErr, ctx.Err())
 		}
 	}
 	return nil, errors.New("selected external route could not reach the public measurement origin")
+}
+func (e *routerVPNExternalMeasurementEngine) dialOwned(ctx context.Context, tag, address string) (net.Conn, error) {
+	connection, err := e.core.Dial(ctx, tag, address)
+	_, observeErr := e.IdentityContext(ctx)
+	if err != nil || observeErr != nil || ctx.Err() != nil || connection == nil {
+		if connection != nil {
+			err = errors.Join(err, connection.Close())
+		}
+		return nil, errors.Join(err, observeErr, ctx.Err(), errors.New("external measurement dial failed or became stale"))
+	}
+	return connection, nil
 }
 func routerVPNPublicMeasurementAddress(ip netip.Addr) bool {
 	return ip.IsValid() && ip.Zone() == "" && !ip.Is4In6() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsUnspecified()
