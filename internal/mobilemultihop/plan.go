@@ -623,3 +623,32 @@ func (c *Controller) selectionContext(ctx context.Context) (string, error) {
 	}
 	return selected, ctx.Err()
 }
+
+// Selection is a mutation of the original retained engine. External engines
+// must admit the caller before committing; a completed native commit remains
+// joined even when cancellation arrives during persistence or stream closure.
+func (c *Controller) selectContext(ctx context.Context, tag string) error {
+	if err := c.requireValidContext(ctx); err != nil {
+		return err
+	}
+	if err := externalObservationLock(ctx, &c.mu); err != nil {
+		return err
+	}
+	engine := c.engine
+	external := c.external != nil
+	c.mu.Unlock()
+	if selector, ok := engine.(interface {
+		SelectContext(context.Context, string) error
+	}); ok {
+		if err := selector.SelectContext(ctx, tag); err != nil {
+			return err
+		}
+	} else if external {
+		return errors.New("external engine has no owned selection context")
+	} else if err := engine.Select(tag); err != nil {
+		// Preserve older non-native paired engines while shipping native
+		// adapters adopt the context-aware mutation contract.
+		return err
+	}
+	return c.requireValidContext(ctx)
+}

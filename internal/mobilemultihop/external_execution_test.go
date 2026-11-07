@@ -255,7 +255,12 @@ func (e *externalExecutionEngine) SelectedContext(ctx context.Context) (string, 
 	return e.selected, ctx.Err()
 }
 func (e *externalExecutionEngine) Select(tag string) error {
-	e.mu.Lock()
+	return e.SelectContext(context.Background(), tag)
+}
+func (e *externalExecutionEngine) SelectContext(ctx context.Context, tag string) error {
+	if err := externalObservationLock(ctx, &e.mu); err != nil {
+		return err
+	}
 	defer e.mu.Unlock()
 	if e.identity == "" {
 		return errors.New("retired")

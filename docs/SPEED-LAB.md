@@ -247,8 +247,16 @@ Comparison keeps its existing budget, followed by the separate 45-second
 network-proof allowance. A caller deadline can shorten both, but callbacks
 cannot replace it. Later health, path and execution observations use one bounded
 caller; an observation timeout leaves a healthy VPN retained, while actual
-owner or path replacement revokes proof authority. The comparison's trial/final
-selector mutations still require their separate context adoption.
+owner or path replacement revokes proof authority. Trial and final selector
+mutations now retain that caller through original-owner validation and native
+selection admission. Their serialized native commit preserves cache writes,
+connection interruption and history notification. Cancellation before commit
+causes no mutation; cancellation during commit joins the exact original work
+and cannot publish a successful retained path. Native cache persistence,
+connection closure and later history contention are not interruptible once
+entered, so this does not claim a hard native-side-effect deadline. The real
+bbolt writer, close-callback history update, exact interruption filter and
+original replacement/cancellation boundaries are mandatory native tests.
 
 The ordinary external mobile DNS comparison constructor now keeps the same
 caller through successful-proof and current-path verification, exact source and

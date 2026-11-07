@@ -1,0 +1,17 @@
+package interrupt
+
+import (
+	"context"
+
+	"github.com/sagernet/sing-box/adapter"
+)
+
+// The caller keeps this original group locked until its synchronous commit
+// completes. A canceled admission never closes a connection or leaves a waiter.
+// An entered Close has to finish before release; it cannot be detached on expiry.
+func (g *Group) RouterVPNPrepareInterrupt(ctx context.Context, external bool) (commit func(), release func(), err error) {
+	if err := adapter.RouterVPNLockContext(ctx, &g.access); err != nil {
+		return nil, nil, err
+	}
+	return func() { g.routerVPNInterruptLocked(external) }, g.access.Unlock, nil
+}

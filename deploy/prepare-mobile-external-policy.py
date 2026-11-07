@@ -12,6 +12,46 @@ _graphs_spec = importlib.util.spec_from_file_location('routervpn_external_graphs
 GRAPHS = importlib.util.module_from_spec(_graphs_spec)
 _graphs_spec.loader.exec_module(GRAPHS)
 
+SELECTION_REPLACEMENTS = {
+    'protocol/group/selector.go': (
+        ('\t"net"\n', '\t"net"\n\t"sync"\n'),
+        ('\ttags                         []string\n', '\trouterVPNSelectionAccess     sync.Mutex\n\ttags                         []string\n'),
+        ('func (s *Selector) SelectOutbound(tag string) bool {\n',
+         'func (s *Selector) SelectOutbound(tag string) bool {\n'
+         '\ts.routerVPNSelectionAccess.Lock()\n\tdefer s.routerVPNSelectionAccess.Unlock()\n'
+         '\treturn s.routerVPNSelectOutboundLocked(tag, func() { s.interruptGroup.Interrupt(s.interruptExternalConnections) }, func() {\n'
+         '\t\tif s.history != nil { s.history.NotifyUpdated() }\n\t})\n}\n\n'
+         'func (s *Selector) routerVPNSelectOutboundLocked(tag string, interrupt, notify func()) bool {\n'),
+        ('\ts.interruptGroup.Interrupt(s.interruptExternalConnections)\n\tif s.history != nil {\n\t\ts.history.NotifyUpdated()\n\t}\n',
+         '\tinterrupt()\n\tnotify()\n'),
+    ),
+    'common/interrupt/group.go': (
+        ('\tvar toDelete []*list.Element[*groupConnItem]\n',
+         '\tg.routerVPNInterruptLocked(interruptExternalConnections)\n}\n\n'
+         'func (g *Group) routerVPNInterruptLocked(interruptExternalConnections bool) {\n'
+         '\tvar toDelete []*list.Element[*groupConnItem]\n'),
+    ),
+}
+
+def selection_sources(vendor):
+    """Exact pinned sources and their complete owned selector transforms."""
+    values = {}
+    for relative, replacements in SELECTION_REPLACEMENTS.items():
+        original = subprocess.check_output(['git', '-C', str(vendor), 'show', PIN+':'+relative])
+        source = original.decode()
+        for before, after in replacements:
+            if source.count(before) != 1: raise ValueError('pinned native selection boundary changed: ' + relative)
+            source = source.replace(before, after, 1)
+        values[relative] = (original, source.encode())
+    return values
+
+def check_selection_sources(vendor):
+    for relative, (_, expected) in selection_sources(vendor).items():
+        path = vendor / relative
+        if path.is_symlink() or not path.is_file() or path.read_bytes() != expected:
+            raise ValueError('changed native selection commit: ' + relative)
+
+
 def inputs():
     return [Path(__file__).resolve(), ROOT/'deploy/test_mobile_external_pinned.sh'] + sorted((ROOT/'mobile/externalpolicy').glob('*.tmpl')) + GRAPHS.inputs()
 
@@ -40,6 +80,22 @@ def prepare(vendor, *, mobile=True):
         if source.count(before)!=1:raise ValueError('native external configuration capture boundary changed')
         source=source.replace(before,after,1)
     path.write_text(source)
+    # Both preparation and execution prove the full pinned commit body. A
+    # partial or foreign patch cannot erase cache/interrupt/history semantics.
+    for relative, (original, expected) in selection_sources(vendor).items():
+        path = vendor / relative
+        if path.is_symlink() or path.read_bytes() not in (original, expected):
+            raise ValueError('changed native selection commit: ' + relative)
+        path.write_bytes(expected)
+    for name, relative in {
+        'selector_context.go': 'protocol/group/routervpn_selector_context.go',
+        'interrupt_context.go': 'common/interrupt/routervpn_selector_context.go',
+        'history_context.go': 'common/urltest/routervpn_selector_context.go',
+        'selection_context_test.go': 'routervpn_external_selection_context_test.go',
+    }.items():
+        path = vendor / relative
+        if path.is_symlink(): raise ValueError('linked native selection context')
+        path.write_bytes((ROOT/'mobile/externalpolicy'/(name+'.tmpl')).read_bytes())
     (vendor/'routervpn_external_observation_test.go').write_bytes((ROOT/'mobile/externalpolicy/observation_test.go.tmpl').read_bytes())
     for name in ('box.go','box_test.go'):
         template=ROOT/'mobile/externalpolicy'/(name+'.tmpl')

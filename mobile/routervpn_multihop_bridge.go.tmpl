@@ -219,17 +219,29 @@ func (e *routerMultihopEngine) selector() (*group.Selector, error) {
 	return e.selectorContext(ctx)
 }
 func (e *routerMultihopEngine) Select(tag string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), routerMultihopObservationTimeout)
+	defer cancel()
+	return e.SelectContext(ctx, tag)
+}
+func (e *routerMultihopEngine) SelectContext(ctx context.Context, tag string) error {
 	if tag != mobilemultihop.LocalTag && tag != mobilemultihop.ServerTag {
 		return errors.New("unproved execution selection")
 	}
-	selector, err := e.selector()
+	selector, err := e.selectorContext(ctx)
 	if err != nil {
 		return err
 	}
-	if !selector.SelectOutbound(tag) || selector.Now() != tag {
+	current := func(ctx context.Context) error {
+		original, err := e.selectorContext(ctx)
+		if err != nil { return err }
+		if original != selector { return errors.New("native selector owner changed") }
+		return ctx.Err()
+	}
+	if err := selector.RouterVPNSelectOutboundContext(ctx, tag, current); err != nil { return err }
+	if selector.Now() != tag {
 		return errors.New("native selector refused winner")
 	}
-	return nil
+	return current(ctx)
 }
 func (e *routerMultihopEngine) Selected() string {
 	ctx, cancel := context.WithTimeout(context.Background(), routerMultihopObservationTimeout)

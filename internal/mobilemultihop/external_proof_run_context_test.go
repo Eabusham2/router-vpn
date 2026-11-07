@@ -412,6 +412,10 @@ func (e *externalRunCaptureEngine) Select(tag string) error {
 	e.selections.Add(1)
 	return e.externalExecutionEngine.Select(tag)
 }
+func (e *externalRunCaptureEngine) SelectContext(ctx context.Context, tag string) error {
+	e.selections.Add(1)
+	return e.externalExecutionEngine.SelectContext(ctx, tag)
+}
 
 func TestExternalProofRunCannotAdoptReplacementComparison(t *testing.T) {
 	for _, phase := range []string{"before-admission", "during-capture", "caller-ended-capture"} {

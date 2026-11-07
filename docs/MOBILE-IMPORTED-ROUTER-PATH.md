@@ -419,8 +419,28 @@ external proof execution now retains its original operation through native
 admission, original-graph comparison capture, connected OpenVPN observation,
 entry/DNS/exit proof and final native delivery. Proof and comparison admission
 mutexes obey cancellation, and a completed proof retains the VPN lifetime
-after its operation ends. The comparison's trial/final selector mutations,
-desktop legacy boolean measurement callbacks, plus Tor resident/padding/Server
+after its operation ends. Trial and final selection now pass that same caller
+to the captured native selector, including the paired mobile adapter. External
+engines without this mutation capability are refused. Native selector and
+interruption admission waits are cancellable, and history admission is checked
+before mutation. The original cache write, exact connection interruption filter
+and history notification remain in one synchronously joined commit, shared with
+the legacy selector API. Cancellation cannot publish a score for a cancelled
+trial or a successful retained path after final activation expires.
+
+An already-entered native cache write, connection `Close`, or later history
+notification is not interruptible. It must finish before selection returns,
+including cancellation while a real bbolt writer is held. This is a cancellable
+admission and joined-commit contract, not a hard deadline for native side effects.
+No detached selection worker can mutate a replacement after return. History is
+not locked across `Close`, because a close callback can itself update history.
+The mandatory gate adds 12 shared selection verdicts, two native paired-adapter
+held-read verdicts and 27 actual Box/selector verdicts, retaining the existing
+context suites and rejection of missing, duplicate, foreign or skipped tests.
+These fixtures use real managers, selectors, cache persistence and interruption;
+their modeled connections do not establish physical VPN acceptance.
+
+Desktop legacy boolean measurement callbacks, plus Tor resident/padding/Server
 proof and lease observations remain separate context-propagation requirements.
 
 The complete compiled graph supplies the MTU plan. For a nested packet final,

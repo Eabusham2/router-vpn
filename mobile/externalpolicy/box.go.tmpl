@@ -690,14 +690,31 @@ func (e *routerVPNExternalNativeEngine) DNSProof(parent context.Context, tunTag 
 }
 
 func (e *routerVPNExternalNativeEngine) Select(tag string) error {
-	if e.Identity() == "" || tag != mobilemultihop.LocalTag && tag != mobilemultihop.ServerTag || e.routes[tag] == nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	return e.SelectContext(ctx, tag)
+}
+func (e *routerVPNExternalNativeEngine) SelectContext(ctx context.Context, tag string) error {
+	if e == nil || tag != mobilemultihop.LocalTag && tag != mobilemultihop.ServerTag {
 		return errors.New("external candidate selection is unowned")
 	}
+	ctx, finish, err := e.beginData(ctx)
+	if err != nil { return err }
+	defer finish()
+	if _, err := e.IdentityContext(ctx); err != nil { return err }
 	selector, ok := e.routes[mobilemultihop.ExternalFinalTag].(*group.Selector)
-	if !ok || !selector.SelectOutbound(tag) || selector.Now() != tag || e.Identity() == "" {
+	if !ok || e.routes[tag] == nil {
+		return errors.New("external candidate selection is unowned")
+	}
+	current := func(ctx context.Context) error {
+		_, err := e.IdentityContext(ctx)
+		return err
+	}
+	if err := selector.RouterVPNSelectOutboundContext(ctx, tag, current); err != nil { return err }
+	if selector.Now() != tag {
 		return errors.New("external selector did not retain the captured candidate")
 	}
-	return nil
+	return current(ctx)
 }
 func (e *routerVPNExternalNativeEngine) Selected() string {
 	if e.Identity() == "" {

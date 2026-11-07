@@ -51,11 +51,11 @@ func routerProofNativeOwner(t *testing.T) (*routerMultihopEngine, *daemon.Starte
 	return &routerMultihopEngine{server: &CommandServer{StartedService: started}, instance: native}, started, manager, registry
 }
 func TestRouterNativeProofContextRetiresHeldReads(t *testing.T) {
-	for _, phase := range []string{"identity", "dial", "dns", "hop-identity", "hop-dial", "capture", "selected", "manager-dial", "manager-selected"} {
+	for _, phase := range []string{"identity", "dial", "dns", "hop-identity", "hop-dial", "capture", "selected", "manager-dial", "manager-selected", "select", "manager-select"} {
 		t.Run(phase, func(t *testing.T) {
 			core, started, manager, _ := routerProofNativeOwner(t)
 			held := routerProofField[sync.RWMutex](t, started, "serviceAccess")
-			if phase == "manager-dial" || phase == "manager-selected" {
+			if phase == "manager-dial" || phase == "manager-selected" || phase == "manager-select" {
 				held = routerProofField[sync.RWMutex](t, manager, "access")
 			}
 			held.Lock()
@@ -69,6 +69,8 @@ func TestRouterNativeProofContextRetiresHeldReads(t *testing.T) {
 				var err error
 				hop := &routerHopMeasurementEngine{core: core}
 				switch phase {
+				case "select", "manager-select":
+					err = core.SelectContext(ctx, mobilemultihop.ServerTag)
 				case "identity":
 					_, err = core.IdentityContext(ctx)
 				case "dial", "manager-dial":

@@ -127,11 +127,12 @@ class ImportedEntryVerdicts(unittest.TestCase):
   for mutation in (events[:-1],events+[events[-1]],events[:-1]+[dict(events[-1],Action='skip')]):
    with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
  def test_context_owner_verdicts_are_required(self):
-  self.assertEqual(len(gate.names(gate.CONTEXT_CORE)),112)
+  self.assertEqual(len(gate.names(gate.CONTEXT_CORE)),124)
   self.assertEqual(len(gate.names(gate.CONTEXT_DNS)),23)
-  self.assertEqual(len(gate.names(gate.CONTEXT_NATIVE)),102)
+  self.assertEqual(len(gate.names(gate.CONTEXT_NATIVE)),104)
   self.assertEqual(len(gate.names(gate.CONTEXT_DNS_BOX)),13)
-  for group in (gate.CONTEXT_CORE,gate.CONTEXT_DNS,gate.CONTEXT_NATIVE,gate.CONTEXT_DNS_BOX):
+  self.assertEqual(len(gate.names(gate.CONTEXT_SELECTION_BOX)),27)
+  for group in (gate.CONTEXT_CORE,gate.CONTEXT_DNS,gate.CONTEXT_NATIVE,gate.CONTEXT_DNS_BOX,gate.CONTEXT_SELECTION_BOX):
    expected=gate.names(group)
    events=[{'Action':a,'Test':n} for n in sorted(expected) for a in ('run','pass')]
    gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
@@ -149,6 +150,23 @@ class ImportedEntryVerdicts(unittest.TestCase):
   gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
   for mutation in (events[:-1],events+[events[-1]],events[:-1]+[dict(events[-1],Action='skip')],events+[{'Action':'pass','Test':'foreign'}]):
    with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
+ def test_selector_native_execution_is_mandatory(self):
+  source=(ROOT/'deploy/test_mobile_imported_entry.py').read_text()
+  self.assertIn("names(CONTEXT_SELECTION_BOX),timeout=90)",source)
+  self.assertIn("m.EXTERNAL_POLICY.check_selection_sources(vendor)",source)
+ def test_selector_commit_source_cannot_be_partially_projected(self):
+  spec=importlib.util.spec_from_file_location('selection_projection',ROOT/'deploy/prepare-mobile-external-policy.py')
+  projection=importlib.util.module_from_spec(spec);spec.loader.exec_module(projection)
+  expected=b'captured cache write\nexact interruption\noriginal history\n'
+  with tempfile.TemporaryDirectory() as temporary:
+   vendor=Path(temporary);path=vendor/'selector.go';path.write_bytes(expected)
+   with mock.patch.object(projection,'selection_sources',return_value={'selector.go':(b'pinned original',expected)}):
+    projection.check_selection_sources(vendor)
+    for body in (b'pinned original',expected.replace(b'exact interruption\n',b''),expected+b'foreign mutation\n'):
+     path.write_bytes(body)
+     with self.assertRaisesRegex(ValueError,'changed native selection commit'):projection.check_selection_sources(vendor)
+    path.unlink();target=vendor/'foreign.go';target.write_bytes(expected);path.symlink_to(target)
+    with self.assertRaisesRegex(ValueError,'changed native selection commit'):projection.check_selection_sources(vendor)
  def test_socks_reality_scope_and_inventory(self):
   self.assertEqual(gate.SOCKS_XRAY_FILES,{'socks5--final-'+gate.socks_label('reality-vision',a,b)+'.json' for a in gate.LAYERS for b in gate.LAYERS})
   self.assertEqual(len(gate.FILES),346)

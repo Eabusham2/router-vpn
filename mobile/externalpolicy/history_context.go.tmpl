@@ -1,0 +1,22 @@
+package urltest
+
+import (
+	"context"
+
+	"github.com/sagernet/sing-box/adapter"
+)
+
+// Check notification admission before the selector mutates, but do not hold a
+// history lock across arbitrary connection Close callbacks: they may update
+// history themselves. The original NotifyUpdated lock and subscriber order
+// remain inside the synchronous, fully joined commit after interruption.
+func (s *HistoryStorage) RouterVPNPrepareNotifyUpdated(ctx context.Context) (notify func(), release func(), err error) {
+	if s == nil {
+		return func() {}, func() {}, nil
+	}
+	if err := adapter.RouterVPNRLockContext(ctx, &s.access); err != nil {
+		return nil, nil, err
+	}
+	s.access.RUnlock()
+	return s.NotifyUpdated, func() {}, nil
+}

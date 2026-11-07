@@ -1,0 +1,67 @@
+package group
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/adapter"
+)
+
+// RouterVPNSelectOutboundContext admits only the original caller and captured
+// owner. Selector/interruption ownership and notification admission are checked
+// before the first mutation. No worker may finish a selection after return.
+//
+// Once admitted, the original cache write, exact connection closes and history
+// notification complete synchronously. Native persistence, io.Closer.Close and
+// the commit's history notification have no cancellation contract: they join even
+// after the caller expires. Expiry can never be reported as selection success.
+func (s *Selector) RouterVPNSelectOutboundContext(ctx context.Context, tag string, current func(context.Context) error) error {
+	if current == nil {
+		return errors.New("native selection has no original owner")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &s.routerVPNSelectionAccess); err != nil {
+		return err
+	}
+	defer s.routerVPNSelectionAccess.Unlock()
+	detour, found := s.outbounds[tag]
+	if !found || detour == nil {
+		return errors.New("native selection candidate is unavailable")
+	}
+	if err := current(ctx); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.selected.Load() == detour {
+		return errors.Join(current(ctx), ctx.Err())
+	}
+	interrupt, releaseInterrupt, err := s.interruptGroup.RouterVPNPrepareInterrupt(ctx, s.interruptExternalConnections)
+	if err != nil {
+		return err
+	}
+	defer releaseInterrupt()
+	notify, releaseHistory, err := s.history.RouterVPNPrepareNotifyUpdated(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseHistory()
+	if err := current(ctx); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// The same commit body as SelectOutbound retains the pinned cache error
+	// logging, interruption order/filter and history notification semantics.
+	if !s.routerVPNSelectOutboundLocked(tag, interrupt, notify) {
+		return errors.New("native selection candidate changed before commit")
+	}
+	if err := current(ctx); err != nil {
+		return err
+	}
+	if s.selected.Load() != detour {
+		return errors.New("native selection did not retain its captured candidate")
+	}
+	return ctx.Err()
+}

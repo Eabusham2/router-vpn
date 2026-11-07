@@ -1,0 +1,489 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+	"path/filepath"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+	"unsafe"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	O "github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/common/interrupt"
+	"github.com/sagernet/sing-box/common/urltest"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/cachefile"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/common/observable"
+	"github.com/sagernet/sing/service"
+)
+
+func selectionContextField[T any](t *testing.T, owner any, name string) *T {
+	t.Helper()
+	field := reflect.ValueOf(owner).Elem().FieldByName(name)
+	if !field.IsValid() || !field.CanAddr() || field.Type() != reflect.TypeFor[T]() {
+		t.Fatal("pinned selector ownership field changed", name)
+	}
+	return (*T)(unsafe.Pointer(field.UnsafeAddr()))
+}
+
+type selectionContextCache struct {
+	adapter.CacheFile
+	stores  atomic.Int32
+	onStore func(string, string) error
+}
+
+func (*selectionContextCache) LoadSelected(string) string { return "" }
+func (c *selectionContextCache) StoreSelected(group, tag string) error {
+	c.stores.Add(1)
+	if c.onStore != nil {
+		return c.onStore(group, tag)
+	}
+	return nil
+}
+
+type selectionContextConn struct {
+	net.Conn
+	closes  atomic.Int32
+	onClose func()
+}
+
+func (c *selectionContextConn) Close() error {
+	c.closes.Add(1)
+	if c.onClose != nil {
+		c.onClose()
+	}
+	return nil
+}
+
+type selectionContextOutbound struct {
+	O.Adapter
+	conn *selectionContextConn
+}
+
+func (o *selectionContextOutbound) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+	return o.conn, nil
+}
+func (*selectionContextOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("unused fixture packet dial")
+}
+
+func selectionContextFixture(t *testing.T, cache adapter.CacheFile) (*routerVPNExternalNativeEngine, *group.Selector, *urltest.HistoryStorage, *selectionContextConn, <-chan struct{}) {
+	t.Helper()
+	engine, _ := boundedIdentityFixture(t)
+	ctx := service.ExtendContext(context.Background())
+	history := urltest.NewHistoryStorage()
+	subscriber := observable.NewSubscriber[struct{}](8)
+	history.AddUpdateHook(subscriber)
+	updates, _ := subscriber.Subscription()
+	t.Cleanup(func() { _ = history.Close(); _ = subscriber.Close() })
+	ctx = service.ContextWithPtr(ctx, history)
+	if cache != nil {
+		service.MustRegister[adapter.CacheFile](ctx, cache)
+	}
+	registry := O.NewRegistry()
+	conn := &selectionContextConn{}
+	O.Register[struct{}](registry, "selection-fixture", func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ struct{}) (adapter.Outbound, error) {
+		return &selectionContextOutbound{Adapter: O.NewAdapter("selection-fixture", tag, []string{"tcp"}, nil), conn: conn}, nil
+	})
+	group.RegisterSelector(registry)
+	endpoints := endpoint.NewManager(log.NewNOPFactory().Logger(), endpoint.NewRegistry())
+	manager := O.NewManager(log.NewNOPFactory().Logger(), registry, endpoints, "")
+	service.MustRegister[adapter.OutboundManager](ctx, manager)
+	for _, tag := range []string{mobilemultihop.LocalTag, mobilemultihop.ServerTag} {
+		if err := manager.Create(ctx, nil, log.NewNOPFactory().Logger(), tag, "selection-fixture", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	options := &option.SelectorOutboundOptions{Outbounds: []string{mobilemultihop.LocalTag, mobilemultihop.ServerTag}, Default: mobilemultihop.LocalTag, InterruptExistConnections: true}
+	if err := manager.Create(ctx, nil, log.NewNOPFactory().Logger(), mobilemultihop.ExternalFinalTag, C.TypeSelector, options); err != nil {
+		t.Fatal(err)
+	}
+	selectorOwner, _ := manager.Outbound(mobilemultihop.ExternalFinalTag)
+	selector := selectorOwner.(*group.Selector)
+	if err := selector.Start(); err != nil {
+		t.Fatal(err)
+	}
+	engine.box.outbound = manager
+	engine.routes, engine.owners = map[string]adapter.Outbound{}, map[string]adapter.Outbound{}
+	for _, tag := range []string{mobilemultihop.LocalTag, mobilemultihop.ServerTag, mobilemultihop.ExternalFinalTag} {
+		owner, _ := manager.Outbound(tag)
+		engine.routes[tag], engine.owners[tag] = owner, owner
+	}
+	if _, err := engine.IdentityContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := selector.DialContext(context.Background(), "tcp", M.ParseSocksaddr("203.0.113.20:443")); err != nil {
+		t.Fatal(err)
+	}
+	return engine, selector, history, conn, updates
+}
+
+func TestRouterVPNExternalSelectionContextOwnsAdmission(t *testing.T) {
+	for _, phase := range []string{"current", "legacy", "nil", "cancel-before", "engine-held", "outbound-held", "selector-held", "interrupt-held", "history-held", "owner-replaced", "candidate-refused"} {
+		t.Run(phase, func(t *testing.T) {
+			cache := &selectionContextCache{}
+			engine, selector, history, conn, updates := selectionContextFixture(t, cache)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+			defer cancel()
+			var held sync.Locker
+			switch phase {
+			case "engine-held":
+				held = &engine.mu
+			case "outbound-held":
+				held = selectionContextField[sync.RWMutex](t, engine.box.outbound, "access")
+			case "selector-held":
+				held = selectionContextField[sync.Mutex](t, selector, "routerVPNSelectionAccess")
+			case "interrupt-held":
+				held = selectionContextField[sync.Mutex](t, *selectionContextField[*interrupt.Group](t, selector, "interruptGroup"), "access")
+			case "history-held":
+				held = selectionContextField[sync.RWMutex](t, history, "access")
+			}
+			var once sync.Once
+			release := func() {
+				if held != nil {
+					once.Do(held.Unlock)
+				}
+			}
+			if held != nil {
+				held.Lock()
+			}
+			defer release()
+			if phase == "owner-replaced" {
+				_ = engine.box.outbound.Remove(mobilemultihop.ServerTag)
+			}
+			if phase == "cancel-before" {
+				cancel()
+			}
+			done := make(chan error, 1)
+			go func() {
+				caller := context.Context(ctx)
+				if phase == "nil" {
+					caller = nil
+				}
+				tag := mobilemultihop.ServerTag
+				if phase == "candidate-refused" {
+					tag = "direct"
+				}
+				if phase == "legacy" {
+					done <- engine.Select(tag)
+				} else {
+					done <- engine.SelectContext(caller, tag)
+				}
+			}()
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(500 * time.Millisecond):
+				release()
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Fatal("held selector admission did not join")
+				}
+				t.Fatal("selection ignored original caller at held native admission")
+			}
+			release()
+			if phase == "current" || phase == "legacy" {
+				if err != nil || selector.Now() != mobilemultihop.ServerTag || cache.stores.Load() != 1 || conn.closes.Load() != 1 {
+					t.Fatal("native selection lost cache or exact connection interruption", err)
+				}
+				select {
+				case <-updates:
+				default:
+					t.Fatal("native selection lost history notification")
+				}
+			} else {
+				if err == nil || selector.Now() != mobilemultihop.LocalTag || cache.stores.Load() != 0 || conn.closes.Load() != 0 {
+					t.Fatal("failed admission mutated original selection", phase, err)
+				}
+				select {
+				case <-updates:
+					t.Fatal("failed admission notified history")
+				default:
+				}
+				if phase != "owner-replaced" && engine.physical.(*boundedIdentityPhysical).cancelled.Load() {
+					t.Fatal("cancelled admission retired healthy original VPN")
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNExternalSelectionContextJoinsNativeCommit(t *testing.T) {
+	for _, phase := range []string{"cache-cancel", "close-cancel", "cache-replaced", "close-replaced", "cache-error", "same-candidate", "close-updates-history"} {
+		t.Run(phase, func(t *testing.T) {
+			cache := &selectionContextCache{}
+			engine, selector, history, conn, updates := selectionContextFixture(t, cache)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if phase == "close-updates-history" {
+				conn.onClose = func() { history.StoreURLTestHistory(mobilemultihop.LocalTag, &adapter.URLTestHistory{Delay: 10}) }
+				done := make(chan error, 1)
+				go func() { done <- engine.SelectContext(ctx, mobilemultihop.ServerTag) }()
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("selection introduced history/Close lock inversion")
+				}
+				if history.LoadURLTestHistory(mobilemultihop.LocalTag) == nil || conn.closes.Load() != 1 || cache.stores.Load() != 1 {
+					t.Fatal("native close callback lost its history update")
+				}
+				for i := 0; i < 2; i++ {
+					select {
+					case <-updates:
+					default:
+						t.Fatal("native commit lost callback or selection notification")
+					}
+				}
+				return
+			}
+			if phase == "same-candidate" {
+				if err := engine.SelectContext(ctx, mobilemultihop.LocalTag); err != nil {
+					t.Fatal(err)
+				}
+				if cache.stores.Load() != 0 || conn.closes.Load() != 0 {
+					t.Fatal("unchanged selection repeated native commit")
+				}
+				select {
+				case <-updates:
+					t.Fatal("unchanged selection notified history")
+				default:
+				}
+				return
+			}
+			if phase == "cache-error" {
+				cache.onStore = func(string, string) error { return errors.New("original cache write failed") }
+				if err := engine.SelectContext(ctx, mobilemultihop.ServerTag); err != nil {
+					t.Fatal("cache logging behavior changed native selection", err)
+				}
+				if cache.stores.Load() != 1 || conn.closes.Load() != 1 {
+					t.Fatal("cache failure discarded original interruption")
+				}
+				select {
+				case <-updates:
+				default:
+					t.Fatal("cache failure discarded original history notification")
+				}
+				return
+			}
+			entered, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			defer unblock()
+			block := func() { close(entered); <-release }
+			if phase == "cache-cancel" || phase == "cache-replaced" {
+				cache.onStore = func(string, string) error { block(); return nil }
+			} else {
+				conn.onClose = block
+			}
+			done := make(chan error, 1)
+			go func() { done <- engine.SelectContext(ctx, mobilemultihop.ServerTag) }()
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("native selection did not enter captured commit")
+			}
+			if phase == "cache-replaced" || phase == "close-replaced" {
+				_ = engine.box.outbound.Remove(mobilemultihop.ServerTag)
+			} else {
+				cancel()
+			}
+			// A second selection cannot acquire the same original selector
+			// while its first non-interruptible commit is still completing.
+			second, stop := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer stop()
+			if err := selector.RouterVPNSelectOutboundContext(second, mobilemultihop.LocalTag, func(ctx context.Context) error { return ctx.Err() }); err == nil {
+				t.Fatal("replacement selection overlapped the original commit")
+			}
+			select {
+			case <-done:
+				t.Fatal("selection detached an already-entered native commit")
+			default:
+			}
+			unblock()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("late native commit manufactured a current success")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("native commit was not joined")
+			}
+			if selector.Now() != mobilemultihop.ServerTag || cache.stores.Load() != 1 || conn.closes.Load() != 1 {
+				t.Fatal("cancelled commit discarded original persistence or exact close")
+			}
+			select {
+			case <-updates:
+			default:
+				t.Fatal("cancelled entered commit discarded history notification")
+			}
+			// After return, a newer operation is free to select its own route.
+			// There is no old timer/worker capable of rewriting it later.
+			cache.onStore, conn.onClose = nil, nil
+			if !selector.SelectOutbound(mobilemultihop.LocalTag) || selector.Now() != mobilemultihop.LocalTag || cache.stores.Load() != 2 || conn.closes.Load() != 1 {
+				t.Fatal("joined original commit interfered with the next selector operation")
+			}
+			if phase == "cache-cancel" || phase == "close-cancel" {
+				if engine.physical.(*boundedIdentityPhysical).cancelled.Load() {
+					t.Fatal("caller expiry revoked healthy original VPN")
+				}
+			} else if !engine.physical.(*boundedIdentityPhysical).cancelled.Load() {
+				t.Fatal("confirmed native owner replacement retained proof authority")
+			}
+		})
+	}
+}
+
+func TestRouterVPNExternalSelectionRetainsRealCacheCommit(t *testing.T) {
+	for _, phase := range []string{"current", "writer-joined"} {
+		t.Run(phase, func(t *testing.T) {
+			cache := cachefile.New(context.Background(), log.NewNOPFactory().Logger(), option.CacheFileOptions{Path: filepath.Join(t.TempDir(), "native-selection.db")})
+			if err := cache.Start(adapter.StartStateInitialize); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := cache.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			engine, selector, _, conn, updates := selectionContextFixture(t, cache)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			var rollback func()
+			if phase == "writer-joined" {
+				tx, err := cache.DB.Begin(true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var once sync.Once
+				rollback = func() {
+					once.Do(func() {
+						if err := tx.Rollback(); err != nil {
+							t.Error(err)
+						}
+					})
+				}
+				defer rollback()
+			}
+			go func() { done <- engine.SelectContext(ctx, mobilemultihop.ServerTag) }()
+			if phase == "writer-joined" {
+				limit := time.Now().Add(time.Second)
+				for selector.Now() != mobilemultihop.ServerTag && time.Now().Before(limit) {
+					time.Sleep(time.Millisecond)
+				}
+				if selector.Now() != mobilemultihop.ServerTag {
+					t.Fatal("real native cache commit never entered")
+				}
+				cancel()
+				select {
+				case <-done:
+					t.Fatal("selection detached the real pending bbolt writer")
+				case <-time.After(25 * time.Millisecond):
+				}
+				rollback()
+			}
+			select {
+			case err := <-done:
+				if (phase == "current") != (err == nil) {
+					t.Fatal("real cache join lost original caller outcome", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("real cache commit failed to join")
+			}
+			if cache.LoadSelected(mobilemultihop.ExternalFinalTag) != mobilemultihop.ServerTag || conn.closes.Load() != 1 {
+				t.Fatal("real cache persistence or original stream closure was lost")
+			}
+			select {
+			case <-updates:
+			default:
+				t.Fatal("real cache commit lost history notification")
+			}
+		})
+	}
+}
+
+func TestRouterVPNExternalSelectionJoinsLateHistoryContention(t *testing.T) {
+	cache := &selectionContextCache{}
+	engine, _, history, _, updates := selectionContextFixture(t, cache)
+	held := selectionContextField[sync.RWMutex](t, history, "access")
+	entered := make(chan struct{})
+	cache.onStore = func(string, string) error { held.Lock(); close(entered); return nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- engine.SelectContext(ctx, mobilemultihop.ServerTag) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("selection did not enter history contention fixture")
+	}
+	var once sync.Once
+	release := func() { once.Do(held.Unlock) }
+	defer release()
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("selection detached original history notification")
+	case <-time.After(25 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expired notification retained selection success")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("selection did not join original history notification")
+	}
+	select {
+	case <-updates:
+	default:
+		t.Fatal("joined cancellation lost original history notification")
+	}
+}
+
+func TestRouterVPNExternalSelectionKeepsInterruptFilter(t *testing.T) {
+	for _, external := range []bool{false, true} {
+		name := "internal-only"
+		if external {
+			name = "including-external"
+		}
+		t.Run(name, func(t *testing.T) {
+			engine, selector, _, internal, _ := selectionContextFixture(t, &selectionContextCache{})
+			*selectionContextField[bool](t, selector, "interruptExternalConnections") = external
+			connections := *selectionContextField[*interrupt.Group](t, selector, "interruptGroup")
+			outside := &selectionContextConn{}
+			wrapped := connections.NewConn(outside, true)
+			if err := engine.SelectContext(context.Background(), mobilemultihop.ServerTag); err != nil {
+				t.Fatal(err)
+			}
+			want := int32(0)
+			if external {
+				want = 1
+			}
+			if internal.closes.Load() != 1 || outside.closes.Load() != want {
+				t.Fatal("native selector changed original interruption filter")
+			}
+			if !external {
+				if err := wrapped.Close(); err != nil || outside.closes.Load() != 1 {
+					t.Fatal("preserved external connection lost ordinary close ownership", err)
+				}
+			}
+		})
+	}
+}

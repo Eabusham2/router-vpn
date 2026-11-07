@@ -468,7 +468,7 @@ func (d driver) Open(ctx context.Context, candidate routechoice.Candidate) (rout
 		}
 	}
 	if c.external != nil {
-		if err := c.engine.Select(s.tag); err != nil {
+		if err := c.selectContext(ctx, s.tag); err != nil {
 			return s, err
 		}
 		selected, err := c.selectionContext(ctx)
@@ -605,7 +605,7 @@ func (c *Controller) runCaptured(parent context.Context, engine Engine, expected
 		if result.Winner.Execution == routechoice.Server {
 			tag = ServerTag
 		}
-		err = engine.Select(tag)
+		err = c.selectContext(ctx, tag)
 		if err == nil {
 			var selected string
 			selected, err = c.selectionContext(ctx)
