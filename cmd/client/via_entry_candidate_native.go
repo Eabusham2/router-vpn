@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -282,13 +283,13 @@ func launchViaEntryNativeLane(ctx context.Context, root, binary string, config [
 	ready, stop := context.WithTimeout(ctx, 5*time.Second)
 	defer stop()
 	for {
-		if !lane.Alive() || ready.Err() != nil {
+		if !lane.AliveContext(ready) || ready.Err() != nil {
 			return lane, errors.New("candidate native listener did not become ready")
 		}
 		connection, dialErr := (&net.Dialer{Timeout: 100 * time.Millisecond}).DialContext(ready, "tcp", lane.proxy)
 		if dialErr == nil {
 			_ = connection.Close()
-			if lane.Alive() {
+			if lane.AliveContext(ready) {
 				return lane, nil
 			}
 		}
@@ -301,7 +302,13 @@ func launchViaEntryNativeLane(ctx context.Context, root, binary string, config [
 }
 
 func (l *viaEntryNativeLane) Alive() bool {
-	l.mu.Lock()
+	return l.AliveContext(context.Background())
+}
+
+func (l *viaEntryNativeLane) AliveContext(ctx context.Context) bool {
+	if err := desktopnetwork.LockContext(ctx, &l.mu); err != nil {
+		return false
+	}
 	defer l.mu.Unlock()
 	if l.closing || l.ctx.Err() != nil {
 		return false
@@ -335,7 +342,9 @@ func captureViaEntryDirectory(directory string) (os.FileInfo, error) {
 }
 
 func (l *viaEntryNativeLane) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	l.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &l.mu); err != nil {
+		return nil, err
+	}
 	if l.closing || l.ctx.Err() != nil || network != "tcp" || !l.allowed[address] {
 		l.mu.Unlock()
 		return nil, errors.New("candidate socket is outside its captured entry owner")
@@ -351,8 +360,11 @@ func (l *viaEntryNativeLane) DialContext(ctx context.Context, network, address s
 		return nil, errors.New("owned candidate proxy is unavailable")
 	}
 	conn := &viaEntryNativeConn{Conn: raw, owner: l}
-	l.mu.Lock()
-	if l.closing || l.ctx.Err() != nil {
+	if err := desktopnetwork.LockContext(dialCtx, &l.mu); err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
+	if l.closing || l.ctx.Err() != nil || dialCtx.Err() != nil {
 		l.mu.Unlock()
 		_ = raw.Close()
 		return nil, errors.New("candidate entry was cancelled")
@@ -372,7 +384,7 @@ func (l *viaEntryNativeLane) DialContext(ctx context.Context, network, address s
 		deadline = value
 	}
 	_ = raw.SetDeadline(deadline)
-	if err := viaEntrySOCKSHandshake(raw, address, l.username, l.password); err != nil || dialCtx.Err() != nil || !l.Alive() {
+	if err := viaEntrySOCKSHandshake(raw, address, l.username, l.password); err != nil || dialCtx.Err() != nil || !l.AliveContext(dialCtx) {
 		return nil, errors.New("captured entry did not complete the routed TCP handshake")
 	}
 	if !stopRequest() || dialCtx.Err() != nil {
@@ -384,9 +396,13 @@ func (l *viaEntryNativeLane) DialContext(ctx context.Context, network, address s
 }
 
 func (l *viaEntryNativeLane) Close(ctx context.Context) error {
-	l.closeMu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &l.closeMu); err != nil {
+		return err
+	}
 	defer l.closeMu.Unlock()
-	l.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &l.mu); err != nil {
+		return err
+	}
 	if !l.closing {
 		l.closing = true
 		l.cancel()
@@ -540,7 +556,7 @@ func viaEntrySOCKSHandshake(conn net.Conn, address, username, password string) e
 }
 
 func proveViaEntryLane(ctx context.Context, lane viaEntryLane, entry common.RouterProfile) error {
-	if !lane.Alive() || ctx.Err() != nil {
+	if !lane.AliveContext(ctx) || ctx.Err() != nil {
 		return errors.New("captured entry proof lane is no longer alive")
 	}
 	target, _, err := viaEntryProofAddress(entry)
@@ -567,7 +583,7 @@ func proveViaEntryLane(ctx context.Context, lane viaEntryLane, entry common.Rout
 		NodeID string `json:"node_id"`
 		Proof  string `json:"proof"`
 	}
-	if readErr != nil || len(body) > 4096 || response.StatusCode/100 != 2 || decodeRelayControlJSON(body, &proof) != nil || !proof.OK || proof.NodeID != entry.NodeProofID || proof.Proof != desktopNodeProofKind || !lane.Alive() || ctx.Err() != nil {
+	if readErr != nil || len(body) > 4096 || response.StatusCode/100 != 2 || decodeRelayControlJSON(body, &proof) != nil || !proof.OK || proof.NodeID != entry.NodeProofID || proof.Proof != desktopNodeProofKind || !lane.AliveContext(ctx) || ctx.Err() != nil {
 		return errors.New("candidate entry identity proof failed; all routed samples discarded")
 	}
 	return nil

@@ -48,7 +48,7 @@ func TestViaEntryFiftyActualDefaultAndPartialFailure(t *testing.T) {
 			body, _ := json.Marshal(viaEntryRequest{RequestID: id, EntryID: entry.ID, CandidateIDs: []string{candidate.ID}})
 			w := httptest.NewRecorder()
 			a.viaEntryCandidatesWith(w, httptest.NewRequest(http.MethodPost, "/api/multihop/candidates", strings.NewReader(string(body))), viaEntryDependencies{
-				network: func() string { return "captured-fifty-network" },
+				network: func(context.Context) (string, error) { return "captured-fifty-network", nil },
 				start: func(context.Context, string, string, common.RouterProfile, map[string][]byte, map[string][]byte, []common.RouterProfile) (viaEntryLane, error) {
 					return lane, nil
 				},
@@ -82,7 +82,7 @@ func TestViaEntryFiftyRejectsShortOrOversizedRequestBeforeOwnership(t *testing.T
 		body, _ := json.Marshal(viaEntryRequest{RequestID: strings.Repeat("b", 32), EntryID: "entry", CandidateIDs: []string{"exit"}, Samples: samples})
 		w := httptest.NewRecorder()
 		a.viaEntryCandidatesWith(w, httptest.NewRequest(http.MethodPost, "/api/multihop/candidates", strings.NewReader(string(body))), viaEntryDependencies{
-			network: func() string { networks++; return "network" },
+			network: func(context.Context) (string, error) { networks++; return "network", nil },
 			start: func(context.Context, string, string, common.RouterProfile, map[string][]byte, map[string][]byte, []common.RouterProfile) (viaEntryLane, error) {
 				started++
 				return nil, errors.New("must not start")

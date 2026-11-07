@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 )
 
 func viaEntryFixture(t *testing.T) (*app, common.RouterProfile, []common.RouterProfile) {
@@ -70,8 +71,12 @@ type viaEntryTestLane struct {
 	workers        sync.WaitGroup
 }
 
-func (l *viaEntryTestLane) Alive() bool {
-	l.mu.Lock()
+func (l *viaEntryTestLane) Alive() bool { return l.AliveContext(context.Background()) }
+
+func (l *viaEntryTestLane) AliveContext(ctx context.Context) bool {
+	if err := desktopnetwork.LockContext(ctx, &l.mu); err != nil {
+		return false
+	}
 	defer l.mu.Unlock()
 	return !l.closed
 }
@@ -148,7 +153,7 @@ func viaEntryTestRequest(id string, candidates []common.RouterProfile) string {
 	return string(data)
 }
 
-func runViaEntryTest(a *app, lane *viaEntryTestLane, id string, candidates []common.RouterProfile, network func() string) *httptest.ResponseRecorder {
+func runViaEntryTest(a *app, lane *viaEntryTestLane, id string, candidates []common.RouterProfile, network func(context.Context) (string, error)) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/multihop/candidates", strings.NewReader(viaEntryTestRequest(id, candidates)))
 	a.viaEntryCandidatesWith(w, r, viaEntryDependencies{network: network, start: func(context.Context, string, string, common.RouterProfile, map[string][]byte, map[string][]byte, []common.RouterProfile) (viaEntryLane, error) {
@@ -174,7 +179,7 @@ func TestViaEntryCandidatesReceiptOwnsActualProofAndCleanup(t *testing.T) {
 	beforeProfiles, beforeState := cloneRouterProfileStore(a.profiles), a.state
 	lane := &viaEntryTestLane{entry: entry, failHost: candidates[1].Endpoint}
 	id := strings.Repeat("1", 32)
-	w := runViaEntryTest(a, lane, id, candidates, func() string { return "physical-one" })
+	w := runViaEntryTest(a, lane, id, candidates, func(context.Context) (string, error) { return "physical-one", nil })
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
@@ -200,7 +205,7 @@ func TestViaEntryCandidatesReceiptOwnsActualProofAndCleanup(t *testing.T) {
 	if result := validateViaEntryTest(a, id, "not-captured"); result.Code != 409 {
 		t.Fatal("uncaptured candidate adopted")
 	}
-	if result := runViaEntryTest(a, &viaEntryTestLane{entry: entry}, id, candidates, func() string { return "physical-one" }); result.Code != 409 {
+	if result := runViaEntryTest(a, &viaEntryTestLane{entry: entry}, id, candidates, func(context.Context) (string, error) { return "physical-one", nil }); result.Code != 409 {
 		t.Fatal("reused receipt nonce launched another session")
 	}
 }
@@ -211,7 +216,7 @@ func TestViaEntryCandidatesRejectChangedSourcesNetworkExpiryAndDecision(t *testi
 			a, entry, candidates := viaEntryFixture(t)
 			var network atomic.Value
 			network.Store("physical-one")
-			identity := func() string { return network.Load().(string) }
+			identity := func(context.Context) (string, error) { return network.Load().(string), nil }
 			id := strings.Repeat("2", 32)
 			if w := runViaEntryTest(a, &viaEntryTestLane{entry: entry}, id, candidates, identity); w.Code != 200 {
 				t.Fatal(w.Body.String())
@@ -251,7 +256,7 @@ func TestViaEntryCandidatesFinalWrongEntryDiscardsEverySample(t *testing.T) {
 	a, entry, candidates := viaEntryFixture(t)
 	lane := &viaEntryTestLane{entry: entry, wrongLastProof: true}
 	id := strings.Repeat("3", 32)
-	w := runViaEntryTest(a, lane, id, candidates, func() string { return "physical-one" })
+	w := runViaEntryTest(a, lane, id, candidates, func(context.Context) (string, error) { return "physical-one", nil })
 	if w.Code != 409 || !lane.closed || lane.proofs != 2 || validateViaEntryTest(a, id, candidates[0].ID).Code != 409 {
 		t.Fatal("wrong final entry identity retained samples", w.Body.String())
 	}
@@ -263,13 +268,15 @@ func TestViaEntryCandidatesCancelBeforeStartAndDuringProbe(t *testing.T) {
 	if w := cancelViaEntryTest(a, id); w.Code != 200 || !strings.Contains(w.Body.String(), `"drained":true`) {
 		t.Fatal(w.Body.String())
 	}
-	if w := runViaEntryTest(a, &viaEntryTestLane{entry: entry}, id, candidates, func() string { return "network" }); w.Code != 409 {
+	if w := runViaEntryTest(a, &viaEntryTestLane{entry: entry}, id, candidates, func(context.Context) (string, error) { return "network", nil }); w.Code != 409 {
 		t.Fatal("cancel-before-start nonce launched a lane")
 	}
 	id = strings.Repeat("5", 32)
 	lane := &viaEntryTestLane{entry: entry, block: make(chan struct{}), entered: make(chan struct{})}
 	finished := make(chan *httptest.ResponseRecorder, 1)
-	go func() { finished <- runViaEntryTest(a, lane, id, candidates, func() string { return "network" }) }()
+	go func() {
+		finished <- runViaEntryTest(a, lane, id, candidates, func(context.Context) (string, error) { return "network", nil })
+	}()
 	select {
 	case <-lane.entered:
 	case <-time.After(2 * time.Second):
@@ -287,7 +294,7 @@ func TestViaEntryCandidatesCancelBeforeStartAndDuringProbe(t *testing.T) {
 	}
 	newID := strings.Repeat("6", 32)
 	newLane := &viaEntryTestLane{entry: entry}
-	if w := runViaEntryTest(a, newLane, newID, candidates, func() string { return "network" }); w.Code != 200 {
+	if w := runViaEntryTest(a, newLane, newID, candidates, func(context.Context) (string, error) { return "network", nil }); w.Code != 200 {
 		t.Fatal("replacement after checked cancellation rejected", w.Body.String())
 	}
 	if w := cancelViaEntryTest(a, id); w.Code != 200 || validateViaEntryTest(a, newID, candidates[0].ID).Code != 200 {
@@ -299,7 +306,7 @@ func TestViaEntryCandidatesFailedCleanupRetainsOwner(t *testing.T) {
 	a, entry, candidates := viaEntryFixture(t)
 	lane := &viaEntryTestLane{entry: entry, failClose: true}
 	id := strings.Repeat("7", 32)
-	if w := runViaEntryTest(a, lane, id, candidates, func() string { return "network" }); w.Code != 503 {
+	if w := runViaEntryTest(a, lane, id, candidates, func(context.Context) (string, error) { return "network", nil }); w.Code != 503 {
 		t.Fatal("failed cleanup reported a usable measurement", w.Body.String())
 	}
 	if validateViaEntryTest(a, id, candidates[0].ID).Code != 409 {
@@ -339,7 +346,7 @@ func TestViaEntryCandidatesNetworkChangeCancelsInFlightSocket(t *testing.T) {
 	lane := &viaEntryTestLane{entry: entry, block: make(chan struct{}), entered: make(chan struct{})}
 	finished := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		finished <- runViaEntryTest(a, lane, strings.Repeat("8", 32), candidates, func() string { return network.Load().(string) })
+		finished <- runViaEntryTest(a, lane, strings.Repeat("8", 32), candidates, func(context.Context) (string, error) { return network.Load().(string), nil })
 	}()
 	select {
 	case <-lane.entered:
@@ -383,7 +390,7 @@ func TestViaEntryLinuxBaseInferenceAndVariantOwnership(t *testing.T) {
 			lane := &viaEntryTestLane{entry: entry}
 			w := httptest.NewRecorder()
 			seen := ""
-			a.viaEntryCandidatesWith(w, httptest.NewRequest(http.MethodPost, "/api/multihop/candidates", strings.NewReader(string(body))), viaEntryDependencies{network: func() string { return "physical" }, start: func(ctx context.Context, root, mode string, p common.RouterProfile, captured, start map[string][]byte, nodes []common.RouterProfile) (viaEntryLane, error) {
+			a.viaEntryCandidatesWith(w, httptest.NewRequest(http.MethodPost, "/api/multihop/candidates", strings.NewReader(string(body))), viaEntryDependencies{network: func(context.Context) (string, error) { return "physical", nil }, start: func(ctx context.Context, root, mode string, p common.RouterProfile, captured, start map[string][]byte, nodes []common.RouterProfile) (viaEntryLane, error) {
 				seen = mode
 				if !reflect.DeepEqual(captured, files) {
 					return lane, errors.New("AWG source parameters changed")

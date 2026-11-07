@@ -478,7 +478,7 @@ func TestViaEntryPinnedNativeUpstreamResponseAndCancellation(t *testing.T) {
 	}
 	stop, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stopCancel()
-	if err := lane.Close(stop); err != nil || lane.Alive() {
+	if err := lane.Close(stop); err != nil || lane.AliveContext(stop) {
 		t.Fatal("native process and sockets did not drain", err)
 	}
 }

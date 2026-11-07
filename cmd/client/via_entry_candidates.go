@@ -33,13 +33,13 @@ var viaEntryProbePorts = []int{443, 8388, 10443, 11443, 12443, 13443, 14443, 154
 // A candidate test owns a private userspace entry, never app.cmd, the system
 // route table, Home connection state, or the durable direct-latency cache.
 type viaEntryLane interface {
-	Alive() bool
+	AliveContext(context.Context) bool
 	DialContext(context.Context, string, string) (net.Conn, error)
 	Close(context.Context) error
 }
 
 type viaEntryDependencies struct {
-	network func() string
+	network func(context.Context) (string, error)
 	start   func(context.Context, string, string, common.RouterProfile, map[string][]byte, map[string][]byte, []common.RouterProfile) (viaEntryLane, error)
 }
 
@@ -90,7 +90,7 @@ type viaEntryOwner struct {
 	lane      viaEntryLane
 	snapshot  viaEntrySnapshot
 	receipt   *viaEntryReceipt
-	network   func() string
+	network   func(context.Context) (string, error)
 	closeMu   sync.Mutex
 }
 
@@ -185,7 +185,7 @@ func viaEntrySourceMode(root, entryID, base string) (string, error) {
 	return "", errors.New("selected AWG entry has no saved split source")
 }
 
-func captureViaEntrySnapshot(a *app, q viaEntryRequest, network func() string) (viaEntrySnapshot, common.RouterProfile, []common.RouterProfile, map[string][]byte, map[string][]byte, error) {
+func captureViaEntrySnapshot(ctx context.Context, a *app, q viaEntryRequest, network func(context.Context) (string, error)) (viaEntrySnapshot, common.RouterProfile, []common.RouterProfile, map[string][]byte, map[string][]byte, error) {
 	var snap viaEntrySnapshot
 	var entry common.RouterProfile
 	var candidates []common.RouterProfile
@@ -196,11 +196,14 @@ func captureViaEntrySnapshot(a *app, q viaEntryRequest, network func() string) (
 	if err != nil {
 		return fail(err)
 	}
-	snap = viaEntrySnapshot{root: root, profiles: map[string]string{}, candidates: map[string]bool{}, network: network()}
-	if snap.network == "" {
-		return fail(errors.New("physical network identity is unavailable"))
+	identity, err := network(ctx)
+	if err != nil || ctx.Err() != nil || identity == "" {
+		return fail(errors.Join(err, ctx.Err(), errors.New("physical network identity is unavailable")))
 	}
-	a.mu.Lock()
+	snap = viaEntrySnapshot{root: root, profiles: map[string]string{}, candidates: map[string]bool{}, network: identity}
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return fail(err)
+	}
 	if profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()
 		return fail(errors.New("disconnect and wait for Home to be idle before testing candidates"))
@@ -277,6 +280,9 @@ func captureViaEntrySnapshot(a *app, q viaEntryRequest, network func() string) (
 		snap.assets = append(snap.assets, viaEntryAsset{entry.ID, "shadowsocks", viaEntryAssetDigest(start)})
 	}
 	for i := range candidates {
+		if err := ctx.Err(); err != nil {
+			return fail(err)
+		}
 		p := &candidates[i]
 		host, e := normalizeEndpoint(p.Endpoint)
 		if e != nil || host != p.Endpoint {
@@ -295,25 +301,34 @@ func captureViaEntrySnapshot(a *app, q viaEntryRequest, network func() string) (
 			return fail(errors.New("candidate identity differs from its saved WireGuard peer"))
 		}
 	}
-	if err := snap.validate(a, network); err != nil {
+	if err := snap.validate(ctx, a, network); err != nil {
 		return fail(err)
 	}
 	keep = true
 	return snap, entry, candidates, files, start, nil
 }
 
-func (s viaEntrySnapshot) validate(a *app, network func() string) error {
-	a.mu.Lock()
+func (s viaEntrySnapshot) validate(ctx context.Context, a *app, network func(context.Context) (string, error)) error {
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	err := validateMeasurementProfilesLocked(a, s.profiles)
 	current := !profileSettingsBusy(a.state.Connected, a.state.Phase) && s.state == mtuStateSnapshotToken(a.state) && s.selected == a.profiles.SelectedID
 	a.mu.Unlock()
-	if err != nil || !current || network() != s.network {
+	if err != nil || !current {
 		return errors.New("candidate source, Home decision, or physical network changed; retest required")
+	}
+	identity, err := network(ctx)
+	if err != nil || ctx.Err() != nil || identity != s.network {
+		return errors.Join(err, ctx.Err(), errors.New("candidate source, Home decision, or physical network changed; retest required"))
 	}
 	if mode, err := viaEntrySourceMode(s.root, s.entry, s.base); err != nil || mode != s.mode {
 		return errors.New("selected entry raw base changed; retest required")
 	}
 	for _, asset := range s.assets {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		files, err := readDesktopNodeAssets(s.root, asset.id, asset.mode)
 		if err != nil {
 			return errors.New("captured candidate source is no longer available")
@@ -324,11 +339,11 @@ func (s viaEntrySnapshot) validate(a *app, network func() string) error {
 			return errors.New("saved candidate credentials changed; retest required")
 		}
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (a *app) viaEntryCandidates(w http.ResponseWriter, r *http.Request) {
-	a.viaEntryCandidatesWith(w, r, viaEntryDependencies{network: physicalNetworkIdentity, start: startViaEntryNativeLane})
+	a.viaEntryCandidatesWith(w, r, viaEntryDependencies{network: physicalNetworkIdentityContext, start: startViaEntryNativeLane})
 }
 
 func (a *app) viaEntryCandidatesWith(w http.ResponseWriter, r *http.Request, deps viaEntryDependencies) {
@@ -351,16 +366,26 @@ func (a *app) viaEntryCandidatesWith(w http.ResponseWriter, r *http.Request, dep
 	if q.Samples == 0 {
 		q.Samples = viaEntryBenchmarkSamples
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), viaEntryRequestTimeout)
+	defer cancel()
+	if ctx.Err() != nil || deps.network == nil || deps.start == nil {
+		http.Error(w, "candidate request has no current captured measurement caller", http.StatusConflict)
+		return
+	}
 	if !a.operationMu.TryLock() {
 		http.Error(w, "another connection or candidate transaction is in progress", http.StatusConflict)
 		return
 	}
 	defer a.operationMu.Unlock()
 	c := viaEntryControlFor(a)
-	c.mu.Lock()
-	if a.controllerClosing() {
+	if err := desktopnetwork.LockContext(ctx, &c.mu); err != nil {
+		http.Error(w, "candidate request was cancelled before ownership", http.StatusConflict)
+		return
+	}
+	closing, closingErr := viaEntryControllerClosing(ctx, a)
+	if closingErr != nil || closing {
 		c.mu.Unlock()
-		http.Error(w, errControllerClosing.Error(), http.StatusServiceUnavailable)
+		http.Error(w, "candidate request lost its controller or caller", http.StatusServiceUnavailable)
 		return
 	}
 	c.pruneNoncesLocked()
@@ -370,25 +395,25 @@ func (a *app) viaEntryCandidatesWith(w http.ResponseWriter, r *http.Request, dep
 		http.Error(w, "candidate request was cancelled, reused, or still owns pending cleanup", http.StatusConflict)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), viaEntryRequestTimeout)
 	owner := &viaEntryOwner{id: q.RequestID, entry: q.EntryID, cancel: cancel, done: make(chan struct{}), running: true, network: deps.network}
 	c.owner, c.seen[q.RequestID] = owner, time.Now()
 	c.mu.Unlock()
-	defer cancel()
 
 	receipt, runErr := a.runViaEntryCandidates(ctx, owner, q, deps)
 	cleanupErr := cleanupViaEntryOwner(c, owner)
+	// Observers may wait for native metadata or app state. They use the
+	// measurement caller outside the control lock, so Cancel can retire its
+	// exact owner while revalidation is in flight.
+	if runErr == nil && cleanupErr == nil {
+		runErr = owner.snapshot.validate(ctx, a, deps.network)
+	}
 	c.mu.Lock()
-	if runErr == nil && cleanupErr == nil && !owner.cancelled && ctx.Err() == nil {
+	if runErr == nil && cleanupErr == nil && c.owner == owner && !owner.cancelled && ctx.Err() == nil {
 		// Cleanup is part of the measurement boundary. A result becomes selectable
 		// only after every socket and the exact temporary process have retired.
-		if err := owner.snapshot.validate(a, deps.network); err == nil {
-			receipt.Drained = true
-			receipt.ExpiresAt = time.Now().UTC().Add(viaEntryReceiptLifetime)
-			owner.receipt = &receipt
-		} else {
-			runErr = err
-		}
+		receipt.Drained = true
+		receipt.ExpiresAt = time.Now().UTC().Add(viaEntryReceiptLifetime)
+		owner.receipt = &receipt
 	} else if runErr == nil {
 		runErr = errors.New("candidate test was cancelled or its cleanup is pending")
 	}
@@ -412,7 +437,7 @@ func (a *app) viaEntryCandidatesWith(w http.ResponseWriter, r *http.Request, dep
 
 func (a *app) runViaEntryCandidates(ctx context.Context, owner *viaEntryOwner, q viaEntryRequest, deps viaEntryDependencies) (viaEntryReceipt, error) {
 	receipt := viaEntryReceipt{Schema: 1, RequestID: q.RequestID, EntryID: q.EntryID, Results: []liveLatencyResult{}, Errors: []viaEntryCandidateError{}}
-	snap, entry, candidates, files, start, err := captureViaEntrySnapshot(a, q, deps.network)
+	snap, entry, candidates, files, start, err := captureViaEntrySnapshot(ctx, a, q, deps.network)
 	if err != nil {
 		return receipt, err
 	}
@@ -420,7 +445,7 @@ func (a *app) runViaEntryCandidates(ctx context.Context, owner *viaEntryOwner, q
 	defer clearViaEntryAssets(start)
 	owner.snapshot = snap // cancellation only reads snapshots after done closes
 	receipt.EntryBase, receipt.EntryMode = snap.base, snap.mode
-	path, stop, err := speedLabPathContext(ctx, func() error { return snap.validate(a, deps.network) })
+	path, stop, err := speedLabPathContextWithCaller(ctx, func(caller context.Context) error { return snap.validate(caller, a, deps.network) })
 	if err != nil {
 		return receipt, err
 	}
@@ -430,7 +455,7 @@ func (a *app) runViaEntryCandidates(ctx context.Context, owner *viaEntryOwner, q
 	if err != nil {
 		return receipt, errors.New("captured entry proof lane could not start")
 	}
-	if lane == nil || !lane.Alive() {
+	if lane == nil || !lane.AliveContext(path) {
 		return receipt, errors.New("captured entry proof lane is unavailable")
 	}
 	if err = proveViaEntryLane(path, lane, entry); err != nil {
@@ -479,7 +504,7 @@ dispatch:
 	}
 	receipt.FastestID = fastestViaEntryCandidate(receipt.Results)
 	receipt.MeasuredAt = time.Now().UTC()
-	return receipt, snap.validate(a, deps.network)
+	return receipt, snap.validate(ctx, a, deps.network)
 }
 
 func eligibleViaEntryResult(value liveLatencyResult) bool {
@@ -509,7 +534,7 @@ func fastestViaEntryCandidate(values []liveLatencyResult) string {
 func measureViaEntryCandidate(ctx context.Context, lane viaEntryLane, p common.RouterProfile, samples int) (liveLatencyResult, error) {
 	port := 0
 	dial := func(port int, timeout time.Duration) (float64, error) {
-		if ctx.Err() != nil || !lane.Alive() {
+		if ctx.Err() != nil || !lane.AliveContext(ctx) {
 			return 0, errors.New("captured entry is no longer alive")
 		}
 		request, cancel := context.WithTimeout(ctx, timeout)
@@ -520,7 +545,7 @@ func measureViaEntryCandidate(ctx context.Context, lane viaEntryLane, p common.R
 		if conn != nil {
 			_ = conn.Close()
 		}
-		if err != nil || request.Err() != nil || !lane.Alive() {
+		if err != nil || request.Err() != nil || !lane.AliveContext(request) {
 			return 0, errors.New("routed TCP handshake did not complete")
 		}
 		return math.Max(.001, elapsed), nil
@@ -554,7 +579,7 @@ func measureViaEntryCandidate(ctx context.Context, lane viaEntryLane, p common.R
 			}
 		}
 	}
-	if ctx.Err() != nil || !lane.Alive() || len(values) == 0 {
+	if ctx.Err() != nil || !lane.AliveContext(ctx) || len(values) == 0 {
 		return liveLatencyResult{}, errors.New("no current routed response samples")
 	}
 	result := profileLatencySummary(p, port, values, failed)
@@ -564,10 +589,12 @@ func measureViaEntryCandidate(ctx context.Context, lane viaEntryLane, p common.R
 }
 
 func cleanupViaEntryOwner(c *viaEntryControl, owner *viaEntryOwner) error {
-	owner.closeMu.Lock()
-	defer owner.closeMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if err := desktopnetwork.LockContext(ctx, &owner.closeMu); err != nil {
+		return err
+	}
+	defer owner.closeMu.Unlock()
 	var err error
 	if owner.lane != nil {
 		err = owner.lane.Close(ctx)
@@ -576,6 +603,14 @@ func cleanupViaEntryOwner(c *viaEntryControl, owner *viaEntryOwner) error {
 	owner.drained = err == nil
 	c.mu.Unlock()
 	return err
+}
+
+func viaEntryControllerClosing(ctx context.Context, a *app) (bool, error) {
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return false, err
+	}
+	defer a.mu.Unlock()
+	return a.controllerClosingLocked(), nil
 }
 
 func (a *app) viaEntryCandidatesCancel(w http.ResponseWriter, r *http.Request) {
@@ -590,7 +625,10 @@ func (a *app) viaEntryCandidatesCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := viaEntryControlFor(a)
-	c.mu.Lock()
+	if err := desktopnetwork.LockContext(r.Context(), &c.mu); err != nil {
+		http.Error(w, "candidate cancellation could not enter its original control", http.StatusRequestTimeout)
+		return
+	}
 	c.pruneNoncesLocked()
 	if _, exists := c.seen[q.RequestID]; !exists && len(c.seen) >= 1024 {
 		c.mu.Unlock()
@@ -640,10 +678,35 @@ func (a *app) viaEntryCandidatesValidate(w http.ResponseWriter, r *http.Request)
 	}
 	defer a.operationMu.Unlock()
 	c := viaEntryControlFor(a)
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	if err := desktopnetwork.LockContext(r.Context(), &c.mu); err != nil {
+		http.Error(w, "candidate validation was cancelled before ownership", http.StatusConflict)
+		return
+	}
 	owner := c.owner
-	if a.controllerClosing() || owner == nil || owner.id != q.RequestID || owner.entry != q.EntryID || owner.running || owner.cancelled || !owner.drained || owner.receipt == nil || time.Now().After(owner.receipt.ExpiresAt) || !owner.snapshot.candidates[q.ExitID] || owner.snapshot.validate(a, owner.network) != nil {
+	current := func() bool {
+		return r.Context().Err() == nil && owner != nil && c.owner == owner && owner.id == q.RequestID && owner.entry == q.EntryID && !owner.running && !owner.cancelled && owner.drained && owner.receipt != nil && time.Now().Before(owner.receipt.ExpiresAt) && owner.snapshot.candidates[q.ExitID]
+	}
+	if !current() {
+		c.mu.Unlock()
+		http.Error(w, "candidate receipt is stale; retest before adopting a measured selection", http.StatusConflict)
+		return
+	}
+	receipt := owner.receipt
+	c.mu.Unlock()
+	closing, err := viaEntryControllerClosing(r.Context(), a)
+	if err == nil && !closing {
+		err = owner.snapshot.validate(r.Context(), a, owner.network)
+	}
+	if err != nil || closing {
+		http.Error(w, "candidate receipt is stale; retest before adopting a measured selection", http.StatusConflict)
+		return
+	}
+	if err := desktopnetwork.LockContext(r.Context(), &c.mu); err != nil {
+		http.Error(w, "candidate validation was cancelled before adoption", http.StatusConflict)
+		return
+	}
+	defer c.mu.Unlock()
+	if !current() || owner.receipt != receipt {
 		http.Error(w, "candidate receipt is stale; retest before adopting a measured selection", http.StatusConflict)
 		return
 	}
