@@ -6,6 +6,20 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 7 resumed continuation
+
+The [resumed evidence ledger](CONTINUATION-EVIDENCE-2026-11-07-RESUMED.md)
+records another original-source reconciliation and eight published coherent
+units through `b63e9709`. Windows child encoding, native MTU/test inventories,
+Darwin route-prefix decoding and external proof execution ownership now have
+focused executable evidence. The separate CONNECT/REALITY native parser passes
+all 172 shared and nineteen shared-native verdicts; actual Android/Apple stages
+and encrypted peer/DNS references retain their own pending gates. The desktop
+imported-entry daily path is still under implementation review, including exact
+Unix socket permissions and a real final-owned DNS proof. Original scope,
+current release publication and physical/private acceptance remain distinct.
+The passages below retain their dated checkpoint meaning.
+
 ## November 7 continuation: imported paths and native verification
 
 The [November 7 evidence ledger](CONTINUATION-EVIDENCE-2026-11-07.md) records
