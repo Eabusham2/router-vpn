@@ -243,7 +243,9 @@ for rel, markers in {
     ),
     "cmd/client/multihop_native_capture.go": (
         "func (a *app) proveNativeMultihop", "connectionOperationContextOrBackground()",
-        "func proveNativeMultihopCapture", "a.ownsConnectionRuntime(command)",
+        "func proveNativeMultihopCapture", "a.nativeMultihopProofOwnerCurrentContext(ctx, sel, command)",
+        "mobilemtu.LockContext(ctx, &a.mu)", "command != nil && a.cmd == command && !a.closing",
+        "a.observeImportedOpenVPN(ctx, sel, command) == nil",
         "!owns() || sel.Native == nil || sel.Native.validate(sel) != nil",
         "prove(ctx, sel.Entry, multihopEntryProofProxy)",
         "prove(ctx, sel.Exit, multihopProofProxy)",
