@@ -211,19 +211,31 @@ func writeDesktopRuntimeFile(launch *desktopNodeLaunch, name string, data []byte
 }
 
 func writeDesktopRuntimeFileContext(ctx context.Context, launch *desktopNodeLaunch, name string, data []byte, retry bool) error {
+	_, err := writeDesktopRuntimeFileAdmissionContext(ctx, launch, name, data, retry)
+	return err
+}
+
+// entered is false only when publication was never attempted. Once the
+// original OpenFile is entered, its caller must retain uncertain ownership:
+// the native child may consume a complete input before the final readback.
+func writeDesktopRuntimeFileAdmissionContext(ctx context.Context, launch *desktopNodeLaunch, name string, data []byte, retry bool) (entered bool, failure error) {
 	limit := 8 << 20
 	if launch != nil && name == "node-source.json" {
 		limit = mobilemultihop.NodeLaunchInputLimit
 	}
 	if launch == nil || !desktopRuntimeFilename(name) || len(data) == 0 || len(data) > limit {
-		return errors.New("invalid native runtime input")
+		return false, errors.New("invalid native runtime input")
 	}
 	if err := mobilemtu.LockContext(ctx, &launch.workspaceMu); err != nil {
-		return err
+		return false, err
 	}
 	if err := desktopExternalDirectoryCurrent(launch); err != nil {
 		launch.workspaceMu.Unlock()
-		return err
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		launch.workspaceMu.Unlock()
+		return false, err
 	}
 	file, err := launch.directoryRoot.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -231,11 +243,11 @@ func writeDesktopRuntimeFileContext(ctx context.Context, launch *desktopNodeLaun
 		if retry && errors.Is(err, os.ErrExist) {
 			body, readErr := readDesktopRuntimeFileContext(ctx, launch, name, int64(len(data)))
 			if readErr == nil && bytes.Equal(data, body) {
-				return nil
+				return true, nil
 			}
-			return errors.Join(readErr, errors.New("native runtime request already has another owner or contents"))
+			return true, errors.Join(readErr, errors.New("native runtime request already has another owner or contents"))
 		}
-		return err
+		return true, err
 	}
 	info, err := file.Stat()
 	if err == nil {
@@ -254,13 +266,13 @@ func writeDesktopRuntimeFileContext(ctx context.Context, launch *desktopNodeLaun
 	}
 	launch.workspaceMu.Unlock()
 	if err != nil {
-		return err
+		return true, err
 	}
 	body, err := readDesktopRuntimeFileContext(ctx, launch, name, int64(len(data)))
 	if err != nil || !bytes.Equal(data, body) {
-		return errors.Join(err, errors.New("native runtime input did not retain its captured contents"))
+		return true, errors.Join(err, errors.New("native runtime input did not retain its captured contents"))
 	}
-	return ctx.Err()
+	return true, ctx.Err()
 }
 
 func desktopRuntimeOwnedFile(name string) bool {

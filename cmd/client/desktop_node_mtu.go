@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"router-vpn/internal/desktopnetwork"
+	"router-vpn/internal/mobilemtu"
 )
 
 const desktopNodeMTURecordLimit = 32 << 10
@@ -103,7 +104,11 @@ func readDesktopNodeMTUWith(launch *desktopNodeLaunch, read func(*desktopNodeLau
 	return record, nil
 }
 func openDesktopNodeMTUOwner(launch *desktopNodeLaunch, live mtuLiveSnapshot, token string) (mtuKernelOwner, error) {
-	record, err := readDesktopNodeMTU(launch)
+	return openDesktopNodeMTUOwnerContext(context.Background(), launch, live, token)
+}
+
+func openDesktopNodeMTUOwnerContext(ctx context.Context, launch *desktopNodeLaunch, live mtuLiveSnapshot, token string) (mtuKernelOwner, error) {
+	record, err := readDesktopNodeMTUContext(ctx, launch)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +116,7 @@ func openDesktopNodeMTUOwner(launch *desktopNodeLaunch, live mtuLiveSnapshot, to
 		return nil, errors.New("native TUN was replaced or already has an active MTU lease")
 	}
 	owner := &desktopNodeMTUOwner{launch: launch, record: record, family: live.Family, originalMTU: record.MTU, lease: token}
-	if err = owner.exchange("begin", 0); err != nil {
+	if err = owner.exchangeContext(ctx, "begin", 0); err != nil {
 		return owner, err
 	}
 	return owner, nil
@@ -121,32 +126,48 @@ func (owner *desktopNodeMTUOwner) state() mtuKernelState {
 	return mtuKernelState{Interface: r.Interface, Family: owner.family, Index: r.Index, MTU: r.MTU, Identity: fmt.Sprintf("%s/%s/%d", r.Session, r.Path, r.Reader)}
 }
 func (owner *desktopNodeMTUOwner) readLocked() (mtuKernelState, error) {
+	return owner.readLockedContext(context.Background())
+}
+
+func (owner *desktopNodeMTUOwner) readLockedContext(ctx context.Context) (mtuKernelState, error) {
 	if owner.closed || owner.pending != nil {
 		return mtuKernelState{}, errors.New("native MTU lease is closed or its last command has not drained")
 	}
-	if closed, err := readDesktopNodeStopped(owner.launch); err != nil || closed {
-		return mtuKernelState{}, errors.New("captured native TUN has retired or its close receipt is invalid")
+	if closed, err := readDesktopNodeStoppedContext(ctx, owner.launch); err != nil || closed {
+		return mtuKernelState{}, errors.Join(err, errors.New("captured native TUN has retired or its close receipt is invalid"))
 	}
-	r, err := readDesktopNodeMTU(owner.launch)
+	r, err := readDesktopNodeMTUContext(ctx, owner.launch)
 	expiry := owner.committed && owner.record.Expired && owner.record.Restored && !owner.record.Active && owner.record.MTU == owner.originalMTU
 	if err != nil || r.Session != owner.record.Session || r.Config != owner.record.Config || r.Path != owner.record.Path || r.Reader != owner.record.Reader || r.Interface != owner.record.Interface || r.Index != owner.record.Index || r.MTU != owner.record.MTU || r.Generation != owner.record.Generation || r.Request != owner.record.Request || r.Failure != owner.record.Failure || r.Failure != "" && !expiry || r.Lease != owner.lease || r.Active != owner.record.Active || r.Restored != owner.record.Restored || r.Expired != owner.record.Expired || !owner.committed && !r.Active {
-		return mtuKernelState{}, errors.New("captured native TUN lease or reader changed")
+		return mtuKernelState{}, errors.Join(err, errors.New("captured native TUN lease or reader changed"))
 	}
-	return owner.state(), nil
+	return owner.state(), ctx.Err()
 }
 func (owner *desktopNodeMTUOwner) Read() (mtuKernelState, error) {
-	owner.mu.Lock()
+	return owner.ReadContext(context.Background())
+}
+
+func (owner *desktopNodeMTUOwner) ReadContext(ctx context.Context) (mtuKernelState, error) {
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return mtuKernelState{}, err
+	}
 	defer owner.mu.Unlock()
-	return owner.readLocked()
+	return owner.readLockedContext(ctx)
 }
 func (owner *desktopNodeMTUOwner) Change(expected mtuKernelState, mtu int) (mtuKernelState, error) {
-	owner.mu.Lock()
-	defer owner.mu.Unlock()
-	current, err := owner.readLocked()
-	if err != nil || current != expected || mtu < 1280 || mtu > 9000 {
-		return current, errors.New("native MTU mutation lost its captured reader")
+	return owner.ChangeContext(context.Background(), expected, mtu)
+}
+
+func (owner *desktopNodeMTUOwner) ChangeContext(ctx context.Context, expected mtuKernelState, mtu int) (mtuKernelState, error) {
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return mtuKernelState{}, err
 	}
-	err = owner.exchange("set", mtu)
+	defer owner.mu.Unlock()
+	current, err := owner.readLockedContext(ctx)
+	if err != nil || current != expected || mtu < 1280 || mtu > 9000 {
+		return current, errors.Join(err, errors.New("native MTU mutation lost its captured reader"))
+	}
+	err = owner.exchangeContext(ctx, "set", mtu)
 	return owner.state(), err
 }
 func (owner *desktopNodeMTUOwner) Commit() error {
@@ -156,10 +177,24 @@ func (owner *desktopNodeMTUOwner) Commit() error {
 // The Linux host must retain the exact unconfirmed revert capability until
 // the post-command original host/kernel observation also succeeds. Other
 // consumers preserve their existing commit contract through Commit above.
+func (owner *desktopNodeMTUOwner) CommitContext(ctx context.Context) error {
+	return owner.commitWithValidationContext(ctx, nil)
+}
+
 func (owner *desktopNodeMTUOwner) commitWithValidation(current func() error) error {
-	owner.mu.Lock()
+	var check func(context.Context) error
+	if current != nil {
+		check = func(context.Context) error { return current() }
+	}
+	return owner.commitWithValidationContext(context.Background(), check)
+}
+
+func (owner *desktopNodeMTUOwner) commitWithValidationContext(ctx context.Context, current func(context.Context) error) error {
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return err
+	}
 	defer owner.mu.Unlock()
-	if _, err := owner.readLocked(); err != nil {
+	if _, err := owner.readLockedContext(ctx); err != nil {
 		return err
 	}
 	if owner.committed {
@@ -168,13 +203,16 @@ func (owner *desktopNodeMTUOwner) commitWithValidation(current func() error) err
 		}
 		return nil
 	}
-	if err := owner.exchange("commit", 0); err != nil {
+	if err := owner.exchangeContext(ctx, "commit", 0); err != nil {
 		return err
 	}
 	if current != nil {
-		if err := current(); err != nil {
+		if err := current(ctx); err != nil {
 			return err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	owner.committed = true
 	owner.discardCommitRevert()
@@ -182,35 +220,45 @@ func (owner *desktopNodeMTUOwner) commitWithValidation(current func() error) err
 }
 
 func (owner *desktopNodeMTUOwner) Restore() (mtuKernelState, error) {
-	owner.mu.Lock()
+	return owner.RestoreContext(context.Background())
+}
+
+func (owner *desktopNodeMTUOwner) RestoreContext(ctx context.Context) (mtuKernelState, error) {
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return mtuKernelState{}, err
+	}
 	defer owner.mu.Unlock()
 	if owner.closed {
 		return mtuKernelState{}, errors.New("native MTU owner is closed")
 	}
-	return owner.restoreLocked()
+	return owner.restoreLockedContext(ctx)
 }
 
 func (owner *desktopNodeMTUOwner) restoreLocked() (mtuKernelState, error) {
+	return owner.restoreLockedContext(context.Background())
+}
+
+func (owner *desktopNodeMTUOwner) restoreLockedContext(ctx context.Context) (mtuKernelState, error) {
 	if owner.committed {
 		if !owner.record.Restored {
 			return mtuKernelState{}, errors.New("confirmed native MTU commit cannot be reverted")
 		}
-		return owner.readLocked()
+		return owner.readLockedContext(ctx)
 	}
-	if record, err := readDesktopNodeMTU(owner.launch); err == nil && record.Expired {
-		if restored, expiryErr := owner.acceptExpiredRestoration(record); expiryErr != nil {
+	if record, err := readDesktopNodeMTUContext(ctx, owner.launch); err == nil && record.Expired {
+		if restored, expiryErr := owner.acceptExpiredRestorationContext(ctx, record); expiryErr != nil {
 			return mtuKernelState{}, expiryErr
 		} else if restored {
-			return owner.readLocked()
+			return owner.readLockedContext(ctx)
 		}
 	}
 	if owner.pending != nil {
-		if err := owner.drain(); err != nil && owner.pending != nil {
+		if err := owner.drainContext(ctx); err != nil && owner.pending != nil {
 			return mtuKernelState{}, err
 		}
 	}
 	if owner.committed && owner.record.Restored {
-		return owner.readLocked()
+		return owner.readLockedContext(ctx)
 	}
 	action, value := "rollback", 0
 	if !owner.record.Active {
@@ -219,22 +267,28 @@ func (owner *desktopNodeMTUOwner) restoreLocked() (mtuKernelState, error) {
 		}
 		action, value = "revert-unconfirmed-commit", owner.originalMTU
 	}
-	if err := owner.exchange(action, value); err != nil {
+	if err := owner.exchangeContext(ctx, action, value); err != nil {
 		return mtuKernelState{}, err
 	}
 	// The lease is now explicitly inactive with the original readback. Retain
 	// that receipt for the controller's final validation before releasing it.
 	owner.committed = true
 	owner.discardCommitRevert()
-	return owner.readLocked()
+	return owner.readLockedContext(ctx)
 }
 func (owner *desktopNodeMTUOwner) Close() error {
-	owner.mu.Lock()
+	return owner.CloseContext(context.Background())
+}
+
+func (owner *desktopNodeMTUOwner) CloseContext(ctx context.Context) error {
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return err
+	}
 	defer owner.mu.Unlock()
 	if owner.closed {
 		return nil
 	}
-	if closed, err := readDesktopNodeStopped(owner.launch); err != nil {
+	if closed, err := readDesktopNodeStoppedContext(ctx, owner.launch); err != nil {
 		return err
 	} else if closed {
 		// This exact child already closed Box/TUN. There is no live interface to
@@ -246,7 +300,7 @@ func (owner *desktopNodeMTUOwner) Close() error {
 	}
 	var commandFailure error
 	if owner.pending != nil {
-		if err := owner.drain(); err != nil {
+		if err := owner.drainContext(ctx); err != nil {
 			if owner.pending != nil {
 				return err
 			}
@@ -256,9 +310,12 @@ func (owner *desktopNodeMTUOwner) Close() error {
 		}
 	}
 	if !owner.committed {
-		if _, err := owner.restoreLocked(); err != nil {
+		if _, err := owner.restoreLockedContext(ctx); err != nil {
 			return errors.Join(commandFailure, err)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(commandFailure, err)
 	}
 	owner.closed = true
 	return commandFailure
@@ -283,6 +340,10 @@ func (owner *desktopNodeMTUOwner) discardCommitRevert() {
 }
 
 func (owner *desktopNodeMTUOwner) acceptExpiredRestoration(record desktopNodeMTURecord) (bool, error) {
+	return owner.acceptExpiredRestorationContext(context.Background(), record)
+}
+
+func (owner *desktopNodeMTUOwner) acceptExpiredRestorationContext(ctx context.Context, record desktopNodeMTURecord) (bool, error) {
 	if !record.Expired {
 		return false, nil
 	}
@@ -303,10 +364,13 @@ func (owner *desktopNodeMTUOwner) acceptExpiredRestoration(record desktopNodeMTU
 	if !matching || record.Reader < owner.record.Reader || record.Reader > maximum || record.Reader == owner.record.Reader && (record.Index != owner.record.Index || record.MTU != owner.record.MTU) {
 		return false, bad
 	}
-	if _, err := readDesktopRuntimeFile(owner.launch, "node-mtu-request.json", 4096); !errors.Is(err, os.ErrNotExist) {
+	if _, err := readDesktopRuntimeFileContext(ctx, owner.launch, "node-mtu-request.json", 4096); !errors.Is(err, os.ErrNotExist) {
 		if err == nil {
 			return false, nil // The child must consume a pending command first.
 		}
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
 		return false, err
 	}
 	owner.record, owner.pending, owner.committed = record, nil, true
@@ -314,6 +378,16 @@ func (owner *desktopNodeMTUOwner) acceptExpiredRestoration(record desktopNodeMTU
 	return true, nil
 }
 func (owner *desktopNodeMTUOwner) exchange(action string, value int) error {
+	return owner.exchangeContext(context.Background(), action, value)
+}
+
+func (owner *desktopNodeMTUOwner) exchangeContext(ctx context.Context, action string, value int) error {
+	if ctx == nil {
+		return errors.New("native MTU command has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if owner.pending != nil {
 		return errors.New("another native MTU command is still draining")
 	}
@@ -350,29 +424,51 @@ func (owner *desktopNodeMTUOwner) exchange(action string, value int) error {
 	owner.pending = &command
 	// A consume-before-final-stat race is accepted only by drain's matching
 	// acknowledgement and confirmed removal of this immutable request file.
-	writeErr := writeDesktopRuntimeFile(owner.launch, "node-mtu-request.json", raw, true)
-	err = owner.drain()
+	entered, writeErr := writeDesktopRuntimeFileAdmissionContext(ctx, owner.launch, "node-mtu-request.json", raw, true)
+	if !entered {
+		owner.pending = nil
+		if action == "commit" {
+			owner.discardCommitRevert()
+		}
+		if action == "begin" {
+			// This owner never acquired a native lease. Close must not wait
+			// for an unissued nonce or manufacture a rollback of another lease.
+			owner.closed = true
+		}
+		return writeErr
+	}
+	err = owner.drainContext(ctx)
 	if err != nil && writeErr != nil {
 		return errors.Join(writeErr, err)
 	}
 	return err
 }
 func (owner *desktopNodeMTUOwner) drain() error {
+	return owner.drainContext(context.Background())
+}
+
+func (owner *desktopNodeMTUOwner) drainContext(parent context.Context) error {
+	if parent == nil {
+		return errors.New("native MTU drain has no caller")
+	}
+	ctx, cancel := context.WithTimeout(parent, 12*time.Second)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	command := owner.pending
 	if command == nil {
 		return nil
 	}
-	deadline := time.NewTimer(12 * time.Second)
-	defer deadline.Stop()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if closed, err := readDesktopNodeStopped(owner.launch); err != nil || closed {
-			return errors.New("native TUN retired before this command; checked Close must release its owner")
+		if closed, err := readDesktopNodeStoppedContext(ctx, owner.launch); err != nil || closed {
+			return errors.Join(err, errors.New("native TUN retired before this command; checked Close must release its owner"))
 		}
-		record, err := readDesktopNodeMTU(owner.launch)
+		record, err := readDesktopNodeMTUContext(ctx, owner.launch)
 		if err == nil && record.Expired {
-			if restored, expiryErr := owner.acceptExpiredRestoration(record); expiryErr != nil {
+			if restored, expiryErr := owner.acceptExpiredRestorationContext(ctx, record); expiryErr != nil {
 				return expiryErr
 			} else if restored {
 				return errDesktopNodeMTUExpired
@@ -381,7 +477,7 @@ func (owner *desktopNodeMTUOwner) drain() error {
 		if err == nil && record.Generation == command.Generation && record.Request == command.Request && record.Config == command.Config && record.Path == command.Path {
 			// Do not issue another operation until the child has consumed the
 			// precise command; its response is published before its input is removed.
-			if _, err := readDesktopRuntimeFile(owner.launch, "node-mtu-request.json", 4096); errors.Is(err, os.ErrNotExist) {
+			if _, err := readDesktopRuntimeFileContext(ctx, owner.launch, "node-mtu-request.json", 4096); errors.Is(err, os.ErrNotExist) {
 				// A matching nonce alone is not ownership. Do not replace the
 				// captured reader/lease with a foreign or contradictory response.
 				if record.Lease != owner.lease || record.Interface != owner.record.Interface || record.Reader < owner.record.Reader || record.Reader > owner.record.Reader+1 || (record.Reader == owner.record.Reader && record.Index != owner.record.Index) {
@@ -393,6 +489,9 @@ func (owner *desktopNodeMTUOwner) drain() error {
 					if !record.Active && (command.Action != "revert-unconfirmed-commit" || record.Restored || owner.unconfirmedCommit == nil) {
 						return errors.New("failed native MTU command abandoned its active lease")
 					}
+					if err := ctx.Err(); err != nil {
+						return err
+					}
 					owner.pending, owner.record = nil, record
 					if command.Action == "commit" {
 						owner.discardCommitRevert()
@@ -402,6 +501,9 @@ func (owner *desktopNodeMTUOwner) drain() error {
 				restoring := command.Action == "rollback" || command.Action == "revert-unconfirmed-commit"
 				if record.Expired || (command.Action == "begin" || command.Action == "set") != record.Active || command.Action == "set" && record.MTU != command.Value || (command.Action == "begin" || command.Action == "commit") && (record.Reader != owner.record.Reader || record.MTU != command.MTU) || restoring && (!record.Restored || record.MTU != owner.originalMTU) || !restoring && record.Restored || (command.Action == "set" || restoring) && record.MTU != owner.record.MTU && record.Reader != owner.record.Reader+1 {
 					return errors.New("native MTU acknowledgement changed its lease or requested value")
+				}
+				if err := ctx.Err(); err != nil {
+					return err
 				}
 				owner.pending, owner.record = nil, record
 				if restoring {
@@ -415,8 +517,8 @@ func (owner *desktopNodeMTUOwner) drain() error {
 			return errors.New("native TUN workspace was replaced")
 		}
 		select {
-		case <-deadline.C:
-			return errors.New("captured native MTU command did not drain before its deadline")
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-ticker.C:
 		}
 	}
@@ -450,15 +552,24 @@ func desktopNodeProcessExited(launch *desktopNodeLaunch) bool {
 }
 
 func readDesktopNodeStopped(launch *desktopNodeLaunch) (bool, error) {
-	raw, err := readDesktopRuntimeFile(launch, "stopped.json", 1024)
+	return readDesktopNodeStoppedContext(context.Background(), launch)
+}
+
+func readDesktopNodeStoppedContext(ctx context.Context, launch *desktopNodeLaunch) (bool, error) {
+	if ctx == nil {
+		return false, errors.New("native Router node close has no original caller")
+	}
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, "stopped.json", 1024)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		return false, ctx.Err()
 	}
 	var record desktopExternalStop
 	if err != nil || decodeRelayControlJSON(raw, &record) != nil || record.Schema != 1 || record.SessionID != launch.mtuSession || record.SourceSHA256 != launch.configSHA256 || !record.Closed {
-		return false, errors.New("native Router node close belongs to another runtime")
+		return false, errors.Join(err, ctx.Err(), errors.New("native Router node close belongs to another runtime"))
 	}
-	launch.workspaceMu.Lock()
+	if err := mobilemtu.LockContext(ctx, &launch.workspaceMu); err != nil {
+		return false, err
+	}
 	launch.nodeStopAcknowledged = true
 	launch.workspaceMu.Unlock()
 	return true, nil
