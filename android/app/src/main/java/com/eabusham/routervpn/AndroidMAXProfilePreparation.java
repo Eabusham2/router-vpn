@@ -138,7 +138,15 @@ final class AndroidMAXProfilePreparation implements AutoCloseable {
         watch = new Thread(() -> {
             try {
                 while (!closing) {
-                    if (!current(false)) { cancel(); return; }
+                    if (!current(false)) {
+                        synchronized (lock) {
+                            // Claim may have begun its intentional drain after
+                            // this watch iteration was admitted. That retirement
+                            // is not an external STOP of the adopted connection.
+                            if (!closing) beginDrainLocked();
+                        }
+                        return;
+                    }
                     Thread.sleep(40);
                 }
             } catch (InterruptedException stopped) { /* close joins this owner */ }

@@ -130,6 +130,43 @@ P.HARNESS = P.HARNESS[:P.HARNESS.index(' public static void main(')] + r'''
  static void noThreads()throws Exception{
   for(int i=0;i<100;i++){boolean found=false;for(Thread t:Thread.getAllStackTraces().keySet())if(t.isAlive()&&t.getName().startsWith("routervpn-max-"))found=true;if(!found)return;Thread.sleep(10);}throw new AssertionError("MAX owner thread escaped handoff");
  }
+ static final class WatchBoundary {
+  static volatile WatchBoundary active;
+  final java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
+  final java.util.concurrent.atomic.AtomicBoolean taken=new java.util.concurrent.atomic.AtomicBoolean();
+  volatile Thread thread;
+  static void pause(){WatchBoundary gate=active;if(gate==null||!gate.taken.compareAndSet(false,true))return;gate.thread=Thread.currentThread();gate.entered.countDown();AndroidMAXDNSOwner.await(gate.release);}
+ }
+ static void watchRetirement(Path root)throws Exception {
+  for(String fault:new String[]{"handoff","stop","home","network","source","watch-home"}){
+   var state=reset();Owned original=new Owned(root,"max-tls-wg","aes-256-gcm+xor-whitening");original.compile();original.stage();
+   state.closeEntered=new java.util.concurrent.CountDownLatch(1);state.closeRelease=new java.util.concurrent.CountDownLatch(1);
+   WatchBoundary gate=new WatchBoundary();WatchBoundary.active=gate;
+   try{
+    waitFor(gate.entered);
+    if(fault.equals("watch-home")){
+     AndroidHomeStateStore.value.sessionId="retired-before-claim";
+     gate.release.countDown();waitFor(state.closeEntered);gate.thread.join(2000);
+     check(!gate.thread.isAlive(),"watcher ignored changed ownership before claim");
+     state.closeRelease.countDown();original.owner.close();reject(original::claim);
+     check(state.closes.get()==1&&!AndroidMAXProfilePreparation.busy(),"watcher retained its invalid original preparation");
+     continue;
+    }
+    // The native Close barrier proves claim has begun its intentional drain
+    // before the paused original watcher can observe cancelled=true.
+    Job claim=new Job(original::claim);waitFor(state.closeEntered);
+    if(fault.equals("stop"))original.owner.cancel();
+    else if(fault.equals("home"))AndroidHomeStateStore.value.sessionId="foreign-home";
+    else if(fault.equals("network"))original.context.connectivity.active.links.privateName="foreign-network";
+    else if(fault.equals("source")){
+     long modified=original.source.lastModified();byte[] bytes=original.original.clone();bytes[bytes.length-2]^=1;Files.write(original.source.toPath(),bytes);check(original.source.setLastModified(modified),"watch boundary lost same-metadata source control");
+    }
+    gate.release.countDown();gate.thread.join(2000);check(!gate.thread.isAlive(),"watcher did not join its owned retirement decision");
+    state.closeRelease.countDown();claim.done(!fault.equals("handoff"));
+    check(state.closes.get()==1&&!AndroidMAXProfilePreparation.busy(),"watch/claim handoff skipped or repeated original drain");
+   }finally{gate.release.countDown();state.closeRelease.countDown();WatchBoundary.active=null;original.owner.close();}
+  }
+ }
  public static void main(String[] args)throws Exception{
   fixtures=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_MAX_PROFILE_FIXTURES"))));Path root=Path.of(args[0]);
   successes(root);envelopeNegatives(root);capturedFiles(root);lifetime(root);noThreads();
@@ -147,11 +184,31 @@ def main():
         os.environ['ROUTERVPN_MAX_PROFILE_FIXTURES'] = str(fixture)
         try:
             P.run()
+            run_watch_boundary()
         finally:
             if old is None:
                 os.environ.pop('ROUTERVPN_MAX_PROFILE_FIXTURES', None)
             else:
                 os.environ['ROUTERVPN_MAX_PROFILE_FIXTURES'] = old
+
+
+def run_watch_boundary():
+    # Pause immediately after the shipping watcher's loop admission. This
+    # scheduling seam changes no ownership check or native/compiler answer.
+    path = 'com/eabusham/routervpn/AndroidMAXProfilePreparation.java'
+    original, harness = P.M.STUBS[path], P.HARNESS
+    anchor = 'while (!closing) {'
+    assert original.count(anchor) == 1
+    phases = 'successes(root);envelopeNegatives(root);capturedFiles(root);lifetime(root);noThreads();'
+    assert harness.count(phases) == 1
+    P.M.STUBS[path] = original.replace(anchor, anchor + '\n                    PQSelectionHarness.WatchBoundary.pause();')
+    P.HARNESS = harness.replace(phases, 'watchRetirement(root);noThreads();').replace(
+        'Android MAX owned preparation: PASS 24 real Java/Go hostname graphs, ',
+        'Android MAX deterministic watcher/claim handoff: PASS 6 original Java/Go ownership cases, ')
+    try:
+        P.run()
+    finally:
+        P.M.STUBS[path], P.HARNESS = original, harness
 
 
 if __name__ == '__main__':
