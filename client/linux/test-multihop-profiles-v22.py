@@ -194,7 +194,11 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Missing fixtu
                     broken['supported_entry_modes'] = modes
                     catalog_path.write_text(json.dumps(broken))
                     negative = subprocess.run(['xvfb-run','-a',str(binary),str(directory)], text=True, capture_output=True, timeout=60)
-                    assert negative.returncode != 0 and 'Actual profile catalog' in negative.stderr, negative.stdout + negative.stderr
+                    # Debian xvfb-run can merge the child's stderr into stdout.
+                    # Require both failure status and the catalog witness in
+                    # the captured output, as the other native GTK gates do.
+                    output = negative.stdout + negative.stderr
+                    assert negative.returncode != 0 and 'Actual profile catalog' in output, f'{fault}: exit={negative.returncode}\n{output}'
                     print('GTK actual controller catalog '+fault+': rejected')
                 catalog_path.write_text(json.dumps(catalog))
             else:
