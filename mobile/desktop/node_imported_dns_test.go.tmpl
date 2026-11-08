@@ -94,6 +94,17 @@ func TestRouterVPNImportedDNSMailbox(t *testing.T) {
 				if deadline, ok := ctx.Deadline(); !ok || deadline.UnixMilli() != request.Deadline {
 					t.Error("native DNS lost original request deadline")
 				}
+				// A no-op callback can finish within one Windows clock tick.
+				// Supply a real measured interval without changing the native
+				// mailbox's rejection of zero or expired measurements.
+				started := time.Now()
+				for time.Since(started) <= 0 {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(time.Millisecond):
+					}
+				}
 				switch fault {
 				case "dns-failed":
 					return errors.New("original resolver failed")
@@ -223,11 +234,16 @@ func TestRouterVPNImportedDNSNativeRouterIsUncached(t *testing.T) {
 			t.Error("selected native DNS lost its explicit loopback source")
 			return
 		}
+		if len(q.Question) != 1 || q.Question[0].Name != "example.com." ||
+			q.Question[0].Qclass != dns.ClassINET || q.Question[0].Qtype != dns.TypeA && q.Question[0].Qtype != dns.TypeAAAA {
+			t.Error("selected native DNS substituted its bounded proof question")
+			return
+		}
 		queries.Add(1)
 		answer := new(dns.Msg).SetReply(q)
 		if failed.Load() {
 			answer.Rcode = dns.RcodeNameError
-		} else {
+		} else if q.Question[0].Qtype == dns.TypeA {
 			answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: net.ParseIP("93.184.216.34")}}
 		}
 		_ = w.WriteMsg(answer)
@@ -271,6 +287,7 @@ func TestRouterVPNImportedDNSNativeRouterIsUncached(t *testing.T) {
 	var generation uint64
 	for index, want := range []string{"passed", "failed", "passed"} {
 		failed.Store(index == 1)
+		before := queries.Load()
 		request.Request = strings.Repeat(string(rune('d'+index)), 32)
 		request.Generation = generation + 1
 		request.Deadline = time.Now().Add(4 * time.Second).UnixMilli()
@@ -280,8 +297,14 @@ func TestRouterVPNImportedDNSNativeRouterIsUncached(t *testing.T) {
 		}
 		raw, err := files.read("node-dns-result.json", 4096)
 		var result routerVPNImportedDNSResult
-		if err != nil || !routerVPNMTUStrict(raw, &result) || result.Status != want || queries.Load() != int32(index+1) {
-			t.Fatal("selected native resolver was cached or bypassed", err, result.Status, queries.Load())
+		// The pinned TCP transport separately probes connection reuse with
+		// A and AAAA messages. Count real per-operation upstream progress,
+		// not one global wire query per proof. The alternating positive /
+		// NXDOMAIN / positive result still rejects either cached response.
+		if err != nil || !routerVPNMTUStrict(raw, &result) || result.routerVPNImportedDNSRequest != request ||
+			result.Status != want || queries.Load() <= before {
+			t.Fatal("selected native resolver was cached or bypassed", "phase", index, "error", err,
+				"status", result.Status, "want", want, "queries before/after", before, queries.Load())
 		}
 	}
 }
