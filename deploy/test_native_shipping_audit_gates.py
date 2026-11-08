@@ -69,6 +69,42 @@ class NativeShippingAuditTests(unittest.TestCase):
         for gate in self.legacy.values():
             self.assertEqual(gate(), expected)
 
+    def assert_backend_proof_admission(self, expected):
+        backend = ast.parse((ROOT / "deploy/backend-session-transaction-audit.py").read_text())
+        functions = [node for node in backend.body if isinstance(node, ast.FunctionDef)
+                     and node.name == "require_native_multihop_proof_admission"]
+        self.assertEqual(len(functions), 1)
+        invocations = [node for node in backend.body if isinstance(node, ast.Expr)
+                       and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                       and node.value.func.id == "require_native_multihop_proof_admission"]
+        self.assertEqual(len(invocations), 1, "backend audit must execute its proof-admission guard")
+        scope = {"read": self.body, "errors": [],
+                 "native_multihop_proof_admission": _NATIVE.native_multihop_proof_admission}
+        exec(compile(ast.Module(body=functions + invocations, type_ignores=[]), "backend-native-proof", "exec"), scope)
+        self.assertEqual(not scope["errors"], expected)
+
+    def test_backend_proof_guard_uses_original_runtime_context_and_dns(self):
+        self.assert_backend_proof_admission(True)
+        for path, before, after in (
+            ("cmd/client/multihop_native_capture.go", "a.nativeMultihopProofOwnerCurrentContext(ctx, sel, command)",
+             "a.nativeMultihopProofOwnerCurrentContext(context.Background(), sel, command)"),
+            ("cmd/client/multihop_native_capture.go", "command != nil && a.cmd == command && !a.closing", "true"),
+            ("cmd/client/multihop_native_capture.go", "a.profiles.SelectedID == sel.Control.ID", "true"),
+            ("cmd/client/multihop_native_capture.go", "mobilemtu.LockContext(ctx, &a.mu)",
+             "mobilemtu.LockContext(context.Background(), &a.mu)"),
+            ("cmd/client/multihop_native_capture.go", "a.proveImportedNativeDNS(ctx, sel, command)",
+             "a.proveImportedNativeDNS(ctx, sel, other)"),
+            ("cmd/client/multihop_native_imported.go", "proveMultihopLaneNodeContext(ctx, profile, proxy)",
+             "proveMultihopLaneNodeContext(context.Background(), profile, proxy)"),
+            ("cmd/client/multihop_native_imported_dns.go", "expectedDNSSelection(selection.Exit)",
+             "expectedDNSSelection(selection.Entry)"),
+        ):
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\n"
+                self.assert_backend_proof_admission(False)
+
     def assert_multihop_chain(self, expected):
         self.assert_multihop_scores(expected)
         # Exercise the actual backend audit hook, including its read/error path.

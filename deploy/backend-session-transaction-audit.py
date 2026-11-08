@@ -10,6 +10,7 @@ _native_spec = importlib.util.spec_from_file_location(
 _native_module = importlib.util.module_from_spec(_native_spec)
 _native_spec.loader.exec_module(_native_module)
 native_multihop_shipping_chain = _native_module.native_multihop_shipping_chain
+native_multihop_proof_admission = _native_module.native_multihop_proof_admission
 errors: list[str] = []
 
 
@@ -43,6 +44,17 @@ def require_native_multihop_shipping_chain() -> None:
 
 
 require_native_multihop_shipping_chain()
+
+
+def require_native_multihop_proof_admission() -> None:
+    if not native_multihop_proof_admission(
+            read("cmd/client/multihop_native_capture.go"),
+            read("cmd/client/multihop_native_imported.go"),
+            read("cmd/client/multihop_native_imported_dns.go")):
+        errors.append("native multihop original caller/runtime, captured node proofs or selected DNS admission are incomplete")
+
+
+require_native_multihop_proof_admission()
 
 
 def standard_exit_captured_chain(source: str, restore_source: str) -> bool:
