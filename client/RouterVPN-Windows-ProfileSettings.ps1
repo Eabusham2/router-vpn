@@ -277,7 +277,7 @@ function global:Get-RouterVPNVisibleConnectionSnapshot {
             $result.multihop_execution='local';if($null-ne$execution -and $null-ne$execution.SelectedItem){$result.multihop_execution=[string]$execution.SelectedItem.Tag}
         }
     }catch{}
-    if($result.multihop_enabled-and(-not$entryChoiceValid-or([string]$result.multihop_entry_mode)-cnotin@('','wg','awg2-fast','awg2-strong','wg-pq','awg2-pq','shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','ss-v2ray','split','max','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg'))){throw 'Select a supported entry mode before saving the connection profile.'}
+    if($result.multihop_enabled-and(-not$entryChoiceValid-or([string]$result.multihop_entry_mode)-cnotin@('','wg','awg2-fast','awg2-strong','wg-pq','awg2-pq','shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','ss-v2ray','split','max','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg','wireguard','amneziawg','socks5','http-connect','https-connect','openvpn'))){throw 'Select a supported entry mode before saving the connection profile.'}
     if($result.multihop_enabled -and ([string]$result.multihop_exit_mode)-cnotin@('shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','wg','awg2-fast','awg2-strong','ss-v2ray','split','max','wg-pq','awg2-pq','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg')){throw 'Select a supported exit transport before saving the connection profile.'}
     return $result
 }
