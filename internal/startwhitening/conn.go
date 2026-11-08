@@ -207,6 +207,13 @@ func (c *Conn) Close() error {
 		// Closing the physical socket must interrupt pending I/O BEFORE taking
 		// the offset locks. This also avoids a close/read deadlock.
 		c.closeErr = c.Conn.Close()
+		// A captured lower owner may already have retired a nested TLS
+		// carrier. Its closeNotify can then return a wrapped ErrClosed even
+		// though the physical connection is joined. Preserve every other
+		// cause, including errors joined with an already-closed indication.
+		if carrierAlreadyClosed(c.closeErr) {
+			c.closeErr = nil
+		}
 		c.readMu.Lock()
 		c.writeMu.Lock()
 		clear(c.key[:])
@@ -222,6 +229,44 @@ func (c *Conn) Close() error {
 	})
 	return c.closeErr
 }
+
+func carrierAlreadyClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	pending := []error{err}
+	for remaining := 32; len(pending) != 0 && remaining > 0; remaining-- {
+		last := len(pending) - 1
+		cause := pending[last]
+		pending = pending[:last]
+		if cause == net.ErrClosed {
+			continue
+		}
+		switch wrapped := cause.(type) {
+		case interface{ Unwrap() []error }:
+			children := wrapped.Unwrap()
+			if len(children) == 0 || len(children) > remaining-1 {
+				return false
+			}
+			for _, child := range children {
+				if child == nil {
+					return false
+				}
+			}
+			pending = append(pending, children...)
+		case interface{ Unwrap() error }:
+			child := wrapped.Unwrap()
+			if child == nil {
+				return false
+			}
+			pending = append(pending, child)
+		default:
+			return false
+		}
+	}
+	return len(pending) == 0
+}
+
 func (c *Conn) CloseWrite() error {
 	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
 		return half.CloseWrite()
