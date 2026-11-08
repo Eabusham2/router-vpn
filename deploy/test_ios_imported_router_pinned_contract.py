@@ -114,7 +114,9 @@ class ImportedGate(unittest.TestCase):
 
     def test_portable_crypto_provider_is_in_source_digest(self):
         with tempfile.TemporaryDirectory() as temp:
-            root=Path(temp)
+            # Match the production root's canonical identity. macOS may return
+            # /var here while the source file resolves through /private/var.
+            root=Path(temp).resolve()
             for name in ('deploy/test_ios_imported_router_pinned.py','ios/RouterVPN/prepare-libbox.sh',
                          'go.mod','deploy/ios_test_crypto_bridge.py','android/test_android_multihop_graph.py'):
                 target=root/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text('original')
