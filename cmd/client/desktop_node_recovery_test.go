@@ -237,6 +237,16 @@ func newDesktopRecoveryFixture(t *testing.T, pendingOff, absent bool) *desktopRe
 	f.slot = &desktopNodeProtectionSlot{backend: backend}
 	f.a.nodeProtection = f.slot
 	f.events = nil
+	// Ordinary Stop keeps its reusable observer until the controller exits.
+	// Retire that fixture-owned lifetime after every assertion, inside the
+	// synctest bubble when present, before its saved profile directory goes away.
+	t.Cleanup(func() {
+		tracker := cancelSessionTracker(f.a)
+		joinSessionTracker(f.a, tracker)
+		if tracker != nil {
+			sessionTrackers.CompareAndDelete(f.a, tracker)
+		}
+	})
 	return f
 }
 
