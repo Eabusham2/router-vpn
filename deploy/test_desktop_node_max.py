@@ -144,10 +144,10 @@ def control_sources(source, label, relative, replacement):
         # witness. A stale owner or unrelated transport failure cannot pass.
         physical = 'routervpn/desktoppt/node_physical.go'
         original = (source / physical).read_text(encoding='utf-8')
-        boundary = '\tif closed || !allowed || owner == nil || !owner.SocketCurrent() {\n'
+        boundary = '\tif closed || !allowed || owner == nil {\n'
         if original.count(boundary) != 1:
             raise ValueError('Complete MAX lost its exact captured tuple rejection boundary')
-        observation = ('\tif !closed && !allowed && owner != nil && owner.SocketCurrent() && base == ' +
+        observation = ('\tif !closed && !allowed && owner != nil && owner.SocketCurrentContext(ctx) == nil && ctx.Err() == nil && base == ' +
                        json.dumps(protocol) + ' {\n\t\tprintln(' + json.dumps(tuple_witness(protocol)) + ')\n\t}\n')
         result[physical] = original.replace(boundary, observation + boundary)
     return result

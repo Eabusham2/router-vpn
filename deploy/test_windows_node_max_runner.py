@@ -268,6 +268,78 @@ def captured_cleanup_test_command(go, path, env):
     return [go, 'test', *race, '-count=1', '-timeout=15s', '-v', str(path)]
 
 
+LOWER_OBSERVER_HARNESS = r'''package observer
+import("context";"errors";"net";"testing")
+type target struct{ valid bool }
+func(t target)Validate()error{if !t.valid{return errors.New("invalid target")};return nil}
+type readback struct{Closed bool;Target target;Capture string;Owner struct{Kind string}}
+type capturedOwner struct{ready,retired bool;currentErr,socketErr error;socketCancel context.CancelFunc}
+var originalContext context.Context
+var activeTest *testing.T
+var snapshot readback
+var snapshotError error
+var snapshotCancel context.CancelFunc
+var observations []string
+func caller(ctx context.Context){if ctx!=originalContext{activeTest.Fatal("observer lost its original caller")}}
+func(n *capturedOwner)CurrentContext(ctx context.Context)error{
+ caller(ctx);if err:=ctx.Err();err!=nil{return err};if n.currentErr!=nil{return n.currentErr}
+ if n.retired||!n.ready{return net.ErrClosed};return nil
+}
+func(n *capturedOwner)SocketCurrentContext(ctx context.Context)error{
+ caller(ctx);if err:=ctx.Err();err!=nil{return err};if n.socketErr!=nil{return n.socketErr};if n.retired{return net.ErrClosed}
+ // Model a caller expiring immediately after a successful native observation.
+ if n.socketCancel!=nil{n.socketCancel()};return nil
+}
+func(*capturedOwner)brokerCapture()string{return "original-capture"}
+func nativeSnapshot(ctx context.Context)(readback,error){
+ caller(ctx);if err:=ctx.Err();err!=nil{return readback{},err};if snapshotCancel!=nil{snapshotCancel()};return snapshot,snapshotError
+}
+func recordWitness(witness string){observations=append(observations,witness)}
+func TestGeneratedMAXObserver(t *testing.T){
+ for _,protocol:=range []string{"tcp","udp"}{for _,phase:=range []string{"handshake","tuple"}{
+  cases:=[]string{"live-unready","ready","retired","closed","wrong-tuple","wrong-protocol","nil-owner","cancelled","socket-failure","cancel-after-socket"}
+  if phase=="handshake"{cases=append(cases,"current-failure","snapshot-failure","snapshot-closed","foreign-capture","foreign-kind","invalid-target","cancel-after-snapshot")}
+  for _,fault:=range cases{t.Run(protocol+"/"+phase+"/"+fault,func(t *testing.T){
+   activeTest=t;ctx,cancel:=context.WithCancel(context.WithValue(context.Background(),struct{}{},"original caller"));defer cancel();originalContext=ctx
+   owner:=&capturedOwner{};allowed,closed,base:=phase=="handshake",false,protocol
+   snapshot=readback{Target:target{true},Capture:"original-capture"};snapshot.Owner.Kind="windows-isolated-token"
+   snapshotError=nil;snapshotCancel=nil;observations=nil
+   switch fault{
+   case "ready":owner.ready=true
+   case "retired":owner.retired=true
+   case "closed":closed=true
+   case "wrong-tuple":allowed=!allowed
+   case "wrong-protocol":if protocol=="tcp"{base="udp"}else{base="tcp"}
+   case "nil-owner":owner=nil
+   case "cancelled":cancel()
+   case "socket-failure":owner.socketErr=errors.New("captured broker unavailable")
+   case "cancel-after-socket":owner.socketCancel=cancel
+   case "current-failure":owner.currentErr=context.DeadlineExceeded
+   case "snapshot-failure":snapshotError=errors.New("native readback unavailable")
+   case "snapshot-closed":snapshot.Closed=true
+   case "foreign-capture":snapshot.Capture="replacement-capture"
+   case "foreign-kind":snapshot.Owner.Kind="another-owner"
+   case "invalid-target":snapshot.Target.valid=false
+   case "cancel-after-snapshot":snapshotCancel=cancel
+   }
+   var observe func(context.Context,*capturedOwner,bool,bool,string)error
+   switch phase+"/"+protocol{case "handshake/tcp":observe=handshakeTCP;case "handshake/udp":observe=handshakeUDP;case "tuple/tcp":observe=tupleTCP;case "tuple/udp":observe=tupleUDP}
+   err:=observe(ctx,owner,allowed,closed,base)
+   want:=fault=="live-unready"||phase=="tuple"&&fault=="ready"
+   if want{
+    if err==nil||len(observations)!=1{t.Fatal("observer lost the exact captured rejection",err,observations)}
+    expected:="MAX native captured "+protocol+" handshake rejected before ready"
+    if phase=="tuple"{expected="MAX captured lower rejected uncaptured "+protocol+" tuple"}
+    if observations[0]!=expected{t.Fatal("observer changed its exact protocol witness",observations)}
+   }else if len(observations)!=0{t.Fatal("observer emitted a witness without its captured live phase",observations)}
+   if phase=="handshake"&&fault=="ready"&&err!=nil{t.Fatal("observer changed ready-owner success",err)}
+   if fault=="current-failure"&&!errors.Is(err,context.DeadlineExceeded){t.Fatal("observer replaced original caller failure",err)}
+  })}
+ }}
+}
+'''
+
+
 FOREIGN_ADMISSION_HARNESS = r'''package nativefixture
 import("context";"errors";"fmt";"strings";"testing")
 type capture struct{SourceSHA256 string}
@@ -977,8 +1049,9 @@ class MAXNativeBoundaries(unittest.TestCase):
                 mapping = self.assert_native_scope(selected)
                 self.assertEqual(Path(mapping[str(self.source / relative)]).read_text(), replacement)
                 observer = Path(mapping[str(self.source / lower)]).read_text()
-                self.assertIn('!closed && !allowed && owner != nil && owner.SocketCurrent() && base == "' + protocol + '"', observer)
-                self.assertIn('if closed || !allowed || owner == nil || !owner.SocketCurrent() {', observer)
+                self.assertIn('!closed && !allowed && owner != nil && owner.SocketCurrentContext(ctx) == nil && ctx.Err() == nil && base == "' + protocol + '"', observer)
+                self.assertIn('if closed || !allowed || owner == nil {', observer)
+                self.assertIn('if err := owner.SocketCurrentContext(ctx); err != nil {', observer)
                 self.assertIn('println(' + json.dumps(witness) + ')', observer)
                 self.assertEqual((self.source / lower).read_bytes(), self.original[lower])
                 recorded = GATE.overlay_source_hashes(self.source, selected)
@@ -1077,13 +1150,77 @@ class MAXNativeBoundaries(unittest.TestCase):
                 selected = GATE.overlay(self.source, self.directory(control[0]), prospective=True, mutation=control)
                 mapping = self.assert_native_scope(selected)
                 raw = Path(mapping[str(self.source / 'routervpn/desktoppt/node_physical.go')]).read_text()
-                self.assertIn('!closed && allowed && owner != nil && owner.SocketCurrent() && !owner.Current() && base == "' + protocol + '"', raw)
+                self.assertIn('if errors.Is(err, net.ErrClosed) && base == "' + protocol + '" && owner.SocketCurrentContext(ctx) == nil {', raw)
                 self.assertIn('snapshot.Capture == owner.brokerCapture()', raw)
-                self.assertIn('if closed || !allowed || owner == nil || !owner.Current() {', raw)
+                self.assertIn('snapshotErr == nil && ctx.Err() == nil && !snapshot.Closed', raw)
+                self.assertIn('if closed || !allowed || owner == nil {', raw)
+                self.assertIn('if err := owner.CurrentContext(ctx); err != nil {', raw)
+                boundary = '\tif err := owner.CurrentContext(ctx); err != nil {\n'
+                selected = GATE.WFP.mutants(self.source)[1]
+                before, after = raw.split(boundary)
+                original_before, original_after = selected[4].split(boundary)
+                self.assertEqual(before, original_before)
+                self.assertTrue(after.endswith(original_after))
+                for changed in (selected[4].replace(boundary, ''), selected[4] + boundary):
+                    with self.assertRaisesRegex(ValueError, 'precise late-handshake mutation'):
+                        GATE.late_handshake_control((*selected[:4], changed), protocol)
                 self.assertEqual(control[3], GATE.handshake_witness(protocol))
                 for wrong in ('actual PQ Node startup', 'context deadline exceeded', GATE.handshake_witness('udp' if protocol == 'tcp' else 'tcp')):
                     with self.assertRaises(ValueError):
                         GATE.rejected_output(1, failure(control[1], control[2], wrong), control[1], control[2], control[3])
+
+    def test_generated_observers_execute_exact_phase_and_original_caller_controls(self):
+        go = shutil.which('go')
+        self.assertIsNotNone(go, 'MAX generated observer control requires Go')
+        functions = {}
+        selected = GATE.WFP.mutants(self.source)[1]
+        for protocol in ('tcp', 'udp'):
+            handshake = GATE.late_handshake_control(selected, protocol)[4]
+            relative = 'routervpn/desktoppt/node_physical.go'
+            tuple_source = GATE.MAX.control_sources(self.source, 'different-outer-' + protocol + '-tuple',
+                                                    'outer.go', 'captured outer replacement')[relative]
+            for phase, raw in (('handshake', handshake), ('tuple', tuple_source)):
+                # Execute the generated branch and unchanged rejection body.
+                # Only the return arity, native snapshot API and witness sink
+                # are projected into this portable fixture; the native owner
+                # and Windows readback are explicit modeled boundaries.
+                start = raw.index('\to.mu.Unlock()\n', raw.index('func (o *NodePhysicalOutbound) current(')) + len('\to.mu.Unlock()\n')
+                end = raw.index('\tmanager := service.FromContext', start)
+                body = raw[start:end].replace('return nil, ', 'return ')
+                body = body.replace('mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)', 'nativeSnapshot(ctx)')
+                body = body.replace('println(', 'recordWitness(')
+                name = phase + protocol.upper()
+                functions[name] = '\nfunc ' + name + '(ctx context.Context, owner *capturedOwner, allowed, closed bool, base string) error {\n' + body + '\treturn nil\n}\n'
+        code = LOWER_OBSERVER_HARNESS + ''.join(functions.values())
+        controls = (
+            ('caller-expiry', 'snapshotErr == nil && ctx.Err() == nil && !snapshot.Closed',
+             'snapshotErr == nil && !snapshot.Closed', 'observer emitted a witness without its captured live phase'),
+            ('wrong-phase', 'if err := owner.CurrentContext(ctx); err != nil {',
+             'if err := owner.SocketCurrentContext(ctx); err != nil {', 'observer lost the exact captured rejection'),
+            ('ambient-caller', 'owner.SocketCurrentContext(ctx)',
+             'owner.SocketCurrentContext(context.Background())', 'observer lost its original caller'),
+        )
+        with tempfile.TemporaryDirectory(prefix='max-generated-observer-') as temporary:
+            path = Path(temporary) / 'observer_test.go'
+            env = dict(os.environ, GOTOOLCHAIN='local')
+            for label, body, diagnostic in (('original', code, None), *(
+                    (label, code.replace(before, after), diagnostic)
+                    for label, before, after, diagnostic in controls)):
+                with self.subTest(control=label):
+                    path.write_text(body)
+                    result = subprocess.run(captured_cleanup_test_command(go, path, env), env=env,
+                                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+                    self.assertNotIn('--- SKIP:', result.stdout)
+                    if diagnostic is None:
+                        self.assertEqual(result.returncode, 0, result.stdout)
+                        for protocol in ('tcp', 'udp'):
+                            for phase in ('handshake', 'tuple'):
+                                self.assertIn('--- PASS: TestGeneratedMAXObserver/' + protocol + '/' + phase + '/live-unready ', result.stdout)
+                        self.assertEqual(result.stdout.count('--- PASS: TestGeneratedMAXObserver/'), 54)
+                    else:
+                        self.assertNotEqual(result.returncode, 0, result.stdout)
+                        self.assertIn(diagnostic, result.stdout)
+                        self.assertIn('--- FAIL: TestGeneratedMAXObserver/', result.stdout)
 
     def test_compiled_overlay_receipts_detect_changed_aliased_and_escaped_sources(self):
         selected = GATE.overlay(self.source, self.directory('overlay-receipt'), prospective=True)

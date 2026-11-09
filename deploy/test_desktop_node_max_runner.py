@@ -96,7 +96,7 @@ class MAXOutcomeChecks(unittest.TestCase):
     def test_tuple_control_observes_the_original_live_denial_without_replacing_it(self):
         original = (ROOT / 'mobile/desktop/node_physical.go.tmpl').read_text()
         relative = 'routervpn/desktoppt/node_physical.go'
-        boundary = '\tif closed || !allowed || owner == nil || !owner.SocketCurrent() {\n'
+        boundary = '\tif closed || !allowed || owner == nil {\n'
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory)
             path = source / relative
@@ -113,7 +113,7 @@ class MAXOutcomeChecks(unittest.TestCase):
                 self.assertEqual(suffix, original_suffix)
                 self.assertTrue(prefix.startswith(original_prefix))
                 observation = prefix[len(original_prefix):]
-                self.assertEqual(observation, '\tif !closed && !allowed && owner != nil && owner.SocketCurrent() && base == "' +
+                self.assertEqual(observation, '\tif !closed && !allowed && owner != nil && owner.SocketCurrentContext(ctx) == nil && ctx.Err() == nil && base == "' +
                                  protocol + '" {\n\t\tprintln("' + GATE.tuple_witness(protocol) + '")\n\t}\n')
             path.write_text(original.replace(boundary, '\tif closed {\n'))
             with self.assertRaisesRegex(ValueError, 'exact captured tuple rejection boundary'):

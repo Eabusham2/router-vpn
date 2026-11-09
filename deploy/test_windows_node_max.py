@@ -477,14 +477,18 @@ func DesktopWindowsMAXControlDial(ctx context.Context, network, address string, 
 
 def late_handshake_control(selected, protocol):
     raw = selected[4]
-    boundary = '\tif closed || !allowed || owner == nil || !owner.Current() {\n'
+    boundary = '\tif err := owner.CurrentContext(ctx); err != nil {\n'
     if raw.count(boundary) != 1:
         raise ValueError('MAX native control lost its precise late-handshake mutation')
-    observer = ('\tif !closed && allowed && owner != nil && owner.SocketCurrent() && !owner.Current() && base == ' + json.dumps(protocol) + ' {\n'
-                '\t\tsnapshot, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)\n'
-                '\t\tif err == nil && !snapshot.Closed && snapshot.Target.Validate() == nil && snapshot.Capture == owner.brokerCapture() && snapshot.Owner.Kind == "windows-isolated-token" {\n'
-                '\t\t\tprintln(' + json.dumps(handshake_witness(protocol)) + ')\n\t\t}\n\t}\n')
-    return (*selected[:4], raw.replace(boundary, observer + boundary))
+    # The unchanged tuple/closed/nil guard precedes this erroneous proof-phase
+    # check. Observe its actual rejection, using the same caller for both the
+    # still-live socket phase and the native readback. Cancellation or another
+    # owner failure must never stand in for the pre-ready handshake witness.
+    observer = ('\t\tif errors.Is(err, net.ErrClosed) && base == ' + json.dumps(protocol) + ' && owner.SocketCurrentContext(ctx) == nil {\n'
+                '\t\t\tsnapshot, snapshotErr := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)\n'
+                '\t\t\tif snapshotErr == nil && ctx.Err() == nil && !snapshot.Closed && snapshot.Target.Validate() == nil && snapshot.Capture == owner.brokerCapture() && snapshot.Owner.Kind == "windows-isolated-token" {\n'
+                '\t\t\t\tprintln(' + json.dumps(handshake_witness(protocol)) + ')\n\t\t\t}\n\t\t}\n')
+    return (*selected[:4], raw.replace(boundary, boundary + observer))
 
 
 def observed_control_sources(source, mutation):
