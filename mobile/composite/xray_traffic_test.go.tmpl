@@ -393,20 +393,133 @@ func launchCompositeXray(binary, directory string, server map[string]any, reserv
 	return nil, 0, errors.New("owned Xray fixture exhausted bounded bind attempts")
 }
 
+// The live-child ownership control needs UDP on the same numeric port as its
+// foreign TCP listener. A TCP-only allocation cannot see an occupied UDP port.
+// Keep both reservations until the handoff, and retry only a real UDP collision.
+func compositeXrayFixturePort(needUDP bool, listenTCP func(string, string) (net.Listener, error)) (net.Listener, net.PacketConn, error) {
+	var last error
+	for attempt := 0; attempt < 3; attempt++ {
+		listener, err := listenTCP("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, nil, err
+		}
+		if !needUDP {
+			return listener, nil, nil
+		}
+		packet, err := net.ListenPacket("udp", listener.Addr().String())
+		if err == nil {
+			return listener, packet, nil
+		}
+		if closeErr := listener.Close(); closeErr != nil {
+			return nil, nil, errors.Join(err, closeErr)
+		}
+		collision := errors.Is(err, syscall.EADDRINUSE)
+		if goruntime.GOOS == "windows" {
+			collision = errors.Is(err, syscall.Errno(10048))
+		}
+		if !collision {
+			return nil, nil, err
+		}
+		last = err
+	}
+	return nil, nil, fmt.Errorf("owned Xray fixture exhausted three paired TCP/UDP reservations: %w", last)
+}
+
+func TestCompositeXrayFixturePortKeepsForeignUDPAndBoundsSelection(t *testing.T) {
+	for _, occupied := range []int{1, 3} {
+		t.Run(fmt.Sprintf("occupied-%d", occupied), func(t *testing.T) {
+			var candidates []net.Listener
+			var foreign []net.PacketConn
+			listener, packet, err := compositeXrayFixturePort(true, func(network, address string) (net.Listener, error) {
+				tcp, err := net.Listen(network, address)
+				if err != nil {
+					return nil, err
+				}
+				candidates = append(candidates, tcp)
+				t.Cleanup(func() { _ = tcp.Close() })
+				if len(candidates) <= occupied {
+					udp, err := net.ListenPacket("udp", tcp.Addr().String())
+					if err != nil {
+						_ = tcp.Close()
+						return nil, err
+					}
+					foreign = append(foreign, udp)
+					t.Cleanup(func() { _ = udp.Close() })
+				}
+				return tcp, nil
+			})
+			if listener != nil {
+				defer listener.Close()
+			}
+			if packet != nil {
+				defer packet.Close()
+			}
+			if occupied == 1 {
+				if err != nil || listener == nil || packet == nil || len(candidates) < 2 || len(candidates) > 3 || listener.Addr().String() != packet.LocalAddr().String() {
+					t.Fatal("fixture did not retain a fresh exact TCP/UDP pair", len(candidates), err)
+				}
+				other, bindErr := net.ListenPacket("udp", packet.LocalAddr().String())
+				if other != nil {
+					_ = other.Close()
+				}
+				if bindErr == nil {
+					t.Fatal("fixture released its UDP reservation before handoff")
+				}
+			} else if err == nil || listener != nil || packet != nil || len(candidates) != 3 {
+				t.Fatal("fixture retried beyond its three owned reservations", len(candidates), err)
+			}
+			for _, udp := range foreign {
+				if err := udp.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+					t.Fatal("fixture changed the unrelated UDP owner", err)
+				}
+			}
+			for _, candidate := range candidates {
+				if candidate == listener {
+					continue
+				}
+				if err := candidate.Close(); !errors.Is(err, net.ErrClosed) {
+					t.Fatal("fixture retained its failed TCP reservation", err)
+				}
+			}
+		})
+	}
+}
+
 func TestCompositeXrayFixtureRetriesOnlyOwnedBindCollision(t *testing.T) {
 	binary := os.Getenv("ROUTER_VPN_XRAY_TEST_BINARY")
 	if binary == "" {
 		t.Fatal("exact pinned Xray server binary required for startup ownership regression")
 	}
-	for _, scenario := range []string{"foreign-listener", "configuration-failure", "live-child-with-foreign-tcp"} {
+	for _, scenario := range []string{"foreign-listener", "configuration-failure", "live-child-with-foreign-tcp", "live-child-after-occupied-udp"} {
 		t.Run(scenario, func(t *testing.T) {
 			invalid := scenario == "configuration-failure"
-			wrongTransport := scenario == "live-child-with-foreign-tcp"
-			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			wrongTransport := strings.HasPrefix(scenario, "live-child-")
+			allocations := 0
+			listener, packet, err := compositeXrayFixturePort(wrongTransport, func(network, address string) (net.Listener, error) {
+				tcp, err := net.Listen(network, address)
+				if err != nil {
+					return nil, err
+				}
+				allocations++
+				if scenario == "live-child-after-occupied-udp" && allocations == 1 {
+					foreignUDP, err := net.ListenPacket("udp", tcp.Addr().String())
+					if err != nil {
+						_ = tcp.Close()
+						return nil, err
+					}
+					t.Cleanup(func() { _ = foreignUDP.Close() })
+				}
+				return tcp, nil
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer listener.Close()
+			defer func() {
+				if packet != nil {
+					_ = packet.Close()
+				}
+			}()
 			originalAddress := listener.Addr().String()
 			originalPort := listener.Addr().(*net.TCPAddr).Port
 			protocol := "socks"
@@ -439,6 +552,14 @@ func TestCompositeXrayFixtureRetriesOnlyOwnedBindCollision(t *testing.T) {
 				foreign, bindErr = net.Listen("tcp", address)
 				if bindErr == nil {
 					t.Cleanup(func() { _ = foreign.Close() })
+					if packet != nil {
+						// The captured foreign TCP listener is now held. Release
+						// only our UDP reservation immediately before child start.
+						if err := packet.Close(); err != nil {
+							return err
+						}
+						packet = nil
+					}
 				}
 				return bindErr
 			})
@@ -457,6 +578,9 @@ func TestCompositeXrayFixtureRetriesOnlyOwnedBindCollision(t *testing.T) {
 					diagnostic, readErr := os.ReadFile(filepath.Join(directory, "owned-server-0.log"))
 					if readErr != nil || !strings.Contains(string(diagnostic), "listening UDP on "+originalAddress) || !strings.Contains(string(diagnostic), " started\n") || !strings.Contains(err.Error(), "did not publish") {
 						t.Fatal("foreign-listener regression did not retain a live non-TCP child until readiness rejection", err, readErr, string(diagnostic))
+					}
+					if scenario == "live-child-after-occupied-udp" && (allocations < 2 || allocations > 3) {
+						t.Fatal("live child control did not replace only bounded occupied UDP candidates", allocations)
 					}
 				}
 			} else {
