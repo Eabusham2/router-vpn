@@ -34,6 +34,15 @@ ARCHIVES = {
     ('Linux', 'arm64'): ('llvm-mingw-20261006-ucrt-ubuntu-22.04-aarch64.tar.xz', 78002292,
                         'e77c4acfa44184f6b0c52b814d724ad63b2ecebb3c3f6f842c0846e717cbd23c'),
 }
+# These public GitHub asset identities refer to the same exact archives above.
+# A gateway failure may use the official binary API route; size/digest and
+# extraction/compiler checks remain the acceptance authority on either route.
+ASSET_IDS = {
+    'llvm-mingw-20261006-ucrt-x86_64.zip': 618062564,
+    'llvm-mingw-20261006-ucrt-aarch64.zip': 618062371,
+    'llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64.tar.xz': 618062377,
+    'llvm-mingw-20261006-ucrt-ubuntu-22.04-aarch64.tar.xz': 618062372,
+}
 MAX_FILES, MAX_EXPANDED, MAX_MEMBER = 60000, 3 << 30, 512 << 20
 
 
@@ -148,9 +157,10 @@ def check_compilers(directory, system):
             raise ValueError('Installed LLVM-MinGW compiler version changed')
 
 
-def open_archive(request, deadline):
+def open_archive(request, deadline, fallback=None):
     """Retry only transient gateway replies, within the original download clock.
 
+    The optional official API route shares the same three attempts and clock.
     No body/file is opened until a successful response. Transport exceptions,
     cancellation, permanent HTTP errors and later integrity failures propagate.
     """
@@ -169,6 +179,8 @@ def open_archive(request, deadline):
             if remaining <= delay:
                 raise TimeoutError('Pinned compiler download exhausted its original retry budget') from error
             time.sleep(delay)
+            if fallback is not None:
+                request = fallback
             continue
         if time.monotonic() >= deadline:
             response.close()
@@ -209,7 +221,12 @@ def install(output, host_arch=None):
         deadline = time.monotonic()+600
         url = 'https://github.com/mstorsjo/llvm-mingw/releases/download/'+RELEASE+'/'+filename
         request = urllib.request.Request(url, headers={'User-Agent': 'RouterVPN-pinned-native-build'})
-        with open_archive(request, deadline) as response, archive.open('xb') as target:
+        asset_id = ASSET_IDS.get(filename)
+        fallback = urllib.request.Request(
+            'https://api.github.com/repos/mstorsjo/llvm-mingw/releases/assets/'+str(asset_id),
+            headers={'User-Agent': 'RouterVPN-pinned-native-build', 'Accept': 'application/octet-stream'},
+        ) if asset_id is not None else None
+        with open_archive(request, deadline, fallback) as response, archive.open('xb') as target:
             if not response.geturl().startswith('https://'):
                 raise ValueError('Compiler download must remain on HTTPS')
             while True:

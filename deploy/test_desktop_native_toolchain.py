@@ -1355,6 +1355,137 @@ def zip_bytes(prefix, entries=None):
 
 
 class VerifiedWindowsInstaller(unittest.TestCase):
+    def test_gateway_uses_official_binary_api_for_same_verified_pin(self):
+        prefix = 'llvm-mingw-fixture'
+        raw = zip_bytes(prefix)
+        digest = hashlib.sha256(raw).hexdigest()
+        for code in (502, 503, 504):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp)/'installed'
+                body = io.BytesIO(b'gateway response is not an archive')
+                failure = W.urllib.error.HTTPError('https://github.com/pinned', code, 'gateway', {}, body)
+                with patch.object(W.platform, 'system', return_value='Windows'), \
+                     patch.object(W.platform, 'machine', return_value='AMD64'), \
+                     patch.dict(W.ARCHIVES, {('Windows', 'amd64'): (prefix+'.zip', len(raw), digest)}), \
+                     patch.dict(W.ASSET_IDS, {prefix+'.zip': 123456}), \
+                     patch.object(W.urllib.request, 'urlopen', side_effect=[failure, Response(raw)]) as download, \
+                     patch.object(W.time, 'sleep') as sleep, \
+                     patch.object(W.subprocess, 'check_output', return_value=W.CLANG+' (fixture)') as compiler:
+                    self.assertEqual(W.install(output), output/'bin')
+                    self.assertTrue(body.closed)
+                    self.assertEqual(download.call_count, 2)
+                    first, second = download.call_args_list
+                    self.assertEqual(first.args[0].full_url, 'https://github.com/mstorsjo/llvm-mingw/releases/download/'+W.RELEASE+'/'+prefix+'.zip')
+                    self.assertEqual(second.args[0].full_url, 'https://api.github.com/repos/mstorsjo/llvm-mingw/releases/assets/123456')
+                    self.assertEqual(second.args[0].get_header('Accept'), 'application/octet-stream')
+                    self.assertEqual(set(key.lower() for key, _ in second.args[0].header_items()), {'accept', 'user-agent'})
+                    self.assertEqual(first.kwargs['timeout'], 60)
+                    self.assertEqual(second.kwargs['timeout'], 60)
+                    sleep.assert_called_once_with(1)
+                    self.assertEqual(compiler.call_count, 2)
+                    receipt = json.loads((output/'INSTALL.json').read_text())
+                    self.assertEqual(receipt['archive'], prefix+'.zip')
+                    self.assertEqual(receipt['sha256'], digest)
+                    self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ['installed'])
+
+    def test_official_api_fallback_keeps_original_attempt_count(self):
+        primary = W.urllib.request.Request('https://github.com/pinned')
+        api = W.urllib.request.Request('https://api.github.com/pinned', headers={'Accept': 'application/octet-stream'})
+        errors = [W.urllib.error.HTTPError('https://pinned', code, 'gateway', {}, io.BytesIO()) for code in (504, 503, 502)]
+        with patch.object(W.time, 'monotonic', return_value=10), \
+             patch.object(W.urllib.request, 'urlopen', side_effect=errors) as download, \
+             patch.object(W.time, 'sleep') as sleep:
+            with self.assertRaises(W.urllib.error.HTTPError) as caught:
+                W.open_archive(primary, 610, api)
+            self.assertIs(caught.exception, errors[-1])
+            self.assertEqual([call.args[0] for call in download.call_args_list], [primary, api, api])
+            self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2])
+            self.assertTrue(all(error.fp.closed for error in errors))
+
+    def test_official_api_fallback_does_not_retry_permanent_or_transport_errors(self):
+        primary = W.urllib.request.Request('https://github.com/pinned')
+        api = W.urllib.request.Request('https://api.github.com/pinned')
+        failures = [W.urllib.error.HTTPError(api.full_url, code, 'permanent', {}, io.BytesIO()) for code in (400, 401, 403, 404, 429, 500)]
+        failures += [W.urllib.error.URLError('original transport'), TimeoutError('original socket'), KeyboardInterrupt()]
+        for failure in failures:
+            with self.subTest(failure=repr(failure)):
+                gateway = W.urllib.error.HTTPError(primary.full_url, 504, 'gateway', {}, io.BytesIO())
+                with patch.object(W.urllib.request, 'urlopen', side_effect=[gateway, failure]) as download, \
+                     patch.object(W.time, 'sleep') as sleep:
+                    with self.assertRaises(type(failure)) as caught:
+                        W.open_archive(primary, W.time.monotonic()+600, api)
+                    self.assertIs(caught.exception, failure)
+                    self.assertEqual([call.args[0] for call in download.call_args_list], [primary, api])
+                    sleep.assert_called_once_with(1)
+                    self.assertTrue(gateway.fp.closed)
+                    if isinstance(failure, W.urllib.error.HTTPError):
+                        self.assertTrue(failure.fp.closed)
+
+    def test_official_api_fallback_never_accepts_unverified_body(self):
+        prefix = 'llvm-mingw-fixture'
+        raw = zip_bytes(prefix)
+        for fault in ('long', 'short', 'hash', 'http', 'metadata', 'partial'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as tmp:
+                size = len(raw)+(1 if fault == 'short' else -1 if fault == 'long' else 0)
+                digest = '0'*64 if fault == 'hash' else hashlib.sha256(raw).hexdigest()
+                response = Response(b'{"name":"not an archive"}' if fault == 'metadata' else raw,
+                                    'http://invalid' if fault == 'http' else 'https://release-assets.githubusercontent.com/pinned')
+                failure = W.urllib.error.HTTPError('https://github.com/pinned', 504, 'gateway', {}, io.BytesIO())
+                original_read = response.read
+                reads = [0]
+                def read(size):
+                    reads[0] += 1
+                    if fault == 'partial' and reads[0] == 2:
+                        raise W.urllib.error.URLError('partial API body')
+                    return original_read(size)
+                with patch.object(W.platform, 'system', return_value='Windows'), \
+                     patch.object(W.platform, 'machine', return_value='AMD64'), \
+                     patch.dict(W.ARCHIVES, {('Windows', 'amd64'): (prefix+'.zip', size, digest)}), \
+                     patch.dict(W.ASSET_IDS, {prefix+'.zip': 123456}), \
+                     patch.object(W.urllib.request, 'urlopen', side_effect=[failure, response]) as download, \
+                     patch.object(response, 'read', side_effect=read), patch.object(W.time, 'sleep'), \
+                     patch.object(W, 'extract') as extract, patch.object(W, 'check_compilers') as check:
+                    with self.assertRaises(W.urllib.error.URLError if fault == 'partial' else ValueError):
+                        W.install(Path(tmp)/'out')
+                    self.assertEqual(download.call_count, 2)
+                    self.assertEqual(download.call_args_list[-1].args[0].full_url,
+                                     'https://api.github.com/repos/mstorsjo/llvm-mingw/releases/assets/123456')
+                    self.assertTrue(response.closed)
+                    self.assertEqual(list(Path(tmp).iterdir()), [])
+                    extract.assert_not_called()
+                    check.assert_not_called()
+
+    def test_official_api_fallback_keeps_the_original_absolute_deadline(self):
+        primary = W.urllib.request.Request('https://github.com/pinned')
+        api = W.urllib.request.Request('https://api.github.com/pinned')
+        for expires in (False, True):
+            with self.subTest(expires=expires):
+                clock = [0.0]
+                response = Response(b'pinned')
+                failure = W.urllib.error.HTTPError(primary.full_url, 504, 'gateway', {}, io.BytesIO())
+                calls = []
+                def opened(request, timeout):
+                    calls.append((request, timeout))
+                    if len(calls) == 1:
+                        clock[0] = 598
+                        raise failure
+                    if expires:
+                        clock[0] = 600
+                    return response
+                def sleep(delay):
+                    clock[0] += delay
+                with patch.object(W.time, 'monotonic', side_effect=lambda: clock[0]), \
+                     patch.object(W.time, 'sleep', side_effect=sleep), \
+                     patch.object(W.urllib.request, 'urlopen', side_effect=opened):
+                    if expires:
+                        with self.assertRaises(TimeoutError):
+                            W.open_archive(primary, 600, api)
+                        self.assertTrue(response.closed)
+                    else:
+                        self.assertIs(W.open_archive(primary, 600, api), response)
+                    self.assertEqual(calls, [(primary, 60), (api, 1)])
+                    response.close()
+
     def test_gateway_retry_installs_only_original_verified_archive(self):
         prefix = 'llvm-mingw-fixture'
         raw = zip_bytes(prefix)
@@ -1487,6 +1618,13 @@ class VerifiedWindowsInstaller(unittest.TestCase):
     def test_official_pin_covers_all_supported_host_architectures(self):
         self.assertEqual(W.RELEASE, '20261006')
         self.assertEqual(set(W.ARCHIVES), {(s,a) for s in ('Windows','Linux') for a in ('amd64','arm64')})
+        self.assertEqual(W.ASSET_IDS, {
+            'llvm-mingw-20261006-ucrt-x86_64.zip': 618062564,
+            'llvm-mingw-20261006-ucrt-aarch64.zip': 618062371,
+            'llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64.tar.xz': 618062377,
+            'llvm-mingw-20261006-ucrt-ubuntu-22.04-aarch64.tar.xz': 618062372,
+        })
+        self.assertEqual(set(W.ASSET_IDS), {row[0] for row in W.ARCHIVES.values()})
         for (system, arch), (name, size, digest) in W.ARCHIVES.items():
             self.assertTrue(name.startswith('llvm-mingw-'+W.RELEASE+'-ucrt-'))
             self.assertTrue(name.endswith('.zip' if system == 'Windows' else '.tar.xz'))
