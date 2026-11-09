@@ -108,6 +108,16 @@ type desktopTorPrelaunchFailure struct {
 }
 
 func (owner *desktopTorRuntime) currentNetworkIdentity() string {
+	if owner != nil && owner.networkIdentityContext != nil {
+		// Live proof checks outlast the connection request, but must retain its
+		// captured observer. A failed observation cannot borrow the ambient
+		// network or a different legacy observer to keep this path connected.
+		value, err := owner.currentNetworkIdentityContext(context.Background())
+		if err != nil {
+			return ""
+		}
+		return value
+	}
 	if owner != nil && owner.networkIdentity != nil {
 		return owner.networkIdentity()
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -52,6 +53,16 @@ func safeExecutable(name string) (string, error) {
 }
 
 func desktopTorExecutable(root string) (string, error) {
+	return desktopTorExecutableContext(context.Background(), root)
+}
+
+func desktopTorExecutableContext(ctx context.Context, root string) (string, error) {
+	if ctx == nil {
+		return "", errors.New("Tor executable discovery has no original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	var path string
 	var err error
 	switch runtime.GOOS {
@@ -59,7 +70,7 @@ func desktopTorExecutable(root string) (string, error) {
 		if _, err = windowsTorHostCompatibility(); err != nil {
 			return "", err
 		}
-		path, err = windowsTorRuntimeExecutable(root, "tor.exe")
+		path, err = windowsTorRuntimeExecutableContext(ctx, root, "tor.exe")
 	case "linux", "darwin":
 		path, err = safeExecutable("tor")
 	default:
@@ -78,7 +89,8 @@ func desktopTorExecutable(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return safePinnedRuntimeExecutable(path, "captured standalone Tor")
+	path, err = safePinnedRuntimeExecutable(path, "captured standalone Tor")
+	return path, errors.Join(err, ctx.Err())
 }
 
 func torBridgeRuntimeCapabilityForRoot(root string) standardExitCapability {
@@ -86,18 +98,26 @@ func torBridgeRuntimeCapabilityForRoot(root string) standardExitCapability {
 }
 
 func torBridgeRuntimeCapabilityForExecution(root, execution string) standardExitCapability {
+	return torBridgeRuntimeCapabilityForExecutionContext(context.Background(), root, execution)
+}
+
+func torBridgeRuntimeCapabilityForExecutionContext(ctx context.Context, root, execution string) standardExitCapability {
 	cap := standardExitCapability{Protocol: "tor-bridge", Implemented: true}
+	if ctx == nil || ctx.Err() != nil {
+		cap.Reason = "Tor capability verification has no live original caller"
+		return cap
+	}
 	if desktopTorExecution(execution) == "" || runtime.GOOS != "windows" && runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		cap.Reason = "Tor requires a supported native desktop execution owner"
 		return cap
 	}
 	if execution != "server" {
-		if _, err := desktopTorExecutable(root); err != nil {
+		if _, err := desktopTorExecutableContext(ctx, root); err != nil {
 			cap.Reason = err.Error()
 			return cap
 		}
 	}
-	if _, err := verifyBundledNative(desktopAmneziaPackageRoot()); err != nil {
+	if _, err := verifyBundledNativeContext(ctx, desktopAmneziaPackageRoot()); err != nil {
 		cap.Reason = "the verified Router VPN native engine is required for Tor transports: " + err.Error()
 		return cap
 	}
@@ -106,7 +126,11 @@ func torBridgeRuntimeCapabilityForExecution(root, execution string) standardExit
 }
 
 func desktopTorPolicyRuntimeCapability(policy common.RouterProfile) standardExitCapability {
-	return torBridgeRuntimeCapabilityForExecution(filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client")), policy.MultihopExecution)
+	return desktopTorPolicyRuntimeCapabilityContext(context.Background(), policy)
+}
+
+func desktopTorPolicyRuntimeCapabilityContext(ctx context.Context, policy common.RouterProfile) standardExitCapability {
+	return torBridgeRuntimeCapabilityForExecutionContext(ctx, filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client")), policy.MultihopExecution)
 }
 
 func torBridgeRuntimeCapability() standardExitCapability {

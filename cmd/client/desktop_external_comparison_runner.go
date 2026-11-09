@@ -15,18 +15,19 @@ import (
 // The source cohort, Speed Lab transaction, native mailbox, restoration capture,
 // selection commit and history writers below are the shipping composition.
 type desktopExternalComparisonRuntime struct {
-	prepare func(speedLabRequest) (*speedLabExternalPreparation, error)
-	start   func(speedLabRequest) (speedLabPath, error)
-	stop    func(bool) error
-	restart func(speedLabRestorePlan) error
-	network func(context.Context, *app, speedLabPathIdentity) (desktopExternalComparisonNetwork, error)
+	prepare        func(speedLabRequest) (*speedLabExternalPreparation, error)
+	start          func(speedLabRequest) (speedLabPath, error)
+	stop           func(bool) error
+	restart        func(speedLabRestorePlan) error
+	restartContext func(context.Context, speedLabRestorePlan) error
+	network        func(context.Context, *app, speedLabPathIdentity) (desktopExternalComparisonNetwork, error)
 }
 
 func (a *app) desktopComparisonRuntime() desktopExternalComparisonRuntime {
 	return desktopExternalComparisonRuntime{prepare: func(q speedLabRequest) (*speedLabExternalPreparation, error) {
 		return a.prepareSpeedLabExternalPath(q, nil)
 	},
-		start: a.startSpeedLabExternalPath, stop: a.speedLabStopRuntime, restart: a.speedLabRestartPlan, network: openDesktopExternalComparisonNetwork}
+		start: a.startSpeedLabExternalPath, stop: a.speedLabStopRuntime, restartContext: a.speedLabRestartPlanContext, network: openDesktopExternalComparisonNetwork}
 }
 
 type desktopComparisonCheckpoint struct {
@@ -92,7 +93,7 @@ func (operation *desktopExternalComparisonOperation) finish(ctx context.Context,
 }
 
 func (a *app) runDesktopExternalComparisonWith(ctx context.Context, operation *desktopExternalComparisonOperation, runtime desktopExternalComparisonRuntime) (failure error) {
-	if ctx == nil || ctx.Err() != nil || operation == nil || runtime.prepare == nil || runtime.start == nil || runtime.stop == nil || runtime.restart == nil || runtime.network == nil {
+	if ctx == nil || ctx.Err() != nil || operation == nil || runtime.prepare == nil || runtime.start == nil || runtime.stop == nil || runtime.restart == nil && runtime.restartContext == nil || runtime.network == nil {
 		return errors.New("external comparison has no complete owned runtime")
 	}
 	finishRun, err := beginSpeedLabRun(a)
@@ -488,7 +489,7 @@ func (t *desktopComparisonTransaction) restore() error {
 	_ = t.network.BeforeTransition(owner.intent, before)
 	var next desktopComparisonCheckpoint
 	var nextPlan speedLabRestorePlan
-	actions := speedLabRestoreActions{stop: t.runtime.stop, restart: t.runtime.restart, persist: t.store.write, network: physicalNetworkIdentity,
+	actions := speedLabRestoreActions{stop: t.runtime.stop, restart: t.runtime.restart, restartContext: t.runtime.restartContext, persist: t.store.write, network: physicalNetworkIdentity,
 		restored: func(command *exec.Cmd, st state) error {
 			if err := a.speedLabCheckOwner(owner); err != nil {
 				return err

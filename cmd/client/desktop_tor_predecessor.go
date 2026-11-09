@@ -41,7 +41,7 @@ func desktopNodeAssetsIdentity(mode string, files, start map[string][]byte) (str
 // Both preparation and native reconstruction validate the complete selected
 // graph. Saved credentials, endpoints, mode files and MTU history stay intact.
 func compileDesktopTorPredecessor(ctx context.Context, entry common.RouterProfile, mode string, files, start map[string][]byte, lookup applexray.Lookup) (*desktopTorPredecessorCapture, error) {
-	if entry.ID == "" || entry.External != nil || entry.NodeKind != "" && entry.NodeKind != "router-vpn" {
+	if ctx == nil || ctx.Err() != nil || entry.ID == "" || entry.External != nil || entry.NodeKind != "" && entry.NodeKind != "router-vpn" {
 		return nil, errors.New("desktop Tor Local entry requires its private Router node")
 	}
 	entry = cloneRouterProfile(entry)
@@ -64,10 +64,24 @@ func compileDesktopTorPredecessor(ctx context.Context, entry common.RouterProfil
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return &desktopTorPredecessorCapture{entry: entry, profileToken: desktopTorSourceIdentityToken(entry), assetsSHA256: assets, mode: mode, endpoint: endpoint, native: native}, nil
 }
 
 func captureDesktopTorPredecessor(a *app, profile common.RouterProfile, lookup applexray.Lookup) (*desktopTorPredecessorCapture, error) {
+	ctx := context.Background()
+	if a != nil {
+		ctx = a.connectionOperationContextOrBackground()
+	}
+	return captureDesktopTorPredecessorContext(ctx, a, profile, lookup)
+}
+
+func captureDesktopTorPredecessorContext(ctx context.Context, a *app, profile common.RouterProfile, lookup applexray.Lookup) (*desktopTorPredecessorCapture, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return nil, errors.New("Tor predecessor has no live original caller")
+	}
 	if !profile.MultihopEnabled {
 		return nil, nil
 	}
@@ -77,7 +91,9 @@ func captureDesktopTorPredecessor(a *app, profile common.RouterProfile, lookup a
 	if desktopTorExecution(profile.MultihopExecution) == "" {
 		return nil, errors.New("desktop Tor Compare requires its distinct measured candidate paths; the saved choice cannot be replaced by Local")
 	}
-	a.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
 	entry, found := a.profileByIDLocked(profile.MultihopEntryID)
 	entry = cloneRouterProfile(entry)
 	a.mu.Unlock()
@@ -92,11 +108,11 @@ func captureDesktopTorPredecessor(a *app, profile common.RouterProfile, lookup a
 		if profile.MultihopExecution == "server" {
 			return nil, errors.New("Tor Server requires a private Router entry; an ordinary public-address proof cannot authorize a server lease")
 		}
-		captured, err := compileDesktopTorExternalPredecessor(a.connectionOperationContextOrBackground(), entry, profile, mode, lookup)
+		captured, err := compileDesktopTorExternalPredecessor(ctx, entry, profile, mode, lookup)
 		if err != nil {
 			return nil, err
 		}
-		if err = captured.current(a); err != nil {
+		if err = captured.currentContext(ctx, a); err != nil {
 			return nil, err
 		}
 		return captured, nil
@@ -106,6 +122,9 @@ func captureDesktopTorPredecessor(a *app, profile common.RouterProfile, lookup a
 		return nil, err
 	}
 	defer eraseDesktopTorAssets(files)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var start map[string][]byte
 	if entry.StartLayer != "" && entry.StartLayer != "off" && !mobilemultihop.MAXMode(mode) && mode != "shadowsocks" {
 		start, err = readDesktopNodeAssets(clientRoot(a), entry.ID, "shadowsocks")
@@ -114,11 +133,11 @@ func captureDesktopTorPredecessor(a *app, profile common.RouterProfile, lookup a
 		}
 		defer eraseDesktopTorAssets(start)
 	}
-	captured, err := compileDesktopTorPredecessor(a.connectionOperationContextOrBackground(), entry, mode, files, start, lookup)
+	captured, err := compileDesktopTorPredecessor(ctx, entry, mode, files, start, lookup)
 	if err != nil {
 		return nil, err
 	}
-	if err := captured.current(a); err != nil {
+	if err := captured.currentContext(ctx, a); err != nil {
 		return nil, err
 	}
 	return captured, nil

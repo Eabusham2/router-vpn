@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 )
 
 func (a *app) torBridgeStopFailure(cmd *exec.Cmd, cause string) (string, bool) {
@@ -32,12 +33,13 @@ func (a *app) torBridgeConnect(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) torBridgeConnectWithRuntime(w http.ResponseWriter, r *http.Request, driver desktopTorConnectRuntime) {
 	driver.requestContext = r.Context()
-	_, finish, guardErr := a.beginConnectionOperation()
+	operation, finish, guardErr := a.beginConnectionOperationContext(r.Context())
 	if guardErr != nil {
 		http.Error(w, guardErr.Error(), http.StatusConflict)
 		return
 	}
 	defer finish()
+	driver.operation = operation
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -52,7 +54,10 @@ func (a *app) torBridgeConnectWithRuntime(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Tor bridge connect requires an explicit valid profile_id", http.StatusBadRequest)
 		return
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(operation, &a.mu); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	profile, ok := a.profileByIDLocked(profileID)
 	profile = cloneRouterProfile(profile)
 	expectationErr := a.validateExternalProfileExpectedProfilesLocked(q, profile)
@@ -79,22 +84,26 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 }
 
 func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile common.RouterProfile, q externalProfileConnectRequest, startup *startupPolicyCapture, driver desktopTorConnectRuntime) {
-	if err := a.guardDesktopOwnedNodeTransition(nil); err != nil {
+	caller, err := captureDesktopTorCaller(a, driver.operation, driver.requestContext)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	defer caller.finish()
+	ctx, operation, selected := caller.work, caller.operation, caller.selected
+	driver.operation = operation
+	if err := a.guardDesktopOwnedNodeTransitionContext(ctx, nil); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	if startup != nil {
-		if err := startup.current(a); err != nil {
+		if err := startup.currentContext(ctx, a); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
 	}
-	a.mu.Lock()
-	operation, selected := a.connectionContext, a.profiles.SelectedID
-	operationErr := desktopTorOperationCurrentLocked(a, operation, selected)
-	a.mu.Unlock()
-	if operationErr != nil {
-		http.Error(w, operationErr.Error(), http.StatusConflict)
+	if err := caller.currentContext(ctx, a); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	lookup := driver.lookup
@@ -119,14 +128,19 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		}
 		capturedRequest.Execution = driver.startupExecution
 	}
-	selection, err := captureDesktopTorSelection(a, profile, capturedRequest, lookup)
+	selection, err := captureDesktopTorSelectionContext(ctx, a, profile, capturedRequest, lookup)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	selection.preference = execution
+	selection.adoption = caller.intent
+	if err := caller.currentContext(ctx, a); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if driver.capability == nil {
-		driver.capability = func() standardExitCapability { return desktopTorPolicyRuntimeCapability(selection.policy) }
+		driver.capability = func() standardExitCapability { return desktopTorPolicyRuntimeCapabilityContext(ctx, selection.policy) }
 	}
 	cap := driver.capability()
 	if !cap.Supported {
@@ -134,31 +148,30 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		return
 	}
 	policy := selection.policy
-	cmd, prelaunch, err := prepareTorBridgeCommandWithRuntime(a, policy, profile, selection.predecessor, driver)
+	cmd, prelaunch, err := prepareTorBridgeCommandWithRuntimeContext(ctx, a, policy, profile, selection.predecessor, driver)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	check := func() error {
-		if err := a.checkConnectionOperation(); err != nil {
+		if err := caller.currentContext(ctx, a); err != nil {
 			return err
 		}
-		a.mu.Lock()
-		operationErr := desktopTorOperationCurrentLocked(a, operation, selected)
+		if err := selection.currentContext(ctx, a); err != nil {
+			return err
+		}
+		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+			return err
+		}
+		expectedErr := a.validateExternalProfileExpectedProfilesLocked(q, profile)
 		a.mu.Unlock()
-		if operationErr != nil {
-			return operationErr
-		}
-		if err := selection.current(a); err != nil {
-			return err
-		}
-		if err := a.validateExternalProfileExpectedProfiles(q, profile); err != nil {
-			return err
+		if expectedErr != nil {
+			return expectedErr
 		}
 		if startup != nil {
-			return startup.current(a)
+			return startup.currentContext(ctx, a)
 		}
-		return nil
+		return ctx.Err()
 	}
 	if err := check(); err != nil {
 		failure := errors.Join(err, prelaunch.cleanup())
@@ -178,7 +191,7 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		http.Error(w, failure.Error(), http.StatusInternalServerError)
 		return
 	}
-	err = prelaunch.startContext(operation, check)
+	err = prelaunch.startContext(ctx, check)
 	if err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		status := http.StatusInternalServerError
@@ -215,7 +228,7 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		a.state.Phase = profile.External.Protocol + ":proving-exit"
 	}
 	a.mu.Unlock()
-	actualIP, proofErr := a.proveTorBridgeExit()
+	actualIP, proofErr := a.proveTorBridgeExitContext(ctx, prelaunch.workspace)
 	if cancelErr := check(); cancelErr != nil {
 		message, cleanupFailed := a.torBridgeStopFailure(cmd, cancelErr.Error())
 		sessionTrackerFor(a).markRequestFailure(message)
@@ -247,7 +260,7 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		return
 	}
 
-	retainedProof, retainedErr := a.readDesktopTorProof(prelaunch.workspace)
+	retainedProof, retainedErr := a.readDesktopTorProofContext(ctx, prelaunch.workspace)
 	if retainedErr == nil {
 		retainedErr = check()
 	}

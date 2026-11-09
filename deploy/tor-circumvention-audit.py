@@ -409,7 +409,7 @@ need(
     "torBridgeRuntimeCapabilityForRoot",
     'case "windows":',
     'windowsTorHostCompatibility()',
-    'windowsTorRuntimeExecutable(root, "tor.exe")',
+    'windowsTorRuntimeExecutableContext(ctx, root, "tor.exe")',
     "verifyBundledNative",
     "filepath.EvalSymlinks",
 )

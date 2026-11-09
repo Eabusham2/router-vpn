@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/routechoice"
 )
 
@@ -20,6 +21,19 @@ type speedLabTorComparisonPreparation struct {
 // configuration remain intact. A missing native candidate receives no score;
 // if neither can be prepared, no live connection has to be disturbed.
 func (a *app) prepareSpeedLabTorComparison(q speedLabRequest, profile common.RouterProfile, runtime desktopTorConnectRuntime) (_ *speedLabTorPreparation, failure error) {
+	caller, err := captureDesktopTorCaller(a, runtime.operation, runtime.requestContext)
+	if err != nil {
+		return nil, err
+	}
+	defer caller.finish()
+	runtime.operation = caller.operation
+	return a.prepareSpeedLabTorComparisonContext(caller.work, q, profile, runtime)
+}
+
+func (a *app) prepareSpeedLabTorComparisonContext(ctx context.Context, q speedLabRequest, profile common.RouterProfile, runtime desktopTorConnectRuntime) (_ *speedLabTorPreparation, failure error) {
+	if ctx == nil || ctx.Err() != nil || runtime.operation == nil {
+		return nil, errors.New("Tor Speed Lab comparison has no original caller and operation")
+	}
 	comparison := &speedLabTorComparisonPreparation{runtime: runtime,
 		paths: make(map[routechoice.Execution]*speedLabTorPreparation), failures: make(map[routechoice.Execution]error)}
 	var prepared *speedLabTorPreparation
@@ -31,9 +45,12 @@ func (a *app) prepareSpeedLabTorComparison(q speedLabRequest, profile common.Rou
 		}
 	}()
 	for _, execution := range []routechoice.Execution{routechoice.Local, routechoice.Server} {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		choice := q
 		choice.Execution = string(execution)
-		candidate, err := a.prepareSpeedLabTorPathWithRuntime(choice, profile, nil, runtime)
+		candidate, err := a.prepareSpeedLabTorPathWithRuntimeContext(ctx, choice, profile, nil, runtime)
 		if err != nil {
 			comparison.failures[execution] = err
 			continue
@@ -61,15 +78,23 @@ func (a *app) prepareSpeedLabTorComparison(q speedLabRequest, profile common.Rou
 	if prepared == nil {
 		return nil, errors.Join(errors.New("neither Tor Speed Lab candidate could be prepared"), comparison.failures[routechoice.Local], comparison.failures[routechoice.Server])
 	}
-	if err := prepared.current(a, false); err != nil {
+	if err := prepared.currentContext(ctx, a, false); err != nil {
 		return nil, err
 	}
 	return prepared, nil
 }
 
 func (a *app) startPreparedSpeedLabTorComparison(q speedLabRequest, profile common.RouterProfile, prepared *speedLabTorPreparation) (path speedLabPath, failure error) {
+	if prepared == nil {
+		return path, errors.New("Tor Speed Lab Compare has no original preparation")
+	}
+	caller, finish, err := desktopTorChoiceCaller(prepared.operation, prepared.intent)
+	if err != nil {
+		return path, err
+	}
+	defer finish()
 	comparison := prepared.comparison
-	if comparison == nil || prepared.temporary == nil || prepared.current(a, true) != nil {
+	if comparison == nil || prepared.temporary == nil || prepared.currentContext(caller, a, true) != nil {
 		return path, errors.New("Tor Speed Lab Compare lost its prepared temporary owner")
 	}
 	id, err := randomHex(16)
@@ -77,10 +102,10 @@ func (a *app) startPreparedSpeedLabTorComparison(q speedLabRequest, profile comm
 		return path, err
 	}
 	driver := &desktopTorComparisonDriver{app: a, profile: cloneRouterProfile(profile), request: cloneDesktopTorConnectRequest(prepared.request),
-		operation: prepared.operation, selected: profile.ID, network: prepared.temporary.network, readNetwork: physicalNetworkIdentityContext, runtime: comparison.runtime,
+		operation: prepared.operation, selected: profile.ID, network: prepared.temporary.network, readNetwork: prepared.prelaunch.workspace.tor.currentNetworkIdentityContext, runtime: comparison.runtime,
 		temporary: prepared.temporary, selections: make(map[routechoice.Execution]*desktopTorSelection),
 		prepared: make(map[routechoice.Execution]*speedLabTorPreparation), prepareFailures: comparison.failures}
-	ctx, cancel := context.WithTimeout(prepared.operation, 8*time.Minute)
+	ctx, cancel := context.WithTimeout(caller, 8*time.Minute)
 	defer cancel()
 	for _, execution := range []routechoice.Execution{routechoice.Local, routechoice.Server} {
 		driver.candidates = append(driver.candidates, routechoice.Candidate{Execution: execution, Transport: profile.External.Protocol,
@@ -142,7 +167,9 @@ func (a *app) startPreparedSpeedLabTorComparison(q speedLabRequest, profile comm
 		return path, errors.New("Tor Speed Lab final proof belongs to a cancelled or different execution")
 	}
 	launch := winner.prelaunch.workspace
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return path, err
+	}
 	if !a.speedLabOwnerCurrentLocked(prepared.temporary) || prepared.temporary.runtime != winner.command || a.cmd != winner.command ||
 		desktopTorOperationCurrentLocked(a, prepared.operation, profile.ID) != nil || winner.selection.currentLocked(a) != nil {
 		a.mu.Unlock()

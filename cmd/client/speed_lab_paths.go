@@ -436,7 +436,7 @@ func (a *app) speedLabWriteStore(store common.RouterProfileStore) error {
 }
 
 func (a *app) speedLabRestoreTemporary(snapshot speedLabTemporarySnapshot) error {
-	return a.speedLabRestoreWith(snapshot, speedLabRestoreActions{stop: a.speedLabStopRuntime, restart: a.speedLabRestartPlan, persist: a.speedLabWriteStore, network: physicalNetworkIdentity})
+	return a.speedLabRestoreWith(snapshot, speedLabRestoreActions{stop: a.speedLabStopRuntime, restartContext: a.speedLabRestartPlanContext, persist: a.speedLabWriteStore, network: physicalNetworkIdentity})
 }
 
 func speedLabProfileOverrides(profile common.RouterProfile, q speedLabRequest) common.RouterProfile {
@@ -460,11 +460,17 @@ func speedLabProfileOverrides(profile common.RouterProfile, q speedLabRequest) c
 }
 
 func (a *app) previewSpeedLabTemporaryProfile(nodeID string, q speedLabRequest) (common.RouterProfile, error) {
+	return a.previewSpeedLabTemporaryProfileContext(context.Background(), nodeID, q)
+}
+
+func (a *app) previewSpeedLabTemporaryProfileContext(ctx context.Context, nodeID string, q speedLabRequest) (common.RouterProfile, error) {
 	nodeID = strings.TrimSpace(nodeID)
 	if !validProfileID(nodeID) {
 		return common.RouterProfile{}, errors.New("temporary Speed Lab path requires a valid linked node id")
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return common.RouterProfile{}, err
+	}
 	profile, ok := a.profileByIDLocked(nodeID)
 	profile = cloneRouterProfile(profile)
 	a.mu.Unlock()
@@ -849,7 +855,20 @@ func (a *app) prepareSpeedLabExternalPathWithRuntime(q speedLabRequest, restored
 	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		return nil, errors.New("temporary external Speed Lab path requires the desktop external-node runtime on this platform")
 	}
-	external, err := a.previewSpeedLabTemporaryProfile(q.NodeID, q)
+	caller := torDriver.requestContext
+	if torDriver.operation != nil {
+		var finish context.CancelFunc
+		var err error
+		caller, finish, err = desktopTorChoiceCaller(torDriver.operation, caller)
+		if err != nil {
+			return nil, err
+		}
+		defer finish()
+	}
+	if caller == nil {
+		caller = context.Background()
+	}
+	external, err := a.previewSpeedLabTemporaryProfileContext(caller, q.NodeID, q)
 	if err != nil {
 		return nil, err
 	}

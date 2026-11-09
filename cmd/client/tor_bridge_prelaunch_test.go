@@ -15,7 +15,7 @@ import (
 )
 
 func TestTorBridgePrelaunchHistoricalMTUKeepsExactPolicyAndAdmissionGuards(t *testing.T) {
-	for _, changed := range []string{"none", "derived-history", "bridge-key", "dns-policy", "manual-mtu", "protection", "network", "replacement-command", "final-cancel"} {
+	for _, changed := range []string{"none", "derived-history", "bridge-key", "dns-policy", "manual-mtu", "protection", "network", "replacement-command", "final-cancel", "last-start-cancel"} {
 		t.Run(changed, func(t *testing.T) {
 			profile, _ := desktopTorPolicyFixture(t, func(profile *common.RouterProfile) {
 				profile.EffectiveMTU, profile.EffectiveMTUSource = 1350, "historical-fixture"
@@ -30,7 +30,7 @@ func TestTorBridgePrelaunchHistoricalMTUKeepsExactPolicyAndAdmissionGuards(t *te
 			}
 			launch := prepared.Launch
 			launch.tor.network = "captured-test-network"
-			launch.tor.networkIdentity = func() string { return "captured-test-network" }
+			launch.tor.networkIdentityContext = func(ctx context.Context) (string, error) { return "captured-test-network", ctx.Err() }
 			a := &app{cfg: common.ClientConfig{ProfilesFile: filepath.Join(root, "profiles.json")}, profiles: common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{common.CloneRouterProfile(profile)}}}
 			owner := desktopTorPreparedOwner(t, a, prepared)
 			owner.command = exec.Command(os.Args[0], "-test.run=^TestStartupExternalProcessFixture$")
@@ -64,7 +64,7 @@ func TestTorBridgePrelaunchHistoricalMTUKeepsExactPolicyAndAdmissionGuards(t *te
 			case "protection":
 				a.profiles.Profiles[0].KillSwitchPolicy += "-replacement"
 			case "network":
-				launch.tor.networkIdentity = func() string { return "replacement-network" }
+				launch.tor.networkIdentityContext = func(ctx context.Context) (string, error) { return "replacement-network", ctx.Err() }
 			case "replacement-command":
 				a.cmd = exec.Command("replacement")
 			}
@@ -72,7 +72,7 @@ func TestTorBridgePrelaunchHistoricalMTUKeepsExactPolicyAndAdmissionGuards(t *te
 			checks := 0
 			err = owner.start(func() error {
 				checks++
-				if changed == "final-cancel" && checks == 2 {
+				if changed == "final-cancel" && checks == 2 || changed == "last-start-cancel" && checks == 3 {
 					return context.Canceled
 				}
 				return nil
@@ -86,7 +86,7 @@ func TestTorBridgePrelaunchHistoricalMTUKeepsExactPolicyAndAdmissionGuards(t *te
 				}
 				return
 			}
-			if err != nil || checks != 2 || owner.command.Process == nil {
+			if err != nil || checks != 3 || owner.command.Process == nil {
 				t.Fatal("historical MTU rejected the unchanged captured Tor source before exec", err)
 			}
 			if current, exists := desktopNodeOwners.Load(a); !exists || current != launch {

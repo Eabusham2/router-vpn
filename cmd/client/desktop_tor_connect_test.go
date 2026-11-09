@@ -216,6 +216,12 @@ func TestDesktopTorRetainedExecutionCannotSubstituteCapturedChoice(t *testing.T)
 			if test.direct {
 				q.Direct = &test.direct
 			}
+			operation, finish, err := f.a.beginConnectionOperationContext(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer finish()
+			f.driver.operation = operation
 			response := httptest.NewRecorder()
 			f.a.externalProfileConnectOwned(response, q, test.retained, nil, externalConnectRuntime{tor: f.driver})
 			if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "retained Tor execution differs") || f.launch != nil || f.preflight != 0 || f.commands != 0 || !reflect.DeepEqual(before, f.a.profiles) {

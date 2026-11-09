@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net"
 	"strings"
@@ -23,6 +24,16 @@ func (a *app) proveTorBridgeExit() (string, error) {
 		return "", errors.New("Tor exit proof requires its captured native owner")
 	}
 	ctx := a.connectionOperationContextOrBackground()
+	return a.proveTorBridgeExitContext(ctx, launch)
+}
+
+func (a *app) proveTorBridgeExitContext(ctx context.Context, launch *desktopNodeLaunch) (string, error) {
+	if ctx == nil || launch == nil || launch.tor == nil {
+		return "", errors.New("Tor exit proof has no original caller or native owner")
+	}
+	if current, found := desktopNodeOwners.Load(a); !found || current != launch {
+		return "", errors.New("Tor exit proof belongs to a replaced native owner")
+	}
 	proof, err := a.waitDesktopTorProof(ctx, launch)
 	if err != nil && ctx.Err() != nil {
 		return "", errConnectionOperationCancelled

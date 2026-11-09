@@ -136,27 +136,38 @@ func captureSpeedLabTorRestore(profile common.RouterProfile, identity speedLabPa
 }
 
 func (a *app) speedLabTorRestoreProfile(plan speedLabRestorePlan) (common.RouterProfile, error) {
+	return a.speedLabTorRestoreProfileContext(context.Background(), plan)
+}
+
+func (a *app) speedLabTorRestoreProfileContext(ctx context.Context, plan speedLabRestorePlan) (common.RouterProfile, error) {
 	saved := plan.tor
 	if saved == nil || plan.external != nil || plan.native != nil || plan.multihop != nil || plan.request.Topology != "external" || plan.request.NodeID != plan.profile.ID || saved.execution() == "" || plan.request.Execution != saved.execution() || saved.profileToken == "" || liveMeasurementProfileToken(plan.profile) != saved.profileToken {
 		return common.RouterProfile{}, errors.New("previous Tor restore selection is not the captured proved execution")
 	}
-	if saved.network == "" || physicalNetworkIdentity() != saved.network {
+	network, err := physicalNetworkIdentityContext(ctx)
+	if err != nil || saved.network == "" || network != saved.network {
 		return common.RouterProfile{}, errors.New("previous Tor restore belongs to a changed physical network")
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return common.RouterProfile{}, err
+	}
 	current, exists := a.profileByIDLocked(plan.profile.ID)
 	current = cloneRouterProfile(current)
 	a.mu.Unlock()
 	if !exists || liveMeasurementProfileToken(current) != saved.profileToken {
 		return common.RouterProfile{}, errors.New("previous Tor restore node policy or credentials changed")
 	}
-	if _, err := saved.selectionFor(a, plan.profile, plan.request); err != nil {
+	if _, err := saved.selectionForContext(ctx, a, plan.profile, plan.request); err != nil {
 		return common.RouterProfile{}, err
 	}
 	return cloneRouterProfile(plan.profile), nil
 }
 
 func (saved *speedLabTorRestore) selectionFor(a *app, profile common.RouterProfile, request speedLabRequest) (*desktopTorSelection, error) {
+	return saved.selectionForContext(context.Background(), a, profile, request)
+}
+
+func (saved *speedLabTorRestore) selectionForContext(ctx context.Context, a *app, profile common.RouterProfile, request speedLabRequest) (*desktopTorSelection, error) {
 	if saved == nil || saved.selection == nil || saved.profileToken != liveMeasurementProfileToken(profile) || saved.selection.profileToken != desktopTorSourceIdentityToken(profile) || saved.policyToken == "" || desktopTorSourceIdentityToken(saved.selection.policy) != saved.policyToken || request.Topology != "external" || saved.execution() == "" || request.Execution != saved.execution() || request.Base != "" || request.Mode != "" || request.ExitMode != "" || request.ExitID != "" || request.NodeID != profile.ID {
 		return nil, errors.New("previous Tor restore would substitute its proved source, device or DNS policy")
 	}
@@ -164,10 +175,11 @@ func (saved *speedLabTorRestore) selectionFor(a *app, profile common.RouterProfi
 	if entry := saved.selection.predecessor; entry != nil {
 		entryID, mode = entry.entry.ID, entry.mode
 	}
-	if request.EntryID != entryID || request.EntryMode != mode || saved.network == "" || physicalNetworkIdentity() != saved.network {
+	network, err := physicalNetworkIdentityContext(ctx)
+	if err != nil || request.EntryID != entryID || request.EntryMode != mode || saved.network == "" || network != saved.network {
 		return nil, errors.New("previous Tor restore would select a different entry, mode or physical path")
 	}
-	if err := saved.selection.current(a); err != nil {
+	if err := saved.selection.currentContext(ctx, a); err != nil {
 		return nil, err
 	}
 	selection := *saved.selection
@@ -690,8 +702,11 @@ func (a *app) speedLabCaptureRestorePlanContext(ctx context.Context, snapshot sp
 type speedLabRestoreActions struct {
 	stop    func(bool) error
 	restart func(speedLabRestorePlan) error
-	persist func(common.RouterProfileStore) error
-	network func() string
+	// Shipping restart receives the coordinator's exact already-created
+	// cleanup operation. The contextless boundary is retained for fixtures.
+	restartContext func(context.Context, speedLabRestorePlan) error
+	persist        func(common.RouterProfileStore) error
+	network        func() string
 	// Optional batch continuation captures the terminal restored owner inside
 	// this operation, before its restoration context is cancelled on return.
 	restored func(*exec.Cmd, state) error
@@ -756,7 +771,9 @@ func (a *app) speedLabRestoreWith(snapshot speedLabTemporarySnapshot, actions sp
 	// immediately by Disconnect. No unrelated operation can replace this owner.
 	restoreCtx, cancelRestore := context.WithTimeout(owner.intent, 180*time.Second)
 	defer cancelRestore()
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(restoreCtx, &a.mu); err != nil {
+		return err
+	}
 	if !a.speedLabOwnerCurrentLocked(owner) || a.cmd != nil {
 		a.mu.Unlock()
 		return errors.New("temporary Speed Lab restoration owner changed")
@@ -768,7 +785,14 @@ func (a *app) speedLabRestoreWith(snapshot speedLabTemporarySnapshot, actions sp
 		a.profiles.SelectedID = snapshot.Plan.profile.ID
 	}
 	a.mu.Unlock()
-	err := actions.restart(snapshot.Plan)
+	var err error
+	if actions.restartContext != nil {
+		err = actions.restartContext(restoreCtx, snapshot.Plan)
+	} else if actions.restart != nil {
+		err = actions.restart(snapshot.Plan)
+	} else {
+		err = errors.New("Speed Lab restore has no captured restart adapter")
+	}
 	if err == nil {
 		err = restoreCtx.Err()
 	}
@@ -840,15 +864,29 @@ func (a *app) speedLabRestartPlan(plan speedLabRestorePlan) error {
 	return a.speedLabRestartPlanWithTorRuntime(plan, desktopTorConnectRuntime{})
 }
 
+func (a *app) speedLabRestartPlanContext(ctx context.Context, plan speedLabRestorePlan) error {
+	return a.speedLabRestartPlanWithTorRuntimeContext(ctx, plan, desktopTorConnectRuntime{})
+}
+
 func (a *app) speedLabRestartPlanWithTorRuntime(plan speedLabRestorePlan, torDriver desktopTorConnectRuntime) error {
+	return a.speedLabRestartPlanWithTorRuntimeContext(a.connectionOperationContextOrBackground(), plan, torDriver)
+}
+
+func (a *app) speedLabRestartPlanWithTorRuntimeContext(ctx context.Context, plan speedLabRestorePlan, torDriver desktopTorConnectRuntime) error {
+	if ctx == nil {
+		return errors.New("Speed Lab restart has no original cleanup operation")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var err error
 	switch {
 	case plan.standard != nil:
-		err = plan.standard.restart(a.connectionOperationContextOrBackground(), a)
+		err = plan.standard.restart(ctx, a)
 	case plan.linux != nil:
 		err = a.restartCapturedDesktopLinuxNode(plan, "speed-lab:restore")
 	case plan.tor != nil:
-		err = a.startSpeedLabTorRestoreWithRuntime(plan, torDriver)
+		err = a.startSpeedLabTorRestoreWithRuntimeContext(ctx, plan, torDriver)
 	case plan.external != nil:
 		_, err = a.startSpeedLabExternalPathCaptured(plan.request, plan.external)
 	case plan.native != nil:
@@ -873,7 +911,7 @@ func (a *app) speedLabRestartPlanWithTorRuntime(plan speedLabRestorePlan, torDri
 		var identity speedLabPathIdentity
 		identity, err = waitForSpeedLabConnectedIdentity(a, 2500*time.Millisecond)
 		if err == nil {
-			err = verifySpeedLabPath(a.connectionOperationContextOrBackground(), a, identity)
+			err = verifySpeedLabPath(ctx, a, identity)
 		}
 	}
 	return err

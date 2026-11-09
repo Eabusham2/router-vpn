@@ -152,16 +152,16 @@ func TestTorUsesOwnedDynamicAdapterInsteadOfFixedExitStore(t *testing.T) {
 	// neither can reintroduce the old command-only adapter around our tested
 	// cancellation/start-failure cleanup boundary.
 	for _, caller := range []struct{ file, function, prepare, start string }{
-		{"speed_lab_tor_path.go", "func (a *app) startPreparedSpeedLabTorPath", "prepared.prelaunch.start(current)", "prepared.prelaunch.start(current)"},
-		{"tor_bridge_routes.go", "func (a *app) torBridgeConnectSelectionOwned", "prepareTorBridgeCommandWithRuntime(a, policy, profile, selection.predecessor, driver)", "prelaunch.startContext(operation, check)"},
+		{"speed_lab_tor_path.go", "func (a *app) startPreparedSpeedLabTorPath", "prepared.prelaunch.startContext(ctx, current)", "prepared.prelaunch.startContext(ctx, current)"},
+		{"tor_bridge_routes.go", "func (a *app) torBridgeConnectSelectionOwned", "prepareTorBridgeCommandWithRuntimeContext(ctx, a, policy, profile, selection.predecessor, driver)", "prelaunch.startContext(ctx, check)"},
 	} {
 		source := sourceFunctionForTest(t, caller.file, caller.function)
 		if !strings.Contains(source, caller.prepare) || !strings.Contains(source, caller.start) {
 			t.Fatal("shipping Tor caller dropped its prepared workspace owner", caller.file)
 		}
 	}
-	preparation := sourceFunctionForTest(t, "speed_lab_tor_path.go", "func (a *app) prepareSpeedLabTorPathWithRuntime")
-	if !strings.Contains(preparation, "prepareTorBridgeCommandWithRuntime(a, selection.policy, profile, selection.predecessor, driver)") {
+	preparation := sourceFunctionForTest(t, "speed_lab_tor_path.go", "func (a *app) prepareSpeedLabTorPathWithRuntimeContext")
+	if !strings.Contains(preparation, "prepareTorBridgeCommandWithRuntimeContext(ctx, a, selection.policy, profile, selection.predecessor, driver)") {
 		t.Fatal("Speed Lab lost exact predecessor preparation before stopping its previous runtime")
 	}
 }

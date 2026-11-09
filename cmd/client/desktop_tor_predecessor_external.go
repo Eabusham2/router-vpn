@@ -42,20 +42,43 @@ func desktopTorEntryMode(control, entry common.RouterProfile, requested, base st
 // before invoking it, its result is frozen once, and no proof or selected DNS
 // query can use this callback. An interrupted network cannot donate its result.
 func desktopTorEndpointLookup(ctx context.Context, host string) ([]netip.Addr, error) {
-	if ctx == nil || ctx.Err() != nil {
+	return desktopTorEndpointLookupObserved(ctx, host, physicalNetworkIdentityContext, net.DefaultResolver.LookupNetIP)
+}
+
+func desktopTorEndpointLookupObserved(ctx context.Context, host string, readNetwork func(context.Context) (string, error), lookup func(context.Context, string, string) ([]netip.Addr, error)) ([]netip.Addr, error) {
+	if ctx == nil || readNetwork == nil || lookup == nil {
 		return nil, errors.New("Tor endpoint bootstrap lost its captured operation")
 	}
-	network := physicalNetworkIdentity()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	network, err := readNetwork(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if network == "" {
 		return nil, errors.New("Tor endpoint bootstrap has no captured physical network")
 	}
 	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	addresses, err := net.DefaultResolver.LookupNetIP(bounded, "ip", host)
+	addresses, err := lookup(bounded, "ip", host)
 	if err != nil {
 		return nil, err
 	}
-	if bounded.Err() != nil || network != physicalNetworkIdentity() {
+	if err := bounded.Err(); err != nil {
+		return nil, err
+	}
+	current, err := readNetwork(bounded)
+	if err != nil {
+		return nil, err
+	}
+	if err := bounded.Err(); err != nil {
+		return nil, err
+	}
+	if network != current {
 		return nil, errors.New("Tor endpoint bootstrap belongs to a retired operation or network")
 	}
 	return addresses, nil

@@ -74,7 +74,7 @@ func torControllerProofContract(route, persistence []byte) error {
 		return true
 	}
 	controller, save, adopt := methods["torBridgeConnectSelectionOwned"], methods["commitDesktopTorChoice"], methods["adopt"]
-	if !ordered(calls(controller, "a.proveTorBridgeExit"), calls(controller, "a.commitDesktopTorChoice"), calls(controller, "saved.adopt"), calls(controller, "a.monitorDesktopTorRuntime")) || len(connected(controller)) != 0 {
+	if !ordered(calls(controller, "a.proveTorBridgeExitContext"), calls(controller, "a.commitDesktopTorChoice"), calls(controller, "saved.adopt"), calls(controller, "a.monitorDesktopTorRuntime")) || len(connected(controller)) != 0 {
 		return errors.New("Tor controller must prove, save and adopt the same runtime before monitoring; Connected belongs to final adoption")
 	}
 	if !ordered(calls(save, "a.readDesktopTorProofContext"), calls(save, "a.persistDesktopTorChoiceProfilesContext"), calls(save, "launch.tor.committedChoice.Store")) || len(connected(save)) != 0 {
@@ -132,8 +132,8 @@ func TestTorBridgeControllerProofContractRejectsRetiredOrdering(t *testing.T) {
 		name, old, replacement string
 		route                  bool
 	}{
-		{"ignored-proof", "actualIP, proofErr := a.proveTorBridgeExit()", "actualIP, proofErr := unrelatedProof()", true},
-		{"early-connected", "actualIP, proofErr := a.proveTorBridgeExit()", "a.state.Connected = true\nactualIP, proofErr := a.proveTorBridgeExit()", true},
+		{"ignored-proof", "actualIP, proofErr := a.proveTorBridgeExitContext(ctx, prelaunch.workspace)", "actualIP, proofErr := unrelatedProof()", true},
+		{"early-connected", "actualIP, proofErr := a.proveTorBridgeExitContext(ctx, prelaunch.workspace)", "a.state.Connected = true\nactualIP, proofErr := a.proveTorBridgeExitContext(ctx, prelaunch.workspace)", true},
 		{"ignored-adoption", "retainedProof, err = saved.adopt(a)", "retainedProof, err = unrelatedAdopt(a)", true},
 		{"ignored-save", "if err := a.persistDesktopTorChoiceProfilesContext(ctx, currentWrite); err != nil {", "if err := unrelatedSave(); err != nil {", false},
 		{"ignored-save-error", "if err := a.persistDesktopTorChoiceProfilesContext(ctx, currentWrite); err != nil {", "if err := a.persistDesktopTorChoiceProfilesContext(ctx, currentWrite); false {", false},

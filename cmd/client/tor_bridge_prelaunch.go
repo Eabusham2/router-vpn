@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"router-vpn/internal/desktopnetwork"
 )
 
 // Before exec.Start the controller owns only prepared input files and an
@@ -26,6 +28,13 @@ type torBridgePrelaunch struct {
 var errTorPrelaunchRejected = errors.New("captured Tor prelaunch operation was rejected")
 
 func captureTorBridgePrelaunch(a *app, profileID, directory string, captured ...*desktopNodeLaunch) (*torBridgePrelaunch, error) {
+	return captureTorBridgePrelaunchContext(context.Background(), a, profileID, directory, captured...)
+}
+
+func captureTorBridgePrelaunchContext(ctx context.Context, a *app, profileID, directory string, captured ...*desktopNodeLaunch) (*torBridgePrelaunch, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return nil, errors.New("Tor prelaunch capture has no live original caller")
+	}
 	workspace := &desktopNodeLaunch{}
 	names := []string{"torrc", "sing-box.json", "tor-data"}
 	if len(captured) > 1 {
@@ -47,6 +56,12 @@ func captureTorBridgePrelaunch(a *app, profileID, directory string, captured ...
 	owner := &torBridgePrelaunch{workspace: workspace, files: make(map[string]os.FileInfo), app: a,
 		dns: activeDNSRuntimeIdentity{ProfileID: profileID, RuntimeID: runtimeID, Config: filepath.Join(directory, "sing-box.json")}}
 	for _, name := range names {
+		if err := ctx.Err(); err != nil {
+			if len(captured) == 0 {
+				owner.close()
+			}
+			return nil, err
+		}
 		info, err := workspace.directoryRoot.Lstat(name)
 		if err != nil || name == "tor-data" && !info.IsDir() || name != "tor-data" && !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 			if len(captured) == 0 {
@@ -56,7 +71,7 @@ func captureTorBridgePrelaunch(a *app, profileID, directory string, captured ...
 		}
 		owner.files[name] = info
 	}
-	if err := owner.validate(); err != nil {
+	if err := owner.validateContext(ctx); err != nil {
 		// A supplied capture still belongs to its caller on failure. Keep the
 		// retained handle usable for that caller's exact-input cleanup.
 		if len(captured) == 0 {
@@ -95,25 +110,34 @@ func (owner *torBridgePrelaunch) startContext(operation context.Context, check f
 	if owner.command == nil || check == nil {
 		return errors.Join(errors.New("Tor launch has no captured command or operation guard"), owner.cleanup())
 	}
+	if operation == nil {
+		return errors.Join(errTorPrelaunchRejected, errors.New("Tor launch has no live original caller"), owner.cleanup())
+	}
+	if err := operation.Err(); err != nil {
+		return errors.Join(errTorPrelaunchRejected, errConnectionOperationCancelled, err, owner.cleanup())
+	}
 	if err := check(); err != nil {
 		return errors.Join(errTorPrelaunchRejected, err, owner.cleanup())
 	}
-	if err := owner.validate(); err != nil {
+	if err := owner.validateContext(operation); err != nil {
 		return errors.Join(errTorPrelaunchRejected, err, owner.cleanup())
 	}
 	if owner.workspace.tor != nil {
 		launch := owner.workspace
-		if owner.app == nil || launch.tor.network == "" || launch.tor.network != launch.tor.currentNetworkIdentity() {
+		network, networkErr := launch.tor.currentNetworkIdentityContext(operation)
+		if owner.app == nil || networkErr != nil || launch.tor.network == "" || launch.tor.network != network {
 			return errors.Join(errTorPrelaunchRejected, errors.New("Tor physical network changed before launch"), owner.cleanup())
 		}
-		owner.app.mu.Lock()
+		if err := desktopnetwork.LockContext(operation, &owner.app.mu); err != nil {
+			return errors.Join(errTorPrelaunchRejected, err, owner.cleanup())
+		}
 		profile, found := owner.app.profileByIDLocked(launch.profileID)
 		current := found && owner.app.cmd == nil && desktopTorSourceIdentityToken(profile) == launch.tor.profileToken && launch.tor.entryCurrentLocked(owner.app) == nil
 		owner.app.mu.Unlock()
 		if !current {
 			return errors.Join(errTorPrelaunchRejected, errors.New("Tor node or process changed before launch"), owner.cleanup())
 		}
-		if err := launch.tor.entryCurrent(owner.app); err != nil {
+		if err := launch.tor.entryCurrentContext(operation, owner.app); err != nil {
 			return errors.Join(errTorPrelaunchRejected, err, owner.cleanup())
 		}
 		launch.command, launch.tor.started = owner.command, time.Now()
@@ -126,7 +150,7 @@ func (owner *torBridgePrelaunch) startContext(operation context.Context, check f
 			desktopNodeOwners.CompareAndDelete(owner.app, launch)
 			return errors.Join(errTorPrelaunchRejected, err, owner.cleanup())
 		}
-		if err := launch.tor.entryCurrent(owner.app); err != nil {
+		if err := launch.tor.entryCurrentContext(operation, owner.app); err != nil {
 			desktopNodeOwners.CompareAndDelete(owner.app, launch)
 			return errors.Join(errTorPrelaunchRejected, err, owner.cleanup())
 		}
@@ -148,6 +172,16 @@ func (owner *torBridgePrelaunch) startContext(operation context.Context, check f
 			return errors.Join(err, owner.cleanup())
 		}
 	}
+	finalErr := operation.Err()
+	if finalErr == nil {
+		finalErr = check()
+	}
+	if err := errors.Join(finalErr, operation.Err()); err != nil {
+		if owner.workspace.tor != nil {
+			desktopNodeOwners.CompareAndDelete(owner.app, owner.workspace)
+		}
+		return errors.Join(errTorPrelaunchRejected, err, owner.cleanup())
+	}
 	if err := owner.command.Start(); err != nil {
 		if owner.workspace.tor != nil {
 			desktopNodeOwners.CompareAndDelete(owner.app, owner.workspace)
@@ -158,6 +192,13 @@ func (owner *torBridgePrelaunch) startContext(operation context.Context, check f
 }
 
 func (owner *torBridgePrelaunch) validate() error {
+	return owner.validateContext(context.Background())
+}
+
+func (owner *torBridgePrelaunch) validateContext(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil {
+		return errors.New("Tor prelaunch validation has no live original caller")
+	}
 	if err := desktopExternalDirectoryCurrent(owner.workspace); err != nil {
 		return err
 	}
@@ -171,6 +212,9 @@ func (owner *torBridgePrelaunch) validate() error {
 		return errors.New("Tor prelaunch workspace contains unowned files")
 	}
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		expected, known := owner.files[entry.Name()]
 		current, err := owner.workspace.directoryRoot.Lstat(entry.Name())
 		if !known || err != nil || !os.SameFile(expected, current) || current.Mode()&os.ModeSymlink != 0 {
@@ -178,9 +222,9 @@ func (owner *torBridgePrelaunch) validate() error {
 		}
 		if owner.workspace.tor != nil && entry.Name() != "tor-data" {
 			input, known := owner.workspace.tor.inputs[entry.Name()]
-			raw, err := readDesktopRuntimeFile(owner.workspace, entry.Name(), desktopTorInputLimit(entry.Name()))
+			raw, err := readDesktopRuntimeFileContext(ctx, owner.workspace, entry.Name(), desktopTorInputLimit(entry.Name()))
 			if !known || err != nil || desktopTorDigest(raw) != input.digest {
-				return errors.New("Tor prelaunch input contents changed after capture")
+				return errors.Join(err, errors.New("Tor prelaunch input contents changed after capture"))
 			}
 		}
 	}
@@ -193,7 +237,7 @@ func (owner *torBridgePrelaunch) validate() error {
 	if len(entries) != 0 || err != nil && !errors.Is(err, io.EOF) {
 		return errors.New("Tor prelaunch data directory is no longer empty; native owner retained")
 	}
-	return desktopExternalDirectoryCurrent(owner.workspace)
+	return errors.Join(desktopExternalDirectoryCurrent(owner.workspace), ctx.Err())
 }
 
 func (owner *torBridgePrelaunch) cleanup() error {

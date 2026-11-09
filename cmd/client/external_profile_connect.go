@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -158,12 +159,13 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) externalProfileConnectWithRuntime(w http.ResponseWriter, r *http.Request, driver externalConnectRuntime) {
 	driver.tor.requestContext = r.Context()
-	_, finish, guardErr := a.beginConnectionOperation()
+	operation, finish, guardErr := a.beginConnectionOperationContext(r.Context())
 	if guardErr != nil {
 		http.Error(w, guardErr.Error(), http.StatusConflict)
 		return
 	}
 	defer finish()
+	driver.tor.operation = operation
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -180,13 +182,49 @@ func (a *app) externalProfileConnectWithRuntime(w http.ResponseWriter, r *http.R
 // Both interactive Connect and startup already hold one connection transaction.
 // A retained execution is internal Last-state evidence, never an HTTP override.
 func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfileConnectRequest, retained string, startup *startupPolicyCapture, driver externalConnectRuntime) {
-	operation := a.connectionOperationContextOrBackground()
+	operation := driver.tor.operation
+	admission := driver.tor.requestContext
+	var finishCaller context.CancelFunc
+	if operation != nil {
+		var err error
+		admission, finishCaller, err = desktopTorChoiceCaller(operation, admission)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		defer finishCaller()
+	}
+	if admission == nil {
+		admission = context.Background()
+	}
+	if err := desktopnetwork.LockContext(admission, &a.mu); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if operation == nil {
+		operation = a.connectionContext
+	}
+	a.mu.Unlock()
+	if operation == nil {
+		operation = context.Background() // compatibility for isolated already-owned callers
+	}
+	ctx := admission
+	if finishCaller == nil {
+		var callerErr error
+		ctx, finishCaller, callerErr = desktopTorChoiceCaller(operation, driver.tor.requestContext)
+		if callerErr != nil {
+			http.Error(w, callerErr.Error(), http.StatusConflict)
+			return
+		}
+		defer finishCaller()
+	}
+	driver.tor.operation = operation
 	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		http.Error(w, "desktop external-node runtime is unavailable on this platform", http.StatusNotImplemented)
 		return
 	}
 	if startup != nil {
-		if err := startup.current(a); err != nil {
+		if err := startup.currentContext(ctx, a); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
@@ -203,7 +241,10 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 		http.Error(w, "external connect requires an explicit valid profile_id", http.StatusBadRequest)
 		return
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	externalProfile, ok := a.profileByIDLocked(profileID)
 	expectedErr := a.validateExternalProfileExpectedProfilesLocked(q, externalProfile)
 	externalProfile = cloneRouterProfile(externalProfile)
@@ -233,7 +274,7 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 	}
 
 	if desktopTorProtocol(externalProfile.External.Protocol) {
-		if err := a.guardDesktopOwnedNodeTransition(nil); err != nil {
+		if err := a.guardDesktopOwnedNodeTransitionContext(ctx, nil); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}

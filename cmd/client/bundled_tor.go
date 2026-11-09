@@ -358,6 +358,16 @@ func bundledTorExecutableIdentity(raw []byte, target string) (bundledTorIdentity
 }
 
 func verifyBundledTorPayload(directory, target string) (string, error) {
+	return verifyBundledTorPayloadContext(context.Background(), directory, target)
+}
+
+func verifyBundledTorPayloadContext(ctx context.Context, directory, target string) (string, error) {
+	if ctx == nil {
+		return "", errors.New("Tor payload verification has no original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	executable, execution, err := bundledTorExecution(target)
 	if err != nil {
 		return "", err
@@ -365,6 +375,9 @@ func verifyBundledTorPayload(directory, target string) (string, error) {
 	bad := errors.New("bundled Tor receipt differs from its exact source, padding, execution or payload")
 	data := map[string][]byte{}
 	for _, name := range append(append([]string{}, bundledTorRecords...), bundledTorBinaryName(target)) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		raw, err := bundledAmneziaRegular(filepath.Join(directory, name), bundledTorPayloadBound(name, target))
 		if err != nil {
 			return "", err
@@ -450,13 +463,17 @@ func verifyBundledTorPayload(directory, target string) (string, error) {
 	if err != nil || !reflect.DeepEqual(identity, receipt.Identity) {
 		return "", bad
 	}
-	return filepath.Join(directory, bundledTorBinaryName(target)), nil
+	return filepath.Join(directory, bundledTorBinaryName(target)), ctx.Err()
 }
 
 // verifyBundledTor is the sole fixed-path resolver for the complete desktop
 // bundle. It never falls back to a PATH executable or an unrelated Tor tree.
 func verifyBundledTor(root string) (string, error) {
-	if _, err := verifyBundledNative(root); err != nil {
+	return verifyBundledTorContext(context.Background(), root)
+}
+
+func verifyBundledTorContext(ctx context.Context, root string) (string, error) {
+	if _, err := verifyBundledNativeContext(ctx, root); err != nil {
 		return "", err
 	}
 	if runtime.GOOS == "windows" {
@@ -469,18 +486,28 @@ func verifyBundledTor(root string) (string, error) {
 		return "", err
 	}
 	directory := filepath.Join(root, "runtime", "native")
-	binary, err := verifyBundledTorPayload(directory, runtime.GOOS+"/"+runtime.GOARCH)
+	binary, err := verifyBundledTorPayloadContext(ctx, directory, runtime.GOOS+"/"+runtime.GOARCH)
 	if err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	return verifyBundledTorVersion(ctx, binary, directory)
+}
+
+func verifyBundledTorVersion(ctx context.Context, binary, directory string) (string, error) {
+	if ctx == nil {
+		return "", errors.New("Tor version verification has no original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, binary, "--version")
 	command.Dir = directory
 	command.Env = nativeLibraryEnvironment(os.Environ(), directory)
 	output, err := command.Output()
-	if err != nil || len(output) > 8192 || !regexp.MustCompile(`^Tor version 0\.4\.9\.14(?:[. (]|$)`).Match(output) {
-		return "", fmt.Errorf("bundled Tor failed its exact executable version check")
+	if err != nil || ctx.Err() != nil || len(output) > 8192 || !regexp.MustCompile(`^Tor version 0\.4\.9\.14(?:[. (]|$)`).Match(output) {
+		return "", errors.Join(ctx.Err(), fmt.Errorf("bundled Tor failed its exact executable version check"))
 	}
 	return binary, nil
 }

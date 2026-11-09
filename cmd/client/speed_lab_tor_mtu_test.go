@@ -302,17 +302,17 @@ func TestSpeedLabTorMTUShippingRestoreCallsReadbackBeforeAcceptance(t *testing.T
 	// Runtime tests above exercise the process boundary and actual transaction.
 	// Retain the shipping dispatch edge so a later refactor cannot silently
 	// omit the tested MTU restoration while reporting the initial Tor proof.
-	source := sourceFunctionForTest(t, "speed_lab_transaction.go", "func (a *app) speedLabRestartPlanWithTorRuntime")
+	source := sourceFunctionForTest(t, "speed_lab_transaction.go", "func (a *app) speedLabRestartPlanWithTorRuntimeContext")
 	start := strings.Index(source, "case plan.tor != nil:")
 	end := strings.Index(source, "case plan.external != nil:")
 	if start < 0 || end <= start {
 		t.Fatal("shipping restart no longer selects the owned Tor restore branch")
 	}
 	branch := source[start:end]
-	if !strings.Contains(branch, "a.startSpeedLabTorRestoreWithRuntime(plan, torDriver)") {
+	if !strings.Contains(branch, "a.startSpeedLabTorRestoreWithRuntimeContext(ctx, plan, torDriver)") {
 		t.Fatal("shipping Tor restart bypasses the retained runtime")
 	}
-	branch = sourceFunctionForTest(t, "speed_lab_tor_path.go", "func (a *app) startSpeedLabTorRestoreWithRuntime")
+	branch = sourceFunctionForTest(t, "speed_lab_tor_path.go", "func (a *app) startSpeedLabTorRestoreWithRuntimeContext")
 	launch := strings.Index(branch, "a.startPreparedSpeedLabTorPath(plan.request, profile, prepared)")
 	readback := strings.Index(branch, "return a.restoreSpeedLabTorMTU(plan)")
 	if launch < 0 || readback <= launch || !strings.Contains(branch[launch:readback], "if err != nil") {

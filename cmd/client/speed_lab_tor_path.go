@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 )
 
 // This preparation belongs to one temporary-test transaction. It retains the
@@ -21,6 +22,7 @@ type speedLabTorPreparation struct {
 	prelaunch      *torBridgePrelaunch
 	sourceToken    string
 	operation      context.Context
+	intent         context.Context
 	temporary      *speedLabTemporaryOwner
 	owned          bool
 	request        externalProfileConnectRequest
@@ -53,9 +55,26 @@ func (prepared *speedLabTorPreparation) releaseUnused() error {
 }
 
 func (prepared *speedLabTorPreparation) current(a *app, applied bool) error {
+	return prepared.currentContext(context.Background(), a, applied)
+}
+
+func (prepared *speedLabTorPreparation) currentContext(ctx context.Context, a *app, applied bool) error {
+	if ctx == nil || prepared == nil || prepared.operation == nil {
+		return errors.New("Tor Speed Lab has no original preparation caller")
+	}
+	work, finish, err := desktopTorChoiceCaller(prepared.operation, prepared.intent)
+	if err != nil {
+		return err
+	}
+	defer finish()
+	ctx, finishCall, err := desktopTorChoiceCaller(work, ctx)
+	if err != nil {
+		return err
+	}
+	defer finishCall()
 	if prepared != nil && prepared.comparison != nil {
 		for _, candidate := range prepared.comparison.paths {
-			if err := candidate.current(a, applied); err != nil {
+			if err := candidate.currentContext(ctx, a, applied); err != nil {
 				return err
 			}
 		}
@@ -67,10 +86,16 @@ func (prepared *speedLabTorPreparation) current(a *app, applied bool) error {
 		return errConnectionOperationCancelled
 	}
 	launch := prepared.prelaunch.workspace
-	if launch == nil || launch.tor == nil || prepared.temporary == nil || launch.tor.network == "" || launch.tor.network != prepared.temporary.network || launch.tor.network != launch.tor.currentNetworkIdentity() {
+	if launch == nil || launch.tor == nil || prepared.temporary == nil || launch.tor.network == "" || launch.tor.network != prepared.temporary.network {
 		return errors.New("Tor Speed Lab preparation belongs to a changed physical network")
 	}
-	a.mu.Lock()
+	network, err := launch.tor.currentNetworkIdentityContext(ctx)
+	if err != nil || network != launch.tor.network {
+		return errors.Join(err, errors.New("Tor Speed Lab physical observation changed"))
+	}
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	raw, owned := speedLabTemporaryOwners.Load(a)
 	current := !a.closing && a.connectionContext == prepared.operation && owned == prepared.owned &&
 		(!owned || raw == prepared.temporary && a.speedLabOwnerCurrentLocked(prepared.temporary) && a.cmd == prepared.temporary.runtime)
@@ -81,24 +106,40 @@ func (prepared *speedLabTorPreparation) current(a *app, applied bool) error {
 		token = prepared.selection.profileToken
 		selected = prepared.selectedAfter
 	}
-	current = current && exists && desktopTorSourceIdentityToken(profile) == token && a.profiles.SelectedID == selected
+	current = current && exists && desktopTorSourceIdentityToken(profile) == token && desktopTorOperationCurrentLocked(a, prepared.operation, selected) == nil
 	a.mu.Unlock()
 	if !current {
 		return errors.New("Tor Speed Lab preparation belongs to a replaced operation, runtime or private source")
 	}
-	return prepared.selection.predecessor.current(a)
+	return prepared.selection.predecessor.currentContext(ctx, a)
 }
 
 func (a *app) prepareSpeedLabTorPathWithRuntime(q speedLabRequest, profile common.RouterProfile, restored *speedLabTorRestore, driver desktopTorConnectRuntime) (*speedLabTorPreparation, error) {
-	a.mu.Lock()
+	caller, err := captureDesktopTorCaller(a, driver.operation, driver.requestContext)
+	if err != nil {
+		return nil, err
+	}
+	defer caller.finish()
+	driver.operation = caller.operation
+	return a.prepareSpeedLabTorPathWithRuntimeContext(caller.work, q, profile, restored, driver)
+}
+
+func (a *app) prepareSpeedLabTorPathWithRuntimeContext(ctx context.Context, q speedLabRequest, profile common.RouterProfile, restored *speedLabTorRestore, driver desktopTorConnectRuntime) (*speedLabTorPreparation, error) {
+	if ctx == nil || driver.operation == nil {
+		return nil, errors.New("Tor Speed Lab preparation has no original caller and operation")
+	}
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
 	original, exists := a.profileByIDLocked(profile.ID)
 	original = cloneRouterProfile(original)
-	operation := a.connectionContext
+	operation := driver.operation
 	selected := a.profiles.SelectedID
 	rawOwner, owned := speedLabTemporaryOwners.Load(a)
 	owner, _ := rawOwner.(*speedLabTemporaryOwner)
+	operationErr := desktopTorOperationCurrentLocked(a, operation, selected)
 	a.mu.Unlock()
-	if !exists || operation == nil || !owned || owner == nil || liveMeasurementProfileToken(speedLabProfileOverrides(original, q)) != liveMeasurementProfileToken(profile) {
+	if operationErr != nil || !exists || operation == nil || !owned || owner == nil || liveMeasurementProfileToken(speedLabProfileOverrides(original, q)) != liveMeasurementProfileToken(profile) {
 		return nil, errors.New("Tor Speed Lab preview does not belong to the captured node and temporary policy")
 	}
 	if restored == nil {
@@ -107,40 +148,43 @@ func (a *app) prepareSpeedLabTorPathWithRuntime(q speedLabRequest, profile commo
 			return nil, err
 		}
 		if execution == "auto" {
-			return a.prepareSpeedLabTorComparison(q, profile, driver)
+			return a.prepareSpeedLabTorComparisonContext(ctx, q, profile, driver)
 		}
 	}
-	before := a.speedLabTorPrelaunchCheck(original)
+	before, err := a.speedLabTorPrelaunchCheckContext(ctx, operation, original)
+	if err != nil {
+		return nil, err
+	}
 	var selection *desktopTorSelection
-	var err error
 	if restored == nil {
 		lookup := driver.lookup
 		if lookup == nil {
 			lookup = desktopTorEndpointLookup
 		}
-		selection, err = captureDesktopTorSelection(a, original, speedLabTorRequest(q, original), lookup)
+		selection, err = captureDesktopTorSelectionContext(ctx, a, original, speedLabTorRequest(q, original), lookup)
 		if err == nil {
 			selection.policy = speedLabProfileOverrides(selection.policy, q)
 			selection.profile = cloneRouterProfile(profile)
 			selection.profileToken = desktopTorSourceIdentityToken(profile)
 		}
 	} else {
-		selection, err = restored.selectionFor(a, profile, q)
+		selection, err = restored.selectionForContext(ctx, a, profile, q)
 	}
 	if err != nil {
 		return nil, err
 	}
+	selection.adoption = driver.requestContext
 	if driver.capability == nil {
-		driver.capability = func() standardExitCapability { return desktopTorPolicyRuntimeCapability(selection.policy) }
+		driver.capability = func() standardExitCapability { return desktopTorPolicyRuntimeCapabilityContext(ctx, selection.policy) }
 	}
 	if capability := driver.capability(); !capability.Supported {
 		return nil, errors.New(capability.Reason)
 	}
-	command, prelaunch, err := prepareTorBridgeCommandWithRuntime(a, selection.policy, profile, selection.predecessor, driver)
+	command, prelaunch, err := prepareTorBridgeCommandWithRuntimeContext(ctx, a, selection.policy, profile, selection.predecessor, driver)
 	if err != nil {
 		return nil, err
 	}
-	prepared := &speedLabTorPreparation{selection: selection, command: command, prelaunch: prelaunch, sourceToken: desktopTorSourceIdentityToken(original), operation: operation, temporary: owner, owned: owned, request: speedLabTorRequest(q, profile)}
+	prepared := &speedLabTorPreparation{selection: selection, command: command, prelaunch: prelaunch, sourceToken: desktopTorSourceIdentityToken(original), operation: operation, intent: driver.requestContext, temporary: owner, owned: owned, request: speedLabTorRequest(q, profile)}
 	prepared.selectedBefore, prepared.selectedAfter = selected, profile.ID
 	if restored != nil {
 		prepared.selectedAfter = selected
@@ -148,7 +192,7 @@ func (a *app) prepareSpeedLabTorPathWithRuntime(q speedLabRequest, profile commo
 	if err := before(); err != nil {
 		return nil, errors.Join(err, prepared.releaseUnused())
 	}
-	if err := prepared.current(a, false); err != nil {
+	if err := prepared.currentContext(ctx, a, false); err != nil {
 		return nil, errors.Join(err, prepared.releaseUnused())
 	}
 	return prepared, nil
@@ -156,7 +200,15 @@ func (a *app) prepareSpeedLabTorPathWithRuntime(q speedLabRequest, profile commo
 
 func (a *app) startPreparedSpeedLabTorPath(q speedLabRequest, profile common.RouterProfile, prepared *speedLabTorPreparation) (path speedLabPath, failure error) {
 	defer func() { failure = errors.Join(failure, prepared.releaseUnused()) }()
-	if err := prepared.current(a, true); err != nil {
+	if prepared == nil {
+		return path, errors.New("Tor Speed Lab start has no original preparation")
+	}
+	ctx, finish, err := desktopTorChoiceCaller(prepared.operation, prepared.intent)
+	if err != nil {
+		return path, err
+	}
+	defer finish()
+	if err := prepared.currentContext(ctx, a, true); err != nil {
 		return path, err
 	}
 	if !reflect.DeepEqual(prepared.request, speedLabTorRequest(q, profile)) {
@@ -177,17 +229,20 @@ func (a *app) startPreparedSpeedLabTorPath(q speedLabRequest, profile common.Rou
 	if err := a.speedLabStopRuntime(true); err != nil {
 		return path, err
 	}
-	check := a.speedLabTorPrelaunchCheck(profile)
+	check, err := a.speedLabTorPrelaunchCheckContext(ctx, prepared.operation, profile)
+	if err != nil {
+		return path, err
+	}
 	current := func() error {
-		if err := prepared.current(a, true); err != nil {
+		if err := prepared.currentContext(ctx, a, true); err != nil {
 			return err
 		}
-		if err := selection.current(a); err != nil {
+		if err := selection.currentContext(ctx, a); err != nil {
 			return err
 		}
 		return check()
 	}
-	if err := prepared.prelaunch.start(current); err != nil {
+	if err := prepared.prelaunch.startContext(ctx, current); err != nil {
 		return path, err
 	}
 	command, launch := prepared.command, prepared.prelaunch.workspace
@@ -199,20 +254,22 @@ func (a *app) startPreparedSpeedLabTorPath(q speedLabRequest, profile common.Rou
 	if err := a.speedLabOwnRuntime(command); err != nil {
 		return path, err
 	}
-	if err := prepared.current(a, true); err != nil {
+	if err := prepared.currentContext(ctx, a, true); err != nil {
 		return path, err
 	}
-	if _, err := a.proveTorBridgeExit(); err != nil {
+	if _, err := a.proveTorBridgeExitContext(ctx, launch); err != nil {
 		return path, err
 	}
-	if err := prepared.current(a, true); err != nil {
+	if err := prepared.currentContext(ctx, a, true); err != nil {
 		return path, err
 	}
-	if err := a.desktopTorCurrent(launch); err != nil {
+	if err := a.desktopTorCurrentContext(ctx, launch); err != nil {
 		return path, err
 	}
-	a.mu.Lock()
-	if a.cmd != command || selection.currentLocked(a) != nil {
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return path, err
+	}
+	if ctx.Err() != nil || desktopTorOperationCurrentLocked(a, prepared.operation, prepared.selectedAfter) != nil || a.cmd != command || selection.currentLocked(a) != nil {
 		a.mu.Unlock()
 		return path, errors.New("Tor Speed Lab proof belongs to a replaced native owner")
 	}
@@ -231,11 +288,26 @@ func (a *app) startPreparedSpeedLabTorPath(q speedLabRequest, profile common.Rou
 }
 
 func (a *app) startSpeedLabTorRestoreWithRuntime(plan speedLabRestorePlan, driver desktopTorConnectRuntime) error {
-	profile, err := a.speedLabTorRestoreProfile(plan)
+	return a.startSpeedLabTorRestoreWithRuntimeContext(a.connectionOperationContextOrBackground(), plan, driver)
+}
+
+func (a *app) startSpeedLabTorRestoreWithRuntimeContext(ctx context.Context, plan speedLabRestorePlan, driver desktopTorConnectRuntime) error {
+	if ctx == nil {
+		return errors.New("Tor restoration has no original cleanup operation")
+	}
+	// The restoration coordinator has already installed its separate captured
+	// cleanup operation. The cancelled HTTP test cannot own this restoration.
+	caller, err := captureDesktopTorCaller(a, ctx, nil)
 	if err != nil {
 		return err
 	}
-	prepared, err := a.prepareSpeedLabTorPathWithRuntime(plan.request, profile, plan.tor, driver)
+	defer caller.finish()
+	driver.operation, driver.requestContext = caller.operation, nil
+	profile, err := a.speedLabTorRestoreProfileContext(caller.work, plan)
+	if err != nil {
+		return err
+	}
+	prepared, err := a.prepareSpeedLabTorPathWithRuntimeContext(caller.work, plan.request, profile, plan.tor, driver)
 	if err != nil {
 		return err
 	}

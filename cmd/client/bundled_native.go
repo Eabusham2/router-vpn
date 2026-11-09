@@ -201,7 +201,7 @@ func verifyBundledNativeContext(ctx context.Context, root string) (string, error
 	if err := verifyNativePayload(directory, receipt); err != nil {
 		return "", err
 	}
-	if _, err := verifyBundledTorPayload(directory, receipt.Target); err != nil {
+	if _, err := verifyBundledTorPayloadContext(ctx, directory, receipt.Target); err != nil {
 		return "", err
 	}
 	if runtime.GOOS == "linux" {

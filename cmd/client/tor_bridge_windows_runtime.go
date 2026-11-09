@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -28,6 +29,16 @@ func safePinnedRuntimeExecutable(path, label string) (string, error) {
 }
 
 func findUniquePinnedRuntimeExecutable(root, name, label string) (string, error) {
+	return findUniquePinnedRuntimeExecutableContext(context.Background(), root, name, label)
+}
+
+func findUniquePinnedRuntimeExecutableContext(ctx context.Context, root, name, label string) (string, error) {
+	if ctx == nil {
+		return "", errors.New("Tor runtime discovery has no original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	root = filepath.Clean(strings.TrimSpace(root))
 	if root == "." || root == "" || strings.ContainsAny(root, "\r\n\x00") {
 		return "", fmt.Errorf("%s runtime root is empty or unsafe", label)
@@ -43,6 +54,9 @@ func findUniquePinnedRuntimeExecutable(root, name, label string) (string, error)
 	visited := 0
 	matches := make([]string, 0, 1)
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -78,10 +92,18 @@ func findUniquePinnedRuntimeExecutable(root, name, label string) (string, error)
 	if len(matches) != 1 {
 		return "", fmt.Errorf("Tor Expert Bundle must contain exactly one %s; found %d", name, len(matches))
 	}
-	return safePinnedRuntimeExecutable(matches[0], label)
+	path, err := safePinnedRuntimeExecutable(matches[0], label)
+	return path, errors.Join(err, ctx.Err())
 }
 
 func windowsTorRuntimeExecutable(root, name string) (string, error) {
+	return windowsTorRuntimeExecutableContext(context.Background(), root, name)
+}
+
+func windowsTorRuntimeExecutableContext(ctx context.Context, root, name string) (string, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return "", errors.New("Windows Tor discovery has no live original caller")
+	}
 	if runtime.GOOS != "windows" {
 		return "", errors.New("Windows Tor runtime requested on a non-Windows platform")
 	}
@@ -93,9 +115,9 @@ func windowsTorRuntimeExecutable(root, name string) (string, error) {
 	case "sing-box.exe":
 		return safePinnedRuntimeExecutable(filepath.Join(windowsRoot, "sing-box.exe"), "pinned Windows sing-box")
 	case "tor.exe":
-		return findUniquePinnedRuntimeExecutable(filepath.Join(windowsRoot, "tor-expert"), "tor.exe", "pinned Windows Tor")
+		return findUniquePinnedRuntimeExecutableContext(ctx, filepath.Join(windowsRoot, "tor-expert"), "tor.exe", "pinned Windows Tor")
 	case "lyrebird.exe":
-		return findUniquePinnedRuntimeExecutable(filepath.Join(windowsRoot, "tor-expert"), "lyrebird.exe", "pinned Windows Lyrebird")
+		return findUniquePinnedRuntimeExecutableContext(ctx, filepath.Join(windowsRoot, "tor-expert"), "lyrebird.exe", "pinned Windows Lyrebird")
 	default:
 		return "", fmt.Errorf("unsupported Windows Tor runtime executable %q", name)
 	}

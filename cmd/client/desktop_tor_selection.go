@@ -39,6 +39,17 @@ func desktopTorExecution(value string) string {
 }
 
 func captureDesktopTorSelection(a *app, profile common.RouterProfile, q externalProfileConnectRequest, lookup applexray.Lookup) (*desktopTorSelection, error) {
+	ctx := context.Background()
+	if a != nil {
+		ctx = a.connectionOperationContextOrBackground()
+	}
+	return captureDesktopTorSelectionContext(ctx, a, profile, q, lookup)
+}
+
+func captureDesktopTorSelectionContext(ctx context.Context, a *app, profile common.RouterProfile, q externalProfileConnectRequest, lookup applexray.Lookup) (*desktopTorSelection, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return nil, errors.New("Tor selection has no live original caller")
+	}
 	if a == nil || profile.ID == "" || strings.TrimSpace(q.ProfileID) != profile.ID {
 		return nil, errors.New("Tor selection requires its exact captured external node")
 	}
@@ -92,7 +103,9 @@ func captureDesktopTorSelection(a *app, profile common.RouterProfile, q external
 		if !validProfileID(entryID) || entryID == profile.ID {
 			return nil, errors.New("Tor requires two distinct valid entry and exit references")
 		}
-		a.mu.Lock()
+		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+			return nil, err
+		}
 		var found bool
 		entry, found = a.profileByIDLocked(entryID)
 		entry = cloneRouterProfile(entry)
@@ -116,7 +129,7 @@ func captureDesktopTorSelection(a *app, profile common.RouterProfile, q external
 		return nil, err
 	}
 	if !direct {
-		selection.predecessor, err = captureDesktopTorPredecessor(a, policy, lookup)
+		selection.predecessor, err = captureDesktopTorPredecessorContext(ctx, a, policy, lookup)
 		if err != nil {
 			return nil, err
 		}
@@ -127,7 +140,7 @@ func captureDesktopTorSelection(a *app, profile common.RouterProfile, q external
 		}
 	}
 	selection.policy = policy
-	if err := selection.current(a); err != nil {
+	if err := selection.currentContext(ctx, a); err != nil {
 		return nil, err
 	}
 	return selection, nil

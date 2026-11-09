@@ -508,6 +508,11 @@ func TestStartupExternalTorRejectsRetiredCaptureBeforeRuntimeAccess(t *testing.T
 	a.profiles = common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}}
 	capture := startupCaptureForTest(t, a)
 	a.profiles.Profiles[0].External.TorBridge.Bridges = []string{torImportSnowflakeBridge}
+	_, finish, err := a.beginConnectionTransactionContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finish()
 	result := &startupConnectResponse{header: make(http.Header)}
 	a.torBridgeConnectCapturedOwned(result, capture.profile, capture)
 	if result.status != http.StatusConflict || !strings.Contains(result.body.String(), "startup profile or policy changed") || a.cmd != nil || a.state.Connected {

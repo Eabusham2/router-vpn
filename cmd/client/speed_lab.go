@@ -313,7 +313,7 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
 	if strings.EqualFold(strings.TrimSpace(q.Topology), "external") {
-		q.preparedExternal, err = a.prepareSpeedLabExternalPath(q, nil)
+		q.preparedExternal, err = a.prepareSpeedLabExternalPathWithRuntime(q, nil, desktopTorConnectRuntime{requestContext: r.Context(), operation: operationCtx})
 		if err != nil {
 			return speedLabPath{}, speedLabMeasurement{}, nil, err
 		}

@@ -15,11 +15,18 @@ import (
 // They preserve the saved node, full policy and Startup Last until a winner
 // earns two fresh operands and the normal durable choice/adoption transaction.
 func (a *app) torBridgeCompareSelectionOwned(w http.ResponseWriter, profile common.RouterProfile, q externalProfileConnectRequest, startup *startupPolicyCapture, runtime desktopTorConnectRuntime) {
-	if err := a.guardDesktopOwnedNodeTransition(nil); err != nil {
+	caller, err := captureDesktopTorCaller(a, runtime.operation, runtime.requestContext)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	driver, err := newDesktopTorComparisonDriver(a, profile, q, startup, runtime)
+	defer caller.finish()
+	runtime.operation = caller.operation
+	if err := a.guardDesktopOwnedNodeTransitionContext(caller.work, nil); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	driver, err := newDesktopTorComparisonDriverContext(caller.work, a, profile, q, startup, runtime)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -29,17 +36,10 @@ func (a *app) torBridgeCompareSelectionOwned(w http.ResponseWriter, profile comm
 		http.Error(w, "could not allocate Tor comparison identity", http.StatusInternalServerError)
 		return
 	}
-	ctx, cancel := context.WithTimeout(driver.operation, 8*time.Minute)
+	ctx, cancel := context.WithTimeout(caller.work, 8*time.Minute)
 	defer cancel()
 	for _, selection := range driver.selections {
 		selection.adoption = ctx
-	}
-	if runtime.requestContext != nil {
-		if runtime.requestContext.Err() != nil {
-			cancel()
-		}
-		stop := context.AfterFunc(runtime.requestContext, cancel)
-		defer stop()
 	}
 	progress := &comparisonOwner{value: routeComparisonProgress{ID: id, RequestID: q.ComparisonRequestID, Stage: "starting", Measurements: []routechoice.Measurement{},
 		LastNodeMeasurement: "tor-last-relay-http", ExternalMeasurement: "same-captured-endpoint-http"}}

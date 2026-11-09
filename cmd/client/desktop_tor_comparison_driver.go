@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobiletor"
 	"router-vpn/internal/routechoice"
 )
@@ -88,7 +89,17 @@ func desktopTorRequestedExecution(profile common.RouterProfile, q externalProfil
 }
 
 func newDesktopTorComparisonDriver(a *app, profile common.RouterProfile, request externalProfileConnectRequest, startup *startupPolicyCapture, runtime desktopTorConnectRuntime) (*desktopTorComparisonDriver, error) {
-	if a == nil {
+	caller, err := captureDesktopTorCaller(a, runtime.operation, runtime.requestContext)
+	if err != nil {
+		return nil, err
+	}
+	defer caller.finish()
+	runtime.operation = caller.operation
+	return newDesktopTorComparisonDriverContext(caller.work, a, profile, request, startup, runtime)
+}
+
+func newDesktopTorComparisonDriverContext(ctx context.Context, a *app, profile common.RouterProfile, request externalProfileConnectRequest, startup *startupPolicyCapture, runtime desktopTorConnectRuntime) (*desktopTorComparisonDriver, error) {
+	if ctx == nil || ctx.Err() != nil || a == nil || runtime.operation == nil {
 		return nil, errors.New("Tor comparison requires a captured application owner")
 	}
 	request = cloneDesktopTorConnectRequest(request)
@@ -97,8 +108,10 @@ func newDesktopTorComparisonDriver(a *app, profile common.RouterProfile, request
 	if err != nil || execution != "auto" {
 		return nil, errors.New("Tor comparison requires an explicit or saved Compare choice through a private Router entry")
 	}
-	a.mu.Lock()
-	operation, selected := a.connectionContext, a.profiles.SelectedID
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
+	operation, selected := runtime.operation, a.profiles.SelectedID
 	err = desktopTorOperationCurrentLocked(a, operation, selected)
 	a.mu.Unlock()
 	if err != nil {
@@ -108,16 +121,21 @@ func newDesktopTorComparisonDriver(a *app, profile common.RouterProfile, request
 	if lookup == nil {
 		lookup = desktopTorEndpointLookup
 	}
-	driver := &desktopTorComparisonDriver{app: a, profile: profile, request: request, startup: startup,
-		operation: operation, selected: selected, network: physicalNetworkIdentity(), readNetwork: physicalNetworkIdentityContext, runtime: runtime,
-		selections: make(map[routechoice.Execution]*desktopTorSelection)}
-	if driver.network == "" {
-		return nil, errors.New("Tor comparison could not capture the current physical network identity")
+	readNetwork := runtime.readNetwork
+	if readNetwork == nil {
+		readNetwork = physicalNetworkIdentityContext
 	}
+	network, err := readNetwork(ctx)
+	if err != nil || network == "" || ctx.Err() != nil {
+		return nil, errors.Join(err, ctx.Err(), errors.New("Tor comparison could not capture the current physical network identity"))
+	}
+	driver := &desktopTorComparisonDriver{app: a, profile: profile, request: request, startup: startup,
+		operation: operation, selected: selected, network: network, readNetwork: readNetwork, runtime: runtime,
+		selections: make(map[routechoice.Execution]*desktopTorSelection)}
 	for _, execution := range []routechoice.Execution{routechoice.Local, routechoice.Server} {
 		choice := cloneDesktopTorConnectRequest(request)
 		choice.Execution = string(execution)
-		selection, err := captureDesktopTorSelection(a, profile, choice, lookup)
+		selection, err := captureDesktopTorSelectionContext(ctx, a, profile, choice, lookup)
 		if err != nil {
 			return nil, err
 		}
@@ -126,6 +144,7 @@ func newDesktopTorComparisonDriver(a *app, profile common.RouterProfile, request
 			return nil, errors.New("Tor Compare requires independently captured Local and authenticated Server paths through the same private Router")
 		}
 		selection.preference = "auto"
+		selection.adoption = runtime.requestContext
 		driver.selections[execution] = selection
 		driver.candidates = append(driver.candidates, routechoice.Candidate{Execution: execution, Transport: profile.External.Protocol, EntryID: entry.entry.ID, ExitID: profile.ID})
 	}
@@ -137,7 +156,7 @@ func newDesktopTorComparisonDriver(a *app, profile common.RouterProfile, request
 		local.predecessor.assetsSHA256 != server.predecessor.assetsSHA256 || local.predecessor.mode != server.predecessor.mode {
 		return nil, errors.New("Local and Server Tor captures differ in private source, resolver or protection policy")
 	}
-	if err := driver.current(); err != nil {
+	if err := driver.currentContext(ctx); err != nil {
 		return nil, err
 	}
 	return driver, nil
@@ -171,7 +190,9 @@ func (d *desktopTorComparisonDriver) OpenTarget(ctx context.Context, candidate r
 		return nil, errors.New("Tor comparison cannot substitute a captured candidate")
 	}
 	if d.last != nil {
-		d.last.mu.Lock()
+		if err := desktopnetwork.LockContext(ctx, &d.last.mu); err != nil {
+			return nil, err
+		}
 		closed := d.last.closed
 		d.last.mu.Unlock()
 		if !closed {
@@ -180,7 +201,7 @@ func (d *desktopTorComparisonDriver) OpenTarget(ctx context.Context, candidate r
 	}
 	runtime := d.runtime
 	if runtime.capability == nil {
-		runtime.capability = func() standardExitCapability { return desktopTorPolicyRuntimeCapability(selection.policy) }
+		runtime.capability = func() standardExitCapability { return desktopTorPolicyRuntimeCapabilityContext(ctx, selection.policy) }
 	}
 	if capability := runtime.capability(); !capability.Supported {
 		return nil, errors.New(capability.Reason)
@@ -192,13 +213,13 @@ func (d *desktopTorComparisonDriver) OpenTarget(ctx context.Context, candidate r
 		if prepared.selection != selection || prepared.temporary != d.temporary {
 			return nil, errors.New("Tor comparison candidate differs from its preflight owner")
 		}
-		if err := prepared.current(d.app, true); err != nil {
+		if err := prepared.currentContext(ctx, d.app, true); err != nil {
 			return nil, err
 		}
 		delete(d.prepared, candidate.Execution)
 		command, prelaunch = prepared.command, prepared.prelaunch
 	} else {
-		command, prelaunch, err = prepareTorBridgeCommandWithRuntime(d.app, selection.policy, d.profile, selection.predecessor, runtime)
+		command, prelaunch, err = prepareTorBridgeCommandWithRuntimeContext(ctx, d.app, selection.policy, d.profile, selection.predecessor, runtime)
 		if err != nil {
 			return nil, err
 		}
