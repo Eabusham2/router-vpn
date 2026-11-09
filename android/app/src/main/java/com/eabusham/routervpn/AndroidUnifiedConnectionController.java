@@ -102,7 +102,8 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
 
     boolean capturedOrdinaryEntryMatches(AndroidHomeStateStore.Snapshot owner,AndroidStandardExitStore.Entry expected)throws Exception{
         if(!samePath(owner,AndroidHomeStateStore.snapshot(activity)))return false;
-        AndroidStandardExitStore.Entry captured=runtime.standardExit.capturedOrdinaryEntry(owner);
+        if(expected!=null&&"multihop".equals(owner.logicalMode)&&(!"local".equals(multihop.activeExecution())||!"local".equals(multihop.activeSelectedExecution())))return false;
+        AndroidStandardExitStore.Entry captured="multihop".equals(owner.logicalMode)?multihop.capturedOrdinaryEntry(owner):runtime.standardExit.capturedOrdinaryEntry(owner);
         return (expected==null?captured==null:captured!=null&&externalDigest(expected).equals(externalDigest(captured)))
                 &&samePath(owner,AndroidHomeStateStore.snapshot(activity));
     }
