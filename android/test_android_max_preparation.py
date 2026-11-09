@@ -176,7 +176,7 @@ P.HARNESS = P.HARNESS[:P.HARNESS.index(' public static void main(')] + r'''
 '''
 
 
-def main():
+def main(*, after_run=None):
     with tempfile.TemporaryDirectory(prefix='android-max-prepare-fixtures-') as temp:
         fixture = Path(temp) / 'profiles.json'
         subprocess.run(['go', 'test', '-count=1', '-run', '^TestExportMAXMobileProfiles$', './internal/mobilemultihop'], cwd=ROOT, env=dict(os.environ, ROUTERVPN_MAX_PROFILE_FIXTURES=str(fixture)), check=True, timeout=90)
@@ -184,7 +184,8 @@ def main():
         os.environ['ROUTERVPN_MAX_PROFILE_FIXTURES'] = str(fixture)
         try:
             P.run()
-            run_watch_boundary()
+            if after_run is not None:
+                after_run()
         finally:
             if old is None:
                 os.environ.pop('ROUTERVPN_MAX_PROFILE_FIXTURES', None)
@@ -212,4 +213,6 @@ def run_watch_boundary():
 
 
 if __name__ == '__main__':
-    main()
+    # Only this entrypoint owns the preparation harness. The full service
+    # imports main() after installing its own independent Java main method.
+    main(after_run=run_watch_boundary)

@@ -305,6 +305,7 @@ for executable_contract in (
     "test_android_multihop_layers.py",
     "test_android_layered_service_compile.py",
     "test_android_max_dns_owner.py",
+    "test_android_max_fixture_composition.py",
     "test_android_max_preparation.py",
     "test_android_max_host_paths.py",
     "test_android_max_service.py",
