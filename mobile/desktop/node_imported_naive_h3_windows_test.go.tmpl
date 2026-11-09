@@ -1,0 +1,1016 @@
+//go:build windows && routervpn_windows_node_composition && with_purego
+
+package box
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/cronet-go"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	GROUP "github.com/sagernet/sing-box/protocol/group"
+	HY "github.com/sagernet/sing-box/protocol/hysteria2"
+	MIXED "github.com/sagernet/sing-box/protocol/mixed"
+	NV "github.com/sagernet/sing-box/protocol/naive"
+	OVPN "github.com/sagernet/sing-box/protocol/openvpn"
+	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
+	OVL "github.com/sagernet/sing-box/protocol/routervpnopenvpnlayers"
+	WH "github.com/sagernet/sing-box/protocol/routervpnwhitening"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	SOCKS "github.com/sagernet/sing-box/protocol/socks"
+	WG "github.com/sagernet/sing-box/protocol/wireguard"
+	desktoppt "github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/service/routervpnperformance"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// This is a separate protected Windows acceptance inventory. It starts the
+// actual imported Box, original policy, BFE baseline and isolated socket owner.
+// Wintun identity is real; route/DNS installation and packet pumping retain the
+// existing explicit external WFP fixture boundary. These are not device tests.
+var desktopImportedH3WindowsKinds = []string{"socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn-tcp", "openvpn-udp"}
+var desktopImportedH3WindowsLayers = []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"}
+
+func desktopImportedH3WindowsLibrary(t *testing.T) {
+	t.Helper()
+	path, expected := os.Getenv("ROUTERVPN_NODE_CRONET_LIBRARY"), os.Getenv("ROUTERVPN_NODE_CRONET_SHA256")
+	size, e := strconv.ParseInt(os.Getenv("ROUTERVPN_NODE_CRONET_BYTES"), 10, 64)
+	if e != nil || size <= 0 || size > 128<<20 || len(expected) != 64 || !filepath.IsAbs(path) {
+		t.Fatal("protected imported H3 requires its exact same-target Cronet module")
+	}
+	before, e := os.Lstat(path)
+	if e != nil || !before.Mode().IsRegular() || before.Size() != size {
+		t.Fatal("captured imported H3 library is absent or changed", e)
+	}
+	file, e := os.Open(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer file.Close()
+	opened, e := file.Stat()
+	if e != nil || !os.SameFile(before, opened) {
+		t.Fatal("imported H3 library changed while opening", e)
+	}
+	digest := sha256.New()
+	n, e := io.Copy(digest, io.LimitReader(file, size+1))
+	if e != nil || n != size || hex.EncodeToString(digest.Sum(nil)) != expected {
+		t.Fatal("imported H3 library differs from captured module", e)
+	}
+	if e = cronet.LoadLibrary(path); e != nil {
+		t.Fatal("captured imported H3 native library did not load", e)
+	}
+	after, e := os.Lstat(path)
+	if e != nil || !os.SameFile(opened, after) || after.Size() != size {
+		t.Fatal("imported H3 library changed during native load", e)
+	}
+}
+func desktopImportedH3WindowsSource(t *testing.T, kind, first, last string) []string {
+	t.Helper()
+	directory := os.Getenv("ROUTERVPN_IMPORTED_NAIVE_H3_FIXTURES")
+	if directory == "" {
+		t.Fatal("protected imported H3 has no separate source inventory")
+	}
+	path := filepath.Join(directory, kind+"--naive-h3--"+first+"--"+last+".json")
+	before, e := os.Lstat(path)
+	if e != nil || !before.Mode().IsRegular() || before.Size() <= 0 || before.Size() > 1<<20 {
+		t.Fatal("protected imported H3 source is not a bounded original file", e)
+	}
+	raw, e := os.ReadFile(path)
+	var source []string
+	if e != nil || json.Unmarshal(raw, &source) != nil || len(source) != 9 || source[2] != "naive-h3" {
+		t.Fatal("protected imported H3 source lost its original strings", e)
+	}
+	original := desktopImportedH3CompileSource(t, source)
+	defer original.Close()
+	if original.SourceSHA256() != source[7] || original.Config() != source[8] || original.Healthy() {
+		t.Fatal("protected imported H3 source identity changed or fabricated proof")
+	}
+	var meta mobilemultihop.Metadata
+	protocol := kind
+	if strings.HasPrefix(kind, "openvpn-") {
+		protocol = "openvpn"
+	}
+	normalize := func(v string) string {
+		if v == "" {
+			return "off"
+		}
+		return v
+	}
+	if json.Unmarshal([]byte(original.Metadata()), &meta) != nil || meta.EntryMode != protocol || meta.ExitMode != "naive-h3" || normalize(meta.EntryStartLayer) != first || normalize(meta.ExitStartLayer) != last {
+		t.Fatal("protected imported H3 filename relabeled another original graph")
+	}
+	after, e := os.Lstat(path)
+	current, readErr := os.ReadFile(path)
+	if e != nil || readErr != nil || !os.SameFile(before, after) || !bytes.Equal(raw, current) {
+		t.Fatal("protected imported H3 original source changed during capture")
+	}
+	return source
+}
+
+type desktopImportedH3Reference struct {
+	alias       *desktopExternalWindowsAlias
+	input       io.WriteCloser
+	output      *os.File
+	reader      *bufio.Reader
+	done        chan error
+	cancel      context.CancelFunc
+	diagnostics desktopExternalWFPDiagnostics
+	initial     desktopImportedH3PeerReply
+	closed      bool
+}
+
+func (p *desktopImportedH3Reference) read() (desktopImportedH3PeerReply, error) {
+	type result struct {
+		reply desktopImportedH3PeerReply
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		var value desktopImportedH3PeerReply
+		e := desktopImportedH3Read(p.reader, &value)
+		done <- result{value, e}
+	}()
+	select {
+	case value := <-done:
+		return value.reply, value.err
+	case <-time.After(12 * time.Second):
+		p.cancel()
+		_ = p.output.Close()
+		select {
+		case <-done:
+		case <-time.After(12 * time.Second):
+			return desktopImportedH3PeerReply{}, errors.New("original H3 peer reader did not join")
+		}
+		return desktopImportedH3PeerReply{}, errors.New("original H3 peer response timed out")
+	}
+}
+func (p *desktopImportedH3Reference) same(reply desktopImportedH3PeerReply) bool {
+	original := p.initial
+	return reply.Schema == 1 && reply.Probe == original.Probe && reply.Kind == original.Kind && reply.EntryLayer == original.EntryLayer && reply.FinalLayer == original.FinalLayer && reply.Address == original.Address && reply.SourceSHA256 == original.SourceSHA256 && reply.ConfigSHA256 == original.ConfigSHA256 && reflect.DeepEqual(reply.Source, original.Source) && bytes.Equal(reply.AppID, original.AppID)
+}
+func (p *desktopImportedH3Reference) observe(t *testing.T) desktopImportedH3PeerReply {
+	t.Helper()
+	if p.closed {
+		t.Fatal("retired imported H3 peer was reused")
+	}
+	if e := json.NewEncoder(p.input).Encode(desktopImportedH3PeerRequest{Schema: 1, Operation: "observe"}); e != nil {
+		t.Fatal(e)
+	}
+	r, e := p.read()
+	if e != nil || !p.same(r) || r.Closed {
+		t.Fatal("imported H3 peer readback changed owner", e, p.diagnostics.String())
+	}
+	return r
+}
+func (p *desktopImportedH3Reference) close() error {
+	if p.closed {
+		return nil
+	}
+	p.closed = true
+	failure := p.input.Close()
+	reply, e := p.read()
+	if e != nil || !p.same(reply) || !reply.Closed || reply.Nonce != "" {
+		failure = errors.Join(failure, e, errors.New("imported H3 peer did not acknowledge original joined cleanup"))
+		p.cancel()
+	}
+	failure = errors.Join(failure, desktopExternalWFPJoinOutput(p.reader, p.output.Close, p.done, p.cancel, 12*time.Second))
+	failure = errors.Join(failure, p.output.Close())
+	p.cancel()
+	return failure
+}
+func desktopImportedH3WindowsReference(t *testing.T, ca *desktopExternalIntegrationCA, kind, first, last, fault string) *desktopImportedH3Reference {
+	return desktopImportedH3WindowsReferenceWithAlias(t, ca, kind, first, last, fault, nil)
+}
+func desktopImportedH3WindowsReferenceWithAlias(t *testing.T, ca *desktopExternalIntegrationCA, kind, first, last, fault string, alias *desktopExternalWindowsAlias) *desktopImportedH3Reference {
+	t.Helper()
+	address := desktopExternalWFPAddress(t).String()
+	if strings.HasPrefix(kind, "openvpn-") {
+		if alias == nil {
+			alias = desktopExternalCreateAlias(t)
+		} else if e := alias.readback(); e != nil {
+			t.Fatal("replacement H3 reference lost original owned alias", e)
+		}
+		address = desktopExternalOpenVPNAlias.String()
+	}
+	image, e := desktopExternalWFPCapturedImage()
+	if e != nil {
+		t.Fatal(e)
+	}
+	copyPath := filepath.Join(t.TempDir(), "retained-imported-h3-provider.test.exe")
+	writer, e := image.create(copyPath)
+	if writer != nil {
+		t.Cleanup(func() {
+			if e := writer.close(); e != nil {
+				t.Error(e)
+			}
+		})
+	}
+	if e != nil {
+		t.Fatal(e)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	command := exec.CommandContext(ctx, copyPath, "-test.run=^TestRouterVPNWindowsImportedNaiveH3Peer$", "-test.count=1", "-test.timeout=85s")
+	command.Env = append(os.Environ(), "ROUTERVPN_WINDOWS_IMPORTED_H3_PEER=1")
+	input, e := command.StdinPipe()
+	if e != nil {
+		cancel()
+		t.Fatal(e)
+	}
+	output, child, e := os.Pipe()
+	if e != nil {
+		_ = input.Close()
+		cancel()
+		t.Fatal(e)
+	}
+	p := &desktopImportedH3Reference{alias: alias, input: input, output: output, reader: bufio.NewReaderSize(output, desktopImportedH3PeerLimit+1), done: make(chan error, 1), cancel: cancel}
+	command.Stdout, command.Stderr = child, &p.diagnostics
+	if e = command.Start(); e != nil {
+		_ = input.Close()
+		_ = output.Close()
+		_ = child.Close()
+		cancel()
+		t.Fatal(e)
+	}
+	_ = child.Close()
+	go func() { p.done <- command.Wait() }()
+	t.Cleanup(func() {
+		if e := p.close(); e != nil {
+			t.Error("original imported H3 provider cleanup", e, p.diagnostics.String())
+		}
+	})
+	cert, key := desktopExternalWFPCertificate(t, ca.certificate(t, true))
+	r := desktopImportedH3PeerRequest{Schema: 1, Operation: "start", Kind: kind, EntryLayer: first, FinalLayer: last, Address: address, Fault: fault, Source: desktopImportedH3WindowsSource(t, kind, first, last), Certificate: cert, Key: key}
+	if e = json.NewEncoder(input).Encode(r); e != nil {
+		t.Fatal(e)
+	}
+	clear(key)
+	p.initial, e = p.read()
+	self, appErr := mobiletor.DesktopWindowsNodeCompositionAppID()
+	if e != nil || appErr != nil || p.initial.Schema != 1 || p.initial.Kind != kind || p.initial.EntryLayer != first || p.initial.FinalLayer != last || p.initial.Closed || len(p.initial.AppID) == 0 || bytes.Equal(self, p.initial.AppID) || len(p.initial.Source) != 7 {
+		t.Fatal("independent imported H3 reference lost original process/source identity", e, appErr, p.diagnostics.String())
+	}
+	return p
+}
+
+type desktopImportedH3WindowsFixture struct {
+	box         *Box
+	policy      *mobilemultihop.DesktopImportedPolicy
+	source      []string
+	network     *desktoppt.NodeNetworkOwner
+	tun         *desktopExternalWFPTUN
+	preparation *RouterVPNDesktopNodePreparation
+	owner       *RouterVPNDesktopNodePhysical
+	prepared    mobiletor.DesktopWindowsProtectionTarget
+	admitted    int
+	cancel      context.CancelFunc
+	closeOnce   sync.Once
+	closeErr    error
+}
+
+func (f *desktopImportedH3WindowsFixture) close() error {
+	f.closeOnce.Do(func() {
+		if f.owner != nil {
+			f.owner.Cancel()
+		}
+		if f.box != nil {
+			f.closeErr = f.box.Close()
+		}
+		f.cancel()
+	})
+	return f.closeErr
+}
+func desktopImportedH3WindowsBox(t *testing.T, p *desktopImportedH3Reference, previous *mobiletor.DesktopWindowsProtectionTarget) *desktopImportedH3WindowsFixture {
+	t.Helper()
+	original := desktopImportedH3CompileSource(t, p.initial.Source)
+	t.Cleanup(func() { _ = original.Close() })
+	sum := sha256.Sum256([]byte(original.Config()))
+	if original.SourceSHA256() != p.initial.SourceSHA256 || hex.EncodeToString(sum[:]) != p.initial.ConfigSHA256 {
+		t.Fatal("Windows imported H3 adopted changed reference source")
+	}
+	policy, e := mobilemultihop.NewDesktopImportedPolicy(original, desktopExternalWFPNonce(t), "windows")
+	if e != nil {
+		t.Fatal(e)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	f := &desktopImportedH3WindowsFixture{policy: policy, source: append([]string(nil), p.initial.Source...), cancel: cancel}
+	t.Cleanup(func() {
+		if e := f.close(); e != nil {
+			t.Error("protected imported H3 Box failed original join", e)
+		}
+	})
+	ins := inbound.NewRegistry()
+	MIXED.RegisterInbound(ins)
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
+		f.tun = &desktopExternalWFPTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag), ctx: ctx, options: options}
+		return f.tun, nil
+	})
+	outs := outbound.NewRegistry()
+	GROUP.RegisterSelector(outs)
+	NV.RegisterOutbound(outs)
+	HY.RegisterOutbound(outs)
+	SS.RegisterOutbound(outs)
+	SOCKS.RegisterOutbound(outs)
+	WH.RegisterOutbound(outs)
+	desktoppt.RegisterNodePhysicalOutbound(outs)
+	desktoppt.RegisterExternalSOCKSOutbound(outs)
+	OVL.RegisterOutbound(outs)
+	endpoints := endpoint.NewRegistry()
+	WG.RegisterEndpoint(endpoints)
+	AWG.RegisterEndpoint(endpoints)
+	OVPN.RegisterEndpoint(endpoints)
+	transports := dns.NewTransportRegistry()
+	DNST.RegisterUDP(transports)
+	DNST.RegisterTCP(transports)
+	OVPN.RegisterDNSTransport(transports)
+	services := boxService.NewRegistry()
+	routervpnperformance.RegisterService(services)
+	boxService.Register[desktoppt.NodeCaptureOptions](services, mobilemultihop.DesktopNodeNetworkType, func(ctx context.Context, logger log.ContextLogger, tag string, options desktoppt.NodeCaptureOptions) (adapter.Service, error) {
+		owner, e := desktoppt.NewNodeNetworkOwner(ctx, logger, tag, options)
+		if e == nil {
+			f.network = owner.(*desktoppt.NodeNetworkOwner)
+		}
+		return owner, e
+	})
+	admission := func(ctx context.Context, captured desktoppt.NodePhysicalPrepared) error {
+		if f.network == nil || f.network.Current() || f.network.SocketCurrent() || f.admitted != 0 {
+			return errors.New("imported H3 physical admission was late or repeated")
+		}
+		target := mobiletor.DesktopWindowsProtectionTarget{Capture: captured.Capture, Policy: captured.Policy, BaselineSHA256: captured.BaselineSHA256}
+		if e := mobiletor.DesktopWindowsNodeCompositionVerifyPrepared(ctx, target); e != nil {
+			return e
+		}
+		f.prepared, f.admitted = target, 1
+		return nil
+	}
+	if previous == nil {
+		ctx, e = desktoppt.WithNodePhysicalAdmission(ctx, policy, admission)
+	} else {
+		ctx, e = desktoppt.WithNodePhysicalSuccessorAdmission(ctx, policy, *previous, admission)
+	}
+	if e != nil {
+		t.Fatal(e)
+	}
+	ctx = Context(ctx, ins, outs, endpoints, transports, services, certificate.NewRegistry())
+	options, e := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(policy.Config()))
+	if e != nil {
+		t.Fatal(e)
+	}
+	options.Log = &option.LogOptions{Level: "error", DisableColor: true}
+	f.box, e = New(Options{Context: ctx, Options: options})
+	if e != nil {
+		t.Fatal(e)
+	}
+	f.preparation, e = f.box.RouterVPNDesktopImportedPreparePhysicalOwned(policy)
+	if e != nil || f.preparation == nil {
+		t.Fatal("imported H3 skipped exact shipping physical preparation", e)
+	}
+	return f
+}
+func (f *desktopImportedH3WindowsFixture) start(t *testing.T) {
+	t.Helper()
+	if e := f.box.RouterVPNStrategyStart(); e != nil {
+		t.Fatal("protected imported H3 native startup", e)
+	}
+	if f.admitted != 1 || f.prepared.Validate() != nil || f.network.Current() {
+		t.Fatal("protected imported H3 startup lost captured pre-activation owner")
+	}
+	// Equal bytes from a new compiler object cannot adopt this exact runtime.
+	raw, e := f.policy.OriginalController().ImportedLaunchInput()
+	if e != nil {
+		t.Fatal(e)
+	}
+	foreign, e := mobilemultihop.ParseImportedLaunchInput(raw)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer foreign.Close()
+	replayed, e := mobilemultihop.NewDesktopImportedPolicy(foreign, f.policy.Metadata().SessionID, "windows")
+	if e != nil || replayed.Config() != f.policy.Config() {
+		t.Fatal("equal-source H3 negative lost its capture", e)
+	}
+	if owner, e := f.box.RouterVPNDesktopImportedActivatePhysical(replayed); e == nil || owner != nil {
+		t.Fatal("protected H3 adopted an equal replacement policy")
+	}
+	f.owner, e = f.box.RouterVPNDesktopImportedActivatePhysical(f.policy)
+	if e != nil || f.owner == nil || !f.owner.Current() {
+		t.Fatal("protected H3 lost original activation", e)
+	}
+}
+func (f *desktopImportedH3WindowsFixture) outbound(t *testing.T, tag string) adapter.Outbound {
+	t.Helper()
+	value, ok := f.box.outbound.Outbound(tag)
+	if !ok {
+		t.Fatal("protected H3 lost native outbound", tag)
+	}
+	return value
+}
+func desktopImportedH3Exchange(ctx context.Context, dialer adapter.Outbound, network string) error {
+	c, e := dialer.DialContext(ctx, network, M.ParseSocksaddr(desktopImportedH3Echo))
+	if e != nil {
+		return e
+	}
+	defer c.Close()
+	if e = c.SetDeadline(time.Now().Add(5 * time.Second)); e != nil {
+		return e
+	}
+	body := []byte("captured-imported-h3-" + network)
+	if _, e = c.Write(body); e != nil {
+		return e
+	}
+	answer := make([]byte, len(body))
+	if _, e = io.ReadFull(c, answer); e != nil {
+		return e
+	}
+	if !bytes.Equal(body, answer) {
+		return errors.New("protected H3 original payload changed")
+	}
+	return nil
+}
+func (f *desktopImportedH3WindowsFixture) query(ctx context.Context, selected bool) error {
+	graph := desktopImportedH3ObjectNoTest(f.policy.Config())
+	servers := graph["dns"].(map[string]any)["servers"].([]any)
+	index, name, expected := 1, "bootstrap.routervpn.test.", "203.0.113.76"
+	if selected {
+		index, name, expected = 0, "selected.routervpn.test.", "203.0.113.77"
+	}
+	row := servers[index].(map[string]any)
+	if row["type"] != "udp" || row["server"] != "192.168.50.133" || row["server_port"] != float64(53) {
+		return errors.New("protected H3 changed original Home UDP policy")
+	}
+	transport, ok := f.box.dnsTransport.Transport(row["tag"].(string))
+	if !ok {
+		return errors.New("protected H3 lost original native DNS transport")
+	}
+	answer, e := transport.Exchange(ctx, new(mDNS.Msg).SetQuestion(name, mDNS.TypeA))
+	if e != nil {
+		return e
+	}
+	if len(answer.Answer) != 1 {
+		return errors.New("protected H3 native DNS answer missing")
+	}
+	a, ok := answer.Answer[0].(*mDNS.A)
+	if !ok || a.A.String() != expected {
+		return errors.New("protected H3 selected/bootstrap DNS lanes crossed")
+	}
+	return nil
+}
+func (f *desktopImportedH3WindowsFixture) proofLane(ctx context.Context, entry bool) error {
+	port := mobilemultihop.DesktopImportedExitProofPort
+	if entry {
+		port = mobilemultihop.DesktopImportedEntryProofPort
+	}
+	dialer, e := SOCKS.NewOutbound(f.box.ctx, nil, log.NewNOPFactory().Logger(), "independent-proof-lane", option.SOCKSOutboundOptions{ServerOptions: option.ServerOptions{Server: "127.0.0.1", ServerPort: uint16(port)}, Version: "5"})
+	if e != nil {
+		return e
+	}
+	address := "10.77.0.1:8787"
+	if entry {
+		address = "1.1.1.1:443"
+	}
+	stream, e := dialer.DialContext(ctx, "tcp", M.ParseSocksaddr(address))
+	if e != nil {
+		return e
+	}
+	defer stream.Close()
+	stop := context.AfterFunc(ctx, func() { _ = stream.Close() })
+	defer stop()
+	if e = stream.SetDeadline(time.Now().Add(5 * time.Second)); e != nil {
+		return e
+	}
+	path, authorization := "/health", "Bearer "+desktopImportedH3ObjectNoTest(f.source[4])["api_token"].(string)
+	if entry {
+		secure := tls.Client(stream, &tls.Config{ServerName: "1.1.1.1", MinVersion: tls.VersionTLS12})
+		if e = secure.HandshakeContext(ctx); e != nil {
+			return e
+		}
+		stream = secure
+		path, authorization = "/cdn-cgi/trace?routervpn_proof="+strings.Repeat("a", 32), ""
+	}
+	request, e := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+path, nil)
+	if e != nil {
+		return e
+	}
+	request.Host = strings.TrimSuffix(address, ":443")
+	if authorization != "" {
+		request.Header.Set("Authorization", authorization)
+	}
+	if e = request.Write(stream); e != nil {
+		return e
+	}
+	reply, e := http.ReadResponse(bufio.NewReader(stream), request)
+	if e != nil {
+		return e
+	}
+	defer reply.Body.Close()
+	body, e := io.ReadAll(io.LimitReader(reply.Body, 4097))
+	if e != nil || reply.StatusCode != 200 || len(body) > 4096 {
+		return errors.Join(e, errors.New("protected H3 captured proof failed"))
+	}
+	if entry {
+		if string(body) != "ip="+desktopExternalIntegrationIP+"\n" {
+			return errors.New("protected H3 entry public IP changed")
+		}
+	} else {
+		var value struct {
+			OK     bool   `json:"ok"`
+			NodeID string `json:"node_id"`
+			Proof  string `json:"proof"`
+		}
+		if json.Unmarshal(body, &value) != nil || !value.OK || value.NodeID != f.policy.Metadata().ExitNodeID || value.Proof != "router-vpn-private-agent-v1" {
+			return errors.New("protected H3 paired final identity changed")
+		}
+	}
+	return nil
+}
+
+func (f *desktopImportedH3WindowsFixture) snapshot(t *testing.T, peer *desktopImportedH3Reference) mobiletor.DesktopWindowsNodeCompositionReadback {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	view, e := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	if e != nil || view.Closed || view.Target != f.prepared || view.Owner.Kind != "windows-isolated-token" || !view.Options.RetainBaselineForHandoff || !f.owner.Current() {
+		t.Fatal("protected imported H3 lost actual BFE/socket owner readback", e)
+	}
+	capture, e := f.policy.OriginalController().ImportedDesktopCapture()
+	if e != nil {
+		t.Fatal(e)
+	}
+	associations := peer.observe(t).SOCKS
+	for _, grant := range view.Grants {
+		if grant.Capture != f.prepared.Capture || grant.Binding.Owner != view.Owner {
+			t.Fatal("protected imported H3 grant changed its original captured owner")
+		}
+		static := false
+		for _, root := range capture.PhysicalRoots {
+			for _, destination := range root.Destinations {
+				if grant.Network == destination.Network && grant.Remote.String() == net.JoinHostPort(destination.Host, strconv.Itoa(destination.Port)) {
+					static = true
+				}
+			}
+		}
+		authenticated := false
+		if f.policy.Metadata().SOCKSUDPAssociationRequired && grant.Network == "udp" {
+			for _, association := range associations {
+				if !association.Closed && association.Control != "" && association.Client != "" && association.Packets > 0 && grant.Local.String() == association.Client && grant.Remote.String() == association.Relay {
+					authenticated = true
+				}
+			}
+		}
+		if !static && !authenticated {
+			t.Fatal("protected imported H3 granted its final or DNS as a direct physical root", grant.Network, grant.Remote)
+		}
+	}
+	if len(view.Grants) == 0 {
+		t.Fatal("protected imported H3 accepted traffic with no actual native socket grants")
+	}
+	return view
+}
+func (f *desktopImportedH3WindowsFixture) prove(t *testing.T, p *desktopImportedH3Reference) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if e := f.proofLane(ctx, true); e != nil {
+		t.Fatal("protected imported H3 original entry public proof", e)
+	}
+	if e := f.query(ctx, false); e != nil {
+		t.Fatal("protected imported H3 original bootstrap DNS", e)
+	}
+	if e := f.query(ctx, true); e != nil {
+		t.Fatal("protected imported H3 original selected final DNS", e)
+	}
+	if e := f.proofLane(ctx, false); e != nil {
+		t.Fatal("protected imported H3 paired final identity proof", e)
+	}
+	final := f.outbound(t, f.policy.Metadata().FinalTag)
+	for _, network := range []string{"tcp", "udp"} {
+		if e := desktopImportedH3Exchange(ctx, final, network); e != nil {
+			t.Fatal("protected imported H3 actual authenticated payload", network, e)
+		}
+	}
+	actual := p.observe(t)
+	if actual.Bootstrap < 1 || actual.Selected < 1 || actual.TCP < 1 || actual.UDP < 1 || actual.Private < 1 || actual.Public < 1 || actual.QUIC < 1 {
+		t.Fatal("protected imported H3 proof lacks independent real receiver observations", actual.Bootstrap, actual.Selected, actual.TCP, actual.UDP, actual.Private, actual.Public, actual.QUIC)
+	}
+	f.snapshot(t, p)
+	desktopImportedH3RequireBlocked(t, p)
+	if f.policy.OriginalController().Healthy() {
+		t.Fatal("native H3 fixture fabricated application Connected proof")
+	}
+}
+func (f *desktopImportedH3WindowsFixture) drain(t *testing.T) mobiletor.DesktopWindowsProtectionTarget {
+	t.Helper()
+	if e := f.close(); e != nil {
+		t.Fatal("protected imported H3 owner failed original drain", e)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	view, e := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	if e != nil || !view.Closed || len(view.Grants) != 0 || view.Target != f.prepared || f.network.SocketCurrent() || f.owner != nil && f.owner.Current() {
+		t.Fatal("protected imported H3 drain retained active original grants", e)
+	}
+	return view.Target
+}
+func desktopImportedH3WindowsTrust(t *testing.T) *desktopExternalIntegrationCA {
+	t.Helper()
+	desktopImportedH3WindowsLibrary(t)
+	ca := newDesktopExternalIntegrationCA(t)
+	roots := x509.NewCertPool()
+	certificate, e := x509.ParseCertificate(ca.der)
+	if e != nil {
+		t.Fatal(e)
+	}
+	roots.AddCert(certificate)
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+	x509.SetFallbackRoots(roots)
+	return ca
+}
+func TestRouterVPNWindowsImportedNaiveH3Runtime(t *testing.T) {
+	ca := desktopImportedH3WindowsTrust(t)
+	for _, kind := range desktopImportedH3WindowsKinds {
+		for _, first := range desktopImportedH3WindowsLayers {
+			for _, last := range desktopImportedH3WindowsLayers {
+				t.Run(kind+"--"+first+"--"+last, func(t *testing.T) {
+					peer := desktopImportedH3WindowsReference(t, ca, kind, first, last, "")
+					var retained mobiletor.DesktopWindowsProtectionTarget
+					desktopExternalWFPCleanup(t, &retained)
+					f := desktopImportedH3WindowsBox(t, peer, nil)
+					f.start(t)
+					f.prove(t, peer)
+					retained = f.drain(t)
+				})
+			}
+		}
+	}
+}
+
+func desktopImportedH3PacketDNS(c net.Conn) error {
+	if e := c.SetDeadline(time.Now().Add(5 * time.Second)); e != nil {
+		return e
+	}
+	raw, e := new(mDNS.Msg).SetQuestion("bootstrap.routervpn.test.", mDNS.TypeA).Pack()
+	if e != nil {
+		return e
+	}
+	if _, e = c.Write(raw); e != nil {
+		return e
+	}
+	body := make([]byte, 4096)
+	n, e := c.Read(body)
+	if e != nil {
+		return e
+	}
+	answer := new(mDNS.Msg)
+	if e = answer.Unpack(body[:n]); e != nil {
+		return e
+	}
+	if len(answer.Answer) != 1 {
+		return errors.New("owned SOCKS association lost bootstrap DNS")
+	}
+	return nil
+}
+func desktopImportedH3WaitSnapshot(t *testing.T, f *desktopImportedH3WindowsFixture, predicate func(mobiletor.DesktopWindowsNodeCompositionReadback) bool) mobiletor.DesktopWindowsNodeCompositionReadback {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		view, e := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if predicate(view) {
+			return view
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("captured imported H3 grant retirement did not complete", ctx.Err())
+		case <-tick.C:
+		}
+	}
+}
+func TestRouterVPNWindowsImportedNaiveH3Associations(t *testing.T) {
+	ca := desktopImportedH3WindowsTrust(t)
+	peer := desktopImportedH3WindowsReference(t, ca, "socks5", "off", "off", "")
+	var retained mobiletor.DesktopWindowsProtectionTarget
+	desktopExternalWFPCleanup(t, &retained)
+	f := desktopImportedH3WindowsBox(t, peer, nil)
+	f.start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	entry := f.outbound(t, "entry-wg")
+	a, e := entry.DialContext(ctx, "udp", M.ParseSocksaddr(desktopImportedH3DNS))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer a.Close()
+	b, e := entry.DialContext(ctx, "udp", M.ParseSocksaddr(desktopImportedH3DNS))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer b.Close()
+	if e = desktopImportedH3PacketDNS(a); e != nil {
+		t.Fatal(e)
+	}
+	if e = desktopImportedH3PacketDNS(b); e != nil {
+		t.Fatal(e)
+	}
+	before := peer.observe(t)
+	if len(before.SOCKS) != 2 || before.SOCKS[0].Relay == before.SOCKS[1].Relay || before.SOCKS[0].Control == before.SOCKS[1].Control || before.SOCKS[0].Client == before.SOCKS[1].Client || before.SOCKS[0].Control == "" || before.SOCKS[0].Client == "" || before.SOCKS[1].Control == "" || before.SOCKS[1].Client == "" || before.SOCKS[0].Closed || before.SOCKS[1].Closed || before.SOCKS[0].Packets < 1 || before.SOCKS[1].Packets < 1 {
+		t.Fatal("actual imported SOCKS operations shared or fabricated an association", before.SOCKS)
+	}
+	first, second := netip.MustParseAddrPort(before.SOCKS[0].Relay), netip.MustParseAddrPort(before.SOCKS[1].Relay)
+	view := f.snapshot(t, peer)
+	count := func(v mobiletor.DesktopWindowsNodeCompositionReadback, remote netip.AddrPort) int {
+		n := 0
+		for _, g := range v.Grants {
+			if g.Network == "udp" && g.Remote == remote {
+				n++
+			}
+		}
+		return n
+	}
+	if count(view, first) != 1 || count(view, second) != 1 {
+		t.Fatal("actual SOCKS authenticated operations lack independent native relay grants")
+	}
+	if e = a.Close(); e != nil {
+		t.Fatal(e)
+	}
+	desktopImportedH3WaitSnapshot(t, f, func(v mobiletor.DesktopWindowsNodeCompositionReadback) bool {
+		return count(v, first) == 0 && count(v, second) == 1
+	})
+	if e = desktopImportedH3PacketDNS(b); e != nil {
+		t.Fatal("retiring original SOCKS association cancelled its independent sibling", e)
+	}
+	if e = b.Close(); e != nil {
+		t.Fatal(e)
+	}
+	desktopImportedH3WaitSnapshot(t, f, func(v mobiletor.DesktopWindowsNodeCompositionReadback) bool {
+		return count(v, first) == 0 && count(v, second) == 0
+	})
+	retained = f.drain(t)
+	// Old captured controls cannot reopen authority after owner retirement.
+	if c, e := entry.DialContext(context.Background(), "udp", M.ParseSocksaddr(desktopImportedH3DNS)); e == nil || c != nil {
+		if c != nil {
+			c.Close()
+		}
+		t.Fatal("retired imported SOCKS owner reacquired a dynamic grant")
+	}
+}
+func TestRouterVPNWindowsImportedNaiveH3Succession(t *testing.T) {
+	ca := desktopImportedH3WindowsTrust(t)
+	peer := desktopImportedH3WindowsReference(t, ca, "socks5", "off", "off", "")
+	var retained mobiletor.DesktopWindowsProtectionTarget
+	desktopExternalWFPCleanup(t, &retained)
+	first := desktopImportedH3WindowsBox(t, peer, nil)
+	first.start(t)
+	first.prove(t, peer)
+	retained = first.drain(t)
+	second := desktopImportedH3WindowsBox(t, peer, &retained)
+	second.start(t)
+	second.prove(t, peer)
+	first.owner.Cancel()
+	if e := first.close(); e != nil {
+		t.Fatal(e)
+	}
+	second.prove(t, peer)
+	if second.prepared == first.prepared || second.policy.Metadata().SourceSHA256 == first.policy.Metadata().SourceSHA256 {
+		t.Fatal("H3 successor reused original runtime ownership")
+	}
+	retained = second.drain(t)
+	restored := desktopImportedH3WindowsBox(t, peer, &retained)
+	restored.start(t)
+	restored.prove(t, peer)
+	if !reflect.DeepEqual(restored.source, first.source) || restored.policy.Metadata().OriginalSourceSHA256 != first.policy.Metadata().OriginalSourceSHA256 {
+		t.Fatal("H3 restoration changed original entry/final source")
+	}
+	retained = restored.drain(t)
+}
+func TestRouterVPNWindowsImportedNaiveH3Refusals(t *testing.T) {
+	ca := desktopImportedH3WindowsTrust(t)
+	cases := []struct{ name, kind, first, last, fault string }{}
+	for _, kind := range desktopImportedH3WindowsKinds {
+		cases = append(cases, struct{ name, kind, first, last, fault string }{"entry-auth--" + kind, kind, "off", "off", "entry-auth"})
+	}
+	for _, fault := range []string{"final-password", "final-sni", "final-trust", "bootstrap-route", "selected-route", "socks-forged-relay", "socks-auth-downgrade"} {
+		cases = append(cases, struct{ name, kind, first, last, fault string }{fault, "socks5", "off", "off", fault})
+	}
+	cases = append(cases, struct{ name, kind, first, last, fault string }{"entry-layer-key", "socks5", "aes-256-gcm+xor-whitening", "off", "entry-layer-key"}, struct{ name, kind, first, last, fault string }{"final-layer-key", "socks5", "off", "aes-256-gcm+xor-whitening", "final-layer-key"})
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			peer := desktopImportedH3WindowsReference(t, ca, item.kind, item.first, item.last, item.fault)
+			var retained mobiletor.DesktopWindowsProtectionTarget
+			desktopExternalWFPCleanup(t, &retained)
+			f := desktopImportedH3WindowsBox(t, peer, nil)
+			if e := f.box.RouterVPNStrategyStart(); e != nil {
+				if f.admitted != 1 {
+					t.Fatal("negative failed before actual protected admission", e)
+				}
+				if e = f.close(); e != nil {
+					t.Fatal(e)
+				}
+				if target, found, e := f.preparation.RetainedProtection(context.Background()); e != nil || !found || target == nil {
+					t.Fatal("failed protected H3 startup lost retained owner", e)
+				} else {
+					retained = *target
+				}
+			} else {
+				var e error
+				f.owner, e = f.box.RouterVPNDesktopImportedActivatePhysical(f.policy)
+				if e != nil {
+					t.Fatal("negative failed before original native activation", e)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if item.fault == "bootstrap-route" {
+					e = f.query(ctx, false)
+				} else if item.fault == "selected-route" {
+					e = f.query(ctx, true)
+				} else {
+					e = desktopImportedH3Exchange(ctx, f.outbound(t, f.policy.Metadata().FinalTag), "tcp")
+				}
+				if e == nil {
+					t.Fatal("protected imported H3 admitted a wrong captured peer or DNS route", item.name)
+				}
+				view := peer.observe(t)
+				if item.fault == "bootstrap-route" && view.Bootstrap != 0 || item.fault == "selected-route" && view.Selected != 0 || strings.HasPrefix(item.fault, "final-") && (view.TCP != 0 || view.UDP != 0 || view.Selected != 0) {
+					t.Fatal("rejected protected H3 path delivered forbidden application traffic", item.name)
+				}
+				retained = f.drain(t)
+			}
+			if e := peer.close(); e != nil {
+				t.Fatal("rejected H3 peer did not join before restoration", e)
+			}
+			restoredPeer := desktopImportedH3WindowsReferenceWithAlias(t, ca, item.kind, item.first, item.last, "", peer.alias)
+			restored := desktopImportedH3WindowsBox(t, restoredPeer, &retained)
+			restored.start(t)
+			restored.prove(t, restoredPeer)
+			retained = restored.drain(t)
+		})
+	}
+}
+
+func (p *desktopImportedH3Reference) marker(t *testing.T, operation, nonce string) int64 {
+	t.Helper()
+	if e := json.NewEncoder(p.input).Encode(desktopImportedH3PeerRequest{Schema: 1, Operation: operation, Nonce: nonce}); e != nil {
+		t.Fatal(e)
+	}
+	reply, e := p.read()
+	if e != nil || !p.same(reply) || reply.Closed || reply.Nonce != nonce {
+		t.Fatal("protected H3 independent marker changed receiver", e)
+	}
+	return reply.Observed
+}
+func desktopImportedH3RequireBlocked(t *testing.T, p *desktopImportedH3Reference) {
+	t.Helper()
+	positive := func() {
+		nonce := desktopExternalWFPNonce(t)
+		if p.marker(t, "arm", nonce) != 0 || p.marker(t, "positive", nonce) != 1 {
+			t.Fatal("protected H3 independent raw receiver was not live")
+		}
+	}
+	positive()
+	nonce := desktopExternalWFPNonce(t)
+	if p.marker(t, "arm", nonce) != 0 {
+		t.Fatal("H3 raw-deny probe reused an old marker")
+	}
+	echo, err := desktopExternalWFPExchange(netip.MustParseAddrPort(p.initial.Probe), nonce)
+	observed := p.marker(t, "observe", nonce)
+	positive()
+	if observed != 0 || p.marker(t, "observe", nonce) != 0 || echo {
+		t.Fatal("ordinary token bypassed actual imported H3 WFP deny: independent peer marker")
+	}
+	var timeout net.Error
+	if err == nil || !errors.Is(err, syscall.Errno(10013)) && !(errors.As(err, &timeout) && timeout.Timeout()) {
+		t.Fatal("protected H3 ordinary raw refusal lacks an actual access/timeout error", err)
+	}
+}
+func TestRouterVPNWindowsImportedNaiveH3Ownership(t *testing.T) {
+	ca := desktopImportedH3WindowsTrust(t)
+	peer := desktopImportedH3WindowsReference(t, ca, "socks5", "off", "off", "")
+	var retained mobiletor.DesktopWindowsProtectionTarget
+	desktopExternalWFPCleanup(t, &retained)
+	f := desktopImportedH3WindowsBox(t, peer, nil)
+	f.start(t)
+	t.Run("original-caller", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		before := peer.observe(t)
+		c, e := f.outbound(t, "entry-wg").DialContext(ctx, "udp", M.ParseSocksaddr(desktopImportedH3DNS))
+		if e == nil || c != nil {
+			if c != nil {
+				c.Close()
+			}
+			t.Fatal("cancelled imported H3 caller acquired physical association")
+		}
+		after := peer.observe(t)
+		if len(after.SOCKS) != len(before.SOCKS) {
+			t.Fatal("cancelled H3 caller negotiated a replacement association")
+		}
+	})
+	t.Run("foreign-physical-root", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		c, e := f.outbound(t, mobilemultihop.DesktopNodePhysicalTag).DialContext(ctx, "udp", M.ParseSocksaddr(peer.initial.Probe))
+		if e == nil || c != nil {
+			if c != nil {
+				c.Close()
+			}
+			t.Fatal("protected imported H3 lower granted an uncaptured physical root")
+		}
+		desktopImportedH3RequireBlocked(t, peer)
+	})
+	f.prove(t, peer)
+	old := f.outbound(t, f.policy.Metadata().FinalTag)
+	retained = f.drain(t)
+	t.Run("retired-owner", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if e := desktopImportedH3Exchange(ctx, old, "tcp"); e == nil {
+			t.Fatal("retired protected H3 owner continued application traffic")
+		}
+		view, e := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+		if e != nil || !view.Closed || len(view.Grants) != 0 || view.Target != retained {
+			t.Fatal("retired H3 operation changed retained cleanup owner", e)
+		}
+	})
+}
+
+func TestRouterVPNWindowsImportedNaiveH3Cancellation(t *testing.T) {
+	ca := desktopImportedH3WindowsTrust(t)
+	peer := desktopImportedH3WindowsReference(t, ca, "socks5", "off", "off", "held-bootstrap")
+	var retained mobiletor.DesktopWindowsProtectionTarget
+	desktopExternalWFPCleanup(t, &retained)
+	f := desktopImportedH3WindowsBox(t, peer, nil)
+	f.start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- f.query(ctx, false) }()
+	observed := false
+	wait, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelWait()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for !observed {
+		observed = peer.observe(t).Bootstrap == 1
+		if observed {
+			break
+		}
+		select {
+		case e := <-done:
+			t.Fatal("cancelled H3 proof never entered its captured UDP receiver", e)
+		case <-wait.Done():
+			t.Fatal("original H3 UDP receiver was never entered")
+		case <-tick.C:
+		}
+	}
+	cancel()
+	select {
+	case e := <-done:
+		if !errors.Is(e, context.Canceled) {
+			t.Fatal("entered H3 DNS exchange lost its original cancelled caller", e)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("entered protected H3 proof did not join caller cancellation")
+	}
+	retained = f.drain(t)
+	if peer.observe(t).Selected != 0 {
+		t.Fatal("cancelled bootstrap proof substituted selected final DNS")
+	}
+}

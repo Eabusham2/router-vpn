@@ -315,6 +315,66 @@ public final class ImportedRouterTest {
   }
   check(before.equals(original.toString()),"Naive H2 DNS coverage mutated original sources");
  }
+ static void naiveH3Identity(AndroidStandardExitStore.Entry entry,JSONObject bundle,AndroidImportedRouterPath.Compiled compiled)throws Exception{
+  String mode="naive-h3",before=bundle.toString();JSONObject files=bundle.getJSONObject("profiles").getJSONObject(mode);
+  JSONObject original=object(new String(Base64.getDecoder().decode(files.getString("sing-box.json")),StandardCharsets.UTF_8));
+  JSONObject expected=object(Libbox.routerCompileProxyEntry(files.toString(),mode)),graph=object(compiled.config),actual=outbound(graph,"routervpn-execution-local");
+  check(actual.getString("type").equals("naive")&&actual.getBoolean("quic")&&actual.getString("username").equals(expected.getString("username"))&&actual.getString("password").equals(expected.getString("password"))&&actual.getJSONObject("tls").toString().equals(expected.getJSONObject("tls").toString())&&actual.getJSONObject("udp_over_tcp").toString().equals(expected.getJSONObject("udp_over_tcp").toString()),"Naive H3 changed original authenticated stream, UoT or captured trust");
+  String layer=AndroidStartLayer.selectedMode(bundle),outer=layer.equals("off")?"entry-wg":"start-layer-aes";
+  check(actual.getString("detour").equals(outer)&&actual.getString("server").equals(layer.equals("off")?expected.getString("server"):"127.0.0.1")&&actual.getInt("server_port")==expected.getInt("server_port"),"Naive H3 changed final-owned receiver or independent layer");
+  JSONArray servers=graph.getJSONObject("dns").getJSONArray("servers");check(servers.length()==2,"Naive H3 Home source lost its separate captured lower resolver");
+  JSONObject selected=servers.getJSONObject(0),lower=servers.getJSONObject(1);
+  check(selected.getString("type").equals("udp")&&selected.getString("server").equals(profile(bundle).getString("adguard_ipv4"))&&selected.getString("detour").equals("proxy"),"Naive H3 rewrote selected Home UDP policy");
+  check(lower.getString("type").equals(selected.getString("type"))&&lower.getString("server").equals(selected.getString("server"))&&lower.getString("detour").equals(outer)&&actual.getJSONObject("domain_resolver").getString("server").equals(lower.getString("tag")),"Naive H3 dropped or bypassed its captured bootstrap owner");
+  boolean connect=List.of("http","https").contains(entry.protocol);
+  if(entry.protocol.equals("shadowsocks"))for(String key:List.of("not-base64",Base64.getEncoder().encodeToString(new byte[31]))){
+   AndroidStandardExitStore.Entry invalid=AndroidStandardExitStore.copy(entry);invalid.secret=key;
+   reject("Naive H3 refuses malformed original SS2022 entry key",()->AndroidImportedRouterPath.compile(invalid,bundle,mode,"local"));
+  }
+  check(!connect&&!AndroidImportedRouterPath.supports("http","naive-h3")&&!AndroidImportedRouterPath.supports("https","naive-h3"),"Naive H3 cannot borrow CONNECT stream authority");
+  for(String fault:List.of("h2","numeric-quic","missing-uot","uot-version","numeric-uot","missing-user","missing-password","insecure","missing-sni","missing-certificate","malformed-certificate","unused-asset","missing-source","foreign-service")){
+   JSONObject changed=object(before),assets=changed.getJSONObject("profiles").getJSONObject(mode),raw=object(original.toString()),row=outbound(raw,"proxy");
+   switch(fault){case "h2":row.put("quic",false);break;case "numeric-quic":row.put("quic",0);break;case "missing-uot":row.remove("udp_over_tcp");break;case "uot-version":row.getJSONObject("udp_over_tcp").put("version",1);break;case "numeric-uot":row.getJSONObject("udp_over_tcp").put("enabled",1);break;case "missing-user":row.remove("username");break;case "missing-password":row.remove("password");break;case "insecure":row.getJSONObject("tls").put("insecure",true);break;case "missing-sni":row.getJSONObject("tls").remove("server_name");break;case "missing-certificate":row.getJSONObject("tls").remove("certificate");row.getJSONObject("tls").put("certificate_path","missing.crt");break;case "malformed-certificate":assets.put(row.getJSONObject("tls").getString("certificate_path"),Base64.getEncoder().encodeToString("not a certificate".getBytes(StandardCharsets.UTF_8)));break;case "unused-asset":assets.put("unused.crt",Base64.getEncoder().encodeToString("unused asset".getBytes(StandardCharsets.UTF_8)));break;case "missing-source":assets.remove("sing-box.json");break;default:assets.put("routervpn-ss-service.json",Base64.getEncoder().encodeToString("{}".getBytes(StandardCharsets.UTF_8)));}
+   if(!fault.equals("missing-source"))assets.put("sing-box.json",Base64.getEncoder().encodeToString(raw.toString().getBytes(StandardCharsets.UTF_8)));
+   reject("Naive H3 rejects invalid captured source "+fault,()->AndroidImportedRouterPath.compile(entry,changed,mode,"local"));
+  }
+  for(String fault:List.of("username","password","server","server_name")){
+   JSONObject changed=object(compiled.input),assets=object(changed.getString("exit_files")),raw=object(original.toString()),row=outbound(raw,"proxy");
+   if(fault.equals("server_name"))row.getJSONObject("tls").put(fault,"different.example.net");else row.put(fault,fault.equals("server")?"203.0.113.99":"different-original");
+   assets.put("sing-box.json",Base64.getEncoder().encodeToString(raw.toString().getBytes(StandardCharsets.UTF_8)));changed.put("exit_files",assets.toString());
+   reject("Naive H3 replay refuses replaced original "+fault,()->AndroidImportedRouterPath.prepareExecution(compiled.config,compiled.metadata,changed.toString()));
+  }
+  if(layer.equals("off")&&entry.startLayer==null)naiveH3DNS(entry,bundle);
+  check(bundle.toString().equals(before),"Naive H3 validation rewrote original sources");
+ }
+ static void naiveH3DNS(AndroidStandardExitStore.Entry entry,JSONObject original)throws Exception{
+  boolean connect=List.of("http","https").contains(entry.protocol);String before=original.toString();
+  JSONObject system=object(before),assets=system.getJSONObject("profiles").getJSONObject("naive-h3"),wrapper=object(new String(Base64.getDecoder().decode(assets.getString("sing-box.json")),StandardCharsets.UTF_8));
+  JSONObject tls=outbound(wrapper,"proxy").getJSONObject("tls");tls.remove("certificate");tls.remove("certificate_path");List<String> names=new ArrayList<>();assets.keys().forEachRemaining(names::add);for(String name:names)if(!name.equals("sing-box.json"))assets.remove(name);assets.put("sing-box.json",Base64.getEncoder().encodeToString(wrapper.toString().getBytes(StandardCharsets.UTF_8)));
+  JSONObject systemGraph=object(AndroidImportedRouterPath.compile(entry,system,"naive-h3","local").config);check(!outbound(systemGraph,"routervpn-execution-local").getJSONObject("tls").has("certificate"),"Naive H3 replaced explicit system trust with a borrowed certificate");
+  JSONObject home=object(before);profile(home).put("dns_protocol","udp");String saved=home.toString();
+  if(connect)reject("Naive H3 CONNECT cannot rewrite saved Home UDP",()->AndroidImportedRouterPath.compile(entry,home,"naive-h3","local"));
+  else{JSONObject graph=object(AndroidImportedRouterPath.compile(entry,home,"naive-h3","local").config);check(graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0).getString("type").equals("udp"),"Naive H3 capable entry lost selected Home UDP");}
+  check(home.toString().equals(saved),"Naive H3 rewrote incompatible saved Home policy");
+  for(String transport:List.of("udp","tcp","tls","https","h3"))for(boolean hostname:List.of(false,true)){
+   JSONObject bundle=object(before),p=profile(bundle);p.put("dns_mode","custom").put("dns_protocol",transport).put("dns_host",hostname?"resolver.example.net":"203.0.113.53").put("dns_port",8853).put("dns_server_name","resolver.example.net").put("dns_path","/owned-dns-query");
+   if(hostname)p.put("dns_bootstrap",new JSONObject().put("server",new JSONObject().put("type","tcp").put("tag","external-dns-bootstrap").put("server","203.0.113.54").put("server_port",5354).put("detour","proxy")).put("query",new JSONObject().put("server","external-dns-bootstrap").put("timeout","3s").put("disable_optimistic_cache",true)));
+   String captured=bundle.toString();AndroidImportedRouterPath.Compiled c=AndroidImportedRouterPath.compile(entry,bundle,"naive-h3","local");JSONArray servers=object(c.config).getJSONObject("dns").getJSONArray("servers");JSONObject dns=servers.getJSONObject(0);
+   check(captured.equals(bundle.toString())&&servers.length()==(hostname?4:2)&&dns.getString("type").equals(transport)&&dns.getString("server").equals(p.getString("dns_host"))&&dns.getInt("server_port")==8853&&dns.getString("detour").equals("proxy"),"Naive H3 lost captured selected/transport resolver closure");
+   for(int i=0;i<servers.length();i++){JSONObject server=servers.getJSONObject(i);check(server.getString("detour").equals(server.getString("tag").startsWith("routervpn-predecessor-bootstrap-")?"entry-wg":"proxy"),"Naive H3 resolver escaped its original owner");}
+   if(List.of("tls","https","h3").contains(transport))check(dns.getJSONObject("tls").getString("server_name").equals("resolver.example.net"),"Naive H3 replaced selected DNS trust name");
+   if(List.of("https","h3").contains(transport))check(dns.getString("path").equals("/owned-dns-query"),"Naive H3 replaced selected DNS request path");
+   RouterMultihop restored=AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,c.input);restored.close();
+   if(hostname)for(String lower:List.of("udp","h3")){JSONObject changed=object(captured);JSONObject bootstrap=changed.getJSONArray("routerProfiles").getJSONObject(0).getJSONObject("dns_bootstrap").getJSONObject("server");bootstrap.put("type",lower);if(lower.equals("h3"))bootstrap.put("tls",new JSONObject().put("enabled",true).put("server_name","bootstrap.example.net")).put("path","/bootstrap-dns-query");JSONObject changedGraph=object(AndroidImportedRouterPath.compile(entry,changed,"naive-h3","local").config);JSONArray tree=changedGraph.getJSONObject("dns").getJSONArray("servers");check(tree.length()==4,"Naive H3 lost selected and lower bootstrap tree");int retained=0;for(int i=0;i<tree.length();i++){JSONObject row=tree.getJSONObject(i);if(row.optString("server").equals("203.0.113.54")){check(row.getString("type").equals(lower),"Naive H3 rewrote original bootstrap protocol");retained++;}}check(retained==2,"Naive H3 did not retain both original bootstrap owners");}
+
+  }
+  Path lowerSources=Path.of(System.getenv("ROUTERVPN_IMPORTED_NAIVE_H2_SOURCES"));
+  for(String protocol:List.of("http-connect","https-connect")){
+   AndroidStandardExitStore.Entry forbidden=entry(new JSONArray(Files.readString(lowerSources.resolve(protocol+"--naive-h2--off--off.json"))));AndroidImportedRouterPath.requireEntry(forbidden);
+   for(String transport:List.of("udp","tcp","h3")){JSONObject changed=object(before);profile(changed).put("dns_protocol",transport);reject("Naive H3 refuses valid "+protocol+" despite selected "+transport,()->AndroidImportedRouterPath.compile(forbidden,changed,"naive-h3","local"));}
+  }
+  check(before.equals(original.toString()),"Naive H3 DNS coverage mutated original sources");
+ }
  static void one(Path root,Path fixture)throws Exception{
   JSONArray args=new JSONArray(Files.readString(fixture));String finalMode=args.getString(2);AndroidStandardExitStore.Entry e=entry(args);JSONObject b=bundle(args);
   String before=AndroidStandardExitStore.snapshot(e),beforeFinal=b.toString();AndroidImportedRouterPath.Compiled c=AndroidImportedRouterPath.compile(e,b,finalMode,"local");
@@ -322,6 +382,7 @@ public final class ImportedRouterTest {
   JSONObject selected=object(c.metadata),raw=object(c.input),graph=object(c.config);
   if(finalMode.equals("reality-xhttp"))xhttpIdentity(e,b,c);
   if(finalMode.equals("naive-h2"))naiveH2Identity(e,b,c);
+  if(finalMode.equals("naive-h3"))naiveH3Identity(e,b,c);
   if(finalMode.equals("reality-pq-vision")){
    JSONObject files=b.getJSONObject("profiles").getJSONObject(finalMode),xray=object(new String(Base64.getDecoder().decode(files.getString("xray.json")),StandardCharsets.UTF_8));
    JSONObject user=xray.getJSONArray("outbounds").getJSONObject(0).getJSONObject("settings").getJSONArray("vnext").getJSONObject(0).getJSONArray("users").getJSONObject(0);
@@ -482,7 +543,7 @@ public final class ImportedRouterTest {
   reject("trailing session object",()->AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,c.input+"{}"));
   reject("wrong final key source",()->{JSONObject changed=object(c.input);JSONObject p=object(changed.getString("exit_profile"));p.put("api_token","replacement-secret");changed.put("exit_profile",p.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
   for(String execution:List.of("server","auto"))reject(execution,()->AndroidImportedRouterPath.compile(e,b,finalMode,execution));
-  reject("different final protocol",()->AndroidImportedRouterPath.compile(e,b,"naive-h3","local"));
+  reject("different final protocol",()->AndroidImportedRouterPath.compile(e,b,"split","local"));
   if(List.of("wireguard","amneziawg").contains(e.protocol)&&!List.of("wg","awg2-fast","awg2-strong").contains(finalMode))for(String nested:List.of("wg","awg2-fast","awg2-strong"))reject("unproved nested packet graph",()->AndroidImportedRouterPath.compile(e,b,nested,"local"));
   JSONObject same=object(b.toString());profile(same).put("id",e.id);same.put("selectedRouterID",e.id);reject("same source identity",()->AndroidImportedRouterPath.compile(e,same,finalMode,"local"));
   JSONObject unpaired=object(b.toString());profile(unpaired).remove("node_proof_id");reject("unpaired final",()->AndroidImportedRouterPath.compile(e,unpaired,finalMode,"local"));
@@ -498,7 +559,7 @@ public final class ImportedRouterTest {
   check(Files.exists(staged.resolve(AndroidKillSwitchPolicy.SESSION_MARKER))==AndroidImportedRouterPath.requiresProtection(c.input),"strict protection marker mismatch");
   java.io.File owned=staged.toFile().getCanonicalFile(),executionFile=staged.resolve("routervpn-multihop.json").toFile().getCanonicalFile(),entryLayerFile=staged.resolve("entry-layer.json").toFile().getCanonicalFile(),exitLayerFile=staged.resolve("exit-layer.json").toFile().getCanonicalFile(),importedEntryFile=staged.resolve(AndroidImportedRouterPath.SESSION_FILE).toFile().getCanonicalFile();
   LayeredVpnService.requireOwnedImportedFiles(owned,prepared.session.mode,executionFile,entryLayerFile,exitLayerFile,importedEntryFile);check(true,"actual service accepted captured imported mode");
-  reject("service unknown imported mode",()->LayeredVpnService.requireOwnedImportedFiles(owned,"multihop-imported-naive-h3",executionFile,entryLayerFile,exitLayerFile,importedEntryFile));
+  reject("service unknown imported mode",()->LayeredVpnService.requireOwnedImportedFiles(owned,"multihop-imported-split",executionFile,entryLayerFile,exitLayerFile,importedEntryFile));
   reject("service missing final metadata",()->LayeredVpnService.requireOwnedImportedFiles(owned,prepared.session.mode,staged.resolve("absent.json").toFile(),entryLayerFile,exitLayerFile,importedEntryFile));
   Files.writeString(entryLayerFile.toPath(),"foreign layer");try{reject("service extra layer owner",()->LayeredVpnService.requireOwnedImportedFiles(owned,prepared.session.mode,executionFile,entryLayerFile,exitLayerFile,importedEntryFile));}finally{Files.delete(entryLayerFile.toPath());}
   reject("service missing original capture",()->LayeredVpnService.requireOwnedImportedFiles(owned,prepared.session.mode,executionFile,entryLayerFile,exitLayerFile,staged.resolve("absent.json").toFile()));
@@ -524,6 +585,14 @@ public final class ImportedRouterTest {
    check(paths.size()==81&&new HashSet<>(paths.stream().map(p->p.getFileName().toString()).toList()).equals(expected),"incomplete independent Naive H2 sources");for(Path p:paths)check(!Files.isSymbolicLink(p)&&Files.isRegularFile(p)&&Files.size(p)>0&&Files.size(p)<=32*1024*1024,"unowned Naive H2 source");
    List<Path> selected=paths.stream().filter(p->p.getFileName().toString().startsWith(kind+"--")).toList();check(selected.size()==9,"incomplete independent Naive H2 phase");exportEnvironment="ROUTERVPN_ANDROID_IMPORTED_NAIVE_H2_FIXTURES";for(Path p:selected)one(root,p);
    System.out.println("Android Naive H2 entries: "+checks+" checks; "+kind+", "+selected.size()+" original independent layer graphs");return;
+  }
+  if(args[3].startsWith("naive-h3--")){
+   String kind=args[3].substring("naive-h3--".length());List<String> kinds=List.of("socks5","shadowsocks","hysteria2","wireguard","amneziawg","openvpn-tcp","openvpn-udp");check(kinds.contains(kind),"unknown Naive H3 entry phase");
+   Path sources=Path.of(System.getenv("ROUTERVPN_IMPORTED_NAIVE_H3_SOURCES"));List<Path> paths;try(var entries=Files.list(sources)){paths=entries.sorted().toList();}
+   Set<String> expected=new HashSet<>();for(String protocol:kinds)for(String first:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening"))for(String last:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening"))expected.add(protocol+"--naive-h3--"+first+"--"+last+".json");
+   check(paths.size()==63&&new HashSet<>(paths.stream().map(p->p.getFileName().toString()).toList()).equals(expected),"incomplete independent Naive H3 sources");for(Path p:paths)check(!Files.isSymbolicLink(p)&&Files.isRegularFile(p)&&Files.size(p)>0&&Files.size(p)<=32*1024*1024,"unowned Naive H3 source");
+   List<Path> selected=paths.stream().filter(p->p.getFileName().toString().startsWith(kind+"--")).toList();check(selected.size()==9,"incomplete independent Naive H3 phase");exportEnvironment="ROUTERVPN_ANDROID_IMPORTED_NAIVE_H3_FIXTURES";for(Path p:selected)one(root,p);
+   System.out.println("Android Naive H3 entries: "+checks+" checks; "+kind+", "+selected.size()+" original independent layer graphs");return;
   }
   if(args[3].startsWith("xhttp--")){
    String kind=args[3].substring("xhttp--".length());List<String> kinds=List.of("socks5","shadowsocks","hysteria2","http-connect","https-connect","wireguard","amneziawg","openvpn-tcp","openvpn-udp");check(kinds.contains(kind),"unknown XHTTP entry phase");
@@ -597,11 +666,12 @@ PACKET_XRAY_PHASES = tuple('packet-reality--'+kind for kind in ('wireguard','amn
 PQ_XRAY_PHASES = tuple("pq-reality--"+kind for kind in ("socks5","shadowsocks","hysteria2","http-connect","https-connect","wireguard","amneziawg","openvpn-tcp","openvpn-udp"))
 XHTTP_XRAY_PHASES = tuple("xhttp--"+kind for kind in ("socks5","shadowsocks","hysteria2","http-connect","https-connect","wireguard","amneziawg","openvpn-tcp","openvpn-udp"))
 NAIVE_H2_PHASES = tuple("naive-h2--"+kind for kind in ("socks5","shadowsocks","hysteria2","http-connect","https-connect","wireguard","amneziawg","openvpn-tcp","openvpn-udp"))
+NAIVE_H3_PHASES = tuple("naive-h3--"+kind for kind in ("socks5","shadowsocks","hysteria2","wireguard","amneziawg","openvpn-tcp","openvpn-udp"))
 
 def selected_phases(phases=None):
     allowed = PRIMARY_PHASES + CONNECT_LAYER_PHASES + PROXY_XRAY_PHASES + CONNECT_XRAY_PHASES + PACKET_XRAY_PHASES
     selected = allowed if phases is None else tuple(phases)
-    allowed += PQ_XRAY_PHASES + XHTTP_XRAY_PHASES + NAIVE_H2_PHASES
+    allowed += PQ_XRAY_PHASES + XHTTP_XRAY_PHASES + NAIVE_H2_PHASES + NAIVE_H3_PHASES
     if not selected or any(phase not in allowed for phase in selected) or len(set(selected)) != len(selected):
         raise ValueError('Choose a nonempty, exact, duplicate-free imported-entry phase selection')
     return selected
@@ -616,6 +686,13 @@ def main(phases=None):
             raise ValueError('Naive H2 export requires its own empty directory and all nine exact Naive H2 phases')
         if any(os.environ.get(key) is not None for key in ('ROUTERVPN_ANDROID_IMPORTED_XHTTP_XRAY_FIXTURES','ROUTERVPN_ANDROID_IMPORTED_PQ_XRAY_FIXTURES','ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES','ROUTERVPN_ANDROID_CONNECT_LAYER_FIXTURES','ROUTERVPN_ANDROID_IMPORTED_PROXY_XRAY_FIXTURES','ROUTERVPN_ANDROID_IMPORTED_CONNECT_XRAY_FIXTURES','ROUTERVPN_ANDROID_IMPORTED_PACKET_XRAY_FIXTURES')):
             raise ValueError('Naive H2 exports cannot replace or share an ordinary or PQ inventory')
+    naive_h3_output = os.environ.get('ROUTERVPN_ANDROID_IMPORTED_NAIVE_H3_FIXTURES')
+    if naive_h3_output is not None:
+        destination = Path(naive_h3_output)
+        if not naive_h3_output or not destination.is_dir() or destination.is_symlink() or any(destination.iterdir()) or tuple(phases) != NAIVE_H3_PHASES:
+            raise ValueError('Naive H3 export requires its own empty directory and all seven exact Naive H3 phases')
+        if any(os.environ.get(key) is not None for key in ('ROUTERVPN_ANDROID_IMPORTED_NAIVE_H2_FIXTURES','ROUTERVPN_ANDROID_IMPORTED_XHTTP_XRAY_FIXTURES','ROUTERVPN_ANDROID_IMPORTED_PQ_XRAY_FIXTURES','ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES','ROUTERVPN_ANDROID_CONNECT_LAYER_FIXTURES','ROUTERVPN_ANDROID_IMPORTED_PROXY_XRAY_FIXTURES','ROUTERVPN_ANDROID_IMPORTED_CONNECT_XRAY_FIXTURES','ROUTERVPN_ANDROID_IMPORTED_PACKET_XRAY_FIXTURES')):
+            raise ValueError('Naive H3 exports cannot replace or share an ordinary or PQ inventory')
     xhttp_output = os.environ.get('ROUTERVPN_ANDROID_IMPORTED_XHTTP_XRAY_FIXTURES')
     if xhttp_output is not None:
         destination = Path(xhttp_output)
@@ -715,9 +792,14 @@ def main(phases=None):
         child_env['ROUTERVPN_IMPORTED_XHTTP_XRAY_SOURCES'] = str(xhttp_sources)
         naive_sources = temp / 'naive-h2'
         naive_sources.mkdir()
-        if any(phase in NAIVE_H2_PHASES for phase in phases):
+        if any(phase in NAIVE_H2_PHASES + NAIVE_H3_PHASES for phase in phases):
             subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedNaiveH2IndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ,ROUTERVPN_IMPORTED_NAIVE_H2_FIXTURES=str(naive_sources)), check=True, timeout=45)
         child_env['ROUTERVPN_IMPORTED_NAIVE_H2_SOURCES'] = str(naive_sources)
+        naive_h3_sources = temp / 'naive-h3'
+        naive_h3_sources.mkdir()
+        if any(phase in NAIVE_H3_PHASES for phase in phases):
+            subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedNaiveH3IndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ,ROUTERVPN_IMPORTED_NAIVE_H3_FIXTURES=str(naive_h3_sources)), check=True, timeout=45)
+        child_env['ROUTERVPN_IMPORTED_NAIVE_H3_SOURCES'] = str(naive_h3_sources)
         module = next(line.split()[1] for line in (ROOT / "go.mod").read_text().splitlines() if line.startswith("module "))
         helper = E.GO.replace('switch args[0]{', 'switch args[0]{'+GO_CASE).replace("github.com/Eabusham2/router-vpn", module)
         (temp / "main.go").write_text(helper)
@@ -782,6 +864,7 @@ def main(phases=None):
         causal_env.pop("ROUTERVPN_ANDROID_IMPORTED_PQ_XRAY_FIXTURES",None)
         causal_env.pop("ROUTERVPN_ANDROID_IMPORTED_XHTTP_XRAY_FIXTURES",None)
         causal_env.pop("ROUTERVPN_ANDROID_IMPORTED_NAIVE_H2_FIXTURES",None)
+        causal_env.pop("ROUTERVPN_ANDROID_IMPORTED_NAIVE_H3_FIXTURES",None)
         for old,new,assertion in controls:
             if original.count(old)!=1:raise AssertionError("Imported source ownership control changed")
             source.write_text(original.replace(old,new))
@@ -823,11 +906,22 @@ def main(phases=None):
             if result.returncode==0 or 'Imported entry sources have no exclusive original multihop owner.' not in result.stderr:raise AssertionError('Old service Naive H2 refusal was not reproduced: '+result.stderr)
             admission_source.write_text(actual)
             print('Android imported Naive H2 service causal rejected: old native session allowlist')
+        if any(phase in NAIVE_H3_PHASES for phase in phases):
+            admission_source=app/'LayeredVpnService.java';actual=admission_source.read_text()
+            absent=',"multihop-imported-naive-h3"'
+            if actual.count(absent)!=1:raise AssertionError('Exact native Naive H3 admission changed')
+            admission_source.write_text(actual.replace(absent,''))
+            subprocess.run(compile_command,check=True,timeout=60,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            service_causal_env=dict(causal_env,ROUTERVPN_IMPORTED_NAIVE_H3_SOURCES=str(naive_h3_sources),ROUTERVPN_IMPORTED_NAIVE_H2_SOURCES=str(naive_sources))
+            result=subprocess.run(command+[NAIVE_H3_PHASES[0]],env=service_causal_env,capture_output=True,text=True,timeout=180)
+            if result.returncode==0 or 'Imported entry sources have no exclusive original multihop owner.' not in result.stderr:raise AssertionError('Old service Naive H3 refusal was not reproduced: '+result.stderr)
+            admission_source.write_text(actual)
+            print('Android imported Naive H3 service causal rejected: old native session allowlist')
 
 
 def cli(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--phase', action='append', choices=PRIMARY_PHASES + CONNECT_LAYER_PHASES + PROXY_XRAY_PHASES + CONNECT_XRAY_PHASES + PACKET_XRAY_PHASES + PQ_XRAY_PHASES + XHTTP_XRAY_PHASES + NAIVE_H2_PHASES,
+    parser.add_argument('--phase', action='append', choices=PRIMARY_PHASES + CONNECT_LAYER_PHASES + PROXY_XRAY_PHASES + CONNECT_XRAY_PHASES + PACKET_XRAY_PHASES + PQ_XRAY_PHASES + XHTTP_XRAY_PHASES + NAIVE_H2_PHASES + NAIVE_H3_PHASES,
                         help='Run this exact bounded phase; repeat for several phases. The default runs every phase.')
     args = parser.parse_args(argv)
     try:

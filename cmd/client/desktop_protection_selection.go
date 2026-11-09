@@ -34,7 +34,7 @@ func desktopProtectionSelectionForCaptured(node *mobilemultihop.DesktopNodePolic
 		_, meta, capture, err := imported.ReadValidated()
 		if err != nil || meta.TargetOS != "windows" || meta.ProfileID != meta.ExitID || !validProfileID(meta.EntryID) || !validProfileID(meta.ExitID) ||
 			meta.EntryID == meta.ExitID || capture.EntryID != meta.EntryID || capture.ExitID != meta.ExitID || capture.ExitNodeID != meta.ExitNodeID ||
-			!desktopImportedEntryProtocol(meta.EntryMode) || !desktopImportedFinalMode(meta.ExitMode) ||
+			!desktopImportedEntryFinalMode(meta.EntryMode, meta.ExitMode) ||
 			meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" {
 			return empty, errors.Join(err, errors.New("native imported protection lost its original entry and paired final"))
 		}

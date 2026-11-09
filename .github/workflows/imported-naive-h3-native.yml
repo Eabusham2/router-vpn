@@ -1,0 +1,185 @@
+name: Imported Naive H3 source and native reference
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  naive-h3-apple-graphs:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+      - name: Export all 63 actual Swift Naive H3 source graphs
+        shell: bash
+        env:
+          ROUTERVPN_APPLE_IMPORTED_NAIVE_H3_FIXTURES: ${{ runner.temp }}/naive-h3-apple
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/naive-h3-apple"
+          python3 deploy/test_ios_tor_profile.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: imported-naive-h3-apple-graphs
+          path: ${{ runner.temp }}/naive-h3-apple
+          if-no-files-found: error
+          retention-days: 7
+
+  imported-naive-h3-reference:
+    needs: naive-h3-apple-graphs
+    runs-on: ubuntu-24.04
+    # Keep the original reference job's budget intact. These new, separate
+    # parser/protocol/peer stages have their own finite aggregate allowance.
+    timeout-minutes: 120
+    env:
+      GOTOOLCHAIN: go1.26.3
+      GOMAXPROCS: '2'
+      GOGC: '60'
+      GOMEMLIMIT: 2048MiB
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install the actual Android JSON dependency
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libandroid-json-java
+      - name: Prepare the exact captured Naive H3 desktop reference sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          native_core="$RUNNER_TEMP/routervpn-imported-naive-h3-core"
+          native_xray="$RUNNER_TEMP/routervpn-imported-naive-h3-xray"
+          git init "$native_core"
+          git -C "$native_core" remote add origin https://github.com/SagerNet/sing-box.git
+          git -C "$native_core" fetch --depth=1 origin 1ac1a339cb1223e9c70eae14c44411c75033c02d
+          git -C "$native_core" checkout --detach FETCH_HEAD
+          git init "$native_xray"
+          git -C "$native_xray" remote add origin https://github.com/XTLS/Xray-core.git
+          git -C "$native_xray" fetch --depth=1 origin 50231eaff98ccc31b5cbd247a721c16e97fe5ec1
+          git -C "$native_xray" checkout --detach FETCH_HEAD
+          python3 deploy/prepare-relay-core.py "$native_core" "$native_xray"
+          python3 deploy/prepare-mobile-performance.py "$native_core"
+          python3 deploy/mobile_openvpn_close_policy.py "$native_core"
+          python3 deploy/prepare-desktop-external.py "$native_core"
+          python3 deploy/prepare-mobile-buffers.py "$native_core"
+          (cd "$native_core" && go mod tidy)
+      - uses: actions/download-artifact@v4
+        with:
+          name: imported-naive-h3-apple-graphs
+          path: ${{ runner.temp }}/naive-h3-apple
+      - name: Export all 63 actual Android and desktop Naive H3 source graphs
+        timeout-minutes: 20
+        env:
+          ROUTERVPN_ANDROID_IMPORTED_NAIVE_H3_FIXTURES: ${{ runner.temp }}/naive-h3-android
+          ROUTERVPN_DESKTOP_IMPORTED_NAIVE_H3_FIXTURES: ${{ runner.temp }}/naive-h3-desktop
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/naive-h3-android" "$RUNNER_TEMP/naive-h3-desktop"
+          python3 android/test_android_imported_router.py \
+            --phase naive-h3--socks5 --phase naive-h3--shadowsocks \
+            --phase naive-h3--hysteria2 --phase naive-h3--wireguard \
+            --phase naive-h3--amneziawg --phase naive-h3--openvpn-tcp \
+            --phase naive-h3--openvpn-udp
+          go test -race ./cmd/client -run '^TestDesktopImportedNaiveH3' -count=1 -timeout=180s
+      - name: Execute separate Naive H3 parser protocol and imported peer inventories
+        shell: bash
+        timeout-minutes: 90
+        run: |
+          set -euo pipefail
+          python3 deploy/test_imported_naive_h3_workflow.py
+          python3 deploy/test_mobile_imported_naive_h3_runner.py
+          python3 deploy/test_mobile_imported_naive_h3.py \
+            "$RUNNER_TEMP/routervpn-imported-naive-h3-core" \
+            --android "$RUNNER_TEMP/naive-h3-android" --apple "$RUNNER_TEMP/naive-h3-apple" \
+            --desktop "$RUNNER_TEMP/naive-h3-desktop"
+          python3 deploy/test_mobile_imported_naive_h3.py \
+            "$RUNNER_TEMP/routervpn-imported-naive-h3-core" --loopback-only
+          python3 deploy/test_mobile_imported_naive_h3.py \
+            "$RUNNER_TEMP/routervpn-imported-naive-h3-core" --reference-only
+
+  imported-naive-h3-windows:
+    name: Imported H3 protected native path on Windows ${{ matrix.architecture }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - architecture: amd64
+            runner: windows-latest
+          - architecture: arm64
+            runner: windows-11-arm
+    env:
+      GOTOOLCHAIN: go1.26.3
+      GOMAXPROCS: '2'
+      GOGC: '60'
+      GOMEMLIMIT: 2048MiB
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Verify the separate imported H3 native owner and receipt contracts
+        shell: pwsh
+        run: |
+          python deploy/test_windows_imported_naive_h3_runner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Imported H3 native scope and receipt contract failed' }
+      - name: Execute actual imported H3 peers with their captured Windows owner
+        timeout-minutes: 75
+        shell: pwsh
+        run: |
+          # Actual BFE is scoped to the retained test executable. This separate
+          # CGO-disabled diagnostic preserves all original seven native phases;
+          # it does not claim OS TUN, packaged CGO, PQ, race or device acceptance.
+          python deploy/test_windows_imported_naive_h3.py phase --architecture '${{ matrix.architecture }}' --output '${{ runner.temp }}/windows-imported-naive-h3-${{ matrix.architecture }}.json'
+          if ($LASTEXITCODE -ne 0) { throw 'Actual imported H3 protected native path failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-imported-naive-h3-${{ matrix.architecture }}-${{ github.sha }}
+          path: ${{ runner.temp }}/windows-imported-naive-h3-${{ matrix.architecture }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  imported-naive-h3-windows-complete:
+    name: Complete protected imported H3 Windows inventory
+    needs: imported-naive-h3-windows
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Require both original Windows architecture jobs
+        env:
+          NATIVE_RESULT: ${{ needs.imported-naive-h3-windows.result }}
+        run: |
+          python3 -c 'import os; assert os.environ["NATIVE_RESULT"] == "success", "Both imported H3 native architecture jobs must succeed"'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: windows-imported-naive-h3-*
+          path: ${{ runner.temp }}/windows-imported-naive-h3-receipts
+          merge-multiple: true
+      - name: Verify both imported H3 inventories and exact source identities
+        env:
+          NATIVE_RESULT: ${{ needs.imported-naive-h3-windows.result }}
+        run: python3 deploy/test_windows_imported_naive_h3.py aggregate --receipts '${{ runner.temp }}/windows-imported-naive-h3-receipts' --needs-result "$NATIVE_RESULT"

@@ -115,6 +115,7 @@ def inputs():
                              ROOT/'deploy/test_desktop_imported_pq_runtime.py',
                              ROOT/'deploy/test_desktop_imported_xhttp_runtime.py',
                              ROOT/'deploy/test_desktop_imported_naive_h2_runtime.py',
+                             ROOT/'deploy/test_desktop_imported_naive_h3_runtime.py',
                              ROOT/'deploy/build-mobile-pq.py', ROOT/'deploy/prepare-desktop-rosenpass.py',
                              ROOT/'deploy/setup-desktop-native-toolchain.py',
                              ROOT/'deploy/install-desktop-windows-toolchain.py',
@@ -126,6 +127,8 @@ def inputs():
                              ROOT/'deploy/test_windows_protection_observation.py',
                              ROOT/'deploy/test_windows_node_physical.py',
                              ROOT/'deploy/test_windows_node_physical_runner.py',
+                             ROOT/'deploy/test_windows_imported_naive_h3.py',
+                             ROOT/'deploy/test_windows_imported_naive_h3_runner.py',
                              ROOT/'deploy/test_windows_external_provider_join.py',
                              ROOT/'deploy/test_windows_node_pq.py',
                              ROOT/'deploy/test_windows_node_pq_runner.py',
@@ -152,20 +155,25 @@ def inputs():
                              ROOT/'deploy/test_mobile_imported_pq_xray.py',
                              ROOT/'deploy/test_mobile_imported_xhttp_xray.py',
                              ROOT/'deploy/test_mobile_imported_naive_h2.py',
+                             ROOT/'deploy/test_mobile_imported_naive_h3.py',
                              ROOT/'deploy/test_mobile_imported_pq_xray_runner.py',
                              ROOT/'deploy/test_mobile_imported_xhttp_xray_runner.py',
                              ROOT/'deploy/test_mobile_imported_naive_h2_runner.py',
+                             ROOT/'deploy/test_mobile_imported_naive_h3_runner.py',
                              ROOT/'deploy/test_imported_pq_workflow.py',
                              ROOT/'deploy/test_imported_xhttp_workflow.py',
                              ROOT/'deploy/test_imported_naive_h2_workflow.py',
+                             ROOT/'deploy/test_imported_naive_h3_workflow.py',
                              ROOT/'android/test_android_imported_router.py',
                              ROOT/'mobile/routervpn_imported_pq_xray_native_test.go.tmpl',
                              ROOT/'mobile/routervpn_imported_xhttp_xray_native_test.go.tmpl',
                              ROOT/'mobile/routervpn_imported_naive_h2_native_test.go.tmpl',
+                             ROOT/'mobile/routervpn_imported_naive_h3_native_test.go.tmpl',
                              ROOT/'.github/workflows/imported-socks-reality-native.yml',
                              ROOT/'.github/workflows/imported-pq-reality-native.yml',
                              ROOT/'.github/workflows/imported-xhttp-native.yml',
                              ROOT/'.github/workflows/imported-naive-h2-native.yml',
+                             ROOT/'.github/workflows/imported-naive-h3-native.yml',
                              ROOT/'.github/workflows/release-candidate.yml',
                              ROOT/'deploy/test_xray_vision_state.py',
                              ROOT/'deploy/test_xray_vision_state_runner.py',
@@ -997,6 +1005,60 @@ def verify_imported_desktop_naive_h2_configs(bundle, target, env):
         raise ValueError('Completed bundle changed during imported Naive H2 proof')
     print('Native imported Naive H2 desktop: all81 separate original graphs accepted by the completed production engine. Installed-device acceptance remains separate.', flush=True)
 
+IMPORTED_NAIVE_H3_GRAPH_TEST = 'TestDesktopImportedNaiveH3CapturedGraphs'
+IMPORTED_NAIVE_H3_ENTRIES = ('socks5', 'shadowsocks', 'hysteria2',
+                       'wireguard', 'amneziawg', 'openvpn-tcp', 'openvpn-udp')
+IMPORTED_NAIVE_H3_FILES = {entry+'--naive-h3--'+first+'--'+last+'.json'
+    for entry in IMPORTED_NAIVE_H3_ENTRIES
+    for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
+
+
+def imported_desktop_naive_h3_verdicts():
+    return {IMPORTED_NAIVE_H3_GRAPH_TEST} | {IMPORTED_NAIVE_H3_GRAPH_TEST+'/'+entry+'/'+first+'/'+last
+        for entry in IMPORTED_NAIVE_H3_ENTRIES
+        for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
+
+
+def verify_imported_desktop_naive_h3_configs(bundle, target, env):
+    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
+        raise ValueError('Imported Naive H3 gate requires its matching completed native bundle')
+    bundle = Path(bundle).absolute()
+    original = reuse(bundle, target, env=env)
+    with tempfile.TemporaryDirectory(prefix='routervpn-imported-naive-h3-') as directory:
+        groups = {'portable':Path(directory)/'portable'}
+        if target.startswith('windows/'):
+            groups['protected'] = Path(directory)/'protected'
+        for fixtures in groups.values(): fixtures.mkdir()
+        child = {**env, 'ROUTERVPN_DESKTOP_IMPORTED_NAIVE_H3_FIXTURES':str(groups['portable'])}
+        child.pop('ROUTERVPN_DESKTOP_IMPORTED_NAIVE_H3_PROTECTED_FIXTURES', None)
+        if 'protected' in groups:
+            child['ROUTERVPN_DESKTOP_IMPORTED_NAIVE_H3_PROTECTED_FIXTURES'] = str(groups['protected'])
+        output = run(['go', 'test', '-json', *([] if target == 'windows/arm64' else ['-race']),
+            './cmd/client', '-run', '^'+IMPORTED_NAIVE_H3_GRAPH_TEST+'$', '-count=1', '-timeout=180s'],
+            cwd=ROOT, env=child, timeout=300)
+        verify_imported_native_verdicts(output, 'router-vpn/cmd/client', imported_desktop_naive_h3_verdicts())
+        captured = {}
+        for name, fixtures in groups.items():
+            if {path.name for path in fixtures.iterdir()} != IMPORTED_NAIVE_H3_FILES:
+                raise ValueError('Imported Naive H3 gate lost its exact63 original '+name+' graphs')
+            captured[name] = {file:regular(fixtures/file, 4<<20) for file in IMPORTED_NAIVE_H3_FILES}
+        if 'protected' in captured and any(captured['protected'][name] == captured['portable'][name] for name in IMPORTED_NAIVE_H3_FILES):
+            raise ValueError('Protected Windows H3 launch evidence substituted its portable graph')
+        # Only the matching Windows engine may instantiate the inert protected
+        # projection. This check does not bind its owner or start a UDP relay.
+        for name, fixtures in groups.items():
+            for file in sorted(captured[name]):
+                if regular(fixtures/file, 4<<20) != captured[name][file]:
+                    raise ValueError('Original Naive H3 '+name+' graph changed before native parsing')
+                run([bundle/binary_name(target), 'check', '-c', fixtures/file], env=env, timeout=20)
+        for name, fixtures in groups.items():
+            if {path.name for path in fixtures.iterdir()} != IMPORTED_NAIVE_H3_FILES or any(regular(fixtures/file, 4<<20) != raw for file,raw in captured[name].items()):
+                raise ValueError('Original Naive H3 '+name+' graph changed during native parsing')
+    if reuse(bundle, target, env=env) != original:
+        raise ValueError('Completed bundle changed during imported Naive H3 proof')
+    suffix = '; all63 separate protected Windows launch graphs also parsed' if target.startswith('windows/') else ''
+    print('Native imported Naive H3: all63 original portable graphs parsed'+suffix+'. Owned network and installed-device execution remain separate.', flush=True)
+
 
 def verify_linux_stock_dns(bundle, target, env):
     host = 'linux/'+{'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), '')
@@ -1154,6 +1216,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             verify_imported_desktop_pq_configs(destination, target, env)
             verify_imported_desktop_xhttp_configs(destination, target, env)
             verify_imported_desktop_naive_h2_configs(destination, target, env)
+            verify_imported_desktop_naive_h3_configs(destination, target, env)
         print('Reused verified complete native runtime '+target, flush=True)
         return destination
     if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:
@@ -1293,6 +1356,18 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                          source, '--loopback-only'], env=env, timeout=1200)
                     run([sys.executable, ROOT/'deploy/test_mobile_imported_naive_h2.py',
                          source, '--reference-only'], env=env, timeout=3000)
+                    # Naive H3 retains its own captured sources, original QUIC
+                    # ownership, UDP DNS and independently captured peers.
+                    run([sys.executable, ROOT/'deploy/test_imported_naive_h3_workflow.py'],
+                        cwd=ROOT, env=env, timeout=60)
+                    run([sys.executable, ROOT/'deploy/test_mobile_imported_naive_h3_runner.py'],
+                        cwd=ROOT, env=env, timeout=60)
+                    run([sys.executable, ROOT/'deploy/test_mobile_imported_naive_h3.py',
+                         source], env=env, timeout=1200)
+                    run([sys.executable, ROOT/'deploy/test_mobile_imported_naive_h3.py',
+                         source, '--loopback-only'], env=env, timeout=1200)
+                    run([sys.executable, ROOT/'deploy/test_mobile_imported_naive_h3.py',
+                         source, '--reference-only'], env=env, timeout=3000)
                 # The PQ matrix uses the same verified native archive and
                 # compiler cache, fresh KEM keys, and real packet/Start Layer
                 # peers. Native firewall/public admission remains separate.
@@ -1326,6 +1401,13 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 # A full package requires all source-bound phase receipts.
                 physical = load('desktop_windows_physical_phases', 'test_windows_node_physical.py')
                 physical.execute_partitioned(source, env, run)
+                # Keep the original seven physical phases intact. Imported H3
+                # separately exercises the captured Box/owner with this actual
+                # matching-host source, compiler environment and native tags.
+                run([sys.executable, ROOT/'deploy/test_windows_imported_naive_h3_runner.py'],
+                    cwd=ROOT, env=env, timeout=60)
+                run([sys.executable, ROOT/'deploy/test_windows_imported_naive_h3.py',
+                     'prepared', source], env=env, timeout=4500)
                 run([sys.executable, ROOT/'deploy/test_windows_node_pq_runner.py'], cwd=ROOT, env=env)
                 # Actual matching-host CGO/Rust, isolated sockets and BFE. Only
                 # positive PQ execution keeps the shipping predicate unchanged;
@@ -1435,6 +1517,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             verify_imported_desktop_pq_configs(stage, target, env)
             verify_imported_desktop_xhttp_configs(stage, target, env)
             verify_imported_desktop_naive_h2_configs(stage, target, env)
+            verify_imported_desktop_naive_h3_configs(stage, target, env)
             if target.startswith('linux/'):
                 verify_installed_linux_host(source, stage, target, env)
             elif target.startswith('darwin/'):

@@ -402,7 +402,7 @@ enum IOSImportedEntryMultihop {
     static let methods: Set<String> = ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"]
     static func supports(entry: String, final: String) -> Bool {
         if ["http-connect", "https-connect"].contains(entry) { return final == "shadowsocks" || final == "naive-h2" || xrayFinal(final) }
-        if ["socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn"].contains(entry) && (final == "naive-h2" || xrayFinal(final)) { return true }
+        if ["socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn"].contains(entry) && (["naive-h2", "naive-h3"].contains(final) || xrayFinal(final)) { return true }
         if ["socks5", "openvpn"].contains(entry) { return ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(final) }
         if ["shadowsocks", "hysteria2"].contains(final) {
             return ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(entry)
@@ -418,11 +418,19 @@ enum IOSImportedEntryMultihop {
         return true
     }
 
-    /// Picker/role validation of the original H2 source. The shared native
+    /// Picker/role validation of the original Naive source. The shared native
     /// compiler separately verifies the certificate, full wrapper and resolver
     /// closure before admission; this does not create a transport receipt.
     static func validateNaiveH2(final: [String: Any], profiles: [String: [String: String]], entry: String) throws {
-        guard let files = profiles["naive-h2"], !files.isEmpty, files.count <= 2,
+        try validateNaive(final: final, profiles: profiles, entry: entry, mode: "naive-h2")
+    }
+    static func validateNaiveH3(final: [String: Any], profiles: [String: [String: String]], entry: String) throws {
+        try validateNaive(final: final, profiles: profiles, entry: entry, mode: "naive-h3")
+    }
+    private static func validateNaive(final: [String: Any], profiles: [String: [String: String]], entry: String, mode: String) throws {
+        guard ["naive-h2", "naive-h3"].contains(mode),
+              mode != "naive-h3" || !["http-connect", "https-connect"].contains(entry),
+              let files = profiles[mode], !files.isEmpty, files.count <= 2,
               files["routervpn-ss-service.json"] == nil,
               let encoded = files["sing-box.json"], let source = Data(base64Encoded: encoded),
               !source.isEmpty, source.count <= 4 * 1024 * 1024, source.base64EncodedString() == encoded,
@@ -430,7 +438,7 @@ enum IOSImportedEntryMultihop {
               let rows = root["outbounds"] as? [[String: Any]], rows.filter({ $0["tag"] as? String == "proxy" }).count == 1,
               let out = rows.first(where: { $0["tag"] as? String == "proxy" }),
               Set(out.keys).isSubset(of: ["type", "tag", "server", "server_port", "username", "password", "quic", "udp_over_tcp", "tls"]),
-              out["type"] as? String == "naive", exactBoolean(out["quic"]) == false,
+              out["type"] as? String == "naive", exactBoolean(out["quic"]) == (mode == "naive-h3"),
               let host = out["server"] as? String, literalAddress(host),
               let port = out["server_port"] as? NSNumber, CFGetTypeID(port) != CFBooleanGetTypeID(),
               port.doubleValue == Double(port.intValue), (1...65535).contains(port.intValue),
@@ -520,6 +528,7 @@ enum IOSImportedEntryMultihop {
               let kind = imported["protocol"] as? String, ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains(kind) else { throw issue() }
         let naiveH2 = final["multihop_exit_mode"] as? String == "naive-h2"
         if naiveH2 { try validateNaiveH2(final: final, profiles: profiles, entry: kind) }
+        if final["multihop_exit_mode"] as? String == "naive-h3" { try validateNaiveH3(final: final, profiles: profiles, entry: kind) }
         if xrayFinal(final["multihop_exit_mode"] as? String ?? "") {
             guard ["socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn"].contains(kind),
                   [entry, final].allSatisfy({ profile in

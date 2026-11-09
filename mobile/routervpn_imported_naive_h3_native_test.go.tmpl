@@ -1,0 +1,244 @@
+package libbox
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+)
+
+// The dedicated native gate supplies the same sealed library as packaging.
+// Static builds do not claim that an unexecuted dynamic load has succeeded.
+var routerImportedNaiveH3LoadLibrary = func(string) error {
+	return errors.New("Naive H3 parser requires the explicit pure-Go native loader")
+}
+
+func routerImportedNaiveH3Library(t *testing.T) {
+	t.Helper()
+	path, expected := os.Getenv("ROUTERVPN_NODE_CRONET_LIBRARY"), os.Getenv("ROUTERVPN_NODE_CRONET_SHA256")
+	size, err := strconv.ParseInt(os.Getenv("ROUTERVPN_NODE_CRONET_BYTES"), 10, 64)
+	if err != nil || size <= 0 || size > 128<<20 || len(expected) != 64 || !filepath.IsAbs(path) {
+		t.Fatal("Naive H3 parser requires its exact native-library module seal")
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() != size {
+		t.Fatal("Naive H3 parser library is absent, linked or changed", err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		t.Fatal("Naive H3 parser library changed during capture", err)
+	}
+	digest := sha256.New()
+	n, err := io.Copy(digest, io.LimitReader(file, size+1))
+	if err != nil || n != size || hex.EncodeToString(digest.Sum(nil)) != expected {
+		t.Fatal("Naive H3 parser library differs from its captured module", err)
+	}
+	if err := routerImportedNaiveH3LoadLibrary(path); err != nil {
+		t.Fatal("actual pinned Cronet parser library did not load", err)
+	}
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(opened, after) || after.Size() != size {
+		t.Fatal("Naive H3 parser library changed during native load", err)
+	}
+}
+
+func routerImportedNaiveH3Names() map[string]bool {
+	names := map[string]bool{}
+	for _, kind := range []string{"socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn-tcp", "openvpn-udp"} {
+		for _, first := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, last := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				names[kind+"--naive-h3--"+first+"--"+last+".json"] = true
+			}
+		}
+	}
+	return names
+}
+
+func TestRouterImportedNaiveH3SourceGraphs(t *testing.T) {
+	routerImportedNaiveH3Graphs(t, "ROUTERVPN_IMPORTED_NAIVE_H3_FIXTURES", true, false, "192.168.50.133")
+}
+func TestRouterImportedNaiveH3AndroidSourceGraphs(t *testing.T) {
+	routerImportedNaiveH3Graphs(t, "ROUTERVPN_ANDROID_IMPORTED_NAIVE_H3_FIXTURES", true, true, "192.168.50.133")
+}
+func TestRouterImportedNaiveH3AppleGraphs(t *testing.T) {
+	routerImportedNaiveH3Graphs(t, "ROUTERVPN_APPLE_IMPORTED_NAIVE_H3_FIXTURES", false, false, "192.168.50.133")
+}
+func TestRouterImportedNaiveH3DesktopGraphs(t *testing.T) {
+	// The original paired desktop fixture captures its own Home AdGuard.
+	// The allowed tuple comes from this producer contract, never the input graph.
+	routerImportedNaiveH3Graphs(t, "ROUTERVPN_DESKTOP_IMPORTED_NAIVE_H3_FIXTURES", false, false, "10.88.0.53")
+}
+
+func routerImportedNaiveH3Graphs(t *testing.T, environment string, captured, android bool, homeServer string) {
+	directory := os.Getenv(environment)
+	if directory == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_NAIVE_H3_FIXTURES") == "1" {
+			t.Fatal("required separate NaiveH3 source inventory missing")
+		}
+		t.Skip("separate NaiveH3 parser gate supplies original host captures")
+	}
+	directoryInfo, err := os.Lstat(directory)
+	if err != nil || !directoryInfo.IsDir() || directoryInfo.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("NaiveH3 parser source directory is absent or linked", err)
+	}
+	expected := routerImportedNaiveH3Names()
+	rows, err := os.ReadDir(directory)
+	if err != nil || len(rows) != len(expected) {
+		t.Fatal("NaiveH3 parser lost its exact 63 original graph inventory", err)
+	}
+	routerImportedNaiveH3Library(t)
+	for _, row := range rows {
+		t.Run(row.Name(), func(t *testing.T) {
+			name := row.Name()
+			if android {
+				if !strings.HasPrefix(name, "android-") {
+					t.Fatal("NaiveH3 Android source lacks its producer identity")
+				}
+				name = strings.TrimPrefix(name, "android-")
+			}
+			info, err := row.Info()
+			if err != nil || !expected[name] || row.Type()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 4<<20 {
+				t.Fatal("NaiveH3 parser received a foreign or unbounded source", err)
+			}
+			raw, err := os.ReadFile(filepath.Join(directory, row.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			config := string(raw)
+			if captured {
+				var source []string
+				if json.Unmarshal(raw, &source) != nil || len(source) != 9 || source[2] != "naive-h3" {
+					t.Fatal("NaiveH3 parser lost original seven inputs and graph receipt")
+				}
+				plan, err := mobilemultihop.NewImportedEntry(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
+				if err != nil {
+					t.Fatal("pinned native compiler rejected original NaiveH3 source", err)
+				}
+				defer plan.Close()
+				if plan.SourceSHA256() != source[7] || plan.Config() != source[8] || plan.Healthy() {
+					t.Fatal("pinned native NaiveH3 source identity changed or acquired live proof")
+				}
+				config = plan.Config()
+			}
+			var graph map[string]any
+			if json.Unmarshal([]byte(config), &graph) != nil {
+				t.Fatal("invalid original NaiveH3 graph")
+			}
+			routerImportedNaiveH3Axes(t, name, graph)
+			// This separate matrix captures original Home UDP. The final owns
+			// selected queries; its retained bootstrap uses the lower entry/layer.
+			policy, _ := graph["dns"].(map[string]any)
+			servers, _ := policy["servers"].([]any)
+			if policy["final"] != "selected-dns" || len(servers) != 2 {
+				t.Fatal("Naive H3 parser lost captured Home UDP resolver closure")
+			}
+			for index, raw := range servers {
+				row, _ := raw.(map[string]any)
+				tag, detour := "selected-dns", "proxy"
+				if index == 1 {
+					tag, detour = "routervpn-predecessor-bootstrap-0", "entry-wg"
+					if strings.Split(strings.TrimSuffix(name, ".json"), "--")[3] != "off" {
+						detour = mobilemultihop.NativeStartLayerTag
+					}
+				}
+				if row["type"] != "udp" || row["tag"] != tag || row["detour"] != detour || row["server"] != homeServer || row["server_port"] != float64(53) {
+					t.Fatal("Naive H3 parser changed captured Home UDP transport or resolver owner")
+				}
+			}
+			found := 0
+			for _, value := range graph["outbounds"].([]any) {
+				out := value.(map[string]any)
+				if out["type"] != "naive" {
+					continue
+				}
+				found++
+				uot, _ := out["udp_over_tcp"].(map[string]any)
+				tls, _ := out["tls"].(map[string]any)
+				resolver, _ := out["domain_resolver"].(map[string]any)
+				if out["quic"] != true || out["tag"] != "routervpn-execution-local" || out["detour"] == nil ||
+					uot["enabled"] != true || uot["version"] != float64(2) || tls["enabled"] != true || tls["insecure"] == true ||
+					resolver["server"] != "routervpn-predecessor-bootstrap-0" {
+					t.Fatal("Naive H3 parser lost its exact QUIC, UoT, trust or original resolver owner")
+				}
+				transport := make(map[string]any, len(out))
+				for key, value := range out {
+					if key != "domain_resolver" {
+						transport[key] = value
+					}
+				}
+				if err := multihoprelay.ValidateNaiveRoutedTransport(transport, "naive-h3"); err != nil {
+					t.Fatal("Naive H3 original final lost its verified native transport", err)
+				}
+			}
+			if found != 1 {
+				t.Fatal("NaiveH3 parser requires one exact native final")
+			}
+			if err := CheckConfig(config); err != nil {
+				t.Fatal("actual pinned Libbox rejected the original NaiveH3 host graph", err)
+			}
+		})
+	}
+}
+
+func routerImportedNaiveH3Axes(t *testing.T, name string, graph map[string]any) {
+	t.Helper()
+	axes := strings.Split(strings.TrimSuffix(name, ".json"), "--")
+	if len(axes) != 4 || axes[1] != "naive-h3" {
+		t.Fatal("NaiveH3 graph lost its exact inventory axes")
+	}
+	byTag := map[string]map[string]any{}
+	for _, family := range []string{"outbounds", "endpoints"} {
+		rows, _ := graph[family].([]any)
+		for _, value := range rows {
+			row := value.(map[string]any)
+			tag, _ := row["tag"].(string)
+			if tag == "" || byTag[tag] != nil {
+				t.Fatal("NaiveH3 graph has an unowned or duplicate transport tag")
+			}
+			byTag[tag] = row
+		}
+	}
+	entry, final := byTag["entry-wg"], byTag["routervpn-execution-local"]
+	types := map[string]string{"socks5": "socks", "shadowsocks": "shadowsocks", "hysteria2": "hysteria2", "wireguard": "wireguard", "amneziawg": "routervpn-amneziawg", "openvpn-tcp": "openvpn-client", "openvpn-udp": "openvpn-client"}
+	if entry == nil || final == nil || types[axes[0]] == "" || entry["type"] != types[axes[0]] {
+		t.Fatal("NaiveH3 filename substituted another imported transport")
+	}
+	if strings.HasPrefix(axes[0], "openvpn-") && entry["network"] != strings.TrimPrefix(axes[0], "openvpn-") {
+		t.Fatal("NaiveH3 filename substituted another OpenVPN wire transport")
+	}
+	layer := func(row map[string]any, off string) string {
+		if row["detour"] == nil && off == "" || row["detour"] == off {
+			return "off"
+		}
+		tag, _ := row["detour"].(string)
+		outer := byTag[tag]
+		if outer["type"] == "routervpn-openvpn-layer-map" {
+			mode, _ := outer["mode"].(string)
+			return mode
+		}
+		if outer["type"] == "routervpn-aes-xor" {
+			return "aes-256-gcm+xor-whitening"
+		}
+		if outer["type"] == "shadowsocks" && outer["method"] == "2022-blake3-aes-256-gcm" {
+			return "aes-256-gcm"
+		}
+		return "unowned"
+	}
+	if layer(entry, "") != axes[2] || layer(final, "entry-wg") != axes[3] {
+		t.Fatal("NaiveH3 filename substituted an independent Start Layer")
+	}
+}

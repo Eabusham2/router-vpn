@@ -51,7 +51,7 @@ func TestDesktopEntryCatalogContracts(t *testing.T) {
 	slices.Sort(expected)
 	actual := slices.Clone(daily.Supported)
 	slices.Sort(actual)
-	expectedFinals := []string{"awg2-fast", "awg2-strong", "hysteria2", "naive-h2", "reality-pq-vision", "reality-vision", "reality-xhttp", "shadowsocks", "wg"}
+	expectedFinals := []string{"awg2-fast", "awg2-strong", "hysteria2", "naive-h2", "naive-h3", "reality-pq-vision", "reality-vision", "reality-xhttp", "shadowsocks", "wg"}
 	dailyFinals := slices.Clone(daily.Finals)
 	slices.Sort(dailyFinals)
 	if len(paired) != 19 || len(actual) != 25 || !reflect.DeepEqual(actual, expected) ||
@@ -77,7 +77,11 @@ func TestDesktopEntryCatalogContracts(t *testing.T) {
 			protocol := strings.TrimPrefix(node.ID, "imported-")
 			finals := slices.Clone(node.Finals)
 			slices.Sort(finals)
-			if !reflect.DeepEqual(node.Modes, []string{protocol}) || !reflect.DeepEqual(node.Executions, []string{"local"}) || !reflect.DeepEqual(finals, expectedFinals) {
+			expectedForEntry := slices.Clone(expectedFinals)
+			if protocol == "http-connect" || protocol == "https-connect" {
+				expectedForEntry = slices.DeleteFunc(expectedForEntry, func(mode string) bool { return mode == "naive-h3" })
+			}
+			if !reflect.DeepEqual(node.Modes, []string{protocol}) || !reflect.DeepEqual(node.Executions, []string{"local"}) || !reflect.DeepEqual(finals, expectedForEntry) {
 				t.Fatal("temporary imported capability lost its original protocol or Local-only final graph", node.ID)
 			}
 			for _, mode := range node.Finals {

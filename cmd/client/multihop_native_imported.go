@@ -24,10 +24,19 @@ func desktopImportedEntryProtocol(protocol string) bool {
 
 func desktopImportedFinalMode(mode string) bool {
 	switch mode {
-	case "shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2":
+	case "shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3":
 		return true
 	}
 	return false
+}
+
+// The final's own UoT payload does not provide UDP to its lower transport.
+// H3 needs a captured datagram-capable entry; ordinary CONNECT carries streams.
+func desktopImportedEntryFinalMode(protocol, mode string) bool {
+	if !desktopImportedEntryProtocol(protocol) || !desktopImportedFinalMode(mode) {
+		return false
+	}
+	return mode != "naive-h3" || protocol != "http-connect" && protocol != "https-connect"
 }
 
 func resolveDesktopImportedSelection(control, entry, exit common.RouterProfile, q multihopConnectRequest) (multihopSelection, error) {
@@ -54,7 +63,7 @@ func resolveDesktopImportedSelection(control, entry, exit common.RouterProfile, 
 	if final == "" {
 		final = "shadowsocks"
 	}
-	if !desktopImportedFinalMode(final) {
+	if !desktopImportedEntryFinalMode(entry.External.Protocol, final) {
 		return multihopSelection{}, errors.New("imported entry requires an explicit compatible paired final transport")
 	}
 	return multihopSelection{Control: control, Entry: entry, Exit: exit, Base: "native", EntryMode: entry.External.Protocol, ExitMode: final}, nil
@@ -102,7 +111,7 @@ func captureDesktopImportedMultihop(ctx context.Context, root string, sel multih
 
 func captureDesktopImportedMultihopWithHost(ctx context.Context, root string, sel multihopSelection, modes []string, lookup applexray.Lookup, host *desktopNodeConnectionOwner) (multihopSelection, error) {
 	if ctx == nil || ctx.Err() != nil || sel.Base != "native" || len(modes) != 1 || modes[0] != sel.ExitMode ||
-		sel.Entry.External == nil || sel.EntryMode != sel.Entry.External.Protocol || !desktopImportedEntryProtocol(sel.EntryMode) || !desktopImportedFinalMode(sel.ExitMode) ||
+		sel.Entry.External == nil || sel.EntryMode != sel.Entry.External.Protocol || !desktopImportedEntryFinalMode(sel.EntryMode, sel.ExitMode) ||
 		sel.Control.ID != sel.Exit.ID {
 		return sel, errors.New("desktop imported path requires one explicit Local captured entry and paired final")
 	}

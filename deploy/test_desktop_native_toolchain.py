@@ -361,12 +361,12 @@ class NativeSocketUIDGate(unittest.TestCase):
                             failures.append(error)
                             raise error
                         return ''
-                    if len(args) > 1 and args[1] in (str(ROOT/'deploy/test_imported_pq_workflow.py'), str(ROOT/'deploy/test_mobile_imported_pq_xray_runner.py'), str(ROOT/'deploy/test_imported_xhttp_workflow.py'), str(ROOT/'deploy/test_mobile_imported_xhttp_xray_runner.py'), str(ROOT/'deploy/test_imported_naive_h2_workflow.py'), str(ROOT/'deploy/test_mobile_imported_naive_h2_runner.py')):
+                    if len(args) > 1 and args[1] in (str(ROOT/'deploy/test_imported_pq_workflow.py'), str(ROOT/'deploy/test_mobile_imported_pq_xray_runner.py'), str(ROOT/'deploy/test_imported_xhttp_workflow.py'), str(ROOT/'deploy/test_mobile_imported_xhttp_xray_runner.py'), str(ROOT/'deploy/test_imported_naive_h2_workflow.py'), str(ROOT/'deploy/test_mobile_imported_naive_h2_runner.py'), str(ROOT/'deploy/test_imported_naive_h3_workflow.py'), str(ROOT/'deploy/test_mobile_imported_naive_h3_runner.py')):
                         self.assertEqual(system, 'linux')
                         self.assertEqual(args[2:], [])
                         self.assertEqual(kwargs, {'cwd': ROOT, 'env': env, 'timeout': 60})
                         return ''
-                    if len(args) > 1 and args[1] in (str(ROOT/'deploy/test_mobile_imported_pq_xray.py'), str(ROOT/'deploy/test_mobile_imported_xhttp_xray.py'), str(ROOT/'deploy/test_mobile_imported_naive_h2.py')):
+                    if len(args) > 1 and args[1] in (str(ROOT/'deploy/test_mobile_imported_pq_xray.py'), str(ROOT/'deploy/test_mobile_imported_xhttp_xray.py'), str(ROOT/'deploy/test_mobile_imported_naive_h2.py'), str(ROOT/'deploy/test_mobile_imported_naive_h3.py')):
                         self.assertEqual(system, 'linux')
                         self.assertEqual(args[2], str(source.resolve()))
                         self.assertIn(args[3:], ([], ['--loopback-only'], ['--reference-only']))
@@ -431,6 +431,18 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(system, 'windows')
                         self.assertEqual(args[2:], [])
                         self.assertEqual(kwargs['cwd'], ROOT)
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_imported_naive_h3_runner.py'):
+                        self.assertEqual(system, 'windows')
+                        self.assertEqual(args[2:], [])
+                        self.assertEqual(kwargs, {'cwd': ROOT, 'env': env, 'timeout': 60})
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_imported_naive_h3.py'):
+                        self.assertEqual(system, 'windows')
+                        self.assertEqual(args[2:], ['prepared', str(source.resolve())])
+                        self.assertEqual(kwargs, {'env': env, 'timeout': 4500})
+                        self.assertEqual(kwargs['env']['CGO_ENABLED'], '1')
+                        self.assertEqual(kwargs['env']['GOARCH'], arch)
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_pq.py'):
                         self.assertEqual(system, 'windows')
@@ -755,8 +767,16 @@ class NativeSocketUIDGate(unittest.TestCase):
                 if imported_naive_h2:
                     for previous, current in zip([imported_xhttp[-1], *imported_naive_h2[:-1]], imported_naive_h2):
                         self.assertEqual(calls.index(current), calls.index(previous)+1)
+                imported_naive_h3 = [args for args in calls if len(args) > 1 and args[1] in (
+                    str(ROOT/'deploy/test_imported_naive_h3_workflow.py'),
+                    str(ROOT/'deploy/test_mobile_imported_naive_h3_runner.py'),
+                    str(ROOT/'deploy/test_mobile_imported_naive_h3.py'))]
+                self.assertEqual(len(imported_naive_h3), 5 if system == 'linux' else 0)
+                if imported_naive_h3:
+                    for previous, current in zip([imported_naive_h2[-1], *imported_naive_h3[:-1]], imported_naive_h3):
+                        self.assertEqual(calls.index(current), calls.index(previous)+1)
                 if node_pq:
-                    predecessor = imported_naive_h2[-1] if imported_naive_h2 else imported_xhttp[-1] if imported_xhttp else imported_pq[-1] if imported_pq else dns_reference[0] if dns_reference else node[0]
+                    predecessor = imported_naive_h3[-1] if imported_naive_h3 else imported_naive_h2[-1] if imported_naive_h2 else imported_xhttp[-1] if imported_xhttp else imported_pq[-1] if imported_pq else dns_reference[0] if dns_reference else node[0]
                     self.assertEqual(calls.index(node_pq[0]), calls.index(predecessor)+1)
                 max_runner = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_max_runner.py')]
                 max_graph = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_max.py')]
@@ -821,12 +841,21 @@ class NativeSocketUIDGate(unittest.TestCase):
                 for name in ('test_windows_node_physical.py', 'test_windows_node_physical_runner.py', 'test_windows_external_provider_join.py'):
                     self.assertIn(ROOT/'deploy'/name, N.inputs())
                 self.assertIn(ROOT/'deploy/fixtures/windows-node-physical/kernel_observer.go', N.inputs())
+                h3_runner = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_imported_naive_h3_runner.py')]
+                h3_native = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_imported_naive_h3.py')]
+                self.assertEqual(len(h3_runner), len(kernel_runner))
+                self.assertEqual(len(h3_native), len(kernel_runner))
+                if h3_native:
+                    self.assertEqual(calls.index(h3_runner[0]), calls.index(kernel_node[-1])+1)
+                    self.assertEqual(calls.index(h3_native[0]), calls.index(h3_runner[0])+1)
+                for name in ('test_windows_imported_naive_h3.py', 'test_windows_imported_naive_h3_runner.py'):
+                    self.assertIn(ROOT/'deploy'/name, N.inputs())
                 pq_kernel_runner = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_pq_runner.py')]
                 pq_kernel = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_pq.py')]
                 self.assertEqual(len(pq_kernel_runner), len(kernel_runner))
                 self.assertEqual(len(pq_kernel), len(kernel_runner))
                 if pq_kernel:
-                    self.assertEqual(calls.index(pq_kernel_runner[0]), calls.index(kernel_node[-1])+1)
+                    self.assertEqual(calls.index(pq_kernel_runner[0]), calls.index(h3_native[0])+1)
                     self.assertEqual(calls.index(pq_kernel[0]), calls.index(pq_kernel_runner[0])+1)
                 for name in ('test_windows_node_pq.py', 'test_windows_node_pq_runner.py'):
                     self.assertIn(ROOT/'deploy'/name, N.inputs())
@@ -2089,6 +2118,7 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
                  patch.object(N, 'verify_imported_desktop_openvpn_configs'), \
                  patch.object(N, 'verify_imported_desktop_xhttp_configs'), patch.object(N, 'verify_imported_desktop_pq_configs'), \
                  patch.object(N, 'verify_imported_desktop_naive_h2_configs') as naive_h2, \
+                 patch.object(N, 'verify_imported_desktop_naive_h3_configs') as naive_h3, \
                  patch.object(N, 'verify_imported_desktop_native_openvpn'), \
                  patch.object(N.DNSSEC, 'test_native_bundle', side_effect=dnssec_failure) as dnssec:
                 invoke = (lambda: N.build('linux/'+arch, bundle)) if reused else (lambda: N.verify_installed_linux_host(Path(temporary)/'core', bundle, 'linux/'+arch, env))
@@ -2105,10 +2135,12 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
                 imported.assert_called_once_with(bundle, 'linux/'+arch, env)
                 packet.assert_called_once_with(bundle, 'linux/'+arch, env)
                 naive_h2.assert_called_once_with(bundle, 'linux/'+arch, env)
+                naive_h3.assert_called_once_with(bundle, 'linux/'+arch, env)
             else:
                 imported.assert_not_called()
                 packet.assert_not_called()
                 naive_h2.assert_not_called()
+                naive_h3.assert_not_called()
             if failure is not None or verdict_failure:
                 configs.assert_not_called()
             else:

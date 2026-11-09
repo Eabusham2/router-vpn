@@ -6,7 +6,44 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 9 latest checkpoint: imported Naive H2 and public Stop ownership
+## November 9 latest checkpoint: imported Naive H3 and native timing repairs
+
+This revision adds the existing paired Naive H3 final to Local imported-entry
+graphs on shared Go, Android, Apple and desktop. Seven concrete packet-capable
+entry wires retain all nine independent entry/final Start Layer pairs, Home
+AdGuard UDP through the final, original lower bootstrap, credentials, proof,
+policy and restoration ownership. The pinned native reader accepted all
+**252 original graphs** and rejected **fourteen deliberate faults**. Actual
+encrypted H3 and SOCKS association components passed **37 race verdicts**.
+The [H3 evidence guide](testing/imported-naive-h3.md) records the individual
+source snapshots, desktop launch projections, native-library identity and
+mandatory matching-host release gates.
+
+The Windows AMD64 companion cross-compiled with all required root symbols.
+Its actual AMD64/ARM64 execution, BFE/WFP behavior and physical peer inventory
+remain required; local interface capture was denied by Netlink. The original
+desktop Home resolver differs from the mobile fixture resolver, and both are
+retained. The corrected test reader independently checks each producer's
+captured tuple and rejects substitution.
+
+Published `cd08371b` constrains literal H3 native callbacks to their captured
+UDP peer while preserving H2 TCP ownership and the original hostname resolver.
+The [native ownership guide](NAIVE-H3-NATIVE-OWNERSHIP.md) records 48 actual
+H2/H3 loopback verdicts and three causal controls; raw AAAA-only hostname
+acceptance remains unproved. Published `fde7808c` separates valid zero-duration
+observation/cancellation completion from strictly positive successful DNS RTT;
+its [mailbox guide](testing/imported-mailbox-duration.md) records 114 focused
+race verdicts. Published `19d08be0` exposes the checked platform measurement
+interval with 41 race verdicts. Client and native DNS adoption is separate
+pending work at this checkpoint.
+
+This H3 source unit preserves the existing mode counts and defaults. Imported
+Server/Compare, additional-hop composition, Home UDP over stream-only CONNECT/H2
+paths and remaining Unix protected integration are still open requirements.
+Exact-current-SHA packages and release publication, physical selected-path and
+network-transition acceptance, signing and private deployment remain separate.
+
+## November 9 earlier checkpoint: imported Naive H2 and public Stop ownership
 
 This revision adds the existing paired Naive H2 final to Local imported-entry
 preparation in shared Go, Android, Apple and desktop. Each producer retains
@@ -18,8 +55,10 @@ boundaries. The [H2 evidence guide](testing/imported-naive-h2.md) records the
 source identities, caller and DNS rules, completed-bundle gates and limits.
 The 657-case imported peer inventory compiled, but its first physical-owner
 witness was blocked locally by Netlink; hosted peer acceptance remains required.
-CONNECT with the default Home UDP lower resolver, H3, imported Server/Compare,
-additional-hop composition and remaining Unix protected integration remain open.
+At this earlier H2 checkpoint, CONNECT with the default Home UDP lower resolver,
+H3, imported Server/Compare, additional-hop composition and remaining Unix
+protected integration were open. The H3 section above supersedes only its
+recorded H3 source and component gaps.
 
 Published `f23dea2f` fixes native H2 IPv6 literal resolution and trailing-dot
 TLS wire names while preserving the selected DNS policy and TCP-only lower

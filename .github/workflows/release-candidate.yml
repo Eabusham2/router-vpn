@@ -42,6 +42,10 @@ jobs:
     name: Imported Naive H2 native graphs and peers
     uses: ./.github/workflows/imported-naive-h2-native.yml
 
+  imported-naive-h3:
+    name: Imported Naive H3 native graphs and peers
+    uses: ./.github/workflows/imported-naive-h3-native.yml
+
   source-audit:
     name: Source security and release-gap audits
     runs-on: ubuntu-24.04
@@ -67,7 +71,8 @@ jobs:
           python3 deploy/test_linux_runtime_install.py
           python3 deploy/test_desktop_native_toolchain.py
           python3 deploy/test_desktop_stop_retry.py --contracts-only
-          python3 -m unittest deploy.test_desktop_imported_runtime deploy.test_desktop_imported_packet_runtime deploy.test_desktop_imported_openvpn_runtime deploy.test_desktop_imported_pq_runtime deploy.test_desktop_imported_xhttp_runtime deploy.test_desktop_imported_naive_h2_runtime
+          python3 -m unittest deploy.test_desktop_imported_runtime deploy.test_desktop_imported_packet_runtime deploy.test_desktop_imported_openvpn_runtime deploy.test_desktop_imported_pq_runtime deploy.test_desktop_imported_xhttp_runtime deploy.test_desktop_imported_naive_h2_runtime deploy.test_desktop_imported_naive_h3_runtime
+          python3 deploy/test_windows_imported_naive_h3_runner.py
           python3 deploy/test_node_heartbeat_context.py
           python3 deploy/test_desktop_native_dependencies.py
           python3 deploy/test_native_naive_transport_policy.py
@@ -642,7 +647,7 @@ jobs:
 
   aggregate:
     name: Aggregate one-SHA native release candidate
-    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2]
+    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

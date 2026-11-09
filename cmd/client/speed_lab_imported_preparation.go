@@ -57,7 +57,7 @@ func speedLabMultihopNodeCapabilities(profile common.RouterProfile) ([]string, [
 	}
 	var finals []string
 	for _, mode := range desktopMultihopExitModes() {
-		if desktopImportedFinalMode(mode) {
+		if desktopImportedEntryFinalMode(profile.External.Protocol, mode) {
 			finals = append(finals, mode)
 		}
 	}

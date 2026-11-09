@@ -8,6 +8,7 @@ on:
       - '.github/workflows/imported-pq-reality-native.yml'
       - '.github/workflows/imported-xhttp-native.yml'
       - '.github/workflows/imported-naive-h2-native.yml'
+      - '.github/workflows/imported-naive-h3-native.yml'
       - 'internal/**'
       - 'mobile/**'
       - 'android/**'
@@ -97,3 +98,7 @@ jobs:
   imported-naive-h2-reference:
     needs: imported-xhttp-reference
     uses: ./.github/workflows/imported-naive-h2-native.yml
+
+  imported-naive-h3-reference:
+    needs: imported-naive-h2-reference
+    uses: ./.github/workflows/imported-naive-h3-native.yml

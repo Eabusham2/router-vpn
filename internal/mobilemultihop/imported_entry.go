@@ -54,7 +54,12 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	packetXrayFinal := (selection.Protocol == "wireguard" || selection.Protocol == "amneziawg" || selection.Protocol == "openvpn") && importedNativeXrayFinal(exitMode)
 	importedXrayFinal := proxyXrayFinal || packetXrayFinal
 	naiveH2Final := exitMode == "naive-h2"
-	if selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5" && selection.Protocol != "http-connect" && selection.Protocol != "https-connect" && selection.Protocol != "openvpn") || selection.Profile["node_kind"] != "external" || (!importedXrayFinal && !naiveH2Final && exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
+	naiveH3Final := exitMode == "naive-h3"
+	naiveFinal := naiveH2Final || naiveH3Final
+	if naiveH3Final && !importedNaiveH3Entry(selection.Protocol) {
+		return nil, bad
+	}
+	if selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5" && selection.Protocol != "http-connect" && selection.Protocol != "https-connect" && selection.Protocol != "openvpn") || selection.Profile["node_kind"] != "external" || (!importedXrayFinal && !naiveFinal && exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
 		return nil, bad
 	}
 
@@ -162,7 +167,7 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	if original == nil || original["type"] != expectedType || selection.Protocol == "shadowsocks" && !importedSS2022Method(predecessorText(original, "method")) {
 		return nil, bad
 	}
-	if (proxyXrayFinal || naiveH2Final) && selection.Protocol == "shadowsocks" && !importedSS2022Credentials(predecessorText(original, "method"), predecessorText(original, "password")) {
+	if (proxyXrayFinal || naiveFinal) && selection.Protocol == "shadowsocks" && !importedSS2022Credentials(predecessorText(original, "method"), predecessorText(original, "password")) {
 		return nil, bad
 	}
 	// Each transport has its own authenticated layer. Attach the final's outer
@@ -199,6 +204,11 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	}
 	if naiveH2Final && !connectEntry {
 		if err := importedNaiveH2DNS(last, final, true); err != nil {
+			return nil, err
+		}
+	}
+	if naiveH3Final {
+		if err := importedNaiveH3DNS(last, final); err != nil {
 			return nil, err
 		}
 	}
@@ -242,8 +252,8 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 		}
 	}
 	outer["detour"] = "entry-wg"
-	if naiveH2Final {
-		attachImportedNaiveH2Bootstrap(last)
+	if naiveFinal {
+		attachImportedNaiveBootstrap(last)
 	}
 	for _, family := range []string{"endpoints", "outbounds"} {
 		rows, _ := first[family].([]any)

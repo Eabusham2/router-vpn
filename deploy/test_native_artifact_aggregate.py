@@ -55,7 +55,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(without + decoy)
 
     def test_duplicate_aggregate_or_imported_family_job_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2"):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3"):
             with self.subTest(job=job), self.assertRaisesRegex(AssertionError, "missing or duplicate"):
                 self.check(self.source + "\n  " + job + ":\n    runs-on: ubuntu-24.04\n")
 
@@ -67,7 +67,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
 
     def test_condition_or_nonblocking_gate_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2"):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3"):
             for bypass in ("    if: ${{ false }}\n", "    continue-on-error: true\n"):
                 with self.subTest(job=job, bypass=bypass):
                     with self.assertRaisesRegex(AssertionError, "conditional or nonblocking"):
@@ -85,6 +85,13 @@ class NativeArtifactAggregate(unittest.TestCase):
         for replacement in ("    uses: ./.github/workflows/imported-xhttp-native.yml", "    runs-on: ubuntu-24.04"):
             with self.subTest(replacement=replacement):
                 with self.assertRaisesRegex(AssertionError, "actual imported Naive H2"):
+                    self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
+
+    def test_removed_or_changed_naive_h3_workflow_fails(self):
+        marker = "    uses: ./.github/workflows/imported-naive-h3-native.yml"
+        for replacement in ("    uses: ./.github/workflows/imported-xhttp-native.yml", "    runs-on: ubuntu-24.04"):
+            with self.subTest(replacement=replacement):
+                with self.assertRaisesRegex(AssertionError, "actual imported Naive H3"):
                     self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
 
     def test_authoritative_audit_executes_guard_and_controls(self):

@@ -334,6 +334,7 @@ public final class MultihopHomeHarness {
   for(String mode:List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong")){
    try{pair("socks5",mode);}catch(Throwable failure){throw new AssertionError("published SOCKS Home admission failed: "+mode,failure);}
   }
+  for(String entry:List.of("socks5","shadowsocks","hysteria2","wireguard","amneziawg","openvpn"))pair(entry,"naive-h3");
   for(String raw:List.of("http","https")){
    String mode=AndroidExternalPolicy.protocol(raw);
    check((raw+"-connect").equals(mode),"captured CONNECT protocol mapping changed");
@@ -347,7 +348,7 @@ public final class MultihopHomeHarness {
   }
   for(boolean adopted:List.of(false,true)){
    Context context=externalOwner();Map<String,Object> before=new HashMap<>(context.store.values);boolean refused=false;
-   try{if(adopted)AndroidHomeStateStore.connectedMultihop(context,ENTRY,EXIT,"naive-h3","socks5");else AndroidHomeStateStore.beginMultihop(context,ENTRY,EXIT,"naive-h3","socks5");}catch(IllegalArgumentException expected){refused=true;}
+   try{if(adopted)AndroidHomeStateStore.connectedMultihop(context,ENTRY,EXIT,"split","socks5");else AndroidHomeStateStore.beginMultihop(context,ENTRY,EXIT,"split","socks5");}catch(IllegalArgumentException expected){refused=true;}
    check(refused&&before.equals(context.store.values),"unsupported SOCKS final changed original Home owner");
   }
  }

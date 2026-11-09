@@ -24,7 +24,7 @@ final class AndroidImportedRouterPath {
     static boolean supports(String entryProtocol, String finalMode) {
         entryProtocol = AndroidExternalPolicy.protocol(entryProtocol);
         if (Arrays.asList("http-connect", "https-connect").contains(entryProtocol)) return "shadowsocks".equals(finalMode) || Arrays.asList("reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2").contains(finalMode);
-        if (Arrays.asList("socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn").contains(entryProtocol) && Arrays.asList("reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2").contains(finalMode)) return true;
+        if (Arrays.asList("socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn").contains(entryProtocol) && Arrays.asList("reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3").contains(finalMode)) return true;
         if (Arrays.asList("socks5", "openvpn").contains(entryProtocol)) return Arrays.asList("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong").contains(finalMode);
         boolean proxyEntry = Arrays.asList("shadowsocks", "hysteria2").contains(entryProtocol);
         return (proxyEntry || Arrays.asList("wireguard", "amneziawg").contains(entryProtocol))

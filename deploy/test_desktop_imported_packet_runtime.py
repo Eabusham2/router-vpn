@@ -185,7 +185,7 @@ class ImportedPacketRuntimeGate(unittest.TestCase):
                     namespace = dict(target=target,host=target,stage=stage,destination=destination,binary=stage/N.binary_name(target),
                         policy='policy',marker=lambda _: 'original',source=Path('prepared-core'),env=env,run=run,os=N.os,
                         verify_imported_desktop_configs=original,verify_imported_desktop_packet_configs=packet,verify_imported_desktop_openvpn_configs=lambda *args: None,
-                        verify_imported_desktop_pq_configs=lambda *args: None, verify_imported_desktop_xhttp_configs=lambda *args: None, verify_imported_desktop_naive_h2_configs=lambda *args: None,
+                        verify_imported_desktop_pq_configs=lambda *args: None, verify_imported_desktop_xhttp_configs=lambda *args: None, verify_imported_desktop_naive_h2_configs=lambda *args: None, verify_imported_desktop_naive_h3_configs=lambda *args: None,
                         verify_installed_linux_host=installed,verify_installed_darwin_host=installed)
                     if failure is None: exec(compile(tail,'actual completed native build tail','exec'),namespace)
                     else:
@@ -214,7 +214,7 @@ class ImportedPacketRuntimeGate(unittest.TestCase):
                          patch.object(N.DNSSEC,'test_native_bundle'),patch.object(N,'run') as run, \
                          patch.object(N,'verify_imported_desktop_configs',side_effect=original), \
                          patch.object(N,'verify_imported_desktop_packet_configs',side_effect=packet),patch.object(N,'verify_imported_desktop_openvpn_configs'), \
-                         patch.object(N,'verify_imported_desktop_naive_h2_configs'), patch.object(N,'verify_imported_desktop_xhttp_configs'), patch.object(N,'verify_imported_desktop_pq_configs'),contextlib.redirect_stdout(stdout):
+                         patch.object(N,'verify_imported_desktop_naive_h2_configs'), patch.object(N, 'verify_imported_desktop_naive_h3_configs'), patch.object(N,'verify_imported_desktop_xhttp_configs'), patch.object(N,'verify_imported_desktop_pq_configs'),contextlib.redirect_stdout(stdout):
                         if failure is None: self.assertEqual(N.build(target,bundle),bundle)
                         else:
                             with self.assertRaises(type(failure)) as caught: N.build(target,bundle)

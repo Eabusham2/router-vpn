@@ -46,7 +46,7 @@ def check_release_aggregate_gates(source: str) -> None:
     values = [value.strip() for value in needs[0][len("    needs: ["):-1].split(",")]
     required = {"source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
                 "windows-complete-max", "windows-all-controller", "android", "ios", "macos",
-                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2"}
+                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3"}
     assert len(values) == len(set(values)) and set(values) == required, (
         "native release aggregate changed its complete required gate inventory")
     pq = job("imported-pq-reality")
@@ -58,8 +58,11 @@ def check_release_aggregate_gates(source: str) -> None:
     naive_h2 = job("imported-naive-h2")
     assert "    uses: ./.github/workflows/imported-naive-h2-native.yml" in naive_h2, (
         "native release lost its actual imported Naive H2 producer/reference workflow")
+    naive_h3 = job("imported-naive-h3")
+    assert "    uses: ./.github/workflows/imported-naive-h3-native.yml" in naive_h3, (
+        "native release lost its actual imported Naive H3 producer/reference workflow")
     for name, lines in (("aggregate", aggregate), ("imported-pq-reality", pq),
-                        ("imported-xhttp", xhttp), ("imported-naive-h2", naive_h2)):
+                        ("imported-xhttp", xhttp), ("imported-naive-h2", naive_h2), ("imported-naive-h3", naive_h3)):
         assert not any(line.startswith(("    if:", "    continue-on-error:")) for line in lines), (
             f"native release {name} gate became conditional or nonblocking")
 

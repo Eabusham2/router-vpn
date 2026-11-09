@@ -12,7 +12,16 @@ import (
 // separately captured transport resolver belongs to the lower entry/layer;
 // application UoT does not grant datagrams to that lower transport.
 func importedNaiveH2DNS(graph, final map[string]any, lowerUDP bool) error {
-	bad := errors.New("imported Naive H2 requires its original authenticated stream and complete captured DNS bootstrap tree")
+	return importedNaiveDNS(graph, final, "naive-h2", lowerUDP)
+}
+
+// The mode is validated before reading either resolver tree. H3 requires an
+// independently admitted UDP predecessor; Naive's inner UoT does not provide it.
+func importedNaiveDNS(graph, final map[string]any, mode string, lowerUDP bool) error {
+	bad := errors.New("imported Naive requires its exact original transport and complete captured DNS bootstrap tree")
+	if mode != "naive-h2" && mode != "naive-h3" || mode == "naive-h3" && !lowerUDP {
+		return bad
+	}
 	transport := predecessorCopy(final)
 	delete(transport, "domain_resolver")
 	detour := predecessorText(final, "detour")
@@ -20,14 +29,14 @@ func importedNaiveH2DNS(graph, final map[string]any, lowerUDP bool) error {
 		if _, exists := final["detour"]; exists {
 			return bad
 		}
-		if err := multihoprelay.ValidateNaiveTransport(transport, "naive-h2"); err != nil {
+		if err := multihoprelay.ValidateNaiveTransport(transport, mode); err != nil {
 			return err
 		}
 	} else {
 		if detour != NativeStartLayerTag {
 			return bad
 		}
-		if err := multihoprelay.ValidateNaiveRoutedTransport(transport, "naive-h2"); err != nil {
+		if err := multihoprelay.ValidateNaiveRoutedTransport(transport, mode); err != nil {
 			return err
 		}
 	}
@@ -106,7 +115,7 @@ func importedNaiveH2DNS(graph, final map[string]any, lowerUDP bool) error {
 
 // Called only after the complete original Naive bootstrap tree has passed the
 // validation above. Existing final/layer resolver edges remain unchanged.
-func attachImportedNaiveH2Bootstrap(graph map[string]any) {
+func attachImportedNaiveBootstrap(graph map[string]any) {
 	servers := graph["dns"].(map[string]any)["servers"].([]any)
 	for _, raw := range servers[len(servers)/2:] {
 		server := raw.(map[string]any)

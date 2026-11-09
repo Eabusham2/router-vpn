@@ -1,0 +1,1051 @@
+//go:build windows && routervpn_windows_node_composition && with_purego
+
+package box
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/quic-go"
+	"github.com/sagernet/quic-go/http3"
+	"github.com/sagernet/sing-box/adapter"
+	boxTLS "github.com/sagernet/sing-box/common/tls"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	NV "github.com/sagernet/sing-box/protocol/naive"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	HYQUIC "github.com/sagernet/sing-quic/hysteria2"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	tun "github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/auth"
+	"github.com/sagernet/sing/common/buf"
+	B "github.com/sagernet/sing/common/bufio"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// This independent copied executable owns the real protocol servers. It has no
+// client broker, modeled grant map or permission callback. Its AppID is outside
+// the test process's actual BFE policy. Only exact captured destinations route.
+const desktopImportedH3PeerLimit = 2 << 20
+const desktopImportedH3DNS = "192.168.50.133:53"
+const desktopImportedH3Echo = "192.0.2.99:33443"
+
+type desktopImportedH3PeerRequest struct {
+	Schema                                                         int
+	Operation, Kind, EntryLayer, FinalLayer, Address, Fault, Nonce string
+	Source                                                         []string
+	Certificate, Key                                               []byte
+}
+type desktopImportedH3PeerReply struct {
+	Schema                                                                          int
+	Kind, EntryLayer, FinalLayer, Address, SourceSHA256, ConfigSHA256, Nonce, Probe string
+	Source                                                                          []string
+	AppID                                                                           []byte
+	Observed, Bootstrap, Selected, TCP, UDP, Private, Public, QUIC, Rejected        int64
+	SOCKS                                                                           []desktopExternalSOCKSWFPReceipt
+	Closed                                                                          bool
+}
+
+func desktopImportedH3JSON(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+func desktopImportedH3Object(t *testing.T, raw string) map[string]any {
+	t.Helper()
+	var value map[string]any
+	if json.Unmarshal([]byte(raw), &value) != nil || value == nil {
+		t.Fatal("imported H3 capture is not an object")
+	}
+	return value
+}
+func desktopImportedH3Read(reader *bufio.Reader, value any) error {
+	raw, err := reader.ReadSlice('\n')
+	if err != nil || len(raw) > desktopImportedH3PeerLimit {
+		return errors.Join(err, errors.New("imported H3 peer message exceeded its original bound"))
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err = d.Decode(value); err != nil {
+		return err
+	}
+	var extra any
+	if d.Decode(&extra) != io.EOF {
+		return errors.New("imported H3 peer message changed exact framing")
+	}
+	return nil
+}
+func desktopImportedH3LayerMode(mode string) bool {
+	return mode == "off" || mode == "aes-256-gcm" || mode == "aes-256-gcm+xor-whitening"
+}
+func desktopImportedH3Kind(kind string) bool {
+	switch kind {
+	case "socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn-tcp", "openvpn-udp":
+		return true
+	}
+	return false
+}
+func desktopImportedH3NativePeer(ctx context.Context, certificate tls.Certificate) *desktopExternalIntegrationPeer {
+	own, cancel := context.WithCancel(ctx)
+	return &desktopExternalIntegrationPeer{ctx: own, cancel: cancel, certificate: certificate, proxyCertificate: certificate, connections: map[net.Conn]bool{}, packetConnections: map[N.PacketConn]bool{}}
+}
+
+type desktopImportedH3Route struct{ network, destination, target string }
+type desktopImportedH3Servers struct {
+	probe                                                  *desktopExternalWFPDatagrams
+	ctx                                                    context.Context
+	cancel                                                 context.CancelFunc
+	entry, final                                           *desktopExternalIntegrationPeer
+	socks                                                  *desktopExternalSOCKSWFPProvider
+	layers                                                 []*desktopExternalIntegrationPeer
+	closeOnce                                              sync.Once
+	closeErr                                               error
+	closeFinal                                             func() error
+	closes                                                 []io.Closer
+	workers                                                sync.WaitGroup
+	source                                                 []string
+	sourceSHA, configSHA, physical                         string
+	bootstrap, selected, tcp, udp, private, quic, rejected atomic.Int64
+	mu                                                     sync.Mutex
+	markers                                                map[string]int64
+	holdBootstrap                                          bool
+}
+
+func (s *desktopImportedH3Servers) close() error {
+	s.closeOnce.Do(func() {
+		s.cancel()
+		for _, c := range s.closes {
+			s.closeErr = errors.Join(s.closeErr, c.Close())
+		}
+		for _, p := range s.layers {
+			p.close()
+		}
+		if s.socks != nil {
+			s.socks.close()
+		} else if s.entry != nil {
+			s.entry.close()
+		}
+		if s.closeFinal != nil {
+			s.closeErr = errors.Join(s.closeErr, s.closeFinal())
+		}
+		if s.final != nil {
+			s.final.close()
+		}
+		s.workers.Wait()
+	})
+	return s.closeErr
+}
+
+func desktopImportedH3ReplyPacket(writer N.PacketWriter, payload []byte) (*buf.Buffer, error) {
+	front, rear := N.CalculateFrontHeadroom(writer), N.CalculateRearHeadroom(writer)
+	if front < 0 || rear < 0 || front > 4096 || rear > 4096 || len(payload) > 65535 {
+		return nil, errors.New("imported H3 reply exceeds captured native writer bounds")
+	}
+	reply := buf.NewSize(front + len(payload) + rear)
+	reply.Resize(front, 0)
+	_, _ = reply.Write(payload)
+	return reply, nil
+}
+
+func (s *desktopImportedH3Servers) selectedPacket(ctx context.Context, c N.PacketConn, m M.Metadata) error {
+	writer := c // Preserve the actual writer's header/trailer contract before owning its cached first packet.
+	c = desktopWFPOwnInitialPacket(c)
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+	defer stop()
+	for {
+		body := buf.NewPacket()
+		destination, err := c.ReadPacket(body)
+		if err != nil {
+			body.Release()
+			return err
+		}
+		if destination != m.Destination {
+			body.Release()
+			return errors.New("H3 final changed its original datagram destination")
+		}
+		if destination.String() == desktopImportedH3DNS {
+			question := new(mDNS.Msg)
+			err = question.Unpack(body.Bytes())
+			body.Release()
+			if err != nil || len(question.Question) != 1 || question.Question[0].Name != "selected.routervpn.test." || question.Question[0].Qtype != mDNS.TypeA {
+				s.rejected.Add(1)
+				return errors.New("H3 selected DNS received a bootstrap or foreign question")
+			}
+			s.selected.Add(1)
+			answer := new(mDNS.Msg).SetReply(question)
+			answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: question.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 1}, A: net.IPv4(203, 0, 113, 77)}}
+			raw, e := answer.Pack()
+			if e != nil {
+				return e
+			}
+			reply, e := desktopImportedH3ReplyPacket(writer, raw)
+			if e != nil {
+				return e
+			}
+			if e = c.WritePacket(reply, destination); e != nil {
+				return e
+			}
+		} else if destination.String() == desktopImportedH3Echo {
+			if string(body.Bytes()) != "captured-imported-h3-udp" {
+				body.Release()
+				return errors.New("H3 final UDP payload changed")
+			}
+			s.udp.Add(1)
+			reply, e := desktopImportedH3ReplyPacket(writer, body.Bytes())
+			body.Release()
+			if e != nil {
+				return e
+			}
+			if err = c.WritePacket(reply, destination); err != nil {
+				return err
+			}
+		} else {
+			body.Release()
+			s.rejected.Add(1)
+			return errors.New("H3 final refused an uncaptured application datagram")
+		}
+	}
+}
+func (s *desktopImportedH3Servers) selectedStream(ctx context.Context, c net.Conn, m M.Metadata) error {
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+	defer stop()
+	switch m.Destination.String() {
+	case desktopImportedH3Echo:
+		body := make([]byte, len("captured-imported-h3-tcp"))
+		if _, e := io.ReadFull(c, body); e != nil {
+			return e
+		}
+		if string(body) != "captured-imported-h3-tcp" {
+			return errors.New("H3 final TCP payload changed")
+		}
+		s.tcp.Add(1)
+		_, e := c.Write(body)
+		return e
+	case "10.77.0.1:8787":
+		r, e := http.ReadRequest(bufio.NewReader(c))
+		if e != nil {
+			return e
+		}
+		defer r.Body.Close()
+		profile := desktopImportedH3ObjectNoTest(s.source[4])
+		if r.Method != http.MethodGet || r.Host != "10.77.0.1:8787" || r.URL.Path != "/health" || r.Header.Get("Authorization") != "Bearer "+profile["api_token"].(string) {
+			s.rejected.Add(1)
+			return errors.New("H3 private proof changed captured authority")
+		}
+		s.private.Add(1)
+		body, _ := json.Marshal(map[string]any{"ok": true, "node_id": profile["node_proof_id"], "proof": "router-vpn-private-agent-v1"})
+		_, e = fmt.Fprintf(c, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+		return e
+	default:
+		s.rejected.Add(1)
+		return errors.New("H3 final refused an uncaptured application stream")
+	}
+}
+func desktopImportedH3ObjectNoTest(raw string) map[string]any {
+	var value map[string]any
+	_ = json.Unmarshal([]byte(raw), &value)
+	return value
+}
+
+type desktopImportedH3Router struct {
+	adapter.Router
+	peer *desktopExternalIntegrationPeer
+}
+
+func (r *desktopImportedH3Router) RouteConnection(ctx context.Context, c net.Conn, m adapter.InboundContext) error {
+	return r.peer.NewConnection(ctx, c, M.Metadata{Source: m.Source, Destination: m.Destination})
+}
+func (r *desktopImportedH3Router) RoutePacketConnection(ctx context.Context, c N.PacketConn, m adapter.InboundContext) error {
+	return r.peer.NewPacketConnection(ctx, c, M.Metadata{Source: m.Source, Destination: m.Destination})
+}
+func (r *desktopImportedH3Router) RouteConnectionEx(ctx context.Context, c net.Conn, m adapter.InboundContext, done N.CloseHandlerFunc) {
+	r.peer.NewConnectionEx(ctx, c, m.Source, m.Destination, done)
+}
+func (r *desktopImportedH3Router) RoutePacketConnectionEx(ctx context.Context, c N.PacketConn, m adapter.InboundContext, done N.CloseHandlerFunc) {
+	r.peer.NewPacketConnectionEx(ctx, c, m.Source, m.Destination, done)
+}
+
+func (s *desktopImportedH3Servers) startFinal(t *testing.T, r desktopImportedH3PeerRequest, pair tls.Certificate) (map[string]any, string) {
+	t.Helper()
+	s.final = desktopImportedH3NativePeer(s.ctx, pair)
+	s.final.ownedStream = s.selectedStream
+	s.final.ownedPacket = s.selectedPacket
+	user, password := desktopExternalWFPNonce(t), desktopExternalWFPNonce(t)
+	native, err := NV.NewInbound(s.ctx, &desktopImportedH3Router{peer: s.final}, log.NewNOPFactory().Logger(), "captured-h3-final", option.NaiveInboundOptions{Network: option.NetworkList("tcp"), Users: []auth.User{{Username: user, Password: password}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet, err := net.ListenPacket("udp4", net.JoinHostPort(r.Address, "0"))
+	if err != nil {
+		_ = native.Close()
+		t.Fatal(err)
+	}
+	server := &http3.Server{TLSConfig: &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13, NextProtos: []string{"h3"}}, QUICConfig: &quic.Config{Allow0RTT: true, DisablePathManager: true}, ConnContext: func(context.Context, *quic.Conn) context.Context { return s.ctx }}
+	server.Handler = http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		if q.ProtoMajor != 3 || q.TLS == nil || q.TLS.NegotiatedProtocol != "h3" {
+			s.rejected.Add(1)
+			http.Error(w, "H3 required", http.StatusHTTPVersionNotSupported)
+			return
+		}
+		s.quic.Add(1)
+		native.(*NV.Inbound).ServeHTTP(w, q)
+	})
+	joined := make(chan error, 1)
+	go func() { joined <- server.Serve(packet) }()
+	s.closeFinal = func() error {
+		e := server.Close()
+		_ = packet.Close()
+		e = errors.Join(e, native.Close())
+		<-joined
+		return e
+	}
+	address := netip.MustParseAddrPort(packet.LocalAddr().String())
+	row := map[string]any{"type": "naive", "tag": "proxy", "server": address.Addr().String(), "server_port": int(address.Port()), "username": user, "password": password, "quic": true, "udp_over_tcp": map[string]any{"enabled": true, "version": 2}, "tls": map[string]any{"enabled": true, "server_name": "captured-proxy.example", "certificate_path": "cert.pem"}}
+	switch r.Fault {
+	case "final-password":
+		row["password"] = password + "-foreign"
+	case "final-sni":
+		row["tls"].(map[string]any)["server_name"] = "foreign.invalid"
+	}
+	return row, packet.LocalAddr().String()
+}
+
+// Both path lanes forward ciphertext to a separately owned actual receiver.
+// The final's selected DNS handler never sees the entry's bootstrap questions.
+func (s *desktopImportedH3Servers) routes(peer *desktopExternalIntegrationPeer, routes []desktopImportedH3Route, allowPublic bool, dynamic func(string) bool) {
+	target := func(network, destination string) (string, bool) {
+		for _, route := range routes {
+			if route.network == network && route.destination == destination {
+				return route.target, true
+			}
+		}
+		if network == "udp" && dynamic != nil && dynamic(destination) {
+			return destination, true
+		}
+		return "", false
+	}
+	peer.ownedStream = func(ctx context.Context, c net.Conn, m M.Metadata) error {
+		if allowPublic && m.Destination.String() == "1.1.1.1:443" {
+			return peer.serve(c, m.Destination.String())
+		}
+		remote, ok := target("tcp", m.Destination.String())
+		if !ok {
+			s.rejected.Add(1)
+			return errors.New("imported H3 entry refused uncaptured TCP")
+		}
+		destination, e := (&net.Dialer{}).DialContext(ctx, "tcp", remote)
+		if e != nil {
+			return e
+		}
+		defer destination.Close()
+		stop := context.AfterFunc(peer.ctx, func() { _ = c.Close(); _ = destination.Close() })
+		defer stop()
+		done := make(chan struct{})
+		go func() { _, _ = io.Copy(destination, c); _ = c.Close(); _ = destination.Close(); close(done) }()
+		_, _ = io.Copy(c, destination)
+		_ = destination.Close()
+		_ = c.Close()
+		<-done
+		return nil
+	}
+	peer.ownedPacket = func(ctx context.Context, c N.PacketConn, m M.Metadata) error {
+		remote, ok := target("udp", m.Destination.String())
+		if !ok {
+			s.rejected.Add(1)
+			return errors.New("imported H3 entry refused uncaptured UDP")
+		}
+		writer := c // Cached ownership must not hide the pinned SS2022 writer's headroom.
+		c = desktopWFPOwnInitialPacket(c)
+		destination, e := (&net.Dialer{}).DialContext(ctx, "udp", remote)
+		if e != nil {
+			return e
+		}
+		defer destination.Close()
+		stop := context.AfterFunc(peer.ctx, func() { _ = c.Close(); _ = destination.Close() })
+		defer stop()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for {
+				body := buf.NewPacket()
+				n, err := destination.Read(body.FreeBytes())
+				if err != nil {
+					body.Release()
+					_ = c.Close()
+					return
+				}
+				body.Truncate(n)
+				reply, err := desktopImportedH3ReplyPacket(writer, body.Bytes())
+				body.Release()
+				if err != nil {
+					_ = c.Close()
+					return
+				}
+				if err = c.WritePacket(reply, m.Destination); err != nil {
+					_ = c.Close()
+					return
+				}
+			}
+		}()
+		for {
+			body := buf.NewPacket()
+			address, err := c.ReadPacket(body)
+			if err == nil && address != m.Destination {
+				err = errors.New("imported H3 entry packet changed captured destination")
+			}
+			if err == nil {
+				_, err = destination.Write(body.Bytes())
+			}
+			body.Release()
+			if err != nil {
+				break
+			}
+		}
+		_ = destination.Close()
+		<-done
+		return nil
+	}
+	peer.ownedFlow = func(protocol uint8, source, destination netip.AddrPort) tun.FlowVerdict {
+		network := "udp"
+		if protocol == 6 {
+			network = "tcp"
+		} else if protocol != 17 {
+			return tun.FlowVerdict{Action: tun.ActionReject}
+		}
+		_, ok := target(network, destination.String())
+		if source.Addr() != netip.MustParseAddr("10.78.0.2") || !ok && !(allowPublic && network == "tcp" && destination.String() == "1.1.1.1:443") {
+			return tun.FlowVerdict{Action: tun.ActionReject}
+		}
+		return tun.FlowVerdict{Action: tun.ActionAccept}
+	}
+}
+func (s *desktopImportedH3Servers) bootstrapPeer(t *testing.T) string {
+	t.Helper()
+	packet, e := net.ListenPacket("udp4", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	s.closes = append(s.closes, packet)
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		var body [4096]byte
+		for {
+			n, from, err := packet.ReadFrom(body[:])
+			if err != nil {
+				return
+			}
+			q := new(mDNS.Msg)
+			if q.Unpack(body[:n]) != nil || len(q.Question) != 1 || q.Question[0].Name != "bootstrap.routervpn.test." || q.Question[0].Qtype != mDNS.TypeA {
+				s.rejected.Add(1)
+				continue
+			}
+			s.bootstrap.Add(1)
+			if s.holdBootstrap {
+				<-s.ctx.Done()
+				return
+			}
+			answer := new(mDNS.Msg).SetReply(q)
+			answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: q.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 1}, A: net.IPv4(203, 0, 113, 76)}}
+			raw, _ := answer.Pack()
+			_, _ = packet.WriteTo(raw, from)
+		}
+	}()
+	return packet.LocalAddr().String()
+}
+
+// The native SS service decodes both entry and Start Layer packets. Whitening
+// wraps only their wire bytes and uses each independently captured key.
+func (s *desktopImportedH3Servers) ss(t *testing.T, peer *desktopExternalIntegrationPeer, address, mode, password string) string {
+	t.Helper()
+	host, port, e := net.SplitHostPort(address)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var listener net.Listener
+	var packet net.PacketConn
+	if port == "0" {
+		listener, packet, e = desktopWFPSSEntryPortPair(netip.MustParseAddr(host), net.Listen)
+	} else {
+		packet, e = net.ListenPacket("udp4", address)
+		if e == nil {
+			listener, e = net.Listen("tcp4", address)
+		}
+	}
+	if e != nil {
+		if packet != nil {
+			_ = packet.Close()
+		}
+		t.Fatal(e)
+	}
+	peer.listener, peer.packet = listener, packet
+	service, e := shadowaead_2022.NewServiceWithPassword("2022-blake3-aes-256-gcm", password, 60, peer, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var key *[32]byte
+	if mode == "aes-256-gcm+xor-whitening" {
+		value := sha256.Sum256([]byte("router-vpn-xor-whitening-v1\x00" + password))
+		key = &value
+	}
+	peer.workers.Add(2)
+	go func() {
+		defer peer.workers.Done()
+		for {
+			c, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			peer.mu.Lock()
+			if peer.closing {
+				peer.mu.Unlock()
+				_ = c.Close()
+				return
+			}
+			peer.connections[c] = true
+			peer.workers.Add(1)
+			peer.mu.Unlock()
+			go func() {
+				defer peer.workers.Done()
+				defer func() { _ = c.Close(); peer.mu.Lock(); delete(peer.connections, c); peer.mu.Unlock() }()
+				wire := c
+				if key != nil {
+					wire = &desktopWFPSSEntryWhiteningStream{Conn: c, key: *key}
+				}
+				peer.accepted.Add(1)
+				peer.recordFailure(service.NewConnection(peer.ctx, wire, M.Metadata{Source: M.SocksaddrFromNet(c.RemoteAddr())}))
+			}()
+		}
+	}()
+	go func() {
+		defer peer.workers.Done()
+		wire := packet
+		if key != nil {
+			wire = &desktopExternalLayerWhiteningPacket{PacketConn: packet, key: *key}
+		}
+		reader := B.NewPacketConn(wire)
+		for {
+			body := buf.NewPacket()
+			from, err := reader.ReadPacket(body)
+			if err != nil {
+				body.Release()
+				return
+			}
+			peer.physicalUDP.Add(1)
+			peer.recordFailure(service.NewPacket(peer.ctx, reader, body, M.Metadata{Source: from}))
+		}
+	}()
+	return packet.LocalAddr().String()
+}
+
+func (s *desktopImportedH3Servers) startSOCKS(t *testing.T, peer *desktopExternalIntegrationPeer, address, fault string) string {
+	t.Helper()
+	listener, e := net.Listen("tcp4", net.JoinHostPort(address, "0"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	probe, e := net.ListenPacket("udp4", net.JoinHostPort(address, "0"))
+	if e != nil {
+		_ = listener.Close()
+		t.Fatal(e)
+	}
+	p := &desktopExternalSOCKSWFPProvider{peer: peer, local: netip.MustParseAddr(address), listener: listener, probe: &desktopExternalWFPDatagrams{PacketConn: probe, observed: map[string]int{}}, fault: fault, streams: map[net.Conn]bool{}, refusalRelease: make(chan struct{})}
+	s.socks = p
+	if fault == "relay-other-private" {
+		close(p.refusalRelease)
+	}
+	p.workers.Add(1)
+	go func() {
+		defer p.workers.Done()
+		for {
+			c, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			p.mu.Lock()
+			if p.closed {
+				p.mu.Unlock()
+				_ = c.Close()
+				return
+			}
+			p.streams[c] = true
+			p.workers.Add(1)
+			p.mu.Unlock()
+			go p.serve(c)
+		}
+	}()
+	return listener.Addr().String()
+}
+func (s *desktopImportedH3Servers) startHY2(t *testing.T, peer *desktopExternalIntegrationPeer, r desktopImportedH3PeerRequest, password string) string {
+	t.Helper()
+	packet, e := net.ListenPacket("udp4", net.JoinHostPort(r.Address, "0"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	peer.packet = packet
+	logger := log.NewNOPFactory().Logger()
+	tlsConfig, e := boxTLS.NewServer(s.ctx, logger, option.InboundTLSOptions{Enabled: true, Certificate: []string{string(r.Certificate)}, Key: []string{string(r.Key)}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	server, e := HYQUIC.NewService[int](HYQUIC.ServiceOptions{Context: s.ctx, Logger: logger, TLSConfig: tlsConfig, UDPTimeout: 10 * time.Second, Handler: peer})
+	if e != nil {
+		t.Fatal(e)
+	}
+	server.UpdateUsers([]int{1}, []string{password})
+	peer.closeProtocol = func() { _ = server.Close(); _ = tlsConfig.Close() }
+	if e = tlsConfig.Start(); e == nil {
+		e = server.Start(packet)
+	}
+	if e != nil {
+		t.Fatal(e)
+	}
+	return packet.LocalAddr().String()
+}
+
+func (s *desktopImportedH3Servers) startOpenVPN(t *testing.T, r desktopImportedH3PeerRequest, routes []desktopImportedH3Route, public string) (nativeopenvpn.Profile, string) {
+	t.Helper()
+	pki := desktopOpenVPNCompositionCertificates(t)
+	port, e := desktopOpenVPNCompositionPort(r.Address, map[int]bool{})
+	if e != nil {
+		t.Fatal(e)
+	}
+	rules := []any{}
+	for _, route := range append(append([]desktopImportedH3Route(nil), routes...), desktopImportedH3Route{"tcp", "1.1.1.1:443", public}) {
+		original := netip.MustParseAddrPort(route.destination)
+		actual := netip.MustParseAddrPort(route.target)
+		rules = append(rules, map[string]any{"network": []string{route.network}, "ip_cidr": []string{original.Addr().String() + "/32"}, "port": []int{int(original.Port())}, "action": "route", "outbound": "selected-services", "override_address": actual.Addr().String(), "override_port": int(actual.Port())})
+	}
+	rules = append(rules, map[string]any{"action": "reject"})
+	network := strings.TrimPrefix(r.Kind, "openvpn-")
+	graph := map[string]any{"log": map[string]any{"disabled": true}, "endpoints": []any{map[string]any{"type": "openvpn-server", "tag": "provider", "system": false, "listen": r.Address, "listen_port": port, "network": network, "address": []string{"10.211.18.1/24"}, "data_ciphers": []string{"AES-256-GCM", "AES-128-GCM"}, "tls": map[string]any{"certificate": []string{pki.provider}, "key": []string{pki.providerKey}, "client_certificate": []string{pki.ca}, "verify_client_certificate": "require", "remote_certificate_tls": "client", "control_wrap": map[string]any{"type": "tls_auth", "key": []string{desktopOpenVPNCompositionControlKey()}, "direction": "server"}}}}, "outbounds": []any{map[string]any{"type": "direct", "tag": "selected-services"}}, "route": map[string]any{"rules": rules}}
+	provider, e := desktopOpenVPNCompositionProviderBox(s.ctx, graph)
+	if e != nil {
+		t.Fatal(e)
+	}
+	s.closes = append(s.closes, provider)
+	if e = provider.Start(); e != nil {
+		t.Fatal("actual captured imported H3 OpenVPN provider failed", e)
+	}
+	profile := desktopOpenVPNCompositionProfile(pki, []nativeopenvpn.Remote{{Host: r.Address, Port: port, Network: network}}, "tls-auth", "")
+	return profile, net.JoinHostPort(r.Address, strconv.Itoa(port))
+}
+
+func desktopImportedH3Find(t *testing.T, graph map[string]any, tag string) map[string]any {
+	t.Helper()
+	for _, family := range []string{"outbounds", "endpoints"} {
+		rows, _ := graph[family].([]any)
+		for _, raw := range rows {
+			row := raw.(map[string]any)
+			if row["tag"] == tag {
+				return row
+			}
+		}
+	}
+	t.Fatal("imported H3 graph lost captured tag", tag)
+	return nil
+}
+func desktopImportedH3Address(row map[string]any) string {
+	return net.JoinHostPort(row["server"].(string), fmt.Sprint(int(row["server_port"].(float64))))
+}
+func desktopImportedH3ReplaceEndpoint(row map[string]any, address string) {
+	a := netip.MustParseAddrPort(address)
+	row["server"], row["server_port"] = a.Addr().String(), int(a.Port())
+}
+func desktopImportedH3CompileSource(t *testing.T, source []string) *mobilemultihop.Controller {
+	t.Helper()
+	if len(source) < 7 {
+		t.Fatal("imported H3 original inputs absent")
+	}
+	plan, e := mobilemultihop.NewImportedEntry(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
+	if e != nil {
+		t.Fatal("actual protected H3 source did not compile", e)
+	}
+	return plan
+}
+func desktopImportedH3StartServers(t *testing.T, r desktopImportedH3PeerRequest) *desktopImportedH3Servers {
+	t.Helper()
+	if len(r.Source) != 9 || r.Source[2] != "naive-h3" || !desktopImportedH3Kind(r.Kind) || !desktopImportedH3LayerMode(r.EntryLayer) || !desktopImportedH3LayerMode(r.FinalLayer) {
+		t.Fatal("H3 child lost original source axes")
+	}
+	inherited := desktopImportedH3CompileSource(t, r.Source)
+	if inherited.SourceSHA256() != r.Source[7] || inherited.Config() != r.Source[8] {
+		_ = inherited.Close()
+		t.Fatal("H3 child source receipt changed before original capture")
+	}
+	_ = inherited.Close()
+	pair, e := tls.X509KeyPair(r.Certificate, r.Key)
+	if e != nil {
+		t.Fatal(e)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &desktopImportedH3Servers{ctx: ctx, cancel: cancel, markers: map[string]int64{}, holdBootstrap: r.Fault == "held-bootstrap"}
+	probe, e := net.ListenPacket("udp4", net.JoinHostPort(r.Address, "0"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	s.probe = &desktopExternalWFPDatagrams{PacketConn: probe, observed: map[string]int{}}
+	s.closes = append(s.closes, s.probe)
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		var b [128]byte
+		for {
+			if _, _, e := s.probe.ReadFrom(b[:]); e != nil {
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		if e := s.close(); e != nil {
+			t.Error("imported H3 independent peer did not join", e)
+		}
+	})
+	args := append([]string(nil), r.Source[:7]...)
+	profile := desktopImportedH3Object(t, args[4])
+	profile["kill_switch_policy"] = "always"
+	profile["home_lan_access"] = false
+	profile["ipv6_mode"] = "on"
+	profile["endpoint"] = r.Address
+	source, capture := desktopImportedH3Object(t, args[0]), desktopImportedH3Object(t, args[1])
+	entryProfile := capture["profile"].(map[string]any)
+	entryProfile["home_lan_access"] = false
+	entryProfile["ipv6_mode"] = "on"
+	external := entryProfile["external"].(map[string]any)
+	final, finalPhysical := s.startFinal(t, r, pair)
+	var files map[string]string
+	if json.Unmarshal([]byte(args[3]), &files) != nil || len(files) != 2 || files["cert.pem"] == "" {
+		t.Fatal("original H3 final lost its complete graph and certificate assets")
+	}
+	rawFinal, e := base64.StdEncoding.Strict().DecodeString(files["sing-box.json"])
+	if e != nil {
+		t.Fatal(e)
+	}
+	finalGraph := desktopImportedH3Object(t, string(rawFinal))
+	finalRows := finalGraph["outbounds"].([]any)
+	replaced := 0
+	for index, raw := range finalRows {
+		if raw.(map[string]any)["tag"] == "proxy" {
+			finalRows[index] = final
+			replaced++
+		}
+	}
+	if replaced != 1 {
+		t.Fatal("original H3 final did not retain exactly one selected transport")
+	}
+	files["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(desktopImportedH3JSON(t, finalGraph)))
+	files["cert.pem"] = base64.StdEncoding.EncodeToString(r.Certificate)
+	if r.Fault == "final-trust" {
+		foreign, _ := desktopExternalWFPCertificate(t, newDesktopExternalIntegrationCA(t).certificate(t, true))
+		files["cert.pem"] = base64.StdEncoding.EncodeToString(foreign)
+	}
+	args[3], args[4] = desktopImportedH3JSON(t, files), desktopImportedH3JSON(t, profile)
+	if r.FinalLayer != "off" {
+		var layers map[string]string
+		if json.Unmarshal([]byte(args[5]), &layers) != nil {
+			t.Fatal("original final layer assets absent")
+		}
+		raw, e := base64.StdEncoding.Strict().DecodeString(layers["sing-box.json"])
+		if e != nil {
+			t.Fatal(e)
+		}
+		graph := desktopImportedH3Object(t, string(raw))
+		node := graph["outbounds"].([]any)[0].(map[string]any)
+		node["server"] = r.Address
+		layers["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(desktopImportedH3JSON(t, graph)))
+		args[5] = desktopImportedH3JSON(t, layers)
+	}
+	provisional := desktopImportedH3CompileSource(t, args)
+	compiled := desktopImportedH3Object(t, provisional.Config())
+	finalRow := desktopImportedH3Find(t, compiled, mobilemultihop.LocalTag)
+	finalTarget := desktopImportedH3Address(finalRow)
+	_ = provisional.Close()
+	bootstrap := s.bootstrapPeer(t)
+	routes := []desktopImportedH3Route{{"udp", finalTarget, finalPhysical}}
+	if r.Fault != "bootstrap-route" {
+		routes = append(routes, desktopImportedH3Route{"udp", desktopImportedH3DNS, bootstrap})
+	}
+	if r.FinalLayer != "off" {
+		outer := desktopImportedH3Find(t, compiled, mobilemultihop.NativeStartLayerTag)
+		layer := desktopImportedH3NativePeer(ctx, pair)
+		s.layers = append(s.layers, layer)
+		s.routes(layer, routes, false, nil)
+		password := outer["password"].(string)
+		if r.Fault == "final-layer-key" {
+			password = desktopWFPSSEntryPassword("2022-blake3-aes-256-gcm", 99)
+		}
+		port := "8388"
+		if r.FinalLayer == "aes-256-gcm+xor-whitening" {
+			port = "8389"
+		}
+		finalPhysical = s.ss(t, layer, net.JoinHostPort("127.0.0.1", port), r.FinalLayer, password)
+		finalTarget = desktopImportedH3Address(outer)
+		routes = []desktopImportedH3Route{{"udp", finalTarget, finalPhysical}}
+	}
+	s.entry = desktopImportedH3NativePeer(ctx, pair)
+	s.routes(s.entry, routes, true, nil)
+	original := desktopImportedH3Find(t, source, "custom-exit")
+	var entryAddress string
+	if strings.HasPrefix(r.Kind, "openvpn-") {
+		// The caller owns a real public /32 alias. No native policy exception
+		// admits a private OpenVPN endpoint or a synthetic physical interface.
+		listener, e := net.Listen("tcp4", net.JoinHostPort(r.Address, "0"))
+		if e != nil {
+			t.Fatal(e)
+		}
+		s.closes = append(s.closes, listener)
+		s.workers.Add(1)
+		go func() { defer s.workers.Done(); desktopOpenVPNCompositionServeStream(s.entry, listener, "1.1.1.1:443") }()
+		originalProfile, address := s.startOpenVPN(t, r, routes, listener.Addr().String())
+		entryAddress = address
+		if r.Fault == "entry-auth" {
+			originalProfile.Config = strings.ReplaceAll(originalProfile.Config, strings.Repeat("a", 32), strings.Repeat("b", 32))
+		}
+		endpoint, e := nativeopenvpn.CompileProfile(originalProfile, "custom-exit", "")
+		if e != nil {
+			t.Fatal(e)
+		}
+		source["endpoints"] = []any{endpoint}
+		external["openvpn"] = map[string]any{"config": originalProfile.Config, "username": originalProfile.Username, "password": originalProfile.Password}
+	} else if r.Kind == "wireguard" || r.Kind == "amneziawg" {
+		protocol := "wireguard"
+		if r.Kind == "amneziawg" {
+			protocol = "awg2-strong"
+		}
+		request, credentials := desktopExternalWFPPacketKeys(t, protocol)
+		packet, e := net.ListenPacket("udp4", net.JoinHostPort(r.Address, "0"))
+		if e != nil {
+			t.Fatal(e)
+		}
+		s.entry.packet = packet
+		entryAddress = packet.LocalAddr().String()
+		fault := ""
+		if r.Fault == "entry-auth" {
+			fault = "psk"
+		}
+		desktopExternalWFPStartPacketPeer(t, s.entry, request, fault)
+		remote := netip.MustParseAddrPort(entryAddress)
+		peer := original["peers"].([]any)[0].(map[string]any)
+		original["private_key"], original["address"] = credentials.privateKey, []string{"10.78.0.2/32", "fd78:78::2/128"}
+		peer["address"], peer["port"], peer["public_key"], peer["pre_shared_key"] = remote.Addr().String(), int(remote.Port()), credentials.peerPublicKey, credentials.presharedKey
+		credentialsMap := external[r.Kind].(map[string]any)
+		credentialsMap["private_key"], credentialsMap["addresses"], credentialsMap["endpoint"], credentialsMap["peer_public_key"], credentialsMap["preshared_key"] = original["private_key"], original["address"], entryAddress, peer["public_key"], peer["pre_shared_key"]
+		if r.Kind == "amneziawg" {
+			original["amnezia"] = credentials.parameters
+			credentialsMap["parameters"] = credentials.parameters
+		}
+	} else {
+		switch r.Kind {
+		case "socks5":
+			fault := ""
+			if r.Fault == "entry-auth" {
+				fault = "password"
+			}
+			if r.Fault == "socks-forged-relay" {
+				fault = "relay-other-private"
+			}
+			if r.Fault == "socks-auth-downgrade" {
+				fault = "auth-downgrade"
+			}
+			entryAddress = s.startSOCKS(t, s.entry, r.Address, fault)
+			original["username"], original["password"] = desktopExternalIntegrationUser, desktopExternalIntegrationPassword
+			credential := external["socks5"].(map[string]any)
+			credential["username"], credential["password"] = original["username"], original["password"]
+		case "shadowsocks":
+			password := desktopWFPSSEntryPassword("2022-blake3-aes-256-gcm", 31)
+			wire := password
+			if r.Fault == "entry-auth" {
+				wire = desktopWFPSSEntryPassword("2022-blake3-aes-256-gcm", 32)
+			}
+			entryAddress = s.ss(t, s.entry, net.JoinHostPort(r.Address, "0"), "", wire)
+			original["password"] = password
+			external["shadowsocks"].(map[string]any)["password"] = password
+		case "hysteria2":
+			password := desktopExternalIntegrationPassword
+			wire := password
+			if r.Fault == "entry-auth" {
+				wire += "-foreign"
+			}
+			entryAddress = s.startHY2(t, s.entry, r, wire)
+			original["password"] = password
+			original["tls"].(map[string]any)["server_name"] = "captured-proxy.example"
+			credential := external["hysteria2"].(map[string]any)
+			credential["password"], credential["tls_server_name"] = password, "captured-proxy.example"
+		}
+		desktopImportedH3ReplaceEndpoint(original, entryAddress)
+		address := netip.MustParseAddrPort(entryAddress)
+		credential := external[r.Kind].(map[string]any)
+		credential["port"] = int(address.Port())
+		if r.Kind == "socks5" {
+			credential["host"] = address.Addr().String()
+		} else {
+			credential["server"] = address.Addr().String()
+		}
+	}
+	s.physical = entryAddress
+	if r.EntryLayer != "off" {
+		layerCapture := external["start_layer"].(map[string]any)
+		transport := layerCapture["transport"].(map[string]any)
+		transport["server"] = r.Address
+		inner := net.JoinHostPort("10.93.0.1", strconv.Itoa(int(netip.MustParseAddrPort(entryAddress).Port())))
+		layer := desktopImportedH3NativePeer(ctx, pair)
+		s.layers = append(s.layers, layer)
+		networks := []string{"tcp", "udp"}
+		if r.Kind == "hysteria2" || r.Kind == "wireguard" || r.Kind == "amneziawg" || r.Kind == "openvpn-udp" {
+			networks = []string{"udp"}
+		} else if r.Kind == "socks5" || r.Kind == "openvpn-tcp" {
+			networks = []string{"tcp"}
+		}
+		layerRoutes := []desktopImportedH3Route{}
+		for _, network := range networks {
+			layerRoutes = append(layerRoutes, desktopImportedH3Route{network, inner, entryAddress})
+		}
+		dynamic := func(destination string) bool {
+			if s.socks == nil {
+				return false
+			}
+			for _, receipt := range s.socks.receipts() {
+				if !receipt.Closed && receipt.Relay == destination {
+					return true
+				}
+			}
+			return false
+		}
+		s.routes(layer, layerRoutes, false, dynamic)
+		password := transport["password"].(string)
+		wire := password
+		if r.Fault == "entry-layer-key" {
+			wire = desktopWFPSSEntryPassword("2022-blake3-aes-256-gcm", 98)
+		}
+		port := "8388"
+		if r.EntryLayer == "aes-256-gcm+xor-whitening" {
+			port = "8389"
+		}
+		s.physical = s.ss(t, layer, net.JoinHostPort(r.Address, port), r.EntryLayer, wire)
+	}
+	args[0], args[1] = desktopImportedH3JSON(t, source), desktopImportedH3JSON(t, capture)
+	s.source = append([]string(nil), args...)
+	sealed := desktopImportedH3CompileSource(t, args)
+	s.sourceSHA = sealed.SourceSHA256()
+	sum := sha256.Sum256([]byte(sealed.Config()))
+	s.configSHA = hex.EncodeToString(sum[:])
+	_ = sealed.Close()
+	if r.Fault == "selected-route" {
+		s.final.ownedPacket = func(context.Context, N.PacketConn, M.Metadata) error {
+			s.rejected.Add(1)
+			return errors.New("captured selected DNS refusal")
+		}
+	}
+	return s
+}
+
+func TestRouterVPNWindowsImportedNaiveH3Peer(t *testing.T) {
+	if os.Getenv("ROUTERVPN_WINDOWS_IMPORTED_H3_PEER") == "" {
+		return
+	}
+	if os.Getenv("ROUTERVPN_WINDOWS_IMPORTED_H3_PEER") != "1" {
+		t.Fatal("unknown imported H3 reference owner")
+	}
+	input := bufio.NewReaderSize(os.Stdin, desktopImportedH3PeerLimit+1)
+	var r desktopImportedH3PeerRequest
+	if e := desktopImportedH3Read(input, &r); e != nil || r.Schema != 1 || r.Operation != "start" || r.Nonce != "" {
+		t.Fatal("imported H3 peer lost captured start", e)
+	}
+	address, e := netip.ParseAddr(r.Address)
+	if e != nil || address != desktopExternalWFPAddress(t) && (!strings.HasPrefix(r.Kind, "openvpn-") || r.Address != desktopExternalOpenVPNAlias.String()) {
+		t.Fatal("imported H3 peer address was not independently captured")
+	}
+	switch r.Fault {
+	case "", "held-bootstrap", "entry-auth", "final-password", "final-sni", "final-trust", "entry-layer-key", "final-layer-key", "bootstrap-route", "selected-route", "socks-forged-relay", "socks-auth-downgrade":
+	default:
+		t.Fatal("unknown imported H3 peer refusal")
+	}
+	s := desktopImportedH3StartServers(t, r)
+	appID, e := mobiletor.DesktopWindowsNodeCompositionAppID()
+	if e != nil || len(appID) == 0 {
+		t.Fatal("H3 peer lost captured executable identity", e)
+	}
+	reply := func(nonce string, closed bool) {
+		s.probe.mu.Lock()
+		observed := int64(s.probe.observed[nonce])
+		s.probe.mu.Unlock()
+		value := desktopImportedH3PeerReply{Schema: 1, Probe: s.probe.LocalAddr().String(), Kind: r.Kind, EntryLayer: r.EntryLayer, FinalLayer: r.FinalLayer, Address: s.physical, Source: s.source, SourceSHA256: s.sourceSHA, ConfigSHA256: s.configSHA, AppID: appID, Nonce: nonce, Observed: observed, Bootstrap: s.bootstrap.Load(), Selected: s.selected.Load(), TCP: s.tcp.Load(), UDP: s.udp.Load(), Private: s.private.Load(), Public: int64(s.entry.publicRequests.Load()), QUIC: s.quic.Load(), Rejected: s.rejected.Load(), Closed: closed}
+		if s.socks != nil {
+			value.SOCKS = s.socks.receipts()
+		}
+		if e := json.NewEncoder(os.Stdout).Encode(value); e != nil {
+			t.Fatal(e)
+		}
+	}
+	reply("", false)
+	for {
+		var command desktopImportedH3PeerRequest
+		e := desktopImportedH3Read(input, &command)
+		if errors.Is(e, io.EOF) {
+			if e = s.close(); e != nil {
+				t.Fatal(e)
+			}
+			reply("", true)
+			return
+		}
+		if e != nil || command.Schema != 1 || command.Kind != "" || len(command.Source) != 0 || len(command.Certificate)+len(command.Key) != 0 {
+			t.Fatal("H3 peer command changed original identity", e)
+		}
+		switch command.Operation {
+		case "observe":
+			reply(command.Nonce, false)
+		case "arm":
+			if len(command.Nonce) != 32 {
+				t.Fatal("H3 raw probe lost original nonce")
+			}
+			s.probe.mu.Lock()
+			if _, exists := s.probe.observed[command.Nonce]; exists {
+				s.probe.mu.Unlock()
+				t.Fatal("H3 raw probe nonce reused")
+			}
+			s.probe.observed[command.Nonce] = 0
+			s.probe.mu.Unlock()
+			reply(command.Nonce, false)
+		case "positive":
+			s.probe.mu.Lock()
+			_, exists := s.probe.observed[command.Nonce]
+			s.probe.mu.Unlock()
+			if !exists {
+				t.Fatal("H3 raw probe missing original reservation")
+			}
+			ok, e := desktopExternalWFPExchange(netip.MustParseAddrPort(s.probe.LocalAddr().String()), command.Nonce)
+			if e != nil || !ok {
+				t.Fatal("independent H3 raw receiver did not prove actual liveness", e)
+			}
+			reply(command.Nonce, false)
+		default:
+			t.Fatal("unknown H3 peer command")
+		}
+	}
+}

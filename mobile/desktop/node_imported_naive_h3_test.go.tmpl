@@ -1,0 +1,1479 @@
+//go:build linux && !android && routervpn_openvpn_remote_test
+
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	transport "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	NV "github.com/sagernet/sing-box/protocol/naive"
+	OV "github.com/sagernet/sing-box/protocol/openvpn"
+	SOCKS "github.com/sagernet/sing-box/protocol/socks"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
+)
+
+// These are userspace protocol/proof witnesses using the original captured
+// source and a mandatory real physical-interface inventory. They never mark
+// the compiler plan healthy or substitute for a system-TUN/device result.
+type desktopImportedNaiveH3Fixture struct {
+	*desktopPacketRealityFixture
+	finalOptions                       option.NaiveOutboundOptions
+	bootstrapRaw                       []byte
+	bootstrap, selectedTransport       adapter.DNSTransport
+	bootstrapPeer, selectedPeer        string
+	bootstrapHits                      atomic.Int64
+	dnsManager                         *desktopImportedNaiveH3DNSManager
+	dnsRouter                          *desktopImportedNaiveH3DNSRouter
+	finalCloseOnce                     sync.Once
+	finalCloseErr                      error
+	physical                           *desktopImportedNaiveH3Physical
+	socks                              *desktopExternalInstalledSOCKSPeer
+	associations                       *desktopImportedSOCKSLayerRoutes
+	entryLayerServer, finalLayerServer *desktopNodeLayerServer
+}
+
+func (f *desktopImportedNaiveH3Fixture) closeFinal() error {
+	f.finalCloseOnce.Do(func() {
+		if f.final != nil {
+			f.finalCloseErr = f.final.(io.Closer).Close()
+		}
+	})
+	return f.finalCloseErr
+}
+func (f *desktopImportedNaiveH3Fixture) close() error {
+	f.closeOnce.Do(func() {
+		if f.ingress != nil {
+			f.ingress.retiring.Store(true)
+		}
+		if f.selectedTransport != nil {
+			f.closeErr = errors.Join(f.closeErr, f.selectedTransport.Close())
+		}
+		if f.bootstrap != nil {
+			f.closeErr = errors.Join(f.closeErr, f.bootstrap.Close())
+		}
+		f.closeErr = errors.Join(f.closeErr, f.closeFinal())
+		if f.first != nil {
+			if closer, ok := f.first.(io.Closer); ok {
+				f.closeErr = errors.Join(f.closeErr, closer.Close())
+			} else if f.kind != "socks5" {
+				f.closeErr = errors.Join(f.closeErr, errors.New("captured H3 entry lost its native close contract"))
+			}
+		}
+		if f.manager != nil {
+			for tag, owner := range f.manager.owners {
+				if tag != "entry-wg" && tag != f.lower.Tag() {
+					if closer, ok := owner.(io.Closer); ok {
+						f.closeErr = errors.Join(f.closeErr, closer.Close())
+					}
+				}
+			}
+		}
+		if f.lower != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			f.closeErr = errors.Join(f.closeErr, f.lower.empty(ctx))
+		}
+		if f.cancelFinal != nil {
+			f.cancelFinal()
+		}
+	})
+	return f.closeErr
+}
+
+func desktopImportedNaiveH3Source(t *testing.T, kind, first, last string) []string {
+	t.Helper()
+	directory := os.Getenv("ROUTERVPN_IMPORTED_NAIVE_H3_FIXTURES")
+	if directory == "" {
+		t.Fatal("required imported H3 original source inventory absent")
+	}
+	path := filepath.Join(directory, kind+"--naive-h3--"+first+"--"+last+".json")
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 1<<20 {
+		t.Fatal("Naive H3 source is not an original bounded regular file", err)
+	}
+	raw, err := os.ReadFile(path)
+	var source []string
+	if err != nil || json.Unmarshal(raw, &source) != nil || len(source) != 9 || source[2] != "naive-h3" {
+		t.Fatal("Naive H3 original source receipt changed", err)
+	}
+	plan, err := mobilemultihop.NewImportedEntry(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
+	if err != nil {
+		t.Fatal("original Naive H3 source failed exact compilation", err)
+	}
+	defer plan.Close()
+	if plan.SourceSHA256() != source[7] || plan.Config() != source[8] || plan.Healthy() {
+		t.Fatal("Naive H3 original source identity changed or claimed live proof")
+	}
+	var metadata mobilemultihop.Metadata
+	normalize := func(mode string) string {
+		if mode == "" {
+			return "off"
+		}
+		return mode
+	}
+	protocol := kind
+	if strings.HasPrefix(kind, "openvpn-") {
+		protocol = "openvpn"
+	}
+	if json.Unmarshal([]byte(plan.Metadata()), &metadata) != nil || metadata.EntryMode != protocol || normalize(metadata.EntryStartLayer) != first || normalize(metadata.ExitStartLayer) != last {
+		t.Fatal("Naive H3 source name substituted another captured entry or layer")
+	}
+	if protocol == "openvpn" {
+		graph := desktopImportedSOCKSXrayObject(t, plan.Config())
+		matched := false
+		for _, raw := range graph["endpoints"].([]any) {
+			row := raw.(map[string]any)
+			if row["tag"] == "entry-wg" && row["network"] == strings.TrimPrefix(kind, "openvpn-") {
+				matched = true
+			}
+		}
+		if !matched {
+			t.Fatal("Naive H3 source name substituted original OpenVPN wire transport")
+		}
+	}
+	return source
+}
+
+func desktopImportedNaiveH3Compile(t *testing.T, args []string) *mobilemultihop.Controller {
+	t.Helper()
+	plan, err := mobilemultihop.NewImportedEntry(args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+	if err != nil {
+		t.Fatal("captured native imported Naive H3 source did not compile", err)
+	}
+	t.Cleanup(func() {
+		if err := plan.Close(); err != nil {
+			t.Error("captured packet plan did not close", err)
+		}
+	})
+	return plan
+}
+
+func desktopImportedNaiveH3New(t *testing.T, kind, firstLayer, lastLayer, fault string) *desktopImportedNaiveH3Fixture {
+	t.Helper()
+	original := desktopImportedNaiveH3Source(t, kind, firstLayer, lastLayer)
+	args := append([]string(nil), original[:7]...)
+	profile := desktopImportedSOCKSXrayObject(t, args[4])
+	f := &desktopImportedNaiveH3Fixture{desktopPacketRealityFixture: &desktopPacketRealityFixture{kind: kind, fault: fault}}
+	// Register first: independent peer counters are read only after all
+	// original listeners, reference processes and native owners have joined.
+	t.Cleanup(func() {
+		if f.audit != nil {
+			f.audit()
+		}
+	})
+	// Inventory and the original non-loopback listener remain mandatory even
+	// though each bounded provider owns only private loopback forwarding rules.
+	_, physicalIP := desktopNodePeerInterface(t)
+	token, tokenOK := profile["api_token"].(string)
+	identity, identityOK := profile["node_proof_id"].(string)
+	if !tokenOK || token == "" || !identityOK || len(identity) != 64 || profile["router_api"] != "http://10.77.0.1:8787" || profile["multihop_execution"] != nil && profile["multihop_execution"] != "local" {
+		t.Fatal("imported Naive H3 lost paired Local proof authority")
+	}
+	paired := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.Host != "10.77.0.1:8787" || r.URL.Path != "/health" {
+			http.Error(w, "foreign", http.StatusForbidden)
+			return
+		}
+		f.health.Add(1)
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			http.Error(w, "foreign", http.StatusForbidden)
+			return
+		}
+		f.authorized.Add(1)
+		node := identity
+		if fault == "final-identity" {
+			node = strings.Repeat("f", 64)
+			if node == identity {
+				node = strings.Repeat("e", 64)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": node, "proof": "router-vpn-private-agent-v1"})
+	}))
+	t.Cleanup(paired.Close)
+	certificate, ca := desktopExternalInstalledPeerCertificate(t, false, "proxy.example.com")
+	public := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.Host != "1.1.1.1" || r.URL.Path != "/cdn-cgi/trace" {
+			http.Error(w, "foreign", http.StatusForbidden)
+			return
+		}
+		f.public.Add(1)
+		address := "203.0.113.88"
+		if fault == "wrong-entry-ip" {
+			address = "203.0.113.89"
+		}
+		_, _ = fmt.Fprintln(w, "ip="+address)
+	}))
+	public.TLS = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
+	public.StartTLS()
+	t.Cleanup(public.Close)
+	f.roots = x509.NewCertPool()
+	if !f.roots.AppendCertsFromPEM([]byte(ca)) {
+		t.Fatal("imported Naive H3 public proof trust missing")
+	}
+	f.bootstrapPeer = desktopImportedNaiveH3DNSPeer(t, "bootstrap.routervpn.test.", &f.bootstrapHits)
+	f.selectedPeer = desktopImportedNaiveH3DNSPeer(t, "selected.routervpn.test.", &f.dns)
+	var files string
+	f.finalServer, files = startDesktopNodeNaiveServer(t, "naive-h3", physicalIP, "", func(server *desktopNodeLayerServer) {
+		server.routerAddress = paired.Listener.Addr().String()
+		// Selected Home UDP is decoded only by the authenticated final UoT
+		// handler. Its receiver is distinct from the entry-owned bootstrap.
+		server.ownedUDP = func(destination string) (string, context.Context, func(), bool) {
+			if destination == "192.168.50.133:53" {
+				return f.selectedPeer, server.ctx, nil, fault != "dns-route"
+			}
+			return "", server.ctx, nil, desktopNodeLayerEcho(M.ParseSocksaddr(destination))
+		}
+	})
+	finalTarget := f.finalServer.udp.LocalAddr().String()
+	finalPhysical := desktopImportedNaiveH3CiphertextBridge(t, physicalIP, finalTarget)
+	profile["endpoint"] = physicalIP.String()
+	switch fault {
+	case "final-password", "final-user", "final-server-name", "final-certificate":
+		files = desktopNodeNaiveAssets(t, files, "naive-"+strings.TrimPrefix(fault, "final-"))
+	case "final-token":
+		profile["api_token"] = token + "-foreign"
+	}
+	if fault == "final-route" {
+		files = desktopImportedNaiveH3AssetEndpoint(t, files, "198.51.100.240")
+		profile["endpoint"] = "198.51.100.240"
+	}
+	if lastLayer != "off" {
+		var layers map[string]string
+		if json.Unmarshal([]byte(args[5]), &layers) != nil {
+			t.Fatal("imported Naive H3 final layer source absent")
+		}
+		raw, err := base64.StdEncoding.Strict().DecodeString(layers["sing-box.json"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		layer := desktopImportedSOCKSXrayObject(t, string(raw))
+		layer["outbounds"].([]any)[0].(map[string]any)["server"] = physicalIP.String()
+		layers["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(desktopImportedSOCKSXrayJSON(t, layer)))
+		args[5] = desktopImportedSOCKSXrayJSON(t, layers)
+	}
+	args[3], args[4] = files, desktopImportedSOCKSXrayJSON(t, profile)
+	provisional := desktopImportedNaiveH3Compile(t, args)
+	provisionalTags := desktopImportedSOCKSGraph(desktopImportedSOCKSXrayObject(t, provisional.Config()))
+	provisionalFinal := provisionalTags[mobilemultihop.LocalTag]
+	if provisionalFinal == nil || provisionalFinal["type"] != "naive" || provisionalFinal["quic"] != true {
+		t.Fatal("imported Naive H3 lost its native paired final")
+	}
+	newServer := func(routes []desktopNodeLayerRoute) *desktopNodeLayerServer {
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		return &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{}, routes: routes}
+	}
+	if lastLayer != "off" {
+		outer := provisionalTags[mobilemultihop.NativeStartLayerTag]
+		if outer == nil || outer["detour"] != "entry-wg" || provisionalFinal["detour"] != mobilemultihop.NativeStartLayerTag {
+			t.Fatal("imported Naive H3 lost its separate final layer")
+		}
+		routes := []desktopNodeLayerRoute{{Network: "udp", Destination: desktopImportedSOCKSAddress(provisionalFinal), Physical: finalPhysical}}
+		if fault != "bootstrap-route" {
+			routes = append(routes, desktopNodeLayerRoute{Network: "udp", Destination: "192.168.50.133:53", Physical: f.bootstrapPeer})
+		}
+		server := newServer(routes)
+		f.finalLayerServer = server
+		layerFault := ""
+		if strings.HasPrefix(fault, "final-layer-") {
+			layerFault = fault
+		}
+		peer := desktopImportedSOCKSLayerProvider(t, server, outer, layerFault)
+		f.finalCarrier = &peer
+		t.Cleanup(peer.close)
+		finalTarget, finalPhysical = desktopImportedSOCKSAddress(outer), peer.address
+	} else if provisionalFinal["detour"] != "entry-wg" {
+		t.Fatal("unlayered imported Naive H3 bypassed original entry")
+	}
+	entryRoutes := []desktopNodeLayerRoute{{Network: "udp", Destination: finalTarget, Physical: finalPhysical}, {Network: "tcp", Destination: "1.1.1.1:443", Physical: public.Listener.Addr().String()}}
+	if lastLayer == "off" && fault != "bootstrap-route" {
+		entryRoutes = append(entryRoutes, desktopNodeLayerRoute{Network: "udp", Destination: "192.168.50.133:53", Physical: f.bootstrapPeer})
+	}
+	source, capture := desktopImportedSOCKSXrayObject(t, args[0]), desktopImportedSOCKSXrayObject(t, args[1])
+	if capture["expected_public_ip"] != "203.0.113.88" {
+		t.Fatal("packet entry public proof capture changed")
+	}
+	entryProfile := capture["profile"].(map[string]any)
+	external := entryProfile["external"].(map[string]any)
+	var virtual, entryPhysical string
+	var openvpnPeer *desktopExternalInstalledOpenVPNPeer
+	if strings.HasPrefix(kind, "openvpn-") {
+		f.entryNetwork = strings.TrimPrefix(kind, "openvpn-")
+		loopback := netip.MustParseAddr("127.0.0.1")
+		entry := startDesktopInstalledOpenVPNProviderCaptured(t, newServer(nil), desktopExternalInstalledPeerRequest{OpenVPNNetwork: f.entryNetwork}, "", "", loopback, loopback, true, 2,
+			&desktopOpenVPNProviderCapture{Remote: netip.MustParseAddrPort("203.0.113.24:1194"), MTU: 1500, Routes: entryRoutes})
+		openvpnPeer = &entry
+		virtual, entryPhysical = entry.address, entry.entryRoutes[0].Target
+		f.entryStats = func() desktopPacketRealityReceipt {
+			s := entry.stats()
+			return desktopPacketRealityReceipt{raw: s.connections + s.physicalUDP, tcp: s.streams, udp: s.packets, auth: s.authFailures}
+		}
+		config, password := entry.profile, entry.password
+		if fault == "entry-auth" {
+			password += "-foreign"
+		}
+		if fault == "entry-route" {
+			config = strings.ReplaceAll(config, "203.0.113.24", "203.0.113.25")
+		}
+		external["openvpn"] = map[string]any{"config": config, "username": entry.username, "password": password}
+		endpoint, err := nativeopenvpn.CompileProfile(nativeopenvpn.Profile{Config: config, Username: entry.username, Password: password}, "custom-exit", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		source["endpoints"] = []any{endpoint}
+	} else if kind == "wireguard" || kind == "amneziawg" {
+		f.entryNetwork = "udp"
+		endpoint := source["endpoints"].([]any)[0].(map[string]any)
+		peer := endpoint["peers"].([]any)[0].(map[string]any)
+		virtual = net.JoinHostPort(peer["address"].(string), fmt.Sprint(int(peer["port"].(float64))))
+		provider, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		consumer, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		secret := make([]byte, 32)
+		if _, err := rand.Read(secret); err != nil {
+			t.Fatal(err)
+		}
+		defer clear(secret)
+		encode := base64.StdEncoding.EncodeToString
+		request := desktopExternalInstalledWGRequest{PrivateKey: encode(provider.Bytes()), ClientPublicKey: encode(consumer.PublicKey().Bytes()), PresharedKey: encode(secret)}
+		parameters, backend := "", startDesktopDarwinWGDevice
+		if kind == "amneziawg" {
+			values := map[string]string{}
+			for k, v := range endpoint["amnezia"].(map[string]any) {
+				values[k] = v.(string)
+			}
+			parameters, backend = desktopDarwinAmneziaBackend(t, desktopExternalInstalledAWGRequest{request, values})
+		} else if kind != "wireguard" {
+			t.Fatal("uncaptured imported Naive H3 protocol")
+		}
+		rules := map[string]desktopReferenceRule{}
+		for _, route := range entryRoutes {
+			address := netip.MustParseAddrPort(route.Destination)
+			rules[route.Network+"/"+route.Destination] = desktopReferenceRule{Network: route.Network, Address: address.Addr().String(), Port: int(address.Port()), Target: route.Physical}
+		}
+		entry := desktopInstalledPacketDevice(t, newServer(entryRoutes), request, netip.MustParseAddr("127.0.0.1"), parameters, backend, rules, false)
+		entryPhysical = entry.address
+		f.entryStats = func() desktopPacketRealityReceipt {
+			raw, tcp, udp := entry.stats()
+			return desktopPacketRealityReceipt{raw: raw, tcp: tcp, udp: udp}
+		}
+		endpoint["private_key"], endpoint["address"] = encode(consumer.Bytes()), []string{"10.78.0.2/32", "fd78:78::2/128"}
+		peer["public_key"], peer["pre_shared_key"] = encode(provider.PublicKey().Bytes()), encode(secret)
+		switch fault {
+		case "entry-private-key":
+			endpoint["private_key"] = desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'x')
+		case "entry-public-key":
+			peer["public_key"] = desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'x')
+		case "entry-psk":
+			peer["pre_shared_key"] = desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'x')
+		case "entry-awg-parameter":
+			endpoint["amnezia"].(map[string]any)["s1"] = "57"
+		case "entry-route":
+			peer["address"] = "203.0.113.25"
+		}
+		credentials := external[kind].(map[string]any)
+		credentials["private_key"], credentials["addresses"], credentials["peer_public_key"], credentials["preshared_key"] = endpoint["private_key"], endpoint["address"], peer["public_key"], peer["pre_shared_key"]
+		credentials["endpoint"] = net.JoinHostPort(peer["address"].(string), fmt.Sprint(int(peer["port"].(float64))))
+		if kind == "amneziawg" {
+			credentials["parameters"] = endpoint["amnezia"]
+		}
+	} else {
+		virtual, entryPhysical = f.proxyProvider(t, kind, fault, source, external, provisionalTags["entry-wg"], newServer(entryRoutes), certificate)
+	}
+	args[0], args[1] = desktopImportedSOCKSXrayJSON(t, source), desktopImportedSOCKSXrayJSON(t, capture)
+	f.source, f.captured = args, append([]string(nil), args...)
+	f.plan = desktopImportedNaiveH3Compile(t, args)
+	f.config = f.plan.Config()
+	graph := desktopImportedSOCKSXrayObject(t, f.config)
+	byTag := desktopImportedSOCKSGraph(graph)
+	firstRaw, finalRaw := byTag["entry-wg"], byTag[mobilemultihop.LocalTag]
+	if firstRaw == nil || desktopImportedSOCKSXrayJSON(t, finalRaw) != desktopImportedSOCKSXrayJSON(t, provisionalFinal) {
+		t.Fatal("entry provider changed independent original Naive H3 final")
+	}
+	capability := ""
+	protocol := kind
+	if strings.HasPrefix(kind, "openvpn-") {
+		protocol = "openvpn"
+	}
+	if json.Unmarshal([]byte(f.plan.Metadata()), &f.meta) != nil || f.meta.EntryKind != "external" || f.meta.EntryMode != protocol || f.meta.EntryAPI != "" || f.meta.EntryNodeID != "" || f.meta.EntryToken != "" || f.meta.ExitMode != "naive-h3" || f.meta.TransportCapability != capability || f.meta.ExitNodeID != identity || f.meta.ExitAPI != "http://10.77.0.1:8787" {
+		t.Fatal("imported H3 changed original proof or invented stream capability")
+	}
+	f.captureDNS(t, graph, finalRaw, lastLayer)
+	outer := desktopImportedSOCKSOuter(t, byTag, firstRaw, "")
+	if firstLayer != "off" {
+		if outer == nil || outer["tag"] == firstRaw["tag"] || outer["detour"] != nil {
+			t.Fatal("imported Naive H3 entry layer lost its independent physical owner")
+		}
+		var layerRaw map[string]any
+		var inner string
+		if openvpnPeer != nil {
+			if outer["type"] != nativeopenvpn.LayerMapType {
+				t.Fatal("OpenVPN REALITY lost its captured layer mapper")
+			}
+			mapping := outer["layers"].(map[string]any)["203.0.113.24"].(map[string]any)
+			api, err := url.Parse(mapping["api"].(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			inner = net.JoinHostPort(api.Hostname(), "1194")
+			layerRaw = desktopImportedSOCKSXrayObject(t, desktopImportedSOCKSXrayJSON(t, mapping["transport"]))
+			if firstLayer == "aes-256-gcm+xor-whitening" {
+				layerRaw["type"] = "routervpn-aes-xor"
+				layerRaw["server_port"] = float64(8389)
+			}
+		} else {
+			if kind == "wireguard" || kind == "amneziawg" {
+				peer := firstRaw["peers"].([]any)[0].(map[string]any)
+				inner = net.JoinHostPort(peer["address"].(string), fmt.Sprint(int(peer["port"].(float64))))
+			} else {
+				inner = desktopImportedSOCKSAddress(firstRaw)
+			}
+			layerRaw = outer
+		}
+		layerFault := ""
+		if strings.HasPrefix(fault, "entry-layer-") {
+			layerFault = fault
+		}
+		var layerServer *desktopNodeLayerServer
+		if kind == "socks5" {
+			f.associations = &desktopImportedSOCKSLayerRoutes{parent: context.Background(), control: entryPhysical, private: firstRaw["server"].(string), leases: map[string]*desktopImportedSOCKSRelayLease{}, physical: map[string]string{}}
+			layerServer = newServer([]desktopNodeLayerRoute{{Network: "tcp", Destination: inner, Physical: entryPhysical}})
+			f.associations.parent = layerServer.ctx
+			layerServer.ownedUDP = f.associations.acquire
+			f.socks.mu.Lock()
+			f.socks.entryRelay = f.associations.relay
+			f.socks.mu.Unlock()
+		} else {
+			networks := []string{f.entryNetwork}
+			if f.entryNetwork == "tcp+udp" {
+				networks = []string{"tcp", "udp"}
+			}
+			routes := make([]desktopNodeLayerRoute, 0, len(networks))
+			for _, network := range networks {
+				routes = append(routes, desktopNodeLayerRoute{Network: network, Destination: inner, Physical: entryPhysical})
+			}
+			layerServer = newServer(routes)
+		}
+		f.entryLayerServer = layerServer
+		layer := desktopImportedSOCKSLayerProvider(t, layerServer, layerRaw, layerFault)
+		f.entryCarrier = &layer
+		t.Cleanup(layer.close)
+		virtual, entryPhysical = desktopImportedSOCKSAddress(layerRaw), layer.address
+	} else if outer["tag"] != firstRaw["tag"] || firstRaw["detour"] != nil {
+		t.Fatal("unlayered imported Naive H3 invented a wrapper")
+	}
+	f.lower = newDesktopPacketRealityPhysical("tcp", M.ParseSocksaddr(virtual), entryPhysical)
+	f.physical = &desktopImportedNaiveH3Physical{desktopPacketRealityPhysical: f.lower, networks: map[string]bool{}}
+	if f.entryNetwork == "tcp+udp" {
+		f.physical.networks["tcp"], f.physical.networks["udp"] = true, true
+	} else {
+		f.physical.networks[f.entryNetwork] = true
+	}
+	if kind == "socks5" && firstLayer == "off" {
+		// The UDP endpoint comes only from the authenticated original control,
+		// never the static proxy port or the historical relay observation list.
+		host, _, err := net.SplitHostPort(entryPhysical)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.associations = &desktopImportedSOCKSLayerRoutes{parent: f.socks.server.ctx, control: entryPhysical, private: host, leases: map[string]*desktopImportedSOCKSRelayLease{}, physical: map[string]string{}}
+		f.socks.mu.Lock()
+		f.socks.entryRelay = f.associations.relay
+		f.socks.mu.Unlock()
+		f.physical.associations = f.associations
+		f.physical.networks = map[string]bool{"tcp": true}
+	}
+	if f.associations != nil {
+		t.Cleanup(f.associations.close)
+	}
+	t.Cleanup(func() {
+		if err := f.lower.Close(); err != nil {
+			t.Error("packet physical fixture did not retire", err)
+		}
+	})
+	ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 15*time.Second)
+	f.ctx = ctx
+	t.Cleanup(cancel)
+	f.manager = &desktopImportedSOCKSXrayManager{owners: map[string]adapter.Outbound{f.lower.Tag(): f.physical}}
+	owned := service.ContextWith[adapter.OutboundManager](ctx, f.manager)
+	owned = service.ContextWith[adapter.CertificateStore](owned, &desktopImportedHysteriaTrust{roots: f.roots})
+	owned = service.ContextWith[adapter.NetworkManager](owned, &desktopImportedPacketNetwork{})
+	f.ingress = &desktopImportedOpenVPNIngress{t: t}
+	owned = service.ContextWith[adapter.Router](owned, f.ingress)
+	t.Cleanup(func() {
+		if err := f.close(); err != nil {
+			t.Error("original imported Naive H3 native owners did not join before fixture cleanup", err)
+		}
+		if f.ingress.active.Load() != 0 {
+			t.Error("imported Naive H3 routed unsolicited inbound traffic")
+		}
+	})
+	f.firstRaw = desktopImportedSOCKSXrayObject(t, desktopImportedSOCKSXrayJSON(t, firstRaw))
+	if firstLayer != "off" {
+		outer["detour"] = f.lower.Tag()
+		f.manager.owners[outer["tag"].(string)] = desktopImportedOpenVPNNative(t, owned, outer)
+	} else {
+		firstRaw["detour"] = f.lower.Tag()
+	}
+	f.first = desktopImportedNaiveH3Entry(t, owned, firstRaw)
+	f.manager.owners["entry-wg"] = f.first
+	if openvpnPeer != nil {
+		f.openvpn = f.first.(*OV.ClientEndpoint)
+	}
+	// Packet endpoint startup may immediately launch receive workers whose
+	// detours read this same manager. Complete its immutable catalog first.
+	if lastLayer != "off" {
+		f.manager.owners[mobilemultihop.NativeStartLayerTag] = desktopImportedSOCKSNativeLayer(t, owned, byTag[mobilemultihop.NativeStartLayerTag])
+	}
+	f.dnsManager = &desktopImportedNaiveH3DNSManager{owners: make(map[string]adapter.DNSTransport)}
+	owned = service.ContextWith[adapter.DNSTransportManager](owned, f.dnsManager)
+	f.dnsRouter = &desktopImportedNaiveH3DNSRouter{manager: f.dnsManager}
+	owned = service.ContextWith[adapter.DNSRouter](owned, f.dnsRouter)
+	f.bootstrap = desktopImportedNaiveH3Transport(t, owned, f.bootstrapRaw)
+	f.dnsManager.owners[f.bootstrap.Tag()] = f.bootstrap
+	if lifecycle, ok := f.first.(adapter.Lifecycle); ok {
+		for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+			if err := lifecycle.Start(stage); err != nil {
+				f.startErr = err
+				return f
+			}
+		}
+	} else if kind == "wireguard" || kind == "amneziawg" || strings.HasPrefix(kind, "openvpn-") {
+		t.Fatal("captured packet entry lost its mandatory native lifecycle")
+	}
+	finalCtx, cancelFinal := context.WithCancel(owned)
+	f.owned, f.cancelFinal = finalCtx, cancelFinal
+	if json.Unmarshal([]byte(desktopImportedSOCKSXrayJSON(t, finalRaw)), &f.finalOptions) != nil {
+		t.Fatal("imported Naive H3 lost exact native final options")
+	}
+	var err error
+	f.final, err = NV.NewOutbound(finalCtx, nil, log.NewNOPFactory().Logger(), mobilemultihop.LocalTag, f.finalOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.final.(adapter.Lifecycle).Start(adapter.StartStateStart); err != nil {
+		t.Fatal("imported Naive H3 native final did not start", err)
+	}
+	selectedContext := service.ContextWith[adapter.OutboundManager](owned, &desktopImportedNaiveH3SelectedManager{desktopImportedSOCKSXrayManager: f.manager, final: f.final})
+	f.selectedTransport = desktopImportedNaiveH3Transport(t, selectedContext, f.selected)
+	return f
+}
+
+// The two receivers accept different questions. Merely reaching a UDP DNS
+// listener cannot satisfy the other lane, even when both captured tuples match.
+func desktopImportedNaiveH3DNSPeer(t *testing.T, question string, hits *atomic.Int64) string {
+	t.Helper()
+	listener, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &dns.Server{PacketConn: listener, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		answer := new(dns.Msg).SetReply(q)
+		if len(q.Question) != 1 || q.Question[0].Name != question || q.Question[0].Qtype != dns.TypeA || q.Question[0].Qclass != dns.ClassINET {
+			answer.Rcode = dns.RcodeRefused
+		} else {
+			hits.Add(1)
+			answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: question, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 1}, A: net.IPv4(203, 0, 113, 77)}}
+		}
+		_ = w.WriteMsg(answer)
+	})}
+	ready, joined := make(chan struct{}), make(chan error, 1)
+	server.NotifyStartedFunc = func() { close(ready) }
+	go func() { joined <- server.ActivateAndServe() }()
+	select {
+	case <-ready:
+	case err := <-joined:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("captured H3 UDP DNS did not start")
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := server.ShutdownContext(ctx); err != nil {
+			t.Error("captured H3 UDP DNS did not retire", err)
+		}
+		_ = listener.Close()
+		select {
+		case <-joined:
+		case <-ctx.Done():
+			t.Error("captured H3 UDP DNS did not join")
+		}
+	})
+	return listener.LocalAddr().String()
+}
+
+func desktopImportedNaiveH3AssetEndpoint(t *testing.T, files, endpoint string) string {
+	t.Helper()
+	var assets map[string]string
+	if json.Unmarshal([]byte(files), &assets) != nil {
+		t.Fatal("H3 assets absent")
+	}
+	raw, err := base64.StdEncoding.Strict().DecodeString(assets["sing-box.json"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := desktopImportedSOCKSXrayObject(t, string(raw))
+	graph["outbounds"].([]any)[0].(map[string]any)["server"] = endpoint
+	assets["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(desktopImportedSOCKSXrayJSON(t, graph)))
+	return desktopImportedSOCKSXrayJSON(t, assets)
+}
+
+func (f *desktopImportedNaiveH3Fixture) captureDNS(t *testing.T, graph, final map[string]any, layer string) {
+	t.Helper()
+	policy, ok := graph["dns"].(map[string]any)
+	if !ok || policy["final"] != "selected-dns" {
+		t.Fatal("H3 selected DNS authority changed")
+	}
+	servers, ok := policy["servers"].([]any)
+	if !ok || len(servers) != 2 {
+		t.Fatal("H3 Home UDP lost its exact selected/bootstrap pair")
+	}
+	lower := "entry-wg"
+	if layer != "off" {
+		lower = mobilemultihop.NativeStartLayerTag
+	}
+	for index, raw := range servers {
+		row, ok := raw.(map[string]any)
+		tag, detour := "selected-dns", "proxy"
+		if index == 1 {
+			tag, detour = "routervpn-predecessor-bootstrap-0", lower
+		}
+		expected := map[string]any{"type": "udp", "tag": tag, "server": "192.168.50.133", "server_port": float64(53), "detour": detour}
+		if !ok || !reflect.DeepEqual(row, expected) {
+			t.Fatal("H3 rewrote original DNS transport, tuple or ownership", row)
+		}
+		if index == 0 {
+			f.selected = []byte(desktopImportedSOCKSXrayJSON(t, row))
+		} else {
+			f.bootstrapRaw = []byte(desktopImportedSOCKSXrayJSON(t, row))
+		}
+	}
+	if !reflect.DeepEqual(final["domain_resolver"], map[string]any{"server": "routervpn-predecessor-bootstrap-0"}) {
+		t.Fatal("H3 final lost its captured bootstrap query binding")
+	}
+}
+
+type desktopImportedNaiveH3DNSManager struct {
+	adapter.DNSTransportManager
+	owners map[string]adapter.DNSTransport
+	reads  atomic.Int64
+}
+
+func (m *desktopImportedNaiveH3DNSManager) Transport(tag string) (adapter.DNSTransport, bool) {
+	m.reads.Add(1)
+	owner, ok := m.owners[tag]
+	return owner, ok
+}
+func (*desktopImportedNaiveH3DNSManager) Default() adapter.DNSTransport {
+	panic("H3 must retain explicit captured bootstrap")
+}
+func (*desktopImportedNaiveH3DNSManager) Transports() []adapter.DNSTransport {
+	panic("H3 must not enumerate replacement DNS owners")
+}
+
+type desktopImportedNaiveH3DNSRouter struct {
+	adapter.DNSRouter
+	manager *desktopImportedNaiveH3DNSManager
+	calls   atomic.Int64
+}
+
+func (r *desktopImportedNaiveH3DNSRouter) Exchange(ctx context.Context, q *dns.Msg, o adapter.DNSQueryOptions) (*dns.Msg, error) {
+	r.calls.Add(1)
+	original := r.manager.owners["routervpn-predecessor-bootstrap-0"]
+	if original == nil || o.Transport != original {
+		return nil, errors.New("H3 attempted uncaptured DNS owner")
+	}
+	return original.Exchange(ctx, q)
+}
+func (r *desktopImportedNaiveH3DNSRouter) Lookup(ctx context.Context, name string, o adapter.DNSQueryOptions) ([]netip.Addr, error) {
+	q := new(dns.Msg)
+	q.SetQuestion(dns.Fqdn(name), dns.TypeA)
+	reply, err := r.Exchange(ctx, q, o)
+	if err != nil {
+		return nil, err
+	}
+	var result []netip.Addr
+	for _, answer := range reply.Answer {
+		if a, ok := answer.(*dns.A); ok {
+			if ip, ok := netip.AddrFromSlice(a.A); ok {
+				result = append(result, ip.Unmap())
+			}
+		}
+	}
+	if len(result) == 0 {
+		return nil, errors.New("captured H3 bootstrap returned no original address")
+	}
+	return result, nil
+}
+func desktopImportedNaiveH3Transport(t *testing.T, ctx context.Context, raw []byte) adapter.DNSTransport {
+	t.Helper()
+	var o option.RemoteDNSServerOptions
+	row := desktopImportedSOCKSXrayObject(t, string(raw))
+	if row["type"] != "udp" || json.Unmarshal(raw, &o) != nil {
+		t.Fatal("H3 DNS constructor changed captured transport")
+	}
+	owner, err := transport.NewUDP(ctx, log.NewNOPFactory().Logger(), row["tag"].(string), o)
+	if err != nil {
+		t.Fatal("actual captured UDP DNS did not construct", err)
+	}
+	if err = owner.Start(adapter.StartStateStart); err != nil {
+		_ = owner.Close()
+		t.Fatal("actual captured UDP DNS did not bind its original detour", err)
+	}
+	return owner
+}
+
+type desktopImportedNaiveH3SelectedManager struct {
+	*desktopImportedSOCKSXrayManager
+	final adapter.Outbound
+}
+
+func (m *desktopImportedNaiveH3SelectedManager) Outbound(tag string) (adapter.Outbound, bool) {
+	if tag == "proxy" {
+		return m.final, true
+	}
+	return m.desktopImportedSOCKSXrayManager.Outbound(tag)
+}
+
+func desktopImportedNaiveH3Entry(t *testing.T, ctx context.Context, raw map[string]any) adapter.Outbound {
+	t.Helper()
+	switch raw["type"] {
+	case "socks":
+		var o option.SOCKSOutboundOptions
+		if json.Unmarshal([]byte(desktopImportedSOCKSXrayJSON(t, raw)), &o) != nil {
+			t.Fatal("original H3 SOCKS source invalid")
+		}
+		owner, err := SOCKS.NewOutbound(ctx, nil, log.NewNOPFactory().Logger(), "entry-wg", o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return owner
+	default:
+		return desktopImportedOpenVPNNative(t, ctx, raw)
+	}
+}
+
+func (f *desktopImportedNaiveH3Fixture) proxyProvider(t *testing.T, kind, fault string, source, external, compiled map[string]any, server *desktopNodeLayerServer, certificate tls.Certificate) (string, string) {
+	t.Helper()
+	raw := source["outbounds"].([]any)[0].(map[string]any)
+	key := strings.ReplaceAll(kind, "-", "_")
+	credentials, ok := external[key].(map[string]any)
+	if !ok {
+		t.Fatal("H3 proxy capture missing original credentials")
+	}
+	password, ok := raw["password"].(string)
+	if !ok || password == "" {
+		t.Fatal("H3 proxy has no original password")
+	}
+	// The provider uses its captured valid password. Only the negative source
+	// changes both recorded source copies, never the reference peer's credential.
+	if fault == "entry-auth" {
+		foreign := password + "-foreign"
+		if kind == "shadowsocks" {
+			foreign = desktopSSReferenceKey(raw["method"].(string), 'z')
+		}
+		raw["password"], credentials["password"] = foreign, foreign
+	}
+	if fault == "entry-sni" {
+		raw["tls"].(map[string]any)["server_name"] = "foreign-entry.example"
+		credentials["tls_server_name"] = "foreign-entry.example"
+	}
+	virtual := desktopImportedSOCKSAddress(raw)
+	if fault == "entry-route" {
+		raw["server"] = "203.0.113.25"
+		field := "server"
+		if kind == "socks5" {
+			field = "host"
+		}
+		credentials[field] = "203.0.113.25"
+	}
+	f.entryNetwork = "tcp+udp"
+	if kind == "hysteria2" {
+		f.entryNetwork = "udp"
+	}
+	var peer desktopExternalInstalledSSPeer
+	switch kind {
+	case "socks5":
+		if raw["username"] != "captured-native-user" {
+			t.Fatal("SOCKS provider lost original username")
+		}
+		socksFault := ""
+		if strings.HasPrefix(fault, "socks-") {
+			socksFault = strings.TrimPrefix(fault, "socks-")
+		}
+		peer, f.socks = desktopStartImportedSOCKSProvider(t, server, password, socksFault)
+	case "shadowsocks", "hysteria2":
+		peer = desktopStartImportedProxyXrayProvider(t, kind, server, compiled, password, certificate, fault)
+	default:
+		t.Fatal("uncaptured H3 proxy family")
+	}
+	f.entryStats = func() desktopPacketRealityReceipt {
+		s := peer.stats()
+		return desktopPacketRealityReceipt{raw: s.PhysicalTCP + s.PhysicalUDP, tcp: s.Streams, udp: s.Packets, auth: int64(s.AuthTCP + s.AuthUDP)}
+	}
+	return virtual, peer.address
+}
+
+func desktopImportedNaiveH3DNSExchange(ctx context.Context, owner adapter.DNSTransport, name string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	err := desktopCONNECTXrayDNSExchange(ctx, owner, name)
+	return err == nil, err
+}
+
+// The positive and lifetime inventory covers every original wire and both
+// independent layer axes. Family-specific refusal controls retain their exact
+// authenticated reference peer; none is counted as a replacement positive.
+func desktopImportedNaiveH3Faults(kind, first, last string) []string {
+	faults := []string{"success", "cancel", "close-owner", "replacement-owner"}
+	if kind == "socks5" {
+		faults = append(faults, "socks-relay-route", "socks-control-eof")
+	}
+	if first == "off" && last == "off" {
+		faults = append(faults, "entry-route", "wrong-entry-ip", "final-password", "final-user", "final-server-name", "final-certificate", "final-route", "bootstrap-route", "dns-route", "final-identity", "final-token")
+		switch kind {
+		case "wireguard", "amneziawg":
+			faults = append(faults, "entry-private-key", "entry-public-key", "entry-psk")
+			if kind == "amneziawg" {
+				faults = append(faults, "entry-awg-parameter")
+			}
+		default:
+			faults = append(faults, "entry-auth")
+		}
+		if kind == "hysteria2" {
+			faults = append(faults, "entry-sni", "entry-trust")
+		}
+	}
+	if first != "off" {
+		faults = append(faults, "entry-layer-key")
+	}
+	if first == "aes-256-gcm+xor-whitening" {
+		faults = append(faults, "entry-layer-whitening")
+	}
+	if last != "off" {
+		faults = append(faults, "final-layer-key", "bootstrap-route")
+	}
+	if last == "aes-256-gcm+xor-whitening" {
+		faults = append(faults, "final-layer-whitening")
+	}
+	return faults
+}
+func desktopImportedNaiveH3Cases(t *testing.T, kinds []string) {
+	t.Helper()
+	desktopNodeNaiveLibrary(t)
+	for _, kind := range kinds {
+		for _, first := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, last := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				for _, fault := range desktopImportedNaiveH3Faults(kind, first, last) {
+					t.Run(kind+"/"+first+"/"+last+"/"+fault, func(t *testing.T) { desktopImportedNaiveH3Traffic(t, kind, first, last, fault) })
+				}
+			}
+		}
+	}
+}
+func TestRouterVPNImportedNaiveH3ProxyTraffic(t *testing.T) {
+	desktopImportedNaiveH3Cases(t, []string{"socks5", "shadowsocks", "hysteria2"})
+}
+func TestRouterVPNImportedNaiveH3PacketTraffic(t *testing.T) {
+	desktopImportedNaiveH3Cases(t, []string{"wireguard", "amneziawg", "openvpn-tcp", "openvpn-udp"})
+}
+func desktopImportedNaiveH3Traffic(t *testing.T, kind, first, last, fault string) {
+	t.Helper()
+	f := desktopImportedNaiveH3New(t, kind, first, last, fault)
+	if f.startErr != nil {
+		f.audit = func() {
+			stats := f.entryStats()
+			if fault != "entry-route" || f.lower.denied.Load() == 0 || f.lower.calls.Load() != 0 || stats.raw != 0 || stats.tcp != 0 || stats.udp != 0 || f.finalServer.rawUDP.Load() != 0 {
+				t.Fatal("imported Naive H3 native startup failed without its exact foreign-tuple refusal", f.startErr)
+			}
+		}
+		if err := f.close(); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	entryFailure := strings.HasPrefix(fault, "entry-") || fault == "wrong-entry-ip"
+	entryErr := f.connectedEntry(f.ctx)
+	if entryErr != nil && !entryFailure {
+		t.Fatal("actual imported Naive H3 entry did not authenticate", entryErr)
+	}
+	publicOK := false
+	var err error
+	if entryErr == nil {
+		publicOK, err = desktopImportedSOCKSXrayPublic(f.ctx, f.first, f.roots, "203.0.113.88")
+	}
+	if publicOK == entryFailure {
+		t.Fatal("imported Naive H3 independent entry proof changed", err, entryErr)
+	}
+	bootstrapOK, dnsOK, proofOK := false, false, false
+	if publicOK {
+		bootstrapOK, err = desktopImportedNaiveH3DNSExchange(f.ctx, f.bootstrap, "bootstrap.routervpn.test.")
+		wantBootstrap := fault != "bootstrap-route" && !strings.HasPrefix(fault, "final-layer-") && !strings.HasPrefix(fault, "socks-")
+		if bootstrapOK != wantBootstrap {
+			t.Fatal("original H3 bootstrap did not use its captured lower UDP DNS", err)
+		}
+		if bootstrapOK {
+			dnsOK, err = desktopImportedNaiveH3DNSExchange(f.ctx, f.selectedTransport, "selected.routervpn.test.")
+			wantDNS := fault != "final-password" && fault != "final-user" && fault != "final-server-name" && fault != "final-certificate" && fault != "final-route" && fault != "dns-route"
+			if dnsOK != wantDNS {
+				t.Fatal("H3 selected UDP DNS did not traverse its original authenticated final", err)
+			}
+			if dnsOK {
+				proofOK, err = desktopImportedSOCKSXrayProof(f.ctx, f.final, f.meta.ExitAPI, f.meta.ExitNodeID, f.meta.ExitToken)
+				if proofOK != (fault != "final-identity" && fault != "final-token") {
+					t.Fatal("H3 independent paired proof changed", err)
+				}
+			}
+		}
+	}
+	success := fault == "success" || fault == "cancel" || fault == "close-owner" || fault == "replacement-owner"
+	if (publicOK && bootstrapOK && dnsOK && proofOK) != success || f.plan.Healthy() {
+		t.Fatal("imported Naive H3 confused a userspace proof with host readiness")
+	}
+	f.recheckConnected(t)
+	if success {
+		for _, network := range []string{"tcp", "udp"} {
+			if err := desktopImportedSOCKSXrayEcho(f.ctx, f.final, network); err != nil {
+				t.Fatal("imported Naive H3 final payload failed", network, err)
+			}
+		}
+	}
+	var replacement adapter.Outbound
+	var replacementCloseOnce sync.Once
+	var replacementCloseErr error
+	closeReplacement := func() error {
+		replacementCloseOnce.Do(func() {
+			if replacement != nil {
+				replacementCloseErr = replacement.(io.Closer).Close()
+			}
+		})
+		return replacementCloseErr
+	}
+	if fault == "replacement-owner" {
+		replacement, err = NV.NewOutbound(f.owned, nil, log.NewNOPFactory().Logger(), mobilemultihop.LocalTag, f.finalOptions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := closeReplacement(); err != nil {
+				t.Error(err)
+			}
+		})
+		if err := replacement.(adapter.Lifecycle).Start(adapter.StartStateStart); err != nil {
+			t.Fatal(err)
+		}
+		for _, network := range []string{"tcp", "udp"} {
+			if err := desktopImportedSOCKSXrayEcho(f.ctx, replacement, network); err != nil {
+				t.Fatal("replacement final did not prove its own traffic", network, err)
+			}
+		}
+	}
+	if fault == "cancel" || fault == "close-owner" || fault == "replacement-owner" {
+		held, err := f.final.DialContext(f.ctx, "tcp", M.ParseSocksaddr("192.0.2.99:9999"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = held.Close() })
+		if err := held.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if err := desktopImportedSOCKSXrayExchange(held); err != nil {
+			t.Fatal("retirement did not first prove its original held stream", err)
+		}
+		if fault == "cancel" {
+			f.cancelFinal()
+		} else if err := f.closeFinal(); err != nil {
+			t.Fatal(err)
+		}
+		_ = held.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var body [1]byte
+		if n, err := held.Read(body[:]); n != 0 || err == nil {
+			t.Fatal("retired original final kept its application stream")
+		} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+			t.Fatal("retirement waited only for the fixture deadline")
+		}
+		calls, streams := f.lower.calls.Load(), f.entryStats().tcp
+		lateContext, stopLate := context.WithTimeout(context.Background(), 2*time.Second)
+		late, lateErr := f.final.DialContext(lateContext, "tcp", M.ParseSocksaddr("192.0.2.99:9999"))
+		if late != nil {
+			deadline, _ := lateContext.Deadline()
+			_ = late.SetDeadline(deadline)
+			lateErr = desktopImportedSOCKSXrayExchange(late)
+			_ = late.Close()
+		}
+		stopLate()
+		// Naive DialEarly can return a lazy stream after caller cancellation.
+		// It must fail its actual payload without obtaining another captured
+		// entry connection. Explicit native Close also refuses allocation.
+		if lateErr == nil || fault != "cancel" && late != nil || f.lower.calls.Load() != calls || f.entryStats().tcp != streams {
+			t.Fatal("retired H3 owner acquired another physical/authenticated entry or delivered late payload", lateErr)
+		}
+		f.retired, f.retiredTCP = true, streams
+	}
+	if replacement != nil {
+		for _, network := range []string{"tcp", "udp"} {
+			if err := desktopImportedSOCKSXrayEcho(f.ctx, replacement, network); err != nil {
+				t.Fatal("original retirement damaged the independent replacement", network, err)
+			}
+		}
+		if err := closeReplacement(); err != nil {
+			t.Fatal(err)
+		}
+		f.retiredTCP = f.entryStats().tcp
+	}
+	f.recheckConnected(t)
+	if err := f.close(); err != nil {
+		t.Fatal("packet native owners did not drain before physical fixture teardown", err)
+	}
+	f.audit = func() {
+		stats := f.entryStats()
+		if f.retired && stats.tcp != f.retiredTCP {
+			t.Fatal("retired final opened a deferred authenticated entry stream before original peer cleanup joined")
+		}
+		if f.dnsRouter.calls.Load() != 0 || publicOK && bootstrapOK && f.dnsManager.reads.Load() == 0 {
+			t.Fatal("literal H3 final changed its exact retained bootstrap authority")
+		}
+		if fault == "bootstrap-route" && (f.bootstrapHits.Load() != 0 || f.dns.Load() != 0 || f.health.Load() != 0) {
+			t.Fatal("refused bootstrap borrowed selected DNS or final proof")
+		}
+		t.Logf("kind=%s entry_layer=%s final_layer=%s fault=%s source_sha256=%s lower=%s physical_calls=%d entry_tcp=%d entry_udp=%d bootstrap_udp=%d selected_udp=%d naive_quic=%d naive_tcp=%d naive_uot=%d", kind, first, last, fault, f.plan.SourceSHA256(), f.entryNetwork, f.lower.calls.Load(), stats.tcp, stats.udp, f.bootstrapHits.Load(), f.dns.Load(), f.finalServer.rawUDP.Load(), f.finalServer.plainTCP.Load(), f.finalServer.plainUDP.Load())
+		if !reflect.DeepEqual(f.source, f.captured) || f.plan.Config() != f.config || f.plan.Healthy() {
+			t.Fatal("imported Naive H3 rewrote its capture or changed its native QUIC source")
+		}
+		if fault == "entry-route" {
+			if f.lower.denied.Load() == 0 || f.lower.calls.Load() != 0 || stats.raw != 0 {
+				t.Fatal("wrong entry tuple reached original physical provider")
+			}
+		} else if f.lower.calls.Load() == 0 {
+			t.Fatal("imported Naive H3 did not attempt the original captured physical owner")
+		}
+		if fault == "entry-auth" && stats.auth == 0 {
+			t.Fatal("OpenVPN negative did not witness actual provider authentication rejection")
+		}
+		if strings.HasPrefix(fault, "entry-layer-") {
+			if stats.raw != 0 || stats.tcp != 0 || stats.udp != 0 {
+				t.Fatal("rejected entry layer reached the original packet provider")
+			}
+		} else if fault != "entry-route" && stats.raw == 0 {
+			t.Fatal("packet negative did not reach its original ciphertext provider")
+		}
+		if entryFailure || fault == "final-route" || fault == "bootstrap-route" || strings.HasPrefix(fault, "final-layer-") || strings.HasPrefix(fault, "socks-") {
+			if f.finalServer.rawUDP.Load() != 0 || f.dns.Load() != 0 || f.health.Load() != 0 {
+				t.Fatal("rejected original entry or final route reached the paired engine")
+			}
+		} else if f.finalServer.rawUDP.Load() == 0 {
+			t.Fatal("imported Naive H3 did not reach original final ciphertext")
+		}
+		if fault == "final-password" || fault == "final-user" || fault == "final-server-name" || fault == "final-certificate" {
+			if f.dns.Load() != 0 || f.health.Load() != 0 || f.finalServer.plainTCP.Load() != 0 || f.finalServer.plainUDP.Load() != 0 {
+				t.Fatal("foreign Naive credential gained final plaintext")
+			}
+		}
+		wantedPublic := int64(1)
+		if entryFailure && fault != "wrong-entry-ip" {
+			wantedPublic = 0
+		}
+		if f.public.Load() != wantedPublic {
+			t.Fatal("imported Naive H3 lost its independent public proof")
+		}
+		if success && (f.bootstrapHits.Load() != 1 || f.dns.Load() != 1 || f.health.Load() != 1 || f.authorized.Load() != 1 || f.finalServer.plainTCP.Load() == 0 || f.finalServer.plainUDP.Load() == 0 || stats.tcp == 0 || stats.udp == 0) {
+			t.Fatal("imported Naive H3 omitted actual payload, selected DNS or distinct paired proof")
+		}
+		if f.socks != nil {
+			f.socks.mu.Lock()
+			associations := len(f.socks.relays)
+			f.socks.mu.Unlock()
+			if success && (associations == 0 || f.socks.server.rawUDP.Load() == 0) {
+				t.Fatal("H3 SOCKS omitted its actual authenticated UDP association")
+			}
+			if strings.HasPrefix(fault, "socks-") {
+				if associations == 0 || f.bootstrapHits.Load() != 0 || f.dns.Load() != 0 || f.health.Load() != 0 {
+					t.Fatal("H3 SOCKS refusal did not retain original association and empty final authority")
+				}
+				if fault == "socks-relay-route" && (first == "off" && f.lower.denied.Load() == 0 || first != "off" && f.entryLayerServer.rejectedUDP.Load() == 0) {
+					t.Fatal("foreign SOCKS relay did not reach its original exact-tuple rejection")
+				}
+				if fault == "socks-control-eof" && (f.socks.server.rawUDP.Load() == 0 || stats.udp != 0) {
+					t.Fatal("SOCKS control retirement was not triggered by its original relay datagram")
+				}
+			}
+			if f.socks.joinFailed.Load() {
+				t.Fatal("original H3 SOCKS control read did not join")
+			}
+		}
+		if fault == "dns-route" && (f.bootstrapHits.Load() != 1 || f.dns.Load() != 0 || f.health.Load() != 0) {
+			t.Fatal("foreign DNS route reached original resolver or proof")
+		}
+		if fault == "final-identity" || fault == "final-token" {
+			wanted := int64(1)
+			if fault == "final-token" {
+				wanted = 0
+			}
+			if f.dns.Load() != 1 || f.health.Load() != 1 || f.authorized.Load() != wanted {
+				t.Fatal("paired final refusal lost independent DNS/token evidence")
+			}
+		}
+		for _, role := range []struct {
+			name, network string
+			peer          *desktopExternalInstalledSSPeer
+		}{{"entry", f.entryNetwork, f.entryCarrier}, {"final", "udp", f.finalCarrier}} {
+			if role.peer == nil {
+				continue
+			}
+			observed := role.peer.stats()
+			failed := strings.HasPrefix(fault, role.name+"-layer-")
+			if success && role.network == "tcp+udp" && (observed.PhysicalTCP == 0 || observed.PhysicalUDP == 0 || observed.Streams == 0 || observed.Packets == 0) {
+				t.Fatal("H3 mixed entry layer omitted original TCP control/proof or UDP carrier")
+			}
+			if role.network == "tcp" && (observed.PhysicalUDP != 0 || observed.Packets != 0) || role.network == "udp" && (observed.PhysicalTCP != 0 || observed.Streams != 0) {
+				t.Fatal("independent layer changed original physical transport", role.name)
+			}
+			if failed {
+				if observed.AuthTCP+observed.AuthUDP == 0 || observed.Streams+observed.Packets != 0 {
+					t.Fatal("independent packet layer lacks actual rejection", role.name)
+				}
+			} else if role.name == "final" && strings.HasPrefix(fault, "socks-") {
+				if observed.PhysicalTCP+observed.PhysicalUDP+observed.Streams+observed.Packets != 0 {
+					t.Fatal("refused SOCKS association reached the independent final layer")
+				}
+			} else if role.name == "final" && fault == "bootstrap-route" {
+				if observed.PhysicalUDP == 0 || observed.AuthUDP != 0 || observed.Packets != 0 || f.finalLayerServer == nil || f.finalLayerServer.rejectedUDP.Load() == 0 {
+					t.Fatal("H3 bootstrap refusal missed its authenticated final-layer route owner")
+				}
+			} else if !entryFailure && observed.Streams+observed.Packets == 0 {
+				t.Fatal("imported Naive H3 bypassed its independent layer", role.name)
+			}
+		}
+	}
+}
+
+// The physical boundary retains every socket until the actual native owner
+// closes it. SOCKS UDP is admitted only by the original live association lease;
+// other entries and Start Layers own their exact captured static tuple.
+type desktopImportedNaiveH3Physical struct {
+	*desktopPacketRealityPhysical
+	networks     map[string]bool
+	associations *desktopImportedSOCKSLayerRoutes
+}
+
+func (p *desktopImportedNaiveH3Physical) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	address, operation := p.physical, ctx
+	var release func()
+	if network == "udp" && p.associations != nil {
+		var found bool
+		address, operation, release, found = p.associations.acquire(destination.String())
+		if !found || operation == nil || operation.Err() != nil {
+			if release != nil {
+				release()
+			}
+			p.denied.Add(1)
+			return nil, errors.New("H3 SOCKS rejected an unowned or retired relay")
+		}
+	} else if !p.networks[network] || destination != p.expected {
+		p.denied.Add(1)
+		return nil, errors.New("H3 rejected an uncaptured lower transport or tuple")
+	}
+	keepLease := false
+	defer func() {
+		if release != nil && !keepLease {
+			release()
+		}
+	}()
+	p.mu.Lock()
+	if p.closed || ctx.Err() != nil || operation.Err() != nil {
+		p.mu.Unlock()
+		return nil, errors.Join(ctx.Err(), operation.Err(), net.ErrClosed)
+	}
+	p.pending++
+	p.signal()
+	p.mu.Unlock()
+	defer func() { p.mu.Lock(); p.pending--; p.signal(); p.mu.Unlock() }()
+	p.calls.Add(1)
+	raw, err := (&net.Dialer{}).DialContext(ctx, network+"4", address)
+	if err != nil {
+		return nil, err
+	}
+	connection := &desktopImportedSOCKSXrayConnection{Conn: raw, owner: p.desktopImportedSOCKSXrayPhysical}
+	p.mu.Lock()
+	p.connections[connection] = true
+	retired := p.closed || ctx.Err() != nil || operation.Err() != nil
+	p.signal()
+	p.mu.Unlock()
+	if retired {
+		return nil, errors.Join(ctx.Err(), operation.Err(), net.ErrClosed, connection.Close())
+	}
+	if release == nil {
+		return connection, nil
+	}
+	lease := &desktopImportedNaiveH3LeaseConnection{Conn: connection, release: release, joined: make(chan struct{})}
+	lease.stop = context.AfterFunc(operation, func() {
+		defer close(lease.joined)
+		_ = connection.Close()
+		lease.once.Do(release)
+	})
+	keepLease = true
+	return lease, nil
+}
+func (p *desktopImportedNaiveH3Physical) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	connection, err := p.DialContext(ctx, "udp", destination)
+	if err != nil {
+		return nil, err
+	}
+	return &desktopImportedProxyXrayPacket{Conn: connection, expected: destination}, nil
+}
+
+type desktopImportedNaiveH3LeaseConnection struct {
+	net.Conn
+	stop    func() bool
+	release func()
+	joined  chan struct{}
+	once    sync.Once
+}
+
+func (c *desktopImportedNaiveH3LeaseConnection) Close() error {
+	err := c.Conn.Close()
+	if !c.stop() {
+		<-c.joined
+	}
+	c.once.Do(c.release)
+	return err
+}
+
+// Forward only unchanged QUIC ciphertext from each original private source to
+// the captured non-loopback Naive listener. Each source keeps an independent
+// connected UDP socket; teardown cancels and joins both directions.
+func desktopImportedNaiveH3CiphertextBridge(t *testing.T, physical netip.Addr, target string) string {
+	t.Helper()
+	address, err := netip.ParseAddrPort(target)
+	if err != nil || !physical.Is4() || !physical.IsPrivate() || physical.IsLoopback() || address.Addr() != physical || address.Port() == 0 {
+		t.Fatal("H3 ciphertext bridge lost original physical reference tuple", err)
+	}
+	listener, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var mu sync.Mutex
+	closed := false
+	owners := map[string]net.Conn{}
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		var body [65535]byte
+		for {
+			n, source, err := listener.ReadFrom(body[:])
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			if closed {
+				mu.Unlock()
+				return
+			}
+			peer := owners[source.String()]
+			if peer == nil {
+				peer, err = (&net.Dialer{}).DialContext(ctx, "udp4", target)
+				if err != nil {
+					mu.Unlock()
+					return
+				}
+				owners[source.String()] = peer
+				workers.Add(1)
+				go func(connection net.Conn, original net.Addr) {
+					defer workers.Done()
+					defer connection.Close()
+					var reply [65535]byte
+					for {
+						n, err := connection.Read(reply[:])
+						if err != nil {
+							return
+						}
+						if _, err = listener.WriteTo(reply[:n], original); err != nil {
+							return
+						}
+					}
+				}(peer, source)
+			}
+			mu.Unlock()
+			if _, err := peer.Write(body[:n]); err != nil {
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		mu.Lock()
+		closed = true
+		all := make([]net.Conn, 0, len(owners))
+		for _, connection := range owners {
+			all = append(all, connection)
+		}
+		mu.Unlock()
+		cancel()
+		_ = listener.Close()
+		for _, connection := range all {
+			_ = connection.Close()
+		}
+		joined := make(chan struct{})
+		go func() { workers.Wait(); close(joined) }()
+		select {
+		case <-joined:
+		case <-time.After(2 * time.Second):
+			t.Error("original H3 ciphertext bridge did not join")
+		}
+	})
+	return listener.LocalAddr().String()
+}
+
+// Exercise the new fixture's actual native SOCKS association and encrypted
+// relay lifetime without a physical-network claim. The complete H3 peer matrix
+// still calls desktopNodePeerInterface before constructing any graph.
+func TestRouterVPNImportedNaiveH3SOCKSAssociation(t *testing.T) {
+	for _, layer := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		for _, fault := range []string{"success", "relay-route", "control-eof", "cancelled"} {
+			t.Run(layer+"/"+fault, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				serverCtx, stopServer := context.WithCancel(ctx)
+				defer stopServer()
+				server := &desktopNodeLayerServer{ctx: serverCtx, cancel: stopServer, connections: map[io.Closer]bool{}}
+				peer, socks := desktopStartImportedSOCKSProvider(t, server, "captured-h3-association", fault)
+				defer peer.close()
+				inner := "203.0.113.20:443"
+				if layer != "off" {
+					inner = "10.93.0.1:443"
+				}
+				private := "127.0.0.1"
+				if layer != "off" {
+					private = "10.93.0.1"
+				}
+				routes := &desktopImportedSOCKSLayerRoutes{parent: ctx, control: peer.address, private: private, leases: map[string]*desktopImportedSOCKSRelayLease{}, physical: map[string]string{}}
+				defer routes.close()
+				socks.mu.Lock()
+				socks.entryRelay = routes.relay
+				socks.mu.Unlock()
+				physical := &desktopImportedNaiveH3Physical{desktopPacketRealityPhysical: newDesktopPacketRealityPhysical("tcp", M.ParseSocksaddr(inner), peer.address), networks: map[string]bool{"tcp": true}, associations: routes}
+				var layerServer *desktopNodeLayerServer
+				var layerRaw map[string]any
+				if layer != "off" {
+					layerRaw = map[string]any{"tag": "original-entry-layer", "type": "shadowsocks", "method": mobilemultihop.NativeStartLayerMethod, "password": desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'q'), "server": "203.0.113.20", "server_port": float64(8388), "detour": physical.Tag()}
+					if layer == "aes-256-gcm+xor-whitening" {
+						layerRaw["type"] = "routervpn-aes-xor"
+						layerRaw["server_port"] = float64(8389)
+					}
+					layerCtx, stopLayer := context.WithCancel(ctx)
+					defer stopLayer()
+					layerServer = &desktopNodeLayerServer{ctx: layerCtx, cancel: stopLayer, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: inner, Physical: peer.address}}, ownedUDP: routes.acquire}
+					layerPeer := desktopImportedSOCKSLayerProvider(t, layerServer, layerRaw, "")
+					defer layerPeer.close()
+					physical.expected, physical.physical = M.ParseSocksaddr(desktopImportedSOCKSAddress(layerRaw)), layerPeer.address
+					physical.associations = nil
+					physical.networks["udp"] = true
+				}
+				defer func() {
+					if err := physical.Close(); err != nil {
+						t.Error(err)
+					}
+				}()
+				manager := &desktopImportedSOCKSXrayManager{owners: map[string]adapter.Outbound{physical.Tag(): physical}}
+				owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
+				detour := physical.Tag()
+				if layerRaw != nil {
+					detour = layerRaw["tag"].(string)
+					owner := desktopImportedSOCKSNativeLayer(t, owned, layerRaw)
+					manager.owners[detour] = owner
+					defer func() {
+						if closer, ok := owner.(io.Closer); ok {
+							_ = closer.Close()
+						}
+					}()
+				}
+				address := M.ParseSocksaddr(inner)
+				entry := desktopImportedNaiveH3Entry(t, owned, map[string]any{"type": "socks", "tag": "entry-wg", "server": address.Addr.String(), "server_port": float64(address.Port), "version": "5", "username": "captured-native-user", "password": "captured-h3-association", "detour": detour})
+				caller := ctx
+				if fault == "cancelled" {
+					var stop context.CancelFunc
+					caller, stop = context.WithCancel(ctx)
+					stop()
+				}
+				connection, err := entry.DialContext(caller, "udp", M.ParseSocksaddr("192.0.2.99:9999"))
+				if connection != nil {
+					_ = connection.SetDeadline(time.Now().Add(time.Second))
+					err = desktopImportedSOCKSXrayExchange(connection)
+					_ = connection.Close()
+				}
+				if (err == nil) != (fault == "success") {
+					t.Fatal("actual SOCKS association/layer result changed", fault, err)
+				}
+				if fault == "cancelled" && (!errors.Is(err, context.Canceled) || physical.calls.Load() != 0) {
+					t.Fatal("cancelled SOCKS caller acquired lower authority", err)
+				}
+				if err := physical.empty(ctx); err != nil {
+					t.Fatal("native SOCKS close did not release its actual lower sockets", err)
+				}
+				peer.close()
+				socks.mu.Lock()
+				associations := len(socks.relays)
+				socks.mu.Unlock()
+				routes.mu.Lock()
+				live := len(routes.leases)
+				routes.mu.Unlock()
+				if live != 0 || socks.joinFailed.Load() {
+					t.Fatal("original authenticated control retained relay authority after native close")
+				}
+				if fault == "cancelled" {
+					if associations != 0 || server.rawUDP.Load() != 0 {
+						t.Fatal("cancelled caller created an association")
+					}
+				} else if associations == 0 {
+					t.Fatal("fixture failed before the actual authenticated UDP-association reply")
+				}
+				if fault == "success" && (server.rawUDP.Load() == 0 || server.plainUDP.Load() == 0) {
+					t.Fatal("actual SOCKS UDP payload absent")
+				}
+				if fault == "relay-route" && (layer == "off" && physical.denied.Load() == 0 || layer != "off" && layerServer.rejectedUDP.Load() == 0) {
+					t.Fatal("foreign relay escaped original owner")
+				}
+				if fault == "control-eof" && (server.rawUDP.Load() == 0 || server.plainUDP.Load() != 0) {
+					t.Fatal("original control EOF did not precede payload")
+				}
+			})
+		}
+	}
+}

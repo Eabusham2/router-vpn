@@ -158,7 +158,7 @@ public final class MultihopStartupLastTest{
  }
  static AndroidStandardExitStore.Entry imported(){AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id="saved-import";e.name="Original import";e.protocol="socks5";AndroidImportedRouterPath.current=e;return e;}
  static void importedRuntime()throws Exception{
-  for(String protocol:new String[]{"socks5","http","https","openvpn"})for(String mode:(protocol.equals("socks5")||protocol.equals("openvpn"))?new String[]{"shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"}:new String[]{"shadowsocks"})try(Fixture f=new Fixture()){
+  for(String protocol:new String[]{"socks5","http","https","openvpn"})for(String mode:(protocol.equals("socks5")||protocol.equals("openvpn"))?new String[]{"shadowsocks","hysteria2","wg","awg2-fast","awg2-strong","naive-h3"}:new String[]{"shadowsocks"})try(Fixture f=new Fixture()){
    AndroidStandardExitStore.Entry e=imported();e.protocol=protocol;Callback c=new Callback();f.runtime.connectImported(e,f.exit,mode,"local",c);c.await();
    check(c.ok&&f.engine.starts==1&&AndroidMultihopController.preparations==1,"supported SOCKS imported runtime rejected before preparation: "+mode);
    check(AndroidPathProbe.proofs==1&&LayeredVpnService.mtu==1&&AndroidStartupPolicy.writes==0,"imported runtime skipped owned proof/activation or borrowed paired history");
@@ -166,7 +166,7 @@ public final class MultihopStartupLastTest{
   }
   for(String protocol:new String[]{"socks5","http","https","openvpn"})for(String fault:new String[]{"unsupported-entry","unsupported-final","server","auto","same-id","foreign-source","queued-entry","queued-exit","queued-cancel","prepared-entry","started-entry","private-proof"})try(Fixture f=new Fixture()){
    AndroidStandardExitStore.Entry e=imported();e.protocol=protocol;String mode=(protocol.equals("socks5")||protocol.equals("openvpn"))?"wg":"shadowsocks",execution="local";
-   if(fault.equals("unsupported-entry"))e.protocol="unsupported-entry";if(fault.equals("unsupported-final"))mode="naive-h3";
+   if(fault.equals("unsupported-entry"))e.protocol="unsupported-entry";if(fault.equals("unsupported-final"))mode="split";
    if(fault.equals("server")||fault.equals("auto"))execution=fault;if(fault.equals("same-id"))e.id=f.exit.id;if(fault.equals("foreign-source"))AndroidImportedRouterPath.current=null;
    if(fault.equals("prepared-entry"))AndroidMultihopController.onPrepare=()->e.secret="replaced before staging";
    if(fault.equals("started-entry"))f.engine.duringStart=()->e.secret="replaced after native start";
@@ -177,6 +177,12 @@ public final class MultihopStartupLastTest{
    boolean launched=fault.equals("started-entry")||fault.equals("private-proof");
    check(!c.ok&&f.engine.starts==(launched?1:0)&&!AndroidHomeStateStore.current.connected&&LayeredVpnService.mtu==0,"invalid imported source/execution escaped runtime: "+fault);
    if(launched)check(f.engine.stops==1,"failed imported proof did not join original native owner");cases++;
+  }
+ }
+ static void naiveH3ConnectRefusals()throws Exception{
+  for(String protocol:new String[]{"http","https"})try(Fixture f=new Fixture()){
+   AndroidStandardExitStore.Entry e=imported();e.protocol=protocol;Callback c=new Callback();f.runtime.connectImported(e,f.exit,"naive-h3","local",c);c.await();
+   check(!c.ok&&f.engine.starts==0&&AndroidMultihopController.preparations==0&&!AndroidHomeStateStore.current.connected&&LayeredVpnService.mtu==0,"Naive H3 borrowed stream-only CONNECT runtime authority");cases++;
   }
  }
  static void historicalMatrix()throws Exception{
@@ -251,7 +257,7 @@ public final class MultihopStartupLastTest{
   }
   try(Fixture f=new Fixture()){LayeredVpnService.selected="local";AndroidStartupPolicy.writeFailure=true;Callback c=new Callback();f.runtime.connect(f.entry,f.exit,"wg","auto","wg",c);c.await();check(c.ok&&AndroidStartupPolicy.writes==0&&LayeredVpnService.mtu==1,"harmless historical write failure disconnected proved path");cases++;}
  }
- public static void main(String[] args)throws Exception{importedRuntime();historicalMatrix();malformed();staleAndProof();historicalRecording();System.out.println("Android two-Router historical execution: "+checks+" checks / "+cases+" cases; actual runtime, source files and public-pin constraints");}
+ public static void main(String[] args)throws Exception{importedRuntime();naiveH3ConnectRefusals();historicalMatrix();malformed();staleAndProof();historicalRecording();System.out.println("Android two-Router historical execution: "+checks+" checks / "+cases+" cases; actual runtime, source files and public-pin constraints");}
 }
 '''
 
@@ -335,7 +341,7 @@ public final class ComposedTest {
  static final class Callback implements AndroidMultihopRuntime.Callback {final CountDownLatch done=new CountDownLatch(1);boolean ok;int completions;public void progress(String s){}public void finished(boolean value,String message){ok=value;completions++;done.countDown();}void await()throws Exception{check(done.await(4,TimeUnit.SECONDS)&&completions==1,"composed runtime did not finish one owned callback");}}
  static byte[] source()throws Exception{return new JSONObject().put("node_id","final").put("profiles",new JSONObject()).put("modes",new JSONArray()).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);}
  public static void main(String[] args)throws Exception{
-  for(String protocol:List.of("socks5","http","https","openvpn"))for(String mode:protocol.equals("socks5")?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong","reality-vision"):protocol.equals("openvpn")?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"):List.of("shadowsocks"))for(String fault:List.of("none","source-before-stage","source-after-start","proof","cancel")){
+  for(String protocol:List.of("socks5","http","https","openvpn"))for(String mode:protocol.equals("socks5")?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong","reality-vision","naive-h3"):protocol.equals("openvpn")?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong","naive-h3"):List.of("shadowsocks"))for(String fault:List.of("none","source-before-stage","source-after-start","proof","cancel")){
    context=new Context();NativeSingBoxController engine=new NativeSingBoxController();AndroidMultihopController.preparations=0;AndroidMultihopController.onPrepare=null;AndroidPathProbe.proofs=0;AndroidPathProbe.valid=!fault.equals("proof");AndroidPathProbe.duringProof=null;
    LayeredVpnService.captures=0;LayeredVpnService.mtu=0;LayeredVpnService.unhealthy=false;LayeredVpnService.selected="";LayeredVpnService.pins="{}";LayeredVpnService.duringCapture=null;LayeredVpnService.duringMTU=null;
    Path directory=Files.createTempDirectory("composed-imported-home-"),file=directory.resolve("final.json");Files.write(file,source());AndroidNodeStore.Node last=new AndroidNodeStore.Node("final",file.toFile());
@@ -354,13 +360,13 @@ public final class ComposedTest {
     }else check(!callback.ok&&!home.connected&&LayeredVpnService.mtu==0,"composed runtime published cancelled/stale/unproved Home: "+fault);
    }finally{runtime.disconnect();runtime.close();long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);while(runtime.isActiveOrTransitioning()&&System.nanoTime()<end)Thread.yield();check(!AndroidHomeStateStore.snapshot(context).connected&&engine.state.equals("DOWN"),"composed cleanup retained live Home or native owner: "+fault+"/"+engine.state+"/"+AndroidHomeStateStore.snapshot(context).phase);Files.delete(file);Files.delete(directory);}
   }
-  for(String protocol:List.of("socks5","http","https","openvpn"))for(String mode:protocol.equals("socks5")?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong","reality-vision"):protocol.equals("openvpn")?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"):List.of("shadowsocks"))for(boolean alive:List.of(false,true)){
+  for(String protocol:List.of("socks5","http","https","openvpn"))for(String mode:protocol.equals("socks5")?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong","reality-vision","naive-h3"):protocol.equals("openvpn")?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong","naive-h3"):List.of("shadowsocks"))for(boolean alive:List.of(false,true)){
    context=new Context();AndroidHomeStateStore.beginMultihop(context,"saved-socks","saved-final",mode,AndroidExternalPolicy.protocol(protocol));AndroidHomeStateStore.connectedMultihop(context,"saved-socks","saved-final",mode,AndroidExternalPolicy.protocol(protocol));
    NativeSingBoxController engine=new NativeSingBoxController();engine.state=alive?"UP":"DOWN";AndroidMultihopRuntime runtime=new AndroidMultihopRuntime(context,engine);
    try{check(runtime.isConnected()==alive&&AndroidHomeStateStore.snapshot(context).connected==alive,"published SOCKS live-state reattachment changed exact native liveness");if(alive)check(runtime.activeEntryMode().equals(AndroidExternalPolicy.protocol(protocol)),"reattachment changed original entry label");}
    finally{runtime.disconnect();runtime.close();}
   }
-  System.out.println("Composed shipping imported runtime + Home: "+checks+" checks /91 cases PASS; native preparation/proof and Android OS boundaries doubled");
+  System.out.println("Composed shipping imported runtime + Home: "+checks+" checks /105 cases PASS; native preparation/proof and Android OS boundaries doubled");
  }
 }
 '''
