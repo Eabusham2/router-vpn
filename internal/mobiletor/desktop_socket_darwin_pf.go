@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -264,55 +263,13 @@ func desktopDarwinPFForeignRootInventory(ctx context.Context, inventory func(con
 	return nil
 }
 
-func desktopDarwinPFSystemChildInventory(ctx context.Context, inventory func(context.Context, string) ([]byte, error)) (failure error) {
+func desktopDarwinPFSystemChildInventory(ctx context.Context, inventory func(context.Context, string) ([]byte, error)) error {
 	progress := desktopPFChildrenProgress{command: 1, attempted: 1}
-	defer func() { failure = progress.failure(failure) }()
 	anchors, err := inventory(ctx, "com.apple")
 	if err != nil {
-		return err
+		return progress.failure(err)
 	}
-	progress.listed, progress.completed = true, 1
-	lines := strings.Split(string(anchors), "\n")
-	for _, line := range lines {
-		name := strings.TrimPrefix(strings.TrimSpace(line), "com.apple/")
-		if name != "" && "com.apple/"+name != desktopDarwinPFNamespace {
-			progress.children++
-		}
-	}
-	for _, line := range lines {
-		name := strings.TrimPrefix(strings.TrimSpace(line), "com.apple/")
-		if name == "" || "com.apple/"+name == desktopDarwinPFNamespace {
-			continue
-		}
-		progress.child++
-		progress.command = 0
-		if !desktopDarwinPFAnchorName.MatchString(name) {
-			return errors.New("Darwin PF dispatch has an unknown anchor identity")
-		}
-		// Quick deny prevents a later foreign pass from admitting an unowned
-		// packet; our nonquick permitted/tagged packets still reach foreign
-		// blocks. Stateful foreign passes (in either direction) cannot be
-		// accepted yet: a state can outlive both socket holders and bypass the
-		// per-packet UID check. This is a bounded compatibility requirement,
-		// not authority to rewrite or flush another filter owner.
-		var progressMu sync.Mutex
-		observe := func(command int, completed bool) {
-			progressMu.Lock()
-			defer progressMu.Unlock()
-			if completed {
-				progress.completed++
-			} else {
-				progress.command = command
-				progress.attempted++
-			}
-		}
-		if err := desktopPFForeignBranches(ctx, "com.apple/"+name, "com.apple/"+name < desktopDarwinPFNamespace,
-			desktopDarwinPFRead, desktopDarwinPFNoTranslation, observe); err != nil {
-			return err
-		}
-		progress.verified++
-	}
-	return nil
+	return desktopPFSystemChildReadback(ctx, desktopDarwinPFNamespace, anchors, desktopDarwinPFRead, desktopDarwinPFNoTranslation)
 }
 
 func desktopDarwinValidatePFBaseline(ctx context.Context, capture DesktopSocketCapture, options DesktopDarwinSocketOptions) error {

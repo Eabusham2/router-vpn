@@ -12,4 +12,7 @@ var (
 	_ func(*testing.T) = TestDesktopPFReadbackQueuedCommandCancellation
 	_ func(*testing.T) = TestDesktopPFReadbackCommandSlotJoinsCleanup
 	_ func(*testing.T) = TestDesktopPFReadbackForeignBranches
+	_ func(*testing.T) = TestDesktopPFReadbackSystemChildrenUseIdleSlotsWithoutExtendingReadback
+	_ func(*testing.T) = TestDesktopPFReadbackSystemChildrenJoinCancellationAndRejectLateSuccess
+	_ func(*testing.T) = TestDesktopPFReadbackSystemChildrenKeepExactForeignInventoryAndRefusals
 )

@@ -40,6 +40,9 @@ READBACK_CASES = ('PFReadbackCompleteWithinCapturedBudget', 'PFReadbackFailureAn
                   'PFReadbackDeadlineAndInvalidCapture', 'PFReadbackNestedNativeCommandBudget',
                   'PFReadbackQueuedCommandCancellation', 'PFReadbackCommandSlotJoinsCleanup',
                   'PFReadbackForeignBranches',
+                  'PFReadbackSystemChildrenUseIdleSlotsWithoutExtendingReadback',
+                  'PFReadbackSystemChildrenJoinCancellationAndRejectLateSuccess',
+                  'PFReadbackSystemChildrenKeepExactForeignInventoryAndRefusals',
                   'PFReadbackInventorySharesOnlyJoinedIdenticalPaths',
                   'PFReadbackInventoryNewInspectionReadsAfterMutation',
                   'PFReadbackInventoryCancelledWaiterDoesNotDetachNativeOwner',
@@ -548,6 +551,7 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
             'desktop_socket_darwin_frame_test.go', 'desktop_socket_darwin_socks.go',
             'desktop_socket_darwin_socks_guardian.go', 'desktop_socket_darwin_socks_pf.go',
             'desktop_socket_darwin_pf.go', 'desktop_socket_darwin_state.go',
+            'desktop_socket_pf_system_children.go', 'desktop_socket_pf_system_children_test.go',
             'desktop_socket_darwin_readback.go', 'desktop_socket_darwin_pf_probe_cgo.go',
             'desktop_socket_darwin_pf_probe_nocgo.go', 'desktop_socket_darwin_filter_cgo.go',
             'desktop_socket_darwin_filter_nocgo.go', 'desktop_socket_darwin_filter_test.go',
@@ -733,6 +737,14 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
         ('nested PF shared native command budget', 'PFReadbackNestedNativeCommandBudget', 'nested PF inspections lost the shared four-command limit',
          'desktop_socket_pf_readback.go', (
              ('if ctx.Value(desktopPFCommandBudgetKey{}) == nil {', 'if true {'),)),
+        ('independent PF system child scheduling', 'PFReadbackSystemChildrenUseIdleSlotsWithoutExtendingReadback', 'original bounded child inventory did not join all independent observations',
+         'desktop_socket_pf_system_children.go', (
+             ('for start := 0; start < len(checks); start += 32 {\n\t\tif err := desktopPFReadback(ctx, checks[start:min(start+32, len(checks))]...); err != nil {',
+              'for _, check := range checks {\n\t\tif err := check(ctx); err != nil {'),)),
+        ('complete PF system child inventory', 'PFReadbackSystemChildrenKeepExactForeignInventoryAndRefusals', 'bounded batches omitted a later original child',
+         'desktop_socket_pf_system_children.go', (
+             ('for start := 0; start < len(checks); start += 32 {',
+              'for start := 0; start < min(32, len(checks)); start += 32 {'),)),
         ('foreign PF earlier owner refusal', 'PFReadbackForeignBranches', 'parallel foreign PF inspection accepted an original refusal',
          'desktop_socket_pf_foreign.go', (
              ('if err != nil || earlier && actual != "" {', 'if err != nil {'),)),
