@@ -280,7 +280,7 @@ def execute(command,cwd,env,expected,timeout=600):
 def socks_xray_controls():
  return (
   ('original-admission','internal/mobilemultihop/imported_entry.go',
-   'socksXrayFinal := selection.Protocol == "socks5" && exitMode == "reality-vision"',
+   'socksXrayFinal := selection.Protocol == "socks5" && importedVisionFinal(exitMode)',
    'socksXrayFinal := false',
    'TestImportedEntrySOCKSRealityVisionCapturedGraphs','default-home',
    'captured SOCKS REALITY/Vision graph was rejected'),

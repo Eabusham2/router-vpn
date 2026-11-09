@@ -134,7 +134,7 @@ func desktopImportedProxyXrayTraffic(t *testing.T, original []string, kind, meth
 	validLayer := func(mode string) bool {
 		return mode == "" || mode == "aes-256-gcm" || mode == "aes-256-gcm+xor-whitening"
 	}
-	if !ok || expectedIP != "203.0.113.88" || args[2] != "reality-vision" || (args[5] == "") != (finalLayer == "") || args[6] != "" ||
+	if !ok || expectedIP != "203.0.113.88" || (args[2] != "reality-vision" && args[2] != "reality-pq-vision") || (args[5] == "") != (finalLayer == "") || args[6] != "" ||
 		profile["multihop_execution"] != "local" || !validLayer(entryLayer) || !validLayer(finalLayer) ||
 		profile["router_api"] != "http://10.77.0.1:8787" {
 		t.Fatal("imported proxy REALITY reference lost its exact Local independent-layer source")
@@ -172,7 +172,7 @@ func desktopImportedProxyXrayTraffic(t *testing.T, original []string, kind, meth
 		}
 		earlyFailure := fault == "entry-auth" || fault == "entry-sni" || fault == "entry-trust" || fault == "wrong-entry-ip" || strings.HasPrefix(fault, "entry-layer-")
 		routeFailure := fault == "final-route" || strings.HasPrefix(fault, "final-layer-")
-		cipherFailure := fault == "final-reality-key" || fault == "final-user"
+		cipherFailure := fault == "final-reality-key" || fault == "final-pq-key" || fault == "final-user"
 		if earlyFailure || routeFailure {
 			if finalServer.rawTCP.Load() != 0 || dnsRequests.Load() != 0 || healthRequests.Load() != 0 {
 				t.Error("failed original entry reached the paired Xray proof path")
@@ -286,10 +286,12 @@ func desktopImportedProxyXrayTraffic(t *testing.T, original []string, kind, meth
 	})
 	_, ip := desktopNodePeerInterface(t)
 	var files string
-	finalServer, files = startDesktopNodeXrayServerWithProof(t, "reality-vision", ip, packet.LocalAddr().String(), paired.Listener.Addr().String())
+	finalServer, files = startDesktopNodeXrayServerWithProof(t, args[2], ip, packet.LocalAddr().String(), paired.Listener.Addr().String())
 	finalTarget := finalServer.tcp.Addr().String()
 	if fault == "final-reality-key" {
 		files = desktopNodeXrayAssets(t, files, "xray-reality-key")
+	} else if fault == "final-pq-key" {
+		files = desktopNodeXrayAssets(t, files, "xray-pq-key")
 	} else if fault == "final-user" {
 		files = desktopNodeXrayAssets(t, files, "xray-user")
 	}
@@ -394,12 +396,12 @@ func desktopImportedProxyXrayTraffic(t *testing.T, original []string, kind, meth
 			t.Fatal("imported proxy REALITY lost independently provisioned final layer")
 		}
 	}
-	if firstRaw["type"] != kind || finalRaw["type"] != "routervpn-xray" || finalRaw["mode"] != "reality-vision" || finalRaw["detour"] != finalDetour || len(finalRaw) != 5 {
+	if firstRaw["type"] != kind || finalRaw["type"] != "routervpn-xray" || finalRaw["mode"] != args[2] || finalRaw["detour"] != finalDetour || len(finalRaw) != 5 {
 		t.Fatal("imported proxy REALITY reference lost its exact native detour")
 	}
 	var meta mobilemultihop.Metadata
 	if json.Unmarshal([]byte(plan.Metadata()), &meta) != nil || meta.EntryKind != "external" || meta.EntryMode != kind ||
-		meta.ExitMode != "reality-vision" || meta.EntryAPI != "" || meta.EntryToken != "" || meta.ExitAPI != "http://10.77.0.1:8787" || meta.ExitNodeID != node {
+		meta.ExitMode != args[2] || meta.EntryAPI != "" || meta.EntryToken != "" || meta.ExitAPI != "http://10.77.0.1:8787" || meta.ExitNodeID != node {
 		t.Fatal("imported proxy REALITY reference changed captured proof ownership")
 	}
 	dnsOptions := graph["dns"].(map[string]any)
@@ -562,7 +564,7 @@ func desktopImportedProxyXrayTraffic(t *testing.T, original []string, kind, meth
 	dnsOK, proofOK := false, false
 	if publicOK {
 		dnsOK, err = desktopImportedSOCKSXrayDNS(ctx, final, net.JoinHostPort(wantedDNS, "53"))
-		wantDNS := fault != "final-reality-key" && fault != "final-user" && fault != "final-route" && fault != "dns-route" && !strings.HasPrefix(fault, "final-layer-")
+		wantDNS := fault != "final-reality-key" && fault != "final-pq-key" && fault != "final-user" && fault != "final-route" && fault != "dns-route" && !strings.HasPrefix(fault, "final-layer-")
 		if dnsOK != wantDNS {
 			t.Fatal("imported proxy REALITY selected DNS did not follow its original authenticated chain", err)
 		}

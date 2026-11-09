@@ -5,13 +5,13 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/imported-socks-reality-native.yml'
+      - '.github/workflows/imported-pq-reality-native.yml'
       - 'internal/**'
       - 'mobile/**'
       - 'android/**'
       - 'ios/**'
       - 'deploy/**'
-      - 'cmd/client/desktop_tor_comparison_native.go'
-      - 'cmd/client/multihop_exact_json.go'
+      - 'cmd/client/**'
       - 'go.mod'
       - 'go.sum'
       - 'server/**'
@@ -83,3 +83,7 @@ jobs:
           set -euo pipefail
           python3 deploy/test_native_xray_udp443.py \
             "$RUNNER_TEMP/routervpn-imported-socks-core"
+
+  imported-pq-reality-reference:
+    needs: imported-socks-reality-reference
+    uses: ./.github/workflows/imported-pq-reality-native.yml

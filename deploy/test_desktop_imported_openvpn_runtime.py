@@ -192,6 +192,7 @@ class ImportedOpenVPNRuntimeGate(unittest.TestCase):
                     namespace = dict(target=target,host=target,stage=stage,destination=destination,binary=stage/N.binary_name(target),
                         policy='policy',marker=lambda _: 'original',source=Path('prepared-core'),env=env,run=run,os=N.os,
                         verify_imported_desktop_configs=original,verify_imported_desktop_packet_configs=prior_packet,verify_imported_desktop_openvpn_configs=packet,
+                        verify_imported_desktop_pq_configs=lambda *args: None,
                         verify_installed_linux_host=installed,verify_installed_darwin_host=installed)
                     if failure is None: exec(compile(tail,'actual completed native build tail','exec'),namespace)
                     else:
@@ -221,7 +222,8 @@ class ImportedOpenVPNRuntimeGate(unittest.TestCase):
                          patch.object(N.DNSSEC,'test_native_bundle'),patch.object(N,'run') as run, \
                          patch.object(N,'verify_imported_desktop_configs',side_effect=original), \
                          patch.object(N,'verify_imported_desktop_packet_configs',side_effect=prior_packet), \
-                         patch.object(N,'verify_imported_desktop_openvpn_configs',side_effect=packet),contextlib.redirect_stdout(stdout):
+                         patch.object(N,'verify_imported_desktop_openvpn_configs',side_effect=packet), \
+                         patch.object(N,'verify_imported_desktop_pq_configs'),contextlib.redirect_stdout(stdout):
                         if failure is None: self.assertEqual(N.build(target,bundle),bundle)
                         else:
                             with self.assertRaises(type(failure)) as caught: N.build(target,bundle)

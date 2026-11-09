@@ -181,6 +181,7 @@ public final class ImportedRouterTest {
   reject("CONNECT substituted final transport key on restore",()->{JSONObject input=object(compiled.input),files=object(input.getString("exit_files")),raw=object(new String(Base64.getDecoder().decode(files.getString("sing-box.json")),StandardCharsets.UTF_8));outbound(raw,"proxy").put("password",transport.getString("password"));files.put("sing-box.json",Base64.getEncoder().encodeToString(raw.toString().getBytes(StandardCharsets.UTF_8)));input.put("exit_files",files.toString());AndroidImportedRouterPath.prepareExecution(compiled.config,compiled.metadata,input.toString());});
  }
  static void connectReality(AndroidStandardExitStore.Entry entry,JSONObject bundle,AndroidImportedRouterPath.Compiled compiled)throws Exception{
+  String finalMode=object(compiled.input).getString("exit_mode");
   JSONObject graph=object(compiled.config),first=outbound(graph,"entry-wg"),captured=object(compiled.input);
   check(first.getString("type").equals("http")&&first.getString("username").equals(entry.username)&&first.getString("password").equals(entry.password)&&first.getInt("server_port")==entry.serverPort,"REALITY changed CONNECT authentication or port");
   if(entry.protocol.equals("https"))check(first.getJSONObject("tls").getBoolean("enabled")&&!first.getJSONObject("tls").optBoolean("insecure")&&first.getJSONObject("tls").getString("server_name").equals(entry.tlsServerName),"REALITY changed captured CONNECT TLS identity");
@@ -195,31 +196,31 @@ public final class ImportedRouterTest {
     else if(fault.equals("mismatch"))changed.startLayer.put("mode",entry.policy.optString("start_layer").equals("aes-256-gcm")?"aes-256-gcm+xor-whitening":"aes-256-gcm");
     else if(fault.equals("foreign"))changed.startLayer.getJSONObject("transport").put("server","203.0.113.99");
     else changed.policy.put("start_layer","off");
-    reject("CONNECT REALITY unowned entry layer "+fault,()->AndroidImportedRouterPath.compile(changed,bundle,"reality-vision","local"));
+    reject("CONNECT REALITY unowned entry layer "+fault,()->AndroidImportedRouterPath.compile(changed,bundle,finalMode,"local"));
    }
   }
-  for(String foreign:List.of("tcp-only","uot-v2"))try{RouterMultihop.capabilityOverride=foreign;reject("CONNECT REALITY foreign compiler capability",()->AndroidImportedRouterPath.compile(entry,bundle,"reality-vision","local"));}finally{RouterMultihop.capabilityOverride=null;}
-  try{Libbox.rejectSSService=true;AndroidImportedRouterPath.Compiled independent=AndroidImportedRouterPath.compile(entry,bundle,"reality-vision","local");check(independent.config.equals(compiled.config)&&independent.metadata.equals(compiled.metadata),"CONNECT REALITY borrowed the final layer's SS service capability");}finally{Libbox.rejectSSService=false;}
-  JSONObject foreign=object(bundle.toString());foreign.getJSONObject("profiles").getJSONObject("reality-vision").put("routervpn-ss-service.json",Base64.getEncoder().encodeToString("{}".getBytes(StandardCharsets.UTF_8)));
-  reject("CONNECT REALITY foreign service declaration",()->AndroidImportedRouterPath.compile(entry,foreign,"reality-vision","local"));
+  for(String foreign:List.of("tcp-only","uot-v2"))try{RouterMultihop.capabilityOverride=foreign;reject("CONNECT REALITY foreign compiler capability",()->AndroidImportedRouterPath.compile(entry,bundle,finalMode,"local"));}finally{RouterMultihop.capabilityOverride=null;}
+  try{Libbox.rejectSSService=true;AndroidImportedRouterPath.Compiled independent=AndroidImportedRouterPath.compile(entry,bundle,finalMode,"local");check(independent.config.equals(compiled.config)&&independent.metadata.equals(compiled.metadata),"CONNECT REALITY borrowed the final layer's SS service capability");}finally{Libbox.rejectSSService=false;}
+  JSONObject foreign=object(bundle.toString());foreign.getJSONObject("profiles").getJSONObject(finalMode).put("routervpn-ss-service.json",Base64.getEncoder().encodeToString("{}".getBytes(StandardCharsets.UTF_8)));
+  reject("CONNECT REALITY foreign service declaration",()->AndroidImportedRouterPath.compile(entry,foreign,finalMode,"local"));
   JSONArray outputs=graph.getJSONArray("outbounds");for(int i=0;i<outputs.length();i++)check(!outputs.getJSONObject(i).has("udp_over_tcp"),"CONNECT injected SS UoT into its actual VLESS carrier");
   JSONObject original=object(new String(Base64.getDecoder().decode(object(captured.getString("exit_files")).getString("xray.json")),StandardCharsets.UTF_8));
   String flow=original.getJSONArray("outbounds").getJSONObject(0).getJSONObject("settings").getJSONArray("vnext").getJSONObject(0).getJSONArray("users").getJSONObject(0).getString("flow");
   JSONObject running=object(outbound(graph,"routervpn-execution-local").getString("config_json"));
   check(running.getJSONArray("outbounds").getJSONObject(0).getJSONObject("settings").getJSONArray("vnext").getJSONObject(0).getJSONArray("users").getJSONObject(0).getString("flow").equals(flow),"CONNECT silently changed original REALITY UDP443 permission");
-  if(entry.startLayer==null&&profile(bundle).optString("start_layer","off").equals("off"))connectRealityDNS(entry,bundle);
+  if(entry.startLayer==null&&profile(bundle).optString("start_layer","off").equals("off"))connectRealityDNS(entry,bundle,finalMode);
  }
- static void connectRealityDNS(AndroidStandardExitStore.Entry entry,JSONObject original)throws Exception{
+ static void connectRealityDNS(AndroidStandardExitStore.Entry entry,JSONObject original,String finalMode)throws Exception{
   String before=original.toString();int cases=0;
   for(String flow:List.of("xtls-rprx-vision","xtls-rprx-vision-udp443"))for(String transport:List.of("udp","tcp","tls","https","h3"))for(boolean hostname:List.of(false,true)){
    if(transport.equals("h3")&&!flow.endsWith("-udp443"))continue;
-   JSONObject bundle=object(before),p=profile(bundle),files=bundle.getJSONObject("profiles").getJSONObject("reality-vision"),xray=object(new String(Base64.getDecoder().decode(files.getString("xray.json")),StandardCharsets.UTF_8));
+   JSONObject bundle=object(before),p=profile(bundle),files=bundle.getJSONObject("profiles").getJSONObject(finalMode),xray=object(new String(Base64.getDecoder().decode(files.getString("xray.json")),StandardCharsets.UTF_8));
    xray.getJSONArray("outbounds").getJSONObject(0).getJSONObject("settings").getJSONArray("vnext").getJSONObject(0).getJSONArray("users").getJSONObject(0).put("flow",flow);
    files.put("xray.json",Base64.getEncoder().encodeToString(xray.toString().getBytes(StandardCharsets.UTF_8)));
    int port=transport.equals("h3")?443:8853;
    p.put("dns_mode",Map.of("tls","dot","https","doh","h3","doh3").getOrDefault(transport,"custom")).put("dns_protocol",transport).put("dns_host",hostname?"resolver.example.net":"203.0.113.53").put("dns_port",port).put("dns_server_name","resolver.example.net").put("dns_path","/owned-dns-query");
    if(hostname)p.put("dns_bootstrap",new JSONObject().put("server",new JSONObject().put("type","udp").put("tag","external-dns-bootstrap").put("server","203.0.113.54").put("server_port",5354).put("detour","proxy")).put("query",new JSONObject().put("server","external-dns-bootstrap").put("timeout","3s").put("disable_optimistic_cache",true)));
-   String captured=bundle.toString();AndroidImportedRouterPath.Compiled c=AndroidImportedRouterPath.compile(entry,bundle,"reality-vision","local");JSONObject input=object(c.input),graph=object(c.config),dns=graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
+   String captured=bundle.toString();AndroidImportedRouterPath.Compiled c=AndroidImportedRouterPath.compile(entry,bundle,finalMode,"local");JSONObject input=object(c.input),graph=object(c.config),dns=graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
    check(bundle.toString().equals(captured)&&object(c.metadata).getString("transport_capability").equals("vless-stream")&&dns.getString("type").equals(transport)&&dns.getString("server").equals(p.getString("dns_host"))&&dns.getInt("server_port")==port&&dns.getString("detour").equals("proxy"),"CONNECT REALITY changed selected DNS or original sources");
    if(List.of("tls","https","h3").contains(transport))check(dns.getJSONObject("tls").getString("server_name").equals("resolver.example.net"),"CONNECT REALITY changed selected DNS TLS name");
    if(List.of("https","h3").contains(transport))check(dns.getString("path").equals("/owned-dns-query"),"CONNECT REALITY changed selected DNS request path");
@@ -235,13 +236,27 @@ public final class ImportedRouterTest {
   String before=AndroidStandardExitStore.snapshot(e),beforeFinal=b.toString();AndroidImportedRouterPath.Compiled c=AndroidImportedRouterPath.compile(e,b,finalMode,"local");
   check(before.equals(AndroidStandardExitStore.snapshot(e))&&beforeFinal.equals(b.toString()),"compiler mutated original source");
   JSONObject selected=object(c.metadata),raw=object(c.input),graph=object(c.config);
+  if(finalMode.equals("reality-pq-vision")){
+   JSONObject files=b.getJSONObject("profiles").getJSONObject(finalMode),xray=object(new String(Base64.getDecoder().decode(files.getString("xray.json")),StandardCharsets.UTF_8));
+   JSONObject user=xray.getJSONArray("outbounds").getJSONObject(0).getJSONObject("settings").getJSONArray("vnext").getJSONObject(0).getJSONArray("users").getJSONObject(0);
+   check(user.getString("encryption").startsWith("mlkem768x25519plus.native.0rtt."),"PQ host lost exact hybrid encryption");
+   for(String fault:List.of("ordinary","missing-encryption","missing-xray","missing-wrapper","ordinary-label")){
+    JSONObject changed=object(b.toString()),asset=changed.getJSONObject("profiles").getJSONObject(finalMode),changedXray=object(xray.toString());
+    if(fault.equals("missing-xray"))asset.remove("xray.json");
+    else if(fault.equals("missing-wrapper"))asset.remove("sing-box.json");
+    else if(fault.equals("ordinary-label"))changed.getJSONObject("profiles").put("reality-vision",asset);
+    else{JSONObject changedUser=changedXray.getJSONArray("outbounds").getJSONObject(0).getJSONObject("settings").getJSONArray("vnext").getJSONObject(0).getJSONArray("users").getJSONObject(0);if(fault.equals("ordinary"))changedUser.put("encryption","none");else changedUser.remove("encryption");asset.put("xray.json",Base64.getEncoder().encodeToString(changedXray.toString().getBytes(StandardCharsets.UTF_8)));}
+    reject("PQ rejects changed encryption source "+fault,()->AndroidImportedRouterPath.compile(e,changed,fault.equals("ordinary-label")?"reality-vision":finalMode,"local"));
+   }
+  }
+
   check(selected.getString("entry_kind").equals("external")&&selected.getString("entry_id").equals(e.id)&&selected.getString("exit_id").equals(profile(b).getString("id"))&&selected.getString("entry_mode").equals(AndroidMultihopRuntime.importedEntryMode(e))&&selected.getString("exit_mode").equals(finalMode),"host changed selected identities or transport");
   if(List.of("http","https").contains(e.protocol)){
-   if(finalMode.equals("reality-vision")){check(selected.getString("transport_capability").equals("vless-stream"),"CONNECT REALITY capability was lost");connectReality(e,b,c);}
+   if(AndroidImportedRouterPath.visionFinal(finalMode)){check(selected.getString("transport_capability").equals("vless-stream"),"CONNECT REALITY capability was lost");connectReality(e,b,c);}
    else{check(selected.getString("transport_capability").equals(b.getJSONObject("profiles").getJSONObject("shadowsocks").has("routervpn-ss-service.json")?"uot-v2":"tcp-only"),"CONNECT capability was lost");if(e.startLayer!=null)connectLayer(args,e,b,c);}
    if(fixture.getFileName().toString().contains("--2022-blake3-aes-256-gcm--home"))configuredCONNECT(e,b);
    JSONObject dns=graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0),saved=profile(b);
-   check(dns.getString("type").equals(finalMode.equals("reality-vision")?"udp":saved.getString("dns_protocol"))&&dns.getString("server").equals(finalMode.equals("reality-vision")?saved.getString("adguard_ipv4"):saved.getString("dns_host"))&&dns.getInt("server_port")== (finalMode.equals("reality-vision")?53:saved.getInt("dns_port"))&&dns.getString("detour").equals("proxy"),"CONNECT changed exact saved DNS");
+   check(dns.getString("type").equals(AndroidImportedRouterPath.visionFinal(finalMode)?"udp":saved.getString("dns_protocol"))&&dns.getString("server").equals(AndroidImportedRouterPath.visionFinal(finalMode)?saved.getString("adguard_ipv4"):saved.getString("dns_host"))&&dns.getInt("server_port")== (AndroidImportedRouterPath.visionFinal(finalMode)?53:saved.getInt("dns_port"))&&dns.getString("detour").equals("proxy"),"CONNECT changed exact saved DNS");
    for(String execution:List.of("server","auto"))reject("CONNECT unsupported execution",()->AndroidImportedRouterPath.compile(e,b,finalMode,execution));
    for(String field:List.of("username","password"))reject("CONNECT replaced source "+field,()->{JSONObject changed=object(c.input),capture=object(changed.getString("entry_capture"));capture.getJSONObject("profile").getJSONObject("external").getJSONObject(AndroidExternalPolicy.protocol(e.protocol).replace("-","_")).put(field,"foreign");changed.put("entry_capture",capture.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
   }
@@ -305,7 +320,7 @@ public final class ImportedRouterTest {
    for(String field:List.of("private_key","peer_public_key","preshared_key","endpoint","mtu","persistent_keepalive_interval"))reject("changed captured packet "+field,()->{JSONObject changed=object(c.input),capture=object(changed.getString("entry_capture"));JSONObject packet=capture.getJSONObject("profile").getJSONObject("external").getJSONObject(e.protocol);if(field.equals("mtu"))packet.put(field,e.wgMtu+1);else if(field.equals("persistent_keepalive_interval"))packet.put(field,e.wgKeepalive==null?21:e.wgKeepalive+1);else if(field.equals("endpoint"))packet.put(field,"203.0.113.99:40000");else packet.put(field,java.util.Base64.getEncoder().encodeToString("X".repeat(32).getBytes(StandardCharsets.UTF_8)));changed.put("entry_capture",capture.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
    if(e.protocol.equals("amneziawg"))reject("changed captured AWG parameter",()->{JSONObject changed=object(c.input),capture=object(changed.getString("entry_capture"));capture.getJSONObject("profile").getJSONObject("external").getJSONObject(e.protocol).getJSONObject("parameters").put("s1","37");changed.put("entry_capture",capture.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
   }
-  if(finalMode.equals("reality-vision")&&List.of("shadowsocks","hysteria2").contains(e.protocol)){
+  if(AndroidImportedRouterPath.visionFinal(finalMode)&&List.of("shadowsocks","hysteria2").contains(e.protocol)){
    JSONObject first=null;JSONArray rows=graph.getJSONArray("outbounds");for(int i=0;i<rows.length();i++)if(rows.getJSONObject(i).optString("tag").equals("entry-wg"))first=rows.getJSONObject(i);
    check(first!=null&&first.getString("type").equals(e.protocol)&&first.getString("password").equals(e.secret),"REALITY changed original encrypted entry authentication");
    if(e.protocol.equals("shadowsocks"))check(first.getString("method").equals(e.method),"REALITY changed selected SS2022 method");
@@ -323,15 +338,15 @@ public final class ImportedRouterTest {
    if(e.protocol.equals("shadowsocks"))for(String key:List.of("bad-key",java.util.Base64.getEncoder().encodeToString("x".repeat(31).getBytes(StandardCharsets.UTF_8)),java.util.Base64.getEncoder().encodeToString("x".repeat(33).getBytes(StandardCharsets.UTF_8)))){AndroidStandardExitStore.Entry malformed=AndroidStandardExitStore.copy(e);malformed.secret=key;reject("REALITY rejects malformed inner SS2022 key",()->AndroidImportedRouterPath.compile(malformed,b,finalMode,"local"));}
    for(String execution:List.of("server","auto"))reject("REALITY encrypted entry cannot acquire "+execution,()->AndroidImportedRouterPath.compile(e,b,finalMode,execution));
   }
-  if(finalMode.equals("reality-vision")){
+  if(AndroidImportedRouterPath.visionFinal(finalMode)){
    JSONObject assets=object(raw.getString("exit_files"));
    check(assets.toString().equals(object(args.getString(3)).toString())&&assets.has("xray.json")&&assets.has("sing-box.json"),"REALITY lost complete original Xray assets");
    check(List.of("socks5","shadowsocks","hysteria2","http","https","wireguard","amneziawg","openvpn").contains(e.protocol)&&selected.getString("exit_mode").equals(finalMode),"REALITY expanded exact captured entry");
    JSONObject finalNative=null,outer=null;JSONArray nativeOut=graph.getJSONArray("outbounds");for(int i=0;i<nativeOut.length();i++){JSONObject n=nativeOut.getJSONObject(i);if(n.optString("tag").equals("routervpn-execution-local"))finalNative=n;if(n.optString("tag").equals("start-layer-aes"))outer=n;}
    String finalLayer=profile(b).optString("start_layer","off");boolean layered=!List.of("","off").contains(finalLayer);
-   check(finalNative!=null&&finalNative.getString("type").equals("routervpn-xray")&&finalNative.getString("mode").equals("reality-vision")&&finalNative.getString("detour").equals(layered?"start-layer-aes":"entry-wg"),"REALITY lost selected inner layer edge");
+   check(finalNative!=null&&finalNative.getString("type").equals("routervpn-xray")&&finalNative.getString("mode").equals(finalMode)&&finalNative.getString("detour").equals(layered?"start-layer-aes":"entry-wg"),"REALITY lost selected inner layer edge");
    check(layered?outer!=null&&outer.getString("detour").equals("entry-wg")&&!raw.getString("exit_start").isEmpty():outer==null&&raw.getString("exit_start").isEmpty(),"REALITY lost independent final layer provision");
-   for(String mode:List.of("reality-pq-vision","reality-xhttp","split","max","max-tls-wg"))check(!AndroidImportedRouterPath.supports("socks5",mode),"REALITY admitted unsupported final "+mode);
+   for(String mode:List.of("reality-pq-vision","reality-xhttp","split","max","max-tls-wg"))check(AndroidImportedRouterPath.supports("socks5",mode)==mode.equals("reality-pq-vision"),"REALITY changed exact admitted final "+mode);
    for(String kind:List.of("openvpn","wireguard","amneziawg","shadowsocks","hysteria2","http-connect","https-connect"))check(AndroidImportedRouterPath.supports(kind,finalMode),"REALITY refused captured entry "+kind);
    for(String kind:List.of("tor","reality-pq-vision","reality-xhttp","unknown"))check(!AndroidImportedRouterPath.supports(kind,finalMode),"REALITY admitted unsupported entry "+kind);
    JSONObject unprovisioned=object(b.toString());profile(unprovisioned).put("start_layer","aes-256-gcm");unprovisioned.getJSONObject("profiles").remove("shadowsocks");reject("REALITY final layer requires own provision",()->AndroidImportedRouterPath.compile(e,unprovisioned,finalMode,"local"));
@@ -354,7 +369,7 @@ public final class ImportedRouterTest {
   check(selected.optString("entry_api").isEmpty()&&selected.optString("entry_token").isEmpty()&&selected.optString("entry_node_id").isEmpty(),"import acquired private pairing");
   check(raw.getString("exit_start").equals(args.getString(5).isEmpty()?"":object(args.getString(5)).toString())&&object(raw.getString("entry_capture")).getJSONObject("profile").getString("dns_mode").equals(object(args.getString(1)).getJSONObject("profile").getString("dns_mode")),"raw entry policy or inherent final layer changed");
   JSONObject dns=graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
-  check(dns.getString("server").equals(List.of("http","https").contains(e.protocol)&&!finalMode.equals("reality-vision")?profile(b).getString("dns_host"):"192.168.50.133")&&dns.getString("detour").equals("proxy"),"exact selected final DNS policy lost");
+  check(dns.getString("server").equals(List.of("http","https").contains(e.protocol)&&!AndroidImportedRouterPath.visionFinal(finalMode)?profile(b).getString("dns_host"):"192.168.50.133")&&dns.getString("detour").equals("proxy"),"exact selected final DNS policy lost");
   try{RouterMultihop exact=AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,c.input);check(exact.sourceSHA256().equals(c.source),"reconstruction source changed");exact.close();}finally{check(RouterMultihop.open==0,"pure compilation leaked");}
   AndroidImportedRouterPath.requireSessionMode("multihop-imported-"+finalMode,c.metadata);
   reject("changed final session label",()->AndroidImportedRouterPath.requireSessionMode("multihop-imported-"+(finalMode.equals("shadowsocks")?"hysteria2":"shadowsocks"),c.metadata));
@@ -394,6 +409,13 @@ public final class ImportedRouterTest {
   Path staged=privateRoot.resolve("layered-sessions").resolve(prepared.session.sessionId);
   check(prepared.session.mode.equals("multihop-imported-"+finalMode)&&Files.readString(staged.resolve(AndroidImportedRouterPath.SESSION_FILE)).equals(c.input),"staged owner differs from original source");
   check(Files.exists(staged.resolve(AndroidKillSwitchPolicy.SESSION_MARKER))==AndroidImportedRouterPath.requiresProtection(c.input),"strict protection marker mismatch");
+  java.io.File owned=staged.toFile().getCanonicalFile(),executionFile=staged.resolve("routervpn-multihop.json").toFile().getCanonicalFile(),entryLayerFile=staged.resolve("entry-layer.json").toFile().getCanonicalFile(),exitLayerFile=staged.resolve("exit-layer.json").toFile().getCanonicalFile(),importedEntryFile=staged.resolve(AndroidImportedRouterPath.SESSION_FILE).toFile().getCanonicalFile();
+  LayeredVpnService.requireOwnedImportedFiles(owned,prepared.session.mode,executionFile,entryLayerFile,exitLayerFile,importedEntryFile);check(true,"actual service accepted captured imported mode");
+  reject("service unknown imported mode",()->LayeredVpnService.requireOwnedImportedFiles(owned,"multihop-imported-reality-xhttp",executionFile,entryLayerFile,exitLayerFile,importedEntryFile));
+  reject("service missing final metadata",()->LayeredVpnService.requireOwnedImportedFiles(owned,prepared.session.mode,staged.resolve("absent.json").toFile(),entryLayerFile,exitLayerFile,importedEntryFile));
+  Files.writeString(entryLayerFile.toPath(),"foreign layer");try{reject("service extra layer owner",()->LayeredVpnService.requireOwnedImportedFiles(owned,prepared.session.mode,executionFile,entryLayerFile,exitLayerFile,importedEntryFile));}finally{Files.delete(entryLayerFile.toPath());}
+  reject("service missing original capture",()->LayeredVpnService.requireOwnedImportedFiles(owned,prepared.session.mode,executionFile,entryLayerFile,exitLayerFile,staged.resolve("absent.json").toFile()));
+
   long count;try(var dirs=Files.list(staged.getParent())){count=dirs.count();}
   AndroidPrivateFileStore.failName=AndroidImportedRouterPath.SESSION_FILE;
   try{reject("private staging failure",()->AndroidImportedRouterPath.prepare(context,original,file.toFile(),finalMode,"local",last));}finally{AndroidPrivateFileStore.failName="";}
@@ -408,6 +430,14 @@ public final class ImportedRouterTest {
  }
  public static void main(String[] args)throws Exception{
   Libbox.compiler=args[0];Path root=Path.of(args[1]),fixtures=Path.of(args[2]);retainedStaging(Files.createTempDirectory(root,"retained-staging-"));List<Path> all;
+  if(args[3].startsWith("pq-reality--")){
+   String kind=args[3].substring("pq-reality--".length());List<String> kinds=List.of("socks5","shadowsocks","hysteria2","http-connect","https-connect","wireguard","amneziawg","openvpn-tcp","openvpn-udp");check(kinds.contains(kind),"unknown PQ REALITY entry phase");
+   Path sources=Path.of(System.getenv("ROUTERVPN_IMPORTED_PQ_XRAY_SOURCES"));List<Path> paths;try(var entries=Files.list(sources)){paths=entries.sorted().toList();}
+   Set<String> expected=new HashSet<>();for(String protocol:kinds)for(String first:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening"))for(String last:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening"))expected.add(protocol+"--reality-pq-vision--"+first+"--"+last+".json");
+   check(paths.size()==81&&new HashSet<>(paths.stream().map(p->p.getFileName().toString()).toList()).equals(expected),"incomplete independent PQ REALITY sources");for(Path p:paths)check(!Files.isSymbolicLink(p)&&Files.isRegularFile(p)&&Files.size(p)>0&&Files.size(p)<=32*1024*1024,"unowned PQ REALITY source");
+   List<Path> selected=paths.stream().filter(p->p.getFileName().toString().startsWith(kind+"--")).toList();check(selected.size()==9,"incomplete independent PQ REALITY phase");exportEnvironment="ROUTERVPN_ANDROID_IMPORTED_PQ_XRAY_FIXTURES";for(Path p:selected)one(root,p);
+   System.out.println("Android PQ REALITY entries: "+checks+" checks; "+kind+", "+selected.size()+" original independent layer graphs");return;
+  }
   if(args[3].startsWith("packet-reality--")){
    String kind=args[3].substring("packet-reality--".length());check(List.of("wireguard","amneziawg","openvpn-tcp","openvpn-udp").contains(kind),"unknown packet REALITY entry phase");
    Path sources=Path.of(System.getenv("ROUTERVPN_IMPORTED_PACKET_XRAY_SOURCES"));List<Path> paths;try(var entries=Files.list(sources)){paths=entries.sorted().toList();}
@@ -461,9 +491,12 @@ CONNECT_XRAY_PHASES = ('connect-reality--http-connect', 'connect-reality--https-
 PACKET_XRAY_PHASES = tuple('packet-reality--'+kind for kind in ('wireguard','amneziawg','openvpn-tcp','openvpn-udp'))
 
 
+PQ_XRAY_PHASES = tuple("pq-reality--"+kind for kind in ("socks5","shadowsocks","hysteria2","http-connect","https-connect","wireguard","amneziawg","openvpn-tcp","openvpn-udp"))
+
 def selected_phases(phases=None):
     allowed = PRIMARY_PHASES + CONNECT_LAYER_PHASES + PROXY_XRAY_PHASES + CONNECT_XRAY_PHASES + PACKET_XRAY_PHASES
     selected = allowed if phases is None else tuple(phases)
+    allowed += PQ_XRAY_PHASES
     if not selected or any(phase not in allowed for phase in selected) or len(set(selected)) != len(selected):
         raise ValueError('Choose a nonempty, exact, duplicate-free imported-entry phase selection')
     return selected
@@ -471,6 +504,13 @@ def selected_phases(phases=None):
 
 def main(phases=None):
     phases = selected_phases(phases)
+    pq_output = os.environ.get('ROUTERVPN_ANDROID_IMPORTED_PQ_XRAY_FIXTURES')
+    if pq_output is not None:
+        destination = Path(pq_output)
+        if not pq_output or not destination.is_dir() or destination.is_symlink() or any(destination.iterdir()) or tuple(phases) != PQ_XRAY_PHASES:
+            raise ValueError('PQ export requires its own empty directory and all nine exact PQ phases')
+        if any(os.environ.get(key) is not None for key in ('ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES','ROUTERVPN_ANDROID_CONNECT_LAYER_FIXTURES','ROUTERVPN_ANDROID_IMPORTED_PROXY_XRAY_FIXTURES','ROUTERVPN_ANDROID_IMPORTED_CONNECT_XRAY_FIXTURES','ROUTERVPN_ANDROID_IMPORTED_PACKET_XRAY_FIXTURES')):
+            raise ValueError('PQ exports cannot replace or share an ordinary graph inventory')
     connect_output = os.environ.get('ROUTERVPN_ANDROID_CONNECT_LAYER_FIXTURES')
     if connect_output is not None:
         destination = Path(connect_output)
@@ -544,6 +584,11 @@ def main(phases=None):
         if any(phase in PACKET_XRAY_PHASES for phase in phases):
             subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedPacketRealityVisionIndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ,ROUTERVPN_IMPORTED_PACKET_XRAY_FIXTURES=str(packet_xray_sources)), check=True, timeout=45)
         child_env = dict(os.environ, ROUTERVPN_CONNECT_LAYER_SOURCES=str(connect_sources), ROUTERVPN_IMPORTED_PROXY_XRAY_SOURCES=str(proxy_sources), ROUTERVPN_IMPORTED_CONNECT_XRAY_SOURCES=str(connect_xray_sources), ROUTERVPN_IMPORTED_PACKET_XRAY_SOURCES=str(packet_xray_sources))
+        pq_sources = temp / 'pq-reality'
+        pq_sources.mkdir()
+        if any(phase in PQ_XRAY_PHASES for phase in phases):
+            subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedPQRealityIndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ,ROUTERVPN_IMPORTED_PQ_XRAY_FIXTURES=str(pq_sources)), check=True, timeout=45)
+        child_env['ROUTERVPN_IMPORTED_PQ_XRAY_SOURCES'] = str(pq_sources)
         module = next(line.split()[1] for line in (ROOT / "go.mod").read_text().splitlines() if line.startswith("module "))
         helper = E.GO.replace('switch args[0]{', 'switch args[0]{'+GO_CASE).replace("github.com/Eabusham2/router-vpn", module)
         (temp / "main.go").write_text(helper)
@@ -575,6 +620,11 @@ def main(phases=None):
         controller = (JAVA / "AndroidMultihopController.java").read_text()
         capture = "\n".join(block(controller, signature) for signature in ("    static final class Prepared {", "    static final class Source {", "    private static final class LoadedBundle {", "    static Source captureSource(", "    private static String sourceDigest(", "    private static byte[] readBundleBytes("))
         (app / "AndroidMultihopController.java").write_text("package com.eabusham.routervpn;import java.io.*;import java.nio.charset.StandardCharsets;import org.json.*;final class AndroidMultihopController{private static final int MAX_BUNDLE=32*1024*1024;"+capture+"}")
+        service=(JAVA/'LayeredVpnService.java').read_text()
+        if service.count('requireOwnedImportedFiles(session,modeId,executionFile,entryLayerFile,exitLayerFile,importedEntryFile);') != 1:
+            raise AssertionError('Native service dropped its exact imported source admission')
+        admission=block(service,'    static void requireOwnedImportedFiles(')
+        (app/'LayeredVpnService.java').write_text('package com.eabusham.routervpn;import java.io.File;final class LayeredVpnService{'+admission+'}')
         (app / "ImportedRouterTest.java").write_text(HARNESS)
         classes = temp / "classes"
         compile_command=["javac", "--release", "17", "-encoding", "UTF-8", "-cp", str(jar), "-d", str(classes), *map(str, temp.rglob("*.java"))]
@@ -600,6 +650,7 @@ def main(phases=None):
         causal_env.pop("ROUTERVPN_ANDROID_IMPORTED_PROXY_XRAY_FIXTURES",None)
         causal_env.pop("ROUTERVPN_ANDROID_IMPORTED_CONNECT_XRAY_FIXTURES",None)
         causal_env.pop("ROUTERVPN_ANDROID_IMPORTED_PACKET_XRAY_FIXTURES",None)
+        causal_env.pop("ROUTERVPN_ANDROID_IMPORTED_PQ_XRAY_FIXTURES",None)
         for old,new,assertion in controls:
             if original.count(old)!=1:raise AssertionError("Imported source ownership control changed")
             source.write_text(original.replace(old,new))
@@ -608,11 +659,22 @@ def main(phases=None):
             if result.returncode==0 or assertion not in result.stderr:raise AssertionError("Imported ownership causal was not rejected at its intended assertion: "+result.stderr)
             print("Android imported source causal rejected:",assertion)
         source.write_text(original)
+        if any(phase in PQ_XRAY_PHASES for phase in phases):
+            admission_source=app/'LayeredVpnService.java';actual=admission_source.read_text()
+            absent=',"multihop-imported-reality-pq-vision"'
+            if actual.count(absent)!=1:raise AssertionError('Exact native PQ admission changed')
+            admission_source.write_text(actual.replace(absent,''))
+            subprocess.run(compile_command,check=True,timeout=60,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            service_causal_env=dict(causal_env,ROUTERVPN_IMPORTED_PQ_XRAY_SOURCES=str(pq_sources))
+            result=subprocess.run(command+[PQ_XRAY_PHASES[0]],env=service_causal_env,capture_output=True,text=True,timeout=180)
+            if result.returncode==0 or 'Imported entry sources have no exclusive original multihop owner.' not in result.stderr:raise AssertionError('Old service PQ refusal was not reproduced: '+result.stderr)
+            admission_source.write_text(actual)
+            print('Android imported PQ service causal rejected: old native session allowlist')
 
 
 def cli(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--phase', action='append', choices=PRIMARY_PHASES + CONNECT_LAYER_PHASES + PROXY_XRAY_PHASES + CONNECT_XRAY_PHASES + PACKET_XRAY_PHASES,
+    parser.add_argument('--phase', action='append', choices=PRIMARY_PHASES + CONNECT_LAYER_PHASES + PROXY_XRAY_PHASES + CONNECT_XRAY_PHASES + PACKET_XRAY_PHASES + PQ_XRAY_PHASES,
                         help='Run this exact bounded phase; repeat for several phases. The default runs every phase.')
     args = parser.parse_args(argv)
     try:

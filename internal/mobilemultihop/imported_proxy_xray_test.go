@@ -395,6 +395,11 @@ func TestImportedProxyRealityVisionKeepsScope(t *testing.T) {
 					if _, err := NewNodeProfile(mode, files, externalTestJSON(t, profile), start, ""); err != nil {
 						t.Fatal("scope control did not begin with valid original paired node", err)
 					}
+					// PQ is admitted only with its exact encryption assets; retain this
+					// required scope verdict as an ordinary-under-PQ downgrade rejection.
+					if mode == "reality-pq-vision" {
+						files, _, _ = nodeProfileFixture(t, "reality-vision", "")
+					}
 					if _, err := NewImportedEntry(source[0], source[1], mode, files, externalTestJSON(t, profile), start, ""); err == nil {
 						t.Fatal("imported REALITY admitted another final graph family")
 					}

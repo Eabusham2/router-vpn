@@ -39,11 +39,14 @@ def file(path, data=b'tool', executable=False):
 
 
 def imported_native_dns_output():
+    return imported_native_output(N.IMPORTED_NATIVE_DNS_ROOTS, N.imported_native_dns_verdicts())
+
+
+def imported_native_output(roots, names):
     """Model only the already separately tested native runner boundary."""
     package = N.IMPORTED_NATIVE_DNS_PACKAGE
     rows = [{'Package': package, 'Action': 'start'}]
-    names = N.imported_native_dns_verdicts()
-    for root in N.IMPORTED_NATIVE_DNS_ROOTS:
+    for root in roots:
         rows.append({'Package': package, 'Test': root, 'Action': 'run'})
         rows.extend({'Package': package, 'Test': name, 'Action': action}
                     for name in sorted(names) if name.startswith(root+'/') for action in ('run', 'pass'))
@@ -358,6 +361,17 @@ class NativeSocketUIDGate(unittest.TestCase):
                             failures.append(error)
                             raise error
                         return ''
+                    if len(args) > 1 and args[1] in (str(ROOT/'deploy/test_imported_pq_workflow.py'), str(ROOT/'deploy/test_mobile_imported_pq_xray_runner.py')):
+                        self.assertEqual(system, 'linux')
+                        self.assertEqual(args[2:], [])
+                        self.assertEqual(kwargs, {'cwd': ROOT, 'env': env, 'timeout': 60})
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_mobile_imported_pq_xray.py'):
+                        self.assertEqual(system, 'linux')
+                        self.assertEqual(args[2], str(source.resolve()))
+                        self.assertIn(args[3:], ([], ['--loopback-only'], ['--reference-only']))
+                        self.assertEqual(kwargs, {'env': env, 'timeout': 3000 if args[3:] == ['--reference-only'] else 1200})
+                        return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_max_runner.py'):
                         self.assertIn(system, ('linux', 'windows'))
                         self.assertEqual(args[2:], [])
@@ -476,6 +490,15 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['timeout'], 300)
                         self.assertIn('-tags='+','.join(N.tags(target)), args)
                         return imported_native_dns_output()
+                    openvpn_roots, openvpn_names = N.imported_native_openvpn_verdicts()
+                    if args[:3] == ['go', 'test', '-json'] and '^('+'|'.join(openvpn_roots)+')$' in args:
+                        self.assertEqual(args, ['go', 'test', '-json', *([] if target == 'windows/arm64' else ['-race']),
+                            '-mod=readonly', '-tags='+','.join([*N.tags(target), 'routervpn_openvpn_remote_test']),
+                            '-ldflags=-checklinkname=0', './cmd/sing-box', '-run', '^('+'|'.join(openvpn_roots)+')$',
+                            '-count=1', '-timeout=120s'])
+                        self.assertEqual(kwargs, {'cwd': source.resolve(),
+                            'env': {**env, 'ROUTERVPN_REQUIRE_IMPORTED_OPENVPN_OBSERVATION': '1'}, 'timeout': 300})
+                        return imported_native_output(openvpn_roots, openvpn_names)
                     if args[:2] in (['go', 'test'], ['go', 'mod']):
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_hysteria2_deadlines_pinned.py'):
@@ -708,8 +731,16 @@ class NativeSocketUIDGate(unittest.TestCase):
                 self.assertIn(ROOT/'deploy/test_desktop_node_physical.py', N.inputs())
                 node_pq = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_pq.py')]
                 self.assertEqual(len(node_pq), len(node))
+                imported_pq = [args for args in calls if len(args) > 1 and args[1] in (
+                    str(ROOT/'deploy/test_imported_pq_workflow.py'),
+                    str(ROOT/'deploy/test_mobile_imported_pq_xray_runner.py'),
+                    str(ROOT/'deploy/test_mobile_imported_pq_xray.py'))]
+                self.assertEqual(len(imported_pq), 5 if system == 'linux' else 0)
+                if imported_pq:
+                    for previous, current in zip([dns_reference[0], *imported_pq[:-1]], imported_pq):
+                        self.assertEqual(calls.index(current), calls.index(previous)+1)
                 if node_pq:
-                    predecessor = dns_reference[0] if dns_reference else node[0]
+                    predecessor = imported_pq[-1] if imported_pq else dns_reference[0] if dns_reference else node[0]
                     self.assertEqual(calls.index(node_pq[0]), calls.index(predecessor)+1)
                 max_runner = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_max_runner.py')]
                 max_graph = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_max.py')]
@@ -1902,6 +1933,7 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
                  patch.object(N, 'verify_imported_desktop_configs') as imported, \
                  patch.object(N, 'verify_imported_desktop_packet_configs') as packet, \
                  patch.object(N, 'verify_imported_desktop_openvpn_configs'), \
+                 patch.object(N, 'verify_imported_desktop_pq_configs'), \
                  patch.object(N, 'verify_imported_desktop_native_openvpn'), \
                  patch.object(N.DNSSEC, 'test_native_bundle', side_effect=dnssec_failure) as dnssec:
                 invoke = (lambda: N.build('linux/'+arch, bundle)) if reused else (lambda: N.verify_installed_linux_host(Path(temporary)/'core', bundle, 'linux/'+arch, env))

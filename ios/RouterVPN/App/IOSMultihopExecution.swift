@@ -390,10 +390,13 @@ enum IOSMultihopExecution {
 /// Validation of the two original saved roles. Native compilation and runtime
 /// proof remain separate; this never grants a pairing identity to an import.
 enum IOSImportedEntryMultihop {
+    static func visionFinal(_ mode: String) -> Bool {
+        ["reality-vision", "reality-pq-vision"].contains(mode)
+    }
     static let methods: Set<String> = ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"]
     static func supports(entry: String, final: String) -> Bool {
-        if ["http-connect", "https-connect"].contains(entry) { return ["shadowsocks", "reality-vision"].contains(final) }
-        if ["socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn"].contains(entry) && final == "reality-vision" { return true }
+        if ["http-connect", "https-connect"].contains(entry) { return final == "shadowsocks" || visionFinal(final) }
+        if ["socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn"].contains(entry) && visionFinal(final) { return true }
         if ["socks5", "openvpn"].contains(entry) { return ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(final) }
         if ["shadowsocks", "hysteria2"].contains(final) {
             return ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(entry)
@@ -411,7 +414,7 @@ enum IOSImportedEntryMultihop {
     static func validate(entry: [String: Any], final: [String: Any], profiles: [String: [String: String]] = [:]) throws {
         guard let imported = entry["external"] as? [String: Any],
               let kind = imported["protocol"] as? String, ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains(kind) else { throw issue() }
-        if final["multihop_exit_mode"] as? String == "reality-vision" {
+        if visionFinal(final["multihop_exit_mode"] as? String ?? "") {
             guard ["socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn"].contains(kind),
                   [entry, final].allSatisfy({ profile in
                       (profile["start_layer"] == nil || profile["start_layer"] is String) &&
@@ -419,9 +422,10 @@ enum IOSImportedEntryMultihop {
                   }) else { throw issue() }
         }
         if ["http-connect", "https-connect"].contains(kind) {
-            let reality = final["multihop_exit_mode"] as? String == "reality-vision"
+            let mode = final["multihop_exit_mode"] as? String ?? ""
+            let reality = visionFinal(mode)
             if reality {
-                guard let original = profiles["reality-vision"], original["xray.json"] != nil,
+                guard let original = profiles[mode], original["xray.json"] != nil,
                       original["routervpn-ss-service.json"] == nil else { throw issue() }
             }
             let uot = try configuredCONNECTUoT(final: final, profiles: profiles)

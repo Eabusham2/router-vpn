@@ -1,0 +1,108 @@
+name: Imported PQ REALITY source and native reference
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pq-apple-graphs:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+      - name: Export all 81 actual Swift PQ source graphs
+        shell: bash
+        env:
+          ROUTERVPN_APPLE_IMPORTED_PQ_XRAY_FIXTURES: ${{ runner.temp }}/pq-apple
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/pq-apple"
+          python3 deploy/test_ios_tor_profile.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: imported-pq-apple-graphs
+          path: ${{ runner.temp }}/pq-apple
+          if-no-files-found: error
+          retention-days: 7
+
+  imported-pq-reality-reference:
+    needs: pq-apple-graphs
+    runs-on: ubuntu-24.04
+    # Keep the original reference job's budget intact. These new, separate
+    # parser/protocol/peer stages have their own finite aggregate allowance.
+    timeout-minutes: 120
+    env:
+      GOTOOLCHAIN: go1.26.3
+      GOMAXPROCS: '2'
+      GOGC: '60'
+      GOMEMLIMIT: 2048MiB
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install the actual Android JSON dependency
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libandroid-json-java
+      - name: Prepare the exact captured PQ desktop reference sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          native_core="$RUNNER_TEMP/routervpn-imported-pq-core"
+          native_xray="$RUNNER_TEMP/routervpn-imported-pq-xray"
+          git init "$native_core"
+          git -C "$native_core" remote add origin https://github.com/SagerNet/sing-box.git
+          git -C "$native_core" fetch --depth=1 origin 1ac1a339cb1223e9c70eae14c44411c75033c02d
+          git -C "$native_core" checkout --detach FETCH_HEAD
+          git init "$native_xray"
+          git -C "$native_xray" remote add origin https://github.com/XTLS/Xray-core.git
+          git -C "$native_xray" fetch --depth=1 origin 50231eaff98ccc31b5cbd247a721c16e97fe5ec1
+          git -C "$native_xray" checkout --detach FETCH_HEAD
+          python3 deploy/prepare-relay-core.py "$native_core" "$native_xray"
+          python3 deploy/prepare-mobile-performance.py "$native_core"
+          python3 deploy/mobile_openvpn_close_policy.py "$native_core"
+          python3 deploy/prepare-desktop-external.py "$native_core"
+          python3 deploy/prepare-mobile-buffers.py "$native_core"
+          (cd "$native_core" && go mod tidy)
+      - uses: actions/download-artifact@v4
+        with:
+          name: imported-pq-apple-graphs
+          path: ${{ runner.temp }}/pq-apple
+      - name: Export all 81 actual Android and desktop PQ source graphs
+        timeout-minutes: 20
+        env:
+          ROUTERVPN_ANDROID_IMPORTED_PQ_XRAY_FIXTURES: ${{ runner.temp }}/pq-android
+          ROUTERVPN_DESKTOP_IMPORTED_PQ_XRAY_FIXTURES: ${{ runner.temp }}/pq-desktop
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/pq-android" "$RUNNER_TEMP/pq-desktop"
+          python3 android/test_android_imported_router.py \
+            --phase pq-reality--socks5 --phase pq-reality--shadowsocks \
+            --phase pq-reality--hysteria2 --phase pq-reality--http-connect \
+            --phase pq-reality--https-connect --phase pq-reality--wireguard \
+            --phase pq-reality--amneziawg --phase pq-reality--openvpn-tcp \
+            --phase pq-reality--openvpn-udp
+          go test -race ./cmd/client -run '^TestDesktopImportedPQReality' -count=1 -timeout=180s
+      - name: Execute separate PQ parser protocol and imported peer inventories
+        shell: bash
+        timeout-minutes: 90
+        run: |
+          set -euo pipefail
+          python3 deploy/test_imported_pq_workflow.py
+          python3 deploy/test_mobile_imported_pq_xray_runner.py
+          python3 deploy/test_mobile_imported_pq_xray.py \
+            "$RUNNER_TEMP/routervpn-imported-pq-core" \
+            --android "$RUNNER_TEMP/pq-android" --apple "$RUNNER_TEMP/pq-apple" \
+            --desktop "$RUNNER_TEMP/pq-desktop"
+          python3 deploy/test_mobile_imported_pq_xray.py \
+            "$RUNNER_TEMP/routervpn-imported-pq-core" --loopback-only
+          python3 deploy/test_mobile_imported_pq_xray.py \
+            "$RUNNER_TEMP/routervpn-imported-pq-core" --reference-only

@@ -832,10 +832,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             File entryLayerFile=new File(session,AndroidMultihopStartLayer.SESSION_FILE).getCanonicalFile();
             File exitLayerFile=new File(session,AndroidMultihopStartLayer.EXIT_SESSION_FILE).getCanonicalFile();
             File importedEntryFile=new File(session,AndroidImportedRouterPath.SESSION_FILE).getCanonicalFile();
-            if(importedEntryFile.exists()&&(!importedEntryFile.isFile()||!importedEntryFile.getParentFile().equals(session)
-                    ||!executionFile.isFile()||!java.util.Arrays.asList("multihop-imported-shadowsocks","multihop-imported-hysteria2","multihop-imported-wg","multihop-imported-awg2-fast","multihop-imported-awg2-strong","multihop-imported-reality-vision").contains(modeId)
-                    ||entryLayerFile.exists()||exitLayerFile.exists()))throw new IllegalStateException("Imported entry sources have no exclusive original multihop owner.");
-            if(modeId.startsWith("multihop-imported-")&&!importedEntryFile.isFile())throw new IllegalStateException("The imported entry lost its original private sources.");
+            requireOwnedImportedFiles(session,modeId,executionFile,entryLayerFile,exitLayerFile,importedEntryFile);
             if(exitLayerFile.exists()&&(!executionFile.isFile()||!exitLayerFile.getParentFile().equals(session)))throw new IllegalStateException("Exit Start Layer has no owned multihop session.");
             if (entryLayerFile.exists() && (!executionFile.isFile() || !entryLayerFile.getParentFile().equals(session))) {
                 throw new IllegalStateException("Entry Start Layer has no owned multihop session.");
@@ -1657,6 +1654,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }
 
     private static boolean safeToken(String value) { return value != null && value.matches("[A-Za-z0-9._-]{1,96}") && !value.equals(".") && !value.equals("..") && !value.contains(".."); }
+
+    static void requireOwnedImportedFiles(File session,String modeId,File executionFile,File entryLayerFile,File exitLayerFile,File importedEntryFile) {
+            if(importedEntryFile.exists()&&(!importedEntryFile.isFile()||!importedEntryFile.getParentFile().equals(session)
+                    ||!executionFile.isFile()||!java.util.Arrays.asList("multihop-imported-shadowsocks","multihop-imported-hysteria2","multihop-imported-wg","multihop-imported-awg2-fast","multihop-imported-awg2-strong","multihop-imported-reality-vision","multihop-imported-reality-pq-vision").contains(modeId)
+                    ||entryLayerFile.exists()||exitLayerFile.exists()))throw new IllegalStateException("Imported entry sources have no exclusive original multihop owner.");
+            if(modeId.startsWith("multihop-imported-")&&!importedEntryFile.isFile())throw new IllegalStateException("The imported entry lost its original private sources.");
+    }
 
     private static byte[] readLimited(File file, int max) throws Exception {
         try (FileInputStream input = new FileInputStream(file); ByteArrayOutputStream output = new ByteArrayOutputStream()) {

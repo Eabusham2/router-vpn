@@ -15,9 +15,9 @@ extension RouterVPNModel {
               let encoded = try? JSONEncoder().encode(profile),
               let original = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any] else { return [] }
         selected.selectedRouterID = exitID
-        return ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong", "reality-vision"].filter { mode in
+        return ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong", "reality-vision", "reality-pq-vision"].filter { mode in
             guard IOSImportedEntryMultihop.supports(entry: entryMode, final: mode) else { return false }
-            if mode == "reality-vision" {
+            if IOSImportedEntryMultihop.visionFinal(mode) {
                 guard let first = entryProfile, first.normalizedNodeKind == "external",
                       ["socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn"].contains(first.external?.protocolName ?? ""), first.id != exitID,
                       first.external?.matchesStartLayer(first.startLayer) == true else { return false }
@@ -359,6 +359,7 @@ struct IOSMultihopView: View {
                             if importedFinalModes.contains("shadowsocks") { Text("Shadowsocks 2022").tag("shadowsocks") }
                             if importedFinalModes.contains("hysteria2") { Text("Hysteria2").tag("hysteria2") }
                             if importedFinalModes.contains("reality-vision") { Text("REALITY Vision").tag("reality-vision") }
+                            if importedFinalModes.contains("reality-pq-vision") { Text("PQ REALITY Vision").tag("reality-pq-vision") }
                             if importedFinalModes.contains("wg") { Text("WireGuard").tag("wg") }
                             if importedFinalModes.contains("awg2-fast") { Text("AmneziaWG Fast").tag("awg2-fast") }
                             if importedFinalModes.contains("awg2-strong") { Text("AmneziaWG Strong").tag("awg2-strong") }

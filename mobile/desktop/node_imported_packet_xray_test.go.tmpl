@@ -323,9 +323,21 @@ func desktopPacketRealityCompile(t *testing.T, args []string) *mobilemultihop.Co
 	return plan
 }
 
-func desktopPacketRealityNew(t *testing.T, kind, firstLayer, lastLayer, fault string, selectedPeer *desktopCONNECTXrayDNSResolver) *desktopPacketRealityFixture {
+func desktopPacketRealityNew(t *testing.T, kind, firstLayer, lastLayer, fault string, selectedPeer *desktopCONNECTXrayDNSResolver, selectedMode ...string) *desktopPacketRealityFixture {
 	t.Helper()
-	original := desktopPacketRealitySource(t, kind+"--reality-vision--"+firstLayer+"--"+lastLayer+".json")
+	mode := "reality-vision"
+	if len(selectedMode) > 1 || len(selectedMode) == 1 && selectedMode[0] != "reality-pq-vision" {
+		t.Fatal("packet reference changed exact Vision mode")
+	}
+	if len(selectedMode) == 1 {
+		mode = selectedMode[0]
+	}
+	var original []string
+	if mode == "reality-pq-vision" {
+		original = desktopImportedPQXraySource(t, kind, firstLayer, lastLayer)
+	} else {
+		original = desktopPacketRealitySource(t, kind+"--reality-vision--"+firstLayer+"--"+lastLayer+".json")
+	}
 	args := append([]string(nil), original[:7]...)
 	profile := desktopImportedSOCKSXrayObject(t, args[4])
 	f := &desktopPacketRealityFixture{kind: kind, fault: fault}
@@ -423,7 +435,7 @@ func desktopPacketRealityNew(t *testing.T, kind, firstLayer, lastLayer, fault st
 		routes = selectedPeer.routes
 	}
 	var files string
-	f.finalServer, files = startDesktopNodeXrayServerWithProof(t, "reality-vision", physicalIP, home.LocalAddr().String(), paired.Listener.Addr().String(), routes...)
+	f.finalServer, files = startDesktopNodeXrayServerWithProof(t, mode, physicalIP, home.LocalAddr().String(), paired.Listener.Addr().String(), routes...)
 	finalTarget := f.finalServer.tcp.Addr().String()
 	finalPhysical := desktopPacketRealityCiphertextBridge(t, physicalIP, finalTarget)
 	profile["endpoint"] = physicalIP.String()
@@ -450,6 +462,9 @@ func desktopPacketRealityNew(t *testing.T, kind, firstLayer, lastLayer, fault st
 	files = desktopImportedSOCKSXrayJSON(t, assets)
 	if fault == "final-reality-key" {
 		files = desktopNodeXrayAssets(t, files, "xray-reality-key")
+	}
+	if fault == "final-pq-key" {
+		files = desktopNodeXrayAssets(t, files, "xray-pq-key")
 	}
 	if fault == "final-user" {
 		files = desktopNodeXrayAssets(t, files, "xray-user")
@@ -502,7 +517,7 @@ func desktopPacketRealityNew(t *testing.T, kind, firstLayer, lastLayer, fault st
 	provisional := desktopPacketRealityCompile(t, args)
 	provisionalTags := desktopImportedSOCKSGraph(desktopImportedSOCKSXrayObject(t, provisional.Config()))
 	provisionalFinal := provisionalTags[mobilemultihop.LocalTag]
-	if provisionalFinal == nil || provisionalFinal["type"] != "routervpn-xray" || provisionalFinal["mode"] != "reality-vision" {
+	if provisionalFinal == nil || provisionalFinal["type"] != "routervpn-xray" || provisionalFinal["mode"] != mode {
 		t.Fatal("packet REALITY lost its native paired final")
 	}
 	newServer := func(routes []desktopNodeLayerRoute) *desktopNodeLayerServer {
@@ -636,7 +651,7 @@ func desktopPacketRealityNew(t *testing.T, kind, firstLayer, lastLayer, fault st
 	if firstRaw == nil || desktopImportedSOCKSXrayJSON(t, finalRaw) != desktopImportedSOCKSXrayJSON(t, provisionalFinal) {
 		t.Fatal("entry provider changed independent original REALITY final")
 	}
-	if json.Unmarshal([]byte(f.plan.Metadata()), &f.meta) != nil || f.meta.EntryKind != "external" || f.meta.EntryMode != strings.Split(kind, "-")[0] && f.meta.EntryMode != kind || f.meta.EntryAPI != "" || f.meta.EntryNodeID != "" || f.meta.EntryToken != "" || f.meta.ExitMode != "reality-vision" || f.meta.TransportCapability != "" || f.meta.ExitNodeID != identity || f.meta.ExitAPI != "http://10.77.0.1:8787" {
+	if json.Unmarshal([]byte(f.plan.Metadata()), &f.meta) != nil || f.meta.EntryKind != "external" || f.meta.EntryMode != strings.Split(kind, "-")[0] && f.meta.EntryMode != kind || f.meta.EntryAPI != "" || f.meta.EntryNodeID != "" || f.meta.EntryToken != "" || f.meta.ExitMode != mode || f.meta.TransportCapability != "" || f.meta.ExitNodeID != identity || f.meta.ExitAPI != "http://10.77.0.1:8787" {
 		t.Fatal("packet REALITY changed captured proof or transport authority")
 	}
 	selectedDNS := graph["dns"].(map[string]any)
@@ -821,9 +836,9 @@ func desktopPacketRealityCases(t *testing.T, kind string) {
 	}
 }
 
-func desktopPacketRealityTraffic(t *testing.T, kind, first, last, fault string) {
+func desktopPacketRealityTraffic(t *testing.T, kind, first, last, fault string, selectedMode ...string) {
 	t.Helper()
-	f := desktopPacketRealityNew(t, kind, first, last, fault, nil)
+	f := desktopPacketRealityNew(t, kind, first, last, fault, nil, selectedMode...)
 	if f.startErr != nil {
 		f.audit = func() {
 			stats := f.entryStats()
@@ -856,7 +871,7 @@ func desktopPacketRealityTraffic(t *testing.T, kind, first, last, fault string) 
 			wanted = "192.168.50.134:53"
 		}
 		dnsOK, err = desktopImportedSOCKSXrayDNS(f.ctx, f.final, wanted)
-		wantDNS := fault != "final-reality-key" && fault != "final-user" && fault != "final-route" && fault != "dns-route" && !strings.HasPrefix(fault, "final-layer-")
+		wantDNS := fault != "final-reality-key" && fault != "final-pq-key" && fault != "final-user" && fault != "final-route" && fault != "dns-route" && !strings.HasPrefix(fault, "final-layer-")
 		if dnsOK != wantDNS {
 			t.Fatal("packet REALITY selected Home DNS did not traverse its original authenticated chain", err)
 		}
@@ -980,7 +995,7 @@ func desktopPacketRealityTraffic(t *testing.T, kind, first, last, fault string) 
 		} else if f.finalServer.rawTCP.Load() == 0 {
 			t.Fatal("packet REALITY did not reach original final ciphertext")
 		}
-		if fault == "final-reality-key" || fault == "final-user" {
+		if fault == "final-reality-key" || fault == "final-pq-key" || fault == "final-user" {
 			if f.dns.Load() != 0 || f.health.Load() != 0 || f.finalServer.plainTCP.Load() != 0 || f.finalServer.plainUDP.Load() != 0 {
 				t.Fatal("foreign REALITY credential gained final plaintext")
 			}
@@ -1167,5 +1182,18 @@ func TestRouterVPNImportedPacketRealityPhysicalOwner(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// These PQ verdicts retain their independent physical interface requirement.
+func TestRouterVPNImportedPQRealityPacketTraffic(t *testing.T) {
+	for _, kind := range []string{"wireguard", "amneziawg", "openvpn-tcp", "openvpn-udp"} {
+		for _, first := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, last := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				for _, fault := range desktopImportedPQXrayFaults(first, last) {
+					t.Run(kind+"/"+first+"/"+last+"/"+fault, func(t *testing.T) { desktopPacketRealityTraffic(t, kind, first, last, fault, "reality-pq-vision") })
+				}
+			}
+		}
 	}
 }

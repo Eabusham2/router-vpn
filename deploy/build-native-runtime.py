@@ -112,6 +112,7 @@ def inputs():
                              ROOT/'deploy/test_desktop_imported_runtime.py',
                              ROOT/'deploy/test_desktop_imported_packet_runtime.py',
                              ROOT/'deploy/test_desktop_imported_openvpn_runtime.py',
+                             ROOT/'deploy/test_desktop_imported_pq_runtime.py',
                              ROOT/'deploy/build-mobile-pq.py', ROOT/'deploy/prepare-desktop-rosenpass.py',
                              ROOT/'deploy/setup-desktop-native-toolchain.py',
                              ROOT/'deploy/install-desktop-windows-toolchain.py',
@@ -146,6 +147,14 @@ def inputs():
                              ROOT/'deploy/test_mobile_imported_packet_xray_runner.py',
                              ROOT/'deploy/test_native_xray_udp443.py',
                              ROOT/'deploy/test_native_xray_udp443_runner.py',
+                             ROOT/'deploy/test_mobile_imported_pq_xray.py',
+                             ROOT/'deploy/test_mobile_imported_pq_xray_runner.py',
+                             ROOT/'deploy/test_imported_pq_workflow.py',
+                             ROOT/'android/test_android_imported_router.py',
+                             ROOT/'mobile/routervpn_imported_pq_xray_native_test.go.tmpl',
+                             ROOT/'.github/workflows/imported-socks-reality-native.yml',
+                             ROOT/'.github/workflows/imported-pq-reality-native.yml',
+                             ROOT/'.github/workflows/release-candidate.yml',
                              ROOT/'deploy/test_xray_vision_state.py',
                              ROOT/'deploy/test_xray_vision_state_runner.py',
                              ROOT/'deploy/test_mobile_imported_entry.py',
@@ -850,6 +859,46 @@ def verify_imported_desktop_openvpn_configs(bundle, target, env):
     print('Native imported OpenVPN desktop: all108 original TCP/UDP graphs accepted by the completed production engine; exact observation/source/profile verdicts passed. Installed-device acceptance remains separate.',flush=True)
 
 
+IMPORTED_PQ_GRAPH_TEST = 'TestDesktopImportedPQRealityCapturedGraphs'
+IMPORTED_PQ_ENTRIES = ('socks5', 'shadowsocks', 'hysteria2', 'http-connect', 'https-connect',
+                       'wireguard', 'amneziawg', 'openvpn-tcp', 'openvpn-udp')
+IMPORTED_PQ_FILES = {entry+'--reality-pq-vision--'+first+'--'+last+'.json'
+    for entry in IMPORTED_PQ_ENTRIES
+    for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
+
+
+def imported_desktop_pq_verdicts():
+    return {IMPORTED_PQ_GRAPH_TEST} | {IMPORTED_PQ_GRAPH_TEST+'/'+entry+'/'+first+'/'+last
+        for entry in IMPORTED_PQ_ENTRIES
+        for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
+
+
+def verify_imported_desktop_pq_configs(bundle, target, env):
+    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
+        raise ValueError('Imported PQ gate requires its matching completed native bundle')
+    bundle = Path(bundle).absolute()
+    original = reuse(bundle, target, env=env)
+    with tempfile.TemporaryDirectory(prefix='routervpn-imported-pq-') as directory:
+        fixtures = Path(directory)
+        child = {**env, 'ROUTERVPN_DESKTOP_IMPORTED_PQ_XRAY_FIXTURES':directory}
+        output = run(['go', 'test', '-json', *([] if target == 'windows/arm64' else ['-race']),
+            './cmd/client', '-run', '^'+IMPORTED_PQ_GRAPH_TEST+'$', '-count=1', '-timeout=180s'],
+            cwd=ROOT, env=child, timeout=300)
+        verify_imported_native_verdicts(output, 'router-vpn/cmd/client', imported_desktop_pq_verdicts())
+        if {path.name for path in fixtures.iterdir()} != IMPORTED_PQ_FILES:
+            raise ValueError('Imported PQ gate lost its exact81 separate original graphs')
+        captured = {name:regular(fixtures/name, 4<<20) for name in IMPORTED_PQ_FILES}
+        for name in sorted(captured):
+            if regular(fixtures/name, 4<<20) != captured[name]:
+                raise ValueError('Original PQ graph changed before native parsing')
+            run([bundle/binary_name(target), 'check', '-c', fixtures/name], env=env, timeout=20)
+        if {path.name for path in fixtures.iterdir()} != IMPORTED_PQ_FILES or any(regular(fixtures/name, 4<<20) != raw for name,raw in captured.items()):
+            raise ValueError('Original PQ graph changed during native parsing')
+    if reuse(bundle, target, env=env) != original:
+        raise ValueError('Completed bundle changed during imported PQ proof')
+    print('Native imported PQ desktop: all81 separate original graphs accepted by the completed production engine. Installed-device acceptance remains separate.', flush=True)
+
+
 def verify_linux_stock_dns(bundle, target, env):
     host = 'linux/'+{'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), '')
     if platform.system() != 'Linux' or target != host or env.get('GOOS') != 'linux' or env.get('GOARCH') != target.split('/')[1]:
@@ -1003,6 +1052,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             verify_imported_desktop_configs(destination, target, env)
             verify_imported_desktop_packet_configs(destination, target, env)
             verify_imported_desktop_openvpn_configs(destination, target, env)
+            verify_imported_desktop_pq_configs(destination, target, env)
         print('Reused verified complete native runtime '+target, flush=True)
         return destination
     if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:
@@ -1104,6 +1154,20 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                          source], env=env, timeout=3000)
                     run([sys.executable, ROOT/'deploy/test_native_xray_udp443.py',
                          source], env=env, timeout=3000)
+                    # PQ has its own 81 captured sources and exact native
+                    # verdicts. Parsing, ML-KEM protocol refusal and complete
+                    # imported peers are separate mandatory stages; none
+                    # replaces an ordinary REALITY reference above.
+                    run([sys.executable, ROOT/'deploy/test_imported_pq_workflow.py'],
+                        cwd=ROOT, env=env, timeout=60)
+                    run([sys.executable, ROOT/'deploy/test_mobile_imported_pq_xray_runner.py'],
+                        cwd=ROOT, env=env, timeout=60)
+                    run([sys.executable, ROOT/'deploy/test_mobile_imported_pq_xray.py',
+                         source], env=env, timeout=1200)
+                    run([sys.executable, ROOT/'deploy/test_mobile_imported_pq_xray.py',
+                         source, '--loopback-only'], env=env, timeout=1200)
+                    run([sys.executable, ROOT/'deploy/test_mobile_imported_pq_xray.py',
+                         source, '--reference-only'], env=env, timeout=3000)
                 # The PQ matrix uses the same verified native archive and
                 # compiler cache, fresh KEM keys, and real packet/Start Layer
                 # peers. Native firewall/public admission remains separate.
@@ -1243,6 +1307,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             verify_imported_desktop_configs(stage, target, env)
             verify_imported_desktop_packet_configs(stage, target, env)
             verify_imported_desktop_openvpn_configs(stage, target, env)
+            verify_imported_desktop_pq_configs(stage, target, env)
             if target.startswith('linux/'):
                 verify_installed_linux_host(source, stage, target, env)
             elif target.startswith('darwin/'):

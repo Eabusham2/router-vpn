@@ -41,6 +41,7 @@ func TestDesktopEntryCatalogContracts(t *testing.T) {
 		Supported []string `json:"supported_entry_modes"`
 		Paired    []string `json:"paired_entry_modes"`
 		Execution []string `json:"imported_entry_executions"`
+		Finals    []string `json:"imported_final_modes"`
 	}
 	if status.Code != http.StatusOK || json.Unmarshal(status.Body.Bytes(), &daily) != nil {
 		t.Fatal("actual main/profile entry catalog failed")
@@ -50,8 +51,11 @@ func TestDesktopEntryCatalogContracts(t *testing.T) {
 	slices.Sort(expected)
 	actual := slices.Clone(daily.Supported)
 	slices.Sort(actual)
+	expectedFinals := []string{"awg2-fast", "awg2-strong", "hysteria2", "reality-pq-vision", "reality-vision", "shadowsocks", "wg"}
+	dailyFinals := slices.Clone(daily.Finals)
+	slices.Sort(dailyFinals)
 	if len(paired) != 19 || len(actual) != 25 || !reflect.DeepEqual(actual, expected) ||
-		!reflect.DeepEqual(daily.Paired, paired) || !reflect.DeepEqual(daily.Execution, []string{"local"}) {
+		!reflect.DeepEqual(daily.Paired, paired) || !reflect.DeepEqual(daily.Execution, []string{"local"}) || !reflect.DeepEqual(dailyFinals, expectedFinals) {
 		t.Fatal("main/profile catalog lost original imported identities or paired execution boundaries")
 	}
 	options := httptest.NewRecorder()
@@ -71,7 +75,9 @@ func TestDesktopEntryCatalogContracts(t *testing.T) {
 	for _, node := range temporary.Nodes {
 		if strings.HasPrefix(node.ID, "imported-") {
 			protocol := strings.TrimPrefix(node.ID, "imported-")
-			if !reflect.DeepEqual(node.Modes, []string{protocol}) || !reflect.DeepEqual(node.Executions, []string{"local"}) || len(node.Finals) != 6 {
+			finals := slices.Clone(node.Finals)
+			slices.Sort(finals)
+			if !reflect.DeepEqual(node.Modes, []string{protocol}) || !reflect.DeepEqual(node.Executions, []string{"local"}) || !reflect.DeepEqual(finals, expectedFinals) {
 				t.Fatal("temporary imported capability lost its original protocol or Local-only final graph", node.ID)
 			}
 			for _, mode := range node.Finals {

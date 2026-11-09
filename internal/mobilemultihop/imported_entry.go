@@ -22,10 +22,16 @@ type importedEntry struct {
 	desktopSeal                         string
 }
 
+// Imported Vision finals retain their exact native encryption policy. XHTTP
+// and composite modes require separate graph admission and are not aliases.
+func importedVisionFinal(mode string) bool {
+	return mode == "reality-vision" || mode == "reality-pq-vision"
+}
+
 // NewImportedEntry composes a captured SOCKS5, SS2022, Hysteria2, WireGuard,
 // AmneziaWG, HTTP/HTTPS CONNECT or OpenVPN predecessor and a compatible paired
 // Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. Each imported transport
-// also supports the paired REALITY/Vision final with independently captured
+// also supports ordinary and PQ REALITY/Vision finals with independently captured
 // Start Layers. Packet and bounded OpenVPN entries carry its native VLESS stream
 // through their existing owned userspace endpoint, not another system VPN.
 // Packet-to-packet
@@ -41,10 +47,10 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil {
 		return nil, bad
 	}
-	socksXrayFinal := selection.Protocol == "socks5" && exitMode == "reality-vision"
+	socksXrayFinal := selection.Protocol == "socks5" && importedVisionFinal(exitMode)
 	connectEntry := selection.Protocol == "http-connect" || selection.Protocol == "https-connect"
-	proxyXrayFinal := socksXrayFinal || (selection.Protocol == "shadowsocks" || selection.Protocol == "hysteria2" || connectEntry) && exitMode == "reality-vision"
-	packetXrayFinal := (selection.Protocol == "wireguard" || selection.Protocol == "amneziawg" || selection.Protocol == "openvpn") && exitMode == "reality-vision"
+	proxyXrayFinal := socksXrayFinal || (selection.Protocol == "shadowsocks" || selection.Protocol == "hysteria2" || connectEntry) && importedVisionFinal(exitMode)
+	packetXrayFinal := (selection.Protocol == "wireguard" || selection.Protocol == "amneziawg" || selection.Protocol == "openvpn") && importedVisionFinal(exitMode)
 	importedXrayFinal := proxyXrayFinal || packetXrayFinal
 	if selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5" && selection.Protocol != "http-connect" && selection.Protocol != "https-connect" && selection.Protocol != "openvpn") || selection.Profile["node_kind"] != "external" || (!importedXrayFinal && exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
 		return nil, bad
@@ -181,9 +187,9 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 		// the independently captured entry; arbitrary detours are never stripped.
 		layer := predecessorText(exit.profile, "start_layer")
 		if layer == "" || layer == "off" {
-			err = applexray.ValidateSingleTransport(final, "reality-vision")
+			err = applexray.ValidateSingleTransport(final, exitMode)
 		} else {
-			err = validateNestedXrayExit(final, "reality-vision", applexray.StartLayerTag)
+			err = validateNestedXrayExit(final, exitMode, applexray.StartLayerTag)
 		}
 		if err != nil {
 			return nil, err

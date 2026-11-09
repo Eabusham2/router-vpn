@@ -513,3 +513,73 @@ func TestNativeXrayCompletedDialRetainsOwnedConnections(t *testing.T) {
 		})
 	}
 }
+
+// This separately bounded protocol reference proves ML-KEM authentication at
+// the existing owned dialer boundary. It grants no imported physical route,
+// system TUN, mobile VPN entitlement, or public router acceptance.
+func TestNativePQRealityAuthenticationRefusal(t *testing.T) {
+	installScopedDialer()
+	camouflage := loopbackCamouflage(t)
+	tcp, udp := loopbackEcho(t)
+	endpoint, original := startLoopbackXray(t, "reality-pq-vision", camouflage, tcp, udp, nativeConfig(t, "reality-pq-vision"))
+	for _, fault := range []string{"matching-key", "wrong-pq-key", "restored-key"} {
+		t.Run(fault, func(t *testing.T) {
+			raw := append([]byte(nil), original...)
+			if fault == "wrong-pq-key" {
+				graph, err := applexray.Object(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				key, err := mlkem.NewDecapsulationKey768(bytes.Repeat([]byte{0x39}, 64))
+				if err != nil {
+					t.Fatal(err)
+				}
+				user := graph["outbounds"].([]any)[0].(map[string]any)["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)
+				user["encryption"] = "mlkem768x25519plus.native.0rtt." + base64.RawURLEncoding.EncodeToString(key.EncapsulationKey().Bytes())
+				raw, err = json.Marshal(graph)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			plan, err := applexray.Prepare("reality-pq-vision", raw)
+			if err != nil {
+				t.Fatal("reference must exercise a structurally valid PQ key", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			underlay := &loopbackUnderlay{destination: endpoint}
+			binding := &binding{ctx: ctx, dialer: underlay, server: netip.MustParseAddrPort("192.0.2.1:443"), sockets: map[*ownedConn]bool{}}
+			h := &Outbound{ctx: context.WithValue(ctx, bindingKey{}, binding), cancel: cancel, binding: binding, plan: plan}
+			if err := h.Start(adapter.StartStateStart); err != nil {
+				t.Fatal(err)
+			}
+			defer h.Close()
+			conn, err := h.DialContext(ctx, "tcp", M.ParseSocksaddr(tcp))
+			if err != nil {
+				t.Fatal("PQ key control must reach the actual owned transport", err)
+			}
+			defer conn.Close()
+			conn.SetDeadline(time.Now().Add(3 * time.Second))
+			payload := []byte("captured-pq-authentication-control")
+			_, writeErr := conn.Write(payload)
+			received := make([]byte, len(payload))
+			n, readErr := io.ReadFull(conn, received)
+			if fault == "wrong-pq-key" {
+				if readErr == nil || n != 0 {
+					t.Fatal("wrong ML-KEM peer key gained authenticated plaintext")
+				}
+			} else if writeErr != nil || readErr != nil || !bytes.Equal(received, payload) {
+				t.Fatal("matching original PQ key failed authenticated traffic", writeErr, readErr)
+			}
+			underlay.mu.Lock()
+			calls := underlay.calls
+			underlay.mu.Unlock()
+			if calls == 0 {
+				t.Fatal("PQ authentication control never reached original encrypted peer")
+			}
+			if err := h.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
