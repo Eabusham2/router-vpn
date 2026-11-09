@@ -1,10 +1,36 @@
 # Current implementation status
 
-Updated November 7, 2026 UTC. This file distinguishes published source,
+Updated November 9, 2026 UTC. This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
+
+## November 9 continuation: imported paths and owned session work
+
+The [November 9 evidence ledger](CONTINUATION-EVIDENCE-2026-11-09.md)
+records published work through `e0c815c1`, including newer concurrent commits.
+Bounded desktop OpenVPN TCP/UDP entry-to-paired-final Local execution is now
+implemented (`578590ac`); the older absence statements below are historical.
+Main/profile catalogs contain 25 choices while the paired temporary catalog
+retains nineteen. These chooser counts do not change the twenty raw runtime
+profiles grouped into sixteen logical modes.
+
+Published fixes retain benchmark/Tor/native-MTU callers, uncached DNS proof,
+Windows profile callbacks, Apple temporary-path identity, GTK rejection output,
+joined TLS carrier retirement and Android MAX ownership handoff. Selected-DNS
+workers now cancel and join their captured owner before replacement/shutdown
+(`a984b757`), and the newer concurrent session-observer cleanup in `e0c815c1`
+is preserved. The source audit follows the actual owned worker lifecycle.
+
+Imported desktop MTU Auto/Retest/Cancel measurement and rollback, temporary
+Speed Lab preparation/protection transfer, remaining Tor admission/adoption,
+and broader requested graph/platform support remain active implementation.
+Safe rejection is not completion. Current exact-SHA native builds and release
+publication are still pending; the older `745b3e41` release does not prove this
+newer source. Physical devices, off-LAN methods, signing, private deployment,
+ASUS forwarding, live provider and post-deployment acceptance remain separate.
+The dated sections below preserve their original checkpoint meaning.
 
 ## November 7 resumed continuation
 
