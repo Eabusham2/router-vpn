@@ -43,7 +43,11 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
         self.assertNotIn('socks5--shadowsocks.json',N.IMPORTED_DESKTOP_FILES)
         for target in N.TARGETS:
             _, names = N.imported_desktop_verdicts(target)
-            self.assertEqual(len(names),61 if target.startswith('linux/') else 57)
+            self.assertEqual(len(names),82 if target.startswith('linux/') else 78)
+            self.assertEqual({name.removeprefix('TestDesktopImportedDNSOperationDuration/') for name in names
+                              if name.startswith('TestDesktopImportedDNSOperationDuration/')},
+                             {operation+'/'+fault for operation in ('dns','observe') for fault in
+                              ('positive','zero','failed-zero','cancelled-zero','negative','nan','infinite','oversized','reader','foreign-operation')})
             events = self.events(target)
             N.verify_imported_desktop_verdicts(self.output(events),target)
             for index in range(len(events)):
@@ -181,9 +185,15 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
     def native_events(self):
         return self.inventory_events(N.IMPORTED_NATIVE_DNS_PACKAGE, N.imported_native_dns_verdicts())
 
-    def test_native_dns_requires_all_thirteen_original_verdicts_and_joined_roots(self):
+    def test_native_dns_requires_original_and_zero_tick_verdicts_and_joined_roots(self):
         expected = N.imported_native_dns_verdicts()
-        self.assertEqual(len(expected),13)
+        self.assertEqual(len(expected),19)
+        self.assertEqual({name for name in expected if not name.startswith('TestRouterVPNImportedDNSOperationDuration')},
+                         {'TestRouterVPNImportedDNSMailbox','TestRouterVPNImportedDNSCancellationJoins','TestRouterVPNImportedDNSNativeRouterIsUncached'} |
+                         {'TestRouterVPNImportedDNSMailbox/'+case for case in ('success','dns-failed','session','config','path','reader','deadline','replay','source-replaced','owner-replaced')})
+        self.assertEqual({name.removeprefix('TestRouterVPNImportedDNSOperationDuration/') for name in expected
+                          if name.startswith('TestRouterVPNImportedDNSOperationDuration/')},
+                         {'observe','dns','dns-error','cancelled-dns','cancelled-observe'})
         events = self.native_events()
         verify = lambda rows: N.verify_imported_native_verdicts(self.output(rows),N.IMPORTED_NATIVE_DNS_PACKAGE,expected)
         verify(events)

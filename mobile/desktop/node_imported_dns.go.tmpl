@@ -171,9 +171,12 @@ func routerVPNConsumeImportedDNS(parent context.Context, files *routerVPNExterna
 	status := "passed"
 	if query.Err() != nil || cancelInfo != nil {
 		status = "cancelled"
-	} else if queryErr != nil || elapsed <= 0 {
+	} else if queryErr != nil || elapsed < 0 || request.Operation == "" && elapsed == 0 {
 		status = "failed"
 	}
+	// A current packet observation can complete within one native clock tick.
+	// Its zero interval is completion evidence, never a selected-DNS RTT. DNS
+	// success still requires an actual positive measured interval.
 	if status != "passed" {
 		observedState = nil
 	}

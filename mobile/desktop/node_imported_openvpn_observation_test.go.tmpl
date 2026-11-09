@@ -470,8 +470,11 @@ func TestRouterVPNImportedOpenVPNMailbox(t *testing.T) {
 			importedDNSWrite(t, files, "node-dns-request.json", request)
 			calls := 0
 			var generation uint64
-			err := routerVPNConsumeImportedDNS(context.Background(), files, tun, &generation, func(context.Context) error {
+			err := routerVPNConsumeImportedDNS(context.Background(), files, tun, &generation, func(query context.Context) error {
 				calls++
+				if err := importedDNSFixtureInterval(query); err != nil {
+					return err
+				}
 				if fault == "dns-failed" {
 					return errors.New("selected resolver refused")
 				}

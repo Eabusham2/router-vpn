@@ -180,9 +180,12 @@ func exchangeDesktopImportedNativeWithPublisher(parent context.Context, launch *
 			}
 			return nil, errors.New("imported DNS result belongs to another request")
 		}
+		// A same-tick observation or unsuccessful completion may join its
+		// exact request. Only a passing selected-DNS result supplies an RTT.
 		if result.desktopImportedDNSRequest != request || operation == "" && result.OpenVPN != nil || operation == "openvpn-observe" && result.Status == "passed" && (result.OpenVPN == nil || result.OpenVPN.Validate() != nil) || result.Interface != live.Interface || result.Index != live.Index ||
 			result.ProvedAt < started-1 || result.ProvedAt > time.Now().Add(time.Second).UnixMilli() ||
-			math.IsNaN(result.Milliseconds) || math.IsInf(result.Milliseconds, 0) || result.Milliseconds <= 0 || result.Milliseconds > 7000 ||
+			math.IsNaN(result.Milliseconds) || math.IsInf(result.Milliseconds, 0) || result.Milliseconds < 0 || result.Milliseconds > 7000 ||
+			operation == "" && result.Status == "passed" && result.Milliseconds == 0 ||
 			result.Status != "passed" && result.Status != "failed" && result.Status != "cancelled" {
 			return nil, errors.New("imported DNS result changed its original request or TUN owner")
 		}

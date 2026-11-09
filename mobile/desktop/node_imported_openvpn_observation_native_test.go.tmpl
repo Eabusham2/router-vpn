@@ -73,7 +73,9 @@ func testImportedOpenVPNNativeConnected(t *testing.T) {
 				} else if q.Question[0].Qtype == dns.TypeA {
 					answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: net.ParseIP("93.184.216.34")}}
 				}
-				_ = w.WriteMsg(answer)
+				if importedDNSFixtureInterval(ctx) == nil {
+					_ = w.WriteMsg(answer)
+				}
 			})}
 			dnsDone := make(chan error, 1)
 			go func() { dnsDone <- server.ActivateAndServe() }()

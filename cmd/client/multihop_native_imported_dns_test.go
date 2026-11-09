@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -333,6 +334,108 @@ func TestDesktopImportedDNSAtomicPublicationAndFreshHeartbeat(t *testing.T) {
 		cancel()
 		if swapped && err == nil || !swapped && err != nil {
 			t.Fatal("post-query heartbeat admitted the wrong reader", swapped, err)
+		}
+	}
+}
+
+// Exercise the actual request publication and receipt reader. These finite
+// private-file peers model native completion only; authenticated OpenVPN and
+// selected DNS execution remain in their separate native gates.
+func TestDesktopImportedDNSOperationDuration(t *testing.T) {
+	for _, operation := range []string{"dns", "observe"} {
+		for _, fault := range []string{"positive", "zero", "failed-zero", "cancelled-zero", "negative", "nan", "infinite", "oversized", "reader", "foreign-operation"} {
+			t.Run(operation+"/"+fault, func(t *testing.T) {
+				f, original := desktopImportedOpenVPNObservationFixture(t)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				op := ""
+				if operation == "observe" {
+					op = "openvpn-observe"
+				}
+				status, duration := "passed", "0"
+				switch fault {
+				case "positive":
+					duration = "1"
+				case "failed-zero":
+					status = "failed"
+				case "cancelled-zero":
+					status = "cancelled"
+				case "negative":
+					duration = "-1"
+				case "nan":
+					duration = "NaN"
+				case "infinite":
+					duration = "1e999"
+				case "oversized":
+					duration = "7000.1"
+				}
+				validReceipt := fault == "positive" || fault == "zero" && operation == "observe" || fault == "failed-zero" || fault == "cancelled-zero"
+				requests, cancels := 0, 0
+				var captured desktopImportedDNSRequest
+				publish := func(call context.Context, launch *desktopNodeLaunch, name string, raw []byte) error {
+					if err := publishDesktopImportedDNSMessage(call, launch, name, raw); err != nil {
+						return err
+					}
+					if name == "node-dns-cancel.json" {
+						cancels++
+						// Invalid evidence still uses the original explicit native
+						// close acknowledgement to finish its cleanup; it cannot
+						// manufacture a passing or joined measurement receipt.
+						stopped, _ := json.Marshal(map[string]any{"schema": 1, "session_id": launch.mtuSession, "source_sha256": launch.configSHA256, "closed": true})
+						return writeDesktopRuntimeFile(launch, "stopped.json", stopped, false)
+					}
+					if name != "node-dns-request.json" || decodeRelayControlJSON(raw, &captured) != nil || captured.Operation != op {
+						return errors.New("duration fixture lost the actual original request")
+					}
+					requests++
+					result := desktopImportedDNSResult{desktopImportedDNSRequest: captured, Status: status,
+						Interface: f.base.Interface, Index: f.base.Index, ProvedAt: time.Now().UnixMilli(), Milliseconds: 1}
+					if op == "openvpn-observe" && status == "passed" {
+						result.OpenVPN = &original
+					}
+					if fault == "reader" {
+						result.Reader++
+					} else if fault == "foreign-operation" {
+						result.Operation = "foreign"
+					}
+					body, err := json.Marshal(result)
+					if err != nil {
+						return err
+					}
+					// Invalid JSON/nonfinite controls enter the real decoder;
+					// ordinary finite values use the same wire field.
+					marker := []byte(`"milliseconds":1`)
+					if bytes.Count(body, marker) != 1 {
+						return errors.New("duration fixture lost its exact wire field")
+					}
+					body = bytes.Replace(body, marker, []byte(`"milliseconds":`+duration), 1)
+					if err := writeDesktopRuntimeFile(launch, "node-dns-result.json", body, false); err != nil {
+						return err
+					}
+					return launch.directoryRoot.Remove("node-dns-request.json")
+				}
+				result, err := exchangeDesktopImportedNativeWithPublisher(ctx, f.launch, func(call context.Context) error {
+					return call.Err()
+				}, op, publish)
+				if requests != 1 || f.launch.importedDNSGeneration != captured.Generation {
+					t.Fatal("duration case did not use the exact actual request", requests)
+				}
+				if validReceipt {
+					if cancels != 0 || f.launch.importedDNSLast != captured.Request {
+						t.Fatal("valid same-tick completion did not join its original request", fault, cancels, err)
+					}
+				} else if cancels != 1 || f.launch.importedDNSLast == captured.Request {
+					t.Fatal("invalid measurement or foreign receipt acquired completion authority", fault, cancels, err)
+				}
+				if validReceipt && status == "passed" {
+					if err != nil || result == nil || result.desktopImportedDNSRequest != captured || result.Milliseconds != map[string]float64{"positive": 1, "zero": 0}[fault] ||
+						op == "openvpn-observe" && (result.OpenVPN == nil || *result.OpenVPN != original) || op == "" && result.OpenVPN != nil {
+						t.Fatal("actual reader lost current operation or exact measured duration", result, err)
+					}
+				} else if err == nil || result != nil {
+					t.Fatal("failed/cancelled/invalid DNS result became a successful measurement", fault, result, err)
+				}
+			})
 		}
 	}
 }

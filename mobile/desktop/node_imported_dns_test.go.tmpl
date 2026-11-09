@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/miekg/dns"
@@ -64,6 +65,23 @@ func importedDNSWrite(t *testing.T, files *routerVPNExternalFiles, name string, 
 	}
 }
 
+// Model real response work in DNS-only fixtures. An immediate local callback
+// can finish inside one Windows clock tick; do not turn it into a fabricated
+// positive RTT or relax the production zero-interval refusal.
+func importedDNSFixtureInterval(ctx context.Context) error {
+	started := time.Now()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for time.Since(started) <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+	return ctx.Err()
+}
+
 func TestRouterVPNImportedDNSMailbox(t *testing.T) {
 	for _, fault := range []string{"success", "dns-failed", "session", "config", "path", "reader", "deadline", "replay", "source-replaced", "owner-replaced"} {
 		t.Run(fault, func(t *testing.T) {
@@ -94,16 +112,8 @@ func TestRouterVPNImportedDNSMailbox(t *testing.T) {
 				if deadline, ok := ctx.Deadline(); !ok || deadline.UnixMilli() != request.Deadline {
 					t.Error("native DNS lost original request deadline")
 				}
-				// A no-op callback can finish within one Windows clock tick.
-				// Supply a real measured interval without changing the native
-				// mailbox's rejection of zero or expired measurements.
-				started := time.Now()
-				for time.Since(started) <= 0 {
-					select {
-					case <-ctx.Done():
-						return ctx.Err()
-					case <-time.After(time.Millisecond):
-					}
+				if err := importedDNSFixtureInterval(ctx); err != nil {
+					return err
 				}
 				switch fault {
 				case "dns-failed":
@@ -222,6 +232,8 @@ func (*importedDNSNativeTUN) Close() error                   { return nil }
 // resolver exchange, cache controls and mailbox publication are shipping code.
 // Opposite consecutive upstream answers cannot be supplied by an OS lookup.
 func TestRouterVPNImportedDNSNativeRouterIsUncached(t *testing.T) {
+	peerContext, stopPeer := context.WithTimeout(context.Background(), 15*time.Second)
+	defer stopPeer()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -246,7 +258,9 @@ func TestRouterVPNImportedDNSNativeRouterIsUncached(t *testing.T) {
 		} else if q.Question[0].Qtype == dns.TypeA {
 			answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: net.ParseIP("93.184.216.34")}}
 		}
-		_ = w.WriteMsg(answer)
+		if importedDNSFixtureInterval(peerContext) == nil {
+			_ = w.WriteMsg(answer)
+		}
 	})}
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- server.ActivateAndServe() }()
@@ -257,7 +271,7 @@ func TestRouterVPNImportedDNSNativeRouterIsUncached(t *testing.T) {
 		tun.tag = tag
 		return tun, nil
 	})
-	ctx, cancel := context.WithCancel(box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry()))
+	ctx, cancel := context.WithCancel(box.Context(peerContext, registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry()))
 	defer cancel()
 	graph, _ := json.Marshal(map[string]any{"log": map[string]any{"disabled": true}, "inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in"}},
 		"outbounds": []any{map[string]any{"type": "direct", "tag": "proxy", "inet4_bind_address": "127.0.0.1"}}, "dns": map[string]any{"servers": []any{map[string]any{"type": "tcp", "tag": "selected-dns", "server": "127.0.0.1", "server_port": listener.Addr().(*net.TCPAddr).Port, "detour": "proxy"}}, "final": "selected-dns"}, "route": map[string]any{"final": "proxy"}})
@@ -292,7 +306,11 @@ func TestRouterVPNImportedDNSNativeRouterIsUncached(t *testing.T) {
 		request.Generation = generation + 1
 		request.Deadline = time.Now().Add(4 * time.Second).UnixMilli()
 		importedDNSWrite(t, files, "node-dns-request.json", request)
-		if err := routerVPNConsumeImportedDNS(ctx, files, owner, &generation, instance.RouterVPNStrategyDNSProofContext); err != nil {
+		var proofErr error
+		if err := routerVPNConsumeImportedDNS(ctx, files, owner, &generation, func(query context.Context) error {
+			proofErr = instance.RouterVPNStrategyDNSProofContext(query)
+			return proofErr
+		}); err != nil {
 			t.Fatal(err)
 		}
 		raw, err := files.read("node-dns-result.json", 4096)
@@ -304,7 +322,65 @@ func TestRouterVPNImportedDNSNativeRouterIsUncached(t *testing.T) {
 		if err != nil || !routerVPNMTUStrict(raw, &result) || result.routerVPNImportedDNSRequest != request ||
 			result.Status != want || queries.Load() <= before {
 			t.Fatal("selected native resolver was cached or bypassed", "phase", index, "error", err,
-				"status", result.Status, "want", want, "queries before/after", before, queries.Load())
+				"status", result.Status, "want", want, "queries before/after", before, queries.Load(), "milliseconds", result.Milliseconds, "native proof", proofErr)
 		}
+	}
+}
+
+func TestRouterVPNImportedDNSOperationDuration(t *testing.T) {
+	for _, operation := range []string{"observe", "dns", "dns-error", "cancelled-dns", "cancelled-observe"} {
+		t.Run(operation, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				owner, _, _, raw := importedOpenVPNFixture(t)
+				files, request := importedDNSFiles(t, owner.tun, raw)
+				if operation == "observe" || operation == "cancelled-observe" {
+					request.Operation = "openvpn-observe"
+				}
+				importedDNSWrite(t, files, "node-dns-request.json", request)
+				cancelled := strings.HasPrefix(operation, "cancelled-")
+				if cancelled {
+					importedDNSWrite(t, files, "node-dns-cancel.json", request)
+				}
+				var generation uint64
+				calls := 0
+				started := time.Now()
+				if err := routerVPNConsumeImportedDNS(context.Background(), files, owner.tun, &generation, func(context.Context) error {
+					calls++
+					if operation == "dns-error" {
+						return errors.New("original native resolver refusal")
+					}
+					return nil
+				}, owner); err != nil {
+					t.Fatal(err)
+				}
+				body, err := files.read("node-dns-result.json", 4096)
+				var result routerVPNImportedDNSResult
+				if err != nil || !routerVPNMTUStrict(body, &result) || result.routerVPNImportedDNSRequest != request ||
+					generation != 1 || result.Milliseconds != 0 || time.Since(started) != 0 {
+					t.Fatal("same-tick operation lost exact completion or invented duration", result, err)
+				}
+				want := "failed"
+				if operation == "observe" {
+					want = "passed"
+				} else if cancelled {
+					want = "cancelled"
+				}
+				if result.Status != want {
+					t.Fatal("same-tick observation/completion was treated as DNS RTT", operation, result.Status, want)
+				}
+				if operation == "observe" {
+					if calls != 0 || result.OpenVPN == nil || *result.OpenVPN != importedOpenVPNStateFixture() {
+						t.Fatal("same-tick observation borrowed DNS or lost original native receipt")
+					}
+				} else if result.OpenVPN != nil || cancelled && calls != 0 || !cancelled && calls != 1 {
+					t.Fatal("zero-interval completion acquired foreign operation authority", calls, result.OpenVPN)
+				}
+				for _, name := range []string{"node-dns-request.json", "node-dns-cancel.json"} {
+					if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+						t.Fatal("same-tick operation did not drain its exact request", name, err)
+					}
+				}
+			})
+		})
 	}
 }

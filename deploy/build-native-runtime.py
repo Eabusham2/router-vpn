@@ -581,10 +581,15 @@ IMPORTED_DESKTOP_LIFECYCLE_TEST = 'TestDesktopImportedDailyConnectRestoreAndOwne
 IMPORTED_DESKTOP_DNS_ROOTS = ('TestDesktopImportedDNSReceiptAdmission',
     'TestDesktopImportedDNSCancellationWaitsForNativeJoin',
     'TestDesktopImportedDNSCannotUseSuccessfulOSLookup',
-    'TestDesktopImportedDNSAtomicPublicationAndFreshHeartbeat')
+    'TestDesktopImportedDNSAtomicPublicationAndFreshHeartbeat',
+    'TestDesktopImportedDNSOperationDuration')
 IMPORTED_DESKTOP_DNS_CASES = ('success', 'dns-failed', 'reader', 'source', 'owner', 'old-receipt')
+IMPORTED_DESKTOP_DNS_DURATION_CASES = tuple(operation+'/'+fault for operation in ('dns','observe') for fault in
+    ('positive','zero','failed-zero','cancelled-zero','negative','nan','infinite','oversized','reader','foreign-operation'))
 IMPORTED_NATIVE_DNS_ROOTS = ('TestRouterVPNImportedDNSMailbox',
-    'TestRouterVPNImportedDNSCancellationJoins', 'TestRouterVPNImportedDNSNativeRouterIsUncached')
+    'TestRouterVPNImportedDNSCancellationJoins', 'TestRouterVPNImportedDNSNativeRouterIsUncached',
+    'TestRouterVPNImportedDNSOperationDuration')
+IMPORTED_NATIVE_DNS_DURATION_CASES = ('observe','dns','dns-error','cancelled-dns','cancelled-observe')
 IMPORTED_NATIVE_DNS_CASES = ('success', 'dns-failed', 'session', 'config', 'path', 'reader',
     'deadline', 'replay', 'source-replaced', 'owner-replaced')
 IMPORTED_NATIVE_DNS_PACKAGE = 'github.com/sagernet/sing-box/cmd/sing-box'
@@ -606,6 +611,7 @@ def imported_desktop_verdicts(target):
     roots = (IMPORTED_DESKTOP_GRAPH_TEST, IMPORTED_DESKTOP_LAYER_TEST, *IMPORTED_DESKTOP_DNS_ROOTS)
     expected = set(roots)
     expected.update(IMPORTED_DESKTOP_DNS_ROOTS[0]+'/'+case for case in IMPORTED_DESKTOP_DNS_CASES)
+    expected.update('TestDesktopImportedDNSOperationDuration/'+case for case in IMPORTED_DESKTOP_DNS_DURATION_CASES)
     expected.update(IMPORTED_DESKTOP_GRAPH_TEST+'/'+entry+'/'+final for entry,final in IMPORTED_DESKTOP_PAIRS)
     expected.update(IMPORTED_DESKTOP_LAYER_TEST+'/'+execution+'/'+entry+'/'+final
                     for execution in ('local','server','auto')
@@ -623,7 +629,8 @@ def verify_imported_desktop_verdicts(output, target):
 
 
 def imported_native_dns_verdicts():
-    return set(IMPORTED_NATIVE_DNS_ROOTS) | {IMPORTED_NATIVE_DNS_ROOTS[0]+'/'+case for case in IMPORTED_NATIVE_DNS_CASES}
+    return (set(IMPORTED_NATIVE_DNS_ROOTS) | {IMPORTED_NATIVE_DNS_ROOTS[0]+'/'+case for case in IMPORTED_NATIVE_DNS_CASES}
+        | {'TestRouterVPNImportedDNSOperationDuration/'+case for case in IMPORTED_NATIVE_DNS_DURATION_CASES})
 
 
 def verify_imported_native_verdicts(output, package, expected):
