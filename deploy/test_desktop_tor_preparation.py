@@ -133,6 +133,7 @@ class DesktopPTPreparation(unittest.TestCase):
     def test_shipping_preparer_calls_selective_pipeline_without_mobile_tor(self):
         captured = dict(os.environ, GOTOOLCHAIN='local', GOWORK='off', GOENV='off')
         with patch.object(PREP, 'prepare_desktop_pt') as selective, patch.object(PREP, 'write', wraps=PREP.write) as writes, \
+             patch.object(PREP.RELAY.NAIVE, 'prepare') as naive_prepare, \
              patch.object(PREP.MTU, 'prepare'), patch.object(PREP.DESKTOP_MTU, 'prepare'), \
              patch.object(PREP.STRATEGY, 'prepare'), patch.object(PREP.EXTERNAL, 'prepare'), \
              patch.object(PREP, 'prepare_network_startup') as startup, \
@@ -140,6 +141,7 @@ class DesktopPTPreparation(unittest.TestCase):
              patch.object(PREP.RELAY.OPENVPN_REMOTE, 'prepare'), \
              contextlib.redirect_stdout(io.StringIO()):
             PREP.prepare(self.vendor, GO, env=captured)
+            naive_prepare.assert_called_once_with(self.vendor.resolve())
             selective.assert_called_once_with(self.vendor.resolve(), GO, env=captured)
             startup.assert_called_once_with(self.vendor.resolve())
             node_capture.assert_called_once_with(self.vendor.resolve())

@@ -133,12 +133,14 @@ class OwnedUIDRunner(unittest.TestCase):
                 raise SharedStageComplete()
             write(vendor, relative, raw)
 
-        with patch.object(GATE.PREP, 'prepare_desktop_pt'), \
+        with patch.object(GATE.PREP.RELAY.NAIVE, 'prepare') as naive_prepare, \
+             patch.object(GATE.PREP, 'prepare_desktop_pt'), \
              patch.object(GATE.PREP, 'comparison_client_contract', return_value={}), \
              patch.object(GATE.PREP.PFABI, 'checked_files', return_value={}), \
              patch.object(GATE.PREP, 'write', side_effect=copy_shared), \
              self.assertRaises(SharedStageComplete):
             GATE.PREP.prepare(source)
+        naive_prepare.assert_called_once_with(source.resolve())
         _, records = GATE.checked_sources(source)
         self.assertEqual(set(records), {path.name for path in owned_sources()})
 
