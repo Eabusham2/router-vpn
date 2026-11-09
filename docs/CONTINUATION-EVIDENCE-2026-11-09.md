@@ -4,6 +4,31 @@ This checkpoint continues the [November 7 reconciled ledger](CONTINUATION-EVIDEN
 
 The latest branch read for this checkpoint was `e0c815c107ebac1775c49295ccef1b1a5c896b84`. Its ancestry contains the changes below. The source is still advancing. No private server, ASUS configuration, household forwarding, signing account or physical user device was changed by this continuation.
 
+## Original-source recovery and limits
+
+
+- The historical 1–356 audit and C1–C7 remain requirement indexes. Their wording
+  includes assistant-organized summaries; they are not 356 verbatim user
+  requests. This continuation did not independently recover every original
+  passage behind items 1–311.
+- Original August 11/12 product and breakage requests, including the expanded
+  32-item request, and the August 16 map-first request were recovered with their
+  surrounding user messages. The instruction to complete both earlier and later
+  scope remains binding. Overlapping lists are not added into a completion
+  percentage.
+- Original comparison and ASUS safety corrections were also recovered. The
+  native client's fail-closed protection and the ASUS helper's preservation of
+  ordinary household Internet remain separate requirements.
+- Personal-context retrieval was unavailable. Checked November exports did not
+  yield a new Router VPN product override; that is a retrieval limit, not proof
+  that no additional source exists. Neither historical handoffs nor this ledger
+  close unexamined requirements. Private transcript contents and credentials
+  are not reproduced here.
+
+The Android change below follows the original native graph and complete-session
+restoration requirements. A separate verbatim original request specifically
+naming temporary imported-entry Speed Lab was not recovered.
+
 ## Published implementation and repairs
 
 Each change made by this continuation was committed, sent through a guarded non-force update of `main`, and independently read back. The remote Git tree matched the tested local source. Concurrent upstream work was preserved through normal ancestry. A local commit or uploaded Git object alone was not counted as publication.
@@ -25,7 +50,14 @@ Each change made by this continuation was committed, sent through a guarded non-
 | [`a984b757`](https://github.com/Eabusham2/router-vpn/commit/a984b7574383d2f82e21155211e6bd37329a0ab9) | Selected-DNS proof workers own their original 30-second budget, session/runtime/router/base/token identity and completion receipt. Replacement waits for the original worker; shutdown cancels and joins before controller mutation. Fifty-two race verdicts across twelve roots pass. Four actual-source controls reject detached admission, missing cancellation, missing join and stale-worker retention. | The public physical Speed Lab fixture could not enter its mandatory Netlink capture locally. Current native execution remains required. |
 | [`0c46cb64`](https://github.com/Eabusham2/router-vpn/commit/0c46cb64876775d0c6f7bff39d22eaaf112afb04) | The recovered selected-DNS source gate follows the owned worker dispatch, cancellation, join and shutdown path. Four predicate/mutation tests and the recovered source audit pass. | Manual/live acceptance fields remain unproved. A source audit total is not a completion percentage. |
 
-Concurrent [`cb24240f`](https://github.com/Eabusham2/router-vpn/commit/cb24240f1376d6781237cdb26879877c8db64363) adds Android imported temporary Speed Lab handling; [`506336e8`](https://github.com/Eabusham2/router-vpn/commit/506336e826246c3c016e0b7509591f68b5a1348b) retains imported desktop current-path owners and reproves selected DNS; [`e0c815c1`](https://github.com/Eabusham2/router-vpn/commit/e0c815c107ebac1775c49295ccef1b1a5c896b84) owns and joins the periodic session-observer lifetime. These commits were inspected and preserved. Their authors' reported test counts are distinct from tests independently executed by this continuation. Overlapping temporary-path work must merge their actual source before publication.
+Concurrent [`cb24240f`](https://github.com/Eabusham2/router-vpn/commit/cb24240f1376d6781237cdb26879877c8db64363) adds Android imported temporary Speed Lab handling; [`506336e8`](https://github.com/Eabusham2/router-vpn/commit/506336e826246c3c016e0b7509591f68b5a1348b) retains imported desktop current-path owners and reproves selected DNS; [`e0c815c1`](https://github.com/Eabusham2/router-vpn/commit/e0c815c107ebac1775c49295ccef1b1a5c896b84) owns and joins the periodic session-observer lifetime. The cooperating workstreams separately executed the following bounded verification. These counts do not establish physical acceptance, and the table does not replace the earlier units or their distinct evidence. Overlapping temporary-path work must merge this actual source before publication.
+
+| Published unit | Result and bounded evidence |
+| --- | --- |
+| [`be954cc15`](https://github.com/Eabusham2/router-vpn/commit/be954cc15f5d99c6c0a9865d3b7020e91418d570) — backend native proof audit | The backend release audit executes the function-scoped guard for the original caller, runtime, selected profile and final-owned DNS. All 32 native shipping audit tests pass, including changed-context, wrong-runtime and wrong-resolver controls. This is executable audit coverage, not native traffic or release evidence. |
+| [`cb24240f1`](https://github.com/Eabusham2/router-vpn/commit/cb24240f1376d6781237cdb26879877c8db64363) — Android temporary imported path | Speed Lab accepts an original imported entry before a paired final through the existing Local runtime. Preflight compiles the actual final assets before suspending the original; the picker offers only compatible captured transports. Source changes, stale native receipts, cancellation and newer user ownership prevent stale results. The shipping JVM restoration harness passes 4,070 checks; the external regression harness passes 3,165. Their 25 and seven causal controls are rejected. A final source baseline passes again. The real Android producer and shared Go compiler pass nine protocol phases, each with nine independent entry/final Start Layer graphs, plus five source/staging controls. OS and transport handles remain controlled boundaries; no APK/device acceptance is inferred. |
+| [`506336e8`](https://github.com/Eabusham2/router-vpn/commit/506336e826246c3c016e0b7509591f68b5a1348b) — desktop imported Current path | Current-path Speed Lab retains the exact imported native runtime, original caller, physical/profile observations and fresh selected-DNS verification between measurement phases. Cancellation joins the native operation before returning the caller error. All 27 race-instrumented verdicts across ten roots and 23 shipping-audit tests pass. Physical-network observation and the native child are controlled test boundaries. This unit does not publish the separate desktop temporary-path preparation, picker or per-hop work. |
+| [`e0c815c1`](https://github.com/Eabusham2/router-vpn/commit/e0c815c107ebac1775c49295ccef1b1a5c896b84) — session observer retirement | The periodic observer has an owned context and join. Shutdown atomically retains a stopped tracker even before the first status request. DNS contexts derive from that lifetime while preserving the existing per-proof budget, stale cancellation and completion receipt. Terminal state updates only the joined original snapshot. Merged verification passes 69 race-instrumented verdicts across 23 roots, seven recovered-DNS audit tests, 32 native shipping audit tests and 23 Speed Lab audit tests. The public native Speed Lab fixtures remain mandatory in hosted CI because local Netlink capture cannot reach their assertions. |
 
 ## Remaining implementation and acceptance ledger
 

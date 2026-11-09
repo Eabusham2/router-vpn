@@ -23,6 +23,12 @@ workers now cancel and join their captured owner before replacement/shutdown
 (`a984b757`), and the newer concurrent session-observer cleanup in `e0c815c1`
 is preserved. The source audit follows the actual owned worker lifecycle.
 
+Android temporary imported entry-to-paired-final Speed Lab is published in
+`cb24240f1`; desktop imported Current-path ownership and fresh selected-DNS
+verification are published in `506336e8`. Their local JVM/race and mutation
+results, original-source recovery limits, and native/physical boundaries are
+recorded in the same ledger.
+
 Imported desktop MTU Auto/Retest/Cancel measurement and rollback, temporary
 Speed Lab preparation/protection transfer, remaining Tor admission/adoption,
 and broader requested graph/platform support remain active implementation.
