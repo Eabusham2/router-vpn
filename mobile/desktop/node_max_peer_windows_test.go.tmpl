@@ -429,17 +429,29 @@ func TestRouterVPNDesktopNodeWindowsMAXReferenceProcess(t *testing.T) {
 		}
 		return value.(*atomic.Int64).Load()
 	}
+	// A failed retained reset must identify the operation that stopped before
+	// the parent's unchanged read deadline. Fixed stage names go only to the
+	// diagnostic channel; they contain no source, key or private reply bytes.
+	resetting := false
+	resetStage := func(stage string) {
+		if resetting {
+			_, _ = io.WriteString(os.Stderr, "MAX retained reference reset stage="+stage+"\n")
+		}
+	}
 	respond := func(initial bool, nonce string) {
 		select {
 		case err := <-f.server.failure:
 			t.Fatal("MAX actual native reference failed", err)
 		default:
 		}
+		resetStage("native-snapshot")
 		snapshot, err := f.reference.Snapshot()
 		if err != nil {
 			t.Fatal("MAX actual native reference readback failed", err)
 		}
+		resetStage("bridge-readback")
 		reply := nodeMAXWFPReply{Schema: 1, AppID: scope, SourceSHA256: digest, Snapshot: snapshot, Updates: f.reference.Updates(), Packets: f.reference.Packets(), KEMReceived: f.server.received.Load(), KEMRejected: f.server.rejected.Load(), PacketBridge: wg.snapshot(), KEMBridge: kem.snapshot(), MiddleRaw: f.middle.raw.Load(), MiddleRejected: f.middle.rejected.Load(), MiddlePacket: lane(f.middle, f.packet), MiddleKEM: lane(f.middle, f.kem), MiddleOuter: lane(f.middle, f.outerDestination), OuterRaw: f.outer.raw.Load(), OuterRejected: f.outer.rejected.Load(), OuterMiddle: lane(f.outer, f.middleDestination), Queries: f.inner.queries.Load(), Echoes: f.inner.echoes.Load(), Rejected: f.inner.rejected.Load(), Plain: f.reference.PlaintextSeen() || f.middle.plain.Load() || f.outer.plain.Load() || wg.plain.Load() || kem.plain.Load(), Probe: nonce}
+		resetStage("tls-records")
 		if f.tlsReference != nil {
 			diagnostic := f.tlsReference.process.diagnostics()
 			reply.MLKEMRejected = strings.Contains(diagnostic, "ML-KEM-768 handshake failed > chacha20poly1305: message authentication failed")
@@ -458,6 +470,7 @@ func TestRouterVPNDesktopNodeWindowsMAXReferenceProcess(t *testing.T) {
 		if err != nil || len(encoded)+1 > nodeMAXWFPLimit {
 			t.Fatal("MAX reply exceeded its captured bound", err)
 		}
+		resetStage("private-reply")
 		if _, err = nodeMAXWFPReplyOutput.Write(append(encoded, '\n')); err != nil {
 			t.Fatal("MAX reference lost its private reply channel", err)
 		}
@@ -496,13 +509,19 @@ func TestRouterVPNDesktopNodeWindowsMAXReferenceProcess(t *testing.T) {
 			respond(false, "")
 			continue
 		case "reset-joined-client":
+			resetting = true
+			resetStage("next-key-epoch")
 			next, err := f.server.nextKeyBarrier()
 			if err != nil {
 				t.Fatal("MAX restored reference lost its next actual key epoch", err)
 			}
+			resetStage("packet-bridge")
 			wg.resetWithKeyBarrier(next)
+			resetStage("kem-bridge")
 			kem.reset()
 			respond(false, "")
+			resetStage("complete")
+			resetting = false
 			continue
 		}
 		parts := strings.Split(action, " ")
@@ -654,9 +673,12 @@ func (p *nodeMAXWFPReference) observeLocked(ctx context.Context, action string) 
 		return nodeMAXWFPReply{}, errors.Join(err, errors.New("MAX observation lost its retained channel"))
 	}
 	reply, err := p.readContext(ctx, 10*time.Second)
+	if err != nil {
+		return nodeMAXWFPReply{}, errors.Join(err, errors.New("MAX reference did not complete its retained observation read"))
+	}
 	old := p.reply
-	if err != nil || reply.Schema != 1 || !bytes.Equal(reply.AppID, old.AppID) || reply.SourceSHA256 != old.SourceSHA256 || reply.Source != nil || reply.Password != "" || reply.Updates < old.Updates || reply.Packets < old.Packets || reply.KEMReceived < old.KEMReceived || reply.KEMRejected < old.KEMRejected || !reply.PacketBridge.follows(old.PacketBridge) || !reply.KEMBridge.follows(old.KEMBridge) || reply.Queries < old.Queries || reply.Echoes < old.Echoes || reply.MiddleRaw < old.MiddleRaw || reply.MiddleRejected < old.MiddleRejected || reply.MiddlePacket < old.MiddlePacket || reply.MiddleKEM < old.MiddleKEM || reply.MiddleOuter < old.MiddleOuter || reply.OuterRaw < old.OuterRaw || reply.OuterRejected < old.OuterRejected || reply.OuterMiddle < old.OuterMiddle || old.MLKEMRejected && !reply.MLKEMRejected || old.UserRejected && !reply.UserRejected || old.Plain && !reply.Plain {
-		return nodeMAXWFPReply{}, errors.Join(err, errors.New("MAX reference changed its original source or regressed actual observations"))
+	if reply.Schema != 1 || !bytes.Equal(reply.AppID, old.AppID) || reply.SourceSHA256 != old.SourceSHA256 || reply.Source != nil || reply.Password != "" || reply.Updates < old.Updates || reply.Packets < old.Packets || reply.KEMReceived < old.KEMReceived || reply.KEMRejected < old.KEMRejected || !reply.PacketBridge.follows(old.PacketBridge) || !reply.KEMBridge.follows(old.KEMBridge) || reply.Queries < old.Queries || reply.Echoes < old.Echoes || reply.MiddleRaw < old.MiddleRaw || reply.MiddleRejected < old.MiddleRejected || reply.MiddlePacket < old.MiddlePacket || reply.MiddleKEM < old.MiddleKEM || reply.MiddleOuter < old.MiddleOuter || reply.OuterRaw < old.OuterRaw || reply.OuterRejected < old.OuterRejected || reply.OuterMiddle < old.OuterMiddle || old.MLKEMRejected && !reply.MLKEMRejected || old.UserRejected && !reply.UserRejected || old.Plain && !reply.Plain {
+		return nodeMAXWFPReply{}, errors.New("MAX reference changed its original source or regressed actual observations")
 	}
 	p.reply = reply
 	return reply, nil
