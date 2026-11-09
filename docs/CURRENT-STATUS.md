@@ -58,11 +58,25 @@ before restoration. Its hosted result remains required. A broader nonterminal
 selected-DNS cancel-and-join phase inside Stop is separately unfinished.
 
 Remaining imported graph families, Server/Compare, protected desktop public
-startup/temporary handoff, the diagnosed MAX succession timeout, physical and
+startup/temporary handoff, current native/release verification, physical and
 off-LAN acceptance, signing and authorized private deployment remain open.
 Naive H2 feasibility work has not yet produced a shipping implementation;
 refusing an unsupported graph or DNS transport does not complete it. The
 dated checkpoints below retain their historical meaning.
+
+### Later native MAX evidence, observed at 03:04 UTC
+
+With live `main` at `5b76d2fa8a1f09048bfc92890727eb4314aa441f`, the newest
+completed [MAX/WFP run 42546960251](https://github.com/Eabusham2/router-vpn/actions/runs/42546960251)
+passed all ten required jobs at `e5875af0520c992b2fa58dd75a1422d246fa12eb`.
+The actual [AMD64 succession log](https://github.com/Eabusham2/router-vpn/actions/runs/42546960251/job/128940397827)
+and [ARM64 succession log](https://github.com/Eabusham2/router-vpn/actions/runs/42546960251/job/128940397594)
+each show all twelve mode/layer cases passing, including `max-tls-awg/off`.
+The [dated evidence ledger](CONTINUATION-EVIDENCE-2026-11-09.md#native-windows-max-follow-up--observed-at-0304-utc)
+records the exact durations and unchanged source boundary. This supersedes the
+old timeout as the latest observed gate result; `fe3e62d8` remains diagnostic,
+not an asserted causal repair. Newer MAX execution and the full current release
+were still pending. Physical/off-LAN acceptance and deployment are unchanged.
 
 ## Earlier November 9 checkpoint: PQ graphs, imported MTU and release gates
 

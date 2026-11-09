@@ -4,6 +4,44 @@ This checkpoint continues the [November 7 reconciled ledger](CONTINUATION-EVIDEN
 
 The initial branch read for this checkpoint was `e0c815c107ebac1775c49295ccef1b1a5c896b84`. A later November 9 read verified `e5875af0520c992b2fa58dd75a1422d246fa12eb` on `main`; its exact tree is `f203249bb62e110a6a6bd8cbad848ed10aa4a846`. The source is still advancing. No private server, ASUS configuration, household forwarding, signing account or physical user device was changed by this continuation.
 
+## Native Windows MAX follow-up — observed at 03:04 UTC
+
+The live branch read was `5b76d2fa8a1f09048bfc92890727eb4314aa441f`.
+The newest completed standalone
+[MAX/WFP run 42546960251](https://github.com/Eabusham2/router-vpn/actions/runs/42546960251)
+finished successfully at 02:59:21 UTC on the earlier exact commit
+`e5875af0520c992b2fa58dd75a1422d246fa12eb`. All ten jobs passed: QUIC, TLS,
+succession and both ownership-control suites on Windows AMD64 and ARM64.
+
+The two succession job logs independently contain all twelve required mode/layer
+passes and their parent pass, including the previously failing case:
+
+| Actual hosted target | Exact succession job | `max-tls-awg/off` | Whole twelve-case succession root |
+|---|---|---|---|
+| Windows AMD64 | [128940397827](https://github.com/Eabusham2/router-vpn/actions/runs/42546960251/job/128940397827) | Passed, 102.99 seconds | Passed, 1237.71 seconds |
+| Windows ARM64 | [128940397594](https://github.com/Eabusham2/router-vpn/actions/runs/42546960251/job/128940397594) | Passed, 25.81 seconds | Passed, 313.17 seconds |
+
+These are the Go test's elapsed durations. The
+[shipping succession fixture at that commit](https://github.com/Eabusham2/router-vpn/blob/e5875af0520c992b2fa58dd75a1422d246fa12eb/mobile/desktop/node_max_peer_windows_test.go.tmpl)
+still drains the original and opposite-transport trial, resets the retained
+reference, restores the original Always capture and requires fresh traffic.
+The MAX peer/reference sources, harness and workflow examined for this
+follow-up are unchanged between that tested commit and the recorded branch
+head; this comparison does not relabel an older native run as new-head execution.
+
+This success supersedes the old succession timeout as the latest observed MAX
+gate result. `fe3e62d8` remains diagnostic instrumentation: no causal repair is
+attributed to its stage messages, and neither the ten-second observation budget
+nor the original ownership checks was loosened for this follow-up. No source
+repair was selected from a historical failure that these later jobs did not
+reproduce.
+
+The newer [MAX run 42553223176](https://github.com/Eabusham2/router-vpn/actions/runs/42553223176)
+at `053e611114ce9f8e9e0dd430f3c49986b40d0f00` was still pending at the live
+read. Required native/release verification for the latest branch remains
+unfinished. This bounded hosted MAX success establishes no new full release,
+physical user-device/off-LAN acceptance, signing or private deployment.
+
 ## Latest published checkpoint through 5670c8e3
 
 At 02:45 UTC on November 9, an independent live branch read and local fetch
@@ -64,7 +102,7 @@ integration gate. No new reusable DNS-worker drain was added to ordinary Stop.
 | #214–224: external nodes and graph roles | The bounded Local final set includes PQ REALITY and XHTTP REALITY with preserved original transport/source/layer policy. Other graph families, Server/Compare and additional-hop composition remain requirements. Naive H2 has source analysis and a pending isolated native feasibility witness, not shipping support. |
 | #160–168: selected DNS | Final-owned policy and bootstrap remain required. H2 application UDP-over-TCP cannot grant UDP to a TCP-only entry's lower resolver. No resolver rewrite or public substitute is authorized to make a graph pass. Current hosted encrypted DNS and device leak/path checks remain required. |
 | #229–240: MTU and protection | The native adapter and caller-cause repair are published. Protected Windows integration, retained lease/reader, actual TUN/private-path measurements and device acceptance remain separate. |
-| Exact native release and live acceptance | Required full suites, platform packages, images, compose and publication must converge on one SHA. MAX succession is diagnosed but not yet shown repaired. Physical/off-LAN behavior, UI/accessibility, signing, providers, authorized private deployment and ASUS fail-open validation remain open. |
+| Exact native release and live acceptance | Required full suites, platform packages, images, compose and publication must converge on one SHA. The later MAX follow-up above records all ten hosted jobs passing at `e5875af0`, including both succession targets; newer release evidence remains required. Physical/off-LAN behavior, UI/accessibility, signing, providers, authorized private deployment and ASUS fail-open validation remain open. |
 
 ## Earlier published checkpoint through e5875af0
 
