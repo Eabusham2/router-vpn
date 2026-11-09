@@ -225,6 +225,15 @@ func preflightOwnedNativeMultihopCommandContext(ctx context.Context, a *app, sel
 // Called only after the previous runtime has drained. Preflight is separate so
 // an invalid native graph never requires stopping a usable connection first.
 func stageOwnedNativeMultihopCommand(a *app, sel multihopSelection, launch *desktopNodeLaunch) error {
+	if err := stageOwnedNativeMultihopInputs(a, sel, launch); err != nil {
+		return err
+	}
+	return registerNativeMultihopDNSRuntime(a, sel, launch.command)
+}
+
+// A temporary prepared launch publishes DNS only after its captured operation
+// wins the final owner check. Private input staging itself grants no live route.
+func stageOwnedNativeMultihopInputs(a *app, sel multihopSelection, launch *desktopNodeLaunch) error {
 	if launch == nil || sel.Native == nil || sel.Native.validate(sel) != nil || launch.profileID != sel.Exit.ID || launch.policyProfileID != sel.Control.ID || launch.endpoint != sel.Native.endpoint || launch.importedEntry != sel.Native.imported {
 		return errors.New("native multihop source changed before staging")
 	}
@@ -240,9 +249,6 @@ func stageOwnedNativeMultihopCommand(a *app, sel multihopSelection, launch *desk
 		if err != nil {
 			return err
 		}
-	}
-	if err := registerNativeMultihopDNSRuntime(a, sel, launch.command); err != nil {
-		return err
 	}
 	return nil
 }

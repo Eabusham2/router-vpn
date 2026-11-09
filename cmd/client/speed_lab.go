@@ -63,6 +63,8 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 			"multihop_entry_id": p.MultihopEntryID, "multihop_entry_mode": p.MultihopEntryMode,
 			"multihop_execution": p.MultihopExecution,
 		}
+		entryModes, exitModes, executions := speedLabMultihopNodeCapabilities(p)
+		node["multihop_entry_modes"], node["multihop_exit_modes"], node["multihop_execution_choices"] = entryModes, exitModes, executions
 		if p.External != nil {
 			node["has_response_probe"] = p.External.ResponseProbe != nil || len(p.External.OpenVPNResponseProbes) != 0
 			node["has_server_peer"] = p.External.ServerPeer != nil
@@ -316,6 +318,13 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 			return speedLabPath{}, speedLabMeasurement{}, nil, err
 		}
 		defer q.preparedExternal.releaseUnused()
+	}
+	if strings.EqualFold(strings.TrimSpace(q.Topology), "multihop") {
+		q.preparedMultihop, err = a.prepareSpeedLabImportedMultihop(r.Context(), q)
+		if err != nil {
+			return speedLabPath{}, speedLabMeasurement{}, nil, err
+		}
+		defer q.preparedMultihop.releaseUnused()
 	}
 	if err := a.speedLabSuspendPrevious(snapshot, strings.EqualFold(strings.TrimSpace(q.Topology), "system-direct")); err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, err)

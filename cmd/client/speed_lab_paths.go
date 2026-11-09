@@ -18,6 +18,7 @@ import (
 
 type speedLabRequest struct {
 	preparedExternal       *speedLabExternalPreparation
+	preparedMultihop       *speedLabMultihopPreparation
 	Scope                  string            `json:"scope,omitempty"`
 	Topology               string            `json:"topology,omitempty"`
 	NodeID                 string            `json:"node_id,omitempty"`
@@ -600,19 +601,28 @@ func (a *app) resolveSpeedLabMultihop(q speedLabRequest, control common.RouterPr
 }
 
 func (a *app) startSpeedLabMultihopPath(q speedLabRequest) (speedLabPath, error) {
+	if prepared := q.preparedMultihop; prepared != nil {
+		selection, err := prepared.apply(prepared.caller, a, q)
+		if err != nil {
+			return speedLabPath{}, err
+		}
+		return a.startSpeedLabMultihopSelection(selection, q)
+	}
 	// The visible complete-profile selection owns the raw entry default. The
 	// temporary hop's own saved graph is a different preference and must not
 	// become the default merely because it becomes the temporary policy owner.
 	a.mu.Lock()
 	selected, _ := a.profileByIDLocked(a.profiles.SelectedID)
 	selected = cloneRouterProfile(selected)
+	entry, _ := a.profileByIDLocked(strings.TrimSpace(q.EntryID))
+	imported := entry.External != nil || entry.NodeKind == "external"
 	a.mu.Unlock()
+	if imported {
+		return speedLabPath{}, errors.New("temporary imported entry requires its prepared native graph before the previous VPN is suspended")
+	}
 	entryProfile, err := a.applySpeedLabTemporaryProfile(q.EntryID, q)
 	if err != nil {
 		return speedLabPath{}, err
-	}
-	if strings.EqualFold(entryProfile.NodeKind, "external") || entryProfile.External != nil {
-		return speedLabPath{}, errors.New("Router VPN node-to-node multihop requires a Router VPN entry; use topology=external for an external entry/exit graph")
 	}
 	a.mu.Lock()
 	profiles := cloneRouterProfileStore(a.profiles).Profiles
@@ -625,6 +635,22 @@ func (a *app) startSpeedLabMultihopPath(q speedLabRequest) (speedLabPath, error)
 }
 
 func (a *app) resolveSpeedLabTemporaryMultihop(q speedLabRequest, selected, entryProfile common.RouterProfile, profiles []common.RouterProfile) (multihopSelection, error) {
+	if entryProfile.External != nil || entryProfile.NodeKind == "external" {
+		final, exists := profileByID(profiles, strings.TrimSpace(q.ExitID))
+		if !exists {
+			return multihopSelection{}, errors.New("temporary imported entry requires its independently paired final")
+		}
+		control := cloneRouterProfile(final)
+		// Only the visible complete profile supplies an omitted selection. The
+		// final's own saved graph must not silently replace that selection.
+		control.MultihopEntryMode, control.MultihopExecution = selected.MultihopEntryMode, selected.MultihopExecution
+		selection, err := a.resolveSpeedLabMultihop(q, control, profiles)
+		if err != nil {
+			return selection, err
+		}
+		selection.Control = cloneRouterProfile(final)
+		return selection, nil
+	}
 	mode, base, err := resolveNativeMultihopEntryMode(selected, entryProfile, q.EntryMode, q.Base)
 	if err != nil {
 		return multihopSelection{}, err
@@ -660,7 +686,19 @@ func (a *app) startSpeedLabMultihopSelection(sel multihopSelection, q speedLabRe
 			return speedLabPath{}, err
 		}
 	}
-	network := physicalNetworkIdentity()
+	parent := a.connectionOperationContextOrBackground()
+	network := ""
+	if prepared := q.preparedMultihop; prepared != nil {
+		if execution != routechoice.Local || sel.Native != prepared.selection.Native {
+			return speedLabPath{}, errors.New("temporary imported path changed its captured Local selection")
+		}
+		if err := prepared.current(prepared.caller, a, true); err != nil {
+			return speedLabPath{}, err
+		}
+		parent, network = prepared.caller, prepared.network
+	} else {
+		network = physicalNetworkIdentity()
+	}
 	if network == "" {
 		return speedLabPath{}, errors.New("temporary multihop cannot capture its physical network")
 	}
@@ -668,9 +706,9 @@ func (a *app) startSpeedLabMultihopSelection(sel multihopSelection, q speedLabRe
 	if err := a.speedLabStopRuntime(true); err != nil {
 		return speedLabPath{}, err
 	}
-	ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), 180*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 180*time.Second)
 	defer cancel()
-	driver := &desktopExecutionDriver{a: a, selection: sel, network: network}
+	driver := &desktopExecutionDriver{a: a, selection: sel, network: network, prepared: q.preparedMultihop}
 	var active routechoice.Session
 	var winner *routechoice.Candidate
 	if execution == "auto" {
@@ -708,7 +746,7 @@ func (a *app) startSpeedLabMultihopSelection(sel multihopSelection, q speedLabRe
 	if err == nil {
 		err = a.checkConnectionOperation()
 	}
-	if err == nil && (!ok || winner == nil || real.Identity() == "") {
+	if err == nil && (!ok || winner == nil || real.identityContext(ctx) == "") {
 		err = errors.New("temporary multihop result lost its captured path before adoption")
 	}
 	if err != nil {

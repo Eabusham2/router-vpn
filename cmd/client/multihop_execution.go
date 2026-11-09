@@ -134,6 +134,7 @@ type desktopExecutionDriver struct {
 	a         *app
 	selection multihopSelection
 	network   string
+	prepared  *speedLabMultihopPreparation
 	peerMu    sync.Mutex
 	peers     map[string]desktopServerPeerIdentity
 }
@@ -168,7 +169,17 @@ type desktopRelayOwner struct {
 var desktopRelays sync.Map
 
 func (s *desktopExecutionSession) Identity() string {
-	if s.command == nil || !s.driver.a.ownsConnectionRuntime(s.command) || physicalNetworkIdentity() != s.driver.network {
+	return s.identityContext(context.Background())
+}
+
+func (s *desktopExecutionSession) identityContext(ctx context.Context) string {
+	if ctx == nil || ctx.Err() != nil || s.command == nil || desktopnetwork.LockContext(ctx, &s.driver.a.mu) != nil {
+		return ""
+	}
+	owned := s.driver.a.cmd == s.command && !s.driver.a.closing
+	s.driver.a.mu.Unlock()
+	network, err := physicalNetworkIdentityContext(ctx)
+	if !owned || err != nil || network != s.driver.network {
 		return ""
 	}
 	g, ok := getActiveMultihopGraph(s.driver.a)
@@ -178,13 +189,16 @@ func (s *desktopExecutionSession) Identity() string {
 	if capture := s.selection.Native; capture != nil && (g.EntryMode != capture.entryMode || g.SourceSHA != capture.source || capture.validate(s.selection) != nil) {
 		return ""
 	}
-	if s.selection.Native != nil && s.selection.Native.imported && !s.driver.a.nativeMultihopProofOwnerCurrent(s.selection, s.command) {
+	if s.selection.Native != nil && s.selection.Native.imported && !s.driver.a.nativeMultihopProofOwnerCurrentContext(ctx, s.selection, s.command) {
+		return ""
+	}
+	if ctx.Err() != nil {
 		return ""
 	}
 	return s.generation
 }
 func (s *desktopExecutionSession) Verify(ctx context.Context) error {
-	if s.Identity() == "" {
+	if s.identityContext(ctx) == "" {
 		return errors.New("candidate no longer owns its network/session")
 	}
 	if err := s.driver.a.observeImportedOpenVPN(ctx, s.selection, s.command); err != nil {
@@ -193,7 +207,7 @@ func (s *desktopExecutionSession) Verify(ctx context.Context) error {
 	if err := proveNativeMultihopLaneContext(ctx, s.selection.Entry, multihopEntryProofProxy); err != nil {
 		return err
 	}
-	if s.Identity() == "" {
+	if s.identityContext(ctx) == "" {
 		return errors.New("entry proof completed for a retired candidate")
 	}
 	if err := s.driver.a.observeImportedOpenVPN(ctx, s.selection, s.command); err != nil {
@@ -202,7 +216,7 @@ func (s *desktopExecutionSession) Verify(ctx context.Context) error {
 	if err := proveMultihopLaneNodeContext(ctx, s.selection.Exit, multihopProofProxy); err != nil {
 		return err
 	}
-	if s.Identity() == "" {
+	if s.identityContext(ctx) == "" {
 		return errors.New("exit proof completed for a retired candidate")
 	}
 	if err := s.driver.a.observeImportedOpenVPN(ctx, s.selection, s.command); err != nil {
@@ -210,7 +224,7 @@ func (s *desktopExecutionSession) Verify(ctx context.Context) error {
 	}
 	if s.selection.Native != nil && s.selection.Native.imported {
 		_, err := s.driver.a.proveImportedNativeDNS(ctx, s.selection, s.command)
-		if err != nil || ctx.Err() != nil || s.Identity() == "" {
+		if err != nil || ctx.Err() != nil || s.identityContext(ctx) == "" {
 			return errors.New("imported path final DNS or retained owner was not proved")
 		}
 	}
@@ -236,7 +250,7 @@ func (s *desktopExecutionSession) ProbeExternal(ctx context.Context, target stri
 	return s.probe(ctx, target, nil)
 }
 func (s *desktopExecutionSession) probe(ctx context.Context, target string, node *common.RouterProfile) (time.Duration, error) {
-	identity := s.Identity()
+	identity := s.identityContext(ctx)
 	if identity == "" {
 		return 0, errors.New("unowned measurement")
 	}
@@ -266,7 +280,7 @@ func (s *desktopExecutionSession) probe(ctx context.Context, target string, node
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4097))
 	_ = resp.Body.Close()
 	elapsed := time.Since(start)
-	if readErr != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 || len(body) > 4096 || ctx.Err() != nil || s.Identity() != identity {
+	if readErr != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 || len(body) > 4096 || ctx.Err() != nil || s.identityContext(ctx) != identity {
 		return 0, errors.New("routed probe failed, expired, or changed path")
 	}
 	if node != nil {
@@ -310,11 +324,18 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 	if d.selection.Entry.NodeKind == "external" && c.Execution != routechoice.Local {
 		return nil, errors.New("ordinary imported entry supports only explicit Local execution")
 	}
-	if c.EntryID != d.selection.Entry.ID || c.ExitID != d.selection.Exit.ID || physicalNetworkIdentity() != d.network {
+	network, networkErr := physicalNetworkIdentityContext(ctx)
+	if c.EntryID != d.selection.Entry.ID || c.ExitID != d.selection.Exit.ID || networkErr != nil || network != d.network {
 		return nil, errors.New("comparison node/network changed")
 	}
-	if err := d.a.checkConnectionOperation(); err != nil {
+	if err := desktopnetwork.LockContext(ctx, &d.a.mu); err != nil {
 		return nil, err
+	}
+	operation := d.a.connectionContext
+	cancelled := d.a.closing || operation != nil && (operation.Err() != nil || d.a.connectionCancelIntent == operation)
+	d.a.mu.Unlock()
+	if cancelled || ctx.Err() != nil {
+		return nil, errConnectionOperationCancelled
 	}
 	if _, busy := desktopRelays.Load(d.a); busy {
 		return nil, errors.New("a previous server lease still requires cleanup")
@@ -378,20 +399,41 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 		descriptor = &desktopExecutionDescriptor{Execution: "server", Lease: lease}
 		s.relay = &desktopRelayOwner{app: d.a, entry: sel.Entry, expected: lease, request: q, localPacketPublic: localPacketPublic, serverPacketPublic: sel.serverPacketPublic, localPQIdentity: localPQIdentity, serverPQIdentity: sel.serverPQIdentity}
 	}
-	s.command, s.descriptorDir, s.native, err = desktopExecutionCommandContext(ctx, d.a, sel, descriptor)
+	if d.prepared != nil {
+		s.native, err = d.prepared.stage(ctx, d.a, sel, c)
+		if err == nil {
+			s.command = s.native.command
+		}
+	} else {
+		s.command, s.descriptorDir, s.native, err = desktopExecutionCommandContext(ctx, d.a, sel, descriptor)
+	}
 	if err != nil {
 		return s, err
 	}
-	if err = ctx.Err(); err != nil {
+	// Serialize the last ownership check, process start and publication. An
+	// old prepared result may neither replace a newer command nor leave an
+	// unregistered started child if cancellation wins the admission lock.
+	if err := desktopnetwork.LockContext(ctx, &d.a.mu); err != nil {
 		return s, err
 	}
+	if d.a.cmd != nil || d.a.closing || d.a.connectionContext != operation ||
+		operation != nil && (operation.Err() != nil || d.a.connectionCancelIntent == operation) || ctx.Err() != nil {
+		d.a.mu.Unlock()
+		return s, errors.New("multihop startup lost its captured connection operation")
+	}
+	if d.prepared != nil {
+		if err := d.prepared.currentLocked(d.a, true); err != nil {
+			d.a.mu.Unlock()
+			return s, err
+		}
+	}
 	if err = s.command.Start(); err != nil {
+		d.a.mu.Unlock()
 		return s, errors.New("owned multihop helper failed to start")
 	}
 	if s.native != nil {
 		desktopNodeOwners.Store(d.a, s.native)
 	}
-	d.a.mu.Lock()
 	d.a.cmd = s.command
 	d.a.state.Mode = "multihop"
 	d.a.state.LogicalMode = "multihop"
@@ -410,15 +452,26 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 			return s, err
 		}
 	}
+	if d.prepared != nil {
+		if err := d.a.speedLabOwnRuntime(s.command); err != nil {
+			return s, err
+		}
+	}
 	if s.relay != nil {
 		s.relay.command = s.command
 	}
 	for {
-		if s.Identity() == "" {
+		if s.identityContext(ctx) == "" {
 			return s, errors.New("entry startup lost ownership")
 		}
-		err = proveMultihopLaneNodeContext(ctx, sel.Entry, multihopEntryProofProxy)
+		err = d.a.observeImportedOpenVPN(ctx, sel, s.command)
 		if err == nil {
+			err = proveNativeMultihopLaneContext(ctx, sel.Entry, multihopEntryProofProxy)
+		}
+		if err == nil {
+			if s.identityContext(ctx) == "" {
+				return s, errors.New("entry startup proof belongs to a retired candidate")
+			}
 			break
 		}
 		select {
@@ -454,9 +507,18 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 		s.relay.startRenewal()
 	}
 	for {
-		err = proveMultihopLaneNodeContext(ctx, sel.Exit, multihopProofProxy)
+		if s.identityContext(ctx) == "" {
+			return s, errors.New("exit startup lost ownership")
+		}
+		err = d.a.observeImportedOpenVPN(ctx, sel, s.command)
 		if err == nil {
-			return s, nil
+			err = proveMultihopLaneNodeContext(ctx, sel.Exit, multihopProofProxy)
+		}
+		if err == nil {
+			if s.identityContext(ctx) == "" {
+				return s, errors.New("exit startup proof belongs to a retired candidate")
+			}
+			return s, d.a.observeImportedOpenVPN(ctx, sel, s.command)
 		}
 		select {
 		case <-ctx.Done():
