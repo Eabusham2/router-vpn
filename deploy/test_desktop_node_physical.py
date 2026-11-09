@@ -268,6 +268,18 @@ NAIVE_TRANSPORT_VERDICTS = (
       ("udp", "udp4", "udp6", "unix", "empty", "listen-packet", "tcp-original", "tcp-cancelled")),
     *("TestRouterVPNNaiveTransportH3/" + case for case in ("tcp", "udp", "listen-packet")))
 NAIVE_TRANSPORT_SUITE = ("naive-transport-policy", "./protocol/naive", "^TestRouterVPNNaiveTransport", NAIVE_TRANSPORT_VERDICTS)
+NAIVE_LITERAL_ROOT = "TestRouterVPNDesktopNodeNaiveLiteral"
+NAIVE_LITERAL_CASES = (
+    "literal-with-udp-bootstrap", "literal-with-tcp-bootstrap", "wrong-password", "wrong-user",
+    "ipv4-trailing-dot-name", "ipv4-dotted-wrong-server-name", "ipv4-dotted-wrong-certificate",
+    "wrong-server-name", "wrong-certificate", "forced-nonliteral-query-control", "fresh-literal-after-refusals",
+    "literal-ipv6-with-udp-bootstrap", "literal-ipv6-with-tcp-bootstrap", "ipv6-uppercase-name", "ipv6-trailing-dot-name",
+    "ipv6-dotted-wrong-server-name", "ipv6-dotted-wrong-certificate",
+    "ipv6-wrong-password", "ipv6-wrong-user", "ipv6-wrong-server-name", "ipv6-wrong-certificate",
+    "ipv6-forced-nonliteral-query-control", "fresh-ipv6-after-refusals")
+NAIVE_LITERAL_VERDICTS = (NAIVE_LITERAL_ROOT, *(NAIVE_LITERAL_ROOT + "/" + case for case in NAIVE_LITERAL_CASES))
+NAIVE_LITERAL_SUITE = ("naive-literal-policy", "./protocol/routervpnamnezia", "^" + NAIVE_LITERAL_ROOT + "$", NAIVE_LITERAL_VERDICTS)
+
 COMPOSITE_MODES = ("split", "max", "ss-v2ray")
 COMPOSITE_CASES = tuple(mode + "/" + layer for mode in COMPOSITE_MODES
                        for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening"))
@@ -1098,6 +1110,8 @@ def execute_baseline_suite(baselines, suite):
         require_native_verdicts(output, OPENVPN_CAPACITY_VERDICTS, "OpenVPN authenticated live capacity")
     if name == NAIVE_TRANSPORT_SUITE[0]:
         require_native_verdicts(output, NAIVE_TRANSPORT_VERDICTS, "Naive H2 transport and original H3 owner")
+    if name == NAIVE_LITERAL_SUITE[0]:
+        require_native_verdicts(output, NAIVE_LITERAL_VERDICTS, "Naive captured IPv6 TLS and original DNS owner")
     if name == "native-lifecycle-admission":
         require_native_verdicts(output, NATIVE_LIFECYCLE_ADMISSION_VERDICTS, "native lifecycle admission")
     if name == 'native-retirement-bound':
@@ -1295,6 +1309,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         ("naive-traffic", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeNaiveTraffic$",
          ("TestRouterVPNDesktopNodeNaiveTraffic",)),
         NAIVE_TRANSPORT_SUITE,
+        NAIVE_LITERAL_SUITE,
         ("naive-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeNaiveWrongCredential$",
          ("TestRouterVPNDesktopNodeNaiveWrongCredential",)),
         ("composite-traffic", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeCompositeTraffic$",

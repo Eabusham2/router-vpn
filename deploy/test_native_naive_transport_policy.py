@@ -55,7 +55,9 @@ class NativeNaiveTransport(unittest.TestCase):
                 raise AssertionError('Unexpected native source read: '+repr(argv))
 
             with mock.patch.object(POLICY, 'SOURCE_SHA256', hashlib.sha256(original[POLICY.OUTBOUND]).hexdigest()), \
-                    mock.patch.object(POLICY.subprocess, 'check_output', side_effect=git):
+                    mock.patch.object(POLICY.subprocess, 'check_output', side_effect=git), \
+                    mock.patch.object(POLICY.LITERAL, 'prepare'), \
+                    mock.patch.object(POLICY.LITERAL, 'verify', return_value={}):
                 yield vendor, original
 
     @staticmethod
@@ -83,6 +85,8 @@ class NativeNaiveTransport(unittest.TestCase):
             with self.assertRaises(ValueError):
                 POLICY.verify(vendor)
             POLICY.prepare(vendor)
+            POLICY.LITERAL.prepare.assert_called_once_with(vendor)
+            POLICY.LITERAL.verify.assert_called_once_with(vendor)
             expected = dict(original)
             expected[POLICY.OUTBOUND] = POLICY.patch(original[POLICY.OUTBOUND])
             expected.update({relative: (ROOT/'mobile/naive'/name).read_bytes()

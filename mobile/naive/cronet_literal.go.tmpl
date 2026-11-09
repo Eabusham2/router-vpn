@@ -1,0 +1,67 @@
+package cronet
+
+import (
+	"errors"
+	"net/netip"
+	"strings"
+
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// The caller's captured DNS name remains its source identity. Derive only the
+// runtime H2 hostname: RFC 6066 section 3 excludes a terminal dot from wire SNI.
+// Use the same derived name for the URL and native resolver alias, so their
+// existing exact comparison cannot send an absolute name to a lower resolver.
+// The caller's options, endpoint, port, credentials and trust are not modified.
+func routerVPNNaiveWireName(name string, quic bool) (string, error) {
+	if quic || !strings.HasSuffix(name, ".") {
+		return name, nil
+	}
+	if err := routerVPNNaiveHostname(name); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(name, "."), nil
+}
+
+// The transport's captured IPv6 literal is already the intended address. Keep
+// it typed as a literal inside Chromium's resolver, so its unrelated global
+// IPv6 reachability heuristic cannot suppress the original endpoint's AAAA
+// answer. This changes neither the TLS URL/SNI nor the explicit DNS callback.
+// H3 and IPv4 retain their original resolver behavior.
+func routerVPNNaiveLiteralRule(address M.Socksaddr, serverName string, quic bool) (string, error) {
+	if quic || !address.Addr.Is6() || address.Addr.Is4In6() {
+		return "", nil
+	}
+	if _, err := netip.ParseAddr(serverName); err == nil {
+		return "", nil
+	}
+	// HostMappingRules accepts glob patterns and comma-separated instructions.
+	// Admit only an exact ASCII DNS hostname (including already encoded IDNA).
+	// Do not normalize or interpolate a user-supplied mapping instruction.
+	if address.Addr.Zone() != "" {
+		return "", errors.New("Naive IPv6 requires an exact hostname and unzoned captured literal")
+	}
+	if err := routerVPNNaiveHostname(serverName); err != nil {
+		return "", err
+	}
+	return "MAP " + serverName + " [" + address.Addr.String() + "]", nil
+}
+
+func routerVPNNaiveHostname(serverName string) error {
+	name := strings.TrimSuffix(serverName, ".")
+	if name == "" || len(serverName) > 253 {
+		return errors.New("Naive resolver rule requires an exact hostname")
+	}
+	for _, label := range strings.Split(name, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return errors.New("Naive resolver rule has an invalid hostname")
+		}
+		for _, c := range []byte(label) {
+			if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' {
+				continue
+			}
+			return errors.New("Naive resolver rule has an unsafe hostname")
+		}
+	}
+	return nil
+}

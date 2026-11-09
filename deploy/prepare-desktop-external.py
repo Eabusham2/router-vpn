@@ -157,6 +157,7 @@ PEER_TEMPLATES = {
     'node_router_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_router_peer_linux_test.go',
     'node_hysteria2_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_hysteria2_peer_test.go',
     'node_naive_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_peer_test.go',
+    'node_naive_literal_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_literal_test.go',
     'node_naive_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_peer_windows_test.go',
     'node_naive_loader_purego_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_loader_purego_test.go',
     'node_pq_peer_test.go.tmpl': 'protocol/routervpnpq/node_pq_peer_test.go',

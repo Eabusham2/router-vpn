@@ -1,0 +1,295 @@
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"runtime/debug"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mdns "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	NV "github.com/sagernet/sing-box/protocol/naive"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// Any actual lower lookup is observed and refused. The native Naive code must
+// retain this exact explicit transport even when its literal/SNI mapping needs
+// no upstream lookup. It cannot use a system/default resolver.
+type desktopNaiveLiteralWitnessDNS struct {
+	adapter.DNSRouter
+	exchanges atomic.Int64
+	lookups   atomic.Int64
+}
+
+func (d *desktopNaiveLiteralWitnessDNS) Exchange(context.Context, *mdns.Msg, adapter.DNSQueryOptions) (*mdns.Msg, error) {
+	d.exchanges.Add(1)
+	return nil, errors.New("native H2 witness refuses every upstream bootstrap query")
+}
+
+func (d *desktopNaiveLiteralWitnessDNS) Lookup(context.Context, string, adapter.DNSQueryOptions) ([]netip.Addr, error) {
+	d.lookups.Add(1)
+	return nil, errors.New("native H2 witness refuses every upstream bootstrap lookup")
+}
+
+type desktopNaiveLiteralWitnessDNSTransport struct {
+	adapter.DNSTransport
+	kind string
+}
+
+func (*desktopNaiveLiteralWitnessDNSTransport) Tag() string    { return "captured-naive-bootstrap" }
+func (d *desktopNaiveLiteralWitnessDNSTransport) Type() string { return d.kind }
+
+type desktopNaiveLiteralWitnessDNSManager struct {
+	adapter.DNSTransportManager
+	transport *desktopNaiveLiteralWitnessDNSTransport
+	reads     atomic.Int64
+}
+
+func (m *desktopNaiveLiteralWitnessDNSManager) Transport(tag string) (adapter.DNSTransport, bool) {
+	m.reads.Add(1)
+	return m.transport, tag == m.transport.Tag()
+}
+func (*desktopNaiveLiteralWitnessDNSManager) Default() adapter.DNSTransport {
+	panic("unexpected default DNS")
+}
+func (*desktopNaiveLiteralWitnessDNSManager) Transports() []adapter.DNSTransport {
+	panic("unexpected DNS enumeration")
+}
+
+// The inherited helper retains every actual TCP connection independently of
+// the native Naive lifetime. Only one exact original endpoint is rebound to
+// its loopback peer. UDP attempts are counted before they are refused.
+type desktopNaiveLiteralWitnessLower struct {
+	*desktopImportedSOCKSXrayPhysical
+	udp        atomic.Int64
+	mu         sync.Mutex
+	attempts   []string
+	firstStack string
+}
+
+func (p *desktopNaiveLiteralWitnessLower) refused(network string, destination M.Socksaddr) {
+	p.udp.Add(1)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.attempts = append(p.attempts, network+" "+destination.String())
+	if p.firstStack == "" {
+		p.firstStack = string(debug.Stack())
+	}
+}
+
+func (p *desktopNaiveLiteralWitnessLower) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network != "tcp" {
+		p.refused(network, destination)
+		return nil, errors.New("native H2 witness has no lower UDP authority")
+	}
+	return p.desktopImportedSOCKSXrayPhysical.DialContext(ctx, network, destination)
+}
+func (p *desktopNaiveLiteralWitnessLower) ListenPacket(_ context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	p.refused("listen-packet", destination)
+	return nil, errors.New("native H2 witness has no lower packet authority")
+}
+
+func TestRouterVPNDesktopNodeNaiveLiteral(t *testing.T) {
+	desktopNodeNaiveLibrary(t)
+	for _, test := range []struct{ name, resolver, fault, endpoint, hostStyle string }{
+		{"literal-with-udp-bootstrap", "udp", "", "192.0.2.77", ""},
+		{"literal-with-tcp-bootstrap", "tcp", "", "192.0.2.77", ""},
+		{"ipv4-trailing-dot-name", "tcp", "", "192.0.2.77", "trailing-dot"},
+		{"ipv4-dotted-wrong-server-name", "tcp", "naive-server-name", "192.0.2.77", "trailing-dot"},
+		{"ipv4-dotted-wrong-certificate", "tcp", "naive-certificate", "192.0.2.77", "trailing-dot"},
+		{"wrong-password", "udp", "naive-password", "192.0.2.77", ""},
+		{"wrong-user", "udp", "naive-user", "192.0.2.77", ""},
+		{"wrong-server-name", "udp", "naive-server-name", "192.0.2.77", ""},
+		{"wrong-certificate", "udp", "naive-certificate", "192.0.2.77", ""},
+		{"forced-nonliteral-query-control", "udp", "forced-query", "192.0.2.77", ""},
+		{"fresh-literal-after-refusals", "udp", "", "192.0.2.77", ""},
+		{"literal-ipv6-with-udp-bootstrap", "udp", "", "2001:db8::77", ""},
+		{"literal-ipv6-with-tcp-bootstrap", "tcp", "", "2001:db8::77", ""},
+		{"ipv6-uppercase-name", "tcp", "", "2001:db8::77", "uppercase"},
+		{"ipv6-trailing-dot-name", "tcp", "", "2001:db8::77", "trailing-dot"},
+		{"ipv6-dotted-wrong-server-name", "tcp", "naive-server-name", "2001:db8::77", "trailing-dot"},
+		{"ipv6-dotted-wrong-certificate", "tcp", "naive-certificate", "2001:db8::77", "trailing-dot"},
+		{"ipv6-wrong-password", "tcp", "naive-password", "2001:db8::77", ""},
+		{"ipv6-wrong-user", "tcp", "naive-user", "2001:db8::77", ""},
+		{"ipv6-wrong-server-name", "tcp", "naive-server-name", "2001:db8::77", ""},
+		{"ipv6-wrong-certificate", "tcp", "naive-certificate", "2001:db8::77", ""},
+		{"ipv6-forced-nonliteral-query-control", "tcp", "forced-query", "2001:db8::77", ""},
+		{"fresh-ipv6-after-refusals", "tcp", "", "2001:db8::77", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			desktopNaiveLiteralTransport(t, test.resolver, test.fault, test.endpoint, test.hostStyle)
+		})
+	}
+}
+
+func desktopNaiveLiteralTransport(t *testing.T, resolverKind, fault, endpoint, hostStyle string) {
+	t.Helper()
+	var peer *desktopNodeLayerServer
+	var lower *desktopNaiveLiteralWitnessLower
+	var sourceSHA string
+	dns := new(desktopNaiveLiteralWitnessDNS)
+	manager := &desktopNaiveLiteralWitnessDNSManager{transport: &desktopNaiveLiteralWitnessDNSTransport{kind: resolverKind}}
+	completed := false
+	// Runs after original native, lower and server cleanup has joined.
+	t.Cleanup(func() {
+		if lower != nil && peer != nil {
+			t.Logf("source_sha256=%s endpoint=%s resolver=%s fault=%q bootstrap_transport_reads=%d bootstrap_exchanges=%d bootstrap_lookups=%d lower_tcp=%d lower_udp=%d peer_tls=%d authenticated_tcp=%d authenticated_udp=%d",
+				sourceSHA, endpoint, resolverKind, fault, manager.reads.Load(), dns.exchanges.Load(), dns.lookups.Load(), lower.calls.Load(), lower.udp.Load(), peer.rawTCP.Load(), peer.plainTCP.Load(), peer.plainUDP.Load())
+		}
+		if !completed {
+			return
+		}
+		if lower.udp.Load() != 0 {
+			lower.mu.Lock()
+			attempts, stack := append([]string(nil), lower.attempts...), lower.firstStack
+			lower.mu.Unlock()
+			t.Error("native H2 attempted an unowned lower datagram", lower.udp.Load(), attempts)
+			t.Log("original refused lower callback stack:\n" + stack)
+		}
+		if fault != "forced-query" && manager.reads.Load() == 0 {
+			t.Error("native H2 did not retain the explicit captured bootstrap")
+		}
+		if fault == "forced-query" {
+			if dns.exchanges.Load()+dns.lookups.Load() == 0 || lower.calls.Load() != 0 || peer.rawTCP.Load() != 0 {
+				t.Error("forced resolver control failed to observe original DNS before any lower connection")
+			}
+		} else {
+			if dns.exchanges.Load() != 0 || dns.lookups.Load() != 0 {
+				t.Error("literal/SNI mapping used lower bootstrap DNS")
+			}
+			if lower.calls.Load() == 0 || peer.rawTCP.Load() == 0 {
+				t.Error("native control missed its actual TLS peer")
+			}
+		}
+		if fault == "" {
+			if peer.plainTCP.Load() == 0 || peer.plainUDP.Load() == 0 {
+				t.Error("native H2 omitted authenticated TCP or UoT-v2 payload")
+			}
+		} else if peer.plainTCP.Load() != 0 || peer.plainUDP.Load() != 0 {
+			t.Error("failed source gained authenticated payload")
+		}
+
+	})
+	var files string
+	peer, files = startDesktopNodeNaiveServer(t, "naive-h2", netip.MustParseAddr("127.0.0.1"), "")
+	if fault != "" && fault != "forced-query" {
+		files = desktopNodeNaiveAssets(t, files, fault)
+	}
+	var assets map[string]string
+	if json.Unmarshal([]byte(files), &assets) != nil {
+		t.Fatal("native peer assets changed")
+	}
+	raw, err := base64.StdEncoding.Strict().DecodeString(assets["sing-box.json"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var graph map[string]any
+	if json.Unmarshal(raw, &graph) != nil {
+		t.Fatal("native peer graph changed")
+	}
+	finalRaw := graph["outbounds"].([]any)[0].(map[string]any)
+	certificate, err := base64.StdEncoding.Strict().DecodeString(assets["cert.pem"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	tls := finalRaw["tls"].(map[string]any)
+	if hostStyle == "uppercase" {
+		tls["server_name"] = strings.ToUpper(tls["server_name"].(string))
+	} else if hostStyle == "trailing-dot" {
+		tls["server_name"] = tls["server_name"].(string) + "."
+	} else if hostStyle != "" {
+		t.Fatal("unknown captured TLS hostname control")
+	}
+	delete(tls, "certificate_path")
+	tls["certificate"] = []any{string(certificate)}
+	// Preserve the native peer's credentials/SNI/trust and exact port. The
+	// only test address mapping is this original literal endpoint to loopback.
+	finalRaw["server"] = endpoint
+	if err := multihoprelay.ValidateNaiveTransport(finalRaw, "naive-h2"); err != nil {
+		t.Fatal("strict original H2 source rejected", err)
+	}
+	encoded, err := json.Marshal(finalRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(encoded)
+	sourceSHA = hex.EncodeToString(digest[:])
+	expected := M.ParseSocksaddrHostPort(endpoint, uint16(finalRaw["server_port"].(float64)))
+	lower = &desktopNaiveLiteralWitnessLower{desktopImportedSOCKSXrayPhysical: newDesktopImportedCONNECTXrayPhysical(expected, peer.tcp.Addr().String())}
+	t.Cleanup(func() {
+		if err := lower.Close(); err != nil {
+			t.Error("original lower cleanup", err)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	t.Cleanup(cancel)
+	owners := &desktopImportedSOCKSXrayManager{owners: map[string]adapter.Outbound{lower.Tag(): lower}}
+	owned := service.ContextWith[adapter.OutboundManager](ctx, owners)
+	owned = service.ContextWith[adapter.DNSTransportManager](owned, manager)
+	owned = service.ContextWith[adapter.DNSRouter](owned, dns)
+	finalRaw["detour"] = lower.Tag()
+	finalRaw["domain_resolver"] = map[string]any{"server": manager.transport.Tag(), "disable_cache": true}
+	if fault == "forced-query" {
+		// Deliberate native-only mutation: shipping source validation above
+		// forbids this hostname. It proves the DNS observation is live.
+		finalRaw["server"] = "unowned-bootstrap.invalid"
+	}
+	encoded, err = json.Marshal(finalRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var options option.NaiveOutboundOptions
+	if json.Unmarshal(encoded, &options) != nil {
+		t.Fatal("native Naive options changed")
+	}
+	capturedOptions, err := json.Marshal(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	final, err := NV.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), "witness-naive-h2", options)
+	if err != nil {
+		t.Fatal("actual pinned Naive did not construct", err)
+	}
+	t.Cleanup(func() {
+		if err := final.(io.Closer).Close(); err != nil {
+			t.Error("native Naive did not join", err)
+		}
+		drain, stop := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stop()
+		if err := lower.empty(drain); err != nil {
+			t.Error("native Naive left its original lower connection", err)
+		}
+	})
+	if err := final.(adapter.Lifecycle).Start(adapter.StartStateStart); err != nil {
+		t.Fatal("actual pinned Naive did not start", err)
+	}
+	currentOptions, err := json.Marshal(options)
+	if err != nil || string(currentOptions) != string(capturedOptions) {
+		t.Fatal("native wire derivation mutated captured source, address, credentials or trust", err)
+	}
+	for _, network := range []string{"tcp", "udp"} {
+		err := desktopImportedSOCKSXrayEcho(ctx, final, network)
+		if fault == "" && err != nil {
+			t.Fatal("actual authenticated H2 payload failed", network, err)
+		}
+		if fault != "" && err == nil {
+			t.Fatal("negative control delivered authenticated H2 payload", network)
+		}
+	}
+	completed = true
+}

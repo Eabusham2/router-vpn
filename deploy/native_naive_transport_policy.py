@@ -2,6 +2,7 @@
 from pathlib import Path
 import argparse
 import hashlib
+import importlib.util
 import stat
 import subprocess
 
@@ -15,11 +16,14 @@ TEMPLATES = {
     'transport.go.tmpl': 'protocol/naive/routervpn_transport.go',
     'transport_test.go.tmpl': 'protocol/naive/routervpn_transport_test.go',
 }
+_literal_spec = importlib.util.spec_from_file_location('native_naive_literal', ROOT/'deploy/native_naive_literal_policy.py')
+LITERAL = importlib.util.module_from_spec(_literal_spec)
+_literal_spec.loader.exec_module(LITERAL)
 
 
 def inputs():
     return [Path(__file__).resolve(), ROOT/'deploy/test_native_naive_transport_policy.py',
-            *(ROOT/'mobile/naive'/name for name in TEMPLATES)]
+            *(ROOT/'mobile/naive'/name for name in TEMPLATES), *LITERAL.inputs()]
 
 
 def patch(raw):
@@ -99,11 +103,13 @@ def verify(vendor):
         if not path.is_file() or path.read_bytes() != expected:
             raise ValueError('Native Naive H2 transport policy is absent or incomplete')
         records[path.relative_to(vendor).as_posix()] = hashlib.sha256(expected).hexdigest()
+    records.update(LITERAL.verify(vendor))
     return records
 
 
 def prepare(vendor):
     vendor, files = planned_sources(vendor)
+    LITERAL.prepare(vendor)
     for path, expected in files.items():
         if not path.exists() or path.read_bytes() != expected:
             path.write_bytes(expected)

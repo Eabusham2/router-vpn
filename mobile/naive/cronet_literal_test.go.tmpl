@@ -1,0 +1,92 @@
+package cronet
+
+import (
+	"strings"
+	"testing"
+
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+func TestRouterVPNNaiveWireName(t *testing.T) {
+	for _, test := range []struct {
+		name, original, expected string
+		quic                     bool
+	}{
+		{"absolute", "captured-naive.test.", "captured-naive.test", false},
+		{"uppercase-absolute", "Captured-Naive.Test.", "Captured-Naive.Test", false},
+		{"idna-absolute", "xn--bcher-kva.example.", "xn--bcher-kva.example", false},
+		{"relative", "captured-naive.test", "captured-naive.test", false},
+		{"ipv4", "192.0.2.77", "192.0.2.77", false},
+		{"ipv6", "2001:db8::77", "2001:db8::77", false},
+		{"h3-absolute-unchanged", "captured-naive.test.", "captured-naive.test.", true},
+		{"h3-no-new-policy", "original_*_name.", "original_*_name.", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			captured := test.original
+			wire, err := routerVPNNaiveWireName(captured, test.quic)
+			if err != nil || wire != test.expected || captured != test.original {
+				t.Fatalf("wire name changed original authority: original=%q wire=%q error=%v", captured, wire, err)
+			}
+		})
+	}
+	for name, original := range map[string]string{
+		"empty-label": ".", "multiple-dot": "captured.test..", "wildcard": "*.test.",
+		"instructions": "host,MAP other 192.0.2.1.", "space": "host name.", "unicode": "bücher.example.",
+		"long-name": strings.Repeat("x.", 127),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if wire, err := routerVPNNaiveWireName(original, false); err == nil || wire != "" {
+				t.Fatalf("invalid captured name obtained a wire identity: %q %v", wire, err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNNaiveLiteralRule(t *testing.T) {
+	for _, test := range []struct {
+		name, address, host, expected string
+		quic                          bool
+	}{
+		{"ipv6-exact", "2001:db8::77", "captured-naive.test", "MAP captured-naive.test [2001:db8::77]", false},
+		{"ipv6-case", "2001:db8::77", "Captured-Naive.Test", "MAP Captured-Naive.Test [2001:db8::77]", false},
+		{"ipv6-trailing-dot", "2001:db8::77", "captured-naive.test.", "MAP captured-naive.test. [2001:db8::77]", false},
+		{"ipv6-idna", "2001:db8::77", "xn--bcher-kva.example", "MAP xn--bcher-kva.example [2001:db8::77]", false},
+		{"ipv6-literal-name", "2001:db8::77", "2001:db8::77", "", false},
+		{"ipv4", "192.0.2.77", "captured-naive.test", "", false},
+		{"ipv4-mapped", "::ffff:192.0.2.77", "captured-naive.test", "", false},
+		{"hostname-endpoint", "original.example", "captured-naive.test", "", false},
+		{"h3-original", "2001:db8::77", "captured-naive.test", "", true},
+		{"h3-no-new-host-policy", "2001:db8::77", "original_*_name", "", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			address := M.ParseSocksaddrHostPort(test.address, 8443)
+			original := address
+			got, err := routerVPNNaiveLiteralRule(address, test.host, test.quic)
+			if err != nil || got != test.expected || address != original || address.Port != 8443 {
+				t.Fatalf("captured resolver identity changed: rule=%q error=%v address=%v", got, err, address)
+			}
+		})
+	}
+}
+
+func TestRouterVPNNaiveLiteralRuleRejectsInstructions(t *testing.T) {
+	for name, host := range map[string]string{
+		"empty": "", "wildcard": "*.example", "question-glob": "?.example", "escape": `host\name`,
+		"comma": "host,MAP other 192.0.2.1", "space": "host name", "tab": "host\tname", "newline": "host\nname",
+		"port": "host:443", "brackets": "[host]", "unicode": "bücher.example", "path": "host/path",
+		"leading-hyphen": "-host", "trailing-hyphen": "host-", "empty-label": "host..example",
+		"long-label": strings.Repeat("x", 64) + ".example", "long-name": strings.Repeat("x.", 128),
+		"long-name-with-dot": strings.Repeat("x.", 127),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, err := routerVPNNaiveLiteralRule(M.ParseSocksaddrHostPort("2001:db8::77", 8443), host, false); err == nil || got != "" {
+				t.Fatalf("unowned resolver instruction accepted: %q %v", got, err)
+			}
+		})
+	}
+	t.Run("zoned-address", func(t *testing.T) {
+		if got, err := routerVPNNaiveLiteralRule(M.ParseSocksaddrHostPort("fe80::1%foreign", 8443), "captured.test", false); err == nil || got != "" {
+			t.Fatalf("unowned resolver zone accepted: %q %v", got, err)
+		}
+	})
+}
