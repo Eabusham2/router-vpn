@@ -1,6 +1,6 @@
-"""Retain captured H2 address/name authority in one verified Cronet Go copy.
+"""Retain captured Naive address/name authority in one verified Cronet Go copy.
 
-The native library and explicit DNS resolver remain unchanged. Derive the H2
+The native library and explicit DNS resolver remain unchanged. Derive the
 wire hostname without an RFC 6066-forbidden terminal dot, preserving the caller's
 original options. Map only its exact hostname to its original IPv6 literal.
 Never edit the shared Go cache or accept an unrelated local module replacement.

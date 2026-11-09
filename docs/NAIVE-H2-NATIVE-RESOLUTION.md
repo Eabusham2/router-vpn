@@ -20,7 +20,9 @@ not change the captured endpoint or selected DNS transport.
 Only exact ASCII DNS labels are admitted into the resolver rule or dotted-name
 derivation. Wildcards, rule separators, whitespace, escapes, malformed labels,
 oversized names and address zones are rejected. Already encoded IDNA labels
-retain their original spelling. H3 keeps its original name and transport path.
+retain their original spelling. The original H2 unit left H3 unchanged; its
+later captured transport and name-resolution hardening is documented in the
+[Naive H3 ownership unit](NAIVE-H3-NATIVE-OWNERSHIP.md).
 
 ## Source preparation and required gates
 
@@ -92,8 +94,9 @@ native library and executable identities were read back after execution.
 This is a native protocol and source-preparation result. The captured IPv6
 tuple was checked exactly and then mapped only to the owned local TLS peer;
 the test does not establish a physical IPv6 route, system-TUN operation,
-installed application behavior or current release acceptance. H3's unchanged
-path has policy coverage here, not a new native H3 IPv6 handshake result.
+installed application behavior or current release acceptance. These H2
+measurements alone do not establish native H3 IPv6 behavior; the separate
+[H3 ownership unit](NAIVE-H3-NATIVE-OWNERSHIP.md) records that later evidence.
 
 Zero bootstrap lookups in these literal cases do not authorize removing the
 compiled resolver dependency or changing a captured UDP resolver to TCP.

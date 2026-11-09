@@ -169,27 +169,29 @@ class NativeNaiveLiteral(unittest.TestCase):
 
     def test_native_peer_gate_requires_each_original_ipv6_and_refusal_verdict(self):
         node = load('test_desktop_node_physical.py')
-        names = node.NAIVE_LITERAL_VERDICTS
-        self.assertEqual(len(names), 24)
-        self.assertEqual(len(names), len(set(names)))
-        self.assertIn('TestRouterVPNDesktopNodeNaiveLiteral/literal-ipv6-with-udp-bootstrap', names)
-        self.assertIn('TestRouterVPNDesktopNodeNaiveLiteral/ipv6-wrong-certificate', names)
-        for leaf in ('ipv4-trailing-dot-name', 'ipv6-trailing-dot-name', 'ipv4-dotted-wrong-server-name',
-                     'ipv4-dotted-wrong-certificate', 'ipv6-dotted-wrong-server-name', 'ipv6-dotted-wrong-certificate'):
-            self.assertIn('TestRouterVPNDesktopNodeNaiveLiteral/'+leaf, names)
-        def output(selected):
-            return ''.join('=== RUN   '+name+'\n--- PASS: '+name+' (0.00s)\n' for name in selected)
-        baseline = mock.Mock()
-        baseline.execute.return_value = (0, output(names))
-        with redirect_stdout(io.StringIO()): node.execute_baseline_suite(baseline, node.NAIVE_LITERAL_SUITE)
-        baseline.execute.assert_called_once_with(*node.NAIVE_LITERAL_SUITE[:3], 90)
-        for missing in names:
-            baseline.execute.return_value = (0, output([name for name in names if name != missing]))
-            with self.subTest(missing=missing), redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
-                node.execute_baseline_suite(baseline, node.NAIVE_LITERAL_SUITE)
-        for changed in (output([*names, names[0]]), output(names)+'--- SKIP: foreign (0.00s)\n', output(names)+'--- FAIL: foreign (0.00s)\n'):
-            baseline.execute.return_value = (0, changed)
-            with redirect_stdout(io.StringIO()), self.assertRaises(ValueError): node.execute_baseline_suite(baseline, node.NAIVE_LITERAL_SUITE)
+        for root, names, suite in ((node.NAIVE_LITERAL_ROOT, node.NAIVE_LITERAL_VERDICTS, node.NAIVE_LITERAL_SUITE),
+                                  (node.NAIVE_H3_LITERAL_ROOT, node.NAIVE_H3_LITERAL_VERDICTS, node.NAIVE_H3_LITERAL_SUITE)):
+            self.assertEqual(len(names), 24)
+            self.assertEqual(len(names), len(set(names)))
+            self.assertIn(root+'/literal-ipv6-with-udp-bootstrap', names)
+            self.assertIn(root+'/ipv6-wrong-certificate', names)
+            for leaf in ('ipv4-trailing-dot-name', 'ipv6-trailing-dot-name', 'ipv4-dotted-wrong-server-name',
+                         'ipv4-dotted-wrong-certificate', 'ipv6-dotted-wrong-server-name', 'ipv6-dotted-wrong-certificate'):
+                self.assertIn(root+'/'+leaf, names)
+            def output(selected):
+                return ''.join('=== RUN   '+name+'\n--- PASS: '+name+' (0.00s)\n' for name in selected)
+            baseline = mock.Mock()
+            baseline.execute.return_value = (0, output(names))
+            with redirect_stdout(io.StringIO()): node.execute_baseline_suite(baseline, suite)
+            baseline.execute.assert_called_once_with(*suite[:3], 90)
+            for missing in names:
+                baseline.execute.return_value = (0, output([name for name in names if name != missing]))
+                with self.subTest(missing=missing), redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+                    node.execute_baseline_suite(baseline, suite)
+            for changed in (output([*names, names[0]]), output(names)+'--- SKIP: foreign (0.00s)\n', output(names)+'--- FAIL: foreign (0.00s)\n'):
+                baseline.execute.return_value = (0, changed)
+                with redirect_stdout(io.StringIO()), self.assertRaises(ValueError): node.execute_baseline_suite(baseline, suite)
+
 
     def test_shipping_mapping_and_instruction_refusal_with_causal_controls(self):
         go = shutil.which('go')
@@ -205,11 +207,11 @@ class NativeNaiveLiteral(unittest.TestCase):
             path = directory/'routervpn_naive_literal.go'
             original = path.read_text()
             for label, changed, root in (
-                ('h3-rewritten', original.replace('if quic || !address.Addr.Is6()', 'if !address.Addr.Is6()'), 'TestRouterVPNNaiveLiteralRule'),
-                ('mapping-disabled', original.replace('if quic || !address.Addr.Is6()', 'if true || quic || !address.Addr.Is6()'), 'TestRouterVPNNaiveLiteralRule'),
+                ('h3-mapping-bypassed', original.replace('if !address.Addr.Is6()', 'if quic || !address.Addr.Is6()'), 'TestRouterVPNNaiveLiteralRule'),
+                ('mapping-disabled', original.replace('if !address.Addr.Is6()', 'if true || !address.Addr.Is6()'), 'TestRouterVPNNaiveLiteralRule'),
                 ('instructions-accepted', original.replace('return errors.New("Naive resolver rule has an unsafe hostname")', 'continue'), 'TestRouterVPNNaiveLiteralRule'),
-                ('wire-name-unchanged', original.replace('if quic || !strings.HasSuffix(name, ".") {', 'if true {'), 'TestRouterVPNNaiveWireName'),
-                ('h3-wire-name-changed', original.replace('if quic || !strings.HasSuffix(name, ".") {', 'if !strings.HasSuffix(name, ".") {'), 'TestRouterVPNNaiveWireName'),
+                ('wire-name-unchanged', original.replace('if !strings.HasSuffix(name, ".") {', 'if true {'), 'TestRouterVPNNaiveWireName'),
+                ('h3-wire-name-bypassed', original.replace('if !strings.HasSuffix(name, ".") {', 'if quic || !strings.HasSuffix(name, ".") {'), 'TestRouterVPNNaiveWireName'),
             ):
                 self.assertNotEqual(changed, original)
                 path.write_text(changed)

@@ -1,4 +1,4 @@
-"""Keep native Naive H2 on TCP without changing its captured DNS or H3 owner."""
+"""Keep native Naive H2 on TCP and captured literal H3 on its original UDP peer."""
 from pathlib import Path
 import argparse
 import hashlib
@@ -11,7 +11,7 @@ PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 SOURCE_SHA256 = '9e01f79402408a0325b7e14334c0c8e72183f7963ca5efcc80bf201ea14c59f3'
 OUTBOUND = 'protocol/naive/outbound.go'
 OLD = b'\t\tDialer:                   outboundDialer,'
-NEW = b'\t\tDialer:                   routerVPNNaiveTransport(outboundDialer, options.QUIC),'
+NEW = b'\t\tDialer:                   routerVPNNaiveTransport(outboundDialer, options.QUIC, options.ServerOptions.Build()),'
 TEMPLATES = {
     'transport.go.tmpl': 'protocol/naive/routervpn_transport.go',
     'transport_test.go.tmpl': 'protocol/naive/routervpn_transport_test.go',
@@ -29,10 +29,10 @@ def inputs():
 def patch(raw):
     original = raw.replace(NEW, OLD, 1) if raw.count(NEW) == 1 else raw
     if hashlib.sha256(original).hexdigest() != SOURCE_SHA256 or original.count(OLD) != 1:
-        raise ValueError('Pinned Naive outbound differs; H2 transport policy refused')
+        raise ValueError('Pinned Naive outbound differs; captured transport policy refused')
     expected = original.replace(OLD, NEW, 1)
     if raw not in (original, expected):
-        raise ValueError('Partial native Naive H2 transport policy')
+        raise ValueError('Partial native Naive transport policy')
     return expected
 
 
@@ -114,7 +114,7 @@ def prepare(vendor):
         if not path.exists() or path.read_bytes() != expected:
             path.write_bytes(expected)
     verify(vendor)
-    print('Verified native Naive H2 TCP ownership; original DNS and H3 transport retained')
+    print('Verified native Naive H2 TCP and literal H3 UDP ownership; original DNS and raw hostname transport retained')
 
 
 if __name__ == '__main__':

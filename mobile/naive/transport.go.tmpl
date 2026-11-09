@@ -12,14 +12,21 @@ import (
 )
 
 var errRouterVPNNaiveH2Transport = errors.New("Naive H2 owns only TCP lower transport")
+var errRouterVPNNaiveH3Transport = errors.New("Naive H3 owns only its captured UDP peer")
 
 // Cronet can request a UDP socket for its IPv6 reachability probe even when
 // QUIC is disabled. H2 must reject that request before it reaches the retained
 // lower owner. Application datagrams use the existing UoT-v2 TCP stream.
-// H3 retains its original dialer, including its separate UDP authority.
-func routerVPNNaiveTransport(original N.Dialer, quic bool) N.Dialer {
+// Captured paired/imported H3 endpoints are literals and own only that QUIC
+// tuple. Raw hostname configurations retain their original dialer, DNS callback
+// and lower-owner checks; this policy does not claim raw-hostname IPv6 support.
+// The original ResolveDialer also remains outside this wrapper in DNSResolver.
+func routerVPNNaiveTransport(original N.Dialer, quic bool, peer M.Socksaddr) N.Dialer {
 	if quic {
-		return original
+		if peer.Fqdn != "" {
+			return original
+		}
+		return &routerVPNNaiveH3Transport{original: original, peer: peer}
 	}
 	return &routerVPNNaiveH2Transport{original: original}
 }
@@ -37,4 +44,20 @@ func (d *routerVPNNaiveH2Transport) DialContext(ctx context.Context, network str
 
 func (*routerVPNNaiveH2Transport) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
 	return nil, errRouterVPNNaiveH2Transport
+}
+
+type routerVPNNaiveH3Transport struct {
+	original N.Dialer
+	peer     M.Socksaddr
+}
+
+func (d *routerVPNNaiveH3Transport) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network != N.NetworkUDP || destination != d.peer || !d.peer.Addr.IsValid() || d.peer.Fqdn != "" ||
+		d.peer.Port == 0 || d.peer.Addr.Zone() != "" || d.peer.Addr.Is4In6() || d.peer.Addr.IsUnspecified() || d.peer.Addr.IsMulticast() {
+		return nil, errRouterVPNNaiveH3Transport
+	}
+	return d.original.DialContext(ctx, network, destination)
+}
+func (*routerVPNNaiveH3Transport) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errRouterVPNNaiveH3Transport
 }

@@ -158,6 +158,7 @@ PEER_TEMPLATES = {
     'node_hysteria2_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_hysteria2_peer_test.go',
     'node_naive_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_peer_test.go',
     'node_naive_literal_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_literal_test.go',
+    'node_naive_h3_literal_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_h3_literal_test.go',
     'node_imported_naive_h2_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_imported_naive_h2_test.go',
     'node_naive_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_peer_windows_test.go',
     'node_naive_loader_purego_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_loader_purego_test.go',
@@ -723,6 +724,8 @@ def copy_encrypted_peer_templates(vendor):
         prefix = b'package routervpnamnezia\n'
         if name in ('node_peer_windows_test.go.tmpl', 'node_layer_peer_windows_test.go.tmpl', 'node_xray_peer_windows_test.go.tmpl', 'node_naive_peer_windows_test.go.tmpl', 'node_composite_peer_windows_test.go.tmpl'):
             prefix = b'//go:build windows && routervpn_windows_node_composition\n\n' + prefix
+        elif name == 'node_naive_h3_literal_test.go.tmpl':
+            prefix = b'//go:build with_naive_outbound\n\n' + prefix
         elif name == 'node_naive_loader_purego_test.go.tmpl':
             prefix = b'//go:build with_purego\n\n' + prefix
         elif name in ('node_resolved_broker_test.go.tmpl', 'node_resolved_private_tld_test.go.tmpl'):

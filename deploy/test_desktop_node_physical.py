@@ -266,7 +266,13 @@ NAIVE_TRANSPORT_VERDICTS = (
     "TestRouterVPNNaiveTransportH2", "TestRouterVPNNaiveTransportH3",
     *("TestRouterVPNNaiveTransportH2/" + case for case in
       ("udp", "udp4", "udp6", "unix", "empty", "listen-packet", "tcp-original", "tcp-cancelled")),
-    *("TestRouterVPNNaiveTransportH3/" + case for case in ("tcp", "udp", "listen-packet")))
+    *("TestRouterVPNNaiveTransportH3/" + case for case in (
+        "tcp", "tcp4", "tcp6", "udp4", "udp6", "unix", "empty",
+        "foreign-v4", "foreign-v6", "wrong-port", "hostname", "zero", "listen-packet",
+        "invalid-empty", "invalid-zero-port", "invalid-zoned", "invalid-mapped", "invalid-unspecified", "invalid-multicast",
+        "udp4-original", "udp4-cancelled", "udp6-original", "udp6-cancelled")),
+    "TestRouterVPNNaiveTransportRawHostname",
+    *("TestRouterVPNNaiveTransportRawHostname/"+network+"-"+state for network in ("tcp", "udp", "listen-packet") for state in ("original", "cancelled")))
 NAIVE_TRANSPORT_SUITE = ("naive-transport-policy", "./protocol/naive", "^TestRouterVPNNaiveTransport", NAIVE_TRANSPORT_VERDICTS)
 NAIVE_LITERAL_ROOT = "TestRouterVPNDesktopNodeNaiveLiteral"
 NAIVE_LITERAL_CASES = (
@@ -279,6 +285,9 @@ NAIVE_LITERAL_CASES = (
     "ipv6-forced-nonliteral-query-control", "fresh-ipv6-after-refusals")
 NAIVE_LITERAL_VERDICTS = (NAIVE_LITERAL_ROOT, *(NAIVE_LITERAL_ROOT + "/" + case for case in NAIVE_LITERAL_CASES))
 NAIVE_LITERAL_SUITE = ("naive-literal-policy", "./protocol/routervpnamnezia", "^" + NAIVE_LITERAL_ROOT + "$", NAIVE_LITERAL_VERDICTS)
+NAIVE_H3_LITERAL_ROOT = "TestRouterVPNDesktopNodeNaiveH3Literal"
+NAIVE_H3_LITERAL_VERDICTS = (NAIVE_H3_LITERAL_ROOT, *(NAIVE_H3_LITERAL_ROOT+"/"+case for case in NAIVE_LITERAL_CASES))
+NAIVE_H3_LITERAL_SUITE = ("naive-h3-literal-policy", "./protocol/routervpnamnezia", "^"+NAIVE_H3_LITERAL_ROOT+"$", NAIVE_H3_LITERAL_VERDICTS)
 
 COMPOSITE_MODES = ("split", "max", "ss-v2ray")
 COMPOSITE_CASES = tuple(mode + "/" + layer for mode in COMPOSITE_MODES
@@ -800,7 +809,7 @@ def naive_transport_mutants(source):
     return [
         ("uncaptured-naive-physical-dial", relative, "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeNaiveTraffic", "naive-h2/off",
          "layered graph bypassed its captured socket grants", BOOT.IDENTITY.replace_once(original,
-         "Dialer:                   routerVPNNaiveTransport(outboundDialer, options.QUIC),", "Dialer:                   N.SystemDialer,")),
+         "Dialer:                   routerVPNNaiveTransport(outboundDialer, options.QUIC, options.ServerOptions.Build()),", "Dialer:                   N.SystemDialer,")),
         ("downgraded-naive-h3", relative, "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeNaiveTraffic", "naive-h3/off",
          "layered encrypted payload escaped or lost its exact native lower", BOOT.IDENTITY.replace_once(original,
          "QUIC:                     options.QUIC,", "QUIC:                     false,")),
@@ -1109,9 +1118,11 @@ def execute_baseline_suite(baselines, suite):
     if name == OPENVPN_CAPACITY_SUITE[0]:
         require_native_verdicts(output, OPENVPN_CAPACITY_VERDICTS, "OpenVPN authenticated live capacity")
     if name == NAIVE_TRANSPORT_SUITE[0]:
-        require_native_verdicts(output, NAIVE_TRANSPORT_VERDICTS, "Naive H2 transport and original H3 owner")
+        require_native_verdicts(output, NAIVE_TRANSPORT_VERDICTS, "Naive H2 TCP, captured literal H3 UDP and original raw hostname owner")
     if name == NAIVE_LITERAL_SUITE[0]:
         require_native_verdicts(output, NAIVE_LITERAL_VERDICTS, "Naive captured IPv6 TLS and original DNS owner")
+    if name == NAIVE_H3_LITERAL_SUITE[0]:
+        require_native_verdicts(output, NAIVE_H3_LITERAL_VERDICTS, "Naive H3 captured QUIC tuple, IPv6 TLS and original DNS owner")
     if name == "native-lifecycle-admission":
         require_native_verdicts(output, NATIVE_LIFECYCLE_ADMISSION_VERDICTS, "native lifecycle admission")
     if name == 'native-retirement-bound':
@@ -1310,6 +1321,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          ("TestRouterVPNDesktopNodeNaiveTraffic",)),
         NAIVE_TRANSPORT_SUITE,
         NAIVE_LITERAL_SUITE,
+        NAIVE_H3_LITERAL_SUITE,
         ("naive-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeNaiveWrongCredential$",
          ("TestRouterVPNDesktopNodeNaiveWrongCredential",)),
         ("composite-traffic", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeCompositeTraffic$",

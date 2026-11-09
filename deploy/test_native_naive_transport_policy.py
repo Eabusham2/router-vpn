@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep the declared H2 transport patch in every prepared native runtime."""
+"""Keep the declared captured transport patch in every prepared native runtime."""
 from pathlib import Path
 from contextlib import contextmanager
 import contextlib
@@ -33,7 +33,7 @@ class NativeNaiveTransport(unittest.TestCase):
             vendor = Path(tmp)
             (vendor/'go.mod').write_text('module github.com/sagernet/sing-box\n')
             original = {
-                POLICY.OUTBOUND: b'package naive\nfunc original() {\n'+POLICY.OLD+b'\n}\n',
+                POLICY.OUTBOUND: b'package naive\nfunc original() {\n'+POLICY.OLD+b'\n\t\tDNSResolver:              dnsResolver,\n}\n',
                 'protocol/naive/inbound.go': b'package naive\n// original inbound\n',
                 'common/uot/router.go': b'package uot\n// original UoT\n',
             }
@@ -72,6 +72,8 @@ class NativeNaiveTransport(unittest.TestCase):
             raw = original[POLICY.OUTBOUND]
             patched = POLICY.patch(raw)
             self.assertEqual(patched, raw.replace(POLICY.OLD, POLICY.NEW, 1))
+            self.assertIn(b"DNSResolver:              dnsResolver,", patched)
+            self.assertNotIn(b"routerVPNNaiveDNSResolver", patched)
             self.assertEqual(POLICY.patch(patched), patched)
             for changed in (raw+b'changed', patched+b'changed', patched+POLICY.NEW,
                             patched.replace(b'options.QUIC', b'true'), patched.replace(POLICY.NEW, POLICY.NEW+b' changed')):
@@ -161,8 +163,8 @@ class NativeNaiveTransport(unittest.TestCase):
     def test_native_runner_requires_each_original_transport_verdict(self):
         node = load('test_desktop_node_physical.py')
         names = node.NAIVE_TRANSPORT_VERDICTS
-        self.assertEqual(len(names), 13)
-        self.assertEqual(len(set(names)), 13)
+        self.assertEqual(len(names), 40)
+        self.assertEqual(len(set(names)), 40)
         def output(selected):
             return ''.join('=== RUN   '+name+'\n--- PASS: '+name+' (0.00s)\n' for name in selected)
         baseline = mock.Mock()
@@ -205,7 +207,7 @@ class NativeNaiveTransport(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     node.naive_transport_mutants(source)
 
-    def test_shipping_h2_guard_and_h3_passthrough_with_causal_mutants(self):
+    def test_shipping_literal_guards_and_original_hostname_with_causal_mutants(self):
         go = shutil.which('go')
         self.assertIsNotNone(go, 'the native transport policy gate requires Go')
         with tempfile.TemporaryDirectory(prefix='native-naive-transport-go-') as tmp:
@@ -219,20 +221,25 @@ class NativeNaiveTransport(unittest.TestCase):
             path = tmp/'transport.go'
             original = path.read_text()
             controls = (
-                ('h2-unwrapped', original.replace('if quic {', 'if true {', 1), 'H2'),
+                ('h2-unwrapped', original.replace('return &routerVPNNaiveH2Transport{original: original}', 'return original', 1), 'H2'),
                 ('h2-datagram-dial', original.replace('if network != N.NetworkTCP {', 'if false {', 1), 'H2'),
-                ('h3-wrapped', original.replace('if quic {', 'if false {', 1), 'H3'),
+                ('h3-unwrapped', original.replace('return &routerVPNNaiveH3Transport{original: original, peer: peer}', 'return original', 1), 'H3'),
+                ('h3-foreign-tuple', original.replace('destination != d.peer || ', '', 1), 'H3'),
+                ('h3-tcp-authority', original.replace('network != N.NetworkUDP || ', '', 1), 'H3'),
+                ('h3-invalid-peer', original.replace('!d.peer.Addr.IsValid() || d.peer.Fqdn != "" ||\n\t\td.peer.Port == 0 || d.peer.Addr.Zone() != "" || d.peer.Addr.Is4In6() || d.peer.Addr.IsUnspecified() || d.peer.Addr.IsMulticast()', 'false', 1), 'H3'),
+                ('raw-hostname-wrapped', original.replace('if peer.Fqdn != "" {', 'if false {', 1), 'RawHostname'),
             )
             for name, changed, root in controls:
                 self.assertNotEqual(changed, original, name)
                 path.write_text(changed)
-                result = subprocess.run(command, cwd=tmp, env=env, stdout=subprocess.PIPE,
+                result = subprocess.run(command+["-run=^TestRouterVPNNaiveTransport"+root+"$"], cwd=tmp, env=env, stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT, text=True, timeout=120)
                 self.assertEqual(result.returncode, 1, name+' did not fail the original policy boundary\n'+result.stdout)
                 self.assertIn('--- FAIL: TestRouterVPNNaiveTransport'+root, result.stdout)
                 self.assertNotIn('build failed', result.stdout)
                 self.assertNotIn('DATA RACE', result.stdout)
-            print('Shipping Naive H2/H3 transport policy and three causal refusal controls passed')
+                self.assertNotIn('panic:', result.stdout)
+            print('Shipping literal H2/H3 transport and original raw-hostname ownership passed with seven causal controls')
 
 
 if __name__ == '__main__':

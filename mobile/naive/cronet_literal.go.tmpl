@@ -9,12 +9,12 @@ import (
 )
 
 // The caller's captured DNS name remains its source identity. Derive only the
-// runtime H2 hostname: RFC 6066 section 3 excludes a terminal dot from wire SNI.
+// runtime hostname: RFC 6066 section 3 excludes a terminal dot from wire SNI.
 // Use the same derived name for the URL and native resolver alias, so their
 // existing exact comparison cannot send an absolute name to a lower resolver.
 // The caller's options, endpoint, port, credentials and trust are not modified.
 func routerVPNNaiveWireName(name string, quic bool) (string, error) {
-	if quic || !strings.HasSuffix(name, ".") {
+	if !strings.HasSuffix(name, ".") {
 		return name, nil
 	}
 	if err := routerVPNNaiveHostname(name); err != nil {
@@ -27,9 +27,9 @@ func routerVPNNaiveWireName(name string, quic bool) (string, error) {
 // it typed as a literal inside Chromium's resolver, so its unrelated global
 // IPv6 reachability heuristic cannot suppress the original endpoint's AAAA
 // answer. This changes neither the TLS URL/SNI nor the explicit DNS callback.
-// H3 and IPv4 retain their original resolver behavior.
+// IPv4 retains its original resolver behavior.
 func routerVPNNaiveLiteralRule(address M.Socksaddr, serverName string, quic bool) (string, error) {
-	if quic || !address.Addr.Is6() || address.Addr.Is4In6() {
+	if !address.Addr.Is6() || address.Addr.Is4In6() {
 		return "", nil
 	}
 	if _, err := netip.ParseAddr(serverName); err == nil {
