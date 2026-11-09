@@ -50,6 +50,14 @@ type Session interface {
 	ProbeExternal(context.Context, string) (time.Duration, error)
 	Close(context.Context) error
 }
+
+// ContextIdentitySession observes the original path under the same deadline as
+// its proof or probe. Native identities may need retained locks or IPC; they
+// must not replace that caller with a new background operation. Legacy Session
+// identities remain synchronous and joined for compatibility.
+type ContextIdentitySession interface {
+	IdentityContext(context.Context) (string, error)
+}
 type Driver interface {
 	Open(context.Context, Candidate) (Session, error)
 }
@@ -130,8 +138,35 @@ func defaults(o Options) (Options, error) {
 	}
 	return o, nil
 }
-func identity(s Session, want string) error {
-	if want == "" || s.Identity() != want {
+func sessionIdentity(ctx context.Context, s Session) (string, error) {
+	if ctx == nil || s == nil {
+		return "", errors.New("multihop identity has no original caller or session")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	var value string
+	var err error
+	if captured, ok := s.(ContextIdentitySession); ok {
+		value, err = captured.IdentityContext(ctx)
+	} else {
+		value = s.Identity()
+	}
+	if err = errors.Join(err, ctx.Err()); err != nil {
+		return "", err
+	}
+	if value == "" {
+		return "", errors.New("multihop session has no retained path identity")
+	}
+	return value, nil
+}
+
+func identity(ctx context.Context, s Session, want string) error {
+	actual, err := sessionIdentity(ctx, s)
+	if err != nil {
+		return err
+	}
+	if want == "" || actual != want {
 		return errors.New("multihop session or underlying path changed during the measurement")
 	}
 	return nil
@@ -139,27 +174,38 @@ func identity(s Session, want string) error {
 func measure(ctx context.Context, c Candidate, s Session, target string, o Options) (m Measurement) {
 	m.Candidate = c
 	fail := func(stage string) Measurement { m.Eligible = false; m.ScoreMS = nil; m.Failure = stage; return m }
-	generation := s.Identity()
 	child, cancel := context.WithTimeout(ctx, o.ProbeTimeout)
-	err := s.Verify(child)
+	generation, err := sessionIdentity(child, s)
+	if err == nil {
+		err = s.Verify(child)
+	}
+	if err == nil {
+		err = identity(child, s, generation)
+	}
 	expired := child.Err()
 	cancel()
-	if err != nil || expired != nil || identity(s, generation) != nil {
+	if err != nil || expired != nil {
 		return fail("path proof failed or expired")
 	}
 	child, cancel = context.WithTimeout(ctx, o.ProbeTimeout)
 	last, err := s.ProbeLast(child)
+	if err == nil && last > 0 && last <= o.ProbeTimeout {
+		err = identity(child, s, generation)
+	}
 	expired = child.Err()
 	cancel()
-	if err != nil || expired != nil || last <= 0 || last > o.ProbeTimeout || identity(s, generation) != nil {
+	if err != nil || expired != nil || last <= 0 || last > o.ProbeTimeout {
 		return fail("last-node probe failed, timed out or changed session")
 	}
 	m.LastNodeMS = durationMS(last)
 	child, cancel = context.WithTimeout(ctx, o.ProbeTimeout)
 	external, err := s.ProbeExternal(child, target)
+	if err == nil && external > 0 && external <= o.ProbeTimeout {
+		err = identity(child, s, generation)
+	}
 	expired = child.Err()
 	cancel()
-	if err != nil || expired != nil || external <= 0 || external > o.ProbeTimeout || identity(s, generation) != nil {
+	if err != nil || expired != nil || external <= 0 || external > o.ProbeTimeout {
 		return fail("external-server probe failed, timed out or changed session")
 	}
 	if ctx.Err() != nil {
