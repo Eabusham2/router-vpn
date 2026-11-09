@@ -77,7 +77,7 @@ func (a *app) startPreparedSpeedLabTorComparison(q speedLabRequest, profile comm
 		return path, err
 	}
 	driver := &desktopTorComparisonDriver{app: a, profile: cloneRouterProfile(profile), request: cloneDesktopTorConnectRequest(prepared.request),
-		operation: prepared.operation, selected: profile.ID, network: prepared.temporary.network, runtime: comparison.runtime,
+		operation: prepared.operation, selected: profile.ID, network: prepared.temporary.network, readNetwork: physicalNetworkIdentityContext, runtime: comparison.runtime,
 		temporary: prepared.temporary, selections: make(map[routechoice.Execution]*desktopTorSelection),
 		prepared: make(map[routechoice.Execution]*speedLabTorPreparation), prepareFailures: comparison.failures}
 	ctx, cancel := context.WithTimeout(prepared.operation, 8*time.Minute)
@@ -109,7 +109,7 @@ func (a *app) startPreparedSpeedLabTorComparison(q speedLabRequest, profile comm
 		}
 		progress.mu.Unlock()
 	}()
-	if err := driver.current(); err != nil {
+	if err := driver.currentContext(ctx); err != nil {
 		return path, err
 	}
 	base := desktopExternalEntryBase(prepared.selection.predecessor.mode)
@@ -126,7 +126,7 @@ func (a *app) startPreparedSpeedLabTorComparison(q speedLabRequest, profile comm
 	}
 	winner, ok := active.(*desktopTorComparisonSession)
 	if !ok || winner == nil || winner != driver.last || result.Winner == nil || result.Final == nil || !result.Final.Eligible || result.Final.ScoreMS == nil ||
-		*result.Winner != winner.candidate || result.Final.Candidate != winner.candidate || result.Target != winner.target || winner.Identity() == "" {
+		*result.Winner != winner.candidate || result.Final.Candidate != winner.candidate || result.Target != winner.target || winner.identityContext(ctx) == "" {
 		return path, errors.New("Tor Speed Lab winner differs from its repeated path measurements")
 	}
 	cleanup, cancelCleanup := context.WithTimeout(ctx, 30*time.Second)
@@ -135,7 +135,7 @@ func (a *app) startPreparedSpeedLabTorComparison(q speedLabRequest, profile comm
 	if err != nil {
 		return path, err
 	}
-	if err := driver.current(); err != nil {
+	if err := driver.currentContext(ctx); err != nil {
 		return path, err
 	}
 	if ctx.Err() != nil || desktopTorExecution(proof.Policy.Execution) != string(winner.candidate.Execution) {

@@ -7,6 +7,7 @@ import (
 
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 )
 
 // A connection request captures a private source independently from the
@@ -162,4 +163,26 @@ func (selection *desktopTorSelection) current(a *app) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return selection.currentLocked(a)
+}
+
+func (selection *desktopTorSelection) currentContext(ctx context.Context, a *app) error {
+	if a == nil || selection == nil {
+		return errors.New("Tor selection has no original application or source owner")
+	}
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
+	err := selection.currentLocked(a)
+	a.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if err := selection.predecessor.currentContext(ctx, a); err != nil {
+		return err
+	}
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
+	defer a.mu.Unlock()
+	return errors.Join(selection.currentLocked(a), ctx.Err())
 }

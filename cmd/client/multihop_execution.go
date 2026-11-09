@@ -172,6 +172,19 @@ func (s *desktopExecutionSession) Identity() string {
 	return s.identityContext(context.Background())
 }
 
+// IdentityContext lets routechoice retain the same probe caller through the
+// original app, graph, physical inventory and imported native proof checks.
+func (s *desktopExecutionSession) IdentityContext(ctx context.Context) (string, error) {
+	if ctx == nil {
+		return "", errors.New("multihop identity has no original caller")
+	}
+	value := s.identityContext(ctx)
+	if value == "" {
+		return "", errors.Join(ctx.Err(), errors.New("multihop identity lost its captured session or path"))
+	}
+	return value, ctx.Err()
+}
+
 func (s *desktopExecutionSession) identityContext(ctx context.Context) string {
 	if ctx == nil || ctx.Err() != nil || s.command == nil || desktopnetwork.LockContext(ctx, &s.driver.a.mu) != nil {
 		return ""

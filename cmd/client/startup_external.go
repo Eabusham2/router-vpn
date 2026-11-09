@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -120,6 +122,31 @@ func (capture *startupPolicyCapture) current(a *app) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return capture.currentLocked(a)
+}
+
+func (capture *startupPolicyCapture) currentContext(ctx context.Context, a *app) error {
+	if a == nil || capture == nil {
+		return errors.New("scheduled startup has no original application or source owner")
+	}
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
+	err := capture.currentLocked(a)
+	a.mu.Unlock()
+	if err != nil || capture.sourceToken == "" {
+		return errors.Join(err, ctx.Err())
+	}
+	// Already-entered bounded regular-file reads stay synchronously joined.
+	// Cancellation still owns both admission and final result publication.
+	token, err := startupExternalSourceToken(a, capture.entry, capture.entryMode)
+	if err != nil || token != capture.sourceToken {
+		return errors.Join(err, errors.New("scheduled startup private entry source changed"))
+	}
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
+	defer a.mu.Unlock()
+	return errors.Join(capture.currentLocked(a), ctx.Err())
 }
 
 // Hash the original private Router-entry source as well as its profile. A

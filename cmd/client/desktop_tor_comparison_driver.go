@@ -19,17 +19,18 @@ import (
 // never saves a profile, Startup Last record or Connected state. Final adoption
 // is a separate transaction after routechoice repeats both winning probes.
 type desktopTorComparisonDriver struct {
-	app        *app
-	profile    common.RouterProfile
-	request    externalProfileConnectRequest
-	startup    *startupPolicyCapture
-	operation  context.Context
-	selected   string
-	network    string
-	runtime    desktopTorConnectRuntime
-	selections map[routechoice.Execution]*desktopTorSelection
-	candidates []routechoice.Candidate
-	last       *desktopTorComparisonSession
+	app         *app
+	profile     common.RouterProfile
+	request     externalProfileConnectRequest
+	startup     *startupPolicyCapture
+	operation   context.Context
+	selected    string
+	network     string
+	readNetwork func(context.Context) (string, error)
+	runtime     desktopTorConnectRuntime
+	selections  map[routechoice.Execution]*desktopTorSelection
+	candidates  []routechoice.Candidate
+	last        *desktopTorComparisonSession
 	// Temporary tests capture and preflight candidates before suspending their
 	// previous VPN. The same driver retains the exact temporary runtime owner.
 	temporary       *speedLabTemporaryOwner
@@ -108,7 +109,7 @@ func newDesktopTorComparisonDriver(a *app, profile common.RouterProfile, request
 		lookup = desktopTorEndpointLookup
 	}
 	driver := &desktopTorComparisonDriver{app: a, profile: profile, request: request, startup: startup,
-		operation: operation, selected: selected, network: physicalNetworkIdentity(), runtime: runtime,
+		operation: operation, selected: selected, network: physicalNetworkIdentity(), readNetwork: physicalNetworkIdentityContext, runtime: runtime,
 		selections: make(map[routechoice.Execution]*desktopTorSelection)}
 	if driver.network == "" {
 		return nil, errors.New("Tor comparison could not capture the current physical network identity")
@@ -143,30 +144,7 @@ func newDesktopTorComparisonDriver(a *app, profile common.RouterProfile, request
 }
 
 func (d *desktopTorComparisonDriver) current() error {
-	if d == nil || d.app == nil || d.network == "" || physicalNetworkIdentity() != d.network {
-		return errors.New("Tor comparison physical network changed")
-	}
-	d.app.mu.Lock()
-	err := desktopTorOperationCurrentLocked(d.app, d.operation, d.selected)
-	if err == nil && d.temporary != nil && (!d.app.speedLabOwnerCurrentLocked(d.temporary) || d.app.cmd != d.temporary.runtime) {
-		err = errors.New("Tor comparison lost its captured temporary runtime owner")
-	}
-	d.app.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	for _, selection := range d.selections {
-		if err := selection.current(d.app); err != nil {
-			return err
-		}
-	}
-	if err := d.app.validateExternalProfileExpectedProfiles(d.request, d.profile); err != nil {
-		return err
-	}
-	if d.startup != nil {
-		return d.startup.current(d.app)
-	}
-	return nil
+	return d.currentContext(context.Background())
 }
 
 func (d *desktopTorComparisonDriver) Open(context.Context, routechoice.Candidate) (routechoice.Session, error) {
@@ -177,7 +155,7 @@ func (d *desktopTorComparisonDriver) OpenTarget(ctx context.Context, candidate r
 	if ctx == nil || ctx.Err() != nil || !mobiletor.DesktopTorCompareTarget(target) || !candidate.Valid() {
 		return nil, errors.New("Tor comparison startup has an invalid operation or external target")
 	}
-	if err := d.current(); err != nil {
+	if err := d.currentContext(ctx); err != nil {
 		return nil, err
 	}
 	if failure := d.prepareFailures[candidate.Execution]; failure != nil {
@@ -234,7 +212,7 @@ func (d *desktopTorComparisonDriver) OpenTarget(ctx context.Context, candidate r
 		if prelaunch.workspace.tor.network != d.network {
 			return errors.New("Tor comparison preparation belongs to a changed network")
 		}
-		return d.current()
+		return d.currentContext(ctx)
 	}
 	if err := check(); err != nil {
 		return session, err
@@ -285,33 +263,25 @@ func (d *desktopTorComparisonDriver) OpenTarget(ctx context.Context, candidate r
 	if err := session.probe.Prepare(ctx); err != nil {
 		return session, err
 	}
-	session.identity = session.probe.Identity()
-	if session.identity == "" || check() != nil || session.Identity() == "" {
+	session.identity, err = desktopTorComparisonProbeIdentity(ctx, session.probe)
+	if err != nil || session.identity == "" || check() != nil || session.identityContext(ctx) == "" {
 		return session, errors.New("Tor comparison preparation completed for a retired candidate")
 	}
 	return session, nil
 }
 
 func (s *desktopTorComparisonSession) Identity() string {
-	if s == nil || s.driver == nil || s.prelaunch == nil || s.identity == "" || s.driver.current() != nil || s.driver.app.desktopTorCurrent(s.prelaunch.workspace) != nil {
-		return ""
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed || !s.measurementDrained && (s.probe == nil || s.probe.Identity() != s.identity) {
-		return ""
-	}
-	return s.identity
+	return s.identityContext(context.Background())
 }
 
 func (s *desktopTorComparisonSession) Verify(ctx context.Context) error {
-	if ctx == nil || ctx.Err() != nil || s.Identity() == "" {
+	if ctx == nil || ctx.Err() != nil || s.identityContext(ctx) == "" {
 		return errors.New("Tor comparison cannot verify a retired candidate")
 	}
 	if err := s.probe.Verify(ctx); err != nil {
 		return err
 	}
-	if s.Identity() == "" {
+	if s.identityContext(ctx) == "" {
 		return errors.New("Tor comparison proof completed for a changed path")
 	}
 	return ctx.Err()
@@ -329,7 +299,7 @@ func (s *desktopTorComparisonSession) ProbeExternal(ctx context.Context, target 
 }
 
 func (s *desktopTorComparisonSession) measure(ctx context.Context, target string) (time.Duration, error) {
-	if ctx == nil || ctx.Err() != nil || s.Identity() == "" {
+	if ctx == nil || ctx.Err() != nil || s.identityContext(ctx) == "" {
 		return 0, errors.New("Tor comparison cannot measure a retired candidate")
 	}
 	var duration time.Duration
@@ -339,7 +309,7 @@ func (s *desktopTorComparisonSession) measure(ctx context.Context, target string
 	} else {
 		duration, err = s.probe.ProbeExternal(ctx, target)
 	}
-	if err != nil || duration <= 0 || ctx.Err() != nil || s.Identity() == "" {
+	if err != nil || duration <= 0 || ctx.Err() != nil || s.identityContext(ctx) == "" {
 		return 0, errors.Join(err, errors.New("Tor comparison measurement failed, expired or changed path"))
 	}
 	return duration, nil
@@ -353,7 +323,7 @@ func (s *desktopTorComparisonSession) retainPath(ctx context.Context) (desktopTo
 		return desktopTorProof{}, errors.New("Tor comparison cleanup is already pending")
 	}
 	defer s.cleanup.Unlock()
-	if s.Identity() == "" || ctx.Err() != nil {
+	if s.identityContext(ctx) == "" || ctx.Err() != nil {
 		return desktopTorProof{}, errors.New("Tor winning path retired before measurement cleanup")
 	}
 	if err := s.probe.Close(ctx); err != nil {
@@ -362,10 +332,10 @@ func (s *desktopTorComparisonSession) retainPath(ctx context.Context) (desktopTo
 	s.mu.Lock()
 	s.measurementDrained = true
 	s.mu.Unlock()
-	if s.Identity() == "" || ctx.Err() != nil {
+	if s.identityContext(ctx) == "" || ctx.Err() != nil {
 		return desktopTorProof{}, errors.New("Tor winning path changed while measurement cleanup completed")
 	}
-	return s.driver.app.readDesktopTorProof(s.prelaunch.workspace)
+	return s.driver.app.readDesktopTorProofContext(ctx, s.prelaunch.workspace)
 }
 
 func (s *desktopTorComparisonSession) Close(ctx context.Context) error {

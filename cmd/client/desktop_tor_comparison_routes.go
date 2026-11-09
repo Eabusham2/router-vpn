@@ -82,7 +82,7 @@ func (a *app) torBridgeCompareSelectionOwned(w http.ResponseWriter, profile comm
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		return driver.current()
+		return driver.currentContext(ctx)
 	}
 	if err := check(); err != nil {
 		failed(err, nil, http.StatusConflict)
@@ -105,7 +105,7 @@ func (a *app) torBridgeCompareSelectionOwned(w http.ResponseWriter, profile comm
 	winner, ok := active.(*desktopTorComparisonSession)
 	if !ok || winner == nil || winner != driver.last || result.Winner == nil || result.Final == nil ||
 		!result.Final.Eligible || result.Final.ScoreMS == nil || result.Final.Candidate != winner.candidate ||
-		*result.Winner != winner.candidate || result.Target != winner.target || winner.Identity() == "" || check() != nil {
+		*result.Winner != winner.candidate || result.Target != winner.target || winner.identityContext(ctx) == "" || check() != nil {
 		failed(errors.New("Tor comparison winner changed before adoption"), active, http.StatusConflict)
 		return
 	}
