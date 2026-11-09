@@ -99,11 +99,163 @@ func importedOpenVPNFixture(t *testing.T) (*routerVPNImportedOpenVPN, *box.Box, 
 
 func importedOpenVPNGuardFixture(owner *routerVPNImportedOpenVPN) {
 	original := owner.tun.guardContext
+	owner.tun.openVPN = owner
 	owner.tun.guardContext = func(ctx context.Context) error {
 		if err := original(ctx); err != nil {
 			return err
 		}
-		return owner.pinned(ctx)
+		return owner.pinnedMTU(ctx)
+	}
+}
+
+func TestRouterVPNNodeMTUImportedOpenVPNRetainsOwnedReaderHandoff(t *testing.T) {
+	for _, ending := range []string{"commit", "rollback", "expiry", "unconfirmed-revert"} {
+		t.Run(ending, func(t *testing.T) {
+			observer, _, _, _ := importedOpenVPNFixture(t)
+			original, err := observer.observe(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner := observer.tun
+			first := owner.inbound
+			desktopNodeMTUApply(t, owner, "begin", 0)
+			if observer.pinned(context.Background()) == nil {
+				t.Fatal("ordinary DNS or measurement admitted during the owned MTU lease")
+			}
+			if actual, err := observer.observeMTU(context.Background()); err != nil || actual != original {
+				t.Fatal("exact MTU lease could not reobserve its original packet endpoint", actual, err)
+			}
+			desktopNodeMTUApply(t, owner, "set", 1380)
+			if owner.inbound == first || observer.inbound != owner.inbound || observer.record.Reader != owner.record.Reader || observer.record.MTU != 1380 || *observer.state != original {
+				t.Fatal("owned mutation did not hand off only the returned TUN reader")
+			}
+			switch ending {
+			case "commit":
+				desktopNodeMTUApply(t, owner, "commit", 0)
+			case "rollback":
+				desktopNodeMTUApply(t, owner, "rollback", 0)
+			case "expiry":
+				if err := owner.expire(owner.deadline.Add(time.Second)); err != nil {
+					t.Fatal("original lease expiry could not restore its owned reader", err)
+				}
+				// Expiry publishes its terminal failure receipt; normal measurements
+				// must still reject that retired operation.
+				if !owner.record.Restored || observer.inbound != owner.inbound || owner.record.MTU != 1420 {
+					t.Fatal("expiry lost actual returned original-value reader")
+				}
+				if actual, err := observer.observeMTU(context.Background()); err != nil || actual != original || observer.pinned(context.Background()) == nil {
+					t.Fatal("expired rollback could not publish its exact receipt or admitted ordinary proof", err)
+				}
+				return
+			case "unconfirmed-revert":
+				commit := desktopNodeMTURequest(owner, "commit", 0)
+				commit.RevertToken = strings.Repeat("f", 32)
+				if err := owner.command(commit); err != nil {
+					t.Fatal(err)
+				}
+				owner.record.Generation, owner.record.Request = commit.Generation, commit.Request
+				revert := desktopNodeMTURequest(owner, "revert-unconfirmed-commit", 1420)
+				revert.CommitRequest, revert.CommitGeneration, revert.RevertToken = commit.Request, commit.Generation, commit.RevertToken
+				if err := owner.command(revert); err != nil {
+					t.Fatal("exact unconfirmed commit could not return its owned TUN reader", err)
+				}
+			}
+			if actual, err := observer.observe(context.Background()); err != nil || actual != original || observer.inbound != owner.inbound {
+				t.Fatal("completed lease changed the original authenticated packet connection", actual, err)
+			}
+			if ending != "commit" && (owner.record.MTU != 1420 || !owner.record.Restored) {
+				t.Fatal("owned cancellation did not restore the original measured interface")
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeMTUImportedOpenVPNCancelledChangeKeepsReturnedRollback(t *testing.T) {
+	observer, _, _, _ := importedOpenVPNFixture(t)
+	original, err := observer.observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := observer.tun
+	desktopNodeMTUApply(t, owner, "begin", 0)
+	desktopNodeMTUApply(t, owner, "set", 1360)
+	previous := owner.inbound
+	parent, cancel := context.WithCancel(owner.ctx)
+	defer cancel()
+	engine := owner.engine.(*desktopNodeMTUEngineFixture)
+	engine.change = func(_ context.Context, previous adapter.Inbound, _ int) (adapter.Inbound, error) {
+		old := previous.(*desktopMTUTUNFixture)
+		next := &desktopMTUTUNFixture{index: old.index + 1, mtu: old.mtu, guard: old.guard, guardContext: old.guardContext}
+		engine.current = next
+		cancel()
+		return next, context.Canceled
+	}
+	request := desktopNodeMTURequest(owner, "set", 1280)
+	if err := owner.commandContext(parent, request); err == nil || owner.inbound == previous || observer.inbound != owner.inbound || owner.record.MTU != 1360 || observer.record.Reader != owner.record.Reader || *observer.state != original {
+		t.Fatal("cancelled native transaction lost its exact returned rollback reader", err)
+	}
+	owner.record.Generation, owner.record.Request = request.Generation, request.Request
+	owner.record.Failure = "captured TUN operation rejected"
+	engine.change = nil
+	desktopNodeMTUApply(t, owner, "rollback", 0)
+	owner.record.Failure = "" // The shipping file consumer clears an accepted command.
+	if actual, err := observer.observe(context.Background()); err != nil || actual != original || owner.record.MTU != 1420 || !owner.record.Restored || owner.record.Active {
+		t.Fatal("original cancellation could not restore its retained packet connection", err)
+	}
+}
+
+func TestRouterVPNNodeMTUImportedOpenVPNRejectsForeignHandoff(t *testing.T) {
+	for _, fault := range []string{"lease", "reader", "generation", "capacity", "endpoint", "path", "cancelled"} {
+		t.Run(fault, func(t *testing.T) {
+			observer, instance, endpoint, _ := importedOpenVPNFixture(t)
+			if _, err := observer.observe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			owner := observer.tun
+			desktopNodeMTUApply(t, owner, "begin", 0)
+			before, reader := observer.record, observer.inbound
+			originalContext, cancelOriginal := context.WithCancel(owner.ctx)
+			defer cancelOriginal()
+			owner.ctx = originalContext
+			engine := owner.engine.(*desktopNodeMTUEngineFixture)
+			engine.change = func(ctx context.Context, previous adapter.Inbound, value int) (adapter.Inbound, error) {
+				old := previous.(*desktopMTUTUNFixture)
+				next := &desktopMTUTUNFixture{index: old.index + 1, mtu: value, guard: old.guard, guardContext: old.guardContext}
+				engine.current = next
+				switch fault {
+				case "lease":
+					owner.record.Lease = strings.Repeat("0", 32)
+				case "reader":
+					owner.record.Reader++
+				case "generation", "capacity":
+					endpoint.read = func(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error) {
+						s := importedOpenVPNStateFixture()
+						if fault == "generation" {
+							s.Remote.Generation++
+						} else {
+							s.MTU++
+						}
+						return s.Remote, s.MTU, nil
+					}
+				case "endpoint":
+					if err := instance.Endpoint().Remove("entry-wg"); err != nil {
+						t.Error(err)
+					}
+				case "path":
+					observer.path = func(context.Context) error { return errors.New("original physical path changed") }
+				case "cancelled":
+					cancelOriginal()
+					return next, context.Canceled
+				}
+				return next, nil
+			}
+			if err := owner.command(desktopNodeMTURequest(owner, "set", 1380)); err == nil {
+				t.Fatal("foreign or cancelled reader acquired the original OpenVPN observer", fault)
+			}
+			if observer.record != before || observer.inbound != reader {
+				t.Fatal("failed handoff replaced the original captured observer", fault)
+			}
+		})
 	}
 }
 

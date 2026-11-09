@@ -24,6 +24,7 @@ type routerVPNImportedOpenVPN struct {
 	mu      sync.Mutex
 	read    func(context.Context) (nativeopenvpn.PacketObservation, error)
 	current func(context.Context) error
+	path    func(context.Context) error
 	tun     *routerVPNNodeMTU
 	record  routerVPNNodeMTURecord
 	inbound routerVPNDesktopMTUTUN
@@ -31,6 +32,7 @@ type routerVPNImportedOpenVPN struct {
 	minimum uint32
 	state   *nativeopenvpn.PacketObservation
 	retired error
+	lease   string
 	// Immutable timestamps retain Go's monotonic clock. The loop can inspect
 	// freshness even when a caller is waiting for this observer's mutex.
 	observedAt atomic.Pointer[time.Time]
@@ -77,7 +79,7 @@ func newRouterVPNImportedOpenVPN(ctx context.Context, instance *box.Box, raw []b
 	if !ok {
 		return nil, routerVPNExternalFailure
 	}
-	owner := &routerVPNImportedOpenVPN{tun: tun, record: tun.record, inbound: tun.inbound, remote: remotes[0], minimum: uint32(mtu)}
+	owner := &routerVPNImportedOpenVPN{tun: tun, record: tun.record, inbound: tun.inbound, remote: remotes[0], minimum: uint32(mtu), path: tun.guardContext}
 	owner.current = func(call context.Context) error {
 		actual, found, err := adapter.RouterVPNOutboundContext(call, instance.Outbound(), "entry-wg")
 		if err != nil || !found || actual != first {
@@ -100,6 +102,16 @@ func newRouterVPNImportedOpenVPN(ctx context.Context, instance *box.Box, raw []b
 // auth or packet-device read. It only reads immutable captured fields and the
 // loop's TUN record, which the joined mailbox keeps unchanged until return.
 func (owner *routerVPNImportedOpenVPN) pinned(ctx context.Context) error {
+	return owner.pinnedContext(ctx, false)
+}
+
+// Only the native node-MTU command loop uses this admission. Ordinary selected
+// DNS and measurement mailboxes keep pinned's inactive-lease requirement.
+func (owner *routerVPNImportedOpenVPN) pinnedMTU(ctx context.Context) error {
+	return owner.pinnedContext(ctx, true)
+}
+
+func (owner *routerVPNImportedOpenVPN) pinnedContext(ctx context.Context, ownedMTU bool) error {
 	if owner == nil || ctx == nil || owner.tun == nil || owner.tun.engine == nil || owner.inbound == nil || owner.current == nil {
 		return routerVPNExternalFailure
 	}
@@ -110,9 +122,13 @@ func (owner *routerVPNImportedOpenVPN) pinned(ctx context.Context) error {
 		return err
 	}
 	r, original := owner.tun.record, owner.record
+	lease := ownedMTU && owner.lease != "" && r.Lease == owner.lease
+	failedOwnedChange := lease && r.Active && r.Failure == "captured TUN operation rejected"
+	expiredOwnedRollback := lease && !r.Active && r.Expired && r.Restored && r.MTU == owner.tun.original && r.Failure == "captured MTU lease expired; original MTU restored"
 	if r.Session != original.Session || r.Config != original.Config || r.Path != original.Path ||
 		r.Reader != original.Reader || r.Interface != original.Interface || r.Index != original.Index || r.MTU != original.MTU ||
-		r.Reader == 0 || r.Path == "" || r.MTU < 1280 || r.Active || r.Failure != "" || owner.tun.inbound != owner.inbound {
+		r.Reader == 0 || r.Path == "" || r.MTU < 1280 || r.Active && !lease ||
+		r.Failure != "" && !failedOwnedChange && !expiredOwnedRollback || owner.tun.inbound != owner.inbound {
 		return routerVPNExternalFailure
 	}
 	actual, err := owner.tun.engine.CurrentContext(ctx)
@@ -139,6 +155,14 @@ func (owner *routerVPNImportedOpenVPN) pinned(ctx context.Context) error {
 }
 
 func (owner *routerVPNImportedOpenVPN) observe(ctx context.Context) (nativeopenvpn.PacketObservation, error) {
+	return owner.observeContext(ctx, false)
+}
+
+func (owner *routerVPNImportedOpenVPN) observeMTU(ctx context.Context) (nativeopenvpn.PacketObservation, error) {
+	return owner.observeContext(ctx, true)
+}
+
+func (owner *routerVPNImportedOpenVPN) observeContext(ctx context.Context, ownedMTU bool) (nativeopenvpn.PacketObservation, error) {
 	empty := nativeopenvpn.PacketObservation{}
 	if owner == nil || ctx == nil || owner.read == nil {
 		return empty, routerVPNExternalFailure
@@ -162,13 +186,13 @@ func (owner *routerVPNImportedOpenVPN) observe(ctx context.Context) (nativeopenv
 		owner.retired = err
 		return empty, err
 	}
-	if err := owner.pinned(ctx); err != nil {
+	if err := owner.pinnedContext(ctx, ownedMTU); err != nil {
 		return fail(err)
 	}
 	state, err := owner.read(ctx)
 	if err != nil {
 		if errors.Is(err, nativeopenvpn.ErrRemotePending) && owner.state == nil {
-			if err := owner.pinned(ctx); err != nil {
+			if err := owner.pinnedContext(ctx, ownedMTU); err != nil {
 				return fail(err)
 			}
 			return empty, nativeopenvpn.ErrRemotePending
@@ -178,7 +202,7 @@ func (owner *routerVPNImportedOpenVPN) observe(ctx context.Context) (nativeopenv
 		}
 		return fail(err)
 	}
-	if err := owner.pinned(ctx); err != nil {
+	if err := owner.pinnedContext(ctx, ownedMTU); err != nil {
 		return fail(err)
 	}
 	if state.Validate() != nil || state.Remote.Remote != owner.remote || state.MTU < owner.minimum {
@@ -197,6 +221,88 @@ func (owner *routerVPNImportedOpenVPN) observe(ctx context.Context) (nativeopenv
 	observed := time.Now()
 	owner.observedAt.Store(&observed)
 	return state, nil
+}
+
+func (owner *routerVPNImportedOpenVPN) claimMTULease(ctx context.Context, lease string) error {
+	if owner == nil || !routerVPNExternalSession.MatchString(lease) {
+		return routerVPNExternalFailure
+	}
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return err
+	}
+	defer owner.mu.Unlock()
+	if owner.state == nil || owner.retired != nil || owner.tun.record.Active || owner.tun.used[lease] {
+		return routerVPNExternalFailure
+	}
+	if err := owner.pinned(ctx); err != nil {
+		return err
+	}
+	owner.lease = lease
+	return nil
+}
+
+// The only reader handoff is the exact result of this retained node's already
+// validated MTU command. Reobserving the immutable endpoint and remote tuple
+// grants no authority to recapture a replacement graph, process or reconnect.
+func (owner *routerVPNImportedOpenVPN) handoffMTU(ctx context.Context, previous routerVPNDesktopMTUTUN, before routerVPNNodeMTURecord,
+	next routerVPNDesktopMTUTUN, after routerVPNNodeMTURecord) error {
+	if owner == nil || ctx == nil || owner.path == nil || next == nil || previous == nil || owner.tun == nil || owner.tun.ctx == nil || owner.tun.ctx.Err() != nil {
+		return routerVPNExternalFailure
+	}
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return err
+	}
+	defer owner.mu.Unlock()
+	if owner.retired != nil || owner.state == nil || owner.inbound != previous || owner.tun.inbound != previous || owner.tun.record != before ||
+		owner.record.Session != before.Session || owner.record.Config != before.Config || owner.record.Path != before.Path ||
+		owner.record.Reader != before.Reader || owner.record.Interface != before.Interface || owner.record.Index != before.Index || owner.record.MTU != before.MTU ||
+		owner.lease == "" || owner.lease != before.Lease || !owner.tun.used[owner.lease] ||
+		!before.Active && (before.Restored || owner.tun.commitRevert == nil || !time.Now().Before(owner.tun.deadline)) {
+		return routerVPNExternalFailure
+	}
+	want := before
+	want.Reader++
+	want.Index, want.MTU = after.Index, after.MTU
+	if after != want || after.Index < 1 || after.MTU < 1280 || after.MTU > 9000 || next == previous || next.Tag() != previous.Tag() || next.Type() != "tun" {
+		return routerVPNExternalFailure
+	}
+	current := func() error {
+		if err := owner.path(ctx); err != nil {
+			return err
+		}
+		if err := owner.current(ctx); err != nil {
+			return err
+		}
+		actual, err := owner.tun.engine.CurrentContext(ctx)
+		if err != nil || actual != next {
+			return errors.Join(err, routerVPNExternalFailure)
+		}
+		reader, ok := next.(interface {
+			RouterVPNDesktopMTUInterfaceContext(context.Context) (string, int, int, error)
+		})
+		if !ok {
+			return routerVPNExternalFailure
+		}
+		name, index, mtu, err := reader.RouterVPNDesktopMTUInterfaceContext(ctx)
+		if err != nil || name != after.Interface || index != after.Index || mtu != after.MTU {
+			return errors.Join(err, routerVPNExternalFailure)
+		}
+		return ctx.Err()
+	}
+	if err := current(); err != nil {
+		return err
+	}
+	observed, err := owner.read(ctx)
+	if err != nil || observed != *owner.state || observed.Validate() != nil {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	if err := current(); err != nil {
+		return err
+	}
+	owner.inbound, owner.record = next, after
+	now := time.Now()
+	owner.observedAt.Store(&now)
+	return nil
 }
 
 // Periodic admission leaves room inside the existing two-second heartbeat
@@ -218,7 +324,7 @@ func (owner *routerVPNImportedOpenVPN) refresh(parent context.Context) (bool, er
 	defer cancel()
 	err := owner.tun.currentContext(ctx)
 	if err == nil {
-		_, err = owner.observe(ctx)
+		_, err = owner.observeMTU(ctx)
 	}
 	if err == nil {
 		err = ctx.Err()

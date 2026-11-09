@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -102,7 +103,7 @@ func testImportedOpenVPNNativeConnected(t *testing.T) {
 				t.Helper()
 				request.Operation = operation
 				request.Generation = generation + 1
-				request.Request = strings.Repeat("a", 31) + string(rune('a'+request.Generation))
+				request.Request = fmt.Sprintf("%032x", request.Generation)
 				request.Deadline = time.Now().Add(budget).UnixMilli()
 				importedDNSWrite(t, files, "node-dns-request.json", request)
 				if err := routerVPNConsumeImportedDNS(ctx, files, tun, &generation, instance.RouterVPNStrategyDNSProofContext, owner); err != nil {
@@ -141,6 +142,18 @@ func testImportedOpenVPNNativeConnected(t *testing.T) {
 			if state, err := owner.observe(ctx); err != nil || state != original || owner.retired != nil {
 				t.Fatal("native read timeout retired healthy TLS/data connection", state, err)
 			}
+			// The application TUN remains the explicit platform fixture. The
+			// command's handoff must independently reobserve this actual native
+			// mutual-TLS/data endpoint without changing its remote generation.
+			desktopNodeMTUApply(t, tun, "begin", 0)
+			desktopNodeMTUApply(t, tun, "set", 1380)
+			if state, err := owner.observeMTU(ctx); err != nil || state != original || owner.pinned(ctx) == nil {
+				t.Fatal("owned MTU handoff lost the actual native connection or admitted ordinary measurements", state, err)
+			}
+			desktopNodeMTUApply(t, tun, "rollback", 0)
+			request.Reader, request.MTU = tun.record.Reader, tun.record.MTU
+			exchange("openvpn-observe", "passed", 2*time.Second)
+			exchange("", "passed", 2*time.Second)
 			client.RouterVPNTestRestart()
 			remoteNativeWait(t, func() bool {
 				next, capacity, err := client.RouterVPNConnectedCapacityContext(ctx)

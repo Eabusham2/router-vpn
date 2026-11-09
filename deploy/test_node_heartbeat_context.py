@@ -37,11 +37,11 @@ type routerVPNExternalFiles struct{root *os.Root;stopped atomic.Bool;published i
 func(f *routerVPNExternalFiles)stopRequested(string,string)bool{return f.stopped.Load()}
 func(*routerVPNExternalFiles)read(name string,_ int)([]byte,error){if name=="sing-box.json"{return []byte(`{}`),nil};return nil,os.ErrNotExist}
 func(f *routerVPNExternalFiles)publish(_ string,record routerVPNNodeMTURecord)error{f.published++;if f.publishHook!=nil{f.publishHook(record)}else{f.stopped.Store(true)};return nil}
-type routerVPNNodeMTURecord struct{Generation uint64;Request,Failure,NetworkReceipt string;Heartbeat int64}
+type routerVPNNodeMTURecord struct{Generation uint64;Request,Failure,NetworkReceipt string;Heartbeat int64;OpenVPN fixtureOpenVPNState}
 type routerVPNNodeMTUCommand struct{Schema int;Session,Config,Request string;Generation uint64}
 func routerVPNMTUStrict([]byte,any)bool{return false}
 type routerVPNNodeMTUBox struct{instance *fixtureBox;tag string;physical *fixturePhysical}
-type routerVPNNodeMTU struct{record routerVPNNodeMTURecord;native *NativeTun;guard,guardContext func(context.Context)error;last error}
+type routerVPNNodeMTU struct{record routerVPNNodeMTURecord;native *NativeTun;guard,guardContext func(context.Context)error;last error;openVPN *routerVPNImportedOpenVPN}
 func newRouterVPNNodeMTUContext(ctx context.Context,b *routerVPNNodeMTUBox,_,_,_ string,guard func(context.Context)error)(*routerVPNNodeMTU,error){
  o:=&routerVPNNodeMTU{native:b.instance.native,guard:guard};b.instance.owner=o;return o,guard(ctx)
 }
@@ -53,6 +53,8 @@ var errFixtureRemotePending=errors.New("original native endpoint not yet ready")
 type routerVPNImportedOpenVPN struct{mu sync.Mutex;tun *routerVPNNodeMTU;read func(context.Context)(fixtureOpenVPNState,error);remote string;minimum uint32;state *fixtureOpenVPNState;retired error;observedAt atomic.Pointer[time.Time]}
 func newRouterVPNImportedOpenVPN(ctx context.Context,b *fixtureBox,_ []byte,tun *routerVPNNodeMTU)(*routerVPNImportedOpenVPN,error){if b.openVPN!=nil{b.openVPN.tun=tun};return b.openVPN,ctx.Err()}
 func(*routerVPNImportedOpenVPN)pinned(ctx context.Context)error{return ctx.Err()}
+func(*routerVPNImportedOpenVPN)pinnedMTU(ctx context.Context)error{return ctx.Err()}
+func(*routerVPNImportedOpenVPN)pinnedContext(ctx context.Context,_ bool)error{return ctx.Err()}
 func routerVPNConsumeImportedDNS(ctx context.Context,f *routerVPNExternalFiles,_ *routerVPNNodeMTU,generation *uint64,_ func(context.Context)error,_ ...*routerVPNImportedOpenVPN)error{if f.consume!=nil{return f.consume(ctx,generation)};return nil}
 func(*routerVPNNodeMTU)expire(time.Time)error{return nil}
 func(*routerVPNNodeMTU)command(routerVPNNodeMTUCommand)error{return errors.New("unexpected command")}
@@ -104,12 +106,14 @@ func TestActualOpenVPNHeartbeatFreshness(t *testing.T){
   owner:=&routerVPNImportedOpenVPN{remote:"original-entry",minimum:1420}
   files:=&routerVPNExternalFiles{}
   afterFirst,refreshed,queryInProgress,queryConsumed:=false,false,false,false
+  postNetworkRead:=false
   misses:=0;var firstHeartbeat int64;var firstObserved *time.Time;var observerReleased chan struct{}
   defer func(){if observerReleased!=nil{<-observerReleased}}()
   owner.read=func(ctx context.Context)(fixtureOpenVPNState,error){
    if ctx.Value(originalCallerKey{})!="original-caller"{t.Fatal("periodic observation lost original caller")}
+   afterNetwork:=postNetworkRead;postNetworkRead=false
    if !afterFirst{return state,ctx.Err()}
-   deadline,ok:=ctx.Deadline();bound:=250*time.Millisecond;if queryInProgress{bound=300*time.Millisecond};if !ok||time.Until(deadline)>bound{t.Fatal("periodic observation lost bounded refresh admission")}
+   deadline,ok:=ctx.Deadline();bound:=250*time.Millisecond;if queryInProgress{bound=300*time.Millisecond};if afterNetwork{bound=2*time.Second};if !ok||time.Until(deadline)>bound{t.Fatal("periodic observation lost bounded refresh admission")}
    switch mode{
    case "native-held":if misses==0{misses++;<-ctx.Done();return fixtureOpenVPNState{},ctx.Err()};refreshed=true
    case "observer-held":refreshed=true
@@ -132,6 +136,7 @@ func TestActualOpenVPNHeartbeatFreshness(t *testing.T){
    queryConsumed=true;(*generation)++;return nil
   }
   files.publishHook=func(record routerVPNNodeMTURecord){
+   if record.OpenVPN!=state{t.Fatal("heartbeat refreshed without a new original-tuple observation")}
    if !afterFirst{
     afterFirst=true;firstHeartbeat=record.Heartbeat;firstObserved=owner.observedAt.Load()
     if firstObserved==nil{t.Fatal("heartbeat has no successful original-tuple observation")}
@@ -145,7 +150,7 @@ func TestActualOpenVPNHeartbeatFreshness(t *testing.T){
    if !refreshed||record.Heartbeat<=firstHeartbeat{t.Fatal("heartbeat refreshed without a new original-tuple observation")}
    files.stopped.Store(true)
   }
-  native:=&NativeTun{read:func(ctx context.Context)(string,error){return "original-receipt",ctx.Err()}}
+  native:=&NativeTun{read:func(ctx context.Context)(string,error){postNetworkRead=true;return "original-receipt",ctx.Err()}}
   instance:=&fixtureBox{native:native,openVPN:owner}
   err:=routerVPNRunNodeMTULoop(parent,graph,files,instance,"session","config",nil,func(ctx context.Context)error{return ctx.Err()},func()error{return nil})
   recovering:=mode=="native-held"||mode=="observer-held"||mode=="query-expiry"
@@ -175,7 +180,7 @@ def execute():
                          'func (t *NativeTun) RouterVPNDesktopNetworkReceiptContext(')
     source = (ROOT/'mobile/desktop/node_imported_openvpn_observation.go.tmpl').read_text()
     observations = '\n'.join(function(source, 'func (owner *routerVPNImportedOpenVPN) '+name+'(')
-                             for name in ('observe', 'healthy', 'refresh', 'await'))
+                             for name in ('observe', 'observeMTU', 'observeContext', 'healthy', 'refresh', 'await'))
     observations = observations.replace('nativeopenvpn.PacketObservation', 'fixtureOpenVPNState').replace(
         'nativeopenvpn.ErrRemotePending', 'errFixtureRemotePending').replace('mobilemtu.LockContext', 'LockContext')
     lock = function((ROOT/'internal/mobilemtu/context.go').read_text(), 'func LockContext(')
@@ -215,7 +220,7 @@ def execute():
             ('missing post-query observation',
              'if openVPN != nil && dnsGeneration != previousDNSGeneration {',
              'if openVPN != nil && dnsGeneration != previousDNSGeneration && false {',
-             'query-expiry', 'heartbeat refreshed without a new original-tuple observation'),
+             'query-expiry', 'periodic expiry retired healthy child instead of recovering without stale evidence'),
             ('extended original freshness',
              'observed.Add(2*time.Second).Before(limit) {',
              'observed.Add(2*time.Second).Before(limit) && false {',
@@ -224,7 +229,17 @@ def execute():
         for label, before, after, cases, reason in controls:
             if production.count(before) != 1:
                 raise ValueError(label+' causal control seam changed')
-            (folder/'loop.go').write_text(production.replace(before, after, 1))
+            changed = production.replace(before, after, 1)
+            if label == 'stale observation publication':
+                # The additional post-network read independently blocks stale
+                # publication. Remove both protections for this same negative
+                # control; neither a missing first read nor a missing second
+                # read alone can fabricate a fresh original-tuple receipt.
+                terminal = 'next.OpenVPN, err = openVPN.observeMTU(heartbeatContext)'
+                if changed.count(terminal) != 1:
+                    raise ValueError('Original post-network OpenVPN observation seam changed')
+                changed = changed.replace(terminal, 'next.OpenVPN = fixtureOpenVPNState{}', 1)
+            (folder/'loop.go').write_text(changed)
             result = subprocess.run(command+['-run','^TestActualOpenVPNHeartbeatFreshness/('+cases+')$'],
                                     cwd=folder,env=environment,stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT,text=True,timeout=90)

@@ -14,28 +14,30 @@ import (
 
 	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemtu"
+	"router-vpn/internal/nativeopenvpn"
 )
 
 const desktopNodeMTURecordLimit = 32 << 10
 
 type desktopNodeMTURecord struct {
-	NetworkReceipt string `json:"network_receipt,omitempty"`
-	Schema         int    `json:"schema"`
-	Session        string `json:"session_id"`
-	Config         string `json:"config_sha256"`
-	Path           string `json:"path_id"`
-	Generation     uint64 `json:"generation"`
-	Request        string `json:"request_id"`
-	Lease          string `json:"lease_id"`
-	Active         bool   `json:"active"`
-	Restored       bool   `json:"restored"`
-	Expired        bool   `json:"expired,omitempty"`
-	Reader         uint64 `json:"reader"`
-	Interface      string `json:"interface"`
-	Index          int    `json:"index"`
-	MTU            int    `json:"mtu"`
-	Heartbeat      int64  `json:"heartbeat_at"`
-	Failure        string `json:"failure,omitempty"`
+	OpenVPN        nativeopenvpn.PacketObservation `json:"openvpn,omitzero"`
+	NetworkReceipt string                          `json:"network_receipt,omitempty"`
+	Schema         int                             `json:"schema"`
+	Session        string                          `json:"session_id"`
+	Config         string                          `json:"config_sha256"`
+	Path           string                          `json:"path_id"`
+	Generation     uint64                          `json:"generation"`
+	Request        string                          `json:"request_id"`
+	Lease          string                          `json:"lease_id"`
+	Active         bool                            `json:"active"`
+	Restored       bool                            `json:"restored"`
+	Expired        bool                            `json:"expired,omitempty"`
+	Reader         uint64                          `json:"reader"`
+	Interface      string                          `json:"interface"`
+	Index          int                             `json:"index"`
+	MTU            int                             `json:"mtu"`
+	Heartbeat      int64                           `json:"heartbeat_at"`
+	Failure        string                          `json:"failure,omitempty"`
 }
 type desktopNodeMTUCommand struct {
 	Schema           int    `json:"schema"`

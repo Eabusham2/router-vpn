@@ -18,6 +18,8 @@ import (
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
 	"github.com/sagernet/sing-box/option"
 	SJ "github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
@@ -30,23 +32,24 @@ import (
 const routerVPNNodeMTURecordLimit = 32 << 10
 
 type routerVPNNodeMTURecord struct {
-	NetworkReceipt string `json:"network_receipt,omitempty"`
-	Schema         int    `json:"schema"`
-	Session        string `json:"session_id"`
-	Config         string `json:"config_sha256"`
-	Path           string `json:"path_id"`
-	Generation     uint64 `json:"generation"`
-	Request        string `json:"request_id"`
-	Lease          string `json:"lease_id"`
-	Active         bool   `json:"active"`
-	Restored       bool   `json:"restored"`
-	Expired        bool   `json:"expired,omitempty"`
-	Reader         uint64 `json:"reader"`
-	Interface      string `json:"interface"`
-	Index          int    `json:"index"`
-	MTU            int    `json:"mtu"`
-	Heartbeat      int64  `json:"heartbeat_at"`
-	Failure        string `json:"failure,omitempty"`
+	OpenVPN        nativeopenvpn.PacketObservation `json:"openvpn,omitzero"`
+	NetworkReceipt string                          `json:"network_receipt,omitempty"`
+	Schema         int                             `json:"schema"`
+	Session        string                          `json:"session_id"`
+	Config         string                          `json:"config_sha256"`
+	Path           string                          `json:"path_id"`
+	Generation     uint64                          `json:"generation"`
+	Request        string                          `json:"request_id"`
+	Lease          string                          `json:"lease_id"`
+	Active         bool                            `json:"active"`
+	Restored       bool                            `json:"restored"`
+	Expired        bool                            `json:"expired,omitempty"`
+	Reader         uint64                          `json:"reader"`
+	Interface      string                          `json:"interface"`
+	Index          int                             `json:"index"`
+	MTU            int                             `json:"mtu"`
+	Heartbeat      int64                           `json:"heartbeat_at"`
+	Failure        string                          `json:"failure,omitempty"`
 }
 type routerVPNNodeMTUCommand struct {
 	Schema           int    `json:"schema"`
@@ -142,6 +145,7 @@ type routerVPNNodeMTU struct {
 	original     int
 	deadline     time.Time
 	commitRevert *routerVPNNodeCommitRevert
+	openVPN      *routerVPNImportedOpenVPN
 	// Diagnostic suppression belongs to this exact reader, not a session
 	// basename or a replacement owner. It is never serialized as evidence.
 	networkReceiptDiagnosticReader uint64
@@ -265,33 +269,66 @@ func (owner *routerVPNNodeMTU) change(value int) error {
 	return owner.changeBefore(value, time.Time{})
 }
 func (owner *routerVPNNodeMTU) changeBefore(value int, deadline time.Time) error {
-	if owner.current() != nil || value < 1280 || value > 9000 {
+	return owner.changeBeforeContext(owner.ctx, value, deadline)
+}
+func (owner *routerVPNNodeMTU) changeBeforeContext(parent context.Context, value int, deadline time.Time) error {
+	if owner.currentContext(parent) != nil || value < 1280 || value > 9000 {
 		return routerVPNExternalFailure
 	}
 	if value == owner.record.MTU {
 		return nil
 	}
+	if !mobilemtu.SameOperationContext(parent, parent) {
+		work, finish, err := mobilemtu.WithOperationContext(parent, 10*time.Second, 3*time.Second)
+		if err != nil {
+			return err
+		}
+		defer finish()
+		parent = work
+	}
 	limit := time.Now().Add(10 * time.Second)
 	if !deadline.IsZero() && deadline.Before(limit) {
 		limit = deadline
 	}
-	ctx, cancel := context.WithDeadline(owner.ctx, limit)
+	ctx, cancel := context.WithDeadline(parent, limit)
 	defer cancel()
-	next, changeErr := owner.engine.Change(ctx, owner.inbound, value)
-	actual, err := owner.engine.Current()
+	previous, before := owner.inbound, owner.record
+	next, changeErr := owner.engine.Change(ctx, previous, value)
+	observe := ctx
+	if ctx.Err() != nil {
+		// Only the native transaction's original cleanup allowance may observe
+		// its returned rollback reader. It cannot adopt a late measured winner.
+		var err error
+		observe, err = mobilemtu.OperationCleanupContext(ctx)
+		if err != nil || owner.ctx.Err() != nil {
+			return errors.Join(changeErr, err, ctx.Err())
+		}
+	}
+	actual, err := owner.engine.CurrentContext(observe)
 	reader, ok := next.(routerVPNDesktopMTUTUN)
 	if err != nil || !ok || actual != next || reader.Tag() != owner.inbound.Tag() || reader.Type() != "tun" {
 		return routerVPNExternalFailure
 	}
-	name, index, mtu, err := reader.RouterVPNDesktopMTUInterface()
+	observed, ok := reader.(interface {
+		RouterVPNDesktopMTUInterfaceContext(context.Context) (string, int, int, error)
+	})
+	if !ok {
+		return routerVPNExternalFailure
+	}
+	name, index, mtu, err := observed.RouterVPNDesktopMTUInterfaceContext(observe)
 	if err != nil || name != owner.record.Interface || index < 1 || mtu < 1280 || mtu > 9000 {
 		return routerVPNExternalFailure
 	}
-	owner.inbound = reader
-	owner.record.Reader++
-	owner.record.Index = index
-	owner.record.MTU = mtu
-	if changeErr != nil || ctx.Err() != nil || mtu != value || owner.current() != nil {
+	after := before
+	after.Reader++
+	after.Index, after.MTU = index, mtu
+	if owner.openVPN != nil {
+		if err := owner.openVPN.handoffMTU(observe, previous, before, reader, after); err != nil {
+			return err
+		}
+	}
+	owner.inbound, owner.record = reader, after
+	if changeErr != nil || ctx.Err() != nil || mtu != value || owner.currentContext(ctx) != nil {
 		return routerVPNExternalFailure
 	}
 	return nil
@@ -314,6 +351,11 @@ func (owner *routerVPNNodeMTU) expire(now time.Time) error {
 	return err
 }
 func (owner *routerVPNNodeMTU) command(request routerVPNNodeMTUCommand) error {
+	ctx, cancel := context.WithTimeout(owner.ctx, 10*time.Second)
+	defer cancel()
+	return owner.commandContext(ctx, request)
+}
+func (owner *routerVPNNodeMTU) commandContext(ctx context.Context, request routerVPNNodeMTUCommand) error {
 	if request.Schema != 1 || request.Session != owner.record.Session || request.Config != owner.record.Config || request.Path != owner.record.Path || request.Generation != owner.record.Generation+1 || !routerVPNExternalSession.MatchString(request.Request) || !routerVPNExternalSession.MatchString(request.Lease) {
 		return routerVPNExternalFailure
 	}
@@ -326,12 +368,22 @@ func (owner *routerVPNNodeMTU) command(request routerVPNNodeMTUCommand) error {
 	if request.RevertToken != "" && !routerVPNExternalSession.MatchString(request.RevertToken) {
 		return routerVPNExternalFailure
 	}
-	if request.Reader != owner.record.Reader || request.MTU != owner.record.MTU || owner.current() != nil {
+	if request.Reader != owner.record.Reader || request.MTU != owner.record.MTU || owner.currentContext(ctx) != nil {
 		return routerVPNExternalFailure
+	}
+	if owner.openVPN != nil {
+		if _, err := owner.openVPN.observeMTU(ctx); err != nil {
+			return err
+		}
 	}
 	if request.Action == "begin" {
 		if owner.record.Active || owner.used[request.Lease] || len(owner.used) >= 4096 || request.Value != 0 {
 			return routerVPNExternalFailure
+		}
+		if owner.openVPN != nil {
+			if err := owner.openVPN.claimMTULease(ctx, request.Lease); err != nil {
+				return err
+			}
 		}
 		owner.used[request.Lease] = true
 		owner.record.Lease = request.Lease
@@ -350,7 +402,7 @@ func (owner *routerVPNNodeMTU) command(request routerVPNNodeMTUCommand) error {
 		if subtle.ConstantTimeCompare(hash[:], capture.tokenHash[:]) != 1 {
 			return routerVPNExternalFailure
 		}
-		if err := owner.changeBefore(owner.original, owner.deadline); err != nil {
+		if err := owner.changeBeforeContext(ctx, owner.original, owner.deadline); err != nil {
 			return err
 		}
 		owner.record.Restored = true
@@ -360,7 +412,7 @@ func (owner *routerVPNNodeMTU) command(request routerVPNNodeMTUCommand) error {
 			return routerVPNExternalFailure
 		}
 		if request.Action == "set" {
-			if err := owner.change(request.Value); err != nil {
+			if err := owner.changeBeforeContext(ctx, request.Value, owner.deadline); err != nil {
 				return err
 			}
 		} else {
@@ -368,7 +420,7 @@ func (owner *routerVPNNodeMTU) command(request routerVPNNodeMTUCommand) error {
 				return routerVPNExternalFailure
 			}
 			if request.Action == "rollback" {
-				if err := owner.change(owner.original); err != nil {
+				if err := owner.changeBeforeContext(ctx, owner.original, owner.deadline); err != nil {
 					return err
 				}
 				owner.record.Restored = true
@@ -662,11 +714,12 @@ func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExtern
 		return err
 	}
 	if openVPN != nil {
+		owner.openVPN = openVPN
 		owner.guardContext = func(call context.Context) error {
 			if err := guard(call); err != nil {
 				return err
 			}
-			return openVPN.pinned(call)
+			return openVPN.pinnedMTU(call)
 		}
 		// Readiness and its selected native DNS exchange cannot precede the
 		// original entry's actual authenticated packet capacity.
@@ -749,6 +802,12 @@ func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExtern
 			// lower readers must not renew it or outlive the original Stop.
 			heartbeatContext, stopHeartbeat := context.WithTimeout(observe, 2*time.Second)
 			next.NetworkReceipt, err = owner.DesktopNetworkReceiptContext(heartbeatContext)
+			if err == nil && openVPN != nil {
+				// The packet generation is freshly reobserved after this exact
+				// reader's network policy. A saved pre-mutation receipt cannot
+				// authorize the host's authenticated MTU probes.
+				next.OpenVPN, err = openVPN.observeMTU(heartbeatContext)
+			}
 			if err == nil {
 				err = heartbeatContext.Err()
 			}
