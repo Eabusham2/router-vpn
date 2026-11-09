@@ -9,17 +9,24 @@ import (
 type selectedDNSProbe func(context.Context, *app, observedConnection, string) dnsProofState
 
 func (t *sessionTracker) dnsProofPathContext(sessionID string, s observedConnection, runtimeID string) (context.Context, func(), error) {
+	return t.dnsProofPathContextWithCaller(context.Background(), sessionID, s, runtimeID)
+}
+
+func (t *sessionTracker) dnsProofPathContextWithCaller(parent context.Context, sessionID string, s observedConnection, runtimeID string) (context.Context, func(), error) {
 	// A detached tracker must not create another process observer while proving
 	// a path. Production registers its tracker before starting the loop.
 	if owner, ok := sessionTrackers.Load(t.a); !ok || owner != t {
 		return nil, nil, errors.New("DNS proof has no matching process session owner")
 	}
-	before := t.snapshot(0)
+	_, before, err := measurementSessionContext(parent, t.a, t)
+	if err != nil {
+		return nil, nil, err
+	}
 	if before.ID != sessionID || before.RouterID != s.RouterID || before.ActualMode != runtimeID || before.ActualBase != s.Base {
 		return nil, nil, errors.New("DNS proof observation no longer belongs to the active session")
 	}
 	st := state{Connected: s.Connected, Phase: s.Phase, Mode: s.Mode, LogicalMode: s.LogicalMode, RuntimeMode: s.RuntimeMode, Base: s.Base, RouterID: s.RouterID}
-	ctx, stop, _, err := asyncMeasurementPathContext(context.Background(), t.a, s.Profile, st, before, asyncMeasurementProfileToken(s.Profile))
+	ctx, stop, _, err := asyncMeasurementPathContext(parent, t.a, s.Profile, st, before, asyncMeasurementProfileToken(s.Profile))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -52,7 +59,13 @@ func (t *sessionTracker) discardDNSProof(sessionID string) {
 }
 
 func (t *sessionTracker) proveDNSAsyncWithProbe(sessionID string, s observedConnection, runtimeID string, probe selectedDNSProbe) {
-	ctx, stop, err := t.dnsProofPathContext(sessionID, s, runtimeID)
+	ctx, cancel := context.WithTimeout(context.Background(), sessionDNSProofBudget)
+	defer cancel()
+	t.proveDNSAsyncWithProbeContext(ctx, sessionID, s, runtimeID, probe)
+}
+
+func (t *sessionTracker) proveDNSAsyncWithProbeContext(parent context.Context, sessionID string, s observedConnection, runtimeID string, probe selectedDNSProbe) {
+	ctx, stop, err := t.dnsProofPathContextWithCaller(parent, sessionID, s, runtimeID)
 	if err != nil {
 		t.discardDNSProof(sessionID)
 		return

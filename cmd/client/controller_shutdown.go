@@ -125,6 +125,9 @@ func (a *app) drainControllerOwner() error {
 	// as well, because its durable adoption can otherwise wait for the same lock.
 	a.cancelConnectionOperation()
 	cancelCapturedMTU(a)
+	if err := stopSessionDNSProofs(a); err != nil {
+		return err
+	}
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
 	if err := finishViaEntryCancellation(a); err != nil {

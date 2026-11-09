@@ -38,6 +38,7 @@ import (
 // or restore callback is substituted. These are not native networking tests.
 type desktopNodeConnectionFixture struct {
 	a             *app
+	tracker       *sessionTracker
 	profile       common.RouterProfile
 	data          string
 	packageDir    string
@@ -167,6 +168,7 @@ func newDesktopNodeConnectionFixture(t *testing.T, policy, layer string) *deskto
 		t.Fatal(err)
 	}
 	tracker := &sessionTracker{a: f.a}
+	f.tracker = tracker
 	sessionTrackers.Store(f.a, tracker)
 	// Drive the production observation method on its normal cadence, with a
 	// fixture-owned stop so this otherwise permanent app loop joins in tests.
@@ -444,6 +446,9 @@ func (f *desktopNodeConnectionFixture) close(t *testing.T) {
 	f.a.mu.Unlock()
 	f.retire()
 	<-f.telemetryDone
+	if err := f.tracker.stopDNSProofs(context.Background()); err != nil {
+		t.Error(err)
+	}
 	for _, child := range f.children {
 		if err := stopDesktopOwnedNodeMonitor(context.Background(), child.launch); err != nil {
 			t.Error(err)

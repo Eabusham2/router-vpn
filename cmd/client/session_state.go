@@ -85,6 +85,8 @@ type sessionTracker struct {
 	dnsProofRunning     bool
 	dnsProofLastAttempt time.Time
 	dnsProofBinding     *asyncMeasurementAdoption
+	dnsProofWork        *sessionDNSProofWork
+	dnsProofClosed      bool
 }
 
 var sessionTrackers sync.Map
@@ -109,6 +111,12 @@ func (t *sessionTracker) loop() {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for range ticker.C {
+		t.mu.Lock()
+		closed := t.dnsProofClosed
+		t.mu.Unlock()
+		if closed {
+			return
+		}
 		t.observe(t.capture())
 	}
 }
@@ -218,6 +226,9 @@ func (t *sessionTracker) declareRequest(mode, base string) {
 }
 
 func (t *sessionTracker) startLocked(s observedConnection, phase string) {
+	if t.dnsProofWork != nil {
+		t.dnsProofWork.cancel()
+	}
 	homeExitProofs.Delete(t.a)
 	now := time.Now().UTC()
 	id := fmt.Sprintf("session-%d-%d", now.UnixMilli(), sessionNumber.Add(1))
@@ -251,6 +262,9 @@ func (t *sessionTracker) startLocked(s observedConnection, phase string) {
 func (t *sessionTracker) observe(s observedConnection) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.dnsProofClosed {
+		return
+	}
 	phase := strings.TrimSpace(s.Phase)
 	if phase == "" {
 		phase = "off"
@@ -274,6 +288,7 @@ func (t *sessionTracker) observe(s observedConnection) {
 	if runtimeID == "" && s.Mode != "off" {
 		runtimeID = s.Mode
 	}
+	t.cancelStaleDNSProofLocked(s, runtimeID)
 	// Invalidate at the observed transition, not just during summary reads: a
 	// temporary recheck/rollback must not resurrect the old exit proof later.
 	if !s.Connected || phase != "connected" || t.session.Phase != "connected" ||
@@ -312,12 +327,7 @@ func (t *sessionTracker) observe(s observedConnection) {
 	}
 
 	if s.Connected && phase == "connected" && t.session.PathProof == "passed" && t.session.DNSProof.Status != "passed" && !t.dnsProofRunning && (t.dnsProofLastAttempt.IsZero() || time.Since(t.dnsProofLastAttempt) >= 30*time.Second) {
-		t.dnsProofRunning = true
-		t.dnsProofLastAttempt = time.Now()
-		t.session.DNSProof.Status = "checking"
-		t.session.DNSProof.Reason = "verifying active selected-DNS enforcement and OS resolver path"
-		sessionID := t.session.ID
-		go t.proveDNSAsync(sessionID, s, runtimeID)
+		t.startDNSProofLocked(t.session.ID, s, runtimeID, proveSelectedDNSContext)
 	}
 
 	if phase == "stopping" && t.session.StopReason == "" {
