@@ -50,6 +50,7 @@ PACKAGE_FILES = (
 WORKSPACE_SCOPES = (
     ('^TestDesktopRuntimeWorkspace', ''),
     ('^TestDesktopDNS', ''),
+    ('^TestDesktopImportedMTU(KernelSocketBinding|SocketRequiresOriginalLease)$', ''),
     ('^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)', ''),
     ('^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)', ''),
     ('^TestDesktopWindowsExternalSSEntry', ''),
@@ -494,6 +495,7 @@ class WindowsReleaseGateTests(unittest.TestCase):
         job = workflow_job(workflow, "native-windows")
         check_workspace_gate(job)
         for old, new in (("Run = '^TestDesktopRuntimeWorkspace'", "Run = '^TestDesktopTor'"),
+                         ("Run = '^TestDesktopImportedMTU(KernelSocketBinding|SocketRequiresOriginalLease)$'", "Run = '^$'"),
                          ("Run = '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)'", "Run = '^$'"),
                          ("Run = '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)'", "Run = '^$'"),
                          ("Run = '^TestDesktopWindowsExternalSSEntry'", "Run = '^$'"),
@@ -521,6 +523,7 @@ class WindowsReleaseGateTests(unittest.TestCase):
         # added tests inherit exactly one group without a stale allowlist.
         original = (
             '^TestDesktopRuntimeWorkspace', '^TestDesktopDNS',
+            '^TestDesktopImportedMTU(KernelSocketBinding|SocketRequiresOriginalLease)$',
             '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)',
             '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)',
             '^TestDesktopWindowsExternalSSEntry',
@@ -541,6 +544,8 @@ class WindowsReleaseGateTests(unittest.TestCase):
         self.assertEqual(set(selected), expected)
         self.assertEqual(len(selected), len(set(selected)), 'native test selected by multiple package invocations')
         for name in (
+            'TestDesktopImportedMTUKernelSocketBinding',
+            'TestDesktopImportedMTUSocketRequiresOriginalLease',
             'TestDesktopTorComparisonRequiresStoppedReceiptAndActualProcessJoin',
             'TestDesktopTorPublicCompareHTTPCancellationDrainsOwnedTrial',
             'TestDesktopTorOrdinarySpeedLabRetainsCompiledSourceAndRestoresAfterCancel',
