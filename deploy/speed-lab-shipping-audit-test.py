@@ -127,8 +127,17 @@ class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
             ("cmd/client/desktop_external_path.go", 'a.proveImportedNativeDNS(ctx, identity.Imported.selection, identity.Command)', 'a.proveImportedNativeDNS(ctx, otherSelection, identity.Command)'),
             ("cmd/client/desktop_external_path.go", 'return errors.Join(err, ctx.Err())', 'return err'),
             ("cmd/client/speed_lab.go", 'identity.Standard != nil || identity.Imported != nil', 'identity.Standard != nil'),
-            ("cmd/client/multihop_native_launch.go", 'networkIdentityContext: physicalNetworkIdentityContext', 'networkIdentityContext: nil'),
-            ("cmd/client/multihop_native_launch.go", 'networkIdentityContext: physicalNetworkIdentityContext', 'networkIdentityContext: cachedNetwork'),
+            ("cmd/client/multihop_native_launch.go", 'networkIdentityContext: observe', 'networkIdentityContext: nil'),
+            ("cmd/client/multihop_native_launch.go", 'networkIdentityContext: observe', 'networkIdentityContext: cachedNetwork'),
+            ("cmd/client/multihop_native_launch.go", 'observe := physicalNetworkIdentityContext', 'observe := cachedNetwork'),
+            ("cmd/client/multihop_native_launch.go", 'observe = launch.ownedNode.imported.readNetwork', 'observe = physicalNetworkIdentityContext'),
+            ("cmd/client/multihop_native_launch.go", 'actual, err := observe(ctx)', 'actual, err := observe(context.Background())'),
+            ("cmd/client/multihop_native_launch.go", 'actual, err := observe(ctx)', 'actual, err := network, error(nil)'),
+            ("cmd/client/multihop_native_launch.go", 'if err != nil || ctx.Err() != nil {', 'if err != nil {'),
+            ("cmd/client/multihop_native_launch.go", 'actual != network', 'false'),
+            ("cmd/client/multihop_native_launch.go", '!ok || current != launch', '!ok'),
+            ("cmd/client/multihop_native_launch.go", 'a.desktopOwnedNodeCurrentContext(ctx, owner.launch, true)', 'a.desktopOwnedNodeCurrentContext(context.Background(), owner.launch, true)'),
+            ("cmd/client/multihop_native_launch.go", 'a.desktopOwnedNodeCurrentContext(ctx, owner.launch, true)', 'a.desktopOwnedNodeCurrentContext(ctx, otherLaunch, true)'),
             ("cmd/client/multihop_native_launch.go", 'network, err := owner.physicalNetworkContext(ctx)', 'network, err := owner.network, nil'),
             ("cmd/client/multihop_native_launch.go", 'owner.networkIdentityContext == nil', 'false'),
             ("cmd/client/multihop_native_launch.go", 'return network, errors.Join(err, ctx.Err())', 'return network, nil'),
@@ -142,7 +151,8 @@ class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
         for path, marker in (
             ("cmd/client/speed_lab_paths.go", 'owner != identity.Imported'),
             ("cmd/client/desktop_external_path.go", 'a.proveImportedNativeDNS(ctx, identity.Imported.selection, identity.Command)'),
-            ("cmd/client/multihop_native_launch.go", 'networkIdentityContext: physicalNetworkIdentityContext'),
+            ("cmd/client/multihop_native_launch.go", 'networkIdentityContext: observe'),
+            ("cmd/client/multihop_native_launch.go", 'observe = launch.ownedNode.imported.readNetwork'),
         ):
             changed = self.sources[path].replace(marker, 'removed')
             for witness in ('\n// '+marker, '\n/* '+marker+' */', '\nvar fixture = `'+marker+'`',
@@ -161,11 +171,24 @@ class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
 
     def test_formatting_is_allowed_but_duplicate_owner_constructor_is_rejected(self):
         path = "cmd/client/multihop_native_launch.go"
-        changed = self.sources[path].replace('networkIdentityContext: physicalNetworkIdentityContext',
-                                            'networkIdentityContext: /* original OS observer */\nphysicalNetworkIdentityContext')
+        changed = self.sources[path].replace('networkIdentityContext: observe',
+                                            'networkIdentityContext: /* original retained observer */\nobserve')
         self.assertEqual([], self.check_sources({path: changed}))
-        declaration = "func bindNativeMultihopRuntime(a *app, launch *desktopNodeLaunch, sel multihopSelection, network string) error"
-        self.assertTrue(self.check_sources({path: self.sources[path]+'\n'+declaration+' { return nil }'}))
+        for declaration in (
+            "func bindNativeMultihopRuntime(a *app, launch *desktopNodeLaunch, sel multihopSelection, network string) error",
+            "func bindNativeMultihopRuntimeContext(ctx context.Context, a *app, launch *desktopNodeLaunch, sel multihopSelection, network string) error",
+        ):
+            with self.subTest(declaration=declaration):
+                self.assertTrue(self.check_sources({path: self.sources[path]+'\n'+declaration+' { return nil }'}))
+
+    def test_original_observer_is_checked_before_retained_binding(self):
+        path = "cmd/client/multihop_native_launch.go"
+        observation = '\tactual, err := observe(ctx)\n'
+        binding = '\tnativeMultihopOwners.Store(a, &nativeMultihopRuntime{launch: launch, selection: sel, graph: graph, network: network, networkIdentityContext: observe})\n'
+        self.assertEqual(self.sources[path].count(observation), 1)
+        self.assertEqual(self.sources[path].count(binding), 1)
+        changed = self.sources[path].replace(observation, '').replace(binding, binding+observation)
+        self.assertTrue(self.check_sources({path: changed}))
 
 
 class SpeedLabNativeMultihopLaneAuditTests(unittest.TestCase):

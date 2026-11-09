@@ -101,7 +101,8 @@ def need_imported_speed_lab_current() -> None:
     temporary = function(tokens(read("cmd/client/speed_lab.go")),
                          "func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration speedLabDuration, minDuration, maxDuration time.Duration) (speedLabPath, speedLabMeasurement, []speedLabHopMeasurement, error)")
     runtime = tokens(read("cmd/client/multihop_native_launch.go"))
-    bind = function(runtime, "func bindNativeMultihopRuntime(a *app, launch *desktopNodeLaunch, sel multihopSelection, network string) error")
+    legacy_bind = function(runtime, "func bindNativeMultihopRuntime(a *app, launch *desktopNodeLaunch, sel multihopSelection, network string) error")
+    bind = function(runtime, "func bindNativeMultihopRuntimeContext(ctx context.Context, a *app, launch *desktopNodeLaunch, sel multihopSelection, network string) error")
     observe = function(runtime, "func capturedNativeMultihopRuntimeContext(ctx context.Context, a *app, command *exec.Cmd, graph activeMultihopGraph) (*nativeMultihopRuntime, error)")
     network = function(runtime, "func (owner *nativeMultihopRuntime) physicalNetworkContext(ctx context.Context) (string, error)")
     def has(body, *fragments):
@@ -131,8 +132,26 @@ def need_imported_speed_lab_current() -> None:
         and has(temporary,
             'if identity.External != nil || identity.Standard != nil || identity.Imported != nil {',
             'if err := verifySpeedLabPath(pathCtx, a, identity); err != nil { return err }')
-        and has(bind, 'nativeMultihopOwners.Store(a, &nativeMultihopRuntime{launch: launch, selection: sel, graph: graph, network: network, networkIdentityContext: physicalNetworkIdentityContext})')
-        and has(observe, 'network, err := owner.physicalNetworkContext(ctx)')
+        and legacy_bind == tokens('return bindNativeMultihopRuntimeContext(context.Background(), a, launch, sel, network)')
+        and _native_module._ordered_once(bind,
+            'observe := physicalNetworkIdentityContext',
+            '''if launch != nil && launch.ownedNode != nil && launch.ownedNode.imported != nil {
+                observe = launch.ownedNode.imported.readNetwork
+            }''',
+            'if ctx == nil || observe == nil {',
+            'actual, err := observe(ctx)',
+            'if err != nil || ctx.Err() != nil { return errors.Join(err, ctx.Err()) }',
+            '!a.ownsConnectionRuntime(launch.command) || network == "" || actual != network',
+            'current, ok := desktopNodeOwners.Load(a)',
+            '!ok || current != launch',
+            'nativeMultihopOwners.Store(a, &nativeMultihopRuntime{launch: launch, selection: sel, graph: graph, network: network, networkIdentityContext: observe})')
+        and _native_module._ordered_once(observe,
+            '''if owner.launch.ownedNode != nil && owner.launch.ownedNode.imported != nil {
+                if err := a.desktopOwnedNodeCurrentContext(ctx, owner.launch, true); err != nil {
+                    return nil, err
+                }
+            }''',
+            'network, err := owner.physicalNetworkContext(ctx)')
         and has(network,
             'if ctx == nil || owner == nil || owner.networkIdentityContext == nil {',
             'network, err := owner.networkIdentityContext(ctx)',
