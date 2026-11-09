@@ -171,8 +171,10 @@ def windows_profile_controls() -> None:
                        "a.cfg.ProfilesFile != capture.savedPath", "profileStartupSettingsToken(updated) != capture.resultRevision",
                        "!bytes.Equal(raw, append(want, '\\n'))", "profileStartupSettingsToken(value) == capture.resultRevision")
     ordered(save, "persistCapturedProtectionOff", "if !capture.profileWritten.Load()",
-            "a.persistProfilesLocked()", "capture.profileWritten.Store(true)",
+            "a.persistProtectionOffProfilesLocked(ctx)", "capture.profileWritten.Store(true)",
             "readPrivateRegular(capture.savedPath, maxPrivateStoreBytes)", "capture.profileSaved.Store(true)")
+    go_function("cmd/client/profile_protection_owned.go", "persistProtectionOffProfilesLocked",
+                "ctx == nil", "json.MarshalIndent(a.profiles", "atomicWritePrivateChecked(a.cfg.ProfilesFile, append(raw, '\\n'), ctx.Err)")
     go_function("cmd/client/desktop_node_protection_off.go", "finishOffSave",
                 "!capture.profileSaved.Load()", "s.finishJournalOffLocked(ctx, capture, current)")
     barrier = go_function("cmd/client/desktop_node_journal_off.go", "barrier",

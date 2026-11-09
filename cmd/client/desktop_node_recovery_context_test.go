@@ -5,8 +5,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
@@ -377,6 +379,133 @@ func TestDesktopNodeRecoveryNativeObserverRequiresCaller(t *testing.T) {
 			}
 			if err := backend.observeCurrent(caller); err == nil || calls != 0 {
 				t.Fatal("native recovery admitted an observation without its original caller and capability", err)
+			}
+		})
+	}
+}
+
+// Observe an actual prepared temporary file or the actual renamed target.
+// Cancellation follows that filesystem witness, not a call count or timer.
+type desktopProtectionOffPublicationContext struct {
+	context.Context
+	observe func() bool
+	cancel  context.CancelFunc
+	fired   bool
+}
+
+func (ctx *desktopProtectionOffPublicationContext) Err() error {
+	if err := ctx.Context.Err(); err != nil {
+		return err
+	}
+	if !ctx.fired && ctx.observe() {
+		ctx.fired = true
+		ctx.cancel()
+	}
+	return ctx.Context.Err()
+}
+
+func TestDesktopProtectionOffContextGuardsActualPublication(t *testing.T) {
+	for _, phase := range []string{"before-rename", "after-rename"} {
+		t.Run(phase, func(t *testing.T) {
+			f := newDesktopDurableOffFixture(t, "always")
+			capture := f.capture(t)
+			current := func() bool { return f.a.capturedProtectionOffCurrent(f.slot, capture, false) }
+			if err := f.slot.applyOff(context.Background(), capture, current); err != nil {
+				t.Fatal(err)
+			}
+			owner := capture.owner
+			path := f.a.cfg.ProfilesFile
+			before := cloneRouterProfileStore(f.a.profiles)
+			original, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			originalInfo, err := os.Stat(path)
+			if err != nil || !os.SameFile(originalInfo, originalInfo) {
+				t.Fatal("fixture could not capture the actual original private file", err)
+			}
+			// Keep the original file object alive across replacement without a
+			// Windows open handle which could itself prevent the native rename.
+			if err := os.Link(path, filepath.Join(filepath.Dir(path), "before-off.json")); err != nil {
+				t.Fatal(err)
+			}
+			updated, err := profileProtectionOffResult(before.Profiles[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := cloneRouterProfileStore(before)
+			result.Profiles[0] = updated
+			want, err := json.MarshalIndent(result, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want = append(want, '\n')
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx := &desktopProtectionOffPublicationContext{Context: parent, cancel: cancel}
+			publicationRecorded := false
+			var observationErr error
+			ctx.observe = func() bool {
+				if phase == "before-rename" {
+					matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*"))
+					if err != nil {
+						observationErr = err
+						return false
+					}
+					for _, name := range matches {
+						raw, err := os.ReadFile(name)
+						if err == nil && bytes.Equal(raw, want) {
+							return true
+						}
+					}
+					return false
+				}
+				actual, err := os.Stat(path)
+				if err != nil {
+					observationErr = err
+					return false
+				}
+				if os.SameFile(originalInfo, actual) {
+					return false
+				}
+				publicationRecorded = capture.profileWritten.Load() && capture.savedPath == path &&
+					reflect.DeepEqual(f.a.profiles, result)
+				return true
+			}
+			_, err = f.a.persistCapturedProtectionOff(ctx, f.slot, capture, false)
+			if !ctx.fired || observationErr != nil || !errors.Is(err, context.Canceled) || !errors.Is(err, errDesktopProtectionOffUnsaved) {
+				t.Fatal("Off publication did not observe original cancellation at the actual filesystem boundary", err, observationErr)
+			}
+			after, readErr := os.ReadFile(path)
+			actualInfo, statErr := os.Stat(path)
+			if readErr != nil || statErr != nil || capture.owner != owner || f.calls != 1 || f.slot.off != capture ||
+				f.kernel.target != nil || !capture.removed || !capture.absenceProved || capture.profileSaved.Load() {
+				t.Fatal("cancelled Off publication lost its accepted native removal or truthful save state", readErr, statErr)
+			}
+			if phase == "before-rename" {
+				if capture.profileWritten.Load() || !bytes.Equal(after, original) || !os.SameFile(originalInfo, actualInfo) || !reflect.DeepEqual(f.a.profiles, before) {
+					t.Fatal("cancelled Off publication replaced the actual private file after its final admission was revoked")
+				}
+			} else if !publicationRecorded || !capture.profileWritten.Load() || !bytes.Equal(after, want) ||
+				os.SameFile(originalInfo, actualInfo) || !reflect.DeepEqual(f.a.profiles, result) {
+				t.Fatal("post-rename cancellation rolled back or forgot the completed Off publication")
+			}
+			matches, globErr := filepath.Glob(filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*"))
+			if globErr != nil || len(matches) != 0 {
+				t.Fatal("cancelled Off publication abandoned its owned temporary file", globErr, matches)
+			}
+			// Accepted removal retains its independent shutdown cleanup. A
+			// previously published result is only re-read, never written again.
+			f.a.closing, f.a.state.Phase = true, "stopping"
+			if _, err := f.a.resumeDesktopProtectionOff(context.Background(), f.slot, capture, true); err != nil {
+				t.Fatal("original cleanup could not finish the cancelled accepted Off", err)
+			}
+			f.finished(t)
+			finished, readErr := os.ReadFile(path)
+			finishedInfo, statErr := os.Stat(path)
+			if readErr != nil || statErr != nil || !bytes.Equal(finished, want) || f.calls != 1 || capture.owner != owner ||
+				phase == "after-rename" && !os.SameFile(actualInfo, finishedInfo) {
+				t.Fatal("Off cleanup replaced the native owner or rewrote an already published result", readErr, statErr)
 			}
 		})
 	}

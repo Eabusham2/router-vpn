@@ -249,7 +249,7 @@ func (a *app) persistCapturedProtectionOff(ctx context.Context, slot *desktopNod
 		for i := range a.profiles.Profiles {
 			if a.profiles.Profiles[i].ID == profile.ID {
 				a.profiles.Profiles[i] = updated
-				if err := a.persistProfilesLocked(); err != nil {
+				if err := a.persistProtectionOffProfilesLocked(ctx); err != nil {
 					a.profiles.Profiles[i] = profile
 					return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, err)
 				}
@@ -289,6 +289,22 @@ func (a *app) persistCapturedProtectionOff(ctx context.Context, slot *desktopNod
 		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, err)
 	}
 	return updated, nil
+}
+
+// The accepted Off transaction already proved native absence and holds a.mu
+// over its exact selected profile. The caller still governs publication after
+// temporary-file preparation. A successful rename must be reported as success
+// so the owner records profileWritten before any later cancelled readback.
+func (a *app) persistProtectionOffProfilesLocked(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("protection Off save omitted its original caller")
+	}
+	raw, err := json.MarshalIndent(a.profiles, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = atomicWritePrivateChecked(a.cfg.ProfilesFile, append(raw, '\n'), ctx.Err)
+	return err
 }
 
 // Startup may find the original accepted profile, or its exact Off result

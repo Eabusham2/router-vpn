@@ -154,6 +154,7 @@ SHARED_TESTS = (
     "TestDesktopExternalPhysicalWindowsHysteria2LayersKeepOuterAndInnerOwners",
     "TestDesktopNodeRecoveryFreshNativeObserverContext",
     "TestDesktopNodeRecoveryNativeObserverRequiresCaller",
+    "TestDesktopProtectionOffContextGuardsActualPublication",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -167,6 +168,7 @@ PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsoc
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
 EXPECTED = (*REQUIRED,
             *("TestDesktopNodeRecoveryNativeObserverRequiresCaller/" + case for case in ("missing", "cancelled", "missing-observer")),
+            *("TestDesktopProtectionOffContextGuardsActualPublication/" + case for case in ("before-rename", "after-rename")),
             *("TestDesktopWindowsExternalCurrentProofContext/"+case for case in ("current", "owner-lock", "app-lock", "source-lock", "slot-lock", "process-done-lock", "missing-host-observer", "missing-process-observer", "wrong-session", "wrong-slot")), *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
             *("TestDesktopWindowsExternalPublicConnectAndDisconnect/" + policy + "/" + protocol
               for policy in ("on-connect", "always") for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2", "hysteria2-aes", "hysteria2-aes-xor", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed")),
