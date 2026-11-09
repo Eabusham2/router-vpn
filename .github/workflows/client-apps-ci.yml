@@ -35,7 +35,9 @@ jobs:
           go-version: '1.26.3'
           cache: false
       - name: Test Go controller and shared API
-        run: go test ./...
+        # The exact controller suite completed in 670s on the matching CI image.
+        # Keep the full inventory and every per-operation deadline unchanged.
+        run: go test ./... -timeout=15m
       - name: Validate repository contracts
         run: python3 deploy/validate-repo.py
       - name: Validate logical/raw catalogs and master base model

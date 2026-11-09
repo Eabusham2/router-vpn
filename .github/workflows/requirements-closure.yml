@@ -26,7 +26,9 @@ jobs:
           go-version: '1.26.3'
           cache: false
       - name: Compile and test Go source
-        run: go test ./...
+        # The exact controller suite completed in 670s on the matching CI image.
+        # Keep the full inventory and every per-operation deadline unchanged.
+        run: go test ./... -timeout=15m
       - name: Prove recovered requirements and corrections
         shell: bash
         run: |
