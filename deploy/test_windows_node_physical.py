@@ -781,7 +781,7 @@ def mutants(source):
             "owned, err := mobiletor.NewDesktopWindowsSocketPolicySuccessor(ctx, capture, options, predecessor)",
             "_ = predecessor\n\t\towned, err := mobiletor.NewDesktopWindowsSocketPolicy(ctx, capture, options)")),
         ("late-handshake", lower, REQUIRED[0], "actual WFP eager encrypted node startup failed",
-         BOOT.IDENTITY.replace_once((source / lower).read_text(encoding="utf-8"), "!owner.SocketCurrent()", "!owner.Current()")),
+         BOOT.IDENTITY.replace_once((source / lower).read_text(encoding="utf-8"), "owner.SocketCurrentContext(ctx)", "owner.CurrentContext(ctx)")),
         ("ordinary-udp-deny", policy, REQUIRED[0], "independent peer marker receipt",
          BOOT.IDENTITY.replace_once((source / policy).read_text(encoding="utf-8"),
             'p.pair("deny", family, 1, false, true)', 'p.pair("deny", family, 1, true, true)')),

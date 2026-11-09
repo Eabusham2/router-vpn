@@ -92,6 +92,29 @@ class NativeNodeScope(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "overlaps native scope ownership"):
             GATE.overlay(self.source, self.observer, forbidden)
 
+    def test_handshake_control_keeps_caller_and_changes_only_readiness_phase(self):
+        relative = "routervpn/desktoppt/node_physical.go"
+        path = self.source / relative
+        original = path.read_text(encoding="utf-8")
+        before, after = "owner.SocketCurrentContext(ctx)", "owner.CurrentContext(ctx)"
+        self.assertEqual(original.count(before), 1)
+        mutation = next(item for item in GATE.mutants(self.source) if item[0] == "late-handshake")
+        self.assertEqual(mutation[1:4], (relative, GATE.REQUIRED[0], "actual WFP eager encrypted node startup failed"))
+        self.assertEqual(mutation[4], original.replace(before, after, 1))
+        self.assertEqual(mutation[4].count(after), 1)
+        self.assertNotIn("!owner.Current()", mutation[4])
+        selected = GATE.overlay(self.source, self.observer, mutation)
+        mapping = json.loads(selected.read_text())["Replace"]
+        self.assertEqual(Path(mapping[str(path)]).read_text(encoding="utf-8"), mutation[4])
+        self.assertEqual(path.read_bytes(), self.original[relative])
+        # A missing or duplicated call is source drift, not permission to
+        # mutate a different check or silently omit the compiled control.
+        for changed in (original.replace(before, after, 1), original + "\n// " + before + "\n"):
+            path.write_text(changed, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "exact production boundary"):
+                GATE.mutants(self.source)
+        path.write_bytes(self.original[relative])
+
     def test_udp_permit_defect_keeps_scope_and_requires_actual_peer_receipt(self):
         mutations = GATE.mutants(self.source)
         self.assertEqual([m[0] for m in mutations], ["legacy-adoption", "late-handshake", "ordinary-udp-deny", "missing-loopback-ipc"])
