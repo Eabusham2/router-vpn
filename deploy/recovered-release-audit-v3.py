@@ -179,13 +179,25 @@ def selected_dns_proof() -> bool:
         )
         and mod.has(
             "cmd/client/session_state.go",
-            "proveDNSAsyncWithProbe(sessionID, s, runtimeID, proveSelectedDNSContext)",
-            'DNSProof.Status = "checking"',
+            "t.startDNSProofLocked(t.session.ID, s, runtimeID, proveSelectedDNSContext)",
+            "t.cancelStaleDNSProofLocked(s, runtimeID)",
             "t.invalidateDNSProofBindingLocked()",
         )
         and mod.has(
+            "cmd/client/session_dns_lifecycle.go",
+            "context.WithTimeout(context.Background(), sessionDNSProofBudget)",
+            "t.dnsProofWork = work", 'DNSProof.Status = "checking"',
+            "t.proveDNSAsyncWithProbeContext(ctx, sessionID, s, runtimeID, probe)",
+            "defer close(work.done)", "work.cancel()", "t.dnsProofClosed = true",
+            "desktopnetwork.LockContext(ctx, &t.mu)", "case <-work.done:",
+            "case <-ctx.Done():", "return tracker.stopDNSProofs(ctx)",
+        )
+        and mod.has("cmd/client/controller_shutdown.go", "stopSessionDNSProofs(a)")
+        and mod.has(
             "cmd/client/dns_proof_path.go",
-            "asyncMeasurementPathContext",
+            "measurementSessionContext(parent, t.a, t)",
+            "asyncMeasurementPathContext(parent, t.a, s.Profile",
+            "t.dnsProofPathContextWithCaller(parent, sessionID, s, runtimeID)",
             "beginAsyncMeasurementAdoption(ctx)",
             "defer stop()",
             "defer release()",

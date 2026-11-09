@@ -22,7 +22,8 @@ class RecoveredDNSProofGateTests(unittest.TestCase):
         self.files = {
             path: (ROOT / path).read_text(encoding="utf-8")
             for path in ("cmd/client/dns_proof.go", "cmd/client/session_state.go",
-                         "cmd/client/dns_proof_path.go")
+                         "cmd/client/dns_proof_path.go", "cmd/client/session_dns_lifecycle.go",
+                         "cmd/client/controller_shutdown.go")
         }
         namespace = {"mod": types.SimpleNamespace(has=self.has)}
         exec(compile(module, "recovered-dns-proof-predicate", "exec"), namespace)
@@ -43,11 +44,23 @@ class RecoveredDNSProofGateTests(unittest.TestCase):
                 'result.Status = "passed"',
             ),
             "cmd/client/session_state.go": (
-                "proveDNSAsyncWithProbe(sessionID, s, runtimeID, proveSelectedDNSContext)",
-                'DNSProof.Status = "checking"', "t.invalidateDNSProofBindingLocked()",
+                "t.startDNSProofLocked(t.session.ID, s, runtimeID, proveSelectedDNSContext)",
+                "t.cancelStaleDNSProofLocked(s, runtimeID)", "t.invalidateDNSProofBindingLocked()",
             ),
+            "cmd/client/session_dns_lifecycle.go": (
+                "context.WithTimeout(context.Background(), sessionDNSProofBudget)",
+                "t.dnsProofWork = work", 'DNSProof.Status = "checking"',
+                "t.proveDNSAsyncWithProbeContext(ctx, sessionID, s, runtimeID, probe)",
+                "defer close(work.done)", "work.cancel()", "t.dnsProofClosed = true",
+                "desktopnetwork.LockContext(ctx, &t.mu)", "case <-work.done:",
+                "case <-ctx.Done():", "return tracker.stopDNSProofs(ctx)",
+            ),
+            "cmd/client/controller_shutdown.go": ("stopSessionDNSProofs(a)",),
             "cmd/client/dns_proof_path.go": (
-                "asyncMeasurementPathContext", "beginAsyncMeasurementAdoption(ctx)",
+                "measurementSessionContext(parent, t.a, t)",
+                "asyncMeasurementPathContext(parent, t.a, s.Profile",
+                "t.dnsProofPathContextWithCaller(parent, sessionID, s, runtimeID)",
+                "beginAsyncMeasurementAdoption(ctx)",
                 "defer stop()", "defer release()", "dnsProofBinding.validateLocked(t.session)",
                 '"dns-proof"', "t.session.DNSProof = proof",
             ),
@@ -64,6 +77,13 @@ class RecoveredDNSProofGateTests(unittest.TestCase):
     def test_missing_owned_helper_cannot_pass_through_legacy_markers(self) -> None:
         self.files["cmd/client/dns_proof_path.go"] = ""
         self.files["cmd/client/session_state.go"] += '\n"dns-proof"\nt.session.DNSProof = proof\n'
+        self.assertFalse(self.predicate())
+
+    def test_missing_worker_lifetime_cannot_pass_through_legacy_dispatch(self) -> None:
+        self.files["cmd/client/session_dns_lifecycle.go"] = ""
+        self.files["cmd/client/session_state.go"] += (
+            '\nproveDNSAsyncWithProbe(sessionID, s, runtimeID, proveSelectedDNSContext)\n'
+            'DNSProof.Status = "checking"\n')
         self.assertFalse(self.predicate())
 
 
