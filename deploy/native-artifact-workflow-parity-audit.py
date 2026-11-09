@@ -46,13 +46,17 @@ def check_release_aggregate_gates(source: str) -> None:
     values = [value.strip() for value in needs[0][len("    needs: ["):-1].split(",")]
     required = {"source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
                 "windows-complete-max", "windows-all-controller", "android", "ios", "macos",
-                "linux", "imported-pq-reality"}
+                "linux", "imported-pq-reality", "imported-xhttp"}
     assert len(values) == len(set(values)) and set(values) == required, (
         "native release aggregate changed its complete required gate inventory")
     pq = job("imported-pq-reality")
     assert "    uses: ./.github/workflows/imported-pq-reality-native.yml" in pq, (
         "native release lost its actual imported PQ producer/reference workflow")
-    for name, lines in (("aggregate", aggregate), ("imported-pq-reality", pq)):
+    xhttp = job("imported-xhttp")
+    assert "    uses: ./.github/workflows/imported-xhttp-native.yml" in xhttp, (
+        "native release lost its actual imported XHTTP producer/reference workflow")
+    for name, lines in (("aggregate", aggregate), ("imported-pq-reality", pq),
+                        ("imported-xhttp", xhttp)):
         assert not any(line.startswith(("    if:", "    continue-on-error:")) for line in lines), (
             f"native release {name} gate became conditional or nonblocking")
 

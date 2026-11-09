@@ -24,7 +24,7 @@ func desktopImportedEntryProtocol(protocol string) bool {
 
 func desktopImportedFinalMode(mode string) bool {
 	switch mode {
-	case "shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong", "reality-vision", "reality-pq-vision":
+	case "shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong", "reality-vision", "reality-pq-vision", "reality-xhttp":
 		return true
 	}
 	return false

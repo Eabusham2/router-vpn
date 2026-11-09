@@ -51,7 +51,7 @@ func TestDesktopEntryCatalogContracts(t *testing.T) {
 	slices.Sort(expected)
 	actual := slices.Clone(daily.Supported)
 	slices.Sort(actual)
-	expectedFinals := []string{"awg2-fast", "awg2-strong", "hysteria2", "reality-pq-vision", "reality-vision", "shadowsocks", "wg"}
+	expectedFinals := []string{"awg2-fast", "awg2-strong", "hysteria2", "reality-pq-vision", "reality-vision", "reality-xhttp", "shadowsocks", "wg"}
 	dailyFinals := slices.Clone(daily.Finals)
 	slices.Sort(dailyFinals)
 	if len(paired) != 19 || len(actual) != 25 || !reflect.DeepEqual(actual, expected) ||

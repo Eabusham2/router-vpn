@@ -374,9 +374,9 @@ func TestImportedPacketRealityVisionKeepsScope(t *testing.T) {
 					if _, err := NewNodeProfile(mode, files, externalTestJSON(t, profile), start, ""); err != nil {
 						t.Fatal("scope control lacks a valid paired original", err)
 					}
-					// PQ is admitted only with its exact encryption assets; retain this
-					// required scope verdict as an ordinary-under-PQ downgrade rejection.
-					if mode == "reality-pq-vision" {
+					// PQ/XHTTP require their exact assets; retain this
+					// required scope verdict as an ordinary-under-native downgrade rejection.
+					if mode == "reality-pq-vision" || mode == "reality-xhttp" {
 						files, _, _ = nodeProfileFixture(t, "reality-vision", "")
 					}
 					if plan, err := NewImportedEntry(source[0], source[1], mode, files, externalTestJSON(t, profile), start, ""); err == nil || plan != nil {

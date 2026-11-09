@@ -18,7 +18,7 @@ func importedCONNECTCapture(graph, final map[string]any, entryLayer, mode string
 	if !off(entryLayer) && entryLayer != "aes-256-gcm" && entryLayer != "aes-256-gcm+xor-whitening" {
 		return "", bad
 	}
-	if importedVisionFinal(mode) {
+	if importedNativeXrayFinal(mode) {
 		// NewNodeProfile and the exact Xray/layer validators run before this
 		// branch and before an outer CONNECT detour is attached. Derive this
 		// capability only from their real native VLESS final, never from an SS

@@ -390,13 +390,13 @@ enum IOSMultihopExecution {
 /// Validation of the two original saved roles. Native compilation and runtime
 /// proof remain separate; this never grants a pairing identity to an import.
 enum IOSImportedEntryMultihop {
-    static func visionFinal(_ mode: String) -> Bool {
-        ["reality-vision", "reality-pq-vision"].contains(mode)
+    static func xrayFinal(_ mode: String) -> Bool {
+        ["reality-vision", "reality-pq-vision", "reality-xhttp"].contains(mode)
     }
     static let methods: Set<String> = ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"]
     static func supports(entry: String, final: String) -> Bool {
-        if ["http-connect", "https-connect"].contains(entry) { return final == "shadowsocks" || visionFinal(final) }
-        if ["socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn"].contains(entry) && visionFinal(final) { return true }
+        if ["http-connect", "https-connect"].contains(entry) { return final == "shadowsocks" || xrayFinal(final) }
+        if ["socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn"].contains(entry) && xrayFinal(final) { return true }
         if ["socks5", "openvpn"].contains(entry) { return ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(final) }
         if ["shadowsocks", "hysteria2"].contains(final) {
             return ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(entry)
@@ -414,7 +414,7 @@ enum IOSImportedEntryMultihop {
     static func validate(entry: [String: Any], final: [String: Any], profiles: [String: [String: String]] = [:]) throws {
         guard let imported = entry["external"] as? [String: Any],
               let kind = imported["protocol"] as? String, ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains(kind) else { throw issue() }
-        if visionFinal(final["multihop_exit_mode"] as? String ?? "") {
+        if xrayFinal(final["multihop_exit_mode"] as? String ?? "") {
             guard ["socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn"].contains(kind),
                   [entry, final].allSatisfy({ profile in
                       (profile["start_layer"] == nil || profile["start_layer"] is String) &&
@@ -423,7 +423,7 @@ enum IOSImportedEntryMultihop {
         }
         if ["http-connect", "https-connect"].contains(kind) {
             let mode = final["multihop_exit_mode"] as? String ?? ""
-            let reality = visionFinal(mode)
+            let reality = xrayFinal(mode)
             if reality {
                 guard let original = profiles[mode], original["xray.json"] != nil,
                       original["routervpn-ss-service.json"] == nil else { throw issue() }
@@ -495,6 +495,6 @@ enum IOSImportedEntryMultihop {
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ImportedEntry", code: 1, userInfo: [NSLocalizedDescriptionKey:
-            "Choose a Local imported entry and a different paired Router VPN final with their original settings. WireGuard, AmneziaWG, OpenVPN, SOCKS5, Shadowsocks 2022, Hysteria2 and HTTP/HTTPS CONNECT entries can use a paired REALITY Vision final while retaining each node's independently provisioned Start Layer. REALITY carries TCP and UDP; QUIC or DoH3 on port 443 requires the final node's UDP 443 option. HTTP/HTTPS CONNECT can also use SS2022 with selected TCP, DoT or DoH DNS. Its captured UoT-v2 service additionally permits UDP and final AES or AES+XOR; without it, SS2022 is TCP-only with the final layer Off. Resolver hostnames require their saved bootstrap through the same final. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
+            "Choose a Local imported entry and a different paired Router VPN final with their original settings. WireGuard, AmneziaWG, OpenVPN, SOCKS5, Shadowsocks 2022, Hysteria2 and HTTP/HTTPS CONNECT entries can use a paired REALITY Vision, PQ REALITY Vision or XHTTP final while retaining each node's independently provisioned Start Layer. REALITY carries TCP and UDP; Vision requires the final node's UDP 443 option for QUIC or DoH3 on port 443. HTTP/HTTPS CONNECT can also use SS2022 with selected TCP, DoT or DoH DNS. Its captured UoT-v2 service additionally permits UDP and final AES or AES+XOR; without it, SS2022 is TCP-only with the final layer Off. Resolver hostnames require their saved bootstrap through the same final. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
     }
 }

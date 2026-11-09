@@ -326,7 +326,7 @@ func desktopPacketRealityCompile(t *testing.T, args []string) *mobilemultihop.Co
 func desktopPacketRealityNew(t *testing.T, kind, firstLayer, lastLayer, fault string, selectedPeer *desktopCONNECTXrayDNSResolver, selectedMode ...string) *desktopPacketRealityFixture {
 	t.Helper()
 	mode := "reality-vision"
-	if len(selectedMode) > 1 || len(selectedMode) == 1 && selectedMode[0] != "reality-pq-vision" {
+	if len(selectedMode) > 1 || len(selectedMode) == 1 && selectedMode[0] != "reality-pq-vision" && selectedMode[0] != "reality-xhttp" {
 		t.Fatal("packet reference changed exact Vision mode")
 	}
 	if len(selectedMode) == 1 {
@@ -335,6 +335,8 @@ func desktopPacketRealityNew(t *testing.T, kind, firstLayer, lastLayer, fault st
 	var original []string
 	if mode == "reality-pq-vision" {
 		original = desktopImportedPQXraySource(t, kind, firstLayer, lastLayer)
+	} else if mode == "reality-xhttp" {
+		original = desktopImportedXHTTPXraySource(t, kind, firstLayer, lastLayer)
 	} else {
 		original = desktopPacketRealitySource(t, kind+"--reality-vision--"+firstLayer+"--"+lastLayer+".json")
 	}
@@ -440,7 +442,10 @@ func desktopPacketRealityNew(t *testing.T, kind, firstLayer, lastLayer, fault st
 	finalPhysical := desktopPacketRealityCiphertextBridge(t, physicalIP, finalTarget)
 	profile["endpoint"] = physicalIP.String()
 	flow := "xtls-rprx-vision"
-	if selectedPeer != nil && fault != "dot853" && fault != "doh443" && fault != "plain-vision-udp443" {
+	if mode == "reality-xhttp" {
+		flow = ""
+	}
+	if selectedPeer != nil && mode != "reality-xhttp" && fault != "dot853" && fault != "doh443" && fault != "plain-vision-udp443" {
 		flow = "xtls-rprx-vision-udp443"
 	}
 	var assets map[string]string
@@ -465,6 +470,9 @@ func desktopPacketRealityNew(t *testing.T, kind, firstLayer, lastLayer, fault st
 	}
 	if fault == "final-pq-key" {
 		files = desktopNodeXrayAssets(t, files, "xray-pq-key")
+	}
+	if fault == "final-xhttp-path" {
+		files = desktopNodeXrayAssets(t, files, "xray-path")
 	}
 	if fault == "final-user" {
 		files = desktopNodeXrayAssets(t, files, "xray-user")
@@ -871,7 +879,7 @@ func desktopPacketRealityTraffic(t *testing.T, kind, first, last, fault string, 
 			wanted = "192.168.50.134:53"
 		}
 		dnsOK, err = desktopImportedSOCKSXrayDNS(f.ctx, f.final, wanted)
-		wantDNS := fault != "final-reality-key" && fault != "final-pq-key" && fault != "final-user" && fault != "final-route" && fault != "dns-route" && !strings.HasPrefix(fault, "final-layer-")
+		wantDNS := fault != "final-reality-key" && fault != "final-pq-key" && fault != "final-xhttp-path" && fault != "final-user" && fault != "final-route" && fault != "dns-route" && !strings.HasPrefix(fault, "final-layer-")
 		if dnsOK != wantDNS {
 			t.Fatal("packet REALITY selected Home DNS did not traverse its original authenticated chain", err)
 		}
@@ -995,7 +1003,7 @@ func desktopPacketRealityTraffic(t *testing.T, kind, first, last, fault string, 
 		} else if f.finalServer.rawTCP.Load() == 0 {
 			t.Fatal("packet REALITY did not reach original final ciphertext")
 		}
-		if fault == "final-reality-key" || fault == "final-pq-key" || fault == "final-user" {
+		if fault == "final-reality-key" || fault == "final-pq-key" || fault == "final-xhttp-path" || fault == "final-user" {
 			if f.dns.Load() != 0 || f.health.Load() != 0 || f.finalServer.plainTCP.Load() != 0 || f.finalServer.plainUDP.Load() != 0 {
 				t.Fatal("foreign REALITY credential gained final plaintext")
 			}
@@ -1192,6 +1200,18 @@ func TestRouterVPNImportedPQRealityPacketTraffic(t *testing.T) {
 			for _, last := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 				for _, fault := range desktopImportedPQXrayFaults(first, last) {
 					t.Run(kind+"/"+first+"/"+last+"/"+fault, func(t *testing.T) { desktopPacketRealityTraffic(t, kind, first, last, fault, "reality-pq-vision") })
+				}
+			}
+		}
+	}
+}
+
+func TestRouterVPNImportedXHTTPPacketTraffic(t *testing.T) {
+	for _, kind := range []string{"wireguard", "amneziawg", "openvpn-tcp", "openvpn-udp"} {
+		for _, first := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, last := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				for _, fault := range desktopImportedXHTTPXrayFaults(first, last) {
+					t.Run(kind+"/"+first+"/"+last+"/"+fault, func(t *testing.T) { desktopPacketRealityTraffic(t, kind, first, last, fault, "reality-xhttp") })
 				}
 			}
 		}

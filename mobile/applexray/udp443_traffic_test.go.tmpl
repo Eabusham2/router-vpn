@@ -481,6 +481,9 @@ func nativeUDP443Case(t *testing.T, mode, name string) {
 	if name == "plain-vision-udp443" || name == "home-udp53" || name == "dot853" || name == "doh443" {
 		flow = "xtls-rprx-vision"
 	}
+	if mode == "reality-xhttp" {
+		flow = ""
+	}
 	user["flow"] = flow
 	input, err := json.Marshal(original)
 	if err != nil {
@@ -723,5 +726,14 @@ func TestNativeXrayUDP443DoTProbeAdmission(t *testing.T) {
 	}
 	if _, valid := nativeUDP443ReuseProbe(1, nil); valid {
 		t.Fatal("missing DNS query counted as a reuse probe")
+	}
+}
+
+// XHTTP uses its captured empty flow. The original Vision UDP443 cases above
+// retain their exact inventory and explicit opt-in/refusal policy.
+func TestNativeXHTTPSelectedDNSUDP443(t *testing.T) {
+	installScopedDialer()
+	for _, name := range []string{"home-udp53", "dot853", "doh443", "doh3-udp443", "wrong-dns-sni", "wrong-dns-trust", "wrong-dns-route", "wrong-dns-port", "wrong-dns-path", "wrong-reality-key", "wrong-owner", "cancel-before-query", "cancel-inflight", "close-owner", "replacement-owner"} {
+		t.Run(name, func(t *testing.T) { nativeUDP443Case(t, "reality-xhttp", name) })
 	}
 }

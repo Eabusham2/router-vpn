@@ -17,14 +17,14 @@ final class AndroidImportedRouterPath {
     private static final String[] INPUT_KEYS = {"entry_config", "entry_capture", "exit_mode", "exit_files",
             "exit_profile", "exit_start", "dns_bootstrap", "source_sha256"};
 
-    static boolean visionFinal(String mode) {
-        return "reality-vision".equals(mode) || "reality-pq-vision".equals(mode);
+    static boolean xrayFinal(String mode) {
+        return "reality-vision".equals(mode) || "reality-pq-vision".equals(mode) || "reality-xhttp".equals(mode);
     }
 
     static boolean supports(String entryProtocol, String finalMode) {
         entryProtocol = AndroidExternalPolicy.protocol(entryProtocol);
-        if (Arrays.asList("http-connect", "https-connect").contains(entryProtocol)) return "shadowsocks".equals(finalMode) || Arrays.asList("reality-vision", "reality-pq-vision").contains(finalMode);
-        if (Arrays.asList("socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn").contains(entryProtocol) && Arrays.asList("reality-vision", "reality-pq-vision").contains(finalMode)) return true;
+        if (Arrays.asList("http-connect", "https-connect").contains(entryProtocol)) return "shadowsocks".equals(finalMode) || Arrays.asList("reality-vision", "reality-pq-vision", "reality-xhttp").contains(finalMode);
+        if (Arrays.asList("socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn").contains(entryProtocol) && Arrays.asList("reality-vision", "reality-pq-vision", "reality-xhttp").contains(finalMode)) return true;
         if (Arrays.asList("socks5", "openvpn").contains(entryProtocol)) return Arrays.asList("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong").contains(finalMode);
         boolean proxyEntry = Arrays.asList("shadowsocks", "hysteria2").contains(entryProtocol);
         return (proxyEntry || Arrays.asList("wireguard", "amneziawg").contains(entryProtocol))
@@ -105,7 +105,7 @@ final class AndroidImportedRouterPath {
                 if (Arrays.asList("http-connect", "https-connect").contains(entryMode)) {
                     JSONObject files = new JSONObject(input.getString("exit_files"));
                     String capability = "tcp-only";
-                    if (visionFinal(input.getString("exit_mode"))) {
+                    if (xrayFinal(input.getString("exit_mode"))) {
                         if (!files.has("xray.json") || files.has("routervpn-ss-service.json")) {
                             throw new IllegalStateException("CONNECT lost its original REALITY transport authority.");
                         }
@@ -146,8 +146,8 @@ final class AndroidImportedRouterPath {
         // Non-SS finals take their outer Start Layer from this same paired
         // node's exact generated SS asset map, separately from the inner mode.
         String layer = AndroidStartLayer.selectedMode(exit);
-        if (visionFinal(exitMode) && !Arrays.asList("socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn").contains(AndroidExternalPolicy.protocol(entry.protocol))) {
-            throw new IllegalArgumentException("REALITY Vision requires a captured Local WireGuard, AmneziaWG, OpenVPN, SOCKS5, Shadowsocks 2022, Hysteria2 or HTTP/HTTPS CONNECT entry.");
+        if (xrayFinal(exitMode) && !Arrays.asList("socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn").contains(AndroidExternalPolicy.protocol(entry.protocol))) {
+            throw new IllegalArgumentException("REALITY requires a captured Local WireGuard, AmneziaWG, OpenVPN, SOCKS5, Shadowsocks 2022, Hysteria2 or HTTP/HTTPS CONNECT entry.");
         }
         String exitStart = !"shadowsocks".equals(exitMode) && !"off".equals(layer)
                 ? exit.getJSONObject("profiles").getJSONObject("shadowsocks").toString() : "";

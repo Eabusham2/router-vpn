@@ -122,7 +122,7 @@ func desktopImportedCONNECTXrayTraffic(t *testing.T, original []string, kind, fa
 	validLayer := func(mode string) bool {
 		return mode == "" || mode == "aes-256-gcm" || mode == "aes-256-gcm+xor-whitening"
 	}
-	if !ok || expectedIP != "203.0.113.88" || (args[2] != "reality-vision" && args[2] != "reality-pq-vision") || (args[5] == "") != (finalLayer == "") || args[6] != "" ||
+	if !ok || expectedIP != "203.0.113.88" || (args[2] != "reality-vision" && args[2] != "reality-pq-vision" && args[2] != "reality-xhttp") || (args[5] == "") != (finalLayer == "") || args[6] != "" ||
 		profile["multihop_execution"] != "local" || !validLayer(entryLayer) || !validLayer(finalLayer) ||
 		profile["router_api"] != "http://10.77.0.1:8787" {
 		t.Fatal("imported CONNECT REALITY reference lost its exact Local independent-layer source")
@@ -160,7 +160,7 @@ func desktopImportedCONNECTXrayTraffic(t *testing.T, original []string, kind, fa
 		}
 		earlyFailure := fault == "entry-auth" || fault == "entry-sni" || fault == "entry-trust" || fault == "wrong-entry-ip" || strings.HasPrefix(fault, "entry-layer-")
 		routeFailure := fault == "final-route" || strings.HasPrefix(fault, "final-layer-")
-		cipherFailure := fault == "final-reality-key" || fault == "final-pq-key" || fault == "final-user"
+		cipherFailure := fault == "final-reality-key" || fault == "final-pq-key" || fault == "final-xhttp-path" || fault == "final-user"
 		if earlyFailure || routeFailure {
 			if finalServer.rawTCP.Load() != 0 || dnsRequests.Load() != 0 || healthRequests.Load() != 0 {
 				t.Error("failed original entry reached the paired Xray proof path")
@@ -282,6 +282,8 @@ func desktopImportedCONNECTXrayTraffic(t *testing.T, original []string, kind, fa
 		files = desktopNodeXrayAssets(t, files, "xray-reality-key")
 	} else if fault == "final-pq-key" {
 		files = desktopNodeXrayAssets(t, files, "xray-pq-key")
+	} else if fault == "final-xhttp-path" {
+		files = desktopNodeXrayAssets(t, files, "xray-path")
 	} else if fault == "final-user" {
 		files = desktopNodeXrayAssets(t, files, "xray-user")
 	}
@@ -551,7 +553,7 @@ func desktopImportedCONNECTXrayTraffic(t *testing.T, original []string, kind, fa
 	dnsOK, proofOK := false, false
 	if publicOK {
 		dnsOK, err = desktopImportedSOCKSXrayDNS(ctx, final, net.JoinHostPort(wantedDNS, "53"))
-		wantDNS := fault != "final-reality-key" && fault != "final-pq-key" && fault != "final-user" && fault != "final-route" && fault != "dns-route" && !strings.HasPrefix(fault, "final-layer-")
+		wantDNS := fault != "final-reality-key" && fault != "final-pq-key" && fault != "final-xhttp-path" && fault != "final-user" && fault != "final-route" && fault != "dns-route" && !strings.HasPrefix(fault, "final-layer-")
 		if dnsOK != wantDNS {
 			t.Fatal("imported CONNECT REALITY selected DNS did not follow its original authenticated chain", err)
 		}

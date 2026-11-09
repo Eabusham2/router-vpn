@@ -197,7 +197,8 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   }
   for kind in ["shadowsocks","hysteria2","http-connect","https-connect","wireguard","amneziawg","openvpn"]{try check("REALITY supports captured original entry "+kind,IOSImportedEntryMultihop.supports(entry:kind,final:"reality-vision"))}
   try check("PQ REALITY supports captured original entry",IOSImportedEntryMultihop.supports(entry:kind,final:"reality-pq-vision"))
-  for mode in ["reality-xhttp","split","max","max-tls-wg"] {
+  try check("XHTTP supports captured original entry",IOSImportedEntryMultihop.supports(entry:kind,final:"reality-xhttp"))
+  for mode in ["split","max","max-tls-wg"] {
    try check("SOCKS unrelated final remains refused "+mode,!IOSImportedEntryMultihop.supports(entry:kind,final:mode))
   }
   var layerPairs=Set<String>()
@@ -268,8 +269,9 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   try check("REALITY rejected alternatives do not replace saved owner",model.writes==writes && encoded(model.bundle!)==saved)
   print("PASS "+(kind=="socks5" ? "SOCKS":kind)+" REALITY host \(checks) checks")
  }
- static func pqReality(_ path:String)throws {
-  let mode="reality-pq-vision",source=try JSONDecoder().decode([String].self,from:Data(contentsOf:URL(fileURLWithPath:path)))
+ static func pqReality(_ path:String,_ mode:String="reality-pq-vision")throws {
+  guard ["reality-pq-vision","reality-xhttp"].contains(mode) else {throw IOSImportedEntryMultihop.issue()}
+  let source=try JSONDecoder().decode([String].self,from:Data(contentsOf:URL(fileURLWithPath:path)))
   try check("PQ picker uses complete exact source capture",source.count==9 && source[2]==mode)
   let capture=try JSONSerialization.jsonObject(with:Data(source[1].utf8)) as! [String:Any]
   func capturedProfile(_ raw:[String:Any])throws->RouterProfile {
@@ -296,11 +298,18 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   func compile(_ value:[String:String])throws->String{try RouterVPNTorTestCall(["Op":"imported-router","Config":String(decoding:encoded(value),as:UTF8.self)])}
   let compiled=try compile(args)
   try check("PQ actual compiler retains original graph",try encoded(JSONSerialization.jsonObject(with:Data(compiled.utf8)))==encoded(JSONSerialization.jsonObject(with:Data(source[8].utf8))))
-  for fault in ["missing-xray","missing-wrapper","malformed-xray","ordinary-encryption","ordinary-label"] {
+  let faults=mode=="reality-xhttp" ? ["missing-xray","malformed-wrapper","bad-path","ordinary-encryption","pq-label"]:["missing-xray","missing-wrapper","malformed-xray","ordinary-encryption","ordinary-label"]
+  for fault in faults {
    var changed=assets,replaced=args
    if fault=="missing-xray"{changed.removeValue(forKey:"xray.json")}
    else if fault=="missing-wrapper"{changed.removeValue(forKey:"sing-box.json")}
    else if fault=="malformed-xray"{changed["xray.json"]=Data("{".utf8).base64EncodedString()}
+   else if fault=="malformed-wrapper"{changed["sing-box.json"]=Data("{".utf8).base64EncodedString()}
+   else if fault=="pq-label"{replaced["mode"]="reality-pq-vision"}
+   else if fault=="bad-path"{
+    var raw=try JSONSerialization.jsonObject(with:Data(base64Encoded:assets["xray.json"]!)!) as! [String:Any],rows=raw["outbounds"] as! [[String:Any]],row=rows[0],stream=row["streamSettings"] as! [String:Any],settings=stream["xhttpSettings"] as! [String:Any]
+    settings["path"]="unowned-relative-path";stream["xhttpSettings"]=settings;row["streamSettings"]=stream;rows[0]=row;raw["outbounds"]=rows;changed["xray.json"]=try encoded(raw).base64EncodedString()
+   }
    else if fault=="ordinary-label"{replaced["mode"]="reality-vision"}
    else {
     var raw=try JSONSerialization.jsonObject(with:Data(base64Encoded:assets["xray.json"]!)!) as! [String:Any],rows=raw["outbounds"] as! [[String:Any]],row=rows[0],settings=row["settings"] as! [String:Any],peers=settings["vnext"] as! [[String:Any]],peer=peers[0],users=peer["users"] as! [[String:Any]]
@@ -308,9 +317,27 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    }
    replaced["files"]=String(decoding:try encoded(changed),as:UTF8.self)
    try reject("PQ actual compiler refuses "+fault){_ = try compile(replaced)}
-   if fault != "ordinary-label" {
+   if !["ordinary-label","pq-label"].contains(fault) {
     var replacement=model.bundle!;replacement.profiles[mode]=changed;var config=configuration;config["bundle"]=try encoded(replacement)
     try reject("PQ receipt refuses changed source "+fault){let next=try IOSMultihopExecution.Source(configuration:config,digest:hash);_ = try IOSMultihopExecution.StartupChoice.decode(receipt,source:next)}
+   }
+  }
+  if mode=="reality-xhttp" {
+   var rawAssets=assets,rawArgs=args;rawAssets.removeValue(forKey:"sing-box.json");rawArgs["files"]=String(decoding:try encoded(rawAssets),as:UTF8.self)
+   func native(_ raw:String)throws->[String:Any]{let graph=try JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [String:Any];return (graph["outbounds"] as! [[String:Any]]).first{$0["tag"] as? String=="routervpn-execution-local"}!}
+   try check("XHTTP raw-only assets retain exact native final",try encoded(native(compile(rawArgs)))==encoded(native(compiled)))
+   for fault in ["path","mask","key","raw-only"] {
+    var changed=assets
+    if fault=="raw-only"{changed=rawAssets}
+    else {
+     var raw=try JSONSerialization.jsonObject(with:Data(base64Encoded:assets["xray.json"]!)!) as! [String:Any],rows=raw["outbounds"] as! [[String:Any]],row=rows[0],stream=row["streamSettings"] as! [String:Any]
+     if fault=="path"{var settings=stream["xhttpSettings"] as! [String:Any];settings["path"]="/different-owned-source";stream["xhttpSettings"]=settings}
+     else if fault=="mask"{stream.removeValue(forKey:"finalmask")}
+     else {var settings=row["settings"] as! [String:Any],peers=settings["vnext"] as! [[String:Any]],peer=peers[0],users=peer["users"] as! [[String:Any]];let key=users[0]["encryption"] as! String;users[0]["encryption"]=String(key.dropLast())+(key.hasSuffix("A") ? "B":"A");peer["users"]=users;peers[0]=peer;settings["vnext"]=peers;row["settings"]=settings}
+     row["streamSettings"]=stream;rows[0]=row;raw["outbounds"]=rows;changed["xray.json"]=try encoded(raw).base64EncodedString()
+    }
+    var replacement=model.bundle!;replacement.profiles[mode]=changed;var config=configuration;config["bundle"]=try encoded(replacement)
+    try reject("XHTTP receipt refuses substituted original "+fault){let next=try IOSMultihopExecution.Source(configuration:config,digest:hash);_ = try IOSMultihopExecution.StartupChoice.decode(receipt,source:next)}
    }
   }
   let saved=try encoded(model.bundle!),writes=model.writes
@@ -318,7 +345,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    try reject("PQ picker refuses unowned "+execution){try model.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:execution,entryMode:"socks5")}
    try check("PQ refusal preserves saved owner",model.writes==writes && encoded(model.bundle!)==saved)
   }
-  print("PASS PQ REALITY picker \(checks) checks")
+  print("PASS "+(mode=="reality-xhttp" ? "XHTTP":"PQ REALITY")+" picker \(checks) checks")
  }
  static func packetReality(_ directory:String,_ kind:String)throws {
   guard ["wireguard","amneziawg","openvpn-tcp","openvpn-udp"].contains(kind) else {throw IOSImportedEntryMultihop.issue()}
@@ -411,6 +438,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   finalBundle.profiles["shadowsocks"]=["sing-box.json":try encoded(["outbounds":[["type":"shadowsocks","tag":"proxy","server":"192.0.2.44","server_port":443,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:8,count:32).base64EncodedString()]]]).base64EncodedString()]
   if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "socks-reality" {try reality(finalBundle,paired);return}
   if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "pq-reality" {try pqReality(CommandLine.arguments[3]);return}
+  if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "xhttp-reality" {try pqReality(CommandLine.arguments[3],"reality-xhttp");return}
   if CommandLine.arguments.count == 5 && CommandLine.arguments[2] == "selected-dns" { try selectedDNS(finalBundle,paired,CommandLine.arguments[3],CommandLine.arguments[4]);return }
   if CommandLine.arguments.count == 5 && CommandLine.arguments[2] == "packet-reality" {try packetReality(CommandLine.arguments[4],CommandLine.arguments[3]);return}
   if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "proxy-reality" {guard ["shadowsocks","hysteria2"].contains(CommandLine.arguments[3]) else {throw IOSImportedEntryMultihop.issue()};try reality(finalBundle,paired,CommandLine.arguments[3]);return}
@@ -1001,6 +1029,18 @@ def main():
         if pq.stdout != 'PASS PQ REALITY picker 19 checks\n' or pq_source.read_bytes() != original_pq:
             raise ValueError('Missing, foreign, or source-mutating PQ picker verdict: '+repr(pq.stdout))
         print(pq.stdout, end='', flush=True)
+        xhttp_sources = work / 'xhttp-sources'
+        xhttp_sources.mkdir()
+        subprocess.run(['go', 'test', './internal/mobilemultihop', '-run', '^TestImportedXHTTPIndependentLayers$',
+                        '-count=1', '-timeout=30s'], cwd=ROOT, check=True, timeout=45,
+                       env=dict(os.environ, ROUTERVPN_IMPORTED_XHTTP_XRAY_FIXTURES=str(xhttp_sources)))
+        xhttp_source = xhttp_sources / 'socks5--reality-xhttp--off--off.json'
+        original_xhttp = xhttp_source.read_bytes()
+        xhttp = subprocess.run([str(work/'test'), str(compiler), 'xhttp-reality', str(xhttp_source)],
+                               env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
+        if xhttp.stdout != 'PASS XHTTP picker 24 checks\n' or xhttp_source.read_bytes() != original_xhttp:
+            raise ValueError('Missing, foreign, or source-mutating XHTTP picker verdict: '+repr(xhttp.stdout))
+        print(xhttp.stdout, end='', flush=True)
         for kind in ('shadowsocks', 'hysteria2'):
             proxy = subprocess.run([str(work / 'test'), str(compiler), 'proxy-reality', kind], env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
             if proxy.stdout != f'PASS {kind} REALITY host 115 checks\n':

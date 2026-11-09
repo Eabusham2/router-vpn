@@ -147,7 +147,7 @@ func startLoopbackXray(t *testing.T, mode, camouflage, tcpEcho, udpEcho string, 
 // Extra routes exist only in the separate reference process. They admit one
 // captured DNS tuple each to its retained loopback peer; existing callers keep
 // their original echo-only policy and gain no resolver or Internet fallback.
-func startLoopbackXrayWithDNS(t *testing.T, mode, camouflage, tcpEcho, udpEcho string, raw []byte, routes []loopbackXrayDNSRoute) (string, []byte) {
+func startLoopbackXrayWithDNS(t *testing.T, mode, camouflage, tcpEcho, udpEcho string, raw []byte, routes []loopbackXrayDNSRoute, diagnostics ...func(string)) (string, []byte) {
 	t.Helper()
 	binary := os.Getenv("ROUTER_VPN_XRAY_TEST_BINARY")
 	if binary == "" {
@@ -256,6 +256,12 @@ func startLoopbackXrayWithDNS(t *testing.T, mode, camouflage, tcpEcho, udpEcho s
 	log, err := os.Create(filepath.Join(t.TempDir(), "server.log"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(diagnostics) > 1 {
+		t.Fatal("multiple reference diagnostic owners")
+	}
+	if len(diagnostics) == 1 {
+		diagnostics[0](log.Name())
 	}
 	command := exec.Command(binary, "run", "-c", path)
 	capture := ""
@@ -579,6 +585,181 @@ func TestNativePQRealityAuthenticationRefusal(t *testing.T) {
 			}
 			if err := h.Close(); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// Separate XHTTP controls exercise the existing pinned server and scoped owner.
+// A disjoint path is required: Xray deliberately accepts a normalized prefix.
+func TestNativeXHTTPAuthenticationRefusal(t *testing.T) {
+	installScopedDialer()
+	camouflage := loopbackCamouflage(t)
+	tcp, udp := loopbackEcho(t)
+	var diagnostic string
+	endpoint, original := startLoopbackXrayWithDNS(t, "reality-xhttp", camouflage, tcp, udp, nativeConfig(t, "reality-xhttp"), nil, func(path string) { diagnostic = path })
+	for _, fault := range []string{"matching-key", "wrong-xhttp-path", "restored-path", "wrong-pq-key", "restored-key"} {
+		t.Run(fault, func(t *testing.T) {
+			prior, err := os.ReadFile(diagnostic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw := bytes.Clone(original)
+			graph, err := applexray.Object(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			outbound := graph["outbounds"].([]any)[0].(map[string]any)
+			user := outbound["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)
+			if fault == "wrong-xhttp-path" {
+				outbound["streamSettings"].(map[string]any)["xhttpSettings"].(map[string]any)["path"] = "/unowned-xhttp-control"
+			} else if fault == "wrong-pq-key" {
+				key, err := mlkem.NewDecapsulationKey768(bytes.Repeat([]byte{0x59}, 64))
+				if err != nil {
+					t.Fatal(err)
+				}
+				changed := "mlkem768x25519plus.native.0rtt." + base64.RawURLEncoding.EncodeToString(key.EncapsulationKey().Bytes())
+				if changed == user["encryption"] {
+					t.Fatal("key control equals original peer")
+				}
+				user["encryption"] = changed
+			}
+			raw, err = json.Marshal(graph)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, err := applexray.Prepare("reality-xhttp", raw)
+			if err != nil {
+				t.Fatal("peer control must be structurally valid", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			underlay := &loopbackUnderlay{destination: endpoint}
+			binding := &binding{ctx: ctx, dialer: underlay, server: netip.MustParseAddrPort("192.0.2.1:443"), sockets: map[*ownedConn]bool{}}
+			h := &Outbound{ctx: context.WithValue(ctx, bindingKey{}, binding), cancel: cancel, binding: binding, plan: plan}
+			if err := h.Start(adapter.StartStateStart); err != nil {
+				t.Fatal(err)
+			}
+			defer h.Close()
+			conn, dialErr := h.DialContext(ctx, "tcp", M.ParseSocksaddr(tcp))
+			payload := []byte("captured-xhttp-authentication-control")
+			received := make([]byte, len(payload))
+			var n int
+			var writeErr, errorRead error
+			if dialErr == nil {
+				defer conn.Close()
+				conn.SetDeadline(time.Now().Add(3 * time.Second))
+				_, writeErr = conn.Write(payload)
+				n, errorRead = io.ReadFull(conn, received)
+			} else {
+				errorRead = dialErr
+			}
+			negative := fault == "wrong-xhttp-path" || fault == "wrong-pq-key"
+			if negative {
+				if errorRead == nil || n != 0 {
+					t.Fatal("foreign XHTTP authority gained authenticated plaintext")
+				}
+			} else if dialErr != nil || writeErr != nil || errorRead != nil || !bytes.Equal(received, payload) {
+				t.Fatal("original XHTTP did not restore authenticated traffic", dialErr, writeErr, errorRead)
+			}
+			underlay.mu.Lock()
+			calls := underlay.calls
+			underlay.mu.Unlock()
+			if calls == 0 {
+				t.Fatal("XHTTP control never reached original encrypted peer")
+			}
+			if conn != nil {
+				_ = conn.Close()
+			}
+			if err := h.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if negative {
+				wanted := "ML-KEM-768 handshake failed"
+				if fault == "wrong-xhttp-path" {
+					wanted = "failed to validate path"
+				}
+				tick := time.NewTicker(10 * time.Millisecond)
+				defer tick.Stop()
+				for {
+					evidence, err := os.ReadFile(diagnostic)
+					if err != nil || len(evidence) < len(prior) || !bytes.Equal(evidence[:len(prior)], prior) {
+						t.Fatal("original XHTTP peer diagnostics changed", err)
+					}
+					recent := evidence[len(prior):]
+					if bytes.Contains(recent, []byte(wanted)) && (fault != "wrong-xhttp-path" || bytes.Contains(recent, []byte("/unowned-xhttp-control/"))) {
+						break
+					}
+					select {
+					case <-ctx.Done():
+						t.Fatal("original encrypted peer did not witness exact XHTTP refusal", fault, string(recent))
+					case <-tick.C:
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestNativeXHTTPConfigurationRefusal(t *testing.T) {
+	installScopedDialer()
+	for _, fault := range []string{"ordinary-key", "missing-key", "malformed-key", "vision-flow", "vision-udp443-flow", "raw-network", "relative-path", "download-settings", "foreign-mode"} {
+		t.Run(fault, func(t *testing.T) {
+			graph, err := applexray.Object(nativeConfig(t, "reality-xhttp"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := graph["outbounds"].([]any)[0].(map[string]any)
+			user := out["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)
+			stream := out["streamSettings"].(map[string]any)
+			settings := stream["xhttpSettings"].(map[string]any)
+			switch fault {
+			case "ordinary-key":
+				user["encryption"] = "none"
+			case "missing-key":
+				delete(user, "encryption")
+			case "malformed-key":
+				user["encryption"] = "mlkem768x25519plus.native.0rtt.not_a_valid_encapsulation_key"
+			case "vision-flow":
+				user["flow"] = "xtls-rprx-vision"
+			case "vision-udp443-flow":
+				user["flow"] = "xtls-rprx-vision-udp443"
+			case "raw-network":
+				stream["network"] = "raw"
+			case "relative-path":
+				settings["path"] = "relative"
+			case "download-settings":
+				settings["downloadSettings"] = map[string]any{"address": "198.51.100.99"}
+			case "foreign-mode":
+				settings["mode"] = "stream-one"
+			}
+			raw, err := json.Marshal(graph)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, err := applexray.Prepare("reality-xhttp", raw)
+			if fault != "malformed-key" {
+				if err == nil {
+					t.Fatal("unowned XHTTP configuration admitted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal("malformed encoded key must reach pinned key parser", err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			d := &fixtureDialer{}
+			defer d.close()
+			b := &binding{ctx: ctx, dialer: d, server: plan.Server, sockets: map[*ownedConn]bool{}}
+			h := &Outbound{ctx: context.WithValue(ctx, bindingKey{}, b), cancel: cancel, binding: b, plan: plan}
+			defer h.Close()
+			if err := h.Start(adapter.StartStateStart); err == nil {
+				h.Close()
+				t.Fatal("pinned Xray accepted malformed ML-KEM key")
+			}
+			if d.calls != 0 {
+				t.Fatal("malformed key opened an outer socket")
 			}
 		})
 	}

@@ -30,7 +30,7 @@ class NativeArtifactAggregate(unittest.TestCase):
     def test_actual_complete_aggregate_passes(self):
         self.check(self.source)
 
-    def test_removing_each_original_or_pq_gate_fails(self):
+    def test_removing_each_original_or_pq_or_xhttp_gate_fails(self):
         for gate in self.gates:
             with self.subTest(gate=gate):
                 values = [value for value in self.gates if value != gate]
@@ -54,8 +54,8 @@ class NativeArtifactAggregate(unittest.TestCase):
                 with self.assertRaisesRegex(AssertionError, "complete required gate inventory"):
                     self.check(without + decoy)
 
-    def test_duplicate_aggregate_or_pq_job_fails(self):
-        for job in ("aggregate", "imported-pq-reality"):
+    def test_duplicate_aggregate_or_pq_or_xhttp_job_fails(self):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp"):
             with self.subTest(job=job), self.assertRaisesRegex(AssertionError, "missing or duplicate"):
                 self.check(self.source + "\n  " + job + ":\n    runs-on: ubuntu-24.04\n")
 
@@ -67,11 +67,18 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
 
     def test_condition_or_nonblocking_gate_fails(self):
-        for job in ("aggregate", "imported-pq-reality"):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp"):
             for bypass in ("    if: ${{ false }}\n", "    continue-on-error: true\n"):
                 with self.subTest(job=job, bypass=bypass):
                     with self.assertRaisesRegex(AssertionError, "conditional or nonblocking"):
                         self.check(self.source.replace("  " + job + ":\n", "  " + job + ":\n" + bypass, 1))
+
+    def test_removed_or_changed_xhttp_workflow_fails(self):
+        marker = "    uses: ./.github/workflows/imported-xhttp-native.yml"
+        for replacement in ("    uses: ./.github/workflows/imported-pq-reality-native.yml", "    runs-on: ubuntu-24.04"):
+            with self.subTest(replacement=replacement):
+                with self.assertRaisesRegex(AssertionError, "actual imported XHTTP"):
+                    self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
 
     def test_authoritative_audit_executes_guard_and_controls(self):
         tree = ast.parse(AUDIT.read_text())

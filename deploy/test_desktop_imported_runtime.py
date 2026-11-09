@@ -315,7 +315,7 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
                          patch.object(N.DNSSEC,'test_native_bundle'),patch.object(N,'run') as run, \
                          patch.object(N,'verify_imported_desktop_packet_configs') as packet, \
                          patch.object(N,'verify_imported_desktop_openvpn_configs'), \
-                         patch.object(N,'verify_imported_desktop_pq_configs'), \
+                         patch.object(N,'verify_imported_desktop_xhttp_configs'), patch.object(N,'verify_imported_desktop_pq_configs'), \
                          patch.object(N,'verify_imported_desktop_configs',side_effect=failure) as gate,contextlib.redirect_stdout(stdout):
                         if failure is None: self.assertEqual(N.build(target,bundle),bundle)
                         else:

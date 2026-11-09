@@ -22,16 +22,16 @@ type importedEntry struct {
 	desktopSeal                         string
 }
 
-// Imported Vision finals retain their exact native encryption policy. XHTTP
-// and composite modes require separate graph admission and are not aliases.
-func importedVisionFinal(mode string) bool {
-	return mode == "reality-vision" || mode == "reality-pq-vision"
+// Imported native Xray finals retain their exact transport and encryption.
+// Composite modes require independent graphs and are not aliases.
+func importedNativeXrayFinal(mode string) bool {
+	return mode == "reality-vision" || mode == "reality-pq-vision" || mode == "reality-xhttp"
 }
 
 // NewImportedEntry composes a captured SOCKS5, SS2022, Hysteria2, WireGuard,
 // AmneziaWG, HTTP/HTTPS CONNECT or OpenVPN predecessor and a compatible paired
 // Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. Each imported transport
-// also supports ordinary and PQ REALITY/Vision finals with independently captured
+// also supports ordinary/PQ REALITY Vision and XHTTP finals with independently captured
 // Start Layers. Packet and bounded OpenVPN entries carry its native VLESS stream
 // through their existing owned userspace endpoint, not another system VPN.
 // Packet-to-packet
@@ -47,10 +47,10 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil {
 		return nil, bad
 	}
-	socksXrayFinal := selection.Protocol == "socks5" && importedVisionFinal(exitMode)
+	socksXrayFinal := selection.Protocol == "socks5" && importedNativeXrayFinal(exitMode)
 	connectEntry := selection.Protocol == "http-connect" || selection.Protocol == "https-connect"
-	proxyXrayFinal := socksXrayFinal || (selection.Protocol == "shadowsocks" || selection.Protocol == "hysteria2" || connectEntry) && importedVisionFinal(exitMode)
-	packetXrayFinal := (selection.Protocol == "wireguard" || selection.Protocol == "amneziawg" || selection.Protocol == "openvpn") && importedVisionFinal(exitMode)
+	proxyXrayFinal := socksXrayFinal || (selection.Protocol == "shadowsocks" || selection.Protocol == "hysteria2" || connectEntry) && importedNativeXrayFinal(exitMode)
+	packetXrayFinal := (selection.Protocol == "wireguard" || selection.Protocol == "amneziawg" || selection.Protocol == "openvpn") && importedNativeXrayFinal(exitMode)
 	importedXrayFinal := proxyXrayFinal || packetXrayFinal
 	if selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5" && selection.Protocol != "http-connect" && selection.Protocol != "https-connect" && selection.Protocol != "openvpn") || selection.Profile["node_kind"] != "external" || (!importedXrayFinal && exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
 		return nil, bad

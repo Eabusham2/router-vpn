@@ -1062,6 +1062,11 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
  }
  @MainActor static func run()throws {
   defer{RouterVPNTorTestClose()}
+  if ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_IMPORTED_XHTTP_XRAY_FIXTURES"] != nil {
+   try importedXHTTPGraphs()
+   print("Apple imported XHTTP: PASS (81 separate shipping Swift/actual Go graphs; \(checks) checks; no native network proof)")
+   return
+  }
   if ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_IMPORTED_PQ_XRAY_FIXTURES"] != nil {
    try importedPQRealityGraphs()
    print("Apple imported PQ REALITY: PASS (81 separate shipping Swift/actual Go graphs; \(checks) checks; no native network proof)")
@@ -1148,6 +1153,99 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try check("complete direct and private enabled padding matrix",paddingGraphs==464)
   try ordinaryTorPredecessors(padding:true)
   try check("complete enabled padding matrix",paddingGraphs==528)
+ }
+ @MainActor static func importedXHTTPGraphs()throws {
+  guard let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_XHTTP_XRAY_SOURCES"],let output=ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_IMPORTED_XHTTP_XRAY_FIXTURES"] else {throw NSError(domain:"fixture",code:1)}
+  let mode="reality-xhttp",kinds=["socks5","shadowsocks","hysteria2","http-connect","https-connect","wireguard","amneziawg","openvpn-tcp","openvpn-udp"]
+  let files=try FileManager.default.contentsOfDirectory(at:URL(fileURLWithPath:directory),includingPropertiesForKeys:nil).sorted{$0.lastPathComponent<$1.lastPathComponent}
+  var expected=Set<String>()
+  for kind in kinds {for first in layers {for last in layers {expected.insert(kind+"--"+mode+"--"+first+"--"+last+".json")}}}
+  try check("XHTTP exact separate source inventory",files.count==81 && Set(files.map{$0.lastPathComponent})==expected)
+  for file in files {
+   let source=try JSONDecoder().decode([String].self,from:Data(contentsOf:file))
+   try check("XHTTP preserves all original inputs",source.count==9 && source[2]==mode)
+   let capture=try object(Data(source[1].utf8)),entry=capture["profile"] as! [String:Any],kind=capture["protocol"] as! String
+   let axes=file.deletingPathExtension().lastPathComponent.components(separatedBy:"--")
+   var final=try object(Data(source[4].utf8))
+   final["multihop_enabled"]=true;final["multihop_entry_id"]=entry["id"];final["multihop_entry_mode"]=kind;final["multihop_exit_id"]=final["id"];final["multihop_exit_mode"]=mode;final["multihop_execution"]="local"
+   let assets=try JSONDecoder().decode([String:String].self,from:Data(source[3].utf8))
+   var maps=[mode:assets]
+   if !source[5].isEmpty {maps["shadowsocks"]=try JSONDecoder().decode([String:String].self,from:Data(source[5].utf8))}
+   try check("XHTTP public admission retains exact imported family",IOSImportedEntryMultihop.supports(entry:kind,final:mode))
+   try IOSImportedEntryMultihop.validate(entry:entry,final:final,profiles:maps)
+   let raw=try RouterVPNExternalExitBuilder.importedRouterSource(profile:entry),last=try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:maps)
+   let captured=try object(Data(raw.capture.utf8))["profile"] as! [String:Any]
+   try check("XHTTP preserves complete imported credentials and policy",try json(captured)==json(entry))
+   try check("XHTTP preserves exact paired final assets",try json(object(Data(last.files.utf8)))==json(assets) && last.mode==mode && last.start.isEmpty==(axes[3]=="off"))
+   if axes[3] != "off" {try check("XHTTP final layer retains its own original assets",try json(object(Data(last.start.utf8)))==json(object(Data(source[5].utf8))))}
+   let args=["config":raw.config,"capture":raw.capture,"mode":mode,"files":last.files,"start":last.start,"profile":try text(final),"dns":source[6]]
+   let encoded=try bridge(["Op":"imported-router","Config":text(args)]),graph=try object(Data(encoded.utf8)),original=try object(Data(source[8].utf8))
+   let native=try tagged(graph,"routervpn-execution-local"),oldNative=try tagged(original,"routervpn-execution-local")
+   try check("XHTTP shipping producer retains exact native graph and layer edge",native["type"] as? String=="routervpn-xray" && native["mode"] as? String==mode && json(native)==json(oldNative))
+   let xray=try object(Data((native["config_json"] as! String).utf8)),out=(xray["outbounds"] as! [[String:Any]])[0],peer=((out["settings"] as! [String:Any])["vnext"] as! [[String:Any]])[0],user=(peer["users"] as! [[String:Any]])[0]
+   let stream=out["streamSettings"] as! [String:Any],settings=stream["xhttpSettings"] as! [String:Any],mask=stream["finalmask"] as! [String:Any]
+   try check("XHTTP shipping producer retains exact hybrid and transport settings",(user["encryption"] as? String)?.hasPrefix("mlkem768x25519plus.native.0rtt.")==true && (user["flow"] as? String ?? "").isEmpty && stream["network"] as? String=="xhttp" && settings["path"] as? String=="/assets/sync" && settings["mode"] as? String=="auto" && (mask["tcp"] as? [[String:Any]])?.isEmpty==false)
+   let originalXray=try object(Data(base64Encoded:assets["xray.json"]!)!),originalOut=(originalXray["outbounds"] as! [[String:Any]])[0],originalPeer=((originalOut["settings"] as! [String:Any])["vnext"] as! [[String:Any]])[0]
+   try check("XHTTP native runtime preserves original user and transport settings",try json(stream)==json(originalOut["streamSettings"]!) && json(peer["users"]!)==json(originalPeer["users"]!))
+   var rawOnly=assets,rawArgs=args;rawOnly.removeValue(forKey:"sing-box.json");rawArgs["files"]=try text(rawOnly)
+   let rawGraph=try object(Data(bridge(["Op":"imported-router","Config":text(rawArgs)]).utf8))
+   try check("XHTTP legacy raw-only assets preserve the exact final runtime",try json(tagged(rawGraph,"routervpn-execution-local"))==json(native))
+   try check("XHTTP final owns exact selected DNS",try json(graph["dns"]!)==json(original["dns"]!))
+   for value in (graph["outbounds"] as! [[String:Any]])+((graph["endpoints"] as? [[String:Any]]) ?? []) {
+    let tag=value["tag"] as! String
+    if tag=="entry-wg" || tag.hasPrefix("imported-entry-") || tag=="start-layer-aes" {
+     var row=value,old=try tagged(original,tag)
+     if ["wireguard","amneziawg"].contains(kind) && tag=="entry-wg" {if row["system"]==nil{row["system"]=false};if old["system"]==nil{old["system"]=false}}
+     try check("XHTTP preserves every independently owned entry/layer edge",try json(row)==json(old))
+    }
+   }
+   var selected=ClientBundle.empty,profile=final
+   profile["name"]="Captured final";profile["adguard_ipv6"]="";profile["socks_host"]="";profile["socks_port"]=0;profile["socks_username"]="";profile["socks_password"]=""
+   selected.routerProfiles=[try JSONDecoder().decode(RouterProfile.self,from:json(profile))];selected.selectedRouterID=final["id"] as! String;selected.profiles=maps
+   let selection=try IOSRuntimeSelector.selectMultihop(bundle:selected,rawProfileID:nil)
+   try check("XHTTP actual runtime selects exact Local final",selection.engine == .multihop && selection.rawProfileID==mode && selection.multihopEntryMode==kind)
+   let entryBundle:[String:Any]=["selectedRouterID":entry["id"]!,"routerProfiles":[entry],"profiles":[String:[String:String]]()]
+   let configuration:[String:Any]=["engine":"multihop-libbox","mode":mode,"bundle":try JSONEncoder().encode(selected),"entryBundle":try json(entryBundle)]
+   func identity(_ value:[String:Any])throws->IOSMultihopExecution.Source{try IOSMultihopExecution.Source(configuration:value,digest:{SHA256.hash(data:$0).map{String(format:"%02x",$0)}.joined()})}
+   let owner=try identity(configuration),receipt=try IOSMultihopExecution.StartupChoice(source:owner,execution:"local").encoded()
+   try check("XHTTP startup retains complete original source",try IOSMultihopExecution.StartupChoice.decode(receipt,source:owner).source==owner)
+   for fault in ["ordinary","missing-encryption","missing-xray","malformed-wrapper","vision-flow","wrong-network","missing-settings","bad-path","bad-mode","pq-label"] {
+    var changed=assets,replaced=args
+    if fault=="missing-xray"{changed.removeValue(forKey:"xray.json")}
+    else if fault=="malformed-wrapper"{changed["sing-box.json"]=Data("{".utf8).base64EncodedString()}
+    else if fault=="pq-label"{replaced["mode"]="reality-pq-vision"}
+    else {
+     var rawXray=try object(Data(base64Encoded:assets["xray.json"]!)!),rows=rawXray["outbounds"] as! [[String:Any]],row=rows[0],settings=row["settings"] as! [String:Any],peers=settings["vnext"] as! [[String:Any]],remote=peers[0],users=remote["users"] as! [[String:Any]],stream=row["streamSettings"] as! [String:Any]
+     switch fault {
+     case "ordinary":users[0]["encryption"]="none"
+     case "missing-encryption":users[0].removeValue(forKey:"encryption")
+     case "vision-flow":users[0]["flow"]="xtls-rprx-vision"
+     case "wrong-network":stream["network"]="raw"
+     case "missing-settings":stream.removeValue(forKey:"xhttpSettings")
+     default:var transport=stream["xhttpSettings"] as! [String:Any];transport[fault=="bad-path" ? "path":"mode"]=fault=="bad-path" ? "uncaptured":"stream-one";stream["xhttpSettings"]=transport
+     }
+     remote["users"]=users;peers[0]=remote;settings["vnext"]=peers;row["settings"]=settings;row["streamSettings"]=stream;rows[0]=row;rawXray["outbounds"]=rows;changed["xray.json"]=try json(rawXray).base64EncodedString()
+    }
+    replaced["files"]=try text(changed)
+    reject("XHTTP refuses malformed or downgraded native asset "+fault){_ = try bridge(["Op":"imported-router","Config":text(replaced)])}
+    var bundle=selected;bundle.profiles[mode]=changed;var substitution=configuration;substitution["bundle"]=try JSONEncoder().encode(bundle)
+    if fault != "pq-label"{reject("XHTTP restore refuses substituted source "+fault){_ = try IOSMultihopExecution.StartupChoice.decode(receipt,source:identity(substitution))}}
+   }
+   for fault in ["path","mask","raw-only"] {
+    var changed=assets
+    if fault=="raw-only"{changed.removeValue(forKey:"sing-box.json")}
+    else {
+     var rawXray=try object(Data(base64Encoded:assets["xray.json"]!)!),rows=rawXray["outbounds"] as! [[String:Any]],row=rows[0],stream=row["streamSettings"] as! [String:Any]
+     if fault=="mask"{stream.removeValue(forKey:"finalmask")}else{var transport=stream["xhttpSettings"] as! [String:Any];transport["path"]="/different-original";stream["xhttpSettings"]=transport}
+     row["streamSettings"]=stream;rows[0]=row;rawXray["outbounds"]=rows;changed["xray.json"]=try json(rawXray).base64EncodedString()
+    }
+    var bundle=selected;bundle.profiles[mode]=changed;var substitution=configuration;substitution["bundle"]=try JSONEncoder().encode(bundle)
+    reject("XHTTP original receipt refuses substituted "+fault){_ = try IOSMultihopExecution.StartupChoice.decode(receipt,source:identity(substitution))}
+   }
+   for execution in ["server","auto"] {var changed=final;changed["multihop_execution"]=execution;reject("XHTTP refuses unowned execution "+execution){try IOSImportedEntryMultihop.validate(entry:entry,final:changed,profiles:maps)}}
+   if ["http-connect","https-connect"].contains(kind) && axes[2]=="off" && axes[3]=="off"{try importedCONNECTRealityDNS(entry:entry,baseline:selected,mode:mode)}
+   try Data(encoded.utf8).write(to:URL(fileURLWithPath:output).appendingPathComponent(file.lastPathComponent),options:.withoutOverwriting)
+  }
  }
  @MainActor static func importedPQRealityGraphs()throws {
   guard let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_PQ_XRAY_SOURCES"],let output=ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_IMPORTED_PQ_XRAY_FIXTURES"] else {throw NSError(domain:"fixture",code:1)}
@@ -1421,11 +1519,11 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   let original=try object(JSONEncoder().encode(baseline.routerProfiles[0])),raw=try RouterVPNExternalExitBuilder.importedRouterSource(profile:entry)
   let originalBytes=try json(object(JSONEncoder().encode(baseline))),entryBundle:[String:Any]=["selectedRouterID":entry["id"]!,"routerProfiles":[entry],"profiles":[String:[String:String]]()]
   var cases=0
-  for flow in ["xtls-rprx-vision","xtls-rprx-vision-udp443"] {for transport in ["udp","tcp","tls","https","h3"] {for hostname in [false,true] {
+  for flow in (mode=="reality-xhttp" ? [""]:["xtls-rprx-vision","xtls-rprx-vision-udp443"]) {for transport in ["udp","tcp","tls","https","h3"] {for hostname in [false,true] {
    if transport=="h3" && flow=="xtls-rprx-vision"{continue}
    var final=original,maps=baseline.profiles,assets=maps[mode]!,xray=try object(Data(base64Encoded:maps[mode]!["xray.json"]!)!)
    var outbounds=xray["outbounds"] as! [[String:Any]],out=outbounds[0],settings=out["settings"] as! [String:Any],peers=settings["vnext"] as! [[String:Any]],peer=peers[0],users=peer["users"] as! [[String:Any]]
-   users[0]["flow"]=flow;peer["users"]=users;peers[0]=peer;settings["vnext"]=peers;out["settings"]=settings;outbounds[0]=out;xray["outbounds"]=outbounds
+   if flow.isEmpty{users[0].removeValue(forKey:"flow")}else{users[0]["flow"]=flow};peer["users"]=users;peers[0]=peer;settings["vnext"]=peers;out["settings"]=settings;outbounds[0]=out;xray["outbounds"]=outbounds
    assets["xray.json"]=try json(xray).base64EncodedString();maps[mode]=assets
    let port=transport=="h3" ? 443:8853
    final["dns_mode"]=["tls":"dot","https":"doh","h3":"doh3"][transport] ?? "custom";final["dns_protocol"]=transport;final["dns_host"]=hostname ? "resolver.example.net":"203.0.113.53";final["dns_port"]=port;final["dns_server_name"]="resolver.example.net";final["dns_path"]="/owned-dns-query"
@@ -1438,7 +1536,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    if ["tls","https","h3"].contains(transport){try check("CONNECT REALITY keeps selected DNS TLS identity",(dns["tls"] as? [String:Any])?["server_name"] as? String=="resolver.example.net")}
    if ["https","h3"].contains(transport){try check("CONNECT REALITY keeps selected DNS request path",dns["path"] as? String=="/owned-dns-query")}
    let native=try object(Data((tagged(graph,"routervpn-execution-local")["config_json"] as! String).utf8)),nativeOut=(native["outbounds"] as! [[String:Any]])[0],nativePeer=((nativeOut["settings"] as! [String:Any])["vnext"] as! [[String:Any]])[0]
-   try check("CONNECT REALITY keeps explicit original flow assets",((nativePeer["users"] as! [[String:Any]])[0]["flow"] as? String)==flow && json(object(Data(last.files.utf8)))==json(assets))
+   try check("CONNECT REALITY keeps explicit original flow assets",(((nativePeer["users"] as! [[String:Any]])[0]["flow"] as? String) ?? "")==flow && json(object(Data(last.files.utf8)))==json(assets))
    var selected=baseline;selected.profiles=maps;selected.routerProfiles=[try JSONDecoder().decode(RouterProfile.self,from:json(final))]
    let chosen=try IOSRuntimeSelector.selectMultihop(bundle:selected,rawProfileID:nil)
    try check("CONNECT REALITY selected DNS reaches actual runtime selection",chosen.engine == .multihop && chosen.rawProfileID==mode)
@@ -1454,7 +1552,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    }
    cases+=1
   }}}
-  try check("CONNECT REALITY selected DNS covers exact original choices without source mutation",cases==18 && json(object(JSONEncoder().encode(baseline)))==originalBytes)
+  try check("CONNECT REALITY selected DNS covers exact original choices without source mutation",cases==(mode=="reality-xhttp" ? 10:18) && json(object(JSONEncoder().encode(baseline)))==originalBytes)
  }
  @MainActor static func importedOpenVPNRouterGraphs()throws {
   guard let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_OPENVPN_SOURCES"] else { throw NSError(domain:"fixture",code:1,userInfo:[NSLocalizedDescriptionKey:"Original OpenVPN source matrix is required"] ) }
@@ -2081,6 +2179,13 @@ def main():
             raise ValueError('ROUTERVPN_APPLE_IMPORTED_CONNECT_XRAY_FIXTURES must name an existing empty owned directory')
         if proxy_output is not None or connect_output is not None or imported_output is not None or external_output is not None or args.output or args.padding_output or args.entry_output or args.openvpn_probes_only or os.environ.get('ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY') == '1':
             raise ValueError('CONNECT REALITY evidence is separate from established graph inventories')
+    xhttp_xray_output = os.environ.get('ROUTERVPN_APPLE_IMPORTED_XHTTP_XRAY_FIXTURES')
+    if xhttp_xray_output is not None:
+        destination = Path(xhttp_xray_output)
+        if not xhttp_xray_output or not destination.is_dir() or destination.is_symlink() or any(destination.iterdir()):
+            raise ValueError('XHTTP graph output requires its own empty owned directory')
+        if any(os.environ.get(key) is not None for key in ('ROUTERVPN_APPLE_IMPORTED_PQ_XRAY_FIXTURES','ROUTERVPN_APPLE_IMPORTED_PACKET_XRAY_FIXTURES','ROUTERVPN_APPLE_IMPORTED_CONNECT_XRAY_FIXTURES','ROUTERVPN_APPLE_IMPORTED_PROXY_XRAY_FIXTURES','ROUTERVPN_APPLE_CONNECT_LAYER_FIXTURES','ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS','ROUTERVPN_IOS_EXTERNAL_GRAPHS')) or args.output or args.padding_output or args.entry_output or args.openvpn_probes_only:
+            raise ValueError('XHTTP graph output cannot replace an existing inventory')
     pq_xray_output = os.environ.get('ROUTERVPN_APPLE_IMPORTED_PQ_XRAY_FIXTURES')
     if pq_xray_output is not None:
         destination = Path(pq_xray_output)
@@ -2185,6 +2290,11 @@ def main():
             pq_sources.mkdir()
             subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedPQRealityIndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ,ROUTERVPN_IMPORTED_PQ_XRAY_FIXTURES=str(pq_sources)), check=True, timeout=45)
             environment['ROUTERVPN_IOS_IMPORTED_PQ_XRAY_SOURCES'] = str(pq_sources)
+        if xhttp_xray_output is not None:
+            xhttp_sources = work / 'xhttp-sources'
+            xhttp_sources.mkdir()
+            subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedXHTTPIndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ,ROUTERVPN_IMPORTED_XHTTP_XRAY_FIXTURES=str(xhttp_sources)), check=True, timeout=45)
+            environment['ROUTERVPN_IOS_IMPORTED_XHTTP_XRAY_SOURCES'] = str(xhttp_sources)
         environment.pop('ROUTERVPN_IOS_OPENVPN_PROBES_ONLY', None)
         environment.pop('ROUTERVPN_IOS_PADDING_ONLY', None)
         environment.pop('ROUTERVPN_IOS_LOCAL_PADDING_GRAPHS', None)

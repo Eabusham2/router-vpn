@@ -255,7 +255,7 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 	validLayer := func(mode string) bool {
 		return mode == "" || mode == "aes-256-gcm" || mode == "aes-256-gcm+xor-whitening"
 	}
-	if !ok || expectedIP != "203.0.113.88" || (args[2] != "reality-vision" && args[2] != "reality-pq-vision") || (args[5] == "") != (finalLayer == "") || args[6] != "" ||
+	if !ok || expectedIP != "203.0.113.88" || (args[2] != "reality-vision" && args[2] != "reality-pq-vision" && args[2] != "reality-xhttp") || (args[5] == "") != (finalLayer == "") || args[6] != "" ||
 		profile["multihop_execution"] != "local" || !validLayer(entryLayer) || !validLayer(finalLayer) ||
 		profile["router_api"] != "http://10.77.0.1:8787" {
 		t.Fatal("SOCKS REALITY reference lost its exact Local independent-layer source")
@@ -285,7 +285,7 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 		}
 		earlyFailure := fault == "entry-auth" || fault == "auth-downgrade" || fault == "wrong-entry-ip" || strings.HasPrefix(fault, "entry-layer-")
 		routeFailure := fault == "final-route" || strings.HasPrefix(fault, "final-layer-")
-		cipherFailure := fault == "final-reality-key" || fault == "final-pq-key" || fault == "final-user"
+		cipherFailure := fault == "final-reality-key" || fault == "final-pq-key" || fault == "final-xhttp-path" || fault == "final-user"
 		if earlyFailure || routeFailure {
 			if finalServer.rawTCP.Load() != 0 || dnsRequests.Load() != 0 || healthRequests.Load() != 0 {
 				t.Error("failed original entry reached the paired Xray proof path")
@@ -407,6 +407,8 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 		files = desktopNodeXrayAssets(t, files, "xray-reality-key")
 	} else if fault == "final-pq-key" {
 		files = desktopNodeXrayAssets(t, files, "xray-pq-key")
+	} else if fault == "final-xhttp-path" {
+		files = desktopNodeXrayAssets(t, files, "xray-path")
 	} else if fault == "final-user" {
 		files = desktopNodeXrayAssets(t, files, "xray-user")
 	}
@@ -651,7 +653,7 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 	dnsOK, proofOK := false, false
 	if publicOK {
 		dnsOK, err = desktopImportedSOCKSXrayDNS(ctx, final, net.JoinHostPort(wantedDNS, "53"))
-		wantDNS := fault != "final-reality-key" && fault != "final-pq-key" && fault != "final-user" && fault != "final-route" && fault != "dns-route" && !strings.HasPrefix(fault, "final-layer-")
+		wantDNS := fault != "final-reality-key" && fault != "final-pq-key" && fault != "final-xhttp-path" && fault != "final-user" && fault != "final-route" && fault != "dns-route" && !strings.HasPrefix(fault, "final-layer-")
 		if dnsOK != wantDNS {
 			t.Fatal("SOCKS REALITY selected DNS did not follow its original authenticated chain", err)
 		}
@@ -970,4 +972,103 @@ func (c *desktopImportedSOCKSXrayConnection) Close() error {
 	c.owner.signal()
 	c.owner.mu.Unlock()
 	return nil
+}
+
+func desktopImportedXHTTPXraySource(t *testing.T, kind, first, last string) []string {
+	t.Helper()
+	directory := os.Getenv("ROUTERVPN_IMPORTED_XHTTP_XRAY_FIXTURES")
+	if directory == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_XHTTP_XRAY_FIXTURES") == "1" {
+			t.Fatal("required original XHTTP REALITY sources absent")
+		}
+		t.Skip("separate XHTTP native gate supplies original source inventory")
+	}
+	path := filepath.Join(directory, kind+"--reality-xhttp--"+first+"--"+last+".json")
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 1<<20 {
+		t.Fatal("XHTTP source is not an original bounded regular file", err)
+	}
+	raw, err := os.ReadFile(path)
+	var source []string
+	if err != nil || json.Unmarshal(raw, &source) != nil || len(source) != 9 || source[2] != "reality-xhttp" {
+		t.Fatal("XHTTP original source receipt changed", err)
+	}
+	plan, err := mobilemultihop.NewImportedEntry(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
+	if err != nil {
+		t.Fatal("original XHTTP source failed exact compilation", err)
+	}
+	defer plan.Close()
+	if plan.SourceSHA256() != source[7] || plan.Config() != source[8] || plan.Healthy() {
+		t.Fatal("XHTTP original source identity changed or claimed live proof")
+	}
+	var metadata mobilemultihop.Metadata
+	normalize := func(mode string) string {
+		if mode == "" {
+			return "off"
+		}
+		return mode
+	}
+	protocol := kind
+	if strings.HasPrefix(kind, "openvpn-") {
+		protocol = "openvpn"
+	}
+	if json.Unmarshal([]byte(plan.Metadata()), &metadata) != nil || metadata.EntryMode != protocol || normalize(metadata.EntryStartLayer) != first || normalize(metadata.ExitStartLayer) != last {
+		t.Fatal("XHTTP source name substituted another captured entry or layer")
+	}
+	if protocol == "openvpn" {
+		graph := desktopImportedSOCKSXrayObject(t, plan.Config())
+		matched := false
+		for _, raw := range graph["endpoints"].([]any) {
+			row := raw.(map[string]any)
+			if row["tag"] == "entry-wg" && row["network"] == strings.TrimPrefix(kind, "openvpn-") {
+				matched = true
+			}
+		}
+		if !matched {
+			t.Fatal("XHTTP source name substituted original OpenVPN wire transport")
+		}
+	}
+	return source
+}
+
+func desktopImportedXHTTPXrayFaults(first, last string) []string {
+	faults := []string{"success", "final-pq-key", "final-xhttp-path", "cancel", "close-owner"}
+	if first == "off" && last == "off" {
+		faults = append(faults, "wrong-entry-ip", "final-reality-key", "final-user", "final-route", "dns-route", "final-identity", "final-token")
+	}
+	if first != "off" {
+		faults = append(faults, "entry-layer-key")
+	}
+	if first == "aes-256-gcm+xor-whitening" {
+		faults = append(faults, "entry-layer-whitening")
+	}
+	if last != "off" {
+		faults = append(faults, "final-layer-key")
+	}
+	if last == "aes-256-gcm+xor-whitening" {
+		faults = append(faults, "final-layer-whitening")
+	}
+	return faults
+}
+
+func TestRouterVPNImportedXHTTPProxyTraffic(t *testing.T) {
+	for _, kind := range []string{"socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect"} {
+		for _, first := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, last := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				for _, fault := range desktopImportedXHTTPXrayFaults(first, last) {
+					t.Run(kind+"/"+first+"/"+last+"/"+fault, func(t *testing.T) {
+						original := desktopImportedXHTTPXraySource(t, kind, first, last)
+						switch kind {
+						case "socks5":
+							desktopImportedSOCKSXrayTraffic(t, original, fault)
+						case "shadowsocks", "hysteria2":
+							desktopImportedProxyXrayTraffic(t, original, kind, "", fault)
+						default:
+							desktopImportedCONNECTXrayTraffic(t, original, kind, fault)
+						}
+					})
+				}
+			}
+		}
+	}
 }

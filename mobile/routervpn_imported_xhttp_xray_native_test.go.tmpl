@@ -1,0 +1,163 @@
+package libbox
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func routerImportedXHTTPNames() map[string]bool {
+	names := map[string]bool{}
+	for _, kind := range []string{"socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn-tcp", "openvpn-udp"} {
+		for _, first := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, last := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				names[kind+"--reality-xhttp--"+first+"--"+last+".json"] = true
+			}
+		}
+	}
+	return names
+}
+
+func TestRouterImportedXHTTPSourceGraphs(t *testing.T) {
+	routerImportedXHTTPGraphs(t, "ROUTERVPN_IMPORTED_XHTTP_XRAY_FIXTURES", true, false)
+}
+func TestRouterImportedXHTTPAndroidSourceGraphs(t *testing.T) {
+	routerImportedXHTTPGraphs(t, "ROUTERVPN_ANDROID_IMPORTED_XHTTP_XRAY_FIXTURES", true, true)
+}
+func TestRouterImportedXHTTPAppleGraphs(t *testing.T) {
+	routerImportedXHTTPGraphs(t, "ROUTERVPN_APPLE_IMPORTED_XHTTP_XRAY_FIXTURES", false, false)
+}
+func TestRouterImportedXHTTPDesktopGraphs(t *testing.T) {
+	routerImportedXHTTPGraphs(t, "ROUTERVPN_DESKTOP_IMPORTED_XHTTP_XRAY_FIXTURES", false, false)
+}
+
+func routerImportedXHTTPGraphs(t *testing.T, environment string, captured, android bool) {
+	directory := os.Getenv(environment)
+	if directory == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_XHTTP_XRAY_FIXTURES") == "1" {
+			t.Fatal("required separate XHTTP source inventory missing")
+		}
+		t.Skip("separate XHTTP parser gate supplies original host captures")
+	}
+	expected := routerImportedXHTTPNames()
+	rows, err := os.ReadDir(directory)
+	if err != nil || len(rows) != len(expected) {
+		t.Fatal("XHTTP parser lost its exact 81 original graph inventory", err)
+	}
+	for _, row := range rows {
+		t.Run(row.Name(), func(t *testing.T) {
+			name := row.Name()
+			if android {
+				if !strings.HasPrefix(name, "android-") {
+					t.Fatal("XHTTP Android source lacks its producer identity")
+				}
+				name = strings.TrimPrefix(name, "android-")
+			}
+			info, err := row.Info()
+			if err != nil || !expected[name] || row.Type()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 4<<20 {
+				t.Fatal("XHTTP parser received a foreign or unbounded source", err)
+			}
+			raw, err := os.ReadFile(filepath.Join(directory, row.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			config := string(raw)
+			if captured {
+				var source []string
+				if json.Unmarshal(raw, &source) != nil || len(source) != 9 || source[2] != "reality-xhttp" {
+					t.Fatal("XHTTP parser lost original seven inputs and graph receipt")
+				}
+				plan, err := mobilemultihop.NewImportedEntry(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
+				if err != nil {
+					t.Fatal("pinned native compiler rejected original XHTTP source", err)
+				}
+				defer plan.Close()
+				if plan.SourceSHA256() != source[7] || plan.Config() != source[8] || plan.Healthy() {
+					t.Fatal("pinned native XHTTP source identity changed or acquired live proof")
+				}
+				config = plan.Config()
+			}
+			var graph map[string]any
+			if json.Unmarshal([]byte(config), &graph) != nil {
+				t.Fatal("invalid original XHTTP graph")
+			}
+			routerImportedXHTTPAxes(t, name, graph)
+			found := 0
+			for _, value := range graph["outbounds"].([]any) {
+				out := value.(map[string]any)
+				if out["type"] != "routervpn-xray" {
+					continue
+				}
+				found++
+				if out["mode"] != "reality-xhttp" || out["tag"] != "routervpn-execution-local" || out["detour"] == nil {
+					t.Fatal("XHTTP parser lost exact final native owner")
+				}
+			}
+			if found != 1 {
+				t.Fatal("XHTTP parser requires one exact native final")
+			}
+			if err := CheckConfig(config); err != nil {
+				t.Fatal("actual pinned Libbox rejected the original XHTTP host graph", err)
+			}
+		})
+	}
+}
+
+func routerImportedXHTTPAxes(t *testing.T, name string, graph map[string]any) {
+	t.Helper()
+	axes := strings.Split(strings.TrimSuffix(name, ".json"), "--")
+	if len(axes) != 4 || axes[1] != "reality-xhttp" {
+		t.Fatal("XHTTP graph lost its exact inventory axes")
+	}
+	byTag := map[string]map[string]any{}
+	for _, family := range []string{"outbounds", "endpoints"} {
+		rows, _ := graph[family].([]any)
+		for _, value := range rows {
+			row := value.(map[string]any)
+			tag, _ := row["tag"].(string)
+			if tag == "" || byTag[tag] != nil {
+				t.Fatal("XHTTP graph has an unowned or duplicate transport tag")
+			}
+			byTag[tag] = row
+		}
+	}
+	entry, final := byTag["entry-wg"], byTag["routervpn-execution-local"]
+	types := map[string]string{"socks5": "socks", "shadowsocks": "shadowsocks", "hysteria2": "hysteria2", "http-connect": "http", "https-connect": "http", "wireguard": "wireguard", "amneziawg": "routervpn-amneziawg", "openvpn-tcp": "openvpn-client", "openvpn-udp": "openvpn-client"}
+	if entry == nil || final == nil || types[axes[0]] == "" || entry["type"] != types[axes[0]] {
+		t.Fatal("XHTTP filename substituted another imported transport")
+	}
+	if strings.HasPrefix(axes[0], "openvpn-") && entry["network"] != strings.TrimPrefix(axes[0], "openvpn-") {
+		t.Fatal("XHTTP filename substituted another OpenVPN wire transport")
+	}
+	if axes[0] == "http-connect" || axes[0] == "https-connect" {
+		tls, _ := entry["tls"].(map[string]any)
+		if (axes[0] == "https-connect") != (tls != nil && tls["enabled"] == true) {
+			t.Fatal("XHTTP filename substituted CONNECT TLS policy")
+		}
+	}
+	layer := func(row map[string]any, off string) string {
+		if row["detour"] == nil && off == "" || row["detour"] == off {
+			return "off"
+		}
+		tag, _ := row["detour"].(string)
+		outer := byTag[tag]
+		if outer["type"] == "routervpn-openvpn-layer-map" {
+			mode, _ := outer["mode"].(string)
+			return mode
+		}
+		if outer["type"] == "routervpn-aes-xor" {
+			return "aes-256-gcm+xor-whitening"
+		}
+		if outer["type"] == "shadowsocks" && outer["method"] == "2022-blake3-aes-256-gcm" {
+			return "aes-256-gcm"
+		}
+		return "unowned"
+	}
+	if layer(entry, "") != axes[2] || layer(final, "entry-wg") != axes[3] {
+		t.Fatal("XHTTP filename substituted an independent Start Layer")
+	}
+}

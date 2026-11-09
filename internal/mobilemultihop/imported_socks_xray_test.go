@@ -273,9 +273,9 @@ func TestImportedEntrySOCKSRealityVisionKeepsScope(t *testing.T) {
 			if _, err := NewNodeProfile(mode, files, externalTestJSON(t, profile), start, ""); err != nil {
 				t.Fatal("unsupported-final control did not begin with a valid original node", err)
 			}
-			// PQ is admitted only with its exact encryption assets; retain this
-			// required scope verdict as an ordinary-under-PQ downgrade rejection.
-			if mode == "reality-pq-vision" {
+			// PQ/XHTTP require their exact assets; retain this
+			// required scope verdict as an ordinary-under-native downgrade rejection.
+			if mode == "reality-pq-vision" || mode == "reality-xhttp" {
 				files, _, _ = nodeProfileFixture(t, "reality-vision", "")
 			}
 			if _, err := NewImportedEntry(source[0], source[1], mode, files, externalTestJSON(t, profile), start, ""); err == nil {

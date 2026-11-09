@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/imported-socks-reality-native.yml'
       - '.github/workflows/imported-pq-reality-native.yml'
+      - '.github/workflows/imported-xhttp-native.yml'
       - 'internal/**'
       - 'mobile/**'
       - 'android/**'
@@ -87,3 +88,7 @@ jobs:
   imported-pq-reality-reference:
     needs: imported-socks-reality-reference
     uses: ./.github/workflows/imported-pq-reality-native.yml
+
+  imported-xhttp-reference:
+    needs: imported-pq-reality-reference
+    uses: ./.github/workflows/imported-xhttp-native.yml

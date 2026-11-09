@@ -187,13 +187,13 @@ enum RouterVPNExternalExitBuilder {
     /// Keep final transport and optional outer AES assets in separate original
     /// maps. The native node compiler owns certificate inlining and layering.
     static func importedRouterFinalSource(profile: [String: Any], profiles: [String: [String: String]]) throws -> (mode: String, files: String, start: String) {
-        guard let mode = profile["multihop_exit_mode"] as? String, ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong", "reality-vision", "reality-pq-vision"].contains(mode),
+        guard let mode = profile["multihop_exit_mode"] as? String, ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong", "reality-vision", "reality-pq-vision", "reality-xhttp"].contains(mode),
               let assets = profiles[mode], !assets.isEmpty else { throw error("The paired final transport lost its original assets.") }
         let layer = try IOSMultihopStartLayer.capture(profile: profile, profiles: profiles)
-        if ["reality-vision", "reality-pq-vision"].contains(mode) {
+        if ["reality-vision", "reality-pq-vision", "reality-xhttp"].contains(mode) {
             guard ["socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn"].contains(profile["multihop_entry_mode"] as? String ?? ""),
                   (profile["multihop_execution"] as? String ?? "local") == "local" else {
-                throw error("REALITY Vision requires a captured Local WireGuard, AmneziaWG, OpenVPN, SOCKS5, Shadowsocks 2022, Hysteria2 or HTTP/HTTPS CONNECT entry and independently provisioned Start Layers.")
+                throw error("REALITY requires a captured Local WireGuard, AmneziaWG, OpenVPN, SOCKS5, Shadowsocks 2022, Hysteria2 or HTTP/HTTPS CONNECT entry and independently provisioned Start Layers.")
             }
         }
         let files = try JSONSerialization.data(withJSONObject: assets, options: [.sortedKeys])
