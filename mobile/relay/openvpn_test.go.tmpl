@@ -123,9 +123,12 @@ func (*remoteNativePhysical) ListenPacket(context.Context, M.Socksaddr) (net.Pac
 	return nil, errors.New("unowned packet listener")
 }
 
-func remoteNativeFactory(parent context.Context, raw []byte, physical N.Dialer, dispatch func(uint64, func() error) error) (*routerVPNRelayBox, error) {
+func remoteNativeFactory(parent context.Context, raw []byte, physical N.Dialer, dispatch func(uint64, func() error) error, configure ...func(context.Context)) (*routerVPNRelayBox, error) {
 	ctx, cancel := context.WithCancel(include.Context(context.Background()))
 	stop := context.AfterFunc(parent, cancel)
+	for _, setup := range configure {
+		setup(ctx)
+	}
 	if physical != nil {
 		registry := service.FromContext[adapter.EndpointRegistry](ctx).(*E.Registry)
 		E.Register[option.OpenVPNClientEndpointOptions](registry, "openvpn-client", func(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.OpenVPNClientEndpointOptions) (adapter.Endpoint, error) {
