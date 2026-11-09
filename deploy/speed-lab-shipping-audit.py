@@ -90,6 +90,58 @@ def need_native_multihop_lanes(path: str) -> None:
         errors.append(f"{path}: captured paired/imported native proof lanes lost their original compiler or routes")
 
 
+def need_imported_speed_lab_current() -> None:
+    """Source-only binding; native traffic and physical transitions stay separate."""
+    tokens, function, positions = _native_module._tokens, _native_module._function, _native_module._positions
+    paths = tokens(read("cmd/client/speed_lab_paths.go"))
+    capture = function(paths, "func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathIdentity, speedLabPath, error)")
+    validate = function(paths, "func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speedLabPathIdentity) error")
+    verify = function(tokens(read("cmd/client/desktop_external_path.go")),
+                      "func verifySpeedLabPath(ctx context.Context, a *app, identity speedLabPathIdentity) error")
+    temporary = function(tokens(read("cmd/client/speed_lab.go")),
+                         "func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration speedLabDuration, minDuration, maxDuration time.Duration) (speedLabPath, speedLabMeasurement, []speedLabHopMeasurement, error)")
+    runtime = tokens(read("cmd/client/multihop_native_launch.go"))
+    bind = function(runtime, "func bindNativeMultihopRuntime(a *app, launch *desktopNodeLaunch, sel multihopSelection, network string) error")
+    observe = function(runtime, "func capturedNativeMultihopRuntimeContext(ctx context.Context, a *app, command *exec.Cmd, graph activeMultihopGraph) (*nativeMultihopRuntime, error)")
+    network = function(runtime, "func (owner *nativeMultihopRuntime) physicalNetworkContext(ctx context.Context) (string, error)")
+    def has(body, *fragments):
+        return body is not None and all(len(positions(body, fragment)) == 1 for fragment in fragments)
+    checks = positions(verify, "validateSpeedLabIdentityContext(ctx, a, identity)") if verify is not None else []
+    dns = positions(verify, "a.proveImportedNativeDNS(ctx, identity.Imported.selection, identity.Command)") if verify is not None else []
+    valid = (
+        has(capture,
+            'if st.Mode == "multihop" && graphOK && graph.ImportedEntry {',
+            'imported, err = capturedNativeMultihopRuntimeContext(ctx, a, command, graph)',
+            'Imported: imported')
+        and has(validate,
+            'if identity.GraphOK && identity.Graph.ImportedEntry {',
+            'owner, exists := nativeMultihopOwners.Load(a)',
+            'if !exists || identity.Imported == nil || owner != identity.Imported {',
+            'network, err = identity.Imported.physicalNetworkContext(ctx)',
+            'owner, err := capturedNativeMultihopRuntimeContext(ctx, a, identity.Command, current)',
+            'if err != nil || identity.Imported == nil || owner != identity.Imported || !a.nativeMultihopProofOwnerCurrentContext(ctx, owner.selection, identity.Command) {')
+        and len(checks) == 2 and len(dns) == 1 and checks[0] < dns[0] < checks[1]
+        and has(verify, '''
+            if identity.Imported != nil {
+                if _, err := a.proveImportedNativeDNS(ctx, identity.Imported.selection, identity.Command); err != nil {
+                    return errors.Join(err, ctx.Err())
+                }
+            }
+        ''')
+        and has(temporary,
+            'if identity.External != nil || identity.Standard != nil || identity.Imported != nil {',
+            'if err := verifySpeedLabPath(pathCtx, a, identity); err != nil { return err }')
+        and has(bind, 'nativeMultihopOwners.Store(a, &nativeMultihopRuntime{launch: launch, selection: sel, graph: graph, network: network, networkIdentityContext: physicalNetworkIdentityContext})')
+        and has(observe, 'network, err := owner.physicalNetworkContext(ctx)')
+        and has(network,
+            'if ctx == nil || owner == nil || owner.networkIdentityContext == nil {',
+            'network, err := owner.networkIdentityContext(ctx)',
+            'return network, errors.Join(err, ctx.Err())')
+    )
+    if not valid:
+        errors.append("imported Speed Lab lost its captured native owner, caller, selected DNS or original physical observation")
+
+
 # Shared desktop controller: current path is identity-bound, temporary paths are
 # transactional/non-persistent, and real Mbps + idle/loaded latency are distinct.
 need(
@@ -137,6 +189,7 @@ need(
 )
 
 need_go_map_entry("cmd/client/speed_lab.go", "hops", "hops")
+need_imported_speed_lab_current()
 
 # Router VPN nodes commonly share the same private 10.77.0.1 API address. Per-hop
 # telemetry must therefore use local routing lanes that bind the request to the

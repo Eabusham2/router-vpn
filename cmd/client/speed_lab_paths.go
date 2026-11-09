@@ -75,6 +75,7 @@ type speedLabPathIdentity struct {
 	RouterID        string
 	Graph           activeMultihopGraph
 	GraphOK         bool
+	Imported        *nativeMultihopRuntime
 	ImportedOpenVPN *nativeMultihopRuntime
 	Command         *exec.Cmd
 	Network         string
@@ -133,11 +134,20 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 	if st.Mode == "multihop" && !graphOK {
 		return speedLabPathIdentity{}, speedLabPath{}, errors.New("active multihop graph identity is unavailable")
 	}
-	network, err := physicalNetworkIdentityContext(ctx)
+	var network string
+	var imported *nativeMultihopRuntime
+	if st.Mode == "multihop" && graphOK && graph.ImportedEntry {
+		imported, err = capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
+		if err == nil {
+			network = imported.network
+		}
+	} else {
+		network, err = physicalNetworkIdentityContext(ctx)
+	}
 	if err != nil {
 		return speedLabPathIdentity{}, speedLabPath{}, err
 	}
-	identity := speedLabPathIdentity{Tracker: tracker, SessionID: session.ID, StateToken: mtuStateSnapshotToken(st), RouterID: st.RouterID, Graph: graph, GraphOK: graphOK && st.Mode == "multihop", Command: command, Network: network, ProfileToken: liveMeasurementProfileToken(profile), Options: [3]bool{st.DAITA, st.Jumbo, st.Socks}}
+	identity := speedLabPathIdentity{Tracker: tracker, SessionID: session.ID, StateToken: mtuStateSnapshotToken(st), RouterID: st.RouterID, Graph: graph, GraphOK: graphOK && st.Mode == "multihop", Imported: imported, Command: command, Network: network, ProfileToken: liveMeasurementProfileToken(profile), Options: [3]bool{st.DAITA, st.Jumbo, st.Socks}}
 	if identity.Network == "" {
 		return speedLabPathIdentity{}, speedLabPath{}, errors.New("Speed Lab cannot capture the current physical network")
 	}
@@ -270,6 +280,15 @@ func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
 }
 
 func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speedLabPathIdentity) error {
+	if identity.Imported != nil && (!identity.GraphOK || !identity.Graph.ImportedEntry || identity.External != nil || identity.Tor != nil || identity.Node != nil || identity.Linux != nil) {
+		return errors.New("Speed Lab imported identity belongs to another topology")
+	}
+	if identity.GraphOK && identity.Graph.ImportedEntry {
+		owner, exists := nativeMultihopOwners.Load(a)
+		if !exists || identity.Imported == nil || owner != identity.Imported {
+			return errors.New("Speed Lab imported runtime owner changed")
+		}
+	}
 	if identity.ImportedOpenVPN != nil && (!identity.GraphOK || !identity.Graph.ImportedEntry || identity.Graph.EntryMode != "openvpn" || identity.External != nil || identity.Tor != nil || identity.Node != nil || identity.Linux != nil) {
 		return errors.New("Speed Lab imported OpenVPN identity belongs to another topology")
 	}
@@ -321,7 +340,12 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 	if !profileOK || profileToken != identity.ProfileToken || identity.EntryToken != "" && (!entryOK || entryToken != identity.EntryToken) {
 		return errors.New("Speed Lab result became stale because the captured node policy or credentials changed")
 	}
-	network, err := physicalNetworkIdentityContext(ctx)
+	var network string
+	if identity.Imported != nil {
+		network, err = identity.Imported.physicalNetworkContext(ctx)
+	} else {
+		network, err = physicalNetworkIdentityContext(ctx)
+	}
 	if err != nil {
 		return err
 	}
@@ -332,6 +356,13 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 		current, ok := getActiveMultihopGraph(a)
 		if !ok || current != identity.Graph {
 			return errors.New("Speed Lab result became stale because the launched multihop graph changed")
+		}
+		if current.ImportedEntry {
+			owner, err := capturedNativeMultihopRuntimeContext(ctx, a, identity.Command, current)
+			if err != nil || identity.Imported == nil || owner != identity.Imported ||
+				!a.nativeMultihopProofOwnerCurrentContext(ctx, owner.selection, identity.Command) {
+				return errors.Join(err, errors.New("Speed Lab imported runtime owner changed"))
+			}
 		}
 		if current.ImportedEntry && current.EntryMode == "openvpn" {
 			if err := validateDesktopImportedOpenVPNRuntime(ctx, a, identity.ImportedOpenVPN); err != nil {

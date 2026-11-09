@@ -376,7 +376,7 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 		if err := validate(pathCtx); err != nil {
 			return err
 		}
-		if identity.External != nil || identity.Standard != nil {
+		if identity.External != nil || identity.Standard != nil || identity.Imported != nil {
 			if err := verifySpeedLabPath(pathCtx, a, identity); err != nil {
 				return err
 			}

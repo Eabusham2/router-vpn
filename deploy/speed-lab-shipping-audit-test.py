@@ -10,6 +10,7 @@ CHECK = AUDIT["need_go_map_entry"]
 IOS_CHECK = AUDIT["need_ios_topology_routes"]
 ANDROID_CHECK = AUDIT["need_android_captured_transaction"]
 NATIVE_CHECK = AUDIT["need_native_multihop_lanes"]
+IMPORTED_CURRENT_CHECK = AUDIT["need_imported_speed_lab_current"]
 
 
 class SpeedLabResponseAuditTests(unittest.TestCase):
@@ -98,6 +99,73 @@ class SpeedLabAndroidTransactionAuditTests(unittest.TestCase):
                 changed = self.source.replace(marker, "removed")
                 self.assertTrue(self.check_source(changed))
                 self.assertTrue(self.check_source(changed + "\n// " + marker))
+
+
+class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
+    sources = {path: (Path(__file__).resolve().parents[1]/path).read_text() for path in (
+        "cmd/client/speed_lab_paths.go", "cmd/client/desktop_external_path.go",
+        "cmd/client/speed_lab.go", "cmd/client/multihop_native_launch.go")}
+
+    def check_sources(self, changes=None):
+        sources = dict(self.sources)
+        sources.update(changes or {})
+        errors = []
+        with patch.dict(IMPORTED_CURRENT_CHECK.__globals__, {"read": sources.__getitem__, "errors": errors}):
+            IMPORTED_CURRENT_CHECK()
+        return errors
+
+    def test_shipping_capture_dns_and_physical_observer_share_the_original_owner(self):
+        self.assertEqual([], self.check_sources())
+
+    def test_owner_context_and_dns_cannot_be_removed_or_borrowed(self):
+        changes = (
+            ("cmd/client/speed_lab_paths.go", 'Imported: imported', 'Imported: nil'),
+            ("cmd/client/speed_lab_paths.go", 'owner != identity.Imported', 'owner == nil'),
+            ("cmd/client/speed_lab_paths.go", 'network, err = identity.Imported.physicalNetworkContext(ctx)', 'network, err = "cached-network", nil'),
+            ("cmd/client/desktop_external_path.go", 'validateSpeedLabIdentityContext(ctx, a, identity)', 'validateSpeedLabIdentity(a, identity)'),
+            ("cmd/client/desktop_external_path.go", 'a.proveImportedNativeDNS(ctx, identity.Imported.selection, identity.Command)', 'a.proveImportedNativeDNS(context.Background(), identity.Imported.selection, identity.Command)'),
+            ("cmd/client/desktop_external_path.go", 'a.proveImportedNativeDNS(ctx, identity.Imported.selection, identity.Command)', 'a.proveImportedNativeDNS(ctx, otherSelection, identity.Command)'),
+            ("cmd/client/desktop_external_path.go", 'return errors.Join(err, ctx.Err())', 'return err'),
+            ("cmd/client/speed_lab.go", 'identity.Standard != nil || identity.Imported != nil', 'identity.Standard != nil'),
+            ("cmd/client/multihop_native_launch.go", 'networkIdentityContext: physicalNetworkIdentityContext', 'networkIdentityContext: nil'),
+            ("cmd/client/multihop_native_launch.go", 'networkIdentityContext: physicalNetworkIdentityContext', 'networkIdentityContext: cachedNetwork'),
+            ("cmd/client/multihop_native_launch.go", 'network, err := owner.physicalNetworkContext(ctx)', 'network, err := owner.network, nil'),
+            ("cmd/client/multihop_native_launch.go", 'owner.networkIdentityContext == nil', 'false'),
+            ("cmd/client/multihop_native_launch.go", 'return network, errors.Join(err, ctx.Err())', 'return network, nil'),
+        )
+        for path, before, after in changes:
+            with self.subTest(path=path, before=before, after=after):
+                self.assertIn(before, self.sources[path])
+                self.assertTrue(self.check_sources({path: self.sources[path].replace(before, after)}))
+
+    def test_comments_strings_and_unrelated_functions_cannot_supply_a_live_binding(self):
+        for path, marker in (
+            ("cmd/client/speed_lab_paths.go", 'owner != identity.Imported'),
+            ("cmd/client/desktop_external_path.go", 'a.proveImportedNativeDNS(ctx, identity.Imported.selection, identity.Command)'),
+            ("cmd/client/multihop_native_launch.go", 'networkIdentityContext: physicalNetworkIdentityContext'),
+        ):
+            changed = self.sources[path].replace(marker, 'removed')
+            for witness in ('\n// '+marker, '\n/* '+marker+' */', '\nvar fixture = `'+marker+'`',
+                            '\nfunc unrelatedSourceWitness() { '+marker+' }'):
+                with self.subTest(path=path, witness=witness):
+                    self.assertTrue(self.check_sources({path: changed+witness}))
+
+    def test_dns_must_remain_between_both_contextual_identity_checks(self):
+        path = "cmd/client/desktop_external_path.go"
+        before = 'if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {'
+        first, rest = self.sources[path].split(before, 1)
+        changed = first + 'if err := validateSpeedLabIdentity(a, identity); err != nil {' + rest
+        self.assertTrue(self.check_sources({path: changed}))
+        changed = self.sources[path] + '\nfunc unrelated() { validateSpeedLabIdentityContext(ctx, a, identity) }'
+        self.assertEqual([], self.check_sources({path: changed}))
+
+    def test_formatting_is_allowed_but_duplicate_owner_constructor_is_rejected(self):
+        path = "cmd/client/multihop_native_launch.go"
+        changed = self.sources[path].replace('networkIdentityContext: physicalNetworkIdentityContext',
+                                            'networkIdentityContext: /* original OS observer */\nphysicalNetworkIdentityContext')
+        self.assertEqual([], self.check_sources({path: changed}))
+        declaration = "func bindNativeMultihopRuntime(a *app, launch *desktopNodeLaunch, sel multihopSelection, network string) error"
+        self.assertTrue(self.check_sources({path: self.sources[path]+'\n'+declaration+' { return nil }'}))
 
 
 class SpeedLabNativeMultihopLaneAuditTests(unittest.TestCase):

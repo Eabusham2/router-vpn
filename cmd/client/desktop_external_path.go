@@ -359,7 +359,7 @@ func verifySpeedLabPath(ctx context.Context, a *app, identity speedLabPathIdenti
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := validateSpeedLabIdentity(a, identity); err != nil {
+	if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 		return err
 	}
 	if identity.External != nil {
@@ -367,7 +367,12 @@ func verifySpeedLabPath(ctx context.Context, a *app, identity speedLabPathIdenti
 			return err
 		}
 	}
-	if err := validateSpeedLabIdentity(a, identity); err != nil {
+	if identity.Imported != nil {
+		if _, err := a.proveImportedNativeDNS(ctx, identity.Imported.selection, identity.Command); err != nil {
+			return errors.Join(err, ctx.Err())
+		}
+	}
+	if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 		return err
 	}
 	return ctx.Err()

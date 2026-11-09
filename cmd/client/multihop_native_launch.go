@@ -26,6 +26,20 @@ type nativeMultihopRuntime struct {
 	selection multihopSelection
 	graph     activeMultihopGraph
 	network   string
+	// Bound once to the OS observer by bindNativeMultihopRuntime, alongside
+	// the retained launch. Missing observation must fail closed.
+	networkIdentityContext func(context.Context) (string, error)
+}
+
+func (owner *nativeMultihopRuntime) physicalNetworkContext(ctx context.Context) (string, error) {
+	if ctx == nil || owner == nil || owner.networkIdentityContext == nil {
+		return "", errors.New("captured multihop has no original physical network observer")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	network, err := owner.networkIdentityContext(ctx)
+	return network, errors.Join(err, ctx.Err())
 }
 
 var nativeMultihopOwners sync.Map // map[*app]*nativeMultihopRuntime
@@ -244,7 +258,7 @@ func bindNativeMultihopRuntime(a *app, launch *desktopNodeLaunch, sel multihopSe
 	if current, ok := desktopNodeOwners.Load(a); !ok || current != launch || launch.profileID != sel.Exit.ID || launch.policyProfileID != sel.Control.ID {
 		return errors.New("native multihop TUN belongs to another node owner")
 	}
-	nativeMultihopOwners.Store(a, &nativeMultihopRuntime{launch: launch, selection: sel, graph: graph, network: network})
+	nativeMultihopOwners.Store(a, &nativeMultihopRuntime{launch: launch, selection: sel, graph: graph, network: network, networkIdentityContext: physicalNetworkIdentityContext})
 	return nil
 }
 
@@ -302,7 +316,7 @@ func capturedNativeMultihopRuntimeContext(ctx context.Context, a *app, command *
 	if current, found := desktopNodeOwners.Load(a); !found || current != owner.launch {
 		return nil, errors.New("multihop system TUN owner was replaced")
 	}
-	network, err := physicalNetworkIdentityContext(ctx)
+	network, err := owner.physicalNetworkContext(ctx)
 	if err != nil {
 		return nil, err
 	}
