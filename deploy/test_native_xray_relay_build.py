@@ -40,7 +40,9 @@ class NativeRelayBuild(unittest.TestCase):
         original='package fixture\n'+close.OLD+'\n'+''.join(before*count for before,after,count in remote.CHANGES)
         server='package fixture\nfunc closeServer() {\n'+close.SERVER_OLD+'\n}\n'
         # Model only the pinned upstream fixture identity and unrelated module
-        # preparation. Execute the actual ordinary AWG entrypoint and both
+        # preparation, including the separately tested Naive source projection.
+        # Require that projection for this exact original checkout on every
+        # attempt. Execute the actual ordinary AWG entrypoint and both
         # shipping OpenVPN transformations, helper projection and verification.
         with tempfile.TemporaryDirectory() as tmp:
             core=Path(tmp).resolve();directory=core/'protocol/openvpn';directory.mkdir(parents=True)
@@ -53,6 +55,7 @@ class NativeRelayBuild(unittest.TestCase):
                 self.assertEqual(kwargs,{'text':True})
                 return M.CORE+'\n'
             with mock.patch.object(M.subprocess,'check_output',side_effect=captured_identity), \
+                    mock.patch.object(M.NAIVE,'prepare') as naive, \
                     mock.patch.object(M.AMNEZIA,'prepare'), \
                     mock.patch.object(remote.MODULE,'prepare'),mock.patch.object(remote.LAYERS,'prepare'), \
                     mock.patch.object(remote.STACK,'prepare'), \
@@ -62,6 +65,7 @@ class NativeRelayBuild(unittest.TestCase):
                     mock.patch.object(close,'SERVER_SOURCE_SHA',close.blobsha(server.encode())):
                 for attempt in range(2):
                     M.prepare(core)
+                    self.assertEqual(naive.call_args_list,[mock.call(core)]*(attempt+1))
                     helper=directory/'routervpn_close_policy.go'
                     self.assertTrue(helper.is_file(),'ordinary AWG preparation omitted original OpenVPN transport owner')
                     self.assertEqual(helper.read_bytes(),(ROOT/'mobile/openvpn/close_policy.go.tmpl').read_bytes())
@@ -73,6 +77,7 @@ class NativeRelayBuild(unittest.TestCase):
                 before=client.read_bytes();helper.write_bytes(helper.read_bytes()+b'foreign owner\n')
                 with self.assertRaisesRegex(ValueError,'helper differs'):
                     M.prepare(core)
+                self.assertEqual(naive.call_args_list,[mock.call(core)]*3)
                 self.assertEqual(client.read_bytes(),before)
                 self.assertTrue(helper.read_bytes().endswith(b'foreign owner\n'))
 
