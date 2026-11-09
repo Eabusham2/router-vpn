@@ -73,6 +73,10 @@ PROTECTED_SUSPENDED_REQUIRED = (
     "TestWindowsControllerFoundationProtectedGlobalSuspendedLaunch/cancelled-after-creation=false",
     "TestWindowsControllerFoundationProtectedGlobalSuspendedLaunch/cancelled-after-creation=true",
 )
+PROCESS_CONTEXT_REQUIRED = (
+    "TestWindowsControllerFoundationProcessObservationContext/token",
+    "TestWindowsControllerFoundationProcessObservationContext/creation",
+)
 # A real linked token belongs to a separate native fixture. Its exact test is
 # still mandatory in the independent UAC workflow step and fails when absent;
 # an unavailable hosted token must not prevent the protocol mutants executing.
@@ -274,7 +278,7 @@ def execute(go="go", *, env=None):
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if (status or "--- SKIP:" in output or "DATA RACE" in output or
                 any("--- PASS: " + name + " (" not in output
-                    for name in (*REQUIRED, *PROTECTED_SUSPENDED_REQUIRED))):
+                    for name in (*REQUIRED, *PROTECTED_SUSPENDED_REQUIRED, *PROCESS_CONTEXT_REQUIRED))):
             raise ValueError("Windows controller did not execute every native ownership boundary")
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Windows controller test binary changed during execution")

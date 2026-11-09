@@ -94,6 +94,78 @@ func TestWindowsOwnedExternalChildActualRetirement(t *testing.T) {
 	testWindowsOwnedProcessActualRetirement(t, "routervpn-external")
 }
 
+// Retain real controller process/token/directory handles, then cancel only the
+// first bootstrap attempt. Every retained native callback must use a later
+// caller, and a cancelled caller may not reach journal I/O or adoption.
+func TestWindowsOwnedRecoveryFreshCallbackContext(t *testing.T) {
+	identity, err := windowscontroller.CurrentIdentity()
+	if err != nil || !identity.Primary || !identity.Elevated || !identity.Administrator {
+		t.Fatal("native recovery fixture requires its actual elevated primary token", err)
+	}
+	process, err := windowscontroller.OpenProcess(uint32(os.Getpid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer process.Close()
+	image, err := windowscontroller.PinCurrentImage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer image.Close()
+	directory := t.TempDir()
+	data, err := os.Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	lifetime, end := context.WithCancel(context.Background())
+	defer end()
+	controller := &windowsOwnedController{parent: process, self: process, selfImage: image,
+		directories: []*os.File{data}, dataRoot: directory, packageRoot: filepath.Dir(image.Path()), elevated: identity, ctx: lifetime}
+	controller.authenticated.Store(true)
+	previous := windowsOwnedCapture.Swap(controller)
+	defer windowsOwnedCapture.Store(previous)
+	first, cancelFirst := context.WithCancel(lifetime)
+	backend, err := desktopNodeRecoveryBootstrap(controller)(first, filepath.Join(directory, "routers.json"))
+	if err != nil {
+		cancelFirst()
+		t.Fatal(err)
+	}
+	cancelFirst()
+	if backend.currentContext == nil || backend.current != nil {
+		t.Fatal("native recovery bootstrap did not retain its explicit per-caller observer")
+	}
+	retry, cancelRetry := context.WithCancel(lifetime)
+	defer cancelRetry()
+	if err := backend.observeCurrent(retry); err != nil {
+		t.Fatal("native recovery observer reused the cancelled bootstrap caller", err)
+	}
+	for name, callback := range map[string]func(context.Context) error{
+		"bootstrap": func(ctx context.Context) error {
+			_, err := desktopNodeRecoveryBootstrap(controller)(ctx, filepath.Join(directory, "routers.json"))
+			return err
+		},
+		"current": backend.observeCurrent,
+		"open":    func(ctx context.Context) error { _, err := backend.open(ctx); return err },
+		"create":  func(ctx context.Context) error { _, err := backend.create(ctx); return err },
+		"begin":   func(ctx context.Context) error { _, err := backend.begin(ctx, nil); return err },
+	} {
+		if err := callback(first); !errors.Is(err, context.Canceled) {
+			t.Fatalf("native recovery %s callback ignored its cancelled original caller: %v", name, err)
+		}
+		if err := callback(nil); err == nil {
+			t.Fatalf("native recovery %s callback accepted a missing caller", name)
+		}
+	}
+	if retry.Err() != nil || lifetime.Err() != nil || currentDesktopNodeControllerContext(retry, controller) != nil {
+		t.Fatal("cancelled native recovery callbacks retired the captured controller")
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil || len(entries) != 0 {
+		t.Fatal("cancelled native recovery callback touched the private journal namespace", err)
+	}
+}
+
 func testWindowsOwnedProcessActualRetirement(t *testing.T, command string) {
 	t.Helper()
 	identity, err := windowscontroller.CurrentIdentity()

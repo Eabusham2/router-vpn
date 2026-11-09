@@ -36,6 +36,7 @@ SPEC.loader.exec_module(NATIVE)
 TAG = "routervpn_controller_windows_native"
 NATIVE_TESTS = (
     "TestWindowsOwnedNodeProcessActualRetirement",
+    "TestWindowsOwnedRecoveryFreshCallbackContext",
     "TestWindowsOwnedNodeProcessRejectsMissingController",
     "TestWindowsPrivateStoreWriteThroughReplace",
     "TestWindowsPrivateStoreWriteThroughFailureAndRetry",
@@ -151,6 +152,8 @@ SHARED_TESTS = (
     "TestDesktopWindowsExternalOpenVPNAuthorityKeepsOriginalImport",
     "TestDesktopWindowsExternalHysteria2LayerAuthorityKeepsOriginalSource",
     "TestDesktopExternalPhysicalWindowsHysteria2LayersKeepOuterAndInnerOwners",
+    "TestDesktopNodeRecoveryFreshNativeObserverContext",
+    "TestDesktopNodeRecoveryNativeObserverRequiresCaller",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -162,7 +165,9 @@ ARGUMENT_CASES = (
 PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2",
                 "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray")
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
-EXPECTED = (*REQUIRED, *("TestDesktopWindowsExternalCurrentProofContext/"+case for case in ("current", "owner-lock", "app-lock", "source-lock", "slot-lock", "process-done-lock", "missing-host-observer", "missing-process-observer", "wrong-session", "wrong-slot")), *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
+EXPECTED = (*REQUIRED,
+            *("TestDesktopNodeRecoveryNativeObserverRequiresCaller/" + case for case in ("missing", "cancelled", "missing-observer")),
+            *("TestDesktopWindowsExternalCurrentProofContext/"+case for case in ("current", "owner-lock", "app-lock", "source-lock", "slot-lock", "process-done-lock", "missing-host-observer", "missing-process-observer", "wrong-session", "wrong-slot")), *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
             *("TestDesktopWindowsExternalPublicConnectAndDisconnect/" + policy + "/" + protocol
               for policy in ("on-connect", "always") for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2", "hysteria2-aes", "hysteria2-aes-xor", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed")),
             *("TestDesktopWindowsExternalRetirementRetriesExactOwner/" + fault
@@ -239,7 +244,7 @@ REQUIRED_SOURCES = (
     "cmd/client/desktop_node_protection_off.go", "cmd/client/desktop_node_protection_off_test.go",
     "cmd/client/desktop_node_journal_off.go", "cmd/client/desktop_node_journal_off_test.go",
     "cmd/client/desktop_node_recovery.go", "cmd/client/desktop_node_recovery_windows.go",
-    "cmd/client/desktop_node_recovery_other.go", "cmd/client/desktop_node_recovery_test.go",
+    "cmd/client/desktop_node_recovery_other.go", "cmd/client/desktop_node_recovery_test.go", "cmd/client/desktop_node_recovery_context_test.go",
     "cmd/client/desktop_node_recovery_initial.go", "cmd/client/desktop_node_recovery_initial_test.go",
     "cmd/client/desktop_node_owned.go",
     "cmd/client/desktop_node_connection_host.go", "cmd/client/desktop_node_connection_host_test.go",

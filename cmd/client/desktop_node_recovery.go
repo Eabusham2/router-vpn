@@ -20,11 +20,30 @@ type desktopNodeJournalRecovery interface {
 // original desktop/Data handles and native ProtectionJournal. No imported
 // profile, UI field or serialized receipt supplies a recovery capability.
 type desktopNodeRecoveryBackend struct {
-	controller windowsprotection.Controller
-	current    func() error
-	open       func(context.Context) (desktopNodeProtectionJournal, error)
-	create     func(context.Context) (desktopNodeProtectionJournal, error)
-	begin      func(context.Context, desktopNodeProtectionJournal) (desktopNodeJournalRecovery, error)
+	controller     windowsprotection.Controller
+	currentContext func(context.Context) error
+	current        func() error // Explicit modeled fixtures only; production retains currentContext.
+	open           func(context.Context) (desktopNodeProtectionJournal, error)
+	create         func(context.Context) (desktopNodeProtectionJournal, error)
+	begin          func(context.Context, desktopNodeProtectionJournal) (desktopNodeJournalRecovery, error)
+}
+
+// A retained backend outlives an individual recovery attempt. Observe it with
+// this attempt's caller, not the cancelled context which first captured it.
+func (backend desktopNodeRecoveryBackend) observeCurrent(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("startup recovery observation omitted its original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if backend.currentContext != nil {
+		return backend.currentContext(ctx)
+	}
+	if backend.current == nil {
+		return errors.New("startup recovery lost its retained controller observer")
+	}
+	return backend.current()
 }
 
 type desktopNodeRecoveryState struct {
@@ -171,12 +190,12 @@ func (s *desktopNodeProtectionSlot) initializeRecoveryWithJournal(ctx context.Co
 	}
 	r := s.recovery
 	defer func() { r.failure = failure }()
-	if r.backend.current == nil {
+	if r.backend.currentContext == nil && r.backend.current == nil {
 		backend, err := s.backend.bootstrap(ctx, profiles)
 		if err != nil {
 			return err
 		}
-		if backend.controller.Validate() != nil || backend.current == nil || backend.open == nil || backend.begin == nil {
+		if backend.controller.Validate() != nil || backend.currentContext == nil && backend.current == nil || backend.open == nil || backend.begin == nil {
 			return errors.New("startup recovery has no complete native bootstrap owner")
 		}
 		r.backend = backend
@@ -188,7 +207,7 @@ func (s *desktopNodeProtectionSlot) initializeRecoveryWithJournal(ctx context.Co
 		if ctx.Err() != nil || !current() {
 			return errors.Join(ctx.Err(), errors.New("startup recovery lost its application generation"))
 		}
-		return r.backend.current()
+		return r.backend.observeCurrent(ctx)
 	}
 	if err := check(); err != nil {
 		return err

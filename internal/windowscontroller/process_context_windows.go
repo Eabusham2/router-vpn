@@ -40,6 +40,54 @@ func (p *Process) AliveContext(ctx context.Context) error {
 	}
 	return ctx.Err()
 }
+
+// Query only the original retained handle. Cancellation can refuse its borrow
+// without waiting for a concurrent observer or retiring that process owner.
+func (p *Process) IdentityContext(ctx context.Context) (TokenIdentity, error) {
+	handle, release, err := p.borrowContext(ctx)
+	if err != nil {
+		return TokenIdentity{}, err
+	}
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return TokenIdentity{}, err
+	}
+	var token syscall.Token
+	if err := syscall.OpenProcessToken(handle, syscall.TOKEN_QUERY, &token); err != nil {
+		return TokenIdentity{}, errors.Join(err, ctx.Err())
+	}
+	identity, _, readErr := readTokenIdentity(token)
+	err = errors.Join(readErr, token.Close(), ctx.Err())
+	if err != nil || !identity.Primary {
+		return TokenIdentity{}, errors.Join(err, errors.New("captured Windows process primary token is unproved"))
+	}
+	return identity, nil
+}
+
+func (p *Process) StartTimeUTCTicksContext(ctx context.Context) (int64, error) {
+	handle, release, err := p.borrowContext(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	var created, exited, kernel, user syscall.Filetime
+	if err := syscall.GetProcessTimes(handle, &created, &exited, &kernel, &user); err != nil {
+		return 0, errors.Join(err, ctx.Err())
+	}
+	const epoch = uint64(504911232000000000)
+	ticks := uint64(created.HighDateTime)<<32 | uint64(created.LowDateTime)
+	if ticks == 0 || ticks > uint64(3155378975999999999)-epoch {
+		return 0, errors.Join(errors.New("the retained Windows process has an invalid creation identity"), ctx.Err())
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return int64(ticks + epoch), nil
+}
+
 func (child *GUIChild) AliveContext(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("Windows child observation omitted caller")

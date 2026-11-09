@@ -14,10 +14,10 @@ import (
 func desktopNodeRecoveryBootstrap(controller *windowsOwnedController) func(context.Context, string) (desktopNodeRecoveryBackend, error) {
 	return func(ctx context.Context, profiles string) (desktopNodeRecoveryBackend, error) {
 		var empty desktopNodeRecoveryBackend
-		if ctx == nil || ctx.Err() != nil {
+		if ctx == nil {
 			return empty, errors.New("startup recovery has no live captured controller operation")
 		}
-		if err := currentDesktopNodeController(controller); err != nil {
+		if err := currentDesktopNodeControllerContext(ctx, controller); err != nil {
 			return empty, err
 		}
 		if controller.self == nil || controller.parent == nil || len(controller.directories) != 1 ||
@@ -25,11 +25,11 @@ func desktopNodeRecoveryBootstrap(controller *windowsOwnedController) func(conte
 			!windowsOwnedSamePath(profiles, filepath.Join(controller.dataRoot, "routers.json")) {
 			return empty, errors.New("startup recovery lost its original desktop Data/profile directory")
 		}
-		started, err := controller.self.StartTimeUTCTicks()
+		started, err := controller.self.StartTimeUTCTicksContext(ctx)
 		if err != nil {
 			return empty, err
 		}
-		identity, err := controller.self.Identity()
+		identity, err := controller.self.IdentityContext(ctx)
 		if err != nil || identity != controller.elevated {
 			return empty, errors.Join(err, errors.New("startup recovery changed its actual controller primary token"))
 		}
@@ -39,8 +39,8 @@ func desktopNodeRecoveryBootstrap(controller *windowsOwnedController) func(conte
 			return empty, err
 		}
 		return desktopNodeRecoveryBackend{controller: captured,
-			current: func() error {
-				if err := currentDesktopNodeController(controller); err != nil {
+			currentContext: func(caller context.Context) error {
+				if err := currentDesktopNodeControllerContext(caller, controller); err != nil {
 					return err
 				}
 				if len(controller.directories) != 1 || !windowsOwnedSamePath(controller.directories[0].Name(), controller.dataRoot) {
@@ -52,13 +52,13 @@ func desktopNodeRecoveryBootstrap(controller *windowsOwnedController) func(conte
 				return openDesktopNodeStartupJournal(ctx, controller)
 			},
 			create: func(ctx context.Context) (desktopNodeProtectionJournal, error) {
-				if err := currentDesktopNodeController(controller); err != nil {
+				if err := currentDesktopNodeControllerContext(ctx, controller); err != nil {
 					return nil, err
 				}
 				return windowsprotection.CreateProtectionJournal(ctx, controller.parent, controller.directories[0])
 			},
 			begin: func(ctx context.Context, journal desktopNodeProtectionJournal) (desktopNodeJournalRecovery, error) {
-				if err := currentDesktopNodeController(controller); err != nil {
+				if err := currentDesktopNodeControllerContext(ctx, controller); err != nil {
 					return nil, err
 				}
 				store, ok := journal.(*windowsprotection.ProtectionJournal)
@@ -71,7 +71,7 @@ func desktopNodeRecoveryBootstrap(controller *windowsOwnedController) func(conte
 }
 
 func openDesktopNodeStartupJournal(ctx context.Context, controller *windowsOwnedController) (*windowsprotection.ProtectionJournal, error) {
-	if err := currentDesktopNodeController(controller); err != nil {
+	if err := currentDesktopNodeControllerContext(ctx, controller); err != nil {
 		return nil, err
 	}
 	return windowsprotection.OpenProtectionJournalForStartup(ctx, controller.parent, controller.directories[0])

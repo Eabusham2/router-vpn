@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"router-vpn/internal/desktopnetwork"
 )
 
 type desktopRecoveryWaitingContext struct {
@@ -302,5 +304,80 @@ func TestDesktopProtectionOffContextKeepsSavedResultForCleanup(t *testing.T) {
 	currentInfo, statErr := os.Stat(f.a.cfg.ProfilesFile)
 	if err != nil || statErr != nil || !bytes.Equal(saved, after) || !os.SameFile(info, currentInfo) || f.calls != 1 || capture.owner != owner {
 		t.Fatal("cleanup resaved Off or replaced the accepted native removal", err, statErr)
+	}
+}
+
+func TestDesktopNodeRecoveryFreshNativeObserverContext(t *testing.T) {
+	f := newDesktopRecoveryFixture(t, false, false)
+	bootstrap := f.slot.backend.bootstrap
+	var nativeObserver sync.Mutex
+	var caller context.Context
+	bootstraps, observations, legacyCalls := 0, 0, 0
+	f.slot.backend.bootstrap = func(ctx context.Context, profiles string) (desktopNodeRecoveryBackend, error) {
+		bootstraps++
+		backend, err := bootstrap(ctx, profiles)
+		if err != nil {
+			return backend, err
+		}
+		backend.current = func() error {
+			legacyCalls++
+			return errors.New("retained native observer used its ambient fixture fallback")
+		}
+		backend.currentContext = func(actual context.Context) error {
+			observations++
+			if actual != caller {
+				return errors.New("retained native observer replaced the current retry caller")
+			}
+			if err := desktopnetwork.LockContext(actual, &nativeObserver); err != nil {
+				return err
+			}
+			nativeObserver.Unlock()
+			return nil
+		}
+		return backend, nil
+	}
+	desktopRecoveryCancelHeldAdmission(t, &nativeObserver, func(ctx context.Context) error {
+		caller = ctx
+		return f.a.ensureDesktopNodeRecovery(ctx, f.slot)
+	})
+	if bootstraps != 1 || observations != 1 || legacyCalls != 0 || f.opens != 0 || f.begins != 0 ||
+		f.slot.recovery == nil || f.slot.recovery.backend.currentContext == nil || f.slot.recovery.ready || f.slot.journal != nil {
+		t.Fatal("cancelled native observation discarded its captured backend or admitted recovery work")
+	}
+	first := caller
+	retry, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	caller = retry
+	if err := f.a.ensureDesktopNodeRecovery(retry, f.slot); err != nil {
+		t.Fatal("retained recovery backend reused the cancelled bootstrap caller", err)
+	}
+	if first.Err() == nil || retry.Err() != nil || bootstraps != 1 || observations < 2 || legacyCalls != 0 ||
+		f.opens != 1 || f.begins != 1 || f.recovery.runs != 1 || !f.slot.recovery.ready ||
+		f.slot.journal != f.store || !reflect.DeepEqual(f.kernel.target, &f.target) {
+		t.Fatal("fresh recovery retry replaced native ownership or its original contextual observer")
+	}
+}
+
+func TestDesktopNodeRecoveryNativeObserverRequiresCaller(t *testing.T) {
+	for _, kind := range []string{"missing", "cancelled", "missing-observer"} {
+		t.Run(kind, func(t *testing.T) {
+			calls := 0
+			backend := desktopNodeRecoveryBackend{currentContext: func(context.Context) error { calls++; return nil },
+				current: func() error { calls++; return nil }}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var caller context.Context = ctx
+			switch kind {
+			case "missing":
+				caller = nil
+			case "cancelled":
+				cancel()
+			case "missing-observer":
+				backend = desktopNodeRecoveryBackend{}
+			}
+			if err := backend.observeCurrent(caller); err == nil || calls != 0 {
+				t.Fatal("native recovery admitted an observation without its original caller and capability", err)
+			}
+		})
 	}
 }
