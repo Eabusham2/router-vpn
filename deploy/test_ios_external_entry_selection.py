@@ -196,7 +196,8 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    try check("REALITY unsupported entry remains refused "+kind,!IOSImportedEntryMultihop.supports(entry:kind,final:"reality-vision"))
   }
   for kind in ["shadowsocks","hysteria2","http-connect","https-connect","wireguard","amneziawg","openvpn"]{try check("REALITY supports captured original entry "+kind,IOSImportedEntryMultihop.supports(entry:kind,final:"reality-vision"))}
-  for mode in ["reality-pq-vision","reality-xhttp","split","max","max-tls-wg"] {
+  try check("PQ REALITY supports captured original entry",IOSImportedEntryMultihop.supports(entry:kind,final:"reality-pq-vision"))
+  for mode in ["reality-xhttp","split","max","max-tls-wg"] {
    try check("SOCKS unrelated final remains refused "+mode,!IOSImportedEntryMultihop.supports(entry:kind,final:mode))
   }
   var layerPairs=Set<String>()
@@ -266,6 +267,58 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   }
   try check("REALITY rejected alternatives do not replace saved owner",model.writes==writes && encoded(model.bundle!)==saved)
   print("PASS "+(kind=="socks5" ? "SOCKS":kind)+" REALITY host \(checks) checks")
+ }
+ static func pqReality(_ path:String)throws {
+  let mode="reality-pq-vision",source=try JSONDecoder().decode([String].self,from:Data(contentsOf:URL(fileURLWithPath:path)))
+  try check("PQ picker uses complete exact source capture",source.count==9 && source[2]==mode)
+  let capture=try JSONSerialization.jsonObject(with:Data(source[1].utf8)) as! [String:Any]
+  func capturedProfile(_ raw:[String:Any])throws->RouterProfile {
+   var value=raw
+   for (key,fallback) in ["name":"Captured PQ path","endpoint":"","router_api":"","api_token":"","adguard_ipv4":"","adguard_ipv6":"","socks_host":"","socks_port":0,"socks_username":"","socks_password":""] as [String:Any] where value[key]==nil {value[key]=fallback}
+   return try JSONDecoder().decode(RouterProfile.self,from:encoded(value))
+  }
+  let first=try capturedProfile(capture["profile"] as! [String:Any]),paired=try capturedProfile(JSONSerialization.jsonObject(with:Data(source[4].utf8)) as! [String:Any])
+  let assets=try JSONDecoder().decode([String:String].self,from:Data(source[3].utf8))
+  var original=ClientBundle.empty;original.selectedRouterID=first.id;original.routerProfiles=[first];original.profiles=[:]
+  var final=ClientBundle.empty;final.selectedRouterID=paired.id;final.routerProfiles=[paired];final.profiles=[mode:assets]
+  let model=RouterVPNModel();model.bundle=final
+  IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:try encoded(final)]
+  try check("PQ picker requires captured entry",model.iosImportedRouterFinalModes(entryMode:"socks5",exitID:paired.id,entryProfile:first).contains(mode))
+  try check("PQ picker refuses absent entry",!model.iosImportedRouterFinalModes(entryMode:"socks5",exitID:paired.id).contains(mode))
+  try model.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:"socks5")
+  let held=try model.iosMultihopEntryBundle(for:model.bundle!)
+  try check("PQ save retains both original roles",held.routerProfiles==original.routerProfiles && held.profiles==original.profiles && model.bundle!.profiles==final.profiles && model.bundle!.routerProfiles[0].multihopExitMode==mode)
+  func hash(_ data:Data)->String{CryptoKit.SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()}
+  let configuration:[String:Any]=["engine":"multihop-libbox","mode":mode,"bundle":try encoded(model.bundle!),"entryBundle":try encoded(original)]
+  let identity=try IOSMultihopExecution.Source(configuration:configuration,digest:hash),receipt=try IOSMultihopExecution.StartupChoice(source:identity,execution:"local").encoded()
+  try check("PQ startup binds exact final",identity.exitMode==mode && IOSMultihopExecution.StartupChoice.decode(receipt,source:identity).source==identity)
+  let args=["config":source[0],"capture":source[1],"mode":source[2],"files":source[3],"profile":source[4],"start":source[5],"dns":source[6]]
+  func compile(_ value:[String:String])throws->String{try RouterVPNTorTestCall(["Op":"imported-router","Config":String(decoding:encoded(value),as:UTF8.self)])}
+  let compiled=try compile(args)
+  try check("PQ actual compiler retains original graph",try encoded(JSONSerialization.jsonObject(with:Data(compiled.utf8)))==encoded(JSONSerialization.jsonObject(with:Data(source[8].utf8))))
+  for fault in ["missing-xray","missing-wrapper","malformed-xray","ordinary-encryption","ordinary-label"] {
+   var changed=assets,replaced=args
+   if fault=="missing-xray"{changed.removeValue(forKey:"xray.json")}
+   else if fault=="missing-wrapper"{changed.removeValue(forKey:"sing-box.json")}
+   else if fault=="malformed-xray"{changed["xray.json"]=Data("{".utf8).base64EncodedString()}
+   else if fault=="ordinary-label"{replaced["mode"]="reality-vision"}
+   else {
+    var raw=try JSONSerialization.jsonObject(with:Data(base64Encoded:assets["xray.json"]!)!) as! [String:Any],rows=raw["outbounds"] as! [[String:Any]],row=rows[0],settings=row["settings"] as! [String:Any],peers=settings["vnext"] as! [[String:Any]],peer=peers[0],users=peer["users"] as! [[String:Any]]
+    users[0]["encryption"]="none";peer["users"]=users;peers[0]=peer;settings["vnext"]=peers;row["settings"]=settings;rows[0]=row;raw["outbounds"]=rows;changed["xray.json"]=try encoded(raw).base64EncodedString()
+   }
+   replaced["files"]=String(decoding:try encoded(changed),as:UTF8.self)
+   try reject("PQ actual compiler refuses "+fault){_ = try compile(replaced)}
+   if fault != "ordinary-label" {
+    var replacement=model.bundle!;replacement.profiles[mode]=changed;var config=configuration;config["bundle"]=try encoded(replacement)
+    try reject("PQ receipt refuses changed source "+fault){let next=try IOSMultihopExecution.Source(configuration:config,digest:hash);_ = try IOSMultihopExecution.StartupChoice.decode(receipt,source:next)}
+   }
+  }
+  let saved=try encoded(model.bundle!),writes=model.writes
+  for execution in ["server","auto"] {
+   try reject("PQ picker refuses unowned "+execution){try model.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:execution,entryMode:"socks5")}
+   try check("PQ refusal preserves saved owner",model.writes==writes && encoded(model.bundle!)==saved)
+  }
+  print("PASS PQ REALITY picker \(checks) checks")
  }
  static func packetReality(_ directory:String,_ kind:String)throws {
   guard ["wireguard","amneziawg","openvpn-tcp","openvpn-udp"].contains(kind) else {throw IOSImportedEntryMultihop.issue()}
@@ -357,6 +410,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   var finalBundle=bundle(paired)
   finalBundle.profiles["shadowsocks"]=["sing-box.json":try encoded(["outbounds":[["type":"shadowsocks","tag":"proxy","server":"192.0.2.44","server_port":443,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:8,count:32).base64EncodedString()]]]).base64EncodedString()]
   if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "socks-reality" {try reality(finalBundle,paired);return}
+  if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "pq-reality" {try pqReality(CommandLine.arguments[3]);return}
   if CommandLine.arguments.count == 5 && CommandLine.arguments[2] == "selected-dns" { try selectedDNS(finalBundle,paired,CommandLine.arguments[3],CommandLine.arguments[4]);return }
   if CommandLine.arguments.count == 5 && CommandLine.arguments[2] == "packet-reality" {try packetReality(CommandLine.arguments[4],CommandLine.arguments[3]);return}
   if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "proxy-reality" {guard ["shadowsocks","hysteria2"].contains(CommandLine.arguments[3]) else {throw IOSImportedEntryMultihop.issue()};try reality(finalBundle,paired,CommandLine.arguments[3]);return}
@@ -935,6 +989,18 @@ def main():
         if reality.stdout != 'PASS SOCKS REALITY host 115 checks\n':
             raise ValueError('Missing or foreign SOCKS REALITY Swift verdict: '+repr(reality.stdout))
         print(reality.stdout, end='', flush=True)
+        pq_sources = work / 'pq-reality-sources'
+        pq_sources.mkdir()
+        subprocess.run(['go', 'test', './internal/mobilemultihop', '-run', '^TestImportedPQRealityIndependentLayers$',
+                        '-count=1', '-timeout=30s'], cwd=ROOT, check=True, timeout=45,
+                       env=dict(os.environ, ROUTERVPN_IMPORTED_PQ_XRAY_FIXTURES=str(pq_sources)))
+        pq_source = pq_sources / 'socks5--reality-pq-vision--off--off.json'
+        original_pq = pq_source.read_bytes()
+        pq = subprocess.run([str(work/'test'), str(compiler), 'pq-reality', str(pq_source)],
+                            env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
+        if pq.stdout != 'PASS PQ REALITY picker 19 checks\n' or pq_source.read_bytes() != original_pq:
+            raise ValueError('Missing, foreign, or source-mutating PQ picker verdict: '+repr(pq.stdout))
+        print(pq.stdout, end='', flush=True)
         for kind in ('shadowsocks', 'hysteria2'):
             proxy = subprocess.run([str(work / 'test'), str(compiler), 'proxy-reality', kind], env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
             if proxy.stdout != f'PASS {kind} REALITY host 115 checks\n':
