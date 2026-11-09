@@ -18,6 +18,42 @@ type sessionDNSStopReceipt struct {
 	work    *sessionDNSProofWork
 	epoch   uint64
 	token   string
+	// A public Stop may wait behind an existing transition. That transition
+	// may retire its runtime, but cannot reopen admission for the waiting
+	// caller. Only the exact public receipt/retry or terminal shutdown can.
+	publicReserved bool
+}
+
+// Caller holds tracker.mu. Registration, cancellation, join, and completion
+// are distinct so a public caller can fence/cancel before operationMu while
+// retaining the same receipt for the later serialized teardown.
+func (t *sessionTracker) captureDNSStopLocked(ctx context.Context, expected *sessionDNSStopReceipt) (*sessionDNSStopReceipt, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if owner, ok := sessionTrackers.Load(t.a); !ok || owner != t || t.a == nil {
+		return nil, errors.New("selected-DNS Stop lost its original registered tracker")
+	}
+	receipt := t.dnsProofStop
+	if expected != nil && receipt != expected {
+		return nil, errors.New("Stop retry belongs to a replaced retirement receipt")
+	}
+	if receipt == nil {
+		token, err := randomHex(16)
+		if err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		receipt = &sessionDNSStopReceipt{tracker: t, work: t.dnsProofWork, epoch: t.dnsProofEpoch.Add(1), token: token}
+		t.dnsProofStop = receipt
+		t.dnsProofBinding = nil
+		if t.session != nil {
+			t.session.DNSProof = dnsProofState{Status: "not-proven", Reason: "selected-DNS proof retired by Stop"}
+		}
+	}
+	return receipt, receipt.currentLocked()
 }
 
 // The caller owns operationMu, but no tracker/app/native/MTU lock. Registering
@@ -42,32 +78,14 @@ func (a *app) drainCapturedSessionDNSForStop(ctx context.Context, expected *sess
 	} else {
 		t = sessionTrackerFor(a)
 	}
+	if t == nil || t.a != a {
+		return nil, errors.New("selected-DNS Stop lost its original application tracker")
+	}
 	if err := desktopnetwork.LockContext(ctx, &t.mu); err != nil {
 		return nil, err
 	}
-	if owner, ok := sessionTrackers.Load(a); !ok || owner != t || t.a != a {
-		t.mu.Unlock()
-		return nil, errors.New("selected-DNS Stop lost its original registered tracker")
-	}
-	receipt := t.dnsProofStop
-	if expected != nil && receipt != expected {
-		t.mu.Unlock()
-		return nil, errors.New("Stop retry belongs to a replaced retirement receipt")
-	}
-	if receipt == nil {
-		token, err := randomHex(16)
-		if err != nil {
-			t.mu.Unlock()
-			return nil, err
-		}
-		receipt = &sessionDNSStopReceipt{tracker: t, work: t.dnsProofWork, epoch: t.dnsProofEpoch.Add(1), token: token}
-		t.dnsProofStop = receipt
-		t.dnsProofBinding = nil
-		if t.session != nil {
-			t.session.DNSProof = dnsProofState{Status: "not-proven", Reason: "selected-DNS proof retired by Stop"}
-		}
-	}
-	if err := receipt.currentLocked(); err != nil {
+	receipt, err := t.captureDNSStopLocked(ctx, expected)
+	if err != nil {
 		t.mu.Unlock()
 		return nil, err
 	}
@@ -109,6 +127,10 @@ func (r *sessionDNSStopReceipt) currentLocked() error {
 // Advance again so an observation captured while Stop was fenced cannot start
 // a worker after a fast reconnect restores identical presentation fields.
 func (r *sessionDNSStopReceipt) finish(ctx context.Context) error {
+	return r.finishCaptured(ctx, nil)
+}
+
+func (r *sessionDNSStopReceipt) finishCaptured(ctx context.Context, expected *sessionDNSStopReceipt) error {
 	if r == nil || r.tracker == nil || ctx == nil {
 		return errors.New("selected-DNS Stop completion lost its captured owner")
 	}
@@ -129,6 +151,12 @@ func (r *sessionDNSStopReceipt) finish(ctx context.Context) error {
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if expected != nil && expected != r {
+		return errors.New("Stop completion belongs to another captured receipt")
+	}
+	if r.publicReserved && expected == nil && !t.dnsProofClosed {
+		return nil
 	}
 	t.dnsProofEpoch.Add(1)
 	t.dnsProofStop = nil

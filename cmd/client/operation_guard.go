@@ -189,19 +189,20 @@ func (a *app) beginConnectionTransactionContext(caller context.Context) (context
 		return nil, nil, err
 	}
 
-	// Re-check under the app lock after filesystem validation before publishing
-	// connection context/state. operationMu keeps competing Router VPN operations
-	// out, while this second check protects against any independent state change.
+	// Public Stop may reserve its DNS fence without operationMu. Recheck that
+	// fence atomically with app state after preflight and before publishing the
+	// new connection context, under the established tracker -> app lock order.
 	if err := invalidateDesktopDNSResultsContext(caller, a); err != nil {
 		a.operationMu.Unlock()
 		return nil, nil, err
 	}
-	if err := desktopnetwork.LockContext(caller, &a.mu); err != nil {
+	releasePublication, err := a.lockConnectionPublicationContext(caller)
+	if err != nil {
 		a.operationMu.Unlock()
 		return nil, nil, err
 	}
 	if a.controllerClosingLocked() || profileSettingsBusy(a.state.Connected, a.state.Phase) {
-		a.mu.Unlock()
+		releasePublication()
 		a.operationMu.Unlock()
 		return nil, nil, errors.New("Router VPN state changed while validating private connection runtime")
 	}
@@ -210,7 +211,7 @@ func (a *app) beginConnectionTransactionContext(caller context.Context) (context
 	a.connectionCancel = cancel
 	a.connectionCancelIntent = nil
 	a.state.Phase = "requested"
-	a.mu.Unlock()
+	releasePublication()
 	finish := func() {
 		cancel()
 		a.mu.Lock()

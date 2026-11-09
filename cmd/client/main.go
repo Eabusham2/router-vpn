@@ -982,17 +982,27 @@ func (a *app) connect(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, `{"ok":true}`)
 }
 
-func (a *app) disconnect(w http.ResponseWriter, _ *http.Request) {
-	// Cancel any in-flight connection proof first, then serialize teardown behind
-	// that transaction so a stale connect cannot publish Connected afterward.
-	a.cancelConnectionOperation()
-	a.operationMu.Lock()
-	defer a.operationMu.Unlock()
-	if err := finishViaEntryCancellation(a); err != nil {
+func (a *app) disconnect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	receipt, err := a.capturePublicStopContext(r.Context(), "")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	release, err := a.beginCapturedPublicStopContext(r.Context(), receipt)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
+	if err := finishViaEntryCancellationContext(r.Context(), a); err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	if err := a.stopMode(); err != nil {
+	if err := a.stopModeWithDNSReceiptContext(r.Context(), false, receipt); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1286,7 +1296,14 @@ func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
 }
 
 func (a *app) stopModeWithDNSReceipt(holdKillSwitch bool, expected *sessionDNSStopReceipt) (failure error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	return a.stopModeWithDNSReceiptContext(context.Background(), holdKillSwitch, expected)
+}
+
+func (a *app) stopModeWithDNSReceiptContext(caller context.Context, holdKillSwitch bool, expected *sessionDNSStopReceipt) (failure error) {
+	if caller == nil {
+		return errors.New("Stop requires its original cleanup caller")
+	}
+	ctx, cancel := context.WithTimeout(caller, 15*time.Second)
 	defer cancel()
 	dnsStop, err := a.drainCapturedSessionDNSForStop(ctx, expected)
 	if err != nil {
@@ -1294,7 +1311,7 @@ func (a *app) stopModeWithDNSReceipt(holdKillSwitch bool, expected *sessionDNSSt
 	}
 	defer func() {
 		if failure == nil {
-			failure = dnsStop.finish(ctx)
+			failure = dnsStop.finishCaptured(ctx, expected)
 		}
 	}()
 	if err := retireLegacyStandardPreparations(a, ctx); err != nil {

@@ -32,6 +32,12 @@ excludes this request from both its queued post-cancel Disconnect and its
 completion fallback. An in-progress Stop disables duplicate primary actions.
 Existing 15-second Stop cleanup and platform request budgets are unchanged.
 
+The later [public Stop cancellation repair](public-stop-dns-cancellation.md)
+keeps the same token-first admission and carries the original Retry caller into
+captured cancellation, candidate cleanup and selected-DNS join. Its separate
+controls cover cancellation while candidate control is held and while original
+entered cleanup remains unjoined. It does not recapture a replacement receipt.
+
 ## Persistent mutations and protection recovery
 
 A pending receipt keeps ordinary settings and node mutation controls busy.

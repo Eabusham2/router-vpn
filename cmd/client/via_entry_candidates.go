@@ -378,26 +378,25 @@ func (a *app) viaEntryCandidatesWith(w http.ResponseWriter, r *http.Request, dep
 	}
 	defer a.operationMu.Unlock()
 	c := viaEntryControlFor(a)
-	if err := desktopnetwork.LockContext(ctx, &c.mu); err != nil {
+	releaseAdmission, err := a.lockCandidatePublicationContext(ctx, c)
+	if err != nil {
+		if errors.Is(err, errControllerClosing) {
+			http.Error(w, "candidate request lost its controller or caller", http.StatusServiceUnavailable)
+			return
+		}
 		http.Error(w, "candidate request was cancelled before ownership", http.StatusConflict)
-		return
-	}
-	closing, closingErr := viaEntryControllerClosing(ctx, a)
-	if closingErr != nil || closing {
-		c.mu.Unlock()
-		http.Error(w, "candidate request lost its controller or caller", http.StatusServiceUnavailable)
 		return
 	}
 	c.pruneNoncesLocked()
 	_, repeated := c.seen[q.RequestID]
 	if repeated || len(c.seen) >= 1024 || (c.owner != nil && (c.owner.running || !c.owner.drained)) {
-		c.mu.Unlock()
+		releaseAdmission()
 		http.Error(w, "candidate request was cancelled, reused, or still owns pending cleanup", http.StatusConflict)
 		return
 	}
 	owner := &viaEntryOwner{id: q.RequestID, entry: q.EntryID, cancel: cancel, done: make(chan struct{}), running: true, network: deps.network}
 	c.owner, c.seen[q.RequestID] = owner, time.Now()
-	c.mu.Unlock()
+	releaseAdmission()
 
 	receipt, runErr := a.runViaEntryCandidates(ctx, owner, q, deps)
 	cleanupErr := cleanupViaEntryOwner(c, owner)
@@ -589,7 +588,14 @@ func measureViaEntryCandidate(ctx context.Context, lane viaEntryLane, p common.R
 }
 
 func cleanupViaEntryOwner(c *viaEntryControl, owner *viaEntryOwner) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	return cleanupViaEntryOwnerContext(context.Background(), c, owner)
+}
+
+func cleanupViaEntryOwnerContext(caller context.Context, c *viaEntryControl, owner *viaEntryOwner) error {
+	if caller == nil {
+		return errors.New("candidate cleanup requires its original caller")
+	}
+	ctx, cancel := context.WithTimeout(caller, 10*time.Second)
 	defer cancel()
 	if err := desktopnetwork.LockContext(ctx, &owner.closeMu); err != nil {
 		return err
@@ -599,10 +605,12 @@ func cleanupViaEntryOwner(c *viaEntryControl, owner *viaEntryOwner) error {
 	if owner.lane != nil {
 		err = owner.lane.Close(ctx)
 	}
-	c.mu.Lock()
+	if lockErr := desktopnetwork.LockContext(ctx, &c.mu); lockErr != nil {
+		return errors.Join(err, lockErr)
+	}
 	owner.drained = err == nil
 	c.mu.Unlock()
-	return err
+	return errors.Join(err, ctx.Err())
 }
 
 func viaEntryControllerClosing(ctx context.Context, a *app) (bool, error) {
@@ -742,24 +750,37 @@ func guardViaEntryDecisionContext(ctx context.Context, a *app) error {
 }
 
 func cancelViaEntryOperation(a *app) {
+	_ = cancelViaEntryOperationContext(context.Background(), a)
+}
+
+func cancelViaEntryOperationContext(ctx context.Context, a *app) error {
 	c := viaEntryControlFor(a)
-	c.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &c.mu); err != nil {
+		return err
+	}
 	defer c.mu.Unlock()
 	if c.owner != nil {
 		c.owner.cancelled, c.owner.receipt = true, nil
 		c.owner.cancel()
 	}
+	return ctx.Err()
 }
 
 func finishViaEntryCancellation(a *app) error {
+	return finishViaEntryCancellationContext(context.Background(), a)
+}
+
+func finishViaEntryCancellationContext(ctx context.Context, a *app) error {
 	c := viaEntryControlFor(a)
-	c.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &c.mu); err != nil {
+		return err
+	}
 	owner := c.owner
 	c.mu.Unlock()
 	if owner == nil {
-		return nil
+		return ctx.Err()
 	}
 	// Disconnect owns operationMu here; the measurement handler has joined all
 	// workers and closed done before releasing that same transaction lock.
-	return cleanupViaEntryOwner(c, owner)
+	return cleanupViaEntryOwnerContext(ctx, c, owner)
 }

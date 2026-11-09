@@ -693,14 +693,22 @@ func (a *app) emergencyStop(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	a.cancelConnectionOperation()
-	a.operationMu.Lock()
-	defer a.operationMu.Unlock()
-	if err := finishViaEntryCancellation(a); err != nil {
+	receipt, err := a.capturePublicStopContext(r.Context(), "emergency-stop")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	release, err := a.beginCapturedPublicStopContext(r.Context(), receipt)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
+	if err := finishViaEntryCancellationContext(r.Context(), a); err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	if err := a.stopMode(); err != nil {
+	if err := a.stopModeWithDNSReceiptContext(r.Context(), false, receipt); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

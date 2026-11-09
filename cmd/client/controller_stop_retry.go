@@ -140,12 +140,15 @@ func (a *app) retryDisconnect(w http.ResponseWriter, r *http.Request) {
 	}
 	// Token admission precedes even cancellation. An expired displayed retry
 	// must not cancel or tear down a replacement connection transaction.
-	a.cancelConnectionOperation()
-	if err := finishViaEntryCancellation(a); err != nil {
+	if err := a.cancelCapturedStopContext(r.Context(), receipt); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if err := finishViaEntryCancellationContext(r.Context(), a); err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	if err := a.stopModeWithDNSReceipt(false, receipt); err != nil {
+	if err := a.stopModeWithDNSReceiptContext(r.Context(), false, receipt); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

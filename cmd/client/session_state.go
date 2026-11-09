@@ -504,8 +504,7 @@ func (a *app) connectLogicalTracked(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) emergencyStopTracked(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
-		sessionTrackerFor(a).markStopReason("emergency-stop")
-	}
+	// The handler records its reason only after capturing the exact live Stop
+	// owner; a rejected or cancelled request must not change session history.
 	a.emergencyStop(w, r)
 }

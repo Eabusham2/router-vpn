@@ -57,7 +57,7 @@ attempt_body = main.split("func (a *app) startModeAttempt(", 1)[1].split("\nfunc
 assert attempt_body.index("a.guardDesktopOwnedNodeTransition(native)") < attempt_body.index("transition[0].StopBegun = true") < attempt_body.index("a.stopModeWithIntent(true)"), "SMART transition receipt does not distinguish preflight from the actual Stop boundary"
 
 try:
-    stop_body = main.split("func (a *app) stopModeWithDNSReceipt(holdKillSwitch bool, expected *sessionDNSStopReceipt) (failure error) {", 1)[1].split("func (a *app) auto", 1)[0]
+    stop_body = main.split("func (a *app) stopModeWithDNSReceiptContext(caller context.Context, holdKillSwitch bool, expected *sessionDNSStopReceipt) (failure error) {", 1)[1].split("func (a *app) auto", 1)[0]
 except IndexError as exc:
     raise AssertionError("controller stop intent body could not be located") from exc
 assert "if !holdKillSwitch" in stop_body, "final/manual stop does not distinguish held transitions"
@@ -68,7 +68,9 @@ assert release_at > mode_guard_at, "persisted kill-switch release is incorrectly
 assert stop_body.index("stopDesktopNodeRuntime(a, cmd)") < mode_guard_at, "captured native runtime does not retire before raw-mode fallback"
 assert stop_body.index("finishDesktopNodeRuntime(a)") > release_at, "native retry identity is discarded before firewall release commits"
 assert stop_body.index("a.drainCapturedSessionDNSForStop(ctx, expected)") < stop_body.index("retireLegacyStandardPreparations(a, ctx)") < stop_body.index("a.holdMTUForStop()") < stop_body.index("nativeStop.Retire(ctx, relayOwner, !holdKillSwitch)"), "selected-DNS cleanup must join before every native teardown, including the MTU fallback"
-assert "defer func() {\n\t\tif failure == nil {\n\t\t\tfailure = dnsStop.finish(ctx)" in stop_body, "failed runtime retirement must retain its exact reusable DNS fence"
+assert "defer func() {\n\t\tif failure == nil {\n\t\t\tfailure = dnsStop.finishCaptured(ctx, expected)" in stop_body, "failed runtime retirement must retain its exact reusable DNS fence"
+assert "return a.stopModeWithDNSReceiptContext(context.Background(), holdKillSwitch, expected)" in main, "internal Stop lost its existing cleanup caller wrapper"
+assert "context.WithTimeout(caller, 15*time.Second)" in stop_body, "public Stop cleanup replaced or extended its original caller"
 
 assert "a.startModeAttempt(candidate.RuntimeID, true)" in logical
 assert "a.releaseFallbackKillSwitch(a.connectionOperationContextOrBackground())" in logical

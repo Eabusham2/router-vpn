@@ -178,13 +178,28 @@ require(
 )
 main = require(
     "cmd/client/main.go",
-    "beginMutationOperation(r)", "beginConnectionOperation()", "cancelConnectionOperation()",
-    "a.operationMu.Lock()", "checkCapturedConnectionOperation(startupCtx)", "a.ownsConnectionRuntime(cmd)",
+    "beginMutationOperation(r)", "beginConnectionOperation()", "a.capturePublicStopContext(r.Context(), \"\")",
+    "a.beginCapturedPublicStopContext(r.Context(), receipt)", "checkCapturedConnectionOperation(startupCtx)", "a.ownsConnectionRuntime(cmd)",
     "publishStartedDesktopNode(startupCtx, native, cmd", "checkDesktopNodeStartupOwnerLocked(startupCtx, native, cmd)",
     "errConnectionOperationCancelled", "connectionOperationContextOrBackground()",
     "oldStore := a.profiles", "a.profiles = oldStore",
     "func (a *app) stopModeWithDNSReceipt(holdKillSwitch bool, expected *sessionDNSStopReceipt) (failure error)", "clearActiveMultihopGraph(a)",
-    "return a.stopModeWithDNSReceipt(holdKillSwitch, nil)", "a.drainCapturedSessionDNSForStop(ctx, expected)", "failure = dnsStop.finish(ctx)",
+    "return a.stopModeWithDNSReceipt(holdKillSwitch, nil)", "a.drainCapturedSessionDNSForStop(ctx, expected)", "failure = dnsStop.finishCaptured(ctx, expected)",
+    "return a.stopModeWithDNSReceiptContext(context.Background(), holdKillSwitch, expected)",
+    "context.WithTimeout(caller, 15*time.Second)",
+)
+require(
+    "cmd/client/public_stop_operation.go",
+    "t.captureDNSStopLocked(ctx, expected)", "receipt.publicReserved = true", "receipt.work.cancel()",
+    "a.connectionCancelIntent = a.connectionContext", "cancelViaEntryOperationContext(ctx, a)",
+    "desktopnetwork.LockContext(ctx, &a.operationMu)", "a.captureStopRetryContext(ctx, receipt.token)",
+    "current != receipt", "func (a *app) lockConnectionPublicationContext", "t.dnsProofStop != nil",
+)
+require(
+    "cmd/client/public_stop_operation_test.go",
+    "TestPublicStopCancelsSelectedDNSBeforeOperationWait", "TestPublicStopCancelledBeforeCaptureIsReadOnly",
+    "TestPublicStopExpiryRetainsExactRetryableFence", "TestDelayedPublicStopCannotCancelAfterOwnedRetryAndReconnect",
+    "TestPublicStopFencesActualConnectionContextPublication", "TestPublicStopReservationKeepsTerminalShutdownClosed",
 )
 require(
     "cmd/client/desktop_node_connection_host.go",

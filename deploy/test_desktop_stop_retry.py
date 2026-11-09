@@ -302,9 +302,35 @@ def contracts():
             else:raise AssertionError('removed native retry gate was accepted: '+path)
     main=read('cmd/client/main.go');retry=read('cmd/client/controller_stop_retry.go')
     assert 'h.HandleFunc("/api/disconnect/retry", a.retryDisconnect)' in main
-    assert retry.index('a.captureStopRetryContext(r.Context(), request.StopToken)')<retry.index('a.cancelConnectionOperation()')<retry.index('a.stopModeWithDNSReceipt(false, receipt)')
+    assert retry.index('a.captureStopRetryContext(r.Context(), request.StopToken)')<retry.index('a.cancelCapturedStopContext(r.Context(), receipt)')<retry.index('a.stopModeWithDNSReceiptContext(r.Context(), false, receipt)')
+    assert 'a.cancelConnectionOperation()' not in retry
     assert 'receipt != expected' in read('cmd/client/session_dns_stop.go')
     assert 'return a.stopModeWithDNSReceipt(holdKillSwitch, nil)' in main
+    # Both public entry points must keep the same caller/receipt through
+    # cancellation, operation admission and cleanup. Runtime Go controls also
+    # execute these handlers with held original workers and stale receipts.
+    def public_stop_chain(source, name, reason):
+        signature='func (a *app) '+name+'(w http.ResponseWriter, r *http.Request)'
+        if signature not in source:return False
+        body=source.split(signature,1)[1].split('\nfunc ',1)[0]
+        calls=[f'a.capturePublicStopContext(r.Context(), "{reason}")',
+               'a.beginCapturedPublicStopContext(r.Context(), receipt)',
+               'finishViaEntryCancellationContext(r.Context(), a)',
+               'a.stopModeWithDNSReceiptContext(r.Context(), false, receipt)']
+        if any(body.count(call)!=1 for call in calls):return False
+        return [body.index(call) for call in calls]==sorted(body.index(call) for call in calls) and 'a.cancelConnectionOperation()' not in body and 'a.operationMu.Lock()' not in body
+    for source,name,reason in [(main,'disconnect',''),(read('cmd/client/extras.go'),'emergencyStop','emergency-stop')]:
+        assert public_stop_chain(source,name,reason)
+        for original,replacement in [
+            (f'a.capturePublicStopContext(r.Context(), "{reason}")',f'a.capturePublicStopContext(context.Background(), "{reason}")'),
+            ('a.beginCapturedPublicStopContext(r.Context(), receipt)','a.beginCapturedPublicStopContext(r.Context(), nil)'),
+            ('finishViaEntryCancellationContext(r.Context(), a)','finishViaEntryCancellation(a)'),
+            ('a.stopModeWithDNSReceiptContext(r.Context(), false, receipt)','a.stopMode()'),
+        ]:
+            assert not public_stop_chain(source.replace(original,replacement,1),name,reason)
+    assert 'context.WithTimeout(caller, 15*time.Second)' in main
+    assert 'failure = dnsStop.finishCaptured(ctx, expected)' in main
+    assert 'r.publicReserved && expected == nil && !t.dnsProofClosed' in read('cmd/client/session_dns_stop.go')
     print('Owned Stop retry: mandatory three-platform shipping gates and removal controls passed')
 
 if __name__=='__main__':

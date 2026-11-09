@@ -77,9 +77,10 @@ A temporary source overlay restoring only that old reservation call failed the
 updated admission control at its intended assertion in 0.01 seconds, with the
 new Stop implementation still present.
 
-Public Disconnect and Emergency Stop currently acquire `operationMu` before
-entering this drain. If a DNS result already owns that lock inside an entered
-recovery guard, the caller still waits for that original operation. Prompt
-cancellation before that wait requires a separate captured-owner caller hook;
-this repair guarantees joining before teardown and does not claim to close that
-earlier admission boundary.
+The later [public Stop cancellation repair](public-stop-dns-cancellation.md)
+adds a captured reservation before public Disconnect and Emergency Stop wait
+for `operationMu`. It cancels the original selected-DNS caller at that earlier
+boundary, retains the same receipt through admission and join, and refuses a
+delayed caller after another owned retry completes. The evidence above remains
+the original ordinary-drain component's execution; the later guide records its
+separate public-handler, connection-publication and candidate-admission controls.
