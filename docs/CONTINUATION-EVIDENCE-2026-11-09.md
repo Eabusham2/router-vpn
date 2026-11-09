@@ -2,7 +2,37 @@
 
 This checkpoint continues the [November 7 reconciled ledger](CONTINUATION-EVIDENCE-2026-11-07-RESUMED.md). That ledger retains the original user sources, original 356-item index, C1–C7, later product/breakage request, map-first changes and external-node additions. No shortened checkpoint removes that scope. Original identifiers below are references into the recovered authority, not a new completion denominator.
 
-The latest branch read for this checkpoint was `e0c815c107ebac1775c49295ccef1b1a5c896b84`. Its ancestry contains the changes below. The source is still advancing. No private server, ASUS configuration, household forwarding, signing account or physical user device was changed by this continuation.
+The initial branch read for this checkpoint was `e0c815c107ebac1775c49295ccef1b1a5c896b84`. A later November 9 read verified `e5875af0520c992b2fa58dd75a1422d246fa12eb` on `main`; its exact tree is `f203249bb62e110a6a6bd8cbad848ed10aa4a846`. The source is still advancing. No private server, ASUS configuration, household forwarding, signing account or physical user device was changed by this continuation.
+
+## Later published checkpoint through e5875af0
+
+| Published commit | Concrete change and bounded evidence | Remaining boundary |
+|---|---|---|
+| [`40267fce`](https://github.com/Eabusham2/router-vpn/commit/40267fce50c70d800d4183af8857e2882940c772) | Imported temporary Speed Lab preserves the paired final's saved base; twelve race verdicts retain all eight entry labels, final policy and unchanged source. | Full protected temporary handoff, packaged/native execution and devices remain separate. |
+| [`a0138fc1`](https://github.com/Eabusham2/router-vpn/commit/a0138fc1ad776e46b8da63d09dcabfed3b4071ce) | The authoritative Windows release gate includes both imported MTU socket-owner roots. Nineteen gate contracts pass; both actual Windows ALL/controller jobs subsequently passed at `13fb0b75`. | Controller/source gate evidence does not establish WFP dataplane or full release success. |
+| [`3c903d2a`](https://github.com/Eabusham2/router-vpn/commit/3c903d2af37b36a676dcd74f4a198abb15c431e0) | Composite Xray's live-UDP/foreign-TCP control retains a paired reservation before child handoff. The original collision was reproduced with actual pinned Xray; three roots/six leaves passed under race instrumentation, and four broken variants were rejected. | The focused image extracts exact fixture functions with a real child; complete composite/APK packaging remains a hosted gate. Five-second readiness and three launcher attempts remain unchanged. |
+| [`fe3e62d8`](https://github.com/Eabusham2/router-vpn/commit/fe3e62d817b3190cffbcf2a2b1066c553bc5f80e) | Retained Windows MAX reset emits fixed stderr stage names and distinguishes read failure from source/counter regression. Eight focused checks passed; the exact rejection predicate and ten-second read budget are unchanged. | This is diagnostic instrumentation, not a demonstrated repair for the AMD64 `max-tls-awg/off` succession timeout. |
+| [`81626bce`](https://github.com/Eabusham2/router-vpn/commit/81626bceae3ef9dce0ae6a6dfb9567459700e096) | Published imported native Auto/Retest/Cancel measurement, exact socket binding, captured probe/transfer ownership, cache remeasurement and rollback. The [guide](testing/imported-native-mtu.md) records the bounded 90 passing base-feature verdicts and the separately failing protected integration subset. | Do not turn the combined 90-pass/3-fail snapshot into an all-pass result. Protected Windows integration, actual TUN/private server behavior and packaged release remain separate. |
+| [`4bd0bb7c`](https://github.com/Eabusham2/router-vpn/commit/4bd0bb7c02b8a95107ff2d40c42b09750011f91b) | Tor durable choice and adoption retain the request and connection callers through proof, locks and atomic persistence. The [caller guide](testing/routechoice-identity-caller.md) records 23 runtime verdicts across five new roots. | These fixture/process results do not prove a real Tor circuit; public connection capture/preflight/prelaunch propagation remains separately tracked. |
+| [`e5875af0`](https://github.com/Eabusham2/router-vpn/commit/e5875af0520c992b2fa58dd75a1422d246fa12eb) | Existing PQ REALITY is admitted for imported-entry to paired-final Local graphs across host producers. The [guide](testing/imported-pq-reality.md) records 81 graphs per producer, 324 native parser cases, five renamed-source refusals, real matching/wrong/restored-key loopback, and mandatory completed/reused bundle checks. Final integration contracts passed: seven package, nine workflow, seven runner and nineteen Windows release checks. | Local native execution receipts retain their recorded pre-integration hashes; they were not relabeled as new execution on the final merged tree. Full exact-SHA native packages and hosted physical peers remain required. Protected desktop public-child integration, XHTTP/composite finals, Server/Compare, arbitrary graphs and devices are not completed by this unit. |
+
+The local physical imported PQ witness failed at the original native interface
+lookup with `route ip+net: netlinkrib: operation not permitted`. The image compiled,
+but no physical-path success or synthetic replacement was accepted. The separate
+encrypted loopback and parser results remain valid only for their stated scope.
+
+The earlier Darwin PF repair
+[`0cdc9c92`](https://github.com/Eabusham2/router-vpn/commit/0cdc9c92f699f11e22373649bc5e8c41cd5c3873)
+completed all four jobs in [run 42539984511](https://github.com/Eabusham2/router-vpn/actions/runs/42539984511).
+Intel and ARM64 full-owner jobs retained all 47 negative controls and the original
+two-second command budget/four-permit limit. This closes that old native-gate
+blocker at its own SHA, not the full release at a later head.
+
+At the later checkpoint, [authoritative build 42546960381](https://github.com/Eabusham2/router-vpn/actions/runs/42546960381)
+had registered the new required PQ Apple producer, source-security checks and
+diagnostic-bearing MAX succession job. Their registration/queued state is not
+completed execution or release publication. The historical `745b3e41` release
+remains distinct from this newer source.
 
 ## Original-source recovery and limits
 
@@ -59,13 +89,13 @@ Concurrent [`cb24240f`](https://github.com/Eabusham2/router-vpn/commit/cb24240f1
 | [`506336e8`](https://github.com/Eabusham2/router-vpn/commit/506336e826246c3c016e0b7509591f68b5a1348b) — desktop imported Current path | Current-path Speed Lab retains the exact imported native runtime, original caller, physical/profile observations and fresh selected-DNS verification between measurement phases. Cancellation joins the native operation before returning the caller error. All 27 race-instrumented verdicts across ten roots and 23 shipping-audit tests pass. Physical-network observation and the native child are controlled test boundaries. This unit does not publish the separate desktop temporary-path preparation, picker or per-hop work. |
 | [`e0c815c1`](https://github.com/Eabusham2/router-vpn/commit/e0c815c107ebac1775c49295ccef1b1a5c896b84) — session observer retirement | The periodic observer has an owned context and join. Shutdown atomically retains a stopped tracker even before the first status request. DNS contexts derive from that lifetime while preserving the existing per-proof budget, stale cancellation and completion receipt. Terminal state updates only the joined original snapshot. Merged verification passes 69 race-instrumented verdicts across 23 roots, seven recovered-DNS audit tests, 32 native shipping audit tests and 23 Speed Lab audit tests. The public native Speed Lab fixtures remain mandatory in hosted CI because local Netlink capture cannot reach their assertions. |
 
-## Remaining implementation and acceptance ledger
+## Remaining implementation and acceptance ledger through e5875af0
 
 | Recovered requirement area | Current implementation boundary | Next evidence that can close it |
 |---|---|---|
-| #2–3, #5, #15, #200–224: owned connection and measurement lifecycle | Contextual proof, native selection, DNS workers and the observer lifetime have published fixes. Some Tor admission/adoption paths and imported temporary-session restoration still require implementation review. | Shipping call paths and cancellation/replace/restore controls on the merged source, followed by native packaged execution. |
-| #229–240: MTU Auto / Fixed / Retest / Cancel | The original native command owner is published. Imported desktop socket binding, finalization rollback and the paired-final authenticated probe/throughput adapter are in active implementation. They are not delivered merely because unsupported retests currently fail safely. | Exact lease/reader and path proof, real socket binding, measured candidates, original-budget cancellation, rollback, a second retest and native CI for each target. |
-| #214–224: external nodes and graph roles | Bounded proxy, packet and OpenVPN entry-to-paired-final Local paths exist. Imported temporary Speed Lab, protected-owner transfer and broader requested graph/Server/Compare combinations remain distinct gaps. | Protocol-specific production/native integration with original credentials, policy, selected DNS, entry/final proof and exact restoration. |
+| #2–3, #5, #15, #200–224: owned connection and measurement lifecycle | Contextual proof, native selection, DNS workers, observer lifetime and Tor durable adoption have published fixes. Public connection/preflight caller propagation and protected imported temporary handoff remain separate work. | Shipping call paths and cancellation/replace/restore controls on the merged source, followed by native packaged execution. |
+| #229–240: MTU Auto / Fixed / Retest / Cancel | Imported desktop socket binding, finalization rollback and the paired-final authenticated probe/throughput adapter are published in `81626bce`. Its protected Windows integration and actual native TUN/private path acceptance are not established by the bounded base-feature result. | Complete protected integration, exact lease/reader and path proof, measured candidates, original-budget cancellation, rollback, a second retest and native CI for each target. |
+| #214–224: external nodes and graph roles | Bounded proxy, packet and OpenVPN entry-to-paired-final Local paths now include PQ REALITY producers/registry/protocol support. Temporary Speed Lab source and UI work has advanced; protected public-child integration, broader graph families and Server/Compare remain separate. | Actual native startup/protection/proof/restore integration and exact-SHA packages; then protocol-specific physical evidence with original credentials, policy, selected DNS and separate entry/final identity. |
 | #160–168 and later corrections: DNS policy | Default and selected final-owned DNS remain authoritative. Worker lifecycle and uncached-proof fixtures are repaired. | Current hosted encrypted/native DNS checks, followed by real selected-path and leak acceptance. |
 | Map-first native product, complete profiles and temporary-path choices | Profile callbacks preserve canonical imported modes. Temporary choices must match their actual node and execution capability without dropping existing paired modes. | Actual native callback-to-controller execution and rendered/touch/device checks; a source label alone is insufficient. |
 | All native platforms and exact release identity | The older `745b3e41` release is retained as historical evidence only. Current main has newer source and pending CI. | Exact same-SHA native packages, ARM64 images, production compose, manifests/checksums and publication. |
@@ -73,11 +103,14 @@ Concurrent [`cb24240f`](https://github.com/Eabusham2/router-vpn/commit/cb24240f1
 
 The protocol/mode inventory remains twenty raw profiles grouped into sixteen logical choices; the separate native chooser counts do not replace that contract. Local/Server/Compare keeps the same random endpoint and the mean of the two required response times; failed candidates receive no score. Start Layers, READY-plus-thirty-minute download retention, blank AdGuard Allowed Clients, reusable installers and separate private linking remain unchanged requirements.
 
-## Exact-source CI observation
+## Earlier exact-source CI observation at e0c815c1
 
 At the `e0c815c1` query, GitHub returned 31 workflow runs: Repository state audit and Weighted release audit succeeded; several other workflows were running and the rest were queued or pending. The authoritative [Build all run 42539296355](https://github.com/Eabusham2/router-vpn/actions/runs/42539296355) was pending. This is a dated observation, not a current all-green assertion. The earlier selected-DNS audit failures share one stale predicate corrected by `0c46cb64` and refined in `e0c815c1`.
 
-The remaining Darwin native timeout is being repaired without lengthening its two-second parent budget, five-second proof freshness or global command-permit cap. A diagnostic log identified serial child-rule reads despite available existing command slots. Its prepared concurrent-read change still requires focused execution and exact-SHA native verification; diagnosis is not a passing release.
+At that earlier cutoff the Darwin native timeout was still being repaired. The
+later four-job native result at `0cdc9c92` is recorded above and supersedes this
+older pending status. Its two-second parent budget, five-second proof freshness
+and global command-permit cap were not lengthened.
 
 ## Retained local evidence
 

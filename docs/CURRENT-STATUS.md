@@ -6,7 +6,49 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 9 continuation: imported paths and owned session work
+## November 9 later checkpoint: PQ graphs, imported MTU and current release gates
+
+The published source checkpoint is `e5875af0520c992b2fa58dd75a1422d246fa12eb`.
+The [updated November 9 ledger](CONTINUATION-EVIDENCE-2026-11-09.md) preserves
+the original requirements and the distinct evidence for the changes below.
+
+The existing PQ REALITY runtime is now a Local paired final for the eight
+imported entry labels, with nine concrete wire variants and all nine independent
+entry/final Start Layer combinations. Android service admission, Apple capture
+and selection, and desktop graph/catalog producers retain that exact PQ mode.
+The [PQ evidence guide](testing/imported-pq-reality.md) records 81 graphs per
+producer, all 324 native parser cases, wrong-key refusal and restored-key
+encrypted loopback, source/ownership controls and the original execution
+snapshots. Completed and reused desktop bundles must additionally check all 81
+PQ graphs with their own executable on each matching host. These actual package
+checks and the new mandatory hosted peer workflow still require release results.
+Protected desktop public-child/source-replay integration and physical-device
+acceptance are separate from this graph/registry/protocol extension.
+
+Imported desktop Auto/Retest/Cancel now has a published measured native adapter
+and owned rollback (`81626bce`), documented in the
+[imported MTU guide](testing/imported-native-mtu.md). That bounded host result
+does not close its protected Windows integration follow-up or real TUN/private
+router acceptance. The saved paired-final base is retained during imported
+temporary preparation (`40267fce`). Tor durable choice and final adoption keep
+their original callers (`4bd0bb7c`); broader public connection admission remains
+separately tracked.
+
+The authoritative Windows gate now includes the imported MTU socket owners
+(`a0138fc1`). The composite Xray live-child negative control reserves both TCP
+and UDP before its captured handoff (`3c903d2a`). A retained MAX reference read
+failure now identifies its reset stage (`fe3e62d8`); that diagnostic change does
+not establish a fix for the observed AMD64 succession timeout. The earlier
+Darwin PF repair has actual Intel and ARM64 native passes at `0cdc9c92`, with
+the original deadline/permit limits and all 47 controls retained.
+
+Current source is newer than the historical `745b3e41` published release.
+Exact-current native packages, images, compose and publication have not yet
+converged. XHTTP and other remaining imported graph families, protected desktop
+handoff, physical/off-LAN acceptance, signing and authorized private deployment
+remain open. No source/parser count substitutes for those requirements.
+
+## Earlier November 9 checkpoint through e0c815c1
 
 The [November 9 evidence ledger](CONTINUATION-EVIDENCE-2026-11-09.md)
 records published work through `e0c815c1`, including newer concurrent commits.

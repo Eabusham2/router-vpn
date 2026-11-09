@@ -392,15 +392,20 @@ native observation and DNS inventories remain mandatory in release builds.
 
 The wider shared OpenVPN compiler supports additional remote arrangements.
 Desktop multiple-remote/failover and hostname-remote admission remain outside
-this bounded single-remote unit. Live imported-path automatic MTU discovery,
-Retest and cancellation of that MTU transaction remain unfinished. The public
-Retest route rejects this imported multihop owner before native mailbox work;
-initial automatic MTU transition also rejects an external entry. A validated
-fixed/captured TUN value, native packet-capacity observation, observation
-cancellation and fresh-child restoration do not implement that missing MTU
-workflow. Ordinary paired-node MTU reader replacement remains unaffected.
-Dynamic SOCKS UDP physical ownership remains unfinished. Additional paired final
-families, Server/Compare for this direction, and complete graph parity remain
-open requirements. Selected-path live proof, retained native lifecycle, package
-verification and real installed-device acceptance are required independently
-of source or configuration-parser success.
+this bounded single-remote unit. The later `81626bce` change implements the
+captured imported native Auto/Retest/Cancel adapter, authenticated measurements
+and rollback; the earlier blanket statement that these public dispatch paths
+always reject imported owners is superseded. The
+[MTU evidence guide](testing/imported-native-mtu.md) records its bounded host
+result and the separate protected Windows integration still requiring repair
+and verification. A fixed/captured TUN value, parser pass or that host result
+does not prove a live private path measurement.
+
+The `e5875af0` [PQ REALITY extension](testing/imported-pq-reality.md) adds the
+seventh paired final to the imported host producers and actual native registry/
+protocol gates. Protected public-child startup, source replay and negotiated
+SOCKS UDP ownership still need their own complete integration evidence. Other
+paired final families, Server/Compare for this direction, and complete graph
+parity remain open. Selected-path live proof, retained native lifecycle,
+completed-package verification and real installed-device acceptance are required
+independently of source or configuration-parser success.
