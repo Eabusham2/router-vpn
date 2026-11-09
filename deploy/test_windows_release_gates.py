@@ -22,6 +22,12 @@ import unittest
 from unittest.mock import patch
 
 REPOSITORY = Path(__file__).resolve().parents[1]
+FULL_SOURCE_COMMAND = "go test ./... -timeout=15m"
+FULL_SOURCE_GATES = (
+    ("requirements-closure.yml", "source-contract", "Compile and test Go source"),
+    ("release-candidate.yml", "source-audit", "Go source contracts"),
+    ("client-apps-ci.yml", "desktop-unix", "Test Go controller and shared API"),
+)
 HARNESSES = (
     ("test_windows_device_settings", ()),
     ("test_windows_home_dns", ()),
@@ -118,6 +124,23 @@ def workflow_job(source: str, name: str) -> str:
     if match is None:
         raise AssertionError("missing authoritative job " + name)
     return match.group(1)
+
+
+def check_full_source_gate(source: str, job_name: str, step_name: str) -> None:
+    job = workflow_job(source, job_name)
+    header = job.split("    steps:\n", 1)[0]
+    if re.search(r"(?m)^    (?:if|continue-on-error):", header):
+        raise AssertionError("full Go source job became conditional or nonblocking")
+    marker = "      - name: " + step_name + "\n"
+    if job.count(marker) != 1:
+        raise AssertionError("full Go source gate is missing or duplicated")
+    gate = job.split(marker, 1)[1].split("      - ", 1)[0]
+    # Require the entire one-command step, not a matching substring followed
+    # by a selector, ignored exit status, or a folded YAML continuation. This
+    # keeps every package, test, example and ordinary fuzz seed in the suite.
+    execution = "\n".join(line for line in gate.splitlines() if line.strip() and not line.lstrip().startswith("#"))
+    if execution != "        run: " + FULL_SOURCE_COMMAND:
+        raise AssertionError("full Go source gate must run the bounded unfiltered suite: " + FULL_SOURCE_COMMAND)
 
 
 def check_workspace_gate(job: str) -> None:
@@ -324,8 +347,9 @@ def check_workflow(candidate: str, build_all: str) -> None:
     check_owned_process_gate(windows, True)
     check_owned_process_gate(windows, True, True)
     check_wfp_gate(windows, True)
+    check_full_source_gate(candidate, "source-audit", "Go source contracts")
     source = workflow_job(candidate, "source-audit")
-    for command in ("run: go test ./...", "python3 deploy/test_desktop_tor_unix_wrapper.py", "python3 modes/test_cleanup_private_runtime.py",
+    for command in ("python3 deploy/test_desktop_tor_unix_wrapper.py", "python3 modes/test_cleanup_private_runtime.py",
                     "python3 deploy/test_windows_release_gates.py"):
         if command not in source:
             raise AssertionError("authoritative source gate omitted controller or Unix ownership coverage: " + command)
@@ -489,6 +513,56 @@ class WindowsReleaseGateTests(unittest.TestCase):
 
     def test_current_workflow_requires_both_architectures_shells_and_publication_edge(self):
         check_workflow((REPOSITORY / ".github/workflows/release-candidate.yml").read_text(encoding="utf-8"), (REPOSITORY / ".github/workflows/build-all.yml").read_text(encoding="utf-8"))
+
+    def test_full_source_workflows_keep_bounded_unfiltered_package_execution(self):
+        for filename, job_name, step_name in FULL_SOURCE_GATES:
+            with self.subTest(workflow=filename):
+                source = (REPOSITORY / ".github/workflows" / filename).read_text(encoding="utf-8")
+                check_full_source_gate(source, job_name, step_name)
+                if filename == "requirements-closure.yml":
+                    header = workflow_job(source, job_name).split("    steps:\n", 1)[0]
+                    self.assertEqual(re.findall(r"(?m)^    timeout-minutes: (\d+)$", header), ["45"])
+
+    def test_full_source_gates_reject_omission_filters_and_weakened_budgets(self):
+        mutations = (
+            ("omitted", "true"),
+            ("implicit-timeout", "go test ./..."),
+            ("unbounded", "go test ./... -timeout=0"),
+            ("former-aggregate-budget", "go test ./... -timeout=10m"),
+            ("excessive-budget", "go test ./... -timeout=360m"),
+            ("no-tests", FULL_SOURCE_COMMAND + " -run '^$'"),
+            ("test-only-no-examples", FULL_SOURCE_COMMAND + " -run '^Test'"),
+            ("skip-controller", FULL_SOURCE_COMMAND + " -skip '^TestDesktopTor'"),
+            ("short-only", FULL_SOURCE_COMMAND + " -short"),
+            ("package-subset", "go test ./internal/mobilemtu -timeout=15m"),
+            ("compile-only", "go test -c ./... -timeout=15m"),
+            ("ignored-failure", FULL_SOURCE_COMMAND + " || true"),
+            ("unjoined-process", FULL_SOURCE_COMMAND + " &"),
+            ("folded-ignored-failure", FULL_SOURCE_COMMAND + "\n          || true"),
+        )
+        for filename, job_name, step_name in FULL_SOURCE_GATES:
+            source = (REPOSITORY / ".github/workflows" / filename).read_text(encoding="utf-8")
+            self.assertEqual(source.count("        run: " + FULL_SOURCE_COMMAND + "\n"), 1)
+            for name, command in mutations:
+                with self.subTest(workflow=filename, mutation=name), self.assertRaises(AssertionError):
+                    check_full_source_gate(source.replace(FULL_SOURCE_COMMAND, command, 1), job_name, step_name)
+
+    def test_full_source_gates_reject_conditional_nonblocking_and_duplicate_steps(self):
+        for filename, job_name, step_name in FULL_SOURCE_GATES:
+            source = (REPOSITORY / ".github/workflows" / filename).read_text(encoding="utf-8")
+            marker = "      - name: " + step_name + "\n"
+            job_marker = "  " + job_name + ":\n"
+            variants = (
+                ("omitted-step", source.replace(marker, "      - name: Omitted full suite\n", 1)),
+                ("duplicate-step", source.replace(marker, marker + "        run: " + FULL_SOURCE_COMMAND + "\n" + marker, 1)),
+                ("conditional-step", source.replace(marker, marker + "        if: false\n", 1)),
+                ("nonblocking-step", source.replace(marker, marker + "        continue-on-error: true\n", 1)),
+                ("conditional-job", source.replace(job_marker, job_marker + "    if: false\n", 1)),
+                ("nonblocking-job", source.replace(job_marker, job_marker + "    continue-on-error: true\n", 1)),
+            )
+            for name, changed in variants:
+                with self.subTest(workflow=filename, mutation=name), self.assertRaises(AssertionError):
+                    check_full_source_gate(changed, job_name, step_name)
 
     def test_standalone_windows_runs_the_real_workspace_and_child_tests(self):
         workflow = (REPOSITORY / ".github/workflows/windows-native-contract.yml").read_text(encoding="utf-8")
@@ -711,7 +785,7 @@ class WindowsReleaseGateTests(unittest.TestCase):
             ("imported-mtu-omitted", "Run = '^TestDesktopImportedMTU'", "Run = '^$'"),
             ("imported-mtu-restricted", "Run = '^TestDesktopImportedMTU'", "Run = '^TestDesktopImportedMTU(KernelSocketBinding|SocketRequiresOriginalLease)$'"),
             ("unix", "python3 deploy/test_desktop_tor_unix_wrapper.py", "true # omitted Unix ownership"),
-            ("controller", "run: go test ./...", "run: go test -run '^$' ./..."),
+            ("controller", "run: " + FULL_SOURCE_COMMAND, "run: " + FULL_SOURCE_COMMAND + " -run '^$'"),
             ("matrix", "{arch: arm64, runner: windows-11-arm}", "{arch: other, runner: windows-latest}"),
             ("shell", "foreach($shell in @('pwsh','powershell.exe')){\n            python deploy/test_windows_release_gates.py", "foreach($shell in @('pwsh')){\n            python deploy/test_windows_release_gates.py"),
             ("source", "--package-root $roots[0].FullName", "--package-root $env:GITHUB_WORKSPACE"),
