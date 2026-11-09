@@ -225,7 +225,9 @@ func (prepared *speedLabMultihopPreparation) apply(ctx context.Context, a *app, 
 	if err != nil || prepared == nil || !reflect.DeepEqual(request, prepared.request) {
 		return multihopSelection{}, errors.New("temporary imported multihop request changed after preparation")
 	}
-	prepared.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &prepared.mu); err != nil {
+		return multihopSelection{}, err
+	}
 	defer prepared.mu.Unlock()
 	if prepared.applied || prepared.consumed {
 		return multihopSelection{}, errors.New("temporary imported preparation was already consumed")
@@ -261,7 +263,9 @@ func (prepared *speedLabMultihopPreparation) apply(ctx context.Context, a *app, 
 }
 
 func (prepared *speedLabMultihopPreparation) stage(ctx context.Context, a *app, selection multihopSelection, candidate routechoice.Candidate) (*desktopNodeLaunch, error) {
-	prepared.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &prepared.mu); err != nil {
+		return nil, err
+	}
 	defer prepared.mu.Unlock()
 	if !prepared.applied || prepared.consumed || prepared.launch == nil || candidate.Execution != routechoice.Local ||
 		candidate.EntryID != prepared.selection.Entry.ID || candidate.ExitID != prepared.selection.Exit.ID || candidate.Transport != prepared.selection.ExitMode ||

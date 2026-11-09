@@ -461,3 +461,52 @@ func TestSpeedLabImportedPreparationHonorsOriginalCallerDuringCaptureAndPrefligh
 		})
 	}
 }
+
+func TestSpeedLabImportedPreparedAdmissionCancelsWhilePreparationLockIsHeld(t *testing.T) {
+	for _, phase := range []string{"apply", "stage"} {
+		t.Run(phase, func(t *testing.T) {
+			f := newSpeedLabImportedFixture(t, "openvpn")
+			prepared, err := f.a.prepareSpeedLabImportedMultihopWithRuntime(f.caller, f.q, f.driver)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer prepared.releaseUnused()
+			f.suspend(t)
+			var selection multihopSelection
+			if phase == "stage" {
+				selection, err = prepared.apply(f.caller, f.a, f.q)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := cloneRouterProfileStore(f.a.profiles)
+			candidate := routechoice.Candidate{EntryID: f.q.EntryID, ExitID: f.q.ExitID, Transport: f.q.ExitMode, Execution: routechoice.Local}
+			ctx, cancel := context.WithCancel(f.caller)
+			defer cancel()
+			prepared.mu.Lock()
+			done := make(chan error, 1)
+			go func() {
+				if phase == "apply" {
+					_, err := prepared.apply(ctx, f.a, f.q)
+					done <- err
+				} else {
+					_, err := prepared.stage(ctx, f.a, selection, candidate)
+					done <- err
+				}
+			}()
+			cancel()
+			select {
+			case err = <-done:
+				prepared.mu.Unlock()
+				if !errors.Is(err, context.Canceled) || !reflect.DeepEqual(f.a.profiles, before) ||
+					prepared.applied != (phase == "stage") || prepared.consumed || prepared.launch.command != nil || prepared.dns.Config != "" {
+					t.Fatal("cancelled preparation admission changed profiles or staged a native owner", err)
+				}
+			case <-time.After(2 * time.Second):
+				prepared.mu.Unlock()
+				<-done // Join the failed admission before retiring private inputs.
+				t.Fatal("cancelled preparation admission waited for a held preparation lock")
+			}
+		})
+	}
+}
