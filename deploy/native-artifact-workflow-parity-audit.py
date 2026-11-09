@@ -28,6 +28,35 @@ def require(body: str, rel: str, *markers: str) -> None:
         assert marker in body, f"{rel}: missing artifact/toolchain marker {marker!r}"
 
 
+def check_release_aggregate_gates(source: str) -> None:
+    """Check the actual required jobs, not a matching comment or another job."""
+    def job(name: str) -> list[str]:
+        lines = source.splitlines()
+        matches = [i for i, line in enumerate(lines) if line == f"  {name}:"]
+        assert len(matches) == 1, f"native release has missing or duplicate {name} job"
+        start = matches[0]
+        end = next((i for i in range(start + 1, len(lines))
+                    if lines[i].strip() and len(lines[i]) - len(lines[i].lstrip()) <= 2), len(lines))
+        return lines[start:end]
+
+    aggregate = job("aggregate")
+    needs = [line for line in aggregate if line.startswith("    needs:")]
+    assert len(needs) == 1 and needs[0].startswith("    needs: [") and needs[0].endswith("]"), (
+        "native release aggregate lost its explicit required dependencies")
+    values = [value.strip() for value in needs[0][len("    needs: ["):-1].split(",")]
+    required = {"source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
+                "windows-complete-max", "windows-all-controller", "android", "ios", "macos",
+                "linux", "imported-pq-reality"}
+    assert len(values) == len(set(values)) and set(values) == required, (
+        "native release aggregate changed its complete required gate inventory")
+    pq = job("imported-pq-reality")
+    assert "    uses: ./.github/workflows/imported-pq-reality-native.yml" in pq, (
+        "native release lost its actual imported PQ producer/reference workflow")
+    for name, lines in (("aggregate", aggregate), ("imported-pq-reality", pq)):
+        assert not any(line.startswith(("    if:", "    continue-on-error:")) for line in lines), (
+            f"native release {name} gate became conditional or nonblocking")
+
+
 policy = load_policy()
 build_rel = ".github/workflows/build-all.yml"
 rc_rel = ".github/workflows/release-candidate.yml"
@@ -384,8 +413,8 @@ for request, spec in policy.DIRECT_ARTIFACTS.items():
         assert member in producer, f"{request}: producer workflow does not upload member {member}"
 
 # Keep the one-SHA aggregate exhaustive rather than silently dropping a platform.
+check_release_aggregate_gates(rc)
 require(rc, rc_rel,
-        "needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux]",
         "windows-complete-max:",
         "uses: ./.github/workflows/windows-node-max-contract.yml",
         "windows-all-controller:",

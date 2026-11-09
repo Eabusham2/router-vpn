@@ -202,6 +202,7 @@ for audit in (
     "deploy/runtime-state-ownership-audit.py",
     "deploy/native-auto-requirements-ui-audit.py",
     "deploy/native-artifact-workflow-parity-audit.py",
+    "deploy/test_native_artifact_aggregate.py",
     "deploy/workflow-structure-audit.py",
     "deploy/reusable-workflow-concurrency-audit.py",
     "deploy/workflow-evidence-pipeline-audit.py",
