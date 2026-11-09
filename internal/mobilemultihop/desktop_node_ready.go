@@ -31,12 +31,11 @@ type DesktopNodeReadyRecord struct {
 	CoverSHA256     string  `json:"cover_sha256,omitempty"`
 }
 
-func (r DesktopNodeReadyRecord) Validate(policy *DesktopNodePolicy, transfer string) error {
+func (r DesktopNodeReadyRecord) Validate(policy DesktopPhysicalPolicy, transfer string) error {
 	if policy == nil || policy.Validate() != nil || !proofID.MatchString(transfer) {
 		return errors.New("native Router readiness lost its captured policy")
 	}
-	meta := policy.Metadata()
-	capture, err := policy.Capture()
+	_, meta, capture, err := ReadDesktopPhysicalPolicy(policy)
 	if err != nil {
 		return errors.New("native Router readiness lost its original source")
 	}
@@ -46,7 +45,11 @@ func (r DesktopNodeReadyRecord) Validate(policy *DesktopNodePolicy, transfer str
 	// targets cannot claim this Linux proof merely by adding receipt fields.
 	coverCount, coverSHA256 := 0, ""
 	if meta.TargetOS == "linux" {
-		cover, digest, err := policy.CoverPolicy()
+		node, ok := policy.(*DesktopNodePolicy)
+		if !ok || meta.Kind != "node" {
+			return errors.New("native Router readiness has another Linux policy family")
+		}
+		cover, digest, err := node.CoverPolicy()
 		if err != nil {
 			return err
 		}
@@ -67,7 +70,7 @@ func (r DesktopNodeReadyRecord) Validate(policy *DesktopNodePolicy, transfer str
 	return nil
 }
 
-func CanonicalDesktopNodeReadyRecord(record DesktopNodeReadyRecord, policy *DesktopNodePolicy, transfer string) ([]byte, error) {
+func CanonicalDesktopNodeReadyRecord(record DesktopNodeReadyRecord, policy DesktopPhysicalPolicy, transfer string) ([]byte, error) {
 	if err := record.Validate(policy, transfer); err != nil {
 		return nil, err
 	}
@@ -78,7 +81,7 @@ func CanonicalDesktopNodeReadyRecord(record DesktopNodeReadyRecord, policy *Desk
 	return raw, nil
 }
 
-func ParseDesktopNodeReadyRecord(raw []byte, policy *DesktopNodePolicy, transfer string) (DesktopNodeReadyRecord, error) {
+func ParseDesktopNodeReadyRecord(raw []byte, policy DesktopPhysicalPolicy, transfer string) (DesktopNodeReadyRecord, error) {
 	var record DesktopNodeReadyRecord
 	if len(raw) == 0 || len(raw) > DesktopNodeReadyRecordLimit || json.Unmarshal(raw, &record) != nil {
 		return DesktopNodeReadyRecord{}, errors.New("native Router readiness is not a bounded private record")

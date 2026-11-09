@@ -9,7 +9,11 @@ import (
 // its actual outer sockets. An ordinary SOCKS UDP relay remains dynamic: its
 // control address never grants an unrelated datagram destination permission.
 func (c *Controller) ImportedPhysicalEgress() ([]PhysicalEgress, error) {
-	if c == nil || c.imported == nil || c.imported.source == "" || c.meta.EntryKind != "external" || c.meta.Execution != "local" || c.generation.Load() != 1 {
+	return c.importedPhysicalEgress(nil)
+}
+
+func (c *Controller) importedPhysicalEgress(desktop *externalDesktopRecorder) ([]PhysicalEgress, error) {
+	if c == nil || c.validateImportedDesktopCapture() != nil || c.meta.EntryKind != "external" || c.meta.Execution != "local" || c.generation.Load() != 1 {
 		return nil, errors.New("desktop imported path has no captured Local graph")
 	}
 	var graph map[string]any
@@ -64,5 +68,5 @@ func (c *Controller) ImportedPhysicalEgress() ([]PhysicalEgress, error) {
 	if c.meta.TransportCapability == "tcp-only" {
 		networks = []string{"tcp"}
 	}
-	return compiledPhysicalEgressWithDesktopProof(string(encoded), networks, nil, c.meta.EntryTag)
+	return compiledPhysicalEgressWithDesktopProof(string(encoded), networks, desktop, c.meta.EntryTag)
 }

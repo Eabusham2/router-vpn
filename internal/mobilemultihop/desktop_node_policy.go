@@ -228,6 +228,10 @@ func deriveDesktopNodePolicyCapture(original *NodeProfile, inputs desktopNodePol
 }
 
 func adaptDesktopNodeDNS(graph map[string]any, capture NodeDesktopCapture) error {
+	return adaptDesktopPhysicalDNS(graph, capture.SelectedDNS, capture.BootstrapDNS)
+}
+
+func adaptDesktopPhysicalDNS(graph map[string]any, selectedDNS ExternalDesktopDNS, bootstrapDNS []ExternalDesktopDNS) error {
 	dns, ok := graph["dns"].(map[string]any)
 	if !ok {
 		return desktopNodePolicyError
@@ -242,8 +246,8 @@ func adaptDesktopNodeDNS(graph map[string]any, capture NodeDesktopCapture) error
 		if !ok {
 			return desktopNodePolicyError
 		}
-		if server["tag"] == capture.SelectedDNS.Tag {
-			if selected || capture.SelectedDNS.Physical || desktopExternalObjectDigest(server) != capture.SelectedDNS.ConfigSHA256 {
+		if server["tag"] == selectedDNS.Tag {
+			if selected || selectedDNS.Physical || desktopExternalObjectDigest(server) != selectedDNS.ConfigSHA256 {
 				return desktopNodePolicyError
 			}
 			selected = true
@@ -252,7 +256,7 @@ func adaptDesktopNodeDNS(graph map[string]any, capture NodeDesktopCapture) error
 	if !selected {
 		return desktopNodePolicyError
 	}
-	for _, bootstrap := range capture.BootstrapDNS {
+	for _, bootstrap := range bootstrapDNS {
 		if !bootstrap.Physical {
 			continue
 		}
@@ -262,7 +266,7 @@ func adaptDesktopNodeDNS(graph map[string]any, capture NodeDesktopCapture) error
 			if server["tag"] != bootstrap.Tag {
 				continue
 			}
-			if found || bootstrap.Tag == capture.SelectedDNS.Tag || predecessorText(server, "detour") != "" ||
+			if found || bootstrap.Tag == selectedDNS.Tag || predecessorText(server, "detour") != "" ||
 				desktopExternalObjectDigest(server) != bootstrap.ConfigSHA256 {
 				return desktopNodePolicyError
 			}
