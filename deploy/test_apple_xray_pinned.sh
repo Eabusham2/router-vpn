@@ -10,10 +10,37 @@ FIXTURE_DIR=$(mktemp -d)
 trap 'rm -rf "$FIXTURE_DIR"' EXIT
 # Full native packet tests require the same corrected dependency buffers as apps.
 python3 "$ROOT/deploy/prepare-mobile-buffers.py" "$VENDOR"
-# A separate server process avoids replacing the native client's globally
-# registered system dialer. This executable is a CI fixture, not an app helper.
-(cd "$XRAY" && go build -ldflags=-checklinkname=0 -o "$FIXTURE_DIR/xray-fixture" ./main)
-export ROUTER_VPN_XRAY_TEST_BINARY="$FIXTURE_DIR/xray-fixture"
+# A listening socket precedes the pinned REALITY detector's completion. Reuse
+# the original captured detector receipt before starting bounded authentication
+# exchanges. This separately built fixture never changes a shipping engine.
+python3 - "$ROOT" "$VENDOR" "$XRAY" "$FIXTURE_DIR" <<'PY'
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+root, vendor, expected_xray, workspace = map(Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location(
+    "apple_xray_reference", root / "deploy/test_mobile_imported_socks_xray.py")
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+compiler = shutil.which("go")
+if not compiler:
+    raise ValueError("native Xray fixture requires the pinned Go compiler")
+env = dict(os.environ)
+env.update(json.loads(subprocess.check_output(
+    [compiler, "env", "-json", "GOOS", "GOARCH"], text=True)))
+source, _, binary, _, _, _ = gate.build_reference(compiler, vendor, workspace, env)
+if source.resolve() != expected_xray.resolve():
+    raise ValueError("native Xray fixture changed its original prepared source")
+(workspace / "reference-binary-path").write_text(str(binary), encoding="utf-8")
+PY
+ROUTER_VPN_XRAY_TEST_BINARY="$(cat "$FIXTURE_DIR/reference-binary-path")"
+export ROUTER_VPN_XRAY_TEST_BINARY
+export ROUTER_VPN_XRAY_REFERENCE_DETECTOR_READY=1
 (cd "$XRAY" && go test -race -ldflags=-checklinkname=0 -count=1 -run 'TestRouterVPN' ./transport/internet/splithttp)
 (cd "$XRAY" && go test -race -ldflags=-checklinkname=0 -count=1 -run 'TestRouterVPNScoped' ./transport/internet)
 (

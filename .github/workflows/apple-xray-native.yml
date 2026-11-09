@@ -16,6 +16,8 @@ on:
       - 'deploy/xray_datagram_policy.py'
       - 'deploy/xray_connection_policy.py'
       - 'deploy/test_apple_xray_pinned.sh'
+      - 'deploy/test_mobile_imported_socks_xray.py'
+      - 'deploy/test_native_runner_dependencies.py'
       - 'deploy/test_xray_start_layer_pinned.sh'
       - 'deploy/prepare-mobile-buffers.py'
       - 'deploy/mobile_udp_socket_policy.py'
@@ -38,6 +40,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 deploy/test_native_runner_dependencies.py
           SING="$RUNNER_TEMP/routervpn-sing-box"
           XRAY="$RUNNER_TEMP/routervpn-xray"
           git init "$SING"

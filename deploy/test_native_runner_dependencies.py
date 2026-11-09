@@ -254,5 +254,79 @@ sys.exit(status)
         self.assertIn("-run 'TestRouterXray'", xray)
         self.assertIn('with_quic,with_wireguard,with_gvisor', xray)
 
+    def test_xray_runner_owns_detector_readiness_before_bounded_native_tests(self):
+        source = (ROOT/'deploy/test_apple_xray_pinned.sh').read_text()
+        begin = 'python3 - "$ROOT" "$VENDOR" "$XRAY" "$FIXTURE_DIR" <<\'PY\'\n'
+        self.assertEqual(source.count(begin), 1)
+        shim = '''#!PYTHON
+import json, os, pathlib, sys
+name=pathlib.Path(sys.argv[0]).name
+args=sys.argv[1:]
+state_path=pathlib.Path(os.environ['FIXTURE_STATE'])
+state=json.loads(state_path.read_text()) if state_path.exists() else {'calls':[]}
+if name=='git':
+    print('50231eaff98ccc31b5cbd247a721c16e97fe5ec1' if args[1]==os.environ['FIXTURE_XRAY'] else '1ac1a339cb1223e9c70eae14c44411c75033c02d')
+elif args[:2]==['env','-json']:
+    print(json.dumps({'GOOS':'linux','GOARCH':'amd64'}))
+elif args and args[0]=='test':
+    package=next(arg for arg in args if arg.startswith('./'))
+    state['calls'].append(package)
+    if package=='./protocol/routervpnxray' and (not state.get('reference') or os.environ.get('ROUTER_VPN_XRAY_REFERENCE_DETECTOR_READY')!='1' or pathlib.Path(os.environ['ROUTER_VPN_XRAY_TEST_BINARY']).read_text()!='owned reference'):
+        print('native authentication lost its original detector-ready reference')
+        state_path.write_text(json.dumps(state));sys.exit(73)
+state_path.write_text(json.dumps(state))
+'''.replace('PYTHON', sys.executable)
+        reference = '''import json, os
+from pathlib import Path
+def build_reference(compiler, vendor, workspace, env):
+    assert env['GOOS']=='linux' and env['GOARCH']=='amd64'
+    state_path=Path(os.environ['FIXTURE_STATE'])
+    state=json.loads(state_path.read_text())
+    state['calls'].append('captured-detector-reference')
+    state['reference']=True
+    state_path.write_text(json.dumps(state))
+    if os.environ['FIXTURE_FAULT']=='build-failure':
+        raise ValueError('original detector verdict was missing')
+    binary=workspace/'xray-reference';binary.write_text('owned reference')
+    source=Path(os.environ['FIXTURE_XRAY'])
+    if os.environ['FIXTURE_FAULT']=='wrong-source':source=source/'foreign'
+    return source, {}, binary, 'digest', workspace/'overlay', {}
+'''
+        expected = ['captured-detector-reference', './transport/internet/splithttp',
+                    './transport/internet', './experimental/libbox/routervpn/applexray',
+                    './protocol/routervpnxray', './experimental/libbox']
+        for fault in ('none', 'build-failure', 'wrong-source', 'missing-ready'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);deploy=root/'deploy';deploy.mkdir()
+                core=root/'core';core.mkdir();xray=root/'xray';xray.mkdir()
+                commands=root/'bin';commands.mkdir()
+                for name in ('git','go'):
+                    tool=commands/name;tool.write_text(shim);tool.chmod(0o755)
+                (deploy/'test_mobile_imported_socks_xray.py').write_text(reference)
+                (deploy/'prepare-mobile-buffers.py').write_text('pass\n')
+                (deploy/'test_xray_start_layer_pinned.sh').write_text('echo original-start-layer-retained\n')
+                driver=deploy/'test_apple_xray_pinned.sh'
+                driver.write_text(source.replace('export ROUTER_VPN_XRAY_REFERENCE_DETECTOR_READY=1\n','') if fault=='missing-ready' else source)
+                state=root/'state.json'
+                env=dict(os.environ, PATH=str(commands)+os.pathsep+os.environ['PATH'],
+                         FIXTURE_STATE=str(state), FIXTURE_XRAY=str(xray), FIXTURE_FAULT=fault)
+                env.pop('ROUTER_VPN_XRAY_REFERENCE_DETECTOR_READY',None)
+                result=subprocess.run(['bash',str(driver),str(core),str(xray)], env=env,
+                                      text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=15)
+                calls=json.loads(state.read_text())['calls']
+                if fault=='none':
+                    self.assertEqual(result.returncode,0,result.stdout)
+                    self.assertEqual(calls,expected)
+                    self.assertIn('original-start-layer-retained',result.stdout)
+                else:
+                    self.assertNotEqual(result.returncode,0,result.stdout)
+                    self.assertEqual(calls,expected[:5] if fault=='missing-ready' else expected[:1])
+                    self.assertNotIn('original-start-layer-retained',result.stdout)
+        workflow=(ROOT/'.github/workflows/apple-xray-native.yml').read_text()
+        self.assertIn("'deploy/test_mobile_imported_socks_xray.py'",workflow)
+        self.assertIn("'deploy/test_native_runner_dependencies.py'",workflow)
+        self.assertLess(workflow.index('python3 deploy/test_native_runner_dependencies.py'),
+                        workflow.index('bash deploy/test_apple_xray_pinned.sh'))
+
 if __name__ == '__main__':
     unittest.main()
