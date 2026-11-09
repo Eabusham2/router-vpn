@@ -334,7 +334,7 @@ func readDesktopMTURecordContext(ctx context.Context, launch *desktopNodeLaunch)
 	}
 	identity, identityErr := capturedDesktopMeasurementRuntimeContext(ctx, launch)
 	if identityErr != nil || record.Schema != 1 || record.Session != identity.session || record.SourceSHA256 != identity.source || record.ConfigSHA256 != identity.config {
-		return record, errors.New("native MTU record belongs to another session or graph")
+		return record, errors.Join(identityErr, errors.New("native MTU record belongs to another session or graph"))
 	}
 	if err := validateDesktopMTURecordForSource(record, identity.measuredSource); err != nil {
 		return record, err
