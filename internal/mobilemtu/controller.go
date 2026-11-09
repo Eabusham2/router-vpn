@@ -180,11 +180,12 @@ func (c *Controller) Run(request string, force bool) error {
 	}
 	return c.execute(op, force)
 }
-func (c *Controller) run(ctx context.Context, config string, force bool) (runErr error) {
+func (c *Controller) run(ctx context.Context, config string, force bool, captured *State) (runErr error) {
 	original, err := c.capture(ctx)
 	if err != nil || !c.live(ctx, original) {
 		return errors.Join(err, ctx.Err(), errors.New("MTU interface changed before capture"))
 	}
+	*captured = original
 	plan, err := NewPlan(config, original.MTU)
 	if err != nil {
 		return err

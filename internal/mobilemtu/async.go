@@ -12,6 +12,7 @@ type operation struct {
 	finish   context.CancelFunc
 	done     chan struct{}
 	config   string
+	original State
 	finalize func(context.Context) error
 }
 
@@ -100,7 +101,7 @@ func (c *Controller) beginContextAdmissionProvider(admission, parent context.Con
 func (c *Controller) execute(op *operation, force bool) error {
 	defer op.cancel()
 	defer op.finish()
-	workErr := c.run(op.ctx, op.config, force)
+	workErr := c.run(op.ctx, op.config, force, &op.original)
 	c.mu.Lock()
 	// Adoption already changed the exact native reader/config under this same
 	// mutex. Later cancellation cannot undo it after native run closure starts.
@@ -118,6 +119,22 @@ func (c *Controller) execute(op *operation, force bool) error {
 			err = errors.Join(err, op.ctx.Err())
 		}
 	}
+	var restored *State
+	var restorationContext context.Context
+	if finalizationErr != nil && op.original.Session != "" {
+		if observer, ok := c.owner.(FinalizationRollbackOwner); ok {
+			if cleanup, cleanupErr := OperationCleanupContext(op.ctx); cleanupErr == nil {
+				state, observeErr := observer.FinalizedRollbackContext(cleanup, op.original)
+				if observeErr == nil && state.Session == op.original.Session && state.Path == op.original.Path && state.MTU == op.original.MTU &&
+					state.Interface != "" && c.live(cleanup, state) {
+					if _, planErr := NewPlan(op.config, state.MTU); planErr == nil {
+						restored = &state
+						restorationContext = cleanup
+					}
+				}
+			}
+		}
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.status.Running = false
@@ -125,6 +142,9 @@ func (c *Controller) execute(op *operation, force bool) error {
 	if finalizationErr != nil {
 		c.revokeLocked("failed")
 		c.status.Failure = "MTU original run closure did not join both retained observers"
+		if restored != nil {
+			c.restoreFinalizedRollbackLocked(restorationContext, *restored, op.config)
+		}
 	}
 	if c.closed {
 		c.revokeLocked("stopped")
@@ -143,6 +163,17 @@ func (c *Controller) execute(op *operation, force bool) error {
 	// Drain the exact generation before another Run/Start can observe it as idle.
 	close(op.done)
 	return err
+}
+
+// The live proof and complete configuration validation precede final admission.
+// Waiting for this mutex cannot extend their original cleanup authority.
+func (c *Controller) restoreFinalizedRollbackLocked(ctx context.Context, state State, config string) {
+	if ctx == nil || ctx.Err() != nil || c.closed || c.invalid {
+		return
+	}
+	c.currentConfig = config
+	c.status.Restored, c.status.EffectiveMTU, c.status.Source, c.status.Phase = true, state.MTU, "restored-unmeasured", "restored"
+	c.status.Failure = "MTU final adoption failed; original interface and configuration restored"
 }
 
 // Start publishes before launching work; an immediate Cancel cannot be lost.

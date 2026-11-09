@@ -33,6 +33,7 @@ func capturedContextOwner(owner Owner) (ContextOwner, bool) {
 	}
 	return bounded, true
 }
+
 type boundedOperationKey struct{}
 type operationAuthorityKey struct{}
 type operationCleanupOnlyKey struct{}
@@ -266,6 +267,15 @@ func newControllerContext(ctx context.Context, owner Owner, config string, polic
 // winner admission and is invoked only by the original run's rollback defer.
 type RollbackOwner interface {
 	RollbackStateContext(context.Context, State) (State, error)
+}
+
+// FinalizationRollbackOwner can attest that failed final native adoption has
+// already completed exact owned rollback. This is observation only: it cannot
+// issue a new mutation or renew the original operation's cleanup allowance.
+// The controller independently checks the returned live state before restoring
+// its pre-run configuration; a numeric MTU match alone grants no authority.
+type FinalizationRollbackOwner interface {
+	FinalizedRollbackContext(context.Context, State) (State, error)
 }
 
 // ContextCache keeps native mailbox/cache admission in the same work budget.
