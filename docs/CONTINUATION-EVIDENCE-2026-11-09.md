@@ -4,6 +4,32 @@ This checkpoint continues the [November 7 reconciled ledger](CONTINUATION-EVIDEN
 
 The initial branch read for this checkpoint was `e0c815c107ebac1775c49295ccef1b1a5c896b84`. A later November 9 read verified `e5875af0520c992b2fa58dd75a1422d246fa12eb` on `main`; its exact tree is `f203249bb62e110a6a6bd8cbad848ed10aa4a846`. The source is still advancing. No private server, ASUS configuration, household forwarding, signing account or physical user device was changed by this continuation.
 
+## Later source checkpoint through ef8d3762 and owned desktop retry
+
+The UI unit was tested on published
+`ef8d3762ee2e9e5f8f742c66ea3a8f44baa9ba8b` and rebased onto
+`fcc6f47a1d73d6665aff505333e5fb2f8ec7cac6`, preserving its four unrelated MAX
+runner/generator repairs with byte-identical tested components. The rebase does
+not relabel those earlier executions. Normal ancestry and the historical
+receipts below are retained. No private router, live server, signing account or
+physical user device was changed.
+
+| Source change | Concrete closure | Evidence boundary |
+|---|---|---|
+| `b16656f5` ordinary Stop | Captured selected-DNS cancellation/join precedes MTU and every runtime teardown path; a failed Stop retains a reusable fence until owned retry succeeds. | [Guide](testing/ordinary-stop-dns.md): original failure, 107 focused race verdicts and exact post-rebase component comparison. The public pre-operation-lock wait remains separate. |
+| This owned retry unit | Windows/macOS/Linux primary buttons display Retry Disconnect and retain its original token. The authenticated endpoint validates that exact receipt before cancellation; ordinary editors stay fenced while captured protection Off remains available. | [Guide](testing/owned-stop-retry.md): 46 controller race verdicts/19 roots, three bridge roots, actual transformed host callback fixtures and eleven rejected mutations. Window/dispatch/HTTP and kernel boundaries are explicitly modeled where applicable. |
+| `cbc279a7` Tor callers | Original request/operation, restore caller, endpoint observation and prelaunch cancellation retain their ownership and causes. | [Original Tor evidence](testing/tor-original-callers.md), including its recorded source identities; no new physical or native-device execution is inferred here. |
+| `fa17b23b`, `edbb3880` recovery/Off | Retained Windows observations use each attempt's current caller; durable Off checks the accepted caller and records a completed rename before later cancellation. | Author-recorded focused controls and cross-compilation remain attributed to their original source. Current native Windows execution is separately required. |
+| `7625fe61` protected imported Windows | The captured imported parent reaches native execution, original proofs/DNS, negotiated UDP grants, MTU, joined retirement and restoration without legacy fallback. | [Protected-imported evidence](testing/desktop-imported-native-protection.md): controller and negative controls plus target compilation; full native OS/device/release acceptance remains open. |
+| `f344092f` H2 transport | Cronet H2 cannot send its IPv6 reachability UDP probe to the retained lower transport; H3 keeps its original dialer. | [Actual native transport witness](testing/naive-h2-transport.md), with its exact source/library receipts and retained bootstrap limits. Imported-H2 admission is not yet published at this checkpoint. |
+| `4a88e919`, `52b33abb`, `ef8d3762` current fixture repairs | Sparse native copies include required Naive preparation; the recovery fixture joins its reusable observer after unchanged assertions; the deliberate Windows eager-handshake mutation uses the current caller-aware phase. | These preserve the intended causal gates. The recovery repair records 66 race verdicts/26 roots; the Windows control records 61 Python contracts, with native execution still required. |
+
+The new retry callback gate is required in all three focused native workflows
+and the matching release jobs. Gate-removal controls reject omitted or optional
+execution. Local successful selectors and their registered workflows do not
+establish current packaged UI, physical networking or complete release status.
+Older MAX, XHTTP and PQ results below retain their original exact-source dates.
+
 ## Native Windows MAX follow-up — observed at 03:04 UTC
 
 The live branch read was `5b76d2fa8a1f09048bfc92890727eb4314aa441f`.

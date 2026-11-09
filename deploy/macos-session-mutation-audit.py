@@ -38,7 +38,9 @@ need(unified,
     'candidate.name.caseInsensitiveCompare(editing!.name) == .orderedSame',
     'unified-kill-switch', 'unified-multihop-toggle', 'unified-mode-popup', 'unified-dns-popup',
     'as? NSControl', 'control.isEnabled = !busy', 'self.routerPopup.isEnabled = !busy', 'self.multihopEntryPopup.isEnabled = !busy',
-    'button.isEnabled = !unknown && !disconnecting')
+    'button.isEnabled = stopPresentation.enabled', 'button.stopRetryToken = stopPresentation.token',
+    'guard let status else', 'return ("Checking…", false, nil)',
+    'if phase.contains("disconnecting") || phase.contains("stopping") { return ("Disconnecting…", false, nil) }')
 need(telemetry,
     'root["selected_id"]', 'var selectedIndex = 0', 'popup.selectItem(at: selectedIndex)',
     'Use Connect separately.', 'sender.isEnabled = false', 'Press Connect when ready.',

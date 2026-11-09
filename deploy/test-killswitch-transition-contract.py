@@ -44,18 +44,20 @@ for required in (
     "func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*modeAttemptTransition) error",
     "a.stopModeWithIntent(true)",
     "a.stopModeWithIntent(holdOnFailure)",
-    "func (a *app) stopModeWithIntent(holdKillSwitch bool) (failure error)",
+    "func (a *app) stopModeWithDNSReceipt(holdKillSwitch bool, expected *sessionDNSStopReceipt) (failure error)",
     "c.Env = a.stopCommandEnv(holdKillSwitch)",
     "a.startModeAttempt(m.ID, true)",
     "a.releaseTransitionKillSwitch()",
 ):
     assert required in main, f"controller missing protected transition state: {required}"
 
+assert "func (a *app) stopModeWithIntent(holdKillSwitch bool) error {\n\treturn a.stopModeWithDNSReceipt(holdKillSwitch, nil)\n}" in main, "ordinary Stop bypassed the shared captured DNS teardown"
+
 attempt_body = main.split("func (a *app) startModeAttempt(", 1)[1].split("\nfunc ", 1)[0]
 assert attempt_body.index("a.guardDesktopOwnedNodeTransition(native)") < attempt_body.index("transition[0].StopBegun = true") < attempt_body.index("a.stopModeWithIntent(true)"), "SMART transition receipt does not distinguish preflight from the actual Stop boundary"
 
 try:
-    stop_body = main.split("func (a *app) stopModeWithIntent(holdKillSwitch bool) (failure error) {", 1)[1].split("func (a *app) auto", 1)[0]
+    stop_body = main.split("func (a *app) stopModeWithDNSReceipt(holdKillSwitch bool, expected *sessionDNSStopReceipt) (failure error) {", 1)[1].split("func (a *app) auto", 1)[0]
 except IndexError as exc:
     raise AssertionError("controller stop intent body could not be located") from exc
 assert "if !holdKillSwitch" in stop_body, "final/manual stop does not distinguish held transitions"
@@ -65,7 +67,7 @@ mode_guard_at = stop_body.index('if !nativeOwned && modeID != "off"')
 assert release_at > mode_guard_at, "persisted kill-switch release is incorrectly confined to remembered active-mode cleanup"
 assert stop_body.index("stopDesktopNodeRuntime(a, cmd)") < mode_guard_at, "captured native runtime does not retire before raw-mode fallback"
 assert stop_body.index("finishDesktopNodeRuntime(a)") > release_at, "native retry identity is discarded before firewall release commits"
-assert stop_body.index("a.drainSessionDNSForStop(ctx)") < stop_body.index("retireLegacyStandardPreparations(a, ctx)") < stop_body.index("a.holdMTUForStop()") < stop_body.index("nativeStop.Retire(ctx, relayOwner, !holdKillSwitch)"), "selected-DNS cleanup must join before every native teardown, including the MTU fallback"
+assert stop_body.index("a.drainCapturedSessionDNSForStop(ctx, expected)") < stop_body.index("retireLegacyStandardPreparations(a, ctx)") < stop_body.index("a.holdMTUForStop()") < stop_body.index("nativeStop.Retire(ctx, relayOwner, !holdKillSwitch)"), "selected-DNS cleanup must join before every native teardown, including the MTU fallback"
 assert "defer func() {\n\t\tif failure == nil {\n\t\t\tfailure = dnsStop.finish(ctx)" in stop_body, "failed runtime retirement must retain its exact reusable DNS fence"
 
 assert "a.startModeAttempt(candidate.RuntimeID, true)" in logical

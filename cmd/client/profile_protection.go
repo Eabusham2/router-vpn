@@ -87,6 +87,14 @@ func (a *app) profileProtectionSettings(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "kill_switch_policy must be off, on-connect, or always", http.StatusBadRequest)
 		return
 	}
+	// Off retains its captured recovery path. Every other preference remains
+	// fenced while an original Stop still owns selected-DNS/runtime cleanup.
+	if q.KillSwitchPolicy != "off" {
+		if err := a.guardSessionDNSStopPending(r.Context()); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+	}
 	if a.handlePlatformProfileProtection(w, r, profile, capture, q.KillSwitchPolicy) {
 		return
 	}

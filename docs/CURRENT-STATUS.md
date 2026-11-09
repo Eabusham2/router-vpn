@@ -6,7 +6,55 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 9 current checkpoint: XHTTP graphs and native release repairs
+## November 9 later checkpoint: ordinary Stop and owned desktop retry
+
+Published `b16656f5` completes the reusable selected-DNS cancel-and-join phase
+before ordinary Stop tears down a runtime or enters its MTU fallback. The
+[ordinary Stop guide](testing/ordinary-stop-dns.md) records the original-source
+failure, 107 focused race verdicts, retained retry fence and same-tracker
+reconnect. The final publication preserved the concurrent Tor caller change
+`cbc279a7`; its component comparison is not relabeled as a new merged race run.
+
+This change adds a truthful **Retry Disconnect** primary action to all three
+desktop shells. Status retains the original Connected/phase values and reports
+an owned Stop token. A stale click cannot cancel or stop a replacement, or turn
+into Connect. Both UI and controller ordinary-mutation admission reject a
+pending Stop; exact protection Off recovery remains available. The
+[owned retry guide](testing/owned-stop-retry.md) records 46 controller race
+verdicts across 19 roots, three native-bridge roots, executable transformed
+PowerShell/Swift/C callbacks, eleven rejected source mutations and preserved
+protection/DNS controls. Native window/HTTP boundaries were modeled; required
+matching-host package and workflow results remain separate.
+
+Normal ancestry through `ef8d3762` also preserves these published source repairs:
+
+- `cbc279a7`: Tor public preparation, restoration and endpoint observations keep
+  their original callers; [Tor evidence](testing/tor-original-callers.md) retains
+  its original execution identities and physical acceptance limits.
+- `fa17b23b` and `edbb3880`: each retained Windows recovery attempt uses its fresh
+  caller, and protection Off checks its original caller at the durable rename.
+- `7625fe61`: the protected imported Windows path reaches its captured native
+  child, proofs, selected DNS, MTU and restoration owners. The
+  [protected-imported guide](testing/desktop-imported-native-protection.md)
+  records controller/fault controls and cross-compilation; real Windows native
+  execution and device/release acceptance are still distinct.
+- `f344092f`: native Naive H2 refuses lower UDP before Cronet reaches the retained
+  dialer. The [transport guide](testing/naive-h2-transport.md) records its actual
+  witness and limits. This is a transport repair; imported-H2 graph admission
+  is still unpublished work at this checkpoint.
+- `4a88e919`, `52b33abb` and `ef8d3762`: sparse preparation fixtures include the
+  declared Naive policy, recovery fixtures join their observer after the
+  original cancellation assertions, and the Windows eager-handshake negative
+  control targets the current caller-aware check. These test repairs preserve
+  their production checks and do not establish new device acceptance.
+
+The earlier public Disconnect wait before `operationMu`, complete current
+native/release verification, remaining graph families/executions, physical and
+off-LAN acceptance, signing and authorized private deployment remain open.
+The dated checkpoint below describes its earlier source and is superseded only
+where this section explicitly records a later change.
+
+## November 9 earlier checkpoint: XHTTP graphs and native release repairs
 
 The last independently read branch checkpoint for this section is
 `5670c8e383f90636c0d11447d4228bdc606cdc6b`. The

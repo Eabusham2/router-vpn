@@ -156,7 +156,10 @@ def macos(directory):
     shell = module.transform(read("client/macos/RouterVPNMacUnifiedShell.swift"), "unified")
     callback = section(shell, r"^    @objc func toggleUnifiedKillSwitch\(.*?^    \}")
     assert callback.index("let displayedProfileID = routerIDs[index]") < callback.index("asyncAction")
-    assert 'self.requireMutationIdle("changing persistent kill-switch policy")' in callback
+    assert 'self.requireUnifiedProtectionIdle(enabled: enabled)' in callback
+    guard = section(shell, r'^    private func requireUnifiedProtectionIdle\(.*?^    \}')
+    assert 'if enabled { try requireMutationIdle("changing persistent kill-switch policy"); return }' in guard
+    assert 'if mutationBusy(from: ordinary)' in guard
     assert 'saveData(displayedProfileID: displayedProfileID, enabled: enabled)' in callback
     assert 'requestRaw("/api/profile/protection", body: body' in callback
     assert 'kill.state = valid ?' in shell and ': .mixed' in shell
@@ -211,7 +214,11 @@ def linux(directory):
     string_reader = section(read("client/linux/routervpn-gtk-product.c"), r"^static const char \*obj_string\(.*?^\}")
     callback = section(source, r"^static void linux_unified_kill_changed_v8\(.*?^\}")
     assert callback.index("char *displayed = g_strdup") < callback.index('"/api/profile/protection", "GET"')
-    assert 'routervpn_require_mutation_idle' in callback
+    assert 'linux_protection_mutation_busy_v26(state->app,enabled)' in callback
+    guard = section(source, r'^static gboolean linux_protection_mutation_busy_v26\(App \*app, gboolean enabled\) \{.*?^\}')
+    assert 'if(enabled)return routervpn_mutation_busy(app);' in guard
+    assert 'if(linux_async_busy_v16(app))return TRUE;' in guard
+    assert 'routervpn_phase_busy(obj_string(obj,"phase"))' in guard
     assert 'linux_protection_payload_v21(json_node_get_object(root), displayed, enabled)' in callback
     assert 'post_and_log(state->app,"/api/profile/protection",body' in callback
     assert 'gtk_toggle_button_set_inconsistent(GTK_TOGGLE_BUTTON(state->kill_switch), !valid)' in source

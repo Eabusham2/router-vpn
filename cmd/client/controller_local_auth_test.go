@@ -62,7 +62,7 @@ func TestLocalControllerActualHTTPProtectsEveryRoute(t *testing.T) {
 		_, _ = io.WriteString(w, r.URL.Path)
 	})))
 	defer server.Close()
-	for _, route := range []string{"/", "/api/status", "/api/info", "/api/profiles", "/api/connect", "/api/profile/import", "/api/forward", controllerShutdownPath, "/not-a-registered-route"} {
+	for _, route := range []string{"/", "/api/status", "/api/info", "/api/profiles", "/api/connect", "/api/disconnect/retry", "/api/profile/import", "/api/forward", controllerShutdownPath, "/not-a-registered-route"} {
 		for _, token := range []string{"", "Bearer " + strings.Repeat("a", 64), "bearer " + testLocalControllerAccess, "Bearer " + testLocalControllerAccess + "0", "Basic " + testLocalControllerAccess} {
 			status, _, _ := testLocalControllerRequest(t, server.Client(), server.URL, http.MethodGet, route, token, nil)
 			if status != http.StatusForbidden {

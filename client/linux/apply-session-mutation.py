@@ -258,12 +258,43 @@ if async_spec is None or async_spec.loader is None:
     raise SystemExit("cannot load Linux async action composition")
 async_actions = importlib.util.module_from_spec(async_spec)
 async_spec.loader.exec_module(async_actions)
+# The owned retry helpers precede the original primary action. Retain every
+# frozen mutation anchor and reject any other source change.
+name = "routervpn-unified-shell-v8.inc"
+_, changes = base.SPECS[name]
+base.SPECS[name] = ("7f445d3fce634fc8837d803d4a2e6f212181aa01e7248a71eb8e197222e0563c",
+    [(i1 + (36 if i1 >= 233 else 0), i2 + (36 if i2 >= 233 else 0), old, new) for i1, i2, old, new in changes])
 frozen_apply = base.apply
 
+
+
+def _owned_stop_retry(path):
+    text = path.read_text()
+    def replace(old, new):
+        nonlocal text
+        if text.count(old) != 1:
+            raise RuntimeError("Linux owned Stop retry composition drifted: " + old[:100])
+        text = text.replace(old, new, 1)
+    replace('    if (linux_async_stopping_v16(state->app)) return;', '    const char *captured_retry=g_object_get_data(G_OBJECT(state->connect),"routervpn-stop-retry-token");\n    if(captured_retry!=NULL){g_autofree char *token=g_strdup(captured_retry);linux_unified_retry_stop_v26(state,token);return;}\n    if (linux_async_stopping_v16(state->app)) return;')
+    replace('gboolean status_ok=FALSE, active=FALSE, disconnecting=FALSE;', 'gboolean status_ok=FALSE, active=FALSE, disconnecting=FALSE; g_autofree char *retry_token=NULL;')
+    replace('status_ok=TRUE;active=routervpn_mutation_busy_from_status(obj);', 'const char *retry=linux_stop_retry_token_v26(obj,&status_ok);retry_token=g_strdup(retry);active=routervpn_mutation_busy_from_status(obj);')
+    replace('    if(active){post_and_log(state->app,"/api/disconnect","{}",30000,"Disconnect");return;}', '    if(retry_token!=NULL){linux_unified_retry_stop_v26(state,retry_token);return;}\n    if(active){post_and_log(state->app,"/api/disconnect","{}",30000,"Disconnect");return;}')
+    replace('status_ok=TRUE;busy=routervpn_mutation_busy_from_status(obj);', 'const char *retry=linux_stop_retry_token_v26(obj,&status_ok);g_object_set_data_full(G_OBJECT(state->connect),"routervpn-stop-retry-token",g_strdup(retry),g_free);busy=routervpn_mutation_busy_from_status(obj)||retry!=NULL||!status_ok;')
+    replace('disconnecting?"Disconnecting…":busy?"Disconnect":"Connect"', 'disconnecting?"Disconnecting…":retry!=NULL?"Retry Disconnect":busy?"Disconnect":"Connect"')
+    replace('if(!status_ok){gtk_button_set_label', 'if(!status_ok){g_object_set_data(G_OBJECT(state->connect),"routervpn-stop-retry-token",NULL);gtk_button_set_label')
+    path.write_text(text)
 
 def apply(src, dst):
     frozen_apply(src, dst)
     async_actions.apply(Path(dst))
+    if Path(dst).name == "routervpn-gtk-product.c":
+        text = Path(dst).read_text()
+        old = 'static gboolean routervpn_mutation_busy_from_status(JsonObject *obj) {\n    if (obj == NULL) return TRUE;'
+        new = old + '\n    if(json_object_has_member(obj,"stop_pending")){JsonNode *pending=json_object_get_member(obj,"stop_pending");if(!JSON_NODE_HOLDS_VALUE(pending)||json_node_get_value_type(pending)!=G_TYPE_BOOLEAN||json_node_get_boolean(pending))return TRUE;}'
+        if text.count(old) != 1: raise RuntimeError("Linux pending Stop mutation guard drifted")
+        Path(dst).write_text(text.replace(old,new,1))
+    if Path(dst).name == "routervpn-unified-shell-v8.inc":
+        _owned_stop_retry(Path(dst))
 
 
 base.apply = apply

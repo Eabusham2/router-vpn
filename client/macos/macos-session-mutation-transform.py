@@ -199,6 +199,37 @@ def _captured_dns_editor_pairs(pairs, mode):
         raise SystemExit("captured DNS editor mutation pair count drifted")
     return result
 
+
+def _stop_retry_unified(source: str) -> str:
+    pairs = [
+        ('    @objc func connectUnified() {\n', '    @objc func connectUnified() {\n        let capturedRetryToken = (findUnifiedView("unified-connect") as? MacUnifiedConnectButton)?.stopRetryToken\n'),
+        ('                let status = try self.api.json("/api/status") as? [String: Any] ?? [:]\n', '                // A rendered Retry remains that exact action even if cleanup or\n                // another connection completes before this callback executes.\n                if let token = capturedRetryToken {\n                    _ = try self.api.request("/api/disconnect/retry", method: "POST", body: ["stop_token": token], timeout: 25)\n                    DispatchQueue.main.async { self.refreshAll(); self.refreshUnifiedChrome() }\n                    return\n                }\n                let status = try self.api.json("/api/status") as? [String: Any] ?? [:]\n                if let token = try productStopRetryToken(status) {\n                    _ = try self.api.request("/api/disconnect/retry", method: "POST", body: ["stop_token": token], timeout: 25)\n                    DispatchQueue.main.async { self.refreshAll(); self.refreshUnifiedChrome() }\n                    return\n                }\n'),
+        ('let busy = self.mutationBusy(from: statusObject), unknown = statusObject == nil', 'let stopPresentation = productStopRetryPresentation(statusObject, busy: self.mutationBusy(from: statusObject))\n            let busy = self.mutationBusy(from: statusObject) || stopPresentation.token != nil || !stopPresentation.enabled, unknown = statusObject == nil'),
+    ]
+    for old, new in pairs:
+        if source.count(old) != 1:
+            raise SystemExit("macOS owned Stop retry composition drifted: " + old[:100])
+        source = source.replace(old, new, 1)
+    old = 'if let button = self.findUnifiedView("unified-connect") as? NSButton { button.title = unknown ? "Checking…" : disconnecting ? "Disconnecting…" : (connected || busy ? "Disconnect" : "Connect"); button.isEnabled = !unknown && !disconnecting }'
+    new = 'if let button = self.findUnifiedView("unified-connect") as? MacUnifiedConnectButton { button.title = stopPresentation.title; button.isEnabled = stopPresentation.enabled; button.stopRetryToken = stopPresentation.token }'
+    if source.count(old) != 1:
+        raise SystemExit("macOS owned Stop retry button composition drifted")
+    source = source.replace(old, new, 1)
+    protection = '    @objc func toggleUnifiedKillSwitch(_ sender: NSButton) {'
+    helper = '    private func requireUnifiedProtectionIdle(enabled: Bool) throws {\n        if enabled { try requireMutationIdle("changing persistent kill-switch policy"); return }\n        let status = try api.json("/api/status", timeout: 3) as? [String: Any]\n        _ = try productStopRetryToken(status)\n        var ordinary = status ?? [:]; ordinary.removeValue(forKey: "stop_pending"); ordinary.removeValue(forKey: "stop_token")\n        if mutationBusy(from: ordinary) { throw NSError(domain: "RouterVPN.StopRetry", code: 409, userInfo: [NSLocalizedDescriptionKey: "Wait for the active connection to stop before retrying protection Off."]) }\n    }\n'
+    if source.count(protection) != 1: raise SystemExit("macOS protection cleanup helper drifted")
+    source = source.replace(protection, helper + protection, 1)
+    old = 'guard ensureMutationIdle("changing persistent kill-switch policy") else { refreshUnifiedChrome(); return }'
+    new = 'do { try requireUnifiedProtectionIdle(enabled: sender.state == .on) } catch { appendHelp(error.localizedDescription); refreshUnifiedChrome(); return }'
+    if source.count(old) != 1: raise SystemExit("macOS protection initial cleanup guard drifted")
+    source = source.replace(old, new, 1)
+    old = 'try self.requireMutationIdle("changing persistent kill-switch policy")'
+    if source.count(old) != 1: raise SystemExit("macOS protection final cleanup guard drifted")
+    source = source.replace(old, 'try self.requireUnifiedProtectionIdle(enabled: enabled)', 1)
+    old = 'kill.isEnabled = valid && known && !connected && stable'
+    if source.count(old) != 1: raise SystemExit("macOS protection cleanup presentation drifted")
+    return source.replace(old, old + ' && stopPresentation.enabled && (stopPresentation.token == nil || protection?.killSwitchPolicy != "off")', 1)
+
 def transform(source: str, mode: str) -> str:
     if mode not in PAIRS:
         raise SystemExit(f"unknown transform mode: {mode}")
@@ -221,7 +252,7 @@ def transform(source: str, mode: str) -> str:
         source=source.replace(old,new,1)
     if mode == "product":
         old = 'func mutationBusy(from status: [String: Any]?) -> Bool {\n        guard let status'
-        new = 'func mutationBusy(from status: [String: Any]?) -> Bool {\n        if MacViaEntryCandidateReservation.shared.active { return true }\n        guard let status'
+        new = 'func mutationBusy(from status: [String: Any]?) -> Bool {\n        if MacViaEntryCandidateReservation.shared.active { return true }\n        if let pending = status?["stop_pending"] { guard let boolean = pending as? NSNumber, CFGetTypeID(boolean) == CFBooleanGetTypeID(), !boolean.boolValue else { return true } }\n        guard let status'
         if source.count(old) != 1:
             raise SystemExit("macOS candidate reservation mutation boundary drifted")
         source = source.replace(old, new, 1)
@@ -232,6 +263,7 @@ def transform(source: str, mode: str) -> str:
         if count != 1:
             raise SystemExit(f"unified session-mutation control typing drifted: anchor count={count}")
         source = source.replace(bad, good, 1)
+        source = _stop_retry_unified(source)
     return source
 
 def main() -> None:

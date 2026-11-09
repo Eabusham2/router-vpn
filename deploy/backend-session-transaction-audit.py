@@ -183,8 +183,8 @@ main = require(
     "publishStartedDesktopNode(startupCtx, native, cmd", "checkDesktopNodeStartupOwnerLocked(startupCtx, native, cmd)",
     "errConnectionOperationCancelled", "connectionOperationContextOrBackground()",
     "oldStore := a.profiles", "a.profiles = oldStore",
-    "func (a *app) stopModeWithIntent(holdKillSwitch bool) (failure error)", "clearActiveMultihopGraph(a)",
-    "a.drainSessionDNSForStop(ctx)", "failure = dnsStop.finish(ctx)",
+    "func (a *app) stopModeWithDNSReceipt(holdKillSwitch bool, expected *sessionDNSStopReceipt) (failure error)", "clearActiveMultihopGraph(a)",
+    "return a.stopModeWithDNSReceipt(holdKillSwitch, nil)", "a.drainCapturedSessionDNSForStop(ctx, expected)", "failure = dnsStop.finish(ctx)",
 )
 require(
     "cmd/client/desktop_node_connection_host.go",

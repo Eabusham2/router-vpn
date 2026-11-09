@@ -1,7 +1,31 @@
 import AppKit
 import Foundation
+import CoreFoundation
 import MapKit
 import ObjectiveC
+
+// A displayed retry owns one cleanup receipt, independent of later status polls.
+final class MacUnifiedConnectButton: NSButton {
+    var stopRetryToken: String?
+}
+func productStopRetryToken(_ status: [String: Any]?) throws -> String? {
+    guard let status else { throw NSError(domain: "RouterVPN.StopRetry", code: 1) }
+    guard let pending = status["stop_pending"] else { return nil }
+    guard let boolean = pending as? NSNumber, CFGetTypeID(boolean) == CFBooleanGetTypeID() else { throw NSError(domain: "RouterVPN.StopRetry", code: 2) }
+    guard boolean.boolValue else { return nil }
+    guard let token = status["stop_token"] as? String, token.utf8.count == 32,
+          token.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { throw NSError(domain: "RouterVPN.StopRetry", code: 3) }
+    return token
+}
+func productStopRetryPresentation(_ status: [String: Any]?, busy: Bool) -> (title: String, enabled: Bool, token: String?) {
+    do {
+        let token = try productStopRetryToken(status)
+        let phase = (status?["phase"] as? String ?? "").lowercased()
+        if phase.contains("disconnecting") || phase.contains("stopping") { return ("Disconnecting…", false, nil) }
+        if let token { return ("Retry Disconnect", true, token) }
+        return ((status?["connected"] as? Bool ?? false) || busy ? "Disconnect" : "Connect", true, nil)
+    } catch { return ("Checking…", false, nil) }
+}
 
 func productQuickDNSBody(captured: [String: Any]?, displayedProfileID: String, mode: String) throws -> [String: Any] {
     guard ["home", "rescue"].contains(mode) else {
@@ -321,7 +345,7 @@ extension ProductWindowController {
         let handleWrap = NSStackView(); handleWrap.orientation = .horizontal; handleWrap.addArrangedSubview(NSView()); handleWrap.addArrangedSubview(handle); handleWrap.addArrangedSubview(NSView()); controls.addArrangedSubview(handleWrap)
 
         let connectRow = NSStackView(); connectRow.orientation = .horizontal; connectRow.spacing = 9
-        let connect = NSButton(title: "Connect", target: self, action: #selector(connectUnified)); connect.identifier = NSUserInterfaceItemIdentifier("unified-connect"); connect.bezelStyle = .rounded; connect.controlSize = .large; connect.keyEquivalent = "\r"; connect.contentTintColor = .controlAccentColor; connect.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let connect = MacUnifiedConnectButton(title: "Connect", target: self, action: #selector(connectUnified)); connect.identifier = NSUserInterfaceItemIdentifier("unified-connect"); connect.bezelStyle = .rounded; connect.controlSize = .large; connect.keyEquivalent = "\r"; connect.contentTintColor = .controlAccentColor; connect.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let kill = NSButton(checkboxWithTitle: "Kill switch", target: self, action: #selector(toggleUnifiedKillSwitch(_:))); kill.identifier = NSUserInterfaceItemIdentifier("unified-kill-switch")
         connectRow.addArrangedSubview(connect); connectRow.addArrangedSubview(kill); controls.addArrangedSubview(connectRow); connect.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
 

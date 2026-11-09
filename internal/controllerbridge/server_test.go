@@ -579,3 +579,22 @@ func TestControllerBridgeRejectsUnboundedForwarderResponse(t *testing.T) {
 	}
 	mustSignal(t, h.done, "invalid forwarding response did not retire channel")
 }
+
+// The native IPC bridge preserves the owned retry as a distinct request. In
+// particular an expired receipt's conflict is never converted to ordinary Stop.
+func TestControllerBridgeOwnedStopRetry(t *testing.T) {
+	body := []byte(`{"stop_token":"0123456789abcdef0123456789abcdef"}`)
+	h := newHarness(t, forwardFunc(func(ctx context.Context, method, target string, got []byte, limit int64) (controllertransport.Response, error) {
+		if method != "POST" || target != "/api/disconnect/retry" || !bytes.Equal(got, body) || limit != 32768 {
+			t.Error("bridge changed captured Stop retry")
+		}
+		return controllertransport.Response{Status: 409, Body: []byte("expired Stop receipt")}, nil
+	}))
+	if err := h.send(requestHeader(1, "/api/disconnect/retry", body, 32768), "/api/disconnect/retry", body); err != nil {
+		t.Fatal(err)
+	}
+	reply, payload, err := h.receive()
+	if err != nil || reply.Status != 409 || string(payload) != "expired Stop receipt" {
+		t.Fatal("bridge lost owned retry refusal", reply, err)
+	}
+}

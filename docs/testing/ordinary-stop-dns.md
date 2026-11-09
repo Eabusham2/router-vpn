@@ -29,12 +29,12 @@ retry reopens the same reusable tracker; terminal controller retirement never
 reopens it. Old receipts cannot cancel or clear a replacement tracker, worker or
 retirement receipt.
 
-Use an explicit **Disconnect**, **Emergency disconnect** or **Emergency Stop**
-action to retry cleanup. The macOS Advanced Product surface exposes Disconnect;
-Windows exposes Emergency disconnect; Linux exposes Emergency Stop even when
-the normal Disconnect control is disabled. The unified desktop Connect buttons
-do not yet expose a dedicated pending-Stop retry state; that UI change is a
-separate follow-up. Repeated Connect attempts deliberately keep returning the
+The unified Windows, macOS and Linux primary buttons now expose **Retry
+Disconnect** with the exact outstanding receipt, including failed/off
+presentation. The [owned retry guide](owned-stop-retry.md) records its dedicated
+route, stale-click refusal and separate validation. The macOS Advanced Product
+Disconnect, Windows Emergency disconnect and Linux Emergency Stop actions also
+remain available. Repeated Connect attempts deliberately keep returning the
 pending-cleanup error until an owned Stop retry completes.
 
 ## Regression evidence and limits

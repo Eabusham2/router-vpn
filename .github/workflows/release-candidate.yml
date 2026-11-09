@@ -62,6 +62,7 @@ jobs:
           python3 deploy/test_native_runtime_delivery.py
           python3 deploy/test_linux_runtime_install.py
           python3 deploy/test_desktop_native_toolchain.py
+          python3 deploy/test_desktop_stop_retry.py --contracts-only
           python3 -m unittest deploy.test_desktop_imported_runtime deploy.test_desktop_imported_packet_runtime deploy.test_desktop_imported_openvpn_runtime deploy.test_desktop_imported_pq_runtime deploy.test_desktop_imported_xhttp_runtime
           python3 deploy/test_node_heartbeat_context.py
           python3 deploy/test_desktop_native_dependencies.py
@@ -255,6 +256,13 @@ jobs:
         with: {go-version: '1.26.3', cache: false}
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
+      - name: Owned Stop retry preserves the displayed cleanup receipt
+        shell: pwsh
+        run: |
+          python deploy/test_desktop_stop_retry.py --platform windows --shell pwsh
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 7 owned Stop retry failed' }
+          python deploy/test_desktop_stop_retry.py --platform windows --shell powershell.exe
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 5.1 owned Stop retry failed' }
       - name: Native workspace deletion and captured Tor child cleanup
         shell: pwsh
         run: |
@@ -567,6 +575,8 @@ jobs:
       - name: Verify and stage exact native runtime payloads
         shell: bash
         run: python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime darwin/amd64 darwin/arm64
+      - name: Owned Stop retry preserves the displayed cleanup receipt
+        run: python3 deploy/test_desktop_stop_retry.py --platform macos
       - name: Build native macOS packages
         run: |
           chmod +x client/macos/build-native-app.sh deploy/package-macos-native.sh
@@ -609,6 +619,8 @@ jobs:
       - name: Verify and stage exact native runtime payloads
         shell: bash
         run: python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime linux/${{ matrix.arch }}
+      - name: Owned Stop retry preserves the displayed cleanup receipt
+        run: python3 deploy/test_desktop_stop_retry.py --platform linux
       - name: Build native Linux package
         run: |
           chmod +x client/linux/build-native-app.sh deploy/package-linux-native.sh

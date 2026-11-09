@@ -17,18 +17,31 @@ type sessionDNSStopReceipt struct {
 	tracker *sessionTracker
 	work    *sessionDNSProofWork
 	epoch   uint64
+	token   string
 }
 
 // The caller owns operationMu, but no tracker/app/native/MTU lock. Registering
 // the ordinary tracker first also fences a concurrent first status request.
 func (a *app) drainSessionDNSForStop(ctx context.Context) (*sessionDNSStopReceipt, error) {
+	return a.drainCapturedSessionDNSForStop(ctx, nil)
+}
+
+func (a *app) drainCapturedSessionDNSForStop(ctx context.Context, expected *sessionDNSStopReceipt) (*sessionDNSStopReceipt, error) {
 	if a == nil || ctx == nil {
 		return nil, errors.New("selected-DNS Stop requires its original cleanup caller")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	t := sessionTrackerFor(a)
+	var t *sessionTracker
+	if expected != nil {
+		t = expected.tracker
+		if t == nil || t.a != a {
+			return nil, errors.New("Stop retry lost its original DNS tracker")
+		}
+	} else {
+		t = sessionTrackerFor(a)
+	}
 	if err := desktopnetwork.LockContext(ctx, &t.mu); err != nil {
 		return nil, err
 	}
@@ -37,8 +50,17 @@ func (a *app) drainSessionDNSForStop(ctx context.Context) (*sessionDNSStopReceip
 		return nil, errors.New("selected-DNS Stop lost its original registered tracker")
 	}
 	receipt := t.dnsProofStop
+	if expected != nil && receipt != expected {
+		t.mu.Unlock()
+		return nil, errors.New("Stop retry belongs to a replaced retirement receipt")
+	}
 	if receipt == nil {
-		receipt = &sessionDNSStopReceipt{tracker: t, work: t.dnsProofWork, epoch: t.dnsProofEpoch.Add(1)}
+		token, err := randomHex(16)
+		if err != nil {
+			t.mu.Unlock()
+			return nil, err
+		}
+		receipt = &sessionDNSStopReceipt{tracker: t, work: t.dnsProofWork, epoch: t.dnsProofEpoch.Add(1), token: token}
 		t.dnsProofStop = receipt
 		t.dnsProofBinding = nil
 		if t.session != nil {

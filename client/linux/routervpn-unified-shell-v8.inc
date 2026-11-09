@@ -15,7 +15,7 @@ typedef struct {
     GtkWidget *status;
     GtkWidget *settings_summary;
     gboolean syncing;
-} LinuxUnifiedV8;
+} LinuxUnifiedV8; static gboolean linux_protection_mutation_busy_v26(App *app, gboolean enabled);
 
 // Forward declaration: callbacks above the refresh implementation may request an
 // immediate UI refresh. Keep this explicit so -Werror never relies on an implicit
@@ -51,7 +51,7 @@ static void linux_unified_refresh_protection_v21(LinuxUnifiedV8 *state) {
     }
     g_free(err); free(out.data);
     gtk_toggle_button_set_inconsistent(GTK_TOGGLE_BUTTON(state->kill_switch), !valid);
-    gtk_widget_set_sensitive(state->kill_switch, valid && !routervpn_mutation_busy(state->app));
+    gtk_widget_set_sensitive(state->kill_switch, valid && !linux_protection_mutation_busy_v26(state->app, !enabled));
     if (valid) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->kill_switch), enabled);
 }
 
@@ -230,6 +230,42 @@ static int linux_unified_selected_external_v8(App *app,const char *displayed_id,
     *body=external_primary_captured_body_v24(root,selected,FALSE,NULL);
     return *body!=NULL?1:-1;
 }
+/* The token is an opaque receipt, never inferred from a phase or error text. */
+static const char *linux_stop_retry_token_v26(JsonObject *status, gboolean *valid) {
+    *valid=FALSE;if(status==NULL)return NULL;
+    if(!json_object_has_member(status,"stop_pending")){*valid=TRUE;return NULL;}
+    JsonNode *pending=json_object_get_member(status,"stop_pending");
+    if(!JSON_NODE_HOLDS_VALUE(pending)||json_node_get_value_type(pending)!=G_TYPE_BOOLEAN)return NULL;
+    if(!json_node_get_boolean(pending)){*valid=TRUE;return NULL;}
+    JsonNode *value=json_object_has_member(status,"stop_token")?json_object_get_member(status,"stop_token"):NULL;
+    if(value==NULL||!JSON_NODE_HOLDS_VALUE(value)||json_node_get_value_type(value)!=G_TYPE_STRING)return NULL;
+    const char *token=json_node_get_string(value);if(token==NULL||strlen(token)!=32)return NULL;
+    for(size_t i=0;i<32;i++)if(!((token[i]>='0'&&token[i]<='9')||(token[i]>='a'&&token[i]<='f')))return NULL;
+    *valid=TRUE;return token;
+}
+static gboolean linux_protection_mutation_busy_v26(App *app, gboolean enabled) {
+    if(enabled)return routervpn_mutation_busy(app);
+    if(linux_async_busy_v16(app))return TRUE;
+    Buffer out={0};char *err=NULL;gboolean busy=TRUE;
+    if(api_request("/api/status","GET",NULL,3500,&out,&err)){
+        JsonNode *root=parse_json(out.data);
+        if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){
+            JsonObject *obj=json_node_get_object(root);gboolean valid=FALSE;
+            (void)linux_stop_retry_token_v26(obj,&valid);
+            busy=!valid || (json_object_has_member(obj,"connected")&&json_object_get_boolean_member(obj,"connected")) || routervpn_phase_busy(obj_string(obj,"phase"));
+        }
+        if(root!=NULL)json_node_free(root);
+    }
+    g_free(err);free(out.data);return busy;
+}
+static void linux_unified_retry_stop_v26(LinuxUnifiedV8 *state, const char *token) {
+    /* This request deliberately uses the non-preempting async lane. A stale
+     * Retry must never cancel a replacement before server owner validation. */
+    if(linux_async_busy_v16(state->app)){append_diag(state->app,"Another owned action is pending; refresh before retrying Disconnect.");return;}
+    char *body=json_string_body("stop_token",token);
+    post_and_log(state->app,"/api/disconnect/retry",body,30000,"Retry Disconnect");
+    g_free(body);
+}
 static void linux_unified_connect_v8(GtkButton *button, gpointer data) {
     (void)button; LinuxUnifiedV8 *state=data; Buffer out={0};char *err=NULL;gboolean active=FALSE;
     if(api_request("/api/status","GET",NULL,4000,&out,&err)){JsonNode *root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);gboolean connected=json_object_has_member(obj,"connected")&&json_object_get_boolean_member(obj,"connected");const char *phase=obj_string(obj,"phase");active=connected||g_str_has_prefix(phase,"starting")||g_str_has_prefix(phase,"checking")||strstr(phase,"trying")!=NULL||strstr(phase,"proving")!=NULL;json_node_free(root);}}g_free(err);free(out.data);
@@ -245,9 +281,9 @@ static void linux_unified_connect_v8(GtkButton *button, gpointer data) {
 static void linux_unified_kill_changed_v8(GtkToggleButton *toggle, gpointer data) {
     LinuxUnifiedV8 *state = data;
     if (state == NULL || state->syncing) return;
-    if (!routervpn_require_mutation_idle(state->app,"changing persistent kill-switch policy")) { linux_unified_refresh_v8(state); return; }
+    gboolean enabled = gtk_toggle_button_get_active(toggle); if (linux_protection_mutation_busy_v26(state->app,enabled)) { append_diag(state->app,"Wait for the active connection or owned Stop cleanup before changing protection."); linux_unified_refresh_v8(state); return; }
     char *displayed = g_strdup(gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->node)));
-    gboolean enabled = gtk_toggle_button_get_active(toggle);
+    /* Preserve the captured toggle through its exact protection request. */
     Buffer out = {0}; char *err = NULL;
     if (displayed != NULL && api_request("/api/profile/protection", "GET", NULL, 5000, &out, &err)) {
         JsonNode *root = parse_json(out.data);

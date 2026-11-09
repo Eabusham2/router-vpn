@@ -234,7 +234,7 @@ function SetUnifiedAsyncUI([bool]$Busy,[string]$Label=''){
     foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedEntryMode','UnifiedExitMode','UnifiedExecution','UnifiedBaseCombo','UnifiedCandidatesButton','UnifiedFastestNode','UnifiedForwardButton','UnifiedPerformanceButton','MtuRetestButton','MultihopConnectButton','AutoButton','ConnectButton','ExternalDirectButton','ExternalViaEntryButton','LatencyButton','DnsButton','UnifiedNodeCombo','UnifiedDnsCombo','UnifiedKillSwitch','UnifiedTorButton','UnifiedExternalNodeButton','UnifiedExternalPathButton')){
         $C=Control $N;if($null-ne$C){$C.IsEnabled=(-not$Busy -and (-not$script:UnifiedProtectionPending -or $N-ceq'UnifiedKillSwitch'))}
     }
-    $B=Control 'UnifiedConnectButton';if($null-ne$B){$B.IsEnabled=($Busy -or -not$script:UnifiedProtectionPending);if($Busy){$B.Content=if($Label-match'(?i)connect|auto|custom|multihop|external'){'Cancel / Disconnect'}else{$Label}}}
+    $B=Control 'UnifiedConnectButton';if($null-ne$B -and $Busy -and $script:UnifiedAsyncOwnedStopRetry){$B.IsEnabled=$false;$B.Content='Retrying disconnect…';return};if($null-ne$B){$B.IsEnabled=($Busy -or -not$script:UnifiedProtectionPending);if($Busy){$B.Content=if($Label-match'(?i)connect|auto|custom|multihop|external'){'Cancel / Disconnect'}else{$Label}}}
 }
 function UnifiedMultihopStartupTimeout($Body){
     if([string]$Body.execution-cne'auto'){return 200}
@@ -274,6 +274,7 @@ function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET'
         $Cts=[System.Threading.CancellationTokenSource]::new()
         $Cts.CancelAfter([TimeSpan]::FromSeconds([Math]::Max(1,$Timeout)))
         $script:UnifiedAsyncRequest=$Req;$script:UnifiedAsyncCts=$Cts;$script:UnifiedAsyncSuccess=$OnSuccess;$script:UnifiedAsyncFailure=$OnFailure;$script:UnifiedAsyncFinally=$OnFinally
+        $script:UnifiedAsyncOwnedStopRetry=($Path-ceq'/api/disconnect/retry')
         $script:UnifiedAsyncLabel=$Label;$script:UnifiedAsyncCancelled=$false;$script:UnifiedAsyncDisconnectAfterCancel=$false
         $script:UnifiedAsyncTask=$script:UnifiedAsyncClient.SendAsync($Req,$Cts.Token)
         if($ComparisonID-or$Path-ceq'/api/multihop/connect'){StartUnifiedComparisonProgress $ComparisonID $Timeout $OnComparison}
@@ -294,7 +295,7 @@ function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET'
             $script:UnifiedAsyncPoller.Stop()
             $script:UnifiedAsyncTask=$null;$script:UnifiedAsyncRequest=$null;$script:UnifiedAsyncCts=$null
             $script:UnifiedAsyncSuccess=$null;$script:UnifiedAsyncFailure=$null;$script:UnifiedAsyncFinally=$null;$script:UnifiedAsyncLabel=''
-            $script:UnifiedAsyncActive=$false
+            $script:UnifiedAsyncActive=$false;$script:UnifiedAsyncOwnedStopRetry=$false
             SetUnifiedAsyncUI $false
         }
         return $false
@@ -305,7 +306,7 @@ function CancelUnifiedApiAsync([bool]$DisconnectAfter=$false){
     $script:UnifiedAsyncCancelled=$true
     StopUnifiedComparisonProgress
     # Repeated cancel/close events must not retract a requested disconnect.
-    $script:UnifiedAsyncDisconnectAfterCancel=$script:UnifiedAsyncDisconnectAfterCancel -or $DisconnectAfter
+    $script:UnifiedAsyncDisconnectAfterCancel=(-not$script:UnifiedAsyncOwnedStopRetry -and ($script:UnifiedAsyncDisconnectAfterCancel -or $DisconnectAfter))
     try{if($null-ne$script:UnifiedAsyncCts){$script:UnifiedAsyncCts.Cancel()}}catch{}
     return $true
 }
@@ -336,11 +337,11 @@ function CompleteUnifiedApiAsync{
             try{if($null-ne$Cts){$Cts.Dispose()}}catch{}
             # Read cancellation after callbacks: a nested dispatcher may have
             # received Cancel while a callback was presenting a dialog.
-            $DisconnectAfter=$script:UnifiedAsyncDisconnectAfterCancel
+            $DisconnectAfter=(-not$script:UnifiedAsyncOwnedStopRetry -and $script:UnifiedAsyncDisconnectAfterCancel)
             $script:UnifiedAsyncTask=$null;$script:UnifiedAsyncRequest=$null;$script:UnifiedAsyncCts=$null;$script:UnifiedAsyncResponse=$null
             $script:UnifiedAsyncSuccess=$null;$script:UnifiedAsyncFailure=$null;$script:UnifiedAsyncFinally=$null;$script:UnifiedAsyncLabel=''
             $script:UnifiedAsyncCancelled=$false;$script:UnifiedAsyncDisconnectAfterCancel=$false
-            $script:UnifiedAsyncCompleting=$false;$script:UnifiedAsyncActive=$false
+            $script:UnifiedAsyncCompleting=$false;$script:UnifiedAsyncActive=$false;$script:UnifiedAsyncOwnedStopRetry=$false
         }
     }
     if($script:UnifiedAsyncClosed){return}
@@ -359,6 +360,7 @@ $script:UnifiedRefreshTasks=@{}
 $script:UnifiedRefreshRequests=@{}
 $script:UnifiedRefreshCts=$null
 $script:UnifiedRefreshDiscard=$false
+$script:UnifiedStopRetryToken='';$script:UnifiedAsyncOwnedStopRetry=$false
 $script:UnifiedProtectionPending=$false
 $script:UnifiedProtectionProfileID=''
 $script:UnifiedRefreshPoller=New-Object Windows.Threading.DispatcherTimer
@@ -401,6 +403,7 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
     try{
         $Connected=[bool]$Status.connected;$Phase=[string]$Status.phase
         $ControllerBusy=Test-RouterVPNMutationBusyFromStatus $Status
+        try{if(GetUnifiedStopRetryToken $Status){$ControllerBusy=$true}}catch{$ControllerBusy=$true}
         $ProtectionView=Get-RouterVPNProtectionPresentation -Captured $Protection -DisplayedProfileID ([string]$Store.selected_id)
         $script:UnifiedProtectionPending=[bool]$ProtectionView.Pending
         $script:UnifiedProtectionProfileID=if($ProtectionView.Valid){[string]$Store.selected_id}else{''}
@@ -429,7 +432,7 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
         DrawMap $Profiles ([string]$Store.selected_id)
         $Selected=@($Profiles|Where-Object{[string]$_.id-eq[string]$Store.selected_id}|Select-Object -First 1)
         $UnifiedKill=Control 'UnifiedKillSwitch'
-        if($null-ne$UnifiedKill){$UnifiedKill.Content=[string]$ProtectionView.Label;$UnifiedKill.IsChecked=$ProtectionView.Checked;$UnifiedKill.ToolTip=[string]$ProtectionView.Message;$UnifiedKill.IsEnabled=(-not$ControllerBusy -and [bool]$ProtectionView.Enabled)}
+        if($null-ne$UnifiedKill){$UnifiedKill.Content=[string]$ProtectionView.Label;$UnifiedKill.IsChecked=$ProtectionView.Checked;$UnifiedKill.ToolTip=[string]$ProtectionView.Message;$UnifiedKill.IsEnabled=([bool]$ProtectionView.Enabled -and -not(TestUnifiedProtectionStatusBusy $Status) -and (-not$ControllerBusy -or [bool]$ProtectionView.Checked -or [bool]$ProtectionView.Pending))}
         if($Selected.Count){
             $Profile=$Selected[0]
             $Success=if($Profile.effective_mtu_success_ratio){[double]$Profile.effective_mtu_success_ratio*100}else{0}
@@ -470,6 +473,7 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
             $UnifiedConnect.Content=if($Disconnecting){'Disconnecting…'}elseif($script:UnifiedProtectionPending){'Connect'}elseif($Connected-or$MutationBusy){'Disconnect'}else{'Connect'}
             $UnifiedConnect.IsEnabled=(-not$Disconnecting -and -not$script:UnifiedProtectionPending)
         }
+        SetUnifiedStopRetryPresentation $Status
         foreach($Name in @('UnifiedMultihop','UnifiedModeCombo','UnifiedDnsCombo','UnifiedFastestNode')){
             $C=Control $Name;if($null-ne$C){$C.IsEnabled=-not$MutationBusy}
         }
@@ -526,7 +530,45 @@ function RefreshUnifiedModeChoices($Modes){$Wanted=GetUnifiedModeID;$Values=New-
 function UnifiedSelectedProfile{try{$S=$RouterCombo.Tag;$ID=[string]$RouterCombo.SelectedValue;if($null-eq$S -or -not$ID -or [string]$S.selected_id -cne $ID){return $null};$Found=@($S.profiles|Where-Object{[string]$_.id -ceq $ID});if($Found.Count-ne1){return $null};return $Found[0]}catch{return $null}}
 function OpenUnifiedDetail([int]$Index){(Control 'UnifiedShell').Visibility='Collapsed';(Control 'LegacyDetailTabs').Visibility='Visible';(Control 'LegacyDetailTabs').SelectedIndex=$Index;(Control 'UnifiedBackButton').Visibility='Visible'}
 function BackUnifiedMap{(Control 'LegacyDetailTabs').Visibility='Collapsed';(Control 'UnifiedBackButton').Visibility='Collapsed';(Control 'UnifiedShell').Visibility='Visible';RefreshProduct}
+function GetUnifiedStopRetryToken($Status){
+    if($null-eq$Status){throw 'Refresh controller status before changing the connection.'}
+    $Pending=$Status.PSObject.Properties['stop_pending']
+    if($null-eq$Pending){return ''}
+    if($Pending.Value -isnot [bool]){throw 'The controller returned an invalid Stop receipt.'}
+    if(-not$Pending.Value){return ''}
+    if($Status.stop_token -isnot [string] -or [string]$Status.stop_token -cnotmatch '^[0-9a-f]{32}$'){throw 'The controller returned an invalid Stop retry token.'}
+    return [string]$Status.stop_token
+}
+function TestUnifiedProtectionStatusBusy($Status){
+    try{
+        [void](GetUnifiedStopRetryToken $Status)
+        $Ordinary=$Status|Select-Object * -ExcludeProperty stop_pending,stop_token
+        return (Test-RouterVPNMutationBusyFromStatus $Ordinary)
+    }catch{return $true}
+}
+function AssertUnifiedProtectionMutationIdle([bool]$Enabled){
+    if($Enabled){Assert-RouterVPNMutationIdle 'changing persistent kill-switch policy';return}
+    if((UnifiedAsyncBusy) -or (TestUnifiedProtectionStatusBusy (Api '/api/status' -Timeout 3))){throw 'Wait for the active connection to stop before retrying protection Off.'}
+}
+function SetUnifiedStopRetryPresentation($Status){
+    $script:UnifiedStopRetryToken=''
+    $Button=Control 'UnifiedConnectButton'
+    try{$Token=GetUnifiedStopRetryToken $Status}catch{if($null-ne$Button){$Button.Content='Checking…';$Button.IsEnabled=$false};return}
+    if($Token){
+        $script:UnifiedStopRetryToken=$Token
+        if($null-ne$Button){$Stopping=[string]$Status.phase -match '(?i)(disconnecting|stopping)';$Button.Content=if($Stopping){'Disconnecting…'}else{'Retry Disconnect'};$Button.IsEnabled=(-not$Stopping -and -not(UnifiedAsyncBusy))}
+    }
+}
+function StartUnifiedStopRetry([string]$Token){
+    if($Token -cnotmatch '^[0-9a-f]{32}$'){throw 'Refresh the original Stop receipt before retrying.'}
+    # Retry is a captured cleanup action. Never preempt another local request.
+    if(UnifiedAsyncBusy){Log 'Another owned action is pending; refresh before retrying Disconnect.';return}
+    [void](StartUnifiedApiAsync 'Retrying disconnect…' '/api/disconnect/retry' 'POST' @{stop_token=$Token} 20 {param($R)Log 'Disconnect cleanup completed'} {param($E)Log ('Disconnect retry refused or failed: '+$E)} $null)
+}
 function UnifiedConnect{
+    $CapturedRetry=[string]$script:UnifiedStopRetryToken
+    if($CapturedRetry){try{StartUnifiedStopRetry $CapturedRetry}catch{Log $_.Exception.Message};return}
+    if($script:UnifiedAsyncOwnedStopRetry){return}
     if(UnifiedAsyncBusy){
         [void](CancelUnifiedApiAsync $true)
         Log 'Cancelling active Router VPN action; disconnect will follow cleanup.'
@@ -534,6 +576,9 @@ function UnifiedConnect{
     }
     try{
         $Status=Api '/api/status' -Timeout 3;$Phase=[string]$Status.phase
+        $RetryToken=GetUnifiedStopRetryToken $Status
+        if($RetryToken){StartUnifiedStopRetry $RetryToken;return}
+        if($script:UnifiedProtectionPending){throw 'Complete protection recovery before starting a connection.'}
         if([bool]$Status.connected -or $Phase -match '^(starting|checking)|trying|proving'){
             [void](StartUnifiedApiAsync 'Disconnecting…' '/api/disconnect' 'POST' @{} 20 {param($R)Log 'Disconnected'} {param($E)Log ('Disconnect failed: '+$E)} $null)
             return
@@ -881,7 +926,7 @@ $Window.Add_Closed({
     try{if($null-ne$script:UnifiedAsyncCts){$script:UnifiedAsyncCts.Dispose()}}catch{}
 })
 (Control 'UnifiedModeCombo').Add_SelectionChanged({if($ModeCombo.SelectedValue){$ID=[string]$ModeCombo.SelectedValue;if($ID -eq 'custom:new'){ShowUnifiedCustomBuilder}else{SaveUnifiedModeID $ID}}})
-(Control 'UnifiedKillSwitch').Add_Click({try{$On=[bool](Control 'UnifiedKillSwitch').IsChecked;$DisplayedProfileID=[string]$RouterCombo.SelectedValue;if($script:UnifiedProtectionPending -and $script:UnifiedProtectionProfileID-ceq$DisplayedProfileID){$On=$false};[void](Set-RouterVPNProfileProtection -BaseUrl $BaseUrl -DisplayedProfileID $DisplayedProfileID -Enabled $On);Log $(if($On){'Kill switch enabled'}else{'Kill switch disabled'})}catch{Log ('Kill switch update failed: '+$_.Exception.Message)};RefreshProduct})
+(Control 'UnifiedKillSwitch').Add_Click({try{$On=[bool](Control 'UnifiedKillSwitch').IsChecked;$DisplayedProfileID=[string]$RouterCombo.SelectedValue;if($script:UnifiedProtectionPending -and $script:UnifiedProtectionProfileID-ceq$DisplayedProfileID){$On=$false};AssertUnifiedProtectionMutationIdle $On;[void](Set-RouterVPNProfileProtection -BaseUrl $BaseUrl -DisplayedProfileID $DisplayedProfileID -Enabled $On);Log $(if($On){'Kill switch enabled'}else{'Kill switch disabled'})}catch{Log ('Kill switch update failed: '+$_.Exception.Message)};RefreshProduct})
 (Control 'UnifiedDnsCombo').Add_SelectionChanged({if(-not $script:Busy){$Tag=ComboTag (Control 'UnifiedDnsCombo') 'home';if($Tag -in @('fastest','custom','dot','doh','doh3')){OpenUnifiedDetail 3;RefreshDnsPolicy}else{try{SetUnifiedDNSPreset -Mode $Tag;Log ('DNS selected: '+$Tag)}catch{Log ('DNS update failed: '+$_.Exception.Message)};RefreshDnsPolicy;RefreshProduct}}})
 '@
     $ProductSource = $ProductSource.Replace($beforeShow, $handlers + "`n" + $beforeShow)

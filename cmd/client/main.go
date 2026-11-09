@@ -242,6 +242,7 @@ func main() {
 	h.HandleFunc("/api/profile/import", a.importProfileBundle)
 	h.HandleFunc("/api/connect", a.connect)
 	h.HandleFunc("/api/disconnect", a.disconnect)
+	h.HandleFunc("/api/disconnect/retry", a.retryDisconnect)
 	h.HandleFunc("/api/auto", a.auto)
 	h.HandleFunc("/api/options", a.options)
 	h.HandleFunc("/api/forward", a.forward)
@@ -287,10 +288,15 @@ func (a *app) logicalUI(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(b)
 }
 
-func (a *app) status(w http.ResponseWriter, _ *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	_ = json.NewEncoder(w).Encode(a.state)
+func (a *app) status(w http.ResponseWriter, r *http.Request) {
+	status, err := a.controllerStatusContext(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.Header().Set("content-type", "application/json")
+	w.Header().Set("cache-control", "no-store")
+	_ = json.NewEncoder(w).Encode(status)
 }
 
 func (a *app) info(w http.ResponseWriter, _ *http.Request) {
@@ -1275,10 +1281,14 @@ func (a *app) stopMode() error {
 	return a.stopModeWithIntent(false)
 }
 
-func (a *app) stopModeWithIntent(holdKillSwitch bool) (failure error) {
+func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
+	return a.stopModeWithDNSReceipt(holdKillSwitch, nil)
+}
+
+func (a *app) stopModeWithDNSReceipt(holdKillSwitch bool, expected *sessionDNSStopReceipt) (failure error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	dnsStop, err := a.drainSessionDNSForStop(ctx)
+	dnsStop, err := a.drainCapturedSessionDNSForStop(ctx, expected)
 	if err != nil {
 		return err
 	}
