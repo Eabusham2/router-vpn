@@ -580,7 +580,7 @@ def mutants():
          once(recovery, "r.result != nil && !sameDesktopNodeJournalSelection(r.result.Selection, copy)", "false")),
         (profile_file, "recovered-off-ignores-private-readback", "TestDesktopNodeRecoveryRejectsUnprovedReceiptAndChangedProfile/private-store-mismatch",
          "unproved recovery or changed accepted profile reached native removal or saved settlement",
-         NATIVE.function_mutant(profile, "func (a *app) captureRecoveredOffProfile(",
+         NATIVE.function_mutant(profile, "func (a *app) captureRecoveredOffProfileContext(",
                                "!bytes.Equal(raw, append(want, '\\n'))", "false && !bytes.Equal(raw, append(want, '\\n'))")),
         (recovery_file, "adoption-before-native-close", "TestDesktopNodeRecoveryPartialOpenAndNativeCloseRemainOwned/native-close",
          "native recovery cleanup failure admitted a successor owner",

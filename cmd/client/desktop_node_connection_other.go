@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 
 	"router-vpn/internal/common"
 )
@@ -13,3 +14,10 @@ func (*app) startDesktopLinuxNodeConnection(context.Context, common.RouterProfil
 }
 
 func (*app) guardDesktopLinuxNodeLegacyTransition() error { return nil }
+
+func (*app) guardDesktopLinuxNodeLegacyTransitionContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("native transition requires its original caller")
+	}
+	return ctx.Err()
+}

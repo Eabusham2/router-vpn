@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/linuxprotection"
 )
 
@@ -40,7 +41,18 @@ type desktopPlatformProtectionCapture struct {
 }
 
 func (a *app) captureDesktopParentProfileProtection() *desktopPlatformProtectionCapture {
-	a.mu.Lock()
+	return a.captureDesktopParentProfileProtectionContext(context.Background())
+}
+
+func (a *app) captureDesktopParentProfileProtectionContext(caller context.Context) *desktopPlatformProtectionCapture {
+	if caller == nil {
+		return &desktopPlatformProtectionCapture{failure: errors.New("Linux protection observation requires its original caller")}
+	}
+	ctx, cancel := context.WithTimeout(caller, 2*time.Second)
+	defer cancel()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return &desktopPlatformProtectionCapture{failure: err}
+	}
 	controller := a.localController
 	a.mu.Unlock()
 	if controller == nil || controller.nodeParent == nil {
@@ -51,8 +63,6 @@ func (a *app) captureDesktopParentProfileProtection() *desktopPlatformProtection
 		return &desktopPlatformProtectionCapture{controller: controller, failure: errors.New("Linux protection has another original parent")}
 	}
 	capture := &desktopPlatformProtectionCapture{controller: controller, parent: parent}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
 	select {
 	case <-ctx.Done():
 		capture.failure = ctx.Err()
@@ -248,17 +258,24 @@ func (a *app) handlePlatformProfileProtection(w http.ResponseWriter, r *http.Req
 }
 
 func (a *app) guardPlatformProtectionOffPending() error {
-	capture := a.capturePlatformProfileProtection()
+	return a.guardPlatformProtectionOffPendingContext(context.Background())
+}
+
+func (a *app) guardPlatformProtectionOffPendingContext(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil {
+		return errors.New("Linux protection admission requires its original live caller")
+	}
+	capture := a.capturePlatformProfileProtectionContext(ctx)
 	if capture != nil && capture.standard != nil {
 		if capture.failure != nil || capture.standard.Failure != nil || capture.standard.Pending || capture.standard.Active {
 			return errors.New("finish the pending original standard-service protection change before another operation")
 		}
-		return nil
+		return ctx.Err()
 	}
 	if capture != nil && (capture.off != nil || capture.failure != nil) {
 		return errors.New("finish the pending Linux Kill Switch Off change or original protection cleanup before another operation")
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (a *app) guardPlatformProtectionPreference(policy string) error {

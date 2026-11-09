@@ -95,6 +95,13 @@ func (a *app) beginProtectionAwareMutationOperation(r *http.Request, allowOffRet
 }
 
 func preflightPrivateConnectionRuntime() error {
+	return preflightPrivateConnectionRuntimeContext(context.Background())
+}
+
+func preflightPrivateConnectionRuntimeContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("private connection preparation requires its original caller")
+	}
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 	for _, category := range []string{
 		"native-node",
@@ -103,26 +110,46 @@ func preflightPrivateConnectionRuntime() error {
 		"openvpn-standard-exit",
 		"tor-bridge",
 	} {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if _, err := privateRuntimeBase(root, category); err != nil {
 			return fmt.Errorf("private connection runtime %s is unsafe: %w", category, err)
 		}
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (a *app) beginConnectionOperation() (context.Context, func(), error) {
+	return a.beginConnectionOperationContext(context.Background())
+}
+
+func (a *app) beginConnectionOperationContext(caller context.Context) (context.Context, func(), error) {
+	if caller == nil || caller.Err() != nil {
+		return nil, nil, errors.New("connection admission requires its original live caller")
+	}
 	// An explicit Connect supersedes delayed startup even when its own
 	// preflight fails. Startup enters the shared transaction directly so it
 	// does not cancel the intent that it is about to execute.
 	cancelPendingStartupPolicy(a)
-	return a.beginConnectionTransaction()
+	return a.beginConnectionTransactionContext(caller)
 }
 
 func (a *app) beginConnectionTransaction() (context.Context, func(), error) {
+	return a.beginConnectionTransactionContext(context.Background())
+}
+
+func (a *app) beginConnectionTransactionContext(caller context.Context) (context.Context, func(), error) {
+	if a == nil || caller == nil || caller.Err() != nil {
+		return nil, nil, errors.New("connection transaction requires its original live caller")
+	}
 	if !a.operationMu.TryLock() {
 		return nil, nil, errors.New("another Router VPN connection or settings transaction is already in progress")
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(caller, &a.mu); err != nil {
+		a.operationMu.Unlock()
+		return nil, nil, err
+	}
 	closing := a.controllerClosingLocked()
 	busy := profileSettingsBusy(a.state.Connected, a.state.Phase)
 	a.mu.Unlock()
@@ -134,11 +161,11 @@ func (a *app) beginConnectionTransaction() (context.Context, func(), error) {
 		a.operationMu.Unlock()
 		return nil, nil, errors.New("Router VPN is connected or transitioning; disconnect before starting another connection")
 	}
-	if err := a.guardDesktopProtectionOffPending(); err != nil {
+	if err := a.guardDesktopProtectionOffPending(caller); err != nil {
 		a.operationMu.Unlock()
 		return nil, nil, err
 	}
-	if err := guardViaEntryDecision(a); err != nil {
+	if err := guardViaEntryDecisionContext(caller, a); err != nil {
 		a.operationMu.Unlock()
 		return nil, nil, err
 	}
@@ -146,7 +173,7 @@ func (a *app) beginConnectionTransaction() (context.Context, func(), error) {
 	// Validate/create every secret-bearing desktop runtime root before recording
 	// Phase=requested or starting any helper. A poisoned run/ tree therefore
 	// fails closed without changing connection state or touching the network.
-	if err := preflightPrivateConnectionRuntime(); err != nil {
+	if err := preflightPrivateConnectionRuntimeContext(caller); err != nil {
 		a.operationMu.Unlock()
 		return nil, nil, err
 	}
@@ -154,14 +181,20 @@ func (a *app) beginConnectionTransaction() (context.Context, func(), error) {
 	// Re-check under the app lock after filesystem validation before publishing
 	// connection context/state. operationMu keeps competing Router VPN operations
 	// out, while this second check protects against any independent state change.
-	invalidateDesktopDNSResults(a)
-	a.mu.Lock()
+	if err := invalidateDesktopDNSResultsContext(caller, a); err != nil {
+		a.operationMu.Unlock()
+		return nil, nil, err
+	}
+	if err := desktopnetwork.LockContext(caller, &a.mu); err != nil {
+		a.operationMu.Unlock()
+		return nil, nil, err
+	}
 	if a.controllerClosingLocked() || profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()
 		a.operationMu.Unlock()
 		return nil, nil, errors.New("Router VPN state changed while validating private connection runtime")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(caller)
 	a.connectionContext = ctx
 	a.connectionCancel = cancel
 	a.connectionCancelIntent = nil

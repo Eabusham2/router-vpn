@@ -13,19 +13,35 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 )
 
 func (a *app) capturePlatformProfileProtection() *desktopPlatformProtectionCapture {
-	a.mu.Lock()
+	return a.capturePlatformProfileProtectionContext(context.Background())
+}
+
+func (a *app) capturePlatformProfileProtectionContext(caller context.Context) *desktopPlatformProtectionCapture {
+	if caller == nil {
+		return &desktopPlatformProtectionCapture{failure: errors.New("Linux protection capture requires its original caller")}
+	}
+	if err := desktopnetwork.LockContext(caller, &a.mu); err != nil {
+		return &desktopPlatformProtectionCapture{failure: err}
+	}
 	profilePath := a.cfg.ProfilesFile
 	a.mu.Unlock()
-	parent := a.captureDesktopParentProfileProtection()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	parent := a.captureDesktopParentProfileProtectionContext(caller)
+	ctx, cancel := context.WithTimeout(caller, 2*time.Second)
 	defer cancel()
 	service := a.captureLinuxStandardServiceProtectionForParent(ctx, parent)
 	capture := combineLinuxProtectionCaptures(parent, service)
 	if capture != nil && capture.standard != nil {
 		capture.standardProfilePath = profilePath
+	}
+	if err := ctx.Err(); err != nil {
+		if capture == nil {
+			capture = &desktopPlatformProtectionCapture{}
+		}
+		capture.failure = errors.Join(capture.failure, err)
 	}
 	return capture
 }

@@ -15,6 +15,7 @@ import (
 
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/mobiletor"
 )
@@ -157,12 +158,32 @@ func (a *app) retainedDesktopNodeProtection() bool {
 	return slot != nil && !slot.provedEmpty()
 }
 
+func (a *app) retainedDesktopNodeProtectionContext(ctx context.Context) (bool, error) {
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return false, err
+	}
+	slot := a.nodeProtection
+	a.mu.Unlock()
+	if slot == nil {
+		return false, ctx.Err()
+	}
+	if err := desktopnetwork.LockContext(ctx, &slot.mu); err != nil {
+		return false, err
+	}
+	defer slot.mu.Unlock()
+	return !slot.provedEmptyLocked(), ctx.Err()
+}
+
 func (s *desktopNodeProtectionSlot) provedEmpty() bool {
 	if s == nil {
 		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.provedEmptyLocked()
+}
+
+func (s *desktopNodeProtectionSlot) provedEmptyLocked() bool {
 	return s.known && s.target == nil && s.active == nil && s.retirement == nil && s.off == nil && s.journal == nil
 }
 
@@ -631,18 +652,31 @@ func (a *app) publishDesktopOwnedNodeStartFor(launch *desktopNodeLaunch, phase, 
 // own native successor and restore support; rejecting after Stop would destroy
 // a working connection while the new path cannot consume its retained deny.
 func (a *app) guardDesktopOwnedNodeTransition(next *desktopNodeLaunch) error {
-	if err := a.guardDesktopLinuxNodeLegacyTransition(); err != nil {
+	return a.guardDesktopOwnedNodeTransitionContext(context.Background(), next)
+}
+
+func (a *app) guardDesktopOwnedNodeTransitionContext(ctx context.Context, next *desktopNodeLaunch) error {
+	if ctx == nil || ctx.Err() != nil {
+		return errors.New("native transition requires its original live caller")
+	}
+	if err := a.guardDesktopLinuxNodeLegacyTransitionContext(ctx); err != nil {
 		return err
 	}
 	typedExternal := next != nil && next.ownedNode == nil && next.external != nil && next.external.windows != nil &&
 		next.external.windows.app == a && next.external.windows.launch == next && desktopWindowsExternalEligible(next)
-	if a.retainedDesktopNodeProtection() && (next == nil || next.ownedNode == nil && !typedExternal) {
+	retained, err := a.retainedDesktopNodeProtectionContext(ctx)
+	if err != nil {
+		return err
+	}
+	if retained && (next == nil || next.ownedNode == nil && !typedExternal) {
 		return errors.New("the selected path cannot yet inherit this captured native protection; disconnect the current on-connect path first")
 	}
 	if next == nil || next.ownedNode == nil && !typedExternal {
-		return nil
+		return ctx.Err()
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	active := a.cmd != nil || a.state.Connected || a.state.Mode != "" && a.state.Mode != "off"
 	a.mu.Unlock()
 	_, externalExists := desktopExternalRetainedLaunches.Load(a)
@@ -660,7 +694,7 @@ func (a *app) guardDesktopOwnedNodeTransition(next *desktopNodeLaunch) error {
 	} else if active {
 		return errors.New("native Router protection cannot adopt an unrelated running mode")
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (a *app) prepareDesktopOwnedNodeStop(launch *desktopNodeLaunch, command *exec.Cmd) error {

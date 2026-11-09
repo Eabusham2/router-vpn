@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 )
 
 var errDesktopProtectionOffUnsaved = errors.New("kill switch is off, but its preference could not be saved; retry Off to save the same change")
@@ -96,27 +97,50 @@ func (a *app) guardDesktopProtectionOffPending(caller ...context.Context) error 
 	if len(caller) > 1 || len(caller) == 1 && caller[0] == nil {
 		return errors.New("recorded protection recovery has no single captured caller")
 	}
-	a.mu.Lock()
-	slot := a.nodeProtection
+	parent := context.Background()
+	if len(caller) == 1 {
+		parent = caller[0]
+	}
+	if err := desktopnetwork.LockContext(parent, &a.mu); err != nil {
+		return err
+	}
+	slot, operation := a.nodeProtection, a.connectionContext
 	a.mu.Unlock()
 	if slot != nil {
-		pending := slot.pendingOff()
-		if slot.recoveryPending() || pending != nil && pending.recovered {
-			parent := a.connectionOperationContextOrBackground()
-			if len(caller) == 1 {
-				parent = caller[0]
+		if err := desktopnetwork.LockContext(parent, &slot.mu); err != nil {
+			return err
+		}
+		recovering := slot.backend.bootstrap != nil && (slot.recovery == nil || !slot.recovery.ready) || slot.off != nil && slot.off.recovered
+		slot.mu.Unlock()
+		if recovering {
+			recoveryParent := parent
+			if len(caller) == 0 && operation != nil {
+				recoveryParent = operation
 			}
-			ctx, cancel := context.WithTimeout(parent, 25*time.Second)
+			ctx, cancel := context.WithTimeout(recoveryParent, 25*time.Second)
 			defer cancel()
 			if err := a.resumeDesktopNodeStartupRecovery(ctx, slot); err != nil {
 				return errors.Join(err, errors.New("recorded protection recovery must finish before another operation"))
 			}
 		}
 	}
-	if a.desktopProtectionOffPending() {
+	if err := desktopnetwork.LockContext(parent, &a.mu); err != nil {
+		return err
+	}
+	slot = a.nodeProtection
+	a.mu.Unlock()
+	pending := false
+	if slot != nil {
+		if err := desktopnetwork.LockContext(parent, &slot.mu); err != nil {
+			return err
+		}
+		pending = slot.off != nil
+		slot.mu.Unlock()
+	}
+	if pending {
 		return errors.New("finish the pending Kill Switch Off change before starting a connection or changing node settings")
 	}
-	return a.guardPlatformProtectionOffPending()
+	return a.guardPlatformProtectionOffPendingContext(parent)
 }
 
 // Broader settings editors cannot silently turn a retained native policy into
@@ -129,10 +153,16 @@ func (a *app) guardDesktopProtectionPreference(policy string) error {
 }
 
 func (a *app) capturedProtectionOffCurrent(slot *desktopNodeProtectionSlot, capture *desktopNodeProtectionOff, cleanup bool) bool {
-	if slot == nil || capture == nil {
+	return a.capturedProtectionOffCurrentContext(context.Background(), slot, capture, cleanup)
+}
+
+func (a *app) capturedProtectionOffCurrentContext(ctx context.Context, slot *desktopNodeProtectionSlot, capture *desktopNodeProtectionOff, cleanup bool) bool {
+	if ctx == nil || ctx.Err() != nil || slot == nil || capture == nil {
 		return false
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return false
+	}
 	defer a.mu.Unlock()
 	profile, exists := a.profileByIDLocked(capture.profileID)
 	if !exists || a.nodeProtection != slot || a.profiles.SelectedID != capture.capturedSelection() ||
@@ -149,11 +179,11 @@ func (a *app) capturedProtectionOffCurrent(slot *desktopNodeProtectionSlot, capt
 // takes a.mu only after the exact owner has joined and absence has been read.
 func (a *app) resumeDesktopProtectionOff(ctx context.Context, slot *desktopNodeProtectionSlot, capture *desktopNodeProtectionOff, cleanup bool) (common.RouterProfile, error) {
 	if capture != nil && capture.recovered {
-		if err := a.captureRecoveredOffProfile(slot, capture); err != nil {
+		if err := a.captureRecoveredOffProfileContext(ctx, slot, capture); err != nil {
 			return common.RouterProfile{}, err
 		}
 	}
-	current := func() bool { return a.capturedProtectionOffCurrent(slot, capture, cleanup) }
+	current := func() bool { return a.capturedProtectionOffCurrentContext(ctx, slot, capture, cleanup) }
 	if err := slot.applyOff(ctx, capture, current); err != nil {
 		return common.RouterProfile{}, err
 	}
@@ -167,6 +197,9 @@ func (a *app) resumeDesktopProtectionOff(ctx context.Context, slot *desktopNodeP
 	if err := slot.finishOffSave(ctx, capture, current); err != nil {
 		return common.RouterProfile{}, err
 	}
+	// Native absence, the durable preference and journal cleanup have already
+	// completed. Retire that exact slot as joined bookkeeping, without giving
+	// later cancellation authority to undo or strand the published Off result.
 	a.mu.Lock()
 	if a.nodeProtection != slot {
 		a.mu.Unlock()
@@ -194,10 +227,13 @@ func profileProtectionOffResult(profile common.RouterProfile) (common.RouterProf
 // journal flush or failed close can retry this result without rewriting Off or
 // rolling RAM back to the original preference after disk has already changed.
 func (a *app) persistCapturedProtectionOff(ctx context.Context, slot *desktopNodeProtectionSlot, capture *desktopNodeProtectionOff, cleanup bool) (common.RouterProfile, error) {
-	if ctx == nil || ctx.Err() != nil || !slot.offReadyToSave(capture) {
-		return common.RouterProfile{}, errDesktopProtectionOffUnsaved
+	ready, err := slot.offReadyToSaveContext(ctx, capture)
+	if err != nil || !ready {
+		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, err)
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, err)
+	}
 	defer a.mu.Unlock()
 	profile, exists := a.profileByIDLocked(capture.profileID)
 	if !exists || a.nodeProtection != slot || a.profiles.SelectedID != capture.capturedSelection() ||
@@ -260,10 +296,16 @@ func (a *app) persistCapturedProtectionOff(ctx context.Context, slot *desktopNod
 // private store before doing either native removal or another save. Preserve
 // the selected node and every unrelated profile/credential reference.
 func (a *app) captureRecoveredOffProfile(slot *desktopNodeProtectionSlot, capture *desktopNodeProtectionOff) error {
+	return a.captureRecoveredOffProfileContext(context.Background(), slot, capture)
+}
+
+func (a *app) captureRecoveredOffProfileContext(ctx context.Context, slot *desktopNodeProtectionSlot, capture *desktopNodeProtectionOff) error {
 	if capture == nil || !capture.recovered {
 		return errors.New("restart Off has no captured accepted request")
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	profile, exists := a.profileByIDLocked(capture.profileID)
 	if !exists || a.nodeProtection != slot || a.profiles.SelectedID != capture.selectedID || a.cmd != nil || a.state.Connected ||

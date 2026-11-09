@@ -332,28 +332,46 @@ func (o *desktopDNSOperation) draining() {
 }
 
 func (o *desktopDNSOperation) invalidate() {
-	o.mu.Lock()
+	_ = o.invalidateContext(context.Background())
+}
+
+func (o *desktopDNSOperation) invalidateContext(ctx context.Context) error {
+	if err := desktopnetwork.LockContext(ctx, &o.mu); err != nil {
+		return err
+	}
+	defer o.mu.Unlock()
 	o.invalid, o.completedAt = true, time.Time{}
 	o.status.Stage, o.status.Failure, o.status.Results = "cancelled", "DNS request cancelled or its connection replaced", []dnsmeasure.Result{}
 	o.cancel()
-	o.mu.Unlock()
+	return nil
 }
 
 func invalidateDesktopDNSResults(a *app) {
-	invalidateDesktopLatencyResults(a)
-	a.mu.Lock()
+	_ = invalidateDesktopDNSResultsContext(context.Background(), a)
+}
+
+func invalidateDesktopDNSResultsContext(ctx context.Context, a *app) error {
+	if err := invalidateDesktopLatencyResultsContext(ctx, a); err != nil {
+		return err
+	}
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	slot := a.dnsMeasurements
 	a.mu.Unlock()
 	if slot == nil {
-		return
+		return ctx.Err()
 	}
-	slot.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &slot.mu); err != nil {
+		return err
+	}
 	operation := slot.current
 	slot.used, slot.cancelled = map[string]bool{}, map[string]desktopDNSView{}
 	slot.mu.Unlock()
 	if operation != nil {
-		operation.invalidate()
+		return operation.invalidateContext(ctx)
 	}
+	return ctx.Err()
 }
 
 func (o *desktopDNSOperation) view(a *app) desktopDNSView {

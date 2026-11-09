@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sync"
 
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobiletor"
 )
 
@@ -289,7 +290,9 @@ func (a *app) captureLinuxStandardServiceProtectionForParent(ctx context.Context
 	if a == nil {
 		return nil
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return &linuxStandardServiceProtectionCapture{Failure: err}
+	}
 	controller := a.localController
 	a.mu.Unlock()
 	raw, exists := linuxStandardServiceProtectionClients.Load(a)
@@ -317,7 +320,9 @@ func (a *app) captureLinuxStandardServiceProtectionForParent(ctx context.Context
 	if client == nil || client.app != a || client.controller != controller {
 		return &linuxStandardServiceProtectionCapture{Failure: errors.New("standard protection lost original controller")}
 	}
-	client.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &client.mu); err != nil {
+		return &linuxStandardServiceProtectionCapture{client: client, Failure: err}
+	}
 	defer client.mu.Unlock()
 	session, err := randomHex(16)
 	if err != nil {
@@ -333,7 +338,10 @@ func (a *app) captureLinuxStandardServiceProtectionForParent(ctx context.Context
 			view.Failure = errors.Join(err, absenceErr)
 		}
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		view.Failure, view.Available = errors.Join(view.Failure, err), false
+		return view
+	}
 	if raw, exists := linuxStandardServiceOwners.Load(a); exists {
 		view.launch, _ = raw.(*linuxStandardServiceLaunch)
 		if view.launch == nil {
@@ -358,6 +366,9 @@ func (a *app) captureLinuxStandardServiceProtectionForParent(ctx context.Context
 				}
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		view.Failure, view.Available = errors.Join(view.Failure, err), false
 	}
 	return view
 }

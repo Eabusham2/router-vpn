@@ -9,6 +9,7 @@ import (
 	"math"
 	"sync/atomic"
 
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobiletor"
 )
 
@@ -109,19 +110,36 @@ func (v desktopNodeProtectionView) token(profileRevision string) string {
 }
 
 func (s *desktopNodeProtectionSlot) pendingOff() *desktopNodeProtectionOff {
-	if s == nil {
-		return nil
+	pending, _ := s.pendingOffContext(context.Background())
+	return pending
+}
+
+func (s *desktopNodeProtectionSlot) pendingOffContext(ctx context.Context) (*desktopNodeProtectionOff, error) {
+	if ctx == nil {
+		return nil, errors.New("protection Off status lost its original caller")
 	}
-	s.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, nil
+	}
+	if err := desktopnetwork.LockContext(ctx, &s.mu); err != nil {
+		return nil, err
+	}
 	defer s.mu.Unlock()
-	return s.off
+	// Captured identity, including recovered, is immutable after publication.
+	// Mutable progress is still read or changed under this slot's own lock.
+	return s.off, nil
 }
 
 func (s *desktopNodeProtectionSlot) captureOff(ctx context.Context, profileID, profileRevision, resultRevision, token string) (*desktopNodeProtectionOff, error) {
 	if s == nil || ctx == nil || ctx.Err() != nil || profileID == "" || !desktopNodeProcessHex(profileRevision, 32) || !desktopNodeProcessHex(resultRevision, 32) || token == "" {
 		return nil, errors.New("protection Off has no current selected-node revision")
 	}
-	s.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &s.mu); err != nil {
+		return nil, err
+	}
 	defer s.mu.Unlock()
 	if !s.known || s.active != nil || s.retirement != nil || s.target == nil || s.target.Validate() != nil ||
 		s.binding.ProfileID != profileID || s.binding.SourceSHA256 != s.target.Capture.SourceSHA256 ||
@@ -163,13 +181,26 @@ func (s *desktopNodeProtectionSlot) offCurrentLocked(capture *desktopNodeProtect
 }
 
 func (s *desktopNodeProtectionSlot) offReadyToSave(capture *desktopNodeProtectionOff) bool {
-	if s == nil {
-		return false
+	ready, _ := s.offReadyToSaveContext(context.Background(), capture)
+	return ready
+}
+
+func (s *desktopNodeProtectionSlot) offReadyToSaveContext(ctx context.Context, capture *desktopNodeProtectionOff) (bool, error) {
+	if ctx == nil {
+		return false, errors.New("protection Off save readiness lost its original caller")
 	}
-	s.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if s == nil {
+		return false, nil
+	}
+	if err := desktopnetwork.LockContext(ctx, &s.mu); err != nil {
+		return false, err
+	}
 	defer s.mu.Unlock()
 	return s.offCurrentLocked(capture) && capture.removed && capture.absenceProved && capture.owner != nil && capture.prepared &&
-		(capture.journal == nil && s.journal == nil || s.offJournalCurrentLocked(capture) && capture.joined && capture.journal.acknowledged.Load())
+		(capture.journal == nil && s.journal == nil || s.offJournalCurrentLocked(capture) && capture.joined && capture.journal.acknowledged.Load()), nil
 }
 
 // current must not acquire the slot lock. The application holds operationMu
@@ -179,7 +210,9 @@ func (s *desktopNodeProtectionSlot) applyOff(ctx context.Context, capture *deskt
 	if s == nil || ctx == nil || ctx.Err() != nil || current == nil || !current() {
 		return errors.New("protection Off lost its captured application operation")
 	}
-	s.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &s.mu); err != nil {
+		return err
+	}
 	defer s.mu.Unlock()
 	if !s.offCurrentLocked(capture) || s.backend.read == nil || s.backend.recover == nil {
 		return errors.New("protection Off belongs to a replaced retained owner")
@@ -258,7 +291,9 @@ func (s *desktopNodeProtectionSlot) finishOffSave(ctx context.Context, capture *
 	if s == nil || ctx == nil || ctx.Err() != nil || current == nil || !current() {
 		return errors.New("protection Off lost its pending save owner")
 	}
-	s.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &s.mu); err != nil {
+		return err
+	}
 	defer s.mu.Unlock()
 	if !s.offCurrentLocked(capture) || !capture.removed || !capture.absenceProved || capture.owner == nil || !capture.prepared || !capture.profileSaved.Load() {
 		return errors.New("protection Off cannot finish before exact native absence and preference persistence")

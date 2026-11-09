@@ -7,6 +7,7 @@ import (
 	"math"
 	"time"
 
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/windowsprotection"
 )
 
@@ -52,7 +53,9 @@ func (a *app) captureDesktopNodeRecoveryOperation(parent context.Context, slot *
 	if parent == nil || parent.Err() != nil {
 		return nil, nil, errors.New("startup recovery has no current caller")
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(parent, &a.mu); err != nil {
+		return nil, nil, err
+	}
 	defer a.mu.Unlock()
 	if a.nodeProtection != slot || a.nodeRecovery != nil || a.controllerClosingLocked() {
 		return nil, nil, errors.New("startup recovery belongs to an active or replaced operation")
@@ -62,6 +65,8 @@ func (a *app) captureDesktopNodeRecoveryOperation(parent context.Context, slot *
 	a.nodeRecovery = operation
 	finish := func() {
 		cancel()
+		// Retiring the already published operation is joined bookkeeping, not
+		// new work admission. Cancellation cannot leave this marker orphaned.
 		a.mu.Lock()
 		if a.nodeRecovery == operation {
 			a.nodeRecovery = nil
@@ -111,7 +116,9 @@ func (a *app) ensureDesktopNodeRecoveryMode(ctx context.Context, slot *desktopNo
 	if a == nil || slot == nil || ctx == nil || ctx.Err() != nil {
 		return errors.New("native startup recovery has no captured application slot")
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	selected, profiles := a.profiles.SelectedID, a.cfg.ProfilesFile
 	current := a.nodeProtection == slot && !a.controllerClosingLocked()
 	a.mu.Unlock()
@@ -119,7 +126,9 @@ func (a *app) ensureDesktopNodeRecoveryMode(ctx context.Context, slot *desktopNo
 		return errors.New("native startup recovery belongs to a replaced application")
 	}
 	guard := func() bool {
-		a.mu.Lock()
+		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+			return false
+		}
 		defer a.mu.Unlock()
 		return ctx.Err() == nil && a.nodeProtection == slot && a.profiles.SelectedID == selected &&
 			a.cfg.ProfilesFile == profiles && !a.controllerClosingLocked()
@@ -135,7 +144,9 @@ func (s *desktopNodeProtectionSlot) initializeRecoveryWithJournal(ctx context.Co
 	if s == nil || ctx == nil || ctx.Err() != nil || current == nil || !current() {
 		return errors.New("native startup recovery lost its captured operation")
 	}
-	s.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &s.mu); err != nil {
+		return err
+	}
 	defer s.mu.Unlock()
 	if s.backend.bootstrap == nil {
 		return nil // explicit modeled/pre-captured test backends have no native store
@@ -325,12 +336,25 @@ func (s *desktopNodeProtectionSlot) hydrateRecoveryLocked(selectedID string, res
 }
 
 func (s *desktopNodeProtectionSlot) recoveryPending() bool {
-	if s == nil {
-		return false
+	pending, _ := s.recoveryPendingContext(context.Background())
+	return pending
+}
+
+func (s *desktopNodeProtectionSlot) recoveryPendingContext(ctx context.Context) (bool, error) {
+	if ctx == nil {
+		return false, errors.New("startup recovery status lost its original caller")
 	}
-	s.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if s == nil {
+		return false, nil
+	}
+	if err := desktopnetwork.LockContext(ctx, &s.mu); err != nil {
+		return false, err
+	}
 	defer s.mu.Unlock()
-	return s.backend.bootstrap != nil && (s.recovery == nil || !s.recovery.ready)
+	return s.backend.bootstrap != nil && (s.recovery == nil || !s.recovery.ready), nil
 }
 
 // initializeDesktopNodeRecoveryWith runs before the listener can schedule any
@@ -340,9 +364,13 @@ func (a *app) initializeDesktopNodeRecoveryWith(ctx context.Context, backend des
 	if a == nil || ctx == nil || ctx.Err() != nil || backend.bootstrap == nil {
 		return errors.New("startup recovery requires its native application bootstrap")
 	}
-	a.operationMu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.operationMu); err != nil {
+		return err
+	}
 	defer a.operationMu.Unlock()
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	if a.nodeProtection == nil {
 		a.nodeProtection = &desktopNodeProtectionSlot{backend: backend}
 	}
@@ -362,21 +390,30 @@ func (a *app) resumeDesktopNodeStartupRecovery(ctx context.Context, slot *deskto
 	if err := a.ensureDesktopNodeRecovery(ctx, slot); err != nil {
 		return err
 	}
-	if pending := slot.pendingOff(); pending != nil {
+	pending, err := slot.pendingOffContext(ctx)
+	if err != nil {
+		return err
+	}
+	if pending != nil {
 		_, err := a.resumeDesktopProtectionOff(ctx, slot, pending, false)
 		return err
 	}
-	slot.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &slot.mu); err != nil {
+		return err
+	}
 	empty := slot.known && slot.target == nil && slot.active == nil && slot.retirement == nil && slot.off == nil
 	err = nil
 	if empty {
 		err = slot.closeEmptyJournalLocked(ctx)
 	}
+	empty = empty && err == nil && slot.provedEmptyLocked()
 	slot.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	if empty && slot.provedEmpty() {
+	if empty {
+		// The original empty journal has already joined. Finish its exact app
+		// bookkeeping even if cancellation arrives after that completed close.
 		a.mu.Lock()
 		if a.nodeProtection == slot {
 			a.nodeProtection = nil

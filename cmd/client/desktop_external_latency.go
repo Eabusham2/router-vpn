@@ -282,26 +282,42 @@ func (o *desktopLatencyOperation) draining() {
 }
 
 func (o *desktopLatencyOperation) invalidate() {
-	o.mu.Lock()
+	_ = o.invalidateContext(context.Background())
+}
+
+func (o *desktopLatencyOperation) invalidateContext(ctx context.Context) error {
+	if err := desktopnetwork.LockContext(ctx, &o.mu); err != nil {
+		return err
+	}
+	defer o.mu.Unlock()
 	o.invalid, o.completedAt = true, time.Time{}
 	o.status.Stage, o.status.Failure, o.status.Results = "cancelled", "Latency request cancelled or its connection replaced", []hopmeasure.Result{}
 	o.cancel()
-	o.mu.Unlock()
+	return nil
 }
 
 func invalidateDesktopLatencyResults(a *app) {
-	a.mu.Lock()
+	_ = invalidateDesktopLatencyResultsContext(context.Background(), a)
+}
+
+func invalidateDesktopLatencyResultsContext(ctx context.Context, a *app) error {
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	slot := a.latencyMeasurements
 	a.mu.Unlock()
 	if slot == nil {
-		return
+		return ctx.Err()
 	}
-	slot.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &slot.mu); err != nil {
+		return err
+	}
 	operation := slot.current
 	slot.mu.Unlock()
 	if operation != nil {
-		operation.invalidate()
+		return operation.invalidateContext(ctx)
 	}
+	return ctx.Err()
 }
 
 func (o *desktopLatencyOperation) view(a *app) desktopLatencyView {

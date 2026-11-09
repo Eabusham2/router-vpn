@@ -3,6 +3,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net/http"
 
 	"router-vpn/internal/common"
@@ -21,3 +23,10 @@ func (a *app) handlePlatformProfileProtection(http.ResponseWriter, *http.Request
 }
 func (a *app) guardPlatformProtectionOffPending() error       { return nil }
 func (a *app) guardPlatformProtectionPreference(string) error { return nil }
+
+func (a *app) guardPlatformProtectionOffPendingContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("protection admission requires its original caller")
+	}
+	return ctx.Err()
+}

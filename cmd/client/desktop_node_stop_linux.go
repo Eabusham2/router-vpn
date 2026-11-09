@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"time"
 
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/linuxprotection"
 	"router-vpn/internal/mobiletor"
 )
@@ -28,10 +29,18 @@ type desktopNodeStopCapture struct {
 }
 
 func (a *app) captureDesktopNodeStop() (*desktopNodeStopCapture, error) {
-	if a == nil {
+	return a.captureDesktopNodeStopContext(context.Background())
+}
+
+func (a *app) captureDesktopNodeStopContext(caller context.Context) (*desktopNodeStopCapture, error) {
+	if a == nil || caller == nil {
 		return nil, errors.New("Linux Node Stop has no application")
 	}
-	a.mu.Lock()
+	ctx, cancel := context.WithTimeout(caller, 2*time.Second)
+	defer cancel()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
 	controller, operation, command := a.localController, a.connectionContext, a.cmd
 	a.mu.Unlock()
 	if controller == nil || controller.nodeParent == nil {
@@ -41,8 +50,6 @@ func (a *app) captureDesktopNodeStop() (*desktopNodeStopCapture, error) {
 	if !ok || parent == nil {
 		return nil, errors.New("Linux Node Stop has another original parent")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -67,7 +74,9 @@ func (a *app) captureDesktopNodeStop() (*desktopNodeStopCapture, error) {
 		if err := session.unclaimedStopLocked(ctx); err != nil {
 			return nil, err
 		}
-		a.mu.Lock()
+		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+			return nil, err
+		}
 		current := session.parent.currentAppLocked(true) == nil && a.localController == controller &&
 			a.connectionContext == operation && a.cmd == command
 		a.mu.Unlock()
@@ -81,7 +90,7 @@ func (a *app) captureDesktopNodeStop() (*desktopNodeStopCapture, error) {
 	}
 	captured := &desktopNodeStopCapture{app: a, session: session, host: session.active, predecessor: session.predecessor,
 		journal: session.journal, operation: operation, command: command}
-	if err := captured.currentApp(command, false); err != nil {
+	if err := captured.currentAppContext(ctx, command, false); err != nil {
 		return nil, err
 	}
 	return captured, nil
@@ -148,11 +157,17 @@ func (s *desktopLinuxNodeSession) unclaimedStopLocked(ctx context.Context) error
 // Replacing the request, controller, command or session does. No call to the
 // command's Wait/Signal/Kill methods occurs outside its original process owner.
 func (captured *desktopNodeStopCapture) currentApp(command *exec.Cmd, retired bool) error {
+	return captured.currentAppContext(context.Background(), command, retired)
+}
+
+func (captured *desktopNodeStopCapture) currentAppContext(ctx context.Context, command *exec.Cmd, retired bool) error {
 	if captured == nil || captured.app == nil || captured.session == nil || captured.session.parent == nil {
 		return errors.New("Linux Node Stop lost its captured session")
 	}
 	a := captured.app
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	if captured.session.parent.currentAppLocked(false) != nil || a.connectionContext != captured.operation || command != captured.command {
 		return errors.New("Linux Node Stop belongs to a replaced application or operation")
@@ -173,7 +188,7 @@ func (captured *desktopNodeStopCapture) currentApp(command *exec.Cmd, retired bo
 	if _, exists := desktopNodeOwners.Load(a); exists {
 		return errors.New("Linux Node Stop cannot share its original process with the legacy native registry")
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (captured *desktopNodeStopCapture) Retire(ctx context.Context, command *exec.Cmd, disconnect bool) error {

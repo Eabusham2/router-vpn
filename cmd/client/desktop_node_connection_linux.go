@@ -309,12 +309,16 @@ func (capture *desktopLinuxNodeConnectPreflight) publishFailure(failure error) {
 // multihop paths. An empty/released session may defer only through its actual
 // original checkpoint/native absence proof; this never creates a session.
 func (a *app) guardDesktopLinuxNodeLegacyTransition() error {
-	captured, err := a.captureDesktopNodeStop()
+	return a.guardDesktopLinuxNodeLegacyTransitionContext(context.Background())
+}
+
+func (a *app) guardDesktopLinuxNodeLegacyTransitionContext(ctx context.Context) error {
+	captured, err := a.captureDesktopNodeStopContext(ctx)
 	if err != nil {
 		return err
 	}
 	if captured != nil {
 		return errors.New("the selected path cannot inherit the retained Linux protection; disconnect the current on-connect path first")
 	}
-	return nil
+	return ctx.Err()
 }
