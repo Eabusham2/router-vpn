@@ -2,11 +2,14 @@
 """Exercise the exact compiled-image inventory and original deadline runner."""
 from collections import Counter
 from pathlib import Path
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -123,6 +126,81 @@ class JoinedVerdicts(unittest.TestCase):
             with self.subTest(name=name):
                 with self.assertRaises(ValueError):
                     GATE.verdicts(encoded(rows), (self.root,), self.required)
+
+
+class FailureDiagnostics(unittest.TestCase):
+    @staticmethod
+    def large_failure():
+        name = "TestRouterVPNExternalPhysicalOriginal/failed-middle"
+        ordinary = (encoded([{"Package": GATE.PACKAGE, "Action": "output", "Test": "TestOther",
+                             "Output": "ordinary successful output " * 40}]) + "\n").encode() * 180
+        failed = (encoded([
+            {"Package": GATE.PACKAGE, "Action": "output", "Test": name,
+             "Output": "    actual_native_test.go:77: original physical owner was lost\n"},
+            {"Package": GATE.PACKAGE, "Action": "fail", "Test": name},
+        ]) + "\n").encode()
+        return name, ordinary + failed + ordinary
+
+    def test_middle_assertion_survives_both_native_logging_bounds(self):
+        name, raw = self.large_failure()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = root / "original-native-output.jsonl"
+            original.write_bytes(raw)
+            driver = root / "nested-failure.py"
+            driver.write_text("""import importlib.util, os, pathlib, subprocess, sys
+spec = importlib.util.spec_from_file_location('original_pt_gate', sys.argv[1])
+gate = importlib.util.module_from_spec(spec); spec.loader.exec_module(gate)
+gate.run([sys.executable, '-c', "import pathlib,sys; sys.stdout.buffer.write(pathlib.Path(sys.argv[1]).read_bytes()); sys.exit(17)", sys.argv[2]], cwd=pathlib.Path(sys.argv[2]).parent, env=dict(os.environ), timeout=30)
+""")
+            build = GATE.load("pt_diagnostic_actual_parent", "build-native-runtime.py")
+            shown = io.StringIO()
+            with contextlib.redirect_stderr(shown), self.assertRaises(subprocess.CalledProcessError) as caught:
+                build.run([sys.executable, driver, Path(GATE.__file__), original], timeout=45)
+            self.assertEqual(caught.exception.returncode, 1)
+            self.assertIn("returned non-zero exit status 17", caught.exception.stderr.decode())
+            self.assertIn("FAILED native test: " + name, shown.getvalue())
+            self.assertIn("actual_native_test.go:77: original physical owner was lost", shown.getvalue())
+            self.assertLess(len(shown.getvalue().encode()), build.MAX_BUILD_DIAGNOSTIC + 256)
+            self.assertEqual(original.read_bytes(), raw)
+
+    def test_failure_and_timeout_keep_original_exception_bytes_and_deadline(self):
+        name, raw = self.large_failure()
+        for error in (subprocess.CalledProcessError(17, ["native"], output=raw, stderr=b"\xffinvalid-tail\n"),
+                      subprocess.TimeoutExpired(["native"], 123, output=raw, stderr=b"\xffinvalid-tail\n")):
+            with self.subTest(error=type(error).__name__):
+                shown = io.StringIO()
+                with patch.object(GATE.os, "name", "posix"), patch.object(GATE.subprocess, "run", side_effect=error) as run:
+                    with contextlib.redirect_stderr(shown), self.assertRaises(type(error)) as caught:
+                        GATE.run(["native"], cwd=ROOT, env={}, timeout=123)
+                self.assertIs(caught.exception, error)
+                self.assertIs(error.stdout, raw)
+                self.assertEqual(run.call_args.kwargs["timeout"], 123)
+                self.assertTrue(run.call_args.kwargs["check"])
+                self.assertIn("FAILED native test: " + name, shown.getvalue())
+                self.assertIn("original physical owner was lost", shown.getvalue())
+                self.assertLess(len(shown.getvalue().encode()), 65536 + 16384 + 256)
+
+    def test_foreign_malformed_and_package_only_events_cannot_invent_test_failure(self):
+        raw = b"malformed\xff\n[]\n17\n" + encoded([
+            {"Package": "foreign", "Action": "fail", "Test": "TestForeign"},
+            {"Package": GATE.PACKAGE, "Action": "fail"},
+            {"Package": GATE.PACKAGE, "Action": "pass", "Test": "TestPassed"},
+        ]).encode()
+        self.assertEqual(GATE.failed_test_diagnostics(raw), b"")
+
+    def test_many_large_actual_failures_remain_bounded(self):
+        rows = []
+        for index in range(100):
+            name = "TestRouterVPNExternalPhysicalOriginal/" + str(index)
+            rows.extend([
+                {"Package": GATE.PACKAGE, "Action": "output", "Test": name, "Output": "assertion" * 5000},
+                {"Package": GATE.PACKAGE, "Action": "fail", "Test": name},
+            ])
+        shown = GATE.failed_test_diagnostics(encoded(rows).encode())
+        self.assertLess(len(shown), 16384 + 80)
+        self.assertIn(b"FAILED native test: TestRouterVPNExternalPhysicalOriginal/0", shown)
+        self.assertIn(b"additional failed-test diagnostics omitted", shown)
 
 
 class ActualCompilerDiscovery(unittest.TestCase):

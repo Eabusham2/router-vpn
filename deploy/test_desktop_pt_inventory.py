@@ -218,6 +218,38 @@ def checked_sources(source):
     return source, records
 
 
+def failed_test_diagnostics(raw):
+    """Keep actual failed test identities/assertions after nested log truncation."""
+    rows, failures = [], []
+    for line in raw.splitlines():
+        try:
+            event = json.loads(line)
+        except (ValueError, UnicodeError):
+            continue
+        if not isinstance(event, dict) or event.get("Package") != PACKAGE:
+            continue
+        name = event.get("Test")
+        if not isinstance(name, str):
+            continue
+        rows.append(event)
+        if event.get("Action") == "fail" and name not in failures:
+            failures.append(name)
+    if not failures:
+        return b""
+    pieces = [b"\nDesktop PT failed test diagnostics (bounded; original failure retained):\n"]
+    for name in failures:
+        output = "".join(event["Output"] for event in rows
+                         if event.get("Test") == name and event.get("Action") == "output"
+                         and isinstance(event.get("Output"), str)).encode("utf-8")
+        if len(output) > 8192:
+            output = output[:4096] + b"\n[bounded failed-test output]\n" + output[-4096:]
+        pieces.extend((b"FAILED native test: " + name.encode("utf-8")[:2048] + b"\n", output, b"\n"))
+    result = b"".join(pieces)
+    if len(result) > 16384:
+        result = result[:8192] + b"\n[additional failed-test diagnostics omitted]\n" + result[-8192:]
+    return result
+
+
 def run(command, *, cwd, env, timeout=PROCESS_TIMEOUT):
     try:
         if os.name == "nt":
@@ -230,6 +262,11 @@ def run(command, *, cwd, env, timeout=PROCESS_TIMEOUT):
         # Keep the first assertion and final stack while preserving the failure.
         shown = raw if len(raw) <= 65536 else raw[:32768] + b"\n[bounded native diagnostic]\n" + raw[-32768:]
         sys.stderr.write(shown.decode("utf-8", errors="replace"))
+        # The parent native builder retains stream tails. Append the failed
+        # test's own events after ordinary output so an assertion in the middle
+        # of a large inventory remains visible through both logging bounds.
+        sys.stderr.write(failed_test_diagnostics(raw).decode("utf-8", errors="replace"))
+        sys.stderr.flush()
         raise
     if result.stderr:
         sys.stderr.write(result.stderr.decode("utf-8", errors="replace"))
