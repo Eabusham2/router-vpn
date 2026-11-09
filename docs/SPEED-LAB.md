@@ -15,7 +15,7 @@ A completed test reports:
 - upload-loaded latency and upload bufferbloat delta;
 - transfer duration/rounds and whether Auto stopped after throughput stabilized;
 - exact path identity used for the result;
-- for supported multihop paths, independently measured entry/exit private-path RTT and independently measured entry/exit download/upload Mbps.
+- for supported multihop paths, independently measured entry/exit response times and download/upload Mbps, labeled by the actual node or public endpoint measured.
 
 Public transfer measurement uses Router VPN's built-in HTTPS Speed Lab against Cloudflare's fixed speed-test edge. Requests disable caching/compression, refuse provider redirects, verify byte counts, and use multiple adaptive transfer streams so fast paths are not artificially capped by one TCP flow.
 
@@ -73,7 +73,13 @@ saved raw entry mode and offers Local, Server and Compare both. Server/Compare
 requires the exit's valid pairing and response-proof configuration. A direct
 external path or an ordinary external entry uses its supported Local execution;
 a Router entry mode is not attached to either path. Router VPN multihop has its
-own execution selector.
+own execution selector. For an original imported entry to a paired Router final,
+that selector offers Local only and the entry selector offers the exact original
+protocol. Its complete graph, final-owned policy, physical sockets and native
+preflight are captured before suspension. A retained protection owner that
+cannot transfer into the multihop runtime is still rejected by the existing
+transition guard; completing that handoff remains required. See
+[DESKTOP-IMPORTED-ROUTER-PATH.md](DESKTOP-IMPORTED-ROUTER-PATH.md).
 
 A saved node, entry mode or execution that is no longer valid remains visibly
 unavailable and cannot silently select another route. Current path and System
@@ -135,14 +141,21 @@ Router VPN nodes normally reuse private addresses such as `10.77.0.1`, so an ord
 
 These are local runtime inbounds, not WAN services and not user-facing forwarding ports. On Linux, the entry lane is routed through the existing private entry SOCKS hop while the exit lane is routed through the final exit proxy. On Windows/macOS and Android, the entry lane uses a dedicated private SOCKS outbound whose dial is detoured through the `entry-wg` endpoint; the exit lane uses the final `proxy` outbound. Normal TUN traffic keeps its existing route behavior.
 
-Before accepting RTT or Mbps, Router VPN requests that hop's private `/health` endpoint through the corresponding lane and validates the exact cryptographic Router VPN node identity (`node_id` + proof kind derived from the saved WireGuard server identity). Throughput is then measured against the same hop's authenticated private benchmark service through that same lane, and the node is proved again after loaded transfer. This prevents two nodes with identical private IPs from being mislabeled as separate hop measurements.
+Before accepting a paired-node HTTP response time or Mbps, Router VPN requests that hop's private `/health` endpoint through the corresponding lane and validates the exact cryptographic Router VPN node identity (`node_id` + proof kind derived from the saved WireGuard server identity). Throughput is then measured against the same hop's authenticated private benchmark service through that same lane, and the node is proved again after loaded transfer. This prevents two nodes with identical private IPs from being mislabeled as separate hop measurements.
 
-For every hop Router VPN also re-checks the live session/graph identity. Entry and exit values are independent observations:
+An ordinary imported desktop entry has no private Router API. Its independent
+entry measurement instead uses the original entry-only lane to the existing
+fixed public HTTPS Speed Lab endpoint. The UI labels its four response samples
+**Entry-routed HTTP response** and its separate 8 MiB download/upload transfers
+**Entry-routed HTTPS transfer**. The imported expected public exit is proved
+before sampling, before transfer and after load. The paired final continues to
+use its authenticated private-node measurement. A public entry-routed response
+is not a measurement to the entry server itself, and neither HTTP measurement
+is an ICMP ping.
 
-```text
-ENTRY • private RTT • real down Mbps • real up Mbps
-EXIT  • private RTT • real down Mbps • real up Mbps
-```
+For every hop Router VPN re-checks the original live session, source profiles,
+graph and caller before and after measurement. Entry and exit values are
+independent observations; replacement or cancellation discards the old result.
 
 Router VPN does **not**:
 
@@ -161,7 +174,7 @@ Keep these separate:
 - **live RTT** — lightweight current-path telemetry;
 - **durable node latency** — larger saved node benchmark;
 - **Speed Lab** — dedicated public throughput + idle/loaded latency test;
-- **per-hop Speed Lab metrics** — authenticated private transfer/RTT through the exact hop-specific lane of the active multihop graph;
+- **per-hop Speed Lab metrics** — authenticated private-node response/transfer measurements, or explicitly labeled public entry-routed HTTPS measurements for ordinary imported entries, through the exact captured hop lane;
 - **Auto-MTU optimizer throughput** — bounded candidate comparison used only for MTU selection.
 
 None of those measurements is relabeled as another.

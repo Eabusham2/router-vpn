@@ -316,7 +316,7 @@ static void linux_speed_lab_refresh_controls_v12(GtkComboBox *ignored, gpointer 
     gtk_widget_set_sensitive(s->entry, temporary && (strcmp(top,"multihop")==0 || strcmp(top,"external")==0)); gtk_widget_set_sensitive(s->exit, temporary && strcmp(top,"multihop")==0); gtk_widget_set_sensitive(s->exit_mode, temporary && strcmp(top,"multihop")==0); gtk_widget_set_sensitive(s->layers, temporary && strcmp(mode,"custom")==0);
     JsonObject *entry=linux_speed_lab_find_v19(s,"nodes",linux_speed_lab_active_id_v12(s->entry));
     gboolean router_entry=strcmp(linux_speed_lab_kind_v19(entry),"router-vpn")==0;
-    gtk_widget_set_sensitive(s->entry_mode,temporary&&(strcmp(top,"multihop")==0||strcmp(top,"external")==0)&&router_entry);
+    gtk_widget_set_sensitive(s->entry_mode,temporary&&(strcmp(top,"multihop")==0||(strcmp(top,"external")==0&&router_entry)));
     gtk_widget_set_sensitive(s->execution,temporary&&(strcmp(top,"multihop")==0||(strcmp(top,"external")==0&&router_entry)));
     gtk_widget_set_sensitive(s->node,temporary&&(strcmp(top,"router")==0||strcmp(top,"external")==0));
     gtk_widget_set_sensitive(s->mode,temporary&&strcmp(top,"router")==0);
@@ -353,7 +353,7 @@ static char *linux_speed_lab_request_body_v12(LinuxSpeedLabV12 *s) {
         const char *top=linux_speed_lab_active_id_v12(s->topology); SL_STR("topology",top);
         if(strcmp(top,"router")==0||strcmp(top,"external")==0)SL_STR("node_id",linux_speed_lab_active_id_v12(s->node));
         if(strcmp(top,"router")==0){SL_STR("mode",linux_speed_lab_active_id_v12(s->mode));SL_STR("base",linux_speed_lab_active_id_v12(s->base));}
-        if(strcmp(top,"multihop")==0){SL_STR("entry_id",linux_speed_lab_active_id_v12(s->entry));SL_STR("entry_mode",linux_speed_lab_active_id_v12(s->entry_mode));SL_STR("exit_id",linux_speed_lab_active_id_v12(s->exit));SL_STR("base",linux_speed_lab_active_id_v12(s->base));SL_STR("exit_mode",linux_speed_lab_active_id_v12(s->exit_mode));SL_STR("execution",linux_speed_lab_active_id_v12(s->execution));}
+        if(strcmp(top,"multihop")==0){JsonObject *entry=linux_speed_lab_find_v19(s,"nodes",linux_speed_lab_active_id_v12(s->entry));SL_STR("entry_id",linux_speed_lab_active_id_v12(s->entry));SL_STR("entry_mode",linux_speed_lab_active_id_v12(s->entry_mode));SL_STR("exit_id",linux_speed_lab_active_id_v12(s->exit));SL_STR("base",strcmp(linux_speed_lab_kind_v19(entry),"router-vpn")==0?linux_speed_lab_active_id_v12(s->base):"auto");SL_STR("exit_mode",linux_speed_lab_active_id_v12(s->exit_mode));SL_STR("execution",linux_speed_lab_active_id_v12(s->execution));}
         if(strcmp(top,"external")==0){
             const char *entry_id=linux_speed_lab_active_id_v12(s->entry);SL_STR("entry_id",entry_id);SL_STR("execution",linux_speed_lab_active_id_v12(s->execution));
             JsonObject *entry=linux_speed_lab_find_v19(s,"nodes",entry_id);
@@ -387,15 +387,18 @@ static char *linux_speed_lab_hops_v12(JsonObject *obj, guint *count_out) {
         JsonObject *hop = json_array_get_object_element(hops, i); if (hop == NULL) continue;
         const char *role = obj_string(hop, "role"), *name = obj_string(hop, "name"), *id = obj_string(hop, "router_id");
         if (name[0] == '\0') name = id;
+        const char *latency_label = obj_string(hop, "latency_label"), *speed_label = obj_string(hop, "speed_label");
+        if (!latency_label[0]) latency_label = "HTTP response";
+        if (!speed_label[0]) speed_label = "Transfer";
         char *latency = NULL, *speed = NULL;
         if (json_object_has_member(hop, "latency")) {
-            JsonObject *stats = json_object_get_object_member(hop, "latency"); latency = g_strdup_printf("%.1f ms", linux_speed_lab_number_v12(stats, "median_ms"));
-        } else if (json_object_has_member(hop, "latency_error")) latency = g_strdup_printf("RTT unavailable: %s", obj_string(hop, "latency_error"));
-        else latency = g_strdup("RTT unavailable");
+            JsonObject *stats = json_object_get_object_member(hop, "latency"); latency = g_strdup_printf("%s: %.1f ms", latency_label, linux_speed_lab_number_v12(stats, "median_ms"));
+        } else if (json_object_has_member(hop, "latency_error")) latency = g_strdup_printf("%s unavailable: %s", latency_label, obj_string(hop, "latency_error"));
+        else latency = g_strdup_printf("%s unavailable", latency_label);
         if (json_object_has_member(hop, "speed")) {
-            JsonObject *stats = json_object_get_object_member(hop, "speed"); speed = g_strdup_printf("↓ %.1f / ↑ %.1f Mbps", linux_speed_lab_number_v12(stats, "download_mbps"), linux_speed_lab_number_v12(stats, "upload_mbps"));
+            JsonObject *stats = json_object_get_object_member(hop, "speed"); speed = g_strdup_printf("%s: ↓ %.1f / ↑ %.1f Mbps", speed_label, linux_speed_lab_number_v12(stats, "download_mbps"), linux_speed_lab_number_v12(stats, "upload_mbps"));
         } else if (json_object_has_member(hop, "speed_error")) speed = g_strdup_printf("speed unavailable: %s", obj_string(hop, "speed_error"));
-        else speed = g_strdup("speed unavailable");
+        else speed = g_strdup_printf("%s unavailable", speed_label);
         g_string_append_printf(text, "%s • %s • %s • %s\n", role[0] ? role : "hop", name[0] ? name : "node", latency, speed); g_free(latency); g_free(speed); count++;
     }
     if (count == 0) { g_string_free(text, TRUE); return NULL; }

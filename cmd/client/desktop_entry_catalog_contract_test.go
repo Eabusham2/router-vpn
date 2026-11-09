@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"router-vpn/internal/common"
@@ -57,9 +58,30 @@ func TestDesktopEntryCatalogContracts(t *testing.T) {
 	a.speedLabOptions(options, httptest.NewRequest(http.MethodGet, "/api/speed-lab/options", nil))
 	var temporary struct {
 		Supported []string `json:"supported_entry_modes"`
+		Nodes     []struct {
+			ID         string   `json:"id"`
+			Modes      []string `json:"multihop_entry_modes"`
+			Finals     []string `json:"multihop_exit_modes"`
+			Executions []string `json:"multihop_execution_choices"`
+		} `json:"nodes"`
 	}
 	if options.Code != http.StatusOK || json.Unmarshal(options.Body.Bytes(), &temporary) != nil || !reflect.DeepEqual(temporary.Supported, paired) {
 		t.Fatal("temporary Router Speed Lab advertised an unrelated entry contract")
+	}
+	for _, node := range temporary.Nodes {
+		if strings.HasPrefix(node.ID, "imported-") {
+			protocol := strings.TrimPrefix(node.ID, "imported-")
+			if !reflect.DeepEqual(node.Modes, []string{protocol}) || !reflect.DeepEqual(node.Executions, []string{"local"}) || len(node.Finals) != 6 {
+				t.Fatal("temporary imported capability lost its original protocol or Local-only final graph", node.ID)
+			}
+			for _, mode := range node.Finals {
+				if !desktopImportedFinalMode(mode) {
+					t.Fatal("imported capability granted an unsupported final", mode)
+				}
+			}
+		} else if !reflect.DeepEqual(node.Modes, paired) || !reflect.DeepEqual(node.Executions, []string{"local", "server", "auto"}) {
+			t.Fatal("paired temporary capability changed", node.ID)
+		}
 	}
 	for _, protocol := range imports {
 		if normalized, err := normalizeConnectionProfileEntryMode(protocol); err != nil || normalized != protocol {

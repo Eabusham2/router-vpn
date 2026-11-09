@@ -26,14 +26,30 @@ Connect serialization preserve those original IDs. Saving a choice does not
 grant a new execution mode; imported connection admission still requires Local
 and the original independent profiles.
 
-Speed Lab's **temporary Router multihop** chooser and resolver currently admit
-only the 19 paired Router entry transports. Selecting a new temporary imported
-entry to a paired final remains unfinished work. The form preserves a main
-profile's imported mode and rejects that unsupported temporary request instead
-of replacing it with WG. This boundary does not narrow **Current path**
-measurement of an already connected, captured imported graph. Native callback
-tests consume the real daily and temporary controller catalogs separately;
-catalog equality between those two workflows is not a capability contract.
+Speed Lab's **temporary Router multihop** captures an original imported entry
+and independently paired final before suspending the current VPN. Its per-node
+choices distinguish the 19 paired transports from the imported node's exact
+canonical protocol; imported entries offer Local execution and the bounded
+final catalog below. Windows, macOS and Linux preserve a captured main-profile
+selection and use the same per-node rules when the entry changes. An unavailable
+saved mode stays visible and invalid instead of silently becoming WireGuard.
+
+The temporary graph keeps the complete original entry credentials and applies
+requested DNS, packet and protection overrides to the paired final. The actual
+compiler and native preflight run before suspension. Startup consumes those
+same checked bytes once, validates the original caller, profile revisions,
+selected source, network and owned operation, then proves the original public
+entry, paired final and selected final DNS. An unstarted launch retires only its
+own private workspace and DNS registration. Restoration retains the already
+proved original Local/Server choice instead of rerunning Compare.
+
+The existing protection transition guard remains: a previous connection whose
+retained native protection owner cannot yet transfer into this multihop runtime
+is rejected before suspension. Completing that protected runtime handoff remains
+a separate requirement. These source changes do not establish installed-device
+networking, physical visual acceptance or every imported graph combination.
+Native callback tests consume the real daily and temporary controller catalogs
+separately; a generic union catalog cannot grant imported execution authority.
 
 The desktop host admits original WireGuard, AmneziaWG, SOCKS5, Shadowsocks 2022,
 Hysteria2, HTTP CONNECT, HTTPS CONNECT and bounded OpenVPN entries. Its final transport catalog is Shadowsocks,
@@ -136,6 +152,23 @@ run a candidate when the saved final has Server or Compare selected, without
 rewriting that saved choice; omission of the override is rejected. Server and
 Compare requests for ordinary imported entries are rejected before acquiring
 network authority.
+
+## Speed Lab entry measurements
+
+An ordinary imported entry has no Router VPN private benchmark API or node
+credential. Its independent entry measurement uses the reserved original entry
+lane and the existing public HTTPS Speed Lab endpoint. Four response samples
+are labeled **Entry-routed HTTP response**; separate 8 MiB download and upload
+transfers are labeled **Entry-routed HTTPS transfer**. Mbps comes from consumed
+bytes and elapsed time. It is not an ICMP sample, a measurement to the entry
+server itself, or an authenticated private-node benchmark.
+
+The original expected public exit is proved before sampling, before transfer
+and after load. Caller, live graph and profile ownership are checked around each
+phase. Redirects, incorrect byte counts, unread uploads, cancellation, a wrong
+public identity or a replacement graph cannot produce a successful transfer.
+The paired final still uses its own authenticated private-node lane and
+benchmark. Neither side borrows the other's credentials or measurement.
 
 ## Evidence and required release checks
 

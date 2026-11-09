@@ -33,6 +33,10 @@ private enum RouterVPNMacSpeedLabPathPolicy {
         return tokens
     }
     static func kind(_ node: [String: Any]?) -> String { node == nil ? "" : (node?["node_kind"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "router-vpn" }
+    static func nodeChoice(_ node: [String: Any]?, key: String, id: String) -> Bool {
+        guard !id.isEmpty, let values = node?[key] as? [String] else { return false }
+        return values.filter { $0 == id }.count == 1
+    }
     static func entryMode(_ node: [String: Any]?, _ entry: [String: Any]?) -> String {
         guard kind(entry) == "router-vpn" else { return "" }
         if node?["multihop_entry_id"] as? String == entry?["id"] as? String, let saved = node?["multihop_entry_mode"] as? String, !saved.isEmpty { return saved }
@@ -73,7 +77,11 @@ private enum RouterVPNMacSpeedLabPathPolicy {
         let node = find(nodes, nodeID), entry = find(nodes, entryID)
         if topology == "router" { if kind(node) != "router-vpn" { try reject("Select a linked Router VPN node.") }; return }
         if topology == "multihop" {
-            if kind(entry) != "router-vpn" || kind(find(nodes, exitID)) != "router-vpn" || entryID == exitID { try reject("Select two different linked Router VPN nodes.") }
+            if entry == nil || kind(find(nodes, exitID)) != "router-vpn" || entryID == exitID { try reject("Select a linked entry and a different paired Router VPN final.") }
+            if kind(entry) != "router-vpn" {
+                if kind(entry) != "external" || entryMode != (entry?["external_protocol"] as? String) || !nodeChoice(entry, key: "multihop_entry_modes", id: entryMode) { try reject("Select the original imported entry protocol.") }
+                if execution != "local" || !nodeChoice(entry, key: "multihop_execution_choices", id: execution) { try reject("This imported entry uses Local execution.") }
+            }
         } else if topology == "external" {
             guard let node, kind(node) == "external" else { try reject("Select a linked external exit."); return }
             if !entryID.isEmpty && (entry == nil || entryID == nodeID) { try reject("Select a different linked entry, or Direct.") }
@@ -265,9 +273,9 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
             throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "The captured entry mode is unavailable. Select the intended entry mode before reopening Speed Lab."])
         }
         updatingChoices = true; defer { updatingChoices = false }
-        selectPreserving(entryMode, capturedEntryMode)
         selectPreserving(topology, "multihop"); selectPreserving(node, capturedSelection.selectedNodeID)
         selectPreserving(entry, capturedSelection.entryID); selectPreserving(exit, capturedSelection.exitID)
+        setEntryModeDefault(); selectPreserving(entryMode, capturedEntryMode)
         selectPreserving(exitMode, capturedSelection.exitMode); selectPreserving(execution, capturedSelection.execution)
     }
 
@@ -295,11 +303,22 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
     }
 
     private func setEntryModeDefault() {
+        let entryValue = RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(entry))
+        let paired = RouterVPNMacSpeedLabPathPolicy.kind(entryValue) == "router-vpn"
+        let previousExecution = selected(execution)
         if selected(topology) == "multihop" {
-            let value = RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(node))?["multihop_entry_mode"] as? String ?? ""
+            let modes = paired ? supportedEntryModes : entryValue?["multihop_entry_modes"] as? [String] ?? []
+            populate(entryMode, values: modes.map { id in ["id": id, "name": RouterVPNNodeEntryModes.choices.first(where: { $0.id == id })?.title ?? id] })
+            if paired { entryMode.insertItem(withTitle: "Use saved entry mode / base", at: 0); entryMode.item(at: 0)?.representedObject = "" }
+            populate(execution, values: paired ? executions : executions.filter { RouterVPNMacSpeedLabPathPolicy.nodeChoice(entryValue, key: "multihop_execution_choices", id: $0["id"] as? String ?? "") })
+            selectPreserving(execution, paired ? previousExecution : "local")
+            let value = paired ? RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(node))?["multihop_entry_mode"] as? String ?? "" : entryValue?["external_protocol"] as? String ?? ""
             selectPreserving(entryMode, value); return
         }
-        let value = RouterVPNMacSpeedLabPathPolicy.entryMode(RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(node)), RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(entry)))
+        populate(execution, values: executions); selectPreserving(execution, previousExecution)
+        populate(entryMode, values: entryModes)
+        entryMode.insertItem(withTitle: "Use saved entry mode / base", at: 0); entryMode.item(at: 0)?.representedObject = ""
+        let value = RouterVPNMacSpeedLabPathPolicy.entryMode(RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(node)), entryValue)
         if value.isEmpty { entryMode.selectItem(at: -1) } else { selectPreserving(entryMode, value) }
     }
 
@@ -414,9 +433,9 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
         exit.isEnabled = temporary && top == "multihop"; exitMode.isEnabled = temporary && top == "multihop"
         layers.isEnabled = temporary && top == "router" && selected(mode) == "custom"
         mode.isEnabled = temporary && top == "router"; node.isEnabled = temporary && ["router", "external"].contains(top)
-        base.isEnabled = temporary && ["router", "multihop"].contains(top)
         let routerEntry = RouterVPNMacSpeedLabPathPolicy.kind(RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(entry))) == "router-vpn"
-        entryMode.isEnabled = temporary && ["multihop", "external"].contains(top) && routerEntry
+        base.isEnabled = temporary && (top == "router" || top == "multihop" && routerEntry)
+        entryMode.isEnabled = temporary && (top == "multihop" || top == "external" && routerEntry)
         execution.isEnabled = temporary && (top == "multihop" || top == "external" && routerEntry)
         let customTime = available && selected(durationMode) == "custom"; minTime.isEnabled = customTime; maxTime.isEnabled = customTime
     }
@@ -473,10 +492,16 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
             guard exitModes.contains(selected(exitMode)) else {
                 throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Select an exit transport supported by the installed runtime."])
             }
-            guard let entryChoice = entryMode.selectedItem?.representedObject as? String, entryChoice.isEmpty || supportedEntryModes.contains(entryChoice) else {
+            let entryValue = RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(entry))
+            let paired = RouterVPNMacSpeedLabPathPolicy.kind(entryValue) == "router-vpn"
+            guard let entryChoice = entryMode.selectedItem?.representedObject as? String,
+                (paired ? entryChoice.isEmpty || supportedEntryModes.contains(entryChoice) : RouterVPNMacSpeedLabPathPolicy.nodeChoice(entryValue, key: "multihop_entry_modes", id: entryChoice)) else {
                 throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Select an entry mode supported by the installed runtime, or the saved entry mode / base."])
             }
-            body["entry_mode"] = entryChoice; body["entry_id"] = selected(entry); body["exit_id"] = selected(exit); body["base"] = selected(base); body["exit_mode"] = selected(exitMode); body["execution"] = selected(execution)
+            if !paired && !RouterVPNMacSpeedLabPathPolicy.nodeChoice(entryValue, key: "multihop_exit_modes", id: selected(exitMode)) {
+                throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Select a compatible paired final transport for this imported entry."])
+            }
+            body["entry_mode"] = entryChoice; body["entry_id"] = selected(entry); body["exit_id"] = selected(exit); body["base"] = paired ? selected(base) : "auto"; body["exit_mode"] = selected(exitMode); body["execution"] = selected(execution)
         }
         if top == "external" {
             body["entry_id"] = selected(entry); body["execution"] = selected(execution)
@@ -491,15 +516,17 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
         let lines = hops.map { hop -> String in
             let role = ((hop["role"] as? String) ?? "hop").uppercased()
             let name = (hop["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? (hop["router_id"] as? String ?? "node")
-            var latency = "RTT unavailable"
+            let latencyLabel = hop["latency_label"] as? String ?? "HTTP response"
+            let speedLabel = hop["speed_label"] as? String ?? "Transfer"
+            var latency = "\(latencyLabel) unavailable"
             if let stats = hop["latency"] as? [String: Any], let value = (stats["median_ms"] as? NSNumber)?.doubleValue {
-                latency = String(format: "%.1f ms", value)
+                latency = latencyLabel + String(format: ": %.1f ms", value)
             } else if let reason = hop["latency_error"] as? String, !reason.isEmpty {
-                latency = "RTT unavailable: \(reason)"
+                latency = "\(latencyLabel) unavailable: \(reason)"
             }
-            var speed = "speed unavailable"
+            var speed = "\(speedLabel) unavailable"
             if let stats = hop["speed"] as? [String: Any], let down = (stats["download_mbps"] as? NSNumber)?.doubleValue, let up = (stats["upload_mbps"] as? NSNumber)?.doubleValue {
-                speed = String(format: "↓ %.1f / ↑ %.1f Mbps", down, up)
+                speed = speedLabel + String(format: ": ↓ %.1f / ↑ %.1f Mbps", down, up)
             } else if let reason = hop["speed_error"] as? String, !reason.isEmpty {
                 speed = "speed unavailable: \(reason)"
             }

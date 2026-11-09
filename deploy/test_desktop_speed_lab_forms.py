@@ -40,6 +40,7 @@ def linux_form(directory):
         'static gboolean linux_multihop_exit_advertised_v22(',
         'static void linux_multihop_select_preserving_v22(',
         'static void linux_multihop_exit_choices_v22(',
+        'static void linux_multihop_execution_choices_v22(',
     ))
     methods += '\n' + '\n'.join(block(source, marker) for marker in (
         'static const char *linux_speed_lab_active_id_v12(',
@@ -163,6 +164,21 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Expected fixt
  JsonObject*service_policy=linux_speed_lab_find_v19(&s,"nodes","entry");char*original_policy_token=g_strdup(obj_string(service_policy,"profile_token"));json_object_set_string_member(service_policy,"profile_token","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");reject(&s);json_object_set_string_member(service_policy,"profile_token",original_policy_token);g_free(original_policy_token);
  json_object_remove_member(current,"policy_profile_id");json_object_remove_member(current,"standard_exit_id");json_object_set_string_member(current,"router_id","exit-router");json_object_set_string_member(current,"exit_id","exit-router");json_object_set_string_member(current,"entry_id","entry");json_object_set_string_member(current,"mode","multihop");json_object_set_string_member(current,"execution","server");choose(s.scope,"temporary");
 
+ /* Execute the actual entry-change signal and Run callback for each original
+  * imported source. The form selects only IDs; private policy stays captured. */
+ const char*temporary_imports[]={"shadowsocks","hysteria2","socks5","http-connect","https-connect","wireguard","amneziawg","openvpn"};
+ for(guint i=0;i<G_N_ELEMENTS(temporary_imports);i++){
+  const char*protocol=temporary_imports[i];g_autofree char*id=g_strdup_printf("imported-%s",protocol);choose(s.entry,id);choose(s.exit,"exit-router");choose(s.exit_mode,"reality-vision");
+  check(g_strcmp0(linux_speed_lab_active_id_v12(s.entry_mode),protocol)==0&&g_strcmp0(linux_speed_lab_active_id_v12(s.execution),"local")==0,"Imported entry lost its exact protocol or Local default");
+  check(gtk_tree_model_iter_n_children(gtk_combo_box_get_model(GTK_COMBO_BOX(s.entry_mode)),NULL)==1&&gtk_tree_model_iter_n_children(gtk_combo_box_get_model(GTK_COMBO_BOX(s.execution)),NULL)==1,"Imported chooser acquired another protocol or execution");
+  g_autofree char*name=g_strdup_printf("speed-lab-imported-%s",protocol);emit(&s,argv[1],name);
+  for(guint j=1;j<3;j++){linux_speed_lab_select_v19(s.execution,executions[j]);reject(&s);}choose(s.execution,"local");
+  linux_speed_lab_select_v19(s.entry_mode,"wg");reject(&s);choose(s.entry_mode,protocol);choose(s.exit_mode,"max");reject(&s);choose(s.exit_mode,"reality-vision");
+  JsonObject*imported=linux_speed_lab_find_v19(&s,"nodes",id);JsonArray*capability=linux_speed_lab_node_choices_v24(imported,"multihop_entry_modes");json_array_add_string_element(capability,protocol);reject(&s);json_array_remove_element(capability,1);
+  json_array_ref(capability);json_object_remove_member(imported,"multihop_entry_modes");reject(&s);json_object_set_array_member(imported,"multihop_entry_modes",capability);
+  g_autofree char*token=g_strdup(obj_string(imported,"profile_token"));json_object_set_string_member(imported,"profile_token","dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");reject(&s);json_object_set_string_member(imported,"profile_token",token);
+ }
+ choose(s.entry,"entry");
  choose(s.exit,"entry");reject(&s);choose(s.exit,"exit-router");choose(s.topology,"system-direct");emit(&s,argv[1],"speed-lab-system-direct");
  JsonNode*reload=parse_json(s.response.data);JsonArray*reload_nodes=json_object_get_array_member(json_node_get_object(reload),"nodes");for(guint i=0;i<json_array_get_length(reload_nodes);i++){JsonObject*n=json_array_get_object_element(reload_nodes,i);json_object_set_boolean_member(n,"selected",strcmp(obj_string(n,"id"),"entry")==0);}JsonGenerator*generator=json_generator_new();json_generator_set_root(generator,reload);g_free(s.response.data);s.response.data=json_generator_to_data(generator,NULL);g_object_unref(generator);json_node_free(reload);
  staged_enabled=TRUE;staged_entry="entry";staged_exit="exit-router";staged_mode="reality-pq-vision";staged_entry_mode="wg-pq";staged_execution="auto";choose(app.router_combo,"entry");check(!linux_speed_lab_apply_options_v12(&s),"A delayed catalog replaced the original main selection");linux_speed_lab_capture_selection_v19(&s);check(linux_speed_lab_apply_options_v12(&s),"Reloaded options failed");check(strcmp(linux_speed_lab_active_id_v12(s.topology),"multihop")==0&&strcmp(linux_speed_lab_active_id_v12(s.entry),"entry")==0&&strcmp(linux_speed_lab_active_id_v12(s.exit),"exit-router")==0&&strcmp(linux_speed_lab_active_id_v12(s.exit_mode),"reality-pq-vision")==0&&strcmp(linux_speed_lab_active_id_v12(s.execution),"auto")==0&&strcmp(linux_speed_lab_active_id_v12(s.entry_mode),"wg-pq")==0,"Loaded whole-connection profile choices changed");
@@ -172,6 +188,12 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Expected fixt
  staged_mode="naive-h2";reject(&s);staged_mode="reality-pq-vision";staged_execution="server";reject(&s);staged_execution="auto";staged_entry="exit-router";reject(&s);staged_entry="entry";
  const char*imported_entries[]={"wireguard","amneziawg","socks5","http-connect","https-connect","openvpn"};
  for(guint i=0;i<G_N_ELEMENTS(imported_entries);i++){staged_mode="shadowsocks";staged_execution="local";staged_entry_mode=imported_entries[i];linux_speed_lab_capture_selection_v19(&s);check(linux_speed_lab_apply_options_v12(&s),"Imported main options failed");check(g_strcmp0(linux_speed_lab_active_id_v12(s.entry_mode),imported_entries[i])==0,"Imported main mode silently changed");choose(s.scope,"current");char*current_imported=linux_speed_lab_request_body_v12(&s);check(current_imported!=NULL,"Imported main mode blocked Current");g_free(current_imported);choose(s.scope,"temporary");for(guint j=0;j<3;j++){choose(s.execution,executions[j]);reject(&s);}}
+ for(guint i=0;i<G_N_ELEMENTS(temporary_imports);i++){
+  const char*protocol=temporary_imports[i];g_autofree char*id=g_strdup_printf("imported-%s",protocol);staged_entry=id;staged_entry_mode=protocol;staged_mode="reality-vision";staged_execution="local";linux_speed_lab_capture_selection_v19(&s);check(linux_speed_lab_apply_options_v12(&s),"Captured imported main options failed");
+  check(g_strcmp0(linux_speed_lab_active_id_v12(s.entry),id)==0&&g_strcmp0(linux_speed_lab_active_id_v12(s.entry_mode),protocol)==0&&g_strcmp0(linux_speed_lab_active_id_v12(s.execution),"local")==0,"Captured imported main selection changed");
+  choose(s.scope,"temporary");g_autofree char*name=g_strdup_printf("speed-lab-main-imported-%s",protocol);emit(&s,argv[1],name);
+ }
+ staged_entry="entry";staged_entry_mode="";
  staged_mode="missing-saved-exit";linux_speed_lab_capture_selection_v19(&s);check(linux_speed_lab_apply_options_v12(&s),"Unknown saved mode options failed");check(strcmp(linux_speed_lab_active_id_v12(s.exit_mode),"missing-saved-exit")==0,"Unknown saved exit was replaced");reject(&s);
  staged_mode="shadowsocks";staged_entry_mode="missing-saved-entry";linux_speed_lab_capture_selection_v19(&s);check(linux_speed_lab_apply_options_v12(&s),"Unknown saved entry options failed");check(strcmp(linux_speed_lab_active_id_v12(s.entry_mode),"missing-saved-entry")==0,"Unknown saved entry was replaced");reject(&s);
  staged_enabled=FALSE;gtk_combo_box_set_active(GTK_COMBO_BOX(app.router_combo),-1);linux_speed_lab_capture_selection_v19(&s);g_free(s.response.data);s.response.data=g_strdup("{\"nodes\":[],\"logical_modes\":[{\"id\":\"smart-auto\"}]}");check(linux_speed_lab_apply_options_v12(&s),"First-use empty node options failed");choose(s.scope,"temporary");choose(s.topology,"system-direct");char*empty_body=linux_speed_lab_request_body_v12(&s);check(empty_body!=NULL,"First-use System direct was blocked");JsonNode*empty_request=parse_json(empty_body);JsonObject*empty_object=json_node_get_object(empty_request);check(!obj_string(empty_object,"expected_selected_node_id")[0]&&json_object_get_size(json_object_get_object_member(empty_object,"expected_profile_tokens"))==0,"First-use System direct invented a node identity");json_node_free(empty_request);g_free(empty_body);s.closed=TRUE;g_clear_pointer(&captured,g_free);gtk_button_clicked(GTK_BUTTON(s.run));check(captured==NULL,"Closed Speed Lab issued a request");
@@ -261,8 +283,8 @@ let originalOptions=try Data(contentsOf:output.appendingPathComponent("speed-lab
 let originalRoot=try JSONSerialization.jsonObject(with:originalOptions) as! [String:Any]
 let mainCatalog=try JSONSerialization.jsonObject(with:Data(contentsOf:output.appendingPathComponent("multihop-status.json"))) as! [String:Any]
 func product(_ id:String,_ mode:String="shadowsocks",_ execution:String="local",_ entryMode:String="")->ProductWindowController{
- let p=ProductWindowController();p.profiles=originalRoot["nodes"] as! [[String:Any]];p.routerIDs=p.profiles.map{$0["id"] as! String};p.multihopNodeIDs=p.profiles.filter{RouterVPNMacSpeedLabPathPolicy.kind($0)=="router-vpn"}.map{$0["id"] as! String}
- for node in p.profiles{if let id=node["id"] as? String,let token=node["profile_token"] as? String{p.multihopNodeTokens[id]=token}}
+ let p=ProductWindowController();p.profiles=originalRoot["nodes"] as! [[String:Any]];p.routerIDs=p.profiles.map{$0["id"] as! String};let hopNodes=mainCatalog["nodes"] as! [[String:Any]];p.multihopNodeIDs=hopNodes.map{$0["id"] as! String}
+ for node in hopNodes{if let id=node["id"] as? String,let token=node["profile_token"] as? String{p.multihopNodeTokens[id]=token}}
  fill(p.routerPopup,p.routerIDs);choose(p.routerPopup,id);fill(p.multihopEntryPopup,p.multihopNodeIDs);choose(p.multihopEntryPopup,"entry");fill(p.multihopExitPopup,p.multihopNodeIDs);choose(p.multihopExitPopup,"exit-router");fill(p.multihopEntryModePopup,RouterVPNNodeEntryModes.choices.map{$0.id});choose(p.multihopEntryModePopup,entryMode);fill(p.multihopExitModePopup,RouterVPNNodeExitModes.choices.map{$0.id});choose(p.multihopExitModePopup,mode);fill(p.multihopExecutionPopup,["local","server","auto"]);choose(p.multihopExecutionPopup,execution);return p
 }
 func configure(_ f:Form,_ options:Data){fill(f.scope,["current","temporary"]);fill(f.topology,["system-direct","router","multihop","external"]);fill(f.base,["auto","wg","awg"]);f.initializeExitModes();f.exitMode.selectItem(at:0);fill(f.durationMode,["auto","custom"]);f.maxTime.doubleValue=12;f.options=options}
@@ -326,6 +348,18 @@ f.selectPreserving(f.exitMode,"removed-exit-mode");reject();choose(f.exitMode,"n
 let supportedExitModes=f.exitModes;f.exitModes.removeAll{$0=="naive-h3"};reject();f.exitModes=supportedExitModes
 f.currentPath=["entry_id":"entry","exit_id":"exit-router","exit_mode":"reality-pq-vision"];f.applyPathDefaults();check(f.selected(f.exitMode)=="reality-pq-vision","Matching current graph lost its exact exit mode")
 f.currentPath["entry_id"]="different-entry";choose(f.exitMode,"naive-h2");f.applyPathDefaults();check(f.selected(f.exitMode)=="naive-h2","Unrelated graph replaced the selected exit mode")
+let temporaryImports=["shadowsocks","hysteria2","socks5","http-connect","https-connect","wireguard","amneziawg","openvpn"]
+for proto in temporaryImports {
+ choose(f.entry,"imported-"+proto);f.pathChanged(f.entry);choose(f.exit,"exit-router");choose(f.exitMode,"reality-vision")
+ check(f.selected(f.entryMode)==proto&&f.selected(f.execution)=="local"&&f.entryMode.numberOfItems==1&&f.execution.numberOfItems==1,"Imported entry callback lost its exact protocol or Local-only choices")
+ try emit("speed-lab-imported-"+proto)
+ for value in ["server","auto"] {f.selectPreserving(f.execution,value);reject()};choose(f.execution,"local")
+ f.selectPreserving(f.entryMode,"wg");reject();choose(f.entryMode,proto);choose(f.exitMode,"max");reject();choose(f.exitMode,"reality-vision")
+ let index=f.nodes.firstIndex(where:{$0["id"] as? String=="imported-"+proto})!;let original=f.nodes[index]["multihop_entry_modes"]!
+ f.nodes[index]["multihop_entry_modes"]=[proto,proto];reject();f.nodes[index].removeValue(forKey:"multihop_entry_modes");reject();f.nodes[index]["multihop_entry_modes"]=original
+ let token=f.nodes[index]["profile_token"]!;f.nodes[index]["profile_token"]=String(repeating:"d",count:64);reject();f.nodes[index]["profile_token"]=token
+}
+choose(f.entry,"entry");f.pathChanged(f.entry)
 choose(f.exit,"entry");reject();choose(f.exit,"exit-router");choose(f.topology,"system-direct");try emit("speed-lab-system-direct")
 var routerRoot=originalRoot;var routerNodes=originalRoot["nodes"] as! [[String:Any]]
 for i in routerNodes.indices{routerNodes[i]["selected"]=routerNodes[i]["id"] as? String=="entry"};routerRoot["nodes"]=routerNodes
@@ -348,6 +382,12 @@ for entryMode in importedEntries {
  choose(snapshot.scope,"current");snapshot.runSpeedLab();check(snapshot.captured?["scope"] as? String=="current","Imported main selection blocked Current request")
  snapshot.request=nil;snapshot.cancelled=false;choose(snapshot.scope,"temporary")
  for execution in ["local","server","auto"]{choose(snapshot.execution,execution);snapshot.captured=nil;snapshot.runSpeedLab();check(snapshot.captured==nil,"Imported mode borrowed paired temporary authority")}
+}
+for proto in temporaryImports {
+ let owner=product("entry","reality-vision","local",proto);choose(owner.multihopEntryPopup,"imported-"+proto)
+ let snapshot=Form(owner);configure(snapshot,routerOptions);snapshot.loadOptions();check(snapshot.optionsReady&&snapshot.selected(snapshot.entry)=="imported-"+proto&&snapshot.selected(snapshot.entryMode)==proto&&snapshot.selected(snapshot.execution)=="local","Captured imported main selection changed")
+ choose(snapshot.scope,"temporary");snapshot.runSpeedLab();check(snapshot.captured?["entry_mode"] as? String==proto,snapshot.detail.string)
+ try JSONSerialization.data(withJSONObject:snapshot.captured!,options:[.sortedKeys]).write(to:output.appendingPathComponent("speed-lab-main-imported-"+proto+".json"))
 }
 do{let owner=product("entry","shadowsocks","auto"),snapshot=Form(owner);configure(snapshot,routerOptions);snapshot.loadOptions();check(snapshot.optionsReady&&snapshot.entryMode.selectedItem != nil&&snapshot.selected(snapshot.entryMode)=="","Saved entry/base fallback disappeared")}
 do{let owner=product("entry","shadowsocks","auto"),snapshot=Form(owner);configure(snapshot,routerOptions);snapshot.deferOptions=true;snapshot.loadOptions();choose(owner.multihopEntryModePopup,"max-quic-wg");snapshot.finishOptions();check(!snapshot.optionsReady&&snapshot.nodes.isEmpty,"Changed main entry accepted old options")}

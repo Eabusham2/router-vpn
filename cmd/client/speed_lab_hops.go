@@ -15,6 +15,8 @@ type speedLabHopMeasurement struct {
 	Role         string                   `json:"role"`
 	RouterID     string                   `json:"router_id"`
 	Name         string                   `json:"name"`
+	LatencyLabel string                   `json:"latency_label,omitempty"`
+	SpeedLabel   string                   `json:"speed_label,omitempty"`
 	Latency      *connectionLatencyResult `json:"latency,omitempty"`
 	Speed        *routedSpeedResult       `json:"speed,omitempty"`
 	LatencyError string                   `json:"latency_error,omitempty"`
@@ -42,6 +44,7 @@ func measureSpeedLabMultihopHopsContext(ctx context.Context, a *app, identity sp
 	st := a.state
 	entry, entryOK := a.profileByIDLocked(identity.Graph.EntryID)
 	exit, exitOK := a.profileByIDLocked(identity.Graph.ExitID)
+	entry, exit = cloneRouterProfile(entry), cloneRouterProfile(exit)
 	a.mu.Unlock()
 	if !entryOK || !exitOK {
 		return nil, errors.New("Speed Lab active multihop entry or exit disappeared")
@@ -57,15 +60,22 @@ func measureSpeedLabMultihopHopsContext(ctx context.Context, a *app, identity sp
 		} else if role != "exit" {
 			return speedLabHopMeasurement{}, errors.New("unknown Speed Lab multihop role")
 		}
-		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		p := exit
+		if role == "entry" {
+			p = entry
+		}
+		if p.ID != profileID {
+			return speedLabHopMeasurement{}, errors.New("Speed Lab hop differs from its captured source")
+		}
+		if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 			return speedLabHopMeasurement{}, err
 		}
-		p, ok := a.profileByIDLocked(profileID)
-		a.mu.Unlock()
-		if !ok {
-			return speedLabHopMeasurement{}, errors.New("Speed Lab hop disappeared during measurement")
+		if role == "entry" && (p.External != nil || p.NodeKind == "external") {
+			return measureSpeedLabImportedEntryHop(ctx, entry, func(call context.Context) error {
+				return validateSpeedLabIdentityContext(call, a, identity)
+			})
 		}
-		hop := speedLabHopMeasurement{Role: role, RouterID: p.ID, Name: pName}
+		hop := speedLabHopMeasurement{Role: role, RouterID: p.ID, Name: pName, LatencyLabel: "Node HTTP response", SpeedLabel: "Node transfer"}
 
 		latency, latencyErr := measureRoutedProfileLatencyViaProxyContext(ctx, p, 4, proxy)
 		if err := ctx.Err(); err != nil {

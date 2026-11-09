@@ -147,6 +147,21 @@ $OriginalModes=$SpeedLabOptions.supported_exit_modes;$SpeedLabOptions.supported_
 $SpeedLabOptions.current=[pscustomobject]@{entry_id='entry';exit_id='exit-router';exit_mode='reality-pq-vision'};SetSpeedLabDefaults;Check ((SelectedTag $ExitMode)-ceq'reality-pq-vision') 'Matching current graph lost its exact exit mode.'
 $SpeedLabOptions.current.entry_id='different-entry';$ExitMode.SelectedValue='naive-h2';SetSpeedLabDefaults;Check ((SelectedTag $ExitMode)-ceq'naive-h2') 'Unrelated graph replaced selected exit mode.'
 $Exit.SelectedValue='entry';Reject 'identical multihop nodes';$Exit.SelectedValue='exit-router'
+# Actual entry-change and Run callbacks preserve the imported source identity;
+# only its canonical protocol and Local execution are offered for this path.
+$TemporaryImports=@('shadowsocks','hysteria2','socks5','http-connect','https-connect','wireguard','amneziawg','openvpn')
+foreach($P in $TemporaryImports){
+ $Entry.SelectedValue=('imported-'+$P);SpeedLabPathChanged 'entry';$Exit.SelectedValue='exit-router';$ExitMode.SelectedValue='reality-vision'
+ Check ($EntryMode.SelectedValue-ceq$P-and$Execution.SelectedValue-ceq'local'-and@($EntryMode.ItemsSource).Count-eq1-and@($Execution.ItemsSource).Count-eq1) 'Imported entry callback lost its exact protocol or Local-only choices.'
+ Emit ('speed-lab-imported-'+$P)
+ foreach($E in @('server','auto')){SelectSpeedLabChoice $Execution $E;Reject ('imported execution '+$P+' '+$E)}
+ $Execution.SelectedValue='local';SelectSpeedLabChoice $EntryMode 'wg';Reject ('imported source mode '+$P);$EntryMode.SelectedValue=$P
+ $ExitMode.SelectedValue='max';Reject ('imported unsupported final '+$P);$ExitMode.SelectedValue='reality-vision'
+ $ImportedNode=SpeedLabFind 'nodes' ('imported-'+$P);$OriginalCapability=@($ImportedNode.multihop_entry_modes)
+ $ImportedNode.multihop_entry_modes=@($P,$P);Reject ('duplicate imported capability '+$P);$ImportedNode.multihop_entry_modes=@();Reject ('missing imported capability '+$P);$ImportedNode.multihop_entry_modes=$OriginalCapability
+ $OriginalToken=$ImportedNode.profile_token;$ImportedNode.profile_token='d'*64;Reject ('same-ID imported source relink '+$P);$ImportedNode.profile_token=$OriginalToken
+}
+$Entry.SelectedValue='entry';SpeedLabPathChanged 'entry'
 $Topology.SelectedValue='system-direct';Emit 'speed-lab-system-direct'
 # The real options callback must adopt the detached visible profile, including
 # disconnected selections that do not exist in per-node metadata.
@@ -174,6 +189,13 @@ foreach($M in $ImportedEntries){
  $Scope.SelectedValue='current';$script:Captured=$null;&$RunCallback;Check ($null-ne$script:Captured-and$script:Captured.scope-ceq'current') 'Imported main selection blocked Current request.'
  $Scope.SelectedValue='temporary';foreach($E in @('local','server','auto')){$Execution.SelectedValue=$E;Reject ('Imported mode on paired temporary entry '+$M+' '+$E)}
 }
+foreach($P in $TemporaryImports){
+ $MultihopEntryCombo.SelectedValue=('imported-'+$P);$MultihopEntryModeCombo.SelectedValue=$P;$MultihopExitModeCombo.SelectedValue='reality-vision';$MainFields.UnifiedExecution.SelectedValue='local';$CapturedSpeedLabSelection=CaptureSpeedLabSelection
+ $D.Tag='owned-options';&$Initializer $RouterOpt
+ Check ($D.Tag-ceq'ready'-and$Entry.SelectedValue-ceq('imported-'+$P)-and$EntryMode.SelectedValue-ceq$P-and$Execution.SelectedValue-ceq'local') 'Captured imported main selection changed while options loaded.'
+ Emit ('speed-lab-main-imported-'+$P)
+}
+$MultihopEntryCombo.SelectedValue='entry'
 $MultihopEntryModeCombo.SelectedValue='';$CapturedSpeedLabSelection=CaptureSpeedLabSelection;$D.Tag='owned-options';&$Initializer $RouterOpt
 Check ($D.Tag-ceq'ready'-and$EntryMode.SelectedValue-ceq'') 'Saved entry/base fallback disappeared.'
 $MultihopEntryModeCombo.SelectedValue='reality-xhttp';Reject 'main entry changed after Ready';$MultihopEntryModeCombo.SelectedValue=''

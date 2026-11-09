@@ -56,6 +56,16 @@ func desktopSpeedLabFormApp(t *testing.T) *app {
 		}
 		a.profiles.Profiles = append(a.profiles.Profiles, tor)
 	}
+	for _, protocol := range []string{"shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn"} {
+		var imported common.RouterProfile
+		if protocol == "openvpn" {
+			imported = desktopImportedOpenVPNProfileFixture(t, "tcp")
+		} else {
+			imported, _ = desktopExternalNativeFixture(t, protocol)
+		}
+		imported.ID, imported.Name = "imported-"+protocol, "Original imported "+protocol
+		a.profiles.Profiles = append(a.profiles.Profiles, imported)
+	}
 	raw, err := os.ReadFile(filepath.Join("..", "..", "configs", "client", "modes.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -102,8 +112,8 @@ func TestDesktopSpeedLabPathFormCatalog(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "speed-lab-options.json"), catalog, 0600); err != nil {
 		t.Fatal(err)
 	}
-	// Main/profile Connect admits imported entries; the temporary Router-only
-	// Speed Lab form has its own smaller catalog. Exercise both actual APIs.
+	// Main/profile Connect has a union catalog. Temporary Speed Lab keeps the
+	// paired catalog and each imported source capability separate.
 	status := httptest.NewRecorder()
 	a.nativeMultihopStatus(status, httptest.NewRequest(http.MethodGet, "/api/multihop/status", nil))
 	if status.Code != http.StatusOK {
@@ -145,7 +155,7 @@ func TestDesktopSpeedLabPathFormPayload(t *testing.T) {
 		}
 		if request.hasExpectedProfiles() {
 			expectedSelected := "exit"
-			if strings.HasPrefix(name, "speed-lab-main-entry-") {
+			if strings.HasPrefix(name, "speed-lab-main-entry-") || strings.HasPrefix(name, "speed-lab-main-imported-") {
 				expectedSelected = "entry"
 			}
 			for _, mode := range mobilemultihop.NodeMultihopExitModes() {
@@ -250,6 +260,37 @@ func TestDesktopSpeedLabPathFormPayload(t *testing.T) {
 				t.Fatal("ordinary external entry changed")
 			}
 		})
+	}
+	for _, prefix := range []string{"speed-lab-imported-", "speed-lab-main-imported-"} {
+		for _, protocol := range []string{"shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn"} {
+			t.Run(prefix+protocol, func(t *testing.T) {
+				request, fields := read(prefix + protocol)
+				entry, ok := profileByID(a.profiles.Profiles, "imported-"+protocol)
+				selected, _ := profileByID(a.profiles.Profiles, request.ExpectedSelectedNodeID)
+				if !ok || request.Scope != "temporary" || request.Topology != "multihop" || request.EntryID != entry.ID ||
+					request.ExitID != "exit-router" || request.EntryMode != protocol || request.Execution != "local" || request.ExitMode != "reality-vision" || request.Base != "auto" {
+					t.Fatal("native imported callback substituted the original entry or selected Local graph")
+				}
+				before := cloneRouterProfileStore(a.profiles)
+				selection, err := a.resolveSpeedLabTemporaryMultihop(request, selected, entry, a.profiles.Profiles)
+				if err != nil || selection.Control.ID != request.ExitID || selection.Exit.ID != request.ExitID ||
+					selection.EntryMode != protocol || !reflect.DeepEqual(selection.Entry, entry) || !reflect.DeepEqual(before, a.profiles) {
+					t.Fatal("shipping temporary resolver changed the original imported source or final policy owner", err)
+				}
+				for _, forbidden := range []string{"api_token", "external", "dns_mode", "start_layer", "private_key", "multihop_entry_modes"} {
+					if _, exists := fields[forbidden]; exists {
+						t.Fatal("native imported callback copied credential or capability authority", forbidden)
+					}
+				}
+				for _, execution := range []string{"server", "auto"} {
+					changed := request
+					changed.Execution = execution
+					if _, err := a.resolveSpeedLabTemporaryMultihop(changed, selected, entry, a.profiles.Profiles); err == nil {
+						t.Fatal("native temporary payload borrowed private Server authority", execution)
+					}
+				}
+			})
+		}
 	}
 	for _, execution := range []string{"local", "server", "auto"} {
 		request, _ := read("speed-lab-multihop-" + execution)
