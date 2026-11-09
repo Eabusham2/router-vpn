@@ -52,6 +52,7 @@ type controllerShutdown struct {
 	retryDelay   time.Duration
 	operations   context.Context
 	cancelWork   context.CancelFunc
+	tracker      *sessionTracker
 }
 
 func newControllerShutdown(a *app, ownerToken string) *controllerShutdown {
@@ -94,6 +95,7 @@ func (c *controllerShutdown) begin() {
 		c.a.closing = true
 		c.a.mu.Unlock()
 		c.cancelWork()
+		c.tracker = cancelSessionTracker(c.a)
 		invalidateDesktopDNSResults(c.a)
 		c.a.cancelConnectionOperation()
 		cancelCapturedMTU(c.a)
@@ -105,6 +107,11 @@ func (c *controllerShutdown) drain() {
 	reported := false
 	for {
 		if err := c.a.drainControllerOwner(); err == nil {
+			joinSessionTracker(c.a, c.tracker)
+			if original, ok := sessionTrackers.Load(c.a); ok && original == c.tracker {
+				// Publish the actual final state without reopening observation.
+				c.tracker.publishRetiredObservation(c.tracker.capture())
+			}
 			close(c.done)
 			return
 		}

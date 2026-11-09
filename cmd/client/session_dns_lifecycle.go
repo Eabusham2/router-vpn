@@ -37,7 +37,7 @@ func (t *sessionTracker) startDNSProofLocked(sessionID string, s observedConnect
 			return
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), sessionDNSProofBudget)
+	ctx, cancel := context.WithTimeout(t.observationContext(), sessionDNSProofBudget)
 	work := &sessionDNSProofWork{sessionID: sessionID, runtimeID: runtimeID, routerID: s.RouterID, base: s.Base,
 		profile: asyncMeasurementProfileToken(s.Profile), cancel: cancel, done: make(chan struct{})}
 	t.dnsProofWork = work

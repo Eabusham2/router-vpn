@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import re
 import types
 import unittest
 
@@ -25,7 +26,7 @@ class RecoveredDNSProofGateTests(unittest.TestCase):
                          "cmd/client/dns_proof_path.go", "cmd/client/session_dns_lifecycle.go",
                          "cmd/client/controller_shutdown.go")
         }
-        namespace = {"mod": types.SimpleNamespace(has=self.has)}
+        namespace = {"mod": types.SimpleNamespace(has=self.has, body=lambda path: self.files.get(path, ""))}
         exec(compile(module, "recovered-dns-proof-predicate", "exec"), namespace)
         self.predicate = namespace["selected_dns_proof"]
 
@@ -48,19 +49,29 @@ class RecoveredDNSProofGateTests(unittest.TestCase):
                 "t.cancelStaleDNSProofLocked(s, runtimeID)", "t.invalidateDNSProofBindingLocked()",
             ),
             "cmd/client/session_dns_lifecycle.go": (
-                "context.WithTimeout(context.Background(), sessionDNSProofBudget)",
-                "t.dnsProofWork = work", 'DNSProof.Status = "checking"',
+                "const sessionDNSProofBudget = 30 * time.Second",
+                "t.dnsProofClosed", "t.session.ID != sessionID", "case <-previous.done:",
+                "ctx, cancel := context.WithTimeout(", ", sessionDNSProofBudget)",
+                "cancel: cancel, done: make(chan struct{})", "t.dnsProofWork = work",
+                't.session.DNSProof.Status = "checking"',
+                "defer close(work.done)", "defer cancel()",
                 "t.proveDNSAsyncWithProbeContext(ctx, sessionID, s, runtimeID, probe)",
-                "defer close(work.done)", "work.cancel()", "t.dnsProofClosed = true",
-                "desktopnetwork.LockContext(ctx, &t.mu)", "case <-work.done:",
-                "case <-ctx.Done():", "return tracker.stopDNSProofs(ctx)",
+                "t.session.ID != work.sessionID", "runtimeID != work.runtimeID",
+                "asyncMeasurementProfileToken(s.Profile) != work.profile", "work.cancel()",
+                "desktopnetwork.LockContext(ctx, &t.mu)", "t.dnsProofClosed = true",
+                "work := t.dnsProofWork", "case <-work.done:", "case <-ctx.Done():",
+                "return ctx.Err()", "sessionTrackers.Load(a)", "tracker.a != a",
+                "5*time.Second", "return tracker.stopDNSProofs(ctx)",
             ),
-            "cmd/client/controller_shutdown.go": ("stopSessionDNSProofs(a)",),
+            "cmd/client/controller_shutdown.go": (
+                "if err := stopSessionDNSProofs(a); err != nil {",
+            ),
             "cmd/client/dns_proof_path.go": (
+                "sessionTrackers.Load(t.a)", "owner != t",
                 "measurementSessionContext(parent, t.a, t)",
-                "asyncMeasurementPathContext(parent, t.a, s.Profile",
+                "asyncMeasurementPathContext(parent, t.a, s.Profile, st, before,",
                 "t.dnsProofPathContextWithCaller(parent, sessionID, s, runtimeID)",
-                "beginAsyncMeasurementAdoption(ctx)",
+                "proof := probe(ctx, t.a, s, runtimeID)", "beginAsyncMeasurementAdoption(ctx)",
                 "defer stop()", "defer release()", "dnsProofBinding.validateLocked(t.session)",
                 '"dns-proof"', "t.session.DNSProof = proof",
             ),
@@ -79,13 +90,46 @@ class RecoveredDNSProofGateTests(unittest.TestCase):
         self.files["cmd/client/session_state.go"] += '\n"dns-proof"\nt.session.DNSProof = proof\n'
         self.assertFalse(self.predicate())
 
+    def test_retained_observation_parent_keeps_the_same_bounded_worker(self) -> None:
+        path = "cmd/client/session_dns_lifecycle.go"
+        self.files[path], replaced = re.subn(
+            r"ctx, cancel := context\.WithTimeout\([^\n]+, sessionDNSProofBudget\)",
+            "ctx, cancel := context.WithTimeout(t.observationContext(), sessionDNSProofBudget)",
+            self.files[path], count=1,
+        )
+        self.assertEqual(replaced, 1)
+        self.assertTrue(self.predicate())
+
+    def test_detached_probe_cannot_borrow_a_compatibility_wrapper(self) -> None:
+        path = "cmd/client/session_dns_lifecycle.go"
+        call = "t.proveDNSAsyncWithProbeContext(ctx, sessionID, s, runtimeID, probe)"
+        self.assertIn(call, self.files[path])
+        self.files[path] = self.files[path].replace(call, call.replace("(ctx,", "(context.Background(),"))
+        # The old wrapper in dns_proof_path.go still has the bounded call.
+        self.assertIn(call, self.files["cmd/client/dns_proof_path.go"])
+        self.assertFalse(self.predicate())
+
+    def test_lifecycle_markers_outside_the_owned_function_do_not_count(self) -> None:
+        for path, marker in (
+            ("cmd/client/session_state.go", "t.startDNSProofLocked(t.session.ID, s, runtimeID, proveSelectedDNSContext)"),
+            ("cmd/client/session_dns_lifecycle.go", 't.session.DNSProof.Status = "checking"'),
+            ("cmd/client/session_dns_lifecycle.go", "defer close(work.done)"),
+            ("cmd/client/session_dns_lifecycle.go", "case <-work.done:"),
+            ("cmd/client/controller_shutdown.go", "if err := stopSessionDNSProofs(a); err != nil {"),
+        ):
+            with self.subTest(path=path, marker=marker):
+                original = self.files[path]
+                self.assertIn(marker, original)
+                self.files[path] = original.replace(marker, "REMOVED_OWNED_WIRING") + "\nfunc unusedProofFixture() {\n// " + marker + "\n}\n"
+                self.assertFalse(self.predicate())
+                self.files[path] = original
+
     def test_missing_worker_lifetime_cannot_pass_through_legacy_dispatch(self) -> None:
         self.files["cmd/client/session_dns_lifecycle.go"] = ""
         self.files["cmd/client/session_state.go"] += (
             '\nproveDNSAsyncWithProbe(sessionID, s, runtimeID, proveSelectedDNSContext)\n'
             'DNSProof.Status = "checking"\n')
         self.assertFalse(self.predicate())
-
 
 if __name__ == "__main__":
     unittest.main()

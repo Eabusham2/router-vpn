@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 )
 
 type typedSessionError struct {
@@ -87,6 +89,7 @@ type sessionTracker struct {
 	dnsProofBinding     *asyncMeasurementAdoption
 	dnsProofWork        *sessionDNSProofWork
 	dnsProofClosed      bool
+	lifetime            sessionWorkerLifetime
 }
 
 var sessionTrackers sync.Map
@@ -101,28 +104,46 @@ func initSessionTracker(a *app) *sessionTracker {
 	if loaded {
 		return actual.(*sessionTracker)
 	}
-	go t.loop()
+	t.startWorker(t.loop)
 	return t
 }
 
 func sessionTrackerFor(a *app) *sessionTracker { return initSessionTracker(a) }
 
-func (t *sessionTracker) loop() {
+func (t *sessionTracker) loop(ctx context.Context) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	for range ticker.C {
-		t.mu.Lock()
-		closed := t.dnsProofClosed
-		t.mu.Unlock()
-		if closed {
+	for {
+		select {
+		case <-ctx.Done():
 			return
+		case <-ticker.C:
+			if err := desktopnetwork.LockContext(ctx, &t.mu); err != nil {
+				return
+			}
+			closed := t.dnsProofClosed
+			t.mu.Unlock()
+			if closed {
+				return
+			}
+			s, err := t.captureContext(ctx)
+			if err != nil {
+				return
+			}
+			t.observe(s)
 		}
-		t.observe(t.capture())
 	}
 }
 
 func (t *sessionTracker) capture() observedConnection {
-	t.a.mu.Lock()
+	s, _ := t.captureContext(context.Background())
+	return s
+}
+
+func (t *sessionTracker) captureContext(ctx context.Context) (observedConnection, error) {
+	if err := desktopnetwork.LockContext(ctx, &t.a.mu); err != nil {
+		return observedConnection{}, err
+	}
 	defer t.a.mu.Unlock()
 	s := t.a.state
 	profileID := t.a.profiles.SelectedID
@@ -140,7 +161,7 @@ func (t *sessionTracker) capture() observedConnection {
 		Connected: s.Connected, Mode: s.Mode, LogicalMode: s.LogicalMode,
 		RuntimeMode: s.RuntimeMode, Base: s.Base, RouterID: s.RouterID,
 		Phase: s.Phase, LastError: s.LastError, Profile: cloneRouterProfile(p),
-	}
+	}, ctx.Err()
 }
 
 // dnsProofObservationStillCurrentLocked is called with tracker.mu held. The

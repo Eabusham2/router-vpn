@@ -444,11 +444,13 @@ func (f *desktopNodeConnectionFixture) close(t *testing.T) {
 	f.a.mu.Lock()
 	f.a.closing = true
 	f.a.mu.Unlock()
+	f.tracker.cancelObservation()
 	f.retire()
 	<-f.telemetryDone
 	if err := f.tracker.stopDNSProofs(context.Background()); err != nil {
 		t.Error(err)
 	}
+	joinSessionTracker(f.a, f.tracker)
 	for _, child := range f.children {
 		if err := stopDesktopOwnedNodeMonitor(context.Background(), child.launch); err != nil {
 			t.Error(err)
@@ -465,7 +467,7 @@ func (f *desktopNodeConnectionFixture) close(t *testing.T) {
 	}
 	f.releaseMTU()
 	desktopNodeOwners.Delete(f.a)
-	sessionTrackers.Delete(f.a)
+	sessionTrackers.CompareAndDelete(f.a, f.tracker)
 	strategyLocks.Delete(f.a)
 	mtuSuspensions.Delete(f.a)
 	routerNodeAutomaticMTUs.Delete(f.a)

@@ -166,6 +166,18 @@ def ios_map() -> bool:
 
 
 def selected_dns_proof() -> bool:
+    def function_has(path: str, signature: str, *markers: str) -> bool:
+        source = mod.body(path)
+        start = source.find(signature)
+        if start < 0:
+            return False
+        # The ownership call must remain in the shipping function. A legacy
+        # wrapper or unrelated helper containing the same text earns no credit.
+        function = source[start:].split("\nfunc ", 1)[0]
+        return all(marker in function for marker in markers)
+
+    lifecycle = "cmd/client/session_dns_lifecycle.go"
+    path = "cmd/client/dns_proof_path.go"
     return (
         mod.has(
             "cmd/client/dns_proof.go",
@@ -177,33 +189,62 @@ def selected_dns_proof() -> bool:
             "hijack-dns",
             'result.Status = "passed"',
         )
-        and mod.has(
+        and function_has(
             "cmd/client/session_state.go",
+            "func (t *sessionTracker) observe(",
             "t.startDNSProofLocked(t.session.ID, s, runtimeID, proveSelectedDNSContext)",
             "t.cancelStaleDNSProofLocked(s, runtimeID)",
             "t.invalidateDNSProofBindingLocked()",
         )
-        and mod.has(
-            "cmd/client/session_dns_lifecycle.go",
-            "context.WithTimeout(context.Background(), sessionDNSProofBudget)",
-            "t.dnsProofWork = work", 'DNSProof.Status = "checking"',
+        and mod.has(lifecycle, "const sessionDNSProofBudget = 30 * time.Second")
+        and function_has(
+            lifecycle, "func (t *sessionTracker) startDNSProofLocked(",
+            "t.dnsProofClosed", "t.session.ID != sessionID", "case <-previous.done:",
+            "ctx, cancel := context.WithTimeout(", ", sessionDNSProofBudget)",
+            "cancel: cancel, done: make(chan struct{})", "t.dnsProofWork = work",
+            't.session.DNSProof.Status = "checking"',
+            "defer close(work.done)", "defer cancel()",
             "t.proveDNSAsyncWithProbeContext(ctx, sessionID, s, runtimeID, probe)",
-            "defer close(work.done)", "work.cancel()", "t.dnsProofClosed = true",
-            "desktopnetwork.LockContext(ctx, &t.mu)", "case <-work.done:",
-            "case <-ctx.Done():", "return tracker.stopDNSProofs(ctx)",
         )
-        and mod.has("cmd/client/controller_shutdown.go", "stopSessionDNSProofs(a)")
-        and mod.has(
-            "cmd/client/dns_proof_path.go",
+        and function_has(
+            lifecycle, "func (t *sessionTracker) cancelStaleDNSProofLocked(",
+            "t.session.ID != work.sessionID", "runtimeID != work.runtimeID",
+            "asyncMeasurementProfileToken(s.Profile) != work.profile", "work.cancel()",
+        )
+        and function_has(
+            lifecycle, "func (t *sessionTracker) stopDNSProofs(",
+            "desktopnetwork.LockContext(ctx, &t.mu)", "t.dnsProofClosed = true",
+            "work := t.dnsProofWork", "work.cancel()", "case <-work.done:",
+            "case <-ctx.Done():", "return ctx.Err()",
+        )
+        and function_has(
+            lifecycle, "func stopSessionDNSProofs(",
+            "sessionTrackers.Load(a)", "tracker.a != a", "5*time.Second",
+            "return tracker.stopDNSProofs(ctx)",
+        )
+        and function_has(
+            "cmd/client/controller_shutdown.go", "func (a *app) drainControllerOwner(",
+            "if err := stopSessionDNSProofs(a); err != nil {",
+        )
+        and function_has(
+            path, "func (t *sessionTracker) dnsProofPathContextWithCaller(",
+            "sessionTrackers.Load(t.a)", "owner != t",
             "measurementSessionContext(parent, t.a, t)",
-            "asyncMeasurementPathContext(parent, t.a, s.Profile",
+            "asyncMeasurementPathContext(parent, t.a, s.Profile, st, before,",
+        )
+        and function_has(
+            path, "func (t *sessionTracker) proveDNSAsyncWithProbeContext(",
             "t.dnsProofPathContextWithCaller(parent, sessionID, s, runtimeID)",
+            "proof := probe(ctx, t.a, s, runtimeID)",
             "beginAsyncMeasurementAdoption(ctx)",
             "defer stop()",
             "defer release()",
-            "dnsProofBinding.validateLocked(t.session)",
             '"dns-proof"',
             "t.session.DNSProof = proof",
+        )
+        and function_has(
+            path, "func (t *sessionTracker) invalidateDNSProofBindingLocked(",
+            "dnsProofBinding.validateLocked(t.session)",
         )
     )
 

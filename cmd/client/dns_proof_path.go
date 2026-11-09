@@ -9,7 +9,7 @@ import (
 type selectedDNSProbe func(context.Context, *app, observedConnection, string) dnsProofState
 
 func (t *sessionTracker) dnsProofPathContext(sessionID string, s observedConnection, runtimeID string) (context.Context, func(), error) {
-	return t.dnsProofPathContextWithCaller(context.Background(), sessionID, s, runtimeID)
+	return t.dnsProofPathContextWithCaller(t.observationContext(), sessionID, s, runtimeID)
 }
 
 func (t *sessionTracker) dnsProofPathContextWithCaller(parent context.Context, sessionID string, s observedConnection, runtimeID string) (context.Context, func(), error) {
@@ -59,7 +59,7 @@ func (t *sessionTracker) discardDNSProof(sessionID string) {
 }
 
 func (t *sessionTracker) proveDNSAsyncWithProbe(sessionID string, s observedConnection, runtimeID string, probe selectedDNSProbe) {
-	ctx, cancel := context.WithTimeout(context.Background(), sessionDNSProofBudget)
+	ctx, cancel := context.WithTimeout(t.observationContext(), sessionDNSProofBudget)
 	defer cancel()
 	t.proveDNSAsyncWithProbeContext(ctx, sessionID, s, runtimeID, probe)
 }
