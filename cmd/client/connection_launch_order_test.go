@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
+	"go/format"
 	"go/parser"
 	"go/token"
 	"os"
@@ -72,7 +74,10 @@ func TestEveryShippingConnectionStartIsGuardedBeforeAndAfterLaunch(t *testing.T)
 			t.Fatal("public native multihop lost its shipping adapter", required)
 		}
 	}
-	assertGuardedProcessStart(t, "multihop_native_routes.go", "func (a *app) nativeMultihopConnectOwned", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
+	assertGuardedProcessStart(t, "multihop_native_routes.go", "func (a *app) nativeMultihopConnectOwned", "err = cmd.Start()", "a.cmd = cmd")
+	if err := nativeMultihopLaunchGuards(nativeMultihopLaunchSources(t)); err != nil {
+		t.Fatal(err)
+	}
 	assertGuardedProcessStart(t, "multihop.go", "func (a *app) multihopConnect", "if err := cmd.Start(); err != nil", "a.cmd = cmd")
 	assertGuardedProcessStart(t, "external_profile_connect.go", "func (a *app) externalProfileConnectOwned", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
 	assertGuardedProcessStart(t, "external_profile_connect.go", "func (a *app) externalProfileConnectOwned", "err = nativeRetained.Start(a.connectionOperationContextOrBackground())", "a.cmd = realCmd")
@@ -81,6 +86,210 @@ func TestEveryShippingConnectionStartIsGuardedBeforeAndAfterLaunch(t *testing.T)
 	if err := sharedNativeExternalLaunchGuards(fn); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func nativeMultihopLaunchSources(t *testing.T) []string {
+	t.Helper()
+	return []string{
+		sourceFunctionForTest(t, "multihop_native_routes.go", "func (a *app) nativeMultihopConnectOwned("),
+		sourceFunctionForTest(t, "desktop_imported_owned.go", "func (a *app) publishDesktopImportedMultihopStartLocked("),
+		sourceFunctionForTest(t, "desktop_imported_owned.go", "func startDesktopOwnedImportedLaunch("),
+		sourceFunctionForTest(t, "desktop_node_owned.go", "func startDesktopOwnedNodeLaunchFor("),
+	}
+}
+
+// The protected imported path publishes its partial owner before native child
+// creation so a failed start can still be joined. Follow that actual helper as
+// well as the ordinary cmd.Start branch; an unrelated guard, comment or string
+// cannot stand in for either branch's original operation.
+func nativeMultihopLaunchGuards(sources []string) error {
+	if len(sources) != 4 {
+		return fmt.Errorf("native multihop launch lost its four shipping functions")
+	}
+	positions := token.NewFileSet()
+	methods := make([]*ast.FuncDecl, 0, len(sources))
+	for _, source := range sources {
+		file, err := parser.ParseFile(positions, "", "package fixture\n"+source, 0)
+		if err != nil || len(file.Decls) != 1 {
+			return fmt.Errorf("native multihop launch source is invalid: %v", err)
+		}
+		method, ok := file.Decls[0].(*ast.FuncDecl)
+		if !ok || method.Body == nil {
+			return fmt.Errorf("native multihop launch lost its function body")
+		}
+		methods = append(methods, method)
+	}
+	text := func(node ast.Node) string {
+		var out bytes.Buffer
+		_ = format.Node(&out, positions, node)
+		return out.String()
+	}
+	contains := func(block *ast.BlockStmt, exact string) bool {
+		if block != nil {
+			for _, statement := range block.List {
+				if text(statement) == exact {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	returns := func(block *ast.BlockStmt) bool {
+		if block != nil && len(block.List) != 0 {
+			_, ok := block.List[len(block.List)-1].(*ast.ReturnStmt)
+			return ok
+		}
+		return false
+	}
+	guard := func(statement ast.Stmt, exact string) bool {
+		branch, ok := statement.(*ast.IfStmt)
+		return ok && branch.Init != nil && text(branch.Init) == exact && text(branch.Cond) == "err != nil" && returns(branch.Body)
+	}
+	before, launch, failed, publication, after, protectedStart := -1, -1, -1, -1, -1, -1
+	for index, statement := range methods[0].Body.List {
+		if guard(statement, "err = a.checkConnectionOperation()") {
+			if launch < 0 {
+				before = index
+			} else if protectedStart < 0 {
+				after = index
+			}
+		}
+		branch, ok := statement.(*ast.IfStmt)
+		if !ok || branch.Init != nil {
+			continue
+		}
+		switch text(branch.Cond) {
+		case "protected":
+			other, ordinary := branch.Else.(*ast.BlockStmt)
+			if ordinary && len(branch.Body.List) == 3 && text(branch.Body.List[0]) == "a.mu.Lock()" &&
+				text(branch.Body.List[1]) == "err = a.publishDesktopImportedMultihopStartLocked(operation, native, sel)" &&
+				text(branch.Body.List[2]) == "a.mu.Unlock()" && len(other.List) == 1 && text(other.List[0]) == "err = cmd.Start()" {
+				launch = index
+			}
+			if branch.Else == nil && len(branch.Body.List) == 1 &&
+				guard(branch.Body.List[0], "err := startDesktopOwnedImportedLaunch(operation, operation, a, native)") {
+				protectedStart = index
+			}
+		case "err != nil":
+			if launch >= 0 && publication < 0 && returns(branch.Body) {
+				failed = index
+			}
+		case "!protected":
+			if branch.Else == nil && contains(branch.Body, "a.mu.Lock()") && contains(branch.Body, "a.cmd = cmd") && contains(branch.Body, "a.mu.Unlock()") {
+				publication = index
+			}
+		}
+	}
+	if before < 0 || launch <= before || failed <= launch || publication <= failed || after <= publication || protectedStart <= after {
+		return fmt.Errorf("native multihop branches lost guarded start/retained publication order: %d %d %d %d %d %d", before, launch, failed, publication, after, protectedStart)
+	}
+	// Protected publication validates the captured request under its caller's
+	// app lock, before retaining the exact unstarted command.
+	publicationGuard, retained := -1, -1
+	for index, statement := range methods[1].Body.List {
+		if guard(statement, "err := a.checkCapturedConnectionOperationLocked(operation)") {
+			publicationGuard = index
+		}
+		if text(statement) == "a.cmd = launch.command" {
+			retained = index
+		}
+	}
+	if publicationGuard < 0 || retained <= publicationGuard {
+		return fmt.Errorf("protected multihop publication lost its captured operation")
+	}
+	delegates, callbacks, callbackGuard := 0, 0, 0
+	ast.Inspect(methods[2].Body, func(node ast.Node) bool {
+		if call, ok := node.(*ast.CallExpr); ok && text(call.Fun) == "startDesktopOwnedNodeLaunchFor" && len(call.Args) == 5 &&
+			text(call.Args[0]) == "ctx" && text(call.Args[1]) == "operation" && text(call.Args[2]) == "a" && text(call.Args[3]) == "launch" {
+			delegates++
+		}
+		if result, ok := node.(*ast.ReturnStmt); ok && len(result.Results) == 1 && text(result.Results[0]) == "owner.host.start(call, a, launch, arguments, environment, directory)" {
+			callbacks++
+		}
+		if statement, ok := node.(ast.Stmt); ok && guard(statement, "err := owner.currentContext(call)") {
+			callbackGuard++
+		}
+		return true
+	})
+	if delegates != 1 || callbacks != 1 || callbackGuard != 1 {
+		return fmt.Errorf("protected multihop lost its original-context native start delegate")
+	}
+	pre, child, capture, post, refusal, admit := -1, -1, -1, -1, -1, -1
+	for index, statement := range methods[3].Body.List {
+		if guard(statement, "err := a.checkCapturedConnectionOperation(operation)") {
+			pre = index
+		}
+		switch text(statement) {
+		case "process, err := start(ctx, args, launch.command.Env, launch.directory)":
+			child = index
+		case "owned.process = process":
+			capture = index
+		case "operationErr := a.checkCapturedConnectionOperation(operation)":
+			post = index
+		case "return errors.Join(a.admitDesktopOwnedNodeFor(ctx, operation, launch), a.checkCapturedConnectionOperation(operation))":
+			admit = index
+		}
+		if branch, ok := statement.(*ast.IfStmt); ok && branch.Init == nil &&
+			text(branch.Cond) == "err != nil || operationErr != nil || process == nil || !process.Started() || a.desktopOwnedNodeCurrentFor(ctx, launch, true) != nil" && returns(branch.Body) {
+			refusal = index
+		}
+	}
+	if pre < 0 || child <= pre || capture <= child || post <= capture || refusal <= post || admit <= refusal {
+		return fmt.Errorf("protected native child lost captured pre/post-start admission and retained failure cleanup")
+	}
+	return nil
+}
+
+func TestNativeMultihopLaunchGuardsRejectMutations(t *testing.T) {
+	original := nativeMultihopLaunchSources(t)
+	if err := nativeMultihopLaunchGuards(original); err != nil {
+		t.Fatal("shipping launch prerequisite:", err)
+	}
+	for _, mutation := range []struct {
+		name, old, replacement string
+		part                   int
+	}{
+		{"ordinary-start-omitted", "err = cmd.Start()", "err = nil", 0},
+		{"ordinary-owner-omitted", "a.cmd = cmd", "a.cmd = nil", 0},
+		{"prelaunch-guard-omitted", "if err = a.checkConnectionOperation(); err != nil {", "if err = error(nil); err != nil {", 0},
+		{"protected-publication-omitted", "err = a.publishDesktopImportedMultihopStartLocked(operation, native, sel)", "err = nil", 0},
+		{"protected-caller-replaced", "startDesktopOwnedImportedLaunch(operation, operation, a, native)", "startDesktopOwnedImportedLaunch(context.Background(), operation, a, native)", 0},
+		{"protected-publication-guard-omitted", "a.checkCapturedConnectionOperationLocked(operation)", "unrelatedGuard()", 1},
+		{"protected-command-substituted", "a.cmd = launch.command", "a.cmd = nil", 1},
+		{"delegate-operation-replaced", "startDesktopOwnedNodeLaunchFor(ctx, operation, a, launch,", "startDesktopOwnedNodeLaunchFor(ctx, ctx, a, launch,", 2},
+		{"native-caller-replaced", "owner.host.start(call, a, launch, arguments, environment, directory)", "owner.host.start(context.Background(), a, launch, arguments, environment, directory)", 2},
+		{"native-owner-guard-omitted", "owner.currentContext(call)", "unrelatedGuard()", 2},
+		{"native-prelaunch-guard-omitted", "if err := a.checkCapturedConnectionOperation(operation); err != nil {", "if err := error(nil); err != nil {", 3},
+		{"partial-child-omitted", "owned.process = process", "owned.process = nil", 3},
+		{"native-postlaunch-guard-omitted", "operationErr := a.checkCapturedConnectionOperation(operation)", "operationErr := error(nil)", 3},
+		{"native-postlaunch-error-ignored", "err != nil || operationErr != nil || process == nil", "err != nil || process == nil", 3},
+		{"native-final-admission-omitted", "a.admitDesktopOwnedNodeFor(ctx, operation, launch)", "unrelatedAdmission()", 3},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			changed := append([]string(nil), original...)
+			if strings.Count(changed[mutation.part], mutation.old) < 1 {
+				t.Fatal("mutation lost its actual shipping operation")
+			}
+			changed[mutation.part] = strings.Replace(changed[mutation.part], mutation.old, mutation.replacement, 1) + "\n// " + mutation.old
+			if err := nativeMultihopLaunchGuards(changed); err == nil {
+				t.Fatal("broken native launch passed with an obsolete comment marker")
+			}
+		})
+	}
+	// Retain the earlier guard while removing the check after ordinary owner
+	// publication. It cannot protect either newly launched native branch.
+	t.Run("post-publication-guard-omitted", func(t *testing.T) {
+		changed := append([]string(nil), original...)
+		marker := "if err = a.checkConnectionOperation(); err != nil {"
+		if strings.Count(changed[0], marker) != 2 {
+			t.Fatal("expected exact prelaunch and post-publication guards")
+		}
+		index := strings.LastIndex(changed[0], marker)
+		changed[0] = changed[0][:index] + strings.Replace(changed[0][index:], marker, "if err = error(nil); err != nil {", 1)
+		if err := nativeMultihopLaunchGuards(changed); err == nil {
+			t.Fatal("prelaunch guard substituted for post-publication admission")
+		}
+	})
 }
 
 // Both native branches must share guards and publication in their own enclosing

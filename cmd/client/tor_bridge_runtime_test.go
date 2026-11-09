@@ -143,7 +143,6 @@ func TestTorBridgeControllerRequiresDynamicTorProofBeforeConnected(t *testing.T)
 	}
 	source := string(route)
 	for _, marker := range []string{
-		"beginConnectionOperation()",
 		"Tor bridge public-exit proof failed",
 		"a.stopOwnedConnectionRuntime(cmd)",
 		"tor-project-is-tor-passed",

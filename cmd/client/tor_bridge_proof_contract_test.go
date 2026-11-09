@@ -73,6 +73,36 @@ func torControllerProofContract(route, persistence []byte) error {
 		}
 		return true
 	}
+	// The public request owns both cancellation and the captured operation.
+	// Follow the actual handler statements, rather than an obsolete inline
+	// beginConnectionOperation marker or a matching comment elsewhere.
+	handler := methods["torBridgeConnectWithRuntime"]
+	if handler == nil || handler.Body == nil {
+		return errors.New("Tor public handler lost its original caller")
+	}
+	request, begin, refusal, finish, captured, delegated := -1, -1, -1, -1, -1, -1
+	for index, statement := range handler.Body.List {
+		switch text(statement) {
+		case "driver.requestContext = r.Context()":
+			request = index
+		case "operation, finish, guardErr := a.beginConnectionOperationContext(r.Context())":
+			begin = index
+		case "defer finish()":
+			finish = index
+		case "driver.operation = operation":
+			captured = index
+		case "a.torBridgeConnectSelectionOwned(w, profile, q, nil, driver)":
+			delegated = index
+		}
+		if branch, ok := statement.(*ast.IfStmt); ok && branch.Init == nil && text(branch.Cond) == "guardErr != nil" && len(branch.Body.List) > 0 {
+			if _, returned := branch.Body.List[len(branch.Body.List)-1].(*ast.ReturnStmt); returned {
+				refusal = index
+			}
+		}
+	}
+	if request < 0 || begin <= request || refusal <= begin || finish <= refusal || captured <= finish || delegated <= captured {
+		return errors.New("Tor public request must retain context, checked operation admission, joined finish and the same driver")
+	}
 	controller, save, adopt := methods["torBridgeConnectSelectionOwned"], methods["commitDesktopTorChoice"], methods["adopt"]
 	if !ordered(calls(controller, "a.proveTorBridgeExitContext"), calls(controller, "a.commitDesktopTorChoice"), calls(controller, "saved.adopt"), calls(controller, "a.monitorDesktopTorRuntime")) || len(connected(controller)) != 0 {
 		return errors.New("Tor controller must prove, save and adopt the same runtime before monitoring; Connected belongs to final adoption")
@@ -132,6 +162,12 @@ func TestTorBridgeControllerProofContractRejectsRetiredOrdering(t *testing.T) {
 		name, old, replacement string
 		route                  bool
 	}{
+		{"request-context-omitted", "driver.requestContext = r.Context()", "driver.requestContext = context.Background()", true},
+		{"request-admission-detached", "a.beginConnectionOperationContext(r.Context())", "a.beginConnectionOperation()", true},
+		{"request-admission-error-ignored", "if guardErr != nil {", "if false {", true},
+		{"request-finish-omitted", "defer finish()", "unrelatedFinish()", true},
+		{"request-operation-substituted", "defer finish()\n\tdriver.operation = operation", "defer finish()\n\tdriver.operation = context.Background()", true},
+		{"request-driver-substituted", "a.torBridgeConnectSelectionOwned(w, profile, q, nil, driver)", "a.torBridgeConnectSelectionOwned(w, profile, q, nil, desktopTorConnectRuntime{})", true},
 		{"ignored-proof", "actualIP, proofErr := a.proveTorBridgeExitContext(ctx, prelaunch.workspace)", "actualIP, proofErr := unrelatedProof()", true},
 		{"early-connected", "actualIP, proofErr := a.proveTorBridgeExitContext(ctx, prelaunch.workspace)", "a.state.Connected = true\nactualIP, proofErr := a.proveTorBridgeExitContext(ctx, prelaunch.workspace)", true},
 		{"ignored-adoption", "retainedProof, err = saved.adopt(a)", "retainedProof, err = unrelatedAdopt(a)", true},
@@ -151,7 +187,7 @@ func TestTorBridgeControllerProofContractRejectsRetiredOrdering(t *testing.T) {
 			if strings.Count(*target, change.old) != 1 {
 				t.Fatal("mutation no longer names one shipping operation")
 			}
-			*target = strings.Replace(*target, change.old, change.replacement+" // "+change.old, 1)
+			*target = strings.Replace(*target, change.old, change.replacement+" // "+strings.ReplaceAll(change.old, "\n", " "), 1)
 			if torControllerProofContract([]byte(r), []byte(p)) == nil {
 				t.Fatal("broken proof/persistence contract was accepted")
 			}
