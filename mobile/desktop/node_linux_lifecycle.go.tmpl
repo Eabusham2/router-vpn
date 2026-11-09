@@ -42,7 +42,8 @@ func (n *NodeNetworkOwner) linuxPhysicalSnapshot() linuxPhysicalNetworkSnapshot 
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return linuxPhysicalNetworkSnapshot{policy: linuxPhysicalPolicy{node: n.policy}, source: n.source, capture: n.brokerCapture(),
+	node, _ := n.policy.(*mobilemultihop.DesktopNodePolicy)
+	return linuxPhysicalNetworkSnapshot{policy: linuxPhysicalPolicy{node: node}, source: n.source, capture: n.brokerCapture(),
 		ready: n.ready && n.sockets, retired: n.retired, closed: n.closed, joined: !n.ready && !n.sockets}
 }
 func (n *NodeNetworkOwner) linuxPhysicalAdmissionCurrent() bool { return n.SocketCurrent() }

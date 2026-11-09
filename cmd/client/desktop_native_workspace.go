@@ -164,6 +164,9 @@ func writeDesktopRuntimeFile(launch *desktopNodeLaunch, name string, data []byte
 	if launch != nil && name == "node-source.json" {
 		limit = mobilemultihop.NodeLaunchInputLimit
 	}
+	if launch != nil && name == "imported-source.json" {
+		limit = mobilemultihop.ImportedLaunchInputLimit
+	}
 	if launch == nil || !desktopRuntimeFilename(name) || len(data) == 0 || len(data) > limit {
 		return errors.New("invalid native runtime input")
 	}
@@ -222,6 +225,9 @@ func writeDesktopRuntimeFileAdmissionContext(ctx context.Context, launch *deskto
 	limit := 8 << 20
 	if launch != nil && name == "node-source.json" {
 		limit = mobilemultihop.NodeLaunchInputLimit
+	}
+	if launch != nil && name == "imported-source.json" {
+		limit = mobilemultihop.ImportedLaunchInputLimit
 	}
 	if launch == nil || !desktopRuntimeFilename(name) || len(data) == 0 || len(data) > limit {
 		return false, errors.New("invalid native runtime input")
@@ -282,7 +288,7 @@ func desktopRuntimeOwnedFile(name string) bool {
 		"path-request.json", "path-cancel.json", "path-status.json", ".path-status.json.pending",
 		"dns-request.json", "dns-cancel.json", "dns-status.json", ".dns-status.json.pending",
 		"latency-request.json", "latency-cancel.json", "latency-status.json", ".latency-status.json.pending",
-		"node-source.json", "node-protection-transfer.json", "node-protection-retired.json", ".node-protection-retired.json.pending",
+		"node-source.json", "imported-source.json", "node-protection-transfer.json", "node-protection-retired.json", ".node-protection-retired.json.pending",
 		"node-physical-handoff-ready.json", ".node-physical-handoff-ready.json.pending", "node-physical-handoff-ack.json",
 		"node-ready.json", ".node-ready.json.pending",
 		"node-dns-request.json", ".node-dns-request.json.pending", "node-dns-cancel.json", ".node-dns-cancel.json.pending", "node-dns-result.json", ".node-dns-result.json.pending",

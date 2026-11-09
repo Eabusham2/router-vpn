@@ -57,7 +57,7 @@ func (o *NodePhysicalOutbound) prepare(owner *NodeNetworkOwner, allowed map[exte
 }
 
 func (o *NodePhysicalOutbound) current(ctx context.Context, network string, destination M.Socksaddr) (*mobiletor.DesktopSocketBroker, error) {
-	if ctx == nil || ctx.Err() != nil || o.ctx.Err() != nil || destination.IsDomain() || !destination.IsValid() || destination.Port == 0 {
+	if o == nil || ctx == nil || ctx.Err() != nil || o.ctx == nil || o.ctx.Err() != nil || destination.IsDomain() || !destination.IsValid() || destination.Port == 0 {
 		return nil, errors.New("Router node desktop lower socket has no current numeric captured destination")
 	}
 	address, err := netip.ParseAddrPort(destination.String())
@@ -73,25 +73,38 @@ func (o *NodePhysicalOutbound) current(ctx context.Context, network string, dest
 	default:
 		return nil, errors.New("Router node desktop lower socket has another outer protocol")
 	}
-	o.mu.Lock()
+	if err := adapter.RouterVPNLockContext(ctx, &o.mu); err != nil {
+		return nil, err
+	}
 	owner, allowed, closed := o.owner, o.allowed[externalPhysicalDestination{base, address}], o.closed
 	o.mu.Unlock()
-	if closed || !allowed || owner == nil || !owner.SocketCurrent() {
+	if closed || !allowed || owner == nil {
 		return nil, errors.New("Router node desktop lower socket lost its captured native capability")
+	}
+	if err := owner.SocketCurrentContext(ctx); err != nil {
+		return nil, err
 	}
 	manager := service.FromContext[adapter.OutboundManager](o.ctx)
 	if manager == nil {
 		return nil, errors.New("Router node desktop lower manager is unavailable")
 	}
-	selected, found := manager.Outbound(mobilemultihop.DesktopNodePhysicalTag)
+	selected, found, err := adapter.RouterVPNOutboundContext(ctx, manager, mobilemultihop.DesktopNodePhysicalTag)
+	if err != nil {
+		return nil, err
+	}
 	if !found || selected != o {
 		return nil, errors.New("Router node desktop lower object was replaced")
 	}
-	owner.mu.Lock()
-	broker := owner.broker
+	if err := adapter.RouterVPNLockContext(ctx, &owner.mu); err != nil {
+		return nil, err
+	}
+	broker, capture := owner.broker, owner.brokerCapture()
 	owner.mu.Unlock()
-	if broker == nil || !broker.Matches(owner.brokerCapture()) {
+	if broker == nil {
 		return nil, errors.New("Router node desktop broker belongs to another native generation")
+	}
+	if err := broker.MatchesContext(ctx, capture); err != nil {
+		return nil, err
 	}
 	return broker, nil
 }

@@ -219,6 +219,31 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.changes[path] = self.body(path) + "\n" + declaration + " {}\n"
                 self.assert_multihop_scores(False)
 
+    def test_imported_compiler_requires_original_protected_host_and_legacy_wrapper(self):
+        for path, before, after in (
+            ("cmd/client/multihop_native_imported.go",
+             "return captureDesktopImportedMultihopWithHost(ctx, root, sel, modes, lookup, nil)",
+             "return unrelatedImportedCapture(ctx, root, sel, modes, lookup)"),
+            ("cmd/client/multihop_native_capture.go",
+             "captureDesktopImportedMultihopWithHost(ctx, owner.capture.dataRoot, sel, modes, owner.host.lookup, owner)",
+             "captureDesktopImportedMultihopWithHost(ctx, owner.capture.dataRoot, sel, modes, owner.host.lookup, nil)"),
+            ("cmd/client/multihop_native_capture.go",
+             "verifiedDesktopImportedPackage(ctx, owner)",
+             "verifiedDesktopImportedPackage(context.Background(), owner)"),
+            ("cmd/client/multihop_native_capture.go",
+             "owner, err := captureDesktopImportedConnectionOwner(parent, a, sel)",
+             "owner, err := captureDesktopImportedConnectionOwner(context.Background(), a, sel)"),
+        ):
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\n"
+                self.assert_multihop_scores(False)
+        self.changes.clear()
+        path = "cmd/client/multihop_native_imported.go"
+        self.changes[path] = self.body(path) + "\nfunc captureDesktopImportedMultihopWithHost(ctx context.Context, root string, sel multihopSelection, modes []string, lookup applexray.Lookup, host *desktopNodeConnectionOwner) (multihopSelection, error) {}\n"
+        self.assert_multihop_scores(False)
+
     def test_exact_public_adapters_are_required_by_every_consumer(self):
         path = "cmd/client/multihop_native_routes.go"
         adapters = (
@@ -269,6 +294,28 @@ class NativeShippingAuditTests(unittest.TestCase):
         )
         for before, after in changes:
             with self.subTest(before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\n"
+                self.assert_multihop_chain(False)
+
+    def test_typed_imported_child_keeps_original_publication_and_proof_order(self):
+        path = "cmd/client/multihop_native_routes.go"
+        changes = (
+            ("protected := native.ownedNode != nil", "protected := false"),
+            ("a.publishDesktopImportedMultihopStartLocked(operation, native, sel)",
+             "a.publishDesktopImportedMultihopStartLocked(context.Background(), native, sel)"),
+            ("a.publishDesktopImportedMultihopStartLocked(operation, native, sel)",
+             "a.publishDesktopImportedMultihopStartLocked(operation, other, sel)"),
+            ("startDesktopOwnedImportedLaunch(operation, operation, a, native)",
+             "startDesktopOwnedImportedLaunch(context.Background(), operation, a, native)"),
+            ("startDesktopOwnedImportedLaunch(operation, operation, a, native)",
+             "startDesktopOwnedImportedLaunch(operation, context.Background(), a, native)"),
+            ("startDesktopOwnedImportedLaunch(operation, operation, a, native)",
+             "startDesktopOwnedImportedLaunch(operation, operation, a, other)"),
+        )
+        for before, after in changes:
+            with self.subTest(before=before, after=after):
                 self.changes.clear()
                 self.replace(path, before, after)
                 self.changes[path] += "\n// " + before + "\n"
@@ -374,8 +421,15 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("cmd/client/multihop_native_launch.go", 'inbound["auto_route"] != true || inbound["strict_route"] != true', "false"),
             ("cmd/client/multihop_native_launch.go", "compileDesktopExecutionConfig(data, *descriptor, sel)", "compileUnrelatedServer(data)"),
             ("cmd/client/multihop_native_launch.go", "registerNativeMultihopDNSRuntime(a, sel, launch.command)", "registerUnrelatedDNS()"),
+            ("cmd/client/multihop_native_launch.go", "stageOwnedNativeMultihopCommandContext(ctx, a, sel, launch)", "stageOwnedNativeMultihopCommand(a, sel, launch)"),
+            ("cmd/client/multihop_native_launch.go", "stageDesktopNodeLaunchContext(ctx, a, launch)", "stageDesktopNodeLaunch(a, launch)"),
+            ("cmd/client/multihop_native_launch.go", "observe = launch.ownedNode.imported.readNetwork", "observe = physicalNetworkIdentityContext"),
+            ("cmd/client/multihop_native_launch.go", "actual, err := observe(ctx)", "actual, err := observe(context.Background())"),
+            ("cmd/client/multihop_native_launch.go", "actual != network", "false"),
             ("cmd/client/multihop_native_launch.go", "!a.ownsConnectionRuntime(launch.command)", "false"),
             ("cmd/client/desktop_node_native.go", "receipt.ConfigSHA256 != configSHA256", "false"),
+            ("cmd/client/desktop_node_native.go", 'writeDesktopRuntimeFileContext(ctx, launch, "sing-box.json", launch.config, false)',
+             'writeDesktopRuntimeFile(launch, "sing-box.json", launch.config, false)'),
             ("cmd/client/multihop_native_routes.go", "driver.proof(a, sel, cmd)", "proveUnrelatedPath()"),
         )
         for path, before, after in mutations:

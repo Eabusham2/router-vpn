@@ -39,7 +39,7 @@ type NodeNetworkOwner struct {
 	cancel    context.CancelFunc
 	capture   NodeCaptureOptions
 	networkID string
-	policy    *mobilemultihop.DesktopNodePolicy
+	policy    mobilemultihop.DesktopPhysicalPolicy
 	factory   NodePhysicalBrokerFactory
 	preparing chan struct{}
 	broker    *mobiletor.DesktopSocketBroker
@@ -92,11 +92,11 @@ func (n *NodeNetworkOwner) brokerCapture() mobiletor.DesktopSocketCapture {
 	return mobiletor.DesktopSocketCapture{SessionID: n.capture.SessionID, SourceSHA256: n.capture.SourceSHA256, NetworkID: n.networkID}
 }
 
-func (n *NodeNetworkOwner) PrepareNodePhysicalBroker(policy *mobilemultihop.DesktopNodePolicy, factory NodePhysicalBrokerFactory) error {
+func (n *NodeNetworkOwner) PrepareNodePhysicalBroker(policy mobilemultihop.DesktopPhysicalPolicy, factory NodePhysicalBrokerFactory) error {
 	if n == nil || policy == nil || factory == nil {
 		return errors.New("Router node desktop physical preparation requires its original compiled authority")
 	}
-	_, meta, capture, err := policy.ReadValidated()
+	_, meta, capture, err := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func (n *NodeNetworkOwner) PrepareNodePhysicalBroker(policy *mobilemultihop.Desk
 		// a target alias cannot relabel its actual native socket authority.
 		return errors.New("Router node desktop physical transport requires a proved native target and complete association capability")
 	}
-	allowed, err := desktopPhysicalDestinations(capture.IPv6Mode, capture.PhysicalRoots, capture.SelectedDNS, capture.BootstrapDNS)
+	allowed, err := nodePhysicalDestinations(policy, capture)
 	if err != nil {
 		return err
 	}
@@ -117,6 +117,9 @@ func (n *NodeNetworkOwner) PrepareNodePhysicalBroker(policy *mobilemultihop.Desk
 	physical, ok := selected.(*NodePhysicalOutbound)
 	if !exists || !ok || physical == nil || physical.options != n.capture {
 		return errors.New("Router node desktop physical preparation found another native lower object")
+	}
+	if err := prepareNodeImportedSOCKS(policy, n, physical); err != nil {
+		return err
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -196,7 +199,7 @@ func (n *NodeNetworkOwner) startPhysical() error {
 // Activate follows actual native Started and consumes the same policy pointer
 // used for preparation. Its context is the parent of proof and measurement
 // work, so a real network reset revokes those results before publication.
-func (n *NodeNetworkOwner) Activate(policy *mobilemultihop.DesktopNodePolicy) (context.Context, error) {
+func (n *NodeNetworkOwner) Activate(policy mobilemultihop.DesktopPhysicalPolicy) (context.Context, error) {
 	if n == nil || policy == nil || policy.Validate() != nil {
 		return nil, errors.New("Router node desktop activation requires its original native policy")
 	}
@@ -372,11 +375,14 @@ func (n *NodeNetworkOwner) Close() error {
 // service has joined every entered constructor, socket and native source. The
 // bool says whether a native source was returned at all; false is not proof
 // of absence and requires the command's independent expected-state read.
-func (n *NodeNetworkOwner) RetainedPhysicalProtection(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (*mobiletor.DesktopWindowsProtectionTarget, bool, error) {
+func (n *NodeNetworkOwner) RetainedPhysicalProtection(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) (*mobiletor.DesktopWindowsProtectionTarget, bool, error) {
 	if n == nil || ctx == nil || ctx.Err() != nil || policy == nil || policy.Validate() != nil {
 		return nil, false, errors.New("Router node retirement lost its captured cleanup request")
 	}
-	meta := policy.Metadata()
+	_, meta, _, err := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
+	if err != nil {
+		return nil, false, err
+	}
 	n.mu.Lock()
 	valid := n.closed && n.retired && n.ctx != nil && !n.ready && !n.sockets && n.capture.SessionID == meta.SessionID && n.capture.SourceSHA256 == meta.SourceSHA256 &&
 		(n.policy == policy || n.policy == nil && n.factory == nil && n.preparing == nil)
@@ -431,10 +437,15 @@ func (n *NodeNetworkOwner) RetirePhysicalTunnel(ctx context.Context, name string
 	return n.changePhysicalTunnel(ctx, name, index, nil, true)
 }
 func (n *NodeNetworkOwner) changePhysicalTunnel(ctx context.Context, name string, index uint32, file *os.File, retire bool) error {
-	if ctx == nil || ctx.Err() != nil || name == "" || index == 0 || !n.Current() {
+	if ctx == nil || name == "" || index == 0 {
 		return errors.New("Router node desktop tunnel lost its active native capture")
 	}
-	n.mu.Lock()
+	if err := n.CurrentContext(ctx); err != nil {
+		return err
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &n.mu); err != nil {
+		return err
+	}
 	source, capture := n.source, n.brokerCapture()
 	n.mu.Unlock()
 	policy, ok := source.(mobiletor.DesktopSocketTunnelPolicy)
@@ -458,8 +469,5 @@ func (n *NodeNetworkOwner) changePhysicalTunnel(ctx context.Context, name string
 	} else {
 		err = policy.BindTunnel(bounded, capture, name, index)
 	}
-	if err != nil || bounded.Err() != nil || !n.Current() {
-		return errors.Join(err, bounded.Err(), errors.New("Router node desktop physical policy did not acknowledge the captured TUN"))
-	}
-	return nil
+	return errors.Join(err, bounded.Err(), n.CurrentContext(bounded))
 }

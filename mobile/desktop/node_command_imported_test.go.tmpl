@@ -1,0 +1,257 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func desktopImportedCommandOriginal(t *testing.T, mode, layer string, autoMTU bool) *mobilemultihop.Controller {
+	t.Helper()
+	final := desktopNodeCommandOriginalWithLayer(t, layer)
+	if mode == "hysteria2" {
+		final = desktopNodeCommandHysteria2Original(t, layer)
+	} else if mode == "reality-vision" {
+		final = desktopNodeCommandXrayOriginal(t, mode, layer)
+	} else if mode != "shadowsocks" {
+		t.Fatal("imported command fixture has another final protocol")
+	}
+	launch, err := final.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var input struct {
+		Mode    string `json:"mode"`
+		Files   string `json:"files"`
+		Profile string `json:"profile_json"`
+		Start   string `json:"start"`
+		DNS     string `json:"dns_bootstrap"`
+	}
+	if json.Unmarshal([]byte(launch), &input) != nil || input.Mode != mode {
+		t.Fatal("imported command fixture lost its original final inputs")
+	}
+	capture := desktopExternalCapture
+	if autoMTU {
+		var fields map[string]any
+		if json.Unmarshal([]byte(capture), &fields) != nil {
+			t.Fatal("imported command fixture lost its original entry capture")
+		}
+		profile := fields["profile"].(map[string]any)
+		profile["mtu_policy"] = "auto"
+		delete(profile, "manual_mtu")
+		encoded, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		capture = string(encoded)
+	}
+	original, err := mobilemultihop.NewImportedEntry(desktopExternalSource, capture, input.Mode, input.Files, input.Profile, input.Start, input.DNS)
+	if err != nil {
+		t.Fatal("complete imported command source did not compile", err)
+	}
+	t.Cleanup(func() { _ = original.Close() })
+	return original
+}
+
+func desktopImportedCommandFiles(t *testing.T, inputs map[string]string) *routerVPNExternalFiles {
+	t.Helper()
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range inputs {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := routerVPNOpenExternalFiles(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = files.root.Close() })
+	return files
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandImportedSourceBoundary(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		if policy, err := routerVPNImportedCommandPhysicalWithMTU(nil, desktopExternalSession, strings.Repeat("b", 64), strings.Repeat("c", 64), 0); err == nil || policy != nil {
+			t.Fatal("another native host borrowed the imported Windows factory")
+		}
+		return
+	}
+	for _, mode := range []string{"shadowsocks", "hysteria2", "reality-vision"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			label := layer
+			if label == "" {
+				label = "off"
+			}
+			t.Run(mode+"/"+label, func(t *testing.T) {
+				original := desktopImportedCommandOriginal(t, mode, layer, false)
+				policy, err := mobilemultihop.NewDesktopImportedPolicy(original, desktopExternalSession, "windows")
+				if err != nil {
+					t.Fatal(err)
+				}
+				launch, err := original.ImportedLaunchInput()
+				if err != nil {
+					t.Fatal(err)
+				}
+				files := desktopImportedCommandFiles(t, map[string]string{"imported-source.json": launch, "sing-box.json": policy.Config()})
+				actual, err := routerVPNImportedCommandPhysicalWithMTU(files, desktopExternalSession, policy.Metadata().ConfigSHA256, policy.Metadata().SourceSHA256, 0)
+				if err != nil || actual == nil || actual.Config() != policy.Config() || !reflect.DeepEqual(actual.Metadata(), policy.Metadata()) || actual.OriginalController() == original {
+					t.Fatal("native command did not independently reconstruct both captured hops", err)
+				}
+				_ = actual.OriginalController().Close()
+			})
+		}
+	}
+	for _, fault := range []string{"missing-source", "ordinary-source", "entry-secret", "final-secret", "unknown-field", "source-hash", "config-hash", "session", "missing-flag", "graph-bytes", "graph-rehash", "restored-mtu", "invalid-mtu"} {
+		t.Run(fault, func(t *testing.T) {
+			original := desktopImportedCommandOriginal(t, "hysteria2", "", false)
+			policy, err := mobilemultihop.NewDesktopImportedPolicy(original, desktopExternalSession, "windows")
+			if err != nil {
+				t.Fatal(err)
+			}
+			launch, err := original.ImportedLaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			staged, source, config, session := policy.Config(), policy.Metadata().SourceSHA256, policy.Metadata().ConfigSHA256, desktopExternalSession
+			mtu := 0
+			switch fault {
+			case "ordinary-source":
+				launch, err = desktopNodeCommandOriginal(t).LaunchInput()
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "entry-secret", "final-secret":
+				secret := "private-proxy-secret"
+				if fault == "final-secret" {
+					secret = "private-fixture-token"
+				}
+				if !strings.Contains(launch, secret) {
+					t.Fatal("negative control did not locate its original private fixture")
+				}
+				launch = strings.ReplaceAll(launch, secret, "changed-private-fixture")
+			case "unknown-field":
+				launch = strings.TrimSuffix(launch, "}") + `,"unowned":true}`
+			case "source-hash":
+				source = strings.Repeat("f", 64)
+			case "config-hash":
+				config = strings.Repeat("f", 64)
+			case "session":
+				session = strings.Repeat("f", 32)
+			case "missing-flag":
+				source = ""
+			case "graph-bytes", "graph-rehash":
+				staged += "\n"
+				if fault == "graph-rehash" {
+					sum := sha256.Sum256([]byte(staged))
+					config = hex.EncodeToString(sum[:])
+				}
+			case "restored-mtu":
+				mtu = 1392
+			case "invalid-mtu":
+				mtu = 1279
+			}
+			inputs := map[string]string{"sing-box.json": staged, "imported-source.json": launch}
+			if fault == "missing-source" {
+				delete(inputs, "imported-source.json")
+			}
+			files := desktopImportedCommandFiles(t, inputs)
+			if actual, err := routerVPNImportedCommandPhysicalWithMTU(files, session, config, source, mtu); err == nil || actual != nil {
+				t.Fatal("imported command adopted altered source or another command family", fault)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandImportedRestoredMTU(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		if policy, err := routerVPNImportedCommandPhysicalWithMTU(nil, desktopExternalSession, strings.Repeat("b", 64), strings.Repeat("c", 64), 1392); err == nil || policy != nil {
+			t.Fatal("another native host adopted an imported restoration")
+		}
+		return
+	}
+	for _, fault := range []string{"original", "missing", "different", "source-dropped"} {
+		t.Run(fault, func(t *testing.T) {
+			original := desktopImportedCommandOriginal(t, "hysteria2", "", true)
+			policy, err := mobilemultihop.NewDesktopImportedPolicyWithMTU(original, desktopExternalSession, "windows", 1392)
+			if err != nil {
+				t.Fatal(err)
+			}
+			launch, err := original.ImportedLaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			files := desktopImportedCommandFiles(t, map[string]string{"imported-source.json": launch, "sing-box.json": policy.Config()})
+			mtu, source := 1392, policy.Metadata().SourceSHA256
+			switch fault {
+			case "missing":
+				mtu = 0
+			case "different":
+				mtu = 1380
+			case "source-dropped":
+				source = ""
+			}
+			actual, err := routerVPNImportedCommandPhysicalWithMTU(files, desktopExternalSession, policy.Metadata().ConfigSHA256, source, mtu)
+			if fault == "original" {
+				if err != nil || actual == nil || actual.Config() != policy.Config() || !reflect.DeepEqual(actual.Metadata(), policy.Metadata()) {
+					t.Fatal("native import restoration changed its immutable original capture", err)
+				}
+				_ = actual.OriginalController().Close()
+			} else if err == nil || actual != nil {
+				t.Fatal("unbound imported restoration gained native admission", fault)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandImportedJournalBeforePrivateInputs(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("original imported parent was not authenticated")
+	journal := &routerVPNNodeJournalAuthenticationFixture{failure: want}
+	err := routerVPNRunNodeMTUFamilyCaptured(context.Background(), directory, desktopExternalSession, strings.Repeat("b", 64), "", strings.Repeat("c", 64), strings.Repeat("d", 64), 0, journal)
+	if runtime.GOOS == "windows" {
+		if !errors.Is(err, want) || journal.calls != 1 {
+			t.Fatal("imported private inputs preceded original parent authentication", err, journal.calls)
+		}
+	} else if !errors.Is(err, routerVPNExternalFailure) || journal.calls != 0 {
+		t.Fatal("another target entered imported native admission", err, journal.calls)
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandImportedExclusiveFamily(t *testing.T) {
+	for _, fault := range []string{"both-flags", "missing-journal", "public-missing-journal"} {
+		t.Run(fault, func(t *testing.T) {
+			directory := filepath.Join(t.TempDir(), "private-input-must-not-open")
+			var err error
+			if fault == "public-missing-journal" {
+				err = routerVPNRunImportedMTUWithJournal(context.Background(), directory, desktopExternalSession, strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64), 0, routerVPNNodeJournalOptions{})
+			} else {
+				source := ""
+				var journal routerVPNNodeJournal
+				if fault == "both-flags" {
+					source = strings.Repeat("c", 64)
+					journal = &routerVPNNodeJournalAuthenticationFixture{}
+				}
+				err = routerVPNRunNodeMTUFamilyCaptured(context.Background(), directory, desktopExternalSession, strings.Repeat("b", 64), source, strings.Repeat("c", 64), strings.Repeat("d", 64), 0, journal)
+			}
+			if !errors.Is(err, routerVPNExternalFailure) || errors.Is(err, os.ErrNotExist) {
+				t.Fatal("invalid imported command family opened private input", err)
+			}
+		})
+	}
+}

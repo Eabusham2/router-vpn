@@ -208,7 +208,7 @@ func validateDesktopNodeProcessArguments(arguments []string, directory string) (
 			if !desktopNodeProcessHex(value, 16) {
 				return nil, invalid
 			}
-		case "--config-sha256", "--physical-source-sha256", "--physical-transfer-sha256":
+		case "--config-sha256", "--physical-source-sha256", "--imported-source-sha256", "--physical-transfer-sha256":
 			if !desktopNodeProcessHex(value, 32) {
 				return nil, invalid
 			}
@@ -222,7 +222,10 @@ func validateDesktopNodeProcessArguments(arguments []string, directory string) (
 		}
 		values[name] = value
 	}
-	for _, name := range []string{"--runtime-dir", "--session", "--config-sha256", "--physical-source-sha256", "--physical-transfer-sha256"} {
+	if (values["--physical-source-sha256"] == "") == (values["--imported-source-sha256"] == "") {
+		return nil, invalid
+	}
+	for _, name := range []string{"--runtime-dir", "--session", "--config-sha256", "--physical-transfer-sha256"} {
 		if values[name] == "" {
 			return nil, invalid
 		}
@@ -235,6 +238,11 @@ func validateDesktopNodeProcessArguments(arguments []string, directory string) (
 func validateDesktopExternalProcessArguments(arguments []string, directory string) ([]string, error) {
 	if len(arguments) != 11 || arguments[0] != "routervpn-external" {
 		return nil, errors.New("native external process requires its exact captured command")
+	}
+	for _, argument := range arguments {
+		if argument == "--imported-source-sha256" {
+			return nil, errors.New("native external process cannot borrow imported-entry authority")
+		}
 	}
 	copied := append([]string(nil), arguments...)
 	copied[0] = "routervpn-node"

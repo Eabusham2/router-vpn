@@ -56,11 +56,11 @@ func routerVPNNodeCommandPhysicalWithMTU(files *routerVPNExternalFiles, session,
 	return policy, nil
 }
 
-func routerVPNNodeCommandTransfer(files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodePolicy, digest string) (*mobiletor.DesktopProtectionTransferRecord, error) {
+func routerVPNNodeCommandTransfer(files *routerVPNExternalFiles, policy mobilemultihop.DesktopPhysicalPolicy, digest string) (*mobiletor.DesktopProtectionTransferRecord, error) {
 	if files == nil || files.root == nil {
 		return nil, routerVPNExternalFailure
 	}
-	if policy == nil {
+	if routerVPNPhysicalPolicyMissing(policy) {
 		if digest != "" {
 			return nil, routerVPNExternalFailure
 		}
@@ -81,7 +81,10 @@ func routerVPNNodeCommandTransfer(files *routerVPNExternalFiles, policy *mobilem
 		return nil, routerVPNExternalFailure
 	}
 	record, err := mobiletor.ParseDesktopProtectionTransferRecord(raw)
-	meta := policy.Metadata()
+	_, meta, _, readErr := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
+	if readErr != nil {
+		return nil, routerVPNExternalFailure
+	}
 	if err != nil || record.SessionID != meta.SessionID || record.SourceSHA256 != meta.SourceSHA256 ||
 		record.ConfigSHA256 != meta.ConfigSHA256 || record.Policy != meta.KillSwitchPolicy {
 		return nil, routerVPNExternalFailure
@@ -97,10 +100,10 @@ type routerVPNNodeProtectionOwner interface {
 // Every return path either publishes one exact bounded readback receipt or
 // leaves cleanup pending. A source that was never returned still requires an
 // independent native check of the original expected state.
-func routerVPNRetireNodeProtection(files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodePolicy,
+func routerVPNRetireNodeProtection(files *routerVPNExternalFiles, policy mobilemultihop.DesktopPhysicalPolicy,
 	expected *mobiletor.DesktopProtectionTransferRecord, owner routerVPNNodeProtectionOwner,
 	readExpected func(context.Context, *mobiletor.DesktopWindowsProtectionTarget) error) error {
-	if policy == nil {
+	if routerVPNPhysicalPolicyMissing(policy) {
 		if expected != nil || owner != nil {
 			return routerVPNExternalFailure
 		}
@@ -109,7 +112,10 @@ func routerVPNRetireNodeProtection(files *routerVPNExternalFiles, policy *mobile
 	if files == nil || files.root == nil || policy.Validate() != nil || expected == nil || expected.Validate() != nil || readExpected == nil {
 		return routerVPNExternalFailure
 	}
-	meta := policy.Metadata()
+	_, meta, _, readErr := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
+	if readErr != nil {
+		return routerVPNExternalFailure
+	}
 	if expected.SessionID != meta.SessionID || expected.SourceSHA256 != meta.SourceSHA256 || expected.ConfigSHA256 != meta.ConfigSHA256 || expected.Policy != meta.KillSwitchPolicy {
 		return routerVPNExternalFailure
 	}
@@ -146,4 +152,17 @@ func routerVPNRetireNodeProtection(files *routerVPNExternalFiles, policy *mobile
 		return routerVPNExternalFailure
 	}
 	return nil
+}
+
+func routerVPNPhysicalPolicyMissing(policy mobilemultihop.DesktopPhysicalPolicy) bool {
+	switch policy := policy.(type) {
+	case nil:
+		return true
+	case *mobilemultihop.DesktopNodePolicy:
+		return policy == nil
+	case *mobilemultihop.DesktopImportedPolicy:
+		return policy == nil
+	default:
+		return false
+	}
 }

@@ -37,8 +37,14 @@ func (a *app) desktopOwnedNodeCurrentContext(ctx context.Context, launch *deskto
 		return errors.New("native Router observation lost its captured launch")
 	}
 	owned := launch.ownedNode
-	if owned.policy == nil || owned.policy.Validate() != nil || owned.network == "" {
+	config, meta, _, policyErr := owned.physicalState()
+	if policyErr != nil || owned.network == "" {
 		return errors.New("native Router observation changed its captured policy or network")
+	}
+	if owned.imported != nil {
+		if err := validateDesktopOwnedImportedSourceContext(ctx, launch, config, meta); err != nil {
+			return err
+		}
 	}
 	current := func() error {
 		if owned.host != nil {
@@ -49,13 +55,16 @@ func (a *app) desktopOwnedNodeCurrentContext(ctx context.Context, launch *deskto
 		if raw, exists := desktopNodeOwners.Load(a); !exists || raw != launch {
 			return errors.New("native Router observation lost its original registration")
 		}
+		if owned.imported != nil && (owned.imported.app != a || owned.imported.selection.Native == nil || owned.imported.selection.Native.validate(owned.imported.selection) != nil) {
+			return errors.New("native imported observation changed its captured entry or paired final")
+		}
 		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
 			return err
 		}
 		profile, exists := a.profileByIDLocked(launch.profileID)
 		current := exists && !a.closing && owned.slot != nil && a.nodeProtection == owned.slot && a.cmd == launch.command && a.state.RouterID == launch.profileID &&
 			a.state.RuntimeMode == launch.mode && [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} == owned.options &&
-			desktopOwnedNodeProfileToken(profile) == owned.profileToken
+			desktopOwnedNodeProfileToken(profile) == owned.profileToken && owned.importedSourceCurrentLocked(a)
 		a.mu.Unlock()
 		if !current {
 			return errors.New("native Router observation changed its original runtime or profile")
@@ -82,7 +91,7 @@ func (a *app) desktopOwnedNodeCurrentContext(ctx context.Context, launch *deskto
 	if err := current(); err != nil {
 		return err
 	}
-	network, err := physicalNetworkIdentityContext(ctx)
+	network, err := owned.networkContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -105,7 +114,11 @@ func (a *app) readDesktopOwnedNodeReadyContext(ctx context.Context, launch *desk
 	if err != nil {
 		return empty, err
 	}
-	record, err := mobilemultihop.ParseDesktopNodeReadyRecord(raw, owned.policy, owned.attempt.digest)
+	policy, err := owned.physicalPolicy()
+	if err != nil {
+		return empty, err
+	}
+	record, err := mobilemultihop.ParseDesktopNodeReadyRecord(raw, policy, owned.attempt.digest)
 	if err != nil {
 		return empty, err
 	}

@@ -21,7 +21,7 @@ func (f *routerVPNNodeJournalAuthenticationFixture) authenticate(context.Context
 	f.calls++
 	return f.failure
 }
-func (f *routerVPNNodeJournalAuthenticationFixture) prepare(context.Context, *mobilemultihop.DesktopNodePolicy, *mobiletor.DesktopProtectionTransferRecord) (context.Context, *routerVPNNodeAdmission, error) {
+func (f *routerVPNNodeJournalAuthenticationFixture) prepare(context.Context, mobilemultihop.DesktopPhysicalPolicy, *mobiletor.DesktopProtectionTransferRecord) (context.Context, *routerVPNNodeAdmission, error) {
 	return nil, nil, errors.New("fixture unexpectedly reached native construction")
 }
 func (f *routerVPNNodeJournalAuthenticationFixture) close() error { return nil }

@@ -399,6 +399,13 @@ func prepareDesktopNodeLaunch(a *app, p common.RouterProfile, mode string) (*des
 // Stage only after the prior runtime is completely drained. A prior mode's
 // cleanup must never delete the new graph before its captured process starts.
 func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) (resultErr error) {
+	return stageDesktopNodeLaunchContext(a.connectionOperationContextOrBackground(), a, launch)
+}
+
+func stageDesktopNodeLaunchContext(ctx context.Context, a *app, launch *desktopNodeLaunch) (resultErr error) {
+	if ctx == nil || ctx.Err() != nil {
+		return errors.New("native staging lost its original caller")
+	}
 	if launch == nil || launch.command != nil || launch.directory != "" || len(launch.config) == 0 {
 		return errors.New("native launch has already been staged or is incomplete")
 	}
@@ -459,21 +466,21 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) (resultErr error)
 			}
 		}
 	}()
-	if err = writeDesktopRuntimeFile(launch, "sing-box.json", launch.config, false); err != nil {
+	if err = writeDesktopRuntimeFileContext(ctx, launch, "sing-box.json", launch.config, false); err != nil {
 		return err
 	}
 	capture := launch.metadata
 	if launch.external != nil {
 		capture = launch.external.capture
-		if err = writeDesktopRuntimeFile(launch, "source.json", launch.external.source, false); err != nil {
+		if err = writeDesktopRuntimeFileContext(ctx, launch, "source.json", launch.external.source, false); err != nil {
 			return err
 		}
 	}
-	if err = writeDesktopRuntimeFile(launch, "capture.json", capture, false); err != nil {
+	if err = writeDesktopRuntimeFileContext(ctx, launch, "capture.json", capture, false); err != nil {
 		return err
 	}
 	if launch.ownedNode != nil {
-		if err = stageDesktopOwnedNodeInputs(a, launch); err != nil {
+		if err = stageDesktopOwnedNodeInputsContext(ctx, a, launch); err != nil {
 			return err
 		}
 		packageRoot, err := desktopNodeConnectionPackageRoot(launch)

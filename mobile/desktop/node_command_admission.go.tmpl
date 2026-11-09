@@ -35,7 +35,7 @@ type routerVPNNodeAdmissionRecord struct {
 
 type routerVPNNodeAdmission struct {
 	files       *routerVPNExternalFiles
-	metadata    mobilemultihop.DesktopNodeMetadata
+	metadata    mobilemultihop.DesktopPhysicalMetadata
 	transfer    string
 	state       atomic.Int32 // 0 prepared, 1 entered/joined callback, 2 retired
 	joined      chan struct{}
@@ -46,14 +46,14 @@ type routerVPNNodeAdmission struct {
 	nativeClose func() error
 }
 
-func routerVPNPrepareNodeAdmission(ctx context.Context, files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodePolicy, expected *mobiletor.DesktopProtectionTransferRecord) (context.Context, *routerVPNNodeAdmission, error) {
-	if policy == nil || policy.Metadata().TargetOS != "windows" {
+func routerVPNPrepareNodeAdmission(ctx context.Context, files *routerVPNExternalFiles, policy mobilemultihop.DesktopPhysicalPolicy, expected *mobiletor.DesktopProtectionTransferRecord) (context.Context, *routerVPNNodeAdmission, error) {
+	_, meta, _, readErr := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
+	if readErr != nil || meta.TargetOS != "windows" {
 		return nil, nil, routerVPNExternalFailure
 	}
 	if ctx == nil || ctx.Err() != nil || files == nil || files.root == nil || policy.Validate() != nil || expected == nil || expected.Validate() != nil {
 		return nil, nil, routerVPNExternalFailure
 	}
-	meta := policy.Metadata()
 	if expected.SessionID != meta.SessionID || expected.SourceSHA256 != meta.SourceSHA256 || expected.ConfigSHA256 != meta.ConfigSHA256 || expected.Policy != meta.KillSwitchPolicy {
 		return nil, nil, routerVPNExternalFailure
 	}

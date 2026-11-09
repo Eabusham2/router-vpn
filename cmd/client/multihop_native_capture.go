@@ -36,6 +36,9 @@ type nativeMultihopCapture struct {
 	assets                                                   []viaEntryAsset
 	imported                                                 bool
 	openVPN                                                  *desktopImportedOpenVPNSpec
+	importedInput                                            string
+	importedOriginalSource                                   string
+	importedHost                                             *desktopNodeConnectionOwner
 }
 
 func captureNativeMultihopSelection(ctx context.Context, root string, sel multihopSelection, modes []string, lookup applexray.Lookup) (multihopSelection, error) {
@@ -186,6 +189,9 @@ func (c *nativeMultihopCapture) validate(sel multihopSelection) error {
 	if c == nil || sel.Entry.ID != c.entryID || sel.Exit.ID != c.exitID || sel.Base != c.base || sel.EntryMode != c.entryMode || liveMeasurementProfileToken(sel.Control) != c.controlToken || liveMeasurementProfileToken(sel.Entry) != c.entryToken || liveMeasurementProfileToken(sel.Exit) != c.exitToken {
 		return bad
 	}
+	if c.imported && (c.importedInput == "" || c.importedOriginalSource == "" || c.importedCaptureDigest() != c.source) {
+		return bad
+	}
 	if c.entrySelection == "" {
 		if mode, err := viaEntrySourceMode(c.root, c.entryID, c.base); err != nil || mode != c.entryMode {
 			return bad
@@ -217,6 +223,26 @@ func captureNativeMultihopForApp(a *app, sel multihopSelection, modes []string) 
 }
 
 func captureNativeMultihopForAppContext(parent context.Context, a *app, sel multihopSelection, modes []string) (multihopSelection, error) {
+	owner, err := captureDesktopImportedConnectionOwner(parent, a, sel)
+	if err != nil {
+		return sel, err
+	}
+	if owner != nil {
+		ctx, cancel := context.WithTimeout(parent, 20*time.Second)
+		stopOwner := context.AfterFunc(owner.capture.lifetime, cancel)
+		defer func() { stopOwner(); cancel() }()
+		if _, err := verifiedDesktopImportedPackage(ctx, owner); err != nil {
+			return sel, err
+		}
+		captured, err := captureDesktopImportedMultihopWithHost(ctx, owner.capture.dataRoot, sel, modes, owner.host.lookup, owner)
+		if err != nil {
+			return sel, err
+		}
+		if err := owner.currentContext(ctx); err != nil {
+			return sel, err
+		}
+		return captured, nil
+	}
 	if _, err := verifyBundledNativeContext(parent, desktopAmneziaPackageRoot()); err != nil {
 		return sel, err
 	}

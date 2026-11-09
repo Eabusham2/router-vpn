@@ -19,7 +19,7 @@ type NodePhysicalPrepared struct {
 type NodePhysicalAdmission func(context.Context, NodePhysicalPrepared) error
 type nodePhysicalAdmissionKey struct{}
 type nodePhysicalAdmissionOwner struct {
-	policy      *mobilemultihop.DesktopNodePolicy
+	policy      mobilemultihop.DesktopPhysicalPolicy
 	admit       NodePhysicalAdmission
 	predecessor *mobiletor.DesktopWindowsProtectionTarget
 	commit      mobiletor.DesktopWindowsProtectionCommitBarrier
@@ -28,7 +28,7 @@ type nodePhysicalAdmissionOwner struct {
 // WithNodePhysicalJournalAdmission binds the authenticated parent's durable
 // intent acknowledgment to this exact compiled policy and prepared admission.
 // A staged transfer file is comparison data; it cannot construct this callback.
-func WithNodePhysicalJournalAdmission(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy,
+func WithNodePhysicalJournalAdmission(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy,
 	predecessor *mobiletor.DesktopWindowsProtectionTarget, commit mobiletor.DesktopWindowsProtectionCommitBarrier,
 	admit NodePhysicalAdmission) (context.Context, error) {
 	if commit == nil || predecessor != nil && predecessor.Validate() != nil {
@@ -47,14 +47,14 @@ func WithNodePhysicalJournalAdmission(ctx context.Context, policy *mobilemultiho
 	return owned, nil
 }
 
-func nodePhysicalCommitFor(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (mobiletor.DesktopWindowsProtectionCommitBarrier, error) {
+func nodePhysicalCommitFor(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) (mobiletor.DesktopWindowsProtectionCommitBarrier, error) {
 	if _, err := nodePhysicalAdmissionFor(ctx, policy); err != nil {
 		return nil, err
 	}
 	return ctx.Value(nodePhysicalAdmissionKey{}).(*nodePhysicalAdmissionOwner).commit, nil
 }
 
-func WithNodePhysicalAdmission(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy, admit NodePhysicalAdmission) (context.Context, error) {
+func WithNodePhysicalAdmission(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy, admit NodePhysicalAdmission) (context.Context, error) {
 	return withNodePhysicalAdmission(ctx, policy, nil, admit)
 }
 
@@ -62,22 +62,23 @@ func WithNodePhysicalAdmission(ctx context.Context, policy *mobilemultihop.Deskt
 // predecessor alongside this particular compiled graph. The Windows factory
 // independently verifies it under the native BFE lock before replacement.
 // Imported JSON and a later selected profile cannot supply or change it.
-func WithNodePhysicalSuccessorAdmission(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy, predecessor mobiletor.DesktopWindowsProtectionTarget, admit NodePhysicalAdmission) (context.Context, error) {
+func WithNodePhysicalSuccessorAdmission(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy, predecessor mobiletor.DesktopWindowsProtectionTarget, admit NodePhysicalAdmission) (context.Context, error) {
 	if err := predecessor.Validate(); err != nil {
 		return nil, err
 	}
 	return withNodePhysicalAdmission(ctx, policy, &predecessor, admit)
 }
 
-func withNodePhysicalAdmission(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy, predecessor *mobiletor.DesktopWindowsProtectionTarget, admit NodePhysicalAdmission) (context.Context, error) {
-	if ctx == nil || ctx.Err() != nil || policy == nil || policy.Validate() != nil || admit == nil ||
-		policy.Metadata().TargetOS != "windows" || ctx.Value(nodePhysicalAdmissionKey{}) != nil {
+func withNodePhysicalAdmission(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy, predecessor *mobiletor.DesktopWindowsProtectionTarget, admit NodePhysicalAdmission) (context.Context, error) {
+	_, meta, _, err := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
+	if ctx == nil || ctx.Err() != nil || err != nil || admit == nil ||
+		meta.TargetOS != "windows" || ctx.Value(nodePhysicalAdmissionKey{}) != nil {
 		return nil, errors.New("Router node physical handoff requires its unique captured native policy")
 	}
 	return context.WithValue(ctx, nodePhysicalAdmissionKey{}, &nodePhysicalAdmissionOwner{policy: policy, admit: admit, predecessor: predecessor}), nil
 }
 
-func nodePhysicalAdmissionFor(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (NodePhysicalAdmission, error) {
+func nodePhysicalAdmissionFor(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) (NodePhysicalAdmission, error) {
 	if ctx == nil || ctx.Err() != nil || policy == nil {
 		return nil, errors.New("Router node physical handoff lost its native lifetime")
 	}
@@ -88,7 +89,7 @@ func nodePhysicalAdmissionFor(ctx context.Context, policy *mobilemultihop.Deskto
 	return owner.admit, nil
 }
 
-func nodePhysicalPredecessorFor(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (*mobiletor.DesktopWindowsProtectionTarget, error) {
+func nodePhysicalPredecessorFor(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) (*mobiletor.DesktopWindowsProtectionTarget, error) {
 	if _, err := nodePhysicalAdmissionFor(ctx, policy); err != nil {
 		return nil, err
 	}
@@ -106,12 +107,15 @@ func nodePhysicalPredecessorFor(ctx context.Context, policy *mobilemultihop.Desk
 // CompleteNodePhysicalAdmission consumes only a previously installed
 // native capability for this same policy object. It does not create or verify
 // kernel policy; the Windows factory supplies its independently read baseline.
-func CompleteNodePhysicalAdmission(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy, prepared NodePhysicalPrepared) error {
+func CompleteNodePhysicalAdmission(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy, prepared NodePhysicalPrepared) error {
 	admit, err := nodePhysicalAdmissionFor(ctx, policy)
 	if err != nil {
 		return err
 	}
-	metadata := policy.Metadata()
+	_, metadata, _, err := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
+	if err != nil {
+		return err
+	}
 	if prepared.Capture.SessionID != metadata.SessionID || prepared.Capture.SourceSHA256 != metadata.SourceSHA256 ||
 		prepared.Policy != metadata.KillSwitchPolicy || !networkSessionID.MatchString(prepared.Capture.NetworkID) || !networkSourceID.MatchString(prepared.BaselineSHA256) {
 		return errors.New("Router node physical handoff substituted its captured native baseline")

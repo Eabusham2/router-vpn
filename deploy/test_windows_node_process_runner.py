@@ -19,6 +19,31 @@ SPEC.loader.exec_module(GATE)
 
 
 class NodeProcessRunner(unittest.TestCase):
+    def test_imported_parent_requires_real_dispatch_proofs_and_both_original_sources(self):
+        self.assertEqual(len(GATE.IMPORTED_CASES), 13)
+        self.assertEqual(sum(map(len, GATE.IMPORTED_CASES.values())), 58)
+        for root, children in GATE.IMPORTED_CASES.items():
+            self.assertIn(root, GATE.SHARED_TESTS)
+            self.assertIn(root, GATE.EXPECTED)
+            for child in children:
+                self.assertIn(root + "/" + child, GATE.EXPECTED)
+        self.assertEqual(GATE.IMPORTED_CASES["TestDesktopImportedOwnedSpeedLabActualOpenAndProofs"],
+                         ("success", "wrong-entry", "entry-replaced", "wrong-final", "failed-DNS", "caller-after-create"))
+        self.assertEqual(GATE.IMPORTED_CASES["TestDesktopImportedOwnedSuccessionRetainsLatestPredecessor"],
+                         ("on-connect", "always"))
+        self.assertEqual(GATE.IMPORTED_CASES["TestDesktopImportedOwnedSpeedLabProtectedPreSuspendAdmission"],
+                         ("on-connect", "always"))
+        self.assertEqual(GATE.IMPORTED_CASES["TestDesktopImportedMTUMergedPolicyControlsAutoRetestAndStatus"],
+                         ("entry-fixed", "entry-jumbo", "final-fixed", "compatible-auto", "packet-entry-fixed"))
+        self.assertEqual(GATE.IMPORTED_CASES["TestDesktopImportedMTUMergedPolicyRefusesChangedOriginalSource"],
+                         ("envelope", "resealed-source", "resealed-graph", "entry-policy", "final-authority"))
+        for path in ("cmd/client/desktop_imported_owned.go", "cmd/client/desktop_imported_owned_test.go",
+                     "cmd/client/desktop_imported_mtu_policy.go", "cmd/client/desktop_imported_mtu_policy_test.go",
+                     "cmd/client/desktop_imported_mtu_ui.go",
+                     "cmd/client/desktop_imported_speedlab_owned_test.go", "internal/mobilemultihop/desktop_imported_policy.go",
+                     "internal/mobilemultihop/imported_entry_launch_input.go", "internal/mobilemultihop/desktop_physical_policy.go"):
+            self.assertIn(path, GATE.REQUIRED_SOURCES)
+
     def test_external_process_and_retained_application_cases_are_mandatory(self):
         self.assertIn("TestWindowsOwnedExternalChildActualRetirement", GATE.NATIVE_TESTS)
         self.assertIn("TestWindowsOwnedExternalProcessRequiresOriginalJournal", GATE.NATIVE_TESTS)
@@ -154,10 +179,11 @@ class NodeProcessRunner(unittest.TestCase):
                       "cmd/client/desktop_node_recovery_initial.go", "cmd/client/desktop_node_owned.go",
                       "cmd/client/desktop_node_connection_host.go", "cmd/client/desktop_node_native.go",
                       "cmd/client/strategy_requirements.go", "cmd/client/desktop_node_smart.go", "cmd/client/start_layer_routes.go",
-                      "cmd/client/logical_modes.go", "cmd/client/logical_base_preference.go")}
+                      "cmd/client/logical_modes.go", "cmd/client/logical_base_preference.go",
+                      "cmd/client/desktop_imported_owned.go", "cmd/client/multihop_native_launch.go")}
         changes = GATE.mutants()
-        self.assertEqual(len(changes), 46)
-        self.assertEqual(len({change[1] for change in changes}), 46)
+        self.assertEqual(len(changes), 49)
+        self.assertEqual(len({change[1] for change in changes}), 49)
         for filename, _, test, witness, replacement in changes:
             self.assertIn(filename, originals)
             self.assertNotEqual(replacement.encode(), originals[filename])
@@ -370,7 +396,7 @@ class NodeProcessRunner(unittest.TestCase):
         partitions = [GATE.suite_controls(suite, changes) for suite in GATE.EXECUTION_SUITES]
         self.assertEqual(tuple(item for part in partitions for item in part), changes)
         self.assertEqual(len({item[1] for part in partitions for item in part}), len(changes))
-        self.assertEqual([len(part) for part in partitions], [0, 23, 23, 0])
+        self.assertEqual([len(part) for part in partitions], [0, 25, 24, 0])
         self.assertEqual(GATE.suite_controls("complete", changes), changes)
         with self.assertRaisesRegex(ValueError, "Unknown native Node process execution suite"):
             GATE.suite_controls("ownership-controls-3", changes)

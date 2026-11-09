@@ -97,6 +97,10 @@ func desktopImportedEntrySource(ctx context.Context, entry common.RouterProfile,
 }
 
 func captureDesktopImportedMultihop(ctx context.Context, root string, sel multihopSelection, modes []string, lookup applexray.Lookup) (multihopSelection, error) {
+	return captureDesktopImportedMultihopWithHost(ctx, root, sel, modes, lookup, nil)
+}
+
+func captureDesktopImportedMultihopWithHost(ctx context.Context, root string, sel multihopSelection, modes []string, lookup applexray.Lookup, host *desktopNodeConnectionOwner) (multihopSelection, error) {
 	if ctx == nil || ctx.Err() != nil || sel.Base != "native" || len(modes) != 1 || modes[0] != sel.ExitMode ||
 		sel.Entry.External == nil || sel.EntryMode != sel.Entry.External.Protocol || !desktopImportedEntryProtocol(sel.EntryMode) || !desktopImportedFinalMode(sel.ExitMode) ||
 		sel.Control.ID != sel.Exit.ID {
@@ -109,7 +113,10 @@ func captureDesktopImportedMultihop(ctx context.Context, root string, sel multih
 	sel.Control, sel.Entry, sel.Exit = cloneRouterProfile(sel.Control), cloneRouterProfile(sel.Entry), cloneRouterProfile(sel.Exit)
 	c := &nativeMultihopCapture{root: root, entryID: sel.Entry.ID, exitID: sel.Exit.ID, base: sel.Base, entryMode: sel.EntryMode, entrySelection: sel.EntryMode,
 		controlToken: liveMeasurementProfileToken(sel.Control), entryToken: liveMeasurementProfileToken(sel.Entry), exitToken: liveMeasurementProfileToken(sel.Exit),
-		configs: map[string]string{}, localPacketPublic: map[string]string{}, localPQIdentity: map[string]string{}, failures: map[string]error{}, imported: true}
+		configs: map[string]string{}, localPacketPublic: map[string]string{}, localPQIdentity: map[string]string{}, failures: map[string]error{}, imported: true, importedHost: host}
+	if host != nil && (host.capture.dataRoot != root || host.currentContext(ctx) != nil) {
+		return sel, errors.New("protected imported capture changed its original Windows controller")
+	}
 	if sel.EntryMode == "openvpn" {
 		c.openVPN, err = desktopImportedOpenVPNProfile(sel.Entry)
 		if err != nil {
@@ -197,14 +204,32 @@ func captureDesktopImportedMultihop(ctx context.Context, root string, sel multih
 		return sel, err
 	}
 	defer compiled.Close()
+	c.importedInput, err = compiled.ImportedLaunchInput()
+	if err != nil {
+		return sel, err
+	}
+	c.importedOriginalSource = compiled.SourceSHA256()
 	if c.openVPN != nil {
 		if err := capturedDesktopImportedOpenVPN(compiled.Config(), c.openVPN); err != nil {
 			return sel, err
 		}
 	}
-	c.entryPhysical, err = compiled.ImportedPhysicalEgress()
-	if err != nil {
-		return sel, err
+	if host != nil {
+		// The typed native SOCKS owner admits a negotiated UDP relay later.
+		// This parent capture retains only the constructor's static sockets;
+		// it never turns a control endpoint into a wildcard datagram permit.
+		physical, captureErr := compiled.ImportedDesktopCapture()
+		if captureErr != nil {
+			return sel, captureErr
+		}
+		for _, root := range physical.PhysicalRoots {
+			c.entryPhysical = append(c.entryPhysical, root.Destinations...)
+		}
+	} else {
+		c.entryPhysical, err = compiled.ImportedPhysicalEgress()
+		if err != nil {
+			return sel, err
+		}
 	}
 	if _, err := netip.ParseAddr(endpoint); err != nil || len(c.entryPhysical) == 0 {
 		return sel, errors.New("imported entry lost its captured physical socket identity")
@@ -215,17 +240,28 @@ func captureDesktopImportedMultihop(ctx context.Context, root string, sel multih
 		return sel, err
 	}
 	c.configs[sel.ExitMode] = config
+	c.source = c.importedCaptureDigest()
+	sel.Native = c
+	return sel, errors.Join(ctx.Err(), c.validate(sel))
+}
+
+// Bind the replay envelope to the original graph and both independently saved
+// node sources. A launch must not swap its constructor after preflight merely
+// because a public profile ID or compiled metadata stayed the same.
+func (c *nativeMultihopCapture) importedCaptureDigest() string {
+	if c == nil || !c.imported || c.importedInput == "" || len(c.importedInput) > mobilemultihop.ImportedLaunchInputLimit {
+		return ""
+	}
 	assetIDs := make([][]string, 0, len(c.assets))
 	for _, asset := range c.assets {
 		assetIDs = append(assetIDs, []string{asset.id, asset.mode, asset.digest})
 	}
-	sealed, _ := json.Marshal([]any{"desktop-imported-entry-v1", compiled.SourceSHA256(), c.entryMode, c.entryPhysical, c.endpoint,
+	inputHash := sha256.Sum256([]byte(c.importedInput))
+	sealed, _ := json.Marshal([]any{"desktop-imported-entry-v2", c.importedHost != nil, c.importedOriginalSource, hex.EncodeToString(inputHash[:]), c.entryMode, c.entryPhysical, c.endpoint,
 		c.controlToken, c.entryToken, c.exitToken, assetIDs, c.configs})
 	sum := sha256.Sum256(sealed)
 	clear(sealed)
-	c.source = hex.EncodeToString(sum[:])
-	sel.Native = c
-	return sel, errors.Join(ctx.Err(), c.validate(sel))
+	return hex.EncodeToString(sum[:])
 }
 
 func proveNativeMultihopLaneContext(ctx context.Context, profile common.RouterProfile, proxy string) error {

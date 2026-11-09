@@ -117,6 +117,11 @@ func newDesktopImportedMTUOwner(ctx context.Context, a *app, runtime *nativeMult
 	if hex.EncodeToString(digest[:]) != launch.configSHA256 {
 		return nil, errors.New("imported MTU compiled source was replaced")
 	}
+	if launch.ownedNode != nil && launch.ownedNode.imported != nil {
+		if err := validateDesktopOwnedImportedConfigContext(ctx, launch, raw); err != nil {
+			return nil, err
+		}
+	}
 	record, err := readDesktopNodeMTUContext(ctx, launch)
 	if err != nil || record.Active || record.Failure != "" {
 		return nil, errors.Join(err, errors.New("imported MTU requires its stable native reader"))

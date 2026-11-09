@@ -77,12 +77,15 @@ func (owner *routerVPNNodeWindowsJournal) authenticate(ctx context.Context, file
 	return err
 }
 
-func (owner *routerVPNNodeWindowsJournal) prepare(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy,
+func (owner *routerVPNNodeWindowsJournal) prepare(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy,
 	expected *mobiletor.DesktopProtectionTransferRecord) (context.Context, *routerVPNNodeAdmission, error) {
 	if owner == nil || owner.client == nil || ctx == nil || ctx.Err() != nil || policy == nil || policy.Validate() != nil || expected == nil {
 		return nil, nil, routerVPNExternalFailure
 	}
-	meta := policy.Metadata()
+	_, meta, _, readErr := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
+	if readErr != nil {
+		return nil, nil, readErr
+	}
 	digest, err := mobiletor.DesktopProtectionTransferRecordSHA256(*expected)
 	captured, capturedErr := mobiletor.DesktopProtectionTransferRecordSHA256(owner.capture.Transfer)
 	if err != nil || capturedErr != nil || digest != captured || owner.capture.ProfileID != meta.ProfileID ||

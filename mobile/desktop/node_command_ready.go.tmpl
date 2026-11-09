@@ -23,13 +23,16 @@ type routerVPNNodeCoverOwner interface {
 // TUN readback. The private record is bound to the same source and predecessor
 // as the handoff; the controller still owes its authenticated selected-node
 // proof before it can report Connected.
-func routerVPNProveNodeReady(ctx context.Context, files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodePolicy,
+func routerVPNProveNodeReady(ctx context.Context, files *routerVPNExternalFiles, policy mobilemultihop.DesktopPhysicalPolicy,
 	expected *mobiletor.DesktopProtectionTransferRecord, owner routerVPNNodeDNSOwner) error {
 	if ctx == nil || ctx.Err() != nil || files == nil || files.root == nil || policy == nil || policy.Validate() != nil ||
 		expected == nil || expected.Validate() != nil || owner == nil || !owner.Current() {
 		return routerVPNExternalFailure
 	}
-	meta := policy.Metadata()
+	_, meta, _, readErr := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
+	if readErr != nil {
+		return routerVPNExternalFailure
+	}
 	if expected.SessionID != meta.SessionID || expected.SourceSHA256 != meta.SourceSHA256 ||
 		expected.ConfigSHA256 != meta.ConfigSHA256 || expected.Policy != meta.KillSwitchPolicy ||
 		files.stopRequested(meta.SessionID, meta.ConfigSHA256) || !files.current("node-ready.json") {
@@ -45,23 +48,22 @@ func routerVPNProveNodeReady(ctx context.Context, files *routerVPNExternalFiles,
 // The platform coordinator supplies its independently authenticated selection
 // digest. This shared probe owns no admission or predecessor capability; it
 // performs the same real selected resolver exchange and native TUN readback.
-func routerVPNProveNodeReadyCaptured(ctx context.Context, files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodePolicy,
+func routerVPNProveNodeReadyCaptured(ctx context.Context, files *routerVPNExternalFiles, policy mobilemultihop.DesktopPhysicalPolicy,
 	transfer string, owner routerVPNNodeDNSOwner) error {
 	return routerVPNProveNodeReadyCapturedCover(ctx, files, policy, transfer, owner, nil)
 }
 
-func routerVPNProveNodeReadyCapturedCover(ctx context.Context, files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodePolicy,
+func routerVPNProveNodeReadyCapturedCover(ctx context.Context, files *routerVPNExternalFiles, policy mobilemultihop.DesktopPhysicalPolicy,
 	transfer string, owner routerVPNNodeDNSOwner, cover routerVPNNodeCoverOwner) error {
 	if ctx == nil || ctx.Err() != nil || files == nil || files.root == nil || policy == nil || policy.Validate() != nil ||
 		!routerVPNExternalSource.MatchString(transfer) || owner == nil || !owner.Current() {
 		return routerVPNExternalFailure
 	}
-	meta := policy.Metadata()
-	if files.stopRequested(meta.SessionID, meta.ConfigSHA256) || !files.current("node-ready.json") {
+	_, meta, capture, readErr := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
+	if readErr != nil {
 		return routerVPNExternalFailure
 	}
-	capture, err := policy.Capture()
-	if err != nil {
+	if files.stopRequested(meta.SessionID, meta.ConfigSHA256) || !files.current("node-ready.json") {
 		return routerVPNExternalFailure
 	}
 	elapsed, err := owner.MeasureSelectedDNS(ctx)

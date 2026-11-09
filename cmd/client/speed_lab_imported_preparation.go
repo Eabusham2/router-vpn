@@ -76,7 +76,7 @@ func (prepared *speedLabMultihopPreparation) releaseUnused() error {
 // Staging registers one exact private DNS input before process startup. Retire
 // that identity with an unstarted launch; a replacement runtime is never cleared.
 func (prepared *speedLabMultihopPreparation) retireUnstartedLocked() error {
-	if prepared.launch != nil && (prepared.launch.command == nil || prepared.launch.command.Process == nil) && prepared.app != nil && prepared.dns.Config != "" {
+	if prepared.launch != nil && !nativeMultihopLaunchStarted(prepared.launch) && prepared.app != nil && prepared.dns.Config != "" {
 		activeDNSRuntimeIdentities.CompareAndDelete(prepared.app, prepared.dns)
 	}
 	return retireUnstartedNativeMultihop(prepared.launch)
@@ -277,7 +277,7 @@ func (prepared *speedLabMultihopPreparation) stage(ctx context.Context, a *app, 
 		return nil, err
 	}
 	prepared.consumed = true
-	if err := stageOwnedNativeMultihopInputs(a, selection, prepared.launch); err != nil {
+	if err := stageOwnedNativeMultihopInputsContext(ctx, a, selection, prepared.launch); err != nil {
 		return prepared.launch, errors.Join(err, prepared.retireUnstartedLocked())
 	}
 	config, err := runtimeConfigUnderPrivateRun(a, filepath.Join(prepared.launch.directory, "sing-box.json"))

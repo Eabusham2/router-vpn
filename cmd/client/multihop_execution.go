@@ -138,6 +138,20 @@ type desktopExecutionDriver struct {
 	peerMu    sync.Mutex
 	peers     map[string]desktopServerPeerIdentity
 }
+
+func (d *desktopExecutionDriver) physicalNetworkContext(ctx context.Context) (string, error) {
+	if ctx == nil || d == nil {
+		return "", errors.New("multihop execution lost its original network observer")
+	}
+	if prepared := d.prepared; prepared != nil {
+		if prepared.app != d.a || prepared.selection.Native != d.selection.Native || prepared.readNetwork == nil {
+			return "", errors.New("multihop execution changed its prepared network owner")
+		}
+		return prepared.readNetwork(ctx)
+	}
+	return physicalNetworkIdentityContext(ctx)
+}
+
 type desktopExecutionSession struct {
 	driver        *desktopExecutionDriver
 	candidate     routechoice.Candidate
@@ -191,7 +205,7 @@ func (s *desktopExecutionSession) identityContext(ctx context.Context) string {
 	}
 	owned := s.driver.a.cmd == s.command && !s.driver.a.closing
 	s.driver.a.mu.Unlock()
-	network, err := physicalNetworkIdentityContext(ctx)
+	network, err := s.driver.physicalNetworkContext(ctx)
 	if !owned || err != nil || network != s.driver.network {
 		return ""
 	}
@@ -337,7 +351,7 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 	if d.selection.Entry.NodeKind == "external" && c.Execution != routechoice.Local {
 		return nil, errors.New("ordinary imported entry supports only explicit Local execution")
 	}
-	network, networkErr := physicalNetworkIdentityContext(ctx)
+	network, networkErr := d.physicalNetworkContext(ctx)
 	if c.EntryID != d.selection.Entry.ID || c.ExitID != d.selection.Exit.ID || networkErr != nil || network != d.network {
 		return nil, errors.New("comparison node/network changed")
 	}
@@ -423,9 +437,9 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 	if err != nil {
 		return s, err
 	}
-	// Serialize the last ownership check, process start and publication. An
-	// old prepared result may neither replace a newer command nor leave an
-	// unregistered started child if cancellation wins the admission lock.
+	// Serialize the final ownership check and publication. A protected child
+	// enters native creation only after its partial owner is registered; the
+	// legacy helper starts under this same lock. Both retain exact cleanup.
 	if err := desktopnetwork.LockContext(ctx, &d.a.mu); err != nil {
 		return s, err
 	}
@@ -440,11 +454,17 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 			return s, err
 		}
 	}
-	if err = s.command.Start(); err != nil {
+	protected := s.native != nil && s.native.ownedNode != nil
+	if protected {
+		if err := d.a.publishDesktopImportedMultihopStartLocked(operation, s.native, sel); err != nil {
+			d.a.mu.Unlock()
+			return s, err
+		}
+	} else if err = s.command.Start(); err != nil {
 		d.a.mu.Unlock()
 		return s, errors.New("owned multihop helper failed to start")
 	}
-	if s.native != nil {
+	if s.native != nil && !protected {
 		desktopNodeOwners.Store(d.a, s.native)
 	}
 	d.a.cmd = s.command
@@ -461,12 +481,17 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 	graph.Execution = string(c.Execution)
 	activeMultihopGraphs.Store(d.a, graph)
 	if s.native != nil {
-		if err := bindNativeMultihopRuntime(d.a, s.native, sel, d.network); err != nil {
+		if err := bindNativeMultihopRuntimeContext(ctx, d.a, s.native, sel, d.network); err != nil {
 			return s, err
 		}
 	}
 	if d.prepared != nil {
 		if err := d.a.speedLabOwnRuntime(s.command); err != nil {
+			return s, err
+		}
+	}
+	if protected {
+		if err := startDesktopOwnedImportedLaunch(ctx, operation, d.a, s.native); err != nil {
 			return s, err
 		}
 	}

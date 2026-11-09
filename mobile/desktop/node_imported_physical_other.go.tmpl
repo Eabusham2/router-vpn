@@ -1,0 +1,12 @@
+//go:build !windows
+
+package routervpndesktoppt
+
+import (
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func (*NodeNetworkOwner) PrepareImportedPhysicalPolicy(*mobilemultihop.DesktopImportedPolicy) error {
+	return errors.New("this target has no admitted imported Windows protection owner")
+}

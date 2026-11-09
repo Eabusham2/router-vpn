@@ -40,16 +40,12 @@ func getDesktopImportedMTUUI(ctx context.Context, a *app, runtime *nativeMultiho
 		}
 	}
 	profile := runtime.selection.Exit
-	if !desktopImportedMTUAutomatic(profile.MTUPolicy, profile.JumboTUN) {
-		return nil, errors.New("choose Auto MTU without Jumbo before Retest")
-	}
-	raw, err := json.Marshal(profile)
+	raw, policy, err := readDesktopImportedMTUPolicyContext(ctx, runtime.selection)
 	if err != nil {
 		return nil, err
 	}
-	policy, err := mobilemtu.ReadProfile(string(raw))
-	if err != nil {
-		return nil, err
+	if !policy.Automatic || policy.Jumbo {
+		return nil, errors.New("choose compatible Auto MTU without shared Jumbo on the captured entry and final before Retest")
 	}
 	owner, err := newDesktopImportedMTUOwner(ctx, a, runtime, policy)
 	if err != nil {
@@ -57,7 +53,7 @@ func getDesktopImportedMTUUI(ctx context.Context, a *app, runtime *nativeMultiho
 	}
 	u := &desktopImportedMTUUI{a: a, runtime: runtime, owner: owner, identity: mtuViewIdentity{Session: runtime.launch.mtuSession, Profile: profile.ID, Native: true}}
 	u.cache = &desktopImportedMTUCache{ui: u}
-	u.controller, err = mobilemtu.NewContext(ctx, owner, owner.config, string(raw), u.cache)
+	u.controller, err = mobilemtu.NewContext(ctx, owner, owner.config, raw, u.cache)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +341,11 @@ func (a *app) writeDesktopImportedMTUViewStatus(w http.ResponseWriter, r *http.R
 		http.Error(w, "imported MTU connection was replaced", http.StatusConflict)
 		return true
 	}
-	profile := runtime.selection.Exit
+	_, policy, err := readDesktopImportedMTUPolicyContext(r.Context(), runtime.selection)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return true
+	}
 	live, err := readDesktopNodeMTUContext(r.Context(), runtime.launch)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -400,7 +400,7 @@ func (a *app) writeDesktopImportedMTUViewStatus(w http.ResponseWriter, r *http.R
 		http.Error(w, err.Error(), http.StatusConflict)
 		return true
 	}
-	writeMTUViewStatus(w, identity, requested, false, desktopImportedMTUAutomatic(profile.MTUPolicy, profile.JumboTUN), status)
+	writeMTUViewStatus(w, identity, requested, false, policy.Automatic && !policy.Jumbo, status)
 	return true
 }
 
@@ -414,7 +414,10 @@ func (a *app) startDesktopImportedAutomaticMTU() bool {
 		return true
 	}
 	profile := runtime.selection.Exit
-	if !desktopImportedMTUAutomatic(profile.MTUPolicy, profile.JumboTUN) || mtuSuspended(a) {
+	// This read-only eligibility check cannot begin a measurement. The worker
+	// below still proves the same live runtime before public Retest admission.
+	_, policy, err := readDesktopImportedMTUPolicyContext(context.Background(), runtime.selection)
+	if err != nil || !policy.Automatic || policy.Jumbo || mtuSuspended(a) {
 		return true
 	}
 	command := runtime.launch.command

@@ -15,9 +15,30 @@ type desktopProtectionSelection struct {
 }
 
 func desktopProtectionSelectionFor(node *mobilemultihop.DesktopNodePolicy, external *mobilemultihop.DesktopExternalPolicy) (desktopProtectionSelection, error) {
+	return desktopProtectionSelectionForCaptured(node, external, nil)
+}
+
+func desktopProtectionSelectionForCaptured(node *mobilemultihop.DesktopNodePolicy, external *mobilemultihop.DesktopExternalPolicy,
+	imported *mobilemultihop.DesktopImportedPolicy) (desktopProtectionSelection, error) {
 	var empty desktopProtectionSelection
-	if (node == nil) == (external == nil) {
+	families := 0
+	for _, present := range []bool{node != nil, external != nil, imported != nil} {
+		if present {
+			families++
+		}
+	}
+	if families != 1 {
 		return empty, errors.New("native protection requires exactly one captured policy family")
+	}
+	if imported != nil {
+		_, meta, capture, err := imported.ReadValidated()
+		if err != nil || meta.TargetOS != "windows" || meta.ProfileID != meta.ExitID || !validProfileID(meta.EntryID) || !validProfileID(meta.ExitID) ||
+			meta.EntryID == meta.ExitID || capture.EntryID != meta.EntryID || capture.ExitID != meta.ExitID || capture.ExitNodeID != meta.ExitNodeID ||
+			!desktopImportedEntryProtocol(meta.EntryMode) || !desktopImportedFinalMode(meta.ExitMode) ||
+			meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" {
+			return empty, errors.Join(err, errors.New("native imported protection lost its original entry and paired final"))
+		}
+		return desktopProtectionSelection{meta.ProfileID, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, meta.KillSwitchPolicy}, nil
 	}
 	if node != nil {
 		if err := node.Validate(); err != nil {
@@ -65,11 +86,24 @@ func (attempt *desktopNodeProtectionAttempt) selection() (desktopProtectionSelec
 	if attempt == nil {
 		return desktopProtectionSelection{}, errors.New("native protection lost its original selection")
 	}
-	return desktopProtectionSelectionFor(attempt.policy, attempt.external)
+	return desktopProtectionSelectionForCaptured(attempt.policy, attempt.external, attempt.imported)
+}
+
+func (attempt *desktopNodeProtectionAttempt) matchesOwned(owned *desktopOwnedNodeRuntime) bool {
+	if attempt == nil || owned == nil || attempt.external != nil || (owned.policy == nil) == (owned.imported == nil) {
+		return false
+	}
+	if owned.imported != nil {
+		return owned.imported.policy != nil && attempt.policy == nil && attempt.imported == owned.imported.policy
+	}
+	return attempt.imported == nil && attempt.policy == owned.policy
 }
 
 func (attempt *desktopNodeProtectionAttempt) process() desktopNodeProcess {
-	if attempt == nil || attempt.launch == nil || (attempt.policy == nil) == (attempt.external == nil) {
+	if attempt == nil || attempt.launch == nil {
+		return nil
+	}
+	if _, err := attempt.selection(); err != nil {
 		return nil
 	}
 	if attempt.external != nil {

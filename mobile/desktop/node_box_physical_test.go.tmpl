@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,9 +21,12 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/dns"
 	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
+	"github.com/sagernet/sing-box/protocol/mixed"
 	"github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
@@ -92,14 +96,17 @@ func newDesktopNodeBoxFixtureWithOptions(t *testing.T, edit func(map[string]any)
 		raw = string(body)
 	}
 	ins := inbound.NewRegistry()
+	mixed.RegisterInbound(ins)
 	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
 		f.tun = &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag), name: options.InterfaceName, index: 771, mtu: int(options.MTU)}
 		return f.tun, nil
 	})
 	outs := outbound.NewRegistry()
+	group.RegisterSelector(outs)
 	shadowsocks.RegisterOutbound(outs)
 	routervpnwhitening.RegisterOutbound(outs)
 	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
+	routervpndesktoppt.RegisterExternalSOCKSOutbound(outs)
 	dnsRegistry := dns.NewTransportRegistry()
 	DNST.RegisterUDP(dnsRegistry)
 	DNST.RegisterTCP(dnsRegistry)
@@ -136,6 +143,13 @@ func newDesktopNodeBoxFixtureWithOptions(t *testing.T, edit func(map[string]any)
 }
 
 func (f *desktopNodeBoxFixture) start(t *testing.T) *RouterVPNDesktopNodePhysical {
+	return f.startWithSource(t, f.source)
+}
+
+func (f *desktopNodeBoxFixture) startWithSource(t *testing.T, source interface {
+	mobiletor.DesktopSocketSource
+	mobiletor.DesktopSocketPolicy
+}) *RouterVPNDesktopNodePhysical {
 	t.Helper()
 	if _, _, err := f.box.routerVPNDesktopNodePhysical(f.policy); err != nil {
 		t.Fatal(err)
@@ -145,10 +159,10 @@ func (f *desktopNodeBoxFixture) start(t *testing.T) *RouterVPNDesktopNodePhysica
 			t.Error("node source was constructed after native admission")
 		}
 		f.source.capture = capture
-		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.source, current, func(observeCtx context.Context) error {
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current, func(observeCtx context.Context) error {
 			return f.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
 		})
-		return broker, f.source, err
+		return broker, source, err
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +238,7 @@ func (f *desktopNodeBoxFixture) replacement(owner *RouterVPNDesktopNodePhysical,
 			return expected, err
 		}
 		makeReader := func(value, nextIndex int) *desktopTorMTUCandidate {
-			return &desktopTorMTUCandidate{desktopTorBoxTUN: &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, expected.Tag()), name: name, index: nextIndex, mtu: value, claimed: true, guard: owner.generationCurrent}}
+			return &desktopTorMTUCandidate{desktopTorBoxTUN: &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, expected.Tag()), name: name, index: nextIndex, mtu: value, claimed: true, guard: owner.generationCurrent, guardContext: owner.generationCurrentContext}}
 		}
 		*candidate, *rollback = makeReader(mtu, index+1), makeReader(oldMTU, index+2)
 		(*candidate).afterStart = callback
@@ -272,6 +286,156 @@ func TestRouterVPNDesktopNodePhysicalBoxRetainsMTUAndExactRollback(t *testing.T)
 	}
 	if _, err := owner.changeMTU(context.Background(), next, 1450, func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) { return original, nil }); err == nil || owner.Current() || f.network.SocketCurrent() {
 		t.Fatal("unrelated replacement result retained the live physical generation")
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalBoxMTUOriginalCleanup(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		t.Run(fmt.Sprint(expired), func(t *testing.T) {
+			f := newDesktopNodeBoxFixture(t, nil)
+			owner := f.start(t)
+			budget := time.Second
+			if expired {
+				budget = 40 * time.Millisecond
+			}
+			accepted, finish, err := mobilemtu.WithOperationContext(context.Background(), time.Minute, budget)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer finish()
+			work, cancel := context.WithCancel(accepted)
+			defer cancel()
+			var candidate, rollback *desktopTorMTUCandidate
+			var cleanup context.Context
+			observations := 0
+			change := f.replacement(owner, func(stage adapter.StartStage) error {
+				if stage == adapter.StartStateStarted {
+					cancel()
+				}
+				return nil
+			}, &candidate, &rollback)
+			next, failure := owner.changeMTU(work, owner.inbound, 1400, func(call context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+				if !mobilemtu.SameOperationContext(work, call) {
+					t.Fatal("physical replacement substituted the admitted MTU operation")
+				}
+				next, failure := change(call, expected, mtu)
+				cleanup, err = mobilemtu.OperationCleanupContext(call)
+				if err != nil || next != rollback {
+					t.Fatal("native transaction did not retain its exact rollback and original allowance", err)
+				}
+				rollback.guardContext = func(observe context.Context) error {
+					observations++
+					if observe != cleanup || !mobilemtu.SameOperationContext(work, observe) {
+						return errors.New("physical adoption renewed the native rollback allowance")
+					}
+					return owner.generationCurrentContext(observe)
+				}
+				if expired {
+					<-cleanup.Done()
+				}
+				return next, failure
+			})
+			if failure == nil || next != rollback || !errors.Is(failure, context.Canceled) {
+				t.Fatal("cancelled work claimed a measured winner or lost the actual returned rollback", failure)
+			}
+			if expired {
+				if !errors.Is(failure, context.DeadlineExceeded) || owner.Current() || f.network.SocketCurrent() || f.source.binds != 1 || f.source.retires != 1 || observations != 0 {
+					t.Fatal("expired original cleanup renewed a physical grant or observed a replacement", failure, observations)
+				}
+			} else if !owner.Current() || f.source.binds != 2 || f.source.retires != 1 || observations < 2 {
+				t.Fatal("valid original cleanup did not bind and read the exact rollback", failure, observations)
+			}
+		})
+	}
+}
+
+type desktopNodeMTUObservedContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *desktopNodeMTUObservedContext) Err() error {
+	// Capture before notifying cancellation, so even the old unbounded path
+	// necessarily passes its first check and then encounters the held lock.
+	err := c.Context.Err()
+	c.once.Do(func() { close(c.entered) })
+	return err
+}
+
+func TestRouterVPNDesktopNodePhysicalBoxMTULocksHonorCaller(t *testing.T) {
+	for _, held := range []string{"physical-owner", "native-reader"} {
+		t.Run(held, func(t *testing.T) {
+			f := newDesktopNodeBoxFixture(t, nil)
+			owner := f.start(t)
+			accepted, finish, err := mobilemtu.WithOperationContext(context.Background(), time.Minute, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer finish()
+			work, cancel := context.WithCancel(accepted)
+			defer cancel()
+			observed := &desktopNodeMTUObservedContext{Context: work, entered: make(chan struct{})}
+			lock := &owner.mu
+			if held == "native-reader" {
+				lock = &f.tun.mu
+			}
+			lock.Lock()
+			called := false
+			joined := make(chan error, 1)
+			go func() {
+				_, err := owner.changeMTU(observed, owner.inbound, 1400, func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) {
+					called = true
+					return nil, errors.New("cancelled caller reached native mutation")
+				})
+				joined <- err
+			}()
+			<-observed.entered
+			cancel()
+			select {
+			case err := <-joined:
+				lock.Unlock()
+				if !errors.Is(err, context.Canceled) || called || f.source.binds != 1 || f.source.retires != 0 || !owner.Current() {
+					t.Fatal("cancelled lock admission changed native TUN ownership", err)
+				}
+			case <-time.After(time.Second):
+				lock.Unlock()
+				<-joined
+				t.Fatal("cancelled physical MTU retained a waiter behind another owner's lock")
+			}
+		})
+	}
+}
+
+type desktopNodeEnteredRetirement struct {
+	*desktopExternalBoxSource
+	cancel context.CancelFunc
+}
+
+func (s *desktopNodeEnteredRetirement) RetireTunnel(ctx context.Context, capture mobiletor.DesktopSocketCapture, name string, index uint32) error {
+	if err := s.desktopExternalBoxSource.RetireTunnel(ctx, capture, name, index); err != nil {
+		return err
+	}
+	s.cancel()
+	return ctx.Err()
+}
+
+func TestRouterVPNDesktopNodePhysicalBoxMTURetireFailureInvalidatesOwner(t *testing.T) {
+	f := newDesktopNodeBoxFixture(t, nil)
+	work, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	source := &desktopNodeEnteredRetirement{desktopExternalBoxSource: f.source, cancel: cancel}
+	owner := f.startWithSource(t, source)
+	called := false
+	_, err := owner.changeMTU(work, owner.inbound, 1400, func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) {
+		called = true
+		return nil, nil
+	})
+	if !errors.Is(err, context.Canceled) || called || f.source.retires != 1 || f.source.binds != 1 || owner.Current() || f.network.SocketCurrent() {
+		t.Fatal("uncertain entered retirement retained a supposedly usable physical path", err)
+	}
+	if err := f.network.Close(); err != nil || !f.source.cancelled.Load() || !f.source.closed.Load() {
+		t.Fatal("failed entered retirement did not join its exact original source", err)
 	}
 }
 

@@ -1,0 +1,190 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/netip"
+	"reflect"
+	"runtime"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/service"
+)
+
+// A static projection can admit only the original TCP control. Each negotiated
+// UDP relay still belongs to one authenticated native SOCKS client operation;
+// neither this map nor a different imported or Router graph can grant it.
+func nodePhysicalDestinations(policy mobilemultihop.DesktopPhysicalPolicy, capture mobilemultihop.DesktopPhysicalCapture) (map[externalPhysicalDestination]bool, error) {
+	roots := append([]mobilemultihop.ExternalDesktopPhysicalRoot(nil), capture.PhysicalRoots...)
+	for index, root := range roots {
+		if !root.DynamicSOCKSUDP {
+			continue
+		}
+		imported, ok := policy.(*mobilemultihop.DesktopImportedPolicy)
+		if !ok || imported == nil {
+			return nil, errors.New("Router node cannot borrow an imported SOCKS relay")
+		}
+		meta := imported.Metadata()
+		if !meta.SOCKSUDPAssociationRequired || meta.EntryMode != "socks5" || root.Tag != meta.EntryTag || root.Type != "socks" ||
+			root.SOCKSVersion != "5" || root.SOCKSControl == nil || root.SOCKSControl.Network != "tcp" ||
+			len(root.Destinations) != 1 || root.Destinations[0] != *root.SOCKSControl {
+			return nil, errors.New("imported SOCKS relay lost its original TCP control")
+		}
+		roots[index].DynamicSOCKSUDP = false
+	}
+	return desktopPhysicalDestinations(capture.IPv6Mode, roots, capture.SelectedDNS, capture.BootstrapDNS)
+}
+
+func prepareNodeImportedSOCKS(policy mobilemultihop.DesktopPhysicalPolicy, owner *NodeNetworkOwner, lower *NodePhysicalOutbound) error {
+	imported, ok := policy.(*mobilemultihop.DesktopImportedPolicy)
+	if !ok {
+		return nil
+	}
+	if imported == nil || imported.Validate() != nil || owner == nil || lower == nil {
+		return errors.New("imported SOCKS preparation has no original native owner")
+	}
+	meta := imported.Metadata()
+	if !meta.SOCKSUDPAssociationRequired {
+		return nil
+	}
+	manager := service.FromContext[adapter.OutboundManager](owner.ctx)
+	if manager == nil {
+		return errors.New("imported SOCKS preparation has no original outbound manager")
+	}
+	raw, found := manager.Outbound(meta.EntryTag)
+	root, ok := raw.(*ExternalSOCKSOutbound)
+	if !found || !ok || root == nil || root.Type() != mobilemultihop.DesktopImportedSOCKSType {
+		return errors.New("imported SOCKS preparation found another native entry")
+	}
+	return root.prepareImported(imported, owner, lower)
+}
+
+// The explicit imported type is distinct from the ordinary external final.
+// Its inert JSON options cannot activate it: only prepareImported can bind the
+// original sealed paired graph and its prepared physical owner.
+func NewImportedSOCKSOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options ExternalSOCKSOptions) (adapter.Outbound, error) {
+	address, err := netip.ParseAddr(options.Server)
+	if runtime.GOOS != "windows" || ctx == nil || ctx.Err() != nil || tag != "entry-wg" ||
+		!networkSessionID.MatchString(options.SessionID) || !networkSourceID.MatchString(options.SourceSHA256) ||
+		err != nil || address.String() != options.Server || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || options.ServerPort == 0 ||
+		options.Version != "5" || options.Network != "" || options.UDPOverTCP != nil ||
+		!reflect.DeepEqual(options.DialerOptions, option.DialerOptions{Detour: mobilemultihop.DesktopNodePhysicalTag}) ||
+		(options.Username == "") != (options.Password == "") || len(options.Username) > 255 || len(options.Password) > 255 {
+		return nil, errors.New("imported SOCKS5 requires its original native control and separately captured paired graph")
+	}
+	return &ExternalSOCKSOutbound{
+		Adapter: outbound.NewAdapterWithDialerOptions(mobilemultihop.DesktopImportedSOCKSType, tag, []string{"tcp", "udp"}, options.DialerOptions),
+		ctx:     ctx, options: options, control: options.ServerOptions.Build(), operations: make(map[*externalSOCKSOperation]struct{}),
+	}, nil
+}
+
+func (o *ExternalSOCKSOutbound) prepareImported(policy *mobilemultihop.DesktopImportedPolicy, owner *NodeNetworkOwner, lower *NodePhysicalOutbound) error {
+	if o == nil || policy == nil || owner == nil || lower == nil || runtime.GOOS != "windows" {
+		return errors.New("imported SOCKS preparation lost its original native graph")
+	}
+	config, meta, capture, err := policy.ReadValidated()
+	if err != nil || meta.TargetOS != "windows" || meta.EntryMode != "socks5" || meta.EntryTag != o.Tag() || !meta.SOCKSUDPAssociationRequired ||
+		o.Type() != mobilemultihop.DesktopImportedSOCKSType || o.options.Detour != mobilemultihop.DesktopNodePhysicalTag ||
+		owner.capture.SessionID != o.options.SessionID || owner.capture.SourceSHA256 != o.options.SourceSHA256 || lower.options != owner.capture ||
+		meta.SessionID != o.options.SessionID || meta.SourceSHA256 != o.options.SourceSHA256 {
+		return errors.New("imported SOCKS preparation substituted its policy, lower object or control owner")
+	}
+	dynamic := 0
+	for _, root := range capture.PhysicalRoots {
+		if root.DynamicSOCKSUDP {
+			dynamic++
+			if root.Tag != o.Tag() || root.SOCKSControl == nil || root.SOCKSControl.Host != o.options.Server || root.SOCKSControl.Port != int(o.options.ServerPort) || root.SOCKSControl.Network != "tcp" {
+				return errors.New("imported SOCKS substituted its original captured TCP control")
+			}
+		}
+	}
+	if dynamic != 1 {
+		return errors.New("imported SOCKS has another dynamic relay composition")
+	}
+	var graph struct {
+		Outbounds []json.RawMessage `json:"outbounds"`
+	}
+	if json.Unmarshal([]byte(config), &graph) != nil {
+		return errors.New("imported SOCKS lost its complete native graph")
+	}
+	matched := 0
+	for _, raw := range graph.Outbounds {
+		var original struct {
+			Type string `json:"type"`
+			Tag  string `json:"tag"`
+			ExternalSOCKSOptions
+		}
+		if json.Unmarshal(raw, &original) != nil {
+			return errors.New("imported SOCKS graph has invalid native options")
+		}
+		if original.Tag == o.Tag() {
+			matched++
+			if original.Type != mobilemultihop.DesktopImportedSOCKSType || !reflect.DeepEqual(original.ExternalSOCKSOptions, o.options) {
+				return errors.New("imported SOCKS changed its original credentials or native options")
+			}
+		}
+	}
+	if matched != 1 {
+		return errors.New("imported SOCKS is not the unique captured entry")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed || o.ctx.Err() != nil || o.owner != nil || o.lower != nil || o.policy != nil ||
+		o.importedPolicy != nil || o.importedOwner != nil || o.importedLower != nil || len(o.operations) != 0 {
+		return errors.New("imported SOCKS preparation is repeated, retired or late")
+	}
+	o.importedPolicy, o.importedOwner, o.importedLower = policy, owner, lower
+	return nil
+}
+
+func (o *ExternalSOCKSOutbound) currentImported(ctx context.Context, policy *mobilemultihop.DesktopImportedPolicy) (*mobiletor.DesktopSocketBroker, error) {
+	if o == nil || ctx == nil {
+		return nil, net.ErrClosed
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &o.mu); err != nil {
+		return nil, err
+	}
+	owner, lower, current, closed := o.importedOwner, o.importedLower, o.importedPolicy, o.closed
+	foreign := o.owner != nil || o.lower != nil || o.policy != nil || o.entry != nil
+	o.mu.Unlock()
+	if ctx.Err() != nil || closed || foreign || owner == nil || lower == nil || policy == nil || current != policy || policy.Validate() != nil {
+		return nil, net.ErrClosed
+	}
+	if err := owner.SocketCurrentContext(ctx); err != nil {
+		return nil, err
+	}
+	manager := service.FromContext[adapter.OutboundManager](o.ctx)
+	if manager == nil {
+		return nil, errors.New("imported SOCKS lost its native outbound manager")
+	}
+	selected, found, err := adapter.RouterVPNOutboundContext(ctx, manager, o.Tag())
+	if err != nil {
+		return nil, err
+	}
+	if !found || selected != o {
+		return nil, errors.New("imported SOCKS entry was replaced")
+	}
+	// This checks the permanently captured TCP tuple. Only the existing private
+	// native-client operation can later request its own authenticated UDP relay.
+	return lower.current(ctx, "tcp", o.control)
+}
+
+func (o *ExternalSOCKSOutbound) capturedIPv6Mode() string {
+	o.mu.Lock()
+	imported, ordinary := o.importedPolicy, o.policy
+	o.mu.Unlock()
+	if imported != nil {
+		return imported.Metadata().IPv6Mode
+	}
+	if ordinary != nil {
+		return ordinary.Metadata().IPv6Mode
+	}
+	return "off"
+}

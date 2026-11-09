@@ -1,0 +1,64 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"runtime"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// The public imported command authenticates the inherited controller and its
+// exact journal pipe before opening any private imported source. It keeps the
+// original constructor alive through joined protection retirement.
+func routerVPNRunImportedMTUWithJournal(parent context.Context, directory, session, config, source, transfer string,
+	mtu int, options routerVPNNodeJournalOptions) (failure error) {
+	if runtime.GOOS != "windows" || !routerVPNExternalSource.MatchString(source) {
+		return routerVPNExternalFailure
+	}
+	journal, err := routerVPNNewNodeJournal(parent, source, options)
+	if err != nil || journal == nil {
+		return routerVPNExternalFailure
+	}
+	defer func() { failure = errors.Join(failure, journal.close()) }()
+	return routerVPNRunNodeMTUFamilyCaptured(parent, directory, session, config, "", source, transfer, mtu, journal)
+}
+
+// This explicit command family independently recompiles the original imported
+// entry and paired final. Failure never retries NodeProfile or ordinary final
+// parsing. The public digest constrains the exact derived source; it cannot
+// create a policy, admit a socket or acknowledge a journal transaction.
+func routerVPNImportedCommandPhysicalWithMTU(files *routerVPNExternalFiles, session, config, source string, restoredMTU int) (_ *mobilemultihop.DesktopImportedPolicy, failure error) {
+	if runtime.GOOS != "windows" || files == nil || !routerVPNExternalSource.MatchString(source) {
+		return nil, routerVPNExternalFailure
+	}
+	raw, err := files.read("imported-source.json", mobilemultihop.ImportedLaunchInputLimit)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	original, err := mobilemultihop.ParseImportedLaunchInput(string(raw))
+	clear(raw)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	defer func() {
+		if failure != nil {
+			// This constructor has never started a runtime. Rejecting its
+			// immutable source retires only this exact failed parse.
+			_ = original.Close()
+		}
+	}()
+	policy, err := mobilemultihop.NewDesktopImportedPolicyWithMTU(original, session, runtime.GOOS, restoredMTU)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	meta := policy.Metadata()
+	if meta.SourceSHA256 != source || meta.ConfigSHA256 != config {
+		return nil, routerVPNExternalFailure
+	}
+	staged, err := files.read("sing-box.json", 4<<20)
+	if err != nil || string(staged) != policy.Config() {
+		return nil, routerVPNExternalFailure
+	}
+	return policy, nil
+}

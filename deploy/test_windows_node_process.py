@@ -156,6 +156,22 @@ SHARED_TESTS = (
     "TestDesktopNodeRecoveryNativeObserverRequiresCaller",
     "TestDesktopProtectionOffContextGuardsActualPublication",
 )
+IMPORTED_CASES = {
+    "TestDesktopImportedOwnedSourceAndNativeDispatch": ("shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn"),
+    "TestDesktopImportedOwnedDynamicRelayRequiresTypedHost": (),
+    "TestDesktopImportedOwnedCommandRejectsMixedFamilies": ("both-sources", "missing-source", "unbounded-source", "other-directory", "external-command", "duplicate-source", "relative-directory"),
+    "TestDesktopImportedOwnedSuccessionRetainsLatestPredecessor": ("on-connect", "always"),
+    "TestDesktopImportedOwnedRestorationKeepsGraphHostAndLiveMTU": (),
+    "TestDesktopImportedOwnedCancellationAndReplacementKeepCleanup": ("caller", "operation", "entry-source", "final-source", "network", "controller", "native-ready-source", "native-ready-dns"),
+    "TestDesktopImportedOwnedCancelledAdmissionDoesNotWaitForHeldLock": ("application", "workspace"),
+    "TestDesktopImportedOwnedPublicationPreservesReplacement": ("command", "owner", "operation", "entry", "policy-family"),
+    "TestDesktopImportedOwnedDerivedConfigKeepsOriginalEnvelope": ("valid", "legacy-config", "derived-digest", "session", "source-envelope", "equivalent-host", "entry-capture", "edited-file"),
+    "TestDesktopImportedOwnedSpeedLabActualOpenAndProofs": ("success", "wrong-entry", "entry-replaced", "wrong-final", "failed-DNS", "caller-after-create"),
+    "TestDesktopImportedOwnedSpeedLabProtectedPreSuspendAdmission": ("on-connect", "always"),
+    "TestDesktopImportedMTUMergedPolicyControlsAutoRetestAndStatus": ("entry-fixed", "entry-jumbo", "final-fixed", "compatible-auto", "packet-entry-fixed"),
+    "TestDesktopImportedMTUMergedPolicyRefusesChangedOriginalSource": ("envelope", "resealed-source", "resealed-graph", "entry-policy", "final-authority"),
+}
+SHARED_TESTS = (*SHARED_TESTS, *IMPORTED_CASES)
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
     "interpreter", "another-directory", "missing-source", "duplicate-source",
@@ -166,7 +182,7 @@ ARGUMENT_CASES = (
 PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2",
                 "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray")
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
-EXPECTED = (*REQUIRED,
+EXPECTED = (*REQUIRED, *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
             *("TestDesktopNodeRecoveryNativeObserverRequiresCaller/" + case for case in ("missing", "cancelled", "missing-observer")),
             *("TestDesktopProtectionOffContextGuardsActualPublication/" + case for case in ("before-rename", "after-rename")),
             *("TestDesktopWindowsExternalCurrentProofContext/"+case for case in ("current", "owner-lock", "app-lock", "source-lock", "slot-lock", "process-done-lock", "missing-host-observer", "missing-process-observer", "wrong-session", "wrong-slot")), *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
@@ -222,6 +238,15 @@ EXPECTED = (*REQUIRED,
             *("TestPrivateStoreCheckedWriteRetainsOriginalTarget/" + case for case in
               ("unchanged", "same-content", "different-content", "appeared", "removed", "refused")))
 REQUIRED_SOURCES = (
+    "cmd/client/desktop_imported_owned.go", "cmd/client/desktop_imported_owned_test.go",
+    "cmd/client/desktop_imported_mtu_policy.go", "cmd/client/desktop_imported_mtu_policy_test.go",
+    "cmd/client/desktop_imported_mtu_ui.go",
+    "cmd/client/desktop_imported_speedlab_owned_test.go", "cmd/client/multihop_execution.go",
+    "cmd/client/multihop_native_capture.go", "cmd/client/multihop_native_imported.go", "cmd/client/multihop_native_launch.go",
+    "cmd/client/multihop_native_restore.go", "cmd/client/multihop_native_dns_runtime.go", "cmd/client/speed_lab_imported_preparation.go",
+    "cmd/client/desktop_node_owned_observation.go", "internal/mobilemultihop/desktop_imported_policy.go",
+    "internal/mobilemultihop/imported_entry_launch_input.go", "internal/mobilemultihop/imported_entry_desktop_capture.go",
+    "internal/mobilemultihop/desktop_physical_policy.go",
     "cmd/client/desktop_node_toolchain_test.go", "cmd/client/desktop_node_all_toolchain_test.go",
     "cmd/client/desktop_node_all.go", "cmd/client/desktop_node_all_test.go", "cmd/client/desktop_node_all_prospective_test.go",
     "cmd/client/desktop_node_all_restore_prospective_test.go", "cmd/client/speed_lab_fallback.go",
@@ -463,6 +488,10 @@ def check_rejection(name, test, witness, status, output):
 
 
 def mutants():
+    imported_file = "cmd/client/desktop_imported_owned.go"
+    imported = (ROOT / imported_file).read_text(encoding="utf-8")
+    multihop_file = "cmd/client/multihop_native_launch.go"
+    multihop = (ROOT / multihop_file).read_text(encoding="utf-8")
     filename = "cmd/client/desktop_node_process.go"
     original = (ROOT / filename).read_text(encoding="utf-8")
     journal_file = "cmd/client/desktop_node_journal.go"
@@ -516,6 +545,16 @@ def mutants():
                      "basePreference, err := (*logicalBasePreferenceTransaction)(nil), error(nil)\n\t_ = operation")
     late_base = once(late_base, "\tfallbackUsed := used.Base !=", "\tif err := a.persistBasePreference(q.Base); err != nil {\n\t\thttp.Error(w, err.Error(), http.StatusInternalServerError)\n\t\treturn\n\t}\n\tfallbackUsed := used.Base !=")
     return (
+        (multihop_file, "protected-imported-legacy-fallback", "TestDesktopImportedOwnedSourceAndNativeDispatch/shadowsocks",
+         "protected capture silently used a legacy helper",
+         once(multihop, "if sel.Native.importedHost != nil {", "if false && sel.Native.importedHost != nil {")),
+        (imported_file, "imported-derived-config-identity", "TestDesktopImportedOwnedDerivedConfigKeepsOriginalEnvelope/derived-digest",
+         "derived physical config lost its distinct original constructor identity",
+         once(imported, "meta.ConfigSHA256 != launch.configSHA256 ||", "false && meta.ConfigSHA256 != launch.configSHA256 ||")),
+        (owned_file, "imported-constructor-retired-before-child", "TestDesktopImportedOwnedSuccessionRetainsLatestPredecessor/always",
+         "failed close discarded the original constructor or protection attempt",
+         NATIVE.function_mutant(owned, "func (a *app) retireDesktopOwnedNode(",
+                               "owned := launch.ownedNode", "owned := launch.ownedNode\n\t_ = owned.closeImportedConstructor()")),
         (filename, "retired-controller-authority", NATIVE_TESTS[0],
          "retired controller still authorized the native child", alive),
         (filename, "failed-child-join-acknowledgment", SHARED_TESTS[1],

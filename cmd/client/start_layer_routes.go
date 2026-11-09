@@ -90,9 +90,9 @@ func (a *app) startLayerCapabilities(w http.ResponseWriter, r *http.Request) {
 				if launch.external != nil && launch.external.profile.ID == effectiveID {
 					externalOwner = launch
 					effective, effectiveFound = cloneRouterProfile(launch.external.profile), true
-				} else if launch.ownedNode != nil && launch.ownedNode.policy != nil && launch.ownedNode.policy.Validate() == nil {
-					meta := launch.ownedNode.policy.Metadata()
-					if launch.profileID == effectiveID && meta.ProfileID == effectiveID {
+				} else if launch.ownedNode != nil {
+					_, meta, _, err := launch.ownedNode.physicalState()
+					if err == nil && launch.profileID == effectiveID && meta.ProfileID == effectiveID {
 						nodeOwner = launch
 						// Presentation needs only this non-secret projection of the
 						// captured graph. Today's saved preference is not live proof.

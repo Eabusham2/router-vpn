@@ -12,6 +12,7 @@ import (
 
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -29,17 +30,24 @@ type desktopNodeConnectionHost struct {
 }
 
 func (a *app) desktopNodeConnectionHost() *desktopNodeConnectionHost {
+	host, _ := a.desktopNodeConnectionHostContext(context.Background())
+	return host
+}
+
+func (a *app) desktopNodeConnectionHostContext(ctx context.Context) (*desktopNodeConnectionHost, error) {
 	if a == nil {
-		return nil
+		return nil, errors.New("native Router host has no application owner")
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
 	host := a.nodeConnectionHost
 	a.mu.Unlock()
 	if host != nil {
-		return host
+		return host, nil
 	}
 	if runtime.GOOS != "windows" {
-		return nil
+		return nil, nil
 	}
 	return &desktopNodeConnectionHost{
 		capture: captureDesktopOwnedNodePreparation,
@@ -50,7 +58,7 @@ func (a *app) desktopNodeConnectionHost() *desktopNodeConnectionHost {
 		start:             startDesktopOwnedNodeJournalProcess,
 		startExternal:     startDesktopOwnedExternalJournalProcess,
 		externalPreflight: runDesktopExternalPreflightCommand,
-	}
+	}, nil
 }
 
 func (a *app) desktopNodeConnectionSelected(mode string) bool {

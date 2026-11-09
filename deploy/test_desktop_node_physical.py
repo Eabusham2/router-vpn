@@ -117,6 +117,20 @@ HYSTERIA2_SUITES = (
 )
 NETWORK_CONTEXT_TESTS = tuple("TestRouterVPNDesktopNetwork" + name for name in (
     "ReceiptOriginalContext", "ReceiptHeldLifecycle", "ContextClaimRetainsGuard", "ReceiptUnavailable"))
+IMPORTED_COMMAND_ROOT = "TestRouterVPNDesktopNodePhysicalCommandImported"
+IMPORTED_COMMAND_CASES = tuple(IMPORTED_COMMAND_ROOT + "SourceBoundary/" + mode + "/" + layer
+    for mode in ("shadowsocks", "hysteria2", "reality-vision")
+    for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")) + tuple(
+    IMPORTED_COMMAND_ROOT + "SourceBoundary/" + fault for fault in (
+        "missing-source", "ordinary-source", "entry-secret", "final-secret", "unknown-field", "source-hash", "config-hash", "session",
+        "missing-flag", "graph-bytes", "graph-rehash", "restored-mtu", "invalid-mtu")) + tuple(
+    IMPORTED_COMMAND_ROOT + "RestoredMTU/" + fault for fault in ("original", "missing", "different", "source-dropped"))
+IMPORTED_FACTORY_ROOT = "TestRouterVPNNodePhysicalImported"
+IMPORTED_FACTORY_CASES = tuple(IMPORTED_FACTORY_ROOT + "SOCKSRequiresOriginalRoot/" + fault for fault in (
+    "unprepared", "missing-root", "foreign-root", "credential", "source", "repeated", "closed"))
+IMPORTED_BOX_ROOT = "TestRouterVPNDesktopNodePhysicalBoxImported"
+IMPORTED_BOX_CASES = tuple(IMPORTED_BOX_ROOT + "RequiresExactGraph/" + fault for fault in (
+    "entry-credential", "final-credential", "entry-proof", "final-proof", "dns", "mtu", "interface", "source"))
 NETWORK_CONTEXT_LEAVES = tuple(NETWORK_CONTEXT_TESTS[0] + "/" + name for name in (
     "live", "guard-cancel", "interface-cancel", "receipt-cancel", "changed-index"))
 
@@ -800,7 +814,27 @@ def mutants(source, windows):
     readiness = "cmd/sing-box/routervpn_node_command_ready.go"
     selected_dns = "routervpn_desktop_node_box_dns.go"
     node_command = "cmd/sing-box/routervpn_mtu_node.go"
+    imported_socks = "routervpn/desktoppt/node_imported_socks.go"
+    socks_dispatch = "routervpn/desktoppt/external_socks.go"
+    lower_current = "func (o *NodePhysicalOutbound) current(ctx context.Context, network string, destination M.Socksaddr) (*mobiletor.DesktopSocketBroker, error) {"
+    imported_current = "func (o *ExternalSOCKSOutbound) currentImported(ctx context.Context, policy *mobilemultihop.DesktopImportedPolicy) (*mobiletor.DesktopSocketBroker, error) {"
+    entry_current = "func (o *ExternalSOCKSOutbound) current(ctx context.Context) (*mobiletor.DesktopSocketBroker, error) {"
+    contextual_entry_lock = "\tif err := adapter.RouterVPNLockContext(ctx, &o.mu); err != nil {\n\t\treturn nil, err\n\t}\n"
+    ambient_owner = "func() error { if !owner.SocketCurrent() { return net.ErrClosed }; return nil }()"
+    caller_diagnostic = "physical caller used an ambient wait without its original context"
     result = [
+        ("node-lower-ambient-lock", lower, "./routervpn/desktoppt", "TestRouterVPNNodePhysicalCallerContext", "lower",
+         caller_diagnostic, changed_function(lower, lower_current, contextual_entry_lock, "\to.mu.Lock()\n")),
+        ("node-owner-ambient-lock", lower, "./routervpn/desktoppt", "TestRouterVPNNodePhysicalCallerContext", "owner",
+         caller_diagnostic, changed_function(lower, lower_current, "owner.SocketCurrentContext(ctx)", ambient_owner)),
+        ("node-manager-ambient-lock", lower, "./routervpn/desktoppt", "TestRouterVPNNodePhysicalCallerContext", "manager",
+         caller_diagnostic, changed_function(lower, lower_current,
+         "selected, found, err := adapter.RouterVPNOutboundContext(ctx, manager, mobilemultihop.DesktopNodePhysicalTag)",
+         "selected, found := manager.Outbound(mobilemultihop.DesktopNodePhysicalTag)\n\terr = nil")),
+        ("imported-socks-dispatch-ambient-lock", socks_dispatch, "./routervpn/desktoppt", IMPORTED_FACTORY_ROOT + "SOCKSCallerContext", "dispatch",
+         caller_diagnostic, changed_function(socks_dispatch, entry_current, contextual_entry_lock, "\to.mu.Lock()\n")),
+        ("imported-socks-entry-ambient-lock", imported_socks, "./routervpn/desktoppt", IMPORTED_FACTORY_ROOT + "SOCKSCallerContext", "entry",
+         caller_diagnostic, changed_function(imported_socks, imported_current, contextual_entry_lock, "\to.mu.Lock()\n")),
         ("sip003-cover-without-captured-composite", "service/routervpnperformance/service.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeSIP003RetainedProof", "off/owned",
          "SIP003 cover lost independent TCP proof, UDP owner or truthful native boundary", changed_function("service/routervpnperformance/service.go",
          "func (s *Service) resolve(tag string, seen map[string]bool) (adapter.Outbound, string, error) {",
@@ -868,7 +902,7 @@ def mutants(source, windows):
          "private node input preceded actual parent authentication", changed(node_command,
          "\tif journal != nil {\n\t\tif err := journal.authenticate(parent, files); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n", "")),
         ("late-handshake-phase", lower, "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeEncryptedPreReadyHandshake", "awg2-fast",
-         "actual eager encrypted Box startup", changed(lower, "!owner.SocketCurrent()", "!owner.Current()")),
+         "actual eager encrypted Box startup", changed(lower, "owner.SocketCurrentContext(ctx)", "owner.CurrentContext(ctx)")),
         ("uncaptured-peer-tuple", lower, "./routervpn/desktoppt", "TestRouterVPNNodePhysicalHandshakePhaseAndExactPolicy", "",
          "node handshake admitted an uncaptured application or outer tuple", changed(lower, "closed || !allowed || owner == nil", "closed || (!allowed && false) || owner == nil")),
         ("substituted-box-source", box, ".", "TestRouterVPNDesktopNodePhysicalBoxRejectsSubstitutedGraph", "credential",
@@ -895,6 +929,12 @@ def mutants(source, windows):
          "Node DNS proof adopted a failed or replaced native path", changed(selected_dns, "same := owner.inbound == inbound", "same := true")),
     ]
     if windows:
+        result.append(("imported-socks-owner-ambient-lock", imported_socks, "./routervpn/desktoppt", IMPORTED_FACTORY_ROOT + "SOCKSCallerContext", "owner",
+                       caller_diagnostic, changed_function(imported_socks, imported_current, "owner.SocketCurrentContext(ctx)", ambient_owner)))
+        result.append(("imported-socks-manager-ambient-lock", imported_socks, "./routervpn/desktoppt", IMPORTED_FACTORY_ROOT + "SOCKSCallerContext", "manager",
+                       caller_diagnostic, changed_function(imported_socks, imported_current,
+                       "selected, found, err := adapter.RouterVPNOutboundContext(ctx, manager, o.Tag())",
+                       "selected, found, err := func() (adapter.Outbound, bool, error) { selected, found := manager.Outbound(o.Tag()); return selected, found, nil }()")))
         factory = "routervpn/desktoppt/node_physical_windows.go"
         result.append(("changed-prepared-baseline", factory, "./routervpn/desktoppt", "TestRouterVPNNodePhysicalWindowsAdmissionRejectsChangedOwners", "baseline-changed",
                        "failed node handoff admitted eager sockets or discarded partial source", changed(factory, "currentBaseline != baseline", "false && currentBaseline != baseline")))
@@ -1222,14 +1262,25 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         ("ss-packet", "./protocol/shadowsocks", "^TestRouterVPNShadowsocks",
          ("TestRouterVPNShadowsocksCompleteCiphertextPacket", "TestRouterVPNShadowsocksPacketWrongKey")),
         ("command", "./cmd/sing-box", "^TestRouterVPNDesktopNodePhysicalCommand",
-         tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "Hysteria2CompleteStartSource", "XrayCompleteStartSource", "NaiveCompleteStartSource", "CompositeCompleteStartSource", "RestoredMTU", "TransferInput", "RetirementReceipt", "ReadyRequiresFreshDNS", "ReadyRequiresCapturedCover", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionExactStop", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "JournalBeforePrivateInputs", "PublicRequiresJournal"))),
+         tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "Hysteria2CompleteStartSource", "XrayCompleteStartSource", "NaiveCompleteStartSource", "CompositeCompleteStartSource", "RestoredMTU", "TransferInput", "RetirementReceipt", "ReadyRequiresFreshDNS", "ReadyRequiresCapturedCover", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionExactStop", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "JournalBeforePrivateInputs", "PublicRequiresJournal")) +
+         tuple(IMPORTED_COMMAND_ROOT + name for name in ("SourceBoundary", "RestoredMTU", "JournalBeforePrivateInputs", "ExclusiveFamily")) +
+         tuple(IMPORTED_COMMAND_ROOT + "ExclusiveFamily/" + fault for fault in ("both-flags", "missing-journal", "public-missing-journal")) +
+         (IMPORTED_COMMAND_CASES if windows else ())),
         ("factory", "./routervpn/desktoppt", "^TestRouterVPNNodePhysical" if windows else "^TestRouterVPNNode(Physical|LinuxLifecycle)",
          tuple("TestRouterVPNNodePhysical" + name for name in ("SeparateRegistriesAndUnpreparedRejection", "HandshakePhaseAndExactPolicy", "FactoryCancellationJoinsPartialOwner", "RetirementKeepsExactJoinedSource", "AdmissionRetainsExactPolicy", "AdmissionCapturesExactPredecessor", "JournalAdmissionCapturesDurableBarrier")) +
-         (tuple("TestRouterVPNNodePhysicalWindows" + name for name in ("CapturesPreparedOwner", "AdmissionRejectsChangedOwners", "CloseJoinsAdmission")) if windows else
+         (IMPORTED_FACTORY_ROOT + "StaticAndCapturedAdmission", IMPORTED_FACTORY_ROOT + "SOCKSCallerContext", "TestRouterVPNNodePhysicalCallerContext") +
+         tuple("TestRouterVPNNodePhysicalCallerContext/" + held for held in ("lower", "owner", "manager")) +
+         tuple(IMPORTED_FACTORY_ROOT + "SOCKSCallerContext/" + held for held in ("dispatch", "entry")) +
+         (tuple("TestRouterVPNNodePhysicalWindows" + name for name in ("CapturesPreparedOwner", "AdmissionRejectsChangedOwners", "CloseJoinsAdmission", "ImportedCapturesOriginalPolicy")) +
+          tuple(IMPORTED_FACTORY_ROOT + name for name in ("SOCKSRequiresOriginalRoot", "SOCKSOwnsEachAssociation", "SOCKSCancellationJoinsAuthentication")) + IMPORTED_FACTORY_CASES +
+          tuple(IMPORTED_FACTORY_ROOT + "SOCKSCallerContext/" + held for held in ("owner", "manager", "lower")) if windows else
           tuple("TestRouterVPNNodePhysicalUnix" + name for name in ("CapturesPolicyAndRetainsLateOwner", "RejectsUncapturedSourceBeforeConstructor", "CloseJoinsLateFactoryAndRetriesSource")) +
           tuple("TestRouterVPNNodeLinuxLifecycle" + name for name in ("RejectsMissingOrReusedCapability", "BracketsAdmissionAndRetainsSource", "RetirementRequiresSuccessfulJoinAndSameRecord", "JoinsCancelledLateConstructor", "RetainedCapabilityOwnsDisconnectAndTeardown", "KeepsPartialRetentionUntilSourceJoin", "CreatesBaselineBeforeGuardian")))),
         ("box", ".", "^TestRouterVPNDesktop(NodePhysical|LinuxNodeCover)" if platform.system() == "Linux" else "^TestRouterVPNDesktopNodePhysical",
-         tuple("TestRouterVPNDesktopNodePhysicalBox" + name for name in ("RejectsSubstitutedGraph", "RequiresPreparedOwner", "RetainsMTUAndExactRollback", "RestoresCapturedMTU")) +
+         tuple("TestRouterVPNDesktopNodePhysicalBox" + name for name in ("RejectsSubstitutedGraph", "RequiresPreparedOwner", "RetainsMTUAndExactRollback", "RestoresCapturedMTU", "MTUOriginalCleanup", "MTULocksHonorCaller", "MTURetireFailureInvalidatesOwner")) +
+         tuple("TestRouterVPNDesktopNodePhysicalBoxMTUOriginalCleanup/" + leaf for leaf in ("false", "true")) +
+         tuple("TestRouterVPNDesktopNodePhysicalBoxMTULocksHonorCaller/" + leaf for leaf in ("physical-owner", "native-reader")) +
+         (tuple(IMPORTED_BOX_ROOT + name for name in ("RequiresExactGraph", "RetainsOnePhysicalOwner")) + IMPORTED_BOX_CASES if windows else ()) +
          ("TestRouterVPNDesktopNodePhysicalDNSCapturedOwner", "TestRouterVPNDesktopNodePhysicalDNSRetirementCancelsQuery") +
          (("TestRouterVPNDesktopLinuxNodeCoverRejectsIncompleteNativeOwner", "TestRouterVPNDesktopLinuxNodeCoverCannotAdoptReplacementOrEmptySet") if platform.system() == "Linux" else ())),
         ("encrypted", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeEncrypted",

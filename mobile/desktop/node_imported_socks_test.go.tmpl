@@ -1,0 +1,426 @@
+//go:build linux || windows || darwin
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/netip"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// Keep both original constructor sources. The actual native association is
+// tested below; this helper never projects a paired final into a NodeProfile.
+func nodeImportedSOCKSPolicy(t *testing.T, address netip.AddrPort) *mobilemultihop.DesktopImportedPolicy {
+	t.Helper()
+	final, err := nodePhysicalPolicyFixture(t, "windows").OriginalProfile().LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var input struct {
+		Mode    string `json:"mode"`
+		Files   string `json:"files"`
+		Profile string `json:"profile_json"`
+		Start   string `json:"start"`
+		DNS     string `json:"dns_bootstrap"`
+	}
+	if json.Unmarshal([]byte(final), &input) != nil || input.Mode != "wg" {
+		t.Fatal("imported SOCKS fixture lost original paired final")
+	}
+	entry, err := json.Marshal(map[string]any{
+		"inbounds":  []any{map[string]any{"type": "tun", "tag": "tun-in", "address": []string{"172.29.93.1/30", "fd29:93::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}},
+		"outbounds": []any{map[string]any{"type": "socks", "tag": "custom-exit", "version": "5", "server": address.Addr().String(), "server_port": address.Port(), "username": "captured-user", "password": "captured-password"}},
+		"route":     map[string]any{"final": "custom-exit", "auto_detect_interface": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture, err := json.Marshal(map[string]any{"schema": 1, "exit_id": "captured-imported-entry", "protocol": "socks5", "expected_public_ip": "203.0.113.88", "profile": map[string]any{
+		"id": "captured-imported-entry", "node_kind": "external", "external": map[string]any{"protocol": "socks5", "expected_public_ip": "203.0.113.88", "socks5": map[string]any{
+			"host": address.Addr().String(), "port": address.Port(), "username": "captured-user", "password": "captured-password"}},
+		"dns_mode": "rescue", "mtu_policy": "fixed", "manual_mtu": 1280, "home_lan_access": false, "ipv6_mode": "off"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := mobilemultihop.NewImportedEntry(string(entry), string(capture), input.Mode, input.Files, input.Profile, input.Start, input.DNS)
+	if err != nil {
+		t.Fatal("original imported SOCKS and paired final did not compile", err)
+	}
+	t.Cleanup(func() { _ = original.Close() })
+	policy, err := mobilemultihop.NewDesktopImportedPolicy(original, strings.Repeat("b", 32), "windows")
+	if err != nil || !policy.Metadata().SOCKSUDPAssociationRequired {
+		t.Fatal("imported packet path lost its exact dynamic SOCKS boundary", err)
+	}
+	return policy
+}
+
+func TestRouterVPNNodePhysicalImportedStaticAndCapturedAdmission(t *testing.T) {
+	address := netip.MustParseAddrPort("11.77.0.2:1080")
+	policy := nodeImportedSOCKSPolicy(t, address)
+	_, meta, capture, err := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, err := nodePhysicalDestinations(policy, capture)
+	if err != nil || len(allowed) != 1 || !allowed[externalPhysicalDestination{"tcp", address}] || allowed[externalPhysicalDestination{"udp", address}] || capture.SelectedDNS.Physical {
+		t.Fatal("imported static projection admitted a relay or final DNS outside its path", err)
+	}
+	if _, err := nodePhysicalDestinations(nodePhysicalPolicyFixture(t, "windows"), capture); err == nil {
+		t.Fatal("ordinary Node policy borrowed an imported dynamic relay")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	owned, err := WithNodePhysicalAdmission(ctx, policy, func(context.Context, NodePhysicalPrepared) error { calls++; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared := NodePhysicalPrepared{Capture: mobiletor.DesktopSocketCapture{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, NetworkID: strings.Repeat("a", 32)}, Policy: meta.KillSwitchPolicy, BaselineSHA256: strings.Repeat("c", 64)}
+	if err := CompleteNodePhysicalAdmission(owned, policy, prepared); err != nil || calls != 1 {
+		t.Fatal("original imported native baseline was not admitted", err)
+	}
+	identical := nodeImportedSOCKSPolicy(t, address)
+	if identical.Config() != policy.Config() {
+		t.Fatal("equal-owner negative fixture changed its source")
+	}
+	if err := CompleteNodePhysicalAdmission(owned, identical, prepared); err == nil || calls != 1 {
+		t.Fatal("another imported constructor borrowed native admission")
+	}
+	changed := prepared
+	changed.Capture.SourceSHA256 = policy.Metadata().OriginalSourceSHA256
+	if err := CompleteNodePhysicalAdmission(owned, policy, changed); err == nil || calls != 1 {
+		t.Fatal("original constructor hash replaced derived native source")
+	}
+	cancel()
+	if err := CompleteNodePhysicalAdmission(owned, policy, prepared); err == nil || calls != 1 {
+		t.Fatal("cancelled imported owner retained native admission")
+	}
+}
+
+func TestRouterVPNNodePhysicalImportedSOCKSCallerContext(t *testing.T) {
+	for _, held := range []string{"dispatch", "entry"} {
+		t.Run(held, func(t *testing.T) {
+			// Cancellation before admission is portable. No constructor or
+			// source permission is fabricated for an unsupported target.
+			root := &ExternalSOCKSOutbound{ctx: context.Background()}
+			nodePhysicalCancelHeldLock(t, &root.mu, func(ctx context.Context) error {
+				var broker *mobiletor.DesktopSocketBroker
+				var err error
+				if held == "dispatch" {
+					broker, err = root.current(ctx)
+				} else {
+					broker, err = root.currentImported(ctx, nil)
+				}
+				if broker != nil {
+					return errors.New("unadmitted imported entry published a socket capability")
+				}
+				return err
+			})
+		})
+	}
+	if runtime.GOOS != "windows" {
+		return
+	}
+	for _, held := range []string{"owner", "manager", "lower"} {
+		t.Run(held, func(t *testing.T) {
+			f := newNodeImportedSOCKSFixture(t, netip.MustParseAddrPort("11.77.0.2:1080"), netip.AddrPort{})
+			f.activate(t)
+			if broker, err := f.root.current(context.Background()); err != nil || broker != f.network.broker {
+				t.Fatal("original imported fixture was not usable before contention", err)
+			}
+			mutex := &f.network.mu
+			if held == "manager" {
+				mutex = &f.manager.mu
+			} else if held == "lower" {
+				mutex = &f.lower.mu
+			}
+			nodePhysicalCancelHeldLock(t, mutex, func(ctx context.Context) error {
+				broker, err := f.root.current(ctx)
+				if broker != nil {
+					return errors.New("cancelled imported entry published its original broker")
+				}
+				return err
+			})
+			if broker, err := f.root.current(context.Background()); err != nil || broker != f.network.broker || !f.network.Current() || f.source.closed.Load() {
+				t.Fatal("one cancelled imported observation retired its original path", err)
+			}
+		})
+	}
+}
+
+type nodeImportedSOCKSFixture struct {
+	policy  *mobilemultihop.DesktopImportedPolicy
+	native  *desktopPTFixture
+	root    *ExternalSOCKSOutbound
+	manager *externalSOCKSManager
+	network *NodeNetworkOwner
+	lower   *NodePhysicalOutbound
+	source  *physicalFactorySource
+	kernel  *externalSOCKSKernelFixture
+}
+
+func newNodeImportedSOCKSFixture(t *testing.T, control, relay netip.AddrPort) *nodeImportedSOCKSFixture {
+	t.Helper()
+	f := &nodeImportedSOCKSFixture{policy: nodeImportedSOCKSPolicy(t, control), native: newDesktopPTFixture(t)}
+	meta := f.policy.Metadata()
+	options := NodeCaptureOptions{meta.SessionID, meta.SourceSHA256}
+	raw, err := NewNodeNetworkOwner(f.native.ctx, nil, mobilemultihop.DesktopNodeNetworkTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.network = raw.(*NodeNetworkOwner)
+	lower, err := NewNodePhysicalOutbound(f.native.ctx, nil, nil, mobilemultihop.DesktopNodePhysicalTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.lower = lower.(*NodePhysicalOutbound)
+	var graph struct {
+		Outbounds []json.RawMessage `json:"outbounds"`
+	}
+	if json.Unmarshal([]byte(f.policy.Config()), &graph) != nil {
+		t.Fatal("imported native fixture lost graph")
+	}
+	var socksOptions ExternalSOCKSOptions
+	matched := 0
+	for _, value := range graph.Outbounds {
+		var row struct {
+			Tag string `json:"tag"`
+		}
+		if json.Unmarshal(value, &row) != nil {
+			t.Fatal("imported native fixture lost root")
+		}
+		if row.Tag == meta.EntryTag {
+			matched++
+			if json.Unmarshal(value, &socksOptions) != nil {
+				t.Fatal("imported native fixture lost root options")
+			}
+		}
+	}
+	if matched != 1 {
+		t.Fatal("imported native fixture duplicated entry")
+	}
+	root, err := NewImportedSOCKSOutbound(f.native.ctx, nil, nil, meta.EntryTag, socksOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.root = root.(*ExternalSOCKSOutbound)
+	f.manager = &externalSOCKSManager{objects: map[string]adapter.Outbound{f.root.Tag(): f.root, f.lower.Tag(): f.lower}}
+	service.MustRegister[adapter.OutboundManager](f.native.ctx, f.manager)
+	f.source = &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+	f.kernel = &externalSOCKSKernelFixture{desktopPhysicalPolicyFixture: f.source.desktopPhysicalPolicyFixture, address: control.Addr(), control: control, relay: relay}
+	t.Cleanup(func() {
+		if err := f.root.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := f.network.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := f.lower.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return f
+}
+
+func (f *nodeImportedSOCKSFixture) prepare() error {
+	return f.network.PrepareNodePhysicalBroker(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.kernel, current, func(observe context.Context) error {
+			return f.network.MatchesContext(observe, capture.SessionID, capture.SourceSHA256)
+		})
+		return broker, f.source, err
+	})
+}
+
+func (f *nodeImportedSOCKSFixture) activate(t *testing.T) {
+	t.Helper()
+	if _, err := f.root.current(context.Background()); err == nil {
+		t.Fatal("imported entry bypassed native preparation")
+	}
+	if err := f.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+		if err := f.network.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+		if f.network.Current() {
+			t.Fatal("imported handshake phase fabricated full native readiness")
+		}
+	}
+	if _, err := f.network.Activate(f.policy); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNNodePhysicalImportedSOCKSRequiresOriginalRoot(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		if root, err := NewImportedSOCKSOutbound(context.Background(), nil, nil, "entry-wg", ExternalSOCKSOptions{}); err == nil || root != nil {
+			t.Fatal("unsupported host adopted imported native association")
+		}
+		return
+	}
+	for _, fault := range []string{"unprepared", "missing-root", "foreign-root", "credential", "source", "repeated", "closed"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newNodeImportedSOCKSFixture(t, netip.MustParseAddrPort("11.77.0.2:1080"), netip.AddrPort{})
+			switch fault {
+			case "missing-root":
+				f.manager.replace(f.root.Tag(), nil)
+			case "foreign-root":
+				f.manager.replace(f.root.Tag(), f.lower)
+			case "credential":
+				f.root.options.Password = "foreign-private-password"
+			case "source":
+				f.root.options.SourceSHA256 = strings.Repeat("f", 64)
+			case "repeated":
+				if err := f.prepare(); err != nil {
+					t.Fatal(err)
+				}
+			case "closed":
+				if err := f.root.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if fault != "unprepared" && f.prepare() == nil {
+				t.Fatal("changed imported root acquired native preparation", fault)
+			}
+			if _, err := f.root.current(context.Background()); err == nil || f.network.broker != nil {
+				t.Fatal("rejected imported root acquired socket authority")
+			}
+		})
+	}
+}
+
+// Real authenticated SOCKS framing and actual TCP/UDP sockets run here. Only
+// privileged per-socket OS grants are modeled. The paired final and selected
+// DNS still require the independent parent proofs, never these fixture bytes.
+func TestRouterVPNNodePhysicalImportedSOCKSOwnsEachAssociation(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	peer := newExternalSOCKSPeer(t, nil)
+	f := newNodeImportedSOCKSFixture(t, netip.MustParseAddrPort(peer.tcp.Addr().String()), peer.udp.LocalAddr().(*net.UDPAddr).AddrPort())
+	f.activate(t)
+	packets := make([]net.PacketConn, 2)
+	for index := range packets {
+		packet, err := f.root.ListenPacket(context.Background(), M.ParseSocksaddr("203.0.113.53:5353"))
+		if err != nil {
+			t.Fatal("imported native client lost authenticated relay", err)
+		}
+		packets[index] = packet
+		t.Cleanup(func() { _ = packet.Close() })
+		externalSOCKSExchange(t, packet, "captured-imported-association")
+	}
+	if packets[0].LocalAddr().String() == packets[1].LocalAddr().String() {
+		t.Fatal("imported operations shared one relay socket")
+	}
+	relay := M.SocksaddrFromNet(peer.udp.LocalAddr())
+	if _, err := f.lower.current(context.Background(), "udp", relay); err == nil {
+		t.Fatal("negotiated imported relay became a static physical permission")
+	}
+	for _, packet := range packets {
+		operation := packet.(*externalSOCKSPacket).operation
+		if _, err := operation.DialContext(operation.ctx, "udp", relay); err == nil {
+			t.Fatal("imported operation reused its authenticated UDP capability")
+		}
+		if _, err := operation.DialContext(context.Background(), "tcp", f.root.control); err == nil {
+			t.Fatal("another caller borrowed imported control authority")
+		}
+	}
+	f.source.mu.Lock()
+	grants := len(f.source.grants)
+	f.source.mu.Unlock()
+	if grants != 4 {
+		t.Fatal("imported association omitted a distinct original control or relay grant", grants)
+	}
+	if err := packets[0].Close(); err != nil {
+		t.Fatal(err)
+	}
+	externalSOCKSExchange(t, packets[1], "sibling-imported-association-remains-owned")
+	f.source.mu.Lock()
+	grants = len(f.source.grants)
+	f.source.mu.Unlock()
+	if grants != 2 {
+		t.Fatal("retiring imported operation changed its sibling", grants)
+	}
+	f.manager.replace(f.root.Tag(), f.lower)
+	if _, err := f.root.ListenPacket(context.Background(), M.ParseSocksaddr("203.0.113.53:5353")); err == nil {
+		t.Fatal("replaced imported root admitted a new association")
+	}
+	if err := packets[1].Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.source.mu.Lock()
+	grants = len(f.source.grants)
+	f.source.mu.Unlock()
+	if grants != 0 {
+		t.Fatal("imported replacement retained old per-operation grants", grants)
+	}
+}
+
+func TestRouterVPNNodePhysicalImportedSOCKSCancellationJoinsAuthentication(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	release := make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	peer := newExternalSOCKSPeer(t, release)
+	f := newNodeImportedSOCKSFixture(t, netip.MustParseAddrPort(peer.tcp.Addr().String()), peer.udp.LocalAddr().(*net.UDPAddr).AddrPort())
+	f.activate(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	joined := make(chan error, 1)
+	go func() {
+		packet, err := f.root.ListenPacket(ctx, M.ParseSocksaddr("203.0.113.53:5353"))
+		if packet != nil {
+			_ = packet.Close()
+		}
+		joined <- err
+	}()
+	select {
+	case <-peer.seen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("imported client did not enter actual SOCKS authentication")
+	}
+	cancel()
+	select {
+	case err := <-joined:
+		if err == nil {
+			t.Fatal("cancelled imported authentication returned a relay")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("imported authentication did not join cancellation")
+	}
+	f.source.mu.Lock()
+	grants := len(f.source.grants)
+	f.source.mu.Unlock()
+	f.root.mu.Lock()
+	operations := len(f.root.operations)
+	f.root.mu.Unlock()
+	if grants != 0 || operations != 0 || !f.network.Current() {
+		t.Fatal("cancelled imported operation leaked grants or closed its original healthy owner", grants, operations)
+	}
+	once.Do(func() { close(release) })
+	packet, err := f.root.ListenPacket(context.Background(), M.ParseSocksaddr("203.0.113.53:5353"))
+	if err != nil {
+		t.Fatal("cancelled operation retired a later independent imported association", err)
+	}
+	defer packet.Close()
+	externalSOCKSExchange(t, packet, "new-imported-operation-after-cancellation")
+	f.network.Cancel()
+	if _, err := f.root.current(context.Background()); !errors.Is(err, net.ErrClosed) {
+		t.Fatal("real native owner cancellation retained an imported relay", err)
+	}
+}

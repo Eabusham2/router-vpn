@@ -628,6 +628,8 @@ class WindowsReleaseGateTests(unittest.TestCase):
             'TestDesktopImportedMTUHistoricalWriteKeepsOriginalFinalCaller',
             'TestDesktopImportedMTUCheckedRetirementReleasesOnlyItsRemovedWorkspace',
             'TestDesktopImportedMTUNewRequestCannotBorrowPreviousCommitDuringAdmission',
+            'TestDesktopImportedMTUMergedPolicyControlsAutoRetestAndStatus',
+            'TestDesktopImportedMTUMergedPolicyRefusesChangedOriginalSource',
             'TestDesktopTorComparisonRequiresStoppedReceiptAndActualProcessJoin',
             'TestDesktopTorPublicCompareHTTPCancellationDrainsOwnedTrial',
             'TestDesktopTorOrdinarySpeedLabRetainsCompiledSourceAndRestoresAfterCancel',

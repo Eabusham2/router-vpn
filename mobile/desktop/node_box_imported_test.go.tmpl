@@ -1,0 +1,182 @@
+package box
+
+import (
+	"context"
+	"encoding/json"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func desktopImportedBoxPolicy(t *testing.T) *mobilemultihop.DesktopImportedPolicy {
+	t.Helper()
+	final := newDesktopNodeBoxFixture(t, nil).policy.OriginalProfile()
+	launch, err := final.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var input struct {
+		Mode    string `json:"mode"`
+		Files   string `json:"files"`
+		Profile string `json:"profile_json"`
+		Start   string `json:"start"`
+		DNS     string `json:"dns_bootstrap"`
+	}
+	if json.Unmarshal([]byte(launch), &input) != nil || input.Mode != "shadowsocks" {
+		t.Fatal("imported Box lost original final")
+	}
+	const entry = `{"inbounds":[{"type":"tun","tag":"tun-in","address":["172.29.93.1/30","fd29:93::1/126"],"mtu":1280,"auto_route":true,"strict_route":true,"stack":"system"}],"outbounds":[{"type":"socks","tag":"custom-exit","version":"5","server":"198.51.100.20","server_port":1080,"username":"captured-entry-user","password":"captured-entry-password"}],"route":{"final":"custom-exit","auto_detect_interface":true}}`
+	const capture = `{"schema":1,"exit_id":"captured-entry","protocol":"socks5","expected_public_ip":"203.0.113.88","profile":{"id":"captured-entry","node_kind":"external","external":{"protocol":"socks5","expected_public_ip":"203.0.113.88","socks5":{"host":"198.51.100.20","port":1080,"username":"captured-entry-user","password":"captured-entry-password"}},"dns_mode":"rescue","mtu_policy":"auto","home_lan_access":false,"ipv6_mode":"off"}}`
+	original, err := mobilemultihop.NewImportedEntry(entry, capture, input.Mode, input.Files, input.Profile, input.Start, input.DNS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = original.Close() })
+	policy, err := mobilemultihop.NewDesktopImportedPolicy(original, desktopTorBoxSession, "windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
+
+func desktopImportedBoxFixture(t *testing.T, policy *mobilemultihop.DesktopImportedPolicy, change func(map[string]any)) *desktopNodeBoxFixture {
+	t.Helper()
+	return newDesktopNodeBoxFixture(t, func(graph map[string]any) {
+		for key := range graph {
+			delete(graph, key)
+		}
+		var captured map[string]any
+		if json.Unmarshal([]byte(policy.Config()), &captured) != nil {
+			t.Fatal("imported Box lost exact derived graph")
+		}
+		for key, value := range captured {
+			graph[key] = value
+		}
+		if change != nil {
+			change(graph)
+		}
+	})
+}
+
+func TestRouterVPNDesktopNodePhysicalBoxImportedRequiresExactGraph(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	for _, fault := range []string{"entry-credential", "final-credential", "entry-proof", "final-proof", "dns", "mtu", "interface", "source"} {
+		t.Run(fault, func(t *testing.T) {
+			policy := desktopImportedBoxPolicy(t)
+			f := desktopImportedBoxFixture(t, policy, func(graph map[string]any) {
+				switch fault {
+				case "entry-credential", "final-credential":
+					tag := "entry-wg"
+					if fault == "final-credential" {
+						tag = mobilemultihop.LocalTag
+					}
+					for _, raw := range graph["outbounds"].([]any) {
+						node := raw.(map[string]any)
+						if node["tag"] == tag {
+							password := node["password"].(string)
+							if fault == "final-credential" {
+								node["password"] = strings.Replace(password, password[:1], "Z", 1)
+							} else {
+								node["password"] = "changed-private-entry"
+							}
+						}
+					}
+				case "entry-proof", "final-proof":
+					index := 0
+					if fault == "final-proof" {
+						index = 1
+					}
+					rules := graph["route"].(map[string]any)["rules"].([]any)
+					rules[index].(map[string]any)["outbound"] = mobilemultihop.LocalTag
+				case "dns":
+					graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["server"] = "192.168.50.134"
+				case "mtu":
+					graph["inbounds"].([]any)[0].(map[string]any)["mtu"] = float64(1392)
+				case "interface":
+					graph["inbounds"].([]any)[0].(map[string]any)["interface_name"] = "foreign-imported-tun"
+				case "source":
+					graph["services"].([]any)[0].(map[string]any)["source_sha256"] = strings.Repeat("f", 64)
+				}
+			})
+			if _, _, err := f.box.routerVPNDesktopNodePhysical(policy); err == nil {
+				t.Fatal("changed imported Box adopted native factory", fault)
+			}
+			if owner, err := f.box.RouterVPNDesktopImportedActivatePhysical(policy); err == nil || owner != nil {
+				t.Fatal("changed imported Box acquired original TUN", fault)
+			}
+			if f.tun.ready || f.tun.claimed || f.network.SocketCurrent() {
+				t.Fatal("rejected imported graph entered native startup")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalBoxImportedRetainsOnePhysicalOwner(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	policy := desktopImportedBoxPolicy(t)
+	f := desktopImportedBoxFixture(t, policy, nil)
+	if owner, err := f.box.RouterVPNDesktopImportedActivatePhysical(policy); err == nil || owner != nil {
+		t.Fatal("unprepared imported graph acquired native TUN")
+	}
+	if _, _, err := f.box.routerVPNDesktopNodePhysical(policy); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.network.PrepareNodePhysicalBroker(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		if f.tun.ready || f.tun.claimed || f.network.SocketCurrent() {
+			t.Fatal("imported factory entered after native sockets")
+		}
+		f.source.capture = capture
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.source, current, func(observe context.Context) error {
+			return f.network.MatchesContext(observe, capture.SessionID, capture.SourceSHA256)
+		})
+		return broker, f.source, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("actual imported native managers failed startup", err)
+	}
+	if f.network.Current() || f.tun.claimed || !f.network.SocketCurrent() {
+		t.Fatal("imported startup fabricated complete path readiness")
+	}
+	input, err := policy.OriginalController().ImportedLaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := mobilemultihop.ParseImportedLaunchInput(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replayed.Close()
+	foreign, err := mobilemultihop.NewDesktopImportedPolicy(replayed, desktopTorBoxSession, "windows")
+	if err != nil || foreign.Config() != policy.Config() {
+		t.Fatal("equal imported policy negative lost exact source", err)
+	}
+	if owner, err := f.box.RouterVPNDesktopImportedActivatePhysical(foreign); err == nil || owner != nil {
+		t.Fatal("equal recompiled policy borrowed original prepared owner")
+	}
+	owner, err := f.box.RouterVPNDesktopImportedActivatePhysical(policy)
+	if err != nil || owner == nil || !owner.Current() || !f.tun.claimed || f.source.binds != 1 {
+		t.Fatal("actual imported graph lost its one retained physical owner", err)
+	}
+	name, index, mtu, err := owner.ClaimTUNContext(context.Background(), owner.generationCurrentContext)
+	if err != nil || name != "router-vpn" || index != 771 || mtu != 1280 {
+		t.Fatal("imported physical owner lost actual original TUN", err)
+	}
+	for _, tag := range []string{mobilemultihop.DesktopImportedEntryProofTag, mobilemultihop.DesktopImportedExitProofTag} {
+		if inbound, found := f.box.inbound.Get(tag); !found || inbound.Type() != "mixed" {
+			t.Fatal("actual imported graph lost an independent native proof listener", tag)
+		}
+	}
+	owner.Cancel()
+	if owner.Current() || f.network.SocketCurrent() {
+		t.Fatal("retired imported path kept native ownership")
+	}
+}

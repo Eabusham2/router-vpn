@@ -11,6 +11,14 @@ func nativeMultihopRuntimeDirFromCommand(cmd *exec.Cmd) (string, error) {
 	if cmd == nil || len(cmd.Args) < 2 {
 		return "", errors.New("native multihop command has no runtime arguments")
 	}
+	if cmd.Args[1] == "routervpn-node" {
+		// The typed child descriptor already owns this directory. An edited
+		// --runtime-dir must not authenticate itself as a new DNS workspace.
+		if _, err := validateDesktopNodeProcessArguments(cmd.Args[1:], cmd.Dir); err != nil {
+			return "", err
+		}
+		return cmd.Dir, nil
+	}
 	for i := 0; i+1 < len(cmd.Args); i++ {
 		if strings.EqualFold(strings.TrimSpace(cmd.Args[i]), "-RuntimeDir") {
 			dir := strings.TrimSpace(cmd.Args[i+1])

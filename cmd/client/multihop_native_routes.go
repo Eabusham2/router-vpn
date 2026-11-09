@@ -262,12 +262,16 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		http.Error(w, "multihop network or request changed before launch", http.StatusConflict)
 		return
 	}
+	if err := a.guardDesktopOwnedNodeTransition(native); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 
 	// Preserve any existing graph until its owning runtime has actually stopped.
 	// Failed teardown must keep exact entry/exit identity available for recovery.
 	tracker := sessionTrackerFor(a)
 	tracker.declareRequest("multihop", sel.Base)
-	if err = a.stopMode(); err != nil {
+	if err = a.stopModeWithIntent(native.ownedNode != nil); err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -288,28 +292,40 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if err = cmd.Start(); err != nil {
+	protected := native.ownedNode != nil
+	if protected {
 		a.mu.Lock()
-		a.state.Phase = "failed"
-		a.state.LastError = err.Error()
-		a.state.Connected = false
+		err = a.publishDesktopImportedMultihopStartLocked(operation, native, sel)
+		a.mu.Unlock()
+	} else {
+		err = cmd.Start()
+	}
+	if err != nil {
+		a.mu.Lock()
+		if !protected || a.connectionContext == operation && a.cmd == nil {
+			a.state.Phase = "failed"
+			a.state.LastError = err.Error()
+			a.state.Connected = false
+		}
 		a.mu.Unlock()
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	desktopNodeOwners.Store(a, native)
-	a.mu.Lock()
-	a.cmd = cmd
-	a.state.Mode = "multihop"
-	a.state.LogicalMode = "multihop"
-	a.state.RuntimeMode = sel.ExitMode
-	a.state.Base = sel.Base
-	a.state.RouterID = sel.Exit.ID
-	a.state.Connected = false
-	a.state.Phase = "multihop:proving-exit"
-	a.state.LastError = ""
-	a.mu.Unlock()
+	if !protected {
+		desktopNodeOwners.Store(a, native)
+		a.mu.Lock()
+		a.cmd = cmd
+		a.state.Mode = "multihop"
+		a.state.LogicalMode = "multihop"
+		a.state.RuntimeMode = sel.ExitMode
+		a.state.Base = sel.Base
+		a.state.RouterID = sel.Exit.ID
+		a.state.Connected = false
+		a.state.Phase = "multihop:proving-exit"
+		a.state.LastError = ""
+		a.mu.Unlock()
+	}
 	setActiveMultihopGraph(a, sel)
 	if err = bindNativeMultihopRuntime(a, native, sel, network); err != nil {
 		message, _ := a.multihopStopFailure(cmd, err.Error())
@@ -326,6 +342,14 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		}
 		http.Error(w, message, status)
 		return
+	}
+	if protected {
+		if err := startDesktopOwnedImportedLaunch(operation, operation, a, native); err != nil {
+			message, _ := a.multihopStopFailure(cmd, err.Error())
+			sessionTrackerFor(a).markRequestFailure(message)
+			http.Error(w, message, http.StatusInternalServerError)
+			return
+		}
 	}
 	originalRuntime, _ := nativeMultihopOwners.Load(a)
 	originalGraph, originalGraphOK := getActiveMultihopGraph(a)
@@ -424,6 +448,9 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	a.startRouterNodeAutomaticMTU()
+	if protected {
+		a.monitorDesktopOwnedNodeRuntime(native)
+	}
 	w.Header().Set("content-type", "application/json")
 	route := "client TUN -> captured exit proxy -> captured entry endpoint -> exit node -> Internet"
 	if sel.ExitMode == "wg" {

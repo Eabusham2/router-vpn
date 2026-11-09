@@ -173,12 +173,13 @@ def retained_native_multihop_platform(platform: str) -> bool:
                         "compileDesktopExecutionConfig(data, *descriptor, sel)",
                         'inbound["auto_route"] != true || inbound["strict_route"] != true',
                         "preflightRetainedNativeMultihop(ctx, binary, launch, runDesktopExternalPreflightCommand)",
-                        "stageOwnedNativeMultihopCommand(a, sel, launch)",
-                        "stageDesktopNodeLaunch(a, launch)",
+                        "stageOwnedNativeMultihopCommandContext(ctx, a, sel, launch)",
+                        "stageDesktopNodeLaunchContext(ctx, a, launch)",
                         "nativeNodeMTUEnvironment(nativeMultihopEnvironment(launch.root, sel), launch.mtuSession, launch.configSHA256)",
                         "registerNativeMultihopDNSRuntime(a, sel, launch.command)",
                         "!a.ownsConnectionRuntime(launch.command)",
-                        "physicalNetworkIdentity() != network", "current != launch")
+                        "observe = launch.ownedNode.imported.readNetwork",
+                        "actual, err := observe(ctx)", "actual != network", "current != launch")
         and all_markers("cmd/client/multihop_execution.go",
                         "desktopExecutionCommandContext(ctx, d.a, sel, descriptor)")
         and all_markers("cmd/client/multihop_execution_config.go",
@@ -189,7 +190,7 @@ def retained_native_multihop_platform(platform: str) -> bool:
                         "context.WithTimeout(ctx, 10*time.Second)")
         and all_markers("cmd/client/desktop_node_native.go", "func stageDesktopNodeLaunch",
                         "receipt.ConfigSHA256 != configSHA256", "captureDesktopRuntimeDirectory(launch, directory)",
-                        'writeDesktopRuntimeFile(launch, "sing-box.json", launch.config, false)', helper)
+                        'writeDesktopRuntimeFileContext(ctx, launch, "sing-box.json", launch.config, false)', helper)
         and all_markers("cmd/client/multihop_native_retained_test.go",
                         "TestNativeMultihopRetainedStageBindsFreshSessionAndExactConfig",
                         "TestNativeMultihopRetainedPreflightReadsExactGraphAndPreservesFailure",

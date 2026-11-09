@@ -185,7 +185,7 @@ class DesktopPTPreparation(unittest.TestCase):
                     self.assertEqual(generated[relative], exact)
                     self.assertEqual((self.vendor/relative).read_bytes(), exact)
                     self.assertNotIn(b'"router-vpn/internal/', exact)
-            for name in ('node_command_journal.go.tmpl', 'node_command_journal_windows.go.tmpl',
+            for name in ('node_command_imported.go.tmpl', 'node_command_imported_test.go.tmpl', 'node_command_journal.go.tmpl', 'node_command_journal_windows.go.tmpl',
                          'node_command_journal_other.go.tmpl', 'node_command_journal_test.go.tmpl',
                          'node_command_control.go.tmpl', 'node_command_control_linux.go.tmpl',
                          'node_command_control_other.go.tmpl', 'node_command_run_linux.go.tmpl',

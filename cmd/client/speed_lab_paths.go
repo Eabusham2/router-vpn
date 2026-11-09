@@ -767,6 +767,9 @@ func (a *app) startSpeedLabMultihopSelection(sel multihopSelection, q speedLabRe
 	a.mu.Lock()
 	a.state.Connected, a.state.Phase, a.state.LastError = true, "connected", ""
 	a.mu.Unlock()
+	if real.native != nil && real.native.ownedNode != nil {
+		a.monitorDesktopOwnedNodeRuntime(real.native)
+	}
 	if _, err := waitForSpeedLabConnectedIdentity(a, 2500*time.Millisecond); err != nil {
 		return speedLabPath{}, err
 	}

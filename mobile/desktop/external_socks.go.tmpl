@@ -29,6 +29,7 @@ type ExternalSOCKSOptions struct {
 
 func RegisterExternalSOCKSOutbound(registry *outbound.Registry) {
 	outbound.Register[ExternalSOCKSOptions](registry, mobilemultihop.DesktopExternalSOCKSType, NewExternalSOCKSOutbound)
+	outbound.Register[ExternalSOCKSOptions](registry, mobilemultihop.DesktopImportedSOCKSType, NewImportedSOCKSOutbound)
 }
 
 // The original SOCKS option bytes remain in ExternalPolicy. This derived host
@@ -36,19 +37,22 @@ func RegisterExternalSOCKSOutbound(registry *outbound.Registry) {
 // map or imported JSON field can authorize a negotiated UDP relay.
 type ExternalSOCKSOutbound struct {
 	outbound.Adapter
-	mu           sync.Mutex
-	ctx          context.Context
-	options      ExternalSOCKSOptions
-	control      M.Socksaddr
-	owner        *ExternalNetworkOwner
-	lower        *ExternalPhysicalOutbound
-	entry        adapter.Endpoint
-	entryAddress M.Socksaddr
-	policy       *mobilemultihop.DesktopExternalPolicy
-	operations   map[*externalSOCKSOperation]struct{}
-	closed       bool
-	closeOnce    sync.Once
-	closeErr     error
+	mu             sync.Mutex
+	ctx            context.Context
+	options        ExternalSOCKSOptions
+	control        M.Socksaddr
+	owner          *ExternalNetworkOwner
+	lower          *ExternalPhysicalOutbound
+	entry          adapter.Endpoint
+	entryAddress   M.Socksaddr
+	policy         *mobilemultihop.DesktopExternalPolicy
+	importedPolicy *mobilemultihop.DesktopImportedPolicy
+	importedOwner  *NodeNetworkOwner
+	importedLower  *NodePhysicalOutbound
+	operations     map[*externalSOCKSOperation]struct{}
+	closed         bool
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 func NewExternalSOCKSOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options ExternalSOCKSOptions) (adapter.Outbound, error) {
@@ -118,7 +122,7 @@ func (o *ExternalSOCKSOutbound) prepare(policy *mobilemultihop.DesktopExternalPo
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.closed || o.ctx.Err() != nil || o.owner != nil || o.lower != nil || o.policy != nil || len(o.operations) != 0 {
+	if o.closed || o.ctx.Err() != nil || o.owner != nil || o.lower != nil || o.policy != nil || o.importedPolicy != nil || o.importedOwner != nil || o.importedLower != nil || len(o.operations) != 0 {
 		return errors.New("retained SOCKS5 preparation is repeated, retired or late")
 	}
 	o.owner, o.lower, o.policy, o.entry, o.entryAddress = owner, lower, policy, entry, entryAddress
@@ -129,9 +133,15 @@ func (o *ExternalSOCKSOutbound) current(ctx context.Context) (*mobiletor.Desktop
 	if o == nil || ctx == nil || ctx.Err() != nil || o.ctx == nil || o.ctx.Err() != nil {
 		return nil, net.ErrClosed
 	}
-	o.mu.Lock()
+	if err := adapter.RouterVPNLockContext(ctx, &o.mu); err != nil {
+		return nil, err
+	}
 	owner, lower, policy, closed := o.owner, o.lower, o.policy, o.closed
+	imported := o.importedPolicy
 	o.mu.Unlock()
+	if imported != nil {
+		return o.currentImported(ctx, imported)
+	}
 	if closed || owner == nil || lower == nil || policy == nil || policy.Validate() != nil || !owner.SocketCurrent() {
 		return nil, net.ErrClosed
 	}
@@ -273,7 +283,7 @@ func (s *externalSOCKSOperation) DialContext(ctx context.Context, network string
 	remote, parseErr := netip.ParseAddrPort(address.String())
 	if parseErr != nil || address.IsDomain() || !remote.IsValid() || remote.Port() == 0 ||
 		remote.Addr().IsUnspecified() || remote.Addr().IsMulticast() || remote.Addr().Is4In6() || remote.Addr().Zone() != "" ||
-		remote.Addr().Is6() && s.root.policy.Metadata().IPv6Mode == "off" {
+		remote.Addr().Is6() && s.root.capturedIPv6Mode() == "off" {
 		return nil, errors.New("retained SOCKS5 reply requires an admitted numeric relay and selected IP family")
 	}
 	// The actual source independently checks IPv4/IPv6, LAN/private policy and

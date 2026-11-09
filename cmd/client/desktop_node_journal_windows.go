@@ -66,7 +66,7 @@ func startDesktopProtectedJournalProcess(ctx context.Context, a *app, launch *de
 		owned.mu.Unlock()
 		revision, captureName = owned.profileToken, "external-journal-capture.json"
 		current = func(required bool) bool { return owned.current(required) == nil }
-		if attempt == nil || attempt.external != owned.policy || attempt.policy != nil {
+		if attempt == nil || attempt.external != owned.policy || attempt.policy != nil || attempt.imported != nil {
 			return nil, errors.New("native external journal lost its exact policy selection")
 		}
 	} else {
@@ -76,7 +76,7 @@ func startDesktopProtectedJournalProcess(ctx context.Context, a *app, launch *de
 		owned := launch.ownedNode
 		slot, attempt, revision, captureName = owned.slot, owned.attempt, owned.profileToken, "node-journal-capture.json"
 		current = func(required bool) bool { return a.desktopOwnedNodeCurrent(launch, required) }
-		if attempt == nil || attempt.policy != owned.policy || attempt.external != nil {
+		if !attempt.matchesOwned(owned) {
 			return nil, errors.New("native Router journal lost its exact policy selection")
 		}
 	}
@@ -117,6 +117,10 @@ func startDesktopProtectedJournalProcess(ctx context.Context, a *app, launch *de
 	var controller *windowsOwnedController
 	if external {
 		controller, _ = launch.external.windows.host.capture.retainedController.(*windowsOwnedController)
+	} else if launch.ownedNode.imported != nil {
+		if launch.ownedNode.host != nil {
+			controller, _ = launch.ownedNode.host.capture.retainedController.(*windowsOwnedController)
+		}
 	} else {
 		controller = windowsOwnedCapture.Load()
 	}

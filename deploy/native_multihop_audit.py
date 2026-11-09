@@ -51,7 +51,9 @@ def native_multihop_proof_lanes(source: str, imported_source: str) -> bool:
     """Source-only closure of both compiler captures and their exact proof routes."""
     tokens, imported = _tokens(source), _tokens(imported_source)
     capture = _function(tokens, "func captureNativeMultihopSelection(ctx context.Context, root string, sel multihopSelection, modes []string, lookup applexray.Lookup) (multihopSelection, error)")
-    imported_capture = _function(imported, "func captureDesktopImportedMultihop(ctx context.Context, root string, sel multihopSelection, modes []string, lookup applexray.Lookup) (multihopSelection, error)")
+    imported_wrapper = _function(imported, "func captureDesktopImportedMultihop(ctx context.Context, root string, sel multihopSelection, modes []string, lookup applexray.Lookup) (multihopSelection, error)")
+    imported_capture = _function(imported, "func captureDesktopImportedMultihopWithHost(ctx context.Context, root string, sel multihopSelection, modes []string, lookup applexray.Lookup, host *desktopNodeConnectionOwner) (multihopSelection, error)")
+    protected_capture = _function(tokens, "func captureNativeMultihopForAppContext(parent context.Context, a *app, sel multihopSelection, modes []string) (multihopSelection, error)")
     graph = _function(tokens, "func nativeMultihopProofConfig(config string, entry common.RouterProfile) (string, string, error)")
     return (
         _ordered_once(capture, '''
@@ -59,6 +61,14 @@ def native_multihop_proof_lanes(source: str, imported_source: str) -> bool:
                 return captureDesktopImportedMultihop(ctx, root, sel, modes, lookup)
             }
         ''', "config, _, e = nativeMultihopProofConfig(config, sel.Entry)")
+        and imported_wrapper == _tokens("return captureDesktopImportedMultihopWithHost(ctx, root, sel, modes, lookup, nil)")
+        and _ordered_once(protected_capture,
+            "owner, err := captureDesktopImportedConnectionOwner(parent, a, sel)",
+            "if owner != nil {",
+            "verifiedDesktopImportedPackage(ctx, owner)",
+            "captured, err := captureDesktopImportedMultihopWithHost(ctx, owner.capture.dataRoot, sel, modes, owner.host.lookup, owner)",
+            "owner.currentContext(ctx)",
+            "return captured, nil")
         and _ordered_once(imported_capture,
             "compiled, err := mobilemultihop.NewImportedEntry(source, capture, sel.ExitMode, encodeDesktopNodeAssets(files), string(rawFinal), startJSON, bootstrap)",
             "config, _, err := nativeMultihopProofConfig(compiled.Config(), sel.Entry)",
@@ -221,8 +231,23 @@ def native_multihop_shipping_chain(source: str) -> bool:
         "native, err := driver.preflight(a, sel, nil)",
         "err = driver.stage(a, sel, native)",
         "cmd := native.command",
-        "err = cmd.Start()",
+        '''protected := native.ownedNode != nil
+        if protected {
+            a.mu.Lock()
+            err = a.publishDesktopImportedMultihopStartLocked(operation, native, sel)
+            a.mu.Unlock()
+        } else {
+            err = cmd.Start()
+        }''',
         "err = bindNativeMultihopRuntime(a, native, sel, network)",
+        '''if protected {
+            if err := startDesktopOwnedImportedLaunch(operation, operation, a, native); err != nil {
+                message, _ := a.multihopStopFailure(cmd, err.Error())
+                sessionTrackerFor(a).markRequestFailure(message)
+                http.Error(w, message, http.StatusInternalServerError)
+                return
+            }
+        }''',
         "proofErr := driver.proof(a, sel, cmd)",
     )
     previous = -1

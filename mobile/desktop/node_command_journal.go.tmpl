@@ -15,7 +15,7 @@ type routerVPNNodeJournalOptions struct {
 
 type routerVPNNodeJournal interface {
 	authenticate(context.Context, *routerVPNExternalFiles) error
-	prepare(context.Context, *mobilemultihop.DesktopNodePolicy, *mobiletor.DesktopProtectionTransferRecord) (context.Context, *routerVPNNodeAdmission, error)
+	prepare(context.Context, mobilemultihop.DesktopPhysicalPolicy, *mobiletor.DesktopProtectionTransferRecord) (context.Context, *routerVPNNodeAdmission, error)
 	close() error
 }
 

@@ -19,6 +19,7 @@ import (
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
 	"github.com/sagernet/sing-box/option"
 	SJ "github.com/sagernet/sing/common/json"
@@ -435,19 +436,26 @@ func (owner *routerVPNNodeMTU) commandContext(ctx context.Context, request route
 }
 
 func init() {
-	var directory, session, config, physicalSource, physicalTransfer string
+	var directory, session, config, physicalSource, importedSource, physicalTransfer string
 	var physicalMTU int
 	var journal routerVPNNodeJournalOptions
 	var linuxParent routerVPNNodeLinuxParentOptions
 	command := &cobra.Command{Use: "routervpn-node", Short: "Run one captured Router VPN node and its retained TUN", Args: cobra.NoArgs, SilenceUsage: true, RunE: func(*cobra.Command, []string) error {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
+		if importedSource != "" {
+			if physicalSource != "" || linuxParent != (routerVPNNodeLinuxParentOptions{}) {
+				return routerVPNExternalFailure
+			}
+			return routerVPNRunImportedMTUWithJournal(ctx, directory, session, config, importedSource, physicalTransfer, physicalMTU, journal)
+		}
 		return routerVPNRunNodeMTUWithParents(ctx, directory, session, config, physicalSource, physicalTransfer, physicalMTU, journal, linuxParent)
 	}}
 	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private runtime directory")
 	command.Flags().StringVar(&session, "session", "", "captured runtime identity")
 	command.Flags().StringVar(&config, "config-sha256", "", "captured configuration digest")
 	command.Flags().StringVar(&physicalSource, "physical-source-sha256", "", "captured derived physical owner identity")
+	command.Flags().StringVar(&importedSource, "imported-source-sha256", "", "captured imported entry and paired final physical owner identity")
 	command.Flags().StringVar(&physicalTransfer, "physical-transfer-sha256", "", "captured private protection predecessor record")
 	command.Flags().IntVar(&physicalMTU, "physical-mtu", 0, "captured live TUN value for sealed connection restoration")
 	command.Flags().Uint64Var(&journal.ParentHandle, "journal-parent-handle", 0, "inherited native controller capability")
@@ -472,7 +480,14 @@ func routerVPNRunNodeMTUWithPhysicalMTU(parent context.Context, directory, sessi
 	return routerVPNRunNodeMTUCaptured(parent, directory, session, config, physicalSource, physicalTransfer, physicalMTU, nil)
 }
 
-func routerVPNRunNodeMTUCaptured(parent context.Context, directory, session, config, physicalSource, physicalTransfer string, physicalMTU int, journal routerVPNNodeJournal) (failure error) {
+func routerVPNRunNodeMTUCaptured(parent context.Context, directory, session, config, physicalSource, physicalTransfer string, physicalMTU int, journal routerVPNNodeJournal) error {
+	return routerVPNRunNodeMTUFamilyCaptured(parent, directory, session, config, physicalSource, "", physicalTransfer, physicalMTU, journal)
+}
+
+func routerVPNRunNodeMTUFamilyCaptured(parent context.Context, directory, session, config, physicalSource, importedSource, physicalTransfer string, physicalMTU int, journal routerVPNNodeJournal) (failure error) {
+	if importedSource != "" && (physicalSource != "" || journal == nil || runtime.GOOS != "windows") {
+		return routerVPNExternalFailure
+	}
 	decoded, decodeErr := hex.DecodeString(config)
 	if parent == nil || !routerVPNExternalSession.MatchString(session) || decodeErr != nil || len(decoded) != 32 || hex.EncodeToString(decoded) != config {
 		return routerVPNExternalFailure
@@ -500,9 +515,33 @@ func routerVPNRunNodeMTUCaptured(parent context.Context, directory, session, con
 	if hex.EncodeToString(digest[:]) != config {
 		return routerVPNExternalFailure
 	}
-	physicalPolicy, err := routerVPNNodeCommandPhysicalWithMTU(files, session, config, physicalSource, physicalMTU)
-	if err != nil {
-		return err
+	var physicalPolicy mobilemultihop.DesktopPhysicalPolicy
+	if importedSource != "" {
+		policy, err := routerVPNImportedCommandPhysicalWithMTU(files, session, config, importedSource, physicalMTU)
+		if err != nil {
+			return err
+		}
+		physicalPolicy = policy
+		original := policy.OriginalController()
+		if original == nil {
+			return routerVPNExternalFailure
+		}
+		// Registered before native cleanup: every protection receipt still
+		// reads the live immutable constructor. Keep this exact pointer,
+		// since the policy accessor intentionally rejects it after Close.
+		defer func() {
+			if original.Close() != nil {
+				failure = routerVPNExternalFailure
+			}
+		}()
+	} else {
+		policy, err := routerVPNNodeCommandPhysicalWithMTU(files, session, config, physicalSource, physicalMTU)
+		if err != nil {
+			return err
+		}
+		if policy != nil {
+			physicalPolicy = policy
+		}
 	}
 	protectionTransfer, err := routerVPNNodeCommandTransfer(files, physicalPolicy, physicalTransfer)
 	if err != nil {
@@ -608,7 +647,16 @@ func routerVPNRunNodeMTUCaptured(parent context.Context, directory, session, con
 	}
 	native.box = instance
 	if physicalPolicy != nil {
-		captured, prepareErr := instance.RouterVPNDesktopNodePreparePhysicalOwned(physicalPolicy)
+		var captured *box.RouterVPNDesktopNodePreparation
+		var prepareErr error
+		switch policy := physicalPolicy.(type) {
+		case *mobilemultihop.DesktopNodePolicy:
+			captured, prepareErr = instance.RouterVPNDesktopNodePreparePhysicalOwned(policy)
+		case *mobilemultihop.DesktopImportedPolicy:
+			captured, prepareErr = instance.RouterVPNDesktopImportedPreparePhysicalOwned(policy)
+		default:
+			return routerVPNExternalFailure
+		}
 		if captured != nil {
 			preparation = captured
 		}
@@ -624,7 +672,14 @@ func routerVPNRunNodeMTUCaptured(parent context.Context, directory, session, con
 		if !admission.admitted() {
 			return routerVPNExternalFailure
 		}
-		physical, err = instance.RouterVPNDesktopNodeActivatePhysical(physicalPolicy)
+		switch policy := physicalPolicy.(type) {
+		case *mobilemultihop.DesktopNodePolicy:
+			physical, err = instance.RouterVPNDesktopNodeActivatePhysical(policy)
+		case *mobilemultihop.DesktopImportedPolicy:
+			physical, err = instance.RouterVPNDesktopImportedActivatePhysical(policy)
+		default:
+			return routerVPNExternalFailure
+		}
 		if err != nil {
 			return routerVPNExternalFailure
 		}

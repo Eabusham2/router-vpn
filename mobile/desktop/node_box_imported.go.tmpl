@@ -1,0 +1,29 @@
+package box
+
+import (
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"runtime"
+)
+
+// Imported entry + paired-final graphs have a distinct sealed source and two
+// proof lanes. They share only the independently checked native lower owner,
+// complete Box-options comparison, retained TUN and WFP transaction machinery.
+func (s *Box) RouterVPNDesktopImportedPreparePhysicalOwned(policy *mobilemultihop.DesktopImportedPolicy) (*RouterVPNDesktopNodePreparation, error) {
+	if runtime.GOOS != "windows" || policy == nil || policy.Validate() != nil {
+		return nil, errors.New("this target has no captured imported Windows protection factory")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopNodePreparation{network: network, policy: policy}
+	return owner, network.PrepareImportedPhysicalPolicy(policy)
+}
+
+func (s *Box) RouterVPNDesktopImportedActivatePhysical(policy *mobilemultihop.DesktopImportedPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if runtime.GOOS != "windows" || policy == nil || policy.Validate() != nil {
+		return nil, errors.New("this target has no captured imported Windows protection factory")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}

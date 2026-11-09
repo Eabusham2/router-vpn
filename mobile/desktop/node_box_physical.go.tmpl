@@ -11,6 +11,7 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
@@ -61,7 +62,7 @@ func (s *Box) RouterVPNDesktopNodePreparePhysical(policy *mobilemultihop.Desktop
 // looking it up from a later, cancelled or replacement Box is unnecessary.
 type RouterVPNDesktopNodePreparation struct {
 	network *routervpndesktoppt.NodeNetworkOwner
-	policy  *mobilemultihop.DesktopNodePolicy
+	policy  mobilemultihop.DesktopPhysicalPolicy
 }
 
 func (s *Box) RouterVPNDesktopNodePreparePhysicalOwned(policy *mobilemultihop.DesktopNodePolicy) (*RouterVPNDesktopNodePreparation, error) {
@@ -93,13 +94,13 @@ func routerVPNDesktopNodePhysicalAvailable(policy *mobilemultihop.DesktopNodePol
 	return meta.TargetOS == "windows" && mobilemultihop.DesktopNodePhysicalGraphSupported(meta.Mode, meta.StartLayer)
 }
 
-func (s *Box) routerVPNDesktopNodePhysical(policy *mobilemultihop.DesktopNodePolicy) (option.Options, *routervpndesktoppt.NodeNetworkOwner, error) {
+func (s *Box) routerVPNDesktopNodePhysical(policy mobilemultihop.DesktopPhysicalPolicy) (option.Options, *routervpndesktoppt.NodeNetworkOwner, error) {
 	var empty option.Options
 	if s == nil || s.ctx == nil || s.ctx.Err() != nil || s.service == nil || s.routerVPNNodeOptions == "" ||
 		policy == nil {
 		return empty, nil, errors.New("Router node physical preparation lost its complete native Box")
 	}
-	config, meta, _, err := policy.ReadValidated()
+	config, meta, _, err := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
 	if err != nil {
 		return empty, nil, err
 	}
@@ -123,7 +124,7 @@ type RouterVPNDesktopNodePhysical struct {
 	mu            sync.Mutex
 	instance      *Box
 	ctx           context.Context
-	policy        *mobilemultihop.DesktopNodePolicy
+	policy        mobilemultihop.DesktopPhysicalPolicy
 	network       *routervpndesktoppt.NodeNetworkOwner
 	inbound       adapter.Inbound
 	reader        routerVPNDesktopTorTUN
@@ -140,13 +141,17 @@ func (s *Box) RouterVPNDesktopNodeActivatePhysical(policy *mobilemultihop.Deskto
 	return s.routerVPNDesktopNodeActivatePhysical(policy)
 }
 
-func (s *Box) routerVPNDesktopNodeActivatePhysical(policy *mobilemultihop.DesktopNodePolicy) (_ *RouterVPNDesktopNodePhysical, failure error) {
+func (s *Box) routerVPNDesktopNodeActivatePhysical(policy mobilemultihop.DesktopPhysicalPolicy) (_ *RouterVPNDesktopNodePhysical, failure error) {
 	compiled, network, err := s.routerVPNDesktopNodePhysical(policy)
 	if err != nil {
 		return nil, err
 	}
-	capture, err := policy.Capture()
-	if err != nil || len(compiled.Inbounds) != 1 || compiled.Inbounds[0].Tag != capture.TUNTag {
+	_, meta, capture, err := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
+	inboundCount := 1
+	if meta.Kind == "imported" {
+		inboundCount = 3
+	}
+	if err != nil || len(compiled.Inbounds) != inboundCount || compiled.Inbounds[0].Tag != capture.TUNTag {
 		return nil, errors.New("Router node physical activation lost its one captured TUN")
 	}
 	options, ok := compiled.Inbounds[0].Options.(*option.TunInboundOptions)
@@ -179,7 +184,7 @@ func (s *Box) routerVPNDesktopNodeActivatePhysical(policy *mobilemultihop.Deskto
 	}
 	name, index, mtu, err := bounded.RouterVPNDesktopMTUContext(ctx, owner.generationCurrentContext)
 	expectedMTU := capture.ConfiguredMTU
-	if restored := policy.Metadata().RestoredMTU; restored != 0 {
+	if restored := meta.RestoredMTU; restored != 0 {
 		expectedMTU = restored
 	}
 	if err != nil || name != options.InterfaceName || index < 1 || mtu != expectedMTU {
@@ -343,45 +348,94 @@ func (owner *RouterVPNDesktopNodePhysical) changeMTU(ctx context.Context, expect
 	if owner == nil || ctx == nil || ctx.Err() != nil || expected == nil || change == nil || mtu < 1280 || mtu > 9000 {
 		return nil, errors.New("Router node physical MTU replacement has no live bounded request")
 	}
-	owner.mu.Lock()
+	if !mobilemtu.SameOperationContext(ctx, ctx) {
+		work, finish, err := mobilemtu.WithOperationContext(ctx, 10*time.Second, 3*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		defer finish()
+		ctx = work
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &owner.mu); err != nil {
+		return nil, err
+	}
 	defer owner.mu.Unlock()
-	name, index, _, err := owner.readback()
+	name, index, _, err := owner.readbackContext(ctx)
 	if err != nil || owner.inbound != expected {
 		return nil, errors.Join(err, errors.New("Router node physical MTU request has another native reader"))
 	}
 	if err := owner.network.RetirePhysicalTunnel(ctx, name, uint32(index)); err != nil {
+		// An entered OS operation may have retired the grant before returning
+		// an expiry or failure. Keep that exact owner fail closed until joined
+		// teardown proves its outcome; a live TUN alone is not a usable path.
+		owner.network.CancelAdmission()
 		return nil, err
 	}
 	owner.detached = true
 	next, changeErr := change(ctx, expected, mtu)
-	if err := owner.adoptTUN(next); err != nil {
-		owner.Cancel()
+	finalize := ctx
+	if changeErr != nil || ctx.Err() != nil {
+		// The native manager may already have spent part of this allowance
+		// restoring its returned reader. Physical admission must reuse it.
+		finalize, err = mobilemtu.OperationCleanupContext(ctx)
+		if err != nil {
+			owner.network.CancelAdmission()
+			return next, errors.Join(changeErr, ctx.Err(), err)
+		}
+	}
+	err = owner.adoptTUN(finalize, next)
+	if err != nil && finalize == ctx && mobiletor.ObservationContextExpired(ctx, err) {
+		// Only pure work expiry can finish this same returned transaction.
+		// A changed native reader or policy never receives another attempt.
+		cleanup, cleanupErr := mobilemtu.OperationCleanupContext(ctx)
+		if cleanupErr == nil {
+			cleanupErr = owner.adoptTUN(cleanup, next)
+		}
+		if cleanupErr == nil {
+			err = nil
+		} else {
+			err = errors.Join(err, cleanupErr)
+		}
+	}
+	if err != nil {
+		owner.network.CancelAdmission()
 		return next, errors.Join(changeErr, err)
 	}
-	return next, changeErr
+	return next, errors.Join(changeErr, ctx.Err())
 }
 
-func (owner *RouterVPNDesktopNodePhysical) adoptTUN(next adapter.Inbound) error {
-	if !owner.generationCurrent() || !owner.detached || next == nil || next.Type() != C.TypeTun || next.Tag() != owner.inbound.Tag() {
+func (owner *RouterVPNDesktopNodePhysical) adoptTUN(ctx context.Context, next adapter.Inbound) error {
+	if err := owner.generationCurrentContext(ctx); err != nil {
+		return err
+	}
+	if !owner.detached && next == owner.inbound {
+		_, _, _, err := owner.readbackContext(ctx)
+		return err
+	}
+	if !owner.detached || next == nil || next.Type() != C.TypeTun || next.Tag() != owner.inbound.Tag() {
 		return errors.New("Router node physical replacement lost its native generation")
 	}
-	current, found := owner.instance.inbound.Get(next.Tag())
+	current, found, err := adapter.RouterVPNInboundContext(ctx, owner.instance.inbound, next.Tag())
+	if err != nil {
+		return err
+	}
 	reader, ok := next.(routerVPNDesktopTorTUN)
 	if !found || current != next || !ok {
 		return errors.New("Router node physical replacement is not the returned native reader")
 	}
 	// The native MTU transaction already carries this generation guard into
 	// its candidate and rollback readers. Do not claim their ownership again.
-	name, index, mtu, err := reader.RouterVPNDesktopMTUInterface()
-	if err != nil || name != owner.interfaceName || index < 1 || mtu < 1280 || mtu > 9000 {
+	name, index, mtu, err := reader.RouterVPNDesktopMTUInterfaceContext(ctx)
+	if err != nil {
+		return err
+	}
+	if name != owner.interfaceName || index < 1 || mtu < 1280 || mtu > 9000 {
 		return errors.New("Router node physical replacement has an invalid TUN identity")
 	}
-	cleanup, cancel := context.WithTimeout(owner.ctx, 3*time.Second)
-	defer cancel()
-	if err := owner.network.BindPhysicalTunnel(cleanup, name, uint32(index)); err != nil {
+	if err := owner.network.BindPhysicalTunnel(ctx, name, uint32(index)); err != nil {
 		return err
 	}
 	owner.inbound, owner.reader, owner.name, owner.index, owner.mtu, owner.detached = next, reader, name, index, mtu, false
-	_, _, _, err = owner.readback()
+	_, _, _, err = owner.readbackContext(ctx)
 	return err
 }

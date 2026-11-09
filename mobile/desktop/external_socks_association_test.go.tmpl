@@ -37,6 +37,14 @@ func (m *externalSOCKSManager) Outbound(tag string) (adapter.Outbound, bool) {
 	value, found := m.objects[tag]
 	return value, found
 }
+func (m *externalSOCKSManager) RouterVPNOutboundContext(ctx context.Context, tag string) (adapter.Outbound, bool, error) {
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return nil, false, err
+	}
+	defer m.mu.Unlock()
+	value, found := m.objects[tag]
+	return value, found, ctx.Err()
+}
 func (m *externalSOCKSManager) replace(tag string, value adapter.Outbound) {
 	m.mu.Lock()
 	m.objects[tag] = value

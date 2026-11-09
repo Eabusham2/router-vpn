@@ -9,6 +9,7 @@ import (
 	"errors"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -96,6 +97,88 @@ func (f *nodePhysicalFixture) prepare(t *testing.T, source *physicalFactorySourc
 		return broker, source, err
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Observe the original context being consulted by a contended wait before
+// cancelling it. A scheduling delay cannot manufacture successful admission,
+// and the original mutex remains held until the actual caller has returned.
+type nodePhysicalWaitingContext struct {
+	context.Context
+	once    sync.Once
+	waiting chan struct{}
+}
+
+func (c *nodePhysicalWaitingContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
+func nodePhysicalCancelHeldLock(t *testing.T, mutex *sync.Mutex, observe func(context.Context) error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	waiting := &nodePhysicalWaitingContext{Context: ctx, waiting: make(chan struct{})}
+	mutex.Lock()
+	var unlock sync.Once
+	release := func() { unlock.Do(mutex.Unlock) }
+	defer release()
+	done := make(chan error, 1)
+	go func() { done <- observe(waiting) }()
+	select {
+	case <-waiting.waiting:
+	case err := <-done:
+		t.Fatal("physical caller did not reach the held original owner", err)
+	case <-time.After(3 * time.Second):
+		cancel()
+		release()
+		<-done
+		t.Fatal("physical caller used an ambient wait without its original context")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal("physical caller lost its original cancellation", err)
+		}
+	case <-time.After(3 * time.Second):
+		release()
+		<-done
+		t.Fatal("physical caller kept waiting for a held original owner after cancellation")
+	}
+	release()
+}
+
+func TestRouterVPNNodePhysicalCallerContext(t *testing.T) {
+	for _, held := range []string{"lower", "owner", "manager"} {
+		t.Run(held, func(t *testing.T) {
+			f := newNodePhysicalFixture(t)
+			source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+			f.prepare(t, source)
+			if err := f.network.Start(adapter.StartStateInitialize); err != nil {
+				t.Fatal(err)
+			}
+			peer := M.ParseSocksaddr("192.0.2.1:51820")
+			if broker, err := f.physical.current(context.Background(), "udp", peer); err != nil || broker != f.network.broker {
+				t.Fatal("original lower fixture was not usable before contention", err)
+			}
+			mutex := &f.physical.mu
+			if held == "owner" {
+				mutex = &f.network.mu
+			} else if held == "manager" {
+				mutex = &f.manager.mu
+			}
+			nodePhysicalCancelHeldLock(t, mutex, func(ctx context.Context) error {
+				broker, err := f.physical.current(ctx, "udp", peer)
+				if broker != nil {
+					return errors.New("cancelled lower observation published its original broker")
+				}
+				return err
+			})
+			if broker, err := f.physical.current(context.Background(), "udp", peer); err != nil || broker != f.network.broker || source.closed.Load() {
+				t.Fatal("one cancelled observation retired the original lower owner", err)
+			}
+		})
 	}
 }
 

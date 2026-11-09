@@ -32,6 +32,11 @@ func TestConnectionCancellationIntentPrecedesCallback(t *testing.T) {
 		<-joined
 		t.Fatal("cancellation intent was not committed for the exact live operation before its callback")
 	}
+	if a.checkCapturedConnectionOperation(operation) == nil || !a.sameConnectionOperation(operation) {
+		close(release)
+		<-joined
+		t.Fatal("recorded cancellation allowed new admission or discarded original cleanup ownership")
+	}
 	// A delayed callback remains tied to its original operation even if a
 	// captured transaction installs a replacement context in the meantime.
 	replacement, cancelReplacement := context.WithCancel(context.Background())
@@ -39,6 +44,11 @@ func TestConnectionCancellationIntentPrecedesCallback(t *testing.T) {
 	a.mu.Lock()
 	a.connectionContext, a.connectionCancel = replacement, cancelReplacement
 	a.mu.Unlock()
+	if err := a.checkCapturedConnectionOperation(replacement); err != nil {
+		close(release)
+		<-joined
+		t.Fatal("original cancellation intent rejected the replacement operation", err)
+	}
 	close(release)
 	<-joined
 	a.mu.Lock()

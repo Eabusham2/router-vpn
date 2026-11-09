@@ -309,9 +309,6 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 	if err := r.Context().Err(); err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
-	if err := a.guardDesktopOwnedNodeTemporary(q, snapshot); err != nil {
-		return speedLabPath{}, speedLabMeasurement{}, nil, err
-	}
 	if strings.EqualFold(strings.TrimSpace(q.Topology), "external") {
 		q.preparedExternal, err = a.prepareSpeedLabExternalPathWithRuntime(q, nil, desktopTorConnectRuntime{requestContext: r.Context(), operation: operationCtx})
 		if err != nil {
@@ -325,6 +322,9 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 			return speedLabPath{}, speedLabMeasurement{}, nil, err
 		}
 		defer q.preparedMultihop.releaseUnused()
+	}
+	if err := a.guardDesktopOwnedNodeTemporary(q, snapshot); err != nil {
+		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
 	if err := a.speedLabSuspendPrevious(snapshot, strings.EqualFold(strings.TrimSpace(q.Topology), "system-direct")); err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, err)

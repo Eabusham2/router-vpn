@@ -77,7 +77,7 @@ func (a *app) checkCapturedConnectionOperation(ctx context.Context) error {
 }
 
 func (a *app) checkCapturedConnectionOperationLocked(ctx context.Context) error {
-	if !a.sameConnectionOperationLocked(ctx) || ctx.Err() != nil || a.controllerClosingLocked() {
+	if !a.sameConnectionOperationLocked(ctx) || ctx.Err() != nil || a.connectionCancelIntent == ctx || a.controllerClosingLocked() {
 		return errConnectionOperationCancelled
 	}
 	return nil
