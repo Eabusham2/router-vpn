@@ -18,6 +18,8 @@ type importedEntry struct {
 	source, metadata, profile, publicIP string
 	openvpnTransport                    map[string]any
 	openvpnMTU                          uint32
+	inputs                              importedEntryInputs
+	desktopSeal                         string
 }
 
 // NewImportedEntry composes a captured SOCKS5, SS2022, Hysteria2, WireGuard,
@@ -349,7 +351,11 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	}
 	metadata, _ := json.Marshal(meta)
 	source, _ := json.Marshal([]string{"routervpn-imported-entry-v1", entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap})
-	c := &Controller{meta: meta, config: string(encoded), progress: Progress{Stage: "prepared", Measurements: []routechoice.Measurement{}}, imported: &importedEntry{source: externalDigest(source), metadata: string(metadata), profile: profile, publicIP: selection.ExpectedPublicIP}}
+	c := &Controller{meta: meta, config: string(encoded), progress: Progress{Stage: "prepared", Measurements: []routechoice.Measurement{}}, imported: &importedEntry{
+		source: externalDigest(source), metadata: string(metadata), profile: profile, publicIP: selection.ExpectedPublicIP,
+		inputs: importedEntryInputs{entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap},
+	}}
+	clear(source)
 	if selection.Protocol == "openvpn" {
 		// The exact compiled endpoint retains public remote identity through its
 		// captured layer mapper. The complete original import and independent
@@ -361,6 +367,9 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 		c.imported.openvpnMTU = uint32(entryMTU)
 	}
 	c.generation.Store(1)
+	if err := c.sealImportedDesktopCapture(); err != nil {
+		return nil, err
+	}
 	return c, nil
 }
 func (c *Controller) Metadata() string {
