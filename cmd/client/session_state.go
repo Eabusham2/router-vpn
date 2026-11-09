@@ -64,6 +64,7 @@ type connectionSession struct {
 }
 
 type observedConnection struct {
+	dnsEpoch    uint64
 	Connected   bool
 	Mode        string
 	LogicalMode string
@@ -89,6 +90,8 @@ type sessionTracker struct {
 	dnsProofBinding     *asyncMeasurementAdoption
 	dnsProofWork        *sessionDNSProofWork
 	dnsProofClosed      bool
+	dnsProofEpoch       atomic.Uint64
+	dnsProofStop        *sessionDNSStopReceipt
 	lifetime            sessionWorkerLifetime
 }
 
@@ -158,6 +161,7 @@ func (t *sessionTracker) captureContext(ctx context.Context) (observedConnection
 	}
 	p, _ := t.a.profileByIDLocked(profileID)
 	return observedConnection{
+		dnsEpoch:  t.dnsProofEpoch.Load(),
 		Connected: s.Connected, Mode: s.Mode, LogicalMode: s.LogicalMode,
 		RuntimeMode: s.RuntimeMode, Base: s.Base, RouterID: s.RouterID,
 		Phase: s.Phase, LastError: s.LastError, Profile: cloneRouterProfile(p),
@@ -428,8 +432,14 @@ func (t *sessionTracker) markRequestFailureLocked(message string) {
 func (t *sessionTracker) snapshot(after uint64) connectionSession {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	pendingDNS := func(out connectionSession) connectionSession {
+		if t.dnsProofStop != nil {
+			out.DNSProof = dnsProofState{Status: "not-proven", Reason: "selected-DNS admission is paused until the previous Stop completes; retry Disconnect"}
+		}
+		return out
+	}
 	if t.session == nil {
-		return connectionSession{Phase: "off", PathProof: "not-run", RollbackState: "not-needed", DNSProof: dnsProofState{Status: "not-proven"}, Events: []connectionEvent{}}
+		return pendingDNS(connectionSession{Phase: "off", PathProof: "not-run", RollbackState: "not-needed", DNSProof: dnsProofState{Status: "not-proven"}, Events: []connectionEvent{}})
 	}
 	out := *t.session
 	out.Events = append([]connectionEvent(nil), t.session.Events...)
@@ -442,7 +452,7 @@ func (t *sessionTracker) snapshot(after uint64) connectionSession {
 		}
 		out.Events = filtered
 	}
-	return out
+	return pendingDNS(out)
 }
 
 func (a *app) sessionStatus(w http.ResponseWriter, r *http.Request) {

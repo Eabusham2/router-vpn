@@ -161,6 +161,10 @@ func (a *app) beginConnectionTransactionContext(caller context.Context) (context
 		a.operationMu.Unlock()
 		return nil, nil, errors.New("Router VPN is connected or transitioning; disconnect before starting another connection")
 	}
+	if err := a.guardSessionDNSStopPending(caller); err != nil {
+		a.operationMu.Unlock()
+		return nil, nil, err
+	}
 	if err := a.guardDesktopProtectionOffPending(caller); err != nil {
 		a.operationMu.Unlock()
 		return nil, nil, err

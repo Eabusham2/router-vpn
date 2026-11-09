@@ -35,11 +35,17 @@ func TestStoppedDNSResultCannotReserveReplacementTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stop()
-	// Hold the observer before Stop. The old result keeps its real captured
-	// DNS context; rejection cannot be supplied by a periodic observer tick.
-	releaseTracker := measurementHeldLock(&tracker.mu)
-	defer releaseTracker()
+	// Join the periodic observer, but retain its actual immutable binding and
+	// original live parent. This isolates mandatory adoption validation from
+	// incidental observer cancellation. Ordinary Stop now needs tracker.mu to
+	// drain a registered DNS worker; this result is deliberately not one.
+	binding, ok := ctx.Value(asyncMeasurementBindingKey{}).(*asyncMeasurementAdoption)
+	if !ok || binding == nil {
+		stop()
+		t.Fatal("actual DNS capture did not retain its immutable result binding")
+	}
+	stop()
+	ctx = context.WithValue(parent, asyncMeasurementBindingKey{}, binding)
 	a.modes = []common.Mode{{ID: "multihop"}}
 	a.operationMu.Lock()
 	err = a.stopModeWithIntent(true)
@@ -47,6 +53,8 @@ func TestStoppedDNSResultCannotReserveReplacementTransaction(t *testing.T) {
 	if err != nil || a.state.Connected || a.state.Phase != "off" {
 		t.Fatal("original Stop did not finish before late DNS result", err, a.state)
 	}
+	releaseTracker := measurementHeldLock(&tracker.mu)
+	defer releaseTracker()
 	releaseApp := measurementHeldLock(&a.mu)
 	defer releaseApp()
 	caller := &measurementAdmissionWaitingContext{Context: ctx, waiting: make(chan struct{})}

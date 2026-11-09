@@ -169,6 +169,7 @@ guard = require(
     "profileSettingsBusy(a.state.Connected, a.state.Phase)",
     "connection request was cancelled before it could adopt a runtime",
     "cancelPendingStartupPolicy(a)", "stopOwnedConnectionRuntime", "cloneRouterProfileStore",
+    "a.guardSessionDNSStopPending(caller)",
 )
 require(
     "cmd/client/profile_settings.go",
@@ -182,7 +183,8 @@ main = require(
     "publishStartedDesktopNode(startupCtx, native, cmd", "checkDesktopNodeStartupOwnerLocked(startupCtx, native, cmd)",
     "errConnectionOperationCancelled", "connectionOperationContextOrBackground()",
     "oldStore := a.profiles", "a.profiles = oldStore",
-    "func (a *app) stopModeWithIntent(holdKillSwitch bool) error", "clearActiveMultihopGraph(a)",
+    "func (a *app) stopModeWithIntent(holdKillSwitch bool) (failure error)", "clearActiveMultihopGraph(a)",
+    "a.drainSessionDNSForStop(ctx)", "failure = dnsStop.finish(ctx)",
 )
 require(
     "cmd/client/desktop_node_connection_host.go",
@@ -264,7 +266,7 @@ for rel, markers in {
         "err == nil && ctx.Err() == nil && owns() && sel.Native.validate(sel) == nil",
     ),
     "cmd/client/external_profile_connect.go": (
-        "beginConnectionOperation()", "startedCmd", "checkConnectionOperation()",
+        "a.beginConnectionOperationContext(r.Context())", "startedCmd", "checkConnectionOperation()",
         "previousStore := cloneRouterProfileStore(a.profiles)", "a.rollbackProfilesLocked(previousStore)",
         "proveOpenVPNStandardExitForOperation", "proveStandardExitForOperation",
     ),

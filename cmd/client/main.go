@@ -1275,9 +1275,18 @@ func (a *app) stopMode() error {
 	return a.stopModeWithIntent(false)
 }
 
-func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
+func (a *app) stopModeWithIntent(holdKillSwitch bool) (failure error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	dnsStop, err := a.drainSessionDNSForStop(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if failure == nil {
+			failure = dnsStop.finish(ctx)
+		}
+	}()
 	if err := retireLegacyStandardPreparations(a, ctx); err != nil {
 		return err
 	}

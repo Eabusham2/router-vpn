@@ -26,7 +26,7 @@ type sessionDNSProofWork struct {
 // The caller holds tracker.mu. Keep an old worker until it has actually
 // returned, even if a new session has already replaced its visible status.
 func (t *sessionTracker) startDNSProofLocked(sessionID string, s observedConnection, runtimeID string, probe selectedDNSProbe) {
-	if t.dnsProofClosed || t.session == nil || t.session.ID != sessionID {
+	if t.dnsProofClosed || t.dnsProofStop != nil || s.dnsEpoch != t.dnsProofEpoch.Load() || t.session == nil || t.session.ID != sessionID {
 		return
 	}
 	if previous := t.dnsProofWork; previous != nil {
