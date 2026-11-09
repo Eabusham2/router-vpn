@@ -36,7 +36,8 @@ func testImportedOpenVPNNativeConnected(t *testing.T) {
 			}
 			var queries atomic.Int32
 			var denied atomic.Bool
-			server := &dns.Server{Listener: listener, Net: "tcp", Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+			dnsReady := make(chan struct{})
+			server := &dns.Server{Listener: listener, Net: "tcp", NotifyStartedFunc: func() { close(dnsReady) }, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
 				queries.Add(1)
 				answer := new(dns.Msg).SetReply(q)
 				if denied.Load() {
@@ -48,6 +49,20 @@ func testImportedOpenVPNNativeConnected(t *testing.T) {
 			})}
 			dnsDone := make(chan error, 1)
 			go func() { dnsDone <- server.ActivateAndServe() }()
+			// Shutdown before ActivateAndServe enters is a no-op. Capture its
+			// actual started acknowledgement before a failed native constructor
+			// can unwind this fixture and otherwise wait forever on dnsDone.
+			select {
+			case <-dnsReady:
+			case err := <-dnsDone:
+				_ = listener.Close()
+				t.Fatal("native selected-DNS fixture did not start", err)
+			case <-ctx.Done():
+				_ = listener.Close()
+				_ = server.Shutdown()
+				<-dnsDone
+				t.Fatal("native selected-DNS fixture lost its original startup context", ctx.Err())
+			}
 			defer func() { _ = server.Shutdown(); <-dnsDone }()
 			pki := remoteNativeOpenVPNNativePKI(t)
 			port := remoteNativeProvider(t, pki, network, listener.Addr().(*net.TCPAddr).Port)
