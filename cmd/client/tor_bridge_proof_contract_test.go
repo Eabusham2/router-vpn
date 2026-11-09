@@ -77,13 +77,13 @@ func torControllerProofContract(route, persistence []byte) error {
 	if !ordered(calls(controller, "a.proveTorBridgeExit"), calls(controller, "a.commitDesktopTorChoice"), calls(controller, "saved.adopt"), calls(controller, "a.monitorDesktopTorRuntime")) || len(connected(controller)) != 0 {
 		return errors.New("Tor controller must prove, save and adopt the same runtime before monitoring; Connected belongs to final adoption")
 	}
-	if !ordered(calls(save, "a.readDesktopTorProof"), calls(save, "a.persistProfilesLocked"), calls(save, "launch.tor.committedChoice.Store")) || len(connected(save)) != 0 {
+	if !ordered(calls(save, "a.readDesktopTorProofContext"), calls(save, "a.persistDesktopTorChoiceProfilesContext"), calls(save, "launch.tor.committedChoice.Store")) || len(connected(save)) != 0 {
 		return errors.New("Tor choice must retain fresh proof and a successful durable save before binding its new source")
 	}
 	rollback := false
 	ast.Inspect(save.Body, func(node ast.Node) bool {
 		branch, ok := node.(*ast.IfStmt)
-		if ok && text(branch.Cond) == "err != nil" && branch.Init != nil && strings.Contains(text(branch.Init), "a.persistProfilesLocked()") {
+		if ok && text(branch.Cond) == "err != nil" && branch.Init != nil && strings.Contains(text(branch.Init), "a.persistDesktopTorChoiceProfilesContext(ctx, currentWrite)") {
 			for _, statement := range branch.Body.List {
 				if expression, ok := statement.(*ast.ExprStmt); ok && text(expression.X) == "a.rollbackProfilesLocked(previous)" {
 					rollback = true
@@ -95,9 +95,26 @@ func torControllerProofContract(route, persistence []byte) error {
 	if !rollback {
 		return errors.New("Tor save failure must restore the captured in-memory store")
 	}
-	proofs, owners := calls(adopt, "a.readDesktopTorProof"), calls(adopt, "saved.currentLocked")
-	if len(proofs) != 2 || len(owners) != 2 || !ordered(proofs[:1], owners[:1], calls(adopt, "a.saveStartupSelection"), proofs[1:], owners[1:], connected(adopt)) {
+	proofs, owners := calls(adopt, "a.readDesktopTorProofContext"), calls(adopt, "saved.currentLocked")
+	if len(proofs) != 2 || len(owners) != 2 || !ordered(proofs[:1], owners[:1], calls(adopt, "a.saveDesktopTorChoiceStartupContext"), proofs[1:], owners[1:], connected(adopt)) {
 		return errors.New("Tor final Connected requires fresh proof and current ownership after Startup Last is saved")
+	}
+	for _, name := range []string{"persistDesktopTorChoiceProfilesContext", "saveDesktopTorChoiceStartupContext"} {
+		method := methods[name]
+		if len(calls(method, "atomicWritePrivateChecked")) != 1 || len(calls(method, "check")) != 1 {
+			return errors.New("Tor durable writes must retain original admission before work and before rename")
+		}
+		guarded := false
+		ast.Inspect(method.Body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if ok && text(call.Fun) == "atomicWritePrivateChecked" && len(call.Args) == 3 && text(call.Args[2]) == "check" {
+				guarded = true
+			}
+			return true
+		})
+		if !guarded {
+			return errors.New("Tor durable writes cannot omit final caller admission")
+		}
 	}
 	return nil
 }
@@ -118,10 +135,12 @@ func TestTorBridgeControllerProofContractRejectsRetiredOrdering(t *testing.T) {
 		{"ignored-proof", "actualIP, proofErr := a.proveTorBridgeExit()", "actualIP, proofErr := unrelatedProof()", true},
 		{"early-connected", "actualIP, proofErr := a.proveTorBridgeExit()", "a.state.Connected = true\nactualIP, proofErr := a.proveTorBridgeExit()", true},
 		{"ignored-adoption", "retainedProof, err = saved.adopt(a)", "retainedProof, err = unrelatedAdopt(a)", true},
-		{"ignored-save", "if err := a.persistProfilesLocked(); err != nil {", "if err := unrelatedSave(); err != nil {", false},
-		{"ignored-save-error", "if err := a.persistProfilesLocked(); err != nil {", "if err := a.persistProfilesLocked(); false {", false},
+		{"ignored-save", "if err := a.persistDesktopTorChoiceProfilesContext(ctx, currentWrite); err != nil {", "if err := unrelatedSave(); err != nil {", false},
+		{"ignored-save-error", "if err := a.persistDesktopTorChoiceProfilesContext(ctx, currentWrite); err != nil {", "if err := a.persistDesktopTorChoiceProfilesContext(ctx, currentWrite); false {", false},
 		{"ignored-rollback", "a.rollbackProfilesLocked(previous)", "unrelatedRollback(previous)", false},
-		{"stale-adoption-proof", "proof, err := a.readDesktopTorProof(saved.launch)", "proof, err := unrelatedProof(saved.launch)", false},
+		{"stale-adoption-proof", "proof, err := a.readDesktopTorProofContext(ctx, saved.launch)", "proof, err := unrelatedProof(saved.launch)", false},
+		{"unowned-profile-rename", `atomicWritePrivateChecked(a.cfg.ProfilesFile, append(body, '\n'), check)`, `atomicWritePrivateChecked(a.cfg.ProfilesFile, append(body, '\n'), nil)`, false},
+		{"unowned-startup-rename", `atomicWritePrivateChecked(path, append(body, '\n'), check)`, `atomicWritePrivateChecked(path, append(body, '\n'), nil)`, false},
 	} {
 		t.Run(change.name, func(t *testing.T) {
 			r, p := string(route), string(persistence)

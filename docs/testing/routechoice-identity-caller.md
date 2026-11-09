@@ -45,6 +45,38 @@ join controls. The tests retain actual private IPC files and child processes;
 their timing receipts are fixtures, not evidence of a Tor network circuit or
 physical-device acceptance.
 
-This change bounds comparison identity and probe admission. Public connection
-preflight and final durable choice/adoption still have separate caller
-propagation work; this result does not close those requirements.
+This identity change bounds comparison identity and probe admission. The
+durable-choice follow-up below closes a separate caller boundary; public
+connection capture, preflight and prelaunch propagation remain in progress.
+
+## Durable choice and final adoption
+
+Saving a proved Tor choice now retains both its original connection operation
+and the original request/adoption lifetime. The resulting caller preserves the
+request's values and the earlier deadline, and either original can cancel it.
+Native proof, source and physical-network observations, application/native
+locks, profile persistence and Startup Last persistence use that same caller.
+Recorded Disconnect intent rejects admission even before the original cancel
+callback has returned. Cleanup keeps its separately owned authority.
+
+The final atomic rename rechecks the caller and exact current owner. A rejected
+write preserves the original file and rolls back only this operation's in-memory
+choice. A completed durable profile write remains recorded if later adoption
+fails; it is not falsely reported as rolled back. Connected still requires the
+fresh retained proofs and the original current path after persistence.
+
+The integrated race binary at
+`0de31ff7103622fa999da523061581623dece47c` passed all 23 verdicts across five new
+runtime roots. They exercise held application/proof/native-owner locks,
+independently cancelled original lifetimes, the actual Disconnect function with
+its cancel callback held, actual private atomic writes and a retained private
+IPC proof process. The final-rename cases preserve the old inode and contents
+when admission fails. The controller AST contract passed ten verdicts; all 43
+Python Tor source-audit tests also passed, including removed-guard controls.
+
+The broader selector additionally reached twelve older physical-capture cases,
+which failed before their assertions because this environment cannot capture
+the physical network. Those twelve leaves and their parent are retained as
+failed results, not passed or skipped cases. The local controlled-observer
+checks do not replace the hosted native gate, a real Tor circuit, or device
+acceptance. Public connection preflight remains a separate unfinished unit.

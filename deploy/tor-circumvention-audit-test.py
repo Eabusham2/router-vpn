@@ -213,6 +213,27 @@ class TorMaintenanceAuditTests(unittest.TestCase):
 
 
 class TorChoiceAuditTests(unittest.TestCase):
+    def test_final_rename_keeps_original_caller_and_native_owner(self):
+        for original, replacement in (
+            ("a.connectionCancelIntent == operation", "false"),
+            (r"atomicWritePrivateChecked(a.cfg.ProfilesFile, append(body, '\n'), check)",
+             r"atomicWritePrivateChecked(a.cfg.ProfilesFile, append(body, '\n'), nil)"),
+            (r"atomicWritePrivateChecked(path, append(body, '\n'), check)",
+             r"atomicWritePrivateChecked(path, append(body, '\n'), nil)"),
+            ("ctx, finish, err := desktopTorChoiceCaller(operation, selection.adoption)",
+             "ctx, finish, err := desktopTorChoiceCaller(operation, nil)"),
+            ("ctx, finish, err := desktopTorChoiceCaller(saved.operation, saved.intent)",
+             "ctx, finish, err := desktopTorChoiceCaller(context.Background(), nil)"),
+            ("ctx, cancel = context.WithDeadline(intent, deadline)",
+             "ctx, cancel = context.WithCancel(intent)"),
+            ("stop := context.AfterFunc(operation, cancel)",
+             "stop := context.AfterFunc(context.Background(), cancel)"),
+            ("if !desktopTorChoiceRuntimeCurrentLocked(ctx, a, launch) || desktopNodeProcessExited(launch)",
+             "if false"),
+        ):
+            with self.subTest(original=original):
+                self.reject(CHOICE, original, replacement)
+
     def errors(self, changed=None):
         sources = dict(CHOICE_SOURCE)
         sources.update(changed or {})
@@ -239,11 +260,11 @@ class TorChoiceAuditTests(unittest.TestCase):
 
     def test_actual_route_save_binding_and_fresh_adoption_pass(self):
         self.assertEqual([], self.errors())
-        self.assertNotIn("a.persistProfilesLocked()", CHOICE_SOURCE[ROUTE])
+        self.assertNotIn("a.persistDesktopTorChoiceProfilesContext(ctx, currentWrite)", CHOICE_SOURCE[ROUTE])
 
     def test_shipping_audit_actually_invokes_the_durable_choice_contract(self):
         original_read = Path.read_text
-        broken = CHOICE_SOURCE[CHOICE].replace("a.persistProfilesLocked()", "skipDurableWrite()")
+        broken = CHOICE_SOURCE[CHOICE].replace("a.persistDesktopTorChoiceProfilesContext(ctx, currentWrite)", "skipDurableWrite()")
 
         def read(path, *args, **kwargs):
             return broken if path == ROOT/CHOICE else original_read(path, *args, **kwargs)
@@ -256,8 +277,8 @@ class TorChoiceAuditTests(unittest.TestCase):
         self.assertIn("desktop Tor durable choice/adoption ownership:", output.getvalue())
 
     def test_whitespace_and_nonsemantic_comments_are_allowed(self):
-        changed = {path: source.replace("\n", "\r\n").replace("a.persistProfilesLocked()",
-                   "a /* braces } { */ . persistProfilesLocked ( )")
+        changed = {path: source.replace("\n", "\r\n").replace("a.persistDesktopTorChoiceProfilesContext(ctx, currentWrite)",
+                   "a /* braces } { */ . persistDesktopTorChoiceProfilesContext ( ctx , currentWrite )")
                    for path, source in CHOICE_SOURCE.items()}
         self.assertEqual([], self.errors(changed))
 
@@ -277,9 +298,9 @@ class TorChoiceAuditTests(unittest.TestCase):
         ):
             with self.subTest(original=original):
                 self.reject(ROUTE, original, '// ' + original + '\n\t_ = "' + original + ' { }"')
-        self.reject(CHOICE, "if err := a.persistProfilesLocked(); err != nil {",
+        self.reject(CHOICE, "if err := a.persistDesktopTorChoiceProfilesContext(ctx, currentWrite); err != nil {",
                     'if err := func() error { return nil }(); err != nil {\n'
-                    '\t\t// a.persistProfilesLocked()\n\t\t_ = "a.persistProfilesLocked() { }"')
+                    '\t\t// a.persistDesktopTorChoiceProfilesContext(ctx, currentWrite)\n\t\t_ = "a.persistDesktopTorChoiceProfilesContext(ctx, currentWrite) { }"')
 
     def test_route_requires_captured_arguments_and_rejects_failed_save_or_adoption(self):
         for original, replacement in (
@@ -299,18 +320,18 @@ class TorChoiceAuditTests(unittest.TestCase):
         admission = next(line for line in source.splitlines()
                          if line.startswith("\tif desktopTorOperationCurrentLocked(a, operation, selected) != nil ||"))
         for guard in ("desktopTorOperationCurrentLocked(a, operation, selected) != nil",
-                      "registered != launch", "!desktopTorChoiceRuntimeCurrentLocked(a, launch)",
+                      "registered != launch", "!desktopTorChoiceRuntimeCurrentLocked(ctx, a, launch)",
                       "launch.tor.committedChoice.Load() != nil", "selection.currentLocked(a) != nil",
                       "a.validateExternalProfileExpectedProfilesLocked(q, selection.profile) != nil",
                       "startup != nil && startup.currentLocked(a) != nil"):
             with self.subTest(guard=guard):
                 self.assertIn(guard, admission)
                 self.reject(CHOICE, admission, admission.replace(guard, "false"))
-        self.reject(CHOICE, "if err := selection.current(a); err != nil {\n\t\treturn nil, err\n\t}",
-                    "_ = selection.current(a)")
+        self.reject(CHOICE, "if err := selection.currentContext(ctx, a); err != nil {\n\t\treturn nil, err\n\t}",
+                    "_ = selection.currentContext(ctx, a)")
 
     def test_last_source_and_operation_checks_cannot_move_after_disk_write(self):
-        final_guard = "\tif err := desktopTorOperationCurrentLocked(a, operation, selected); err != nil {\n\t\treturn nil, err\n\t}\n"
+        final_guard = "\tif err := errors.Join(ctx.Err(), desktopTorOperationCurrentLocked(a, operation, selected)); err != nil {\n\t\treturn nil, err\n\t}\n"
         self.move_before(CHOICE, final_guard, "\tchoice := &desktopTorCommittedChoice{")
         self.reject(CHOICE, "if err != nil || selection.predecessor != nil && source != selection.predecessor.assetsSHA256 {",
                     "if err != nil {")
@@ -325,7 +346,7 @@ class TorChoiceAuditTests(unittest.TestCase):
                 self.reject(CHOICE, original, replacement)
         binding = next(line for line in CHOICE_SOURCE[CHOICE].splitlines(keepends=True)
                        if line.startswith("\tchoice := &desktopTorCommittedChoice{")) + "\tlaunch.tor.committedChoice.Store(choice)\n"
-        self.move_before(CHOICE, binding, "\tif err := a.persistProfilesLocked(); err != nil {")
+        self.move_before(CHOICE, binding, "\tif err := a.persistDesktopTorChoiceProfilesContext(ctx, currentWrite); err != nil {")
 
     def test_atomic_saved_token_is_bound_to_exact_native_identity(self):
         for original, replacement in (
@@ -338,29 +359,29 @@ class TorChoiceAuditTests(unittest.TestCase):
                 self.reject(CHOICE, original, replacement)
 
     def test_saved_choice_needs_real_proof_before_startup_and_after_startup(self):
-        for original in ("_, err := a.readDesktopTorProof(saved.launch)",
-                         "proof, err := a.readDesktopTorProof(saved.launch)"):
+        for original in ("_, err = a.readDesktopTorProofContext(ctx, saved.launch)",
+                         "proof, err := a.readDesktopTorProofContext(ctx, saved.launch)"):
             with self.subTest(original=original):
                 self.reject(CHOICE, original, '// ' + original + '\n\t_ = "' + original + '"')
-        proof = "\tproof, err := a.readDesktopTorProof(saved.launch)\n\tif err != nil {\n\t\treturn desktopTorProof{}, err\n\t}\n"
-        self.move_before(CHOICE, proof, "\tif err := a.saveStartupSelection(saved.startup); err != nil {")
+        proof = "\tproof, err := a.readDesktopTorProofContext(ctx, saved.launch)\n\tif err != nil {\n\t\treturn desktopTorProof{}, err\n\t}\n"
+        self.move_before(CHOICE, proof, "\tif err := a.saveDesktopTorChoiceStartupContext(ctx, saved); err != nil {")
         self.reject(CHOICE, proof, proof.replace("return desktopTorProof{}, err", "_ = err"))
 
     def test_startup_and_final_admission_failures_cannot_be_ignored(self):
         for original, replacement in (
             ('return desktopTorProof{}, fmt.Errorf("proved Tor Startup Last record could not be saved: %w", err)',
              '_ = fmt.Errorf("proved Tor Startup Last record could not be saved: %w", err)'),
-            ("if err := saved.currentLocked(a); err != nil {\n\t\treturn desktopTorProof{}, err\n\t}",
-             "_ = saved.currentLocked(a)"),
+            ("if err := saved.currentLocked(ctx, a); err != nil {\n\t\treturn desktopTorProof{}, err\n\t}",
+             "_ = saved.currentLocked(ctx, a)"),
         ):
             with self.subTest(original=original):
                 self.reject(CHOICE, original, replacement)
         self.move_before(CHOICE, '\ta.state.Connected, a.state.Phase, a.state.LastError = true, "connected", ""\n',
-                         "\tif err := saved.currentLocked(a); err != nil {\n\t\treturn desktopTorProof{}, err\n\t}")
+                         "\tif err := saved.currentLocked(ctx, a); err != nil {\n\t\treturn desktopTorProof{}, err\n\t}")
 
     def test_post_save_failure_cannot_claim_rollback_of_committed_choice(self):
-        self.reject(CHOICE, "proof, err := a.readDesktopTorProof(saved.launch)",
-                    "a.rollbackProfilesLocked(a.profiles)\n\tproof, err := a.readDesktopTorProof(saved.launch)")
+        self.reject(CHOICE, "proof, err := a.readDesktopTorProofContext(ctx, saved.launch)",
+                    "a.rollbackProfilesLocked(a.profiles)\n\tproof, err := a.readDesktopTorProofContext(ctx, saved.launch)")
         self.reject(ROUTE, "retainedProof, err = saved.adopt(a)\n\tif err != nil {",
                     "retainedProof, err = saved.adopt(a)\n\tif err != nil {\n\t\ta.rollbackProfilesLocked(a.profiles)")
 
