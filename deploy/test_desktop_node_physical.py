@@ -88,7 +88,12 @@ LAYER_CASES = tuple(mode + "/" + layer for mode in ("shadowsocks", "hysteria2", 
 LAYER_ALLOCATION_CASES = tuple("paired-listeners/" + case for case in (
     "retained-pair", "collision-bound", "access-denied-bound", "fatal-error", "foreign-pair",
     "candidate-selection", "retry-both-protocols", "udp-collision-bound", "udp-access-denied-bound",
-    "udp-fatal-error", "udp-foreign-pair", "partial-close-error"))
+    "udp-fatal-error", "udp-foreign-pair", "partial-close-error", "production-pair"))
+if sys.platform != "win32":
+    LAYER_ALLOCATION_CASES += tuple("paired-listeners/" + case for case in (
+        "tcp-zero-retained", "tcp-zero-avoids-held-TCP", "tcp-zero-retry-UDP-collision",
+        "tcp-zero-UDP-collision-bound", "tcp-zero-TCP-fatal", "tcp-zero-UDP-fatal",
+        "tcp-zero-TCP-foreign", "tcp-zero-UDP-foreign", "tcp-zero-TCP-close-error", "tcp-zero-UDP-close-error"))
 HYSTERIA2_CREDENTIAL_CASES = (
     "off/hysteria-password", "off/hysteria-trust", "off/hysteria-salamander",
     "aes-256-gcm/hysteria-password", "aes-256-gcm+xor-whitening/hysteria-password",
