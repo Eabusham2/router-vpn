@@ -351,7 +351,9 @@ func TestSpeedLabTorPreparedTrialRejectsStaleAdmissionBeforeStop(t *testing.T) {
 			case "owner":
 				speedLabTemporaryOwners.Store(f.a, &speedLabTemporaryOwner{})
 			case "network":
-				prepared.tor.prelaunch.workspace.tor.networkIdentity = func() string { return "replacement-network" }
+				prepared.tor.prelaunch.workspace.tor.networkIdentityContext = func(ctx context.Context) (string, error) {
+					return "replacement-network", ctx.Err()
+				}
 			case "replacement-runtime":
 				f.a.cmd = exec.Command("never-started-replacement-owner")
 				f.a.state.RouterID, f.a.state.RuntimeMode = "replacement", "replacement"

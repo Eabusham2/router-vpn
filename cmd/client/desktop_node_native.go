@@ -403,8 +403,11 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) (resultErr error)
 }
 
 func stageDesktopNodeLaunchContext(ctx context.Context, a *app, launch *desktopNodeLaunch) (resultErr error) {
-	if ctx == nil || ctx.Err() != nil {
+	if ctx == nil {
 		return errors.New("native staging lost its original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(errConnectionOperationCancelled, err, errors.New("native staging lost its original caller"))
 	}
 	if launch == nil || launch.command != nil || launch.directory != "" || len(launch.config) == 0 {
 		return errors.New("native launch has already been staged or is incomplete")
