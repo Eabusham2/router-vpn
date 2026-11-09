@@ -1,0 +1,228 @@
+package libbox
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+)
+
+// The dedicated native gate supplies the same sealed library as packaging.
+// Static builds do not claim that an unexecuted dynamic load has succeeded.
+var routerImportedNaiveH2LoadLibrary = func(string) error {
+	return errors.New("Naive H2 parser requires the explicit pure-Go native loader")
+}
+
+func routerImportedNaiveH2Library(t *testing.T) {
+	t.Helper()
+	path, expected := os.Getenv("ROUTERVPN_NODE_CRONET_LIBRARY"), os.Getenv("ROUTERVPN_NODE_CRONET_SHA256")
+	size, err := strconv.ParseInt(os.Getenv("ROUTERVPN_NODE_CRONET_BYTES"), 10, 64)
+	if err != nil || size <= 0 || size > 128<<20 || len(expected) != 64 || !filepath.IsAbs(path) {
+		t.Fatal("Naive H2 parser requires its exact native-library module seal")
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() != size {
+		t.Fatal("Naive H2 parser library is absent, linked or changed", err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		t.Fatal("Naive H2 parser library changed during capture", err)
+	}
+	digest := sha256.New()
+	n, err := io.Copy(digest, io.LimitReader(file, size+1))
+	if err != nil || n != size || hex.EncodeToString(digest.Sum(nil)) != expected {
+		t.Fatal("Naive H2 parser library differs from its captured module", err)
+	}
+	if err := routerImportedNaiveH2LoadLibrary(path); err != nil {
+		t.Fatal("actual pinned Cronet parser library did not load", err)
+	}
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(opened, after) || after.Size() != size {
+		t.Fatal("Naive H2 parser library changed during native load", err)
+	}
+}
+
+func routerImportedNaiveH2Names() map[string]bool {
+	names := map[string]bool{}
+	for _, kind := range []string{"socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn-tcp", "openvpn-udp"} {
+		for _, first := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, last := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				names[kind+"--naive-h2--"+first+"--"+last+".json"] = true
+			}
+		}
+	}
+	return names
+}
+
+func TestRouterImportedNaiveH2SourceGraphs(t *testing.T) {
+	routerImportedNaiveH2Graphs(t, "ROUTERVPN_IMPORTED_NAIVE_H2_FIXTURES", true, false)
+}
+func TestRouterImportedNaiveH2AndroidSourceGraphs(t *testing.T) {
+	routerImportedNaiveH2Graphs(t, "ROUTERVPN_ANDROID_IMPORTED_NAIVE_H2_FIXTURES", true, true)
+}
+func TestRouterImportedNaiveH2AppleGraphs(t *testing.T) {
+	routerImportedNaiveH2Graphs(t, "ROUTERVPN_APPLE_IMPORTED_NAIVE_H2_FIXTURES", false, false)
+}
+func TestRouterImportedNaiveH2DesktopGraphs(t *testing.T) {
+	routerImportedNaiveH2Graphs(t, "ROUTERVPN_DESKTOP_IMPORTED_NAIVE_H2_FIXTURES", false, false)
+}
+
+func routerImportedNaiveH2Graphs(t *testing.T, environment string, captured, android bool) {
+	directory := os.Getenv(environment)
+	if directory == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_NAIVE_H2_FIXTURES") == "1" {
+			t.Fatal("required separate NaiveH2 source inventory missing")
+		}
+		t.Skip("separate NaiveH2 parser gate supplies original host captures")
+	}
+	directoryInfo, err := os.Lstat(directory)
+	if err != nil || !directoryInfo.IsDir() || directoryInfo.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("NaiveH2 parser source directory is absent or linked", err)
+	}
+	expected := routerImportedNaiveH2Names()
+	rows, err := os.ReadDir(directory)
+	if err != nil || len(rows) != len(expected) {
+		t.Fatal("NaiveH2 parser lost its exact 81 original graph inventory", err)
+	}
+	routerImportedNaiveH2Library(t)
+	for _, row := range rows {
+		t.Run(row.Name(), func(t *testing.T) {
+			name := row.Name()
+			if android {
+				if !strings.HasPrefix(name, "android-") {
+					t.Fatal("NaiveH2 Android source lacks its producer identity")
+				}
+				name = strings.TrimPrefix(name, "android-")
+			}
+			info, err := row.Info()
+			if err != nil || !expected[name] || row.Type()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 4<<20 {
+				t.Fatal("NaiveH2 parser received a foreign or unbounded source", err)
+			}
+			raw, err := os.ReadFile(filepath.Join(directory, row.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			config := string(raw)
+			if captured {
+				var source []string
+				if json.Unmarshal(raw, &source) != nil || len(source) != 9 || source[2] != "naive-h2" {
+					t.Fatal("NaiveH2 parser lost original seven inputs and graph receipt")
+				}
+				plan, err := mobilemultihop.NewImportedEntry(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
+				if err != nil {
+					t.Fatal("pinned native compiler rejected original NaiveH2 source", err)
+				}
+				defer plan.Close()
+				if plan.SourceSHA256() != source[7] || plan.Config() != source[8] || plan.Healthy() {
+					t.Fatal("pinned native NaiveH2 source identity changed or acquired live proof")
+				}
+				config = plan.Config()
+			}
+			var graph map[string]any
+			if json.Unmarshal([]byte(config), &graph) != nil {
+				t.Fatal("invalid original NaiveH2 graph")
+			}
+			routerImportedNaiveH2Axes(t, name, graph)
+			found := 0
+			for _, value := range graph["outbounds"].([]any) {
+				out := value.(map[string]any)
+				if out["type"] != "naive" {
+					continue
+				}
+				found++
+				uot, _ := out["udp_over_tcp"].(map[string]any)
+				tls, _ := out["tls"].(map[string]any)
+				resolver, _ := out["domain_resolver"].(map[string]any)
+				if out["quic"] != false || out["tag"] != "routervpn-execution-local" || out["detour"] == nil ||
+					uot["enabled"] != true || uot["version"] != float64(2) || tls["enabled"] != true || tls["insecure"] == true ||
+					resolver["server"] != "routervpn-predecessor-bootstrap-0" {
+					t.Fatal("Naive H2 parser lost its exact TCP, UoT, trust or original resolver owner")
+				}
+				transport := make(map[string]any, len(out))
+				for key, value := range out {
+					if key != "domain_resolver" {
+						transport[key] = value
+					}
+				}
+				if err := multihoprelay.ValidateNaiveRoutedTransport(transport, "naive-h2"); err != nil {
+					t.Fatal("Naive H2 original final lost its verified native transport", err)
+				}
+			}
+			if found != 1 {
+				t.Fatal("NaiveH2 parser requires one exact native final")
+			}
+			if err := CheckConfig(config); err != nil {
+				t.Fatal("actual pinned Libbox rejected the original NaiveH2 host graph", err)
+			}
+		})
+	}
+}
+
+func routerImportedNaiveH2Axes(t *testing.T, name string, graph map[string]any) {
+	t.Helper()
+	axes := strings.Split(strings.TrimSuffix(name, ".json"), "--")
+	if len(axes) != 4 || axes[1] != "naive-h2" {
+		t.Fatal("NaiveH2 graph lost its exact inventory axes")
+	}
+	byTag := map[string]map[string]any{}
+	for _, family := range []string{"outbounds", "endpoints"} {
+		rows, _ := graph[family].([]any)
+		for _, value := range rows {
+			row := value.(map[string]any)
+			tag, _ := row["tag"].(string)
+			if tag == "" || byTag[tag] != nil {
+				t.Fatal("NaiveH2 graph has an unowned or duplicate transport tag")
+			}
+			byTag[tag] = row
+		}
+	}
+	entry, final := byTag["entry-wg"], byTag["routervpn-execution-local"]
+	types := map[string]string{"socks5": "socks", "shadowsocks": "shadowsocks", "hysteria2": "hysteria2", "http-connect": "http", "https-connect": "http", "wireguard": "wireguard", "amneziawg": "routervpn-amneziawg", "openvpn-tcp": "openvpn-client", "openvpn-udp": "openvpn-client"}
+	if entry == nil || final == nil || types[axes[0]] == "" || entry["type"] != types[axes[0]] {
+		t.Fatal("NaiveH2 filename substituted another imported transport")
+	}
+	if strings.HasPrefix(axes[0], "openvpn-") && entry["network"] != strings.TrimPrefix(axes[0], "openvpn-") {
+		t.Fatal("NaiveH2 filename substituted another OpenVPN wire transport")
+	}
+	if axes[0] == "http-connect" || axes[0] == "https-connect" {
+		tls, _ := entry["tls"].(map[string]any)
+		if (axes[0] == "https-connect") != (tls != nil && tls["enabled"] == true) {
+			t.Fatal("NaiveH2 filename substituted CONNECT TLS policy")
+		}
+	}
+	layer := func(row map[string]any, off string) string {
+		if row["detour"] == nil && off == "" || row["detour"] == off {
+			return "off"
+		}
+		tag, _ := row["detour"].(string)
+		outer := byTag[tag]
+		if outer["type"] == "routervpn-openvpn-layer-map" {
+			mode, _ := outer["mode"].(string)
+			return mode
+		}
+		if outer["type"] == "routervpn-aes-xor" {
+			return "aes-256-gcm+xor-whitening"
+		}
+		if outer["type"] == "shadowsocks" && outer["method"] == "2022-blake3-aes-256-gcm" {
+			return "aes-256-gcm"
+		}
+		return "unowned"
+	}
+	if layer(entry, "") != axes[2] || layer(final, "entry-wg") != axes[3] {
+		t.Fatal("NaiveH2 filename substituted an independent Start Layer")
+	}
+}

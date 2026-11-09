@@ -282,42 +282,48 @@ func (f *desktopImportedOwnedFixture) publish(t *testing.T) {
 }
 
 func TestDesktopImportedOwnedSourceAndNativeDispatch(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn"} {
-		t.Run(protocol, func(t *testing.T) {
-			f := newDesktopImportedOwnedFixture(t, protocol, "reality-vision", "always")
-			before := cloneRouterProfileStore(f.a.profiles)
-			if f.launch.ownedNode.policy != nil || f.launch.ownedNode.imported.policy.Metadata().EntryID != f.selection.Entry.ID {
-				t.Fatal("imported entry was coerced into ordinary Node authority")
-			}
-			if _, err := compileRetainedNativeMultihopLaunch(f.selection, nil); err == nil {
-				t.Fatal("protected capture silently used a legacy helper")
-			}
-			f.stage(t)
-			if !reflect.DeepEqual(before, f.a.profiles) || f.kernel.target != nil || f.starts != 0 {
-				t.Fatal("private staging changed profiles or acquired kernel/runtime ownership")
-			}
-			if _, err := os.Lstat(filepath.Join(f.launch.directory, "node-source.json")); !errors.Is(err, os.ErrNotExist) {
-				t.Fatal("imported producer emitted an ordinary-node source")
-			}
-			identity, ok := activeDNSRuntimeIdentities.Load(f.a)
-			if !ok || identity.(activeDNSRuntimeIdentity).ImportedEntry != true || identity.(activeDNSRuntimeIdentity).ProfileID != f.selection.Exit.ID {
-				t.Fatal("typed command lost imported final DNS ownership")
-			}
-			f.publish(t)
-			caller, cancel := context.WithCancel(f.operation)
-			if err := startDesktopOwnedImportedLaunch(caller, f.operation, f.a, f.launch); err != nil {
+	for _, finalMode := range []string{"reality-vision", "naive-h2"} {
+		for _, protocol := range []string{"shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn"} {
+			t.Run(finalMode+"/"+protocol, func(t *testing.T) {
+				f := newDesktopImportedOwnedFixture(t, protocol, finalMode, "always", func(selection *multihopSelection) {
+					if finalMode == "naive-h2" {
+						selection.Exit.DNSProtocol = "tcp"
+					}
+				})
+				before := cloneRouterProfileStore(f.a.profiles)
+				if f.launch.ownedNode.policy != nil || f.launch.ownedNode.imported.policy.Metadata().EntryID != f.selection.Entry.ID {
+					t.Fatal("imported entry was coerced into ordinary Node authority")
+				}
+				if _, err := compileRetainedNativeMultihopLaunch(f.selection, nil); err == nil {
+					t.Fatal("protected capture silently used a legacy helper")
+				}
+				f.stage(t)
+				if !reflect.DeepEqual(before, f.a.profiles) || f.kernel.target != nil || f.starts != 0 {
+					t.Fatal("private staging changed profiles or acquired kernel/runtime ownership")
+				}
+				if _, err := os.Lstat(filepath.Join(f.launch.directory, "node-source.json")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("imported producer emitted an ordinary-node source")
+				}
+				identity, ok := activeDNSRuntimeIdentities.Load(f.a)
+				if !ok || identity.(activeDNSRuntimeIdentity).ImportedEntry != true || identity.(activeDNSRuntimeIdentity).ProfileID != f.selection.Exit.ID {
+					t.Fatal("typed command lost imported final DNS ownership")
+				}
+				f.publish(t)
+				caller, cancel := context.WithCancel(f.operation)
+				if err := startDesktopOwnedImportedLaunch(caller, f.operation, f.a, f.launch); err != nil {
+					cancel()
+					t.Fatal(err)
+				}
 				cancel()
-				t.Fatal(err)
-			}
-			cancel()
-			if f.starts != 1 || f.launch.command.Process != nil || f.launch.ownedNode.operation != f.operation ||
-				f.a.desktopOwnedNodeCurrentContext(context.Background(), f.launch, true) != nil || f.a.state.Connected {
-				t.Fatal("startup replaced operation lifetime or invented connected proof")
-			}
-			if _, err := f.a.readDesktopOwnedNodeReadyContext(context.Background(), f.launch, false); err != nil {
-				t.Fatal("parsed readiness did not retain both original inputs", err)
-			}
-		})
+				if f.starts != 1 || f.launch.command.Process != nil || f.launch.ownedNode.operation != f.operation ||
+					f.a.desktopOwnedNodeCurrentContext(context.Background(), f.launch, true) != nil || f.a.state.Connected {
+					t.Fatal("startup replaced operation lifetime or invented connected proof")
+				}
+				if _, err := f.a.readDesktopOwnedNodeReadyContext(context.Background(), f.launch, false); err != nil {
+					t.Fatal("parsed readiness did not retain both original inputs", err)
+				}
+			})
+		}
 	}
 }
 

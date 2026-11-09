@@ -1657,7 +1657,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
 
     static void requireOwnedImportedFiles(File session,String modeId,File executionFile,File entryLayerFile,File exitLayerFile,File importedEntryFile) {
             if(importedEntryFile.exists()&&(!importedEntryFile.isFile()||!importedEntryFile.getParentFile().equals(session)
-                    ||!executionFile.isFile()||!java.util.Arrays.asList("multihop-imported-shadowsocks","multihop-imported-hysteria2","multihop-imported-wg","multihop-imported-awg2-fast","multihop-imported-awg2-strong","multihop-imported-reality-vision","multihop-imported-reality-pq-vision","multihop-imported-reality-xhttp").contains(modeId)
+                    ||!executionFile.isFile()||!java.util.Arrays.asList("multihop-imported-shadowsocks","multihop-imported-hysteria2","multihop-imported-wg","multihop-imported-awg2-fast","multihop-imported-awg2-strong","multihop-imported-reality-vision","multihop-imported-reality-pq-vision","multihop-imported-reality-xhttp","multihop-imported-naive-h2").contains(modeId)
                     ||entryLayerFile.exists()||exitLayerFile.exists()))throw new IllegalStateException("Imported entry sources have no exclusive original multihop owner.");
             if(modeId.startsWith("multihop-imported-")&&!importedEntryFile.isFile())throw new IllegalStateException("The imported entry lost its original private sources.");
     }

@@ -6,6 +6,39 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 9 latest checkpoint: imported Naive H2 and public Stop ownership
+
+This revision adds the existing paired Naive H2 final to Local imported-entry
+preparation in shared Go, Android, Apple and desktop. Each producer retains
+nine wire variants and nine independent Start Layer combinations. The actual
+pinned native parser passed all **324 original graphs**, and the real H2
+literal-address/credential/trust suite passed **24 verdicts**. Five renamed
+graph controls and four native-library seal controls failed at their intended
+boundaries. The [H2 evidence guide](testing/imported-naive-h2.md) records the
+source identities, caller and DNS rules, completed-bundle gates and limits.
+The 657-case imported peer inventory compiled, but its first physical-owner
+witness was blocked locally by Netlink; hosted peer acceptance remains required.
+CONNECT with the default Home UDP lower resolver, H3, imported Server/Compare,
+additional-hop composition and remaining Unix protected integration remain open.
+
+Published `f23dea2f` fixes native H2 IPv6 literal resolution and trailing-dot
+TLS wire names while preserving the selected DNS policy and TCP-only lower
+transport. [Native resolution evidence](NAIVE-H2-NATIVE-RESOLUTION.md) records
+the real encrypted exchanges and the rejected original-source controls.
+
+Published `7c4a3eed` closes the earlier public Disconnect/Emergency Stop wait
+before `operationMu`: it cancels the exact captured DNS owner first, retains
+the original caller, fences later Connect/candidate publication and reserves
+owned Retry. Its [public Stop guide](testing/public-stop-dns-cancellation.md)
+records 151 race verdicts and three causal controls. Published `1e2ba67a`
+corrects the native OpenVPN DNS fixture to register its modeled TUN in the
+same Box; [the fixture record](testing/imported-openvpn-dns-fixture.md) keeps
+the local 41-verdict scope separate from pending full hosted native execution.
+
+These changes supersede the older H2/public-Stop gaps below. They do not
+establish a new all-platform release, physical/off-LAN acceptance, signing or
+private deployment. Each of those still requires its own current-code evidence.
+
 ## November 9 later checkpoint: ordinary Stop and owned desktop retry
 
 Published `b16656f5` completes the reusable selected-DNS cancel-and-join phase

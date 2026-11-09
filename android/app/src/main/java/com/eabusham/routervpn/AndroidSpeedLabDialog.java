@@ -180,8 +180,8 @@ final class AndroidSpeedLabDialog {
             if(ordinary==null)values.addAll(connection.supportedMultihopExitModes(n));
             else if(!ordinary.id.equals(n.id)){
                 JSONObject bundle=AndroidImportedRouterPath.finalBundle(n.file);
-                for(String candidate:new String[]{"shadowsocks","hysteria2","wg","awg2-fast","awg2-strong","reality-vision","reality-pq-vision","reality-xhttp"}){
-                    try{AndroidImportedRouterPath.compile(ordinary,bundle,candidate,"local");values.add(new NativeSingBoxController.ModeInfo(candidate,switch(candidate){case "hysteria2"->"Hysteria2";case "wg"->"WireGuard";case "awg2-fast"->"AmneziaWG Fast";case "awg2-strong"->"AmneziaWG Strong";case "reality-vision"->"REALITY Vision";case "reality-pq-vision"->"PQ REALITY Vision";case "reality-xhttp"->"REALITY XHTTP";default->"Shadowsocks";}));}
+                for(String candidate:new String[]{"shadowsocks","hysteria2","wg","awg2-fast","awg2-strong","reality-vision","reality-pq-vision","reality-xhttp","naive-h2"}){
+                    try{AndroidImportedRouterPath.compile(ordinary,bundle,candidate,"local");values.add(new NativeSingBoxController.ModeInfo(candidate,switch(candidate){case "hysteria2"->"Hysteria2";case "wg"->"WireGuard";case "awg2-fast"->"AmneziaWG Fast";case "awg2-strong"->"AmneziaWG Strong";case "reality-vision"->"REALITY Vision";case "reality-pq-vision"->"PQ REALITY Vision";case "reality-xhttp"->"REALITY XHTTP";case "naive-h2"->"Naive HTTP/2";default->"Shadowsocks";}));}
                     catch(Exception unavailable){/* Offer only complete captured final transports. */}
                 }
             }

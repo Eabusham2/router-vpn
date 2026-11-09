@@ -1,4 +1,10 @@
 import Foundation
+import CoreFoundation
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 
 /// A runtime-only restoration receipt. No node credential or selected policy
 /// is copied into the launch option, and the saved Compare preference stays
@@ -395,8 +401,8 @@ enum IOSImportedEntryMultihop {
     }
     static let methods: Set<String> = ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"]
     static func supports(entry: String, final: String) -> Bool {
-        if ["http-connect", "https-connect"].contains(entry) { return final == "shadowsocks" || xrayFinal(final) }
-        if ["socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn"].contains(entry) && xrayFinal(final) { return true }
+        if ["http-connect", "https-connect"].contains(entry) { return final == "shadowsocks" || final == "naive-h2" || xrayFinal(final) }
+        if ["socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn"].contains(entry) && (final == "naive-h2" || xrayFinal(final)) { return true }
         if ["socks5", "openvpn"].contains(entry) { return ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(final) }
         if ["shadowsocks", "hysteria2"].contains(final) {
             return ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(entry)
@@ -411,9 +417,109 @@ enum IOSImportedEntryMultihop {
         try IOSMultihopStartLayer.validateCapturedSSService(files, node: node)
         return true
     }
+
+    /// Picker/role validation of the original H2 source. The shared native
+    /// compiler separately verifies the certificate, full wrapper and resolver
+    /// closure before admission; this does not create a transport receipt.
+    static func validateNaiveH2(final: [String: Any], profiles: [String: [String: String]], entry: String) throws {
+        guard let files = profiles["naive-h2"], !files.isEmpty, files.count <= 2,
+              files["routervpn-ss-service.json"] == nil,
+              let encoded = files["sing-box.json"], let source = Data(base64Encoded: encoded),
+              !source.isEmpty, source.count <= 4 * 1024 * 1024, source.base64EncodedString() == encoded,
+              let root = try JSONSerialization.jsonObject(with: source) as? [String: Any],
+              let rows = root["outbounds"] as? [[String: Any]], rows.filter({ $0["tag"] as? String == "proxy" }).count == 1,
+              let out = rows.first(where: { $0["tag"] as? String == "proxy" }),
+              Set(out.keys).isSubset(of: ["type", "tag", "server", "server_port", "username", "password", "quic", "udp_over_tcp", "tls"]),
+              out["type"] as? String == "naive", exactBoolean(out["quic"]) == false,
+              let host = out["server"] as? String, literalAddress(host),
+              let port = out["server_port"] as? NSNumber, CFGetTypeID(port) != CFBooleanGetTypeID(),
+              port.doubleValue == Double(port.intValue), (1...65535).contains(port.intValue),
+              let username = out["username"] as? String, !username.contains(":"), let password = out["password"] as? String,
+              [username, password].allSatisfy({ !$0.isEmpty && $0.utf8.count <= 4096 && !$0.utf8.contains(where: { [0, 10, 13].contains($0) }) }),
+              let uot = out["udp_over_tcp"] as? [String: Any], Set(uot.keys) == Set(["enabled", "version"]),
+              exactBoolean(uot["enabled"]) == true, let version = uot["version"] as? NSNumber,
+              CFGetTypeID(version) != CFBooleanGetTypeID(), version.doubleValue == 2,
+              let tls = out["tls"] as? [String: Any],
+              Set(tls.keys).isSubset(of: ["enabled", "server_name", "insecure", "certificate", "certificate_path"]),
+              exactBoolean(tls["enabled"]) == true, tls["insecure"] == nil || exactBoolean(tls["insecure"]) == false,
+              let name = tls["server_name"] as? String, !name.isEmpty, name.utf8.count <= 253,
+              name == name.trimmingCharacters(in: .whitespacesAndNewlines),
+              name.unicodeScalars.allSatisfy({ $0.isASCII && $0.value > 32 && $0.value != 127 }) else { throw issue() }
+        var used: Set<String> = ["sing-box.json"]
+        if let raw = tls["certificate_path"] {
+            guard let path = raw as? String, path != "sing-box.json", !path.contains(".."),
+                  path.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil,
+                  tls["certificate"] == nil, let text = files[path], let data = Data(base64Encoded: text),
+                  data.base64EncodedString() == text, !data.isEmpty, data.count <= 256 * 1024,
+                  let material = String(data: data, encoding: .utf8), capturedCertificate(material) else { throw issue() }
+            used.insert(path)
+        }
+        if let raw = tls["certificate"] {
+            let material = raw as? [String] ?? (raw as? String).map { [$0] }
+            guard let material, !material.isEmpty, material.count <= 16,
+                  material.reduce(0, { $0 + $1.utf8.count }) <= 256 * 1024,
+                  material.allSatisfy(capturedCertificate) else { throw issue() }
+        }
+        guard used == Set(files.keys) else { throw issue() }
+        if ["http-connect", "https-connect"].contains(entry) {
+            // Naive's inner UoT does not authorize UDP below its own H2 dial.
+            // Preserve the original selected DNS and bootstrap; refuse an
+            // incompatible tree instead of replacing it with another policy.
+            guard ["tcp", "tls", "https"].contains(try selectedDNSTransport(final)) else { throw issue() }
+            let dnsMode = (final["dns_mode"] as? String ?? "home").lowercased()
+            guard final["dns_host"] == nil || final["dns_host"] is String else { throw issue() }
+            let configuredHost = final["dns_host"] as? String ?? ""
+            let homeHost = [final["adguard_ipv4"] as? String ?? "", final["adguard_ipv6"] as? String ?? ""].first(where: { !$0.isEmpty }) ?? ""
+            let resolverHost = dnsMode == "rescue" ? "1.1.1.1" :
+                (["", "home"].contains(dnsMode) && configuredHost.isEmpty ? homeHost : configuredHost)
+            guard !resolverHost.isEmpty else { throw issue() }
+            if let raw = final["dns_bootstrap"] {
+                guard !literalAddress(resolverHost), let bootstrap = raw as? [String: Any],
+                      Set(bootstrap.keys) == Set(["server", "query"]), let server = bootstrap["server"] as? [String: Any],
+                      ["tcp", "tls", "https"].contains(server["type"] as? String ?? ""),
+                      server["tag"] as? String == "external-dns-bootstrap",
+                      ["proxy", "custom-exit"].contains(server["detour"] as? String ?? ""),
+                      let host = server["server"] as? String, literalAddress(host),
+                      let query = bootstrap["query"] as? [String: Any], query["server"] as? String == "external-dns-bootstrap" else { throw issue() }
+            } else if !literalAddress(resolverHost) { throw issue() }
+        }
+    }
+
+    private static func literalAddress(_ value: String) -> Bool {
+        guard !value.isEmpty, !value.contains("%"), !value.utf8.contains(0) else { return false }
+        var v4 = in_addr(), v6 = in6_addr()
+        return inet_pton(AF_INET, value, &v4) == 1 || inet_pton(AF_INET6, value, &v6) == 1
+    }
+
+    private static func exactBoolean(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
+    }
+    private static func capturedCertificate(_ value: String) -> Bool {
+        let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.hasPrefix("-----BEGIN CERTIFICATE-----") && text.hasSuffix("-----END CERTIFICATE-----")
+    }
+    private static func selectedDNSTransport(_ final: [String: Any]) throws -> String {
+        guard ["dns_mode", "dns_protocol"].allSatisfy({ final[$0] == nil || final[$0] is String }) else { throw issue() }
+        let mode = (final["dns_mode"] as? String ?? "").lowercased()
+        let saved = (final["dns_protocol"] as? String ?? "").lowercased()
+        let selected: String
+        switch mode {
+        case "", "home": selected = saved.isEmpty ? "udp" : saved
+        case "custom": selected = saved
+        case "dot": selected = "tls"
+        case "doh", "rescue": selected = "https"
+        case "doh3": selected = "h3"
+        case "fastest": selected = "udp"
+        default: throw issue()
+        }
+        return ["dot": "tls", "doh": "https", "doh3": "h3"][selected] ?? selected
+    }
     static func validate(entry: [String: Any], final: [String: Any], profiles: [String: [String: String]] = [:]) throws {
         guard let imported = entry["external"] as? [String: Any],
               let kind = imported["protocol"] as? String, ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains(kind) else { throw issue() }
+        let naiveH2 = final["multihop_exit_mode"] as? String == "naive-h2"
+        if naiveH2 { try validateNaiveH2(final: final, profiles: profiles, entry: kind) }
         if xrayFinal(final["multihop_exit_mode"] as? String ?? "") {
             guard ["socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn"].contains(kind),
                   [entry, final].allSatisfy({ profile in
@@ -429,24 +535,12 @@ enum IOSImportedEntryMultihop {
                       original["routervpn-ss-service.json"] == nil else { throw issue() }
             }
             let uot = try configuredCONNECTUoT(final: final, profiles: profiles)
-            let datagrams = reality || uot
+            let datagrams = reality || uot || naiveH2
             let layers = datagrams ? ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"] : ["", "off"]
-            let transports = datagrams ? ["udp", "tcp", "tls", "https", "h3"] : ["tcp", "tls", "https"]
+            let transports = datagrams && !naiveH2 ? ["udp", "tcp", "tls", "https", "h3"] : ["tcp", "tls", "https"]
             guard entry["start_layer"] == nil || entry["start_layer"] is String,
                   ["start_layer", "dns_mode", "dns_protocol"].allSatisfy({ final[$0] == nil || final[$0] is String }) else { throw issue() }
-            let dnsMode = (final["dns_mode"] as? String ?? "").lowercased()
-            let savedTransport = (final["dns_protocol"] as? String ?? "").lowercased()
-            let selected: String
-            switch dnsMode {
-            case "", "home": selected = savedTransport.isEmpty ? "udp" : savedTransport
-            case "custom": selected = savedTransport
-            case "dot": selected = "tls"
-            case "doh", "rescue": selected = "https"
-            case "doh3": selected = "h3"
-            case "fastest": selected = "udp"
-            default: throw issue()
-            }
-            let transport = ["dot": "tls", "doh": "https", "doh3": "h3"][selected] ?? selected
+            let transport = try selectedDNSTransport(final)
             guard ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(entry["start_layer"] as? String ?? ""),
                   layers.contains(final["start_layer"] as? String ?? ""),
                   transports.contains(transport) else { throw issue() }
@@ -495,6 +589,6 @@ enum IOSImportedEntryMultihop {
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ImportedEntry", code: 1, userInfo: [NSLocalizedDescriptionKey:
-            "Choose a Local imported entry and a different paired Router VPN final with their original settings. WireGuard, AmneziaWG, OpenVPN, SOCKS5, Shadowsocks 2022, Hysteria2 and HTTP/HTTPS CONNECT entries can use a paired REALITY Vision, PQ REALITY Vision or XHTTP final while retaining each node's independently provisioned Start Layer. REALITY carries TCP and UDP; Vision requires the final node's UDP 443 option for QUIC or DoH3 on port 443. HTTP/HTTPS CONNECT can also use SS2022 with selected TCP, DoT or DoH DNS. Its captured UoT-v2 service additionally permits UDP and final AES or AES+XOR; without it, SS2022 is TCP-only with the final layer Off. Resolver hostnames require their saved bootstrap through the same final. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
+            "Choose a Local imported entry and a different paired Router VPN final with their original settings. WireGuard, AmneziaWG, OpenVPN, SOCKS5, Shadowsocks 2022, Hysteria2 and HTTP/HTTPS CONNECT entries can use a paired REALITY Vision, PQ REALITY Vision or XHTTP final while retaining each node's independently provisioned Start Layer. Naive H2 retains its own authenticated H2 and UDP stream transport. Over HTTP/HTTPS CONNECT its selected DNS and captured bootstrap must use TCP, DoT or DoH; saved Home UDP is not rewritten. REALITY carries TCP and UDP; Vision requires the final node's UDP 443 option for QUIC or DoH3 on port 443. HTTP/HTTPS CONNECT can also use SS2022 with selected TCP, DoT or DoH DNS. Its captured UoT-v2 service additionally permits UDP and final AES or AES+XOR; without it, SS2022 is TCP-only with the final layer Off. Resolver hostnames require their saved bootstrap through the same final. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
     }
 }

@@ -1,0 +1,7 @@
+//go:build with_purego
+
+package libbox
+
+import "github.com/sagernet/cronet-go"
+
+func init() { routerImportedNaiveH2LoadLibrary = cronet.LoadLibrary }

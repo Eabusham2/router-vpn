@@ -31,9 +31,10 @@ func importedNativeXrayFinal(mode string) bool {
 // NewImportedEntry composes a captured SOCKS5, SS2022, Hysteria2, WireGuard,
 // AmneziaWG, HTTP/HTTPS CONNECT or OpenVPN predecessor and a compatible paired
 // Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. Each imported transport
-// also supports ordinary/PQ REALITY Vision and XHTTP finals with independently captured
-// Start Layers. Packet and bounded OpenVPN entries carry its native VLESS stream
-// through their existing owned userspace endpoint, not another system VPN.
+// also supports ordinary/PQ REALITY Vision, XHTTP and Naive H2 finals with
+// independently captured Start Layers. Packet and bounded OpenVPN entries
+// carry those final streams through their existing owned userspace endpoint,
+// within the same system VPN.
 // Packet-to-packet
 // composition requires the complete configured data/control envelope. SOCKS5's
 // SS/Hysteria2/WG/AWG/REALITY finals retain independently provisioned Start Layers.
@@ -52,7 +53,8 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	proxyXrayFinal := socksXrayFinal || (selection.Protocol == "shadowsocks" || selection.Protocol == "hysteria2" || connectEntry) && importedNativeXrayFinal(exitMode)
 	packetXrayFinal := (selection.Protocol == "wireguard" || selection.Protocol == "amneziawg" || selection.Protocol == "openvpn") && importedNativeXrayFinal(exitMode)
 	importedXrayFinal := proxyXrayFinal || packetXrayFinal
-	if selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5" && selection.Protocol != "http-connect" && selection.Protocol != "https-connect" && selection.Protocol != "openvpn") || selection.Profile["node_kind"] != "external" || (!importedXrayFinal && exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
+	naiveH2Final := exitMode == "naive-h2"
+	if selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5" && selection.Protocol != "http-connect" && selection.Protocol != "https-connect" && selection.Protocol != "openvpn") || selection.Profile["node_kind"] != "external" || (!importedXrayFinal && !naiveH2Final && exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
 		return nil, bad
 	}
 
@@ -160,7 +162,7 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	if original == nil || original["type"] != expectedType || selection.Protocol == "shadowsocks" && !importedSS2022Method(predecessorText(original, "method")) {
 		return nil, bad
 	}
-	if proxyXrayFinal && selection.Protocol == "shadowsocks" && !importedSS2022Credentials(predecessorText(original, "method"), predecessorText(original, "password")) {
+	if (proxyXrayFinal || naiveH2Final) && selection.Protocol == "shadowsocks" && !importedSS2022Credentials(predecessorText(original, "method"), predecessorText(original, "password")) {
 		return nil, bad
 	}
 	// Each transport has its own authenticated layer. Attach the final's outer
@@ -192,6 +194,11 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 			err = validateNestedXrayExit(final, exitMode, applexray.StartLayerTag)
 		}
 		if err != nil {
+			return nil, err
+		}
+	}
+	if naiveH2Final && !connectEntry {
+		if err := importedNaiveH2DNS(last, final, true); err != nil {
 			return nil, err
 		}
 	}
@@ -235,6 +242,9 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 		}
 	}
 	outer["detour"] = "entry-wg"
+	if naiveH2Final {
+		attachImportedNaiveH2Bootstrap(last)
+	}
 	for _, family := range []string{"endpoints", "outbounds"} {
 		rows, _ := first[family].([]any)
 		if len(rows) == 0 {

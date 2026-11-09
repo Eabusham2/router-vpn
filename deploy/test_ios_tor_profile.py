@@ -1062,6 +1062,11 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
  }
  @MainActor static func run()throws {
   defer{RouterVPNTorTestClose()}
+  if ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_IMPORTED_NAIVE_H2_FIXTURES"] != nil {
+   try importedNaiveH2Graphs()
+   print("Apple imported Naive H2: PASS (81 separate shipping Swift/actual Go graphs; \(checks) checks; no native network proof)")
+   return
+  }
   if ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_IMPORTED_XHTTP_XRAY_FIXTURES"] != nil {
    try importedXHTTPGraphs()
    print("Apple imported XHTTP: PASS (81 separate shipping Swift/actual Go graphs; \(checks) checks; no native network proof)")
@@ -1153,6 +1158,139 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try check("complete direct and private enabled padding matrix",paddingGraphs==464)
   try ordinaryTorPredecessors(padding:true)
   try check("complete enabled padding matrix",paddingGraphs==528)
+ }
+ @MainActor static func importedNaiveH2Graphs()throws {
+  guard let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_NAIVE_H2_SOURCES"],let output=ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_IMPORTED_NAIVE_H2_FIXTURES"] else {throw NSError(domain:"fixture",code:1)}
+  let mode="naive-h2",kinds=["socks5","shadowsocks","hysteria2","http-connect","https-connect","wireguard","amneziawg","openvpn-tcp","openvpn-udp"]
+  let files=try FileManager.default.contentsOfDirectory(at:URL(fileURLWithPath:directory),includingPropertiesForKeys:nil).sorted{$0.lastPathComponent<$1.lastPathComponent}
+  var expected=Set<String>()
+  for kind in kinds {for first in layers {for last in layers {expected.insert(kind+"--"+mode+"--"+first+"--"+last+".json")}}}
+  try check("Naive H2 exact separate source inventory",files.count==81 && Set(files.map{$0.lastPathComponent})==expected)
+  for file in files {
+   let source=try JSONDecoder().decode([String].self,from:Data(contentsOf:file))
+   try check("Naive H2 preserves all original inputs",source.count==9 && source[2]==mode)
+   let capture=try object(Data(source[1].utf8)),entry=capture["profile"] as! [String:Any],kind=capture["protocol"] as! String
+   let axes=file.deletingPathExtension().lastPathComponent.components(separatedBy:"--")
+   var final=try object(Data(source[4].utf8))
+   final["multihop_enabled"]=true;final["multihop_entry_id"]=entry["id"];final["multihop_entry_mode"]=kind;final["multihop_exit_id"]=final["id"];final["multihop_exit_mode"]=mode;final["multihop_execution"]="local"
+   let assets=try JSONDecoder().decode([String:String].self,from:Data(source[3].utf8))
+   var maps=[mode:assets]
+   if !source[5].isEmpty {maps["shadowsocks"]=try JSONDecoder().decode([String:String].self,from:Data(source[5].utf8))}
+   try check("Naive H2 public admission retains exact imported family",IOSImportedEntryMultihop.supports(entry:kind,final:mode))
+   try IOSImportedEntryMultihop.validate(entry:entry,final:final,profiles:maps)
+   let raw=try RouterVPNExternalExitBuilder.importedRouterSource(profile:entry),last=try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:maps)
+   try check("Naive H2 captures complete original entry",try json(object(Data(raw.capture.utf8))["profile"]!)==json(entry))
+   try check("Naive H2 retains original paired assets and independent layer",try json(object(Data(last.files.utf8)))==json(assets) && last.mode==mode && last.start.isEmpty==(axes[3]=="off"))
+   if axes[3] != "off" {try check("Naive H2 layer retains own original assets",try json(object(Data(last.start.utf8)))==json(object(Data(source[5].utf8))))}
+   let args=["config":raw.config,"capture":raw.capture,"mode":mode,"files":last.files,"start":last.start,"profile":try text(final),"dns":source[6]]
+   let encoded=try bridge(["Op":"imported-router","Config":text(args)]),graph=try object(Data(encoded.utf8)),original=try object(Data(source[8].utf8))
+   let native=try tagged(graph,"routervpn-execution-local"),oldNative=try tagged(original,"routervpn-execution-local")
+   let transport=try object(Data(bridge(["Op":"proxy-entry","Mode":mode,"Files":last.files]).utf8)),outer=axes[3]=="off" ? "entry-wg":"start-layer-aes"
+   try check("Naive H2 retains exact native final graph",try json(native)==json(oldNative) && native["type"] as? String=="naive" && native["quic"] as? Bool==false)
+   try check("Naive H2 retains credentials UoT and trust",try json(native["tls"]!)==json(transport["tls"]!) && json(native["udp_over_tcp"]!)==json(transport["udp_over_tcp"]!) && native["username"] as? String==transport["username"] as? String && native["password"] as? String==transport["password"] as? String)
+   try check("Naive H2 final retains its receiver and layer edge",native["detour"] as? String==outer && native["server"] as? String==(axes[3]=="off" ? transport["server"] as? String:"127.0.0.1") && native["server_port"] as? Int==transport["server_port"] as? Int)
+   let dns=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]],resolver=native["domain_resolver"] as! [String:Any]
+   try check("Naive H2 selected DNS and lower bootstrap remain separate",dns.count==2 && dns[0]["type"] as? String=="tcp" && dns[0]["detour"] as? String=="proxy" && dns[0]["server"] as? String==final["adguard_ipv4"] as? String && dns[1]["detour"] as? String==outer && resolver["server"] as? String==dns[1]["tag"] as? String)
+   try check("Naive H2 preserves exact captured DNS policy",try json(graph["dns"]!)==json(original["dns"]!))
+   let metadata=try object(Data(bridge(["Op":"imported-router-metadata","Config":text(args)]).utf8))
+   try check("Naive H2 retains final-only proof credentials",metadata["exit_mode"] as? String==mode && metadata["exit_id"] as? String==final["id"] as? String && (metadata["entry_api"] as? String ?? "").isEmpty && (metadata["entry_token"] as? String ?? "").isEmpty)
+   if ["http-connect","https-connect"].contains(kind){try check("Naive H2 capability is distinct from SS and VLESS",metadata["transport_capability"] as? String=="naive-h2-stream")}
+   if kind=="shadowsocks" {for key in ["not-base64",Data(repeating:0,count:31).base64EncodedString()] {
+    var changed=entry,external=entry["external"] as! [String:Any],transport=(entry["external"] as! [String:Any])["shadowsocks"] as! [String:Any]
+    transport["password"]=key;external["shadowsocks"]=transport;changed["external"]=external
+    reject("Naive H2 actual compiler refuses malformed original SS2022 entry key"){
+     let invalid=try RouterVPNExternalExitBuilder.importedRouterSource(profile:changed);var replaced=args;replaced["config"]=invalid.config;replaced["capture"]=invalid.capture
+     _ = try bridge(["Op":"imported-router","Config":text(replaced)])
+    }
+   }}
+   for value in (graph["outbounds"] as! [[String:Any]])+((graph["endpoints"] as? [[String:Any]]) ?? []) {
+    let tag=value["tag"] as! String
+    if tag=="entry-wg" || tag.hasPrefix("imported-entry-") || tag=="start-layer-aes" {
+     var row=value,old=try tagged(original,tag)
+     if ["wireguard","amneziawg"].contains(kind) && tag=="entry-wg" {if row["system"]==nil{row["system"]=false};if old["system"]==nil{old["system"]=false}}
+     try check("Naive H2 retains every independent entry/layer edge",try json(row)==json(old))
+    }
+   }
+   var selected=ClientBundle.empty,profile=final
+   profile["name"]="Captured final";profile["adguard_ipv6"]="";profile["socks_host"]="";profile["socks_port"]=0;profile["socks_username"]="";profile["socks_password"]=""
+   selected.routerProfiles=[try JSONDecoder().decode(RouterProfile.self,from:json(profile))];selected.selectedRouterID=final["id"] as! String;selected.profiles=maps
+   let selection=try IOSRuntimeSelector.selectMultihop(bundle:selected,rawProfileID:nil)
+   try check("Naive H2 actual runtime selects exact Local final",selection.engine == .multihop && selection.rawProfileID==mode && selection.multihopEntryMode==kind)
+   let entryBundle:[String:Any]=["selectedRouterID":entry["id"]!,"routerProfiles":[entry],"profiles":[String:[String:String]]()]
+   let configuration:[String:Any]=["engine":"multihop-libbox","mode":mode,"bundle":try JSONEncoder().encode(selected),"entryBundle":try json(entryBundle)]
+   func identity(_ value:[String:Any])throws->IOSMultihopExecution.Source{try IOSMultihopExecution.Source(configuration:value,digest:{SHA256.hash(data:$0).map{String(format:"%02x",$0)}.joined()})}
+   let owner=try identity(configuration),receipt=try IOSMultihopExecution.StartupChoice(source:owner,execution:"local").encoded()
+   try check("Naive H2 startup retains complete original source",try IOSMultihopExecution.StartupChoice.decode(receipt,source:owner).source==owner)
+   for fault in ["h3","numeric-quic","missing-uot","uot-version","numeric-uot","missing-user","missing-password","insecure","missing-sni","missing-certificate","malformed-certificate","unused-asset","missing-source","foreign-service"] {
+    var changed=assets,replaced=args,rawConfig=try object(Data(base64Encoded:assets["sing-box.json"]!)!),rows=try object(Data(base64Encoded:assets["sing-box.json"]!)!)["outbounds"] as! [[String:Any]]
+    let index=rows.firstIndex(where:{$0["tag"] as? String=="proxy"})!;var row=rows[index]
+    switch fault {
+    case "h3":row["quic"]=true
+    case "numeric-quic":row["quic"]=0
+    case "missing-uot":row.removeValue(forKey:"udp_over_tcp")
+    case "uot-version","numeric-uot":var uot=row["udp_over_tcp"] as! [String:Any];uot[fault=="uot-version" ? "version":"enabled"]=1;row["udp_over_tcp"]=uot
+    case "missing-user":row.removeValue(forKey:"username")
+    case "missing-password":row.removeValue(forKey:"password")
+    case "insecure","missing-sni":var tls=row["tls"] as! [String:Any];if fault=="insecure"{tls["insecure"]=true}else{tls.removeValue(forKey:"server_name")};row["tls"]=tls
+    case "missing-certificate":var tls=row["tls"] as! [String:Any];tls.removeValue(forKey:"certificate");tls["certificate_path"]="missing.crt";row["tls"]=tls
+    case "malformed-certificate":changed[(row["tls"] as! [String:Any])["certificate_path"] as! String]=Data("not a certificate".utf8).base64EncodedString()
+    case "unused-asset":changed["unused.crt"]=Data("unused asset".utf8).base64EncodedString()
+    case "foreign-service":changed["routervpn-ss-service.json"]=Data("{}".utf8).base64EncodedString()
+    default:break
+    }
+    rows[index]=row;rawConfig["outbounds"]=rows;changed["sing-box.json"]=try json(rawConfig).base64EncodedString()
+    if fault=="missing-source"{changed.removeValue(forKey:"sing-box.json")}
+    replaced["files"]=try text(changed);var changedMaps=maps;changedMaps[mode]=changed
+    reject("Naive H2 host refuses invalid original source "+fault){try IOSImportedEntryMultihop.validate(entry:entry,final:final,profiles:changedMaps)}
+    reject("Naive H2 compiler refuses invalid original source "+fault){_ = try bridge(["Op":"imported-router","Config":text(replaced)])}
+   }
+   for field in ["username","password","server","server_name"] {
+    var changed=assets,rawConfig=try object(Data(base64Encoded:assets["sing-box.json"]!)!),rows=try object(Data(base64Encoded:assets["sing-box.json"]!)!)["outbounds"] as! [[String:Any]]
+    let index=rows.firstIndex(where:{$0["tag"] as? String=="proxy"})!;var row=rows[index]
+    if field=="server_name"{var tls=row["tls"] as! [String:Any];tls[field]="different.example.net";row["tls"]=tls}else{row[field]=field=="server" ? "203.0.113.99":"different-original"}
+    rows[index]=row;rawConfig["outbounds"]=rows;changed["sing-box.json"]=try json(rawConfig).base64EncodedString()
+    var bundle=selected;bundle.profiles[mode]=changed;var substitution=configuration;substitution["bundle"]=try JSONEncoder().encode(bundle)
+    reject("Naive H2 original receipt refuses substituted "+field){_ = try IOSMultihopExecution.StartupChoice.decode(receipt,source:identity(substitution))}
+   }
+   for execution in ["server","auto"] {var changed=final;changed["multihop_execution"]=execution;reject("Naive H2 refuses unowned execution "+execution){try IOSImportedEntryMultihop.validate(entry:entry,final:changed,profiles:maps)}}
+   if axes[2]=="off" && axes[3]=="off"{try importedNaiveH2DNS(entry:entry,final:final,maps:maps,args:args)}
+   try Data(encoded.utf8).write(to:URL(fileURLWithPath:output).appendingPathComponent(file.lastPathComponent),options:.withoutOverwriting)
+  }
+ }
+ @MainActor static func importedNaiveH2DNS(entry:[String:Any],final:[String:Any],maps:[String:[String:String]],args:[String:String])throws {
+  let kind=(entry["external"] as! [String:Any])["protocol"] as! String,connect=["http-connect","https-connect"].contains(kind),before=try json(final)
+  var system=maps["naive-h2"]!,wrapper=try object(Data(base64Encoded:maps["naive-h2"]!["sing-box.json"]!)!),rows=try object(Data(base64Encoded:maps["naive-h2"]!["sing-box.json"]!)!)["outbounds"] as! [[String:Any]]
+  let index=rows.firstIndex(where:{$0["tag"] as? String=="proxy"})!;var tls=rows[index]["tls"] as! [String:Any];tls.removeValue(forKey:"certificate");tls.removeValue(forKey:"certificate_path");rows[index]["tls"]=tls;wrapper["outbounds"]=rows;system=["sing-box.json":try json(wrapper).base64EncodedString()]
+  var systemMaps=maps;systemMaps["naive-h2"]=system;try IOSImportedEntryMultihop.validate(entry:entry,final:final,profiles:systemMaps)
+  var systemArgs=args;systemArgs["files"]=try text(system);let systemGraph=try object(Data(bridge(["Op":"imported-router","Config":text(systemArgs)]).utf8))
+  try check("Naive H2 retains explicit system trust",try (tagged(systemGraph,"routervpn-execution-local")["tls"] as! [String:Any])["certificate"]==nil)
+  var home=final;home["dns_protocol"]="udp";var homeArgs=args;homeArgs["profile"]=try text(home)
+  if connect {
+   reject("Naive H2 CONNECT host retains incompatible Home UDP"){try IOSImportedEntryMultihop.validate(entry:entry,final:home,profiles:maps)}
+   reject("Naive H2 CONNECT compiler refuses unchanged Home UDP"){_ = try bridge(["Op":"imported-router","Config":text(homeArgs)])}
+  } else {
+   try IOSImportedEntryMultihop.validate(entry:entry,final:home,profiles:maps)
+   let graph=try object(Data(bridge(["Op":"imported-router","Config":text(homeArgs)]).utf8)),dns=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
+   try check("Naive H2 capable entry keeps selected Home UDP",dns[0]["type"] as? String=="udp")
+  }
+  for transport in ["tcp","tls","https"] {for hostname in [false,true] {
+   var selected=final;selected["dns_mode"]="custom";selected["dns_protocol"]=transport;selected["dns_host"]=hostname ? "resolver.example.net":"203.0.113.53";selected["dns_port"]=8853;selected["dns_server_name"]="resolver.example.net";selected["dns_path"]="/owned-dns-query"
+   if hostname{selected["dns_bootstrap"]=["server":["type":"tcp","tag":"external-dns-bootstrap","server":"203.0.113.54","server_port":5354,"detour":"proxy"],"query":["server":"external-dns-bootstrap","timeout":"3s","disable_optimistic_cache":true]] as [String:Any]}
+   try IOSImportedEntryMultihop.validate(entry:entry,final:selected,profiles:maps)
+   var captured=args;captured["profile"]=try text(selected);captured["dns"]=hostname ? try text(selected["dns_bootstrap"]!):""
+   let graph=try object(Data(bridge(["Op":"imported-router","Config":text(captured)]).utf8)),dns=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
+   try check("Naive H2 retains complete selected resolver and lower bootstrap",dns.count==(hostname ? 4:2) && dns[0]["type"] as? String==transport && dns[0]["server"] as? String==selected["dns_host"] as? String && dns[0]["server_port"] as? Int==8853)
+   for resolver in dns {try check("Naive H2 resolver retains exact lane owner",resolver["detour"] as? String==((resolver["tag"] as! String).hasPrefix("routervpn-predecessor-bootstrap-") ? "entry-wg":"proxy"))}
+   if transport != "tcp"{try check("Naive H2 retains selected DNS trust",(dns[0]["tls"] as? [String:Any])?["server_name"] as? String=="resolver.example.net")}
+   if transport=="https"{try check("Naive H2 retains selected DNS path",dns[0]["path"] as? String=="/owned-dns-query")}
+   if hostname && connect {for lower in ["udp","h3"] {
+    var rejected=selected,bootstrap=selected["dns_bootstrap"] as! [String:Any],server=bootstrap["server"] as! [String:Any];server["type"]=lower;bootstrap["server"]=server;rejected["dns_bootstrap"]=bootstrap
+    reject("Naive H2 host refuses lower "+lower){try IOSImportedEntryMultihop.validate(entry:entry,final:rejected,profiles:maps)}
+    var rejectedArgs=captured;rejectedArgs["profile"]=try text(rejected);rejectedArgs["dns"]=try text(bootstrap)
+    reject("Naive H2 compiler refuses lower "+lower){_ = try bridge(["Op":"imported-router","Config":text(rejectedArgs)])}
+   }}
+  }}
+  try check("Naive H2 policy controls preserve original source",try before==json(final))
  }
  @MainActor static func importedXHTTPGraphs()throws {
   guard let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_XHTTP_XRAY_SOURCES"],let output=ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_IMPORTED_XHTTP_XRAY_FIXTURES"] else {throw NSError(domain:"fixture",code:1)}
@@ -2179,6 +2317,13 @@ def main():
             raise ValueError('ROUTERVPN_APPLE_IMPORTED_CONNECT_XRAY_FIXTURES must name an existing empty owned directory')
         if proxy_output is not None or connect_output is not None or imported_output is not None or external_output is not None or args.output or args.padding_output or args.entry_output or args.openvpn_probes_only or os.environ.get('ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY') == '1':
             raise ValueError('CONNECT REALITY evidence is separate from established graph inventories')
+    naive_h2_output = os.environ.get('ROUTERVPN_APPLE_IMPORTED_NAIVE_H2_FIXTURES')
+    if naive_h2_output is not None:
+        destination = Path(naive_h2_output)
+        if not naive_h2_output or not destination.is_dir() or destination.is_symlink() or any(destination.iterdir()):
+            raise ValueError('Naive H2 graph output requires its own empty owned directory')
+        if any(os.environ.get(key) is not None for key in ('ROUTERVPN_APPLE_IMPORTED_XHTTP_XRAY_FIXTURES','ROUTERVPN_APPLE_IMPORTED_PQ_XRAY_FIXTURES','ROUTERVPN_APPLE_IMPORTED_PACKET_XRAY_FIXTURES','ROUTERVPN_APPLE_IMPORTED_CONNECT_XRAY_FIXTURES','ROUTERVPN_APPLE_IMPORTED_PROXY_XRAY_FIXTURES','ROUTERVPN_APPLE_CONNECT_LAYER_FIXTURES','ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS','ROUTERVPN_IOS_EXTERNAL_GRAPHS')) or args.output or args.padding_output or args.entry_output or args.openvpn_probes_only:
+            raise ValueError('Naive H2 graph output cannot replace an existing inventory')
     xhttp_xray_output = os.environ.get('ROUTERVPN_APPLE_IMPORTED_XHTTP_XRAY_FIXTURES')
     if xhttp_xray_output is not None:
         destination = Path(xhttp_xray_output)
@@ -2295,6 +2440,11 @@ def main():
             xhttp_sources.mkdir()
             subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedXHTTPIndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ,ROUTERVPN_IMPORTED_XHTTP_XRAY_FIXTURES=str(xhttp_sources)), check=True, timeout=45)
             environment['ROUTERVPN_IOS_IMPORTED_XHTTP_XRAY_SOURCES'] = str(xhttp_sources)
+        if naive_h2_output is not None:
+            naive_sources = work / 'naive-h2-sources'
+            naive_sources.mkdir()
+            subprocess.run(['go','test','./internal/mobilemultihop','-run','^TestImportedNaiveH2IndependentLayers$','-count=1','-timeout=30s'], cwd=ROOT, env=dict(os.environ,ROUTERVPN_IMPORTED_NAIVE_H2_FIXTURES=str(naive_sources)), check=True, timeout=45)
+            environment['ROUTERVPN_IOS_IMPORTED_NAIVE_H2_SOURCES'] = str(naive_sources)
         environment.pop('ROUTERVPN_IOS_OPENVPN_PROBES_ONLY', None)
         environment.pop('ROUTERVPN_IOS_PADDING_ONLY', None)
         environment.pop('ROUTERVPN_IOS_LOCAL_PADDING_GRAPHS', None)

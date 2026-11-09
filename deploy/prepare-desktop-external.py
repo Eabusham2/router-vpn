@@ -158,6 +158,7 @@ PEER_TEMPLATES = {
     'node_hysteria2_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_hysteria2_peer_test.go',
     'node_naive_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_peer_test.go',
     'node_naive_literal_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_literal_test.go',
+    'node_imported_naive_h2_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_imported_naive_h2_test.go',
     'node_naive_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_peer_windows_test.go',
     'node_naive_loader_purego_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_loader_purego_test.go',
     'node_pq_peer_test.go.tmpl': 'protocol/routervpnpq/node_pq_peer_test.go',
@@ -737,7 +738,7 @@ def copy_encrypted_peer_templates(vendor):
             prefix = b'//go:build linux && routervpn_linux_node_composition\n\n' + prefix
         elif name == 'node_router_peer_linux_test.go.tmpl':
             prefix = b'//go:build linux && !android && routervpn_linux_node_composition\n\n' + prefix
-        elif name in ('node_openvpn_capacity_test.go.tmpl', 'node_imported_openvpn_test.go.tmpl', 'node_imported_packet_xray_test.go.tmpl', 'node_imported_packet_xray_dns_test.go.tmpl'):
+        elif name in ('node_openvpn_capacity_test.go.tmpl', 'node_imported_openvpn_test.go.tmpl', 'node_imported_packet_xray_test.go.tmpl', 'node_imported_packet_xray_dns_test.go.tmpl', 'node_imported_naive_h2_test.go.tmpl'):
             prefix = b'//go:build linux && !android && routervpn_openvpn_remote_test\n\n' + prefix
         elif name in ('node_external_hysteria_layer_installed_test.go.tmpl', 'node_external_wireguard_installed_test.go.tmpl', 'node_external_amnezia_installed_test.go.tmpl', 'node_external_openvpn_installed_test.go.tmpl'):
             prefix = b'//go:build (linux && !android) || (darwin && routervpn_darwin_external_host)\n\n' + prefix

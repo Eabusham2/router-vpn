@@ -11,12 +11,20 @@ import (
 // configured UoT-v2 authority; without it the existing TCP-only path remains.
 // None of these configured capabilities proves a live receiver or selected DNS.
 func importedCONNECTCapture(graph, final map[string]any, entryLayer, mode string, profile map[string]any, files string) (string, error) {
-	bad := errors.New("CONNECT requires its captured independent entry layer and a paired REALITY/Vision or SS2022 final with its own transport authority")
+	bad := errors.New("CONNECT requires its captured independent entry layer and a paired REALITY, Naive H2 or SS2022 final with its own transport authority")
 	off := func(s string) bool { return s == "" || s == "off" }
 	// NewExternalPolicy has validated and retained this entry's independently
 	// provisioned wrapper. It does not supply the final's UoT or layer authority.
 	if !off(entryLayer) && entryLayer != "aes-256-gcm" && entryLayer != "aes-256-gcm+xor-whitening" {
 		return "", bad
+	}
+	if mode == "naive-h2" {
+		// This source already passed NewNodeProfile's exact Naive compiler.
+		// Its native UoT-v2 is not an SS service declaration or inline claim.
+		if err := importedNaiveH2DNS(graph, final, false); err != nil {
+			return "", err
+		}
+		return "naive-h2-stream", nil
 	}
 	if importedNativeXrayFinal(mode) {
 		// NewNodeProfile and the exact Xray/layer validators run before this

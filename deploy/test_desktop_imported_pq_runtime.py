@@ -177,7 +177,7 @@ class ImportedPQRuntimeGate(unittest.TestCase):
                 policy='policy', marker=lambda _: 'original', source=Path('prepared-core'), env=env, os=N.os,
                 run=lambda command,**options: 'sing-box version original\n' if command[-1] == 'version' else '--runtime-dir --session',
                 verify_imported_desktop_configs=record('ordinary'), verify_imported_desktop_packet_configs=record('packet'),
-                verify_imported_desktop_openvpn_configs=record('openvpn'), verify_imported_desktop_pq_configs=record('pq'), verify_imported_desktop_xhttp_configs=lambda *args: None,
+                verify_imported_desktop_openvpn_configs=record('openvpn'), verify_imported_desktop_pq_configs=record('pq'), verify_imported_desktop_xhttp_configs=lambda *args: None, verify_imported_desktop_naive_h2_configs=lambda *args: None,
                 verify_installed_linux_host=record('installed'), verify_installed_darwin_host=record('installed'))
             if failure is None: exec(compile(self.completed_tail(source), 'actual completed native tail', 'exec'), namespace)
             else:
@@ -216,7 +216,7 @@ class ImportedPQRuntimeGate(unittest.TestCase):
                          patch.object(N, 'verify_imported_desktop_packet_configs', side_effect=record('packet')), \
                          patch.object(N, 'verify_imported_desktop_openvpn_configs', side_effect=record('openvpn')), \
                          patch.object(N, 'verify_imported_desktop_pq_configs', side_effect=record('pq')), \
-                         patch.object(N, 'verify_imported_desktop_xhttp_configs'), contextlib.redirect_stdout(stdout):
+                         patch.object(N, 'verify_imported_desktop_naive_h2_configs'), patch.object(N, 'verify_imported_desktop_xhttp_configs'), contextlib.redirect_stdout(stdout):
                         if failure is None: self.assertEqual(N.build(target, bundle), bundle)
                         else:
                             with self.assertRaises(type(failure)) as caught: N.build(target, bundle)
@@ -231,7 +231,7 @@ class ImportedPQRuntimeGate(unittest.TestCase):
         source = (ROOT/'.github/workflows/release-candidate.yml').read_text()
         command = next(line.strip() for line in source.splitlines() if line.strip().startswith('python3 -m unittest deploy.test_desktop_imported_runtime'))
         self.assertEqual(command.split(), ['python3', '-m', 'unittest', 'deploy.test_desktop_imported_runtime',
-            'deploy.test_desktop_imported_packet_runtime', 'deploy.test_desktop_imported_openvpn_runtime', 'deploy.test_desktop_imported_pq_runtime', 'deploy.test_desktop_imported_xhttp_runtime'])
+            'deploy.test_desktop_imported_packet_runtime', 'deploy.test_desktop_imported_openvpn_runtime', 'deploy.test_desktop_imported_pq_runtime', 'deploy.test_desktop_imported_xhttp_runtime', 'deploy.test_desktop_imported_naive_h2_runtime'])
 
 
 if __name__ == '__main__':

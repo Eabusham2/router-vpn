@@ -23,8 +23,8 @@ final class AndroidImportedRouterPath {
 
     static boolean supports(String entryProtocol, String finalMode) {
         entryProtocol = AndroidExternalPolicy.protocol(entryProtocol);
-        if (Arrays.asList("http-connect", "https-connect").contains(entryProtocol)) return "shadowsocks".equals(finalMode) || Arrays.asList("reality-vision", "reality-pq-vision", "reality-xhttp").contains(finalMode);
-        if (Arrays.asList("socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn").contains(entryProtocol) && Arrays.asList("reality-vision", "reality-pq-vision", "reality-xhttp").contains(finalMode)) return true;
+        if (Arrays.asList("http-connect", "https-connect").contains(entryProtocol)) return "shadowsocks".equals(finalMode) || Arrays.asList("reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2").contains(finalMode);
+        if (Arrays.asList("socks5", "shadowsocks", "hysteria2", "wireguard", "amneziawg", "openvpn").contains(entryProtocol) && Arrays.asList("reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2").contains(finalMode)) return true;
         if (Arrays.asList("socks5", "openvpn").contains(entryProtocol)) return Arrays.asList("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong").contains(finalMode);
         boolean proxyEntry = Arrays.asList("shadowsocks", "hysteria2").contains(entryProtocol);
         return (proxyEntry || Arrays.asList("wireguard", "amneziawg").contains(entryProtocol))
@@ -110,6 +110,24 @@ final class AndroidImportedRouterPath {
                             throw new IllegalStateException("CONNECT lost its original REALITY transport authority.");
                         }
                         capability = "vless-stream";
+                    } else if ("naive-h2".equals(input.getString("exit_mode"))) {
+                        // This capability belongs to Naive's original authenticated
+                        // H2/UoT transport, never a same-node SS declaration.
+                        String nativeJSON = Libbox.routerCompileProxyEntry(input.getString("exit_files"), "naive-h2");
+                        if (nativeJSON == null || nativeJSON.isEmpty() || nativeJSON.getBytes(StandardCharsets.UTF_8).length > 4 * 1024 * 1024) {
+                            throw new IllegalStateException("CONNECT lost its original Naive H2 transport authority.");
+                        }
+                        JSONObject nativeTransport = new JSONObject(nativeJSON);
+                        JSONObject uot = nativeTransport.getJSONObject("udp_over_tcp");
+                        if (!"naive".equals(nativeTransport.optString("type"))
+                                || !"routervpn-hop-entry".equals(nativeTransport.optString("tag"))
+                                || !(nativeTransport.get("quic") instanceof Boolean) || nativeTransport.getBoolean("quic")
+                                || nativeTransport.has("detour") || files.has("routervpn-ss-service.json")
+                                || uot.length() != 2 || !(uot.get("enabled") instanceof Boolean) || !uot.getBoolean("enabled")
+                                || !(uot.get("version") instanceof Integer) || uot.getInt("version") != 2) {
+                            throw new IllegalStateException("CONNECT changed its captured Naive H2 stream transport.");
+                        }
+                        capability = "naive-h2-stream";
                     } else if (files.has("routervpn-ss-service.json")) {
                         String node = new JSONObject(input.getString("exit_profile")).getString("node_proof_id");
                         if (!Libbox.routerValidateSSService(input.getString("exit_files"), node)) {

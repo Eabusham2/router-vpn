@@ -347,6 +347,100 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   }
   print("PASS "+(mode=="reality-xhttp" ? "XHTTP":"PQ REALITY")+" picker \(checks) checks")
  }
+ static func naiveH2(_ path:String)throws {
+  func hash(_ data:Data)->String{CryptoKit.SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()}
+  let mode="naive-h2",source=try JSONDecoder().decode([String].self,from:Data(contentsOf:URL(fileURLWithPath:path)))
+  try check("Naive H2 picker uses complete original source",source.count==9 && source[2]==mode)
+  let capture=try JSONSerialization.jsonObject(with:Data(source[1].utf8)) as! [String:Any],kind=capture["protocol"] as! String
+  func capturedProfile(_ raw:[String:Any])throws->RouterProfile {
+   var value=raw
+   for (key,fallback) in ["name":"Captured H2 path","endpoint":"","router_api":"","api_token":"","adguard_ipv4":"","adguard_ipv6":"","socks_host":"","socks_port":0,"socks_username":"","socks_password":""] as [String:Any] where value[key]==nil {value[key]=fallback}
+   return try JSONDecoder().decode(RouterProfile.self,from:encoded(value))
+  }
+  let first=try capturedProfile(capture["profile"] as! [String:Any]),paired=try capturedProfile(JSONSerialization.jsonObject(with:Data(source[4].utf8)) as! [String:Any]),assets=try JSONDecoder().decode([String:String].self,from:Data(source[3].utf8))
+  var original=ClientBundle.empty;original.selectedRouterID=first.id;original.routerProfiles=[first];original.profiles=[:]
+  var final=ClientBundle.empty;final.selectedRouterID=paired.id;final.routerProfiles=[paired];final.profiles=[mode:assets]
+  let model=RouterVPNModel();model.bundle=final;IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:try encoded(final)]
+  try check("Naive H2 picker offers compatible exact source",model.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
+  try check("Naive H2 picker requires captured entry",!model.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id).contains(mode))
+  try model.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)
+  let held=try model.iosMultihopEntryBundle(for:model.bundle!)
+  try check("Naive H2 save retains original source roles",held.routerProfiles==original.routerProfiles && held.profiles==original.profiles && model.bundle!.profiles==final.profiles && model.bundle!.routerProfiles[0].dnsProtocol=="tcp")
+  let configuration:[String:Any]=["engine":"multihop-libbox","mode":mode,"bundle":try encoded(model.bundle!),"entryBundle":try encoded(original)]
+  let owner=try IOSMultihopExecution.Source(configuration:configuration,digest:hash),receipt=try IOSMultihopExecution.StartupChoice(source:owner,execution:"local").encoded()
+  try check("Naive H2 startup retains original final choice",owner.exitMode==mode && IOSMultihopExecution.StartupChoice.decode(receipt,source:owner).source==owner)
+  let args=["config":source[0],"capture":source[1],"mode":source[2],"files":source[3],"profile":source[4],"start":source[5],"dns":source[6]]
+  func compile(_ value:[String:String])throws->String{try RouterVPNTorTestCall(["Op":"imported-router","Config":String(decoding:encoded(value),as:UTF8.self)])}
+  try check("Naive H2 actual compiler keeps original graph",try encoded(JSONSerialization.jsonObject(with:Data(compile(args).utf8)))==encoded(JSONSerialization.jsonObject(with:Data(source[8].utf8))))
+  for fault in ["h3","numeric-quic","uot-version","missing-user","missing-password","insecure","missing-sni","missing-certificate","malformed-certificate","unused-asset","missing-source","foreign-service"] {
+   var changed=assets,raw=try JSONSerialization.jsonObject(with:Data(base64Encoded:assets["sing-box.json"]!)!) as! [String:Any],rows=(try JSONSerialization.jsonObject(with:Data(base64Encoded:assets["sing-box.json"]!)!) as! [String:Any])["outbounds"] as! [[String:Any]]
+   let index=rows.firstIndex(where:{$0["tag"] as? String=="proxy"})!;var row=rows[index]
+   switch fault {
+   case "h3":row["quic"]=true
+   case "numeric-quic":row["quic"]=0
+   case "uot-version":var uot=row["udp_over_tcp"] as! [String:Any];uot["version"]=1;row["udp_over_tcp"]=uot
+   case "missing-user":row.removeValue(forKey:"username")
+   case "missing-password":row.removeValue(forKey:"password")
+   case "insecure","missing-sni":var tls=row["tls"] as! [String:Any];if fault=="insecure"{tls["insecure"]=true}else{tls.removeValue(forKey:"server_name")};row["tls"]=tls
+   case "missing-certificate":var tls=row["tls"] as! [String:Any];tls.removeValue(forKey:"certificate");tls["certificate_path"]="missing.crt";row["tls"]=tls
+   case "malformed-certificate":changed[(row["tls"] as! [String:Any])["certificate_path"] as! String]=Data("not a certificate".utf8).base64EncodedString()
+   case "unused-asset":changed["unused.crt"]=Data("unused asset".utf8).base64EncodedString()
+   case "foreign-service":changed["routervpn-ss-service.json"]=Data("{}".utf8).base64EncodedString()
+   default:break
+   }
+   rows[index]=row;raw["outbounds"]=rows;changed["sing-box.json"]=try encoded(raw).base64EncodedString();if fault=="missing-source"{changed.removeValue(forKey:"sing-box.json")}
+   var candidate=final;candidate.profiles[mode]=changed;let rejected=RouterVPNModel();rejected.bundle=candidate
+   IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:try encoded(candidate)]
+   try check("Naive H2 picker refuses changed authority "+fault,!rejected.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
+   try reject("Naive H2 save refuses changed authority "+fault){try rejected.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)}
+   var replaced=args;replaced["files"]=String(decoding:try encoded(changed),as:UTF8.self)
+   try reject("Naive H2 actual compiler refuses "+fault){_ = try compile(replaced)}
+  }
+  for transport in ["udp","h3"] {
+   var candidate=final;candidate.routerProfiles[0].dnsProtocol=transport
+   let before=try encoded(candidate),rejected=RouterVPNModel();rejected.bundle=candidate
+   IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:before]
+   try check("Naive H2 picker refuses incompatible saved Home "+transport,!rejected.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
+   try reject("Naive H2 save refuses lower DNS "+transport){try rejected.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)}
+   try check("Naive H2 refusal leaves saved policy unchanged",rejected.writes==0 && encoded(rejected.bundle!)==before)
+   var profile=try JSONSerialization.jsonObject(with:Data(source[4].utf8)) as! [String:Any];profile["dns_protocol"]=transport;var replaced=args;replaced["profile"]=String(decoding:try encoded(profile),as:UTF8.self)
+   try reject("Naive H2 actual lower DNS refusal "+transport){_ = try compile(replaced)}
+  }
+  for transport in ["tcp","tls","https"] {for lower in ["tcp","tcp-custom-exit","udp","h3","missing"] {
+   var raw=try JSONSerialization.jsonObject(with:Data(source[4].utf8)) as! [String:Any]
+   raw["dns_mode"]="custom";raw["dns_protocol"]=transport;raw["dns_host"]="resolver.example.net";raw["dns_port"]=8853;raw["dns_server_name"]="resolver.example.net";raw["dns_path"]="/owned-dns-query"
+   if lower != "missing"{raw["dns_bootstrap"]=["server":["type":lower=="tcp-custom-exit" ? "tcp":lower,"tag":"external-dns-bootstrap","server":"203.0.113.54","server_port":5354,"detour":lower=="tcp-custom-exit" ? "custom-exit":"proxy"],"query":["server":"external-dns-bootstrap","timeout":"3s","disable_optimistic_cache":true]] as [String:Any]}
+   var candidate=final;candidate.routerProfiles=[try capturedProfile(raw)]
+   let selection=RouterVPNModel();selection.bundle=candidate;IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:try encoded(candidate)]
+   var selectedArgs=args;selectedArgs["profile"]=String(decoding:try encoded(raw),as:UTF8.self);selectedArgs["dns"]=lower=="missing" ? "":String(decoding:try encoded(raw["dns_bootstrap"]!),as:UTF8.self)
+   if lower.hasPrefix("tcp"){
+    try check("Naive H2 picker offers captured compatible hostname bootstrap",selection.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
+    try selection.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)
+    try check("Naive H2 save retains selected and bootstrap policy",selection.bundle!.routerProfiles[0].dnsBootstrap==candidate.routerProfiles[0].dnsBootstrap && selection.bundle!.routerProfiles[0].dnsHost=="resolver.example.net" && selection.bundle!.routerProfiles[0].dnsProtocol==transport)
+    let graph=try JSONSerialization.jsonObject(with:Data(compile(selectedArgs).utf8)) as! [String:Any]
+    try check("Naive H2 actual compiler retains four owned resolvers",((graph["dns"] as! [String:Any])["servers"] as! [[String:Any]]).count==4)
+   }else{
+    try check("Naive H2 picker refuses incompatible hostname bootstrap "+lower,!selection.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
+    try reject("Naive H2 save refuses incompatible hostname bootstrap "+lower){try selection.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)}
+    try reject("Naive H2 actual compiler refuses incompatible hostname bootstrap "+lower){_ = try compile(selectedArgs)}
+   }
+  }}
+  for field in ["username","password","server","server_name"] {
+   var changed=assets,raw=try JSONSerialization.jsonObject(with:Data(base64Encoded:assets["sing-box.json"]!)!) as! [String:Any],rows=(try JSONSerialization.jsonObject(with:Data(base64Encoded:assets["sing-box.json"]!)!) as! [String:Any])["outbounds"] as! [[String:Any]]
+   let index=rows.firstIndex(where:{$0["tag"] as? String=="proxy"})!;var row=rows[index]
+   if field=="server_name"{var tls=row["tls"] as! [String:Any];tls[field]="different.example.net";row["tls"]=tls}else{row[field]=field=="server" ? "203.0.113.99":"different-original"}
+   rows[index]=row;raw["outbounds"]=rows;changed["sing-box.json"]=try encoded(raw).base64EncodedString();var replacement=model.bundle!;replacement.profiles[mode]=changed;var config=configuration;config["bundle"]=try encoded(replacement)
+   try reject("Naive H2 receipt refuses replacement "+field){let next=try IOSMultihopExecution.Source(configuration:config,digest:hash);_ = try IOSMultihopExecution.StartupChoice.decode(receipt,source:next)}
+  }
+  IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:try encoded(model.bundle!)]
+  let saved=try encoded(model.bundle!),writes=model.writes
+  for execution in ["server","auto"] {
+   try reject("Naive H2 picker refuses unowned "+execution){try model.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:execution,entryMode:kind)}
+   try check("Naive H2 execution refusal preserves saved source",model.writes==writes && encoded(model.bundle!)==saved)
+  }
+  for other in ["naive-h3","split","max","max-tls-wg"]{try check("Naive H2 does not admit unrelated final "+other,!IOSImportedEntryMultihop.supports(entry:kind,final:other))}
+  print("PASS Naive H2 picker \(checks) checks")
+ }
  static func packetReality(_ directory:String,_ kind:String)throws {
   guard ["wireguard","amneziawg","openvpn-tcp","openvpn-udp"].contains(kind) else {throw IOSImportedEntryMultihop.issue()}
   for entryLayer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {for finalLayer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
@@ -439,6 +533,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "socks-reality" {try reality(finalBundle,paired);return}
   if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "pq-reality" {try pqReality(CommandLine.arguments[3]);return}
   if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "xhttp-reality" {try pqReality(CommandLine.arguments[3],"reality-xhttp");return}
+  if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "naive-h2" {try naiveH2(CommandLine.arguments[3]);return}
   if CommandLine.arguments.count == 5 && CommandLine.arguments[2] == "selected-dns" { try selectedDNS(finalBundle,paired,CommandLine.arguments[3],CommandLine.arguments[4]);return }
   if CommandLine.arguments.count == 5 && CommandLine.arguments[2] == "packet-reality" {try packetReality(CommandLine.arguments[4],CommandLine.arguments[3]);return}
   if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "proxy-reality" {guard ["shadowsocks","hysteria2"].contains(CommandLine.arguments[3]) else {throw IOSImportedEntryMultihop.issue()};try reality(finalBundle,paired,CommandLine.arguments[3]);return}
@@ -1041,6 +1136,18 @@ def main():
         if xhttp.stdout != 'PASS XHTTP picker 24 checks\n' or xhttp_source.read_bytes() != original_xhttp:
             raise ValueError('Missing, foreign, or source-mutating XHTTP picker verdict: '+repr(xhttp.stdout))
         print(xhttp.stdout, end='', flush=True)
+        naive_sources = work / 'naive-h2-sources'
+        naive_sources.mkdir()
+        subprocess.run(['go', 'test', './internal/mobilemultihop', '-run', '^TestImportedNaiveH2IndependentLayers$',
+                        '-count=1', '-timeout=30s'], cwd=ROOT, check=True, timeout=45,
+                       env=dict(os.environ, ROUTERVPN_IMPORTED_NAIVE_H2_FIXTURES=str(naive_sources)))
+        naive_source = naive_sources / 'http-connect--naive-h2--off--off.json'
+        original_naive = naive_source.read_bytes()
+        naive = subprocess.run([str(work/'test'), str(compiler), 'naive-h2', str(naive_source)],
+                               env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
+        if naive.stdout != 'PASS Naive H2 picker 107 checks\n' or naive_source.read_bytes() != original_naive:
+            raise ValueError('Missing, foreign, or source-mutating Naive H2 picker verdict: '+repr(naive.stdout))
+        print(naive.stdout, end='', flush=True)
         for kind in ('shadowsocks', 'hysteria2'):
             proxy = subprocess.run([str(work / 'test'), str(compiler), 'proxy-reality', kind], env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
             if proxy.stdout != f'PASS {kind} REALITY host 115 checks\n':

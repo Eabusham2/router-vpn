@@ -15,18 +15,20 @@ extension RouterVPNModel {
               let encoded = try? JSONEncoder().encode(profile),
               let original = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any] else { return [] }
         selected.selectedRouterID = exitID
-        return ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong", "reality-vision", "reality-pq-vision", "reality-xhttp"].filter { mode in
+        return ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2"].filter { mode in
             guard IOSImportedEntryMultihop.supports(entry: entryMode, final: mode) else { return false }
-            if IOSImportedEntryMultihop.xrayFinal(mode) {
+            if IOSImportedEntryMultihop.xrayFinal(mode) || mode == "naive-h2" {
                 guard let first = entryProfile, first.normalizedNodeKind == "external",
                       ["socks5", "shadowsocks", "hysteria2", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn"].contains(first.external?.protocolName ?? ""), first.id != exitID,
-                      first.external?.matchesStartLayer(first.startLayer) == true else { return false }
+                      first.external?.matchesStartLayer(first.startLayer) == true,
+                      mode != "naive-h2" || first.external?.protocolName == entryMode else { return false }
                 if first.external?.startLayer != nil {
                     do { try IOSExternalExecution.validateLayerDraft(first) }
                     catch { return false }
                 }
             }
             do {
+                if mode == "naive-h2" { try IOSImportedEntryMultihop.validateNaiveH2(final: original, profiles: selected.profiles, entry: entryMode) }
                 _ = try IOSMultihopStartLayer.capture(profile: original, profiles: selected.profiles)
                 _ = try IOSRuntimeSelector.selectRaw(bundle: selected, rawProfileID: mode)
                 return true
@@ -361,6 +363,7 @@ struct IOSMultihopView: View {
                             if importedFinalModes.contains("reality-vision") { Text("REALITY Vision").tag("reality-vision") }
                             if importedFinalModes.contains("reality-pq-vision") { Text("PQ REALITY Vision").tag("reality-pq-vision") }
                             if importedFinalModes.contains("reality-xhttp") { Text("REALITY XHTTP").tag("reality-xhttp") }
+                            if importedFinalModes.contains("naive-h2") { Text("Naive HTTP/2").tag("naive-h2") }
                             if importedFinalModes.contains("wg") { Text("WireGuard").tag("wg") }
                             if importedFinalModes.contains("awg2-fast") { Text("AmneziaWG Fast").tag("awg2-fast") }
                             if importedFinalModes.contains("awg2-strong") { Text("AmneziaWG Strong").tag("awg2-strong") }

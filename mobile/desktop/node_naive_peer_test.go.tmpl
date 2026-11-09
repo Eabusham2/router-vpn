@@ -222,7 +222,7 @@ func desktopNodeNaiveCertificate(t *testing.T) (tls.Certificate, []byte) {
 	return pair, certificate
 }
 
-func startDesktopNodeNaiveServer(t *testing.T, mode string, ip netip.Addr, dnsAddress string) (*desktopNodeLayerServer, string) {
+func startDesktopNodeNaiveServer(t *testing.T, mode string, ip netip.Addr, dnsAddress string, configure ...func(*desktopNodeLayerServer)) (*desktopNodeLayerServer, string) {
 	t.Helper()
 	if !desktopNodeNaiveMode(mode) {
 		t.Fatal("Naive reference requires its exact selected HTTP version")
@@ -236,6 +236,12 @@ func startDesktopNodeNaiveServer(t *testing.T, mode string, ip netip.Addr, dnsAd
 	clear(secret[:])
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, dnsAddress: dnsAddress, connections: make(map[io.Closer]bool)}
+	if len(configure) > 1 {
+		t.Fatal("Naive reference received multiple route owners")
+	}
+	if len(configure) == 1 {
+		configure[0](s)
+	}
 	logger := log.NewNOPFactory().NewLogger("captured-naive-peer")
 	native, err := NV.NewInbound(ctx, &desktopNodeNaiveRouter{server: s}, logger, "captured-naive", option.NaiveInboundOptions{
 		Network: option.NetworkList("tcp"), Users: []auth.User{{Username: user, Password: password}},
