@@ -165,7 +165,7 @@ func TestMeasurementAdoptionCancellationJoinsTransaction(t *testing.T) {
 			stop()
 			parent, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			ctx := context.WithValue(parent, asyncMeasurementBindingKey{}, binding)
+			ctx := &measurementAdmissionWaitingContext{Context: context.WithValue(parent, asyncMeasurementBindingKey{}, binding), waiting: make(chan struct{})}
 			release := measurementHeldLock(&a.mu)
 			defer release()
 			if when == "before" {
@@ -180,23 +180,22 @@ func TestMeasurementAdoptionCancellationJoinsTransaction(t *testing.T) {
 				done <- err
 			}()
 			if when == "during" {
-				deadline := time.Now().Add(time.Second)
-				for a.operationMu.TryLock() {
-					a.operationMu.Unlock()
-					if time.Now().After(deadline) {
-						release()
-						<-done
-						t.Fatal("transaction did not enter its original guard")
-					}
-					time.Sleep(time.Millisecond)
-				}
-				cancel()
 				select {
-				case <-done:
-					t.Fatal("entered compatibility transaction was detached")
-				case <-time.After(20 * time.Millisecond):
+				case <-ctx.waiting:
+				case <-time.After(time.Second):
+					cancel()
+					release()
+					<-done
+					t.Fatal("adoption did not reach its original caller's owner admission")
 				}
-				release()
+				if !a.operationMu.TryLock() {
+					cancel()
+					release()
+					<-done
+					t.Fatal("unvalidated measurement reserved a connection transaction")
+				}
+				a.operationMu.Unlock()
+				cancel()
 			}
 			if err := measurementContextResult(t, done, release); !errors.Is(err, context.Canceled) {
 				t.Fatal("canceled joined transaction adopted a measurement", err)

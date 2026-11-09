@@ -4,7 +4,69 @@ This checkpoint continues the [November 7 reconciled ledger](CONTINUATION-EVIDEN
 
 The initial branch read for this checkpoint was `e0c815c107ebac1775c49295ccef1b1a5c896b84`. A later November 9 read verified `e5875af0520c992b2fa58dd75a1422d246fa12eb` on `main`; its exact tree is `f203249bb62e110a6a6bd8cbad848ed10aa4a846`. The source is still advancing. No private server, ASUS configuration, household forwarding, signing account or physical user device was changed by this continuation.
 
-## Later published checkpoint through e5875af0
+## Latest published checkpoint through 5670c8e3
+
+At 02:45 UTC on November 9, an independent live branch read and local fetch
+confirmed `5670c8e383f90636c0d11447d4228bdc606cdc6b`. All changes below are in
+normal `main` ancestry; no recovery snapshot was replayed over newer work.
+This section supersedes the earlier XHTTP-absent status, while preserving the
+original requirements and the dated evidence below.
+
+| Published commit | Concrete change and evidence | Remaining boundary |
+|---|---|---|
+| [`38379372`](https://github.com/Eabusham2/router-vpn/commit/383793724d24cb50066bd2a15ddb30174f844a95) | Apple saved selection recognizes the supported PQ final. The actual Swift/Go harness retains ordinary, packet, CONNECT and DNS checks and adds nineteen PQ capture/compiler/source/receipt controls. | This fixture repair is separate from packaged Apple and device acceptance. |
+| [`587ebb69`](https://github.com/Eabusham2/router-vpn/commit/587ebb69b7ebbdfbeec061ff8e8d86831d51a45e) | The pinned native REALITY runner waits for its captured reference detector. The same protocol image failed matching PQ traffic in five of five readiness-off trials and passed matching/wrong/restored keys in five of five readiness-on trials. The actual hosted gate then succeeded on this SHA. | Existing three-second traffic deadlines, cryptographic validation and native engine behavior are unchanged. The bounded native gate is not an all-platform release. |
+| [`506d18e2`](https://github.com/Eabusham2/router-vpn/commit/506d18e2d0715ef6bc6e78b4922a03f714465d24) | Concurrent connection admission and protection recovery retain the original caller. The [original-admission guide](testing/original-connection-admission.md) records its source and bounded controls; this work was preserved without replacing it. | Public Tor propagation, protected native startup and final persistence remain separately tracked. Its author's results are not relabeled as independent execution by this continuation. |
+| [`7a490251`](https://github.com/Eabusham2/router-vpn/commit/7a490251d61ba63a4fd77daa26a54d6e51835ef1) | Three missed complete-suite commands now use the existing fifteen-minute package budget. Same-SHA hosted evidence showed a ten-minute aggregate timeout and a separate complete 670.490-second run. The [budget guide](testing/go-source-contract-budget.md) records the comparison. | No package, test, example, fuzz seed, negative control or per-operation deadline was removed or widened. The separate MTU assertion was repaired rather than hidden by this budget. |
+| [`6c1bcd81`](https://github.com/Eabusham2/router-vpn/commit/6c1bcd81784387bbcc2c4829ec9c1c45118f0519) | Local imported entries reach a paired XHTTP REALITY final through the actual shared and native-host capture paths. The [guide](testing/imported-xhttp.md) records 81 graphs per producer, 833 shared race verdicts, 145 desktop race verdicts, actual Android/Swift exports, 324 native parses, 32 encrypted loopback verdicts and required matching-host bundle/peer gates. | Native execution receipts keep their original frozen-source identity. Physical imported-peer execution was denied at Netlink; full current native packages, protected desktop public-child integration, Server/Compare and other graphs are separate. |
+| [`b1717204`](https://github.com/Eabusham2/router-vpn/commit/b1717204f5f7205c666a059204922843c4ebc01c) | Native MTU record identity reads join the original caller-expiry cause to the existing ownership rejection. Both old-code cancellation/deadline controls failed at the real held-owner boundary. Twelve focused race verdicts then passed, including matching/foreign records and the original cancel/drain/durable-restore fixture. | Schema, session, source and configuration validation remain unchanged. This is error-cause repair, not new physical MTU acceptance. |
+| [`5670c8e3`](https://github.com/Eabusham2/router-vpn/commit/5670c8e383f90636c0d11447d4228bdc606cdc6b) | Concurrent release tests require the complete finite source command in all three jobs and reject omission, filtering, conditional/ignored execution and unbounded timeouts. An independent local run passed all 22 release-gate tests. | These are executable workflow contracts; the required hosted complete suites still have to pass. |
+
+The exact `587ebb69` native-Xray gate passed in
+[run 42548735038, job 128939338641](https://github.com/Eabusham2/router-vpn/actions/runs/42548735038/job/128939338641).
+It executed the real pinned Libbox/Xray parser and traffic image, all three PQ
+matching/wrong/restored leaves, six AES/whitening traffic variants and both
+wrong-key controls. It does not establish success of the newer XHTTP workflow.
+
+The XHTTP native source receipts predate a clean merge of concurrent caller
+and workflow changes. The merge verification found all 4,537 prepared native
+entries unchanged and all 81 new desktop exports byte-identical to the parsed
+inputs. The desktop 145-verdict race gate and 34 integration contracts passed
+again after that merge. Earlier native parser/loopback runs were not relabeled
+as new-head execution. Completed package checks remain actual hosted gates.
+
+At the exact `5670c8e3` read at 02:44 UTC, 75 checks contained twelve successes,
+seven running, forty-one queued, fourteen pending and one skipped, with no
+failure at that read. The authoritative
+[run 42552212023](https://github.com/Eabusham2/router-vpn/actions/runs/42552212023)
+still had source-security and both PQ/XHTTP Apple producers queued and MAX
+AMD64 succession pending. A no-failure snapshot with unfinished jobs is not a
+green release. No new release publication, private deployment or device
+acceptance was established; the historical `745b3e41` package set stays separate.
+
+### Updated remaining implementation boundaries
+
+The current source includes the
+[captured measurement admission correction](testing/measurement-admission-after-stop.md).
+Unmodified source failed its actual post-Stop lock-reservation control in
+0.01 seconds. The repaired focused gate passed 120 race verdicts across
+24 roots with no failure or skip, retaining the protection/via-entry guards,
+pre-admission cancellation, entered recovery cleanup join and original final
+binding validation. The backend transaction audit and seven selected-DNS
+contracts passed. The unchanged eight-protocol Tor lifecycle root was also
+attempted: all eight local leaves stopped at initial physical-network capture,
+before the hosted restoration assertion. That requirement remains a hosted
+integration gate. No new reusable DNS-worker drain was added to ordinary Stop.
+
+| Recovered requirement area | Current boundary and next work |
+|---|---|
+| #2–3, #5, #15, #200–224: lifecycle and observations | Caller-bound admission/recovery and MTU cancellation fixes are published. The captured measurement admission correction passed its bounded controller controls; unchanged Tor restoration still needs its hosted physical-network gate. Reusable DNS drain, public Tor, protected imported temporary handoff and native startup retain separate implementation/evidence boundaries. |
+| #214–224: external nodes and graph roles | The bounded Local final set includes PQ REALITY and XHTTP REALITY with preserved original transport/source/layer policy. Other graph families, Server/Compare and additional-hop composition remain requirements. Naive H2 has source analysis and a pending isolated native feasibility witness, not shipping support. |
+| #160–168: selected DNS | Final-owned policy and bootstrap remain required. H2 application UDP-over-TCP cannot grant UDP to a TCP-only entry's lower resolver. No resolver rewrite or public substitute is authorized to make a graph pass. Current hosted encrypted DNS and device leak/path checks remain required. |
+| #229–240: MTU and protection | The native adapter and caller-cause repair are published. Protected Windows integration, retained lease/reader, actual TUN/private-path measurements and device acceptance remain separate. |
+| Exact native release and live acceptance | Required full suites, platform packages, images, compose and publication must converge on one SHA. MAX succession is diagnosed but not yet shown repaired. Physical/off-LAN behavior, UI/accessibility, signing, providers, authorized private deployment and ASUS fail-open validation remain open. |
+
+## Earlier published checkpoint through e5875af0
 
 | Published commit | Concrete change and bounded evidence | Remaining boundary |
 |---|---|---|

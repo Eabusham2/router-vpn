@@ -6,7 +6,65 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 9 later checkpoint: PQ graphs, imported MTU and current release gates
+## November 9 current checkpoint: XHTTP graphs and native release repairs
+
+The last independently read branch checkpoint for this section is
+`5670c8e383f90636c0d11447d4228bdc606cdc6b`. The
+[November 9 evidence ledger](CONTINUATION-EVIDENCE-2026-11-09.md) records the
+published changes and their distinct test, native and release boundaries.
+
+Published `6c1bcd81` extends Local imported-entry paths to the existing paired
+XHTTP REALITY final across shared, Android, Apple and desktop producers. The
+[XHTTP guide](testing/imported-xhttp.md) records all nine concrete entry
+transports, independent entry/final Start Layers, selected final-owned DNS and
+81 original graphs per producer. All 324 native parses and the 32 encrypted
+loopback verdicts passed on their recorded frozen source. The final merged
+desktop gate passed 145 race verdicts and retained byte-identical exported
+graphs. Matching completed/reused bundle checks and the independent hosted
+physical-peer workflow are mandatory; local Netlink denial did not count as
+physical acceptance. The original ordinary and PQ inventories remain required.
+
+The native REALITY runner now waits for its captured reference detector to
+be ready (`587ebb69`). The actual pinned native gate subsequently passed on
+that exact SHA, including matching/wrong/restored PQ keys and independent
+AES/whitening traffic. The original three-second protocol budget is unchanged.
+The Apple saved-selector fixture also retains the newly supported PQ final
+(`38379372`). These close their specific observed failures, not all newer CI.
+
+Native MTU record validation retains the original cancellation/deadline cause
+while still rejecting foreign session, graph and source records (`b1717204`).
+Both old-code expiry controls failed at the intended identity-read boundary;
+the repair passed twelve race verdicts, including the original cancel/restore
+fixture. Connection admission and protection recovery also retain their
+original callers (`506d18e2`); their remaining Tor/public/native integration is
+tracked separately.
+
+The three complete source-suite jobs now use the already-established finite
+fifteen-minute package budget (`7a490251`), with no test filters or changed
+operation deadlines. New release contracts (`5670c8e3`) reject omitted,
+filtered, conditional, nonblocking or unbounded suite execution; all 22 gate
+tests passed locally. The current complete release is still pending. The
+historical twelve-asset `745b3e41` prerelease does not certify newer source.
+
+Current source also fixes a stale measurement admission race after Stop.
+The [admission guide](testing/measurement-admission-after-stop.md) records the
+old-source failure at the actual transaction reservation, atomic validation of
+the captured owner, preserved protection/via-entry guards and original caller
+cancellation. The focused controller gate passed 120 race verdicts across
+24 roots, plus the backend session audit and seven selected-DNS contracts.
+The unchanged Tor lifecycle integration was attempted for all eight ordinary
+entry protocols; local physical-network capture blocked every initial Connect
+before restoration. Its hosted result remains required. A broader nonterminal
+selected-DNS cancel-and-join phase inside Stop is separately unfinished.
+
+Remaining imported graph families, Server/Compare, protected desktop public
+startup/temporary handoff, the diagnosed MAX succession timeout, physical and
+off-LAN acceptance, signing and authorized private deployment remain open.
+Naive H2 feasibility work has not yet produced a shipping implementation;
+refusing an unsupported graph or DNS transport does not complete it. The
+dated checkpoints below retain their historical meaning.
+
+## Earlier November 9 checkpoint: PQ graphs, imported MTU and release gates
 
 The published source checkpoint is `e5875af0520c992b2fa58dd75a1422d246fa12eb`.
 The [updated November 9 ledger](CONTINUATION-EVIDENCE-2026-11-09.md) preserves

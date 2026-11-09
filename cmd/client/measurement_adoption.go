@@ -145,8 +145,50 @@ func (b *asyncMeasurementAdoption) validateContext(ctx context.Context) error {
 	return b.validateLockedContext(ctx, tracker.session)
 }
 
-// Acquire only after all HTTP work finishes. Never hold the operation lock
-// during probes, and never wait behind a connection/settings transaction.
+// Validate and reserve while the same tracker and app still own this result.
+// A stale DNS result must not briefly claim operationMu after Stop and reject
+// an immediate replacement connection. TryLock cannot wait while holding
+// tracker/app, so it preserves the operation -> tracker -> app lock order used
+// by an already admitted transaction. Native guards run after these locks are
+// released, with the original caller and final adoption checks retained.
+func (a *app) beginAsyncMeasurementOperation(ctx context.Context, binding *asyncMeasurementAdoption, tracker *sessionTracker) (func(), error) {
+	claim := func() error {
+		if err := desktopnetwork.LockContext(ctx, &tracker.mu); err != nil {
+			return err
+		}
+		defer tracker.mu.Unlock()
+		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+			return err
+		}
+		defer a.mu.Unlock()
+		if a.controllerClosingLocked() {
+			return errControllerClosing
+		}
+		if err := binding.validateLockedContext(ctx, tracker.session); err != nil {
+			return err
+		}
+		if !a.operationMu.TryLock() {
+			return errors.New("another Router VPN connection or settings transaction is already in progress")
+		}
+		return nil
+	}
+	if err := claim(); err != nil {
+		return nil, err
+	}
+	if err := a.guardDesktopProtectionOffPending(ctx); err != nil {
+		a.operationMu.Unlock()
+		return nil, err
+	}
+	if err := guardViaEntryDecisionContext(ctx, a); err != nil {
+		a.operationMu.Unlock()
+		return nil, err
+	}
+	return a.operationMu.Unlock, nil
+}
+
+// Acquire only after all HTTP work finishes. Operation-lock admission is
+// nonblocking; tracker/app lock waits retain the original caller. Probes
+// never hold the operation lock.
 // The returned function releases app, tracker, and operation locks in reverse.
 func (a *app) beginAsyncMeasurementAdoption(ctx context.Context) (func(), error) {
 	if ctx == nil {
@@ -168,10 +210,7 @@ func (a *app) beginAsyncMeasurementAdoption(ctx context.Context) (func(), error)
 	if err != nil {
 		return nil, err
 	}
-	// The general transaction may synchronously join protection recovery. It
-	// retains its compatibility contract; cancellation cannot detach it or
-	// authorize a later measurement write after it finally returns.
-	releaseOperation, err := a.beginNodeBoundOperation()
+	releaseOperation, err := a.beginAsyncMeasurementOperation(ctx, binding, tracker)
 	if err != nil {
 		return nil, err
 	}
