@@ -119,7 +119,11 @@ func (a *app) prepareSpeedLabImportedMultihopWithRuntime(ctx context.Context, q 
 	// Overrides belong to the final's DNS, protection and packet policy. The
 	// imported entry keeps its complete original transport and credentials.
 	originalFinal := cloneRouterProfile(final)
-	final = speedLabProfileOverrides(final, q)
+	// Base selects the entry path; it does not override the paired final's
+	// saved preference. Keep the original request for validation and identity.
+	policyRequest := q
+	policyRequest.Base = ""
+	final = speedLabProfileOverrides(final, policyRequest)
 	profiles := cloneRouterProfileStore(store).Profiles
 	for i := range profiles {
 		if profiles[i].ID == final.ID {

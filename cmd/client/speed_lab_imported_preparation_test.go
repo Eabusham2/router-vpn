@@ -176,6 +176,55 @@ func TestSpeedLabImportedPreparationOwnsOriginalEntryAndFinalPolicy(t *testing.T
 	}
 }
 
+func TestSpeedLabImportedPreparationKeepsFinalBaseAndOriginalRequest(t *testing.T) {
+	for _, choice := range []struct{ requested, saved string }{{"wg", "awg"}, {"awg", "wg"}} {
+		t.Run(choice.requested, func(t *testing.T) {
+			f := newSpeedLabImportedFixture(t, "shadowsocks")
+			f.q.Base = choice.requested
+			f.a.profiles.Profiles[2].BaseTunnel = choice.saved
+			f.original = cloneRouterProfileStore(f.a.profiles)
+			requireEncryption := true
+			f.q.RequireEncrypted = &requireEncryption
+			wantFinal := cloneRouterProfile(f.original.Profiles[2])
+			wantFinal.AutoRequireEncrypted = true
+			prepared, err := f.a.prepareSpeedLabImportedMultihopWithRuntime(f.caller, f.q, f.driver)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer prepared.releaseUnused()
+			if f.q.Base != choice.requested || f.checks != 2 || f.owner.mutated || !reflect.DeepEqual(f.a.profiles, f.original) {
+				t.Fatal("entry-base preparation changed the original request, profiles or current VPN")
+			}
+			if !reflect.DeepEqual(prepared.selection.Control, wantFinal) || !reflect.DeepEqual(prepared.selection.Exit, wantFinal) ||
+				!reflect.DeepEqual(prepared.selection.Entry, f.original.Profiles[1]) || prepared.selection.Base != "native" ||
+				prepared.selection.Native == nil || prepared.selection.Native.validate(prepared.selection) != nil {
+				t.Fatal("entry Base changed the paired final's saved preference or imported native capture")
+			}
+			checked := append([]byte(nil), prepared.launch.config...)
+			f.suspend(t)
+			changed := f.q
+			changed.Base = "auto"
+			if _, err := prepared.apply(f.caller, f.a, changed); err == nil || prepared.applied || !reflect.DeepEqual(f.a.profiles, f.original) {
+				t.Fatal("policy-only Base clearing changed the original request's admission identity")
+			}
+			selected, err := prepared.apply(f.caller, f.a, f.q)
+			if err != nil || selected.Native != prepared.selection.Native || selected.Base != "native" ||
+				!reflect.DeepEqual(f.a.profiles.Profiles[2], wantFinal) {
+				t.Fatal("temporary admission changed the original final base or rebuilt its native graph", err)
+			}
+			candidate := routechoice.Candidate{Execution: routechoice.Local, EntryID: selected.Entry.ID, ExitID: selected.Exit.ID, Transport: selected.ExitMode}
+			launch, err := prepared.stage(f.caller, f.a, selected, candidate)
+			if err != nil || launch != prepared.launch {
+				t.Fatal("entry Base changed the preflighted native launch", err)
+			}
+			staged, err := readDesktopRuntimeFile(launch, "sing-box.json", 4<<20)
+			if err != nil || !bytes.Equal(staged, checked) || selected.Native.validate(selected) != nil {
+				t.Fatal("entry Base changed the actual retained native graph", err)
+			}
+		})
+	}
+}
+
 func TestSpeedLabImportedUnstartedRetirementKeepsReplacementDNSOwner(t *testing.T) {
 	for _, fault := range []string{"none", "cancel-after-stage", "replacement-before-registration", "replacement-after-stage"} {
 		t.Run(fault, func(t *testing.T) {
