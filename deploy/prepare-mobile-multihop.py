@@ -46,6 +46,9 @@ _hy2_spec.loader.exec_module(HY2_DEADLINES)
 _observation_spec = importlib.util.spec_from_file_location('routervpn_observation_policy', ROOT/'deploy/native_observation_policy.py')
 OBSERVATION = importlib.util.module_from_spec(_observation_spec)
 _observation_spec.loader.exec_module(OBSERVATION)
+_naive_spec = importlib.util.spec_from_file_location('routervpn_naive_transport', ROOT/'deploy/native_naive_transport_policy.py')
+NAIVE = importlib.util.module_from_spec(_naive_spec)
+_naive_spec.loader.exec_module(NAIVE)
 
 def inputs():
     paths = [ROOT/'ios/RouterVPN/App/IOSHomeDNSPolicy.swift', ROOT/'deploy/test_ios_xray_exits.py', ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift', ROOT/'deploy/testfixtures/xray-entry/main.go', ROOT/'deploy/test_ios_multihop_graph.py', ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_external_policy_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
@@ -63,7 +66,7 @@ def inputs():
     paths.append(ROOT/'mobile/routervpn_multihop_context_test.go.tmpl')
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
-    return paths + OBSERVATION.inputs() + HY2_DEADLINES.inputs() + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + EXTERNAL_POLICY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
+    return paths + NAIVE.inputs() + OBSERVATION.inputs() + HY2_DEADLINES.inputs() + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + EXTERNAL_POLICY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
 
 def digest():
     h=hashlib.sha256()
@@ -77,6 +80,7 @@ def prepare(vendor):
         raise ValueError('expected the verified disposable sing-box checkout')
     HY2_DEADLINES.prepare(vendor)
     WHITENING.prepare(vendor)
+    NAIVE.prepare(vendor)
     OBSERVATION.prepare(vendor)
     root=vendor/'experimental/libbox'
     for package in PACKAGES:

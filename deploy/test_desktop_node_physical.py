@@ -248,6 +248,12 @@ NAIVE_CASES = tuple(mode + "/" + layer for mode in NAIVE_MODES
                     for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening"))
 NAIVE_CREDENTIAL_CASES = (*NAIVE_CASES, *(mode + "/" + case for mode in NAIVE_MODES for case in (
     "off/naive-user", "off/naive-server-name", "off/naive-certificate", "aes-256-gcm/aes-key", "aes-256-gcm+xor-whitening/aes-key")))
+NAIVE_TRANSPORT_VERDICTS = (
+    "TestRouterVPNNaiveTransportH2", "TestRouterVPNNaiveTransportH3",
+    *("TestRouterVPNNaiveTransportH2/" + case for case in
+      ("udp", "udp4", "udp6", "unix", "empty", "listen-packet", "tcp-original", "tcp-cancelled")),
+    *("TestRouterVPNNaiveTransportH3/" + case for case in ("tcp", "udp", "listen-packet")))
+NAIVE_TRANSPORT_SUITE = ("naive-transport-policy", "./protocol/naive", "^TestRouterVPNNaiveTransport", NAIVE_TRANSPORT_VERDICTS)
 COMPOSITE_MODES = ("split", "max", "ss-v2ray")
 COMPOSITE_CASES = tuple(mode + "/" + layer for mode in COMPOSITE_MODES
                        for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening"))
@@ -361,20 +367,14 @@ def checked_sources(source):
     if native_xray.is_symlink() or native_xray.read_bytes() != (ROOT / "mobile/applexray/outbound.go.tmpl").read_bytes():
         raise ValueError("Node native Xray instance lost its exact captured socket owner")
     records["protocol/routervpnxray/outbound.go"] = hashlib.sha256(native_xray.read_bytes()).hexdigest()
-    # Naive uses the pinned native outbound and real inbound/UoT reference,
-    # without a patched transport copy. Reject changed or extra implementation
-    # files before compiling either the baseline or deliberate Go overlays.
-    naive_paths = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", PREP.PIN, "--", "protocol/naive", "common/uot"], cwd=source, text=True).splitlines()
-    expected_naive = {relative for relative in naive_paths if relative.endswith(".go")}
-    actual_naive = {path.relative_to(source).as_posix() for directory in ("protocol/naive", "common/uot") for path in (source / directory).rglob("*.go")}
-    if not expected_naive or actual_naive != expected_naive:
-        raise ValueError("Node Naive native implementation differs from its pinned file set")
-    for relative in sorted(expected_naive):
-        path = source / relative
-        expected = subprocess.check_output(["git", "show", PREP.PIN + ":" + relative], cwd=source)
-        if path.is_symlink() or not path.is_file() or path.read_bytes() != expected:
-            raise ValueError("Node Naive native implementation differs from its pinned source: " + relative)
-        records[relative] = hashlib.sha256(expected).hexdigest()
+    # The original native Naive/UoT closure permits only the declared H2
+    # transport boundary. The DNS resolver still captures its original dialer.
+    naive_policy = PREP.RELAY.NAIVE
+    records.update(naive_policy.verify(source))
+    for path in naive_policy.inputs():
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("Node Naive transport lost its original source authority")
+        records['gate/' + path.relative_to(ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     # SIP003 uses the pinned actual TLS/WebSocket/mux plugin. Bind every
     # implementation file before applying explicit negative-control overlays.
     sip_paths = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", PREP.PIN, "--", "transport/sip003", "transport/v2raywebsocket"], cwd=source, text=True).splitlines()
@@ -768,6 +768,19 @@ def mutation_in_function(raw, signature, before, after):
     return BOOT.IDENTITY.function_mutant(raw, signature, before, after)
 
 
+def naive_transport_mutants(source):
+    relative = "protocol/naive/outbound.go"
+    original = (source / relative).read_text(encoding="utf-8")
+    return [
+        ("uncaptured-naive-physical-dial", relative, "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeNaiveTraffic", "naive-h2/off",
+         "layered graph bypassed its captured socket grants", BOOT.IDENTITY.replace_once(original,
+         "Dialer:                   routerVPNNaiveTransport(outboundDialer, options.QUIC),", "Dialer:                   N.SystemDialer,")),
+        ("downgraded-naive-h3", relative, "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeNaiveTraffic", "naive-h3/off",
+         "layered encrypted payload escaped or lost its exact native lower", BOOT.IDENTITY.replace_once(original,
+         "QUIC:                     options.QUIC,", "QUIC:                     false,")),
+    ]
+
+
 def mutants(source, windows):
     def changed(relative, before, after, count=1):
         raw = (source / relative).read_text(encoding="utf-8")
@@ -828,12 +841,7 @@ def mutants(source, windows):
          "simultaneous composite traffic omitted one retained native lane grant", changed("protocol/routervpnxray/outbound.go",
          "conn, err := b.dialer.DialContext(cctx, N.NetworkTCP, M.ParseSocksaddr(b.server.String()))",
          "conn, err := (&net.Dialer{}).DialContext(cctx, N.NetworkTCP, b.server.String())")),
-        ("uncaptured-naive-physical-dial", "protocol/naive/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeNaiveTraffic", "naive-h2/off",
-         "layered graph bypassed its captured socket grants", changed("protocol/naive/outbound.go",
-         "Dialer:                   outboundDialer,", "Dialer:                   N.SystemDialer,")),
-        ("downgraded-naive-h3", "protocol/naive/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeNaiveTraffic", "naive-h3/off",
-         "layered encrypted payload escaped or lost its exact native lower", changed("protocol/naive/outbound.go",
-         "QUIC:                     options.QUIC,", "QUIC:                     false,")),
+        *naive_transport_mutants(source),
         ("caller-owned-xray-dns", "protocol/routervpnxray/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeXrayTraffic", "reality-vision/off",
          "selected Home DNS did not traverse the actual layered graph", changed("protocol/routervpnxray/outbound.go",
          "h.connections.BeginDial(ctx)", "h.connections.Begin(ctx)", count=2)),
@@ -1048,6 +1056,8 @@ def execute_baseline_suite(baselines, suite):
         raise ValueError("Node " + name + " omitted a required native boundary")
     if name == OPENVPN_CAPACITY_SUITE[0]:
         require_native_verdicts(output, OPENVPN_CAPACITY_VERDICTS, "OpenVPN authenticated live capacity")
+    if name == NAIVE_TRANSPORT_SUITE[0]:
+        require_native_verdicts(output, NAIVE_TRANSPORT_VERDICTS, "Naive H2 transport and original H3 owner")
     if name == "native-lifecycle-admission":
         require_native_verdicts(output, NATIVE_LIFECYCLE_ADMISSION_VERDICTS, "native lifecycle admission")
     if name == 'native-retirement-bound':
@@ -1233,6 +1243,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          ("TestRouterVPNDesktopNodeXrayWrongCredential",)),
         ("naive-traffic", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeNaiveTraffic$",
          ("TestRouterVPNDesktopNodeNaiveTraffic",)),
+        NAIVE_TRANSPORT_SUITE,
         ("naive-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeNaiveWrongCredential$",
          ("TestRouterVPNDesktopNodeNaiveWrongCredential",)),
         ("composite-traffic", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeCompositeTraffic$",

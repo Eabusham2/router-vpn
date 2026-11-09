@@ -251,6 +251,7 @@ def checked_sources(vendor,peers):
  # The native core must run the same source compiler, not an old matching-name implementation.
  import importlib.util
  spec=importlib.util.spec_from_file_location('imported_mobile_projection',ROOT/'deploy/prepare-mobile-multihop.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+ m.NAIVE.verify(vendor)
  if not peers:m.EXTERNAL_POLICY.check_selection_sources(vendor)
  for shared in ('mobilemultihop','dnsmeasure'):
   for source in (ROOT/'internal'/shared).glob('*.go'):

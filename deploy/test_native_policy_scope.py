@@ -30,7 +30,7 @@ class NativePolicyScope(unittest.TestCase):
             # This fixture owns package copying, not vendored transport files.
             # Every native patcher has its own exact-source/executable tests.
             prepared = {}
-            for hook in ('WHITENING','AMNEZIA','MTU','PERFORMANCE','WIREGUARD_BIND','OPENVPN_CLOSE','OPENVPN_REMOTE','EXTERNAL_POLICY','PQ','STRATEGY','COMPOSITE','HY2_DEADLINES'):
+            for hook in ('WHITENING','AMNEZIA','MTU','PERFORMANCE','WIREGUARD_BIND','OPENVPN_CLOSE','OPENVPN_REMOTE','EXTERNAL_POLICY','PQ','STRATEGY','COMPOSITE','HY2_DEADLINES','NAIVE'):
                 if hasattr(module,hook):
                     prepared[hook]=mocks.enter_context(mock.patch.object(getattr(module,hook),'prepare'))
             if hasattr(module,'CORE'):
@@ -93,7 +93,7 @@ class NativePolicyScope(unittest.TestCase):
             # Both base paths emit the original OpenVPN transport helper
             # before its caller. Only the relay's HY2 guard waits for
             # prepare_native; repeated base preparation verifies both helpers.
-            for hook in ('OPENVPN_CLOSE','OPENVPN_REMOTE','HY2_DEADLINES'):
+            for hook in ('OPENVPN_CLOSE','OPENVPN_REMOTE','HY2_DEADLINES','NAIVE'):
                 if hook in prepared:
                     expected=[] if name=='prepare-relay-core.py' and hook=='HY2_DEADLINES' else [mock.call(vendor.resolve())]
                     self.assertEqual(prepared[hook].call_args_list,expected)
@@ -110,7 +110,7 @@ class NativePolicyScope(unittest.TestCase):
                 self.assertNotIn('"router-vpn/internal/', source.read_text())
             before={str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()}
             module.prepare(vendor)
-            for hook in ('OPENVPN_CLOSE','OPENVPN_REMOTE','HY2_DEADLINES'):
+            for hook in ('OPENVPN_CLOSE','OPENVPN_REMOTE','HY2_DEADLINES','NAIVE'):
                 if hook in prepared:
                     expected=[] if name=='prepare-relay-core.py' and hook=='HY2_DEADLINES' else [mock.call(vendor.resolve())]*2
                     self.assertEqual(prepared[hook].call_args_list,expected)

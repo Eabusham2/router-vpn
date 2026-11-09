@@ -218,7 +218,7 @@ def desktop_pt_notices():
 
 
 def inputs():
-    files = [Path(__file__).resolve(), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *RELAY.OPENVPN_REMOTE.inputs(),
+    files = [Path(__file__).resolve(), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *RELAY.OPENVPN_REMOTE.inputs(), *RELAY.NAIVE.inputs(),
              ROOT/'mobile/toroutbound/box.go.tmpl', ROOT/'mobile/toroutbound/box_test.go.tmpl',
              ROOT/'mobile/toroutbound/padding_box.go.tmpl', ROOT/'mobile/toroutbound/padding_box_test.go.tmpl',
              ROOT/'deploy/prepare-desktop-mtu.py', ROOT/'deploy/prepare-desktop-command-retirement.py', ROOT/'deploy/prepare-desktop-dbus.py', ROOT/'deploy/test_desktop_tun_retirement_projection.py', ROOT/'deploy/prepare-mobile-tor.py',
@@ -622,6 +622,7 @@ def prepare_node_capture(vendor):
 
 def prepare(vendor, go='go', *, env=None):
     vendor = checked_vendor(vendor)
+    RELAY.NAIVE.prepare(vendor)
     pfabi = PFABI.checked_files(ROOT/'internal/mobiletor')
     controller_contract = comparison_client_contract()
     prepare_desktop_pt(vendor, go, env=env)

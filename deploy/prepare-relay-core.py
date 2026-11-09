@@ -50,11 +50,14 @@ XRAY_VERSION = 'v1.260327.1-0.20260711155151-50231eaff98c'
 _observation_spec = importlib.util.spec_from_file_location('routervpn_observation_policy', ROOT/'deploy/native_observation_policy.py')
 OBSERVATION = importlib.util.module_from_spec(_observation_spec)
 _observation_spec.loader.exec_module(OBSERVATION)
+_naive_spec = importlib.util.spec_from_file_location('relay_naive_transport', ROOT/'deploy/native_naive_transport_policy.py')
+NAIVE = importlib.util.module_from_spec(_naive_spec)
+_naive_spec.loader.exec_module(NAIVE)
 
 def inputs():
     files = [Path(__file__).resolve(), ROOT/'deploy/test_external_openvpn_native.py', ROOT/'mobile/routervpn_openvpn_external_native_test.go.tmpl', *sorted((ROOT/'mobile/relay').glob('*.tmpl'))] + HY2_DEADLINES.inputs() + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs() + PQ.inputs() + COMPOSITE.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + STRATEGY.inputs() + SERVER_TOR.inputs()
     for package in PACKAGES: files += sorted((ROOT/'internal'/package).glob('*.go'))
-    return list(dict.fromkeys(files + OBSERVATION.inputs()))
+    return list(dict.fromkeys(files + OBSERVATION.inputs() + NAIVE.inputs()))
 
 def digest():
     h = hashlib.sha256()
@@ -67,6 +70,7 @@ def prepare(vendor):
         raise ValueError('Private AWG relay requires the exact native core')
     if not (vendor/'go.mod').read_text().startswith('module github.com/sagernet/sing-box\n'):
         raise ValueError('Not a disposable native sing-box checkout')
+    NAIVE.prepare(vendor)
     OBSERVATION.prepare(vendor)
     for package in PACKAGES:
         output = vendor/'experimental/libbox/routervpn'/package

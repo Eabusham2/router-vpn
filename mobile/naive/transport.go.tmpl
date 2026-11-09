@@ -1,0 +1,40 @@
+//go:build with_naive_outbound
+
+package naive
+
+import (
+	"context"
+	"errors"
+	"net"
+
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+var errRouterVPNNaiveH2Transport = errors.New("Naive H2 owns only TCP lower transport")
+
+// Cronet can request a UDP socket for its IPv6 reachability probe even when
+// QUIC is disabled. H2 must reject that request before it reaches the retained
+// lower owner. Application datagrams use the existing UoT-v2 TCP stream.
+// H3 retains its original dialer, including its separate UDP authority.
+func routerVPNNaiveTransport(original N.Dialer, quic bool) N.Dialer {
+	if quic {
+		return original
+	}
+	return &routerVPNNaiveH2Transport{original: original}
+}
+
+type routerVPNNaiveH2Transport struct {
+	original N.Dialer
+}
+
+func (d *routerVPNNaiveH2Transport) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network != N.NetworkTCP {
+		return nil, errRouterVPNNaiveH2Transport
+	}
+	return d.original.DialContext(ctx, network, destination)
+}
+
+func (*routerVPNNaiveH2Transport) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errRouterVPNNaiveH2Transport
+}

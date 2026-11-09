@@ -1,0 +1,121 @@
+//go:build with_naive_outbound
+
+package naive
+
+import (
+	"context"
+	"errors"
+	"net"
+	"testing"
+
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+type routerVPNNaiveTransportRecorder struct {
+	N.Dialer
+	calls       int
+	packets     int
+	ctx         context.Context
+	network     string
+	destination M.Socksaddr
+	connection  net.Conn
+	packet      net.PacketConn
+	err         error
+}
+
+type routerVPNNaiveTransportPacket struct{ net.PacketConn }
+
+func (d *routerVPNNaiveTransportRecorder) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	d.calls++
+	d.ctx, d.network, d.destination = ctx, network, destination
+	return d.connection, d.err
+}
+
+func (d *routerVPNNaiveTransportRecorder) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	d.packets++
+	d.ctx, d.destination = ctx, destination
+	return d.packet, d.err
+}
+
+func TestRouterVPNNaiveTransportH2(t *testing.T) {
+	destination := M.ParseSocksaddr("192.0.2.77:443")
+	for _, network := range []string{"udp", "udp4", "udp6", "unix", ""} {
+		name := network
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			lower := new(routerVPNNaiveTransportRecorder)
+			guard := routerVPNNaiveTransport(lower, false)
+			connection, err := guard.DialContext(context.Background(), network, destination)
+			if connection != nil || !errors.Is(err, errRouterVPNNaiveH2Transport) || lower.calls != 0 || lower.packets != 0 {
+				t.Fatal("H2 delegated an unowned non-TCP request", network, lower.calls, lower.packets, err)
+			}
+		})
+	}
+	t.Run("listen-packet", func(t *testing.T) {
+		lower := new(routerVPNNaiveTransportRecorder)
+		connection, err := routerVPNNaiveTransport(lower, false).ListenPacket(context.Background(), destination)
+		if connection != nil || !errors.Is(err, errRouterVPNNaiveH2Transport) || lower.calls != 0 || lower.packets != 0 {
+			t.Fatal("H2 delegated an unowned packet listener", lower.calls, lower.packets, err)
+		}
+	})
+	for _, cancelled := range []bool{false, true} {
+		name := "tcp-original"
+		if cancelled {
+			name = "tcp-cancelled"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			connection, peer := net.Pipe()
+			defer connection.Close()
+			defer peer.Close()
+			originalErr := errors.New("original lower result")
+			if cancelled {
+				cancel()
+				originalErr = ctx.Err()
+			}
+			lower := &routerVPNNaiveTransportRecorder{connection: connection, err: originalErr}
+			actual, err := routerVPNNaiveTransport(lower, false).DialContext(ctx, N.NetworkTCP, destination)
+			if actual != connection || err != originalErr || lower.calls != 1 || lower.packets != 0 || lower.ctx != ctx || lower.network != N.NetworkTCP || lower.destination != destination {
+				t.Fatal("H2 replaced the captured TCP caller, tuple, result or owner")
+			}
+		})
+	}
+}
+
+func TestRouterVPNNaiveTransportH3(t *testing.T) {
+	destination := M.ParseSocksaddr("[2001:db8::77]:443")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	originalErr := errors.New("original H3 lower result")
+	for _, network := range []string{N.NetworkTCP, N.NetworkUDP} {
+		t.Run(network, func(t *testing.T) {
+			connection, peer := net.Pipe()
+			defer connection.Close()
+			defer peer.Close()
+			lower := &routerVPNNaiveTransportRecorder{connection: connection, err: originalErr}
+			guard := routerVPNNaiveTransport(lower, true)
+			if guard != lower {
+				t.Fatal("H3 replaced its original transport owner")
+			}
+			actual, err := guard.DialContext(ctx, network, destination)
+			if actual != connection || err != originalErr || lower.calls != 1 || lower.ctx != ctx || lower.network != network || lower.destination != destination {
+				t.Fatal("H3 changed its original transport authority")
+			}
+		})
+	}
+	t.Run("listen-packet", func(t *testing.T) {
+		lower := &routerVPNNaiveTransportRecorder{packet: new(routerVPNNaiveTransportPacket), err: originalErr}
+		guard := routerVPNNaiveTransport(lower, true)
+		if guard != lower {
+			t.Fatal("H3 replaced its original packet owner")
+		}
+		actual, err := guard.ListenPacket(ctx, destination)
+		if actual != lower.packet || err != originalErr || lower.packets != 1 || lower.calls != 0 || lower.ctx != ctx || lower.destination != destination {
+			t.Fatal("H3 changed its original packet authority")
+		}
+	})
+}

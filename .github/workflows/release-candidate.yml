@@ -65,6 +65,7 @@ jobs:
           python3 -m unittest deploy.test_desktop_imported_runtime deploy.test_desktop_imported_packet_runtime deploy.test_desktop_imported_openvpn_runtime deploy.test_desktop_imported_pq_runtime deploy.test_desktop_imported_xhttp_runtime
           python3 deploy/test_node_heartbeat_context.py
           python3 deploy/test_desktop_native_dependencies.py
+          python3 deploy/test_native_naive_transport_policy.py
           python3 deploy/test_windows_build_owner.py
           python3 deploy/test_desktop_pq_output.py
           python3 deploy/test_desktop_pq_dependencies.py
