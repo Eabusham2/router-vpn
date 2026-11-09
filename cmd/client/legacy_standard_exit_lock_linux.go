@@ -56,8 +56,14 @@ func (l *legacyExitMutationLease) Current() error {
 	return nil
 }
 func acquireLegacyExitMutationLease(ctx context.Context, root string) (*legacyExitMutationLease, error) {
-	if ctx == nil || ctx.Err() != nil || !filepath.IsAbs(root) {
+	if ctx == nil || !filepath.IsAbs(root) {
 		return nil, errors.New("standard mutation admission has no original root or deadline")
+	}
+	// Stop may spend its original budget joining the captured engine before
+	// reaching policy retirement. Preserve that cancellation cause without
+	// opening or creating any mutation descriptors.
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()

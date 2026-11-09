@@ -814,8 +814,11 @@ func (s *linuxLegacyStandardExitStop) Retire(ctx context.Context, command *exec.
 		}
 		o.app.mu.Unlock()
 	}()
-	if command != s.command || ctx == nil || ctx.Err() != nil {
+	if command != s.command || ctx == nil {
 		return errors.New("legacy standard Stop has no current captured command")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := s.current(); err != nil {
 		return err
