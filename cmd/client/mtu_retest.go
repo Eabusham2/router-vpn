@@ -130,6 +130,9 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 	if a.retestPlatformServiceMTU(w, r, request) {
 		return
 	}
+	if a.retestDesktopImportedMTU(w, r, request) {
+		return
+	}
 	launch, launchErr := desktopExternalMTULaunchContext(r.Context(), a)
 	if launchErr != nil {
 		http.Error(w, launchErr.Error(), http.StatusConflict)

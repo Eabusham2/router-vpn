@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -299,6 +300,15 @@ func TestDesktopNodeMTUAckWaitsForInputConsumptionAndRejectsStaleNonce(t *testin
 
 func startDesktopNodeMTUFixtureChild(t *testing.T, fixture *desktopNodeMTUFixture, mutate func(desktopNodeMTUCommand, *desktopNodeMTURecord)) <-chan desktopNodeMTUCommand {
 	t.Helper()
+	commands, _ := startDesktopNodeMTUFixtureChildWithHeartbeat(t, fixture, mutate, false)
+	return commands
+}
+
+// Long real-transfer tests need the same periodic retained-reader status as
+// the shipping native loop. Opt in explicitly: replacement-injection fixtures
+// must not have their deliberate negative records overwritten by a heartbeat.
+func startDesktopNodeMTUFixtureChildWithHeartbeat(t *testing.T, fixture *desktopNodeMTUFixture, mutate func(desktopNodeMTUCommand, *desktopNodeMTURecord), heartbeat bool) (<-chan desktopNodeMTUCommand, func()) {
+	t.Helper()
 	stop, done := make(chan struct{}), make(chan struct{})
 	commands := make(chan desktopNodeMTUCommand, 32)
 	failed := make(chan error, 1)
@@ -307,6 +317,7 @@ func startDesktopNodeMTUFixtureChild(t *testing.T, fixture *desktopNodeMTUFixtur
 		current := fixture.base
 		original := current.MTU
 		var committed *desktopNodeMTUCommand
+		var lastHeartbeat time.Time
 		used := map[string]bool{}
 		ticker := time.NewTicker(2 * time.Millisecond)
 		defer ticker.Stop()
@@ -318,6 +329,13 @@ func startDesktopNodeMTUFixtureChild(t *testing.T, fixture *desktopNodeMTUFixtur
 			}
 			raw, err := readDesktopRuntimeFile(fixture.launch, "node-mtu-request.json", 4096)
 			if errors.Is(err, os.ErrNotExist) {
+				if heartbeat && time.Since(lastHeartbeat) >= 250*time.Millisecond {
+					if err := fixture.publish(current, false); err != nil {
+						failed <- err
+						return
+					}
+					lastHeartbeat = time.Now()
+				}
 				continue
 			}
 			if err != nil {
@@ -381,19 +399,21 @@ func startDesktopNodeMTUFixtureChild(t *testing.T, fixture *desktopNodeMTUFixtur
 				return
 			}
 			current = next
+			lastHeartbeat = time.Now()
 			commands <- request
 		}
 	}()
-	t.Cleanup(func() {
-		close(stop)
-		<-done
+	var stopOnce sync.Once
+	join := func() {
+		stopOnce.Do(func() { close(stop); <-done })
 		select {
 		case err := <-failed:
 			t.Error(err)
 		default:
 		}
-	})
-	return commands
+	}
+	t.Cleanup(join)
+	return commands, join
 }
 
 func TestDesktopNodeMTUActualMailboxMutationCommitAndRollback(t *testing.T) {

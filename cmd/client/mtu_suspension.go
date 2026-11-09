@@ -138,8 +138,9 @@ func (a *app) holdCapturedMTU(ctx context.Context) (func(), error) {
 		for {
 			cancelCapturedMTU(a)
 			if lock.TryLock() {
+				failure = closeDesktopImportedMTUForHold(ctx, a)
 				if raw, exists := mtuLiveOwners.Load(a); exists {
-					failure = raw.(*mtuLiveOwner).Close()
+					failure = errors.Join(failure, raw.(*mtuLiveOwner).Close())
 				}
 				if failure != nil {
 					lock.Unlock()

@@ -290,6 +290,9 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 	if a.writeDesktopPlatformMTUViewStatus(w, r, request, session) {
 		return
 	}
+	if a.writeDesktopImportedMTUViewStatus(w, r, request, session) {
+		return
+	}
 	identity, err := currentMTUViewIdentityContext(ctx, a)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -483,6 +486,12 @@ func cancelMTUViewOperation(ctx context.Context, a *app, w http.ResponseWriter, 
 }
 
 func currentMTUViewIdentityContext(ctx context.Context, a *app) (mtuViewIdentity, error) {
+	if owner, handled, err := desktopImportedMTURuntime(ctx, a); handled {
+		if err != nil {
+			return mtuViewIdentity{}, err
+		}
+		return mtuViewIdentity{Session: owner.launch.mtuSession, Profile: owner.selection.Exit.ID, Native: true}, nil
+	}
 	launch, err := desktopExternalMTULaunchContext(ctx, a)
 	if err != nil {
 		return mtuViewIdentity{}, err

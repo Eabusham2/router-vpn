@@ -328,6 +328,19 @@ func (owner *desktopNodeMTUOwner) CloseContext(ctx context.Context) error {
 func (owner *desktopNodeMTUOwner) CleanupRestored() (mtuKernelState, bool) {
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
+	return owner.cleanupRestoredLocked()
+}
+
+func (owner *desktopNodeMTUOwner) CleanupRestoredContext(ctx context.Context) (mtuKernelState, bool, error) {
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return mtuKernelState{}, false, err
+	}
+	defer owner.mu.Unlock()
+	state, restored := owner.cleanupRestoredLocked()
+	return state, restored, ctx.Err()
+}
+
+func (owner *desktopNodeMTUOwner) cleanupRestoredLocked() (mtuKernelState, bool) {
 	if !owner.closed || owner.runtimeRetired || !owner.committed || owner.pending != nil || owner.unconfirmedCommit != nil || owner.record.Active || !owner.record.Restored || owner.record.Failure != "" && !owner.record.Expired || owner.record.MTU != owner.originalMTU {
 		return mtuKernelState{}, false
 	}

@@ -50,7 +50,7 @@ PACKAGE_FILES = (
 WORKSPACE_SCOPES = (
     ('^TestDesktopRuntimeWorkspace', ''),
     ('^TestDesktopDNS', ''),
-    ('^TestDesktopImportedMTU(KernelSocketBinding|SocketRequiresOriginalLease)$', ''),
+    ('^TestDesktopImportedMTU', ''),
     ('^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)', ''),
     ('^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)', ''),
     ('^TestDesktopWindowsExternalSSEntry', ''),
@@ -495,7 +495,8 @@ class WindowsReleaseGateTests(unittest.TestCase):
         job = workflow_job(workflow, "native-windows")
         check_workspace_gate(job)
         for old, new in (("Run = '^TestDesktopRuntimeWorkspace'", "Run = '^TestDesktopTor'"),
-                         ("Run = '^TestDesktopImportedMTU(KernelSocketBinding|SocketRequiresOriginalLease)$'", "Run = '^$'"),
+                         ("Run = '^TestDesktopImportedMTU'", "Run = '^$'"),
+                         ("Run = '^TestDesktopImportedMTU'", "Run = '^TestDesktopImportedMTU(KernelSocketBinding|SocketRequiresOriginalLease)$'"),
                          ("Run = '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)'", "Run = '^$'"),
                          ("Run = '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)'", "Run = '^$'"),
                          ("Run = '^TestDesktopWindowsExternalSSEntry'", "Run = '^$'"),
@@ -523,7 +524,7 @@ class WindowsReleaseGateTests(unittest.TestCase):
         # added tests inherit exactly one group without a stale allowlist.
         original = (
             '^TestDesktopRuntimeWorkspace', '^TestDesktopDNS',
-            '^TestDesktopImportedMTU(KernelSocketBinding|SocketRequiresOriginalLease)$',
+            '^TestDesktopImportedMTU',
             '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)',
             '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)',
             '^TestDesktopWindowsExternalSSEntry',
@@ -546,6 +547,13 @@ class WindowsReleaseGateTests(unittest.TestCase):
         for name in (
             'TestDesktopImportedMTUKernelSocketBinding',
             'TestDesktopImportedMTUSocketRequiresOriginalLease',
+            'TestDesktopImportedMTUOwnedCommitRollbackAndLateCommitCancellation',
+            'TestDesktopImportedMTUFailedDialClosesPartialConnection',
+            'TestDesktopImportedMTUSharedPrivateControllerAndFinalization',
+            'TestDesktopImportedMTULongTransferRequiresNativeHeartbeat',
+            'TestDesktopImportedMTUHistoricalWriteKeepsOriginalFinalCaller',
+            'TestDesktopImportedMTUCheckedRetirementReleasesOnlyItsRemovedWorkspace',
+            'TestDesktopImportedMTUNewRequestCannotBorrowPreviousCommitDuringAdmission',
             'TestDesktopTorComparisonRequiresStoppedReceiptAndActualProcessJoin',
             'TestDesktopTorPublicCompareHTTPCancellationDrainsOwnedTrial',
             'TestDesktopTorOrdinarySpeedLabRetainsCompiledSourceAndRestoresAfterCancel',
@@ -700,6 +708,8 @@ class WindowsReleaseGateTests(unittest.TestCase):
         build_all = (REPOSITORY / ".github/workflows/build-all.yml").read_text(encoding="utf-8")
         variants = (
             ("cleanup", "Run = '^TestDesktopRuntimeWorkspace'", "Run = '^TestDesktopTor'"),
+            ("imported-mtu-omitted", "Run = '^TestDesktopImportedMTU'", "Run = '^$'"),
+            ("imported-mtu-restricted", "Run = '^TestDesktopImportedMTU'", "Run = '^TestDesktopImportedMTU(KernelSocketBinding|SocketRequiresOriginalLease)$'"),
             ("unix", "python3 deploy/test_desktop_tor_unix_wrapper.py", "true # omitted Unix ownership"),
             ("controller", "run: go test ./...", "run: go test -run '^$' ./..."),
             ("matrix", "{arch: arm64, runner: windows-11-arm}", "{arch: other, runner: windows-latest}"),

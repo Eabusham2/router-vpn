@@ -439,7 +439,7 @@ jobs:
           $scopes = @(
             @{ Run = '^TestDesktopRuntimeWorkspace'; Skip = '' },
             @{ Run = '^TestDesktopDNS'; Skip = '' },
-            @{ Run = '^TestDesktopImportedMTU(KernelSocketBinding|SocketRequiresOriginalLease)$'; Skip = '' },
+            @{ Run = '^TestDesktopImportedMTU'; Skip = '' },
             @{ Run = '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)'; Skip = '' },
             @{ Run = '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)'; Skip = '' },
             @{ Run = '^TestDesktopWindowsExternalSSEntry'; Skip = '' },
