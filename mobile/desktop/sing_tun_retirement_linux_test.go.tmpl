@@ -503,10 +503,10 @@ func TestRouterVPNNativeLinuxRoutingRetirementSocket(t *testing.T) {
 	}
 	address, err := syscall.Getsockname(int(watcher.file.Fd()))
 	actual, ok := address.(*syscall.SockaddrNetlink)
-	wanted := uint32(unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV4_RULE | unix.RTMGRP_IPV6_ROUTE | 1<<(unix.RTNLGRP_IPV6_RULE-1))
+	wanted := uint32(unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV6_IFADDR | unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV4_RULE | unix.RTMGRP_IPV6_ROUTE | 1<<(unix.RTNLGRP_IPV6_RULE-1))
 	if err != nil || !ok || actual.Groups != wanted || actual.Pid != watcher.port {
 		_ = watcher.close(ctx)
-		t.Fatal("original native socket did not capture both IP-family rule/route groups", address, err)
+		t.Fatal("original native socket did not capture both IP-family address/route/rule groups", address, err)
 	}
 	events, err := watcher.drain(ctx)
 	if err != nil {
