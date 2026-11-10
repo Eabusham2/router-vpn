@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -54,12 +55,25 @@ func newPrivateBenchmarkHTTPClient(timeout time.Duration) *http.Client {
 	}
 }
 
+func privateBenchmarkMbps(bytesCount int64, milliseconds float64) (float64, error) {
+	mbits := float64(bytesCount*8) / 1_000_000.0
+	mbps := round3(mbits / (milliseconds / 1000))
+	if mbps <= 0 || math.IsInf(mbps, 0) || math.IsNaN(mbps) {
+		return 0, errors.New("private benchmark clock did not produce positive finite throughput")
+	}
+	return mbps, nil
+}
+
 func measureRoutedProfileSpeed(p common.RouterProfile, bytesCount int64) (routedSpeedResult, error) {
 	return measureRoutedProfileSpeedContext(context.Background(), p, bytesCount)
 }
 
 func measureRoutedProfileSpeedContext(ctx context.Context, p common.RouterProfile, bytesCount int64) (routedSpeedResult, error) {
-	if err := ctx.Err(); err != nil {
+	return measureRoutedProfileSpeedWithClock(ctx, p, bytesCount, startClientMeasurementInterval)
+}
+
+func measureRoutedProfileSpeedWithClock(ctx context.Context, p common.RouterProfile, bytesCount int64, startClock clientMeasurementClock) (routedSpeedResult, error) {
+	if err := context.Cause(ctx); err != nil {
 		return routedSpeedResult{}, err
 	}
 	bytesCount = clampSpeedBytes(bytesCount)
@@ -81,7 +95,10 @@ func measureRoutedProfileSpeedContext(ctx context.Context, p common.RouterProfil
 	}
 	downloadReq = downloadReq.WithContext(ctx)
 	downloadReq.Header.Set("Accept-Encoding", "identity")
-	downloadStarted := time.Now()
+	downloadInterval, err := startClock()
+	if err != nil {
+		return routedSpeedResult{}, fmt.Errorf("download benchmark clock start failed: %w", errors.Join(err, context.Cause(ctx)))
+	}
 	downloadResp, err := client.Do(downloadReq)
 	if err != nil {
 		return routedSpeedResult{}, fmt.Errorf("download benchmark failed: %w", err)
@@ -97,7 +114,15 @@ func measureRoutedProfileSpeedContext(ctx context.Context, p common.RouterProfil
 	if downloaded != bytesCount {
 		return routedSpeedResult{}, fmt.Errorf("download benchmark returned %d bytes; expected %d", downloaded, bytesCount)
 	}
-	downloadElapsed := time.Since(downloadStarted)
+	downloadMs, err := clientMeasurementMilliseconds(ctx, downloadInterval)
+	if err != nil {
+		return routedSpeedResult{}, fmt.Errorf("download benchmark clock failed: %w", err)
+	}
+
+	downloadMbps, err := privateBenchmarkMbps(bytesCount, downloadMs)
+	if err != nil {
+		return routedSpeedResult{}, err
+	}
 
 	payload := make([]byte, bytesCount)
 	if _, err := io.ReadFull(rand.Reader, payload); err != nil {
@@ -110,7 +135,10 @@ func measureRoutedProfileSpeedContext(ctx context.Context, p common.RouterProfil
 	}
 	uploadReq = uploadReq.WithContext(ctx)
 	uploadReq.ContentLength = bytesCount
-	uploadStarted := time.Now()
+	uploadInterval, err := startClock()
+	if err != nil {
+		return routedSpeedResult{}, fmt.Errorf("upload benchmark clock start failed: %w", errors.Join(err, context.Cause(ctx)))
+	}
 	uploadResp, err := client.Do(uploadReq)
 	if err != nil {
 		return routedSpeedResult{}, fmt.Errorf("upload benchmark failed: %w", err)
@@ -126,7 +154,10 @@ func measureRoutedProfileSpeedContext(ctx context.Context, p common.RouterProfil
 	if len(body) > 64<<10 {
 		return routedSpeedResult{}, errors.New("private benchmark upload response is oversized")
 	}
-	uploadElapsed := time.Since(uploadStarted)
+	uploadMs, err := clientMeasurementMilliseconds(ctx, uploadInterval)
+	if err != nil {
+		return routedSpeedResult{}, fmt.Errorf("upload benchmark clock failed: %w", err)
+	}
 	var ack struct {
 		Bytes           int64   `json:"bytes"`
 		ServerReceiveMs float64 `json:"server_receive_ms"`
@@ -138,15 +169,18 @@ func measureRoutedProfileSpeedContext(ctx context.Context, p common.RouterProfil
 		return routedSpeedResult{}, fmt.Errorf("upload benchmark acknowledged %d bytes; expected %d", ack.Bytes, bytesCount)
 	}
 
-	if err := ctx.Err(); err != nil {
+	if err := context.Cause(ctx); err != nil {
 		return routedSpeedResult{}, err
 	}
 
-	mbits := float64(bytesCount*8) / 1_000_000.0
+	uploadMbps, err := privateBenchmarkMbps(bytesCount, uploadMs)
+	if err != nil {
+		return routedSpeedResult{}, err
+	}
 	return routedSpeedResult{
 		RouterID: p.ID, Name: p.Name, Bytes: bytesCount,
-		DownloadMbps: round3(mbits / downloadElapsed.Seconds()), UploadMbps: round3(mbits / uploadElapsed.Seconds()),
-		DownloadMs: round3(float64(downloadElapsed.Microseconds()) / 1000.0), UploadMs: round3(float64(uploadElapsed.Microseconds()) / 1000.0),
+		DownloadMbps: downloadMbps, UploadMbps: uploadMbps,
+		DownloadMs: roundMeasuredMilliseconds(downloadMs), UploadMs: roundMeasuredMilliseconds(uploadMs),
 		ServerReceiveMs: round3(ack.ServerReceiveMs), MeasuredAt: time.Now().UTC(),
 		Proof: "authenticated private router-agent transfer to this node through the unchanged current client routing graph; not derived from RTT or another hop",
 	}, nil
