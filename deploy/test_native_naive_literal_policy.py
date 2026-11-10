@@ -193,6 +193,24 @@ class NativeNaiveLiteral(unittest.TestCase):
                 with redirect_stdout(io.StringIO()), self.assertRaises(ValueError): node.execute_baseline_suite(baseline, suite)
 
 
+    def test_connect_literal_home_gate_requires_every_original_verdict(self):
+        node = load('test_desktop_node_physical.py')
+        names, suite = node.NAIVE_CONNECT_LITERAL_VERDICTS, node.NAIVE_CONNECT_LITERAL_SUITE
+        self.assertEqual(len(names), 29)
+        self.assertEqual(len(set(names)), 29)
+        def output(rows):
+            return ''.join('=== RUN   '+name+'\n--- PASS: '+name+' (0.00s)\n' for name in rows)
+        baseline = mock.Mock()
+        baseline.execute.return_value = (0, output(names))
+        with redirect_stdout(io.StringIO()): node.execute_baseline_suite(baseline, suite)
+        for missing in names:
+            baseline.execute.return_value = (0, output([name for name in names if name != missing]))
+            with self.subTest(missing=missing), redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+                node.execute_baseline_suite(baseline, suite)
+        for changed in (output([*names,names[0]]), output(names)+'--- SKIP: foreign (0.00s)\n', output(names)+'--- FAIL: foreign (0.00s)\n'):
+            baseline.execute.return_value = (0,changed)
+            with redirect_stdout(io.StringIO()), self.assertRaises(ValueError): node.execute_baseline_suite(baseline,suite)
+
     def test_shipping_mapping_and_instruction_refusal_with_causal_controls(self):
         go = shutil.which('go')
         self.assertIsNotNone(go, 'the native literal policy gate requires Go')

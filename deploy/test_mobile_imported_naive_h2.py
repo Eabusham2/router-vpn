@@ -72,7 +72,8 @@ PEERS = {
     'TestRouterVPNImportedNaiveH2ProxyTraffic': KINDS[:5],
     'TestRouterVPNImportedNaiveH2PacketTraffic': KINDS[5:],
 }
-LOOPBACK = {PACKET.NODE.NAIVE_LITERAL_ROOT: PACKET.NODE.NAIVE_LITERAL_CASES}
+LOOPBACK = {PACKET.NODE.NAIVE_LITERAL_ROOT: PACKET.NODE.NAIVE_LITERAL_CASES,
+            PACKET.NODE.NAIVE_CONNECT_LITERAL_ROOT: PACKET.NODE.NAIVE_CONNECT_LITERAL_CASES}
 
 
 def peer_verdicts(parent, kinds):
@@ -116,9 +117,50 @@ def inventory(directory, role):
     return records
 
 
+HOME_ROLES = ('android', 'apple', 'desktop')
+HOME_ROOT = 'TestRouterImportedNaiveH2HomeGraphs'
+HOME_NAMES = {'http-connect.json', 'https-connect.json'}
+HOME_VERDICTS = [HOME_ROOT] + [HOME_ROOT+'/'+role+'/'+kind.removesuffix('.json')
+    for role in HOME_ROLES for kind in sorted(HOME_NAMES)]
+
+
+def home_inventory(directory):
+    directory = Path(directory)
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValueError('Home graphs require an owned directory')
+    paths = list(directory.iterdir())
+    if {path.name for path in paths} != HOME_NAMES or len(paths) != 2:
+        raise ValueError('Home graphs require both exact CONNECT producer files')
+    records = {}
+    for path in paths:
+        if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= 4*1024*1024:
+            raise ValueError('Home graph is linked, empty or unbounded')
+        raw = path.read_bytes()
+        if not isinstance(json.loads(raw), dict):
+            raise ValueError('Home producer graph must be an object')
+        records[path.name] = hashlib.sha256(raw).hexdigest()
+    return records
+
+
+def execute_home_parsers(compiler, vendor, env, image, digest, homes):
+    if set(homes) != set(HOME_ROLES) or any(value is None for value in homes.values()):
+        raise ValueError('Home parser requires actual Java, Swift and desktop exports together')
+    before = {role: home_inventory(directory) for role, directory in homes.items()}
+    child = dict(env, **{'ROUTERVPN_'+role.upper()+'_NAIVE_H2_HOME_GRAPHS': str(Path(directory).resolve(strict=True))
+        for role, directory in homes.items()})
+    result = SOCKS.execute_image(compiler, vendor, child, image, digest,
+        'libbox', HOME_ROOT, HOME_VERDICTS, timeout=120)
+    if before != {role: home_inventory(directory) for role, directory in homes.items()}:
+        raise ValueError('Home producer bytes changed during native parsing')
+    return {'verdicts': result, 'sources': before}
+
+
 def source_receipt():
     paths = set(BUILD.inputs()) | {Path(__file__), ROOT/READER, ROOT/LOADER,
-        ROOT/'deploy/test_mobile_imported_naive_h2_runner.py'}
+        ROOT/'deploy/test_mobile_imported_naive_h2_runner.py',
+        ROOT/'deploy/test_ios_tor_profile.py', ROOT/'android/test_android_imported_router.py',
+        ROOT/'cmd/client/multihop_native_imported_naive_h2_home_test.go',
+        ROOT/'deploy/test_imported_naive_h2_workflow.py', ROOT/'.github/workflows/imported-naive-h2-native.yml'}
     for directory, suffix in (('android/app/src/main/java/com/eabusham/routervpn', '*.java'),
                               ('ios/RouterVPN/App', '*.swift'), ('ios/RouterVPN/PacketTunnel', '*.swift')):
         paths.update((ROOT/directory).glob(suffix))
@@ -232,7 +274,7 @@ def parser_library_controls(compiler, vendor, work, env, image, digest):
     return {'rejected': rejected, 'reader_sha256': digest}
 
 
-def run(vendor, *, stage='parser', android=None, apple=None, desktop=None):
+def run(vendor, *, stage='parser', android=None, apple=None, desktop=None, homes=None):
     vendor = Path(vendor).resolve(strict=True)
     compiler = Path(shutil.which('go') or '').resolve(strict=True)
     env = dict(os.environ, GOTOOLCHAIN=SOCKS.TOOLCHAIN, GOWORK='off')
@@ -274,6 +316,8 @@ def run(vendor, *, stage='parser', android=None, apple=None, desktop=None):
                     'libbox', parent, names, timeout=120)
                 if inventory(directory, role) != captured:
                     raise ValueError('Naive H2 host source changed during actual native parsing')
+            if any(value is not None for value in (android, apple, desktop)) or homes is not None:
+                receipt['home_parsers'] = execute_home_parsers(compiler, vendor, env, image, digest, homes or {})
             control_role, control_source = ('apple', apple) if apple is not None else ('shared', sources)
             receipt['inventory_controls'] = parser_inventory_controls(compiler, vendor, work, env, image, digest, control_role, control_source)
             receipt['library_controls'] = parser_library_controls(compiler, vendor, work, env, image, digest)
@@ -309,8 +353,11 @@ if __name__ == '__main__':
     parser.add_argument('--android', type=Path, help='Complete actual Android Naive H2 source export')
     parser.add_argument('--apple', type=Path, help='Complete actual Swift Naive H2 graph export')
     parser.add_argument('--desktop', type=Path, help='Complete desktop shipping Naive H2 graph export')
+    for role in HOME_ROLES:
+        parser.add_argument('--'+role+'-home', type=Path, help='Separate actual '+role+' Home UDP graph export')
     args = parser.parse_args()
-    if (args.reference_only or args.loopback_only) and (args.android or args.apple or args.desktop):
+    if (args.reference_only or args.loopback_only) and (args.android or args.apple or args.desktop or args.android_home or args.apple_home or args.desktop_home):
         parser.error('Host producer exports belong to the separate parser stage')
     run(args.vendor, stage='reference' if args.reference_only else 'loopback' if args.loopback_only else 'parser',
-        android=args.android, apple=args.apple, desktop=args.desktop)
+        android=args.android, apple=args.apple, desktop=args.desktop,
+        homes={role: getattr(args, role+'_home') for role in HOME_ROLES} if any(getattr(args, role+'_home') is not None for role in HOME_ROLES) else None)

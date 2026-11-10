@@ -68,5 +68,11 @@ func (c *Controller) importedPhysicalEgress(desktop *externalDesktopRecorder) ([
 	if c.meta.TransportCapability == "tcp-only" {
 		networks = []string{"tcp"}
 	}
-	return compiledPhysicalEgressWithDesktopProof(string(encoded), networks, desktop, c.meta.EntryTag)
+	dormantNaiveUDP := false
+	if c.meta.ExitMode == "naive-h2" && c.meta.TransportCapability == "naive-h2-stream" &&
+		(c.meta.ExitStartLayer == "" || c.meta.ExitStartLayer == "off") {
+		servers, _ := graph["dns"].(map[string]any)["servers"].([]any)
+		dormantNaiveUDP = len(servers) == 2 && predecessorText(servers[0].(map[string]any), "type") == "udp"
+	}
+	return compiledPhysicalEgressWithCapturedNaive(string(encoded), networks, desktop, c.meta.EntryTag, dormantNaiveUDP)
 }

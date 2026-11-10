@@ -473,7 +473,7 @@ enum IOSImportedEntryMultihop {
             // Naive's inner UoT does not authorize UDP below its own H2 dial.
             // Preserve the original selected DNS and bootstrap; refuse an
             // incompatible tree instead of replacing it with another policy.
-            guard ["tcp", "tls", "https"].contains(try selectedDNSTransport(final)) else { throw issue() }
+            let selectedTransport = try selectedDNSTransport(final)
             let dnsMode = (final["dns_mode"] as? String ?? "home").lowercased()
             guard final["dns_host"] == nil || final["dns_host"] is String else { throw issue() }
             let configuredHost = final["dns_host"] as? String ?? ""
@@ -481,6 +481,13 @@ enum IOSImportedEntryMultihop {
             let resolverHost = dnsMode == "rescue" ? "1.1.1.1" :
                 (["", "home"].contains(dnsMode) && configuredHost.isEmpty ? homeHost : configuredHost)
             guard !resolverHost.isEmpty else { throw issue() }
+            // The validated literal H2 endpoint and captured TLS name need no
+            // lower DNS query when the final Start Layer is Off. Retain the
+            // resolver tree; this grants only final-owned application UDP.
+            let literalH2UDP = mode == "naive-h2" && selectedTransport == "udp"
+                && ["", "off"].contains(final["start_layer"] as? String ?? "")
+                && literalAddress(resolverHost) && final["dns_bootstrap"] == nil
+            guard literalH2UDP || ["tcp", "tls", "https"].contains(selectedTransport) else { throw issue() }
             if let raw = final["dns_bootstrap"] {
                 guard !literalAddress(resolverHost), let bootstrap = raw as? [String: Any],
                       Set(bootstrap.keys) == Set(["server", "query"]), let server = bootstrap["server"] as? [String: Any],
@@ -546,7 +553,9 @@ enum IOSImportedEntryMultihop {
             let uot = try configuredCONNECTUoT(final: final, profiles: profiles)
             let datagrams = reality || uot || naiveH2
             let layers = datagrams ? ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"] : ["", "off"]
-            let transports = datagrams && !naiveH2 ? ["udp", "tcp", "tls", "https", "h3"] : ["tcp", "tls", "https"]
+            // validateNaiveH2 above has already proved the narrow literal,
+            // unlayered UDP resolver case before this common choice list.
+            let transports = naiveH2 ? ["udp", "tcp", "tls", "https"] : datagrams ? ["udp", "tcp", "tls", "https", "h3"] : ["tcp", "tls", "https"]
             guard entry["start_layer"] == nil || entry["start_layer"] is String,
                   ["start_layer", "dns_mode", "dns_protocol"].allSatisfy({ final[$0] == nil || final[$0] is String }) else { throw issue() }
             let transport = try selectedDNSTransport(final)
@@ -598,6 +607,6 @@ enum IOSImportedEntryMultihop {
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ImportedEntry", code: 1, userInfo: [NSLocalizedDescriptionKey:
-            "Choose a Local imported entry and a different paired Router VPN final with their original settings. WireGuard, AmneziaWG, OpenVPN, SOCKS5, Shadowsocks 2022, Hysteria2 and HTTP/HTTPS CONNECT entries can use a paired REALITY Vision, PQ REALITY Vision or XHTTP final while retaining each node's independently provisioned Start Layer. Naive H2 retains its own authenticated H2 and UDP stream transport. Over HTTP/HTTPS CONNECT its selected DNS and captured bootstrap must use TCP, DoT or DoH; saved Home UDP is not rewritten. REALITY carries TCP and UDP; Vision requires the final node's UDP 443 option for QUIC or DoH3 on port 443. HTTP/HTTPS CONNECT can also use SS2022 with selected TCP, DoT or DoH DNS. Its captured UoT-v2 service additionally permits UDP and final AES or AES+XOR; without it, SS2022 is TCP-only with the final layer Off. Resolver hostnames require their saved bootstrap through the same final. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
+            "Choose a Local imported entry and a different paired Router VPN final with their original settings. WireGuard, AmneziaWG, OpenVPN, SOCKS5, Shadowsocks 2022, Hysteria2 and HTTP/HTTPS CONNECT entries can use a paired REALITY Vision, PQ REALITY Vision or XHTTP final while retaining each node's independently provisioned Start Layer. Naive H2 retains its own authenticated H2 and UDP stream transport. Over HTTP/HTTPS CONNECT a captured literal Naive H2 final with its final Start Layer Off supports the original Home UDP resolver. Layered finals and hostname resolver trees still require TCP-compatible bootstrap; saved DNS is never rewritten. REALITY carries TCP and UDP; Vision requires the final node's UDP 443 option for QUIC or DoH3 on port 443. HTTP/HTTPS CONNECT can also use SS2022 with selected TCP, DoT or DoH DNS. Its captured UoT-v2 service additionally permits UDP and final AES or AES+XOR; without it, SS2022 is TCP-only with the final layer Off. Resolver hostnames require their saved bootstrap through the same final. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
     }
 }

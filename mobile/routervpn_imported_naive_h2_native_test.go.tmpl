@@ -226,3 +226,52 @@ func routerImportedNaiveH2Axes(t *testing.T, name string, graph map[string]any) 
 		t.Fatal("NaiveH2 filename substituted an independent Start Layer")
 	}
 }
+
+// Separate from the original 81 TCP graphs: these bytes come from the actual
+// Java, Swift and desktop producer paths, each with its original Home UDP policy.
+func TestRouterImportedNaiveH2HomeGraphs(t *testing.T) {
+	if os.Getenv("ROUTERVPN_ANDROID_NAIVE_H2_HOME_GRAPHS") == "" && os.Getenv("ROUTERVPN_APPLE_NAIVE_H2_HOME_GRAPHS") == "" && os.Getenv("ROUTERVPN_DESKTOP_NAIVE_H2_HOME_GRAPHS") == "" {
+		t.Skip("separate Home parser gate supplies actual producer graphs")
+	}
+	routerImportedNaiveH2Library(t)
+	for _, role := range []string{"ANDROID", "APPLE", "DESKTOP"} {
+		directory := os.Getenv("ROUTERVPN_" + role + "_NAIVE_H2_HOME_GRAPHS")
+		info, err := os.Lstat(directory)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			t.Fatal("missing owned Home producer directory", role, err)
+		}
+		rows, err := os.ReadDir(directory)
+		if err != nil || len(rows) != 2 {
+			t.Fatal("Home producer requires both exact CONNECT graphs", role, err)
+		}
+		for _, kind := range []string{"http-connect", "https-connect"} {
+			t.Run(strings.ToLower(role)+"/"+kind, func(t *testing.T) {
+				path := filepath.Join(directory, kind+".json")
+				info, err := os.Lstat(path)
+				if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 4<<20 {
+					t.Fatal("unowned Home graph", err)
+				}
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var graph map[string]any
+				if json.Unmarshal(raw, &graph) != nil {
+					t.Fatal("invalid Home graph")
+				}
+				routerImportedNaiveH2Axes(t, kind+"--naive-h2--off--off.json", graph)
+				servers := graph["dns"].(map[string]any)["servers"].([]any)
+				if len(servers) != 2 {
+					t.Fatal("Home graph lost retained bootstrap")
+				}
+				selected, lower := servers[0].(map[string]any), servers[1].(map[string]any)
+				if selected["type"] != "udp" || selected["server_port"] != float64(53) || selected["detour"] != "proxy" || lower["type"] != selected["type"] || lower["server"] != selected["server"] || lower["server_port"] != selected["server_port"] || lower["detour"] != "entry-wg" || lower["tag"] != "routervpn-predecessor-bootstrap-0" {
+					t.Fatal("Home producer changed selected DNS or retained lower owner")
+				}
+				if err := CheckConfig(string(raw)); err != nil {
+					t.Fatal("actual pinned Libbox rejected producer Home graph", err)
+				}
+			})
+		}
+	}
+}

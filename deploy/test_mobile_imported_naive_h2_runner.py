@@ -15,6 +15,47 @@ spec.loader.exec_module(G)
 
 
 class NaiveH2NativeRunner(unittest.TestCase):
+    def test_home_inventory_and_native_parser_keep_every_actual_producer(self):
+        self.assertEqual(G.HOME_NAMES, {'http-connect.json', 'https-connect.json'})
+        self.assertEqual(len(G.HOME_VERDICTS), 7)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            homes = {}
+            for role in G.HOME_ROLES:
+                directory = root/role; directory.mkdir(); homes[role] = directory
+                for name in G.HOME_NAMES: (directory/name).write_text('{}')
+            def execute(*args, **options):
+                self.assertEqual(args[5:8], ('libbox', G.HOME_ROOT, G.HOME_VERDICTS))
+                self.assertEqual(options, {'timeout':120})
+                for role in G.HOME_ROLES:
+                    self.assertEqual(args[2]['ROUTERVPN_'+role.upper()+'_NAIVE_H2_HOME_GRAPHS'], str(homes[role]))
+                return {'modeled':True}
+            with patch.object(G.SOCKS, 'execute_image', side_effect=execute):
+                result = G.execute_home_parsers('go', root, {}, root/'image', 'a'*64, homes)
+                self.assertEqual(set(result['sources']), set(G.HOME_ROLES))
+            for missing in G.HOME_ROLES:
+                with self.assertRaises(ValueError):
+                    G.execute_home_parsers('go', root, {}, root/'image', 'a'*64, {k:v for k,v in homes.items() if k != missing})
+            with patch.object(G.SOCKS, 'execute_image', side_effect=ValueError('actual parser failure')):
+                with self.assertRaisesRegex(ValueError, 'actual parser failure'):
+                    G.execute_home_parsers('go', root, {}, root/'image', 'a'*64, homes)
+            target = homes['apple']/'http-connect.json'
+            def changed(*args, **options): target.write_text('{"changed":true}')
+            with patch.object(G.SOCKS, 'execute_image', side_effect=changed):
+                with self.assertRaisesRegex(ValueError, 'changed during'):
+                    G.execute_home_parsers('go', root, {}, root/'image', 'a'*64, homes)
+            for fault in ('missing', 'extra', 'empty', 'linked', 'array'):
+                with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                    path=Path(directory)
+                    for name in G.HOME_NAMES: (path/name).write_text('{}')
+                    first=path/'http-connect.json'
+                    if fault=='missing': first.unlink()
+                    elif fault=='extra': (path/'foreign.json').write_text('{}')
+                    elif fault=='empty': first.write_text('')
+                    elif fault=='linked': first.unlink(); first.symlink_to(path/'https-connect.json')
+                    else: first.write_text('[]')
+                    with self.assertRaises(ValueError): G.home_inventory(path)
+
     def sources(self, directory, role='shared'):
         for name in G.NAMES:
             kind, mode, first, last = name.removesuffix('.json').split('--')
@@ -93,7 +134,8 @@ class NaiveH2NativeRunner(unittest.TestCase):
             self.assertTrue(all(name.startswith(parent+'/') for name in names[1:]))
 
     def test_literal_gate_preserves_all_ipv4_ipv6_dotted_and_refusal_verdicts(self):
-        self.assertEqual(list(G.LOOPBACK), ['TestRouterVPNDesktopNodeNaiveLiteral'])
+        self.assertEqual(list(G.LOOPBACK), ['TestRouterVPNDesktopNodeNaiveLiteral', 'TestRouterVPNDesktopNodeNaiveCONNECTLiteral'])
+        self.assertEqual(len(G.LOOPBACK['TestRouterVPNDesktopNodeNaiveCONNECTLiteral']), 28)
         cases = next(iter(G.LOOPBACK.values()))
         self.assertEqual(len(cases), 23)
         self.assertTrue({'ipv4-trailing-dot-name', 'ipv6-trailing-dot-name',
@@ -176,7 +218,7 @@ class NaiveH2NativeRunner(unittest.TestCase):
                      patch.object(G.PACKET.NODE,'verify_naive_library',side_effect=lambda _:order.append('verify')), patch('builtins.print'):
                     result=G.run(vendor,stage=stage)
                 self.assertEqual(order[:2],['library','compile']); self.assertEqual(order[-1],'verify')
-                self.assertEqual(len(observed), {'parser':82,'loopback':24,'reference':659}[stage])
+                self.assertEqual(len(observed), {'parser':82,'loopback':53,'reference':659}[stage])
                 self.assertEqual(result['native_library'], {'sha256':'a'*64,'bytes':42})
                 self.assertFalse(result['device_acceptance']); self.assertFalse(result['production_router_acceptance'])
 

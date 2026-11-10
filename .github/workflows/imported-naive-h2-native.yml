@@ -17,14 +17,21 @@ jobs:
         shell: bash
         env:
           ROUTERVPN_APPLE_IMPORTED_NAIVE_H2_FIXTURES: ${{ runner.temp }}/naive-h2-apple
+          ROUTERVPN_APPLE_NAIVE_H2_HOME_GRAPHS: ${{ runner.temp }}/naive-h2-home-apple
         run: |
           set -euo pipefail
-          mkdir "$RUNNER_TEMP/naive-h2-apple"
+          mkdir "$RUNNER_TEMP/naive-h2-apple" "$RUNNER_TEMP/naive-h2-home-apple"
           python3 deploy/test_ios_tor_profile.py
       - uses: actions/upload-artifact@v4
         with:
           name: imported-naive-h2-apple-graphs
           path: ${{ runner.temp }}/naive-h2-apple
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: imported-naive-h2-home-apple-graphs
+          path: ${{ runner.temp }}/naive-h2-home-apple
           if-no-files-found: error
           retention-days: 7
 
@@ -76,14 +83,20 @@ jobs:
         with:
           name: imported-naive-h2-apple-graphs
           path: ${{ runner.temp }}/naive-h2-apple
+      - uses: actions/download-artifact@v4
+        with:
+          name: imported-naive-h2-home-apple-graphs
+          path: ${{ runner.temp }}/naive-h2-home-apple
       - name: Export all 81 actual Android and desktop Naive H2 source graphs
         timeout-minutes: 20
         env:
           ROUTERVPN_ANDROID_IMPORTED_NAIVE_H2_FIXTURES: ${{ runner.temp }}/naive-h2-android
           ROUTERVPN_DESKTOP_IMPORTED_NAIVE_H2_FIXTURES: ${{ runner.temp }}/naive-h2-desktop
+          ROUTERVPN_ANDROID_NAIVE_H2_HOME_GRAPHS: ${{ runner.temp }}/naive-h2-home-android
+          ROUTERVPN_DESKTOP_NAIVE_H2_HOME_GRAPHS: ${{ runner.temp }}/naive-h2-home-desktop
         run: |
           set -euo pipefail
-          mkdir "$RUNNER_TEMP/naive-h2-android" "$RUNNER_TEMP/naive-h2-desktop"
+          mkdir "$RUNNER_TEMP/naive-h2-android" "$RUNNER_TEMP/naive-h2-desktop" "$RUNNER_TEMP/naive-h2-home-android" "$RUNNER_TEMP/naive-h2-home-desktop"
           python3 android/test_android_imported_router.py \
             --phase naive-h2--socks5 --phase naive-h2--shadowsocks \
             --phase naive-h2--hysteria2 --phase naive-h2--http-connect \
@@ -101,7 +114,9 @@ jobs:
           python3 deploy/test_mobile_imported_naive_h2.py \
             "$RUNNER_TEMP/routervpn-imported-naive-h2-core" \
             --android "$RUNNER_TEMP/naive-h2-android" --apple "$RUNNER_TEMP/naive-h2-apple" \
-            --desktop "$RUNNER_TEMP/naive-h2-desktop"
+            --desktop "$RUNNER_TEMP/naive-h2-desktop" \
+            --android-home "$RUNNER_TEMP/naive-h2-home-android" --apple-home "$RUNNER_TEMP/naive-h2-home-apple" \
+            --desktop-home "$RUNNER_TEMP/naive-h2-home-desktop"
           python3 deploy/test_mobile_imported_naive_h2.py \
             "$RUNNER_TEMP/routervpn-imported-naive-h2-core" --loopback-only
           python3 deploy/test_mobile_imported_naive_h2.py \

@@ -159,6 +159,10 @@ class ImportedNaiveH2Workflow(unittest.TestCase):
         self.assertIn('    uses: ./.github/workflows/imported-naive-h2-native.yml\n', caller)
         self.assertNotIn('if:', caller)
         pq_source = NAIVE_H2_WORKFLOW.read_text()
+        for role in ('ANDROID', 'APPLE', 'DESKTOP'):
+            self.assertIn('ROUTERVPN_'+role+'_NAIVE_H2_HOME_GRAPHS: ${{ runner.temp }}/naive-h2-home-'+role.lower(), pq_source)
+        self.assertEqual(pq_source.count('name: imported-naive-h2-home-apple-graphs'), 2)
+        self.assertEqual(pq_source.count('path: ${{ runner.temp }}/naive-h2-home-apple'), 2)
         self.assertIn('  workflow_call:\n', pq_source)
         pq = section(pq_source, 'imported-naive-h2-reference:', 2)
         self.assertIn('    timeout-minutes: 60\n', ordinary)
@@ -217,7 +221,9 @@ class ImportedNaiveH2Workflow(unittest.TestCase):
                 ['deploy/'+GATE, str(work/'routervpn-imported-naive-h2-core'), *arguments]
                 for _, arguments, _ in STAGES]
             expected[2].extend(['--android', str(work/'naive-h2-android'), '--apple', str(work/'naive-h2-apple'),
-                                '--desktop', str(work/'naive-h2-desktop')])
+                                '--desktop', str(work/'naive-h2-desktop'),
+                                '--android-home', str(work/'naive-h2-home-android'), '--apple-home', str(work/'naive-h2-home-apple'),
+                                '--desktop-home', str(work/'naive-h2-home-desktop')])
             if producers:
                 expected = [['android/test_android_imported_router.py',
                              *(part for kind in KINDS for part in ('--phase', 'naive-h2--'+kind))],

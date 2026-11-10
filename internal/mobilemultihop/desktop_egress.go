@@ -95,6 +95,13 @@ func compiledPhysicalEgressWithDesktop(configJSON string, networks []string, des
 // Trace it through the same original graph: only the actual first transport
 // gains intent, never the entry proof destination or the inner final peer.
 func compiledPhysicalEgressWithDesktopProof(configJSON string, networks []string, desktop *externalDesktopRecorder, proofTag string) ([]PhysicalEgress, error) {
+	return compiledPhysicalEgressWithCapturedNaive(configJSON, networks, desktop, proofTag, false)
+}
+
+// Only the revalidated imported constructor may identify its unlayered literal
+// H2 resolver as dormant. The resolver stays in the executable and capture;
+// recording its identity must not manufacture an unsupported lower UDP socket.
+func compiledPhysicalEgressWithCapturedNaive(configJSON string, networks []string, desktop *externalDesktopRecorder, proofTag string, dormantNaiveUDP bool) ([]PhysicalEgress, error) {
 	var graph map[string]any
 	if exactJSON([]byte(configJSON), &graph, 4<<20) != nil {
 		return nil, nodePhysicalEgressError
@@ -102,7 +109,7 @@ func compiledPhysicalEgressWithDesktopProof(configJSON string, networks []string
 	p := nodeEgressProjection{
 		nodes: map[string]map[string]any{}, resolvers: map[string]map[string]any{},
 		active: map[string]bool{}, visited: map[string]bool{}, tuples: map[PhysicalEgress]bool{},
-		desktop: desktop,
+		desktop: desktop, dormantNaiveUDP: dormantNaiveUDP,
 	}
 	for _, family := range []string{"endpoints", "outbounds"} {
 		rows, _ := graph[family].([]any)
@@ -160,6 +167,7 @@ type nodeEgressProjection struct {
 	active, visited  map[string]bool
 	tuples           map[PhysicalEgress]bool
 	desktop          *externalDesktopRecorder
+	dormantNaiveUDP  bool
 }
 
 func (p *nodeEgressProjection) add(host string, port any, network string) error {
@@ -225,7 +233,21 @@ func (p *nodeEgressProjection) node(tag, payload string) error {
 		// Naive retains an explicit native resolver even for a literal server.
 		// The desktop wrapper must preserve that compiled bootstrap dependency;
 		// the legacy fixed-tuple projection keeps its existing behavior.
-		if err := p.resolve(value); err != nil {
+		if p.dormantNaiveUDP && tag == "proxy" {
+			query, err := externalDesktopQuery(value["domain_resolver"])
+			server := p.resolvers[query.Server]
+			literal, literalErr := netip.ParseAddr(predecessorText(value, "server"))
+			_, resolverErr := netip.ParseAddr(predecessorText(server, "server"))
+			if err != nil || !query.Present || query.Server != "routervpn-predecessor-bootstrap-0" ||
+				literalErr != nil || !literal.IsValid() || resolverErr != nil || value["quic"] != false ||
+				value["detour"] != "entry-wg" || server["type"] != "udp" || server["detour"] != "entry-wg" ||
+				!externalPort(server["server_port"]) {
+				return nodePhysicalEgressError
+			}
+			if err := p.desktop.dns(query.Server, server, true, false, int(server["server_port"].(float64))); err != nil {
+				return err
+			}
+		} else if err := p.resolve(value); err != nil {
 			return err
 		}
 	}

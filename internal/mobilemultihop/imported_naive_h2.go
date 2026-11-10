@@ -56,6 +56,15 @@ func importedNaiveDNS(graph, final map[string]any, mode string, lowerUDP bool) e
 	if err := importedCONNECTDNS(map[string]any{"dns": application}, true); err != nil {
 		return err
 	}
+	// The strict Naive validator above requires the original literal endpoint
+	// and self-contained TLS identity. With no final Start Layer, Cronet's
+	// exact literal/SNI mapping establishes H2 without consulting the lower
+	// resolver. Keep that complete resolver attached: it remains an owned,
+	// unusable fallback, not permission to send UDP through CONNECT. Limit
+	// this case to a single literal UDP application resolver; hostname DNS,
+	// DoH3 and layered final bootstraps retain their existing capability gate.
+	literalH2UDP := mode == "naive-h2" && detour == "" && count == 1 &&
+		predecessorText(servers[0].(map[string]any), "type") == "udp"
 	names := map[string]string{ExternalDNSTag: "routervpn-predecessor-bootstrap-0"}
 	if count == 2 {
 		names["external-dns-bootstrap"] = "routervpn-predecessor-bootstrap-1"
@@ -106,7 +115,7 @@ func importedNaiveDNS(graph, final map[string]any, mode string, lowerUDP bool) e
 		// Equality above preserves the exact selected endpoint, transport,
 		// TLS identity, port/path and query options. Only capability is checked
 		// here; no selected resolver is rewritten for a TCP-only entry.
-		if !lowerUDP && (expected["type"] == "udp" || expected["type"] == "h3") {
+		if !lowerUDP && !literalH2UDP && (expected["type"] == "udp" || expected["type"] == "h3") {
 			return errors.New("Naive H2 over CONNECT requires an explicitly captured TCP-compatible DNS bootstrap; the selected UDP or DoH3 policy cannot traverse that entry")
 		}
 	}

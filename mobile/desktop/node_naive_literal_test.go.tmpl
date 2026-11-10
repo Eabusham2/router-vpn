@@ -3,6 +3,7 @@ package routervpnamnezia
 import (
 	"context"
 	"crypto/sha256"
+	STD_TLS "crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -138,6 +139,27 @@ func TestRouterVPNDesktopNodeNaiveLiteral(t *testing.T) {
 }
 
 func desktopNaiveLiteralTransport(t *testing.T, resolverKind, fault, endpoint, hostStyle string) {
+	desktopNaiveLiteralTransportCarrier(t, resolverKind, fault, endpoint, hostStyle, "")
+}
+
+func TestRouterVPNDesktopNodeNaiveCONNECTLiteral(t *testing.T) {
+	desktopNodeNaiveLibrary(t)
+	for _, carrier := range []string{"http-connect", "https-connect"} {
+		for _, endpoint := range []string{"192.0.2.77", "2001:db8::77"} {
+			for _, fault := range []string{"", "naive-password", "naive-server-name", "naive-certificate", "forced-query", "connect-auth", "connect-route"} {
+				name := fault
+				if name == "" {
+					name = "home-udp"
+				}
+				t.Run(carrier+"/"+endpoint+"/"+name, func(t *testing.T) {
+					desktopNaiveLiteralTransportCarrier(t, "udp", fault, endpoint, "", carrier)
+				})
+			}
+		}
+	}
+}
+
+func desktopNaiveLiteralTransportCarrier(t *testing.T, resolverKind, fault, endpoint, hostStyle, carrier string) {
 	t.Helper()
 	var peer *desktopNodeLayerServer
 	var lower *desktopNaiveLiteralWitnessLower
@@ -172,7 +194,11 @@ func desktopNaiveLiteralTransport(t *testing.T, resolverKind, fault, endpoint, h
 			if dns.exchanges.Load() != 0 || dns.lookups.Load() != 0 {
 				t.Error("literal/SNI mapping used lower bootstrap DNS")
 			}
-			if lower.calls.Load() == 0 || peer.rawTCP.Load() == 0 {
+			if strings.HasPrefix(fault, "connect-") {
+				if lower.calls.Load() == 0 || peer.rawTCP.Load() != 0 {
+					t.Error("changed CONNECT authority reached the final TLS peer")
+				}
+			} else if lower.calls.Load() == 0 || peer.rawTCP.Load() == 0 {
 				t.Error("native control missed its actual TLS peer")
 			}
 		}
@@ -186,8 +212,39 @@ func desktopNaiveLiteralTransport(t *testing.T, resolverKind, fault, endpoint, h
 
 	})
 	var files string
-	peer, files = startDesktopNodeNaiveServer(t, "naive-h2", netip.MustParseAddr("127.0.0.1"), "")
-	if fault != "" && fault != "forced-query" {
+	dnsAddress := ""
+	var selectedQueries atomic.Int64
+	if carrier != "" {
+		packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		dnsAddress = packet.LocalAddr().String()
+		server := &mdns.Server{PacketConn: packet, Handler: mdns.HandlerFunc(func(w mdns.ResponseWriter, q *mdns.Msg) {
+			reply := new(mdns.Msg)
+			reply.SetReply(q)
+			if len(q.Question) != 1 || q.Question[0].Name != "example.com." || q.Question[0].Qtype != mdns.TypeA {
+				reply.Rcode = mdns.RcodeRefused
+			} else {
+				selectedQueries.Add(1)
+				reply.Answer = []mdns.RR{&mdns.A{Hdr: mdns.RR_Header{Name: "example.com.", Rrtype: mdns.TypeA, Class: mdns.ClassINET, Ttl: 1}, A: net.ParseIP("93.184.216.34")}}
+			}
+			_ = w.WriteMsg(reply)
+		})}
+		done := make(chan error, 1)
+		go func() { done <- server.ActivateAndServe() }()
+		t.Cleanup(func() {
+			_ = server.Shutdown()
+			_ = packet.Close()
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Error("Home DNS receiver did not join")
+			}
+		})
+	}
+	peer, files = startDesktopNodeNaiveServer(t, "naive-h2", netip.MustParseAddr("127.0.0.1"), dnsAddress)
+	if fault != "" && fault != "forced-query" && !strings.HasPrefix(fault, "connect-") {
 		files = desktopNodeNaiveAssets(t, files, fault)
 	}
 	var assets map[string]string
@@ -243,6 +300,38 @@ func desktopNaiveLiteralTransport(t *testing.T, resolverKind, fault, endpoint, h
 	owned = service.ContextWith[adapter.DNSTransportManager](owned, manager)
 	owned = service.ContextWith[adapter.DNSRouter](owned, dns)
 	finalRaw["detour"] = lower.Tag()
+	if carrier != "" {
+		entryCtx, entryCancel := context.WithCancel(ctx)
+		entryServer := &desktopNodeLayerServer{ctx: entryCtx, cancel: entryCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: expected.String(), Physical: peer.tcp.Addr().String()}}}
+		var certificate *STD_TLS.Certificate
+		raw := map[string]any{"type": "http", "tag": "entry-wg", "server": "192.0.2.88", "username": "captured-entry", "password": "captured-entry-secret", "detour": lower.Tag()}
+		if carrier == "https-connect" {
+			pair, pem := desktopNodeNaiveCertificate(t)
+			certificate = &pair
+			raw["tls"] = map[string]any{"enabled": true, "server_name": "captured-naive.test", "certificate": []string{string(pem)}}
+		}
+		if fault == "connect-route" {
+			entryServer.routes[0].Destination = "192.0.2.99:4444"
+		}
+		entryPeer := desktopStartImportedCONNECTPeer(t, entryServer, "captured-entry", "captured-entry-secret", certificate, nil, "")
+		address := netip.MustParseAddrPort(entryPeer.address)
+		raw["server_port"] = int(address.Port())
+		lower.expected = M.ParseSocksaddrHostPort("192.0.2.88", address.Port())
+		lower.physical = entryPeer.address
+		if fault == "connect-auth" {
+			raw["password"] = "foreign-entry-secret"
+		}
+		entry := desktopImportedCONNECTXrayOutbound(t, owned, raw)
+		owners.owners["entry-wg"] = entry
+		finalRaw["detour"] = "entry-wg"
+		t.Cleanup(func() {
+			if closer, ok := entry.(io.Closer); ok {
+				if err := closer.Close(); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+	}
 	finalRaw["domain_resolver"] = map[string]any{"server": manager.transport.Tag(), "disable_cache": true}
 	if fault == "forced-query" {
 		// Deliberate native-only mutation: shipping source validation above
@@ -289,6 +378,15 @@ func desktopNaiveLiteralTransport(t *testing.T, resolverKind, fault, endpoint, h
 		}
 		if fault != "" && err == nil {
 			t.Fatal("negative control delivered authenticated H2 payload", network)
+		}
+	}
+	if carrier != "" {
+		ok, err := desktopImportedSOCKSXrayDNS(ctx, final, "192.168.50.133:53")
+		if fault == "" && (!ok || err != nil || selectedQueries.Load() != 1) {
+			t.Fatal("captured Home UDP did not traverse the authenticated final", ok, err, selectedQueries.Load())
+		}
+		if fault != "" && (ok || selectedQueries.Load() != 0) {
+			t.Fatal("refused native source reached Home DNS", ok, err)
 		}
 	}
 	completed = true

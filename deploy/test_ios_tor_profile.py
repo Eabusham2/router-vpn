@@ -1270,14 +1270,10 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   var systemArgs=args;systemArgs["files"]=try text(system);let systemGraph=try object(Data(bridge(["Op":"imported-router","Config":text(systemArgs)]).utf8))
   try check("Naive H2 retains explicit system trust",try (tagged(systemGraph,"routervpn-execution-local")["tls"] as! [String:Any])["certificate"]==nil)
   var home=final;home["dns_protocol"]="udp";var homeArgs=args;homeArgs["profile"]=try text(home)
-  if connect {
-   reject("Naive H2 CONNECT host retains incompatible Home UDP"){try IOSImportedEntryMultihop.validate(entry:entry,final:home,profiles:maps)}
-   reject("Naive H2 CONNECT compiler refuses unchanged Home UDP"){_ = try bridge(["Op":"imported-router","Config":text(homeArgs)])}
-  } else {
-   try IOSImportedEntryMultihop.validate(entry:entry,final:home,profiles:maps)
-   let graph=try object(Data(bridge(["Op":"imported-router","Config":text(homeArgs)]).utf8)),dns=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
-   try check("Naive H2 capable entry keeps selected Home UDP",dns[0]["type"] as? String=="udp")
-  }
+  try IOSImportedEntryMultihop.validate(entry:entry,final:home,profiles:maps)
+  let homeGraph=try object(Data(bridge(["Op":"imported-router","Config":text(homeArgs)]).utf8)),homeDNS=(homeGraph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
+  try check("Literal Naive H2 keeps exact final-owned Home UDP",homeDNS[0]["type"] as? String=="udp" && homeDNS[0]["server"] as? String==home["adguard_ipv4"] as? String && homeDNS[0]["detour"] as? String=="proxy")
+  if connect,let output=ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_NAIVE_H2_HOME_GRAPHS"]{try json(homeGraph).write(to:URL(fileURLWithPath:output).appendingPathComponent(kind+".json"),options:.withoutOverwriting)}
   for transport in ["tcp","tls","https"] {for hostname in [false,true] {
    var selected=final;selected["dns_mode"]="custom";selected["dns_protocol"]=transport;selected["dns_host"]=hostname ? "resolver.example.net":"203.0.113.53";selected["dns_port"]=8853;selected["dns_server_name"]="resolver.example.net";selected["dns_path"]="/owned-dns-query"
    if hostname{selected["dns_bootstrap"]=["server":["type":"tcp","tag":"external-dns-bootstrap","server":"203.0.113.54","server_port":5354,"detour":"proxy"],"query":["server":"external-dns-bootstrap","timeout":"3s","disable_optimistic_cache":true]] as [String:Any]}
