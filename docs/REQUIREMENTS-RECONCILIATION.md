@@ -18,6 +18,28 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
+## November 10 original-source recovery and current boundaries
+
+The [November 10 evidence ledger](CONTINUATION-EVIDENCE-2026-11-10.md)
+rechecks `mm.md`, the audit/addendum, the full later 32-topic request, and the
+August 13/14 external-node and August 19 map-first user passages. The 1–311
+list is an organized audit index embedded in conversation; it is not relabeled
+as 311 verbatim user statements. The 312–356/C1–C7 addendum and later direct
+user wording remain separate, overlapping sources. This recovery preserves
+the original identifiers and numerical/default contracts without inventing a
+completion percentage.
+
+At source cutoff `e2211ee4`, native DNS and four client measurement paths adopt
+the checked platform interval. The ledger distinguishes passing local source
+and component tests from pending native packages and publication. It also
+identifies genuine source gaps beyond live-device work: imported Server/Compare,
+additional independently selected hops, and protected Unix imported composition.
+Home UDP over authenticated SS UoT-v2/native VLESS CONNECT paths is already
+implemented; selected UDP/DoH3 lower bootstrap for Naive H2 over CONNECT remains
+a narrower open path. Existing Unix direct and external-pair protection is
+preserved and is not described as wholly absent. Later source units must carry
+their own runtime and producer evidence before closing these boundaries.
+
 ## November 6 imported-layer increment through `a08d7d6f`
 
 Published [`a08d7d6f`](https://github.com/Eabusham2/router-vpn/commit/a08d7d6f387c3b55b3139de54ef567bd67e841f9)

@@ -1,10 +1,34 @@
 # Current implementation status
 
-Updated November 9, 2026 UTC. This file distinguishes published source,
+Updated November 10, 2026 UTC. This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
+
+## November 10 continuation: measurement clocks and current release repairs
+
+The [November 10 evidence ledger](CONTINUATION-EVIDENCE-2026-11-10.md)
+records the recovered original sources, published units through `e2211ee4`,
+actual executable checks, and remaining source and acceptance boundaries.
+Native DNS and four client DNS/RTT paths now use checked per-sample platform
+intervals. Invalid timing cannot earn a score or overwrite saved statistics;
+real positive tiny samples retain their measured value. Routed candidate and
+Compare probe clock adoption remains a separate source unit at this cutoff.
+
+Current release repairs retain the required negative controls and native
+inventory. They include real-build fixture corrections, complete generated
+bundle verdict counts, and bounded scheduling of all 536 Android source tests.
+The current native builds and publication have not yet completed. The older
+`745b3e41` release does not establish acceptance of these newer source changes.
+
+The source reconciliation narrows two stale blanket gaps: Home UDP already
+works over CONNECT when the independently authenticated final supplies SS
+UoT-v2 or native VLESS datagram carriage, and Unix already has protected direct
+and bounded external-pair paths. Naive H2's selected UDP/DoH3 lower bootstrap,
+protected imported-entry/paired-final Unix composition, imported Server/Compare,
+and additional user-selected hops remain open at this cutoff. The ledger names
+the actual shipping boundaries; safe rejection does not complete a requirement.
 
 ## November 9 latest checkpoint: imported Naive H3 and native timing repairs
 
