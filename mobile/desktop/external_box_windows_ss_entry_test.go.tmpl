@@ -303,6 +303,14 @@ func (h *desktopWFPSSEntryForward) NewPacketConnection(ctx context.Context, c N.
 		h.rejected.Add(1)
 		return errors.New("SS entry rejected unowned UDP final")
 	}
+	// Capture the real SS writer before the initial-packet ownership wrapper.
+	// That wrapper deliberately exposes only PacketConn, so querying it would
+	// hide the SS2022 header and AEAD trailer requirements.
+	front, rear := N.CalculateFrontHeadroom(c), N.CalculateRearHeadroom(c)
+	if front < 0 || rear < 0 || front > 4096 || rear > 4096 {
+		_ = c.Close()
+		return errors.New("SS entry reply exceeds captured native writer bounds")
+	}
 	c = desktopWFPOwnInitialPacket(c)
 	h.mu.Lock()
 	if h.closing {
@@ -333,8 +341,13 @@ func (h *desktopWFPSSEntryForward) NewPacketConnection(ctx context.Context, c N.
 				_ = c.Close()
 				return
 			}
-			body.Truncate(n)
-			if e = c.WritePacket(body, m.Destination); e != nil {
+			// Keep the UDP payload bound unchanged; header/trailer capacity is
+			// separate and belongs to this captured encrypted writer only.
+			reply := buf.NewSize(front + n + rear)
+			reply.Resize(front, 0)
+			_, _ = reply.Write(body.FreeBytes()[:n])
+			body.Release()
+			if e = c.WritePacket(reply, m.Destination); e != nil {
 				_ = c.Close()
 				return
 			}
