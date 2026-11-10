@@ -4,6 +4,8 @@ from pathlib import Path
 import copy
 import importlib.util
 import json
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -216,6 +218,89 @@ class ProtectedImportedH3Runner(unittest.TestCase):
             self.assertTrue(raw.startswith(GATE.TAG)); self.assertEqual(copies[target], raw)
         self.assertIn('RouterVPNDesktopImportedPreparePhysicalOwned(policy)', (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_test.go.tmpl').read_text())
         self.assertIn('DesktopWindowsNodeCompositionVerifyPrepared(ctx, target)', (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_test.go.tmpl').read_text())
+
+
+    def test_native_openvpn_readiness_preserves_original_owner_and_caller(self):
+        source = (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_test.go.tmpl').read_text()
+        helper = source.split('type desktopImportedH3OpenVPN interface {', 1)[1].split('func (f *desktopImportedH3WindowsFixture) awaitEntryReady', 1)[0]
+        helper = 'type desktopImportedH3OpenVPN interface {' + helper
+        proof = source.split('func (f *desktopImportedH3WindowsFixture) prove(', 1)[1].split('func (f *desktopImportedH3WindowsFixture) drain(', 1)[0]
+        self.assertIn('context.WithTimeout(context.Background(), 15*time.Second)', proof)
+        self.assertLess(proof.index('f.awaitEntryReady(ctx)'), proof.index('f.proofLane(ctx, true)'))
+        self.assertEqual(proof.count('f.proofLane(ctx, true)'), 1)
+        header = 'package readiness\nimport("context";"errors";"time";"router-vpn/internal/nativeopenvpn")\n'
+        cases = r'''package readiness
+import("context";"errors";"testing";"time";"router-vpn/internal/nativeopenvpn")
+type endpoint struct { read func(context.Context)(nativeopenvpn.RemoteReceipt,uint32,error) }
+func(e *endpoint)RouterVPNConnectedCapacityContext(ctx context.Context)(nativeopenvpn.RemoteReceipt,uint32,error){ return e.read(ctx) }
+func capture()map[string]any{return map[string]any{"server":"203.0.113.24","server_port":float64(1194),"network":"tcp","mtu":float64(1400)}}
+func receipt()nativeopenvpn.RemoteReceipt{return nativeopenvpn.RemoteReceipt{Remote:nativeopenvpn.Remote{Host:"203.0.113.24",Port:1194,Network:"tcp"},Generation:1,ConnectedAt:1700000000000}}
+func TestOriginalPendingEndpointBecomesReadyBeforeProof(t *testing.T){
+ for _,network:=range []string{"tcp","udp"}{t.Run(network,func(t *testing.T){
+  ctx,cancel:=context.WithTimeout(context.Background(),time.Second);defer cancel()
+  queries,proofs:=0,0; original:=&endpoint{}; expected:=capture(); expected["network"]=network
+  original.read=func(call context.Context)(nativeopenvpn.RemoteReceipt,uint32,error){
+   if call!=ctx{t.Fatal("native observation lost original caller")};queries++
+   if queries==1{return nativeopenvpn.RemoteReceipt{},0,nativeopenvpn.ErrRemotePending}
+   r:=receipt();r.Network=network;return r,1400,nil
+  }
+  current:=func(call context.Context)(desktopImportedH3OpenVPN,error){if call!=ctx{t.Fatal("owner check lost caller")};return original,nil}
+  err:=desktopImportedH3AwaitOpenVPN(ctx,original,current,expected)
+  if err==nil{proofs++}
+  if err!=nil||queries!=2||proofs!=1{t.Fatalf("proof admitted before native ready: queries=%d proofs=%d err=%v",queries,proofs,err)}
+ })}
+}
+func TestReadinessRejectsChangedReceiptAndNativeFailure(t *testing.T){
+ for _,fault:=range []string{"host","port","network","generation","timestamp","capacity","oversized-capacity","native-error"}{t.Run(fault,func(t *testing.T){
+  reads:=0;actual:=errors.New("original provider authentication failure");original:=&endpoint{}
+  original.read=func(context.Context)(nativeopenvpn.RemoteReceipt,uint32,error){reads++;r:=receipt();mtu:=uint32(1400)
+   switch fault{case "host":r.Host="203.0.113.25";case "port":r.Port++;case "network":r.Network="udp";case "generation":r.Generation=0;case "timestamp":r.ConnectedAt=0;case "capacity":mtu--;case "oversized-capacity":mtu=65536;case "native-error":return r,mtu,actual};return r,mtu,nil}
+  err:=desktopImportedH3AwaitOpenVPN(context.Background(),original,func(context.Context)(desktopImportedH3OpenVPN,error){return original,nil},capture())
+  if err==nil||reads!=1{t.Fatalf("invalid readiness retried or adopted: reads=%d err=%v",reads,err)}
+  if fault=="native-error"&&!errors.Is(err,actual){t.Fatal("native error cause lost",err)}
+ })}
+}
+func TestReadinessRejectsCancellationAndEndpointReplacement(t *testing.T){
+ for _,fault:=range []string{"cancel-before","cancel-read","cancel-pending","replace-before","replace-read","owner-error"}{t.Run(fault,func(t *testing.T){
+  ctx,cancel:=context.WithCancel(context.Background());defer cancel()
+  original,replacement:=&endpoint{},&endpoint{};var live desktopImportedH3OpenVPN=original
+  reads:=0;actual:=errors.New("original owner retired")
+  original.read=func(call context.Context)(nativeopenvpn.RemoteReceipt,uint32,error){reads++
+   if fault=="cancel-read"||fault=="cancel-pending"{cancel()};if fault=="replace-read"{live=replacement}
+   if fault=="cancel-pending"{return nativeopenvpn.RemoteReceipt{},0,nativeopenvpn.ErrRemotePending};return receipt(),1400,nil}
+  if fault=="cancel-before"{cancel()};if fault=="replace-before"{live=replacement}
+  current:=func(context.Context)(desktopImportedH3OpenVPN,error){if fault=="owner-error"{return nil,actual};return live,nil}
+  err:=desktopImportedH3AwaitOpenVPN(ctx,original,current,capture())
+  if err==nil{t.Fatal("retired original owner/caller admitted proof")}
+  if fault=="cancel-before"||fault=="cancel-read"||fault=="cancel-pending"{if !errors.Is(err,context.Canceled){t.Fatal("caller cancellation lost",err)}}
+  if fault=="owner-error"&&!errors.Is(err,actual){t.Fatal("owner error cause lost",err)}
+  if (fault=="cancel-before"||fault=="replace-before"||fault=="owner-error")&&reads!=0{t.Fatal("retired owner was observed")}
+ })}
+}
+func TestReadinessPendingObeysOriginalDeadline(t *testing.T){
+ ctx,cancel:=context.WithTimeout(context.Background(),25*time.Millisecond);defer cancel()
+ original:=&endpoint{read:func(context.Context)(nativeopenvpn.RemoteReceipt,uint32,error){return nativeopenvpn.RemoteReceipt{},0,nativeopenvpn.ErrRemotePending}}
+ err:=desktopImportedH3AwaitOpenVPN(ctx,original,func(context.Context)(desktopImportedH3OpenVPN,error){return original,nil},capture())
+ if !errors.Is(err,context.DeadlineExceeded){t.Fatal("pending authentication did not retain proof deadline",err)}
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='routervpn-h3-readiness-') as directory:
+            work = Path(directory)
+            (work / 'go.mod').write_text('module router-vpn/h3-readiness\n\ngo 1.26.3\n\nrequire router-vpn v0.0.0\nreplace router-vpn => ' + json.dumps(ROOT.as_posix()) + '\n')
+            target = work / 'readiness.go'
+            target.write_text(header + helper)
+            (work / 'readiness_test.go').write_text(cases)
+            command = [shutil.which('go') or 'go', 'test', '-count=1', '-timeout=10s', '.']
+            result = subprocess.run(command, cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            # No barrier: the same initial pending endpoint must fail before a
+            # public proof is attempted. Do not retry that proof or its errors.
+            changed = helper.replace('if !errors.Is(err, nativeopenvpn.ErrRemotePending) {', 'if err != nil {')
+            self.assertNotEqual(changed, helper)
+            target.write_text(header + changed)
+            result = subprocess.run(command + ['-run', '^TestOriginalPendingEndpointBecomesReadyBeforeProof$'], cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn('proof admitted before native ready', result.stdout)
 
 
 if __name__ == '__main__':

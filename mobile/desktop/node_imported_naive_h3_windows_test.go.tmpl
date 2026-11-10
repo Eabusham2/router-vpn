@@ -39,6 +39,7 @@ import (
 	"github.com/sagernet/sing-box/dns"
 	DNST "github.com/sagernet/sing-box/dns/transport"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	GROUP "github.com/sagernet/sing-box/protocol/group"
@@ -600,10 +601,98 @@ func (f *desktopImportedH3WindowsFixture) snapshot(t *testing.T, peer *desktopIm
 	}
 	return view
 }
+
+// OpenVPN startup schedules authentication asynchronously. Observe its original
+// endpoint before the one-shot proof; process/Box startup is not readiness.
+type desktopImportedH3OpenVPN interface {
+	RouterVPNConnectedCapacityContext(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error)
+}
+
+func desktopImportedH3AwaitOpenVPN(ctx context.Context, original desktopImportedH3OpenVPN, current func(context.Context) (desktopImportedH3OpenVPN, error), capture map[string]any) error {
+	if ctx == nil || original == nil || current == nil {
+		return errors.New("protected H3 OpenVPN readiness lost original owner or caller")
+	}
+	remotes, err := nativeopenvpn.Remotes(capture)
+	minimum, ok := capture["mtu"].(float64)
+	if err != nil || len(remotes) != 1 || !ok || minimum < 1280 || minimum > 65535 || minimum != float64(uint32(minimum)) {
+		return errors.New("protected H3 OpenVPN readiness lost captured remote or capacity")
+	}
+	check := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		actual, err := current(ctx)
+		if err != nil || ctx.Err() != nil {
+			return errors.Join(err, ctx.Err())
+		}
+		if actual != original {
+			return errors.New("protected H3 OpenVPN endpoint owner changed before proof")
+		}
+		return nil
+	}
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if err := check(); err != nil {
+			return err
+		}
+		receipt, capacity, err := original.RouterVPNConnectedCapacityContext(ctx)
+		if currentErr := check(); currentErr != nil {
+			return errors.Join(err, currentErr)
+		}
+		if err == nil {
+			state := nativeopenvpn.PacketObservation{Remote: receipt, MTU: capacity}
+			if state.Validate() != nil || receipt.Remote != remotes[0] || capacity < uint32(minimum) {
+				return errors.New("protected H3 OpenVPN connected receipt changed original authority")
+			}
+			return nil
+		}
+		if !errors.Is(err, nativeopenvpn.ErrRemotePending) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
+	}
+}
+
+func (f *desktopImportedH3WindowsFixture) awaitEntryReady(ctx context.Context) error {
+	if f.policy.Metadata().EntryMode != "openvpn" {
+		return ctx.Err()
+	}
+	tag := f.policy.Metadata().EntryTag
+	current := func(call context.Context) (desktopImportedH3OpenVPN, error) {
+		value, found, err := adapter.RouterVPNOutboundContext(call, f.box.Outbound(), tag)
+		endpoint, typed := value.(desktopImportedH3OpenVPN)
+		if err != nil || !found || !typed || f.owner == nil || !f.owner.Current() {
+			return nil, errors.Join(err, errors.New("protected H3 lost original OpenVPN native owner"))
+		}
+		return endpoint, nil
+	}
+	original, err := current(ctx)
+	if err != nil {
+		return err
+	}
+	graph := desktopImportedH3ObjectNoTest(f.policy.Config())
+	rows, _ := graph["endpoints"].([]any)
+	for _, raw := range rows {
+		row, ok := raw.(map[string]any)
+		if ok && row["tag"] == tag && row["type"] == "openvpn-client" {
+			return desktopImportedH3AwaitOpenVPN(ctx, original, current, row)
+		}
+	}
+	return errors.New("protected H3 original OpenVPN endpoint capture missing")
+}
+
 func (f *desktopImportedH3WindowsFixture) prove(t *testing.T, p *desktopImportedH3Reference) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	if e := f.awaitEntryReady(ctx); e != nil {
+		t.Fatal("protected imported H3 original entry readiness", e)
+	}
 	if e := f.proofLane(ctx, true); e != nil {
 		t.Fatal("protected imported H3 original entry public proof", e)
 	}
