@@ -38,6 +38,7 @@ import (
 
 type desktopImportedPacketNetwork struct{ adapter.NetworkManager }
 
+func (*desktopImportedPacketNetwork) DefaultOptions() adapter.NetworkOptions { return adapter.NetworkOptions{} }
 func (*desktopImportedPacketNetwork) InterfaceFinder() control.InterfaceFinder      { return nil }
 func (*desktopImportedPacketNetwork) InterfaceMonitor() tun.DefaultInterfaceMonitor { return nil }
 func (*desktopImportedPacketNetwork) AutoRedirectOutputMark() uint32                { return 0 }

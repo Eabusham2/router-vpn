@@ -352,7 +352,7 @@ enum IOSExternalExecution {
    for fault in ["unknown-entry","unsupported-final","unsupported-other-final","foreign-entry","changed-entry-owner","missing-entry"] {
     var object=try json(records),rows=object["profiles"] as! [[String:Any]],prefs=rows[0]["preferences"] as! [String:Any]
     if fault=="unknown-entry"{prefs["multihopEntryMode"]="unknown-import"}
-    else if fault=="unsupported-final"{prefs["multihopExitMode"]=kind.contains("connect") ? "wg":"naive-h3"}
+    else if fault=="unsupported-final"{prefs["multihopExitMode"]=kind.contains("connect") ? "wg":"wg-pq"}
     else if fault=="unsupported-other-final"{prefs["multihopExitMode"]=kind.contains("connect") ? "hysteria2":"ss-v2ray"}
     else if fault=="foreign-entry"{prefs["multihopEntryID"]="foreign"}
     else if fault=="changed-entry-owner"{var changed=entry;changed.routerProfiles[0].external?.expectedPublicIP="203.0.113.199";IOSNodeBundleStore.shared.bundles[first.id]=try encoded(changed)}

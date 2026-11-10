@@ -142,7 +142,7 @@ final class AndroidExternalPolicy {static final class Captured{String source="{}
  boundaries+='\n'.join(block(layer,signature) for signature in ('    static String selectedMode(','    private static JSONObject selectedRouterProfile(','    private static JSONObject requireHome(','    private static String normalize('))+'}\n'
  source=(JAVA/'AndroidImportedRouterPath.java').read_text()
  boundaries+='final class AndroidImportedRouterPath {static final class Compiled {final JSONObject input;Compiled(JSONObject input){this.input=input;}}\n'
- boundaries+='\n'.join(block(source,signature) for signature in ('    static boolean supports(','    static void requireEntry(','    private static boolean pairedKind(','    static Compiled compile('))+'}'
+ boundaries+='\n'.join(block(source,signature) for signature in ('    static boolean xrayFinal(', '    static boolean supports(','    static void requireEntry(','    private static boolean pairedKind(','    static Compiled compile('))+'}'
  path=app/'Boundaries.java';path.write_text(boundaries)
  (app/'SSServiceCapture.java').write_text(JAVA_MAIN)
  (work/'main.go').write_text(P.GO)
