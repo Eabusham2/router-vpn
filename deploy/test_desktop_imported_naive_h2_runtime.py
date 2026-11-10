@@ -212,16 +212,23 @@ class ImportedNaiveH2RuntimeGate(unittest.TestCase):
                             calls.append((name,args))
                             if name == 'naive_h2' and failure is not None: raise failure
                         return gate
-                    with patch.object(N, 'environment', return_value=env), patch.object(N, 'digest', return_value='original'), \
-                         patch.object(N, 'reuse', return_value={'captured':'receipt'}) as receipt, patch.object(N, 'native_host_target', return_value=target), \
-                         patch.object(N, 'verify_linux_stock_dns'), patch.object(N, 'verify_installed_darwin_host'), \
-                         patch.object(N.DNSSEC, 'test_native_bundle'), patch.object(N, 'run') as run, \
-                         patch.object(N, 'verify_imported_desktop_configs', side_effect=record('ordinary')), \
-                         patch.object(N, 'verify_imported_desktop_packet_configs', side_effect=record('packet')), \
-                         patch.object(N, 'verify_imported_desktop_openvpn_configs', side_effect=record('openvpn')), \
-                         patch.object(N, 'verify_imported_desktop_pq_configs', side_effect=record('pq')), \
-                         patch.object(N, 'verify_imported_desktop_xhttp_configs', side_effect=record('xhttp')), \
-                         patch.object(N, 'verify_imported_desktop_naive_h2_configs', side_effect=record('naive_h2')), patch.object(N, 'verify_imported_desktop_naive_h3_configs'), contextlib.redirect_stdout(stdout):
+                    # Each item in a multi-context ``with`` consumes a compiler
+                    # block on the release runner's Python. Keep the complete
+                    # gate inventory without exhausting that static limit.
+                    with contextlib.ExitStack() as stack:
+                        stack.enter_context(patch.object(N, 'environment', return_value=env))
+                        stack.enter_context(patch.object(N, 'digest', return_value='original'))
+                        receipt = stack.enter_context(patch.object(N, 'reuse', return_value={'captured':'receipt'}))
+                        stack.enter_context(patch.object(N, 'native_host_target', return_value=target))
+                        stack.enter_context(patch.object(N, 'verify_linux_stock_dns'))
+                        stack.enter_context(patch.object(N, 'verify_installed_darwin_host'))
+                        stack.enter_context(patch.object(N.DNSSEC, 'test_native_bundle'))
+                        run = stack.enter_context(patch.object(N, 'run'))
+                        for name in ('ordinary', 'packet', 'openvpn', 'pq', 'xhttp', 'naive_h2'):
+                            attribute = 'verify_imported_desktop_' + ('' if name == 'ordinary' else name + '_') + 'configs'
+                            stack.enter_context(patch.object(N, attribute, side_effect=record(name)))
+                        stack.enter_context(patch.object(N, 'verify_imported_desktop_naive_h3_configs'))
+                        stack.enter_context(contextlib.redirect_stdout(stdout))
                         if failure is None: self.assertEqual(N.build(target, bundle), bundle)
                         else:
                             with self.assertRaises(type(failure)) as caught: N.build(target, bundle)
