@@ -44,13 +44,19 @@ func TestSpeedLabTransferUploadRequiresConsumedRequestBytes(t *testing.T) {
 				// An in-memory response can complete within one clock tick on
 				// Windows. Cross a real, cancellable transport interval before
 				// returning; production must measure that elapsed time itself.
-				started := time.Now()
+				interval, clockErr := startSpeedLabTransferInterval()
+				if clockErr != nil {
+					return nil, clockErr
+				}
 				tick := time.NewTicker(time.Millisecond)
 				defer tick.Stop()
 				for transportElapsed <= 0 {
 					select {
 					case <-tick.C:
-						transportElapsed = time.Since(started)
+						transportElapsed, clockErr = interval.Duration()
+						if clockErr != nil {
+							return nil, clockErr
+						}
 					case <-req.Context().Done():
 						return nil, req.Context().Err()
 					}

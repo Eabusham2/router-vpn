@@ -106,7 +106,7 @@ func measureSpeedLabImportedEntryHopWithRuntime(ctx context.Context, profile com
 		hop.Speed = &routedSpeedResult{RouterID: profile.ID, Name: profile.Name, Bytes: bytesCount,
 			DownloadMbps: round3(float64(downBytes) * 8 / 1_000_000 / downTime.Seconds()),
 			UploadMbps:   round3(float64(upBytes) * 8 / 1_000_000 / upTime.Seconds()),
-			DownloadMs:   round3(float64(downTime) / float64(time.Millisecond)), UploadMs: round3(float64(upTime) / float64(time.Millisecond)),
+			DownloadMs:   roundMeasuredMilliseconds(float64(downTime) / float64(time.Millisecond)), UploadMs: roundMeasuredMilliseconds(float64(upTime) / float64(time.Millisecond)),
 			MeasuredAt: time.Now().UTC(),
 			Proof:      "independent byte-counted HTTPS transfer through the original imported entry lane to the public Speed Lab endpoint; public exit identity proved before and after load"}
 	}

@@ -76,7 +76,12 @@ func TestSpeedLabDirectionDeadlineCountsOnlyAcknowledgedUploads(t *testing.T) {
 	var acknowledged atomic.Int64
 	var acknowledgementElapsed atomic.Int64
 	installSpeedLabDurationEdge(t, func(w http.ResponseWriter, r *http.Request) {
-		started := time.Now()
+		interval, clockErr := startSpeedLabTransferInterval()
+		if clockErr != nil {
+			t.Error(clockErr)
+			http.Error(w, "clock failed", 500)
+			return
+		}
 		first := requests.Add(1) == 1
 		read, err := io.Copy(io.Discard, r.Body)
 		if err != nil {
@@ -92,7 +97,12 @@ func TestSpeedLabDirectionDeadlineCountsOnlyAcknowledgedUploads(t *testing.T) {
 			for elapsed <= 0 {
 				select {
 				case <-tick.C:
-					elapsed = time.Since(started)
+					elapsed, clockErr = interval.Duration()
+					if clockErr != nil {
+						t.Error(clockErr)
+						http.Error(w, "clock failed", 500)
+						return
+					}
 				case <-r.Context().Done():
 					return
 				}

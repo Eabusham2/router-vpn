@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"router-vpn/internal/hopmeasure"
 )
 
 const (
@@ -321,7 +323,39 @@ func speedLabStreamCount(previousMbps float64) int {
 	}
 }
 
+// Administrative direction deadlines can retain verified partial transfers.
+// Clock failures must never enter that success path, even when joined with a
+// context error from the same in-flight request.
+var errSpeedLabMeasurementClock = errors.New("speed-test measurement clock failed")
+
+type speedLabTransferInterval interface{ Duration() (time.Duration, error) }
+type speedLabTransferClock func() (speedLabTransferInterval, error)
+
+func startSpeedLabTransferInterval() (speedLabTransferInterval, error) {
+	return hopmeasure.StartInterval()
+}
+
+func readSpeedLabTransferInterval(interval speedLabTransferInterval) (time.Duration, error) {
+	elapsed, err := interval.Duration()
+	if err != nil {
+		return 0, errors.Join(errSpeedLabMeasurementClock, err)
+	}
+	if elapsed <= 0 {
+		return 0, fmt.Errorf("%w: nonpositive elapsed duration", errSpeedLabMeasurementClock)
+	}
+	return elapsed, nil
+}
+
+func finishSpeedLabTransfer(interval speedLabTransferInterval, bytes int64, transferErr error) (int64, time.Duration, error) {
+	elapsed, clockErr := readSpeedLabTransferInterval(interval)
+	return bytes, elapsed, errors.Join(transferErr, clockErr)
+}
+
 func speedLabDownloadRound(ctx context.Context, client *http.Client, bytesCount int64) (int64, time.Duration, error) {
+	return speedLabDownloadRoundWithClock(ctx, client, bytesCount, startSpeedLabTransferInterval)
+}
+
+func speedLabDownloadRoundWithClock(ctx context.Context, client *http.Client, bytesCount int64, startClock speedLabTransferClock) (int64, time.Duration, error) {
 	url := speedLabDownloadURL + "?bytes=" + strconv.FormatInt(bytesCount, 10) + "&r=" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -330,27 +364,33 @@ func speedLabDownloadRound(ctx context.Context, client *http.Client, bytesCount 
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("Cache-Control", "no-store")
 	req.Header.Set("User-Agent", "RouterVPN-SpeedLab/1")
-	started := time.Now()
+	interval, err := startClock()
+	if err != nil {
+		return 0, 0, errors.Join(errSpeedLabMeasurementClock, err, context.Cause(ctx))
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, 0, err
+		return finishSpeedLabTransfer(interval, 0, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return 0, 0, fmt.Errorf("download load returned HTTP %d", resp.StatusCode)
+		return finishSpeedLabTransfer(interval, 0, fmt.Errorf("download load returned HTTP %d", resp.StatusCode))
 	}
 	read, err := io.Copy(io.Discard, io.LimitReader(resp.Body, bytesCount+1))
-	elapsed := time.Since(started)
 	if err != nil {
-		return read, elapsed, err
+		return finishSpeedLabTransfer(interval, read, err)
 	}
 	if read != bytesCount {
-		return read, elapsed, fmt.Errorf("download load returned %d bytes; expected %d", read, bytesCount)
+		return finishSpeedLabTransfer(interval, read, fmt.Errorf("download load returned %d bytes; expected %d", read, bytesCount))
 	}
-	return read, elapsed, nil
+	return finishSpeedLabTransfer(interval, read, nil)
 }
 
 func speedLabUploadRound(ctx context.Context, client *http.Client, bytesCount int64, pattern []byte) (int64, time.Duration, error) {
+	return speedLabUploadRoundWithClock(ctx, client, bytesCount, pattern, startSpeedLabTransferInterval)
+}
+
+func speedLabUploadRoundWithClock(ctx context.Context, client *http.Client, bytesCount int64, pattern []byte, startClock speedLabTransferClock) (int64, time.Duration, error) {
 	reader := &speedLabUploadReader{reader: io.LimitReader(&speedLabPatternReader{pattern: pattern}, bytesCount)}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, speedLabUploadURL, reader)
 	if err != nil {
@@ -361,31 +401,38 @@ func speedLabUploadRound(ctx context.Context, client *http.Client, bytesCount in
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("Cache-Control", "no-store")
 	req.Header.Set("User-Agent", "RouterVPN-SpeedLab/1")
-	started := time.Now()
+	interval, err := startClock()
+	if err != nil {
+		return 0, 0, errors.Join(errSpeedLabMeasurementClock, err, context.Cause(ctx))
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return reader.bytes.Load(), time.Since(started), err
+		return finishSpeedLabTransfer(interval, reader.bytes.Load(), err)
 	}
 	defer resp.Body.Close()
 	responseBytes, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, (64<<10)+1))
-	elapsed := time.Since(started)
+	elapsed, clockErr := readSpeedLabTransferInterval(interval)
 	sent := reader.bytes.Load()
 	if resp.StatusCode/100 != 2 {
-		return sent, elapsed, fmt.Errorf("upload load returned HTTP %d", resp.StatusCode)
+		return sent, elapsed, errors.Join(clockErr, fmt.Errorf("upload load returned HTTP %d", resp.StatusCode))
 	}
 	if readErr != nil {
-		return sent, elapsed, fmt.Errorf("read upload response: %w", readErr)
+		return sent, elapsed, errors.Join(clockErr, fmt.Errorf("read upload response: %w", readErr))
 	}
 	if responseBytes > 64<<10 {
-		return sent, elapsed, errors.New("upload response exceeded its 64 KiB limit")
+		return sent, elapsed, errors.Join(clockErr, errors.New("upload response exceeded its 64 KiB limit"))
 	}
 	if sent != bytesCount {
-		return sent, elapsed, fmt.Errorf("upload load consumed %d bytes; expected %d", sent, bytesCount)
+		return sent, elapsed, errors.Join(clockErr, fmt.Errorf("upload load consumed %d bytes; expected %d", sent, bytesCount))
 	}
-	return sent, elapsed, nil
+	return sent, elapsed, clockErr
 }
 
 func speedLabParallelRound(ctx context.Context, direction string, client *http.Client, bytesCount int64, streams int, pattern []byte) (int64, time.Duration, error) {
+	return speedLabParallelRoundWithClock(ctx, direction, client, bytesCount, streams, pattern, startSpeedLabTransferInterval)
+}
+
+func speedLabParallelRoundWithClock(ctx context.Context, direction string, client *http.Client, bytesCount int64, streams int, pattern []byte, startClock speedLabTransferClock) (int64, time.Duration, error) {
 	if streams < 1 {
 		streams = 1
 	}
@@ -400,7 +447,10 @@ func speedLabParallelRound(ctx context.Context, direction string, client *http.C
 	results := make(chan speedLabParallelResult, streams)
 	base := bytesCount / int64(streams)
 	remainder := bytesCount % int64(streams)
-	started := time.Now()
+	interval, err := startClock()
+	if err != nil {
+		return 0, 0, errors.Join(errSpeedLabMeasurementClock, err, context.Cause(ctx))
+	}
 	for i := 0; i < streams; i++ {
 		part := base
 		if int64(i) < remainder {
@@ -410,9 +460,9 @@ func speedLabParallelRound(ctx context.Context, direction string, client *http.C
 			var done int64
 			var err error
 			if direction == "download" {
-				done, _, err = speedLabDownloadRound(roundCtx, client, size)
+				done, _, err = speedLabDownloadRoundWithClock(roundCtx, client, size, startClock)
 			} else {
-				done, _, err = speedLabUploadRound(roundCtx, client, size, pattern)
+				done, _, err = speedLabUploadRoundWithClock(roundCtx, client, size, pattern, startClock)
 			}
 			if err != nil {
 				// Upload reads only prove bytes left the local reader. A failed
@@ -430,13 +480,16 @@ func speedLabParallelRound(ctx context.Context, direction string, client *http.C
 	for i := 0; i < streams; i++ {
 		result := <-results
 		total += result.bytes
-		if result.err != nil && (firstErr == nil || (speedLabContextError(firstErr) && !speedLabContextError(result.err))) {
+		if errors.Is(result.err, errSpeedLabMeasurementClock) {
+			firstErr = errors.Join(firstErr, result.err)
+		} else if result.err != nil && (firstErr == nil || (speedLabContextError(firstErr) && !speedLabContextError(result.err))) {
 			// A rejected response must not be hidden by another stream's
 			// cancellation and mistaken for an ordinary duration deadline.
 			firstErr = result.err
 		}
 	}
-	elapsed := time.Since(started)
+	elapsed, clockErr := readSpeedLabTransferInterval(interval)
+	firstErr = errors.Join(firstErr, clockErr)
 	if firstErr != nil {
 		return total, elapsed, firstErr
 	}
@@ -447,10 +500,14 @@ func speedLabParallelRound(ctx context.Context, direction string, client *http.C
 }
 
 func speedLabContextError(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	return !errors.Is(err, errSpeedLabMeasurementClock) && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
 }
 
 func measureSpeedLabDirection(ctx context.Context, direction string, minDuration, maxDuration time.Duration, idleMedian float64) (speedLabDirectionResult, error) {
+	return measureSpeedLabDirectionWithClock(ctx, direction, minDuration, maxDuration, idleMedian, startSpeedLabTransferInterval)
+}
+
+func measureSpeedLabDirectionWithClock(ctx context.Context, direction string, minDuration, maxDuration time.Duration, idleMedian float64, startClock speedLabTransferClock) (speedLabDirectionResult, error) {
 	if direction != "download" && direction != "upload" {
 		return speedLabDirectionResult{}, errors.New("speed-test direction must be download or upload")
 	}
@@ -470,6 +527,10 @@ func measureSpeedLabDirection(ctx context.Context, direction string, minDuration
 	// The chosen maximum bounds in-flight transfers too, not just the gap
 	// between rounds. Setup/cleanup time is not part of the load window.
 	started := time.Now()
+	loadInterval, err := startClock()
+	if err != nil {
+		return speedLabDirectionResult{}, errors.Join(errSpeedLabMeasurementClock, err, context.Cause(ctx))
+	}
 	directionCtx, cancelDirection := context.WithTimeout(ctx, maxDuration)
 	defer cancelDirection()
 	loadedCtx, cancelLoaded := context.WithCancel(directionCtx)
@@ -493,11 +554,11 @@ func measureSpeedLabDirection(ctx context.Context, direction string, minDuration
 		if streams > maxStreamsUsed {
 			maxStreamsUsed = streams
 		}
-		bytesDone, roundElapsed, err := speedLabParallelRound(directionCtx, direction, client, bytesCount, streams, pattern)
+		bytesDone, roundElapsed, err := speedLabParallelRoundWithClock(directionCtx, direction, client, bytesCount, streams, pattern, startClock)
 		if ctx.Err() != nil {
 			cancelLoaded()
 			<-loadedDone
-			return speedLabDirectionResult{}, ctx.Err()
+			return speedLabDirectionResult{}, errors.Join(context.Cause(ctx), err)
 		}
 		if err != nil {
 			if errors.Is(directionCtx.Err(), context.DeadlineExceeded) && speedLabContextError(err) {
@@ -527,11 +588,14 @@ func measureSpeedLabDirection(ctx context.Context, direction string, minDuration
 			break
 		}
 	}
-	loadElapsed := time.Since(started)
+	loadElapsed, clockErr := readSpeedLabTransferInterval(loadInterval)
 	cancelLoaded()
 	loaded := <-loadedDone
 	if ctx.Err() != nil {
-		return speedLabDirectionResult{}, ctx.Err()
+		return speedLabDirectionResult{}, errors.Join(context.Cause(ctx), clockErr)
+	}
+	if clockErr != nil {
+		return speedLabDirectionResult{}, clockErr
 	}
 	if totalBytes == 0 || loadElapsed <= 0 {
 		return speedLabDirectionResult{}, errors.New("speed-test completed without verified transferred bytes")
@@ -543,8 +607,12 @@ func measureSpeedLabDirection(ctx context.Context, direction string, minDuration
 	// would report an earlier fast burst as the speed of the whole test.
 	seconds := loadElapsed.Seconds()
 	mbps := float64(totalBytes*8) / 1_000_000 / seconds
+	displaySeconds := round3(seconds)
+	if displaySeconds == 0 {
+		displaySeconds = seconds
+	}
 	return speedLabDirectionResult{
-		Direction: direction, Mbps: round3(mbps), Bytes: totalBytes, Seconds: round3(seconds), Rounds: measuredRounds,
+		Direction: direction, Mbps: round3(mbps), Bytes: totalBytes, Seconds: displaySeconds, Rounds: measuredRounds,
 		LoadedLatency: loaded, BufferbloatMs: round3(math.Max(0, loaded.MedianMs-idleMedian)), StoppedStable: stoppedStable,
 		ProviderDetail: fmt.Sprintf("HTTPS transfer against Cloudflare's fixed speed test edge using adaptive 1-%d concurrent streams while independent 1-byte probes measure loaded latency", maxStreamsUsed),
 	}, nil
