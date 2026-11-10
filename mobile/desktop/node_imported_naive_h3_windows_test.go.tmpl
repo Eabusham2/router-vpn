@@ -155,6 +155,23 @@ type desktopImportedH3Reference struct {
 	closed      bool
 }
 
+// A failed Go test peer writes its failure detail after the first non-JSON
+// verdict line. Retain that bounded tail before the existing owner joins the
+// original process; otherwise the framing error hides the actual provider
+// failure. This never accepts diagnostic output as a protocol acknowledgement.
+func desktopImportedH3ReadReply(reader *bufio.Reader, value any, diagnostics io.Writer) error {
+	err := desktopImportedH3Read(reader, value)
+	if err == nil || errors.Is(err, io.EOF) {
+		return err
+	}
+	const limit = 64 << 10
+	n, drainErr := io.Copy(diagnostics, io.LimitReader(reader, limit))
+	if n == limit {
+		drainErr = errors.Join(drainErr, errors.New("original imported H3 peer failure diagnostic exceeded bound"))
+	}
+	return errors.Join(err, drainErr)
+}
+
 func (p *desktopImportedH3Reference) read() (desktopImportedH3PeerReply, error) {
 	type result struct {
 		reply desktopImportedH3PeerReply
@@ -163,7 +180,7 @@ func (p *desktopImportedH3Reference) read() (desktopImportedH3PeerReply, error) 
 	done := make(chan result, 1)
 	go func() {
 		var value desktopImportedH3PeerReply
-		e := desktopImportedH3Read(p.reader, &value)
+		e := desktopImportedH3ReadReply(p.reader, &value, &p.diagnostics)
 		done <- result{value, e}
 	}()
 	select {

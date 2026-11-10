@@ -219,6 +219,56 @@ class ProtectedImportedH3Runner(unittest.TestCase):
         self.assertIn('RouterVPNDesktopImportedPreparePhysicalOwned(policy)', (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_test.go.tmpl').read_text())
         self.assertIn('DesktopWindowsNodeCompositionVerifyPrepared(ctx, target)', (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_test.go.tmpl').read_text())
 
+    def test_original_failed_peer_keeps_bounded_diagnostics_without_accepting_them(self):
+        source = (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_test.go.tmpl').read_text()
+        peer = (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_peer_test.go.tmpl').read_text()
+        helper = 'func desktopImportedH3ReadReply' + source.split('func desktopImportedH3ReadReply', 1)[1].split('func (p *desktopImportedH3Reference) read()', 1)[0]
+        parser = 'func desktopImportedH3Read(' + peer.split('func desktopImportedH3Read(', 1)[1].split('func desktopImportedH3LayerMode(', 1)[0]
+        caller = source.split('func (p *desktopImportedH3Reference) read()', 1)[1].split('func (p *desktopImportedH3Reference) same(', 1)[0]
+        self.assertIn('desktopImportedH3ReadReply(p.reader, &value, &p.diagnostics)', caller)
+        self.assertIn('case <-time.After(12 * time.Second):', caller)
+        self.assertLess(caller.index('p.cancel()'), caller.index('_ = p.output.Close()'))
+        header = 'package peer\nimport("bufio";"bytes";"encoding/json";"errors";"io")\nconst desktopImportedH3PeerLimit = 2 << 20\n'
+        cases = r'''package peer
+import("bufio";"bytes";"errors";"io";"strings";"testing")
+type reply struct{Schema int}
+func TestActualPeerFailureRetainsCauseAndStillFails(t *testing.T){
+ for _,first:=range []string{"--- FAIL: TestRouterVPNWindowsImportedNaiveH3Peer (0.01s)","{\"Schema\":1,\"foreign\":true}","{\"Schema\":1} {}"}{t.Run(first,func(t *testing.T){
+  const cause="    peer.go:123: actual captured imported H3 OpenVPN provider failed: original refusal\nFAIL\n"
+  var got reply;var diagnostic bytes.Buffer
+  err:=desktopImportedH3ReadReply(bufio.NewReader(strings.NewReader(first+"\n"+cause)),&got,&diagnostic)
+  if err==nil||diagnostic.String()!=cause{t.Fatalf("failed original peer was accepted or its cause lost: err=%v diagnostic=%q",err,diagnostic.String())}
+ })}
+}
+func TestSuccessDoesNotConsumeAnotherOriginalAcknowledgement(t *testing.T){
+ input:=bufio.NewReader(strings.NewReader("{\"Schema\":1}\n{\"Schema\":2}\n"));var got reply;var diagnostic bytes.Buffer
+ if err:=desktopImportedH3ReadReply(input,&got,&diagnostic);err!=nil||got.Schema!=1||diagnostic.Len()!=0{t.Fatal("first original acknowledgement changed",err)}
+ if err:=desktopImportedH3ReadReply(input,&got,&diagnostic);err!=nil||got.Schema!=2||diagnostic.Len()!=0{t.Fatal("next original acknowledgement consumed",err)}
+ if err:=desktopImportedH3ReadReply(input,&got,&diagnostic);!errors.Is(err,io.EOF){t.Fatal("original EOF lost",err)}
+}
+func TestFailedPeerDiagnosticIsStrictlyBounded(t *testing.T){
+ input:=bufio.NewReader(strings.NewReader("FAIL\n"+strings.Repeat("x",(64<<10)+23)));var got reply;var diagnostic bytes.Buffer
+ err:=desktopImportedH3ReadReply(input,&got,&diagnostic)
+ if err==nil||!strings.Contains(err.Error(),"diagnostic exceeded bound")||diagnostic.Len()!=64<<10{t.Fatal("unbounded or accepted failed peer diagnostic",err,diagnostic.Len())}
+ rest,_:=io.ReadAll(input);if len(rest)!=23{t.Fatal("read beyond original diagnostic limit",len(rest))}
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='routervpn-h3-peer-diagnostic-') as directory:
+            work = Path(directory)
+            (work / 'go.mod').write_text('module routervpn-peer-diagnostic\n\ngo 1.26.3\n')
+            target = work / 'peer.go'
+            target.write_text(header + parser + helper)
+            (work / 'peer_test.go').write_text(cases)
+            command = [shutil.which('go') or 'go', 'test', '-count=1', '-timeout=10s', '.']
+            result = subprocess.run(command, cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            changed = helper.replace('io.Copy(diagnostics, io.LimitReader(reader, limit))', 'io.Copy(io.Discard, io.LimitReader(reader, limit))')
+            self.assertNotEqual(changed, helper)
+            target.write_text(header + parser + changed)
+            result = subprocess.run(command + ['-run', '^TestActualPeerFailureRetainsCauseAndStillFails$'], cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn('its cause lost', result.stdout)
+
 
     def test_native_openvpn_readiness_preserves_original_owner_and_caller(self):
         source = (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_test.go.tmpl').read_text()
