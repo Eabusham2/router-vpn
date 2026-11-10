@@ -398,13 +398,22 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   }
   for transport in ["udp","h3"] {
    var candidate=final;candidate.routerProfiles[0].dnsProtocol=transport
-   let before=try encoded(candidate),rejected=RouterVPNModel();rejected.bundle=candidate
+   let before=try encoded(candidate),selection=RouterVPNModel();selection.bundle=candidate
    IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:before]
-   try check("Naive H2 picker refuses incompatible saved Home "+transport,!rejected.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
-   try reject("Naive H2 save refuses lower DNS "+transport){try rejected.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)}
-   try check("Naive H2 refusal leaves saved policy unchanged",rejected.writes==0 && encoded(rejected.bundle!)==before)
    var profile=try JSONSerialization.jsonObject(with:Data(source[4].utf8)) as! [String:Any];profile["dns_protocol"]=transport;var replaced=args;replaced["profile"]=String(decoding:try encoded(profile),as:UTF8.self)
-   try reject("Naive H2 actual lower DNS refusal "+transport){_ = try compile(replaced)}
+   if transport=="udp" {
+    try check("Naive H2 picker offers literal unlayered Home UDP",selection.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
+    try selection.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)
+    try check("Naive H2 save retains selected Home UDP and original sources",selection.writes==1 && selection.bundle!.routerProfiles[0].dnsProtocol=="udp" && selection.bundle!.routerProfiles[0].adGuardIPv4==paired.adGuardIPv4 && selection.bundle!.profiles==final.profiles && (try selection.iosMultihopEntryBundle(for:selection.bundle!)).profiles==original.profiles)
+    let graph=try JSONSerialization.jsonObject(with:Data(compile(replaced).utf8)) as! [String:Any],resolvers=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
+    try check("Naive H2 actual Home UDP is final-owned",resolvers.count==2 && resolvers[0]["type"] as? String=="udp" && resolvers[0]["server"] as? String==paired.adGuardIPv4 && resolvers[0]["server_port"] as? Int==53 && resolvers[0]["detour"] as? String=="proxy")
+    try check("Naive H2 retains the original lower resolver owner",resolvers[1]["detour"] as? String=="entry-wg" && resolvers[1]["type"] as? String=="udp" && resolvers[1]["server"] as? String==paired.adGuardIPv4)
+   }else{
+    try check("Naive H2 picker refuses incompatible saved Home "+transport,!selection.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
+    try reject("Naive H2 save refuses lower DNS "+transport){try selection.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)}
+    try check("Naive H2 refusal leaves saved policy unchanged",selection.writes==0 && encoded(selection.bundle!)==before)
+    try reject("Naive H2 actual lower DNS refusal "+transport){_ = try compile(replaced)}
+   }
   }
   for transport in ["tcp","tls","https"] {for lower in ["tcp","tcp-custom-exit","udp","h3","missing"] {
    var raw=try JSONSerialization.jsonObject(with:Data(source[4].utf8)) as! [String:Any]
