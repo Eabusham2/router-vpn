@@ -693,7 +693,7 @@ def prepare(vendor, go='go', *, env=None):
     for name, raw in pfabi.items():
         write(vendor, 'routervpn/mobiletor/'+name, raw)
     for path in sorted((ROOT/'internal/dnsmeasure').glob('*.go')):
-        write(vendor, 'experimental/libbox/routervpn/dnsmeasure/'+path.name, path.read_bytes())
+        write(vendor, 'experimental/libbox/routervpn/dnsmeasure/'+path.name, relocated_shared_source(path.read_bytes()))
     for name in ('box.go', 'box_test.go'):
         write(vendor, 'routervpn_tor'+('_test' if name.endswith('_test.go') else '')+'.go',
               (ROOT/'mobile/toroutbound'/(name+'.tmpl')).read_bytes())

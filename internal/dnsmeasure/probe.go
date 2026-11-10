@@ -8,22 +8,41 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"mime"
 	"net"
 	"net/http"
 	"strconv"
-	"time"
+
+	"router-vpn/internal/hopmeasure"
 )
 
 const maxDNSMessage = 16 * 1024
 
-func (s *Service) sample(parent context.Context, endpoint Endpoint) (milliseconds float64, failure error) {
+type probeInterval interface {
+	Milliseconds() (float64, error)
+}
+
+func startProbeInterval() (probeInterval, error) {
+	return hopmeasure.StartInterval()
+}
+
+func (s *Service) sample(parent context.Context, endpoint Endpoint) (float64, error) {
+	return s.sampleWithClock(parent, endpoint, startProbeInterval)
+}
+
+// The clock factory belongs to this call, never mutable package or service state.
+// Production always captures the checked platform clock before any DNS work.
+func (s *Service) sampleWithClock(parent context.Context, endpoint Endpoint, startClock func() (probeInterval, error)) (milliseconds float64, failure error) {
 	ctx, cancel := context.WithTimeout(parent, SampleTimeout)
 	defer cancel()
 	if err := s.valid(ctx); err != nil {
 		return 0, err
 	}
-	start := time.Now()
+	interval, err := startClock()
+	if err != nil {
+		return 0, err
+	}
 	if endpoint.Kind == "selected" {
 		if err := s.engine.SelectedDNS(ctx); err != nil {
 			return 0, err
@@ -31,7 +50,7 @@ func (s *Service) sample(parent context.Context, endpoint Endpoint) (millisecond
 		if err := s.valid(ctx); err != nil {
 			return 0, err
 		}
-		return elapsedProbeMilliseconds(start, time.Now())
+		return s.finishProbe(ctx, interval)
 	}
 	query, err := newQuery()
 	if err != nil {
@@ -91,17 +110,23 @@ func (s *Service) sample(parent context.Context, endpoint Endpoint) (millisecond
 	if err := s.valid(ctx); err != nil {
 		return 0, err
 	}
-	return elapsedProbeMilliseconds(start, time.Now())
+	return s.finishProbe(ctx, interval)
 }
 
-// A successful response is not a timing measurement unless the clock advanced.
-// In particular, never replace a zero interval with an invented minimum RTT.
-func elapsedProbeMilliseconds(start, end time.Time) (float64, error) {
-	elapsed := end.Sub(start)
-	if elapsed <= 0 {
-		return 0, errors.New("DNS probe clock did not advance")
+// A successful response is not a timing measurement unless the original clock
+// advanced. Readback cannot replace the original owner or outlive its caller.
+func (s *Service) finishProbe(ctx context.Context, interval probeInterval) (float64, error) {
+	elapsed, err := interval.Milliseconds()
+	if err != nil {
+		return 0, err
 	}
-	return float64(elapsed.Nanoseconds()) / 1e6, nil
+	if elapsed <= 0 || math.IsNaN(elapsed) || math.IsInf(elapsed, 0) {
+		return 0, errors.New("DNS probe clock did not produce a positive finite interval")
+	}
+	if err := s.valid(ctx); err != nil {
+		return 0, err
+	}
+	return elapsed, nil
 }
 
 func framedExchange(connection net.Conn, query []byte) ([]byte, error) {

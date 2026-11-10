@@ -141,7 +141,12 @@ def checked_sources(vendor):
             check_file(vendor / target, raw, records, target)
     for source in sorted((ROOT / "internal/dnsmeasure").glob("*.go")):
         target = "experimental/libbox/routervpn/dnsmeasure/" + source.name
-        check_file(vendor / target, source.read_bytes(), records, target)
+        # Independently retain every source byte except the native clock's
+        # declared import relocation; do not bless arbitrary prepared copies.
+        raw = source.read_bytes().replace(
+            b'"router-vpn/internal/hopmeasure"',
+            b'"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"')
+        check_file(vendor / target, raw, records, target)
     # SOCKS itself is the pinned real outbound. No copied test implementation
     # substitutes for its authentication, CONNECT or detour handling.
     paths = subprocess.check_output(
