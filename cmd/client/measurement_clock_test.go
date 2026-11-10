@@ -208,7 +208,7 @@ func TestClientDNSClockReadCannotAdoptReplacementRuntime(t *testing.T) {
 }
 
 func TestClientDurableLatencyClockFailureCannotOverwriteStatistics(t *testing.T) {
-	for _, fault := range []string{"tiny", "ordinary", "start", "late-read", "late-zero", "late-negative", "late-nan", "cancel", "replacement"} {
+	for _, fault := range []string{"tiny", "ordinary", "outliers", "start", "late-read", "late-zero", "late-negative", "late-nan", "cancel", "replacement"} {
 		t.Run(fault, func(t *testing.T) {
 			a, tracker := fastestAdoptionFixture(t)
 			a.profiles.Profiles = a.profiles.Profiles[:1]
@@ -267,6 +267,15 @@ func TestClientDurableLatencyClockFailureCannotOverwriteStatistics(t *testing.T)
 					if fault == "ordinary" {
 						return 1.23456, nil
 					}
+					if fault == "outliers" {
+						if reads <= 5 {
+							return .1, nil
+						}
+						if reads > 45 {
+							return 10000, nil
+						}
+						return 10, nil
+					}
 					return .000001, nil
 				}), nil
 			}
@@ -277,7 +286,7 @@ func TestClientDurableLatencyClockFailureCannotOverwriteStatistics(t *testing.T)
 			if e != nil {
 				t.Fatal(e)
 			}
-			if fault == "tiny" || fault == "ordinary" {
+			if fault == "tiny" || fault == "ordinary" || fault == "outliers" {
 				var result latencyResponse
 				if e = json.Unmarshal(w.Body.Bytes(), &result); e != nil {
 					t.Fatalf("durable score missing: %d %s", w.Code, w.Body.String())
@@ -285,6 +294,12 @@ func TestClientDurableLatencyClockFailureCannotOverwriteStatistics(t *testing.T)
 				want := .000001
 				if fault == "ordinary" {
 					want = 1.235
+				}
+				if fault == "outliers" {
+					want = 10
+					if result.MinMs != .1 || result.MaxMs != 10000 || result.AverageMs != 1008.01 || a.profiles.Profiles[0].LatencyTrimmedMeanMs != want {
+						t.Fatalf("outliers were erased or included in the persisted trimmed mean: %+v", result)
+					}
 				}
 				if w.Code != 200 || !result.Complete || !result.Saved || result.Samples != 50 || result.Failed != 0 || result.MedianMs != want || result.TrimmedMs != want || a.profiles.Profiles[0].LatencyMedianMs != want || starts != 50 || reads != 50 {
 					t.Fatalf("actual fifty-sample statistics changed: %+v starts=%d reads=%d", result, starts, reads)

@@ -65,7 +65,7 @@ func TestDurableNodeLatencyKeepsMinimumFiftySamplesAndRealTrimmedMean(t *testing
 	for _, required := range []string{
 		"q.Samples = max(50, q.Samples)",
 		"trim := len(values) / 10",
-		"trimmedV := average(trimmed)",
+		"trimmedV := averageMeasuredMilliseconds(trimmed)",
 		"LatencyTrimmedMeanMs = resp.TrimmedMs",
 		"LatencySamples = resp.Samples",
 		"LatencyLastTest = now.Format(time.RFC3339)",
