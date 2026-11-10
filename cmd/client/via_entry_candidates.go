@@ -530,29 +530,47 @@ func fastestViaEntryCandidate(values []liveLatencyResult) string {
 	return winner
 }
 
+var errViaEntryMeasurementClock = errors.New("captured entry measurement clock failed")
+
 func measureViaEntryCandidate(ctx context.Context, lane viaEntryLane, p common.RouterProfile, samples int) (liveLatencyResult, error) {
+	return measureViaEntryCandidateWithClock(ctx, lane, p, samples, startClientMeasurementInterval)
+}
+
+func measureViaEntryCandidateWithClock(ctx context.Context, lane viaEntryLane, p common.RouterProfile, samples int, startClock clientMeasurementClock) (liveLatencyResult, error) {
 	port := 0
 	dial := func(port int, timeout time.Duration) (float64, error) {
 		if ctx.Err() != nil || !lane.AliveContext(ctx) {
-			return 0, errors.New("captured entry is no longer alive")
+			return 0, errors.Join(context.Cause(ctx), errors.New("captured entry is no longer alive"))
 		}
 		request, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		started := time.Now()
+		interval, err := startClock()
+		if err != nil {
+			return 0, errors.Join(errViaEntryMeasurementClock, err)
+		}
 		conn, err := lane.DialContext(request, "tcp", net.JoinHostPort(p.Endpoint, strconv.Itoa(port)))
-		elapsed := float64(time.Since(started).Nanoseconds()) / 1e6
+		var elapsed float64
+		var clockErr error
+		if err == nil && conn != nil {
+			elapsed, clockErr = clientMeasurementMilliseconds(request, interval)
+		}
 		if conn != nil {
 			_ = conn.Close()
 		}
-		if err != nil || request.Err() != nil || !lane.AliveContext(request) {
-			return 0, errors.New("routed TCP handshake did not complete")
+		if clockErr != nil {
+			return 0, errors.Join(errViaEntryMeasurementClock, clockErr)
 		}
-		return math.Max(.001, elapsed), nil
+		if err != nil || conn == nil || request.Err() != nil || !lane.AliveContext(request) {
+			return 0, errors.Join(err, context.Cause(request), errors.New("routed TCP handshake did not complete"))
+		}
+		return elapsed, nil
 	}
 	for _, candidate := range viaEntryProbePorts {
 		if _, err := dial(candidate, 450*time.Millisecond); err == nil {
 			port = candidate
 			break
+		} else if errors.Is(err, errViaEntryMeasurementClock) {
+			return liveLatencyResult{}, err
 		}
 		if ctx.Err() != nil {
 			return liveLatencyResult{}, ctx.Err()
@@ -565,6 +583,9 @@ func measureViaEntryCandidate(ctx context.Context, lane viaEntryLane, p common.R
 	failed := 0
 	for i := 0; i < samples; i++ {
 		value, err := dial(port, 900*time.Millisecond)
+		if errors.Is(err, errViaEntryMeasurementClock) {
+			return liveLatencyResult{}, err
+		}
 		if err != nil {
 			failed++
 		} else {

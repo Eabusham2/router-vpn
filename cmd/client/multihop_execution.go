@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/multihoprelay"
 	"router-vpn/internal/routechoice"
 )
@@ -276,7 +277,20 @@ func (s *desktopExecutionSession) ProbeExternal(ctx context.Context, target stri
 	}
 	return s.probe(ctx, target, nil)
 }
+
+type executionMeasurementInterval interface {
+	Duration() (time.Duration, error)
+}
+
+func startExecutionMeasurementInterval() (executionMeasurementInterval, error) {
+	return hopmeasure.StartInterval()
+}
+
 func (s *desktopExecutionSession) probe(ctx context.Context, target string, node *common.RouterProfile) (time.Duration, error) {
+	return s.probeWithClock(ctx, target, node, startExecutionMeasurementInterval)
+}
+
+func (s *desktopExecutionSession) probeWithClock(ctx context.Context, target string, node *common.RouterProfile, startClock func() (executionMeasurementInterval, error)) (time.Duration, error) {
 	identity := s.identityContext(ctx)
 	if identity == "" {
 		return 0, errors.New("unowned measurement")
@@ -299,14 +313,23 @@ func (s *desktopExecutionSession) probe(ctx context.Context, target string, node
 	if node != nil {
 		req.Header.Set("Authorization", "Bearer "+node.APIToken)
 	}
-	start := time.Now()
+	interval, err := startClock()
+	if err != nil {
+		return 0, err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, errors.New("routed response-time probe failed")
+		return 0, errors.Join(err, context.Cause(ctx), errors.New("routed response-time probe failed"))
 	}
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4097))
 	_ = resp.Body.Close()
-	elapsed := time.Since(start)
+	elapsed, clockErr := interval.Duration()
+	if clockErr != nil || context.Cause(ctx) != nil {
+		return 0, errors.Join(clockErr, context.Cause(ctx))
+	}
+	if elapsed <= 0 {
+		return 0, errors.New("routed response-time clock did not produce a positive interval")
+	}
 	if readErr != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 || len(body) > 4096 || ctx.Err() != nil || s.identityContext(ctx) != identity {
 		return 0, errors.New("routed probe failed, expired, or changed path")
 	}
