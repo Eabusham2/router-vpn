@@ -49,7 +49,14 @@ function Set-RouterVPNProfileProtection{
     $script:ProtectionRequests+=,[pscustomobject]@{ProfileID=$DisplayedProfileID;Enabled=$Enabled;BaseUrl=$BaseUrl}
 }
 $script:ProtectionStatus=@{connected=$false;phase='off';runtime_mode='off';mode='off';logical_mode='';base='';router_id='';last_error=''}
-function Api{param([string]$Path,[string]$Method='GET',$Body,[int]$Timeout)if($Path-cne'/api/status'){throw 'Unexpected protection fixture request'};return $script:ProtectionStatus}
+# Match the controller's JSON response shape on synchronous click-time reads too.
+# A raw Hashtable exposes dictionary members to Select-Object, unlike the
+# PSCustomObject returned by the shipping transport and asynchronous refresh.
+function Api{
+    param([string]$Path,[string]$Method='GET',$Body,[int]$Timeout)
+    if($Path-cne'/api/status'){throw 'Unexpected protection fixture request'}
+    return ($script:ProtectionStatus|ConvertTo-Json -Depth 32 -Compress|ConvertFrom-Json)
+}
 $BaseUrl='https://127.0.0.1:8788'
 $Profile=@{id='node';node_kind='router-vpn';name='Captured node';endpoint='192.0.2.1';location='';home_lan_access=$false;kill_switch_policy='always';mtu_policy='auto';effective_mtu=1420;effective_mtu_source='';effective_mtu_tested_at='';effective_mtu_success_ratio=0;effective_mtu_mbps=0;effective_mtu_median_rtt_ms=0;multihop_enabled=$false;auto_require_encrypted=$false;auto_require_obfuscation=$false;ipv6_mode='on';dns_mode='home'}
 $Store=@{selected_id='node';profiles=@($Profile)}
@@ -64,6 +71,11 @@ $script:UnifiedTelemetryTasks=@{};$script:UnifiedTelemetryRequests=@{};$script:U
 $script:UnifiedRoutePathMs=0.0;$script:UnifiedForwardSync=$false
 $script:UnifiedRefreshPoller=[pscustomobject]@{Stops=0};$script:UnifiedRefreshPoller|Add-Member ScriptMethod Stop {$this.Stops++}
 $script:UnifiedTelemetryPoller=[pscustomobject]@{Stops=0};$script:UnifiedTelemetryPoller|Add-Member ScriptMethod Stop {$this.Stops++}
+
+$WireStatus=Api '/api/status'
+Assert-ProtectionComposition ($null-ne$WireStatus.PSObject.Properties['connected'] -and $null-ne$WireStatus.PSObject.Properties['phase']) 'Status fixture did not return controller JSON properties'
+Assert-ProtectionComposition (-not(TestUnifiedProtectionStatusBusy $WireStatus)) 'Wire-shaped idle status unexpectedly blocked protection Off'
+Assert-ProtectionComposition (TestUnifiedProtectionStatusBusy ([pscustomobject]@{phase='off'})) 'Malformed status stopped failing closed'
 
 $Bindings=@($Ast.FindAll({param($N)$N-is[System.Management.Automation.Language.InvokeMemberExpressionAst]-and
     $N.Member-is[System.Management.Automation.Language.StringConstantExpressionAst]-and$N.Member.Value-ceq'Add_Click'-and
