@@ -154,6 +154,10 @@ func quickProfileLatencyContext(ctx context.Context, p common.RouterProfile, sam
 // Port discovery is not one of the measured samples. Both live reachability
 // and Fastest use this actual TCP dial loop, with their own sample contracts.
 func profileLatencyAtPort(ctx context.Context, p common.RouterProfile, port, samples int) (liveLatencyResult, error) {
+	return profileLatencyAtPortWithClock(ctx, p, port, samples, startClientMeasurementInterval)
+}
+
+func profileLatencyAtPortWithClock(ctx context.Context, p common.RouterProfile, port, samples int, startClock clientMeasurementClock) (liveLatencyResult, error) {
 	if samples < 1 || samples > 200 || port < 1 || port > 65535 {
 		return liveLatencyResult{}, errors.New("invalid node measurement bounds")
 	}
@@ -166,7 +170,13 @@ func profileLatencyAtPort(ctx context.Context, p common.RouterProfile, port, sam
 				return liveLatencyResult{}, err
 			}
 		}
-		started := time.Now()
+		if err := context.Cause(ctx); err != nil {
+			return liveLatencyResult{}, err
+		}
+		interval, err := startClock()
+		if err != nil {
+			return liveLatencyResult{}, err
+		}
 		c, dialErr := dialer.DialContext(ctx, "tcp", net.JoinHostPort(p.Endpoint, fmt.Sprintf("%d", port)))
 		if dialErr != nil {
 			if ctx.Err() != nil {
@@ -176,7 +186,11 @@ func profileLatencyAtPort(ctx context.Context, p common.RouterProfile, port, sam
 			continue
 		}
 		_ = c.Close()
-		values = append(values, float64(time.Since(started))/float64(time.Millisecond))
+		elapsed, err := clientMeasurementMilliseconds(ctx, interval)
+		if err != nil {
+			return liveLatencyResult{}, err
+		}
+		values = append(values, elapsed)
 		if i+1 < samples {
 			select {
 			case <-ctx.Done():
@@ -200,9 +214,9 @@ func profileLatencySummary(p common.RouterProfile, port int, measured []float64,
 	trim := len(values) / 10
 	return liveLatencyResult{
 		ID: p.ID, Name: p.Name, NodeKind: p.NodeKind, Endpoint: p.Endpoint, Port: port,
-		Samples: len(values), Failed: failed, MinMs: round3(values[0]), MedianMs: round3(percentile(values, 0.50)),
-		AverageMs: round3(average(values)), P90Ms: round3(percentile(values, 0.90)), MaxMs: round3(values[len(values)-1]),
-		TrimmedMs:  round3(average(values[trim : len(values)-trim])),
+		Samples: len(values), Failed: failed, MinMs: roundMeasuredMilliseconds(values[0]), MedianMs: roundMeasuredMilliseconds(percentile(values, 0.50)),
+		AverageMs: roundMeasuredMilliseconds(averageMeasuredMilliseconds(values)), P90Ms: roundMeasuredMilliseconds(percentile(values, 0.90)), MaxMs: roundMeasuredMilliseconds(values[len(values)-1]),
+		TrimmedMs:  roundMeasuredMilliseconds(averageMeasuredMilliseconds(values[trim : len(values)-trim])),
 		MeasuredAt: time.Now().UTC(), Description: "TCP-handshake RTT to the node; not ICMP or a tunnel-path measurement",
 	}
 }
@@ -560,6 +574,10 @@ func privatePathLatency(p common.RouterProfile, st state, samples int) (connecti
 }
 
 func privatePathLatencyContext(ctx context.Context, p common.RouterProfile, st state, samples int) (connectionLatencyResult, error) {
+	return privatePathLatencyWithClock(ctx, p, st, samples, startClientMeasurementInterval)
+}
+
+func privatePathLatencyWithClock(ctx context.Context, p common.RouterProfile, st state, samples int, startClock clientMeasurementClock) (connectionLatencyResult, error) {
 	if err := ctx.Err(); err != nil {
 		return connectionLatencyResult{}, err
 	}
@@ -593,7 +611,10 @@ func privatePathLatencyContext(ctx context.Context, p common.RouterProfile, st s
 		}
 		req.Header.Set("Cache-Control", "no-store")
 		req.Header.Set("Accept-Encoding", "identity")
-		started := time.Now()
+		interval, err := startClock()
+		if err != nil {
+			return connectionLatencyResult{}, err
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -604,7 +625,10 @@ func privatePathLatencyContext(ctx context.Context, p common.RouterProfile, st s
 		}
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, (16<<10)+1))
 		_ = resp.Body.Close()
-		elapsedMs := float64(time.Since(started).Microseconds()) / 1000.0
+		elapsedMs, clockErr := clientMeasurementMilliseconds(ctx, interval)
+		if clockErr != nil {
+			return connectionLatencyResult{}, clockErr
+		}
 		if err := ctx.Err(); err != nil {
 			return connectionLatencyResult{}, err
 		}
@@ -633,7 +657,7 @@ func privatePathLatencyContext(ctx context.Context, p common.RouterProfile, st s
 		return connectionLatencyResult{}, errors.New("current private tunnel path did not answer with a proved node identity")
 	}
 	sort.Float64s(values)
-	return connectionLatencyResult{Connected: true, Mode: st.Mode, RouterID: p.ID, Name: p.Name, Samples: len(values), Failed: failed, MinMs: round3(values[0]), MedianMs: round3(percentile(values, .50)), AverageMs: round3(average(values)), P90Ms: round3(percentile(values, .90)), MaxMs: round3(values[len(values)-1]), MeasuredAt: time.Now().UTC(), Proof: "HTTP RTT to the active node private Router API through the current tunnel; paired node identity proved for every sample"}, nil
+	return connectionLatencyResult{Connected: true, Mode: st.Mode, RouterID: p.ID, Name: p.Name, Samples: len(values), Failed: failed, MinMs: roundMeasuredMilliseconds(values[0]), MedianMs: roundMeasuredMilliseconds(percentile(values, .50)), AverageMs: roundMeasuredMilliseconds(averageMeasuredMilliseconds(values)), P90Ms: roundMeasuredMilliseconds(percentile(values, .90)), MaxMs: roundMeasuredMilliseconds(values[len(values)-1]), MeasuredAt: time.Now().UTC(), Proof: "HTTP RTT to the active node private Router API through the current tunnel; paired node identity proved for every sample"}, nil
 }
 
 func (a *app) connectionLiveLatency(w http.ResponseWriter, r *http.Request) {

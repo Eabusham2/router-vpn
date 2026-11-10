@@ -72,6 +72,10 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) profileLatencyWithNetwork(w http.ResponseWriter, r *http.Request, networkIdentity func(context.Context) (string, error)) {
+	a.profileLatencyWithClock(w, r, networkIdentity, startClientMeasurementInterval)
+}
+
+func (a *app) profileLatencyWithClock(w http.ResponseWriter, r *http.Request, networkIdentity func(context.Context) (string, error), startClock clientMeasurementClock) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -180,7 +184,11 @@ func (a *app) profileLatencyWithNetwork(w http.ResponseWriter, r *http.Request, 
 			rejectObservation(err)
 			return
 		}
-		started := time.Now()
+		interval, clockErr := startClock()
+		if clockErr != nil {
+			http.Error(w, "durable node latency clock failed: "+clockErr.Error(), http.StatusBadGateway)
+			return
+		}
 		c, dialErr := dialer.DialContext(r.Context(), "tcp", net.JoinHostPort(p.Endpoint, fmt.Sprintf("%d", port)))
 		if dialErr != nil {
 			if r.Context().Err() != nil {
@@ -191,7 +199,16 @@ func (a *app) profileLatencyWithNetwork(w http.ResponseWriter, r *http.Request, 
 			continue
 		}
 		_ = c.Close()
-		values = append(values, math.Max(0.001, float64(time.Since(started).Microseconds())/1000.0))
+		elapsed, clockErr := clientMeasurementMilliseconds(r.Context(), interval)
+		if clockErr != nil {
+			if r.Context().Err() != nil {
+				http.Error(w, "durable node latency request was cancelled", http.StatusRequestTimeout)
+			} else {
+				http.Error(w, "durable node latency clock failed: "+clockErr.Error(), http.StatusBadGateway)
+			}
+			return
+		}
+		values = append(values, elapsed)
 		if i%10 == 9 {
 			select {
 			case <-r.Context().Done():
@@ -212,7 +229,7 @@ func (a *app) profileLatencyWithNetwork(w http.ResponseWriter, r *http.Request, 
 	sort.Float64s(values)
 	minV := values[0]
 	maxV := values[len(values)-1]
-	avgV := average(values)
+	avgV := averageMeasuredMilliseconds(values)
 	medianV := percentile(values, 0.50)
 	p90V := percentile(values, 0.90)
 	trim := len(values) / 10
@@ -220,19 +237,19 @@ func (a *app) profileLatencyWithNetwork(w http.ResponseWriter, r *http.Request, 
 	if len(values)-2*trim >= 3 && trim > 0 {
 		trimmed = values[trim : len(values)-trim]
 	}
-	trimmedV := average(trimmed)
+	trimmedV := averageMeasuredMilliseconds(trimmed)
 	now := time.Now().UTC()
 	resp := latencyResponse{
 		ID:          p.ID,
 		Port:        port,
 		Samples:     len(values),
 		Failed:      failed,
-		MinMs:       round3(minV),
-		MedianMs:    round3(medianV),
-		TrimmedMs:   round3(trimmedV),
-		AverageMs:   round3(avgV),
-		P90Ms:       round3(p90V),
-		MaxMs:       round3(maxV),
+		MinMs:       roundMeasuredMilliseconds(minV),
+		MedianMs:    roundMeasuredMilliseconds(medianV),
+		TrimmedMs:   roundMeasuredMilliseconds(trimmedV),
+		AverageMs:   roundMeasuredMilliseconds(avgV),
+		P90Ms:       roundMeasuredMilliseconds(p90V),
+		MaxMs:       roundMeasuredMilliseconds(maxV),
 		MeasuredAt:  now,
 		Description: "Disconnected direct TCP handshake latency; network metadata captured; median and 10% trimmed mean resist outliers",
 		Complete:    failed == 0 && len(values) == q.Samples,

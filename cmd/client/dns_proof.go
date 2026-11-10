@@ -361,6 +361,10 @@ func proveSelectedDNSContext(parent context.Context, a *app, s observedConnectio
 }
 
 func proveSelectedDNSWithLookup(parent context.Context, a *app, s observedConnection, runtimeID string, lookup func(context.Context, string) ([]string, error)) dnsProofState {
+	return proveSelectedDNSWithClock(parent, a, s, runtimeID, lookup, startClientMeasurementInterval)
+}
+
+func proveSelectedDNSWithClock(parent context.Context, a *app, s observedConnection, runtimeID string, lookup func(context.Context, string) ([]string, error), startClock clientMeasurementClock) dnsProofState {
 	if torDNSObservation(s, runtimeID) {
 		return proveDesktopTorDNS(parent, a, s, runtimeID)
 	}
@@ -429,9 +433,13 @@ func proveSelectedDNSWithLookup(parent context.Context, a *app, s observedConnec
 		}
 	}
 
-	started := time.Now()
 	ctx, cancel := context.WithTimeout(parent, 4*time.Second)
 	defer cancel()
+	interval, err := startClock()
+	if err != nil {
+		result.Reason = "selected-DNS measurement clock failed: " + err.Error()
+		return result
+	}
 	addrs, err := lookup(ctx, "example.com")
 	if cause := context.Cause(ctx); cause != nil {
 		result.Reason = "selected-DNS proof was cancelled during resolver work"
@@ -444,6 +452,11 @@ func proveSelectedDNSWithLookup(parent context.Context, a *app, s observedConnec
 		result.Reason = "active selected-DNS policy is structurally enforced, but OS resolver proof failed: " + err.Error()
 		return result
 	}
+	elapsed, err := clientMeasurementMilliseconds(ctx, interval)
+	if err != nil {
+		result.Reason = "selected-DNS measurement clock failed: " + err.Error()
+		return result
+	}
 	if nativeOwned {
 		if err := snapshot.source.current(); err != nil {
 			result.Reason = err.Error()
@@ -451,7 +464,7 @@ func proveSelectedDNSWithLookup(parent context.Context, a *app, s observedConnec
 		}
 	}
 	result.Status = "passed"
-	result.LatencyMs = float64(time.Since(started).Microseconds()) / 1000.0
+	result.LatencyMs = elapsed
 	result.Reason = fmt.Sprintf("selected DNS %s://%s:%d is enforced by the active %s runtime and an OS resolver query succeeded through the connected Router VPN path", selected.Protocol, selected.Host, selected.Port, runtimeID)
 	return result
 }
