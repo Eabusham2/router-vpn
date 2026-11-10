@@ -239,7 +239,7 @@ def run(vendor, *, stage='parser', android=None, apple=None, desktop=None):
                 image, digest = PACKET.compile_image(compiler, vendor, work, env)
                 receipt['peers'] = {}
                 for parent, kinds in PEERS.items():
-                    children = [kind+'/'+first+'/'+last+'/'+fault for kind in kinds
+                    children = [parent+'/'+kind+'/'+first+'/'+last+'/'+fault for kind in kinds
                         for first in LAYERS for last in LAYERS for fault in faults(first, last)]
                     receipt['peers'][parent] = SOCKS.execute_image(compiler, vendor, env, image, digest,
                         'routervpnamnezia', parent, [parent]+children, timeout=600)
