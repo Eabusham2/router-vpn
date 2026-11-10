@@ -104,6 +104,10 @@ func measureRoutedProfileLatencyViaProxy(p common.RouterProfile, samples int, pr
 }
 
 func measureRoutedProfileLatencyViaProxyContext(ctx context.Context, p common.RouterProfile, samples int, proxyRaw string) (connectionLatencyResult, error) {
+	return measureRoutedProfileLatencyViaProxyWithClock(ctx, p, samples, proxyRaw, startClientMeasurementInterval)
+}
+
+func measureRoutedProfileLatencyViaProxyWithClock(ctx context.Context, p common.RouterProfile, samples int, proxyRaw string, startClock clientMeasurementClock) (connectionLatencyResult, error) {
 	if err := ctx.Err(); err != nil {
 		return connectionLatencyResult{}, err
 	}
@@ -133,7 +137,10 @@ func measureRoutedProfileLatencyViaProxyContext(ctx context.Context, p common.Ro
 			req.Header.Set("Authorization", "Bearer "+p.APIToken)
 		}
 		req.Header.Set("Cache-Control", "no-store")
-		started := time.Now()
+		interval, clockErr := startClock()
+		if clockErr != nil {
+			return connectionLatencyResult{}, clockErr
+		}
 		resp, requestErr := client.Do(req)
 		if requestErr != nil {
 			if err := ctx.Err(); err != nil {
@@ -153,7 +160,13 @@ func measureRoutedProfileLatencyViaProxyContext(ctx context.Context, p common.Ro
 		if err := validateSelectedNodeProof(p, body); err != nil {
 			return connectionLatencyResult{}, fmt.Errorf("multihop hop lane reached the wrong Router VPN node: %w", err)
 		}
-		values = append(values, float64(time.Since(started).Microseconds())/1000.0)
+		elapsed, clockErr := clientMeasurementMilliseconds(ctx, interval)
+		if clockErr != nil {
+			// A faulty interval invalidates this observation, including earlier
+			// samples. It is not packet loss within one measured clock domain.
+			return connectionLatencyResult{}, clockErr
+		}
+		values = append(values, elapsed)
 		if i+1 < samples {
 			select {
 			case <-ctx.Done():
@@ -171,9 +184,9 @@ func measureRoutedProfileLatencyViaProxyContext(ctx context.Context, p common.Ro
 	sort.Float64s(values)
 	return connectionLatencyResult{
 		Connected: true, Mode: "multihop", RouterID: p.ID, Name: p.Name,
-		Samples: len(values), Failed: failed, MinMs: round3(values[0]),
-		MedianMs: round3(percentile(values, .50)), AverageMs: round3(average(values)),
-		P90Ms: round3(percentile(values, .90)), MaxMs: round3(values[len(values)-1]),
+		Samples: len(values), Failed: failed, MinMs: roundMeasuredMilliseconds(values[0]),
+		MedianMs: roundMeasuredMilliseconds(percentile(values, .50)), AverageMs: roundMeasuredMilliseconds(averageMeasuredMilliseconds(values)),
+		P90Ms: roundMeasuredMilliseconds(percentile(values, .90)), MaxMs: roundMeasuredMilliseconds(values[len(values)-1]),
 		MeasuredAt: time.Now().UTC(),
 		Proof:      "exact Router VPN node-identity HTTP RTT through reserved local multihop hop lane " + proxyRaw,
 	}, nil

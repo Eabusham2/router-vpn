@@ -138,6 +138,13 @@ func newSpeedLabHTTPClient(timeout time.Duration) *http.Client {
 }
 
 func speedLabProbeOnce(ctx context.Context, client *http.Client) (float64, error) {
+	return speedLabProbeOnceWithClock(ctx, client, startClientMeasurementInterval)
+}
+
+func speedLabProbeOnceWithClock(ctx context.Context, client *http.Client, startClock clientMeasurementClock) (float64, error) {
+	if err := context.Cause(ctx); err != nil {
+		return 0, err
+	}
 	url := speedLabDownloadURL + "?bytes=1&r=" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -146,7 +153,10 @@ func speedLabProbeOnce(ctx context.Context, client *http.Client) (float64, error
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("Cache-Control", "no-store")
 	req.Header.Set("User-Agent", "RouterVPN-SpeedLab/1")
-	started := time.Now()
+	interval, err := startClock()
+	if err != nil {
+		return 0, err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, err
@@ -162,16 +172,21 @@ func speedLabProbeOnce(ctx context.Context, client *http.Client) (float64, error
 	if len(body) != 1 {
 		return 0, fmt.Errorf("latency probe returned %d bytes; expected 1", len(body))
 	}
-	return float64(time.Since(started).Microseconds()) / 1000.0, nil
+	return clientMeasurementMilliseconds(ctx, interval)
 }
 
 func computeSpeedLabLatencyStats(values []float64, failed int) (speedLabLatencyStats, error) {
 	if len(values) == 0 {
 		return speedLabLatencyStats{Failed: failed}, errors.New("no latency probes succeeded")
 	}
+	for _, value := range values {
+		if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+			return speedLabLatencyStats{}, errors.New("latency statistics require actual positive finite samples")
+		}
+	}
 	sorted := append([]float64(nil), values...)
 	sort.Float64s(sorted)
-	mean := average(sorted)
+	mean := averageMeasuredMilliseconds(sorted)
 	variance := 0.0
 	for _, value := range sorted {
 		delta := value - mean
@@ -180,9 +195,9 @@ func computeSpeedLabLatencyStats(values []float64, failed int) (speedLabLatencyS
 	variance /= float64(len(sorted))
 	return speedLabLatencyStats{
 		Samples: len(sorted), Failed: failed,
-		MinMs: round3(sorted[0]), MedianMs: round3(percentile(sorted, 0.50)),
-		AverageMs: round3(mean), P90Ms: round3(percentile(sorted, 0.90)), MaxMs: round3(sorted[len(sorted)-1]),
-		JitterMs: round3(math.Sqrt(variance)),
+		MinMs: roundMeasuredMilliseconds(sorted[0]), MedianMs: roundMeasuredMilliseconds(percentile(sorted, 0.50)),
+		AverageMs: roundMeasuredMilliseconds(mean), P90Ms: roundMeasuredMilliseconds(percentile(sorted, 0.90)), MaxMs: roundMeasuredMilliseconds(sorted[len(sorted)-1]),
+		JitterMs: roundMeasuredMilliseconds(math.Sqrt(variance)),
 	}, nil
 }
 
