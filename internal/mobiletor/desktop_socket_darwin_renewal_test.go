@@ -5,25 +5,82 @@ package mobiletor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"net/netip"
 	"reflect"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
 // Execute the same captured operation used by the monitor against the actual
 // independently running privileged guardian. Only selection of this one due
 // group is explicit; no receipt, descriptor identity or PF readback is modeled.
-func desktopDarwinRenewOriginalGroup(t *testing.T, broker *DesktopSocketBroker, policy *DesktopDarwinSocketPolicy, sockets []*desktopSocket) []DesktopSocketReceipt {
-	t.Helper()
-	var group []desktopSocketRenewalPeer
-	var expected []DesktopSocketGrant
-	accepted := false
-	defer func() {
-		if !accepted {
+// Manual native evidence uses the same exclusive renewal slot as the monitor.
+// Never hold one parent operation while waiting for a child's in-flight renewal:
+// the monitor must remain free to renew the complete original family meanwhile.
+func desktopDarwinCaptureOriginalRenewalGroup(ctx context.Context, broker *DesktopSocketBroker, sockets []*desktopSocket) ([]desktopSocketRenewalPeer, []DesktopSocketGrant, func(), error) {
+	if ctx == nil || len(sockets) == 0 || len(sockets) > desktopSocketRenewalLimit {
+		return nil, nil, nil, errors.New("native renewal capture requires its bounded original group")
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
+		broker.mu.Lock()
+		closing, busy := broker.closing, broker.renewing
+		if !closing && !busy {
+			broker.renewing = true
+		}
+		broker.mu.Unlock()
+		if closing {
+			return nil, nil, nil, net.ErrClosed
+		}
+		if !busy {
+			release := func() { broker.mu.Lock(); broker.renewing = false; broker.mu.Unlock() }
+			var group []desktopSocketRenewalPeer
+			var expected []DesktopSocketGrant
+			var failure error
+			for _, socket := range sockets {
+				socket.mu.Lock()
+				peer := socket.peers[socket.remote]
+				socket.mu.Unlock()
+				if peer == nil {
+					failure = errors.New("native renewal lost its original peer")
+					break
+				}
+				if !peer.op.TryLock() {
+					break
+				}
+				if err := socket.beginIO(); err != nil {
+					peer.op.Unlock()
+					failure = err
+					break
+				}
+				peer.mu.Lock()
+				valid := peer.valid && !peer.applying && validDesktopSocketReceipt(peer.receipt, peer.request, time.Now())
+				grant, until := peer.request, desktopSocketRenewalUntil(peer.receipt)
+				if valid {
+					peer.applying = true
+				}
+				peer.mu.Unlock()
+				if !valid {
+					peer.op.Unlock()
+					socket.io.Done()
+					failure = errors.New("native renewal lost its fresh acknowledged original")
+					break
+				}
+				group = append(group, desktopSocketRenewalPeer{socket, peer, until, grant.Remote})
+				grant.Sequence++
+				expected = append(expected, grant)
+			}
+			if len(group) == len(sockets) && ctx.Err() == nil {
+				return group, expected, release, nil
+			}
 			for _, member := range group {
 				member.peer.mu.Lock()
 				member.peer.applying = false
@@ -31,34 +88,32 @@ func desktopDarwinRenewOriginalGroup(t *testing.T, broker *DesktopSocketBroker, 
 				member.peer.op.Unlock()
 				member.socket.io.Done()
 			}
+			release()
+			if failure != nil {
+				return nil, nil, nil, failure
+			}
 		}
-	}()
-	for _, socket := range sockets {
-		socket.mu.Lock()
-		peer := socket.peers[socket.remote]
-		socket.mu.Unlock()
-		peer.op.Lock()
-		if err := socket.beginIO(); err != nil {
-			peer.op.Unlock()
-			t.Fatal("native renewal lost its original live descriptor", err)
+		// This waits only for original ownership admission, never for a second
+		// native attempt. Receipt clocks remain untouched and still expire.
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, nil, nil, ctx.Err()
+		case <-timer.C:
 		}
-		peer.mu.Lock()
-		valid := peer.valid && !peer.applying && validDesktopSocketReceipt(peer.receipt, peer.request, time.Now())
-		grant, until := peer.request, desktopSocketRenewalUntil(peer.receipt)
-		if valid {
-			peer.applying = true
-		}
-		peer.mu.Unlock()
-		if !valid {
-			peer.op.Unlock()
-			socket.io.Done()
-			t.Fatal("native renewal did not retain a fresh acknowledged original")
-		}
-		group = append(group, desktopSocketRenewalPeer{socket, peer, until, grant.Remote})
-		grant.Sequence++
-		expected = append(expected, grant)
 	}
-	accepted = true
+}
+
+func desktopDarwinRenewOriginalGroup(t *testing.T, broker *DesktopSocketBroker, policy *DesktopDarwinSocketPolicy, sockets []*desktopSocket) []DesktopSocketReceipt {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(broker.ctx, desktopSocketControlWait)
+	defer cancel()
+	group, expected, release, err := desktopDarwinCaptureOriginalRenewalGroup(ctx, broker, sockets)
+	if err != nil {
+		t.Fatal("native renewal could not capture its complete original group", err)
+	}
+	defer release()
 	broker.applyRenewals(policy, group)
 	receipts := make([]DesktopSocketReceipt, len(group))
 	for index, member := range group {
@@ -205,5 +260,93 @@ func desktopDarwinRenewalFrameControls(t *testing.T, receipt DesktopSocketReceip
 		if desktopDarwinRenewalFrame(changed) {
 			t.Fatal("native renewal frame borrowed another operation's authority", fault)
 		}
+	}
+}
+
+// The actual fixture capture runs with modeled native policy only. A busy child
+// and an existing monitor transaction must never pin an earlier parent lease.
+func TestDesktopDarwinGuardianRenewalCaptureOwnership(t *testing.T) {
+	for _, fault := range []string{"ready", "held-child", "joined-child", "active-monitor", "cancelled", "stale"} {
+		t.Run(fault, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				broker := &DesktopSocketBroker{ctx: ctx, current: func() bool { return true }, policy: desktopSocketFixturePolicy()}
+				remote := netip.MustParseAddrPort("192.0.2.1:443")
+				grant := DesktopSocketGrant{Sequence: 3, Remote: remote}
+				receipt := DesktopSocketReceipt{Grant: grant, ObservedAt: time.Now().UnixMilli(), ExpiresAt: time.Now().Add(7 * time.Second).UnixMilli()}
+				first, child := &desktopSocketPeer{request: grant, receipt: receipt, valid: true}, &desktopSocketPeer{request: grant, receipt: receipt, valid: true}
+				sockets := []*desktopSocket{{ctx: ctx, broker: broker, remote: remote, peers: map[netip.AddrPort]*desktopSocketPeer{remote: first}}, {ctx: ctx, broker: broker, remote: remote, peers: map[netip.AddrPort]*desktopSocketPeer{remote: child}}}
+				if fault == "held-child" || fault == "joined-child" {
+					child.op.Lock()
+				}
+				if fault == "active-monitor" {
+					broker.renewing = true
+				}
+				if fault == "cancelled" {
+					cancel()
+				}
+				if fault == "stale" {
+					child.receipt.ObservedAt = time.Now().Add(-DesktopSocketReadbackAge - time.Millisecond).UnixMilli()
+				}
+				done := make(chan error, 1)
+				go func() {
+					group, expected, release, err := desktopDarwinCaptureOriginalRenewalGroup(ctx, broker, sockets)
+					if err == nil {
+						if len(group) != 2 || len(expected) != 2 || expected[0].Sequence != 4 || expected[1].Sequence != 4 {
+							err = errors.New("fixture changed the complete original renewal inventory")
+						}
+						for _, member := range group {
+							member.peer.mu.Lock()
+							member.peer.applying = false
+							member.peer.mu.Unlock()
+							member.peer.op.Unlock()
+							member.socket.io.Done()
+						}
+						release()
+					}
+					done <- err
+				}()
+				synctest.Wait()
+				if !first.op.TryLock() {
+					t.Fatal("fixture capture pinned the original parent while waiting for a child")
+				}
+				first.op.Unlock()
+				first.mu.Lock()
+				applying := first.applying
+				unchanged := first.receipt == receipt && first.request == grant
+				first.mu.Unlock()
+				if applying || !unchanged {
+					t.Fatal("fixture wait changed original receipt or retained partial parent ownership")
+				}
+				if fault == "held-child" || fault == "joined-child" || fault == "active-monitor" {
+					select {
+					case err := <-done:
+						t.Fatal("capture bypassed original active owner", err)
+					default:
+					}
+					broker.mu.Lock()
+					busy := broker.renewing
+					broker.mu.Unlock()
+					if busy != (fault == "active-monitor") {
+						t.Fatal("fixture borrowed or retained the monitor renewal slot")
+					}
+					if fault != "joined-child" {
+						cancel()
+					}
+					if fault == "held-child" || fault == "joined-child" {
+						child.op.Unlock()
+					}
+				}
+				if err := <-done; (err == nil) != (fault == "ready" || fault == "joined-child") {
+					t.Fatal("capture changed original ownership acceptance", err)
+				}
+				if fault == "active-monitor" {
+					broker.renewing = false
+				}
+				sockets[0].io.Wait()
+				sockets[1].io.Wait()
+			})
+		})
 	}
 }

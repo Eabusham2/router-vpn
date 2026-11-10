@@ -55,6 +55,16 @@ SOCKS_LEAVES = ('original-kernel-identity', 'stale-control-permit', 'expired-con
 PROBE_CASES = ('FilterOnlyRetirement', 'NativeFilterProjection', 'BaselineTransition', 'ReferenceOwnership')
 
 
+RENEWAL_CAPTURE_ROOT = 'TestDesktopDarwinGuardianRenewalCaptureOwnership'
+RENEWAL_CAPTURE_CASES = ('ready', 'held-child', 'joined-child', 'active-monitor', 'cancelled', 'stale')
+
+def require_renewal_capture_verdicts(output):
+    expected = (RENEWAL_CAPTURE_ROOT,)+(tuple(RENEWAL_CAPTURE_ROOT+'/'+name for name in RENEWAL_CAPTURE_CASES))
+    for name in expected:
+        if len(re.findall(r'^\s*--- PASS: '+re.escape(name)+r' \([0-9]+(?:\.[0-9]+)?s\)$', output, re.M)) != 1:
+            raise ValueError('Darwin renewal capture omitted or duplicated its original ownership verdict: '+name)
+
+
 def native_case_name(case):
     if case in PROBE_CASES:
         return 'TestDesktopPFAnchorProbe'+case
@@ -598,6 +608,7 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         if '--- PASS: TestDesktopPFABIRejectsUnprovedKernel (' not in output:
             raise ValueError('Darwin guardian omitted the private ABI version-rejection boundary')
         if case is None:
+            require_renewal_capture_verdicts(output)
             for name in ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope', 'UIDAbsenceWait', 'UIDObserverProtocol'):
                 if '--- PASS: TestDesktopDarwinGuardian'+name+' (' not in output:
                     raise ValueError('Darwin guardian omitted its inherited-channel or freshness boundary')

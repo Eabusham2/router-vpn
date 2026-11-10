@@ -542,6 +542,19 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.gate.require_socks_verdicts(output, 'TCPAndUDP')
 
+    def test_manual_renewal_capture_requires_every_original_ownership_case(self):
+        gate = self.gate
+        names = [gate.RENEWAL_CAPTURE_ROOT]+[gate.RENEWAL_CAPTURE_ROOT+'/'+leaf for leaf in gate.RENEWAL_CAPTURE_CASES]
+        lines = ['--- PASS: '+name+' (0.01s)' for name in names]
+        gate.require_renewal_capture_verdicts('\n'.join(lines))
+        for index in range(len(lines)):
+            for changed in (lines[:index]+lines[index+1:], lines+[lines[index]],
+                            lines[:index]+[lines[index].replace('PASS', 'SKIP')]+lines[index+1:]):
+                with self.assertRaises(ValueError):
+                    gate.require_renewal_capture_verdicts('\n'.join(changed))
+        selector = next(arg.removeprefix('-test.run=') for arg in gate.native_test_arguments() if arg.startswith('-test.run='))
+        self.assertRegex(gate.RENEWAL_CAPTURE_ROOT, selector)
+
     def test_every_required_case_has_one_bounded_fixture_selection(self):
         gate = self.gate
         cases = gate.CASES+gate.READBACK_CASES+gate.SOCKS_CASES
@@ -565,6 +578,7 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
         original = ['--- PASS: '+gate.native_case_name(name)+' (0.01s)' for name in gate.CASES+gate.READBACK_CASES
                     if name not in gate.SEPARATE_CASES]
         original += ['--- PASS: TestDesktopPFABIRejectsUnprovedKernel (0.01s)']
+        original += ['--- PASS: '+name+' (0.01s)' for name in (gate.RENEWAL_CAPTURE_ROOT,)+tuple(gate.RENEWAL_CAPTURE_ROOT+'/'+leaf for leaf in gate.RENEWAL_CAPTURE_CASES)]
         original += ['--- PASS: TestDesktopDarwinGuardian'+name+' (0.01s)' for name in
                      ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope', 'UIDAbsenceWait', 'UIDObserverProtocol')]
         original += ['--- PASS: TestDesktopDarwinGuardianKernelTCPAndUDP/'+network+' (0.01s)' for network in ('tcp4', 'udp4', 'tcp6', 'udp6')]
