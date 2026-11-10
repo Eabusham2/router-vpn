@@ -23,10 +23,39 @@ func (p *DesktopNodePolicy) CoverPolicy() ([]DesktopNodeCoverService, string, er
 	if p == nil || p.Validate() != nil {
 		return nil, "", failure
 	}
+	return desktopPhysicalCoverPolicy(p.config, p.metadata.NodeID)
+}
+
+// Imported cover belongs to the independently paired final, never the external
+// entry. It is read from the sealed complete imported graph without rebuilding
+// that final as an ordinary NodeProfile.
+func (p *DesktopImportedPolicy) CoverPolicy() ([]DesktopNodeCoverService, string, error) {
+	if p == nil || p.Validate() != nil {
+		return nil, "", errors.New("desktop imported cover lost its sealed final")
+	}
+	return desktopPhysicalCoverPolicy(p.config, p.metadata.ExitNodeID)
+}
+
+func ReadDesktopPhysicalCoverPolicy(policy DesktopPhysicalPolicy) ([]DesktopNodeCoverService, string, error) {
+	if _, _, _, err := ReadDesktopPhysicalPolicy(policy); err != nil {
+		return nil, "", err
+	}
+	switch original := policy.(type) {
+	case *DesktopNodePolicy:
+		return original.CoverPolicy()
+	case *DesktopImportedPolicy:
+		return original.CoverPolicy()
+	default:
+		return nil, "", errors.New("cover requires an original sealed physical policy")
+	}
+}
+
+func desktopPhysicalCoverPolicy(config, nodeID string) ([]DesktopNodeCoverService, string, error) {
+	failure := errors.New("desktop Router cover lost its complete sealed native policy")
 	var graph struct {
 		Services []json.RawMessage `json:"services"`
 	}
-	if json.Unmarshal([]byte(p.config), &graph) != nil {
+	if json.Unmarshal([]byte(config), &graph) != nil {
 		return nil, "", failure
 	}
 	var result []DesktopNodeCoverService
@@ -42,7 +71,7 @@ func (p *DesktopNodePolicy) CoverPolicy() ([]DesktopNodeCoverService, string, er
 		if service.Type != mobileperf.CoverType {
 			continue
 		}
-		if len(result) != 0 || service.Tag != "routervpn-cover-exit" || service.NodeID != p.metadata.NodeID || service.CoverOptions.Validate() != nil {
+		if len(result) != 0 || service.Tag != "routervpn-cover-exit" || service.NodeID != nodeID || service.CoverOptions.Validate() != nil {
 			return nil, "", failure
 		}
 		result = append(result, DesktopNodeCoverService{Tag: service.Tag, Options: service.CoverOptions})

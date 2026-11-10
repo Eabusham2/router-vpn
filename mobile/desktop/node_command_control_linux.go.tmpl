@@ -29,7 +29,7 @@ type routerVPNLinuxNodeControl struct {
 	bootstrap     *linuxprocess.Bootstrap
 	control       *linuxprotection.NodeControl
 	selection     linuxprotection.NodeSelection
-	policy        *mobilemultihop.DesktopNodePolicy
+	policy        mobilemultihop.DesktopPhysicalPolicy
 	external      *mobilemultihop.DesktopExternalPolicy
 	native        *routerVPNExternalNative
 	preparation   routerVPNLinuxPhysicalPreparation
@@ -168,7 +168,45 @@ func (owner *routerVPNLinuxNodeControl) compile(ctx context.Context, files *rout
 	return policy, nil
 }
 
-func (owner *routerVPNLinuxNodeControl) prepare(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (context.Context, error) {
+// Imported input is independently recompiled only after this exact inherited
+// parent has authenticated. An ordinary NodeProfile cannot fill this slot.
+func (owner *routerVPNLinuxNodeControl) compileImported(ctx context.Context, files *routerVPNExternalFiles,
+	session, source, config, transfer string, mtu int) (_ *mobilemultihop.DesktopImportedPolicy, failure error) {
+	if owner == nil || owner.policy != nil || owner.external != nil || owner.control != nil || owner.retiring.Load() ||
+		files == nil || files.root == nil || owner.original(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	policy, err := routerVPNImportedCommandPhysicalTarget(files, session, config, source, mtu, "linux")
+	if err != nil {
+		return nil, err
+	}
+	original := policy.OriginalController()
+	if original == nil {
+		return nil, routerVPNExternalFailure
+	}
+	defer func() {
+		if failure != nil {
+			failure = errors.Join(failure, original.Close())
+		}
+	}()
+	meta := policy.Metadata()
+	selection := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
+		ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
+	command, commandErr := selection.CaptureSHA256()
+	selected, selectedErr := selection.ControlSHA256()
+	if commandErr != nil || selectedErr != nil || command != owner.commandHash || meta.TargetOS != "linux" ||
+		meta.SourceSHA256 != source || meta.ConfigSHA256 != config || selected != transfer || owner.original(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	owner.control, err = linuxprotection.NewNodeChildControl(ctx, owner.bootstrap, selection)
+	if err != nil {
+		return nil, err
+	}
+	owner.policy, owner.selection, owner.selectionHash = policy, selection, selected
+	return policy, nil
+}
+
+func (owner *routerVPNLinuxNodeControl) prepare(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) (context.Context, error) {
 	if owner == nil || owner.control == nil || owner.policy != policy || owner.retiring.Load() || owner.original(ctx) != nil {
 		return nil, routerVPNExternalFailure
 	}

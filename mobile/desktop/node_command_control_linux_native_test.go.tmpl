@@ -133,6 +133,22 @@ type linuxChildControlParent struct {
 
 func linuxStartChildControl(t *testing.T, scenario string) (*linuxChildControlParent, error) {
 	t.Helper()
+	if strings.HasPrefix(scenario, "imported/") {
+		original := desktopLinuxImportedCommandOriginal(t)
+		var nonce [16]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
+			t.Fatal(err)
+		}
+		policy, err := mobilemultihop.NewDesktopImportedPolicy(original, hex.EncodeToString(nonce[:]), "linux")
+		if err != nil {
+			t.Fatal(err)
+		}
+		input, err := original.ImportedLaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return linuxStartCapturedPhysicalControl(t, scenario, input, policy, "TestRouterVPNLinuxNodeControlWorker", 30*time.Second)
+	}
 	node, policy := linuxChildControlPolicy(t)
 	return linuxStartCapturedChildControl(t, scenario, node, policy, "TestRouterVPNLinuxNodeControlWorker", 30*time.Second)
 }
@@ -140,12 +156,34 @@ func linuxStartChildControl(t *testing.T, scenario string) (*linuxChildControlPa
 func linuxStartCapturedChildControl(t *testing.T, scenario string, node *mobilemultihop.NodeProfile,
 	policy *mobilemultihop.DesktopNodePolicy, worker string, limit time.Duration) (*linuxChildControlParent, error) {
 	t.Helper()
+	if node == nil {
+		t.Fatal("native child fixture has no original node")
+	}
+	input, err := node.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return linuxStartCapturedPhysicalControl(t, scenario, input, policy, worker, limit)
+}
+
+func linuxStartCapturedPhysicalControl(t *testing.T, scenario, input string, policy mobilemultihop.DesktopPhysicalPolicy,
+	worker string, limit time.Duration) (*linuxChildControlParent, error) {
+	t.Helper()
 	linuxChildControlNamespace(t)
-	if node == nil || policy == nil || policy.Validate() != nil ||
+	if input == "" || policy == nil || policy.Validate() != nil ||
 		(worker != "TestRouterVPNLinuxNodeControlWorker" && worker != "TestRouterVPNLinuxNodeTUNWorker") || limit < 10*time.Second || limit > 90*time.Second {
 		t.Fatal("native child fixture lost its bounded captured launch")
 	}
-	meta := policy.Metadata()
+	_, meta, _, err := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childScenario := scenario
+	scenario = strings.TrimPrefix(scenario, "imported/")
+	sourceFile := "node-source.json"
+	if meta.Kind == "imported" {
+		sourceFile = "imported-source.json"
+	}
 	selection := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256,
 		Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
 	transfer, _ := selection.ControlSHA256()
@@ -156,11 +194,7 @@ func linuxStartCapturedChildControl(t *testing.T, scenario string, node *mobilem
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(directory) })
-	input, err := node.LaunchInput()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, body := range map[string]string{"node-source.json": input, "sing-box.json": policy.Config()} {
+	for name, body := range map[string]string{sourceFile: input, "sing-box.json": policy.Config()} {
 		if err := os.WriteFile(filepath.Join(directory, name), []byte(body), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -233,7 +267,7 @@ func linuxStartCapturedChildControl(t *testing.T, scenario string, node *mobilem
 	}
 	owner.process = exec.CommandContext(ctx, launch, "-test.run=^"+worker+"$", "-test.count=1", "-test.timeout="+(limit-3*time.Second).String())
 	owner.process.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_LINUX_GUARDIAN_TEST_NS=1",
-		"ROUTERVPN_NODE_CHILD_CONTROL=" + scenario, "ROUTERVPN_NODE_CHILD_INVOCATION=" + string(body)}
+		"ROUTERVPN_NODE_CHILD_CONTROL=" + childScenario, "ROUTERVPN_NODE_CHILD_INVOCATION=" + string(body)}
 	owner.process.ExtraFiles = []*os.File{childChannel, parentDirectory, childImage}
 	pidfd := -1
 	owner.process.SysProcAttr = &syscall.SysProcAttr{PidFD: &pidfd}
@@ -350,6 +384,8 @@ func TestRouterVPNLinuxNodeControlWorker(t *testing.T) {
 	if scenario == "" {
 		return
 	}
+	imported := strings.HasPrefix(scenario, "imported/")
+	scenario = strings.TrimPrefix(scenario, "imported/")
 	linuxChildControlNamespace(t)
 	var invocation linuxChildControlInvocation
 	if json.Unmarshal([]byte(os.Getenv("ROUTERVPN_NODE_CHILD_INVOCATION")), &invocation) != nil {
@@ -359,13 +395,10 @@ func TestRouterVPNLinuxNodeControlWorker(t *testing.T) {
 	globalCtx = include.Context(service.ContextWithDefaultRegistry(context.Background()))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if scenario == "before-prepare" {
-		cancel()
-	}
-	if scenario != "captured-prepare" && scenario != "cancelled-after-admission" && scenario != "prepared-before-start" {
+	if scenario != "captured-prepare" && scenario != "cancelled-after-admission" && scenario != "prepared-before-start" && scenario != "before-prepare" && scenario != "cancelled-before-compile" {
 		var err error
-		if scenario == "before-prepare" {
-			err = routerVPNRunLinuxNodeControlled(ctx, invocation.Directory, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256,
+		if imported {
+			err = routerVPNRunLinuxImportedControlled(ctx, invocation.Directory, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256,
 				invocation.Transfer, 0, invocation.Options)
 		} else {
 			// Use the actual registered command and its argument bindings. No
@@ -381,11 +414,7 @@ func TestRouterVPNLinuxNodeControlWorker(t *testing.T) {
 				"--linux-parent-capture", invocation.Options.CaptureSHA256})
 			_, err = mainCommand.ExecuteC()
 		}
-		if scenario == "before-prepare" {
-			if err != nil {
-				t.Fatal("cancelled original command failed joined early retirement", err)
-			}
-		} else if err == nil {
+		if err == nil {
 			t.Fatal("generated command admitted its rejected original preparation", scenario)
 		}
 		return
@@ -424,9 +453,68 @@ func TestRouterVPNLinuxNodeControlWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer files.root.Close()
-	policy, err := owner.compile(ctx, files, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, invocation.Transfer, 0)
-	if err != nil {
-		t.Fatal(err)
+	if scenario == "cancelled-before-compile" {
+		cancel()
+		if imported {
+			policy, err := owner.compileImported(ctx, files, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, invocation.Transfer, 0)
+			if err == nil || policy != nil {
+				t.Fatal("cancelled original caller compiled imported source")
+			}
+		} else {
+			policy, err := owner.compile(ctx, files, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, invocation.Transfer, 0)
+			if err == nil || policy != nil {
+				t.Fatal("cancelled original caller compiled node source")
+			}
+		}
+		if owner.policy != nil || owner.control != nil || owner.preparation != nil || owner.native != nil {
+			t.Fatal("cancelled compile acquired native preparation or control ownership")
+		}
+		return
+	}
+	var policy mobilemultihop.DesktopPhysicalPolicy
+	if imported {
+		captured, compileErr := owner.compileImported(ctx, files, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, invocation.Transfer, 0)
+		if compileErr != nil {
+			t.Fatal(compileErr)
+		}
+		original := captured.OriginalController()
+		defer func() {
+			if !owner.retired {
+				t.Error("imported constructor closed before parent ACK")
+				return
+			}
+			if err := original.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		policy = captured
+	} else {
+		captured, compileErr := owner.compile(ctx, files, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, invocation.Transfer, 0)
+		if compileErr != nil {
+			t.Fatal(compileErr)
+		}
+		policy = captured
+	}
+	if scenario == "before-prepare" {
+		// The original parent and sealed source now exist. Cancellation refuses
+		// native preparation but cannot replace their actual empty-source join.
+		cancel()
+		owner.native = &routerVPNExternalNative{cancel: func() {}}
+		retire, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stop()
+		if owner.retire(retire) == nil {
+			t.Fatal("unjoined empty source entered retirement")
+		}
+		if owner.preparation != nil || owner.native.box != nil {
+			t.Fatal("cancelled pre-prepare source created native state")
+		}
+		if err := owner.joinNative(retire); err != nil {
+			t.Fatal("original empty source did not join", err)
+		}
+		if err := owner.retire(retire); err != nil || !owner.acknowledged || !owner.retired {
+			t.Fatal("original empty source lost parent ACK", err)
+		}
+		return
 	}
 	graph, stopGraph := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(globalCtx)))
 	defer stopGraph()
@@ -445,7 +533,12 @@ func TestRouterVPNLinuxNodeControlWorker(t *testing.T) {
 	}
 	defer instance.Close()
 	owner.native = &routerVPNExternalNative{cancel: stopGraph, box: instance}
-	owner.preparation, err = instance.RouterVPNDesktopLinuxNodePreparePhysicalOwned(policy)
+	switch captured := policy.(type) {
+	case *mobilemultihop.DesktopNodePolicy:
+		owner.preparation, err = instance.RouterVPNDesktopLinuxNodePreparePhysicalOwned(captured)
+	case *mobilemultihop.DesktopImportedPolicy:
+		owner.preparation, err = instance.RouterVPNDesktopLinuxImportedPreparePhysicalOwned(captured)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -546,9 +639,17 @@ func TestDesktopLinuxGuardianKernelNodeChildControl(t *testing.T) {
 			t.Errorf("owned route cleanup: %v: %s", err, output)
 		}
 	})
-	for _, scenario := range []string{"captured-prepare", "cancelled-after-admission", "prepared-before-start", "baseline-refused", "admission-refused", "before-prepare", "changed-config", "changed-selection", "bootstrap-refused", "foreign-image"} {
+	cases := []string{"captured-prepare", "cancelled-after-admission", "prepared-before-start", "baseline-refused", "admission-refused", "before-prepare", "cancelled-before-compile", "changed-config", "changed-selection", "bootstrap-refused", "foreign-image"}
+	for _, scenario := range append(append([]string(nil), cases...), func() []string {
+		var result []string
+		for _, name := range cases {
+			result = append(result, "imported/"+name)
+		}
+		return result
+	}()...) {
 		t.Run(scenario, func(t *testing.T) {
 			owner, bindErr := linuxStartChildControl(t, scenario)
+			scenario = strings.TrimPrefix(scenario, "imported/")
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			selection := owner.invocation.Selection
@@ -589,7 +690,7 @@ func TestDesktopLinuxGuardianKernelNodeChildControl(t *testing.T) {
 					}
 					return nil
 				})
-				if scenario == "changed-config" || scenario == "changed-selection" {
+				if scenario == "changed-config" || scenario == "changed-selection" || scenario == "cancelled-before-compile" {
 					if err == nil || created != 0 || admitted != 0 {
 						t.Fatal("changed private graph or selection reached original native creation", err)
 					}

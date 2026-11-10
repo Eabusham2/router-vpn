@@ -17,6 +17,8 @@ def completed():
 
 class LinuxNodeChildControlRunner(unittest.TestCase):
     def test_complete_actual_verdict_is_accepted(self):
+        self.assertEqual(len(RUNNER.CASES), 22)
+        self.assertEqual(sum(case.startswith("imported/") for case in RUNNER.CASES), 11)
         RUNNER.check_verdict("\n".join(completed()))
 
     def test_every_original_boundary_is_required(self):

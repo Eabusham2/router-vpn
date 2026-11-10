@@ -286,3 +286,100 @@ func TestRouterVPNDesktopNodePhysicalCommandImportedExclusiveFamily(t *testing.T
 		})
 	}
 }
+
+func desktopLinuxImportedCommandOriginal(t *testing.T) *mobilemultihop.Controller {
+	t.Helper()
+	final, err := desktopNodeCommandShadowsocksOriginal(t, "").LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var input struct {
+		Mode    string `json:"mode"`
+		Files   string `json:"files"`
+		Profile string `json:"profile_json"`
+		Start   string `json:"start"`
+		DNS     string `json:"dns_bootstrap"`
+	}
+	if json.Unmarshal([]byte(final), &input) != nil {
+		t.Fatal("lost paired final")
+	}
+	key := func(value string) string { return base64.StdEncoding.EncodeToString([]byte(strings.Repeat(value, 32))) }
+	entry := map[string]any{
+		"inbounds":  []any{map[string]any{"type": "tun", "tag": "tun-in", "address": []string{"172.29.93.1/30", "fd29:93::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}},
+		"outbounds": []any{},
+		"endpoints": []any{map[string]any{"type": "wireguard", "tag": "custom-exit", "address": []string{"10.78.0.2/32", "fd78:78::2/128"}, "private_key": key("d"), "mtu": 1280,
+			"peers": []any{map[string]any{"address": "192.168.51.7", "port": 51820, "public_key": key("e"), "pre_shared_key": key("f"), "allowed_ips": []string{"0.0.0.0/0", "::/0"}, "persistent_keepalive_interval": 25}}}},
+		"route": map[string]any{"final": "custom-exit", "auto_detect_interface": true},
+	}
+	capture := map[string]any{"schema": 1, "exit_id": "captured-imported-entry", "protocol": "wireguard", "expected_public_ip": "203.0.113.88", "profile": map[string]any{
+		"id": "captured-imported-entry", "node_kind": "external", "dns_mode": "rescue", "mtu_policy": "auto", "ipv6_mode": "on", "home_lan_access": false,
+		"external": map[string]any{"protocol": "wireguard", "expected_public_ip": "203.0.113.88", "wireguard": map[string]any{
+			"endpoint": "192.168.51.7:51820", "private_key": key("d"), "peer_public_key": key("e"), "preshared_key": key("f"), "addresses": []string{"10.78.0.2/32", "fd78:78::2/128"},
+			"allowed_ips": []string{"0.0.0.0/0", "::/0"}, "persistent_keepalive_interval": 25, "mtu": 1280}}}}
+	encoded, _ := json.Marshal(entry)
+	captured, _ := json.Marshal(capture)
+	original, err := mobilemultihop.NewImportedEntry(string(encoded), string(captured), input.Mode, input.Files, input.Profile, input.Start, input.DNS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = original.Close() })
+	return original
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandImportedLinuxSource(t *testing.T) {
+	for _, fault := range []string{"valid", "source", "config", "entry", "final", "dns", "mtu", "target", "ordinary-source", "missing-source"} {
+		t.Run(fault, func(t *testing.T) {
+			original := desktopLinuxImportedCommandOriginal(t)
+			policy, err := mobilemultihop.NewDesktopImportedPolicyWithMTU(original, desktopExternalSession, "linux", 1280)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, err := original.ImportedLaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			config, source, staged, target, mtu := policy.Metadata().ConfigSHA256, policy.Metadata().SourceSHA256, policy.Config(), "linux", 1280
+			inputs := map[string]string{"imported-source.json": input, "sing-box.json": staged}
+			switch fault {
+			case "source":
+				source = strings.Repeat("f", 64)
+			case "config":
+				config = strings.Repeat("f", 64)
+			case "entry":
+				inputs["imported-source.json"] = strings.Replace(input, "192.168.51.7", "192.168.51.8", 1)
+			case "final":
+				inputs["imported-source.json"] = strings.Replace(input, "192.0.2.44", "192.0.2.45", 1)
+			case "dns":
+				inputs["sing-box.json"] = staged + " "
+			case "mtu":
+				mtu = 1281
+			case "target":
+				target = "windows"
+			case "ordinary-source":
+				inputs["imported-source.json"], _ = desktopNodeCommandShadowsocksOriginal(t, "").LaunchInput()
+			case "missing-source":
+				delete(inputs, "imported-source.json")
+			}
+			files := desktopImportedCommandFiles(t, inputs)
+			actual, err := routerVPNImportedCommandPhysicalTarget(files, desktopExternalSession, config, source, mtu, target)
+			if fault != "valid" {
+				if err == nil || actual != nil {
+					t.Fatal("Linux imported parser adopted changed original or family", fault)
+				}
+				return
+			}
+			if err != nil || actual == nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(actual.Metadata(), policy.Metadata()) || actual.Config() != policy.Config() {
+				t.Fatal("Linux imported parser changed complete original source")
+			}
+			if original == actual.OriginalController() {
+				t.Fatal("child parser borrowed parent constructor")
+			}
+			if err := actual.OriginalController().Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

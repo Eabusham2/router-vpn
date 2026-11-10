@@ -65,3 +65,41 @@ control fail because a nil pointer became a retained nonnil interface. The
 temporary harness was removed. Existing routing-runner checks and the exact
 seventeen-verdict imported inventory controls passed; missing, skipped and
 duplicate native results remain rejected.
+
+## Authenticated imported child and final cover
+
+The internal Linux imported child coordinator uses the same original inherited
+FD 3 channel, FD 4 private directory and FD 5 image as the ordinary Linux child.
+It authenticates those participants before reading `imported-source.json`,
+recompiles its canonical imported constructor, compares the complete staged
+configuration and binds both the command capture and control-selection hashes.
+An ordinary `node-source.json` cannot fill the imported slot. This coordinator
+remains unreachable from the public imported dispatcher until the Linux parent
+host integration is ready.
+
+Imported Linux cover is derived from the final service in that sealed graph.
+The final node identity, private API, token, rate, packet/proof routing and source
+digest remain captured. Readiness checks the selected final DNS, retained TUN,
+MTU, transfer and exact cover count/digest. The child starts the actual captured
+cover worker and retains its health in the existing heartbeat guard. It uses
+the existing DNS query/cancel/result and MTU command loop.
+
+The imported compiler remains alive until actual native source join and the
+parent's retirement acknowledgment. Failed join or acknowledgment retains the
+constructor and reports failure; neither cancellation nor an empty source
+substitutes for that sequence.
+
+The inherited-child gate includes both ordinary and imported variants of its
+eleven boundaries: captured preparation, cancellation after admission, a
+prepared but unstarted source, refused baseline, refused admission, cancellation
+after sealed compile but before preparation, cancellation before compile,
+changed configuration, changed selection, refused bootstrap and foreign image.
+The pre-prepare fixture now establishes its real bootstrap and sealed control
+before cancellation; it explicitly rejects retirement before empty-source join.
+The earlier cancellation case requires compile rejection with no policy,
+control, preparation or native owner. Production cancellation checks are unchanged.
+
+The source cleanup harness executes the shipping join/retire functions and
+existing cleanup loop with modeled callbacks. It rejects a causal mutation that
+allows retirement before join. The native namespace cases still require a
+matching privileged Linux runner; source/model results cannot replace them.

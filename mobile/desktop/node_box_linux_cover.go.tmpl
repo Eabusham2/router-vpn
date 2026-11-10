@@ -17,7 +17,7 @@ import (
 // saved preference into proof. The original Box remains their joined lifetime.
 type RouterVPNDesktopLinuxNodeCover struct {
 	instance *Box
-	policy   *mobilemultihop.DesktopNodePolicy
+	policy   mobilemultihop.DesktopPhysicalPolicy
 	physical *RouterVPNDesktopNodePhysical
 	options  []mobilemultihop.DesktopNodeCoverService
 	services []*performance.Service
@@ -129,8 +129,24 @@ func (owner *RouterVPNDesktopLinuxNodeCover) close() (failure error) {
 // proof and bounded UDP confirmation. Parent routed proof and Connected still
 // follow; startup cancellation invalidates and joins these exact services.
 func (s *Box) RouterVPNDesktopLinuxNodeActivateCover(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy,
+	physical *RouterVPNDesktopNodePhysical) (*RouterVPNDesktopLinuxNodeCover, error) {
+	if !routerVPNDesktopLinuxNodeLifecycleAvailable(policy) {
+		return nil, errors.New("Linux Router cover has no original admitted node policy")
+	}
+	return s.routerVPNDesktopLinuxActivateCover(ctx, policy, physical)
+}
+
+func (s *Box) RouterVPNDesktopLinuxImportedActivateCover(ctx context.Context, policy *mobilemultihop.DesktopImportedPolicy,
+	physical *RouterVPNDesktopNodePhysical) (*RouterVPNDesktopLinuxNodeCover, error) {
+	if !routerVPNDesktopLinuxImportedLifecycleAvailable(policy) {
+		return nil, errors.New("Linux imported cover has no original admitted pair")
+	}
+	return s.routerVPNDesktopLinuxActivateCover(ctx, policy, physical)
+}
+
+func (s *Box) routerVPNDesktopLinuxActivateCover(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy,
 	physical *RouterVPNDesktopNodePhysical) (active *RouterVPNDesktopLinuxNodeCover, failure error) {
-	if ctx == nil || ctx.Err() != nil || !routerVPNDesktopLinuxNodeLifecycleAvailable(policy) || physical == nil ||
+	if ctx == nil || ctx.Err() != nil || policy == nil || policy.Validate() != nil || physical == nil ||
 		physical.instance != s || physical.policy != policy || !physical.Current() {
 		return nil, errors.New("Linux Router cover activation lost its original proved native path")
 	}
@@ -138,7 +154,7 @@ func (s *Box) RouterVPNDesktopLinuxNodeActivateCover(ctx context.Context, policy
 	if err != nil || physical.network != network {
 		return nil, errors.Join(err, errors.New("Linux Router cover changed its complete native Box policy"))
 	}
-	options, digest, err := policy.CoverPolicy()
+	options, digest, err := mobilemultihop.ReadDesktopPhysicalCoverPolicy(policy)
 	if err != nil {
 		return nil, err
 	}

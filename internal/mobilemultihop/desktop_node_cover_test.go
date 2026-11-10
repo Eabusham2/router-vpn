@@ -105,3 +105,78 @@ func TestDesktopNodeLinuxReadinessRequiresCapturedCoverActivation(t *testing.T) 
 		})
 	}
 }
+
+func desktopImportedLinuxCoverFixture(t *testing.T, enabled bool, rate int) *DesktopImportedPolicy {
+	t.Helper()
+	source := importedPacketFixture(t, "wireguard", "shadowsocks", "", "")
+	profile := externalTestRead(t, source[4])
+	profile["daita_enabled"], profile["daita_rate_kbps"], profile["daita_host"] = enabled, rate, "10.77.0.1"
+	source[4] = externalTestJSON(t, profile)
+	original := desktopImportedOriginal(t, source, "always")
+	t.Cleanup(func() { _ = original.Close() })
+	policy, err := NewDesktopImportedPolicy(original, desktopNodeTestSession, "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
+
+func TestDesktopImportedLinuxCoverRetainsFinalAndReadiness(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "off", true: "on"}[enabled], func(t *testing.T) {
+			policy := desktopImportedLinuxCoverFixture(t, enabled, 64)
+			options, digest, err := ReadDesktopPhysicalCoverPolicy(policy)
+			if err != nil || (len(options) == 1) != enabled || (digest != "") != enabled {
+				t.Fatal("imported final lost its selected cover worker", err)
+			}
+			if enabled && (options[0].Options.NodeID != policy.Metadata().ExitNodeID || options[0].Options.API != "http://10.77.0.1:8787" || options[0].Options.RateKbps != 64) {
+				t.Fatal("imported cover adopted its entry or another paired final")
+			}
+			before := append([]DesktopNodeCoverService(nil), options...)
+			if enabled {
+				options[0].Options.NodeID = strings.Repeat("f", 64)
+			}
+			again, same, err := policy.CoverPolicy()
+			if err != nil || same != digest || !reflect.DeepEqual(before, again) {
+				t.Fatal("returned imported cover mutated sealed source", err)
+			}
+			meta := policy.Metadata()
+			capture, err := policy.Capture()
+			if err != nil {
+				t.Fatal(err)
+			}
+			transfer := strings.Repeat("a", 64)
+			record := DesktopNodeReadyRecord{Schema: 1, Kind: "routervpn-node-ready-v1", SessionID: meta.SessionID,
+				SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, TransferSHA256: transfer,
+				DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256, InterfaceName: "router-vpn", InterfaceIndex: 771,
+				MTU: capture.ConfiguredMTU, ProvedAt: 1793366400123, DNSMilliseconds: 1.25, CoverServices: len(again), CoverSHA256: digest}
+			if record.Validate(policy, transfer) != nil {
+				t.Fatal("original imported readiness rejected")
+			}
+			for _, fault := range []string{"cover-count", "cover-digest", "source", "final-dns", "transfer", "wrong-final-policy", "unsealed"} {
+				t.Run(fault, func(t *testing.T) {
+					changed, selected := record, policy
+					switch fault {
+					case "cover-count":
+						changed.CoverServices++
+					case "cover-digest":
+						changed.CoverSHA256 = strings.Repeat("b", 64)
+					case "source":
+						changed.SourceSHA256 = policy.Metadata().OriginalSourceSHA256
+					case "final-dns":
+						changed.DNSConfigSHA256 = strings.Repeat("b", 64)
+					case "transfer":
+						changed.TransferSHA256 = strings.Repeat("b", 64)
+					case "wrong-final-policy":
+						selected = desktopImportedLinuxCoverFixture(t, !enabled, 192)
+					case "unsealed":
+						selected = &DesktopImportedPolicy{config: policy.Config(), metadata: policy.Metadata()}
+					}
+					if changed.Validate(selected, transfer) == nil {
+						t.Fatal("imported ready adopted absent or foreign final proof")
+					}
+				})
+			}
+		})
+	}
+}

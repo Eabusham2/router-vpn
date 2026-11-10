@@ -29,7 +29,16 @@ func routerVPNRunImportedMTUWithJournal(parent context.Context, directory, sessi
 // parsing. The public digest constrains the exact derived source; it cannot
 // create a policy, admit a socket or acknowledge a journal transaction.
 func routerVPNImportedCommandPhysicalWithMTU(files *routerVPNExternalFiles, session, config, source string, restoredMTU int) (_ *mobilemultihop.DesktopImportedPolicy, failure error) {
-	if runtime.GOOS != "windows" || files == nil || !routerVPNExternalSource.MatchString(source) {
+	if runtime.GOOS != "windows" {
+		return nil, routerVPNExternalFailure
+	}
+	return routerVPNImportedCommandPhysicalTarget(files, session, config, source, restoredMTU, "windows")
+}
+
+// The platform controller authenticates its original inherited participants
+// before invoking this parser. A policy or digest alone grants no admission.
+func routerVPNImportedCommandPhysicalTarget(files *routerVPNExternalFiles, session, config, source string, restoredMTU int, target string) (_ *mobilemultihop.DesktopImportedPolicy, failure error) {
+	if files == nil || !routerVPNExternalSource.MatchString(source) || (target != "windows" && target != "linux") {
 		return nil, routerVPNExternalFailure
 	}
 	raw, err := files.read("imported-source.json", mobilemultihop.ImportedLaunchInputLimit)
@@ -48,7 +57,7 @@ func routerVPNImportedCommandPhysicalWithMTU(files *routerVPNExternalFiles, sess
 			_ = original.Close()
 		}
 	}()
-	policy, err := mobilemultihop.NewDesktopImportedPolicyWithMTU(original, session, runtime.GOOS, restoredMTU)
+	policy, err := mobilemultihop.NewDesktopImportedPolicyWithMTU(original, session, target, restoredMTU)
 	if err != nil {
 		return nil, routerVPNExternalFailure
 	}

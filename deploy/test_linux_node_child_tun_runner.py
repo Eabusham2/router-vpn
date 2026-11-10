@@ -434,6 +434,16 @@ func(f *phaseFiles)publish(name string,_ any)error{if name!="stopped.json"{panic
         fixture += '\n'.join(methods)
         fixture += '\nfunc originalCleanup(control *routerVPNLinuxNodeControl, files *phaseFiles, incoming error)(failure error){\n failure=incoming\n var stopped atomic.Bool\n cancel:=func(){}\n session,config:="original-session","original-source"\n' + cleanup + '\n return failure\n}\n'
         fixture += r"""
+func TestEmptySourceRetirementRequiresOriginalJoin(t *testing.T){
+ synctest.Test(t,func(t *testing.T){
+  s:=&trace{fault:"current",started:time.Now()}
+  owner:=&routerVPNLinuxNodeControl{native:&phaseNative{s},control:&phaseControl{s}}
+  ctx,cancel:=context.WithTimeout(context.Background(),15*time.Second);defer cancel()
+  if owner.retire(ctx)==nil||s.exchange!=0{t.Fatal("unjoined empty source entered retirement")}
+  if err:=owner.joinNative(ctx);err!=nil{t.Fatal(err)}
+  if err:=owner.retire(ctx);err!=nil||!owner.joined||!owner.acknowledged||!owner.retired||s.native!=1||s.exchange!=1||s.source!=0||s.receipt!=0{t.Fatal("empty source lost its actual join and original ACK",err)}
+ })
+}
 func TestOriginalCleanupPhase(t *testing.T){
  for _,phase:=range []string{"Box close","source close","joined-source receipt","retirement exchange","retained protection close","retry","current"}{t.Run(phase,func(t *testing.T){synctest.Test(t,func(t *testing.T){
   s:=&trace{fault:phase,started:time.Now()}
@@ -469,6 +479,13 @@ func TestOriginalCleanupPhase(t *testing.T){
                           'retained_protection_close', 'retry', 'current'):
                 self.assertEqual(result.stdout.count('--- PASS: TestOriginalCleanupPhase/'+phase+' '), 1, result.stdout)
             self.assertNotIn('--- SKIP:', result.stdout)
+            mutant = fixture.replace('owner.control == nil || !owner.joined ||', 'owner.control == nil || false ||', 1)
+            self.assertNotEqual(mutant, fixture)
+            (root/'phase_test.go').write_text(mutant)
+            rejected = subprocess.run(['go', 'test', '-race', '-count=1', '-run=^TestEmptySourceRetirementRequiresOriginalJoin$', '.'],
+                                      cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            self.assertIn('unjoined empty source entered retirement', rejected.stdout)
 
 
 if __name__ == '__main__':

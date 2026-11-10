@@ -45,11 +45,7 @@ func (r DesktopNodeReadyRecord) Validate(policy DesktopPhysicalPolicy, transfer 
 	// targets cannot claim this Linux proof merely by adding receipt fields.
 	coverCount, coverSHA256 := 0, ""
 	if meta.TargetOS == "linux" {
-		node, ok := policy.(*DesktopNodePolicy)
-		if !ok || meta.Kind != "node" {
-			return errors.New("native Router readiness has another Linux policy family")
-		}
-		cover, digest, err := node.CoverPolicy()
+		cover, digest, err := ReadDesktopPhysicalCoverPolicy(policy)
 		if err != nil {
 			return err
 		}

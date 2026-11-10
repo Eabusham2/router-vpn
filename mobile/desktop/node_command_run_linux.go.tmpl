@@ -11,6 +11,7 @@ import (
 	"time"
 
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/option"
 	SJ "github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
@@ -21,7 +22,20 @@ import (
 // created parent's descriptors, exact sealed policy and native ACKs; no flag
 // can substitute a file acknowledgment or construct those capabilities.
 func routerVPNRunLinuxNodeControlled(parent context.Context, directory, session, config, source, transfer string,
-	mtu int, options routerVPNNodeLinuxParentOptions) (failure error) {
+	mtu int, options routerVPNNodeLinuxParentOptions) error {
+	return routerVPNRunLinuxPhysicalControlled(parent, directory, session, config, source, transfer, mtu, options, false)
+}
+
+// The public imported dispatcher stays closed until the complete Linux parent
+// path is integrated. This child entry point still requires the actual inherited
+// descriptors and authenticated selection before any private source read.
+func routerVPNRunLinuxImportedControlled(parent context.Context, directory, session, config, source, transfer string,
+	mtu int, options routerVPNNodeLinuxParentOptions) error {
+	return routerVPNRunLinuxPhysicalControlled(parent, directory, session, config, source, transfer, mtu, options, true)
+}
+
+func routerVPNRunLinuxPhysicalControlled(parent context.Context, directory, session, config, source, transfer string,
+	mtu int, options routerVPNNodeLinuxParentOptions, imported bool) (failure error) {
 	if parent == nil {
 		return routerVPNExternalFailure
 	}
@@ -44,9 +58,32 @@ func routerVPNRunLinuxNodeControlled(parent context.Context, directory, session,
 	defer files.root.Close()
 	ctx, stopPreparation := context.WithTimeout(parent, routerVPNNodeAdmissionLimit)
 	defer stopPreparation()
-	policy, err := control.compile(ctx, files, session, source, config, transfer, mtu)
-	if err != nil {
-		return err
+	var policy mobilemultihop.DesktopPhysicalPolicy
+	if imported {
+		captured, compileErr := control.compileImported(ctx, files, session, source, config, transfer, mtu)
+		if compileErr != nil {
+			return compileErr
+		}
+		original := captured.OriginalController()
+		if original == nil {
+			return routerVPNExternalFailure
+		}
+		// This defer precedes native cleanup registration: the constructor stays
+		// live through original source join and parent retirement acknowledgment.
+		defer func() {
+			if !control.retired {
+				failure = errors.Join(failure, errors.New("imported constructor retains unacknowledged native retirement"))
+				return
+			}
+			failure = errors.Join(failure, original.Close())
+		}()
+		policy = captured
+	} else {
+		captured, compileErr := control.compile(ctx, files, session, source, config, transfer, mtu)
+		if compileErr != nil {
+			return compileErr
+		}
+		policy = captured
 	}
 	lifetime := globalCtx
 	if lifetime == nil {
@@ -96,7 +133,7 @@ func routerVPNRunLinuxNodeControlled(parent context.Context, directory, session,
 		}{routerVPNExternalStop{Schema: 1, Session: session, SourceSHA256: config}, true}
 		failure = errors.Join(failure, files.publish("stopped.json", closed))
 	}()
-	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-protection-retired.json", "stopped.json", "node-protection-transfer.json"} {
+	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-protection-retired.json", "stopped.json", "node-protection-transfer.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json"} {
 		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 			return routerVPNExternalFailure
 		}
@@ -152,7 +189,22 @@ func routerVPNRunLinuxNodeControlled(parent context.Context, directory, session,
 		return err
 	}
 	native.box = instance
-	control.preparation, err = instance.RouterVPNDesktopLinuxNodePreparePhysicalOwned(policy)
+	switch original := policy.(type) {
+	case *mobilemultihop.DesktopNodePolicy:
+		prepared, prepareErr := instance.RouterVPNDesktopLinuxNodePreparePhysicalOwned(original)
+		if prepared != nil {
+			control.preparation = prepared
+		}
+		err = prepareErr
+	case *mobilemultihop.DesktopImportedPolicy:
+		prepared, prepareErr := instance.RouterVPNDesktopLinuxImportedPreparePhysicalOwned(original)
+		if prepared != nil {
+			control.preparation = prepared
+		}
+		err = prepareErr
+	default:
+		return routerVPNExternalFailure
+	}
 	if err != nil {
 		return err
 	}
@@ -167,13 +219,25 @@ func routerVPNRunLinuxNodeControlled(parent context.Context, directory, session,
 	}
 	stopPreparation()
 	proof, stopProof := context.WithTimeout(graph, routerVPNNodeAdmissionLimit)
-	physical, err := instance.RouterVPNDesktopLinuxNodeActivatePhysical(proof, policy)
+	var physical *box.RouterVPNDesktopNodePhysical
+	switch original := policy.(type) {
+	case *mobilemultihop.DesktopNodePolicy:
+		physical, err = instance.RouterVPNDesktopLinuxNodeActivatePhysical(proof, original)
+	case *mobilemultihop.DesktopImportedPolicy:
+		physical, err = instance.RouterVPNDesktopLinuxImportedActivatePhysical(proof, original)
+	}
 	stopProof()
 	if err != nil {
 		return err
 	}
 	activation, stopActivation := context.WithTimeout(graph, routerVPNNodeAdmissionLimit)
-	cover, err := instance.RouterVPNDesktopLinuxNodeActivateCover(activation, policy, physical)
+	var cover *box.RouterVPNDesktopLinuxNodeCover
+	switch original := policy.(type) {
+	case *mobilemultihop.DesktopNodePolicy:
+		cover, err = instance.RouterVPNDesktopLinuxNodeActivateCover(activation, original, physical)
+	case *mobilemultihop.DesktopImportedPolicy:
+		cover, err = instance.RouterVPNDesktopLinuxImportedActivateCover(activation, original, physical)
+	}
 	stopActivation()
 	if err != nil {
 		return err

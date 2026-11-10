@@ -30,7 +30,8 @@ NODE = load("linux_child_control_sources", "test_desktop_node_physical.py")
 GUARD = load("linux_child_control_namespace", "test_desktop_linux_guardian.py")
 TAGS = (*NODE.TAGS, "routervpn_linux_node_control")
 CASES = ("captured-prepare", "cancelled-after-admission", "prepared-before-start", "baseline-refused",
-         "admission-refused", "before-prepare", "changed-config", "changed-selection", "bootstrap-refused", "foreign-image")
+         "admission-refused", "before-prepare", "cancelled-before-compile", "changed-config", "changed-selection", "bootstrap-refused", "foreign-image")
+CASES += tuple("imported/" + case for case in CASES)
 RUNNERS = ("test_linux_node_child_control.py", "test_linux_node_child_control_runner.py",
            "test_desktop_node_physical.py", "test_desktop_linux_guardian.py", "test_desktop_socket_uid.py",
            "prepare-desktop-external.py", "build-native-runtime.py")
@@ -42,7 +43,9 @@ def checked_sources(source):
         "cmd/sing-box/routervpn_mtu_node.go", "cmd/sing-box/routervpn_node_command_control.go",
         "cmd/sing-box/routervpn_node_command_control_linux.go", "cmd/sing-box/routervpn_node_command_control_other.go",
         "cmd/sing-box/routervpn_node_command_run_linux.go", "cmd/sing-box/routervpn_node_command_control_linux_native_test.go",
-        "cmd/sing-box/routervpn_node_command_ready.go", "routervpn_desktop_node_box_linux_lifecycle.go",
+        "cmd/sing-box/routervpn_node_command_ready.go", "cmd/sing-box/routervpn_node_command_imported.go",
+        "routervpn_desktop_node_box_imported_linux_lifecycle.go", "routervpn_desktop_node_box_linux_cover.go",
+        "routervpn_desktop_node_box_linux_lifecycle.go",
         "routervpn/desktoppt/node_linux_lifecycle.go", "routervpn/desktoppt/node_linux_source_join.go",
         "routervpn/linuxprocess/bootstrap_linux.go", "routervpn/linuxprocess/channel_linux.go",
         "routervpn/linuxprotection/node_control_linux.go", "routervpn/mobiletor/desktop_socket_linux_node_baseline.go",

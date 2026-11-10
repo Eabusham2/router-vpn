@@ -1301,7 +1301,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          ("TestRouterVPNShadowsocksCompleteCiphertextPacket", "TestRouterVPNShadowsocksPacketWrongKey")),
         ("command", "./cmd/sing-box", "^TestRouterVPNDesktopNodePhysicalCommand",
          tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "Hysteria2CompleteStartSource", "XrayCompleteStartSource", "NaiveCompleteStartSource", "CompositeCompleteStartSource", "RestoredMTU", "TransferInput", "RetirementReceipt", "ReadyRequiresFreshDNS", "ReadyRequiresCapturedCover", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionExactStop", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "JournalBeforePrivateInputs", "PublicRequiresJournal")) +
-         tuple(IMPORTED_COMMAND_ROOT + name for name in ("SourceBoundary", "RestoredMTU", "JournalBeforePrivateInputs", "ExclusiveFamily")) +
+         tuple(IMPORTED_COMMAND_ROOT + name for name in ("SourceBoundary", "RestoredMTU", "JournalBeforePrivateInputs", "ExclusiveFamily", "LinuxSource")) +
+         tuple(IMPORTED_COMMAND_ROOT + "LinuxSource/" + fault for fault in ("valid", "source", "config", "entry", "final", "dns", "mtu", "target", "ordinary-source", "missing-source")) +
          tuple(IMPORTED_COMMAND_ROOT + "ExclusiveFamily/" + fault for fault in ("both-flags", "missing-journal", "public-missing-journal")) +
          (IMPORTED_COMMAND_CASES if windows else ())),
         ("factory", "./routervpn/desktoppt", "^TestRouterVPNNodePhysical" if windows else "^TestRouterVPNNode(Physical|LinuxLifecycle)",
