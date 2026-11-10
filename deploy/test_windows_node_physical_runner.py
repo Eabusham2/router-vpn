@@ -1258,14 +1258,12 @@ class OpenVPNWitnessCompilerScope(unittest.TestCase):
         original = self.helper.PROOF.read_text()
         actual = self.helper.proof_source(original)
         field = "\trouterVPNTestOpenVPNProofRead atomic.Pointer[func(string, adapter.Outbound, nativeopenvpn.RemoteReceipt, error)]\n"
-        old = "\treceipt, err := endpoint.RouterVPNConnectedRemote()\n\tcurrent, exists := e.box.outbound.Outbound(tag)\n"
+        old = "\treceipt, err := endpoint.RouterVPNConnectedRemoteContext(ctx)\n"
         observation = (
             "\tobserver := e.routerVPNTestOpenVPNProofRead.Load()\n"
-            "\treceipt, err := endpoint.RouterVPNConnectedRemote()\n"
-            "\tcurrent, exists := e.box.outbound.Outbound(tag)\n"
+            "\treceipt, err := endpoint.RouterVPNConnectedRemoteContext(ctx)\n"
             "\tif observer != nil && e.routerVPNTestOpenVPNProofRead.Load() == observer &&\n"
-            "\t\texists && current == owner && e.Identity() != \"\" &&\n"
-            "\t\t(tag != mobilemultihop.LocalTag || e.Selected() == tag) {\n"
+            "\t\tctx.Err() == nil && e.routes[tag] == owner {\n"
             "\t\t(*observer)(tag, owner, receipt, err)\n"
             "\t}\n")
         expected = original.replace("type routerVPNExternalNativeEngine struct {\n", "type routerVPNExternalNativeEngine struct {\n" + field, 1).replace(old, observation, 1)

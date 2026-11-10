@@ -64,14 +64,12 @@ def proof_source(raw, mutation=None):
     raw = replace(raw, "type routerVPNExternalNativeEngine struct {\n",
                   "type routerVPNExternalNativeEngine struct {\n"
                   "\trouterVPNTestOpenVPNProofRead atomic.Pointer[func(string, adapter.Outbound, nativeopenvpn.RemoteReceipt, error)]\n")
-    old = "\treceipt, err := endpoint.RouterVPNConnectedRemote()\n\tcurrent, exists := e.box.outbound.Outbound(tag)\n"
+    old = "\treceipt, err := endpoint.RouterVPNConnectedRemoteContext(ctx)\n"
     new = (
         "\tobserver := e.routerVPNTestOpenVPNProofRead.Load()\n"
-        "\treceipt, err := endpoint.RouterVPNConnectedRemote()\n"
-        "\tcurrent, exists := e.box.outbound.Outbound(tag)\n"
+        "\treceipt, err := endpoint.RouterVPNConnectedRemoteContext(ctx)\n"
         "\tif observer != nil && e.routerVPNTestOpenVPNProofRead.Load() == observer &&\n"
-        "\t\texists && current == owner && e.Identity() != \"\" &&\n"
-        "\t\t(tag != mobilemultihop.LocalTag || e.Selected() == tag) {\n"
+        "\t\tctx.Err() == nil && e.routes[tag] == owner {\n"
         "\t\t(*observer)(tag, owner, receipt, err)\n"
         "\t}\n")
     if mutation == "missing-proof-read":
