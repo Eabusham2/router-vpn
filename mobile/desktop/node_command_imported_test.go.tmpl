@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,14 +17,44 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 )
 
+func desktopNodeCommandShadowsocksOriginal(t *testing.T, layer string) *mobilemultihop.NodeProfile {
+	t.Helper()
+	input, err := desktopNodeCommandOriginalWithLayer(t, layer).LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source struct {
+		Profile string `json:"profile_json"`
+	}
+	if json.Unmarshal([]byte(input), &source) != nil || source.Profile == "" {
+		t.Fatal("Shadowsocks command lost its exact original node policy")
+	}
+	graph, _ := json.Marshal(map[string]any{
+		"inbounds": []any{map[string]any{"type": "tun", "auto_route": true, "strict_route": true}},
+		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.44", "server_port": 8388,
+			"method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))}},
+		"route": map[string]any{"final": "proxy"},
+	})
+	files, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(graph)})
+	// Shadowsocks is its own selected AES source; a separate Start owner is invalid.
+	original, err := mobilemultihop.NewNodeProfile("shadowsocks", string(files), source.Profile, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return original
+}
+
 func desktopImportedCommandOriginal(t *testing.T, mode, layer string, autoMTU bool) *mobilemultihop.Controller {
 	t.Helper()
-	final := desktopNodeCommandOriginalWithLayer(t, layer)
-	if mode == "hysteria2" {
+	var final *mobilemultihop.NodeProfile
+	switch mode {
+	case "shadowsocks":
+		final = desktopNodeCommandShadowsocksOriginal(t, layer)
+	case "hysteria2":
 		final = desktopNodeCommandHysteria2Original(t, layer)
-	} else if mode == "reality-vision" {
+	case "reality-vision":
 		final = desktopNodeCommandXrayOriginal(t, mode, layer)
-	} else if mode != "shadowsocks" {
+	default:
 		t.Fatal("imported command fixture has another final protocol")
 	}
 	launch, err := final.LaunchInput()

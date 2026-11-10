@@ -157,7 +157,9 @@ SHARED_TESTS = (
     "TestDesktopProtectionOffContextGuardsActualPublication",
 )
 IMPORTED_CASES = {
-    "TestDesktopImportedOwnedSourceAndNativeDispatch": ("shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn"),
+    "TestDesktopImportedOwnedSourceAndNativeDispatch": tuple(final+"/"+protocol
+        for final in ("reality-vision", "naive-h2")
+        for protocol in ("shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "wireguard", "amneziawg", "openvpn")),
     "TestDesktopImportedOwnedDynamicRelayRequiresTypedHost": (),
     "TestDesktopImportedOwnedCommandRejectsMixedFamilies": ("both-sources", "missing-source", "unbounded-source", "other-directory", "external-command", "duplicate-source", "relative-directory"),
     "TestDesktopImportedOwnedSuccessionRetainsLatestPredecessor": ("on-connect", "always"),
@@ -545,7 +547,7 @@ def mutants():
                      "basePreference, err := (*logicalBasePreferenceTransaction)(nil), error(nil)\n\t_ = operation")
     late_base = once(late_base, "\tfallbackUsed := used.Base !=", "\tif err := a.persistBasePreference(q.Base); err != nil {\n\t\thttp.Error(w, err.Error(), http.StatusInternalServerError)\n\t\treturn\n\t}\n\tfallbackUsed := used.Base !=")
     return (
-        (multihop_file, "protected-imported-legacy-fallback", "TestDesktopImportedOwnedSourceAndNativeDispatch/shadowsocks",
+        (multihop_file, "protected-imported-legacy-fallback", "TestDesktopImportedOwnedSourceAndNativeDispatch/reality-vision/shadowsocks",
          "protected capture silently used a legacy helper",
          once(multihop, "if sel.Native.importedHost != nil {", "if false && sel.Native.importedHost != nil {")),
         (imported_file, "imported-derived-config-identity", "TestDesktopImportedOwnedDerivedConfigKeepsOriginalEnvelope/derived-digest",

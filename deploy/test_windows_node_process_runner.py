@@ -21,7 +21,7 @@ SPEC.loader.exec_module(GATE)
 class NodeProcessRunner(unittest.TestCase):
     def test_imported_parent_requires_real_dispatch_proofs_and_both_original_sources(self):
         self.assertEqual(len(GATE.IMPORTED_CASES), 13)
-        self.assertEqual(sum(map(len, GATE.IMPORTED_CASES.values())), 58)
+        self.assertEqual(sum(map(len, GATE.IMPORTED_CASES.values())), 66)
         for root, children in GATE.IMPORTED_CASES.items():
             self.assertIn(root, GATE.SHARED_TESTS)
             self.assertIn(root, GATE.EXPECTED)
