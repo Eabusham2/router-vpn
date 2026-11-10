@@ -25,19 +25,31 @@ func (n *NodeNetworkOwner) PrepareNodePhysicalPolicy(policy *mobilemultihop.Desk
 	})
 }
 
+// This typed entry point retains the imported constructor rather than parsing
+// its paired final as a NodeProfile. The Linux seal bounds the supported pair.
+func (n *NodeNetworkOwner) PrepareImportedLinuxPhysicalPolicy(policy *mobilemultihop.DesktopImportedPolicy) error {
+	return n.prepareNodePhysicalLinuxLifecycle(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+		owned, err := mobiletor.NewDesktopLinuxNodeSocketPolicy(ctx, capture, options)
+		if owned == nil {
+			return nil, err
+		}
+		return owned, err
+	})
+}
+
 // The constructor independently reads the exact installed nftables baseline
 // before a socket can be used. This adapter projects only the sealed original
-// NodeProfile into that constructor and retains partial creation on failure.
-// Public command/Box admission stays closed on Unix until the matching native
-// baseline, handoff, readiness and retirement contracts are integrated.
+// NodeProfile or imported entry/final policy into that constructor and retains
+// partial creation on failure.
+// Imported public command/application admission stays closed until its matching
+// parent, handoff, proof and retirement contracts are integrated.
 // Only construction of that privileged source is an executable test seam.
-func (n *NodeNetworkOwner) prepareNodePhysicalLinux(policy *mobilemultihop.DesktopNodePolicy,
+func (n *NodeNetworkOwner) prepareNodePhysicalLinux(policy mobilemultihop.DesktopPhysicalPolicy,
 	create func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error)) error {
-	if policy == nil || policy.Validate() != nil || create == nil {
+	if policy == nil || create == nil {
 		return errors.New("Linux Router node physical sockets lost their captured policy")
 	}
-	meta := policy.Metadata()
-	captured, err := policy.Capture()
+	_, meta, captured, err := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
 	if err != nil || meta.TargetOS != "linux" || !n.Matches(meta.SessionID, meta.SourceSHA256) {
 		return errors.New("Linux Router node physical sockets belong to another native target")
 	}

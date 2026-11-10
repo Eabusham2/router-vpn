@@ -10,19 +10,20 @@ import (
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
-// Router nodes and ordinary external graphs keep distinct sealed policy types.
+// Router nodes, imported entry/final pairs and ordinary external graphs retain
+// distinct sealed compiler products and their original pointer identities.
 // Their Linux native source admission, guardian and joined protection contract
 // is shared; the authenticated parent still owns succession and release.
 type NodeLinuxPhysicalPrepared = LinuxPhysicalPrepared
 type NodeLinuxPhysicalAdmission = LinuxPhysicalAdmission
 type NodeLinuxPhysicalBaseline = LinuxPhysicalBaseline
 
-func WithNodeLinuxPhysicalAdmission(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy,
+func WithNodeLinuxPhysicalAdmission(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy,
 	admit NodeLinuxPhysicalAdmission) (context.Context, error) {
 	return withLinuxPhysicalAdmission(ctx, linuxPhysicalPolicy{node: policy}, nil, admit)
 }
 
-func WithNodeLinuxPhysicalBaseline(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy,
+func WithNodeLinuxPhysicalBaseline(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy,
 	baseline NodeLinuxPhysicalBaseline, admit NodeLinuxPhysicalAdmission) (context.Context, error) {
 	if baseline == nil {
 		return nil, errors.New("Linux Router node baseline requires its original parent callback")
@@ -42,13 +43,12 @@ func (n *NodeNetworkOwner) linuxPhysicalSnapshot() linuxPhysicalNetworkSnapshot 
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	node, _ := n.policy.(*mobilemultihop.DesktopNodePolicy)
-	return linuxPhysicalNetworkSnapshot{policy: linuxPhysicalPolicy{node: node}, source: n.source, capture: n.brokerCapture(),
+	return linuxPhysicalNetworkSnapshot{policy: linuxPhysicalPolicy{node: n.policy}, source: n.source, capture: n.brokerCapture(),
 		ready: n.ready && n.sockets, retired: n.retired, closed: n.closed, joined: !n.ready && !n.sockets}
 }
 func (n *NodeNetworkOwner) linuxPhysicalAdmissionCurrent() bool { return n.SocketCurrent() }
 
-func (n *NodeNetworkOwner) prepareNodePhysicalLinuxLifecycle(policy *mobilemultihop.DesktopNodePolicy,
+func (n *NodeNetworkOwner) prepareNodePhysicalLinuxLifecycle(policy mobilemultihop.DesktopPhysicalPolicy,
 	create func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error)) error {
 	if n == nil {
 		return errors.New("Linux Router node admission has no native service")
@@ -58,20 +58,20 @@ func (n *NodeNetworkOwner) prepareNodePhysicalLinuxLifecycle(policy *mobilemulti
 	})
 }
 
-func (n *NodeNetworkOwner) CheckLinuxPhysicalAdmission(policy *mobilemultihop.DesktopNodePolicy) error {
+func (n *NodeNetworkOwner) CheckLinuxPhysicalAdmission(policy mobilemultihop.DesktopPhysicalPolicy) error {
 	return checkLinuxPhysicalAdmission(n, linuxPhysicalPolicy{node: policy})
 }
 
-func (n *NodeNetworkOwner) RetainedLinuxPhysicalProtection(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (*NodeLinuxPhysicalPrepared, bool, error) {
+func (n *NodeNetworkOwner) RetainedLinuxPhysicalProtection(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) (*NodeLinuxPhysicalPrepared, bool, error) {
 	return retainedLinuxPhysicalProtection(ctx, n, linuxPhysicalPolicy{node: policy})
 }
 
-func (n *NodeNetworkOwner) joinedLinuxProtection(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (mobiletor.DesktopLinuxProtectionOwner, error) {
+func (n *NodeNetworkOwner) joinedLinuxProtection(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) (mobiletor.DesktopLinuxProtectionOwner, error) {
 	captured, err := joinedLinuxPhysicalCapture(ctx, n, linuxPhysicalPolicy{node: policy})
 	return captured.retention, err
 }
 
-func (n *NodeNetworkOwner) DisconnectLinuxPhysicalProtection(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (bool, error) {
+func (n *NodeNetworkOwner) DisconnectLinuxPhysicalProtection(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) (bool, error) {
 	retention, err := n.joinedLinuxProtection(ctx, policy)
 	if err != nil || retention == nil {
 		return false, errors.Join(err, errors.New("Linux disconnect has no retained native baseline"))
@@ -79,7 +79,7 @@ func (n *NodeNetworkOwner) DisconnectLinuxPhysicalProtection(ctx context.Context
 	return retention.Disconnect(ctx)
 }
 
-func (n *NodeNetworkOwner) ReleaseLinuxPhysicalProtection(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) error {
+func (n *NodeNetworkOwner) ReleaseLinuxPhysicalProtection(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) error {
 	retention, err := n.joinedLinuxProtection(ctx, policy)
 	if err != nil || retention == nil {
 		return errors.Join(err, errors.New("Linux release has no retained native baseline"))
@@ -87,7 +87,7 @@ func (n *NodeNetworkOwner) ReleaseLinuxPhysicalProtection(ctx context.Context, p
 	return retention.Release(ctx)
 }
 
-func (n *NodeNetworkOwner) CloseLinuxPhysicalProtection(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) error {
+func (n *NodeNetworkOwner) CloseLinuxPhysicalProtection(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) error {
 	retention, err := n.joinedLinuxProtection(ctx, policy)
 	if err != nil {
 		return err

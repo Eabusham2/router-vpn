@@ -79,7 +79,7 @@ func NewDesktopImportedPolicyWithMTU(original *Controller, sessionID, targetOS s
 }
 
 func deriveDesktopImportedPolicy(original *Controller, inputs desktopNodePolicyInputs, captured *ImportedDesktopCapture) (*DesktopImportedPolicy, error) {
-	if original == nil || !desktopExternalSessionID.MatchString(inputs.sessionID) || inputs.targetOS != "windows" {
+	if original == nil || !desktopExternalSessionID.MatchString(inputs.sessionID) || (inputs.targetOS != "windows" && inputs.targetOS != "linux") {
 		return nil, desktopImportedPolicyError
 	}
 	capture, err := original.ImportedDesktopCapture()
@@ -87,6 +87,12 @@ func deriveDesktopImportedPolicy(original *Controller, inputs desktopNodePolicyI
 		(capture.IPv6Mode != "on" && capture.IPv6Mode != "off") || capture.EntryID == "" || capture.ExitID == "" ||
 		capture.EntryID == capture.ExitID || capture.EntryTag != "entry-wg" || capture.FinalTag != "proxy" ||
 		len(capture.PhysicalRoots) == 0 || len(capture.PhysicalRoots) > 32 {
+		return nil, desktopImportedPolicyError
+	}
+	// Linux initially admits only the packet entry and paired final whose native
+	// retained lifecycle is implemented. Other graphs remain closed at compile.
+	if inputs.targetOS == "linux" && (capture.EntryMode != "wireguard" || capture.ExitMode != "shadowsocks" ||
+		capture.EntryStartLayer != "" || capture.ExitStartLayer != "") {
 		return nil, desktopImportedPolicyError
 	}
 	if inputs.restoredMTU != 0 {

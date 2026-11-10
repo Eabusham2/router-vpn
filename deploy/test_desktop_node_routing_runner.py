@@ -167,6 +167,20 @@ class NativeLifecycleAdmissionVerdicts(unittest.TestCase):
             NODE.require_native_verdicts(output+output, names, "lifecycle admission")
 
 
+class LinuxImportedLifecycleVerdicts(unittest.TestCase):
+    def test_original_imported_pair_and_each_native_failure_are_required(self):
+        names = NODE.LINUX_IMPORTED_LIFECYCLE_VERDICTS
+        self.assertEqual(len(names), 17)
+        output = "".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n" for name in names)
+        NODE.require_native_verdicts(output, names, "Linux imported lifecycle")
+        for name in names:
+            for replacement in ("", "--- SKIP: " + name + " (0.01s)\n"):
+                with self.subTest(name=name, replacement=replacement), self.assertRaises(ValueError):
+                    NODE.require_native_verdicts(output.replace("--- PASS: " + name + " (0.01s)\n", replacement, 1), names, "Linux imported lifecycle")
+        with self.assertRaises(ValueError):
+            NODE.require_native_verdicts(output + output, names, "Linux imported lifecycle")
+
+
 class LinuxLayeredEntryVerdicts(unittest.TestCase):
     def test_generated_original_entry_runs_and_passes_exactly_once(self):
         suite = NODE.LINUX_LAYERED_ENTRY_SUITE

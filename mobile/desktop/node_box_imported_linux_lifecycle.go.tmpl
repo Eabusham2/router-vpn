@@ -1,0 +1,126 @@
+//go:build linux
+
+package box
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// Linux imported graphs retain their own typed source and observation owner.
+// This native factory does not admit a public command: the caller must still
+// supply authenticated parent ownership, both proofs and joined succession.
+type RouterVPNDesktopLinuxImportedPreparation struct {
+	network *routervpndesktoppt.NodeNetworkOwner
+	policy  *mobilemultihop.DesktopImportedPolicy
+}
+
+func routerVPNDesktopLinuxImportedLifecycleAvailable(policy *mobilemultihop.DesktopImportedPolicy) bool {
+	if policy == nil || policy.Validate() != nil {
+		return false
+	}
+	meta := policy.Metadata()
+	// Only the bounded imported WireGuard entry and paired Shadowsocks final
+	// enter this native TUN/nft/DNS lifecycle. The seal rederives each actual
+	// endpoint/outbound, credential, port and physical lower.
+	return meta.TargetOS == "linux" && meta.EntryMode == "wireguard" && meta.ExitMode == "shadowsocks" &&
+		meta.EntryStartLayer == "" && meta.ExitStartLayer == ""
+}
+
+func (s *Box) RouterVPNDesktopLinuxImportedPreparePhysicalOwned(policy *mobilemultihop.DesktopImportedPolicy) (*RouterVPNDesktopLinuxImportedPreparation, error) {
+	if !routerVPNDesktopLinuxImportedLifecycleAvailable(policy) {
+		return nil, errors.New("this Linux imported path graph has no admitted native lifecycle")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopLinuxImportedPreparation{network: network, policy: policy}
+	return owner, network.PrepareImportedLinuxPhysicalPolicy(policy)
+}
+
+func (p *RouterVPNDesktopLinuxImportedPreparation) RetainedProtection(ctx context.Context) (*routervpndesktoppt.NodeLinuxPhysicalPrepared, bool, error) {
+	if p == nil || p.network == nil || p.policy == nil {
+		return nil, false, errors.New("Linux imported path preparation lost its captured retirement owner")
+	}
+	return p.network.RetainedLinuxPhysicalProtection(ctx, p.policy)
+}
+
+func (p *RouterVPNDesktopLinuxImportedPreparation) JoinedSource(ctx context.Context) (*mobiletor.DesktopLinuxSourceJoinRecord, bool, error) {
+	if p == nil || p.network == nil || p.policy == nil {
+		return nil, false, errors.New("Linux imported path cleanup lost its captured source")
+	}
+	return p.network.JoinedLinuxPhysicalSource(ctx, p.policy)
+}
+
+// CloseSource joins only this original native service after the caller has
+// joined its Box. A partial preparation may predate ServiceManager.Initialize,
+// whose ordinary Close therefore has no started service to visit. Keeping the
+// retained preparation lets that exact source close without a later lookup or
+// an invented absence receipt. It never releases the parent-owned baseline.
+func (p *RouterVPNDesktopLinuxImportedPreparation) CloseSource(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil || p.policy.Validate() != nil || ctx == nil || ctx.Err() != nil {
+		return errors.New("Linux source cleanup lost its retained preparation")
+	}
+	if err := p.network.Close(); err != nil {
+		return err
+	}
+	_, _, err := p.network.JoinedLinuxPhysicalSource(ctx, p.policy)
+	return err
+}
+
+func (p *RouterVPNDesktopLinuxImportedPreparation) DisconnectProtection(ctx context.Context) (bool, error) {
+	if p == nil || p.network == nil || p.policy == nil {
+		return false, errors.New("Linux disconnect lost its retained native preparation")
+	}
+	return p.network.DisconnectLinuxPhysicalProtection(ctx, p.policy)
+}
+
+func (p *RouterVPNDesktopLinuxImportedPreparation) ReleaseProtection(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil {
+		return errors.New("Linux release lost its retained native preparation")
+	}
+	return p.network.ReleaseLinuxPhysicalProtection(ctx, p.policy)
+}
+
+func (p *RouterVPNDesktopLinuxImportedPreparation) CloseProtection(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil {
+		return errors.New("Linux protection teardown lost its native preparation")
+	}
+	return p.network.CloseLinuxPhysicalProtection(ctx, p.policy)
+}
+
+// Activation uses the actual native TUN reader and an uncached selected-DNS
+// exchange through this exact graph. A cancelled or failed proof revokes the
+// same native generation and leaves its partial owners available for Close.
+// Authenticated Router node HTTP proof and parent publication still follow;
+// this method does not report the application Connected state.
+func (s *Box) RouterVPNDesktopLinuxImportedActivatePhysical(ctx context.Context, policy *mobilemultihop.DesktopImportedPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if ctx == nil || ctx.Err() != nil || !routerVPNDesktopLinuxImportedLifecycleAvailable(policy) {
+		return nil, errors.New("Linux imported path activation lost its captured proof request")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	if err = network.CheckLinuxPhysicalAdmission(policy); err != nil {
+		return nil, err
+	}
+	owner, err := s.routerVPNDesktopNodeActivatePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	if err = owner.ProveSelectedDNS(ctx); err != nil {
+		owner.Cancel()
+		return nil, err
+	}
+	if err = network.CheckLinuxPhysicalAdmission(policy); err != nil || ctx.Err() != nil || !owner.Current() {
+		owner.Cancel()
+		return nil, errors.Join(err, ctx.Err(), errors.New("Linux imported path selected-DNS proof lost its original native owner"))
+	}
+	return owner, nil
+}

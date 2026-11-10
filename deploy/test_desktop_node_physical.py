@@ -29,6 +29,11 @@ BOOT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BOOT)
 PREP = BOOT.PREP
 TAGS = tuple(value for value in BOOT.TAGS if value not in ("routervpn_native_pq", "routervpn_windows_physical_composition"))
+LINUX_IMPORTED_LIFECYCLE_ROOT = "TestRouterVPNNodeLinuxLifecycleImportedCapturedPair"
+LINUX_IMPORTED_LIFECYCLE_VERDICTS = (LINUX_IMPORTED_LIFECYCLE_ROOT,) + tuple(
+    LINUX_IMPORTED_LIFECYCLE_ROOT + "/" + kill + "/" + fault
+    for kill in ("on-connect", "always")
+    for fault in ("live", "missing-baseline", "foreign-policy", "callback-error", "cancel", "changed-baseline", "partial", "unjoined"))
 OPENVPN_CAPACITY_PARENT = "TestRouterVPNOpenVPNConnectedCapacityUserspace"
 OPENVPN_CAPACITY_VERDICTS = (OPENVPN_CAPACITY_PARENT,) + tuple(
     OPENVPN_CAPACITY_PARENT + "/" + network + "/" + outcome
@@ -1300,7 +1305,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
           tuple(IMPORTED_FACTORY_ROOT + name for name in ("SOCKSRequiresOriginalRoot", "SOCKSOwnsEachAssociation", "SOCKSCancellationJoinsAuthentication")) + IMPORTED_FACTORY_CASES +
           tuple(IMPORTED_FACTORY_ROOT + "SOCKSCallerContext/" + held for held in ("owner", "manager", "lower")) if windows else
           tuple("TestRouterVPNNodePhysicalUnix" + name for name in ("CapturesPolicyAndRetainsLateOwner", "RejectsUncapturedSourceBeforeConstructor", "CloseJoinsLateFactoryAndRetriesSource")) +
-          tuple("TestRouterVPNNodeLinuxLifecycle" + name for name in ("RejectsMissingOrReusedCapability", "BracketsAdmissionAndRetainsSource", "RetirementRequiresSuccessfulJoinAndSameRecord", "JoinsCancelledLateConstructor", "RetainedCapabilityOwnsDisconnectAndTeardown", "KeepsPartialRetentionUntilSourceJoin", "CreatesBaselineBeforeGuardian")))),
+          tuple("TestRouterVPNNodeLinuxLifecycle" + name for name in ("RejectsMissingOrReusedCapability", "BracketsAdmissionAndRetainsSource", "RetirementRequiresSuccessfulJoinAndSameRecord", "JoinsCancelledLateConstructor", "RetainedCapabilityOwnsDisconnectAndTeardown", "KeepsPartialRetentionUntilSourceJoin", "CreatesBaselineBeforeGuardian")) + LINUX_IMPORTED_LIFECYCLE_VERDICTS)),
         ("box", ".", "^TestRouterVPNDesktop(NodePhysical|LinuxNodeCover)" if platform.system() == "Linux" else "^TestRouterVPNDesktopNodePhysical",
          tuple("TestRouterVPNDesktopNodePhysicalBox" + name for name in ("RejectsSubstitutedGraph", "RequiresPreparedOwner", "RetainsMTUAndExactRollback", "RestoresCapturedMTU", "MTUOriginalCleanup", "MTULocksHonorCaller", "MTURetireFailureInvalidatesOwner")) +
          tuple("TestRouterVPNDesktopNodePhysicalBoxMTUOriginalCleanup/" + leaf for leaf in ("false", "true")) +

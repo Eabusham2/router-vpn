@@ -319,3 +319,42 @@ func TestDesktopImportedPolicyReadinessAndRestorationKeepDistinctOwners(t *testi
 		t.Fatal("fixed tuple projection invented a dynamic SOCKS UDP destination", err)
 	}
 }
+
+// Linux compiler admission is deliberately narrower than Windows. The native
+// host still has to own both proofs and the original retained transaction.
+func TestDesktopImportedPolicyLinuxCapturedPair(t *testing.T) {
+	for _, kill := range []string{"on-connect", "always"} {
+		t.Run(kill, func(t *testing.T) {
+			original := desktopImportedOriginal(t, importedPacketFixture(t, "wireguard", "shadowsocks", "", ""), kill)
+			defer original.Close()
+			policy, err := NewDesktopImportedPolicyWithMTU(original, desktopNodeTestSession, "linux", 1280)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertDesktopImportedExactDerivation(t, policy)
+			_, meta, capture, err := ReadDesktopPhysicalPolicy(policy)
+			if err != nil || meta.TargetOS != "linux" || meta.Kind != "imported" || meta.Mode != "shadowsocks" ||
+				capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != "proxy" || len(capture.PhysicalRoots) != 1 {
+				t.Fatal("Linux imported policy lost its original physical root or selected final DNS", err)
+			}
+			windows, err := NewDesktopImportedPolicyWithMTU(original, desktopNodeTestSession, "windows", 1280)
+			if err != nil || windows.Metadata().SourceSHA256 == policy.Metadata().SourceSHA256 {
+				t.Fatal("Linux imported source borrowed Windows authority", err)
+			}
+			policy.inputs.targetOS = "windows"
+			if policy.Validate() == nil {
+				t.Fatal("changed target retained Linux seal")
+			}
+		})
+	}
+	for _, spec := range [][4]string{{"amneziawg", "shadowsocks", "", ""}, {"wireguard", "hysteria2", "", ""},
+		{"wireguard", "shadowsocks", "aes-256-gcm", ""}, {"wireguard", "shadowsocks", "", "aes-256-gcm"}} {
+		t.Run(strings.Join(spec[:], "/"), func(t *testing.T) {
+			original := desktopImportedOriginal(t, importedPacketFixture(t, spec[0], spec[1], spec[2], spec[3]), "always")
+			defer original.Close()
+			if _, err := NewDesktopImportedPolicy(original, desktopNodeTestSession, "linux"); err == nil {
+				t.Fatal("unintegrated Linux pair or layer acquired native policy")
+			}
+		})
+	}
+}

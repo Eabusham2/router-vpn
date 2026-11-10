@@ -4,6 +4,8 @@ package routervpndesktoppt
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -13,6 +15,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/routervpn/linuxprocess"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/service"
 )
 
 // Only the native constructor/readback is replaced in these portable cases.
@@ -630,5 +633,201 @@ func TestRouterVPNNodeLinuxLifecycleCreatesBaselineBeforeGuardian(t *testing.T) 
 				}
 			}
 		})
+	}
+}
+
+// The real imported compiler, native lower, interface capture, broker and
+// retention coordinator run here. Only the privileged source constructor is
+// modeled; kernel packets and the authenticated parent remain separate gates.
+func nodeLinuxImportedPolicy(t *testing.T, kill string) *mobilemultihop.DesktopImportedPolicy {
+	t.Helper()
+	final, err := nodeUnixFactoryPolicy(t, "shadowsocks", "linux", "on", kill, false).OriginalProfile().LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var input struct {
+		Mode    string `json:"mode"`
+		Files   string `json:"files"`
+		Profile string `json:"profile_json"`
+		Start   string `json:"start"`
+		DNS     string `json:"dns_bootstrap"`
+	}
+	if json.Unmarshal([]byte(final), &input) != nil {
+		t.Fatal("lost paired final")
+	}
+	key := func(value string) string { return base64.StdEncoding.EncodeToString([]byte(strings.Repeat(value, 32))) }
+	entry := map[string]any{
+		"inbounds":  []any{map[string]any{"type": "tun", "tag": "tun-in", "address": []string{"172.29.93.1/30", "fd29:93::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}},
+		"outbounds": []any{},
+		"endpoints": []any{map[string]any{"type": "wireguard", "tag": "custom-exit", "address": []string{"10.78.0.2/32", "fd78:78::2/128"}, "private_key": key("d"), "mtu": 1280,
+			"peers": []any{map[string]any{"address": "192.168.51.7", "port": 51820, "public_key": key("e"), "pre_shared_key": key("f"), "allowed_ips": []string{"0.0.0.0/0", "::/0"}, "persistent_keepalive_interval": 25}}}},
+		"route": map[string]any{"final": "custom-exit", "auto_detect_interface": true},
+	}
+	capture := map[string]any{"schema": 1, "exit_id": "captured-imported-entry", "protocol": "wireguard", "expected_public_ip": "203.0.113.88", "profile": map[string]any{
+		"id": "captured-imported-entry", "node_kind": "external", "dns_mode": "rescue", "mtu_policy": "auto", "ipv6_mode": "on", "home_lan_access": false,
+		"external": map[string]any{"protocol": "wireguard", "expected_public_ip": "203.0.113.88", "wireguard": map[string]any{
+			"endpoint": "192.168.51.7:51820", "private_key": key("d"), "peer_public_key": key("e"), "preshared_key": key("f"), "addresses": []string{"10.78.0.2/32", "fd78:78::2/128"},
+			"allowed_ips": []string{"0.0.0.0/0", "::/0"}, "persistent_keepalive_interval": 25, "mtu": 1280}}}}
+	encoded, _ := json.Marshal(entry)
+	captured, _ := json.Marshal(capture)
+	original, err := mobilemultihop.NewImportedEntry(string(encoded), string(captured), input.Mode, input.Files, input.Profile, input.Start, input.DNS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = original.Close() })
+	policy, err := mobilemultihop.NewDesktopImportedPolicy(original, strings.Repeat("b", 32), "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
+
+func TestRouterVPNNodeLinuxLifecycleImportedCapturedPair(t *testing.T) {
+	for _, kill := range []string{"on-connect", "always"} {
+		for _, fault := range []string{"live", "missing-baseline", "foreign-policy", "callback-error", "cancel", "changed-baseline", "partial", "unjoined"} {
+			t.Run(kill+"/"+fault, func(t *testing.T) {
+				policy := nodeLinuxImportedPolicy(t, kill)
+				meta := policy.Metadata()
+				native := newDesktopPTFixture(t)
+				manager := &desktopPTEntryManager{}
+				service.MustRegister[adapter.OutboundManager](native.ctx, manager)
+				options := NodeCaptureOptions{meta.SessionID, meta.SourceSHA256}
+				raw, err := NewNodeNetworkOwner(native.ctx, nil, mobilemultihop.DesktopNodeNetworkTag, options)
+				if err != nil {
+					t.Fatal(err)
+				}
+				network := raw.(*NodeNetworkOwner)
+				lower, err := NewNodePhysicalOutbound(native.ctx, nil, nil, mobilemultihop.DesktopNodePhysicalTag, options)
+				if err != nil {
+					t.Fatal(err)
+				}
+				manager.replace(lower)
+				selected := externalPhysicalFactoryInterface(t)
+				monitor := &nodeUnixFactoryNetwork{externalPhysicalFactoryNetwork: &externalPhysicalFactoryNetwork{desktopPTNetwork: native.network}}
+				monitor.selected.Store(selected)
+				service.MustRegister[adapter.NetworkManager](native.ctx, monitor)
+				source := &nodeLinuxLifecycleSource{nodeUnixFactorySource: &nodeUnixFactorySource{physicalFactorySource: &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}}}
+				source.record = mobiletor.DesktopLinuxProtectionRecord{Capture: network.brokerCapture(), Owner: source.owner, UID: 22171,
+					PermitPrefix: "rvpn_" + strings.Repeat("e", 20), TableHandle: 11, ChainHandle: 12, BaselineSHA256: strings.Repeat("f", 64)}
+				source.guardian = nodeLinuxLifecycleGuardianFixture(source.record.Owner.ProcessID)
+				t.Cleanup(func() {
+					source.failClose.Store(false)
+					if err := network.Close(); err != nil {
+						t.Error(err)
+					}
+					_ = lower.(*NodePhysicalOutbound).Close()
+					if source.retention != nil {
+						if err := network.CloseLinuxPhysicalProtection(context.Background(), policy); err != nil {
+							t.Error(err)
+						}
+					}
+				})
+				baselines, admissions, constructors := 0, 0, 0
+				ctx, err := WithNodeLinuxPhysicalBaseline(network.ctx, policy,
+					func(ctx context.Context, capture mobiletor.DesktopSocketCapture) error {
+						baselines++
+						if capture != source.record.Capture || ctx.Err() != nil || constructors != 0 {
+							t.Error("imported baseline lost its original source or ordering")
+						}
+						if fault == "missing-baseline" {
+							return errors.New("original parent refused baseline")
+						}
+						return nil
+					}, func(ctx context.Context, prepared NodeLinuxPhysicalPrepared) error {
+						admissions++
+						if prepared.Protection != source.record || prepared.Guardian != source.guardian || prepared.Policy != kill || source.reads != 1 {
+							t.Error("imported admission replaced its retained source")
+						}
+						if fault == "callback-error" {
+							return errors.New("original parent refused admission")
+						}
+						if fault == "cancel" {
+							network.Cancel()
+						}
+						return nil
+					})
+				if err != nil {
+					t.Fatal(err)
+				}
+				network.ctx = ctx
+				source.observe = func(read int, record *mobiletor.DesktopLinuxProtectionRecord) error {
+					if read > 1 && fault == "changed-baseline" {
+						record.TableHandle++
+					}
+					return nil
+				}
+				selectedPolicy := policy
+				if fault == "foreign-policy" {
+					selectedPolicy = nodeLinuxImportedPolicy(t, kill)
+				}
+				err = network.prepareNodePhysicalLinuxLifecycle(selectedPolicy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+					constructors++
+					if baselines != 1 || len(options.PrivateDestinations) != 1 || options.PrivateDestinations[0].Network != "udp" || options.PrivateDestinations[0].Address.String() != "192.168.51.7:51820" || len(options.LANPrefixes) != 0 {
+						t.Error("imported physical source leaked its final or DNS tuple")
+					}
+					if fault == "partial" {
+						return source, errors.New("partial original source")
+					}
+					return source, nil
+				})
+				if fault == "foreign-policy" {
+					if err == nil || constructors != 0 || baselines != 0 {
+						t.Fatal("equivalent imported compiler stole original admission")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = network.Start(adapter.StartStateInitialize)
+				live := fault == "live" || fault == "unjoined"
+				if live != (err == nil) || network.SocketCurrent() != live || network.Current() {
+					t.Fatal("imported native lifecycle lost distinct pre-ready phase", err)
+				}
+				if fault == "missing-baseline" {
+					if constructors != 0 || admissions != 0 {
+						t.Fatal("refused imported baseline constructed native source")
+					}
+					return
+				}
+				if constructors != 1 || network.source != source {
+					t.Fatal("imported lifecycle discarded its returned source")
+				}
+				if !live {
+					return
+				}
+				if err := network.CheckLinuxPhysicalAdmission(policy); err == nil {
+					t.Fatal("imported source fabricated ready before original startup")
+				}
+				for _, stage := range []adapter.StartStage{adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+					if err := network.Start(stage); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := network.CheckLinuxPhysicalAdmission(policy); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := network.DisconnectLinuxPhysicalProtection(context.Background(), policy); err == nil {
+					t.Fatal("unjoined imported source released protection")
+				}
+				if fault == "unjoined" {
+					source.failClose.Store(true)
+					if network.Close() == nil {
+						t.Fatal("failed imported join reported retirement")
+					}
+					source.failClose.Store(false)
+				}
+				if err := network.Close(); err != nil {
+					t.Fatal(err)
+				}
+				retained, err := network.DisconnectLinuxPhysicalProtection(context.Background(), policy)
+				if err != nil || retained != (kill == "always") {
+					t.Fatal("imported disconnect changed selected protection", err)
+				}
+				if err := network.ReleaseLinuxPhysicalProtection(context.Background(), policy); err != nil || source.retention.releases != 1 {
+					t.Fatal("imported release lost exact retained owner", err)
+				}
+			})
+		}
 	}
 }

@@ -75,6 +75,7 @@ BOX_TEMPLATES = {
     'node_box_physical_test.go.tmpl': 'routervpn_desktop_node_box_physical_test.go',
     'node_box_dns.go.tmpl': 'routervpn_desktop_node_box_dns.go',
     'node_box_dns_test.go.tmpl': 'routervpn_desktop_node_box_dns_test.go',
+    'node_box_imported_linux_lifecycle.go.tmpl': 'routervpn_desktop_node_box_imported_linux_lifecycle.go',
     'node_box_linux_lifecycle.go.tmpl': 'routervpn_desktop_node_box_linux_lifecycle.go',
     'node_box_linux_cover.go.tmpl': 'routervpn_desktop_node_box_linux_cover.go',
     'node_box_linux_cover_test.go.tmpl': 'routervpn_desktop_node_box_linux_cover_test.go',
@@ -332,7 +333,8 @@ def pt_copies():
     for name, relative in BOX_TEMPLATES.items():
         path = ROOT/'mobile/desktop'/name
         raw = path.read_bytes()
-        prefix = {'node_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
+        prefix = {'node_box_imported_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
+                  'node_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
                   'node_imported_naive_h3_windows_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition && with_purego\n\n',
                   'node_imported_naive_h3_windows_peer_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition && with_purego\n\n',
                   'external_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',

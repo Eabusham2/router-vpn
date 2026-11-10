@@ -12,6 +12,6 @@ import (
 // No returned source is distinct from native absence. This comparison keeps
 // even a cancelled or partial source with its exact sealed Router policy; the
 // parent still supplies the independent baseline observation and journal.
-func (n *NodeNetworkOwner) JoinedLinuxPhysicalSource(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (*mobiletor.DesktopLinuxSourceJoinRecord, bool, error) {
+func (n *NodeNetworkOwner) JoinedLinuxPhysicalSource(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) (*mobiletor.DesktopLinuxSourceJoinRecord, bool, error) {
 	return joinedLinuxPhysicalSource(ctx, n, linuxPhysicalPolicy{node: policy})
 }

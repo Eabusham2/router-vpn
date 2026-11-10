@@ -12,12 +12,12 @@ import (
 )
 
 // This capability is shared by the retained Linux native sources. It accepts
-// exactly one independently sealed compiler product; an external source is
+// exactly one independently sealed compiler product; an imported or external source is
 // never converted into a Router NodeProfile or given an invented node proof.
 // The parent still owns process authentication, the durable journal, atomic
 // succession and explicit release. None of the records below grants ownership.
 type linuxPhysicalPolicy struct {
-	node     *mobilemultihop.DesktopNodePolicy
+	node     mobilemultihop.DesktopPhysicalPolicy
 	external *mobilemultihop.DesktopExternalPolicy
 }
 
@@ -30,10 +30,10 @@ func (p linuxPhysicalPolicy) identity() (linuxPhysicalPolicyIdentity, error) {
 	target := ""
 	switch {
 	case p.node != nil && p.external == nil:
-		if err := p.node.Validate(); err != nil {
+		_, m, _, err := mobilemultihop.ReadDesktopPhysicalPolicy(p.node)
+		if err != nil {
 			return identity, err
 		}
-		m := p.node.Metadata()
 		target = m.TargetOS
 		identity = linuxPhysicalPolicyIdentity{m.SessionID, m.SourceSHA256, m.KillSwitchPolicy}
 	case p.external != nil && p.node == nil:
