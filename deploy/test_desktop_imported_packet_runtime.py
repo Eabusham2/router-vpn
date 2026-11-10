@@ -53,7 +53,7 @@ class ImportedPacketRuntimeGate(unittest.TestCase):
             roots,names = N.imported_desktop_packet_verdicts(target)
             self.assertEqual(len(names),185 if target.startswith('linux/') else 176)
             self.assertEqual(len(roots),7 if target.startswith('linux/') else 6)
-            self.assertEqual(len(N.imported_desktop_verdicts(target)[1]),61 if target.startswith('linux/') else 57)
+            self.assertEqual(len(N.imported_desktop_verdicts(target)[1]),82 if target.startswith('linux/') else 78)
             verify = lambda events: N.verify_imported_native_verdicts(self.output(events),'router-vpn/cmd/client',names)
             events = self.events(target)
             verify(events)

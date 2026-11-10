@@ -58,7 +58,7 @@ class ImportedOpenVPNRuntimeGate(unittest.TestCase):
             roots,names = N.imported_desktop_openvpn_verdicts(target)
             self.assertEqual(len(names),196 if target.startswith('linux/') else 192)
             self.assertEqual(len(roots),12 if target.startswith('linux/') else 11)
-            self.assertEqual(len(N.imported_desktop_verdicts(target)[1]),61 if target.startswith('linux/') else 57)
+            self.assertEqual(len(N.imported_desktop_verdicts(target)[1]),82 if target.startswith('linux/') else 78)
             self.assertEqual(len(N.imported_desktop_packet_verdicts(target)[1]),185 if target.startswith('linux/') else 176)
             verify = lambda events: N.verify_imported_native_verdicts(self.output(events),'router-vpn/cmd/client',names)
             events = self.events(target)
