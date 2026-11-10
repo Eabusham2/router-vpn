@@ -1,0 +1,874 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mtuprobe"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	WG "github.com/sagernet/sing-box/protocol/wireguard"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
+)
+
+// This independent test executable has one real WG peer and a separately
+// keyed SS2022 final. Its entry routes contain no private health or DNS bypass.
+// The installed-controller fixture supplies the inherited private pipe; none
+// of these constructors is reachable from the application command dispatcher.
+type desktopImportedWGSSRequest struct {
+	Schema          int    `json:"schema"`
+	Address         string `json:"address"`
+	ClientAddress   string `json:"client_address"`
+	PrivateKey      string `json:"private_key"`
+	ClientPublicKey string `json:"client_public_key"`
+	PreSharedKey    string `json:"pre_shared_key"`
+	FinalPassword   string `json:"final_password"`
+	NodeProofID     string `json:"node_proof_id"`
+	Token           string `json:"token"`
+	DirectRouter    bool   `json:"direct_router"`
+	Cover           bool   `json:"cover"`
+}
+
+type desktopImportedWGSSReply struct {
+	Schema             int    `json:"schema"`
+	Address            string `json:"address"`
+	PublicCA           string `json:"public_ca"`
+	EntryPublicIP      string `json:"entry_public_ip"`
+	FinalPublicIP      string `json:"final_public_ip"`
+	EntryRawUDP        int64  `json:"entry_raw_udp"`
+	EntryTCP           int64  `json:"entry_tcp"`
+	EntryUDP           int64  `json:"entry_udp"`
+	FinalRawTCP        int64  `json:"final_raw_tcp"`
+	FinalRawUDP        int64  `json:"final_raw_udp"`
+	FinalTCP           int64  `json:"final_tcp"`
+	FinalUDP           int64  `json:"final_udp"`
+	EntryPublicQueries uint64 `json:"entry_public_queries"`
+	FinalPublicQueries uint64 `json:"final_public_queries"`
+	RouterQueries      uint64 `json:"router_queries"`
+	DirectQueries      uint32 `json:"direct_router_queries"`
+	DNSQueries         uint64 `json:"dns_queries"`
+	MTUQueries         uint64 `json:"mtu_queries"`
+	MTUReplies         uint64 `json:"mtu_replies"`
+	CoverPackets       uint64 `json:"cover_packets"`
+	CoverReplies       uint64 `json:"cover_replies"`
+	CoverMaximum       uint32 `json:"cover_maximum"`
+	DownloadBytes      uint64 `json:"download_bytes"`
+	UploadBytes        uint64 `json:"upload_bytes"`
+}
+
+type desktopImportedWGSSHealthReply struct {
+	OK     bool   `json:"ok"`
+	NodeID string `json:"node_id"`
+	Proof  string `json:"proof"`
+}
+
+func desktopImportedWGSSIdentity(request desktopImportedWGSSRequest) (string, error) {
+	bad := errors.New("imported WG/SS reference lost its independent captured identities")
+	if request.Schema != 1 || request.Address != "192.168.210.2" || request.ClientAddress != "192.168.210.1" ||
+		len(request.Token) < 16 || len(request.Token) > 256 || strings.ContainsAny(request.Token, "\r\n\x00") {
+		return "", bad
+	}
+	proof, err := hex.DecodeString(request.NodeProofID)
+	if err != nil || len(proof) != 32 || hex.EncodeToString(proof) != request.NodeProofID {
+		return "", bad
+	}
+	var values [4][]byte
+	defer func() {
+		for _, value := range values {
+			clear(value)
+		}
+	}()
+	for index, encoded := range []string{request.PrivateKey, request.ClientPublicKey, request.PreSharedKey, request.FinalPassword} {
+		value, err := base64.StdEncoding.Strict().DecodeString(encoded)
+		if err != nil || len(value) != 32 || base64.StdEncoding.EncodeToString(value) != encoded || bytes.Equal(value, make([]byte, 32)) {
+			clear(value)
+			return "", bad
+		}
+		for _, prior := range values[:index] {
+			if bytes.Equal(value, prior) {
+				clear(value)
+				return "", bad
+			}
+		}
+		values[index] = value
+	}
+	private, err := ecdh.X25519().NewPrivateKey(values[0])
+	if err != nil || bytes.Equal(private.PublicKey().Bytes(), values[1]) {
+		return "", bad
+	}
+	entryProof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + base64.StdEncoding.EncodeToString(private.PublicKey().Bytes())))
+	if request.NodeProofID == hex.EncodeToString(entryProof[:]) {
+		return "", bad
+	}
+	return fmt.Sprintf("private_key=%x\npublic_key=%x\npreshared_key=%x\nallowed_ip=10.78.0.2/32\nallowed_ip=fd78:78::2/128\n", values[0], values[1], values[2]), nil
+}
+
+type desktopImportedWGSSPeer struct {
+	address, ca                                            string
+	entry                                                  *desktopNodeWGHandler
+	bind                                                   *desktopNodeWGBind
+	final                                                  *desktopNodeLayerServer
+	direct                                                 *desktopNodeRouterHealth
+	wrongNode, wrongPublic, failedDNS, dropCover           atomic.Bool
+	entryPublic, finalPublic, health, dns, mtu, mtuReplies atomic.Uint64
+	cover, coverReplies, download, upload                  atomic.Uint64
+	coverMaximum                                           atomic.Uint32
+}
+
+func (p *desktopImportedWGSSPeer) snapshot() desktopImportedWGSSReply {
+	return desktopImportedWGSSReply{Schema: 1, Address: p.address, PublicCA: p.ca,
+		EntryPublicIP: "203.0.113.88", FinalPublicIP: "203.0.113.89",
+		EntryRawUDP: p.bind.packets.Load(), EntryTCP: p.entry.tcp.Load(), EntryUDP: p.entry.udp.Load(),
+		FinalRawTCP: p.final.rawTCP.Load(), FinalRawUDP: p.final.rawUDP.Load(), FinalTCP: p.final.plainTCP.Load(), FinalUDP: p.final.plainUDP.Load(),
+		EntryPublicQueries: p.entryPublic.Load(), FinalPublicQueries: p.finalPublic.Load(), RouterQueries: p.health.Load(),
+		DirectQueries: p.direct.count(), DNSQueries: p.dns.Load(), MTUQueries: p.mtu.Load(), MTUReplies: p.mtuReplies.Load(),
+		CoverPackets: p.cover.Load(), CoverReplies: p.coverReplies.Load(), CoverMaximum: p.coverMaximum.Load(),
+		DownloadBytes: p.download.Load(), UploadBytes: p.upload.Load()}
+}
+
+func (p *desktopImportedWGSSPeer) control(command string, cover bool) error {
+	switch command {
+	case "stats":
+	case "fail-dns":
+		p.failedDNS.Store(true)
+	case "restore-dns":
+		p.failedDNS.Store(false)
+	case "wrong-node":
+		p.wrongNode.Store(true)
+	case "restore-node":
+		p.wrongNode.Store(false)
+	case "wrong-public":
+		p.wrongPublic.Store(true)
+	case "restore-public":
+		p.wrongPublic.Store(false)
+	case "drop-cover", "restore-cover":
+		if !cover {
+			return errors.New("uncaptured imported reference cover")
+		}
+		p.dropCover.Store(command == "drop-cover")
+	default:
+		return errors.New("unrecognized imported reference control")
+	}
+	return nil
+}
+
+func desktopImportedWGSSCertificate(t *testing.T) (tls.Certificate, string) {
+	t.Helper()
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	root := &x509.Certificate{SerialNumber: big.NewInt(92101), Subject: pkix.Name{CommonName: "isolated imported WG SS fixture root"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	rootDER, err := x509.CreateCertificate(rand.Reader, root, root, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(92102), IPAddresses: []net.IP{net.ParseIP("1.1.1.1")}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leaf, root, &leafKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{leafDER, rootDER}, PrivateKey: leafKey}, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}))
+}
+
+func desktopImportedWGSSHTTP(t *testing.T, certificate *tls.Certificate, handler http.Handler) string {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if certificate != nil {
+		listener = tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{*certificate}, MinVersion: tls.VersionTLS12})
+	}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second, IdleTimeout: time.Second, MaxHeaderBytes: 8192}
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			_ = server.Close()
+			t.Error("imported reference HTTP did not join", err)
+		}
+		_ = listener.Close()
+		if err := <-done; !errors.Is(err, http.ErrServerClosed) {
+			t.Error(err)
+		}
+	})
+	return address
+}
+
+// The constructor's physical pair is supplied only by the fixed namespace
+// child below. The separate loopback traffic test passes loopback explicitly;
+// that test cannot stand in for installed host/TUN/protection acceptance.
+func desktopImportedWGSSStart(t *testing.T, request desktopImportedWGSSRequest, local, remote netip.Addr) *desktopImportedWGSSPeer {
+	t.Helper()
+	ipc, err := desktopImportedWGSSIdentity(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !(local == netip.MustParseAddr(request.Address) && remote == netip.MustParseAddr(request.ClientAddress)) &&
+		!(local == netip.MustParseAddr("127.0.0.1") && remote == local && !request.DirectRouter) {
+		t.Fatal("uncaptured imported reference bind")
+	}
+	p := &desktopImportedWGSSPeer{}
+	certificate, ca := desktopImportedWGSSCertificate(t)
+	p.ca = ca
+	public := func(final bool) string {
+		return desktopImportedWGSSHTTP(t, &certificate, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.Host != "1.1.1.1" || r.URL.Path != "/cdn-cgi/trace" || r.URL.RawQuery != "" || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+				http.NotFound(w, r)
+				return
+			}
+			ip := "203.0.113.88"
+			if final {
+				ip = "203.0.113.89"
+				p.finalPublic.Add(1)
+			} else {
+				p.entryPublic.Add(1)
+			}
+			if p.wrongPublic.Load() {
+				ip = "203.0.113.90"
+			}
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprintf(w, "ip=%s\n", ip)
+		}))
+	}
+	entryPublic, finalPublic := public(false), public(true)
+	health := desktopImportedWGSSHTTP(t, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != desktopNodeRouterHealthTarget {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/health" && r.URL.RawQuery == "" && r.ContentLength == 0 && len(r.TransferEncoding) == 0 {
+			p.health.Add(1)
+			node := request.NodeProofID
+			if p.wrongNode.Load() {
+				node = strings.Repeat("f", 64)
+				if node == request.NodeProofID {
+					node = strings.Repeat("e", 64)
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": node, "proof": "router-vpn-private-agent-v1"})
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer "+request.Token {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/benchmark/download" {
+			size, err := strconv.Atoi(r.URL.Query().Get("bytes"))
+			if err != nil || size < 65536 || size > 16<<20 || r.URL.Query().Encode() != "bytes="+strconv.Itoa(size) {
+				http.Error(w, "invalid size", 400)
+				return
+			}
+			w.Header().Set("Content-Length", strconv.Itoa(size))
+			w.Header().Set("X-Routervpn-Benchmark", "download-v1")
+			w.Header().Set("X-Routervpn-Benchmark-Bytes", strconv.Itoa(size))
+			w.Header().Set("Content-Encoding", "identity")
+			chunk := make([]byte, 65536)
+			if _, err := rand.Read(chunk); err != nil {
+				return
+			}
+			for size > 0 {
+				part := min(size, len(chunk))
+				n, err := w.Write(chunk[:part])
+				p.download.Add(uint64(n))
+				if err != nil || n != part {
+					return
+				}
+				size -= n
+			}
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/benchmark/upload" && r.URL.RawQuery == "" && r.ContentLength >= 65536 && r.ContentLength <= 16<<20 {
+			started := time.Now()
+			n, err := io.Copy(io.Discard, io.LimitReader(r.Body, r.ContentLength+1))
+			if err != nil || n != r.ContentLength {
+				http.Error(w, "incomplete body", 400)
+				return
+			}
+			p.upload.Add(uint64(n))
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "direction": "upload", "bytes": n, "server_receive_ms": float64(time.Since(started).Nanoseconds()) / 1e6, "proof": "authenticated tunnel-peer private throughput sink"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	dnsPacket, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsServer := &dns.Server{PacketConn: dnsPacket, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		p.dns.Add(1)
+		answer := new(dns.Msg).SetReply(q)
+		if len(q.Question) != 1 || q.Question[0].Name != "example.com." || q.Question[0].Qtype != dns.TypeA {
+			answer.Rcode = dns.RcodeRefused
+		} else if p.failedDNS.Load() {
+			answer.Rcode = dns.RcodeNameError
+		} else {
+			answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: net.ParseIP("93.184.216.34")}}
+		}
+		_ = w.WriteMsg(answer)
+	})}
+	dnsDone := make(chan error, 1)
+	go func() { dnsDone <- dnsServer.ActivateAndServe() }()
+	t.Cleanup(func() {
+		_ = dnsServer.Shutdown()
+		_ = dnsPacket.Close()
+		if err := <-dnsDone; err != nil {
+			t.Error(err)
+		}
+	})
+	sink, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sinkDone := make(chan struct{})
+	go func() {
+		defer close(sinkDone)
+		body := make([]byte, mtuprobe.MaxBytes+1)
+		for {
+			n, from, err := sink.ReadFrom(body)
+			if err != nil {
+				return
+			}
+			packet := body[:n]
+			if mtuprobe.Recognized(packet) {
+				p.mtu.Add(1)
+				reply, err := mtuprobe.Reply(packet, request.Token, request.NodeProofID, time.Now())
+				if err == nil {
+					if n, e := sink.WriteTo(reply, from); e == nil && n == len(reply) {
+						p.mtuReplies.Add(1)
+					}
+				}
+				continue
+			}
+			if !request.Cover || n < 1 || n > 1200 {
+				continue
+			}
+			p.cover.Add(1)
+			for old := p.coverMaximum.Load(); uint32(n) > old; old = p.coverMaximum.Load() {
+				if p.coverMaximum.CompareAndSwap(old, uint32(n)) {
+					break
+				}
+			}
+			if !p.dropCover.Load() {
+				if count, e := sink.WriteTo(packet, from); e == nil && count == n {
+					p.coverReplies.Add(1)
+				}
+			}
+		}
+	}()
+	t.Cleanup(func() { _ = sink.Close(); <-sinkDone })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	p.final = &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{
+		{Network: "tcp", Destination: desktopNodeRouterHealthTarget, Physical: health}, {Network: "udp", Destination: "192.168.50.133:53", Physical: dnsPacket.LocalAddr().String()},
+		{Network: "tcp", Destination: "1.1.1.1:443", Physical: finalPublic}, {Network: "udp", Destination: desktopNodeRouterCoverTarget, Physical: sink.LocalAddr().String()},
+	}}
+	final := desktopStartSSProvider(t, p.final, mobilemultihop.NativeStartLayerMethod, request.FinalPassword, netip.MustParseAddr("127.0.0.1"))
+	rules := map[string]desktopReferenceRule{}
+	for _, route := range []desktopReferenceRule{{Network: "tcp", Address: "10.77.0.1", Port: 8388, Target: final.address}, {Network: "udp", Address: "10.77.0.1", Port: 8388, Target: final.address}, {Network: "tcp", Address: "1.1.1.1", Port: 443, Target: entryPublic}} {
+		rules[route.Network+"/"+net.JoinHostPort(route.Address, strconv.Itoa(route.Port))] = route
+	}
+	entryContext, entryCancel := context.WithCancel(context.Background())
+	p.entry = &desktopNodeWGHandler{desktopReferenceHandler: &desktopReferenceHandler{ctx: entryContext, cancel: entryCancel, rules: rules, owned: map[io.Closer]bool{}}}
+	stack, err := wg.NewDevice(wg.DeviceOptions{Context: entryContext, Logger: log.NewNOPFactory().Logger(), Handler: p.entry, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 1400, Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/32"), netip.MustParsePrefix("fd78:78::1/128")}})
+	if err != nil {
+		p.entry.close()
+		t.Fatal(err)
+	}
+	p.bind = &desktopNodeWGBind{local: local, remote: remote}
+	device, err := startDesktopNodeWGReferenceDevice(entryContext, stack, p.bind, ipc)
+	ipc = ""
+	if err != nil {
+		p.entry.close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.entry.close(); device.close() })
+	p.address = p.bind.address()
+	if p.address == "" {
+		t.Fatal("imported reference lost its actual WG listener")
+	}
+	if request.DirectRouter {
+		p.direct = startDesktopNodeRouterHealth(t, netip.MustParseAddr("10.77.0.1"), request.NodeProofID)
+	}
+	return p
+}
+
+func TestRouterVPNDesktopImportedWGSSReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_IMPORTED_WG_SS_REFERENCE_CHILD") == "" {
+		return
+	}
+	if os.Getenv("ROUTERVPN_IMPORTED_WG_SS_REFERENCE_CHILD") != "1" {
+		t.Fatal("unrecognized imported reference owner")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, 64<<10+1)
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) > 64<<10 {
+		t.Fatal("imported reference requires one bounded inherited request")
+	}
+	var request desktopImportedWGSSRequest
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF {
+		t.Fatal("imported reference request shape changed")
+	}
+	if _, err := desktopImportedWGSSIdentity(request); err != nil {
+		t.Fatal(err)
+	}
+	local, remote := netip.MustParseAddr(request.Address), netip.MustParseAddr(request.ClientAddress)
+	interfaces, err := net.Interfaces()
+	found := false
+	for _, iface := range interfaces {
+		addresses, e := iface.Addrs()
+		if e != nil {
+			t.Fatal(e)
+		}
+		for _, address := range addresses {
+			prefix, e := netip.ParsePrefix(address.String())
+			found = found || e == nil && prefix.Addr() == local && iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagLoopback == 0
+		}
+	}
+	if err != nil || !found {
+		t.Fatal("imported reference requires its original isolated physical interface", err)
+	}
+	peer := desktopImportedWGSSStart(t, request, local, remote)
+	respond := func() {
+		if json.NewEncoder(os.Stdout).Encode(peer.snapshot()) != nil {
+			t.Fatal("imported reference reply pipe failed")
+		}
+	}
+	respond()
+	for {
+		line, err := reader.ReadSlice('\n')
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return
+		}
+		if err != nil || len(line) > 32 {
+			t.Fatal("imported reference control pipe failed")
+		}
+		if peer.control(strings.TrimSuffix(string(line), "\n"), request.Cover) != nil {
+			t.Fatal("imported reference control not captured")
+		}
+		respond()
+	}
+}
+
+func desktopImportedWGSSFixture(t *testing.T) (desktopImportedWGSSRequest, string) {
+	t.Helper()
+	server, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := make([]byte, 64)
+	if _, err := rand.Read(keys); err != nil {
+		t.Fatal(err)
+	}
+	defer clear(keys)
+	encode := base64.StdEncoding.EncodeToString
+	return desktopImportedWGSSRequest{Schema: 1, Address: "192.168.210.2", ClientAddress: "192.168.210.1", PrivateKey: encode(server.Bytes()), ClientPublicKey: encode(client.PublicKey().Bytes()), PreSharedKey: encode(keys[:32]), FinalPassword: encode(keys[32:]), NodeProofID: strings.Repeat("a", 64), Token: "imported-paired-fixture-token", Cover: true}, encode(client.Bytes())
+}
+
+func TestRouterVPNDesktopImportedWGSSPeerCapture(t *testing.T) {
+	request, _ := desktopImportedWGSSFixture(t)
+	if _, err := desktopImportedWGSSIdentity(request); err != nil {
+		t.Fatal(err)
+	}
+	for _, fault := range []string{"schema", "address", "client", "key", "client-key", "psk", "final-key", "same-key", "node", "token"} {
+		t.Run(fault, func(t *testing.T) {
+			bad := request
+			switch fault {
+			case "schema":
+				bad.Schema = 2
+			case "address":
+				bad.Address = "127.0.0.1"
+			case "client":
+				bad.ClientAddress = bad.Address
+			case "key":
+				bad.PrivateKey = "invalid"
+			case "client-key":
+				bad.ClientPublicKey = "invalid"
+			case "psk":
+				bad.PreSharedKey = "invalid"
+			case "final-key":
+				bad.FinalPassword = "invalid"
+			case "same-key":
+				bad.FinalPassword = bad.PreSharedKey
+			case "node":
+				bad.NodeProofID = "foreign"
+			case "token":
+				bad.Token = ""
+			}
+			if _, err := desktopImportedWGSSIdentity(bad); err == nil {
+				t.Fatal("foreign reference capture accepted")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopImportedWGSSPeerTraffic(t *testing.T) {
+	request, clientKey := desktopImportedWGSSFixture(t)
+	peer := desktopImportedWGSSStart(t, request, netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("127.0.0.1"))
+	ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 20*time.Second)
+	defer cancel()
+	private, _ := base64.StdEncoding.DecodeString(request.PrivateKey)
+	provider, _ := ecdh.X25519().NewPrivateKey(private)
+	clear(private)
+	physical := &desktopSSReferenceLower{virtual: peer.address, original: peer.address}
+	manager := &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"physical": physical}}
+	owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
+	owned = service.ContextWith[adapter.NetworkManager](owned, &desktopImportedPacketNetwork{})
+	address := netip.MustParseAddrPort(peer.address)
+	graph := map[string]any{"private_key": clientKey, "address": []string{"10.78.0.2/32", "fd78:78::2/128"}, "mtu": 1280, "detour": "physical", "peers": []map[string]any{{"address": address.Addr().String(), "port": address.Port(), "public_key": base64.StdEncoding.EncodeToString(provider.PublicKey().Bytes()), "pre_shared_key": request.PreSharedKey, "allowed_ips": []string{"0.0.0.0/0", "::/0"}}}}
+	raw, _ := json.Marshal(graph)
+	var wgOptions option.WireGuardEndpointOptions
+	if err := json.Unmarshal(raw, &wgOptions); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := WG.NewEndpoint(owned, nil, log.NewNOPFactory().Logger(), "entry", wgOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = entry.Close() })
+	manager.owners["entry"] = entry
+	for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+		if err := entry.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newFinal := func(password string) adapter.Outbound {
+		var options option.ShadowsocksOutboundOptions
+		raw, _ := json.Marshal(map[string]any{"server": "10.77.0.1", "server_port": 8388, "method": mobilemultihop.NativeStartLayerMethod, "password": password, "detour": "entry"})
+		_ = json.Unmarshal(raw, &options)
+		out, err := SS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), "final", options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		closer, ok := out.(io.Closer)
+		if !ok {
+			t.Fatal("paired final lost its owned lifecycle")
+		}
+		t.Cleanup(func() {
+			if err := closer.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		return out
+	}
+	final := newFinal(request.FinalPassword)
+	httpGet := func(out adapter.Outbound, path string, trust bool) (string, error) {
+		c, stop := context.WithTimeout(ctx, time.Second)
+		defer stop()
+		roots := x509.NewCertPool()
+		if trust && !roots.AppendCertsFromPEM([]byte(peer.ca)) {
+			t.Fatal("missing fixture CA")
+		}
+		transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, DialContext: func(c context.Context, n, a string) (net.Conn, error) {
+			return out.DialContext(c, n, M.ParseSocksaddr(a))
+		}}
+		defer transport.CloseIdleConnections()
+		r, _ := http.NewRequestWithContext(c, http.MethodGet, path, nil)
+		response, err := (&http.Client{Transport: transport}).Do(r)
+		if err != nil {
+			return "", err
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(response.Body, 4097))
+		if response.StatusCode != 200 || len(body) > 4096 {
+			return "", errors.New("invalid reference HTTP")
+		}
+		return string(body), err
+	}
+	packet := func(out adapter.Outbound, target string, body []byte) ([]byte, error) {
+		c, stop := context.WithTimeout(ctx, 350*time.Millisecond)
+		defer stop()
+		connection, err := out.DialContext(c, "udp", M.ParseSocksaddr(target))
+		if err != nil {
+			return nil, err
+		}
+		defer connection.Close()
+		deadline, _ := c.Deadline()
+		_ = connection.SetDeadline(deadline)
+		if n, err := connection.Write(body); err != nil || n != len(body) {
+			return nil, errors.Join(err, io.ErrShortWrite)
+		}
+		reply := make([]byte, mtuprobe.MaxBytes+1)
+		n, err := connection.Read(reply)
+		return reply[:n], err
+	}
+	t.Run("entry-public-only", func(t *testing.T) {
+		body, err := httpGet(entry, "https://1.1.1.1/cdn-cgi/trace", true)
+		s := peer.snapshot()
+		if err != nil || body != "ip=203.0.113.88\n" || s.EntryPublicQueries != 1 || s.FinalRawTCP != 0 || s.RouterQueries != 0 || s.EntryRawUDP == 0 {
+			t.Fatal("entry proof did not traverse independent encrypted WG", err, s)
+		}
+	})
+	t.Run("strict-public-tls", func(t *testing.T) {
+		before := peer.snapshot()
+		if _, err := httpGet(entry, "https://1.1.1.1/cdn-cgi/trace", false); err == nil {
+			t.Fatal("untrusted fixture CA accepted")
+		}
+		if peer.snapshot().EntryPublicQueries != before.EntryPublicQueries {
+			t.Fatal("untrusted TLS reached HTTP handler")
+		}
+	})
+	t.Run("paired-final-proof", func(t *testing.T) {
+		before := peer.snapshot()
+		body, err := httpGet(final, "http://10.77.0.1:8787/health", false)
+		var reply desktopImportedWGSSHealthReply
+		after := peer.snapshot()
+		if err != nil || json.Unmarshal([]byte(body), &reply) != nil || !reply.OK || reply.NodeID != request.NodeProofID || reply.Proof != "router-vpn-private-agent-v1" || after.RouterQueries != before.RouterQueries+1 || after.FinalRawTCP <= before.FinalRawTCP || after.FinalTCP <= before.FinalTCP || after.EntryPublicQueries != before.EntryPublicQueries {
+			t.Fatal("paired proof lost independent SS final", err, after)
+		}
+	})
+	t.Run("final-public-proof", func(t *testing.T) {
+		before := peer.snapshot()
+		body, err := httpGet(final, "https://1.1.1.1/cdn-cgi/trace", true)
+		after := peer.snapshot()
+		if err != nil || body != "ip=203.0.113.89\n" || after.FinalPublicQueries != before.FinalPublicQueries+1 || after.EntryPublicQueries != before.EntryPublicQueries {
+			t.Fatal("final public proof bypassed final", err, after)
+		}
+	})
+	t.Run("dns-final-refusal-restore", func(t *testing.T) {
+		q := new(dns.Msg).SetQuestion("example.com.", dns.TypeA)
+		wire, _ := q.Pack()
+		before := peer.snapshot()
+		for _, command := range []string{"restore-dns", "fail-dns", "restore-dns"} {
+			_ = peer.control(command, true)
+			raw, err := packet(final, "192.168.50.133:53", wire)
+			var answer dns.Msg
+			expected := dns.RcodeSuccess
+			if command == "fail-dns" {
+				expected = dns.RcodeNameError
+			}
+			if err != nil || answer.Unpack(raw) != nil || answer.Id != q.Id || answer.Rcode != expected {
+				t.Fatal("final-owned DNS response changed", command, err)
+			}
+		}
+		after := peer.snapshot()
+		if after.DNSQueries != before.DNSQueries+3 || after.FinalRawUDP <= before.FinalRawUDP || after.FinalUDP <= before.FinalUDP || after.RouterQueries != before.RouterQueries {
+			t.Fatal("DNS counters escaped final", before, after)
+		}
+	})
+	t.Run("entry-cannot-bypass-final-dns", func(t *testing.T) {
+		q := new(dns.Msg).SetQuestion("example.com.", dns.TypeA)
+		wire, _ := q.Pack()
+		before := peer.snapshot()
+		if _, err := packet(entry, "192.168.50.133:53", wire); err == nil {
+			t.Fatal("entry directly reached Home DNS")
+		}
+		if peer.snapshot().DNSQueries != before.DNSQueries {
+			t.Fatal("entry-only traffic reached final DNS")
+		}
+	})
+	t.Run("entry-cannot-bypass-final-health", func(t *testing.T) {
+		before := peer.snapshot()
+		if _, err := httpGet(entry, "http://10.77.0.1:8787/health", false); err == nil {
+			t.Fatal("entry directly reached paired final health")
+		}
+		after := peer.snapshot()
+		if after.RouterQueries != before.RouterQueries || after.FinalRawTCP != before.FinalRawTCP {
+			t.Fatal("entry-only traffic reached paired final health", before, after)
+		}
+	})
+	t.Run("wrong-final-key", func(t *testing.T) {
+		before := peer.snapshot()
+		bad := newFinal(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x73}, 32)))
+		if _, err := httpGet(bad, "http://10.77.0.1:8787/health", false); err == nil {
+			t.Fatal("wrong final key reached Router")
+		}
+		after := peer.snapshot()
+		if after.RouterQueries != before.RouterQueries || after.FinalTCP != before.FinalTCP || after.FinalRawTCP <= before.FinalRawTCP {
+			t.Fatal("wrong final key escaped independent observation", before, after)
+		}
+	})
+	t.Run("wrong-node-restored", func(t *testing.T) {
+		for _, command := range []string{"wrong-node", "restore-node"} {
+			_ = peer.control(command, true)
+			body, err := httpGet(final, "http://10.77.0.1:8787/health", false)
+			var reply desktopImportedWGSSHealthReply
+			if err != nil || json.Unmarshal([]byte(body), &reply) != nil || (reply.NodeID == request.NodeProofID) != (command == "restore-node") {
+				t.Fatal("node control did not affect actual final response", err)
+			}
+		}
+	})
+	t.Run("wrong-public-restored", func(t *testing.T) {
+		for _, command := range []string{"wrong-public", "restore-public"} {
+			_ = peer.control(command, true)
+			body, err := httpGet(entry, "https://1.1.1.1/cdn-cgi/trace", true)
+			expected := "ip=203.0.113.88\n"
+			if command == "wrong-public" {
+				expected = "ip=203.0.113.90\n"
+			}
+			if err != nil || body != expected {
+				t.Fatal("public control did not affect actual entry response", err)
+			}
+		}
+	})
+	t.Run("mtu-authenticated-final", func(t *testing.T) {
+		before := peer.snapshot()
+		for _, token := range []string{request.Token, "foreign-private-token"} {
+			wire, err := mtuprobe.Request(1252, token, request.NodeProofID, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			reply, err := packet(final, desktopNodeRouterCoverTarget, wire)
+			valid := err == nil && mtuprobe.ValidateReply(wire, reply, request.Token, request.NodeProofID, time.Now()) == nil
+			if valid != (token == request.Token) {
+				t.Fatal("MTU response did not retain final authentication", err)
+			}
+		}
+		after := peer.snapshot()
+		if after.MTUQueries != before.MTUQueries+2 || after.MTUReplies != before.MTUReplies+1 || after.CoverPackets != before.CoverPackets {
+			t.Fatal("MTU traffic was counted as padding", before, after)
+		}
+	})
+	t.Run("cover-drop-restored", func(t *testing.T) {
+		before := peer.snapshot()
+		payload := bytes.Repeat([]byte{0x51}, 1200)
+		for _, command := range []string{"restore-cover", "drop-cover", "restore-cover"} {
+			_ = peer.control(command, true)
+			reply, err := packet(final, desktopNodeRouterCoverTarget, payload)
+			if (err == nil && bytes.Equal(reply, payload)) != (command == "restore-cover") {
+				t.Fatal("cover control did not follow final encrypted path", command, err)
+			}
+		}
+		after := peer.snapshot()
+		if after.CoverPackets != before.CoverPackets+3 || after.CoverReplies != before.CoverReplies+2 || after.CoverMaximum != 1200 {
+			t.Fatal("cover bounds/counters changed", before, after)
+		}
+	})
+	t.Run("authenticated-final-throughput", func(t *testing.T) {
+		before := peer.snapshot()
+		transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(c context.Context, n, a string) (net.Conn, error) {
+			return final.DialContext(c, n, M.ParseSocksaddr(a))
+		}}
+		defer transport.CloseIdleConnections()
+		client := &http.Client{Transport: transport, Timeout: 2 * time.Second}
+		for _, direction := range []string{"unauthenticated", "download", "upload"} {
+			method, target := http.MethodGet, "http://10.77.0.1:8787/api/benchmark/download?bytes=65536"
+			var payload io.Reader
+			if direction == "upload" {
+				method, target = http.MethodPost, "http://10.77.0.1:8787/api/benchmark/upload"
+				payload = bytes.NewReader(bytes.Repeat([]byte{0x19}, 65536))
+			}
+			req, err := http.NewRequestWithContext(ctx, method, target, payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if direction != "unauthenticated" {
+				req.Header.Set("Authorization", "Bearer "+request.Token)
+			}
+			response, err := client.Do(req)
+			if err != nil {
+				t.Fatal("private final throughput request failed", err)
+			}
+			body, err := io.ReadAll(io.LimitReader(response.Body, 65537))
+			_ = response.Body.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch direction {
+			case "unauthenticated":
+				if response.StatusCode != http.StatusForbidden || peer.snapshot().DownloadBytes != before.DownloadBytes {
+					t.Fatal("private throughput lost its captured bearer authority")
+				}
+			case "download":
+				if response.StatusCode != http.StatusOK || len(body) != 65536 || response.Header.Get("X-Routervpn-Benchmark") != "download-v1" || response.Header.Get("X-Routervpn-Benchmark-Bytes") != "65536" {
+					t.Fatal("private throughput did not deliver its bounded payload")
+				}
+			case "upload":
+				var ack struct {
+					OK        bool   `json:"ok"`
+					Direction string `json:"direction"`
+					Bytes     int64  `json:"bytes"`
+				}
+				if response.StatusCode != http.StatusOK || json.Unmarshal(body, &ack) != nil || !ack.OK || ack.Direction != "upload" || ack.Bytes != 65536 {
+					t.Fatal("private throughput did not acknowledge actual received bytes")
+				}
+			}
+		}
+		after := peer.snapshot()
+		if after.DownloadBytes != before.DownloadBytes+65536 || after.UploadBytes != before.UploadBytes+65536 || after.FinalTCP < before.FinalTCP+3 || after.EntryPublicQueries != before.EntryPublicQueries || after.DNSQueries != before.DNSQueries {
+			t.Fatal("private throughput counters escaped independent final", before, after)
+		}
+	})
+	t.Run("wrong-entry-key", func(t *testing.T) {
+		foreign, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		graph["private_key"] = base64.StdEncoding.EncodeToString(foreign.Bytes())
+		raw, _ := json.Marshal(graph)
+		var wrongOptions option.WireGuardEndpointOptions
+		if err := json.Unmarshal(raw, &wrongOptions); err != nil {
+			t.Fatal(err)
+		}
+		wrong, err := WG.NewEndpoint(owned, nil, log.NewNOPFactory().Logger(), "foreign-entry", wrongOptions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer wrong.Close()
+		for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+			if err := wrong.Start(stage); err != nil {
+				t.Fatal(err)
+			}
+		}
+		before := peer.snapshot()
+		if _, err := httpGet(wrong, "https://1.1.1.1/cdn-cgi/trace", true); err == nil {
+			t.Fatal("foreign entry identity reached decrypted public target")
+		}
+		after := peer.snapshot()
+		if after.EntryRawUDP <= before.EntryRawUDP || after.EntryTCP != before.EntryTCP || after.EntryPublicQueries != before.EntryPublicQueries || after.FinalRawTCP != before.FinalRawTCP {
+			t.Fatal("wrong entry key escaped independent observation", before, after)
+		}
+	})
+}
