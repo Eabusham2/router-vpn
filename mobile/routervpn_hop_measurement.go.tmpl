@@ -61,6 +61,9 @@ func (m *RouterHopMeasurement) Start(request string, bytes int64) error {
 func (m *RouterHopMeasurement) StartLatency(request, exitID string) error {
 	return m.service.StartLatency(request, exitID)
 }
+func (m *RouterHopMeasurement) StartResponse(request, exitID string) error {
+	return m.service.StartResponse(request, exitID)
+}
 func (m *RouterHopMeasurement) Cancel(request string)      { m.service.Cancel(request) }
 func (m *RouterHopMeasurement) Drain(request string) error { return m.service.Drain(request) }
 func (m *RouterHopMeasurement) StatusJSON() string         { return m.service.StatusJSON() }

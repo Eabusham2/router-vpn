@@ -108,6 +108,7 @@ type Result struct {
 	Download  *Transfer         `json:"download,omitempty"`
 	Upload    *Transfer         `json:"upload,omitempty"`
 	Benchmark *LatencyBenchmark `json:"benchmark,omitempty"`
+	Response  *PathResponse     `json:"response,omitempty"`
 }
 type Status struct {
 	Request  string   `json:"request_id"`
