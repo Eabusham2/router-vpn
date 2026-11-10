@@ -8,6 +8,8 @@ Set-StrictMode -Version Latest
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
 function Assert-ProtectionComposition([bool]$Value,[string]$Message){if(-not$Value){throw $Message}}
 foreach($Name in @('Test-RouterVPNMutationBusyFromStatus','Test-RouterVPNMutationBusy','Assert-RouterVPNMutationIdle',
+    'GetUnifiedStopRetryToken','TestUnifiedProtectionStatusBusy','AssertUnifiedProtectionMutationIdle',
+    'SetUnifiedStopRetryPresentation','UnifiedAsyncBusy',
     'ApplyUnifiedRefreshSnapshot','UnifiedRefreshBusy','CompleteUnifiedRefreshAsync','SetUnifiedAsyncUI',
     'UnifiedTelemetryBusy','CompleteUnifiedTelemetryRefresh')){
     $Functions=@($Ast.FindAll({param($N)$N-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$N.Name-ceq$Name},$true))
@@ -56,6 +58,7 @@ $MH=@{nodes=@();entry_id='';exit_id='';platform_supported=$true;connected=$false
 $Timeline=@{events=@();last_event_seq=0}
 $script:Busy=$false;$script:EventSeq=[uint64]0;$script:DnsPolicySummary='Home AdGuard';$script:NodeSort='name'
 $script:UnifiedProtectionPending=$false;$script:UnifiedProtectionProfileID='';$script:UnifiedAsyncClosed=$false
+$script:UnifiedAsyncActive=$false;$script:UnifiedAsyncOwnedStopRetry=$false;$script:UnifiedStopRetryToken=''
 $script:UnifiedRefreshTasks=@{};$script:UnifiedRefreshRequests=@{};$script:UnifiedRefreshDiscard=$false
 $script:UnifiedTelemetryTasks=@{};$script:UnifiedTelemetryRequests=@{};$script:UnifiedTelemetryDiscard=$false
 $script:UnifiedRoutePathMs=0.0;$script:UnifiedForwardSync=$false

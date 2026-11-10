@@ -387,6 +387,10 @@ Check $UnifiedBlock.Success 'Shipping primary Connect source missing.'
 $Primary=@([ScriptBlock]::Create($UnifiedBlock.Groups[1].Value).Ast.FindAll({param($Node)$Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'UnifiedConnect'},$true))
 Check ($Primary.Count -eq 1) 'Shipping primary Connect function changed.'
 . ([ScriptBlock]::Create($Primary[0].Extent.Text))
+$RetryReceipt=@([ScriptBlock]::Create($UnifiedBlock.Groups[1].Value).Ast.FindAll({param($Node)$Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'GetUnifiedStopRetryToken'},$true))
+Check ($RetryReceipt.Count -eq 1) 'Shipping Stop receipt validator changed.'
+. ([ScriptBlock]::Create($RetryReceipt[0].Extent.Text))
+$script:UnifiedStopRetryToken='';$script:UnifiedAsyncOwnedStopRetry=$false;$script:UnifiedProtectionPending=$false
 function UnifiedAsyncBusy{return $false}
 function UnifiedSelectedProfile{return $Captured}
 $RouterCombo=[pscustomobject]@{Tag=$null;SelectedValue=''}
