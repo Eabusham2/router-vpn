@@ -17,6 +17,10 @@ PHASES = (
     ('Start Layers and composites', r'^Test(?:Composite|EntryStartLayer|EntryLayer|BothStartLayers|ExitLayer|NativeBaseStartLayer)'),
     ('complete MAX chains', r'^Test(?:CompleteMAX|MAX|ExportMAX|ExportPinnedCoreMAX)'),
     ('external paths and OpenVPN', r'^Test(?:External|OpenVPN|ImportedEntry)'),
+    # Keep the growing fallback below the same 180s aggregate bound. Exclude
+    # the roots already covered by the node and external phases explicitly.
+    ('desktop execution and ownership', r'^TestDesktop(?!Predecessor)'),
+    ('imported transports and ownership', r'^TestImported(?!Entry)'),
 )
 REQUIRED = frozenset((
     'TestImportedEntryPacketFinalCompleteGraphs', 'TestImportedEntryPacketFinalOwnershipAndMTU',
@@ -91,6 +95,8 @@ class PartitionTests(unittest.TestCase):
     def setUp(self):
         self.names = sorted(REQUIRED | {
             'TestEntryStartLayerPreservesAllNativeModesAndChoicePaths',
+            'TestDesktopExecution', 'TestDesktopPredecessorOwnership',
+            'TestImportedTransport',
             'TestFutureController', 'Example', 'FuzzFutureSeed', 'TestÜnicode',
         })
 
@@ -109,6 +115,18 @@ class PartitionTests(unittest.TestCase):
                        '\n'.join(name for name in self.names if name != sorted(REQUIRED)[0])):
             with self.subTest(output=output), self.assertRaises(ValueError):
                 inventory(output)
+
+    def test_growing_fallback_is_disjoint_and_future_names_still_run(self):
+        groups = dict(partition(self.names))
+        self.assertIn('TestDesktopExecution', groups['desktop execution and ownership'])
+        self.assertIn('TestDesktopPredecessorOwnership', groups['node capture and packet identities'])
+        self.assertIn('TestImportedTransport', groups['imported transports and ownership'])
+        self.assertIn('TestImportedEntryPacketFinalCompleteGraphs', groups['external paths and OpenVPN'])
+        for name in ('TestFutureController', 'Example', 'FuzzFutureSeed', 'TestÜnicode'):
+            self.assertIn(name, groups['controller, proof and remaining ownership'])
+        for label, pattern in (('overlap desktop', r'^TestDesktop'), ('overlap imported', r'^TestImported')):
+            with self.subTest(label=label), self.assertRaises(ValueError):
+                partition(self.names, PHASES + ((label, pattern),))
 
     def test_overlapping_predicates_reject(self):
         with self.assertRaises(ValueError):

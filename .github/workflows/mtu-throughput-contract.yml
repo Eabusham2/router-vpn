@@ -23,6 +23,7 @@ on:
       - 'internal/linuxprocess/**'
       - 'internal/linuxprotection/node_control*'
       - 'deploy/test_desktop_mtu_client_context*.py'
+      - 'deploy/test_mtu_throughput_budget.py'
       - 'cmd/client/desktop_node_mtu*.go'
       - 'mobile/desktop/mtu_node*.go.tmpl'
       - 'cmd/client/extras.go'
@@ -51,6 +52,7 @@ on:
       - 'internal/linuxprocess/**'
       - 'internal/linuxprotection/node_control*'
       - 'deploy/test_desktop_mtu_client_context*.py'
+      - 'deploy/test_mtu_throughput_budget.py'
       - 'cmd/client/desktop_node_mtu*.go'
       - 'mobile/desktop/mtu_node*.go.tmpl'
       - 'cmd/client/extras.go'
@@ -119,8 +121,10 @@ jobs:
         run: |
           python3 deploy/test_desktop_mtu_client_context_runner.py
           python3 deploy/test_desktop_mtu_client_context.py
+      - name: Validate complete MTU controller package budget
+        run: python3 deploy/test_mtu_throughput_budget.py
       - name: Go client MTU Retest and Portable path seam compiles
-        run: go test ./cmd/client -count=1
+        run: go test ./cmd/client -count=1 -timeout=15m
       - name: Original native process MTU observation contexts
         run: sudo env PATH="$PATH" GOTOOLCHAIN=local GOCACHE="$(go env GOCACHE)" GOMODCACHE="$(go env GOMODCACHE)" python3 deploy/test_desktop_mtu_client_context.py --native-only --go "$(command -v go)"
 
