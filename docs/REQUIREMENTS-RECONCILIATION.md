@@ -29,16 +29,26 @@ user wording remain separate, overlapping sources. This recovery preserves
 the original identifiers and numerical/default contracts without inventing a
 completion percentage.
 
-At source cutoff `e2211ee4`, native DNS and four client measurement paths adopt
-the checked platform interval. The ledger distinguishes passing local source
-and component tests from pending native packages and publication. It also
-identifies genuine source gaps beyond live-device work: imported Server/Compare,
-additional independently selected hops, and protected Unix imported composition.
-Home UDP over authenticated SS UoT-v2/native VLESS CONNECT paths is already
-implemented; selected UDP/DoH3 lower bootstrap for Naive H2 over CONNECT remains
-a narrower open path. Existing Unix direct and external-pair protection is
-preserved and is not described as wholly absent. Later source units must carry
-their own runtime and producer evidence before closing these boundaries.
+At source cutoff `885fb23c935b4006d8766e9a0b184bd4184063c5`, the named checked DNS/RTT,
+Compare and throughput changes and the bounded literal Naive H2 CONNECT/Home
+UDP path are published. The ledger records their actual local/native component
+checks without converting them into exact-head package or device acceptance.
+Linux imported physical/child prerequisites are published; the parent/host
+integration is unfinished, and the unavailable execution environment prevents
+verification of its latest uncommitted state. Its admission remains closed.
+
+Additional independently selected hops and broader protected Unix graphs remain
+open. No numeric hop maximum was recovered from the original repeated-hop
+wording. The earlier blanket assertion that an ordinary imported entry must
+offer Server/Compare despite lacking remote execution authority was an
+inference, not recovered exact wording. Preserve both that unresolved scope
+question and the existing authenticated eligibility rules. Do not silently
+remove a recovered requirement, invent remote credentials, or count a refused
+combination as completed delivery.
+
+The [recovery record](CONTINUATION-RECOVERY-2026-11-10.md) names the published
+baseline, inaccessible pending files and remaining validation. It cannot
+substitute for a byte-exact patch or actual restored-workspace inspection.
 
 ## November 6 imported-layer increment through `a08d7d6f`
 

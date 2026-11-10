@@ -6,29 +6,36 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 10 continuation: measurement clocks and current release repairs
+## November 10 continuation: published measurements, DNS and release repairs
 
-The [November 10 evidence ledger](CONTINUATION-EVIDENCE-2026-11-10.md)
-records the recovered original sources, published units through `e2211ee4`,
-actual executable checks, and remaining source and acceptance boundaries.
-Native DNS and four client DNS/RTT paths now use checked per-sample platform
-intervals. Invalid timing cannot earn a score or overwrite saved statistics;
-real positive tiny samples retain their measured value. Routed candidate and
-Compare probe clock adoption remains a separate source unit at this cutoff.
+The [evidence ledger](CONTINUATION-EVIDENCE-2026-11-10.md) records the recovered
+original sources and published source through `885fb23c935b4006d8766e9a0b184bd4184063c5`.
+Checked timing now covers the named DNS/RTT, Compare, private/hop throughput and
+Speed Lab paths. Clock faults cannot become a score, saved benchmark or partial
+success; real tiny positive observations retain their value. The literal
+Naive H2 final over HTTP/HTTPS CONNECT now carries selected Home/custom UDP
+when its final Start Layer is Off, with actual native execution and producer
+evidence recorded separately.
 
-Current release repairs retain the required negative controls and native
-inventory. They include real-build fixture corrections, complete generated
-bundle verdict counts, and bounded scheduling of all 536 Android source tests.
-The current native builds and publication have not yet completed. The older
-`745b3e41` release does not establish acceptance of these newer source changes.
+The Linux imported WG-to-paired-SS physical and authenticated-child
+prerequisites are published. The parent/host integration remains unfinished
+and unpublished, and public admission remains closed. The execution workspace
+became unavailable before its current source could be fully validated or
+backed up. The [recovery record](CONTINUATION-RECOVERY-2026-11-10.md) distinguishes
+the last successful compile from the later unverified edits and records the
+remaining restoration, ownership and actual-host tests.
 
-The source reconciliation narrows two stale blanket gaps: Home UDP already
-works over CONNECT when the independently authenticated final supplies SS
-UoT-v2 or native VLESS datagram carriage, and Unix already has protected direct
-and bounded external-pair paths. Naive H2's selected UDP/DoH3 lower bootstrap,
-protected imported-entry/paired-final Unix composition, imported Server/Compare,
-and additional user-selected hops remain open at this cutoff. The ledger names
-the actual shipping boundaries; safe rejection does not complete a requirement.
+Current release fixes preserve the negative controls and inventory, including
+the real Windows controller-response shape in its protection fixture. The latter
+repair awaits hosted PowerShell/installed/Portable validation because the local
+executor is unavailable. Native workflows and publication are still pending;
+the historical `745b3e41` release does not validate these newer commits.
+
+Additional independently selected hops and broader Unix graph coverage remain
+open. The scope of Server/Compare for ordinary imported entries without remote
+executor authority is explicitly unresolved in the recovered original wording;
+their Local-only capability guard is retained. Source, build, publication,
+physical acceptance and private deployment remain distinct.
 
 ## November 9 latest checkpoint: imported Naive H3 and native timing repairs
 

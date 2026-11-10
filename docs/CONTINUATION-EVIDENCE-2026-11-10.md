@@ -2,8 +2,9 @@
 
 This ledger preserves the full requested product scope and separates source,
 tests, publication, deployment and physical acceptance. The source cutoff for
-this entry is `e2211ee4e022e00fabafa84d0c58c017d426398d`. Later commits must be
-read before treating an open item below as the current implementation state.
+this entry is `885fb23c935b4006d8766e9a0b184bd4184063c5`. Earlier validation
+snapshots below retain their own source identities. Later commits must be read
+before treating an open item below as the current implementation state.
 
 ## Recovered authority
 
@@ -55,12 +56,27 @@ was performed.
 | `ce2faf49` | All 536 Android source roots remain selected exactly once; the 222-root fallback is split into 94/73/55 bounded groups. Their actual race executions passed in 128.374/117.641/15.992 seconds. The unchanged full client suite has an explicit 15-minute workflow budget. Nine partition/budget controls passed. |
 | `e2211ee4` | Selected DNS, quick/Fastest TCP, private-node HTTP and durable 50–200-sample measurements retain checked per-sample intervals. The 212-verdict/45-root focused race suite passed, including real TCP/HTTP exchanges and failed persistence controls; Windows AMD64/ARM64 cross-builds and 21 dependency tests passed. |
 
+
+| `9aadc001` | Routed candidate TCP and Compare duration readback use checked intervals. Invalid timing has no fallback score. Focused client/hopmeasure and route-choice tests passed; fabricated-floor/duration controls failed. The score, common endpoint and repeat proof are unchanged. |
+| `9bc6d5ff` | Speed Lab HTTPS latency and reserved private hop-lane HTTP latency retain checked intervals and tiny positive statistics. Twenty-three new race verdicts plus 49 existing regressions passed. |
+| `f166f0b1` | Sealed Linux imported WG-entry/paired-SS-final physical policy and retained native lifecycle were added as prerequisites. Real native code compiled, but local Netlink denial blocked strict physical cases. Diagnostic interface-model results are explicitly separate. Public host admission was not enabled. |
+| `7e2ac684` | Private-node download/upload rates retain actual bytes, complete acknowledgments and checked elapsed time. Seventy focused race verdicts plus 16 ownership regressions passed; fabricated-duration controls failed. |
+| `1063cb2c` | A captured literal Naive H2 final over HTTP/HTTPS CONNECT carries selected Home/custom UDP DNS when the final Start Layer is Off. All three entry layers retain their original authority. Actual pinned native H2/H3/CONNECT execution passed 77 verdicts; all six newly exported Android/Apple/desktop Home graphs passed the native parser. Hostname-dependent lower DNS, DoH3 and layered-final UDP bootstrap remain separate boundaries. |
+| `a0fbb61d` | Reserved multihop-lane throughput retains actual bytes, checked duration, full acknowledgment and identity proof before and after load. The focused race selection passed 118 verdicts across 17 roots; four fabricated-readback controls failed. |
+| `0fffc378` | The durable latency source gate now names the checked mean helper. A real 50-connection outlier case proves the full mean and persisted 10% trimmed mean separately; 14 focused race verdicts passed. The optional no-trimming mutation did not execute because its compiler was resource-killed, so it is not counted as a negative-control pass. |
+| `cd9c6903` | Linux imported child control authenticates inherited ownership before source parsing, binds both source/selection hashes and retains its constructor through native join/retirement. Final-owned cover participates in readiness. Shared race/parser checks, 60 routing checks and 22 child/TUN runner checks passed. Actual Box/guardian cases remained blocked locally by Netlink permissions; public imported admission remains closed. |
+| `d493015f` | Speed Lab single/parallel/whole-load throughput uses checked durations, retains the stalled final tail, and distinguishes clock faults from ordinary administrative deadlines. Actual HTTP/captured-tunnel race tests passed 117 verdicts across 24 roots. Four partial-success mutations and the wrong-denominator mutation failed as intended. |
+| `885fb23c` | The Windows protection-composition fixture now returns controller-shaped JSON objects on synchronous status reads. Existing callback/owner assertions remain; wire-property, idle and malformed-status assertions were added. This was diagnosed from real hosted failures and reviewed source. The workspace was unavailable, so no local execution is claimed; hosted PowerShell and installed/Portable validation remains required. |
+
 The measurement guides record their original test commands, causal controls
 and limitations:
 [native DNS](testing/native-dns-measurement-clock.md),
 [client timing](testing/client-measurement-clock.md),
 [suite scheduling](testing/go-source-contract-budget.md), and
-[Darwin renewal fixture](testing/darwin-renewal-fixture-capture.md).
+[Darwin renewal fixture](testing/darwin-renewal-fixture-capture.md),
+[literal H2 Home DNS](testing/imported-naive-h2-literal-home.md),
+[Linux imported lifecycle](testing/linux-imported-policy-lifecycle.md), and
+[Speed Lab throughput](testing/speed-lab-throughput-clock.md).
 
 ## Source and native evidence boundaries
 
@@ -87,15 +103,29 @@ queued or running and no complete new release was verified. The independently
 verified historical `745b3e41` release retains 12 assets: ten native packages,
 the release manifest and checksums. It does not validate the newer source.
 
-## Concrete remaining source gaps
+## Current source and requirement boundaries
 
-| Requirement | Current shipping evidence | Actual remaining boundary |
+| Area | Current shipping evidence | Actual remaining boundary |
 | --- | --- | --- |
-| Imported entry to paired final with Local/Server/Compare | `imported_entry.go`, desktop and native producers retain Local metadata. Paired Router entries already have authenticated Server/Compare machinery. | Ordinary imported credentials do not provide remote execution authority. Implement a real independently authenticated lease/cleanup path before admitting Server/Compare for this direction. |
-| Additional user-selected nodes | `common.RouterProfile`, desktop multihop selection and shared metadata retain one entry and one exit. MAX/predecessor internals can contain multiple transports for one selected node. | No ordered topology of a third or subsequent independently selected node is executed. This needs a shared compiler, per-node proof/policy and actual native producers, not an unused array. |
-| Home UDP over CONNECT | `imported_connect.go` already admits final-owned configured SS UoT-v2 and native VLESS datagrams; default Home and wrong-authority controls exist. | Unprovisioned SS stream paths remain TCP-only. Naive H2 over CONNECT still rejects the selected UDP/DoH3 lower bootstrap at this cutoff. Its separately authenticated application UoT does not prove a usable lower bootstrap. |
-| Protected Unix graphs | Linux direct WG/AWG/SS/HY2/ss-v2ray and bounded Unix external pairs retain actual host protection. | Imported-entry/paired-final protected policy and its retained controller currently require Windows. Broader Unix combinations require actual host, proof, DNS, MTU, restore and successor integration. |
-| Remaining response/throughput clocks | Native DNS and four client paths use checked platform intervals at this cutoff. | Routed candidate and Compare response clocks, plus other throughput paths, need their own source-path audit and tests. |
+| Additional user-selected nodes | Desktop selection/shared metadata retain one entry and one exit. MAX/predecessor component chains are not additional independently selected nodes. | The original August 19 user passage asks for another node's latency via the already selected node and repeats that operation. No explicit numeric maximum was recovered. Ordered additional-node execution, per-node proof/policy and native producers remain unimplemented. |
+| Imported Local/Server/Compare eligibility | Imported-entry/paired-final producers retain Local execution. Paired Router entries already have authenticated Server/Compare execution. | Ordinary imported transport credentials confer no remote executor authority. The earlier blanket requirement for Server execution on such an unmanaged entry was an inference from general scope, not recovered exact user wording. Keep this scope question explicit and retain the eligibility/authentication guard; do not invent credentials or declare broader Server coverage complete. |
+| Home UDP over CONNECT | Configured SS UoT-v2 and native VLESS datagrams already worked. `1063cb2c` also carries Home/custom UDP through a literal Naive H2 final with final layer Off. | Unprovisioned SS stream paths, hostname-dependent Naive lower UDP bootstrap, DoH3 and final AES/AES+XOR UDP bootstrap require their own actual transport path. Do not carry forward the old blanket claim that all CONNECT/Home UDP is absent. |
+| Protected Unix imported graphs | Linux direct and bounded external pairs already work. The sealed WG-to-paired-SS Linux physical lifecycle and authenticated child/cover prerequisites are published. | The actual Linux parent/host integration is unfinished and unpublished; normal imported admission remains closed. Broader combinations and macOS require their own complete host, proof, DNS, MTU, restore and successor paths. |
+| Measurement clocks | Native DNS, client DNS/direct/private RTT, routed candidates/Compare, hop HTTP latency, private/hop throughput and Speed Lab throughput now retain checked timing in the published units above. | Source/local evidence is bounded to the named paths and test snapshots. Matching native packages, device throughput and complete selected-path acceptance remain required; no full-product or all-device completion is inferred. |
+
+## Workspace interruption and recovery
+
+The execution environment became unavailable after publication of
+`d493015f`. Process creation failed with an exec-server transport disconnect
+and a 45-second recovery timeout; the environment then explicitly reported
+unavailable. Connected GitHub remained usable, allowing the reviewed Windows
+fixture repair and this evidence update to be published with normal ancestry.
+
+The [recovery record](CONTINUATION-RECOVERY-2026-11-10.md) preserves the exact
+published baseline, last observed pending paths, completed versus unverified
+checks, and known unfinished correctness work. It is not a byte-exact backup
+of inaccessible uncommitted files. Do not publish reconstructed Linux source
+or open its admission guard merely because an earlier partial version compiled.
 
 The exact Compare score remains
 `(last_node_response_time + external_server_response_time) / 2`, with the same
