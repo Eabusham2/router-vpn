@@ -48,7 +48,7 @@ class ImportedPacketRuntimeGate(unittest.TestCase):
         self.assertEqual(len(expected_files),108)
         # The packet extension must not reclassify or reduce the published gates.
         self.assertEqual(len(N.IMPORTED_DESKTOP_FILES),26)
-        self.assertEqual(len(N.imported_native_dns_verdicts()),13)
+        self.assertEqual(len(N.imported_native_dns_verdicts()),19)
         for target in N.TARGETS:
             roots,names = N.imported_desktop_packet_verdicts(target)
             self.assertEqual(len(names),185 if target.startswith('linux/') else 176)

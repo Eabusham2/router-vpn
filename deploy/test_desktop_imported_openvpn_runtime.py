@@ -53,7 +53,7 @@ class ImportedOpenVPNRuntimeGate(unittest.TestCase):
         # The OpenVPN extension must not reclassify or reduce the published gates.
         self.assertEqual(len(N.IMPORTED_DESKTOP_FILES),26)
         self.assertEqual(len(N.IMPORTED_PACKET_FILES),108)
-        self.assertEqual(len(N.imported_native_dns_verdicts()),13)
+        self.assertEqual(len(N.imported_native_dns_verdicts()),19)
         for target in N.TARGETS:
             roots,names = N.imported_desktop_openvpn_verdicts(target)
             self.assertEqual(len(names),196 if target.startswith('linux/') else 192)
