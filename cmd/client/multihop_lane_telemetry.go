@@ -197,7 +197,11 @@ func measureRoutedProfileSpeedViaProxy(p common.RouterProfile, bytesCount int64,
 }
 
 func measureRoutedProfileSpeedViaProxyContext(ctx context.Context, p common.RouterProfile, bytesCount int64, proxyRaw string) (routedSpeedResult, error) {
-	if err := ctx.Err(); err != nil {
+	return measureRoutedProfileSpeedViaProxyWithClock(ctx, p, bytesCount, proxyRaw, startClientMeasurementInterval)
+}
+
+func measureRoutedProfileSpeedViaProxyWithClock(ctx context.Context, p common.RouterProfile, bytesCount int64, proxyRaw string, startClock clientMeasurementClock) (routedSpeedResult, error) {
+	if err := context.Cause(ctx); err != nil {
 		return routedSpeedResult{}, err
 	}
 	if err := proveMultihopLaneNodeContext(ctx, p, proxyRaw); err != nil {
@@ -221,7 +225,10 @@ func measureRoutedProfileSpeedViaProxyContext(ctx context.Context, p common.Rout
 	}
 	downloadReq = downloadReq.WithContext(ctx)
 	downloadReq.Header.Set("Accept-Encoding", "identity")
-	downloadStarted := time.Now()
+	downloadInterval, err := startClock()
+	if err != nil {
+		return routedSpeedResult{}, fmt.Errorf("hop-lane download benchmark clock start failed: %w", errors.Join(err, context.Cause(ctx)))
+	}
 	downloadResp, err := client.Do(downloadReq)
 	if err != nil {
 		return routedSpeedResult{}, fmt.Errorf("hop-lane download benchmark failed: %w", err)
@@ -237,7 +244,14 @@ func measureRoutedProfileSpeedViaProxyContext(ctx context.Context, p common.Rout
 	if downloaded != bytesCount {
 		return routedSpeedResult{}, fmt.Errorf("hop-lane download benchmark returned %d bytes; expected %d", downloaded, bytesCount)
 	}
-	downloadElapsed := time.Since(downloadStarted)
+	downloadMs, err := clientMeasurementMilliseconds(ctx, downloadInterval)
+	if err != nil {
+		return routedSpeedResult{}, fmt.Errorf("hop-lane download benchmark clock failed: %w", err)
+	}
+	downloadMbps, err := privateBenchmarkMbps(bytesCount, downloadMs)
+	if err != nil {
+		return routedSpeedResult{}, err
+	}
 
 	payload := make([]byte, bytesCount)
 	if _, err := io.ReadFull(rand.Reader, payload); err != nil {
@@ -250,7 +264,10 @@ func measureRoutedProfileSpeedViaProxyContext(ctx context.Context, p common.Rout
 	}
 	uploadReq = uploadReq.WithContext(ctx)
 	uploadReq.ContentLength = bytesCount
-	uploadStarted := time.Now()
+	uploadInterval, err := startClock()
+	if err != nil {
+		return routedSpeedResult{}, fmt.Errorf("hop-lane upload benchmark clock start failed: %w", errors.Join(err, context.Cause(ctx)))
+	}
 	uploadResp, err := client.Do(uploadReq)
 	if err != nil {
 		return routedSpeedResult{}, fmt.Errorf("hop-lane upload benchmark failed: %w", err)
@@ -266,7 +283,14 @@ func measureRoutedProfileSpeedViaProxyContext(ctx context.Context, p common.Rout
 	if len(body) > 64<<10 {
 		return routedSpeedResult{}, errors.New("hop-lane upload benchmark response is oversized")
 	}
-	uploadElapsed := time.Since(uploadStarted)
+	uploadMs, err := clientMeasurementMilliseconds(ctx, uploadInterval)
+	if err != nil {
+		return routedSpeedResult{}, fmt.Errorf("hop-lane upload benchmark clock failed: %w", err)
+	}
+	uploadMbps, err := privateBenchmarkMbps(bytesCount, uploadMs)
+	if err != nil {
+		return routedSpeedResult{}, err
+	}
 	var ack struct {
 		Bytes           int64   `json:"bytes"`
 		ServerReceiveMs float64 `json:"server_receive_ms"`
@@ -283,11 +307,13 @@ func measureRoutedProfileSpeedViaProxyContext(ctx context.Context, p common.Rout
 		return routedSpeedResult{}, fmt.Errorf("hop-lane identity changed after throughput benchmark: %w", err)
 	}
 
-	mbits := float64(bytesCount*8) / 1_000_000.0
+	if err := context.Cause(ctx); err != nil {
+		return routedSpeedResult{}, err
+	}
 	return routedSpeedResult{
 		RouterID: p.ID, Name: p.Name, Bytes: bytesCount,
-		DownloadMbps: round3(mbits / downloadElapsed.Seconds()), UploadMbps: round3(mbits / uploadElapsed.Seconds()),
-		DownloadMs: round3(float64(downloadElapsed.Microseconds()) / 1000.0), UploadMs: round3(float64(uploadElapsed.Microseconds()) / 1000.0),
+		DownloadMbps: downloadMbps, UploadMbps: uploadMbps,
+		DownloadMs: roundMeasuredMilliseconds(downloadMs), UploadMs: roundMeasuredMilliseconds(uploadMs),
 		ServerReceiveMs: round3(ack.ServerReceiveMs), MeasuredAt: time.Now().UTC(),
 		Proof: "independent authenticated transfer through reserved local multihop hop lane " + proxyRaw + "; node identity proved before and after load",
 	}, nil
