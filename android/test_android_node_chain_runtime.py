@@ -32,7 +32,7 @@ for name in ('AndroidNodeChainSession', 'AndroidHomeStateStore'):
     SOURCES.pop(APP + name + '.java')
 
 SOURCES['android/content/SharedPreferences.java'] = '''package android.content;
-public interface SharedPreferences {String getString(String k,String d);long getLong(String k,long d);boolean getBoolean(String k,boolean d);Editor edit();
+public interface SharedPreferences {String getString(String k,String d);long getLong(String k,long d);boolean getBoolean(String k,boolean d);java.util.Map<String,?> getAll();Editor edit();
  interface Editor {Editor putString(String k,String v);Editor putLong(String k,long v);Editor putBoolean(String k,boolean v);Editor remove(String k);void apply();}}
 '''
 SOURCES['android/content/Context.java'] = r'''package android.content;
@@ -48,6 +48,7 @@ public class Context {
   final java.util.Map<String,Object> values=new java.util.HashMap<>();
   public volatile Runnable beforeApply;public volatile Thread applyThread;
   public synchronized String getString(String k,String d){return (String)values.getOrDefault(k,d);}public synchronized long getLong(String k,long d){return (Long)values.getOrDefault(k,d);}public synchronized boolean getBoolean(String k,boolean d){return (Boolean)values.getOrDefault(k,d);}
+  public synchronized java.util.Map<String,?> getAll(){return new java.util.HashMap<>(values);}
   public Editor edit(){return new Editor(){final java.util.Map<String,Object> stage=new java.util.HashMap<>();
    public Editor putString(String k,String v){stage.put(k,v);return this;}public Editor putLong(String k,long v){stage.put(k,v);return this;}public Editor putBoolean(String k,boolean v){stage.put(k,v);return this;}public Editor remove(String k){stage.put(k,null);return this;}
    public void apply(){Runnable hook=beforeApply;if(hook!=null&&Thread.currentThread()==applyThread)hook.run();synchronized(Store.this){for(var e:stage.entrySet())if(e.getValue()==null)values.remove(e.getKey());else values.put(e.getKey(),e.getValue());}}
@@ -98,6 +99,7 @@ SOURCES[NATIVE + 'Libbox.java'] = SOURCES[NATIVE + 'Libbox.java'].replace('publi
   if(plan.server!=server||!plan.healthy())throw new IllegalStateException("unproved or replaced ordered MTU");mtuPlan=plan;mtuServer=server;mtuPlatform=platform;return new RouterMTU();}
 }'''
 SOURCES[APP + 'AndroidNodeStore.java'] = r'''package com.eabusham.routervpn;final class AndroidNodeStore {
+ AndroidNodeStore(android.content.Context context){}String activeId(){return "";}
  static final class ChainSource {final String id;ChainSource(String id){this.id=id;}}
  static final class ChainCapture {
   final ChainSource control;final java.util.List<ChainSource> members;final java.util.List<String> modes;volatile boolean valid=true;boolean strict;volatile Runnable beforeCurrent;volatile Thread hookThread;
@@ -130,11 +132,18 @@ SOURCES[APP + 'AndroidRuntimeRegistry.java'] = '''package com.eabusham.routervpn
  static class WG{com.wireguard.android.backend.Tunnel.State getState(){return com.wireguard.android.backend.Tunnel.State.DOWN;}}
  static class AWG{org.amnezia.awg.backend.Tunnel.State getState(){return org.amnezia.awg.backend.Tunnel.State.DOWN;}}
 }'''
+SOURCES[APP + 'AndroidStartupPolicy.java'] = '''package com.eabusham.routervpn;final class AndroidStartupPolicy {
+ static int prepared,recorded;static AndroidNodeStore.ChainCapture source;
+ static final class OrderedLast{final AndroidNodeStore.ChainCapture source;OrderedLast(AndroidNodeStore.ChainCapture source){this.source=source;}}
+ static OrderedLast prepareOrderedExecution(android.content.Context context,AndroidNodeStore.ChainCapture capture){prepared++;source=capture;return new OrderedLast(capture);}
+ static boolean recordOrderedExecution(android.content.Context context,OrderedLast receipt,AndroidHomeStateStore.Snapshot home){if(receipt==null)return false;if(!home.connected||!home.pathProof.equals("passed")||!home.logicalMode.equals("node-chain")||receipt.source!=source)throw new AssertionError("history preceded complete ordered proof");recorded++;return true;}
+}'''
 
 HARNESS = r'''package com.eabusham.routervpn;
 import android.content.*;import io.nekohasekai.libbox.*;import java.nio.file.*;import java.lang.reflect.*;import java.util.concurrent.*;import java.util.*;
 public final class OrderedRuntimeTest {
  static int checks;interface Action{void run()throws Exception;}static void check(boolean value,String message){checks++;if(!value)throw new AssertionError(message);}
+ static final java.util.concurrent.ConcurrentLinkedQueue<Throwable> uncaught=new java.util.concurrent.ConcurrentLinkedQueue<>();
  static void reject(Action call,String message)throws Exception{try{call.run();}catch(Exception expected){checks++;return;}throw new AssertionError(message);}
  static Object get(Object owner,String name)throws Exception{Field field=owner.getClass().getDeclaredField(name);field.setAccessible(true);return field.get(owner);}
  static void set(Object owner,String name,Object value)throws Exception{Field field=owner.getClass().getDeclaredField(name);field.setAccessible(true);field.set(owner,value);}
@@ -152,7 +161,7 @@ public final class OrderedRuntimeTest {
  }
  static void success()throws Exception {
   for(int count:new int[]{2,3,4,8})try(Fixture f=new Fixture(count)){
-   f.connected();AndroidNodeChainSession original=f.owner();RouterNodeChain graph=original.capture.plan;CommandServer server=(CommandServer)get(f.service,"commandServer");
+   int previousHistory=AndroidStartupPolicy.recorded;f.connected();check(AndroidStartupPolicy.recorded==previousHistory+1,"fresh proved ordered connection did not record its captured Local choice");AndroidNodeChainSession original=f.owner();RouterNodeChain graph=original.capture.plan;CommandServer server=(CommandServer)get(f.service,"commandServer");
    check(graph.runs==1&&graph.count==count&&graph.server==server,"service substituted a pair/final probe or another native Box");
    var home=AndroidHomeStateStore.snapshot(f.service);var ordered=new org.json.JSONArray(home.activeChain);
    check(home.connected&&home.logicalMode.equals("node-chain")&&home.activeEntryId.isEmpty()&&home.activeExitId.isEmpty()&&ordered.length()==count,"Home dropped ordered members or borrowed pair identity");
@@ -162,19 +171,31 @@ public final class OrderedRuntimeTest {
    check(f.service.network.physical.bindings==1,"ordered socket was not bound to its captured physical network");
    reject(()->AndroidNodeChainSession.claim(f.service,original.directory,original.sessionId,"node-chain",original.capture.config,home.sessionId),"same private source started twice");
    var restore=f.runtime.captureRestore();check(f.runtime.captureCurrent(restore),"proved original restore capture rejected");
-   f.stop();check(original.released()&&!original.directory.exists()&&server.checkedCloses>0&&!f.runtime.isActiveOrTransitioning(),"Disconnected preceded native join or private-source cleanup");
+   check(!f.runtime.restoredMatches(restore),"the original proof was mistaken for a fresh restored owner");
+   check(!f.runtime.disconnectAndDrainCaptured("different-home")&&f.runtime.isConnected(),"captured disconnect stopped an unrelated Home owner");
+   check(f.runtime.disconnectAndDrainCaptured(home.sessionId),"the exact captured ordered owner did not drain");f.drain();
+   check(AndroidHomeStateStore.snapshot(f.service).pathGeneration==home.pathGeneration+2,"captured stop did not invalidate proof before terminal Home");
+   check(original.released()&&!original.directory.exists()&&server.checkedCloses>0&&!f.runtime.isActiveOrTransitioning(),"Disconnected preceded native join or private-source cleanup");
+   int prepared=AndroidStartupPolicy.prepared,recorded=AndroidStartupPolicy.recorded;
    var idle=AndroidHomeStateStore.snapshot(f.service);Result result=new Result();f.runtime.restore(restore,idle,result);result.finished();check(result.ok,"exact original restore did not reprove every member: "+result.message);
-   AndroidNodeChainSession restored=f.owner();check(restored!=original&&restored.source==original.source&&restored.capture.plan!=graph&&restored.capture.plan.runs==1,"restore reused proof or reconstructed saved labels");f.stop();
+   AndroidNodeChainSession restored=f.owner();check(restored!=original&&restored.source==original.source&&restored.capture.plan!=graph&&restored.capture.plan.runs==1,"restore reused proof or reconstructed saved labels");
+   check(f.runtime.restoredMatches(restore)&&!f.runtime.captureCurrent(restore),"fresh restored proof did not match its complete original sources");
+   check(prepared==AndroidStartupPolicy.prepared&&recorded==AndroidStartupPolicy.recorded,"temporary restoration overwrote ordered Last history");
+   f.source.valid=false;check(!f.runtime.restoredMatches(restore),"restored proof borrowed a changed original member");f.source.valid=true;
+   check(!f.runtime.disconnectAndDrainCaptured(home.sessionId)&&f.runtime.isConnected(),"an old captured disconnect stopped the fresh restored owner");f.stop();
+   Result last=new Result();f.runtime.connectLast(f.source,AndroidHomeStateStore.snapshot(f.service),last);last.finished();check(last.ok&&f.runtime.isConnected()&&f.owner().capture.plan!=restored.capture.plan&&f.owner().capture.plan.runs==1,"Startup Last reused an old ordered native proof");
+   check(prepared==AndroidStartupPolicy.prepared&&recorded==AndroidStartupPolicy.recorded,"Startup Last overwrote its original ordered history");f.stop();
   }
  }
  static void staleSources()throws Exception {
   for(String family:List.of("middle","Home","proof","config","metadata","launch"))try(Fixture f=new Fixture(4)){
-   final String[] replacement={""};int created=CommandServer.created;
+   final String[] replacement={""};int created=CommandServer.created,beforeHistory=AndroidStartupPolicy.recorded;
    if(family.equals("middle"))RouterNodeChain.configured=plan->plan.afterRun=()->f.source.valid=false;
    if(family.equals("proof"))RouterNodeChain.configured=plan->plan.valid=false;
    if(family.equals("Home"))RouterNodeChain.configured=plan->plan.afterRun=()->{replacement[0]=AndroidHomeStateStore.begin(f.service,"new","new","libbox","replacement");AndroidHomeStateStore.connected(f.service,"new","new","libbox","","replacement");};
    if(family.equals("config")||family.equals("metadata")||family.equals("launch"))f.nativeOwner.beforeStart=()->{try{AndroidNodeChainSession owner=f.owner();Files.writeString(owner.directory.toPath().resolve(family.equals("config")?"sing-box.json":family.equals("launch")?AndroidNodeChainCapture.SESSION_FILE:"routervpn-multihop.json"),"{}");}catch(Exception failure){throw new IllegalStateException(failure);}};
    Result result=f.connect();check(!result.ok&&!f.runtime.isConnected(),"stale ordered source/proof reached Connected: "+family);f.drain();
+   check(AndroidStartupPolicy.recorded==beforeHistory,"failed complete ordered proof minted historical Last authority: "+family);
    check(!f.runtime.isActiveOrTransitioning(),"failed native proof lost its cleanup: "+family);
    if(!replacement[0].isEmpty())check(AndroidHomeStateStore.snapshot(f.service).sessionId.equals(replacement[0])&&AndroidHomeStateStore.snapshot(f.service).connected,"old ordered failure overwrote replacement Home");
    if(family.equals("config")||family.equals("metadata")||family.equals("launch"))check(created==CommandServer.created,"tampered or mixed ordered source constructed native service");
@@ -191,6 +212,55 @@ public final class OrderedRuntimeTest {
    check(get(f.service,"nodeChainSession")==original&&get(f.service,"commandServer")==server,"failed native drain discarded or swapped exact handles");
    Result blocked=f.connect();check(!blocked.ok,"replacement ordered graph bypassed retained cleanup");
    original.capture.plan.failCloses=0;server.failClose=false;f.stop();check(original.released(),"retry did not acknowledge the original native owner");
+  }
+ }
+ static void capturedDrainRetry()throws Exception {
+  for(boolean releasedBeforeRetry:new boolean[]{false,true})try(Fixture f=new Fixture(4)){
+   f.connected();AndroidNodeChainSession original=f.owner();var home=AndroidHomeStateStore.snapshot(f.service);var restore=f.runtime.captureRestore();CommandServer server=(CommandServer)get(f.service,"commandServer");server.failClose=true;
+   check(!f.runtime.disconnectAndDrainCaptured(home.sessionId),"failed captured drain acknowledged an open native Box");f.drain();
+   check(uncaught.isEmpty(),"native cleanup failure escaped the ordered worker and could terminate Android");
+   check(f.runtime.isActiveOrTransitioning()&&f.owner()==original&&!original.released()&&f.runtime.retainsCapturedOwner(home.sessionId),"failed captured drain lost its exact retry authority");
+   check(AndroidHomeStateStore.snapshot(f.service).pathGeneration==home.pathGeneration+1,"failed captured drain invalidated its Home more than once");
+   server.failClose=false;
+   if(releasedBeforeRetry){Method shutdown=LayeredVpnService.class.getDeclaredMethod("shutdown",String.class,String.class);shutdown.setAccessible(true);shutdown.invoke(f.service,"DOWN","");check(original.released()&&AndroidHomeStateStore.snapshot(f.service).activeChain.isEmpty(),"late native release did not clear its retired public identity");check(f.runtime.isActiveOrTransitioning()&&f.owner()==original,"late release lost its pending exact Home receipt");}
+   check(!f.runtime.disconnectAndDrainCaptured("unrelated-home"),"failed captured drain adopted another UUID");
+   check(f.runtime.disconnectAndDrainCaptured(home.sessionId),"same captured drain could not retry its original native cleanup");
+   check(original.released()&&!original.directory.exists()&&AndroidHomeStateStore.snapshot(f.service).pathGeneration==home.pathGeneration+2&&!f.runtime.isActiveOrTransitioning()&&!f.runtime.retainsCapturedOwner(home.sessionId),"captured drain retry did not finish the exact two-generation transition");
+   Result replay=new Result();f.runtime.restore(restore,AndroidHomeStateStore.snapshot(f.service),replay);replay.finished();check(replay.ok&&f.runtime.restoredMatches(restore),"original ordered source could not restore after captured cleanup retry");f.stop();
+  }
+  try(Fixture f=new Fixture(4)){
+   f.connected();AndroidNodeChainSession original=f.owner();String home=original.home.sessionId;Method shutdown=LayeredVpnService.class.getDeclaredMethod("shutdown",String.class,String.class);shutdown.setAccessible(true);shutdown.invoke(f.service,"FAILED","native watchdog retired original proof");
+   check(original.released()&&!f.runtime.retainsCapturedOwner(home)&&!f.runtime.disconnectAndDrainCaptured(home),"terminal owner before captured stop was reported as retryable native cleanup");
+   check(AndroidHomeStateStore.snapshot(f.service).sessionId.equals(home)&&!AndroidHomeStateStore.snapshot(f.service).connected,"terminal captured-stop query replaced the final Home receipt");
+  }
+  try(Fixture f=new Fixture(4)){
+   f.connected();AndroidNodeChainSession original=f.owner();String home=original.home.sessionId;CommandServer server=(CommandServer)get(f.service,"commandServer");server.failClose=true;
+   Method shutdown=LayeredVpnService.class.getDeclaredMethod("shutdown",String.class,String.class);shutdown.setAccessible(true);reject(()->shutdown.invoke(f.service,"FAILED","native watchdog retired original proof"),"failed original watchdog cleanup was not retained");
+   check(f.runtime.retainsCapturedOwner(home)&&!AndroidHomeStateStore.snapshot(f.service).connected,"failed original watchdog owner lost its cleanup authority");
+   check(!f.runtime.disconnectAndDrainCaptured(home)&&f.runtime.retainsCapturedOwner(home),"failed original proof became restoration authority during cleanup");
+   check(uncaught.isEmpty(),"native cleanup failure escaped the ordered worker and could terminate Android");
+   server.failClose=false;check(!f.runtime.disconnectAndDrainCaptured(home),"retiring a failed original proof authorized temporary restoration");
+   check(original.released()&&!f.runtime.retainsCapturedOwner(home)&&!f.runtime.isActiveOrTransitioning(),"failed original watchdog owner did not become terminal after captured cleanup retry");
+  }
+ }
+ static void selectionOwnership()throws Exception {
+  for(boolean restoring:new boolean[]{false,true})try(Fixture f=new Fixture(4)){
+   var prefs=f.service.getSharedPreferences("router-vpn-unified",0);prefs.edit().putBoolean("multihop_on",true).apply();AndroidNodeChainRuntime.RestoreCapture capture=null;
+   if(restoring){f.connected();capture=f.runtime.captureRestore();check(f.runtime.disconnectAndDrainCaptured(AndroidHomeStateStore.snapshot(f.service).sessionId),"selection restore fixture did not stop its original owner");}
+   var idle=AndroidHomeStateStore.snapshot(f.service);String selection=AndroidNodeChainSession.selection(f.service,f.source);int created=CommandServer.created;
+   CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);((ExecutorService)get(f.runtime,"executor")).submit(()->{entered.countDown();try{release.await(3,TimeUnit.SECONDS);}catch(InterruptedException stopped){Thread.currentThread().interrupt();}});check(entered.await(1,TimeUnit.SECONDS),"queued selection fixture did not hold admission");
+   Result result=new Result();if(restoring)f.runtime.restore(capture,idle,result);else f.runtime.connect(f.source,idle,selection,result);prefs.edit().putBoolean("multihop_on",false).apply();release.countDown();result.finished();
+   check(!result.ok&&created==CommandServer.created&&!f.runtime.isActiveOrTransitioning(),"queued ordered admission borrowed a newer saved Off choice");
+   check(AndroidHomeStateStore.snapshot(f.service).pathGeneration==idle.pathGeneration&&AndroidHomeStateStore.snapshot(f.service).sessionId.equals(idle.sessionId),"stale saved ordered choice changed idle Home before rejection");
+  }
+  try(Fixture f=new Fixture(4)){
+   var prefs=f.service.getSharedPreferences("router-vpn-unified",0);prefs.edit().putBoolean("multihop_on",true).apply();RouterNodeChain.configured=plan->plan.afterRun=()->prefs.edit().putBoolean("multihop_on",false).apply();
+   Result result=f.connect();check(!result.ok&&!f.runtime.isConnected()&&!f.runtime.isActiveOrTransitioning(),"saved Off during native proof reached Connected");
+  }
+  try(Fixture f=new Fixture(4)){
+   var prefs=f.service.getSharedPreferences("router-vpn-unified",0);prefs.edit().putBoolean("multihop_on",true).apply();f.connected();var capture=f.runtime.captureRestore();AndroidNodeChainSession original=f.owner();prefs.edit().putBoolean("multihop_on",false).apply();
+   check(!LayeredVpnService.nodeChainReady(original),"live ordered native proof ignored a newer saved selection");check(!f.runtime.captureCurrent(capture),"restore capture ignored a newer saved selection");f.stop();
+   Result result=new Result();f.runtime.restore(capture,AndroidHomeStateStore.snapshot(f.service),result);result.finished();check(!result.ok&&!f.runtime.isActiveOrTransitioning(),"restore recaptured the new saved choice instead of the original digest");
   }
  }
  static void lateDelivery()throws Exception {
@@ -327,9 +397,13 @@ public final class OrderedRuntimeTest {
   }
  }
  public static void main(String[] args)throws Exception {
+  Thread.UncaughtExceptionHandler previous=Thread.getDefaultUncaughtExceptionHandler();Thread.setDefaultUncaughtExceptionHandler((thread,failure)->uncaught.add(failure));
+  try {
   String family=args.length==0?"all":args[0];
-  if(family.equals("all")||family.equals("success"))success();if(family.equals("all")||family.equals("source"))staleSources();if(family.equals("all")||family.equals("cleanup"))pendingCleanup();if(family.equals("all")||family.equals("late"))lateDelivery();if(family.equals("all")||family.equals("proof"))ownedProof();if(family.equals("all")||family.equals("destroyed"))destroyedHost();if(family.equals("all")||family.equals("idle"))idleEpoch();if(family.equals("all")||family.equals("watchdog"))watchdog();if(family.equals("all")||family.equals("late-destroyed"))lateDestroyedProof();if(family.equals("all")||family.equals("preclaim"))preclaim();if(family.equals("all")||family.equals("same-runtime"))sameRuntimeReplacement();if(family.equals("all")||family.equals("publication"))publicationFence();
+  if(family.equals("all")||family.equals("success"))success();if(family.equals("all")||family.equals("source"))staleSources();if(family.equals("all")||family.equals("cleanup"))pendingCleanup();if(family.equals("all")||family.equals("late"))lateDelivery();if(family.equals("all")||family.equals("proof"))ownedProof();if(family.equals("all")||family.equals("destroyed"))destroyedHost();if(family.equals("all")||family.equals("idle"))idleEpoch();if(family.equals("all")||family.equals("watchdog"))watchdog();if(family.equals("all")||family.equals("late-destroyed"))lateDestroyedProof();if(family.equals("all")||family.equals("preclaim"))preclaim();if(family.equals("all")||family.equals("same-runtime"))sameRuntimeReplacement();if(family.equals("all")||family.equals("publication"))publicationFence();if(family.equals("all")||family.equals("captured-drain"))capturedDrainRetry();if(family.equals("all")||family.equals("selection"))selectionOwnership();
+  check(uncaught.isEmpty(),"native cleanup failure escaped the ordered worker and could terminate Android");
   System.out.println("Android ordered native host ownership: "+checks+" executable checks passed; OS/native handles doubled.");
+  } finally {Thread.setDefaultUncaughtExceptionHandler(previous);}
  }
 }'''
 
@@ -346,7 +420,7 @@ def main():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
         app = src / APP
-        names = ('AndroidHomeStateStore', 'AndroidNodeChainSession', 'AndroidNodeChainRuntime', 'LayeredVpnService')
+        names = ('AndroidHomeStateStore', 'AndroidConnectionSelection', 'AndroidNodeChainSession', 'AndroidNodeChainRuntime', 'LayeredVpnService')
         originals = {}
         for name in names:
             originals[name] = (JAVA / (name + '.java')).read_text()
@@ -372,6 +446,14 @@ def main():
             ('AndroidNodeChainRuntime', 'if(operation==selectedOperation){connected = false; transitioning = false; reconcile();}', '{connected = false; transitioning = false; reconcile();}', 'same-runtime', 'old runtime catch cancelled the queued replacement operation'),
             ('LayeredVpnService', 'synchronized (PUBLICATION_LOCK) {\n            if (currentService.get() != this) return;', 'synchronized (new Object()) {\n            if (currentService.get() != this) return;', 'publication', 'replacement claimed ownership inside an unfinished old state publication'),
             ('LayeredVpnService', 'synchronized (PUBLICATION_LOCK) {\n            currentService=new java.lang.ref.WeakReference<>(this);', 'synchronized (new Object()) {\n            currentService=new java.lang.ref.WeakReference<>(this);', 'publication', 'replacement claimed ownership inside an unfinished old state publication'),
+            ('AndroidNodeChainRuntime', 'connect(capture.source, idle, capture.selection, false, callback);', 'connect(capture.source, idle, capture.selection, true, callback);', 'success', 'temporary restoration overwrote ordered Last history'),
+            ('AndroidNodeChainRuntime', 'recordOrderedExecution(context, history,', 'recordOrderedExecution(context, null,', 'success', 'fresh proved ordered connection did not record its captured Local choice'),
+            ('AndroidNodeChainRuntime', 'connectSelected(capture,idle,false,callback);', 'connectSelected(capture,idle,true,callback);', 'success', 'Startup Last overwrote its original ordered history'),
+            ('AndroidNodeChainRuntime', 'capturedDrain == captured && capturedDrainOperation == operation', 'false', 'captured-drain', 'same captured drain could not retry its original native cleanup'),
+            ('AndroidNodeChainRuntime', 'owner.released() && owner != capturedDrain', 'owner.released()', 'captured-drain', 'late release lost its pending exact Home receipt'),
+            ('AndroidNodeChainSession', '        requireSelection(context,source,selectionDigest);', '', 'selection', 'live ordered native proof ignored a newer saved selection'),
+            ('AndroidNodeChainRuntime', 'boolean failedOwner = !now.connected', 'boolean failedOwner = false && !now.connected', 'captured-drain', 'failed original watchdog owner did not become terminal after captured cleanup retry'),
+            ('LayeredVpnService', 'Log.w(TAG,"Native cleanup remains owned for retry",pending);', 'if(pending!=null)throw new IllegalStateException("uncaught native cleanup regression",pending);', 'captured-drain', 'native cleanup failure escaped the ordered worker and could terminate Android'),
         )
         for number, (name, old, new, family, witness) in enumerate(controls):
             source = originals[name]

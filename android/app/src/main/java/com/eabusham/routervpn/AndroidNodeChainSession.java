@@ -26,6 +26,7 @@ final class AndroidNodeChainSession {
     private static final Map<String, AndroidNodeChainSession> pending = new HashMap<>();
     final String sessionId = UUID.randomUUID().toString().replace("-", "");
     final AndroidNodeStore.ChainCapture source;
+    final String selectionDigest;
     final AndroidHomeStateStore.Snapshot home;
     final AndroidNodeChainCapture capture;
     final File directory;
@@ -40,9 +41,14 @@ final class AndroidNodeChainSession {
 
     AndroidNodeChainSession(Context context, AndroidNodeStore.ChainCapture source,
                             AndroidHomeStateStore.Snapshot home) throws Exception {
+        this(context,source,home,selection(context,source));
+    }
+    AndroidNodeChainSession(Context context, AndroidNodeStore.ChainCapture source,
+                            AndroidHomeStateStore.Snapshot home,String selectionDigest) throws Exception {
         this.context = context.getApplicationContext();
-        this.source = source; this.home = home;
+        this.source = source; this.home = home; this.selectionDigest=selectionDigest;
         source.requireCurrent();
+        requireSelection(this.context,source,selectionDigest);
         if (!AndroidHomeStateStore.ownsNodeChain(this.context, home)) throw new IllegalStateException("The ordered launch lost its original Home selection.");
         File root = new File(this.context.getFilesDir(), "layered-sessions").getCanonicalFile();
         directory = new File(root, sessionId).getCanonicalFile();
@@ -134,7 +140,17 @@ final class AndroidNodeChainSession {
     void requireSource() throws Exception {
         if (cancelled || released || proofClosed) throw new IllegalStateException("The original ordered source has been retired.");
         capture.requireCurrent();
+        requireSelection(context,source,selectionDigest);
         if (!AndroidHomeStateStore.ownsNodeChain(context, home)) throw new IllegalStateException("The original ordered Home owner changed.");
+    }
+
+    static String selection(Context context,AndroidNodeStore.ChainCapture source)throws Exception {
+        if(source==null)throw new IllegalStateException("The ordered source selection is missing.");
+        return AndroidConnectionSelection.digest(source.control.id,AndroidConnectionSelection.preferences(context));
+    }
+    static void requireSelection(Context context,AndroidNodeStore.ChainCapture source,String expected)throws Exception {
+        if(expected==null||!expected.matches("[0-9a-f]{64}")||!expected.equals(selection(context,source)))
+            throw new IllegalStateException("The original saved ordered selection changed.");
     }
 
     void requireCurrent() throws Exception {

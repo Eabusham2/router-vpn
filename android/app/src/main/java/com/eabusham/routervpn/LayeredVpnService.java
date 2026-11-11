@@ -149,7 +149,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                     if("external".equals(new JSONObject(owner.metadata).optString("entry_kind")))
                         captured.activate(owner.server,owner.config,metadata,owner.plan);
                     else captured.activate(owner.server,owner.config,metadata);
-                } catch(Exception invalid) { service.shutdown("FAILED","The captured multihop MTU source is invalid."); }
+                } catch(Exception invalid) { service.shutdownRetainingOwner("FAILED","The captured multihop MTU source is invalid."); }
             });
         }
     }
@@ -247,7 +247,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         if (!performanceActive || owned == null || !"UP".equals(state)) return;
         String failure = Libbox.routerPerformanceFailure(owned);
         if (failure == null || !failure.isEmpty()) {
-            executor.execute(() -> { if (commandServer == owned && performanceActive) shutdown("FAILED", "Requested padding stopped or its private path changed."); });
+            executor.execute(() -> { if (commandServer == owned && performanceActive) shutdownRetainingOwner("FAILED", "Requested padding stopped or its private path changed."); });
             return;
         }
         executionHandler.postDelayed(this, 500);
@@ -716,7 +716,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         if(max!=null&&!max.current(false)||!executionNetwork.equals(executionNetworkIdentity())||(executionProved&&plan!=null&&!plan.healthy())||(executionProved&&tor!=null&&!tor.healthy())||(executionProved&&external!=null&&!external.healthy())||(chain!=null&&executionProved&&!nodeChainProofCurrent(chain))){
             if(external!=null)AndroidHomeStateStore.failedPolicyExternal(LayeredVpnService.this,externalHomeOwner,"The captured external exit, entry, DNS or network changed; reconnect to prove the path.",false);
             if(chain!=null)AndroidHomeStateStore.failedNodeChain(LayeredVpnService.this,chain.home,"The original ordered source, native proof or physical network changed; reconnect to prove every member.",false);
-            cancelMultihopComparison();executor.execute(()->{if(tor!=null&&torSession!=tor||external!=null&&externalSession!=external||max!=null&&maxSession!=max||chain!=null&&nodeChainSession!=chain)return;shutdown("FAILED",chain!=null?"The complete ordered path lost its original source, network or native proof.":max!=null?"The captured MAX source or physical network changed; reconnect to prove the path.":tor!=null?"The captured Tor network or circuit changed; reconnect to prove the path.":external!=null?"The captured external exit, entry, DNS or network changed; reconnect to prove the path.":"Multihop network or server lease changed; reconnect to compare again.");});return;
+            cancelMultihopComparison();executor.execute(()->{if(tor!=null&&torSession!=tor||external!=null&&externalSession!=external||max!=null&&maxSession!=max||chain!=null&&nodeChainSession!=chain)return;shutdownRetainingOwner("FAILED",chain!=null?"The complete ordered path lost its original source, network or native proof.":max!=null?"The captured MAX source or physical network changed; reconnect to prove the path.":tor!=null?"The captured Tor network or circuit changed; reconnect to prove the path.":external!=null?"The captured external exit, entry, DNS or network changed; reconnect to prove the path.":"Multihop network or server lease changed; reconnect to compare again.");});return;
         }
         executionHandler.postDelayed(this,500);
     }};
@@ -736,7 +736,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 if(proved)return;
                 AndroidHomeStateStore.failedNodeChain(this,captured.home,"The original ordered source, network or native proof changed; reconnect to prove every member.",false);
                 captured.cancel();
-                executor.execute(()->{if(nodeChainSession==captured&&commandServer==server&&generation==lifecycle.get())shutdown("FAILED","The complete ordered path lost its original native proof.");});
+                executor.execute(()->{if(nodeChainSession==captured&&commandServer==server&&generation==lifecycle.get())shutdownRetainingOwner("FAILED","The complete ordered path lost its original native proof.");});
             });
         }); } catch(java.util.concurrent.RejectedExecutionException stopped) { nodeChainObservationPending.set(false); }
     }
@@ -770,15 +770,16 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             final long stopGeneration = lifecycle.get();
             if (captured != null) captured.cancel();
             executor.execute(() -> {
+                try {
                 if (captured != null && !captured.released()) {
                     if (captured.hasHost()) {
                         captured.requestStop(() -> completeNodeChainStop(captured, command, stopGeneration));
                         return;
                     }
-                    else try { captured.discardUnstarted(); }
-                    catch (Exception pending) { throw new IllegalStateException("The original ordered cleanup is still pending.", pending); }
+                    else captured.discardUnstarted();
                 }
                 completeNodeChainStop(captured, command, stopGeneration);
+                } catch (Exception pending) { reportCleanupPending(pending); }
             });
             return Service.START_NOT_STICKY;
         }
@@ -797,7 +798,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             cancelMultihopComparison();
             final long command = intent.getLongExtra(AndroidServiceStopConfirmation.EXTRA_COMMAND, 0L);
             executor.execute(() -> {
-                shutdown("DOWN", "");
+                if (!shutdownRetainingOwner("DOWN", "")) return;
                 // Do not acknowledge in finally: failed teardown must remain busy.
                 AndroidServiceStopConfirmation.acknowledge(STATE_KEY, command);
             });
@@ -1035,7 +1036,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 activeConfig = config;
                 mtuMetadata=capturedMTU;
                 mtuSession=new AndroidMTUSession(this,owner->executor.execute(()->{
-                    if(mtuSession==owner)shutdown("FAILED","MTU transaction could not retain the verified VPN interface.");
+                    if(mtuSession==owner)shutdownRetainingOwner("FAILED","MTU transaction could not retain the verified VPN interface.");
                 }));
                 executionController=preparedExecution;executionAdopted=true;executionProved=false;
                 multihopMetadata=hopMetadata;multihopHomeOwner=hopMetadata==null?null:AndroidHomeStateStore.snapshot(this);
@@ -1050,7 +1051,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 else if(preparedMAX!=null)executionNetwork=executionNetworkIdentity();
                 torOwner = torMetadata != null;
                 startLayerRelay = AndroidStartLayerRelay.prepareIfConfigured(this, session, message -> executor.execute(() -> {
-                    if (!explicitStop && activeSession == session) shutdown("FAILED", message);
+                    if (!explicitStop && activeSession == session) shutdownRetainingOwner("FAILED", message);
                 }));
                 if(startLayerRelay!=null)startLayerRelay.start();
                 commandServer = new CommandServer(this, this);
@@ -1142,11 +1143,11 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         } catch (RevokedException revoked) {
             Log.w(TAG, revoked.getMessage());
             if(capturedComparison!=null)capturedComparison.finished(false,revoked.getMessage());
-            shutdown("REVOKED", revoked.getMessage());
+            shutdownRetainingOwner("REVOKED", revoked.getMessage());
         } catch (Throwable error) {
             Log.e(TAG, "Layered VPN start failed", error);
             if(capturedComparison!=null)capturedComparison.finished(false,safeMessage(error));
-            shutdown("FAILED", safeMessage(error));
+            shutdownRetainingOwner("FAILED", safeMessage(error));
         } finally {
             AndroidNodeChainSession unadoptedChain = preparedChain == null ? AndroidNodeChainSession.pending(sessionId) : preparedChain;
             if (unadoptedChain != null && nodeChainSession != unadoptedChain && !unadoptedChain.hasHost() && !unadoptedChain.released()) {
@@ -1239,7 +1240,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         AndroidMAXProfilePreparation.cancelActive();
         cancelMultihopComparison();
         explicitStop = false;
-        executor.execute(() -> shutdown("REVOKED", "Android revoked VPN permission."));
+        executor.execute(() -> shutdownRetainingOwner("REVOKED", "Android revoked VPN permission."));
         super.onRevoke();
     }
 
@@ -1325,6 +1326,18 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         }
     }
 
+    private boolean shutdownRetainingOwner(String terminalState, String error) {
+        try { shutdown(terminalState,error); return true; }
+        catch (RuntimeException pending) { reportCleanupPending(pending); return false; }
+    }
+
+    private void reportCleanupPending(Exception pending) {
+        // An exception escaping execute() reaches Android's process-fatal
+        // uncaught handler. Keep the exact native handles reachable instead.
+        Log.w(TAG,"Native cleanup remains owned for retry",pending);
+        publish("STOPPING",activeMode,"VPN teardown remains unconfirmed; Disconnect retries the original native owner.");
+    }
+
     private void requestNodeChainStop(AndroidNodeChainSession captured, Runnable complete) {
         synchronized (lock) {
             if (captured.released()) { complete.run(); return; }
@@ -1332,12 +1345,14 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             lifecycle.incrementAndGet(); explicitStop = true; cancelMultihopComparison();
         }
         executor.execute(() -> {
+            try {
             if (!captured.released()) {
                 if (nodeChainSession != captured) throw new IllegalStateException("The original ordered teardown host changed.");
-                shutdown("DOWN", "");
+                if (!shutdownRetainingOwner("DOWN", "")) return;
             }
             if (captured.released()) complete.run();
             if (hostDestroyed && captured.released()) executor.shutdown();
+            } catch (RuntimeException pending) { reportCleanupPending(pending); }
         });
     }
 
@@ -1745,7 +1760,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private void pushDefaultInterface() {
         AndroidTorSession tor=torSession;
         if(tor!=null&&!executionNetwork.equals(executionNetworkIdentity())){
-            tor.cancel();executor.execute(()->{if(torSession==tor)shutdown("FAILED","The captured Tor network changed; reconnect to prove the path.");});return;
+            tor.cancel();executor.execute(()->{if(torSession==tor)shutdownRetainingOwner("FAILED","The captured Tor network changed; reconnect to prove the path.");});return;
         }
         AndroidMTUSession mtu=mtuSession;
         if(mtu!=null){
@@ -1845,7 +1860,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     @Override public void serviceStop() {
         executor.execute(() -> {
             if ("FAILED".equals(state) || "REVOKED".equals(state)) return;
-            shutdown(explicitStop ? "DOWN" : "FAILED", explicitStop ? "" : "sing-box stopped unexpectedly.");
+            shutdownRetainingOwner(explicitStop ? "DOWN" : "FAILED", explicitStop ? "" : "sing-box stopped unexpectedly.");
         });
     }
 
@@ -1853,7 +1868,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         executor.execute(() -> {
             synchronized (lock) {
                 if (commandServer == null || activeConfig.isEmpty()) return;
-                if(torOwner||executionController!=null||nodeChainSession!=null||hopMeasurement!=null||dnsMeasurement!=null||mtuSession!=null){cancelMultihopComparison();shutdown("FAILED","Native reload needs fresh path and MTU ownership.");return;}
+                if(torOwner||executionController!=null||nodeChainSession!=null||hopMeasurement!=null||dnsMeasurement!=null||mtuSession!=null){cancelMultihopComparison();shutdownRetainingOwner("FAILED","Native reload needs fresh path and MTU ownership.");return;}
                 try {
                     commandServer.startOrReloadService(activeConfig, new OverrideOptions());
                 } catch (Throwable error) {

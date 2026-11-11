@@ -17,11 +17,11 @@ P = S.P
 
 OWNERS = r'''
 final class AndroidHomeStateStore {
- static final class Snapshot {boolean connected;long pathGeneration;String sessionId="",phase="off",pathProof="not-run",logicalMode="",runtimeMode="",actualBase="",expectedExternalIp="",fallback="",activeNodeId="",activeEntryId="",activeExitId="",activeEntryMode="",activeExternalId="",activeExternalProtocol="";}
+ static final class Snapshot {boolean connected;long pathGeneration;String sessionId="",phase="off",pathProof="not-run",logicalMode="",runtimeMode="",actualBase="",expectedExternalIp="",fallback="",activeNodeId="",activeEntryId="",activeExitId="",activeEntryMode="",activeExternalId="",activeExternalProtocol="",activeChain="";}
  static volatile Snapshot current=new Snapshot();static int serial;static boolean emergency;
  static Snapshot snapshot(Context c){return current;}
  static boolean emergencyDisconnectPending(Context c){return emergency;}
- static Snapshot copy(){Snapshot a=current,b=new Snapshot();b.connected=a.connected;b.pathGeneration=a.pathGeneration;b.sessionId=a.sessionId;b.phase=a.phase;b.pathProof=a.pathProof;b.logicalMode=a.logicalMode;b.runtimeMode=a.runtimeMode;b.actualBase=a.actualBase;b.expectedExternalIp=a.expectedExternalIp;b.fallback=a.fallback;b.activeNodeId=a.activeNodeId;b.activeEntryId=a.activeEntryId;b.activeExitId=a.activeExitId;b.activeEntryMode=a.activeEntryMode;b.activeExternalId=a.activeExternalId;b.activeExternalProtocol=a.activeExternalProtocol;return b;}
+ static Snapshot copy(){Snapshot a=current,b=new Snapshot();b.connected=a.connected;b.pathGeneration=a.pathGeneration;b.sessionId=a.sessionId;b.phase=a.phase;b.pathProof=a.pathProof;b.logicalMode=a.logicalMode;b.runtimeMode=a.runtimeMode;b.actualBase=a.actualBase;b.expectedExternalIp=a.expectedExternalIp;b.fallback=a.fallback;b.activeNodeId=a.activeNodeId;b.activeEntryId=a.activeEntryId;b.activeExitId=a.activeExitId;b.activeEntryMode=a.activeEntryMode;b.activeExternalId=a.activeExternalId;b.activeExternalProtocol=a.activeExternalProtocol;b.activeChain=a.activeChain;return b;}
  static long advancePathGeneration(Context c){Snapshot s=copy();s.pathGeneration++;current=s;return s.pathGeneration;}
  static Snapshot begin(String topology,String raw,String entry,String exit,String mode,String external){Snapshot s=new Snapshot();s.pathGeneration=current.pathGeneration+1;s.sessionId="native-"+(++serial);s.logicalMode=topology;s.phase="connecting";s.pathProof="pending";s.runtimeMode=raw;s.activeNodeId=exit;s.activeEntryId=entry;s.activeExitId=exit;s.activeEntryMode=mode;s.activeExternalId=external;s.activeExternalProtocol=topology.equals("external")?raw:"";current=s;return s;}
  static void proved(){Snapshot s=copy();s.connected=true;s.phase="connected";s.pathProof="passed";current=s;RuntimeBoundary.proofs++;}
@@ -34,6 +34,32 @@ final class RuntimeBoundary {
  static void reset(){holdConnect=false;holdRestore=false;holdStop=false;stopEntered=false;stopping=false;pendingConnect=null;pendingRestore=null;afterRestoredProof=null;afterOrdinaryProof=null;afterImportedProof=null;stopRelease=new java.util.concurrent.CountDownLatch(1);starts=stops=restores=proofs=0;restoredRaw=restoredLogical=restoredExecution=restoredEntry=restoredExternal="";}
  static void ready(Runnable r){if(holdConnect)pendingConnect=r;else r.run();}
  static boolean stop(String id)throws Exception{if(!id.equals(AndroidHomeStateStore.current.sessionId))return false;stops++;stopping=true;AndroidHomeStateStore.Snapshot s=AndroidHomeStateStore.copy();if(s.connected)s.pathGeneration++;s.connected=false;s.phase="connecting";s.pathProof="pending";AndroidHomeStateStore.current=s;stopEntered=true;if(holdStop)stopRelease.await();boolean owned=id.equals(AndroidHomeStateStore.current.sessionId);if(owned)AndroidHomeStateStore.off();stopping=false;return owned;}
+}
+// Only native proof/drain completion is controlled. The full shipping Unified
+// and Speed Lab owners consume the exact original all-member receipt.
+final class AndroidNodeChainRuntime {
+ interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String s){}}
+ Runnable beforeCapturedDrain;Context context;AndroidNodeStore.ChainCapture source,restoredSource;AndroidHomeStateStore.Snapshot home;boolean active;
+ final Set<String> drained=new HashSet<>();
+ static volatile boolean holdCapture;static java.util.concurrent.CountDownLatch captureEntered=new java.util.concurrent.CountDownLatch(1),captureRelease=new java.util.concurrent.CountDownLatch(1);
+ static void workerOnly(){if(Thread.currentThread().getName().equals("main"))throw new AssertionError("ordered native/source verification ran on UI thread");}
+ static final class RestoreCapture{final AndroidNodeStore.ChainCapture source;final AndroidHomeStateStore.Snapshot home;final String selection;RestoreCapture(AndroidNodeStore.ChainCapture source,AndroidHomeStateStore.Snapshot home)throws Exception{this.source=source;this.home=home;selection=AndroidConnectionSelection.digest(new Context(),new AndroidNodeStore(new Context()));}}
+ static String chain(AndroidNodeStore.ChainCapture source)throws Exception{JSONArray values=new JSONArray();for(int i=0;i<source.members.size();i++)values.put(new JSONObject().put("id",source.members.get(i).id).put("mode",source.modes.get(i)));return values.toString();}
+ void begin(AndroidNodeStore.ChainCapture captured)throws Exception{source=captured;AndroidHomeStateStore.begin("node-chain","node-chain","","","","");AndroidHomeStateStore.current.activeNodeId=captured.control.id;AndroidHomeStateStore.current.activeChain=chain(captured);home=AndroidHomeStateStore.copy();active=true;}
+ boolean isActiveOrTransitioning(){return active;}boolean isConnected(){return active&&home!=null&&home.sessionId.equals(AndroidHomeStateStore.current.sessionId)&&AndroidHomeStateStore.current.connected;}
+ List<AndroidNodeStore.ChainSource> activeSources(){return isConnected()?source.members:List.of();}List<String> activeModes(){return isConnected()?source.modes:List.of();}
+ RestoreCapture captureRestore()throws Exception{workerOnly();if(holdCapture){captureEntered.countDown();if(!captureRelease.await(4,java.util.concurrent.TimeUnit.SECONDS))throw new AssertionError("ordered capture release missing");}source.requireCurrent();if(!isConnected())throw new IllegalStateException("original ordered owner missing");return new RestoreCapture(source,AndroidHomeStateStore.copy());}
+ boolean captureCurrent(RestoreCapture capture){workerOnly();try{capture.source.requireCurrent();return isConnected()&&source==capture.source&&capture.home.sessionId.equals(AndroidHomeStateStore.current.sessionId)&&capture.home.pathGeneration==AndroidHomeStateStore.current.pathGeneration&&capture.home.activeChain.equals(AndroidHomeStateStore.current.activeChain);}catch(Exception changed){return false;}}
+ boolean restoredMatches(RestoreCapture capture){workerOnly();try{capture.source.requireCurrent();return isConnected()&&source==capture.source&&chain(source).equals(AndroidHomeStateStore.current.activeChain)&&source.control.id.equals(AndroidHomeStateStore.current.activeNodeId);}catch(Exception changed){return false;}}
+ void connect(AndroidNodeStore.ChainCapture captured,Callback callback){connect(captured,AndroidHomeStateStore.copy(),callback);}
+ void connect(AndroidNodeStore.ChainCapture captured,AndroidHomeStateStore.Snapshot idle,String selection,Callback callback){try{AndroidConnectionSelection.requireCurrent(context,new AndroidNodeStore(context),selection);connect(captured,idle,callback);}catch(Exception changed){callback.finished(false,changed.toString());}}
+ void connectLast(AndroidNodeStore.ChainCapture captured,AndroidHomeStateStore.Snapshot idle,String selection,Callback callback){throw new AssertionError("temporary restore must replay its original native capture, not Startup Last");}
+ void connectLast(AndroidNodeStore.ChainCapture captured,AndroidHomeStateStore.Snapshot idle,Callback callback){throw new AssertionError("temporary restore must replay its original native capture, not Startup Last");}
+ void connect(AndroidNodeStore.ChainCapture captured,AndroidHomeStateStore.Snapshot idle,Callback callback){try{captured.requireCurrent();if(active||idle==null||idle.connected||idle.pathGeneration!=AndroidHomeStateStore.current.pathGeneration||!idle.sessionId.equals(AndroidHomeStateStore.current.sessionId))throw new IllegalStateException("ordered launch lost original idle epoch");begin(captured);RuntimeBoundary.starts++;callback.owned(home.sessionId);RuntimeBoundary.ready(()->{AndroidHomeStateStore.proved();callback.finished(true,"controlled ordered proof");});}catch(Exception changed){callback.finished(false,changed.toString());}}
+ boolean retainsCapturedOwner(String session){return active&&home!=null&&home.sessionId.equals(session);}
+ boolean disconnectAndDrainCaptured(String session)throws Exception{workerOnly();if(beforeCapturedDrain!=null){Runnable fault=beforeCapturedDrain;beforeCapturedDrain=null;fault.run();}if(!active||home==null||!home.sessionId.equals(session))return false;boolean clean=RuntimeBoundary.stop(session);if(clean){drained.add(session);active=false;}return clean;}
+ boolean stopAndProve(){try{return !active||disconnectAndDrainCaptured(home.sessionId);}catch(Exception failed){return false;}}
+ void restore(RestoreCapture captured,AndroidHomeStateStore.Snapshot idle,Callback callback){workerOnly();try{if(captured==null||!drained.contains(captured.home.sessionId))throw new IllegalStateException("original ordered owner never drained");captured.source.requireCurrent();if(active||idle==null||idle.connected||idle.pathGeneration!=AndroidHomeStateStore.current.pathGeneration||!idle.sessionId.equals(AndroidHomeStateStore.current.sessionId))throw new IllegalStateException("ordered restore lost original idle epoch");begin(captured.source);restoredSource=captured.source;RuntimeBoundary.restores++;callback.owned(home.sessionId);Runnable finish=()->{AndroidHomeStateStore.proved();if(RuntimeBoundary.afterRestoredProof!=null)RuntimeBoundary.afterRestoredProof.run();callback.finished(true,"fresh ordered proof");};if(RuntimeBoundary.holdRestore)RuntimeBoundary.pendingRestore=finish;else finish.run();}catch(Exception changed){callback.finished(false,changed.toString());}}
 }
 final class AndroidModeOrchestrator {
  interface Callback{void progress(String message);void finished(boolean ok,String mode,String message);default void owned(String id){}default void proved(String session,String raw,String source){}}
@@ -162,7 +188,7 @@ public final class SpeedLabRestoreTest {
    request.scope="temporary";request.topology=topology;request.node=first;request.entry=first;request.exit=last;request.mode="all";request.entryMode="wg-pq";request.exitMode="shadowsocks";request.execution="external".equals(topology)?"local":"server";request.standardExit=external;request.externalDirect=false;
   }
   AndroidNodeStore.Node node(Path root,String id)throws Exception{Path folder=Files.createTempDirectory(root,id);Path file=folder.resolve(id+".json");Files.writeString(file,"{\"private\":\""+id+"\",\"dns\":\"home-adguard\",\"mtu\":\"auto\"}");AndroidNodeStore.Node n=new AndroidNodeStore.Node(id,file.toFile());AndroidNodeStore.nodes.add(n);return n;}
-  void start(){controller.run(request,result);}void quiesce(){check(LayeredVpnService.quiesce!=null,"transaction rejected its valid original before MTU drain: "+result.error);LayeredVpnService.quiesce.accept(null);}void measured()throws Exception{waitFor(()->AndroidSpeedLab.pending!=null,"measurement never started");AndroidSpeedLab.drained(false);}
+  void start(){controller.run(request,result);}void quiesce(){try{waitFor(()->LayeredVpnService.quiesce!=null||result.count>0,"original capture never completed");}catch(Exception error){throw new IllegalStateException(error);}check(LayeredVpnService.quiesce!=null,"transaction rejected its valid original before MTU drain: "+result.error);LayeredVpnService.quiesce.accept(null);}void measured()throws Exception{waitFor(()->AndroidSpeedLab.pending!=null,"measurement never started");AndroidSpeedLab.drained(false);}
   void complete()throws Exception{waitFor(()->result.count>0,"transaction never completed");check(result.count==1&&!controller.isRunning()&&!AndroidMTUMeasurementGate.held(),"completion did not release its drained lease exactly once");}
   AndroidStandardExitStore.Entry ordinary(String protocol,String id){AndroidStandardExitStore.Entry value=new AndroidStandardExitStore.Entry();value.id=id;value.name="Ordinary "+protocol;value.protocol=protocol;value.secret="ordinary-private-"+id;value.policy="ordinary-policy-"+id;AndroidStandardExitStore.saved.put(id,AndroidStandardExitStore.copy(value));return value;}
   void captureOriginal()throws Exception{AndroidStandardExitRuntime runtime=AndroidRuntimeRegistry.instance.standardExit;runtime.adopted(originalOrdinary!=null||AndroidHomeStateStore.current.activeEntryId.isEmpty()?null:original.file,originalOrdinary,external);}
@@ -471,7 +497,78 @@ public final class SpeedLabRestoreTest {
   }
   Fixture newer=new Fixture(root,"router","multihop");newer.importedTemporary("socks5");newer.start();newer.quiesce();waitFor(()->AndroidSpeedLab.pending!=null,"newer-owner fixture did not measure");AndroidHomeStateStore.begin("new-user","wg","","new-node","","");AndroidHomeStateStore.proved();String session=AndroidHomeStateStore.current.sessionId;AndroidSpeedLab.drained(false);newer.complete();check(newer.result.error!=null&&newer.result.result==null&&RuntimeBoundary.restores==0&&AndroidHomeStateStore.current.sessionId.equals(session)&&AndroidHomeStateStore.current.connected,"imported cleanup replaced newer user connection");
  }
- public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);externalUI(root);ordinaryUI(root);ordinaryRestoration(root);ordinaryRestoreChanges(root);importedMatrix(root);importedUI(root);importedInvalid(root);importedCancellation(root);exactMultihopWinner(root);exactExternalWinner(root);exactTorExecution(root);externalOriginalSources(root);cancellation(root);stale(root);multihopPins(root);permissionCapture(root);permissionSelection(root);uiCancellation(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks; original native sources before capture and stop,captured winners,40 ordinary and 40 imported paired graph restores,8-protocol typed pickers,cleanup/permission source changes,saved/test selection separation,cancellation phases and newer-user ownership");}
+ static AndroidNodeStore.ChainCapture orderedOriginal(Fixture f)throws Exception{
+  AndroidNodeStore.ChainCapture source=new AndroidNodeStore.ChainCapture(List.of(f.original,f.first,f.last),List.of("wg","wg","shadowsocks"));
+  AndroidNodeStore.active=f.last.id;AndroidNodeChainRuntime runtime=AndroidRuntimeRegistry.instance.nodeChain;runtime.begin(source);AndroidHomeStateStore.proved();f.originalSession=AndroidHomeStateStore.current.sessionId;f.raw="node-chain";return source;
+ }
+ static void orderedRestoration(Path root)throws Exception{
+  for(String target:List.of("router","multihop","external","system-direct"))for(boolean cancel:new boolean[]{false,true}){
+   Fixture f=new Fixture(root,"node-chain",target);var captured=orderedOriginal(f);var originalPreferences=new HashMap<>(android.content.Context.speedPreferences);
+   try{
+    f.start();f.quiesce();waitFor(()->AndroidSpeedLab.pending!=null,"ordered original never reached temporary measurement");
+    check(!AndroidRuntimeRegistry.instance.nodeChain.active&&RuntimeBoundary.stops==1,"ordered original native owner did not drain before temporary measurement");
+    if(cancel){f.controller.cancel();AndroidSpeedLab.drained(true);}else f.measured();f.complete();
+    var home=AndroidHomeStateStore.current;check(home.connected&&home.pathProof.equals("passed")&&home.logicalMode.equals("node-chain")&&!home.sessionId.equals(f.originalSession),"ordered original lacked fresh restored native proof");
+    check(AndroidRuntimeRegistry.instance.nodeChain.restoredSource==captured&&RuntimeBoundary.restores==1&&home.activeNodeId.equals(captured.control.id)&&home.activeChain.equals(AndroidNodeChainRuntime.chain(captured)),"ordered restoration substituted original source, order, final or modes");
+    check(cancel?f.result.error!=null:f.result.error==null,"ordered restoration changed temporary result/cancellation");
+    check(f.last.id.equals(AndroidNodeStore.active)&&originalPreferences.equals(android.content.Context.speedPreferences),"temporary ordered restoration rewrote saved choices");
+   }finally{AndroidNodeStore.active=null;AndroidRuntimeRegistry.instance.nodeChain.active=false;AndroidHomeStateStore.off();}
+  }
+  for(String fault:List.of("before-capture","before-stop","owner-before-stop","middle-after-stop","permission","replacement-source","new-stop")){
+   Fixture f=new Fixture(root,"node-chain","router");var captured=orderedOriginal(f);
+   try{
+    if(fault.equals("before-capture"))Files.writeString(f.first.file.toPath(),"replaced original middle before capture");
+    f.start();
+    if(fault.equals("before-capture")){f.complete();check(f.result.error!=null&&RuntimeBoundary.stops==0,"ordered restore capture read today's replacement source");continue;}
+    waitFor(()->LayeredVpnService.quiesce!=null||f.result.count>0,"ordered source was not captured before fault injection");
+    if(fault.equals("before-stop"))Files.writeString(f.first.file.toPath(),"replaced original middle before stop");
+    if(fault.equals("owner-before-stop"))AndroidRuntimeRegistry.instance.nodeChain.source=new AndroidNodeStore.ChainCapture(List.of(f.original,f.first,f.last),captured.modes);
+    f.quiesce();
+    if(fault.equals("before-stop")||fault.equals("owner-before-stop")){f.complete();check(f.result.error!=null&&RuntimeBoundary.stops==0,"ordered original stopped after source or owner replacement: "+fault);continue;}
+    waitFor(()->AndroidSpeedLab.pending!=null,"ordered fault never reached measurement");
+    if(fault.equals("middle-after-stop"))Files.writeString(f.first.file.toPath(),"replaced original middle after stop");
+    if(fault.equals("permission"))android.net.VpnService.needsPermission=true;
+    if(fault.equals("replacement-source"))RuntimeBoundary.afterRestoredProof=()->{try{AndroidRuntimeRegistry.instance.nodeChain.source=new AndroidNodeStore.ChainCapture(List.of(f.original,f.first,f.last),captured.modes);}catch(Exception e){throw new IllegalStateException(e);}};
+    if(fault.equals("new-stop")){RuntimeBoundary.holdStop=true;RuntimeBoundary.stopEntered=false;f.measured();waitFor(()->RuntimeBoundary.stopEntered,"ordered temporary stop did not retain its worker");AndroidHomeStateStore.advancePathGeneration(f.activity);RuntimeBoundary.stopRelease.countDown();}else f.measured();
+    f.complete();check(f.result.error!=null,"ordered restoration accepted stale original admission: "+fault);
+    if(!fault.equals("replacement-source"))check(RuntimeBoundary.restores==0&&!AndroidHomeStateStore.current.connected,"ordered stale original reconnected after refusal: "+fault);
+   }finally{RuntimeBoundary.stopRelease.countDown();android.net.VpnService.needsPermission=false;AndroidNodeStore.active=null;AndroidRuntimeRegistry.instance.nodeChain.active=false;AndroidHomeStateStore.off();}
+  }
+  for(boolean cancel:new boolean[]{false,true}){
+   Fixture f=new Fixture(root,"node-chain","router");orderedOriginal(f);AndroidNodeChainRuntime.holdCapture=true;AndroidNodeChainRuntime.captureEntered=new java.util.concurrent.CountDownLatch(1);AndroidNodeChainRuntime.captureRelease=new java.util.concurrent.CountDownLatch(1);
+   try{f.start();check(AndroidNodeChainRuntime.captureEntered.await(3,java.util.concurrent.TimeUnit.SECONDS),"ordered capture did not run on worker");check(f.controller.isRunning()&&!AndroidMTUMeasurementGate.held(),"pending ordered capture lost its process owner or acquired native MTU work early");
+    if(cancel)f.controller.cancel();else AndroidHomeStateStore.advancePathGeneration(f.activity);
+    AndroidNodeChainRuntime.captureRelease.countDown();f.complete();check(f.result.error!=null&&RuntimeBoundary.starts==0&&RuntimeBoundary.stops==0&&AndroidHomeStateStore.current.connected&&AndroidHomeStateStore.current.sessionId.equals(f.originalSession),"cancelled/replaced ordered capture started a temporary path");
+   }finally{AndroidNodeChainRuntime.holdCapture=false;AndroidNodeChainRuntime.captureRelease.countDown();AndroidNodeStore.active=null;AndroidRuntimeRegistry.instance.nodeChain.active=false;AndroidHomeStateStore.off();}
+  }
+  {
+   Fixture f=new Fixture(root,"node-chain","router");orderedOriginal(f);
+   try{
+    var nativeOwner=AndroidRuntimeRegistry.instance.nodeChain;
+    nativeOwner.beforeCapturedDrain=()->{nativeOwner.active=false;var failed=AndroidHomeStateStore.copy();failed.connected=false;failed.phase="failed";failed.pathProof="failed";failed.activeNodeId="";failed.activeChain="";AndroidHomeStateStore.current=failed;};
+    f.start();f.quiesce();f.complete();
+    check(f.result.error!=null&&RuntimeBoundary.starts==0&&RuntimeBoundary.stops==0&&!nativeOwner.active,"terminal ordered owner was retried or replaced after release before captured drain");
+   }finally{AndroidNodeStore.active=null;AndroidRuntimeRegistry.instance.nodeChain.active=false;AndroidHomeStateStore.off();}
+  }
+  // Hold the actual worker's posted UI result after its expensive validation.
+  // A newer Home decision must still win when that result is finally rendered.
+  for(String stage:List.of("capture","admission","restored"))for(boolean choice:new boolean[]{false,true}){
+   Fixture f=new Fixture(root,"node-chain","router");orderedOriginal(f);
+   android.app.Activity.queuedThread="routervpn-speedlab-ordered-"+stage;
+   try{
+    f.start();if(!stage.equals("capture"))f.quiesce();if(stage.equals("restored"))f.measured();
+    waitFor(()->android.app.Activity.queuedAction!=null,"ordered worker did not post its held UI completion: "+stage);
+    if(choice)android.content.Context.speedPreferences.put("multihop_nodes","newer saved order or Off decision");
+    else if(stage.equals("restored")){AndroidHomeStateStore.begin("new-user","wg","","new-node","","");AndroidHomeStateStore.proved();}
+    else AndroidHomeStateStore.advancePathGeneration(f.activity);
+    String replacement=AndroidHomeStateStore.current.sessionId;
+    Runnable delivery=android.app.Activity.queuedAction;android.app.Activity.queuedAction=null;android.app.Activity.queuedThread="";delivery.run();f.complete();
+    check(f.result.error!=null&&f.result.result==null&&AndroidHomeStateStore.current.connected&&replacement.equals(AndroidHomeStateStore.current.sessionId),"late ordered worker result adopted or stopped a newer Home owner: "+stage);
+    if(!stage.equals("restored"))check(RuntimeBoundary.starts==0&&RuntimeBoundary.stops==0,"late ordered admission stopped the original owner: "+stage);
+   }finally{android.app.Activity.queuedThread="";android.app.Activity.queuedAction=null;AndroidNodeStore.active=null;AndroidRuntimeRegistry.instance.nodeChain.active=false;AndroidHomeStateStore.off();}
+  }
+ }
+ public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);externalUI(root);ordinaryUI(root);ordinaryRestoration(root);ordinaryRestoreChanges(root);importedMatrix(root);importedUI(root);importedInvalid(root);importedCancellation(root);exactMultihopWinner(root);exactExternalWinner(root);exactTorExecution(root);externalOriginalSources(root);cancellation(root);stale(root);multihopPins(root);permissionCapture(root);permissionSelection(root);uiCancellation(root);orderedRestoration(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks; original native sources before capture and stop,captured winners,all-member ordered restores,40 ordinary and 40 imported paired graph restores,8-protocol typed pickers,cleanup/permission source changes,saved/test selection separation,cancellation phases and newer-user ownership");}
 }
 '''
 
@@ -483,6 +580,7 @@ def replace_class(text, name, replacement):
 
 def sources():
     ui=dict(P.T.UI)
+    ui['android/app/Activity.java']=ui['android/app/Activity.java'].replace('public void runOnUiThread(Runnable action){action.run();}', 'public static volatile String queuedThread="";public static volatile Runnable queuedAction;public void runOnUiThread(Runnable action){if(Thread.currentThread().getName().equals(queuedThread)){if(queuedAction!=null)throw new AssertionError("second queued UI completion");queuedAction=action;}else action.run();}')
     ui['android/content/Context.java']=ui['android/content/Context.java'].replace('public SharedPreferences getSharedPreferences(String name,int mode){return (key,fallback)->fallback;}', 'public static final java.util.Map<String,String> speedPreferences=new java.util.HashMap<>();public SharedPreferences getSharedPreferences(String name,int mode){return new SharedPreferences(){public String getString(String key,String fallback){return speedPreferences.getOrDefault(key,fallback);}public java.util.Map<String,?> getAll(){return new java.util.LinkedHashMap<>(speedPreferences);}};}')
     ui['android/content/SharedPreferences.java']='package android.content;public interface SharedPreferences{String getString(String key,String fallback);java.util.Map<String,?> getAll();}'
     # AdapterView.INVALID_POSITION represents an unavailable saved selection;
@@ -500,7 +598,7 @@ def sources():
     ui['android/widget/SeekBar.java']='package android.widget;public final class SeekBar extends android.view.View{int value;OnSeekBarChangeListener listener;public SeekBar(android.content.Context c){super(c);}public void setMax(int v){}public void setProgress(int v){value=v;if(listener!=null)listener.onProgressChanged(this,v,false);}public int getProgress(){return value;}public void setOnSeekBarChangeListener(OnSeekBarChangeListener l){listener=l;}public interface OnSeekBarChangeListener{void onStartTrackingTouch(SeekBar b);void onStopTrackingTouch(SeekBar b);void onProgressChanged(SeekBar b,int p,boolean u);}}'
     ui['android/app/AlertDialog.java']=ui['android/app/AlertDialog.java'].replace('public void dismiss(){','public boolean isShowing(){return showing;}public void dismiss(){')
     boundaries=P.BOUNDARIES.replace('String id="saved-exit",protocol','String name="Saved exit",id="saved-exit",protocol')
-    for name in ('AndroidHomeStateStore','AndroidModeOrchestrator','AndroidMultihopRuntime','AndroidStandardExitRuntime','AndroidConnectionProfileStore'):
+    for name in ('AndroidHomeStateStore','AndroidModeOrchestrator','AndroidMultihopRuntime','AndroidStandardExitRuntime','AndroidConnectionProfileStore','AndroidNodeChainRuntime'):
         boundaries=replace_class(boundaries,name,'')
     boundaries=boundaries.replace('static void compile(AndroidStandardExitStore.Entry e,JSONObject b,String mode,String execution){requireEntry(e);', 'static void compile(AndroidStandardExitStore.Entry e,JSONObject b,String mode,String execution){if(b.has("availableFinals")&&!b.optJSONArray("availableFinals").toString().contains("\\\""+mode+"\\\""))throw new IllegalArgumentException("original final service unavailable");requireEntry(e);')
     boundaries=boundaries.replace('return busy;','return busy||RuntimeBoundary.stopping||AndroidHomeStateStore.current.connected||AndroidHomeStateStore.current.phase.equals("connecting");')
@@ -529,6 +627,15 @@ def main():
         (root/'data').mkdir()
         subprocess.run(compile,check=True,timeout=45);subprocess.run(run,check=True,timeout=35)
         cases=(
+            ('AndroidSpeedLabController.java','&&connection.capturedCleanupPending(home,topology)','','terminal ordered cleanup was retried'),
+            ('AndroidUnifiedConnectionController.java','AndroidConnectionSelection.requireCurrent(activity,nodeStore,point.orderedCapture.selection);return true;','return true;','late original saved selection'),
+            ('AndroidSpeedLabController.java','if(orderedCaptureCancelled){callback.finished(null,cancelled());return;}','','cancelled ordered capture'),
+            ('AndroidSpeedLabController.java','if(!connection.pathCurrent(expected)||!connection.restoreChoiceCurrent(originalCapture)){callback.finished(null,new IllegalStateException("A newer connection decision cancelled the ordered test capture."));return;}','','late ordered capture Home epoch'),
+            ('AndroidSpeedLabController.java','if(!valid||!connection.pathCurrent(original.home)||!connection.restoreChoiceCurrent(original))','if(!valid||!connection.restoreChoiceCurrent(original))','late ordered admission Home epoch'),
+            ('AndroidSpeedLabController.java','if(!proved||!connection.pathCurrent(observed)||!connection.restoreChoiceCurrent(original))','if(!proved||!connection.restoreChoiceCurrent(original))','late ordered restoration Home epoch'),
+            ('AndroidUnifiedConnectionController.java','runtime.nodeChain.restore(point.orderedCapture,idle,','runtime.nodeChain.connect(point.orderedCapture.source,idle,','retained original ordered replay'),
+            ('AndroidUnifiedConnectionController.java','runtime.nodeChain.restoredMatches(point.orderedCapture)','true','fresh ordered native source owner'),
+            ('AndroidUnifiedConnectionController.java','runtime.nodeChain.captureCurrent(point.orderedCapture)','true','original ordered native owner before stop'),
             ('AndroidSpeedLabDialog.java','cancel.setOnClickListener(v->{controller.cancel();','cancel.setOnClickListener(v->{;','Cancel button'),
             ('AndroidSpeedLabDialog.java','dialog.setOnDismissListener(d->{if(controller.isRunning())controller.cancel();});','dialog.setOnDismissListener(d->{});','dialog cancellation'),
             ('AndroidSpeedLabController.java','if(!originalSuspended||original==null||!original.connected())','if(true)','original restore'),
@@ -536,7 +643,7 @@ def main():
             ('AndroidSpeedLabController.java','nativeHopMeter.cancel();return;','return;','native cancellation'),
             ('AndroidUnifiedConnectionController.java','point.home.runtimeMode,point.home.logicalMode,point.home.fallback','"wg",point.home.logicalMode,point.home.fallback','exact original transport'),
             ('AndroidUnifiedConnectionController.java','if(!file.getValue().equals(', 'if(false&&!file.getValue().equals(', 'changed original node'),
-            ('AndroidSpeedLabController.java','if(!ok||!connection.restoredCurrent(original,restoredOwner[0]))','if(!ok)','fresh restoration owner'),
+            ('AndroidSpeedLabController.java','if(!proved||!connection.pathCurrent(observed)||!connection.restoreChoiceCurrent(original))','if(false)','fresh restoration owner'),
             ('AndroidUnifiedConnectionController.java','multihop.restoreCaptured(point.entry,point.exit,point.multihopCapture,idle,','multihop.connect(point.entry,point.exit,point.home.runtimeMode,point.execution,point.home.activeEntryMode,','captured original winner'),
             ('AndroidUnifiedConnectionController.java','multihop.captureCurrent(point.multihopCapture)','true','original Server pin owner'),
             ('AndroidUnifiedConnectionController.java','multihop.restoredMatches(point.multihopCapture,point.entry,point.exit,now)','true','restored Server pin owner'),

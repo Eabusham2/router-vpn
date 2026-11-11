@@ -39,13 +39,26 @@ for marker in (
     "isAlwaysOn()",
     "isLockdownEnabled()",
     "VpnService.prepare(this)",
-    'shutdown("REVOKED"',
+    'shutdownRetainingOwner("REVOKED"',
     'publish("FAILED"',
 ):
     assert marker in service, f"LayeredVpnService missing strict/lifecycle marker: {marker}"
 assert "updateDefaultInterface" in service
 assert "resetNetwork()" in service
 assert "registerDefaultNetworkCallback" in service
+# The underlying close remains strict. Async callbacks must contain its
+# pending failures so Android's uncaught handler cannot destroy the retained
+# cleanup authority. The executable service gate injects that exact failure.
+for marker in (
+    "private void shutdown(String terminalState, String error)",
+    "private boolean shutdownRetainingOwner(String terminalState, String error)",
+    "try { shutdown(terminalState,error); return true; }",
+    "catch (RuntimeException pending) { reportCleanupPending(pending); return false; }",
+    'Log.w(TAG,"Native cleanup remains owned for retry",pending);',
+    'publish("STOPPING",activeMode,"VPN teardown remains unconfirmed; Disconnect retries the original native owner.");',
+):
+    assert marker in service, f"LayeredVpnService lost its reported async cleanup boundary: {marker}"
+assert service.count('if (!shutdownRetainingOwner("DOWN", "")) return;') == 2, "Generic and captured ordered stop must both withhold completion on pending cleanup"
 
 # Android must package exactly one gomobile Go runtime. The combined libbox AAR
 # includes sing-box plus the exact libXray revision whose go.mod pins Xray-core

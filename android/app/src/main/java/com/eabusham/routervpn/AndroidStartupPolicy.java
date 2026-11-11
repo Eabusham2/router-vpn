@@ -24,12 +24,13 @@ import java.util.UUID;
 /** One cold-process startup decision. Permission state contains only its nonce;
  * exact private sources remain in this process and must still match at launch. */
 final class AndroidStartupPolicy {
-    private static final String PREFS="router-vpn-unified", LAST_FILE="startup-last-v1.json", EXTERNAL_LAST_FILE="startup-tor-last-v1.json", MULTIHOP_LAST_FILE="startup-multihop-last-v1.json";
+    private static final String PREFS="router-vpn-unified", LAST_FILE="startup-last-v1.json", EXTERNAL_LAST_FILE="startup-tor-last-v1.json", MULTIHOP_LAST_FILE="startup-multihop-last-v1.json", ORDERED_LAST_FILE="startup-ordered-last-v1.json";
     // Retain the original receipt filename for upgrades. Its complete path
     // digest already binds the exact exit protocol and all private sources.
     private static final int MAX_LAST=4096;
     private static final String[] CHOICES={"smart-auto","auto","last","manual"};
     private static boolean coldLaunchClaimed;
+    private static long startupEpoch;
     private static Attempt pending;
 
     static final class Attempt {
@@ -38,11 +39,13 @@ final class AndroidStartupPolicy {
         final AndroidNodeStore.Node node, entry, exit;
         final AndroidStandardExitStore.Entry external, ordinaryEntry;
         final AndroidMultihopRuntime.StartupCapture lastMultihop;
+        final AndroidNodeStore.ChainCapture ordered;
         private final String nodeKind, externalSnapshot, ordinaryEntrySnapshot;
         private final String selectedID, activeID;
         private final AndroidHomeStateStore.Snapshot idle;
         private final Map<String,Object> preferences;
         private final Map<String,byte[]> files;
+        private long epoch;
         private boolean retired;
 
         private Attempt(String mode, AndroidNodeStore.Node node, AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, AndroidStandardExitStore.Entry external,
@@ -77,6 +80,7 @@ final class AndroidStartupPolicy {
             this.mode=mode;this.node=node;this.entry=entry;this.exit=exit;this.entryMode=entryMode;this.exitMode=exitMode;
             this.execution=execution;this.source=source;this.lastRaw=lastRaw;this.lastExecution=lastExecution;this.selectedID=selectedID;this.activeID=activeID;
             this.lastMultihop=lastMultihop;
+            this.ordered=null;
             this.idle=idle;this.preferences=Collections.unmodifiableMap(new LinkedHashMap<>(preferences));
             this.external=external==null?null:AndroidStandardExitStore.copy(external);
             this.nodeKind=external==null?"router-vpn":"external";
@@ -88,16 +92,32 @@ final class AndroidStartupPolicy {
             this.files=Collections.unmodifiableMap(copy);
         }
 
+        private Attempt(String mode,AndroidNodeStore.Node node,AndroidNodeStore.ChainCapture ordered,
+                        String activeID,AndroidHomeStateStore.Snapshot idle,Map<String,Object> preferences)throws Exception {
+            this.mode=mode;this.node=node;this.ordered=ordered;this.activeID=activeID;this.idle=idle;
+            entry=null;exit=null;external=null;ordinaryEntry=null;lastMultihop=null;
+            entryMode="";exitMode="";execution="local";lastRaw="";lastExecution="";
+            selectedID=ordered.control.id;nodeKind="router-vpn";externalSnapshot="";ordinaryEntrySnapshot="";
+            source=ordered.control.bundle().toString();
+            this.preferences=Collections.unmodifiableMap(new LinkedHashMap<>(preferences));
+            Map<String,byte[]> captured=new LinkedHashMap<>();
+            for(AndroidNodeStore.ChainSource member:ordered.members)captured.put(member.id,member.bytes());
+            captured.put(ordered.control.id,ordered.control.bytes());
+            files=Collections.unmodifiableMap(captured);
+        }
+
         boolean multihop(){return entry!=null||ordinaryEntry!=null;}
         boolean external(){return external!=null;}
+        boolean ordered(){return ordered!=null;}
         AndroidHomeStateStore.Snapshot idleOwner(){return idle;}
+        boolean current(){synchronized(AndroidStartupPolicy.class){return !retired&&pending==this&&epoch==startupEpoch;}}
 
         void requireCurrent(Context context, AndroidNodeStore nodes, AndroidUnifiedConnectionController connection)throws Exception {
             synchronized(AndroidStartupPolicy.class){
-                if(retired||pending!=this)throw new IllegalStateException("The startup decision was cancelled or belongs to an earlier app process.");
+                if(retired||pending!=this||epoch!=startupEpoch)throw new IllegalStateException("The startup decision was cancelled or belongs to an earlier app process.");
             }
             requireNoVPN(context);
-            if(!connection.idleCurrent(idle))throw new IllegalStateException("A newer VPN decision cancelled automatic startup.");
+            if(!connection.startupIdleCurrent(idle,this))throw new IllegalStateException("A newer VPN decision cancelled automatic startup.");
             if(!activeID.equals(nodes.activeId())||!preferences.equals(selectionPreferences(context)))
                 throw new IllegalStateException("The selected node or connection preferences changed during startup permission.");
             SharedPreferences prefs=prefs(context);
@@ -116,14 +136,16 @@ final class AndroidStartupPolicy {
                     throw new IllegalStateException("A captured startup node or path policy changed; choose Connect again.");
             }
             if(lastMultihop!=null)lastMultihop.require(entry,exit);
+            if(ordered!=null){ordered.requireCurrent();requireOrderedChoice(context,ordered);}
             requireNoVPN(context);
-            if(!connection.idleCurrent(idle))throw new IllegalStateException("A newer VPN owner replaced the startup decision.");
+            if(!connection.startupIdleCurrent(idle,this))throw new IllegalStateException("A newer VPN owner replaced the startup decision.");
+            if(!current())throw new IllegalStateException("The startup request was cancelled while its sources were checked.");
         }
 
         /** Called once, immediately before the existing permission-approved dispatch. */
         void dispatched()throws Exception {
             synchronized(AndroidStartupPolicy.class){
-                if(retired||pending!=this)throw new IllegalStateException("The startup request was already consumed or cancelled.");
+                if(retired||pending!=this||epoch!=startupEpoch)throw new IllegalStateException("The startup request was already consumed or cancelled.");
                 retired=true;pending=null;
             }
         }
@@ -134,7 +156,12 @@ final class AndroidStartupPolicy {
     /** Rotation/resume never creates another request, and a saved Activity from a
      * dead process cannot revive private permission state from its old nonce. */
     static Attempt coldLaunch(Context context,AndroidNodeStore nodes,AndroidUnifiedConnectionController connection,boolean restoredActivity)throws Exception {
+        return coldLaunch(context,nodes,connection,restoredActivity,captureEpoch());
+    }
+    static synchronized long captureEpoch(){return startupEpoch;}
+    static Attempt coldLaunch(Context context,AndroidNodeStore nodes,AndroidUnifiedConnectionController connection,boolean restoredActivity,long expectedEpoch)throws Exception {
         synchronized(AndroidStartupPolicy.class){
+            if(expectedEpoch!=startupEpoch)return null;
             if(coldLaunchClaimed)return null;
             coldLaunchClaimed=true;
             if(restoredActivity)return null;
@@ -143,7 +170,7 @@ final class AndroidStartupPolicy {
         String selected=prefs.getString("selected_id",nodes.activeId());
         if(selected==null||selected.isEmpty())return null;
         String kind=prefs.getString("selected_kind","router-vpn");
-        if("external".equals(kind))return captureExternal(context,nodes,connection,selected);
+        if("external".equals(kind))return captureExternal(context,nodes,connection,selected,expectedEpoch);
         if(!"router-vpn".equals(kind))throw new IllegalStateException("The selected startup node kind is unsupported.");
         AndroidNodeStore.Node node=requiredNode(nodes,selected);
         byte[] bytes=AndroidPrivateFileStore.read(node.file,AndroidNodeStore.MAX_BUNDLE);
@@ -159,6 +186,14 @@ final class AndroidStartupPolicy {
         AndroidHomeStateStore.Snapshot idle=connection.captureIdle();
         if(!selected.equals(nodes.activeId()))throw new IllegalStateException("The selected Router and active private node disagree; select the node before connecting.");
         Map<String,Object> preferences=selectionPreferences(context);
+        if(prefs.getBoolean("multihop_on",false)&&!prefs.getString("multihop_nodes","").trim().isEmpty()){
+            AndroidNodeStore.ChainCapture ordered=nodes.captureChain(node.id);
+            requireOrderedChoice(context,ordered);
+            if("last".equals(mode))requireLastOrdered(context,ordered);
+            Attempt capture=new Attempt(mode,node,ordered,nodes.activeId(),idle,preferences);
+            publish(capture,expectedEpoch);
+            try{capture.requireCurrent(context,nodes,connection);return capture;}catch(Exception changed){capture.cancel();throw changed;}
+        }
         Map<String,byte[]> files=new LinkedHashMap<>();files.put(node.id,bytes);
         AndroidNodeStore.Node entry=null,exit=null;AndroidStandardExitStore.Entry ordinaryEntry=null;String entryMode="wg",exitMode="",execution="local";
         if(prefs.getBoolean("multihop_on",false)){
@@ -184,11 +219,11 @@ final class AndroidStartupPolicy {
         AndroidMultihopRuntime.StartupCapture lastMultihop="last".equals(mode)&&entry!=null&&"auto".equals(execution)
                 ?lastMultihop(context,node.id,bytes,entry,files.get(entry.id),exit,files.get(exit.id),entryMode,exitMode,execution):null;
         Attempt capture=new Attempt(mode,node,entry,exit,null,ordinaryEntry,entryMode,exitMode,execution,source,last,selected,nodes.activeId(),idle,preferences,files,"",lastMultihop);
-        synchronized(AndroidStartupPolicy.class){if(pending!=null)throw new IllegalStateException("Another startup permission request is pending.");pending=capture;}
+        publish(capture,expectedEpoch);
         try{capture.requireCurrent(context,nodes,connection);return capture;}catch(Exception changed){capture.cancel();throw changed;}
     }
 
-    private static Attempt captureExternal(Context context,AndroidNodeStore nodes,AndroidUnifiedConnectionController connection,String selected)throws Exception{
+    private static Attempt captureExternal(Context context,AndroidNodeStore nodes,AndroidUnifiedConnectionController connection,String selected,long expectedEpoch)throws Exception{
         AndroidStandardExitStore exits=new AndroidStandardExitStore(context);
         AndroidStandardExitStore.Entry saved=AndroidStandardExitStore.copy(exits.get(selected));
         AndroidStandardExitStore.validate(saved);
@@ -207,12 +242,17 @@ final class AndroidStartupPolicy {
             if(lastExecution.isEmpty())throw new IllegalStateException("Startup Last has no matching proved external execution. Choose Connect to run Compare both for this saved path.");
         }
         Attempt capture=new Attempt(saved.startupMode,null,path.entry,null,saved,path.ordinaryEntry,path.entryMode,saved.protocol,path.execution,"","",selected,nodes.activeId(),idle,preferences,files,lastExecution);
-        synchronized(AndroidStartupPolicy.class){if(pending!=null)throw new IllegalStateException("Another startup permission request is pending.");pending=capture;}
+        publish(capture,expectedEpoch);
         try{capture.requireCurrent(context,nodes,connection);return capture;}catch(Exception changed){capture.cancel();throw changed;}
     }
 
-    static synchronized Attempt restore(String nonce){return nonce!=null&&nonce.matches("[0-9a-f]{32}")&&pending!=null&&!pending.retired&&nonce.equals(pending.nonce)?pending:null;}
-    static synchronized void cancelPending(){if(pending!=null)pending.cancel();}
+    private static synchronized void publish(Attempt capture,long expectedEpoch)throws Exception {
+        if(expectedEpoch!=startupEpoch)throw new IllegalStateException("The startup capture was cancelled before its source was ready.");
+        if(pending!=null)throw new IllegalStateException("Another startup permission request is pending.");
+        capture.epoch=expectedEpoch;pending=capture;
+    }
+    static synchronized Attempt restore(String nonce){return nonce!=null&&nonce.matches("[0-9a-f]{32}")&&pending!=null&&pending.current()&&nonce.equals(pending.nonce)?pending:null;}
+    static synchronized void cancelPending(){startupEpoch++;coldLaunchClaimed=true;if(pending!=null)pending.cancel();}
 
     static String startupMode(JSONObject profile)throws Exception {
         Object value=profile.opt("startup_mode");
@@ -249,6 +289,85 @@ final class AndroidStartupPolicy {
                 return true;
             }
         }catch(Exception unavailable){return false;}
+    }
+
+    /** A historical Local choice binds every original ordered source. It owns
+     * no native service, proof, TUN, MTU result, or reusable response lease. */
+    static final class OrderedLast {
+        private final String controlID,members,record;
+        private final Map<String,Object> preferences;
+        private OrderedLast(AndroidNodeStore.ChainCapture source,String pathSHA,Map<String,Object> preferences)throws Exception {
+            controlID=source.control.id;members=orderedMembers(source);
+            record=new JSONObject().put("schema",1).put("control_id",controlID).put("nodes_json",members)
+                    .put("path_sha256",pathSHA).put("selected_execution","local").toString();
+            this.preferences=Collections.unmodifiableMap(new LinkedHashMap<>(preferences));
+        }
+    }
+
+    static OrderedLast prepareOrderedExecution(Context context,AndroidNodeStore.ChainCapture source){
+        try{
+            if(source==null||AndroidMTUMeasurementGate.held())return null;
+            source.requireCurrent();requireOrderedChoice(context,source);
+            Map<String,Object> preferences=selectionPreferences(context);
+            String identity=orderedPathIdentity(source);
+            source.requireCurrent();requireOrderedChoice(context,source);
+            if(!preferences.equals(selectionPreferences(context)))return null;
+            return new OrderedLast(source,identity,preferences);
+        }catch(Exception unavailable){return null;}
+    }
+
+    /** Prepared source bytes are hashed before native/Home adoption. This
+     * transaction reads only public ownership and the saved choice. */
+    static boolean recordOrderedExecution(Context context,OrderedLast record,AndroidHomeStateStore.Snapshot captured){
+        try{
+            if(record==null||AndroidMTUMeasurementGate.held())return false;
+            synchronized(AndroidHomeStateStore.class){
+                AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
+                if(captured==null||captured.sessionId.isEmpty()||!captured.sessionId.equals(home.sessionId)
+                        ||captured.pathGeneration!=home.pathGeneration||!home.connected||!"connected".equals(home.phase)||!"passed".equals(home.pathProof)
+                        ||!"node-chain".equals(home.logicalMode)||!"node-chain".equals(home.runtimeMode)
+                        ||!record.controlID.equals(home.activeNodeId)||!record.members.equals(home.activeChain)
+                        ||!home.activeEntryId.isEmpty()||!home.activeExitId.isEmpty()||!home.activeExternalId.isEmpty()
+                        ||AndroidHomeStateStore.emergencyDisconnectPending(context)||!record.preferences.equals(selectionPreferences(context)))return false;
+                AndroidPrivateFileStore.write(new File(context.getApplicationContext().getFilesDir(),ORDERED_LAST_FILE),record.record.getBytes(StandardCharsets.UTF_8),MAX_LAST);
+                return true;
+            }
+        }catch(Exception unavailable){return false;}
+    }
+
+    private static void requireLastOrdered(Context context,AndroidNodeStore.ChainCapture source)throws Exception {
+        try{
+            JSONObject receipt=lastObject(context,ORDERED_LAST_FILE,"control_id","nodes_json","path_sha256","selected_execution");
+            if(!source.control.id.equals(receipt.getString("control_id"))||!orderedMembers(source).equals(receipt.getString("nodes_json"))
+                    ||!orderedPathIdentity(source).equals(receipt.getString("path_sha256"))||!"local".equals(receipt.getString("selected_execution")))
+                throw new IllegalStateException("The historical ordered choice differs from its complete original sources.");
+        }catch(Exception absent){throw new IllegalStateException("Startup Last has no matching proved ordered path. Connect the complete saved path once before using Last.");}
+    }
+
+    private static void requireOrderedChoice(Context context,AndroidNodeStore.ChainCapture source)throws Exception {
+        SharedPreferences saved=prefs(context);String raw=saved.getString("multihop_nodes","");
+        if(!"router-vpn".equals(saved.getString("selected_kind","router-vpn"))||!source.control.id.equals(saved.getString("selected_id",""))
+                ||!saved.getBoolean("multihop_on",false)||!"local".equals(saved.getString("multihop_execution","local"))
+                ||!"router-vpn".equals(saved.getString("multihop_entry_kind","router-vpn"))||raw.isEmpty()||raw.length()>MAX_LAST)
+            throw new IllegalStateException("The saved ordered startup selection lost its exact Local source.");
+        io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON("{\"nodes\":"+raw+"}");
+        if(!canonical(new JSONArray(raw)).equals(canonical(AndroidNodeStore.orderedSelection(source.control.profile()))))
+            throw new IllegalStateException("The saved ordered modes or member order changed.");
+    }
+
+    private static String orderedMembers(AndroidNodeStore.ChainCapture source)throws Exception {
+        JSONArray members=new JSONArray();
+        for(int i=0;i<source.members.size();i++)members.put(new JSONObject().put("id",source.members.get(i).id).put("mode",source.modes.get(i)));
+        return members.toString();
+    }
+
+    private static String orderedPathIdentity(AndroidNodeStore.ChainCapture source)throws Exception {
+        JSONArray members=new JSONArray();
+        for(int i=0;i<source.members.size();i++)members.put(new JSONObject().put("id",source.members.get(i).id)
+                .put("profile_sha256",profileIdentity(source.members.get(i).bundle())).put("mode",source.modes.get(i)));
+        JSONObject identity=new JSONObject().put("control_id",source.control.id).put("control_sha256",profileIdentity(source.control.bundle()))
+                .put("nodes",members).put("execution","local");
+        return AndroidTorProfile.digest(canonical(identity).getBytes(StandardCharsets.UTF_8));
     }
 
     /** Complete source identity prepared outside the native/Home adoption.

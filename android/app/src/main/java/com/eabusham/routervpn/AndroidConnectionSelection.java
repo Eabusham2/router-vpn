@@ -32,6 +32,10 @@ final class AndroidConnectionSelection {
         String active=nodes.activeId();
         Map<String,Object> captured=preferences(context);
         if(!java.util.Objects.equals(active,nodes.activeId()))throw new IllegalStateException("The selected private node changed during capture.");
+        return digest(active,captured);
+    }
+
+    static String digest(String active,Map<String,Object> captured)throws Exception{
         StringBuilder source=new StringBuilder("routervpn-connection-selection-v1\n");
         append(source,"active_node_id",active);
         for(String key:KEYS)if(captured.containsKey(key))append(source,key,captured.get(key));

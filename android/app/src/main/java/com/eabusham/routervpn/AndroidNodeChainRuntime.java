@@ -24,6 +24,9 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
     private final NativeSingBoxController singBox;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private AndroidNodeChainSession owner;
+    private AndroidNodeChainSession capturedDrain;
+    private long capturedDrainOperation, capturedDrainGeneration;
+    private boolean capturedDrainRestoreAuthorized;
     private boolean transitioning, connected, stopping, closed, submitted;
     private long operation;
 
@@ -32,9 +35,14 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
     }
 
     private void reconcile() {
-        if (owner != null && owner.released()) { owner = null; connected = false; submitted = false; }
+        if (owner != null && owner.released() && owner != capturedDrain) { owner = null; connected = false; submitted = false; }
     }
     synchronized boolean isActiveOrTransitioning() { reconcile(); return transitioning || owner != null; }
+    synchronized boolean retainsCapturedOwner(String homeSession) {
+        reconcile();
+        return homeSession != null && owner != null && homeSession.equals(owner.home.sessionId)
+                && (!owner.released() || capturedDrain == owner && capturedDrainOperation == operation);
+    }
     private AndroidNodeChainSession connectedOwner() {
         AndroidNodeChainSession captured;
         synchronized (this) { reconcile(); captured = connected && !stopping ? owner : null; }
@@ -71,22 +79,33 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
     }
 
     void connect(AndroidNodeStore.ChainCapture capture, Callback callback) { connect(capture, AndroidHomeStateStore.snapshot(context), callback); }
-    synchronized void connect(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, Callback callback) {
+    void connect(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, Callback callback) { connectSelected(capture,idle,true,callback); }
+    void connectLast(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, Callback callback) { connectSelected(capture,idle,false,callback); }
+    private void connectSelected(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, boolean remember, Callback callback) {
+        try { connect(capture,idle,AndroidNodeChainSession.selection(context,capture),remember,callback); }
+        catch(Exception invalid){callback.finished(false,safe(invalid));}
+    }
+    void connect(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, String selected, Callback callback) { connect(capture,idle,selected,true,callback); }
+    void connectLast(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, String selected, Callback callback) { connect(capture,idle,selected,false,callback); }
+    private synchronized void connect(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, String selected, boolean remember, Callback callback) {
         reconcile();
         if (closed || transitioning || owner != null || !terminal(singBox.getState())) {
             callback.finished(false, "The previous native owner must finish cleanup before an ordered path can start."); return;
         }
         transitioning = true; stopping = false; submitted = false;
         long selectedOperation=++operation;
-        executor.execute(() -> launch(capture, idle, selectedOperation, callback));
+        executor.execute(() -> launch(capture, idle, selected, selectedOperation, remember, callback));
     }
 
-    private void launch(AndroidNodeStore.ChainCapture source, AndroidHomeStateStore.Snapshot idle, long selectedOperation, Callback callback) {
+    private void launch(AndroidNodeStore.ChainCapture source, AndroidHomeStateStore.Snapshot idle, String selected, long selectedOperation, boolean remember, Callback callback) {
         AndroidHomeStateStore.Snapshot home = null;
         AndroidNodeChainSession session = null;
         try {
             if (source == null) throw new IllegalStateException("The original ordered selection is missing.");
             source.requireCurrent(); requireStarting(selectedOperation);
+            AndroidStartupPolicy.OrderedLast history = remember ? AndroidStartupPolicy.prepareOrderedExecution(context, source) : null;
+            synchronized (context.getSharedPreferences("router-vpn-unified",Context.MODE_PRIVATE)) {
+            AndroidNodeChainSession.requireSelection(context,source,selected);
             synchronized (AndroidHomeStateStore.class) {
                 AndroidHomeStateStore.Snapshot now = AndroidHomeStateStore.snapshot(context);
                 if (idle == null || now.connected || AndroidHomeStateStore.emergencyDisconnectPending(context)
@@ -96,9 +115,10 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
                 }
                 home = AndroidHomeStateStore.beginNodeChain(context, source);
             }
+            }
             callback.owned(home.sessionId);
             callback.progress("Preparing every original ordered node and authenticated layer…");
-            session = new AndroidNodeChainSession(context, source, home);
+            session = new AndroidNodeChainSession(context, source, home, selected);
             synchronized (this) { requireStarting(selectedOperation); owner = session; }
             requireStarting(selectedOperation); session.stage(); requireStarting(selectedOperation);
             synchronized (this) { requireStarting(selectedOperation); submitted = true; }
@@ -113,12 +133,19 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
             }
             requireStarting(selectedOperation); session.requireSource();
             if (!LayeredVpnService.nodeChainReady(session)) throw new IllegalStateException("The complete ordered path did not finish its native proof before timeout.");
-            if (!AndroidHomeStateStore.connectedNodeChain(context, home)) throw new IllegalStateException("The original ordered Home selection changed during proof.");
+            synchronized(context.getSharedPreferences("router-vpn-unified",Context.MODE_PRIVATE)) {
+                AndroidNodeChainSession.requireSelection(context,source,selected);
+                if (!AndroidHomeStateStore.connectedNodeChain(context, home)) throw new IllegalStateException("The original ordered Home selection changed during proof.");
+            }
             if (!LayeredVpnService.nodeChainReady(session)) throw new IllegalStateException("The complete native proof expired before Connected delivery.");
             synchronized (this) {
                 requireStarting(selectedOperation); connected = true; transitioning = false;
             }
             LayeredVpnService.startNodeChainAutomaticMTU(session);
+            synchronized (this) {
+                if (operation == selectedOperation && owner == session && connected && !stopping)
+                    AndroidStartupPolicy.recordOrderedExecution(context, history, AndroidHomeStateStore.snapshot(context));
+            }
             callback.finished(true, "Every ordered node and selected DNS passed the original native path proof.");
         } catch (Throwable failure) {
             String message = safe(failure);
@@ -150,6 +177,47 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
         synchronized(this){selectedOperation=operation;}
         return stopOperation(selectedOperation);
     }
+    /** Speed Lab stops only its original proved owner. Invalidate that proof
+     * before native teardown; an unrelated or queued replacement is untouched. */
+    boolean disconnectAndDrainCaptured(String homeSession) {
+        final long selectedOperation;
+        final boolean restoreAuthorized;
+        synchronized (this) {
+            reconcile();
+            AndroidNodeChainSession captured = owner;
+            boolean retry = captured != null && capturedDrain == captured && capturedDrainOperation == operation;
+            if (homeSession == null || homeSession.isEmpty() || captured == null || transitioning
+                    || !homeSession.equals(captured.home.sessionId)) return false;
+            synchronized (AndroidHomeStateStore.class) {
+                AndroidHomeStateStore.Snapshot now = AndroidHomeStateStore.snapshot(context);
+                boolean identity = captured.home.activeNodeId.equals(now.activeNodeId) && captured.home.activeChain.equals(now.activeChain);
+                boolean releasedReceipt = retry && captured.released() && now.activeNodeId.isEmpty() && now.activeChain.isEmpty()
+                        && "failed".equals(now.phase) && "failed".equals(now.pathProof);
+                if (!homeSession.equals(now.sessionId) || !captured.home.logicalMode.equals(now.logicalMode)
+                        || !captured.home.runtimeMode.equals(now.runtimeMode) || !(identity || releasedReceipt) || !now.activeEntryId.isEmpty()
+                        || !now.activeExitId.isEmpty() || !now.activeExternalId.isEmpty()
+                        || AndroidHomeStateStore.emergencyDisconnectPending(context)) return false;
+                if (retry) {
+                    if (now.pathGeneration != capturedDrainGeneration || now.connected
+                            || !("connecting".equals(now.phase) || "failed".equals(now.phase))) return false;
+                } else {
+                    boolean failedOwner = !now.connected && "failed".equals(now.phase) && "failed".equals(now.pathProof)
+                            && now.pathGeneration == captured.home.pathGeneration;
+                    if (!failedOwner) {
+                        if (!connected || stopping || !AndroidHomeStateStore.ownsNodeChain(context, captured.home) || !now.connected || !"connected".equals(now.phase)) return false;
+                        if (AndroidHomeStateStore.beginPathRevalidation(context, "The original ordered path is stopping for a captured temporary measurement.") == null) return false;
+                    }
+                    capturedDrain = captured; capturedDrainOperation = operation;
+                    capturedDrainGeneration = failedOwner ? now.pathGeneration : now.pathGeneration + 1;
+                    capturedDrainRestoreAuthorized = !failedOwner;
+                }
+            }
+            selectedOperation = operation; restoreAuthorized = capturedDrainRestoreAuthorized; stopping = true; connected = false; captured.cancel();
+        }
+        // An already failed original proof can still own retryable cleanup.
+        // Its drain never authorizes the temporary transaction to restore it.
+        return stopOperation(selectedOperation) && restoreAuthorized;
+    }
     private boolean stopOperation(long selectedOperation) {
         AndroidNodeChainSession captured;
         synchronized (this) {
@@ -157,7 +225,7 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
             stopping = true; connected = false; captured = owner; if (captured != null) captured.cancel(); else if (transitioning) return false;
         }
         boolean clean = stopOwned(captured);
-        synchronized (this) { if (clean && operation==selectedOperation) { transitioning = false; reconcile(); } }
+        synchronized (this) { if (clean && operation==selectedOperation) { if(capturedDrain==captured)capturedDrain=null; transitioning = false; reconcile(); } }
         synchronized(this){if (clean && captured != null && operation==selectedOperation) AndroidHomeStateStore.disconnectedNodeChain(context, captured.home);}
         return clean;
     }
@@ -198,8 +266,9 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
 
     static final class RestoreCapture {
         final AndroidNodeStore.ChainCapture source;
+        final String selection;
         private final AndroidNodeChainSession original;
-        private RestoreCapture(AndroidNodeChainSession owner) { original = owner; source = owner.source; }
+        private RestoreCapture(AndroidNodeChainSession owner) { original = owner; source = owner.source; selection = owner.selectionDigest; }
     }
     RestoreCapture captureRestore() throws Exception {
         AndroidNodeChainSession captured = connectedOwner();
@@ -212,14 +281,24 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
     boolean captureCurrent(RestoreCapture capture) {
         try {
             if (capture == null || connectedOwner() != capture.original) return false;
-            capture.source.requireCurrent(); return connectedOwner() == capture.original;
+            capture.source.requireCurrent(); AndroidNodeChainSession.requireSelection(context,capture.source,capture.selection); return connectedOwner() == capture.original;
+        } catch (Exception stale) { return false; }
+    }
+    boolean restoredMatches(RestoreCapture capture) {
+        try {
+            if (capture == null || !capture.original.released()) return false;
+            AndroidNodeChainSession current = connectedOwner();
+            if (current == null || current == capture.original || current.source != capture.source) return false;
+            capture.source.requireCurrent(); AndroidNodeChainSession.requireSelection(context,capture.source,capture.selection); current.requireCurrent();
+            return connectedOwner() == current;
         } catch (Exception stale) { return false; }
     }
     void restore(RestoreCapture capture, AndroidHomeStateStore.Snapshot idle, Callback callback) {
         try {
             if (capture == null || idle == null || !capture.original.released()) throw new IllegalStateException("The original ordered native owner has not completed its drain.");
             capture.source.requireCurrent();
-            connect(capture.source, idle, callback);
+            AndroidNodeChainSession.requireSelection(context,capture.source,capture.selection);
+            connect(capture.source, idle, capture.selection, false, callback);
         } catch (Exception stale) { callback.finished(false, safe(stale)); }
     }
     @Override public void close() { synchronized (this) { closed = true; } disconnect(); }

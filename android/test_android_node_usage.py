@@ -354,6 +354,7 @@ def sources():
     for name in ('AndroidPrivateFileStore', 'AndroidNodeUsage', 'AndroidHomeStateStore', 'AndroidNodeStore', 'AndroidStandardExitStore', 'AndroidModeOrchestrator', 'AndroidMultihopRuntime', 'AndroidStandardExitRuntime'):
         boundaries = S.replace_class(boundaries, name, '')
     boundaries = boundaries.replace('throw new AssertionError("unexpected startup capture");', '')
+    boundaries = boundaries.replace('AndroidHomeStateStore.Snapshot idleOwner(){throw new AssertionError("unexpected startup idle capture");}', 'final AndroidHomeStateStore.Snapshot capturedIdle=AndroidHomeStateStore.snapshot(new Context());AndroidHomeStateStore.Snapshot idleOwner(){return capturedIdle;}')
     boundaries = boundaries.replace('final class NativeWireGuardController {}', 'final class NativeWireGuardController {com.wireguard.android.backend.Tunnel.State getState(){return com.wireguard.android.backend.Tunnel.State.DOWN;}}').replace('final class NativeAmneziaWGController {}', 'final class NativeAmneziaWGController {org.amnezia.awg.backend.Tunnel.State getState(){return org.amnezia.awg.backend.Tunnel.State.DOWN;}}').replace('final class NativeXrayController {}', 'final class NativeXrayController {String getState(){return "DOWN";}}')
     boundaries = boundaries.replace('final class NativeSingBoxController {', 'final class NativeSingBoxController {String getState(){return "DOWN";}')
     boundaries = boundaries.replace('static boolean isTor(String p)', 'static void validate(AndroidStandardExitStore.Entry e){}static boolean isTor(String p)')

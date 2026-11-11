@@ -50,7 +50,7 @@ final class AndroidStandardExitStore{
  static void validateExecution(Entry e,boolean entry,String execution){if(!List.of("local","server","auto").contains(execution)||!execution.equals("local")&&(!entry||e.protocol.startsWith("tor")))throw new IllegalArgumentException("unowned execution");}
 }
 final class AndroidHomeStateStore{
- static final class Snapshot{boolean connected;long pathGeneration;String sessionId="off",phase="off",pathProof="pending",logicalMode="",runtimeMode="",actualBase="",expectedExternalIp="",activeNodeId="",activeExternalId="",activeExternalProtocol="",activeEntryId="",activeEntryMode="",activeExitId="";}
+ static final class Snapshot{boolean connected;long pathGeneration;String sessionId="off",phase="off",pathProof="pending",logicalMode="",runtimeMode="",actualBase="",expectedExternalIp="",activeNodeId="",activeExternalId="",activeExternalProtocol="",activeEntryId="",activeEntryMode="",activeExitId="",activeChain="";}
  static Snapshot value=new Snapshot();static Snapshot snapshot(Context a){return value;}static boolean emergencyDisconnectPending(Context c){throw new AssertionError("throughput fixture has no native benchmark commit");}
 }
 final class LayeredVpnService{
@@ -69,16 +69,22 @@ final class AndroidStandardExitRuntime{
 }
 final class AndroidRuntimeRegistry{final AndroidStandardExitRuntime standardExit=new AndroidStandardExitRuntime();static final AndroidRuntimeRegistry instance=new AndroidRuntimeRegistry();static AndroidRuntimeRegistry get(Context c){return instance;}}
 final class AndroidMultihopRuntime{static final class RestoreCapture{private RestoreCapture(){throw new AssertionError("external-only fixture cannot mint a Router multihop receipt");}}}
+final class AndroidNodeChainRuntime{static final class RestoreCapture{private RestoreCapture(){throw new AssertionError("external-only fixture cannot mint an ordered native receipt");}}}
 final class AndroidUnifiedConnectionController{
+ final Context activity=new Context();
+ // PRODUCTION_PATH_CURRENT
+ // PRODUCTION_SAME_PATH
  interface Callback{void progress(String m);void finished(boolean ok,String m);default void owned(String session){}default void superseded(){}default void validate()throws Exception{}}
  int starts,broadStops,ownedStops,ownedRequests;String entryMode="",execution="local",selectedExecution="local",requestedCleanup="";boolean direct,busy,holdCleanup;AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry external,ordinaryEntry;Callback pending,cleanup;
  // PRODUCTION_RESTORE_POINT
  RestorePoint captureRestorePoint(){if(isActiveOrTransitioning())throw new IllegalStateException("fixture has no captured live graph");return new RestorePoint(AndroidHomeStateStore.value,"off",null,null,null,null,"","","",Collections.emptyMap(),"",null);}
  boolean restorePointCurrent(RestorePoint p){return idleCurrent(p.home);}
+ boolean restoreChoiceCurrent(RestorePoint p){if(!"off".equals(p.topology))throw new AssertionError("external fixture cannot own a connected restoration choice");return true;}
  boolean idleCurrent(AndroidHomeStateStore.Snapshot idle){return !busy&&!AndroidHomeStateStore.value.connected&&idle.sessionId.equals(AndroidHomeStateStore.value.sessionId)&&idle.pathGeneration==AndroidHomeStateStore.value.pathGeneration;}
  AndroidHomeStateStore.Snapshot captureIdle(){if(busy||AndroidHomeStateStore.value.connected)throw new IllegalStateException("native owner retained");return AndroidHomeStateStore.value;}
  boolean restoredCurrent(RestorePoint point,String session){return false;}void restoreCaptured(RestorePoint p,AndroidHomeStateStore.Snapshot idle,Callback cb){throw new AssertionError("unexpected restore of off fixture");}
  boolean cancelPending(Callback cb){if(cb!=pending)return false;pending=null;cb.finished(false,"permission cancelled");return true;}
+ boolean capturedCleanupPending(String session,String topology){return busy||requestedCleanup.equals(session);}
  void stopCaptured(String session,String topology,Callback cb){disconnectExternal(session,cb);}
  boolean isActiveOrTransitioning(){return busy||AndroidHomeStateStore.value.connected;}
  void connectExternal(AndroidNodeStore.Node node,AndroidStandardExitStore.Entry exit,boolean d,String mode,String execution,Callback cb){starts++;entry=node;ordinaryEntry=null;external=exit;direct=d;entryMode=mode;this.execution=execution;selectedExecution=execution.equals("auto")?"server":execution;pending=cb;}
@@ -196,6 +202,11 @@ def main():
     speed = (JAVA / "AndroidSpeedLab.java").read_text()
     duration = speed[speed.index("    static final class DurationPolicy"):speed.index("    static final class Latency")]
     boundaries = BOUNDARIES.replace(" // PRODUCTION_NATIVE_PREDICATES", "\n".join(predicates)).replace(" // PRODUCTION_COMPOSITE_PREDICATE", composite).replace(" // PRODUCTION_DURATION_POLICY", duration)
+    unified = (JAVA / "AndroidUnifiedConnectionController.java").read_text()
+    path_current = re.findall(r"(?m)^    boolean pathCurrent\(.*$", unified)
+    same_path = re.findall(r"(?ms)^    private static boolean samePath\(.*?^    \}", unified)
+    assert len(path_current) == len(same_path) == 1, "original Home owner predicates must be unambiguous"
+    boundaries = boundaries.replace(" // PRODUCTION_PATH_CURRENT", path_current[0]).replace(" // PRODUCTION_SAME_PATH", same_path[0])
     for placeholder, filename, name in (
         (" // PRODUCTION_MEASUREMENT_SOURCE", "AndroidStandardExitRuntime.java", "MeasurementSource"),
         (" // PRODUCTION_RESTORE_POINT", "AndroidUnifiedConnectionController.java", "RestorePoint"),
