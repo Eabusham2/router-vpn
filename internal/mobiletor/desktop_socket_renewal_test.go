@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,6 +23,7 @@ type desktopRenewalFixture struct {
 	maximum atomic.Int32
 	cost    time.Duration
 	sizes   chan int
+	batches chan []DesktopSocketGrant
 }
 
 func (p *desktopRenewalFixture) enter(ctx context.Context) (context.Context, func(), error) {
@@ -75,6 +77,9 @@ func (p *desktopRenewalFixture) renewSocketsAdmitted(ctx context.Context, member
 		if p.sizes != nil {
 			p.sizes <- len(requests)
 		}
+		if p.batches != nil {
+			p.batches <- slices.Clone(requests)
+		}
 		for old := p.maximum.Load(); int32(len(requests)) > old; old = p.maximum.Load() {
 			if p.maximum.CompareAndSwap(old, int32(len(requests))) {
 				break
@@ -99,14 +104,15 @@ func (p *desktopRenewalFixture) renewSocketsAdmitted(ctx context.Context, member
 
 func TestDesktopSocketRenewalGroupRetainsQueuedOriginalStreams(t *testing.T) {
 	for _, count := range []int{8, desktopSocketRenewalLimit + 1} {
-		t.Run(fmt.Sprint(count), func(t *testing.T) { desktopSocketRenewalStreams(t, count, 0) })
+		t.Run(fmt.Sprint(count), func(t *testing.T) { desktopSocketRenewalStreams(t, count, 0, 650*time.Millisecond) })
 	}
-	t.Run("staggered", func(t *testing.T) { desktopSocketRenewalStreams(t, 4, 100*time.Millisecond) })
+	t.Run("staggered", func(t *testing.T) { desktopSocketRenewalStreams(t, 4, 100*time.Millisecond, 650*time.Millisecond) })
+	t.Run("staggered-slow-native", func(t *testing.T) { desktopSocketRenewalStreams(t, 4, 100*time.Millisecond, 1200*time.Millisecond) })
 }
 
-func desktopSocketRenewalStreams(t *testing.T, count int, stagger time.Duration) {
+func desktopSocketRenewalStreams(t *testing.T, count int, stagger, cost time.Duration) {
 	t.Helper()
-	p := &desktopRenewalFixture{desktopSocketPolicyFixture: desktopSocketFixturePolicy(), cost: 650 * time.Millisecond, sizes: make(chan int, 32)}
+	p := &desktopRenewalFixture{desktopSocketPolicyFixture: desktopSocketFixturePolicy(), cost: cost, sizes: make(chan int, 32)}
 	b, err := NewDesktopSocketBroker(context.Background(), desktopSocketFixtureCapture(), p, func() bool { return true })
 	if err != nil {
 		t.Fatal(err)
@@ -204,8 +210,9 @@ func desktopSocketRenewalStreams(t *testing.T, count int, stagger time.Duration)
 		time.Sleep(time.Millisecond)
 	}
 	// Later receipts become due while the first original group is still
-	// queued. They must remain unsubmitted until it joins, then coalesce into
-	// the next captured group instead of filling this FIFO with singleton jobs.
+	// queued. Already acknowledged members must share its captured native
+	// transaction instead of filling this FIFO with singleton jobs or waiting
+	// for a second transaction that can outlive their original five-second age.
 	_ = desktopRenewalFixtureWait(context.Background(), 450*time.Millisecond)
 	p.control.mu.Lock()
 	queued := len(p.control.waiters)
@@ -239,10 +246,9 @@ func desktopSocketRenewalStreams(t *testing.T, count int, stagger time.Duration)
 	}
 	minimumGroup := int32(4)
 	if stagger != 0 {
-		minimumGroup = 2
-		firstSize, nextSize := desktopSocketAwait(t, p.sizes), desktopSocketAwait(t, p.sizes)
-		if firstSize >= count || nextSize < 2 || firstSize+nextSize != count {
-			t.Fatal("later original receipts did not coalesce after their preceding group joined", firstSize, nextSize)
+		firstSize := desktopSocketAwait(t, p.sizes)
+		if firstSize != count {
+			t.Fatal("already acknowledged siblings did not share the original captured renewal", firstSize, count)
 		}
 	}
 	if p.groups.Load() == 0 || p.maximum.Load() < minimumGroup {
@@ -261,6 +267,216 @@ func desktopSocketRenewalStreams(t *testing.T, count int, stagger time.Duration)
 	defer cancel()
 	if err := b.Close(ctx); err != nil || p.count() != 0 {
 		t.Fatal("grouped native renewal failed joined exact retirement", err, p.count())
+	}
+}
+
+func TestDesktopSocketRenewalDoesNotAddAcknowledgementWhileQueued(t *testing.T) {
+	p := &desktopRenewalFixture{desktopSocketPolicyFixture: desktopSocketFixturePolicy(), cost: 250 * time.Millisecond, sizes: make(chan int, 16)}
+	b, err := NewDesktopSocketBroker(context.Background(), desktopSocketFixtureCapture(), p, func() bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := desktopSocketListener(t)
+	var workers sync.WaitGroup
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := b.Close(ctx); err != nil {
+			t.Error("late acknowledgement lost original joined retirement", err)
+		}
+		_ = listener.Close()
+		workers.Wait()
+	})
+	accept := func() <-chan *net.TCPConn {
+		accepted := make(chan *net.TCPConn, 1)
+		go func() { connection, _ := listener.AcceptTCP(); accepted <- connection }()
+		return accepted
+	}
+	echo := func(accepted <-chan *net.TCPConn) {
+		peer := desktopSocketAwait(t, accepted)
+		if peer == nil {
+			t.Fatal("original TCP stream was not accepted")
+		}
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			defer peer.Close()
+			_ = peer.SetDeadline(time.Now().Add(10 * time.Second))
+			_, _ = io.Copy(peer, peer)
+		}()
+	}
+	accepted := accept()
+	first, err := b.DialContext(context.Background(), "tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	echo(accepted)
+	socket := first.(*desktopSocketConn).socket
+	socket.mu.Lock()
+	peer := socket.peers[socket.remote]
+	socket.mu.Unlock()
+	original, _ := peer.snapshot()
+	_ = desktopRenewalFixtureWait(context.Background(), time.Until(time.UnixMilli(original.ObservedAt).Add(1700*time.Millisecond)))
+	p.control.Lock()
+	var once sync.Once
+	release := func() { once.Do(p.control.Unlock) }
+	defer release()
+	type dialResult struct {
+		connection net.Conn
+		err        error
+	}
+	accepted = accept()
+	connected := make(chan dialResult, 1)
+	go func() {
+		connection, err := b.DialContext(context.Background(), "tcp", listener.Addr().String())
+		connected <- dialResult{connection, err}
+	}()
+	// Its first grant is ahead of renewal in the actual FIFO, but is still
+	// unacknowledged when the monitor captures the existing original peer.
+	desktopSocketAwaitControlQueue(t, &p.control, 1)
+	desktopSocketAwaitControlQueue(t, &p.control, 2)
+	release()
+	second := desktopSocketAwait(t, connected)
+	if second.err != nil || second.connection == nil {
+		t.Fatal("queued original initial grant did not join", second.err)
+	}
+	defer second.connection.Close()
+	echo(accepted)
+	if size := desktopSocketAwait(t, p.sizes); size != 1 {
+		t.Fatal("queued native renewal adopted a later acknowledgement", size)
+	}
+	_ = desktopRenewalFixtureWait(context.Background(), time.Until(time.UnixMilli(original.ObservedAt).Add(5250*time.Millisecond)))
+	for index, connection := range []net.Conn{first, second.connection} {
+		_ = connection.SetDeadline(time.Now().Add(time.Second))
+		if _, err := connection.Write([]byte{byte(index + 1)}); err != nil {
+			t.Fatal("separately captured original stream could not write", err)
+		}
+		var reply [1]byte
+		if _, err := io.ReadFull(connection, reply[:]); err != nil || reply[0] != byte(index+1) {
+			t.Fatal("late member changed an original stream", index, reply, err)
+		}
+	}
+	if p.groups.Load() < 2 {
+		t.Fatal("later acknowledgement never entered a separate captured renewal")
+	}
+}
+
+func TestDesktopSocketRenewalDueAssociationPrecedesFreshRoots(t *testing.T) {
+	for _, parentDue := range []bool{false, true} {
+		t.Run(fmt.Sprintf("parent-due-%t", parentDue), func(t *testing.T) {
+			listener := desktopSocketListener(t)
+			packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = packet.Close() })
+			p := &desktopRenewalFixture{desktopSocketPolicyFixture: desktopSocketFixturePolicy(), batches: make(chan []DesktopSocketGrant, 16)}
+			b, err := NewDesktopSocketBroker(context.Background(), desktopSocketFixtureCapture(), p, func() bool { return true })
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := b.Close(ctx); err != nil || p.count() != 0 {
+					t.Error("capacity proof lost joined exact ownership", err, p.count())
+				}
+			})
+			// Hold only the broker's single renewal slot during setup. Its real
+			// monitor still inspects every receipt under the original age bound.
+			b.mu.Lock()
+			b.renewing = true
+			b.mu.Unlock()
+			var once sync.Once
+			release := func() {
+				once.Do(func() {
+					b.mu.Lock()
+					b.renewing = false
+					b.mu.Unlock()
+				})
+			}
+			defer release()
+			control := desktopSOCKSPrivateControl(t, b, listener)
+			defer control.Close()
+			relay, err := b.DialContext(context.Background(), "udp", packet.LocalAddr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer relay.Close()
+			parent := control.(*desktopSocketConn).socket
+			child := relay.(*desktopConnectedPacket).packet.socket
+			// Model only the association's already-established native ownership.
+			// Its initial private-address attachment is covered by the separate
+			// SOCKS tests; this capacity case uses actual loopback descriptors so
+			// the renewal and byte-path regression needs no physical interface.
+			// The held broker slot excludes every renewal read of this link.
+			b.mu.Lock()
+			parent.mu.Lock()
+			parent.socksClaimed = true
+			parent.children = map[*desktopSocket]struct{}{child: {}}
+			child.parent = parent
+			parent.mu.Unlock()
+			b.mu.Unlock()
+			desktopSOCKSPrivateExchange(t, relay, packet)
+			child.mu.Lock()
+			childPeer := child.peers[child.remote]
+			child.mu.Unlock()
+			original, valid := childPeer.snapshot()
+			if !valid {
+				t.Fatal("actual UDP member lost its original acknowledgement")
+			}
+			// A genuine later parent readback makes the child's deadline earlier.
+			// Cover both a still-due parent and a fresh parent at group capture.
+			parentAt := 2200 * time.Millisecond
+			if parentDue {
+				parentAt = 100 * time.Millisecond
+			}
+			_ = desktopRenewalFixtureWait(context.Background(), time.Until(time.UnixMilli(original.ObservedAt).Add(parentAt)))
+			parent.mu.Lock()
+			parentPeer := parent.peers[parent.remote]
+			parent.mu.Unlock()
+			parentPeer.op.Lock()
+			err = parent.apply(context.Background(), parentPeer)
+			parentPeer.op.Unlock()
+			if err != nil {
+				t.Fatal("original parent renewal failed", err)
+			}
+			_ = desktopRenewalFixtureWait(context.Background(), time.Until(time.UnixMilli(original.ObservedAt).Add(2200*time.Millisecond)))
+			for range desktopSocketRenewalLimit {
+				fresh := desktopSOCKSPrivateControl(t, b, listener)
+				defer fresh.Close()
+			}
+			release()
+			batch := desktopSocketAwait(t, p.batches)
+			childIndex, parentIndex := -1, -1
+			for index, request := range batch {
+				if request.SocketID == child.id {
+					childIndex = index
+				}
+				if request.SocketID == parent.id {
+					parentIndex = index
+				}
+			}
+			if childIndex < 0 {
+				t.Fatal("due derived UDP peer was omitted behind fresh roots", len(batch))
+			}
+			if len(batch) > desktopSocketRenewalLimit || parentDue && parentIndex < 0 || parentIndex >= childIndex {
+				t.Fatal("bounded renewal lost parent-before-child native ownership", len(batch), parentIndex, childIndex)
+			}
+			until := time.Now().Add(time.Second)
+			for {
+				receipt, valid := childPeer.snapshot()
+				if valid && receipt.Grant.Sequence > original.Grant.Sequence {
+					break
+				}
+				if time.Now().After(until) {
+					t.Fatal("selected derived peer never acknowledged its exact renewal", child.admission.first.Load())
+				}
+				time.Sleep(time.Millisecond)
+			}
+			desktopSOCKSPrivateExchange(t, relay, packet)
+		})
 	}
 }
 

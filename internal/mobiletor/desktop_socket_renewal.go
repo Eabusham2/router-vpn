@@ -138,7 +138,8 @@ func (b *DesktopSocketBroker) refreshRenewals(sockets []*desktopSocket) bool {
 	if !ok {
 		return false
 	}
-	var due []desktopSocketRenewalPeer
+	var candidates []desktopSocketRenewalPeer
+	due := false
 	for _, socket := range sockets {
 		socket.mu.Lock()
 		if socket.closing {
@@ -161,17 +162,19 @@ func (b *DesktopSocketBroker) refreshRenewals(sockets []*desktopSocket) bool {
 				continue
 			}
 			until := desktopSocketRenewalUntil(receipt)
+			candidates = append(candidates, desktopSocketRenewalPeer{socket, peer, until, receipt.Grant.Remote})
 			if until-time.Now().UnixMilli() <= desktopSocketControlWait.Milliseconds() {
-				due = append(due, desktopSocketRenewalPeer{socket, peer, until, receipt.Grant.Remote})
+				due = true
 			}
 		}
 	}
-	if len(due) == 0 {
+	if !due {
 		return true
 	}
-	// Retain one queued/running transaction for this original broker. Peers
-	// becoming due while it waits remain unsubmitted; the next monitor captures
-	// them together after that transaction and all its peer operations join.
+	// Retain one queued/running transaction for this original broker. Capture
+	// already acknowledged siblings now: they may become due during the same
+	// foreground queue and native transaction, when a second batch would be too
+	// late. No new peer or acknowledgement can join this captured group later.
 	// Expiry inspection above never waits for or borrows freshness from this
 	// owner. Foreground requests already in the native FIFO remain ahead.
 	b.mu.Lock()
@@ -186,14 +189,10 @@ func (b *DesktopSocketBroker) refreshRenewals(sockets []*desktopSocket) bool {
 		b.renewing = false
 		b.mu.Unlock()
 	}
-	// A derived UDP permit must not renew against a parent that is itself due
-	// behind it. Put roots first, then order equal roles by their real deadline
-	// and fixed original socket/tuple identity rather than Go map iteration.
-	sort.Slice(due, func(i, j int) bool {
-		a, c := due[i], due[j]
-		if (a.socket.parent == nil) != (c.socket.parent == nil) {
-			return a.socket.parent == nil
-		}
+	// Choose by the real deadline before adding acknowledged siblings. Sorting
+	// all roots first would let fresh roots fill every frame ahead of a due
+	// derived peer. Parent-before-child execution is established after capture.
+	less := func(a, c desktopSocketRenewalPeer) bool {
 		if a.until != c.until {
 			return a.until < c.until
 		}
@@ -201,15 +200,47 @@ func (b *DesktopSocketBroker) refreshRenewals(sockets []*desktopSocket) bool {
 			return a.socket.id < c.socket.id
 		}
 		return a.remote.Compare(c.remote) < 0
-	})
+	}
+	sort.Slice(candidates, func(i, j int) bool { return less(candidates[i], candidates[j]) })
+	available := make(map[*desktopSocketPeer]desktopSocketRenewalPeer, len(candidates))
+	for _, candidate := range candidates {
+		available[candidate.peer] = candidate
+	}
 	group := make([]desktopSocketRenewalPeer, 0, desktopSocketRenewalLimit)
 	selected := make(map[*desktopSocketPeer]bool)
-	for _, candidate := range due {
-		if len(group) == desktopSocketRenewalLimit {
+	capture := func(candidate desktopSocketRenewalPeer) bool {
+		socket, peer := candidate.socket, candidate.peer
+		if !peer.op.TryLock() {
+			return false
+		}
+		if err := socket.beginIO(); err != nil {
+			peer.op.Unlock()
+			return false
+		}
+		peer.mu.Lock()
+		valid := peer.valid && !peer.applying && peer.request == peer.receipt.Grant &&
+			validDesktopSocketReceipt(peer.receipt, peer.request, time.Now())
+		if valid {
+			peer.applying = true
+		}
+		peer.mu.Unlock()
+		if !valid {
+			socket.io.Done()
+			peer.op.Unlock()
+			return false
+		}
+		selected[peer] = true
+		group = append(group, candidate)
+		return true
+	}
+	for _, candidate := range candidates {
+		if len(group) == desktopSocketRenewalLimit || len(group) == 0 && candidate.until-time.Now().UnixMilli() > desktopSocketControlWait.Milliseconds() {
 			break
 		}
-		socket, peer := candidate.socket, candidate.peer
-		if parent := socket.parent; parent != nil {
+		if selected[candidate.peer] {
+			continue
+		}
+		if parent := candidate.socket.parent; parent != nil {
 			parent.mu.Lock()
 			control := parent.peers[parent.remote]
 			parent.mu.Unlock()
@@ -220,33 +251,25 @@ func (b *DesktopSocketBroker) refreshRenewals(sockets []*desktopSocket) bool {
 			pending := control.applying || desktopSocketRenewalUntil(control.receipt)-time.Now().UnixMilli() <= desktopSocketControlWait.Milliseconds()
 			control.mu.Unlock()
 			if pending && !selected[control] {
-				continue
+				// A due child may have the earlier deadline after a genuine
+				// parent renewal. Reserve both slots and capture that exact
+				// parent now instead of skipping the child behind fresh roots.
+				owner, ok := available[control]
+				if !ok || len(group)+2 > desktopSocketRenewalLimit || !capture(owner) {
+					continue
+				}
 			}
 		}
-		if !peer.op.TryLock() {
-			continue
-		}
-		if err := socket.beginIO(); err != nil {
-			peer.op.Unlock()
-			continue
-		}
-		peer.mu.Lock()
-		valid := peer.valid && !peer.applying && peer.request == peer.receipt.Grant &&
-			validDesktopSocketReceipt(peer.receipt, peer.request, time.Now()) &&
-			desktopSocketRenewalUntil(peer.receipt)-time.Now().UnixMilli() <= desktopSocketControlWait.Milliseconds()
-		if valid {
-			peer.applying = true
-		}
-		peer.mu.Unlock()
-		if !valid {
-			socket.io.Done()
-			peer.op.Unlock()
-			continue
-		}
-		selected[peer] = true
-		group = append(group, candidate)
+		capture(candidate)
 	}
 	if len(group) != 0 {
+		sort.Slice(group, func(i, j int) bool {
+			a, c := group[i], group[j]
+			if (a.socket.parent == nil) != (c.socket.parent == nil) {
+				return a.socket.parent == nil
+			}
+			return less(a, c)
+		})
 		go func() {
 			defer releaseGroup()
 			b.applyRenewals(policy, group)
