@@ -198,6 +198,10 @@ public final class NodeChainCaptureHarness {
   check(f.profiles.currentOrderedPath().members.get(0).id.equals(f.members.get(1).id),"saved profile lost editor order");
   f.prefs.edit().putBoolean("multihop_on",false).commit();AndroidOrderedPathSelection disabled=new AndroidOrderedPathSelection(f.nodes,f.profiles);
   check(disabled.members().size()==3,"disabled ordered selection cannot be edited");
+  String remembered=f.prefs.getString("multihop_nodes","");f.profiles.add("Single node while ordered is off");
+  JSONArray rows=new JSONObject(Files.readString(f.rows)).getJSONArray("profiles");JSONObject direct=rows.getJSONObject(rows.length()-1);
+  check(!direct.getBoolean("multihop_enabled")&&!direct.has("multihop_nodes"),"disabled ordered path could not save its direct connection choice");
+  check(remembered.equals(f.prefs.getString("multihop_nodes",""))&&!f.prefs.getBoolean("multihop_on",true),"saving the direct profile discarded or enabled its remembered ordered draft");
   Fixture fresh=new Fixture(root,"4/");fresh.prefs.edit().putString("multihop_nodes","").putBoolean("multihop_on",false).commit();State original=new State(fresh);
   AndroidOrderedPathSelection newPath=new AndroidOrderedPathSelection(fresh.nodes,fresh.profiles);check(newPath.members().size()==1,"new draft did not retain its selected final node");
   newPath.addPrefix(fresh.members.get(0).id);newPath.addPrefix(fresh.members.get(1).id);newPath.addPrefix(fresh.members.get(2).id);
@@ -212,15 +216,19 @@ public final class NodeChainCaptureHarness {
   State before=new State(f);reject(()->draft.save(),"ordered editor revived after source change-away and back");before.same(f,"stale editor generation");
  }
  static void editorFailures(Path root)throws Exception{
-  for(String fault:List.of("source","preferences","native","publication")) {
+  for(String fault:List.of("source","preferences","native","publication","readback")) {
    Fixture f=new Fixture(root,"3/");AndroidOrderedPathSelection draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);State original=new State(f);
    if(fault.equals("source")){JSONObject changed=f.bundle(1);profile(changed).put("api_token","replacement-private-token");Files.writeString(f.members.get(1).file.toPath(),changed.toString());}
    if(fault.equals("preferences"))f.prefs.edit().putString("mode","all").commit();
    if(fault.equals("native"))io.nekohasekai.libbox.Libbox.afterChainMember=()->{throw new IllegalStateException("native compile rejected captured input");};
    if(fault.equals("publication")){AndroidPrivateFileStore.failPath=f.control().file.getAbsolutePath();AndroidPrivateFileStore.failures=1;}
+   if(fault.equals("readback")) {
+    draft.removePrefix(0);
+    f.prefs.beforeCommit=()->AndroidPrivateFileStore.orderedRead=file->{if(file.equals(f.control().file)){AndroidPrivateFileStore.orderedRead=null;throw new IllegalStateException("post-publication original source readback failed");}};
+   }
    State before=new State(f);
    try{reject(()->draft.save(),"ordered editor accepted "+fault);before.same(f,"editor failure "+fault);}
-   finally{io.nekohasekai.libbox.Libbox.afterChainMember=null;AndroidPrivateFileStore.failPath="";AndroidPrivateFileStore.failures=0;}
+   finally{io.nekohasekai.libbox.Libbox.afterChainMember=null;AndroidPrivateFileStore.failPath="";AndroidPrivateFileStore.failures=0;AndroidPrivateFileStore.orderedRead=null;f.prefs.beforeCommit=null;}
   }
  }
  static void orderedPermission(Path root)throws Exception{
@@ -256,6 +264,17 @@ public final class NodeChainCaptureHarness {
   check(!premature,"ordered editor did not exclude an independent source publisher until complete publication");
   check(editorFailure.get()==null&&writerFailure.get()==null&&published.getCount()==0,"original editor or subsequent publisher failed");
  }
+ static void editorFinalBudget(Path root)throws Exception{
+  Fixture f=new Fixture(root,"2/");JSONObject a=f.bundle(0),b=f.bundle(1);
+  for(String key:List.of("multihop_nodes","multihop_enabled","multihop_execution"))profile(b).remove(key);
+  a.put("unused_private_source","");b.put("unused_private_source","");
+  int payload=AndroidNodeStore.MAX_CHAIN_SOURCE-8-a.toString().getBytes(StandardCharsets.UTF_8).length-b.toString().getBytes(StandardCharsets.UTF_8).length;
+  a.put("unused_private_source","x".repeat(payload/2));b.put("unused_private_source","y".repeat(payload-payload/2));f.replace(0,a);f.replace(1,b);f.nodes.select(f.control().id);
+  f.prefs.edit().putString("multihop_nodes","").putBoolean("multihop_on",false).commit();
+  AndroidOrderedPathSelection draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);draft.addPrefix(f.members.get(0).id);int before=AndroidPrivateFileStore.writes;
+  reject(()->draft.save(),"ordered editor accepted sources beyond the final aggregate budget");
+  check(AndroidPrivateFileStore.writes==before,"ordered final references exceeded their aggregate bound after private publication");
+ }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";
   if(family.equals("source")){sourceControls(root);return;}if(family.equals("generation")){generationControls(root);return;}
@@ -265,9 +284,10 @@ public final class NodeChainCaptureHarness {
   if(family.equals("ordered-permission")){orderedPermission(root);return;}
   if(family.equals("editor-native")){editorNative(root);return;}
   if(family.equals("editor-atomic")){editorAtomicity(root);return;}
+  if(family.equals("editor-budget")){editorFinalBudget(root);return;}
   for(String key:List.of("2/","3/","4/","8/","3/aes-256-gcm","4/aes-256-gcm+xor-whitening","4/fixed-middle"))roundtrip(root,key);
   sourceControls(root);generationControls(root);validationControls(root);compilationRace(root);captureAtomicity(root);
-  editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);
+  editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);editorFinalBudget(root);
   System.out.println("Android ordered sources: "+checks+" checks; actual Go compilation, exact all-member saved capture and rollback passed");
  }
 }
@@ -333,6 +353,7 @@ def run(root, work, app, classes, jar, env):
         ("ordered-permission", "AndroidConnectionSelection", permission.replace('"multihop_on","multihop_nodes",', '"multihop_on",'), "permission digest omitted ordered member choices"),
         ("editor-native", "AndroidOrderedPathSelection", editor[:preview_start] + editor[preview_end:], "ordered editor skipped complete native chain validation"),
         ("editor-atomic", "AndroidNodeStore", node.replace(publication_lock, publication_lock.replace("STORE_LOCK", "new Object()")), "ordered editor did not exclude an independent source publisher until complete publication"),
+        ("editor-budget", "AndroidConnectionProfileStore", store.replace('if(complete>AndroidNodeStore.MAX_CHAIN_SOURCE)', 'if(false)'), "ordered final references exceeded their aggregate bound after private publication"),
     )
     assert node.count(source_guard) == node.count(epoch_guard) == node.count(capture_lock) == 1
     for family, name, changed, witness in controls:

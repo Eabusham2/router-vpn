@@ -57,6 +57,12 @@ final class AndroidConnectionProfileStore {
     }
 
     private Record loadRow(JSONObject row) throws Exception {
+        return loadRow(row,null);
+    }
+
+    private interface PublicationValidation { void require() throws Exception; }
+
+    private Record loadRow(JSONObject row,PublicationValidation validation) throws Exception {
         boolean ordered=row.has(MULTI_NODES);String kind=row.getString("node_kind"),nodeId=row.getString("node_id");
         String mode=normalizeMode(row.optString("mode","smart-auto"));List<String>layers=jsonStrings(row.optJSONArray("custom_layers"),32);
         boolean external="external".equals(kind),multi=row.optBoolean("multihop_enabled",false);String entry=row.optString("multihop_entry_id",""),exit=row.optString("multihop_exit_id","");String multiMode=ordered?"":external?row.optString("multihop_exit_mode",""):multi?normalizeMultiMode(row.optString("multihop_exit_mode","shadowsocks")):"shadowsocks";String execution=normalizeExecution(row.optString("multihop_execution","local"));
@@ -139,6 +145,7 @@ final class AndroidConnectionProfileStore {
             else if(!originalSelection.id.isEmpty()){attemptedSelections.add(new AndroidNodeStore.SelectionSnapshot(originalSelection.id,readLimited(nodes.file(originalSelection.id),AndroidNodeStore.MAX_BUNDLE)));nodes.select(originalSelection.id);}
             else nodes.restoreSelection(originalSelection);
             publishPreferences(preferenceUpdate);
+            if(validation!=null)validation.require();
         }catch(Exception failure){
             Exception rollback=null;
             synchronized(prefs()) {
@@ -190,8 +197,9 @@ final class AndroidConnectionProfileStore {
                         .put(MULTI_ENTRY_KIND,"router-vpn").put("multihop_entry_id","").put("multihop_entry_mode","")
                         .put("multihop_exit_id","").put("multihop_exit_mode","").put(MULTI_NODES,members);
                 validateOrderedRow(row,SCHEMA_VERSION);
-                loadRow(row);
-                return currentOrderedPath();
+                AndroidNodeStore.ChainCapture[] result=new AndroidNodeStore.ChainCapture[1];
+                loadRow(row,()->result[0]=currentOrderedPath());
+                return result[0];
             });
         }
     }
@@ -200,7 +208,7 @@ final class AndroidConnectionProfileStore {
 
     private JSONObject snapshot(String name,String id) throws Exception {
         SharedPreferences p=prefs();String kind=p.getString(SELECTED_KIND,"router-vpn"),nodeId=p.getString(SELECTED_ID,nodes.activeId());if(nodeId==null||nodeId.isEmpty())throw new IllegalStateException("Select a Router or Custom node first.");
-        if(!p.getString(MULTI_NODES,"").isEmpty())return snapshotOrdered(name,id);
+        if(p.getBoolean(MULTI_ON,false)&&!p.getString(MULTI_NODES,"").isEmpty())return snapshotOrdered(name,id);
         boolean external="external".equals(kind);AndroidStandardExitStore.Entry custom=external?AndroidStandardExitStore.copy(exits.get(nodeId)):null;
         NodePolicy policy=external?null:routerPolicy(nodeId);
         if(!external&&!"router-vpn".equals(kind))throw new IllegalStateException("Selected node kind is unsupported.");
@@ -300,6 +308,9 @@ final class AndroidConnectionProfileStore {
         byte[] updated=bundle.toString().getBytes(StandardCharsets.UTF_8);
         if(!controlId.equals(AndroidNodeStore.deriveId(bundle,updated)))throw new IllegalStateException("Ordered restoration changed the original control identity.");
         updates.put(controlId,new NodeUpdate(controlId,control.original,updated));
+        long complete=0;
+        for(NodeUpdate member:updates.values())complete+=member.updated.length;
+        if(complete>AndroidNodeStore.MAX_CHAIN_SOURCE)throw new IllegalStateException("Complete ordered sources with their final references exceed the aggregate bound.");
     }
 
     private static JSONArray orderedReferences(JSONArray members) throws Exception {
