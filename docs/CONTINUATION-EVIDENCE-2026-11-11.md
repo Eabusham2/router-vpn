@@ -50,6 +50,14 @@ publication is separate from a successful native build or release.
 | `e2c78454` | Model original Darwin tunnel-control transfer in composition fixtures; correct supported UDP/private-CA and cancellable Tor observation fixtures. | 24 preparation checks; final-source full Darwin ARM64 Box test binary compiled and linked. Actual Darwin execution remains a native CI requirement. |
 | `b2673fdf` | Reconstruct the Linux imported WG-entry/paired-SS-final parent and host using the existing installed session/process/journal/broker. | Focused ownership, source, MTU and restoration suite passed in 28.375 seconds; focused race cases passed in 7.675 seconds. Windows and Darwin AMD64/ARM64 controller cross-compiles passed. Public admission remains closed pending the installed native gate. |
 | `49319df8` | Defer Apple live response measurement while native Auto MTU or Retest runs. | 459 actual Swift MTU/engine checks, 28 IPC checks and 126 live-response checks; busy-owner and cancellation mutations rejected. The native idle reservation is serialized with Auto/Retest start. |
+| `52e00a24` | Register installed Linux imported-host acceptance in the complete native runtime build. | Eight initial scenarios compiled; all 52 runner checks passed, including missing, duplicate and foreign-receipt controls. Privileged execution remains separate. |
+| `513d1779` | Trace the concrete Linux imported owner in the existing shipping audits. | 37 gate tests and 19 new platform mutations passed. The checks still require registered ownership, the original caller, proof/DNS, startup order, monitoring and rejection of legacy fallback. No completion denominator changed. |
+| `c64a3f24` | Build Windows packages using the exact upstream Go 1.26.3 Winsock cleanup correction in a verified compiler copy. | Exact production-file preimages and postimages, owned-copy receipts and both Windows architecture links passed. Application socket-family and ownership guards remain intact; native runtime behavior is still a separate gate. |
+| `9900f889` | Show expiring HTTPS responses through the captured Android external path. | Java worker 145 checks plus seven mutations, MTU 85 checks, service 673 plus five controls, statistics 736 plus eight controls, dialog 359 checks, provenance 11 checks, parser 103 files and the shared Go wrapper race case passed. APK and device execution remain separate. |
+| `339e3f57` | Canonicalize the Windows temporary parent in the compiler-copy fixture. | The actual Windows ARM64 controller job at this SHA passed compiler preparation and all six preimage/reuse/fallback controls. This fixes short/long-path identity in the fixture, not the pending socket/H3/lease runtime verdicts. |
+| `7a15afe3` | Keep the Windows imported fallback mutation scoped to the original Windows owner after adding the Linux platform owner. | All 25 runner tests passed; the actual shared Go positive passed and the scoped production mutation failed at the intended legacy-fallback witness. |
+| `c9917fa2` | Require joined retirement of an outstanding Linux imported MTU lease and trigger native builds for the independent peer source. | Final tagged compilation/classification and the nine-case receipt/inventory regression passed. The cancellation case cancels actual work; the additional case requires original process/source join before discharging the lease. |
+| `5b0c81f3` | Remove redundant relative-path reconstruction from native source sorting. | Identical canonical Windows/POSIX order and changed-byte/removed-file controls passed; the full package-fallback audit passed its unchanged 30-second limit. Every relative filename and original byte remains sealed. |
 
 The Linux parent unit is a new reconstruction from the preserved design and
 published child/policy prerequisites. It is not represented as recovery of the
@@ -67,30 +75,39 @@ starts after DNS/TCP/TLS preparation. It is labeled HTTPS, expires in memory,
 and does not become ICMP RTT, direct node reachability, a throughput result or
 a durable 50-sample score. The selected DNS policy still governs the path.
 
-The Apple owner retains the session, node source, network, already proved
-execution choice, native measurement and MTU lease until workers drain. It
-revalidates before displaying a result. Partial, stale, cancelled, mixed-type
-and incorrectly attributed responses cannot replace the current result.
-Background probes use an idle-only MTU lease; explicit Speed Lab retains its
-existing cancellation and drain contract. If the initial Auto MTU operation
-was deferred by the live lease, final release starts it once.
+The Apple and Android owners retain the session, node source, network, already
+proved execution choice, native measurement and MTU lease until workers drain.
+They revalidate before displaying a result. Partial, stale, cancelled,
+mixed-type and incorrectly attributed responses cannot replace the current
+result. Background probes reserve idle MTU ownership atomically with native
+Auto/Retest start; explicit Speed Lab retains its existing cancellation and
+drain contract. Final release resumes an initial Auto operation deferred by
+that exact lease, including after a failed live sample. Explicit MTU Cancel
+and replacement owners do not inherit that permission. Android values expire
+after ten seconds; Apple values expire after fifteen seconds.
 
 ## Native and release state at this record
 
 The new installed imported-host fixture is registered in the existing mandatory
-Linux generated Node TUN gate. Its eight scenarios cover public Connect,
+`verify_installed_linux_host` gate in `deploy/build-native-runtime.py`, reached
+through the Linux native app and complete desktop-native-runtime workflows.
+It is not part of the separate generated Node child-only workflow. Its nine
+scenarios cover public Connect,
 incorrect entry public proof, incorrect paired-node proof, final DNS refusal,
 authenticated MTU cancellation, captured restoration, final cover loss, and a
-temporary Speed Lab path followed by restoration. Independent encrypted peer
+temporary Speed Lab path followed by restoration, plus an outstanding MTU
+lease that cannot retire before the original process and source join.
+Independent encrypted peer
 counters distinguish entry, final, public/node proof, DNS, MTU and direct bypass.
 Native completion requires original process/source join and settled protection.
 
 The tagged controller compile and scenario classification passed in 0.067
-seconds. All 52 runner checks passed in 353.142 seconds; missing, duplicated
-and foreign imported receipts are rejected. These validate the required gate
-and compiled fixture, not execution of its privileged scenarios in this
-workspace. Undrained-MTU retirement and broader imported graphs retain their
-separate acceptance work.
+seconds. All 52 initial runner checks passed in 353.142 seconds; missing,
+duplicated and foreign imported receipts are rejected. The final nine-case
+fixture compiled in 0.064 seconds and its receipt/inventory regression passed.
+These validate the required gate and compiled fixture, not execution of its
+privileged scenarios in this workspace. All nine actual native scenarios and
+broader imported graphs retain their separate acceptance work.
 
 The existing Linux generated Node TUN workflow passed at `76a64786`, run
 `42926848878`. That precedes the newly reconstructed imported parent/host and
@@ -101,10 +118,13 @@ used as a replacement for the mandatory native job.
 At `b2673fdf`, early CI source audits reported that their retained-owner checks
 did not recognize the new platform adapter. The concrete failures were the
 backend multihop chain, original proof/selected-DNS admission, and imported
-Speed Lab owner checks. Those failures are being reconciled against the actual
-shipping call path and existing negative controls. They are not reported as
-green or bypassed. A complete all-platform release for the current source has
-not yet been established by this record.
+Speed Lab owner checks. The concrete-owner audit correction is published in
+`513d1779` and the separate Windows fallback mutation correction in `7a15afe3`,
+with their actual executable rejection controls. The new hosted runs still
+need their own verdicts. At `339e3f57`, the Windows ARM64 job passed the patched
+compiler preparation and six integrity controls; it had not established the
+native socket/H3/lease outcomes. A complete all-platform release for the
+current source has not yet been established by this record.
 
 ## Remaining requirement ledger
 
@@ -115,7 +135,7 @@ not yet been established by this record.
 | Protected macOS imported graphs | Existing direct/external and ordinary native paths retain their bounded coverage. | Broader imported parent/host combinations require complete source, native policy, proof, DNS, MTU and lifecycle evidence. |
 | Home UDP over CONNECT | Literal Naive H2 final with final Start Layer Off is supported and the Apple fixture now exercises it. | Hostname-dependent lower DNS, DoH3, and final AES/AES+XOR UDP bootstrap still need actual transport solutions. |
 | Imported Server/Compare | Authenticated paired Router entries support their existing remote execution. Ordinary unmanaged imported entry credentials do not confer remote executor authority. | Preserve the original scope distinction; do not fabricate remote credentials or count a safe Local-only refusal as general Server implementation. |
-| Live external measurements | Shared three-response worker and Apple shipping ownership/UI are published. | Android integration and exact native build/device behavior remain separate evidence; this does not establish all-node or all-platform measurement acceptance. |
+| Live external measurements | Shared three-response worker and Apple/Android shipping ownership/UI are published. | Desktop controller/native/UI integration is in progress. Exact native builds and device behavior remain separate evidence; this does not establish all-node or all-platform measurement acceptance. |
 | Native release | Current source fixes are published with their named local checks. | Exact-SHA Windows installed/Portable, macOS, Linux, APK, Xcode-built IPA, ARM64 images, compose, manifest, checksums and final publication must agree. |
 | Physical and live acceptance | No private deployment or physical-device observation was performed in this continuation. | Selected-path/leak/reconnect/transition tests, off-LAN methods, visual/DPI/orientation/accessibility checks, private benchmarking, forwarding/Stop/Resume, rollback, providers, signing and authorized ASUS/Portainer deployment. |
 

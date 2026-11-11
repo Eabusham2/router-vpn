@@ -10,18 +10,24 @@ completion of the current commit's packages, physical devices or deployment.
 
 The [November 11 evidence ledger](CONTINUATION-EVIDENCE-2026-11-11.md) records
 the continuation from live `94658242`, recovered original requirements, and
-published source through `49319df8`. The bounded Linux imported WG-to-paired-SS
+published source through `5b0c81f3`. The bounded Linux imported WG-to-paired-SS
 parent/host is now reconstructed and published; its installed native acceptance
 and public admission are still pending. The independent encrypted peer passed
 component tests, which are not system-TUN acceptance.
 
-The shared short HTTPS response worker and Apple external-path UI retain
-captured session/source/network/execution ownership through native drain. These
-values expire and remain separate from saved 50-sample statistics. Automatic
-refresh now defers to active Auto MTU or Retest using a native idle-only lease.
-Darwin and Windows/Linux fixture repairs preserve their rejection checks and
-need matching native workflows. The latest source-adapter audit failures are
-recorded explicitly; a complete new release is not yet established.
+The shared short HTTPS response worker and Apple/Android external-path UIs
+retain captured session/source/network/execution ownership through native
+drain. These values expire and remain separate from saved 50-sample statistics.
+Automatic refresh defers to active Auto MTU or Retest using an atomic idle
+reservation. Desktop integration is in progress. The Linux installed native
+host gate now requires nine imported-path cases; the separate generated child
+workflow does not exercise those cases.
+
+The concrete-owner source-audit corrections preserve their executable rejection
+controls. Windows builds now prepare a verified compiler copy with the exact
+upstream Go Winsock cleanup correction; actual Windows ARM64 preparation and
+all six integrity controls have passed. Socket, H3 and lease runtime outcomes,
+the new Linux host cases and a complete exact-SHA release remain pending.
 
 The earlier outage and unpublished-source statements below describe their
 dated checkpoints. The November 11 ledger supersedes those status statements
