@@ -36,8 +36,11 @@ class WindowsGoSockets(unittest.TestCase):
     def setUp(self):
         self.workspace = tempfile.TemporaryDirectory(prefix='go-sockets-test-')
         self.addCleanup(self.workspace.cleanup)
-        self.root = Path(self.workspace.name) / 'original'
-        self.output = Path(self.workspace.name) / 'owned'
+        # Windows TEMP can spell the same parent using its 8.3 alias while
+        # prepare_root deliberately returns the resolved original GOROOT.
+        workspace = Path(self.workspace.name).resolve()
+        self.root = workspace / 'original'
+        self.output = workspace / 'owned'
         self.root.mkdir()
         (self.root / 'VERSION').write_text(PATCH.TOOLCHAIN + '\ntime 2026-05-05\n')
         for name, raw in self.originals.items():
