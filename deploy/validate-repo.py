@@ -441,7 +441,7 @@ if ERRORS:
     raise SystemExit(1)
 
 print(
-    f"Validated Router VPN product contract: {len(modes)} raw entries, {len(logical)} logical modes, "
+    f"Validated Router VPN product contract: {len(modes)} catalog entries, {len(logical)} logical modes, "
     "exact selected-node identity proof, honest native-app/platform boundaries, non-destructive branch policy, ASUS forwarding, "
     "image-only Portainer production, secret-free generic apps + separate private node linking, "
     "GitHub-first/router-local generic fallback, dynamic ephemeral broker, exact pins and current docs."

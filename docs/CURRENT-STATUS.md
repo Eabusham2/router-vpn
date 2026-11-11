@@ -6,7 +6,40 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 11 continuation: native repairs and imported-path ownership
+## November 11 later continuation: Android ordered native ownership
+
+The [native repair and ordered-path evidence ledger](CONTINUATION-EVIDENCE-2026-11-11-NATIVE-REPAIRS.md)
+continues from live `62bfab03` and records published source through `2ef6c4b4`.
+Original requirement passages and the historical 1–356 index, C1–C7, product
+fixes, map-first request and additional-node corrections were recovered again.
+The earlier `745b3e41` release does not certify the current source.
+
+Android now connects its bounded ordered editor to one captured native VPN
+service. Every member, Home epoch, physical network, native server and MTU
+owner remains captured through permission, path proof, cancellation and retryable
+cleanup. Old service publications cannot overwrite replacements. The map shows
+entry/intermediate/final roles and explicitly identified routed HTTP proof
+responses; its native observation runs off the UI thread. Emergency Disconnect
+and retained usage cover all original members. The published local scope is
+two through eight paired members with WG prefixes and an SS2022 final.
+
+Startup Last and temporary Speed Lab restoration now retain that complete ordered
+path and require fresh proof of the original Local execution choice. Permission
+rotation and queued captures retain their original selection and Home owner.
+Expected native teardown failures remain inside the worker, keep the original
+handles available for retry and withhold stop acknowledgement until actual drain.
+Other graph families, general Server/Compare
+composition, broader counts, remaining measurements and Unix host coverage
+remain requirements. Host fixture checks do not establish APK/JNI execution,
+physical-device networking or visual acceptance.
+
+The recorded native macOS PF/socket/utun gate passed on Intel and Apple Silicon
+at `52576a3e`. Newer source fixes repair the Tor/usage fixture compositions and
+the shared runtime's Gradle cache input. A complete release at one current SHA
+is still required, along with signing, physical acceptance and authorized
+private deployment. The detailed ledger preserves exact failure and pass identities.
+
+## Historical November 11 earlier continuation: native repairs and imported-path ownership
 
 The [November 11 evidence ledger](CONTINUATION-EVIDENCE-2026-11-11.md) records
 the continuation from live `94658242`, recovered original requirements, and
