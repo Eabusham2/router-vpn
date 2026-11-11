@@ -9,19 +9,27 @@ struct IOSSessionIdentity: Equatable {
     let rawProfile: String
     let bundleData: Data
     let entryBundleData: Data?
+    let nodeChainSource: Data?
     let entryMode: String?
     let providerSession: String?
     let runtimeEpoch: String?
 
     init(connectedAt: Date, engine: String, rawProfile: String,
-         bundleData: Data, entryBundleData: Data?, providerSession: String? = nil,
+         bundleData: Data, entryBundleData: Data?, nodeChainSource: Data? = nil, providerSession: String? = nil,
          runtimeEpoch: String? = nil, entryMode: String? = nil) throws {
         guard ["wireguard", "libbox", "external-libbox", "multihop-libbox"].contains(engine),
               !rawProfile.isEmpty, rawProfile.utf8.count <= 128,
               !bundleData.isEmpty, bundleData.count <= 32 * 1024 * 1024 else {
             throw Self.invalid()
         }
-        if engine == "multihop-libbox" || engine == "external-libbox" && entryBundleData != nil {
+        if let nodeChainSource {
+            guard engine == "multihop-libbox", entryBundleData == nil, entryMode == nil,
+                  !nodeChainSource.isEmpty, nodeChainSource.count <= 40 * 1024 * 1024,
+                  let source = try JSONSerialization.jsonObject(with: nodeChainSource) as? [String: Any],
+                  source["kind"] as? String == "routervpn-node-chain-launch-input", source["execution"] as? String == "local",
+                  source["projection_kind"] == nil, source["session_id"] == nil, source["target_os"] == nil, source["restored_mtu"] == nil,
+                  let nodes = source["nodes"] as? [String], (2...8).contains(nodes.count) else { throw Self.invalid() }
+        } else if engine == "multihop-libbox" || engine == "external-libbox" && entryBundleData != nil {
             guard let entryBundleData, !entryBundleData.isEmpty,
                   entryBundleData.count <= 32 * 1024 * 1024 else { throw Self.invalid() }
         } else if entryBundleData != nil { throw Self.invalid() }
@@ -41,6 +49,7 @@ struct IOSSessionIdentity: Equatable {
         self.rawProfile = rawProfile
         self.bundleData = bundleData
         self.entryBundleData = entryBundleData
+        self.nodeChainSource = nodeChainSource
         self.entryMode = entryMode
         self.providerSession = providerSession
         self.runtimeEpoch = runtimeEpoch
@@ -54,6 +63,11 @@ struct IOSSessionIdentity: Equatable {
         let externalKeys = ["external_entry_bundle", "external_entry_mode", "tor_entry_bundle", "tor_entry_mode"]
         var entry: Data?
         var mode: String?
+        var chain: Data?
+        if let source = configuration["nodeChainSource"] {
+            guard let input = source as? String else { throw Self.invalid() }
+            chain = Data(input.utf8)
+        }
         if engine == "external-libbox" {
             guard configuration["entryBundle"] == nil else { throw Self.invalid() }
             let tor = ["external-tor", "external-tor-bridge"].contains(rawProfile)
@@ -73,7 +87,7 @@ struct IOSSessionIdentity: Equatable {
             }
         }
         try self.init(connectedAt: connectedAt, engine: engine, rawProfile: rawProfile,
-                      bundleData: bundleData, entryBundleData: entry, entryMode: mode)
+                      bundleData: bundleData, entryBundleData: entry, nodeChainSource: chain, entryMode: mode)
     }
 
     private static func invalid() -> NSError {

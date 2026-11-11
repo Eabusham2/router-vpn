@@ -375,7 +375,8 @@ final class RouterVPNModel: ObservableObject {
                 message = "Connected • \(engineName(selection)) • selected-node proof passed"
                 let usageIdentity = captureIOSNodeUsageOwner(manager)
                 await refreshTunnelStatus()
-                if connected, IOSSpeedLabContext.owner == nil, !iosSpeedLabOwnership.active {
+                if connected, IOSDNSRuntimePolicy.selectedProfile(in: bundle)?.multihopNodes == nil,
+                   IOSSpeedLabContext.owner == nil, !iosSpeedLabOwnership.active {
                     do {
                         let configuration = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
                         try await rememberIOSMultihopExecution(manager: manager, source: bundle,
@@ -388,7 +389,7 @@ final class RouterVPNModel: ObservableObject {
                 recordIOSNodeUsage(manager: manager, source: bundle, generation: generation, expected: usageIdentity)
             } else {
                 connected = false
-                message = "The captured multihop graph did not complete both node proofs."
+                message = "The captured multihop graph did not complete every selected node proof."
                 await refreshTunnelStatus()
             }
         } catch {
@@ -481,32 +482,48 @@ final class RouterVPNModel: ObservableObject {
         configuration["rawProfileID"] = selection.rawProfileID
         var entryStrict = false
         var entryAllowsLAN = true
+        var nodeChainSource: String?
+        var nodeChainTimeout: TimeInterval?
         if selection.engine == .multihop {
-            let entry = try iosMultihopEntryBundle(for: bundle)
-            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-            configuration["entryBundle"] = try encoder.encode(entry)
-            if let profile = entry.routerProfiles.first(where: { $0.id == entry.selectedRouterID }) {
-                entryAllowsLAN = profile.homeLANAccess ?? true
-                entryStrict = profile.killSwitch == true || ["always", "strict", "on", "enabled", "lockdown"].contains(profile.killSwitchPolicy ?? "off")
+            if IOSDNSRuntimePolicy.selectedProfile(in: bundle)?.multihopNodes != nil {
+                let capture = try captureIOSNodeChain(bundle)
+                defer { try? capture.plan.close() }
+                guard capture.members.last?.mode == selection.rawProfileID else {
+                    throw IOSMultihopNodeSelection.issue("The selected raw transport differs from the captured final node.")
+                }
+                nodeChainSource = capture.launchInput; nodeChainTimeout = capture.startupTimeout
+                configuration[IOSNodeChainProviderCapture.key] = capture.launchInput
+                entryStrict = capture.strict; entryAllowsLAN = capture.homeLANAccess
+            } else {
+                let entry = try iosMultihopEntryBundle(for: bundle)
+                let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+                configuration["entryBundle"] = try encoder.encode(entry)
+                if let profile = entry.routerProfiles.first(where: { $0.id == entry.selectedRouterID }) {
+                    entryAllowsLAN = profile.homeLANAccess ?? true
+                    entryStrict = profile.killSwitch == true || ["always", "strict", "on", "enabled", "lockdown"].contains(profile.killSwitchPolicy ?? "off")
+                }
             }
         }
-        let maxSources = try IOSMAXSourceSelection.sourceHashes(provider: configuration) { mode, assets, metadata in
-            var failure: NSError?
-            let digest: String? = LibboxRouterCheckMAXProfile(mode, assets, metadata, &failure)
-            if let failure { throw failure }
-            guard let digest else { throw IOSMAXSourceSelection.issue() }
-            return digest
-        }
+        let maxSources: [String: String]
+        if nodeChainSource == nil {
+            maxSources = try IOSMAXSourceSelection.sourceHashes(provider: configuration) { mode, assets, metadata in
+                var failure: NSError?
+                let digest: String? = LibboxRouterCheckMAXProfile(mode, assets, metadata, &failure)
+                if let failure { throw failure }
+                guard let digest else { throw IOSMAXSourceSelection.issue() }
+                return digest
+            }
+        } else { maxSources = [:] }
         if !maxSources.isEmpty { configuration["max_source_sha256"] = maxSources }
         IOSSpeedLabContext.mark(&configuration)
         proto.providerConfiguration = configuration
 
-        let strict = strictKillSwitchEnabled || entryStrict
+        let strict = nodeChainSource == nil ? strictKillSwitchEnabled || entryStrict : entryStrict
         proto.includeAllNetworks = strict
         proto.enforceRoutes = strict
         // Excluding local networks sends them OUTSIDE the tunnel. LAN-Off must
         // never enable that bypass; either hop can request the stricter policy.
-        let capturedLANExclusion = strict && homeLANAccess && entryAllowsLAN
+        let capturedLANExclusion = strict && entryAllowsLAN && (nodeChainSource != nil || homeLANAccess)
         proto.excludeLocalNetworks = capturedLANExclusion
         proto.excludeAPNs = false
         proto.excludeCellularServices = false
@@ -567,12 +584,25 @@ final class RouterVPNModel: ObservableObject {
                 throw IOSMAXSourceSelection.issue()
             }
         }
+        if let nodeChainSource {
+            guard !Task.isCancelled,
+                  self.bundle?.selectedRouterID == bundle.selectedRouterID,
+                  self.bundle?.routerProfiles == bundle.routerProfiles, self.bundle?.profiles == bundle.profiles,
+                  let saved = manager.protocolConfiguration as? NETunnelProviderProtocol,
+                  let savedConfiguration = saved.providerConfiguration,
+                  NSDictionary(dictionary: savedConfiguration).isEqual(to: configuration),
+                  saved.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel",
+                  saved.includeAllNetworks == strict, saved.enforceRoutes == strict,
+                  saved.excludeLocalNetworks == capturedLANExclusion,
+                  manager.connection.status == .disconnected || manager.connection.status == .invalid else { throw CancellationError() }
+            try requireCurrentIOSNodeChain(nodeChainSource, selected: bundle)
+        }
         let mtuHold = IOSMTUMeasurementGate.current
         var launchOptions: [String: NSObject] = mtuHold.isEmpty ? [:] : ["routervpn_mtu_hold": mtuHold as NSString]
         // Cold Startup Last keeps the previously proved execution separately
         // from the saved Compare preference. This historical choice grants no
         // live authority: PacketTunnel must create and prove a fresh graph.
-        if IOSSpeedLabContext.startupAdmission != nil,
+        if nodeChainSource == nil, IOSSpeedLabContext.startupAdmission != nil,
            (try? IOSStartupPolicy.mode(IOSDNSRuntimePolicy.selectedProfile(in: bundle)?.startupMode)) == "last",
            let saved = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
            (try? IOSMultihopExecution.requiresCapture(configuration: saved)) == true,
@@ -582,7 +612,8 @@ final class RouterVPNModel: ObservableObject {
         }
         let options: [String: NSObject]? = launchOptions.isEmpty ? nil : launchOptions
         let startupTimeout: TimeInterval
-        if selection.engine == .multihop {
+        if let nodeChainTimeout { startupTimeout = nodeChainTimeout }
+        else if selection.engine == .multihop {
             startupTimeout = try IOSMultihopExecution.startupTimeout(
                 execution: IOSDNSRuntimePolicy.selectedProfile(in: bundle)?.multihopExecution ?? "local",
                 entryMode: selection.multihopEntryMode ?? "wg", exitMode: selection.rawProfileID)

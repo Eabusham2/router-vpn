@@ -63,6 +63,40 @@ for (prefix,raw) in [("external_entry","external-openvpn"),("tor_entry","externa
 }
 reject("Tor slot cannot disappear into ordinary identity") {_=try captured(["tor_entry_bundle":Data("entry".utf8),"tor_entry_mode":"wg"])}
 reject("ordinary slot cannot disappear into Tor identity") {_=try captured(["external_entry_bundle":Data("entry".utf8),"external_entry_mode":"wg"],"external-libbox","external-tor")}
+
+func chainInput(_ members:[String] = ["original-first-source", "original-middle-source", "original-final-source"])throws->String {
+ String(decoding:try JSONSerialization.data(withJSONObject:["kind":"routervpn-node-chain-launch-input","schema":1,"execution":"local","nodes":members],options:[.sortedKeys]),as:UTF8.self)
+}
+let chain=try chainInput(),ordered=try captured(["nodeChainSource":chain],"multihop-libbox","shadowsocks")
+try check("ordered identity captures all private source bytes",ordered.nodeChainSource==Data(chain.utf8) && ordered.entryBundleData==nil)
+try check("identical ordered readback remains equal",ordered==captured(["nodeChainSource":chain],"multihop-libbox","shadowsocks"))
+for sources in [["original-first-source","changed-middle-source","original-final-source"],
+                ["original-middle-source","original-first-source","original-final-source"],
+                ["original-first-source","original-final-source"]] {
+ try check("same final labels cannot hide middle source change",ordered != captured(["nodeChainSource":chainInput(sources)],"multihop-libbox","shadowsocks"))
+}
+try check("ordered source cannot equal legacy pair",ordered != identity())
+for engine in ["wireguard","libbox","external-libbox"] {
+ reject("ordered source attached to foreign owner"){_ = try captured(["nodeChainSource":chain],engine,"shadowsocks")}
+}
+for bad in [
+ ["nodeChainSource":chain,"entryBundle":Data("legacy-entry".utf8)],
+ ["nodeChainSource":chain,"external_entry_bundle":Data("entry".utf8),"external_entry_mode":"wg"],
+ ["nodeChainSource":chain,"tor_entry_mode":"wg"],
+ ["nodeChainSource":Data(chain.utf8)], ["nodeChainSource":true],
+ ["nodeChainSource":""], ["nodeChainSource":"{}"],
+ ["nodeChainSource":String(repeating:" ",count:40*1024*1024+1)]
+] as [[String:Any]] {reject("ambiguous or malformed ordered owner"){_ = try captured(bad,"multihop-libbox","shadowsocks")}}
+for key in ["projection_kind","session_id","target_os","restored_mtu"] {
+ var changed=try JSONSerialization.jsonObject(with:Data(chain.utf8)) as! [String:Any];changed[key]="foreign-desktop-owner"
+ let source=String(decoding:try JSONSerialization.data(withJSONObject:changed),as:UTF8.self)
+ reject("desktop projection cannot become mobile session identity"){_ = try captured(["nodeChainSource":source],"multihop-libbox","shadowsocks")}
+}
+for members in [[String](),["single"],Array(repeating:"member",count:9)] {
+ let source=try chainInput(members)
+ reject("ordered identity bounds"){_ = try captured(["nodeChainSource":source],"multihop-libbox","shadowsocks")}
+}
+
 print("Exact iOS session identity: PASS (\(checks) executable checks)")
 '''
 def main():
@@ -72,6 +106,13 @@ def main():
         source=Path(tmp)/'main.swift'; binary=Path(tmp)/'session-test'; source.write_text(TEST)
         subprocess.run([swift,'-swift-version','6',str(POLICY),str(source),'-o',str(binary)],check=True,timeout=90)
         subprocess.run([str(binary)],check=True,timeout=15)
+        text=POLICY.read_text();before='self.nodeChainSource = nodeChainSource'
+        assert text.count(before)==1
+        mutated=Path(tmp)/'ChangedIdentity.swift';mutated.write_text(text.replace(before,'self.nodeChainSource = nil',1))
+        subprocess.run([swift,'-swift-version','6',str(mutated),str(source),'-o',str(binary)],check=True,timeout=90)
+        result=subprocess.run([str(binary)],capture_output=True,text=True,timeout=15)
+        assert result.returncode != 0 and 'ordered identity captures all private source bytes' in result.stdout+result.stderr,'ordered session source mutation not detected'
+        print('Rejected session identity mutation: omitted ordered source')
     model=(POLICY.parent/'RouterVPNModel.swift').read_text()
     runner=(POLICY.parent/'IOSSpeedLabRunner.swift').read_text()
     for marker in ['manager.connection.connectedDate','activeSessionIdentity = identity','bundleData: data, configuration: configuration','Tunnel status is unverified']:
