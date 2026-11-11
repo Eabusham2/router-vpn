@@ -23,6 +23,11 @@ def execute(root):
     owner = owner[owner.index('func desktopSocketObservationOwner('):owner.index('func (s *desktopSocket) recordAdmissionLoss(')]
     observer = (sources/'desktop_socket_native_observation.go').read_text()
     pipe = (sources/'desktop_socket_darwin_observation.go').read_text().split('\n\n', 1)[1]
+    fixture = (sources/'desktop_socket_darwin_guardian_test.go').read_text()
+    start = fixture.index('func desktopDarwinKernelBroker(')
+    broker = fixture[start:fixture.index('\nfunc desktopDarwinKernelTrace(', start)]
+    start = fixture.index('func desktopDarwinKernelReadbackTrace(')
+    trace = fixture[start:fixture.index('\nfunc ', start+1)]
     header = '''package mobiletor
 import("bytes";"context";"fmt";"os";"os/exec";"path/filepath";"time";"errors")
 var inspectPath func(string,bool)error
@@ -138,6 +143,77 @@ func TestDarwinObservationDropsFullPipe(t *testing.T){
                 if result.returncode or any(output.count('--- PASS: '+name+' (') != 1 for name in required):
                     raise AssertionError(output)
             elif not result.returncode or witness not in output:
+                raise AssertionError(output)
+            if any(invalid in output for invalid in ('panic:','fatal error:','WARNING: DATA RACE','[build failed]','did not join')):
+                raise AssertionError(output)
+            print('Darwin original command observation: '+label+' verified',flush=True)
+        # The failed native case first drains before the guardian's own
+        # cancellation callback runs. Use the exact fixture cleanup stack and
+        # real observer/pipe; model only the broker's independent retirement.
+        # An expected original test failure remains a failure in both runs.
+        fixture_header = r'''package mobiletor
+import("context";"os";"syscall";"testing";"time")
+type observedProcess struct{}
+func(*observedProcess)Signal(os.Signal)error{return nil}
+type DesktopDarwinSocketPolicy struct{capture DesktopSocketCapture;command struct{Process *observedProcess};observation *os.File}
+type DesktopSocketBroker struct{closeOriginal func()}
+var originalObservationBroker *DesktopSocketBroker
+func NewDesktopSocketBroker(context.Context,DesktopSocketCapture,*DesktopDarwinSocketPolicy,func()bool)(*DesktopSocketBroker,error){return originalObservationBroker,nil}
+func(b *DesktopSocketBroker)Close(context.Context)error{b.closeOriginal();return nil}
+func desktopDarwinKernelTrace(t *testing.T,p *DesktopDarwinSocketPolicy,_ *DesktopSocketBroker){desktopDarwinKernelReadbackTrace(t,p,"first-loss")}
+'''
+        late_regression = r'''package mobiletor
+import("context";"testing";"time")
+func TestDarwinLateOriginalReadbackAfterFailedProbe(t *testing.T){
+ reader,writer,err:=desktopDarwinObservationPipe();if err!=nil{t.Fatal(err)}
+ defer reader.Close();defer writer.Close()
+ policy:=&DesktopDarwinSocketPolicy{observation:reader};policy.command.Process=&observedProcess{}
+ // Both owners keep their original two-second bounds. Scheduling the
+ // independent native cancellation during retirement deterministically
+ // exposes the same receive-before-observer ordering without a sleep race.
+ parent,cancelParent:=context.WithTimeout(context.Background(),2*time.Second);defer cancelParent()
+ native,cancelNative:=context.WithTimeout(context.Background(),2*time.Second);defer cancelNative()
+ deadline,_:=native.Deadline()
+ native=desktopDarwinObserveRequest(native,DesktopSocketCapture{"session","source","network"},DesktopSocketKernelOwner{ProcessID:41},12,"probe")
+ native=context.WithValue(native,desktopDarwinObservationOutputKey{},writer)
+ observation,finish:=desktopDarwinObserveReadback(native,"pfctl",desktopDarwinReadbackReporter(native))
+ observation.enter(desktopNativeObservationWait,61)
+ originalObservationBroker=&DesktopSocketBroker{closeOriginal:func(){
+  if line:=desktopDarwinReadbackMessages(reader);line!=""{t.Error("original observation arrived before the modeled native cancellation",line)}
+  cancelNative();finish()
+ }}
+ t.Run("original-probe-failed",func(t *testing.T){
+  _=desktopDarwinKernelBroker(t,policy)
+  cancelParent()
+  if native.Err()!=nil||parent.Err()!=context.Canceled{t.Fatal("independent native owner did not outlive the original probe failure")}
+  t.Error("original probe receive timed out")
+ })
+ if line:=desktopDarwinReadbackMessages(reader);line!=""{t.Error("late original native observation was lost after bounded retirement",line)}
+ if after,_:=native.Deadline();after!=deadline||native.Err()!=context.Canceled{t.Fatal("diagnostic changed the native deadline or cancellation")}
+}
+'''
+        (folder/'command.go').write_text(header+command)
+        (folder/'pipe.go').write_text(pipe)
+        (folder/'late_test.go').write_text(late_regression)
+        checkpoint = 'desktopDarwinKernelReadbackTrace(t, policy, "after-broker-drain")'
+        if broker.count(checkpoint) != 1:
+            raise RuntimeError('Darwin failed cleanup lost its exact late observation checkpoint')
+        for label, selected in (('late-original-observation', broker),
+                                ('missing-late-observation', broker.replace(checkpoint, '// mutation: late original observation omitted', 1))):
+            (folder/'fixture.go').write_text(fixture_header+selected+trace)
+            files = [str(folder/name) for name in ('command.go','observer.go','owner.go','pipe.go','fixture.go','late_test.go')]
+            result = subprocess.run([compiler,'test','-race','-v','-timeout=15s',*files],
+                                    text=True,capture_output=True,timeout=120,
+                                    env=dict(os.environ,GOTOOLCHAIN='local'))
+            output = result.stdout+result.stderr
+            captured = 'owned native readback observations phase=after-broker-drain: Darwin native observation:'
+            lost = 'late original native observation was lost after bounded retirement'
+            if result.returncode != 1 or 'original probe receive timed out' not in output:
+                raise AssertionError(output)
+            if label == 'late-original-observation':
+                if captured not in output or lost in output or 'guardian=41 request=12 operation=probe command=1 kind=pfctl phase=wait child=61' not in output:
+                    raise AssertionError(output)
+            elif lost not in output or captured in output:
                 raise AssertionError(output)
             if any(invalid in output for invalid in ('panic:','fatal error:','WARNING: DATA RACE','[build failed]','did not join')):
                 raise AssertionError(output)

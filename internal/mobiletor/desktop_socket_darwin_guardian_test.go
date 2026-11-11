@@ -962,6 +962,15 @@ func desktopDarwinKernelBroker(t *testing.T, policy *DesktopDarwinSocketPolicy) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		// The parent's probe deadline begins before the guardian receives it.
+		// Its native cancellation observation can therefore arrive after the
+		// initial failure trace. Drain again after the original bounded cleanup,
+		// without waiting for a diagnostic or changing the retirement result.
+		defer func() {
+			if t.Failed() {
+				desktopDarwinKernelReadbackTrace(t, policy, "after-broker-drain")
+			}
+		}()
 		policy.command.Process.Signal(syscall.SIGCONT)
 		deadline := time.Now().Add(15 * time.Second)
 		for {
@@ -992,15 +1001,14 @@ func desktopDarwinKernelTrace(t *testing.T, policy *DesktopDarwinSocketPolicy, b
 	if policy == nil || policy.pf == nil || !policy.pf.valid() || desktopDarwinTestFixture.Nonce == "" {
 		return
 	}
+	defer desktopDarwinKernelReadbackTrace(t, policy, "after-native-trace")
 	// Diagnostics are read-only and confined to the fixture's captured owner.
 	// A failed query remains a failed query; no repair or permit is installed.
 	t.Logf("owned PF failure: uid=%d guardian=%d current=%t", policy.uid, policy.owner.ProcessID, policy.Current(policy.capture, policy.owner))
 	if loss := policy.loss.Load(); loss != nil {
 		t.Logf("owned PF first loss: phase=%s observed_ms=%d lost_ms=%d age_ms=%d cause=%v", loss.Phase, loss.ObservedAt, loss.LostAt, loss.LostAt-loss.ObservedAt, loss.Cause)
 	}
-	if messages := desktopDarwinReadbackMessages(policy.observation); messages != "" {
-		t.Logf("owned native readback observations: %s", messages)
-	}
+	desktopDarwinKernelReadbackTrace(t, policy, "first-loss")
 	if broker != nil {
 		broker.mu.Lock()
 		var sockets []*desktopSocket
@@ -1047,6 +1055,16 @@ func desktopDarwinKernelTrace(t *testing.T, policy *DesktopDarwinSocketPolicy, b
 			raw = append(raw[:2048:2048], []byte("[truncated]")...)
 		}
 		t.Logf("owned PF %s %q in %s: %q error=%v", query.kind, query.anchor, time.Since(started).Round(time.Millisecond), raw, err)
+	}
+}
+
+func desktopDarwinKernelReadbackTrace(t *testing.T, policy *DesktopDarwinSocketPolicy, phase string) {
+	t.Helper()
+	if policy == nil {
+		return
+	}
+	if messages := desktopDarwinReadbackMessages(policy.observation); messages != "" {
+		t.Logf("owned native readback observations phase=%s: %s", phase, messages)
 	}
 }
 

@@ -780,6 +780,7 @@ var original *DesktopSocketBroker
 func NewDesktopSocketBroker(context.Context,int,*DesktopDarwinSocketPolicy,func()bool)(*DesktopSocketBroker,error){return original,nil}
 func(b *DesktopSocketBroker)Close(context.Context)error{b.events<-"bounded-owner-cleanup";b.once.Do(func(){close(b.release)});return nil}
 func desktopDarwinKernelTrace(*testing.T,*DesktopDarwinSocketPolicy,*DesktopSocketBroker){}
+func desktopDarwinKernelReadbackTrace(*testing.T,*DesktopDarwinSocketPolicy,string){}
 type heldConnection struct{name string;owner *DesktopSocketBroker}
 func(c *heldConnection)Close()error{c.owner.events<-"direct-"+c.name+"-close";<-c.owner.release;return nil}
 '''
