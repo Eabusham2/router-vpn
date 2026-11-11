@@ -76,7 +76,7 @@ private final class IOSMTUReply: @unchecked Sendable {
         if let error = body["command_failure"] as? String { throw failure(error) }
         return data
     }
-    static func holdCurrent(_ model: RouterVPNModel, request: String) async throws {
+    static func holdCurrent(_ model: RouterVPNModel, request: String, idleOnly: Bool = false) async throws {
         await model.refreshTunnelStatus()
         if let startup = IOSSpeedLabContext.startupAdmission {
             guard startup() else { throw CancellationError() }
@@ -85,7 +85,7 @@ private final class IOSMTUReply: @unchecked Sendable {
         // no native mutation to drain; never invent an MTU measurement for it.
         guard model.connected, model.activeEngine.contains("libbox") else { return }
         let binding = try await capture(model)
-        var operation = "mtu-hold"
+        var operation = idleOnly ? "mtu-hold-idle" : "mtu-hold"
         let deadline = ProcessInfo.processInfo.systemUptime + 12
         while ProcessInfo.processInfo.systemUptime < deadline {
             try Task.checkCancellation()
@@ -94,6 +94,7 @@ private final class IOSMTUReply: @unchecked Sendable {
                   body["measurement_hold"] as? Bool == true,
                   body["measurement_lease"] as? String == request else { throw failure("MTU comparison lease was not granted") }
             if body["measurement_ready"] as? Bool == true { return }
+            if idleOnly { throw failure("Wait for the current Auto MTU or Retest before measuring live responses.") }
             operation = "mtu-status"
             try await Task.sleep(for: .milliseconds(100))
         }
@@ -107,10 +108,10 @@ private final class IOSMTUReply: @unchecked Sendable {
         guard let body = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               body["measurement_hold"] as? Bool == false else { throw failure("MTU comparison lease release was not confirmed") }
     }
-    static func withHold<T>(model: RouterVPNModel, operation: @MainActor () async throws -> T) async throws -> T {
+    static func withHold<T>(model: RouterVPNModel, idleOnly: Bool = false, operation: @MainActor () async throws -> T) async throws -> T {
         let lease = IOSMTUMeasurementGate.acquire()
         do {
-            try await holdCurrent(model, request: lease.request)
+            try await holdCurrent(model, request: lease.request, idleOnly: idleOnly)
             let result = try await operation()
             if IOSMTUMeasurementGate.release(lease) { try await releaseCurrent(model, request: lease.request) }
             return result

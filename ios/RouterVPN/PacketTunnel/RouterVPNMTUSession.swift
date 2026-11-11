@@ -336,7 +336,22 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
         guard !stopped, !invalid, session.isEmpty || session == sessionID,
               operation == "mtu-status" || session == sessionID else { stateLock.unlock(); return nil }
         let captured = core
-        if operation == "mtu-hold" {
+        if operation == "mtu-hold-idle" {
+            guard heldBy.isEmpty || heldBy == request else { stateLock.unlock(); return nil }
+            // Every Auto/Retest start holds commandLock. Read the native
+            // worker without the callback state lock, then revalidate that
+            // exact owner before reserving its idle interval. No cancellation
+            // or status-then-hold race is needed for periodic live telemetry.
+            stateLock.unlock()
+            let busy = captured?.running() ?? false
+            stateLock.lock()
+            guard !busy, !stopped, !invalid, core === captured, !changing, opening == nil,
+                  heldBy.isEmpty || heldBy == request else {
+                stateLock.unlock()
+                return statusData(ack: request, commandFailure: "Auto MTU or Retest is still using this native path.")
+            }
+            heldBy = request
+        } else if operation == "mtu-hold" {
             guard heldBy.isEmpty || heldBy == request else { stateLock.unlock(); return nil }
             heldBy = request
         } else if operation == "mtu-release" {

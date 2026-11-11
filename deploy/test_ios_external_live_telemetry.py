@@ -56,6 +56,15 @@ CASES = r'''
    check("MTU release preserves connection ownership: "+drift,drift=="disconnect" ? native.releases==0 : !native.held)
   }
   do {
+   let(model,native)=try fixture(),client=IOSExternalLiveTelemetry();native.nativeBusy=true
+   var failed=false;do{_ = try await client.measure(model:model)}catch{failed=true}
+   check("live response defers to active Auto MTU or Retest",failed && native.starts==0 && native.mtuCancels==0 && native.nativeBusy)
+   check("deferred live response releases only its app owner",!client.running && !IOSMTUMeasurementGate.held && !model.iosSpeedLabOwnership.active)
+   native.nativeBusy=false
+   _ = try await client.measure(model:model)
+   check("live response starts after native MTU finishes",native.starts==1 && client.milliseconds==4)
+  }
+  do {
    let(model,native)=try fixture(),client=IOSExternalLiveTelemetry();native.drained=false
    let operation=Task{@MainActor in try await client.measure(model:model)}
    await wait("cancel request entered"){native.starts==1}
@@ -84,6 +93,12 @@ def source():
     text = benchmark.source().split(benchmark.TESTS, 1)[0]
     native = benchmark.NATIVE.replace('"samples":50', '"samples":3').replace('distribution["samples"]=49', 'distribution["samples"]=2')
     native = native.replace('case "hop-measure-latency-start":', 'case "hop-measure-response-start":')
+    native = native.replace('var mode="valid",', 'var nativeBusy=false,mtuCancels=0\n var mode="valid",')
+    native = native.replace('if operation=="mtu-hold" {held=true;lease=id}', '''if operation=="mtu-hold" {mtuCancels+=1;nativeBusy=false;held=true;lease=id}
+    if operation=="mtu-hold-idle" {
+     if nativeBusy {reply?(try json(["ack_id":id,"session_id":mtu,"command_failure":"Auto/Retest busy"]));return}
+     held=true;lease=id
+    }''')
     native = native.replace('case "partial":', 'case "mixed-benchmark":result["benchmark"]=benchmark\n    case "partial":')
     native = native.replace('result["benchmark"]=benchmark;', '''result["response"]=["schema":benchmark["schema"]!,"measurement":benchmark["measurement"]!,"endpoint":benchmark["endpoint"]!,"attempts":3,"distribution":benchmark["distribution"]!];''')
     text = text.replace(benchmark.NATIVE, native)
@@ -110,6 +125,7 @@ def main():
             ("exact live sample count", "attempts == 3 && d.samples == 3", "attempts == 3 && d.samples >= 1", "invalid live result rejected: partial"),
             ("original exit", "result.node_id == captured.nodeID, result.role", "result.role", "invalid live result rejected: wrong-node"),
             ("proved execution", "try IOSExternalNodeStatistics.PathReceipt(binding: final, requested: requested, network: network) == path,", "true,", "invalid live result rejected: winner-changed"),
+            ("native MTU priority", "withHold(model: model, idleOnly: true)", "withHold(model: model)", "live response defers to active Auto MTU or Retest"),
         ]
         for name, before, after, witness in controls:
             # The saved50 controller is also in the source fixture; only the

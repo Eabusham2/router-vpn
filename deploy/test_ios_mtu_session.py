@@ -51,6 +51,7 @@ public enum FakeOS {
 public final class LibboxRouterMTU:NSObject {
  private var active=false;private var request="";private var phase="idle"
  public var closeFailures=0
+ public private(set) var cancelCalls=0
  public var automatic=true
  public func autoRequested()->Bool{automatic && !closed}
  public private(set) var closeCalls=0
@@ -60,7 +61,7 @@ public final class LibboxRouterMTU:NSObject {
   if active || closed || !automatic {throw NSError(domain:"fixture",code:1)}
   self.request=request;active=true;phase="proving";FakeOS.starts += 1
  }
- public func cancel(_ request:String){if request==self.request{active=false;phase="cancelled"}}
+ public func cancel(_ request:String){cancelCalls+=1;if request==self.request{active=false;phase="cancelled"}}
  public func close()throws{
   FakeOS.closes += 1;closeCalls += 1
   if closeFailures>0{closeFailures -= 1;throw NSError(domain:"NativeMTUCloseFixture",code:1)}
@@ -163,6 +164,16 @@ func request(_ owner:RouterVPNMTUSession,_ op:String,_ id:String,_ session:Strin
  guard let data=owner.request(operation:op,request:id,session:session) else{return nil}
  return try! JSONSerialization.jsonObject(with:data) as? [String:Any]
 }
+final class IdleLeasePlatform {
+ let mtu:RouterVPNMTUSession
+ init(_ mtu:RouterVPNMTUSession){self.mtu=mtu}
+}
+final class IdleLeaseEngine {
+ let ownershipLock=NSLock(),platform:IdleLeasePlatform
+ var ownershipGeneration=UUID(),measurementLease=""
+ init(_ mtu:RouterVPNMTUSession){platform=IdleLeasePlatform(mtu)}
+ // CAPTURED_MTU_REQUEST
+}
 @MainActor func ready(_ hold:String="",capacity:Int32=1420)->RouterVPNMTUSession{
  FakeOS.path="physical-path-a";FakeOS.mtu=capacity;FakeOS.readable=true;FakeOS.bindOK=true;FakeOS.changedDuringBind=false
  FakeOS.newCloseFailures=0;FakeOS.returnOwnerWithError=false;FakeOS.externalCreated=nil;FakeOS.torCreated=nil
@@ -240,8 +251,40 @@ check(request(held,"mtu-start",other,heldSession)?["measurement_hold"] as? Bool 
 check(FakeOS.starts==starts,"held Retest reached native mutation")
 _ = request(held,"mtu-release",id,heldSession)
 check(FakeOS.starts==starts+1,"deferred Auto-MTU did not start after final release")
+let activeCore=FakeOS.current!,cancelsBeforeIdle=activeCore.cancelCalls
+let busyIdle=request(held,"mtu-hold-idle",id,heldSession)!
+check(busyIdle["command_failure"] != nil && busyIdle["measurement_hold"] as? Bool==false && activeCore.running(),"live idle hold cancelled running Auto-MTU")
+check(activeCore.cancelCalls==cancelsBeforeIdle,"live idle hold called native cancellation")
 check(request(held,"mtu-hold",id,heldSession)?["measurement_ready"] as? Bool == true,"running Auto-MTU was not drained for Speed Lab")
+_ = request(held,"mtu-release",id,heldSession)
+let idleStarts=FakeOS.starts,idleCancels=activeCore.cancelCalls
+check(request(held,"mtu-hold-idle",id,heldSession)?["measurement_ready"] as? Bool==true,"idle native owner refused live response lease")
+check(request(held,"mtu-start",other,heldSession)?["measurement_hold"] as? Bool==true && FakeOS.starts==idleStarts,"Retest raced through live response lease")
+check(activeCore.cancelCalls==idleCancels,"idle response lease called native cancellation")
+check(request(held,"mtu-hold-idle",other,heldSession)==nil,"foreign live lease replaced current measurement")
+_ = request(held,"mtu-release",id,heldSession)
+_ = request(held,"mtu-start",other,heldSession)
+check(activeCore.running() && FakeOS.starts==idleStarts+1,"idle response release prevented subsequent Retest")
+check(request(held,"mtu-hold-idle",id,heldSession)?["command_failure"] != nil && activeCore.running(),"live idle hold cancelled manual Retest")
+let idleEngine=IdleLeaseEngine(held)
+_ = idleEngine.mtuRequest(operation:"mtu-hold-idle",request:id,session:heldSession)
+check(idleEngine.measurementLease.isEmpty && activeCore.running(),"engine retained a refused live MTU lease")
+_ = idleEngine.mtuRequest(operation:"mtu-hold",request:id,session:heldSession)
+check(idleEngine.measurementLease==id,"ordinary draining hold lost engine lease")
+_ = idleEngine.mtuRequest(operation:"mtu-release",request:id,session:heldSession)
+_ = idleEngine.mtuRequest(operation:"mtu-hold-idle",request:other,session:heldSession)
+check(idleEngine.measurementLease==other,"engine did not retain granted idle MTU lease")
+_ = idleEngine.mtuRequest(operation:"mtu-release",request:other,session:heldSession)
+check(idleEngine.measurementLease.isEmpty,"engine retained released idle MTU lease")
 let stoppedCount=FakeOS.closes;held.stop();check(FakeOS.closes==stoppedCount+1,"native controller not closed on Stop")
+let firstLive=ready(),firstSession=firstLive.captureMTU()!.session,firstStarts=FakeOS.starts
+check(request(firstLive,"mtu-hold-idle",id,firstSession)?["measurement_ready"] as? Bool==true,"pre-activation live response did not retain exact reader")
+firstLive.activate(server:LibboxCommandServer(),config:"{}",profile:"{\"mtu_policy\":\"auto\"}"){_ in}
+check(FakeOS.starts==firstStarts,"first Auto bypassed live response lease")
+_ = request(firstLive,"mtu-release",id,firstSession)
+check(FakeOS.starts==firstStarts+1 && FakeOS.current!.running(),"first Auto was stranded after live response release")
+check(request(firstLive,"mtu-release",id,firstSession)==nil && FakeOS.starts==firstStarts+1,"stale live release restarted first Auto")
+firstLive.stop()
 for startupHold in ["",id] {
  let imported=ready(startupHold),plan=LibboxRouterMultihop(),starts=FakeOS.starts
  try imported.activateImported(server:LibboxCommandServer(),plan:plan){_ in}
@@ -463,6 +506,11 @@ platform_end=platform_source.index('    // Libbox renamed',platform_begin)
 platform_method=platform_source[platform_begin:platform_end].rstrip()
 assert TEST.count(' // CAPTURED_OPENTUN')==1
 TEST=TEST.replace(' // CAPTURED_OPENTUN',platform_method)
+engine_source=(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift').read_text()
+engine_begin=engine_source.index('    func mtuRequest(')
+engine_end=engine_source.index('    private final class MTUFailureDelivery',engine_begin)
+assert TEST.count(' // CAPTURED_MTU_REQUEST')==1
+TEST=TEST.replace(' // CAPTURED_MTU_REQUEST',engine_source[engine_begin:engine_end].rstrip())
 with tempfile.TemporaryDirectory(prefix='routervpn-ios-mtu-') as directory:
  tmp=Path(directory);(tmp/'Libbox.swift').write_text(STUB);(tmp/'main.swift').write_text(TEST)
  extension = 'dylib' if platform.system() == 'Darwin' else 'so'
@@ -491,6 +539,7 @@ with tempfile.TemporaryDirectory(prefix='routervpn-ios-mtu-') as directory:
   ('configured-retest-admission','guard optimizationAllowed else {','guard true else {','forbidden Tor Retest reached the native controller'),
   ('readback-display','if dead || actual == nil || !readbackMatches {','if dead {','mismatched Tor OS reader retained a configured capacity claim'),
   ('cleanup-physical-monitor','func drainForTorCleanup() throws {\n        stateLock.lock()\n        invalid = true','func drainForTorCleanup() throws {\n        stateLock.lock()\n        stopped = true; invalid = true','Tor cleanup disabled physical reset observation before DELETE acknowledgment'),
+  ('live-idle-reservation','guard !busy, !stopped, !invalid, core === captured,','guard !stopped, !invalid, core === captured,','live idle hold cancelled running Auto-MTU'),
  ):
   assert text.count(before)==1,label
   broken.write_text(text.replace(before,after,1))

@@ -858,6 +858,11 @@ final class RouterVPNLibboxEngine {
         guard ownershipGeneration == generation else { return nil }
         if result != nil {
             if operation == "mtu-hold" { measurementLease = request }
+            if operation == "mtu-hold-idle", let result,
+               let body = try? JSONSerialization.jsonObject(with: result) as? [String: Any],
+               body["measurement_hold"] as? Bool == true,
+               body["measurement_lease"] as? String == request,
+               body["command_failure"] == nil { measurementLease = request }
             if operation == "mtu-release" { measurementLease = "" }
         }
         return result

@@ -125,7 +125,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if messageData.count <= 256,
            let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
            request.count == 3, let operation = request["operation"],
-           ["mtu-status", "mtu-start", "mtu-cancel", "mtu-hold", "mtu-release"].contains(operation),
+           ["mtu-status", "mtu-start", "mtu-cancel", "mtu-hold", "mtu-hold-idle", "mtu-release"].contains(operation),
            let id = request["request_id"], id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
            let session = request["session_id"], session.isEmpty || UUID(uuidString: session) != nil {
             completionHandler(libboxEngine?.mtuRequest(operation: operation, request: id, session: session)); return

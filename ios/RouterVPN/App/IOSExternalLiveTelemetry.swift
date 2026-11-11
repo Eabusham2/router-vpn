@@ -77,7 +77,7 @@ import Foundation
             let owner = try model.iosSpeedLabOwnership.begin { [weak self] in self?.cancel() }
             defer { model.iosSpeedLabOwnership.finish(owner) }
             let value = try await IOSSpeedLabContext.$owner.withValue(owner) {
-                try await IOSMTUControl.withHold(model: model) {
+                try await IOSMTUControl.withHold(model: model, idleOnly: true) {
                     try Task.checkCancellation(); try captured.requireCurrent(model: model)
                     try model.iosSpeedLabOwnership.require(owner)
                     let binding = try await IOSMTUControl.capture(model)

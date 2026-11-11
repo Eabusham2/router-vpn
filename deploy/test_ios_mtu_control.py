@@ -18,6 +18,7 @@ public enum Fixture {
  nonisolated(unsafe) public static var changeConnection=false
  nonisolated(unsafe) public static var ready=true
  nonisolated(unsafe) public static var failCommand=false
+ nonisolated(unsafe) public static var nativeBusy=false
  nonisolated(unsafe) public static var lease=""
  nonisolated(unsafe) public static var releases=0
  nonisolated(unsafe) public static var messages=0
@@ -29,7 +30,7 @@ public final class NETunnelProviderSession:NEVPNConnection {
   Fixture.messages += 1
   let query=try JSONSerialization.jsonObject(with:data) as! [String:String]
   let request=query["request_id"]!,operation=query["operation"]!
-  if operation=="mtu-hold" {
+  if operation=="mtu-hold" || (operation=="mtu-hold-idle" && !Fixture.nativeBusy) {
    if !Fixture.lease.isEmpty && Fixture.lease != request {responseHandler?(nil);return}
    Fixture.lease=request
   }
@@ -42,6 +43,7 @@ public final class NETunnelProviderSession:NEVPNConnection {
    "ack_id":Fixture.wrongAck ? "wrong" : request,"measurement_hold":!Fixture.lease.isEmpty,
    "measurement_lease":Fixture.lease,"measurement_ready":Fixture.ready]
   if Fixture.failCommand {body["command_failure"]="fixture command rejected"}
+  if operation=="mtu-hold-idle" && Fixture.nativeBusy {body["command_failure"]="native Auto/Retest busy"}
   responseHandler?(try JSONSerialization.data(withJSONObject:body))
  }
 }
@@ -111,6 +113,16 @@ import NetworkExtension
   }
   check(Fixture.messages==beforeStartupMessages && Fixture.lease.isEmpty,"retired startup touched the current native owner")
   model.refreshHook=nil;model.startupAllowed=true
+  Fixture.nativeBusy=true
+  await reject("live idle response interrupted a native Retest"){
+   try await IOSMTUControl.withHold(model:model,idleOnly:true){check(false,"busy native MTU entered live response");return}
+  }
+  check(Fixture.lease.isEmpty && !IOSMTUMeasurementGate.held,"refused idle hold retained app or native ownership")
+  Fixture.nativeBusy=false
+  let idle:Int=try await IOSMTUControl.withHold(model:model,idleOnly:true){
+   check(!Fixture.lease.isEmpty && IOSMTUMeasurementGate.held,"idle response entered without a native hold");return 3
+  }
+  check(idle==3 && Fixture.lease.isEmpty && !IOSMTUMeasurementGate.held,"idle response did not release its exact lease")
   let releases=Fixture.releases
   let result:Int=try await IOSMTUControl.withHold(model:model){
    check(IOSMTUMeasurementGate.held && !Fixture.lease.isEmpty,"measurement entered without native hold")
