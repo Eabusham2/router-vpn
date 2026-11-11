@@ -39,6 +39,27 @@ MUTATIONS = {
 }
 
 
+class ExecutedNegativeControl(Exception):
+    """Every selected shell reached the intended shipping assertion."""
+
+
+WINDOWS_NEGATIVE_ASSERTIONS = (
+    'late/foreign live value published: source',
+    'malformed receipt accepted: partial',
+    'expired live value survived',
+)
+
+
+def windows_negative_receipt(result, shell, expected):
+    lines = result.stdout.splitlines()
+    if (result.returncode == 0 or 'RV_LIVE_START' not in lines or
+            'RV_LIVE_ASSERT:' + expected not in lines):
+        raise AssertionError(
+            f'{shell}: negative control did not execute its exact assertion '
+            f'{expected!r}; exit={result.returncode}\n{result.stdout}')
+
+
+
 def shipping(source):
     if MUTATION is not None:
         before, after = MUTATION
@@ -243,7 +264,7 @@ param([string]$Output)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Net.Http
 $script:Checks=0
-function Check($Value,[string]$Message){$script:Checks++;if(-not$Value){throw $Message}}
+function Check($Value,[string]$Message){$script:Checks++;if(-not$Value){[Console]::Error.WriteLine('RV_LIVE_ASSERT:'+$Message);throw $Message}}
 $script:Controls=@{}
 function Control([string]$Name){if(-not$script:Controls.ContainsKey($Name)){$script:Controls[$Name]=[pscustomobject]@{Text='-- ms';ToolTip='';Foreground='';IsEnabled=$false;IsChecked=$false;Content='';Tag=$null}};return $script:Controls[$Name]}
 function UnifiedAsyncBusy{return $script:Busy}
@@ -257,11 +278,14 @@ $script:UnifiedTelemetryClient=[pscustomobject]@{}
 $script:UnifiedTelemetryClient|Add-Member ScriptMethod SendAsync {param($Req,$Token)
  $script:Paths.Add($Req.RequestUri.PathAndQuery);$Resp=[System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::NotFound)
  if($Req.RequestUri.AbsolutePath-ceq'/api/connection/live-latency'){$Resp.StatusCode=[System.Net.HttpStatusCode]::OK;$Resp.Content=[System.Net.Http.StringContent]::new($script:Replies.Dequeue())}else{$Resp.Content=[System.Net.Http.StringContent]::new('{}')}
- return [System.Threading.Tasks.Task]::FromResult[System.Net.Http.HttpResponseMessage]($Resp)
+ $Completed=New-Object 'System.Threading.Tasks.TaskCompletionSource[System.Net.Http.HttpResponseMessage]'
+ $Completed.SetResult($Resp)
+ return $Completed.Task
 }
 METHODS
 function Value{$V=Get-Content (Join-Path $Output 'receipt.json') -Raw|ConvertFrom-Json;$V.measured_at=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();return $V}
 function Decode($V){ReadUnifiedLiveHTTPS $V ([System.Diagnostics.Stopwatch]::GetTimestamp())}
+[Console]::WriteLine('RV_LIVE_START')
 Check ((Decode (Value)).Median-eq4) 'valid live3 rejected'
 foreach($Fault in @('partial','fifty','expired','boolean','endpoint','mixed','source','future')){
  $V=Value;switch($Fault){partial{$V.response.distribution.samples=2}fifty{$V.response.attempts=50}expired{$V.expires_in_ms=0}boolean{$V.response.distribution.median_ms=$true}endpoint{$V.response.endpoint='https://elsewhere.invalid'}mixed{$V|Add-Member NoteProperty benchmark ([pscustomobject]@{})}source{$V.source_sha256='invalid'}future{$V.measured_at+=1000}}
@@ -283,7 +307,17 @@ Write-Output "Shipping PowerShell live HTTPS decoder/delivery: $script:Checks ch
     path=directory/'live.ps1';path.write_text(program)
     shells=[x for x in ('pwsh','powershell.exe') if shutil.which(x)]
     if not shells:raise RuntimeError('PowerShell is required')
-    for shell in shells:subprocess.run([shell,'-NoLogo','-NoProfile','-File',str(path),'-Output',str(directory)],check=True,timeout=60)
+    for shell in shells:
+        command=[shell,'-NoLogo','-NoProfile','-File',str(path),'-Output',str(directory)]
+        if MUTATION is None:
+            subprocess.run(command,check=True,timeout=60)
+        else:
+            expected=WINDOWS_NEGATIVE_ASSERTIONS[MUTATIONS['windows'].index(MUTATION)]
+            result=subprocess.run(command,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=60)
+            windows_negative_receipt(result,shell,expected)
+            print(f'{shell} live HTTPS assertion {expected!r}: rejected',flush=True)
+    if MUTATION is not None:
+        raise ExecutedNegativeControl()
 
 
 def run(platform, negative_controls=False):
@@ -305,9 +339,11 @@ def run(platform, negative_controls=False):
                         subprocess.run = quiet
                         try: {'linux':linux,'darwin':swift,'windows':windows}[platform](directory)
                         finally: subprocess.run = saved
+                except ExecutedNegativeControl:
+                    print(f'{platform} live HTTPS negative control {index}: rejected in every selected shell', flush=True)
                 except subprocess.CalledProcessError as failure:
                     # A compiler failure is not an executed negative witness.
-                    if Path(failure.cmd[0]).name in ('swiftc','gcc'):
+                    if platform == 'windows' or Path(failure.cmd[0]).name in ('swiftc','gcc'):
                         raise AssertionError((directory/'negative-control.log').read_text()) from failure
                     print(f'{platform} live HTTPS negative control {index}: rejected', flush=True)
                 else:

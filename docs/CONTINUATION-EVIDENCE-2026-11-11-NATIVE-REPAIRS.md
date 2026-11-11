@@ -7,6 +7,30 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## Windows PowerShell 5.1 live-response fixture repair
+
+The completed e1204aea Windows encrypted-runtime job
+[130833772547](https://github.com/Eabusham2/router-vpn/actions/runs/43112976450/job/130833772547)
+passed all 27 live HTTPS checks under pwsh, then Windows PowerShell 5.1
+rejected generic Task.FromResult type-argument syntax before execution.
+The fixture file was independently compared with current source and was
+unchanged after that failed run.
+
+The fixture now uses the existing compatible TaskCompletionSource of
+HttpResponseMessage, SetResult and Task pattern. Its 27 existing assertion
+cases and three shipping-source mutations remain. Each mutation must now
+run in every selected PowerShell executable and produce both the execution
+start marker and its exact named Check assertion. A parser failure,
+unrelated exception, wrong assertion or zero exit cannot be counted as a
+successful negative control.
+
+Independent JavaScript receipt-model checks accepted the intended assertion
+and rejected the actual captured 5.1 parser log, an unrelated runtime error,
+the wrong assertion, an escaped mutation and a stack-quoted marker. These
+checks are not Python or PowerShell execution. Both actual shell executions
+and their exact-source negative controls remain required in hosted CI.
+No application, response validation, connection policy or timeout was changed.
+
 ## Ordered readiness validates the captured native target
 
 The shared ready-record validator now derives the interface shape from the
