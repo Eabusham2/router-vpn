@@ -54,6 +54,7 @@ REQUIRED = frozenset((
     'TestDesktopNodeChainPolicyCombinesProtectionAndKeepsFinalDNS',
     'TestDesktopNodeChainPolicyRejectsChangedOriginalAndPhysicalGraph',
     'TestDesktopNodeChainPolicyLaunchOwnerReceiptAndClosedConstructor',
+    'TestDesktopNodeChainReadyRequiresCompletePhysicalAndProofIdentity',
 ))
 
 
@@ -145,7 +146,8 @@ class PartitionTests(unittest.TestCase):
     def test_every_selected_node_chain_root_is_mandatory_and_runs_once(self):
         groups = dict(partition(self.names))
         for prefix, count, phase in (('TestNodeChain', 10, 'node capture and packet identities'),
-                                     ('TestDesktopNodeChainPolicy', 4, 'desktop execution and ownership')):
+                                     ('TestDesktopNodeChainPolicy', 4, 'desktop execution and ownership'),
+                                     ('TestDesktopNodeChainReady', 1, 'desktop execution and ownership')):
             required = {name for name in REQUIRED if name.startswith(prefix)}
             self.assertEqual(len(required), count)
             self.assertTrue(required.issubset(groups[phase]))
