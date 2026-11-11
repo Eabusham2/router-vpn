@@ -1,0 +1,50 @@
+//go:build darwin
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func (n *NodeNetworkOwner) PrepareNodeChainPhysicalPolicy(policy *mobilemultihop.DesktopNodeChainPolicy) error {
+	return n.prepareNodePhysicalDarwin(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopDarwinSocketOptions) (desktopDarwinPhysicalPolicy, error) {
+		owned, err := mobiletor.NewDesktopDarwinSocketPolicy(ctx, capture, options)
+		if owned == nil {
+			return nil, err
+		}
+		return owned, err
+	})
+}
+
+// CloseNodeChainPhysicalSource joins this exact preparation even when native
+// startup returned only a partial source. It does not retire the separate
+// parent-owned whole-device baseline or certify the controller's proof.
+// A different policy pointer cannot close an already prepared original.
+func (n *NodeNetworkOwner) CloseNodeChainPhysicalSource(ctx context.Context, policy *mobilemultihop.DesktopNodeChainPolicy) error {
+	if n == nil || ctx == nil || ctx.Err() != nil || policy == nil {
+		return errors.New("Darwin ordered cleanup lost its captured source request")
+	}
+	_, meta, _, err := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
+	if err != nil || meta.Kind != "node-chain" || meta.TargetOS != "darwin" {
+		return errors.New("Darwin ordered cleanup lost its original sealed policy")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &n.mu); err != nil {
+		return err
+	}
+	exact := n.capture.SessionID == meta.SessionID && n.capture.SourceSHA256 == meta.SourceSHA256 &&
+		(n.policy == policy || n.policy == nil && n.factory == nil && n.preparing == nil)
+	if !exact {
+		n.mu.Unlock()
+		return errors.New("Darwin ordered cleanup cannot replace its retained preparation")
+	}
+	// Close cannot race a new preparation after the identity check. The native
+	// join below retains its existing bounded source and retry semantics.
+	n.retired = true
+	n.mu.Unlock()
+	return errors.Join(n.Close(), ctx.Err())
+}

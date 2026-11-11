@@ -7,6 +7,65 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## macOS ordered physical descriptor and Box integration
+
+This source unit reconstructs the interrupted descriptor work as eleven
+reviewed files. It is new source, not recovery of the unavailable nine-file
+draft below. The preceding command/capture unit is commit
+[c36dcb57](https://github.com/Eabusham2/router-vpn/commit/c36dcb5704bfbd82f478fe69a945893b9d1019cb).
+
+The shared Box physical adapter transfers a duplicate of the original native
+utun control descriptor on Darwin, both at first activation and on MTU reader
+replacement. It binds that actual file through BindPhysicalTunnelFile and
+closes the transfer duplicate even when binding fails. The retained native
+reader and guardian keep their original ownership. Missing adapters, nil or
+foreign descriptors, cancellation, stale generations and partial errors
+refuse binding. Windows and Linux retain their original fixed-name/index
+path. Darwin may request an OS-assigned interface name; readback must still
+return a nonempty native name.
+
+The Darwin physical projection accepts only sealed node or node-chain policy
+families and their validated literal tuples. Existing IPv6/LAN projection,
+socket ownership, network capture and observer checks remain in force. The
+ordered constructor uses the real Darwin socket-policy factory. Source
+closure captures the exact original policy pointer and session/source,
+retires that owner under the original mutex, and invokes bounded closure.
+An equal but different policy cannot close the original source. Failed or
+late source construction remains owned for cleanup retry.
+
+The ordered Darwin Box adapter retains its exact network and physical-policy
+owners across partial preparation. This is descriptor/source integration;
+it does not supply the original parent PF transaction, authenticated child
+command, complete proof/MTU lifecycle or safe native shutdown. In particular,
+review of the pinned native implementation found that legacy Close can close
+a utun descriptor despite a route-removal failure. A separate original
+component-progress retirement implementation remains necessary before the
+new ordered host can be enabled. Interface disappearance or process exit
+alone will not count as joined cleanup.
+
+Seven new Darwin test roots contain sixteen terminal cases. Five Box roots
+cover initial and restored MTU descriptor capture, six refusal cases, failed
+binding, rollback and original-owner cleanup. Two physical roots cover four
+mixed WG/AWG projection shapes and failed/late source cleanup. The fixtures
+exercise the actual sealed chain, Box network service and inbound-manager
+paths. Explicit TUN/PF doubles and pipe duplicates model control transfer;
+endpoint traffic is not started and these tests are not real utun/PF or
+physical-device acceptance. The MTU fixture observes utun991 to utun992 and
+cancelled rollback to utun993, three bindings, two retirements and rejection
+of the old reader.
+
+The native preparer registers the exact new templates and Darwin build tags.
+The existing Box selector already includes all five new Box roots and keeps
+its original 120-second limit. The separate physical test inventory grows
+from 67 to 69 Darwin roots; Linux 70 and Windows 64 are unchanged. Public
+ordered-macOS capability, generic runtime admission and operation deadlines
+are unchanged.
+
+Both source units received independent source review. No local Go execution
+or Darwin compilation was available for these new files. Hosted builds and
+their exact-source native tests remain pending; predecessor results below
+do not certify them.
+
 ## macOS ordered child command and original capture identity
 
 The shared native-process launcher now chooses the fixed child command from
@@ -42,7 +101,7 @@ the original Darwin launcher bytes; ordinary External arguments are exact.
 The native preparer dynamically copies production macosprocess Go files and
 includes the new source in its digest. Hosted compilation, the new portable
 tests and native invocation remain required. Public ordered-macOS capability
-is still closed while the descriptor, child command, original-session
+is still closed while child-command and original-session
 proof/MTU/retirement integration is completed; this unit does not certify an
 operating ordered macOS tunnel.
 
@@ -626,7 +685,12 @@ compatibility correction was still unapplied in that historical patch. The
 later shipping implementation contains the corrected discriminator and owner
 classification. The preserved patch remains documentation data.
 
-### macOS descriptor/native bridge: unfinished
+### macOS descriptor/native bridge: historical interrupted draft
+
+This section records the earlier inaccessible draft. The eleven-file
+reconstruction described at the top supersedes its source-recovery plan.
+The old payload was not recovered or replayed, and its unknown validation
+results remain unknown. The following paths describe that historical state.
 
 Work was present in the detached isolated checkout
 `/workspace/scratch/62d26fbeec14/router-vpn-awg-ordered`:
@@ -641,14 +705,14 @@ Work was present in the detached isolated checkout
 - `deploy/prepare-desktop-external.py`
 - `deploy/test_desktop_node_physical.py` (last registration patch completion unobserved)
 
-The unit transfers the original utun control descriptor during initial
+The historical draft was intended to transfer the original utun control descriptor during initial
 activation and MTU replacement, validates the actual OS-assigned utun name,
 and retains typed ordered physical-policy/Box owners. Windows/Linux fixed-name
 requirements remain in the design. No public Darwin capability, parent/child
 admission or generic launch path was enabled. The existing published
 `f4032c4a` physical-target templates were not edited.
 
-The Go templates were formatted, but no descriptor-unit test or Darwin
+The historical Go templates were formatted, but no descriptor-unit test or Darwin
 cross-compile result was obtained. A copied old prepared tree correctly
 refused a source-seal mismatch after the published f403 changes. No seal was
 modified. Normal clean pinned-source preparation was subsequently launched;
@@ -682,10 +746,12 @@ Android/Apple producers before changing their capability gates.
 
 Read live main before touching either local checkout. The detached worktree
 also contains many already-published changes; never replay its entire diff.
-Restrict recovery to the exact unfinished whitelists above, compare every file
-against the newer remote tree, and preserve unrelated work. Inspect the actual
+Compare any still-relevant recovery file against the newer remote tree and
+preserve unrelated work. The old descriptor whitelist is superseded by the
+new eleven-file reconstruction; do not replay that old draft over it. Inspect the actual
 unresolved logs instead of assuming they passed. Do not reapply the
 superseded desktop startup patch: its corrected source is already published.
+The descriptor reconstruction is likewise distinct from its unavailable draft.
 Validate the current startup inventory and the remaining coherent native
 units, and publish directly to main with normal ancestry. The original requirements and all device/release
 boundaries remain binding. No new physical-device, signing or private-deployment

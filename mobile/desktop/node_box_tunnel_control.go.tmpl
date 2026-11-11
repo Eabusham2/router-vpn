@@ -1,0 +1,38 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"os"
+	"runtime"
+)
+
+// Darwin allocates the native utun name. The retained reader, not a requested
+// alias, supplies the duplicate which the existing physical guardian validates.
+// Only the transfer duplicate is closed here; the reader and guardian retain
+// their own original references through native retirement.
+func (owner *RouterVPNDesktopNodePhysical) bindPhysicalTunnel(ctx context.Context, reader routerVPNDesktopTorTUN, name string, index uint32) error {
+	if reader == nil || name == "" || index == 0 {
+		return errors.New("Router node physical TUN binding has no captured native reader")
+	}
+	if err := owner.generationCurrentContext(ctx); err != nil {
+		return err
+	}
+	if runtime.GOOS != "darwin" {
+		return owner.network.BindPhysicalTunnel(ctx, name, index)
+	}
+	control, ok := reader.(interface {
+		RouterVPNDesktopTunnelControlContext(context.Context, func(context.Context) error) (*os.File, error)
+	})
+	if !ok {
+		return errors.New("Darwin Router node protection requires its original utun control")
+	}
+	file, err := control.RouterVPNDesktopTunnelControlContext(ctx, owner.generationCurrentContext)
+	if file != nil {
+		defer file.Close()
+	}
+	if err != nil || file == nil {
+		return errors.Join(err, errors.New("Darwin Router node protection lost its retained control descriptor"))
+	}
+	return owner.network.BindPhysicalTunnelFile(ctx, name, index, file)
+}

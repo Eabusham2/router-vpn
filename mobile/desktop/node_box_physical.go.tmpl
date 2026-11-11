@@ -155,7 +155,7 @@ func (s *Box) routerVPNDesktopNodeActivatePhysical(policy mobilemultihop.Desktop
 		return nil, errors.New("Router node physical activation lost its one captured TUN")
 	}
 	options, ok := compiled.Inbounds[0].Options.(*option.TunInboundOptions)
-	if !ok || compiled.Inbounds[0].Type != C.TypeTun || options.InterfaceName == "" {
+	if !ok || compiled.Inbounds[0].Type != C.TypeTun || options.InterfaceName == "" && meta.TargetOS != "darwin" {
 		return nil, errors.New("Router node physical activation lost its derived interface policy")
 	}
 	inbound, found := s.inbound.Get(capture.TUNTag)
@@ -187,10 +187,10 @@ func (s *Box) routerVPNDesktopNodeActivatePhysical(policy mobilemultihop.Desktop
 	if restored := meta.RestoredMTU; restored != 0 {
 		expectedMTU = restored
 	}
-	if err != nil || name != options.InterfaceName || index < 1 || mtu != expectedMTU {
+	if err != nil || name == "" || options.InterfaceName != "" && name != options.InterfaceName || index < 1 || mtu != expectedMTU {
 		return nil, errors.New("Router node native TUN differs from its captured graph")
 	}
-	if err := network.BindPhysicalTunnel(ctx, name, uint32(index)); err != nil {
+	if err := owner.bindPhysicalTunnel(ctx, reader, name, uint32(index)); err != nil {
 		return nil, err
 	}
 	owner.name, owner.index, owner.mtu = name, index, mtu
@@ -429,10 +429,10 @@ func (owner *RouterVPNDesktopNodePhysical) adoptTUN(ctx context.Context, next ad
 	if err != nil {
 		return err
 	}
-	if name != owner.interfaceName || index < 1 || mtu < 1280 || mtu > 9000 {
+	if name == "" || owner.interfaceName != "" && name != owner.interfaceName || index < 1 || mtu < 1280 || mtu > 9000 {
 		return errors.New("Router node physical replacement has an invalid TUN identity")
 	}
-	if err := owner.network.BindPhysicalTunnel(ctx, name, uint32(index)); err != nil {
+	if err := owner.bindPhysicalTunnel(ctx, reader, name, uint32(index)); err != nil {
 		return err
 	}
 	owner.inbound, owner.reader, owner.name, owner.index, owner.mtu, owner.detached = next, reader, name, index, mtu, false

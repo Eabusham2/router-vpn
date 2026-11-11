@@ -1,0 +1,345 @@
+//go:build darwin
+
+package box
+
+import (
+	"context"
+	"errors"
+	"os"
+	"sync"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// The actual sealed ordered graph, Box, native network service and inbound
+// manager execute here. Endpoint traffic is not started. The TUN and privileged
+// socket source are explicit boundaries: native pipe duplicates model only the
+// original descriptor transfer, never a real utun or a PF acceptance receipt.
+type desktopNodeDarwinControlSource struct {
+	*desktopExternalBoxSource
+	box          *Box
+	tag          string
+	controlMu    sync.Mutex
+	files        []*os.File
+	nameOnly     int
+	rejectFile   bool
+}
+
+func (s *desktopNodeDarwinControlSource) BindTunnel(context.Context, mobiletor.DesktopSocketCapture, string, uint32) error {
+	s.controlMu.Lock()
+	s.nameOnly++
+	s.controlMu.Unlock()
+	return errors.New("Darwin ordered fixture refuses name-only TUN authority")
+}
+
+func (s *desktopNodeDarwinControlSource) BindTunnelFile(ctx context.Context, capture mobiletor.DesktopSocketCapture, name string, index uint32, file *os.File) error {
+	s.controlMu.Lock()
+	s.files = append(s.files, file)
+	reject := s.rejectFile
+	s.controlMu.Unlock()
+	if reject {
+		return errors.New("fixture retained a failed original descriptor binding")
+	}
+	current, found := s.box.inbound.Get(s.tag)
+	var original *desktopTorBoxTUN
+	switch reader := current.(type) {
+	case *desktopTorBoxTUN:
+		original = reader
+	case *desktopTorMTUCandidate:
+		original = reader.desktopTorBoxTUN
+	}
+	if !found || original == nil {
+		return errors.New("fixture source lost its current original TUN")
+	}
+	if err := desktopExternalBoxControlMatches(ctx, original, name, index, file); err != nil {
+		return err
+	}
+	return s.desktopExternalBoxSource.BindTunnel(ctx, capture, name, index)
+}
+
+func (s *desktopNodeDarwinControlSource) controls(t *testing.T, count int) {
+	t.Helper()
+	s.controlMu.Lock()
+	files := append([]*os.File(nil), s.files...)
+	nameOnly := s.nameOnly
+	s.controlMu.Unlock()
+	if nameOnly != 0 || len(files) != count {
+		t.Fatal("ordered TUN transfer omitted its original descriptor", nameOnly, len(files), count)
+	}
+	for _, file := range files {
+		if file == nil {
+			t.Fatal("ordered source received a nil control descriptor")
+		}
+		if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatal("transferred original control was not closed", err)
+		}
+	}
+}
+
+type desktopNodeDarwinControlFixture struct {
+	box     *Box
+	policy  *mobilemultihop.DesktopNodeChainPolicy
+	network *routervpndesktoppt.NodeNetworkOwner
+	tun     *desktopTorBoxTUN
+	source  *desktopNodeDarwinControlSource
+}
+
+func newDesktopNodeDarwinControlFixture(t *testing.T, restoredMTU int) *desktopNodeDarwinControlFixture {
+	t.Helper()
+	policy, err := mobilemultihop.NewDesktopNodeChainPolicy(
+		chainNativeSourceModes(t, []string{"awg2-fast", "awg2-strong"}), desktopTorBoxSession, "darwin", restoredMTU)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, tun := desktopChainPhysicalBox(t, policy, nil)
+	tun.name = "utun991"
+	_, network, err := instance.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &desktopNodeDarwinControlSource{desktopExternalBoxSource: newDesktopExternalBoxSource(), box: instance, tag: tun.Tag()}
+	f := &desktopNodeDarwinControlFixture{instance, policy, network, tun, source}
+	if err := network.PrepareNodePhysicalBroker(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		if tun.ready || tun.claimed || network.SocketCurrent() || network.Current() {
+			t.Error("ordered descriptor fixture entered after native admission")
+		}
+		source.capture = capture
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current, func(observe context.Context) error {
+			return network.MatchesContext(observe, capture.SessionID, capture.SourceSHA256)
+		})
+		return broker, source, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := network.Close(); err != nil {
+			t.Error("original ordered physical source did not join", err)
+		}
+		if err := instance.inbound.Close(); err != nil {
+			t.Error("original ordered TUN manager did not join", err)
+		}
+	})
+	// Start the actual service and inbound manager only. The fixture does not
+	// claim endpoint startup, encrypted graph traffic or authenticated proof.
+	for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+		if err := network.Start(stage); err != nil {
+			t.Fatal("ordered service boundary did not start", err)
+		}
+		if err := instance.inbound.Start(stage); err != nil {
+			t.Fatal("ordered TUN manager boundary did not start", err)
+		}
+	}
+	return f
+}
+
+func (f *desktopNodeDarwinControlFixture) activate(t *testing.T) *RouterVPNDesktopNodePhysical {
+	t.Helper()
+	if f.network.Current() || f.tun.claimed {
+		t.Fatal("preparation fabricated ordered TUN ownership")
+	}
+	owner, err := f.box.RouterVPNDesktopDarwinNodeChainActivatePhysical(f.policy)
+	if err != nil || owner == nil || !owner.Current() {
+		t.Fatal("descriptor-backed ordered activation failed", err)
+	}
+	return owner
+}
+
+func TestRouterVPNDesktopNodeChainDarwinControlCapture(t *testing.T) {
+	for _, restored := range []int{0, 1392} {
+		t.Run(map[bool]string{false: "configured-mtu", true: "restored-mtu"}[restored != 0], func(t *testing.T) {
+			f := newDesktopNodeDarwinControlFixture(t, restored)
+			owner := f.activate(t)
+			_, _, captured, err := mobilemultihop.ReadDesktopPhysicalPolicy(f.policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := captured.ConfiguredMTU
+			if restored != 0 {
+				want = restored
+			}
+			name, index, mtu, err := owner.ClaimTUN(owner.Current)
+			if err != nil || name != "utun991" || index != f.tun.index || mtu != want || owner.interfaceName != "" {
+				t.Fatal("Darwin ordered reader lost its allocated identity or original MTU", name, index, mtu, err)
+			}
+			f.source.controls(t, 1)
+			if f.tun.fixtureControl == nil {
+				t.Fatal("original TUN did not retain its own control")
+			}
+			if _, err := f.tun.fixtureControl.Stat(); err != nil {
+				t.Fatal("transfer consumed the original TUN control", err)
+			}
+			owner.Cancel()
+			if owner.Current() || f.network.SocketCurrent() {
+				t.Fatal("retired ordered descriptor retained native admission")
+			}
+		})
+	}
+}
+
+type desktopNodeDarwinControlReader struct {
+	routerVPNDesktopTorTUN
+	capture func(context.Context, func(context.Context) error) (*os.File, error)
+}
+
+func (r desktopNodeDarwinControlReader) RouterVPNDesktopTunnelControlContext(ctx context.Context, guard func(context.Context) error) (*os.File, error) {
+	return r.capture(ctx, guard)
+}
+
+func TestRouterVPNDesktopNodeChainDarwinControlRefusal(t *testing.T) {
+	for _, fault := range []string{"missing-adapter", "nil-control", "foreign-control", "control-and-error", "late-cancel", "cancelled-caller"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newDesktopNodeDarwinControlFixture(t, 0)
+			owner := f.activate(t)
+			ctx := context.Background()
+			var transferred *os.File
+			entered := false
+			reader := desktopNodeDarwinControlReader{routerVPNDesktopTorTUN: f.tun}
+			reader.capture = func(call context.Context, guard func(context.Context) error) (*os.File, error) {
+				entered = true
+				if fault == "nil-control" {
+					return nil, nil
+				}
+				if fault == "foreign-control" {
+					file, writer, err := os.Pipe()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := writer.Close(); err != nil {
+						file.Close()
+						t.Fatal(err)
+					}
+					transferred = file
+				} else {
+					var err error
+					transferred, err = f.tun.RouterVPNDesktopTunnelControlContext(call, guard)
+					if err != nil {
+						return transferred, err
+					}
+				}
+				if fault == "control-and-error" {
+					return transferred, errors.New("fixture returns its original partial control")
+				}
+				if fault == "late-cancel" {
+					owner.Cancel()
+				}
+				return transferred, nil
+			}
+			var selected routerVPNDesktopTorTUN = reader
+			if fault == "missing-adapter" {
+				selected = struct{ routerVPNDesktopTorTUN }{f.tun}
+			}
+			if fault == "cancelled-caller" {
+				cancelled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = cancelled
+			}
+			if err := owner.bindPhysicalTunnel(ctx, selected, f.tun.name, uint32(f.tun.index)); err == nil {
+				t.Fatal("unowned or stale Darwin control acquired a physical binding", fault)
+			}
+			if fault == "cancelled-caller" && entered {
+				t.Fatal("cancelled request entered native descriptor capture")
+			}
+			if transferred != nil {
+				if _, err := transferred.Stat(); !errors.Is(err, os.ErrClosed) {
+					t.Fatal("rejected or late original descriptor leaked", err)
+				}
+			}
+			controls := 1
+			if fault == "foreign-control" {
+				controls++
+			}
+			f.source.controls(t, controls)
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainDarwinControlFailedBinding(t *testing.T) {
+	f := newDesktopNodeDarwinControlFixture(t, 0)
+	f.source.rejectFile = true
+	owner, err := f.box.RouterVPNDesktopDarwinNodeChainActivatePhysical(f.policy)
+	if err == nil || owner != nil || f.network.Current() || f.network.SocketCurrent() {
+		t.Fatal("failed descriptor binding retained usable native ownership", err)
+	}
+	f.source.controls(t, 1)
+	if err := f.network.CloseNodeChainPhysicalSource(t.Context(), f.policy); err != nil || !f.source.closed.Load() {
+		t.Fatal("failed activation lost its original source cleanup", err)
+	}
+}
+
+func TestRouterVPNDesktopNodeChainDarwinControlMTURollback(t *testing.T) {
+	f := newDesktopNodeDarwinControlFixture(t, 0)
+	owner := f.activate(t)
+	original := owner.inbound
+	var candidate, rollback *desktopTorMTUCandidate
+	composition := &desktopNodeBoxFixture{box: f.box}
+	next, err := owner.changeMTU(t.Context(), original, 1400, composition.replacement(owner, func(stage adapter.StartStage) error {
+		if stage == adapter.StartStateStarted {
+			candidate.mu.Lock()
+			candidate.name = "utun992"
+			candidate.mu.Unlock()
+		}
+		return nil
+	}, &candidate, &rollback))
+	if err != nil || next != candidate || !owner.Current() {
+		t.Fatal("Darwin MTU candidate lost its returned descriptor", err)
+	}
+	work, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	next, err = owner.changeMTU(work, next, 1500, composition.replacement(owner, func(stage adapter.StartStage) error {
+		if stage == adapter.StartStateStarted {
+			rollback.mu.Lock()
+			rollback.name = "utun993"
+			rollback.mu.Unlock()
+			cancel()
+		}
+		return nil
+	}, &candidate, &rollback))
+	if err == nil || next != rollback || !owner.Current() {
+		t.Fatal("Darwin cancelled MTU lost its exact returned rollback", err)
+	}
+	name, index, mtu, err := owner.ClaimTUN(owner.Current)
+	if err != nil || name != "utun993" || index != rollback.index || mtu != 1400 || f.source.binds != 3 || f.source.retires != 2 {
+		t.Fatal("Darwin rollback skipped original retirement or adopted another reader", name, index, mtu, err)
+	}
+	f.source.controls(t, 3)
+	called := false
+	if _, err := owner.changeMTU(t.Context(), original, 1450, func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) {
+		called = true
+		return nil, nil
+	}); err == nil || called {
+		t.Fatal("stale Darwin TUN changed its proved replacement")
+	}
+}
+
+func TestRouterVPNDesktopNodeChainDarwinPreparationKeepsOriginalCleanup(t *testing.T) {
+	policy, err := mobilemultihop.NewDesktopNodeChainPolicy(chainNativeSource(t), desktopTorBoxSession, "darwin", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, tun := desktopChainPhysicalBox(t, policy, nil)
+	prepared, err := instance.RouterVPNDesktopDarwinNodeChainPreparePhysicalOwned(policy)
+	if err != nil || prepared == nil || tun.ready || tun.claimed {
+		t.Fatal("Darwin preparation changed native startup or lost its original", err)
+	}
+	other, err := mobilemultihop.NewDesktopNodeChainPolicy(chainNativeSource(t), desktopTorBoxSession, "darwin", 0)
+	if err != nil || other.Metadata().SourceSHA256 != policy.Metadata().SourceSHA256 {
+		t.Fatal("cleanup identity negative requires an equal independently valid policy", err)
+	}
+	replaced, err := instance.RouterVPNDesktopDarwinNodeChainPreparePhysicalOwned(other)
+	if err == nil || replaced == nil {
+		t.Fatal("second policy replaced the original prepared source", err)
+	}
+	if err := replaced.CloseSource(t.Context()); err == nil || !prepared.network.Matches(policy.Metadata().SessionID, policy.Metadata().SourceSHA256) {
+		t.Fatal("foreign cleanup consumed the original preparation", err)
+	}
+	if err := prepared.CloseSource(t.Context()); err != nil {
+		t.Fatal("original unstarted preparation did not join", err)
+	}
+	if err := prepared.CloseSource(t.Context()); err != nil {
+		t.Fatal("original cleanup retry lost its retained source", err)
+	}
+}

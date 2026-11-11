@@ -47,7 +47,7 @@ class OriginalInventory(unittest.TestCase):
                                         if re.match(GATE.SELECTION, name))
         for target, wanted in selected.items():
             self.assertEqual(wanted, set(GATE.expected_roots(target)), target)
-        self.assertEqual({target: len(roots) for target, roots in selected.items()}, {"linux": 70, "darwin": 67, "windows": 64})
+        self.assertEqual({target: len(roots) for target, roots in selected.items()}, {"linux": 70, "darwin": 69, "windows": 64})
 
     def test_every_original_darwin_leaf_runs_once_with_unchanged_names_and_bounds(self):
         source = (ROOT / "mobile/desktop/external_physical_darwin_test.go.tmpl").read_text()
