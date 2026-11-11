@@ -30,6 +30,7 @@ import Foundation
 final class NativeCancel: @unchecked Sendable {
  let entered=DispatchSemaphore(value:0),release=DispatchSemaphore(value:0)
  func cancel(){entered.signal();precondition(release.wait(timeout:.now()+3) == .success,"native Cancel release missing")}
+ func networkChanged(){cancel()}
 }
 final class Result: @unchecked Sendable {
  private let lock=NSLock();private var values:[Bool]=[]
@@ -41,6 +42,7 @@ final class Delivery: @unchecked Sendable {
  private var callback:((Error?)->Void)?
  private var cancelled=false,proved=false
  let request=NativeCancel()
+ var plan:NativeCancel{request}
  init(_ result:Result){callback=result.finish}
  func successfulRun(){finish(nil)}
  var wasProved:Bool{lock.lock();defer{lock.unlock()};return proved}
@@ -77,7 +79,7 @@ def main():
     source = ENGINE.read_text()
     with tempfile.TemporaryDirectory(prefix='ios-proof-cancel-delivery-') as temporary:
         folder = Path(temporary)
-        for name in ('TorProofDelivery', 'ExternalProofDelivery'):
+        for name in ('TorProofDelivery', 'ExternalProofDelivery', 'NodeChainDelivery'):
             owned = member(source, '    private final class '+name+':')
             methods = '\n'.join(member(owned, signature) for signature in (
                 '        private func finish(', '        func cancel()', '        private func retired()'))
@@ -87,10 +89,10 @@ def main():
             subprocess.run([str(binary)],check=True,timeout=10)
             # The former defect still skipped the proved flag but delivered a
             # successful nil callback after cancellation had already won.
-            before = 'callback?(delivered)'
+            before = 'completion?(delivered)' if name == 'NodeChainDelivery' else 'callback?(delivered)'
             assert methods.count(before) == 1, name
             broken = folder/(name+'-broken.swift'); negative = folder/(name+'-broken')
-            broken.write_text(SWIFT.replace(' // SHIPPING_METHODS', methods.replace(before,'callback?(error)')))
+            broken.write_text(SWIFT.replace(' // SHIPPING_METHODS', methods.replace(before,before.replace('delivered','error'))))
             subprocess.run([swift,'-swift-version','6','-parse-as-library',str(broken),'-o',str(negative)],check=True,timeout=60)
             result = subprocess.run([str(negative)],capture_output=True,text=True,timeout=10)
             assert result.returncode != 0 and 'claimed cancellation delivered success' in result.stdout+result.stderr, name+' lost its deterministic negative control'

@@ -6,6 +6,7 @@ non-Sendable API doubles, so the old asynchronous captures fail this compilation
 Apple CI still compiles the real generated framework in the mandatory IPA job.
 """
 from pathlib import Path
+import argparse
 import importlib.util
 import os
 import platform
@@ -103,6 +104,41 @@ public final class LibboxRouterMultihop {
     }
     public func setPins(_ value:String,fail:Bool=false) {lock.lock();pins=value;pinFailure=fail;lock.unlock()}
     public func allowCompletion() { release.signal() }
+}
+public final class LibboxRouterNodeChain {
+    private let text:String,block:Bool,fail:Bool
+    private let lock=NSLock()
+    private var valid=true,closed=false,completed=false,running=false
+    private var closeFailures=0,closeCount=0
+    private var healthHook:(()->Void)?
+    public let entered=DispatchSemaphore(value:0)
+    private let release=DispatchSemaphore(value:0),exited=DispatchSemaphore(value:0)
+    public init(_ text:String,block:Bool=false,fail:Bool=false){self.text=text;self.block=block;self.fail=fail}
+    public func config()->String{text}
+    public func sourceSHA256()->String{String(repeating:"c",count:64)}
+    public func configSHA256()->String{String(repeating:"d",count:64)}
+    public func run(_ server:LibboxCommandServer)throws{
+        lock.lock();running=true;lock.unlock();entered.signal()
+        if block{_ = release.wait(timeout:.now()+5)}
+        lock.lock();let bad=closed || !valid || fail;running=false;completed = !bad;lock.unlock();exited.signal()
+        if bad{throw NSError(domain:"NodeChainFixture",code:1)}
+    }
+    public func healthy()->Bool{
+        lock.lock();let value=valid && !closed && completed,hook=healthHook;healthHook=nil;lock.unlock();hook?();return value
+    }
+    public func networkChanged(){lock.lock();valid=false;lock.unlock()}
+    public func configureClose(_ failures:Int){lock.lock();closeFailures=failures;lock.unlock()}
+    public func closeCalls()->Int{lock.lock();defer{lock.unlock()};return closeCount}
+    public func configureHealth(_ valid:Bool,hook:(()->Void)?=nil){lock.lock();self.valid=valid;healthHook=hook;lock.unlock()}
+    public func allowCompletion(){release.signal()}
+    public func close()throws{
+        lock.lock();closeCount+=1;closed=true;valid=false
+        let pending=closeFailures>0,join=running;if pending{closeFailures-=1};lock.unlock()
+        if pending{throw NSError(domain:"NodeChainJoinFixture",code:1)}
+        release.signal()
+        if join && exited.wait(timeout:.now()+3) != .success{throw NSError(domain:"NodeChainJoinFixture",code:2)}
+    }
+    public func progressJSON()->String{lock.lock();defer{lock.unlock()};return String(decoding:try! JSONSerialization.data(withJSONObject:["stage":completed ? "ready":"pending","complete":completed,"ready":completed && valid && !closed,"execution":"local"]),as:UTF8.self)}
 }
 public final class LibboxCommandServer {
     private let lock=NSLock()
@@ -370,6 +406,12 @@ final class MTUPlatformDouble {
     let independentSession = UUID().uuidString
     var hasOwner = false
     var measurementReady = true
+    private let proofLock=NSLock()
+    private var changing = false
+    var isChanging:Bool{get{proofLock.lock();defer{proofLock.unlock()};return changing}set{proofLock.lock();changing=newValue;proofLock.unlock()}}
+    private var proofEpoch = UUID()
+    var proofObservationToken:UUID?{proofLock.lock();defer{proofLock.unlock()};return changing ? nil:proofEpoch}
+    func mutateProofEpoch(){proofLock.lock();proofEpoch=UUID();proofLock.unlock()}
     var statusCallback: (() -> Void)?
     private var server:LibboxCommandServer?
     private var failures=0,drained=false
@@ -395,6 +437,11 @@ final class MTUPlatformDouble {
         guard plan.healthy() else{throw NSError(domain:"ImportedMTUFixture",code:1)}
         hasOwner=true;self.server=server;failures=MTUActivationFixture.shared.failures()
     }
+    func activateNodeChain(server:LibboxCommandServer,plan:LibboxRouterNodeChain,onAbort:@escaping @Sendable(String)->Void)throws {
+        guard plan.healthy() else{throw NSError(domain:"NodeChainMTUFixture",code:1)}
+        hasOwner=true;self.server=server;failures=MTUActivationFixture.shared.failures()
+        MTUActivationFixture.shared.recordChain(plan)
+    }
     func activateExternal(server:LibboxCommandServer,proof:LibboxRouterExternalProofRequest,source:String,capture:String,onAbort:@escaping @Sendable(String)->Void)throws {
         guard proof.healthy() else{throw NSError(domain:"ExternalMTUFixture",code:1)}
         hasOwner=true;self.server=server;failures=MTUActivationFixture.shared.failures();MTUActivationFixture.shared.record([source,capture],proof:proof)
@@ -415,6 +462,7 @@ final class MTUActivationFixture:@unchecked Sendable {
     private let lock=NSLock()
     private var values:[String]=[],proof:LibboxRouterExternalProofRequest?,callback:(()->Void)?
     private var torProof:LibboxRouterTorProofRequest?
+    private var chain:LibboxRouterNodeChain?
     private var closeFailures=0
     private weak var platform:RouterVPNLibboxPlatform?
     func configure(failures:Int=0,_ callback:(()->Void)?=nil){lock.lock();values=[];proof=nil;torProof=nil;self.callback=callback;closeFailures=failures;lock.unlock()}
@@ -426,6 +474,8 @@ final class MTUActivationFixture:@unchecked Sendable {
     func captured()->[String]{lock.lock();defer{lock.unlock()};return values}
     func owns(_ proof:LibboxRouterExternalProofRequest?)->Bool{lock.lock();defer{lock.unlock()};return self.proof === proof}
     func ownsTor(_ proof:LibboxRouterTorProofRequest?)->Bool{lock.lock();defer{lock.unlock()};return torProof === proof}
+    func recordChain(_ plan:LibboxRouterNodeChain){lock.lock();chain=plan;let callback=self.callback;lock.unlock();callback?()}
+    func ownsChain(_ plan:LibboxRouterNodeChain)->Bool{lock.lock();defer{lock.unlock()};return chain === plan}
 }
 final class RouterVPNLibboxPlatform {
     let mtu = MTUPlatformDouble()
@@ -466,6 +516,101 @@ final class CompletionState: @unchecked Sendable {
         var checks = 0
         func check(_ label: String, _ value: @autoclosure () -> Bool) {
             guard value() else { fatalError("FAIL: " + label) }; checks += 1
+        }
+        let chainText="{\"inbounds\":[{\"type\":\"tun\",\"tag\":\"captured-chain-tun\"}],\"outbounds\":[]}"
+        for scenario in ["success","cancel","proof-failure"] {
+            MTUActivationFixture.shared.configure()
+            let plan=LibboxRouterNodeChain(chainText,block:scenario=="cancel",fail:scenario=="proof-failure")
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
+            try owner.start(nodeChain:plan,strict:true)
+            let server=state.currentServer()!,directory=state.directory()
+            check("ordered plan preserves one exact graph without proof injection",owner.ownsNodeChain && server.capturedConfiguration()==chainText && server.strategyCalls()==["start"])
+            owner.completeNodeChainExecution(done.finish)
+            if scenario=="cancel" {
+                check("ordered Run entered original server",plan.entered.wait(timeout:.now()+2) == .success)
+                try owner.stopCheckedForStrategy();plan.allowCompletion()
+                check("ordered cancellation cannot deliver late success",done.wait() && done.values()==(1,1))
+            } else if scenario=="proof-failure" {
+                check("failed prefix or DNS cannot finish startup",done.wait() && done.values()==(1,1))
+                var refused=false;do{try owner.activateNodeChainMTU()}catch{refused=true}
+                check("unproved chain cannot adopt MTU",refused)
+                try owner.stopCheckedForStrategy()
+            } else {
+                check("ordered proof completes once",done.wait() && done.values()==(1,0))
+                try owner.activateNodeChainMTU()
+                check("ordered MTU keeps original complete plan",MTUActivationFixture.shared.ownsChain(plan))
+                check("ordered progress belongs to current plan",owner.multihopProgress() != nil)
+                try owner.stopCheckedForStrategy()
+            }
+            check("ordered shutdown joins native proof and original service",plan.closeCalls()>=2 && server.strategyCalls()==["start","close"] && !FileManager.default.fileExists(atPath:directory))
+            check("retired ordered progress cannot be delivered",!owner.ownsNodeChain && owner.multihopProgress()==nil)
+        }
+        do {
+            let plan=LibboxRouterNodeChain(chainText),owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),before=state.counts()
+            var refused=false
+            do{try owner.start(files:files,strict:false,multihopMetadata:nil,nodeChainPlan:plan)}catch{refused=true}
+            check("ordered substituted config is rejected before native start",refused && state.counts()==before)
+            try plan.close()
+        }
+        for pause in [false,true] {
+            let plan=LibboxRouterNodeChain(chainText),owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
+            try owner.start(nodeChain:plan,strict:false)
+            if pause{owner.pause()}else{owner.invalidateMultihop()}
+            owner.completeNodeChainExecution(done.finish)
+            check("ordered network change before delivery cannot publish readiness",done.wait() && done.values()==(1,1))
+            try owner.stopCheckedForStrategy()
+        }
+        do {
+            let plan=LibboxRouterNodeChain(chainText)
+            var owner:RouterVPNLibboxEngine?=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            try owner!.start(nodeChain:plan,strict:true)
+            let done=CompletionState();owner!.completeNodeChainExecution(done.finish)
+            check("retirement fixture proves original chain",done.wait() && done.values()==(1,0))
+            let server=state.currentServer()!,directory=state.directory(),before=state.counts()
+            weak var platform=MTUActivationFixture.shared.currentPlatform()
+            plan.configureClose(4)
+            var refused=false;do{try owner!.stopCheckedForStrategy()}catch{refused=true}
+            owner=nil
+            check("unjoined ordered proof retains original TUN and private source",refused && platform != nil && platform?.resets==0 && FileManager.default.fileExists(atPath:directory) && state.counts()==before)
+            let blocked=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            refused=false;do{try blocked.start(files:files,strict:false)}catch{refused=true}
+            check("unjoined ordered proof blocks replacement service",refused && state.counts()==before)
+            let replacement=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            try replacement.start(files:files,strict:false)
+            check("joined ordered retry closes only original native owner",server.strategyCalls()==["start","close"] && !FileManager.default.fileExists(atPath:directory))
+            replacement.stop()
+        }
+        do {
+            let provider=PacketTunnelProvider(),owner=RouterVPNLibboxEngine(tunnel:provider),plan=LibboxRouterNodeChain(chainText),done=CompletionState()
+            try owner.start(nodeChain:plan,strict:false);owner.completeNodeChainExecution(done.finish)
+            check("health fixture proves original chain",done.wait() && done.values()==(1,0))
+            let platform=MTUActivationFixture.shared.currentPlatform()!
+            platform.mtu.isChanging=true;plan.configureHealth(false)
+            Thread.sleep(forTimeInterval:1.15)
+            check("only owned MTU transaction defers chain health failure",provider.count()==0)
+            platform.mtu.isChanging=false
+            plan.configureHealth(false){platform.mtu.mutateProofEpoch();plan.configureHealth(true)}
+            Thread.sleep(forTimeInterval:1.15)
+            check("completed MTU transaction cannot publish old health failure",provider.count()==0)
+            plan.configureHealth(false)
+            Thread.sleep(forTimeInterval:1.15)
+            check("unowned ordinary health failure stops ordered service",provider.count()>0)
+            try owner.stopCheckedForStrategy()
+        }
+        do {
+            let plan=LibboxRouterNodeChain(chainText),owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
+            try owner.start(nodeChain:plan,strict:false);owner.completeNodeChainExecution(done.finish)
+            check("native retirement fixture proves original chain",done.wait() && done.values()==(1,0))
+            let server=state.currentServer()!,directory=state.directory(),before=state.counts()
+            server.configureStrategy(close:true)
+            var refused=false;do{try owner.stopCheckedForStrategy()}catch{refused=true}
+            check("failed original Box close retains private chain files",refused && state.counts()==before && FileManager.default.fileExists(atPath:directory))
+            server.configureStrategy(close:false)
+            try owner.stopCheckedForStrategy()
+            check("native close retry uses only captured original Box",server.strategyCalls()==["start","close","close"] && !FileManager.default.fileExists(atPath:directory))
+        }
+        if CommandLine.arguments.contains("--chain-only") {
+            print("Swift 6 ordered chain delivery: PASS (\(checks) shipping lifecycle checks; native handles doubled)");return
         }
         for cancel in [false, true] {
             state.configure(block: cancel)
@@ -1425,6 +1570,10 @@ final class CompletionState: @unchecked Sendable {
 '''
 
 def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--chain-only',action='store_true')
+    parser.add_argument('--shipping-only',action='store_true')
+    requested=parser.parse_args()
     swift = shutil.which('swiftc')
     if swift is None:
         raise SystemExit('swiftc required to compile the shipping concurrency boundary')
@@ -1448,10 +1597,34 @@ def main():
             args += ['-lCryptoKit']
         args += [str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNTorPaddingReceipt.swift')]
         subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(ENGINE),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
+        if requested.chain_only or not requested.shipping_only:
+            subprocess.run([str(tmp/'test'),'--chain-only'],env=environment,check=True,timeout=25)
+            text=ENGINE.read_text()
+            chain_start=text.index('        if let nodeChainPlan {')
+            chain_end=text.index('        } else if let importedPlan {',chain_start)
+            chain=text[chain_start:chain_end]
+            injection=chain.replace('            safeFiles = files','            safeFiles = try validateAndInjectProof(files)',1)
+            assert injection != chain
+            mutations=[('chain-proof-injection',text[:chain_start]+injection+text[chain_end:],'ordered plan preserves one exact graph without proof injection')]
+            for name,before,after,failure in (
+                ('chain-join-required','            if let failure = nativeFailure ?? drainFailure { throw failure }','            _ = nativeFailure; _ = drainFailure','unjoined ordered proof retains original TUN and private source'),
+                ('chain-mtu-observation','            guard !healthy, current(owner), owner.platform.mtu.proofObservationToken == mtuObservation else { return }','            guard !healthy, current(owner) else { return }','completed MTU transaction cannot publish old health failure'),
+            ):
+                assert text.count(before)==1,name
+                mutations.append((name,text.replace(before,after,1),failure))
+            for name,source,failure in mutations:
+                broken=tmp/(name+'.swift');broken.write_text(source)
+                binary=tmp/name
+                subprocess.run(args+[str(ROOT/'ios/RouterVPN/App/IOSMultihopStartLayer.swift'),str(broken),str(harness),'-o',str(binary)],check=True,timeout=90)
+                failed=subprocess.run([str(binary),'--chain-only'],env=environment,capture_output=True,text=True,timeout=25)
+                assert failed.returncode != 0 and 'FAIL: '+failure in failed.stdout+failed.stderr,name+': missing causal assertion '+(failed.stdout+failed.stderr)[-1500:]
+                print('Rejected ordered-owner defect mutation: '+name)
+            if requested.chain_only:return
         subprocess.run([str(tmp/'test')],env=environment,check=True,timeout=25)
         subprocess.run([str(tmp/'test'),'--external-close'],env=environment,check=True,timeout=25)
         subprocess.run([str(tmp/'test'),'--mtu-close'],env=environment,check=True,timeout=25)
         subprocess.run([str(tmp/'test'),'--tor-server-physical-close'],env=environment,check=True,timeout=25)
+        if requested.shipping_only:return
         broken=tmp/'Broken.swift'
         text=ENGINE.read_text()
         foreign_cancel='            guard let probe = owners[id] else {'

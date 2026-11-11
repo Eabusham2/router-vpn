@@ -25,6 +25,11 @@ public final class LibboxRouterMultihop:NSObject {
  public func healthy()->Bool{valid}
  public func mtuProfile()->String{"{\"mtu_policy\":\"auto\"}"}
 }
+public final class LibboxRouterNodeChain:NSObject {
+ public var valid=true
+ public func healthy()->Bool{valid}
+ public func mtuProfile()->String{"{\"mtu_policy\":\"auto\"}"}
+}
 
 public final class LibboxRouterExternalProofRequest:NSObject { public var valid=true }
 public final class LibboxRouterTorProofRequest:NSObject { public var valid=true;public var entryJumbo=false;public var entryFixedMTU:Int32=0 }
@@ -39,6 +44,7 @@ public enum FakeOS {
  nonisolated(unsafe) public static var startCalls=0
  nonisolated(unsafe) public static var closes=0
  nonisolated(unsafe) public static var current:LibboxRouterMTU?
+ nonisolated(unsafe) public static var chain:LibboxRouterNodeChain?
  nonisolated(unsafe) public static var externalArguments:[String]=[]
  nonisolated(unsafe) public static var externalProof:LibboxRouterExternalProofRequest?
  nonisolated(unsafe) public static var externalCreated:(()->Void)?
@@ -83,6 +89,11 @@ public func LibboxRouterImportedEntryMTUProfile(_ plan:LibboxRouterMultihop?)->S
 public func LibboxRouterImportedEntryNewMTU(_ plan:LibboxRouterMultihop?,_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
  guard plan?.healthy()==true else{error?.pointee=NSError(domain:"ImportedMTUFixture",code:1);return nil}
  return LibboxNewRouterMTU(server,platform,"exact imported graph",plan?.mtuProfile(),error)
+}
+public func LibboxRouterNodeChainMTUProfile(_ plan:LibboxRouterNodeChain?)->String?{plan?.mtuProfile() ?? ""}
+public func LibboxRouterNodeChainNewMTU(_ plan:LibboxRouterNodeChain?,_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
+ guard plan?.healthy()==true else{error?.pointee=NSError(domain:"NodeChainMTUFixture",code:1);return nil}
+ FakeOS.chain=plan;return LibboxNewRouterMTU(server,platform,"exact ordered graph",plan?.mtuProfile(),error)
 }
 public func LibboxNewRouterExternalMTU(_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ proof:LibboxRouterExternalProofRequest?,_ source:String?,_ capture:String?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
  FakeOS.externalArguments=[source ?? "",capture ?? ""];FakeOS.externalProof=proof
@@ -303,6 +314,27 @@ let startsBeforeInvalid=FakeOS.starts
 rejects("retired imported plan activated MTU"){try invalidImported.activateImported(server:LibboxCommandServer(),plan:invalidPlan){_ in}}
 check(!invalidImported.hasOwner && FakeOS.starts==startsBeforeInvalid,"unproved imported plan reached native mutation")
 invalidImported.stop()
+for startupHold in ["",id] {
+ let chain=ready(startupHold),plan=LibboxRouterNodeChain(),starts=FakeOS.starts
+ try chain.activateNodeChain(server:LibboxCommandServer(),plan:plan){_ in}
+ check(chain.hasOwner && FakeOS.chain === plan && FakeOS.starts==starts+(startupHold.isEmpty ? 1:0),"ordered MTU lost its complete native plan or startup hold")
+ let before=chain.proofObservationToken,state=chain.captureMTU()!
+ try chain.beginMTUChange(state)
+ check(chain.isChanging && chain.proofObservationToken==nil,"ordered proof observer escaped the original MTU transaction")
+ try chain.endMTUChange()
+ check(!chain.isChanging && chain.proofObservationToken != nil && chain.proofObservationToken != before,"ordered proof observer reused a prior MTU generation")
+ if !startupHold.isEmpty {
+  _=request(chain,"mtu-release",id,state.session)
+  check(FakeOS.starts==starts+1,"ordered Auto did not resume after original hold")
+ }
+ let core=FakeOS.current!;try chain.stopChecked()
+ check(core.closed && chain.captureMTU()==nil,"ordered MTU Stop forgot original native owner")
+}
+let invalidChain=ready(),invalidChainPlan=LibboxRouterNodeChain();invalidChainPlan.valid=false
+let chainStarts=FakeOS.starts
+rejects("unproved ordered plan activated MTU"){try invalidChain.activateNodeChain(server:LibboxCommandServer(),plan:invalidChainPlan){_ in}}
+check(!invalidChain.hasOwner && FakeOS.starts==chainStarts,"unproved ordered plan reached native mutation")
+invalidChain.stop()
 for raw in ["{}", "{\"mtu_policy\":\"\"}", "{\"mtu_policy\":\" AUTO \"}"] {
  let alias=ready();let count=FakeOS.starts
  alias.activate(server:LibboxCommandServer(),config:"{}",profile:raw){_ in}

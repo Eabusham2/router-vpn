@@ -18,6 +18,7 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
     private var expectedMTU: Int32 = 0
     private var opening: UUID?
     private var changing = false
+    private var proofObservationEpoch = UUID()
     private var stopped = false
     private var invalid = false
     private var activated = false
@@ -78,7 +79,7 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
         stateLock.lock(); defer { stateLock.unlock() }
         guard !stopped, !invalid, (1280...9000).contains(mtu), opening == nil,
               readerID.isEmpty || changing else { throw failure("Unowned or stale MTU TUN replacement") }
-        let token = UUID(); opening = token
+        let token = UUID(); opening = token; proofObservationEpoch = UUID()
         return token
     }
     func didOpen(_ token: UUID, mtu: Int32) throws {
@@ -107,6 +108,12 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
     var isChanging: Bool {
         stateLock.lock(); defer { stateLock.unlock() }
         return changing || opening != nil
+    }
+    /// A health failure sampled across this exact TUN mutation is retried
+    /// after its native successor proof. Ordinary probe work never changes it.
+    var proofObservationToken: UUID? {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return changing || opening != nil ? nil : proofObservationEpoch
     }
     func invalidate() {
         stateLock.lock(); invalid = true; let captured = core; stateLock.unlock()
@@ -171,6 +178,15 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
               activateOwned(profile: profile, onAbort: onAbort, create: { createError in
                   LibboxRouterImportedEntryNewMTU(plan, server, self, &createError)
               }) else { throw failure("Imported MTU could not retain its original proved graph") }
+    }
+
+    func activateNodeChain(server: LibboxCommandServer, plan: LibboxRouterNodeChain,
+                           onAbort: @escaping @Sendable (String) -> Void) throws {
+        let capturedProfile: String? = LibboxRouterNodeChainMTUProfile(plan)
+        guard let profile = capturedProfile, !profile.isEmpty, profile.utf8.count <= 65536, plan.healthy(),
+              activateOwned(profile: profile, onAbort: onAbort, create: { createError in
+                  LibboxRouterNodeChainNewMTU(plan, server, self, &createError)
+              }) else { throw failure("Ordered MTU could not retain every captured prefix and its proved native TUN") }
     }
 
     func activateExternal(server: LibboxCommandServer, proof: LibboxRouterExternalProofRequest,
@@ -261,7 +277,7 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
     func beginMTUChange(_ expected: LibboxRouterMTUState?) throws {
         stateLock.lock(); defer { stateLock.unlock() }
         guard !changing, opening == nil, same(captureMTU(), expected) else { throw failure("Stale MTU mutation") }
-        changing = true
+        changing = true; proofObservationEpoch = UUID()
     }
     func endMTUChange() throws {
         defer { stateLock.lock(); changing = false; stateLock.unlock() }

@@ -13,6 +13,9 @@ final class RouterVPNLibboxEngine {
     private var configContent = ""
     private var runtimeRoot: URL?
     private var multihop: LibboxRouterMultihop?
+    private var nodeChain: LibboxRouterNodeChain?
+    private var nodeChainDelivery: NodeChainDelivery?
+    private var pendingNodeChainCleanup: NodeChainCleanup?
     private var importedMultihop = false
     private var multihopExecutionSource: IOSMultihopExecution.Source?
     private var hopMeasurement: LibboxRouterHopMeasurement?
@@ -63,7 +66,12 @@ final class RouterVPNLibboxEngine {
         try start(files: files, strict: strict, multihopMetadata: nil, externalPolicy: externalPolicy)
     }
 
-    func start(files: [String: Data], strict: Bool, multihopMetadata: String?, entryStartLayerSource: String? = nil, exitStartLayerSource: String? = nil, externalPolicy: RouterVPNExternalPolicy? = nil, importedPlan: LibboxRouterMultihop? = nil) throws {
+    func start(nodeChain plan: LibboxRouterNodeChain, strict: Bool) throws {
+        try start(files: ["sing-box.json": Data(plan.config().utf8)], strict: strict,
+                  multihopMetadata: nil, nodeChainPlan: plan)
+    }
+
+    func start(files: [String: Data], strict: Bool, multihopMetadata: String?, entryStartLayerSource: String? = nil, exitStartLayerSource: String? = nil, externalPolicy: RouterVPNExternalPolicy? = nil, importedPlan: LibboxRouterMultihop? = nil, nodeChainPlan: LibboxRouterNodeChain? = nil) throws {
         try Self.torRetirement.requireAvailable()
         try Self.torServerRetirement.requireAvailable()
         try Self.externalRetirement.requireAvailable()
@@ -89,8 +97,23 @@ final class RouterVPNLibboxEngine {
         try RouterVPNPQFactory.install()
         guard externalPolicy == nil || (multihopMetadata == nil && entryStartLayerSource == nil && exitStartLayerSource == nil) else { throw error("External policy cannot replace another native graph owner") }
         guard importedPlan == nil || (multihopMetadata == nil && externalPolicy == nil && entryStartLayerSource == nil && exitStartLayerSource == nil) else { throw error("Imported entry cannot replace another graph owner") }
+        guard nodeChainPlan == nil || (multihopMetadata == nil && externalPolicy == nil && importedPlan == nil && entryStartLayerSource == nil && exitStartLayerSource == nil) else { throw error("Ordered chain cannot replace another graph owner") }
         var safeFiles: [String: Data]
-        if let importedPlan {
+        if let nodeChainPlan {
+            guard files.count == 1, let compiled = files["sing-box.json"], !compiled.isEmpty, compiled.count <= 4 * 1024 * 1024,
+                  compiled == Data(nodeChainPlan.config().utf8),
+                  nodeChainPlan.sourceSHA256().range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+                  nodeChainPlan.configSHA256().range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else {
+                throw error("Ordered graph lost its exact compiler source")
+            }
+            // The sealed graph already owns every prefix proof. Injecting the
+            // legacy pair proxy would alter its hash and its route authority.
+            safeFiles = files
+            ownershipLock.lock()
+            guard ownershipGeneration == generation else { ownershipLock.unlock(); try? nodeChainPlan.close(); throw error("Ordered startup was cancelled") }
+            nodeChain = nodeChainPlan
+            ownershipLock.unlock()
+        } else if let importedPlan {
             guard files.count == 1, let compiled = files["sing-box.json"], !compiled.isEmpty, compiled.count <= 4 * 1024 * 1024,
                   compiled == Data(importedPlan.config().utf8),
                   importedPlan.sourceSHA256().range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { throw error("Imported graph lost its exact compiler source") }
@@ -102,7 +125,7 @@ final class RouterVPNLibboxEngine {
         } else { safeFiles = try validateAndInjectProof(files, externalPolicy: externalPolicy) }
         let execution = try prepareTorState(safeFiles)
         let tor = execution != nil
-        guard !tor || multihopMetadata == nil else { throw error("Tor owns its complete native graph and cannot adopt another comparison controller") }
+        guard !tor || (multihopMetadata == nil && nodeChainPlan == nil) else { throw error("Tor owns its complete native graph and cannot adopt another comparison controller") }
         ownershipLock.lock(); torOwned = tor; torExecution = execution; ownershipLock.unlock()
         if let multihopMetadata {
             guard let raw = safeFiles["sing-box.json"], let text = String(data: raw, encoding: .utf8) else { throw error("Missing multihop graph") }
@@ -157,6 +180,10 @@ final class RouterVPNLibboxEngine {
     }
 
     func stop() { _ = stopGeneration(nil) }
+    var ownsNodeChain: Bool {
+        ownershipLock.lock(); defer { ownershipLock.unlock() }
+        return nodeChain != nil || pendingNodeChainCleanup != nil
+    }
     func stopCheckedForStrategy() throws {
         if let failure = stopGeneration(nil) { throw failure }
     }
@@ -164,6 +191,11 @@ final class RouterVPNLibboxEngine {
         ownershipLock.lock()
         if let expected, expected != ownershipGeneration { ownershipLock.unlock(); return nil }
         if permanentlyStopped {
+            if let cleanup = pendingNodeChainCleanup, !stopInProgress {
+                stopInProgress = true
+                ownershipLock.unlock()
+                return finishNodeChainCleanup(cleanup)
+            }
             if let cleanup = pendingTorCleanup, !stopInProgress {
                 stopInProgress = true
                 ownershipLock.unlock()
@@ -177,7 +209,15 @@ final class RouterVPNLibboxEngine {
         ownershipGeneration = UUID()
         let plan = multihop, owned = server, health = multihopHealth, directory = runtimeRoot, probe = hopMeasurement, paddingHealth = performanceHealth, torDelivery = torProofDelivery, capturedTor = torOwned, torHealth = self.torHealth
         let externalDelivery = externalProofDelivery, externalHealth = self.externalHealth, capturedExternal = externalPolicy != nil
+        let chain = nodeChain, chainDelivery = nodeChainDelivery
         let dnsProbe = dnsMeasurement; dnsMeasurement = nil
+        var chainCleanup: NodeChainCleanup?
+        if let chain {
+            chainCleanup = NodeChainCleanup(server: owned, platform: platform, directory: directory, plan: chain,
+                delivery: chainDelivery, measurement: probe, dns: dnsProbe)
+            pendingNodeChainCleanup = chainCleanup
+            Self.measurementRetirement.retain(chainCleanup!)
+        }
         var torCleanup: TorServerCleanup?
         if let owned, let torDelivery, torDelivery.serverExecuted {
             torCleanup = TorServerCleanup(server: owned, platform: platform, directory: directory, proof: torDelivery, measurement: probe, dns: dnsProbe)
@@ -188,11 +228,19 @@ final class RouterVPNLibboxEngine {
         torProofDelivery = nil
         self.torHealth = nil
         externalProofDelivery = nil; self.externalHealth = nil; externalPolicy = nil
+        nodeChain = nil; nodeChainDelivery = nil
         ownershipLock.unlock()
+        chainDelivery?.cancel()
         torDelivery?.cancel()
         torHealth?.cancel()
         externalDelivery?.cancel()
         externalHealth?.cancel()
+        if let chainCleanup {
+            health?.cancel(); paddingHealth?.cancel()
+            if let owned { LibboxRouterInvalidatePerformance(owned) }
+            if let probe { Self.retiredMeasurements.retain(probe, session: settingsEpoch) }
+            return finishNodeChainCleanup(chainCleanup)
+        }
         if let torCleanup {
             health?.cancel(); paddingHealth?.cancel()
             if let owned { LibboxRouterInvalidatePerformance(owned) }
@@ -269,6 +317,69 @@ final class RouterVPNLibboxEngine {
         let result = nativeCloseFailure
         ownershipLock.unlock()
         return result
+    }
+
+    private func finishNodeChainCleanup(_ cleanup: NodeChainCleanup) -> Error? {
+        var failure: Error?
+        do { try cleanup.close(); Self.measurementRetirement.release(cleanup) }
+        catch { failure = error }
+        ownershipLock.lock()
+        if pendingNodeChainCleanup === cleanup {
+            if failure == nil { pendingNodeChainCleanup = nil }
+            nativeCloseFailure = failure
+        }
+        stopInProgress = false
+        ownershipLock.unlock()
+        return failure
+    }
+
+    /// A failed proof join retains its original Box and TUN in the existing
+    /// native retirement gate. Retry cannot discover a replacement service.
+    private final class NodeChainCleanup: @unchecked Sendable {
+        private let lock = NSLock()
+        private let server: LibboxCommandServer?
+        private let platform: RouterVPNLibboxPlatform
+        private let directory: URL?
+        private let plan: LibboxRouterNodeChain
+        private let delivery: NodeChainDelivery?
+        private let measurement: LibboxRouterHopMeasurement?
+        private let dns: RouterVPNDNSMeasurementSession?
+        private var nativeClosed = false, resourcesClosed = false, complete = false
+        init(server: LibboxCommandServer?, platform: RouterVPNLibboxPlatform, directory: URL?, plan: LibboxRouterNodeChain,
+             delivery: NodeChainDelivery?, measurement: LibboxRouterHopMeasurement?, dns: RouterVPNDNSMeasurementSession?) {
+            self.server = server; self.platform = platform; self.directory = directory; self.plan = plan
+            self.delivery = delivery; self.measurement = measurement; self.dns = dns
+        }
+        func close() throws {
+            lock.lock(); defer { lock.unlock() }
+            if complete { return }
+            delivery?.cancel()
+            plan.networkChanged(); platform.mtu.invalidate()
+            measurement?.networkChanged(); dns?.networkChanged()
+            // Cancel all original I/O before closing the Box. A failed first
+            // join is retried after that exact service has released its sockets.
+            try? plan.close(); try? platform.mtu.stopChecked()
+            try? measurement?.close(); try? dns?.close()
+            var nativeFailure: Error?
+            if !nativeClosed {
+                if let server {
+                    var failure: NSError?
+                    let stopped = LibboxRouterStrategyCloseService(server, &failure)
+                    if stopped && failure == nil { nativeClosed = true }
+                    else { nativeFailure = failure ?? NSError(domain: "RouterVPN.NodeChain", code: 3,
+                        userInfo: [NSLocalizedDescriptionKey: "The original ordered native service has not finished shutting down."]) }
+                } else { nativeClosed = true }
+            }
+            var drainFailure: Error?
+            do { try plan.close() } catch { drainFailure = error }
+            do { try measurement?.close() } catch { if drainFailure == nil { drainFailure = error } }
+            do { try dns?.close() } catch { if drainFailure == nil { drainFailure = error } }
+            do { try platform.mtu.stopChecked() } catch { if drainFailure == nil { drainFailure = error } }
+            if let failure = nativeFailure ?? drainFailure { throw failure }
+            if !resourcesClosed { server?.close(); platform.reset(); resourcesClosed = true }
+            if let directory, FileManager.default.fileExists(atPath: directory.path) { try FileManager.default.removeItem(at: directory) }
+            complete = true
+        }
     }
 
     private func finishTorCleanup(_ cleanup: TorServerCleanup) -> Error? {
@@ -776,13 +887,22 @@ final class RouterVPNLibboxEngine {
         private let lock = NSLock()
         private let label: String
         private var retired: [(LibboxCommandServer, RouterVPNLibboxPlatform, URL?, LibboxRouterHopMeasurement?, ExternalProofDelivery?)] = []
+        private var chains: [NodeChainCleanup] = []
         init(label: String) { self.label = label }
         func retain(server: LibboxCommandServer, platform: RouterVPNLibboxPlatform, directory: URL?, failure: Error, measurement: LibboxRouterHopMeasurement? = nil, externalProof: ExternalProofDelivery? = nil) {
             lock.lock(); retired.append((server, platform, directory, measurement, externalProof)); lock.unlock()
         }
+        func retain(_ cleanup: NodeChainCleanup) {
+            lock.lock(); defer { lock.unlock() }
+            if !chains.contains(where: { $0 === cleanup }) { chains.append(cleanup) }
+        }
+        func release(_ cleanup: NodeChainCleanup) {
+            lock.lock(); chains.removeAll { $0 === cleanup }; lock.unlock()
+        }
         func requireAvailable() throws {
-            lock.lock(); let blocked = !retired.isEmpty; lock.unlock()
+            lock.lock(); let blocked = !retired.isEmpty, pending = chains; lock.unlock()
             if blocked { throw NSError(domain: "RouterVPN.NativeRetirement", code: 3, userInfo: [NSLocalizedDescriptionKey: "\(label) shutdown was not confirmed. Restart the VPN extension before starting another connection."]) }
+            for cleanup in pending { try cleanup.close(); release(cleanup) }
         }
     }
 
@@ -834,6 +954,23 @@ final class RouterVPNLibboxEngine {
         let current = multihop === plan && server === owned && ownershipGeneration == generation && !permanentlyStopped
         ownershipLock.unlock()
         guard current, plan.healthy() else { platform.mtu.stop(); throw error("Imported MTU belongs to a retired native generation") }
+    }
+    func activateNodeChainMTU() throws {
+        ownershipLock.lock()
+        let plan = nodeChain, owned = server, generation = ownershipGeneration
+        let available = nodeChainDelivery != nil && !starting && !permanentlyStopped
+        ownershipLock.unlock()
+        guard available, let plan, let owned, plan.healthy() else { throw error("Ordered MTU lost its proved native plan") }
+        let delivery = MTUFailureDelivery(owner: self, generation: generation)
+        try platform.mtu.activateNodeChain(server: owned, plan: plan) { message in delivery.fail(message) }
+        ownershipLock.lock()
+        let current = nodeChain === plan && server === owned && ownershipGeneration == generation && !permanentlyStopped
+        ownershipLock.unlock()
+        // Auto may already be replacing this captured TUN reader. The native
+        // transaction rejoins the same chain before releasing isChanging.
+        guard current, platform.mtu.isChanging || plan.healthy() else {
+            platform.mtu.stop(); throw error("Ordered MTU belongs to a retired native generation")
+        }
     }
     func activateExternalMTU() throws {
         ownershipLock.lock()
@@ -929,6 +1066,81 @@ final class RouterVPNLibboxEngine {
         let delivery = MultihopDelivery(owner: self, plan: plan, server: owned,
                                         generation: generation, completion: completion)
         DispatchQueue.global(qos: .userInitiated).async { delivery.run() }
+    }
+
+    func completeNodeChainExecution(_ completion: @escaping (Error?) -> Void) {
+        ownershipLock.lock()
+        guard let plan = nodeChain, let owned = server, nodeChainDelivery == nil, !starting, !permanentlyStopped else {
+            ownershipLock.unlock(); completion(error("Ordered proof has no captured native service")); return
+        }
+        let delivery = NodeChainDelivery(owner: self, plan: plan, server: owned,
+            generation: ownershipGeneration, completion: completion)
+        nodeChainDelivery = delivery
+        ownershipLock.unlock()
+        DispatchQueue.global(qos: .userInitiated).async { delivery.run() }
+    }
+
+    private final class NodeChainDelivery: @unchecked Sendable {
+        private weak var owner: RouterVPNLibboxEngine?
+        private let plan: LibboxRouterNodeChain
+        private let server: LibboxCommandServer
+        private let generation: UUID
+        private let lock = NSLock()
+        private var callback: ((Error?) -> Void)?
+        private var started = false, cancelled = false
+        init(owner: RouterVPNLibboxEngine, plan: LibboxRouterNodeChain, server: LibboxCommandServer,
+             generation: UUID, completion: @escaping (Error?) -> Void) {
+            self.owner = owner; self.plan = plan; self.server = server; self.generation = generation; callback = completion
+        }
+        private func current(_ owner: RouterVPNLibboxEngine) -> Bool {
+            owner.ownershipLock.lock(); defer { owner.ownershipLock.unlock() }
+            return owner.nodeChain === plan && owner.server === server && owner.nodeChainDelivery === self &&
+                owner.ownershipGeneration == generation && !owner.permanentlyStopped
+        }
+        private func finish(_ error: Error?) {
+            lock.lock(); let completion = callback; callback = nil
+            let delivered = cancelled ? (error ?? retired()) : error
+            lock.unlock(); completion?(delivered)
+        }
+        func cancel() {
+            lock.lock(); cancelled = true; lock.unlock()
+            plan.networkChanged(); finish(retired())
+        }
+        func run() {
+            lock.lock()
+            guard !started, !cancelled else { lock.unlock(); return }
+            started = true; lock.unlock()
+            do {
+                guard let owner, current(owner) else { throw retired() }
+                try plan.run(server)
+                guard current(owner), plan.healthy(), current(owner) else { throw retired() }
+                let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+                timer.schedule(deadline: .now() + 1, repeating: 1)
+                timer.setEventHandler { [self] in checkHealth() }
+                owner.ownershipLock.lock()
+                let valid = owner.nodeChain === plan && owner.server === server && owner.nodeChainDelivery === self &&
+                    owner.ownershipGeneration == generation && !owner.permanentlyStopped
+                if valid { owner.multihopHealth?.cancel(); owner.multihopHealth = timer; timer.resume() }
+                owner.ownershipLock.unlock()
+                guard valid else { timer.setEventHandler {}; timer.resume(); timer.cancel(); throw retired() }
+                finish(nil)
+            } catch { finish(error) }
+        }
+        func progress() -> Data? {
+            guard let owner, current(owner) else { return nil }
+            let data = Data(plan.progressJSON().utf8)
+            guard !data.isEmpty, data.count <= 16384, current(owner) else { return nil }
+            return data
+        }
+        private func checkHealth() {
+            guard let owner, current(owner), let mtuObservation = owner.platform.mtu.proofObservationToken else { return }
+            let healthy = plan.healthy()
+            guard !healthy, current(owner), owner.platform.mtu.proofObservationToken == mtuObservation else { return }
+            owner.tunnel?.nativeLibboxFailure(owner, error: owner.error("An ordered node identity, selected DNS or native path proof expired. Reconnect to verify the complete chain."))
+        }
+        private func retired() -> NSError {
+            NSError(domain: "RouterVPN.NodeChain", code: 2, userInfo: [NSLocalizedDescriptionKey: "The ordered proof belongs to a retired native service."])
+        }
     }
 
     /// Only this delivery object crosses Dispatch's Sendable boundary. The
@@ -1197,7 +1409,8 @@ final class RouterVPNLibboxEngine {
         }
     }
     func multihopProgress() -> Data? {
-        ownershipLock.lock(); let plan = multihop, external = externalProofDelivery; ownershipLock.unlock()
+        ownershipLock.lock(); let plan = multihop, external = externalProofDelivery, chain = nodeChainDelivery; ownershipLock.unlock()
+        if let chain { return chain.progress() }
         guard let plan else { return external?.progress() }
         let data = Data(plan.progressJSON().utf8)
         return data.count <= 16384 ? data : nil
@@ -1300,7 +1513,9 @@ final class RouterVPNLibboxEngine {
     }
     func invalidateMultihop() {
         platform.mtu.invalidate()
-        ownershipLock.lock(); let plan = multihop, probe = hopMeasurement, dnsProbe = dnsMeasurement, owned = server, torDelivery = torProofDelivery, externalDelivery = externalProofDelivery; ownershipLock.unlock()
+        ownershipLock.lock(); let plan = multihop, probe = hopMeasurement, dnsProbe = dnsMeasurement, owned = server, torDelivery = torProofDelivery, externalDelivery = externalProofDelivery, chain = nodeChainDelivery, chainPlan = nodeChain; ownershipLock.unlock()
+        chainPlan?.networkChanged()
+        chain?.cancel()
         torDelivery?.cancel()
         externalDelivery?.cancel()
         if let owned { LibboxRouterInvalidatePerformance(owned) }
@@ -1309,7 +1524,9 @@ final class RouterVPNLibboxEngine {
     }
     func pause() {
         platform.mtu.invalidate()
-        ownershipLock.lock(); let plan = multihop, owned = server, probe = hopMeasurement, dnsProbe = dnsMeasurement, torDelivery = torProofDelivery, externalDelivery = externalProofDelivery; ownershipLock.unlock()
+        ownershipLock.lock(); let plan = multihop, owned = server, probe = hopMeasurement, dnsProbe = dnsMeasurement, torDelivery = torProofDelivery, externalDelivery = externalProofDelivery, chain = nodeChainDelivery, chainPlan = nodeChain; ownershipLock.unlock()
+        chainPlan?.networkChanged()
+        chain?.cancel()
         torDelivery?.cancel()
         externalDelivery?.cancel()
         if let owned { LibboxRouterInvalidatePerformance(owned) }
@@ -1320,7 +1537,7 @@ final class RouterVPNLibboxEngine {
     private func startService() throws {
         ownershipLock.lock(); let owned = server, content = configContent; ownershipLock.unlock()
         guard let server = owned, !content.isEmpty else { throw error("Libbox service is not configured") }
-        if strategyOwned || torOwned || externalPolicy != nil {
+        if strategyOwned || torOwned || externalPolicy != nil || nodeChain != nil {
             var failure: NSError?
             let started = LibboxRouterStrategyStartService(server, content, &failure)
             if let failure { throw failure }
@@ -1328,7 +1545,7 @@ final class RouterVPNLibboxEngine {
         } else { try server.startOrReloadService(content, options: LibboxOverrideOptions()) }
     }
     private func closeService() throws {
-        if strategyOwned || torOwned || externalPolicy != nil || platform.mtu.hasOwner {
+        if strategyOwned || torOwned || externalPolicy != nil || nodeChain != nil || platform.mtu.hasOwner {
             tunnel?.nativeLibboxFailure(self, error: error("The owned native strategy requested service stop."))
             return
         }
@@ -1336,7 +1553,7 @@ final class RouterVPNLibboxEngine {
     }
     private func reloadService() throws {
         guard !strategyOwned, !torOwned, externalPolicy == nil else { throw error("Provider strategies, Tor and external policies require a fresh owned native generation") }
-        ownershipLock.lock(); let comparing = multihop != nil || hopMeasurement != nil || performanceHealth != nil; ownershipLock.unlock()
+        ownershipLock.lock(); let comparing = multihop != nil || nodeChain != nil || hopMeasurement != nil || performanceHealth != nil; ownershipLock.unlock()
         guard !comparing, !platform.mtu.hasOwner else { throw error("Native reload requires a fresh owned comparison and MTU session") }
         try startService()
     }
