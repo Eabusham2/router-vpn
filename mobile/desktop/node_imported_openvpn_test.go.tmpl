@@ -598,13 +598,15 @@ func desktopImportedOpenVPNNative(t *testing.T, ctx context.Context, raw map[str
 		var o option.WireGuardEndpointOptions
 		err = json.Unmarshal(body, &o)
 		if err == nil {
-			out, err = WG.NewEndpoint(ctx, nil, log.NewNOPFactory().Logger(), tag, o)
+			// Like the shipping Box, retain this graph's inbound owner. A late
+			// decrypted reply may enter the protocol callback during teardown.
+			out, err = WG.NewEndpoint(ctx, service.FromContext[adapter.Router](ctx), log.NewNOPFactory().Logger(), tag, o)
 		}
 	case mobilemultihop.AmneziaType:
 		var o Options
 		err = json.Unmarshal(body, &o)
 		if err == nil {
-			out, err = NewEndpoint(ctx, nil, log.NewNOPFactory().Logger(), tag, o)
+			out, err = NewEndpoint(ctx, service.FromContext[adapter.Router](ctx), log.NewNOPFactory().Logger(), tag, o)
 		}
 	case "hysteria2":
 		var o option.Hysteria2OutboundOptions

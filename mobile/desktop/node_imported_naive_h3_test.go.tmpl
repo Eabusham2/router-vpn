@@ -37,10 +37,83 @@ import (
 	NV "github.com/sagernet/sing-box/protocol/naive"
 	OV "github.com/sagernet/sing-box/protocol/openvpn"
 	SOCKS "github.com/sagernet/sing-box/protocol/socks"
+	"github.com/sagernet/sing/common/bufio"
 	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
 )
+
+// The native protocol callbacks remain reachable after an outbound UDP socket
+// closes: a late reply can become an inbound flow. Exercise the real captured
+// WG/AWG endpoints so a missing fixture router cannot hide behind a quiet peer.
+func TestRouterVPNImportedNaiveH3PacketIngress(t *testing.T) {
+	for _, kind := range []string{"wireguard", "amneziawg"} {
+		for _, state := range []string{"active", "retiring", "cancelled"} {
+			for _, network := range []string{"tcp", "udp"} {
+				t.Run(kind+"/"+state+"/"+network, func(t *testing.T) {
+					original := desktopImportedNaiveH3Source(t, kind, "off", "off")
+					graph := desktopImportedSOCKSGraph(desktopImportedSOCKSXrayObject(t, original[8]))
+					ctx, cancel := context.WithCancel(pause.WithDefaultManager(context.Background()))
+					defer cancel()
+					ingress := &desktopImportedOpenVPNIngress{t: t}
+					// The full reference uses the same captured lower owner. This
+					// callback-only case never starts it or sends physical traffic.
+					lower := newDesktopPacketRealityPhysical("udp", M.ParseSocksaddr("192.0.2.1:51820"), "127.0.0.1:51820")
+					defer lower.Close()
+					manager := &desktopImportedSOCKSXrayManager{owners: map[string]adapter.Outbound{lower.Tag(): lower}}
+					graph["entry-wg"]["detour"] = lower.Tag()
+					owned := service.ContextWith[adapter.NetworkManager](ctx, &desktopImportedPacketNetwork{})
+					owned = service.ContextWith[adapter.OutboundManager](owned, manager)
+					owned = service.ContextWith[adapter.Router](owned, ingress)
+					out := desktopImportedOpenVPNNative(t, owned, graph["entry-wg"])
+					defer out.(io.Closer).Close()
+					handler, ok := out.(interface {
+						NewConnectionEx(context.Context, net.Conn, M.Socksaddr, M.Socksaddr, N.CloseHandlerFunc)
+						NewPacketConnectionEx(context.Context, N.PacketConn, M.Socksaddr, M.Socksaddr, N.CloseHandlerFunc)
+					})
+					if !ok {
+						t.Fatal("captured packet endpoint lost its native ingress callbacks")
+					}
+					if state == "retiring" {
+						ingress.retiring.Store(true)
+					} else if state == "cancelled" {
+						cancel()
+					}
+					var callbacks atomic.Int64
+					done := func(error) { callbacks.Add(1) }
+					source, target := M.ParseSocksaddr("192.0.2.10:443"), M.ParseSocksaddr("10.78.0.2:54321")
+					if network == "tcp" {
+						client, peer := net.Pipe()
+						defer peer.Close()
+						defer client.Close()
+						handler.NewConnectionEx(owned, client, source, target, done)
+						if _, err := client.Write([]byte{1}); !errors.Is(err, io.ErrClosedPipe) {
+							t.Fatal("captured ingress did not close its original stream", err)
+						}
+					} else {
+						connection, err := net.ListenPacket("udp4", "127.0.0.1:0")
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer connection.Close()
+						handler.NewPacketConnectionEx(owned, bufio.NewPacketConn(connection), source, target, done)
+						if _, err := connection.WriteTo([]byte{1}, connection.LocalAddr()); !errors.Is(err, net.ErrClosed) {
+							t.Fatal("captured ingress did not close its original packet socket", err)
+						}
+					}
+					want := int64(0)
+					if state == "active" {
+						want = 1
+					}
+					if callbacks.Load() != 1 || ingress.active.Load() != want {
+						t.Fatal("native ingress escaped captured ownership or concealed active unsolicited traffic")
+					}
+				})
+			}
+		}
+	}
+}
 
 // These are userspace protocol/proof witnesses using the original captured
 // source and a mandatory real physical-interface inventory. They never mark

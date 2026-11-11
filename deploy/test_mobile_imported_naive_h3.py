@@ -78,6 +78,9 @@ LOOPBACK = {
     'TestRouterVPNImportedNaiveH3SOCKSAssociation': tuple(layer+'/'+fault for layer in LAYERS
         for fault in ('success', 'relay-route', 'control-eof', 'cancelled')),
     'TestRouterVPNDesktopNodeNaiveH3StreamOwner': ('owner-cancellation', 'caller-deadline'),
+    'TestRouterVPNImportedNaiveH3PacketIngress': tuple(kind+'/'+state+'/'+network
+        for kind in ('wireguard', 'amneziawg')
+        for state in ('active', 'retiring', 'cancelled') for network in ('tcp', 'udp')),
 }
 
 
