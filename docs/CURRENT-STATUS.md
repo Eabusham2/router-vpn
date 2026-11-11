@@ -6,10 +6,10 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 11 later continuation: Android ordered native ownership
+## November 11 later continuation: native ordered paths and protected hosts
 
 The [native repair and ordered-path evidence ledger](CONTINUATION-EVIDENCE-2026-11-11-NATIVE-REPAIRS.md)
-continues from live `62bfab03` and records published source through `ef2cf17f`.
+continues from live `62bfab03` and records published source through `c4e55240`.
 Original requirement passages and the historical 1–356 index, C1–C7, product
 fixes, map-first request and additional-node corrections were recovered again.
 The earlier `745b3e41` release does not certify the current source.
@@ -53,7 +53,12 @@ GTK ordered editor and complete profile flow are published at `8f6edebb`, with
 266 model/serialization/persistence checks, six controls and strict full-source
 GCC compilation. Its actual display callbacks remain CI evidence because this
 local environment has no display and refused the required AF_UNIX operation.
-The protected macOS ordered native host remains implementation work.
+The protected macOS ordered native host remains implementation work. Its typed
+process/manifest foundation is published at `f916767e`, and the distinct ordered
+PF capture and receipt on the existing guarded journal is published at
+`2cb5e773`. The latter passed 18 baseline and 60 owned-PF tests, all 29 causal
+controls, portable Go race tests and Darwin amd64/arm64 controller
+cross-compilation. Neither unit enables an incomplete native host.
 The Linux/Windows physical-target guard now admits those exact mixed prefixes
 at `f4032c4a`, retaining each original sealed mode/proof identity. The actual Box
 race gate passed four roots/27 subtests, and restoring the earlier WG-only
@@ -90,6 +95,42 @@ at `52576a3e`. Newer source fixes repair the Tor/usage fixture compositions and
 the shared runtime's Gradle cache input. A complete release at one current SHA
 is still required, along with signing, physical acceptance and authorized
 private deployment. The detailed ledger preserves exact failure and pass identities.
+
+## November 11 executor interruption and remaining source
+
+Complete macOS profile callbacks at `c41e2cf2` now preserve the original
+selection, complete saved graph and returned receipt through both interfaces;
+4,938 Swift composition checks and all 29 controls passed. Windows uses the
+explicit validated complete-profile route map at `d6ba22c2`. The current
+Python shipping audits (`84c22f14`) and Go launch guards (`3aaa57f5`) trace
+the actual strict request decoder, captured selected control and every original
+member revision while retaining their cancellation and source-change controls.
+
+On exact published `f916767e`, all 12 Python checks at the start of the Android
+multihop workflow passed in 440.796 seconds. All 567 discovered shared Go
+multihop tests passed exactly once with the race detector in the original nine
+phases. Two groups finished near the unchanged 180-second limit. Commit
+`c4e55240` separates ordered chains and desktop node policies into disjoint
+phases while preserving every discovered/mandatory test, all race checks and
+the original time limits. The partition self-tests and three observed split
+groups passed; the final split group's timing was not recovered after the
+executor disconnected. These results do not establish a current native APK
+or full release.
+
+The execution environment became unavailable at approximately 20:53 UTC.
+GitHub remains accessible and every completed unit above was published and
+remotely verified. A live ancestry comparison showed `c4e55240` 55 commits
+ahead of the starting `62bfab03`, with zero divergence. The latest authoritative
+release was queued when checked; no newer green release is claimed.
+
+Two unfinished source units were present locally at the interruption: desktop
+ordered Startup Last/autoconnect, and the remaining macOS descriptor/native
+bridge. Neither was frozen, fully tested or published. The detailed ledger
+records their exact file whitelists, unresolved test sessions and required
+compatibility correction. Their source contents cannot currently be read;
+a recovery manifest is not a backup of those bytes. The Naive H2 hostname/DoH3
+investigation remained read-only. Full source completion, native release,
+physical-device acceptance and private deployment remain open.
 
 ## Historical November 11 earlier continuation: native repairs and imported-path ownership
 

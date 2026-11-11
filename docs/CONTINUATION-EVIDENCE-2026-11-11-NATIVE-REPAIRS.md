@@ -1,4 +1,4 @@
-# November 11 native repair and Android ordered-path evidence
+# November 11 native repair and ordered-path evidence
 
 This additional continuation record preserves the original requirement sources
 and the earlier November 11 ledger. It does not replace either. This continuation
@@ -72,7 +72,6 @@ from a native platform job or published package.
 | `ccc919c087fba53396ca38352a3464fd3a70452d` | Add Apple per-prefix WG/AWG2 mode selection and retain the complete original standard-WG identity inventory in native ordered capture. The shared optional identity-source field preserves canonical input for existing captures that omit it. | Shared race suite passed 27 root/231 leaf cases. Actual Swift/shared-Go identity composition passed 32 checks/three controls; capture 136/four; launch 142/three; editor 98/four; presentation 95/four. Published source and these compositions do not establish device VPN or protected macOS native-host acceptance. |
 | `09b6b148d1c75a205a1830039a4dda827ef08b26` | Expose and retain exact WG/AWG2 variants in the Windows WPF and macOS AppKit ordered editors and saved-profile flows. | Windows editor checks passed 87/five controls; profile checks 2,352/five ordered controls; AppKit composition 3,517/20. Existing runtime capability admission remains enforced. The missing protected macOS ordered native host and physical UI/device acceptance are not supplied by these editor results. |
 | `0a3f8e3e6123b4d8893e897b88ba5a6c2c2da6db` | Compose the Product dialog fixture with the actual ordered chooser, current catalog and paired identity helpers while preserving the original pair actions. | All 430 checks and 12 causal controls passed against the published Android WG/AWG editor. Missing, malformed or mismatched original WG identity sources remain refused. The fixture does not substitute accepting selection helpers or claim native/device proof. |
-
 | `f14eaf956901e7619a61c52731c2706922494a0c` | Carry every Android ordered member's complete original standard-WG identity map into the shared native parser, including AWG and SS final members. | Actual Java/shared-Go capture and editor composition passed 884 checks and 22 causal controls. The selected transport asset remains separate from its original paired identity; a companion label or public-key string cannot replace the full captured WG source. |
 | `5f649db8b82ef88455ebac6fc5e2c779d95ad590` | Clear the Windows ordered mode summary when its underlying draft changes. | The actual ordered editor composition passed 90 checks including six causal controls. This verifies the captured transition, not native WPF rendering or physical UI acceptance. |
 | `67c65b23a6dd72e9ab26f2d1dd19264bc1680cb6` | Exercise Android ordered usage with independently generated original WG identities, and include the real ordered presentation helper closure in the Product worker fixture. | Usage/catalog passed 243+40+50 checks and 19 controls; actual ordered presentation passed its worker checks and both controls. Malformed final companions are imported and selected through the real store before refusal, so a stale-selection guard cannot mask the identity failure. |
@@ -82,14 +81,16 @@ from a native platform job or published package.
 | `62fa3a7917dee304538e588489a551b993cbbd20` | Include the actual ordered control refresh in the Windows asynchronous-action fixture and its emitted completion callbacks. | All 15 behavior groups passed, preserving the earlier 14 groups. A causal omission of the ordered completion refresh failed the intended assertion. Native PowerShell 5.1/WPF execution remains separate. |
 | `bd5c70122ef65bd5eb6d763ffa6fed34fb723ba2` | Admit complete ordered paths through the public desktop Connect request using their original selected control, all member revisions, canonical row fields and explicit Local execution. | The combined public admission, source, graph and legacy regression suite passed 43 roots/148 subcases with the race detector in 346.149 seconds. Unknown or mixed selection fields, changed revisions, foreign controls and legacy fallback remain refused. Source admission does not supply a missing platform host or establish physical traffic. |
 | `3899f5294eb547463334089c17faf95d85574444` | Validate every desktop ordered member's complete original WG identity source, including identities not used by the selected AWG or final SS transport. Preserve the captured first-host resolution without performing a replacement lookup. | A malformed private key in the final SS member's otherwise unused WG companion reproduced the omission before the fix. Eighteen root suites/98 subcases passed with the race detector in 15.412 seconds; installed source-authority passed its root and eight cases in 9.609 seconds. Original source bytes remain in captured digests, and the final fixture supplies a complete dual-default-route WG identity instead of loosening the parser. |
-
 | `f4032c4a2f999788e33221667072f5e27ddd91a9` | Admit exact WG, AWG2 Fast and AWG2 Strong prefixes in the Linux/Windows native physical-target guard while retaining the original sealed policy and per-prefix mode/proof identity. | The actual prepared Box race suite passed four roots/27 subtests in 40.056 seconds. Every original WG case remains; eight mixed first/intermediate/last prefix shapes use the real Amnezia endpoint constructor, independently valid wrong-mode Box/TUN owners are refused, and six changed mode/proof receipts are rejected. Restoring the old WG-only guard failed the intended mixed-factory assertion. These construction/owner tests never fabricate physical preparation, sockets or TUN readiness. |
-
-
 | `8f6edebb39d2f9e44ddaa6b85eb5fe3609cc33ff` | Add the installed Linux GTK ordered editor and complete profile Connect/Save/Update/Load path, preserving the original current graph inventory and exact returned receipts. | The actual model, serialization and persistence composition passed 266 checks and six causal controls; the full shipping source passed strict GCC compilation. Actual display callback execution remains CI evidence: this environment has no display and its required AF_UNIX operation was refused with EPERM. |
 | `ef2cf17fb3666a58452202dd524b7ed7fc2ff64e` | Bind Windows complete Setup Add/Update/Load callbacks to their original inventory and owner, with Load retaining the current saved graph independently of the selected target or draft. Validate returned receipts and retire superseded refresh ownership. | The actual callback composition passed 3,115 checks and 19 causal controls. These source/host checks do not establish native WPF rendering, the hosted PowerShell 5.1 result or device networking. |
-
-
+| `84c22f14aa3c8ba2f1dde91f88a2cc65e51c0ba6` | Update the Python shipping audits to follow the strict current native request decoder, original selected control and complete member revisions. | 44 audit tests and 42 causal mutations passed; backend transaction and complete-profile gates passed. Structural audit scores remain allocations, not product completion percentages. |
+| `f916767e5c34ef0b6ca0ac09a0260cada11f8b84` | Add a distinct typed macOS ordered process/manifest family while preserving the exact legacy external family and handshake. | Portable race coverage passed 16 roots/120 verdicts and four causal controls. Full controller and process package Darwin amd64/arm64 cross-compilation passed. This foundation does not enable the unfinished ordered native host. |
+| `d6ba22c277a7e98172c28e39902436ede7498cfe` | Use an explicit validated Windows complete-profile operation-to-route map. | The route audit and all 3,115 existing callback checks passed. Save/Update/Load still use their original ownership and returned receipt. |
+| `c41e2cf23a5fcd9308767c03832825f42ebab60c` | Preserve the original complete selected graph and returned receipt through both macOS profile interfaces; Load uses the current saved graph independently of a target or draft. | 4,938 actual composed Swift checks and all 29 causal controls passed. Original request generation, source and profile ownership are checked before and after completion; native AppKit rendering and device execution remain separate. |
+| `3aaa57f595e623f3274cf712bac0711b2ffd6f31` | Trace the current strict request resolver in the existing Go shipping-launch guards without weakening process, cancellation or owner checks. | The two stale audit failures were reproduced on exact f916. The repaired race gate passed two roots/67 subcases, including 11 new causal mutations that reject lost original member revisions, ownership and request capture. |
+| `2cb5e773e8c058c34220be82428770fc47a4fc17` | Bind the distinct ordered macOS firewall capture and receipt to the original protected PF journal, selected Router policy and owned token. | 18 baseline and 60 owned-PF tests, all 29 causal controls and three Go race roots/276 total verdicts passed. Full controller Darwin amd64/arm64 compile-only checks passed. Held-deny retirement and ambiguous-cleanup ownership remain intact; no incomplete native capability was enabled. |
+| `c4e55240b431853c1769ce0eb737e5c97e6a4ff6` | Split two growing shared multihop groups into disjoint bounded phases without dropping tests or increasing timeouts. | All 567 discovered tests first passed in the complete original nine-phase race matrix. Six partition self-tests passed. New ordered and remaining node groups passed in 47.287s and 140.550s, and desktop node policies in 111.936s. The final split group's timing was not recovered after executor disconnection; its cases remain required and had passed in the full matrix. |
 
 The raw runtime count remains 20 and the logical choices remain 16. A native
 catalog containing 22 records includes the additional SMART AUTO and CUSTOM
@@ -195,6 +196,165 @@ at `8f6edebb`, followed by the complete Windows original-inventory callbacks at
 protected macOS ordered native host still requires implementation and
 acceptance; its platform capability remains unavailable until the actual
 protected process, PF/socket/utun and ordered proof owner exists.
+
+## Exact-source verification before executor interruption
+
+On exact published `f916767e5c34ef0b6ca0ac09a0260cada11f8b84`, the first
+12 Python commands in the Android multihop workflow all passed in order,
+in 440.796 seconds. The inspected Android/mobile/shared runtime paths and
+workflow were unchanged through `2cb5e773`. The current runtime contract's
+source-assertion prefix passed separately, as did syntax checks for 108 Java
+sources. These are not a complete APK build or physical-device acceptance.
+
+| Android workflow command | Seconds | Result |
+| --- | ---: | --- |
+| `android/test_android_multihop_contract.py` | 0.033 | Pass |
+| `android/test_android_node_chain_capture.py` | 199.945 | Pass; 884 checks and 22 causal controls |
+| `android/test_android_ordered_presentation.py` | 8.171 | Pass; actual worker and two controls |
+| `android/test_android_node_chain_runtime.py` | 168.242 | Pass; 320 checks and 22 controls |
+| `android/test_android_node_chain_mtu.py` | 5.825 | Pass |
+| `android/test_android_multihop_modes.py` | 0.771 | Pass |
+| `android/test_android_home_dns.py` | 8.747 | Pass; 517 checks and substitution controls |
+| `android/test_android_router_dns_retest.py` | 16.809 | Pass |
+| `android/test_android_multihop_graph.py` | 17.173 | Pass |
+| `android/test_android_pq_selection.py` | 5.078 | Pass |
+| `android/test_android_max_selection.py` | 5.202 | Pass |
+| `android/test_android_naive_multihop.py` | 4.800 | Pass |
+
+The complete shared Go multihop matrix also passed all 567 discovered tests
+exactly once with the race detector. Its original nine phase durations were
+177.973, 16.896, 29.007, 71.084, 61.929, 64.574, 177.724, 102.579 and
+12.731 seconds. The disjoint partition repair at `c4e55240` preserves every
+test and the original 180-second Go/240-second subprocess limits.
+
+A separate full `cmd/client` and `internal/common` diagnostic completed on
+f916. The common package passed in 34.923 seconds. The client package did not
+pass: mandatory physical-interface/Netlink operations were unavailable locally,
+and many dependent native fixtures consequently could not reach their
+expected process/proof boundaries. The two independently identified stale
+shipping-audit assertions were repaired at `3aaa57f5` and their focused race
+gate passed. A local detached-worktree build also attempted VCS discovery in
+`/workspace` and failed with exit 128. No physical source validation or VCS
+stamping was disabled to convert those failures into a pass.
+
+The older Android failure at `67c65b23` remains a historical failed run;
+neither the successful Python prefix nor the near-limit Go phase observation
+establishes its precise cause. GitHub job-log requests returned read timeouts.
+Current queued runs are not reported as successful releases.
+
+## Executor interruption and unfinished source recovery
+
+At approximately 20:53 UTC the execution environment reported unavailable.
+The executor first reported a disconnected transport and recovery timeout;
+one later read-only recovery attempt returned
+`No usable execution environment is available.`
+GitHub reads and writes remained available. Completed source through
+`c4e55240b431853c1769ce0eb737e5c97e6a4ff6` was remotely verified. A live
+comparison confirmed 55 commits ahead of starting `62bfab03`, zero behind.
+Its authoritative release run was
+[43098704215](https://github.com/Eabusham2/router-vpn/actions/runs/43098704215),
+queued when inspected. This is not a green or published new release.
+
+### Desktop ordered startup: unfinished
+
+Work was present in the main checkout at
+`/workspace/scratch/62d26fbeec14/router-vpn`, in exactly these six files:
+
+- `cmd/client/startup_external.go`
+- `cmd/client/strategy_modes.go`
+- `cmd/client/multihop_native_routes.go`
+- `cmd/client/startup_node_chain.go` (new)
+- `cmd/client/startup_node_chain_test.go` (new)
+- `cmd/client/startup_node_chain_owned_test.go` (new)
+
+The draft captures the canonical original root, every original profile and
+private-asset digest before delay; retains an explicit proved Local order;
+and uses the same context-owned native connection transaction rather than
+re-entering the public HTTP handler. It is not frozen or fully validated.
+
+A required compatibility correction was identified but not applied. The draft
+incorrectly infers an ordered receipt from `logical_mode=multihop` and excludes
+every multihop record from the ordinary recorder. Historical pair Last records
+can legitimately use that logical label. New ordered receipts need canonical
+`path_kind: "node-chain-v1"` coupled to their complete ordered capture.
+Historical untagged ordinary, pair and external records must preserve their
+existing behavior. The recorder must distinguish the actual retained ordered
+owner from a pair and refuse ambiguous missing ownership during cleanup.
+Tests must include actual historical untagged pair JSON and tagged records
+with the ordered capture omitted. Do not publish the current draft as ready.
+
+The small startup token/selection and invalid-chain-fallback subset passed.
+The first new source/adapter run failed because its fixture omitted mandatory
+protection; the fixture was corrected to set every member's kill switch and
+On-connect policy. The corrected rerun (session 57863) and retained-owner/Last
+suite (session 13164) had no observed final result. Logs, if the workspace
+returns, are `startup-node-chain-source-tests.log` and
+`startup-node-chain-owned-tests.log` in its scratch parent. No final hashes
+or successful complete startup suite were recorded.
+
+### macOS descriptor/native bridge: unfinished
+
+Work was present in the detached isolated checkout
+`/workspace/scratch/62d26fbeec14/router-vpn-awg-ordered`:
+
+- `mobile/desktop/node_box_physical.go.tmpl`
+- `mobile/desktop/node_box_tunnel_control.go.tmpl` (new)
+- `mobile/desktop/node_box_tunnel_control_test.go.tmpl` (new)
+- `mobile/desktop/node_physical_darwin.go.tmpl`
+- `mobile/desktop/node_chain_physical_darwin.go.tmpl` (new)
+- `mobile/desktop/node_chain_physical_other.go.tmpl`
+- `mobile/desktop/node_chain_box_darwin.go.tmpl` (new)
+- `deploy/prepare-desktop-external.py`
+- `deploy/test_desktop_node_physical.py` (last registration patch completion unobserved)
+
+The unit transfers the original utun control descriptor during initial
+activation and MTU replacement, validates the actual OS-assigned utun name,
+and retains typed ordered physical-policy/Box owners. Windows/Linux fixed-name
+requirements remain in the design. No public Darwin capability, parent/child
+admission or generic launch path was enabled. The existing published
+`f4032c4a` physical-target templates were not edited.
+
+The Go templates were formatted, but no descriptor-unit test or Darwin
+cross-compile result was obtained. A copied old prepared tree correctly
+refused a source-seal mismatch after the published f403 changes. No seal was
+modified. Normal clean pinned-source preparation was subsequently launched;
+its final status is unknown. Recovery targets in the scratch parent are
+`macos-ordered-native-clean-prepare.log`, `darwin-ordered-native-source`
+and `darwin-ordered-native-xray`. No native runtime, physical acceptance or
+blocked PQ diagnostic was invoked for this unfinished unit.
+
+The full descriptor-unit source payloads and frozen hashes were not retained
+in the available agent summary. This manifest records their location and
+design; it is not a backup of those unavailable bytes.
+
+### DNS continuation: read-only
+
+No DNS source changes or new fixtures were made. The current Naive H2/CONNECT
+implementation validates both complete resolver trees and permits the existing
+literal Home UDP final-path exception; lower CONNECT transport remains TCP-only.
+A possible next extension must first prove that the entire lower resolver tree
+is unused during establishment for every literal final transport and final
+Start Layer peer. Application DoH3 or hostname DNS with its original explicit
+bootstrap could then be considered through the established final UoT path,
+without granting lower UDP or replacing the selected resolver. This is an
+implementation lead, not established support.
+
+Resume from `internal/mobilemultihop/imported_naive_h2.go`,
+`imported_entry_desktop.go`, `desktop_egress.go` and the existing native
+Naive H2/literal fixtures. Inspect the actual pinned lower transport and
+Android/Apple producers before changing their capability gates.
+
+### Recovery procedure
+
+Read live main before touching either local checkout. The detached worktree
+also contains many already-published changes; never replay its entire diff.
+Restrict recovery to the exact unfinished whitelists above, compare every file
+against the newer remote tree, and preserve unrelated work. Inspect the actual
+unresolved logs instead of assuming they passed. Complete the startup
+discriminator correction, validate each coherent unit, and publish directly
+to main with normal ancestry. The original requirements and all device/release
+boundaries remain binding. No new physical-device, signing or private-deployment
+access was obtained during this interruption.
 
 ## Remaining requirement evidence
 
