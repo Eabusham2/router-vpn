@@ -97,7 +97,7 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 		"private AndroidStartLayerRelay startLayerRelay",
 		"startLayerRelay = AndroidStartLayerRelay.prepareIfConfigured(this, session",
 		"if(startLayerRelay!=null)startLayerRelay.start();",
-		"shutdown(\"FAILED\", message)",
+		"shutdownRetainingOwner(\"FAILED\", message)",
 		"startLayerRelay.close()",
 		"startLayerRelay = null",
 	} {
@@ -173,6 +173,100 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 		if !strings.Contains(home, required) {
 			t.Fatalf("Android Emergency Disconnect transaction missing %q", required)
 		}
+	}
+}
+
+// This source gate complements the executable service fixture: async cleanup
+// must report an incomplete close without escaping Android's fatal worker
+// boundary, releasing the original relay, or acknowledging a successful stop.
+func androidStartLayerServiceRetainsCleanupOwner(service string) bool {
+	region := func(start, end string) string {
+		at := strings.Index(service, start)
+		if at < 0 {
+			return ""
+		}
+		tail := service[at+len(start):]
+		until := strings.Index(tail, end)
+		if until < 0 {
+			return ""
+		}
+		return tail[:until]
+	}
+	if !strings.Contains(service, `if (!explicitStop && activeSession == session) shutdownRetainingOwner("FAILED", message);`) {
+		return false
+	}
+	boundary := region("private boolean shutdownRetainingOwner(String terminalState, String error)", "private void reportCleanupPending(")
+	for _, marker := range []string{
+		"try { shutdown(terminalState,error); return true; }",
+		"catch (RuntimeException pending) { reportCleanupPending(pending); return false; }",
+	} {
+		if !strings.Contains(boundary, marker) {
+			return false
+		}
+	}
+	report := region("private void reportCleanupPending(Exception pending)", "private void requestNodeChainStop(")
+	for _, marker := range []string{
+		`Log.w(TAG,"Native cleanup remains owned for retry",pending);`,
+		`publish("STOPPING",activeMode,"VPN teardown remains unconfirmed; Disconnect retries the original native owner.");`,
+	} {
+		if !strings.Contains(report, marker) {
+			return false
+		}
+	}
+	shutdown := region("private void shutdown(String terminalState, String error)", "private boolean shutdownRetainingOwner(")
+	previous := -1
+	for _, marker := range []string{"closeCoreLocked();", "activeSession = null;", "publish(terminalState,", "deleteTree(session)"} {
+		at := strings.Index(shutdown, marker)
+		if at <= previous {
+			return false
+		}
+		previous = at
+	}
+	close := region("private void closeCoreLocked()", "private void finishNodeChainCleanupLocked(")
+	previous = -1
+	for _, marker := range []string{
+		"if(startLayerRelay!=null){",
+		"try{startLayerRelay.close();}",
+		"catch(RuntimeException pending){",
+		`publish("STOPPING",activeMode,"Start Layer teardown remains unconfirmed; runtime ownership is retained.");`,
+		`throw new IllegalStateException("Start Layer teardown has not completed.");`,
+		"startLayerRelay = null;",
+	} {
+		at := strings.Index(close, marker)
+		if at <= previous {
+			return false
+		}
+		previous = at
+	}
+	// Both the ordinary stop and retained ordered-host stop must withhold their
+	// completion callbacks when the same strict cleanup boundary returns false.
+	return strings.Count(service, `if (!shutdownRetainingOwner("DOWN", "")) return;`) == 2
+}
+
+func TestAndroidStartLayerCleanupFailureRetainsOriginalServiceOwner(t *testing.T) {
+	service := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java")
+	if !androidStartLayerServiceRetainsCleanupOwner(service) {
+		t.Fatal("Start Layer cleanup lost its retained, reported async boundary or strict close-before-release/acknowledgement order")
+	}
+	for _, mutation := range []struct{ name, before, after string }{
+		{"escaping-callback", `if (!explicitStop && activeSession == session) shutdownRetainingOwner("FAILED", message);`, `if (!explicitStop && activeSession == session) shutdown("FAILED", message);`},
+		{"false-success", "reportCleanupPending(pending); return false;", "reportCleanupPending(pending); return true;"},
+		{"silent-failure", `Log.w(TAG,"Native cleanup remains owned for retry",pending);`, ""},
+		{"terminal-pending", `publish("STOPPING",activeMode,"VPN teardown remains unconfirmed; Disconnect retries the original native owner.");`, `publish("DOWN",activeMode,"");`},
+		{"skipped-relay-close", "try{startLayerRelay.close();}", "try{ignoredClose();}"},
+		{"swallowed-relay-close", `throw new IllegalStateException("Start Layer teardown has not completed.");`, ""},
+		{"forgotten-relay", "if(startLayerRelay!=null){", "startLayerRelay = null; if(startLayerRelay!=null){"},
+		{"early-session-release", "closeCoreLocked();\n            activeSession = null;", "activeSession = null;\n            closeCoreLocked();"},
+		{"premature-stop-completion", `if (!shutdownRetainingOwner("DOWN", "")) return;`, `shutdownRetainingOwner("DOWN", "");`},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			if !strings.Contains(service, mutation.before) {
+				t.Fatal("negative control anchor missing", mutation.before)
+			}
+			if androidStartLayerServiceRetainsCleanupOwner(strings.Replace(service, mutation.before, mutation.after, 1)) {
+				t.Fatal("unowned Start Layer cleanup accepted", mutation.name)
+			}
+		})
 	}
 }
 
