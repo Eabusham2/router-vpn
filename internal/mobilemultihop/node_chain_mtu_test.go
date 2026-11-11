@@ -128,6 +128,73 @@ func TestNodeChainMTUControllerRejectsChangedMiddleAndAuthority(t *testing.T) {
 	}
 }
 
+func TestNodeChainMTUControllerKeepsFixedMiddleEndpointAndFinalPolicySeparate(t *testing.T) {
+	for _, fixedFinal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("final-fixed-%t", fixedFinal), func(t *testing.T) {
+			original := nodeChainMTUControllerFixture(t, 4)
+			nodes := append([]*NodeProfile(nil), original.nodes...)
+			for _, position := range []int{1, 3} {
+				if position == 3 && !fixedFinal {
+					continue
+				}
+				source := nodes[position].inputs
+				profile := predecessorCopy(nodes[position].profile)
+				fixed := 1408
+				if position == 3 {
+					fixed = 1280
+				}
+				profile["mtu_policy"], profile["manual_mtu"] = "manual", float64(fixed)
+				var err error
+				nodes[position], err = NewNodeProfile(source.Mode, source.Files, startJSON(t, profile), source.Start, source.DNSBootstrap)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			chain, err := NewNodeChain(startJSON(t, nodeChainFixtureSource(t, nodes)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			bound, err := chain.MTUPlan()
+			if err != nil || bound.Ceiling != 1344 {
+				t.Fatal("the middle Fixed endpoint must bound the complete path", bound, err)
+			}
+			owner := &nodeChainMTUOwnerFixture{mobilemtu.State{Session: "fixed-middle-session", Path: "fixed-middle-network", Interface: "chain-tun", MTU: bound.Original}}
+			controller, err := chain.NewMTUControllerContext(context.Background(), owner, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer controller.Close()
+			if controller.Requested() == fixedFinal {
+				t.Fatal("middle endpoint policy replaced the final shared TUN policy")
+			}
+			if fixedFinal {
+				if err := controller.StartContext(context.Background(), strings.Repeat("d", 32), true); err == nil || !strings.Contains(err.Error(), "choose Auto MTU") {
+					t.Fatal("explicit Retest admitted a Fixed final TUN", err)
+				}
+				return
+			}
+			plan, err := chain.PlanForMTU(chain.Config(), bound.Original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := importedPQGraph(t, chain.Config())
+			for _, mtu := range plan.Candidates(bound.Ceiling) {
+				config, err := plan.Config(mtu)
+				if err != nil || mtu > 1344 {
+					t.Fatal("Auto exceeded a Fixed middle packet envelope", mtu, err)
+				}
+				after := importedPQGraph(t, config)
+				if startJSON(t, before["endpoints"]) != startJSON(t, after["endpoints"]) {
+					t.Fatal("Auto changed a separately owned Fixed middle endpoint")
+				}
+				if _, err := chain.PlanForMTU(config, mtu); err != nil {
+					t.Fatal("valid Auto final readback was blocked by an unchanged Fixed middle", err)
+				}
+			}
+		})
+	}
+}
+
 func TestNodeChainMTUControllerRetainsSealedDesktopPhysicalOwner(t *testing.T) {
 	for _, target := range []string{"linux", "windows", "darwin"} {
 		t.Run(target, func(t *testing.T) {
