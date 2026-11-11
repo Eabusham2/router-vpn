@@ -242,7 +242,7 @@ def main():
             ("LayeredVpnService.java", "Libbox.routerStrategyCloseService(commandServer);", "commandServer.closeService();", "checked native drain"),
             ("LayeredVpnService.java", "capturedExternal.bindSocket(borrowed.getFileDescriptor());", "", "physical network binding"),
             ("LayeredVpnService.java", "AndroidHomeStateStore.failedPolicyExternal(this,home,error.isEmpty()?\"The captured external VPN is stopping; its path proof is no longer valid.\":error,false);", "", "Home invalidation before native drain"),
-            ("LayeredVpnService.java", "discardPreparedSession(this,sessionId);\n        }\n    }", "\n        }\n    }", "preflight preparation cleanup"),
+            ("LayeredVpnService.java", "if (AndroidNodeChainSession.pending(sessionId) == null) discardPreparedSession(this,sessionId);", "if (AndroidNodeChainSession.pending(sessionId) == null) { /* negative control: omit unowned preparation cleanup */ }", "preflight preparation cleanup"),
             ("LayeredVpnService.java", "||generation!=service.lifecycle.get()||service.explicitStop||!\"UP\".equals(service.state))return;", "||service.explicitStop||!\"UP\".equals(service.state))return;", "queued external MTU generation"),
             ("LayeredVpnService.java", 'if(service.externalSession!=external||home==null||!now.connected||!"passed".equals(now.pathProof)||!external.healthy()', 'if(home==null||!now.connected||!"passed".equals(now.pathProof)||!external.healthy()', "queued external MTU native owner"),
             ("LayeredVpnService.java", 'catch(Exception error){publish("STOPPING",activeMode,"MTU cleanup is still pending; its native owner is retained.");throw new IllegalStateException("MTU controller teardown has not drained.");}', "catch(Exception error){}", "retained failed MTU cleanup"),
@@ -258,6 +258,8 @@ def main():
             result = subprocess.run(run_args, capture_output=True, text=True, timeout=20)
             if result.returncode == 0:
                 raise AssertionError(f"Regression escaped: {label}")
+            if label == "preflight preparation cleanup" and "denied lockdown leaked prepared directory" not in result.stderr:
+                raise AssertionError("The preparation cleanup control must fail its runtime ownership assertion: " + result.stderr)
             target.write_text(original)
         print("Android external owner negative controls: 10 rejected")
 
