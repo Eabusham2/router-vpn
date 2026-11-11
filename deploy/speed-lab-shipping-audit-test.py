@@ -102,9 +102,11 @@ class SpeedLabAndroidTransactionAuditTests(unittest.TestCase):
 
 
 class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
+    platform_sources = ("cmd/client/desktop_imported_platform.go", "cmd/client/desktop_imported_linux_lifecycle.go",
+                        "cmd/client/desktop_node_owned.go", "cmd/client/desktop_imported_linux_host.go")
     sources = {path: (Path(__file__).resolve().parents[1]/path).read_text() for path in (
         "cmd/client/speed_lab_paths.go", "cmd/client/desktop_external_path.go",
-        "cmd/client/speed_lab.go", "cmd/client/multihop_native_launch.go")}
+        "cmd/client/speed_lab.go", "cmd/client/multihop_native_launch.go", *platform_sources)}
 
     def check_sources(self, changes=None):
         sources = dict(self.sources)
@@ -116,6 +118,12 @@ class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
 
     def test_shipping_capture_dns_and_physical_observer_share_the_original_owner(self):
         self.assertEqual([], self.check_sources())
+
+    def test_each_traced_native_platform_source_remains_required(self):
+        for path in self.platform_sources:
+            with self.subTest(path=path):
+                self.assertTrue(self.check_sources({path: ""}))
+                self.assertTrue(self.check_sources({path: "/* original source cannot be borrowed from a comment\n"+self.sources[path]+"\n*/"}))
 
     def test_owner_context_and_dns_cannot_be_removed_or_borrowed(self):
         changes = (
@@ -135,7 +143,7 @@ class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
             ("cmd/client/multihop_native_launch.go", 'actual, err := observe(ctx)', 'actual, err := network, error(nil)'),
             ("cmd/client/multihop_native_launch.go", 'if err != nil || ctx.Err() != nil {', 'if err != nil {'),
             ("cmd/client/multihop_native_launch.go", 'actual != network', 'false'),
-            ("cmd/client/multihop_native_launch.go", '!ok || current != launch', '!ok'),
+            ("cmd/client/multihop_native_launch.go", '!found || current != launch', '!found'),
             ("cmd/client/multihop_native_launch.go", 'a.desktopOwnedNodeCurrentContext(ctx, owner.launch, true)', 'a.desktopOwnedNodeCurrentContext(context.Background(), owner.launch, true)'),
             ("cmd/client/multihop_native_launch.go", 'a.desktopOwnedNodeCurrentContext(ctx, owner.launch, true)', 'a.desktopOwnedNodeCurrentContext(ctx, otherLaunch, true)'),
             ("cmd/client/multihop_native_launch.go", 'network, err := owner.physicalNetworkContext(ctx)', 'network, err := owner.network, nil'),
