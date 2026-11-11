@@ -53,7 +53,11 @@ final class AndroidConnectionProfileStore {
 
     synchronized Record load(String id) throws Exception {
         requireIdle("loading a connection profile");
-        JSONObject row=find(id);boolean ordered=row.has(MULTI_NODES);String kind=row.getString("node_kind"),nodeId=row.getString("node_id");
+        return loadRow(find(id));
+    }
+
+    private Record loadRow(JSONObject row) throws Exception {
+        boolean ordered=row.has(MULTI_NODES);String kind=row.getString("node_kind"),nodeId=row.getString("node_id");
         String mode=normalizeMode(row.optString("mode","smart-auto"));List<String>layers=jsonStrings(row.optJSONArray("custom_layers"),32);
         boolean external="external".equals(kind),multi=row.optBoolean("multihop_enabled",false);String entry=row.optString("multihop_entry_id",""),exit=row.optString("multihop_exit_id","");String multiMode=ordered?"":external?row.optString("multihop_exit_mode",""):multi?normalizeMultiMode(row.optString("multihop_exit_mode","shadowsocks")):"shadowsocks";String execution=normalizeExecution(row.optString("multihop_execution","local"));
         String entryKind=normalizeEntryKind(row.optString(MULTI_ENTRY_KIND,"router-vpn"));boolean ordinary="external".equals(entryKind);
@@ -155,6 +159,43 @@ final class AndroidConnectionProfileStore {
         return toRecord(row);
     }
 
+    synchronized Map<String,Object> orderedEditorPreferences() throws Exception {
+        requireIdle("editing an ordered Router path");
+        synchronized(prefs()) { return java.util.Collections.unmodifiableMap(snapshotPreferences()); }
+    }
+
+    /** Publish only choices from the editor's original complete sources. The
+     * existing load transaction owns file/preference rollback and copies no keys. */
+    synchronized AndroidNodeStore.ChainCapture selectOrderedPath(AndroidNodeStore.ChainCatalog catalog,
+            List<AndroidNodeStore.ChainSource> sources,List<String> modes,Map<String,Object> originalPreferences) throws Exception {
+        requireIdle("saving an ordered Router path");
+        if(catalog==null||sources==null||modes==null||sources.size()<2||sources.size()>8||sources.size()!=modes.size())
+            throw new IllegalStateException("Choose every member of the complete ordered path.");
+        synchronized(prefs()) {
+            if(originalPreferences==null||!originalPreferences.equals(snapshotPreferences()))throw new IllegalStateException("The selected connection changed while editing its ordered nodes.");
+            return nodes.publishChainCatalog(catalog,()->{
+                if(!originalPreferences.equals(snapshotPreferences()))throw new IllegalStateException("The ordered editor lost its original connection choice.");
+                JSONArray members=new JSONArray();
+                for(int i=0;i<sources.size();i++) {
+                    AndroidNodeStore.ChainSource source=sources.get(i),original=catalog.source(source.id);
+                    if(!java.util.Arrays.equals(source.bytes(),original.bytes()))throw new IllegalStateException("An ordered editor member differs from its original complete source.");
+                    NodePolicy policy=routerPolicy(source.id);
+                    if(!source.profileId.equals(policy.profileId))throw new IllegalStateException("An ordered editor member changed its selected profile.");
+                    members.put(new JSONObject().put("id",source.profileId).put("node_id",source.id).put("mode",modes.get(i)).put("policy",policy.choices));
+                }
+                AndroidNodeStore.ChainSource control=sources.get(sources.size()-1);
+                JSONObject row=new JSONObject().put("id",newId()).put("name","Ordered Router path").put("node_kind","router-vpn")
+                        .put("node_id",control.id).put("node_profile_id",control.profileId).put("policy",members.getJSONObject(members.length()-1).getJSONObject("policy"))
+                        .put("mode","smart-auto").put("custom_layers",new JSONArray()).put("multihop_enabled",true).put("multihop_execution","local")
+                        .put(MULTI_ENTRY_KIND,"router-vpn").put("multihop_entry_id","").put("multihop_entry_mode","")
+                        .put("multihop_exit_id","").put("multihop_exit_mode","").put(MULTI_NODES,members);
+                validateOrderedRow(row,SCHEMA_VERSION);
+                loadRow(row);
+                return currentOrderedPath();
+            });
+        }
+    }
+
     synchronized void delete(String id) throws Exception { requireIdle("deleting a connection profile");if(!safeId(id))throw new IllegalArgumentException("Invalid connection profile id.");JSONArray rows=readRows(),next=new JSONArray();boolean found=false;for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(id.equals(row.optString("id")))found=true;else next.put(row);}if(!found)throw new IllegalArgumentException("Connection profile was not found.");writeRows(next); }
 
     private JSONObject snapshot(String name,String id) throws Exception {
@@ -191,9 +232,17 @@ final class AndroidConnectionProfileStore {
     }
 
     synchronized AndroidNodeStore.ChainCapture currentOrderedPath() throws Exception {
+        return orderedPath(true);
+    }
+
+    synchronized AndroidNodeStore.ChainCapture orderedEditorPath() throws Exception {
+        return orderedPath(false);
+    }
+
+    private AndroidNodeStore.ChainCapture orderedPath(boolean enabled) throws Exception {
         synchronized(prefs()) {
             SharedPreferences p=prefs();
-            if(!p.getBoolean(MULTI_ON,false)||!"router-vpn".equals(p.getString(SELECTED_KIND,"router-vpn"))
+            if(enabled&&!p.getBoolean(MULTI_ON,false)||!"router-vpn".equals(p.getString(SELECTED_KIND,"router-vpn"))
                     ||!"router-vpn".equals(p.getString(MULTI_ENTRY_KIND,"router-vpn"))
                     ||!"local".equals(p.getString("multihop_execution","local")))throw new IllegalStateException("Choose the original Local ordered Router path.");
             for(String key:new String[]{MULTI_ENTRY,MULTI_EXIT,MULTI_MODE,"multihop_entry_mode"})

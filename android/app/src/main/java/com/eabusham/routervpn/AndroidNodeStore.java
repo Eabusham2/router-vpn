@@ -104,6 +104,23 @@ final class AndroidNodeStore {
         void requireCurrent() throws Exception { owner.requireChainCapture(this); }
     }
 
+    /** The editor retains the original complete catalog and selection epoch.
+     * A later save cannot silently borrow a newer node with the same local ID. */
+    static final class ChainCatalog {
+        final List<Node> nodes;
+        final String selectedId;
+        private final AndroidNodeStore owner;
+        private final SelectionSnapshot selected;
+        private final Map<String, String> fingerprints;
+        private ChainCatalog(AndroidNodeStore owner, List<Node> nodes, Map<String, String> fingerprints, SelectionSnapshot selected) {
+            this.owner = owner; this.selected = selected; this.selectedId = selected.id;
+            this.nodes = Collections.unmodifiableList(new ArrayList<>(nodes));
+            this.fingerprints = Collections.unmodifiableMap(new LinkedHashMap<>(fingerprints));
+        }
+        ChainSource source(String id) throws Exception { return owner.chainCatalogSource(this, id); }
+        void requireCurrent() throws Exception { owner.requireChainCatalog(this); }
+    }
+
     private final Context context;
     private final File root;
 
@@ -288,6 +305,57 @@ final class AndroidNodeStore {
         ChainCapture captured = new ChainCapture(this, control, members, modes);
         requireChainCapture(captured);
         return captured;
+    } }
+
+    synchronized ChainCatalog captureChainCatalog() throws Exception { synchronized (STORE_LOCK) {
+        requireMutable("editing an ordered Router path");
+        SelectionSnapshot selected = snapshotSelection();
+        List<Node> nodes = list();
+        Map<String, String> fingerprints = new LinkedHashMap<>();
+        Set<String> profiles = new HashSet<>();
+        for (Node node : nodes) {
+            ChainSource source = new ChainSource(node.id, readLimited(node.file, MAX_BUNDLE));
+            if (!profiles.add(source.profileId)) throw new IllegalStateException("The ordered catalog has duplicate selected profile identities.");
+            fingerprints.put(node.id, hex(MessageDigest.getInstance("SHA-256").digest(source.original)));
+        }
+        ChainCatalog captured = new ChainCatalog(this, nodes, fingerprints, selected);
+        requireChainCatalog(captured);
+        return captured;
+    } }
+
+    private synchronized void requireChainCatalog(ChainCatalog captured) throws Exception { synchronized (STORE_LOCK) {
+        if (captured == null || captured.owner != this || captured.selected.generation != selectionGeneration
+                || !captured.selected.id.equals(activeId())
+                || !java.util.Arrays.equals(captured.selected.activeBundle, snapshotOptional(activeBundleFile()))) {
+            throw new IllegalStateException("The ordered editor's original selection or publication generation changed.");
+        }
+        List<Node> current = list();
+        if (current.size() != captured.nodes.size()) throw new IllegalStateException("The ordered node catalog changed while editing.");
+        for (Node node : current) {
+            byte[] bytes = snapshotOptional(nodeFile(node.id));
+            if (bytes == null || !hex(MessageDigest.getInstance("SHA-256").digest(bytes)).equals(captured.fingerprints.get(node.id))) {
+                throw new IllegalStateException("An original ordered editor source changed or disappeared.");
+            }
+        }
+    } }
+
+    private synchronized ChainSource chainCatalogSource(ChainCatalog captured, String id) throws Exception { synchronized (STORE_LOCK) {
+        requireChainCatalog(captured);
+        if (!captured.fingerprints.containsKey(id)) throw new IllegalStateException("The ordered editor lost an original saved node.");
+        byte[] bytes = readLimited(nodeFile(id), MAX_BUNDLE);
+        if (!captured.fingerprints.get(id).equals(hex(MessageDigest.getInstance("SHA-256").digest(bytes)))) {
+            throw new IllegalStateException("The selected ordered editor source changed during capture.");
+        }
+        return new ChainSource(id, bytes);
+    } }
+
+    interface ChainPublication<T> { T run() throws Exception; }
+
+    /** Keep every independent node writer outside one complete editor commit. */
+    synchronized <T> T publishChainCatalog(ChainCatalog captured, ChainPublication<T> publication) throws Exception { synchronized (STORE_LOCK) {
+        requireMutable("saving an ordered Router path");
+        requireChainCatalog(captured);
+        return publication.run();
     } }
 
     private synchronized void requireChainCapture(ChainCapture captured) throws Exception { synchronized (STORE_LOCK) {

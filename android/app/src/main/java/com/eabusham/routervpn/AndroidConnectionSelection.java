@@ -14,7 +14,7 @@ import java.util.Map;
  * allowed in Activity state; private profiles remain in their existing stores. */
 final class AndroidConnectionSelection {
     private static final String[] KEYS={"selected_kind","selected_id","mode","custom_presets",
-            "multihop_on","multihop_entry","multihop_exit","multihop_exit_mode","multihop_entry_mode","multihop_entry_kind","multihop_execution"};
+            "multihop_on","multihop_nodes","multihop_entry","multihop_exit","multihop_exit_mode","multihop_entry_mode","multihop_entry_kind","multihop_execution"};
 
     static Map<String,Object> preferences(Context context){
         Map<String,?> all=context.getApplicationContext().getSharedPreferences("router-vpn-unified",Context.MODE_PRIVATE).getAll();

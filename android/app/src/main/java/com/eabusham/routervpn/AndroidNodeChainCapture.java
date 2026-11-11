@@ -82,22 +82,30 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         List<String> inputs = new ArrayList<>();
         for (int i = 0; i < selected.length(); i++) {
             AndroidNodeStore.ChainSource member = original.members.get(i);
-            JSONObject bundle = member.bundle(), profile = member.profile(), reference = selected.getJSONObject(i);
+            JSONObject profile = member.profile(), reference = selected.getJSONObject(i);
             String mode = original.modes.get(i);
             if (!member.profileId.equals(reference.getString("id")) || !mode.equals(reference.getString("mode"))) {
                 throw new IllegalStateException("The ordered member changed its original position or exact mode.");
             }
-            JSONObject assets = bundle.getJSONObject("profiles");
-            String files = bounded(assets.getJSONObject(mode).toString(), 16 * 1024 * 1024);
-            String layer = profile.optString("start_layer", "off"), start = "";
-            if (layer.isEmpty()) layer = "off";
-            if (!java.util.Arrays.asList("off", "aes-256-gcm", "aes-256-gcm+xor-whitening").contains(layer)) throw new IllegalStateException("An ordered member lost its exact authenticated Start Layer.");
-            if (!"off".equals(layer) && !"shadowsocks".equals(mode)) start = bounded(assets.getJSONObject("shadowsocks").toString(), 16 * 1024 * 1024);
-            String bootstrap = profile.has("dns_bootstrap") ? bounded(profile.getJSONObject("dns_bootstrap").toString(), 16384) : "";
-            inputs.add(bounded(Libbox.routerNodeChainMemberInput(mode, files, bounded(profile.toString(), 256 * 1024), start, bootstrap), MAX_INPUT));
+            inputs.add(memberInput(member, mode, profile));
         }
         original.requireCurrent();
         return inputs;
+    }
+
+    /** Pure compiler input shared by the editor preview and the launch capture. */
+    static String memberInput(AndroidNodeStore.ChainSource member, String mode, JSONObject profile) throws Exception {
+        if (!member.profileId.equals(profile.getString("id")) || !member.proofId.equals(profile.getString("node_proof_id"))) {
+            throw new IllegalStateException("The ordered compiler input lost its original paired member.");
+        }
+        JSONObject assets = member.bundle().getJSONObject("profiles");
+        String files = bounded(assets.getJSONObject(mode).toString(), 16 * 1024 * 1024);
+        String layer = profile.optString("start_layer", "off"), start = "";
+        if (layer.isEmpty()) layer = "off";
+        if (!java.util.Arrays.asList("off", "aes-256-gcm", "aes-256-gcm+xor-whitening").contains(layer)) throw new IllegalStateException("An ordered member lost its exact authenticated Start Layer.");
+        if (!"off".equals(layer) && !"shadowsocks".equals(mode)) start = bounded(assets.getJSONObject("shadowsocks").toString(), 16 * 1024 * 1024);
+        String bootstrap = profile.has("dns_bootstrap") ? bounded(profile.getJSONObject("dns_bootstrap").toString(), 16384) : "";
+        return bounded(Libbox.routerNodeChainMemberInput(mode, files, bounded(profile.toString(), 256 * 1024), start, bootstrap), MAX_INPUT);
     }
 
     JSONObject controlProfile() throws Exception { return original.control.profile(); }
