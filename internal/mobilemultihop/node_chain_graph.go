@@ -25,7 +25,7 @@ func compileNodeChain(nodes []*NodeProfile) (string, []NodeChainProof, NodeChain
 		if services, _ := closure.graph["services"].([]any); len(services) != 0 {
 			return fail(errors.New("ordered chain cover services require their per-position native owner integration"))
 		}
-		if i < len(nodes)-1 && (node.mode != "wg" || closure.final["type"] != "wireguard") ||
+		if i < len(nodes)-1 && (!NodeChainPrefixMode(node.mode) || closure.final["type"] != nodeChainPrefixType(node.mode)) ||
 			i == len(nodes)-1 && (node.mode != "shadowsocks" || closure.final["method"] != NativeStartLayerMethod ||
 				closure.final["type"] != "shadowsocks" && closure.final["type"] != "routervpn-aes-xor") {
 			return fail(bad)

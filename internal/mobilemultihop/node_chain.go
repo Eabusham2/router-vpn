@@ -12,6 +12,24 @@ import (
 const NodeChainMaximumNodes = 8
 const NodeChainInputLimit = 40 << 20
 
+// NodeChainPrefixMode reports the exact captured packet modes supported before
+// the final node of a Local ordered path. It does not normalize UI labels or
+// authorize a mode without its matching captured endpoint and credentials.
+func NodeChainPrefixMode(mode string) bool {
+	return nodeChainPrefixType(mode) != ""
+}
+
+func nodeChainPrefixType(mode string) string {
+	switch mode {
+	case "wg":
+		return "wireguard"
+	case "awg2-fast", "awg2-strong":
+		return AmneziaType
+	default:
+		return ""
+	}
+}
+
 // NodeChainSource contains private, canonical NodeProfile launch captures in
 // forwarding order. The aggregate limit applies before parsing any node; it is
 // not a per-node allowance and an oversized chain is never truncated.
@@ -93,19 +111,19 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		if err != nil || node == nil {
 			return nil, nodeChainError
 		}
-		if position < len(source.Nodes)-1 && node.mode != "wg" ||
+		if position < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) ||
 			position == len(source.Nodes)-1 && node.mode != "shadowsocks" {
-			return nil, errors.New("ordered Local chains currently require WireGuard prefixes and a captured SS2022 final")
+			return nil, errors.New("ordered Local chains require captured WG or AWG2 Fast/Strong prefixes and an SS2022 final")
 		}
 		id, peer := predecessorText(node.profile, "id"), predecessorText(node.profile, "node_proof_id")
 		if ids[id] || peers[peer] {
 			return nil, errors.New("ordered chain contains a duplicate selected node identity")
 		}
 		ids[id], peers[peer] = true, true
-		if node.mode == "wg" {
+		if NodeChainPrefixMode(node.mode) {
 			client, err := node.PacketClientPublicKey()
 			if err != nil || clients[client] {
-				return nil, errors.New("ordered chain requires independent canonical WireGuard client identities")
+				return nil, errors.New("ordered chain requires independent canonical WG/AWG client identities")
 			}
 			clients[client] = true
 			closure, err := nodeMultihopPredecessor(node)
@@ -118,7 +136,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 			}
 			server := predecessorText(rows[0].(map[string]any), "public_key")
 			if !nodeChainCanonicalPeer(server) || servers[server] {
-				return nil, errors.New("ordered chain requires a canonical WireGuard server identity")
+				return nil, errors.New("ordered chain requires independent canonical WG/AWG server identities")
 			}
 			servers[server] = true
 		}

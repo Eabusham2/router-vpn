@@ -13,12 +13,24 @@ import (
 
 func nodeChainFixtureNodes(t *testing.T, count int, layer string) []*NodeProfile {
 	t.Helper()
-	nodes := make([]*NodeProfile, 0, count)
+	modes, layers := make([]string, count), make([]string, count)
 	for position := 0; position < count; position++ {
-		mode := "wg"
+		modes[position], layers[position] = "wg", layer
 		if position == count-1 {
-			mode = "shadowsocks"
+			modes[position] = "shadowsocks"
 		}
+	}
+	return nodeChainModeFixtureNodes(t, modes, layers)
+}
+
+func nodeChainModeFixtureNodes(t *testing.T, modes, layers []string) []*NodeProfile {
+	t.Helper()
+	if len(modes) != len(layers) {
+		t.Fatal("every selected fixture member needs its own Start Layer")
+	}
+	nodes := make([]*NodeProfile, 0, len(modes))
+	for position, mode := range modes {
+		layer := layers[position]
 		files, profile, start := nodeProfileFixture(t, mode, layer)
 		endpoint := fmt.Sprintf("198.51.100.%d", position+10)
 		private := bytes.Repeat([]byte{byte(21 + position)}, 32)
@@ -31,10 +43,14 @@ func nodeChainFixtureNodes(t *testing.T, count int, layer string) []*NodeProfile
 		profile["node_proof_id"] = externalDigest([]byte("router-vpn-node-proof-v1\n" + public))
 		profile["router_api"], profile["api_token"] = fmt.Sprintf("http://10.%d.0.1:8787", 80+position), fmt.Sprintf("captured-chain-token-%d", position)
 		profile["adguard_ipv4"] = fmt.Sprintf("10.%d.0.53", 80+position)
-		if mode == "wg" {
+		if mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong" {
+			asset := "wg.conf"
+			if mode != "wg" {
+				asset = "awg.conf"
+			}
 			var assets map[string]string
 			_ = json.Unmarshal([]byte(files), &assets)
-			raw, _ := base64.StdEncoding.DecodeString(assets["wg.conf"])
+			raw, _ := base64.StdEncoding.DecodeString(assets[asset])
 			text := string(raw)
 			for before, after := range map[string]string{
 				base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("a"), 32)): base64.StdEncoding.EncodeToString(private),
@@ -47,7 +63,7 @@ func nodeChainFixtureNodes(t *testing.T, count int, layer string) []*NodeProfile
 			} {
 				text = strings.ReplaceAll(text, before, after)
 			}
-			assets["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(text))
+			assets[asset] = base64.StdEncoding.EncodeToString([]byte(text))
 			files = startJSON(t, assets)
 		} else {
 			var assets map[string]string
