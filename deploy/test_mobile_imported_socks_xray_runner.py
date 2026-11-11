@@ -89,6 +89,40 @@ class ScopedSOCKSRealityVerdicts(unittest.TestCase):
                     self.encode(events + [{"Action": package_action, "Package": "routervpnamnezia"}]),
                     0, gate.PEERS)
 
+    def test_failed_assertion_survives_a_large_trailing_verdict_inventory(self):
+        name = "Original/https-connect/aes/aes-xor/cancel"
+        events = [{"Action": "output", "Test": name, "Output": "original_owner_test.go:123: cancellation did not join the captured stream\n"},
+                  {"Action": "fail", "Test": name}]
+        events += [{"Action": "pass", "Test": "Unrelated/" + str(i)} for i in range(2000)]
+        events += [{"Action": "fail", "Test": "Original"}]
+        raw = self.encode(events)
+        self.assertNotIn("cancellation did not join", raw[-24000:])
+        with self.assertRaises(ValueError) as observed:
+            gate.require_verdicts(raw, 1, (name,))
+        self.assertIn("original_owner_test.go:123: cancellation did not join", str(observed.exception))
+        self.assertIn(name, str(observed.exception))
+        self.assertIn('"Test": "Original"', str(observed.exception))
+
+    def test_failed_leaf_diagnostics_remain_bounded_and_separate(self):
+        events = []
+        for i in range(8):
+            name = "Original/child-" + str(i)
+            events += [{"Action": "output", "Test": name, "Output": "x" * 10000 + "cause-" + str(i) + "\n"},
+                       {"Action": "fail", "Test": name}]
+        events += [{"Action": "fail", "Test": "Original"}]
+        excerpt = gate.failed_native_excerpt(self.encode(events))
+        self.assertLessEqual(len(excerpt), 24000)
+        self.assertIn("cause-0", excerpt)
+        self.assertIn("cause-1", excerpt)
+        self.assertIn("cause-2", excerpt)
+        self.assertNotIn("Original:\n", excerpt)
+
+    def test_unstructured_failure_keeps_its_original_bounded_tail(self):
+        raw = "compiler diagnostic\n" + "x" * 30000 + "\npanic: original command failed\n"
+        self.assertEqual(gate.failed_native_excerpt(raw), raw[-24000:])
+        with self.assertRaises(ValueError):
+            gate.require_verdicts(raw, 1, gate.PEERS)
+
     def test_abort_after_passes_is_not_a_native_receipt(self):
         events = self.events(gate.PEERS)
         for output in ("panic: fixture failed", "fatal error: concurrent map writes", "WARNING: DATA RACE"):

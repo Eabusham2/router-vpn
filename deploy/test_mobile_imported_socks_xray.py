@@ -73,9 +73,42 @@ LAYER_PEERS = tuple(sorted(IMPORTED.names({LAYER_PEER_PARENT:
     [name for label, faults in LAYER_PEER_CASES.items() for name in [label, *(label + "/" + fault for fault in faults)]]})))
 
 
+def failed_native_excerpt(raw):
+    # Large test2json inventories end with thousands of verdict records. The
+    # original assertion can be far outside a tail-only exception. Preserve
+    # bounded output from the actual failed leaves, without changing verdicts.
+    def events():
+        for line in raw.splitlines():
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                yield value
+
+    failed = []
+    for event in events():
+        name = event.get("Test")
+        if event.get("Action") == "fail" and isinstance(name, str) and name and name not in failed:
+            failed.append(name)
+    leaves = [name for name in failed if not any(other.startswith(name + "/") for other in failed)]
+    captured = {name: "" for name in leaves[:4]}
+    if not captured:
+        return raw[-24000:]
+    for event in events():
+        name, output = event.get("Test"), event.get("Output")
+        if isinstance(name, str) and name in captured and isinstance(output, str):
+            captured[name] = (captured[name] + output)[-4000:]
+    context = "Failed native test output (bounded):\n" + "\n".join(
+        name + ":\n" + output for name, output in captured.items())
+    context = context[:16000]
+    separator = "\nNative process tail:\n"
+    return context + separator + raw[-(24000 - len(context) - len(separator)):]
+
+
 def require_verdicts(raw, status, expected):
     if status:
-        raise ValueError("Scoped SOCKS REALITY execution failed:\n" + raw[-24000:])
+        raise ValueError("Scoped SOCKS REALITY execution failed:\n" + failed_native_excerpt(raw))
     for line in raw.splitlines():
         try:
             event = json.loads(line)
