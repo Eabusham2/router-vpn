@@ -549,7 +549,9 @@ def mutants():
     return (
         (multihop_file, "protected-imported-legacy-fallback", "TestDesktopImportedOwnedSourceAndNativeDispatch/reality-vision/shadowsocks",
          "protected capture silently used a legacy helper",
-         once(multihop, "if sel.Native.importedHost != nil {", "if false && sel.Native.importedHost != nil {")),
+         NATIVE.function_mutant(multihop, "func compileRetainedNativeMultihopLaunch(",
+             "if sel.Native.importedHost != nil || sel.Native.importedPlatform != nil {",
+             "if (false && sel.Native.importedHost != nil) || sel.Native.importedPlatform != nil {")),
         (imported_file, "imported-derived-config-identity", "TestDesktopImportedOwnedDerivedConfigKeepsOriginalEnvelope/derived-digest",
          "derived physical config lost its distinct original constructor identity",
          once(imported, "meta.ConfigSHA256 != launch.configSHA256 ||", "false && meta.ConfigSHA256 != launch.configSHA256 ||")),

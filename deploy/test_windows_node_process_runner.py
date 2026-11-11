@@ -192,6 +192,18 @@ class NodeProcessRunner(unittest.TestCase):
         for filename, original in originals.items():
             self.assertEqual((ROOT / filename).read_bytes(), original)
 
+    def test_imported_fallback_mutant_disables_only_original_windows_capture_guard(self):
+        selected = [change for change in GATE.mutants() if change[1] == "protected-imported-legacy-fallback"]
+        self.assertEqual(len(selected), 1)
+        filename, _, test, witness, changed = selected[0]
+        original = (ROOT / filename).read_text(encoding="utf-8")
+        guard = "if sel.Native.importedHost != nil || sel.Native.importedPlatform != nil {"
+        mutant = "if (false && sel.Native.importedHost != nil) || sel.Native.importedPlatform != nil {"
+        self.assertEqual(original.count(guard), 1)
+        self.assertEqual(changed, original.replace(guard, mutant, 1))
+        self.assertEqual(test, "TestDesktopImportedOwnedSourceAndNativeDispatch/reality-vision/shadowsocks")
+        self.assertEqual(witness, "protected capture silently used a legacy helper")
+
     def test_other_host_cannot_report_native_windows_execution(self):
         with patch.object(GATE.platform, "system", return_value="Linux"):
             with self.assertRaisesRegex(ValueError, "actual Windows execution"):
