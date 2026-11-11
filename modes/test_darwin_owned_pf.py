@@ -219,6 +219,196 @@ class OwnedDarwinPF(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'current native session proof'):
             D.darwin_external('apply', dict(capture=capture, expected=None))
 
+    def node_chain_capture(self, policy='always'):
+        self.selected['node_kind'] = 'router-vpn'
+        self.selected.pop('external', None)
+        self.selected['kill_switch_policy'] = policy
+        self.private_json(self.root/'routers.json', self.store)
+        self.stack.enter_context(patch.dict(os.environ, {
+            'HOMEVPN_TOR_PHYSICAL_BROKER': '', 'HOMEVPN_TOR_SESSION': '',
+            'HOMEVPN_TOR_SOURCE_SHA256': '', 'HOMEVPN_ENDPOINT': ''}))
+        return dict(schema=2, family='ordered-node-chain-v1', profile_id='direct-tor',
+                    session_id='c'*32, source_sha256='d'*64, config_sha256='e'*64,
+                    home_lan_access=False, policy=policy)
+
+    def test_node_chain_uses_original_journal_and_exact_retirement(self):
+        for policy in ('on-connect', 'always'):
+            with self.subTest(policy=policy):
+                capture = self.node_chain_capture(policy)
+                active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+                self.assertEqual(active['schema'], 2)
+                self.assertEqual(active['capture'], capture)
+                state = self.saved()
+                self.assertEqual(state['native_socket_family'], 'ordered-node-chain-v1')
+                self.assertEqual(state['native_node_chain_capture'], capture)
+                self.assertNotIn('native_external_capture', state)
+                self.assertEqual(state[P._baseline.STATE_KEY]['request']['session_id'], capture['session_id'])
+                self.assertEqual(state[P._baseline.STATE_KEY]['request']['source_sha256'], capture['source_sha256'])
+                self.assertEqual(state['endpoint_ips'], [])
+                self.assertNotIn('pass out quick', self.rules[P.OWNED_PF_ANCHOR])
+                self.assertEqual(D.darwin_node_chain('apply', dict(capture=capture, expected=None)), active)
+                self.assertEqual(D.darwin_node_chain('current', dict(capture=capture, expected=active)), active)
+                try:
+                    held = D.darwin_node_chain('retire', dict(capture=capture, expected=active))
+                except RuntimeError as error:
+                    self.fail('ordered switch released its deny baseline: '+str(error))
+                self.assertTrue(held['baseline']['present'], 'ordered switch released its deny baseline')
+                self.assertEqual(held['phase'], 'held')
+                self.assertEqual(held['pf_token'], active['pf_token'])
+                self.assertEqual(self.saved()[P._baseline.STATE_KEY]['request']['session_id'], '')
+                self.assertEqual(D.darwin_node_chain('retire', dict(capture=capture, expected=held)), held)
+                retired = D.darwin_node_chain('release', dict(capture=capture, expected=held))
+                self.assertEqual(retired['baseline']['present'], policy == 'always')
+                self.assertEqual(retired['pf_token'], active['pf_token'])
+                self.assertEqual(D.darwin_node_chain('release', dict(capture=capture, expected=retired)), retired)
+                if policy == 'on-connect':
+                    self.assertEqual(self.references, {'999'})
+                else:
+                    self.assertEqual(self.references, {active['pf_token'], '999'})
+                    self.assertNotIn('anchor ', self.rules[P.OWNED_PF_ANCHOR])
+        self.watcher.assert_not_called()
+        self.resolver.assert_not_called()
+
+    def test_node_chain_stale_source_or_reference_cannot_release(self):
+        capture = self.node_chain_capture('on-connect')
+        active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+        before, commands = self.saved(), list(self.commands)
+        for field, other in (('session_id', 'f'*32), ('source_sha256', 'f'*64), ('config_sha256', 'f'*64),
+                             ('home_lan_access', True), ('profile_id', 'foreign-profile'), ('policy', 'always')):
+            with self.subTest(field=field), self.assertRaises(RuntimeError, msg='stale ordered capture retired another native owner'):
+                D.darwin_node_chain('release', dict(capture={**capture, field: other}, expected=None))
+            self.assertEqual(self.saved(), before)
+            self.assertEqual(self.commands, commands)
+        with self.assertRaisesRegex(RuntimeError, 'original PF reference', msg='ordered cleanup released another captured PF reference'):
+            D.darwin_node_chain('release', dict(capture=capture, expected={**active, 'pf_token': '999'}))
+        self.assertEqual(self.saved(), before)
+        self.assertEqual(self.commands, commands)
+
+    def test_node_chain_receipt_rejects_ordinary_and_ambiguous_families(self):
+        capture = self.node_chain_capture()
+        changed = [dict(capture, schema=1), dict(capture, family='external-v1'),
+                   dict(capture, protocol='shadowsocks'), dict(capture, home_lan_access=0),
+                   dict(capture, schema=True), dict(capture, family=None)]
+        changed.append({key: value for key, value in capture.items() if key != 'family'})
+        for value in changed:
+            with self.subTest(capture=value), self.assertRaises(RuntimeError):
+                D.darwin_node_chain('apply', dict(capture=value, expected=None))
+        self.assertEqual(self.commands, [])
+        active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+        with self.assertRaises(RuntimeError):
+            D.darwin_external('release', dict(capture=capture, expected=active))
+        state = self.saved()
+        self.private_json(self.root/'run/kill-switch.json', {**state, 'native_external_capture': capture})
+        with self.assertRaisesRegex(RuntimeError, 'another retained owner'):
+            D.darwin_node_chain('release', dict(capture=capture, expected=active))
+
+    def test_node_chain_saved_control_and_policy_are_checked_before_mutation(self):
+        capture = self.node_chain_capture()
+        active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+        before, commands = self.saved(), list(self.commands)
+        for field, value in (('kill_switch_policy', 'off'), ('home_lan_access', True),
+                             ('node_kind', 'external'), ('external', {'protocol': 'shadowsocks'})):
+            previous = dict(self.selected)
+            self.selected[field] = value
+            self.private_json(self.root/'routers.json', self.store)
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'captured saved Router protection policy',
+                    msg='ordered baseline reused a changed saved control policy'):
+                D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+            self.selected.clear()
+            self.selected.update(previous)
+            self.private_json(self.root/'routers.json', self.store)
+            self.assertEqual(self.saved(), before)
+            self.assertEqual(self.commands, commands)
+        self.store['selected_id'] = 'another-selection'
+        self.private_json(self.root/'routers.json', self.store)
+        with self.assertRaisesRegex(RuntimeError, 'original selected Router control',
+                msg='ordered baseline adopted a new selected control'):
+            D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+        self.assertEqual(self.saved(), before)
+        self.assertEqual(self.commands, commands)
+        self.assertEqual(active['capture'], capture)
+
+    def test_node_chain_failed_apply_keeps_original_cleanup_and_reassert_scope(self):
+        capture = self.node_chain_capture('on-connect')
+        self.fail_after_load = True
+        with self.assertRaisesRegex(RuntimeError, 'ambiguous applied'):
+            D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+        state = self.saved()
+        self.assertEqual(state['native_node_chain_capture'], capture)
+        self.assertTrue(state['darwin_transition_pending'])
+        self.assertFalse(state[P._baseline.STATE_KEY]['complete'])
+        self.assertNotIn(['-X', '417'], self.commands)
+        self.fail_after_load = False
+        retired = D.darwin_node_chain('release', dict(capture=capture, expected=None))
+        self.assertFalse(retired['baseline']['present'])
+        self.assertEqual(self.references, {'999'})
+        capture = self.node_chain_capture()
+        D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+        self.assertEqual(D.darwin_reassert(), 0)
+        state = self.saved()
+        self.assertEqual(state['native_socket_family'], 'ordered-node-chain-v1')
+        self.assertEqual(state['native_node_chain_capture'], capture)
+        self.assertEqual(state[P._baseline.STATE_KEY]['request']['session_id'], '')
+        self.assertEqual(state[P._baseline.STATE_KEY]['request']['source_sha256'], '')
+        self.assertNotIn('anchor ', self.rules[P.OWNED_PF_ANCHOR])
+        with self.assertRaisesRegex(RuntimeError, 'current native session proof'):
+            D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+
+    def test_node_chain_and_ordinary_successors_keep_distinct_cleanup_owners(self):
+        ordered = self.node_chain_capture('on-connect')
+        active = D.darwin_node_chain('apply', dict(capture=ordered, expected=None))
+        held = D.darwin_node_chain('retire', dict(capture=ordered, expected=active))
+        ordinary = self.external_capture('on-connect')
+        self.selected['node_kind'] = 'external'
+        self.private_json(self.root/'routers.json', self.store)
+        ordinary.update(session_id='1'*32, source_sha256='2'*64)
+        replacement = D.darwin_external('apply', dict(capture=ordinary, expected=None))
+        with self.assertRaisesRegex(RuntimeError, 'another retained owner'):
+            D.darwin_node_chain('release', dict(capture=ordered, expected=held))
+        self.assertEqual(D.darwin_external('current', dict(capture=ordinary, expected=replacement)), replacement)
+        held_external = D.darwin_external('retire', dict(capture=ordinary, expected=replacement))
+        successor = self.node_chain_capture('on-connect')
+        successor.update(session_id='3'*32, source_sha256='4'*64)
+        result = D.darwin_node_chain('apply', dict(capture=successor, expected=None))
+        before, commands = self.saved(), list(self.commands)
+        with self.assertRaisesRegex(RuntimeError, 'another retained owner'):
+            D.darwin_external('release', dict(capture=ordinary, expected=held_external))
+        self.assertEqual(self.saved(), before)
+        self.assertEqual(self.commands, commands)
+        self.assertEqual(D.darwin_node_chain('current', dict(capture=successor, expected=result)), result)
+
+    def test_node_chain_entry_retains_original_authority_and_state_guard(self):
+        capture = self.node_chain_capture()
+        events = []
+        @contextlib.contextmanager
+        def authority():
+            events.append('authority')
+            yield
+            events.append('authority-closed')
+        @contextlib.contextmanager
+        def guard(root):
+            self.assertEqual(root, self.root)
+            self.assertEqual(events, ['authority'])
+            events.append('state')
+            yield
+            events.append('state-closed')
+        def dispatch(action, value):
+            self.assertEqual(events, ['authority', 'state'], 'ordered action escaped original controller/state authority')
+            self.assertEqual(action, 'apply')
+            self.assertEqual(value, dict(capture=capture, expected=None))
+            events.append('operation')
+            return {'bounded_fixture': True}
+        with patch.object(D, '_darwin_external_authority', side_effect=authority), \
+             patch.object(D, '_darwin_action_guard', side_effect=guard), \
+             patch.object(P._baseline, 'ROOT', self.root), \
+             patch.object(D.os, 'getuid', return_value=0), patch.object(D.os, 'geteuid', return_value=0), \
+             patch.object(D, 'darwin_external_input', return_value=dict(capture=capture, expected=None)), \
+             patch.object(D, 'darwin_node_chain', side_effect=dispatch), \
+             patch.object(D.sys, 'argv', ['dispatcher', 'ordered-native', 'apply']), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(D.main(), 0)
+        self.assertEqual(events, ['authority', 'state', 'operation', 'state-closed', 'authority-closed'])
+
     @staticmethod
     def private_json(path, value):
         path.write_text(json.dumps(value)+'\n')
