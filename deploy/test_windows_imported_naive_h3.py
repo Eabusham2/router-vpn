@@ -16,6 +16,7 @@ import os
 import platform
 import re
 import stat
+import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -152,7 +153,20 @@ def port_ranges(source, env):
     for table in ('dynamicportrange', 'excludedportrange'):
         for protocol in ('tcp', 'udp'):
             command = ['netsh.exe', 'interface', 'ipv4', 'show', table, 'protocol=' + protocol]
-            status, output = NATIVE.BOOT.IDENTITY.run(command, cwd=source, env=env, timeout=10)
+            try:
+                status, output = NATIVE.BOOT.IDENTITY.run(command, cwd=source, env=env, timeout=10)
+            except RuntimeError as failure:
+                # The read-only observation is not a native path verdict. The
+                # owned runner has already killed and joined a timed-out netsh;
+                # keep its missing data explicit and still execute every actual
+                # listener/proof case. Unresolved process cleanup still blocks.
+                if (not isinstance(failure.__cause__, subprocess.TimeoutExpired)
+                        or not str(failure).startswith('Windows identity gate timed out; no proof accepted:\n')
+                        or '\nOwned process cleanup diagnostics:\n' in str(failure)):
+                    raise
+                status, output = 'unavailable-timeout', str(failure)
+            except OSError as failure:
+                status, output = 'unavailable-command', type(failure).__name__ + ': ' + str(failure)
             print('Original Windows IPv4 ' + protocol + ' ' + table + ' (status=' + str(status) + '):\n' + output[:16384], flush=True)
 
 

@@ -242,6 +242,45 @@ class ProtectedImportedH3Runner(unittest.TestCase):
         for call in printed.call_args_list:
             self.assertIn('(status=1):', call.args[0]); self.assertLess(len(call.args[0]), 16500)
 
+    def test_joined_diagnostic_timeout_does_not_replace_native_execution(self):
+        failure = RuntimeError('Windows identity gate timed out; no proof accepted:\n' + 'x' * 20000)
+        failure.__cause__ = subprocess.TimeoutExpired(['netsh.exe'], 10)
+        original = GATE.REQUIRED
+        with mock.patch.object(GATE.NATIVE.BOOT.IDENTITY, 'run', side_effect=failure) as run, mock.patch('builtins.print') as printed:
+            self.assertIsNone(GATE.port_ranges(ROOT, ENV))
+        self.assertEqual(run.call_count, 4)
+        self.assertEqual(printed.call_count, 4)
+        self.assertIs(GATE.REQUIRED, original)
+        self.assertEqual(len(original), 88)
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs['timeout'], 10)
+        for call in printed.call_args_list:
+            self.assertIn('(status=unavailable-timeout):', call.args[0])
+            self.assertIn('no proof accepted', call.args[0])
+            self.assertLess(len(call.args[0]), 16500)
+
+    def test_unjoined_or_unknown_diagnostic_failure_still_blocks(self):
+        for text, caused in (
+                ('Windows identity gate timed out; no proof accepted:\n\nOwned process cleanup diagnostics:\njoin refused', True),
+                ('unrelated native failure', True),
+                ('Windows identity gate timed out; no proof accepted:\n', False)):
+            failure = RuntimeError(text)
+            if caused:
+                failure.__cause__ = subprocess.TimeoutExpired(['netsh.exe'], 10)
+            with self.subTest(text=text, caused=caused), mock.patch.object(GATE.NATIVE.BOOT.IDENTITY, 'run', side_effect=failure) as run:
+                with self.assertRaises(RuntimeError) as observed:
+                    GATE.port_ranges(ROOT, ENV)
+                self.assertIs(observed.exception, failure)
+                self.assertEqual(run.call_count, 1)
+
+    def test_missing_diagnostic_command_is_reported_without_inventing_ranges(self):
+        with mock.patch.object(GATE.NATIVE.BOOT.IDENTITY, 'run', side_effect=FileNotFoundError('netsh unavailable')), mock.patch('builtins.print') as printed:
+            self.assertIsNone(GATE.port_ranges(ROOT, ENV))
+        self.assertEqual(printed.call_count, 4)
+        for call in printed.call_args_list:
+            self.assertIn('(status=unavailable-command):', call.args[0])
+            self.assertIn('FileNotFoundError: netsh unavailable', call.args[0])
+
     def test_original_openvpn_pair_handoff_retains_ownership_and_refuses_races(self):
         peer = (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_peer_test.go.tmpl').read_text()
         pair = (ROOT / 'mobile/desktop/external_box_windows_ss_entry_test.go.tmpl').read_text()
