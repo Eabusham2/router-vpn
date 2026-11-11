@@ -206,7 +206,7 @@ def pt_inputs():
     if directory.is_symlink():
         raise ValueError('Linked desktop PT source directory')
     files = []
-    for path in sorted(directory.rglob('*'), key=lambda path: path.relative_to(ROOT).as_posix()):
+    for path in sorted(directory.rglob('*'), key=lambda path: path.as_posix()):
         if path.is_symlink():
             raise ValueError('Linked desktop PT source input')
         if path.is_file():
@@ -242,7 +242,9 @@ def inputs():
     for package in (*PURE, 'dnsmeasure'):
         files += sorted((ROOT/'internal'/package).glob('*.go'))
     files += [ROOT/'internal/mobiletor'/name for name in PFABI.checked_files(ROOT/'internal/mobiletor')]
-    return sorted(dict.fromkeys(files), key=lambda path: path.relative_to(ROOT).as_posix())
+    # The common checkout prefix preserves the relative source ordering;
+    # digest() separately requires and seals each relative path and its bytes.
+    return sorted(dict.fromkeys(files), key=lambda path: path.as_posix())
 
 
 def digest():

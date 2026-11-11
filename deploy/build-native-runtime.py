@@ -242,7 +242,10 @@ def inputs():
     # Nested preparers include mixed-case Java/Swift filenames, so preserving
     # their discovery order gives identical bytes different source identities.
     # Seal the complete set in one explicit, platform-independent order.
-    return sorted(files, key=lambda path: path.relative_to(ROOT).as_posix())
+    # Every captured input shares this checkout prefix. Sorting the complete
+    # POSIX name gives the identical relative order without rebuilding each
+    # ancestor path; digest() still seals and validates each relative name.
+    return sorted(files, key=lambda path: path.as_posix())
 
 
 def digest():
