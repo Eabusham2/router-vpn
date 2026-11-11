@@ -135,7 +135,22 @@ class NaiveH2NativeRunner(unittest.TestCase):
 
     def test_literal_gate_preserves_all_ipv4_ipv6_dotted_and_refusal_verdicts(self):
         self.assertEqual(list(G.LOOPBACK), ['TestRouterVPNDesktopNodeNaiveLiteral', 'TestRouterVPNDesktopNodeNaiveCONNECTLiteral'])
-        self.assertEqual(len(G.LOOPBACK['TestRouterVPNDesktopNodeNaiveCONNECTLiteral']), 28)
+        connect = G.LOOPBACK['TestRouterVPNDesktopNodeNaiveCONNECTLiteral']
+        ordinary = {carrier+'/'+endpoint+'/'+fault
+                    for carrier in ('http-connect', 'https-connect')
+                    for endpoint in ('192.0.2.77', '2001:db8::77')
+                    for fault in ('home-udp', 'naive-password', 'naive-server-name',
+                                  'naive-certificate', 'forced-query', 'connect-auth', 'connect-route')}
+        layered = {carrier+'/'+endpoint+'/final-layer/'+layer+'/'+fault
+                   for carrier in ('http-connect', 'https-connect')
+                   for endpoint in ('192.0.2.77', '2001:db8::77')
+                   for layer in ('aes-256-gcm', 'aes-256-gcm+xor-whitening')
+                   for fault in (('home-udp', 'layer-password', 'layer-whitening', 'layer-route', 'layer-bypass')
+                                 if endpoint == '192.0.2.77' else ('home-udp',))}
+        self.assertEqual(len(ordinary), 28)
+        self.assertEqual(len(layered), 24)
+        self.assertEqual(set(connect), ordinary | layered)
+        self.assertEqual(len(connect), 52)
         cases = next(iter(G.LOOPBACK.values()))
         self.assertEqual(len(cases), 23)
         self.assertTrue({'ipv4-trailing-dot-name', 'ipv6-trailing-dot-name',
@@ -218,7 +233,7 @@ class NaiveH2NativeRunner(unittest.TestCase):
                      patch.object(G.PACKET.NODE,'verify_naive_library',side_effect=lambda _:order.append('verify')), patch('builtins.print'):
                     result=G.run(vendor,stage=stage)
                 self.assertEqual(order[:2],['library','compile']); self.assertEqual(order[-1],'verify')
-                self.assertEqual(len(observed), {'parser':82,'loopback':53,'reference':659}[stage])
+                self.assertEqual(len(observed), {'parser':82,'loopback':77,'reference':659}[stage])
                 self.assertEqual(result['native_library'], {'sha256':'a'*64,'bytes':42})
                 self.assertFalse(result['device_acceptance']); self.assertFalse(result['production_router_acceptance'])
 
