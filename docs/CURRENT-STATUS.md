@@ -6,6 +6,25 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## Hosted follow-up after the local executor interruption
+
+The latest [continuation ledger](CONTINUATION-EVIDENCE-2026-11-11-NATIVE-REPAIRS.md)
+records the actual GTK label correction at `07c96a04` and three desktop/iOS
+fixture composition repairs at `ad530f16`. Production policy and existing
+negative controls were preserved. Local execution is unavailable; hosted
+Python, Swift and native jobs must validate these later repairs. The H2 TCP
+DNS reference peer also distinguishes the pinned library's exact reuse probes
+from the original application query while retaining strict proof counts and
+refusal checks; this fixture correction still requires hosted native validation.
+
+At `07c96a04`, all six standalone macOS PF, installed-controller and physical
+socket/utun ownership jobs passed across Intel and Apple Silicon. The actual
+full Go test step also passed, but its containing source-audit job later failed
+on the corrected desktop command expectation. Those results do not certify
+an exact-current complete release or the unfinished protected ordered macOS
+host. The original implementation gaps, unapplied startup recovery patch and
+live acceptance boundaries below remain open.
+
 ## November 11 later continuation: native ordered paths and protected hosts
 
 The [native repair and ordered-path evidence ledger](CONTINUATION-EVIDENCE-2026-11-11-NATIVE-REPAIRS.md)

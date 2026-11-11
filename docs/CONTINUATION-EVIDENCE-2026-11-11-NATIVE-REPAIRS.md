@@ -7,6 +7,69 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## Hosted CI follow-up after the execution interruption
+
+The local executor became unavailable during this continuation. Later fixture
+repairs were reviewed against exact GitHub source and published with normal
+ancestry; no later local Python, Swift or native execution is claimed. Hosted
+jobs remain the executable validation path.
+
+- `07c96a0411fff42f16513fcb9a91482ec64626ac` restores the actual GTK profile
+  label's AUTO encryption/obfuscation requirements wording. The unchanged
+  installed-layout/source audit then passed in job `130794807539`.
+- `ad530f16e9be8f5eec8cbb01999aa36c77ba73b8` repairs three exact-current
+  fixture compositions: the desktop imported-runtime command includes its
+  already-required NodeChain family; iOS base selection asserts both the
+  shipping ordered and paired branches; hop measurement composes shipping
+  `holdCurrent` as well as `current`, `withHold` and the real app lease gate.
+  Idle-only busy/unready refusals and default manual draining are explicit
+  boundary cases. The original hop transaction case block, both original
+  causal controls and all original deadlines are unchanged. A new causal
+  mutation must reject discarded `idleOnly` forwarding. Source-only review is
+  recorded separately from the hosted Swift result.
+
+At `07c96a04`, the actual `go test ./... -timeout=15m` step in authoritative
+job `130795034230` passed. The containing source-audit job later failed on the
+desktop expectation corrected above, so the job itself is not recorded as
+passing. The iOS source job separately failed on the old two-argument hold
+double; that is the third repair above.
+
+All six macOS ownership jobs in standalone run `43101780879` at
+`07c96a04` passed: Intel/ARM PF jobs `130794826962`/`130794820824`,
+installed controller/installer jobs `130794829449`/`130794834731`, and
+physical socket/utun jobs `130794820649`/`130794820476`. Each physical job
+recorded 219 PASS lines and 47 rejected mutants. These completed results are
+distinct from subsequently cancelled jobs in the superseded authoritative
+run and do not enable the unfinished protected ordered macOS host.
+
+Authoritative native H2 job `130808171712` at `07c96a04` exposed a separate
+DNS receipt-counting failure. The pinned sing-box revision
+`1ac1a339cb1223e9c70eae14c44411c75033c02d` sends a TCP reuse capability
+probe (ID 1/A and ID 2/AAAA) in addition to the original ID 0 application
+query. The fixture counted the capability A query as a second application
+receipt. The exact original query, bootstrap versus selected resolver
+separation, strict one application receipt, and zero-on-refusal conditions
+remain required; increasing the expected count or permitting arbitrary
+duplicates would not verify those conditions.
+
+The associated H2 peer-fixture correction distinguishes only those exact
+captured application and capability query identities. Independent per-peer
+atomic counters reject duplicate capability probes; unexpected query IDs or
+types fail. Duplicate ID 0 application requests still fail the unchanged
+strict one-receipt audit. The original IPv4-only AAAA refusal, resolver
+question/class separation and all original lifetime/proof audit code remain
+unchanged. Thirty source-bound sequence checks and six causal controls were
+reviewed in JavaScript, with an additional independent ten-case receipt model;
+these are not execution of the Go or native H2 fixture. The pinned behavior is
+visible in upstream [TCP transport](https://github.com/SagerNet/sing-box/blob/1ac1a339cb1223e9c70eae14c44411c75033c02d/dns/transport/tcp.go)
+and [query multiplexer](https://github.com/SagerNet/sing-box/blob/1ac1a339cb1223e9c70eae14c44411c75033c02d/dns/transport/multiplexer.go).
+
+The current release has not been certified or published by these component
+results. Exact-SHA native packages, server images, compose and final
+publication remain separate gates. The unapplied startup recovery patch,
+inaccessible macOS descriptor work, broader graph requirements and live
+acceptance boundaries recorded below remain open.
+
 ## Requirement recovery
 
 Original source recovery included `mm.md`, both historical Handoff Audits, the

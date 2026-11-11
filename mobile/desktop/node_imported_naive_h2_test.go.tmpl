@@ -552,13 +552,36 @@ func desktopImportedNaiveH2DNSPeer(t *testing.T, question string, hits *atomic.I
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The original application exchange uses ID zero. The pinned TCP transport
+	// independently probes reuse with same-name A/AAAA questions at IDs 1/2.
+	// Those capability questions cannot satisfy the application proof receipt.
+	var probeA, probeAAAA atomic.Int64
 	server := &dns.Server{Listener: listener, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
 		answer := new(dns.Msg).SetReply(q)
-		if len(q.Question) != 1 || q.Question[0].Name != question || q.Question[0].Qtype != dns.TypeA || q.Question[0].Qclass != dns.ClassINET {
+		if len(q.Question) != 1 || q.Question[0].Name != question || q.Question[0].Qclass != dns.ClassINET {
 			answer.Rcode = dns.RcodeRefused
 		} else {
-			hits.Add(1)
-			answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: question, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 1}, A: net.IPv4(203, 0, 113, 77)}}
+			switch {
+			case q.Id == 0 && q.Question[0].Qtype == dns.TypeA:
+				hits.Add(1)
+			case q.Id == 1 && q.Question[0].Qtype == dns.TypeA:
+				if probeA.Add(1) != 1 {
+					t.Error("captured H2 DNS repeated its TCP reuse A probe")
+					answer.Rcode = dns.RcodeRefused
+				}
+			case q.Id == 2 && q.Question[0].Qtype == dns.TypeAAAA:
+				if probeAAAA.Add(1) != 1 {
+					t.Error("captured H2 DNS repeated its TCP reuse AAAA probe")
+				}
+				// Preserve the reference peer's original IPv4-only refusal.
+				answer.Rcode = dns.RcodeRefused
+			default:
+				t.Error("captured H2 DNS received an uncaptured application or reuse query")
+				answer.Rcode = dns.RcodeRefused
+			}
+			if answer.Rcode == dns.RcodeSuccess {
+				answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: question, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 1}, A: net.IPv4(203, 0, 113, 77)}}
+			}
 		}
 		_ = w.WriteMsg(answer)
 	})}
