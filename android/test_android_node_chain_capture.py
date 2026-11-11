@@ -288,6 +288,33 @@ public final class NodeChainCaptureHarness {
   OrderedProductSurface stale=new OrderedProductSurface(f);stale.open();stale.choose(0);JSONObject changed=f.bundle(1);profile(changed).put("api_token","changed while actual editor open");f.replace(1,changed);f.nodes.select(f.control().id);State replacement=new State(f);stale.save();
   check(stale.refreshes==0&&!stale.message.isEmpty(),"shipping ordered editor published a replaced source");replacement.same(f,"actual editor refused replaced source");
  }
+ static void productHandoff(Path root)throws Exception{
+  AndroidHomeStateStore.Snapshot previous=AndroidHomeStateStore.current;
+  try{
+   for(String fault:List.of("current","choice","Home","cancel","destroy")){
+    Fixture f=new Fixture(root,"3/");AndroidHomeStateStore.current=new AndroidHomeStateStore.Snapshot();
+    AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(f.context);String selection=AndroidConnectionSelection.digest(f.context,f.nodes);
+    ProductConnectSurface ui=new ProductConnectSurface(f.context,f.nodes,new AndroidStandardExitStore(f.context));ui.multihopToggle.setChecked(true);
+    ui.pressConnect();check(ui.orderedConnectCapturePending&&ui.connection.starts==0,"ordered Product dispatched before its actual capture worker returned");
+    Runnable delivery=ui.awaitOrderedDelivery();check(ui.connection.starts==0,"ordered Product bypassed its queued UI handoff");
+    switch(fault){
+     case "choice"->f.prefs.edit().putBoolean("multihop_on",false).commit();
+     case "Home"->AndroidHomeStateStore.current=new AndroidHomeStateStore.Snapshot();
+     case "cancel"->{long ticket=ui.orderedConnectTicket;ui.pressConnect();check(!ui.orderedConnectCapturePending&&ui.orderedConnectTicket==ticket+1,"ordered Product cancellation lost its queued capture ticket");}
+     case "destroy"->ui.destroyed=true;
+    }
+    delivery.run();
+    if(fault.equals("current")){
+     check(ui.connection.starts==1&&ui.connection.orderedHome==home&&selection.equals(ui.connection.orderedSelection),"ordered Product replaced its original Home or selection receipt");
+     var source=ui.connection.ordered;source.requireCurrent();check(source.control.id.equals(f.control().id)&&source.members.size()==3,"ordered Product omitted its original complete source");
+     for(int i=0;i<3;i++)check(source.members.get(i).id.equals(f.members.get(i).id),"ordered Product changed original member order");
+    }else check(ui.connection.starts==0,"ordered Product adopted a replaced "+fault);
+   }
+   Fixture f=new Fixture(root,"3/");ProductConnectSurface startup=new ProductConnectSurface(f.context,f.nodes,new AndroidStandardExitStore(f.context));
+   startup.startupCapturePending=true;long ticket=startup.startupCaptureTicket;int cancelled=AndroidStartupPolicy.cancellations;startup.pressConnect();
+   check(!startup.startupCapturePending&&startup.startupCaptureTicket==ticket+1&&AndroidStartupPolicy.cancellations==cancelled+1&&startup.connection.starts==0&&startup.uiCallbacks.isEmpty(),"Product cancelled startup capture fell through to a new connection");
+  }finally{AndroidHomeStateStore.current=previous;}
+ }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";
   if(family.equals("source")){sourceControls(root);return;}if(family.equals("generation")){generationControls(root);return;}
@@ -299,9 +326,10 @@ public final class NodeChainCaptureHarness {
   if(family.equals("editor-atomic")){editorAtomicity(root);return;}
   if(family.equals("editor-budget")){editorFinalBudget(root);return;}
   if(family.equals("editor-ui")){editorHandlers(root);return;}
+  if(family.equals("product-handoff")){productHandoff(root);return;}
   for(String key:List.of("2/","3/","4/","8/","3/aes-256-gcm","4/aes-256-gcm+xor-whitening","4/fixed-middle"))roundtrip(root,key);
   sourceControls(root);generationControls(root);validationControls(root);compilationRace(root);captureAtomicity(root);
-  editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);editorFinalBudget(root);editorHandlers(root);
+  editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);editorFinalBudget(root);editorHandlers(root);productHandoff(root);
   System.out.println("Android ordered sources: "+checks+" checks; actual Go compilation, exact all-member saved capture and rollback passed");
  }
 }
@@ -368,6 +396,7 @@ def run(root, work, app, classes, jar, env):
     permission = (app / "AndroidConnectionSelection.java").read_text()
     editor = (app / "AndroidOrderedPathSelection.java").read_text()
     editor_ui = (app / "OrderedProductSurface.java").read_text()
+    product_ui = (app / "ProductConnectSurface.java").read_text()
     preview_start = editor.index("        RouterNodeChain preview=")
     preview_end = editor.index("        AndroidNodeStore.ChainCapture captured=", preview_start)
     publication_lock = "synchronized <T> T publishChainCatalog(ChainCatalog captured, ChainPublication<T> publication) throws Exception { synchronized (STORE_LOCK)"
@@ -379,6 +408,10 @@ def run(root, work, app, classes, jar, env):
     stage = store[stage_start:stage_end]
     assert stage.count("for(int i=0;i<members.length();i++)") == 1
     controls = (
+        ("product-handoff", "ProductConnectSurface", product_ui.replace("AndroidConnectionSelection.requireCurrent(this,nodeStore,selection);", ""), "ordered Product adopted a replaced choice"),
+        ("product-handoff", "ProductConnectSurface", product_ui.replace("if(!connection.pathCurrent(home))", "if(false)"), "ordered Product adopted a replaced Home"),
+        ("product-handoff", "ProductConnectSurface", product_ui.replace("ticket!=orderedConnectTicket", "false"), "ordered Product adopted a replaced cancel"),
+        ("product-handoff", "ProductConnectSurface", product_ui.replace("isFinishing()||isDestroyed()", "false"), "ordered Product adopted a replaced destroy"),
         ("source", "AndroidNodeStore", node.replace(source_guard, "false"), "ordered capture accepted replacement middle source"),
         ("generation", "AndroidNodeStore", node.replace(epoch_guard, "false"), "ordered capture revived after change-away and back"),
         ("atomic", "AndroidNodeStore", node.replace(capture_lock, capture_lock.replace("STORE_LOCK", "new Object()")), "ordered capture did not exclude the independent store publisher"),
@@ -391,10 +424,11 @@ def run(root, work, app, classes, jar, env):
         ("editor-ui", "OrderedProductSurface", editor_ui.replace('else draft.movePrefix(position,target);', 'else {}'), "shipping ordered editor did not move the original first node later"),
     )
     assert node.count(source_guard) == node.count(epoch_guard) == node.count(capture_lock) == 1
-    for family, name, changed, witness in controls:
-        negative = work / ("ordered-negative-" + family)
+    for index, (family, name, changed, witness) in enumerate(controls):
+        control_id = f"{index}-{family}"
+        negative = work / ("ordered-negative-" + control_id)
         shutil.copytree(classes, negative)
-        source = work / ("ordered-source-" + family) / (name + ".java")
+        source = work / ("ordered-source-" + control_id) / (name + ".java")
         source.parent.mkdir()
         source.write_text(changed)
         classpath = str(negative) + os.pathsep + str(jar)

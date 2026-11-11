@@ -84,9 +84,10 @@ final class AndroidPrivateFileStore {
  static void write(File file,byte[] bytes,int max)throws Exception{if(bytes.length==0||bytes.length>max)throw new IOException("bad size");Runnable hook=beforeWrite;if(hook!=null)hook.run();Files.createDirectories(file.getParentFile().toPath());Files.write(file.toPath(),bytes);writes++;if(failures>0&&file.getAbsolutePath().equals(failPath)){failures--;throw new IOException("injected post-publication failure");}}
  static void remove(File file,int max)throws Exception{Files.deleteIfExists(file.toPath());}
 }
-final class AndroidStartupPolicy {static void cancelPending(){}}
+final class AndroidStartupPolicy {static int cancellations;static void cancelPending(){cancellations++;}}
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(android.content.Context context){return busy;}}
-final class AndroidHomeStateStore {static final class Snapshot{boolean connected;String phase="off";}static Snapshot snapshot(android.content.Context c){return new Snapshot();}}
+// Controlled Home epoch only. This fixture does not supply native readiness.
+final class AndroidHomeStateStore {static final class Snapshot{boolean connected;String phase="off";}static volatile Snapshot current=new Snapshot();static Snapshot snapshot(android.content.Context c){return current;}}
 final class AndroidRuntimeRegistry {
  static final class Engine{boolean isRunning(){return false;}boolean isActiveOrTransitioning(){return false;}String getState(){return "DOWN";}}
  final Engine orchestrator=new Engine(),multihop=new Engine(),singBox=new Engine(),xray=new Engine();static AndroidRuntimeRegistry get(android.content.Context c){return new AndroidRuntimeRegistry();}
@@ -152,7 +153,9 @@ final class AndroidOrderedPathPresentation {static final class Member{String nam
 final class ProductConnectSurface extends Context {
  static final String MULTI_ON="multihop_on",MULTI_ENTRY="multihop_entry",MULTI_EXIT="multihop_exit",MULTI_MODE="multihop_exit_mode";
  static final String SELECTED_ID="selected_id",SELECTED_KIND="selected_kind";
- final ConnectionProfilesHarness.Fixture fixture;final AndroidNodeStore nodeStore;final AndroidStandardExitStore exitStore;
+ final Context storeContext;final AndroidNodeStore nodeStore;final AndroidStandardExitStore exitStore;
+ boolean orderedConnectCapturePending,startupCapturePending,destroyed;long orderedConnectTicket,startupCaptureTicket;
+ final java.util.concurrent.BlockingQueue<Runnable> uiCallbacks=new java.util.concurrent.LinkedBlockingQueue<>();
  static final class View{String text="";boolean checked,enabled;void setText(String value){text=value;}boolean isChecked(){return checked;}void setChecked(boolean value){checked=value;}void setEnabled(boolean value){enabled=value;}}
  final View statusView=new View(),connectButton=new View(),multihopToggle=new View(),multihopHint=new View();String message="";double currentPathMs;static final class Telemetry{double cachedMedian(String id){return 0;}}final Telemetry telemetry=new Telemetry();
  final View killSwitch=new View(),autoRequirementsHint=new View();private String externalProtectionID="",externalProtectionSource="";
@@ -165,20 +168,25 @@ final class ProductConnectSurface extends Context {
   AndroidNodeStore.Node importedFinal;
   boolean isMultihopConnected(){return false;}String activeMultihopEntryId(){return ordinaryEntry==null?"":ordinaryEntry.id;}String activeMultihopExitId(){return importedFinal==null?"":importedFinal.id;}String activeMultihopExitMode(){return mode;}String activeMultihopEntryMode(){return ordinaryEntry==null?"":ordinaryEntry.protocol;}AndroidStandardExitStore.Entry activeImportedMultihopEntry(){return ordinaryEntry;}
   AndroidNodeStore.ChainCapture ordered;
+  AndroidHomeStateStore.Snapshot orderedHome;String orderedSelection;
+  boolean pathCurrent(AndroidHomeStateStore.Snapshot captured){return captured==AndroidHomeStateStore.current;}
   boolean isOrderedConnected(){return false;}List<AndroidNodeStore.ChainSource> activeOrderedSources(){throw new AssertionError("store fixture has no live ordered owner");}List<String> activeOrderedModes(){throw new AssertionError("store fixture has no live ordered modes");}
-  void connectOrdered(AndroidNodeStore.ChainCapture captured,Object callback){starts++;ordered=captured;}
+  void connectOrdered(AndroidNodeStore.ChainCapture captured,AndroidHomeStateStore.Snapshot home,String selection,Object callback){starts++;ordered=captured;orderedHome=home;orderedSelection=selection;}
   void connectImportedMultihop(AndroidStandardExitStore.Entry entry,AndroidNodeStore.Node exit,String mode,String execution,Object callback){starts++;ordinaryEntry=entry;importedFinal=exit;this.mode=mode;this.execution=execution;if(!AndroidImportedRouterPath.supports(entry.protocol,mode)||!execution.equals("local"))throw new AssertionError("changed imported Router path");}
   void connectMultihop(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String mode,String execution,String entryMode,Object callback){throw new AssertionError("external selection became Router multihop");}
   void connect(String mode,List<String> layers,Object callback){throw new AssertionError("external selection used unrelated active Router");}
  }final Connection connection=new Connection();
  static final class ModeChoice{String id,title;List<String> layers;}
- ProductConnectSurface(ConnectionProfilesHarness.Fixture f){this(f,false);}ProductConnectSurface(ConnectionProfilesHarness.Fixture f,boolean independent){super(f.context.getFilesDir());fixture=f;nodeStore=independent?new AndroidNodeStore(f.context):f.nodes;exitStore=independent?new AndroidStandardExitStore(f.context):f.exits;}
- @Override public MemoryPreferences getSharedPreferences(String name,int mode){return fixture.context.getSharedPreferences(name,mode);}
- SharedPreferences prefs(){return fixture.prefs;}void toast(String text){message=text;}void showNodes(){throw new AssertionError("selected external disappeared");}
- AndroidUnifiedNodeCatalog.Item selectedCatalogItem(){return new AndroidUnifiedNodeCatalog.Item(fixture.prefs.getString("selected_id",""),"router-vpn".equals(fixture.prefs.getString("selected_kind","router-vpn")));}
+ ProductConnectSurface(ConnectionProfilesHarness.Fixture f){this(f,false);}ProductConnectSurface(ConnectionProfilesHarness.Fixture f,boolean independent){this(f.context,independent?new AndroidNodeStore(f.context):f.nodes,independent?new AndroidStandardExitStore(f.context):f.exits);}
+ ProductConnectSurface(Context context,AndroidNodeStore nodes,AndroidStandardExitStore exits){super(context.getFilesDir());storeContext=context;nodeStore=nodes;exitStore=exits;}
+ @Override public MemoryPreferences getSharedPreferences(String name,int mode){return storeContext.getSharedPreferences(name,mode);}
+ SharedPreferences prefs(){return getSharedPreferences("router-vpn-unified",0);}void toast(String text){message=text;}void showNodes(){throw new AssertionError("selected external disappeared");}
+ AndroidUnifiedNodeCatalog.Item selectedCatalogItem(){return new AndroidUnifiedNodeCatalog.Item(prefs().getString("selected_id",""),"router-vpn".equals(prefs().getString("selected_kind","router-vpn")));}
  AndroidNodeStore.Node nodeById(String id)throws Exception{for(var n:nodeStore.list())if(n.id.equals(id))return n;return null;}
  Object callback(){return new Object();}void configureMultihop(){}void refreshModeChoices(){}void refreshConnectionLater(){}ModeChoice currentMode(){throw new AssertionError("external selection used Router mode");}
  static String safe(Exception error){return error.getMessage();}void pressConnect(){connectOrDisconnect();}
+ void runOnUiThread(Runnable delivery){uiCallbacks.add(delivery);}boolean isFinishing(){return false;}boolean isDestroyed(){return destroyed;}
+ Runnable awaitOrderedDelivery()throws Exception{Runnable delivery=uiCallbacks.poll(5,java.util.concurrent.TimeUnit.SECONDS);if(delivery==null)throw new AssertionError("actual ordered capture worker did not return its UI callback");return delivery;}
  boolean mutationBusy(){return AndroidVpnMutationGuard.isBusy(this);}
  boolean orderedPathEnabled(){return prefs().getBoolean(MULTI_ON,false)&&!prefs().getString("multihop_nodes","").isEmpty();}AndroidOrderedPathPresentation currentOrderedPresentation(){return null;}
  void pressDNS(String mode){setQuickDns(mode);}void refreshDnsSelection(){}boolean openSelectedExternal(boolean edit){return isExternalSelected();}
@@ -905,7 +913,7 @@ def main():
             target.write_text(content)
         app = src / "com/eabusham/routervpn"
         app.mkdir(parents=True)
-        for name in ("AndroidExternalProtection", "AndroidKillSwitchPolicy", "AndroidConnectionProfileStore", "AndroidConnectionProfilePolicy", "AndroidNodeStore", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidExternalAmnezia", "AndroidOpenVPN"):
+        for name in ("AndroidExternalProtection", "AndroidKillSwitchPolicy", "AndroidConnectionProfileStore", "AndroidConnectionProfilePolicy", "AndroidConnectionSelection", "AndroidNodeStore", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidExternalAmnezia", "AndroidOpenVPN"):
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
         methods = "\n".join(method("AndroidExternalPolicy.java", signature) for signature in ("static boolean supports(", "static String protocol(", "static void checkPolicy("))
         policy_source = (JAVA / "AndroidExternalPolicy.java").read_text(encoding="utf-8")
@@ -916,7 +924,8 @@ def main():
         imported_capture = "\n".join(method("AndroidImportedRouterPath.java", signature) for signature in ("static boolean supports(", "static void requireEntry(", "static AndroidMultihopController.Source captureSource(", "static AndroidStandardExitStore.Entry entry("))
         (app / "Boundaries.java").write_text(BOUNDARIES.replace("EXTERNAL_METHODS", methods).replace("EXTERNAL_POLICY_FIELDS", policy_fields).replace("CAPTURE_SOURCE", captured).replace("IMPORTED_CAPTURE_METHODS", imported_capture), encoding="utf-8")
         protection = "\n".join(method("ProductActivity.java", signature) for signature in ("private boolean isExternalSelected(", "private void setQuickKillSwitch(", "private void refreshSettingsState(", "private void setQuickDns("))
-        (app / "ProductConnectSurface.java").write_text(PRODUCT.replace("PRODUCT_CONNECT", method("ProductActivity.java", "private void connectOrDisconnect(")).replace("PRODUCT_PROTECTION", protection).replace("PRODUCT_IMPORTED", "\n".join(method("ProductActivity.java", signature) for signature in ("private void chooseImportedRouterFinal(", "private void chooseImportedRouterTransport(", "private void refreshMultihopSummary("))), encoding="utf-8")
+        connect = "\n".join(method("ProductActivity.java", signature) for signature in ("private void connectOrDisconnect(", "private void connectSavedOrderedPath("))
+        (app / "ProductConnectSurface.java").write_text(PRODUCT.replace("PRODUCT_CONNECT", connect).replace("PRODUCT_PROTECTION", protection).replace("PRODUCT_IMPORTED", "\n".join(method("ProductActivity.java", signature) for signature in ("private void chooseImportedRouterFinal(", "private void chooseImportedRouterTransport(", "private void refreshMultihopSummary("))), encoding="utf-8")
         (app / "AndroidProductParity.java").write_text('package com.eabusham.routervpn; import org.json.*; final class AndroidProductParity {static void showDNS(android.content.Context c,AndroidNodeStore s){throw new AssertionError("Details sheet rendering boundary");}' + method("AndroidProductParity.java", "static void selectQuickDNS(") + '}')
         (app / "AndroidStartLayer.java").write_text('package com.eabusham.routervpn; final class AndroidStartLayer {static final String OFF="off";static String selectedMode(org.json.JSONObject root){throw new AssertionError("Raw eligibility is covered in native graph tests");}}')
         (app / "ConnectionProfilesHarness.java").write_text(HARNESS)
