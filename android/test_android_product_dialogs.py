@@ -24,7 +24,7 @@ SIGNATURES = (
     "void runRouterNodeComparison(", "void showPerformance(", "void showNodes(",
     "void showProfileManager(",
     "void chooseMultihopExecution(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String mode,String entryMode,AndroidViaEntryLatencyProbe.Result selection)",
-    "void configureMultihop(", "void showViaEntryExitPicker(",
+    "void configurePairMultihop(", "void showViaEntryExitPicker(", "void configureMultihop(",
 )
 
 
@@ -34,11 +34,22 @@ def method(signature):
     return SOURCE[start:end]
 
 
+def block(source, signature):
+    start = source.index(signature)
+    end = source.index("{", start) + 1
+    depth = 1
+    while depth:
+        depth += (source[end] == "{") - (source[end] == "}")
+        end += 1
+    return source[start:end]
+
+
 BOUNDARIES = r'''package com.eabusham.routervpn;
-import java.util.*;
+import java.util.*;import java.security.MessageDigest;import java.nio.charset.StandardCharsets;import org.json.JSONObject;import android.util.Base64;
 final class MemoryPreferences implements android.content.SharedPreferences {
  final Map<String,Object> values=new LinkedHashMap<>();int writes;
  public String getString(String key,String fallback){return (String)values.getOrDefault(key,fallback);}
+ public Map<String,?> getAll(){return new LinkedHashMap<>(values);}
  public Editor edit(){return new Editor(){final Map<String,Object> next=new LinkedHashMap<>();
   public Editor putString(String key,String value){next.put(key,value);return this;}
   public Editor putBoolean(String key,boolean value){next.put(key,value);return this;}
@@ -48,10 +59,38 @@ final class MemoryPreferences implements android.content.SharedPreferences {
 final class AndroidNodeStore {
  static final class Node {final String id,name;Node(String id){this.id=id;name="Node "+id;}}
  final List<Node> nodes=new ArrayList<>(Arrays.asList(new Node("a"),new Node("b"),new Node("c")));
- String selected="a";int selections;
+ String selected="a",identityFault="";int selections,catalogCaptures;boolean staleCatalog;Runnable duringCapture;
  List<Node> list(){return nodes;}String activeId(){return selected;}
  void select(String id){selected=id;selections++;}
+ static final class ChainSource {
+  final String id,profileId,proofId;final String original;
+  ChainSource(String id,String fault)throws Exception{
+   this.id=id;profileId=id;byte[] key=new byte[32];Arrays.fill(key,(byte)id.charAt(0));
+   String config="[Peer]\nPublicKey="+java.util.Base64.getEncoder().encodeToString(key)+"\n";
+   JSONObject assets=new JSONObject().put("shadowsocks",new JSONObject().put("sing-box.json","original captured asset"))
+    .put("wg",new JSONObject().put("wg.conf",java.util.Base64.getEncoder().encodeToString(config.getBytes(StandardCharsets.UTF_8))));
+   JSONObject source=new JSONObject().put("profiles",assets).put("selectedRouterID",id).put("routerProfiles",new org.json.JSONArray().put(new JSONObject().put("id",id)));
+   proofId=stableNodeIdentity(source);source.put("nodeProofId",proofId);
+   if(fault.equals("missing-wg"))assets.remove("wg");
+   if(fault.equals("short-key"))assets.getJSONObject("wg").put("wg.conf",java.util.Base64.getEncoder().encodeToString("[Peer]\nPublicKey=AQ==\n".getBytes(StandardCharsets.UTF_8)));
+   if(fault.equals("wrong-proof"))source.put("nodeProofId","0".repeat(64));
+   original=source.toString();
+  }
+  JSONObject bundle()throws Exception{return new JSONObject(original);}
+  // SHIPPING_PAIRED_IDENTITY
+ }
+ // SHIPPING_NODE_IDENTITY_HELPERS
+ static final class ChainCapture {final List<ChainSource> members;final List<String> modes;ChainCapture(List<ChainSource>s,List<String>m){members=s;modes=m;}}
+ static final class ChainCatalog {
+  final AndroidNodeStore owner;final String selectedId;final List<Node> nodes;
+  ChainCatalog(AndroidNodeStore owner){this.owner=owner;selectedId=owner.selected;nodes=Collections.unmodifiableList(new ArrayList<>(owner.nodes));}
+  ChainSource source(String id)throws Exception{for(Node node:nodes)if(node.id.equals(id))return new ChainSource(id,owner.identityFault);throw new IllegalStateException("captured catalog has no original node");}
+  void requireCurrent(){if(owner.staleCatalog||!selectedId.equals(owner.selected))throw new IllegalStateException("original ordered catalog changed");}
+ }
+ ChainCatalog captureChainCatalog(){catalogCaptures++;ChainCatalog capture=new ChainCatalog(this);if(duringCapture!=null)duringCapture.run();return capture;}
 }
+final class AndroidVpnMutationGuard {static boolean isBusy(android.content.Context context){return ((ProductDialogHarness)context).busy;}}
+
 final class AndroidStandardExitStore {
  static final class Entry {final String id,name,protocol;Entry(String id){this(id,"shadowsocks");}Entry(String id,String protocol){this.id=id;name="Imported "+id;this.protocol=protocol;}}
  final List<Entry> entries=new ArrayList<>();List<Entry> list(){return entries;}
@@ -118,7 +157,9 @@ public final class ProductDialogHarness extends android.app.Activity {
  final AndroidUnifiedNodeCatalog catalog=new AndroidUnifiedNodeCatalog();final AndroidTelemetry telemetry=new AndroidTelemetry();
  final Connection connection=new Connection();final Button fastestButton=new Button(this);final CheckBox multihopToggle=new CheckBox(this);
  final TextView liveLatency=new TextView(this);AndroidTelemetry.PathResult currentPathReceipt;AndroidExternalLiveTelemetry.Result currentExternalReceipt;final AndroidExternalLiveTelemetry externalTelemetry=new AndroidExternalLiveTelemetry();boolean resumed=true,telemetryBusy;long lastTelemetryAt,telemetryGeneration;double currentPathMs;
- AlertDialog fastestProgressDialog;
+ AlertDialog fastestProgressDialog;AndroidOrderedPathSelection ordered;
+ public android.content.SharedPreferences getSharedPreferences(String name,int mode){return saved;}
+ void showOrderedEditor(AndroidOrderedPathSelection draft){ordered=draft;} // Explicit editor-presentation sink; constructor and capture checks are shipping code.
  boolean busy;String selected="",profile="",pair="",entry="",exit="",message="",infoTitle="",info="";int routed,refreshes,externalBenchmarks,externalComparisons;boolean externalComparisonAdopt;
  SharedPreferences prefs(){return saved;}boolean mutationBusy(){return busy;}void toast(String text){message=text;}
  void refreshNodes(){}void refreshAll(){refreshes++;}void refreshMap(){}void dialog(String title,String text){infoTitle=title;info=text;}
@@ -234,19 +275,38 @@ HARNESS_SUFFIX = r'''
   h=new ProductDialogHarness();var captured=h.capture();h.chooseMultihopExecution(h.nodeById("a"),h.nodeById("b"),"wg","wg",captured);captured.stale=true;shown(3,"Multihop execution").clickItem(2);check(h.saved.writes==0&&h.message.contains("Retest"),"late changed capture cannot save an old measured choice");
  }
  static void entry(){
-  ProductDialogHarness h=new ProductDialogHarness();h.configureMultihop();AlertDialog d=shown(3,"Multihop entry");
+  ProductDialogHarness h=new ProductDialogHarness();h.configurePairMultihop();AlertDialog d=shown(3,"Multihop entry");
   String note=((TextView)((LinearLayout)d.customTitle).children.get(1)).getText().toString();
   check(note.contains("Router VPN will then briefly establish and prove this entry")&&note.contains("disconnect")&&note.contains("press Connect"),"Router entry discloses temporary proved measurement before selection");
   d.clickItem(2);check(h.entry.equals("c")&&h.exit.equals("3"),"chosen entry and complete candidate list passed to measurement");
-  h=new ProductDialogHarness();h.busy=true;h.configureMultihop();check(h.entry.isEmpty(),"busy multihop setup cannot create temporary tunnel");
+  h=new ProductDialogHarness();h.busy=true;h.configurePairMultihop();check(h.entry.isEmpty(),"busy multihop setup cannot create temporary tunnel");
   for(String protocol:new String[]{"shadowsocks","hysteria2","wireguard","amneziawg"})for(int routers:new int[]{1,3}){
    h=new ProductDialogHarness();while(h.nodeStore.nodes.size()>routers)h.nodeStore.nodes.remove(h.nodeStore.nodes.size()-1);
    AndroidStandardExitStore.Entry first=new AndroidStandardExitStore.Entry("provider",protocol);h.exitStore.entries.add(first);
-   h.configureMultihop();d=shown(routers+1,"Multihop entry");check(d.items[routers].contains("Imported provider")&&d.items[routers].contains(protocol),"imported entry keeps its own visible identity");
+   h.configurePairMultihop();d=shown(routers+1,"Multihop entry");check(d.items[routers].contains("Imported provider")&&d.items[routers].contains(protocol),"imported entry keeps its own visible identity");
    d.clickItem(routers);check(h.importedEntry==first&&h.importedFinals==h.nodeStore.nodes&&h.entry.isEmpty()&&h.saved.writes==0,"imported selection preserves its source without starting a Router measurement or saving early");
   }
-  h=new ProductDialogHarness();h.nodeStore.nodes.clear();h.exitStore.entries.add(new AndroidStandardExitStore.Entry("provider"));AlertDialog.last=null;h.configureMultihop();
+  h=new ProductDialogHarness();h.nodeStore.nodes.clear();h.exitStore.entries.add(new AndroidStandardExitStore.Entry("provider"));AlertDialog.last=null;h.configurePairMultihop();
   check(AlertDialog.last==null&&h.importedEntry==null,"imported entry cannot fabricate a missing paired final");
+ }
+ static void ordered(){
+  ProductDialogHarness h=new ProductDialogHarness();h.configureMultihop();shown(2,"Choose multihop path").clickItem(0);
+  check(h.ordered!=null&&h.ordered.catalog.owner==h.nodeStore&&h.ordered.catalog.selectedId.equals("a")&&h.ordered.members().size()==1&&h.ordered.members().get(0).source.id.equals("a"),"ordered choice lost original constructor/catalog/final capture");
+  check(h.saved.writes==0&&h.nodeStore.selections==0&&h.entry.isEmpty(),"opening ordered draft mutated selection or entered pair measurement");
+  h=new ProductDialogHarness();h.configureMultihop();shown(2,"Choose multihop path").clickItem(1);shown(3,"Multihop entry").clickItem(1);
+  check(h.ordered==null&&h.entry.equals("b")&&h.nodeStore.catalogCaptures==0,"pair choice entered ordered constructor");
+  h=new ProductDialogHarness();h.saved.values.put(SELECTED_KIND,"external");h.configureMultihop();shown(3,"Multihop entry").clickItem(0);
+  check(h.ordered==null&&h.entry.equals("a")&&h.nodeStore.catalogCaptures==0,"external entry was replaced by an ordered Router draft");
+  h=new ProductDialogHarness();h.busy=true;AlertDialog.last=null;h.configureMultihop();
+  check(AlertDialog.last==null&&h.nodeStore.catalogCaptures==0,"busy chooser created an ordered capture");
+  h=new ProductDialogHarness();h.configureMultihop();AlertDialog prompt=shown(2,"Choose multihop path");h.busy=true;prompt.clickItem(0);
+  check(h.ordered==null&&h.nodeStore.catalogCaptures==0,"late busy constructor captured private sources");
+  for(String fault:new String[]{"missing-wg","short-key"}){h=new ProductDialogHarness();h.nodeStore.identityFault=fault;h.configureMultihop();shown(2,"Choose multihop path").clickItem(0);check(h.ordered!=null&&h.ordered.members().isEmpty(),"ordered constructor selected a final without its original paired identity: "+fault);}
+  h=new ProductDialogHarness();h.nodeStore.identityFault="wrong-proof";h.configureMultihop();shown(2,"Choose multihop path").clickItem(0);check(h.ordered==null&&h.message.contains("proof does not match"),"ordered constructor accepted a substituted paired proof");
+  h=new ProductDialogHarness();h.nodeStore.staleCatalog=true;h.configureMultihop();shown(2,"Choose multihop path").clickItem(0);
+  check(h.ordered==null&&h.message.contains("catalog changed"),"ordered constructor adopted changed original catalog");
+  h=new ProductDialogHarness();ProductDialogHarness original=h;h.nodeStore.duringCapture=()->original.saved.values.put(SELECTED_ID,"b");h.configureMultihop();shown(2,"Choose multihop path").clickItem(0);
+  check(h.ordered==null&&h.message.contains("connection changed"),"ordered constructor adopted changed preferences");
  }
  static void exits(){
   ProductDialogHarness h=new ProductDialogHarness();List<AndroidNodeStore.Node> exits=Arrays.asList(h.nodeById("b"),h.nodeById("c"));
@@ -264,11 +324,11 @@ HARNESS_SUFFIX = r'''
   h=new ProductDialogHarness();captured=new AndroidViaEntryLatencyProbe.Result(h.nodeById("a"),exits,Collections.singletonList(new AndroidTelemetry.Result("b",4.2)));h.showViaEntryExitPicker(captured,null);d=shown(3,"Multihop hop 2");captured.stale=true;d.clickItem(0);check(h.exit.isEmpty()&&h.message.contains("Retest"),"a delayed Fastest callback cannot reuse an old capture");
  }
  public static void main(String[] args){
-  if(args.length>0){switch(args[0]){case "0":fastest();break;case "1":performance();break;case "2":nodes();break;case "3":profiles();break;case "4":execution();break;case "5":entry();break;case "6":exits();break;default:throw new AssertionError("unknown negative");}return;}
+  if(args.length>0){switch(args[0]){case "0":fastest();break;case "1":performance();break;case "2":nodes();break;case "3":profiles();break;case "4":execution();break;case "5":entry();break;case "6":exits();break;case "7":ordered();break;default:throw new AssertionError("unknown negative");}return;}
   AlertDialog broken=new AlertDialog.Builder(new ProductDialogHarness()).setMessage("suppresses list").setItems(new String[]{"unreachable"},(d,i)->{throw new AssertionError("hidden callback ran");}).show();
   check(!broken.itemsVisible(),"AOSP precedence double must reject original form");
   try{broken.clickItem(0);throw new AssertionError("hidden item clickable");}catch(IllegalStateException expected){checks++;}
-  fastest();performance();nodes();profiles();execution();entry();exits();polling();
+  fastest();performance();nodes();profiles();execution();entry();exits();polling();ordered();
   System.out.println("Android shipping ProductActivity dialog actions: PASS "+checks+" checks (AOSP dialog boundary; OS/network handles doubled)");
  }
 }
@@ -298,7 +358,7 @@ def main():
         sources["android/graphics/Color.java"] = "package android.graphics;public final class Color {public static final int WHITE=-1;}"
         sources["android/os/SystemClock.java"] = "package android.os;public final class SystemClock {public static long elapsedRealtime(){return 10000;}}"
         sources["android/content/SharedPreferences.java"] = """package android.content;
-public interface SharedPreferences {String getString(String key,String fallback);default Editor edit(){throw new UnsupportedOperationException();}
+public interface SharedPreferences {String getString(String key,String fallback);default java.util.Map<String,?> getAll(){return java.util.Collections.emptyMap();}default Editor edit(){throw new UnsupportedOperationException();}
 interface Editor{Editor putString(String key,String value);Editor putBoolean(String key,boolean value);void apply();}}"""
         via_source=(JAVA / "AndroidViaEntryLatencyProbe.java").read_text()
         ranking=[]
@@ -307,12 +367,37 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
             while depth:
                 depth+=(via_source[end]=="{")-(via_source[end]=="}");end+=1
             ranking.append(via_source[start:end])
-        sources["com/eabusham/routervpn/ProductBoundaries.java"] = BOUNDARIES.replace("  // SHIPPING_VIA_RANKING", "\n".join(ranking))
+        node_source=(JAVA/'AndroidNodeStore.java').read_text()
+        domain=next(line for line in node_source.splitlines() if 'private static final String NODE_PROOF_DOMAIN' in line)
+        identity_helpers=domain+"\n"+"\n".join(block(node_source,marker) for marker in (
+            '    static String stableNodeIdentity(', '    private static String wireGuardPeerPublicKey(',
+            '    private static JSONObject selectedProfile(', '    private static String hex('))
+        sources["com/eabusham/routervpn/ProductBoundaries.java"] = (BOUNDARIES.replace("  // SHIPPING_VIA_RANKING", "\n".join(ranking))
+            .replace('// SHIPPING_PAIRED_IDENTITY',block(node_source,'        void requirePairedIdentity('))
+            .replace('// SHIPPING_NODE_IDENTITY_HELPERS',identity_helpers))
+        sources['android/util/Base64.java']='package android.util;public final class Base64{public static final int DEFAULT=0;public static byte[] decode(String value,int flags){return java.util.Base64.getMimeDecoder().decode(value);}}'
+        sources['com/eabusham/routervpn/AndroidProfileSelection.java']=(JAVA/'AndroidProfileSelection.java').read_text()
         profile_source=(JAVA/"AndroidConnectionProfileStore.java").read_text()
-        start=profile_source.index("    static void applySelection(");end=profile_source.index("{",start)+1;depth=1
-        while depth:
-            depth+=(profile_source[end]=="{")-(profile_source[end]=="}");end+=1
-        sources["com/eabusham/routervpn/AndroidConnectionProfileStore.java"]="package com.eabusham.routervpn;import android.content.SharedPreferences;final class AndroidConnectionProfileStore{"+profile_source[start:end]+"}"
+        constants=profile_source[profile_source.index('    private static final String FILE_NAME'):profile_source.index('    private static final SecureRandom RANDOM')]
+        selection_keys=profile_source[profile_source.index('    private static final String[] SELECTION_KEYS'):profile_source.index('    static final class Record')]
+        fields=profile_source[profile_source.index('    private final Context context;'):profile_source.index('    AndroidConnectionProfileStore(')]
+        profile_methods="\n".join(block(profile_source,marker) for marker in (
+            '    AndroidConnectionProfileStore(', '    static void applySelection(',
+            '    synchronized Map<String,Object> orderedEditorPreferences(', '    private Map<String,Object> snapshotPreferences(',
+            '    private void requireIdle(', '    private SharedPreferences prefs('))
+        # Persisted-row loading is outside this choice-handler fixture; refusing
+        # that uncomposed branch cannot authorize a fabricated saved capture.
+        sources["com/eabusham/routervpn/AndroidConnectionProfileStore.java"]=(
+            "package com.eabusham.routervpn;import android.content.*;import java.io.File;import java.util.*;final class AndroidConnectionProfileStore{"
+            +constants+selection_keys+fields+profile_methods
+            +'AndroidNodeStore.ChainCapture orderedEditorPath(){throw new IllegalStateException("Saved ordered replay requires the complete profile fixture");}}')
+        ordered_source=(JAVA/'AndroidOrderedPathSelection.java').read_text()
+        ordered_fields=ordered_source[ordered_source.index('    static final class Member'):ordered_source.index('    AndroidOrderedPathSelection(')]
+        ordered_methods="\n".join(block(ordered_source,marker) for marker in (
+            '    AndroidOrderedPathSelection(', '    List<Member> members(', '    void requireCurrent(', '    private static boolean hasMode('))
+        ordered_java=('package com.eabusham.routervpn;import org.json.*;import java.util.*;final class AndroidOrderedPathSelection{'
+            +ordered_fields+ordered_methods+'}')
+        sources['com/eabusham/routervpn/AndroidOrderedPathSelection.java']=ordered_java
 
         for name, text in sources.items():
             path = tmp / name;path.parent.mkdir(parents=True, exist_ok=True);path.write_text(text)
@@ -334,6 +419,20 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
             changed[index] = changed[index].replace("choiceDialog(", "brokenChoiceDialog(", 1)
             changed.append("private AlertDialog.Builder brokenChoiceDialog(String title,String note){return new AlertDialog.Builder(this).setTitle(title).setMessage(note);}")
             compile_run(changed, index)
+        ordered_target=tmp/'com/eabusham/routervpn/AndroidOrderedPathSelection.java'
+        original_constructor=block(ordered_java,'    AndroidOrderedPathSelection(')
+        assert original_constructor.count('        requireCurrent();')==1
+        ordered_target.write_text(ordered_java.replace(original_constructor,original_constructor.replace('        requireCurrent();','        // defect: omit original complete capture validation'),1))
+        try:
+            compile_run(handlers,7,'ordered constructor adopted changed original catalog')
+        finally:
+            ordered_target.write_text(ordered_java)
+        assert ordered_java.count('source.requirePairedIdentity();')==1
+        ordered_target.write_text(ordered_java.replace('source.requirePairedIdentity();','/* defect: omit original paired identity */',1))
+        try:
+            compile_run(handlers,7,'ordered constructor selected a final without its original paired identity')
+        finally:
+            ordered_target.write_text(ordered_java)
         for old,new,expected in (
             ("else chooseImportedRouterFinal(imports.get(w-nodes.size()),nodes);",
              "else prepareViaEntryExitMeasurement(nodes.get(0),nodes);",
@@ -344,8 +443,8 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
             changed=handlers.copy();assert changed[5].count(old)==1
             changed[5]=changed[5].replace(old,new)
             compile_run(changed,5,expected)
-    print("Android product dialogs: all seven original-builder negative controls rejected")
-    print("Android product dialogs: imported dispatch and temporary-probe disclosure defects rejected")
+    print("Android product dialogs: all seven original-builder and the ordered-choice builder controls rejected")
+    print("Android product dialogs: imported dispatch, temporary-probe disclosure and ordered-constructor capture/paired-identity defects rejected")
 
 
 if __name__ == "__main__":
