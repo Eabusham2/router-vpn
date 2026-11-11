@@ -212,6 +212,26 @@ IMPORTED_CASES = ('imported-wg-ss-public', 'imported-wg-ss-wrong-public', 'impor
                   'imported-wg-ss-dns-failure', 'imported-wg-ss-mtu-cancel', 'imported-wg-ss-restore', 'imported-wg-ss-cover-lost', 'imported-wg-ss-temporary', 'imported-wg-ss-mtu-retire-undrained')
 CASES += IMPORTED_CASES
 
+NODE_CHAIN_HOST_CASES = ('node-chain-3-connect', 'node-chain-4-connect', 'node-chain-3-wrong-middle-key',
+    'node-chain-4-wrong-middle-proof', 'node-chain-3-final-dns-failure', 'node-chain-4-final-node-failure',
+    'node-chain-4-middle-source', 'node-chain-3-prefix-lost')
+CASES += NODE_CHAIN_HOST_CASES
+NODE_CHAIN_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledNodeChainFixtureKeepsCompiledAuthority'
+NODE_CHAIN_HOST_AUTHORITY_CASES = (NODE_CHAIN_HOST_AUTHORITY_ROOT,
+    *(NODE_CHAIN_HOST_AUTHORITY_ROOT + '/' + str(count) + '-nodes' for count in (3, 4)))
+
+def check_node_chain_host_authority_verdict(output):
+    NODE.require_native_verdicts(output, NODE_CHAIN_HOST_AUTHORITY_CASES, 'installed ordered source authority')
+
+def execute_node_chain_host_authority(binary, captured):
+    status, output = NODE.run([str(binary), '-test.v', '-test.timeout=30s',
+        '-test.run=^' + NODE_CHAIN_HOST_AUTHORITY_ROOT + '$'], cwd=ROOT, env=captured, timeout=40)
+    if status:
+        raise ValueError('Installed ordered source authority failed:\n' + output[-16384:])
+    check_node_chain_host_authority_verdict(output)
+    print(output, end='' if output.endswith('\n') else '\n')
+    return output
+
 
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
@@ -425,6 +445,7 @@ def check_verdict(output, case=None):
     ss_connect_receipts = Counter()
     ss_hysteria_receipts = Counter()
     imported_receipts = Counter()
+    chain_receipts = Counter()
     exact_passes = Counter(re.findall(r"(?m)^\s*" + re.escape(prefix + "/") + r"([^\s(]+) \([0-9.]+s\)$", output))
     suffix_receipts = Counter()
     for line in output.splitlines():
@@ -435,6 +456,8 @@ def check_verdict(output, case=None):
         _, marker, suffix = line.rpartition('verified installed host ')
         if marker:
             receipts.add(marker + suffix + '\n')
+            if suffix.startswith('ordered independent prefixes and final: '):
+                chain_receipts[suffix.removeprefix('ordered independent prefixes and final: ')] += 1
             if suffix.startswith('imported independent WG entry and paired SS final: '):
                 imported_receipts[suffix.removeprefix('imported independent WG entry and paired SS final: ')] += 1
             if suffix.startswith('independent SS2022 entry and Hysteria2 final: '):
@@ -477,6 +500,7 @@ def check_verdict(output, case=None):
         ('HYSTERIA2_CASES', HYSTERIA2_CASES),
         ('HYSTERIA2_LAYER_CASES', HYSTERIA2_LAYER_CASES),
         ('IMPORTED_CASES', IMPORTED_CASES),
+        ('NODE_CHAIN_HOST_CASES', NODE_CHAIN_HOST_CASES),
         ('LAYER_CASES', LAYER_CASES),
         ('MTU_CASES', MTU_CASES),
         ('OFF_CASES', OFF_CASES),
@@ -490,6 +514,9 @@ def check_verdict(output, case=None):
         ('WIREGUARD_LAYER_CASES', WIREGUARD_LAYER_CASES),
     )}
     for value in cases:
+        if value in membership['NODE_CHAIN_HOST_CASES']:
+            if chain_receipts[value] != 1 or exact_passes[value] != 1:
+                raise ValueError('Installed ordered graph omitted or duplicated its independent encrypted/native completion: ' + value)
         if value in membership['IMPORTED_CASES']:
             if imported_receipts[value] != 1 or exact_passes[value] != 1:
                 raise ValueError('Installed imported graph omitted or duplicated its independent encrypted native completion: ' + value)
@@ -905,6 +932,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
         # negative controls. The installed namespace/TUN inventory below is
         # still mandatory and supplies separate native-host evidence.
         node_chain_peer_output = execute_node_chain_peer(peer, source, captured)
+        node_chain_host_authority_output = execute_node_chain_host_authority(binary, captured)
         logs = []
         for case in (*CASES, *REVERSE_CASES):
             command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary), '--peer-binary', str(peer),
@@ -945,6 +973,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'hysteria_auth_cases': list(HYSTERIA_AUTH_CASES), 'hysteria_auth_output_sha256': hashlib.sha256(hysteria_auth_output.encode()).hexdigest(),
                   'connect_tls_cases': list(CONNECT_TLS_CASES), 'connect_tls_output_sha256': hashlib.sha256(connect_tls_output.encode()).hexdigest(),
                   'layer_peer_cases': list(LAYER_PEER_CASES), 'layer_peer_output_sha256': hashlib.sha256(layer_output.encode()).hexdigest(),
+                  'node_chain_host_authority_cases': list(NODE_CHAIN_HOST_AUTHORITY_CASES), 'node_chain_host_authority_output_sha256': hashlib.sha256(node_chain_host_authority_output.encode()).hexdigest(),
                   'node_chain_peer_cases': list(NODE_CHAIN_PEER_CASES), 'node_chain_peer_output_sha256': hashlib.sha256(node_chain_peer_output.encode()).hexdigest(),
                   'cases': list(CASES), 'reverse_cases': list(REVERSE_CASES), 'compiled_negative_controls': [defect, private_defect, ds_defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
     CHILD.publish_receipt(receipt_path, result, workspace)

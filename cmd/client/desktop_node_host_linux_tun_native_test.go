@@ -38,6 +38,7 @@ var linuxHostTUNCases = []string{"service-transfer", "service-transfer-lost-repl
 
 func init() {
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxImportedHostCases...)
+	linuxHostTUNCases = append(linuxHostTUNCases, linuxNodeChainHostCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNWireGuardCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNHysteria2Cases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNAmneziaCases...)
@@ -312,6 +313,9 @@ func linuxHostTUNDNSObservation(ctx context.Context, a *app, host *desktopLinuxN
 // executable, source, native channel, TUN, DNS, Router proof and journal.
 // It changes no public capability predicate or verifier implementation.
 func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string) (failure error) {
+	if strings.HasPrefix(scenario, "node-chain-") {
+		return linuxHostTUNNodeChainFixture(controller, scenario)
+	}
 	if strings.HasPrefix(scenario, "imported-wg-ss-") {
 		return linuxHostTUNImportedFixture(controller, scenario)
 	}
@@ -807,6 +811,10 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				t.Fatal(err)
 			}
 			linuxHostTUNInstallBundle(t)
+			if strings.HasPrefix(scenario, "node-chain-") {
+				linuxHostTUNNodeChainParent(t, installed, scenario)
+				return
+			}
 			if strings.HasPrefix(scenario, "imported-wg-ss-") {
 				linuxHostTUNImportedParent(t, installed, scenario)
 				return
