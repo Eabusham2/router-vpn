@@ -110,8 +110,8 @@ TESTS = r'''
   do{try await action()}catch{checks+=1;return};throw NSError(domain:"ChainAppRejected",code:1,userInfo:[NSLocalizedDescriptionKey:"ACCEPTED "+name])
  }
  static func reset(){NETunnelProviderManager.reset();IOSNodeBundleStore.shared.records=[:];IOSMAXSourceSelection.calls=0;IOSStartupLastChoice.restores=0;IOSMTUMeasurementGate.current=""}
- static func sources(_ count:Int)throws->[ClientBundle] {
-  let raw=try LibboxTestFixture(count,"off")
+ static func sources(_ count:Int,_ mixed:Bool=false)throws->[ClientBundle] {
+  let raw=try mixed ? LibboxTestAWGFixture(count,"off"):LibboxTestFixture(count,"off")
   let roots=try JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [[String:Any]]
   return try roots.map{original in
    var root=original,profiles=root["routerProfiles"] as! [[String:Any]],p=profiles[0]
@@ -120,8 +120,8 @@ TESTS = r'''
    return try JSONDecoder().decode(ClientBundle.self,from:JSONSerialization.data(withJSONObject:root))
   }
  }
- static func setup(_ count:Int=3)throws->(RouterVPNModel,NETunnelProviderManager,ClientBundle,IOSRuntimeSelection) {
-  reset();let nodes=try sources(count),final=nodes.last!,model=RouterVPNModel(),manager=NETunnelProviderManager()
+ static func setup(_ count:Int=3,_ mixed:Bool=false)throws->(RouterVPNModel,NETunnelProviderManager,ClientBundle,IOSRuntimeSelection) {
+  reset();let nodes=try sources(count,mixed),final=nodes.last!,model=RouterVPNModel(),manager=NETunnelProviderManager()
   model.bundle=final
   for node in nodes {IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
   let capture=try model.captureIOSNodeChain(final);defer{try? capture.plan.close()}
@@ -138,6 +138,13 @@ TESTS = r'''
   catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}
  }
  static func run()async throws {
+  do {
+   let(model,manager,selected,selection)=try setup(4,true)
+   try check("mixed packet launch keeps all original raw modes",selected.routerProfiles[0].multihopNodes?.map(\.mode)==["awg2-fast","awg2-strong","wg","shadowsocks"] && selection.nodeChainInput != nil)
+   _ = try await model.launch(manager,selected,selection)
+   let configuration=(manager.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+   try check("mixed packet source reaches one original PacketTunnel manager",NETunnelProviderManager.starts==1 && configuration[IOSNodeChainProviderCapture.key] as? String==selection.nodeChainInput)
+  }
   for fault in ["none","middle-token","middle-source","final-source","cancel-owner"] {
    let (model,manager,_,_)=try setup()
    let proto=NETunnelProviderProtocol();proto.providerBundleIdentifier="com.eabusham.routervpn.PacketTunnel";manager.protocolConfiguration=proto

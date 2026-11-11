@@ -78,9 +78,9 @@ TESTS = r'''
   do{try body()}catch{checks+=1;return};throw IOSMultihopNodeSelection.issue("ACCEPTED "+name)
  }
  // ORIGINAL_COMPILER_SOURCES
- static func setup(_ count:Int=3)throws->RouterVPNModel {
+ static func setup(_ count:Int=3,_ mixed:Bool=false)throws->RouterVPNModel {
   IOSNodeBundleStore.shared.records=[:];IOSDNSRuntimePolicy.beforePatch=nil
-  let nodes=try sources(count),model=RouterVPNModel();model.bundle=nodes.last!
+  let nodes=try sources(count,mixed),model=RouterVPNModel();model.bundle=nodes.last!
   for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
   return model
  }
@@ -99,6 +99,14 @@ TESTS = r'''
   try check("new draft pins independently selected final",draft.nodes==[.init(id:"",mode:"wg"),.init(id:"final",mode:"shadowsocks")] && !draft.canSave)
   try draft.choose("entry",at:0)
   try check("two-node draft is complete",draft.canSave)
+  for mode in ["awg2-fast","awg2-strong","wg"] {
+   try draft.chooseMode(mode,at:0)
+   try check("editor preserves exact selected packet transport "+mode,draft.canSave && draft.nodes[0].mode==mode && draft.nodes[0].id=="entry")
+  }
+  for mode in ["awg","awg2-pq","wg-pq","shadowsocks",""] {
+   try reject("unsupported ordered prefix transport "+mode){try draft.chooseMode(mode,at:0)}
+  }
+  try reject("transport change cannot replace final"){try draft.chooseMode("awg2-fast",at:1)}
   try reject("changing pinned final"){try draft.choose("replacement",at:1)}
   try reject("using final as prefix"){try draft.choose("final",at:0)}
   try reject("removing final"){try draft.remove(at:1)}
@@ -126,6 +134,17 @@ TESTS = r'''
   try check("saved wrong final stays invalid",!changed.canSave)
   let wrongMode=IOSNodeChainDraft(saved:[.init(id:"entry",mode:"hysteria2"),.init(id:"final",mode:"shadowsocks")],finalID:"final")
   try check("saved transport is not silently rewritten",!wrongMode.canSave && wrongMode.nodes[0].mode=="hysteria2")
+
+  do {
+   let model=try setup(4,true),owner=try model.captureIOSNodeChainEditorOwner(),nodes=model.selectedNodeProfile!.multihopNodes!
+   try model.saveIOSNodeChain(nodes,owner:owner)
+   let capture=try model.captureIOSNodeChain(model.bundle!);defer{try? capture.plan.close()}
+   try check("editor saves complete mixed AWG source without replacing raw variants",model.writes==1 && capture.members.map(\.mode)==["awg2-fast","awg2-strong","wg","shadowsocks"])
+   let changedOwner=try model.captureIOSNodeChainEditorOwner()
+   try editMiddle{$0.profiles["awg2-strong"]!["awg.conf"]=Data("relinked selected AWG source".utf8).base64EncodedString()}
+   try reject("AWG editor cannot reuse relinked selected raw source"){try model.saveIOSNodeChain(nodes,owner:changedOwner)}
+   try check("relinked AWG refusal performs no extra write",model.writes==1)
+  }
 
   for count in [2,3,4,8] {
    let model=try setup(count),original=model.bundle!,nodes=model.selectedNodeProfile!.multihopNodes!,records=IOSNodeBundleStore.shared.records
@@ -212,7 +231,7 @@ def main(selected_mutations=None):
     # directory is included by the real Xcode project, including this view.
     for call in ('draft.choose(id, at: position)', 'draft.move(from: position, to: position - 1)',
                  'draft.move(from: position, to: position + 1)', 'draft.remove(at: position)',
-                 'draft.append()', 'model.saveIOSNodeChain(draft.nodes, owner: owner)',
+                 'draft.append()', 'draft.chooseMode(mode, at: position)', 'model.saveIOSNodeChain(draft.nodes, owner: owner)',
                  'model.captureIOSNodeChainEditorOwner()'):
         assert call in view, 'shipping editor callback removed: ' + call
     with tempfile.TemporaryDirectory(prefix='.ios-chain-editor-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-chain-editor-') as directory:

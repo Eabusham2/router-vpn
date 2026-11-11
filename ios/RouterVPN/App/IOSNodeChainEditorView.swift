@@ -33,8 +33,19 @@ struct IOSNodeChainEditorView: View {
                                 Text("Missing linked node").tag(node.id)
                             }
                         }
+                        Picker("Transport", selection: Binding(
+                            get: { draft.nodes[position].mode },
+                            set: { mode in change { try draft.chooseMode(mode, at: position) } }
+                        )) {
+                            ForEach(IOSMultihopNodeSelection.nativePrefixModes, id: \.self) { mode in
+                                Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
+                            }
+                            if !IOSMultihopNodeSelection.supportsNativePrefix(node.mode) {
+                                Text(IOSMultihopNodeSelection.transportName(node.mode)).tag(node.mode)
+                            }
                         }
-                        Text(node.mode == "wg" ? "WireGuard" : node.mode == "shadowsocks" ? "Shadowsocks 2022" : "Saved transport: \(node.mode)")
+                        }
+                        Text(IOSMultihopNodeSelection.transportName(node.mode))
                             .font(.caption).foregroundStyle(.secondary)
                         if position < draft.nodes.count - 1 { HStack {
                             Button("Earlier") { change { try draft.move(from: position, to: position - 1) } }.disabled(position == 0)
@@ -47,7 +58,7 @@ struct IOSNodeChainEditorView: View {
                 Button("Add preceding node") { change { try draft.append() } }.disabled(draft.nodes.count >= IOSMultihopNodeSelection.maximumNodes)
             }
             Section("Local execution") {
-                Text("Traffic follows this order through one VPN connection. Each preceding node uses WireGuard; the selected final node uses Shadowsocks 2022.")
+                Text("Traffic follows this order through one VPN connection. Each preceding node uses its selected WireGuard or AWG2 transport; the selected final node uses Shadowsocks 2022.")
                 Text("Each node keeps its own saved credentials, Start Layer and protection settings. DNS uses the final node. Every node must pass verification before Connected.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Save ordered route") {

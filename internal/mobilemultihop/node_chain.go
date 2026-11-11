@@ -34,9 +34,10 @@ func nodeChainPrefixType(mode string) string {
 // forwarding order. The aggregate limit applies before parsing any node; it is
 // not a per-node allowance and an oversized chain is never truncated.
 type NodeChainSource struct {
-	Schema    int      `json:"schema"`
-	Execution string   `json:"execution"`
-	Nodes     []string `json:"nodes"`
+	Schema          int      `json:"schema"`
+	Execution       string   `json:"execution"`
+	Nodes           []string `json:"nodes"`
+	IdentitySources []string `json:"identity_sources,omitempty"`
 }
 
 // NodeChainProof identifies a prefix without publishing its API or token.
@@ -97,6 +98,9 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		len(source.Nodes) < 2 || len(source.Nodes) > NodeChainMaximumNodes {
 		return nil, nodeChainError
 	}
+	if len(source.IdentitySources) != 0 && len(source.IdentitySources) != len(source.Nodes) {
+		return nil, nodeChainError
+	}
 	canonical, err := json.Marshal(source)
 	if err != nil || len(canonical) > NodeChainInputLimit {
 		return nil, nodeChainError
@@ -110,6 +114,11 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		node, err := ParseNodeLaunchInput(input)
 		if err != nil || node == nil {
 			return nil, nodeChainError
+		}
+		if len(source.IdentitySources) != 0 {
+			if err := validateNodeChainIdentity(source.IdentitySources[position], node); err != nil {
+				return nil, err
+			}
 		}
 		if position < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) ||
 			position == len(source.Nodes)-1 && node.mode != "shadowsocks" {

@@ -39,7 +39,7 @@ struct IOSNodeChainCapture {
               let selection = final["multihop_nodes"] as? [[String: Any]], selection.count == bundles.count else {
             throw issue("The final node lost its exact captured chain selection.")
         }
-        var inputs: [String] = []
+        var inputs: [String] = [], identitySources: [String] = []
         for (position, data) in bundles.enumerated() {
             guard !data.isEmpty, data.count <= 32 * 1024 * 1024,
                   let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -52,9 +52,14 @@ struct IOSNodeChainCapture {
             }
             guard selection[position]["id"] as? String == selected,
                   let mode = selection[position]["mode"] as? String,
-                  let files = assets[mode], !files.isEmpty else {
+                  let files = assets[mode], !files.isEmpty,
+                  let identity = assets["wg"], !identity.isEmpty else {
                 throw issue("A native source no longer matches its captured chain position.")
             }
+            // The shared parser validates this independent standard-WG peer
+            // against the Router identity. Retain every original byte beside
+            // the selected transport, including AWG's separate packet keys.
+            identitySources.append(try json(identity, maximum: 16 * 1024 * 1024))
             let layer = try IOSMultihopStartLayer.capture(profile: profile, profiles: assets)
             var start = ""
             if layer.mode != "off", mode != "shadowsocks" {
@@ -73,7 +78,8 @@ struct IOSNodeChainCapture {
             }
             inputs.append(input)
         }
-        let source = try json(["schema": 1, "execution": "local", "nodes": inputs], maximum: maximumInputBytes)
+        let source = try json(["schema": 1, "execution": "local", "nodes": inputs,
+                               "identity_sources": identitySources], maximum: maximumInputBytes)
         var failure: NSError?
         guard let plan = LibboxNewRouterNodeChain(source, &failure), failure == nil else {
             throw failure ?? issue("The selected ordered native graph is unavailable.")
@@ -109,7 +115,9 @@ struct IOSNodeChainCapture {
               root["projection_kind"] == nil, root["session_id"] == nil, root["target_os"] == nil, root["restored_mtu"] == nil,
               root["source_sha256"] as? String == plan.sourceSHA256(), root["config_sha256"] as? String == plan.configSHA256(),
               root["original_config_sha256"] as? String == plan.configSHA256(),
-              let nodes = root["nodes"] as? [String], (2...8).contains(nodes.count) else {
+              let nodes = root["nodes"] as? [String], (2...8).contains(nodes.count),
+              let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,
+              identitySources.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 16 * 1024 * 1024 }) else {
             throw Self.issue("The native chain returned another source or platform owner.")
         }
         var members: [Member] = [], strict = false, lan = true

@@ -22,6 +22,7 @@ anchor = ' case "compile":value,err=mobilemultihop.CompilePQProfile(r.Mode,r.Fil
 assert GO.count(anchor) == 1
 GO = GO.replace(anchor, r'''
  case "chain-fixture":var count int;count,err=strconv.Atoi(r.Mode);if err==nil{value,err=chainFixture(count,r.Policy)}
+ case "chain-awg-fixture":var count int;count,err=strconv.Atoi(r.Mode);if err==nil{value,err=chainFixtureModes(count,r.Policy,true)}
  case "chain-member":
   var node *mobilemultihop.NodeProfile;node,err=mobilemultihop.NewNodeProfile(r.Mode,r.Files,r.Policy,r.Source,r.Node)
   if err==nil{value,err=node.LaunchInput()}
@@ -35,11 +36,12 @@ GO = GO.replace(anchor, r'''
   }
 ''' + anchor, 1)
 GO += r'''
-func chainFixture(count int,layer string)(string,error){
+func chainFixture(count int,layer string)(string,error){return chainFixtureModes(count,layer,false)}
+func chainFixtureModes(count int,layer string,mixed bool)(string,error){
  if count<2||count>8{return "",fmt.Errorf("fixture node count")}
  bundles:=make([]any,0,count);selection:=make([]any,0,count)
  for i:=0;i<count;i++{
-  mode:="wg";if i==count-1{mode="shadowsocks"};selection=append(selection,map[string]string{"id":fmt.Sprintf("chain-node-%d",i),"mode":mode})
+  mode:="wg";if mixed{mode=[]string{"awg2-fast","awg2-strong","wg"}[i%3]};if i==count-1{mode="shadowsocks"};selection=append(selection,map[string]string{"id":fmt.Sprintf("chain-node-%d",i),"mode":mode})
  }
  for i:=0;i<count;i++{
   endpoint:=fmt.Sprintf("198.51.100.%d",10+i);id:=fmt.Sprintf("chain-node-%d",i)
@@ -52,6 +54,16 @@ func chainFixture(count int,layer string)(string,error){
   graph:=map[string]any{"inbounds":[]any{map[string]any{"type":"tun","tag":"tun-in","auto_route":true,"strict_route":true,"mtu":1280}},"outbounds":[]any{map[string]any{"type":"shadowsocks","tag":"proxy","server":endpoint,"server_port":443,"method":"2022-blake3-aes-256-gcm","password":key(byte(141+i))},map[string]any{"type":"direct","tag":"direct"}},"route":map[string]any{"auto_detect_interface":true,"final":"proxy","rules":[]any{map[string]any{"protocol":"dns","action":"hijack-dns"}}},"dns":map[string]any{"servers":[]any{map[string]any{"type":"udp","tag":"home-dns","server":fmt.Sprintf("10.%d.0.53",80+i),"detour":"proxy"}},"final":"home-dns"}}
   ss,e:=json.Marshal(graph);if e!=nil{return "",e}
   assets:=map[string]any{"wg":map[string]string{"wg.conf":base64.StdEncoding.EncodeToString([]byte(raw))},"shadowsocks":map[string]string{"sing-box.json":base64.StdEncoding.EncodeToString(ss)}}
+  for _,mode:=range []string{"awg2-fast","awg2-strong"}{
+   jc:=3;if mode=="awg2-strong"{jc=8}
+   parameters:=fmt.Sprintf("[Interface]\nJc=%d\nJmin=40\nJmax=900\nS1=56\nS2=48\nS3=24\nS4=32\nH1=10000000-19999999\nH2=20000000-29999999\nH3=30000000-39999999\nH4=40000000-49999999\n",jc)
+   awgServer,e:=ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(181+i)},32));if e!=nil{return "",e}
+   awgPublic:=base64.StdEncoding.EncodeToString(awgServer.PublicKey().Bytes())
+   awg:=strings.Replace(raw,"[Interface]\n",parameters,1)
+   awg=strings.Replace(awg,"PrivateKey="+key(byte(21+i)),"PrivateKey="+key(byte(161+i)),1)
+   awg=strings.Replace(awg,"PublicKey="+public,"PublicKey="+awgPublic,1)
+   assets[mode]=map[string]string{"awg.conf":base64.StdEncoding.EncodeToString([]byte(awg))}
+  }
   if i==count-1{profile["multihop_enabled"]=true;profile["multihop_execution"]="local";profile["multihop_nodes"]=selection}
   bundles=append(bundles,map[string]any{"selectedRouterID":id,"routerProfiles":[]any{profile},"profiles":assets})
  }
@@ -95,6 +107,7 @@ func make(_ operation:String,_ source:String)throws->LibboxRouterNodeChain{
 public func LibboxNewRouterNodeChain(_ source:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChain?{api(error){try make("chain-new",source)}}
 public func LibboxNewRouterNodeChainLaunch(_ source:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChain?{api(error){try make("chain-open",source)}}
 public func LibboxTestFixture(_ count:Int,_ layer:String)throws->String{try bridge(["Op":"chain-fixture","Mode":String(count),"Policy":layer])}
+public func LibboxTestAWGFixture(_ count:Int,_ layer:String)throws->String{try bridge(["Op":"chain-awg-fixture","Mode":String(count),"Policy":layer])}
 public func LibboxTestProjection(_ launch:String,_ target:String)throws->String{
  let raw=try bridge(["Op":"chain-project","Source":launch,"Mode":target])
  return try object(Data(raw.utf8))["launch"] as! String
@@ -108,8 +121,8 @@ import Libbox
 func data(_ value:Any)throws->Data{try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys])}
 func object(_ value:Data)throws->[String:Any]{try JSONSerialization.jsonObject(with:value) as! [String:Any]}
 func profile(_ bundle:Data)throws->[String:Any]{(try object(bundle)["routerProfiles"] as! [[String:Any]])[0]}
-func sources(_ count:Int,_ layer:String="off")throws->[Data]{
- let value=try LibboxTestFixture(count,layer)
+func sources(_ count:Int,_ layer:String="off",_ mixed:Bool=false)throws->[Data]{
+ let value=try mixed ? LibboxTestAWGFixture(count,layer):LibboxTestFixture(count,layer)
  return try (JSONSerialization.jsonObject(with:Data(value.utf8)) as! [Any]).map{try data($0)}
 }
 func edit(_ original:Data,_ action:(inout [String:Any])->Void)throws->Data{var value=try object(original);action(&value);return try data(value)}
@@ -123,6 +136,18 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
  static func main(){defer{LibboxTestClose()};do{try run();print("Apple ordered native capture: PASS (\(checks) shipping Swift / shared Go checks; no native connection)")}
  catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
  static func run()throws {
+  for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+   let bundles=try sources(4,layer,true),capture=try IOSNodeChainCapture.compile(bundles:bundles)
+   defer{try? capture.plan.close()}
+   try check("mixed packet modes stay exact",capture.members.map(\.mode)==["awg2-fast","awg2-strong","wg","shadowsocks"])
+   let graph=try object(Data(capture.config.utf8)),endpoints=graph["endpoints"] as! [[String:Any]],awg=endpoints.filter{$0["type"] as? String=="routervpn-amneziawg"}
+   try check("both AWG endpoints preserve distinct packet parameters",awg.count==2 && (awg[0]["amnezia"] as? [String:String])?["jc"]=="3" && (awg[1]["amnezia"] as? [String:String])?["jc"]=="8" && (awg[1]["amnezia"] as? [String:String])?["s4"]=="32")
+   let restored=try IOSNodeChainCapture.reopen(capture.launchInput,selectedProfile:profile(bundles.last!));defer{try? restored.plan.close()}
+   try check("mixed packet restoration keeps complete original source",restored.sourceSHA256==capture.sourceSHA256 && restored.config==capture.config && restored.members.map(\.mode)==capture.members.map(\.mode))
+   var broken=bundles
+   broken[1]=try edit(broken[1]){root in var assets=root["profiles"] as! [String:[String:String]];assets["awg2-strong"]!["awg.conf"]=Data("[Interface]\\nPrivateKey=missing\\n".utf8).base64EncodedString();root["profiles"]=assets}
+   try reject("malformed selected AWG cannot borrow WG or Fast assets"){_ = try IOSNodeChainCapture.compile(bundles:broken)}
+  }
   for count in [2,3,4,8] {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
    if count==8 && layer != "off" {
     try reject("deep layered chain retains minimum packet budget"){_ = try IOSNodeChainCapture.compile(bundles:sources(count,layer))}
@@ -190,7 +215,7 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
    case "different-control":changed[3]=try edit(changed[3]){$0["selectedRouterID"]="chain-node-0"}
    case "final-order":changed[3]=try editProfile(changed[3]){var nodes=$0["multihop_nodes"] as! [[String:Any]];nodes.swapAt(0,1);$0["multihop_nodes"]=nodes}
    case "missing-layer":changed[1]=try editProfile(changed[1]){$0["start_layer"]="aes-256-gcm"};changed[1]=try edit(changed[1]){var assets=$0["profiles"] as! [String:Any];assets.removeValue(forKey:"shadowsocks");$0["profiles"]=assets}
-   case "unsupported-family":changed[3]=try editProfile(changed[3]){var nodes=$0["multihop_nodes"] as! [[String:Any]];nodes[1]["mode"]="awg2-fast";$0["multihop_nodes"]=nodes}
+   case "unsupported-family":changed[3]=try editProfile(changed[3]){var nodes=$0["multihop_nodes"] as! [[String:Any]];nodes[1]["mode"]="shadowsocks";$0["multihop_nodes"]=nodes}
    case "malformed-bootstrap":changed[1]=try editProfile(changed[1]){$0["dns_bootstrap"]=true}
    case "hostname-middle":changed[1]=try edit(changed[1]){var assets=$0["profiles"] as! [String:[String:String]];let raw=String(decoding:Data(base64Encoded:assets["wg"]!["wg.conf"]!)!,as:UTF8.self);assets["wg"]!["wg.conf"]=Data(raw.replacingOccurrences(of:"198.51.100.11:51820",with:"middle.example.test:51820").utf8).base64EncodedString();$0["profiles"]=assets}
    default:fatalError()

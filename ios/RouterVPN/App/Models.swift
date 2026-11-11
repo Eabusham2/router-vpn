@@ -612,6 +612,21 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
     var mode: String
 
     static let maximumNodes = 8
+    static let nativePrefixModes = ["wg", "awg2-fast", "awg2-strong"]
+
+    static func supportsNativePrefix(_ mode: String) -> Bool {
+        nativePrefixModes.contains(mode)
+    }
+
+    static func transportName(_ mode: String) -> String {
+        switch mode {
+        case "wg": return "WireGuard"
+        case "awg2-fast": return "AWG2 Fast"
+        case "awg2-strong": return "AWG2 Strong"
+        case "shadowsocks": return "Shadowsocks 2022"
+        default: return "Saved transport: \(mode)"
+        }
+    }
 
     static func validate(_ nodes: [Self], execution: String?, entryID: String?, entryMode: String?,
                          exitID: String?, exitMode: String?, controlID: String? = nil) throws {

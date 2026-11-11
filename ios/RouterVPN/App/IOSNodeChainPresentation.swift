@@ -63,7 +63,7 @@ enum IOSNodeChainPresentation {
             let matches = catalog.filter { $0.id == node.id }
             guard matches.count == 1, let profile = matches.first,
                   profile.normalizedNodeKind == "router-vpn", profile.external == nil,
-                  node.mode == (position == nodes.count - 1 ? "shadowsocks" : "wg") else { return nil }
+                  position == nodes.count - 1 ? node.mode == "shadowsocks" : IOSMultihopNodeSelection.supportsNativePrefix(node.mode) else { return nil }
             points.append(IOSNodePathPoint(profile, mode: node.mode))
         }
         return points

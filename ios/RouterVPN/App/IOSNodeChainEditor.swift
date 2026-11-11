@@ -15,7 +15,7 @@ struct IOSNodeChainDraft {
         (2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) &&
             nodes.allSatisfy({ $0.id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil }) &&
             Set(nodes.map(\.id)).count == nodes.count && nodes.last?.id == controlID &&
-            nodes.dropLast().allSatisfy({ $0.mode == "wg" }) && nodes.last?.mode == "shadowsocks"
+            nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) && nodes.last?.mode == "shadowsocks"
     }
 
     mutating func choose(_ id: String, at position: Int) throws {
@@ -24,6 +24,14 @@ struct IOSNodeChainDraft {
             throw IOSMultihopNodeSelection.issue("Choose a different linked node for each position.")
         }
         nodes[position].id = id
+    }
+
+    mutating func chooseMode(_ mode: String, at position: Int) throws {
+        guard nodes.indices.contains(position), position < nodes.count - 1,
+              IOSMultihopNodeSelection.supportsNativePrefix(mode) else {
+            throw IOSMultihopNodeSelection.issue("Choose WireGuard, AWG2 Fast or AWG2 Strong for a preceding node.")
+        }
+        nodes[position].mode = mode
     }
 
     mutating func append() throws {

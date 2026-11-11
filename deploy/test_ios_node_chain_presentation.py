@@ -83,9 +83,9 @@ TESTS = r'''
  static func encoded(_ value:Any)throws->Data{try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys])}
  static func bundleData(_ bundle:ClientBundle)throws->Data {let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys];return try encoder.encode(bundle)}
  // ORIGINAL_COMPILER_SOURCES
- static func setup(_ count:Int=4)throws->(RouterVPNModel,NETunnelProviderManager,[ClientBundle]) {
+ static func setup(_ count:Int=4,_ mixed:Bool=false)throws->(RouterVPNModel,NETunnelProviderManager,[ClientBundle]) {
   NETunnelProviderManager.reset()
-  var nodes=try sources(count)
+  var nodes=try sources(count,mixed)
   for i in nodes.indices{nodes[i].routerProfiles[0].name="Original node \(i)";nodes[i].routerProfiles[0].latitude=20+Double(i)*7;nodes[i].routerProfiles[0].longitude = -120+Double(i)*25}
   let source=try IOSNodeChainCapture.compile(bundles:nodes.map{try bundleData($0)});defer{try? source.plan.close()}
   let model=RouterVPNModel(),manager=NETunnelProviderManager(),proto=NETunnelProviderProtocol()
@@ -110,6 +110,13 @@ TESTS = r'''
   catch{FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1)}
  }
  static func run()async throws {
+  do {
+   let(model,_,_)=try setup(4,true)
+   let modes=["awg2-fast","awg2-strong","wg","shadowsocks"]
+   try check("active mixed path retains exact raw modes",model.iosVisibleOrderedNodePath?.compactMap(\.mode)==modes)
+   model.connected=false;model.activeSessionIdentity=nil
+   try check("planned mixed path retains exact raw modes",model.iosVisibleOrderedNodePath?.compactMap(\.mode)==modes)
+  }
   for count in [2,3,4,8] {
    let(model,_,original)=try setup(count),path=model.iosVisibleOrderedNodePath!
    try check("actual captured path retains every ordered member",path.map(\.id)==original.map(\.selectedRouterID) && path.count==count)
