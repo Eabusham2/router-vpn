@@ -7,6 +7,30 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## SOCKS authentication-downgrade EOF observation
+
+Both standalone Linux engine jobs at `07c96a04` (`130794976283` AMD64 and
+`130794976347` ARM64) reached the actual authentication-downgrade negative
+case, then failed its peer-side EOF counter. The original client lower-owner
+drain had already completed: its connection is removed only after actual
+`Conn.Close` succeeds. A later fixture cleanup could close the peer locally
+before its independent reader consumed remote EOF; `net.ErrClosed` correctly
+does not satisfy that EOF-only proof.
+
+The peer fixture now joins that exact atomic EOF observation after the
+unchanged lower-owner drain and before peer cleanup, using the **same original
+two-second drain context**. It never accepts local forced-close as EOF. Four
+observation scenarios (already observed, delayed, withheld and expired) plus
+their parent are mandatory verdicts from the already compiled race image.
+The original twelve peer leaves/thirteen verdicts, fifty-one layered verdicts,
+all native deadlines and the thirty-second Python-runner budget are unchanged.
+The runner's missing/failed/skipped-verdict controls include the new scope.
+
+Source review verified the actual refusal reader, real close-before-removal
+path and cleanup order; removing only the new join/helper reproduces the
+original Go template byte-for-byte. Python/Go/native execution of this
+correction remains pending hosted CI, with no local execution claim.
+
 ## Desktop ordered Startup Last source continuation
 
 The source unit is published at `d00230500812941f84c0061415b41f2f80e4181b`.

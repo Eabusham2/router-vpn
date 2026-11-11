@@ -30,6 +30,10 @@ PEER_CASES = (
     "final-identity", "final-token", "cancel", "close-owner",
 )
 PEERS = (PEER_PARENT,) + tuple(PEER_PARENT + "/" + name for name in PEER_CASES)
+REJECTION_PARENT = "TestRouterVPNImportedSOCKSRejectionObservation"
+REJECTION_CASES = ("observed-eof", "delayed-eof", "withheld-eof", "expired-scope")
+REJECTION_TESTS = (REJECTION_PARENT,) + tuple(REJECTION_PARENT + "/" + name for name in REJECTION_CASES)
+
 REFERENCE_DETECTOR_TESTS = (
     "TestReferenceDetectorRequiresEveryCapturedCompletion",
     "TestReferenceDetectorCancellationJoinsOriginalOwner",
@@ -412,6 +416,8 @@ def run(vendor):
         native, native_digest = compile_image(compiler, vendor, workspace, env, "./protocol/routervpnamnezia", "socks-reality-peers")
         if checked_sources(vendor) != before or checked_xray(xray) != xray_before:
             raise ValueError("Scoped SOCKS REALITY source changed during peer build")
+        execute_image(compiler, vendor, env, native, native_digest,
+                      "routervpnamnezia", REJECTION_PARENT, REJECTION_TESTS)
         receipt["reference_startup"] = execute_image(compiler, vendor, env, native, native_digest,
             "routervpnamnezia", "TestRouterVPNDesktopNodeXray(Startup|Detector)Records", REFERENCE_STARTUP_TESTS)
         receipt["peer"] = execute_image(compiler, vendor, env, native, native_digest,

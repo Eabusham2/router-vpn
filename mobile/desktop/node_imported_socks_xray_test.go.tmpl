@@ -719,7 +719,100 @@ func desktopImportedSOCKSXrayTraffic(t *testing.T, original []string, fault stri
 	if err := lower.empty(drain); err != nil {
 		t.Fatal("SOCKS REALITY instance left its original physical streams", err)
 	}
+	if fault == "auth-downgrade" {
+		if err := desktopImportedSOCKSXrayRejectionJoined(drain, &socksPeer.rejected); err != nil {
+			t.Fatal("SOCKS REALITY peer did not observe EOF from its original rejected control", err)
+		}
+	}
 	completed = true
+}
+
+// A successful client-side close does not mean the independent peer has consumed
+// its EOF yet. Join that observation before fixture cleanup can close the peer's
+// socket locally and replace the EOF with net.ErrClosed. The original drain
+// context bounds both proofs; only refuse's existing EOF-only counter can pass.
+func desktopImportedSOCKSXrayRejectionJoined(ctx context.Context, rejected *atomic.Uint32) error {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if rejected.Load() != 0 {
+			return ctx.Err()
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// Done records that the real join reached its wait with no observed EOF.
+// A helper which accepts an empty counter returns before this signal.
+type desktopImportedSOCKSXrayObservationContext struct {
+	context.Context
+	once    sync.Once
+	waiting chan struct{}
+}
+
+func (c *desktopImportedSOCKSXrayObservationContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
+func TestRouterVPNImportedSOCKSRejectionObservation(t *testing.T) {
+	for _, scenario := range []string{"observed-eof", "delayed-eof", "withheld-eof", "expired-scope"} {
+		t.Run(scenario, func(t *testing.T) {
+			var rejected atomic.Uint32
+			if scenario == "observed-eof" {
+				rejected.Add(1)
+				if err := desktopImportedSOCKSXrayRejectionJoined(context.Background(), &rejected); err != nil {
+					t.Fatal("original observed EOF was rejected", err)
+				}
+				return
+			}
+			if scenario == "expired-scope" {
+				ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+				defer cancel()
+				rejected.Add(1)
+				if err := desktopImportedSOCKSXrayRejectionJoined(ctx, &rejected); !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("expired EOF receipt was accepted", err)
+				}
+				return
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			observed := &desktopImportedSOCKSXrayObservationContext{Context: ctx, waiting: make(chan struct{})}
+			done := make(chan error, 1)
+			go func() { done <- desktopImportedSOCKSXrayRejectionJoined(observed, &rejected) }()
+			select {
+			case <-observed.waiting:
+			case err := <-done:
+				t.Fatal("unobserved EOF receipt was accepted", err)
+			case <-time.After(time.Second):
+				t.Fatal("EOF observation did not enter its original wait")
+			}
+			if scenario == "withheld-eof" {
+				cancel()
+			} else {
+				rejected.Add(1)
+			}
+			select {
+			case err := <-done:
+				if scenario == "withheld-eof" {
+					if !errors.Is(err, context.Canceled) || rejected.Load() != 0 {
+						t.Fatal("withheld EOF receipt was accepted", err)
+					}
+				} else if err != nil {
+					t.Fatal("delayed original EOF was not joined", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("EOF observation did not join within its original scope")
+			}
+		})
+	}
 }
 
 func desktopImportedSOCKSXrayPublic(ctx context.Context, first adapter.Outbound, roots *x509.CertPool, expected string) (bool, error) {

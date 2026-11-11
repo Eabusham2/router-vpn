@@ -21,7 +21,8 @@ spec.loader.exec_module(gate)
 class ScopedSOCKSRealityVerdicts(unittest.TestCase):
     def scopes(self):
         return (gate.CORE, gate.PEERS, gate.LAYER_CORE, gate.LAYER_PEERS,
-                gate.REFERENCE_DETECTOR_TESTS, gate.REFERENCE_STARTUP_TESTS)
+                gate.REFERENCE_DETECTOR_TESTS, gate.REFERENCE_STARTUP_TESTS,
+                gate.REJECTION_TESTS)
 
     def events(self, expected):
         return [{"Action": action, "Test": name}
@@ -35,6 +36,17 @@ class ScopedSOCKSRealityVerdicts(unittest.TestCase):
         self.assertEqual(len(gate.PEER_CASES), 12)
         self.assertEqual(len(gate.PEERS), 13)
         self.assertEqual(len(set(gate.PEERS)), 13)
+        self.assertEqual(gate.REJECTION_CASES, (
+            "observed-eof", "delayed-eof", "withheld-eof", "expired-scope",
+        ))
+        self.assertEqual(gate.REJECTION_TESTS, (
+            "TestRouterVPNImportedSOCKSRejectionObservation",
+            "TestRouterVPNImportedSOCKSRejectionObservation/observed-eof",
+            "TestRouterVPNImportedSOCKSRejectionObservation/delayed-eof",
+            "TestRouterVPNImportedSOCKSRejectionObservation/withheld-eof",
+            "TestRouterVPNImportedSOCKSRejectionObservation/expired-scope",
+        ))
+
         self.assertEqual(gate.REFERENCE_DETECTOR_TESTS, (
             "TestReferenceDetectorRequiresEveryCapturedCompletion",
             "TestReferenceDetectorCancellationJoinsOriginalOwner",
