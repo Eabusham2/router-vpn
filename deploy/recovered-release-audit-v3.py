@@ -145,12 +145,19 @@ def ios_map() -> bool:
             "MKMapView",
             "latitude",
             "longitude",
-            "(-90...90).contains(lat)",
-            "(-180...180).contains(lon)",
-            "!(lat == 0 && lon == 0)",
+            "model.iosMapNodePoints",
+            "guard profile.hasCoordinates, let lat = profile.latitude, let lon = profile.longitude else { continue }",
             "RouterVPNNodeManagerSheet",
             "IOSUserLocationControl()",
             "real coordinates",
+        )
+        and mod.has(
+            "ios/RouterVPN/App/IOSNodeChainPresentation.swift",
+            "var hasCoordinates: Bool",
+            "latitude.isFinite && longitude.isFinite",
+            "(-90...90).contains(latitude)",
+            "(-180...180).contains(longitude)",
+            "!(latitude == 0 && longitude == 0)",
         )
         and mod.has(
             "ios/RouterVPN/App/IOSUserLocationOverlay.swift",
