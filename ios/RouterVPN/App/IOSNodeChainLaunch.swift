@@ -18,3 +18,17 @@ extension RouterVPNModel {
         guard current.launchInput == input else { throw CancellationError() }
     }
 }
+
+extension IOSRuntimeSelector {
+    /// Only a complete native compilation can make an ordered selection.
+    /// The app retains this source across its first system-manager lookup.
+    static func selectNodeChain(_ capture: IOSNodeChainCapture) throws -> IOSRuntimeSelection {
+        guard (2...IOSMultihopNodeSelection.maximumNodes).contains(capture.members.count),
+              capture.members.dropLast().allSatisfy({ $0.mode == "wg" }),
+              let final = capture.members.last, final.mode == "shadowsocks" else {
+            throw IOSMultihopNodeSelection.issue("This ordered path requires WireGuard nodes followed by a Shadowsocks 2022 final node.")
+        }
+        return IOSRuntimeSelection(engine: .multihop, logicalModeID: "multihop", rawProfileID: final.mode,
+                                   files: [:], nodeChainInput: capture.launchInput)
+    }
+}

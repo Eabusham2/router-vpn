@@ -14,18 +14,23 @@ struct IOSRuntimeSelection: Hashable {
     // Capture before suspension. A label must not read mutable saved settings
     // after an asynchronous connection attempt has selected another graph.
     let multihopEntryMode: String?
+    // Private immutable launch bytes retain every ordered source across the
+    // first system-preference lookup. This value is never profile metadata.
+    let nodeChainInput: String?
 
     init(engine: IOSRuntimeEngine, logicalModeID: String, rawProfileID: String,
-         files: [String: Data], multihopEntryMode: String? = nil) {
+         files: [String: Data], multihopEntryMode: String? = nil, nodeChainInput: String? = nil) {
         self.engine = engine
         self.logicalModeID = logicalModeID
         self.rawProfileID = rawProfileID
         self.files = files
         self.multihopEntryMode = multihopEntryMode
+        self.nodeChainInput = nodeChainInput
     }
 
     var displayName: String {
         if engine == .multihop {
+            if nodeChainInput != nil { return "Ordered nodes • Local • \(rawProfileID) final" }
             let entry = multihopEntryMode ?? "Unspecified"
             return "\(entry) entry → \(rawProfileID) exit"
         }
@@ -153,7 +158,7 @@ enum IOSRuntimeSelector {
 
     static func selectMultihop(bundle: ClientBundle, rawProfileID: String?) throws -> IOSRuntimeSelection {
         if IOSDNSRuntimePolicy.selectedProfile(in: bundle)?.multihopNodes != nil {
-            throw IOSRuntimeSelectionError.unsupportedMode("The saved ordered chain requires its complete native chain owner before Connect is available.")
+            throw IOSRuntimeSelectionError.unsupportedMode("An ordered graph must be selected with every original node source.")
         }
         guard rawProfileID == nil, let profile = IOSDNSRuntimePolicy.selectedProfile(in: bundle),
               profile.normalizedNodeKind == "router-vpn", profile.multihopEnabled == true,

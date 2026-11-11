@@ -149,6 +149,9 @@ enum IOSDNSRuntimePolicy {
     static func patch(_ value: ClientBundle) throws -> ClientBundle { value }
 }
 enum IOSRuntimeSelector {
+    static func selectNodeChain(_ capture: FixtureNodeChainBoundary) throws -> IOSRuntimeSelection {
+        throw IOSStrategyWire.failure("Separate ordered native admission fixture")
+    }
     static func normalizedStartLayer(in b: ClientBundle) throws -> String { IOSDNSRuntimePolicy.selectedProfile(in: b)?.startLayer ?? "off" }
     static func selectRaw(bundle: ClientBundle, rawProfileID: String) throws -> IOSRuntimeSelection {
         guard let files = bundle.profiles[rawProfileID], !files.isEmpty,

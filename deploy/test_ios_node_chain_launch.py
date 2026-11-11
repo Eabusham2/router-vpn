@@ -33,7 +33,9 @@ import Libbox
 // SHIPPING_NETWORK_EXTENSION_BOUNDARY
 // SHIPPING_SELECTION_TYPES
 enum IOSRuntimeSelectionError:Error {case unsupportedMode(String)}
+enum IOSStrategyPlan {enum Kind {case manual,automatic,all,logical}}
 enum IOSRuntimeSelector {
+ static func selectMultihop(bundle:ClientBundle,rawProfileID:String?)throws->IOSRuntimeSelection{throw CancellationError()}
  static func normalizedStartLayer(in bundle:ClientBundle)throws->String {throw CancellationError()}
 }
 enum IOSDNSRuntimePolicy {
@@ -70,6 +72,18 @@ enum IOSMultihopExecution {
  var iosConnectGeneration=UUID(),userDisconnectInProgress=false
  var baseFallback=false,strictKillSwitchEnabled=false,homeLANAccess=true,routerName="Final node"
  var connected=false,activeEngine="",activeRawProfile="",observedTimeout:TimeInterval?
+ var tunnelTransitioning=false,auto=false,message="",selectedMode="",selectedLogicalMode="",multihopProgressText=""
+ var multihopProgressGeneration=UUID()
+ var selectedRouterProfile:RouterProfile?{bundle.flatMap{IOSDNSRuntimePolicy.selectedProfile(in:$0)}}
+ func saveRouter()->Bool{bundle != nil}
+ func iosStrategySelections(kind:IOSStrategyPlan.Kind,rawProfileID:String?)throws->[IOSRuntimeSelection]{throw CancellationError()}
+ func runIOSOwnedStrategy(kind:IOSStrategyPlan.Kind,selections:[IOSRuntimeSelection])async->Bool{false}
+ func captureIOSNodeUsageOwner(_ manager:NETunnelProviderManager)->Int?{nil}
+ func recordIOSNodeUsage(manager:NETunnelProviderManager,source:ClientBundle,generation:UUID,expected:Int?){}
+ func rememberIOSMultihopExecution(manager:NETunnelProviderManager,source:ClientBundle,entry:Data?,generation:UUID)async throws{throw CancellationError()}
+ func refreshTunnelStatus()async{connected=false;tunnelTransitioning=false}
+ func engineName(_ selection:IOSRuntimeSelection)->String{selection.displayName}
+ var activeSessionIdentity:Data?
  let iosSpeedLabOwnership=IOSSpeedLabOwnership()
  static func iosStrategyDigest(_ data:Data)->String{"boundary"}
  func iosMultihopEntryBundle(for bundle:ClientBundle)throws->ClientBundle{throw CancellationError()}
@@ -81,6 +95,7 @@ enum IOSMultihopExecution {
   observedTimeout=timeout;return false
  }
  // SHIPPING_CHAIN_BUNDLES
+ // SHIPPING_CONNECT
  // SHIPPING_START
 }
 '''
@@ -109,7 +124,8 @@ TESTS = r'''
   reset();let nodes=try sources(count),final=nodes.last!,model=RouterVPNModel(),manager=NETunnelProviderManager()
   model.bundle=final
   for node in nodes {IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
-  return (model,manager,final,IOSRuntimeSelection(engine:.multihop,logicalModeID:"shadowsocks",rawProfileID:"shadowsocks",files:[:]))
+  let capture=try model.captureIOSNodeChain(final);defer{try? capture.plan.close()}
+  return (model,manager,final,try IOSRuntimeSelector.selectNodeChain(capture))
  }
  static func editMiddle(_ mutation:(inout ClientBundle)->Void)throws {
   let key="chain-node-1",data=IOSNodeBundleStore.shared.records[key]!
@@ -122,7 +138,24 @@ TESTS = r'''
   catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}
  }
  static func run()async throws {
-  for count in [2,3,4] {
+  for fault in ["none","middle-token","middle-source","final-source","cancel-owner"] {
+   let (model,manager,_,_)=try setup()
+   let proto=NETunnelProviderProtocol();proto.providerBundleIdentifier="com.eabusham.routervpn.PacketTunnel";manager.protocolConfiguration=proto
+   NETunnelProviderManager.hook={phase in
+    guard phase=="load-all" else{return}
+    switch fault {
+    case "middle-token":try editMiddle{$0.routerProfiles[0].apiToken="changed-before-manager-readback"}
+    case "middle-source":try editMiddle{let raw=String(decoding:Data(base64Encoded:$0.profiles["wg"]!["wg.conf"]!)!,as:UTF8.self);$0.profiles["wg"]!["wg.conf"]=Data(raw.replacingOccurrences(of:"51820",with:"51821").utf8).base64EncodedString()}
+    case "final-source":model.bundle?.routerProfiles[0].apiToken="changed-before-manager-readback"
+    case "cancel-owner":model.iosConnectGeneration=UUID()
+    default:break
+    }
+   }
+   await model.connect(rawProfileID:nil)
+   try check("initial manager await preserves captured ordered source "+fault,NETunnelProviderManager.starts==(fault=="none" ? 1:0))
+   try check("Connect handoff has no simulated proof",!model.connected)
+  }
+  for count in [2,3,4,8] {
    let (model,manager,final,selection)=try setup(count)
    let expected=try model.captureIOSNodeChain(final);defer{try? expected.plan.close()}
    IOSMTUMeasurementGate.current="original-owned-hold"
@@ -176,6 +209,12 @@ TESTS = r'''
    try await reject("wrong final transport"){_ = try await model.launch(manager,final,wrong)}
    try check("wrong final source cannot save preferences",manager.protocolConfiguration==nil && manager.connection.starts==0)
   }
+  for source in [nil,"an-unowned-source"] as [String?] {
+   let (model,manager,final,_)=try setup()
+   let forged=IOSRuntimeSelection(engine:.multihop,logicalModeID:"multihop",rawProfileID:"shadowsocks",files:[:],nodeChainInput:source)
+   try await reject("matching labels without original typed source"){_ = try await model.launch(manager,final,forged)}
+   try check("labels cannot authorize native preferences",manager.protocolConfiguration==nil && manager.connection.starts==0)
+  }
   do {
    let (model,manager,final,selection)=try setup()
    let task=Task{@MainActor in try await model.launch(manager,final,selection)};task.cancel()
@@ -197,6 +236,7 @@ def main():
     body = body.replace('// SHIPPING_SELECTION_TYPES', runtime[runtime.index('enum IOSRuntimeEngine'):runtime.index('enum IOSRuntimeSelectionError')])
     body = body.replace('// SHIPPING_SELECTED_PROFILE', S.member(dns, '    static func selectedProfile('))
     body = body.replace('// SHIPPING_CHAIN_BUNDLES', S.member(view, '    func iosNodeChainBundles('))
+    body = body.replace('// SHIPPING_CONNECT', S.member(model, '    func connect(rawProfileID:'))
     body = body.replace('// SHIPPING_START', S.member(model, '    private func start(manager:'))
     with tempfile.TemporaryDirectory(prefix='.ios-chain-launch-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-chain-launch-') as directory:
         go_dir, work = Path(go_dir), Path(directory)
@@ -214,6 +254,7 @@ def main():
         subprocess.run(command + [str(code), '-o', str(binary)], check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)
         for name, before, after, failure in (
+            ('initial-manager-source', 'selection.nodeChainInput == capture.launchInput else', 'true else', 'initial manager await preserves captured ordered source middle-token'),
             ('middle-source-revalidation', 'try requireCurrentIOSNodeChain(nodeChainSource, selected: bundle)', '_ = nodeChainSource', 'ACCEPTED save middle-token'),
             ('preference-readback', 'NSDictionary(dictionary: savedConfiguration).isEqual(to: configuration),', 'true,', 'ACCEPTED save saved-source'),
         ):
