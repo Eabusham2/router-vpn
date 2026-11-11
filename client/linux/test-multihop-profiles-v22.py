@@ -5,6 +5,7 @@ The real modal Add/Load/Update handlers run against an isolated in-process HTTP
 fixture. GTK widgets and GKeyFile reads/writes are real; no VPN is started.
 """
 from pathlib import Path
+import importlib.util
 import json
 import os
 import subprocess
@@ -34,6 +35,10 @@ def main():
         settings = composed.read_text()
     asynchronous = (HERE/'routervpn-async-actions-v16.inc').read_text()
     choices = (HERE/'routervpn-multihop-choices-v22.inc').read_text()
+    spec = importlib.util.spec_from_file_location('ordered_source_fixture', HERE/'test-ordered-nodes-v1.py')
+    ordered_fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ordered_fixture)
+    ordered = ordered_fixture.public_source_helpers() + '\n' + (HERE/'routervpn-ordered-nodes-v1.inc').read_text()
     methods = '\n'.join(block(asynchronous, marker) for marker in (
         'static char *linux_multihop_execution_choice_v1(',
         'static void linux_multihop_store_execution_v1(',
@@ -55,6 +60,7 @@ def main():
     end = profiles.index('} LinuxProfileEditorV22;', begin)+len('} LinuxProfileEditorV22;')
     methods += '\n' + profiles[begin:end]
     for marker in (
+        'static void linux_profile_editor_closed_v1(',
         'static void linux_profile_editor_changed_v22(',
         'static void linux_profile_manager_v11(',
         'static gboolean linux_profile_runtime_active_v11(',
@@ -65,7 +71,9 @@ def main():
     hops += '\n' + block(settings, 'static LinuxMultihopNodeV7 *linux_multihop_find_v7(')
     hops += '\n' + block(settings, 'static gboolean linux_multihop_can_connect_v22(')
     hops += r'''
-static gboolean linux_async_busy_v16(App*app){(void)app;return mutation_busy;}
+/* This pair catalog fixture has no local HTTP worker. The separate ordered
+ * callback fixture exercises pending-worker delegation to owned Disconnect. */
+static gboolean linux_async_busy_v16(App*app){(void)app;return FALSE;}
 static void linux_multihop_update_summary_v7(LinuxMultihopDialogV7*s,const char*message){gtk_label_set_text(GTK_LABEL(s->summary),message?message:"");}
 static guint64 linux_async_request_v17(App*app,const char*path,const char*body,long timeout,const char*label,gboolean stop){check(!stop,"Connect requested Stop");post_and_log(app,path,body,timeout,label);return 1;}
 '''
@@ -81,7 +89,7 @@ static guint64 linux_async_request_v17(App*app,const char*path,const char*body,l
 #include <stdlib.h>
 #include <stdio.h>
 typedef struct {GtkWidget*window;} App;
-typedef struct {App*app;GtkWidget*mode,*multihop;} LinuxUnifiedV8;
+typedef struct {App*app;GtkWidget*mode,*multihop,*node;gboolean syncing;} LinuxUnifiedV8;
 typedef struct {char*data;size_t len;} Buffer;
 static unsigned checks, saved_count, updated_count, connected_count, delegated_count;
 static gboolean status_busy, mutation_busy;
@@ -90,12 +98,16 @@ static const char *wanted_mode,*wanted_execution,*wanted_entry_mode="",*wanted_e
 static void check(gboolean yes,const char*message){checks++;if(!yes){g_printerr("GTK profile check failed: %s\n",message);exit(1);}}
 static JsonNode*parse_json(const char*raw){JsonParser*p=json_parser_new();JsonNode*n=NULL;if(json_parser_load_from_data(p,raw,-1,NULL))n=json_node_copy(json_parser_get_root(p));g_object_unref(p);return n;}
 static const char*obj_string(JsonObject*obj,const char*key){return obj&&json_object_has_member(obj,key)?json_object_get_string_member(obj,key):"";}
+#define external_path_string_v4 obj_string
 static GKeyFile*linux_unified_load_keyfile_v8(void){GKeyFile*k=g_key_file_new();g_key_file_load_from_file(k,keypath,G_KEY_FILE_NONE,NULL);return k;}
 static void linux_unified_save_keyfile_v8(GKeyFile*k){gsize n=0;char*raw=g_key_file_to_data(k,&n,NULL);check(g_file_set_contents(keypath,raw,n,NULL),"GKeyFile persistence failed");g_free(raw);}
 static char*linux_unified_custom_layers_for_mode_v8(const char*mode){check(strcmp(mode,"smart-auto")==0,"fixture mode changed");return NULL;}
 static void linux_unified_store_mode_v8(const char*mode){check(strcmp(mode,"smart-auto")==0,"Load changed logical mode");}
 static void linux_unified_refresh_mode_combo_v8(LinuxUnifiedV8*s){(void)s;}
 static void linux_unified_refresh_v8(LinuxUnifiedV8*s){(void)s;}
+static void refresh_all(App*a){(void)a;}
+static gboolean linux_async_busy_v16(App*a);
+static GtkWidget*make_button(const char*label,GCallback callback,gpointer data){GtkWidget*b=gtk_button_new_with_label(label);g_signal_connect(b,"clicked",callback,data);return b;}
 static void linux_unified_connect_v8(GtkButton*b,gpointer s){(void)b;(void)s;delegated_count++;}
 static void append_diag(App*a,const char*text){(void)a;check(text&&text[0],"Empty rejection reason");}
 static gboolean routervpn_require_mutation_idle(App*a,const char*reason){(void)a;(void)reason;return !mutation_busy;}
@@ -120,6 +132,7 @@ static void post_and_log(App*a,const char*path,const char*body,long timeout,cons
  connected_count++;g_free(connected_body);connected_body=g_strdup(body);
 }
 CHOICES
+ORDERED
 METHODS
 HOPS
 static void choose(GtkWidget*combo,const char*id){check(gtk_combo_box_set_active_id(GTK_COMBO_BOX(combo),id),"Requested choice missing from real control");}
@@ -162,7 +175,13 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Missing fixtu
  check(linux_profile_setup_body_v11(&state,"Fixture",NULL,TRUE,"entry","entry","naive-h3","auto","")==NULL,"Same-node profile accepted");check(linux_profile_setup_body_v11(&state,"Fixture",NULL,TRUE,"entry","exit","unknown","auto","")==NULL,"Unknown saved exit accepted");check(linux_profile_setup_body_v11(&state,"Fixture",NULL,TRUE,"entry","exit","naive-h3","unknown","")==NULL,"Unknown saved execution accepted");
  check(linux_profile_setup_body_v11(&state,"Fixture",NULL,TRUE,"entry","exit","naive-h3","auto","future-entry")==NULL,"Unknown saved entry accepted");
  hop_controls(&app);gtk_widget_destroy(app.window);gtk_widget_destroy(state.mode);gtk_widget_destroy(state.multihop);g_free(keypath);g_free(catalog_raw);g_free(saved_body);g_free(updated_body);g_free(connected_body);printf("Actual GTK Add/Load/Update/Connect + disk restore: %u checks, 57 exit/execution + 75 entry/execution profiles + 75 transformed hop payloads PASS\n",checks);return 0;}
-'''.replace('\nCHOICES\n', '\n'+choices+'\n').replace('\nMETHODS\n', '\n'+methods+'\n').replace('\nHOPS\n', '\n'+hops+'\n')
+'''.replace('\nCHOICES\n', '\n'+choices+'\n').replace('\nORDERED\n', '\n'+ordered+'\n').replace('\nMETHODS\n', '\n'+methods+'\n').replace('\nHOPS\n', '\n'+hops+'\n')
+    before = 'LinuxUnifiedV8 state={&app,gtk_combo_box_text_new(),gtk_check_button_new()};'
+    after = '''LinuxUnifiedV8 state={.app=&app,.mode=gtk_combo_box_text_new(),.multihop=gtk_check_button_new(),.node=gtk_combo_box_text_new()};
+ gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.node),"exit","exit");gtk_combo_box_set_active_id(GTK_COMBO_BOX(state.node),"exit");
+ JsonNode*public_catalog=parse_json(catalog_raw);JsonObject*public_store=json_node_get_object(public_catalog);JsonArray*public_nodes=json_object_get_array_member(public_store,"nodes");json_object_set_array_member(public_store,"profiles",json_array_ref(public_nodes));json_object_set_string_member(public_store,"selected_id","exit");g_object_set_data_full(G_OBJECT(app.window),"router-vpn-source-catalog-v24",public_catalog,(GDestroyNotify)json_node_free);'''
+    assert program.count(before) == 1
+    program = program.replace(before, after)
     with tempfile.TemporaryDirectory(prefix='routervpn-gtk-multihop-profiles-') as temporary:
         directory = Path(temporary)
         catalog_path = directory/'multihop-status.json'
@@ -179,7 +198,7 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Missing fixtu
         for name, variant in variants.items():
             source, binary = directory/(name+'.c'), directory/name
             source.write_text(variant)
-            subprocess.run(['gcc','-Wall','-Wextra','-Werror',str(source),'-o',str(binary)]+flags,check=True)
+            subprocess.run(['gcc','-Wall','-Wextra','-Werror','-Wno-unused-function',str(source),'-o',str(binary)]+flags,check=True)
             result = subprocess.run(['xvfb-run','-a',str(binary),str(directory)],text=True,capture_output=True,timeout=60)
             output = result.stdout + result.stderr
             if name == 'shipping':

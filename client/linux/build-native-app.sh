@@ -19,6 +19,7 @@ CONTROLLER_LAUNCH_INC="$ROOT/client/linux/routervpn-controller-launch-v1.inc"
 EXTERNAL_SOURCE_INC="$ROOT/client/linux/routervpn-external-source-v24.inc"
 COMPARISON_HEADER="$ROOT/client/linux/routervpn-comparison-progress-v25.h"
 TELEMETRY_INC="$ROOT/client/linux/routervpn-telemetry-v9.inc"
+ORDERED_INC="$ROOT/client/linux/routervpn-ordered-nodes-v1.inc"
 SPEED_LAB_INC="$ROOT/client/linux/routervpn-speed-lab-v12.inc"
 SPEED_LAB_PATH_INC="$ROOT/client/linux/routervpn-speed-lab-path-v19.inc"
 GLOBE_INC="$ROOT/client/linux/routervpn-globe-v10.inc"
@@ -28,7 +29,7 @@ V3="$ROOT/client/linux/routervpn-gtk-product-v3.c"
 CORE="$ROOT/client/linux/routervpn-gtk-product.c"
 SESSION_MUTATION="$ROOT/client/linux/apply-session-mutation.py"
 START_LAYER_SETTINGS="$ROOT/client/linux/apply-start-layer-settings.py"
-SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$SHUTDOWN_INC" "$CONTROLLER_AUTH_HEADER" "$CONTROLLER_LAUNCH_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC" "$V4" "$V3" "$CORE" "$START_LAYER_SETTINGS")
+SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$SHUTDOWN_INC" "$CONTROLLER_AUTH_HEADER" "$CONTROLLER_LAUNCH_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$ORDERED_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC" "$V4" "$V3" "$CORE" "$START_LAYER_SETTINGS")
 BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-linux-v10.XXXXXX")
 EMBEDDED_V4="$BUILD_DIR/routervpn-gtk-product-v4-embedded.c"
 BUILD_SRC="$BUILD_DIR/routervpn-gtk-product-v10-shipping.c"
@@ -46,6 +47,7 @@ done
 for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$SHUTDOWN_INC" "$CONTROLLER_AUTH_HEADER" "$CONTROLLER_LAUNCH_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC"; do
   [[ -s "$source" ]] || { echo "Missing Linux shipping include: $source" >&2; exit 2; }
 done
+[[ -s "$ORDERED_INC" ]] || { echo "Missing Linux ordered-path shipping include: $ORDERED_INC" >&2; exit 2; }
 mkdir -p "$(dirname "$OUT")"
 [[ -s "$SESSION_MUTATION" ]] || { echo "Missing Linux session-mutation transformer: $SESSION_MUTATION" >&2; exit 2; }
 [[ -s "$START_LAYER_SETTINGS" ]] || { echo "Missing Linux Start Layer settings transformer: $START_LAYER_SETTINGS" >&2; exit 2; }

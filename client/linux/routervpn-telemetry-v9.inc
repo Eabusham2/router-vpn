@@ -263,9 +263,11 @@ static gboolean linux_live_tick(gpointer data){
         t->live_ms=ms;t->live_deadline=deadline;g_free(t->live_id);t->live_id=g_strdup(linux_ec_string(o,"profile_id"));char*label=g_strdup_printf("%.1f ms HTTPS",ms);gtk_label_set_text(GTK_LABEL(t->live),label);g_free(label);gtk_widget_set_tooltip_text(t->live,"3 HTTPS responses through the current proved VPN path and selected DNS, timed after DNS/TCP/TLS preparation. Expires after 10 seconds; separate from ICMP, private-node RTT and saved50.");
     }else if(o!=NULL&&linux_ec_member(o,"measurement")==NULL&&isfinite(linux_ec_number(o,"median_ms"))&&linux_ec_number(o,"median_ms")>0){linux_live_clear(t);char*label=g_strdup_printf("%.1f ms",linux_ec_number(o,"median_ms"));gtk_label_set_text(GTK_LABEL(t->live),label);g_free(label);gtk_widget_set_tooltip_text(t->live,"HTTP RTT through the current private Router-node path.");}
     else linux_live_clear(t);
-    if(root!=NULL)json_node_free(root);rv_http_free_v16(job);
+    if(root!=NULL)json_node_free(root);
+    rv_http_free_v16(job);
     if(t->live_job==NULL&&t->live_capture!=NULL){json_node_free(t->live_capture);t->live_capture=NULL;}
-    if(t->app->map!=NULL)gtk_widget_queue_draw(t->app->map);return G_SOURCE_CONTINUE;
+    if(t->app->map!=NULL)gtk_widget_queue_draw(t->app->map);
+    return G_SOURCE_CONTINUE;
 }
 static void linux_live_start(LinuxTelemetryV9*t){
     if(t->live_job!=NULL||linux_live_paused(t))return;
