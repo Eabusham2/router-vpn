@@ -8,7 +8,7 @@ $source = Get-Content -LiteralPath (Join-Path $Root 'client/RouterVPN-Windows-Un
 $extra = [regex]::Match($source, '(?ms)^    \$extraState = @''\r?\n(.*?)\r?\n''@')
 if (-not $extra.Success) { throw 'Shipping async source block not found.' }
 $ast = [ScriptBlock]::Create($extra.Groups[1].Value).Ast
-$names = @('UnifiedAsyncBusy','UnifiedMultihopValue','GetUnifiedMultihopComparisonText','RefreshUnifiedMultihopComparison','UnifiedCapturedComparisonRequestID','UnifiedCapturedComparisonTimeout','UnifiedCapturedComparisonStatus','SetUnifiedAsyncUI','StartUnifiedApiAsync','CancelUnifiedApiAsync','CompleteUnifiedApiAsync','StartUnifiedComparisonProgress','StopUnifiedComparisonProgress','UnifiedComparisonProgressOwned','PollUnifiedComparisonProgress')
+$names = @('UnifiedAsyncBusy','UnifiedMultihopValue','GetUnifiedMultihopComparisonText','RefreshUnifiedMultihopComparison','UnifiedCapturedComparisonRequestID','UnifiedCapturedComparisonTimeout','UnifiedCapturedComparisonStatus','RefreshUnifiedOrderedControls','SetUnifiedAsyncUI','StartUnifiedApiAsync','CancelUnifiedApiAsync','CompleteUnifiedApiAsync','StartUnifiedComparisonProgress','StopUnifiedComparisonProgress','UnifiedComparisonProgressOwned','PollUnifiedComparisonProgress')
 foreach ($name in $names) {
     $nodes = @($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name}, $true))
     if ($nodes.Count -ne 1) { throw "Expected one shipping function: $name" }
@@ -16,7 +16,7 @@ foreach ($name in $names) {
 }
 function Assert([bool]$Value, [string]$Message) { if (-not $Value) { throw $Message } }
 function Log([string]$Text) { $script:Messages.Add($Text) }
-function Control([string]$Name) { if (-not $script:Controls.ContainsKey($Name)) { $script:Controls[$Name] = [pscustomobject]@{IsEnabled=$true;Content='Connect';Text=''} }; return $script:Controls[$Name] }
+function Control([string]$Name) { if (-not $script:Controls.ContainsKey($Name)) { $script:Controls[$Name] = [pscustomobject]@{IsEnabled=$true;Content='Connect';Text='';IsChecked=$false;Visibility='Visible'} }; return $script:Controls[$Name] }
 function CancelUnifiedRefreshAsync { return $false }
 function RefreshProduct { $script:Refreshes++ }
 function Reset-Fixture {
@@ -66,6 +66,41 @@ function Finish-Response([int]$Status = 200) {
     [void]$script:UnifiedAsyncClient.Pending.TrySetResult($r)
     return $r
 }
+
+function Test-OrderedAsyncControls {
+    Reset-Fixture
+    (Control 'UnifiedOrdered').IsChecked=$true
+    (Control 'UnifiedMultihop').IsChecked=$true
+    # A saved ordered path has already rendered before an HTTP action begins.
+    # Completion must preserve these restrictions when it releases busy state.
+    RefreshUnifiedOrderedControls
+    Assert (StartUnifiedApiAsync 'Save ordered setup' '/api/connection-profile/setup/save' 'POST' @{} 30 $null $null $null) 'Ordered setup action did not start'
+    Assert ((Control 'UnifiedModeCombo').Visibility-ceq'Collapsed'-and(Control 'UnifiedOrderedModeSummary').Visibility-ceq'Visible') 'Busy ordered action showed the unrelated single-node mode.'
+    [void](Finish-Response)
+    CompleteUnifiedApiAsync
+    foreach($Name in @('UnifiedEntryCombo','UnifiedExitCombo','UnifiedEntryMode','UnifiedExitMode','UnifiedBaseCombo','UnifiedExecution','UnifiedCandidatesButton','UnifiedPresetsButton')){
+        Assert (-not(Control $Name).IsEnabled) ('HTTP completion enabled a pair selector for an ordered path: '+$Name)
+    }
+    Assert (-not(UnifiedAsyncBusy)-and(Control 'UnifiedOrdered').IsEnabled-and(Control 'UnifiedNodeChainButton').IsEnabled) 'Ordered completion did not release its own idle controls.'
+    Assert ((Control 'UnifiedModeCombo').Visibility-ceq'Collapsed'-and(Control 'UnifiedOrderedModeSummary').Visibility-ceq'Visible') 'Ordered completion lost its per-member mode display.'
+    (Control 'UnifiedOrdered').IsChecked=$false
+    SetUnifiedAsyncUI $false
+    Assert ((Control 'UnifiedModeCombo').Visibility-ceq'Visible'-and(Control 'UnifiedOrderedModeSummary').Visibility-ceq'Collapsed'-and(Control 'UnifiedEntryCombo').IsEnabled) 'Leaving an ordered path retained the previous mode or pair-control presentation.'
+}
+
+Test-OrderedAsyncControls
+# The helper itself remains real and loaded in this causal control. Removing
+# only its completion invocation must fail the same shipping lifecycle case.
+$asyncDefinition=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'SetUnifiedAsyncUI'},$true))[0].Extent.Text
+$orderedInvocation='    RefreshUnifiedOrderedControls'
+Assert ($asyncDefinition.Split(@($orderedInvocation),[StringSplitOptions]::None).Count-eq2) 'Ordered async causal-control anchor changed.'
+. ([ScriptBlock]::Create($asyncDefinition.Replace($orderedInvocation,'    # causal control: omitted ordered refresh')))
+$orderedFailure=''
+try { Test-OrderedAsyncControls } catch { $orderedFailure=$_.Exception.Message }
+finally { . ([ScriptBlock]::Create($asyncDefinition)) }
+Assert ($orderedFailure-ceq'HTTP completion enabled a pair selector for an ordered path: UnifiedEntryCombo') ('Ordered async causal control missed its completion boundary: '+$orderedFailure)
+Test-OrderedAsyncControls
+Write-Host 'PASS ordered completion retains exact mode/pair controls and missing-refresh causal control fails'
 
 # A settled HTTP action cannot re-enable connection/profile mutations while
 # the captured protection owner is still pending. Explicit protection recovery
@@ -288,4 +323,4 @@ $tokens=$null;$errors=$null
 [void][System.Management.Automation.Language.Parser]::ParseInput($handlers.Groups[1].Value,[ref]$tokens,[ref]$errors)
 Assert ($errors.Count -eq 0) ('Shipping event-handler parse failed: '+(($errors|ForEach-Object Message)-join '; '))
 Write-Host 'PASS generated window event handlers parse'
-Write-Host 'Windows async action regression tests: PASS (14 groups)'
+Write-Host 'Windows async action regression tests: PASS (15 groups + ordered completion causal control)'
