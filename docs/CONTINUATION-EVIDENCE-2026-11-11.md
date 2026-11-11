@@ -58,6 +58,19 @@ publication is separate from a successful native build or release.
 | `7a15afe3` | Keep the Windows imported fallback mutation scoped to the original Windows owner after adding the Linux platform owner. | All 25 runner tests passed; the actual shared Go positive passed and the scoped production mutation failed at the intended legacy-fallback witness. |
 | `c9917fa2` | Require joined retirement of an outstanding Linux imported MTU lease and trigger native builds for the independent peer source. | Final tagged compilation/classification and the nine-case receipt/inventory regression passed. The cancellation case cancels actual work; the additional case requires original process/source join before discharging the lease. |
 | `5b0c81f3` | Remove redundant relative-path reconstruction from native source sorting. | Identical canonical Windows/POSIX order and changed-byte/removed-file controls passed; the full package-fallback audit passed its unchanged 30-second limit. Every relative filename and original byte remains sealed. |
+| `52946a24` | Run the complete installed Linux host gate when reusing an existing native bundle. | 56 host-runner, 55 imported-runtime, 39 cold-builder and four warm-reuse checks passed. The gate reconstructs the pinned source and retains the original bundle identity before and after actual execution; a receipt alone cannot authorize reuse. |
+| `6f0f67c0` | Trace the Linux owner in the executable launch-order source guard. | Five test roots and 41 subcases passed, including 17 added platform/ownership mutations. The guard follows nine actual shipping functions and retains original caller, partial-process, Start-before-DNS and locked-publication checks. This is source validation, not a native TUN verdict. |
+| `45eb26d8` | Index complete Linux host log inventories without changing their verdicts. | All 56 runner tests passed in 52.518 seconds, down from 355.322 seconds. An old/new comparison covered 19,995 verdicts, including 125 complete-log variants, with identical acceptance, refusal and messages. All 595 required entries and nine imported scenarios remain mandatory. |
+| `4a6eb234` | Capture acknowledged socket siblings for renewal while prioritizing due children and their original parents. | Race-instrumented renewal, cancellation, capacity, expiry and byte-path cases passed in 33.994 seconds. The original implementation failed the slow-native-operation counterfactual; the initial roots-first draft failed both due-child capacity controls. The 16-member frame, 3-second native budget, 5-second receipt age and 7-second grant bounds are unchanged. Darwin execution remains separate. |
+| `ca05791b` | Give the complete Linux native gate its measured aggregate compilation budget. | Eleven build-dispatch/failure/timeout and retained-baseline tests, all 60 routing-runner cases, and three aggregate-boundary mutations passed. Linux has a bounded 3600-second outer wrapper; Windows remains at 1800 seconds. All individual compiler, suite, control, socket, lease and cancellation deadlines are unchanged. |
+| `2605b1bf` | Initialize the production-owned stop-retry flag in the Windows asynchronous-action fixture. | The original PowerShell StrictMode failure was reproduced; all fourteen actual PowerShell 7.5.2 groups passed with the production reset value. Hosted PowerShell 5.1 remains separate. |
+| `6fcea60a` | Carry live external HTTPS responses through desktop controller, native worker, WPF, AppKit and GTK. | Controller and replay/failure tests, 70 Swift checks plus six controls, 27 PowerShell checks plus three controls, and 43 real GTK checks plus three controls passed. The complete connection-profile regression retained 3,334 checks and fourteen controls. Actual encrypted Box cases compiled but their local execution requires unavailable Netlink capability. |
+| `76ad41e7` | Reduce the XHTTP warm-build fixture's static context depth with ExitStack. | Seven fixture tests passed; context order, exceptions, assertions and cleanup were preserved. Hosted compilation, not the local interpreter, exposed the original block limit. |
+| `1dd21251` | Supersede obsolete automatic Linux main-push runs and stop cancelled automatic runtime jobs. | Five focused tests, 1,280 condition states, eighteen grouping cases and eight causal controls passed. Actual hosted cancellation later released both native jobs instead of retaining the cancelled run's work. Explicit and release runs keep their original ownership. |
+| `615c878a` | Split Windows SS entry execution into eleven bounded groups. | All 86 original leaves and both compiled controls remain mandatory; 67 runner tests and nine CI receipt tests passed. Actual Go subtest selection, including whitening plus signs, rejected a removed leaf and duplicate execution. Native replay remains required. |
+| `489dc74a` | Repair the four matching 21-block ordinary/packet/OpenVPN/PQ fixture stacks rejected by hosted Python. | All 33 fixture tests passed. Full-file AST reconstruction retained all sixteen original contexts and guarded bodies; the repaired paths have six blocks. All 836 tracked Python sources compiled locally, whose interpreter has a different block ceiling. |
+| `3ceef35a` | Preserve literal Naive H2 Home UDP through final AES and AES/XOR layers over HTTP/HTTPS CONNECT. | All 52 actual native traffic leaves passed with independent encrypted peers and selected-DNS, credential, whitening, routing and bypass controls. Shared policy/projection tests passed; the old Off-only condition rejected all twelve added layered constructor cases. Apple passed 738 picker/save/compiler checks; Android passed 1,303 capture/replay checks per CONNECT carrier and six causal controls. |
+| `68b82316` | Isolate exact caller/run/source MAX jobs and supersede obsolete automatic Native MTU pushes. | Six expression/registration tests and thirteen collision, identity and cancellation controls passed. Workload, matrix, cleanup and individual deadlines are unchanged; older runs retain their original workflow definitions. |
 
 The Linux parent unit is a new reconstruction from the preserved design and
 published child/policy prerequisites. It is not represented as recovery of the
@@ -75,7 +88,7 @@ starts after DNS/TCP/TLS preparation. It is labeled HTTPS, expires in memory,
 and does not become ICMP RTT, direct node reachability, a throughput result or
 a durable 50-sample score. The selected DNS policy still governs the path.
 
-The Apple and Android owners retain the session, node source, network, already
+The Apple, Android and desktop owners retain the session, node source, network, already
 proved execution choice, native measurement and MTU lease until workers drain.
 They revalidate before displaying a result. Partial, stale, cancelled,
 mixed-type and incorrectly attributed responses cannot replace the current
@@ -83,8 +96,12 @@ result. Background probes reserve idle MTU ownership atomically with native
 Auto/Retest start; explicit Speed Lab retains its existing cancellation and
 drain contract. Final release resumes an initial Auto operation deferred by
 that exact lease, including after a failed live sample. Explicit MTU Cancel
-and replacement owners do not inherit that permission. Android values expire
-after ten seconds; Apple values expire after fifteen seconds.
+and replacement owners do not inherit that permission. Android and desktop
+values expire after ten seconds; Apple values expire after fifteen seconds.
+Desktop manual fifty-sample work takes priority, and live retries pause while
+its original worker drains. Deterministic operation identities separate a
+short live response from saved measurement receipts; replay cannot promote
+one into the other. Each UI validates the exact request again before display.
 
 ## Native and release state at this record
 
@@ -126,6 +143,49 @@ compiler preparation and six integrity controls; it had not established the
 native socket/H3/lease outcomes. A complete all-platform release for the
 current source has not yet been established by this record.
 
+At `d95914b6`, both actual Windows ALL/restoration jobs passed in run
+`42931895573` (ARM64 job `130234030568` and AMD64 job `130234030770`). The
+overall run was later cancelled; its unfinished H3/MAX lease and macOS work
+does not have a passing verdict. Partial H3 progress before cancellation is
+not credited as completion of its full matrix.
+
+At `5b0c81f3`, both Windows external-packet jobs in run `42931436794`
+passed the actual lease-stop-retry baseline and all six compiled lease
+controls, including `missing-lease-stream-retirement`. The jobs are
+`130233711421` (AMD64) and `130233711434` (ARM64). This is post-backport
+native lease evidence. Separate SS-entry jobs in the same run exhausted the
+shared 180-second batch alarm before the last layer children could finish;
+`615c878a` partitions that unchanged inventory instead of weakening transport
+or lifetime protections. At `52946a24`, native ARM64 MAX QUIC, succession and
+ownership-controls-2 jobs passed (`130243259822`, `130243259798`,
+`130243259847`); these individual verdicts do not establish the full MAX matrix.
+
+The authoritative `1dd21251` source-audit job `130254168120` failed on the
+ordinary warm-build fixture's Python static block depth. The four identical
+remaining stacks were repaired together in `489dc74a`. No release gate was
+disabled. Exact-current-source native and publication evidence remains pending.
+
+The Linux native-app run at `b2673fdf`, `42928509503`, failed before the
+installed-host scenarios. Both architectures completed the 77 baseline
+selectors, backed by 19 retained executable package images, then exhausted
+the 1800-second aggregate wrapper while compiling the 64 mandatory causal
+controls. ARM64 job `130221337259` had completed 18 controls; AMD64 job
+`130221337316` had completed ten. At the slowest observed completed
+compile/control cost, 22.397 seconds, the remaining 54 controls project a
+total of about 3010 seconds. Commit `ca05791b` sets a bounded 3600-second
+Linux aggregate without removing controls or weakening any individual
+deadline. Its native-app run is `42936033110`; creation or queueing is not
+evidence of successful installed-host execution. Public imported-host
+admission stays closed until that actual gate passes.
+
+The older immutable `6f0f67c0` Linux run also reached the original 1800-second
+wrapper limit before installed-host admission. Its ARM64 job `130241123064`
+had rejected seventeen controls before the parent terminated the next
+compile. That run predates the indexed verdict checker and aggregate-budget
+repair. Later, when superseded by `3ceef35a`, the fixed `1dd21251` run cancelled
+its two actual engine jobs (`130258662951`, `130258663019`) and downstream work
+promptly. This demonstrates cancellation behavior, not imported-host acceptance.
+
 ## Remaining requirement ledger
 
 | Requirement area | Current source evidence | Remaining acceptance or implementation |
@@ -133,9 +193,9 @@ current source has not yet been established by this record.
 | Additional independently selected nodes | Existing graph and mobile/desktop selectors retain one entry and one exit; helper/MAX component chains are separate. | Ordered additional user-selected nodes, independent proof/policy, native producers and per-node measurements remain required. |
 | Protected Linux imported host | Bounded WG entry plus paired SS final parent implementation is published at `b2673fdf`; encrypted peer is published at `76a64786`. | Installed native system-TUN scenarios, public-path admission, restoration/retirement and matching package evidence. Broader graph/layer families remain separate requirements. |
 | Protected macOS imported graphs | Existing direct/external and ordinary native paths retain their bounded coverage. | Broader imported parent/host combinations require complete source, native policy, proof, DNS, MTU and lifecycle evidence. |
-| Home UDP over CONNECT | Literal Naive H2 final with final Start Layer Off is supported and the Apple fixture now exercises it. | Hostname-dependent lower DNS, DoH3, and final AES/AES+XOR UDP bootstrap still need actual transport solutions. |
+| Home UDP over CONNECT | Literal Naive H2 final now preserves Home UDP with Off, AES and AES/XOR final layers; shared, Apple, Android and actual encrypted native evidence is published at `3ceef35a`. | Hostname-dependent lower DNS and DoH3 still need actual transport solutions. Packaged native and physical-device acceptance remain separate. |
 | Imported Server/Compare | Authenticated paired Router entries support their existing remote execution. Ordinary unmanaged imported entry credentials do not confer remote executor authority. | Preserve the original scope distinction; do not fabricate remote credentials or count a safe Local-only refusal as general Server implementation. |
-| Live external measurements | Shared three-response worker and Apple/Android shipping ownership/UI are published. | Desktop controller/native/UI integration is in progress. Exact native builds and device behavior remain separate evidence; this does not establish all-node or all-platform measurement acceptance. |
+| Live external measurements | Shared three-response worker and Apple, Android, Windows, macOS and Linux shipping ownership/UI are published. | Exact native builds and device behavior remain separate evidence; this does not establish all-node or all-platform measurement acceptance. |
 | Native release | Current source fixes are published with their named local checks. | Exact-SHA Windows installed/Portable, macOS, Linux, APK, Xcode-built IPA, ARM64 images, compose, manifest, checksums and final publication must agree. |
 | Physical and live acceptance | No private deployment or physical-device observation was performed in this continuation. | Selected-path/leak/reconnect/transition tests, off-LAN methods, visual/DPI/orientation/accessibility checks, private benchmarking, forwarding/Stop/Resume, rollback, providers, signing and authorized ASUS/Portainer deployment. |
 

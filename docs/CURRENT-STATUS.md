@@ -10,24 +10,37 @@ completion of the current commit's packages, physical devices or deployment.
 
 The [November 11 evidence ledger](CONTINUATION-EVIDENCE-2026-11-11.md) records
 the continuation from live `94658242`, recovered original requirements, and
-published source through `5b0c81f3`. The bounded Linux imported WG-to-paired-SS
+published source through `68b82316`. The bounded Linux imported WG-to-paired-SS
 parent/host is now reconstructed and published; its installed native acceptance
 and public admission are still pending. The independent encrypted peer passed
 component tests, which are not system-TUN acceptance.
 
-The shared short HTTPS response worker and Apple/Android external-path UIs
+The shared short HTTPS response worker and Apple/Android/desktop external-path UIs
 retain captured session/source/network/execution ownership through native
 drain. These values expire and remain separate from saved 50-sample statistics.
 Automatic refresh defers to active Auto MTU or Retest using an atomic idle
-reservation. Desktop integration is in progress. The Linux installed native
+reservation. Desktop WPF/AppKit/GTK, replay refusal and manual-measurement
+priority are published at `6fcea60a`. The Linux installed native
 host gate now requires nine imported-path cases; the separate generated child
 workflow does not exercise those cases.
 
 The concrete-owner source-audit corrections preserve their executable rejection
 controls. Windows builds now prepare a verified compiler copy with the exact
 upstream Go Winsock cleanup correction; actual Windows ARM64 preparation and
-all six integrity controls have passed. Socket, H3 and lease runtime outcomes,
-the new Linux host cases and a complete exact-SHA release remain pending.
+all six integrity controls have passed. Both native Windows lease-stop-retry
+and six compiled lease controls subsequently passed at `5b0c81f3`, as did both
+ALL/restoration jobs at `d95914b6`. H3, the complete MAX matrix, the new Linux
+host cases and a complete exact-SHA release remain pending. The current Python
+source-audit blocker is repaired in `489dc74a`, and bounded SS entry execution
+is repaired in `615c878a`; native replays must establish their own verdicts.
+
+Literal Naive H2 over HTTP/HTTPS CONNECT now preserves Home AdGuard UDP with
+Off, AES and AES/XOR final Start Layers (`3ceef35a`). The original final-layer
+resolver remains captured without gaining a direct UDP exception. Actual
+encrypted native, Apple picker/save and Android capture/replay cases passed.
+Hostname-dependent lower DNS and DoH3 remain open. Additional independently
+selected nodes beyond the existing pair and broader protected Unix graph
+coverage also remain source work; helper/MAX components do not close them.
 
 The earlier outage and unpublished-source statements below describe their
 dated checkpoints. The November 11 ledger supersedes those status statements
