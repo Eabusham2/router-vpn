@@ -95,6 +95,11 @@ func nativeMultihopLaunchSources(t *testing.T) []string {
 		sourceFunctionForTest(t, "desktop_imported_owned.go", "func (a *app) publishDesktopImportedMultihopStartLocked("),
 		sourceFunctionForTest(t, "desktop_imported_owned.go", "func startDesktopOwnedImportedLaunch("),
 		sourceFunctionForTest(t, "desktop_node_owned.go", "func startDesktopOwnedNodeLaunchFor("),
+		sourceFunctionForTest(t, "desktop_imported_platform.go", "func startDesktopImportedPlatform("),
+		sourceFunctionForTest(t, "desktop_imported_linux_lifecycle.go", "func (owner *desktopLinuxImportedConnection) Start("),
+		sourceFunctionForTest(t, "desktop_node_session_linux.go", "func (s *desktopLinuxNodeSession) startWithVerifier("),
+		sourceFunctionForTest(t, "desktop_node_host_linux_start.go", "func (h *desktopLinuxNodeHost) startWithVerifier("),
+		sourceFunctionForTest(t, "desktop_node_host_linux_start.go", "func (h *desktopLinuxNodeHost) publishStarting("),
 	}
 }
 
@@ -103,8 +108,8 @@ func nativeMultihopLaunchSources(t *testing.T) []string {
 // well as the ordinary cmd.Start branch; an unrelated guard, comment or string
 // cannot stand in for either branch's original operation.
 func nativeMultihopLaunchGuards(sources []string) error {
-	if len(sources) != 4 {
-		return fmt.Errorf("native multihop launch lost its four shipping functions")
+	if len(sources) != 9 {
+		return fmt.Errorf("native multihop launch lost its original Windows and Linux shipping functions")
 	}
 	positions := token.NewFileSet()
 	methods := make([]*ast.FuncDecl, 0, len(sources))
@@ -159,13 +164,21 @@ func nativeMultihopLaunchGuards(sources []string) error {
 			continue
 		}
 		switch text(branch.Cond) {
-		case "protected":
-			other, ordinary := branch.Else.(*ast.BlockStmt)
-			if ordinary && len(branch.Body.List) == 3 && text(branch.Body.List[0]) == "a.mu.Lock()" &&
-				text(branch.Body.List[1]) == "err = a.publishDesktopImportedMultihopStartLocked(operation, native, sel)" &&
-				text(branch.Body.List[2]) == "a.mu.Unlock()" && len(other.List) == 1 && text(other.List[0]) == "err = cmd.Start()" {
+		case "native.importedPlatform != nil":
+			retained, protected := branch.Else.(*ast.IfStmt)
+			if !protected || retained.Init != nil || text(retained.Cond) != "protected" {
+				continue
+			}
+			other, ordinary := retained.Else.(*ast.BlockStmt)
+			if ordinary && len(branch.Body.List) == 2 &&
+				text(branch.Body.List[0]) == "err = startDesktopImportedPlatform(operation, a, sel, native)" &&
+				text(branch.Body.List[1]) == "cmd = native.command" &&
+				len(retained.Body.List) == 3 && text(retained.Body.List[0]) == "a.mu.Lock()" &&
+				text(retained.Body.List[1]) == "err = a.publishDesktopImportedMultihopStartLocked(operation, native, sel)" &&
+				text(retained.Body.List[2]) == "a.mu.Unlock()" && len(other.List) == 1 && text(other.List[0]) == "err = cmd.Start()" {
 				launch = index
 			}
+		case "protected && native.importedPlatform == nil":
 			if branch.Else == nil && len(branch.Body.List) == 1 &&
 				guard(branch.Body.List[0], "err := startDesktopOwnedImportedLaunch(operation, operation, a, native)") {
 				protectedStart = index
@@ -237,6 +250,67 @@ func nativeMultihopLaunchGuards(sources []string) error {
 	if pre < 0 || child <= pre || capture <= child || post <= capture || refusal <= post || admit <= refusal {
 		return fmt.Errorf("protected native child lost captured pre/post-start admission and retained failure cleanup")
 	}
+	// Linux deliberately uses its existing session/process owner. Trace the
+	// concrete call chain rather than requiring a second Windows-style owner
+	// registry or accepting an unrelated cancellation marker elsewhere.
+	ordered := func(method int, checks ...func(ast.Stmt) bool) bool {
+		next := 0
+		for _, statement := range methods[method].Body.List {
+			if checks[next](statement) {
+				next++
+				if next == len(checks) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	exact := func(want string) func(ast.Stmt) bool {
+		return func(statement ast.Stmt) bool { return text(statement) == want }
+	}
+	checked := func(want string) func(ast.Stmt) bool {
+		return func(statement ast.Stmt) bool { return guard(statement, want) }
+	}
+	if !ordered(4,
+		checked("err := launch.importedPlatform.Start(ctx)"),
+		checked("err := launch.importedPlatform.Current(ctx)"),
+		exact("return registerActiveDNSRuntimeConfigKind(a, sel.Exit.ID, sel.ExitMode, filepath.Join(launch.directory, \"sing-box.json\"), true)")) {
+		return fmt.Errorf("Linux imported launch lost original Start-before-Current-before-DNS ownership")
+	}
+	if !ordered(5,
+		exact("ctx, cancel := context.WithTimeout(ctx, 45*time.Second)"), exact("defer cancel()"),
+		exact("return owner.session.startWithVerifier(ctx, owner.host, os.Environ(), owner.capture.verify)")) {
+		return fmt.Errorf("Linux imported launch replaced its original caller, session or source verifier")
+	}
+	if !ordered(6,
+		checked("err := s.currentLocked(ctx)"),
+		exact("s.active = host"),
+		checked("_, err := s.selectedPredecessorLocked(ctx, s.predecessor)"),
+		exact("return host.startWithVerifier(ctx, s.journal, s.predecessor, environment, verify)")) {
+		return fmt.Errorf("Linux imported session lost original observation, partial owner or captured start")
+	}
+	partialCommand := func(statement ast.Stmt) bool {
+		branch, ok := statement.(*ast.IfStmt)
+		return ok && branch.Init == nil && branch.Else == nil && text(branch.Cond) == "h.process != nil && h.process.Started()" &&
+			contains(branch.Body, "h.launch.command = h.process.command")
+	}
+	if !ordered(7,
+		checked("err := h.unoccupied(ctx)"), checked("err := h.current(ctx)"),
+		exact("h.process, err = startDesktopLinuxNodeProcessWithVerifier(ctx, h.parent, arguments, environment, h.launch.directory, capture, verify)"),
+		partialCommand, checked("err := h.publishStarting(ctx)"),
+		checked("err := h.transaction.ServePreparation(dialogue)"), exact("return h.runningLocked(ctx)")) {
+		return fmt.Errorf("Linux imported native child lost its retained original process or pre/post-start checks")
+	}
+	publicationCurrent := func(statement ast.Stmt) bool {
+		branch, ok := statement.(*ast.IfStmt)
+		return ok && branch.Init == nil && branch.Else == nil &&
+			strings.HasPrefix(text(branch.Cond), "a.checkCapturedConnectionOperationLocked(h.operation) != nil ||") && returns(branch.Body)
+	}
+	if !ordered(8,
+		checked("err := h.current(ctx)"), checked("err := desktopnetwork.LockContext(ctx, &a.mu)"),
+		exact("defer a.mu.Unlock()"), publicationCurrent, exact("a.cmd = h.launch.command")) {
+		return fmt.Errorf("Linux imported publication lost its locked original-operation guard")
+	}
 	return nil
 }
 
@@ -264,6 +338,23 @@ func TestNativeMultihopLaunchGuardsRejectMutations(t *testing.T) {
 		{"native-postlaunch-guard-omitted", "operationErr := a.checkCapturedConnectionOperation(operation)", "operationErr := error(nil)", 3},
 		{"native-postlaunch-error-ignored", "err != nil || operationErr != nil || process == nil", "err != nil || process == nil", 3},
 		{"native-final-admission-omitted", "a.admitDesktopOwnedNodeFor(ctx, operation, launch)", "unrelatedAdmission()", 3},
+		{"platform-caller-replaced", "startDesktopImportedPlatform(operation, a, sel, native)", "startDesktopImportedPlatform(context.Background(), a, sel, native)", 0},
+		{"platform-command-substituted", "cmd = native.command", "cmd = nil", 0},
+		{"platform-start-caller-replaced", "launch.importedPlatform.Start(ctx)", "launch.importedPlatform.Start(context.Background())", 4},
+		{"platform-current-omitted", "launch.importedPlatform.Current(ctx)", "unrelatedGuard()", 4},
+		{"platform-dns-owner-replaced", "registerActiveDNSRuntimeConfigKind(a, sel.Exit.ID, sel.ExitMode,", "registerActiveDNSRuntimeConfigKind(a, \"foreign\", sel.ExitMode,", 4},
+		{"linux-timeout-caller-replaced", "context.WithTimeout(ctx, 45*time.Second)", "context.WithTimeout(context.Background(), 45*time.Second)", 5},
+		{"linux-source-verifier-replaced", "owner.capture.verify)", "verifyBundledNativeContext)", 5},
+		{"linux-session-current-omitted", "s.currentLocked(ctx)", "unrelatedGuard()", 6},
+		{"linux-partial-owner-omitted", "s.active = host", "s.active = nil", 6},
+		{"linux-session-caller-replaced", "host.startWithVerifier(ctx, s.journal,", "host.startWithVerifier(context.Background(), s.journal,", 6},
+		{"linux-predecessor-guard-omitted", "s.selectedPredecessorLocked(ctx, s.predecessor)", "unrelatedPredecessor()", 6},
+		{"linux-native-current-omitted", "h.current(ctx)", "unrelatedGuard()", 7},
+		{"linux-native-caller-replaced", "startDesktopLinuxNodeProcessWithVerifier(ctx, h.parent,", "startDesktopLinuxNodeProcessWithVerifier(context.Background(), h.parent,", 7},
+		{"linux-partial-command-omitted", "h.launch.command = h.process.command", "h.launch.command = nil", 7},
+		{"linux-native-postcheck-omitted", "h.runningLocked(ctx)", "unrelatedGuard()", 7},
+		{"linux-publication-current-omitted", "a.checkCapturedConnectionOperationLocked(h.operation)", "unrelatedGuard()", 8},
+		{"linux-publication-lock-omitted", "desktopnetwork.LockContext(ctx, &a.mu)", "unrelatedGuard()", 8},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {
 			changed := append([]string(nil), original...)
