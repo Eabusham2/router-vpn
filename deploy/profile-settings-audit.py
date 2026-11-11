@@ -31,6 +31,51 @@ def require_combined(label: str, paths: tuple[str, ...], *markers: str) -> str:
     return combined
 
 
+def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
+    """Audit scoped shipping source; executed Swift tests remain separate gates."""
+    problems = []
+    scopes = (
+        ("profiles", "schema", None, None, ("iosConnectionProfilesSchemaVersion = 8", "var multihopNodes: [IOSMultihopNodeSelection]?", "var chainPolicies: [IOSConnectionEntryCapture]?")),
+        ("models", "ordered selection", "struct IOSMultihopNodeSelection:", "struct RouterProfile:", (
+            "static let maximumNodes = 8", '(2...maximumNodes).contains(nodes.count), execution == "local"',
+            '[entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" })',
+            "seen.insert(node.id).inserted", "nodes.last?.id != controlID")),
+        ("profiles", "all-member snapshot", "static func snapshot(", "static func add(", (
+            "let members = try model.iosNodeChainBundles(for: source)", "record.chainPolicies = try members.map",
+            "nodeProofID: profile.nodeProofID", "preferences: try capturePreferences(profile)")),
+        ("profiles", "stored order", "private static func validateStoredProfiles(", "private static func validatePreferences(", (
+            'record.nodeKind == "router-vpn", record.entryPolicy == nil',
+            "var captures = record.chainPolicies, captures.count == nodes.count", "for position in captures.indices",
+            "capture.nodeID == nodes[position].id", "proofs.insert(proof).inserted",
+            "position == nodes.count - 1, capture.preferences != record.preferences", "else if record.chainPolicies != nil")),
+        ("profiles", "original member Load", "private static func applySavedChain(", "private static func applying(", (
+            "nodes.count == captures.count", "for (position, capture) in captures.enumerated()",
+            "nodes[position].id == capture.nodeID", "profile.nodeProofID == capture.nodeProofID",
+            "data == original, capture.preferences == saved.preferences",
+            "try model.restoreConnectionProfile(replacements, selectedID: saved.nodeID)")),
+        ("store", "atomic private restore", "func restoreConnectionProfile(", "private func profileRestoreError(", (
+            "(1...IOSMultihopNodeSelection.maximumNodes).contains(replacements.count)",
+            "$0.value == replacement.original", "replacement.updated.profiles == original.profiles",
+            "profile.nodeProofID == prior.nodeProofID", "profile.external == prior.external", "profile.apiToken == prior.apiToken",
+            "try validate(selected.bundle, prepared)", "guard records == originalRecords", "try commitRecords(next)")),
+        ("capture", "original selected sources", "func iosNodeChainBundles(", "static let ordinaryExternalHopProtocols", (
+            "controlID: control.id", "for node in nodes", "proofs.insert(proof).inserted",
+            "let files = source.profiles[node.mode], !files.isEmpty", "source.selectedRouterID = profile.id", "result.append(source)")),
+    )
+    for owner, label, begin, end, markers in scopes:
+        body = sources[owner]
+        if begin is not None:
+            try:
+                body = body.split(begin, 1)[1].split(end, 1)[0]
+            except IndexError:
+                problems.append(f"iOS ordered profile {label}: shipping owner missing")
+                continue
+        for marker in markers:
+            if marker not in body:
+                problems.append(f"iOS ordered profile {label}: missing {marker!r}")
+    return problems
+
+
 api = require(
     "cmd/client/profile_settings.go",
     "/api/profile/settings",
@@ -233,7 +278,7 @@ require("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift", "LibboxRouterAp
 require("ios/RouterVPN/App/IOSConnectionProfilesView.swift", "profile.daitaEnabled = prefs.daitaEnabled", "profile.jumboTUN = prefs.jumboTUN")
 ios_profiles = require(
     "ios/RouterVPN/App/IOSConnectionProfilesView.swift",
-    "IOSConnectionProfileStore", "IOSConnectionSafePreferences", "iosConnectionProfilesSchemaVersion = 7", "IOSConnectionProfileEnvelope", "Add", "Load", "Update", "Delete",
+    "IOSConnectionProfileStore", "IOSConnectionSafePreferences", "iosConnectionProfilesSchemaVersion = 8", "IOSConnectionProfileEnvelope", "Add", "Load", "Update", "Delete",
     "routervpn.connection-profiles.v1", "routervpn.unified.mode.v1", "routervpn.unified.custom-presets.v1",
     "dnsMode", "dnsProtocol", "multihopEnabled", "multihopEntryID", "multihopExitID",
     "multihopExitMode", "iosMultihopEntryBundle(for: source)",
@@ -258,6 +303,35 @@ for forbidden in ("apiToken", "privateKey", "presharedKey", "socksPassword", "Ex
 if "JSONEncoder().encode(envelope)" not in ios_persist:
     errors.append("iOS profile persistence no longer encodes the non-secret envelope")
 require("deploy/test_ios_multihop_profiles.py", "IOSConnectionSafePreferences", "private_key", "apiToken", "expectedKeys", "multihopEntryID")
+ordered_sources = {
+    "profiles": ios_profiles,
+    "models": read("ios/RouterVPN/App/Models.swift"),
+    "store": read("ios/RouterVPN/App/IOSNodeBundleStore.swift"),
+    "capture": read("ios/RouterVPN/App/IOSMultihopView.swift"),
+}
+ordered_issues = ios_ordered_profile_issues(ordered_sources)
+errors.extend(ordered_issues)
+if not ordered_issues:
+    # These source-gate controls must fail for their own missing boundary.
+    # The separate fixture executes the actual Codable/Load/store methods.
+    for owner, before, after in (
+        ("profiles", "iosConnectionProfilesSchemaVersion = 8", "iosConnectionProfilesSchemaVersion = 7"),
+        ("profiles", "record.chainPolicies = try members.map", "record.chainPolicies = try members.prefix(2).map"),
+        ("profiles", "record.entryPolicy == nil", "true"),
+        ("profiles", "captures.count == nodes.count", "captures.count >= 2"),
+        ("profiles", "profile.nodeProofID == capture.nodeProofID", "true"),
+        ("profiles", "data == original, capture.preferences == saved.preferences", "data == original"),
+        ("store", "replacement.updated.profiles == original.profiles", "true"),
+        ("store", "guard records == originalRecords", "guard true"),
+    ):
+        assert before in ordered_sources[owner], before
+        changed = dict(ordered_sources)
+        changed[owner] = changed[owner].replace(before, after, 1)
+        if not ios_ordered_profile_issues(changed):
+            errors.append(f"iOS ordered profile audit accepted its missing-boundary control: {before}")
+require("deploy/test_ios_node_chain_profiles.py", '"missing-middle"', '"changed-proof"', '"final-policy"',
+        '"stale-during-prepare"', '"missing-capture"', "old-two-record-limit", "lost-ordered-selection")
+require("ios/RouterVPN/test_runtime_selection_contract.py", "test_ios_node_chain_profiles.py")
 require(
     "ios/RouterVPN/App/IOSUnifiedProductView.swift",
     "Require encrypted AUTO candidates", "Require obfuscation for AUTO candidates",
