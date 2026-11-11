@@ -9,7 +9,7 @@ completion of the current commit's packages, physical devices or deployment.
 ## November 11 later continuation: Android ordered native ownership
 
 The [native repair and ordered-path evidence ledger](CONTINUATION-EVIDENCE-2026-11-11-NATIVE-REPAIRS.md)
-continues from live `62bfab03` and records published source through `0a3f8e3e`.
+continues from live `62bfab03` and records published source through `ef2cf17f`.
 Original requirement passages and the historical 1–356 index, C1–C7, product
 fixes, map-first request and additional-node corrections were recovered again.
 The earlier `745b3e41` release does not certify the current source.
@@ -44,10 +44,22 @@ source/capture/ownership race gate passed. Installed system-TUN and physical
 execution remain CI evidence; local namespace creation was denied. Apple
 per-prefix editing and complete standard-WG identity capture are published at
 `ccc919c0`. Windows WPF and macOS AppKit retain the selected variants at
-`09b6b148`. Their capability gates remain intact. The public desktop HTTP
-admission path still lacks its complete ordered launch integration, and the
-installed Linux GTK ordered editor is still missing. Those paths and the
-protected macOS ordered native host remain separate implementation work.
+`09b6b148`. Their capability gates remain intact. Public desktop ordered HTTP
+admission is published at `bd5c7012`: it retains the original selected control,
+all member revisions, canonical fields and explicit Local choice. The complete
+desktop original-WG identity inventory is validated at `3899f529`, including
+companions not used by the selected AWG or SS transport. The installed Linux
+GTK ordered editor and complete profile flow are published at `8f6edebb`, with
+266 model/serialization/persistence checks, six controls and strict full-source
+GCC compilation. Its actual display callbacks remain CI evidence because this
+local environment has no display and refused the required AF_UNIX operation.
+The protected macOS ordered native host remains implementation work.
+The Linux/Windows physical-target guard now admits those exact mixed prefixes
+at `f4032c4a`, retaining each original sealed mode/proof identity. The actual Box
+race gate passed four roots/27 subtests, and restoring the earlier WG-only
+guard failed the intended mixed-factory assertion. This closes a production
+admission gap missed by the earlier encrypted component gate; the construction
+fixture does not supply a real TUN or fabricate physical readiness.
 None of these source and component results establish actual device acceptance.
 
 The current source audits and profile fixtures now include the shipping
@@ -58,6 +70,20 @@ repairs preserve the underlying source checks and native boundaries.
 The Product dialog fixture at `0a3f8e3e` now composes the actual ordered chooser,
 catalog capture and paired identity helpers; its 430 checks and 12 causal
 controls passed without replacing those behaviors with accepting stubs.
+Later usage, presentation and import UI fixtures preserve those dependencies
+and their original identity/proof refusal controls. The final 18 scripts of
+the sequential Android runtime-contract continuation and all five trailing
+gates completed successfully, including ordered Startup Last and Speed Lab
+restoration. Earlier repaired stages and the unchanged source assertion prefix
+were verified separately; this is local continuation evidence across source
+units, not one exact-final-SHA native Android or release result. Windows
+asynchronous completion now composes its actual ordered control refresh at
+`62fa3a79`, and complete profile Save/Update/Load handlers retain original
+selected-node revision expectations at `964b6459`. Windows complete Setup
+Add/Update/Load callbacks at `ef2cf17f` preserve the full original inventory,
+returned receipt and current saved graph independently of a different target
+or draft; 3,115 actual callback checks and 19 controls passed. Native WPF
+rendering and hosted PowerShell 5.1 acceptance remain separate.
 
 The recorded native macOS PF/socket/utun gate passed on Intel and Apple Silicon
 at `52576a3e`. Newer source fixes repair the Tor/usage fixture compositions and

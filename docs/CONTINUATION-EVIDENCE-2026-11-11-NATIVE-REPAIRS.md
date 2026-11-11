@@ -73,6 +73,23 @@ from a native platform job or published package.
 | `09b6b148d1c75a205a1830039a4dda827ef08b26` | Expose and retain exact WG/AWG2 variants in the Windows WPF and macOS AppKit ordered editors and saved-profile flows. | Windows editor checks passed 87/five controls; profile checks 2,352/five ordered controls; AppKit composition 3,517/20. Existing runtime capability admission remains enforced. The missing protected macOS ordered native host and physical UI/device acceptance are not supplied by these editor results. |
 | `0a3f8e3e6123b4d8893e897b88ba5a6c2c2da6db` | Compose the Product dialog fixture with the actual ordered chooser, current catalog and paired identity helpers while preserving the original pair actions. | All 430 checks and 12 causal controls passed against the published Android WG/AWG editor. Missing, malformed or mismatched original WG identity sources remain refused. The fixture does not substitute accepting selection helpers or claim native/device proof. |
 
+| `f14eaf956901e7619a61c52731c2706922494a0c` | Carry every Android ordered member's complete original standard-WG identity map into the shared native parser, including AWG and SS final members. | Actual Java/shared-Go capture and editor composition passed 884 checks and 22 causal controls. The selected transport asset remains separate from its original paired identity; a companion label or public-key string cannot replace the full captured WG source. |
+| `5f649db8b82ef88455ebac6fc5e2c779d95ad590` | Clear the Windows ordered mode summary when its underlying draft changes. | The actual ordered editor composition passed 90 checks including six causal controls. This verifies the captured transition, not native WPF rendering or physical UI acceptance. |
+| `67c65b23a6dd72e9ab26f2d1dd19264bc1680cb6` | Exercise Android ordered usage with independently generated original WG identities, and include the real ordered presentation helper closure in the Product worker fixture. | Usage/catalog passed 243+40+50 checks and 19 controls; actual ordered presentation passed its worker checks and both controls. Malformed final companions are imported and selected through the real store before refusal, so a stale-selection guard cannot mask the identity failure. |
+| `38191c9ec75ed6989dcffb2304d38c46b26d2ee8` | Compose the Android import UI fixture with the shipping ordered presentation and retained Product helpers. | All 74 checks and seven causal controls passed. The added control refuses pair fallback while an ordered proof is pending; unrelated native capture boundaries refuse instead of supplying fabricated proof. |
+| `964b6459b80b2b3880f977bf96a7b5dce0662288` | Bind complete profile Save, Update and Load operations to the original selected node and captured revisions. | Actual HTTP-handler race gates passed in 3.391 seconds; existing ordered, Router-entry, execution, complete-native-exit and legacy external regressions passed in 4.236 seconds. Two causal overlays rejected removal of the original-expectation guard and rollback at their intended assertions. |
+| `118e22f439f50f1b97923396d776008f49f1762c` | Audit the actual retaining-owner Android Start Layer shutdown path and its strict cleanup-before-acknowledgement behavior. | Three focused Go roots and nine new mutation witnesses passed, retaining the earlier MAX controls. Assertions require failed cleanup to remain logged and STOPPING, preserve its original relay/session, and withhold both stop acknowledgements until drain. |
+| `62fa3a7917dee304538e588489a551b993cbbd20` | Include the actual ordered control refresh in the Windows asynchronous-action fixture and its emitted completion callbacks. | All 15 behavior groups passed, preserving the earlier 14 groups. A causal omission of the ordered completion refresh failed the intended assertion. Native PowerShell 5.1/WPF execution remains separate. |
+| `bd5c70122ef65bd5eb6d763ffa6fed34fb723ba2` | Admit complete ordered paths through the public desktop Connect request using their original selected control, all member revisions, canonical row fields and explicit Local execution. | The combined public admission, source, graph and legacy regression suite passed 43 roots/148 subcases with the race detector in 346.149 seconds. Unknown or mixed selection fields, changed revisions, foreign controls and legacy fallback remain refused. Source admission does not supply a missing platform host or establish physical traffic. |
+| `3899f5294eb547463334089c17faf95d85574444` | Validate every desktop ordered member's complete original WG identity source, including identities not used by the selected AWG or final SS transport. Preserve the captured first-host resolution without performing a replacement lookup. | A malformed private key in the final SS member's otherwise unused WG companion reproduced the omission before the fix. Eighteen root suites/98 subcases passed with the race detector in 15.412 seconds; installed source-authority passed its root and eight cases in 9.609 seconds. Original source bytes remain in captured digests, and the final fixture supplies a complete dual-default-route WG identity instead of loosening the parser. |
+
+| `f4032c4a2f999788e33221667072f5e27ddd91a9` | Admit exact WG, AWG2 Fast and AWG2 Strong prefixes in the Linux/Windows native physical-target guard while retaining the original sealed policy and per-prefix mode/proof identity. | The actual prepared Box race suite passed four roots/27 subtests in 40.056 seconds. Every original WG case remains; eight mixed first/intermediate/last prefix shapes use the real Amnezia endpoint constructor, independently valid wrong-mode Box/TUN owners are refused, and six changed mode/proof receipts are rejected. Restoring the old WG-only guard failed the intended mixed-factory assertion. These construction/owner tests never fabricate physical preparation, sockets or TUN readiness. |
+
+
+| `8f6edebb39d2f9e44ddaa6b85eb5fe3609cc33ff` | Add the installed Linux GTK ordered editor and complete profile Connect/Save/Update/Load path, preserving the original current graph inventory and exact returned receipts. | The actual model, serialization and persistence composition passed 266 checks and six causal controls; the full shipping source passed strict GCC compilation. Actual display callback execution remains CI evidence: this environment has no display and its required AF_UNIX operation was refused with EPERM. |
+| `ef2cf17fb3666a58452202dd524b7ed7fc2ff64e` | Bind Windows complete Setup Add/Update/Load callbacks to their original inventory and owner, with Load retaining the current saved graph independently of the selected target or draft. Validate returned receipts and retire superseded refresh ownership. | The actual callback composition passed 3,115 checks and 19 causal controls. These source/host checks do not establish native WPF rendering, the hosted PowerShell 5.1 result or device networking. |
+
+
 
 The raw runtime count remains 20 and the logical choices remain 16. A native
 catalog containing 22 records includes the additional SMART AUTO and CUSTOM
@@ -139,12 +156,52 @@ claim the newly required installed system-TUN cases passed locally. Android and 
 at `6ec7e96f` and `ccc919c0`; it does not convert the earlier component run
 into later exact-SHA native or device acceptance.
 
+
+
+The physical-target audit found that the Linux/Windows Box admission guard still
+required WG for every prefix, even after mixed AWG compilation and encrypted
+reference traffic had passed. Commit `f4032c4a` corrects that shipping guard;
+the actual Box fixture now instantiates the real Amnezia endpoint and tests
+original mode ownership. Its old-guard causal control demonstrates why the
+prior component pass did not prove installed physical admission. No namespace,
+interface, root permission or physical-protection requirement was bypassed.
+
+## Sequential local Android continuation
+
+The continuation resumed the original runtime contract after each diagnosed
+fixture blocker, preserving the original cases and causal controls. The final
+18 scripts after the Router import UI and all five original trailing gates
+completed with exit zero. The unchanged source-assertion prefix was separately
+re-executed against the published retaining-owner audit repair. This records
+sequential local evidence across published units, not one uninterrupted
+exact-final-SHA run or a native Android/device certification.
+
+The completed remainder includes Startup Last at 4,398 checks and 28 controls
+plus all eight imported families; the paired Last gate at 1,807/247 checks and
+14 controls; full profile, ordinary and multihop startup and teardown gates;
+Speed Lab external paths at 3,165 checks/seven controls; ordered restoration at
+4,770/34; and the retained multihop winner at 145 checks with its ownership and
+MTU controls. The trailing pinned multihop, Tor, native Tor and external graph
+contracts passed 13, 11, eight and four tests respectively. The actual generated
+SS source/capture gate passed 15 checks and its service-drop causal control.
+These gates retain explicit OS/native boundary doubles where required. They do
+not replace APK/JNI, protected host, physical traffic or release evidence.
+
+The public desktop ordered HTTP admission gap recorded earlier in this ledger
+is addressed by `bd5c7012`, and complete desktop WG identity inventory is
+addressed by `3899f529`. The installed Linux GTK ordered editor and complete profile flow are published
+at `8f6edebb`, followed by the complete Windows original-inventory callbacks at
+`ef2cf17f`. Their actual native/display acceptance remains separate. The
+protected macOS ordered native host still requires implementation and
+acceptance; its platform capability remains unavailable until the actual
+protected process, PF/socket/utun and ordered proof owner exists.
+
 ## Remaining requirement evidence
 
 | Requirement | Current evidence | Evidence or implementation still required |
 | --- | --- | --- |
 | Android independently ordered nodes | Complete-source editor, permission, single native service, selected-path proof, MTU, Emergency Disconnect, node usage, Home-bound map, Startup Last and temporary Speed Lab restoration are published. Restoration retains the original Local execution choice and requires fresh proof; failed native drain retains its original owner. Native Local composition covers two through eight paired members with exact WG/AWG2 Fast/AWG2 Strong prefixes and an SS2022 final. | Actual APK/native/device acceptance, other graph families, general Server/Compare composition, broader counts and all requested measurements remain separate requirements. |
-| Mixed WG/AWG ordered prefixes | Shared compilation, desktop selection/capture/profile retention, Android and Apple editor/capture integration, and WPF/AppKit variant selection are published. The original and six mixed three/four-node reference shapes passed real encrypted component tests, and the installed fixture requires every original cipher and native AWG parameter digest. | Public desktop HTTP ordered admission, the actual installed Linux GTK ordered editor, protected macOS ordered native host, actual installed-host TUN/physical acceptance, final exact-SHA packages and device acceptance remain separate requirements. The shared Local two-through-eight bound and SS2022 final remain unchanged. |
+| Mixed WG/AWG ordered prefixes | Shared compilation, desktop selection/capture/profile retention, Android and Apple editor/capture integration, and WPF/AppKit variant selection are published. Public desktop HTTP ordered admission and full original desktop WG identity capture are published at `bd5c7012` and `3899f529`; the exact mixed-prefix native physical-target guard is published at `f4032c4a`. The installed GTK editor/profile flow and complete Windows setup callbacks are published at `8f6edebb` and `ef2cf17f`. The original and six mixed three/four-node reference shapes passed real encrypted component tests, and the installed fixture requires every original cipher and native AWG parameter digest. | The protected macOS ordered native host, GTK/WPF native display acceptance, actual installed-host TUN/physical acceptance, final exact-SHA packages and device acceptance remain separate requirements. The shared Local two-through-eight bound and SS2022 final remain unchanged. |
 | Complete selected-path ownership | Existing native compiler/proof plus new editor original-source epochs, policy choices, writer exclusion and rollback. | Every queued launch, asynchronous proof, teardown retry, service recreation and replacement connection must retain its original owner. Safe unavailability is not completion. |
 | Exact-SHA automated release | The named coherent source units are published with local evidence and bounded exact-SHA native observations. | Windows installed/Portable, macOS, Linux, APK, Xcode-built IPA, ARM64 images, compose, checksums and final publication must all match one current SHA. |
 | Native platform failures | The older guardian failure was followed by the recorded four-job native pass at 52576a3e. Historical system-root trust setup and PQ cancellation failures remain diagnostic leads; current H3 cancellation is incomplete evidence. | Diagnose current native attempts and preserve deadlines, selected trust, negative controls and required inventory. Old failure logs alone do not prove a new-head failure. |
