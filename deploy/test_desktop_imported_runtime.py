@@ -321,14 +321,23 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
                     env = {'GOOS':target.split('/')[0],'GOARCH':target.split('/')[1]}
                     go_sockets.reset_mock()
                     stdout = io.StringIO()
-                    with patch.object(N,'environment',return_value=env),patch.object(N,'digest',return_value='original'), \
-                         patch.object(N,'reuse',return_value={'captured':'receipt'}) as receipt,patch.object(N,'native_host_target',return_value=target), \
-                         patch.object(N,'verify_linux_stock_dns'),patch.multiple(N, verify_installed_darwin_host=unittest.mock.DEFAULT, verify_reused_linux_host=unittest.mock.DEFAULT), \
-                         patch.object(N.DNSSEC,'test_native_bundle'),patch.object(N,'run') as run, \
-                         patch.object(N,'verify_imported_desktop_packet_configs') as packet, \
-                         patch.object(N,'verify_imported_desktop_openvpn_configs'), \
-                         patch.object(N,'verify_imported_desktop_naive_h2_configs'), patch.object(N, 'verify_imported_desktop_naive_h3_configs'), patch.object(N,'verify_imported_desktop_xhttp_configs'), patch.object(N,'verify_imported_desktop_pq_configs'), \
-                         patch.object(N,'verify_imported_desktop_configs',side_effect=failure) as gate,contextlib.redirect_stdout(stdout):
+                    with contextlib.ExitStack() as stack:
+                        stack.enter_context(patch.object(N,'environment',return_value=env))
+                        stack.enter_context(patch.object(N,'digest',return_value='original'))
+                        receipt = stack.enter_context(patch.object(N,'reuse',return_value={'captured':'receipt'}))
+                        stack.enter_context(patch.object(N,'native_host_target',return_value=target))
+                        stack.enter_context(patch.object(N,'verify_linux_stock_dns'))
+                        stack.enter_context(patch.multiple(N, verify_installed_darwin_host=unittest.mock.DEFAULT, verify_reused_linux_host=unittest.mock.DEFAULT))
+                        stack.enter_context(patch.object(N.DNSSEC,'test_native_bundle'))
+                        run = stack.enter_context(patch.object(N,'run'))
+                        packet = stack.enter_context(patch.object(N,'verify_imported_desktop_packet_configs'))
+                        stack.enter_context(patch.object(N,'verify_imported_desktop_openvpn_configs'))
+                        stack.enter_context(patch.object(N,'verify_imported_desktop_naive_h2_configs'))
+                        stack.enter_context(patch.object(N, 'verify_imported_desktop_naive_h3_configs'))
+                        stack.enter_context(patch.object(N,'verify_imported_desktop_xhttp_configs'))
+                        stack.enter_context(patch.object(N,'verify_imported_desktop_pq_configs'))
+                        gate = stack.enter_context(patch.object(N,'verify_imported_desktop_configs',side_effect=failure))
+                        stack.enter_context(contextlib.redirect_stdout(stdout))
                         if failure is None: self.assertEqual(N.build(target,bundle),bundle)
                         else:
                             with self.assertRaises(type(failure)) as caught: N.build(target,bundle)
