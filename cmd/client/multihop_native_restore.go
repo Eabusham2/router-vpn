@@ -102,6 +102,7 @@ func captureNativeMultihopRestoreContext(ctx context.Context, a *app, command *e
 	selection.Control = common.CloneRouterProfile(selection.Control)
 	selection.Entry = common.CloneRouterProfile(selection.Entry)
 	selection.Exit = common.CloneRouterProfile(selection.Exit)
+	selection.Nodes = cloneDesktopNodeChainMembers(selection.Nodes)
 	return selection, nil
 }
 
@@ -116,11 +117,26 @@ func nativeMultihopLiveProfilesCurrent(a *app, selection multihopSelection) bool
 }
 
 func nativeMultihopLiveProfilesCurrentContext(ctx context.Context, a *app, selection multihopSelection) bool {
-	if ctx == nil || a == nil || selection.Native == nil || mobilemtu.LockContext(ctx, &a.mu) != nil {
+	if ctx == nil || a == nil || selection.Native == nil {
+		return false
+	}
+	if capture := selection.Native.chain; capture != nil {
+		if len(selection.Nodes) != len(capture.members) {
+			return false
+		}
+		for i, member := range selection.Nodes {
+			if member.Mode != capture.members[i].Mode || liveMeasurementProfileToken(member.Profile) != liveMeasurementProfileToken(capture.members[i].Profile) {
+				return false
+			}
+		}
+	} else if len(selection.Nodes) != 0 {
+		return false
+	}
+	if mobilemtu.LockContext(ctx, &a.mu) != nil {
 		return false
 	}
 	defer a.mu.Unlock()
-	for _, captured := range []common.RouterProfile{selection.Control, selection.Entry, selection.Exit} {
+	for _, captured := range nativeMultihopCapturedProfiles(selection) {
 		current, ok := a.profileByIDLocked(captured.ID)
 		if !ok || mtuProfileSnapshotToken(current) != mtuProfileSnapshotToken(captured) {
 			return false

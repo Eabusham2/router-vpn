@@ -52,6 +52,9 @@ func compileRetainedNativeMultihopLaunch(sel multihopSelection, descriptor *desk
 	if sel.Native == nil || sel.Native.validate(sel) != nil {
 		return nil, errors.New("native multihop launch lost its immutable entry/exit source")
 	}
+	if sel.Native.chain != nil {
+		return nil, errors.New("ordered native launch requires its concrete sealed physical policy owner")
+	}
 	if sel.Native.importedHost != nil || sel.Native.importedPlatform != nil {
 		return nil, errors.New("protected imported capture requires its typed Windows policy owner")
 	}
@@ -376,7 +379,7 @@ func retireUnstartedNativeMultihop(launch *desktopNodeLaunch) error {
 }
 
 func sameMTUMultihopGraph(left, right activeMultihopGraph) bool {
-	return sameActiveMultihopGraph(left, right) && left.Execution == right.Execution && left.EntryMode == right.EntryMode && left.SourceSHA == right.SourceSHA && left.ImportedEntry == right.ImportedEntry
+	return sameActiveMultihopGraph(left, right) && left.Execution == right.Execution && left.EntryMode == right.EntryMode && left.SourceSHA == right.SourceSHA && left.ImportedEntry == right.ImportedEntry && left.ChainNodes == right.ChainNodes
 }
 
 func retireNativeMultihopGraph(a *app, launch *desktopNodeLaunch) {

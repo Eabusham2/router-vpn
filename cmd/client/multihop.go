@@ -36,6 +36,7 @@ type multihopSelection struct {
 	EntryMode string
 	ExitMode  string
 	Native    *nativeMultihopCapture
+	Nodes     []desktopNodeChainMember
 	// A live system-TUN readback captured before a temporary test. This is
 	// applied only to a newly owned restore graph, never to the entry endpoint.
 	restoreMTU int
@@ -69,6 +70,7 @@ type activeMultihopGraph struct {
 	EntryMode     string
 	SourceSHA     string
 	ImportedEntry bool
+	ChainNodes    int
 	ExitMode      string
 	Started       time.Time
 }
@@ -82,6 +84,9 @@ func setActiveMultihopGraph(a *app, sel multihopSelection) {
 	if sel.Native != nil {
 		graph.EntryMode, graph.SourceSHA = sel.Native.entryMode, sel.Native.source
 		graph.ImportedEntry = sel.Native.imported
+		if sel.Native.chain != nil {
+			graph.ChainNodes = len(sel.Nodes)
+		}
 	}
 	activeMultihopGraphs.Store(a, graph)
 	homeExitProofs.Delete(a)

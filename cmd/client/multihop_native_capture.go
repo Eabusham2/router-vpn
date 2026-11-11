@@ -40,9 +40,16 @@ type nativeMultihopCapture struct {
 	importedOriginalSource                                   string
 	importedHost                                             *desktopNodeConnectionOwner
 	importedPlatform                                         desktopImportedPlatformCapture
+	chain                                                    *desktopNodeChainCapture
 }
 
 func captureNativeMultihopSelection(ctx context.Context, root string, sel multihopSelection, modes []string, lookup applexray.Lookup) (multihopSelection, error) {
+	if len(sel.Nodes) != 0 {
+		return captureNativeNodeChainSelection(ctx, root, sel, modes, lookup)
+	}
+	if err := guardLegacyOrderedNodeDispatch(sel.Control); err != nil {
+		return sel, err
+	}
 	if sel.Entry.NodeKind == "external" {
 		return captureDesktopImportedMultihop(ctx, root, sel, modes, lookup)
 	}
@@ -187,6 +194,12 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 
 func (c *nativeMultihopCapture) validate(sel multihopSelection) error {
 	bad := errors.New("captured native multihop source changed; choose the path again")
+	if c != nil && c.chain != nil {
+		return c.validateNodeChainSelection(sel)
+	}
+	if len(sel.Nodes) != 0 {
+		return bad
+	}
 	if c == nil || sel.Entry.ID != c.entryID || sel.Exit.ID != c.exitID || sel.Base != c.base || sel.EntryMode != c.entryMode || liveMeasurementProfileToken(sel.Control) != c.controlToken || liveMeasurementProfileToken(sel.Entry) != c.entryToken || liveMeasurementProfileToken(sel.Exit) != c.exitToken {
 		return bad
 	}
@@ -252,9 +265,13 @@ func captureNativeMultihopForAppContext(parent context.Context, a *app, sel mult
 	}
 	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
-	return captureNativeMultihopSelection(ctx, clientRoot(a), sel, modes, func(ctx context.Context, host string) ([]netip.Addr, error) {
+	captured, err := captureNativeMultihopSelection(ctx, clientRoot(a), sel, modes, func(ctx context.Context, host string) ([]netip.Addr, error) {
 		return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 	})
+	if err == nil && captured.Native.chain != nil {
+		err = captured.Native.chain.currentContext(ctx, a)
+	}
+	return captured, err
 }
 
 // AWG transport keys are separate from the paired node's stable WG identity.
@@ -263,6 +280,9 @@ func captureNativeMultihopForAppContext(parent context.Context, a *app, sel mult
 func (a *app) proveNativeMultihop(sel multihopSelection, command *exec.Cmd) error {
 	ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), nativeMultihopProofTimeout(sel))
 	defer cancel()
+	if sel.Native != nil && sel.Native.chain != nil {
+		return errors.New("ordered native proof requires its complete child heartbeat")
+	}
 	if sel.Native != nil && sel.Native.importedPlatform != nil {
 		graph, found := getActiveMultihopGraph(a)
 		owner, err := capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
@@ -301,8 +321,8 @@ func (a *app) nativeMultihopProofOwnerCurrentContext(ctx context.Context, sel mu
 	}
 	owned := command != nil && a.cmd == command && !a.closing
 	selected := a.profiles.SelectedID == sel.Control.ID
-	if sel.Native.imported {
-		for _, captured := range []common.RouterProfile{sel.Control, sel.Entry, sel.Exit} {
+	if sel.Native.imported || sel.Native.chain != nil {
+		for _, captured := range nativeMultihopCapturedProfiles(sel) {
 			current, ok := a.profileByIDLocked(captured.ID)
 			owned = owned && ok && mtuProfileSnapshotToken(current) == mtuProfileSnapshotToken(captured)
 		}
@@ -311,7 +331,7 @@ func (a *app) nativeMultihopProofOwnerCurrentContext(ctx context.Context, sel mu
 	if !owned {
 		return false
 	}
-	if !sel.Native.imported {
+	if !sel.Native.imported && sel.Native.chain == nil {
 		return true
 	}
 	if sel.Native.importedPlatform != nil {
