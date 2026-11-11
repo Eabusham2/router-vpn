@@ -52,6 +52,8 @@ type nodeChainLaunchRecord struct {
 	OriginalConfigSHA256 string `json:"original_config_sha256"`
 	TargetOS             string `json:"target_os,omitempty"`
 	RestoredMTU          int    `json:"restored_mtu,omitempty"`
+	ProjectionKind       string `json:"projection_kind,omitempty"`
+	SessionID            string `json:"session_id,omitempty"`
 }
 
 // NodeChain is a complete Local path, not an array of independent VPNs. Its
@@ -139,7 +141,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 }
 
 func (c *NodeChain) refreshMetadata() error {
-	plan, err := nodeChainMTUPlan(c.config, c.proofs)
+	plan, err := nodeChainProjectedMTUPlan(c.config, c.proofs, c.projection)
 	if err != nil {
 		return err
 	}
@@ -223,8 +225,12 @@ func (c *NodeChain) validateCapture() error {
 	if c == nil || c.seal == "" || c.captureSeal() != c.seal || len(c.nodes) != len(c.proofs) {
 		return nodeChainError
 	}
-	for _, node := range c.nodes {
-		if node == nil || node.validateNodeDesktopCapture() != nil {
+	for position, node := range c.nodes {
+		proof := c.proofs[position]
+		if node == nil || node.validateNodeDesktopCapture() != nil || proof.Position != position ||
+			node.source != proof.SourceSHA256 || node.mode != proof.Mode ||
+			predecessorText(node.profile, "id") != proof.ProfileID ||
+			predecessorText(node.profile, "node_proof_id") != proof.NodeID {
 			return nodeChainError
 		}
 	}
@@ -271,7 +277,8 @@ func (c *NodeChain) LaunchInput() (string, error) {
 	record := nodeChainLaunchRecord{Kind: "routervpn-node-chain-launch-input", NodeChainSource: source,
 		SourceSHA256: c.sourceSHA, ConfigSHA256: c.dns.ConfigSHA256,
 		MetadataSHA256: externalDigest([]byte(c.metadata)), OriginalConfigSHA256: c.originalConfigSHA,
-		TargetOS: c.projection.TargetOS, RestoredMTU: c.projection.RestoredMTU}
+		TargetOS: c.projection.TargetOS, RestoredMTU: c.projection.RestoredMTU,
+		ProjectionKind: c.projection.Kind, SessionID: c.projection.SessionID}
 	raw, err := json.Marshal(record)
 	if err != nil || len(raw) > NodeChainInputLimit {
 		clear(raw)
@@ -301,7 +308,15 @@ func ParseNodeChainLaunchInput(input string) (*NodeChain, error) {
 	}
 	chain, err := NewNodeChain(string(source))
 	clear(source)
-	if err == nil && record.TargetOS != "" {
+	if err == nil && record.ProjectionKind == nodeChainDesktopPhysicalKind {
+		var policy *DesktopNodeChainPolicy
+		policy, err = NewDesktopNodeChainPolicy(chain, record.SessionID, record.TargetOS, record.RestoredMTU)
+		if err == nil {
+			chain = policy.chain
+		}
+	} else if record.ProjectionKind != "" || record.SessionID != "" {
+		return nil, nodeChainError
+	} else if err == nil && record.TargetOS != "" {
 		chain, err = ProjectNodeChain(chain, record.TargetOS, record.RestoredMTU)
 	} else if record.RestoredMTU != 0 {
 		return nil, nodeChainError

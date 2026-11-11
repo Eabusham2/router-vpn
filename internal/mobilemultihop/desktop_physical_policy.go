@@ -3,9 +3,9 @@ package mobilemultihop
 import "errors"
 
 // DesktopPhysicalPolicy is the sealed native lower-transport boundary shared
-// by the independently compiled Router-node and imported-entry policy types.
-// Its private method prevents caller-created metadata adapters. Both native
-// paths still retain their exact concrete policy pointer through admission,
+// by the independently compiled Router-node, imported-entry and ordered-chain
+// policy types. Its private method prevents caller-created metadata adapters.
+// Native paths retain their exact concrete policy pointer through admission,
 // activation and retirement; a fresh identical policy is a different owner.
 type DesktopPhysicalPolicy interface {
 	Validate() error
@@ -33,12 +33,14 @@ type DesktopPhysicalCapture struct {
 
 // ReadDesktopPhysicalPolicy additionally checks the concrete constructor type.
 // Embedding this interface in a caller-defined wrapper cannot substitute its
-// own validation or projected fields for either original sealed authority.
+// own validation or projected fields for an original sealed authority.
 func ReadDesktopPhysicalPolicy(policy DesktopPhysicalPolicy) (string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error) {
 	switch policy := policy.(type) {
 	case *DesktopNodePolicy:
 		return policy.PhysicalReadValidated()
 	case *DesktopImportedPolicy:
+		return policy.PhysicalReadValidated()
+	case *DesktopNodeChainPolicy:
 		return policy.PhysicalReadValidated()
 	default:
 		return "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, errors.New("native physical policy has no admitted sealed constructor")

@@ -10,8 +10,12 @@ import (
 )
 
 type nodeChainProjection struct {
-	TargetOS    string `json:"target_os,omitempty"`
-	RestoredMTU int    `json:"restored_mtu,omitempty"`
+	TargetOS             string `json:"target_os,omitempty"`
+	RestoredMTU          int    `json:"restored_mtu,omitempty"`
+	Kind                 string `json:"kind,omitempty"`
+	SessionID            string `json:"session_id,omitempty"`
+	PhysicalSourceSHA256 string `json:"physical_source_sha256,omitempty"`
+	BaseConfigSHA256     string `json:"base_config_sha256,omitempty"`
 }
 
 type NodeChainMTUBound struct {
@@ -33,7 +37,7 @@ func (c *NodeChain) MTUPlan() (NodeChainMTUPlan, error) {
 	if c.validateCapture() != nil {
 		return NodeChainMTUPlan{}, nodeChainError
 	}
-	return nodeChainMTUPlan(c.config, c.proofs)
+	return nodeChainProjectedMTUPlan(c.config, c.proofs, c.projection)
 }
 
 // ProjectNodeChain derives interface naming and an explicitly captured system
@@ -82,7 +86,7 @@ func ProjectNodeChain(original *NodeChain, targetOS string, restoredMTU int) (*N
 		return nil, nodeChainError
 	}
 	derived.config = string(raw)
-	derived.projection = nodeChainProjection{targetOS, restoredMTU}
+	derived.projection = nodeChainProjection{TargetOS: targetOS, RestoredMTU: restoredMTU}
 	derived.dns.ConfigSHA256 = externalDigest(raw)
 	if err := derived.refreshMetadata(); err != nil {
 		return nil, err
