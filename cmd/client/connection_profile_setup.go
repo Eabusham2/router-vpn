@@ -29,6 +29,7 @@ type connectionProfileSetupRequest struct {
 	MultihopExitMode  string                         `json:"multihop_exit_mode,omitempty"`
 	MultihopExecution string                         `json:"multihop_execution,omitempty"`
 	MultihopNodes     []common.MultihopNodeSelection `json:"multihop_nodes,omitempty"`
+	expectations      desktopProfileExpectations
 }
 
 type connectionProfileSetupMeta struct {
@@ -147,9 +148,12 @@ func normalizeConnectionProfileSetupEntryMode(value string) (string, error) {
 
 func decodeConnectionProfileSetup(w http.ResponseWriter, r *http.Request, updating bool) (connectionProfileSetupRequest, error) {
 	var q connectionProfileSetupRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&q); err != nil {
+	raw, err := readBoundedBody(r, 32<<10)
+	if err != nil {
+		return q, errors.New("bad json")
+	}
+	q.expectations, err = decodeConnectionProfileSetupExpectations(raw, &q)
+	if err != nil {
 		return q, errors.New("bad json")
 	}
 	q.ID = strings.TrimSpace(q.ID)
@@ -324,6 +328,12 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), status)
 		return
 	}
+	selectedGraph := connectionProfileSetupSelectedGraph(selected, q)
+	if err := a.validateConnectionProfileSetupExpectationsLocked(q.expectations, selectedGraph); err != nil {
+		a.mu.Unlock()
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	oldProfiles, err := loadConnectionProfileStore(a)
 	if err != nil {
 		a.mu.Unlock()
@@ -371,6 +381,10 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 	a.mu.Lock()
 	store, err := loadConnectionProfileStore(a)
 	if err == nil {
+		err = a.validateConnectionProfileSetupExpectationsLocked(q.expectations, selectedGraph)
+	}
+	var responseTokens map[string]string
+	if err == nil {
 		found := false
 		for i := range store.Profiles {
 			if store.Profiles[i].ID != id {
@@ -410,6 +424,9 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 		if !found && err == nil {
 			err = errors.New("connection profile disappeared before setup snapshot was finalized")
 		}
+	}
+	if err == nil {
+		responseTokens, err = a.connectionProfileTokensLocked(selectedGraph)
 	}
 	if err == nil {
 		err = persistConnectionProfileStore(a, store)
@@ -452,6 +469,8 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 	base["multihop_exit_mode"] = q.MultihopExitMode
 	base["multihop_execution"] = q.MultihopExecution
 	base["multihop_nodes"] = q.MultihopNodes
+	base["selected_node_id"] = selectedGraph.ID
+	base["profile_tokens"] = responseTokens
 	for _, saved := range store.Profiles {
 		if saved.ID == id {
 			// Return the same finalized graph that was committed, rather than
@@ -482,11 +501,31 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var ref connectionProfileRefRequest
-	if json.Unmarshal(raw, &ref) != nil || !validProfileID(strings.TrimSpace(ref.ID)) {
+	expected, err := decodeConnectionProfileSetupExpectations(raw, &ref)
+	if err != nil || !validProfileID(strings.TrimSpace(ref.ID)) {
 		http.Error(w, "load requires a valid connection profile id", http.StatusBadRequest)
 		return
 	}
 	a.mu.Lock()
+	selected, selectedOK := a.profileByIDLocked(a.profiles.SelectedID)
+	if expected.present() {
+		if !selectedOK && a.profiles.SelectedID != "" {
+			a.mu.Unlock()
+			http.Error(w, "the current setup selection is no longer linked", http.StatusConflict)
+			return
+		}
+		var expectationErr error
+		if selectedOK {
+			expectationErr = a.validateConnectionProfileSetupExpectationsLocked(expected, selected)
+		} else {
+			expectationErr = a.validateDesktopProfileExpectationsLocked(expected, nil, true)
+		}
+		if expectationErr != nil {
+			a.mu.Unlock()
+			http.Error(w, expectationErr.Error(), http.StatusConflict)
+			return
+		}
+	}
 	meta, metaErr := loadConnectionProfileSetupMeta(a)
 	if metaErr == nil {
 		store, err := loadConnectionProfileStore(a)
@@ -514,7 +553,8 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 		http.Error(w, metaErr.Error(), http.StatusInternalServerError)
 		return
 	}
-	innerReq, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1/", bytes.NewReader(raw))
+	innerBody, _ := json.Marshal(connectionProfileRefRequest{ID: ref.ID})
+	innerReq, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1/", bytes.NewReader(innerBody))
 	innerReq.Header.Set("content-type", "application/json")
 	innerReq = withInternalMutationContext(innerReq)
 	recorder := httptest.NewRecorder()
