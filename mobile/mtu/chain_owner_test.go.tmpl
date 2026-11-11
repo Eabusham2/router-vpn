@@ -1,0 +1,137 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+)
+
+type routerMTUChainPlatformFixture struct {
+	*routerMTUContextPlatform
+	changing bool
+}
+
+func (p *routerMTUChainPlatformFixture) BeginMTUChange(state *RouterMTUState) error {
+	if p.changing {
+		return errors.New("fixture transaction already open")
+	}
+	p.changing = true
+	return p.routerMTUContextPlatform.BeginMTUChange(state)
+}
+func (p *routerMTUChainPlatformFixture) EndMTUChange() error {
+	if !p.changing {
+		return errors.New("fixture transaction not open")
+	}
+	p.changing = false
+	return p.routerMTUContextPlatform.EndMTUChange()
+}
+
+// This explicit proof double checks the shipping MTU coordinator's ordering
+// and ownership. It cannot establish an encrypted chain or a kernel TUN.
+type routerMTUChainLeaseFixture struct {
+	t        *testing.T
+	owner    *routerMTUOwner
+	platform *routerMTUChainPlatformFixture
+	fault    string
+	live     bool
+	before   int
+	after    int
+	op       context.Context
+	cancel   context.CancelFunc
+}
+
+func (c *routerMTUChainLeaseFixture) NetworkChanged() { c.live = false }
+func (c *routerMTUChainLeaseFixture) ownsMTU(o *routerMTUOwner) bool {
+	return c.owner == o && c.fault != "wrong-claim"
+}
+func (c *routerMTUChainLeaseFixture) releaseMTU(o *routerMTUOwner) {
+	if c.owner == o {
+		c.owner = nil
+	}
+}
+func (c *routerMTUChainLeaseFixture) beforeMTUChange(ctx context.Context, o *routerMTUOwner, _ int) (bool, error) {
+	c.before++
+	if o != c.owner || !c.platform.changing || !mobilemtu.SameOperationContext(ctx, c.op) {
+		c.t.Fatal("proof pause escaped its original native MTU transaction")
+	}
+	if c.fault == "pause-refused" {
+		return false, errors.New("original proof is no longer current")
+	}
+	c.live = false
+	if c.fault == "join-failed" {
+		return true, errors.New("original proof did not join")
+	}
+	if c.fault == "cancel" {
+		c.cancel()
+	}
+	return true, nil
+}
+func (c *routerMTUChainLeaseFixture) afterMTUChange(ctx context.Context, o *routerMTUOwner) error {
+	c.after++
+	if o != c.owner || !c.platform.changing || !mobilemtu.SameOperationContext(ctx, c.op) || ctx.Err() != nil {
+		c.t.Fatal("proof resume escaped its original reader or cleanup allowance")
+	}
+	if c.fault == "resume-failed" {
+		return errors.New("returned reader could not be proved")
+	}
+	c.live = true
+	return nil
+}
+
+func TestRouterMTUOrderedProofPauseStaysInsideOriginalNativeTransaction(t *testing.T) {
+	for _, fault := range []string{"native-refused", "pause-refused", "join-failed", "resume-failed", "wrong-claim", "cancel"} {
+		t.Run(fault, func(t *testing.T) {
+			owner, _, original := routerMTUContextFixture(t)
+			platform := &routerMTUChainPlatformFixture{routerMTUContextPlatform: original}
+			owner.platform = platform
+			before, err := owner.CaptureContext(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			op, finish, err := mobilemtu.WithOperationContext(context.Background(), time.Minute, 3*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer finish()
+			ctx, cancel := context.WithCancel(op)
+			defer cancel()
+			proof := &routerMTUChainLeaseFixture{t: t, owner: owner, platform: platform, fault: fault, live: true, op: op, cancel: cancel}
+			owner.chain = proof
+			owner.proofCurrentContext = func(ctx context.Context) error {
+				if !proof.live {
+					return errors.New("fixture proof is paused or failed")
+				}
+				return ctx.Err()
+			}
+			originalReader := owner.inbound
+			after, err := owner.ChangeMTU(ctx, before, 1400)
+			if err == nil || platform.changing || platform.begins != platform.ends {
+				t.Fatal("refused or cancelled native transaction was accepted or left open", err)
+			}
+			if fault == "wrong-claim" {
+				if proof.before != 0 || proof.after != 0 || platform.begins != 0 {
+					t.Fatal("foreign claim reached mutation")
+				}
+				return
+			}
+			if proof.before != 1 || platform.begins != 1 {
+				t.Fatal("original mutation window missing")
+			}
+			if fault == "join-failed" || fault == "resume-failed" {
+				if !owner.invalid.Load() || platform.aborts != 1 || proof.live {
+					t.Fatal("unproved path remained active")
+				}
+				return
+			}
+			if after != before || owner.inbound != originalReader || owner.invalid.Load() || platform.aborts != 0 || !proof.live {
+				t.Fatal("failed native construction lost its unchanged original reader/proof", after, err)
+			}
+			if fault == "pause-refused" && proof.after != 0 || fault != "pause-refused" && proof.after != 1 {
+				t.Fatal("proof resume did not belong to the original pause")
+			}
+		})
+	}
+}

@@ -30,6 +30,15 @@ type RouterMTUPlatform interface {
 }
 
 type RouterMTU struct { controller *mobilemtu.Controller; owner *routerMTUOwner }
+// Only the native ordered-chain factory supplies this package-private lease.
+// Standalone MTU preparation keeps its original dependency closure.
+type routerMTUChainOwner interface {
+ NetworkChanged()
+ ownsMTU(*routerMTUOwner) bool
+ releaseMTU(*routerMTUOwner)
+ beforeMTUChange(context.Context,*routerMTUOwner,int)(bool,error)
+ afterMTUChange(context.Context,*routerMTUOwner)error
+}
 type routerMTUOwner struct {
  mu sync.Mutex
  invalid atomic.Bool
@@ -39,6 +48,7 @@ type routerMTUOwner struct {
  inbound adapter.Inbound
  session, path string
  external routerMTUExternalLease
+ chain routerMTUChainOwner
  proofCurrent func() bool
  proofCurrentContext func(context.Context) error
  // This constructor-only context is cleared before the owner is published.
@@ -88,7 +98,7 @@ func newRouterMTUContext(ctx context.Context, server *CommandServer, platform Ro
 }
 func (m *RouterMTU) Start(request string,force bool) error { if m==nil||m.controller==nil{return errors.New("MTU owner is missing")};return m.controller.Start(request,force) }
 func (m *RouterMTU) Cancel(request string) { if m!=nil&&m.controller!=nil{m.controller.Cancel(request)} }
-func (m *RouterMTU) NetworkChanged() { if m!=nil&&m.owner!=nil{m.owner.invalid.Store(true);m.controller.Invalidate()} }
+func (m *RouterMTU) NetworkChanged() { if m!=nil&&m.owner!=nil{m.owner.invalid.Store(true);if m.owner.chain!=nil{m.owner.chain.NetworkChanged()};m.controller.Invalidate()} }
 func (m *RouterMTU) Close() error {
  if m==nil||m.controller==nil{return nil}
  m.owner.invalid.Store(true)
@@ -96,6 +106,7 @@ func (m *RouterMTU) Close() error {
  // A timed-out drain retains the exact claim, so a replacement optimizer
  // cannot overlap its still-owned native transaction or public socket.
  if m.owner.external!=nil{m.owner.external.Close()}
+ if m.owner.chain!=nil{m.owner.chain.releaseMTU(m.owner)}
  return nil
 }
 func (m *RouterMTU) Running() bool { return m!=nil&&m.controller!=nil&&m.controller.Running() }
@@ -104,6 +115,7 @@ func (o *routerMTUOwner) currentLockedContext(ctx context.Context) error {
  if ctx==nil{return errors.New("MTU native observation has no caller")}
  if err:=ctx.Err();err!=nil{return err}
  if o==nil||o.invalid.Load()||o.server==nil||o.server.StartedService==nil||o.instance==nil||o.instance.Box()==nil||o.inbound==nil{return errors.New("MTU native session was replaced or stopped")}
+ if o.chain!=nil&&!o.chain.ownsMTU(o){return errors.New("MTU lost its original ordered chain claim")}
  instance,err:=o.server.StartedService.RouterVPNInstanceContext(ctx)
  if err!=nil{return err}
  if instance!=o.instance{return errors.New("MTU native instance changed")}
@@ -158,10 +170,23 @@ func (o *routerMTUOwner) ChangeMTU(ctx context.Context, expected mobilemtu.State
   captured,finish,err:=mobilemtu.WithCleanupContext(ctx,3*time.Second);if err!=nil{return state,err};defer finish();ctx=captured
  }
  if err=o.platform.BeginMTUChange(routerMTUExport(expected));err!=nil{return state,err}
+ if o.chain!=nil {
+  paused,pauseErr:=o.chain.beforeMTUChange(ctx,o,mtu)
+  if pauseErr!=nil {
+   endErr:=o.platform.EndMTUChange()
+   if paused||endErr!=nil{o.invalid.Store(true);o.platform.AbortMTU("Ordered path proof did not join before MTU change")}
+   return state,errors.Join(pauseErr,endErr)
+  }
+ }
  var current adapter.Inbound
  var changeErr error
  if o.external!=nil{current,changeErr=o.external.ChangeMTU(ctx,o.inbound,mtu)}else{current,changeErr=o.instance.Box().RouterVPNChangeMTU(ctx,o.inbound,mtu)}
  o.inbound=current
+ if o.chain!=nil&&current!=nil {
+  proofCtx,proofErr:=routerNodeChainMTUProofContext(ctx)
+  if proofErr==nil{proofErr=o.chain.afterMTUChange(proofCtx,o)}
+  changeErr=errors.Join(changeErr,proofErr)
+ }
  endErr:=o.platform.EndMTUChange()
  // A cancelled work read cannot erase this transaction's returned reader.
  // Finalization uses only the original operation's one cleanup allowance.
@@ -187,6 +212,11 @@ func (o *routerMTUOwner) DialThroughTunnel(ctx context.Context, expected mobilem
  host,port,err:=net.SplitHostPort(address);ip,ipErr:=netip.ParseAddr(host);number,portErr:=strconv.Atoi(port)
  if err!=nil||ipErr!=nil||portErr!=nil||number<1||number>65535||!ip.IsPrivate()||ip.Zone()!=""||ip.Is4In6()||(network!="tcp"&&network!="udp"){return nil,errors.New("invalid private MTU socket target")}
  return o.dialBoundSocket(ctx,expected,network,address)
+}
+func routerNodeChainMTUProofContext(ctx context.Context) (context.Context,error) {
+ if ctx==nil{return nil,errors.New("ordered MTU has no captured operation")}
+ if ctx.Err()==nil{return ctx,nil}
+ return mobilemtu.OperationCleanupContext(ctx)
 }
 // All destinations are validated by the private or external caller before
 // this primitive receives a literal address. It never invokes a DNS resolver.

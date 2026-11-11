@@ -113,7 +113,7 @@ def prepare(vendor, *, mobile=True):
         for name in ('instance_context', 'instance_context_test'):
             writes[vendor/'daemon'/('routervpn_'+name+'.go')]=(ROOT/'mobile/daemon'/(name+'.go.tmpl')).read_bytes()
         targets['pprof_maps_test.go']='experimental/libbox/internal/oomprofile/routervpn_maps_test.go'
-        for name in ['bridge','external_owner','interface','socket_linux','socket_darwin','socket_other','bridge_test','bridge_context_test']:
+        for name in ['bridge','external_owner','interface','socket_linux','socket_darwin','socket_other','bridge_test','bridge_context_test','chain_owner_test']:
             targets[name+'.go']='experimental/libbox/routervpn_mtu_'+name+'.go'
     for source,dest in targets.items():writes[vendor/dest]=(ROOT/'mobile/mtu'/(source+'.tmpl')).read_bytes()
     writes.update(policy_copies(vendor))

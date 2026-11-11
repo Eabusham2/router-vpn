@@ -24,7 +24,7 @@ func TestRouterNodeChainBridgeRejectsMissingAndRetiredOwners(t *testing.T) {
 	}
 	m := new(RouterNodeChain)
 	m.NetworkChanged()
-	if !m.retired || m.Healthy() {
+	if !m.retired.Load() || m.Healthy() {
 		t.Fatal("retired empty bridge acquired readiness")
 	}
 	if err := m.Close(); err != nil {

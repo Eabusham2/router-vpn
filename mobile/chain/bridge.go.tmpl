@@ -1,15 +1,7 @@
 package libbox
 
 import (
-	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
-	"sync"
-	"time"
-
-	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 )
 
@@ -21,14 +13,6 @@ func RouterNodeChainMemberInput(mode, files, profile, start, bootstrap string) (
 		return "", err
 	}
 	return node.LaunchInput()
-}
-
-type RouterNodeChain struct {
-	chain   *mobilemultihop.NodeChain
-	mu      sync.Mutex
-	cancel  context.CancelFunc
-	retired bool
-	running bool
 }
 
 func NewRouterNodeChain(source string) (*RouterNodeChain, error) {
@@ -52,95 +36,10 @@ func (m *RouterNodeChain) SourceSHA256() string         { return m.chain.SourceS
 func (m *RouterNodeChain) ConfigSHA256() string         { return m.chain.ConfigSHA256() }
 func (m *RouterNodeChain) LaunchInput() (string, error) { return m.chain.LaunchInput() }
 func (m *RouterNodeChain) ProgressJSON() string {
-	value, _ := json.Marshal(m.chain.Progress())
+	chain := m.chain
+	if state := m.state.Load(); state != nil {
+		chain = state.chain
+	}
+	value, _ := json.Marshal(chain.Progress())
 	return string(value)
-}
-
-func (m *RouterNodeChain) Run(server *CommandServer) error {
-	if m == nil || m.chain == nil || server == nil || server.ctx == nil || server.StartedService == nil {
-		return errors.New("ordered chain has no original native command server")
-	}
-	observe, endObserve := context.WithTimeout(server.ctx, 1500*time.Millisecond)
-	defer endObserve()
-	if err := adapter.RouterVPNLockContext(observe, &m.mu); err != nil {
-		return err
-	}
-	if m.retired || m.running {
-		m.mu.Unlock()
-		return errors.New("ordered native chain cannot be reused")
-	}
-	lifetime, cancel := context.WithCancel(server.ctx)
-	m.cancel, m.running = cancel, true
-	m.mu.Unlock()
-	failure := true
-	defer func() {
-		if failure {
-			cancel()
-		}
-	}()
-	instance, err := server.StartedService.RouterVPNInstanceContext(observe)
-	if err != nil || instance == nil || instance.Box() == nil {
-		return errors.Join(err, errors.New("ordered chain native instance is not running"))
-	}
-	var nonce [32]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return errors.New("ordered chain could not capture a fresh native session")
-	}
-	engine, err := instance.Box().RouterVPNNewNodeChainEngine(observe, m.chain, hex.EncodeToString(nonce[:]),
-		func(ctx context.Context) error {
-			if err := lifetime.Err(); err != nil {
-				return err
-			}
-			current, err := server.StartedService.RouterVPNInstanceContext(ctx)
-			if err != nil {
-				return err
-			}
-			if current != instance || current == nil || current.Box() != instance.Box() {
-				return errors.New("ordered chain native instance was replaced")
-			}
-			return ctx.Err()
-		})
-	if err != nil {
-		return err
-	}
-	// Startup has its own bounded proof budget. Its retained observer belongs
-	// to the connection lifetime, never the short capture observation above.
-	if err := m.chain.Run(lifetime, engine); err != nil {
-		return err
-	}
-	failure = false
-	return nil
-}
-
-func (m *RouterNodeChain) Healthy() bool {
-	if m == nil || m.chain == nil {
-		return false
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-	defer cancel()
-	return m.chain.HealthyContext(ctx) == nil
-}
-
-func (m *RouterNodeChain) NetworkChanged() {
-	if m == nil {
-		return
-	}
-	m.mu.Lock()
-	m.retired = true
-	if m.cancel != nil {
-		m.cancel()
-	}
-	m.mu.Unlock()
-}
-
-// Close joins chain proof work only. The host still owns checked service/TUN
-// teardown and must not report Disconnected until that original owner retires.
-func (m *RouterNodeChain) Close() error {
-	if m == nil || m.chain == nil {
-		return nil
-	}
-	m.NetworkChanged()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return m.chain.CloseContext(ctx)
 }

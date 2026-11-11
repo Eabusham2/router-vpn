@@ -104,6 +104,7 @@ type Plan struct {
 	Ceiling  int
 	TunTag   string
 	source   string
+	captured [32]byte
 }
 
 // NewPlan constrains TUN-only changes to the already validated encrypted packet
@@ -306,7 +307,7 @@ func NewPlan(config string, actual int) (*Plan, error) {
 	if ceiling < MinMTU || actual > ceiling {
 		return nil, errors.New("current TUN MTU exceeds its captured safe envelope")
 	}
-	return &Plan{Original: actual, Ceiling: ceiling, TunTag: tag, source: config}, nil
+	return capturePlan(&Plan{Original: actual, Ceiling: ceiling, TunTag: tag, source: config}), nil
 }
 func (p *Plan) Candidates(cached int) []int {
 	values := []int{p.Original}

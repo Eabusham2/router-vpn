@@ -1,0 +1,117 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+)
+
+func RouterNodeChainMTUProfile(plan *RouterNodeChain) string {
+	if plan == nil || plan.chain == nil {
+		return ""
+	}
+	return plan.chain.MTUProfile()
+}
+
+func RouterNodeChainNewMTU(plan *RouterNodeChain, server *CommandServer, platform RouterMTUPlatform) (*RouterMTU, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), routerMTUObservationBudget)
+	defer cancel()
+	return plan.newMTUContext(ctx, server, platform)
+}
+
+func (m *RouterNodeChain) newMTUContext(ctx context.Context, server *CommandServer, platform RouterMTUPlatform) (*RouterMTU, error) {
+	if m == nil || m.chain == nil || server == nil || platform == nil {
+		return nil, errors.New("ordered MTU requires its captured chain and native platform")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return nil, err
+	}
+	defer m.mu.Unlock()
+	if m.server != server || m.instance == nil || m.mtuOwner.Load() != nil || m.healthyContext(ctx) != nil {
+		return nil, errors.New("ordered MTU has another or unproved native owner")
+	}
+	state, err := routerMTUState(platform.CaptureMTU())
+	if err != nil {
+		return nil, err
+	}
+	plan, err := m.chain.MTUPlan()
+	if err != nil || plan.Original != state.MTU {
+		return nil, errors.Join(err, errors.New("ordered MTU source differs from the original native TUN"))
+	}
+	inbound, found, err := adapter.RouterVPNInboundContext(ctx, m.instance.Box().Inbound(), plan.TUNTag)
+	if err != nil || !found || inbound == nil || inbound.Type() != "tun" {
+		return nil, errors.Join(err, errors.New("ordered MTU has no original native reader"))
+	}
+	owner := &routerMTUOwner{platform: platform, server: server, instance: m.instance, inbound: inbound,
+		session: state.Session, path: state.Path, chain: m, proofCurrentContext: m.healthyContext, initialContext: ctx}
+	defer func() { owner.initialContext = nil }()
+	if !m.mtuOwner.CompareAndSwap(nil, owner) {
+		return nil, errors.New("ordered MTU already has a retained optimizer")
+	}
+	claimed := false
+	defer func() {
+		if !claimed {
+			m.mtuOwner.CompareAndSwap(owner, nil)
+		}
+	}()
+	controller, err := m.chain.NewMTUControllerContext(ctx, owner, mobilemtu.NewCache(routerMTUPreferences{platform}))
+	if err != nil {
+		return nil, err
+	}
+	current, err := owner.CaptureContext(ctx)
+	if err != nil || current != state || m.healthyContext(ctx) != nil {
+		_ = controller.Close()
+		return nil, errors.Join(err, errors.New("ordered MTU owner changed during adoption"))
+	}
+	claimed = true
+	return &RouterMTU{controller: controller, owner: owner}, nil
+}
+
+// The original MTU owner serializes native reader mutation. This bridge joins
+// only its current proof generation before that mutation, retaining failed
+// joins so no replacement controller can overlap the still-owned callbacks.
+func (m *RouterNodeChain) beforeMTUChange(ctx context.Context, owner *routerMTUOwner, mtu int) (bool, error) {
+	if m == nil || owner == nil || m.mtuOwner.Load() != owner {
+		return false, errors.New("ordered MTU lost its exact claim")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return false, err
+	}
+	defer m.mu.Unlock()
+	plan, err := m.chain.MTUPlan()
+	if err != nil || mtu < 1280 || mtu > plan.Ceiling || m.healthyContext(ctx) != nil {
+		return false, errors.Join(err, errors.New("ordered MTU lost its proved path or prefix bounds"))
+	}
+	return true, m.joinProofLocked(ctx)
+}
+
+func (m *RouterNodeChain) afterMTUChange(ctx context.Context, owner *routerMTUOwner) error {
+	if m == nil || owner == nil || m.mtuOwner.Load() != owner {
+		return errors.New("ordered MTU cannot resume another native claim")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return err
+	}
+	defer m.mu.Unlock()
+	if m.retired.Load() || owner.server != m.server || owner.instance != m.instance || owner.inbound == nil ||
+		owner.inbound.Tag() != m.chain.DNSCapture().TUNTag {
+		return errors.New("ordered MTU returned another native reader owner")
+	}
+	current, found, err := adapter.RouterVPNInboundContext(ctx, m.instance.Box().Inbound(), owner.inbound.Tag())
+	if err != nil || !found || current != owner.inbound {
+		return errors.Join(err, errors.New("ordered MTU returned reader is no longer active"))
+	}
+	return m.startProofLocked(ctx)
+}
+
+func (m *RouterNodeChain) ownsMTU(owner *routerMTUOwner) bool {
+	return m != nil && owner != nil && m.mtuOwner.Load() == owner
+}
+
+func (m *RouterNodeChain) releaseMTU(owner *routerMTUOwner) {
+	if m != nil && owner != nil {
+		m.mtuOwner.CompareAndSwap(owner, nil)
+	}
+}

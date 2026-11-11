@@ -17,6 +17,9 @@ TEMPLATES = {
     'network_context_test.go.tmpl': 'route/routervpn_node_chain_test.go',
     'bridge.go.tmpl': 'experimental/libbox/routervpn_node_chain.go',
     'bridge_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_test.go',
+    'lifecycle.go.tmpl': 'experimental/libbox/routervpn_node_chain_lifecycle.go',
+    'lifecycle_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_lifecycle_test.go',
+    'mtu.go.tmpl': 'experimental/libbox/routervpn_node_chain_mtu.go',
 }
 
 

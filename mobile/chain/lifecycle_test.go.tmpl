@@ -1,0 +1,94 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func routerNodeChainNativeOwnerFixture(t *testing.T) (*RouterNodeChain, *routerNodeChainProofState) {
+	t.Helper()
+	owner, _, _ := routerMTUContextFixture(t)
+	owner.server.ctx = context.Background()
+	lifetime, cancel := context.WithCancel(owner.server.ctx)
+	t.Cleanup(cancel)
+	m := &RouterNodeChain{server: owner.server, instance: owner.instance}
+	state := &routerNodeChainProofState{lifetime: lifetime, cancel: cancel}
+	m.state.Store(state)
+	return m, state
+}
+
+func TestRouterNodeChainBridgeNativeOwnerRejectsCancelledAndReplacedGeneration(t *testing.T) {
+	for _, fault := range []string{"lifetime", "generation", "instance", "retired"} {
+		t.Run(fault, func(t *testing.T) {
+			m, state := routerNodeChainNativeOwnerFixture(t)
+			if err := m.nativeCurrent(context.Background(), state); err != nil {
+				t.Fatal(err)
+			}
+			if m.Healthy() {
+				t.Fatal("native owner observation fabricated path proof")
+			}
+			switch fault {
+			case "lifetime":
+				state.cancel()
+			case "generation":
+				m.state.Store(&routerNodeChainProofState{lifetime: context.Background(), cancel: func() {}})
+			case "instance":
+				*routerMTUField[*daemon.Instance](t, m.server.StartedService, "instance") = &daemon.Instance{}
+			case "retired":
+				m.NetworkChanged()
+			}
+			if err := m.nativeCurrent(context.Background(), state); err == nil {
+				t.Fatal("old native generation retained authority", fault)
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainBridgeNativeOwnerKeepsOriginalReadDeadline(t *testing.T) {
+	m, state := routerNodeChainNativeOwnerFixture(t)
+	lock := routerMTUField[sync.RWMutex](t, m.server.StartedService, "serviceAccess")
+	lock.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	err := m.nativeCurrent(ctx, state)
+	cancel()
+	lock.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("native owner lookup lost original deadline", err)
+	}
+	if err := m.nativeCurrent(context.Background(), state); err != nil {
+		t.Fatal("expired read damaged original owner", err)
+	}
+}
+
+func TestRouterNodeChainBridgeMTUClaimCannotReleaseReplacement(t *testing.T) {
+	m := &RouterNodeChain{chain: new(mobilemultihop.NodeChain)}
+	original, replacement := new(routerMTUOwner), new(routerMTUOwner)
+	m.mtuOwner.Store(original)
+	m.releaseMTU(replacement)
+	if !m.ownsMTU(original) {
+		t.Fatal("foreign optimizer released original claim")
+	}
+	m.releaseMTU(original)
+	if !m.mtuOwner.CompareAndSwap(nil, replacement) {
+		t.Fatal("original claim failed to retire")
+	}
+	m.releaseMTU(original)
+	if !m.ownsMTU(replacement) {
+		t.Fatal("late original release removed replacement claim")
+	}
+	if RouterNodeChainMTUProfile(m) != "" {
+		t.Fatal("invalid source fabricated private probe authority")
+	}
+	if value, err := RouterNodeChainNewMTU(m, &CommandServer{}, &mtuPlatformFixture{}); err == nil || value != nil {
+		t.Fatal("unproved chain acquired native MTU")
+	}
+	if value, err := RouterNodeChainNewMTU(nil, nil, nil); err == nil || value != nil {
+		t.Fatal("missing chain acquired native MTU")
+	}
+}

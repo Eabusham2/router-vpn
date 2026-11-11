@@ -76,6 +76,7 @@ type Controller struct {
 	status        Status
 	currentConfig string
 	external      *externalMeasurement
+	planner       CapturedPlanner
 }
 
 func New(owner Owner, config, profile string, cache Cache) (*Controller, error) {
@@ -97,17 +98,21 @@ func newController(owner Owner, config string, policy Profile, cache Cache) (*Co
 	return newControllerState(owner, config, policy, cache, state)
 }
 func newControllerState(owner Owner, config string, policy Profile, cache Cache, state State) (*Controller, error) {
+	return newControllerStateCaptured(owner, config, policy, cache, state, nil)
+}
+func newControllerStateCaptured(owner Owner, config string, policy Profile, cache Cache, state State, planner CapturedPlanner) (*Controller, error) {
 	if state.Session == "" || state.Path == "" || state.Interface == "" || state.MTU < MinMTU || state.MTU > MaxMTU {
 		return nil, errors.New("MTU must capture a running native VPN interface")
 	}
 	// A fixed or Jumbo connection does not enter the optimizer. Keep it visible
 	// without interpreting its stored effective_mtu as a current measurement.
+	controller := &Controller{owner: owner, profile: policy, frozenConfig: config, currentConfig: config, cache: cache, planner: planner, status: Status{Phase: "idle", EffectiveMTU: state.MTU, Source: "configured-unmeasured", Candidates: []Candidate{}}}
 	if policy.Automatic && !policy.Jumbo {
-		if _, err := NewPlan(config, state.MTU); err != nil {
+		if _, err := controller.planFor(config, state.MTU); err != nil {
 			return nil, err
 		}
 	}
-	return &Controller{owner: owner, profile: policy, frozenConfig: config, currentConfig: config, cache: cache, status: Status{Phase: "idle", EffectiveMTU: state.MTU, Source: "configured-unmeasured", Candidates: []Candidate{}}}, nil
+	return controller, nil
 }
 func (c *Controller) Requested() bool { return c.profile.Automatic && !c.profile.Jumbo }
 func (c *Controller) live(ctx context.Context, expected State) bool {
@@ -186,7 +191,7 @@ func (c *Controller) run(ctx context.Context, config string, force bool, capture
 		return errors.Join(err, ctx.Err(), errors.New("MTU interface changed before capture"))
 	}
 	*captured = original
-	plan, err := NewPlan(config, original.MTU)
+	plan, err := c.planFor(config, original.MTU)
 	if err != nil {
 		return err
 	}
