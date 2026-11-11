@@ -37,13 +37,14 @@ function Add-RouterVPNUnifiedWindowsShell {
       <TextBlock Name="UnifiedLastError" Foreground="#FF9CA8" TextWrapping="Wrap" Margin="0,0,0,6"/>
       <Grid Margin="0,2,0,6"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button Name="UnifiedConnectButton" Content="Connect" FontSize="17" FontWeight="Bold" Padding="18,10" Background="#6857E5" Foreground="White"/><CheckBox Name="UnifiedKillSwitch" Grid.Column="1" Content="Kill switch" IsEnabled="False" VerticalAlignment="Center" Margin="14,0,0,0"/></Grid>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Multihop" FontWeight="SemiBold" VerticalAlignment="Center"/><CheckBox Name="UnifiedMultihop" Grid.Column="1" VerticalAlignment="Center" Margin="6,0"/><ComboBox Name="UnifiedEntryCombo" Grid.Column="2" DisplayMemberPath="name" SelectedValuePath="id" MinWidth="150"/><TextBlock Grid.Column="3" Text=" → " VerticalAlignment="Center"/><ComboBox Name="UnifiedExitCombo" Grid.Column="4" DisplayMemberPath="name" SelectedValuePath="id" MinWidth="150"/><ComboBox Name="UnifiedExitMode" Grid.Column="5" Margin="6,0,0,0"><ComboBoxItem Content="Shadowsocks" Tag="shadowsocks"/><ComboBoxItem Content="Hysteria2" Tag="hysteria2"/><ComboBoxItem Content="REALITY Vision" Tag="reality-vision"/><ComboBoxItem Content="PQ REALITY Vision" Tag="reality-pq-vision"/><ComboBoxItem Content="REALITY XHTTP" Tag="reality-xhttp"/><ComboBoxItem Content="Naive H2" Tag="naive-h2"/><ComboBoxItem Content="Naive H3" Tag="naive-h3"/><ComboBoxItem Content="WireGuard" Tag="wg"/><ComboBoxItem Content="AWG Fast" Tag="awg2-fast"/><ComboBoxItem Content="AWG Strong" Tag="awg2-strong"/><ComboBoxItem Content="SS/V2Ray" Tag="ss-v2ray"/><ComboBoxItem Content="Split" Tag="split"/><ComboBoxItem Content="MAX" Tag="max"/><ComboBoxItem Content="WG + PQ" Tag="wg-pq"/><ComboBoxItem Content="AWG + PQ" Tag="awg2-pq"/><ComboBoxItem Content="Complete MAX TLS / WG" Tag="max-tls-wg"/><ComboBoxItem Content="Complete MAX TLS / AWG" Tag="max-tls-awg"/><ComboBoxItem Content="Complete MAX QUIC / WG" Tag="max-quic-wg"/><ComboBoxItem Content="Complete MAX QUIC / AWG" Tag="max-quic-awg"/></ComboBox></Grid>
+      <StackPanel Margin="76,3,0,5"><WrapPanel><CheckBox Name="UnifiedOrdered" Content="Ordered nodes" VerticalAlignment="Center" ToolTip="Choose every entry and hop in order. The selected node remains the final exit."/><Button Name="UnifiedNodeChainButton" Content="Edit ordered path…" Margin="10,0,0,0" Padding="10,5"/></WrapPanel><TextBlock Name="UnifiedNodeChainSummary" Text="Choose entry and hops, then the selected exit." TextWrapping="Wrap" Foreground="#A8B6D5" FontSize="11" Margin="0,4,0,0"/></StackPanel>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Entry base" FontWeight="SemiBold" VerticalAlignment="Center"/><ComboBox Name="UnifiedBaseCombo" Grid.Column="1" SelectedIndex="0" ToolTip="Auto follows the selected entry node's saved base. AWG uses its exact saved Fast or Strong source."><ComboBoxItem Content="Auto - saved entry base" Tag="auto"/><ComboBoxItem Content="WireGuard" Tag="wg"/><ComboBoxItem Content="AmneziaWG" Tag="awg"/></ComboBox></Grid>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Entry mode" FontWeight="SemiBold" VerticalAlignment="Center"/><ComboBox Name="UnifiedEntryMode" Grid.Column="1" SelectedIndex="0" ToolTip="Keep the saved entry mode or choose its complete transport. Entry base supplies the WG/AWG fallback when no mode was saved."><ComboBoxItem Content="Use saved entry mode / base" Tag=""/><ComboBoxItem Content="WireGuard" Tag="wg"/><ComboBoxItem Content="AWG Fast" Tag="awg2-fast"/><ComboBoxItem Content="AWG Strong" Tag="awg2-strong"/><ComboBoxItem Content="WG + PQ" Tag="wg-pq"/><ComboBoxItem Content="AWG + PQ" Tag="awg2-pq"/><ComboBoxItem Content="Shadowsocks" Tag="shadowsocks"/><ComboBoxItem Content="Hysteria2" Tag="hysteria2"/><ComboBoxItem Content="REALITY Vision" Tag="reality-vision"/><ComboBoxItem Content="PQ REALITY Vision" Tag="reality-pq-vision"/><ComboBoxItem Content="REALITY XHTTP" Tag="reality-xhttp"/><ComboBoxItem Content="Naive H2" Tag="naive-h2"/><ComboBoxItem Content="Naive H3" Tag="naive-h3"/><ComboBoxItem Content="SS/V2Ray" Tag="ss-v2ray"/><ComboBoxItem Content="Split" Tag="split"/><ComboBoxItem Content="MAX TCP/UDP" Tag="max"/><ComboBoxItem Content="MAX TLS / WG + PQ" Tag="max-tls-wg"/><ComboBoxItem Content="MAX TLS / AWG + PQ" Tag="max-tls-awg"/><ComboBoxItem Content="MAX QUIC / WG + PQ" Tag="max-quic-wg"/><ComboBoxItem Content="MAX QUIC / AWG + PQ" Tag="max-quic-awg"/><ComboBoxItem Content="Imported WireGuard - Local only" Tag="wireguard"/><ComboBoxItem Content="Imported AmneziaWG - Local only" Tag="amneziawg"/><ComboBoxItem Content="Imported SOCKS5 - Local only" Tag="socks5"/><ComboBoxItem Content="Imported HTTP CONNECT - Local only" Tag="http-connect"/><ComboBoxItem Content="Imported HTTPS CONNECT - Local only" Tag="https-connect"/><ComboBoxItem Content="Imported OpenVPN - Local only" Tag="openvpn"/></ComboBox></Grid>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Execution" FontWeight="SemiBold" VerticalAlignment="Center"/><ComboBox Name="UnifiedExecution" Grid.Column="1" SelectedIndex="2" ToolTip="Local keeps the exit tunnel on this device. Server trusts the entry node to run the exit. Compare tests both and keeps the lower valid average."><ComboBoxItem Content="Local — exit runs on device" Tag="local"/><ComboBoxItem Content="Server — exit runs on entry node" Tag="server"/><ComboBoxItem Content="Compare both — lowest valid average" Tag="auto"/></ComboBox></Grid>
       <TextBlock Name="UnifiedComparisonText" Text="Compare: (last-node response time + external-server response time) / 2. Either timeout excludes the candidate." TextWrapping="Wrap" Foreground="#A8B6D5" FontSize="11" Margin="76,0,0,4"/>
       <Button Name="UnifiedCandidatesButton" Content="Measure exits via entry…" HorizontalAlignment="Left" Margin="76,2,0,6" Padding="10,5" ToolTip="Measure candidate TCP responses through the selected WireGuard or AmneziaWG entry. Selecting an exit is separate from Connect."/>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Settings" FontWeight="SemiBold" VerticalAlignment="Center"/><TextBlock Name="UnifiedSettingsSummary" Grid.Column="1" Foreground="#A8B6D5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/><StackPanel Grid.Column="2" Orientation="Horizontal"><Button Name="UnifiedSettingsButton" Content="Open settings" Padding="10,5"/><Button Name="UnifiedMtuButton" Content="Retest MTU" Margin="6,0,0,0" Padding="10,5"/></StackPanel></Grid>
-      <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Mode" FontWeight="SemiBold" VerticalAlignment="Center"/><ComboBox Name="UnifiedModeCombo" Grid.Column="1" DisplayMemberPath="display" SelectedValuePath="id"/><Button Name="UnifiedPresetsButton" Grid.Column="2" Content="Presets / CUSTOM" Margin="6,0,0,0" Padding="10,5"/></Grid>
+      <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Mode" FontWeight="SemiBold" VerticalAlignment="Center"/><ComboBox Name="UnifiedModeCombo" Grid.Column="1" DisplayMemberPath="display" SelectedValuePath="id"/><TextBlock Name="UnifiedOrderedModeSummary" Grid.Column="1" Text="WireGuard entry and hops → Shadowsocks exit" TextWrapping="Wrap" VerticalAlignment="Center" Visibility="Collapsed"/><Button Name="UnifiedPresetsButton" Grid.Column="2" Content="Presets / CUSTOM" Margin="6,0,0,0" Padding="10,5"/></Grid>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="DNS" FontWeight="SemiBold" VerticalAlignment="Center"/><ComboBox Name="UnifiedDnsCombo" Grid.Column="1"><ComboBoxItem Content="Home AdGuard" Tag="home"/><ComboBoxItem Content="Fastest measured" Tag="fastest"/><ComboBoxItem Content="Custom" Tag="custom"/><ComboBoxItem Content="DoT" Tag="dot"/><ComboBoxItem Content="DoH" Tag="doh"/><ComboBoxItem Content="DoH3" Tag="doh3"/><ComboBoxItem Content="Rescue" Tag="rescue"/></ComboBox><Button Name="UnifiedDnsDetailsButton" Grid.Column="2" Content="DNS details" Margin="6,0,0,0" Padding="10,5"/></Grid>
     </StackPanel></ScrollViewer>
   </Border>
@@ -231,9 +232,10 @@ function PollUnifiedComparisonProgress {
 $script:UnifiedComparisonPoller.Add_Tick({PollUnifiedComparisonProgress})
 function SetUnifiedAsyncUI([bool]$Busy,[string]$Label=''){
     if($script:UnifiedAsyncClosed){return}
-    foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedEntryMode','UnifiedExitMode','UnifiedExecution','UnifiedBaseCombo','UnifiedCandidatesButton','UnifiedFastestNode','UnifiedForwardButton','UnifiedPerformanceButton','MtuRetestButton','MultihopConnectButton','AutoButton','ConnectButton','ExternalDirectButton','ExternalViaEntryButton','LatencyButton','DnsButton','UnifiedNodeCombo','UnifiedDnsCombo','UnifiedKillSwitch','UnifiedTorButton','UnifiedExternalNodeButton','UnifiedExternalPathButton')){
+    foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedOrdered','UnifiedNodeChainButton','UnifiedEntryCombo','UnifiedExitCombo','UnifiedEntryMode','UnifiedExitMode','UnifiedExecution','UnifiedBaseCombo','UnifiedCandidatesButton','UnifiedFastestNode','UnifiedForwardButton','UnifiedPerformanceButton','MtuRetestButton','MultihopConnectButton','AutoButton','ConnectButton','ExternalDirectButton','ExternalViaEntryButton','LatencyButton','DnsButton','UnifiedNodeCombo','UnifiedDnsCombo','UnifiedKillSwitch','UnifiedTorButton','UnifiedExternalNodeButton','UnifiedExternalPathButton')){
         $C=Control $N;if($null-ne$C){$C.IsEnabled=(-not$Busy -and (-not$script:UnifiedProtectionPending -or $N-ceq'UnifiedKillSwitch'))}
     }
+    RefreshUnifiedOrderedControls
     $B=Control 'UnifiedConnectButton';if($null-ne$B -and $Busy -and $script:UnifiedAsyncOwnedStopRetry){$B.IsEnabled=$false;$B.Content='Retrying disconnect…';return};if($null-ne$B){$B.IsEnabled=($Busy -or -not$script:UnifiedProtectionPending);if($Busy){$B.Content=if($Label-match'(?i)connect|auto|custom|multihop|external'){'Cancel / Disconnect'}else{$Label}}}
 }
 function UnifiedMultihopStartupTimeout($Body){
@@ -428,6 +430,7 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
         $RouterCombo.ItemsSource=$Profiles;$NodesGrid.ItemsSource=$Profiles
         $RouterCombo.Tag=$Store|ConvertTo-Json -Depth 32|ConvertFrom-Json;$NodesGrid.Tag=$Store|ConvertTo-Json -Depth 32|ConvertFrom-Json
         if($Store.selected_id){$RouterCombo.SelectedValue=[string]$Store.selected_id}
+        RefreshUnifiedOrderedSelection $Store
         if($OldNode){$NodesGrid.SelectedValue=$OldNode}
         DrawMap $Profiles ([string]$Store.selected_id)
         $Selected=@($Profiles|Where-Object{[string]$_.id-eq[string]$Store.selected_id}|Select-Object -First 1)
@@ -474,9 +477,10 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
             $UnifiedConnect.IsEnabled=(-not$Disconnecting -and -not$script:UnifiedProtectionPending)
         }
         SetUnifiedStopRetryPresentation $Status
-        foreach($Name in @('UnifiedMultihop','UnifiedModeCombo','UnifiedDnsCombo','UnifiedFastestNode')){
+        foreach($Name in @('UnifiedMultihop','UnifiedOrdered','UnifiedNodeChainButton','UnifiedModeCombo','UnifiedDnsCombo','UnifiedFastestNode')){
             $C=Control $Name;if($null-ne$C){$C.IsEnabled=-not$MutationBusy}
         }
+        RefreshUnifiedOrderedControls
     }finally{$script:Busy=$false}
 }
 function CompleteUnifiedRefreshAsync {
@@ -589,6 +593,15 @@ function UnifiedConnect{
         if(([string]$P.node_kind).ToLowerInvariant()-cnotin@('','router-vpn','external')){throw 'The selected node type is invalid.'}
         if($P-and(([string]$P.node_kind).ToLowerInvariant()-eq'external')){
             $Path='/api/external-profile/connect';$Body=(NewUnifiedExternalPrimaryBody $P $RouterCombo.Tag);$Timeout=180;$Label='Connecting external exit…'
+        }elseif((Control 'UnifiedMultihop').IsChecked -and $null-ne(Control 'UnifiedOrdered') -and (Control 'UnifiedOrdered').IsChecked){
+            $Ordered=Get-RouterVPNOrderedConnectionSnapshot $Window
+            $Capability=Api '/api/multihop/status' -Timeout 5
+            $Supported=Get-RouterVPNOrderedValue $Capability 'ordered_nodes_supported' $false
+            if($Supported-isnot[bool]-or-not$Supported){throw 'This controller has not enabled the ordered native host. The complete path is retained; update the app before connecting it.'}
+            $Store=Api '/api/profiles' -Timeout 5
+            $Draft=[pscustomobject]@{control_id=[string]$P.id;nodes=$Ordered.multihop_nodes}
+            $Body=New-RouterVPNOrderedConnectPayload $Draft $Store
+            $Path='/api/multihop/connect';$Timeout=380;$Label='Connecting ordered nodes…'
         }elseif((Control 'UnifiedMultihop').IsChecked){
             $Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue
             if(-not$Entry-or-not$Exit-or$Entry-eq$Exit){throw 'Multihop requires different entry and exit nodes.'}
@@ -813,6 +826,88 @@ function ShowUnifiedCandidates{
     if($State.CloseOwner){$Window.Close()}else{RefreshProduct}
 }
 
+function RefreshUnifiedOrderedControls {
+    $ordered=Control 'UnifiedOrdered';if($null-eq$ordered){return}
+    $mode=Control 'UnifiedModeCombo';$description=Control 'UnifiedOrderedModeSummary'
+    $enabled=[bool]$ordered.IsChecked-and[bool](Control 'UnifiedMultihop').IsChecked
+    if($null-ne$mode){$mode.Visibility=if($enabled){'Collapsed'}else{'Visible'}}
+    if($null-ne$description){$description.Visibility=if($enabled){'Visible'}else{'Collapsed'}}
+    if(-not$enabled){return}
+    foreach($name in @('UnifiedEntryCombo','UnifiedExitCombo','UnifiedEntryMode','UnifiedExitMode','UnifiedBaseCombo','UnifiedExecution','UnifiedCandidatesButton')){
+        $widget=Control $name;if($null-ne$widget){$widget.IsEnabled=$false}
+    }
+    $presets=Control 'UnifiedPresetsButton';if($null-ne$presets){$presets.IsEnabled=$false}
+    $label=Control 'UnifiedComparisonText';if($null-ne$label){$label.Text='Local ordered path: every selected node must pass its own private-path proof.'}
+}
+function RefreshUnifiedOrderedSelection($Store) {
+    $button=Control 'UnifiedNodeChainButton';$toggle=Control 'UnifiedOrdered';$label=Control 'UnifiedNodeChainSummary'
+    if($null-eq$button-or$null-eq$toggle-or$null-eq$label){return}
+    $id=[string](Get-RouterVPNOrderedValue $Store 'selected_id')
+    $selected=@($Store.profiles|Where-Object{[string]$_.id-ceq$id})
+    if($selected.Count-ne1){$button.Tag=$null;$toggle.IsChecked=$false;$label.Text='Select a linked exit node first.';return}
+    if($null-eq$button.Tag-or[string](Get-RouterVPNOrderedValue $button.Tag 'control_id')-cne$id){
+        $button.Tag=[pscustomobject]@{control_id=$id;nodes=@()};$toggle.IsChecked=$false
+        $saved=Get-RouterVPNOrderedValue $selected[0] 'multihop_nodes'
+        if($null-ne$saved-and@($saved).Count-gt0){
+            $button.Tag.nodes=$saved;$toggle.IsChecked=$true
+            (Control 'UnifiedMultihop').IsChecked=[bool](Get-RouterVPNOrderedValue $selected[0] 'multihop_enabled' $false)
+            try{
+                $button.Tag.nodes=@(Copy-RouterVPNOrderedNodes $saved $id)
+            }catch{$label.Text='Saved ordered path needs attention: '+$_.Exception.Message;return}
+        }
+    }
+    if(@($button.Tag.nodes).Count-eq0){$label.Text='Choose entry and hops, then '+[string]$selected[0].name+' as exit.';return}
+    $names=@();foreach($node in @($button.Tag.nodes)){
+        $match=@($Store.profiles|Where-Object{[string]$_.id-ceq[string]$node.id})
+        $names+=if($match.Count-eq1){[string]$match[0].name}else{'Missing: '+[string]$node.id}
+    }
+    $label.Text=($names-join' → ')+' · Local'
+}
+function ShowUnifiedOrderedNodes {
+    try{
+        if(UnifiedAsyncBusy){throw 'Wait for the current connection action to finish.'}
+        Assert-RouterVPNMutationIdle 'editing the ordered node path'
+        $store=Api '/api/profiles' -Timeout 5;$id=[string]$RouterCombo.SelectedValue
+        if([string]$store.selected_id-cne$id){throw 'Refresh the selected exit before editing the path.'}
+        $selected=@($store.profiles|Where-Object{[string]$_.id-ceq$id})
+        if($selected.Count-ne1-or[string](Get-RouterVPNOrderedValue $selected[0] 'node_kind' '')-cnotin@('','router-vpn')){throw 'Select a linked Router VPN exit first.'}
+        $draft=(Control 'UnifiedNodeChainButton').Tag
+        $initial=@();if($null-ne$draft-and[string]$draft.control_id-ceq$id-and@($draft.nodes).Count){$initial=@(Copy-RouterVPNOrderedNodes $draft.nodes $id)}
+        [xml]$x=@"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Ordered node path" Width="640" Height="570" MinWidth="510" MinHeight="440" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><StackPanel><TextBlock Text="Entry → hops → selected exit" FontSize="22" FontWeight="Bold"/><TextBlock Text="Add up to seven WireGuard nodes in forwarding order. The selected exit uses Shadowsocks. Each node keeps its own saved credentials and policy." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,7,0,12"/></StackPanel><Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ComboBox Name="Available" DisplayMemberPath="name" SelectedValuePath="id"/><Button Name="Add" Grid.Column="1" Content="Add node" Padding="12,6" Margin="8,0,0,0"/></Grid><ListBox Name="Order" Grid.Row="2" DisplayMemberPath="display" Margin="0,12"/><WrapPanel Grid.Row="3"><Button Name="Up" Content="Move up" Padding="12,6"/><Button Name="Down" Content="Move down" Padding="12,6" Margin="8,0"/><Button Name="Remove" Content="Remove" Padding="12,6"/></WrapPanel><StackPanel Grid.Row="4" Margin="0,12"><TextBlock Name="Final" FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock Name="Status" Foreground="#FFBD8D" TextWrapping="Wrap" Margin="0,7,0,0"/></StackPanel><StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="Cancel" Content="Cancel" Padding="12,7" Margin="4"/><Button Name="Apply" Content="Use this path" Padding="12,7" Margin="4"/></StackPanel></Grid></Window>
+"@
+        $dialog=[Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x));$dialog.Owner=$Window
+        $rows=New-Object 'Collections.Generic.List[object]';foreach($node in $initial|Select-Object -SkipLast 1){[void]$rows.Add([pscustomobject]@{id=$node.id;mode=$node.mode})}
+        $available=$dialog.FindName('Available');$list=$dialog.FindName('Order');$status=$dialog.FindName('Status')
+        $dialog.FindName('Final').Text='Final exit: '+[string]$selected[0].name+' · Shadowsocks · Local'
+        $refresh={
+            $index=$list.SelectedIndex;$labels=@();for($i=0;$i-lt$rows.Count;$i++){$node=$rows[$i];$match=@($store.profiles|Where-Object{[string]$_.id-ceq$node.id});$name=if($match.Count-eq1){[string]$match[0].name}else{'Missing: '+$node.id};$labels+=[pscustomobject]@{id=$node.id;display=('{0}. {1} · WireGuard' -f ($i+1),$name)}}
+            $list.ItemsSource=$labels;$list.SelectedIndex=[Math]::Min($index,$rows.Count-1)
+            $used=@($rows|ForEach-Object{[string]$_.id})
+            $available.ItemsSource=@($store.profiles|Where-Object{[string]$_.id-cne$id-and[string](Get-RouterVPNOrderedValue $_ 'node_kind' '')-cin@('','router-vpn')-and$used-cnotcontains[string]$_.id});$available.SelectedIndex=0
+            $dialog.FindName('Add').IsEnabled=$rows.Count-lt7-and$available.Items.Count-gt0
+            $dialog.FindName('Up').IsEnabled=$list.SelectedIndex-gt0;$dialog.FindName('Down').IsEnabled=$list.SelectedIndex-ge0-and$list.SelectedIndex-lt$rows.Count-1;$dialog.FindName('Remove').IsEnabled=$list.SelectedIndex-ge0
+        }
+        $dialog.FindName('Add').Add_Click({if($rows.Count-lt7-and$null-ne$available.SelectedItem){[void]$rows.Add([pscustomobject]@{id=[string]$available.SelectedValue;mode='wg'});&$refresh;$list.SelectedIndex=$rows.Count-1}})
+        $dialog.FindName('Remove').Add_Click({if($list.SelectedIndex-ge0){$rows.RemoveAt($list.SelectedIndex);&$refresh}})
+        $move={param([int]$step)$from=$list.SelectedIndex;$to=$from+$step;if($from-ge0-and$to-ge0-and$to-lt$rows.Count){$item=$rows[$from];$rows.RemoveAt($from);$rows.Insert($to,$item);&$refresh;$list.SelectedIndex=$to}}
+        $dialog.FindName('Up').Add_Click({&$move -1});$dialog.FindName('Down').Add_Click({&$move 1})
+        $list.Add_SelectionChanged({$dialog.FindName('Up').IsEnabled=$list.SelectedIndex-gt0;$dialog.FindName('Down').IsEnabled=$list.SelectedIndex-ge0-and$list.SelectedIndex-lt$rows.Count-1;$dialog.FindName('Remove').IsEnabled=$list.SelectedIndex-ge0})
+        $dialog.FindName('Cancel').Add_Click({$dialog.Close()})
+        $dialog.FindName('Apply').Add_Click({try{
+            Assert-RouterVPNMutationIdle 'applying the ordered node path'
+            $current=Api '/api/profiles' -Timeout 5
+            if([string]$RouterCombo.SelectedValue-cne$id){throw 'The selected exit changed while the editor was open.'}
+            $nodes=@($rows.ToArray())+@([pscustomobject]@{id=$id;mode='shadowsocks'})
+            $captured=[pscustomobject]@{control_id=$id;nodes=$nodes}
+            $validated=New-RouterVPNOrderedConnectPayload $captured $current
+            $captured.nodes=@($validated.nodes)
+            (Control 'UnifiedNodeChainButton').Tag=$captured;(Control 'UnifiedOrdered').IsChecked=$true;(Control 'UnifiedMultihop').IsChecked=$true
+            RefreshUnifiedOrderedSelection $current;RefreshUnifiedOrderedControls;$dialog.Close()
+        }catch{$status.Text=$_.Exception.Message}})
+        [void](CancelUnifiedRefreshAsync);&$refresh;[void]$dialog.ShowDialog()
+    }catch{Log ('Ordered path: '+$_.Exception.Message)}
+}
 function ShowUnifiedCustomBuilder{
  try{$Raw=@(Api '/api/logical-modes' -Timeout 12);$Layers=New-Object 'System.Collections.Generic.HashSet[string]';foreach($M in $Raw){foreach($V in @($M.variants.PSObject.Properties)){if($V.Value -and $V.Value.mode){foreach($L in @($V.Value.mode.layers)){if($L){[void]$Layers.Add([string]$L)}}}}};$LayerList=@($Layers|Sort-Object);if(-not $LayerList){throw 'No mode layers are available.'}
  [xml]$X=@"
@@ -898,6 +993,8 @@ $DnsButton.Add_Click({if(UnifiedAsyncBusy){Log 'DNS Retest refused: another Rout
     $handlers = @'
 (Control 'UnifiedConnectButton').Add_Click({UnifiedConnect})
 (Control 'UnifiedCandidatesButton').Add_Click({ShowUnifiedCandidates})
+(Control 'UnifiedNodeChainButton').Add_Click({ShowUnifiedOrderedNodes})
+(Control 'UnifiedOrdered').Add_Click({try{Assert-RouterVPNMutationIdle 'choosing ordered multihop';if((Control 'UnifiedOrdered').IsChecked){(Control 'UnifiedMultihop').IsChecked=$true;ShowUnifiedOrderedNodes}}catch{Log $_.Exception.Message};RefreshProduct})
 $MultihopEntryCombo.Add_DropDownOpened({BeginUnifiedCandidateEntryChoice})
 $MultihopEntryCombo.Add_SelectionChanged({MarkUnifiedCandidateEntryChoice})
 $MultihopEntryCombo.Add_DropDownClosed({CommitUnifiedCandidateEntryChoice})

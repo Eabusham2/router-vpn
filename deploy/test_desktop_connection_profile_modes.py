@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -48,9 +49,14 @@ def run(command, *, negative=False):
 def windows(shell):
     command = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                str(ROOT / "client/test-windows-connection-profile-modes.ps1")]
-    for mutation in ("shipping", "capture-two-modes", "load-fallback", "connect-fallback", "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback", "startup-deadline"):
+    for mutation in ("shipping", "capture-two-modes", "load-fallback", "connect-fallback", "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback", "startup-deadline", "ordered-drop-middle", "ordered-final-owner", "ordered-capability"):
         run(command + ["-Mutation", mutation], negative=mutation != "shipping")
-    print("WPF exit/entry capture, load/Connect defaults and startup deadline negatives: 7 rejected")
+    print("WPF pair and ordered capture, load/Connect, capability and startup deadline negatives: 10 rejected")
+    editor = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+              str(ROOT / "client/test-windows-ordered-editor.ps1")]
+    if os.name == "nt":
+        editor.append("-WPF")
+    run(editor)
 
 
 SWIFT_BOUNDARIES = r'''

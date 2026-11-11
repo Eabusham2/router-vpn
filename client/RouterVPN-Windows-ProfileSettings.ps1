@@ -260,11 +260,80 @@ function global:Set-RouterVPNLoadedModeSnapshot {
     }
 }
 
+function global:Get-RouterVPNOrderedValue {
+    param($Value,[string]$Name,$Default=$null)
+    if($null-eq$Value){return $Default}
+    if($Value-is[Collections.IDictionary]){if($Value.Contains($Name)){return $Value[$Name]};return $Default}
+    $property=$Value.PSObject.Properties[$Name];if($null-ne$property){return $property.Value};return $Default
+}
+
+function global:Copy-RouterVPNOrderedNodes {
+    param($Nodes,[string]$ControlID)
+    if($Nodes-isnot[Collections.IList]-or$Nodes.Count-lt2-or$Nodes.Count-gt8){throw 'Choose between two and eight ordered nodes.'}
+    $seen=New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    $copy=New-Object 'Collections.Generic.List[object]'
+    for($i=0;$i-lt$Nodes.Count;$i++){
+        $id=Get-RouterVPNOrderedValue $Nodes[$i] 'id';$mode=Get-RouterVPNOrderedValue $Nodes[$i] 'mode'
+        if($id-isnot[string]-or$id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or-not$seen.Add($id)){throw 'Ordered nodes require distinct linked node IDs.'}
+        if($mode-isnot[string]-or($i-lt$Nodes.Count-1-and$mode-cne'wg')-or($i-eq$Nodes.Count-1-and$mode-cne'shadowsocks')){throw 'This ordered path requires WireGuard entry and hops, followed by a Shadowsocks exit.'}
+        [void]$copy.Add([pscustomobject]@{id=$id;mode=$mode})
+    }
+    if([string]::IsNullOrEmpty($ControlID)-or$copy[$copy.Count-1].id-cne$ControlID){throw 'The final ordered node must be the selected exit node.'}
+    return $copy.ToArray()
+}
+
+function global:New-RouterVPNOrderedConnectPayload {
+    param($Draft,$Store)
+    $control=[string](Get-RouterVPNOrderedValue $Draft 'control_id')
+    if($control-cne[string](Get-RouterVPNOrderedValue $Store 'selected_id')){throw 'The selected exit changed. Reopen the ordered path editor.'}
+    $nodes=@(Copy-RouterVPNOrderedNodes (Get-RouterVPNOrderedValue $Draft 'nodes') $control)
+    $profiles=@(Get-RouterVPNOrderedValue $Store 'profiles' @())
+    foreach($node in $nodes){
+        $matches=@($profiles|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$node.id})
+        if($matches.Count-ne1-or[string](Get-RouterVPNOrderedValue $matches[0] 'node_kind' '')-cnotin@('','router-vpn')){throw 'An ordered node is missing or is no longer a linked Router VPN node.'}
+    }
+    # Only references cross this UI boundary. Every private source is captured
+    # independently by the original native controller before it owns a tunnel.
+    return @{nodes=$nodes;execution='local'}
+}
+
+function global:Get-RouterVPNOrderedConnectionSnapshot {
+    param($Owner)
+    if($null-eq$Owner){return $null}
+    $toggle=$Owner.FindName('UnifiedOrdered');$multi=$Owner.FindName('UnifiedMultihop')
+    if($null-eq$toggle-or-not$toggle.IsChecked-or$null-eq$multi-or-not$multi.IsChecked){return $null}
+    $button=$Owner.FindName('UnifiedNodeChainButton');$selected=$Owner.FindName('UnifiedNodeCombo')
+    if($null-eq$button-or$null-eq$button.Tag-or$null-eq$selected){throw 'Edit the complete ordered path before saving or connecting.'}
+    if([string](Get-RouterVPNOrderedValue $button.Tag 'control_id')-cne[string]$selected.SelectedValue){throw 'The selected exit changed. Reopen the ordered path editor.'}
+    $nodes=@(Copy-RouterVPNOrderedNodes (Get-RouterVPNOrderedValue $button.Tag 'nodes') ([string]$selected.SelectedValue))
+    return @{multihop_enabled=$true;multihop_nodes=$nodes;multihop_execution='local';multihop_entry_id='';multihop_exit_id='';multihop_entry_mode='';multihop_exit_mode=''}
+}
+
+function global:Set-RouterVPNLoadedOrderedSnapshot {
+    param($Owner,$Loaded)
+    $raw=Get-RouterVPNOrderedValue $Loaded 'multihop_nodes'
+    $hasNodes=$null-ne$raw-and@($raw).Count-gt0
+    $toggle=$Owner.FindName('UnifiedOrdered');$button=$Owner.FindName('UnifiedNodeChainButton')
+    if($hasNodes){
+        $id=[string](Get-RouterVPNOrderedValue $Loaded 'selected_node_id')
+        $nodes=@(Copy-RouterVPNOrderedNodes $raw $id)
+        if(-not[bool](Get-RouterVPNOrderedValue $Loaded 'multihop_enabled' $false)-or[string](Get-RouterVPNOrderedValue $Loaded 'multihop_execution')-cne'local'){throw 'The loaded ordered path has an invalid execution choice.'}
+        foreach($key in @('multihop_entry_id','multihop_exit_id','multihop_entry_mode','multihop_exit_mode')){if([string](Get-RouterVPNOrderedValue $Loaded $key)){throw 'The loaded profile mixes an ordered path with another entry or exit.'}}
+        if($null-eq$toggle-or$null-eq$button){throw 'This window cannot display the complete loaded ordered path.'}
+        $button.Tag=[pscustomobject]@{control_id=$id;nodes=$nodes}
+        $toggle.IsChecked=$true
+    }else{
+        if($null-ne$button){$button.Tag=$null};if($null-ne$toggle){$toggle.IsChecked=$false}
+    }
+}
+
 function global:Get-RouterVPNVisibleConnectionSnapshot {
     param([System.Windows.Window]$Owner,[hashtable]$Provided)
     if($null -ne $Provided){return $Provided}
     $result=@{multihop_enabled=$false;multihop_entry_id='';multihop_exit_id='';multihop_exit_mode='';multihop_execution='';multihop_entry_mode=''}
     if($null -eq $Owner){return $result}
+    $ordered=Get-RouterVPNOrderedConnectionSnapshot $Owner
+    if($null-ne$ordered){return $ordered}
     $entryChoiceValid=$false
     try{
         $toggle=$Owner.FindName('UnifiedMultihop');$entry=$Owner.FindName('UnifiedEntryCombo');$entryMode=$Owner.FindName('UnifiedEntryMode');$exit=$Owner.FindName('UnifiedExitCombo');$exitMode=$Owner.FindName('UnifiedExitMode');$execution=$Owner.FindName('UnifiedExecution')
@@ -285,6 +354,7 @@ function global:Get-RouterVPNVisibleConnectionSnapshot {
 function global:Apply-RouterVPNLoadedConnectionSnapshot {
     param([System.Windows.Window]$Owner,$Loaded)
     if($null -eq $Owner){return}
+    Set-RouterVPNLoadedOrderedSnapshot $Owner $Loaded
     try{
         $toggle=$Owner.FindName('UnifiedMultihop');$entry=$Owner.FindName('UnifiedEntryCombo');$entryMode=$Owner.FindName('UnifiedEntryMode');$exit=$Owner.FindName('UnifiedExitCombo');$exitMode=$Owner.FindName('UnifiedExitMode');$execution=$Owner.FindName('UnifiedExecution')
         if($null-ne$execution){$wanted=[string]$Loaded.multihop_execution;if($wanted-notin@('local','server','auto')){$wanted='local'};foreach($item in $execution.Items){if([string]$item.Tag-eq$wanted){$execution.SelectedItem=$item;break}}}
@@ -421,6 +491,11 @@ function global:Show-RouterVPNProfileSettingsDialog {
         $snap=Get-RouterVPNCurrentModeSnapshot
         $visible=Get-RouterVPNVisibleConnectionSnapshot -Owner $Owner -Provided $ConnectionSnapshot
         $body=@{name=$Name;mode=[string]$snap.mode;custom_layers=@($snap.custom_layers);multihop_enabled=[bool]$visible.multihop_enabled;multihop_entry_id=[string]$visible.multihop_entry_id;multihop_exit_id=[string]$visible.multihop_exit_id;multihop_exit_mode=[string]$visible.multihop_exit_mode;multihop_execution=[string]$visible.multihop_execution;multihop_entry_mode=[string]$visible.multihop_entry_mode}
+        if($visible.ContainsKey('multihop_nodes')){
+            $body.multihop_nodes=@(Copy-RouterVPNOrderedNodes $visible.multihop_nodes ([string]$Owner.FindName('UnifiedNodeCombo').SelectedValue))
+            $body.mode='shadowsocks';$body.custom_layers=@()
+            foreach($key in @('multihop_entry_id','multihop_exit_id','multihop_entry_mode','multihop_exit_mode')){[void]$body.Remove($key)}
+        }
         if($ID){$body.id=$ID}
         return $body
     }

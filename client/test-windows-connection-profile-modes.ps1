@@ -1,6 +1,6 @@
 param(
     [string]$Root = (Split-Path $PSScriptRoot -Parent),
-    [ValidateSet('shipping','capture-two-modes','load-fallback','connect-fallback','entry-capture-fallback','entry-load-fallback','entry-connect-fallback','startup-deadline')][string]$Mutation = 'shipping'
+    [ValidateSet('shipping','capture-two-modes','load-fallback','connect-fallback','entry-capture-fallback','entry-load-fallback','entry-connect-fallback','startup-deadline','ordered-drop-middle','ordered-final-owner','ordered-capability')][string]$Mutation = 'shipping'
 )
 $ErrorActionPreference='Stop'
 # The real launcher composes these sources before opening WPF. Exercise that
@@ -41,7 +41,7 @@ try{
     [void][ScriptBlock]::Create($ProductSource)
 
     $Helpers=''
-    foreach($Name in @('global:Get-RouterVPNCurrentModeSnapshot','global:Set-RouterVPNLoadedModeSnapshot','global:Get-RouterVPNVisibleConnectionSnapshot','global:Apply-RouterVPNLoadedConnectionSnapshot')){
+    foreach($Name in @('global:Get-RouterVPNCurrentModeSnapshot','global:Set-RouterVPNLoadedModeSnapshot','global:Get-RouterVPNVisibleConnectionSnapshot','global:Apply-RouterVPNLoadedConnectionSnapshot','global:Get-RouterVPNOrderedValue','global:Copy-RouterVPNOrderedNodes','global:New-RouterVPNOrderedConnectPayload','global:Get-RouterVPNOrderedConnectionSnapshot','global:Set-RouterVPNLoadedOrderedSnapshot')){
         # Type and storage boundaries only; all selection and payload logic is
         # taken unchanged from the functions loaded by the shipping launcher.
         $Helpers+=(ShippingFunction $ProfileSettingsSource $Name).Replace('[System.Windows.Window]','[object]').Replace('$PSScriptRoot','$FixtureStateRoot')+"`n"
@@ -56,6 +56,9 @@ try{
         'entry-load-fallback'{$Helpers=ReplaceOnce $Helpers '$entryMode.SelectedIndex=-1' '$entryMode.SelectedIndex=0'}
         'entry-connect-fallback'{$Connect=ReplaceOnce $Connect 'entry_mode=(MultihopEntryModeChoice)' 'entry_mode="wg"'}
         'startup-deadline'{$Connect=ReplaceOnce $Connect '$Timeout=UnifiedMultihopStartupTimeout $Body' '$Timeout=200'}
+        'ordered-drop-middle'{$Helpers=ReplaceOnce $Helpers 'return $copy.ToArray()' 'return @($copy[0],$copy[$copy.Count-1])'}
+        'ordered-final-owner'{$Helpers=ReplaceOnce $Helpers '$copy[$copy.Count-1].id-cne$ControlID' '$false'}
+        'ordered-capability'{$Connect=ReplaceOnce $Connect '$Supported-isnot[bool]-or-not$Supported' '$false'}
     }
     . ([ScriptBlock]::Create($Helpers))
     . ([ScriptBlock]::Create($Choice))
@@ -158,6 +161,9 @@ public sealed class ProfileModeOwner {
     . ([ScriptBlock]::Create($Connect))
     . ([ScriptBlock]::Create((ShippingFunction $ProductSource 'UnifiedSelectedProfile')))
     . ([ScriptBlock]::Create((ShippingFunction $ProductSource 'BaseChoice')))
+    . ([ScriptBlock]::Create((ShippingFunction $ProductSource 'UnifiedMultihopValue')))
+    . ([ScriptBlock]::Create((ShippingFunction $ProductSource 'GetUnifiedStopRetryToken')))
+    $script:UnifiedStopRetryToken='';$script:UnifiedAsyncOwnedStopRetry=$false;$script:UnifiedProtectionPending=$false
     $MultihopEntryCombo=$entry;$MultihopExitCombo=$exit;$BaseCombo=New-Object ProfileModeCombo
     $RouterCombo=[pscustomobject]@{SelectedValue='private-node';Tag=[pscustomobject]@{selected_id='private-node';profiles=@([pscustomobject]@{id='private-node';node_kind='router-vpn'})}}
     $BaseCombo.Items.Add((New-Object ProfileModeItem 'auto'));$BaseCombo.SelectedIndex=0
@@ -165,6 +171,8 @@ public sealed class ProfileModeOwner {
     function UnifiedAsyncBusy{return $false}
     function Api($Path,$Method,$Body,$Timeout){
         if($Path-ceq'/api/status'){return [pscustomobject]@{connected=$false;phase='off'}}
+        if($Path-ceq'/api/profiles'){return $RouterCombo.Tag}
+        if($Path-ceq'/api/multihop/status'){return $script:OrderedCapability}
         throw 'Unexpected Connect boundary'
     }
     function Log($Message){}
@@ -231,6 +239,68 @@ public sealed class ProfileModeOwner {
     $script:Busy=$false;$toggle.IsChecked=$false
     $Disabled=Get-RouterVPNVisibleConnectionSnapshot -Owner $Owner
     Check (-not$Disabled.multihop_enabled-and$Disabled.multihop_entry_id-ceq''-and$Disabled.multihop_exit_id-ceq''-and$Disabled.multihop_exit_mode-ceq''-and$Disabled.multihop_execution-ceq'') 'Disabled multihop retained another graph'
+
+    # Ordered paths execute the same actual Add/Load/Update/Connect callbacks.
+    # Widget and HTTP boundaries are doubled; no private node source is copied.
+    $Window=$Owner;$ordered=[pscustomobject]@{IsChecked=$true};$chainButton=[pscustomobject]@{Tag=$null}
+    $Owner.Controls['UnifiedOrdered']=$ordered;$Owner.Controls['UnifiedNodeChainButton']=$chainButton;$Owner.Controls['UnifiedNodeCombo']=$RouterCombo
+    $script:OrderedCapability=[pscustomobject]@{ordered_nodes_supported=$true}
+    foreach($nodeCount in @(2,3,4,8)){
+        $nodes=@();$profiles=@()
+        for($i=0;$i-lt$nodeCount;$i++){
+            $id='ordered-'+$i;$mode=if($i-eq$nodeCount-1){'shadowsocks'}else{'wg'}
+            $nodes+=[pscustomobject]@{id=$id;mode=$mode;private_key='never-copy-member-secret'}
+            $profiles+=[pscustomobject]@{id=$id;name=('Node '+$i);node_kind='router-vpn';api_token='never-copy-token'}
+        }
+        $control=$nodes[-1].id;$RouterCombo.SelectedValue=$control;$RouterCombo.Tag=[pscustomobject]@{selected_id=$control;profiles=$profiles}
+        $toggle.IsChecked=$true;$ordered.IsChecked=$true;$chainButton.Tag=[pscustomobject]@{control_id=$control;nodes=$nodes}
+        $MultihopEntryModeCombo.SelectedIndex=-1;$MultihopExitModeCombo.SelectedIndex=-1
+        foreach($callback in @($AddCallback,$UpdateCallback)){
+            $before=$script:Requests.Count;&$callback
+            Check ($script:Requests.Count-eq$before+1) ('Ordered profile write failed: '+$profileStatus.Text)
+            $body=$script:Requests[-1].Body
+            Check ($body.mode-ceq'shadowsocks'-and@($body.custom_layers).Count-eq0-and$body.multihop_execution-ceq'local') 'Ordered profile borrowed an unrelated logical mode or execution'
+            Check (@($body.multihop_nodes).Count-eq$nodeCount-and(@($body.multihop_nodes.id)-join',')-ceq(@($nodes.id)-join',')) 'Ordered profile truncated or reordered a middle node'
+            foreach($field in @('multihop_entry_id','multihop_exit_id','multihop_entry_mode','multihop_exit_mode')){Check ($null-eq$body.PSObject.Properties[$field]) 'Ordered profile mixed legacy pair fields'}
+            Check (($body|ConvertTo-Json -Depth 8)-notmatch'never-copy') 'Ordered profile copied private sources'
+        }
+        $script:Loaded=$script:Requests[-1].Body
+        $script:Loaded|Add-Member -NotePropertyName selected_node_id -NotePropertyValue $control
+        $script:Loaded|Add-Member -NotePropertyName profile -NotePropertyValue ([pscustomobject]@{name='Ordered saved profile'})
+        $chainButton.Tag=$null;$ordered.IsChecked=$false;$toggle.IsChecked=$false;$script:ConnectBody=$null
+        &$LoadCallback
+        Check ($null-eq$script:ConnectBody-and$ordered.IsChecked-and$toggle.IsChecked) 'Ordered Load connected or lost its enabled choice'
+        Check ($chainButton.Tag.control_id-ceq$control-and@($chainButton.Tag.nodes).Count-eq$nodeCount-and(@($chainButton.Tag.nodes.id)-join',')-ceq(@($nodes.id)-join',')) 'Ordered Load lost a middle or selected final node'
+        UnifiedConnect;$body=$script:ConnectBody
+        Check ($null-ne$body-and(@($body.PSObject.Properties.Name|Sort-Object)-join',')-ceq'execution,nodes') 'Ordered Connect sent legacy pair or private fields'
+        Check ($body.execution-ceq'local'-and(@($body.nodes.id)-join',')-ceq(@($nodes.id)-join',')-and$body.nodes[-1].mode-ceq'shadowsocks') 'Ordered Connect changed its complete path'
+        $copy=@(Copy-RouterVPNOrderedNodes $nodes $control);$copy[0].id='replacement'
+        Check ($nodes[0].id-ceq'ordered-0') 'Ordered copy retained mutable member references'
+        foreach($capability in @([pscustomobject]@{},[pscustomobject]@{ordered_nodes_supported=$false},[pscustomobject]@{ordered_nodes_supported='true'})){
+            $script:OrderedCapability=$capability;$script:ConnectBody=$null;UnifiedConnect
+            Check ($null-eq$script:ConnectBody) 'An older controller received ordered nodes as a legacy pair'
+        }
+        $script:OrderedCapability=[pscustomobject]@{ordered_nodes_supported=$true}
+        foreach($fault in @('missing-middle','duplicate-middle','external-middle','changed-selected')){
+            $saved=$RouterCombo.Tag
+            $changed=$saved|ConvertTo-Json -Depth 8|ConvertFrom-Json
+            switch($fault){
+                'missing-middle'{$changed.profiles=@($changed.profiles|Where-Object{$_.id-cne$nodes[0].id})}
+                'duplicate-middle'{$changed.profiles+=,$changed.profiles[0]}
+                'external-middle'{$changed.profiles[0].node_kind='external'}
+                'changed-selected'{$changed.selected_id='replacement'}
+            }
+            $RouterCombo.Tag=$changed;$script:ConnectBody=$null;UnifiedConnect
+            Check ($null-eq$script:ConnectBody) ('Changed ordered selection reached Connect: '+$fault)
+            $RouterCombo.Tag=$saved
+        }
+    }
+    foreach($bad in @(@(),@([pscustomobject]@{id='final';mode='shadowsocks'}),@($nodes+$nodes[0]),@([pscustomobject]@{id='same';mode='wg'},[pscustomobject]@{id='same';mode='shadowsocks'}),@([pscustomobject]@{id='wrong final';mode='wg'},[pscustomobject]@{id='final';mode='shadowsocks'}),@([pscustomobject]@{id='entry';mode='WG'},[pscustomobject]@{id='final';mode='shadowsocks'}),@([pscustomobject]@{id='entry';mode='wg'},[pscustomobject]@{id='another';mode='shadowsocks'}))){
+        $rejected=$false;try{[void](Copy-RouterVPNOrderedNodes $bad 'final')}catch{$rejected=$true}
+        Check $rejected 'Invalid or foreign-final ordered selection was accepted'
+    }
+    $toggle.IsChecked=$false
+    Check (-not(Get-RouterVPNVisibleConnectionSnapshot -Owner $Owner).ContainsKey('multihop_nodes')) 'Disabled ordered path leaked into a direct profile'
     Write-Output ("Actual WPF profile Add/Load/Update and main Connect callbacks: $script:Count checks PASS")
 }finally{
     if(Test-Path -LiteralPath $FixtureStateRoot){Remove-Item -LiteralPath $FixtureStateRoot -Recurse -Force}
