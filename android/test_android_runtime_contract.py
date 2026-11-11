@@ -331,7 +331,7 @@ for executable_contract in (
     "test_android_custom_preset_commit.py",
     "test_android_product_dialogs.py",
     "test_android_current_telemetry.py",
-    "test_android_node_usage.py",
+    "test_android_node_usage.py", "test_android_ordered_presentation.py",
     "test_android_router_import_ui.py",
     "test_android_updates.py",
     "test_android_via_entry_measurement.py",

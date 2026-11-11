@@ -147,6 +147,8 @@ final class AndroidHomeSummary {
                 AtomicReference<String> rawFailure=new AtomicReference<>("");
                 runtime.wireGuard.disconnectManaged((state,message,error)->{if(error==null&&state==com.wireguard.android.backend.Tunnel.State.DOWN)wgDown.set(true);else rawFailure.compareAndSet("","WireGuard: "+(error==null?message:safe(error)));rawStops.countDown();});
                 runtime.amneziaWG.disconnectManaged((state,message,error)->{if(error==null&&state==org.amnezia.awg.backend.Tunnel.State.DOWN)awgDown.set(true);else rawFailure.compareAndSet("","AmneziaWG: "+(error==null?message:safe(error)));rawStops.countDown();});
+                boolean orderedStopped=false;
+                try{orderedStopped=runtime.nodeChain.stopAndProve();}catch(Throwable ignored){}
                 try{runtime.multihop.failClosedForRevalidation();}catch(Throwable ignored){}
                 try{runtime.standardExit.failClosedForRevalidation();}catch(Throwable ignored){}
                 try{if(!terminalEngineState(runtime.singBox.getState()))runtime.singBox.stop();}catch(Throwable ignored){}
@@ -156,9 +158,10 @@ final class AndroidHomeSummary {
                 if(!rawFailure.get().isEmpty())throw new IllegalStateException("Raw tunnel teardown failed: "+rawFailure.get());
                 if(!wgDown.get()||runtime.wireGuard.getState()!=com.wireguard.android.backend.Tunnel.State.DOWN)throw new IllegalStateException("WireGuard did not prove DOWN during Emergency Disconnect.");
                 if(!awgDown.get()||runtime.amneziaWG.getState()!=org.amnezia.awg.backend.Tunnel.State.DOWN)throw new IllegalStateException("AmneziaWG did not prove DOWN during Emergency Disconnect.");
+                if(!orderedStopped)throw new IllegalStateException("The original ordered native path still owns unfinished cleanup after Emergency Disconnect.");
                 long deadline=System.currentTimeMillis()+5000L;
                 while(System.currentTimeMillis()<deadline){
-                    boolean clean=ownedVpnNetwork(activity)==null&&terminalEngineState(runtime.singBox.getState())&&terminalEngineState(runtime.xray.getState())&&!runtime.multihop.isActiveOrTransitioning()&&!runtime.standardExit.isActiveOrTransitioning();
+                    boolean clean=ownedVpnNetwork(activity)==null&&terminalEngineState(runtime.singBox.getState())&&terminalEngineState(runtime.xray.getState())&&!runtime.multihop.isActiveOrTransitioning()&&!runtime.standardExit.isActiveOrTransitioning()&&!runtime.nodeChain.isActiveOrTransitioning();
                     if(clean)break;
                     Thread.sleep(150L);
                 }
@@ -167,6 +170,7 @@ final class AndroidHomeSummary {
                 if(!terminalEngineState(runtime.xray.getState()))throw new IllegalStateException("Xray did not reach DOWN/FAILED/REVOKED during Emergency Disconnect.");
                 if(runtime.multihop.isActiveOrTransitioning())throw new IllegalStateException("Multihop runtime still owns an active/transitioning graph after Emergency Disconnect.");
                 if(runtime.standardExit.isActiveOrTransitioning())throw new IllegalStateException("Custom-exit runtime still owns an active/transitioning graph after Emergency Disconnect.");
+                if(runtime.nodeChain.isActiveOrTransitioning())throw new IllegalStateException("Ordered native runtime still owns an active/transitioning graph after Emergency Disconnect.");
                 AndroidHomeStateStore.disconnected(activity);
                 callback.done("Emergency Disconnect completed; all Router VPN engines proved terminal and no Router VPN-owned VPN network remains.", null);
             } catch(Throwable error) { AndroidHomeStateStore.failed(activity, safe(error)); callback.done("Emergency Disconnect incomplete: "+safe(error), error); }

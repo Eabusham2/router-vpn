@@ -275,6 +275,19 @@ public final class NodeChainCaptureHarness {
   reject(()->draft.save(),"ordered editor accepted sources beyond the final aggregate budget");
   check(AndroidPrivateFileStore.writes==before,"ordered final references exceeded their aggregate bound after private publication");
  }
+ static void editorHandlers(Path root)throws Exception{
+  Fixture f=new Fixture(root,"3/");State before=new State(f);OrderedProductSurface ui=new OrderedProductSurface(f);
+  ui.open();ui.choose(0);check(ui.dialog.title.equals("Ordered Router path")&&ui.dialog.labels.length==4&&ui.dialog.detail.contains("two to eight"),"shipping ordered editor omitted original nodes or its supported transport boundary");
+  ui.choose(0);ui.choose(0);check(ui.dialog.labels[0].toString().contains(profile(f.original.get(1)).optString("name",profile(f.original.get(1)).getString("id"))),"shipping ordered editor did not move the original first node later");
+  ui.choose(0);ui.choose(1);check(ui.dialog.labels.length==3,"shipping ordered editor did not remove one selected prefix");
+  ui.choose(2);check(ui.dialog.title.equals("Add intermediate Router node"),"shipping ordered editor did not expose repeated addition");ui.choose(0);
+  check(ui.dialog.labels.length==4,"shipping ordered editor failed to add another original node before final");ui.cancel();before.same(f,"actual ordered editor cancellation");
+  ui.open();ui.choose(0);ui.choose(0);ui.choose(1);ui.save();
+  check(ui.refreshes==1&&ui.statusView.text.contains("Press Connect")&&ui.message.isEmpty(),"shipping ordered Save did not publish a reviewable path without connection");
+  var saved=f.profiles.currentOrderedPath();check(saved.members.size()==2&&saved.control.id.equals(f.control().id)&&saved.members.get(0).id.equals(f.members.get(1).id),"shipping ordered Save substituted its original final or prefix");
+  OrderedProductSurface stale=new OrderedProductSurface(f);stale.open();stale.choose(0);JSONObject changed=f.bundle(1);profile(changed).put("api_token","changed while actual editor open");f.replace(1,changed);f.nodes.select(f.control().id);State replacement=new State(f);stale.save();
+  check(stale.refreshes==0&&!stale.message.isEmpty(),"shipping ordered editor published a replaced source");replacement.same(f,"actual editor refused replaced source");
+ }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";
   if(family.equals("source")){sourceControls(root);return;}if(family.equals("generation")){generationControls(root);return;}
@@ -285,9 +298,10 @@ public final class NodeChainCaptureHarness {
   if(family.equals("editor-native")){editorNative(root);return;}
   if(family.equals("editor-atomic")){editorAtomicity(root);return;}
   if(family.equals("editor-budget")){editorFinalBudget(root);return;}
+  if(family.equals("editor-ui")){editorHandlers(root);return;}
   for(String key:List.of("2/","3/","4/","8/","3/aes-256-gcm","4/aes-256-gcm+xor-whitening","4/fixed-middle"))roundtrip(root,key);
   sourceControls(root);generationControls(root);validationControls(root);compilationRace(root);captureAtomicity(root);
-  editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);editorFinalBudget(root);
+  editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);editorFinalBudget(root);editorHandlers(root);
   System.out.println("Android ordered sources: "+checks+" checks; actual Go compilation, exact all-member saved capture and rollback passed");
  }
 }
@@ -299,6 +313,25 @@ def prepare_sources(src, app, java):
     shutil.copyfile(java / "AndroidOrderedPathSelection.java", app / "AndroidOrderedPathSelection.java")
     shutil.copyfile(java / "AndroidConnectionSelection.java", app / "AndroidConnectionSelection.java")
     (app / "NodeChainCaptureHarness.java").write_text(HARNESS)
+    from test_android_connection_profiles import method
+    handlers="\n".join(method("ProductActivity.java", signature) for signature in ("private void configureMultihop(","private void showOrderedEditor(","private void chooseOrderedNode(","private void editOrderedPrefix("))
+    surface=r'''package com.eabusham.routervpn;
+import android.content.*;import java.util.*;
+final class OrderedProductSurface extends Context {
+ final NodeChainCaptureHarness.Fixture fixture;final AndroidNodeStore nodeStore;final AndroidStandardExitStore exitStore;
+ OrderedProductSurface(NodeChainCaptureHarness.Fixture f){super(f.context.getFilesDir());fixture=f;nodeStore=f.nodes;exitStore=new AndroidStandardExitStore(f.context);}
+ @Override public MemoryPreferences getSharedPreferences(String name,int mode){return fixture.context.getSharedPreferences(name,mode);}
+ static final class Label{String text="";void setText(String value){text=value;}}final Label statusView=new Label();String message="";int refreshes;
+ boolean mutationBusy(){return AndroidVpnMutationGuard.isBusy(this);}boolean isExternalSelected(){return false;}void configurePairMultihop(){throw new AssertionError("ordered editor silently became pair editor");}
+ void toast(String value){message=value;}static String safe(Exception e){return e.getMessage();}void refreshAll(){refreshes++;}
+ interface Click{void run(Object d,int index);}
+ static final class Choice{final OrderedProductSurface owner;String title,detail;CharSequence[] labels;Click selected,positive,negative;Choice(OrderedProductSurface owner,String title,String detail){this.owner=owner;this.title=title;this.detail=detail;}Choice setItems(CharSequence[] items,Click listener){labels=items;selected=listener;return this;}Choice setPositiveButton(String label,Click listener){positive=listener;return this;}Choice setNegativeButton(String label,Click listener){negative=listener;return this;}void show(){owner.dialog=this;}}
+ Choice dialog;Choice choiceDialog(String title,String detail){return new Choice(this,title,detail);}void open(){configureMultihop();}void choose(int i){Choice before=dialog;dialog=null;before.selected.run(before,i);}void save(){Choice before=dialog;dialog=null;before.positive.run(before,0);}void cancel(){dialog=null;}
+ static final class AlertDialog{static final class Builder{final Choice choice;Builder(OrderedProductSurface owner){choice=owner.choiceDialog("","");}Builder setTitle(String title){choice.title=title;return this;}Builder setItems(CharSequence[] items,Click selected){choice.setItems(items,selected);return this;}Builder setNegativeButton(String label,Click selected){choice.setNegativeButton(label,selected);return this;}void show(){choice.show();}}}
+ // ACTUAL_ORDERED_HANDLERS
+}
+'''
+    (app / "OrderedProductSurface.java").write_text(surface.replace("// ACTUAL_ORDERED_HANDLERS", handlers))
     libbox = src / "io/nekohasekai/libbox/Libbox.java"
     source = libbox.read_text()
     marker = "private static String call(String...args)throws Exception{"
@@ -334,6 +367,7 @@ def run(root, work, app, classes, jar, env):
     store = (app / "AndroidConnectionProfileStore.java").read_text()
     permission = (app / "AndroidConnectionSelection.java").read_text()
     editor = (app / "AndroidOrderedPathSelection.java").read_text()
+    editor_ui = (app / "OrderedProductSurface.java").read_text()
     preview_start = editor.index("        RouterNodeChain preview=")
     preview_end = editor.index("        AndroidNodeStore.ChainCapture captured=", preview_start)
     publication_lock = "synchronized <T> T publishChainCatalog(ChainCatalog captured, ChainPublication<T> publication) throws Exception { synchronized (STORE_LOCK)"
@@ -354,6 +388,7 @@ def run(root, work, app, classes, jar, env):
         ("editor-native", "AndroidOrderedPathSelection", editor[:preview_start] + editor[preview_end:], "ordered editor skipped complete native chain validation"),
         ("editor-atomic", "AndroidNodeStore", node.replace(publication_lock, publication_lock.replace("STORE_LOCK", "new Object()")), "ordered editor did not exclude an independent source publisher until complete publication"),
         ("editor-budget", "AndroidConnectionProfileStore", store.replace('if(complete>AndroidNodeStore.MAX_CHAIN_SOURCE)', 'if(false)'), "ordered final references exceeded their aggregate bound after private publication"),
+        ("editor-ui", "OrderedProductSurface", editor_ui.replace('else draft.movePrefix(position,target);', 'else {}'), "shipping ordered editor did not move the original first node later"),
     )
     assert node.count(source_guard) == node.count(epoch_guard) == node.count(capture_lock) == 1
     for family, name, changed, witness in controls:

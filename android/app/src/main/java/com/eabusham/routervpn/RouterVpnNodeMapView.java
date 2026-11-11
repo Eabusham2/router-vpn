@@ -26,7 +26,7 @@ import java.util.Locale;
 /** Offline native VPN globe. Callers provide only coordinates explicitly present in linked node data. */
 final class RouterVpnNodeMapView extends View {
     interface OnMarkerClickListener { void onMarkerClick(Marker marker); }
-    static final String ROLE_NORMAL="normal", ROLE_SELECTED="selected", ROLE_ENTRY="entry", ROLE_EXIT="exit", ROLE_EXTERNAL="external";
+    static final String ROLE_NORMAL="normal", ROLE_SELECTED="selected", ROLE_ENTRY="entry", ROLE_HOP="hop", ROLE_EXIT="exit", ROLE_EXTERNAL="external";
     private static final int LOCATION_PERMISSION_REQUEST=6403;
     private static final long MAX_LAST_LOCATION_AGE_MS=30*1000L;
     private static final float MAX_LOCATION_ACCURACY_METERS=10_000f;
@@ -41,6 +41,16 @@ final class RouterVpnNodeMapView extends View {
         // Legacy Router profiles can use 0,0 as their unknown-location sentinel.
         // Typed external metadata retains absence separately from an explicit pair.
         Marker(String id,String name,double latitude,double longitude,String role,double latencyMs,boolean explicitCoordinates){this.id=id;this.name=name;this.latitude=latitude;this.longitude=longitude;this.role=role==null?ROLE_NORMAL:role;this.selected=ROLE_SELECTED.equals(this.role);this.latencyMs=Double.isFinite(latencyMs)&&latencyMs>0?latencyMs:0;this.explicitCoordinates=explicitCoordinates;}
+        String label(){
+            String label=name==null||name.trim().isEmpty()?"Router VPN node":name.trim(),measurement="";
+            for(String kind:new String[]{"routed HTTP proof","HTTPS"}){
+                String suffix=" • "+kind;if(latencyMs>0&&label.endsWith(suffix)){measurement=kind;label=label.substring(0,label.length()-suffix.length());break;}
+            }
+            if(label.length()>18)label=label.substring(0,17)+"…";
+            if(latencyMs>0)label+="  "+String.format(Locale.US,"%.1f ms",latencyMs);
+            if(!measurement.isEmpty())label+=" "+measurement;
+            return label;
+        }
     }
 
     private final Paint background=paint(Color.rgb(9,17,31),1f);
@@ -50,6 +60,7 @@ final class RouterVpnNodeMapView extends View {
     private final Paint normalPin=paint(Color.rgb(72,199,214),1f);
     private final Paint selectedPin=paint(Color.rgb(145,108,255),1f);
     private final Paint entryPin=paint(Color.rgb(55,145,255),1f);
+    private final Paint hopPin=paint(Color.rgb(55,207,183),1f);
     private final Paint exitPin=paint(Color.rgb(255,154,50),1f);
     private final Paint externalPin=paint(Color.rgb(242,91,172),1f);
     private final Paint userPin=paint(Color.rgb(78,214,132),1f);
@@ -59,6 +70,8 @@ final class RouterVpnNodeMapView extends View {
     private final Paint text=paint(Color.WHITE,1f);
     private final Paint secondary=paint(Color.rgb(160,180,208),1f);
     private List<Marker> markers=Collections.emptyList();
+    private List<String> orderedPath=Collections.emptyList();
+    private boolean orderedLive;
     private OnMarkerClickListener markerClickListener;
     private final LocationManager locationManager;
     private final LocationListener locationListener;
@@ -83,6 +96,7 @@ final class RouterVpnNodeMapView extends View {
     }
 
     void setMarkers(List<Marker>value){markers=value==null?Collections.emptyList():new ArrayList<>(value);invalidate();}
+    void setOrderedPath(List<String> value,boolean live){orderedPath=value==null?Collections.emptyList():Collections.unmodifiableList(new ArrayList<>(value));orderedLive=live;invalidate();}
     void setOnMarkerClickListener(OnMarkerClickListener listener){markerClickListener=listener;}
 
     @Override protected void onDraw(Canvas canvas){
@@ -95,14 +109,25 @@ final class RouterVpnNodeMapView extends View {
 
         Marker entry=null,exit=null;
         for(Marker marker:markers){if(ROLE_ENTRY.equals(marker.role))entry=marker;else if(ROLE_EXIT.equals(marker.role))exit=marker;}
-        if(entry!=null&&exit!=null&&valid(entry)&&valid(exit)){
+        if(!orderedPath.isEmpty()) {
+            for(int i=1;i<orderedPath.size();i++) {
+                Marker a=null,b=null;
+                for(Marker marker:markers){if(marker.id.equals(orderedPath.get(i-1)))a=marker;if(marker.id.equals(orderedPath.get(i)))b=marker;}
+                // Missing coordinates break that segment; never invent a
+                // shortcut that visually drops an intermediate selected node.
+                if(a==null||b==null||!valid(a)||!valid(b))continue;
+                float ax=xFor(a.longitude,world),ay=yFor(a.latitude,world),bx=xFor(b.longitude,world),by=yFor(b.latitude,world);
+                canvas.drawLine(ax,ay,bx,by,path);
+                if(orderedLive){float phase=(System.currentTimeMillis()%1800L)/1800f;canvas.drawCircle(ax+(bx-ax)*phase,ay+(by-ay)*phase,dp(4),packet);postInvalidateDelayed(48);}
+            }
+        }else if(entry!=null&&exit!=null&&valid(entry)&&valid(exit)){
             float ax=xFor(entry.longitude,world),ay=yFor(entry.latitude,world),bx=xFor(exit.longitude,world),by=yFor(exit.latitude,world);canvas.drawLine(ax,ay,bx,by,path);
             float phase=(System.currentTimeMillis()%1800L)/1800f;float px=ax+(bx-ax)*phase,py=ay+(by-ay)*phase;canvas.drawCircle(px,py,dp(4),packet);postInvalidateDelayed(48);
         }
 
         for(Marker marker:markers){
-            if(!valid(marker))continue;float x=xFor(marker.longitude,world),y=yFor(marker.latitude,world);float r=dp(ROLE_SELECTED.equals(marker.role)||ROLE_ENTRY.equals(marker.role)||ROLE_EXIT.equals(marker.role)?8:6);canvas.drawCircle(x,y,r,paintFor(marker.role));
-            String label=marker.name==null||marker.name.trim().isEmpty()?"Router VPN node":marker.name.trim();if(label.length()>18)label=label.substring(0,17)+"…";if(marker.latencyMs>0)label+="  "+String.format(Locale.US,"%.1f ms",marker.latencyMs);canvas.drawText(label,x+r+dp(4),y-dp(4),text);
+            if(!valid(marker))continue;float x=xFor(marker.longitude,world),y=yFor(marker.latitude,world);float r=dp(ROLE_SELECTED.equals(marker.role)||ROLE_ENTRY.equals(marker.role)||ROLE_HOP.equals(marker.role)||ROLE_EXIT.equals(marker.role)?8:6);canvas.drawCircle(x,y,r,paintFor(marker.role));
+            canvas.drawText(marker.label(),x+r+dp(4),y-dp(4),text);
         }
         if(validUserLocation()){
             float x=xFor(userLocation.getLongitude(),world),y=yFor(userLocation.getLatitude(),world);canvas.drawCircle(x,y,dp(12),halo(userPin.getColor()));canvas.drawCircle(x,y,dp(7),userPin);canvas.drawText("YOU",x+dp(11),y-dp(5),text);
@@ -186,7 +211,7 @@ final class RouterVpnNodeMapView extends View {
     private boolean valid(Marker m){return Double.isFinite(m.latitude)&&Double.isFinite(m.longitude)&&m.latitude>=-90&&m.latitude<=90&&m.longitude>=-180&&m.longitude<=180&&(m.explicitCoordinates||!(m.latitude==0&&m.longitude==0));}
     private float xFor(double lon,RectF world){return world.left+(float)((lon+180d)/360d)*world.width();}
     private float yFor(double lat,RectF world){return world.top+(float)((90d-lat)/180d)*world.height();}
-    private Paint paintFor(String role){if(ROLE_ENTRY.equals(role))return entryPin;if(ROLE_EXIT.equals(role))return exitPin;if(ROLE_EXTERNAL.equals(role))return externalPin;if(ROLE_SELECTED.equals(role))return selectedPin;return normalPin;}
+    private Paint paintFor(String role){if(ROLE_ENTRY.equals(role))return entryPin;if(ROLE_HOP.equals(role))return hopPin;if(ROLE_EXIT.equals(role))return exitPin;if(ROLE_EXTERNAL.equals(role))return externalPin;if(ROLE_SELECTED.equals(role))return selectedPin;return normalPin;}
     private Paint halo(int color){Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);p.setColor(Color.argb(58,Color.red(color),Color.green(color),Color.blue(color)));return p;}
     private Paint paint(int color,float widthDp){Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);p.setColor(color);p.setStrokeWidth(dp(widthDp));p.setStrokeCap(Paint.Cap.ROUND);return p;}
     private float dp(float value){return value*getResources().getDisplayMetrics().density;}

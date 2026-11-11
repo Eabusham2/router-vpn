@@ -24,6 +24,7 @@ final class AndroidVpnMutationGuard {
             // no app-owned VPN transport remains, no transition is running, and
             // every actual engine is provably idle/terminal.
             if (!ownedVpn && failedSessionHasNoLiveEngine(home, e)
+                    && !e.nodeChain.isActiveOrTransitioning()
                     && !e.multihop.isActiveOrTransitioning()
                     && !e.standardExit.isActiveOrTransitioning()) return false;
             return ownedVpn
@@ -31,6 +32,7 @@ final class AndroidVpnMutationGuard {
                     || e.orchestrator.isRunning()
                     || e.orchestrator.isActive()
                     || e.multihop.isActiveOrTransitioning()
+                    || e.nodeChain.isActiveOrTransitioning()
                     || e.standardExit.isActiveOrTransitioning()
                     || tunnelBusy(e.wireGuard.getState())
                     || tunnelBusy(e.amneziaWG.getState())
@@ -56,6 +58,7 @@ final class AndroidVpnMutationGuard {
         if (home == null || e == null || home.connected) return false;
         String phase = home.phase == null ? "" : home.phase.trim().toLowerCase(java.util.Locale.ROOT);
         return "failed".equals(phase)
+                && !e.nodeChain.isActiveOrTransitioning()
                 && !e.orchestrator.isRunning()
                 && e.wireGuard.getState() == com.wireguard.android.backend.Tunnel.State.DOWN
                 && e.amneziaWG.getState() == org.amnezia.awg.backend.Tunnel.State.DOWN

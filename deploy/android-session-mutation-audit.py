@@ -188,7 +188,7 @@ if "protocl" in standard_runtime:
 
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedConnectionController.java",
-    "boolean isActiveOrTransitioning() { return pendingCallback!=null || disconnecting.get() || AndroidVpnMutationGuard.isBusy(activity); }",
+            "boolean isActiveOrTransitioning() { return pendingCallback!=null || disconnecting.get() || runtime.nodeChain.isActiveOrTransitioning() || AndroidVpnMutationGuard.isBusy(activity); }",
     "disconnecting.compareAndSet(false,true)",
     "callback.finished(success,",
 )
@@ -202,7 +202,7 @@ require(
     "fastestButton.setEnabled((!busy||connection.isConnected())&&!candidate&&!permission&&!startup&&!AndroidMTUMeasurementGate.held())",
     "killSwitch.setEnabled(!busy)",
     "multihopToggle.setEnabled(!busy)",
-    "modeSpinner.setEnabled(!busy&&!isExternalSelected())",
+    'modeSpinner.setEnabled(!busy&&!isExternalSelected()&&!(prefs().getBoolean(MULTI_ON,false)&&!prefs().getString("multihop_nodes","").isEmpty()))',
     "dnsSpinner.setEnabled(!busy&&!isExternalSelected())",
     "VPN state changed while Fastest was measuring",
     "VPN state changed while permission was open",

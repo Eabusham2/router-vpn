@@ -61,15 +61,18 @@ final class AndroidNodeUsage {
      * UI recreation cannot opt a temporary test into usage or replace its sources. */
     static final class Attempt {
         private final List<Node> nodes;
-        private final String topology,router,entry,exit,entryMode,externalProtocol;
+        private final String topology,router,entry,exit,entryMode,externalProtocol,chain;
         private final boolean unavailable;
         private String session="";
         private long generation=-1;
         private boolean invalid,completed;
 
         private Attempt(List<Node> nodes,String topology,String router,String entry,String exit,String entryMode,String externalProtocol,boolean unavailable){
+            this(nodes,topology,router,entry,exit,entryMode,externalProtocol,unavailable,"");
+        }
+        private Attempt(List<Node> nodes,String topology,String router,String entry,String exit,String entryMode,String externalProtocol,boolean unavailable,String chain){
             this.nodes=Collections.unmodifiableList(new ArrayList<>(nodes));this.topology=topology;this.router=router;
-            this.entry=entry;this.exit=exit;this.entryMode=entryMode;this.externalProtocol=externalProtocol;this.unavailable=unavailable;
+            this.entry=entry;this.exit=exit;this.entryMode=entryMode;this.externalProtocol=externalProtocol;this.unavailable=unavailable;this.chain=chain;
         }
 
         synchronized void owned(Context context,String value){
@@ -117,7 +120,11 @@ final class AndroidNodeUsage {
         private void requireOwner(AndroidHomeStateStore.Snapshot home){
             if(home==null||session.isEmpty()||!session.equals(home.sessionId)||generation<0||generation!=home.pathGeneration||!home.connected
                     ||!"connected".equals(home.phase)||!"passed".equals(home.pathProof))throw new IllegalStateException("The proved usage owner changed.");
-            if("router".equals(topology)){
+            if("node-chain".equals(topology)) {
+                if(!"node-chain".equals(home.logicalMode)||!router.equals(home.activeNodeId)||!sameChain(chain,home.activeChain)
+                        ||!home.activeEntryId.isEmpty()||!home.activeExitId.isEmpty()||!home.activeExternalId.isEmpty())
+                    throw new IllegalStateException("The complete ordered usage path changed.");
+            }else if("router".equals(topology)){
                 if(!router.equals(home.activeNodeId)||!home.activeEntryId.isEmpty()||!home.activeExitId.isEmpty()||!home.activeExternalId.isEmpty())
                     throw new IllegalStateException("The single-node usage path changed.");
             }else if("multihop".equals(topology)){
@@ -136,6 +143,31 @@ final class AndroidNodeUsage {
     static Attempt router(AndroidNodeStore.Node node)throws Exception{
         Node captured=captureRouter(node);
         return new Attempt(Collections.singletonList(captured),"router",node.id,"","","","",false);
+    }
+
+    static Attempt ordered(Context context,AndroidNodeStore store,AndroidNodeStore.ChainCapture captured)throws Exception {
+        if(captured==null)throw new IllegalStateException("The original ordered usage capture is unavailable.");
+        captured.requireCurrent();List<Node> nodes=new ArrayList<>();JSONArray chain=new JSONArray();
+        for(int i=0;i<captured.members.size();i++) {
+            AndroidNodeStore.ChainSource source=captured.members.get(i);
+            Node node=captureRouter(new AndroidNodeStore.Node(source.id,"","",store.file(source.id)));
+            if(!node.source.sha256.equals(AndroidTorProfile.digest(source.bytes())))throw new IllegalStateException("An ordered usage member changed before Android permission.");
+            nodes.add(node);chain.put(new JSONObject().put("id",source.id).put("mode",captured.modes.get(i)));
+        }
+        captured.requireCurrent();
+        return new Attempt(nodes,"node-chain",captured.control.id,"","","","",false,chain.toString());
+    }
+
+    private static boolean sameChain(String expected,String actual) {
+        try {
+            JSONArray a=new JSONArray(expected),b=new JSONArray(actual);
+            if(a.length()<2||a.length()!=b.length())return false;
+            for(int i=0;i<a.length();i++) {
+                JSONObject first=a.getJSONObject(i),second=b.getJSONObject(i);
+                if(second.length()!=2||!first.getString("id").equals(second.getString("id"))||!first.getString("mode").equals(second.getString("mode")))return false;
+            }
+            return true;
+        } catch(Exception invalid) { return false; }
     }
 
     static Attempt multihop(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String entryMode)throws Exception{
@@ -236,7 +268,7 @@ final class AndroidNodeUsage {
     // and all captured private sources still match. One write covers every
     // distinct node of the retained path; imported counts are maxima, not sums.
     private static void record(Context context,String request,List<Node> nodes)throws Exception{
-        if(request==null||!request.matches("[0-9a-f]{32}")||nodes.isEmpty()||nodes.size()>2)throw new IllegalArgumentException("Invalid logical usage receipt.");
+        if(request==null||!request.matches("[0-9a-f]{32}")||nodes.isEmpty()||nodes.size()>8)throw new IllegalArgumentException("Invalid logical usage receipt.");
         File file=new File(context.getApplicationContext().getFilesDir(),FILE_NAME);
         Map<String,JSONObject> records=load(file);Set<String> seen=new HashSet<>();
         long now=System.currentTimeMillis();

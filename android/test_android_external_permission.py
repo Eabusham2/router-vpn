@@ -40,7 +40,7 @@ import android.content.Context;import java.io.*;import java.util.*;import java.n
 final class AndroidPrivateFileStore {static byte[] read(File f,int max)throws Exception{byte[] b=Files.readAllBytes(f.toPath());if(b.length==0||b.length>max)throw new IllegalArgumentException("bounded private input required");return b;}}
 // These permission-only callbacks never opt into user usage. The dedicated
 // node-usage fixture compiles the complete shipping recorder and controller.
-final class AndroidNodeUsage {static final class Attempt{void owned(Context c,String s){}String finished(Context c,String request,boolean ok){throw new AssertionError("permission-only fixture opted into usage");}}static Attempt unavailable(){return new Attempt();}static Attempt router(AndroidNodeStore.Node n){return new Attempt();}static Attempt importedMultihop(Context c,AndroidStandardExitStore.Entry a,AndroidNodeStore.Node b,String mode){return new Attempt();}static Attempt multihop(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode){return new Attempt();}static Attempt external(Context c,AndroidNodeStore.Node a,AndroidStandardExitStore.Entry b,AndroidStandardExitStore.Entry e,boolean direct,String mode){return new Attempt();}}
+final class AndroidNodeUsage {static final class Attempt{void owned(Context c,String s){}String finished(Context c,String request,boolean ok){throw new AssertionError("permission-only fixture opted into usage");}}static Attempt ordered(Context c,AndroidNodeStore n,AndroidNodeStore.ChainCapture capture){return new Attempt();}static Attempt unavailable(){return new Attempt();}static Attempt router(AndroidNodeStore.Node n){return new Attempt();}static Attempt importedMultihop(Context c,AndroidStandardExitStore.Entry a,AndroidNodeStore.Node b,String mode){return new Attempt();}static Attempt multihop(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode){return new Attempt();}static Attempt external(Context c,AndroidNodeStore.Node a,AndroidStandardExitStore.Entry b,AndroidStandardExitStore.Entry e,boolean direct,String mode){return new Attempt();}}
 final class AndroidTorProfile {static String compileOrdinary(AndroidStandardExitStore.Entry entry,AndroidStandardExitStore.Entry exit,String session,String execution){if(!AndroidExternalPolicy.supports(entry.protocol)||!isTor(exit.protocol)||entry.id.equals(exit.id)||!execution.equals("local"))throw new IllegalArgumentException("invalid ordinary Tor selection");return "{}";}static boolean isTor(String p){return "tor".equals(p)||"tor-bridge".equals(p);}static String strictText(byte[] b)throws Exception{return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(b)).toString();}static String digest(byte[] b)throws Exception{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(b));}}
 // No comparison is created by this permission-only fixture. Its full owner is
 // executed in test_android_external_node_comparison.py.
@@ -54,9 +54,11 @@ final class AndroidImportedRouterPath {
 }
 final class AndroidExternalNodeComparison {static boolean active;static int cancels;static boolean hasActiveOperation(){return active;}static boolean cancelActiveOperation(){if(active)cancels++;return active;}}
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(Context c){return busy;}}
-final class AndroidHomeStateStore {static final class Snapshot{boolean connected;long pathGeneration;String sessionId="",phase="off",pathProof="not-run",logicalMode="",runtimeMode="",fallback="",activeNodeId="",activeEntryId="",activeExitId="",activeEntryMode="",activeExternalId="",activeExternalProtocol="";}static Snapshot current=new Snapshot();static Snapshot snapshot(Context c){return current;}static long advancePathGeneration(Context c){return ++current.pathGeneration;}}
+final class AndroidHomeStateStore {static final class Snapshot{boolean connected;long pathGeneration;String sessionId="",phase="off",pathProof="not-run",logicalMode="",runtimeMode="",fallback="",activeNodeId="",activeEntryId="",activeExitId="",activeEntryMode="",activeExternalId="",activeExternalProtocol="";}static Snapshot current=new Snapshot();static Snapshot snapshot(Context c){Snapshot out=new Snapshot();try{for(var field:Snapshot.class.getDeclaredFields())field.set(out,field.get(current));}catch(Exception e){throw new AssertionError(e);}return out;}static long advancePathGeneration(Context c){return ++current.pathGeneration;}}
 final class AndroidNodeStore {
  static final int MAX_BUNDLE=32*1024*1024;static final List<Node> nodes=new ArrayList<>();static String active;
+ static final class ChainSource {final String id,profileId;final File file;final byte[] source;ChainSource(Node node)throws Exception{id=node.id;profileId=node.id;file=node.file;source=Files.readAllBytes(file.toPath());}byte[] bytes(){return source.clone();}JSONObject profile()throws Exception{return new JSONObject().put("id",profileId).put("name",id);}}
+ static final class ChainCapture {final ChainSource control;final List<ChainSource> members;final List<String> modes;boolean revoked;ChainCapture(List<Node> nodes,List<String> modes)throws Exception{List<ChainSource> selected=new ArrayList<>();for(Node node:nodes)selected.add(new ChainSource(node));members=Collections.unmodifiableList(selected);control=members.get(members.size()-1);this.modes=List.copyOf(modes);}void requireCurrent()throws Exception{if(revoked)throw new IllegalStateException("changed ordered source epoch");for(ChainSource member:members)if(!Arrays.equals(member.source,Files.readAllBytes(member.file.toPath())))throw new IllegalStateException("changed ordered private source");}}
  static final class Node {final String id,name,endpoint="";final File file;Node(String id,File f){this.id=id;name=id;file=f;}}
  AndroidNodeStore(Context c){}List<Node> list(){return new ArrayList<>(nodes);}String activeId(){return active!=null?active:nodes.isEmpty()?"":nodes.get(0).id;}File file(String id){for(Node n:nodes)if(n.id.equals(id))return n.file;return null;}
  static void validateBundle(JSONObject b)throws Exception{b.getJSONObject("profiles");b.getJSONArray("modes");}
@@ -75,7 +77,7 @@ final class AndroidExternalPolicy {
  static String protocol(String p){return p.equals("http")?"http-connect":p.equals("https")?"https-connect":p;}
 }
 final class AndroidConnectionProfileStore {
- AndroidConnectionProfileStore(Context c,AndroidNodeStore n,AndroidStandardExitStore e){}ExternalSelection currentExternalPath(String id){throw new AssertionError("permission UI must cancel before selecting a new path");}
+ AndroidConnectionProfileStore(Context c,AndroidNodeStore n,AndroidStandardExitStore e){}AndroidNodeStore.ChainCapture currentOrderedPath(){throw new AssertionError("permission UI must cancel before selecting a new ordered path");}ExternalSelection currentExternalPath(String id){throw new AssertionError("permission UI must cancel before selecting a new path");}
  static final class ImportedRouterSelection{AndroidStandardExitStore.Entry entry;AndroidNodeStore.Node exit;String exitMode,execution;}ImportedRouterSelection currentImportedRouterPath(){throw new AssertionError("permission UI must cancel before path selection");}
  static final class ExternalSelection{final AndroidNodeStore.Node entry;final AndroidStandardExitStore.Entry ordinaryEntry,exit;final String entryMode,execution;
  ExternalSelection(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry ordinaryEntry,AndroidStandardExitStore.Entry exit,String mode,String execution){this.entry=entry;this.ordinaryEntry=ordinaryEntry;this.exit=exit;entryMode=mode;this.execution=execution;}boolean direct(){return entry==null&&ordinaryEntry==null;}}
@@ -121,8 +123,23 @@ final class AndroidStandardExitRuntime {
  void connect(File f,AndroidStandardExitStore.Entry e,String m,Callback cb){starts++;entry=f;mode=m;exit=e;cb.finished(true,"owned entry");}
 }
 final class AndroidRuntimeRegistry {
- static AndroidRuntimeRegistry instance=new AndroidRuntimeRegistry();static AndroidRuntimeRegistry get(Context c){return instance;}
+ static AndroidRuntimeRegistry instance=new AndroidRuntimeRegistry();static AndroidRuntimeRegistry get(Context c){instance.nodeChain.context=c;return instance;}
+ final AndroidNodeChainRuntime nodeChain=new AndroidNodeChainRuntime();
  final NativeWireGuardController wireGuard=new NativeWireGuardController();final NativeAmneziaWGController amneziaWG=new NativeAmneziaWGController();final NativeSingBoxController singBox=new NativeSingBoxController();final NativeXrayController xray=new NativeXrayController();final AndroidModeOrchestrator orchestrator=new AndroidModeOrchestrator();final AndroidMultihopRuntime multihop=new AndroidMultihopRuntime();final AndroidStandardExitRuntime standardExit=new AndroidStandardExitRuntime();
+}
+// The ordered native service is exercised separately. This boundary records
+// only the exact immutable permission capture handed to that service owner.
+final class AndroidNodeChainRuntime {
+ interface Callback{void progress(String message);void finished(boolean ok,String message);default void owned(String session){}}
+ int starts,activeReads;Context context;AndroidNodeStore.ChainCapture source;boolean busy,connected;Runnable beforeAdmission;
+ static final class ActiveCapture{final String homeSession,progressJSON;final long pathGeneration;final List<AndroidNodeStore.ChainSource> sources;final List<String> modes;ActiveCapture(AndroidNodeStore.ChainCapture source,AndroidHomeStateStore.Snapshot home,String progress){homeSession=home.sessionId;pathGeneration=home.pathGeneration;progressJSON=progress;sources=source.members;modes=source.modes;}}
+ ActiveCapture active;ActiveCapture captureActive(){activeReads++;return active;}
+ void connect(AndroidNodeStore.ChainCapture capture,Callback callback){connect(capture,null,callback);}
+ void connect(AndroidNodeStore.ChainCapture capture,AndroidHomeStateStore.Snapshot idle,Callback callback){try{if(beforeAdmission!=null){beforeAdmission.run();beforeAdmission=null;}AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);if(idle!=null&&(idle.pathGeneration!=home.pathGeneration||!idle.sessionId.equals(home.sessionId)))throw new IllegalStateException("original permission Home owner changed");capture.requireCurrent();source=capture;starts++;callback.finished(true,"captured ordered dispatch");}catch(Exception changed){callback.finished(false,changed.getMessage());}}
+ boolean isActiveOrTransitioning(){return busy;}boolean isConnected(){return connected;}
+ List<AndroidNodeStore.ChainSource> activeSources(){return connected&&source!=null?source.members:Collections.emptyList();}
+ List<String> activeModes(){return connected&&source!=null?source.modes:Collections.emptyList();}
+ boolean stopAndProve(){busy=false;connected=false;return true;}
 }
 // Startup has its own shipping-policy/permission fixture. This suite never
 // creates a startup capture or records a single-Router proof.
@@ -150,14 +167,14 @@ PREFERENCE_ACCESS = r'''public static final java.util.Map<String,Object> connect
 PRODUCT = r'''package com.eabusham.routervpn;
 import android.app.*;import android.content.*;import android.widget.*;import java.util.*;
 final class AndroidViaEntryLatencyProbe {boolean isBusy(){return false;}static boolean hasActiveOperation(){return false;}static boolean cancelActiveOperation(){return false;}}
-final class AndroidUnifiedNodeCatalog {static final class Item{String id="";boolean isRouterVpn(){return false;}}}
+final class AndroidUnifiedNodeCatalog {static final class Item{String id="",protocol="";boolean isRouterVpn(){return false;}}}
 final class AndroidHomeSummary {static String format(Context c,AndroidNodeStore n){return "idle";}}
 final class PermissionActivity extends Activity {
  AndroidUnifiedConnectionController connection;AndroidNodeStore nodeStore;AndroidStandardExitStore exitStore;AndroidViaEntryLatencyProbe viaEntryProbe=new AndroidViaEntryLatencyProbe();
  Button connectButton=new Button(this),nodeButton=new Button(this),fastestButton=new Button(this);CheckBox killSwitch=new CheckBox(this),multihopToggle=new CheckBox(this);
  Spinner modeSpinner=new Spinner(this),dnsSpinner=new Spinner(this);TextView statusView=new TextView(this),liveLatency=new TextView(this);double currentPathMs;int changes;
  boolean resumed;String pendingProbeEntryId="";final Runnable telemetryTick=()->{};final Handler telemetryHandler=new Handler();static final class Handler{void removeCallbacks(Runnable r){}void post(Runnable r){}}void refreshAll(){refreshConnectionState();}
- static final String MULTI_ENTRY="multihop_entry",MULTI_EXIT="multihop_exit",MULTI_MODE="multihop_exit_mode";
+ static final String MULTI_ON="multihop_on",MULTI_ENTRY="multihop_entry",MULTI_EXIT="multihop_exit",MULTI_MODE="multihop_exit_mode";
  static final class ModeChoice {String id="";String title="";List<String> layers=List.of();}
  boolean isExternalSelected(){return false;}String multihopExecutionSummary(){return "";}void refreshConnectionLater(){refreshConnectionState();}
  AndroidUnifiedNodeCatalog.Item selectedCatalogItem(){throw new AssertionError("pending cancel reached a new connection decision");}void showNodes(){}AndroidNodeStore.Node nodeById(String id){return null;}void configureMultihop(){}
@@ -174,7 +191,7 @@ import android.app.*;import android.os.*;import java.nio.file.*;import java.nio.
 public class ExternalPermissionTest {
  // ALL_CAPTURED_MODES
  static int checks;static void check(boolean ok,String message){checks++;if(!ok)throw new AssertionError(message);}
- static final class Callback implements AndroidUnifiedConnectionController.Callback {int completions;boolean ok;String message="";public void progress(String s){message=s;}public void finished(boolean b,String s){completions++;ok=b;message=s;}}
+ static final class Callback implements AndroidUnifiedConnectionController.Callback {int completions;boolean ok;String message="";Runnable validation;public void validate(){if(validation!=null)validation.run();}public void progress(String s){message=s;}public void finished(boolean b,String s){completions++;ok=b;message=s;}}
  static void resetOwner()throws Exception{var owner=AndroidUnifiedConnectionController.class.getDeclaredField("permissionOwner");owner.setAccessible(true);owner.set(null,null);}
  static final class Fixture {
   final Activity activity=new Activity();final AndroidNodeStore nodes=new AndroidNodeStore(activity);final AndroidStandardExitStore.Entry exit=new AndroidStandardExitStore.Entry();final AndroidNodeStore.Node entry;
@@ -334,7 +351,56 @@ public class ExternalPermissionTest {
   try{counter.setInt(null,0xffff);Fixture last=new Fixture(root);last.request("wg",false);check(last.activity.permissionRequest==0xffff,"last safe request code was unavailable");last.controller.cancelPermissionPending();Fixture over=new Fixture(root);over.request("wg",false);check(over.callback.completions==1&&!over.callback.ok&&over.activity.permission==null&&!over.controller.isPermissionPending(),"permission request code exhaustion reused a stale identity");}
   finally{counter.setInt(null,original);}
  }
- public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);allModes(root);directAndFrozen(root);execution(root);changes(root);ordinaryPaths(root);selectedChanges(root);owners(root);activity(root);importedPaths(root);exhaustion(root);System.out.println("Android external permission: "+checks+" checks;19 Router entries,8 ordinary entries,imported Router permission,saved selection/rotation/resume,owned cancellation/replacement,actual Product busy/cancel");}
+ static AndroidNodeStore.ChainCapture orderedCapture(Fixture f)throws Exception{
+  List<AndroidNodeStore.Node> nodes=new ArrayList<>();nodes.add(f.entry);
+  for(String id:List.of("original-middle","original-final")){Path file=Files.createTempFile(f.file.getParent(),"ordered-",".json");Files.writeString(file,"private-ordered-credential-"+id);AndroidNodeStore.Node node=new AndroidNodeStore.Node(id,file.toFile());AndroidNodeStore.nodes.add(node);nodes.add(node);}
+  android.content.Context.connectionPreferences.put("multihop_nodes","original-entry,middle,final");
+  return new AndroidNodeStore.ChainCapture(nodes,List.of("wg","wg","shadowsocks"));
+ }
+ static void orderedPaths(Path root)throws Exception{
+  for(boolean restored:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);var capture=orderedCapture(f);f.controller.connectOrdered(capture,f.callback);Bundle state=new Bundle();f.controller.savePending(state);
+   check(AndroidRuntimeRegistry.instance.nodeChain.starts==0&&!state.values.toString().contains("private-ordered-credential"),"ordered path ran before permission or copied private sources into Bundle");
+   if(restored)f.restore(state);f.allow();
+   check(f.callback.ok&&AndroidRuntimeRegistry.instance.nodeChain.starts==1&&AndroidRuntimeRegistry.instance.nodeChain.source==capture,"ordered permission replaced its original complete source object");
+   check(f.runtime().starts==0&&AndroidRuntimeRegistry.instance.multihop.starts==0&&AndroidRuntimeRegistry.instance.orchestrator.starts==0,"ordered path dispatched an unrelated pair or direct owner");
+  }
+  for(String fault:List.of("middle","epoch","selection","mode","lost-process","cancel","busy","receipt","stop","stop-validation","stop-admission"))for(boolean restored:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);var capture=orderedCapture(f);f.controller.connectOrdered(capture,f.callback);Bundle state=new Bundle();f.controller.savePending(state);
+   if(fault.equals("middle"))Files.writeString(capture.members.get(1).file.toPath(),"new private middle source");
+   if(fault.equals("epoch"))capture.revoked=true;
+   if(fault.equals("selection"))android.content.Context.connectionPreferences.put("multihop_nodes","different-original-order");
+   if(fault.equals("mode"))state.putString("routervpn.pending.mode","wg");
+   if(fault.equals("lost-process"))resetOwner();
+   if(restored||fault.equals("mode")||fault.equals("lost-process"))f.restore(state);
+   if(fault.equals("busy"))AndroidRuntimeRegistry.instance.nodeChain.busy=true;
+   if(fault.equals("stop"))AndroidHomeStateStore.advancePathGeneration(f.activity);
+   if(fault.equals("stop-validation"))f.callback.validation=()->AndroidHomeStateStore.advancePathGeneration(f.activity);
+   if(fault.equals("stop-admission"))AndroidRuntimeRegistry.instance.nodeChain.beforeAdmission=()->AndroidHomeStateStore.advancePathGeneration(f.activity);
+   if(fault.equals("cancel"))f.controller.cancelPermissionPending();
+   if(fault.equals("receipt")) {
+    var ownerField=AndroidUnifiedConnectionController.class.getDeclaredField("permissionOwner");ownerField.setAccessible(true);Object owner=ownerField.get(null);
+    var orderedField=owner.getClass().getDeclaredField("ordered");orderedField.setAccessible(true);
+    var replacement=new AndroidNodeStore.ChainCapture(List.of(f.entry,new AndroidNodeStore.Node("original-middle",capture.members.get(1).file),new AndroidNodeStore.Node("original-final",capture.members.get(2).file)),capture.modes);
+    f.callback.validation=()->{try{orderedField.set(owner,replacement);}catch(Exception error){throw new IllegalStateException(error);}};
+   }
+   f.allow();check(!f.callback.ok&&AndroidRuntimeRegistry.instance.nodeChain.starts==0,"ordered permission admitted changed original receipt or source: "+fault);
+  }
+ }
+ static void permissionStopEpoch(Path root)throws Exception{
+  for(boolean restored:new boolean[]{false,true})for(boolean validation:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);Bundle state=f.request("wg",true);if(restored)f.restore(state);
+   if(validation)f.callback.validation=()->AndroidHomeStateStore.advancePathGeneration(f.activity);else AndroidHomeStateStore.advancePathGeneration(f.activity);
+   f.allow();check(!f.callback.ok&&f.runtime().starts==0,"completed emergency stop revived a permission request");
+  }
+ }
+ static void orderedMode(){
+  android.content.Context.connectionPreferences.put("mode","smart-auto");OrderedModeSurface ui=new OrderedModeSurface();ui.display();
+  check(!ui.modeSpinner.isEnabled()&&ui.modeChoices.size()==1&&ui.modeChoices.get(0).id.equals("node-chain")&&ui.modeHint.getText().toString().contains("single-node mode is remembered separately"),"ordered mode picker advertised an ignored single-node mode");
+  check(ui.prefs().getString("mode","").equals("smart-auto"),"ordered mode display overwrote the remembered single-node choice");
+  ui.ordered=false;ui.display();check(ui.modeChoices.stream().anyMatch(m->m.id.equals("smart-auto")),"leaving ordered mode lost single-node mode choices");
+ }
+ public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);allModes(root);directAndFrozen(root);execution(root);changes(root);ordinaryPaths(root);selectedChanges(root);owners(root);activity(root);importedPaths(root);orderedPaths(root);permissionStopEpoch(root);orderedMode();exhaustion(root);System.out.println("Android external permission: "+checks+" checks;19 Router entries,8 ordinary entries,ordered/imported Router permission,saved selection/rotation/resume,owned cancellation/replacement,actual Product busy/cancel");}
 }
 '''
 
@@ -344,7 +410,10 @@ def main():
     if not jar.is_file() or not shutil.which("javac"):
         raise RuntimeError("JDK and Android JSON are required for unified permission tests")
     ui = dict(T.UI)
+    ui['android/widget/ArrayAdapter.java']=ui['android/widget/ArrayAdapter.java'].replace('public void setDropDownViewResource', 'public ArrayAdapter(android.content.Context c,int layout,java.util.List<T> source){values=(T[])source.toArray();}public void setDropDownViewResource')
+    ui['android/widget/Spinner.java']=ui['android/widget/Spinner.java'].replace('public void setSelection(int value){', 'public void setSelection(int value,boolean animate){setSelection(value);}public void setSelection(int value){')
     ui["android/content/SharedPreferences.java"] = PREFS
+    ui["android/content/SharedPreferences.java"] = ui["android/content/SharedPreferences.java"][:-1]+'''default Editor edit(){throw new AssertionError("mode display edited preferences");}interface Editor{Editor putString(String key,String value);} }'''
     ui["android/content/Context.java"] = ui["android/content/Context.java"].replace('public SharedPreferences getSharedPreferences(String name,int mode){return (key,fallback)->fallback;}', PREFERENCE_ACCESS)
     ui["android/os/Bundle.java"] = ui["android/os/Bundle.java"][:-1] + "public void putStringArrayList(String k,java.util.ArrayList<String> v){values.put(k,v);}public java.util.ArrayList<String> getStringArrayList(String k){return (java.util.ArrayList<String>)values.get(k);}public boolean containsKey(String k){return values.containsKey(k);}}"
     native = (JAVA / "NativeSingBoxController.java").read_text()
@@ -374,6 +443,19 @@ def main():
         (app / "Boundaries.java").write_text(boundaries)
         (app / "ExternalPermissionTest.java").write_text(HARNESS.replace(" // ALL_CAPTURED_MODES", modes))
         (app / 'PermissionActivity.java').write_text(PRODUCT.replace(' // SHIPPING_PRODUCT_METHODS', '\n'.join(methods)))
+        mode_surface=r'''package com.eabusham.routervpn;
+import android.app.*;import android.content.*;import android.widget.*;import android.view.View;import java.util.*;import org.json.*;
+final class OrderedModeSurface extends Activity{
+ static final String MODE_KEY="mode";boolean ordered=true;Spinner modeSpinner=new Spinner(this);TextView modeHint=new TextView(this);List<ModeChoice> modeChoices=new ArrayList<>();
+ static final class ModeChoice{final String id,title;final List<String> layers;ModeChoice(String id,String title){this(id,title,List.of());}ModeChoice(String id,String title,List<String> layers){this.id=id;this.title=title;this.layers=layers;}}
+ static final class CustomPreset{String name;List<String> layers;}
+ static final class AndroidConnectionProfileStore{static void applySelection(SharedPreferences p,SharedPreferences.Editor e){throw new AssertionError("display committed a connection choice");}}
+ SharedPreferences prefs(){return getSharedPreferences("router-vpn-unified",0);}boolean orderedPathEnabled(){return ordered;}boolean mutationBusy(){return false;}
+ AndroidUnifiedNodeCatalog.Item selectedCatalogItem(){return null;}JSONObject activeBundle(){return new JSONObject();}List<CustomPreset> loadCustomPresets(){return List.of();}void showCustomBuilder(CustomPreset p){throw new AssertionError("mode display opened builder");}void toast(String s){throw new AssertionError(s);}void display(){refreshModeChoices();}
+ // ACTUAL_MODE_CHOICES
+}'''
+        mode_method=product[product.index('    private void refreshModeChoices('):product.index('    private ModeChoice currentMode(')]
+        (app/'OrderedModeSurface.java').write_text(mode_surface.replace('// ACTUAL_MODE_CHOICES',mode_method))
         shutil.copyfile(JAVA / 'AndroidConnectionSelection.java', app / 'AndroidConnectionSelection.java')
         shutil.copyfile(JAVA / 'AndroidMTUMeasurementGate.java', app / 'AndroidMTUMeasurementGate.java')
         target = app / "AndroidUnifiedConnectionController.java"
@@ -395,6 +477,10 @@ def main():
             ('AndroidUnifiedConnectionController.java', 'if(pendingCallback!=null){callback.finished(false,"Another Android permission request already owns this screen.");return;}', '', 'duplicate restore cleared its current pending owner'),
             ('AndroidUnifiedConnectionController.java', 'prompt?nextPermissionCode++:0', 'prompt?PREPARE_UNIFIED:0', 'replacement reused an old Android permission request code'),
             ('PermissionActivity.java', 'if(connection!=null)connection.resumePending();', '', 'shipping Activity resume retained changed connection selection'),
+            ('AndroidUnifiedConnectionController.java', 'if(ordered==null||permission.ordered!=ordered)', 'if(ordered==null)', 'ordered permission admitted changed original receipt or source: receipt'),
+            ('AndroidUnifiedConnectionController.java', 'runtime.nodeChain.connect(ordered,permission.idleHome,', 'runtime.nodeChain.connect(ordered,null,', 'ordered permission admitted changed original receipt or source: stop-admission'),
+            ('AndroidUnifiedConnectionController.java', 'owner==null||owner.homeGeneration!=home.pathGeneration||!owner.homeSession.equals(home.sessionId)', 'owner==null', 'completed emergency stop revived a permission request'),
+            ('OrderedModeSurface.java', 'if(orderedPathEnabled())', 'if(false)', 'ordered mode picker advertised an ignored single-node mode'),
         )
         for name, old, new, assertion in controls:
             target = app / name

@@ -101,8 +101,13 @@ final class UsageActivity extends android.app.Activity{
  final android.widget.TextView statusView=new android.widget.TextView(this);final android.widget.Button connectButton=new android.widget.Button(this);String toast="";
  final android.widget.Button nodeButton=new android.widget.Button(this),fastestButton=new android.widget.Button(this);
  // SHIPPING_MAP_CONSTANTS
- AndroidNodeStore nodeStore;AndroidUnifiedNodeCatalog catalog;AndroidUnifiedConnectionController connection;RouterVpnNodeMapView mapView=new RouterVpnNodeMapView();UsageMapTelemetry telemetry=new UsageMapTelemetry();
+ AndroidNodeStore nodeStore;AndroidStandardExitStore exitStore=new AndroidStandardExitStore(this);AndroidUnifiedNodeCatalog catalog;AndroidUnifiedConnectionController connection;RouterVpnNodeMapView mapView=new RouterVpnNodeMapView();UsageMapTelemetry telemetry=new UsageMapTelemetry();
  // SHIPPING_PREFS
+ // The actual helper may observe this explicit unproved boundary, never accept it.
+ static final class UnprovedExternalReceipt{String id;double medianMs=77;int checks;UnprovedExternalReceipt(String id){this.id=id;}void requireCurrent(){checks++;throw new IllegalStateException("usage fixture owns no live external measurement");}}
+ UnprovedExternalReceipt currentExternalReceipt;
+ // SHIPPING_EXTERNAL_LATENCY
+ AndroidOrderedPathPresentation orderedPresentation;AndroidOrderedPathPresentation currentOrderedPresentation(){return orderedPresentation!=null&&orderedPresentation.current(this)?orderedPresentation:null;}
  boolean mutationBusy(){return AndroidVpnMutationGuard.isBusy(this);}void map(){refreshNodes();}SharedPreferences mapPreferences(){return prefs();}
  boolean isDestroyed(){return false;}void toast(String message){toast=message;}void refreshAll(){statusView.setText("Refreshed current Home");}void refreshConnectionLater(){}AndroidUnifiedConnectionController.Callback userCallback(){return callback();}
  // SHIPPING_CALLBACK
@@ -111,11 +116,11 @@ final class UsageActivity extends android.app.Activity{
 // The map receives the exact shipping marker projection. Android canvas drawing
 // and physical rendering remain separate device acceptance requirements.
 final class RouterVpnNodeMapView {
- static final String ROLE_ENTRY="entry",ROLE_EXIT="exit",ROLE_SELECTED="selected",ROLE_EXTERNAL="external",ROLE_NORMAL="normal";
+ static final String ROLE_ENTRY="entry",ROLE_HOP="hop",ROLE_EXIT="exit",ROLE_SELECTED="selected",ROLE_EXTERNAL="external",ROLE_NORMAL="normal";
  // SHIPPING_MAP_MARKER
  // SHIPPING_MAP_VALID
  boolean renders(Marker marker){return valid(marker);}
- List<Marker> markers=new ArrayList<>();void setMarkers(List<Marker> values){markers=new ArrayList<>(values);}
+ List<Marker> markers=new ArrayList<>();List<String> ordered=new ArrayList<>();boolean orderedLive;void setMarkers(List<Marker> values){markers=new ArrayList<>(values);}void setOrderedPath(List<String> values,boolean live){ordered=new ArrayList<>(values);orderedLive=live;}
 }
 final class UsageMapTelemetry {double cachedMedian(String id){return 0;}}
 '''
@@ -269,11 +274,60 @@ public final class NodeUsageTest{
    AndroidStandardExitStore.Entry e=f.exits.get(f.x.id);String old=AndroidStandardExitStore.snapshot(e);e.location="Chicago";e.latitude=41.8781;e.longitude= -87.6298;f.exits.saveIfUnchanged(e,old);
    AndroidUnifiedNodeCatalog.Item item=f.catalog.list().stream().filter(i->i.kind.equals("external")&&i.id.equals(e.id)).findFirst().orElseThrow();check(item.hasCoordinates()&&item.latitude==41.8781&&item.longitude== -87.6298&&item.location.equals("Chicago")&&item.subtitle().contains("Chicago")&&!item.hasMeasuredLatency(),"external catalog lost explicit coordinates/location or invented latency");
    f.activity.mapPreferences().edit().putString("selected_kind","external").putString("selected_id",e.id).apply();f.activity.map();check(f.activity.mapView.markers.size()==1,"shipping map omitted the external pin or created an absent pin");RouterVpnNodeMapView.Marker marker=f.activity.mapView.markers.get(0);check(marker.id.equals("external:"+e.id)&&marker.latitude==e.latitude&&marker.longitude==e.longitude&&marker.role.equals("selected")&&marker.latencyMs==0&&f.activity.mapView.renders(marker),"shipping external pin changed exact coordinates/role or invented measurement");check(f.activity.nodeButton.getText().toString().contains("Chicago"),"selected external location label is not displayed");
+   f.activity.currentExternalReceipt=new UsageActivity.UnprovedExternalReceipt(e.id);f.activity.map();check(f.activity.currentExternalReceipt.checks>0&&f.activity.mapView.markers.get(0).latencyMs==0,"external map accepted an unowned live measurement");f.activity.currentExternalReceipt=null;
    e.latitude=0d;e.longitude=0d;f.exits.save(e);f.activity.map();check(f.activity.mapView.markers.size()==1&&f.activity.mapView.markers.get(0).latitude==0&&f.activity.mapView.markers.get(0).longitude==0&&f.activity.mapView.renders(f.activity.mapView.markers.get(0)),"valid explicit zero coordinates disappeared from shipping map");
    e.latitude=null;e.longitude=null;f.exits.save(e);f.activity.map();check(f.activity.mapView.markers.isEmpty()&&f.activity.nodeButton.getText().toString().contains("Chicago"),"clearing coordinates retained the old pin or removed its independent label");
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1){if(!List.of("imported-packet","imported-socks").contains(args[1]))throw new AssertionError("Unknown usage family");importedProtocols=args[1].equals("imported-socks")?List.of("socks5"):List.of("wireguard","amneziawg");importedExclusions(root);System.out.println("Android "+args[1]+" entry usage: "+checks+" shipping controller/store/Home checks PASS (native proof boundary controlled)");return;}externalMap(root);ordinary(root);excluded(root);importedExclusions(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
+ static AndroidNodeStore.ChainCapture ordered(Fixture f)throws Exception{
+  f.store.remove(f.a.id);f.store.remove(f.b.id);JSONArray refs=new JSONArray();
+  for(int i=0;i<3;i++)refs.put(new JSONObject().put("id","ordered-"+i).put("mode",i==2?"shadowsocks":"wg"));
+  AndroidNodeStore.Node control=null;
+  for(int i=0;i<3;i++){
+   JSONObject b=bundle(String.valueOf((char)('c'+i)).repeat(64),"Ordered "+i,0);JSONObject p=b.getJSONArray("routerProfiles").getJSONObject(0);
+   p.put("id","ordered-"+i);b.put("selectedRouterID","ordered-"+i).put("activeRouterProfileId","ordered-"+i);
+   if(i!=1)p.put("latitude",10+i).put("longitude",20+i);
+   if(i==2){p.put("multihop_enabled",true).put("multihop_execution","local").put("multihop_nodes",refs);b.getJSONObject("profiles").put("shadowsocks",new JSONObject().put("fixture","controlled-native-boundary"));}
+   control=f.store.importBundle(b.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+  }
+  f.activity.mapPreferences().edit().putString("selected_kind","router-vpn").putString("selected_id",control.id).putBoolean("multihop_on",true).putString("multihop_nodes",refs.toString()).apply();
+  return f.store.captureChain(control.id);
+ }
+ static JSONObject orderedProgress(AndroidNodeStore.ChainCapture captured)throws Exception{
+  JSONArray prefixes=new JSONArray();for(int i=0;i<captured.members.size();i++)prefixes.put(new JSONObject().put("position",i).put("profile_id",captured.members.get(i).profileId).put("response_ms",10.0+i).put("proven",true));
+  return new JSONObject().put("complete",true).put("ready",true).put("execution","local").put("prefixes",prefixes);
+ }
+ static void orderedUsage(Path root)throws Exception{
+  for(String fault:List.of("","source","order","mode","control","stop"))try(Fixture f=new Fixture(root)){
+   var captured=ordered(f);var attempt=AndroidNodeUsage.ordered(f.activity,f.store,captured);var home=AndroidHomeStateStore.beginNodeChain(f.activity,captured);attempt.owned(f.activity,home.sessionId);
+   check(AndroidHomeStateStore.connectedNodeChain(f.activity,home),"controlled ordered native boundary could not adopt original Home");
+   if(fault.equals("source"))Files.writeString(f.store.file(captured.members.get(1).id).toPath(),"changed middle source");
+   if(fault.equals("order")||fault.equals("mode")){JSONArray altered=new JSONArray(home.activeChain);if(fault.equals("order")){JSONObject first=altered.getJSONObject(0);altered.put(0,altered.getJSONObject(1));altered.put(1,first);}else altered.getJSONObject(1).put("mode","shadowsocks");f.activity.getSharedPreferences("routervpn_home_state_v1",0).edit().putString("active_chain",altered.toString()).apply();}
+   if(fault.equals("control"))f.activity.getSharedPreferences("routervpn_home_state_v1",0).edit().putString("active_node_id",captured.members.get(0).id).apply();
+   if(fault.equals("stop"))AndroidHomeStateStore.advancePathGeneration(f.activity);
+   String result=attempt.finished(f.activity,"f".repeat(32),true);
+   if(fault.isEmpty()){check(result.isEmpty(),"ordered original proof usage was not saved");for(var member:captured.members)check(f.count("router-vpn",member.id)==1,"ordered usage omitted an original member");byte[] saved=f.read(f.usage());attempt.finished(f.activity,"f".repeat(32),true);check(Arrays.equals(saved,f.read(f.usage())),"ordered usage counted duplicate completion");}
+   else check(!result.isEmpty()&&!f.usage().exists(),"ordered usage accepted a changed source or graph: "+fault);
+  }
+ }
+ static void orderedPresentation(Path root)throws Exception{
+  try(Fixture f=new Fixture(root)){
+   var captured=ordered(f);var home=AndroidHomeStateStore.beginNodeChain(f.activity,captured);check(AndroidHomeStateStore.connectedNodeChain(f.activity,home),"ordered display Home setup failed");
+   var runtime=AndroidRuntimeRegistry.get(f.activity).nodeChain;runtime.active=new AndroidNodeChainRuntime.ActiveCapture(captured,home,orderedProgress(captured).toString());
+   AtomicReference<AndroidOrderedPathPresentation> result=new AtomicReference<>();AtomicReference<Throwable> error=new AtomicReference<>();
+   Thread worker=new Thread(()->{try{result.set(AndroidOrderedPathPresentation.capture(f.activity,f.store,f.exits,runtime));}catch(Throwable e){error.set(e);}},"ordered-render-worker");worker.start();worker.join(4000);
+   check(!worker.isAlive()&&error.get()==null&&result.get()!=null,"ordered worker could not capture the original receipt: "+error.get());f.activity.orderedPresentation=result.get();int reads=runtime.activeReads;
+   for(int i=0;i<10;i++)f.activity.map();
+   check(runtime.activeReads==reads,"ordered UI render reread the native owner");
+   check(f.activity.mapView.ordered.size()==3&&f.activity.mapView.orderedLive&&f.activity.mapView.markers.size()==2,"ordered map omitted the unlocated middle identity or invented its coordinates");
+   for(var marker:f.activity.mapView.markers)check(marker.name.contains("routed HTTP proof")&&marker.latencyMs>=10&&marker.latencyMs<=12,"ordered map borrowed ordinary catalog latency or mislabeled HTTP proof");
+   for(String kind:List.of("routed HTTP proof","HTTPS")){var marker=new RouterVpnNodeMapView.Marker("long","A deliberately very long original node name • "+kind,10,20,"entry",12.5);check(marker.label().contains("…")&&marker.label().endsWith("12.5 ms "+kind),"rendered map truncated its measured protocol: "+kind);}
+   JSONObject mismatched=orderedProgress(captured);mismatched.getJSONArray("prefixes").getJSONObject(1).put("profile_id",captured.members.get(0).profileId);runtime.active=new AndroidNodeChainRuntime.ActiveCapture(captured,home,mismatched.toString());
+   boolean refused=false;try{AndroidOrderedPathPresentation.capture(f.activity,f.store,f.exits,runtime);}catch(Exception expected){refused=true;}check(refused,"ordered display accepted another prefix's response");
+   AndroidHomeStateStore.advancePathGeneration(f.activity);check(f.activity.currentOrderedPresentation()==null,"ordered display survived a completed stop generation");f.activity.map();check(!f.activity.mapView.orderedLive,"ordered map animated a retired receipt");
+  }
+ }
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1){if(!List.of("imported-packet","imported-socks").contains(args[1]))throw new AssertionError("Unknown usage family");importedProtocols=args[1].equals("imported-socks")?List.of("socks5"):List.of("wireguard","amneziawg");importedExclusions(root);System.out.println("Android "+args[1]+" entry usage: "+checks+" shipping controller/store/Home checks PASS (native proof boundary controlled)");return;}externalMap(root);ordinary(root);excluded(root);importedExclusions(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);orderedUsage(root);orderedPresentation(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
 }
 '''
 
@@ -339,7 +393,7 @@ def main():
         app = root / 'com/eabusham/routervpn'
         app.mkdir(parents=True)
         (app / 'Boundaries.java').write_text(boundaries)
-        (app / 'UsageActivity.java').write_text(ACTIVITY.replace(' // SHIPPING_CALLBACK', callback).replace(' // SHIPPING_MAP_PROJECTION', S.block(product, '    private void refreshNodes(')).replace(' // SHIPPING_MAP_CONSTANTS', map_constants).replace(' // SHIPPING_PREFS', S.block(product, '    private SharedPreferences prefs(')).replace(' // SHIPPING_MAP_MARKER', S.block((JAVA / 'RouterVpnNodeMapView.java').read_text(), '    static final class Marker')).replace(' // SHIPPING_MAP_VALID', S.block((JAVA / 'RouterVpnNodeMapView.java').read_text(), '    private boolean valid(Marker m)')))
+        (app / 'UsageActivity.java').write_text(ACTIVITY.replace(' // SHIPPING_EXTERNAL_LATENCY', S.block(product, '    private double liveExternalMedian(')).replace(' // SHIPPING_CALLBACK', callback).replace(' // SHIPPING_MAP_PROJECTION', S.block(product, '    private void refreshNodes(')).replace(' // SHIPPING_MAP_CONSTANTS', map_constants).replace(' // SHIPPING_PREFS', S.block(product, '    private SharedPreferences prefs(')).replace(' // SHIPPING_MAP_MARKER', S.block((JAVA / 'RouterVpnNodeMapView.java').read_text(), '    static final class Marker')).replace(' // SHIPPING_MAP_VALID', S.block((JAVA / 'RouterVpnNodeMapView.java').read_text(), '    private boolean valid(Marker m)')))
         external = (JAVA / 'StandardExitActivity.java').read_text()
         start = external.index('\n', external.index('public final class StandardExitActivity'))
         fields = external[start:external.index('    @Override protected void onCreate(')]
@@ -353,7 +407,7 @@ def main():
                       '    private void startPending(', '    private boolean activeOrTransitioning(', '    @Override protected void onActivityResult(')
         (app / 'StandardExitActivity.java').write_text(EXTERNAL_ACTIVITY.replace(' // SHIPPING_FIELDS', fields).replace(' // SHIPPING_METHODS', '\n'.join(S.block(external, signature) for signature in signatures)))
         (app / 'NodeUsageTest.java').write_text(HARNESS)
-        names = ('AndroidPrivateFileStore', 'AndroidNodeUsage', 'AndroidHomeStateStore', 'AndroidNodeStore', 'AndroidStandardExitStore', 'AndroidProfileSelection', 'AndroidUnifiedNodeCatalog', 'AndroidConnectionSelection', 'AndroidUnifiedConnectionController', 'AndroidNumericAddress')
+        names = ('AndroidPrivateFileStore', 'AndroidNodeUsage', 'AndroidHomeStateStore', 'AndroidNodeStore', 'AndroidStandardExitStore', 'AndroidProfileSelection', 'AndroidUnifiedNodeCatalog', 'AndroidConnectionSelection', 'AndroidUnifiedConnectionController', 'AndroidNumericAddress', 'AndroidOrderedPathPresentation')
         for name in names:
             (app / (name + '.java')).write_bytes((JAVA / (name + '.java')).read_bytes())
         compile = ['javac', '--release', '17', '-encoding', 'UTF-8', '-proc:none', '-cp', str(jar), '-d', str(root / 'classes'), *map(str, root.rglob('*.java'))]
@@ -364,6 +418,12 @@ def main():
         subprocess.run([*run, "imported-packet"], check=True, timeout=60)
         subprocess.run([*run, "imported-socks"], check=True, timeout=60)
         controls = (
+            ('UsageActivity.java', 'currentExternalReceipt.requireCurrent();', '', 'external map accepted an unowned live measurement'),
+            ('AndroidNodeUsage.java', 'nodes.size()>8', 'nodes.size()>2', 'ordered original proof usage was not saved'),
+            ('AndroidNodeUsage.java', '!sameChain(chain,home.activeChain)', 'false', 'ordered usage accepted a changed source or graph: order'),
+            ('AndroidOrderedPathPresentation.java', '!sources.get(i).profileId.equals(prefix.optString("profile_id"))', 'false', "ordered display accepted another prefix's response"),
+            ('UsageActivity.java', 'presentation.members.get(position).httpResponseMs', '0', 'ordered map borrowed ordinary catalog latency or mislabeled HTTP proof'),
+            ('UsageActivity.java', 'if(!measurement.isEmpty())label+=" "+measurement;', '', 'rendered map truncated its measured protocol: routed HTTP proof'),
             ('AndroidNodeUsage.java', '!AndroidImportedRouterPath.supports(entry.protocol,exitMode)', '!Arrays.asList("shadowsocks","hysteria2","wireguard","amneziawg").contains(entry.protocol)', 'imported usage conflated same text IDs across original node kinds: socks5'),
             ('AndroidNodeUsage.java', 'Arrays.asList(captureExternal(context,entry),captureRouter(exit))', 'Collections.singletonList(captureRouter(exit))', 'imported multihop did not count both original typed nodes'),
             ('AndroidNodeUsage.java', 'entry.id,exit.id,entry.protocol,"",false)', 'entry.id,exit.id,"shadowsocks","",false)', 'imported usage conflated same text IDs across original node kinds: hysteria2'),

@@ -6,6 +6,7 @@ ROOT=Path(__file__).resolve().parents[1]
 JAVA=ROOT/'android/app/src/main/java/com/eabusham/routervpn'
 SOURCES={
 'android/content/Context.java':'''package android.content; public class Context {public static final String CONNECTIVITY_SERVICE="connectivity"; public static Object service=new android.net.ConnectivityManager(); public static boolean denyLookup; public Object getSystemService(String key){if(denyLookup)throw new SecurityException("service denied");return service;}}''',
+'android/app/Activity.java':'package android.app;public class Activity extends android.content.Context {}',
 'android/net/ConnectivityManager.java':'''package android.net; public class ConnectivityManager {public static Network active; public static NetworkCapabilities caps=new NetworkCapabilities(); public static boolean denyActive,denyCapabilities; public Network getActiveNetwork(){if(denyActive)throw new SecurityException("network denied");return active;} public NetworkCapabilities getNetworkCapabilities(Network n){if(denyCapabilities)throw new SecurityException("capabilities denied");return caps;}}''',
 'android/net/Network.java':'package android.net; public class Network {}',
 'android/net/NetworkCapabilities.java':'''package android.net; public class NetworkCapabilities {public static final int TRANSPORT_VPN=4; public static boolean vpn,denyOwner; public static int owner=1000,ownerCalls; public boolean hasTransport(int t){return vpn;} public int getOwnerUid(){ownerCalls++;if(android.os.Build.VERSION.SDK_INT<30)throw new NoSuchMethodError("getOwnerUid requires API30");if(denyOwner)throw new SecurityException("owner denied");return owner;}}''',
@@ -18,20 +19,20 @@ import android.content.Context;
 final class AndroidViaEntryLatencyProbe {static boolean active;static boolean hasActiveOperation(){return active;}}
 final class AndroidHomeStateStore {
     static final class Snapshot {boolean connected;String phase="failed";}
-    static Snapshot home=new Snapshot();static Snapshot snapshot(Context c){return home;}
+    static Snapshot home=new Snapshot();static Snapshot snapshot(Context c){return home;}static long epoch;static String reason="";static void warning(Context c,String text){epoch++;reason=text;}static void disconnected(Context c){home.phase="off";home.connected=false;reason="";}static void failed(Context c,String text){home.phase="failed";home.connected=false;reason=text;}
 }
 final class AndroidRuntimeRegistry {
     static AndroidRuntimeRegistry current=new AndroidRuntimeRegistry();
     static AndroidRuntimeRegistry get(Context c){return current;}
     final Orchestrator orchestrator=new Orchestrator();
-    final RuntimeState multihop=new RuntimeState(),standardExit=new RuntimeState();
+    final RuntimeState multihop=new RuntimeState(),standardExit=new RuntimeState(),nodeChain=new RuntimeState();
     final WG wireGuard=new WG();final AWG amneziaWG=new AWG();
     final Embedded singBox=new Embedded(),xray=new Embedded();
     static final class Orchestrator {boolean running,active=true;boolean isRunning(){return running;}boolean isActive(){return active;}}
-    static final class RuntimeState {boolean busy;boolean isActiveOrTransitioning(){return busy;}}
-    static final class Embedded {String state="DOWN";String getState(){return state;}}
-    static final class WG {com.wireguard.android.backend.Tunnel.State state=com.wireguard.android.backend.Tunnel.State.DOWN;com.wireguard.android.backend.Tunnel.State getState(){return state;}}
-    static final class AWG {org.amnezia.awg.backend.Tunnel.State state=org.amnezia.awg.backend.Tunnel.State.DOWN;org.amnezia.awg.backend.Tunnel.State getState(){return state;}}
+    static final class RuntimeState {boolean busy,stopResult=true,retainAfterStop;int stops;boolean isActiveOrTransitioning(){return busy;}boolean stopAndProve(){stops++;if(stopResult&&!retainAfterStop)busy=false;return stopResult;}void failClosedForRevalidation(){busy=false;}}
+    static final class Embedded {String state="DOWN";String getState(){return state;}void stop(){state="DOWN";}}
+    static final class WG {interface Callback{void result(com.wireguard.android.backend.Tunnel.State state,String message,Throwable error);}com.wireguard.android.backend.Tunnel.State state=com.wireguard.android.backend.Tunnel.State.DOWN;com.wireguard.android.backend.Tunnel.State getState(){return state;}void disconnectManaged(Callback callback){state=com.wireguard.android.backend.Tunnel.State.DOWN;callback.result(state,"",null);}}
+    static final class AWG {interface Callback{void result(org.amnezia.awg.backend.Tunnel.State state,String message,Throwable error);}org.amnezia.awg.backend.Tunnel.State state=org.amnezia.awg.backend.Tunnel.State.DOWN;org.amnezia.awg.backend.Tunnel.State getState(){return state;}void disconnectManaged(Callback callback){state=org.amnezia.awg.backend.Tunnel.State.DOWN;callback.result(state,"",null);}}
 }
 ''',
 'com/eabusham/routervpn/GuardHarness.java':r'''package com.eabusham.routervpn;
@@ -71,6 +72,8 @@ public final class GuardHarness {
         AndroidRuntimeRegistry e=reset();check("completed failed session releases cached orchestrator marker",false);
         e=reset();AndroidViaEntryLatencyProbe.active=true;check("temporary entry reservation blocks mutation before native startup",true);
         e=reset();e.multihop.busy=true;check("failed Home cannot release unfinished multihop worker",true);
+        e=reset();e.nodeChain.busy=true;check("failed Home cannot release retained ordered owner",true);recovery("ordered cleanup cannot authorize failed-session recovery",false);
+        e=reset();e.nodeChain.busy=true;e.orchestrator.active=false;AndroidHomeStateStore.home.phase="off";check("idle Home cannot release retained ordered owner",true);
         e=reset();e.standardExit.busy=true;check("failed Home cannot release unfinished custom-exit worker",true);
         e=reset();e.multihop.busy=true;e.standardExit.busy=true;check("all remaining runtime owners must settle",true);
         e=reset();e.orchestrator.active=false;AndroidHomeStateStore.home.phase="off";e.wireGuard.state=null;check("unknown WireGuard state blocks mutation",true);
@@ -116,6 +119,27 @@ def shipping_method(name, signature):
 imports='package com.eabusham.routervpn;import android.content.Context;import android.net.*;import android.os.Build;import android.os.Process;'
 SOURCES['com/eabusham/routervpn/HomeOwnership.java']=imports+'final class HomeOwnership {'+shipping_method('AndroidHomeSummary.java','private static Network ownedVpnNetwork(Context context)')+'static Network inspect(Context c){return ownedVpnNetwork(c);}}'
 SOURCES['com/eabusham/routervpn/ForwardOwnership.java']=imports+'final class ForwardOwnership {final Context context;ForwardOwnership(Context c){context=c;}'+shipping_method('AndroidForwardingMaster.java','private Network ownedVpnNetwork()')+'Network inspect(){return ownedVpnNetwork();}}'
+SOURCES['com/eabusham/routervpn/HomeEmergency.java']=imports+'''import android.app.Activity;import java.util.concurrent.*;import java.util.concurrent.atomic.*;
+final class HomeEmergency {interface Callback{void done(String message,Throwable error);}static String provedSignature="",provedExit="";static String safe(Throwable e){return e.getMessage();}
+private static Network ownedVpnNetwork(Context c){return HomeOwnership.inspect(c);}
+private static boolean terminalEngineState(String state){return "DOWN".equals(state)||"FAILED".equals(state)||"REVOKED".equals(state);}
+'''+shipping_method('AndroidHomeSummary.java','static void emergencyDisconnect(Activity activity, Callback callback)')+'''
+ public static void main(String[] args)throws Exception{
+  Activity activity=new Activity();
+  for(String fault:new String[]{"","cleanup","retained"}){
+   AndroidRuntimeRegistry runtime=GuardHarness.reset();runtime.nodeChain.busy=true;runtime.nodeChain.stopResult=!fault.equals("cleanup");runtime.nodeChain.retainAfterStop=fault.equals("retained");runtime.multihop.busy=true;runtime.standardExit.busy=true;runtime.singBox.state="UP";runtime.xray.state="UP";
+   long before=AndroidHomeStateStore.epoch;CountDownLatch completed=new CountDownLatch(1);AtomicReference<Throwable> failure=new AtomicReference<>();
+   emergencyDisconnect(activity,(message,error)->{failure.set(error);completed.countDown();});
+   if(!completed.await(8,TimeUnit.SECONDS))throw new AssertionError("emergency worker did not finish");
+   if(AndroidHomeStateStore.epoch<=before)throw new AssertionError("emergency did not revoke permission generation");
+   if(runtime.nodeChain.stops!=1)throw new AssertionError("emergency did not stop the retained ordered owner");
+   if(runtime.multihop.busy||runtime.standardExit.busy||!runtime.singBox.state.equals("DOWN")||!runtime.xray.state.equals("DOWN"))throw new AssertionError("ordered cleanup failure prevented other emergency stop requests");
+   if(fault.isEmpty()){if(failure.get()!=null||!AndroidHomeStateStore.home.phase.equals("off")||!AndroidHomeStateStore.reason.isEmpty())throw new AssertionError("confirmed ordered stop did not finish emergency");}
+   else if(failure.get()==null||!runtime.nodeChain.busy||AndroidHomeStateStore.reason.isEmpty())throw new AssertionError("emergency cleared unfinished ordered cleanup: "+fault);
+  }
+  System.out.println("Android emergency ordered ownership: confirmed stop, failed cleanup and retained native owner PASS");
+ }
+}'''
 with tempfile.TemporaryDirectory(prefix='rvpn-guard-idle-') as tmp:
     base=Path(tmp)
     for name,text in SOURCES.items():
@@ -123,6 +147,7 @@ with tempfile.TemporaryDirectory(prefix='rvpn-guard-idle-') as tmp:
     shutil.copyfile(JAVA/'AndroidVpnMutationGuard.java',base/'com/eabusham/routervpn/AndroidVpnMutationGuard.java')
     subprocess.run(['javac','-d',str(base),*[str(p) for p in base.rglob('*.java')]],check=True,timeout=30)
     subprocess.run(['java','-cp',str(base),'com.eabusham.routervpn.GuardHarness'],check=True,timeout=30)
+    subprocess.run(['java','-cp',str(base),'com.eabusham.routervpn.HomeEmergency'],check=True,timeout=30)
     for name in ('AndroidVpnMutationGuard','HomeOwnership','ForwardOwnership'):
         target=base/'com/eabusham/routervpn'/f'{name}.java';original=target.read_text()
         changed=original.replace('Build.VERSION_CODES.R','Build.VERSION_CODES.Q');assert changed!=original
@@ -132,3 +157,9 @@ with tempfile.TemporaryDirectory(prefix='rvpn-guard-idle-') as tmp:
         assert result.returncode!=0 and ('API29 mutation guard called API30' in result.stderr or 'getOwnerUid requires API30' in result.stderr),result.stdout+result.stderr
         target.write_text(original)
     print('Android getOwnerUid API29 regression negatives: all three rejected')
+    target=base/'com/eabusham/routervpn/HomeEmergency.java';original=target.read_text();changed=original.replace('orderedStopped=runtime.nodeChain.stopAndProve();','orderedStopped=true;');assert changed!=original
+    target.write_text(changed)
+    subprocess.run(['javac','-d',str(base),*[str(p) for p in base.rglob('*.java')]],check=True,timeout=30)
+    result=subprocess.run(['java','-cp',str(base),'com.eabusham.routervpn.HomeEmergency'],capture_output=True,text=True,timeout=30)
+    assert result.returncode!=0 and 'emergency did not stop the retained ordered owner' in result.stderr,result.stdout+result.stderr
+    print('Android emergency ordered stop omission causal control: rejected')

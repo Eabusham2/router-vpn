@@ -145,6 +145,8 @@ final class AndroidExternalPolicy {
 
 PRODUCT = r'''package com.eabusham.routervpn;
 import android.content.*;import java.util.*;import org.json.*;import java.nio.charset.StandardCharsets;
+// Native-owned ordered display capture is exercised by the ordered usage suite.
+final class AndroidOrderedPathPresentation {static final class Member{String name,mode;double httpResponseMs;}boolean live;List<Member> members;}
 // Only UI rendering and runtime dispatch are doubled. The shipping handler reads
 // the same actual profile/node/exit stores used by the persistence regression.
 final class ProductConnectSurface extends Context {
@@ -162,6 +164,9 @@ final class ProductConnectSurface extends Context {
   void connectExternal(AndroidConnectionProfileStore.ExternalSelection path,Object callback){if(path.ordinaryEntry!=null){starts++;ordinaryEntry=path.ordinaryEntry;exit=path.exit;mode=path.entryMode;execution=path.execution;direct=false;}else connectExternal(path.entry,path.exit,path.direct(),path.entryMode,path.execution,callback);}
   AndroidNodeStore.Node importedFinal;
   boolean isMultihopConnected(){return false;}String activeMultihopEntryId(){return ordinaryEntry==null?"":ordinaryEntry.id;}String activeMultihopExitId(){return importedFinal==null?"":importedFinal.id;}String activeMultihopExitMode(){return mode;}String activeMultihopEntryMode(){return ordinaryEntry==null?"":ordinaryEntry.protocol;}AndroidStandardExitStore.Entry activeImportedMultihopEntry(){return ordinaryEntry;}
+  AndroidNodeStore.ChainCapture ordered;
+  boolean isOrderedConnected(){return false;}List<AndroidNodeStore.ChainSource> activeOrderedSources(){throw new AssertionError("store fixture has no live ordered owner");}List<String> activeOrderedModes(){throw new AssertionError("store fixture has no live ordered modes");}
+  void connectOrdered(AndroidNodeStore.ChainCapture captured,Object callback){starts++;ordered=captured;}
   void connectImportedMultihop(AndroidStandardExitStore.Entry entry,AndroidNodeStore.Node exit,String mode,String execution,Object callback){starts++;ordinaryEntry=entry;importedFinal=exit;this.mode=mode;this.execution=execution;if(!AndroidImportedRouterPath.supports(entry.protocol,mode)||!execution.equals("local"))throw new AssertionError("changed imported Router path");}
   void connectMultihop(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String mode,String execution,String entryMode,Object callback){throw new AssertionError("external selection became Router multihop");}
   void connect(String mode,List<String> layers,Object callback){throw new AssertionError("external selection used unrelated active Router");}
@@ -175,6 +180,7 @@ final class ProductConnectSurface extends Context {
  Object callback(){return new Object();}void configureMultihop(){}void refreshModeChoices(){}void refreshConnectionLater(){}ModeChoice currentMode(){throw new AssertionError("external selection used Router mode");}
  static String safe(Exception error){return error.getMessage();}void pressConnect(){connectOrDisconnect();}
  boolean mutationBusy(){return AndroidVpnMutationGuard.isBusy(this);}
+ boolean orderedPathEnabled(){return prefs().getBoolean(MULTI_ON,false)&&!prefs().getString("multihop_nodes","").isEmpty();}AndroidOrderedPathPresentation currentOrderedPresentation(){return null;}
  void pressDNS(String mode){setQuickDns(mode);}void refreshDnsSelection(){}boolean openSelectedExternal(boolean edit){return isExternalSelected();}
  JSONObject activeBundle()throws Exception{return new JSONObject(ConnectionProfilesHarness.text(nodeStore.file(nodeStore.activeId())));}
  JSONObject selectedProfile(JSONObject bundle)throws Exception{return AndroidProfileSelection.selectedRouterProfile(bundle);}

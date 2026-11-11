@@ -6,6 +6,13 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCapture.java'
       - 'android/test_android_node_chain_capture.py'
+      - 'android/test_android_ordered_presentation.py'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedPathPresentation.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedConnectionController.java'
+      - 'android/test_android_node_usage.py'
+      - 'android/test_android_external_permission.py'
+      - 'android/test_android_startup_policy.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainRuntime.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSession.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidHomeStateStore.java'
@@ -51,6 +58,13 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCapture.java'
       - 'android/test_android_node_chain_capture.py'
+      - 'android/test_android_ordered_presentation.py'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedPathPresentation.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedConnectionController.java'
+      - 'android/test_android_node_usage.py'
+      - 'android/test_android_external_permission.py'
+      - 'android/test_android_startup_policy.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainRuntime.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSession.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidHomeStateStore.java'
@@ -113,6 +127,7 @@ jobs:
         run: |
           python3 android/test_android_multihop_contract.py
           python3 android/test_android_node_chain_capture.py
+          python3 android/test_android_ordered_presentation.py
           python3 android/test_android_node_chain_runtime.py
           python3 android/test_android_node_chain_mtu.py
           python3 android/test_android_multihop_modes.py
