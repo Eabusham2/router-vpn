@@ -312,16 +312,18 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
         cases = re.search(r'for _, fault := range \[\]string\{([^}]+)\}',host).group(1)
         self.assertEqual(tuple(re.findall(r'"([^"]+)"',cases)),N.IMPORTED_DESKTOP_DNS_CASES)
 
-    def test_reused_bundle_gate_must_complete_before_success(self):
+    @patch.object(N.GO_SOCKETS, 'environment', side_effect=lambda **options: options['env'])
+    def test_reused_bundle_gate_must_complete_before_success(self, go_sockets):
         for target in N.TARGETS:
             for failure in (None,ValueError('missing original DNS verdict'),subprocess.CalledProcessError(7,['native-gate']),subprocess.TimeoutExpired(['native-gate'],300)):
                 with self.subTest(target=target,failure=type(failure).__name__),tempfile.TemporaryDirectory() as directory:
                     bundle = Path(directory)/'bundle';bundle.mkdir();(bundle/'retained').write_bytes(b'exact prior bundle boundary')
                     env = {'GOOS':target.split('/')[0],'GOARCH':target.split('/')[1]}
+                    go_sockets.reset_mock()
                     stdout = io.StringIO()
                     with patch.object(N,'environment',return_value=env),patch.object(N,'digest',return_value='original'), \
                          patch.object(N,'reuse',return_value={'captured':'receipt'}) as receipt,patch.object(N,'native_host_target',return_value=target), \
-                         patch.object(N,'verify_linux_stock_dns'),patch.object(N,'verify_installed_darwin_host'), \
+                         patch.object(N,'verify_linux_stock_dns'),patch.multiple(N, verify_installed_darwin_host=unittest.mock.DEFAULT, verify_reused_linux_host=unittest.mock.DEFAULT), \
                          patch.object(N.DNSSEC,'test_native_bundle'),patch.object(N,'run') as run, \
                          patch.object(N,'verify_imported_desktop_packet_configs') as packet, \
                          patch.object(N,'verify_imported_desktop_openvpn_configs'), \
@@ -335,6 +337,7 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
                     if failure is None: packet.assert_called_once_with(bundle,target,env)
                     else: packet.assert_not_called()
                     receipt.assert_called_once_with(bundle,target,'original',env)
+                    self.assertEqual(go_sockets.call_args_list, [unittest.mock.call(env=env)] if target.startswith('windows/') else [])
                     run.assert_not_called()
                     self.assertEqual('Reused verified complete native runtime' in stdout.getvalue(),failure is None)
                     self.assertEqual((bundle/'retained').read_bytes(),b'exact prior bundle boundary')

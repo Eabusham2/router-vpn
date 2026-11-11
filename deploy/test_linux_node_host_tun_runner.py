@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Require real installed-host lifecycle evidence and exact namespace inputs."""
 from pathlib import Path
-from contextlib import redirect_stderr
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import hashlib
 import ast
 import importlib.util
+import inspect
 import io
 import json
 import os
@@ -954,6 +955,182 @@ class SSHysteriaVerdicts(unittest.TestCase):
             for required in (line,verdict):
                 for changed in (good.replace(required,'',1),good+required,good.replace(required,required.replace(case,case+'-foreign'),1)):
                     with self.subTest(case=case),self.assertRaises(ValueError): G.check_verdict(changed,case)
+
+class InstalledLinuxWarmReuse(unittest.TestCase):
+    def test_preparation_keeps_every_original_projection_and_module_check(self):
+        native = G.BUILD
+        source, xray, env = Path('/original/core'), Path('/original/xray'), {'captured': 'environment'}
+        required = ('policy', 'performance', 'openvpn', 'external', 'buffers', 'tidy', 'verify', 'amnezia')
+        for failure in (None, *required):
+            with self.subTest(failure=failure):
+                calls = []
+                def record(name):
+                    def invoke(*args, **kwargs):
+                        calls.append((name, args, kwargs))
+                        if name == failure:
+                            raise ValueError('original '+name+' refused')
+                    return invoke
+                def run(command, **kwargs):
+                    self.assertEqual(command[:2], ['go', 'mod'])
+                    record(command[2])(command, **kwargs)
+                with patch.object(native.POLICY, 'prepare_native', side_effect=record('policy')), \
+                     patch.object(native.PERFORMANCE, 'prepare', side_effect=record('performance')), \
+                     patch.object(native.OPENVPN, 'prepare', side_effect=record('openvpn')), \
+                     patch.object(native.EXTERNAL, 'prepare', side_effect=record('external')), \
+                     patch.object(native.BUFFERS, 'prepare', side_effect=record('buffers')), \
+                     patch.object(native.POLICY.AMNEZIA, 'verify', side_effect=record('amnezia')), \
+                     patch.object(native, 'run', side_effect=run):
+                    if failure is None:
+                        native.prepare_native_sources(source, xray, env)
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'original '+failure+' refused'):
+                            native.prepare_native_sources(source, xray, env)
+                self.assertEqual([name for name, _, _ in calls], list(required if failure is None else required[:required.index(failure)+1]))
+                for name, args, kwargs in calls:
+                    expected = (source, xray) if name == 'policy' else (['go', 'mod', name],) if name in ('tidy', 'verify') else (source,)
+                    self.assertEqual(args, expected)
+                    self.assertEqual(kwargs, {'env': env} if name == 'external' else {'cwd': source, 'env': env} if name in ('tidy', 'verify') else {})
+
+    def test_warm_host_refuses_foreign_kernel_target_or_unverified_bundle_before_preparation(self):
+        native = G.BUILD
+        env = {'GOOS': 'linux', 'GOARCH': 'amd64', 'CGO_ENABLED': '1'}
+        cases = (('Darwin', 'linux/amd64', env), ('Linux', 'linux/arm64', dict(env, GOARCH='arm64')),
+                 ('Linux', 'windows/amd64', dict(env, GOOS='windows')), ('Linux', 'linux/amd64', dict(env, GOARCH='arm64')),
+                 ('Linux', 'linux/amd64', dict(env, CGO_ENABLED='0')))
+        with patch.object(native, 'native_host_target', return_value='linux/amd64'), \
+             patch.object(native, 'reuse') as reuse, patch.object(native, 'checkout') as checkout, \
+             patch.object(native, 'run') as run, patch.object(native, 'verify_installed_linux_host') as gate:
+            for system, target, captured in cases:
+                with self.subTest(system=system, target=target, env=captured), \
+                     patch.object(native.platform, 'system', return_value=system), self.assertRaises(ValueError):
+                    native.verify_reused_linux_host(Path('/captured/bundle'), target, captured)
+            reuse.assert_not_called()
+            with patch.object(native.platform, 'system', return_value='Linux'):
+                reuse.side_effect = ValueError('original bundle refused')
+                with self.assertRaisesRegex(ValueError, 'original bundle refused'):
+                    native.verify_reused_linux_host(Path('/captured/bundle'), 'linux/amd64', env)
+            checkout.assert_not_called(); run.assert_not_called(); gate.assert_not_called()
+
+    def test_warm_host_rebuilds_exact_test_sources_and_keeps_full_gate_and_payload_checks(self):
+        native = G.BUILD
+        for arch in ('amd64', 'arm64'):
+            for fault in (None, 'compiler', 'pristine', 'prepare', 'native-failure', 'native-timeout', 'changed-bundle'):
+                with self.subTest(arch=arch, fault=fault):
+                    target, bundle = 'linux/'+arch, Path('/captured/original-bundle')
+                    env = {'GOOS': 'linux', 'GOARCH': arch, 'CGO_ENABLED': '1'}
+                    original, calls, identities = {'original': 'payloads-and-source'}, [], []
+                    errors = {'compiler': ValueError, 'pristine': ValueError, 'prepare': ValueError,
+                              'native-failure': subprocess.CalledProcessError, 'native-timeout': subprocess.TimeoutExpired,
+                              'changed-bundle': ValueError}
+                    def reuse(directory, selected, *, env):
+                        self.assertEqual((directory, selected, env), (bundle, target, captured))
+                        calls.append('identity')
+                        identities.append(original)
+                        return {'replacement': 'payload'} if fault == 'changed-bundle' and len(identities) == 3 else original
+                    def checkout(path, url, revision):
+                        calls.append(('checkout', path, url, revision))
+                    def pristine(path, revision):
+                        calls.append(('pristine', path, revision))
+                        if fault == 'pristine': raise ValueError('original pinned source refused')
+                    def prepare(source, xray, environment):
+                        self.assertEqual(environment, captured)
+                        calls.append(('prepare', source, xray))
+                        if fault == 'prepare': raise ValueError('original source projection refused')
+                    def run(command, **kwargs):
+                        if command == ['go', 'env', 'GOVERSION']:
+                            calls.append('compiler')
+                            return 'go-wrong' if fault == 'compiler' else native.TOOLCHAIN
+                        args = [str(value) for value in command]
+                        self.assertEqual(kwargs['env'], captured)
+                        self.assertEqual(kwargs['cwd'], ROOT)
+                        calls.append(('run', args))
+                        if args[1] == str(ROOT/'deploy/test_linux_node_host_tun.py'):
+                            self.assertEqual(args[3:], ['--bundle', str(bundle)])
+                            self.assertEqual(kwargs['timeout'], 2400)
+                            if fault == 'native-failure': raise subprocess.CalledProcessError(7, args)
+                            if fault == 'native-timeout': raise subprocess.TimeoutExpired(args, 2400)
+                        else:
+                            self.assertEqual(args[1:], [str(ROOT/'deploy/test_linux_node_host_tun_runner.py')])
+                        return ''
+                    captured = env
+                    with patch.object(native.platform, 'system', return_value='Linux'), \
+                         patch.object(native, 'native_host_target', return_value=target), \
+                         patch.object(native, 'reuse', side_effect=reuse), patch.object(native, 'run', side_effect=run), \
+                         patch.object(native, 'checkout', side_effect=checkout), patch.object(native, 'pristine', side_effect=pristine), \
+                         patch.object(native, 'prepare_native_sources', side_effect=prepare), \
+                         patch.object(native, 'verify_linux_stock_dns', side_effect=lambda *args: calls.append('stock-dns')):
+                        if fault is None:
+                            native.verify_reused_linux_host(bundle, target, env)
+                        else:
+                            with self.assertRaises(errors[fault]): native.verify_reused_linux_host(bundle, target, env)
+                    self.assertEqual(calls[:2], ['identity', 'compiler'])
+                    checkouts = [call for call in calls if isinstance(call, tuple) and call[0] == 'checkout']
+                    if fault == 'compiler':
+                        self.assertEqual(checkouts, [])
+                        continue
+                    self.assertEqual(len(checkouts), 2)
+                    source, xray = checkouts[0][1], checkouts[1][1]
+                    self.assertEqual(checkouts, [('checkout', source, 'https://github.com/SagerNet/sing-box.git', native.PIN),
+                                                ('checkout', xray, 'https://github.com/XTLS/Xray-core.git', native.POLICY.XRAY.XRAY_PIN)])
+                    self.assertEqual(source.parent, xray.parent)
+                    self.assertFalse(source.parent.exists(), 'completed or failed acceptance retained disposable sources')
+                    if fault in ('pristine', 'prepare'):
+                        self.assertEqual(len(identities), 1)
+                        self.assertFalse(any(isinstance(call, tuple) and call[0] == 'run' for call in calls))
+                    else:
+                        self.assertIn(('pristine', source, native.PIN), calls)
+                        self.assertIn(('pristine', xray, native.POLICY.XRAY.XRAY_PIN), calls)
+                        self.assertIn(('prepare', source, xray), calls)
+                        self.assertIn(('run', [sys.executable, str(ROOT/'deploy/test_linux_node_host_tun.py'), str(source), '--bundle', str(bundle)]), calls)
+                        self.assertEqual(len(identities), 2 if fault in ('native-failure', 'native-timeout') else 3)
+                        if fault not in ('native-failure', 'native-timeout'): self.assertEqual(calls[-1], 'identity')
+
+    def exercise_warm_build(self, arch, failure=None, *, omit_gate=False):
+        native = G.BUILD
+        target = 'linux/'+arch
+        env = {'GOOS': 'linux', 'GOARCH': arch, 'CGO_ENABLED': '1'}
+        with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
+            bundle = Path(temporary)/'bundle'; bundle.mkdir()
+            (bundle/'original').write_bytes(b'original retained native payload')
+            stack.enter_context(patch.object(native, 'environment', return_value=env))
+            stack.enter_context(patch.object(native, 'digest', return_value='original'))
+            stack.enter_context(patch.object(native, 'reuse', return_value={'source': 'original'}))
+            stack.enter_context(patch.object(native, 'native_host_target', return_value=target))
+            stack.enter_context(patch.object(native.platform, 'system', return_value='Linux'))
+            stack.enter_context(patch.object(native.platform, 'machine', return_value='x86_64' if arch == 'amd64' else 'aarch64'))
+            stack.enter_context(patch.object(native.DNSSEC, 'test_native_bundle'))
+            for name in ('verify_linux_stock_dns', 'verify_imported_desktop_configs', 'verify_imported_desktop_packet_configs',
+                         'verify_imported_desktop_openvpn_configs', 'verify_imported_desktop_pq_configs',
+                         'verify_imported_desktop_xhttp_configs', 'verify_imported_desktop_naive_h2_configs', 'verify_imported_desktop_naive_h3_configs'):
+                stack.enter_context(patch.object(native, name))
+            gate = stack.enter_context(patch.object(native, 'verify_reused_linux_host', side_effect=failure))
+            output = stack.enter_context(redirect_stdout(io.StringIO()))
+            build = native.build
+            if omit_gate:
+                source = inspect.getsource(native.build)
+                required = '                verify_reused_linux_host(destination, target, env)\n'
+                self.assertEqual(source.count(required), 1)
+                namespace = dict(vars(native))
+                exec(compile(source.replace(required, '                pass\n', 1), 'identity-only reuse mutant', 'exec'), namespace)
+                build = namespace['build']
+            if failure is None:
+                self.assertEqual(build(target, bundle), bundle)
+            else:
+                with self.assertRaises(type(failure)) as caught: build(target, bundle)
+                self.assertIs(caught.exception, failure)
+            if gate.call_count != 1:
+                self.fail('identity-only warm reuse bypassed installed-host execution')
+            gate.assert_called_once_with(bundle, target, env)
+            self.assertEqual('Reused verified complete native runtime' in output.getvalue(), failure is None)
+            self.assertEqual((bundle/'original').read_bytes(), b'original retained native payload')
+
+    def test_warm_build_cannot_publish_before_actual_matching_host_gate(self):
+        for arch in ('amd64', 'arm64'):
+            for failure in (None, ValueError('missing installed host verdict'), subprocess.CalledProcessError(7, ['native-host']), subprocess.TimeoutExpired(['native-host'], 2400)):
+                with self.subTest(arch=arch, failure=type(failure).__name__): self.exercise_warm_build(arch, failure)
+            with self.assertRaisesRegex(AssertionError, 'identity-only warm reuse bypassed installed-host execution'):
+                self.exercise_warm_build(arch, omit_gate=True)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1095,6 +1095,29 @@ def verify_installed_linux_host(source, bundle, target, env):
     run([sys.executable, ROOT/'deploy/test_linux_node_host_tun.py', source, '--bundle', bundle], cwd=ROOT, env=env, timeout=2400)
 
 
+def verify_reused_linux_host(bundle, target, env):
+    # A payload/source receipt is not an installed-host execution receipt.
+    # Recreate only the exact prepared test sources, then use the same complete
+    # installed-host gate and the original retained bundle as a cold build.
+    if (platform.system() != 'Linux' or target != native_host_target() or
+            target not in ('linux/amd64', 'linux/arm64') or env.get('GOOS') != 'linux' or
+            env.get('GOARCH') != target.split('/')[1] or env.get('CGO_ENABLED') != '1'):
+        raise ValueError('Reused installed Linux host gate requires its matching native CGO host')
+    original = reuse(bundle, target, env=env)
+    if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:
+        raise ValueError('Incorrect pinned native Go compiler for reused Linux host acceptance')
+    with tempfile.TemporaryDirectory(prefix='routervpn-reused-linux-host-') as temporary:
+        source, xray = Path(temporary)/'core', Path(temporary)/'xray'
+        checkout(source, 'https://github.com/SagerNet/sing-box.git', PIN)
+        checkout(xray, 'https://github.com/XTLS/Xray-core.git', POLICY.XRAY.XRAY_PIN)
+        pristine(source, PIN)
+        pristine(xray, POLICY.XRAY.XRAY_PIN)
+        prepare_native_sources(source, xray, env)
+        verify_installed_linux_host(source, bundle, target, env)
+        if reuse(bundle, target, env=env) != original:
+            raise ValueError('Reused Linux bundle changed during its original installed-host acceptance')
+
+
 def verify_installed_darwin_host(source, bundle, target, env):
     if env.get('ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE') != '1':
         return
@@ -1195,6 +1218,17 @@ def stage_pt_notices(stage):
     path.write_bytes(raw)
 
 
+def prepare_native_sources(source, xray, env):
+    POLICY.prepare_native(source, xray)
+    PERFORMANCE.prepare(source)
+    OPENVPN.prepare(source)
+    EXTERNAL.prepare(source, env=env)
+    BUFFERS.prepare(source)
+    run(['go', 'mod', 'tidy'], cwd=source, env=env)
+    run(['go', 'mod', 'verify'], cwd=source, env=env)
+    POLICY.AMNEZIA.verify(source)
+
+
 def build(target, destination, *, source=None, xray=None, pq=None, cache=None, tor_compiled=None, dnssec_compiled=None):
     env, policy = environment(target, compiler=True), digest()
     if target.startswith('windows/'):
@@ -1225,6 +1259,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             verify_imported_desktop_xhttp_configs(destination, target, env)
             verify_imported_desktop_naive_h2_configs(destination, target, env)
             verify_imported_desktop_naive_h3_configs(destination, target, env)
+            if target.startswith('linux/'):
+                verify_reused_linux_host(destination, target, env)
         print('Reused verified complete native runtime '+target, flush=True)
         return destination
     if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:
@@ -1245,14 +1281,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             PQ.build(target, pq, cache or ROOT/'dist/.native-pq-cache')
         pq = Path(pq).absolute()
         pq_receipt = PQ.verify(pq, target)
-        POLICY.prepare_native(source, xray)
-        PERFORMANCE.prepare(source)
-        OPENVPN.prepare(source)
-        EXTERNAL.prepare(source, env=env)
-        BUFFERS.prepare(source)
-        run(['go', 'mod', 'tidy'], cwd=source, env=env)
-        run(['go', 'mod', 'verify'], cwd=source, env=env)
-        POLICY.AMNEZIA.verify(source)
+        prepare_native_sources(source, xray, env)
         # Only the verified build-owned archive and rustc's bounded native
         # dependency names enter the linker command. No user profile does.
         platform_flags = shlex.split(env['CGO_LDFLAGS']) if target.startswith('darwin/') else []

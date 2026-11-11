@@ -227,12 +227,14 @@ class ImportedNaiveH3RuntimeGate(unittest.TestCase):
         self.assertNotEqual(changed, source)
         with self.assertRaises(AssertionError): self.fresh('linux/amd64', source=changed)
 
-    def test_reused_bundle_cannot_report_success_before_naive_h3_gate(self):
+    @patch.object(N.GO_SOCKETS, 'environment', side_effect=lambda **options: options['env'])
+    def test_reused_bundle_cannot_report_success_before_naive_h3_gate(self, go_sockets):
         for target in N.TARGETS:
             for failure in (None, ValueError('missing Naive H3 graph'), subprocess.CalledProcessError(7, ['naive_h3']), subprocess.TimeoutExpired(['naive_h3'], 300)):
                 with self.subTest(target=target, failure=type(failure).__name__), tempfile.TemporaryDirectory() as temporary:
                     bundle = Path(temporary)/'bundle'; bundle.mkdir(); (bundle/'retained').write_bytes(b'original complete bundle')
                     env = {'GOOS':target.split('/')[0], 'GOARCH':target.split('/')[1]}
+                    go_sockets.reset_mock()
                     calls, stdout = [], io.StringIO()
                     def record(name):
                         def gate(*args):
@@ -245,7 +247,7 @@ class ImportedNaiveH3RuntimeGate(unittest.TestCase):
                         receipt = stack.enter_context(patch.object(N, 'reuse', return_value={'captured':'receipt'}))
                         stack.enter_context(patch.object(N, 'native_host_target', return_value=target))
                         stack.enter_context(patch.object(N, 'verify_linux_stock_dns'))
-                        stack.enter_context(patch.object(N, 'verify_installed_darwin_host'))
+                        stack.enter_context(patch.multiple(N, verify_installed_darwin_host=unittest.mock.DEFAULT, verify_reused_linux_host=unittest.mock.DEFAULT))
                         stack.enter_context(patch.object(N.DNSSEC, 'test_native_bundle'))
                         run = stack.enter_context(patch.object(N, 'run'))
                         for gate, name in (
@@ -265,6 +267,7 @@ class ImportedNaiveH3RuntimeGate(unittest.TestCase):
                             self.assertIs(caught.exception, failure)
                     self.assertEqual(calls, [(name,(bundle,target,env)) for name in ('ordinary','packet','openvpn','pq','xhttp','naive_h2','naive_h3')])
                     receipt.assert_called_once_with(bundle,target,'original',env); run.assert_not_called()
+                    self.assertEqual(go_sockets.call_args_list, [unittest.mock.call(env=env)] if target.startswith('windows/') else [])
                     self.assertEqual('Reused verified complete native runtime' in stdout.getvalue(), failure is None)
                     self.assertEqual((bundle/'retained').read_bytes(), b'original complete bundle')
 

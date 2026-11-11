@@ -565,6 +565,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 with patch.object(N, 'load', side_effect=lambda name, path: PHYSICAL if path == 'test_windows_node_physical.py' else original_load(name, path)), \
                      patch.object(PHYSICAL, 'checked_sources', side_effect=lambda value: (value, {'modeled-source': 'a'*64})), \
                      patch.object(N, 'environment', return_value=env), patch.object(N, 'run', side_effect=run), \
+                     patch.object(N.GO_SOCKETS, 'environment', side_effect=lambda **options: options['env']) as go_sockets, \
                      patch.object(N.platform, 'system', return_value={'darwin': 'Darwin', 'linux': 'Linux', 'windows': 'Windows'}[system]), \
                      patch.object(N.platform, 'machine', return_value='x86_64' if arch == 'amd64' else 'arm64'), \
                      patch.object(N, 'pristine'), patch.object(N.PQ, 'verify', return_value={'native_static_libs': []}), \
@@ -577,6 +578,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                                                           openvpn_failure if openvpn_failure is not None and system == 'linux' else CompilerBoundary)
                     with self.assertRaises(expected_error) as caught:
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
+                self.assertEqual(go_sockets.call_args_list, [unittest.mock.call(env=env)] if system == 'windows' else [])
                 if system == 'linux' and expected_error is CompilerBoundary:
                     dnssec.assert_called_once_with(target, dnssec_destination, compiled=None, env=env)
                 else:
@@ -2121,7 +2123,7 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
                  patch.object(N, 'verify_imported_desktop_xhttp_configs'), patch.object(N, 'verify_imported_desktop_pq_configs'), \
                  patch.object(N, 'verify_imported_desktop_naive_h2_configs') as naive_h2, \
                  patch.object(N, 'verify_imported_desktop_naive_h3_configs') as naive_h3, \
-                 patch.object(N, 'verify_imported_desktop_native_openvpn'), \
+                 patch.multiple(N, verify_imported_desktop_native_openvpn=unittest.mock.DEFAULT, verify_reused_linux_host=unittest.mock.DEFAULT), \
                  patch.object(N.DNSSEC, 'test_native_bundle', side_effect=dnssec_failure) as dnssec:
                 invoke = (lambda: N.build('linux/'+arch, bundle)) if reused else (lambda: N.verify_installed_linux_host(Path(temporary)/'core', bundle, 'linux/'+arch, env))
                 with contextlib.redirect_stdout(stdout):
