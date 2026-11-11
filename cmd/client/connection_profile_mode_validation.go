@@ -26,7 +26,7 @@ var connectionProfilePersistedModeIDs = map[string]struct{}{
 var connectionProfileRecordKeys = map[string]struct{}{
 	"id": {}, "name": {}, "node_id": {}, "mode": {}, "preferences": {},
 	"created_at": {}, "updated_at": {},
-	"external_policy": {}, "hop_preferences": {}, "node_proof_id": {},
+	"external_policy": {}, "hop_preferences": {}, "node_proof_id": {}, "node_chain": {},
 }
 
 func normalizePersistedConnectionProfileMode(mode string, prefs *connectionProfilePreferences) (string, error) {
@@ -109,7 +109,7 @@ func (p *connectionProfileRecord) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("connection profile record contains unsupported field %q", key)
 		}
 	}
-	for _, key := range []string{"external_policy", "hop_preferences"} {
+	for _, key := range []string{"external_policy", "hop_preferences", "node_chain"} {
 		if value, present := raw[key]; present && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return errors.New("saved connection policy cannot be null")
 		}

@@ -26,6 +26,7 @@ var connectionProfilePreferenceKeys = map[string]struct{}{
 	"dns_mode": {}, "dns_protocol": {}, "dns_host": {}, "dns_port": {},
 	"dns_server_name": {}, "dns_path": {}, "home_dns_captured": {}, "multihop_enabled": {},
 	"multihop_entry_id": {}, "multihop_exit_id": {}, "multihop_entry_mode": {}, "custom_layers": {},
+	"multihop_nodes": {}, "multihop_execution": {},
 }
 
 func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
@@ -41,7 +42,7 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("connection profile preferences contain unsupported field %q", key)
 		}
 	}
-	for _, key := range []string{"home_lan_cidrs", "startup_mode", "auto_connect", "home_dns_captured", "multihop_entry_mode", "daita_rate_kbps"} {
+	for _, key := range []string{"home_lan_cidrs", "startup_mode", "auto_connect", "home_dns_captured", "multihop_entry_mode", "daita_rate_kbps", "multihop_nodes", "multihop_execution"} {
 		if value, ok := raw[key]; ok && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return errors.New("saved connection policy cannot be null")
 		}
@@ -129,6 +130,15 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 	}
 	if _, err := normalizeConnectionProfileEntryMode(p.MultihopEntryMode); err != nil {
 		return err
+	}
+	if len(p.MultihopNodes) != 0 {
+		if !p.MultihopEnabled || p.MultihopExecution != "local" || p.MultihopEntryID != "" || p.MultihopExitID != "" || p.MultihopEntryMode != "" {
+			return errors.New("saved ordered path requires explicit Local execution and no legacy pair fields")
+		}
+		return common.ValidateMultihopNodes(p.MultihopNodes)
+	}
+	if p.MultihopExecution != "" {
+		return errors.New("saved ordered execution has no complete selected-node inventory")
 	}
 	if p.MultihopEnabled {
 		entryID := strings.TrimSpace(p.MultihopEntryID)

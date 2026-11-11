@@ -241,6 +241,9 @@ func (h *connectionProfileHopCapture) UnmarshalJSON(data []byte) error {
 }
 
 func validateConnectionPathCapture(record connectionProfileRecord) error {
+	if err := validateSavedNodeChain(record); err != nil {
+		return err
+	}
 	if record.NodeProofID != "" && !common.ValidNodeProofID(record.NodeProofID) {
 		return errors.New("saved Router proof identity is invalid")
 	}
@@ -278,6 +281,9 @@ func (a *app) snapshotConnectionPathLocked(node common.RouterProfile) (*connecti
 		}
 	}
 	if !node.MultihopEnabled {
+		return external, nil, nil
+	}
+	if len(node.MultihopNodes) != 0 {
 		return external, nil, nil
 	}
 	var hops []connectionProfileHopCapture
@@ -338,6 +344,10 @@ func applySavedRouterConnectionPolicy(node common.RouterProfile, p *connectionPr
 		entryMode = ""
 	}
 	updated.MultihopEntryMode = entryMode
+	updated.MultihopNodes = append([]common.MultihopNodeSelection(nil), p.MultihopNodes...)
+	if len(p.MultihopNodes) != 0 {
+		updated.MultihopExecution = p.MultihopExecution
+	}
 	if err := common.NormalizeRouterProfile(&updated); err != nil {
 		return node, err
 	}
@@ -345,6 +355,9 @@ func applySavedRouterConnectionPolicy(node common.RouterProfile, p *connectionPr
 }
 
 func (a *app) restoreConnectionHopPoliciesLocked(saved connectionProfileRecord, selected common.RouterProfile) (map[string]common.RouterProfile, error) {
+	if len(saved.NodeChain) != 0 || len(selected.MultihopNodes) != 0 {
+		return a.restoreConnectionNodeChainLocked(saved, selected)
+	}
 	updates := map[string]common.RouterProfile{}
 	for _, capture := range saved.Hops {
 		if !selected.MultihopEnabled || (capture.NodeID != selected.MultihopEntryID && capture.NodeID != selected.MultihopExitID) {

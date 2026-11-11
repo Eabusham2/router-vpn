@@ -11,22 +11,24 @@ import (
 	"path/filepath"
 	"strings"
 
+	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
 )
 
 const connectionProfileSetupMetaVersion = 1
 
 type connectionProfileSetupRequest struct {
-	ID                string   `json:"id,omitempty"`
-	Name              string   `json:"name"`
-	Mode              string   `json:"mode,omitempty"`
-	CustomLayers      []string `json:"custom_layers,omitempty"`
-	MultihopEnabled   bool     `json:"multihop_enabled"`
-	MultihopEntryID   string   `json:"multihop_entry_id,omitempty"`
-	MultihopExitID    string   `json:"multihop_exit_id,omitempty"`
-	MultihopEntryMode string   `json:"multihop_entry_mode,omitempty"`
-	MultihopExitMode  string   `json:"multihop_exit_mode,omitempty"`
-	MultihopExecution string   `json:"multihop_execution,omitempty"`
+	ID                string                         `json:"id,omitempty"`
+	Name              string                         `json:"name"`
+	Mode              string                         `json:"mode,omitempty"`
+	CustomLayers      []string                       `json:"custom_layers,omitempty"`
+	MultihopEnabled   bool                           `json:"multihop_enabled"`
+	MultihopEntryID   string                         `json:"multihop_entry_id,omitempty"`
+	MultihopExitID    string                         `json:"multihop_exit_id,omitempty"`
+	MultihopEntryMode string                         `json:"multihop_entry_mode,omitempty"`
+	MultihopExitMode  string                         `json:"multihop_exit_mode,omitempty"`
+	MultihopExecution string                         `json:"multihop_execution,omitempty"`
+	MultihopNodes     []common.MultihopNodeSelection `json:"multihop_nodes,omitempty"`
 }
 
 type connectionProfileSetupMeta struct {
@@ -170,6 +172,7 @@ func decodeConnectionProfileSetup(w http.ResponseWriter, r *http.Request, updati
 	if err != nil {
 		return q, err
 	}
+	requestedExecution := q.MultihopExecution
 	execution, err := routeExecution(multihopConnectRequest{Execution: q.MultihopExecution})
 	q.MultihopExecution = string(execution)
 	if err != nil {
@@ -184,6 +187,15 @@ func decodeConnectionProfileSetup(w http.ResponseWriter, r *http.Request, updati
 	}
 	if !updating && q.ID != "" {
 		return q, errors.New("new connection profiles must not provide id")
+	}
+	if len(q.MultihopNodes) != 0 {
+		if !q.MultihopEnabled || requestedExecution != "local" || q.MultihopEntryID != "" || q.MultihopExitID != "" || q.MultihopEntryMode != "" || q.MultihopExitMode != "" {
+			return q, errors.New("ordered setup requires explicit Local execution and no legacy pair fields")
+		}
+		if err := common.ValidateMultihopNodes(q.MultihopNodes); err != nil {
+			return q, err
+		}
+		return q, nil
 	}
 	if q.MultihopEnabled {
 		if !validProfileID(q.MultihopEntryID) || !validProfileID(q.MultihopExitID) || q.MultihopEntryID == q.MultihopExitID {
@@ -204,6 +216,16 @@ func decodeConnectionProfileSetup(w http.ResponseWriter, r *http.Request, updati
 
 func validateConnectionProfileSetupGraphLocked(a *app, q connectionProfileSetupRequest) error {
 	if !q.MultihopEnabled {
+		return nil
+	}
+	if len(q.MultihopNodes) != 0 {
+		for i, selected := range q.MultihopNodes {
+			node, found := a.profileByIDLocked(selected.ID)
+			if !found || node.NodeKind != "" && node.NodeKind != "router-vpn" || node.External != nil ||
+				i < len(q.MultihopNodes)-1 && selected.Mode != "wg" || i == len(q.MultihopNodes)-1 && selected.Mode != "shadowsocks" {
+				return errors.New("ordered setup requires linked Router WireGuard prefixes and an SS2022 final")
+			}
+		}
 		return nil
 	}
 	entry, entryOK := a.profileByIDLocked(q.MultihopEntryID)
@@ -282,7 +304,7 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 		if q.MultihopExecution == "" {
 			q.MultihopExecution = "local"
 		}
-	} else if q.MultihopEnabled && q.MultihopEntryMode == "" && selectedOK {
+	} else if q.MultihopEnabled && len(q.MultihopNodes) == 0 && q.MultihopEntryMode == "" && selectedOK {
 		q.MultihopEntryMode, err = normalizeConnectionProfileEntryMode(selected.MultihopEntryMode)
 		if err != nil {
 			a.mu.Unlock()
@@ -359,6 +381,11 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 				store.Profiles[i].Prefs.MultihopEntryID = q.MultihopEntryID
 				store.Profiles[i].Prefs.MultihopExitID = q.MultihopExitID
 				store.Profiles[i].Prefs.MultihopEntryMode = q.MultihopEntryMode
+				store.Profiles[i].Prefs.MultihopNodes = append([]common.MultihopNodeSelection(nil), q.MultihopNodes...)
+				store.Profiles[i].Prefs.MultihopExecution = ""
+				if len(q.MultihopNodes) != 0 {
+					store.Profiles[i].Prefs.MultihopExecution = q.MultihopExecution
+				}
 				node, exists := a.profileByIDLocked(store.Profiles[i].NodeID)
 				if !exists {
 					err = errors.New("selected node disappeared before saving its graph")
@@ -366,7 +393,13 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 				}
 				node.MultihopEnabled, node.MultihopEntryID, node.MultihopExitID = q.MultihopEnabled, q.MultihopEntryID, q.MultihopExitID
 				node.MultihopEntryMode = q.MultihopEntryMode
+				node.MultihopNodes = append([]common.MultihopNodeSelection(nil), q.MultihopNodes...)
+				node.MultihopExecution = q.MultihopExecution
 				_, store.Profiles[i].Hops, err = a.snapshotConnectionPathLocked(node)
+				if err != nil {
+					break
+				}
+				store.Profiles[i].NodeChain, err = a.snapshotConnectionNodeChainLocked(node, store.Profiles[i].Prefs)
 				if err != nil {
 					break
 				}
@@ -418,6 +451,7 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 	base["multihop_entry_mode"] = q.MultihopEntryMode
 	base["multihop_exit_mode"] = q.MultihopExitMode
 	base["multihop_execution"] = q.MultihopExecution
+	base["multihop_nodes"] = q.MultihopNodes
 	for _, saved := range store.Profiles {
 		if saved.ID == id {
 			// Return the same finalized graph that was committed, rather than
@@ -454,6 +488,20 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 	}
 	a.mu.Lock()
 	meta, metaErr := loadConnectionProfileSetupMeta(a)
+	if metaErr == nil {
+		store, err := loadConnectionProfileStore(a)
+		metaErr = err
+		if err == nil {
+			for _, saved := range store.Profiles {
+				if saved.ID != strings.TrimSpace(ref.ID) || len(saved.NodeChain) == 0 {
+					continue
+				}
+				if item, found := meta.Entries[saved.ID]; found && (item.MultihopExecution != "local" || item.MultihopEntryMode != "" || item.MultihopExitMode != "") {
+					metaErr = errors.New("ordered setup metadata contradicts its saved Local path")
+				}
+			}
+		}
+	}
 	if metaErr == nil && meta.Entries[strings.TrimSpace(ref.ID)].MultihopEntryMode != "" {
 		var store connectionProfileStore
 		store, metaErr = loadConnectionProfileStore(a)
@@ -489,6 +537,7 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 		payload["multihop_exit_mode"] = item.MultihopExitMode
 	}
 	if prefs, ok := profileMap["preferences"].(map[string]any); ok {
+		payload["multihop_nodes"] = prefs["multihop_nodes"]
 		payload["multihop_enabled"] = prefs["multihop_enabled"]
 		payload["multihop_entry_id"] = prefs["multihop_entry_id"]
 		payload["multihop_exit_id"] = prefs["multihop_exit_id"]

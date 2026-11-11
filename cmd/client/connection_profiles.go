@@ -19,48 +19,51 @@ const connectionProfileStoreMaxBytes = 1 << 20
 const connectionProfileStoreMaxEntries = 64
 
 type connectionProfilePreferences struct {
-	HomeLANAccess          bool      `json:"home_lan_access"`
-	HomeLANCIDRs           *[]string `json:"home_lan_cidrs,omitempty"`
-	KillSwitchPolicy       string    `json:"kill_switch_policy"`
-	IPv6Mode               string    `json:"ipv6_mode"`
-	StartupMode            *string   `json:"startup_mode,omitempty"`
-	AutoConnect            *bool     `json:"auto_connect,omitempty"`
-	AutoRequireEncrypted   bool      `json:"auto_require_encrypted"`
-	AutoRequireObfuscation bool      `json:"auto_require_obfuscation"`
-	BaseTunnel             string    `json:"base_tunnel"`
-	BaseFallback           bool      `json:"base_fallback"`
-	StartLayer             string    `json:"start_layer"`
-	MTUPolicy              string    `json:"mtu_policy"`
-	ManualMTU              int       `json:"manual_mtu,omitempty"`
-	DAITAEnabled           bool      `json:"daita_enabled"`
-	DAITARateKbps          *int      `json:"daita_rate_kbps,omitempty"`
-	JumboTUN               bool      `json:"jumbo_tun"`
-	SocksEnabled           bool      `json:"socks_enabled"`
-	DNSMode                string    `json:"dns_mode"`
-	DNSProtocol            string    `json:"dns_protocol,omitempty"`
-	DNSHost                string    `json:"dns_host,omitempty"`
-	DNSPort                int       `json:"dns_port,omitempty"`
-	DNSServerName          string    `json:"dns_server_name,omitempty"`
-	DNSPath                string    `json:"dns_path,omitempty"`
-	HomeDNSCaptured        bool      `json:"home_dns_captured,omitempty"`
-	MultihopEnabled        bool      `json:"multihop_enabled"`
-	MultihopEntryID        string    `json:"multihop_entry_id,omitempty"`
-	MultihopExitID         string    `json:"multihop_exit_id,omitempty"`
-	MultihopEntryMode      string    `json:"multihop_entry_mode,omitempty"`
-	CustomLayers           []string  `json:"custom_layers,omitempty"`
+	HomeLANAccess          bool                           `json:"home_lan_access"`
+	HomeLANCIDRs           *[]string                      `json:"home_lan_cidrs,omitempty"`
+	KillSwitchPolicy       string                         `json:"kill_switch_policy"`
+	IPv6Mode               string                         `json:"ipv6_mode"`
+	StartupMode            *string                        `json:"startup_mode,omitempty"`
+	AutoConnect            *bool                          `json:"auto_connect,omitempty"`
+	AutoRequireEncrypted   bool                           `json:"auto_require_encrypted"`
+	AutoRequireObfuscation bool                           `json:"auto_require_obfuscation"`
+	BaseTunnel             string                         `json:"base_tunnel"`
+	BaseFallback           bool                           `json:"base_fallback"`
+	StartLayer             string                         `json:"start_layer"`
+	MTUPolicy              string                         `json:"mtu_policy"`
+	ManualMTU              int                            `json:"manual_mtu,omitempty"`
+	DAITAEnabled           bool                           `json:"daita_enabled"`
+	DAITARateKbps          *int                           `json:"daita_rate_kbps,omitempty"`
+	JumboTUN               bool                           `json:"jumbo_tun"`
+	SocksEnabled           bool                           `json:"socks_enabled"`
+	DNSMode                string                         `json:"dns_mode"`
+	DNSProtocol            string                         `json:"dns_protocol,omitempty"`
+	DNSHost                string                         `json:"dns_host,omitempty"`
+	DNSPort                int                            `json:"dns_port,omitempty"`
+	DNSServerName          string                         `json:"dns_server_name,omitempty"`
+	DNSPath                string                         `json:"dns_path,omitempty"`
+	HomeDNSCaptured        bool                           `json:"home_dns_captured,omitempty"`
+	MultihopEnabled        bool                           `json:"multihop_enabled"`
+	MultihopEntryID        string                         `json:"multihop_entry_id,omitempty"`
+	MultihopExitID         string                         `json:"multihop_exit_id,omitempty"`
+	MultihopEntryMode      string                         `json:"multihop_entry_mode,omitempty"`
+	MultihopExecution      string                         `json:"multihop_execution,omitempty"`
+	MultihopNodes          []common.MultihopNodeSelection `json:"multihop_nodes,omitempty"`
+	CustomLayers           []string                       `json:"custom_layers,omitempty"`
 }
 
 type connectionProfileRecord struct {
-	ID          string                            `json:"id"`
-	Name        string                            `json:"name"`
-	NodeID      string                            `json:"node_id"`
-	NodeProofID string                            `json:"node_proof_id,omitempty"`
-	Mode        string                            `json:"mode"`
-	Prefs       *connectionProfilePreferences     `json:"preferences,omitempty"`
-	External    *connectionProfileExternalCapture `json:"external_policy,omitempty"`
-	Hops        []connectionProfileHopCapture     `json:"hop_preferences,omitempty"`
-	CreatedAt   string                            `json:"created_at"`
-	UpdatedAt   string                            `json:"updated_at"`
+	ID          string                              `json:"id"`
+	Name        string                              `json:"name"`
+	NodeID      string                              `json:"node_id"`
+	NodeProofID string                              `json:"node_proof_id,omitempty"`
+	Mode        string                              `json:"mode"`
+	Prefs       *connectionProfilePreferences       `json:"preferences,omitempty"`
+	External    *connectionProfileExternalCapture   `json:"external_policy,omitempty"`
+	Hops        []connectionProfileHopCapture       `json:"hop_preferences,omitempty"`
+	NodeChain   []connectionProfileNodeChainCapture `json:"node_chain,omitempty"`
+	CreatedAt   string                              `json:"created_at"`
+	UpdatedAt   string                              `json:"updated_at"`
 }
 
 type connectionProfileStore struct {
@@ -264,6 +267,12 @@ func snapshotConnectionPreferences(p common.RouterProfile, customLayers []string
 		copyDNSPolicy(&p, updated)
 		homeDNSCaptured = true
 	}
+	var nodes []common.MultihopNodeSelection
+	execution := ""
+	if p.MultihopEnabled && len(p.MultihopNodes) != 0 {
+		nodes = append([]common.MultihopNodeSelection(nil), p.MultihopNodes...)
+		execution = p.MultihopExecution
+	}
 	return &connectionProfilePreferences{
 		HomeLANAccess: p.HomeLANAccess, KillSwitchPolicy: p.KillSwitchPolicy, IPv6Mode: p.IPv6Mode,
 		HomeLANCIDRs: &lan, StartupMode: &startup, AutoConnect: &autoConnect,
@@ -274,7 +283,8 @@ func snapshotConnectionPreferences(p common.RouterProfile, customLayers []string
 		DNSServerName: p.DNSServerName, DNSPath: p.DNSPath, HomeDNSCaptured: homeDNSCaptured,
 		MultihopEnabled: p.MultihopEnabled, MultihopEntryID: p.MultihopEntryID, MultihopExitID: p.MultihopExitID,
 		MultihopEntryMode: entryMode,
-		CustomLayers:      layers,
+		MultihopNodes:     nodes, MultihopExecution: execution,
+		CustomLayers: layers,
 	}, nil
 }
 
@@ -388,6 +398,11 @@ func (a *app) writeConnectionProfile(w http.ResponseWriter, q connectionProfileS
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	nodeChain, err := a.snapshotConnectionNodeChainLocked(node, prefs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	store, err := loadConnectionProfileStore(a)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -401,7 +416,7 @@ func (a *app) writeConnectionProfile(w http.ResponseWriter, q connectionProfileS
 				continue
 			}
 			created := store.Profiles[i].CreatedAt
-			store.Profiles[i] = connectionProfileRecord{ID: q.ID, Name: q.Name, NodeID: node.ID, NodeProofID: node.NodeProofID, Mode: q.Mode, Prefs: prefs, External: external, Hops: hops, CreatedAt: created, UpdatedAt: now}
+			store.Profiles[i] = connectionProfileRecord{ID: q.ID, Name: q.Name, NodeID: node.ID, NodeProofID: node.NodeProofID, Mode: q.Mode, Prefs: prefs, External: external, Hops: hops, NodeChain: nodeChain, CreatedAt: created, UpdatedAt: now}
 			found = true
 			break
 		}
@@ -415,7 +430,7 @@ func (a *app) writeConnectionProfile(w http.ResponseWriter, q connectionProfileS
 			return
 		}
 		q.ID = newID()
-		store.Profiles = append(store.Profiles, connectionProfileRecord{ID: q.ID, Name: q.Name, NodeID: node.ID, NodeProofID: node.NodeProofID, Mode: q.Mode, Prefs: prefs, External: external, Hops: hops, CreatedAt: now, UpdatedAt: now})
+		store.Profiles = append(store.Profiles, connectionProfileRecord{ID: q.ID, Name: q.Name, NodeID: node.ID, NodeProofID: node.NodeProofID, Mode: q.Mode, Prefs: prefs, External: external, Hops: hops, NodeChain: nodeChain, CreatedAt: now, UpdatedAt: now})
 	}
 	if err := persistConnectionProfileStore(a, store); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -502,7 +517,7 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p := saved.Prefs
-		if p.MultihopEnabled {
+		if p.MultihopEnabled && len(p.MultihopNodes) == 0 {
 			if p.MultihopEntryID == "" || p.MultihopExitID == "" || p.MultihopEntryID == p.MultihopExitID {
 				http.Error(w, "saved multihop profile is invalid", http.StatusConflict)
 				return
