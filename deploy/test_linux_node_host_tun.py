@@ -9,6 +9,7 @@ distinct same-identity direct-LAN control. Each case owns a private namespace.
 No fixture verifier, public admission override or created device is permitted.
 """
 from pathlib import Path
+from collections import Counter
 import argparse
 import hashlib
 import importlib.util
@@ -372,7 +373,7 @@ def check_verdict(output, case=None):
         return check_reverse_verdict(output, case)
     output = output.replace('\r\n', '\n')
     cases = CASES if case is None else (case,)
-    if any(value not in CASES for value in cases) or '--- FAIL:' in output or '--- SKIP:' in output:
+    if case is not None and case not in CASES or '--- FAIL:' in output or '--- SKIP:' in output:
         raise ValueError('Installed Linux host did not complete its actual native acceptance')
     prefix = '--- PASS: TestDesktopLinuxGuardianKernelNodeHostTUN'
     passed = set(re.findall(re.escape(prefix) + r'(?:/[^\s(]+)? \(', output))
@@ -382,144 +383,178 @@ def check_verdict(output, case=None):
     # Index once so exhaustive missing-line controls stay within the build
     # gate as the real installed scenario inventory grows.
     receipts = set()
-    transfer_receipts = []
-    boot_transfer_receipts = []
-    hysteria_receipts = []
-    layered_entry_receipts = []
-    ss_entry_receipts = []
-    ss_connect_receipts = []
-    ss_hysteria_receipts = []
-    imported_receipts = []
-    layered_entry_passes = re.findall(r"(?m)^\s*" + re.escape(prefix + "/") + r"(external-wghy2(?:aes|xor)-[a-z-]+) \([0-9.]+s\)$", output)
-    for line in output.replace('\r\n', '\n').split('\n')[:-1]:
+    transfer_receipts = Counter()
+    boot_transfer_receipts = Counter()
+    hysteria_receipts = Counter()
+    layered_entry_receipts = Counter()
+    ss_entry_receipts = Counter()
+    ss_connect_receipts = Counter()
+    ss_hysteria_receipts = Counter()
+    imported_receipts = Counter()
+    exact_passes = Counter(re.findall(r"(?m)^\s*" + re.escape(prefix + "/") + r"([^\s(]+) \([0-9.]+s\)$", output))
+    suffix_receipts = Counter()
+    for line in output.splitlines():
+        _, marker, suffix = line.rstrip().rpartition('verified installed ')
+        if marker:
+            suffix_receipts[marker + suffix] += 1
+    for line in output.split('\n')[:-1]:
         _, marker, suffix = line.rpartition('verified installed host ')
         if marker:
             receipts.add(marker + suffix + '\n')
             if suffix.startswith('imported independent WG entry and paired SS final: '):
-                imported_receipts.append(suffix.removeprefix('imported independent WG entry and paired SS final: '))
+                imported_receipts[suffix.removeprefix('imported independent WG entry and paired SS final: ')] += 1
             if suffix.startswith('independent SS2022 entry and Hysteria2 final: '):
-                ss_hysteria_receipts.append(suffix.removeprefix('independent SS2022 entry and Hysteria2 final: '))
+                ss_hysteria_receipts[suffix.removeprefix('independent SS2022 entry and Hysteria2 final: ')] += 1
             if suffix.startswith('independent SS2022 entry and CONNECT final: '):
-                ss_connect_receipts.append(suffix.removeprefix('independent SS2022 entry and CONNECT final: '))
+                ss_connect_receipts[suffix.removeprefix('independent SS2022 entry and CONNECT final: ')] += 1
             if suffix.startswith('independent SS2022 entry and SS2022 final: '):
-                ss_entry_receipts.append(suffix.removeprefix('independent SS2022 entry and SS2022 final: '))
+                ss_entry_receipts[suffix.removeprefix('independent SS2022 entry and SS2022 final: ')] += 1
             if suffix.startswith('independent WireGuard entry and layered Hysteria2 final: '):
-                layered_entry_receipts.append(suffix.removeprefix('independent WireGuard entry and layered Hysteria2 final: '))
+                layered_entry_receipts[suffix.removeprefix('independent WireGuard entry and layered Hysteria2 final: ')] += 1
             if suffix.startswith('independent WireGuard entry and Hysteria2 final: '):
-                hysteria_receipts.append(suffix.removeprefix('independent WireGuard entry and Hysteria2 final: '))
+                hysteria_receipts[suffix.removeprefix('independent WireGuard entry and Hysteria2 final: ')] += 1
             if suffix.startswith("original boot service transfer: "):
-                boot_transfer_receipts.append(suffix.removeprefix("original boot service transfer: "))
+                boot_transfer_receipts[suffix.removeprefix("original boot service transfer: ")] += 1
             if suffix.startswith("original service transfer: "):
-                transfer_receipts.append(suffix.removeprefix("original service transfer: "))
+                transfer_receipts[suffix.removeprefix("original service transfer: ")] += 1
     if prefix + ' (' not in passed:
         raise ValueError('Installed Linux host omitted its actual native group')
+    # Preserve the ordered case inventories; index only this call's membership
+    # checks so complete missing-line controls do not repeatedly scan tuples.
+    membership = {name: frozenset(values) for name, values in (
+        ('ACTIVE_CASES', ACTIVE_CASES),
+        ('AMNEZIA_CASES', AMNEZIA_CASES),
+        ('AMNEZIA_LAYER_CASES', AMNEZIA_LAYER_CASES),
+        ('BOOT_RESOLVER_CASES', BOOT_RESOLVER_CASES),
+        ('BOOT_TRANSFER_CASES', BOOT_TRANSFER_CASES),
+        ('COVER_CASES', COVER_CASES),
+        ('EXTERNAL_CASES', EXTERNAL_CASES),
+        ('EXTERNAL_HYSTERIA2_LAYER_CASES', EXTERNAL_HYSTERIA2_LAYER_CASES),
+        ('EXTERNAL_SS_CONNECT_CASES', EXTERNAL_SS_CONNECT_CASES),
+        ('EXTERNAL_SS_ENTRY_CASES', EXTERNAL_SS_ENTRY_CASES),
+        ('EXTERNAL_SS_HYSTERIA_CASES', EXTERNAL_SS_HYSTERIA_CASES),
+        ('EXTERNAL_SS_HYSTERIA_LAYER_CASES', EXTERNAL_SS_HYSTERIA_LAYER_CASES),
+        ('EXTERNAL_SS_LAYER_CASES', EXTERNAL_SS_LAYER_CASES),
+        ('EXTERNAL_WG_CONNECT_CASES', EXTERNAL_WG_CONNECT_CASES),
+        ('EXTERNAL_WG_ENTRY_CASES', EXTERNAL_WG_ENTRY_CASES),
+        ('EXTERNAL_WG_HYSTERIA_CASES', EXTERNAL_WG_HYSTERIA_CASES),
+        ('EXTERNAL_WG_HYSTERIA_LAYER_CASES', EXTERNAL_WG_HYSTERIA_LAYER_CASES),
+        ('HOSTNAME_CASES', HOSTNAME_CASES),
+        ('HYSTERIA2_CASES', HYSTERIA2_CASES),
+        ('HYSTERIA2_LAYER_CASES', HYSTERIA2_LAYER_CASES),
+        ('IMPORTED_CASES', IMPORTED_CASES),
+        ('LAYER_CASES', LAYER_CASES),
+        ('MTU_CASES', MTU_CASES),
+        ('OFF_CASES', OFF_CASES),
+        ('PRIVATE_DS_CASES', PRIVATE_DS_CASES),
+        ('PUBLIC_CASES', PUBLIC_CASES),
+        ('RESOLVED_CASES', RESOLVED_CASES),
+        ('RESTORE_CASES', RESTORE_CASES),
+        ('SIP003_CASES', SIP003_CASES),
+        ('TRANSFER_CASES', TRANSFER_CASES),
+        ('WIREGUARD_CASES', WIREGUARD_CASES),
+        ('WIREGUARD_LAYER_CASES', WIREGUARD_LAYER_CASES),
+    )}
     for value in cases:
-        if value in IMPORTED_CASES:
-            verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
-            if imported_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
+        if value in membership['IMPORTED_CASES']:
+            if imported_receipts[value] != 1 or exact_passes[value] != 1:
                 raise ValueError('Installed imported graph omitted or duplicated its independent encrypted native completion: ' + value)
-        if value in EXTERNAL_SS_ENTRY_CASES or value in EXTERNAL_SS_LAYER_CASES:
-            verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
-            if ss_entry_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
+        if value in membership['EXTERNAL_SS_ENTRY_CASES'] or value in membership['EXTERNAL_SS_LAYER_CASES']:
+            if ss_entry_receipts[value] != 1 or exact_passes[value] != 1:
                 raise ValueError('Installed SS2022 graph omitted or duplicated original native completion: ' + value)
-        if value in EXTERNAL_SS_HYSTERIA_CASES or value in EXTERNAL_SS_HYSTERIA_LAYER_CASES:
-            verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
-            if ss_hysteria_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
+        if value in membership['EXTERNAL_SS_HYSTERIA_CASES'] or value in membership['EXTERNAL_SS_HYSTERIA_LAYER_CASES']:
+            if ss_hysteria_receipts[value] != 1 or exact_passes[value] != 1:
                 raise ValueError('Installed SS HY2 graph omitted or duplicated original native completion: ' + value)
-        if value in EXTERNAL_SS_CONNECT_CASES:
-            verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
-            if ss_connect_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
+        if value in membership['EXTERNAL_SS_CONNECT_CASES']:
+            if ss_connect_receipts[value] != 1 or exact_passes[value] != 1:
                 raise ValueError('Installed SS CONNECT graph omitted or duplicated original native completion: ' + value)
-        if value in EXTERNAL_WG_HYSTERIA_LAYER_CASES:
-            if layered_entry_receipts.count(value) != 1 or layered_entry_passes.count(value) != 1:
+        if value in membership['EXTERNAL_WG_HYSTERIA_LAYER_CASES']:
+            if layered_entry_receipts[value] != 1 or exact_passes[value] != 1:
                 raise ValueError('Installed layered WG/Hysteria graph omitted or duplicated original native completion: ' + value)
-        if value in EXTERNAL_WG_HYSTERIA_CASES:
-            verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
-            if hysteria_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
+        if value in membership['EXTERNAL_WG_HYSTERIA_CASES']:
+            if hysteria_receipts[value] != 1 or exact_passes[value] != 1:
                 raise ValueError('Installed WG/Hysteria graph omitted or duplicated original native completion: ' + value)
         if value == 'service-boot-resolved-dnssec-nta':
             marker = 'verified installed DNSSEC original NTA and absent-anchor recheck'
-            if sum(line.rstrip().endswith(marker) for line in output.splitlines()) != 1:
+            if suffix_receipts[marker] != 1:
                 raise ValueError('Installed DNSSEC omitted exact original trust-plan recheck')
         if value in ('service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname'):
             for alias_prefix in ('verified installed DNSSEC alias target independently captured and adopted: ', 'verified installed DNSSEC alias original proof and target wire queries: '):
                 marker = alias_prefix + value
-                if sum(line.rstrip().endswith(marker) for line in output.splitlines()) != 1:
+                if suffix_receipts[marker] != 1:
                     raise ValueError('Installed DNSSEC alias omitted original target authority or typed proof')
         if value.startswith('service-boot-resolved-dnssec-private-tld'):
             for marker_prefix in ('verified installed private-TLD original and auxiliary wire queries: ', 'verified installed private-TLD original complete root plan and monitor: '):
                 marker=marker_prefix+value
-                if sum(line.rstrip().endswith(marker) for line in output.splitlines())!=1:
+                if suffix_receipts[marker]!=1:
                     raise ValueError('Installed private-TLD omitted original root/monitor or independent proof queries: '+value)
         if value.startswith('service-boot-resolved-dnssec-private-tld') and '-negative-' in value:
             marker='verified installed private-TLD original negative RPC and joined cleanup: '+value
-            if sum(line.rstrip().endswith(marker) for line in output.splitlines())!=1:
+            if suffix_receipts[marker]!=1:
                 raise ValueError('Installed negative omitted exact accepted RPC and joined original cleanup: '+value)
             codes='A=0 AAAA=3' if value.endswith(('-nxdomain-aaaa','-nodata-a')) else 'A=3 AAAA=0'
             marker='verified installed private-TLD original negative families: '+value+' '+codes
-            if sum(line.rstrip().endswith(marker) for line in output.splitlines())!=1:
+            if suffix_receipts[marker]!=1:
                 raise ValueError('Installed negative omitted exact original A/AAAA rcodes: '+value)
-        if value in PRIVATE_DS_CASES:
+        if value in membership['PRIVATE_DS_CASES']:
             marker='verified installed private DS exact original and parent queries: '+value
-            if sum(line.rstrip().endswith(marker) for line in output.splitlines())!=1:
+            if suffix_receipts[marker]!=1:
                 raise ValueError('Deep installed resolver omitted exact original DS dependencies: '+value)
-        if value in RESOLVED_CASES:
+        if value in membership['RESOLVED_CASES']:
             marker = 'verified installed resolved helper original broker and scoped upstream: ' + value
-            if sum(line.rstrip().endswith(marker) for line in output.splitlines()) != 1:
+            if suffix_receipts[marker] != 1:
                 raise ValueError('missing/duplicate installed resolved composition receipt: ' + value)
-        if value in HOSTNAME_CASES:
+        if value in membership['HOSTNAME_CASES']:
             marker = 'verified installed host captured resolver policy: ' + value
-            if sum(line.rstrip().endswith(marker) for line in output.splitlines()) != 1:
+            if suffix_receipts[marker] != 1:
                 raise ValueError('missing/duplicate original resolver policy receipt: ' + value)
-        if value in BOOT_TRANSFER_CASES + BOOT_RESOLVER_CASES + RESOLVED_CASES:
-            verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
-            if boot_transfer_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
+        if (value in membership['BOOT_TRANSFER_CASES'] or value in membership['BOOT_RESOLVER_CASES'] or value in membership['RESOLVED_CASES']):
+            if boot_transfer_receipts[value] != 1 or exact_passes[value] != 1:
                 raise ValueError('Installed boot transfer omitted or duplicated original creator completion: ' + value)
-        if value in TRANSFER_CASES:
-            verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
-            if transfer_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
+        if value in membership['TRANSFER_CASES']:
+            if transfer_receipts[value] != 1 or exact_passes[value] != 1:
                 raise ValueError('Installed service transfer omitted or duplicated original native completion: ' + value)
         if prefix + '/' + value + ' (' not in passed or 'verified installed host native lifecycle: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its actual complete owned lifecycle: ' + value)
-        if value in ACTIVE_CASES and 'verified installed host active lifetime: ' + value + '\n' not in receipts:
+        if value in membership['ACTIVE_CASES'] and 'verified installed host active lifetime: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its actual activation, request completion and native lifetime: ' + value)
-        if value in ('active-request-ended', *PUBLIC_CASES) and 'verified installed host retained DNS observation: ' + value + '\n' not in receipts:
+        if (value == 'active-request-ended' or value in membership['PUBLIC_CASES']) and 'verified installed host retained DNS observation: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its actual retained session DNS consumer: ' + value)
-        if value in MTU_CASES and 'verified installed host original MTU lease: ' + value + '\n' not in receipts:
+        if value in membership['MTU_CASES'] and 'verified installed host original MTU lease: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its original actual MTU lease: ' + value)
-        if value in ('active-request-ended', *PUBLIC_CASES, *MTU_CASES) and 'verified installed host live MTU status: ' + value + '\n' not in receipts:
+        if (value == 'active-request-ended' or value in membership['PUBLIC_CASES'] or value in membership['MTU_CASES']) and 'verified installed host live MTU status: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its current interface MTU status: ' + value)
-        if value in RESTORE_CASES and 'verified installed host sealed temporary restoration: ' + value + '\n' not in receipts:
+        if value in membership['RESTORE_CASES'] and 'verified installed host sealed temporary restoration: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its frozen execution, live MTU and fresh native restoration: ' + value)
-        if value in PUBLIC_CASES and 'verified installed host public Connect and Disconnect: ' + value + '\n' not in receipts:
+        if value in membership['PUBLIC_CASES'] and 'verified installed host public Connect and Disconnect: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its real public Connect and Disconnect composition: ' + value)
-        if value in COVER_CASES and 'verified installed host native cover: ' + value + '\n' not in receipts:
+        if value in membership['COVER_CASES'] and 'verified installed host native cover: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its captured native cover activation/failure/retirement: ' + value)
-        if value in OFF_CASES and 'verified installed host saved Linux protection Off: ' + value + '\n' not in receipts:
+        if value in membership['OFF_CASES'] and 'verified installed host saved Linux protection Off: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its exact Always retention, saved-policy Off and native release: ' + value)
-        if value in LAYER_CASES and 'verified installed host captured Start Layer: ' + value + '\n' not in receipts:
+        if value in membership['LAYER_CASES'] and 'verified installed host captured Start Layer: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its exact cipher, outer physical authority and Start Layer lifecycle: ' + value)
-        if value in WIREGUARD_CASES and 'verified installed host plain WireGuard: ' + value + '\n' not in receipts:
+        if value in membership['WIREGUARD_CASES'] and 'verified installed host plain WireGuard: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its exact UDP WireGuard peer and native owned lifecycle: ' + value)
-        if value in WIREGUARD_LAYER_CASES and 'verified installed host layered WireGuard: ' + value + '\n' not in receipts:
+        if value in membership['WIREGUARD_LAYER_CASES'] and 'verified installed host layered WireGuard: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its captured layered UDP route, final WireGuard identity and owned lifecycle: ' + value)
-        if value in HYSTERIA2_CASES and 'verified installed host plain Hysteria2: ' + value + '\n' not in receipts:
+        if value in membership['HYSTERIA2_CASES'] and 'verified installed host plain Hysteria2: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its exact UDP Hysteria2 peer, selected TLS trust and native owned lifecycle: ' + value)
-        if value in HYSTERIA2_LAYER_CASES and 'verified installed host layered Hysteria2: ' + value + '\n' not in receipts:
+        if value in membership['HYSTERIA2_LAYER_CASES'] and 'verified installed host layered Hysteria2: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted final Hysteria2 identity and owned layered UDP path')
-        if value in AMNEZIA_LAYER_CASES and 'verified installed host layered AWG2: ' + value + '\n' not in receipts:
+        if value in membership['AMNEZIA_LAYER_CASES'] and 'verified installed host layered AWG2: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted exact AWG parameters, separate layer owners or final encrypted lifecycle: ' + value)
-        if value in AMNEZIA_CASES and 'verified installed host captured AWG2: ' + value + '\n' not in receipts:
+        if value in membership['AMNEZIA_CASES'] and 'verified installed host captured AWG2: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its exact UDP AWG2 peer, complete native parameters and owned lifecycle: ' + value)
-        if value in SIP003_CASES and 'verified installed host captured SIP003 lanes: ' + value + '\n' not in receipts:
+        if value in membership['SIP003_CASES'] and 'verified installed host captured SIP003 lanes: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted independent SIP003 TCP/HY2 UDP identity, selected DNS or retained lifecycle: ' + value)
-        if value in EXTERNAL_WG_CONNECT_CASES and 'verified installed host independent WireGuard entry and CONNECT final: ' + value + '\n' not in receipts:
+        if value in membership['EXTERNAL_WG_CONNECT_CASES'] and 'verified installed host independent WireGuard entry and CONNECT final: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux CONNECT graph lacks its separate entry/final TLS/authentication and joined lifecycle')
-        if value in EXTERNAL_WG_ENTRY_CASES and 'verified installed host independent WireGuard entry and SS final: ' + value + '\n' not in receipts:
+        if value in membership['EXTERNAL_WG_ENTRY_CASES'] and 'verified installed host independent WireGuard entry and SS final: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux WG entry lacks its independent entry/final native proof and joined lifecycle')
-        if value in EXTERNAL_CASES and 'verified installed host retained external succession: ' + value + '\n' not in receipts:
+        if value in membership['EXTERNAL_CASES'] and 'verified installed host retained external succession: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted actual external DNS/exit, source, cancellation, replacement or exact Router restoration: ' + value)
-        if value in (*EXTERNAL_HYSTERIA2_LAYER_CASES, *EXTERNAL_WG_HYSTERIA_LAYER_CASES) and 'verified installed host retained layered Hysteria2: ' + value + '\n' not in receipts:
+        if (value in membership['EXTERNAL_HYSTERIA2_LAYER_CASES'] or value in membership['EXTERNAL_WG_HYSTERIA_LAYER_CASES']) and 'verified installed host retained layered Hysteria2: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its exact retained external HY2 layer and physical/private authentication: ' + value)
 
 
