@@ -372,7 +372,12 @@ func (a *app) nativeMultihopConnectLocalOwned(w http.ResponseWriter, r *http.Req
 		a.state.LastError = ""
 		a.mu.Unlock()
 	}
-	setActiveMultihopGraph(a, sel)
+	if _, err = publishDesktopMultihopPlatformGraph(operation, a, native, sel, "local"); err != nil {
+		message, _ := a.multihopStopFailure(cmd, err.Error())
+		sessionTrackerFor(a).markRequestFailure(message)
+		http.Error(w, message, http.StatusConflict)
+		return
+	}
 	if err = bindNativeMultihopRuntime(a, native, sel, network); err != nil {
 		message, _ := a.multihopStopFailure(cmd, err.Error())
 		sessionTrackerFor(a).markRequestFailure(message)

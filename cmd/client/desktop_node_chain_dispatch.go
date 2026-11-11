@@ -38,6 +38,26 @@ func startDesktopMultihopPlatform(ctx context.Context, a *app, selection multiho
 	return registerActiveDNSRuntimeConfigKind(a, selection.Exit.ID, selection.ExitMode, filepath.Join(launch.directory, "sing-box.json"), true)
 }
 
+// A platform with retained graph cleanup publishes and captures its exact
+// receipt atomically under the original host/application/session ownership.
+// Other platforms preserve their existing graph publication behavior.
+func publishDesktopMultihopPlatformGraph(ctx context.Context, a *app, launch *desktopNodeLaunch,
+	selection multihopSelection, execution string) (activeMultihopGraph, error) {
+	if launch != nil && launch.chain != nil && launch.chain.platform != nil {
+		if owner, ok := any(launch.chain.platform).(interface {
+			PublishGraph(context.Context, *app, *desktopNodeLaunch, multihopSelection, string) (activeMultihopGraph, error)
+		}); ok {
+			return owner.PublishGraph(ctx, a, launch, selection, execution)
+		}
+	}
+	graph := setActiveMultihopGraph(a, selection)
+	if execution != graph.Execution {
+		graph.Execution = execution
+		activeMultihopGraphs.Store(a, graph)
+	}
+	return graph, nil
+}
+
 func (a *app) publishDesktopCapturedMultihopStartLocked(operation context.Context, launch *desktopNodeLaunch, selection multihopSelection) error {
 	if launch != nil && launch.chain != nil {
 		return a.publishDesktopNodeChainStartLocked(operation, launch, selection)

@@ -539,10 +539,9 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 	d.a.state.Connected = false
 	d.a.state.Phase = "multihop:proving-" + string(c.Execution)
 	d.a.mu.Unlock()
-	setActiveMultihopGraph(d.a, sel)
-	graph, _ := getActiveMultihopGraph(d.a)
-	graph.Execution = string(c.Execution)
-	activeMultihopGraphs.Store(d.a, graph)
+	if _, err := publishDesktopMultihopPlatformGraph(ctx, d.a, s.native, sel, string(c.Execution)); err != nil {
+		return s, err
+	}
 	if s.native != nil {
 		if err := bindNativeMultihopRuntimeContext(ctx, d.a, s.native, sel, d.network); err != nil {
 			return s, err

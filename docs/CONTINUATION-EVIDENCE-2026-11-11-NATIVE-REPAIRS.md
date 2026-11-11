@@ -7,6 +7,43 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## macOS ordered host and atomic graph ownership
+
+The thirteen-file host unit adds a retained Darwin ordered host to the existing
+original controller/session architecture. It stages only its captured private
+workspace, transfers the exact source/configuration identity to the installed
+native child, joins original process and native retirement receipts, and retains
+the specific PF baseline until that cleanup succeeds. A partial launch is retained
+for retry, including a failed second workspace open; missing or replacement paths
+never authorize deleting another workspace.
+
+The host publishes its active graph and saves that exact graph receipt in one
+host/application/parent critical section. It checks the original command,
+operation, source, session and absence of replacement owners before storing.
+No fallible step follows the store before receipt retention, so cancellation
+between graph publication and outer binding cannot strand an unowned graph.
+Both normal and temporary launch paths use this publication method. Existing
+non-Darwin dispatch retains its previous graph behavior.
+
+Ready-record succession on Darwin additionally checks actual kernel name,
+index and MTU before adopting the native record. A changed utun name requires
+an advanced reader and corresponding proof generation; fixed Windows/Linux
+names remain unchanged. Stop captures the original host before MTU holding and
+requires native acknowledgment, exact graph retirement, retained MTU cleanup,
+PF retirement and workspace cleanup in order. Failed cleanup preserves its
+original owner and cannot clear a replacement connection.
+
+Fifteen authored Darwin test roots exercise real parent/session, source,
+workspace, graph and stop implementations with explicitly modeled process/PF
+receipts. Their cases include pre-publication cancellation, cancellation after
+publication, failed binding, replacement command/session/graph, lost native
+acknowledgment, partial workspace creation and retained MTU cleanup. The common
+launch tests retain eleven fault/succession scenarios. These source definitions
+and the five final atomic-publication replacements were independently reviewed;
+no local Go execution was available. Native compilation and execution are still
+required. Public Darwin ordered admission remains closed until the original
+native child lifecycle and public MTU path are complete.
+
 ## Windows PowerShell 5.1 live-response fixture repair
 
 The completed e1204aea Windows encrypted-runtime job

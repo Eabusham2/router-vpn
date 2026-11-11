@@ -44,7 +44,7 @@ func desktopNodeChainHostSelectionFixture(t *testing.T, count int) (*app, multih
 
 func TestDesktopNodeChainLaunchSealsFullSourceAndPlatform(t *testing.T) {
 	for _, count := range []int{3, 4, 8} {
-		for _, target := range []string{"windows", "linux"} {
+		for _, target := range []string{"windows", "linux", "darwin"} {
 			t.Run(fmt.Sprintf("%s/%d", target, count), func(t *testing.T) {
 				_, launch := desktopNodeChainLaunchFixture(t, count, target)
 				if err := validateDesktopNodeChainLaunch(context.Background(), launch); err != nil {
@@ -299,5 +299,64 @@ func TestDesktopNodeChainWorkspaceRetainsFullBoundAndJoinedFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(directory); !os.IsNotExist(err) {
 		t.Fatal("original private directory remained after cleanup", err)
+	}
+}
+
+func TestDesktopNodeChainDarwinReadyAllowsOnlyAdvancedUTUNReader(t *testing.T) {
+	_, launch := desktopNodeChainLaunchFixture(t, 3, "darwin")
+	original, live, now := desktopNodeChainReadyFixture(t, launch)
+	original.InterfaceName, live.Interface = "utun991", "utun991"
+	started := now.Add(-time.Second)
+	if err := validateDesktopNodeChainReadyForTarget("darwin", original, live, started, now, nil, true); err != nil {
+		t.Fatal("fresh original Darwin reader was rejected", err)
+	}
+	next, changed := original, live
+	next.Generation, next.Reader, next.InterfaceName, next.InterfaceIndex, next.MTU = 2, 2, "utun992", 92, 1392
+	changed.Reader, changed.Interface, changed.Index, changed.MTU, changed.Generation, changed.Active = 2, "utun992", 92, 1392, 1, true
+	if err := validateDesktopNodeChainReadyForTarget("darwin", next, changed, started, now, &original, false); err != nil {
+		t.Fatal("proved Darwin replacement was forced to reuse a retired utun name", err)
+	}
+	rollback, restored := next, changed
+	rollback.Generation, rollback.Reader, rollback.InterfaceName, rollback.InterfaceIndex, rollback.MTU = 3, 3, "utun993", 93, original.MTU
+	restored.Reader, restored.Interface, restored.Index, restored.MTU, restored.Active, restored.Restored = 3, "utun993", 93, original.MTU, false, true
+	if err := validateDesktopNodeChainReadyForTarget("darwin", rollback, restored, started, now, &next, false); err != nil {
+		t.Fatal("proved rollback lost its actual replacement utun", err)
+	}
+	for _, target := range []string{"windows", "linux", ""} {
+		if validateDesktopNodeChainReadyForTarget(target, next, changed, started, now, &original, false) == nil {
+			t.Fatal("Darwin name succession weakened the fixed-interface target", target)
+		}
+	}
+	for _, fault := range []string{"same-reader", "same-generation", "wrong-generation", "live-name", "non-utun", "empty-suffix", "invalid-suffix", "transfer", "identity", "dns", "fresh"} {
+		t.Run(fault, func(t *testing.T) {
+			r, m, fresh := next, changed, false
+			switch fault {
+			case "same-reader":
+				r.Reader, m.Reader, r.Generation = original.Reader, original.Reader, original.Generation
+			case "same-generation":
+				r.Generation = original.Generation
+			case "wrong-generation":
+				r.Generation++
+			case "live-name":
+				m.Interface = "utun994"
+			case "non-utun":
+				r.InterfaceName, m.Interface = "en7", "en7"
+			case "empty-suffix":
+				r.InterfaceName, m.Interface = "utun", "utun"
+			case "invalid-suffix":
+				r.InterfaceName, m.Interface = "utunX", "utunX"
+			case "transfer":
+				r.TransferSHA256 = strings.Repeat("e", 64)
+			case "identity":
+				r.Identity.EngineID = "replacement-engine"
+			case "dns":
+				r.DNSConfigSHA256 = strings.Repeat("e", 64)
+			case "fresh":
+				fresh = true
+			}
+			if validateDesktopNodeChainReadyForTarget("darwin", r, m, started, now, &original, fresh) == nil {
+				t.Fatal("Darwin reader succession accepted missing original proof authority")
+			}
+		})
 	}
 }

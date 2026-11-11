@@ -283,7 +283,7 @@ func (h *desktopMacOSExternalHost) Start(ctx context.Context) error {
 		a.mu.Unlock()
 		return err
 	}
-	if p.currentLocked(ctx, true) != nil || h.parent.session.external != nil {
+	if p.currentLocked(ctx, true) != nil || h.parent.session.external != nil || h.parent.session.nodeChain != nil {
 		p.gate <- struct{}{}
 		a.mu.Unlock()
 		return errors.New("macOS external predecessor has not retired")

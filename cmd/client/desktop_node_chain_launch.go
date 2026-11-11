@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,7 +27,7 @@ type desktopNodeChainLaunch struct {
 
 func newDesktopNodeChainLaunch(selection multihopSelection, session, target string) (*desktopNodeLaunch, error) {
 	if selection.Native == nil || selection.Native.chain == nil || selection.Native.validate(selection) != nil ||
-		selection.Control.ID != selection.Exit.ID || target != "windows" && target != "linux" {
+		selection.Control.ID != selection.Exit.ID || target != "windows" && target != "linux" && target != "darwin" {
 		return nil, errors.New("ordered native launch requires its complete captured Local source")
 	}
 	policy, err := mobilemultihop.NewDesktopNodeChainPolicy(selection.Native.chain.chain, session, target, selection.restoreMTU)
@@ -129,7 +130,7 @@ func readDesktopNodeChainReadyContext(ctx context.Context, launch *desktopNodeLa
 	if err != nil {
 		return empty, err
 	}
-	if err := validateDesktopNodeChainReady(record, live, started, time.Now(), owner.ready, fresh); err != nil {
+	if err := validateDesktopNodeChainReadyForTarget(owner.policy.Metadata().TargetOS, record, live, started, time.Now(), owner.ready, fresh); err != nil {
 		return empty, err
 	}
 	if owner.mtuPath != "" && owner.mtuPath != live.Path || !desktopMTUPathPattern.MatchString(live.Path) {
@@ -146,7 +147,28 @@ func readDesktopNodeChainReadyContext(ctx context.Context, launch *desktopNodeLa
 
 func validateDesktopNodeChainReady(record mobilemultihop.DesktopNodeChainReadyRecord, live desktopNodeMTURecord,
 	started, now time.Time, captured *mobilemultihop.DesktopNodeChainReadyRecord, fresh bool) error {
+	return validateDesktopNodeChainReadyForTarget("", record, live, started, now, captured, fresh)
+}
+
+func desktopNodeChainDarwinInterfaceName(name string) bool {
+	if !strings.HasPrefix(name, "utun") || len(name) == len("utun") {
+		return false
+	}
+	for _, digit := range strings.TrimPrefix(name, "utun") {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func validateDesktopNodeChainReadyForTarget(target string, record mobilemultihop.DesktopNodeChainReadyRecord, live desktopNodeMTURecord,
+	started, now time.Time, captured *mobilemultihop.DesktopNodeChainReadyRecord, fresh bool) error {
 	bad := errors.New("ordered readiness lost its fresh proof generation or exact native MTU reader")
+	if target == "darwin" && (!desktopNodeChainDarwinInterfaceName(record.InterfaceName) ||
+		captured != nil && !desktopNodeChainDarwinInterfaceName(captured.InterfaceName)) {
+		return bad
+	}
 	if started.IsZero() || record.ObservedAt < started.UnixMilli() || record.ObservedAt > now.UnixMilli() || now.UnixMilli()-record.ObservedAt > 2000 ||
 		live.Session != record.Identity.SessionID || live.Config != record.Identity.ConfigSHA256 || live.Reader != record.Reader ||
 		live.Interface != record.InterfaceName || live.Index != int(record.InterfaceIndex) || live.MTU != record.MTU ||
@@ -162,11 +184,11 @@ func validateDesktopNodeChainReady(record mobilemultihop.DesktopNodeChainReadyRe
 	}
 	if record.Identity != captured.Identity || record.SourceSHA256 != captured.SourceSHA256 || record.TransferSHA256 != captured.TransferSHA256 ||
 		record.DNSConfigSHA256 != captured.DNSConfigSHA256 || record.ObservedAt < captured.ObservedAt || record.Generation < captured.Generation ||
-		record.Reader < captured.Reader || record.InterfaceName != captured.InterfaceName {
+		record.Reader < captured.Reader || target != "darwin" && record.InterfaceName != captured.InterfaceName {
 		return bad
 	}
 	if record.Reader == captured.Reader {
-		if record.Generation != captured.Generation || record.InterfaceIndex != captured.InterfaceIndex || record.MTU != captured.MTU {
+		if record.Generation != captured.Generation || record.InterfaceName != captured.InterfaceName || record.InterfaceIndex != captured.InterfaceIndex || record.MTU != captured.MTU {
 			return bad
 		}
 	} else if fresh || record.Generation <= captured.Generation || record.Generation-captured.Generation != record.Reader-captured.Reader {

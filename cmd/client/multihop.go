@@ -80,7 +80,7 @@ type activeMultihopGraph struct {
 
 var activeMultihopGraphs sync.Map
 
-func setActiveMultihopGraph(a *app, sel multihopSelection) {
+func setActiveMultihopGraph(a *app, sel multihopSelection) activeMultihopGraph {
 	graph := activeMultihopGraph{
 		Execution: "local", EntryID: sel.Entry.ID, ExitID: sel.Exit.ID, Base: sel.Base, EntryMode: sel.EntryMode, ExitMode: sel.ExitMode, Started: time.Now().UTC(),
 	}
@@ -93,6 +93,7 @@ func setActiveMultihopGraph(a *app, sel multihopSelection) {
 	}
 	activeMultihopGraphs.Store(a, graph)
 	homeExitProofs.Delete(a)
+	return graph
 }
 
 func clearActiveMultihopGraph(a *app) {

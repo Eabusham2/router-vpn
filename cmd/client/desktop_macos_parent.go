@@ -40,6 +40,7 @@ type desktopMacOSSession struct {
 	parent           *desktopMacOSParent
 	dependents       map[ownedDesktopNodeParent]struct{}
 	external         desktopExternalRetainedRuntime // Exact active ordinary host; protected by parent.gate.
+	nodeChain        *desktopNodeChainPlatformRuntime // Exact active ordered host; protected by parent.gate.
 	stopping, closed bool                           // Protected by the original parent's gate.
 }
 

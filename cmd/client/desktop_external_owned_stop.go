@@ -354,6 +354,20 @@ type desktopWindowsExternalStopCapture struct {
 }
 
 func (a *app) captureDesktopRetainedStop() (desktopRetainedStopCapture, error) {
+	// Capture the original platform owner before the MTU hold. The typed
+	// parent also retains attempts that entered PF but did not bind a graph.
+	a.mu.Lock()
+	controller := a.localController
+	a.mu.Unlock()
+	if controller != nil {
+		if parent, ok := controller.nodeParent.(interface {
+			CaptureNodeChainStop(*app) (desktopRetainedStopCapture, error)
+		}); ok {
+			if captured, err := parent.CaptureNodeChainStop(a); captured != nil || err != nil {
+				return captured, err
+			}
+		}
+	}
 	if captured, err := captureLegacyStandardExitStop(a); captured != nil || err != nil {
 		return captured, err
 	}

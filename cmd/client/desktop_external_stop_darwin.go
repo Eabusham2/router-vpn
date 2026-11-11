@@ -246,7 +246,10 @@ func (c *desktopMacOSExternalStopCapture) Retire(ctx context.Context, command *e
 // MTU cancellation may require closing the original TUN before its lease can
 // discharge. Keep the selected command, workspace and baseline for the Stop
 // capture made before the hold. Only actual native cleanup can satisfy it.
-func prepareDesktopPlatformMTUStop(ctx context.Context, a *app, command *exec.Cmd, operation context.Context, outer *mtuLiveOwner, terminal bool, _ error) (bool, error) {
+func prepareDesktopPlatformMTUStop(ctx context.Context, a *app, command *exec.Cmd, operation context.Context, outer *mtuLiveOwner, terminal bool, failedHold error) (bool, error) {
+	if handled, err := prepareDesktopMacOSNodeChainMTUStop(ctx, a, command, operation, outer, terminal, failedHold); handled || err != nil {
+		return handled, err
+	}
 	value, found := desktopExternalRetainedLaunches.Load(a)
 	if !found {
 		return false, nil
