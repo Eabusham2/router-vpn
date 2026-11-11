@@ -613,7 +613,247 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
     )
 
 
-def native_multihop_shipping_chain(source: str) -> bool:
+def native_multihop_request_admission(read) -> bool:
+    """Bind canonical public input to the original complete catalog snapshot.
+
+    This remains a structural source guard. Unique, scoped function bodies keep
+    duplicate/comment/string decoys from supplying strict decoding or revision
+    ownership; executable HTTP and native-owner gates remain separate evidence.
+    """
+    if not callable(read):
+        return False
+    expected = (
+        ('cmd/client/multihop_node_chain_request.go', 'func (q multihopConnectRequest) ordered() bool', r'''
+return q.nodesPresent || q.Nodes != nil
+        '''),
+        ('cmd/client/multihop_node_chain_request.go', 'func (q multihopConnectRequest) validateOrdered() error', r'''
+if !q.ordered() {
+	return nil
+}
+if q.Execution != "local" || q.EntryID != "" || q.ExitID != "" || q.Base != "" || q.EntryMode != "" || q.ExitMode != "" ||
+	q.ExpectedSelectedNodeID == nil || *q.ExpectedSelectedNodeID == "" || q.ExpectedProfileTokens == nil {
+	return errors.New("ordered Connect requires one explicit Local path and its complete original node revisions")
+}
+if err := common.ValidateMultihopNodes(q.Nodes); err != nil {
+	return err
+}
+if q.Nodes[len(q.Nodes)-1].ID != *q.ExpectedSelectedNodeID {
+	return errors.New("ordered Connect must end at its original selected node")
+}
+return nil
+        '''),
+        ('cmd/client/multihop_node_chain_request.go', 'func (q *multihopConnectRequest) UnmarshalJSON(data []byte) error', r'''
+fields, err := externalConnectJSONObject(data)
+if err != nil {
+	return err
+}
+capture, err := decodeDesktopProfileExpectations(fields)
+if err != nil {
+	return err
+}
+for name := range fields {
+	if name != "nodes" && strings.EqualFold(name, "nodes") {
+		return errors.New("ordered nodes must use their canonical JSON field")
+	}
+}
+rawNodes, ordered := fields["nodes"]
+if ordered {
+	for name := range fields {
+		switch name {
+		case "nodes", "execution", "expected_selected_node_id", "expected_profile_tokens":
+		default:
+			return errors.New("ordered Connect cannot mix another selection or an unknown field")
+		}
+	}
+	var rows []json.RawMessage
+	if json.Unmarshal(rawNodes, &rows) != nil || len(rows) < 2 || len(rows) > common.MultihopMaximumNodes {
+		return errors.New("ordered Connect requires a bounded complete node array")
+	}
+	for _, raw := range rows {
+		row, err := externalConnectJSONObject(raw)
+		if err != nil || len(row) != 2 || row["id"] == nil || row["mode"] == nil {
+			return errors.New("ordered node rows require only canonical identity and mode fields")
+		}
+	}
+}
+type wire multihopConnectRequest
+var decoded wire
+if err := json.Unmarshal(data, &decoded); err != nil {
+	return err
+}
+decoded.desktopProfileExpectations, decoded.nodesPresent = capture, ordered
+result := multihopConnectRequest(decoded)
+if err := result.validateOrdered(); err != nil {
+	return err
+}
+*q = result
+return nil
+        '''),
+        ('cmd/client/multihop_node_chain_request.go', 'func decodeMultihopConnectRequest(body io.Reader) (multihopConnectRequest, error)', r'''
+var q multihopConnectRequest
+data, err := io.ReadAll(body)
+if err == nil {
+	err = json.Unmarshal(data, &q)
+}
+return q, err
+        '''),
+        ('cmd/client/multihop_node_chain_request.go', 'func (a *app) resolveNativeMultihopRequestLocked(q multihopConnectRequest) (multihopSelection, error)', r'''
+if err := q.validateOrdered(); err != nil {
+	return multihopSelection{}, err
+}
+var required []string
+if q.ordered() {
+	for _, node := range q.Nodes {
+		required = append(required, node.ID)
+	}
+}
+if err := a.validateDesktopProfileExpectationsLocked(q.desktopProfileExpectations, required, q.ordered()); err != nil {
+	return multihopSelection{}, err
+}
+store := cloneRouterProfileStore(a.profiles)
+control, ok := profileByID(store.Profiles, store.SelectedID)
+if !ok {
+	return multihopSelection{}, errors.New("select a Router VPN control profile first")
+}
+if control.NodeKind == "external" {
+	return multihopSelection{}, errors.New("selected node is external; use External Connect for its captured path")
+}
+selection, err := resolveNativeMultihopSelection(control, store.Profiles, q)
+if err == nil && q.present() && !q.ordered() {
+	err = a.validateDesktopProfileExpectationsLocked(q.desktopProfileExpectations, []string{selection.Entry.ID, selection.Exit.ID}, false)
+}
+return selection, err
+        '''),
+        ('cmd/client/desktop_profile_expectation.go', 'func decodeDesktopProfileExpectations(fields map[string]json.RawMessage) (desktopProfileExpectations, error)', r'''
+var capture desktopProfileExpectations
+for name := range fields {
+	for _, canonical := range []string{"expected_selected_node_id", "expected_profile_tokens"} {
+		if name != canonical && strings.EqualFold(name, canonical) {
+			return capture, errors.New("source expectation field must use its canonical JSON name")
+		}
+	}
+}
+selected, hasSelected := fields["expected_selected_node_id"]
+tokens, hasTokens := fields["expected_profile_tokens"]
+if hasSelected != hasTokens {
+	return capture, errors.New("source expectations require both selected identity and node revisions")
+}
+if !hasSelected {
+	return capture, nil
+}
+if err := json.Unmarshal(selected, &capture.ExpectedSelectedNodeID); err != nil || capture.ExpectedSelectedNodeID == nil ||
+	(*capture.ExpectedSelectedNodeID != "" && !validProfileID(*capture.ExpectedSelectedNodeID)) {
+	return desktopProfileExpectations{}, errors.New("expected selection must be a canonical node identity")
+}
+entries, err := externalConnectJSONObject(tokens)
+if err != nil || len(entries) > 64 {
+	return desktopProfileExpectations{}, errors.New("expected node revisions must be a bounded unique object")
+}
+capture.ExpectedProfileTokens = make(map[string]string, len(entries))
+for id, raw := range entries {
+	var token string
+	if json.Unmarshal(raw, &token) != nil || !validProfileID(id) || !validExternalProfileExpectationToken(token) {
+		return desktopProfileExpectations{}, errors.New("expected node revision is malformed")
+	}
+	capture.ExpectedProfileTokens[id] = token
+}
+return capture, nil
+        '''),
+        ('cmd/client/desktop_profile_expectation.go', 'func (capture desktopProfileExpectations) present() bool', r'''
+return capture.ExpectedSelectedNodeID != nil || capture.ExpectedProfileTokens != nil
+        '''),
+        ('cmd/client/desktop_profile_expectation.go', 'func (a *app) validateDesktopProfileExpectationsLocked(capture desktopProfileExpectations, requiredIDs []string, exact bool) error', r'''
+if !capture.present() {
+	return nil
+}
+if capture.ExpectedSelectedNodeID == nil || capture.ExpectedProfileTokens == nil || len(capture.ExpectedProfileTokens) > 64 ||
+	*capture.ExpectedSelectedNodeID != a.profiles.SelectedID {
+	return errDesktopProfileSelectionChanged
+}
+required := make(map[string]bool, len(requiredIDs)+1)
+for _, id := range requiredIDs {
+	if !validProfileID(id) {
+		return errDesktopProfileSelectionChanged
+	}
+	required[id] = true
+}
+if selected := *capture.ExpectedSelectedNodeID; selected != "" {
+	if !validProfileID(selected) {
+		return errDesktopProfileSelectionChanged
+	}
+	required[selected] = true
+}
+if exact && len(capture.ExpectedProfileTokens) != len(required) {
+	return errDesktopProfileSelectionChanged
+}
+for id := range required {
+	if capture.ExpectedProfileTokens[id] == "" {
+		return errDesktopProfileSelectionChanged
+	}
+}
+for id, token := range capture.ExpectedProfileTokens {
+	if !validProfileID(id) || !validExternalProfileExpectationToken(token) || (exact && !required[id]) {
+		return errDesktopProfileSelectionChanged
+	}
+	matches := 0
+	for _, profile := range a.profiles.Profiles {
+		if profile.ID == id {
+			matches++
+			if token != publicProfileToken(profile) {
+				return errDesktopProfileSelectionChanged
+			}
+		}
+	}
+	if matches != 1 {
+		return errDesktopProfileSelectionChanged
+	}
+}
+return nil
+        '''),
+        ('cmd/client/external_profile_expectation.go', 'func externalConnectJSONObject(data []byte) (map[string]json.RawMessage, error)', r'''
+decoder := json.NewDecoder(bytes.NewReader(data))
+open, err := decoder.Token()
+if err != nil || open != json.Delim('{') {
+	return nil, errors.New("external connection JSON must be an object")
+}
+fields := map[string]json.RawMessage{}
+for decoder.More() {
+	key, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	name, ok := key.(string)
+	if !ok {
+		return nil, errors.New("external connection JSON field is invalid")
+	}
+	if _, exists := fields[name]; exists {
+		return nil, errors.New("external connection JSON contains a duplicate field")
+	}
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
+		return nil, err
+	}
+	fields[name] = raw
+}
+if close, err := decoder.Token(); err != nil || close != json.Delim('}') {
+	return nil, errors.New("external connection JSON object is incomplete")
+}
+var trailing json.RawMessage
+if err := decoder.Decode(&trailing); err != io.EOF {
+	return nil, errors.New("external connection JSON contains trailing data")
+}
+return fields, nil
+        '''),
+    )
+    for path, declaration, body in expected:
+        if _function(_tokens(read(path)), declaration) != _tokens(body):
+            return False
+    return True
+
+
+def native_multihop_shipping_chain(source: str, read=None) -> bool:
+    if not native_multihop_request_admission(read):
+        return False
     tokens = _tokens(source)
     public = _function(tokens, "func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request)")
     expected = _tokens("""
@@ -629,11 +869,26 @@ def native_multihop_shipping_chain(source: str) -> bool:
         return False
     handler = _function(tokens, "func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime)")
     if not _ordered_once(handler,
-            "operation, finish, guardErr := a.beginConnectionOperation()",
+            "operation, finish, guardErr := a.beginConnectionOperationContext(r.Context())",
             "defer finish()",
             "if r.Method != http.MethodPost {",
             "if !nativeMultihopPlatformSupported() {",
-            "sel, err := resolveNativeMultihopSelection(control, profiles, q)",
+            "q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))",
+            '''if err != nil { http.Error(w, "bad json", http.StatusBadRequest)
+                return }''',
+            '''if q.ordered() && !nativeNodeChainPlatformSupported() {
+                http.Error(w, "this platform has not enabled its protected ordered native host", http.StatusNotImplemented)
+                return
+            }''',
+            '''a.mu.Lock()
+            sel, err := a.resolveNativeMultihopRequestLocked(q)
+            a.mu.Unlock()''',
+            '''if err != nil {
+                status := http.StatusBadRequest
+                if errors.Is(err, errDesktopProfileSelectionChanged) { status = http.StatusConflict }
+                http.Error(w, err.Error(), status)
+                return
+            }''',
             "if execution, err := routeExecution(q); err != nil {",
             "a.nativeMultihopConnectLocalOwned(w, r, operation, sel, driver)"):
         return False

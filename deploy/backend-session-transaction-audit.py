@@ -39,7 +39,7 @@ def function_block(body: str, signature: str) -> str:
 
 
 def require_native_multihop_shipping_chain() -> None:
-    if not native_multihop_shipping_chain(read("cmd/client/multihop_native_routes.go")):
+    if not native_multihop_shipping_chain(read("cmd/client/multihop_native_routes.go"), read):
         errors.append("native multihop public shipping adapters or owned capture/preflight/stage/proof chain are incomplete")
 
 
@@ -267,7 +267,7 @@ for rel, markers in {
         "a.rollbackProfilesLocked(previousStore)", "errConnectionOperationCancelled", "clearActiveMultihopGraph(a)",
     ),
     "cmd/client/multihop_native_routes.go": (
-        "beginConnectionOperation()", "checkConnectionOperation()", "previousStore := cloneRouterProfileStore(a.profiles)",
+        "beginConnectionOperationContext(r.Context())", "checkConnectionOperation()", "previousStore := cloneRouterProfileStore(a.profiles)",
         "a.rollbackProfilesLocked(previousStore)", "http.StatusConflict",
     ),
     "cmd/client/multihop_native_capture.go": (

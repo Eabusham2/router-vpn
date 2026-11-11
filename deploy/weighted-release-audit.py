@@ -153,7 +153,7 @@ def retained_native_multihop_platform(platform: str) -> bool:
                     "/api/multihop/status", "/api/multihop/connect", "switch runtime.GOOS",
                     f'case "{platform}":\n\t\treturn {command}(a, sel)',
                     "bindNativeMultihopRuntime(a, native, sel, network)")
-        and native_multihop_shipping_chain(body("cmd/client/multihop_native_routes.go"))
+        and native_multihop_shipping_chain(body("cmd/client/multihop_native_routes.go"), body)
         and all_markers(wrapper, f"func {command}(a *app, sel multihopSelection)",
                         "return prepareOwnedNativeMultihopCommand(a, sel, nil)")
         and all_markers("cmd/client/multihop_native_capture.go", "mobilemultihop.NodeMultihopConfig",

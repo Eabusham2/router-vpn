@@ -301,12 +301,95 @@ class NativeShippingAuditTests(unittest.TestCase):
         for before, after in (
             ("a.nativeMultihopConnectLocalOwned(w, r, operation, sel, driver)", "a.nativeMultihopConnectLocalOwned(w, r, context.Background(), sel, driver)"),
             ("a.nativeMultihopConnectLocalOwned(w, r, operation, sel, driver)", "a.nativeMultihopConnectLocalOwned(w, r, operation, other, driver)"),
-            ("sel, err := resolveNativeMultihopSelection(control, profiles, q)", "sel, err := unownedSelection(control, profiles, q)"),
+            ("sel, err := a.resolveNativeMultihopRequestLocked(q)", "sel, err := unownedSelection(q)"),
             ("a.checkCapturedConnectionOperation(operation) != nil", "false"),
         ):
             with self.subTest(before=before, after=after):
                 self.changes.clear()
                 self.replace(path, before, after)
+                self.assert_multihop_chain(False)
+
+    def test_public_request_bridge_keeps_http_caller_decode_capability_and_lock(self):
+        path = "cmd/client/multihop_native_routes.go"
+        self.assert_multihop_chain(True)
+        for before, after in (
+            ("a.beginConnectionOperationContext(r.Context())", "a.beginConnectionOperationContext(context.Background())"),
+            ("decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))", "decodeMultihopConnectRequest(r.Body)"),
+            ("decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))", "decodeUncapturedRequest(http.MaxBytesReader(w, r.Body, 16<<10))"),
+            ("if q.ordered() && !nativeNodeChainPlatformSupported() {", "if false {"),
+            ("a.mu.Lock()\n\tsel, err := a.resolveNativeMultihopRequestLocked(q)\n\ta.mu.Unlock()", "sel, err := a.resolveNativeMultihopRequestLocked(q)"),
+            ("a.resolveNativeMultihopRequestLocked(q)", "a.resolveNativeMultihopRequestLocked(other)"),
+            ("errors.Is(err, errDesktopProfileSelectionChanged)", "false"),
+        ):
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\n"
+                self.assert_multihop_chain(False)
+
+    def test_public_request_decoder_and_original_catalog_cannot_be_weakened(self):
+        request = "cmd/client/multihop_node_chain_request.go"
+        revisions = "cmd/client/desktop_profile_expectation.go"
+        strict_json = "cmd/client/external_profile_expectation.go"
+        changes = (
+            (request, 'return q.nodesPresent || q.Nodes != nil', 'return false'),
+            (request, 'q.Execution != "local"', 'false'),
+            (request, 'q.ExpectedSelectedNodeID == nil || *q.ExpectedSelectedNodeID == "" || q.ExpectedProfileTokens == nil', 'false'),
+            (request, 'common.ValidateMultihopNodes(q.Nodes)', 'error(nil)'),
+            (request, 'q.Nodes[len(q.Nodes)-1].ID != *q.ExpectedSelectedNodeID', 'false'),
+            (request, 'fields, err := externalConnectJSONObject(data)', 'fields, err := lenientConnectJSONObject(data)'),
+            (request, 'capture, err := decodeDesktopProfileExpectations(fields)', 'capture, err := desktopProfileExpectations{}, error(nil)'),
+            (request, 'name != "nodes" && strings.EqualFold(name, "nodes")', 'false'),
+            (request, 'case "nodes", "execution", "expected_selected_node_id", "expected_profile_tokens":', 'case "nodes", "execution", "expected_selected_node_id", "expected_profile_tokens", "entry_id":'),
+            (request, 'len(rows) < 2 || len(rows) > common.MultihopMaximumNodes', 'false'),
+            (request, 'len(row) != 2 || row["id"] == nil || row["mode"] == nil', 'false'),
+            (request, 'if err := result.validateOrdered(); err != nil {', 'if err := error(nil); err != nil {'),
+            (request, 'if err := q.validateOrdered(); err != nil {', 'if err := error(nil); err != nil {'),
+            (request, 'for _, node := range q.Nodes {', 'for _, node := range q.Nodes[:1] {'),
+            (request, 'a.validateDesktopProfileExpectationsLocked(q.desktopProfileExpectations, required, q.ordered())', 'a.validateDesktopProfileExpectationsLocked(q.desktopProfileExpectations, required, false)'),
+            (request, 'store := cloneRouterProfileStore(a.profiles)', 'store := capturedForeignProfiles'),
+            (request, 'profileByID(store.Profiles, store.SelectedID)', 'profileByID(store.Profiles, q.EntryID)'),
+            (request, 'resolveNativeMultihopSelection(control, store.Profiles, q)', 'resolveNativeMultihopSelection(control, store.Profiles, other)'),
+            (request, 'a.validateDesktopProfileExpectationsLocked(q.desktopProfileExpectations, []string{selection.Entry.ID, selection.Exit.ID}, false)', 'error(nil)'),
+            (revisions, 'name != canonical && strings.EqualFold(name, canonical)', 'false'),
+            (revisions, 'if hasSelected != hasTokens {', 'if false {'),
+            (revisions, 'if err != nil || len(entries) > 64 {', 'if false {'),
+            (revisions, 'return capture.ExpectedSelectedNodeID != nil || capture.ExpectedProfileTokens != nil', 'return false'),
+            (revisions, '*capture.ExpectedSelectedNodeID != a.profiles.SelectedID', 'false'),
+            (revisions, 'if exact && len(capture.ExpectedProfileTokens) != len(required) {', 'if false {'),
+            (revisions, 'if capture.ExpectedProfileTokens[id] == "" {', 'if false {'),
+            (revisions, '(exact && !required[id])', 'false'),
+            (revisions, 'if token != publicProfileToken(profile) {', 'if false {'),
+            (revisions, 'if matches != 1 {', 'if matches == 0 {'),
+            (strict_json, 'if _, exists := fields[name]; exists {', 'if false {'),
+            (strict_json, 'if err := decoder.Decode(&trailing); err != io.EOF {', 'if false {'),
+        )
+        self.assert_multihop_chain(True)
+        for path, before, after in changes:
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                # A stale comment or separate string cannot restore the lost
+                # ownership check in the actual scoped helper body.
+                self.changes[path] += "\n// " + before + "\nvar auditDecoy = `" + before + "`\n"
+                self.assert_multihop_chain(False)
+
+    def test_public_request_helpers_require_real_unique_functions_and_accept_formatting(self):
+        self.assertFalse(_NATIVE.native_multihop_shipping_chain(self.body("cmd/client/multihop_native_routes.go")))
+        self.assertFalse(_NATIVE.native_multihop_request_admission(None))
+        request = "cmd/client/multihop_node_chain_request.go"
+        self.replace(request, 'a.validateDesktopProfileExpectationsLocked(q.desktopProfileExpectations, required, q.ordered())',
+                     'a.validateDesktopProfileExpectationsLocked(\nq.desktopProfileExpectations, /* original complete path */ required, q.ordered())')
+        self.assert_multihop_chain(True)
+        for path, declaration in (
+            (request, 'func (a *app) resolveNativeMultihopRequestLocked(q multihopConnectRequest) (multihopSelection, error)'),
+            (request, 'func (q *multihopConnectRequest) UnmarshalJSON(data []byte) error'),
+            ('cmd/client/desktop_profile_expectation.go', 'func (a *app) validateDesktopProfileExpectationsLocked(capture desktopProfileExpectations, requiredIDs []string, exact bool) error'),
+            ('cmd/client/external_profile_expectation.go', 'func externalConnectJSONObject(data []byte) (map[string]json.RawMessage, error)'),
+        ):
+            with self.subTest(declaration=declaration):
+                self.changes.clear()
+                self.changes[path] = self.body(path) + "\n" + declaration + " {}\n"
                 self.assert_multihop_chain(False)
 
     def test_imported_selected_dns_is_required_after_transport_before_admission(self):
