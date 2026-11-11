@@ -57,6 +57,7 @@ final class AndroidHopMeasurementDialog {
         String kind=row.optString("kind"),name=row.optString("label"),role=row.optString("role");
         if(!("private-node".equals(kind)||"public-path".equals(kind))||!("entry".equals(role)||"exit".equals(role))||name.isEmpty()||name.length()>160||name.matches("(?s).*[\\x00-\\x1f\\x7f].*"))return "Path unavailable — invalid measurement identity";
         String label=("public-path".equals(kind)?"Public routed path • ":"Private node • ")+name;
+        if(row.has("benchmark")||row.has("response"))return label+": unavailable — another measurement type";
         if(!row.optBoolean("ready"))return label+": unavailable — "+row.optString("failure","unverified result");
         JSONObject idle=row.getJSONObject("idle"),down=row.getJSONObject("download"),up=row.getJSONObject("upload");
         if(!latency(idle)||!transfer(down)||!transfer(up))return label+": unavailable — invalid measurement";

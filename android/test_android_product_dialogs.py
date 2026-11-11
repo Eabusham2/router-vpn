@@ -87,7 +87,13 @@ final class AndroidTelemetry {
  void speedTest(int bytes,One callback){speedBytes=bytes;callback.result(results.get(0),null);}
 }
 final class Connection {boolean connected=true;boolean isConnected(){return connected;}}
-final class AndroidHomeStateStore {static class Snapshot{String logicalMode="raw-tunnel";}static Snapshot state=new Snapshot();static Snapshot snapshot(android.content.Context context){return state;}}
+final class AndroidHomeStateStore {static class Snapshot{String logicalMode="raw-tunnel",activeExternalId="external";}static Snapshot state=new Snapshot();static Snapshot snapshot(android.content.Context context){return state;}}
+final class AndroidExternalLiveTelemetry {
+ static final class Result {String id="external";double medianMs=6;boolean stale;void requireCurrent(){if(stale)throw new IllegalStateException("stale native HTTPS receipt");}String detail(){return "3 HTTPS responses after routed TLS; separate from ICMP";}}
+ interface Callback{void finished(Result result,Throwable error);}final Result result=new Result();Callback pending;boolean delay,running;int calls,cancels;
+ boolean isRunning(){return running;}void measure(String id,Callback cb){calls++;if(delay){running=true;pending=cb;}else cb.finished(result,null);}void cancel(){cancels++;result.stale=true;}
+}
+final class AndroidExternalNodeComparison {static boolean hasActiveOperation(){return false;}}
 final class AndroidMTUMeasurementGate {static boolean busy;static boolean held(){return busy;}}
 final class AndroidViaEntryLatencyProbe {
  static boolean hasActiveOperation(){return false;}
@@ -111,7 +117,7 @@ public final class ProductDialogHarness extends android.app.Activity {
  AndroidStandardExitStore.Entry importedEntry;List<AndroidNodeStore.Node> importedFinals;
  final AndroidUnifiedNodeCatalog catalog=new AndroidUnifiedNodeCatalog();final AndroidTelemetry telemetry=new AndroidTelemetry();
  final Connection connection=new Connection();final Button fastestButton=new Button(this);final CheckBox multihopToggle=new CheckBox(this);
- final TextView liveLatency=new TextView(this);AndroidTelemetry.PathResult currentPathReceipt;boolean resumed=true,telemetryBusy;long lastTelemetryAt,telemetryGeneration;double currentPathMs;
+ final TextView liveLatency=new TextView(this);AndroidTelemetry.PathResult currentPathReceipt;AndroidExternalLiveTelemetry.Result currentExternalReceipt;final AndroidExternalLiveTelemetry externalTelemetry=new AndroidExternalLiveTelemetry();boolean resumed=true,telemetryBusy;long lastTelemetryAt,telemetryGeneration;double currentPathMs;
  AlertDialog fastestProgressDialog;
  boolean busy;String selected="",profile="",pair="",entry="",exit="",message="",infoTitle="",info="";int routed,refreshes,externalBenchmarks,externalComparisons;boolean externalComparisonAdopt;
  SharedPreferences prefs(){return saved;}boolean mutationBusy(){return busy;}void toast(String text){message=text;}
@@ -196,10 +202,24 @@ HARNESS_SUFFIX = r'''
   h=new ProductDialogHarness();h.catalog.items.clear();h.showNodes();check(AlertDialog.last.items==null&&AlertDialog.last.message!=null,"empty node informational dialog retained");
  }
  static void polling(){
+  externalPolling();
   ProductDialogHarness h=new ProductDialogHarness();h.refreshTelemetry(true);check(h.currentPathMs==3&&h.currentPathReceipt==h.telemetry.path&&h.liveLatency.getText().toString().contains("3.0"),"resumed polling did not publish current captured result");h.telemetry.path.stale=true;AndroidMTUMeasurementGate.busy=true;h.refreshTelemetry(true);check(h.currentPathMs==0&&h.currentPathReceipt==null&&h.liveLatency.getText().toString().equals("-- ms")&&h.telemetry.currentCalls==1,"owned measurement kept stale current RTT label");AndroidMTUMeasurementGate.busy=false;
   h=new ProductDialogHarness();h.refreshTelemetry(true);h.connection.connected=false;h.telemetryBusy=true;h.refreshTelemetry(true);check(h.currentPathMs==0&&h.currentPathReceipt==null,"busy polling retained disconnected path label");
   h=new ProductDialogHarness();h.telemetry.delayPath=true;h.refreshTelemetry(true);h.telemetryGeneration++;h.resumed=false;h.telemetry.pending.result(h.telemetry.path,null);check(h.currentPathMs==0&&h.currentPathReceipt==null&&!h.telemetryBusy,"paused or newer UI adopted delayed current RTT");
   h=new ProductDialogHarness();h.telemetry.delayPath=true;h.refreshTelemetry(true);h.telemetry.path.stale=true;h.telemetry.pending.result(h.telemetry.path,null);check(h.currentPathMs==0&&h.currentPathReceipt==null,"delayed stale native path published current RTT");
+ }
+
+ static void externalPolling(){
+  AndroidHomeStateStore.state.logicalMode="external";
+  ProductDialogHarness h=new ProductDialogHarness();h.refreshTelemetry(true);check(h.currentExternalReceipt==h.externalTelemetry.result&&h.currentPathReceipt==null&&h.currentPathMs==6&&h.liveLatency.getText().toString().contains("6.0 ms HTTPS")&&h.telemetry.currentCalls==0,"external live polling fell back to ordinary RTT or lost its HTTPS label");
+  check(h.liveExternalMedian("external")==6&&h.liveExternalMedian("another")==0,"map attributed active path to another external node");h.showLiveTelemetry();check(h.infoTitle.equals("Live HTTPS path response")&&h.info.contains("3 HTTPS responses")&&h.telemetry.currentCalls==0,"live details launched ambient/private RTT");
+  h.externalTelemetry.result.stale=true;AndroidMTUMeasurementGate.busy=true;h.refreshTelemetry(true);check(h.currentExternalReceipt==null&&h.currentPathMs==0&&h.liveExternalMedian("external")==0&&h.externalTelemetry.calls==1,"busy polling retained an expired external map/Disconnect value");AndroidMTUMeasurementGate.busy=false;
+  for(String fault:new String[]{"queued-owner","pause","generation","disconnect"}){
+   h=new ProductDialogHarness();h.externalTelemetry.delay=true;h.refreshTelemetry(true);check(h.telemetryBusy&&h.externalTelemetry.calls==1,"external polling did not retain asynchronous owner");
+   if(fault.equals("queued-owner"))h.externalTelemetry.result.stale=true;if(fault.equals("pause"))h.resumed=false;if(fault.equals("generation"))h.telemetryGeneration++;if(fault.equals("disconnect")){h.connection.connected=false;h.refreshTelemetry(true);check(h.externalTelemetry.cancels>0,"disconnect did not cancel captured external response");}
+   h.externalTelemetry.running=false;h.externalTelemetry.pending.finished(h.externalTelemetry.result,null);check(h.currentExternalReceipt==null&&h.currentPathMs==0&&!h.telemetryBusy,"late external response escaped its queued UI owner: "+fault);
+  }
+  AndroidHomeStateStore.state.logicalMode="raw-tunnel";
  }
  static void profiles(){ProductDialogHarness h=new ProductDialogHarness();h.showProfileManager();shown(3,"Router profiles").clickItem(2);check(h.profile.equals("c"),"exact stored router profile callback");}
  static void execution(){
@@ -259,7 +279,7 @@ def main():
     handlers = [method(signature) for signature in SIGNATURES]
     for signature, handler in zip(SIGNATURES, handlers):
         assert handler.count("choiceDialog(") == 1, signature
-    support = method("void showRouterFastConnectMenu(") + method("AlertDialog.Builder choiceDialog(") + method("TextView text(") + method("int dp(") + method("void refreshTelemetry(") + method("void clearCurrentTelemetry(")
+    support = method("void showRouterFastConnectMenu(") + method("AlertDialog.Builder choiceDialog(") + method("TextView text(") + method("int dp(") + method("void refreshTelemetry(") + method("void clearCurrentTelemetry(") + method("void refreshExternalTelemetry(") + method("double liveExternalMedian(") + method("void showLiveTelemetry(")
     with tempfile.TemporaryDirectory(prefix="routervpn-product-dialog-") as work:
         tmp = Path(work)
         sources = dict(W.UI)

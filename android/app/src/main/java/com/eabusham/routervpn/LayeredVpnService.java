@@ -512,17 +512,18 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         private final File sessionFile;
         private final AndroidTorSession tor;
         private final AndroidExternalSession external;
+        private final AndroidMTUSession mtu;
         private final AndroidHomeStateStore.Snapshot home;
         private final Network physical;
         private volatile boolean started;
         private HopMeasurementOwner(LayeredVpnService service,String request){this(service,request,"","",null);}
         private HopMeasurementOwner(LayeredVpnService service,String request,String exitID,String nativeSession,AndroidHomeStateStore.Snapshot home){
             this.service=service;probe=service.hopMeasurement;server=service.commandServer;generation=service.lifecycle.get();network=service.executionNetwork;this.request=request;
-            this.exitID=exitID;this.nativeSession=nativeSession;this.home=home;config=service.activeConfig;sessionFile=service.activeSession;tor=service.torSession;external=service.externalSession;
+            this.exitID=exitID;this.nativeSession=nativeSession;this.home=home;config=service.activeConfig;sessionFile=service.activeSession;tor=service.torSession;external=service.externalSession;mtu=service.mtuSession;
             physical=tor!=null?service.torPhysicalNetwork:service.externalPhysicalNetwork;
         }
         private void requireCurrent(){
-            if(probe==null||server==null||service.hopMeasurement!=probe||service.commandServer!=server||generation!=service.lifecycle.get()
+            if(probe==null||server==null||service.hopMeasurement!=probe||service.commandServer!=server||service.mtuSession!=mtu||generation!=service.lifecycle.get()
                     ||service.explicitStop||!"UP".equals(service.state)||!network.equals(service.executionNetworkIdentity()))throw new IllegalStateException("The captured path measurement session changed.");
             if(!exitID.isEmpty()){
                 AndroidHomeStateStore.Snapshot now=AndroidHomeStateStore.snapshot(service),proofHome=tor!=null?service.torHomeOwner:service.externalHomeOwner;
@@ -539,11 +540,20 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                         ||!home.runtimeMode.equals(now.runtimeMode)||!home.actualBase.equals(now.actualBase)
                         ||!home.expectedExternalIp.equals(now.expectedExternalIp)||!now.activeNodeId.isEmpty()||!now.activeExitId.isEmpty()
                         ||AndroidHomeStateStore.emergencyDisconnectPending(service))
-                    throw new IllegalStateException("The external 50-sample request lost its native path or DNS proof.");
+                    throw new IllegalStateException("The external measurement lost its native path or DNS proof.");
             }
         }
         void start()throws Exception{
             synchronized(service.lock){requireCurrent();if(service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("MTU Retest has not drained.");if(exitID.isEmpty())probe.start(request,8388608);else probe.startLatency(request,exitID);started=true;requireCurrent();}
+        }
+        void startResponse()throws Exception{
+            synchronized(service.lock){requireCurrent();if(exitID.isEmpty())throw new IllegalStateException("Live HTTPS responses require the captured external path.");if(service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("MTU Retest has not drained.");probe.startResponse(request,exitID);started=true;requireCurrent();}
+        }
+        void requireResponseIdle(){
+            synchronized(service.lock){requireCurrent();if(exitID.isEmpty()||service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("Live HTTPS responses wait for the captured MTU operation.");}
+        }
+        void resumeResponseMTU(){
+            synchronized(service.lock){requireCurrent();if(exitID.isEmpty())throw new IllegalStateException("No captured external response owner.");if(mtu!=null)mtu.resumeAfterResponse();}
         }
         boolean started(){return started;}
         String status()throws Exception{
@@ -573,7 +583,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }
     static HopMeasurementOwner captureExternalHopMeasurement(String request,String exitID,String nativeSession,String homeSession,long pathGeneration)throws Exception{
         LayeredVpnService service=currentService.get();
-        if(service==null||request==null||!request.matches("[0-9a-f]{32}")||exitID==null||exitID.isEmpty()||nativeSession==null||nativeSession.isEmpty())throw new IllegalStateException("No captured external 50-sample session.");
+        if(service==null||request==null||!request.matches("[0-9a-f]{32}")||exitID==null||exitID.isEmpty()||nativeSession==null||nativeSession.isEmpty())throw new IllegalStateException("No captured external measurement session.");
         synchronized(service.lock){
             AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(service);
             if(!home.sessionId.equals(homeSession)||home.pathGeneration!=pathGeneration)throw new IllegalStateException("The external request belongs to another Home owner.");

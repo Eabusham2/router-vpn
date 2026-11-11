@@ -294,6 +294,9 @@ final class AndroidMTUSession implements RouterMTUPlatform {
         try{AndroidMTUMeasurementGate.startMTU(()->owned.start(UUID.randomUUID().toString().replace("-",""),false));automaticDeferred=false;}
         catch(Exception unavailable){notice="Automatic MTU remains deferred until its captured path can be measured.";}
     }
+    /** A drained live response may release the first, never-started Auto run.
+     * Earlier measurements and Cancel/Retest are never restarted here. */
+    void resumeAfterResponse() { synchronized(lifecycle) { resumeDeferredAutomatic(); } }
     private static JSONObject status(RouterMTU owned) throws Exception {
         String raw = owned.statusJSON();
         if (raw == null || raw.length() > 32768) throw new IllegalStateException("MTU status exceeds the IPC bound.");
@@ -339,7 +342,7 @@ final class AndroidMTUSession implements RouterMTUPlatform {
             if (!"status".equals(operation)) {
                 if (closed || invalid || !identity.equals(session) || owned == null || request == null || !request.matches("[0-9a-f]{32}")) throw new IllegalStateException("MTU request is stale or unavailable.");
                 if ("start".equals(operation)) { if(!owned.autoRequested())throw new IllegalStateException("The captured interface policy does not allow Auto MTU or Retest.");AndroidMTUMeasurementGate.startMTU(() -> owned.start(request, true)); automaticDeferred=false; }
-                else if ("cancel".equals(operation)) owned.cancel(request);
+                else if ("cancel".equals(operation)) { owned.cancel(request); automaticDeferred=false; }
                 else throw new IllegalArgumentException("Unknown MTU request.");
             }
             JSONObject result = owned == null ? new JSONObject() : status(owned);

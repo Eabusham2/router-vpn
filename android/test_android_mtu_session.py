@@ -203,8 +203,17 @@ public class Main {
   Fixture retired=new Fixture();retired.establish();RouterMultihop missing=new RouterMultihop();missing.valid=false;retired.owner.activate(core,"captured","{}",missing);
   check(missing.calls==1&&missing.owned==null&&Libbox.created==generic,"retired imported source fell back to untyped MTU");retired.owner.close();
  }
+ static void liveResponseDeferredAuto()throws Exception{
+  for(String fault:new String[]{"current","stopped","network","mtu-cancel"}){
+   Fixture f=new Fixture();f.establish();Object lease=AndroidMTUMeasurementGate.acquire();f.owner.activate(new CommandServer(),"{}","{}");RouterMTU nativeOwner=Libbox.latest;
+   f.owner.resumeAfterResponse();check(nativeOwner.starts==0&&nativeOwner.cancels==0,"live response released Auto before its hold drained");
+   if(fault.equals("stopped"))f.owner.close();if(fault.equals("network"))f.owner.networkChanged();if(fault.equals("mtu-cancel"))f.owner.request("cancel",f.owner.identity,"c".repeat(32));AndroidMTUMeasurementGate.release(lease);f.owner.resumeAfterResponse();f.owner.resumeAfterResponse();
+   check(nativeOwner.starts==(fault.equals("current")?1:0)&&nativeOwner.attempts==(fault.equals("current")?1:0),"first Auto did not resume exactly once under original owner: "+fault);
+   if(fault.equals("current")){f.owner.request("cancel",f.owner.identity,nativeOwner.id);f.owner.resumeAfterResponse();check(nativeOwner.starts==1&&nativeOwner.attempts==1&&nativeOwner.cancels==1,"Cancel was silently restarted by live release");}f.owner.close();
+  }
+ }
  public static void main(String[] args)throws Exception{
-  importedFactory();constructorShutdown();failedDrainRetry();staleConstructorDrainRetry();verifiedHandoff();capturedTelemetry();
+  liveResponseDeferredAuto();importedFactory();constructorShutdown();failedDrainRetry();staleConstructorDrainRetry();verifiedHandoff();capturedTelemetry();
   Fixture a=new Fixture();check(a.owner.captureMTU()==null,"missing interface invented");RouterMTUState first=a.establish();check(first!=null&&first.getMTU()==1280,"initial actual readback lost");
   rejects(a.owner::beforeOpen,"unowned reader replacement allowed");
   RouterMTUState wrong=new RouterMTUState();wrong.setSession("other");wrong.setPath(first.getPath());wrong.setInterface(first.getInterface());wrong.setMTU(1280);

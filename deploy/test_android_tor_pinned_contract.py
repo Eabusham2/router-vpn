@@ -252,6 +252,7 @@ assert args[1:]==['--native-package',os.environ['TOR_PACKAGE'],'--android-aar',o
                          'android/app/src/main/java/com/eabusham/routervpn/AndroidSpeedLabController.java',
                          'android/app/src/main/java/com/eabusham/routervpn/AndroidExternalNodeBenchmark.java',
                          'android/app/src/main/java/com/eabusham/routervpn/AndroidExternalNodeStatistics.java',
+                         'android/app/src/main/java/com/eabusham/routervpn/AndroidExternalLiveTelemetry.java',
                          'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeHopMeasurement.java',
                          'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeUsage.java',
                          'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java',

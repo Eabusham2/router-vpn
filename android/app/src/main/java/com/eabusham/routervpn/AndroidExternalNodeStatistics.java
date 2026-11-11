@@ -106,7 +106,7 @@ final class AndroidExternalNodeStatistics {
         JSONArray rows=status.getJSONArray("results");if(rows.length()!=1)throw new IllegalStateException("The benchmark returned another path.");
         JSONObject row=rows.getJSONObject(0);
         if(!source.path.home.activeExternalId.equals(text(row,"node_id"))||!"exit".equals(text(row,"role"))||!"public-path".equals(text(row,"kind"))
-                ||!bool(row,"ready")||!row.optString("failure","").isEmpty()||row.has("idle")||row.has("download")||row.has("upload"))
+                ||!bool(row,"ready")||!row.optString("failure","").isEmpty()||row.has("idle")||row.has("download")||row.has("upload")||row.has("response"))
             throw new IllegalStateException("No complete 50-sample external benchmark; the previous saved result is retained.");
         JSONObject benchmark=row.getJSONObject("benchmark"),stats=benchmark.getJSONObject("distribution");
         if(integer(benchmark,"schema")!=1||!MEASUREMENT.equals(text(benchmark,"measurement"))||!ENDPOINT.equals(text(benchmark,"endpoint"))

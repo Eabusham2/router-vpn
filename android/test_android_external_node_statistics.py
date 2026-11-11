@@ -54,17 +54,21 @@ final class LayeredVpnService {
   if(!nativeID.equals("native-1")||home.isEmpty()||generation<0||exit.isEmpty()||!valid)throw new IllegalStateException("unowned external handle");captures++;return current=new HopMeasurementOwner(id,exit);
  }
  static final class HopMeasurementOwner {
-  final String id,exit;volatile boolean began,drained;int cancels,drains;
+  final String id,exit;volatile boolean began,drained,responseOnly;int cancels,drains;
   HopMeasurementOwner(String id,String exit){this.id=id;this.exit=exit;}
   void require(){if(!valid||current!=this)throw new IllegalStateException("captured native owner retired");}
   void start(){require();began=true;traffic++;}boolean started(){return began;}
+  void requireResponseIdle(){require();}
+  void startResponse(){responseOnly=true;start();}
+  void resumeResponseMTU(){require();if(!drained||AndroidMTUMeasurementGate.held())throw new AssertionError("live release lost native drain/gate");}
   String requestID(){return id;}String configIdentity(){return "b".repeat(64);}String networkIdentity(){return "c".repeat(64);}
   String status()throws Exception{
    require();JSONObject stats=new JSONObject().put("samples",50).put("min_ms",1).put("median_ms",2).put("average_ms",2.1).put("p90_ms",3).put("max_ms",4).put("jitter_ms",0.3);
    JSONObject benchmark=new JSONObject().put("schema",1).put("measurement","routed-https-response-after-tls").put("endpoint","https://speed.cloudflare.com/__down?bytes=1").put("attempts",50).put("failed",0).put("distribution",stats).put("trimmed_mean_ms",2);
    JSONObject row=new JSONObject().put("node_id",exit).put("role","exit").put("kind","public-path").put("label","External path → Cloudflare edge").put("ready",true).put("benchmark",benchmark);
    JSONObject status=new JSONObject().put("request_id",id).put("stage","complete").put("complete",true).put("drained",drained).put("results",new JSONArray().put(row));
-   switch(fault){case "wrong-node":row.put("node_id","other");break;case "private":row.put("kind","private-node");break;case "entry":row.put("role","entry");break;case "not-ready":row.put("ready",false);break;case "typed-ready":row.put("ready","true");break;case "transfer":row.put("download",new JSONObject());break;
+   if(responseOnly){stats.put("samples",3);benchmark.put("attempts",3);benchmark.remove("failed");benchmark.remove("trimmed_mean_ms");row.remove("benchmark");row.put("response",benchmark);}
+   switch(fault){case "missing-response":row.remove("response");break;case "saved-benchmark":row.put("benchmark",benchmark);break;case "idle":row.put("idle",stats);break;case "upload":row.put("upload",new JSONObject());break;case "typed-samples":stats.put("samples","3");break;case "row-failure":row.put("failure","unproved");break;case "wrong-node":row.put("node_id","other");break;case "private":row.put("kind","private-node");break;case "entry":row.put("role","entry");break;case "not-ready":row.put("ready",false);break;case "typed-ready":row.put("ready","true");break;case "transfer":row.put("download",new JSONObject());break;case "response":row.put("response",new JSONObject());break;
     case "49":stats.put("samples",49);break;case "attempts":benchmark.put("attempts",49);break;case "failed":benchmark.put("failed",1);break;case "typed-count":benchmark.put("attempts","50");break;case "endpoint":benchmark.put("endpoint","https://other.invalid/");break;case "icmp":benchmark.put("measurement","icmp-rtt");break;case "negative":stats.put("min_ms",-1);break;case "order":stats.put("median_ms",8);break;case "trimmed":benchmark.put("trimmed_mean_ms",9);break;case "status-failure":status.put("failure","native source lost");break;
     case "stage-cancelled":status.put("stage","cancelled");break;case "stage-invalidated":status.put("stage","invalidated");break;
    }return status.toString();
@@ -72,7 +76,7 @@ final class LayeredVpnService {
   void cancel(){cancels++;}
   void drain()throws Exception{drains++;if(drainEntered!=null)drainEntered.countDown();if(drainRelease!=null&&!drainRelease.await(6,TimeUnit.SECONDS))throw new IllegalStateException("fixture drain held too long");drained=true;}
   interface Commit{void run()throws Exception;}
-  void commit(Commit write)throws Exception{require();if(!drained||!AndroidMTUMeasurementGate.held())throw new AssertionError("save escaped native drain or MTU owner");write.run();}
+  void commit(Commit write)throws Exception{require();if(!drained||!responseOnly&&!AndroidMTUMeasurementGate.held())throw new AssertionError("save escaped native drain or MTU owner");write.run();}
  }
 }
 '''
@@ -153,7 +157,7 @@ public final class ExternalStatisticsTest {
   }
  }
  static void invalidResults(Path root)throws Exception{
-  for(String fault:List.of("wrong-node","private","entry","not-ready","typed-ready","transfer","49","attempts","failed","typed-count","endpoint","icmp","negative","order","trimmed","status-failure","stage-cancelled","stage-invalidated"))try(Fixture f=new Fixture(root,"direct")){
+  for(String fault:List.of("wrong-node","private","entry","not-ready","typed-ready","transfer","response","49","attempts","failed","typed-count","endpoint","icmp","negative","order","trimmed","status-failure","stage-cancelled","stage-invalidated"))try(Fixture f=new Fixture(root,"direct")){
    f.baseline();byte[] before=f.saved();LayeredVpnService.fault=fault;Callback cb=f.run();cb.joined();check(cb.error!=null&&cb.result==null&&Arrays.equals(before,f.saved()),"malformed native benchmark was saved: "+fault);
   }
  }
@@ -188,7 +192,45 @@ public final class ExternalStatisticsTest {
    check(dialog.getButton(-1).isEnabled()&&detail.contains("Saved 50-sample routed HTTPS"),"visible complete benchmark did not display its actual saved result");byte[] previous=f.saved();f.hold();check(dialog.getButton(-1).performClick(),"Retest handler was not attached");await(LayeredVpnService.drainEntered,"Retest bypassed the actual native request");f.release();deadline=System.nanoTime()+4_000_000_000L;while(!dialog.getButton(-1).isEnabled()&&System.nanoTime()<deadline)Thread.sleep(2);check(dialog.getButton(-1).isEnabled()&&!Arrays.equals(previous,f.saved()),"Retest did not publish a fresh complete request");ui.close();check(!dialog.isShowing(),"Activity cleanup retained external benchmark dialog");
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);Files.createDirectories(root);ordinary(root);failures(root);invalidResults(root);preflightAndHistorical(root);dialogLifecycle(root);System.out.println("Android external 50-sample statistics: "+checks+" checks; exact source/path, native drain, cancellation, durable private storage, Retest and selected-node dispatch");}
+
+ static final class LiveCallback implements AndroidExternalLiveTelemetry.Callback{
+  final CountDownLatch done=new CountDownLatch(1);volatile AndroidExternalLiveTelemetry.Result result;volatile Throwable error;
+  public void finished(AndroidExternalLiveTelemetry.Result value,Throwable failure){result=value;error=failure;done.countDown();}
+  void joined()throws Exception{await(done,"live response failed to join");check(!AndroidMTUMeasurementGate.held(),"live response released completion before native drain");}
+ }
+ static void rejectLive(AndroidExternalLiveTelemetry.Result result,String fault)throws Exception{try{result.requireCurrent();}catch(Exception expected){checks++;return;}throw new AssertionError("stale live HTTPS receipt remained usable: "+fault);}
+ static void driftLive(Fixture f,String fault)throws Exception{
+  if(fault.equals("source"))AndroidPrivateFileStore.write(f.exitFile(),Files.readString(f.exitFile().toPath()).replace("private-external-secret","new-source").getBytes(java.nio.charset.StandardCharsets.UTF_8),512*1024);
+  if(fault.equals("entry-source"))AndroidPrivateFileStore.write(f.router.file,(Files.readString(f.router.file.toPath())+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8),AndroidNodeStore.MAX_BUNDLE);
+  if(fault.equals("Home-generation"))AndroidHomeStateStore.advancePathGeneration(f.activity);
+  if(fault.equals("proof"))AndroidHomeStateStore.failedPreservingOwnership(f.activity,"unproved");
+  if(fault.equals("emergency"))AndroidHomeStateStore.warning(f.activity,"Emergency Disconnect requested; retained owner");
+  if(fault.equals("receipt"))f.runtime.replaceFixtureReceipt();
+  if(fault.equals("native"))LayeredVpnService.valid=false;
+  if(fault.equals("execution"))f.runtime.selected="local";
+ }
+ static void liveResponses(Path root)throws Exception{
+  for(String shape:List.of("direct","router","ordinary"))try(Fixture f=new Fixture(root,shape)){
+   f.baseline();byte[] saved=f.saved(),original=Files.readAllBytes(f.exitFile().toPath());AndroidExternalLiveTelemetry meter=new AndroidExternalLiveTelemetry(f.activity,f.runtime);
+   f.hold();LiveCallback cb=new LiveCallback();meter.measure(f.exit.id,cb);await(LayeredVpnService.drainEntered,"live response did not retain native drain");
+   check(cb.done.getCount()==1&&AndroidMTUMeasurementGate.held()&&meter.isRunning()&&LayeredVpnService.current.responseOnly,"live response used fifty samples or released native workers early");
+   f.release();cb.joined();check(cb.error==null&&cb.result!=null&&cb.result.id.equals(f.exit.id)&&cb.result.medianMs==2,"valid live HTTPS response lost its exact path: "+cb.error);cb.result.requireCurrent();
+   check(cb.result.detail().contains("3 HTTPS responses")&&cb.result.detail().contains("after routed DNS, TCP and TLS")&&cb.result.detail().contains("not ICMP RTT"),"live HTTPS response was relabelled as RTT");
+   check(Arrays.equals(saved,f.saved())&&Arrays.equals(original,Files.readAllBytes(f.exitFile().toPath())),"live response changed saved50 statistics or credentials");
+   java.lang.reflect.Field stamp=cb.result.getClass().getDeclaredField("completedAt");stamp.setAccessible(true);stamp.setLong(cb.result,System.nanoTime()-10_000_000_001L);rejectLive(cb.result,"expiry");meter.cancel();
+  }
+  for(boolean afterDelivery:new boolean[]{false,true})for(String fault:List.of("cancel","source","entry-source","Home-generation","proof","emergency","receipt","native","execution"))try(Fixture f=new Fixture(root,"router")){
+   f.baseline();byte[] before=f.saved();AndroidExternalLiveTelemetry meter=new AndroidExternalLiveTelemetry(f.activity,f.runtime);LiveCallback cb=new LiveCallback();
+   if(!afterDelivery)f.hold();meter.measure(f.exit.id,cb);if(afterDelivery){cb.joined();check(cb.error==null&&cb.result!=null,"live fixture could not establish its receipt");}else await(LayeredVpnService.drainEntered,"live request did not reach held native drain");
+   if(fault.equals("cancel"))meter.cancel();else driftLive(f,fault);
+   if(afterDelivery)rejectLive(cb.result,fault);else{check(AndroidMTUMeasurementGate.held()&&cb.done.getCount()==1,"invalid live request escaped drain: "+fault);f.release();cb.joined();check(cb.error!=null&&cb.result==null,"stale live response was published: "+fault);}
+   check(Arrays.equals(before,f.saved()),"live response touched saved50 history: "+fault);meter.cancel();
+  }
+  for(String fault:List.of("wrong-node","private","entry","not-ready","typed-ready","transfer","response","49","attempts","failed","typed-count","endpoint","icmp","negative","order","trimmed","status-failure","stage-cancelled","stage-invalidated","missing-response","saved-benchmark","idle","upload","typed-samples","row-failure"))try(Fixture f=new Fixture(root,"direct")){
+   f.baseline();byte[] before=f.saved();AndroidExternalLiveTelemetry meter=new AndroidExternalLiveTelemetry(f.activity,f.runtime);LayeredVpnService.fault=fault;LiveCallback cb=new LiveCallback();meter.measure(f.exit.id,cb);cb.joined();check(cb.error!=null&&cb.result==null&&Arrays.equals(before,f.saved()),"malformed live response was published: "+fault);meter.cancel();
+  }
+ }
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);Files.createDirectories(root);ordinary(root);failures(root);invalidResults(root);preflightAndHistorical(root);dialogLifecycle(root);liveResponses(root);System.out.println("Android external saved50/live3 HTTPS: "+checks+" checks; exact source/path, native drain, cancellation, durable private storage, Retest and selected-node dispatch");}
 }'''
 
 
@@ -197,7 +239,7 @@ def verify_shared_bridge():
     actual shared service; native Box creation remains the separate gate."""
     source = (ROOT / 'mobile/routervpn_hop_measurement.go.tmpl').read_text()
     wrapper = U.S.block(source, 'type RouterHopMeasurement struct') + '\n'
-    for name in ('Start', 'StartLatency', 'Cancel', 'Drain', 'StatusJSON', 'Close', 'NetworkChanged'):
+    for name in ('Start', 'StartLatency', 'StartResponse', 'Cancel', 'Drain', 'StatusJSON', 'Close', 'NetworkChanged'):
         wrapper += U.S.block(source, 'func (m *RouterHopMeasurement) ' + name + '(') + '\n'
     test = r'''package libbox
 import("context";"encoding/json";"errors";"net";"strings";"testing";"time";"router-vpn/internal/hopmeasure")
@@ -207,17 +249,20 @@ func(e *bridgeEngine)Dial(ctx context.Context,tag,address string)(net.Conn,error
  if tag!="custom-exit"||address!=hopmeasure.PublicAddress{return nil,errors.New("wrong captured route")};close(e.started);<-ctx.Done();return nil,ctx.Err()
 }
 func TestShippingExternalLatencyBridge(t *testing.T){
- engine:=&bridgeEngine{started:make(chan struct{})};service,err:=hopmeasure.New(engine,[]hopmeasure.Hop{{ID:"exit-owned",Role:"exit",Kind:"public-path",Tag:"custom-exit"}});if err!=nil{t.Fatal(err)}
- bridge:=&RouterHopMeasurement{service};id:=strings.Repeat("a",32)
- if bridge.StartLatency("invalid","exit-owned")==nil||bridge.StartLatency(id,"other")==nil||bridge.Start(id,0)==nil{t.Fatal("public wrapper relaxed request, exit or transfer bounds")}
- if err:=bridge.StartLatency(id,"exit-owned");err!=nil{t.Fatal(err)}
- select{case<-engine.started:case<-time.After(time.Second):t.Fatal("shipping latency wrapper did not reach the actual sealed native route")}
- bridge.Cancel(id);if err:=bridge.Drain(id);err!=nil{t.Fatal(err)}
- var status hopmeasure.Status;if err:=json.Unmarshal([]byte(bridge.StatusJSON()),&status);err!=nil{t.Fatal(err)}
- if status.Request!=id||!status.Complete||!status.Drained||len(status.Results)!=0{t.Fatal("public wrapper lost cancellation or actual drain",status)}
- bridge.NetworkChanged();if bridge.StartLatency(strings.Repeat("b",32),"exit-owned")==nil{t.Fatal("network-invalidated wrapper started another request")}
- if err:=bridge.Close();err!=nil{t.Fatal(err)}
+ for _,response:=range []bool{false,true}{
+  engine:=&bridgeEngine{started:make(chan struct{})};service,err:=hopmeasure.New(engine,[]hopmeasure.Hop{{ID:"exit-owned",Role:"exit",Kind:"public-path",Tag:"custom-exit"}});if err!=nil{t.Fatal(err)}
+  bridge:=&RouterHopMeasurement{service};id:=strings.Repeat("a",32);start:=bridge.StartLatency;if response{start=bridge.StartResponse}
+  if start("invalid","exit-owned")==nil||start(id,"other")==nil||bridge.Start(id,0)==nil{t.Fatal("public wrapper relaxed request, exit or transfer bounds")}
+  if err:=start(id,"exit-owned");err!=nil{t.Fatal(err)}
+  select{case<-engine.started:case<-time.After(time.Second):t.Fatal("shipping response/latency wrapper did not reach the actual sealed native route")}
+  bridge.Cancel(id);if err:=bridge.Drain(id);err!=nil{t.Fatal(err)}
+  var status hopmeasure.Status;if err:=json.Unmarshal([]byte(bridge.StatusJSON()),&status);err!=nil{t.Fatal(err)}
+  if status.Request!=id||!status.Complete||!status.Drained||len(status.Results)!=0{t.Fatal("public wrapper lost cancellation or actual drain",status)}
+  bridge.NetworkChanged();if start(strings.Repeat("b",32),"exit-owned")==nil{t.Fatal("network-invalidated wrapper started another request")}
+  if err:=bridge.Close();err!=nil{t.Fatal(err)}
+ }
 }
+
 '''
     with tempfile.TemporaryDirectory(prefix='.external-statistics-native-', dir=ROOT) as directory:
         work = Path(directory)
@@ -264,7 +309,7 @@ def main():
         (app / 'LayeredVpnService.java').write_text(NATIVE)
         (app / 'StatisticsActivity.java').write_text(ACTIVITY.replace(' // SHIPPING_SAVED', U.S.block((JAVA / 'ProductActivity.java').read_text(), '    private void showSavedStatistics(')))
         (app / 'ExternalStatisticsTest.java').write_text(HARNESS)
-        names = ('AndroidPrivateFileStore', 'AndroidNodeUsage', 'AndroidHomeStateStore', 'AndroidNodeStore', 'AndroidStandardExitStore', 'AndroidProfileSelection', 'AndroidUnifiedNodeCatalog', 'AndroidConnectionSelection', 'AndroidUnifiedConnectionController', 'AndroidNumericAddress', 'AndroidMTUMeasurementGate', 'AndroidNativeHopMeasurement', 'AndroidExternalNodeStatistics', 'AndroidExternalNodeBenchmark', 'AndroidExternalBenchmarkDialog')
+        names = ('AndroidPrivateFileStore', 'AndroidNodeUsage', 'AndroidHomeStateStore', 'AndroidNodeStore', 'AndroidStandardExitStore', 'AndroidProfileSelection', 'AndroidUnifiedNodeCatalog', 'AndroidConnectionSelection', 'AndroidUnifiedConnectionController', 'AndroidNumericAddress', 'AndroidMTUMeasurementGate', 'AndroidNativeHopMeasurement', 'AndroidExternalNodeStatistics', 'AndroidExternalNodeBenchmark', 'AndroidExternalBenchmarkDialog', 'AndroidExternalLiveTelemetry')
         for name in names:
             (app / (name + '.java')).write_bytes((JAVA / (name + '.java')).read_bytes())
         compile = ['javac', '--release', '17', '-encoding', 'UTF-8', '-proc:none', '-cp', str(jar), '-d', str(root / 'classes'), *map(str, root.rglob('*.java'))]
@@ -272,6 +317,9 @@ def main():
         subprocess.run(compile, check=True, timeout=45)
         subprocess.run(run, check=True, timeout=90)
         controls = (
+            ('AndroidExternalLiveTelemetry.java', 'integer(stats,"samples")!=3', 'integer(stats,"samples")<1', 'malformed live response was published: 49', 1),
+            ('AndroidExternalLiveTelemetry.java', 'source.requireCurrent();requireFresh();', 'requireFresh();', 'stale live response was published: source', 1),
+            ('AndroidExternalLiveTelemetry.java', 'age>MAX_AGE_NANOS', 'false', 'stale live HTTPS receipt remained usable: expiry', 1),
             ('AndroidExternalNodeStatistics.java', 'integer(stats,"samples")!=50', 'integer(stats,"samples")<1', 'malformed native benchmark was saved: 49', 1),
             ('AndroidExternalNodeStatistics.java', '!source.path.home.activeExternalId.equals(text(row,"node_id"))', 'false', 'malformed native benchmark was saved: wrong-node', 1),
             ('AndroidExternalNodeStatistics.java', '!MEASUREMENT.equals(text(benchmark,"measurement"))', 'false', 'malformed native benchmark was saved: icmp', 1),

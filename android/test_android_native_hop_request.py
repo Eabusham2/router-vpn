@@ -17,15 +17,18 @@ BOUNDARIES = r'''package com.eabusham.routervpn;
 import java.util.concurrent.*;import java.util.function.*;import org.json.*;
 final class AndroidUnifiedConnectionController{boolean connected=true,multihop=true;boolean isConnected(){return connected;}boolean isMultihopConnected(){return connected&&multihop;}}
 final class LayeredVpnService{
- static volatile HopMeasurementOwner created;static volatile Consumer<Throwable> quiesce;static boolean autoQuiesce=true,startFails,stale,wrongID,invalidType,drainFailsOnce;static volatile boolean complete=true;static volatile CountDownLatch drainEntered,drainRelease;static int captures;static String exitID,nativeSession,homeSession;static long generation;
- static void reset(){created=null;quiesce=null;autoQuiesce=true;startFails=false;stale=false;wrongID=false;invalidType=false;complete=true;drainFailsOnce=false;drainEntered=null;drainRelease=null;captures=0;}
+ static volatile HopMeasurementOwner created;static volatile Consumer<Throwable> quiesce;static boolean autoQuiesce=true,startFails,stale,wrongID,invalidType,drainFailsOnce,responseBusy;static volatile boolean complete=true;static volatile CountDownLatch drainEntered,drainRelease;static int captures;static String exitID,nativeSession,homeSession;static long generation;
+ static void reset(){created=null;quiesce=null;autoQuiesce=true;startFails=false;stale=false;wrongID=false;invalidType=false;complete=true;drainFailsOnce=false;responseBusy=false;drainEntered=null;drainRelease=null;captures=0;}
  static void quiesceMTUForSpeedLab(Consumer<Throwable> cb){quiesce=cb;if(autoQuiesce)cb.accept(null);}
  static HopMeasurementOwner captureHopMeasurement(String id){captures++;created=new HopMeasurementOwner(id);return created;}
  static HopMeasurementOwner captureExternalHopMeasurement(String id,String exit,String nativeID,String home,long pathGeneration){exitID=exit;nativeSession=nativeID;homeSession=home;generation=pathGeneration;return captureHopMeasurement(id);}
  static final class HopMeasurementOwner{
-  final String id;volatile boolean began,drained;int starts,cancels,drains;
+  final String id;volatile boolean began,drained;int starts,responseStarts,cancels,drains,resumes;
   HopMeasurementOwner(String id){this.id=id;}
   void start(){if(startFails)throw new IllegalStateException("owner changed before start");began=true;starts++;}
+  void requireResponseIdle()throws Exception{if(!AndroidMTUMeasurementGate.held())throw new AssertionError("response idle check preceded atomic MTU gate");boolean blocked=false;try{AndroidMTUMeasurementGate.startMTU(()->{throw new AssertionError("new MTU start escaped the response idle boundary");});}catch(IllegalStateException expected){blocked=true;}if(!blocked)throw new AssertionError("response did not exclude a new MTU start");if(responseBusy)throw new IllegalStateException("captured MTU is running");}
+  void startResponse(){start();responseStarts++;}
+  void resumeResponseMTU(){if(stale)throw new IllegalStateException("old native owner");if(AndroidMTUMeasurementGate.held()||began&&!drained)throw new AssertionError("deferred Auto resumed before original native drain/gate release");resumes++;}
   boolean started(){return began;}
   String status()throws Exception{if(stale)throw new IllegalStateException("old Box replaced");return new JSONObject().put("request_id",wrongID?"f".repeat(32):id).put("stage","measuring").put("complete",complete).put("drained",invalidType?"true":drained).put("results",new JSONArray()).toString();}
   interface Commit{void run()throws Exception;}void commit(Commit c)throws Exception{if(stale)throw new IllegalStateException("owner replaced before UI delivery");c.run();}
@@ -70,6 +73,15 @@ public class NativeHopRequestTest{
  static void latencyPublication()throws Exception{
   reset();AndroidNativeHopMeasurement request=new AndroidNativeHopMeasurement();Callback cb=new Callback();request.runLatency("selected-external","native-capture","home-capture",17,cb);cb.await();
   check(cb.error==null&&cb.commits==1&&LayeredVpnService.exitID.equals("selected-external")&&LayeredVpnService.nativeSession.equals("native-capture")&&LayeredVpnService.homeSession.equals("home-capture")&&LayeredVpnService.generation==17,"latency API lost selected native/Home generation");
+  reset();cb=new Callback();request.runResponse("selected-external","native-capture","home-capture",17,cb);cb.await();check(cb.error==null&&cb.commits==1&&LayeredVpnService.created.responseStarts==1&&LayeredVpnService.created.drained&&LayeredVpnService.created.resumes==1,"live response bypassed exact native request/drain");
+  for(String fault:new String[]{"cancel","replace","wrong-id","publication"}){
+   reset();LayeredVpnService.drainEntered=new CountDownLatch(1);LayeredVpnService.drainRelease=new CountDownLatch(1);LayeredVpnService.wrongID=fault.equals("wrong-id");cb=new Callback();cb.failCommit=fault.equals("publication");request.runResponse("selected","native","home",1,cb);check(LayeredVpnService.drainEntered.await(2,TimeUnit.SECONDS),"live response failure did not hold drain");
+   if(fault.equals("cancel"))request.cancel();if(fault.equals("replace"))LayeredVpnService.stale=true;check(LayeredVpnService.created.resumes==0,"pending Auto resumed while live native work still owned its hold");LayeredVpnService.drainRelease.countDown();cb.await();
+   check(cb.error!=null&&cb.result==null&&LayeredVpnService.created.resumes==(fault.equals("replace")?0:1),"live probe cancellation/error stranded first Auto or resumed a replaced MTU owner: "+fault);
+  }
+  reset();LayeredVpnService.autoQuiesce=false;cb=new Callback();request.runResponse("selected","native","home",1,cb);request.cancel();LayeredVpnService.quiesce.accept(null);cb.await();check(cb.error!=null&&LayeredVpnService.created.starts==0&&LayeredVpnService.created.resumes==1,"cancelled unstarted live response stranded current pending Auto");
+  reset();cb=new Callback();request.runResponse("","native","home",1,cb);cb.await();check(cb.error!=null&&LayeredVpnService.captures==0,"empty live response selection acquired a native handle");
+  reset();LayeredVpnService.responseBusy=true;cb=new Callback();request.runResponse("selected","native","home",1,cb);cb.await();check(cb.error!=null&&LayeredVpnService.quiesce==null&&LayeredVpnService.created.starts==0,"automatic live response cancelled existing MTU work");
   reset();cb=new Callback();cb.failCommit=true;request.run(null,cb);cb.await();check(cb.error!=null&&cb.result==null&&cb.commits==1&&LayeredVpnService.created.drained&&!AndroidMTUMeasurementGate.held(),"failed durable publication retained a success or leaked native ownership");
   reset();cb=new Callback();request.runLatency("","native","home",1,cb);cb.await();check(cb.error!=null&&cb.commits==0&&LayeredVpnService.captures==0,"empty latency selection reached native handle");
  }
@@ -82,7 +94,7 @@ public class NativeHopRequestTest{
  static void rendererAndDialog()throws Exception{
   JSONObject valid=row();String text=render(valid);check(text.contains("Public routed path")&&text.contains("Tor circuit → Cloudflare edge")&&text.contains("Download 1.05 Mbps")&&!text.contains("Private node"),"public Tor path was relabelled as a private node API");
   check(render(new JSONObject(valid.toString()).put("kind","private-node").put("label","Router VPN entry private API")).contains("Private node"),"authenticated entry lost its measurement kind");
-  for(String field:new String[]{"kind","label","role","bytes","seconds","rate","samples","ready"}){JSONObject bad=new JSONObject(valid.toString());switch(field){case "kind":bad.put(field,"unowned");break;case "label":bad.put(field,"hidden\nidentity");break;case "role":bad.put(field,"local");break;case "bytes":bad.getJSONObject("download").put("bytes",1);break;case "seconds":bad.getJSONObject("download").put("seconds",0);break;case "rate":bad.getJSONObject("download").put("mbps",100);break;case "samples":bad.getJSONObject("idle").put("samples",0);break;default:bad.put(field,false);}
+  for(String field:new String[]{"kind","label","role","bytes","seconds","rate","samples","ready","response","benchmark"}){JSONObject bad=new JSONObject(valid.toString());switch(field){case "kind":bad.put(field,"unowned");break;case "label":bad.put(field,"hidden\nidentity");break;case "role":bad.put(field,"local");break;case "bytes":bad.getJSONObject("download").put("bytes",1);break;case "seconds":bad.getJSONObject("download").put("seconds",0);break;case "rate":bad.getJSONObject("download").put("mbps",100);break;case "samples":bad.getJSONObject("idle").put("samples",0);break;default:bad.put(field,false);}
    String rendered=render(bad);check(rendered.contains("unavailable")&&!rendered.contains("Mbps"),"invalid native metrics were displayed: "+field);}
   reset();LayeredVpnService.autoQuiesce=false;AndroidHopMeasurementDialog dialog=new AndroidHopMeasurementDialog(new Activity(),new AndroidUnifiedConnectionController());dialog.show();check(AlertDialog.last.showing&&AndroidMTUMeasurementGate.held(),"native measurement dialog not wired to owned request");AlertDialog.last.dismiss();check(LayeredVpnService.created.cancels>0,"dialog dismissal did not cancel captured native request");LayeredVpnService.quiesce.accept(null);long deadline=System.nanoTime()+2_000_000_000L;while(AndroidMTUMeasurementGate.held()&&System.nanoTime()<deadline)Thread.sleep(2);check(!AndroidMTUMeasurementGate.held()&&LayeredVpnService.created.starts==0,"dismissed dialog started a new native measurement");
  }
@@ -154,6 +166,8 @@ def main():
         subprocess.run(run_args, check=True, timeout=25)
         for name, old, new, label in (
             ("AndroidNativeHopMeasurement.java", "job.owner.drain();joined=true;", "joined=true;", "native drain before completion"),
+            ("AndroidNativeHopMeasurement.java", "if(responseOnly)job.owner.requireResponseIdle();", "", "live response must yield to existing MTU"),
+            ("AndroidNativeHopMeasurement.java", "job.owner.resumeResponseMTU();", "", "drained live cancellation must release the current pending Auto"),
             ("AndroidNativeHopMeasurement.java", "if(job.releaseLease)AndroidMTUMeasurementGate.release(job.lease);", "AndroidMTUMeasurementGate.release(job.lease);", "borrowed MTU hold"),
             ("AndroidHopMeasurementDialog.java", "owner.commit(()->{if(visible())output.setText(renderStatus(status));});", "if(visible())output.setText(renderStatus(status));", "queued native owner replacement"),
             ("AndroidHopMeasurementDialog.java", '!activity.isFinishing()&&!activity.isDestroyed()&&dialog!=null', 'dialog!=null', "abandoned Activity delivery"),
@@ -170,7 +184,7 @@ def main():
             except subprocess.TimeoutExpired as timeout:
                 assert "AssertionError" in (timeout.stderr or b"").decode(errors="replace"), label + " hung without rejecting"
             path.write_text(original)
-        print("Android native measurement request negative controls: 5 rejected")
+        print("Android native measurement request negative controls: 7 rejected")
 
 
 if __name__ == "__main__":

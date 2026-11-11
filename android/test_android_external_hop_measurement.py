@@ -19,14 +19,16 @@ spec.loader.exec_module(T)
 SOURCES = dict(T.SOURCES)
 SOURCES["io/nekohasekai/libbox/RouterHopMeasurement.java"] = r'''package io.nekohasekai.libbox;
 public class RouterHopMeasurement {
- public int closes,invalidations,starts,latencyStarts,cancels,drains;public String exitID="";public String request="";public boolean closePending;public Runnable onStart,onStatus;
+ public int closes,invalidations,starts,latencyStarts,responseStarts,cancels,drains;public String exitID="";public String request="";public boolean closePending;public Runnable onStart,onStatus;
  public void close(){closes++;if(closePending)throw new IllegalStateException("native worker pending");}public void networkChanged(){invalidations++;}
  public void start(String id,long bytes){if(bytes!=8388608)throw new AssertionError("unbounded request");starts++;request=id;if(onStart!=null)onStart.run();}
  public void startLatency(String id,String exit){latencyStarts++;request=id;exitID=exit;if(onStart!=null)onStart.run();}
+ public void startResponse(String id,String exit){responseStarts++;request=id;exitID=exit;if(onStart!=null)onStart.run();}
  public void cancel(String id){if(!id.equals(request))throw new AssertionError("cancel lost request");cancels++;}
  public void drain(String id){if(!id.equals(request))throw new AssertionError("drain lost request");drains++;}
  public String statusJSON(){if(onStatus!=null)onStatus.run();return "{\"request_id\":\""+request+"\",\"complete\":false}";}
 }'''
+SOURCES["com/eabusham/routervpn/AndroidMTUSession.java"] = SOURCES["com/eabusham/routervpn/AndroidMTUSession.java"].replace("public boolean running(){return false;}", "public boolean active;public int drains;public boolean running(){return active;}").replace("public void drainForMeasurement()throws Exception{}", "public void drainForMeasurement()throws Exception{drains++;active=false;}").replace("public void resumeAfterResponse(){}", "public int resumes;public void resumeAfterResponse(){resumes++;}")
 native = SOURCES["io/nekohasekai/libbox/Libbox.java"]
 native = native.replace(
     "public static RouterHopMeasurement routerTorCreateHopMeasurement(CommandServer s,RouterTorProofRequest proof,String id)throws Exception{return new RouterHopMeasurement();}",
@@ -114,7 +116,7 @@ public class ExternalHopMeasurementTest {
   final String id="1234567890abcdef1234567890abcdef";
   for(String reason:new String[]{"valid","generation","server","network","replacement","stop","state","late-start","late-status"}){
    Libbox.measurementReset();CommandServer server=new CommandServer(null,null);LayeredVpnService s=service(server);RouterHopMeasurement probe=new RouterHopMeasurement();adopt(s,probe,server,0);field("state").set(s,"UP");field("currentService").set(null,new java.lang.ref.WeakReference<>(s));
-   LayeredVpnService.HopMeasurementOwner owner=LayeredVpnService.captureHopMeasurement(id);check(!owner.started(),"capturing a request started traffic");
+   LayeredVpnService.HopMeasurementOwner owner=LayeredVpnService.captureHopMeasurement(id);check(!owner.started(),"capturing a request started traffic");reject(owner::startResponse);
    java.util.concurrent.atomic.AtomicLong generation=(java.util.concurrent.atomic.AtomicLong)field("lifecycle").get(s);
    if(reason.equals("late-start"))probe.onStart=()->generation.incrementAndGet();
    if(reason.equals("late-start")){reject(owner::start);check(owner.started()&&probe.starts==1,"native started request was lost after post-start ownership failure");}
@@ -130,27 +132,35 @@ public class ExternalHopMeasurementTest {
  static AndroidHomeStateStore.Snapshot externalHome(boolean tor){AndroidHomeStateStore.Snapshot h=new AndroidHomeStateStore.Snapshot();h.connected=true;h.phase="connected";h.pathProof="passed";h.logicalMode="external";h.runtimeMode=tor?"tor":"socks5";h.actualBase="wg";h.sessionId="home-owned";h.pathGeneration=7;h.activeExternalId="exit-owned";h.activeExternalProtocol=h.runtimeMode;h.activeEntryId="entry-owned";h.activeEntryMode="wg";h.activeNodeId="";h.activeExitId="";h.expectedExternalIp=tor?"":"8.8.4.4";return h;}
  static void externalLatencyRequests()throws Exception{
   final String request="a".repeat(32);
-  for(boolean tor:new boolean[]{false,true})for(String fault:new String[]{"valid","wrong-exit","wrong-native","wrong-home","wrong-generation","proof","config","session-file","Home-generation","Home-entry","Home-DNS-proof","owner","network","emergency","late-start"}){
+  for(boolean response:new boolean[]{false,true})for(boolean tor:new boolean[]{false,true})for(String fault:new String[]{"valid","wrong-exit","wrong-native","wrong-home","wrong-generation","proof","config","session-file","Home-generation","Home-entry","Home-DNS-proof","owner","network","emergency","late-start","mtu-busy","mtu-replacement"}){
+   if(!response&&fault.equals("mtu-busy"))continue;
    Libbox.measurementReset();Fixture f=new Fixture(tor,true);f.prove();LayeredVpnService s=service(f.server);RouterHopMeasurement probe=f.create();adopt(s,probe,f.server,0);
    AndroidHomeStateStore.Snapshot home=externalHome(tor);AndroidHomeStateStore.value=home;AndroidHomeStateStore.emergency=false;
    field(tor?"torSession":"externalSession").set(s,tor?f.tor:f.external);field(tor?"torHomeOwner":"externalHomeOwner").set(s,home);field("executionProved").setBoolean(s,true);field("state").set(s,"UP");field("activeConfig").set(s,"original-sealed-DNS-and-route");java.io.File session=java.nio.file.Files.createTempDirectory("external50-service-").toFile();field("activeSession").set(s,session);field("currentService").set(null,new java.lang.ref.WeakReference<>(s));
    if(fault.startsWith("wrong-")){
     reject(()->LayeredVpnService.captureExternalHopMeasurement(request,fault.equals("wrong-exit")?"other":"exit-owned",fault.equals("wrong-native")?"other":"session-owned",fault.equals("wrong-home")?"other":"home-owned",fault.equals("wrong-generation")?8:7));
-    check(probe.starts==0&&probe.latencyStarts==0,"unowned latency capture started traffic: "+fault);s.onDestroy();continue;
+    check(probe.starts==0&&probe.latencyStarts==0&&probe.responseStarts==0,"unowned latency capture started traffic: "+fault);s.onDestroy();continue;
    }
    android.net.Network physical=android.net.ConnectivityManager.networks[0];field(tor?"torPhysicalNetwork":"externalPhysicalNetwork").set(s,physical);field(tor?"torOwner":"externalOwner").setBoolean(s,true);
+   AndroidMTUSession responseMTU=new AndroidMTUSession(s,ignored->{});field("mtuSession").set(s,responseMTU);
    LayeredVpnService.HopMeasurementOwner owner=LayeredVpnService.captureExternalHopMeasurement(request,"exit-owned","session-owned","home-owned",7);
    check(owner.physicalNetwork()==physical,"read-only comparison receipt did not retain exact native physical network");
    field(tor?"torPhysicalNetwork":"externalPhysicalNetwork").set(s,new android.net.Network());reject(owner::physicalNetwork);field(tor?"torPhysicalNetwork":"externalPhysicalNetwork").set(s,physical);
-   check(probe.starts==0&&probe.latencyStarts==0,"physical receipt started measurement traffic");
+   check(probe.starts==0&&probe.latencyStarts==0&&probe.responseStarts==0,"physical receipt started measurement traffic");
    java.util.concurrent.atomic.AtomicLong generation=(java.util.concurrent.atomic.AtomicLong)field("lifecycle").get(s);
    if(fault.equals("late-start"))probe.onStart=()->generation.incrementAndGet();
-   if(fault.equals("late-start"))reject(owner::start);else owner.start();
-   check(owner.started()&&probe.latencyStarts==1&&probe.starts==0&&probe.exitID.equals("exit-owned"),"latency request invoked transfer API or changed native exit");
+   if(response){
+    if(fault.equals("mtu-busy")){responseMTU.active=true;reject(owner::requireResponseIdle);reject(owner::startResponse);check(responseMTU.active&&responseMTU.drains==0&&probe.responseStarts==0&&probe.cancels==0,"automatic live response cancelled or bypassed active native MTU");s.onDestroy();continue;}
+    owner.requireResponseIdle();
+   }
+   Attempt begin=response?owner::startResponse:owner::start;if(fault.equals("late-start"))reject(begin);else begin.run();
+   check(owner.started()&&probe.latencyStarts==(response?0:1)&&probe.responseStarts==(response?1:0)&&probe.starts==0&&probe.exitID.equals("exit-owned"),"latency/response request invoked another API or changed native exit");
+   if(fault.equals("mtu-replacement"))field("mtuSession").set(s,new AndroidMTUSession(s,ignored->{}));
    if(fault.equals("proof"))f.cancel();if(fault.equals("config"))field("activeConfig").set(s,"changed-DNS-or-route");if(fault.equals("session-file"))field("activeSession").set(s,new java.io.File(session.getPath()));if(fault.equals("owner"))field("hopMeasurement").set(s,new RouterHopMeasurement());if(fault.equals("network"))android.net.ConnectivityManager.networks=new android.net.Network[]{};if(fault.equals("emergency"))AndroidHomeStateStore.emergency=true;
    if(fault.startsWith("Home-")){AndroidHomeStateStore.Snapshot next=externalHome(tor);if(fault.equals("Home-generation"))next.pathGeneration++;if(fault.equals("Home-entry"))next.activeEntryId="replacement-entry";if(fault.equals("Home-DNS-proof"))next.pathProof="pending";AndroidHomeStateStore.value=next;}
    AtomicInteger writes=new AtomicInteger();if(fault.equals("valid")){owner.status();owner.commit(writes::incrementAndGet);check(writes.get()==1&&owner.requestID().equals(request)&&!owner.configIdentity().isEmpty()&&!owner.networkIdentity().isEmpty(),"current native receipt could not publish its bound identity");}
    else{reject(owner::status);reject(owner::physicalNetwork);reject(()->owner.commit(writes::incrementAndGet));check(writes.get()==0,"stale native owner allowed durable result: "+fault);}
+   if(response){if(fault.equals("valid")){owner.resumeResponseMTU();check(responseMTU.resumes==1,"current live release lost deferred Auto owner");}else{reject(owner::resumeResponseMTU);check(responseMTU.resumes==0,"replaced live receipt resumed another MTU owner");}}
    owner.cancel();owner.drain();check(probe.cancels==1&&probe.drains==1,"latency replacement lost original cancel/drain handle");field("hopMeasurement").set(s,probe);AndroidHomeStateStore.emergency=false;s.onDestroy();
   }
  }
