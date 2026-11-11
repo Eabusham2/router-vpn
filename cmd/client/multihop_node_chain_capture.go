@@ -92,7 +92,7 @@ func captureDesktopNodeChain(ctx context.Context, root string, control common.Ro
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		input, endpoint, err := capture.compileMember(ctx, member, &total, func() applexray.Lookup {
+		input, endpoint, identity, err := capture.compileMember(ctx, member, &total, func() applexray.Lookup {
 			if i == 0 {
 				return lookup
 			}
@@ -105,6 +105,7 @@ func captureDesktopNodeChain(ctx context.Context, root string, control common.Ro
 			capture.endpoint = endpoint
 		}
 		source.Nodes = append(source.Nodes, input)
+		source.IdentitySources = append(source.IdentitySources, identity)
 		capture.tokens = append(capture.tokens, liveMeasurementProfileToken(member.Profile))
 	}
 	raw, err := json.Marshal(source)
@@ -128,7 +129,7 @@ func captureDesktopNodeChain(ctx context.Context, root string, control common.Ro
 	return capture, nil
 }
 
-func (capture *desktopNodeChainCapture) compileMember(ctx context.Context, member desktopNodeChainMember, total *int, lookup applexray.Lookup) (string, string, error) {
+func (capture *desktopNodeChainCapture) compileMember(ctx context.Context, member desktopNodeChainMember, total *int, lookup applexray.Lookup) (string, string, string, error) {
 	owned := map[string]map[string][]byte{}
 	defer func() {
 		for _, files := range owned {
@@ -155,30 +156,42 @@ func (capture *desktopNodeChainCapture) compileMember(ctx context.Context, membe
 	}
 	wg, err := read("wg")
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	base, baseErr := mobilemultihop.NativeBaseSourceForEndpoint("wg", wg, member.Profile.Endpoint)
 	identity, identityErr := nodeProofIDFromWGConfig(base)
 	if baseErr != nil || identityErr != nil || identity != member.Profile.NodeProofID {
-		return "", "", errors.New("ordered node identity differs from its original saved standard peer")
+		return "", "", "", errors.New("ordered node identity differs from its original saved standard peer")
 	}
 	files, err := read(member.Mode)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	var start map[string][]byte
 	if member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" && member.Mode != "shadowsocks" {
 		start, err = read("shadowsocks")
 		if err != nil {
-			return "", "", err
+			return "", "", "", err
 		}
 	}
 	node, endpoint, err := compileDesktopNode(ctx, member.Profile, member.Mode, files, start, lookup)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
+	}
+	// The original files are already retained by the captured asset digest.
+	// Reuse this member's one captured bootstrap result when preparing its native
+	// identity inventory, exactly as for its selected transport. Never look up
+	// the identity separately, or rewrite the saved profile/asset maps.
+	identityFiles := wg
+	if endpoint != member.Profile.Endpoint {
+		identityFiles, err = freezeDesktopNodeAssets(wg, member.Profile.Endpoint, endpoint)
+		if err != nil {
+			return "", "", "", err
+		}
+		defer clearViaEntryAssets(identityFiles)
 	}
 	input, err := node.LaunchInput()
-	return input, endpoint, err
+	return input, endpoint, encodeDesktopNodeAssets(identityFiles), err
 }
 
 func (capture *desktopNodeChainCapture) digest() string {
