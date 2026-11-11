@@ -8,6 +8,7 @@ nor claims device or network proof.
 """
 from pathlib import Path
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -237,7 +238,7 @@ public final class ConnectionProfilesHarness {
   void changeExternal(String id)throws Exception{AndroidStandardExitStore.Entry e=exits.get(id);JSONObject p=AndroidTorProfile.isTor(e.protocol)?e.torPolicy:e.policy;p.put("dns_host","9.9.9.9").put("manual_mtu",1280).put("home_lan_access",true);exits.save(e);}
   void otherSelection()throws Exception{nodes.select(second.id);prefs.edit().putString("selected_kind","router-vpn").putString("selected_id",second.id).putString("mode","auto").putBoolean("multihop_on",false).putString("custom_presets","[{\"name\":\"other\",\"layers\":[\"hysteria2\"]}]").commit();}
   JSONObject rows()throws Exception{return new JSONObject(text(rows));}JSONObject row()throws Exception{return rows().getJSONArray("profiles").getJSONObject(0);}
-  void row(JSONObject value)throws Exception{Files.writeString(rows.toPath(),new JSONObject().put("schema_version",6).put("profiles",new JSONArray().put(value)).toString());}
+  void row(JSONObject value)throws Exception{Files.writeString(rows.toPath(),new JSONObject().put("schema_version",AndroidConnectionProfileStore.SCHEMA_VERSION).put("profiles",new JSONArray().put(value)).toString());}
  }
  static final class State {
   final Map<String,byte[]> files=new TreeMap<>();final Map<String,Map<String,?>> preferences=new TreeMap<>();
@@ -306,7 +307,7 @@ public final class ConnectionProfilesHarness {
  static List<String> importedFinalModes=List.of("shadowsocks","hysteria2");
  static void importedRouterRoundtrip(Path root)throws Exception{for(String protocol:importedProtocols)for(String finalMode:importedFinalModes){
   Fixture f=new Fixture(root);var entry=mixedSetup(f,protocol,finalMode);var saved=f.store.add("Imported to paired");JSONObject row=f.row();
-  check(f.rows().getInt("schema_version")==6&&row.getString("node_kind").equals("router-vpn")&&row.getString("multihop_entry_kind").equals("external")&&row.getString("node_id").equals(f.first.id),"mixed schema6 lost exact role references");
+  check(f.rows().getInt("schema_version")==7&&row.getString("node_kind").equals("router-vpn")&&row.getString("multihop_entry_kind").equals("external")&&row.getString("node_id").equals(f.first.id),"mixed schema6 lost exact role references");
   check(row.has("ordinary_entry_policy")&&row.has("exit_policy")&&!row.has("entry_policy")&&!row.has("entry_profile_id"),"mixed policy replaced imported role with Router identity");
   String serialized=text(f.rows);for(String secret:List.of("fixture-api-","fixture-socks-","fixture-private-",entry.secret,entry.wgPrivateKey,entry.wgPreSharedKey,"sing-box.json","api_token"))if(!secret.isEmpty())check(!serialized.contains(secret),"mixed row copied private bytes");
   entry.secret=Base64.getEncoder().encodeToString("N".repeat(32).getBytes(StandardCharsets.UTF_8));if(List.of("wireguard","amneziawg").contains(protocol)){entry.wgPrivateKey=Base64.getEncoder().encodeToString("K".repeat(32).getBytes(StandardCharsets.UTF_8));entry.wgPreSharedKey=Base64.getEncoder().encodeToString("P".repeat(32).getBytes(StandardCharsets.UTF_8));}entry.policy.put("manual_mtu",1280);f.exits.save(entry);
@@ -483,7 +484,7 @@ public final class ConnectionProfilesHarness {
   for(String protocol:List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn")){
    Fixture f=new Fixture(root);var entry=ordinary(protocol,"ordinary-"+protocol);f.exits.save(entry);var exit=f.exits.get("external-b");exit.startupMode="last";exit.autoConnect=true;exit.torPolicy.put("manual_mtu",1320);f.exits.save(exit);
    String originalEntry=AndroidStandardExitStore.snapshot(entry),originalExit=AndroidStandardExitStore.snapshot(exit),routerBytes=text(f.first.file);f.store.selectOrdinaryTorPath(exit,entry);var saved=f.store.add("Ordinary "+protocol+" to Tor");JSONObject row=f.row();
-   check(f.rows().getInt("schema_version")==6&&row.getString("multihop_entry_kind").equals("external")&&row.getString("multihop_entry_mode").equals(AndroidExternalPolicy.protocol(protocol)),"ordinary schema/kind/canonical transport not captured");
+   check(f.rows().getInt("schema_version")==7&&row.getString("multihop_entry_kind").equals("external")&&row.getString("multihop_entry_mode").equals(AndroidExternalPolicy.protocol(protocol)),"ordinary schema/kind/canonical transport not captured");
    check(row.getJSONObject("ordinary_entry_policy").getInt("manual_mtu")==1360&&row.getJSONObject("external_policy").getInt("manual_mtu")==1320&&!row.has("entry_policy")&&!row.has("entry_profile_id"),"ordinary entry policy mixed with exit or private Router policy");
    String serialized=text(f.rows);for(String secret:List.of("fixture-api-","fixture-socks-","fixture-private-","openvpn_pairing","openvpn_response_probes","wg_private_key","tor_bridges","api_token"))check(!serialized.contains(secret),"ordinary profile copied private source: "+secret);
    for(String secret:List.of(entry.secret,entry.wgPrivateKey,entry.openVPNConfig))if(!secret.isEmpty())check(!serialized.contains(secret),"ordinary profile copied transport credentials");
@@ -524,8 +525,8 @@ public final class ConnectionProfilesHarness {
   var stale=f.exits.get(entry.id);var changed=f.exits.get(entry.id);changed.password="later private source";f.exits.save(changed);before=new State(f);rejected(()->f.store.selectOrdinaryTorPath(f.exits.get(exit.id),stale),"stale ordinary selection source");before.same(f,"stale ordinary selection");
  }
  static void ordinarySchemaMigration(Path root)throws Exception{
-  for(int schema:new int[]{2,3,4,5}){Fixture f=new Fixture(root);f.store.selectExternalPath(f.exits.get("external-b"),f.first,"wg");var saved=f.store.add("Legacy private entry");JSONObject rows=f.rows();rows.put("schema_version",schema);rows.getJSONArray("profiles").getJSONObject(0).remove("multihop_entry_kind");Files.writeString(f.rows.toPath(),rows.toString());f.otherSelection();f.store.load(saved.id);var path=f.store.currentExternalPath("external-b");check(f.rows().getInt("schema_version")==6&&path.ordinaryEntry==null&&path.entry.id.equals(f.first.id),"legacy Router entry was reinterpreted during schema migration");}
-  Fixture future=new Fixture(root);future.store.add("Future schema");Files.writeString(future.rows.toPath(),future.rows().put("schema_version",7).toString());State before=new State(future);rejected(()->future.store.list(),"future profile schema");before.same(future,"future schema must not rewrite");
+  for(int schema:new int[]{2,3,4,5,6}){Fixture f=new Fixture(root);f.store.selectExternalPath(f.exits.get("external-b"),f.first,"wg");var saved=f.store.add("Legacy private entry");JSONObject rows=f.rows();rows.put("schema_version",schema);rows.getJSONArray("profiles").getJSONObject(0).remove("multihop_entry_kind");Files.writeString(f.rows.toPath(),rows.toString());f.otherSelection();f.store.load(saved.id);var path=f.store.currentExternalPath("external-b");check(f.rows().getInt("schema_version")==7&&path.ordinaryEntry==null&&path.entry.id.equals(f.first.id),"legacy Router entry was reinterpreted during schema migration");}
+  Fixture future=new Fixture(root);future.store.add("Future schema");Files.writeString(future.rows.toPath(),future.rows().put("schema_version",8).toString());State before=new State(future);rejected(()->future.store.list(),"future profile schema");before.same(future,"future schema must not rewrite");
  }
  static void externalRoundtrip(Path root,boolean tor)throws Exception{
   Fixture f=new Fixture(root);String exit=tor?"external-b":"external-a";f.store.selectExternalPath(f.exits.get(exit),f.first,"hysteria2");
@@ -715,7 +716,7 @@ public final class ConnectionProfilesHarness {
    .put("dns_bootstrap",new JSONObject().put("server",new JSONObject().put("type","tls").put("tag","bootstrap").put("server","9.9.9.9").put("server_port",8853).put("detour","custom-exit").put("tls",new JSONObject().put("enabled",true).put("server_name","resolver.example").put("certificate",new JSONArray().put("public-certificate")))).put("query",new JSONObject().put("server","bootstrap").put("strategy","prefer_ipv4").put("disable_cache",true).put("rewrite_ttl",7).put("timeout","2300ms")));
   f.exits.save(exit);f.store.selectExternalPath(exit,null,"wg");var saved=f.store.add("Evidence");JSONObject captured=f.row().getJSONObject("external_policy");check(!captured.has("effective_mtu")&&captured.getJSONObject("dns_bootstrap").toString().equals(exit.policy.getJSONObject("dns_bootstrap").toString())&&captured.getJSONArray("dns_results").length()==1,"capture complete DNS evidence, omit stale MTU");f.changeExternal(exit.id);f.store.load(saved.id);check(!f.exits.get(exit.id).policy.has("effective_mtu"),"restore cannot resurrect stale MTU proof");
   JSONObject old=f.row();old.remove("external_policy");old.remove("external_startup");old.remove("external_protocol");old.remove("external_public_ip");old.put("multihop_exit_mode","shadowsocks");f.row(old);f.changeExternal(exit.id);String current=AndroidStandardExitStore.snapshot(f.exits.get(exit.id));f.otherSelection();f.store.load(saved.id);check(AndroidStandardExitStore.snapshot(f.exits.get(exit.id)).equals(current),"legacy external profile remains selection-only");
-  Files.delete(f.rows.toPath());Files.writeString(f.context.getFilesDir().toPath().resolve("connection-profiles-v1.json"),new JSONObject().put("schema_version",1).put("profiles",new JSONArray().put(old)).toString());f.otherSelection();f.store.load(saved.id);check(f.rows().getInt("schema_version")==6&&!Files.exists(f.context.getFilesDir().toPath().resolve("connection-profiles-v1.json"))&&AndroidStandardExitStore.snapshot(f.exits.get(exit.id)).equals(current),"schema1 path migration preserves selection-only external semantics");
+  Files.delete(f.rows.toPath());Files.writeString(f.context.getFilesDir().toPath().resolve("connection-profiles-v1.json"),new JSONObject().put("schema_version",1).put("profiles",new JSONArray().put(old)).toString());f.otherSelection();f.store.load(saved.id);check(f.rows().getInt("schema_version")==7&&!Files.exists(f.context.getFilesDir().toPath().resolve("connection-profiles-v1.json"))&&AndroidStandardExitStore.snapshot(f.exits.get(exit.id)).equals(current),"schema1 path migration preserves selection-only external semantics");
  }
  static void activeSelectionEdges(Path root)throws Exception{
   Fixture f=new Fixture(root);f.store.selectExternalPath(f.exits.get("external-a"),f.first,"wg");var r=f.store.add("captured entry");f.changeNode(f.first);f.nodes.select(f.first.id);f.store.load(r.id);check(f.nodes.activeId().equals(f.first.id)&&text(new File(f.context.getFilesDir(),AndroidNodeStore.ACTIVE_BUNDLE)).equals(text(f.first.file))&&profile(f.first).getString("start_layer").equals("aes-256-gcm+xor-whitening"),"entry that was already active receives restored policy in its active copy");
@@ -817,15 +818,69 @@ public final class ConnectionProfilesHarness {
    }
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("connect-router")){connectRouterProfiles(root);System.out.println("Android CONNECT persistence: "+checks+" checks across "+cases+" cases passed; compiler boundary independently verified");return;}if(args.length>1&&args[1].equals("home-dns")){homeDNSProfiles(root);System.out.println("Android Home profile stores: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("router-rates")){routerRateProfiles(root);torPaddingProfiles(root);System.out.println("Android Router captured rates: "+checks+" checks across "+cases+" isolated cases passed");return;}if(args.length>1&&args[1].equals("imported-summary")){importedSummary(root);System.out.println("Android actual imported summary: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-preferences")){profilePreferences(root);System.out.println("Android profile preferences: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-apply")){profileApply(root);System.out.println("Android profile apply: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-rollback")){profileRollback(root);System.out.println("Android profile rollback: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&List.of("imported-router","imported-wireguard-router","imported-amneziawg-router","imported-final-wg","imported-final-awg2-fast","imported-final-awg2-strong","imported-nested-wg","imported-nested-awg2-fast","imported-nested-awg2-strong").contains(args[1])){if(args[1].equals("imported-wireguard-router"))importedProtocols=List.of("wireguard");if(args[1].equals("imported-amneziawg-router"))importedProtocols=List.of("amneziawg");if(args[1].startsWith("imported-nested-")){importedProtocols=List.of("wireguard","amneziawg");importedFinalModes=List.of(args[1].substring("imported-nested-".length()));}if(args[1].startsWith("imported-final-"))importedFinalModes=List.of(args[1].substring("imported-final-".length()));importedRouterRoundtrip(root);importedRouterInvalid(root);importedRouterRollback(root);importedRouterProduct(root);packetFinalBoundaries(root);System.out.println("Android "+args[1]+" actual persistence: "+checks+" checks across "+cases+" isolated cases passed (pure compiler boundary doubled)");return;}if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}ordinaryTorRoundtrip(root);ordinaryTorInvalid(root);ordinaryTorRollback(root);ordinarySchemaMigration(root);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);torExecutionProfiles(root);torPaddingProfiles(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+ static java.util.List<String> generalCases(String family){return switch(family){
+  case "store-tor" -> java.util.List.of("ordinaryTorRoundtrip","ordinaryTorInvalid","ordinaryTorRollback","ordinarySchemaMigration","torExecutionProfiles","torPaddingProfiles","torJumboProfiles");
+  case "store-external" -> java.util.List.of("externalRoundtrip-direct","externalRoundtrip-entry","externalExecution","externalDefaultHome","externalStartup");
+  case "store-openvpn" -> java.util.List.of("mappedOpenVPNProfiles");
+  case "store-router" -> java.util.List.of("quickProtection","routerRoundtrip","routerLegacyPolicy","rollback-node","rollback-external","rollback-preferences","rollback-rollback","invalidBeforeMutation","evidenceAndLegacy","activeSelectionEdges","busyAndSelectionFailure","concurrentExternalEditors","strictRawImport");
+  default -> throw new IllegalArgumentException("Unknown original profile group");};}
+ static void generalProfiles(Path root,String family)throws Exception{
+  for(String leaf:generalCases(family))switch(leaf){
+   case "ordinaryTorRoundtrip" -> ordinaryTorRoundtrip(root);
+   case "ordinaryTorInvalid" -> ordinaryTorInvalid(root);
+   case "ordinaryTorRollback" -> ordinaryTorRollback(root);
+   case "ordinarySchemaMigration" -> ordinarySchemaMigration(root);
+   case "torExecutionProfiles" -> torExecutionProfiles(root);
+   case "torPaddingProfiles" -> torPaddingProfiles(root);
+   case "torJumboProfiles" -> torJumboProfiles(root);
+   case "externalRoundtrip-direct" -> externalRoundtrip(root,false);
+   case "externalRoundtrip-entry" -> externalRoundtrip(root,true);
+   case "externalExecution" -> externalExecution(root);
+   case "externalDefaultHome" -> externalDefaultHome(root);
+   case "externalStartup" -> externalStartup(root);
+   case "mappedOpenVPNProfiles" -> mappedOpenVPNProfiles(root);
+   case "quickProtection" -> quickProtection(root);
+   case "routerRoundtrip" -> routerRoundtrip(root);
+   case "routerLegacyPolicy" -> routerLegacyPolicy(root);
+   case "rollback-node" -> rollback(root,"node");
+   case "rollback-external" -> rollback(root,"external");
+   case "rollback-preferences" -> rollback(root,"preferences");
+   case "rollback-rollback" -> rollback(root,"rollback");
+   case "invalidBeforeMutation" -> invalidBeforeMutation(root);
+   case "evidenceAndLegacy" -> evidenceAndLegacy(root);
+   case "activeSelectionEdges" -> activeSelectionEdges(root);
+   case "busyAndSelectionFailure" -> busyAndSelectionFailure(root);
+   case "concurrentExternalEditors" -> concurrentExternalEditors(root);
+   case "strictRawImport" -> strictRawImport(root);
+   default -> throw new IllegalArgumentException("Unexecuted original profile case");
+  }
+  System.out.println("Android actual "+family+": "+checks+" checks across "+cases+" isolated cases passed");
+  System.out.println("GENERAL_EXECUTED="+new JSONArray(generalCases(family)));
+ }
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("list-general")){JSONObject inventory=new JSONObject();for(String family:java.util.List.of("store-tor","store-external","store-openvpn","store-router"))inventory.put(family,new JSONArray(generalCases(family)));System.out.println(inventory);return;}if(args.length>1&&args[1].startsWith("store-")){generalProfiles(root,args[1]);return;}if(args.length>1&&args[1].equals("connect-router")){connectRouterProfiles(root);System.out.println("Android CONNECT persistence: "+checks+" checks across "+cases+" cases passed; compiler boundary independently verified");return;}if(args.length>1&&args[1].equals("home-dns")){homeDNSProfiles(root);System.out.println("Android Home profile stores: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("router-rates")){routerRateProfiles(root);torPaddingProfiles(root);System.out.println("Android Router captured rates: "+checks+" checks across "+cases+" isolated cases passed");return;}if(args.length>1&&args[1].equals("imported-summary")){importedSummary(root);System.out.println("Android actual imported summary: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-preferences")){profilePreferences(root);System.out.println("Android profile preferences: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-apply")){profileApply(root);System.out.println("Android profile apply: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-rollback")){profileRollback(root);System.out.println("Android profile rollback: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&List.of("imported-router","imported-wireguard-router","imported-amneziawg-router","imported-final-wg","imported-final-awg2-fast","imported-final-awg2-strong","imported-nested-wg","imported-nested-awg2-fast","imported-nested-awg2-strong").contains(args[1])){if(args[1].equals("imported-wireguard-router"))importedProtocols=List.of("wireguard");if(args[1].equals("imported-amneziawg-router"))importedProtocols=List.of("amneziawg");if(args[1].startsWith("imported-nested-")){importedProtocols=List.of("wireguard","amneziawg");importedFinalModes=List.of(args[1].substring("imported-nested-".length()));}if(args[1].startsWith("imported-final-"))importedFinalModes=List.of(args[1].substring("imported-final-".length()));importedRouterRoundtrip(root);importedRouterInvalid(root);importedRouterRollback(root);importedRouterProduct(root);packetFinalBoundaries(root);System.out.println("Android "+args[1]+" actual persistence: "+checks+" checks across "+cases+" isolated cases passed (pure compiler boundary doubled)");return;}if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}throw new IllegalArgumentException("Select an explicit complete profile case family");}
 }
 '''
+
+# This is the complete leaf inventory of the former final JVM aggregate. Each
+# named group retains the original 180-second owner; no case or control is lost.
+GENERAL_FAMILIES = {'store-tor': ('ordinaryTorRoundtrip', 'ordinaryTorInvalid', 'ordinaryTorRollback', 'ordinarySchemaMigration', 'torExecutionProfiles', 'torPaddingProfiles', 'torJumboProfiles'), 'store-external': ('externalRoundtrip-direct', 'externalRoundtrip-entry', 'externalExecution', 'externalDefaultHome', 'externalStartup'), 'store-openvpn': ('mappedOpenVPNProfiles',), 'store-router': ('quickProtection', 'routerRoundtrip', 'routerLegacyPolicy', 'rollback-node', 'rollback-external', 'rollback-preferences', 'rollback-rollback', 'invalidBeforeMutation', 'evidenceAndLegacy', 'activeSelectionEdges', 'busyAndSelectionFailure', 'concurrentExternalEditors', 'strictRawImport')}
+
+def validate_general_inventory(actual):
+    expected = {family: list(cases) for family, cases in GENERAL_FAMILIES.items()}
+    if actual != expected:
+        raise AssertionError("Original profile case inventory was omitted, duplicated or reordered")
+    flattened = [case for cases in actual.values() for case in cases]
+    if len(flattened) != len(set(flattened)):
+        raise AssertionError("An original profile case was selected twice")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary"), default="all")
+    parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary", "ordered-chain", "general-stores"), default="all")
     args = parser.parse_args()
+    chain = None
+    if args.case_family in ("all", "ordered-chain"):
+        import test_android_node_chain_capture as chain
     jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
     if not jar.is_file():
         raise RuntimeError("Real Android JSON implementation required")
@@ -835,7 +890,7 @@ def main():
         work = Path(work)
         module = next(line.split()[1] for line in (ROOT / "go.mod").read_text().splitlines() if line.startswith("module "))
         compiler = work / "compiler"
-        (work / "main.go").write_text(GO.replace("router-vpn/internal/", module + "/internal/"))
+        (work / "main.go").write_text((chain.compiler_source(GO) if chain else GO).replace("router-vpn/internal/", module + "/internal/"))
         subprocess.run(["go", "build", "-o", str(compiler), str(work / "main.go")], cwd=ROOT, check=True, timeout=120)
         src = work / "src"
         for name, content in STUBS.items():
@@ -859,11 +914,17 @@ def main():
         (app / "AndroidProductParity.java").write_text('package com.eabusham.routervpn; import org.json.*; final class AndroidProductParity {static void showDNS(android.content.Context c,AndroidNodeStore s){throw new AssertionError("Details sheet rendering boundary");}' + method("AndroidProductParity.java", "static void selectQuickDNS(") + '}')
         (app / "AndroidStartLayer.java").write_text('package com.eabusham.routervpn; final class AndroidStartLayer {static final String OFF="off";static String selectedMode(org.json.JSONObject root){throw new AssertionError("Raw eligibility is covered in native graph tests");}}')
         (app / "ConnectionProfilesHarness.java").write_text(HARNESS)
+        if chain:
+            chain.prepare_sources(src, app, JAVA)
         classes = work / "classes"
         subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", str(jar), "-d", str(classes), *map(str, src.rglob("*.java"))], check=True, timeout=60)
         data = work / "data"
         data.mkdir()
         env = os.environ.copy(); env["ROUTERVPN_PROFILE_COMPILER"] = str(compiler);env["ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-aes-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-xor-client.json")
+        if chain:
+            chain.run(ROOT, work, app, classes, jar, env)
+            if args.case_family == "ordered-chain":
+                return
         # Each complete case family retains the original finite JVM budget.
         if args.case_family in ("all", "home-dns"):
             subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), "home-dns"], env=env, check=True, timeout=80)
@@ -975,11 +1036,31 @@ def main():
             if args.case_family in ("profile-rollback", "selection-ownership"):
                 return
         families=("connect-router",) if args.case_family=="connect-router" else ("imported-final-wg", "imported-final-awg2-fast", "imported-final-awg2-strong", "imported-nested-wg", "imported-nested-awg2-fast", "imported-nested-awg2-strong") if args.case_family=="packet-finals" else ("connect-router", "imported-router", "imported-wireguard-router", "imported-amneziawg-router", "imported-final-wg", "imported-final-awg2-fast", "imported-final-awg2-strong", "imported-nested-wg", "imported-nested-awg2-fast", "imported-nested-awg2-strong")
-        for family in families:
+        for family in (() if args.case_family == "general-stores" else families):
             subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), family], env=env, check=True, timeout=180)
         if args.case_family in ("connect-router", "imported-router", "packet-finals"):
             return
-        subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data)], env=env, check=True, timeout=180)
+        general_command = ["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data)]
+        inventory = json.loads(subprocess.run(general_command + ["list-general"], env=env, check=True, capture_output=True, text=True, timeout=180).stdout)
+        validate_general_inventory(inventory)
+        for fault in ("omitted", "duplicated"):
+            broken = {key: list(value) for key, value in inventory.items()}
+            if fault == "omitted": broken["store-openvpn"].clear()
+            else: broken["store-router"].append(broken["store-openvpn"][0])
+            try: validate_general_inventory(broken)
+            except AssertionError: pass
+            else: raise AssertionError("Original profile inventory accepted " + fault + " case")
+        executed = []
+        for family, selected in GENERAL_FAMILIES.items():
+            result = subprocess.run(general_command + [family], env=env, check=True, capture_output=True, text=True, timeout=180)
+            print(result.stdout, end=""); print(result.stderr, end="")
+            receipts = [line.removeprefix("GENERAL_EXECUTED=") for line in result.stdout.splitlines() if line.startswith("GENERAL_EXECUTED=")]
+            if len(receipts) != 1 or json.loads(receipts[0]) != list(selected):
+                raise AssertionError("Original profile group omitted or duplicated an executed case: " + family)
+            executed.extend(json.loads(receipts[0]))
+        if executed != [case for cases in GENERAL_FAMILIES.values() for case in cases]:
+            raise AssertionError("Original profile case groups did not execute their complete inventory")
+
         # A per-instance transaction can still lose an update between separate
         # Activities. Reproduce that defect only in isolated compiled classes.
         original = (app / "AndroidStandardExitStore.java").read_text()

@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCapture.java'
+      - 'android/test_android_node_chain_capture.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopRuntime.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidPathProbe.java'
@@ -36,6 +38,8 @@ on:
   pull_request:
     paths:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCapture.java'
+      - 'android/test_android_node_chain_capture.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopRuntime.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidPathProbe.java'
@@ -86,6 +90,7 @@ jobs:
       - name: Verify Android multihop boundaries and executable graph
         run: |
           python3 android/test_android_multihop_contract.py
+          python3 android/test_android_node_chain_capture.py
           python3 android/test_android_multihop_modes.py
           python3 android/test_android_home_dns.py
           python3 android/test_android_router_dns_retest.py

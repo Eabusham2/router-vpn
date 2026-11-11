@@ -15,7 +15,7 @@ settings = read("AndroidProfileSettingsDialog.java")
 node_store = read("AndroidNodeStore.java")
 
 for marker in (
-    'SCHEMA_VERSION=6',
+    'SCHEMA_VERSION=7',
     'FILE_NAME="connection-profiles-v4.json"',
     'LEGACY_FILE_NAME="connection-profiles-v1.json"',
     'schema < 1 || schema > SCHEMA_VERSION',
@@ -134,5 +134,26 @@ assert 'no complete supported final transport for the selected entry and layers'
 harness = (ROOT / "test_android_connection_profiles.py").read_text(encoding="utf-8")
 for family in ('imported-router', 'imported-wireguard-router', 'imported-amneziawg-router', 'imported-final-wg', 'imported-final-awg2-fast', 'imported-final-awg2-strong', 'imported-nested-wg', 'imported-nested-awg2-fast', 'imported-nested-awg2-strong'):
     assert harness.count('"' + family + '"') >= 2, f"mandatory profile family missing: {family}"
+
+for marker in ('"multihop_nodes"', 'stageOrderedNodes(updates,row)', 'currentOrderedPath()',
+               'validateOrderedRow(row,schema)', 'nodes.captureChain(', 'orderedReferences(members)',
+               'saved ordered control differs from its exact final member policy'):
+    assert marker in store, f"Android ordered profile capture missing: {marker}"
+assert 'args.case_family in ("all", "ordered-chain")' in harness and 'chain.run(ROOT, work, app, classes, jar, env)' in harness
+workflow = (ROOT.parent / '.github/workflows/android-multihop-contract.yml').read_text()
+for dependency in ('android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCapture.java',
+                   'android/test_android_node_chain_capture.py'):
+    assert workflow.count("- '" + dependency + "'") == 2, f"ordered source push/PR trigger missing: {dependency}"
+assert workflow.count('          python3 android/test_android_node_chain_capture.py') == 1, "actual ordered compiler/capture gate is required"
+
+# The original final aggregate now runs as complete bounded JVM groups. The
+# selected Java inventory and the post-execution receipt must both be checked.
+for family in ('store-tor', 'store-external', 'store-openvpn', 'store-router'):
+    assert 'case "' + family + '" -> java.util.List.of(' in harness
+for marker in ('validate_general_inventory(inventory)', 'for fault in ("omitted", "duplicated"):',
+               'for family, selected in GENERAL_FAMILIES.items():', 'general_command + [family]',
+               'json.loads(receipts[0]) != list(selected)',
+               'independent store instances both adopted the same obsolete editor source'):
+    assert marker in harness, f"original bounded profile inventory/control missing: {marker}"
 
 print("Android connection profile safety contract: PASS")

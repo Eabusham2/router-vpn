@@ -13,7 +13,11 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /** App-private bounded Router VPN node store. IDs are locally derived, never trusted path input. */
 final class AndroidNodeStore {
@@ -24,6 +28,7 @@ final class AndroidNodeStore {
     private static long selectionGeneration;
     static final int MAX_NODES = 24;
     static final int MAX_BUNDLE = 32 * 1024 * 1024;
+    static final int MAX_CHAIN_SOURCE = 40 * 1024 * 1024;
     static final int MAX_PROFILE_SCHEMA = 4;
     static final String ACTIVE_BUNDLE = "router-vpn-bundle.json";
     private static final String PREFS = "router-vpn";
@@ -52,6 +57,51 @@ final class AndroidNodeStore {
             this.id = id == null ? "" : id;
             this.activeBundle = activeBundle == null ? null : activeBundle.clone();
         }
+    }
+
+    /** One immutable private source, including assets not selected by the UI. */
+    static final class ChainSource {
+        final String id, profileId, proofId;
+        private final byte[] original;
+        private ChainSource(String id, byte[] original) throws Exception {
+            this.id = id;
+            this.original = original.clone();
+            JSONObject bundle = bundle();
+            validateBundle(bundle);
+            if (!id.equals(deriveId(bundle, original))) throw new IllegalStateException("An ordered node lost its original local identity.");
+            JSONObject profile = selectedProfile(bundle);
+            profileId = profile.getString("id");
+            proofId = stableNodeIdentity(bundle);
+            if (!(bundle.get("selectedRouterID") instanceof String) || !profileId.equals(bundle.getString("selectedRouterID"))
+                    || !profileId.matches("[A-Za-z0-9_-]{1,64}") || !proofId.matches("[0-9a-f]{64}")) {
+                throw new IllegalStateException("Every ordered member needs its original paired profile identity.");
+            }
+        }
+        byte[] bytes() { return original.clone(); }
+        JSONObject bundle() throws Exception {
+            String source = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(original)).toString();
+            io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(source);
+            return new JSONObject(source);
+        }
+        JSONObject profile() throws Exception { return selectedProfile(bundle()); }
+    }
+
+    /** Source authority stays with the original store publication epoch. */
+    static final class ChainCapture {
+        final ChainSource control;
+        final List<ChainSource> members;
+        final List<String> modes;
+        private final AndroidNodeStore owner;
+        private final long generation;
+        private ChainCapture(AndroidNodeStore owner, ChainSource control, List<ChainSource> members, List<String> modes) {
+            this.owner = owner; this.control = control; this.generation = selectionGeneration;
+            this.members = Collections.unmodifiableList(new ArrayList<>(members));
+            this.modes = Collections.unmodifiableList(new ArrayList<>(modes));
+        }
+        void requireCurrent() throws Exception { owner.requireChainCapture(this); }
     }
 
     private final Context context;
@@ -202,6 +252,82 @@ final class AndroidNodeStore {
     synchronized SelectionSnapshot snapshotSelection() throws Exception { synchronized (STORE_LOCK) {
         return new SelectionSnapshot(activeId(), snapshotOptional(activeBundleFile()));
         }
+    }
+
+    synchronized ChainCapture captureChain(String controlId) throws Exception { synchronized (STORE_LOCK) {
+        if (!safeId(controlId) || !controlId.equals(activeId())) throw new IllegalStateException("The ordered control is not the original selected Router node.");
+        ChainSource control = new ChainSource(controlId, readLimited(nodeFile(controlId), MAX_BUNDLE));
+        if (!java.util.Arrays.equals(control.original, snapshotOptional(activeBundleFile()))) throw new IllegalStateException("The selected ordered control bytes changed.");
+        JSONArray selected = orderedSelection(control.profile());
+        Map<String, ChainSource> catalog = new LinkedHashMap<>();
+        Set<String> wanted = new HashSet<>(), linked = new HashSet<>();
+        for (int i = 0; i < selected.length(); i++) wanted.add(selected.getJSONObject(i).getString("id"));
+        long total = 0;
+        for (Node node : list()) {
+            ChainSource source = node.id.equals(control.id) ? control : new ChainSource(node.id, readLimited(node.file, MAX_BUNDLE));
+            if (!linked.add(source.profileId)) throw new IllegalStateException("The ordered catalog has duplicate selected profile identities.");
+            if (wanted.contains(source.profileId)) {
+                total += source.original.length;
+                if (total > MAX_CHAIN_SOURCE) throw new IllegalStateException("Complete ordered private sources exceed their aggregate bound.");
+                catalog.put(source.profileId, source);
+            }
+        }
+        List<ChainSource> members = new ArrayList<>(); List<String> modes = new ArrayList<>();
+        Set<String> proofs = new HashSet<>();
+        for (int i = 0; i < selected.length(); i++) {
+            JSONObject reference = selected.getJSONObject(i);
+            ChainSource source = catalog.get(reference.getString("id"));
+            if (source == null || !proofs.add(source.proofId)) throw new IllegalStateException("An ordered member is missing or shares another node's paired identity.");
+            String mode = reference.getString("mode");
+            JSONObject assets = source.bundle().getJSONObject("profiles").optJSONObject(mode);
+            if (assets == null || assets.length() == 0) throw new IllegalStateException("An ordered member lost its exact selected transport assets.");
+            members.add(source); modes.add(mode);
+        }
+        ChainSource last = members.get(members.size() - 1);
+        if (last != control) throw new IllegalStateException("The original ordered control must remain the exact final member.");
+        ChainCapture captured = new ChainCapture(this, control, members, modes);
+        requireChainCapture(captured);
+        return captured;
+    } }
+
+    private synchronized void requireChainCapture(ChainCapture captured) throws Exception { synchronized (STORE_LOCK) {
+        if (captured == null || captured.owner != this || captured.generation != selectionGeneration
+                || !captured.control.id.equals(activeId())
+                || !java.util.Arrays.equals(captured.control.original, snapshotOptional(activeBundleFile()))) {
+            throw new IllegalStateException("The ordered source selection or publication generation changed.");
+        }
+        for (ChainSource source : captured.members) {
+            if (!java.util.Arrays.equals(source.original, snapshotOptional(nodeFile(source.id)))) {
+                throw new IllegalStateException("An original ordered member changed or disappeared.");
+            }
+        }
+    } }
+
+    /** Validate references without resolving or inventing a transport owner. */
+    static JSONArray orderedSelection(JSONObject profile) throws Exception {
+        if (!(profile.get("multihop_enabled") instanceof Boolean) || !profile.getBoolean("multihop_enabled")
+                || !"local".equals(profile.getString("multihop_execution"))
+                || !"router-vpn".equals(profile.optString("node_kind", "router-vpn")) || profile.has("external")) {
+            throw new IllegalStateException("An ordered path requires its enabled original Local Router control.");
+        }
+        for (String key : new String[]{"multihop_entry_id", "multihop_entry_mode", "multihop_exit_id", "multihop_exit_mode"}) {
+            if (profile.has(key) && (!(profile.get(key) instanceof String) || !profile.getString(key).isEmpty())) {
+                throw new IllegalStateException("Ordered selection cannot borrow legacy entry/exit fields.");
+            }
+        }
+        JSONArray selected = profile.getJSONArray("multihop_nodes");
+        if (selected.length() < 2 || selected.length() > 8) throw new IllegalStateException("An ordered path requires two to eight complete members.");
+        Set<String> ids = new HashSet<>();
+        for (int i = 0; i < selected.length(); i++) {
+            JSONObject member = selected.getJSONObject(i);
+            if (member.length() != 2 || !(member.get("id") instanceof String) || !(member.get("mode") instanceof String)
+                    || !member.getString("id").matches("[A-Za-z0-9_-]{1,64}") || !member.getString("mode").matches("[a-z0-9-]{1,64}")
+                    || !ids.add(member.getString("id"))) throw new IllegalStateException("Every ordered position needs a distinct canonical node and exact mode.");
+        }
+        if (!profile.getString("id").equals(selected.getJSONObject(selected.length() - 1).getString("id"))) {
+            throw new IllegalStateException("The selected control must be the original final ordered member.");
+        }
+        return new JSONArray(selected.toString());
     }
 
     synchronized void restoreSelection(SelectionSnapshot snapshot) throws Exception { synchronized (STORE_LOCK) {
@@ -419,6 +545,10 @@ final class AndroidNodeStore {
             if (profile == null) throw new IllegalArgumentException("Router VPN node bundle contains an invalid router profile.");
             int nestedSchema = profile.optInt("schema_version", profileSchema);
             if (nestedSchema < 1 || nestedSchema > MAX_PROFILE_SCHEMA) throw new IllegalArgumentException("Router profile schema is newer than this Android app supports.");
+            if (profile.has("multihop_nodes")) {
+                try { orderedSelection(profile); }
+                catch (Exception invalid) { throw new IllegalArgumentException("Router profile has an invalid complete ordered selection.", invalid); }
+            }
         }
         JSONObject profiles = bundle.optJSONObject("profiles");
         if (profiles == null || profiles.length() == 0) throw new IllegalArgumentException("Router VPN node bundle has no generated profiles.");
