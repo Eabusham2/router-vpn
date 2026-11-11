@@ -25,10 +25,10 @@ jobs:
           # Keep the source tests on the same toolchain as the native release.
           go-version: '1.26.3'
           cache: false
-      - name: Exercise captured startup and Last restoration under race instrumentation
-        # Execute the actual new ordered cases and their legacy startup neighbors.
+      - name: Exercise captured startup and temporary restoration under race instrumentation
+        # Execute ordered/legacy startup and the actual cancelled Speed Lab restore.
         # Building a race-enabled native image does not execute this inventory.
-        run: go test -race -count=1 -timeout=180s ./cmd/client -run '^Test(Startup(NodeChain|ProfileToken|Selection|External)|OrderedStartupCannotFallback)'
+        run: go test -race -count=1 -timeout=180s ./cmd/client -run '^Test(Startup(NodeChain|ProfileToken|Selection|External)|OrderedStartupCannotFallback|Desktop(SpeedLabDNSObservation|WindowsExternalSpeedLabRestoresOriginalTypedHost))'
       - name: Compile and test Go source
         # The exact controller suite completed in 670s on the matching CI image.
         # Keep the full inventory and every per-operation deadline unchanged.

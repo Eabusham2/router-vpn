@@ -1075,6 +1075,106 @@ func TestDesktopWindowsExternalDNSUsesOnlyOriginalNativeProof(t *testing.T) {
 	})
 }
 
+// Connected/PathProof publication and selected-DNS adoption have separate
+// completion points. The production worker keeps operationMu until its guarded
+// adoption finishes, even while LockContext is durably blocked on a timer.
+// This fixture joins the captured worker; it neither retries a public request
+// nor cancels DNS, disables a monitor, or reserves the operation lock itself.
+func waitDesktopSpeedLabDNSObservation(ctx context.Context, identity speedLabPathIdentity) error {
+	tracker := identity.Tracker
+	if ctx == nil || tracker == nil || identity.SessionID == "" {
+		return errors.New("original DNS observation has no captured session")
+	}
+	if err := desktopnetwork.LockContext(ctx, &tracker.mu); err != nil {
+		return err
+	}
+	owner, registered := sessionTrackers.Load(tracker.a)
+	work := tracker.dnsProofWork
+	current := registered && owner == tracker && tracker.session != nil && tracker.session.ID == identity.SessionID &&
+		work != nil && work.sessionID == identity.SessionID
+	tracker.mu.Unlock()
+	if !current {
+		return errors.New("original DNS observation lost its exact worker")
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-work.done:
+	}
+	if err := desktopnetwork.LockContext(ctx, &tracker.mu); err != nil {
+		return err
+	}
+	defer tracker.mu.Unlock()
+	owner, registered = sessionTrackers.Load(tracker.a)
+	if !registered || owner != tracker || tracker.session == nil || tracker.session.ID != identity.SessionID ||
+		tracker.dnsProofWork != work || tracker.dnsProofRunning {
+		return errors.New("original DNS observation was replaced before joining")
+	}
+	return ctx.Err()
+}
+
+func TestDesktopSpeedLabDNSObservationJoinsAdmission(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		a, tracker, observed, sessionID := dnsPathFixture(t)
+		control := viaEntryControlFor(a)
+		defer viaEntryControls.Delete(a)
+		releaseGuard := measurementHeldLock(&control.mu)
+		defer releaseGuard()
+		work := startSessionDNSFixture(t, tracker, observed, sessionID, successfulDNSProof)
+		defer func() {
+			work.cancel()
+			releaseGuard()
+			<-work.done
+		}()
+		synctest.Wait()
+		if a.operationMu.TryLock() {
+			a.operationMu.Unlock()
+			t.Fatal("actual DNS adoption did not reserve its transaction before the held guard")
+		}
+		select {
+		case <-work.done:
+			t.Fatal("original DNS worker completed before its guard was released")
+		default:
+		}
+		_, _, finish, err := a.beginSpeedLabTemporaryOperationExpectedContext(context.Background(), nil)
+		if finish != nil {
+			finish()
+		}
+		if err == nil || !strings.Contains(err.Error(), "another Router VPN connection or settings transaction is already in progress") {
+			t.Fatal("temporary admission ignored the original DNS transaction", err)
+		}
+		// Unlock is not the worker's completion receipt: its contextual lock
+		// waiter remains asleep until the existing one-millisecond tick.
+		releaseGuard()
+		synctest.Wait()
+		select {
+		case <-work.done:
+			t.Fatal("quiescence advanced the DNS admission timer")
+		default:
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := waitDesktopSpeedLabDNSObservation(ctx, speedLabPathIdentity{Tracker: tracker, SessionID: sessionID}); err != nil {
+			t.Fatal("original DNS adoption did not join after its guard released", err)
+		}
+		select {
+		case <-work.done:
+		default:
+			t.Fatal("fixture accepted original DNS observation before its completion receipt")
+		}
+		if !a.operationMu.TryLock() {
+			t.Fatal("joined original DNS adoption retained the temporary transaction")
+		}
+		a.operationMu.Unlock()
+		a.mu.Lock()
+		connected := a.state.Connected
+		a.mu.Unlock()
+		if !connected || tracker.snapshot(0).DNSProof.Status != "passed" {
+			t.Fatal("joining original DNS adoption cancelled its result or disconnected the VPN")
+		}
+	})
+}
+
 func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
 	for _, direction := range []string{"router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-hysteria2-aes-router", "hysteria2-aes-router-hysteria2-aes", "router-hysteria2-aes-xor-router", "hysteria2-aes-xor-router-hysteria2-aes-xor", "router-socks5-router", "socks5-router-socks5", "router-wireguard-router", "wireguard-router-wireguard", "router-amneziawg-fast-router", "amneziawg-fast-router-amneziawg-fast", "router-amneziawg-strong-router", "amneziawg-strong-router-amneziawg-strong", "router-openvpn-tcp-router", "openvpn-tcp-router-openvpn-tcp", "router-openvpn-udp-router", "openvpn-udp-router-openvpn-udp", "router-openvpn-mixed-router", "openvpn-mixed-router-openvpn-mixed"} {
 		t.Run(direction, func(t *testing.T) {
@@ -1111,13 +1211,26 @@ func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
 				} else {
 					original = f.connect(t, protocol)
 				}
-				for deadline := time.Now().Add(time.Second); ; {
-					if _, _, err := captureSpeedLabIdentity(a); err == nil {
+				deadline := time.Now().Add(time.Second)
+				var originalIdentity speedLabPathIdentity
+				for {
+					identity, _, err := captureSpeedLabIdentity(a)
+					if err == nil {
+						originalIdentity = identity
 						break
 					} else if !time.Now().Before(deadline) {
 						t.Fatal("original session observation", err)
 					}
 					time.Sleep(100 * time.Millisecond)
+				}
+				// Connected publication precedes the original DNS result's guarded
+				// adoption. Join that exact worker within the same observation budget;
+				// synctest.Wait alone can return while adoption sleeps on a lock timer.
+				observation, stopObservation := context.WithDeadline(context.Background(), deadline)
+				err := waitDesktopSpeedLabDNSObservation(observation, originalIdentity)
+				stopObservation()
+				if err != nil {
+					t.Fatal("original DNS observation did not join", err)
 				}
 				var source []byte
 				if original.ownedNode != nil {
@@ -1160,9 +1273,6 @@ func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
 				}
 				body, _ := json.Marshal(request)
 				response := httptest.NewRecorder()
-				// Connected identity does not join a runnable original proof monitor.
-				// Finish that transaction before this fixture begins its temporary one.
-				synctest.Wait()
 				a.speedLabRun(response, httptest.NewRequest(http.MethodPost, "/api/speed-lab/run", bytes.NewReader(body)).WithContext(ctx))
 				if direction == "external-router-retired-controller" {
 					if response.Code != http.StatusConflict || ctx.Err() == nil || a.state.Connected || len(f.children) != 2 {

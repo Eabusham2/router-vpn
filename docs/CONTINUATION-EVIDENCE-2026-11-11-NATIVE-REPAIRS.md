@@ -7,6 +7,43 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## Speed Lab fixture joins the original DNS adoption
+
+Release-gap job `130817800199` at `da38c3d3` failed the public temporary
+Speed Lab cancellation/restoration case for Router to Hysteria2 with an AES
+Start Layer: admission correctly returned HTTP 409 while the original
+selected-DNS adoption still owned the connection/settings transaction.
+
+The old fixture's `synctest.Wait` observed quiescence rather than completion.
+The actual contextual lock can wait on its existing one-millisecond timer
+while retaining `operationMu`. Connected/path-proof publication starts a
+separate DNS worker, so those visible fields do not supply its join receipt.
+The fixture now captures the registered original tracker, session and exact
+`sessionDNSProofWork.done`, waits under the **same original one-second
+observation deadline**, then verifies that exact worker remains retained and
+is no longer running.
+
+The shipping defer order was independently read: adoption releases app,
+tracker and operation locks; the path observer stops; the worker cancels its
+scope; only then does `work.done` close. The fixture does not retry its public
+request, cancel DNS, disable a monitor, or reserve the transaction itself.
+All twenty-four original directions and the public call/cancellation/
+restoration assertion suffix are byte-identical.
+
+A new causal case holds the real via-entry guard during actual DNS adoption,
+shows that `synctest.Wait` returns while the operation is still reserved,
+requires the normal temporary admission refusal, and then releases the guard
+and joins the original completion receipt. It requires the connection and
+DNS result to remain intact. The final Connected assertion reads under the
+app lock. The focused race gate includes both this causal case and the
+existing twenty-four-direction fixture, alongside all startup cases, without
+changing its three-minute Go execution bound or the full-suite inventory.
+
+This is a fixture synchronization correction. Production transaction
+exclusivity, DNS policy, timeouts and restoration behavior are unchanged.
+Source/call-order review is complete; hosted Go and race execution remain
+pending because the local executor is unavailable.
+
 ## SOCKS authentication-downgrade EOF observation
 
 Both standalone Linux engine jobs at `07c96a04` (`130794976283` AMD64 and
