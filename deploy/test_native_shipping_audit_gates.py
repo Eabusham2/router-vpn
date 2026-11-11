@@ -223,6 +223,42 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.changes[path] += "\n// " + before + "\n"
                 self.assert_multihop_scores(False)
 
+    def test_captured_profile_helper_keeps_paired_and_every_ordered_original(self):
+        capture = "cmd/client/multihop_native_capture.go"
+        selection = "cmd/client/multihop_node_chain_selection.go"
+        changes = (
+            (capture, "if sel.Native != nil && sel.Native.chain != nil {", "if false {"),
+            (capture, 'return errors.New("ordered native proof requires its complete child heartbeat")', "return nil"),
+            (capture, "if sel.Native.imported || sel.Native.chain != nil {", "if sel.Native.imported {"),
+            (capture, "nativeMultihopCapturedProfiles(sel)", "[]common.RouterProfile{sel.Control, sel.Entry, sel.Exit}"),
+            (capture, "if !sel.Native.imported && sel.Native.chain == nil {", "if !sel.Native.imported {"),
+            (selection, "profiles := []common.RouterProfile{selection.Control}", "profiles := []common.RouterProfile{}"),
+            (selection, "if len(selection.Nodes) == 0 {", "if len(selection.Nodes) != 0 {"),
+            (selection, "return append(profiles, selection.Entry, selection.Exit)", "return append(profiles, selection.Exit, selection.Entry)"),
+            (selection, "return append(profiles, selection.Entry, selection.Exit)", "return append(profiles, selection.Exit)"),
+            (selection, "for _, member := range selection.Nodes {", "for _, member := range selection.Nodes[1:] {"),
+            (selection, "profiles = append(profiles, member.Profile)", "profiles = append(profiles, selection.Exit)"),
+            (selection, "profiles = append(profiles, member.Profile)", "profiles = append([]common.RouterProfile{member.Profile}, profiles...)"),
+        )
+        self.assert_multihop_scores(True)
+        for path, before, after in changes:
+            for replacement in (after, "/* " + before + " */"):
+                with self.subTest(path=path, before=before, replacement=replacement):
+                    self.changes.clear()
+                    self.replace(path, before, replacement)
+                    self.changes[path] += "\n// " + before + "\n"
+                    self.assert_backend_proof_admission(False)
+                    self.assert_multihop_scores(False)
+
+    def test_captured_profile_helper_requires_one_actual_function_and_accepts_formatting(self):
+        path = "cmd/client/multihop_node_chain_selection.go"
+        self.replace(path, "append(profiles, member.Profile)", "append(\nprofiles, /* original member */ member.Profile)")
+        self.assert_multihop_scores(True)
+        self.changes.clear()
+        self.changes[path] = self.body(path) + "\nfunc nativeMultihopCapturedProfiles(selection multihopSelection) []common.RouterProfile { return nil }\n"
+        self.assert_backend_proof_admission(False)
+        self.assert_multihop_scores(False)
+
     def test_imported_selected_dns_is_required_after_transport_before_admission(self):
         capture = "cmd/client/multihop_native_capture.go"
         dns = "cmd/client/multihop_native_imported_dns.go"

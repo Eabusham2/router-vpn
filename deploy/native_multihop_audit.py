@@ -243,11 +243,16 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
     proof = _function(tokens, "func proveNativeMultihopCapture(ctx context.Context, sel multihopSelection, owns func() bool, prove func(context.Context, common.RouterProfile, string) error) error")
     lane = _function(imported, "func proveNativeMultihopLaneContext(ctx context.Context, profile common.RouterProfile, proxy string) error")
     selected_dns = _function(dns, "func (a *app) proveImportedNativeDNS(parent context.Context, selection multihopSelection, command *exec.Cmd) (float64, error)")
+    captured_profiles = _function(_tokens(read("cmd/client/multihop_node_chain_selection.go")),
+        "func nativeMultihopCapturedProfiles(selection multihopSelection) []common.RouterProfile") if callable(read) else None
     return (
         native_multihop_platform_chain(read)
         and admission == _tokens('''
             ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), nativeMultihopProofTimeout(sel))
             defer cancel()
+            if sel.Native != nil && sel.Native.chain != nil {
+                return errors.New("ordered native proof requires its complete child heartbeat")
+            }
             if sel.Native != nil && sel.Native.importedPlatform != nil {
                 graph, found := getActiveMultihopGraph(a)
                 owner, err := capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
@@ -268,15 +273,15 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
             if ctx == nil || ctx.Err() != nil || sel.Native == nil || mobilemtu.LockContext(ctx, &a.mu) != nil { return false }
             owned := command != nil && a.cmd == command && !a.closing
             selected := a.profiles.SelectedID == sel.Control.ID
-            if sel.Native.imported {
-                for _, captured := range []common.RouterProfile{sel.Control, sel.Entry, sel.Exit} {
+            if sel.Native.imported || sel.Native.chain != nil {
+                for _, captured := range nativeMultihopCapturedProfiles(sel) {
                     current, ok := a.profileByIDLocked(captured.ID)
                     owned = owned && ok && mtuProfileSnapshotToken(current) == mtuProfileSnapshotToken(captured)
                 }
             }
             a.mu.Unlock()
             if !owned { return false }
-            if !sel.Native.imported { return true }
+            if !sel.Native.imported && sel.Native.chain == nil { return true }
             if sel.Native.importedPlatform != nil {
                 raw, found := nativeMultihopOwners.Load(a)
                 owner, valid := raw.(*nativeMultihopRuntime)
@@ -286,6 +291,19 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
                 }
             }
             return selected && sel.Native.validate(sel) == nil && ctx.Err() == nil
+        ''')
+        # The existing paired capture still checks Control/Entry/Exit. An
+        # ordered capture must retain every original profile in order; tracing
+        # this helper does not admit the separately refused ordered proof.
+        and captured_profiles == _tokens('''
+            profiles := []common.RouterProfile{selection.Control}
+            if len(selection.Nodes) == 0 {
+                return append(profiles, selection.Entry, selection.Exit)
+            }
+            for _, member := range selection.Nodes {
+                profiles = append(profiles, member.Profile)
+            }
+            return profiles
         ''')
         and _ordered_once(proof,
             'if ctx.Err() != nil { return ctx.Err() }',
