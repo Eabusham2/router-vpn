@@ -47,7 +47,7 @@ func resolveDesktopNodeChainSelection(control common.RouterProfile, profiles []c
 		return multihopSelection{}, errors.New("ordered native control must be its exact final selected node")
 	}
 	return multihopSelection{Control: common.CloneRouterProfile(control), Entry: common.CloneRouterProfile(members[0].Profile),
-		Exit: common.CloneRouterProfile(final.Profile), Base: "wg", EntryMode: members[0].Mode, ExitMode: final.Mode,
+		Exit: common.CloneRouterProfile(final.Profile), Base: desktopExternalEntryBase(members[0].Mode), EntryMode: members[0].Mode, ExitMode: final.Mode,
 		Nodes: cloneDesktopNodeChainMembers(members)}, nil
 }
 
@@ -62,7 +62,7 @@ func nodeChainSelectedReferences(members []desktopNodeChainMember) []common.Mult
 func captureNativeNodeChainSelection(ctx context.Context, root string, selection multihopSelection,
 	modes []string, lookup applexray.Lookup) (multihopSelection, error) {
 	if ctx == nil || ctx.Err() != nil || selection.Native != nil || len(modes) != 1 || modes[0] != "shadowsocks" ||
-		selection.Base != "wg" || selection.EntryMode != "wg" || selection.ExitMode != "shadowsocks" ||
+		!mobilemultihop.NodeChainPrefixMode(selection.EntryMode) || selection.Base != desktopExternalEntryBase(selection.EntryMode) || selection.ExitMode != "shadowsocks" ||
 		selection.serverPacketPublic != "" || selection.serverPQIdentity != "" {
 		return selection, errors.New("ordered native capture requires its complete explicit Local selection")
 	}
@@ -72,7 +72,8 @@ func captureNativeNodeChainSelection(ctx context.Context, root string, selection
 	}
 	selected := nodeChainSelectedReferences(selection.Nodes)
 	resolved, err := resolveDesktopNodeChainSelection(selection.Control, profiles, selected, "local")
-	if err != nil || liveMeasurementProfileToken(resolved.Entry) != liveMeasurementProfileToken(selection.Entry) ||
+	if err != nil || resolved.Base != selection.Base || resolved.EntryMode != selection.EntryMode || resolved.ExitMode != selection.ExitMode ||
+		liveMeasurementProfileToken(resolved.Entry) != liveMeasurementProfileToken(selection.Entry) ||
 		liveMeasurementProfileToken(resolved.Exit) != liveMeasurementProfileToken(selection.Exit) {
 		return selection, errors.Join(err, errors.New("ordered native endpoints differ from the complete member capture"))
 	}
@@ -86,7 +87,7 @@ func captureNativeNodeChainSelection(ctx context.Context, root string, selection
 	}
 	resolved.restoreMTU = selection.restoreMTU
 	resolved.Native = &nativeMultihopCapture{root: capture.root, entryID: resolved.Entry.ID, exitID: resolved.Exit.ID,
-		base: "wg", entryMode: "wg", entrySelection: "wg", endpoint: capture.endpoint, source: capture.chain.SourceSHA256(),
+		base: resolved.Base, entryMode: resolved.EntryMode, entrySelection: resolved.EntryMode, endpoint: capture.endpoint, source: capture.chain.SourceSHA256(),
 		controlToken: liveMeasurementProfileToken(resolved.Control), entryToken: liveMeasurementProfileToken(resolved.Entry), exitToken: liveMeasurementProfileToken(resolved.Exit),
 		entryPhysical: append([]mobilemultihop.PhysicalEgress(nil), physical...),
 		configs:       map[string]string{resolved.ExitMode: capture.chain.Config()}, chain: capture}
@@ -100,13 +101,19 @@ func (capture *nativeMultihopCapture) validateNodeChainSelection(selection multi
 	bad := errors.New("ordered native source or any selected member changed")
 	if capture == nil || capture.chain == nil || capture.chain.chain == nil || capture.imported || capture.importedHost != nil ||
 		capture.importedPlatform != nil || capture.openVPN != nil || capture.importedInput != "" || capture.importedOriginalSource != "" ||
-		selection.Native != capture || selection.Control.ID != selection.Exit.ID || selection.Base != "wg" || selection.EntryMode != "wg" || selection.ExitMode != "shadowsocks" ||
-		capture.base != "wg" || capture.entryMode != "wg" || capture.entrySelection != "wg" ||
+		selection.Native != capture || selection.Control.ID != selection.Exit.ID || !mobilemultihop.NodeChainPrefixMode(selection.EntryMode) ||
+		selection.Base != desktopExternalEntryBase(selection.EntryMode) || selection.ExitMode != "shadowsocks" ||
+		capture.base != selection.Base || capture.entryMode != selection.EntryMode || capture.entrySelection != selection.EntryMode ||
 		capture.entryID != selection.Entry.ID || capture.exitID != selection.Exit.ID || capture.root != capture.chain.root || capture.endpoint != capture.chain.endpoint ||
 		capture.source != capture.chain.chain.SourceSHA256() || len(capture.configs) != 1 || capture.configs[selection.ExitMode] != capture.chain.chain.Config() ||
 		capture.controlToken != liveMeasurementProfileToken(selection.Control) || capture.entryToken != liveMeasurementProfileToken(selection.Entry) || capture.exitToken != liveMeasurementProfileToken(selection.Exit) ||
 		len(selection.Nodes) != len(capture.chain.members) || len(selection.Nodes) < 2 || len(selection.Nodes) > common.MultihopMaximumNodes ||
 		selection.serverPacketPublic != "" || selection.serverPQIdentity != "" {
+		return bad
+	}
+	if selection.EntryMode != selection.Nodes[0].Mode ||
+		liveMeasurementProfileToken(selection.Entry) != liveMeasurementProfileToken(selection.Nodes[0].Profile) ||
+		liveMeasurementProfileToken(selection.Exit) != liveMeasurementProfileToken(selection.Nodes[len(selection.Nodes)-1].Profile) {
 		return bad
 	}
 	profiles := make([]common.RouterProfile, len(selection.Nodes))

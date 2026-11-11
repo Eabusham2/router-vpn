@@ -48,6 +48,23 @@ func savedNodeChainDigest(value string) bool {
 	return err == nil && len(decoded) == 32 && hex.EncodeToString(decoded) == value
 }
 
+// The standard peer remains this node's identity source even when its selected
+// AWG transport uses independent packet keys. Retain only the exact chosen raw
+// transport and, when needed, its separately captured Start Layer source.
+func savedNodeChainSourceModes(mode, startLayer string) ([]string, error) {
+	if !mobilemultihop.NodeChainPrefixMode(mode) && mode != "shadowsocks" {
+		return nil, errors.New("ordered path requires an exact WireGuard, AWG2 or SS2022 source")
+	}
+	modes := []string{"wg"}
+	if mode != "wg" && mode != "shadowsocks" {
+		modes = append(modes, mode)
+	}
+	if mode == "shadowsocks" || startLayer != "" && startLayer != "off" {
+		modes = append(modes, "shadowsocks")
+	}
+	return modes, nil
+}
+
 func validateSavedNodeChain(record connectionProfileRecord) error {
 	if len(record.NodeChain) == 0 {
 		if record.Prefs != nil && len(record.Prefs.MultihopNodes) != 0 {
@@ -66,33 +83,32 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 	for i, captured := range record.NodeChain {
 		selected := record.Prefs.MultihopNodes[i]
 		if captured.ID != selected.ID || captured.Mode != selected.Mode || captured.Preferences == nil ||
-			!common.ValidNodeProofID(captured.NodeProofID) || !savedNodeChainDigest(captured.ProfileToken) ||
-			len(captured.Sources) < 1 || len(captured.Sources) > 2 {
+			!common.ValidNodeProofID(captured.NodeProofID) || !savedNodeChainDigest(captured.ProfileToken) {
 			return errors.New("saved ordered member differs from its selected position or source identity")
 		}
-		if i < len(record.NodeChain)-1 && captured.Mode != "wg" || i == len(record.NodeChain)-1 && captured.Mode != "shadowsocks" {
-			return errors.New("saved ordered path requires WireGuard prefixes and an SS2022 final")
+		if i < len(record.NodeChain)-1 && !mobilemultihop.NodeChainPrefixMode(captured.Mode) || i == len(record.NodeChain)-1 && captured.Mode != "shadowsocks" {
+			return errors.New("saved ordered path requires WireGuard or AWG2 prefixes and an SS2022 final")
+		}
+		modes, err := savedNodeChainSourceModes(captured.Mode, captured.Preferences.StartLayer)
+		if err != nil || len(captured.Sources) != len(modes) {
+			return errors.New("saved ordered member lost its selected transport or Start Layer source")
 		}
 		for j, source := range captured.Sources {
-			if j == 0 && source.Mode != "wg" || j == 1 && source.Mode != "shadowsocks" || !savedNodeChainDigest(source.SHA256) {
+			if source.Mode != modes[j] || !savedNodeChainDigest(source.SHA256) {
 				return errors.New("saved ordered member source inventory is incomplete or noncanonical")
 			}
-		}
-		needsSS := captured.Mode == "shadowsocks" || captured.Preferences.StartLayer != "" && captured.Preferences.StartLayer != "off"
-		if needsSS != (len(captured.Sources) == 2) {
-			return errors.New("saved ordered member lost its selected transport or Start Layer source")
 		}
 	}
 	return nil
 }
 
 func captureSavedNodeChainSources(root string, node common.RouterProfile, mode string) ([]connectionProfileNodeSource, error) {
-	if node.NodeKind != "" && node.NodeKind != "router-vpn" || node.External != nil || !common.ValidNodeProofID(node.NodeProofID) || mode != "wg" && mode != "shadowsocks" {
-		return nil, errors.New("ordered path requires linked Router WireGuard/SS2022 sources")
+	if node.NodeKind != "" && node.NodeKind != "router-vpn" || node.External != nil || !common.ValidNodeProofID(node.NodeProofID) {
+		return nil, errors.New("ordered path requires linked Router WireGuard, AWG2 or SS2022 sources")
 	}
-	modes := []string{"wg"}
-	if mode == "shadowsocks" || node.StartLayer != "" && node.StartLayer != "off" {
-		modes = append(modes, "shadowsocks")
+	modes, err := savedNodeChainSourceModes(mode, node.StartLayer)
+	if err != nil {
+		return nil, err
 	}
 	var result []connectionProfileNodeSource
 	for _, sourceMode := range modes {

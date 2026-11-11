@@ -214,11 +214,21 @@ CASES += IMPORTED_CASES
 
 NODE_CHAIN_HOST_CASES = ('node-chain-3-connect', 'node-chain-4-connect', 'node-chain-3-wrong-middle-key',
     'node-chain-4-wrong-middle-proof', 'node-chain-3-final-dns-failure', 'node-chain-4-final-node-failure',
-    'node-chain-4-middle-source', 'node-chain-3-prefix-lost')
+    'node-chain-4-middle-source', 'node-chain-3-prefix-lost',
+    'node-chain-3-awg-fast-wg-connect', 'node-chain-3-wg-awg-strong-connect', 'node-chain-3-awg-strong-awg-fast-connect',
+    'node-chain-4-wg-awg-fast-awg-strong-connect', 'node-chain-4-awg-fast-awg-strong-wg-connect', 'node-chain-4-awg-strong-wg-awg-fast-connect',
+    'node-chain-4-wg-awg-fast-awg-strong-wrong-middle-key', 'node-chain-4-wg-awg-fast-awg-strong-wrong-awg-parameters',
+    'node-chain-4-wg-awg-fast-awg-strong-middle-source', 'node-chain-4-wg-awg-fast-awg-strong-prefix-lost')
 CASES += NODE_CHAIN_HOST_CASES
 NODE_CHAIN_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledNodeChainFixtureKeepsCompiledAuthority'
+NODE_CHAIN_CIPHER_CASES = (
+    ('3-nodes', 3, False), ('4-nodes', 4, False),
+    ('awg-fast-wg-3-nodes', 3, True), ('wg-awg-strong-3-nodes', 3, True),
+    ('awg-strong-awg-fast-3-nodes', 3, True), ('wg-awg-fast-awg-strong-4-nodes', 4, True),
+    ('awg-fast-awg-strong-wg-4-nodes', 4, True), ('awg-strong-wg-awg-fast-4-nodes', 4, True),
+)
 NODE_CHAIN_HOST_AUTHORITY_CASES = (NODE_CHAIN_HOST_AUTHORITY_ROOT,
-    *(NODE_CHAIN_HOST_AUTHORITY_ROOT + '/' + str(count) + '-nodes' for count in (3, 4)))
+    *(NODE_CHAIN_HOST_AUTHORITY_ROOT + '/' + name for name, _, _ in NODE_CHAIN_CIPHER_CASES))
 
 def check_node_chain_host_authority_verdict(output):
     NODE.require_native_verdicts(output, NODE_CHAIN_HOST_AUTHORITY_CASES, 'installed ordered source authority')
@@ -340,19 +350,24 @@ def check_layered_entry_authority_verdict(output):
 
 
 NODE_CHAIN_PEER_CAPTURE = 'TestRouterVPNDesktopNodeChainPeerCapture'
+NODE_CHAIN_PEER_AWG_CAPTURE = 'TestRouterVPNDesktopNodeChainPeerAWGCapture'
 NODE_CHAIN_PEER_TRAFFIC = 'TestRouterVPNDesktopNodeChainPeerTraffic'
 NODE_CHAIN_PEER_CASES = (
     NODE_CHAIN_PEER_CAPTURE,
     *(NODE_CHAIN_PEER_CAPTURE + '/' + fault for fault in (
         'schema', 'address', 'count', 'missing-middle', 'key', 'same-key', 'same-id', 'same-token',
         'wrong-proof', 'final-key', 'final-id', 'final-token')),
+    NODE_CHAIN_PEER_AWG_CAPTURE,
+    *(NODE_CHAIN_PEER_AWG_CAPTURE + '/' + fault for fault in (
+        'complete', 'missing-mode', 'unknown-mode', 'wg-parameters', 'missing-parameters', 'missing-s4',
+        'unknown-parameter', 'invalid-parameter', 'injected-parameter', 'same-public-key')),
     NODE_CHAIN_PEER_TRAFFIC,
-    *(NODE_CHAIN_PEER_TRAFFIC + '/' + str(count) + '-nodes' + suffix
-      for count in (3, 4)
+    *(NODE_CHAIN_PEER_TRAFFIC + '/' + name + suffix
+      for name, count, awg in NODE_CHAIN_CIPHER_CASES
       for suffix in ('', *(f'/prefix-{position}-authenticated' for position in range(count - 1)),
                      '/final-private-public-and-selected-dns', '/wrong-middle-token-and-identity',
                      '/middle-cannot-bypass-final-dns', '/authenticated-final-mtu', '/held-middle-cancellation',
-                     '/middle-key', '/omit-middle', '/final-key')),
+                     '/middle-key', '/omit-middle', '/final-key', *(('/awg-parameters',) if awg else ()))) ,
 )
 
 
@@ -362,7 +377,7 @@ def check_node_chain_peer_verdict(output):
 
 def execute_node_chain_peer(peer, source, captured):
     status, output = NODE.run([str(peer), '-test.v', '-test.timeout=90s',
-                              '-test.run=^(' + NODE_CHAIN_PEER_CAPTURE + '|' + NODE_CHAIN_PEER_TRAFFIC + ')$'],
+                              '-test.run=^(' + NODE_CHAIN_PEER_CAPTURE + '|' + NODE_CHAIN_PEER_AWG_CAPTURE + '|' + NODE_CHAIN_PEER_TRAFFIC + ')$'],
                              cwd=source, env=captured, timeout=100)
     if status:
         raise ValueError('Ordered encrypted prefix reference failed:\n' + output[-16384:])

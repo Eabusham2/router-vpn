@@ -21,10 +21,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/common"
 	"router-vpn/internal/linuxprocess"
 	"router-vpn/internal/mobilemultihop"
@@ -33,14 +35,20 @@ import (
 var linuxNodeChainHostCases = []string{
 	"node-chain-3-connect", "node-chain-4-connect", "node-chain-3-wrong-middle-key", "node-chain-4-wrong-middle-proof",
 	"node-chain-3-final-dns-failure", "node-chain-4-final-node-failure", "node-chain-4-middle-source", "node-chain-3-prefix-lost",
+	"node-chain-3-awg-fast-wg-connect", "node-chain-3-wg-awg-strong-connect", "node-chain-3-awg-strong-awg-fast-connect",
+	"node-chain-4-wg-awg-fast-awg-strong-connect", "node-chain-4-awg-fast-awg-strong-wg-connect", "node-chain-4-awg-strong-wg-awg-fast-connect",
+	"node-chain-4-wg-awg-fast-awg-strong-wrong-middle-key", "node-chain-4-wg-awg-fast-awg-strong-wrong-awg-parameters",
+	"node-chain-4-wg-awg-fast-awg-strong-middle-source", "node-chain-4-wg-awg-fast-awg-strong-prefix-lost",
 }
 
 type linuxNodeChainPrefixRequest struct {
-	PrivateKey      string `json:"private_key"`
-	ClientPublicKey string `json:"client_public_key"`
-	PreSharedKey    string `json:"pre_shared_key"`
-	NodeProofID     string `json:"node_proof_id"`
-	APIToken        string `json:"api_token"`
+	Mode            string            `json:"mode"`
+	Parameters      map[string]string `json:"parameters,omitempty"`
+	PrivateKey      string            `json:"private_key"`
+	ClientPublicKey string            `json:"client_public_key"`
+	PreSharedKey    string            `json:"pre_shared_key"`
+	NodeProofID     string            `json:"node_proof_id"`
+	APIToken        string            `json:"api_token"`
 }
 
 type linuxNodeChainPeerReply struct {
@@ -48,11 +56,13 @@ type linuxNodeChainPeerReply struct {
 	Address  string `json:"address"`
 	PublicCA string `json:"public_ca"`
 	Prefixes []struct {
-		RawUDP       int64  `json:"raw_udp"`
-		TCP          int64  `json:"tcp"`
-		UDP          int64  `json:"udp"`
-		ProofQueries uint64 `json:"proof_queries"`
-		AuthRefusals uint64 `json:"auth_refusals"`
+		Mode             string `json:"mode"`
+		ParametersSHA256 string `json:"parameters_sha256,omitempty"`
+		RawUDP           int64  `json:"raw_udp"`
+		TCP              int64  `json:"tcp"`
+		UDP              int64  `json:"udp"`
+		ProofQueries     uint64 `json:"proof_queries"`
+		AuthRefusals     uint64 `json:"auth_refusals"`
 	} `json:"prefixes"`
 	Final linuxImportedPeerReply `json:"final"`
 }
@@ -74,6 +84,65 @@ type linuxNodeChainPeer struct {
 func linuxNodeChainProofID(key *ecdh.PrivateKey) string {
 	digest := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())))
 	return hex.EncodeToString(digest[:])
+}
+
+type linuxNodeChainCipherCase struct {
+	name, prefix string
+	modes        []string
+}
+
+func linuxNodeChainCipherCases() []linuxNodeChainCipherCase {
+	return []linuxNodeChainCipherCase{
+		{"3-nodes", "node-chain-3-", []string{"wg", "wg"}}, {"4-nodes", "node-chain-4-", []string{"wg", "wg", "wg"}},
+		{"awg-fast-wg-3-nodes", "node-chain-3-awg-fast-wg-", []string{"awg2-fast", "wg"}},
+		{"wg-awg-strong-3-nodes", "node-chain-3-wg-awg-strong-", []string{"wg", "awg2-strong"}},
+		{"awg-strong-awg-fast-3-nodes", "node-chain-3-awg-strong-awg-fast-", []string{"awg2-strong", "awg2-fast"}},
+		{"wg-awg-fast-awg-strong-4-nodes", "node-chain-4-wg-awg-fast-awg-strong-", []string{"wg", "awg2-fast", "awg2-strong"}},
+		{"awg-fast-awg-strong-wg-4-nodes", "node-chain-4-awg-fast-awg-strong-wg-", []string{"awg2-fast", "awg2-strong", "wg"}},
+		{"awg-strong-wg-awg-fast-4-nodes", "node-chain-4-awg-strong-wg-awg-fast-", []string{"awg2-strong", "wg", "awg2-fast"}},
+	}
+}
+func linuxNodeChainScenario(scenario string) ([]string, string, error) {
+	found := false
+	for _, name := range linuxNodeChainHostCases {
+		if scenario == name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, "", errors.New("uncaptured ordered installed scenario")
+	}
+	cases := linuxNodeChainCipherCases()
+	// Longest captured prefixes must win over the original WG-only names.
+	for i := len(cases) - 1; i >= 0; i-- {
+		if action, ok := strings.CutPrefix(scenario, cases[i].prefix); ok {
+			return append([]string(nil), cases[i].modes...), action, nil
+		}
+	}
+	return nil, "", errors.New("ordered installed cipher inventory unavailable")
+}
+func linuxNodeChainSetModes(t *testing.T, peer *linuxNodeChainPeer, modes []string) {
+	t.Helper()
+	if len(modes) != len(peer.requests) {
+		t.Fatal("installed ordered cipher count changed")
+	}
+	for i, mode := range modes {
+		peer.requests[i].Mode = mode
+		if mode == "wg" {
+			peer.requests[i].Parameters = nil
+			continue
+		}
+		if !awgpolicy.IsMode(mode) {
+			t.Fatal("unknown installed ordered cipher")
+		}
+		values := map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": strconv.Itoa(56 + i), "s2": "48", "s3": "24", "s4": strconv.Itoa(32 + i),
+			"h1": "10000000-19999999", "h2": "20000000-29999999", "h3": "30000000-39999999", "h4": "40000000-49999999"}
+		if mode == "awg2-strong" {
+			values["jc"], values["jmax"] = "8", "1200"
+		}
+		peer.requests[i].Parameters = values
+	}
 }
 
 func linuxNodeChainPeerKeys(t *testing.T, count int) *linuxNodeChainPeer {
@@ -99,7 +168,7 @@ func linuxNodeChainPeerKeys(t *testing.T, count int) *linuxNodeChainPeer {
 	for i := 0; i < count-1; i++ {
 		client, server := key(), key()
 		peer.clients = append(peer.clients, client)
-		peer.requests = append(peer.requests, linuxNodeChainPrefixRequest{PrivateKey: base64.StdEncoding.EncodeToString(server.Bytes()),
+		peer.requests = append(peer.requests, linuxNodeChainPrefixRequest{Mode: "wg", PrivateKey: base64.StdEncoding.EncodeToString(server.Bytes()),
 			ClientPublicKey: base64.StdEncoding.EncodeToString(client.PublicKey().Bytes()), PreSharedKey: random(),
 			NodeProofID: linuxNodeChainProofID(server), APIToken: fmt.Sprintf("installed-ordered-prefix-%d-token", i)})
 	}
@@ -123,6 +192,22 @@ func (peer *linuxNodeChainPeer) read(t *testing.T) linuxNodeChainPeerReply {
 	if peer.reply.Address != "" && (peer.reply.Address != reply.Address || peer.reply.PublicCA != reply.PublicCA) {
 		t.Fatal("ordered peer replaced its original captured identity")
 	}
+	for i, prefix := range peer.requests {
+		expected := ""
+		if awgpolicy.IsMode(prefix.Mode) {
+			parameters, err := awgpolicy.ParametersUAPI(prefix.Parameters)
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256([]byte(parameters))
+			expected = hex.EncodeToString(digest[:])
+		} else if prefix.Mode != "wg" || len(prefix.Parameters) != 0 {
+			t.Fatal("unowned ordered peer cipher")
+		}
+		if reply.Prefixes[i].Mode != prefix.Mode || reply.Prefixes[i].ParametersSHA256 != expected {
+			t.Fatal("ordered peer native parameter readback changed", i)
+		}
+	}
 	peer.reply = reply
 	return reply
 }
@@ -135,7 +220,7 @@ func (peer *linuxNodeChainPeer) observe(t *testing.T, action string) linuxNodeCh
 	return peer.read(t)
 }
 
-func startLinuxNodeChainPeer(t *testing.T, count int) *linuxNodeChainPeer {
+func startLinuxNodeChainPeer(t *testing.T, modes []string) *linuxNodeChainPeer {
 	t.Helper()
 	directory, err := os.MkdirTemp("/opt", "routervpn-node-chain-peer-")
 	if err != nil {
@@ -144,7 +229,8 @@ func startLinuxNodeChainPeer(t *testing.T, count int) *linuxNodeChainPeer {
 	t.Cleanup(func() { _ = os.RemoveAll(directory) })
 	image := filepath.Join(directory, "peer.test")
 	linuxHostTUNCopy(t, os.Getenv("ROUTERVPN_NODE_HOST_PEER_BINARY"), image, 512<<20, os.Getenv("ROUTERVPN_NODE_HOST_PEER_SHA256"), 0755)
-	peer := linuxNodeChainPeerKeys(t, count)
+	peer := linuxNodeChainPeerKeys(t, len(modes)+1)
+	linuxNodeChainSetModes(t, peer, modes)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	peer.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", image, "-test.run=^TestRouterVPNDesktopNodeChainReferenceProcess$", "-test.count=1", "-test.timeout=115s")
 	peer.command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD=1"}
@@ -174,7 +260,7 @@ func startLinuxNodeChainPeer(t *testing.T, count int) *linuxNodeChainPeer {
 	return peer
 }
 
-func linuxNodeChainInstalledSources(t *testing.T, peer *linuxNodeChainPeer, wrongMiddle bool) (common.RouterProfileStore, map[string]map[string]map[string][]byte) {
+func linuxNodeChainInstalledSources(t *testing.T, peer *linuxNodeChainPeer, fault string) (common.RouterProfileStore, map[string]map[string]map[string][]byte) {
 	t.Helper()
 	assets := map[string]map[string]map[string][]byte{}
 	var profiles []common.RouterProfile
@@ -201,7 +287,7 @@ func linuxNodeChainInstalledSources(t *testing.T, peer *linuxNodeChainPeer, wron
 		if err != nil {
 			t.Fatal(err)
 		}
-		if wrongMiddle && i == 1 {
+		if fault == "wrong-middle-key" && i == 1 {
 			server, err = ecdh.X25519().GenerateKey(rand.Reader)
 			if err != nil {
 				t.Fatal(err)
@@ -213,9 +299,29 @@ func linuxNodeChainInstalledSources(t *testing.T, peer *linuxNodeChainPeer, wron
 			KillSwitch: true, KillSwitchPolicy: "on-connect"}
 		config := fmt.Sprintf("[Interface]\nAddress=%s.2/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=%s\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n",
 			inner, base64.StdEncoding.EncodeToString(peer.clients[i].Bytes()), base64.StdEncoding.EncodeToString(server.PublicKey().Bytes()), prefix.PreSharedKey, endpoint)
-		assets[profile.ID] = map[string]map[string][]byte{"wg": {"wg.conf": []byte(config)}}
+		standardConfig := config
+		mode, file := prefix.Mode, "wg.conf"
+		if mode != "wg" {
+			values := make(map[string]string, len(prefix.Parameters))
+			for key, value := range prefix.Parameters {
+				values[key] = value
+			}
+			if fault == "wrong-awg-parameters" && i == 1 {
+				values["h1"] = "51000000-51999999"
+			}
+			parameters, err := awgpolicy.ParametersUAPI(values)
+			if err != nil {
+				t.Fatal(err)
+			}
+			config = strings.Replace(config, "[Peer]", parameters+"[Peer]", 1)
+			file = "awg.conf"
+		}
+		assets[profile.ID] = map[string]map[string][]byte{mode: {file: []byte(config)}}
+		if mode != "wg" {
+			assets[profile.ID]["wg"] = map[string][]byte{"wg.conf": []byte(standardConfig)}
+		}
 		profiles = append(profiles, profile)
-		nodes = append(nodes, common.MultihopNodeSelection{ID: profile.ID, Mode: "wg"})
+		nodes = append(nodes, common.MultihopNodeSelection{ID: profile.ID, Mode: mode})
 	}
 	final := common.RouterProfile{ID: "installed-ordered-final", Name: "Original ordered paired final", NodeProofID: linuxNodeChainProofID(peer.finalServer),
 		Endpoint: "10.77.0.1", RouterAPI: "http://10.77.0.1:8787", APIToken: "installed-ordered-final-token", AdGuardIPv4: "192.168.50.133", DNSMode: "home",
@@ -241,9 +347,9 @@ func linuxNodeChainInstalledSources(t *testing.T, peer *linuxNodeChainPeer, wron
 	return common.RouterProfileStore{SchemaVersion: common.RouterProfileSchemaVersion, SelectedID: final.ID, Profiles: profiles}, assets
 }
 
-func installLinuxNodeChainProfiles(t *testing.T, peer *linuxNodeChainPeer, wrongMiddle bool) {
+func installLinuxNodeChainProfiles(t *testing.T, peer *linuxNodeChainPeer, fault string) {
 	t.Helper()
-	store, assets := linuxNodeChainInstalledSources(t, peer, wrongMiddle)
+	store, assets := linuxNodeChainInstalledSources(t, peer, fault)
 	raw, err := json.Marshal(store)
 	if err != nil || os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "routers.json"), raw, 0600) != nil {
 		t.Fatal("ordered saved source unavailable", err)
@@ -286,14 +392,14 @@ func (process *linuxHostTUNController) readNodeChain(t *testing.T, scenario stri
 }
 
 func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
-	count := 3
-	if strings.HasPrefix(scenario, "node-chain-4-") {
-		count = 4
+	modes, action, err := linuxNodeChainScenario(scenario)
+	if err != nil {
+		t.Fatal(err)
 	}
-	action := strings.TrimPrefix(scenario, fmt.Sprintf("node-chain-%d-", count))
-	peer := startLinuxNodeChainPeer(t, count)
-	installLinuxNodeChainProfiles(t, peer, action == "wrong-middle-key")
-	negative := action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "final-dns-failure" || action == "final-node-failure"
+	count := len(modes) + 1
+	peer := startLinuxNodeChainPeer(t, modes)
+	installLinuxNodeChainProfiles(t, peer, action)
+	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "final-dns-failure" || action == "final-node-failure"
 	switch action {
 	case "wrong-middle-proof":
 		peer.observe(t, "wrong-node:1")
@@ -315,7 +421,7 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 		if action == "wrong-middle-proof" && before.Prefixes[1].ProofQueries == 0 || action == "final-dns-failure" && before.Final.DNSQueries == 0 || action == "final-node-failure" && before.Final.RouterQueries == 0 {
 			t.Fatal("ordered negative failed before the intended independent middle/final service", before)
 		}
-		if action == "wrong-middle-key" && (before.Prefixes[1].RawUDP == 0 || before.Prefixes[1].ProofQueries != 0 || before.Final.RouterQueries != 0) {
+		if (action == "wrong-middle-key" || action == "wrong-awg-parameters") && (before.Prefixes[1].RawUDP == 0 || before.Prefixes[1].ProofQueries != 0 || before.Final.RouterQueries != 0) {
 			t.Fatal("wrong middle key bypassed its actual encrypted boundary", before)
 		}
 	} else {
@@ -324,6 +430,9 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 			t.Fatal("ordered installed host omitted actual complete proof or final selected traffic", result, before)
 		}
 		for i, prefix := range before.Prefixes {
+			if result.Nodes[i].Mode != modes[i] || prefix.Mode != modes[i] {
+				t.Fatal("installed ordered runtime substituted captured cipher", i)
+			}
 			if prefix.RawUDP == 0 || prefix.TCP == 0 || prefix.UDP == 0 || prefix.ProofQueries == 0 || prefix.AuthRefusals != 0 {
 				t.Fatal("ordered path omitted independently encrypted authenticated prefix", i, prefix)
 			}
@@ -352,11 +461,11 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 }
 
 func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario string) (failure error) {
-	count := 3
-	if strings.HasPrefix(scenario, "node-chain-4-") {
-		count = 4
+	modes, action, err := linuxNodeChainScenario(scenario)
+	if err != nil {
+		return err
 	}
-	action := strings.TrimPrefix(scenario, fmt.Sprintf("node-chain-%d-", count))
+	count := len(modes) + 1
 	raw, err := readPrivateRegular(filepath.Join(linuxOwnedControllerRoot, "routers.json"), 64<<10)
 	var profiles common.RouterProfileStore
 	if err != nil || decodeRelayControlJSON(raw, &profiles) != nil || len(profiles.Profiles) != count || profiles.SelectedID != "installed-ordered-final" {
@@ -422,7 +531,7 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 			failure = errors.Join(failure, session.Retire(cleanup, session.active, false))
 		}
 	}()
-	negative := action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "final-dns-failure" || action == "final-node-failure"
+	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "final-dns-failure" || action == "final-node-failure"
 	result := linuxNodeChainHostResult{linuxImportedHostResult: linuxImportedHostResult{Scenario: scenario}}
 	if negative {
 		if response.Code == http.StatusOK || a.state.Connected || a.cmd != nil || constructed == nil || constructed.chain == nil || constructed.chain.platform == nil {
@@ -461,7 +570,14 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 			result.Proof = &copied
 		}
 		h.launch.chain.mu.Unlock()
-		for _, member := range runtime.selection.Nodes {
+		for i, member := range runtime.selection.Nodes {
+			expected := "shadowsocks"
+			if i < len(modes) {
+				expected = modes[i]
+			}
+			if member.Mode != expected {
+				return errors.New("ordered native owner replaced original cipher")
+			}
 			result.Nodes = append(result.Nodes, common.MultihopNodeSelection{ID: member.Profile.ID, Mode: member.Mode})
 		}
 		result.Stage, result.Session, result.Ready, result.Monitor = "ready", h.selection.SessionID, h.ready, true
@@ -520,11 +636,13 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 }
 
 func TestDesktopLinuxInstalledNodeChainFixtureKeepsCompiledAuthority(t *testing.T) {
-	for _, count := range []int{3, 4} {
-		t.Run(fmt.Sprintf("%d-nodes", count), func(t *testing.T) {
+	for _, scenario := range linuxNodeChainCipherCases() {
+		count := len(scenario.modes) + 1
+		t.Run(scenario.name, func(t *testing.T) {
 			peer := linuxNodeChainPeerKeys(t, count)
+			linuxNodeChainSetModes(t, peer, scenario.modes)
 			peer.reply.Address = net.JoinHostPort("192.168.210.2", "51820")
-			profiles, assets := linuxNodeChainInstalledSources(t, peer, false)
+			profiles, assets := linuxNodeChainInstalledSources(t, peer, "")
 			root := t.TempDir()
 			for id, modes := range assets {
 				for mode, files := range modes {
@@ -552,6 +670,29 @@ func TestDesktopLinuxInstalledNodeChainFixtureKeepsCompiledAuthority(t *testing.
 			physical, err := policy.NodeChain().PhysicalEgress()
 			if err != nil || len(proofs) != count || len(physical) != 1 || physical[0].Host != "192.168.210.2" {
 				t.Fatal("ordered fixture lost complete source/first physical authority", physical, err)
+			}
+			var compiled map[string]any
+			if json.Unmarshal([]byte(capture.chain.Config()), &compiled) != nil {
+				t.Fatal("compiled installed graph unavailable")
+			}
+			for i, mode := range scenario.modes {
+				row := compiled["endpoints"].([]any)[i].(map[string]any)
+				expected := "wireguard"
+				if mode != "wg" {
+					expected = mobilemultihop.AmneziaType
+					parameters := row["amnezia"].(map[string]any)
+					if len(parameters) != len(peer.requests[i].Parameters) {
+						t.Fatal("compiled installed AWG lost parameter inventory")
+					}
+					for key, value := range peer.requests[i].Parameters {
+						if parameters[key] != value {
+							t.Fatal("compiled installed AWG substituted parameters", i, key)
+						}
+					}
+				}
+				if row["type"] != expected {
+					t.Fatal("compiled installed prefix substituted cipher", i)
+				}
 			}
 			for i, proof := range proofs {
 				if proof.ProfileID != profiles.Profiles[i].ID || proof.NodeID != profiles.Profiles[i].NodeProofID {

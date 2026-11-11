@@ -32,6 +32,7 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/group"
+	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
 	"github.com/sagernet/sing-box/route"
 	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/control"
@@ -63,8 +64,12 @@ func chainNativeJSON(t *testing.T, value any) string {
 
 func chainNativeSource(t *testing.T) *mobilemultihop.NodeChain {
 	t.Helper()
+	return chainNativeSourceModes(t, []string{"wg", "wg"})
+}
+func chainNativeSourceModes(t *testing.T, modes []string) *mobilemultihop.NodeChain {
+	t.Helper()
 	source := mobilemultihop.NodeChainSource{Schema: 1, Execution: "local"}
-	for i := 0; i < 3; i++ {
+	for i := 0; i <= len(modes); i++ {
 		client, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(20 + i)}, 32))
 		server, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(70 + i)}, 32))
 		public := base64.StdEncoding.EncodeToString(server.PublicKey().Bytes())
@@ -76,7 +81,17 @@ func chainNativeSource(t *testing.T) *mobilemultihop.NodeChain {
 			"kill_switch_policy": "always"}
 		mode := "wg"
 		files := map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("[Interface]\nAddress=10.77.0.2/24,fd77::2/64\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=%s:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", base64.StdEncoding.EncodeToString(client.Bytes()), public, address)))}
-		if i == 2 {
+		if i < len(modes) {
+			mode = modes[i]
+			if mode != "wg" {
+				config, _ := base64.StdEncoding.DecodeString(files["wg.conf"])
+				params := "Jc=3\nJmin=40\nJmax=900\nS1=56\nS2=48\nS3=24\nS4=32\nH1=10000000-19999999\nH2=20000000-29999999\nH3=30000000-39999999\nH4=40000000-49999999\n"
+				if mode == "awg2-strong" {
+					params = strings.ReplaceAll(strings.ReplaceAll(params, "Jc=3", "Jc=8"), "Jmax=900", "Jmax=1200")
+				}
+				files = map[string]string{"awg.conf": base64.StdEncoding.EncodeToString([]byte(strings.Replace(string(config), "[Peer]", params+"[Peer]", 1)))}
+			}
+		} else {
 			mode = "shadowsocks"
 			graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
 				"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": address, "server_port": 8388,
@@ -154,7 +169,11 @@ type chainNativeFixture struct {
 
 func newChainNativeFixture(t *testing.T, edit func(map[string]any)) *chainNativeFixture {
 	t.Helper()
-	f := &chainNativeFixture{chain: chainNativeSource(t), prefixes: map[string]*chainNativePrefix{}}
+	return newChainNativeFixtureModes(t, []string{"wg", "wg"}, edit)
+}
+func newChainNativeFixtureModes(t *testing.T, modes []string, edit func(map[string]any)) *chainNativeFixture {
+	t.Helper()
+	f := &chainNativeFixture{chain: chainNativeSourceModes(t, modes), prefixes: map[string]*chainNativePrefix{}}
 	f.current.Store(true)
 	f.registry = outbound.NewRegistry()
 	group.RegisterSelector(f.registry)
@@ -170,6 +189,11 @@ func newChainNativeFixture(t *testing.T, edit func(map[string]any)) *chainNative
 	})
 	endpoint.Register[option.WireGuardEndpointOptions](endpointRegistry, C.TypeWireGuard, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.WireGuardEndpointOptions) (adapter.Endpoint, error) {
 		p := &chainNativePrefix{Adapter: outbound.NewAdapter(C.TypeWireGuard, tag, []string{"tcp", "udp"}, nil)}
+		f.prefixes[tag] = p
+		return p, nil
+	})
+	endpoint.Register[AWG.Options](endpointRegistry, mobilemultihop.AmneziaType, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ AWG.Options) (adapter.Endpoint, error) {
+		p := &chainNativePrefix{Adapter: outbound.NewAdapter(mobilemultihop.AmneziaType, tag, []string{"tcp", "udp"}, nil)}
 		f.prefixes[tag] = p
 		return p, nil
 	})
@@ -338,6 +362,56 @@ func TestRouterVPNNodeChainNativeHeldReadAndLateDial(t *testing.T) {
 				if _, err := peer.Write([]byte{1}); !errors.Is(err, io.ErrClosedPipe) {
 					t.Fatal("late connection was not closed", err)
 				}
+			}
+		})
+	}
+}
+
+// Mixed native-manager capture complements the separately encrypted peer
+// fixtures. These substituted I/O boundaries do not prove actual AWG traffic.
+func TestRouterVPNNodeChainNativeAWGCaptureAndOwnership(t *testing.T) {
+	for _, modes := range [][]string{{"awg2-fast", "wg"}, {"wg", "awg2-strong"}, {"awg2-strong", "awg2-fast", "wg"}} {
+		t.Run(strings.Join(modes, "-"), func(t *testing.T) {
+			f := newChainNativeFixtureModes(t, modes, nil)
+			engine, err := f.capture(context.Background())
+			if err != nil {
+				t.Fatal("complete mixed native capture", err)
+			}
+			identity, err := engine.ObserveChainContext(context.Background())
+			if err != nil || identity.SourceSHA256 != f.chain.SourceSHA256() || identity.ConfigSHA256 != f.chain.ConfigSHA256() {
+				t.Fatal("mixed native identity changed", err)
+			}
+			position := 0
+			if modes[0] == "wg" {
+				position = 1
+			}
+			for _, fault := range []string{"awg-parameters", "awg-key", "wg-downgrade", "skip-prefix"} {
+				t.Run(fault, func(t *testing.T) {
+					other := newChainNativeFixtureModes(t, modes, func(graph map[string]any) {
+						row := graph["endpoints"].([]any)[position].(map[string]any)
+						switch fault {
+						case "awg-parameters":
+							row["amnezia"].(map[string]any)["s4"] = "64"
+						case "awg-key":
+							row["private_key"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{115}, 32))
+						case "wg-downgrade":
+							row["type"] = "wireguard"
+							delete(row, "amnezia")
+						case "skip-prefix":
+							graph["endpoints"].([]any)[1].(map[string]any)["detour"] = "direct"
+						}
+					})
+					if owned, err := other.capture(context.Background()); err == nil || owned != nil {
+						t.Fatal("substituted mixed graph acquired native authority", fault)
+					}
+				})
+			}
+			if _, err := engine.Dial(context.Background(), "direct", "1.1.1.1:443"); err == nil {
+				t.Fatal("mixed native capture admitted physical bypass")
+			}
+			f.current.Store(false)
+			if _, err := engine.ObserveChainContext(context.Background()); err == nil {
+				t.Fatal("mixed native owner was replaced without invalidation")
 			}
 		})
 	}

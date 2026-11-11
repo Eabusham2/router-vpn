@@ -244,6 +244,17 @@ func desktopImportedWGSSHTTP(t *testing.T, certificate *tls.Certificate, handler
 // that test cannot stand in for installed host/TUN/protection acceptance.
 func desktopImportedWGSSStart(t *testing.T, request desktopImportedWGSSRequest, local, remote netip.Addr) *desktopImportedWGSSPeer {
 	t.Helper()
+	return desktopImportedWGSSStartWithFactory(t, request, local, remote, startDesktopNodeWGReferenceDevice)
+}
+
+// The original imported WG fixture keeps its own real WG constructor. Ordered
+// AWG prefixes reuse only its fixed final service and owned lifetime, supplying
+// their independently validated Amnezia factory; keys and bind remain checked.
+func desktopImportedWGSSStartWithFactory(t *testing.T, request desktopImportedWGSSRequest, local, remote netip.Addr, start desktopNodeUDPReferenceFactory) *desktopImportedWGSSPeer {
+	t.Helper()
+	if start == nil {
+		t.Fatal("imported reference requires its captured native constructor")
+	}
 	ipc, err := desktopImportedWGSSIdentity(request)
 	if err != nil {
 		t.Fatal(err)
@@ -422,7 +433,7 @@ func desktopImportedWGSSStart(t *testing.T, request desktopImportedWGSSRequest, 
 		t.Fatal(err)
 	}
 	p.bind = &desktopNodeWGBind{local: local, remote: remote}
-	device, err := startDesktopNodeWGReferenceDevice(entryContext, stack, p.bind, ipc)
+	device, err := start(entryContext, stack, p.bind, ipc)
 	ipc = ""
 	if err != nil {
 		p.entry.close()

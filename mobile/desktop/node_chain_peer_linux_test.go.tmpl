@@ -29,6 +29,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/awgpolicy"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mtuprobe"
@@ -43,16 +44,18 @@ import (
 	"github.com/sagernet/sing/service/pause"
 )
 
-// Each reference prefix owns an independent real WG cryptographic device.
+// Each reference prefix owns its independent real WG or Amnezia cryptographic device.
 // Only its next encrypted UDP tuple and its own authenticated health service
-// are reachable. The final WG prefix reaches the separately keyed SS2022
+// are reachable. The final encrypted prefix reaches the separately keyed SS2022
 // service. No caller can supply a forwarding destination or executable command.
 type desktopNodeChainPrefixRequest struct {
-	PrivateKey      string `json:"private_key"`
-	ClientPublicKey string `json:"client_public_key"`
-	PreSharedKey    string `json:"pre_shared_key"`
-	NodeProofID     string `json:"node_proof_id"`
-	APIToken        string `json:"api_token"`
+	Mode            string            `json:"mode"`
+	Parameters      map[string]string `json:"parameters,omitempty"`
+	PrivateKey      string            `json:"private_key"`
+	ClientPublicKey string            `json:"client_public_key"`
+	PreSharedKey    string            `json:"pre_shared_key"`
+	NodeProofID     string            `json:"node_proof_id"`
+	APIToken        string            `json:"api_token"`
 }
 
 type desktopNodeChainPeerRequest struct {
@@ -66,11 +69,13 @@ type desktopNodeChainPeerRequest struct {
 }
 
 type desktopNodeChainPrefixReply struct {
-	RawUDP       int64  `json:"raw_udp"`
-	TCP          int64  `json:"tcp"`
-	UDP          int64  `json:"udp"`
-	ProofQueries uint64 `json:"proof_queries"`
-	AuthRefusals uint64 `json:"auth_refusals"`
+	Mode             string `json:"mode"`
+	ParametersSHA256 string `json:"parameters_sha256,omitempty"`
+	RawUDP           int64  `json:"raw_udp"`
+	TCP              int64  `json:"tcp"`
+	UDP              int64  `json:"udp"`
+	ProofQueries     uint64 `json:"proof_queries"`
+	AuthRefusals     uint64 `json:"auth_refusals"`
 }
 
 type desktopNodeChainPeerReply struct {
@@ -119,6 +124,15 @@ func desktopNodeChainPeerIdentity(request desktopNodeChainPeerRequest) ([]string
 	}
 	var result []string
 	for position, prefix := range request.Prefixes {
+		if prefix.Mode == "wg" {
+			if len(prefix.Parameters) != 0 {
+				return nil, bad
+			}
+		} else if !awgpolicy.IsMode(prefix.Mode) {
+			return nil, bad
+		} else if _, err := awgpolicy.ParametersUAPI(prefix.Parameters); err != nil {
+			return nil, bad
+		}
 		private, e1 := readKey(prefix.PrivateKey)
 		client, e2 := readKey(prefix.ClientPublicKey)
 		psk, e3 := readKey(prefix.PreSharedKey)
@@ -159,6 +173,8 @@ func desktopNodeChainPeerIdentity(request desktopNodeChainPeerRequest) ([]string
 }
 
 type desktopNodeChainPrefixPeer struct {
+	mode          string
+	readback      func() (string, error)
 	bind          *desktopNodeWGBind
 	handler       *desktopNodeWGHandler
 	proof, denied atomic.Uint64
@@ -173,7 +189,15 @@ type desktopNodeChainPeer struct {
 func (p *desktopNodeChainPeer) snapshot() desktopNodeChainPeerReply {
 	r := desktopNodeChainPeerReply{Schema: 1, Address: p.prefixes[0].bind.address(), PublicCA: p.final.ca, Final: p.final.snapshot()}
 	for _, prefix := range p.prefixes {
-		r.Prefixes = append(r.Prefixes, desktopNodeChainPrefixReply{prefix.bind.packets.Load(), prefix.handler.tcp.Load(), prefix.handler.udp.Load(), prefix.proof.Load(), prefix.denied.Load()})
+		parameters := ""
+		if prefix.readback != nil {
+			// A missing/failed readback cannot become an AWG receipt. Both
+			// the component and installed consumers require the original hash.
+			parameters, _ = prefix.readback()
+		}
+		r.Prefixes = append(r.Prefixes, desktopNodeChainPrefixReply{Mode: prefix.mode, ParametersSHA256: parameters,
+			RawUDP: prefix.bind.packets.Load(), TCP: prefix.handler.tcp.Load(), UDP: prefix.handler.udp.Load(),
+			ProofQueries: prefix.proof.Load(), AuthRefusals: prefix.denied.Load()})
 	}
 	return r
 }
@@ -197,6 +221,56 @@ func (p *desktopNodeChainPeer) control(command string) error {
 	return p.final.control(command, true)
 }
 
+// Choose the actual cipher from the original canonical request. The shared
+// transport wrapper only adapts the owned physical bind; it never converts AWG
+// into WG or fabricates an Amnezia parameter receipt.
+func desktopNodeChainPrefixFactory(t *testing.T, identity desktopNodeChainPrefixRequest, peer *desktopNodeChainPrefixPeer) desktopNodeUDPReferenceFactory {
+	t.Helper()
+	peer.mode = identity.Mode
+	if identity.Mode == "wg" {
+		if len(identity.Parameters) != 0 {
+			t.Fatal("WG prefix carried unowned AWG parameters")
+		}
+		return startDesktopNodeWGReferenceDevice
+	}
+	if !awgpolicy.IsMode(identity.Mode) {
+		t.Fatal("uncaptured ordered cipher")
+	}
+	parameters, err := awgpolicy.ParametersUAPI(identity.Parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := desktopNodeAWGParameterDigest(identity.Parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	padding, err := strconv.Atoi(identity.Parameters["s4"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual := desktopNodeAWGReferenceFactory(expected, padding)
+	return func(ctx context.Context, stack wg.Device, bind *desktopNodeWGBind, ipc string) (desktopNodeUDPReferenceDevice, error) {
+		first, rest, found := strings.Cut(ipc, "\n")
+		if !found || !strings.HasPrefix(first, "private_key=") {
+			return desktopNodeUDPReferenceDevice{}, errors.New("ordered AWG lost original key IPC")
+		}
+		device, err := actual(ctx, stack, bind, first+"\n"+parameters+rest)
+		if err != nil {
+			return desktopNodeUDPReferenceDevice{}, err
+		}
+		if device.readback == nil {
+			device.close()
+			return desktopNodeUDPReferenceDevice{}, errors.New("ordered AWG lacks native parameter readback")
+		}
+		if digest, err := device.readback(); err != nil || digest != expected {
+			device.close()
+			return desktopNodeUDPReferenceDevice{}, errors.New("ordered AWG parameter receipt changed")
+		}
+		peer.readback = device.readback
+		return device, nil
+	}
+}
+
 func desktopNodeChainPeerStart(t *testing.T, request desktopNodeChainPeerRequest, local, remote netip.Addr) *desktopNodeChainPeer {
 	t.Helper()
 	ipcs, err := desktopNodeChainPeerIdentity(request)
@@ -210,10 +284,12 @@ func desktopNodeChainPeerStart(t *testing.T, request desktopNodeChainPeerRequest
 	count := len(request.Prefixes)
 	p := &desktopNodeChainPeer{prefixes: make([]*desktopNodeChainPrefixPeer, count)}
 	last := request.Prefixes[count-1]
-	p.final = desktopImportedWGSSStart(t, desktopImportedWGSSRequest{Schema: 1, Address: request.Address, ClientAddress: request.ClientAddress,
+	p.prefixes[count-1] = &desktopNodeChainPrefixPeer{}
+	lastFactory := desktopNodeChainPrefixFactory(t, last, p.prefixes[count-1])
+	p.final = desktopImportedWGSSStartWithFactory(t, desktopImportedWGSSRequest{Schema: 1, Address: request.Address, ClientAddress: request.ClientAddress,
 		PrivateKey: last.PrivateKey, ClientPublicKey: last.ClientPublicKey, PreSharedKey: last.PreSharedKey,
-		FinalPassword: request.FinalPassword, NodeProofID: request.FinalNodeProofID, Token: request.FinalAPIToken, Cover: true}, loopback, loopback)
-	p.prefixes[count-1] = &desktopNodeChainPrefixPeer{bind: p.final.bind, handler: p.final.entry}
+		FinalPassword: request.FinalPassword, NodeProofID: request.FinalNodeProofID, Token: request.FinalAPIToken, Cover: true}, loopback, loopback, lastFactory)
+	p.prefixes[count-1].bind, p.prefixes[count-1].handler = p.final.bind, p.final.entry
 	delete(p.final.entry.rules, "tcp/1.1.1.1:443")
 	// Keep the original bounded benchmark/health server, requiring the final
 	// captured token before any request reaches it. No public fallback exists.
@@ -337,7 +413,7 @@ func desktopNodeChainPeerStart(t *testing.T, request desktopNodeChainPeerRequest
 			bindLocal, bindRemote = local, remote
 		}
 		prefix.bind = &desktopNodeWGBind{local: bindLocal, remote: bindRemote}
-		device, err := startDesktopNodeWGReferenceDevice(ctx, stack, prefix.bind, ipcs[position])
+		device, err := desktopNodeChainPrefixFactory(t, identity, prefix)(ctx, stack, prefix.bind, ipcs[position])
 		ipcs[position] = ""
 		if err != nil {
 			prefix.handler.close()
@@ -427,7 +503,7 @@ func desktopNodeChainPeerFixture(t *testing.T, count int) (desktopNodeChainPeerR
 			t.Fatal(err)
 		}
 		proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + encode(server.PublicKey().Bytes())))
-		r.Prefixes = append(r.Prefixes, desktopNodeChainPrefixRequest{encode(server.Bytes()), encode(client.PublicKey().Bytes()), encode(secret[:]), hex.EncodeToString(proof[:]), fmt.Sprintf("ordered-prefix-private-token-%d", i)})
+		r.Prefixes = append(r.Prefixes, desktopNodeChainPrefixRequest{Mode: "wg", PrivateKey: encode(server.Bytes()), ClientPublicKey: encode(client.PublicKey().Bytes()), PreSharedKey: encode(secret[:]), NodeProofID: hex.EncodeToString(proof[:]), APIToken: fmt.Sprintf("ordered-prefix-private-token-%d", i)})
 		clients = append(clients, encode(client.Bytes()))
 		clear(secret[:])
 	}
@@ -470,7 +546,17 @@ func desktopNodeChainPeerSource(t *testing.T, r desktopNodeChainPeerRequest, cli
 			provider, _ := ecdh.X25519().NewPrivateKey(private)
 			clear(private)
 			text := fmt.Sprintf("[Interface]\nAddress=%s/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=%s\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", client, clients[i], base64.StdEncoding.EncodeToString(provider.PublicKey().Bytes()), prefix.PreSharedKey, target)
-			files["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(text))
+			mode = prefix.Mode
+			file := "wg.conf"
+			if mode != "wg" {
+				parameters, err := awgpolicy.ParametersUAPI(prefix.Parameters)
+				if err != nil {
+					t.Fatal(err)
+				}
+				text = strings.Replace(text, "[Peer]", parameters+"[Peer]", 1)
+				file = "awg.conf"
+			}
+			files[file] = base64.StdEncoding.EncodeToString([]byte(text))
 			api, token, proof = "http://"+net.JoinHostPort(inner, "8787"), prefix.APIToken, prefix.NodeProofID
 		} else {
 			mode, endpoint, api, token, proof = "shadowsocks", "10.77.0.1", "http://"+desktopNodeRouterHealthTarget, r.FinalAPIToken, r.FinalNodeProofID
@@ -562,6 +648,12 @@ func desktopNodeChainPeerOutbounds(t *testing.T, ctx context.Context, chain *mob
 				t.Fatal("invalid compiled WG options")
 			}
 			out, err = WG.NewEndpoint(owned, &desktopNodeChainRejectInbound{}, log.NewNOPFactory().Logger(), tag, options)
+		case mobilemultihop.AmneziaType:
+			var options Options
+			if json.Unmarshal(raw, &options) != nil {
+				t.Fatal("invalid compiled AWG options")
+			}
+			out, err = NewEndpoint(owned, &desktopNodeChainRejectInbound{}, log.NewNOPFactory().Logger(), tag, options)
 		case "shadowsocks":
 			var options option.ShadowsocksOutboundOptions
 			if json.Unmarshal(raw, &options) != nil {
@@ -596,6 +688,48 @@ func desktopNodeChainPeerOutbounds(t *testing.T, ctx context.Context, chain *mob
 		}
 	}
 	return outbounds
+}
+
+type desktopNodeChainCipherCase struct {
+	name  string
+	modes []string
+}
+
+func desktopNodeChainCipherCases() []desktopNodeChainCipherCase {
+	return []desktopNodeChainCipherCase{
+		{"3-nodes", []string{"wg", "wg"}}, {"4-nodes", []string{"wg", "wg", "wg"}},
+		{"awg-fast-wg-3-nodes", []string{"awg2-fast", "wg"}},
+		{"wg-awg-strong-3-nodes", []string{"wg", "awg2-strong"}},
+		{"awg-strong-awg-fast-3-nodes", []string{"awg2-strong", "awg2-fast"}},
+		{"wg-awg-fast-awg-strong-4-nodes", []string{"wg", "awg2-fast", "awg2-strong"}},
+		{"awg-fast-awg-strong-wg-4-nodes", []string{"awg2-fast", "awg2-strong", "wg"}},
+		{"awg-strong-wg-awg-fast-4-nodes", []string{"awg2-strong", "wg", "awg2-fast"}},
+	}
+}
+func desktopNodeChainSetModes(t *testing.T, request *desktopNodeChainPeerRequest, modes []string) {
+	t.Helper()
+	if len(modes) != len(request.Prefixes) {
+		t.Fatal("ordered cipher inventory changed")
+	}
+	for i, mode := range modes {
+		request.Prefixes[i].Mode = mode
+		if mode == "wg" {
+			request.Prefixes[i].Parameters = nil
+			continue
+		}
+		if !awgpolicy.IsMode(mode) {
+			t.Fatal("unknown fixture cipher")
+		}
+		values := parameters()
+		// Per-prefix wire parameters are independent even when two members
+		// use the same product mode. No shared/default server substitution.
+		values["s1"] = strconv.Itoa(56 + i)
+		values["s4"] = strconv.Itoa(32 + i)
+		if mode == "awg2-strong" {
+			values["jc"], values["jmax"] = "8", "1200"
+		}
+		request.Prefixes[i].Parameters = values
+	}
 }
 
 func TestRouterVPNDesktopNodeChainPeerCapture(t *testing.T) {
@@ -640,11 +774,46 @@ func TestRouterVPNDesktopNodeChainPeerCapture(t *testing.T) {
 	}
 }
 
+func TestRouterVPNDesktopNodeChainPeerAWGCapture(t *testing.T) {
+	for _, fault := range []string{"complete", "missing-mode", "unknown-mode", "wg-parameters", "missing-parameters", "missing-s4", "unknown-parameter", "invalid-parameter", "injected-parameter", "same-public-key"} {
+		t.Run(fault, func(t *testing.T) {
+			request, _ := desktopNodeChainPeerFixture(t, 3)
+			desktopNodeChainSetModes(t, &request, []string{"wg", "awg2-fast", "awg2-strong"})
+			switch fault {
+			case "missing-mode":
+				request.Prefixes[1].Mode = ""
+			case "unknown-mode":
+				request.Prefixes[1].Mode = "awg"
+			case "wg-parameters":
+				request.Prefixes[1].Mode = "wg"
+			case "missing-parameters":
+				request.Prefixes[1].Parameters = nil
+			case "missing-s4":
+				delete(request.Prefixes[1].Parameters, "s4")
+			case "unknown-parameter":
+				request.Prefixes[1].Parameters["foreign"] = "1"
+			case "invalid-parameter":
+				request.Prefixes[1].Parameters["jc"] = "-1"
+			case "injected-parameter":
+				request.Prefixes[1].Parameters["h1"] += "\nlisten_port=1"
+			case "same-public-key":
+				request.Prefixes[2].ClientPublicKey = request.Prefixes[0].ClientPublicKey
+			}
+			_, err := desktopNodeChainPeerIdentity(request)
+			if (err == nil) != (fault == "complete") {
+				t.Fatal("ordered mixed cipher capture lost exact authority", fault, err)
+			}
+		})
+	}
+}
+
 func TestRouterVPNDesktopNodeChainPeerTraffic(t *testing.T) {
-	for _, count := range []int{2, 3} {
+	for _, scenario := range desktopNodeChainCipherCases() {
+		count := len(scenario.modes)
 		var addresses []string
-		t.Run(fmt.Sprintf("%d-nodes", count+1), func(t *testing.T) {
+		t.Run(scenario.name, func(t *testing.T) {
 			request, clients := desktopNodeChainPeerFixture(t, count)
+			desktopNodeChainSetModes(t, &request, scenario.modes)
 			loopback := netip.MustParseAddr("127.0.0.1")
 			peer := desktopNodeChainPeerStart(t, request, loopback, loopback)
 			for _, prefix := range peer.prefixes {
@@ -704,6 +873,17 @@ func TestRouterVPNDesktopNodeChainPeerTraffic(t *testing.T) {
 				t.Run(fmt.Sprintf("prefix-%d-authenticated", i), func(t *testing.T) {
 					inner, _ := desktopNodeChainInner(i, count)
 					before := peer.snapshot()
+					expected := ""
+					if prefix.Mode != "wg" {
+						var err error
+						expected, err = desktopNodeAWGParameterDigest(prefix.Parameters)
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+					if before.Prefixes[i].Mode != prefix.Mode || before.Prefixes[i].ParametersSHA256 != expected {
+						t.Fatal("prefix native cipher/parameter receipt changed", i)
+					}
 					body, err := get(ctx, outbounds[i], "http://"+net.JoinHostPort(inner, "8787")+"/health", prefix.APIToken, false)
 					var result desktopImportedWGSSHealthReply
 					after := peer.snapshot()
@@ -813,17 +993,32 @@ func TestRouterVPNDesktopNodeChainPeerTraffic(t *testing.T) {
 					t.Fatal("held middle lost caller cancellation", err)
 				}
 			})
-			for _, fault := range []string{"middle-key", "omit-middle", "final-key"} {
+			faults := []string{"middle-key", "omit-middle", "final-key"}
+			awgPosition := -1
+			for i, mode := range scenario.modes {
+				if mode != "wg" {
+					awgPosition = i
+					break
+				}
+			}
+			if awgPosition >= 0 {
+				faults = append(faults, "awg-parameters")
+			}
+			for _, fault := range faults {
 				t.Run(fault, func(t *testing.T) {
 					// Each negative owns independent peers and client identities.
 					// A second same-key client would rebind the server's original
 					// endpoint and could invalidate the intended fault witness.
 					request, clients := desktopNodeChainPeerFixture(t, count)
+					desktopNodeChainSetModes(t, &request, scenario.modes)
 					peer := desktopNodeChainPeerStart(t, request, loopback, loopback)
 					physical := netip.MustParseAddrPort(peer.prefixes[0].bind.address())
 					chain := desktopNodeChainPeerSource(t, request, clients, net.JoinHostPort(request.Address, strconv.Itoa(int(physical.Port()))))
 					before := peer.snapshot()
 					bad := desktopNodeChainPeerOutbounds(t, ctx, chain, peer.prefixes[0].bind.address(), func(i int, row map[string]any) {
+						if fault == "awg-parameters" && i == awgPosition {
+							row["amnezia"].(map[string]any)["h1"] = "51000000-51999999"
+						}
 						if fault == "middle-key" && i == 1 {
 							key, _ := ecdh.X25519().GenerateKey(rand.Reader)
 							row["private_key"] = base64.StdEncoding.EncodeToString(key.Bytes())
@@ -842,17 +1037,22 @@ func TestRouterVPNDesktopNodeChainPeerTraffic(t *testing.T) {
 					if fault == "middle-key" {
 						warmPosition = 0
 					}
-					warmAddress, _ := desktopNodeChainInner(warmPosition, len(request.Prefixes))
-					body, err := get(ctx, bad[warmPosition], "http://"+net.JoinHostPort(warmAddress, "8787")+"/health", request.Prefixes[warmPosition].APIToken, false)
-					var proved desktopImportedWGSSHealthReply
-					if err != nil || json.Unmarshal(body, &proved) != nil || proved.NodeID != request.Prefixes[warmPosition].NodeProofID {
-						t.Fatal("negative case lost its intact original predecessor", fault, err)
+					if fault == "awg-parameters" {
+						warmPosition = awgPosition - 1
 					}
-					// An invalid WG identity may already have sent its first
+					if warmPosition >= 0 {
+						warmAddress, _ := desktopNodeChainInner(warmPosition, len(request.Prefixes))
+						body, err := get(ctx, bad[warmPosition], "http://"+net.JoinHostPort(warmAddress, "8787")+"/health", request.Prefixes[warmPosition].APIToken, false)
+						var proved desktopImportedWGSSHealthReply
+						if err != nil || json.Unmarshal(body, &proved) != nil || proved.NodeID != request.Prefixes[warmPosition].NodeProofID {
+							t.Fatal("negative case lost its intact original predecessor", fault, err)
+						}
+					}
+					// An invalid encrypted identity may already have sent its first
 					// handshake during native Start. Retain that original zero
 					// baseline; the normal handshake retry interval is not a
 					// reason to lengthen this refusal deadline.
-					if fault != "middle-key" {
+					if fault != "middle-key" && fault != "awg-parameters" {
 						before = peer.snapshot()
 					}
 					call, stop := context.WithTimeout(ctx, 300*time.Millisecond)
@@ -866,6 +1066,9 @@ func TestRouterVPNDesktopNodeChainPeerTraffic(t *testing.T) {
 					}
 					if fault == "middle-key" && (after.Prefixes[1].RawUDP <= before.Prefixes[1].RawUDP || after.Prefixes[1].TCP != before.Prefixes[1].TCP || after.Prefixes[1].UDP != before.Prefixes[1].UDP) {
 						t.Fatal("wrong middle key did not reach independent cryptographic refusal", before.Prefixes[1], after.Prefixes[1])
+					}
+					if fault == "awg-parameters" && (after.Prefixes[awgPosition].RawUDP <= before.Prefixes[awgPosition].RawUDP || after.Prefixes[awgPosition].TCP != before.Prefixes[awgPosition].TCP || after.Prefixes[awgPosition].UDP != before.Prefixes[awgPosition].UDP) {
+						t.Fatal("changed AWG parameters did not reach real cryptographic refusal", awgPosition)
 					}
 					if fault == "final-key" && (after.Final.FinalRawTCP <= before.Final.FinalRawTCP || after.Final.FinalTCP != before.Final.FinalTCP) {
 						t.Fatal("wrong final key did not reach independent SS refusal")

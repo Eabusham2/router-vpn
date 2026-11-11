@@ -27,8 +27,8 @@ class InstalledNodeChainPeerPreflight(unittest.TestCase):
                        for name in G.NODE_CHAIN_PEER_CASES)
 
     def test_complete_ordered_peer_requires_roots_and_every_causal_control(self):
-        self.assertEqual(len(G.NODE_CHAIN_PEER_CASES), 37)
-        self.assertEqual(len(set(G.NODE_CHAIN_PEER_CASES)), 37)
+        self.assertEqual(len(G.NODE_CHAIN_PEER_CASES), 123)
+        self.assertEqual(len(set(G.NODE_CHAIN_PEER_CASES)), 123)
         good = self.completed()
         G.check_node_chain_peer_verdict(good)
         for line in good.splitlines(True):
@@ -39,7 +39,7 @@ class InstalledNodeChainPeerPreflight(unittest.TestCase):
         for fault in ('--- FAIL:', '--- SKIP:', 'WARNING: DATA RACE', 'panic:'):
             with self.assertRaises(ValueError):
                 G.check_node_chain_peer_verdict(good + fault)
-        for root in (G.NODE_CHAIN_PEER_CAPTURE, G.NODE_CHAIN_PEER_TRAFFIC):
+        for root in (G.NODE_CHAIN_PEER_CAPTURE, G.NODE_CHAIN_PEER_AWG_CAPTURE, G.NODE_CHAIN_PEER_TRAFFIC):
             missing = ''.join(line for line in good.splitlines(True) if root not in line)
             with self.assertRaises(ValueError):
                 G.check_node_chain_peer_verdict(missing)
@@ -49,7 +49,7 @@ class InstalledNodeChainPeerPreflight(unittest.TestCase):
         with patch.object(G.NODE, 'run', return_value=(0, self.completed())) as execute, redirect_stdout(io.StringIO()):
             self.assertEqual(G.execute_node_chain_peer(peer, source, captured), self.completed())
         execute.assert_called_once_with([str(peer), '-test.v', '-test.timeout=90s',
-            '-test.run=^(' + G.NODE_CHAIN_PEER_CAPTURE + '|' + G.NODE_CHAIN_PEER_TRAFFIC + ')$'],
+            '-test.run=^(' + G.NODE_CHAIN_PEER_CAPTURE + '|' + G.NODE_CHAIN_PEER_AWG_CAPTURE + '|' + G.NODE_CHAIN_PEER_TRAFFIC + ')$'],
             cwd=source, env=captured, timeout=100)
         for status, output in ((1, self.completed()), (0, 'PASS\n'), (0, '')):
             with patch.object(G.NODE, 'run', return_value=(status, output)), self.assertRaises(ValueError):
@@ -64,7 +64,11 @@ class InstalledNodeChainHostGate(unittest.TestCase):
     def test_complete_ordered_host_requires_original_encrypted_receipts(self):
         expected = ('node-chain-3-connect', 'node-chain-4-connect', 'node-chain-3-wrong-middle-key',
             'node-chain-4-wrong-middle-proof', 'node-chain-3-final-dns-failure', 'node-chain-4-final-node-failure',
-            'node-chain-4-middle-source', 'node-chain-3-prefix-lost')
+            'node-chain-4-middle-source', 'node-chain-3-prefix-lost',
+    'node-chain-3-awg-fast-wg-connect', 'node-chain-3-wg-awg-strong-connect', 'node-chain-3-awg-strong-awg-fast-connect',
+    'node-chain-4-wg-awg-fast-awg-strong-connect', 'node-chain-4-awg-fast-awg-strong-wg-connect', 'node-chain-4-awg-strong-wg-awg-fast-connect',
+    'node-chain-4-wg-awg-fast-awg-strong-wrong-middle-key', 'node-chain-4-wg-awg-fast-awg-strong-wrong-awg-parameters',
+    'node-chain-4-wg-awg-fast-awg-strong-middle-source', 'node-chain-4-wg-awg-fast-awg-strong-prefix-lost')
         self.assertEqual(G.NODE_CHAIN_HOST_CASES, expected)
         self.assertEqual(G.CASES[-len(expected):], expected)
         self.assertEqual(len(set(G.CASES)), len(G.CASES))
@@ -89,7 +93,10 @@ class InstalledNodeChainHostGate(unittest.TestCase):
     def test_actual_installed_source_authority_is_compiled_and_required(self):
         names = G.NODE_CHAIN_HOST_AUTHORITY_CASES
         self.assertEqual(names, (G.NODE_CHAIN_HOST_AUTHORITY_ROOT,
-            G.NODE_CHAIN_HOST_AUTHORITY_ROOT + '/3-nodes', G.NODE_CHAIN_HOST_AUTHORITY_ROOT + '/4-nodes'))
+            *(G.NODE_CHAIN_HOST_AUTHORITY_ROOT + '/' + name for name in (
+                '3-nodes', '4-nodes', 'awg-fast-wg-3-nodes', 'wg-awg-strong-3-nodes',
+                'awg-strong-awg-fast-3-nodes', 'wg-awg-fast-awg-strong-4-nodes',
+                'awg-fast-awg-strong-wg-4-nodes', 'awg-strong-wg-awg-fast-4-nodes'))))
         good = ''.join('=== RUN   ' + name + '\n--- PASS: ' + name + ' (0.01s)\n' for name in names)
         G.check_node_chain_host_authority_verdict(good)
         for line in good.splitlines(True):

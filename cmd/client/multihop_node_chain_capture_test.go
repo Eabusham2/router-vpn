@@ -62,6 +62,71 @@ func captureNodeChainTest(t *testing.T, a *app, nodes []common.MultihopNodeSelec
 	return capture
 }
 
+func TestDesktopNodeChainAWGCaptureRetainsRawSourcePolicyAndEntryBase(t *testing.T) {
+	for _, modes := range [][]string{
+		{"awg2-fast", "awg2-strong", "wg", "shadowsocks"},
+		{"wg", "awg2-fast", "awg2-strong", "shadowsocks"},
+		{"awg2-strong", "wg", "awg2-fast", "shadowsocks"},
+	} {
+		for _, layer := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(strings.Join(modes, "/")+"/"+layer, func(t *testing.T) {
+				a, nodes := desktopNodeChainCaptureFixture(t, len(modes))
+				installOrderedAWGAssets(t, a, nodes, modes, layer)
+				control, _ := a.profileByIDLocked(a.profiles.SelectedID)
+				selection, err := resolveDesktopNodeChainSelection(control, a.profiles.Profiles, nodes, "local")
+				if err != nil {
+					t.Fatal(err)
+				}
+				selection, err = captureNativeNodeChainSelection(context.Background(), clientRoot(a), selection, []string{"shadowsocks"}, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if selection.Base != desktopExternalEntryBase(modes[0]) || selection.Native.entryMode != modes[0] || selection.Native.entrySelection != modes[0] {
+					t.Fatal("ordered native capture mislabeled or substituted its original packet entry")
+				}
+				capture := selection.Native.chain
+				for i, proof := range capture.chain.ProofInventory() {
+					if proof.Mode != modes[i] || proof.NodeID != a.profiles.Profiles[i].NodeProofID || proof.StartLayer != layer {
+						t.Fatal("ordered AWG capture changed a mode, independent node identity or layer", proof)
+					}
+				}
+				for _, target := range []string{"linux", "windows", "darwin"} {
+					projected, err := capture.project(context.Background(), target, 0)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(projected.ProofInventory(), capture.chain.ProofInventory()) {
+						t.Fatal("projection dropped or rewrote an AWG selected prefix")
+					}
+				}
+				if err := selection.Native.validateNodeChainSelection(selection); err != nil {
+					t.Fatal(err)
+				}
+				altered := selection
+				if modes[0] == "wg" {
+					altered.Base = "awg"
+				} else {
+					altered.Base = "wg"
+				}
+				if selection.Native.validateNodeChainSelection(altered) == nil {
+					t.Fatal("entry base substitution retained ordered authority")
+				}
+				path := filepath.Join(clientRoot(a), "generated", nodes[1].ID, modes[1], map[bool]string{true: "wg.conf", false: "awg.conf"}[modes[1] == "wg"])
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, append(raw, '\n'), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if selection.Native.validateNodeChainSelection(selection) == nil {
+					t.Fatal("ordered AWG capture adopted a replaced middle raw source")
+				}
+			})
+		}
+	}
+}
+
 func TestDesktopNodeChainCaptureOwnsCompleteOrderedSourceAndProjection(t *testing.T) {
 	a, nodes := desktopNodeChainCaptureFixture(t, 3)
 	capture := captureNodeChainTest(t, a, nodes)

@@ -59,8 +59,8 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 	for i, selected := range nodes {
 		profile, found := byID[selected.ID]
 		if !found || profile.NodeKind != "" && profile.NodeKind != "router-vpn" || profile.External != nil || !common.ValidNodeProofID(profile.NodeProofID) ||
-			i < len(nodes)-1 && selected.Mode != "wg" || i == len(nodes)-1 && selected.Mode != "shadowsocks" {
-			return nil, errors.New("ordered selection requires linked Router WireGuard prefixes and an SS2022 final")
+			i < len(nodes)-1 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) || i == len(nodes)-1 && selected.Mode != "shadowsocks" {
+			return nil, errors.New("ordered selection requires linked Router WireGuard or AWG2 prefixes and an SS2022 final")
 		}
 		// Only the first closure owns physical bootstrap. An ambient lookup of
 		// any later transport would bypass its preceding selected prefix.
