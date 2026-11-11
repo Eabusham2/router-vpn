@@ -21,6 +21,45 @@ G = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(G)
 
 
+class InstalledNodeChainPeerPreflight(unittest.TestCase):
+    def completed(self):
+        return ''.join('=== RUN   ' + name + '\n--- PASS: ' + name + ' (0.01s)\n'
+                       for name in G.NODE_CHAIN_PEER_CASES)
+
+    def test_complete_ordered_peer_requires_roots_and_every_causal_control(self):
+        self.assertEqual(len(G.NODE_CHAIN_PEER_CASES), 37)
+        self.assertEqual(len(set(G.NODE_CHAIN_PEER_CASES)), 37)
+        good = self.completed()
+        G.check_node_chain_peer_verdict(good)
+        for line in good.splitlines(True):
+            for changed in (good.replace(line, '', 1), good + line, good.replace(line, 'prefix ' + line, 1)):
+                with self.subTest(line=line):
+                    with self.assertRaises(ValueError):
+                        G.check_node_chain_peer_verdict(changed)
+        for fault in ('--- FAIL:', '--- SKIP:', 'WARNING: DATA RACE', 'panic:'):
+            with self.assertRaises(ValueError):
+                G.check_node_chain_peer_verdict(good + fault)
+        for root in (G.NODE_CHAIN_PEER_CAPTURE, G.NODE_CHAIN_PEER_TRAFFIC):
+            missing = ''.join(line for line in good.splitlines(True) if root not in line)
+            with self.assertRaises(ValueError):
+                G.check_node_chain_peer_verdict(missing)
+
+    def test_actual_compiled_peer_preflight_cannot_accept_identity_only(self):
+        peer, source, captured = Path('/captured/peer'), Path('/captured/source'), {'GOWORK': 'off'}
+        with patch.object(G.NODE, 'run', return_value=(0, self.completed())) as execute, redirect_stdout(io.StringIO()):
+            self.assertEqual(G.execute_node_chain_peer(peer, source, captured), self.completed())
+        execute.assert_called_once_with([str(peer), '-test.v', '-test.timeout=90s',
+            '-test.run=^(' + G.NODE_CHAIN_PEER_CAPTURE + '|' + G.NODE_CHAIN_PEER_TRAFFIC + ')$'],
+            cwd=source, env=captured, timeout=100)
+        for status, output in ((1, self.completed()), (0, 'PASS\n'), (0, '')):
+            with patch.object(G.NODE, 'run', return_value=(status, output)), self.assertRaises(ValueError):
+                G.execute_node_chain_peer(peer, source, captured)
+        body = inspect.getsource(G.execute)
+        self.assertIn('node_chain_peer_output = execute_node_chain_peer(peer, source, captured)', body)
+        self.assertLess(body.index('execute_node_chain_peer(peer, source, captured)'), body.index('for case in (*CASES, *REVERSE_CASES)'))
+        self.assertIn("'node_chain_peer_cases': list(NODE_CHAIN_PEER_CASES)", body)
+
+
 class InstalledReverseServiceVerdict(unittest.TestCase):
     def completed(self):
         parent = 'TestDesktopLinuxGuardianKernelNodeStandardServiceReverse'

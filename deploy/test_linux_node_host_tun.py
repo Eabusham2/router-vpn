@@ -223,6 +223,8 @@ def checked_sources(source):
     app = TRANSACTION.checked_sources()
     if 'protocol/routervpnamnezia/routervpn_desktop_node_imported_peer_linux_test.go' not in native:
         raise ValueError('Installed imported host lost its independent WG entry and paired SS final peer')
+    if 'protocol/routervpnamnezia/routervpn_desktop_node_chain_peer_linux_test.go' not in native:
+        raise ValueError('Installed ordered host lost its independent complete encrypted prefix peer')
     if 'protocol/routervpnamnezia/routervpn_desktop_resolved_broker_test.go' not in native:
         raise ValueError('Installed resolved composition lost its original authenticated broker image source')
     for name in ('ui.html', 'logical_ui.js'):
@@ -315,6 +317,38 @@ LAYERED_ENTRY_AUTHORITY_CASES = (LAYERED_ENTRY_AUTHORITY_ROOT, *(LAYERED_ENTRY_A
 
 def check_layered_entry_authority_verdict(output):
     NODE.require_native_verdicts(output, LAYERED_ENTRY_AUTHORITY_CASES, 'installed layered entry authority')
+
+
+NODE_CHAIN_PEER_CAPTURE = 'TestRouterVPNDesktopNodeChainPeerCapture'
+NODE_CHAIN_PEER_TRAFFIC = 'TestRouterVPNDesktopNodeChainPeerTraffic'
+NODE_CHAIN_PEER_CASES = (
+    NODE_CHAIN_PEER_CAPTURE,
+    *(NODE_CHAIN_PEER_CAPTURE + '/' + fault for fault in (
+        'schema', 'address', 'count', 'missing-middle', 'key', 'same-key', 'same-id', 'same-token',
+        'wrong-proof', 'final-key', 'final-id', 'final-token')),
+    NODE_CHAIN_PEER_TRAFFIC,
+    *(NODE_CHAIN_PEER_TRAFFIC + '/' + str(count) + '-nodes' + suffix
+      for count in (3, 4)
+      for suffix in ('', *(f'/prefix-{position}-authenticated' for position in range(count - 1)),
+                     '/final-private-public-and-selected-dns', '/wrong-middle-token-and-identity',
+                     '/middle-cannot-bypass-final-dns', '/authenticated-final-mtu', '/held-middle-cancellation',
+                     '/middle-key', '/omit-middle', '/final-key')),
+)
+
+
+def check_node_chain_peer_verdict(output):
+    NODE.require_native_verdicts(output, NODE_CHAIN_PEER_CASES, 'ordered encrypted prefix reference')
+
+
+def execute_node_chain_peer(peer, source, captured):
+    status, output = NODE.run([str(peer), '-test.v', '-test.timeout=90s',
+                              '-test.run=^(' + NODE_CHAIN_PEER_CAPTURE + '|' + NODE_CHAIN_PEER_TRAFFIC + ')$'],
+                             cwd=source, env=captured, timeout=100)
+    if status:
+        raise ValueError('Ordered encrypted prefix reference failed:\n' + output[-16384:])
+    check_node_chain_peer_verdict(output)
+    print(output, end='' if output.endswith('\n') else '\n')
+    return output
 
 
 def check_layer_peer_verdict(output, authority=False):
@@ -867,6 +901,10 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
             raise ValueError('Installed Hysteria authentication/TLS reference failed:\n' + hysteria_auth_output[-16384:])
         check_hysteria_auth_verdict(hysteria_auth_output)
         print(hysteria_auth_output, end='' if hysteria_auth_output.endswith('\n') else '\n')
+        # This preflight proves the independent peer's real encryption and
+        # negative controls. The installed namespace/TUN inventory below is
+        # still mandatory and supplies separate native-host evidence.
+        node_chain_peer_output = execute_node_chain_peer(peer, source, captured)
         logs = []
         for case in (*CASES, *REVERSE_CASES):
             command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary), '--peer-binary', str(peer),
@@ -907,6 +945,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'hysteria_auth_cases': list(HYSTERIA_AUTH_CASES), 'hysteria_auth_output_sha256': hashlib.sha256(hysteria_auth_output.encode()).hexdigest(),
                   'connect_tls_cases': list(CONNECT_TLS_CASES), 'connect_tls_output_sha256': hashlib.sha256(connect_tls_output.encode()).hexdigest(),
                   'layer_peer_cases': list(LAYER_PEER_CASES), 'layer_peer_output_sha256': hashlib.sha256(layer_output.encode()).hexdigest(),
+                  'node_chain_peer_cases': list(NODE_CHAIN_PEER_CASES), 'node_chain_peer_output_sha256': hashlib.sha256(node_chain_peer_output.encode()).hexdigest(),
                   'cases': list(CASES), 'reverse_cases': list(REVERSE_CASES), 'compiled_negative_controls': [defect, private_defect, ds_defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
     CHILD.publish_receipt(receipt_path, result, workspace)
     print('Actual installed Linux host, complete bundle, selected TUN/DNS/MTU, routed Router identity, retained activation after request completion and durable joined retirement passed.')
