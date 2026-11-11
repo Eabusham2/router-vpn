@@ -1,0 +1,189 @@
+//go:build darwin
+
+package tun
+
+import (
+	"context"
+	"errors"
+	"net/netip"
+	"os"
+	"testing"
+	"time"
+)
+
+func routervpnDarwinRetirementTestContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func TestRouterVPNDarwinNodeChainCloseProgress(t *testing.T) {
+	t.Run("partial-success", func(t *testing.T) {
+		ctx := routervpnDarwinRetirementTestContext(t)
+		first, second := &routerVPNDarwinCloseStep{}, &routerVPNDarwinCloseStep{}
+		calls := 0
+		closeFirst := func() error { calls++; return nil }
+		if err := first.run(ctx, closeFirst); err != nil {
+			t.Fatal(err)
+		}
+		failure := errors.New("original later close is ambiguous")
+		if err := second.run(ctx, func() error { return failure }); !errors.Is(err, failure) {
+			t.Fatal("later failure became joined", err)
+		}
+		if err := first.run(ctx, closeFirst); err != nil || calls != 1 || !first.done {
+			t.Fatal("successful original component was closed twice", err, calls)
+		}
+	})
+	t.Run("ambiguous-close", func(t *testing.T) {
+		ctx := routervpnDarwinRetirementTestContext(t)
+		step, calls := &routerVPNDarwinCloseStep{}, 0
+		failure := errors.New("kernel close returned an ambiguous error")
+		closeOriginal := func() error { calls++; return failure }
+		if err := step.run(ctx, closeOriginal); !errors.Is(err, failure) {
+			t.Fatal("ambiguous first close passed", err)
+		}
+		if err := step.run(ctx, closeOriginal); !errors.Is(err, failure) || calls != 1 || step.done {
+			t.Fatal("ambiguous descriptor close was accepted or repeated", err, calls)
+		}
+	})
+	t.Run("cancelled-caller", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(routervpnDarwinRetirementTestContext(t))
+		cancel()
+		step, calls := &routerVPNDarwinCloseStep{}, 0
+		if err := step.run(ctx, func() error { calls++; return nil }); err == nil || calls != 0 || step.attempted {
+			t.Fatal("cancelled cleanup entered a new native close", err, calls)
+		}
+	})
+	t.Run("late-cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(routervpnDarwinRetirementTestContext(t))
+		step, calls := &routerVPNDarwinCloseStep{}, 0
+		closeOriginal := func() error { calls++; cancel(); return nil }
+		if err := step.run(ctx, closeOriginal); !errors.Is(err, context.Canceled) || !step.done {
+			t.Fatal("late cancellation lost successful original close progress", err)
+		}
+		if err := step.run(routervpnDarwinRetirementTestContext(t), closeOriginal); err != nil || calls != 1 {
+			t.Fatal("late successful close was performed twice", err, calls)
+		}
+	})
+}
+
+func routervpnDarwinRetirementRoute() DesktopNetworkObject {
+	return DesktopNetworkObject{Kind: "route", Family: 4, Index: 71,
+		Destination: "192.0.2.231/32", Gateway: "10.254.241.1", Flags: 0x2 | 0x4 | 0x800, MTU: 1280}
+}
+
+func TestRouterVPNDarwinNodeChainRouteRetirement(t *testing.T) {
+	for _, fault := range []string{"partial-retry", "missing", "foreign", "duplicate", "withheld-absence", "cancelled-delete", "replaced-after-retirement"} {
+		t.Run(fault, func(t *testing.T) {
+			original := routervpnDarwinRetirementRoute()
+			if original.Validate("darwin") != nil {
+				t.Fatal("route fixture lost its native shape")
+			}
+			owner := routerVPNDarwinRouteRetirement{original: original}
+			current := []DesktopNetworkObject{original}
+			switch fault {
+			case "missing":
+				current = nil
+			case "foreign":
+				current[0].Index++
+			case "duplicate":
+				current = append(current, original)
+			}
+			read := func() ([]DesktopNetworkObject, error) { return append([]DesktopNetworkObject(nil), current...), nil }
+			work, cancel := context.WithCancel(routervpnDarwinRetirementTestContext(t))
+			defer cancel()
+			calls := 0
+			failed := errors.New("original route delete failed before work")
+			remove := func(actual DesktopNetworkObject) error {
+				calls++
+				if actual != original {
+					t.Fatal("deletion selected a replacement route")
+				}
+				if fault == "partial-retry" && calls == 1 {
+					return failed
+				}
+				if fault != "withheld-absence" {
+					current = nil
+				}
+				if fault == "cancelled-delete" {
+					cancel()
+				}
+				return nil
+			}
+			err := owner.retire(work, read, remove)
+			switch fault {
+			case "missing", "foreign", "duplicate":
+				if err == nil || calls != 0 || owner.done || owner.attempted {
+					t.Fatal("unowned route was deleted or adopted", fault, err, calls)
+				}
+			case "withheld-absence":
+				if err == nil || owner.done || calls != 1 {
+					t.Fatal("route deletion passed without native absence", err, calls)
+				}
+			case "partial-retry":
+				if !errors.Is(err, failed) || owner.done || !owner.attempted {
+					t.Fatal("failed original route was discarded", err)
+				}
+				if err := owner.retire(routervpnDarwinRetirementTestContext(t), read, remove); err != nil || !owner.done || calls != 2 {
+					t.Fatal("same original route could not finish its bounded retry", err, calls)
+				}
+			case "cancelled-delete":
+				if !errors.Is(err, context.Canceled) || owner.done || !owner.attempted {
+					t.Fatal("canceled route readback became retirement", err)
+				}
+				if err := owner.retire(routervpnDarwinRetirementTestContext(t), read, remove); err != nil || !owner.done || calls != 1 {
+					t.Fatal("entered original deletion lost its later readback or repeated delete", err, calls)
+				}
+			case "replaced-after-retirement":
+				if err != nil || !owner.done || calls != 1 {
+					t.Fatal("baseline route did not retire", err)
+				}
+				current = []DesktopNetworkObject{original}
+				if err := owner.retire(routervpnDarwinRetirementTestContext(t), read, remove); err == nil || calls != 1 {
+					t.Fatal("replaced retired route was accepted or deleted", err, calls)
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNDarwinNodeChainRetirementRequiresOriginal(t *testing.T) {
+	for _, fault := range []string{"nil", "unbounded", "cancelled", "borrowed", "external", "missing-components"} {
+		t.Run(fault, func(t *testing.T) {
+			ctx := routervpnDarwinRetirementTestContext(t)
+			owner := &NativeTun{}
+			switch fault {
+			case "nil":
+				owner = nil
+			case "unbounded":
+				ctx = context.Background()
+			case "cancelled":
+				cancelled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = cancelled
+			default:
+				reader, writer, err := os.Pipe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { reader.Close(); writer.Close() })
+				owner.tunFile, owner.routervpnOwnedIndex = reader, 71
+				owner.options.Name, owner.options.MTU = "utun71", 1280
+				owner.options.Inet4Address = []netip.Prefix{netip.MustParsePrefix("10.254.241.1/30")}
+				if fault == "borrowed" {
+					owner.options.FileDescriptor = int(reader.Fd())
+				} else if fault == "external" {
+					owner.options.EXP_ExternalConfiguration = true
+				}
+			}
+			entered := false
+			err := owner.routervpnDarwinNodeChainCloseContext(ctx,
+				func() ([]DesktopNetworkObject, error) { entered = true; return nil, nil },
+				func(DesktopNetworkObject) error { entered = true; return nil })
+			if err == nil || entered {
+				t.Fatal("native cleanup admitted another or incomplete original", fault, err)
+			}
+		})
+	}
+}

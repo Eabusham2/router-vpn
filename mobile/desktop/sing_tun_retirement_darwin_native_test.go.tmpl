@@ -1,0 +1,181 @@
+//go:build darwin && routervpn_darwin_node_chain_native
+
+package tun
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"os"
+	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
+)
+
+// This separately selected required test creates real native utun/route
+// objects. It grants no app Connected or protected ordered-host acceptance.
+func TestRouterVPNDarwinNodeChainNativeRetirement(t *testing.T) {
+	if os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_NATIVE") != "1" || os.Geteuid() != 0 {
+		t.Fatal("required Darwin retirement test lacks its explicit native host")
+	}
+	for _, scenario := range []string{"clean", "partial-route", "cancelled-delete", "foreign-descriptor"} {
+		t.Run(scenario, func(t *testing.T) {
+			options := Options{Name: CalculateInterfaceName(""), MTU: 1280, AutoRoute: true,
+				Inet4Address: []netip.Prefix{netip.MustParsePrefix("10.254.241.1/30")},
+				Inet4RouteAddress: []netip.Prefix{netip.MustParsePrefix("192.0.2.231/32"), netip.MustParsePrefix("198.51.100.231/32")}}
+			created, err := New(options)
+			if err != nil {
+				t.Fatal("create required original native utun", err)
+			}
+			owner, ok := created.(*NativeTun)
+			if !ok || owner.routervpnOwnedIndex < 1 {
+				t.Fatal("native constructor returned another adapter")
+			}
+			originalFile, originalIndex := owner.tunFile, owner.routervpnOwnedIndex
+			var retained, foreign *os.File
+			t.Cleanup(func() {
+				owner.tunFile = originalFile
+				cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				if err := owner.RouterVPNDesktopDarwinNodeChainCloseContext(cleanup); err != nil {
+					t.Error("original native cleanup remains unproved", err)
+				}
+				if foreign != nil {
+					if err := foreign.Close(); err != nil {
+						t.Error("foreign test duplicate close failed", err)
+					}
+				}
+				if retained != nil {
+					if err := retained.Close(); err != nil {
+						t.Error("original test control close failed", err)
+					}
+				}
+			})
+			// This is the actual native route constructor used by Start. The
+			// test needs no default-interface monitor or application traffic.
+			if err := owner.setRoutes(); err != nil {
+				t.Fatal("install required original native host routes", err)
+			}
+			owner.routervpnNetwork.mu.Lock()
+			routeCount, historyErr := len(owner.routervpnNetwork.objects), owner.routervpnNetwork.failure
+			owner.routervpnNetwork.mu.Unlock()
+			if historyErr != nil || routeCount != 2 {
+				t.Fatal("native successful-call inventory is incomplete", routeCount, historyErr)
+			}
+			ctx := routervpnDarwinRetirementTestContext(t)
+			retained, err = owner.RouterVPNRetainControlContext(ctx)
+			if err != nil || retained == nil {
+				t.Fatal("retain original native control", err)
+			}
+			calls := 0
+			work, cancel := context.WithCancel(ctx)
+			defer cancel()
+			failed := errors.New("fixture withholds second original route deletion")
+			remove := func(original DesktopNetworkObject) error {
+				calls++
+				if (scenario == "partial-route" || scenario == "foreign-descriptor") && calls == 2 {
+					return failed
+				}
+				err := routervpnDarwinRemoveOriginalRoute(original)
+				if scenario == "cancelled-delete" && calls == 1 && err == nil {
+					cancel()
+				}
+				return err
+			}
+			first := owner.routervpnDarwinNodeChainCloseContext(work, routervpnDarwinNetworkObjects, remove)
+			state := &owner.routervpnDarwinRetirement
+			if scenario == "clean" {
+				if first != nil || calls != 2 || !state.descriptor.done {
+					t.Fatal("actual complete native retirement failed", first, calls)
+				}
+			} else {
+				if first == nil || state.descriptor.done || state.poll.done || state.readPipe.done || state.writePipe.done {
+					t.Fatal("partial native route failure released a later original component", first)
+				}
+				if _, err := originalFile.Stat(); err != nil {
+					t.Fatal("partial route cleanup lost its original utun descriptor", err)
+				}
+				if scenario == "partial-route" || scenario == "foreign-descriptor" {
+					if !errors.Is(first, failed) || calls != 2 || len(state.routes) != 2 || !state.routes[0].done || state.routes[1].done {
+						t.Fatal("failed second route lost original successful first-route progress", first, calls)
+					}
+				} else if !errors.Is(first, context.Canceled) || calls != 1 || state.routes[0].done || !state.routes[0].attempted {
+					t.Fatal("cancelled native deletion fabricated its missing readback", first, calls)
+				}
+				if scenario == "foreign-descriptor" {
+					fd, err := unix.Dup(int(originalFile.Fd()))
+					if err != nil {
+						t.Fatal(err)
+					}
+					unix.CloseOnExec(fd)
+					foreign = os.NewFile(uintptr(fd), "foreign-test-utun-description")
+					owner.tunFile = foreign
+					if err := owner.RouterVPNDesktopDarwinNodeChainCloseContext(routervpnDarwinRetirementTestContext(t)); err == nil || state.descriptor.done {
+						t.Fatal("native cleanup accepted a replacement descriptor object", err)
+					}
+					owner.tunFile = originalFile
+					if err := foreign.Close(); err != nil {
+						t.Fatal(err)
+					}
+					foreign = nil
+				}
+				remainingCalls := 0
+				err := owner.routervpnDarwinNodeChainCloseContext(routervpnDarwinRetirementTestContext(t),
+					routervpnDarwinNetworkObjects, func(original DesktopNetworkObject) error {
+						remainingCalls++
+						return routervpnDarwinRemoveOriginalRoute(original)
+					})
+				if err != nil || remainingCalls != 1 {
+					t.Fatal("native retry repeated a joined route or lost its remaining original", err, remainingCalls)
+				}
+			}
+			if !state.signal.done || !state.descriptor.done || !state.poll.done || !state.readPipe.done || !state.writePipe.done ||
+				owner.stopFd.ReadFD != -1 || owner.stopFd.WriteFD != -1 || !state.finished {
+				t.Fatal("native cleanup omitted original component completion")
+			}
+			if _, err := originalFile.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Fatal("original native file remained open", err)
+			}
+			name, err := unix.GetsockoptString(int(retained.Fd()), 2, 2)
+			if err != nil || name != options.Name {
+				t.Fatal("cleanup consumed the separately retained original control", err)
+			}
+			actual, err := routervpnDarwinNetworkObjects()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, original := range state.routes {
+				if !original.done {
+					t.Fatal("original route has no retirement readback")
+				}
+				for _, current := range actual {
+					if current.Family == original.original.Family && current.Destination == original.original.Destination &&
+						current.Gateway == original.original.Gateway {
+						t.Fatal("actual original native route remained after cleanup")
+					}
+				}
+			}
+			if err := owner.RouterVPNDesktopDarwinNodeChainCloseContext(routervpnDarwinRetirementTestContext(t)); err != nil {
+				t.Fatal("completed native cleanup closed an original component again", err)
+			}
+			if err := retained.Close(); err != nil {
+				t.Fatal(err)
+			}
+			retained = nil
+			until := time.Now().Add(3*time.Second)
+			for {
+				current, err := net.InterfaceByName(options.Name)
+				if err != nil || current.Index != originalIndex {
+					break
+				}
+				if time.Now().After(until) {
+					t.Fatal("original native utun persisted after all original descriptions closed")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			t.Log("actual original utun, two host-route deletions, retained descriptor and native component joins proved")
+		})
+	}
+}

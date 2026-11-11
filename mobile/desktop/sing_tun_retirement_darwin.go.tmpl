@@ -1,0 +1,326 @@
+//go:build darwin
+
+package tun
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"os"
+	"sort"
+	"sync"
+	"syscall"
+
+	"golang.org/x/net/route"
+	"golang.org/x/sys/unix"
+)
+
+// These are original constructor references and successful-call history, not
+// a decoded receipt or an interface found later by name. Unknown close results
+// remain failures: an already-closed error is never converted into retirement.
+type routerVPNDarwinNativeRetirement struct {
+	mu          sync.Mutex
+	captured    bool
+	finished    bool
+	file        *os.File
+	poller      any
+	stopRead    int
+	stopWrite   int
+	name        string
+	index       int
+	receipt     DesktopNetworkReceipt
+	routes      []routerVPNDarwinRouteRetirement
+	signal      routerVPNDarwinCloseStep
+	descriptor  routerVPNDarwinCloseStep
+	poll        routerVPNDarwinCloseStep
+	readPipe    routerVPNDarwinCloseStep
+	writePipe   routerVPNDarwinCloseStep
+}
+
+type routerVPNDarwinCloseStep struct {
+	attempted bool
+	done      bool
+	failure   error
+}
+
+// A kernel close consumes its original descriptor even on some error paths.
+// Never repeat an ambiguous close against a potentially reused integer. A
+// successful earlier component stays joined while later route work retries.
+func (step *routerVPNDarwinCloseStep) run(ctx context.Context, closeOriginal func() error) error {
+	if ctx == nil || ctx.Err() != nil || closeOriginal == nil {
+		return errors.New("Darwin native cleanup lost its original operation")
+	}
+	if step.done {
+		return nil
+	}
+	if step.attempted {
+		return errors.Join(step.failure, errors.New("Darwin native cleanup retains an ambiguous original close"))
+	}
+	step.attempted = true
+	step.failure = closeOriginal()
+	if step.failure != nil {
+		return step.failure
+	}
+	step.done = true
+	return ctx.Err()
+}
+
+type routerVPNDarwinRouteRetirement struct {
+	original  DesktopNetworkObject
+	attempted bool
+	done      bool
+}
+
+func (route *routerVPNDarwinRouteRetirement) retire(ctx context.Context,
+	read func() ([]DesktopNetworkObject, error), remove func(DesktopNetworkObject) error) error {
+	if ctx == nil || ctx.Err() != nil || read == nil || remove == nil {
+		return errors.New("Darwin route cleanup lost its original operation")
+	}
+	current, err := read()
+	if err != nil || ctx.Err() != nil {
+		return errors.Join(err, ctx.Err())
+	}
+	exact, conflict := false, false
+	for _, candidate := range current {
+		if candidate.Kind != "route" || candidate.Family != route.original.Family ||
+			candidate.Destination != route.original.Destination || candidate.Gateway != route.original.Gateway {
+			continue
+		}
+		if candidate == route.original {
+			if exact {
+				conflict = true
+			}
+			exact = true
+		} else {
+			conflict = true
+		}
+	}
+	if route.done {
+		if exact || conflict {
+			return errors.New("Darwin retired route tuple was replaced")
+		}
+		return ctx.Err()
+	}
+	if conflict || !exact && !route.attempted {
+		return errors.New("Darwin route cleanup lost its original installed object")
+	}
+	if !exact {
+		// Only this original object's entered deletion can authorize adoption
+		// of its later absence after a canceled or interrupted readback.
+		route.done = true
+		return ctx.Err()
+	}
+	route.attempted = true
+	deleteErr := remove(route.original)
+	if deleteErr != nil || ctx.Err() != nil {
+		return errors.Join(deleteErr, ctx.Err())
+	}
+	after, err := read()
+	if err != nil || ctx.Err() != nil {
+		return errors.Join(err, ctx.Err())
+	}
+	for _, candidate := range after {
+		if candidate.Kind == "route" && candidate.Family == route.original.Family &&
+			candidate.Destination == route.original.Destination && candidate.Gateway == route.original.Gateway {
+			return errors.New("Darwin original route deletion has no complete absence readback")
+		}
+	}
+	route.done = true
+	return nil
+}
+
+func routervpnDarwinRemoveOriginalRoute(original DesktopNetworkObject) error {
+	if original.Validate("darwin") != nil || original.Kind != "route" || original.Index == 0 || original.Gateway == "" {
+		return errors.New("Darwin route deletion lacks its original complete object")
+	}
+	destination, err := netip.ParsePrefix(original.Destination)
+	if err != nil {
+		return err
+	}
+	gateway, err := netip.ParseAddr(original.Gateway)
+	if err != nil {
+		return err
+	}
+	// Preserve the native route's original scope/index and tuple. The source
+	// object is read directly from this NativeTun's successful-add ledger.
+	message := route.RouteMessage{Type: syscall.RTM_DELETE, Version: syscall.RTM_VERSION,
+		Flags: int(original.Flags), Index: int(original.Index), Seq: 1}
+	if destination.Addr().Is4() {
+		mask := netip.MustParseAddr(net.IP(net.CIDRMask(destination.Bits(), 32)).String())
+		message.Addrs = []route.Addr{
+			syscall.RTAX_DST: &route.Inet4Addr{IP: destination.Addr().As4()},
+			syscall.RTAX_NETMASK: &route.Inet4Addr{IP: mask.As4()},
+			syscall.RTAX_GATEWAY: &route.Inet4Addr{IP: gateway.As4()},
+		}
+	} else {
+		mask := netip.MustParseAddr(net.IP(net.CIDRMask(destination.Bits(), 128)).String())
+		message.Addrs = []route.Addr{
+			syscall.RTAX_DST: &route.Inet6Addr{IP: destination.Addr().As16()},
+			syscall.RTAX_NETMASK: &route.Inet6Addr{IP: mask.As16()},
+			syscall.RTAX_GATEWAY: &route.Inet6Addr{IP: gateway.As16()},
+		}
+	}
+	request, err := message.Marshal()
+	if err != nil {
+		return err
+	}
+	return useSocket(unix.AF_ROUTE, unix.SOCK_RAW, 0, func(fd int) error {
+		n, err := unix.Write(fd, request)
+		if err != nil || n != len(request) {
+			return errors.Join(err, errors.New("Darwin original route delete was not written completely"))
+		}
+		return nil
+	})
+}
+
+// Only the ordered Darwin inbound enables this capability before creation.
+// It does not replace the legacy External/Mobile Close entry point.
+func (t *NativeTun) RouterVPNDesktopDarwinNodeChainCloseContext(ctx context.Context) error {
+	return t.routervpnDarwinNodeChainCloseContext(ctx, routervpnDarwinNetworkObjects, routervpnDarwinRemoveOriginalRoute)
+}
+
+// Only route observation/deletion is injectable; the original native descriptor,
+// poller and stop-pipe closes below always execute their actual owned methods.
+func (t *NativeTun) routervpnDarwinNodeChainCloseContext(ctx context.Context,
+	readRoutes func() ([]DesktopNetworkObject, error), deleteRoute func(DesktopNetworkObject) error) error {
+	if readRoutes == nil || deleteRoute == nil {
+		return errors.New("Darwin native cleanup has no route boundary")
+	}
+	if t == nil || ctx == nil || ctx.Err() != nil {
+		return errors.New("Darwin native cleanup has no captured caller")
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return errors.New("Darwin native cleanup requires its original deadline")
+	}
+	state := &t.routervpnDarwinRetirement
+	if err := LockContext(ctx, &state.mu); err != nil {
+		return err
+	}
+	defer state.mu.Unlock()
+	if t.options.FileDescriptor != 0 || t.options.NetNs != "" || t.options.EXP_ExternalConfiguration ||
+		t.routervpnOwnedIndex < 1 || t.tunFile == nil {
+		return errors.New("Darwin native cleanup requires its original direct constructor")
+	}
+	if !state.captured {
+		if t.stopFd.ReadFD < 0 || t.stopFd.WriteFD < 0 || t.readPoller == nil {
+			return errors.New("Darwin native cleanup lost an original poller or pipe")
+		}
+		// Before retirement starts, the original native observer proves that
+		// every route on this exact utun belongs to its successful calls or
+		// configured address. A failed/partial add with unknown ownership
+		// cannot become authority merely because a pathname later disappears.
+		raw, err := t.routervpnObserveNetworkReceiptContext(ctx)
+		if err != nil {
+			return err
+		}
+		receipt, err := ParseDesktopNetworkReceipt(raw)
+		if err != nil || receipt.TargetOS != "darwin" || receipt.Index != uint32(t.routervpnOwnedIndex) ||
+			receipt.Name != t.options.Name {
+			return errors.New("Darwin native retirement lost its original live inventory")
+		}
+		var routes []routerVPNDarwinRouteRetirement
+		captureRoutes := func() error {
+			t.routervpnNetwork.mu.Lock()
+			defer t.routervpnNetwork.mu.Unlock()
+			if t.routervpnNetwork.failure != nil {
+				return errors.Join(t.routervpnNetwork.failure, errors.New("Darwin native cleanup has incomplete successful-call history"))
+			}
+			for _, original := range t.routervpnNetwork.objects {
+				if original.Validate("darwin") != nil || original.Kind != "route" ||
+					original.Index != uint32(t.routervpnOwnedIndex) || original.Gateway == "" {
+					return errors.New("Darwin native cleanup has a foreign recorded route")
+				}
+				routes = append(routes, routerVPNDarwinRouteRetirement{original: original})
+			}
+			return nil
+		}
+		if err := captureRoutes(); err != nil {
+			return err
+		}
+		sort.Slice(routes, func(i, j int) bool { return routes[i].original.Key() < routes[j].original.Key() })
+		state.routes, state.receipt = routes, receipt
+		state.file, state.poller = t.tunFile, t.readPoller
+		state.stopRead, state.stopWrite = t.stopFd.ReadFD, t.stopFd.WriteFD
+		state.name, state.index, state.captured = t.options.Name, t.routervpnOwnedIndex, true
+	}
+	if state.file != t.tunFile || state.poller != t.readPoller || state.name != t.options.Name ||
+		state.index != t.routervpnOwnedIndex ||
+		!state.readPipe.done && state.stopRead != t.stopFd.ReadFD || !state.writePipe.done && state.stopWrite != t.stopFd.WriteFD {
+		return errors.New("Darwin native cleanup replaced an original component")
+	}
+	if !state.descriptor.done {
+		name, err := t.Name()
+		current, observeErr := net.InterfaceByName(state.name)
+		if err != nil || observeErr != nil || name != state.name || current.Index != state.index {
+			return errors.Join(err, observeErr, errors.New("Darwin native cleanup lost its original utun descriptor"))
+		}
+	}
+	if err := state.signal.run(ctx, func() error {
+		n, err := unix.Write(state.stopWrite, []byte{1})
+		if err != nil || n != 1 {
+			return errors.Join(err, fmt.Errorf("Darwin native stop signal wrote %d bytes", n))
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for index := range state.routes {
+		if err := state.routes[index].retire(ctx, readRoutes, deleteRoute); err != nil {
+			return err
+		}
+	}
+	t.routervpnNetwork.mu.Lock()
+	historyCurrent := t.routervpnNetwork.failure == nil && len(t.routervpnNetwork.objects) == len(state.routes)
+	for _, original := range state.routes {
+		recorded, exists := t.routervpnNetwork.objects[original.original.Key()]
+		historyCurrent = historyCurrent && exists && recorded == original.original
+	}
+	t.routervpnNetwork.mu.Unlock()
+	if !historyCurrent {
+		return errors.New("Darwin native cleanup changed its original successful-call history")
+	}
+	if !state.descriptor.done {
+		actual, err := readRoutes()
+		if err != nil || ctx.Err() != nil {
+			return errors.Join(err, ctx.Err())
+		}
+		for _, original := range actual {
+			if original.Index == uint32(state.index) &&
+				(original.Flags&syscall.RTF_STATIC != 0 || !routervpnNetworkAddressRoute(state.receipt, original)) {
+				return errors.New("Darwin native retirement retains an unjoined or replacement route")
+			}
+		}
+	}
+	if err := state.descriptor.run(ctx, state.file.Close); err != nil {
+		return err
+	}
+	if err := state.poll.run(ctx, t.readPoller.Close); err != nil {
+		return err
+	}
+	if err := state.readPipe.run(ctx, func() error {
+		if err := unix.Close(state.stopRead); err != nil {
+			return err
+		}
+		t.stopFd.ReadFD = -1
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := state.writePipe.run(ctx, func() error {
+		if err := unix.Close(state.stopWrite); err != nil {
+			return err
+		}
+		t.stopFd.WriteFD = -1
+		return nil
+	}); err != nil {
+		return err
+	}
+	t.routeSet = false
+	if !state.finished {
+		state.finished = true
+		flushDNSCache()
+	}
+	return ctx.Err()
+}

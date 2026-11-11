@@ -186,7 +186,7 @@ def verify_linux_retirement_source(vendor, go='go'):
 def darwin_owned_source(raw):
     raw = darwin_route_conflict_patch(raw)
     patches = [
-        (b'type NativeTun struct {', b'type NativeTun struct {\n\troutervpnOwnedIndex int'),
+        (b'type NativeTun struct {', b'type NativeTun struct {\n\troutervpnOwnedIndex int\n\troutervpnDarwinRetirement routerVPNDarwinNativeRetirement'),
         (b'\tnativeTun.readPoller = common.Must1(rawfile.NewPoller(nativeTun.stopFd.ReadFD, tunFd))', b'''\tif options.FileDescriptor == 0 {
 \t\tcurrent, err := net.InterfaceByName(options.Name)
 \t\tif err != nil {
@@ -373,7 +373,7 @@ def prepare(vendor):
     prepared = inbound_retirement_patch(raw)
     if prepared != raw:
         inbound.write_bytes(prepared)
-    for name in ('sing_tun_monitor_context.go.tmpl', 'sing_tun_monitor_context_test.go.tmpl', 'sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_retirement_linux.go.tmpl', 'sing_tun_address_retirement_linux.go.tmpl', 'sing_tun_address_retirement_linux_test.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl', 'sing_tun_retirement_linux_test.go.tmpl', 'sing_tun_retirement_native_linux_test.go.tmpl', 'sing_tun_resolver_linux.go.tmpl', 'sing_tun_resolver_linux_test.go.tmpl', 'sing_tun_resolved_authority_linux.go.tmpl', 'sing_tun_resolved_authority_linux_test.go.tmpl', 'sing_tun_resolved_anchor_linux.go.tmpl', 'sing_tun_resolved_anchor_linux_test.go.tmpl', 'sing_tun_resolved_server_state_linux.go.tmpl', 'sing_tun_resolved_server_state_linux_test.go.tmpl', 'sing_tun_resolved_root_ds_linux.go.tmpl', 'sing_tun_resolved_root_ds_linux_test.go.tmpl', 'sing_tun_dns_test.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
+    for name in ('sing_tun_monitor_context.go.tmpl', 'sing_tun_monitor_context_test.go.tmpl', 'sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_retirement_linux.go.tmpl', 'sing_tun_address_retirement_linux.go.tmpl', 'sing_tun_address_retirement_linux_test.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl', 'sing_tun_retirement_linux_test.go.tmpl', 'sing_tun_retirement_native_linux_test.go.tmpl', 'sing_tun_resolver_linux.go.tmpl', 'sing_tun_resolver_linux_test.go.tmpl', 'sing_tun_resolved_authority_linux.go.tmpl', 'sing_tun_resolved_authority_linux_test.go.tmpl', 'sing_tun_resolved_anchor_linux.go.tmpl', 'sing_tun_resolved_anchor_linux_test.go.tmpl', 'sing_tun_resolved_server_state_linux.go.tmpl', 'sing_tun_resolved_server_state_linux_test.go.tmpl', 'sing_tun_resolved_root_ds_linux.go.tmpl', 'sing_tun_resolved_root_ds_linux_test.go.tmpl', 'sing_tun_dns_test.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl', 'sing_tun_retirement_darwin.go.tmpl', 'sing_tun_retirement_darwin_test.go.tmpl', 'sing_tun_retirement_darwin_native_test.go.tmpl'):
         path = ROOT/'mobile/desktop'/name
         if path.is_symlink():
             raise ValueError('Linked native network receipt template')

@@ -7,6 +7,47 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## Darwin native retirement retains exact component progress
+
+A separate opt-in NativeTun.RouterVPNDesktopDarwinNodeChainCloseContext
+method now retains the actual constructor file, poller, stop pipes, utun
+name/index and successful native route-add inventory. It does not replace
+legacy Close. It requires a bounded original caller and refuses borrowed
+descriptors, external configurations, incomplete creation or foreign routes.
+
+Each original route is deleted only after exact native tuple/index/flags
+readback, then requires absence readback. A failed later deletion keeps the
+successful earlier progress and original descriptor. Cancellation after an
+entered delete can adopt only that exact route's later absence. Successful
+descriptor, poller and pipe closes execute once; an ambiguous close stays an
+error and cannot retry a reused descriptor integer. Original control
+descriptions retained by the guardian remain independently owned.
+
+The native fixture creates real utun interfaces and two actual host routes.
+Its four required scenarios cover clean retirement, failed-second-route retry,
+canceled deletion readback, and rejection of a different descriptor object.
+Seventeen source/component cases cover partial progress, repeated or ambiguous
+close, wrong/duplicate/missing route, absent retirement readback and invalid
+constructor/caller authority. Independent reviews checked the pinned native
+API and constructor/route lifecycle, but no local Go execution was available.
+
+A required Darwin build gate compiles the actual prepared native source and
+checks exact source/template identity. It requires all twenty source verdicts
+and five native verdicts including roots, plus five causal source mutations.
+Eight runner selftests cover omissions and receipt integrity. Complete original
+package start, ordered unique test RUN/terminal events, joined children and
+final package result are mandatory; pass-only, truncated, skipped, duplicated,
+foreign or race-bearing output cannot count. Negative controls require exit 1,
+the exact original test failure and assertion, and a complete failing package.
+Every test image keeps its 120-second Go alarm and subprocess cap of 600 seconds.
+The new 1800-second outer gate covers baseline plus five distinct mutation
+compiles/runs; no existing gate deadline was increased.
+
+This unit establishes the native cleanup implementation and required CI
+definition. Its hosted native execution remains pending. It does not by itself
+complete ordered inbound/component integration, authenticated child shutdown,
+public macOS MTU support, release publication or physical-device acceptance.
+
 ## GTK profile fixture uses the original asynchronous owner
 
 Completed e1204aea Linux encrypted-runtime job

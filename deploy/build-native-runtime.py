@@ -112,6 +112,8 @@ def inputs():
                              ROOT/'deploy/test_windows_build_owner.py',
                              ROOT/'deploy/test_desktop_pt_inventory.py',
                              ROOT/'deploy/test_desktop_pt_inventory_runner.py',
+                             ROOT/'deploy/test_desktop_darwin_retirement.py',
+                             ROOT/'deploy/test_desktop_darwin_retirement_runner.py',
                              ROOT/'deploy/test_desktop_imported_runtime.py',
                              ROOT/'deploy/test_desktop_imported_packet_runtime.py',
                              ROOT/'deploy/test_desktop_imported_openvpn_runtime.py',
@@ -1303,6 +1305,13 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             # The pinned Go toolchain supports race on all shipped native
             # desktop hosts except Windows ARM64 (internal/platform/supported.go).
             race = [] if target == 'windows/arm64' else ['-race']
+            if target.startswith('darwin/'):
+                # Required low-level utun/route cleanup precedes later installed
+                # host/trust acceptance. This does not enable ordered app hosting.
+                run([sys.executable, ROOT/'deploy/test_desktop_darwin_retirement_runner.py'],
+                    env=env, timeout=120)
+                run([sys.executable, ROOT/'deploy/test_desktop_darwin_retirement.py', source,
+                     '--tags='+','.join(tags(target))], env=env, timeout=1800)
             run([sys.executable, ROOT/'deploy/test_hysteria2_deadlines_pinned.py', source],
                 env=env, timeout=400)
             run([sys.executable, ROOT/'deploy/test_amnezia_timers_pinned.py', source],
