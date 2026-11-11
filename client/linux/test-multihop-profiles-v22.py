@@ -70,10 +70,14 @@ def main():
     hops = settings[settings.index('typedef struct {'):settings.index('static void linux_multihop_node_free_v7(')]
     hops += '\n' + block(settings, 'static LinuxMultihopNodeV7 *linux_multihop_find_v7(')
     hops += '\n' + block(settings, 'static gboolean linux_multihop_can_connect_v22(')
+    # Retain the shipping async owner shape and busy predicate. Only the HTTP
+    # job payload is opaque here; pending identity is not a hardcoded idle stub.
+    async_begin = asynchronous.index('typedef struct {\n    App *app;')
+    async_end = asynchronous.index('} LinuxAsyncActionsV16;', async_begin) + len('} LinuxAsyncActionsV16;')
+    hops += '\ntypedef struct { int fixture_identity; } RVHttpJobV16;\n' + asynchronous[async_begin:async_end]
+    hops += '\n' + block(asynchronous, 'static LinuxAsyncActionsV16 *linux_async_state_v16(')
+    hops += '\n' + block(asynchronous, 'static gboolean linux_async_busy_v16(')
     hops += r'''
-/* This pair catalog fixture has no local HTTP worker. The separate ordered
- * callback fixture exercises pending-worker delegation to owned Disconnect. */
-static gboolean linux_async_busy_v16(App*app){(void)app;return FALSE;}
 static void linux_multihop_update_summary_v7(LinuxMultihopDialogV7*s,const char*message){gtk_label_set_text(GTK_LABEL(s->summary),message?message:"");}
 static guint64 linux_async_request_v17(App*app,const char*path,const char*body,long timeout,const char*label,gboolean stop){check(!stop,"Connect requested Stop");post_and_log(app,path,body,timeout,label);return 1;}
 '''
@@ -110,7 +114,7 @@ static gboolean linux_async_busy_v16(App*a);
 static GtkWidget*make_button(const char*label,GCallback callback,gpointer data){GtkWidget*b=gtk_button_new_with_label(label);g_signal_connect(b,"clicked",callback,data);return b;}
 static void linux_unified_connect_v8(GtkButton*b,gpointer s){(void)b;(void)s;delegated_count++;}
 static void append_diag(App*a,const char*text){(void)a;check(text&&text[0],"Empty rejection reason");}
-static gboolean routervpn_require_mutation_idle(App*a,const char*reason){(void)a;(void)reason;return !mutation_busy;}
+static gboolean routervpn_require_mutation_idle(App*a,const char*reason){(void)reason;return !mutation_busy&&!linux_async_busy_v16(a);}
 static char*json_string_body(const char*key,const char*value){JsonObject*o=json_object_new();json_object_set_string_member(o,key,value);JsonNode*n=json_node_new(JSON_NODE_OBJECT);json_node_take_object(n,o);JsonGenerator*g=json_generator_new();json_generator_set_root(g,n);char*raw=json_generator_to_data(g,NULL);g_object_unref(g);json_node_free(n);return raw;}
 static gboolean api_request(const char*path,const char*method,const char*body,long timeout,Buffer*out,char**err){(void)method;(void)timeout;(void)err;const char*response=NULL;char*allocated=NULL;
  if(strcmp(path,"/api/status")==0)response=status_busy?"{\"connected\":true,\"phase\":\"connected\"}":"{\"connected\":false,\"phase\":\"off\"}";
@@ -159,7 +163,21 @@ static void hop_controls(App*app){
  for(guint i=0;i<G_N_ELEMENTS(linux_multihop_entries_v23);i++){json_array_add_string_element(hop.entry_modes,linux_multihop_entries_v23[i].id);}linux_multihop_entry_choices_v23(hop.entry_mode,hop.entry_modes,"");g_signal_connect(hop.entry_mode,"changed",G_CALLBACK(linux_multihop_entry_changed_v23),&hop);
  const char*executions[]={"local","server","auto"};wanted_mode="shadowsocks";
  for(guint i=0;i<G_N_ELEMENTS(linux_multihop_entries_v23);i++){wanted_entry_mode=linux_multihop_entries_v23[i].id;choose(hop.entry_mode,wanted_entry_mode);char*stored=linux_multihop_entry_choice_v23();check(g_strcmp0(stored,wanted_entry_mode)==0,"Hop callback failed exact entry persistence");g_free(stored);for(guint j=0;j<3;j++){wanted_execution=executions[j];choose(hop.execution,wanted_execution);check(linux_multihop_can_connect_v22(&hop),"Advertised entry blocked in hop dialog");unsigned before=connected_count;linux_multihop_connect_v7(NULL,&hop);check(connected_count==before+1,"Actual transformed Connect was not invoked");check_body(connected_body,TRUE);}}
- unsigned before=connected_count;char*previous=g_strdup(gtk_combo_box_get_active_id(GTK_COMBO_BOX(hop.entry_mode)));mutation_busy=TRUE;choose(hop.entry_mode,"wg");check(g_strcmp0(gtk_combo_box_get_active_id(GTK_COMBO_BOX(hop.entry_mode)),previous)==0,"Busy entry edit replaced the owned selection");char*stored=linux_multihop_entry_choice_v23();check(g_strcmp0(stored,previous)==0,"Busy entry edit changed disk selection");g_free(stored);linux_multihop_progress_poll_v1(&hop);check(!gtk_widget_get_sensitive(hop.entry_mode)&&!gtk_widget_get_sensitive(hop.connect),"Busy hop controls remained enabled");linux_multihop_connect_v7(NULL,&hop);check(connected_count==before,"Busy hop connected another owner");mutation_busy=FALSE;linux_multihop_progress_poll_v1(&hop);check(gtk_widget_get_sensitive(hop.entry_mode)&&gtk_widget_get_sensitive(hop.connect),"Idle hop controls did not recover");g_free(previous);
+ unsigned before=connected_count;char*previous=g_strdup(gtk_combo_box_get_active_id(GTK_COMBO_BOX(hop.entry_mode)));
+ for(guint busy_kind=0;busy_kind<4;busy_kind++){
+  RVHttpJobV16 original_job={0};LinuxAsyncActionsV16 pending={.app=app};
+  if(busy_kind==0)pending.primary=&original_job;else if(busy_kind==1)pending.stop=&original_job;else if(busy_kind==2)pending.auxiliary_jobs=1;else pending.closed=TRUE;
+  g_object_set_data(G_OBJECT(app->window),"linux-async-actions-v16",&pending);
+  check(linux_async_busy_v16(app),"Original pending owner was reported idle");
+  choose(hop.entry_mode,"wg");check(g_strcmp0(gtk_combo_box_get_active_id(GTK_COMBO_BOX(hop.entry_mode)),previous)==0,"Busy entry edit replaced the owned selection");
+  char*stored=linux_multihop_entry_choice_v23();check(g_strcmp0(stored,previous)==0,"Busy entry edit changed disk selection");g_free(stored);
+  linux_multihop_progress_poll_v1(&hop);check(!gtk_widget_get_sensitive(hop.entry_mode)&&!gtk_widget_get_sensitive(hop.connect),"Busy hop controls remained enabled");
+  check(!gtk_widget_get_sensitive(hop.entry)&&!gtk_widget_get_sensitive(hop.exit)&&!gtk_widget_get_sensitive(hop.mode)&&!gtk_widget_get_sensitive(hop.execution),"Busy hop graph controls remained enabled");
+  linux_multihop_connect_v7(NULL,&hop);check(connected_count==before,"Busy hop connected another owner");
+  g_object_set_data(G_OBJECT(app->window),"linux-async-actions-v16",NULL);
+  linux_multihop_progress_poll_v1(&hop);check(gtk_widget_get_sensitive(hop.entry_mode)&&gtk_widget_get_sensitive(hop.connect),"Idle hop controls did not recover");
+ }
+ g_free(previous);
  linux_multihop_select_preserving_v22(hop.entry_mode,"future-entry");check(!linux_multihop_can_connect_v22(&hop),"Unknown entry was advertised");linux_multihop_connect_v7(NULL,&hop);check(connected_count==before,"Unknown hop entry reached controller");choose(hop.entry_mode,"wg");json_array_add_string_element(hop.entry_modes,"wg");check(!linux_multihop_can_connect_v22(&hop),"Duplicate entry capability accepted");json_array_remove_element(hop.entry_modes,json_array_get_length(hop.entry_modes)-1);choose(hop.entry_mode,"");check(linux_multihop_can_connect_v22(&hop),"Empty legacy entry selection lost saved/base fallback");
  JsonArray*entries=hop.entry_modes;hop.entry_modes=NULL;check(!linux_multihop_can_connect_v22(&hop),"Missing entry catalog allowed fallback");hop.entry_modes=json_array_new();json_array_add_string_element(hop.entry_modes,"future-entry");check(!linux_multihop_can_connect_v22(&hop),"Unknown-only entry catalog allowed fallback");json_array_unref(hop.entry_modes);hop.entry_modes=entries;choose(hop.exit,"entry");check(!linux_multihop_can_connect_v22(&hop),"Same-node hop accepted");
  gtk_widget_destroy(hop.dialog);gtk_widget_destroy(hop.summary);gtk_widget_destroy(hop.connect);gtk_widget_destroy(hop.entry);gtk_widget_destroy(hop.exit);gtk_widget_destroy(hop.mode);gtk_widget_destroy(hop.entry_mode);gtk_widget_destroy(hop.execution);json_array_unref(hop.entry_modes);json_array_unref(hop.exit_modes);g_ptr_array_unref(hop.nodes);
@@ -192,9 +210,22 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Missing fixtu
         flags = subprocess.check_output(['pkg-config','--cflags','--libs','gtk+-3.0','json-glib-1.0'],text=True).split()
         phase = 'long phases = 4 * (alternatives * entry_phase + linux_multihop_initial_key_ms_v23(exit));'
         assert program.count(phase) == 1
+        busy_owner = 'return s != NULL && (s->closed || s->primary != NULL || s->stop != NULL || s->auxiliary_jobs != 0);'
+        busy_poll = 'gboolean busy = linux_async_busy_v16(state->app);'
+        busy_entry = 'gtk_widget_set_sensitive(state->entry_mode, !busy);'
+        for seam in (busy_owner, busy_poll, busy_entry):
+            assert program.count(seam) == 1, 'Actual async ownership seam drifted: ' + seam
         variants = {'shipping': program,
                     'missing-entry': program.replace(phase, 'long phases = 4 * (alternatives * entry_phase * 0 + linux_multihop_initial_key_ms_v23(exit));'),
-                    'missing-final-recheck': program.replace(phase, 'long phases = 2 * (alternatives * entry_phase + linux_multihop_initial_key_ms_v23(exit));')}
+                    'missing-final-recheck': program.replace(phase, 'long phases = 2 * (alternatives * entry_phase + linux_multihop_initial_key_ms_v23(exit));'),
+                    'missing-busy-owner': program.replace(busy_owner, 'return s != NULL && FALSE;'),
+                    'missing-busy-poll': program.replace(busy_poll, 'gboolean busy = FALSE;'),
+                    'enabled-busy-entry': program.replace(busy_entry, 'gtk_widget_set_sensitive(state->entry_mode, TRUE);')}
+        witnesses = {'missing-entry': 'Connect lost its captured native startup deadline',
+                     'missing-final-recheck': 'Connect lost its captured native startup deadline',
+                     'missing-busy-owner': 'Original pending owner was reported idle',
+                     'missing-busy-poll': 'Busy hop controls remained enabled',
+                     'enabled-busy-entry': 'Busy hop controls remained enabled'}
         for name, variant in variants.items():
             source, binary = directory/(name+'.c'), directory/name
             source.write_text(variant)
@@ -221,8 +252,8 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Missing fixtu
                     print('GTK actual controller catalog '+fault+': rejected')
                 catalog_path.write_text(json.dumps(catalog))
             else:
-                assert result.returncode != 0 and 'Connect lost its captured native startup deadline' in output, output
-                print('GTK captured startup control '+name+': rejected')
+                assert result.returncode != 0 and 'GTK profile check failed: '+witnesses[name] in output, output
+                print('GTK captured startup/async ownership control '+name+': rejected')
 
 
 if __name__ == '__main__':

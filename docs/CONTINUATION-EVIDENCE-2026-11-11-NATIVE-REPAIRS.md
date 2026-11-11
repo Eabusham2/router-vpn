@@ -7,6 +7,33 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## GTK profile fixture uses the original asynchronous owner
+
+Completed e1204aea Linux encrypted-runtime job
+[130833772714](https://github.com/Eabusham2/router-vpn/actions/runs/43112976450/job/130833772714)
+reached the real GTK profile fixture after its Speed Lab checks and failed
+with "Busy hop controls remained enabled". The fixture had hardcoded the
+shipping busy predicate to false while independently toggling mutation_busy.
+The shipping progress poll already consulted the real asynchronous owner.
+
+The fixture now composes the actual LinuxAsyncActionsV16 declaration,
+g_object_get_data lookup and busy predicate from the shipping include. Only
+the unused HTTP job payload is opaque. Each primary, stop, auxiliary and closed
+owner is installed on the original window and checked through real controls.
+Entry and saved selection remain unchanged, all graph controls are disabled,
+Connect cannot create another owner, and the controls recover after that
+specific pending owner is removed. Backend mutation-status rejection remains.
+
+The existing two startup-deadline and three catalog controls remain. Three
+additional source mutations must fail at their specific original-owner or
+busy-control assertions: a hidden owner, a bypassed poll predicate and an
+incorrectly enabled entry selector. Independent source comparison verified
+the actual busy function, declaration and existing forward prototype; seven
+JavaScript truth-table states preserved the intended busy/idle distinctions.
+This is source/model evidence, not Python, GCC or GTK execution. The actual
+native fixture still must pass in CI. No shipping application source or
+existing timeout changed.
+
 ## macOS ordered host and atomic graph ownership
 
 The thirteen-file host unit adds a retained Darwin ordered host to the existing
