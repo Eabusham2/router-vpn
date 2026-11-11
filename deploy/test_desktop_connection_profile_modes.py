@@ -102,13 +102,16 @@ import CoreFoundation
     var loaded: [String: Any] = [:]
     var busy = false
     var failLoad = false, malformedLoad = false
+    var afterStatus: (() -> Void)?
     var afterLoad: (() -> Void)?
+    var afterSetup: ((String) -> Void)?
+    var setupResponse: (([String: Any]) -> [String: Any])?
     var nodeReplies: [[String: Any]] = [], hopReplies: [[String: Any]] = []
     var orderedCapabilities: [String: Any] = ["ordered_nodes_supported": true]
     var orderedCurrent: [String: Any] = [:]
     var afterOrderedSnapshot: (() -> Void)?
     func json(_ path: String, timeout: TimeInterval = 5) throws -> Any {
-        if path == "/api/status" { return ["connected": busy, "phase": busy ? "connected" : "off"] }
+        if path == "/api/status" { afterStatus?(); return ["connected": busy, "phase": busy ? "connected" : "off"] }
         if path == "/api/multihop/status" { return orderedCapabilities }
         if path == "/api/profiles" { let captured = orderedCurrent; afterOrderedSnapshot?(); return captured }
         check(path.hasPrefix("/api/nodes?sort=") && !nodeReplies.isEmpty, "unexpected node catalog request")
@@ -130,7 +133,19 @@ import CoreFoundation
             if malformedLoad { return Data("[]".utf8) }
             afterLoad?()
         }
-        let result: [String: Any] = path.hasSuffix("/load") ? loaded : ["profile": ["name": body["name"] ?? "saved"]]
+        var result: [String: Any] = path.hasSuffix("/load") ? loaded : ["profile": ["name": body["name"] ?? "saved"]]
+        if ["/api/connection-profile/setup/save", "/api/connection-profile/setup/update"].contains(path) {
+            result = decoded
+            result["profile"] = ["name": body["name"] ?? "saved", "mode": body["mode"] ?? "smart-auto"]
+            result["selected_node_id"] = body["expected_selected_node_id"]
+            result["profile_tokens"] = body["expected_profile_tokens"]
+            if result["multihop_nodes"] == nil { result["multihop_nodes"] = NSNull() }
+        }
+        if path.hasPrefix("/api/connection-profile/setup/") {
+            check(decoded["expected_selected_node_id"] is String && decoded["expected_profile_tokens"] is [String: String], "setup request lost its original source capture")
+            if let setupResponse { result = setupResponse(result) }
+            afterSetup?(path)
+        }
         return try JSONSerialization.data(withJSONObject: result)
     }
 }
@@ -202,7 +217,7 @@ settings.popup.selectedItem?.representedObject = ["id": "saved-profile", "name":
 settings.name.stringValue = "Saved \"whole\" path"
 let toggle = NSButton(); toggle.identifier = NSView.Identifier(rawValue: "unified-multihop-toggle")
 owner.window?.contentView?.subviews = [toggle]
-let selectedID = "private-node", entryID = "entry \"private\"", exitID = "exit \"private\""
+let selectedID = "private-node", entryID = "entry_private", exitID = "exit_private"
 let expectedEntries = ["", "wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "ss-v2ray", "split", "max", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "openvpn"]
 check(RouterVPNNodeEntryModes.choices.map { $0.id } == expectedEntries, "entry mode catalog changed or reduced")
 let sourceTokens = [selectedID: String(repeating: "a", count: 64), entryID: String(repeating: "b", count: 64), exitID: String(repeating: "c", count: 64)]
@@ -224,10 +239,10 @@ let sourceTokens = [selectedID: String(repeating: "a", count: 64), entryID: Stri
     owner.basePopup.selectItem(at: 0)
 }
 @MainActor func verify(_ body: [String: Any], _ mode: String, _ execution: String, updating: Bool) {
-    var keys = Set(["name", "mode", "custom_layers", "multihop_enabled", "multihop_entry_id", "multihop_exit_id", "multihop_exit_mode", "multihop_execution", "multihop_entry_mode"])
+    var keys = Set(["expected_selected_node_id", "expected_profile_tokens", "name", "mode", "custom_layers", "multihop_enabled", "multihop_entry_id", "multihop_exit_id", "multihop_exit_mode", "multihop_execution", "multihop_entry_mode"])
     if updating { keys.insert("id") }
     check(Set(body.keys) == keys, "private fields copied or snapshot fields missing")
-    check(body["multihop_enabled"] as? Bool == true && body["multihop_entry_id"] as? String == "entry \"private\"" && body["multihop_exit_id"] as? String == "exit \"private\"", "exact graph identities changed")
+    check(body["multihop_enabled"] as? Bool == true && body["multihop_entry_id"] as? String == "entry_private" && body["multihop_exit_id"] as? String == "exit_private", "exact graph identities changed")
     check(body["multihop_exit_mode"] as? String == mode, "snapshot replaced the selected exit mode")
     check(body["multihop_execution"] as? String == execution, "snapshot replaced the selected execution")
     let entryIndex = (expectedModes.firstIndex(of: mode)! * 3 + executions.firstIndex(of: execution)!) % expectedEntries.count
@@ -237,7 +252,7 @@ let sourceTokens = [selectedID: String(repeating: "a", count: 64), entryID: Stri
 }
 @MainActor func loaded(_ body: [String: Any]) -> [String: Any] {
     var payload = body
-    payload["profile"] = ["name": "Loaded profile"]
+    payload["profile"] = ["name": "Loaded profile", "mode": body["mode"] ?? "smart-auto"]
     payload["selected_node_id"] = "private-node"
     payload["profile_tokens"] = sourceTokens
     payload["private_key"] = "never-copy"
@@ -249,6 +264,7 @@ for (m, mode) in expectedModes.enumerated() {
         // functions called by its native modal Add/Load/Update actions.
         choose(m, e)
         let add = try owner.connectionProfileSnapshot(name: settings.name.stringValue, id: nil)
+        verify(add, mode, execution, updating: false)
         _ = try owner.connectionProfilePOST("/api/connection-profile/setup/save", body: add)
         verify(owner.api.calls.last!.body, mode, execution, updating: false)
         let payload = loaded(add)
@@ -259,6 +275,7 @@ for (m, mode) in expectedModes.enumerated() {
         check(owner.api.calls.count == before, "profile manager Load auto-connected")
         check(try RouterVPNNodeExitModes.require(index: owner.multihopExitModePopup.indexOfSelectedItem) == mode, "profile manager Load changed the selected mode")
         let update = try owner.connectionProfileSnapshot(name: settings.name.stringValue, id: "saved-profile")
+        verify(update, mode, execution, updating: true)
         _ = try owner.connectionProfilePOST("/api/connection-profile/setup/update", body: update)
         verify(owner.api.calls.last!.body, mode, execution, updating: true)
 
@@ -365,6 +382,7 @@ let disabledSettings = try settings.currentMultihopSnapshot()
 check(!disabledSettings.enabled && disabledSettings.entry.isEmpty && disabledSettings.exit.isEmpty && disabledSettings.exitMode.isEmpty && disabledSettings.execution.isEmpty, "disabled Settings graph retained another graph")
 RACE_TESTS
 ORDERED_TESTS
+SETUP_TESTS
 print("Actual AppKit profiles, deferred catalogs and Settings Add/Load/Update callbacks: \(checks) checks PASS")
 '''
 
@@ -384,7 +402,7 @@ SWIFT_ORDERED = r'''
     return rows
 }
 @MainActor func verifyOrderedSnapshot(_ body: [String: Any], rows: [[String: String]], updating: Bool) {
-    var keys = Set(["name", "mode", "custom_layers", "multihop_enabled", "multihop_nodes", "multihop_execution"])
+    var keys = Set(["expected_selected_node_id", "expected_profile_tokens", "name", "mode", "custom_layers", "multihop_enabled", "multihop_nodes", "multihop_execution"])
     if updating { keys.insert("id") }
     check(Set(body.keys) == keys, "ordered save mixed pair fields or private credentials")
     check(body["multihop_nodes"] as? [[String: String]] == rows, "ordered save dropped, substituted or reordered a member")
@@ -400,7 +418,7 @@ for length in [2, 3, 4, 8] {
         _ = try settings.write(path: updating ? "/api/connection-profile/setup/update" : "/api/connection-profile/setup/save", updating: updating)
         verifyOrderedSnapshot(settings.api.calls.last!.body, rows: rows, updating: updating)
         var payload = snapshot
-        payload["profile"] = ["name": "Loaded ordered path"]; payload["selected_node_id"] = selection.selectedNodeID; payload["profile_tokens"] = selection.profileTokens
+        payload["profile"] = ["name": "Loaded ordered path", "mode": "shadowsocks"]; payload["selected_node_id"] = selection.selectedNodeID; payload["profile_tokens"] = selection.profileTokens
         owner.connectionProfileSelection?.orderedNodes = []
         try owner.applyLoadedConnectionProfile(payload)
         check(owner.captureConnectionProfileSelection().orderedNodes == rows, "manager Load lost a middle node")
@@ -508,6 +526,134 @@ check(owner.routerPopup.indexOfSelectedItem == -1, "malformed saved ordered path
 _ = chooseOrdered(); fixtureDefaults.set(false, forKey: macConnectionMultihopEnabledKey)
 let ordinary = try owner.connectionProfileSnapshot(name: "direct", id: nil)
 check(ordinary["multihop_nodes"] == nil && ordinary["multihop_enabled"] as? Bool == false, "disabled ordered draft contaminated a direct profile")
+DispatchQueue.clear()
+'''
+
+SWIFT_SETUP = r'''
+@MainActor func setupRows(_ count: Int = 4) -> [[String: String]] {
+    owner.api.afterSetup = nil; settings.api.afterSetup = nil
+    owner.api.setupResponse = nil; settings.api.setupResponse = nil
+    owner.api.afterLoad = nil; settings.api.afterLoad = nil
+    owner.api.afterStatus = nil; settings.api.afterStatus = nil
+    var rows = chooseOrdered(count)
+    for i in 0..<(count - 1) { rows[i]["mode"] = ["awg2-fast", "wg", "awg2-strong"][i % 3] }
+    owner.connectionProfileSelection?.orderedNodes = rows
+    owner.profiles[count - 1]["multihop_enabled"] = true
+    owner.profiles[count - 1]["multihop_nodes"] = rows
+    owner.profiles[count - 1]["multihop_execution"] = "local"
+    return rows
+}
+@MainActor func setupLoaded(_ rows: [[String: String]], tokens: [String: String]) -> [String: Any] {
+    ["profile": ["name": "Captured ordered setup", "mode": "shadowsocks"], "mode": "shadowsocks", "custom_layers": [String](),
+     "multihop_nodes": rows, "multihop_enabled": true, "multihop_execution": "local",
+     "selected_node_id": rows.last!["id"]!, "profile_tokens": tokens]
+}
+@MainActor func setupAction(_ manager: Bool, _ operation: String) throws {
+    if manager {
+        let body: [String: Any] = operation == "load" ? ["id": "saved-profile"] : try owner.connectionProfileSnapshot(name: "Original setup", id: operation == "update" ? "saved-profile" : nil)
+        let reply = try owner.connectionProfilePOST("/api/connection-profile/setup/" + operation, body: body)
+        if operation == "load" { try owner.applyLoadedConnectionProfile(reply) }
+    } else {
+        if operation == "load" { settings.loadProfile(); if settings.status.stringValue.hasPrefix("Load failed:") { throw RouterVPNOrderedNodes.issue(settings.status.stringValue) } }
+        else { _ = try settings.write(path: "/api/connection-profile/setup/" + operation, updating: operation == "update") }
+    }
+}
+for manager in [true, false] {
+    for count in [2, 3, 4, 8] { for operation in ["save", "update", "load"] {
+        let rows = setupRows(count), original = owner.captureConnectionProfileSelection()
+        let api = manager ? owner.api : settings.api
+        api.loaded = setupLoaded(rows, tokens: original.profileTokens)
+        let before = api.calls.count
+        try setupAction(manager, operation)
+        check(api.calls.count == before + 1, "setup action connected or duplicated its request")
+        let request = api.calls.last!.body
+        check(request["expected_selected_node_id"] as? String == original.selectedNodeID && request["expected_profile_tokens"] as? [String: String] == original.profileTokens,
+              "setup request lost complete original inventory")
+        check(owner.captureConnectionProfileSelection().orderedNodes == rows && owner.captureConnectionProfileSelection().profileTokens == original.profileTokens,
+              "finalized setup response lost a member mode or source receipt")
+        check(!String(data: try JSONSerialization.data(withJSONObject: request), encoding: .utf8)!.contains("private_key"), "setup request copied private sources")
+    } }
+    for operation in ["save", "update", "load"] { for fault in ["new-generation", "visible-off", "mode-change", "source-relinked"] {
+        let rows = setupRows(), original = owner.captureConnectionProfileSelection()
+        let api = manager ? owner.api : settings.api
+        api.loaded = setupLoaded(rows, tokens: original.profileTokens)
+        api.afterSetup = { _ in
+            if fault == "new-generation" { owner.recordVisibleConnectionProfileSelection() }
+            if fault == "visible-off" { fixtureDefaults.set(false, forKey: macConnectionMultihopEnabledKey) }
+            if fault == "mode-change" { fixtureDefaults.set("auto", forKey: macConnectionModeKey) }
+            if fault == "source-relinked" { owner.profiles[0]["profile_token"] = String(repeating: "f", count: 64) }
+        }
+        rejects({ try setupAction(manager, operation) }, "late setup response accepted " + fault)
+        if fault == "visible-off" { check(!fixtureDefaults.bool(forKey: macConnectionMultihopEnabledKey), "late setup response reversed a newer Off choice") }
+        if fault == "mode-change" { check(fixtureDefaults.string(forKey: macConnectionModeKey) == "auto", "late setup response replaced a newer mode") }
+    } }
+    for operation in ["save", "update"] { for fault in ["changed-token", "extra-token", "missing-token", "reordered-members", "changed-mode", "wrong-final-mode", "server-execution"] {
+        let rows = setupRows(), original = owner.captureConnectionProfileSelection(), generation = owner.connectionProfileSelectionGeneration
+        let api = manager ? owner.api : settings.api
+        api.setupResponse = { value in
+            var value = value
+            if ["changed-token", "extra-token", "missing-token"].contains(fault) {
+                var tokens = value["profile_tokens"] as! [String: String]
+                if fault == "changed-token" { tokens[rows[0]["id"]!] = String(repeating: "e", count: 64) }
+                if fault == "extra-token" { tokens["unrelated"] = String(repeating: "d", count: 64) }
+                if fault == "missing-token" { tokens.removeValue(forKey: rows[0]["id"]!) }
+                value["profile_tokens"] = tokens
+            }
+            if fault == "reordered-members" { var changed = rows; changed.swapAt(0, 1); value["multihop_nodes"] = changed }
+            if fault == "changed-mode" { var changed = rows; changed[0]["mode"] = "awg2-strong"; value["multihop_nodes"] = changed }
+            if fault == "wrong-final-mode" { value["profile"] = ["name": "Wrong mode", "mode": "smart-auto"] }
+            if fault == "server-execution" { value["multihop_execution"] = "server" }
+            return value
+        }
+        rejects({ try setupAction(manager, operation) }, "setup response accepted " + fault)
+        check(owner.captureConnectionProfileSelection() == original && owner.connectionProfileSelectionGeneration == generation,
+              "rejected setup response replaced original UI ownership")
+    } }
+    // The stored catalog has four members; the unsaved editor has three, and
+    // the loaded target has two with a different independently selected final.
+    let storedRows = setupRows(), oldControl = owner.captureConnectionProfileSelection().selectedNodeID
+    var draft = storedRows; draft.remove(at: 1); owner.connectionProfileSelection?.orderedNodes = draft
+    let originalTokens = try owner.connectionProfileCatalogTokens(owner.profiles)
+    let targetRows = [["id": "ordered-0", "mode": "awg2-fast"], ["id": "ordered-1", "mode": "shadowsocks"]]
+    let targetTokens = ["ordered-0": String(repeating: "a", count: 64), "ordered-1": String(repeating: "b", count: 64)]
+    let api = manager ? owner.api : settings.api
+    api.loaded = setupLoaded(targetRows, tokens: targetTokens)
+    try setupAction(manager, "load")
+    let request = api.calls.last!.body
+    check(request["expected_selected_node_id"] as? String == oldControl && request["expected_profile_tokens"] as? [String: String] == originalTokens,
+          "Load substituted draft or target sources for the original saved inventory")
+    check(owner.captureConnectionProfileSelection().selectedNodeID == "ordered-1" && owner.captureConnectionProfileSelection().orderedNodes == targetRows && owner.captureConnectionProfileSelection().profileTokens == targetTokens,
+          "Load did not retain its finalized target receipt")
+    check(owner.routerPopup.indexOfSelectedItem == -1, "changed Load target source was treated as an old resolved catalog node")
+    rejects({ _ = try owner.connectionProfileSnapshot(name: "Too early", id: nil) }, "changed Load receipt authorized a write before matching catalog confirmation")
+    var confirmed = owner.profiles
+    for index in confirmed.indices { if let id = confirmed[index]["id"] as? String, let token = targetTokens[id] { confirmed[index]["profile_token"] = token } }
+    confirmed[1]["multihop_enabled"] = true; confirmed[1]["multihop_nodes"] = targetRows; confirmed[1]["multihop_execution"] = "local"
+    let refresh = owner.beginConnectionProfileRefresh(hops: false)
+    check(try owner.applyConnectionProfileNodeCatalog(["profiles": confirmed, "selected_id": "ordered-1"], capture: refresh), "matching Load target catalog was discarded")
+    try setupAction(manager, "save")
+    check(api.calls.last!.body["expected_profile_tokens"] as? [String: String] == targetTokens, "later setup write reused the pre-Load source receipt")
+    let rows = setupRows(), original = owner.captureConnectionProfileSelection()
+    api.loaded = setupLoaded(rows, tokens: original.profileTokens)
+    api.setupResponse = { value in var value = value; var tokens = value["profile_tokens"] as! [String: String]; tokens["unrelated"] = String(repeating: "c", count: 64); value["profile_tokens"] = tokens; return value }
+    rejects({ try setupAction(manager, "load") }, "Load accepted unrelated response source receipts")
+    check(owner.routerPopup.indexOfSelectedItem == -1 && owner.connectionProfileCatalogSelectedID.isEmpty, "invalid Load retained resolved prior authority")
+}
+_ = setupRows()
+let staleBody = try owner.connectionProfileSnapshot(name: "Original On choice", id: nil)
+fixtureDefaults.set(false, forKey: macConnectionMultihopEnabledKey); owner.recordVisibleConnectionProfileSelection()
+let beforeStale = owner.api.calls.count
+rejects({ _ = try owner.connectionProfilePOST("/api/connection-profile/setup/save", body: staleBody) }, "old setup body overrode a newer Off choice before dispatch")
+check(owner.api.calls.count == beforeStale, "stale setup body reached transport")
+_ = setupRows()
+let modeBody = try owner.connectionProfileSnapshot(name: "Original mode", id: nil)
+let beforeModeChange = owner.api.calls.count
+owner.api.afterStatus = { fixtureDefaults.set("auto", forKey: macConnectionModeKey); owner.api.afterStatus = nil }
+rejects({ _ = try owner.connectionProfilePOST("/api/connection-profile/setup/save", body: modeBody) }, "status handoff sent a setup after its original mode changed")
+check(owner.api.calls.count == beforeModeChange, "mode-stale setup reached transport")
+_ = setupRows(); let oldCatalog = owner.beginConnectionProfileRefresh(hops: false), oldProfiles = owner.profiles
+try setupAction(true, "save")
+check(!(try owner.applyConnectionProfileNodeCatalog(["profiles": oldProfiles, "selected_id": "ordered-3"], capture: oldCatalog)), "pre-save catalog reply replaced finalized source ownership")
 DispatchQueue.clear()
 '''
 
@@ -656,6 +802,7 @@ owner.multihopEntryPopup.selectItem(at: 1); let candidates = owner.candidatesOpe
 check(owner.captureConnectionProfileSelection() == previousBusy && owner.candidatesOpened == candidates, "busy entry action changed selection or opened candidates")
 owner.api.busy = false; MacViaEntryCandidateReservation.shared.active = true
 rejects({ try owner.applyLoadedConnectionProfile(busyPayload) }, "candidate-owned path accepted manager Load")
+rejects({ try settings.applyLoadedMultihop(busyPayload) }, "active path accepted direct Settings Load delivery")
 let candidatePosts = settings.api.calls.count; settings.addProfile(); settings.updateProfile()
 check(settings.api.calls.count == candidatePosts, "candidate-owned path accepted Settings Add/Update")
 MacViaEntryCandidateReservation.shared.active = false
@@ -725,7 +872,7 @@ def swift_source():
         product_methods += "\n" + block(telemetry,marker)
     for marker in ("    func refreshAll()", "    func refreshProfiles()", "    func refreshProfiles(order:", "    func refreshAdvanced()", "    @objc func multihopExecutionChanged()"):
         product_methods += "\n" + block(product, marker)
-    for marker in ("    func connectionProfileSnapshot(", "    private func connectionProfilePOST(", "    private func applyLoadedConnectionProfile("):
+    for marker in ("    func connectionProfileSnapshot(", "    func connectionProfilePOST(", "    private func applyLoadedConnectionProfile("):
         product_methods += "\n" + block(profiles, marker)
     settings_methods = "\n".join(block(settings, marker) for marker in (
         "    private func requireIdle(", "    private func selectedID(",
@@ -741,7 +888,7 @@ def swift_source():
     methods = methods.replace("@objc ", "").replace("private func ", "func ")
     # Rename only the queue boundary so Swift does not apply its special
     # DispatchQueue.global inference to the deterministic value-only scheduler.
-    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
+    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED).replace("SETUP_TESTS", SWIFT_SETUP)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
 
 
 def replace_once(source, old, new):
@@ -791,13 +938,27 @@ def macos(directory):
         "ordered-middle-source": replace_once(source, 'matches[0]["profile_token"] as? String == token', 'true'),
         "ordered-capability": replace_once(source, 'CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue', 'true, true'),
         "ordered-request-owner": replace_once(source, 'self.connectionProfileSelectionGeneration == generation &&', 'true &&'),
-        "ordered-locked-source-preconditions": replace_once(source, '"expected_profile_tokens": tokens', '"expected_profile_tokens": [String: String]()'),
+        "ordered-locked-source-preconditions": replace_once(source, 'return ["nodes": rows, "execution": "local", "expected_selected_node_id": selection.selectedNodeID,\n                "expected_profile_tokens": tokens]', 'return ["nodes": rows, "execution": "local", "expected_selected_node_id": selection.selectedNodeID,\n                "expected_profile_tokens": [String: String]()]'),
     }
+    setup_variants = {
+        "setup-source-preconditions": ('request.merge(expected) { _, original in original }', 'request.removeValue(forKey: "expected_profile_tokens")', "setup request lost its original source capture"),
+        "setup-generation": ('connectionProfileSelectionGeneration == admittedGeneration,', 'true,', "late setup response accepted new-generation"),
+        "setup-mode": ('guard connectionProfileSelectionGeneration == admittedGeneration, captureConnectionProfileSelection() == original,\n              UserDefaults.standard.string(forKey: macConnectionModeKey) == mode,', 'guard connectionProfileSelectionGeneration == admittedGeneration, captureConnectionProfileSelection() == original,\n              true,', "late setup response accepted mode-change"),
+        "setup-live-source": ('originals.allSatisfy({ current[$0.key] == $0.value })', 'true', "late setup response accepted source-relinked"),
+        "setup-response-source": ('response["profile_tokens"] as? [String: String] == body["expected_profile_tokens"] as? [String: String]', 'true', "setup response accepted changed-token"),
+        "setup-response-order": ('finalized.orderedNodes == wanted', 'true', "setup response accepted reordered-members"),
+        "setup-load-inventory": ('let graph = loading || external ? matches[0] : body', 'let graph = external ? matches[0] : body', "setup request lost complete original inventory"),
+        "setup-response-inventory": ('Set(tokens.keys) == referenced,', 'true,', "Load accepted unrelated response source receipts"),
+        "setup-stale-body": ('if writing && !(profiles.first(where:', 'if false && !(profiles.first(where:', "old setup body overrode a newer Off choice before dispatch"),
+    }
+    for name, (old, new, _) in setup_variants.items():
+        variants[name] = replace_once(source, old.replace("UserDefaults.standard", "fixtureDefaults"), new)
     for name, program in variants.items():
         path, binary = directory / (name + ".swift"), directory / name
         path.write_text(program, encoding="utf-8")
         run(["swiftc", "-swift-version", "6", "-module-cache-path", str(directory / "swift-module-cache"), str(path), "-o", str(binary)])
-        run([str(binary)], negative=name != "shipping")
+        run([str(binary)], negative=name != "shipping", witness=setup_variants[name][2] if name in setup_variants else None)
+        if name != "shipping": print("PASS causal AppKit " + name, flush=True)
     print(f"AppKit capture, refresh ownership, relink and post-response idle negatives: {len(variants) - 1} rejected")
 
 

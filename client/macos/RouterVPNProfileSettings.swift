@@ -292,22 +292,21 @@ private final class MacConnectionProfileControls: NSObject {
         try requireIdle(updating ? "updating a connection profile" : "adding a connection profile")
         let clean = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 2, userInfo: [NSLocalizedDescriptionKey: "Enter a profile name."]) }
-        if let owner, owner.captureConnectionProfileSelection().multihopEnabled,
+        guard let owner else { throw RouterVPNOrderedNodes.issue("Reopen Settings from the current Router VPN window.") }
+        if owner.captureConnectionProfileSelection().multihopEnabled,
            !owner.captureConnectionProfileSelection().orderedNodes.isEmpty {
             let body = try owner.connectionProfileSnapshot(name: clean, id: updating ? try selectedID() : nil)
-            let data = try api.request(path, method: "POST", body: body, timeout: 10)
-            return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+            return try owner.connectionProfilePOST(path, body: body, transport: api)
         }
-        let snapshot = macCurrentConnectionModeSnapshot()
         let hops = try currentMultihopSnapshot()
+        let snapshot = macCurrentConnectionModeSnapshot()
         var body: [String: Any] = [
             "name": clean, "mode": snapshot.mode, "custom_layers": snapshot.layers,
             "multihop_enabled": hops.enabled, "multihop_entry_id": hops.entry,
             "multihop_exit_id": hops.exit, "multihop_exit_mode": hops.exitMode, "multihop_execution": hops.execution, "multihop_entry_mode": hops.entryMode
         ]
         if updating { body["id"] = try selectedID() }
-        let data = try api.request(path, method: "POST", body: body, timeout: 10)
-        return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        return try owner.connectionProfilePOST(path, body: body, transport: api)
     }
 
     @objc private func addProfile() {
@@ -328,9 +327,7 @@ private final class MacConnectionProfileControls: NSObject {
                 throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 6, userInfo: [NSLocalizedDescriptionKey: "Reopen Settings from the current Router VPN window."])
             }
             try owner.requireMutationIdle("loading a connection profile")
-            owner.beginConnectionProfileLoad()
-            let data = try api.request("/api/connection-profile/setup/load", method: "POST", body: ["id": id], timeout: 12)
-            let rootJSON = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+            let rootJSON = try owner.connectionProfilePOST("/api/connection-profile/setup/load", body: ["id": id], transport: api)
             try applyLoadedMultihop(rootJSON)
             macApplyLoadedConnectionMode(rootJSON)
             let loaded = rootJSON["profile"] as? [String: Any]

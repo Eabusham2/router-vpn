@@ -374,7 +374,7 @@ extension ProductWindowController {
             capture.selection == captureConnectionProfileSelection()
     }
 
-    func validatedLoadedConnectionProfileSelection(_ payload: [String: Any]) throws -> RouterVPNConnectionProfileSelection {
+    func validatedLoadedConnectionProfileSelection(_ payload: [String: Any], fromCatalog: Bool = false) throws -> RouterVPNConnectionProfileSelection {
         let stored = payload["profile"] as? [String: Any]
         let external = stored?["external_policy"] is [String: Any]
         var selection = RouterVPNConnectionProfileSelection(
@@ -387,10 +387,11 @@ extension ProductWindowController {
             execution: payload["multihop_execution"] as? String ?? "local")
         let tokens = payload["profile_tokens"] as? [String: String] ?? [:]
         var referenced = Set([selection.selectedNodeID])
-        if let raw = payload["multihop_nodes"] {
+        if let raw = payload["multihop_nodes"], !(raw is NSNull) {
             selection.orderedNodes = try RouterVPNOrderedNodes.decode(raw, control: selection.selectedNodeID)
             guard !external, selection.multihopEnabled, selection.execution == "local",
-                  selection.entryID.isEmpty, selection.exitID.isEmpty, selection.entryMode == "", selection.exitMode.isEmpty else {
+                  selection.entryID.isEmpty, selection.exitID.isEmpty, selection.entryMode == "", selection.exitMode.isEmpty,
+                  fromCatalog || stored?["mode"] as? String == "shadowsocks" else {
                 throw RouterVPNOrderedNodes.issue("The loaded ordered path mixes an independent entry, exit or execution.")
             }
             referenced.formUnion(selection.orderedNodes.compactMap { $0["id"] })
@@ -403,7 +404,11 @@ extension ProductWindowController {
             }
             referenced.formUnion([selection.entryID, selection.exitID])
         }
-        guard !selection.selectedNodeID.isEmpty, referenced.allSatisfy({ validConnectionProfileToken(tokens[$0]) }) else {
+        if external && (payload["multihop_enabled"] as? Bool ?? false) {
+            referenced.formUnion([selection.entryID, selection.exitID])
+        }
+        guard !selection.selectedNodeID.isEmpty, !referenced.contains(""), Set(tokens.keys) == referenced,
+              referenced.allSatisfy({ validConnectionProfileToken(tokens[$0]) }) else {
             throw NSError(domain: "RouterVPN.ConnectionProfile", code: 4, userInfo: [NSLocalizedDescriptionKey: "The loaded setup has no captured node source identities. Reload it with the matching controller."])
         }
         selection.profileTokens = tokens.filter { referenced.contains($0.key) }
@@ -467,10 +472,13 @@ extension ProductWindowController {
         let adoptNodeDefaults = selection.selectedNodeID.isEmpty || selection.nodeDefaultsPending
         if selection.selectedNodeID.isEmpty { selection.selectedNodeID = selected }
         if adoptNodeDefaults && selection.selectedNodeID == selected {
-            if let profile = nodes.first(where: { $0["id"] as? String == selected }), let raw = profile["multihop_nodes"] {
+            if let profile = nodes.first(where: { $0["id"] as? String == selected }), let raw = profile["multihop_nodes"], !(raw is NSNull) {
+                let members = try RouterVPNOrderedNodes.decode(raw, control: selected)
+                let referenced = Set(members.compactMap { $0["id"] } + [selected])
                 var payload = profile
-                payload["multihop_nodes"] = raw; payload["selected_node_id"] = selected; payload["profile_tokens"] = tokens
-                selection = try validatedLoadedConnectionProfileSelection(payload)
+                payload["multihop_nodes"] = raw; payload["selected_node_id"] = selected
+                payload["profile_tokens"] = tokens.filter { referenced.contains($0.key) }
+                selection = try validatedLoadedConnectionProfileSelection(payload, fromCatalog: true)
                 UserDefaults.standard.set(selection.multihopEnabled, forKey: macConnectionMultihopEnabledKey)
             }
             selection.nodeDefaultsPending = false
@@ -523,6 +531,78 @@ extension ProductWindowController {
         multihopExitPopup.selectItem(at: connectionProfileIdentityIndex(selection.exitID, ids: ids, tokens: tokens, selection: selection))
         refreshUnifiedHopOverlay()
         return true
+    }
+
+    func connectionProfileSetupExpectations(_ body: [String: Any], selection: RouterVPNConnectionProfileSelection, loading: Bool) throws -> [String: Any] {
+        let selected = selection.selectedNodeID
+        if loading && selected.isEmpty && connectionProfileCatalogSelectedID.isEmpty {
+            return ["expected_selected_node_id": "", "expected_profile_tokens": [String: String]()]
+        }
+        let matches = profiles.filter { $0["id"] as? String == selected }
+        guard selected.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
+              connectionProfileCatalogSelectedID == selected, matches.count == 1,
+              selection.profileTokens[selected] == matches[0]["profile_token"] as? String else {
+            throw RouterVPNOrderedNodes.issue("The original selected node is unresolved or changed. Refresh before changing a connection profile.")
+        }
+        let external = matches[0]["node_kind"] as? String == "external"
+        // Load protects the current saved selection, independently of the
+        // target record or an unsaved ordered editor draft.
+        let graph = loading || external ? matches[0] : body
+        var ids = Set([selected])
+        if graph["multihop_enabled"] as? Bool == true {
+            if let raw = graph["multihop_nodes"], !(raw is NSNull) {
+                ids.formUnion(try RouterVPNOrderedNodes.decode(raw, control: selected).compactMap { $0["id"] })
+            } else {
+                guard let entry = graph["multihop_entry_id"] as? String, let exit = graph["multihop_exit_id"] as? String,
+                      !entry.isEmpty, !exit.isEmpty else {
+                    throw RouterVPNOrderedNodes.issue("The original connection profile has an incomplete node selection.")
+                }
+                ids.formUnion([entry, exit])
+            }
+        }
+        let catalog = try connectionProfileCatalogTokens(profiles)
+        let originals = loading || external ? catalog : selection.profileTokens
+        var tokens: [String: String] = [:]
+        for id in ids {
+            guard id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
+                  let token = originals[id], validConnectionProfileToken(token), catalog[id] == token else {
+                throw RouterVPNOrderedNodes.issue("An original connection node changed or was relinked. Refresh before continuing.")
+            }
+            tokens[id] = token
+        }
+        return ["expected_selected_node_id": selected, "expected_profile_tokens": tokens]
+    }
+
+    func confirmedConnectionProfileSave(_ response: [String: Any], body: [String: Any], original: RouterVPNConnectionProfileSelection) throws -> RouterVPNConnectionProfileSelection {
+        let finalized = try validatedLoadedConnectionProfileSelection(response)
+        guard finalized.selectedNodeID == original.selectedNodeID,
+              response["profile_tokens"] as? [String: String] == body["expected_profile_tokens"] as? [String: String] else {
+            throw RouterVPNOrderedNodes.issue("The saved profile response replaced an original selected node or source.")
+        }
+        let wanted = body["multihop_nodes"] as? [[String: String]] ?? []
+        guard finalized.orderedNodes == wanted else {
+            throw RouterVPNOrderedNodes.issue("The saved profile response changed the original ordered path.")
+        }
+        let external = (response["profile"] as? [String: Any])?["external_policy"] is [String: Any]
+        if !external {
+            guard finalized.multihopEnabled == (body["multihop_enabled"] as? Bool ?? false),
+                  finalized.entryID == (body["multihop_entry_id"] as? String ?? ""),
+                  finalized.exitID == (body["multihop_exit_id"] as? String ?? ""),
+                  (response["profile"] as? [String: Any])?["mode"] as? String == body["mode"] as? String else {
+                throw RouterVPNOrderedNodes.issue("The saved profile response changed the requested node selection.")
+            }
+            if finalized.multihopEnabled && wanted.isEmpty {
+                let entryMode = body["multihop_entry_mode"] as? String ?? ""
+                guard finalized.exitMode == body["multihop_exit_mode"] as? String,
+                      finalized.execution == body["multihop_execution"] as? String,
+                      entryMode.isEmpty || finalized.entryMode == entryMode else {
+                    throw RouterVPNOrderedNodes.issue("The saved profile response changed the requested path transports.")
+                }
+            }
+        }
+        var retained = original
+        retained.profileTokens.merge(finalized.profileTokens) { _, source in source }
+        return retained
     }
 
     @objc func manageConnectionProfiles() {
@@ -597,6 +677,7 @@ extension ProductWindowController {
             var body: [String: Any] = ["name": name, "mode": "shadowsocks", "custom_layers": [String](),
                 "multihop_enabled": true, "multihop_nodes": selectedPath.orderedNodes, "multihop_execution": "local"]
             if let id { body["id"] = id }
+            body.merge(try connectionProfileSetupExpectations(body, selection: selectedPath, loading: false)) { _, original in original }
             return body
         }
         let mode = UserDefaults.standard.string(forKey: macConnectionModeKey) ?? "smart-auto"
@@ -621,14 +702,73 @@ extension ProductWindowController {
             "multihop_execution": multihop ? multihopExecutionChoice() : "",
         ]
         if let id { body["id"] = id }
+        body.merge(try connectionProfileSetupExpectations(body, selection: selectedPath, loading: false)) { _, original in original }
         return body
     }
 
-    private func connectionProfilePOST(_ path: String, body: [String: Any]) throws -> [String: Any] {
+    func connectionProfilePOST(_ path: String, body: [String: Any], transport: ProductAPI? = nil) throws -> [String: Any] {
+        let original = captureConnectionProfileSelection()
+        let generation = connectionProfileSelectionGeneration
+        let mode = UserDefaults.standard.string(forKey: macConnectionModeKey)
+        let presets = UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey)
         try requireMutationIdle("changing a connection profile")
-        if path == "/api/connection-profile/setup/load" { beginConnectionProfileLoad() }
-        let data = try api.request(path, method: "POST", body: body, timeout: 15)
+        let loading = path == "/api/connection-profile/setup/load"
+        let writing = path == "/api/connection-profile/setup/save" || path == "/api/connection-profile/setup/update"
+        var request = body
+        if writing && !(profiles.first(where: { $0["id"] as? String == original.selectedNodeID })?["node_kind"] as? String == "external") {
+            guard body["multihop_enabled"] as? Bool == original.multihopEnabled else {
+                throw RouterVPNOrderedNodes.issue("The visible multihop choice changed before its setup request.")
+            }
+            if original.multihopEnabled {
+                let ordered = body["multihop_nodes"] as? [[String: String]] ?? []
+                guard ordered == original.orderedNodes,
+                      !ordered.isEmpty || (body["multihop_entry_id"] as? String == original.entryID &&
+                        body["multihop_exit_id"] as? String == original.exitID &&
+                        body["multihop_entry_mode"] as? String == original.entryMode &&
+                        body["multihop_exit_mode"] as? String == original.exitMode &&
+                        body["multihop_execution"] as? String == original.execution) else {
+                    throw RouterVPNOrderedNodes.issue("The original path changed before its setup request.")
+                }
+            }
+        }
+        if loading || writing {
+            let expected = try connectionProfileSetupExpectations(body, selection: original, loading: loading)
+            if body["expected_selected_node_id"] != nil || body["expected_profile_tokens"] != nil {
+                guard body["expected_selected_node_id"] as? String == expected["expected_selected_node_id"] as? String,
+                      body["expected_profile_tokens"] as? [String: String] == expected["expected_profile_tokens"] as? [String: String] else {
+                    throw RouterVPNOrderedNodes.issue("The original setup source capture changed before its request.")
+                }
+            }
+            request.merge(expected) { _, original in original }
+        }
+        guard connectionProfileSelectionGeneration == generation, captureConnectionProfileSelection() == original,
+              UserDefaults.standard.string(forKey: macConnectionModeKey) == mode,
+              UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey) == presets else {
+            throw RouterVPNOrderedNodes.issue("The selected path changed before the profile request.")
+        }
+        if loading { beginConnectionProfileLoad() }
+        let admittedGeneration = connectionProfileSelectionGeneration
+        let data = try (transport ?? api).request(path, method: "POST", body: request, timeout: 15)
         guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw NSError(domain: "RouterVPN.ConnectionProfile", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connection profile endpoint returned invalid JSON."]) }
+        try requireMutationIdle("adopting the captured connection profile response")
+        guard connectionProfileSelectionGeneration == admittedGeneration, captureConnectionProfileSelection() == original,
+              UserDefaults.standard.string(forKey: macConnectionModeKey) == mode,
+              UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey) == presets else {
+            throw RouterVPNOrderedNodes.issue("The displayed path changed while its profile request was completing. Refresh before continuing.")
+        }
+        if loading || writing {
+            let originals = request["expected_profile_tokens"] as? [String: String] ?? [:]
+            let current = try connectionProfileCatalogTokens(profiles)
+            guard originals.allSatisfy({ current[$0.key] == $0.value }) else {
+                throw RouterVPNOrderedNodes.issue("An original node changed while the profile request was completing.")
+            }
+        }
+        if writing {
+            let retained = try confirmedConnectionProfileSave(value, body: request, original: original)
+            adoptLoadedConnectionProfileSelection(retained)
+        } else if loading {
+            _ = try validatedLoadedConnectionProfileSelection(value)
+        }
         return value
     }
 
