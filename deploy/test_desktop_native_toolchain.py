@@ -552,7 +552,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                     self.assertIs(options['env'], env)
                     previous = calls[-1]
                     self.assertEqual(previous[:2], ['go', 'test'])
-                    self.assertEqual(previous[previous.index('-run')+1], '^TestRouterVPNDesktop(Tor|External)')
+                    self.assertEqual(previous[previous.index('-run')+1], '^TestRouterVPN(Desktop(Tor|External|NodeChain)|NodeChain)')
                     dnssec_destination = Path(destination)
                     self.assertFalse(dnssec_destination.exists())
                     # These bytes model the producer boundary; they are never
@@ -562,18 +562,27 @@ class NativeSocketUIDGate(unittest.TestCase):
                     return dnssec_destination
 
                 original_load = N.load
-                with patch.object(N, 'load', side_effect=lambda name, path: PHYSICAL if path == 'test_windows_node_physical.py' else original_load(name, path)), \
-                     patch.object(PHYSICAL, 'checked_sources', side_effect=lambda value: (value, {'modeled-source': 'a'*64})), \
-                     patch.object(N, 'environment', return_value=env), patch.object(N, 'run', side_effect=run), \
-                     patch.object(N.GO_SOCKETS, 'environment', side_effect=lambda **options: options['env']) as go_sockets, \
-                     patch.object(N.platform, 'system', return_value={'darwin': 'Darwin', 'linux': 'Linux', 'windows': 'Windows'}[system]), \
-                     patch.object(N.platform, 'machine', return_value='x86_64' if arch == 'amd64' else 'arm64'), \
-                     patch.object(N, 'pristine'), patch.object(N.PQ, 'verify', return_value={'native_static_libs': []}), \
-                     patch.object(N.POLICY, 'prepare_native'), patch.object(N.PERFORMANCE, 'prepare'), \
-                     patch.object(N.OPENVPN, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
-                     patch.object(N.EXTERNAL, 'prepare'), patch.object(N.POLICY.AMNEZIA, 'verify'), \
-                     patch.object(N.DNSSEC, 'build', side_effect=build_dnssec) as dnssec, \
-                     patch.object(N, 'stage_cronet', side_effect=stage_cronet):
+                # Each comma-separated context consumes a compiler block in
+                # Python 3.12. Keep every original boundary and reverse cleanup
+                # order without exceeding that interpreter's nesting limit.
+                with contextlib.ExitStack() as boundaries:
+                    boundaries.enter_context(patch.object(N, 'load', side_effect=lambda name, path: PHYSICAL if path == 'test_windows_node_physical.py' else original_load(name, path)))
+                    boundaries.enter_context(patch.object(PHYSICAL, 'checked_sources', side_effect=lambda value: (value, {'modeled-source': 'a'*64})))
+                    boundaries.enter_context(patch.object(N, 'environment', return_value=env))
+                    boundaries.enter_context(patch.object(N, 'run', side_effect=run))
+                    go_sockets = boundaries.enter_context(patch.object(N.GO_SOCKETS, 'environment', side_effect=lambda **options: options['env']))
+                    boundaries.enter_context(patch.object(N.platform, 'system', return_value={'darwin': 'Darwin', 'linux': 'Linux', 'windows': 'Windows'}[system]))
+                    boundaries.enter_context(patch.object(N.platform, 'machine', return_value='x86_64' if arch == 'amd64' else 'arm64'))
+                    boundaries.enter_context(patch.object(N, 'pristine'))
+                    boundaries.enter_context(patch.object(N.PQ, 'verify', return_value={'native_static_libs': []}))
+                    boundaries.enter_context(patch.object(N.POLICY, 'prepare_native'))
+                    boundaries.enter_context(patch.object(N.PERFORMANCE, 'prepare'))
+                    boundaries.enter_context(patch.object(N.OPENVPN, 'prepare'))
+                    boundaries.enter_context(patch.object(N.BUFFERS, 'prepare'))
+                    boundaries.enter_context(patch.object(N.EXTERNAL, 'prepare'))
+                    boundaries.enter_context(patch.object(N.POLICY.AMNEZIA, 'verify'))
+                    dnssec = boundaries.enter_context(patch.object(N.DNSSEC, 'build', side_effect=build_dnssec))
+                    boundaries.enter_context(patch.object(N, 'stage_cronet', side_effect=stage_cronet))
                     expected_error = desktop_pt_failure or physical_failure or command_retirement_failure or darwin_route_failure or forwarder_failure or socks_reference_failure or proxy_reference_failure or connect_reference_failure or packet_reference_failure or dns_reference_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
                                                           openvpn_failure if openvpn_failure is not None and system == 'linux' else CompilerBoundary)
                     with self.assertRaises(expected_error) as caught:
@@ -719,7 +728,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                     self.assertFalse(any(len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_guardian.py') for args in calls))
                     continue
                 box = [args for args in calls if args[:2] == ['go', 'test'] and '.' in args and
-                       '-run' in args and args[args.index('-run')+1] == '^TestRouterVPNDesktop(Tor|External)']
+                       '-run' in args and args[args.index('-run')+1] == '^TestRouterVPN(Desktop(Tor|External|NodeChain)|NodeChain)']
                 self.assertEqual(len(box), 1, 'Native build omitted the complete Box family suite')
                 self.assertEqual([arg for arg in box[0] if arg.startswith('-timeout=')],
                                  ['-timeout=180s' if system == 'linux' else '-timeout=120s'])
@@ -1310,10 +1319,10 @@ class DarwinNativeEnvironment(unittest.TestCase):
                             return imported_native_dns_output()
                         package = args[args.index('-ldflags=-checklinkname=0')+1]
                         expected = {
-                            './cmd/sing-box': '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU)',
+                            './cmd/sing-box': '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU|NodeChain)',
                             './routervpn/mobiletor': '^TestDesktopSocket',
-                            './route': '^TestRouterVPNDesktopTorNetwork',
-                            '.': '^TestRouterVPNDesktopTor',
+                            './route': '^TestRouterVPN(DesktopTorNetwork|NodeChain)',
+                            '.': '^TestRouterVPN(Desktop(Tor|External|NodeChain)|NodeChain)',
                         }
                         self.assertIn(package, expected)
                         self.assertIn(expected[package], args)
