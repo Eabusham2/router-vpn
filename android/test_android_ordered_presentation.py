@@ -72,7 +72,7 @@ final class PresentationObservation {
     harness = U.HARNESS[:U.HARNESS.index("public final class NodeUsageTest")] + "public final class NodeUsageTest {static int checks;\n"
     harness += "\n".join(U.S.block(U.HARNESS, sig) for sig in ("static void check(", "static void await(", "static final class Callback", "static JSONObject bundle(", "static final class Fixture", "static AndroidNodeStore.ChainCapture ordered(", "static JSONObject orderedProgress("))
     harness += TEST + "}"
-    jar = Path(os.environ["ANDROID_JSON_JAR"])
+    jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
     with tempfile.TemporaryDirectory(prefix="routervpn-ordered-ui-") as work, tempfile.TemporaryDirectory(prefix=".ordered-ui-json-", dir=ROOT) as go_dir:
         root = Path(work)
         go_source = Path(go_dir) / "main.go"
