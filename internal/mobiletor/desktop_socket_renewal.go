@@ -15,6 +15,13 @@ import (
 // Sixteen complete grants and receipts fit the unchanged 32 KiB Darwin frame.
 const desktopSocketRenewalLimit = 16
 
+// Queue before one preceding native operation and this group's own operation
+// can consume their existing guardian budgets. The polling allowance is the
+// actual monitor interval; neither value extends an acknowledged receipt.
+// More queued work can still exceed the five-second readback window and must
+// retain the ordinary expiry/retirement path instead of borrowing freshness.
+const desktopSocketRenewalLead = 2*desktopSocketNativeWork + desktopSocketMonitorInterval
+
 type desktopSocketRenewal struct {
 	context context.Context
 	grant   DesktopSocketGrant
@@ -163,7 +170,7 @@ func (b *DesktopSocketBroker) refreshRenewals(sockets []*desktopSocket) bool {
 			}
 			until := desktopSocketRenewalUntil(receipt)
 			candidates = append(candidates, desktopSocketRenewalPeer{socket, peer, until, receipt.Grant.Remote})
-			if until-time.Now().UnixMilli() <= desktopSocketControlWait.Milliseconds() {
+			if until-time.Now().UnixMilli() <= desktopSocketRenewalLead.Milliseconds() {
 				due = true
 			}
 		}
@@ -234,7 +241,7 @@ func (b *DesktopSocketBroker) refreshRenewals(sockets []*desktopSocket) bool {
 		return true
 	}
 	for _, candidate := range candidates {
-		if len(group) == desktopSocketRenewalLimit || len(group) == 0 && candidate.until-time.Now().UnixMilli() > desktopSocketControlWait.Milliseconds() {
+		if len(group) == desktopSocketRenewalLimit || len(group) == 0 && candidate.until-time.Now().UnixMilli() > desktopSocketRenewalLead.Milliseconds() {
 			break
 		}
 		if selected[candidate.peer] {
@@ -248,7 +255,7 @@ func (b *DesktopSocketBroker) refreshRenewals(sockets []*desktopSocket) bool {
 				continue
 			}
 			control.mu.Lock()
-			pending := control.applying || desktopSocketRenewalUntil(control.receipt)-time.Now().UnixMilli() <= desktopSocketControlWait.Milliseconds()
+			pending := control.applying || desktopSocketRenewalUntil(control.receipt)-time.Now().UnixMilli() <= desktopSocketRenewalLead.Milliseconds()
 			control.mu.Unlock()
 			if pending && !selected[control] {
 				// A due child may have the earlier deadline after a genuine

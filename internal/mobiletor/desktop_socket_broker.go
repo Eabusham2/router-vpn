@@ -16,11 +16,13 @@ import (
 )
 
 const (
-	DesktopSocketLimit       = 128
-	DesktopSocketPeerLimit   = 32
-	DesktopSocketGrantMaxAge = 10 * time.Second
-	DesktopSocketReadbackAge = 5 * time.Second
-	desktopSocketControlWait = 3 * time.Second
+	DesktopSocketLimit           = 128
+	DesktopSocketPeerLimit       = 32
+	DesktopSocketGrantMaxAge     = 10 * time.Second
+	DesktopSocketReadbackAge     = 5 * time.Second
+	desktopSocketControlWait     = 3 * time.Second
+	desktopSocketNativeWork      = 2 * time.Second
+	desktopSocketMonitorInterval = 100 * time.Millisecond
 )
 
 // DesktopSocketCapture identifies one immutable native source and one physical
@@ -696,7 +698,7 @@ func (s *desktopSocket) finishApply(ctx context.Context, peer *desktopSocketPeer
 
 func (b *DesktopSocketBroker) monitorOwned() {
 	defer close(b.monitor)
-	tick := time.NewTicker(100 * time.Millisecond)
+	tick := time.NewTicker(desktopSocketMonitorInterval)
 	defer tick.Stop()
 	for {
 		select {

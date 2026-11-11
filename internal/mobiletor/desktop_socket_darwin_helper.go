@@ -163,7 +163,7 @@ func RunDesktopDarwinSocketHelper(role string) error {
 		sequence = next.Sequence
 		reply := desktopDarwinReply{Sequence: sequence, Capture: g.capture}
 		var transferred *os.File
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), desktopSocketNativeWork)
 		ctx = desktopDarwinObserveRequest(ctx, g.capture, g.owner, sequence, next.Operation)
 		ctx = context.WithValue(ctx, desktopDarwinObservationOutputKey{}, observation)
 		switch next.Operation {

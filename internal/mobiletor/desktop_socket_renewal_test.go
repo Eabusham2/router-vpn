@@ -104,14 +104,26 @@ func (p *desktopRenewalFixture) renewSocketsAdmitted(ctx context.Context, member
 
 func TestDesktopSocketRenewalGroupRetainsQueuedOriginalStreams(t *testing.T) {
 	for _, count := range []int{8, desktopSocketRenewalLimit + 1} {
-		t.Run(fmt.Sprint(count), func(t *testing.T) { desktopSocketRenewalStreams(t, count, 0, 650*time.Millisecond) })
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			desktopSocketRenewalStreams(t, count, 0, 650*time.Millisecond, 300*time.Millisecond)
+		})
 	}
-	t.Run("staggered", func(t *testing.T) { desktopSocketRenewalStreams(t, 4, 100*time.Millisecond, 650*time.Millisecond) })
-	t.Run("staggered-slow-native", func(t *testing.T) { desktopSocketRenewalStreams(t, 4, 100*time.Millisecond, 1200*time.Millisecond) })
+	t.Run("staggered", func(t *testing.T) {
+		desktopSocketRenewalStreams(t, 4, 100*time.Millisecond, 650*time.Millisecond, 300*time.Millisecond)
+	})
+	t.Run("staggered-slow-native", func(t *testing.T) {
+		desktopSocketRenewalStreams(t, 4, 100*time.Millisecond, 1200*time.Millisecond, 300*time.Millisecond)
+	})
+	t.Run("native-fifo-work", func(t *testing.T) {
+		desktopSocketRenewalStreams(t, 4, 100*time.Millisecond, 1200*time.Millisecond, 900*time.Millisecond)
+	})
 }
 
-func desktopSocketRenewalStreams(t *testing.T, count int, stagger, cost time.Duration) {
+func desktopSocketRenewalStreams(t *testing.T, count int, stagger, cost, foregroundCost time.Duration) {
 	t.Helper()
+	if cost >= desktopSocketNativeWork || foregroundCost >= desktopSocketNativeWork {
+		t.Fatal("fixture service work must fit the actual guardian operation bound")
+	}
 	p := &desktopRenewalFixture{desktopSocketPolicyFixture: desktopSocketFixturePolicy(), cost: cost, sizes: make(chan int, 32)}
 	b, err := NewDesktopSocketBroker(context.Background(), desktopSocketFixtureCapture(), p, func() bool { return true })
 	if err != nil {
@@ -173,7 +185,7 @@ func desktopSocketRenewalStreams(t *testing.T, count int, stagger, cost time.Dur
 	// Establish two foreground FIFO owners before the unchanged monitor's
 	// renewal point. Their actual queue ownership, not a sleep in Grant, proves
 	// that the renewal may not jump another already queued request.
-	if err := desktopRenewalFixtureWait(context.Background(), time.Until(time.UnixMilli(first.ObservedAt).Add(1700*time.Millisecond))); err != nil {
+	if err := desktopRenewalFixtureWait(context.Background(), time.Until(time.UnixMilli(first.ObservedAt).Add(DesktopSocketReadbackAge-desktopSocketRenewalLead-300*time.Millisecond))); err != nil {
 		t.Fatal(err)
 	}
 	p.control.Lock()
@@ -185,7 +197,7 @@ func desktopSocketRenewalStreams(t *testing.T, count int, stagger, cost time.Dur
 		go func() {
 			ctx, release, err := p.enter(context.Background())
 			if err == nil {
-				err = desktopRenewalFixtureWait(ctx, 300*time.Millisecond)
+				err = desktopRenewalFixtureWait(ctx, foregroundCost)
 				release()
 			}
 			if err != nil {
@@ -196,7 +208,7 @@ func desktopSocketRenewalStreams(t *testing.T, count int, stagger, cost time.Dur
 		}()
 		desktopSocketAwaitControlQueue(t, &p.control, index+1)
 	}
-	queuedUntil := time.Now().Add(time.Second)
+	queuedUntil := time.UnixMilli(first.ObservedAt).Add(3 * time.Second)
 	for {
 		p.control.mu.Lock()
 		queued := len(p.control.waiters)
@@ -270,6 +282,80 @@ func desktopSocketRenewalStreams(t *testing.T, count int, stagger, cost time.Dur
 	}
 }
 
+func TestDesktopSocketRenewalSchedulingFitsOriginalReadback(t *testing.T) {
+	if desktopSocketRenewalLead >= DesktopSocketReadbackAge || desktopSocketNativeWork >= desktopSocketControlWait {
+		t.Fatal("native work and polling no longer fit the original receipt/control bounds")
+	}
+}
+
+func TestDesktopSocketRenewalQueuedWorkCannotExtendReceipt(t *testing.T) {
+	p := &desktopRenewalFixture{desktopSocketPolicyFixture: desktopSocketFixturePolicy(), cost: 1200 * time.Millisecond}
+	b, err := NewDesktopSocketBroker(context.Background(), desktopSocketFixtureCapture(), p, func() bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := b.Close(ctx); err != nil || p.count() != 0 {
+			t.Error("over-capacity renewal lost exact joined retirement", err, p.count())
+		}
+	})
+	listener := desktopSocketListener(t)
+	connection := desktopSOCKSPrivateControl(t, b, listener)
+	defer connection.Close()
+	socket := connection.(*desktopSocketConn).socket
+	socket.mu.Lock()
+	peer := socket.peers[socket.remote]
+	socket.mu.Unlock()
+	original, valid := peer.snapshot()
+	if !valid {
+		t.Fatal("pressure fixture lost its initial acknowledged socket")
+	}
+	// Each foreground operation fits the unchanged native work limit. Their
+	// combined queue plus renewal exceeds the original five-second receipt.
+	// Earlier scheduling cannot turn this excess service work into authority.
+	p.control.Lock()
+	var once sync.Once
+	release := func() { once.Do(p.control.Unlock) }
+	defer release()
+	foreground := make(chan int, 2)
+	for index := range 2 {
+		go func() {
+			ctx, done, err := p.enter(context.Background())
+			if err == nil {
+				err = desktopRenewalFixtureWait(ctx, desktopSocketNativeWork-100*time.Millisecond)
+				done()
+			}
+			if err != nil {
+				foreground <- -1
+			} else {
+				foreground <- index
+			}
+		}()
+		desktopSocketAwaitControlQueue(t, &p.control, index+1)
+	}
+	desktopSocketAwaitControlQueue(t, &p.control, 3)
+	_ = desktopRenewalFixtureWait(context.Background(), 450*time.Millisecond)
+	release()
+	for index := range 2 {
+		if actual := desktopSocketAwait(t, foreground); actual != index {
+			t.Fatal("renewal displaced an earlier original FIFO owner", actual, index)
+		}
+	}
+	_ = desktopRenewalFixtureWait(context.Background(), time.Until(time.UnixMilli(original.ObservedAt).Add(5250*time.Millisecond)))
+	if socket.allowed(socket.remote) {
+		t.Fatal("excess queued work extended an acknowledged receipt")
+	}
+	if _, err := connection.Write([]byte("expired-original")); err == nil {
+		t.Fatal("queued renewal retained successful original data I/O after expiry")
+	}
+	receipt, _ := peer.snapshot()
+	if receipt != original {
+		t.Fatal("a queued transaction fabricated a fresh receipt")
+	}
+}
+
 func TestDesktopSocketRenewalDoesNotAddAcknowledgementWhileQueued(t *testing.T) {
 	p := &desktopRenewalFixture{desktopSocketPolicyFixture: desktopSocketFixturePolicy(), cost: 250 * time.Millisecond, sizes: make(chan int, 16)}
 	b, err := NewDesktopSocketBroker(context.Background(), desktopSocketFixtureCapture(), p, func() bool { return true })
@@ -317,7 +403,7 @@ func TestDesktopSocketRenewalDoesNotAddAcknowledgementWhileQueued(t *testing.T) 
 	peer := socket.peers[socket.remote]
 	socket.mu.Unlock()
 	original, _ := peer.snapshot()
-	_ = desktopRenewalFixtureWait(context.Background(), time.Until(time.UnixMilli(original.ObservedAt).Add(1700*time.Millisecond)))
+	_ = desktopRenewalFixtureWait(context.Background(), time.Until(time.UnixMilli(original.ObservedAt).Add(DesktopSocketReadbackAge-desktopSocketRenewalLead-300*time.Millisecond)))
 	p.control.Lock()
 	var once sync.Once
 	release := func() { once.Do(p.control.Unlock) }
