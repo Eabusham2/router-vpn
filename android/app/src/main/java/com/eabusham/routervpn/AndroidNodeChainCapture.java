@@ -95,6 +95,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
 
     /** Pure compiler input shared by the editor preview and the launch capture. */
     static String memberInput(AndroidNodeStore.ChainSource member, String mode, JSONObject profile) throws Exception {
+        member.requirePairedIdentity();
         if (!member.profileId.equals(profile.getString("id")) || !member.proofId.equals(profile.getString("node_proof_id"))) {
             throw new IllegalStateException("The ordered compiler input lost its original paired member.");
         }

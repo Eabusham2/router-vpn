@@ -87,6 +87,15 @@ final class AndroidNodeStore {
             return new JSONObject(source);
         }
         JSONObject profile() throws Exception { return selectedProfile(bundle()); }
+        void requirePairedIdentity() throws Exception {
+            String peer=wireGuardPeerPublicKey(bundle());
+            byte[] key;
+            try { key=java.util.Base64.getDecoder().decode(peer); }
+            catch(IllegalArgumentException invalid) { throw new IllegalStateException("The ordered node lost its original WireGuard identity source.",invalid); }
+            if(key.length!=32||!java.util.Base64.getEncoder().encodeToString(key).equals(peer))
+                throw new IllegalStateException("The ordered node lost its original WireGuard identity source.");
+            if(!proofId.equals(stableNodeIdentity(bundle())))throw new IllegalStateException("The ordered node's paired identity source changed.");
+        }
     }
 
     /** Source authority stays with the original store publication epoch. */
@@ -295,6 +304,7 @@ final class AndroidNodeStore {
             JSONObject reference = selected.getJSONObject(i);
             ChainSource source = catalog.get(reference.getString("id"));
             if (source == null || !proofs.add(source.proofId)) throw new IllegalStateException("An ordered member is missing or shares another node's paired identity.");
+            source.requirePairedIdentity();
             String mode = reference.getString("mode");
             JSONObject assets = source.bundle().getJSONObject("profiles").optJSONObject(mode);
             if (assets == null || assets.length() == 0) throw new IllegalStateException("An ordered member lost its exact selected transport assets.");

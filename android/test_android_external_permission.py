@@ -362,10 +362,26 @@ public class ExternalPermissionTest {
   finally{counter.setInt(null,original);}
  }
  static AndroidNodeStore.ChainCapture orderedCapture(Fixture f)throws Exception{
+  return orderedCapture(f,List.of("wg","wg","shadowsocks"));
+ }
+ static AndroidNodeStore.ChainCapture orderedCapture(Fixture f,List<String> modes)throws Exception{
   List<AndroidNodeStore.Node> nodes=new ArrayList<>();nodes.add(f.entry);
-  for(String id:List.of("original-middle","original-final")){Path file=Files.createTempFile(f.file.getParent(),"ordered-",".json");Files.writeString(file,"private-ordered-credential-"+id);AndroidNodeStore.Node node=new AndroidNodeStore.Node(id,file.toFile());AndroidNodeStore.nodes.add(node);nodes.add(node);}
+  for(int i=1;i<modes.size();i++){String id=i+1==modes.size()?"original-final":i==1?"original-middle":"original-middle-"+i;Path file=Files.createTempFile(f.file.getParent(),"ordered-",".json");Files.writeString(file,"private-ordered-credential-"+id+"-"+modes.get(i));AndroidNodeStore.Node node=new AndroidNodeStore.Node(id,file.toFile());AndroidNodeStore.nodes.add(node);nodes.add(node);}
   android.content.Context.connectionPreferences.put("multihop_nodes","original-entry,middle,final");
-  return new AndroidNodeStore.ChainCapture(nodes,List.of("wg","wg","shadowsocks"));
+  return new AndroidNodeStore.ChainCapture(nodes,modes);
+ }
+ static void orderedMixedPaths(Path root)throws Exception{
+  for(int count:new int[]{2,3,4,8})for(boolean rotate:new boolean[]{false,true})for(String fault:List.of("none","packet-source","saved-mode")){
+   Fixture f=new Fixture(root);List<String> modes=new ArrayList<>();for(int i=0;i<count-1;i++)modes.add(List.of("awg2-fast","wg","awg2-strong").get(i%3));modes.add("shadowsocks");
+   var captured=orderedCapture(f,modes);f.controller.connectOrdered(captured,f.callback);awaitOrderedWork();Bundle saved=new Bundle();f.controller.savePending(saved);
+   check(AndroidRuntimeRegistry.instance.nodeChain.starts==0&&!saved.values.toString().contains("private-ordered-credential"),"mixed ordered permission copied source or dispatched before approval");
+   if(rotate)f.restore(saved);
+   if(fault.equals("packet-source"))Files.writeString(captured.members.get(0).file.toPath(),"replacement AWG parameters/private key");
+   if(fault.equals("saved-mode"))android.content.Context.connectionPreferences.put("multihop_nodes","same original IDs with replaced mode");
+   f.allow();var runtime=AndroidRuntimeRegistry.instance.nodeChain;
+   if(fault.equals("none"))check(f.callback.ok&&runtime.starts==1&&runtime.source==captured&&runtime.source.modes.equals(modes),"mixed ordered permission substituted original modes, source or final");
+   else check(!f.callback.ok&&runtime.starts==0,"mixed ordered permission accepted a changed "+fault);
+  }
  }
  static void orderedPaths(Path root)throws Exception{
   for(boolean restored:new boolean[]{false,true}){
@@ -437,7 +453,7 @@ public class ExternalPermissionTest {
   check(ui.prefs().getString("mode","").equals("smart-auto"),"ordered mode display overwrote the remembered single-node choice");
   ui.ordered=false;ui.display();check(ui.modeChoices.stream().anyMatch(m->m.id.equals("smart-auto")),"leaving ordered mode lost single-node mode choices");
  }
- public static void main(String[]args)throws Exception{AndroidNodeStore.enforceOrderedWorker=true;AndroidConnectionProfileStore.beforeOrderedRead=AndroidNodeStore::holdWorker;Path root=Path.of(args[0]);allModes(root);directAndFrozen(root);execution(root);changes(root);ordinaryPaths(root);selectedChanges(root);owners(root);activity(root);importedPaths(root);orderedPaths(root);orderedWorkerTransfer(root);permissionStopEpoch(root);orderedMode();exhaustion(root);System.out.println("Android external permission: "+checks+" checks;19 Router entries,8 ordinary entries,ordered/imported Router permission,saved selection/rotation/resume,owned cancellation/replacement,actual Product busy/cancel");}
+ public static void main(String[]args)throws Exception{AndroidNodeStore.enforceOrderedWorker=true;AndroidConnectionProfileStore.beforeOrderedRead=AndroidNodeStore::holdWorker;Path root=Path.of(args[0]);allModes(root);directAndFrozen(root);execution(root);changes(root);ordinaryPaths(root);selectedChanges(root);owners(root);activity(root);importedPaths(root);orderedPaths(root);orderedMixedPaths(root);orderedWorkerTransfer(root);permissionStopEpoch(root);orderedMode();exhaustion(root);System.out.println("Android external permission: "+checks+" checks;19 Router entries,8 ordinary entries,ordered/imported Router permission,saved selection/rotation/resume,owned cancellation/replacement,actual Product busy/cancel");}
 }
 '''
 

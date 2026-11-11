@@ -16,6 +16,7 @@ import java.util.Set;
 /** One cancellable editor draft. It retains original private sources in memory;
  * only an explicit Save publishes references and per-member policy choices. */
 final class AndroidOrderedPathSelection {
+    private static final List<String> PREFIX_MODES=List.of("wg","awg2-fast","awg2-strong");
     static final class Member {
         final AndroidNodeStore.ChainSource source;
         final String mode;
@@ -47,14 +48,28 @@ final class AndroidOrderedPathSelection {
 
     List<AndroidNodeStore.Node> choices(boolean finalNode) throws Exception {
         requireCurrent();
-        String mode=finalNode?"shadowsocks":"wg";
         List<AndroidNodeStore.Node> result=new ArrayList<>();
         for(AndroidNodeStore.Node node:catalog.nodes) {
             boolean used=false;
             for(int i=0;i<members.size();i++)if(members.get(i).source.id.equals(node.id)&&(!finalNode||i!=members.size()-1))used=true;
-            if(!used&&hasMode(catalog.source(node.id),mode))result.add(node);
+            if(!used&&(finalNode?hasMode(catalog.source(node.id),"shadowsocks"):!prefixModes(node.id).isEmpty()))result.add(node);
         }
         requireCurrent();return result;
+    }
+
+    List<String> prefixModes(String id) throws Exception {
+        requireCurrent();AndroidNodeStore.ChainSource source=catalog.source(id);List<String> result=new ArrayList<>();
+        for(String mode:PREFIX_MODES)if(hasMode(source,mode))result.add(mode);
+        requireCurrent();return Collections.unmodifiableList(result);
+    }
+
+    static String prefixModeTitle(String mode) {
+        switch(mode) {
+            case "wg":return "WireGuard";
+            case "awg2-fast":return "AmneziaWG Fast";
+            case "awg2-strong":return "AmneziaWG Strong";
+            default:throw new IllegalArgumentException("Choose an exact supported intermediate transport.");
+        }
     }
 
     void setFinal(String id) throws Exception {
@@ -69,15 +84,31 @@ final class AndroidOrderedPathSelection {
     }
 
     void addPrefix(String id) throws Exception {
+        addPrefix(id,"wg");
+    }
+
+    void addPrefix(String id,String mode) throws Exception {
         requireCurrent();
         if(members.isEmpty())throw new IllegalStateException("Choose the final node first.");
         if(members.size()>=8)throw new IllegalStateException("This native ordered path supports at most eight nodes.");
         for(Member member:members)if(member.source.id.equals(id))throw new IllegalStateException("Each ordered position needs a different saved node.");
         AndroidNodeStore.ChainSource source=catalog.source(id);
-        if(!hasMode(source,"wg"))throw new IllegalStateException("The selected intermediate node has no complete WireGuard source.");
-        members.add(members.size()-1,new Member(source,"wg"));
+        requirePrefixMode(source,mode);
+        members.add(members.size()-1,new Member(source,mode));
         try { requireBound(); }
         catch(Exception failure) { members.remove(members.size()-2);throw failure; }
+    }
+
+    void setPrefixMode(int position,String mode) throws Exception {
+        requireCurrent();
+        if(position<0||position>=members.size()-1)throw new IllegalStateException("Choose an intermediate node to change its transport.");
+        AndroidNodeStore.ChainSource source=members.get(position).source;requirePrefixMode(source,mode);
+        members.set(position,new Member(source,mode));
+    }
+
+    private static void requirePrefixMode(AndroidNodeStore.ChainSource source,String mode) throws Exception {
+        if(!PREFIX_MODES.contains(mode))throw new IllegalStateException("Choose WireGuard, AmneziaWG Fast or AmneziaWG Strong for this intermediate node.");
+        if(!hasMode(source,mode))throw new IllegalStateException("The selected intermediate node has no complete "+prefixModeTitle(mode)+" source.");
     }
 
     void movePrefix(int position,int destination) throws Exception {
@@ -138,6 +169,8 @@ final class AndroidOrderedPathSelection {
     }
 
     private static boolean hasMode(AndroidNodeStore.ChainSource source,String mode) throws Exception {
+        try { source.requirePairedIdentity(); }
+        catch(IllegalStateException unavailable) { return false; }
         JSONObject assets=source.bundle().getJSONObject("profiles").optJSONObject(mode);
         return assets!=null&&assets.length()>0;
     }

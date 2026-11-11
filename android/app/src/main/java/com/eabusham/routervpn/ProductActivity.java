@@ -536,11 +536,11 @@ public final class ProductActivity extends Activity {
             for(int i=0;i<members.size();i++) {
                 AndroidOrderedPathSelection.Member member=members.get(i);
                 String name=member.source.profile().optString("name",member.source.profileId);
-                labels.add((i+1)+". "+name+" • "+(i==members.size()-1?"Final • Shadowsocks 2022":"WireGuard"));
+                labels.add((i+1)+". "+name+" • "+(i==members.size()-1?"Final • Shadowsocks 2022":AndroidOrderedPathSelection.prefixModeTitle(member.mode)));
             }
             if(members.isEmpty())labels.add("Choose final Router node");
             else if(members.size()<8)labels.add("Add another intermediate node");
-            choiceDialog("Ordered Router path", "Local execution supports two to eight independent nodes: WireGuard intermediate hops and a Shadowsocks 2022 final. Tap an intermediate hop to reorder or remove it, or tap the final node to replace it. The final node supplies the selected DNS; every node keeps its own Start Layer and MTU choice.")
+            choiceDialog("Ordered Router path", "Local execution supports two to eight independent nodes: WireGuard, AmneziaWG Fast or AmneziaWG Strong intermediate hops and a Shadowsocks 2022 final. Tap an intermediate hop to change its transport, reorder or remove it, or tap the final node to replace it. The final node supplies the selected DNS; every node keeps its own Start Layer and MTU choice.")
                     .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
                         if(members.isEmpty()){chooseOrderedNode(draft,true);return;}
                         if(w==members.size()){chooseOrderedNode(draft,false);return;}
@@ -558,10 +558,24 @@ public final class ProductActivity extends Activity {
             if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before choosing another node.");
             List<AndroidNodeStore.Node> nodes=draft.choices(finalNode);List<String> labels=new ArrayList<>();
             for(AndroidNodeStore.Node node:nodes)labels.add(node.name);
-            if(nodes.isEmpty())throw new IllegalStateException(finalNode?"Add a different Router node with a complete Shadowsocks 2022 profile.":"Add another independent Router node with a complete WireGuard profile.");
+            if(nodes.isEmpty())throw new IllegalStateException(finalNode?"Add a different Router node with a complete Shadowsocks 2022 profile.":"Add another independent Router node with a complete WireGuard, AmneziaWG Fast or AmneziaWG Strong profile.");
             choiceDialog(finalNode?"Final Router node":"Add intermediate Router node", "Choose one original saved node. Its own keys, Start Layer and policy stay attached to this position.")
                     .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
-                        try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while choosing a node.");if(finalNode)draft.setFinal(nodes.get(w).id);else draft.addPrefix(nodes.get(w).id);showOrderedEditor(draft);}
+                        try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while choosing a node.");if(finalNode){draft.setFinal(nodes.get(w).id);showOrderedEditor(draft);}else chooseOrderedMode(draft,nodes.get(w).id,-1);}
+                        catch(Exception error){toast(safe(error));}
+                    }).setNegativeButton("Back",(d,w)->showOrderedEditor(draft)).show();
+        } catch(Exception error) { toast(safe(error)); }
+    }
+
+    private void chooseOrderedMode(AndroidOrderedPathSelection draft,String id,int position){
+        try {
+            if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before choosing a transport.");
+            List<String> modes=draft.prefixModes(id);List<String> labels=new ArrayList<>();
+            for(String mode:modes)labels.add(AndroidOrderedPathSelection.prefixModeTitle(mode));
+            if(modes.isEmpty())throw new IllegalStateException("This original node has no supported intermediate transport.");
+            choiceDialog("Intermediate transport", "Choose this node's own saved transport. Its exact keys and Amnezia parameters stay attached when the node is moved.")
+                    .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
+                        try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while choosing a transport.");if(position<0)draft.addPrefix(id,modes.get(w));else draft.setPrefixMode(position,modes.get(w));showOrderedEditor(draft);}
                         catch(Exception error){toast(safe(error));}
                     }).setNegativeButton("Back",(d,w)->showOrderedEditor(draft)).show();
         } catch(Exception error) { toast(safe(error)); }
@@ -572,8 +586,9 @@ public final class ProductActivity extends Activity {
         if(position>0){actions.add("Move earlier");destinations.add(position-1);}
         if(position<draft.members().size()-2){actions.add("Move later");destinations.add(position+1);}
         actions.add("Remove this intermediate node");destinations.add(-1);
+        actions.add("Change transport");destinations.add(-2);
         new AlertDialog.Builder(this).setTitle("Hop "+(position+1)).setItems(actions.toArray(new CharSequence[0]),(d,w)->{
-            try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while editing the ordered path.");int target=destinations.get(w);if(target<0)draft.removePrefix(position);else draft.movePrefix(position,target);showOrderedEditor(draft);}
+            try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while editing the ordered path.");int target=destinations.get(w);if(target==-2){chooseOrderedMode(draft,draft.members().get(position).source.id,position);return;}if(target<0)draft.removePrefix(position);else draft.movePrefix(position,target);showOrderedEditor(draft);}
             catch(Exception error){toast(safe(error));}
         }).setNegativeButton("Back",(d,w)->showOrderedEditor(draft)).show();
     }

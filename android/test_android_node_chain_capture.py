@@ -20,12 +20,19 @@ def compiler_source(source):
 
 
 GENERATOR = r'''package mobilemultihop
-import("encoding/json";"os";"testing";"fmt")
+import("encoding/json";"encoding/base64";"crypto/ecdh";"bytes";"strings";"os";"testing";"fmt")
 func TestAndroidOrderedSourceFixture(t *testing.T){
  result:=map[string]any{}
- for _,test:=range []struct{count int;layer string}{{2,""},{3,""},{4,""},{8,""},{3,"aes-256-gcm"},{4,"aes-256-gcm+xor-whitening"},{4,"fixed-middle"}}{
+ for _,test:=range []struct{count int;layer string}{{2,""},{3,""},{4,""},{8,""},{3,"aes-256-gcm"},{4,"aes-256-gcm+xor-whitening"},{4,"fixed-middle"},{2,"awg-fast"},{3,"awg-strong"},{4,"mixed-awg"},{8,"mixed-awg"},{4,"mixed-options"}}{
   layer:=test.layer;if layer=="fixed-middle"{layer=""}
-  nodes:=nodeChainFixtureNodes(t,test.count,layer)
+  mixed:=strings.Contains(layer,"awg")||layer=="mixed-options"
+  modes,layers:=make([]string,test.count),make([]string,test.count)
+  for i:=range modes{modes[i],layers[i]="wg",layer;if mixed{modes[i]=[]string{"awg2-fast","wg","awg2-strong"}[i%3];layers[i]=""};if layer=="awg-strong"{modes[i]="awg2-strong"};if mixed&&test.count==4&&i==1{layers[i]="aes-256-gcm"};if mixed&&test.count==4&&i==2{layers[i]="aes-256-gcm+xor-whitening"}}
+  modes[test.count-1]="shadowsocks"
+  nodes:=nodeChainModeFixtureNodes(t,modes,layers)
+  identityModes:=make([]string,test.count);for i:=range identityModes{identityModes[i]="wg"};identities:=nodeChainModeFixtureNodes(t,identityModes,layers)
+  variants:=map[string][]*NodeProfile{}
+  if mixed{for _,mode:=range []string{"wg","awg2-fast","awg2-strong"}{choices:=append([]string(nil),modes...);for i:=0;i<len(choices)-1;i++{choices[i]=mode};variants[mode]=nodeChainModeFixtureNodes(t,choices,layers)}}
   selected:=[]map[string]string{}
   for _,node:=range nodes{selected=append(selected,map[string]string{"id":node.profile["id"].(string),"mode":node.mode})}
   bundles:=[]any{}
@@ -37,8 +44,16 @@ func TestAndroidOrderedSourceFixture(t *testing.T){
    if test.layer=="fixed-middle"&&position==1{profile["mtu_policy"],profile["manual_mtu"]="manual",1408}
    if position==len(nodes)-1{profile["multihop_enabled"],profile["multihop_execution"],profile["multihop_nodes"]=true,"local",selected}
    assets:=map[string]any{node.mode:files}
+   var identity map[string]string;if err:=json.Unmarshal([]byte(identities[position].inputs.Files),&identity);err!=nil{t.Fatal(err)};assets["wg"]=identity
+   if mixed&&position<len(nodes)-1{
+    for _,mode:=range []string{"awg2-fast","awg2-strong"}{if mode!=node.mode&&test.layer!="mixed-options"{continue};var packet map[string]string;if err:=json.Unmarshal([]byte(variants[mode][position].inputs.Files),&packet);err!=nil{t.Fatal(err)}
+     oldServer,err:=ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(71+position)},32));if err!=nil{t.Fatal(err)};newServer,err:=ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(131+position)},32));if err!=nil{t.Fatal(err)}
+     raw:=string(mustDecodeChainAsset(t,packet["awg.conf"]));raw=strings.ReplaceAll(raw,base64.StdEncoding.EncodeToString(oldServer.PublicKey().Bytes()),base64.StdEncoding.EncodeToString(newServer.PublicKey().Bytes()));packet["awg.conf"]=base64.StdEncoding.EncodeToString([]byte(raw));assets[mode]=packet
+    }
+   }
    if node.inputs.Start!=""{var start map[string]string;if err:=json.Unmarshal([]byte(node.inputs.Start),&start);err!=nil{t.Fatal(err)};assets["shadowsocks"]=start}
-   bundles=append(bundles,map[string]any{"profileSchemaVersion":4,"selectedRouterID":profile["id"],"nodeProofId":profile["node_proof_id"],"routerProfiles":[]any{profile},"profiles":assets,"modes":[]any{map[string]string{"id":node.mode}}})
+   available:=[]any{};for _,mode:=range []string{"wg","awg2-fast","awg2-strong","shadowsocks"}{if assets[mode]!=nil{available=append(available,map[string]string{"id":mode})}}
+   bundles=append(bundles,map[string]any{"profileSchemaVersion":4,"selectedRouterID":profile["id"],"nodeProofId":profile["node_proof_id"],"routerProfiles":[]any{profile},"profiles":assets,"modes":available})
   }
   result[fmt.Sprintf("%d/%s",test.count,test.layer)]=bundles
  }
@@ -104,12 +119,15 @@ public final class NodeChainCaptureHarness {
   reject(()->source.members.clear(),"member list is mutable");reject(()->source.modes.clear(),"mode list is mutable");
   try(AndroidNodeChainCapture capture=AndroidNodeChainCapture.compile(source)){
    JSONObject config=new JSONObject(capture.config),launch=new JSONObject(capture.launchInput);
-   check(config.getJSONArray("inbounds").length()==1&&config.getJSONArray("endpoints").length()==source.members.size()-1,"ordered graph lost one TUN or a WireGuard prefix");
+   check(config.getJSONArray("inbounds").length()==1&&config.getJSONArray("endpoints").length()==source.members.size()-1,"ordered graph lost one TUN or a captured packet prefix");
    check(launch.getJSONArray("nodes").length()==source.members.size()&&capture.strict,"native compile dropped a member or protection policy");
    if(key.equals("4/fixed-middle"))check(config.getJSONArray("endpoints").getJSONObject(1).getInt("mtu")==1408&&capture.finalProfile().getString("mtu_policy").equals("auto"),"Fixed middle endpoint replaced the final Auto policy");
    for(int i=0;i<source.members.size();i++){
     JSONObject input=new JSONObject(launch.getJSONArray("nodes").getString(i));JSONObject p=new JSONObject(input.getString("profile_json"));
     check(p.getString("id").equals(source.members.get(i).profileId)&&p.getString("api_token").equals(profile(f.original.get(i)).getString("api_token")),"native capture borrowed another member token or position");
+    check(input.getString("mode").equals(source.modes.get(i)),"native capture replaced an exact selected member mode");
+    if(i<source.members.size()-1){JSONObject endpoint=config.getJSONArray("endpoints").getJSONObject(i);String mode=source.modes.get(i);check(endpoint.getString("type").equals(mode.equals("wg")?"wireguard":"routervpn-amneziawg"),"native capture replaced a selected packet family");
+     if(mode.startsWith("awg2-")){check(!peerKey(source.members.get(i).bundle(),"wg").equals(peerKey(source.members.get(i).bundle(),mode)),"AWG fixture failed to distinguish original Router identity from selected packet peer");check(p.getString("node_proof_id").equals(source.members.get(i).proofId),"AWG capture substituted its packet peer for the original Router identity");}}
    }
    try(AndroidNodeChainCapture reopened=AndroidNodeChainCapture.reopen(capture.launchInput,source)){check(reopened.launchInput.equals(capture.launchInput)&&reopened.config.equals(capture.config),"canonical source did not replay");}
    JSONObject missing=new JSONObject(capture.launchInput);JSONArray cut=new JSONArray();for(int i=0;i<source.members.size();i++)if(i!=0)cut.put(launch.getJSONArray("nodes").get(i));missing.put("nodes",cut);
@@ -120,6 +138,7 @@ public final class NodeChainCaptureHarness {
   String serialized=Files.readString(f.rows);check(!serialized.contains("api_token")&&!serialized.contains("captured-chain-token")&&!serialized.contains("wg.conf")&&!serialized.contains("sing-box.json"),"saved choices duplicated private source material");
   f.changePolicies();f.profiles.load(saved.id);
   check(f.profiles.currentOrderedPath().members.size()==source.members.size(),"load did not restore every ordered reference");
+  check(f.profiles.currentOrderedPath().modes.equals(source.modes),"load substituted an original ordered mode");
   for(int i=0;i<f.members.size();i++){
    JSONObject restored=f.bundle(i),original=f.original.get(i);
    check(profile(restored).getBoolean("home_lan_access"),"saved middle policy was dropped");
@@ -129,6 +148,10 @@ public final class NodeChainCaptureHarness {
   }
   f.changePolicies();State before=new State(f);AndroidPrivateFileStore.failPath=f.members.get(f.members.size()/2).file.getAbsolutePath();AndroidPrivateFileStore.failures=1;
   try{reject(()->f.profiles.load(saved.id),"middle publication failure was accepted");before.same(f,"middle publication failure");}finally{AndroidPrivateFileStore.failPath="";AndroidPrivateFileStore.failures=0;}
+ }
+ static String peerKey(JSONObject bundle,String mode)throws Exception{
+  String asset=mode.equals("wg")?"wg.conf":"awg.conf";String raw=new String(Base64.getDecoder().decode(bundle.getJSONObject("profiles").getJSONObject(mode).getString(asset)),StandardCharsets.UTF_8);
+  for(String line:raw.split("\\r?\\n"))if(line.trim().startsWith("PublicKey"))return line.substring(line.indexOf('=')+1).trim();throw new AssertionError("missing actual packet peer");
  }
  static void sourceControls(Path root)throws Exception{
   Fixture f=new Fixture(root,"3/");AndroidNodeStore.ChainCapture captured=f.profiles.currentOrderedPath();
@@ -280,13 +303,53 @@ public final class NodeChainCaptureHarness {
   ui.open();ui.choose(0);check(ui.dialog.title.equals("Ordered Router path")&&ui.dialog.labels.length==4&&ui.dialog.detail.contains("two to eight"),"shipping ordered editor omitted original nodes or its supported transport boundary");
   ui.choose(0);ui.choose(0);check(ui.dialog.labels[0].toString().contains(profile(f.original.get(1)).optString("name",profile(f.original.get(1)).getString("id"))),"shipping ordered editor did not move the original first node later");
   ui.choose(0);ui.choose(1);check(ui.dialog.labels.length==3,"shipping ordered editor did not remove one selected prefix");
-  ui.choose(2);check(ui.dialog.title.equals("Add intermediate Router node"),"shipping ordered editor did not expose repeated addition");ui.choose(0);
+  ui.choose(2);check(ui.dialog.title.equals("Add intermediate Router node"),"shipping ordered editor did not expose repeated addition");ui.choose(0);check(ui.dialog.title.equals("Intermediate transport"),"shipping ordered editor omitted the selected node transport choice");ui.choose(0);
   check(ui.dialog.labels.length==4,"shipping ordered editor failed to add another original node before final");ui.cancel();before.same(f,"actual ordered editor cancellation");
   ui.open();ui.choose(0);ui.choose(0);ui.choose(1);ui.save();
   check(ui.refreshes==1&&ui.statusView.text.contains("Press Connect")&&ui.message.isEmpty(),"shipping ordered Save did not publish a reviewable path without connection");
   var saved=f.profiles.currentOrderedPath();check(saved.members.size()==2&&saved.control.id.equals(f.control().id)&&saved.members.get(0).id.equals(f.members.get(1).id),"shipping ordered Save substituted its original final or prefix");
   OrderedProductSurface stale=new OrderedProductSurface(f);stale.open();stale.choose(0);JSONObject changed=f.bundle(1);profile(changed).put("api_token","changed while actual editor open");f.replace(1,changed);f.nodes.select(f.control().id);State replacement=new State(f);stale.save();
   check(stale.refreshes==0&&!stale.message.isEmpty(),"shipping ordered editor published a replaced source");replacement.same(f,"actual editor refused replaced source");
+ }
+ static void pairedIdentity(Path root)throws Exception{
+  for(int position:new int[]{0,3}){
+   Fixture f=new Fixture(root,"4/mixed-awg");AndroidNodeStore.ChainCapture original=f.profiles.currentOrderedPath();
+   JSONObject missing=f.bundle(position);missing.getJSONObject("profiles").remove("wg");f.replace(position,missing);f.nodes.select(f.control().id);
+   reject(original::requireCurrent,"ordered source accepted removal of its separate WireGuard identity");
+   reject(()->f.profiles.currentOrderedPath(),"ordered admission accepted a saved identity label without its original WireGuard asset");
+   AndroidNodeStore.ChainSource unproved=f.nodes.captureChainCatalog().source(f.members.get(position).id);
+   reject(()->AndroidNodeChainCapture.memberInput(unproved,original.modes.get(position),unproved.profile()),"ordered compiler preview accepted an unproved saved identity label");
+  }
+  Fixture f=new Fixture(root,"4/mixed-awg");JSONObject changed=f.bundle(0);
+  JSONObject replacement=f.bundle(1).getJSONObject("profiles").getJSONObject("wg");changed.getJSONObject("profiles").put("wg",replacement);State before=new State(f);
+  reject(()->f.replace(0,changed),"ordered source imported a replacement WireGuard identity beside unchanged AWG keys");before.same(f,"separate identity replacement");
+ }
+ static void editorMixed(Path root)throws Exception{
+  Fixture f=new Fixture(root,"4/mixed-options");f.prefs.edit().putString("multihop_nodes","").putBoolean("multihop_on",false).commit();
+  AndroidOrderedPathSelection draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);State before=new State(f);
+  check(draft.prefixModes(f.members.get(0).id).equals(List.of("wg","awg2-fast","awg2-strong")),"editor omitted exact complete WG/AWG choices");
+  draft.addPrefix(f.members.get(0).id,"awg2-strong");draft.addPrefix(f.members.get(1).id,"wg");draft.addPrefix(f.members.get(2).id,"awg2-fast");
+  draft.movePrefix(2,0);check(draft.members().get(0).source.id.equals(f.members.get(2).id)&&draft.members().get(0).mode.equals("awg2-fast"),"editor reordered a node without its exact transport");
+  draft.setPrefixMode(1,"awg2-fast");check(draft.members().get(1).source.id.equals(f.members.get(0).id)&&draft.members().get(1).mode.equals("awg2-fast"),"editor changed transport by replacing its original source");
+  reject(()->draft.setPrefixMode(3,"awg2-strong"),"editor changed the fixed Shadowsocks final transport");
+  for(String invalid:List.of("WG","awg","awg2-pq","wg-pq","shadowsocks"," awg2-fast","awg2-strong "))reject(()->draft.setPrefixMode(0,invalid),"editor accepted an unsupported or normalized intermediate transport: "+invalid);
+  before.same(f,"mixed draft before explicit Save");AndroidNodeStore.ChainCapture saved=draft.save();
+  check(saved.modes.equals(List.of("awg2-fast","awg2-fast","wg","shadowsocks")),"editor saved a substituted ordered transport");
+  try(AndroidNodeChainCapture compiled=AndroidNodeChainCapture.compile(saved)){check(new JSONObject(compiled.launchInput).getJSONArray("nodes").length()==4,"mixed editor omitted a native compiler input");}
+  var row=f.profiles.add("Mixed captured modes");f.changePolicies();f.profiles.load(row.id);check(f.profiles.currentOrderedPath().modes.equals(saved.modes),"mixed saved profile dropped per-prefix modes");
+  for(int i=0;i<f.members.size();i++)check(ConnectionProfilesHarness.sameJSONValue(f.bundle(i).get("profiles"),f.original.get(i).get("profiles")),"mixed editor changed unselected identity or packet assets");
+  Fixture limited=new Fixture(root,"2/awg-fast");AndroidOrderedPathSelection exact=new AndroidOrderedPathSelection(limited.nodes,limited.profiles);
+  reject(()->exact.setPrefixMode(0,"awg2-strong"),"editor substituted an absent Strong source from its Fast asset");
+ }
+ static void editorMixedHandlers(Path root)throws Exception{
+  Fixture f=new Fixture(root,"4/mixed-options");OrderedProductSurface ui=new OrderedProductSurface(f);State before=new State(f);
+  ui.open();ui.choose(0);check(ui.dialog.labels[0].toString().contains("AmneziaWG Fast")&&ui.dialog.labels[1].toString().contains("WireGuard")&&ui.dialog.labels[2].toString().contains("AmneziaWG Strong"),"shipping ordered editor mislabeled exact per-prefix transports");
+  ui.choose(0);ui.choose(2);check(ui.dialog.title.equals("Intermediate transport")&&Arrays.equals(ui.dialog.labels,new String[]{"WireGuard","AmneziaWG Fast","AmneziaWG Strong"}),"shipping ordered editor did not expose original node's exact transport choices");ui.choose(2);
+  check(ui.dialog.labels[0].toString().contains("AmneziaWG Strong"),"shipping ordered mode callback ignored the selected transport");
+  ui.choose(0);ui.choose(0);check(ui.dialog.labels[1].toString().contains("AmneziaWG Strong"),"shipping ordered move lost the selected transport");
+  before.same(f,"actual mixed editor before explicit Save");ui.save();
+  var saved=f.profiles.currentOrderedPath();check(ui.message.isEmpty()&&saved.members.get(1).id.equals(f.members.get(0).id)&&saved.modes.equals(List.of("wg","awg2-strong","awg2-strong","shadowsocks")),"shipping mixed editor published a different source or selected mode");
+  for(int i=0;i<f.members.size();i++)check(ConnectionProfilesHarness.sameJSONValue(f.bundle(i).get("profiles"),f.original.get(i).get("profiles")),"actual mixed editor replaced original private assets");
  }
  static void productHandoff(Path root)throws Exception{
   AndroidHomeStateStore.Snapshot previous=AndroidHomeStateStore.current;
@@ -327,9 +390,13 @@ public final class NodeChainCaptureHarness {
   if(family.equals("editor-budget")){editorFinalBudget(root);return;}
   if(family.equals("editor-ui")){editorHandlers(root);return;}
   if(family.equals("product-handoff")){productHandoff(root);return;}
-  for(String key:List.of("2/","3/","4/","8/","3/aes-256-gcm","4/aes-256-gcm+xor-whitening","4/fixed-middle"))roundtrip(root,key);
+  if(family.equals("paired-identity")){pairedIdentity(root);return;}
+  if(family.equals("editor-mixed")){editorMixed(root);return;}
+  if(family.equals("editor-mixed-ui")){editorMixedHandlers(root);return;}
+  for(String key:List.of("2/","3/","4/","8/","3/aes-256-gcm","4/aes-256-gcm+xor-whitening","4/fixed-middle","2/awg-fast","3/awg-strong","4/mixed-awg","8/mixed-awg"))roundtrip(root,key);
   sourceControls(root);generationControls(root);validationControls(root);compilationRace(root);captureAtomicity(root);
   editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);editorFinalBudget(root);editorHandlers(root);productHandoff(root);
+  pairedIdentity(root);editorMixed(root);editorMixedHandlers(root);
   System.out.println("Android ordered sources: "+checks+" checks; actual Go compilation, exact all-member saved capture and rollback passed");
  }
 }
@@ -342,7 +409,7 @@ def prepare_sources(src, app, java):
     shutil.copyfile(java / "AndroidConnectionSelection.java", app / "AndroidConnectionSelection.java")
     (app / "NodeChainCaptureHarness.java").write_text(HARNESS)
     from test_android_connection_profiles import method
-    handlers="\n".join(method("ProductActivity.java", signature) for signature in ("private void configureMultihop(","private void showOrderedEditor(","private void chooseOrderedNode(","private void editOrderedPrefix("))
+    handlers="\n".join(method("ProductActivity.java", signature) for signature in ("private void configureMultihop(","private void showOrderedEditor(","private void chooseOrderedNode(","private void chooseOrderedMode(","private void editOrderedPrefix("))
     surface=r'''package com.eabusham.routervpn;
 import android.content.*;import java.util.*;
 final class OrderedProductSurface extends Context {
@@ -397,6 +464,7 @@ def run(root, work, app, classes, jar, env):
     editor = (app / "AndroidOrderedPathSelection.java").read_text()
     editor_ui = (app / "OrderedProductSurface.java").read_text()
     product_ui = (app / "ProductConnectSurface.java").read_text()
+    capture = (app / "AndroidNodeChainCapture.java").read_text()
     preview_start = editor.index("        RouterNodeChain preview=")
     preview_end = editor.index("        AndroidNodeStore.ChainCapture captured=", preview_start)
     publication_lock = "synchronized <T> T publishChainCatalog(ChainCatalog captured, ChainPublication<T> publication) throws Exception { synchronized (STORE_LOCK)"
@@ -408,6 +476,11 @@ def run(root, work, app, classes, jar, env):
     stage = store[stage_start:stage_end]
     assert stage.count("for(int i=0;i<members.length();i++)") == 1
     controls = (
+        ("paired-identity", "AndroidNodeStore", node.replace('source.requirePairedIdentity();', ''), "ordered admission accepted a saved identity label without its original WireGuard asset"),
+        ("paired-identity", "AndroidNodeChainCapture", capture.replace('member.requirePairedIdentity();', ''), "ordered compiler preview accepted an unproved saved identity label"),
+        ("editor-mixed", "AndroidOrderedPathSelection", editor.replace('members.add(members.size()-1,new Member(source,mode));', 'members.add(members.size()-1,new Member(source,"wg"));'), "editor reordered a node without its exact transport"),
+        ("editor-mixed-ui", "OrderedProductSurface", editor_ui.replace('else draft.setPrefixMode(position,modes.get(w));', 'else draft.setPrefixMode(position,"wg");'), "shipping ordered mode callback ignored the selected transport"),
+        ("editor-mixed-ui", "OrderedProductSurface", editor_ui.replace('AndroidOrderedPathSelection.prefixModeTitle(member.mode)', '"WireGuard"'), "shipping ordered editor mislabeled exact per-prefix transports"),
         ("product-handoff", "ProductConnectSurface", product_ui.replace("AndroidConnectionSelection.requireCurrent(this,nodeStore,selection);", ""), "ordered Product adopted a replaced choice"),
         ("product-handoff", "ProductConnectSurface", product_ui.replace("if(!connection.pathCurrent(home))", "if(false)"), "ordered Product adopted a replaced Home"),
         ("product-handoff", "ProductConnectSurface", product_ui.replace("ticket!=orderedConnectTicket", "false"), "ordered Product adopted a replaced cancel"),

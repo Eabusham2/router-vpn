@@ -498,12 +498,15 @@ public final class SpeedLabRestoreTest {
   Fixture newer=new Fixture(root,"router","multihop");newer.importedTemporary("socks5");newer.start();newer.quiesce();waitFor(()->AndroidSpeedLab.pending!=null,"newer-owner fixture did not measure");AndroidHomeStateStore.begin("new-user","wg","","new-node","","");AndroidHomeStateStore.proved();String session=AndroidHomeStateStore.current.sessionId;AndroidSpeedLab.drained(false);newer.complete();check(newer.result.error!=null&&newer.result.result==null&&RuntimeBoundary.restores==0&&AndroidHomeStateStore.current.sessionId.equals(session)&&AndroidHomeStateStore.current.connected,"imported cleanup replaced newer user connection");
  }
  static AndroidNodeStore.ChainCapture orderedOriginal(Fixture f)throws Exception{
-  AndroidNodeStore.ChainCapture source=new AndroidNodeStore.ChainCapture(List.of(f.original,f.first,f.last),List.of("wg","wg","shadowsocks"));
+  return orderedOriginal(f,List.of("wg","wg","shadowsocks"));
+ }
+ static AndroidNodeStore.ChainCapture orderedOriginal(Fixture f,List<String> modes)throws Exception{
+  AndroidNodeStore.ChainCapture source=new AndroidNodeStore.ChainCapture(List.of(f.original,f.first,f.last),modes);
   AndroidNodeStore.active=f.last.id;AndroidNodeChainRuntime runtime=AndroidRuntimeRegistry.instance.nodeChain;runtime.begin(source);AndroidHomeStateStore.proved();f.originalSession=AndroidHomeStateStore.current.sessionId;f.raw="node-chain";return source;
  }
  static void orderedRestoration(Path root)throws Exception{
-  for(String target:List.of("router","multihop","external","system-direct"))for(boolean cancel:new boolean[]{false,true}){
-   Fixture f=new Fixture(root,"node-chain",target);var captured=orderedOriginal(f);var originalPreferences=new HashMap<>(android.content.Context.speedPreferences);
+  for(List<String> modes:List.of(List.of("wg","wg","shadowsocks"),List.of("awg2-fast","awg2-strong","shadowsocks"),List.of("awg2-strong","wg","shadowsocks")))for(String target:List.of("router","multihop","external","system-direct"))for(boolean cancel:new boolean[]{false,true}){
+   Fixture f=new Fixture(root,"node-chain",target);var captured=orderedOriginal(f,modes);var originalPreferences=new HashMap<>(android.content.Context.speedPreferences);
    try{
     f.start();f.quiesce();waitFor(()->AndroidSpeedLab.pending!=null,"ordered original never reached temporary measurement");
     check(!AndroidRuntimeRegistry.instance.nodeChain.active&&RuntimeBoundary.stops==1,"ordered original native owner did not drain before temporary measurement");

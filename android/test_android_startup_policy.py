@@ -225,9 +225,13 @@ public final class StartupTest {
   void restore(Bundle state){controller.close();controller=new AndroidUnifiedConnectionController(activity,nodes);controller.restorePending(state,cb);awaitStartupWork();}
  }
  static AndroidNodeStore.ChainCapture orderedPath(Fixture f,int count,String mode,boolean automatic)throws Exception{
+  return orderedPath(f,count,mode,automatic,false);
+ }
+ static AndroidNodeStore.ChainCapture orderedPath(Fixture f,int count,String mode,boolean automatic,boolean mixed)throws Exception{
   List<String> ids=new ArrayList<>();ids.add(ENTRY);if(count>2)ids.add(EXIT);for(int i=ids.size();i<count-1;i++)ids.add(String.format(java.util.Locale.ROOT,"%032x",32+i));ids.add(FIRST);
-  JSONArray order=new JSONArray();for(int i=0;i<ids.size();i++)order.put(new JSONObject().put("id","p"+ids.get(i)).put("mode",i+1==ids.size()?"shadowsocks":"wg"));
+  JSONArray order=new JSONArray();for(int i=0;i<ids.size();i++)order.put(new JSONObject().put("id","p"+ids.get(i)).put("mode",i+1==ids.size()?"shadowsocks":mixed?List.of("awg2-fast","wg","awg2-strong").get(i%3):"wg"));
   for(String id:ids){JSONObject b=bundle(id);b.put("selectedRouterID","p"+id);JSONObject p=b.getJSONArray("routerProfiles").getJSONObject(0);p.put("id","p"+id);b.getJSONObject("profiles").put("shadowsocks",new JSONObject().put("config.json","SECRET_FINAL_NATIVE_"+id));b.getJSONArray("modes").put(new JSONObject().put("id","shadowsocks"));
+   if(mixed)for(String packet:List.of("awg2-fast","awg2-strong")){b.getJSONObject("profiles").put(packet,new JSONObject().put("awg.conf","SECRET_EXACT_"+packet+"_"+id));b.getJSONArray("modes").put(new JSONObject().put("id",packet));}
    if(id.equals(FIRST))p.put("startup_mode",mode).put("auto_connect",automatic).put("multihop_enabled",true).put("multihop_execution","local").put("multihop_nodes",order);
    Path file=f.dir.resolve(id+".json");Files.writeString(file,b.toString());boolean present=false;for(var n:AndroidNodeStore.nodes)if(n.id.equals(id))present=true;if(!present)AndroidNodeStore.nodes.add(new AndroidNodeStore.Node(id,file.toFile()));
   }
@@ -243,16 +247,16 @@ public final class StartupTest {
  static void enableOrderedLast(Fixture f)throws Exception{f.policy("last",true);AndroidHomeStateStore.disconnected(f.activity);resetProcess();}
  static void refuseOrdered(Fixture f,String reason)throws Exception{boolean rejected=false;try{f.capture();}catch(Exception expected){rejected=true;}check(rejected&&f.starts()==0,reason);}
  static void orderedStartup(Path root)throws Exception{
-  for(int count:new int[]{2,3,4,8})for(String mode:List.of("auto","smart-auto","last")){
-   Fixture f=new Fixture(root);var source=orderedPath(f,count,mode,true);if(mode.equals("last")){saveOrderedLast(f,source);AndroidHomeStateStore.disconnected(f.activity);resetProcess();}
+  for(boolean mixed:new boolean[]{false,true})for(int count:new int[]{2,3,4,8})for(String mode:List.of("auto","smart-auto","last")){
+   Fixture f=new Fixture(root);var source=orderedPath(f,count,mode,true,mixed);if(mode.equals("last")){saveOrderedLast(f,source);AndroidHomeStateStore.disconnected(f.activity);resetProcess();}
    var capture=f.capture();check(capture!=null&&capture.ordered()&&!capture.multihop()&&!capture.external()&&capture.execution.equals("local")&&capture.lastMultihop==null,"ordered startup substituted a legacy pair or comparison");
    check(capture.ordered.members.size()==count&&capture.ordered.control.id.equals(FIRST)&&capture.ordered.members.get(count-1)==capture.ordered.control,"ordered startup lost original final/control");
    for(int i=0;i<count;i++)check(capture.ordered.members.get(i).id.equals(source.members.get(i).id)&&capture.ordered.modes.get(i).equals(source.modes.get(i))&&Arrays.equals(capture.ordered.members.get(i).bytes(),source.members.get(i).bytes()),"ordered startup dropped or changed an original member");
    capture.requireCurrent(f.activity,f.nodes,f.controller);capture.cancel();check(f.starts()==0,"capturing historical ordered choice started native work");
   }
   Fixture absent=new Fixture(root);orderedPath(absent,4,"last",true);refuseOrdered(absent,"Startup Last without ordered history fell back to a pair or Auto");
-  for(int count:new int[]{2,3,4,8})for(String mode:List.of("auto","smart-auto","last"))for(boolean rotate:new boolean[]{false,true}){
-   Fixture f=new Fixture(root);var source=orderedPath(f,count,mode,true);String historical="";if(mode.equals("last")){saveOrderedLast(f,source);historical=Files.readString(orderedReceipt(f));AndroidHomeStateStore.disconnected(f.activity);resetProcess();}
+  for(boolean mixed:new boolean[]{false,true})for(int count:new int[]{2,3,4,8})for(String mode:List.of("auto","smart-auto","last"))for(boolean rotate:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);var source=orderedPath(f,count,mode,true,mixed);String historical="";if(mode.equals("last")){saveOrderedLast(f,source);historical=Files.readString(orderedReceipt(f));AndroidHomeStateStore.disconnected(f.activity);resetProcess();}
    AndroidNodeStore.enforceChainWorker=true;Bundle saved=f.request();var original=f.captured.ordered;check(f.starts()==0&&!saved.values.toString().contains("SECRET_")&&!saved.values.toString().contains("private_key"),"ordered startup bypassed permission or persisted private sources");
    if(rotate)f.restore(saved);f.allow();var nativeOwner=AndroidRuntimeRegistry.instance.nodeChain;
    check(f.cb.ok&&f.starts()==1&&nativeOwner.starts==1&&nativeOwner.source==original&&nativeOwner.source.members.size()==count,"ordered startup permission substituted a single node, pair, or newer source");
