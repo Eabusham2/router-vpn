@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdh"
 	"crypto/rand"
@@ -502,11 +503,12 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 	if !found {
 		return errors.New("ordered fixture lost original selected control")
 	}
-	selection, err := resolveDesktopNodeChainSelection(control, profiles.Profiles, control.MultihopNodes, "local")
+	tokens, err := a.connectionProfileTokensLocked(control)
 	if err != nil {
 		return err
 	}
-	operation, finish, err := a.beginConnectionOperation()
+	body, err := json.Marshal(multihopConnectRequest{Nodes: control.MultihopNodes, Execution: "local",
+		desktopProfileExpectations: desktopProfileExpectations{ExpectedSelectedNodeID: &profiles.SelectedID, ExpectedProfileTokens: tokens}})
 	if err != nil {
 		return err
 	}
@@ -518,8 +520,7 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 			return constructed, err
 		}, stage: stageOwnedNativeMultihopCommand, proof: (*app).proveNativeMultihop}
 	response := httptest.NewRecorder()
-	a.nativeMultihopConnectLocalOwned(response, httptest.NewRequest(http.MethodPost, "/api/multihop/connect", nil).WithContext(ctx), operation, selection, driver)
-	finish()
+	a.nativeMultihopConnectOwned(response, httptest.NewRequest(http.MethodPost, "/api/multihop/connect", bytes.NewReader(body)).WithContext(ctx), driver)
 	session, err := captureDesktopLinuxNodeSession(ctx, a)
 	if err != nil {
 		return err

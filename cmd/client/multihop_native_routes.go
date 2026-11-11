@@ -31,6 +31,10 @@ func nativeMultihopPlatformSupported() bool {
 	return retainedNativeMultihopSelected()
 }
 
+func nativeNodeChainPlatformSupported() bool {
+	return retainedNativeMultihopSelected() && (runtime.GOOS == "windows" || runtime.GOOS == "linux")
+}
+
 func desktopMultihopExitModes() []string {
 	if runtime.GOOS == "linux" && !retainedNativeMultihopSelected() {
 		return []string{"shadowsocks", "hysteria2"}
@@ -39,6 +43,12 @@ func desktopMultihopExitModes() []string {
 }
 
 func resolveNativeMultihopSelection(control common.RouterProfile, profiles []common.RouterProfile, q multihopConnectRequest) (multihopSelection, error) {
+	if q.ordered() {
+		if err := q.validateOrdered(); err != nil {
+			return multihopSelection{}, err
+		}
+		return resolveDesktopNodeChainSelection(control, profiles, q.Nodes, q.Execution)
+	}
 	if err := guardLegacyOrderedNodeDispatch(control); err != nil {
 		return multihopSelection{}, err
 	}
@@ -136,6 +146,11 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"platform":                   runtime.GOOS,
 		"platform_supported":         nativeMultihopPlatformSupported(),
+		"ordered_nodes_supported":    nativeNodeChainPlatformSupported(),
+		"ordered_prefix_modes":       []string{"wg", "awg2-fast", "awg2-strong"},
+		"ordered_exit_modes":         []string{"shadowsocks"},
+		"ordered_executions":         []string{"local"},
+		"ordered_max_nodes":          common.MultihopMaximumNodes,
 		"entry_id":                   entryID,
 		"exit_id":                    exitID,
 		"configured_entry_id":        control.MultihopEntryID,
@@ -202,7 +217,7 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime) {
-	operation, finish, guardErr := a.beginConnectionOperation()
+	operation, finish, guardErr := a.beginConnectionOperationContext(r.Context())
 	if guardErr != nil {
 		http.Error(w, guardErr.Error(), http.StatusConflict)
 		return
@@ -216,26 +231,24 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		http.Error(w, "real multihop is unavailable on this platform instead of faking a chain", http.StatusNotImplemented)
 		return
 	}
-	var q multihopConnectRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&q); err != nil {
+	q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))
+	if err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
+	if q.ordered() && !nativeNodeChainPlatformSupported() {
+		http.Error(w, "this platform has not enabled its protected ordered native host", http.StatusNotImplemented)
+		return
+	}
 	a.mu.Lock()
-	control, ok := a.profileByIDLocked(a.profiles.SelectedID)
-	profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...)
+	sel, err := a.resolveNativeMultihopRequestLocked(q)
 	a.mu.Unlock()
-	if !ok {
-		http.Error(w, "select a Router VPN control profile first", http.StatusBadRequest)
-		return
-	}
-	if control.NodeKind == "external" {
-		http.Error(w, "selected node is external; use External Connect for direct or Router VPN-entry -> external-exit chaining", http.StatusBadRequest)
-		return
-	}
-	sel, err := resolveNativeMultihopSelection(control, profiles, q)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		status := http.StatusBadRequest
+		if errors.Is(err, errDesktopProfileSelectionChanged) {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	if execution, err := routeExecution(q); err != nil {
@@ -248,9 +261,8 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 	a.nativeMultihopConnectLocalOwned(w, r, operation, sel, driver)
 }
 
-// The internal native acceptance fixture enters this same captured Local
-// transaction. Public source admission remains in the request resolver above;
-// neither a request flag nor a test environment variable can open it.
+// Public Connect and the installed native acceptance fixture both enter this
+// transaction through the same request decoder and original-source validation.
 func (a *app) nativeMultihopConnectLocalOwned(w http.ResponseWriter, r *http.Request, operation context.Context,
 	sel multihopSelection, driver nativeMultihopConnectRuntime) {
 	if operation == nil || a.checkCapturedConnectionOperation(operation) != nil || driver.capture == nil ||

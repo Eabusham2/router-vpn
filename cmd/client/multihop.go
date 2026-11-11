@@ -20,12 +20,15 @@ import (
 const multihopProofProxy = "http://127.0.0.1:1099"
 
 type multihopConnectRequest struct {
-	EntryID   string `json:"entry_id"`
-	ExitID    string `json:"exit_id"`
-	Base      string `json:"base"`
-	EntryMode string `json:"entry_mode,omitempty"`
-	ExitMode  string `json:"exit_mode"`
-	Execution string `json:"execution,omitempty"`
+	EntryID   string                         `json:"entry_id,omitempty"`
+	ExitID    string                         `json:"exit_id,omitempty"`
+	Base      string                         `json:"base,omitempty"`
+	EntryMode string                         `json:"entry_mode,omitempty"`
+	ExitMode  string                         `json:"exit_mode,omitempty"`
+	Execution string                         `json:"execution,omitempty"`
+	Nodes     []common.MultihopNodeSelection `json:"nodes,omitempty"`
+	desktopProfileExpectations
+	nodesPresent bool
 }
 
 type multihopSelection struct {
@@ -174,6 +177,9 @@ func resolveMultihopEntryBase(control, entry common.RouterProfile, requested str
 }
 
 func resolveMultihopSelection(control common.RouterProfile, profiles []common.RouterProfile, q multihopConnectRequest) (multihopSelection, error) {
+	if q.ordered() {
+		return multihopSelection{}, errors.New("ordered nodes require the protected native controller")
+	}
 	if err := guardLegacyOrderedNodeDispatch(control); err != nil {
 		return multihopSelection{}, err
 	}
@@ -313,22 +319,20 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "real multihop is currently implemented on the Linux desktop dataplane only; this platform remains unavailable instead of faking a chain", http.StatusNotImplemented)
 		return
 	}
-	var q multihopConnectRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&q); err != nil {
+	q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))
+	if err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
 	a.mu.Lock()
-	control, ok := a.profileByIDLocked(a.profiles.SelectedID)
-	profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...)
+	sel, err := a.resolveLegacyMultihopRequestLocked(q)
 	a.mu.Unlock()
-	if !ok {
-		http.Error(w, "select a Router VPN control profile first", http.StatusBadRequest)
-		return
-	}
-	sel, err := resolveMultihopSelection(control, profiles, q)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		status := http.StatusBadRequest
+		if errors.Is(err, errDesktopProfileSelectionChanged) {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 

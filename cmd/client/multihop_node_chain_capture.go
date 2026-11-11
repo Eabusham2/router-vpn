@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
-	"reflect"
 
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/common"
@@ -37,13 +36,13 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 	if err := common.ValidateMultihopNodes(nodes); err != nil {
 		return nil, err
 	}
-	if execution != "local" || control.NodeKind != "" && control.NodeKind != "router-vpn" || control.External != nil ||
-		control.MultihopEntryID != "" || control.MultihopExitID != "" || control.MultihopEntryMode != "" {
+	if execution != "local" || control.NodeKind != "" && control.NodeKind != "router-vpn" || control.External != nil {
 		return nil, errors.New("ordered selection requires an unambiguous Local Router control profile")
 	}
-	if len(control.MultihopNodes) != 0 && !reflect.DeepEqual(control.MultihopNodes, nodes) {
-		return nil, errors.New("ordered request differs from the captured saved selection")
-	}
+	// Explicit ordered references describe this operation, including an edited
+	// draft. Saved pair/order preferences remain in the original control token;
+	// do not rewrite that private snapshot to make a different draft look saved.
+	// Public admission separately requires the exact original catalog revisions.
 	byID := make(map[string]common.RouterProfile, len(profiles))
 	for _, profile := range profiles {
 		if _, duplicate := byID[profile.ID]; duplicate {
