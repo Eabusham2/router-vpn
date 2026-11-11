@@ -31,6 +31,7 @@ def method(signature):
 METHODS = ['void showAddRouter(', 'void chooseRouterBundle(', 'void receiveRouterBundle(',
            'void showNodeSort(', 'void selectCatalog(AndroidUnifiedNodeCatalog.Item item)',
            'void refreshNodes(', 'void refreshDnsSelection(', 'void refreshMultihopSummary(', 'boolean isExternalSelected(',
+           'boolean orderedPathEnabled(', 'AndroidOrderedPathPresentation currentOrderedPresentation(', 'double liveExternalMedian(',
            'AlertDialog.Builder choiceDialog(', 'TextView text(', 'int dp(']
 
 HARNESS = r'''package com.eabusham.routervpn;
@@ -42,6 +43,11 @@ public final class RouterImportUITest extends android.app.Activity implements Au
  final AndroidNodeStore nodeStore;final AndroidStandardExitStore exitStore=new AndroidStandardExitStore();final AndroidUnifiedNodeCatalog catalog;final AndroidTelemetry telemetry;
  final RouterVpnNodeMapView mapView=new RouterVpnNodeMapView();final Button nodeButton=new Button(this),fastestButton=new Button(this);
  final TextView statusView=new TextView(this),dnsHint=new TextView(this),multihopHint=new TextView(this);final Spinner dnsSpinner=new Spinner(this);final CheckBox multihopToggle=new CheckBox(this);double currentPathMs;
+ AndroidOrderedPathPresentation orderedPresentation;
+ // No native or external live-proof owner is installed by this import fixture.
+ // The actual Product helpers must retain the unavailable state.
+ static final class UnprovedExternalReceipt {String id="exit";double medianMs=77;int checks;void requireCurrent(){checks++;throw new IllegalStateException("No owned external measurement");}}
+ UnprovedExternalReceipt currentExternalReceipt;
  final BlockingQueue<Runnable> ui=new LinkedBlockingQueue<>();final android.content.ContentResolver documents=new android.content.ContentResolver();final Connection connection=new Connection();
  RouterImportUITest()throws Exception{files=Files.createTempDirectory("router-import-ui-").toFile();AndroidVpnMutationGuard.busy=false;AndroidHomeStateStore.home=new AndroidHomeStateStore.Snapshot();AndroidHomeStateStore.home.connected=false;AndroidHomeStateStore.home.phase="disconnected";nodeStore=new AndroidNodeStore(this);catalog=new AndroidUnifiedNodeCatalog(nodeStore,exitStore);telemetry=new AndroidTelemetry(this,nodeStore);dnsSpinner.setAdapter(new ArrayAdapter<>(this,0,new String[]{"Home","Fastest","Custom","DoT","DoH","DoH3","Rescue"}));}
  public void runOnUiThread(Runnable value){ui.add(value);}public boolean isDestroyed(){return destroyed;}public android.content.ContentResolver getContentResolver(){return documents;}
@@ -92,7 +98,14 @@ public final class RouterImportUITest extends android.app.Activity implements Au
   try(RouterImportUITest h=new RouterImportUITest()){h.prefs().edit().putString(SELECTED_KIND,"external").putString(SELECTED_ID,"exit").apply();for(String protocol:List.of("shadowsocks","tor"))for(String value:new String[]{null,"","  ","home","rescue","custom"}){h.exitStore.entry.protocol=protocol;JSONObject policy=value==null?null:new JSONObject().put("dns_mode",value);h.exitStore.entry.policy=policy;h.exitStore.entry.torPolicy=policy;h.refreshDnsSelection();check(h.dnsSpinner.getSelectedItemPosition()==("rescue".equals(value)?6:"custom".equals(value)?2:0),"missing external DNS did not default Home or explicit choice lost: "+protocol+"/"+value);}
    AndroidConnectionProfileStore.path.entry=h.nodeStore.importBundle(bundle("a".repeat(64),"Entry"));AndroidConnectionProfileStore.path.exit=h.exitStore.entry;AndroidConnectionProfileStore.path.entryMode="max-wg";String[] execution={"local","server","auto"},labels={"Local","Server","Compare"};for(boolean ordinary:new boolean[]{false,true}){if(ordinary){AndroidConnectionProfileStore.path.entry=null;AndroidConnectionProfileStore.path.ordinaryEntry=new AndroidStandardExitStore.Entry();AndroidConnectionProfileStore.path.ordinaryEntry.name="Custom entry";}for(int i=0;i<execution.length;i++){AndroidConnectionProfileStore.path.execution=execution[i];h.refreshMultihopSummary();check(h.multihopHint.getText().toString().startsWith((ordinary?"Custom entry":"Entry")+" → "),"external entry summary lost "+ordinary);check(h.multihopHint.getText().toString().endsWith(labels[i]),"external execution summary lost "+labels[i]);}}AndroidConnectionProfileStore.path.entry=null;AndroidConnectionProfileStore.path.ordinaryEntry=null;h.refreshMultihopSummary();check(h.multihopHint.getText().toString().startsWith("Direct"),"direct external path summary changed");}
  }
- public static void main(String[] args)throws Exception{imports();rankingAndPolicies();automaticSelectionKeepsNewerOwner();System.out.println("Android Router import and policy UI: "+checks+" shipping callback, atomic store, stale reply, durable ranking, Home default and execution summary checks PASS");}
+ static void unavailableOrderedProof()throws Exception{
+  try(RouterImportUITest h=new RouterImportUITest()){
+   h.prefs().edit().putString(SELECTED_KIND,"router-vpn").putBoolean(MULTI_ON,true).putString("multihop_nodes","[]").apply();
+   h.refreshMultihopSummary();check(h.multihopToggle.isChecked()&&h.multihopHint.getText().toString().equals("Checking the complete ordered path…"),"ordered pending proof fell back to legacy pair summary");
+   h.currentExternalReceipt=new UnprovedExternalReceipt();check(h.liveExternalMedian("exit")==0&&h.currentExternalReceipt.checks==1,"unproved external response entered imported map");
+  }
+ }
+ public static void main(String[] args)throws Exception{imports();rankingAndPolicies();automaticSelectionKeepsNewerOwner();unavailableOrderedProof();System.out.println("Android Router import and policy UI: "+checks+" shipping callback, atomic store, stale reply, durable ranking, Home default and execution summary checks PASS");}
 }
 '''
 
@@ -109,8 +122,12 @@ def run(overrides=None):
     profile_source=(JAVA/'AndroidConnectionProfileStore.java').read_text()
     start=profile_source.index('    static void applySelection(')
     selection_publication=profile_source[start:profile_source.index('\n',start)]
-    sources['com/eabusham/routervpn/PolicyUIBoundaries.java']=sources['com/eabusham/routervpn/PolicyUIBoundaries.java'].replace('package com.eabusham.routervpn;', 'package com.eabusham.routervpn;import android.content.SharedPreferences;').replace('final class AndroidConnectionProfileStore{','final class AndroidConnectionProfileStore{'+selection_publication)
-    sources['com/eabusham/routervpn/RouterVpnNodeMapView.java']=r'''package com.eabusham.routervpn;final class RouterVpnNodeMapView{static final String ROLE_ENTRY="entry",ROLE_EXIT="exit",ROLE_SELECTED="selected",ROLE_EXTERNAL="external",ROLE_NORMAL="normal";static final class Marker{Marker(String id,String name,double latitude,double longitude,String role,double latency,boolean external){}}void setMarkers(java.util.List<Marker> markers){}}'''
+    sources['com/eabusham/routervpn/PolicyUIBoundaries.java']=sources['com/eabusham/routervpn/PolicyUIBoundaries.java'].replace('package com.eabusham.routervpn;', 'package com.eabusham.routervpn;import android.content.SharedPreferences;').replace('final class AndroidConnectionProfileStore{','final class AndroidConnectionProfileStore{'+selection_publication+'AndroidNodeStore.ChainCapture currentOrderedPath(){throw new IllegalStateException("Import fixture has no ordered source capture");}')
+    sources['com/eabusham/routervpn/AndroidNodeChainRuntime.java']=r'''package com.eabusham.routervpn;
+// Native proof is outside this import/policy fixture and must never be invented.
+final class AndroidNodeChainRuntime {static final class ActiveCapture {long pathGeneration;String homeSession,progressJSON;java.util.List<AndroidNodeStore.ChainSource> sources;java.util.List<String> modes;}ActiveCapture captureActive(){throw new IllegalStateException("Import fixture has no native ordered owner");}}'''
+    sources['com/eabusham/routervpn/AndroidOrderedPathPresentation.java']=(JAVA/'AndroidOrderedPathPresentation.java').read_text()
+    sources['com/eabusham/routervpn/RouterVpnNodeMapView.java']=r'''package com.eabusham.routervpn;final class RouterVpnNodeMapView{static final String ROLE_ENTRY="entry",ROLE_HOP="hop",ROLE_EXIT="exit",ROLE_SELECTED="selected",ROLE_EXTERNAL="external",ROLE_NORMAL="normal";static final class Marker{Marker(String id,String name,double latitude,double longitude,String role,double latency,boolean external){}}void setMarkers(java.util.List<Marker> markers){}void setOrderedPath(java.util.List<String> ids,boolean live){}}'''
     handlers='\n'.join(method(signature) for signature in METHODS)
     for before,after in (overrides or []):
         assert handlers.count(before)==1,before
@@ -141,10 +158,14 @@ def main():
     for mutation in mutations:
         failed=run(mutation)
         assert failed.returncode!=0 and ('stale or destroyed import adopted' in failed.stderr or 'missing external DNS' in failed.stderr or 'external execution summary lost' in failed.stderr or 'external entry summary lost' in failed.stderr),failed.stdout+failed.stderr
-    selected='String selectedKind,selectedId;synchronized(prefs()){selectedKind=prefs().getString(SELECTED_KIND,"router-vpn");selectedId=prefs().getString(SELECTED_ID,nodeStore.activeId());'
+    selected='''String selectedKind,selectedId;
+            synchronized(prefs()) {
+                selectedKind=prefs().getString(SELECTED_KIND,"router-vpn");selectedId=prefs().getString(SELECTED_ID,nodeStore.activeId());'''
     stale='String selectedKind=prefs().getString(SELECTED_KIND,"router-vpn"),selectedId=prefs().getString(SELECTED_ID,nodeStore.activeId());synchronized(prefs()){'
     failed=run([(selected,stale)])
     assert failed.returncode!=0 and 'stale automatic refresh replaced newer selection' in failed.stderr,failed.stdout+failed.stderr
-    print('Android Router import UI: all six stale-adoption, selection-owner and policy-summary negative controls rejected')
+    failed=run([('||AndroidOrderedPathPresentation.configured(this)','||false')])
+    assert failed.returncode!=0 and 'ordered pending proof fell back to legacy pair summary' in failed.stderr,failed.stdout+failed.stderr
+    print('Android Router import UI: all seven stale-adoption, selection-owner, ordered-proof and policy-summary negative controls rejected')
 
 if __name__=='__main__':main()
