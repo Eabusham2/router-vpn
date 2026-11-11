@@ -4,7 +4,7 @@ import SwiftUI
 
 private let iosConnectionProfilesKey = "routervpn.connection-profiles.v1"
 private let iosConnectionProfilesFile = "connection-profiles.json"
-private let iosConnectionProfilesSchemaVersion = 7
+private let iosConnectionProfilesSchemaVersion = 8
 private let iosConnectionProfilesMaximumBytes = 512 * 1024
 private let iosConnectionModeKey = "routervpn.unified.mode.v1"
 private let iosConnectionCustomPresetsKey = "routervpn.unified.custom-presets.v1"
@@ -54,12 +54,13 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
     var multihopExitID: String? = nil
     var multihopExitMode: String? = nil
     var multihopExecution: String? = nil
+    var multihopNodes: [IOSMultihopNodeSelection]? = nil
 
     enum CodingKeys: String, CodingKey {
         case homeLANAccess, homeLANCIDRs, killSwitch, killSwitchPolicy, ipv6Mode, baseTunnel, baseFallback, startLayer
         case autoRequireEncrypted, autoRequireObfuscation, mtuPolicy, manualMTU, startupMode, autoConnect, daitaEnabled, daitaRateKbps, jumboTUN
         case dnsMode, dnsProtocol, dnsHost, dnsPort, dnsServerName, dnsPath, dnsBootstrap, homeDNSCaptured
-        case multihopEnabled, multihopEntryMode, multihopEntryID, multihopExitID, multihopExitMode, multihopExecution
+        case multihopEnabled, multihopEntryMode, multihopEntryID, multihopExitID, multihopExitMode, multihopExecution, multihopNodes
     }
 }
 
@@ -104,6 +105,11 @@ private extension IOSConnectionSafePreferences {
         }
         multihopExecution = try c.decodeIfPresent(String.self, forKey: .multihopExecution)
         guard ["local", "server", "auto"].contains(multihopExecution ?? "local") else { throw DecodingError.dataCorruptedError(forKey: .multihopExecution, in: c, debugDescription: "Unknown multihop execution") }
+        multihopNodes = try c.decodeIfPresent([IOSMultihopNodeSelection].self, forKey: .multihopNodes)
+        if let nodes = multihopNodes {
+            try IOSMultihopNodeSelection.validate(nodes, execution: multihopExecution,
+                entryID: multihopEntryID, entryMode: multihopEntryMode, exitID: multihopExitID, exitMode: multihopExitMode)
+        }
     }
 }
 
@@ -132,6 +138,7 @@ private struct IOSConnectionProfileRecord: Identifiable, Codable, Hashable {
     var externalProtocol: String? = nil
     var externalPublicIP: String? = nil
     var entryPolicy: IOSConnectionEntryCapture? = nil
+    var chainPolicies: [IOSConnectionEntryCapture]? = nil
 
     var autoRequirementsSummary: String {
         guard let preferences else { return "AUTO n/a" }
@@ -182,7 +189,7 @@ private enum IOSConnectionProfileStore {
                 return sorted(values)
             }
             // The pre-v4 private store was a raw array. Treat that exact shape as
-            // known schema v1, validate it fully, then atomically rewrite v7.
+            // known schema v1, validate it fully, then atomically rewrite v8.
             let values = try validateStoredProfiles(decoder.decode([IOSConnectionProfileRecord].self, from: data))
             try persist(values)
             return sorted(values)
@@ -225,7 +232,17 @@ private enum IOSConnectionProfileStore {
                                           customLayers: selection.layers, preferences: prefs, updatedAt: Date(),
                                           externalProtocol: completeExternal ? selected.external?.protocolName : nil,
                                           externalPublicIP: completeExternal ? selected.external?.expectedPublicIP : nil)
-        if selected.multihopEnabled == true, let source = model.bundle {
+        if selected.multihopNodes != nil, let source = model.bundle {
+            let members = try model.iosNodeChainBundles(for: source)
+            record.chainPolicies = try members.map { member in
+                guard let profile = IOSDNSRuntimePolicy.selectedProfile(in: member) else {
+                    throw issue("The selected ordered chain lost a captured node.")
+                }
+                return IOSConnectionEntryCapture(nodeID: profile.id, nodeKind: profile.normalizedNodeKind,
+                    nodeProofID: profile.nodeProofID, externalProtocol: nil, externalPublicIP: nil,
+                    preferences: try capturePreferences(profile))
+            }
+        } else if selected.multihopEnabled == true, let source = model.bundle {
             let entryBundle = try model.iosMultihopEntryBundle(for: source)
             guard let entryID = selected.multihopEntryID,
                   entryBundle.routerProfiles.filter({ $0.id == entryID }).count == 1,
@@ -273,10 +290,11 @@ private enum IOSConnectionProfileStore {
                 dnsBootstrap: selected.dnsBootstrap,
                 multihopEnabled: selected.multihopEnabled ?? false,
                 multihopEntryID: selected.multihopEntryID,
-                multihopEntryMode: selected.multihopEntryMode ?? "wg",
+                multihopEntryMode: selected.multihopNodes == nil ? selected.multihopEntryMode ?? "wg" : selected.multihopEntryMode,
                 multihopExitID: selected.multihopExitID,
                 multihopExitMode: selected.multihopExitMode,
-                multihopExecution: selected.multihopExecution ?? "local"
+                multihopExecution: selected.multihopNodes == nil ? selected.multihopExecution ?? "local" : selected.multihopExecution,
+                multihopNodes: selected.multihopNodes
             )
         if selected.normalizedNodeKind == "router-vpn", preferences.dnsMode == "home" {
             let home = try IOSHomeDNSPolicy.resolve(adGuardIPv4: selected.adGuardIPv4, adGuardIPv6: selected.adGuardIPv6,
@@ -369,6 +387,10 @@ private enum IOSConnectionProfileStore {
 
     private static func applySavedPath(_ saved: IOSConnectionProfileRecord, selected: ClientBundle,
                                        original: Data, model: RouterVPNModel) throws {
+        if let captures = saved.chainPolicies {
+            try applySavedChain(saved, captures: captures, selected: selected, original: original, model: model)
+            return
+        }
         guard let capture = saved.entryPolicy else {
             // Historical snapshots did not capture entry settings. Keep their
             // reference-only behavior; never fabricate a captured entry policy.
@@ -408,6 +430,52 @@ private enum IOSConnectionProfileStore {
         try model.restoreConnectionProfile(replacements, selectedID: saved.nodeID)
     }
 
+    private static func applySavedChain(_ saved: IOSConnectionProfileRecord, captures: [IOSConnectionEntryCapture],
+                                       selected: ClientBundle, original: Data, model: RouterVPNModel) throws {
+        guard let nodes = saved.preferences?.multihopNodes, nodes.count == captures.count else {
+            throw issue("The saved ordered chain lost one of its captured policies.")
+        }
+        var replacements: [(original: Data, updated: ClientBundle)] = [(original, selected)]
+        for (position, capture) in captures.enumerated() {
+            guard nodes[position].id == capture.nodeID,
+                  let data = IOSNodeBundleStore.shared.bundleData(containing: capture.nodeID, current: model.bundle),
+                  let source = try? JSONDecoder().decode(ClientBundle.self, from: data),
+                  source.routerProfiles.filter({ $0.id == capture.nodeID }).count == 1,
+                  let profile = source.routerProfiles.first(where: { $0.id == capture.nodeID }),
+                  profile.normalizedNodeKind == capture.nodeKind, profile.nodeProofID == capture.nodeProofID,
+                  profile.external == nil, capture.externalProtocol == nil, capture.externalPublicIP == nil else {
+                throw issue("A saved chain member is missing or its paired identity changed. Update the saved connection profile.")
+            }
+            if capture.nodeID == saved.nodeID {
+                guard data == original, capture.preferences == saved.preferences else {
+                    throw issue("The chain's final control policy no longer matches its original capture.")
+                }
+                continue
+            }
+            let restored = applying(capture.preferences, to: profile)
+            let replacementIndex: Int
+            if let index = replacements.firstIndex(where: { $0.original == data }) { replacementIndex = index }
+            else {
+                replacementIndex = replacements.count
+                replacements.append((data, source))
+            }
+            guard let index = replacements[replacementIndex].updated.routerProfiles.firstIndex(where: { $0.id == capture.nodeID }) else {
+                throw issue("The saved chain member moved to another private record.")
+            }
+            replacements[replacementIndex].updated.routerProfiles[index] = restored
+            if data != original {
+                replacements[replacementIndex].updated.selectedRouterID = restored.id
+                replacements[replacementIndex].updated.nodeProofID = restored.nodeProofID ?? ""
+                replacements[replacementIndex].updated.endpoint = restored.endpoint
+                replacements[replacementIndex].updated.routerAPI = restored.routerAPI
+                replacements[replacementIndex].updated.apiToken = restored.apiToken
+                replacements[replacementIndex].updated.adGuardIPv4 = restored.adGuardIPv4
+                replacements[replacementIndex].updated.adGuardIPv6 = restored.adGuardIPv6
+            }
+        }
+        try model.restoreConnectionProfile(replacements, selectedID: saved.nodeID)
+    }
+
     private static func applying(_ prefs: IOSConnectionSafePreferences, to source: RouterProfile) -> RouterProfile {
         var profile = source
         profile.homeLANAccess = prefs.homeLANAccess
@@ -436,10 +504,11 @@ private enum IOSConnectionProfileStore {
         profile.dnsBootstrap = prefs.dnsBootstrap
         profile.multihopEnabled = prefs.multihopEnabled
         profile.multihopEntryID = prefs.multihopEntryID
-        profile.multihopEntryMode = prefs.multihopEntryMode ?? "wg"
+        profile.multihopEntryMode = prefs.multihopNodes == nil ? prefs.multihopEntryMode ?? "wg" : prefs.multihopEntryMode
         profile.multihopExitID = prefs.multihopExitID
         profile.multihopExitMode = prefs.multihopExitMode
         profile.multihopExecution = prefs.multihopExecution ?? "local"
+        profile.multihopNodes = prefs.multihopNodes
         return profile
     }
 
@@ -480,7 +549,11 @@ private enum IOSConnectionProfileStore {
                     throw issue("Router connection profile is missing its non-secret preference snapshot.")
                 }
                 record.preferences = try validatePreferences(preferences)
-                if preferences.multihopEnabled, preferences.multihopExitID != record.nodeID {
+                if let nodes = preferences.multihopNodes {
+                    try IOSMultihopNodeSelection.validate(nodes, execution: preferences.multihopExecution,
+                        entryID: preferences.multihopEntryID, entryMode: preferences.multihopEntryMode,
+                        exitID: preferences.multihopExitID, exitMode: preferences.multihopExitMode, controlID: record.nodeID)
+                } else if preferences.multihopEnabled, preferences.multihopExitID != record.nodeID {
                     throw issue("Saved multihop exit does not match the connection profile's node.")
                 }
                 if record.mode == "external" { throw issue("Router connection profile cannot use external mode.") }
@@ -513,6 +586,29 @@ private enum IOSConnectionProfileStore {
                 } else {
                     guard record.externalProtocol == nil, record.externalPublicIP == nil else { throw issue("External identity cannot be detached from its saved policy.") }
                 }
+            }
+            if let nodes = record.preferences?.multihopNodes {
+                guard record.nodeKind == "router-vpn", record.entryPolicy == nil,
+                      var captures = record.chainPolicies, captures.count == nodes.count else {
+                    throw issue("Saved ordered chain policies are incomplete or mixed with a separate entry.")
+                }
+                var proofs = Set<String>()
+                for position in captures.indices {
+                    var capture = captures[position]
+                    guard capture.nodeID == nodes[position].id, capture.nodeKind == "router-vpn",
+                          let proof = capture.nodeProofID, proof.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
+                          proofs.insert(proof).inserted, capture.externalProtocol == nil, capture.externalPublicIP == nil else {
+                        throw issue("Saved ordered chain member policy has another position or paired identity.")
+                    }
+                    capture.preferences = try validatePreferences(capture.preferences)
+                    if position == nodes.count - 1, capture.preferences != record.preferences {
+                        throw issue("Saved ordered chain final policy does not match its control profile.")
+                    }
+                    captures[position] = capture
+                }
+                record.chainPolicies = captures
+            } else if record.chainPolicies != nil {
+                throw issue("Saved node policies cannot be detached from their ordered selection.")
             }
             if var entry = record.entryPolicy {
                 guard record.preferences?.multihopEnabled == true,
@@ -572,7 +668,11 @@ private enum IOSConnectionProfileStore {
         } else {
             p.manualMTU = 0
         }
-        if p.multihopEnabled {
+        if let nodes = p.multihopNodes {
+            guard !external else { throw issue("An ordered chain currently requires a paired Router control profile.") }
+            try IOSMultihopNodeSelection.validate(nodes, execution: p.multihopExecution,
+                entryID: p.multihopEntryID, entryMode: p.multihopEntryMode, exitID: p.multihopExitID, exitMode: p.multihopExitMode)
+        } else if p.multihopEnabled {
             // Entry source kind is independent of the final node kind. Exact
             // graph support is checked by iosMultihopEntryBundle before adoption.
             guard let entry = p.multihopEntryID, let exit = p.multihopExitID, entry != exit,

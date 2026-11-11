@@ -195,6 +195,10 @@ final class RouterVPNModel: ObservableObject {
                 return try IOSDNSRuntimePolicy.patch(value)
             },
             validate: { selected, prepared in
+                if IOSDNSRuntimePolicy.selectedProfile(in: selected)?.multihopNodes != nil {
+                    _ = try self.iosNodeChainBundles(for: selected, capturedBundles: prepared)
+                    return
+                }
                 guard let profile = IOSDNSRuntimePolicy.selectedProfile(in: selected),
                       let entryID = profile.multihopEntryID,
                       let entry = prepared.first(where: { $0.routerProfiles.contains(where: { $0.id == entryID }) }) else {

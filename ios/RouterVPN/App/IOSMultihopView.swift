@@ -3,6 +3,53 @@ import SwiftUI
 
 @MainActor
 extension RouterVPNModel {
+    /// Capture every linked record in forwarding order. This validates saved
+    /// references and source ownership; native admission separately compiles
+    /// complete member inputs and proves the original running path.
+    func iosNodeChainBundles(for selected: ClientBundle, capturedBundles: [ClientBundle]? = nil) throws -> [ClientBundle] {
+        guard selected.routerProfiles.filter({ $0.id == selected.selectedRouterID }).count == 1,
+              let control = selected.routerProfiles.first(where: { $0.id == selected.selectedRouterID }),
+              control.normalizedNodeKind == "router-vpn", control.external == nil,
+              let nodes = control.multihopNodes else {
+            throw IOSMultihopNodeSelection.issue("The ordered chain has no exact selected Router source.")
+        }
+        try IOSMultihopNodeSelection.validate(nodes, execution: control.multihopExecution,
+            entryID: control.multihopEntryID, entryMode: control.multihopEntryMode,
+            exitID: control.multihopExitID, exitMode: control.multihopExitMode, controlID: control.id)
+        var result: [ClientBundle] = [], proofs = Set<String>()
+        for node in nodes {
+            var source: ClientBundle
+            if node.id == control.id { source = selected }
+            else if let capturedBundles {
+                let matches = capturedBundles.filter { $0.routerProfiles.contains(where: { $0.id == node.id }) }
+                guard matches.count == 1, let value = matches.first else {
+                    throw IOSMultihopNodeSelection.issue("A captured chain member is missing or belongs to more than one private record.")
+                }
+                source = value
+            } else {
+                guard let data = IOSNodeBundleStore.shared.bundleData(containing: node.id, current: bundle),
+                      !data.isEmpty, data.count <= 32 * 1024 * 1024 else {
+                    throw IOSMultihopNodeSelection.issue("A selected chain node no longer has its linked private source.")
+                }
+                source = try JSONDecoder().decode(ClientBundle.self, from: data)
+            }
+            guard source.routerProfiles.filter({ $0.id == node.id }).count == 1,
+                  let profile = source.routerProfiles.first(where: { $0.id == node.id }),
+                  profile.normalizedNodeKind == "router-vpn", profile.external == nil,
+                  let proof = profile.nodeProofID, proof.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
+                  proofs.insert(proof).inserted,
+                  let files = source.profiles[node.mode], !files.isEmpty else {
+                throw IOSMultihopNodeSelection.issue("Each chain position needs its own paired Router identity and selected raw transport source.")
+            }
+            source.selectedRouterID = profile.id
+            source.nodeProofID = proof; source.endpoint = profile.endpoint
+            source.routerAPI = profile.routerAPI; source.apiToken = profile.apiToken
+            source.adGuardIPv4 = profile.adGuardIPv4; source.adGuardIPv6 = profile.adGuardIPv6
+            result.append(source)
+        }
+        return result
+    }
+
     static let ordinaryExternalHopProtocols: Set<String> = ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
     /// Picker availability uses the selected paired home's original raw assets.
     /// Save and Connect capture and validate those same sources again.
@@ -207,6 +254,7 @@ extension RouterVPNModel {
         value.routerProfiles[index].multihopExitID = exitID
         value.routerProfiles[index].multihopExitMode = exitMode
         value.routerProfiles[index].multihopExecution = execution
+        value.routerProfiles[index].multihopNodes = nil
         let exit = value.routerProfiles[index]
         value.nodeProofID = exit.nodeProofID ?? value.nodeProofID
         value.endpoint = exit.endpoint

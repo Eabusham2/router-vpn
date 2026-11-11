@@ -605,6 +605,38 @@ struct IOSNodeLatencyReceipt: Codable, Hashable, Sendable {
     }
 }
 
+// Ordered references contain no private transport material. Each member's
+// complete source remains in its original linked bundle.
+struct IOSMultihopNodeSelection: Codable, Hashable {
+    var id: String
+    var mode: String
+
+    static let maximumNodes = 8
+
+    static func validate(_ nodes: [Self], execution: String?, entryID: String?, entryMode: String?,
+                         exitID: String?, exitMode: String?, controlID: String? = nil) throws {
+        guard (2...maximumNodes).contains(nodes.count), execution == "local",
+              [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
+            throw issue("An ordered chain needs two to eight nodes, explicit Local execution, and no separate entry/exit selection.")
+        }
+        var seen = Set<String>()
+        for node in nodes {
+            guard node.id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
+                  node.mode.range(of: "\\A[a-z0-9-]{1,64}\\z", options: .regularExpression) != nil,
+                  seen.insert(node.id).inserted else {
+                throw issue("Each ordered position needs a distinct linked node and its exact transport.")
+            }
+        }
+        if let controlID, nodes.last?.id != controlID {
+            throw issue("The selected Router node must be the final node of this ordered chain.")
+        }
+    }
+
+    static func issue(_ text: String) -> NSError {
+        NSError(domain: "RouterVPN.NodeChain", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
+    }
+}
+
 struct RouterProfile: Identifiable, Codable, Hashable {
     var schemaVersion: Int?
     var id: String
@@ -645,6 +677,7 @@ struct RouterProfile: Identifiable, Codable, Hashable {
     var multihopExitID: String?
     var multihopExitMode: String?
     var multihopExecution: String?
+    var multihopNodes: [IOSMultihopNodeSelection]?
     var mtuPolicy: String?
     var manualMTU: Int?
     var effectiveMTU: Int?
@@ -731,6 +764,7 @@ struct RouterProfile: Identifiable, Codable, Hashable {
         case multihopExitID = "multihop_exit_id"
         case multihopExitMode = "multihop_exit_mode"
         case multihopExecution = "multihop_execution"
+        case multihopNodes = "multihop_nodes"
         case mtuPolicy = "mtu_policy"
         case manualMTU = "manual_mtu"
         case effectiveMTU = "effective_mtu"

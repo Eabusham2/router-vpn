@@ -389,7 +389,9 @@ def main():
     policy = 'enum IOSDNSRuntimePolicy {\nstatic func patch(_ b:ClientBundle)throws->ClientBundle{b}\n' + modes + '\n' + selected + '}\n'
     model = (APP / 'RouterVPNModel.swift').read_text()
     restore = model[model.index('    func restoreConnectionProfile('):model.index('    /// Measurement commits')]
-    boundaries = BOUNDARIES.replace(' // SHIPPING_RESTORE', restore)
+    multihop = (APP / 'IOSMultihopView.swift').read_text()
+    chain_capture = multihop[multihop.index('    func iosNodeChainBundles('):multihop.index('    static let ordinaryExternalHopProtocols')]
+    boundaries = BOUNDARIES.replace(' // SHIPPING_RESTORE', restore + '\n' + chain_capture)
     with tempfile.TemporaryDirectory(prefix='ios-external-profiles-') as temporary:
         work = Path(temporary)
         options = [swift, '-j', '1', '-swift-version', '6', '-module-cache-path', str(work / 'modules')]

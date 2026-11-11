@@ -152,6 +152,9 @@ enum IOSRuntimeSelector {
     }
 
     static func selectMultihop(bundle: ClientBundle, rawProfileID: String?) throws -> IOSRuntimeSelection {
+        if IOSDNSRuntimePolicy.selectedProfile(in: bundle)?.multihopNodes != nil {
+            throw IOSRuntimeSelectionError.unsupportedMode("The saved ordered chain requires its complete native chain owner before Connect is available.")
+        }
         guard rawProfileID == nil, let profile = IOSDNSRuntimePolicy.selectedProfile(in: bundle),
               profile.normalizedNodeKind == "router-vpn", profile.multihopEnabled == true,
               profile.multihopExitID == profile.id,

@@ -104,6 +104,34 @@ for key in ["daitaEnabled","jumboTUN"] {
     var bad = object;bad[key] = "true"
     do { _ = try JSONDecoder().decode(IOSConnectionSafePreferences.self,from:JSONSerialization.data(withJSONObject:bad));fatalError("invalid performance flag accepted") } catch { checks += 1 }
 }
+var chain = legacy
+chain.multihopEnabled = true; chain.multihopExecution = "local"
+chain.multihopNodes = (0..<4).map { IOSMultihopNodeSelection(id:"ordered-\($0)",mode:$0 == 3 ? "shadowsocks" : "wg") }
+let chainData = try JSONEncoder().encode(chain)
+let chainCopy = try JSONDecoder().decode(IOSConnectionSafePreferences.self,from:chainData)
+try check("ordered chain keeps every position and mode",chainCopy == chain && chainCopy.multihopNodes?.count == 4)
+try check("ordered chain does not fabricate legacy pair fields",chainCopy.multihopEntryID == nil && chainCopy.multihopEntryMode == nil && chainCopy.multihopExitID == nil && chainCopy.multihopExitMode == nil)
+let chainObject = try JSONSerialization.jsonObject(with:chainData) as! [String:Any]
+for count in [0,1,9] {
+ var bad=chainObject;bad["multihopNodes"]=(0..<count).map{["id":"node-\($0)","mode":"wg"]}
+ do {_ = try preferences(String(decoding:JSONSerialization.data(withJSONObject:bad),as:UTF8.self));fatalError("invalid chain count accepted")}catch{checks+=1}
+}
+for key in ["multihopEntryID","multihopEntryMode","multihopExitID","multihopExitMode"] {
+ var bad=chainObject;bad[key]=key.hasSuffix("Mode") ? "wg":"legacy-node"
+ do {_ = try preferences(String(decoding:JSONSerialization.data(withJSONObject:bad),as:UTF8.self));fatalError("mixed pair and chain accepted")}catch{checks+=1}
+}
+for selection in ["auto","server",""] {
+ var bad=chainObject;bad["multihopExecution"]=selection
+ do {_ = try preferences(String(decoding:JSONSerialization.data(withJSONObject:bad),as:UTF8.self));fatalError("implicit or remote chain execution accepted")}catch{checks+=1}
+}
+for invalid in [["id":"ordered-0","mode":"wg"],["id":"node.1","mode":"wg"],["id":"node-1","mode":"WG"],["id":"node-1","mode":"wg\n"]] {
+ var bad=chainObject;var nodes=bad["multihopNodes"] as! [[String:Any]];nodes[1]=invalid;bad["multihopNodes"]=nodes
+ do {_ = try preferences(String(decoding:JSONSerialization.data(withJSONObject:bad),as:UTF8.self));fatalError("ambiguous ordered reference accepted")}catch{checks+=1}
+}
+var injectedChain=chainObject;var injectedNodes=injectedChain["multihopNodes"] as! [[String:Any]]
+injectedNodes[1]["api_token"]="never-copy-chain-secret";injectedChain["multihopNodes"]=injectedNodes
+let cleanChain=try preferences(String(decoding:JSONSerialization.data(withJSONObject:injectedChain),as:UTF8.self))
+try check("ordered references never persist injected credentials",!String(decoding:JSONEncoder().encode(cleanChain),as:UTF8.self).contains("never-copy-chain-secret"))
 print("iOS shipping multihop profile serialization: PASS (\(checks) executable checks; no credentials/network/storage used)")
 '''
 
@@ -118,7 +146,8 @@ def main() -> None:
     # Swift access control and synthesized Codable implementations stay real.
     models = (SOURCE.parent / 'Models.swift').read_text()
     bootstrap = models[models.index('struct ExternalDNSBootstrap:'):models.index('struct ExternalWireGuardConfig:')]
-    test = 'import Foundation\n' + bootstrap + '\n' + text[start:end] + '\n@MainActor private func runChecks() throws {\n' + TEST + '\n}\ntry runChecks()\n'
+    chain = models[models.index('struct IOSMultihopNodeSelection:'):models.index('struct RouterProfile:')]
+    test = 'import Foundation\n' + bootstrap + '\n' + chain + '\n' + text[start:end] + '\n@MainActor private func runChecks() throws {\n' + TEST + '\n}\ntry runChecks()\n'
     with tempfile.TemporaryDirectory(prefix='routervpn-multihop-profiles-') as tmp:
         source, binary = Path(tmp) / 'main.swift', Path(tmp) / 'profiles'
         source.write_text(test)

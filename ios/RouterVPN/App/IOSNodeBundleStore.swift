@@ -60,16 +60,16 @@ final class IOSNodeBundleStore {
         _ = try store(source, replaceExistingRecord: true)
     }
 
-    /// A saved connection may own policy on two independently linked nodes.
-    /// Prepare both original records before one durable commit; never expose a
-    /// restored entry with an old exit, or overwrite a concurrently relinked node.
+    /// Prepare every captured original record before one durable commit. A
+    /// saved pair or ordered chain must not expose partially restored settings
+    /// or overwrite a concurrently relinked node.
     func restoreConnectionProfile(
         _ replacements: [(original: Data, updated: ClientBundle)], selectedID: String,
         current: ClientBundle?, prepare: (ClientBundle) throws -> ClientBundle,
         validate: (ClientBundle, [ClientBundle]) throws -> Void
     ) throws -> (bundle: ClientBundle, data: Data) {
         try ensureStorageReady()
-        guard (1...2).contains(replacements.count) else { throw profileRestoreError() }
+        guard (1...IOSMultihopNodeSelection.maximumNodes).contains(replacements.count) else { throw profileRestoreError() }
         let originalRecords = records
         let available = readableRecords(current: current)
         var next = available, seen = Set<String>(), prepared: [ClientBundle] = []
@@ -313,6 +313,7 @@ final class IOSNodeBundleStore {
         }
         var selectedID = bundle.selectedRouterID
         var localIDs = Set<String>()
+        var chainAliases: [String: Set<String>] = [:]
         for index in bundle.routerProfiles.indices {
             var profile = bundle.routerProfiles[index]
             let oldID = profile.id
@@ -356,7 +357,28 @@ final class IOSNodeBundleStore {
                 throw NSError(domain: "RouterVPN.NodeStore", code: 4, userInfo: [NSLocalizedDescriptionKey: "Node bundle contains duplicate node ids"])
             }
             if selectedID == oldID { selectedID = profile.id }
+            chainAliases[oldID, default: []].insert(profile.id)
             bundle.routerProfiles[index] = profile
+        }
+        for index in bundle.routerProfiles.indices {
+            guard var nodes = bundle.routerProfiles[index].multihopNodes else { continue }
+            for position in nodes.indices {
+                if let aliases = chainAliases[nodes[position].id] {
+                    guard aliases.count == 1, let canonical = aliases.first,
+                          !localIDs.contains(nodes[position].id) || canonical == nodes[position].id else {
+                        throw IOSMultihopNodeSelection.issue("An ordered node reference has an ambiguous imported identity.")
+                    }
+                    nodes[position].id = canonical
+                }
+            }
+            let profile = bundle.routerProfiles[index]
+            guard profile.normalizedNodeKind == "router-vpn", profile.external == nil else {
+                throw IOSMultihopNodeSelection.issue("An ordered chain requires a paired Router control profile.")
+            }
+            try IOSMultihopNodeSelection.validate(nodes, execution: profile.multihopExecution,
+                entryID: profile.multihopEntryID, entryMode: profile.multihopEntryMode,
+                exitID: profile.multihopExitID, exitMode: profile.multihopExitMode, controlID: profile.id)
+            bundle.routerProfiles[index].multihopNodes = nodes
         }
         if !bundle.routerProfiles.contains(where: { $0.id == selectedID }) { selectedID = bundle.routerProfiles[0].id }
         bundle.selectedRouterID = selectedID

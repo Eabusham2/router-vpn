@@ -222,7 +222,7 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    let before=try encoded(model.bundle!)
    _=try IOSConnectionProfileStore.load(model:model,id:"legacy")
    try check("legacy Tor remains selection-only",encoded(model.bundle!)==before && IOSConnectionProfileStore.all()[0].preferences==nil)
-   try check("legacy envelope migrates without invented preferences",try object(IOSPrivateJSONStore.bytes!)["schema_version"] as? Int==7)
+   try check("legacy envelope migrates without invented preferences",try object(IOSPrivateJSONStore.bytes!)["schema_version"] as? Int==8)
    let updated=try IOSConnectionProfileStore.update(model:model,id:"legacy",name:"Captured now")
    try check("explicit Update captures a complete legacy Tor profile",updated.id=="legacy" && updated.preferences != nil && updated.externalPublicIP=="")
   }
@@ -291,7 +291,7 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
   let entryBytes=store.bundleData(containing:entryID,current:nil)!
   let actions=ProfileActions(legacyModel);actions.selectedID=legacy.id;actions.load()
   try check("legacy multihop retains current uncaptured entry",actions.status.hasPrefix("Loaded") && actions.status.contains("Older profile: entry settings use the current linked node") && store.bundleData(containing:entryID,current:nil)==entryBytes && IOSConnectionProfileStore.all()[0].entryPolicy==nil)
-  try check("legacy migration never fabricates entry capture",try object(IOSPrivateJSONStore.bytes!)["schema_version"] as? Int==7)
+  try check("legacy migration never fabricates entry capture",try object(IOSPrivateJSONStore.bytes!)["schema_version"] as? Int==8)
  }
  static func nativeRejections()throws {
   for fault in ["fixed-ip","other-owner","bridge-port","bridge-malformed","custom-udp","doh3","resolver-hostname","dns-bootstrap","ipv6","jumbo-fixed","lan-range","start-layer","cover-small","cover-large"] {
@@ -502,7 +502,7 @@ def main():
     source = source.replace(' // SHIPPING_APPLY', member(model, '    private func apply('))
     source = source.replace(' // SHIPPING_LEGACY_MODES', member(model, '    private func legacyLogicalModes('))
     source = source.replace(' // SHIPPING_GRAPH', '\n'.join(member(multihop, signature) for signature in [
-        '    func iosMultihopEntryBundle(', '    private func iosOrdinaryExternalEntryBundle(', '    private func iosMultihopError(']))
+        '    func iosNodeChainBundles(', '    func iosMultihopEntryBundle(', '    private func iosOrdinaryExternalEntryBundle(', '    private func iosMultihopError(']))
     source = source.replace(' // SHIPPING_ACTIONS', actions)
     source = source.replace(' // SHIPPING_RUNTIME', member(external, '    func externalRuntimeBundleData('))
     with tempfile.TemporaryDirectory(prefix='.ios-tor-profiles-go-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-tor-connections-') as temporary:
