@@ -8,6 +8,7 @@ if($NegativeControl-ceq'raw-mode'){$Settings=$Settings.Replace("@('wg','awg2-fas
 if($NegativeControl-ceq'source-token'){$Settings=$Settings.Replace("-or[string](Get-RouterVPNOrderedValue `$matchingProfiles[0] 'profile_token')-cne`$token",'')}
 . ([ScriptBlock]::Create($Settings))
 $Unified=[IO.File]::ReadAllText((Join-Path $Client 'RouterVPN-Windows-UnifiedShell.ps1'),[Text.Encoding]::UTF8)
+if($NegativeControl-ceq'summary-reset'){$Unified=$Unified.Replace("`$description.Text='Choose each intermediate transport and the final node.'",'')}
 . ([ScriptBlock]::Create($Unified))
 $ProductSource=Add-RouterVPNUnifiedWindowsShell ([IO.File]::ReadAllText((Join-Path $Client 'RouterVPN-Windows-Product-v2.ps1'),[Text.Encoding]::UTF8))
 $script:Checks=0
@@ -126,8 +127,15 @@ try{
     $rootControls['UnifiedMultihop'].IsChecked=$false;RefreshUnifiedOrderedControls
     Check ($rootControls['UnifiedModeCombo'].Visibility-ceq'Visible'-and$rootControls['UnifiedOrderedModeSummary'].Visibility-ceq'Collapsed') 'direct mode display remained hidden after disabling multihop'
     $saved.nodes[1].id='altered';Check ($rows[1].id-ceq'prefix-1') 'committed draft retained mutable editor rows'
+    foreach($selectedID in @('prefix-2','missing-final')){
+        $rootControls['UnifiedOrderedModeSummary'].Text='AmneziaWG Strong → previous final'
+        $replacement=$store|ConvertTo-Json -Depth 8|ConvertFrom-Json;$replacement.selected_id=$selectedID
+        RefreshUnifiedOrderedSelection $replacement
+        $rootControls['UnifiedMultihop'].IsChecked=$true;$rootControls['UnifiedOrdered'].IsChecked=$true;RefreshUnifiedOrderedControls
+        Check ($rootControls['UnifiedOrderedModeSummary'].Text-ceq'Choose each intermediate transport and the final node.') 'new incomplete ordered selection displayed a previous path transport summary'
+    }
     if(-not$NegativeControl){
-        $controls=@{'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft'}
+        $controls=@{'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary'}
         foreach($key in $controls.Keys){
             $command="try { & '"+$PSCommandPath.Replace("'","''")+"' -Root '"+$Root.Replace("'","''")+"' -NegativeControl '"+$key+"' } catch { [Console]::Error.WriteLine(`$_.Exception.Message); exit 1 }"
             $child=New-Object Diagnostics.Process

@@ -842,6 +842,7 @@ function RefreshUnifiedOrderedControls {
 function RefreshUnifiedOrderedSelection($Store) {
     $button=Control 'UnifiedNodeChainButton';$toggle=Control 'UnifiedOrdered';$label=Control 'UnifiedNodeChainSummary'
     if($null-eq$button-or$null-eq$toggle-or$null-eq$label){return}
+    $description=Control 'UnifiedOrderedModeSummary';if($null-ne$description){$description.Text='Choose each intermediate transport and the final node.'}
     $id=[string](Get-RouterVPNOrderedValue $Store 'selected_id')
     $selected=@($Store.profiles|Where-Object{[string]$_.id-ceq$id})
     if($selected.Count-ne1){$button.Tag=$null;$toggle.IsChecked=$false;$label.Text='Select a linked exit node first.';return}
