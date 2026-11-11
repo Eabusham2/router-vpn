@@ -27,6 +27,7 @@ function Reset-Fixture {
     $script:UnifiedAsyncSuccess=$null; $script:UnifiedAsyncFailure=$null; $script:UnifiedAsyncFinally=$null
     $script:UnifiedAsyncLabel=''; $script:UnifiedAsyncCancelled=$false; $script:UnifiedAsyncDisconnectAfterCancel=$false
     $script:UnifiedAsyncActive=$false; $script:UnifiedAsyncCompleting=$false; $script:UnifiedAsyncClosed=$false
+    $script:UnifiedAsyncOwnedStopRetry=$false
     $script:UnifiedProtectionPending=$false
     $script:UnifiedAsyncPoller=[pscustomobject]@{Starts=0;Stops=0}
     $script:UnifiedAsyncPoller | Add-Member ScriptMethod Start {$this.Starts++}
