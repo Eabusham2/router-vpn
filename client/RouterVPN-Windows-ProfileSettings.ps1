@@ -491,7 +491,8 @@ function global:Invoke-RouterVPNConnectionSetup {
     # existing refresh owner will drain it without applying its stale reply.
     if($null-ne${function:CancelUnifiedRefreshAsync}){[void](CancelUnifiedRefreshAsync)}
     try{
-        $response=Invoke-RouterVPNControllerRequest -Uri ($BaseUrl.TrimEnd('/')+'/api/connection-profile/setup/'+$Operation) -Method Post -ContentType 'application/json' -Body ($request|ConvertTo-Json -Depth 16 -Compress) -TimeoutSec 12
+        $paths=@{save='/api/connection-profile/setup/save';update='/api/connection-profile/setup/update';load='/api/connection-profile/setup/load'}
+        $response=Invoke-RouterVPNControllerRequest -Uri ($BaseUrl.TrimEnd('/')+$paths[$Operation]) -Method Post -ContentType 'application/json' -Body ($request|ConvertTo-Json -Depth 16 -Compress) -TimeoutSec 12
         $tokens=Confirm-RouterVPNSetupResponse $Owner $capture $response
         if($Operation-ceq'load'){
             $selected=$Owner.FindName('UnifiedNodeCombo')
