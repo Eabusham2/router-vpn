@@ -50,7 +50,7 @@ def require_native_multihop_proof_admission() -> None:
     if not native_multihop_proof_admission(
             read("cmd/client/multihop_native_capture.go"),
             read("cmd/client/multihop_native_imported.go"),
-            read("cmd/client/multihop_native_imported_dns.go")):
+            read("cmd/client/multihop_native_imported_dns.go"), read):
         errors.append("native multihop original caller/runtime, captured node proofs or selected DNS admission are incomplete")
 
 

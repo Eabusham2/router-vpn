@@ -105,6 +105,66 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.changes[path] += "\n// " + before + "\n"
                 self.assert_backend_proof_admission(False)
 
+    def assert_speedlab_imported_platform(self, expected):
+        source = ast.parse((ROOT / "deploy/speed-lab-shipping-audit.py").read_text())
+        functions = [node for node in source.body if isinstance(node, ast.FunctionDef)
+                     and node.name == "need_imported_speed_lab_current"]
+        self.assertEqual(len(functions), 1)
+        scope = {"read": self.body, "errors": [], "_native_module": _NATIVE}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), "speedlab-imported-platform", "exec"), scope)
+        scope["need_imported_speed_lab_current"]()
+        self.assertEqual(not scope["errors"], expected)
+
+    def test_platform_adapter_requires_concrete_native_owner_and_both_proofs(self):
+        self.assert_backend_proof_admission(True)
+        self.assert_speedlab_imported_platform(True)
+        lifecycle = "cmd/client/desktop_imported_linux_lifecycle.go"
+        for path, before, after in (
+            ("cmd/client/desktop_node_owned.go", "return guardDesktopImportedPlatformTransition(ctx, a, next)", "return nil"),
+            (lifecycle, "owner, ok := launch.importedPlatform.(*desktopLinuxImportedConnection)", "owner, ok := launch.importedPlatform.(desktopImportedPlatformRuntime)"),
+            (lifecycle, "!owner.registered", "false"),
+            (lifecycle, "_, retained := p.dependents[h]", "retained := true"),
+            (lifecycle, "return h.CheckLegacyTransition(ctx)", "return nil"),
+            (lifecycle, "s.active != h", "false"),
+            (lifecycle, "s.currentLocked(ctx)", "nil"),
+            (lifecycle, "h.runningPolicyLocked(ctx)", "nil"),
+            (lifecycle, "h.readReadyLocked(ctx, false)", "h.readReadyLocked(context.Background(), false)"),
+            (lifecycle, "proveNativeMultihopCapture(ctx, owner.selection, func() bool { return current(ctx) == nil }, proveNativeMultihopLaneContext)", "nil"),
+            (lifecycle, "expectedDNSSelection(owner.selection.Exit)", "expectedDNSSelection(owner.selection.Entry)"),
+            (lifecycle, "verifySingBoxDNSConfigBytes(h.launch.config, selected)", "nil"),
+            (lifecycle, "return owner.session.Monitor(ctx, owner.host)", "return nil"),
+            ("cmd/client/desktop_imported_platform.go", "launch.importedPlatform.Start(ctx)", "launch.importedPlatform.Start(context.Background())"),
+            ("cmd/client/desktop_imported_platform.go", "launch.importedPlatform.Current(ctx)", "nil"),
+            ("cmd/client/multihop_native_launch.go", "if current, found := desktopNodeOwners.Load(a); !found || current != launch {", "if false {"),
+        ):
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\n"
+                self.assert_backend_proof_admission(False)
+                self.assert_speedlab_imported_platform(False)
+                self.assert_multihop_scores(False)
+
+    def test_platform_start_proof_activation_and_successor_intent_keep_original_caller(self):
+        path = "cmd/client/multihop_native_routes.go"
+        for before, after in (
+            ("a.stopModeWithIntent(native.ownedNode != nil || native.importedPlatform != nil)", "a.stopModeWithIntent(native.ownedNode != nil)"),
+            ("startDesktopImportedPlatform(operation, a, sel, native)", "startDesktopImportedPlatform(context.Background(), a, sel, native)"),
+            ("proofErr = native.importedPlatform.Activate(operation)", "proofErr = nil"),
+        ):
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\n"
+                self.assert_multihop_chain(False)
+
+    def test_platform_duplicate_or_missing_observer_cannot_supply_authority(self):
+        self.assertFalse(_NATIVE.native_multihop_platform_chain(None))
+        path = "cmd/client/desktop_imported_linux_lifecycle.go"
+        self.changes[path] = self.body(path) + "\nfunc (owner *desktopLinuxImportedConnection) Current(ctx context.Context) error { return nil }\n"
+        self.assert_backend_proof_admission(False)
+        self.assert_speedlab_imported_platform(False)
+
     def assert_multihop_chain(self, expected):
         self.assert_multihop_scores(expected)
         # Exercise the actual backend audit hook, including its read/error path.

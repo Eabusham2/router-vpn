@@ -110,7 +110,8 @@ def need_imported_speed_lab_current() -> None:
     checks = positions(verify, "validateSpeedLabIdentityContext(ctx, a, identity)") if verify is not None else []
     dns = positions(verify, "a.proveImportedNativeDNS(ctx, identity.Imported.selection, identity.Command)") if verify is not None else []
     valid = (
-        has(capture,
+        _native_module.native_multihop_platform_chain(read)
+        and has(capture,
             'if st.Mode == "multihop" && graphOK && graph.ImportedEntry {',
             'imported, err = capturedNativeMultihopRuntimeContext(ctx, a, command, graph)',
             'Imported: imported')
@@ -120,7 +121,11 @@ def need_imported_speed_lab_current() -> None:
             'if !exists || identity.Imported == nil || owner != identity.Imported {',
             'network, err = identity.Imported.physicalNetworkContext(ctx)',
             'owner, err := capturedNativeMultihopRuntimeContext(ctx, a, identity.Command, current)',
-            'if err != nil || identity.Imported == nil || owner != identity.Imported || !a.nativeMultihopProofOwnerCurrentContext(ctx, owner.selection, identity.Command) {')
+            'if err != nil || identity.Imported == nil || owner != identity.Imported || !a.nativeMultihopProofOwnerCurrentContext(ctx, owner.selection, identity.Command) {',
+            '''if identity.Imported != nil && identity.Imported.launch != nil && identity.Imported.launch.importedPlatform != nil {
+                if identity.Linux != nil { return errors.New("Speed Lab imported graph cannot replace its original identity with a single-node path") }
+                return identity.Imported.launch.importedPlatform.Current(ctx)
+            }''')
         and len(checks) == 2 and len(dns) == 1 and checks[0] < dns[0] < checks[1]
         and has(verify, '''
             if identity.Imported != nil {
@@ -142,10 +147,10 @@ def need_imported_speed_lab_current() -> None:
             'actual, err := observe(ctx)',
             'if err != nil || ctx.Err() != nil { return errors.Join(err, ctx.Err()) }',
             '!a.ownsConnectionRuntime(launch.command) || network == "" || actual != network',
-            'current, ok := desktopNodeOwners.Load(a)',
-            '!ok || current != launch',
+            'if err := nativeMultihopLaunchCurrent(ctx, a, launch); err != nil { return err }',
             'nativeMultihopOwners.Store(a, &nativeMultihopRuntime{launch: launch, selection: sel, graph: graph, network: network, networkIdentityContext: observe})')
         and _native_module._ordered_once(observe,
+            'if err := nativeMultihopLaunchCurrent(ctx, a, owner.launch); err != nil { return nil, err }',
             '''if owner.launch.ownedNode != nil && owner.launch.ownedNode.imported != nil {
                 if err := a.desktopOwnedNodeCurrentContext(ctx, owner.launch, true); err != nil {
                     return nil, err

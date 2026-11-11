@@ -47,6 +47,122 @@ def _ordered_once(tokens: list[str] | None, *fragments: str) -> bool:
     return True
 
 
+def native_multihop_platform_chain(read) -> bool:
+    """Trace the concrete Linux owner; an arbitrary interface is not proof.
+
+    This is source closure only. It neither opens public Linux admission nor
+    awards native execution credit; the installed-host runner owns that gate.
+    """
+    if not callable(read):
+        return False
+    def function(path, declaration):
+        return _function(_tokens(read("cmd/client/" + path)), declaration)
+    start = function("desktop_imported_platform.go", "func startDesktopImportedPlatform(ctx context.Context, a *app, sel multihopSelection, launch *desktopNodeLaunch) error")
+    current = function("desktop_imported_linux_lifecycle.go", "func (owner *desktopLinuxImportedConnection) Current(ctx context.Context) error")
+    prove = function("desktop_imported_linux_lifecycle.go", "func (owner *desktopLinuxImportedConnection) Prove(ctx context.Context) error")
+    native_prove = function("desktop_imported_linux_lifecycle.go", "func (h *desktopLinuxNodeHost) proveImportedLocked(parent context.Context) (elapsed time.Duration, failure error)")
+    activate = function("desktop_imported_linux_lifecycle.go", "func (owner *desktopLinuxImportedConnection) Activate(ctx context.Context) error")
+    guard = function("desktop_imported_linux_lifecycle.go", "func guardDesktopImportedPlatformTransition(ctx context.Context, a *app, launch *desktopNodeLaunch) error")
+    common_guard = function("desktop_node_owned.go", "func (a *app) guardDesktopOwnedNodeTransitionContext(ctx context.Context, next *desktopNodeLaunch) error")
+    launch = function("multihop_native_launch.go", "func nativeMultihopLaunchCurrent(ctx context.Context, a *app, launch *desktopNodeLaunch) error")
+    prepare = function("desktop_imported_linux_host.go", "func (capture *desktopLinuxImportedCapture) Prepare(ctx context.Context, a *app, sel multihopSelection) (launch *desktopNodeLaunch, failure error)")
+    return (
+        start == _tokens('''
+            if launch == nil || launch.importedPlatform == nil || sel.Native == nil || !sel.Native.imported {
+                return errors.New("imported startup lost its original typed host")
+            }
+            if err := launch.importedPlatform.Start(ctx); err != nil { return err }
+            if launch.command == nil { return errors.New("imported startup returned no original created command") }
+            if err := launch.importedPlatform.Current(ctx); err != nil { return err }
+            return registerActiveDNSRuntimeConfigKind(a, sel.Exit.ID, sel.ExitMode, filepath.Join(launch.directory, "sing-box.json"), true)
+        ''')
+        and current == _tokens('''
+            if owner == nil || owner.session == nil || owner.host == nil { return errors.New("Linux imported observation lost its original session") }
+            s, h := owner.session, owner.host
+            if err := s.enter(ctx); err != nil { return err }
+            defer func() { s.gate <- struct{}{} }()
+            if err := s.currentLocked(ctx); err != nil { return err }
+            if s.active != h || s.journal == nil || h.transaction == nil || h.transaction.journal != s.journal {
+                return errors.New("Linux imported observation belongs to a replaced session")
+            }
+            if err := h.enter(ctx); err != nil { return err }
+            defer func() { h.gate <- struct{}{} }()
+            if err := h.runningPolicyLocked(ctx); err != nil { return err }
+            if h.ready != nil {
+                _, _, err := h.readReadyLocked(ctx, false)
+                return err
+            }
+            return nil
+        ''')
+        and prove == _tokens('''
+            if owner == nil || owner.host == nil { return errors.New("Linux imported proof has no original host") }
+            if err := owner.host.enter(ctx); err != nil { return err }
+            active := owner.host.activation != nil
+            owner.host.gate <- struct{}{}
+            if active {
+                if err := owner.Current(ctx); err != nil { return err }
+                if err := proveNativeMultihopCapture(ctx, owner.selection, func() bool { return owner.Current(ctx) == nil }, proveNativeMultihopLaneContext); err != nil { return err }
+                if _, err := owner.host.parent.app.proveImportedNativeDNS(ctx, owner.selection, owner.host.launch.command); err != nil { return err }
+                return owner.Current(ctx)
+            }
+            if _, err := owner.host.WaitReady(ctx); err != nil { return err }
+            _, err := owner.host.Prove(ctx)
+            return err
+        ''')
+        and _ordered_once(native_prove,
+            'owner, ok := h.launch.importedPlatform.(*desktopLinuxImportedConnection)',
+            'if !ok || owner.host != h {',
+            'ready, live, err := h.readReadyLocked(parent, false)',
+            'ctx, cancel := context.WithTimeout(parent, time.Duration(seconds)*time.Second)',
+            'stop := context.AfterFunc(h.operation, cancel)',
+            'after, next, err := h.readReadyLocked(call, false)',
+            'if err != nil || after != ready || !sameDesktopLinuxNodeProofTUN(live, next) {',
+            'if err := proveNativeMultihopCapture(ctx, owner.selection, func() bool { return current(ctx) == nil }, proveNativeMultihopLaneContext); err != nil { return 0, err }',
+            'selected, err := expectedDNSSelection(owner.selection.Exit)',
+            '''if _, err := exchangeDesktopImportedDNS(ctx, h.launch, func(call context.Context) error {
+                if err := current(call); err != nil { return err }
+                return verifySingBoxDNSConfigBytes(h.launch.config, selected)
+            }); err != nil { return 0, err }''',
+            'if err := current(ctx); err != nil { return 0, err }',
+            'h.proof = &desktopLinuxNodeProof{ready: ready, live: live, provedAt: time.Now(), elapsed: elapsed}')
+        and activate == _tokens('''
+            if owner == nil || owner.host == nil || owner.session == nil { return errors.New("Linux imported activation has no original session") }
+            if err := owner.host.Activate(ctx); err != nil { return err }
+            return owner.session.Monitor(ctx, owner.host)
+        ''')
+        and _ordered_once(guard,
+            'owner, ok := launch.importedPlatform.(*desktopLinuxImportedConnection)',
+            '''if !ok || owner == nil || !owner.registered || owner.host == nil || owner.host.launch != launch ||
+                owner.session == nil || owner.capture == nil || owner.capture.parent == nil || owner.capture.parent.app != a ||
+                owner.host.parent != owner.capture.parent || owner.selection.Native == nil || owner.selection.Native.importedPlatform != owner.capture ||
+                launch.ownedNode != nil || launch.external != nil { return errors.New("Linux imported transition changed its concrete original host") }''',
+            'if err := s.enter(ctx); err != nil { return err }',
+            'if err := s.currentLocked(ctx); err != nil { return err }',
+            '_, retained := p.dependents[h]',
+            'if !retained { return errors.New("Linux imported transition lost its original parent cleanup registration") }',
+            'return h.CheckLegacyTransition(ctx)')
+        and _ordered_once(common_guard,
+            '''if next != nil && next.importedPlatform != nil { return guardDesktopImportedPlatformTransition(ctx, a, next) }''',
+            'if err := a.guardDesktopLinuxNodeLegacyTransitionContext(ctx); err != nil { return err }')
+        and launch == _tokens('''
+            if launch == nil { return errors.New("multihop observation lost its original launch") }
+            if launch.importedPlatform != nil { return launch.importedPlatform.Current(ctx) }
+            if current, found := desktopNodeOwners.Load(a); !found || current != launch { return errors.New("multihop system TUN owner was replaced") }
+            return ctx.Err()
+        ''')
+        and _ordered_once(prepare,
+            'sel.Native.importedPlatform != capture',
+            'sel.Native.validate(sel) != nil || !desktopLinuxImportedEligible(sel)',
+            'capture.sources.currentLocked(a, false)',
+            'original, err := mobilemultihop.ParseImportedLaunchInput(sel.Native.importedInput)',
+            'policy, err := mobilemultihop.NewDesktopImportedPolicyWithMTU(original, sessionID, "linux", sel.restoreMTU)',
+            'p.dependents[h] = struct{}{}',
+            'owner.session, err = captureDesktopLinuxNodeSession(ctx, a)',
+            'if err := h.CheckLegacyTransition(ctx); err != nil { return launch, err }',
+            'return launch, h.current(ctx)')
+    )
+
+
 def native_multihop_proof_lanes(source: str, imported_source: str) -> bool:
     """Source-only closure of both compiler captures and their exact proof routes."""
     tokens, imported = _tokens(source), _tokens(imported_source)
@@ -114,7 +230,7 @@ def native_multihop_proof_lanes(source: str, imported_source: str) -> bool:
     )
 
 
-def native_multihop_proof_admission(source: str, imported_source: str, dns_source: str) -> bool:
+def native_multihop_proof_admission(source: str, imported_source: str, dns_source: str, read=None) -> bool:
     """Bounded source evidence: original owner, both node proofs, then imported DNS.
 
     These token checks do not earn live traffic or physical acceptance credit.
@@ -128,9 +244,18 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
     lane = _function(imported, "func proveNativeMultihopLaneContext(ctx context.Context, profile common.RouterProfile, proxy string) error")
     selected_dns = _function(dns, "func (a *app) proveImportedNativeDNS(parent context.Context, selection multihopSelection, command *exec.Cmd) (float64, error)")
     return (
-        admission == _tokens('''
+        native_multihop_platform_chain(read)
+        and admission == _tokens('''
             ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), nativeMultihopProofTimeout(sel))
             defer cancel()
+            if sel.Native != nil && sel.Native.importedPlatform != nil {
+                graph, found := getActiveMultihopGraph(a)
+                owner, err := capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
+                if err != nil || !found || owner.selection.Native != sel.Native || owner.launch.importedPlatform == nil {
+                    return errors.Join(err, errors.New("Linux imported proof lost its original runtime"))
+                }
+                return owner.launch.importedPlatform.Prove(ctx)
+            }
             current := func() bool { return a.nativeMultihopProofOwnerCurrentContext(ctx, sel, command) && a.observeImportedOpenVPN(ctx, sel, command) == nil }
             if err := proveNativeMultihopCapture(ctx, sel, current, proveNativeMultihopLaneContext); err != nil { return err }
             if sel.Native.imported {
@@ -152,6 +277,14 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
             a.mu.Unlock()
             if !owned { return false }
             if !sel.Native.imported { return true }
+            if sel.Native.importedPlatform != nil {
+                raw, found := nativeMultihopOwners.Load(a)
+                owner, valid := raw.(*nativeMultihopRuntime)
+                if !found || !valid || owner == nil || owner.launch == nil || owner.launch.command != command || owner.selection.Native != sel.Native ||
+                    owner.launch.importedPlatform == nil || owner.launch.importedPlatform.Current(ctx) != nil {
+                    return false
+                }
+            }
             return selected && sel.Native.validate(sel) == nil && ctx.Err() == nil
         ''')
         and _ordered_once(proof,
@@ -229,10 +362,14 @@ def native_multihop_shipping_chain(source: str) -> bool:
     calls = (
         "sel, err = driver.capture(a, sel, []string{sel.ExitMode})",
         "native, err := driver.preflight(a, sel, nil)",
+        "a.stopModeWithIntent(native.ownedNode != nil || native.importedPlatform != nil)",
         "err = driver.stage(a, sel, native)",
         "cmd := native.command",
-        '''protected := native.ownedNode != nil
-        if protected {
+        '''protected := native.ownedNode != nil || native.importedPlatform != nil
+        if native.importedPlatform != nil {
+            err = startDesktopImportedPlatform(operation, a, sel, native)
+            cmd = native.command
+        } else if protected {
             a.mu.Lock()
             err = a.publishDesktopImportedMultihopStartLocked(operation, native, sel)
             a.mu.Unlock()
@@ -240,7 +377,7 @@ def native_multihop_shipping_chain(source: str) -> bool:
             err = cmd.Start()
         }''',
         "err = bindNativeMultihopRuntime(a, native, sel, network)",
-        '''if protected {
+        '''if protected && native.importedPlatform == nil {
             if err := startDesktopOwnedImportedLaunch(operation, operation, a, native); err != nil {
                 message, _ := a.multihopStopFailure(cmd, err.Error())
                 sessionTrackerFor(a).markRequestFailure(message)
@@ -249,6 +386,9 @@ def native_multihop_shipping_chain(source: str) -> bool:
             }
         }''',
         "proofErr := driver.proof(a, sel, cmd)",
+        '''if proofErr == nil && native.importedPlatform != nil {
+            proofErr = native.importedPlatform.Activate(operation)
+        }''',
     )
     previous = -1
     for call in calls:

@@ -163,7 +163,7 @@ def retained_native_multihop_platform(platform: str) -> bool:
                                        body("cmd/client/multihop_native_imported.go"))
         and native_multihop_proof_admission(body("cmd/client/multihop_native_capture.go"),
                                            body("cmd/client/multihop_native_imported.go"),
-                                           body("cmd/client/multihop_native_imported_dns.go"))
+                                           body("cmd/client/multihop_native_imported_dns.go"), body)
         and all_markers("cmd/client/multihop_native_launch.go",
                         "prepareOwnedNativeMultihopCommandContext(a.connectionOperationContextOrBackground(), a, sel, descriptor)",
                         "preflightOwnedNativeMultihopCommandContext(ctx, a, sel, descriptor)",
