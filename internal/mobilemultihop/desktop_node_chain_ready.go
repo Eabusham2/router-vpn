@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"strings"
 )
 
 const DesktopNodeChainReadyRecordLimit = 8192
@@ -46,17 +47,42 @@ func (r DesktopNodeChainReadyRecord) Validate(policy *DesktopNodeChainPolicy, tr
 		return bad
 	}
 	if r.Schema != 1 || r.Kind != "routervpn-node-chain-ready-v1" ||
-		(meta.TargetOS != "windows" && meta.TargetOS != "linux") ||
+		!desktopNodeChainReadyInterface(meta.TargetOS, r.InterfaceName) ||
 		r.SourceSHA256 != meta.SourceSHA256 || r.TransferSHA256 != transfer ||
 		r.DNSConfigSHA256 != capture.SelectedDNS.ConfigSHA256 ||
 		!nodeChainIdentityText(r.Identity.EngineID) || !nodeChainIdentityText(r.Identity.NetworkID) ||
 		r.Identity.SessionID != meta.SessionID || r.Identity.SourceSHA256 != meta.OriginalSourceSHA256 ||
 		r.Identity.ConfigSHA256 != meta.ConfigSHA256 || r.Generation == 0 || r.Reader == 0 ||
-		r.InterfaceName != "router-vpn" || r.InterfaceIndex == 0 || r.MTU < 1280 || r.MTU > plan.Ceiling ||
+		r.InterfaceIndex == 0 || r.MTU < 1280 || r.MTU > plan.Ceiling ||
 		r.ObservedAt <= 0 {
 		return bad
 	}
 	return nil
+}
+
+// This is the native interface shape for the already validated original target.
+// Darwin's allocated name is still only an observation: the host must match the
+// retained control, live kernel interface and original reader/MTU generation.
+// The native PF guardian uses the same utun-plus-ASCII-digits shape before its
+// independent descriptor and kernel checks.
+func desktopNodeChainReadyInterface(target, name string) bool {
+	switch target {
+	case "linux", "windows":
+		return name == "router-vpn"
+	case "darwin":
+		unit, found := strings.CutPrefix(name, "utun")
+		if !found || unit == "" {
+			return false
+		}
+		for _, digit := range unit {
+			if digit < '0' || digit > '9' {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func CanonicalDesktopNodeChainReadyRecord(record DesktopNodeChainReadyRecord, policy *DesktopNodeChainPolicy, transfer string) ([]byte, error) {

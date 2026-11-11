@@ -8,7 +8,7 @@ import (
 )
 
 func TestDesktopNodeChainReadyRequiresCompletePhysicalAndProofIdentity(t *testing.T) {
-	for _, target := range []string{"linux", "windows"} {
+	for _, target := range []string{"linux", "windows", "darwin"} {
 		t.Run(target, func(t *testing.T) {
 			policy := desktopChainPolicy(t, desktopChainFixture(t, 3, "", nil), target, 0)
 			_, meta, capture, err := policy.ReadValidated()
@@ -16,11 +16,15 @@ func TestDesktopNodeChainReadyRequiresCompletePhysicalAndProofIdentity(t *testin
 				t.Fatal(err)
 			}
 			transfer := strings.Repeat("a", 64)
+			name := "router-vpn"
+			if target == "darwin" {
+				name = "utun7"
+			}
 			record := DesktopNodeChainReadyRecord{Schema: 1, Kind: "routervpn-node-chain-ready-v1",
 				SourceSHA256: meta.SourceSHA256, TransferSHA256: transfer, DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256,
 				Identity: NodeChainIdentity{EngineID: "original-native-engine", SessionID: meta.SessionID,
 					NetworkID: "original-network", SourceSHA256: meta.OriginalSourceSHA256, ConfigSHA256: meta.ConfigSHA256},
-				Generation: 1, Reader: 1, InterfaceName: "router-vpn", InterfaceIndex: 17, MTU: capture.ConfiguredMTU, ObservedAt: 1234}
+				Generation: 1, Reader: 1, InterfaceName: name, InterfaceIndex: 17, MTU: capture.ConfiguredMTU, ObservedAt: 1234}
 			raw, err := CanonicalDesktopNodeChainReadyRecord(record, policy, transfer)
 			if err != nil {
 				t.Fatal(err)
@@ -77,6 +81,9 @@ func TestDesktopNodeChainReadyRequiresCompletePhysicalAndProofIdentity(t *testin
 			replaced.Reader++
 			replaced.Generation++
 			replaced.InterfaceIndex++
+			if target == "darwin" {
+				replaced.InterfaceName = "utun8"
+			}
 			replaced.MTU = 1280
 			replaced.ObservedAt++
 			replacement, err := CanonicalDesktopNodeChainReadyRecord(replaced, policy, transfer)
@@ -86,6 +93,153 @@ func TestDesktopNodeChainReadyRequiresCompletePhysicalAndProofIdentity(t *testin
 			var object map[string]any
 			if json.Unmarshal(raw, &object) != nil || len(object) != 12 {
 				t.Fatal("heartbeat shape drifted")
+			}
+		})
+	}
+}
+
+func desktopChainReadyTargetFixture(t *testing.T, chain *NodeChain, target string) (*DesktopNodeChainPolicy, DesktopNodeChainReadyRecord, string) {
+	t.Helper()
+	policy := desktopChainPolicy(t, chain, target, 0)
+	_, meta, capture, err := policy.ReadValidated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "router-vpn"
+	if target == "darwin" {
+		name = "utun7"
+	}
+	transfer := strings.Repeat("a", 64)
+	record := DesktopNodeChainReadyRecord{Schema: 1, Kind: "routervpn-node-chain-ready-v1",
+		SourceSHA256: meta.SourceSHA256, TransferSHA256: transfer, DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256,
+		Identity: NodeChainIdentity{EngineID: "original-native-engine", SessionID: meta.SessionID,
+			NetworkID: "original-network", SourceSHA256: meta.OriginalSourceSHA256, ConfigSHA256: meta.ConfigSHA256},
+		Generation: 1, Reader: 1, InterfaceName: name, InterfaceIndex: 17, MTU: capture.ConfiguredMTU, ObservedAt: 1234}
+	if err := record.Validate(policy, transfer); err != nil {
+		t.Fatal("target fixture lacks an actual validated original policy", err)
+	}
+	return policy, record, transfer
+}
+
+func TestDesktopNodeChainReadyInterfaceNamesFollowCapturedTarget(t *testing.T) {
+	chain := desktopChainFixture(t, 3, "", nil)
+	for _, target := range []string{"linux", "windows", "darwin"} {
+		t.Run(target, func(t *testing.T) {
+			policy, record, transfer := desktopChainReadyTargetFixture(t, chain, target)
+			accepted := []string{"router-vpn"}
+			if target == "darwin" {
+				accepted = []string{"utun0", "utun7", "utun1024"}
+			}
+			for _, name := range accepted {
+				t.Run("accepted-"+name, func(t *testing.T) {
+					selected := record
+					selected.InterfaceName = name
+					raw, err := CanonicalDesktopNodeChainReadyRecord(selected, policy, transfer)
+					if err != nil {
+						t.Fatal("original target lost its native interface shape", err)
+					}
+					got, err := ParseDesktopNodeChainReadyRecord(raw, policy, transfer)
+					if err != nil || got != selected {
+						t.Fatal("native interface observation changed during canonical replay", err)
+					}
+				})
+			}
+			rejected := []struct{ name, value string }{
+				{"empty", ""}, {"pair-alias", "router-vpn-multihop"},
+				{"physical", "en0"}, {"loopback", "lo0"}, {"tun-alias", "tun0"},
+				{"missing-unit", "utun"}, {"negative-unit", "utun-1"}, {"signed-unit", "utun+1"},
+				{"wrong-case", "UTUN7"}, {"mixed-case", "uTun7"}, {"extra-prefix", "xutun7"},
+				{"extra-suffix", "utun7x"}, {"slash", "utun/7"}, {"colon", "utun7:1"},
+				{"space-prefix", " utun7"}, {"space-suffix", "utun7 "}, {"newline", "utun7\n"},
+				{"nul", "utun7\x00"}, {"unicode-unit", "utun٧"}, {"fullwidth-unit", "utun７"},
+			}
+			if target == "darwin" {
+				rejected = append(rejected, struct{ name, value string }{"fixed-alias", "router-vpn"})
+			} else {
+				rejected = append(rejected,
+					struct{ name, value string }{"darwin-zero", "utun0"},
+					struct{ name, value string }{"darwin-allocated", "utun7"})
+			}
+			for _, test := range rejected {
+				t.Run("rejected-"+test.name, func(t *testing.T) {
+					changed := record
+					changed.InterfaceName = test.value
+					if changed.Validate(policy, transfer) == nil {
+						t.Fatal("foreign or malformed interface acquired original target authority")
+					}
+					// Bypass the canonical writer only to exercise the real decoder's
+					// rejection of a well-formed JSON record with a wrong native name.
+					raw, err := json.Marshal(changed)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := ParseDesktopNodeChainReadyRecord(raw, policy, transfer); err == nil {
+						t.Fatal("canonical replay admitted another target's native interface")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestDesktopNodeChainReadyRejectsSubstitutedTargetAuthority(t *testing.T) {
+	chain := desktopChainFixture(t, 3, "", nil)
+	for _, target := range []string{"linux", "windows", "darwin"} {
+		t.Run(target, func(t *testing.T) {
+			policy, original, transfer := desktopChainReadyTargetFixture(t, chain, target)
+			for _, other := range []string{"linux", "windows", "darwin"} {
+				if other == target {
+					continue
+				}
+				t.Run("foreign-"+other, func(t *testing.T) {
+					foreign, template, _ := desktopChainReadyTargetFixture(t, chain, other)
+					changed := original
+					changed.InterfaceName = template.InterfaceName
+					if changed.Validate(foreign, transfer) == nil {
+						t.Fatal("another target replayed the original source with a new interface alias")
+					}
+				})
+			}
+			t.Run("nil-policy", func(t *testing.T) {
+				if original.Validate(nil, transfer) == nil {
+					t.Fatal("unowned interface record acquired native target authority")
+				}
+			})
+			t.Run("metadata-target", func(t *testing.T) {
+				changed := *policy
+				changed.metadata.TargetOS = "darwin"
+				if target == "darwin" {
+					changed.metadata.TargetOS = "linux"
+				}
+				changed.seal = changed.currentSeal()
+				copied := original
+				copied.InterfaceName = "utun7"
+				if changed.metadata.TargetOS == "linux" {
+					copied.InterfaceName = "router-vpn"
+				}
+				if copied.Validate(&changed, transfer) == nil {
+					t.Fatal("resealed target metadata replaced the original constructor")
+				}
+			})
+			t.Run("input-target", func(t *testing.T) {
+				changed := *policy
+				changed.inputs.targetOS = "darwin"
+				if target == "darwin" {
+					changed.inputs.targetOS = "linux"
+				}
+				if original.Validate(&changed, transfer) == nil {
+					t.Fatal("changed derivation target retained the original readiness authority")
+				}
+			})
+		})
+	}
+	for _, target := range []string{"", "Darwin", "darwin/arm64", "macos", "macOS", "ios", "android", "freebsd"} {
+		t.Run("unsupported-"+target, func(t *testing.T) {
+			if desktopNodeChainReadyInterface(target, "router-vpn") || desktopNodeChainReadyInterface(target, "utun7") {
+				t.Fatal("unknown target acquired interface readiness")
+			}
+			if _, err := NewDesktopNodeChainPolicy(chain, desktopNodeTestSession, target, 0); err == nil {
+				t.Fatal("unsupported target acquired an original native constructor")
 			}
 		})
 	}

@@ -7,6 +7,49 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## Ordered readiness validates the captured native target
+
+The shared ready-record validator now derives the interface shape from the
+already validated original DesktopNodeChainPolicy target. Windows and Linux
+continue to require exactly router-vpn. Darwin requires utun followed by
+ASCII digits, matching the existing native guardian's preliminary shape
+check. Unknown targets, aliases, signs, whitespace, control characters and
+non-ASCII digits are rejected.
+
+This change does not give an interface name native authority. Original
+physical/source, selected DNS, transfer, engine/session/network identity,
+reader/proof generation, index, MTU ceiling and canonical bounded-record
+checks remain. The host must separately match the retained control and live
+kernel interface, and verify original reader succession before adopting a
+changed interface.
+
+Three Go test roots now contain 156 authored terminal cases: the original
+seventeen record faults and four canonical faults execute for all three
+targets, with their existing rejection bodies preserved; seventy interface
+cases exercise the real writer/parser; twenty-three additional cases reject
+foreign, forged or unknown target authority. Positive replacement records
+preserve the exact source identity. These are reviewed test definitions,
+not a claim that their new execution has passed. The public macOS ordered
+capability stays closed pending the native host and child lifecycle.
+
+### Completed predecessor race receipts
+
+The completed log for job
+[130842671337](https://github.com/Eabusham2/router-vpn/actions/runs/43115607108/job/130842671337)
+confirms checkout of 92926717fb06f96fcdc6d0893e2c0cee47a75b24. Its focused
+race step passed all thirteen runner selftests and all twenty-nine roots,
+152 required terminal cases and thirty-nine phases. Independent parsing of
+the original Test/pass JSON found 178 pass events, 168 distinct test names
+and exactly 152 terminal names, with no duplicated terminal verdicts.
+The longest whole phase was 125.20 seconds; all phases retained the original
+180-second Go alarm.
+
+The following full-Go step in that particular job was cancelled at
+23:25:10 UTC after the next publication. The whole job is therefore cancelled,
+not successful. The separate exact-92926717 Multihop contract job below did
+pass its full client/common suite. These predecessor receipts do not certify
+the new macOS source or current complete release.
+
 ## macOS ordered physical descriptor and Box integration
 
 This source unit reconstructs the interrupted descriptor work as eleven
@@ -111,8 +154,8 @@ At `92926717fb06f96fcdc6d0893e2c0cee47a75b24`, job
 [130842671337](https://github.com/Eabusham2/router-vpn/actions/runs/43115607108/job/130842671337)
 completed the focused race step successfully from 22:56:55 to 23:12:38 UTC.
 The required runner enforces all 29 roots and 152 cases across 39 invocations.
-Its original named receipts will be inspected when completed job logs are
-available. The subsequent complete Go step was still running when observed.
+Its original named receipts were subsequently inspected as recorded above.
+The subsequent complete Go step was cancelled after the next publication.
 
 The same `92926717` also passed the full unfiltered client/common suite in
 [Multihop contract job 130842801131](https://github.com/Eabusham2/router-vpn/actions/runs/43115606861/job/130842801131):
