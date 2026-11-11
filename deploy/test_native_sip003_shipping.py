@@ -27,7 +27,7 @@ class Shipping(unittest.TestCase):
             # fixture still retains the upstream daemon directory used by the
             # real compiler's captured-instance projection.
             (root/'daemon').mkdir()
-            with mock.patch.object(PREPARE.NAIVE,'prepare') as naive_prepare, mock.patch.object(PREPARE.HY2_DEADLINES,'prepare') as hy2_prepare, mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'), mock.patch.object(PREPARE.OPENVPN_CLOSE,'prepare') as openvpn_close_prepare, mock.patch.object(PREPARE.OPENVPN_REMOTE,'prepare') as openvpn_remote_prepare, mock.patch.object(PREPARE.EXTERNAL_POLICY,'prepare') as external_policy_prepare, mock.patch.object(PREPARE.AMNEZIA,'prepare'), mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare,mock.patch.object(PREPARE.COMPOSITE,'prepare') as composite_prepare:
+            with mock.patch.object(PREPARE.NAIVE,'prepare') as naive_prepare, mock.patch.object(PREPARE.HY2_DEADLINES,'prepare') as hy2_prepare, mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'), mock.patch.object(PREPARE.OPENVPN_CLOSE,'prepare') as openvpn_close_prepare, mock.patch.object(PREPARE.OPENVPN_REMOTE,'prepare') as openvpn_remote_prepare, mock.patch.object(PREPARE.EXTERNAL_POLICY,'prepare') as external_policy_prepare, mock.patch.object(PREPARE.AMNEZIA,'prepare'), mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare,mock.patch.object(PREPARE.COMPOSITE,'prepare') as composite_prepare, mock.patch.object(PREPARE.NODE_CHAIN,'prepare') as node_chain_prepare:
                 PREPARE.prepare(root)
                 naive_prepare.assert_called_once_with(root.resolve())
                 hy2_prepare.assert_called_once_with(root.resolve())
@@ -35,6 +35,7 @@ class Shipping(unittest.TestCase):
                 pq_prepare.assert_called_once_with(root.resolve())
                 strategy_prepare.assert_called_once_with(root.resolve())
                 composite_prepare.assert_called_once_with(root.resolve())
+                node_chain_prepare.assert_called_once_with(root.resolve())
                 openvpn_close_prepare.assert_called_once_with(root.resolve())
                 openvpn_remote_prepare.assert_called_once_with(root.resolve())
                 external_policy_prepare.assert_called_once_with(root.resolve())
