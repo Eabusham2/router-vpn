@@ -278,12 +278,16 @@ def run():
                 node_source = (JAVA/'AndroidNodeStore.java').read_text()
                 methods = node_source[node_source.index('    static String stableNodeIdentity('):node_source.index('    static String deriveId(')]
                 methods += node_source[node_source.index('    private static String wireGuardPeerPublicKey('):node_source.index('    private static JSONObject load(')]
+                # Bundle validation also validates complete ordered selections.
+                # Keep that shipping dependency, including every refusal guard,
+                # instead of replacing it with the graph fixture's shortcut.
+                methods += node_source[node_source.index('    static JSONArray orderedSelection('):node_source.index('    synchronized void restoreSelection(')]
                 methods += next(line for line in node_source.splitlines() if 'private static String hex(byte[] data)' in line)
                 constants = '\n'.join(line for line in node_source.splitlines() if 'private static final String NODE_PROOF_DOMAIN =' in line or 'static final int MAX_PROFILE_SCHEMA =' in line or 'static final int MAX_BUNDLE =' in line)
                 start = text.index('final class AndroidNodeStore {')
                 end = text.index('final class AndroidKillSwitchPolicy {')
                 text = text[:start] + 'final class AndroidNodeStore {\n' + constants + '\n' + methods + '\n}\n' + text[end:]
-                text = text.replace('import org.json.JSONObject;', 'import org.json.JSONObject; import org.json.JSONArray; import java.security.MessageDigest; import java.nio.charset.StandardCharsets; import android.util.Base64;')
+                text = text.replace('import org.json.JSONObject;', 'import org.json.JSONObject; import org.json.JSONArray; import java.security.MessageDigest; import java.nio.charset.StandardCharsets; import java.util.HashSet; import java.util.Set; import android.util.Base64;')
             if path.endswith('/Libbox.java'):
                 begin=text.index(' private static String call(')
                 end=text.index(' public static String routerCompilePQProfile(', begin)
