@@ -178,7 +178,11 @@ func (h *desktopLinuxNodeHost) readReadyLocked(ctx context.Context, fresh bool) 
 	if err != nil {
 		return empty, noLive, err
 	}
-	record, err := mobilemultihop.ParseDesktopNodeReadyRecord(raw, h.policy, digest)
+	policy, err := h.readyPolicy()
+	if err != nil {
+		return empty, noLive, err
+	}
+	record, err := mobilemultihop.ParseDesktopNodeReadyRecord(raw, policy, digest)
 	if err != nil {
 		return empty, noLive, err
 	}

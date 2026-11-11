@@ -100,6 +100,17 @@ func captureDesktopLinuxNodePathWith(ctx context.Context, a *app, command *exec.
 		return nil, true, err
 	}
 	defer func() { h.gate <- struct{}{} }()
+	if h.imported != nil {
+		if h.activation == nil || h.launch == nil || h.launch.command != command || h.launch.importedPlatform == nil {
+			return nil, true, errors.New("Linux imported Speed Lab path has no original activated command")
+		}
+		if err := h.observeLocked(ctx); err != nil {
+			return nil, true, err
+		}
+		// The imported graph keeps both independently saved nodes in its
+		// multihop owner; a NodeProfile cannot replace that source identity.
+		return nil, false, nil
+	}
 	if h.external != nil {
 		if h.activation == nil || h.launch == nil || h.launch.command != command {
 			return nil, true, errors.New("Linux external Speed Lab path has no original activated command")

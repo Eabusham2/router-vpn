@@ -229,6 +229,12 @@ func (s *desktopExecutionSession) Verify(ctx context.Context) error {
 	if s.identityContext(ctx) == "" {
 		return errors.New("candidate no longer owns its network/session")
 	}
+	if s.native != nil && s.native.importedPlatform != nil {
+		if err := s.native.importedPlatform.Prove(ctx); err != nil {
+			return err
+		}
+		return s.native.importedPlatform.Activate(ctx)
+	}
 	if err := s.driver.a.observeImportedOpenVPN(ctx, s.selection, s.command); err != nil {
 		return err
 	}
@@ -347,6 +353,13 @@ func (s *desktopExecutionSession) Close(ctx context.Context) error {
 	// Never stop a replacement runtime. Internal transitions retain the selected
 	// kill-switch guard; explicit user Disconnect owns its release.
 	a := s.driver.a
+	if s.native != nil && s.native.importedPlatform != nil && !a.ownsConnectionRuntime(s.command) {
+		// A child can exist before presentation publication. Its Linux
+		// session still owns complete retirement even with no app command.
+		if err := s.native.importedPlatform.Close(ctx); err != nil {
+			return err
+		}
+	}
 	if a.ownsConnectionRuntime(s.command) {
 		if err := a.stopModeWithIntent(true); err != nil {
 			return err
@@ -477,8 +490,23 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 			return s, err
 		}
 	}
-	protected := s.native != nil && s.native.ownedNode != nil
-	if protected {
+	platform := s.native != nil && s.native.importedPlatform != nil
+	protected := s.native != nil && (s.native.ownedNode != nil || platform)
+	if platform {
+		d.a.mu.Unlock()
+		if err := startDesktopImportedPlatform(ctx, d.a, sel, s.native); err != nil {
+			s.command = s.native.command
+			return s, err
+		}
+		s.command = s.native.command
+		if err := desktopnetwork.LockContext(ctx, &d.a.mu); err != nil {
+			return s, err
+		}
+		if d.a.cmd != s.command || d.a.connectionContext != operation || ctx.Err() != nil {
+			d.a.mu.Unlock()
+			return s, errors.New("Linux imported start lost its original operation")
+		}
+	} else if protected {
 		if err := d.a.publishDesktopImportedMultihopStartLocked(operation, s.native, sel); err != nil {
 			d.a.mu.Unlock()
 			return s, err
@@ -513,7 +541,7 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 			return s, err
 		}
 	}
-	if protected {
+	if protected && !platform {
 		if err := startDesktopOwnedImportedLaunch(ctx, operation, d.a, s.native); err != nil {
 			return s, err
 		}

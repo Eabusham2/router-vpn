@@ -14,6 +14,9 @@ import (
 // hold; this function cannot select whichever lease appeared during draining.
 func prepareDesktopPlatformMTUStop(ctx context.Context, a *app, command *exec.Cmd, operation context.Context,
 	outer *mtuLiveOwner, terminal bool, failedHold error) (bool, error) {
+	if handled, err := prepareDesktopLinuxImportedMTUStop(ctx, a, command, operation, terminal, failedHold); handled || err != nil {
+		return handled, err
+	}
 	if outer == nil {
 		return false, nil
 	}

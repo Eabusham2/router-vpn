@@ -37,6 +37,7 @@ type desktopNodeLaunch struct {
 	nodePhysicalEgress         []mobilemultihop.PhysicalEgress
 	nodePhysicalCapture        *desktopNodePhysicalCapture
 	importedEntry              bool
+	importedPlatform           desktopImportedPlatformRuntime
 	importedDNSMu              sync.Mutex
 	importedDNSLast            string
 	importedDNSGeneration      uint64

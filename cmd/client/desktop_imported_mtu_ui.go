@@ -272,7 +272,7 @@ func (u *desktopImportedMTUUI) releaseObserved(ctx context.Context) error {
 	// child's stop receipt. Workspace cleanup may remove that already-checked
 	// file before this later read-only release; neither flag alone suffices.
 	closed := o.kernel.closed && o.kernel.runtimeRetired
-	if !closed {
+	if !closed && o.launch.importedPlatform == nil {
 		var err error
 		closed, err = readDesktopNodeStoppedContext(ctx, o.launch)
 		if err != nil {

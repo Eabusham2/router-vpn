@@ -25,22 +25,23 @@ import (
 // adapter measures that exact interface with the shared authenticated private
 // protocol; a SOCKS lane or an ordinary LAN socket cannot supply these results.
 type desktopImportedMTUOwner struct {
-	mu          sync.Mutex
-	launch      *desktopNodeLaunch
-	runtime     *nativeMultihopRuntime
-	current     func(context.Context) error
-	dial        func(context.Context, string, string, desktopNodeMTURecord, func(context.Context) error) (net.Conn, error)
-	policy      mobilemtu.Profile
-	config      string
-	record      desktopNodeMTURecord
-	openVPN     nativeopenvpn.PacketObservation
-	kernel      *desktopNodeMTUOwner
-	operation   context.Context
-	mailboxHeld bool
-	originalMTU int
-	committed   atomic.Bool
-	connections sync.Map
-	sockets     atomic.Int64
+	mu            sync.Mutex
+	launch        *desktopNodeLaunch
+	runtime       *nativeMultihopRuntime
+	current       func(context.Context) error
+	dial          func(context.Context, string, string, desktopNodeMTURecord, func(context.Context) error) (net.Conn, error)
+	policy        mobilemtu.Profile
+	config        string
+	record        desktopNodeMTURecord
+	openVPN       nativeopenvpn.PacketObservation
+	kernel        *desktopNodeMTUOwner
+	operation     context.Context
+	mailboxHeld   bool
+	originalMTU   int
+	committed     atomic.Bool
+	cleanupJoined atomic.Bool
+	connections   sync.Map
+	sockets       atomic.Int64
 }
 
 func desktopImportedMTURuntime(ctx context.Context, a *app) (*nativeMultihopRuntime, bool, error) {
@@ -67,6 +68,11 @@ func desktopImportedMTURuntimeCurrent(ctx context.Context, a *app, expected *nat
 		return errors.New("imported MTU has no original caller or runtime")
 	}
 	cleanup, _ := mobilemtu.OperationCleanupOnly(ctx)
+	if cleanup && expected.launch.importedPlatform != nil {
+		// The typed host retains cleanup after its own activation starts closing.
+		// The exact lease is supplied by its owner's callback below.
+		return errors.New("Linux imported cleanup requires its original typed lease")
+	}
 	if !cleanup {
 		held, err := mtuSuspendedContext(ctx, a)
 		_, temporary := speedLabTemporaryOwners.Load(a)
@@ -122,12 +128,29 @@ func newDesktopImportedMTUOwner(ctx context.Context, a *app, runtime *nativeMult
 			return nil, err
 		}
 	}
+	if launch.importedPlatform != nil {
+		if err := launch.importedPlatform.ValidateConfig(ctx, raw); err != nil {
+			return nil, err
+		}
+	}
 	record, err := readDesktopNodeMTUContext(ctx, launch)
 	if err != nil || record.Active || record.Failure != "" {
 		return nil, errors.Join(err, errors.New("imported MTU requires its stable native reader"))
 	}
 	owner := &desktopImportedMTUOwner{launch: launch, runtime: runtime, policy: policy, config: string(raw), record: record,
 		current: func(call context.Context) error { return desktopImportedMTURuntimeCurrent(call, a, runtime) }, dial: dialDesktopImportedMTUSocket}
+	if launch.importedPlatform != nil {
+		owner.current = func(call context.Context) error {
+			cleanup, _ := mobilemtu.OperationCleanupOnly(call)
+			if cleanup {
+				return launch.importedPlatform.MTUCleanupCurrent(call, owner)
+			}
+			return desktopImportedMTURuntimeCurrent(call, a, runtime)
+		}
+		if err := launch.importedPlatform.RetainMTU(ctx, owner); err != nil {
+			return nil, err
+		}
+	}
 	if launch.importedOpenVPN != nil {
 		original := launch.importedOpenVPN
 		if err := mobilemtu.LockContext(ctx, &original.mu); err != nil {
@@ -354,6 +377,9 @@ func (o *desktopImportedMTUOwner) closeLocked(ctx context.Context) error {
 		// A replacement app/session cannot authorize rollback. A checked stop
 		// receipt from the original child may retire that exact stale owner.
 		if err := o.cleanupCurrent(ctx); err != nil {
+			if o.launch.importedPlatform != nil {
+				return err
+			}
 			closed, closeErr := readDesktopNodeStoppedContext(ctx, o.launch)
 			if closeErr != nil || !closed {
 				return errors.Join(err, closeErr)
@@ -374,6 +400,9 @@ func (o *desktopImportedMTUOwner) closeLocked(ctx context.Context) error {
 	if o.mailboxHeld {
 		o.mailboxHeld = false
 		o.launch.importedDNSMu.Unlock()
+	}
+	if ctx.Err() == nil {
+		o.cleanupJoined.Store(true)
 	}
 	return ctx.Err()
 }

@@ -52,7 +52,7 @@ func compileRetainedNativeMultihopLaunch(sel multihopSelection, descriptor *desk
 	if sel.Native == nil || sel.Native.validate(sel) != nil {
 		return nil, errors.New("native multihop launch lost its immutable entry/exit source")
 	}
-	if sel.Native.importedHost != nil {
+	if sel.Native.importedHost != nil || sel.Native.importedPlatform != nil {
 		return nil, errors.New("protected imported capture requires its typed Windows policy owner")
 	}
 	physical, err := netip.ParseAddr(sel.Native.endpoint)
@@ -165,7 +165,11 @@ func preflightRetainedNativeMultihop(ctx context.Context, binary string, launch 
 		return err
 	}
 	environment := desktopNativeEnvironment(os.Environ(), launch.root, launch.profileID, launch.endpoint)
-	if err := run(ctx, binary, []string{"routervpn-node", "--help"}, environment, directory); err != nil {
+	command := "routervpn-node"
+	if launch.importedPlatform != nil {
+		command = "routervpn-imported"
+	}
+	if err := run(ctx, binary, []string{command, "--help"}, environment, directory); err != nil {
 		return err
 	}
 	if err := desktopExternalDirectoryCurrent(workspace); err != nil {
@@ -206,7 +210,16 @@ func preflightOwnedNativeMultihopCommand(a *app, sel multihopSelection, descript
 func preflightOwnedNativeMultihopCommandContext(ctx context.Context, a *app, sel multihopSelection, descriptor *desktopExecutionDescriptor) (launch *desktopNodeLaunch, failure error) {
 	var binary string
 	var err error
-	if sel.Native != nil && sel.Native.importedHost != nil {
+	if sel.Native != nil && sel.Native.importedPlatform != nil {
+		if !sel.Native.imported || descriptor != nil {
+			return nil, errors.New("Linux imported preflight requires its captured Local graph")
+		}
+		launch, err = sel.Native.importedPlatform.Prepare(ctx, a, sel)
+		if err != nil {
+			return launch, errors.Join(err, retireUnstartedNativeMultihop(launch))
+		}
+		binary, err = sel.Native.importedPlatform.Verify(ctx)
+	} else if sel.Native != nil && sel.Native.importedHost != nil {
 		if !sel.Native.imported || descriptor != nil {
 			return nil, errors.New("protected imported preflight requires its original Local graph")
 		}
@@ -221,12 +234,10 @@ func preflightOwnedNativeMultihopCommandContext(ctx context.Context, a *app, sel
 		}
 	}
 	if err != nil {
-		return nil, err
+		return launch, errors.Join(err, retireUnstartedNativeMultihop(launch))
 	}
 	defer func() {
 		if failure != nil {
-			clear(launch.config)
-			clear(launch.metadata)
 			failure = errors.Join(failure, retireUnstartedNativeMultihop(launch))
 		}
 	}()
@@ -246,6 +257,9 @@ func stageOwnedNativeMultihopCommandContext(ctx context.Context, a *app, sel mul
 	if err := stageOwnedNativeMultihopInputsContext(ctx, a, sel, launch); err != nil {
 		return err
 	}
+	if launch.importedPlatform != nil {
+		return nil
+	}
 	return registerNativeMultihopDNSRuntime(a, sel, launch.command)
 }
 
@@ -258,6 +272,9 @@ func stageOwnedNativeMultihopInputs(a *app, sel multihopSelection, launch *deskt
 func stageOwnedNativeMultihopInputsContext(ctx context.Context, a *app, sel multihopSelection, launch *desktopNodeLaunch) error {
 	if launch == nil || sel.Native == nil || sel.Native.validate(sel) != nil || launch.profileID != sel.Exit.ID || launch.policyProfileID != sel.Control.ID || launch.endpoint != sel.Native.endpoint || launch.importedEntry != sel.Native.imported {
 		return errors.New("native multihop source changed before staging")
+	}
+	if launch.importedPlatform != nil {
+		return launch.importedPlatform.Stage(ctx)
 	}
 	if err := stageDesktopNodeLaunchContext(ctx, a, launch); err != nil {
 		return err
@@ -304,7 +321,10 @@ func bindNativeMultihopRuntimeContext(ctx context.Context, a *app, launch *deskt
 		graph.SourceSHA != sel.Native.source || graph.ExitMode != sel.ExitMode || graph.Execution != "local" && graph.Execution != "server" {
 		return errors.New("native multihop changed before its retained TUN could be adopted")
 	}
-	if current, ok := desktopNodeOwners.Load(a); !ok || current != launch || launch.profileID != sel.Exit.ID || launch.policyProfileID != sel.Control.ID {
+	if err := nativeMultihopLaunchCurrent(ctx, a, launch); err != nil {
+		return err
+	}
+	if launch.profileID != sel.Exit.ID || launch.policyProfileID != sel.Control.ID {
 		return errors.New("native multihop TUN belongs to another node owner")
 	}
 	nativeMultihopOwners.Store(a, &nativeMultihopRuntime{launch: launch, selection: sel, graph: graph, network: network, networkIdentityContext: observe})
@@ -318,6 +338,11 @@ func nativeMultihopLaunchStarted(launch *desktopNodeLaunch) bool {
 func retireUnstartedNativeMultihop(launch *desktopNodeLaunch) error {
 	if launch == nil || nativeMultihopLaunchStarted(launch) {
 		return nil
+	}
+	if launch.importedPlatform != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		return launch.importedPlatform.Close(ctx)
 	}
 	if owned := launch.ownedNode; owned != nil && owned.imported != nil {
 		if owned.imported.app == nil {
@@ -378,8 +403,8 @@ func capturedNativeMultihopRuntimeContext(ctx context.Context, a *app, command *
 	if !found || !ok || owner == nil || owner.launch == nil || owner.launch.command != command || !sameMTUMultihopGraph(owner.graph, graph) {
 		return nil, errors.New("multihop measurement has no retained active graph owner")
 	}
-	if current, found := desktopNodeOwners.Load(a); !found || current != owner.launch {
-		return nil, errors.New("multihop system TUN owner was replaced")
+	if err := nativeMultihopLaunchCurrent(ctx, a, owner.launch); err != nil {
+		return nil, err
 	}
 	if owner.launch.ownedNode != nil && owner.launch.ownedNode.imported != nil {
 		if err := a.desktopOwnedNodeCurrentContext(ctx, owner.launch, true); err != nil {
@@ -397,4 +422,17 @@ func capturedNativeMultihopRuntimeContext(ctx context.Context, a *app, command *
 		return nil, err
 	}
 	return owner, ctx.Err()
+}
+
+func nativeMultihopLaunchCurrent(ctx context.Context, a *app, launch *desktopNodeLaunch) error {
+	if launch == nil {
+		return errors.New("multihop observation lost its original launch")
+	}
+	if launch.importedPlatform != nil {
+		return launch.importedPlatform.Current(ctx)
+	}
+	if current, found := desktopNodeOwners.Load(a); !found || current != launch {
+		return errors.New("multihop system TUN owner was replaced")
+	}
+	return ctx.Err()
 }

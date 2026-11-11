@@ -266,7 +266,11 @@ func (c *nativeMultihopCapture) importedCaptureDigest() string {
 		assetIDs = append(assetIDs, []string{asset.id, asset.mode, asset.digest})
 	}
 	inputHash := sha256.Sum256([]byte(c.importedInput))
-	sealed, _ := json.Marshal([]any{"desktop-imported-entry-v2", c.importedHost != nil, c.importedOriginalSource, hex.EncodeToString(inputHash[:]), c.entryMode, c.entryPhysical, c.endpoint,
+	platform := ""
+	if c.importedPlatform != nil {
+		platform = c.importedPlatform.Seal()
+	}
+	sealed, _ := json.Marshal([]any{"desktop-imported-entry-v2", c.importedHost != nil, platform, c.importedOriginalSource, hex.EncodeToString(inputHash[:]), c.entryMode, c.entryPhysical, c.endpoint,
 		c.controlToken, c.entryToken, c.exitToken, assetIDs, c.configs})
 	sum := sha256.Sum256(sealed)
 	clear(sealed)

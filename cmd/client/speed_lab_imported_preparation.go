@@ -155,7 +155,7 @@ func (a *app) prepareSpeedLabImportedMultihopWithRuntime(ctx context.Context, q 
 	if err := prepared.current(ctx, a, false); err != nil {
 		return nil, err
 	}
-	prepared.selection, err = driver.capture(ctx, a, selection, []string{selection.ExitMode})
+	prepared.selection, err = driver.capture(context.WithValue(ctx, desktopImportedPreparationContextKey{}, prepared), a, selection, []string{selection.ExitMode})
 	if err == nil {
 		err = prepared.current(ctx, a, false)
 	}
@@ -279,6 +279,10 @@ func (prepared *speedLabMultihopPreparation) stage(ctx context.Context, a *app, 
 	prepared.consumed = true
 	if err := stageOwnedNativeMultihopInputsContext(ctx, a, selection, prepared.launch); err != nil {
 		return prepared.launch, errors.Join(err, prepared.retireUnstartedLocked())
+	}
+	// This host has private staged files but no command until its actual Start.
+	if prepared.launch.importedPlatform != nil {
+		return prepared.launch, prepared.current(ctx, a, true)
 	}
 	config, err := runtimeConfigUnderPrivateRun(a, filepath.Join(prepared.launch.directory, "sing-box.json"))
 	if err != nil {

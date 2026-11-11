@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -271,7 +272,7 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 	// Failed teardown must keep exact entry/exit identity available for recovery.
 	tracker := sessionTrackerFor(a)
 	tracker.declareRequest("multihop", sel.Base)
-	if err = a.stopModeWithIntent(native.ownedNode != nil); err != nil {
+	if err = a.stopModeWithIntent(native.ownedNode != nil || native.importedPlatform != nil); err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -292,8 +293,11 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	protected := native.ownedNode != nil
-	if protected {
+	protected := native.ownedNode != nil || native.importedPlatform != nil
+	if native.importedPlatform != nil {
+		err = startDesktopImportedPlatform(operation, a, sel, native)
+		cmd = native.command
+	} else if protected {
 		a.mu.Lock()
 		err = a.publishDesktopImportedMultihopStartLocked(operation, native, sel)
 		a.mu.Unlock()
@@ -301,6 +305,20 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		err = cmd.Start()
 	}
 	if err != nil {
+		if native.importedPlatform != nil {
+			cleanup, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			err = errors.Join(err, native.importedPlatform.Close(cleanup))
+			cancel()
+			sessionTrackerFor(a).markRequestFailure(err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if nativeMultihopLaunchStarted(native) {
+			message, _ := a.multihopStopFailure(cmd, err.Error())
+			sessionTrackerFor(a).markRequestFailure(message)
+			http.Error(w, message, http.StatusInternalServerError)
+			return
+		}
 		a.mu.Lock()
 		if !protected || a.connectionContext == operation && a.cmd == nil {
 			a.state.Phase = "failed"
@@ -343,7 +361,7 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		http.Error(w, message, status)
 		return
 	}
-	if protected {
+	if protected && native.importedPlatform == nil {
 		if err := startDesktopOwnedImportedLaunch(operation, operation, a, native); err != nil {
 			message, _ := a.multihopStopFailure(cmd, err.Error())
 			sessionTrackerFor(a).markRequestFailure(message)
@@ -355,6 +373,9 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 	originalGraph, originalGraphOK := getActiveMultihopGraph(a)
 	originalRelay, _ := desktopRelays.Load(a)
 	proofErr := driver.proof(a, sel, cmd)
+	if proofErr == nil && native.importedPlatform != nil {
+		proofErr = native.importedPlatform.Activate(operation)
+	}
 	if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
 		message, cleanupFailed := a.multihopStopFailure(cmd, cancelErr.Error())
 		sessionTrackerFor(a).markRequestFailure(message)
@@ -380,7 +401,7 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		owned := tracked && currentTracker == tracker && a.connectionContext == operation
 		if cleanupFailed {
 			owned = owned && (a.cmd == nil || a.cmd == cmd) &&
-				nodePresent && currentNode == native && runtimePresent && currentRuntime == originalRuntime &&
+				(native.importedPlatform != nil && !nodePresent || nodePresent && currentNode == native) && runtimePresent && currentRuntime == originalRuntime &&
 				originalGraphOK && graphPresent && currentGraph == originalGraph &&
 				(!relayPresent || currentRelay == originalRelay)
 		} else {
@@ -448,7 +469,7 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	a.startRouterNodeAutomaticMTU()
-	if protected {
+	if protected && native.importedPlatform == nil {
 		a.monitorDesktopOwnedNodeRuntime(native)
 	}
 	w.Header().Set("content-type", "application/json")

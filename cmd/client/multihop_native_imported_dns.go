@@ -386,6 +386,11 @@ func proveDesktopImportedDNSObservation(ctx context.Context, a *app, observed ob
 	}
 	raw, exists := desktopNodeOwners.Load(a)
 	launch, ok := raw.(*desktopNodeLaunch)
+	if retained, found := nativeMultihopOwners.Load(a); found {
+		if owner, valid := retained.(*nativeMultihopRuntime); valid && owner != nil && owner.launch != nil && owner.launch.importedPlatform != nil {
+			launch, exists, ok = owner.launch, true, true
+		}
+	}
 	graph, found := getActiveMultihopGraph(a)
 	imported := ok && launch != nil && launch.importedEntry || found && graph.ImportedEntry
 	if retained, present := nativeMultihopOwners.Load(a); present {

@@ -406,6 +406,12 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 			return errors.Join(err, errors.New("Speed Lab result belongs to a changed native Router source"))
 		}
 	}
+	if identity.Imported != nil && identity.Imported.launch != nil && identity.Imported.launch.importedPlatform != nil {
+		if identity.Linux != nil {
+			return errors.New("Speed Lab imported graph cannot replace its original identity with a single-node path")
+		}
+		return identity.Imported.launch.importedPlatform.Current(ctx)
+	}
 	return errors.Join(validateDesktopLinuxNodePath(ctx, a, identity.Linux), ctx.Err())
 }
 

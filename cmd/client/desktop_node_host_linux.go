@@ -31,6 +31,9 @@ type desktopLinuxNodeHost struct {
 	operation                 context.Context
 	policy                    *mobilemultihop.DesktopNodePolicy
 	external                  *mobilemultihop.DesktopExternalPolicy
+	imported                  *mobilemultihop.DesktopImportedPolicy
+	importedMTU               *desktopImportedMTUOwner
+	importedProjected         bool
 	externalProof             *desktopLinuxExternalProof
 	externalPersistedRevision string
 	externalEntryRevision     string
@@ -226,6 +229,9 @@ func (h *desktopLinuxNodeHost) enter(ctx context.Context) error {
 }
 
 func (h *desktopLinuxNodeHost) current(ctx context.Context) error {
+	if h != nil && h.imported != nil {
+		return h.currentImported(ctx)
+	}
 	if h != nil && h.external != nil {
 		return h.currentExternal(ctx)
 	}
@@ -341,10 +347,16 @@ func (h *desktopLinuxNodeHost) argumentsLocked(ctx context.Context) ([]string, s
 	if h.external != nil {
 		command = "routervpn-external"
 	}
+	if h.imported != nil {
+		command = "routervpn-imported"
+	}
 	arguments := []string{command, "--runtime-dir", h.launch.directory, "--session", h.selection.SessionID,
 		"--config-sha256", h.selection.ConfigSHA256, "--physical-source-sha256", h.selection.SourceSHA256, "--physical-transfer-sha256", control}
 	if h.policy != nil && h.policy.Metadata().RestoredMTU != 0 {
 		arguments = append(arguments, "--physical-mtu", strconv.Itoa(h.policy.Metadata().RestoredMTU))
+	}
+	if h.imported != nil && h.imported.Metadata().RestoredMTU != 0 {
+		arguments = append(arguments, "--physical-mtu", strconv.Itoa(h.imported.Metadata().RestoredMTU))
 	}
 	arguments, err = validateDesktopLinuxProtectedArguments(arguments, h.launch.directory)
 	if err != nil {
@@ -380,6 +392,12 @@ func (h *desktopLinuxNodeHost) Close(ctx context.Context) error {
 		return err
 	}
 	if !h.closed {
+		if h.imported != nil {
+			if err := h.imported.OriginalController().Close(); err != nil {
+				return err
+			}
+			retireNativeMultihopGraph(h.parent.app, h.launch)
+		}
 		if h.external != nil && h.launch != nil {
 			desktopExternalRetainedLaunches.CompareAndDelete(h.parent.app, h.launch)
 		}
@@ -392,7 +410,7 @@ func (h *desktopLinuxNodeHost) Close(ctx context.Context) error {
 			clear(h.launch.metadata)
 			h.launch.config, h.launch.metadata = nil, nil
 		}
-		h.source, h.policy, h.external = nil, nil, nil
+		h.source, h.policy, h.external, h.imported = nil, nil, nil, nil
 		h.closed = true
 	}
 	if !h.released {

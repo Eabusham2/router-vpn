@@ -23,6 +23,9 @@ type desktopLinuxPrivateInput struct {
 }
 
 func (h *desktopLinuxNodeHost) privateInputs() []desktopLinuxPrivateInput {
+	if h.imported != nil {
+		return []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config}, {"imported-source.json", h.source}}
+	}
 	if h.external != nil && h.launch != nil && h.launch.external != nil {
 		return []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config},
 			{"source.json", h.launch.external.source}, {"capture.json", h.launch.external.capture}}
@@ -33,6 +36,16 @@ func (h *desktopLinuxNodeHost) privateInputs() []desktopLinuxPrivateInput {
 // The external command has the same inherited parent layout and bounded
 // public digests, but remains a different CLI and sealed policy family.
 func validateDesktopLinuxProtectedArguments(arguments []string, directory string) ([]string, error) {
+	if (len(arguments) == 11 || len(arguments) == 13) && arguments[0] == "routervpn-imported" {
+		copied := append([]string(nil), arguments...)
+		copied[0] = "routervpn-node"
+		validated, err := validateDesktopNodeProcessArguments(copied, directory)
+		if err != nil {
+			return nil, err
+		}
+		validated[0] = "routervpn-imported"
+		return validated, nil
+	}
 	if len(arguments) == 11 && arguments[0] == "routervpn-external" {
 		copied := append([]string(nil), arguments...)
 		copied[0] = "routervpn-node"
@@ -368,10 +381,17 @@ func newDesktopLinuxExternalTransactionWithStartup(startup context.Context, h *d
 }
 
 func (t *desktopLinuxNodeTransaction) validatePolicy() error {
-	if t.policy != nil && t.external == nil {
+	if t.imported != nil && t.policy == nil && t.external == nil && t.importedSources != nil && t.imported.Validate() == nil {
+		meta := t.imported.Metadata()
+		wanted := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
+		if meta.TargetOS == "linux" && t.selection == wanted && t.mode == meta.ExitMode {
+			return nil
+		}
+	}
+	if t.policy != nil && t.external == nil && t.imported == nil {
 		return t.policy.Validate()
 	}
-	if t.external != nil && t.policy == nil && t.external.Validate() == nil {
+	if t.external != nil && t.policy == nil && t.imported == nil && t.external.Validate() == nil {
 		meta := t.external.Metadata()
 		wanted := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
 			ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}

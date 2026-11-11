@@ -724,6 +724,9 @@ func (a *app) guardDesktopOwnedNodeTransitionContext(ctx context.Context, next *
 	if ctx == nil || ctx.Err() != nil {
 		return errors.New("native transition requires its original live caller")
 	}
+	if next != nil && next.importedPlatform != nil {
+		return guardDesktopImportedPlatformTransition(ctx, a, next)
+	}
 	if err := a.guardDesktopLinuxNodeLegacyTransitionContext(ctx); err != nil {
 		return err
 	}

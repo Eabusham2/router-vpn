@@ -39,6 +39,7 @@ type nativeMultihopCapture struct {
 	importedInput                                            string
 	importedOriginalSource                                   string
 	importedHost                                             *desktopNodeConnectionOwner
+	importedPlatform                                         desktopImportedPlatformCapture
 }
 
 func captureNativeMultihopSelection(ctx context.Context, root string, sel multihopSelection, modes []string, lookup applexray.Lookup) (multihopSelection, error) {
@@ -223,6 +224,9 @@ func captureNativeMultihopForApp(a *app, sel multihopSelection, modes []string) 
 }
 
 func captureNativeMultihopForAppContext(parent context.Context, a *app, sel multihopSelection, modes []string) (multihopSelection, error) {
+	if captured, handled, err := captureDesktopImportedPlatformContext(parent, a, sel, modes); handled || err != nil {
+		return captured, err
+	}
 	owner, err := captureDesktopImportedConnectionOwner(parent, a, sel)
 	if err != nil {
 		return sel, err
@@ -259,6 +263,14 @@ func captureNativeMultihopForAppContext(parent context.Context, a *app, sel mult
 func (a *app) proveNativeMultihop(sel multihopSelection, command *exec.Cmd) error {
 	ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), nativeMultihopProofTimeout(sel))
 	defer cancel()
+	if sel.Native != nil && sel.Native.importedPlatform != nil {
+		graph, found := getActiveMultihopGraph(a)
+		owner, err := capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
+		if err != nil || !found || owner.selection.Native != sel.Native || owner.launch.importedPlatform == nil {
+			return errors.Join(err, errors.New("Linux imported proof lost its original runtime"))
+		}
+		return owner.launch.importedPlatform.Prove(ctx)
+	}
 	current := func() bool {
 		return a.nativeMultihopProofOwnerCurrentContext(ctx, sel, command) && a.observeImportedOpenVPN(ctx, sel, command) == nil
 	}
@@ -301,6 +313,14 @@ func (a *app) nativeMultihopProofOwnerCurrentContext(ctx context.Context, sel mu
 	}
 	if !sel.Native.imported {
 		return true
+	}
+	if sel.Native.importedPlatform != nil {
+		raw, found := nativeMultihopOwners.Load(a)
+		owner, valid := raw.(*nativeMultihopRuntime)
+		if !found || !valid || owner == nil || owner.launch == nil || owner.launch.command != command || owner.selection.Native != sel.Native ||
+			owner.launch.importedPlatform == nil || owner.launch.importedPlatform.Current(ctx) != nil {
+			return false
+		}
 	}
 	return selected && sel.Native.validate(sel) == nil && ctx.Err() == nil
 }

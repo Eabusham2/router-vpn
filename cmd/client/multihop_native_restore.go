@@ -23,6 +23,11 @@ func captureNativeMultihopRestoreContext(ctx context.Context, a *app, command *e
 		return multihopSelection{}, err
 	}
 	selection := owner.selection
+	if owner.launch.importedPlatform != nil {
+		if err := owner.launch.importedPlatform.Restore(ctx); err != nil {
+			return multihopSelection{}, err
+		}
+	}
 	if owner.launch.ownedNode != nil && owner.launch.ownedNode.imported != nil {
 		if err := validateDesktopOwnedImportedRestore(ctx, a, owner); err != nil {
 			return multihopSelection{}, err
@@ -74,6 +79,11 @@ func captureNativeMultihopRestoreContext(ctx context.Context, a *app, command *e
 	current, err := capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
 	if err != nil || current != owner || !nativeMultihopLiveProfilesCurrentContext(ctx, a, selection) {
 		return multihopSelection{}, errors.New("multihop owner or node sources changed while capturing live MTU restoration")
+	}
+	if owner.launch.importedPlatform != nil {
+		if err := owner.launch.importedPlatform.Restore(ctx); err != nil {
+			return multihopSelection{}, err
+		}
 	}
 	if owner.launch.ownedNode != nil && owner.launch.ownedNode.imported != nil {
 		if err := validateDesktopOwnedImportedRestore(ctx, a, owner); err != nil {

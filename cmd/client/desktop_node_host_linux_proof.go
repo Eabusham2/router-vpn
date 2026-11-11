@@ -122,6 +122,13 @@ func sameDesktopLinuxNodeProofTUN(first, second desktopNodeMTURecord) bool {
 
 func (h *desktopLinuxNodeHost) capturedProofProfile() (common.RouterProfile, error) {
 	var profile common.RouterProfile
+	if h.imported != nil {
+		owner, ok := h.launch.importedPlatform.(*desktopLinuxImportedConnection)
+		if !ok || owner.host != h || h.imported.Validate() != nil || string(h.source) != owner.selection.Native.importedInput || h.imported.Metadata().ExitNodeID != owner.selection.Exit.NodeProofID {
+			return profile, errors.New("Linux imported proof changed its paired final source")
+		}
+		return cloneRouterProfile(owner.selection.Exit), nil
+	}
 	if h.policy == nil || h.policy.Validate() != nil || h.launch == nil || len(h.source) == 0 {
 		return profile, errors.New("Linux Router proof lost its sealed original profile")
 	}
@@ -149,6 +156,9 @@ func (h *desktopLinuxNodeHost) Prove(parent context.Context) (elapsed time.Durat
 		return 0, err
 	}
 	defer func() { h.gate <- struct{}{} }()
+	if h.imported != nil {
+		return h.proveImportedLocked(parent)
+	}
 	// Preserve the original active proof and its retained observer. A new
 	// startup request must capture a new host instead of reusing this one.
 	if h.activation != nil {

@@ -24,26 +24,28 @@ import (
 // The application owns the connection-operation lock around construction and
 // succession; a superseded/cancelled request cannot create or admit a source.
 type desktopLinuxNodeTransaction struct {
-	stopRequested atomic.Bool
-	gate          chan struct{}
-	parent        *desktopLinuxNodeParentCapture
-	journal       *desktopLinuxNodeJournal
-	process       *desktopLinuxNodeProcess
-	bootstrap     *linuxprocess.Bootstrap
-	control       *linuxprotection.NodeControl
-	policy        *mobilemultihop.DesktopNodePolicy
-	external      *mobilemultihop.DesktopExternalPolicy
-	mode          string
-	operation     context.Context
-	startup       context.Context // original startup budget; operation remains request identity
-	selection     linuxprotection.NodeSelection
-	engine        linuxprocess.Observation
-	engineState   linuxprotection.ProcessRecord
-	profileID     string
-	revision      string
-	network       string
-	options       [3]bool
-	savedOptions  [3]bool
+	stopRequested   atomic.Bool
+	gate            chan struct{}
+	parent          *desktopLinuxNodeParentCapture
+	journal         *desktopLinuxNodeJournal
+	process         *desktopLinuxNodeProcess
+	bootstrap       *linuxprocess.Bootstrap
+	control         *linuxprotection.NodeControl
+	policy          *mobilemultihop.DesktopNodePolicy
+	external        *mobilemultihop.DesktopExternalPolicy
+	imported        *mobilemultihop.DesktopImportedPolicy
+	importedSources *desktopLinuxImportedSources
+	mode            string
+	operation       context.Context
+	startup         context.Context // original startup budget; operation remains request identity
+	selection       linuxprotection.NodeSelection
+	engine          linuxprocess.Observation
+	engineState     linuxprotection.ProcessRecord
+	profileID       string
+	revision        string
+	network         string
+	options         [3]bool
+	savedOptions    [3]bool
 
 	standardTransfer       *linuxStandardServiceNodeTransfer
 	predecessor, successor *desktopLinuxNodeTransaction
@@ -273,6 +275,11 @@ func (t *desktopLinuxNodeTransaction) accepted(ctx context.Context) error {
 		return err
 	}
 	defer a.mu.Unlock()
+	if t.imported != nil {
+		if t.importedSources == nil || t.importedSources.currentLocked(a, true) != nil {
+			return errors.New("Linux imported admission lost its applied independent sources")
+		}
+	}
 	profile, exists := a.profileByIDLocked(t.profileID)
 	if err := a.checkCapturedConnectionOperationLocked(t.operation); err != nil || a.connectionCancelIntent == t.operation || !exists || a.cmd != t.process.command ||
 		a.state.RouterID != t.profileID || a.state.RuntimeMode != t.runtimeMode() ||
