@@ -282,7 +282,7 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
                         else:
                             with self.assertRaises((ValueError,subprocess.CalledProcessError,subprocess.TimeoutExpired)):
                                 exec(compile(selected,'actual native command and DNS gate','exec'),namespace)
-                    self.assertIn('^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU)',calls[0][0])
+                    self.assertIn('^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU|NodeChain)',calls[0][0])
                     self.assertEqual(calls[0][1]['timeout'],600)
                     self.assertIn('-timeout=120s',calls[0][0])
                     self.assertEqual(len(calls),3 if fault == 'success' else 2)

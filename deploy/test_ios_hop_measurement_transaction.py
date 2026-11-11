@@ -27,9 +27,10 @@ protocol ObservableObject {}
  static let shared=Native()
  let session=UUID().uuidString,mtuSession=UUID().uuidString,connection=NETunnelProviderSession()
  var mode="stable",drained=true,starts=0,cancels=0,statuses=0,releases=0,held=false
+ var mtuBusy=false,mtuOperations:[String]=[],mtuRequests:[String]=[]
  var captured:[String:Any]?,pending:((Data?)->Void)?,pendingRequest:[String:Any]?
  var informationHook:(()->Void)?
- func reset(_ mode:String){self.mode=mode;drained=mode=="stable";starts=0;cancels=0;statuses=0;releases=0;held=false;captured=nil;pending=nil;pendingRequest=nil;informationHook=nil;connection.status = .connected;connection.connectedDate=Date(timeIntervalSince1970:10)}
+ func reset(_ mode:String){self.mode=mode;mtuBusy=false;mtuOperations=[];mtuRequests=[];drained=mode=="stable";starts=0;cancels=0;statuses=0;releases=0;held=false;captured=nil;pending=nil;pendingRequest=nil;informationHook=nil;connection.status = .connected;connection.connectedDate=Date(timeIntervalSince1970:10)}
  func body(_ request:[String:Any],complete:Bool,drained:Bool)->Data {
   try! JSONSerialization.data(withJSONObject:["request_id":request["request_id"]!,"session_id":request["session_id"]!,"stage":complete ? "complete":"running","complete":complete,"drained":drained,"results":[]])
  }
@@ -56,6 +57,7 @@ protocol ObservableObject {}
  }
  func deliverLate(){let callback=pending;pending=nil;callback?(body(pendingRequest!,complete:true,drained:drained))}
 }
+@MainActor enum IOSSpeedLabContext {static var startupAdmission:(()->Bool)?=nil}
 @MainActor enum IOSMTUControl {
  struct Binding {let connection:NETunnelProviderSession;let connectedDate:Date;let identity:String;let session:String}
  static func capture(_ model:RouterVPNModel)async throws->Binding{
@@ -63,7 +65,19 @@ protocol ObservableObject {}
   return Binding(connection:Native.shared.connection,connectedDate:Native.shared.connection.connectedDate!,identity:identity,session:Native.shared.mtuSession)
  }
 CURRENT_BINDING
- static func holdCurrent(_ model:RouterVPNModel,request:String)async throws{Native.shared.held=true}
+ // Native MTU command replies are doubled; hold admission is shipping code.
+ static func failure(_ text:String)->NSError{NSError(domain:"RouterVPN.MTU",code:1,userInfo:[NSLocalizedDescriptionKey:text])}
+ static func message(_ binding:Binding,model:RouterVPNModel,operation:String,request:String)async throws->Data{
+  guard current(binding,model:model),request==IOSMTUMeasurementGate.current else{throw CancellationError()}
+  let native=Native.shared;native.mtuOperations.append(operation);native.mtuRequests.append(request)
+  guard operation=="mtu-hold" || operation=="mtu-hold-idle" else{throw CancellationError()}
+  // Idle admission must leave a busy Auto-MTU/Retest owner intact.
+  if operation=="mtu-hold-idle" && native.mtuBusy{throw CancellationError()}
+  if operation=="mtu-hold"{native.mtuBusy=false}
+  native.held=true
+  return try JSONSerialization.data(withJSONObject:["measurement_hold":true,"measurement_lease":request,"measurement_ready":native.mode != "idle-unready"])
+ }
+HOLD_CURRENT
  static func releaseCurrent(_ model:RouterVPNModel,request:String)async throws{Native.shared.held=false;Native.shared.releases+=1}
 WITH_HOLD
 }
@@ -79,6 +93,25 @@ TEST=r'''
    check("bounded fixture progress",condition())
   }
   let native=Native.shared
+  for idleOnly in [true,false] {
+   native.reset("stable");let model=RouterVPNModel();var ran=false
+   try await IOSMTUControl.withHold(model:model,idleOnly:idleOnly){
+    check("operation retains the exact native and app MTU lease",native.held && IOSMTUMeasurementGate.held && native.mtuRequests==[IOSMTUMeasurementGate.current]);ran=true
+   }
+   check("idle-only reservation reaches the matching native operation",native.mtuOperations==[idleOnly ? "mtu-hold-idle":"mtu-hold"])
+   check("successful reservation releases both owners",ran && native.releases==1 && !native.held && !IOSMTUMeasurementGate.held)
+  }
+  for mode in ["stable","idle-unready"] {
+   native.reset(mode);native.mtuBusy=mode=="stable";let model=RouterVPNModel();var ran=false,rejected=false
+   do{try await IOSMTUControl.withHold(model:model,idleOnly:true){ran=true}}catch{rejected=true}
+   check("busy or unready idle reservation never starts work",rejected && !ran && native.mtuOperations==["mtu-hold-idle"] && native.mtuBusy==(mode=="stable"))
+   check("refused idle reservation releases its app lease",native.releases==1 && !native.held && !IOSMTUMeasurementGate.held)
+  }
+  native.reset("stable");native.mtuBusy=true
+  do {
+   let model=RouterVPNModel(),probe=IOSHopMeasurements();probe.start(model:model);await wait{!probe.running}
+   check("manual hop measurement preserves its draining hold policy",native.mtuOperations==["mtu-hold"] && !native.mtuBusy && native.starts==1 && native.releases==1 && !IOSMTUMeasurementGate.held)
+  }
   for engine in ["multihop-libbox","external-libbox"] {
    native.reset("stable");let model=RouterVPNModel();model.activeEngine=engine;let probe=IOSHopMeasurements()
    probe.start(model:model);await wait{!probe.running}
@@ -138,7 +171,8 @@ def main():
     mtu=(APP/'IOSMTUControl.swift').read_text()
     hold=mtu[mtu.index('    static func withHold<T>'):].rsplit('\n}',1)[0]
     current=mtu[mtu.index('    static func current('):mtu.index('    static func message(')]
-    fixture=FIXTURE.replace('WITH_HOLD',hold).replace('CURRENT_BINDING',current)
+    hold_current=mtu[mtu.index('    static func holdCurrent('):mtu.index('    static func releaseCurrent(')]
+    fixture=FIXTURE.replace('WITH_HOLD',hold).replace('CURRENT_BINDING',current).replace('HOLD_CURRENT',hold_current)
     gate=(APP/'IOSMTUMeasurementGate.swift').read_text()
     with tempfile.TemporaryDirectory(prefix='routervpn-apple-hop-') as directory:
         work=Path(directory);code=work/'Main.swift';binary=work/'test'
@@ -159,5 +193,13 @@ def main():
                 'bounded fixture progress' in result.stderr or
                 'native IPC lost its captured session or MTU hold' in result.stderr), name+': ownership regression was accepted or failed for another reason: '+result.stderr[-500:]
         print('Negative controls: undrained completion and foreign-session reply rejected')
+        forwarding='request: lease.request, idleOnly: idleOnly'
+        assert fixture.count(forwarding)==1
+        bad=work/'BadIdle.swift';bad_binary=work/'bad-idle'
+        bad.write_text('import Foundation\n'+gate+fixture.replace(forwarding,'request: lease.request, idleOnly: false',1)+source+TEST)
+        subprocess.run(['swiftc','-swift-version','6','-parse-as-library',str(bad),'-o',str(bad_binary)],check=True,timeout=60)
+        result=subprocess.run([str(bad_binary)],capture_output=True,text=True,timeout=25)
+        assert result.returncode != 0 and 'idle-only reservation reaches the matching native operation' in result.stderr, 'idle-only reservation was ignored or failed for another reason: '+result.stderr[-500:]
+        print('Negative control: discarded idle-only admission rejected')
 
 if __name__=='__main__':main()
