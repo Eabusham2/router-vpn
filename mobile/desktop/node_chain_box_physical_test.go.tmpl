@@ -20,6 +20,7 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/group"
+	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing-box/protocol/wireguard"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
@@ -56,6 +57,7 @@ func desktopChainPhysicalBox(t *testing.T, policy *mobilemultihop.DesktopNodeCha
 	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
 	endpoints := endpoint.NewRegistry()
 	wireguard.RegisterEndpoint(endpoints)
+	AWG.RegisterEndpoint(endpoints)
 	resolvers := dns.NewTransportRegistry()
 	DNST.RegisterUDP(resolvers)
 	services := boxService.NewRegistry()
@@ -152,6 +154,109 @@ func TestRouterVPNDesktopNodeChainPhysicalRejectsSubstitutedBox(t *testing.T) {
 			}
 			if tun.ready || tun.claimed {
 				t.Fatal("changed chain entered native startup")
+			}
+		})
+	}
+}
+
+// Every position before the SS2022 final retains its exact declared WG/AWG
+// mode. The native constructors here are real; only the privileged TUN is a
+// boundary double, and no preparation is manufactured to start a native path.
+func TestRouterVPNDesktopNodeChainPhysicalAWGModesAndOriginalBox(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("this physical adapter covers Linux and Windows")
+	}
+	for _, modes := range [][]string{
+		{"awg2-fast", "wg"}, {"awg2-strong", "wg"},
+		{"wg", "awg2-fast"}, {"wg", "awg2-strong"},
+		{"wg", "awg2-fast", "wg"}, {"wg", "awg2-strong", "wg"},
+		{"awg2-fast", "awg2-strong", "wg"}, {"awg2-strong", "wg", "awg2-fast"},
+	} {
+		t.Run(strings.Join(modes, "/"), func(t *testing.T) {
+			policy, err := mobilemultihop.NewDesktopNodeChainPolicy(chainNativeSourceModes(t, modes), desktopTorBoxSession, runtime.GOOS, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			instance, tun := desktopChainPhysicalBox(t, policy, nil)
+			if !routerVPNDesktopNodeChainPhysicalTarget(policy, runtime.GOOS) {
+				t.Fatal("exact mixed chain lost its typed physical factory")
+			}
+			meta := policy.Metadata()
+			for position, mode := range append(append([]string(nil), modes...), "shadowsocks") {
+				prefix := meta.Prefixes[position]
+				if prefix.Position != position || prefix.Mode != mode || prefix.ProfileID == "" || prefix.NodeID == "" || prefix.SourceSHA256 == "" {
+					t.Fatal("physical factory changed an original prefix mode or proof identity", position)
+				}
+			}
+			_, network, err := instance.routerVPNDesktopNodePhysical(policy)
+			if err != nil || network == nil || tun.ready || tun.claimed || network.Current() || network.SocketCurrent() {
+				t.Fatal("mixed construction fabricated preparation or lost its exact Box", err)
+			}
+			t.Run("different-original-mode", func(t *testing.T) {
+				otherModes := append([]string(nil), modes...)
+				for i, mode := range otherModes {
+					if mode == "awg2-fast" {
+						otherModes[i] = "awg2-strong"
+						break
+					}
+					if mode == "awg2-strong" {
+						otherModes[i] = "awg2-fast"
+						break
+					}
+				}
+				other, err := mobilemultihop.NewDesktopNodeChainPolicy(chainNativeSourceModes(t, otherModes), desktopTorBoxSession, runtime.GOOS, 0)
+				if err != nil || !routerVPNDesktopNodeChainPhysicalTarget(other, runtime.GOOS) {
+					t.Fatal("replacement must be independently valid before testing original ownership", err)
+				}
+				if other.Metadata().SourceSHA256 == meta.SourceSHA256 {
+					t.Fatal("changing an original mode retained the previous source identity")
+				}
+				if _, _, err := instance.routerVPNDesktopNodePhysical(other); err == nil {
+					t.Fatal("another original mode acquired the existing native Box")
+				}
+				if owner, err := instance.routerVPNDesktopNodeActivatePhysical(other); err == nil || owner != nil {
+					t.Fatal("another original mode acquired the retained TUN")
+				}
+			})
+			if owner, err := instance.routerVPNDesktopNodeActivatePhysical(policy); err == nil || owner != nil {
+				t.Fatal("unprepared mixed chain acquired physical TUN authority")
+			}
+			if err := instance.RouterVPNStrategyStart(); err == nil {
+				t.Fatal("mixed ordered JSON bypassed original physical preparation")
+			}
+			if tun.ready || tun.claimed || network.SocketCurrent() {
+				t.Fatal("unprepared mixed chain reached native sockets or TUN")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainPhysicalRejectsChangedModeProof(t *testing.T) {
+	for _, fault := range []string{"unsupported-prefix", "mode-alias", "final-as-prefix", "wrong-original-mode", "wrong-final", "wrong-position"} {
+		t.Run(fault, func(t *testing.T) {
+			policy, err := mobilemultihop.NewDesktopNodeChainPolicy(chainNativeSourceModes(t, []string{"wg", "awg2-fast", "awg2-strong"}), desktopTorBoxSession, "linux", 0)
+			if err != nil || !routerVPNDesktopNodeChainPhysicalTarget(policy, "linux") {
+				t.Fatal("mode receipt control has no valid original policy", err)
+			}
+			// Mutation is confined to this negative fixture. The shipping caller
+			// receives no way to construct or edit this sealed policy metadata.
+			meta := chainNativeField[mobilemultihop.DesktopNodeChainMetadata](t, policy, "metadata")
+			switch fault {
+			case "unsupported-prefix":
+				meta.Prefixes[1].Mode = "max-wg"
+			case "mode-alias":
+				meta.Prefixes[1].Mode = "amneziawg"
+			case "final-as-prefix":
+				meta.Prefixes[1].Mode = "shadowsocks"
+			case "wrong-original-mode":
+				meta.Prefixes[1].Mode = "awg2-strong"
+			case "wrong-final":
+				meta.Prefixes[len(meta.Prefixes)-1].Mode = "wg"
+			case "wrong-position":
+				meta.Prefixes[1].Position = 0
+			}
+			if routerVPNDesktopNodeChainPhysicalTarget(policy, "linux") {
+				t.Fatal("changed mode/proof receipt acquired typed physical authority")
 			}
 		})
 	}
