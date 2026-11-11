@@ -1,6 +1,10 @@
-FROM golang:1.24.13-alpine AS binaries
+FROM golang:1.26.3-alpine AS binaries
+RUN apk add --no-cache python3
 WORKDIR /src
 COPY . .
+RUN python3 deploy/prepare-go-windows-sockets.py --output /opt/routervpn-go --receipt dist/GO-WINDOWS-SOCKETS.json
+ENV GOROOT=/opt/routervpn-go GOTOOLCHAIN=local
+ENV PATH="/opt/routervpn-go/bin:${PATH}"
 RUN mkdir -p dist \
  && for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do \
       GOOS=${target%/*}; GOARCH=${target#*/}; ext=''; [ "$GOOS" = windows ] && ext='.exe'; \
@@ -36,6 +40,11 @@ RUN set -eu; for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 win
 # native AppKit/GTK SDK environments are intentionally not installed here;
 # macOS/Linux desktop fallback requires the exact-SHA native GitHub artifact.
 FROM golang:1.26.3-bookworm AS go-toolchain
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 \
+ && rm -rf /var/lib/apt/lists/*
+COPY deploy/prepare-go-windows-sockets.py /tmp/routervpn/deploy/prepare-go-windows-sockets.py
+RUN python3 /tmp/routervpn/deploy/prepare-go-windows-sockets.py --output /opt/routervpn-go
 
 # The small AWG-only compatibility runtime is cross-built at image creation.
 # The complete CGO/Rust/Cronet runtime below arrives from the same-source host
@@ -63,7 +72,8 @@ ARG TARGETARCH
 RUN apt-get update \
  && apt-get install -y --no-install-recommends bash ca-certificates curl iproute2 iptables nftables openssl procps python3 qrencode wireguard-tools zip \
  && rm -rf /var/lib/apt/lists/*
-COPY --from=go-toolchain /usr/local/go /usr/local/go
+COPY --from=go-toolchain /opt/routervpn-go /usr/local/go
+ENV GOROOT=/usr/local/go GOTOOLCHAIN=local
 ENV PATH="/usr/local/go/bin:${PATH}"
 COPY --from=singbox /usr/local/bin/sing-box /usr/local/bin/sing-box
 COPY --from=xray /xray/linux-${TARGETARCH}/xray /usr/local/bin/xray

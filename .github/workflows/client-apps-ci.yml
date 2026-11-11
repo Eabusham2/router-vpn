@@ -34,6 +34,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - name: Test Go controller and shared API
         # The exact controller suite completed in 670s on the matching CI image.
         # Keep the full inventory and every per-operation deadline unchanged.
@@ -211,6 +212,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
@@ -245,6 +247,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - name: Install XcodeGen
         run: |
           brew install xcodegen autoconf automake libtool pkg-config

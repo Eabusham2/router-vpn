@@ -282,6 +282,7 @@ class NativeBuildDiagnostics(unittest.TestCase):
                     dnssec_verifications.append((directory, selected))
 
                 with patch.object(N, 'environment', return_value=env), patch.object(N, 'run', side_effect=run), \
+                     patch.object(N.GO_SOCKETS, 'environment', side_effect=lambda **options: options['env']) as go_sockets, \
                      patch.object(N, 'pristine'), patch.object(N.PQ, 'verify', return_value={'native_static_libs': []}), \
                      patch.object(N.POLICY, 'prepare_native'), patch.object(N.PERFORMANCE, 'prepare'), \
                      patch.object(N.OPENVPN, 'prepare'), patch.object(N.EXTERNAL, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
@@ -293,6 +294,9 @@ class NativeBuildDiagnostics(unittest.TestCase):
                      contextlib.redirect_stdout(io.StringIO()):
                     result = N.build(target, root/'bundle', source=source, xray=root/'xray', pq=root/'pq')
                     receipt = N.reuse(result, target)
+                    self.assertEqual(go_sockets.call_count, int(system == 'windows'))
+                    if system == 'windows':
+                        go_sockets.assert_called_once_with(env=env)
                 raw = (result/'TOR-PT-NOTICES.json').read_bytes()
                 self.assertEqual(raw, N.EXTERNAL.desktop_pt_notices())
                 self.assertGreater(len(raw), 256*1024)
@@ -587,6 +591,7 @@ class WindowsDependencyDelivery(unittest.TestCase):
                     (stage/'libcronet.dll').write_bytes(image(target))
 
                 with patch.dict(os.environ, {'PATH': '/fixture-tools', 'CGO_LDFLAGS': '-L/ambient -lunowned'}, clear=True), \
+                     patch.object(N.GO_SOCKETS, 'environment', side_effect=lambda **options: options['env']) as go_sockets, \
                      patch.object(N.shutil, 'which', return_value='/verified/mingw-clang'), \
                      patch.object(N, 'run', side_effect=run), patch.object(N, 'pristine'), \
                      patch.object(N.PQ, 'verify', return_value={'native_static_libs': dependencies}), \
@@ -597,6 +602,7 @@ class WindowsDependencyDelivery(unittest.TestCase):
                     preparation_environment = N.environment(target, compiler=True)
                     with self.assertRaises(CompilerBoundary):
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=pq)
+                    go_sockets.assert_called_once()
                     external_prepare.assert_called_once_with(source.resolve(), env=builds[0][1])
                     self.assertEqual(preparations, [(source.resolve(), preparation_environment)])
                 self.assertEqual(len(builds), 1)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,9 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+_GO_SPEC = importlib.util.spec_from_file_location('dns_windows_go_sockets', ROOT / 'deploy/prepare-go-windows-sockets.py')
+GO_SOCKETS = importlib.util.module_from_spec(_GO_SPEC)
+_GO_SPEC.loader.exec_module(GO_SOCKETS)
 MODULE = ROOT / "cmd/dnsproxy"
 TOOLCHAIN = "go1.26.3"
 NOTICE = "DNS-PROXY-NOTICES.json"
@@ -166,6 +170,9 @@ def prepare(go: str, env: dict[str, str], module: Path = MODULE) -> dict:
 
 def build(go: str, target: str, output: Path) -> None:
     env = environment(target)
+    if target.startswith('windows/'):
+        env = GO_SOCKETS.environment(go, env)
+        go = str(Path(env['GOROOT']) / 'bin' / ('go.exe' if os.name == 'nt' else 'go'))
     payload = prepare(go, env)
     output = output.absolute()
     output.parent.mkdir(parents=True, exist_ok=True)

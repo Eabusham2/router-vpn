@@ -15,6 +15,9 @@ on:
       - 'deploy/prepare-*.py'
       - 'deploy/mobile_*policy.py'
       - 'deploy/build-native-runtime.py'
+      - '.github/actions/go-windows-sockets/**'
+      - 'deploy/prepare-go-windows-sockets.py'
+      - 'deploy/test_go_windows_sockets.py'
       - 'deploy/test_windows_physical_bootstrap*.py'
       - 'deploy/test_windows_physical_tunnel*.py'
       - 'deploy/test_windows_external_physical.py'
@@ -39,6 +42,9 @@ on:
       - 'deploy/prepare-*.py'
       - 'deploy/mobile_*policy.py'
       - 'deploy/build-native-runtime.py'
+      - '.github/actions/go-windows-sockets/**'
+      - 'deploy/prepare-go-windows-sockets.py'
+      - 'deploy/test_go_windows_sockets.py'
       - 'deploy/test_windows_physical_bootstrap*.py'
       - 'deploy/test_windows_physical_tunnel*.py'
       - 'deploy/test_windows_external_physical.py'
@@ -90,6 +96,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - name: Verify test-only native firewall scope
         shell: pwsh
         run: |
@@ -161,6 +168,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - name: Prove exact native protection succession and reversal
         timeout-minutes: 8
         shell: pwsh
@@ -204,6 +212,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - name: Verify prospective overlay and source boundaries
         shell: pwsh
         run: |

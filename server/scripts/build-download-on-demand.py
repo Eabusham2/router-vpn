@@ -627,6 +627,13 @@ def _go_build(go: str, src_root: Path, dist: Path, work: Path, goos: str, goarch
         "GOCACHE": str(work / "go-build-cache"),
         "GOMODCACHE": str(work / "go-mod-cache"),
     })
+    if goos == "windows":
+        # Only the same-image compiler prepared at image creation can enter
+        # this bounded controller/helper build. Never repair a native engine
+        # or mutate a host toolchain while serving a requested download.
+        sockets = _desktop_runtime_builders()["native"].GO_SOCKETS
+        env = sockets.environment(go, env=env, require_prepared=True)
+        go = str(Path(env["GOROOT"]) / "bin" / ("go.exe" if os.name == "nt" else "go"))
     ldflags = "-s -w" + (" -H=windowsgui" if windows_gui else "")
     command = [go, "build", "-trimpath", "-ldflags", ldflags, "-o", str(dist / output_name), package]
     if package == "./cmd/dnsproxy":

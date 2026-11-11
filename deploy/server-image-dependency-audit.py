@@ -38,7 +38,7 @@ for forbidden in (
     assert forbidden not in joined, f"floating language builder returned: {forbidden}"
 for required in (
     "FROM golang:1.24.13-alpine AS build",
-    "FROM golang:1.24.13-alpine AS binaries",
+    "FROM golang:1.26.3-alpine AS binaries",
     "FROM golang:1.25.12-bookworm AS go-build",
     "FROM golang:1.23.12-alpine AS plugin",
     "FROM rust:1.88.0-bookworm AS overtls-upstream-build",

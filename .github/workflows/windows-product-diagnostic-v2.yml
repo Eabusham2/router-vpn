@@ -32,6 +32,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - name: Desktop icon generator self-test
         shell: pwsh
         run: python deploy/materialize-desktop-icons.py --self-test

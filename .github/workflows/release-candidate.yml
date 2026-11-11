@@ -53,6 +53,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version: '1.26.3', cache: false}
+      - uses: ./.github/actions/go-windows-sockets
       - name: Universal source syntax
         run: |
           set -euo pipefail
@@ -200,6 +201,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - name: Execute both native owners, Start Layers and replay controls
         shell: bash
         run: |
@@ -229,6 +231,7 @@ jobs:
           python-version: '3.12'
       - uses: actions/setup-go@v5
         with: {go-version: '1.26.3', cache: false}
+      - uses: ./.github/actions/go-windows-sockets
       - uses: actions/download-artifact@v4
         with:
           pattern: RouterVPN-native-runtime-*-${{ github.sha }}
@@ -264,6 +267,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version: '1.26.3', cache: false}
+      - uses: ./.github/actions/go-windows-sockets
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       - name: Owned Stop retry preserves the displayed cleanup receipt
@@ -450,6 +454,7 @@ jobs:
         with: {distribution: temurin, java-version: '17'}
       - uses: actions/setup-go@v5
         with: {go-version: '1.26.3', cache: false}
+      - uses: ./.github/actions/go-windows-sockets
       - uses: gradle/actions/setup-gradle@v4
         with: {gradle-version: '9.5.0'}
       - name: Install Android SDK
@@ -501,6 +506,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version: '1.26.3', cache: false}
+      - uses: ./.github/actions/go-windows-sockets
       - name: Run iOS/iPadOS source contracts
         working-directory: ios/RouterVPN
         run: |
@@ -577,6 +583,7 @@ jobs:
           python-version: '3.12'
       - uses: actions/setup-go@v5
         with: {go-version: '1.26.3', cache: false}
+      - uses: ./.github/actions/go-windows-sockets
       - uses: actions/download-artifact@v4
         with:
           pattern: RouterVPN-native-runtime-darwin-*-${{ github.sha }}
@@ -619,6 +626,7 @@ jobs:
           python-version: '3.12'
       - uses: actions/setup-go@v5
         with: {go-version: '1.26.3', cache: false}
+      - uses: ./.github/actions/go-windows-sockets
       - name: Install GTK native build dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-3-dev libcurl4-openssl-dev libjson-glib-dev pkg-config file xvfb xauth binutils
       - uses: actions/download-artifact@v4

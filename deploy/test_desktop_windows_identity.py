@@ -24,6 +24,10 @@ SPEC = importlib.util.spec_from_file_location(
     "windows_identity_preparation", ROOT / "deploy/prepare-desktop-external.py")
 PREP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PREP)
+GO_SPEC = importlib.util.spec_from_file_location(
+    'windows_identity_go_sockets', ROOT / 'deploy/prepare-go-windows-sockets.py')
+GO_SOCKETS = importlib.util.module_from_spec(GO_SPEC)
+GO_SPEC.loader.exec_module(GO_SOCKETS)
 IDENTITY = "desktop_socket_windows_identity.go"
 CONNECT = "desktop_socket_windows_identity_connect.go"
 TCP = "desktop_socket_tcp_windows.go"
@@ -285,6 +289,8 @@ def selected_compiler(go, source, env):
                          cwd=source, env=captured)
     if status or json.loads(output) != identity:
         raise ValueError("Selected Windows identity compiler changed before the gate")
+    captured = GO_SOCKETS.environment(compiler, captured)
+    compiler = Path(captured['GOROOT']) / 'bin/go.exe'
     return compiler, captured, identity["GOHOSTARCH"]
 
 

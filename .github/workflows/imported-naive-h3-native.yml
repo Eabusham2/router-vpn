@@ -13,6 +13,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.3'
+      - uses: ./.github/actions/go-windows-sockets
       - name: Export all 63 actual Swift Naive H3 source graphs
         shell: bash
         env:
@@ -44,6 +45,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.3'
+      - uses: ./.github/actions/go-windows-sockets
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -135,6 +137,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - name: Verify the separate imported H3 native owner and receipt contracts
         shell: pwsh
         run: |

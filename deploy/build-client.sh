@@ -4,6 +4,15 @@ set -euo pipefail
 rm -rf dist
 mkdir -p dist/client dist/dnsproxy dist/start-layer dist/router-agent dist/app-update
 
+# The same exact Go source backport is mandatory for cross-built Windows
+# clients, launchers and helpers. Keep its independent identity with the build.
+python3 deploy/prepare-go-windows-sockets.py --receipt dist/GO-WINDOWS-SOCKETS.json > dist/go-windows-sockets-selection.json
+GOROOT=$(python3 -c 'import json; print(json.load(open("dist/go-windows-sockets-selection.json"))["goroot"])')
+export GOROOT
+export GOTOOLCHAIN=local
+export PATH="$GOROOT/bin:$PATH"
+rm dist/go-windows-sockets-selection.json
+
 client_targets=(
   windows/amd64 windows/arm64
   darwin/amd64 darwin/arm64

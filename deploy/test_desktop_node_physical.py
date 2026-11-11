@@ -725,6 +725,9 @@ def selected_compiler(go, source, env):
     status, again = run([compiler, "env", "-json", "GOROOT", "GOVERSION", "GOHOSTOS", "GOHOSTARCH"], cwd=source, env=captured, timeout=30)
     if status or json.loads(again) != identity:
         raise ValueError("Node native compiler changed during selection")
+    if system == 'windows':
+        captured = BOOT.IDENTITY.GO_SOCKETS.environment(compiler, captured)
+        compiler = Path(captured['GOROOT']) / 'bin/go.exe'
     return compiler, captured, arch
 
 

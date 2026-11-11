@@ -139,6 +139,7 @@ for floating in ("latest.zip", "/releases/latest", "refs/heads/main"):
 builder_text = text("server/scripts/build-download-on-demand.py")
 for marker in (
     "LOCAL_BUILD_TIMEOUT",
+    "sockets.environment(go, env=env, require_prepared=True)",
     "compile_requested",
     "same-image prebuilt components",
     "same-SHA native GitHub artifact is required",
@@ -153,8 +154,10 @@ for marker in (
 
 need(
     "server/init/Dockerfile",
-    "FROM golang:1.24.13-alpine AS binaries",
+    "FROM golang:1.26.3-alpine AS binaries",
     "FROM golang:1.26.3-bookworm AS go-toolchain",
+    "prepare-go-windows-sockets.py --output /opt/routervpn-go",
+    "COPY --from=go-toolchain /opt/routervpn-go /usr/local/go",
     "build-download-on-demand.py --verify-desktop-runtimes",
     "COPY --from=amnezia /amnezia /src/dist/amnezia",
     "COPY dist/native-runtime/windows-amd64/ /src/dist/native-runtime/windows-amd64/",

@@ -46,6 +46,9 @@ on:
       - 'deploy/test_desktop_windows_wfp.py'
       - 'deploy/test_desktop_windows_identity.py'
       - 'deploy/install-desktop-windows-toolchain.py'
+      - '.github/actions/go-windows-sockets/**'
+      - 'deploy/prepare-go-windows-sockets.py'
+      - 'deploy/test_go_windows_sockets.py'
       - 'go.mod'
       - 'go.sum'
   pull_request:
@@ -92,6 +95,9 @@ on:
       - 'deploy/test_desktop_windows_wfp.py'
       - 'deploy/test_desktop_windows_identity.py'
       - 'deploy/install-desktop-windows-toolchain.py'
+      - '.github/actions/go-windows-sockets/**'
+      - 'deploy/prepare-go-windows-sockets.py'
+      - 'deploy/test_go_windows_sockets.py'
       - 'go.mod'
       - 'go.sum'
   workflow_dispatch:
@@ -113,6 +119,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - name: Validate fixed timing instrumentation boundaries
         shell: pwsh
         run: |
@@ -164,6 +171,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -208,6 +216,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -257,6 +266,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - name: Compile the exact native elevation case with pointer checks
         shell: pwsh
         run: |
@@ -347,6 +357,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - name: Pinned compiler for the actual composed Session race checks
         shell: pwsh
         run: |
@@ -381,6 +392,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - name: Pinned compiler for actual Windows race checks
         shell: pwsh
         run: |

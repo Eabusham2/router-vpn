@@ -23,6 +23,9 @@ on:
       - 'deploy/prepare-*.py'
       - 'deploy/build*pq*.py'
       - 'deploy/build-native-runtime.py'
+      - '.github/actions/go-windows-sockets/**'
+      - 'deploy/prepare-go-windows-sockets.py'
+      - 'deploy/test_go_windows_sockets.py'
       - 'deploy/test_windows_node_pq*.py'
       - 'deploy/test_desktop_node_pq.py'
       - 'deploy/test_pq_reference_preparation.py'
@@ -55,6 +58,9 @@ on:
       - 'deploy/prepare-*.py'
       - 'deploy/build*pq*.py'
       - 'deploy/build-native-runtime.py'
+      - '.github/actions/go-windows-sockets/**'
+      - 'deploy/prepare-go-windows-sockets.py'
+      - 'deploy/test_go_windows_sockets.py'
       - 'deploy/test_windows_node_pq*.py'
       - 'deploy/test_desktop_node_pq.py'
       - 'deploy/test_pq_reference_preparation.py'
@@ -113,6 +119,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - name: Verify native scope and prospective admission boundaries
         shell: pwsh
         run: |

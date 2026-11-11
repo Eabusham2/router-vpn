@@ -29,7 +29,7 @@ VISION_TEST = ROOT/'mobile/applexray/vision_state_test.go.tmpl'
 VISION_TEST_TARGET = 'proxy/routervpn_vision_state_test.go'
 
 def sources():
-    return [Path(__file__).resolve(), ROOT/'deploy/xray_datagram_policy.py', ROOT/'deploy/xray_connection_policy.py', ROOT/'deploy/xray_vision_policy.py', VISION_TEST]
+    return [Path(__file__).resolve(), ROOT/'deploy/prepare-go-windows-sockets.py', ROOT/'deploy/xray_datagram_policy.py', ROOT/'deploy/xray_connection_policy.py', ROOT/'deploy/xray_vision_policy.py', VISION_TEST]
 
 def digest():
     value = hashlib.sha256()

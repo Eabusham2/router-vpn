@@ -18,6 +18,8 @@ import time
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('shared_xray',ROOT/'deploy/prepare-xray-runtime.py')
 POLICY=importlib.util.module_from_spec(spec);spec.loader.exec_module(POLICY)
+go_spec=importlib.util.spec_from_file_location('xray_windows_go_sockets',ROOT/'deploy/prepare-go-windows-sockets.py')
+GO_SOCKETS=importlib.util.module_from_spec(go_spec);go_spec.loader.exec_module(GO_SOCKETS)
 TARGETS=tuple(f'{system}/{arch}' for system in ('linux','darwin','windows') for arch in ('amd64','arm64'))
 TOOLCHAIN='go1.26.3'
 MAX_BINARY=160*1024*1024
@@ -76,6 +78,8 @@ def fetch_source(path):
 
 def build(target,destination,source=None):
     env=environment(target)
+    if target.startswith('windows/'):
+        env=GO_SOCKETS.environment(env=env)
     destination=Path(destination).absolute()
     if destination.is_symlink():raise ValueError('Refusing a symlink engine destination')
     destination.parent.mkdir(parents=True,exist_ok=True)

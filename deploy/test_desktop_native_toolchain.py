@@ -1842,8 +1842,10 @@ class SelectedNodeCompiler(unittest.TestCase):
             identity = {'GOROOT': str(root), 'GOVERSION': N.TOOLCHAIN, 'GOHOSTOS': 'windows', 'GOHOSTARCH': 'amd64'}
             for key in ('PATH', 'Path', 'pAtH'):
                 with self.subTest(key=key), patch.object(node.platform, 'system', return_value='Windows'), \
-                     patch.object(node, 'run', return_value=(0, json.dumps(identity))):
+                     patch.object(node, 'run', return_value=(0, json.dumps(identity))), \
+                     patch.object(node.BOOT.IDENTITY.GO_SOCKETS, 'environment', side_effect=lambda compiler, env: env) as backport:
                     _, captured, _ = node.selected_compiler('bootstrap-go', root, {key: 'preserved-native-tools'})
+                    backport.assert_called_once()
                     self.assertEqual([key for key in captured if key.upper() == 'PATH'], ['PATH'])
                     self.assertEqual(captured['PATH'], str(root/'bin')+os.pathsep+'preserved-native-tools')
             with patch.object(node.platform, 'system', return_value='Windows'), \

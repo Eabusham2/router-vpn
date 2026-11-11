@@ -40,6 +40,7 @@ EXTERNAL = load('desktop_native_external', 'prepare-desktop-external.py')
 TOR = load('desktop_native_tor', 'build-desktop-tor.py')
 DNSSEC = load('desktop_native_dnssec', 'desktop-dnssec-bundle.py')
 BUILD_OWNER = load('desktop_windows_build_owner', 'windows_build_owner.py')
+GO_SOCKETS = load('desktop_windows_go_sockets', 'prepare-go-windows-sockets.py')
 PIN, VERSION, TOOLCHAIN = POLICY.CORE, '1.14.1', 'go1.26.3'
 TARGETS = tuple(PQ.TARGETS)
 TAGS = ('with_wireguard', 'with_gvisor', 'with_quic', 'with_utls', 'with_openvpn',
@@ -105,6 +106,8 @@ def run(command, *, cwd=None, env=None, timeout=1800):
 
 def inputs():
     files = list(dict.fromkeys([Path(__file__).resolve(), ROOT/'deploy/build-desktop-pq.py',
+                             ROOT/'deploy/prepare-go-windows-sockets.py',
+                             ROOT/'deploy/test_go_windows_sockets.py',
                              ROOT/'deploy/windows_build_owner.py',
                              ROOT/'deploy/test_windows_build_owner.py',
                              ROOT/'deploy/test_desktop_pt_inventory.py',
@@ -1191,6 +1194,8 @@ def stage_pt_notices(stage):
 
 def build(target, destination, *, source=None, xray=None, pq=None, cache=None, tor_compiled=None, dnssec_compiled=None):
     env, policy = environment(target, compiler=True), digest()
+    if target.startswith('windows/'):
+        env = GO_SOCKETS.environment(env=env)
     native_acceptance = env.get('ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE', '')
     if native_acceptance not in ('', '1'):
         raise ValueError('Unknown explicit Darwin native acceptance selection')

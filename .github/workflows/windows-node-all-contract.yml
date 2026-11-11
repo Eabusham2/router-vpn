@@ -35,6 +35,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - uses: ./.github/actions/go-windows-sockets
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

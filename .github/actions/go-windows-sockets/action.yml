@@ -1,0 +1,11 @@
+name: Captured Go Windows socket backport
+description: Apply the exact upstream temporary-socket fix to an owned Go 1.26.3 copy
+runs:
+  using: composite
+  steps:
+    - name: Prepare and verify pinned Windows Go socket cleanup
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        python deploy/prepare-go-windows-sockets.py --github-env --output "$RUNNER_TEMP/routervpn-go-windows-sockets"
+        python deploy/test_go_windows_sockets.py

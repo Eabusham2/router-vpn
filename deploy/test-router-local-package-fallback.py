@@ -113,7 +113,7 @@ def fake_source(root: Path) -> None:
     write(root / "docs" / "CLIENT.md")
     write(root / "SECURITY.md")
     write(root / "LICENSE", "MIT\n")
-    for relative in ("deploy/build-dnsproxy.py", "cmd/dnsproxy/go.mod", "cmd/dnsproxy/go.sum", "cmd/dnsproxy/THIRD-PARTY-NOTICES.json"):
+    for relative in ("deploy/build-dnsproxy.py", "deploy/prepare-go-windows-sockets.py", "cmd/dnsproxy/go.mod", "cmd/dnsproxy/go.sum", "cmd/dnsproxy/THIRD-PARTY-NOTICES.json"):
         write(root / relative, (ROOT / relative).read_text(encoding="utf-8"))
     icon = root / "deploy" / "materialize-desktop-icons.py"
     write(
@@ -344,17 +344,39 @@ def main_with_metadata_fixture() -> int:
         # The optional missing Windows DNS component must enter its pinned
         # nested-module builder with the same bounded workspace/toolchain.
         # Intercept only the actual subprocess boundary, not dispatch logic.
-        with mock.patch.object(builder.subprocess, "run") as execute:
+        sockets = builder._desktop_runtime_builders()["native"].GO_SOCKETS
+        prepared_go = str(Path("/installed") / "bin" / ("go.exe" if os.name == "nt" else "go"))
+        def prepared_environment(go, env, require_prepared):
+            assert go == "/installed/go"
+            assert require_prepared is True
+            return dict(env, GOROOT="/installed")
+        with mock.patch.object(builder.subprocess, "run") as execute, \
+                mock.patch.object(sockets, "environment", side_effect=prepared_environment) as select:
             execute.return_value.returncode = 0
             execute.return_value.stdout = ""
             builder._go_build("/installed/go", src, td / "dns-dist", td / "dns-work",
                               "windows", "arm64", "./cmd/dnsproxy", "router-vpn-dns.exe")
             arguments = execute.call_args.args[0]
             assert arguments == [builder.sys.executable, str(src / "deploy/build-dnsproxy.py"),
-                                 "build", "windows/arm64", str(td / "dns-dist/router-vpn-dns.exe"), "--go", "/installed/go"], arguments
+                                 "build", "windows/arm64", str(td / "dns-dist/router-vpn-dns.exe"), "--go", prepared_go], arguments
+            select.assert_called_once()
             assert execute.call_args.kwargs["cwd"] == src
             assert execute.call_args.kwargs["timeout"] == builder.LOCAL_BUILD_TIMEOUT
             assert execute.call_args.kwargs["env"]["GOMODCACHE"] == str(td / "dns-work/go-mod-cache")
+
+        # A compiler without the image-build receipt must fail before launching
+        # any optional component build; source preparation is never a live-node
+        # fallback for this boundary.
+        with mock.patch.object(builder.subprocess, "run") as execute, \
+                mock.patch.object(sockets, "environment", side_effect=ValueError("unprepared image compiler")):
+            try:
+                builder._go_build("/installed/go", src, td / "bad-dist", td / "bad-work",
+                                  "windows", "amd64", "./cmd/client", "router-vpn-client.exe")
+            except ValueError as exc:
+                assert str(exc) == "unprepared image compiler"
+            else:
+                raise AssertionError("unprepared compiler entered router-local build")
+            execute.assert_not_called()
 
         notice_path = src / "cmd/dnsproxy/THIRD-PARTY-NOTICES.json"
         valid_notice = notice_path.read_bytes()

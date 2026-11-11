@@ -17,6 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('desktop_amnezia', ROOT/'deploy/prepare-relay-core.py')
 POLICY = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(POLICY)
+go_spec = importlib.util.spec_from_file_location('desktop_amnezia_go_sockets', ROOT/'deploy/prepare-go-windows-sockets.py')
+GO_SOCKETS = importlib.util.module_from_spec(go_spec)
+go_spec.loader.exec_module(GO_SOCKETS)
 PIN = POLICY.CORE
 VERSION = '1.14.1'
 TOOLCHAIN = 'go1.26.3'
@@ -29,7 +32,7 @@ def run(command, *, cwd=None, env=None):
 
 def digest():
     value = hashlib.sha256()
-    for path in list(dict.fromkeys([Path(__file__).resolve(), *POLICY.inputs()])):
+    for path in list(dict.fromkeys([Path(__file__).resolve(), ROOT/'deploy/prepare-go-windows-sockets.py', *POLICY.inputs()])):
         value.update(str(path.relative_to(ROOT)).encode()+b'\0'+path.read_bytes())
     return value.hexdigest()
 
@@ -81,6 +84,8 @@ def fetch_source(path):
 
 def build(target, destination, source=None):
     env, policy = environment(target), digest()
+    if target.startswith('windows/'):
+        env = GO_SOCKETS.environment(env=env)
     destination = Path(destination).absolute()
     if destination.is_symlink():
         raise ValueError('Refusing a linked native engine destination')
