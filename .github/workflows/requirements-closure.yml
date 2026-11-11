@@ -28,7 +28,8 @@ jobs:
       - name: Exercise captured startup and temporary restoration under race instrumentation
         # Execute ordered/legacy startup and the actual cancelled Speed Lab restore.
         # Building a race-enabled native image does not execute this inventory.
-        run: go test -race -count=1 -timeout=180s ./cmd/client -run '^Test(Startup(NodeChain|ProfileToken|Selection|External)|OrderedStartupCannotFallback|Desktop(SpeedLabDNSObservation|WindowsExternalSpeedLabRestoresOriginalTypedHost))'
+        # Compile once; retain every required case and the 180s alarm per phase.
+        run: python3 deploy/test_startup_race_groups.py
       - name: Compile and test Go source
         # The exact controller suite completed in 670s on the matching CI image.
         # Keep the full inventory and every per-operation deadline unchanged.

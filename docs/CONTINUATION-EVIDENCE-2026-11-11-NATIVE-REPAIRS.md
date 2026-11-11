@@ -7,6 +7,46 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## Focused startup and restoration race phases
+
+Two hosted focused runs compiled the new startup code, then exhausted the
+combined 180-second package alarm: job
+[130830582902](https://github.com/Eabusham2/router-vpn/actions/runs/43112109699/job/130830582902)
+at `fd660673` timed out after 180.030 seconds, while the first owned-rejection
+case had been running for 42 seconds; job
+[130833585877](https://github.com/Eabusham2/router-vpn/actions/runs/43112976326/job/130833585877)
+at `e1204aea` timed out after 180.034 seconds, with that first case only one
+second old. Both stacks were in the initial valid fixture/source preparation,
+before the foreign-context mutation. Neither log reported a compilation
+error, Go assertion failure or race before the package alarm.
+
+`deploy/test_startup_race_groups.py` compiles the actual client race test
+binary once and discovers its compiled inventory. All 29 existing focused
+roots and 152 terminal cases remain required. The eleven expensive retained-
+owner rejection leaves run separately; the other 28 roots run whole. These
+39 disjoint invocations retain the original 180-second Go alarm. The complete
+`go test ./... -timeout=15m` gate and 45-minute job bound remain unchanged.
+
+The runner requires original test2json run/pass receipts for every required
+parent and leaf, a complete package pass and zero exit status. Missing,
+duplicate, skipped, failed, raced, truncated or out-of-order evidence refuses
+the phase. It prints the original successful test pass events, including
+their names and timings. Whole roots execute newly added children; newly
+discovered focused roots also run whole. The divided root's source file is
+pinned to its reviewed Git blob, so adding a leaf cannot silently omit it
+from the split inventory. Real benchmark names from the compiled listing are
+accepted as inventory entries but never enter the focused test phases.
+
+Thirteen parser, partition and source-drift selftests cover absent cases,
+overlap, replaced source, invalid verdicts, future-root/child coverage and
+late children after a passed parent. Independent source reviews caught and
+corrected the real compiled benchmark-listing case and strengthened causal
+event ordering before publication. The 29-root/152-case inventory and narrow
+workflow edit were checked independently. The local executor is unavailable;
+these new Python selftests and the partitioned Go execution still require
+hosted results. No production code, operation deadline or original Go test
+body is changed by this runner repair.
+
 ## Speed Lab fixture joins the original DNS adoption
 
 Release-gap job `130817800199` at `da38c3d3` failed the public temporary
@@ -41,8 +81,15 @@ changing its three-minute Go execution bound or the full-suite inventory.
 
 This is a fixture synchronization correction. Production transaction
 exclusivity, DNS policy, timeouts and restoration behavior are unchanged.
-Source/call-order review is complete; hosted Go and race execution remain
-pending because the local executor is unavailable.
+Source/call-order review is complete. Current-commit Windows native baseline
+job [130833585213](https://github.com/Eabusham2/router-vpn/actions/runs/43112975965/job/130833585213)
+checked out `e1204aea719fb79009bfe62e25c3553ac2ba097f` and passed the
+restoration root plus all 24 named directions. The previously failing
+Router-to-Hysteria2-AES-to-Router direction passed in 2.50 seconds; the
+complete restoration root passed in 140.58 seconds. Its log contains no Go
+test failure or race report. The separate new DNS-admission causal root is
+outside that job's selector and still needs its focused execution receipt.
+These hosted controller fixtures do not establish device networking.
 
 ## SOCKS authentication-downgrade EOF observation
 
@@ -72,12 +119,13 @@ correction remains pending hosted CI, with no local execution claim.
 
 The source unit is published at `d00230500812941f84c0061415b41f2f80e4181b`.
 The requirements-closure workflow additionally executes all twelve new test
-roots and their legacy Startup ProfileToken/Selection/External neighbors with
-`go test -race -count=1 -timeout=180s` before the unchanged complete Go suite.
-The explicit selector also retains the earlier OrderedStartupCannotFallback
-coverage. This is required executable race coverage; a race-enabled native
-compile alone is insufficient. The focused gate's outcome is still pending,
-and no operation deadline or existing complete-suite inventory was relaxed.
+roots and their legacy Startup ProfileToken/Selection/External neighbors
+from one compiled race-enabled image, using the complete bounded phases
+described above before the unchanged complete Go suite. The inventory also
+retains the earlier OrderedStartupCannotFallback coverage. A race-enabled
+compile alone is insufficient. The original combined run timed out; the
+partitioned gate's result remains required, with no operation deadline or
+existing complete-suite inventory relaxed.
 
 The four recovered production edits were checked against the actual unchanged
 files at `da38c3d3f5cc396555deeaa998eb4bced46c37d4`, then corrected as new
@@ -135,8 +183,9 @@ macOS descriptor work remains separate unfinished implementation.
 
 The prepublication `da38c3d3` release-gap job `130817800199` exposed an
 independent Speed Lab cancellation/restoration admission failure (HTTP 409).
-That result is being traced separately; this startup source unit does not
-claim to repair or certify it.
+Its original-DNS observation repair is published in `e1204aea`; that fixture
+change is detailed above and still requires hosted execution. The startup
+source unit does not claim to repair or certify this separate behavior.
 
 ## Hosted CI follow-up after the execution interruption
 
@@ -197,9 +246,10 @@ and [query multiplexer](https://github.com/SagerNet/sing-box/blob/1ac1a339cb1223
 
 The current release has not been certified or published by these component
 results. Exact-SHA native packages, server images, compose and final
-publication remain separate gates. The unapplied startup recovery patch,
-inaccessible macOS descriptor work, broader graph requirements and live
-acceptance boundaries recorded below remain open.
+publication remain separate gates. The historical startup patch has been
+superseded by the corrected published source described above; its complete
+hosted verification is still pending. Inaccessible macOS descriptor work,
+broader graph requirements and live acceptance boundaries remain open.
 
 ## Requirement recovery
 
@@ -449,7 +499,15 @@ Its authoritative release run was
 [43098704215](https://github.com/Eabusham2/router-vpn/actions/runs/43098704215),
 queued when inspected. This is not a green or published new release.
 
-### Desktop ordered startup: unfinished
+### Desktop ordered startup: historical interrupted draft (superseded)
+
+This subsection preserves the state at the executor interruption. Corrected
+production code and newly rebuilt tests were subsequently published in
+`d00230500812941f84c0061415b41f2f80e4181b`, as detailed above. The original
+recovery patch is historical input; do not reapply it over current source.
+Its compatibility defect has been corrected in the shipping files. The
+hosted focused race runs compiled the new code, then exhausted the combined
+180-second package budget; complete case verdicts remain required.
 
 Work was present in the main checkout at
 `/workspace/scratch/62d26fbeec14/router-vpn`, in exactly these six files:
@@ -466,7 +524,8 @@ private-asset digest before delay; retains an explicit proved Local order;
 and uses the same context-owned native connection transaction rather than
 re-entering the public HTTP handler. It is not frozen or fully validated.
 
-A required compatibility correction was identified but not applied. The draft
+At the interruption, a required compatibility correction had been identified
+but not applied to that draft. The draft
 incorrectly infers an ordered receipt from `logical_mode=multihop` and excludes
 every multihop record from the ordinary recorder. Historical pair Last records
 can legitimately use that logical label. New ordered receipts need canonical
@@ -501,8 +560,9 @@ This preserves the recorded production edit payloads, not verified final
 filesystem bytes or final formatting. Both new test-file payloads became
 incomplete in the retained context; their scenarios and unresolved run notes
 are in the manifest instead of invented test code. The known `path_kind`
-compatibility correction remains unapplied. The recovery patch is documentation
-data and has not been applied to shipping application source.
+compatibility correction was still unapplied in that historical patch. The
+later shipping implementation contains the corrected discriminator and owner
+classification. The preserved patch remains documentation data.
 
 ### macOS descriptor/native bridge: unfinished
 
@@ -562,9 +622,10 @@ Read live main before touching either local checkout. The detached worktree
 also contains many already-published changes; never replay its entire diff.
 Restrict recovery to the exact unfinished whitelists above, compare every file
 against the newer remote tree, and preserve unrelated work. Inspect the actual
-unresolved logs instead of assuming they passed. Complete the startup
-discriminator correction, validate each coherent unit, and publish directly
-to main with normal ancestry. The original requirements and all device/release
+unresolved logs instead of assuming they passed. Do not reapply the
+superseded desktop startup patch: its corrected source is already published.
+Validate the current startup inventory and the remaining coherent native
+units, and publish directly to main with normal ancestry. The original requirements and all device/release
 boundaries remain binding. No new physical-device, signing or private-deployment
 access was obtained during this interruption.
 
