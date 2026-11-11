@@ -47,7 +47,7 @@ func macOSExternalNativeController(owned *ownedDesktopController) (bool, error) 
 		StateFile:    filepath.Join(macOSOwnedControllerRoot, "state.json"),
 	}}
 	raw, err = readPrivateRegular(a.cfg.ProfilesFile, 64<<10)
-	if err != nil || decodeRelayControlJSON(raw, &a.profiles) != nil || len(a.profiles.Profiles) != 1 || a.profiles.SelectedID != "installed-macos-external" || a.profiles.Profiles[0].ID != a.profiles.SelectedID {
+	if err != nil || decodeRelayControlJSON(raw, &a.profiles) != nil || !macOSExternalNativeFixtureProfiles(a.profiles) {
 		return true, errors.Join(err, errors.New("native external fixture lost its saved private profile"))
 	}
 	raw, err = readPrivateRegular(a.cfg.ModesFile, 256<<10)
