@@ -152,17 +152,22 @@ import NetworkExtension
  }
 }
 """
-STARTUP_SECTIONS=(('startMultihop(', 'startImportedEntryMultihop('),
-                  ('startImportedEntryMultihop(', 'multihopWireGuardEndpoint('),
-                  ('startLibbox(', 'performanceFiles('),
-                  ('startExternalLibbox(', 'selectedRouterProfile('))
+STARTUP_SECTIONS=('startMultihop(', 'startNodeChain(', 'startImportedEntryMultihop(',
+                  'startLibbox(', 'startExternalLibbox(')
 STARTUP_HOLD='try engine.prepareMTUHold(initialMTUHold)'
 
 
 def startup_sections(provider):
-    for start, end in STARTUP_SECTIONS:
+    for start in STARTUP_SECTIONS:
         begin=provider.index('    private func '+start)
-        finish=provider.index('    private func '+end,begin)
+        # Extract the original method itself. A newly inserted native startup
+        # method must not be counted as another hold inside its predecessor.
+        finish=provider.index('{',begin)+1
+        depth=1
+        while depth:
+            if provider[finish]=='{':depth+=1
+            elif provider[finish]=='}':depth-=1
+            finish+=1
         yield start, begin, finish, provider[begin:finish]
 
 
@@ -201,8 +206,8 @@ assert raw.index('!RouterVPNMTUPolicy.requiresAdaptiveOwner(profile: selectedPro
 
 verify_startup_holds(provider)
 controls=verify_startup_hold_controls(provider)
-assert controls==20, 'Every captured startup path needs its own hold controls'
-print('All four native Apple startup paths hold the original engine before launch; 20 missing/late/owner/lease/duplicate controls rejected.')
+assert controls==25, 'Every captured startup path needs its own hold controls'
+print('All five native Apple startup paths, including the ordered graph, hold the original engine before launch; 25 missing/late/owner/lease/duplicate controls rejected.')
 
 with tempfile.TemporaryDirectory(prefix='routervpn-mtu-control-') as directory:
  tmp=Path(directory);(tmp/'NetworkExtension.swift').write_text(STUB);(tmp/'Harness.swift').write_text(TEST)
