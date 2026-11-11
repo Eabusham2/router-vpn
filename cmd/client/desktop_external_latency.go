@@ -33,13 +33,15 @@ type desktopLatencyView struct {
 }
 
 type desktopLatencySlot struct {
-	mu           sync.Mutex
-	session      string
-	profileID    string
-	profileToken string
-	current      *desktopLatencyOperation
-	used         map[string]bool
-	cancelled    map[string]desktopLatencyView
+	mu                 sync.Mutex
+	session            string
+	profileID          string
+	profileToken       string
+	current            *desktopLatencyOperation
+	response           *desktopLatencyOperation // ephemeral live3; never replaces the saved50 view
+	responsePauseUntil time.Time
+	used               map[string]bool
+	cancelled          map[string]desktopLatencyView
 }
 
 type desktopLatencySnapshot struct {
@@ -52,14 +54,18 @@ type desktopLatencySnapshot struct {
 }
 
 type desktopLatencyOperation struct {
-	mu          sync.Mutex
-	snapshot    desktopLatencySnapshot
-	request     string
-	status      hopmeasure.Status
-	completedAt time.Time
-	invalid     bool
-	cancel      context.CancelFunc
-	done        chan struct{}
+	mu                    sync.Mutex
+	snapshot              desktopLatencySnapshot
+	request               string
+	status                hopmeasure.Status
+	completedAt           time.Time
+	invalid               bool
+	cancel                context.CancelFunc
+	done                  chan struct{}
+	responseOnly          bool
+	startedAt             time.Time
+	responseMTU           *desktopMTUSession
+	responseMTUGeneration uint64
 }
 
 func (a *app) desktopLatencyFor() *desktopLatencySlot {
@@ -160,8 +166,24 @@ func (a *app) desktopLatencyMeasurement(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Latency source or connection changed before Retest", http.StatusConflict)
 		return
 	}
+	identity, identityErr := capturedDesktopLatencyRuntime(snapshot.launch)
+	if identityErr != nil || desktopIsResponseRequestID(request.Request, identity.session, identity.source, identity.config, identity.node) {
+		http.Error(w, "A live HTTPS request cannot be reused as a saved benchmark", http.StatusConflict)
+		return
+	}
 	slot := a.desktopLatencyFor()
 	slot.mu.Lock()
+	slot.responsePauseUntil = time.Now().Add(30 * time.Second)
+	if live := slot.response; live != nil {
+		select {
+		case <-live.done:
+		default:
+			slot.mu.Unlock()
+			live.invalidate()
+			http.Error(w, "The background HTTPS sample was cancelled. Retry this benchmark after its native cleanup; live polling is paused for 30 seconds.", http.StatusConflict)
+			return
+		}
+	}
 	if previous := slot.current; previous != nil {
 		select {
 		case <-previous.done:
@@ -208,7 +230,13 @@ func (a *app) runDesktopLatencyMeasurement(ctx context.Context, operation *deskt
 	var result hopmeasure.Status
 	if err == nil {
 		defer finish()
-		releaseMTU, holdErr := a.holdDesktopMTUForMeasurement(ctx)
+		var releaseMTU func()
+		var holdErr error
+		if operation.responseOnly {
+			releaseMTU, holdErr = a.holdDesktopResponseMTU(ctx, operation)
+		} else {
+			releaseMTU, holdErr = a.holdDesktopMTUForMeasurement(ctx)
+		}
 		err = holdErr
 		if err == nil {
 			defer releaseMTU() // after exact worker/socket drain and result adoption
@@ -246,6 +274,14 @@ func (a *app) runDesktopLatencyMeasurement(ctx context.Context, operation *deskt
 func cloneDesktopLatencyStatus(status hopmeasure.Status) hopmeasure.Status {
 	status.Results = append([]hopmeasure.Result{}, status.Results...)
 	for index := range status.Results {
+		if original := status.Results[index].Response; original != nil {
+			copy := *original
+			if original.Distribution != nil {
+				value := *original.Distribution
+				copy.Distribution = &value
+			}
+			status.Results[index].Response = &copy
+		}
 		if original := status.Results[index].Benchmark; original != nil {
 			copy := *original
 			if original.Distribution != nil {
@@ -313,7 +349,13 @@ func invalidateDesktopLatencyResultsContext(ctx context.Context, a *app) error {
 		return err
 	}
 	operation := slot.current
+	response := slot.response
 	slot.mu.Unlock()
+	if response != nil {
+		if err := response.invalidateContext(ctx); err != nil {
+			return err
+		}
+	}
 	if operation != nil {
 		return operation.invalidateContext(ctx)
 	}

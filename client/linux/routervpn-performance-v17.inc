@@ -102,7 +102,7 @@ static void linux_telemetry_performance_v9(GtkButton *button, gpointer data) {
     GtkWidget *area=gtk_dialog_get_content_area(GTK_DIALOG(p->dialog));gtk_container_set_border_width(GTK_CONTAINER(area),14);
     GtkWidget *flow=gtk_flow_box_new();gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(flow),GTK_SELECTION_NONE);
     gtk_flow_box_set_min_children_per_line(GTK_FLOW_BOX(flow),1);gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(flow),2);
-    const char *labels[]={"Live path RTT","50-sample selected node","Real path speed","Routed hop speeds","Throughput + Auto MTU","Compare external / connect fastest"};
+    const char *labels[]={"Live path response","50-sample selected node","Real path speed","Routed hop speeds","Throughput + Auto MTU","Compare external / connect fastest"};
     for(int i=0;i<6;i++){p->actions[i]=gtk_button_new_with_label(labels[i]);g_object_set_data(G_OBJECT(p->actions[i]),"performance-response",GINT_TO_POINTER(i==5?7:i+1));g_signal_connect(p->actions[i],"clicked",G_CALLBACK(linux_performance_action_v17),p);gtk_container_add(GTK_CONTAINER(flow),p->actions[i]);}
     gtk_box_pack_start(GTK_BOX(area),flow,FALSE,FALSE,4);
     p->result=gtk_label_new("Choose a real measurement. Disconnect/Emergency Stop remain available on the map.");gtk_label_set_line_wrap(GTK_LABEL(p->result),TRUE);gtk_label_set_max_width_chars(GTK_LABEL(p->result),56);gtk_box_pack_start(GTK_BOX(area),p->result,FALSE,FALSE,8);

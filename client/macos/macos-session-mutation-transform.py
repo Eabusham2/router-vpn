@@ -264,6 +264,29 @@ def transform(source: str, mode: str) -> str:
             raise SystemExit(f"unified session-mutation control typing drifted: anchor count={count}")
         source = source.replace(bad, good, 1)
         source = _stop_retry_unified(source)
+    # A connection/profile mutation can keep the same selected profile UUID.
+    # Retire live receipts synchronously, and retain this UI lease until the
+    # captured worker's completion has returned to the main queue.
+    if mode == "product":
+        old = 'func asyncAction(_ work: @escaping () throws -> String) { DispatchQueue.global(qos: .userInitiated).async { [weak self] in guard let self else { return };'
+        new = 'func asyncAction(_ work: @escaping () throws -> String) { let liveMutation = beginLiveHTTPSMutation(); DispatchQueue.global(qos: .userInitiated).async { [weak self] in guard let self else { return }; defer { DispatchQueue.main.async { self.endLiveHTTPSMutation(liveMutation) } };'
+        if source.count(old) != 1:
+            raise SystemExit("macOS live response mutation entry drifted")
+        source = source.replace(old,new,1)
+    if mode == "unified":
+        old = '@objc func connectUnified() {\n        let capturedRetryToken'
+        new = '@objc func connectUnified() {\n        let liveMutation = beginLiveHTTPSMutation()\n        let capturedRetryToken'
+        if source.count(old) != 1:
+            raise SystemExit("macOS live response connect entry drifted")
+        source = source.replace(old,new,1)
+        start = source.index('@objc func connectUnified() {')
+        end = source.index('\n    private func startUnifiedSelectedMode()',start)
+        method = source[start:end]
+        old = 'guard let self else { return }\n            do {'
+        if method.count(old) != 1:
+            raise SystemExit("macOS live response connect completion drifted")
+        method = method.replace(old,'guard let self else { return }\n            defer { DispatchQueue.main.async { self.endLiveHTTPSMutation(liveMutation) } }\n            do {',1)
+        source = source[:start]+method+source[end:]
     return source
 
 def main() -> None:

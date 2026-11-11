@@ -51,13 +51,13 @@ function DrawMap($Profiles,[string]$Selected){
   $Kind=([string]$Profile.node_kind).ToLowerInvariant();$Role=if($ID -eq $Entry){'entry'}elseif($ID -eq $Exit){'exit'}elseif($ID -eq $Selected){'selected'}elseif($Kind -eq 'external'){'external'}else{'normal'}
   $Color=switch($Role){'entry'{'#3791FF'}'exit'{'#FF9A32'}'selected'{'#916CFF'}'external'{'#F25BAC'}default{'#48C7D6'}};$Size=if(@('entry','exit','selected') -contains $Role){16}else{12}
   $Dot=New-Object Windows.Shapes.Ellipse;$Dot.Width=$Size;$Dot.Height=$Size;$Dot.Fill=$Color;$Dot.Stroke='#EAF3FF';$Dot.StrokeThickness=1;$Dot.Tag=$ID;$Dot.Cursor='Hand';$Dot.ToolTip="$($Profile.name) • real stored coordinate $Lat,$Lon";[Windows.Controls.Canvas]::SetLeft($Dot,$X-$Size/2);[Windows.Controls.Canvas]::SetTop($Dot,$Y-$Size/2);$Dot.Add_MouseLeftButtonUp({param($sender,$event)SelectUnifiedMapNode ([string]$sender.Tag)});[void]$MapCanvas.Children.Add($Dot)
-  $Ms=if([double]$Profile.latency_trimmed_mean_ms -gt 0){[double]$Profile.latency_trimmed_mean_ms}elseif([double]$Profile.latency_median_ms -gt 0){[double]$Profile.latency_median_ms}else{0};$Label=New-Object Windows.Controls.TextBlock;$Label.Text=if($Ms -gt 0){'{0}  {1:N1} ms'-f [string]$Profile.name,$Ms}else{[string]$Profile.name};$Label.Foreground='#E8F2FF';$Label.FontSize=11;$Label.Tag=$ID;$Label.Cursor='Hand';$Label.Add_MouseLeftButtonUp({param($sender,$event)SelectUnifiedMapNode ([string]$sender.Tag)});[Windows.Controls.Canvas]::SetLeft($Label,$X+$Size/2+4);[Windows.Controls.Canvas]::SetTop($Label,$Y-8);[void]$MapCanvas.Children.Add($Label);$Count++
+  $Ms=if([double]$Profile.latency_trimmed_mean_ms -gt 0){[double]$Profile.latency_trimmed_mean_ms}elseif([double]$Profile.latency_median_ms -gt 0){[double]$Profile.latency_median_ms}else{0};$Label=New-Object Windows.Controls.TextBlock;$Https=UnifiedLiveHTTPSForID $ID;$Label.Text=if($Https-gt0){'{0}  {1:N1} ms HTTPS'-f [string]$Profile.name,$Https}elseif($Ms -gt 0){'{0}  {1:N1} ms'-f [string]$Profile.name,$Ms}else{[string]$Profile.name};if($Https-gt0){$Label.Uid='live-https-node';$Label.DataContext=$Profile};$Label.Foreground='#E8F2FF';$Label.FontSize=11;$Label.Tag=$ID;$Label.Cursor='Hand';$Label.Add_MouseLeftButtonUp({param($sender,$event)SelectUnifiedMapNode ([string]$sender.Tag)});[Windows.Controls.Canvas]::SetLeft($Label,$X+$Size/2+4);[Windows.Controls.Canvas]::SetTop($Label,$Y-8);[void]$MapCanvas.Children.Add($Label);$Count++
  }
  if($Entry -and $Exit -and $Points.ContainsKey($Entry) -and $Points.ContainsKey($Exit)){$a=$Points[$Entry];$b=$Points[$Exit];$Route=AddGlobeLine $a[0] $a[1] $b[0] $b[1] '#59A7FF' 4;$Route.Opacity=.88;$Packet=New-Object Windows.Shapes.Ellipse;$Packet.Width=8;$Packet.Height=8;$Packet.Fill='White';$Packet.Stroke='#8FD3FF';$Packet.StrokeThickness=2;[void]$MapCanvas.Children.Add($Packet);$script:UnifiedRoute=[pscustomobject]@{x1=[double]$a[0];y1=[double]$a[1];x2=[double]$b[0];y2=[double]$b[1]};$script:UnifiedRoutePacket=$Packet;$PathLabel=New-Object Windows.Controls.TextBlock;$PathLabel.Text=if($script:UnifiedRoutePathMs -gt 0){'PATH {0:N1} ms'-f $script:UnifiedRoutePathMs}else{'LIVE MULTIHOP'};$PathLabel.Foreground='#CBE7FF';$PathLabel.FontSize=10;$PathLabel.FontFamily='Consolas';$PathLabel.Background='#AA0D1B31';$PathLabel.Padding='5,2';[Windows.Controls.Canvas]::SetLeft($PathLabel,(($a[0]+$b[0])/2)-28);[Windows.Controls.Canvas]::SetTop($PathLabel,(($a[1]+$b[1])/2)-22);[void]$MapCanvas.Children.Add($PathLabel)}
  if($Count -eq 0){$Empty=New-Object Windows.Controls.TextBlock;$Empty.Text='No real node coordinates in linked profiles';$Empty.Foreground='#AEBBD5';[Windows.Controls.Canvas]::SetLeft($Empty,20);[Windows.Controls.Canvas]::SetTop($Empty,40);[void]$MapCanvas.Children.Add($Empty)}
  $Privacy=New-Object Windows.Controls.TextBlock;$Privacy.Text='Only real stored coordinates • device location is never fabricated';$Privacy.Foreground='#7186A6';$Privacy.FontSize=9;[Windows.Controls.Canvas]::SetLeft($Privacy,18);[Windows.Controls.Canvas]::SetTop($Privacy,$Height-25);[void]$MapCanvas.Children.Add($Privacy)
 }
-function TickUnifiedMapAnimation{if($null -eq $script:UnifiedRoutePacket -or $null -eq $script:UnifiedRoute){return};$script:UnifiedMapPhase=($script:UnifiedMapPhase+.018)%1.0;$r=$script:UnifiedRoute;$x=$r.x1+($r.x2-$r.x1)*$script:UnifiedMapPhase;$y=$r.y1+($r.y2-$r.y1)*$script:UnifiedMapPhase;[Windows.Controls.Canvas]::SetLeft($script:UnifiedRoutePacket,$x-4);[Windows.Controls.Canvas]::SetTop($script:UnifiedRoutePacket,$y-4)}
+function TickUnifiedMapAnimation{ExpireUnifiedLiveHTTPS;if($null -eq $script:UnifiedRoutePacket -or $null -eq $script:UnifiedRoute){return};$script:UnifiedMapPhase=($script:UnifiedMapPhase+.018)%1.0;$r=$script:UnifiedRoute;$x=$r.x1+($r.x2-$r.x1)*$script:UnifiedMapPhase;$y=$r.y1+($r.y2-$r.y1)*$script:UnifiedMapPhase;[Windows.Controls.Canvas]::SetLeft($script:UnifiedRoutePacket,$x-4);[Windows.Controls.Canvas]::SetTop($script:UnifiedRoutePacket,$y-4)}
 '@
     $drawPattern='(?s)function DrawMap\(\$Profiles,\[string\]\$Selected\)\{.*?\}\r?\nfunction SessionEvents'
     if(-not [regex]::IsMatch($ProductSource,$drawPattern)){throw 'Windows globe renderer contract drifted.'}
@@ -66,6 +66,27 @@ function TickUnifiedMapAnimation{if($null -eq $script:UnifiedRoutePacket -or $nu
     $startup='$BaseCombo.SelectedIndex=0'
     if(-not $ProductSource.Contains($startup)){throw 'Windows telemetry startup seam drifted.'}
     $telemetry=@'
+$script:UnifiedLiveHTTPS=$null
+function UnifiedLiveNumber($Object,[string]$Key){$V=ExternalComparisonValue $Object $Key;if($null-eq$V-or$V-is[bool]-or$V-is[string]){return [double]::NaN};try{return [double]$V}catch{return [double]::NaN}}
+function ReadUnifiedLiveHTTPS($Value,[long]$Started,[long]$Now=[System.Diagnostics.Stopwatch]::GetTimestamp(),[long]$Wall=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()){
+ if([string](ExternalComparisonValue $Value 'measurement')-cne'routed-https-response-after-tls'-or(ExternalComparisonValue $Value 'connected')-isnot[bool]-or-not(ExternalComparisonValue $Value 'connected')){return $null}
+ $R=ExternalComparisonValue $Value 'response';$D=ExternalComparisonValue $R 'distribution'
+ if($null-eq$R-or$null-eq$D-or@($R.PSObject.Properties).Count-ne5-or@($D.PSObject.Properties).Count-ne7-or(UnifiedLiveNumber $R 'schema')-ne1-or(UnifiedLiveNumber $R 'attempts')-ne3-or(UnifiedLiveNumber $D 'samples')-ne3-or[string](ExternalComparisonValue $R 'measurement')-cne'routed-https-response-after-tls'-or[string](ExternalComparisonValue $R 'endpoint')-cne'https://speed.cloudflare.com/__down?bytes=1'){return $null}
+ $Binding=@{};foreach($Key in @('profile_id','profile_token','session_id','request_id','source_sha256','config_sha256','network_sha256')){$Text=ExternalComparisonValue $Value $Key;if($Text-isnot[string]-or-not$Text){return $null};$Length=if($Key-in@('session_id','request_id')){32}else{64};if($Key-ne'profile_id'-and-not(ExternalComparisonToken $Text $Length)){return $null};$Binding[$Key]=$Text}
+ foreach($Key in @('median_ms','benchmark','idle','download','upload')){if(($Value-is[System.Collections.IDictionary]-and$Value.Contains($Key))-or($Value-isnot[System.Collections.IDictionary]-and$null-ne$Value.PSObject.Properties[$Key])){return $null}}
+ $Numbers=@();foreach($Key in @('min_ms','median_ms','average_ms','p90_ms','max_ms','jitter_ms')){$N=UnifiedLiveNumber $D $Key;if([double]::IsNaN($N)-or[double]::IsInfinity($N)){return $null};$Numbers+=,$N}
+ $Min,$Ms,$Avg,$P90,$Max,$Jitter=$Numbers;$At=UnifiedLiveNumber $Value 'measured_at';$Left=UnifiedLiveNumber $Value 'expires_in_ms'
+ if([double]::IsNaN($At)-or[double]::IsNaN($Left)-or[double]::IsInfinity($At)-or[double]::IsInfinity($Left)-or$Min-le0-or$Min-gt$Ms-or$Ms-gt$P90-or$P90-gt$Max-or$Max-gt10000-or$Avg-lt$Min-or$Avg-gt$Max-or$Jitter-lt0-or$Jitter-gt($Max-$Min)-or$Left-le0-or$Left-gt10000-or$Wall-lt$At-or($Wall-$At)-ge10000-or$Now-lt$Started){return $null}
+ $Frequency=[double][System.Diagnostics.Stopwatch]::Frequency;$Remaining=[Math]::Min($Left/1000-($Now-$Started)/$Frequency,(10000-($Wall-$At))/1000);if($Remaining-le0){return $null}
+ return [pscustomobject]@{Binding=$Binding;Median=$Ms;Values=$Numbers;Deadline=([long]($Now+$Remaining*$Frequency))}
+}
+function TestUnifiedLiveHTTPSMatch($A,$B){if($null-eq$A-or$null-eq$B){return $false};foreach($Key in $A.Binding.Keys){if($A.Binding[$Key]-cne$B.Binding[$Key]){return $false}};return ($A.Values-join'|')-ceq($B.Values-join'|')}
+function ClearUnifiedLiveHTTPS{
+ $script:UnifiedLiveHTTPS=$null;(Control 'UnifiedLiveLatency').Text='-- ms'
+ foreach($Item in @($MapCanvas.Children)){if($Item-is[Windows.Controls.TextBlock]-and$Item.Uid-eq'live-https-node'){$Item.Text=[string]$Item.DataContext.name;$Item.Uid=''}}
+}
+function ExpireUnifiedLiveHTTPS{if($null-ne$script:UnifiedLiveHTTPS-and[System.Diagnostics.Stopwatch]::GetTimestamp()-ge$script:UnifiedLiveHTTPS.Deadline){ClearUnifiedLiveHTTPS}}
+function UnifiedLiveHTTPSForID([string]$ID){$R=$script:UnifiedLiveHTTPS;if($null-ne$R-and$R.Binding.profile_id-ceq$ID-and[string]$RouterCombo.SelectedValue-ceq$ID-and[System.Diagnostics.Stopwatch]::GetTimestamp()-lt$R.Deadline-and-not(UnifiedAsyncBusy)){return $R.Median};return 0.0}
 $script:UnifiedTelemetrySync=$false
 $script:UnifiedForwardSync=$false
 function ApplyUnifiedFastestStore($Store){
@@ -82,15 +103,18 @@ $script:UnifiedTelemetryTasks=@{}
 $script:UnifiedTelemetryRequests=@{}
 $script:UnifiedTelemetryCts=$null
 $script:UnifiedTelemetryDiscard=$false
+$script:UnifiedTelemetryPending=$null
+$script:UnifiedTelemetryOriginal=$null
+$script:UnifiedTelemetryStarted=[long]0
 $script:UnifiedTelemetryPoller=New-Object Windows.Threading.DispatcherTimer
 $script:UnifiedTelemetryPoller.Interval=[TimeSpan]::FromMilliseconds(100)
 function UnifiedTelemetryBusy{return $script:UnifiedTelemetryTasks.Count -gt 0}
 function CancelUnifiedTelemetryRefreshAsync{
- if(-not(UnifiedTelemetryBusy)){return $false};$script:UnifiedTelemetryDiscard=$true;try{$script:UnifiedTelemetryCts.Cancel()}catch{};return $true
+ ClearUnifiedLiveHTTPS;if(-not(UnifiedTelemetryBusy)){return $false};$script:UnifiedTelemetryDiscard=$true;try{$script:UnifiedTelemetryCts.Cancel()}catch{};return $true
 }
 function StartUnifiedTelemetryRefresh{
- if((UnifiedTelemetryBusy)-or(UnifiedAsyncBusy)){return}
- $script:UnifiedTelemetryTasks=@{};$script:UnifiedTelemetryRequests=@{};$script:UnifiedTelemetryDiscard=$false
+ ExpireUnifiedLiveHTTPS;if((UnifiedTelemetryBusy)-or(UnifiedAsyncBusy)-or@($Window.OwnedWindows|Where-Object{$_.IsVisible}).Count-gt0){return}
+ $script:UnifiedTelemetryTasks=@{};$script:UnifiedTelemetryRequests=@{};$script:UnifiedTelemetryDiscard=$false;$script:UnifiedTelemetryPending=$null;$script:UnifiedTelemetryOriginal=$null;$script:UnifiedTelemetryStarted=[System.Diagnostics.Stopwatch]::GetTimestamp()
  $script:UnifiedTelemetryCts=[System.Threading.CancellationTokenSource]::new();$script:UnifiedTelemetryCts.CancelAfter([TimeSpan]::FromSeconds(12))
  $Specs=[ordered]@{status=@('GET','/api/status',$null);profiles=@('GET','/api/profiles',$null);live=@('GET','/api/connection/live-latency',$null);forward=@('GET','/api/forwarding/master',$null)}
  try{
@@ -109,18 +133,22 @@ function StartUnifiedTelemetryRefresh{
 }
 function CompleteUnifiedTelemetryRefresh{
  if(-not(UnifiedTelemetryBusy)){return};foreach($Task in $script:UnifiedTelemetryTasks.Values){if(-not$Task.IsCompleted){return}}
- $Discard=$script:UnifiedTelemetryDiscard;$Payload=@{};$Responses=@();$script:UnifiedTelemetryPoller.Stop()
+ $Discard=$script:UnifiedTelemetryDiscard;$Validating=$null-ne$script:UnifiedTelemetryPending;$Payload=if($Validating){$script:UnifiedTelemetryPending}else{@{}};$Responses=@();$Checked=$null;$LiveReceipt=$null;$NextRequestID="";$script:UnifiedTelemetryPoller.Stop()
  try{
   foreach($Key in @($script:UnifiedTelemetryTasks.Keys)){
    try{
     $Resp=$script:UnifiedTelemetryTasks[$Key].GetAwaiter().GetResult();$Responses+=$Resp;$Text=$Resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-    if($Resp.IsSuccessStatusCode-and-not[string]::IsNullOrWhiteSpace($Text)){$Payload[$Key]=$Text|ConvertFrom-Json}
+    if($Resp.IsSuccessStatusCode-and-not[string]::IsNullOrWhiteSpace($Text)){if($Key-eq'validation'){$Checked=$Text|ConvertFrom-Json}else{$Payload[$Key]=$Text|ConvertFrom-Json}}
    }catch{}
   }
-  if(-not$Discard){
+  if(-not$Discard-and$null-ne$Payload.live-and$null-ne(ExternalComparisonValue $Payload.live 'measurement')){
+   if($Validating){$LiveReceipt=ReadUnifiedLiveHTTPS $Checked $script:UnifiedTelemetryStarted;if(-not(TestUnifiedLiveHTTPSMatch $script:UnifiedTelemetryOriginal $LiveReceipt)){$LiveReceipt=$null;[void]$Payload.Remove('live')}else{$Payload.live=$Checked}}
+   else{$First=ReadUnifiedLiveHTTPS $Payload.live $script:UnifiedTelemetryStarted;if($null-ne$First){$NextRequestID=$First.Binding.request_id;$script:UnifiedTelemetryPending=$Payload;$script:UnifiedTelemetryOriginal=$First}else{[void]$Payload.Remove('live')}}
+  }
+  if(-not$Discard-and-not$NextRequestID){
    if($Payload.profiles){ApplyUnifiedFastestStore $Payload.profiles}
    try{(Control 'UnifiedFastestNode').IsEnabled=($Payload.status-and-not$script:UnifiedProtectionPending-and-not(Test-RouterVPNMutationBusyFromStatus $Payload.status))}catch{(Control 'UnifiedFastestNode').IsEnabled=$false}
-   if($Payload.live){$script:UnifiedRoutePathMs=[double]$Payload.live.median_ms;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms'-f[double]$Payload.live.median_ms);(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}else{$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Text='-- ms';(Control 'UnifiedLiveLatency').Foreground='#A8B6D5'}
+   if($null-ne$LiveReceipt-and[string]$RouterCombo.SelectedValue-ceq$LiveReceipt.Binding.profile_id-and$Window.IsVisible-and@($Window.OwnedWindows|Where-Object{$_.IsVisible}).Count-eq0-and[System.Diagnostics.Stopwatch]::GetTimestamp()-lt$LiveReceipt.Deadline-and-not(UnifiedAsyncBusy)){$script:UnifiedLiveHTTPS=$LiveReceipt;$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms HTTPS'-f$LiveReceipt.Median);(Control 'UnifiedLiveLatency').ToolTip='3 HTTPS responses through the current proved VPN and selected DNS, timed after DNS/TCP/TLS preparation. Expires after 10 seconds; separate from ICMP, private-node RTT and saved50.';(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}elseif($Payload.live-and$null-eq(ExternalComparisonValue $Payload.live 'measurement')){ClearUnifiedLiveHTTPS;$script:UnifiedRoutePathMs=[double]$Payload.live.median_ms;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms'-f[double]$Payload.live.median_ms);(Control 'UnifiedLiveLatency').ToolTip='HTTP RTT through the current private Router-node path.';(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}else{ClearUnifiedLiveHTTPS;$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Foreground='#A8B6D5'}
    if($Payload.multihop){$Bits=@();if($Payload.multihop.entry){$Bits+=('IN {0:N1}'-f[double]$Payload.multihop.entry.median_ms)};if($Payload.multihop.exit){$Bits+=('OUT {0:N1}'-f[double]$Payload.multihop.exit.median_ms)};if($Payload.multihop.current_path){$script:UnifiedRoutePathMs=[double]$Payload.multihop.current_path.median_ms;$Bits+=('PATH {0:N1} ms'-f[double]$Payload.multihop.current_path.median_ms)};(Control 'UnifiedMultihopLatency').Text=($Bits-join' • ')}
    if($Payload.forward){$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content=if([bool]$Payload.forward.enabled){'Forward ON'}else{'Forward OFF'};(Control 'UnifiedForwardButton').Tag=[bool]$Payload.forward.enabled;(Control 'UnifiedForwardButton').ToolTip='Real server forwarding master on '+[string]$Payload.forward.name;$script:UnifiedForwardSync=$false}else{$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content='Forward ?';(Control 'UnifiedForwardButton').Tag=$null;(Control 'UnifiedForwardButton').ToolTip='Connect a Router VPN home-node path to control the real server forwarding master';$script:UnifiedForwardSync=$false}
   }
@@ -128,6 +156,9 @@ function CompleteUnifiedTelemetryRefresh{
   foreach($Resp in $Responses){try{$Resp.Dispose()}catch{}};foreach($Req in $script:UnifiedTelemetryRequests.Values){try{$Req.Dispose()}catch{}};try{$script:UnifiedTelemetryCts.Dispose()}catch{}
   $script:UnifiedTelemetryTasks=@{};$script:UnifiedTelemetryRequests=@{};$script:UnifiedTelemetryCts=$null;$script:UnifiedTelemetryDiscard=$false
  }
+ if($NextRequestID-and-not$Discard){
+  try{$script:UnifiedTelemetryCts=[System.Threading.CancellationTokenSource]::new();$script:UnifiedTelemetryCts.CancelAfter([TimeSpan]::FromSeconds(3));$Req=[System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get,([string]$BaseUrl)+'/api/connection/live-latency?request_id='+$NextRequestID);$script:UnifiedTelemetryRequests.validation=$Req;$script:UnifiedTelemetryTasks.validation=$script:UnifiedTelemetryClient.SendAsync($Req,$script:UnifiedTelemetryCts.Token);$script:UnifiedTelemetryPoller.Start()}catch{$script:UnifiedTelemetryPending=$null;$script:UnifiedTelemetryOriginal=$null;[void](CancelUnifiedTelemetryRefreshAsync)}
+ }else{$script:UnifiedTelemetryPending=$null;$script:UnifiedTelemetryOriginal=$null}
 }
 $script:UnifiedTelemetryPoller.Add_Tick({CompleteUnifiedTelemetryRefresh})
 function RefreshUnifiedFastestChoices{StartUnifiedTelemetryRefresh}
@@ -284,14 +315,14 @@ function ContinueUnifiedPerformanceHop($State){
 function ShowUnifiedPerformance{
  if($null-ne$script:UnifiedPerformancePanel){if(-not$script:UnifiedPerformancePanel.Closed){[void]$script:UnifiedPerformancePanel.Dialog.Activate();return};if($null-ne$script:UnifiedPerformancePanel.Current){Log 'The previous Performance request is still retiring.';return}}
  [xml]$PX=@"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Router VPN Performance" Width="760" Height="470" MinWidth="600" MinHeight="380" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Text="Latency &amp; path performance" FontSize="23" FontWeight="Bold"/><TextBlock Grid.Row="1" Margin="0,8,0,12" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Live RTT uses the current private tunnel. Real path speed transfers authenticated bounded data to the active exit. Routed hop speed independently transfers to the selected entry and exit private agents through the active multihop graph; unreachable hops report their real error. Auto MTU is a separate optimizer."/><TextBox Name="Result" Grid.Row="2" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Background="#101A2B" Foreground="#E8ECF8" Padding="10"/><WrapPanel Grid.Row="3" Margin="0,12,0,0"><Button Name="Live" Content="Live path RTT" Margin="4" Padding="11,6"/><Button Name="Durable" Content="50-sample selected node" Margin="4" Padding="11,6"/><Button Name="Speed" Content="Real path speed" Margin="4" Padding="11,6"/><Button Name="HopSpeed" Content="Routed hop speeds" Margin="4" Padding="11,6"/><Button Name="Mtu" Content="Throughput + Auto MTU" Margin="4" Padding="11,6"/><Button Name="External" Content="Compare external / connect fastest" Margin="4" Padding="11,6"/><Button Name="CancelTest" Content="Cancel test" Margin="4" Padding="11,6" IsEnabled="False"/><Button Name="Close" Content="Close" Margin="4" Padding="11,6"/></WrapPanel></Grid></Window>
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Router VPN Performance" Width="760" Height="470" MinWidth="600" MinHeight="380" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Text="Latency &amp; path performance" FontSize="23" FontWeight="Bold"/><TextBlock Grid.Row="1" Margin="0,8,0,12" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Router-node RTT uses the current private tunnel; external live response uses three routed HTTPS responses, timed after TLS and expiring after 10 seconds. Real path speed transfers authenticated bounded data to the active exit. Routed hop speed independently transfers to the selected entry and exit private agents through the active multihop graph; unreachable hops report their real error. Auto MTU is a separate optimizer."/><TextBox Name="Result" Grid.Row="2" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Background="#101A2B" Foreground="#E8ECF8" Padding="10"/><WrapPanel Grid.Row="3" Margin="0,12,0,0"><Button Name="Live" Content="Live path response" Margin="4" Padding="11,6"/><Button Name="Durable" Content="50-sample selected node" Margin="4" Padding="11,6"/><Button Name="Speed" Content="Real path speed" Margin="4" Padding="11,6"/><Button Name="HopSpeed" Content="Routed hop speeds" Margin="4" Padding="11,6"/><Button Name="Mtu" Content="Throughput + Auto MTU" Margin="4" Padding="11,6"/><Button Name="External" Content="Compare external / connect fastest" Margin="4" Padding="11,6"/><Button Name="CancelTest" Content="Cancel test" Margin="4" Padding="11,6" IsEnabled="False"/><Button Name="Close" Content="Close" Margin="4" Padding="11,6"/></WrapPanel></Grid></Window>
 "@
  $Reader=New-Object System.Xml.XmlNodeReader $PX;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window
  $State=[pscustomobject]@{Dialog=$D;Result=$D.FindName('Result');Cancel=$D.FindName('CancelTest');Buttons=@();Current=$null;Task=$null;Pending=$null;Closed=$false;Timer=(New-Object Windows.Threading.DispatcherTimer)}
  $State.Buttons=@($D.FindName('Live'),$D.FindName('Durable'),$D.FindName('Speed'),$D.FindName('HopSpeed'),$D.FindName('Mtu'),$D.FindName('External'))
  $script:UnifiedPerformancePanel=$State
  $State.Timer.Interval=[TimeSpan]::FromMilliseconds(50);$State.Timer.Add_Tick({ContinueUnifiedPerformanceHop $State}.GetNewClosure())
- $D.FindName('Live').Add_Click({[void](StartUnifiedPerformanceRequest $State 'Measuring live RTT…' '/api/connection/live-latency' @{samples=5} 12 6 $false)}.GetNewClosure())
+ $D.FindName('Live').Add_Click({[void](StartUnifiedPerformanceRequest $State 'Checking current path response…' '/api/connection/live-latency' @{samples=5} 12 6 $false)}.GetNewClosure())
  $D.FindName('Durable').Add_Click({try{$P=SelectedNode;[void](StartUnifiedPerformanceRequest $State 'Testing 50-sample node latency…' '/api/profile/latency' @{id=[string]$P.id;samples=50} 180 6 $true)}catch{if(-not$State.Closed){$State.Result.Text=$_.Exception.Message}}}.GetNewClosure())
  $D.FindName('Speed').Add_Click({[void](StartUnifiedPerformanceRequest $State 'Testing real path speed…' '/api/connection/speed-test' @{bytes=8388608} 45 8 $false)}.GetNewClosure())
  $D.FindName('HopSpeed').Add_Click({[void](StartUnifiedPerformanceRequest $State 'Checking the active multihop graph…' '/api/multihop/status' $null 5 10 $false $true)}.GetNewClosure())

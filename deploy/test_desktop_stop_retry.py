@@ -130,6 +130,9 @@ class NSButton { var title=""; var isEnabled=true }
 struct FixtureQueue: Sendable { enum QoS {case userInitiated}; static func global(qos:QoS)->FixtureQueue{FixtureQueue()}; static var main:FixtureQueue{FixtureQueue()}; func async(execute:()->Void){execute()} }
 typealias DispatchQueue = FixtureQueue
 final class FixtureLabel {var stringValue=""}
+// Live receipt state is outside this Stop/Retry fixture; compose its actual
+// mutation-lease methods against this value-only owner boundary.
+final class FixtureLiveOwner {var mutations:Set<UUID>=[];var generation=UUID()}
 final class FixtureAPI {
  var status:[String:Any]=[:];var gets=0;var paths:[String]=[];var bodies:[[String:Any]]=[];var refused=false
  func json(_ path:String,timeout:Double=0)throws->Any{gets+=1;return status}
@@ -137,6 +140,8 @@ final class FixtureAPI {
 }
 final class Fixture {
  let api=FixtureAPI();let button=MacUnifiedConnectButton();let errorLabel=FixtureLabel();var starts=0
+ let liveTelemetryDelivery=FixtureLiveOwner();func clearLiveHTTPS(){}
+ LIVE_MUTATION_METHODS
  func findUnifiedView(_ id:String)->AnyObject?{button}
  func appendHelp(_ value:String){}
  func refreshAll(){}
@@ -182,9 +187,12 @@ def macos(directory):
     helpers += '\nstruct MacViaEntryCandidateReservation: Sendable {static let shared=MacViaEntryCandidateReservation();let active=false}\n'+section(product,r'^    func mutationBusy\(from status:.*?^    \}')+'\n'
     protection=section(source,r'^    private func requireUnifiedProtectionIdle\(.*?^    \}')
     callback=section(source,r'^    @objc func connectUnified\(.*?^    \}').replace('@objc ','').replace('DispatchQueue.','FixtureQueue.')
+    telemetry=read('client/macos/RouterVPNMacTelemetry.swift')
+    live_methods='\n'.join(section(telemetry,r'^    func '+name+r'\(.*?^    \}') for name in ('beginLiveHTTPSMutation','endLiveHTTPSMutation'))
+    boundary=SWIFT_BOUNDARY.replace('LIVE_MUTATION_METHODS',live_methods)
     assert 'button.stopRetryToken = stopPresentation.token' in source and 'button.isEnabled = stopPresentation.enabled' in source
     assert 'let busy = self.mutationBusy(from: statusObject) || stopPresentation.token != nil || !stopPresentation.enabled' in source
-    for name,body in {'shipping':helpers+SWIFT_BOUNDARY+protection+'\n'+callback+'\n}\n','ignore-pending':(helpers+SWIFT_BOUNDARY+protection+'\n'+callback+'\n}\n').replace('if let token { return ("Retry Disconnect", true, token) }','if false { return ("Retry Disconnect", true, token) }'),'lose-rendered-intent':(helpers+SWIFT_BOUNDARY+protection+'\n'+callback+'\n}\n').replace('let capturedRetryToken = (findUnifiedView("unified-connect") as? MacUnifiedConnectButton)?.stopRetryToken','let capturedRetryToken: String? = nil'),'unconditional-stop':(helpers+SWIFT_BOUNDARY+protection+'\n'+callback+'\n}\n').replace('"/api/disconnect/retry"','"/api/disconnect"')}.items():
+    for name,body in {'shipping':helpers+boundary+protection+'\n'+callback+'\n}\n','ignore-pending':(helpers+boundary+protection+'\n'+callback+'\n}\n').replace('if let token { return ("Retry Disconnect", true, token) }','if false { return ("Retry Disconnect", true, token) }'),'lose-rendered-intent':(helpers+boundary+protection+'\n'+callback+'\n}\n').replace('let capturedRetryToken = (findUnifiedView("unified-connect") as? MacUnifiedConnectButton)?.stopRetryToken','let capturedRetryToken: String? = nil'),'unconditional-stop':(helpers+boundary+protection+'\n'+callback+'\n}\n').replace('"/api/disconnect/retry"','"/api/disconnect"')}.items():
         path,binary=directory/(name+'.swift'),directory/name
         # Boundary base type must precede the actual shipping NSButton subclass.
         prelude='import Foundation\nimport CoreFoundation\nclass NSButton { var title=""; var isEnabled=true }\n'

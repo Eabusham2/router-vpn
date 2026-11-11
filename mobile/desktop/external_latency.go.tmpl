@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
@@ -19,11 +22,26 @@ type routerVPNDesktopLatencyRequest struct {
 	Generation   uint64 `json:"generation"`
 	Request      string `json:"request_id"`
 	NodeID       string `json:"node_id"`
+	ResponseOnly bool   `json:"response_only,omitempty"`
 }
 
 type routerVPNDesktopLatencyRecord struct {
 	routerVPNDesktopLatencyRequest
 	Status hopmeasure.Status `json:"status"`
+}
+
+func routerVPNDesktopResponseRequestID(request routerVPNDesktopLatencyRequest) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("routervpn-live-response-v1\x00%s\x00%s\x00%s\x00%s\x00%d", request.Session, request.SourceSHA256, request.ConfigSHA256, request.NodeID, request.Generation)))
+	return fmt.Sprintf("%016x", request.Generation) + hex.EncodeToString(sum[:8])
+}
+
+func routerVPNDesktopIsResponseRequest(request routerVPNDesktopLatencyRequest) bool {
+	if len(request.Request) != 32 {
+		return false
+	}
+	generation, err := strconv.ParseUint(request.Request[:16], 16, 64)
+	request.Generation = generation
+	return err == nil && generation > 0 && request.Request == routerVPNDesktopResponseRequestID(request)
 }
 
 type routerVPNDesktopLatencyProvider interface {
@@ -118,6 +136,9 @@ func (f *routerVPNDesktopLatencyFiles) read(name string, matches func(routerVPND
 		(request.NodeID != base.NodeID) || !matches(request) {
 		return routerVPNDesktopLatencyRequest{}, false
 	}
+	if request.ResponseOnly && request.Request != routerVPNDesktopResponseRequestID(request) || !request.ResponseOnly && routerVPNDesktopIsResponseRequest(request) {
+		return routerVPNDesktopLatencyRequest{}, false
+	}
 	info, err := f.files.root.Lstat(name)
 	if err != nil {
 		return routerVPNDesktopLatencyRequest{}, false
@@ -183,17 +204,17 @@ func (f *routerVPNDesktopLatencyFiles) tick() error {
 	})
 	if !f.started && !f.record.Status.Complete {
 		request := f.record.Request
-		if cancelled || f.used[request] || len(f.used) >= 256 {
+		if cancelled || f.used[request] || !f.record.ResponseOnly && len(f.used) >= 256 {
 			f.service.Cancel(request)
 			f.record.Status.Stage, f.record.Status.Failure = "cancelled", "Latency request was cancelled or already retired"
 			f.record.Status.Complete, f.record.Status.Drained = true, true
-		} else if err := f.service.StartLatency(request, f.record.NodeID); err != nil {
+		} else if err := f.startMeasurement(request); err != nil {
 			f.record.Status.Stage, f.record.Status.Failure = "failed", "Native Latency activity is busy or its captured proof retired"
 			f.record.Status.Complete, f.record.Status.Drained = true, true
 		} else {
 			f.started = true
 		}
-		if len(f.used) < 256 {
+		if !f.record.ResponseOnly && len(f.used) < 256 {
 			f.used[request] = true
 		}
 	}
@@ -214,6 +235,16 @@ func (f *routerVPNDesktopLatencyFiles) tick() error {
 		}
 	}
 	return f.publish()
+}
+
+// Live requests have no caller-supplied nonce or reusable public command. The
+// exact monotonic native generation prevents replay without growing saved50's
+// bounded nonce registry on every automatic poll.
+func (f *routerVPNDesktopLatencyFiles) startMeasurement(request string) error {
+	if f.record.ResponseOnly {
+		return f.service.StartResponse(request, f.record.NodeID)
+	}
+	return f.service.StartLatency(request, f.record.NodeID)
 }
 
 // Called only after owner.Close has acknowledged all Latency workers and sockets.

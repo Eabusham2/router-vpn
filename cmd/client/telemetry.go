@@ -665,6 +665,10 @@ func (a *app) connectionLiveLatency(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	if desktopExternalResponseSelected(a) {
+		a.connectionExternalLiveResponse(w, r)
+		return
+	}
 	samples := 2
 	if r.Method == http.MethodPost {
 		var q liveLatencyRequest

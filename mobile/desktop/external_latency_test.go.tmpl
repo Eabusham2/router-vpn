@@ -138,6 +138,7 @@ func desktopLatencyNativeCommand(t *testing.T, directory string, owner *desktopL
 }
 
 func TestRouterVPNDesktopExternalLatencyMailboxUsesRealWorkerAndNoPartialScore(t *testing.T) {
+	t.Run("live-response", desktopLatencyNativeLiveResponse)
 	directory, _, owner, engine := desktopLatencyNativeFixture(t, false)
 	desktopLatencyNativeCommand(t, directory, owner)
 	initial := desktopLatencyNativeRecord(t, directory, func(r routerVPNDesktopLatencyRecord) bool { return r.Generation == 0 })
@@ -157,6 +158,45 @@ func TestRouterVPNDesktopExternalLatencyMailboxUsesRealWorkerAndNoPartialScore(t
 	})
 	if result.Status.Stage != "cancelled" || engine.dials.Load() != 1 {
 		t.Fatal("retired nonce opened another native dial", result)
+	}
+}
+
+func desktopLatencyNativeLiveResponse(t *testing.T) {
+	directory, _, owner, engine := desktopLatencyNativeFixture(t, false)
+	desktopLatencyNativeCommand(t, directory, owner)
+	initial := desktopLatencyNativeRecord(t, directory, func(r routerVPNDesktopLatencyRecord) bool { return r.Generation == 0 })
+	request := initial.routerVPNDesktopLatencyRequest
+	request.Generation, request.ResponseOnly = 1, true
+	request.Request = routerVPNDesktopResponseRequestID(request)
+	desktopLatencyNativeInput(t, directory, "latency-request.json", request)
+	result := desktopLatencyNativeRecord(t, directory, func(r routerVPNDesktopLatencyRecord) bool {
+		return r.Generation == 1 && r.Status.Complete && r.Status.Drained
+	})
+	if !result.ResponseOnly || result.Status.Stage != "complete" || len(result.Status.Results) != 1 || result.Status.Results[0].Ready || result.Status.Results[0].Response != nil || result.Status.Results[0].Benchmark != nil || engine.active.Load() || engine.dials.Load() != 1 {
+		t.Fatal("failed real response worker fabricated a live score", result)
+	}
+	old := request.Request
+	for _, live := range []bool{true, false} {
+		request.Generation, request.ResponseOnly = 2, live
+		request.Request = old
+		desktopLatencyNativeInput(t, directory, "latency-request.json", request)
+		time.Sleep(100 * time.Millisecond)
+		record := desktopLatencyNativeRecord(t, directory, func(r routerVPNDesktopLatencyRecord) bool { return r.Status.Drained })
+		if record.Generation != 1 || engine.dials.Load() != 1 {
+			t.Fatal("prior live nonce was admitted in another generation/type", record)
+		}
+		if err := os.Remove(filepath.Join(directory, "latency-request.json")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request.Generation, request.ResponseOnly = 2, true
+	request.Request = routerVPNDesktopResponseRequestID(request)
+	desktopLatencyNativeInput(t, directory, "latency-request.json", request)
+	result = desktopLatencyNativeRecord(t, directory, func(r routerVPNDesktopLatencyRecord) bool {
+		return r.Generation == 2 && r.Status.Complete && r.Status.Drained
+	})
+	if request.Request == old || engine.dials.Load() != 2 {
+		t.Fatal("fresh generation did not own a new response worker", result)
 	}
 }
 

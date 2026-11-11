@@ -597,6 +597,8 @@ extension ProductWindowController {
         objc_setAssociatedObject(self, &macSpeedLabButtonKey, button, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
 
+    func unifiedSpeedLabPresented() -> Bool { (objc_getAssociatedObject(self,&macSpeedLabControllerKey) as? RouterVPNMacSpeedLabController)?.window?.isVisible == true }
+
     @objc func openUnifiedSpeedLab() {
         let controller = RouterVPNMacSpeedLabController(api: api, product: self)
         objc_setAssociatedObject(self, &macSpeedLabControllerKey, controller, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)

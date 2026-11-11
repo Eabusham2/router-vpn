@@ -22,6 +22,7 @@ type desktopLatencyNativeRequest struct {
 	Generation   uint64 `json:"generation"`
 	Request      string `json:"request_id"`
 	NodeID       string `json:"node_id"`
+	ResponseOnly bool   `json:"response_only,omitempty"`
 }
 
 type desktopLatencyNativeRecord struct {
@@ -41,7 +42,7 @@ func decodeDesktopLatencyRecord(launch *desktopNodeLaunch, raw []byte) (desktopL
 		return record, bad
 	}
 	if record.Generation == 0 {
-		if record.Request != "" || status.Request != "" || status.Stage != "idle" || !status.Complete || !status.Drained || status.Failure != "" || len(status.Results) != 0 {
+		if record.ResponseOnly || record.Request != "" || status.Request != "" || status.Stage != "idle" || !status.Complete || !status.Drained || status.Failure != "" || len(status.Results) != 0 {
 			return record, bad
 		}
 		return record, nil
@@ -49,7 +50,11 @@ func decodeDesktopLatencyRecord(launch *desktopNodeLaunch, raw []byte) (desktopL
 	if !desktopMTURequestPattern.MatchString(record.Request) || status.Request != record.Request || status.Drained && !status.Complete {
 		return record, bad
 	}
-	if status.Stage == "starting" || desktopLatencyNativePhase(status.Stage) {
+	phase := desktopLatencyNativePhase(status.Stage)
+	if record.ResponseOnly {
+		phase = desktopResponseNativePhase(status.Stage)
+	}
+	if status.Stage == "starting" || phase {
 		if status.Complete || status.Drained || status.Failure != "" || len(status.Results) != 0 {
 			return record, bad
 		}
@@ -216,7 +221,7 @@ func validateDesktopLatencyResults(launch *desktopNodeLaunch, status hopmeasure.
 	}
 	result := status.Results[0]
 	benchmark := result.Benchmark
-	if !result.Ready || result.Failure != "" || result.ID != owner.node || result.Role != "exit" || result.Kind != "public-path" || result.Label != "External exit → Cloudflare edge" || result.Idle != nil || result.Download != nil || result.Upload != nil || benchmark == nil {
+	if !result.Ready || result.Failure != "" || result.ID != owner.node || result.Role != "exit" || result.Kind != "public-path" || result.Label != "External exit → Cloudflare edge" || result.Idle != nil || result.Download != nil || result.Upload != nil || result.Response != nil || benchmark == nil {
 		return bad
 	}
 	if benchmark.Schema != 1 || benchmark.Measurement != "routed-https-response-after-tls" || benchmark.Endpoint != "https://"+hopmeasure.PublicHost+"/__down?bytes=1" || benchmark.Attempts != hopmeasure.LatencyBenchmarkSamples || benchmark.Failed != 0 || benchmark.Distribution == nil {
@@ -266,8 +271,12 @@ func (a *app) runDesktopLatencyNative(ctx context.Context, operation *desktopLat
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
+	if operation.responseOnly && operation.request != desktopResponseRequestID(owner.session, owner.source, owner.config, owner.node, *owner.generation+1) {
+		return result, errors.New("live HTTPS request generation changed before admission")
+	}
 	*owner.generation++
 	request := desktopLatencyNativeRequest{Schema: 1, Session: owner.session, SourceSHA256: owner.source, ConfigSHA256: owner.config, Generation: *owner.generation, Request: operation.request, NodeID: owner.node}
+	request.ResponseOnly = operation.responseOnly
 	drained := false
 	defer func() {
 		if drained {
@@ -318,7 +327,11 @@ func (a *app) runDesktopLatencyNative(ctx context.Context, operation *desktopLat
 			operation.update(record.Status)
 			if record.Status.Complete && record.Status.Drained {
 				drained = true
-				if err := validateDesktopLatencyResults(launch, record.Status); err != nil {
+				validate := validateDesktopLatencyResults
+				if operation.responseOnly {
+					validate = validateDesktopResponseResults
+				}
+				if err := validate(launch, record.Status); err != nil {
 					return result, err
 				}
 				return record.Status, operation.snapshot.currentContext(ctx, a)

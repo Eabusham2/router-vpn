@@ -6,6 +6,13 @@ typedef struct {
     GtkWidget *hop;
     GtkWidget *forward;
     gboolean syncing;
+    RVHttpJobV16 *live_job;
+    JsonNode *live_capture;
+    gint64 live_started, live_deadline;
+    guint live_poll, refresh_poll;
+    guint64 live_generation;
+    char *live_id;
+    double live_ms;
 } LinuxTelemetryV9;
 
 #include "routervpn-connection-profiles-v11.inc"
@@ -212,12 +219,67 @@ static void linux_external_comparison_open(App*app){
 
 #include "routervpn-performance-v17.inc"
 
+static gboolean linux_live_paused(LinuxTelemetryV9*t){
+    if(linux_async_busy_v16(t->app))return TRUE;
+    gboolean paused=FALSE;GList*windows=gtk_window_list_toplevels();
+    for(GList*i=windows;i!=NULL;i=i->next){GtkWidget*w=i->data;if(gtk_widget_get_visible(w)&&gtk_window_get_transient_for(GTK_WINDOW(w))==GTK_WINDOW(t->app->window)&&(g_object_get_data(G_OBJECT(w),"linux-performance-v17")!=NULL||g_object_get_data(G_OBJECT(w),"linux-speed-lab-v12")!=NULL||g_object_get_data(G_OBJECT(w),"external-comparison-state")!=NULL))paused=TRUE;}
+    g_list_free(windows);return paused;
+}
+static void linux_live_clear(LinuxTelemetryV9*t){t->live_ms=0;t->live_deadline=0;g_clear_pointer(&t->live_id,g_free);gtk_label_set_text(GTK_LABEL(t->live),"-- ms");if(t->app->map!=NULL)gtk_widget_queue_draw(t->app->map);}
+static gboolean linux_live_receipt(JsonObject*o,gint64 now_ms,gint64 uptime,gint64 started,double*median,gint64*deadline){
+    JsonObject*r=linux_ec_object(o,"response"),*d=linux_ec_object(r,"distribution");
+    if(strcmp(linux_ec_string(o,"measurement"),"routed-https-response-after-tls")||!linux_ec_bool(o,"connected")||r==NULL||d==NULL||json_object_get_size(r)!=5||json_object_get_size(d)!=7||linux_ec_number(r,"schema")!=1||linux_ec_number(r,"attempts")!=3||linux_ec_number(d,"samples")!=3||strcmp(linux_ec_string(r,"measurement"),"routed-https-response-after-tls")||strcmp(linux_ec_string(r,"endpoint"),"https://speed.cloudflare.com/__down?bytes=1"))return FALSE;
+    const char*keys[]={"profile_id","profile_token","session_id","request_id","source_sha256","config_sha256","network_sha256"};
+    for(guint i=0;i<G_N_ELEMENTS(keys);i++){const char*v=linux_ec_string(o,keys[i]);if(!v[0]||(i!=0&&!linux_ec_token(v,(i==2||i==3)?32:64)))return FALSE;}
+    const char*forbidden[]={"median_ms","benchmark","idle","download","upload"};for(guint i=0;i<G_N_ELEMENTS(forbidden);i++)if(linux_ec_member(o,forbidden[i])!=NULL)return FALSE;
+    double min=linux_ec_number(d,"min_ms"),ms=linux_ec_number(d,"median_ms"),avg=linux_ec_number(d,"average_ms"),p90=linux_ec_number(d,"p90_ms"),max=linux_ec_number(d,"max_ms"),jitter=linux_ec_number(d,"jitter_ms"),at=linux_ec_number(o,"measured_at"),left=linux_ec_number(o,"expires_in_ms");
+    double values[]={min,ms,avg,p90,max,jitter,at,left};for(guint i=0;i<G_N_ELEMENTS(values);i++)if(!isfinite(values[i]))return FALSE;
+    if(min<=0||min>ms||ms>p90||p90>max||max>10000||avg<min||avg>max||jitter<0||jitter>max-min||left<=0||left>10000||now_ms<at||now_ms-at>=10000||uptime<started)return FALSE;
+    double remaining=fmin(left*1000-(uptime-started),(10000-(now_ms-at))*1000);if(remaining<=0)return FALSE;
+    *median=ms;*deadline=uptime+(gint64)remaining;return TRUE;
+}
+static gboolean linux_live_matches(JsonObject*a,JsonObject*b){
+    const char*keys[]={"profile_id","profile_token","session_id","request_id","source_sha256","config_sha256","network_sha256"};for(guint i=0;i<G_N_ELEMENTS(keys);i++)if(strcmp(linux_ec_string(a,keys[i]),linux_ec_string(b,keys[i])))return FALSE;
+    JsonNode*x=linux_ec_member(a,"response"),*y=linux_ec_member(b,"response");return x!=NULL&&y!=NULL&&json_node_equal(x,y);
+}
+static double linux_live_map_ms(App*app,const char*id){
+    LinuxTelemetryV9*t=app!=NULL&&app->window!=NULL?g_object_get_data(G_OBJECT(app->window),"linux-telemetry-v9"):NULL;
+    LinuxAsyncActionsV16*s=app!=NULL?linux_async_state_v16(app):NULL;
+    return t!=NULL&&t->live_id!=NULL&&g_strcmp0(t->live_id,id)==0&&g_strcmp0(active_router_id(app),id)==0&&g_get_monotonic_time()<t->live_deadline&&!linux_live_paused(t)&&(s==NULL||s->generation==t->live_generation)?t->live_ms:0;
+}
+static gboolean linux_live_tick(gpointer data){
+    LinuxTelemetryV9*t=data;LinuxAsyncActionsV16*s=linux_async_state_v16(t->app);
+    gboolean current=!linux_live_paused(t)&&(s==NULL||s->generation==t->live_generation);
+    if(!current||(t->live_id!=NULL&&g_strcmp0(t->live_id,active_router_id(t->app))!=0)||(t->live_deadline>0&&g_get_monotonic_time()>=t->live_deadline))linux_live_clear(t);
+    if(!current&&t->live_job!=NULL)rv_http_cancel_v16(t->live_job);
+    if(t->live_job==NULL||!rv_http_ready_v16(t->live_job))return G_SOURCE_CONTINUE;
+    RVHttpJobV16*job=t->live_job;t->live_job=NULL;
+    gboolean ok=current&&!atomic_load(&job->cancelled)&&job->result==CURLE_OK&&job->status>=200&&job->status<300;
+    JsonNode*root=ok?parse_json(job->response):NULL;JsonObject*o=root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)?json_node_get_object(root):NULL;
+    double ms=0;gint64 deadline=0;gboolean valid=linux_live_receipt(o,g_get_real_time()/1000,g_get_monotonic_time(),t->live_started,&ms,&deadline);
+    if(valid&&t->live_capture==NULL){
+        t->live_capture=json_node_copy(root);char*path=g_strdup_printf("/api/connection/live-latency?request_id=%s",linux_ec_string(o,"request_id"));t->live_job=rv_http_start_method_v17(path,"",3000,"Validate live HTTPS",1);g_free(path);
+    }else if(valid&&linux_live_matches(json_node_get_object(t->live_capture),o)&&g_strcmp0(active_router_id(t->app),linux_ec_string(o,"profile_id"))==0){
+        t->live_ms=ms;t->live_deadline=deadline;g_free(t->live_id);t->live_id=g_strdup(linux_ec_string(o,"profile_id"));char*label=g_strdup_printf("%.1f ms HTTPS",ms);gtk_label_set_text(GTK_LABEL(t->live),label);g_free(label);gtk_widget_set_tooltip_text(t->live,"3 HTTPS responses through the current proved VPN path and selected DNS, timed after DNS/TCP/TLS preparation. Expires after 10 seconds; separate from ICMP, private-node RTT and saved50.");
+    }else if(o!=NULL&&linux_ec_member(o,"measurement")==NULL&&isfinite(linux_ec_number(o,"median_ms"))&&linux_ec_number(o,"median_ms")>0){linux_live_clear(t);char*label=g_strdup_printf("%.1f ms",linux_ec_number(o,"median_ms"));gtk_label_set_text(GTK_LABEL(t->live),label);g_free(label);gtk_widget_set_tooltip_text(t->live,"HTTP RTT through the current private Router-node path.");}
+    else linux_live_clear(t);
+    if(root!=NULL)json_node_free(root);rv_http_free_v16(job);
+    if(t->live_job==NULL&&t->live_capture!=NULL){json_node_free(t->live_capture);t->live_capture=NULL;}
+    if(t->app->map!=NULL)gtk_widget_queue_draw(t->app->map);return G_SOURCE_CONTINUE;
+}
+static void linux_live_start(LinuxTelemetryV9*t){
+    if(t->live_job!=NULL||linux_live_paused(t))return;
+    LinuxAsyncActionsV16*s=linux_async_state_v16(t->app);t->live_generation=s!=NULL?s->generation:0;t->live_started=g_get_monotonic_time();
+    t->live_job=rv_http_start_method_v17("/api/connection/live-latency","",3500,"Current path response",1);
+}
+static void linux_telemetry_free(gpointer data){LinuxTelemetryV9*t=data;if(t->live_poll)g_source_remove(t->live_poll);if(t->refresh_poll)g_source_remove(t->refresh_poll);rv_http_cancel_v16(t->live_job);rv_http_free_v16(t->live_job);if(t->live_capture)json_node_free(t->live_capture);g_free(t->live_id);g_free(t);}
+
 static gboolean linux_telemetry_refresh_v9(gpointer data){
     LinuxTelemetryV9*t=data;if(t==NULL)return G_SOURCE_REMOVE;
     if(linux_async_busy_v16(t->app)){gtk_widget_set_sensitive(t->fastest,FALSE);gtk_label_set_text(GTK_LABEL(t->live),"-- ms");return G_SOURCE_CONTINUE;}
     linux_telemetry_refresh_fastest_v9(t);
     if(t->fastest!=NULL)gtk_widget_set_sensitive(t->fastest,!routervpn_mutation_busy(t->app));
-    Buffer out={0};char*err=NULL;if(api_request("/api/connection/live-latency","GET",NULL,3500,&out,&err)){JsonNode*root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject*obj=json_node_get_object(root);double ms=json_object_has_member(obj,"median_ms")?json_object_get_double_member(obj,"median_ms"):0.0;char*label=ms>0?g_strdup_printf("%.1f ms",ms):g_strdup("-- ms");gtk_label_set_text(GTK_LABEL(t->live),label);g_free(label);json_node_free(root);}}else gtk_label_set_text(GTK_LABEL(t->live),"-- ms");g_free(err);free(out.data);
+    linux_live_start(t);Buffer out={0};char*err=NULL;
     gboolean forward_enabled=FALSE;if(linux_telemetry_read_forward_v9(t,&forward_enabled))linux_telemetry_set_forward_label_v9(t,TRUE,forward_enabled);else linux_telemetry_set_forward_label_v9(t,FALSE,FALSE);
     out=(Buffer){0};err=NULL;if(api_request("/api/multihop/status","GET",NULL,3500,&out,&err)){JsonNode*root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject*obj=json_node_get_object(root);const char*entry=obj_string(obj,"entry_id");const char*exit=obj_string(obj,"exit_id");if(entry[0]&&exit[0]&&strcmp(entry,exit)!=0){char*body=g_strdup_printf("{\"entry_id\":\"%s\",\"exit_id\":\"%s\",\"samples\":2}",entry,exit);Buffer hop={0};char*hop_err=NULL;if(api_request("/api/multihop/live-latency","POST",body,8000,&hop,&hop_err)){JsonNode*h=parse_json(hop.data);if(h!=NULL&&JSON_NODE_HOLDS_OBJECT(h)){JsonObject*ho=json_node_get_object(h);GString*s=g_string_new("");if(json_object_has_member(ho,"entry")){JsonObject*e=json_object_get_object_member(ho,"entry");g_string_append_printf(s,"IN %.1f",json_object_get_double_member(e,"median_ms"));}if(json_object_has_member(ho,"exit")){JsonObject*x=json_object_get_object_member(ho,"exit");if(s->len)g_string_append(s," • ");g_string_append_printf(s,"OUT %.1f",json_object_get_double_member(x,"median_ms"));}if(json_object_has_member(ho,"current_path")){JsonObject*p=json_object_get_object_member(ho,"current_path");if(s->len)g_string_append(s," • ");g_string_append_printf(s,"PATH %.1f ms",json_object_get_double_member(p,"median_ms"));}gtk_label_set_text(GTK_LABEL(t->hop),s->str);g_string_free(s,TRUE);json_node_free(h);}}g_free(hop_err);free(hop.data);g_free(body);}else gtk_label_set_text(GTK_LABEL(t->hop),"");json_node_free(root);}}g_free(err);free(out.data);return G_SOURCE_CONTINUE;
 }
@@ -231,7 +293,7 @@ static void linux_install_telemetry_v9(App *app){
     GtkWidget*multi_row=gtk_widget_get_parent(base->multihop);t->hop=gtk_label_new("");if(GTK_IS_BOX(multi_row)){gtk_box_pack_start(GTK_BOX(multi_row),t->hop,FALSE,FALSE,0);}
     GtkWidget*settings=linux_telemetry_find_button_v9(base->stack,"Open settings");if(settings!=NULL&&GTK_IS_BOX(gtk_widget_get_parent(settings))){GtkWidget*performance=linux_telemetry_button_v9("Performance",G_CALLBACK(linux_telemetry_performance_v9),t);gtk_box_pack_start(GTK_BOX(gtk_widget_get_parent(settings)),performance,FALSE,FALSE,0);}
     linux_install_connection_profiles_v11(app);
-    g_object_set_data_full(G_OBJECT(app->window),"linux-telemetry-v9",t,g_free);linux_telemetry_refresh_fastest_v9(t);linux_telemetry_refresh_v9(t);g_timeout_add(3000,linux_telemetry_refresh_v9,t);gtk_widget_show_all(app->window);
+    g_object_set_data_full(G_OBJECT(app->window),"linux-telemetry-v9",t,linux_telemetry_free);t->live_poll=g_timeout_add(100,linux_live_tick,t);linux_telemetry_refresh_fastest_v9(t);linux_telemetry_refresh_v9(t);t->refresh_poll=g_timeout_add(3000,linux_telemetry_refresh_v9,t);gtk_widget_show_all(app->window);
 }
 
 /* Linux telemetry v9: fastest/specific node selector kept separate from Connect, live current-path RTT, live multihop

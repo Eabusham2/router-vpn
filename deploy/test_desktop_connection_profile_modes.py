@@ -55,6 +55,7 @@ def windows(shell):
 
 SWIFT_BOUNDARIES = r'''
 import Foundation
+import CoreFoundation
 @MainActor final class Item { var representedObject: Any? }
 @MainActor final class Popup {
     var indexOfSelectedItem = -1
@@ -128,7 +129,9 @@ var checks = 0
 '''
 
 SWIFT_PRODUCT = r'''
+@MainActor final class FixtureLiveOwner {var mutations:Set<UUID>=[];var generation=UUID()}
 @MainActor final class ProductWindowController {
+    let liveTelemetryDelivery=FixtureLiveOwner();func clearLiveHTTPS(){}
     let routerPopup = Popup(), multihopEntryPopup = Popup(), multihopExitPopup = Popup()
     let nodePopup = Popup(), externalEntryPopup = Popup(), nodeSortPopup = Popup(), basePopup = Popup()
     let multihopExitModePopup = Popup(), multihopExecutionPopup = Popup(), multihopEntryModePopup = Popup()
@@ -281,6 +284,8 @@ for (i, entryMode) in expectedEntries.enumerated() {
         owner.multihopProgressGeneration = UUID()
         DispatchQueue.main.run()
         check(owner.stoppedProgress.last == progressOwner, "Delayed Connect finalizer captured the replacement comparison owner")
+        while !DispatchQueue.main.pending.isEmpty { DispatchQueue.main.run() }
+        check(owner.liveTelemetryDelivery.mutations.isEmpty, "completed Connect retained its live-response mutation lease")
         DispatchQueue.clear()
     }
 }
@@ -413,6 +418,8 @@ check(owner.connectionProfileSelectionGeneration != nodeGeneration && owner.rout
 DispatchQueue.main.run()
 check(owner.routerPopup.indexOfSelectedItem == -1 && owner.captureConnectionProfileSelection().selectedNodeID == entryID, "late node reply replaced a newer user-selected node")
 DispatchQueue.background.run(); DispatchQueue.main.run()
+DispatchQueue.main.run() // captured asyncAction mutation completion precedes its new catalog reply
+check(owner.liveTelemetryDelivery.mutations.isEmpty, "completed node selection retained its live-response mutation lease")
 runNodeReply(nodeReply([exitID, selectedID, entryID], selected: entryID))
 check(owner.routerPopup.indexOfSelectedItem == 2 && owner.captureConnectionProfileSelection().selectedNodeID == entryID, "confirmed user node choice did not resolve by identity")
 DispatchQueue.clear()
@@ -548,6 +555,9 @@ def swift_source():
         product_methods += "\n" + block(generated_product, marker)
     for marker in ("    func asyncAction(", "    @objc func selectRouter()", "    @objc func connectMultihop()", "    func multihopBaseChoice()"):
         product_methods += "\n" + block(generated_product, marker)
+    telemetry=read("client/macos/RouterVPNMacTelemetry.swift")
+    for marker in ("    func beginLiveHTTPSMutation(","    func endLiveHTTPSMutation("):
+        product_methods += "\n" + block(telemetry,marker)
     for marker in ("    func refreshAll()", "    func refreshProfiles()", "    func refreshProfiles(order:", "    func refreshAdvanced()", "    @objc func multihopExecutionChanged()"):
         product_methods += "\n" + block(product, marker)
     for marker in ("    private func connectionProfileSnapshot(", "    private func connectionProfilePOST(", "    private func applyLoadedConnectionProfile("):

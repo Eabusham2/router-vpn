@@ -204,10 +204,11 @@ final class ProductAPI {
 final class RouterAnnotation: NSObject, MKAnnotation {
     let routerID: String
     let title: String?
-    let subtitle: String?
+    @objc dynamic var subtitle: String?
+    let storedSubtitle: String?
     let coordinate: CLLocationCoordinate2D
     init(id: String, name: String, location: String, latency: Double, lat: Double, lon: Double) {
-        routerID = id; title = name; subtitle = [location, latency > 0 ? String(format: "median %.1f ms", latency) : ""].filter { !$0.isEmpty }.joined(separator: " • "); coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        routerID = id; title = name; storedSubtitle = [location, latency > 0 ? String(format: "median %.1f ms", latency) : ""].filter { !$0.isEmpty }.joined(separator: " • "); subtitle = storedSubtitle; coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
     }
 }
 

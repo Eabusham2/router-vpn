@@ -12,8 +12,89 @@ private var telemetryForwardButtonKey: UInt8 = 0
 private var telemetryPerformanceControllerKey: UInt8 = 0
 private var telemetryExternalComparisonControllerKey: UInt8 = 0
 private var telemetryFastestControllerKey: UInt8 = 0
+private var telemetryLiveDeliveryKey: UInt8 = 0
+
+// A response remains usable only for this exact native request and its short
+// monotonic delivery deadline. The controller revalidates the request before
+// this value enters the main queue; the UI checks again after queueing.
+private struct RouterVPNLiveHTTPSReceipt {
+    let binding: [String: String]
+    let median: Double
+    let deadline: TimeInterval
+    let response: NSDictionary
+    static func number(_ object: [String: Any], _ key: String) -> Double? {
+        guard let n = object[key] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite else { return nil }; return n.doubleValue
+    }
+    static func decode(_ value: [String: Any], now: TimeInterval = Date().timeIntervalSince1970 * 1000, uptime: TimeInterval = ProcessInfo.processInfo.systemUptime, started: TimeInterval) -> Self? {
+        guard value["measurement"] as? String == "routed-https-response-after-tls",
+              let connected = value["connected"] as? NSNumber, CFGetTypeID(connected) == CFBooleanGetTypeID(), connected.boolValue,
+              let r = value["response"] as? [String: Any], Set(r.keys) == Set(["schema","measurement","endpoint","attempts","distribution"]),
+              number(r,"schema") == 1, number(r,"attempts") == 3, r["measurement"] as? String == "routed-https-response-after-tls", r["endpoint"] as? String == "https://speed.cloudflare.com/__down?bytes=1",
+              let d = r["distribution"] as? [String: Any], Set(d.keys) == Set(["samples","min_ms","median_ms","average_ms","p90_ms","max_ms","jitter_ms"]), number(d,"samples") == 3,
+              let min = number(d,"min_ms"), let median = number(d,"median_ms"), let avg = number(d,"average_ms"), let p90 = number(d,"p90_ms"), let max = number(d,"max_ms"), let jitter = number(d,"jitter_ms"),
+              min > 0, min <= median, median <= p90, p90 <= max, max <= 10000, avg >= min, avg <= max, jitter >= 0, jitter <= max-min,
+              let measured = number(value,"measured_at"), let remaining = number(value,"expires_in_ms"), remaining > 0, remaining <= 10000, now >= measured, now-measured < 10000, uptime >= started,
+              !["median_ms","benchmark","idle","download","upload"].contains(where: { value[$0] != nil }) else { return nil }
+        var binding: [String: String] = [:]
+        for key in ["profile_id","profile_token","session_id","request_id","source_sha256","config_sha256","network_sha256"] {
+            guard let text = value[key] as? String, !text.isEmpty else { return nil }
+            if key != "profile_id" { let length = key == "session_id" || key == "request_id" ? 32 : 64; guard text.utf8.count == length, text.utf8.allSatisfy({(48...57).contains($0)||(97...102).contains($0)}) else {return nil} }
+            binding[key] = text
+        }
+        let lifetime = Swift.min(remaining/1000 - (uptime-started), (10000-(now-measured))/1000)
+        guard lifetime > 0 else { return nil }
+        return Self(binding:binding,median:median,deadline:uptime+lifetime,response:r as NSDictionary)
+    }
+    func matches(_ other: Self) -> Bool { binding == other.binding && response.isEqual(other.response) }
+    func current(_ uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool { uptime < deadline }
+}
+
+private final class RouterVPNLiveTelemetryDelivery {
+    var generation = UUID()
+    var running = false
+    var receipt: RouterVPNLiveHTTPSReceipt?
+    var mutations: Set<UUID> = []
+}
 
 extension ProductWindowController {
+    private var liveTelemetryDelivery: RouterVPNLiveTelemetryDelivery {
+        if let value = objc_getAssociatedObject(self,&telemetryLiveDeliveryKey) as? RouterVPNLiveTelemetryDelivery {return value}
+        let value = RouterVPNLiveTelemetryDelivery();objc_setAssociatedObject(self,&telemetryLiveDeliveryKey,value,.OBJC_ASSOCIATION_RETAIN_NONATOMIC);return value
+    }
+    private func clearLiveHTTPS() {
+        let owner = liveTelemetryDelivery
+        if let id = owner.receipt?.binding["profile_id"] {for node in map.annotations.compactMap({$0 as? RouterAnnotation}) where node.routerID == id {node.subtitle = node.storedSubtitle}}
+        owner.receipt = nil;telemetryLiveLabel?.stringValue = "-- ms"
+    }
+    private func liveHTTPSPaused() -> Bool {
+        let performance = objc_getAssociatedObject(self,&telemetryPerformanceControllerKey) as? RouterVPNMacPerformanceController
+        let comparison = objc_getAssociatedObject(self,&telemetryExternalComparisonControllerKey) as? RouterVPNMacExternalComparisonController
+        return !liveTelemetryDelivery.mutations.isEmpty || window?.attachedSheet != nil || performance?.window?.isVisible == true || comparison?.window?.isVisible == true || unifiedSpeedLabPresented()
+    }
+    // The shipping transform calls these on the main queue at mutation entry
+    // and after its background work completes. Same-profile reconnects do not
+    // change the selection UUID, so they require their own captured lease.
+    func beginLiveHTTPSMutation() -> UUID {
+        let token = UUID();liveTelemetryDelivery.mutations.insert(token)
+        liveTelemetryDelivery.generation = UUID();clearLiveHTTPS();return token
+    }
+    func endLiveHTTPSMutation(_ token: UUID) {
+        guard liveTelemetryDelivery.mutations.remove(token) != nil else {return}
+        liveTelemetryDelivery.generation = UUID();clearLiveHTTPS()
+    }
+    private func showLiveHTTPS(_ receipt: RouterVPNLiveHTTPSReceipt, owner: RouterVPNLiveTelemetryDelivery, generation: UUID, selection: UUID) {
+        guard owner.generation == generation, window?.isVisible == true, !liveHTTPSPaused(), connectionProfileSelectionGeneration == selection, receipt.current(),
+              (telemetryFind("unified-connect") as? NSButton)?.title == "Disconnect",
+              routerPopup.indexOfSelectedItem >= 0, routerPopup.indexOfSelectedItem < routerIDs.count, routerIDs[routerPopup.indexOfSelectedItem] == receipt.binding["profile_id"] else {clearLiveHTTPS();return}
+        owner.receipt = receipt
+        let label = String(format:"%.1f ms HTTPS",receipt.median)
+        telemetryLiveLabel?.stringValue = label;telemetryLiveLabel?.textColor = .labelColor
+        telemetryLiveLabel?.toolTip = "3 responses through the current proved VPN path and selected DNS, timed after DNS/TCP/TLS preparation. Expires after 10 seconds; separate from ICMP, private-node RTT and saved50."
+        for node in map.annotations.compactMap({$0 as? RouterAnnotation}) where node.routerID == receipt.binding["profile_id"] {node.subtitle = label}
+        DispatchQueue.main.asyncAfter(deadline:.now()+Swift.max(0,receipt.deadline-ProcessInfo.processInfo.systemUptime)) { [weak self,weak owner] in
+            guard let self, let owner, owner.generation == generation, owner.receipt?.binding == receipt.binding else {return};self.clearLiveHTTPS()
+        }
+    }
     private func telemetryFind(_ id: String) -> NSView? {
         guard let content = window?.contentView else { return nil }
         func walk(_ view: NSView) -> NSView? {
@@ -64,7 +145,7 @@ extension ProductWindowController {
         live.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
         live.textColor = .secondaryLabelColor
         live.alignment = .right
-        live.toolTip = "Live RTT through the active private tunnel path."
+        live.toolTip = "Current private-node HTTP RTT or explicitly labelled external HTTPS response."
         telemetryLiveLabel = live
         connectRow.addArrangedSubview(live)
 
@@ -234,6 +315,12 @@ extension ProductWindowController {
     }
 
     func refreshUnifiedTelemetry() {
+        let delivery = liveTelemetryDelivery
+        if delivery.receipt?.current() == false {clearLiveHTTPS()}
+        if liveHTTPSPaused() {delivery.generation = UUID();clearLiveHTTPS();return}
+        guard !delivery.running else {return}
+        delivery.running = true;delivery.generation = UUID();let generation = delivery.generation
+        let selection = connectionProfileSelectionGeneration
         refreshUnifiedFastNodeMenu()
         refreshUnifiedForwardingMaster()
         let multihopOn = (telemetryFind("unified-multihop-toggle") as? NSButton)?.state == .on
@@ -250,11 +337,19 @@ extension ProductWindowController {
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            if let value = try? self.api.json("/api/connection/live-latency", timeout: 4) as? [String: Any],
-               let ms = (value["median_ms"] as? NSNumber)?.doubleValue {
-                DispatchQueue.main.async { self.telemetryLiveLabel?.stringValue = String(format: "%.1f ms", ms); self.telemetryLiveLabel?.textColor = .labelColor }
-            } else {
-                DispatchQueue.main.async { self.telemetryLiveLabel?.stringValue = "-- ms"; self.telemetryLiveLabel?.textColor = .secondaryLabelColor }
+            let started = ProcessInfo.processInfo.systemUptime
+            let value = (try? self.api.json("/api/connection/live-latency", timeout:4)) as? [String:Any]
+            var receipt: RouterVPNLiveHTTPSReceipt?
+            if let value, let first = RouterVPNLiveHTTPSReceipt.decode(value,started:started),let request = first.binding["request_id"],
+               let checked = (try? self.api.json("/api/connection/live-latency?request_id="+request,timeout:3)) as? [String:Any],
+               let next = RouterVPNLiveHTTPSReceipt.decode(checked,started:started),first.matches(next) {receipt=next}
+            let captured = receipt
+            DispatchQueue.main.async {
+                delivery.running = false
+                guard delivery.generation == generation,self.window?.isVisible == true,self.connectionProfileSelectionGeneration == selection else {return}
+                if let captured {self.showLiveHTTPS(captured,owner:delivery,generation:generation,selection:selection)}
+                else if value?["measurement"] == nil,let value,let ms=RouterVPNLiveHTTPSReceipt.number(value,"median_ms"),ms>0 {self.clearLiveHTTPS();self.telemetryLiveLabel?.stringValue=String(format:"%.1f ms",ms);self.telemetryLiveLabel?.toolTip="HTTP RTT through the current private Router-node path."}
+                else {self.clearLiveHTTPS();self.telemetryLiveLabel?.textColor = .secondaryLabelColor}
             }
 
             guard let (entry, exit) = hopIDs else { return }
@@ -421,12 +516,12 @@ private final class RouterVPNMacPerformanceController: NSWindowController, NSWin
         let stack = NSStackView(); stack.orientation = .vertical; stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
         let title = NSTextField(labelWithString: "Latency & path performance"); title.font = .systemFont(ofSize: 22, weight: .bold); stack.addArrangedSubview(title)
-        let note = NSTextField(wrappingLabelWithString: "Live RTT measures the active private tunnel. Real path speed transfers to the active exit. Routed hop speeds measure the active entry and exit independently through the actual graph; unreachable hops keep their error. Each transfer reports actual bytes and elapsed time. Auto MTU is held during throughput measurements.")
+        let note = NSTextField(wrappingLabelWithString: "Private-node RTT measures the active private tunnel. External live response measures three HTTPS responses after TLS through the proved path and expires after ten seconds. Real path speed transfers to the active exit. Routed hop speeds measure the active entry and exit independently through the actual graph; unreachable hops keep their error. Each transfer reports actual bytes and elapsed time. Auto MTU is held during throughput measurements.")
         note.textColor = .secondaryLabelColor; stack.addArrangedSubview(note)
         result.font = .monospacedSystemFont(ofSize: 12, weight: .regular); result.isSelectable = true
         result.identifier = NSUserInterfaceItemIdentifier("telemetry-performance-result"); stack.addArrangedSubview(result)
         let row = NSStackView(); row.orientation = .horizontal; row.spacing = 8
-        for (tag, title) in ["Live path RTT", "50-sample selected node", "Real path speed", "Routed hop speeds", "Throughput + Auto MTU"].enumerated() {
+        for (tag, title) in ["Live path response", "50-sample selected node", "Real path speed", "Routed hop speeds", "Throughput + Auto MTU"].enumerated() {
             let button = NSButton(title: title, target: self, action: #selector(measure(_:)))
             button.tag = tag; button.bezelStyle = .rounded; actions.append(button); row.addArrangedSubview(button)
         }

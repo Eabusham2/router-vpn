@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"math"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -53,6 +55,9 @@ func desktopLatencyChildFixture(kind, directory string, expected mobilemultihop.
 		}
 		if record.Status.Complete && record.Status.Drained && (valid("latency-request.json") || valid("latency-cancel.json")) {
 			record = desktopLatencyNativeRecord{desktopLatencyNativeRequest: request, Status: hopmeasure.Status{Request: request.Request, Stage: "exit: HTTPS response 1/50", Results: []hopmeasure.Result{}}}
+			if request.ResponseOnly {
+				record.Status.Stage = "exit: live HTTPS response 1/3"
+			}
 		}
 		if record.Generation == 0 {
 			return
@@ -67,8 +72,15 @@ func desktopLatencyChildFixture(kind, directory string, expected mobilemultihop.
 			}
 		} else if !record.Status.Complete && kind != "latency-hold" && kind != "latency-cancel-delay" && kind != "latency-read-fail" {
 			record.Status = desktopLatencyStatusFixture(record.Request, expected.ExitID)
+			if record.ResponseOnly {
+				record.Status = desktopResponseStatusFixture(record.Request, expected.ExitID)
+			}
 			if kind == "latency-incomplete" {
-				record.Status.Results[0].Benchmark.Distribution.Samples = 49
+				if record.ResponseOnly {
+					record.Status.Results[0].Response.Distribution.Samples = 2
+				} else {
+					record.Status.Results[0].Benchmark.Distribution.Samples = 49
+				}
 			}
 			if kind == "latency-undrained" {
 				record.Status.Drained = false
@@ -146,6 +158,13 @@ func desktopLatencyStatusFixture(request, node string) hopmeasure.Status {
 	return hopmeasure.Status{Request: request, Stage: "complete", Complete: true, Drained: true, Results: []hopmeasure.Result{{ID: node, Role: "exit", Kind: "public-path", Label: "External exit → Cloudflare edge", Ready: true, Benchmark: &hopmeasure.LatencyBenchmark{Schema: 1, Measurement: "routed-https-response-after-tls", Endpoint: "https://speed.cloudflare.com/__down?bytes=1", Attempts: 50, Distribution: &hopmeasure.Latency{Samples: 50, Min: 1, Median: 4, Average: 5, P90: 8, Max: 10, Jitter: 2}, TrimmedMean: 4.5}}}}
 }
 
+func desktopResponseStatusFixture(request, node string) hopmeasure.Status {
+	status := desktopLatencyStatusFixture(request, node)
+	status.Results[0].Benchmark = nil
+	status.Results[0].Response = &hopmeasure.PathResponse{Schema: 1, Measurement: "routed-https-response-after-tls", Endpoint: "https://speed.cloudflare.com/__down?bytes=1", Attempts: 3, Distribution: &hopmeasure.Latency{Samples: 3, Min: 1, Median: 4, Average: 5, P90: 8, Max: 10, Jitter: 2}}
+	return status
+}
+
 func desktopLatencyControllerFixture(t *testing.T, kind string) (*app, *desktopNodeLaunch) {
 	t.Helper()
 	a, launch := desktopDNSControllerFixture(t, kind)
@@ -155,12 +174,15 @@ func desktopLatencyControllerFixture(t *testing.T, kind string) (*app, *desktopN
 		slot := a.desktopLatencyFor()
 		slot.mu.Lock()
 		operation := slot.current
+		response := slot.response
 		slot.mu.Unlock()
-		if operation != nil {
-			select {
-			case <-operation.done:
-			case <-time.After(4 * time.Second):
-				t.Error("latency controller fixture failed to drain")
+		for _, operation := range []*desktopLatencyOperation{operation, response} {
+			if operation != nil {
+				select {
+				case <-operation.done:
+				case <-time.After(4 * time.Second):
+					t.Error("latency controller fixture failed to drain")
+				}
 			}
 		}
 	})
@@ -236,6 +258,7 @@ func desktopLatencyWaitTest(t *testing.T, a *app, o *desktopLatencyOperation, ac
 }
 
 func TestDesktopExternalLatencySelectedPathPreservesProfilesAndExactIdentity(t *testing.T) {
+	t.Run("live-three-response", desktopLiveResponseTests)
 	a, launch := desktopLatencyControllerFixture(t, "latency-winner")
 	before := cloneRouterProfileStore(a.profiles)
 	operation, request := desktopLatencyStartTest(t, a)
@@ -259,6 +282,289 @@ func TestDesktopExternalLatencySelectedPathPreservesProfilesAndExactIdentity(t *
 	a.mu.Unlock()
 	if current := operation.view(a); len(current.Status.Results) != 0 || current.MeasuredAt != 0 {
 		t.Fatal("changed source retained current-path score")
+	}
+}
+
+func desktopLiveResponseTests(t *testing.T) {
+	t.Run("manual-priority", desktopLiveResponseManualPriority)
+	t.Run("idle-mtu-resumption", desktopLiveResponseMTUResumption)
+	for _, fault := range []string{"valid", "expiry", "source", "mtu-owner", "network", "cancel", "partial", "busy-mtu", "manual50"} {
+		t.Run(fault, func(t *testing.T) {
+			kind := "latency-winner"
+			if fault == "partial" {
+				kind = "latency-incomplete"
+			}
+			if fault == "cancel" {
+				kind = "latency-cancel-delay"
+			}
+			a, launch := desktopLatencyControllerFixture(t, kind)
+			var networkChanged atomic.Bool
+			capturedNetwork := launch.external.network
+			launch.external.networkIdentity = func() string {
+				if networkChanged.Load() {
+					return "replaced-network"
+				}
+				return capturedNetwork
+			}
+			before := cloneRouterProfileStore(a.profiles)
+			if fault == "busy-mtu" {
+				mtuRetestLockFor(a).Lock()
+				defer mtuRetestLockFor(a).Unlock()
+			}
+			var manual *desktopLatencyOperation
+			if fault == "manual50" {
+				manual, _ = desktopLatencyStartTest(t, a)
+				<-manual.done
+				slot := a.desktopLatencyFor()
+				slot.mu.Lock()
+				slot.responsePauseUntil = time.Time{}
+				slot.mu.Unlock()
+			}
+			get := func() *httptest.ResponseRecorder {
+				w := httptest.NewRecorder()
+				a.connectionLiveLatency(w, httptest.NewRequest(http.MethodGet, "/api/connection/live-latency", nil))
+				return w
+			}
+			w := get()
+			if w.Code != http.StatusAccepted {
+				t.Fatal("live capture", w.Code, w.Body.String())
+			}
+			slot := a.desktopLatencyFor()
+			slot.mu.Lock()
+			operation := slot.response
+			slot.mu.Unlock()
+			if operation == nil || !operation.responseOnly {
+				t.Fatal("live lost captured owner")
+			}
+			if fault == "cancel" {
+				deadline := time.Now().Add(3 * time.Second)
+				for {
+					record, _ := readDesktopLatencyRecord(launch)
+					if desktopResponseNativePhase(record.Status.Stage) {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("live native request did not start")
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+				invalidateDesktopLatencyResults(a)
+				if !mtuSuspended(a) {
+					t.Fatal("cancel released MTU before native drain")
+				}
+				_ = os.WriteFile(filepath.Join(launch.directory, "latency-drain-release.fixture"), []byte("release"), 0600)
+			}
+			select {
+			case <-operation.done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("live native request did not drain")
+			}
+			if fault == "expiry" {
+				operation.mu.Lock()
+				operation.completedAt = time.Now().Add(-11 * time.Second)
+				operation.mu.Unlock()
+			}
+			if fault == "source" {
+				a.mu.Lock()
+				a.profiles.Profiles[0].DNSHost = "9.9.9.9"
+				a.mu.Unlock()
+			}
+			if fault == "mtu-owner" {
+				launch.external.mu.Lock()
+				old := launch.external.mtu
+				launch.external.mtu = &desktopMTUSession{automatic: true}
+				launch.external.mu.Unlock()
+				defer func() { launch.external.mu.Lock(); launch.external.mtu = old; launch.external.mu.Unlock() }()
+			}
+			if fault == "network" {
+				networkChanged.Store(true)
+			}
+			view := operation.responseView(a)
+			good := fault == "valid" || fault == "manual50"
+			if good != (view.Response != nil) {
+				t.Fatal("live score freshness/type mismatch", fault, view, operation.view(a).Status)
+			}
+			if good {
+				if view.ExpiresInMS <= 0 || view.ExpiresInMS > 10000 || view.Response.Attempts != 3 || view.Response.Distribution.Samples != 3 {
+					t.Fatal("live fixed count/expiry", view)
+				}
+				w = get()
+				var reply desktopResponseView
+				var fields map[string]json.RawMessage
+				if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &reply) != nil || json.Unmarshal(w.Body.Bytes(), &fields) != nil || reply.Response == nil || fields["median_ms"] != nil || fields["benchmark"] != nil {
+					t.Fatal("typed current response", w.Code, w.Body.String())
+				}
+				for _, suffix := range []string{operation.request, strings.Repeat("0", 32)} {
+					check := httptest.NewRecorder()
+					a.connectionLiveLatency(check, httptest.NewRequest(http.MethodGet, "/api/connection/live-latency?request_id="+suffix, nil))
+					if (check.Code == http.StatusOK) != (suffix == operation.request) {
+						t.Fatal("delivery validation accepted a foreign live nonce", check.Code, check.Body.String())
+					}
+				}
+				view.Response.Distribution.Median = 1000
+				if operation.responseView(a).Response.Distribution.Median != 4 {
+					t.Fatal("live view escaped native ownership")
+				}
+			}
+			if fault != "source" && !reflect.DeepEqual(before, a.profiles) {
+				t.Fatal("live changed durable profile")
+			}
+			if fault == "busy-mtu" {
+				record, _ := readDesktopLatencyRecord(launch)
+				if record.Generation != 0 || mtuSuspended(a) {
+					t.Fatal("live cancelled MTU or opened native request while busy")
+				}
+			}
+			if manual != nil && manual.view(a).Status.Results[0].Benchmark == nil {
+				t.Fatal("live replaced the manual50 view")
+			}
+		})
+	}
+	launch := &desktopNodeLaunch{external: &desktopExternalRuntime{session: strings.Repeat("a", 32), expected: mobilemultihop.ExternalProofResult{ExitID: "node", SourceSHA256: strings.Repeat("b", 64), ConfigSHA256: strings.Repeat("c", 64)}}}
+	valid := desktopResponseStatusFixture(strings.Repeat("d", 32), "node")
+	for name, change := range map[string]func(*hopmeasure.Status){"partial": func(s *hopmeasure.Status) { s.Results[0].Response.Distribution.Samples = 2 }, "fifty": func(s *hopmeasure.Status) {
+		s.Results[0].Benchmark = desktopLatencyStatusFixture("", "node").Results[0].Benchmark
+	}, "idle": func(s *hopmeasure.Status) { s.Results[0].Idle = &hopmeasure.Latency{} }, "transfer": func(s *hopmeasure.Status) { s.Results[0].Upload = &hopmeasure.Transfer{} }, "wrong-node": func(s *hopmeasure.Status) { s.Results[0].ID = "foreign" }, "endpoint": func(s *hopmeasure.Status) { s.Results[0].Response.Endpoint = "https://elsewhere.invalid" }, "nan": func(s *hopmeasure.Status) { s.Results[0].Response.Distribution.Median = math.NaN() }, "undrained": func(s *hopmeasure.Status) { s.Drained = false }, "count": func(s *hopmeasure.Status) { s.Results[0].Response.Attempts = 50 }} {
+		t.Run(name, func(t *testing.T) {
+			status := cloneDesktopLatencyStatus(valid)
+			change(&status)
+			if validateDesktopResponseResults(launch, status) == nil {
+				t.Fatal("mixed or malformed live score accepted")
+			}
+		})
+	}
+	if validateDesktopResponseResults(launch, valid) != nil || validateDesktopLatencyResults(launch, valid) == nil {
+		t.Fatal("live3 and manual50 types were conflated")
+	}
+}
+
+func desktopLiveResponseManualPriority(t *testing.T) {
+	a, launch := desktopLatencyControllerFixture(t, "latency-cancel-delay")
+	get := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		a.connectionLiveLatency(w, httptest.NewRequest(http.MethodGet, "/api/connection/live-latency", nil))
+		return w
+	}
+	if w := get(); w.Code != http.StatusAccepted {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	slot := a.desktopLatencyFor()
+	slot.mu.Lock()
+	live := slot.response
+	slot.mu.Unlock()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		record, _ := readDesktopLatencyRecord(launch)
+		if desktopResponseNativePhase(record.Status.Stage) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("live worker did not start")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	view := desktopLatencyCaptureTest(t, a)
+	request := desktopLatencyRequest{ProfileID: view.ProfileID, ProfileToken: view.ProfileToken, SessionID: view.SessionID, Request: strings.Repeat("a", 32)}
+	post := func() *httptest.ResponseRecorder {
+		return desktopLatencyHTTP(t, a, http.MethodPost, "/api/speed-lab/external-latency", request)
+	}
+	if w := post(); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "30 seconds") {
+		t.Fatal("manual action did not cancel live with bounded retry", w.Code, w.Body.String())
+	}
+	if !mtuSuspended(a) {
+		t.Fatal("explicit cancellation released MTU before native drain")
+	}
+	if w := get(); w.Code != http.StatusConflict {
+		t.Fatal("polling stole explicit measurement retry window", w.Code)
+	}
+	if err := os.WriteFile(filepath.Join(launch.directory, "latency-drain-release.fixture"), []byte("release"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-live.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("live priority cancellation did not drain")
+	}
+	request.Request = live.request
+	if w := post(); w.Code != http.StatusConflict {
+		t.Fatal("prior live request was accepted as saved50", w.Code)
+	}
+	request.Request = strings.Repeat("a", 32)
+	if w := post(); w.Code != http.StatusAccepted {
+		t.Fatal("explicit benchmark could not retry after background drain", w.Code, w.Body.String())
+	}
+	slot.mu.Lock()
+	manual := slot.current
+	slot.mu.Unlock()
+	if manual == nil || manual.responseOnly || manual.request != request.Request {
+		t.Fatal("manual benchmark lost its own operation")
+	}
+	manual.invalidate()
+}
+
+func desktopLiveResponseMTUResumption(t *testing.T) {
+	for _, fault := range []string{"probe-cancelled", "retired", "replaced", "already-started"} {
+		t.Run(fault, func(t *testing.T) {
+			a, launch := desktopMTUControllerFixture(t, "mtu-winner")
+			snapshot, err := captureDesktopLatencySnapshot(a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			operation := &desktopLatencyOperation{snapshot: snapshot, responseOnly: true, cancel: cancel}
+			release, err := a.holdDesktopResponseMTU(ctx, operation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			owner := desktopMeasurementMTUSession(launch)
+			a.startDesktopExternalAutomaticMTU(launch)
+			time.Sleep(50 * time.Millisecond)
+			owner.mu.Lock()
+			started := owner.automatic
+			owner.mu.Unlock()
+			if started {
+				t.Fatal("background response consumed Auto while its atomic idle gate was held")
+			}
+			switch fault {
+			case "probe-cancelled":
+				operation.invalidate()
+			case "retired":
+				a.mu.Lock()
+				a.state.Connected = false
+				a.mu.Unlock()
+			case "replaced":
+				launch.external.mu.Lock()
+				launch.external.mtu = &desktopMTUSession{}
+				launch.external.mu.Unlock()
+				defer func() { launch.external.mu.Lock(); launch.external.mtu = owner; launch.external.mu.Unlock() }()
+			case "already-started":
+				owner.mu.Lock()
+				owner.automatic = true
+				owner.mu.Unlock()
+			}
+			release()
+			if fault == "probe-cancelled" {
+				record := desktopMTUWaitRecord(t, launch, func(r desktopMTURecord) bool { return r.Status.Complete && r.Status.Measured })
+				if record.Generation != 1 {
+					t.Fatal("deferred first Auto did not start exactly once", record)
+				}
+				release()
+				a.startDesktopExternalAutomaticMTU(launch)
+				time.Sleep(50 * time.Millisecond)
+				again, _ := readDesktopMTURecord(launch)
+				if again.Generation != 1 {
+					t.Fatal("drain release restarted Auto", again)
+				}
+			} else {
+				time.Sleep(100 * time.Millisecond)
+				record, _ := readDesktopMTURecord(launch)
+				if record.Generation != 0 {
+					t.Fatal("retired/replaced/completed Auto resumed", record)
+				}
+			}
+		})
 	}
 }
 

@@ -321,6 +321,40 @@ func TestRouterVPNDesktopExternalPhysicalBoxLatencyObservation(t *testing.T) {
 }
 
 func desktopExternalLatencyIntegration(t *testing.T, ca *desktopExternalIntegrationCA) {
+	for _, fault := range []string{"latency-ok", "latency-dns", "latency-tls", "latency-partial"} {
+		t.Run("latency3/"+fault, func(t *testing.T) {
+			f := newDesktopExternalIntegrationFixture(t, ca, "shadowsocks", fault)
+			f.prove(t)
+			service, err := f.box.RouterVPNExternalHopMeasurement(f.proof, f.originalSource, f.originalCapture, f.policy.Metadata().SessionID, f.proof.Healthy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer service.Close()
+			if err := service.StartResponse(strings.Repeat("f", 32), "selected-external-native"); err != nil {
+				t.Fatal(err)
+			}
+			status := desktopExternalLatencyStatus(t, service)
+			if len(status.Results) != 1 || !status.Complete || !status.Drained {
+				t.Fatal("live response worker lost actual drain", status)
+			}
+			row := status.Results[0]
+			if row.Benchmark != nil || row.Idle != nil || row.Download != nil || row.Upload != nil {
+				t.Fatal("live response became saved50 or transfer", row)
+			}
+			if fault == "latency-ok" {
+				if !row.Ready || row.Response == nil || row.Response.Attempts != 3 || row.Response.Distribution == nil || row.Response.Distribution.Samples != 3 || row.Response.Distribution.Median <= 0 || f.peer.latency.requests.Load() != 3 || f.peer.latency.handshakes.Load() != 3 || f.peer.latency.queries.Load() < 1 || f.peer.bypassed.Load() != 0 {
+					t.Fatal("three actual encrypted HTTPS responses missing", status, f.peer.diagnostic())
+				}
+			} else if row.Ready || row.Response != nil || row.Failure == "" || fault != "latency-partial" && f.peer.latency.requests.Load() != 0 || fault == "latency-partial" && f.peer.latency.requests.Load() != 1 {
+				t.Fatal("failed native response acquired a score", status, f.peer.diagnostic())
+			}
+			release, err := f.proof.activity.beginMTU()
+			if err != nil {
+				t.Fatal("drained live response retained MTU activity", err)
+			}
+			release()
+		})
+	}
 	protocols := []string{"http-connect", "https-connect", "shadowsocks"}
 	if runtime.GOOS == "darwin" {
 		protocols = append(protocols, "socks5", "awg2-fast", "awg2-strong")
