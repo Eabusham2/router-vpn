@@ -7,6 +7,68 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## macOS ordered child command and original capture identity
+
+The shared native-process launcher now chooses the fixed child command from
+the exact captured `macosprocess.Family`: the original empty External family
+retains `routervpn-external`, and `ordered-node-chain-v1` selects
+`routervpn-node-chain`. Unknown families return an error before parent
+admission, dependency retention or image verification. The existing five
+captured flag/value pairs are unchanged. `OpenCapture`, original inherited
+descriptors, actual child creation, `BindCreated`, the sole waiter and native
+cleanup remain the same shipping path.
+
+The shared `macosprocess.NodeChainTransferSHA256` function accepts only a
+complete original Selection with the exact ordered family. It hashes the
+domain `routervpn-macos-node-chain-transfer-v1`, one NUL byte and the canonical
+JSON of all eleven native capture fields. These include the original
+session/source/configuration, caller UID, workspace device/inode, engine,
+controller, catalog, input digests and family. Parent and child must obtain
+that Selection from their retained native Capture after Current succeeds;
+the digest supplies no independent admission, liveness or PF authority.
+
+Six portable Go test roots cover 50 terminal cases: three exact command
+mappings, thirteen rejected family aliases, cross-capture argument isolation,
+one independent canonical digest vector, every original Selection field,
+twelve incomplete captures and nine rejected digest families. Reflection
+requires an explicit mutation for every Selection field. The fixed vector
+was independently recomputed in JavaScript after checking standard empty
+and abc SHA-256 vectors; the result is
+`b658abcc3717b051b31fb6e61149eef56148b529be19cb8d4e748639a8152634`.
+That computation is not execution of the new Go tests.
+
+Source review verified that removing only the small caller changes recovers
+the original Darwin launcher bytes; ordinary External arguments are exact.
+The native preparer dynamically copies production macosprocess Go files and
+includes the new source in its digest. Hosted compilation, the new portable
+tests and native invocation remain required. Public ordered-macOS capability
+is still closed while the descriptor, child command, original-session
+proof/MTU/retirement integration is completed; this unit does not certify an
+operating ordered macOS tunnel.
+
+### Hosted results immediately before this source unit
+
+At `92926717fb06f96fcdc6d0893e2c0cee47a75b24`, job
+[130842671337](https://github.com/Eabusham2/router-vpn/actions/runs/43115607108/job/130842671337)
+completed the focused race step successfully from 22:56:55 to 23:12:38 UTC.
+The required runner enforces all 29 roots and 152 cases across 39 invocations.
+Its original named receipts will be inspected when completed job logs are
+available. The subsequent complete Go step was still running when observed.
+
+The same `92926717` also passed the full unfiltered client/common suite in
+[Multihop contract job 130842801131](https://github.com/Eabusham2/router-vpn/actions/runs/43115606861/job/130842801131):
+client 728.554 seconds, common 75.805 seconds, followed by all 44 native
+shipping audit tests. This is shared client evidence; Android package
+completion is a separate native job.
+
+Separately, the preceding `e1204aea` release-gap job
+[130833709493](https://github.com/Eabusham2/router-vpn/actions/runs/43112975926/job/130833709493)
+passed the full unfiltered `go test ./cmd/client ./internal/common -timeout=15m`:
+the client package completed in 759.367 seconds and common in 50.931 seconds.
+Its release-gap, onboarding, settings, Linux profiles and product-parity
+audits also passed. These results do not certify the new source unit or a
+complete current native release.
+
 ## Focused startup and restoration race phases
 
 Two hosted focused runs compiled the new startup code, then exhausted the

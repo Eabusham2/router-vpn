@@ -36,9 +36,6 @@ type desktopMacOSProcess struct {
 	nativeStopErr      error
 }
 
-func desktopMacOSProcessArguments(scope macosprocess.Scope) []string {
-	return []string{"routervpn-external", "--runtime-dir", scope.Workspace, "--session", scope.Session, "--physical-source-sha256", scope.Source, "--config-sha256", scope.Config, "--darwin-control", "inherited-v1"}
-}
 func startDesktopMacOSProcess(ctx context.Context, parent *desktopMacOSSessionCapture, scope macosprocess.Scope) (*desktopMacOSProcess, error) {
 	return startDesktopMacOSProcessWithVerifier(ctx, parent, scope, verifyBundledNativeContext)
 }
@@ -50,6 +47,10 @@ func startDesktopMacOSProcessWithVerifier(ctx context.Context, parent *desktopMa
 		return nil, errors.New("macOS child requires its original captured application")
 	}
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	arguments, err := desktopMacOSProcessArguments(scope)
+	if err != nil {
 		return nil, err
 	}
 	if err := parent.Current(ctx); err != nil {
@@ -96,7 +97,7 @@ func startDesktopMacOSProcessWithVerifier(ctx context.Context, parent *desktopMa
 	if err != nil {
 		return p, err
 	}
-	p.command = exec.Command(macosprocess.EnginePath, desktopMacOSProcessArguments(scope)...)
+	p.command = exec.Command(macosprocess.EnginePath, arguments...)
 	p.command.Dir, p.command.Env = scope.Workspace, macOSOwnedEnvironment()
 	p.command.Stdout, p.command.Stderr = os.Stdout, os.Stderr
 	p.command.ExtraFiles = append([]*os.File{p.childChannel}, p.capture.Files()...)
