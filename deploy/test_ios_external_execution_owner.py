@@ -66,6 +66,14 @@ final class LibboxCommandServer {
  func close(){released=true;Trace.shared.add("box-release")}
 }
 final class LibboxRouterMultihop {func healthy()->Bool{true};func progressJSON()->String{"{}"};func serverIdentityPinsJSON(_ error:inout NSError?)->String?{"{}"};func close()throws{}}
+// Ordered native plans are never constructed by this external owner fixture.
+// Keep the actual shared retirement and delivery source compilable, without
+// granting a proof through a boundary belonging to another execution path.
+final class LibboxRouterNodeChain {
+ func run(_ server:LibboxCommandServer)throws{throw FixtureFailure.error}
+ func healthy()->Bool{false};func progressJSON()->String{"{}"}
+ func networkChanged(){};func close()throws{}
+}
 final class LibboxRouterHopMeasurement {func close()throws{Trace.shared.add("hop-close")};func networkChanged(){Trace.shared.add("hop-network")}}
 func LibboxRouterExternalCreateProof(_ server:LibboxCommandServer,_ source:String,_ capture:String,_ session:String,_ error:inout NSError?)->LibboxRouterExternalProofRequest? {
  server.request.source=source;server.request.capture=capture;server.request.session=session;return server.request
@@ -90,6 +98,7 @@ struct RouterVPNExternalPolicy: Sendable {
 }
 final class MTUBoundary {
  var hasOwner=false
+ var proofObservationToken:UUID?{nil}
  func stopChecked()throws{Trace.shared.add("mtu-close");hasOwner=false}
  func invalidate(){Trace.shared.add("mtu-invalidate")}
  func drainForTorCleanup()throws{try stopChecked()}
@@ -238,7 +247,8 @@ def shipping():
     failure = source[start:end]
     hops = source[source.index('    func enableExternalHopMeasurement('):source.index('    func hopMeasurementRequest(')]
     receipts = source[source.index('    func multihopProgress('):source.index('    func invalidateMultihop(')]
-    return fields + stop + proof + retirement + mtu + failure + hops + receipts + FIXTURE
+    node_chain = source[source.index('    func completeNodeChainExecution('):source.index('    /// Only this delivery object')]
+    return fields + stop + proof + retirement + mtu + failure + hops + receipts + node_chain + FIXTURE
 
 
 def main():

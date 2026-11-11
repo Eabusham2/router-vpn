@@ -1657,7 +1657,7 @@ def main():
             print('Negative control rejected: '+label)
         seam='DispatchQueue.global(qos: .userInitiated).async { delivery.run() }'
         start=text.index('    func completeMultihopExecution(')
-        end=text.index('    /// Only this delivery object',start)
+        end=text.index('    func completeNodeChainExecution(',start)
         delivery=text[start:end]
         assert delivery.count(seam)==1
         # Require an explicit Sendable closure: Apple's preconcurrency Dispatch
