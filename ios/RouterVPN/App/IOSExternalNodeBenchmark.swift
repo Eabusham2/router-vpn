@@ -116,7 +116,7 @@ import Foundation
               let status = completed, status.complete, status.drained, status.stage == "complete", status.failure == nil,
               status.results.count == 1, let result = status.results.first,
               result.node_id == captured.nodeID, result.role == "exit", result.kind == "public-path", result.ready,
-              result.failure == nil, result.idle == nil, result.download == nil, result.upload == nil,
+              result.failure == nil, result.idle == nil, result.download == nil, result.upload == nil, result.response == nil,
               let benchmark = result.benchmark, benchmark.valid else { throw IOSExternalNodeStatistics.issue() }
         if saveResult { return try IOSExternalNodeStatistics.save(key: key, benchmark: benchmark, path: path) }
         // A temporary batch owns this uncommitted value until the original

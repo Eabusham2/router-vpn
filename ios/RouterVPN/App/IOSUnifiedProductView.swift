@@ -258,6 +258,7 @@ struct IOSUnifiedProductView: View {
     @StateObject private var telemetry = IOSUnifiedTelemetry.shared
     @ObservedObject private var externalComparison = IOSExternalNodeComparison.shared
     @ObservedObject private var externalBenchmark = IOSExternalNodeBenchmark.shared
+    @ObservedObject private var externalLive = IOSExternalLiveTelemetry.shared
     @AppStorage(iosUnifiedModeKey) private var selectedMode = IOSUnifiedModeSelection.smart
     @State private var expanded = false
     @State private var showingNodes = false
@@ -295,7 +296,7 @@ struct IOSUnifiedProductView: View {
                             Text(IOSUnifiedSecureTransport.handshakeLabel(connected: model.connected)).font(.caption2).foregroundStyle(model.connected ? .green : .secondary).lineLimit(1)
                             HStack(spacing: 5) {
                                 Text(model.activeRawProfile.isEmpty ? selectedModeTitle : model.activeRawProfile)
-                                if let ms = telemetry.livePathMs, model.connected { Text(String(format: "• %.1f ms", ms)).monospacedDigit() }
+                                if let ms = livePathMilliseconds, model.connected { Text(String(format: "• %.1f ms %@", ms, livePathLabel)).monospacedDigit() }
                             }.font(.caption2).foregroundStyle(.secondary)
                         }
                         .padding(.horizontal, 10).padding(.vertical, 7).background(.regularMaterial, in: Capsule())
@@ -326,12 +327,17 @@ struct IOSUnifiedProductView: View {
         .task(id: model.connected) {
             while !Task.isCancelled {
                 await telemetry.refreshLivePath(model: model)
+                await externalLive.refresh(model: model)
                 try? await Task.sleep(for: .seconds(2))
             }
         }
+        .onChange(of: model.activeSessionIdentity) { _ in externalLive.cancel(); externalLive.invalidate(model: model) }
+        .onDisappear { externalLive.cancel() }
     }
 
     private var selectedProfile: RouterProfile? { model.unifiedSelectedProfile }
+    private var livePathMilliseconds: Double? { selectedProfile?.normalizedNodeKind == "external" ? externalLive.milliseconds : telemetry.livePathMs }
+    private var livePathLabel: String { selectedProfile?.normalizedNodeKind == "external" ? "HTTPS" : "HTTP" }
     private var routerProfiles: [RouterProfile] { model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" } }
     private var nodeSubtitle: String {
         guard let p = selectedProfile else { return "Router / Custom node" }
@@ -397,7 +403,7 @@ struct IOSUnifiedProductView: View {
                             .buttonStyle(.borderedProminent).tint(model.connected ? .red : .accentColor)
                             .disabled(model.iosUserDisconnectInProgress)
 
-                        if let ms = telemetry.livePathMs, model.connected { Text(String(format: "%.1f\nms", ms)).font(.caption2.bold()).monospacedDigit().multilineTextAlignment(.center) }
+                        if let ms = livePathMilliseconds, model.connected { Text(String(format: "%.1f\nms %@", ms, livePathLabel)).font(.caption2.bold()).monospacedDigit().multilineTextAlignment(.center) }
                         Toggle(isOn: Binding(get: { model.unifiedQuickKillSwitch }, set: { model.setUnifiedQuickKillSwitch($0) })) { Image(systemName: "lock.shield.fill") }
                             .toggleStyle(.button).buttonStyle(.bordered).accessibilityLabel("Kill switch")
                             .disabled(model.profileMutationBlocked)
@@ -457,7 +463,7 @@ struct IOSUnifiedProductView: View {
         if let p = selectedProfile, p.multihopEnabled == true, let entry = p.multihopEntryID, let exit = p.multihopExitID {
             // Direct node-cache RTT is not a routed per-hop measurement.
             var text = "\(entry) → \(exit)"
-            if let path = telemetry.livePathMs, model.connected { text += String(format: " • PATH %.1f", path) }
+            if let path = livePathMilliseconds, model.connected { text += String(format: " • %@ %.1f ms", livePathLabel, path) }
             return text
         }
         return "Choose native entry → encrypted exit"
@@ -711,6 +717,7 @@ private struct IOSUnifiedPerformanceView: View {
     @ObservedObject var telemetry: IOSUnifiedTelemetry
     @ObservedObject private var externalBenchmark = IOSExternalNodeBenchmark.shared
     @ObservedObject private var externalComparison = IOSExternalNodeComparison.shared
+    @ObservedObject private var externalLive = IOSExternalLiveTelemetry.shared
     @State private var output = "Choose a real measurement."
     @State private var busy = false
     @State private var operation: Task<Void, Never>?
@@ -720,8 +727,15 @@ private struct IOSUnifiedPerformanceView: View {
         NavigationStack {
             Form {
                 Section("Current path") {
-                    LabeledContent("Private node response", value: telemetry.livePathMs.map { String(format: "%.1f ms", $0) } ?? "No current measurement")
-                    Button("Measure private node response") { runLive() }.disabled(!model.connected || model.unifiedSelectedProfile?.normalizedNodeKind != "router-vpn" || busy || telemetry.measuring || externalBenchmark.running || externalComparison.running)
+                    if model.unifiedSelectedProfile?.normalizedNodeKind == "external" {
+                        LabeledContent("External path HTTPS response", value: externalLive.milliseconds.map { String(format: "%.1f ms", $0) } ?? "No current measurement")
+                        Button("Measure live external HTTPS response") { runExternalLive() }
+                            .disabled(!IOSExternalLiveTelemetry.supported(model) || busy || externalLive.running || telemetry.measuring || externalBenchmark.running || externalComparison.running || model.iosSpeedLabOwnership.active || IOSMTUMeasurementGate.held)
+                        Text("Median of three HTTPS responses from the Cloudflare speed endpoint through this proved external path and its selected DNS. Timing starts after DNS, TCP and TLS preparation. These live values expire and do not replace saved 50-sample statistics or direct TCP rankings.").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        LabeledContent("Private node response", value: telemetry.livePathMs.map { String(format: "%.1f ms", $0) } ?? "No current measurement")
+                        Button("Measure private node response") { runLive() }.disabled(!model.connected || busy || telemetry.measuring || externalBenchmark.running || externalComparison.running)
+                    }
                     Button(telemetry.isSpeedTesting ? "Testing real VPN path speed…" : "Run real current VPN path speed") { runSpeed() }
                         .disabled(!model.connected || model.unifiedSelectedProfile?.normalizedNodeKind != "router-vpn" || busy || telemetry.measuring || externalBenchmark.running || externalComparison.running)
                     if let speed = telemetry.lastSpeedResult {
@@ -773,14 +787,15 @@ private struct IOSUnifiedPerformanceView: View {
             }
             .navigationTitle("Performance")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { cancelMeasurement(); dismiss() } } }
-            .onAppear { telemetry.showPerformance(true); telemetry.invalidateResults(model: model); externalBenchmark.refreshSaved(model: model) }
-            .onDisappear { cancelMeasurement(); telemetry.showPerformance(false) }
-            .onChange(of: model.connected) { _ in telemetry.invalidateResults(model: model); externalBenchmark.cancel(); externalBenchmark.refreshSaved(model: model) }
-            .onChange(of: model.activeSessionIdentity) { _ in externalBenchmark.cancel(); externalBenchmark.refreshSaved(model: model) }
-            .onChange(of: selectedExternalHistoryKey) { _ in externalBenchmark.cancel(); externalBenchmark.refreshSaved(model: model) }
+            .onAppear { telemetry.showPerformance(true); telemetry.invalidateResults(model: model); externalLive.showPerformance(true); externalLive.invalidate(model: model); externalBenchmark.refreshSaved(model: model) }
+            .onDisappear { cancelMeasurement(); telemetry.showPerformance(false); externalLive.showPerformance(false) }
+            .onChange(of: model.connected) { _ in telemetry.invalidateResults(model: model); externalLive.cancel(); externalLive.invalidate(model: model); externalBenchmark.cancel(); externalBenchmark.refreshSaved(model: model) }
+            .onChange(of: model.activeSessionIdentity) { _ in externalLive.cancel(); externalLive.invalidate(model: model); externalBenchmark.cancel(); externalBenchmark.refreshSaved(model: model) }
+            .onChange(of: selectedExternalHistoryKey) { _ in externalLive.cancel(); externalLive.invalidate(model: model); externalBenchmark.cancel(); externalBenchmark.refreshSaved(model: model) }
         }
     }
-    private func cancelMeasurement() { operation?.cancel(); telemetry.cancel(); externalBenchmark.cancel(); externalComparison.cancel() }
+    private func cancelMeasurement() { operation?.cancel(); telemetry.cancel(); externalLive.cancel(); externalBenchmark.cancel(); externalComparison.cancel() }
+    private func runExternalLive() { busy = true; operation = Task { do { output = String(format: "Current external path HTTPS response: %.1f ms (three samples).", try await externalLive.measure(model: model)) } catch { output = error.localizedDescription }; busy = false } }
     private func runLive() { busy = true; operation = Task { do { output = String(format: "Current private tunnel median response time: %.1f ms", try await telemetry.measureCurrentRTT(model: model)) } catch { output = error.localizedDescription }; busy = false } }
     private func runSpeed() { busy = true; operation = Task { do { output = try await telemetry.speedTest(model: model).detail } catch { output = error.localizedDescription }; busy = false } }
     private func runSelected() { guard let p = model.unifiedSelectedProfile else { return }; busy = true; operation = Task { do { output = try await telemetry.measureOne(p, model: model, samples: 50).detail + "\nSaved to this node." } catch { output = error.localizedDescription }; busy = false } }

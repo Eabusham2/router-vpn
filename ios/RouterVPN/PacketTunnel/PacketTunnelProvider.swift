@@ -101,7 +101,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if messageData.count <= 256,
            let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
            request.count == 3, let operation = request["operation"],
-           ["hop-measure-info", "hop-measure-start", "hop-measure-latency-start", "hop-measure-status", "hop-measure-cancel"].contains(operation),
+           ["hop-measure-info", "hop-measure-start", "hop-measure-latency-start", "hop-measure-response-start", "hop-measure-status", "hop-measure-cancel"].contains(operation),
            let id = request["request_id"], id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
            let session = request["session_id"], (operation == "hop-measure-info" && session.isEmpty) || UUID(uuidString: session) != nil {
             completionHandler(libboxEngine?.hopMeasurementRequest(operation: operation, request: id, session: session) ??

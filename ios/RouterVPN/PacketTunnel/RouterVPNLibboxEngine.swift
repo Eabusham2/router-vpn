@@ -1047,10 +1047,11 @@ final class RouterVPNLibboxEngine {
             guard !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
             return Self.retiredMeasurements.start(probe, request: request, session: session)
         }
-        if operation == "hop-measure-latency-start" {
+        if operation == "hop-measure-latency-start" || operation == "hop-measure-response-start" {
             guard let exitID = hopMeasurementExitID,
                   !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
-            return Self.retiredMeasurements.start(probe, request: request, session: session, latencyExitID: exitID)
+            return Self.retiredMeasurements.start(probe, request: request, session: session, latencyExitID: exitID,
+                liveResponse: operation == "hop-measure-response-start")
         }
         return Self.retiredMeasurements.reply(operation: operation, request: request, session: session)
     }
@@ -1139,12 +1140,16 @@ final class RouterVPNLibboxEngine {
             guard let data = try? JSONSerialization.data(withJSONObject: value), data.count <= 16384 else { return nil }
             return data
         }
-        func start(_ probe: LibboxRouterHopMeasurement, request: String, session: String, latencyExitID: String? = nil) -> Data? {
+        func start(_ probe: LibboxRouterHopMeasurement, request: String, session: String, latencyExitID: String? = nil, liveResponse: Bool = false) -> Data? {
             lock.lock(); defer { lock.unlock() }
             let id = key(request, session)
             guard owners[id] == nil, receipts[id] == nil, !owners.values.contains(where: { $0 === probe }) else { return nil }
             do {
-                if let exitID = latencyExitID { try probe.startLatency(request, exitID: exitID) }
+                if let exitID = latencyExitID {
+                    if liveResponse { try probe.startResponse(request, exitID: exitID) }
+                    else { try probe.startLatency(request, exitID: exitID) }
+                }
+                else if liveResponse { return nil }
                 else { try probe.start(request, bytes: 8388608) }
             } catch { return nil }
             owners[id] = probe

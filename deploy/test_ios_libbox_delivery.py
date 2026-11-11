@@ -152,10 +152,13 @@ public final class LibboxRouterHopMeasurement {
     private var request="",closed=0,complete=false,drained=false,failClose=false
     private var cancelledRequests:[String]=[]
     private var latencyExits:[String]=[]
+    private var responseExits:[String]=[]
     public init() {}
     public func start(_ request: String, bytes: Int64) throws {lock.lock();self.request=request;complete=false;drained=false;lock.unlock()}
     public func startLatency(_ request: String, exitID: String) throws {lock.lock();self.request=request;latencyExits.append(exitID);complete=false;drained=false;lock.unlock()}
+    public func startResponse(_ request: String, exitID: String) throws {lock.lock();self.request=request;responseExits.append(exitID);complete=false;drained=false;lock.unlock()}
     public func latencyExitCalls()->[String]{lock.lock();defer{lock.unlock()};return latencyExits}
+    public func responseExitCalls()->[String]{lock.lock();defer{lock.unlock()};return responseExits}
     public func cancel(_ request: String) {lock.lock();cancelledRequests.append(request);if self.request==request{complete=true};lock.unlock()}
     public func cancellationCalls()->[String]{lock.lock();defer{lock.unlock()};return cancelledRequests}
     public func configure(closeFails:Bool){lock.lock();failClose=closeFails;lock.unlock()}
@@ -1220,7 +1223,7 @@ final class CompletionState: @unchecked Sendable {
             check("Info rejects stale proof, session or foreign exit: "+event,owner.hopMeasurementRequest(operation:"hop-measure-info",request:request,session:"")==nil)
             owner.stop()
         }}
-        for tor in [false,true] {for action in ["stable","cancel-proof","late-factory","retired-reply","latency","latency-retired"] {
+        for tor in [false,true] {for action in ["stable","cancel-proof","late-factory","retired-reply","latency","latency-retired","response","response-retired"] {
             state.configure();externalState.configure();torState.configure();hopState.configure()
             let exitID=tor ? "captured-tor":"saved-exit"
             let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
@@ -1254,10 +1257,12 @@ final class CompletionState: @unchecked Sendable {
                 check("Info binds exact running config and proved Local execution",binding.execution?.valid==true && binding.execution?.requested=="local" && binding.execution?.selected=="local" && binding.execution?.config_sha256==fingerprint)
                 var badMTU=false;do{_ = try IOSHopMeasurementBinding.decode(hopInfo,request:id,mtuSession:UUID().uuidString)}catch{badMTU=true}
                 check("foreign MTU echo cannot enable a hop measurement",badMTU)
-                let startOperation=action.hasPrefix("latency") ? "hop-measure-latency-start":"hop-measure-start"
+                let startOperation=action.hasPrefix("response") ? "hop-measure-response-start":action.hasPrefix("latency") ? "hop-measure-latency-start":"hop-measure-start"
                 check("foreign MTU UUID cannot start routed50",owner.hopMeasurementRequest(operation:"hop-measure-latency-start",request:id,session:mtuSession)==nil)
+                check("foreign MTU UUID cannot start live response",owner.hopMeasurementRequest(operation:"hop-measure-response-start",request:id,session:mtuSession)==nil)
                 check("bounded request starts on adopted owner",owner.hopMeasurementRequest(operation:startOperation,request:id,session:binding.session_id) != nil)
                 check("routed50 gets the native captured exit only",probe!.latencyExitCalls()==(action.hasPrefix("latency") ? [exitID]:[]))
+                check("live response gets the native captured exit only",probe!.responseExitCalls()==(action.hasPrefix("response") ? [exitID]:[]))
                 let beforeCancel=try JSONSerialization.jsonObject(with:Data(probe!.statusJSON().utf8)) as! NSDictionary
                 let beforeCancelCalls=probe!.cancellationCalls()
                 check("early cancel receives bounded discard receipt",owner.hopMeasurementRequest(operation:"hop-measure-cancel",request:other,session:owner.settingsEpoch) != nil)
@@ -1265,14 +1270,16 @@ final class CompletionState: @unchecked Sendable {
                 check("foreign request cannot cancel current work",afterCancel.isEqual(beforeCancel) && probe!.cancellationCalls()==beforeCancelCalls)
                 check("late start after early cancel is rejected",owner.hopMeasurementRequest(operation:"hop-measure-start",request:other,session:owner.settingsEpoch)==nil)
                 check("late routed50 start after early cancel is rejected",owner.hopMeasurementRequest(operation:"hop-measure-latency-start",request:other,session:owner.settingsEpoch)==nil)
+                check("late live response after early cancel is rejected",owner.hopMeasurementRequest(operation:"hop-measure-response-start",request:other,session:owner.settingsEpoch)==nil)
                 check("retired session cannot start on current native owner",owner.hopMeasurementRequest(operation:"hop-measure-start",request:other,session:UUID().uuidString)==nil)
-                if action=="retired-reply" || action=="latency-retired" {
+                if action=="retired-reply" || action=="latency-retired" || action=="response-retired" {
                     owner.stop()
                     let response=RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation:"hop-measure-status",request:id,session:owner.settingsEpoch)!
                     let value=try JSONSerialization.jsonObject(with:response) as! [String:Any]
                     check("retired request can prove its actual drain",value["request_id"] as? String==id && value["drained"] as? Bool==true)
                     check("retired receipt cannot start a new measurement",RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation:"hop-measure-start",request:id,session:owner.settingsEpoch)==nil)
                     check("retired receipt cannot start routed50",RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation:"hop-measure-latency-start",request:id,session:owner.settingsEpoch)==nil)
+                    check("retired receipt cannot start live response",RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation:"hop-measure-response-start",request:id,session:owner.settingsEpoch)==nil)
                     check("retired receipt survives a late cancelled retry",RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation:"hop-measure-cancel",request:id,session:owner.settingsEpoch) != nil)
                 }
             }

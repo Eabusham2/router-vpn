@@ -37,6 +37,22 @@ struct IOSHopMeasurementStatus: Decodable {
     let results: [IOSHopMeasurementResult]
 }
 struct IOSHopMeasurementResult: Decodable {
+    struct Response: Decodable {
+        let schema: Int
+        let measurement: String
+        let endpoint: String
+        let attempts: Int
+        let distribution: Benchmark.Distribution
+        var valid: Bool {
+            let d = distribution
+            let values = [d.min_ms, d.median_ms, d.average_ms, d.p90_ms, d.max_ms, d.jitter_ms]
+            return schema == 1 && measurement == "routed-https-response-after-tls" &&
+                endpoint == "https://speed.cloudflare.com/__down?bytes=1" && attempts == 3 && d.samples == 3 &&
+                values.allSatisfy { $0.isFinite && $0 >= 0 && $0 <= 10_000 } && d.min_ms > 0 &&
+                d.min_ms <= d.median_ms && d.median_ms <= d.p90_ms && d.p90_ms <= d.max_ms &&
+                d.min_ms <= d.average_ms && d.average_ms <= d.max_ms
+        }
+    }
     struct Benchmark: Codable, Equatable {
         struct Distribution: Codable, Equatable {
             let samples: Int
@@ -109,10 +125,11 @@ struct IOSHopMeasurementResult: Decodable {
     let download: Transfer?
     let upload: Transfer?
     let benchmark: Benchmark?
+    let response: Response?
     var summary: String {
         let safeLabel = !label.isEmpty && label.utf8.count <= 160 && !label.contains(where: { $0.isNewline || $0 == "\0" })
         let heading = "\(role.capitalized) • \(node_id) • \(safeLabel ? label : "unverified path")"
-        guard ready, safeLabel, ["private-node", "public-path"].contains(kind),
+        guard ready, safeLabel, benchmark == nil, response == nil, ["private-node", "public-path"].contains(kind),
               !node_id.isEmpty, node_id.utf8.count <= 128, ["entry", "exit"].contains(role), let idle, idle.valid,
               let download, download.valid, let upload, upload.valid else {
             return "\(heading): unavailable — \(failure ?? "unverified or incomplete result")"
@@ -162,7 +179,7 @@ private final class IOSHopReply: @unchecked Sendable {
          pause: @escaping @MainActor () async -> Void = { try? await Task.sleep(for: .milliseconds(350)) }) throws {
         guard id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
               UUID(uuidString: session) != nil,
-              ["hop-measure-start", "hop-measure-latency-start"].contains(startOperation) else { throw CancellationError() }
+              ["hop-measure-start", "hop-measure-latency-start", "hop-measure-response-start"].contains(startOperation) else { throw CancellationError() }
         self.id=id;self.session=session;self.startOperation=startOperation;self.send=send;self.pause=pause
     }
     private func status(_ operation: String) async throws -> IOSHopMeasurementStatus {

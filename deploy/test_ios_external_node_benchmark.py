@@ -46,6 +46,7 @@ enum IOSTelemetryProtocol {
     case "wrong-node":result["node_id"]="another-node"
     case "not-ready":result["ready"]=false
     case "private-kind":result["kind"]="private-node"
+    case "mixed-live":result["response"]=["schema":1,"measurement":"routed-https-response-after-tls","endpoint":"https://speed.cloudflare.com/__down?bytes=1","attempts":3,"distribution":distribution]
     case "entry-role":result["role"]="entry"
     case "foreign-session":if !cancel {body["session_id"]=UUID().uuidString}
     case "foreign-request":if !cancel {body["request_id"]=String(repeating:"f",count:32)}
@@ -150,7 +151,7 @@ TESTS = r'''
    check("stale displayed source history is hidden immediately",client.history(for:try IOSExternalNodeStatistics.selectedKey(model)).isEmpty)
    reopened.refreshSaved(model:model);check("source change refresh cannot display old numbers",!reopened.savedText.contains("Median"))
   }}}
-  for mode in ["partial","failed","wrong-endpoint","wrong-metric","zero","unordered","trim","wrong-node","not-ready","private-kind","entry-role","foreign-session","foreign-request","failed-status","invalidated"] {
+  for mode in ["partial","failed","wrong-endpoint","wrong-metric","zero","unordered","trim","wrong-node","not-ready","private-kind","mixed-live","entry-role","foreign-session","foreign-request","failed-status","invalidated"] {
    let(model,native)=try fixture(),client=IOSExternalNodeBenchmark();native.mode=mode
    client.start(model:model);await wait(mode){!client.running}
    check("invalid native result never saves: "+mode,IOSPrivateJSONStore.writes==0 && client.savedText.isEmpty && !IOSMTUMeasurementGate.held)
