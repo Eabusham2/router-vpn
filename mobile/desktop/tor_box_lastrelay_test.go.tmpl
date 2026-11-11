@@ -426,11 +426,15 @@ func TestRouterVPNDesktopTorComparisonNative(t *testing.T) {
 					var enteredOnce, releaseOnce sync.Once
 					defer releaseOnce.Do(func() { close(release) })
 					f.tun.mu.Lock()
-					previous := f.tun.guard
-					f.tun.guard = func() bool {
+					previous := f.tun.guardContext
+					f.tun.guardContext = func(observe context.Context) error {
 						enteredOnce.Do(func() { close(entered) })
-						<-release
-						return previous()
+						select {
+						case <-release:
+							return previous(observe)
+						case <-observe.Done():
+							return observe.Err()
+						}
 					}
 					f.tun.mu.Unlock()
 					done := make(chan error, 1)

@@ -40,6 +40,7 @@ import (
 type desktopExternalBoxSource struct {
 	capture                 mobiletor.DesktopSocketCapture
 	owner                   mobiletor.DesktopSocketKernelOwner
+	tun                     *desktopTorBoxTUN
 	live, cancelled, closed atomic.Bool
 	mu                      sync.Mutex
 	name                    string
@@ -142,6 +143,7 @@ func newDesktopExternalBoxFixture(t *testing.T, edit func(map[string]any)) *desk
 	ins := inbound.NewRegistry()
 	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
 		f.tun = &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag), name: options.InterfaceName, index: 721, mtu: int(options.MTU)}
+		f.source.tun = f.tun
 		return f.tun, nil
 	})
 	outs := outbound.NewRegistry()

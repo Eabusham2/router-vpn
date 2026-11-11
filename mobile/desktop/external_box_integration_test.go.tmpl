@@ -148,6 +148,7 @@ type desktopExternalIntegrationGrant struct {
 type desktopExternalIntegrationSource struct {
 	capture                 mobiletor.DesktopSocketCapture
 	owner                   mobiletor.DesktopSocketKernelOwner
+	tun                     *desktopTorBoxTUN
 	kernel                  *desktopExternalIntegrationKernel
 	live, cancelled, closed atomic.Bool
 	mu                      sync.Mutex
@@ -1414,7 +1415,7 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	var remote netip.AddrPort
 	var err error
 	if desktopExternalIntegrationUDP(protocol) {
-		if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		if runtime.GOOS != "linux" && runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
 			t.Fatal("direct UDP family has no admitted physical owner on this target")
 		}
 		port := "0"
@@ -1573,6 +1574,7 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	ins := inbound.NewRegistry()
 	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
 		f.tun = &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag), name: options.InterfaceName, index: 741, mtu: int(options.MTU)}
+		f.source.tun = f.tun
 		return f.tun, nil
 	})
 	outs := outbound.NewRegistry()

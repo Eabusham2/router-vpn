@@ -1,0 +1,132 @@
+//go:build darwin
+
+package box
+
+import (
+	"context"
+	"errors"
+	"os"
+	"testing"
+
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"golang.org/x/sys/unix"
+)
+
+// Box composition doubles both the TUN and privileged source. An original
+// pipe models only descriptor transfer between those two fixture boundaries;
+// it cannot attest an actual utun or enter the shipping Darwin socket policy.
+// Each transfer duplicates this same retained file, and Box must close that
+// duplicate after its source acknowledges the original captured TUN identity.
+func (t *desktopTorBoxTUN) RouterVPNDesktopTunnelControlContext(ctx context.Context, guard func(context.Context) error) (*os.File, error) {
+	if err := desktopnetwork.LockContext(ctx, &t.mu); err != nil {
+		return nil, err
+	}
+	defer t.mu.Unlock()
+	if !t.ready || t.closed || !t.claimed || guard == nil {
+		return nil, errors.New("fixture control lost its captured TUN")
+	}
+	if err := guard(ctx); err != nil {
+		return nil, err
+	}
+	if t.fixtureControl == nil {
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			return nil, err
+		}
+		if err := writer.Close(); err != nil {
+			_ = reader.Close()
+			return nil, err
+		}
+		t.fixtureControl = reader
+	}
+	fd, err := unix.FcntlInt(t.fixtureControl.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	duplicate := os.NewFile(uintptr(fd), "composition-only-original-control")
+	if err := guard(ctx); err != nil {
+		_ = duplicate.Close()
+		return nil, err
+	}
+	return duplicate, nil
+}
+
+func desktopExternalBoxControlMatches(ctx context.Context, tun *desktopTorBoxTUN, name string, index uint32, file *os.File) error {
+	if tun == nil || file == nil {
+		return errors.New("fixture source received no original control")
+	}
+	if err := desktopnetwork.LockContext(ctx, &tun.mu); err != nil {
+		return err
+	}
+	defer tun.mu.Unlock()
+	if !tun.ready || tun.closed || !tun.claimed || tun.name != name || uint32(tun.index) != index || tun.fixtureControl == nil || file == tun.fixtureControl || file.Fd() == tun.fixtureControl.Fd() {
+		return errors.New("fixture source received another TUN control")
+	}
+	original, originalErr := tun.fixtureControl.Stat()
+	actual, actualErr := file.Stat()
+	if originalErr != nil || actualErr != nil || !os.SameFile(original, actual) {
+		return errors.New("fixture source received a replaced control descriptor")
+	}
+	return ctx.Err()
+}
+
+func (s *desktopExternalBoxSource) BindTunnelFile(ctx context.Context, capture mobiletor.DesktopSocketCapture, name string, index uint32, file *os.File) error {
+	if err := desktopExternalBoxControlMatches(ctx, s.tun, name, index, file); err != nil {
+		return err
+	}
+	return s.BindTunnel(ctx, capture, name, index)
+}
+
+func (s *desktopExternalIntegrationSource) BindTunnelFile(ctx context.Context, capture mobiletor.DesktopSocketCapture, name string, index uint32, file *os.File) error {
+	if err := desktopExternalBoxControlMatches(ctx, s.tun, name, index, file); err != nil {
+		return err
+	}
+	return s.BindTunnel(ctx, capture, name, index)
+}
+
+func TestRouterVPNDesktopExternalDarwinFixtureControl(t *testing.T) {
+	ctx := t.Context()
+	reader := &desktopTorBoxTUN{name: "fixture-tun", index: 721, ready: true, claimed: true}
+	t.Cleanup(func() { _ = reader.Close() })
+	guard := func(ctx context.Context) error { return ctx.Err() }
+	first, err := reader.RouterVPNDesktopTunnelControlContext(ctx, guard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if err := desktopExternalBoxControlMatches(ctx, reader, reader.name, uint32(reader.index), first); err != nil {
+		t.Fatal("original modeled control was not transferred", err)
+	}
+	other, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	defer writer.Close()
+	for _, foreign := range []*os.File{nil, other, reader.fixtureControl} {
+		if desktopExternalBoxControlMatches(ctx, reader, reader.name, uint32(reader.index), foreign) == nil {
+			t.Fatal("foreign or unduplicated control was accepted")
+		}
+	}
+	if desktopExternalBoxControlMatches(ctx, reader, reader.name, uint32(reader.index+1), first) == nil {
+		t.Fatal("control transferred to a different TUN")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if desktopExternalBoxControlMatches(ctx, reader, reader.name, uint32(reader.index), first) == nil {
+		t.Fatal("consumed duplicate remained current")
+	}
+	second, err := reader.RouterVPNDesktopTunnelControlContext(ctx, guard)
+	if err != nil {
+		t.Fatal("closing transferred duplicate consumed original", err)
+	}
+	defer second.Close()
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if desktopExternalBoxControlMatches(ctx, reader, reader.name, uint32(reader.index), second) == nil {
+		t.Fatal("closed TUN retained modeled control authority")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"net"
 	"net/netip"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -46,6 +47,7 @@ type desktopTorBoxTUN struct {
 	ready, claimed, closed bool
 	guard                  func() bool
 	guardContext           func(context.Context) error
+	fixtureControl         *os.File
 }
 
 func (t *desktopTorBoxTUN) Start(stage adapter.StartStage) error {
@@ -61,6 +63,11 @@ func (t *desktopTorBoxTUN) Close() error {
 	defer t.mu.Unlock()
 	t.closed = true
 	t.ready = false
+	if t.fixtureControl != nil {
+		err := t.fixtureControl.Close()
+		t.fixtureControl = nil
+		return err
+	}
 	return nil
 }
 func (t *desktopTorBoxTUN) RouterVPNDesktopMTU(guard func() bool) (string, int, int, error) {
