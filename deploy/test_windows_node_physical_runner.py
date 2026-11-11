@@ -1343,6 +1343,86 @@ class OrdinarySSEntryScope(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "required native result"):
                         GATE.report_external_ss_entry(status, output, network)
 
+    def test_groups_keep_every_original_leaf_once_and_refuse_foreign_or_missing_verdicts(self):
+        self.assertEqual(tuple(GATE.EXTERNAL_SS_ENTRY_GROUPS), GATE.EXTERNAL_SS_ENTRY_NETWORKS)
+        self.assertEqual([len(groups) for groups in GATE.EXTERNAL_SS_ENTRY_GROUPS.values()], [4, 2, 2, 3])
+        for network, groups in GATE.EXTERNAL_SS_ENTRY_GROUPS.items():
+            required = GATE.EXTERNAL_SS_ENTRY_CASES[network]
+            captured = []
+            for group, (expression, cases) in groups.items():
+                captured.extend(cases[2:])
+                self.assertEqual(cases[:2], required[:2])
+                self.assertEqual(len(cases), len(set(cases)))
+                matches = lambda case: all(re.search(pattern, part) for pattern, part in zip(expression.split("/"), case.split("/")))
+                self.assertEqual({case for case in required if matches(case)}, set(cases))
+                complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in cases)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    GATE.report_external_ss_entry(0, complete, network, group)
+                    for case in cases:
+                        line = "--- PASS: " + case + " (0.01s)\n"
+                        for output in (complete.replace(line, ""), complete + line, complete.replace(line, "expected: " + line)):
+                            with self.assertRaises(ValueError): GATE.report_external_ss_entry(0, output, network, group)
+                    for foreign in set(required) - set(cases):
+                        with self.assertRaises(ValueError):
+                            GATE.report_external_ss_entry(0, complete + "--- PASS: " + foreign + " (0.01s)\n", network, group)
+                    for suffix in ("--- SKIP: hidden", "DATA RACE", "panic: crash", "--- FAIL: hidden", "FAIL"):
+                        with self.assertRaises(ValueError): GATE.report_external_ss_entry(0, complete + suffix + "\n", network, group)
+                    with self.assertRaises(ValueError): GATE.report_external_ss_entry(1, complete, network, group)
+            self.assertEqual(set(captured), set(required[2:]))
+            self.assertEqual(len(captured), len(required) - 2)
+            self.assertEqual(len(captured), len(set(captured)))
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+                GATE.report_external_ss_entry(0, "", network, "unknown")
+        with patch.object(GATE, "EXTERNAL_SS_ENTRY_CASES", {"shadowsocks": (*GATE.EXTERNAL_SS_ENTRY_CASES["shadowsocks"], GATE.EXTERNAL_SS_ENTRY_CASES["shadowsocks"][-1])}):
+            with self.assertRaisesRegex(ValueError, "complete native inventory"):
+                GATE.external_ss_entry_groups()
+        with patch.object(GATE, "EXTERNAL_SS_ENTRY_CASES", {"shadowsocks": (*GATE.EXTERNAL_SS_ENTRY_CASES["shadowsocks"], GATE.EXTERNAL_SS_ENTRY_ROOT + "/shadowsocks/unowned/child")}):
+            with self.assertRaisesRegex(ValueError, "complete native inventory"):
+                GATE.external_ss_entry_groups()
+
+    def test_actual_go_filter_covers_source_names_and_rejects_omitted_or_repeated_execution(self):
+        source = (ROOT / "mobile/desktop/external_box_windows_ss_entry_test.go.tmpl").read_text()
+        start = source.index('\tfor _, final := range []string{', source.index("func " + GATE.EXTERNAL_SS_ENTRY_ROOT + "("))
+        end = source.index('\t\t\tfor _, name := range names {', start)
+        original_names = source[start:end]
+        self.assertIn('names = append(names, "layers/"+entry+"/"+last)', original_names)
+        body = "package inventory\nimport \"testing\"\nfunc " + GATE.EXTERNAL_SS_ENTRY_ROOT + "(t *testing.T){\n" + original_names
+        body += '\t\t\tfor _, name := range names {\nCONTROL\n\t\t\t\tt.Run(name,func(t *testing.T){})\n\t\t\t}\n\t\t})\n\t}\n}\n'
+        omitted = 'if final == "shadowsocks" && name == "layers/aes-256-gcm+xor-whitening/aes-256-gcm+xor-whitening" { continue }'
+        compiler = shutil.which("go")
+        self.assertIsNotNone(compiler, "Go is required for actual SS entry inventory selection")
+        with tempfile.TemporaryDirectory(prefix="windows-ss-entry-selection-") as directory:
+            folder = Path(directory)
+            path = folder / "inventory_test.go"
+            binary = folder / ("inventory.test.exe" if os.name == "nt" else "inventory.test")
+            for control in ("", omitted):
+                path.write_text(body.replace("CONTROL", control))
+                built = subprocess.run([compiler, "test", "-c", "-o", str(binary), str(path)],
+                                       capture_output=True, text=True, timeout=90,
+                                       env=dict(os.environ, GOTOOLCHAIN="local"))
+                self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+                selected = ((network, group, expression) for network, groups in GATE.EXTERNAL_SS_ENTRY_GROUPS.items()
+                            for group, (expression, _) in groups.items()) if not control else (
+                                ("shadowsocks", "layers", GATE.EXTERNAL_SS_ENTRY_GROUPS["shadowsocks"]["layers"][0]),)
+                for network, group, expression in selected:
+                    def run():
+                        return subprocess.run([str(binary), "-test.run=" + expression, "-test.v", "-test.timeout=5s"],
+                                              capture_output=True, text=True, timeout=10)
+                    result = run()
+                    output = result.stdout + result.stderr
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        if control:
+                            self.assertEqual(result.returncode, 0, output)
+                            with self.assertRaisesRegex(ValueError, "required native result"):
+                                GATE.report_external_ss_entry(result.returncode, output, network, group)
+                        else:
+                            GATE.report_external_ss_entry(result.returncode, output, network, group)
+                            if network == "shadowsocks" and group == "layers":
+                                duplicate = run()
+                                self.assertEqual(duplicate.returncode, 0, duplicate.stdout + duplicate.stderr)
+                                with self.assertRaisesRegex(ValueError, "required native result"):
+                                    GATE.report_external_ss_entry(0, output + duplicate.stdout + duplicate.stderr, network, group)
+
     def dispatch(self, fault=None):
         calls = []
         def run(command, **kwargs):
@@ -1353,8 +1433,9 @@ class OrdinarySSEntryScope(unittest.TestCase):
             binary = Path(command[0])
             if binary.parent.name == "external-ss-entry":
                 expression = next(value.removeprefix("-test.run=") for value in command if value.startswith("-test.run="))
-                network = next(network for network in GATE.EXTERNAL_SS_ENTRY_NETWORKS if expression.endswith("/^" + network + "$"))
-                required = GATE.EXTERNAL_SS_ENTRY_CASES[network]
+                required = next(required for groups in GATE.EXTERNAL_SS_ENTRY_GROUPS.values() for selected, required in groups.values() if expression == selected)
+                self.assertIn("-test.timeout=180s", command)
+                self.assertEqual(kwargs["timeout"], 195)
                 if fault == "image":
                     binary.write_bytes(b"foreign image")
                 if fault == "leaf":
@@ -1376,8 +1457,11 @@ class OrdinarySSEntryScope(unittest.TestCase):
 
     def test_ss_entry_builds_are_separate_and_all_native_cases_and_controls_execute(self):
         calls = self.dispatch()
-        self.assertEqual([timeout for _, timeout in calls], [600, 195, 195, 195, 195, 600, 75, 600, 75])
+        self.assertEqual([timeout for _, timeout in calls], [600, *([195] * 11), 600, 75, 600, 75])
         self.assertEqual(len({command[0] for command, timeout in calls if timeout == 195}), 1)
+        expressions = [next(value.removeprefix("-test.run=") for value in command if value.startswith("-test.run=")) for command, timeout in calls if timeout == 195]
+        self.assertEqual(expressions, [expression for groups in GATE.EXTERNAL_SS_ENTRY_GROUPS.values() for expression, _ in groups.values()])
+        self.assertEqual(len(expressions), len(set(expressions)))
 
     def test_native_ss_entry_rejects_spoofed_controls_changed_images_and_omitted_results(self):
         for fault, message in (("compile", "compilation failed"), ("image", "native executable changed"), ("leaf", "required native result"),
@@ -1505,6 +1589,7 @@ class NativePhaseOrchestration(unittest.TestCase):
         self.assertEqual(GATE.PHASE_TIMEOUTS["node-controls"] - GATE.PHASE_TIMEOUTS["node-baseline"], 4 * (600 + 105) - 600 - 1215)
         self.assertEqual(GATE.PHASE_TIMEOUTS["external-socks"], 2 * 180 + 90 + 60 + 600 + 315 + 6 * (600 + 75))
         self.assertEqual(GATE.PHASE_TIMEOUTS["external-packet"], 2 * 180 + 90 + 60 + 600 + 2 * 75 + (5 + len(GATE.EXTERNAL_SERVER_GROUPS)) * 195 + 2 * (600 + 4 * 75) + len(GATE.EXTERNAL_LEASE_CONTROLS) * (600 + 75))
+        self.assertEqual(GATE.PHASE_TIMEOUTS["external-ss-entry"], GATE._PHASE_COMMON + 600 + 11 * 195 + 2 * (600 + 75))
 
     def test_builder_calls_complete_phase_orchestrator_without_old_aggregate(self):
         source = (ROOT / "deploy/build-native-runtime.py").read_text()

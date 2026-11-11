@@ -210,6 +210,41 @@ EXTERNAL_SS_ENTRY_LAYER_TRAFFIC_LEAVES = tuple("layers/" + entry + "/" + final f
 EXTERNAL_SS_ENTRY_LAYER_LEAVES = EXTERNAL_SS_ENTRY_LAYER_TRAFFIC_LEAVES + ("receipt-identity", "retired-initial-packet")
 EXTERNAL_SS_ENTRY_CASES = {network: (EXTERNAL_SS_ENTRY_ROOT, EXTERNAL_SS_ENTRY_ROOT + "/" + network,
     *(EXTERNAL_SS_ENTRY_ROOT + "/" + network + "/" + leaf for leaf in EXTERNAL_SS_ENTRY_LEAVES + (EXTERNAL_SS_ENTRY_LAYER_LEAVES if network == "shadowsocks" else EXTERNAL_SS_ENTRY_LAYER_TRAFFIC_LEAVES if network == "hysteria2" else ()) + (("reject/final-trust", "final-wrapper-tcp-denied") if network == "hysteria2" else ()))) for network in EXTERNAL_SS_ENTRY_NETWORKS}
+
+
+def external_ss_entry_groups():
+    # Both native architectures exhausted the network-wide 180s alarm while
+    # starting a new layer child. Keep that bound for each independent group;
+    # every original leaf still runs once, with its own peer and WFP owner.
+    groups = {}
+    for network, cases in EXTERNAL_SS_ENTRY_CASES.items():
+        prefix = EXTERNAL_SS_ENTRY_ROOT + "/" + network
+        leaves = tuple(case.removeprefix(prefix + "/") for case in cases[2:])
+        receipt = ("receipt-identity", "retired-initial-packet")
+        selected = {
+            "lifecycle": tuple(leaf for leaf in leaves if "/" not in leaf and leaf not in receipt),
+            "rejection": tuple(leaf for leaf in leaves if leaf.startswith("reject/")),
+            "layers": tuple(leaf for leaf in leaves if leaf.startswith("layers/")),
+            "receipt": tuple(leaf for leaf in leaves if leaf in receipt),
+        }
+        groups[network] = {}
+        for group, names in selected.items():
+            if not names:
+                continue
+            parts = tuple(name.split("/") for name in names)
+            if len({len(name) for name in parts}) != 1:
+                raise ValueError("SS entry group mixes native subtest depths")
+            expression = "^" + EXTERNAL_SS_ENTRY_ROOT + "$/^" + re.escape(network) + "$/" + "/".join(
+                "^(" + "|".join(dict.fromkeys(re.escape(name[index]) for name in parts)) + ")$"
+                for index in range(len(parts[0])))
+            groups[network][group] = (expression, (EXTERNAL_SS_ENTRY_ROOT, prefix, *(prefix + "/" + name for name in names)))
+        captured = tuple(name for names in selected.values() for name in names)
+        if len(captured) != len(leaves) or len(set(captured)) != len(captured) or set(captured) != set(leaves):
+            raise ValueError("SS entry groups changed the complete native inventory")
+    return groups
+
+
+EXTERNAL_SS_ENTRY_GROUPS = external_ss_entry_groups()
 IPC_CASES = tuple("TestRouterVPNDesktopNodeWindowsWFPLoopbackIPC/" + network
                   for network in ("tcp4", "tcp6", "udp4", "udp6"))
 LOOPBACK_SOURCE = '''\t\tif len(p.fixtureScope) == 0 {
@@ -727,10 +762,11 @@ def execute_external_openvpn(source, workspace, build, captured):
         print("Rejected actual OpenVPN MAC native control: " + label, flush=True)
 
 
-def report_external_ss_entry(status, output, network):
+def report_external_ss_entry(status, output, network, group=None):
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
-    required = EXTERNAL_SS_ENTRY_CASES.get(network, ())
-    if not required or status or any(not exact_native_verdict(output, "PASS", case) for case in required) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
+    required = EXTERNAL_SS_ENTRY_CASES.get(network, ()) if group is None else EXTERNAL_SS_ENTRY_GROUPS.get(network, {}).get(group, (None, ()))[1]
+    observed = re.findall(r"^\s*--- PASS: (\S+) \(", output, re.MULTILINE)
+    if not required or status or set(observed) != set(required) or any(not exact_native_verdict(output, "PASS", case) for case in required) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
         raise ValueError("Ordinary Windows SS entry omitted its required native result: " + network)
 
 
@@ -743,13 +779,12 @@ def execute_external_ss_entry(source, workspace, build, captured):
     if status:
         raise ValueError("Actual ordinary Windows SS entry compilation failed:\n" + output[-32768:])
     digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-    for network in EXTERNAL_SS_ENTRY_NETWORKS:
-        expression = "^" + EXTERNAL_SS_ENTRY_ROOT + "$/^" + network + "$"
-        duration = 180
-        status, output = BOOT.IDENTITY.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"], cwd=source, env=captured, timeout=duration + 15)
-        report_external_ss_entry(status, output, network)
-        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
-            raise ValueError("Actual ordinary SS entry native executable changed")
+    for network, groups in EXTERNAL_SS_ENTRY_GROUPS.items():
+        for group, (expression, _) in groups.items():
+            status, output = BOOT.IDENTITY.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=180s", "-test.v"], cwd=source, env=captured, timeout=195)
+            report_external_ss_entry(status, output, network, group)
+            if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+                raise ValueError("Actual ordinary SS entry native executable changed")
     for label, witness in (
             ("ordinary-udp-deny", "ordinary token bypassed actual external WFP UDP deny: independent peer marker"),
             ("missing-durable-intent", "actual SS entry source skipped its durable WFP intent")):
@@ -803,7 +838,7 @@ PHASES = ("node-baseline", "node-controls", "external-hysteria2", "external-sock
 _PHASE_COMMON = 2 * 180 + 90 + 60
 _PHASE_REFERENCES = 300 + 30 + 600 + 300 + 2 * 1800
 PHASE_TIMEOUTS = {
-    "external-ss-entry": _PHASE_COMMON + 600 + 4 * 195 + 2 * (600 + 75),
+    "external-ss-entry": _PHASE_COMMON + 600 + sum(len(groups) for groups in EXTERNAL_SS_ENTRY_GROUPS.values()) * 195 + 2 * (600 + 75),
     "node-baseline": _PHASE_COMMON + _PHASE_REFERENCES + 600 + 1215,
     "node-controls": _PHASE_COMMON + _PHASE_REFERENCES + 4 * (600 + 105),
     "external-hysteria2": _PHASE_COMMON + 600 + 3 * 195 + 2 * (600 + 75),
