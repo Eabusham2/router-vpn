@@ -119,6 +119,8 @@ public final class NodeChainCaptureHarness {
   reject(()->source.members.clear(),"member list is mutable");reject(()->source.modes.clear(),"mode list is mutable");
   try(AndroidNodeChainCapture capture=AndroidNodeChainCapture.compile(source)){
    JSONObject config=new JSONObject(capture.config),launch=new JSONObject(capture.launchInput);
+   JSONArray identities=launch.getJSONArray("identity_sources");check(identities.length()==source.members.size(),"native capture omitted the complete original identity inventory");
+   reject(()->capture.identityInputs.clear(),"native identity input list is mutable");
    check(config.getJSONArray("inbounds").length()==1&&config.getJSONArray("endpoints").length()==source.members.size()-1,"ordered graph lost one TUN or a captured packet prefix");
    check(launch.getJSONArray("nodes").length()==source.members.size()&&capture.strict,"native compile dropped a member or protection policy");
    if(key.equals("4/fixed-middle"))check(config.getJSONArray("endpoints").getJSONObject(1).getInt("mtu")==1408&&capture.finalProfile().getString("mtu_policy").equals("auto"),"Fixed middle endpoint replaced the final Auto policy");
@@ -126,6 +128,7 @@ public final class NodeChainCaptureHarness {
     JSONObject input=new JSONObject(launch.getJSONArray("nodes").getString(i));JSONObject p=new JSONObject(input.getString("profile_json"));
     check(p.getString("id").equals(source.members.get(i).profileId)&&p.getString("api_token").equals(profile(f.original.get(i)).getString("api_token")),"native capture borrowed another member token or position");
     check(input.getString("mode").equals(source.modes.get(i)),"native capture replaced an exact selected member mode");
+    check(identities.getString(i).equals(source.members.get(i).bundle().getJSONObject("profiles").getJSONObject("wg").toString()),"native capture replaced an original identity asset map");
     if(i<source.members.size()-1){JSONObject endpoint=config.getJSONArray("endpoints").getJSONObject(i);String mode=source.modes.get(i);check(endpoint.getString("type").equals(mode.equals("wg")?"wireguard":"routervpn-amneziawg"),"native capture replaced a selected packet family");
      if(mode.startsWith("awg2-")){check(!peerKey(source.members.get(i).bundle(),"wg").equals(peerKey(source.members.get(i).bundle(),mode)),"AWG fixture failed to distinguish original Router identity from selected packet peer");check(p.getString("node_proof_id").equals(source.members.get(i).proofId),"AWG capture substituted its packet peer for the original Router identity");}}
    }
@@ -324,6 +327,32 @@ public final class NodeChainCaptureHarness {
   JSONObject replacement=f.bundle(1).getJSONObject("profiles").getJSONObject("wg");changed.getJSONObject("profiles").put("wg",replacement);State before=new State(f);
   reject(()->f.replace(0,changed),"ordered source imported a replacement WireGuard identity beside unchanged AWG keys");before.same(f,"separate identity replacement");
  }
+ static void nativeIdentityReceipt(Path root)throws Exception{
+  Fixture f=new Fixture(root,"4/mixed-awg");var original=f.profiles.currentOrderedPath();
+  try(AndroidNodeChainCapture capture=AndroidNodeChainCapture.compile(original)){
+   JSONObject launch=new JSONObject(capture.launchInput);
+   for(String fault:List.of("missing","replaced","reordered","short","bad-final")){
+    JSONObject source=new JSONObject().put("schema",1).put("execution","local").put("nodes",launch.getJSONArray("nodes"));JSONArray identities=new JSONArray(launch.getJSONArray("identity_sources").toString());source.put("identity_sources",identities);
+    if(fault.equals("missing"))source.remove("identity_sources");
+    if(fault.equals("replaced")){JSONObject map=new JSONObject(identities.getString(2));String raw=new String(Base64.getDecoder().decode(map.getString("wg.conf")),StandardCharsets.UTF_8)+"\n# another original identity asset\n";map.put("wg.conf",Base64.getEncoder().encodeToString(raw.getBytes(StandardCharsets.UTF_8)));identities.put(2,map.toString());}
+    if(fault.equals("reordered")){String first=identities.getString(0);identities.put(0,identities.getString(2));identities.put(2,first);}
+    if(fault.equals("short"))source.put("identity_sources",new JSONArray().put(identities.getString(0)));
+    if(fault.equals("bad-final"))identities.put(3,new JSONObject().put("wg.conf",Base64.getEncoder().encodeToString("not a complete original WG source".getBytes(StandardCharsets.UTF_8))).toString());
+    if(fault.equals("missing")||fault.equals("replaced")){
+     io.nekohasekai.libbox.RouterNodeChain changed=io.nekohasekai.libbox.Libbox.newRouterNodeChain(source.toString());
+     try{check(changed.config().equals(capture.config)&&!changed.sourceSHA256().equals(capture.sourceSHA256),"identity inventory changed the selected transport or escaped its native source digest");String record=changed.launchInput();reject(()->{try(AndroidNodeChainCapture replay=AndroidNodeChainCapture.reopen(record,original)){}},"Android accepted a different native identity inventory: "+fault);}finally{changed.close();}
+    }else reject(()->{io.nekohasekai.libbox.RouterNodeChain changed=io.nekohasekai.libbox.Libbox.newRouterNodeChain(source.toString());changed.close();},"native parser accepted a damaged identity inventory: "+fault);
+   }
+  }
+ }
+ static void identityCompilerAdmission(Path root)throws Exception{
+  for(int position:new int[]{0,3}){
+   Fixture f=new Fixture(root,"4/mixed-awg");JSONObject bundle=f.bundle(position),assets=bundle.getJSONObject("profiles").getJSONObject("wg");
+   String raw=new String(Base64.getDecoder().decode(assets.getString("wg.conf")),StandardCharsets.UTF_8);raw=raw.replaceFirst("(?m)^PrivateKey\\s*=.*$","PrivateKey = invalid-original-private-key");assets.put("wg.conf",Base64.getEncoder().encodeToString(raw.getBytes(StandardCharsets.UTF_8)));f.replace(position,bundle);f.nodes.select(f.control().id);
+   var original=f.profiles.currentOrderedPath();reject(()->{try(AndroidNodeChainCapture capture=AndroidNodeChainCapture.compile(original)){}},"Android compiler accepted malformed original identity beside valid selected transport");
+   AndroidOrderedPathSelection draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);State before=new State(f);reject(draft::save,"ordered editor skipped full native identity source validation");before.same(f,"malformed original identity preview");
+  }
+ }
  static void editorMixed(Path root)throws Exception{
   Fixture f=new Fixture(root,"4/mixed-options");f.prefs.edit().putString("multihop_nodes","").putBoolean("multihop_on",false).commit();
   AndroidOrderedPathSelection draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);State before=new State(f);
@@ -391,12 +420,14 @@ public final class NodeChainCaptureHarness {
   if(family.equals("editor-ui")){editorHandlers(root);return;}
   if(family.equals("product-handoff")){productHandoff(root);return;}
   if(family.equals("paired-identity")){pairedIdentity(root);return;}
+  if(family.equals("native-identity")){nativeIdentityReceipt(root);return;}
+  if(family.equals("identity-compiler")){identityCompilerAdmission(root);return;}
   if(family.equals("editor-mixed")){editorMixed(root);return;}
   if(family.equals("editor-mixed-ui")){editorMixedHandlers(root);return;}
   for(String key:List.of("2/","3/","4/","8/","3/aes-256-gcm","4/aes-256-gcm+xor-whitening","4/fixed-middle","2/awg-fast","3/awg-strong","4/mixed-awg","8/mixed-awg"))roundtrip(root,key);
   sourceControls(root);generationControls(root);validationControls(root);compilationRace(root);captureAtomicity(root);
   editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);editorFinalBudget(root);editorHandlers(root);productHandoff(root);
-  pairedIdentity(root);editorMixed(root);editorMixedHandlers(root);
+  pairedIdentity(root);nativeIdentityReceipt(root);identityCompilerAdmission(root);editorMixed(root);editorMixedHandlers(root);
   System.out.println("Android ordered sources: "+checks+" checks; actual Go compilation, exact all-member saved capture and rollback passed");
  }
 }
@@ -476,6 +507,9 @@ def run(root, work, app, classes, jar, env):
     stage = store[stage_start:stage_end]
     assert stage.count("for(int i=0;i<members.length();i++)") == 1
     controls = (
+        ("native-identity", "AndroidNodeChainCapture", capture.replace('record.getJSONArray("identity_sources")', 'record.has("identity_sources")?record.getJSONArray("identity_sources"):new JSONArray(identityInputs)'), "Android accepted a different native identity inventory: missing"),
+        ("native-identity", "AndroidNodeChainCapture", capture.replace('if(!identityInputs.get(i).equals(returnedIdentities.getString(i)))', 'if(false)'), "Android accepted a different native identity inventory: replaced"),
+        ("identity-compiler", "AndroidOrderedPathSelection", editor.replace('.put("identity_sources",identities)', ''), "ordered editor skipped full native identity source validation"),
         ("paired-identity", "AndroidNodeStore", node.replace('source.requirePairedIdentity();', ''), "ordered admission accepted a saved identity label without its original WireGuard asset"),
         ("paired-identity", "AndroidNodeChainCapture", capture.replace('member.requirePairedIdentity();', ''), "ordered compiler preview accepted an unproved saved identity label"),
         ("editor-mixed", "AndroidOrderedPathSelection", editor.replace('members.add(members.size()-1,new Member(source,mode));', 'members.add(members.size()-1,new Member(source,"wg"));'), "editor reordered a node without its exact transport"),

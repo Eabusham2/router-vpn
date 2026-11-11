@@ -18,34 +18,37 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static final String SESSION_FILE = "routervpn-node-chain.json";
     final RouterNodeChain plan;
     final String launchInput, config, sourceSHA256, configSHA256;
-    final List<String> memberInputs;
+    final List<String> memberInputs, identityInputs;
     final boolean strict, homeLANAccess;
     private final AndroidNodeStore.ChainCapture original;
 
     static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture original) throws Exception {
         List<String> inputs = memberInputs(original);
+        List<String> identities = identityInputs(original);
         String source = bounded(new JSONObject().put("schema", 1).put("execution", "local")
-                .put("nodes", new JSONArray(inputs)).toString(), MAX_INPUT);
+                .put("nodes", new JSONArray(inputs)).put("identity_sources",new JSONArray(identities)).toString(), MAX_INPUT);
         RouterNodeChain plan = Libbox.newRouterNodeChain(source);
-        try { return new AndroidNodeChainCapture(original, inputs, plan); }
+        try { return new AndroidNodeChainCapture(original, inputs, identities, plan); }
         catch (Exception failure) { try { plan.close(); } catch (Exception close) { failure.addSuppressed(close); } throw failure; }
     }
 
     static AndroidNodeChainCapture reopen(String input, AndroidNodeStore.ChainCapture original) throws Exception {
         List<String> inputs = memberInputs(original);
+        List<String> identities = identityInputs(original);
         RouterNodeChain plan = Libbox.newRouterNodeChainLaunch(bounded(input, MAX_INPUT));
         try {
-            AndroidNodeChainCapture capture = new AndroidNodeChainCapture(original, inputs, plan);
+            AndroidNodeChainCapture capture = new AndroidNodeChainCapture(original, inputs, identities, plan);
             if (!input.equals(capture.launchInput)) throw new IllegalStateException("The private ordered launch source is not its original canonical capture.");
             return capture;
         } catch (Exception failure) { try { plan.close(); } catch (Exception close) { failure.addSuppressed(close); } throw failure; }
     }
 
-    private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture original, List<String> inputs, RouterNodeChain plan) throws Exception {
+    private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture original, List<String> inputs, List<String> identities, RouterNodeChain plan) throws Exception {
         if (plan == null) throw new IllegalStateException("The native ordered compiler returned no source owner.");
         this.original = original; this.plan = plan;
         if (inputs.size() != original.members.size()) throw new IllegalStateException("The native input omitted an original ordered member.");
         memberInputs = Collections.unmodifiableList(new ArrayList<>(inputs));
+        identityInputs = Collections.unmodifiableList(new ArrayList<>(identities));
         launchInput = bounded(plan.launchInput(), MAX_INPUT);
         config = bounded(plan.config(), 4 * 1024 * 1024);
         sourceSHA256 = plan.sourceSHA256(); configSHA256 = plan.configSHA256();
@@ -61,9 +64,12 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         }
         JSONArray returned = record.getJSONArray("nodes");
         if (returned.length() != memberInputs.size()) throw new IllegalStateException("The native graph omitted an original ordered member.");
+        JSONArray returnedIdentities=record.getJSONArray("identity_sources");
+        if(returnedIdentities.length()!=identityInputs.size()||identityInputs.size()!=memberInputs.size())throw new IllegalStateException("The native graph omitted an original paired identity source.");
         boolean protect = false, lan = true;
         for (int i = 0; i < returned.length(); i++) {
             if (!memberInputs.get(i).equals(returned.getString(i))) throw new IllegalStateException("The native graph reordered or replaced an original member.");
+            if(!identityInputs.get(i).equals(returnedIdentities.getString(i)))throw new IllegalStateException("The native graph reordered or replaced an original paired identity source.");
             JSONObject profile = original.members.get(i).profile();
             String policy = profile.optString("kill_switch_policy", profile.optBoolean("kill_switch", false) ? "on-connect" : "off");
             if (!java.util.Arrays.asList("off", "on-connect", "always").contains(policy)) throw new IllegalStateException("An ordered member has an invalid protection policy.");
@@ -72,6 +78,17 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         }
         strict = protect; homeLANAccess = lan;
         original.requireCurrent();
+    }
+
+    private static List<String> identityInputs(AndroidNodeStore.ChainCapture original) throws Exception {
+        original.requireCurrent();List<String> result=new ArrayList<>();
+        for(AndroidNodeStore.ChainSource member:original.members)result.add(identityInput(member));
+        original.requireCurrent();return result;
+    }
+
+    static String identityInput(AndroidNodeStore.ChainSource member) throws Exception {
+        member.requirePairedIdentity();
+        return bounded(member.bundle().getJSONObject("profiles").getJSONObject("wg").toString(),16*1024*1024);
     }
 
     private static List<String> memberInputs(AndroidNodeStore.ChainCapture original) throws Exception {

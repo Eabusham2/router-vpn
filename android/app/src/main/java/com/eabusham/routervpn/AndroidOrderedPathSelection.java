@@ -130,7 +130,7 @@ final class AndroidOrderedPathSelection {
         if(members.size()<2)throw new IllegalStateException("Add at least one intermediate node before saving.");
         JSONArray references=new JSONArray();
         for(Member member:members)references.put(new JSONObject().put("id",member.source.profileId).put("mode",member.mode));
-        JSONArray inputs=new JSONArray();List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
+        JSONArray inputs=new JSONArray(),identities=new JSONArray();List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
         for(int i=0;i<members.size();i++) {
             Member member=members.get(i);JSONObject profile=member.source.profile();
             if(i==members.size()-1) {
@@ -139,9 +139,10 @@ final class AndroidOrderedPathSelection {
                 AndroidNodeStore.orderedSelection(profile);
             }
             inputs.put(AndroidNodeChainCapture.memberInput(member.source,member.mode,profile));
+            identities.put(AndroidNodeChainCapture.identityInput(member.source));
             sources.add(member.source);modes.add(member.mode);
         }
-        String source=new JSONObject().put("schema",1).put("execution","local").put("nodes",inputs).toString();
+        String source=new JSONObject().put("schema",1).put("execution","local").put("nodes",inputs).put("identity_sources",identities).toString();
         if(source.getBytes(StandardCharsets.UTF_8).length>AndroidNodeChainCapture.MAX_INPUT)throw new IllegalStateException("The complete ordered path exceeds its private source bound.");
         RouterNodeChain preview=Libbox.newRouterNodeChain(source);
         if(preview==null)throw new IllegalStateException("The native compiler returned no complete ordered path.");
