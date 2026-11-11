@@ -129,6 +129,23 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
    let graph=try object(Data(captured.config.utf8)),tun=graph["inbounds"] as! [[String:Any]]
    try check("single original TUN ignores historical effective MTU",tun.count==1 && tun[0]["type"] as? String=="tun" && tun[0]["mtu"] as? Int==1280)
    if count==3 && layer=="off" {
+    let provider:[String:Any]=["engine":"multihop-libbox","mode":"shadowsocks","rawProfileID":"shadowsocks","modeCandidates":["shadowsocks"],"bundle":bundles.last!,IOSNodeChainProviderCapture.key:captured.launchInput]
+    let handed=try IOSNodeChainProviderCapture.reopen(provider);defer{try? handed.plan.close()}
+    try check("private provider reruns exact native source",handed.config==captured.config && handed.sourceSHA256==captured.sourceSHA256)
+    for fault in ["mixed-entry","mixed-strategy","foreign-engine","missing-source","wrong-final-mode","fallback-candidate","stale final assets"] {
+     var changed=provider
+     switch fault {
+     case "mixed-entry":changed["entryBundle"]=bundles[0]
+     case "mixed-strategy":changed["strategy"]="smart"
+     case "foreign-engine":changed["engine"]="libbox"
+     case "missing-source":changed.removeValue(forKey:IOSNodeChainProviderCapture.key)
+     case "wrong-final-mode":changed["rawProfileID"]="wg"
+     case "fallback-candidate":changed["modeCandidates"]=["shadowsocks","wg"]
+     case "stale final assets":changed["bundle"]=try edit(bundles.last!){var assets=$0["profiles"] as! [String:[String:String]];assets["shadowsocks"]!["sing-box.json"]=Data("replacement asset".utf8).base64EncodedString();$0["profiles"]=assets}
+     default:fatalError()
+     }
+     try reject("provider "+fault){_ = try IOSNodeChainProviderCapture.reopen(changed)}
+    }
     var replaced=try profile(bundles.last!);replaced["api_token"]="replacement-final-secret"
     try reject("replaced final control"){_ = try IOSNodeChainCapture.reopen(captured.launchInput,selectedProfile:replaced)}
     for target in ["darwin","linux","windows","ios","android"] {
@@ -184,9 +201,10 @@ def main():
         library = work / ('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(stub), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
         command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSMultihopStartLayer.swift')]
+        provider = APP / 'IOSNodeChainProviderCapture.swift'
         source = APP / 'IOSNodeChainCapture.swift'
         binary = work / 'tests'
-        subprocess.run(command + [str(source), str(tests), '-o', str(binary)], check=True, timeout=90)
+        subprocess.run(command + [str(source), str(provider), str(tests), '-o', str(binary)], check=True, timeout=90)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)
         text = source.read_text()
         for name, before, after, failure in (
@@ -196,10 +214,18 @@ def main():
             assert text.count(before) == 1, name
             mutated = work / (name + '.swift'); mutated.write_text(text.replace(before, after, 1))
             executable = work / name
-            subprocess.run(command + [str(mutated), str(tests), '-o', str(executable)], check=True, timeout=90)
+            subprocess.run(command + [str(mutated), str(provider), str(tests), '-o', str(executable)], check=True, timeout=90)
             failed = subprocess.run([str(executable), str(compiler)], capture_output=True, text=True, timeout=180)
             assert failed.returncode != 0 and failure in failed.stdout + failed.stderr, name + ': missing causal refusal: ' + (failed.stdout + failed.stderr)[-1000:]
             print('Rejected ordered-source defect mutation: ' + name)
+        provider_text=provider.read_text();before='              selectedFiles == originalFiles else {'
+        assert provider_text.count(before)==1
+        changed=work/'ProviderAssetMutation.swift';changed.write_text(provider_text.replace(before,'              true else {',1))
+        executable=work/'provider-assets'
+        subprocess.run(command+[str(source),str(changed),str(tests),'-o',str(executable)],check=True,timeout=90)
+        failed=subprocess.run([str(executable),str(compiler)],capture_output=True,text=True,timeout=180)
+        assert failed.returncode != 0 and 'ACCEPTED provider stale final assets' in failed.stdout+failed.stderr,'Provider assets were not bound to the original compiled source'
+        print('Rejected ordered-source defect mutation: provider-final-assets')
 
 
 if __name__ == '__main__':

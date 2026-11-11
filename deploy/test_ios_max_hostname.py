@@ -312,7 +312,13 @@ class NEPacketTunnelProvider: @unchecked Sendable {
 }
 final class NETunnelProviderProtocol {var providerConfiguration:[String:Any]?;var includeAllNetworks=true,enforceRoutes=true,excludeLocalNetworks=false}
 final class PrestartForwarding {func invalidate(){}}
-final class PrestartEngine {let trace:PrestartTrace;init(_ trace:PrestartTrace){self.trace=trace};func stop(){trace.stopped()};func pause(){};func stopCheckedForStrategy()throws{fatalError("MAX prestart must not fabricate Tor comparison cleanup")}}
+final class PrestartEngine {let trace:PrestartTrace;var ownsNodeChain:Bool{false};init(_ trace:PrestartTrace){self.trace=trace};func stop(){trace.stopped()};func pause(){};func stopCheckedForStrategy()throws{fatalError("MAX prestart must not fabricate Tor comparison cleanup")}}
+typealias RouterVPNLibboxEngine=PrestartEngine
+struct IOSNodeChainCapture {static func issue(_ text:String)->NSError{NSError(domain:"SeparateOrderedSourceBoundary",code:1,userInfo:[NSLocalizedDescriptionKey:text])}}
+enum IOSNodeChainProviderCapture {
+ static func requested(_ provider:[String:Any],profile:[String:Any])->Bool{provider["nodeChainSource"] != nil || profile["multihop_nodes"] != nil}
+ static func reopen(_ provider:[String:Any])throws->IOSNodeChainCapture{throw IOSNodeChainCapture.issue("Ordered source runs in its separate shipping compiler and provider fixture")}
+}
 final class PrestartAdapter {func stop(_ complete:(Error?)->Void){complete(nil)}}
 final class PrestartStrategy {let currentEpoch="test-epoch";func stop(){}}
 final class PrestartDriver {func drain(_ complete:()->Void){complete()}}
@@ -358,6 +364,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
  private func startWireGuard(provider:[String:Any],root:[String:Any],selectedProfile:[String:Any],completionHandler:@escaping(Error?)->Void)throws{try native(provider,completionHandler)}
  private func startLibbox(provider:[String:Any],root:[String:Any],selectedProfile:[String:Any],strict:Bool,completionHandler:@escaping(Error?)->Void)throws{try native(provider,completionHandler)}
  private func startMultihop(provider:[String:Any],root:[String:Any],selectedProfile:[String:Any],completionHandler:@escaping(Error?)->Void)throws{try native(provider,completionHandler)}
+ private func startNodeChain(_ capture:IOSNodeChainCapture,generation:UUID,completionHandler:@escaping(Error?)->Void)throws{throw IOSNodeChainCapture.issue("Ordered startup must not fabricate MAX proof")}
  private func startExternalLibbox(provider:[String:Any],selectedProfile:[String:Any],strict:Bool,completionHandler:@escaping(Error?)->Void)throws{try native(provider,completionHandler)}
  private func beginProviderStrategy(provider:[String:Any],bundleData:Data,root:[String:Any],selectedProfile:[String:Any],strict:Bool,maxSources:[String:String],completionHandler:@escaping(Error?)->Void)throws{throw tunnelError(1,"Strategies execute in their separate actual-driver gate")}
 __PRODUCTION__
@@ -538,7 +545,7 @@ def main():
         run(['swiftc', '-swift-version', '6', '-I', str(work), '-L', str(work), *libraries,
              '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSNativePQProfile.swift'),
               str(APP / 'IOSMultihopStartLayer.swift'), str(APP / 'IOSMultihopExecution.swift'), str(TUN / 'RouterVPNMAXDNSOwner.swift'),
-             str(TUN / 'RouterVPNMAXPreparation.swift'), str(tests), '-o', str(work / 'tests')])
+             str(TUN / 'RouterVPNMAXPreparation.swift'), str(TUN / 'RouterVPNNodeChainStop.swift'), str(tests), '-o', str(work / 'tests')])
         run([str(work / 'tests'), str(work / 'compiler'), str(fixtures), str(multihop)], timeout=150)
 
 

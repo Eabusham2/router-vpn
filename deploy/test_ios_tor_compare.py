@@ -131,6 +131,7 @@ final class EngineBoundary: @unchecked Sendable {
  func values()->([String],Int,Int){lock.lock();defer{lock.unlock()};return(events,maximum,live.count)}
 }
 final class RouterVPNLibboxEngine {
+ var ownsNodeChain:Bool{false}
  let settingsEpoch:String
  let fixture:EngineBoundary
  let index:Int
@@ -175,6 +176,7 @@ final class PacketTunnelProvider: PacketTunnelBase, @unchecked Sendable {
  private let torCompareOwnerLock=NSLock(),pathLock=NSLock()
  private var torCompareOwner:RouterVPNTorCompare?,torCompareGuard:NetworkProofGuard?,torCompareDraining=false
  private var libboxEngine:RouterVPNLibboxEngine?
+ private var nodeChainStop:RouterVPNNodeChainStop?
  private var guardState:NetworkProofGuard?
  private var multihopExecutionSource:IOSMultihopExecution.Source?
  private var initialMTUHold=String(repeating:"d",count:32)
@@ -423,7 +425,7 @@ def main():
         return '\n'.join(member(text, signature) for signature in (
             '    private struct ExternalLibboxInputs {', '    private func currentTorComparison(',
             '    private func torComparisonAvailable(', '    private func beginTorComparison(',
-            '    override func stopTunnel(', '    private func finishOwnedStop(', '    private func finishNativeStop(', '    func isStrategySettings(',
+            '    override func stopTunnel(', '    private func finishOwnedStop(', '    private func finishNativeStop(', '    private func beginNodeChainStop(', '    func isStrategySettings(',
             '    func nativeLibboxSettingsInvalidated('))
     with tempfile.TemporaryDirectory(prefix='ios-tor-compare-') as temporary:
         work = Path(temporary)
@@ -437,7 +439,7 @@ def main():
             args += ['-lCryptoKit']
         test=work/'Tests.swift'; test.write_text(BOUNDARIES.replace(' // SHIPPING_PROVIDER',provider_body(source))+TESTS)
         host=work/'RouterVPNTorCompare.swift'; host.write_text(host_source)
-        command=args+[str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSMultihopExecution.swift'),str(TUN/'RouterVPNSettingsQueue.swift'),str(host),str(test),'-o',str(work/'tests')]
+        command=args+[str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSMultihopExecution.swift'),str(TUN/'RouterVPNSettingsQueue.swift'),str(TUN/'RouterVPNNodeChainStop.swift'),str(host),str(test),'-o',str(work/'tests')]
         subprocess.run(command,check=True,timeout=90)
         subprocess.run([str(work/'tests')],check=True,timeout=45)
         mutations = (

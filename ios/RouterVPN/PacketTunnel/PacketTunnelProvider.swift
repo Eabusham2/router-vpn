@@ -63,6 +63,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var maxStartOwner: RouterVPNMAXStart?
     private var maxStartGeneration = UUID()
     private var maxStartDraining = false
+    private var nodeChainStop: RouterVPNNodeChainStop?
 
     override init() {
         super.init()
@@ -470,7 +471,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             torCompareOwnerLock.unlock()
             guard comparisonAvailable else { throw tunnelError(71, "The previous Tor comparison still owns native cleanup.") }
             maxStartOwnerLock.lock()
-            guard maxStartOwner == nil, !maxStartDraining else { maxStartOwnerLock.unlock(); throw RouterVPNMAXPreparation.issue() }
+            guard maxStartOwner == nil, nodeChainStop == nil, libboxEngine?.ownsNodeChain != true, !maxStartDraining else { maxStartOwnerLock.unlock(); throw RouterVPNMAXPreparation.issue() }
             let generation = UUID(); maxStartGeneration = generation
             maxStartOwnerLock.unlock()
             initialMTUHold = options?["routervpn_mtu_hold"] as? String ?? ""
@@ -493,6 +494,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
             let engine = (provider["engine"] as? String ?? "wireguard").lowercased()
             multihopExecutionSource = nil; restoredMultihopExecution = nil; restoredMultihopIdentityPins = nil
+            if IOSNodeChainProviderCapture.requested(provider, profile: selectedProfile) {
+                guard options?[IOSMultihopExecution.launchKey] == nil,
+                      options?[IOSMultihopExecution.startupLaunchKey] == nil,
+                      currentMAXGeneration(generation) else { throw IOSNodeChainCapture.issue("Ordered Local cannot restore a legacy pair execution receipt.") }
+                let capture = try IOSNodeChainProviderCapture.reopen(provider)
+                try startNodeChain(capture, generation: generation, completionHandler: completionHandler)
+                return
+            }
             if try IOSMultihopExecution.requiresCapture(configuration: provider) {
                 let source = try IOSMultihopExecution.Source(configuration: provider) {
                     SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined()
@@ -928,6 +937,56 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 completionHandler(nil)
             }
         }
+        }
+    }
+
+    /// Reuses the original one-system-TUN native service. The shared plan proves
+    /// every authenticated prefix and the selected DNS through the final path.
+    private func startNodeChain(_ capture: IOSNodeChainCapture, generation: UUID,
+                                completionHandler: @escaping (Error?) -> Void) throws {
+        var adopted = false
+        defer { if !adopted { try? capture.plan.close() } }
+        guard currentMAXGeneration(generation),
+              let proto = protocolConfiguration as? NETunnelProviderProtocol,
+              proto.includeAllNetworks == capture.strict, proto.enforceRoutes == capture.strict,
+              proto.excludeLocalNetworks == (capture.strict && capture.homeLANAccess),
+              let proofID = capture.finalProfile["node_proof_id"] as? String else {
+            throw IOSNodeChainCapture.issue("The ordered native owner lost its captured route policy.")
+        }
+        let profileData = try JSONSerialization.data(withJSONObject: capture.finalProfile, options: [.sortedKeys])
+        let engine = RouterVPNLibboxEngine(tunnel: self)
+        try engine.prepareMTUHold(initialMTUHold)
+        libboxEngine = engine
+        do { try engine.start(nodeChain: capture.plan, strict: capture.strict); adopted = true }
+        catch {
+            engine.stop(); adopted = engine.ownsNodeChain
+            if !adopted, libboxEngine === engine { libboxEngine = nil }; throw error
+        }
+        let chainGuard = self.armNetworkProofGuard()
+        engine.completeNodeChainExecution { [weak self] failure in
+            guard let self, self.libboxEngine === engine, self.currentMAXGeneration(generation) else {
+                engine.stop(); completionHandler(IOSNodeChainCapture.issue("The ordered proof belongs to a retired provider.")); return
+            }
+            if let failure { engine.stop(); completionHandler(failure); return }
+            guard self.currentPathProofGuard() === chainGuard else {
+                engine.stop(); completionHandler(IOSNodeChainCapture.issue("The ordered path changed while proving its nodes.")); return
+            }
+            do {
+                try engine.activatePerformance()
+                guard self.libboxEngine === engine, self.currentMAXGeneration(generation), self.currentPathProofGuard() === chainGuard else {
+                    throw IOSNodeChainCapture.issue("The ordered path changed before MTU adoption.")
+                }
+                try engine.activateNodeChainMTU()
+            }
+            catch { engine.stop(); completionHandler(error); return }
+            guard self.libboxEngine === engine, self.currentMAXGeneration(generation), self.currentPathProofGuard() === chainGuard else {
+                engine.stop(); completionHandler(IOSNodeChainCapture.issue("The ordered path changed during native activation.")); return
+            }
+            self.enableForwarding(profileData: profileData, proofID: proofID, captured: chainGuard)
+            guard self.libboxEngine === engine, self.currentMAXGeneration(generation), self.currentPathProofGuard() === chainGuard else {
+                engine.stop(); completionHandler(IOSNodeChainCapture.issue("The ordered path changed before delivery.")); return
+            }
+            completionHandler(nil)
         }
     }
 
@@ -1578,6 +1637,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         maxStartOwnerLock.lock()
+        if let pending = nodeChainStop {
+            maxStartOwnerLock.unlock(); pending.start(completion: completionHandler); return
+        }
         maxStartGeneration = UUID(); maxStartDraining = true
         let pending = maxStartOwner
         maxStartOwnerLock.unlock()
@@ -1650,6 +1712,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func finishNativeStop(completion: @escaping () -> Void) {
         clearPathProofGuard()
         cancelActiveProof()
+        if let engine = libboxEngine, beginNodeChainStop(engine, completion: completion) { return }
         if let engine = libboxEngine { libboxEngine = nil; engine.stop() }
         strategyOwnerLock.lock(); providerStrategy = nil; strategyDriver = nil; strategyOwnerLock.unlock()
         let finished = { [self] in
@@ -1659,6 +1722,30 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         guard let adapter = wireGuardAdapter else { finished(); return }
         wireGuardAdapter = nil
         adapter.stop { _ in finished() }
+    }
+
+    private func beginNodeChainStop(_ engine: RouterVPNLibboxEngine, completion: @escaping () -> Void) -> Bool {
+        maxStartOwnerLock.lock()
+        if let pending = nodeChainStop {
+            maxStartOwnerLock.unlock(); pending.start(completion: completion); return true
+        }
+        guard engine.ownsNodeChain else { maxStartOwnerLock.unlock(); return false }
+        maxStartDraining = true
+        let generation = maxStartGeneration
+        let delivery = RouterVPNNodeChainStop(owner: engine) { [weak self] in
+            guard let self else { return }
+            self.maxStartOwnerLock.lock()
+            if self.nodeChainStop?.owns(engine) == true, self.maxStartGeneration == generation,
+               self.libboxEngine == nil || self.libboxEngine === engine {
+                self.libboxEngine = nil; self.nodeChainStop = nil
+                self.maxStartOwner = nil; self.maxStartDraining = false
+            }
+            self.maxStartOwnerLock.unlock()
+        }
+        nodeChainStop = delivery
+        maxStartOwnerLock.unlock()
+        delivery.start(completion: completion)
+        return true
     }
 
     override func sleep(completionHandler: @escaping () -> Void) {

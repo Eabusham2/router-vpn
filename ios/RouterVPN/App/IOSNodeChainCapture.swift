@@ -10,6 +10,7 @@ struct IOSNodeChainCapture {
         let id: String
         let mode: String
         let profileJSON: String
+        let filesJSON: String
         let profile: [String: Any]
     }
 
@@ -111,7 +112,8 @@ struct IOSNodeChainCapture {
         var members: [Member] = [], strict = false, lan = true
         for input in nodes {
             let node = try Self.object(Data(input.utf8), maximum: Self.maximumInputBytes)
-            guard let mode = node["mode"] as? String, let profileJSON = node["profile_json"] as? String else {
+            guard let mode = node["mode"] as? String, let profileJSON = node["profile_json"] as? String,
+                  let filesJSON = node["files"] as? String else {
                 throw Self.issue("A complete native member source is missing.")
             }
             let profile = try Self.object(Data(profileJSON.utf8), maximum: 256 * 1024)
@@ -121,7 +123,7 @@ struct IOSNodeChainCapture {
             guard ["off", "on-connect", "always"].contains(policy) else { throw Self.issue("A chain member has an unsupported protection policy.") }
             strict = strict || policy != "off" || (profile["kill_switch"] as? Bool == true)
             lan = lan && (profile["home_lan_access"] as? Bool ?? true)
-            members.append(Member(id: id, mode: mode, profileJSON: profileJSON, profile: profile))
+            members.append(Member(id: id, mode: mode, profileJSON: profileJSON, filesJSON: filesJSON, profile: profile))
         }
         guard let final = members.last,
               let enabled = final.profile["multihop_enabled"] as? NSNumber, CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue,
