@@ -151,6 +151,12 @@ class ProtectedImportedH3Runner(unittest.TestCase):
                 command = [str(v) for v in command]; calls.append((command, Path(cwd), dict(env), timeout))
                 self.assertEqual(env['CGO_ENABLED'], cgo); self.assertEqual(env['SHIPPING_CAPTURE'], 'original')
                 self.assertNotIn('ROUTERVPN_WINDOWS_IMPORTED_H3_PEER', env)
+                if command[0] == 'netsh.exe':
+                    self.assertEqual(command[:4], ['netsh.exe', 'interface', 'ipv4', 'show'])
+                    self.assertIn(command[4], ('dynamicportrange', 'excludedportrange'))
+                    self.assertIn(command[5], ('protocol=tcp', 'protocol=udp'))
+                    self.assertEqual(len(command), 6); self.assertEqual(timeout, 10)
+                    return 0, 'original active Windows port ranges\n'
                 if './internal/mobilemultihop' in command:
                     sources(Path(env['ROUTERVPN_IMPORTED_NAIVE_H3_FIXTURES']))
                     cases = (GATE.SHARED, *(GATE.SHARED + '/' + k + '/' + a + '/' + b for k in GATE.KINDS for a in GATE.LAYERS for b in GATE.LAYERS))
@@ -200,7 +206,7 @@ class ProtectedImportedH3Runner(unittest.TestCase):
                 self.assertEqual(result['source_sha256'], GATE.digest(before)); self.assertEqual(result['verdicts'], list(GATE.REQUIRED))
                 self.assertEqual(overlays, [None, ('captured-original-policy-defect',)])
                 verify.assert_called_once()
-                self.assertEqual(len(calls), 1 + 2 + 1 + len(tuple(GATE.invocations())) + 1)
+                self.assertEqual(len(calls), 4 + 1 + 2 + 1 + len(tuple(GATE.invocations())) + 1)
                 return result
 
     def test_prepared_matching_host_retains_shipping_cgo_and_all_native_calls(self):
@@ -218,6 +224,134 @@ class ProtectedImportedH3Runner(unittest.TestCase):
             self.assertTrue(raw.startswith(GATE.TAG)); self.assertEqual(copies[target], raw)
         self.assertIn('RouterVPNDesktopImportedPreparePhysicalOwned(policy)', (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_test.go.tmpl').read_text())
         self.assertIn('DesktopWindowsNodeCompositionVerifyPrepared(ctx, target)', (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_test.go.tmpl').read_text())
+        pair = (ROOT / 'mobile/desktop/external_box_windows_ss_entry_test.go.tmpl').read_bytes()
+        self.assertTrue(pair.startswith(b'//go:build windows && routervpn_windows_node_composition\n\n'))
+        self.assertEqual(copies['routervpn_desktop_external_box_windows_ss_entry_test.go'], pair)
+
+    def test_port_range_observations_are_bounded_read_only_and_not_authority(self):
+        commands = []
+        def run(command, *, cwd, env, timeout):
+            commands.append(command)
+            self.assertEqual(cwd, ROOT); self.assertEqual(env, ENV); self.assertEqual(timeout, 10)
+            return 1, 'unavailable observation ' + 'x' * 20000
+        with mock.patch.object(GATE.NATIVE.BOOT.IDENTITY, 'run', side_effect=run), mock.patch('builtins.print') as printed:
+            self.assertIsNone(GATE.port_ranges(ROOT, ENV))
+        self.assertEqual(commands, [['netsh.exe', 'interface', 'ipv4', 'show', table, 'protocol=' + protocol]
+                                    for table in ('dynamicportrange', 'excludedportrange') for protocol in ('tcp', 'udp')])
+        self.assertEqual(printed.call_count, 4)
+        for call in printed.call_args_list:
+            self.assertIn('(status=1):', call.args[0]); self.assertLess(len(call.args[0]), 16500)
+
+    def test_original_openvpn_pair_handoff_retains_ownership_and_refuses_races(self):
+        peer = (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_peer_test.go.tmpl').read_text()
+        pair = (ROOT / 'mobile/desktop/external_box_windows_ss_entry_test.go.tmpl').read_text()
+        pair = 'func desktopWFPSSEntryAddressInUse' + pair.split('func desktopWFPSSEntryAddressInUse', 1)[1].split('func desktopExternalWFPStartSSEntryPeer', 1)[0]
+        owner = 'type desktopImportedH3OpenVPNPortOwner' + peer.split('type desktopImportedH3OpenVPNPortOwner', 1)[1].split('func (s *desktopImportedH3Servers) startOpenVPN', 1)[0]
+        caller = peer.split('func (s *desktopImportedH3Servers) startOpenVPN', 1)[1].split('func desktopImportedH3Find', 1)[0]
+        self.assertIn('desktopWFPSSEntryPortPair(netip.MustParseAddr(r.Address), net.Listen)', caller)
+        self.assertNotIn('desktopOpenVPNCompositionPort(', caller)
+        self.assertLess(caller.index('s.closes = append(s.closes, ports)'), caller.index('desktopOpenVPNCompositionProviderBox(s.ctx, graph)'))
+        self.assertLess(caller.index('s.closes = append(s.closes, provider)'), caller.index('ports.start(network, provider.Start)'))
+        self.assertEqual(caller.count('provider.Start'), 1)
+        header = 'package ports\nimport("crypto/rand";"errors";"fmt";"io";"net";"net/netip";"runtime";"syscall")\n'
+        cases = r'''package ports
+import("bytes";"errors";"io";"net";"net/netip";"runtime";"syscall";"testing")
+func originalPair(t *testing.T)*desktopImportedH3OpenVPNPortOwner{
+ t.Helper();tcp,udp,err:=desktopWFPSSEntryPortPair(netip.MustParseAddr("127.0.0.1"),net.Listen)
+ if err!=nil{t.Fatal("original retained pair failed",err)}
+ p:=&desktopImportedH3OpenVPNPortOwner{tcp:tcp,udp:udp,address:tcp.Addr().String()}
+ t.Cleanup(func(){_ = p.Close();_ = tcp.Close();_ = udp.Close()});return p
+}
+func bind(network,address string)(io.Closer,error){if network=="tcp"{return net.Listen("tcp4",address)};return net.ListenPacket("udp4",address)}
+func owned(t *testing.T,network,address string){
+ t.Helper();other,err:=bind(network,address);if other!=nil{_ = other.Close()}
+ if err==nil{t.Fatal("opposite transport released before provider retirement")}
+ if !desktopWFPSSEntryAllocationError(err){t.Fatal("unexpected original port observation",err)}
+}
+func TestOriginalPortHandoff(t *testing.T){
+ for _,network:=range []string{"tcp","udp"}{t.Run(network,func(t *testing.T){
+  p:=originalPair(t);opposite:="udp";if network=="udp"{opposite="tcp"}
+  owned(t,"tcp",p.address);owned(t,"udp",p.address)
+  calls:=0;var service io.Closer
+  err:=p.start(network,func()error{calls++;owned(t,opposite,p.address);var err error;service,err=bind(network,p.address);return err})
+  if service!=nil{defer service.Close()}
+  if err!=nil||calls!=1||service==nil{t.Fatal("provider could not acquire its captured protocol",calls,err)}
+  owned(t,opposite,p.address)
+  if err:=p.start(network,func()error{calls++;return nil});err==nil||calls!=1{t.Fatal("original port handoff repeated",calls,err)}
+  if err:=p.Close();err!=nil{t.Fatal("original opposite owner did not retire",err)}
+  replacement,err:=bind(opposite,p.address);if err!=nil{t.Fatal("retired opposite port leaked",err)};_ = replacement.Close()
+  if err:=p.Close();err!=nil{t.Fatal("original owner close was not idempotent",err)}
+ })}
+}
+func TestOriginalPortCollisionIsNotRetried(t *testing.T){
+ for _,network:=range []string{"tcp","udp"}{t.Run(network,func(t *testing.T){
+  p:=originalPair(t);calls:=0;var competitor io.Closer
+  err:=p.start(network,func()error{calls++;var err error;competitor,err=bind(network,p.address);if err!=nil{return err};second,err:=bind(network,p.address);if second!=nil{_ = second.Close()};return err})
+  if competitor!=nil{defer competitor.Close()}
+  if err==nil||calls!=1||competitor==nil||!desktopWFPSSEntryAllocationError(err){t.Fatal("handoff collision changed or admitted the provider endpoint",calls,err)}
+  if retry:=p.start(network,func()error{calls++;return nil});retry==nil||calls!=1{t.Fatal("handoff collision retried",calls,retry)}
+ })}
+}
+type closeFailure struct{net.Listener;failure error}
+func(p *closeFailure)Close()error{return p.failure}
+func TestOriginalPortRefusesChangedCaptureAndCloseFailure(t *testing.T){
+ for _,fault:=range []string{"network","address","retired","close"}{t.Run(fault,func(t *testing.T){
+  p:=originalPair(t);network:="tcp";calls:=0;actual:=errors.New("original TCP owner refused close")
+  switch fault{case "network":network="unix";case "address":p.address="127.0.0.2:1";case "retired":_ = p.Close();case "close":p.tcp=&closeFailure{p.tcp,actual}}
+  err:=p.start(network,func()error{calls++;return nil})
+  if err==nil||calls!=0{t.Fatal("changed original pair admitted provider",calls,err)}
+  if fault=="close"&&!errors.Is(err,actual){t.Fatal("original close error lost",err)}
+ })}
+}
+func TestPairedCandidatesDiversifyAndKeepNarrowErrors(t *testing.T){
+ candidates,err:=desktopWFPSSEntryPortCandidates(true,bytes.NewReader([]byte{255,255,255,255}))
+ if err!=nil||candidates!=[3]uint16{49151,49150,49149}{t.Fatal("Windows candidates did not remain distinct outside the default dynamic range",candidates,err)}
+ if _,err:=desktopWFPSSEntryPortCandidates(true,nil);err==nil{t.Fatal("missing original candidate entropy accepted")}
+ allowed:=[]error{syscall.EADDRINUSE};rejected:=[]error{syscall.EACCES,syscall.EINVAL,errors.New("unrelated socket failure")}
+ if runtime.GOOS=="windows"{allowed=[]error{syscall.Errno(10048),syscall.Errno(10013)};rejected=append(rejected,syscall.EADDRINUSE)}
+ for _,cause:=range allowed{
+  calls:=0;tcp,udp,err:=desktopWFPSSEntryPortPairCandidates(netip.MustParseAddr("127.0.0.1"),candidates,
+   func(string,string)(net.PacketConn,error){calls++;return nil,cause},net.Listen)
+  if err==nil||tcp!=nil||udp!=nil||calls!=3||!errors.Is(err,cause){t.Fatal("candidate failure changed bounded original allocation",calls,err)}
+ }
+ for _,cause:=range rejected{
+  calls:=0;tcp,udp,err:=desktopWFPSSEntryPortPairCandidates(netip.MustParseAddr("127.0.0.1"),candidates,
+   func(string,string)(net.PacketConn,error){calls++;return nil,cause},net.Listen)
+  if !errors.Is(err,cause)||tcp!=nil||udp!=nil||calls!=1{t.Fatal("unrelated socket refusal was retried or lost",calls,err)}
+ }
+}
+func TestPairedAllocationKeepsUDPThroughTCPAndRetiresFailures(t *testing.T){
+ calls:=0;var addresses []string
+ tcp,udp,err:=desktopWFPSSEntryPortPair(netip.MustParseAddr("127.0.0.1"),func(network,address string)(net.Listener,error){
+  calls++;addresses=append(addresses,address);owned(t,"udp",address)
+  if calls==1{if runtime.GOOS=="windows"{return nil,syscall.Errno(10048)};return nil,syscall.EADDRINUSE};return net.Listen(network,address)
+ })
+ if err!=nil||tcp==nil||udp==nil||calls!=2{t.Fatal("paired candidate lost original UDP or bounded retry",calls,err)}
+ _ = tcp.Close();_ = udp.Close()
+ for _,address:=range addresses{replacement,err:=net.ListenPacket("udp4",address);if err!=nil{t.Fatal("failed or retired original UDP candidate leaked",err)};_ = replacement.Close()}
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='routervpn-h3-port-owner-') as directory:
+            work = Path(directory)
+            (work / 'go.mod').write_text('module routervpn-h3-port-owner\n\ngo 1.26.3\n')
+            target = work / 'ports.go'
+            target.write_text(header + pair + owner)
+            (work / 'ports_test.go').write_text(cases)
+            command = [shutil.which('go') or 'go', 'test', '-count=1', '-timeout=10s', '.']
+            result = subprocess.run(command, cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            mutations = (
+                (owner.replace('if err := p.tcp.Close(); err != nil {', 'if err := error(nil); err != nil {', 1),
+                 '^TestOriginalPortHandoff$/^tcp$', 'provider could not acquire its captured protocol'),
+                (owner.replace('return start()', '_ = p.Close()\n\treturn start()', 1),
+                 '^TestOriginalPortHandoff$', 'opposite transport released before provider retirement'),
+            )
+            for changed, selected, witness in mutations:
+                self.assertNotEqual(changed, owner)
+                target.write_text(header + pair + changed)
+                result = subprocess.run(command + ['-run', selected], cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(witness, result.stdout); self.assertNotIn('panic:', result.stdout)
 
     def test_original_failed_peer_keeps_bounded_diagnostics_without_accepting_them(self):
         source = (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_test.go.tmpl').read_text()

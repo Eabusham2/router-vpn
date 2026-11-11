@@ -145,6 +145,17 @@ def invocations():
         yield '^' + root + '$', (root, *(root + '/' + value for value in children)), 180
 
 
+def port_ranges(source, env):
+    # Evidence only: availability is still established by the retained native
+    # listeners. Never change a host range, retry a provider, or infer a grant
+    # from netsh output. Both transports can have different active exclusions.
+    for table in ('dynamicportrange', 'excludedportrange'):
+        for protocol in ('tcp', 'udp'):
+            command = ['netsh.exe', 'interface', 'ipv4', 'show', table, 'protocol=' + protocol]
+            status, output = NATIVE.BOOT.IDENTITY.run(command, cwd=source, env=env, timeout=10)
+            print('Original Windows IPv4 ' + protocol + ' ' + table + ' (status=' + str(status) + '):\n' + output[:16384], flush=True)
+
+
 def execute(source, go='go', *, prospective=False, env=None, bootstrap_only=False):
     if prospective or platform.system() != 'Windows' or not NATIVE.BOOT.IDENTITY.ctypes.windll.shell32.IsUserAnAdmin():
         raise ValueError('Protected imported H3 requires actual elevated native Windows execution')
@@ -159,6 +170,7 @@ def execute(source, go='go', *, prospective=False, env=None, bootstrap_only=Fals
     tags = NATIVE.TAGS if bootstrap_only else (*BUILD.tags('windows/' + architecture), 'routervpn_windows_node_composition')
     for name in ('ROUTERVPN_WINDOWS_IMPORTED_H3_PEER', 'ROUTERVPN_EXTERNAL_WFP_PEER', 'ROUTERVPN_NODE_WFP_REFERENCE_CHILD'):
         captured.pop(name, None)
+    port_ranges(source, captured)
     with tempfile.TemporaryDirectory(prefix='routervpn-imported-h3-wfp-') as temporary:
         work = Path(temporary)
         sources = work / 'source-captures'; sources.mkdir()

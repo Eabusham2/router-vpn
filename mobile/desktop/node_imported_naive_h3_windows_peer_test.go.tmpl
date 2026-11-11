@@ -629,13 +629,60 @@ func (s *desktopImportedH3Servers) startHY2(t *testing.T, peer *desktopExternalI
 	return packet.LocalAddr().String()
 }
 
+// The original paired listeners remain owned through provider construction.
+// Only the selected transport is released immediately before the real Box
+// binds it. The opposite transport stays reserved until this peer retires;
+// a bind race at the one required handoff is an error, never a new endpoint.
+type desktopImportedH3OpenVPNPortOwner struct {
+	tcp      net.Listener
+	udp      net.PacketConn
+	address  string
+	released bool
+}
+
+func (p *desktopImportedH3OpenVPNPortOwner) start(network string, start func() error) error {
+	if p.released || p.tcp == nil || p.udp == nil || start == nil || (network != "tcp" && network != "udp") ||
+		p.tcp.Addr() == nil || p.udp.LocalAddr() == nil || p.tcp.Addr().String() != p.address || p.udp.LocalAddr().String() != p.address {
+		return errors.New("imported H3 OpenVPN lost its original paired port owners")
+	}
+	p.released = true
+	if network == "tcp" {
+		if err := p.tcp.Close(); err != nil {
+			return fmt.Errorf("imported H3 OpenVPN TCP port handoff: %w", err)
+		}
+		p.tcp = nil
+	} else {
+		if err := p.udp.Close(); err != nil {
+			return fmt.Errorf("imported H3 OpenVPN UDP port handoff: %w", err)
+		}
+		p.udp = nil
+	}
+	return start()
+}
+
+func (p *desktopImportedH3OpenVPNPortOwner) Close() error {
+	var err error
+	if p.tcp != nil {
+		err = p.tcp.Close()
+		p.tcp = nil
+	}
+	if p.udp != nil {
+		err = errors.Join(err, p.udp.Close())
+		p.udp = nil
+	}
+	return err
+}
+
 func (s *desktopImportedH3Servers) startOpenVPN(t *testing.T, r desktopImportedH3PeerRequest, routes []desktopImportedH3Route, public string) (nativeopenvpn.Profile, string) {
 	t.Helper()
 	pki := desktopOpenVPNCompositionCertificates(t)
-	port, e := desktopOpenVPNCompositionPort(r.Address, map[int]bool{})
+	listener, packet, e := desktopWFPSSEntryPortPair(netip.MustParseAddr(r.Address), net.Listen)
 	if e != nil {
-		t.Fatal(e)
+		t.Fatal("imported H3 OpenVPN retained TCP/UDP pair", e)
 	}
+	ports := &desktopImportedH3OpenVPNPortOwner{tcp: listener, udp: packet, address: listener.Addr().String()}
+	s.closes = append(s.closes, ports)
+	port := int(netip.MustParseAddrPort(ports.address).Port())
 	rules := []any{}
 	for _, route := range append(append([]desktopImportedH3Route(nil), routes...), desktopImportedH3Route{"tcp", "1.1.1.1:443", public}) {
 		original := netip.MustParseAddrPort(route.destination)
@@ -650,7 +697,7 @@ func (s *desktopImportedH3Servers) startOpenVPN(t *testing.T, r desktopImportedH
 		t.Fatal(e)
 	}
 	s.closes = append(s.closes, provider)
-	if e = provider.Start(); e != nil {
+	if e = ports.start(network, provider.Start); e != nil {
 		t.Fatal("actual captured imported H3 OpenVPN provider failed", e)
 	}
 	profile := desktopOpenVPNCompositionProfile(pki, []nativeopenvpn.Remote{{Host: r.Address, Port: port, Network: network}}, "tls-auth", "")
