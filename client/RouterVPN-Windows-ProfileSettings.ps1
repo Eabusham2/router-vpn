@@ -1,4 +1,4 @@
-# Inspect loaded functions without discovering/importing unrelated modules.
+﻿# Inspect loaded functions without discovering/importing unrelated modules.
 # A missing UI-state function otherwise makes cold Get-Command scan the host.
 if($null-eq${function:New-RouterVPNControllerClient}){
     Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
@@ -288,13 +288,17 @@ function global:New-RouterVPNOrderedConnectPayload {
     if($control-cne[string](Get-RouterVPNOrderedValue $Store 'selected_id')){throw 'The selected exit changed. Reopen the ordered path editor.'}
     $nodes=@(Copy-RouterVPNOrderedNodes (Get-RouterVPNOrderedValue $Draft 'nodes') $control)
     $profiles=@(Get-RouterVPNOrderedValue $Store 'profiles' @())
+    $expected=Get-RouterVPNOrderedValue $Draft 'profile_tokens';$tokens=@{}
     foreach($node in $nodes){
-        $matches=@($profiles|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$node.id})
-        if($matches.Count-ne1-or[string](Get-RouterVPNOrderedValue $matches[0] 'node_kind' '')-cnotin@('','router-vpn')){throw 'An ordered node is missing or is no longer a linked Router VPN node.'}
+        $matchingProfiles=@($profiles|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$node.id})
+        if($matchingProfiles.Count-ne1-or[string](Get-RouterVPNOrderedValue $matchingProfiles[0] 'node_kind' '')-cnotin@('','router-vpn')){throw 'An ordered node is missing or is no longer a linked Router VPN node.'}
+        $token=Get-RouterVPNOrderedValue $expected $node.id
+        if($token-isnot[string]-or$token-cnotmatch'\A[0-9a-f]{64}\z'-or[string](Get-RouterVPNOrderedValue $matchingProfiles[0] 'profile_token')-cne$token){throw 'An ordered node changed or was relinked. Reopen its editor before connecting.'}
+        $tokens[$node.id]=$token
     }
     # Only references cross this UI boundary. Every private source is captured
     # independently by the original native controller before it owns a tunnel.
-    return @{nodes=$nodes;execution='local'}
+    return @{nodes=$nodes;execution='local';expected_selected_node_id=$control;expected_profile_tokens=$tokens}
 }
 
 function global:Get-RouterVPNOrderedConnectionSnapshot {
@@ -320,7 +324,9 @@ function global:Set-RouterVPNLoadedOrderedSnapshot {
         if(-not[bool](Get-RouterVPNOrderedValue $Loaded 'multihop_enabled' $false)-or[string](Get-RouterVPNOrderedValue $Loaded 'multihop_execution')-cne'local'){throw 'The loaded ordered path has an invalid execution choice.'}
         foreach($key in @('multihop_entry_id','multihop_exit_id','multihop_entry_mode','multihop_exit_mode')){if([string](Get-RouterVPNOrderedValue $Loaded $key)){throw 'The loaded profile mixes an ordered path with another entry or exit.'}}
         if($null-eq$toggle-or$null-eq$button){throw 'This window cannot display the complete loaded ordered path.'}
-        $button.Tag=[pscustomobject]@{control_id=$id;nodes=$nodes}
+        $rawTokens=Get-RouterVPNOrderedValue $Loaded 'profile_tokens';$tokens=@{}
+        foreach($node in $nodes){$token=Get-RouterVPNOrderedValue $rawTokens $node.id;if($token-isnot[string]-or$token-cnotmatch'\A[0-9a-f]{64}\z'){throw 'The loaded ordered path is missing a captured node source.'};$tokens[$node.id]=$token}
+        $button.Tag=[pscustomobject]@{control_id=$id;nodes=$nodes;profile_tokens=$tokens}
         $toggle.IsChecked=$true
     }else{
         if($null-ne$button){$button.Tag=$null};if($null-ne$toggle){$toggle.IsChecked=$false}

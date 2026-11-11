@@ -53,6 +53,7 @@ fileprivate struct MacCustomPreset: Codable, Equatable {
 private enum UnifiedHopRole {
     case selected
     case entry
+    case hop
     case exit
     case external
     case normal
@@ -355,6 +356,12 @@ extension ProductWindowController {
         multihopRow.addArrangedSubview(multihopToggle); multihopRow.addArrangedSubview(multihopEntryPopup); multihopRow.addArrangedSubview(NSTextField(labelWithString: "→")); multihopRow.addArrangedSubview(multihopExitPopup); multihopRow.addArrangedSubview(multihopExitModePopup)
         let editHops = NSButton(title: "Details", target: self, action: #selector(openUnifiedMultihop)); editHops.bezelStyle = .rounded; multihopRow.addArrangedSubview(editHops); controls.addArrangedSubview(multihopRow)
 
+        let orderedRow = unifiedLabeledRow(title: "Order")
+        orderedRow.addArrangedSubview(NSButton(title: "Edit ordered path…", target: self, action: #selector(openOrderedNodeEditor)))
+        orderedRow.addArrangedSubview(NSButton(title: "Use entry / exit pair", target: self, action: #selector(useOrderedNodePair)))
+        controls.addArrangedSubview(orderedRow)
+        let orderedSummary = NSTextField(wrappingLabelWithString: "Entry / exit pair"); orderedSummary.identifier = NSUserInterfaceItemIdentifier("unified-ordered-summary"); orderedSummary.textColor = .secondaryLabelColor; controls.addArrangedSubview(orderedSummary)
+
         configureMultihopExecution()
         let entryModeRow = unifiedLabeledRow(title: "Entry mode")
         entryModeRow.addArrangedSubview(multihopEntryModePopup); controls.addArrangedSubview(entryModeRow)
@@ -376,7 +383,7 @@ extension ProductWindowController {
 
         let compactMode = NSPopUpButton(frame: .zero, pullsDown: false); compactMode.identifier = NSUserInterfaceItemIdentifier("unified-mode-popup"); compactMode.target = self; compactMode.action = #selector(unifiedModeChanged(_:))
         let modeRow = unifiedLabeledRow(title: "Mode"); modeRow.addArrangedSubview(compactMode)
-        let modeDetails = NSButton(title: "Presets", target: self, action: #selector(openUnifiedModes)); modeDetails.bezelStyle = .rounded; modeRow.addArrangedSubview(modeDetails); controls.addArrangedSubview(modeRow)
+        let modeDetails = NSButton(title: "Presets", target: self, action: #selector(openUnifiedModes)); modeDetails.identifier = NSUserInterfaceItemIdentifier("unified-mode-details"); modeDetails.bezelStyle = .rounded; modeRow.addArrangedSubview(modeDetails); controls.addArrangedSubview(modeRow)
 
         let compactDNS = NSPopUpButton(frame: .zero, pullsDown: false); compactDNS.identifier = NSUserInterfaceItemIdentifier("unified-dns-popup"); compactDNS.addItems(withTitles: ["Home AdGuard", "Fastest measured", "Custom", "DoT", "DoH", "DoH3", "Rescue"]); compactDNS.target = self; compactDNS.action = #selector(unifiedDNSChanged(_:))
         let dnsRow = unifiedLabeledRow(title: "DNS"); dnsRow.addArrangedSubview(compactDNS)
@@ -536,6 +543,33 @@ extension ProductWindowController {
         presentUnifiedDetail(title: "Multihop", view: content, width: 760, height: 520)
     }
 
+    @objc func openOrderedNodeEditor() {
+        do {
+            let controller = RouterVPNOrderedNodeEditor(owner: self, draft: try makeOrderedNodeDraft())
+            retainUnifiedController(controller); controller.showWindow(nil); controller.window?.center(); controller.window?.makeKeyAndOrderFront(nil)
+        } catch { appendHelp(error.localizedDescription) }
+    }
+
+    @objc func useOrderedNodePair() {
+        do { try clearOrderedNodeDraft(); refreshUnifiedChrome() }
+        catch { appendHelp(error.localizedDescription) }
+    }
+
+    func refreshOrderedNodePresentation(busy: Bool) {
+        let selection = captureConnectionProfileSelection()
+        let ordered = selection.multihopEnabled && !selection.orderedNodes.isEmpty
+        if let summary = findUnifiedView("unified-ordered-summary") as? NSTextField {
+            summary.stringValue = selection.orderedNodes.isEmpty ? "Entry / exit pair" :
+                (ordered ? "Local ordered path: " : "Saved ordered path (Multihop off): ") + selection.orderedNodes.enumerated().map { index, row in
+                    let id = row["id"] ?? "", name = profiles.first(where: { $0["id"] as? String == id })?["name"] as? String ?? id
+                    return "\(index + 1). \(name) · \(row["mode"] == "wg" ? "WG" : "Shadowsocks")"
+                }.joined(separator: " → ")
+        }
+        for popup in [multihopEntryPopup, multihopExitPopup, multihopEntryModePopup, multihopExitModePopup, multihopExecutionPopup, basePopup] { popup.isEnabled = !ordered && !busy }
+        if let popup = findUnifiedView("unified-mode-popup") as? NSPopUpButton { popup.isHidden = ordered }
+        if let details = findUnifiedView("unified-mode-details") as? NSButton { details.isEnabled = !ordered && !busy }
+    }
+
     @objc func openUnifiedSettings() { editProfileSettings() }
     @objc func openUnifiedForwarding() { presentUnifiedDetail(title: "Port forwarding / Protected DMZ", view: forwardingView(), width: 760, height: 580) }
 
@@ -611,6 +645,7 @@ extension ProductWindowController {
                     if let popup = self.findUnifiedView("unified-dns-popup") as? NSPopUpButton, let mode = profile["dns_mode"] as? String, let index = self.dnsModeIDs.firstIndex(of: mode) { popup.selectItem(at: index) }
                 }
                 self.refreshUnifiedHopOverlay()
+                self.refreshOrderedNodePresentation(busy: self.mutationBusy(from: status))
             }
         }
     }
@@ -623,6 +658,12 @@ extension ProductWindowController {
 
     private func hopRole(for id: String) -> UnifiedHopRole {
         if UserDefaults.standard.bool(forKey: unifiedMultihopEnabledKey) {
+            let ordered = captureConnectionProfileSelection().orderedNodes.compactMap { $0["id"] }
+            if !ordered.isEmpty {
+                if ordered.first == id { return .entry }
+                if ordered.last == id { return .exit }
+                if ordered.contains(id) { return .hop }
+            }
             let entryIndex = multihopEntryPopup.indexOfSelectedItem, exitIndex = multihopExitPopup.indexOfSelectedItem
             if entryIndex >= 0 && entryIndex < multihopNodeIDs.count && multihopNodeIDs[entryIndex] == id { return .entry }
             if exitIndex >= 0 && exitIndex < multihopNodeIDs.count && multihopNodeIDs[exitIndex] == id { return .exit }
@@ -634,13 +675,27 @@ extension ProductWindowController {
     }
 
     private func color(for role: UnifiedHopRole) -> NSColor {
-        switch role { case .selected: return .systemPurple; case .entry: return .systemBlue; case .exit: return .systemOrange; case .external: return .systemPink; case .normal: return .systemTeal }
+        switch role { case .selected: return .systemPurple; case .entry: return .systemBlue; case .hop: return .systemGreen; case .exit: return .systemOrange; case .external: return .systemPink; case .normal: return .systemTeal }
     }
 
     func refreshUnifiedHopOverlay() {
         RouterVPNVectorMap.clearRoutes(on: map)
         for annotation in map.annotations.compactMap({ $0 as? RouterAnnotation }) { if let view = map.view(for: annotation) as? MKMarkerAnnotationView { view.markerTintColor = color(for: hopRole(for: annotation.routerID)) } }
         guard UserDefaults.standard.bool(forKey: unifiedMultihopEnabledKey) else { return }
+        let ordered = captureConnectionProfileSelection().orderedNodes.compactMap { $0["id"] }
+        if !ordered.isEmpty {
+            for (first, second) in zip(ordered, ordered.dropFirst()) {
+                let coordinates: [CLLocationCoordinate2D] = [first, second].compactMap { id in
+                    guard let profile = profiles.first(where: { $0["id"] as? String == id }),
+                          let lat = (profile["latitude"] as? NSNumber)?.doubleValue,
+                          let lon = (profile["longitude"] as? NSNumber)?.doubleValue else { return nil }
+                    let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                    return CLLocationCoordinate2DIsValid(coordinate) && !(lat == 0 && lon == 0) ? coordinate : nil
+                }
+                if coordinates.count == 2 { map.addOverlays(RouterVPNVectorMap.routes(from: coordinates[0], to: coordinates[1]), level: .aboveLabels) }
+            }
+            return
+        }
         let entryIndex = multihopEntryPopup.indexOfSelectedItem, exitIndex = multihopExitPopup.indexOfSelectedItem
         guard entryIndex >= 0, exitIndex >= 0, entryIndex < multihopNodeIDs.count, exitIndex < multihopNodeIDs.count else { return }
         let ids = [multihopNodeIDs[entryIndex], multihopNodeIDs[exitIndex]]

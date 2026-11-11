@@ -550,6 +550,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     @objc func connectSelected() { let i = modePopup.indexOfSelectedItem; guard i >= 0 && i < modeIDs.count else { return }; let mode = modeIDs[i]; let base = ["auto", "wg", "awg"][max(0, min(basePopup.indexOfSelectedItem, 2))]; asyncAction { String(data: try self.api.request("/api/connect-logical", method: "POST", body: ["mode": mode, "base": base], timeout: 180), encoding: .utf8) ?? "Connected" } }
     @objc func connectMultihop() {
         do { try requireResolvedConnectionProfileSelection() } catch { appendHelp(error.localizedDescription); return }
+        if connectOrderedMultihopIfSelected() { return }
         let ei = multihopEntryPopup.indexOfSelectedItem; let xi = multihopExitPopup.indexOfSelectedItem
         guard ei >= 0, xi >= 0, ei < multihopNodeIDs.count, xi < multihopNodeIDs.count else { appendHelp("Choose both multihop nodes."); return }
         let entryID = multihopNodeIDs[ei], exitID = multihopNodeIDs[xi]

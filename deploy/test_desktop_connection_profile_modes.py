@@ -49,9 +49,9 @@ def run(command, *, negative=False):
 def windows(shell):
     command = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                str(ROOT / "client/test-windows-connection-profile-modes.ps1")]
-    for mutation in ("shipping", "capture-two-modes", "load-fallback", "connect-fallback", "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback", "startup-deadline", "ordered-drop-middle", "ordered-final-owner", "ordered-capability"):
+    for mutation in ("shipping", "capture-two-modes", "load-fallback", "connect-fallback", "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback", "startup-deadline", "ordered-drop-middle", "ordered-final-owner", "ordered-capability", "ordered-source", "ordered-locked-source"):
         run(command + ["-Mutation", mutation], negative=mutation != "shipping")
-    print("WPF pair and ordered capture, load/Connect, capability and startup deadline negatives: 10 rejected")
+    print("WPF pair and ordered capture, load/Connect, capability and startup deadline and all-source negatives: 12 rejected")
     editor = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
               str(ROOT / "client/test-windows-ordered-editor.ps1")]
     if os.name == "nt":
@@ -75,6 +75,7 @@ import CoreFoundation
     static func global(qos: QoS) -> DispatchQueue { background }
     var pending: [() -> Void] = []
     func async(execute: @escaping () -> Void) { pending.append(execute) }
+    func sync<T>(execute: () -> T) -> T { execute() }
     func run(_ index: Int = 0) { check(pending.indices.contains(index), "missing deferred shipping callback"); pending.remove(at: index)() }
     static func clear() { main.pending = []; background.pending = [] }
 }
@@ -94,8 +95,13 @@ import CoreFoundation
     var failLoad = false, malformedLoad = false
     var afterLoad: (() -> Void)?
     var nodeReplies: [[String: Any]] = [], hopReplies: [[String: Any]] = []
+    var orderedCapabilities: [String: Any] = ["ordered_nodes_supported": true]
+    var orderedCurrent: [String: Any] = [:]
+    var afterOrderedSnapshot: (() -> Void)?
     func json(_ path: String, timeout: TimeInterval = 5) throws -> Any {
         if path == "/api/status" { return ["connected": busy, "phase": busy ? "connected" : "off"] }
+        if path == "/api/multihop/status" { return orderedCapabilities }
+        if path == "/api/profiles" { let captured = orderedCurrent; afterOrderedSnapshot?(); return captured }
         check(path.hasPrefix("/api/nodes?sort=") && !nodeReplies.isEmpty, "unexpected node catalog request")
         return nodeReplies.removeFirst()
     }
@@ -349,7 +355,141 @@ check(disabled["multihop_enabled"] as? Bool == false && disabled["multihop_exit_
 let disabledSettings = try settings.currentMultihopSnapshot()
 check(!disabledSettings.enabled && disabledSettings.entry.isEmpty && disabledSettings.exit.isEmpty && disabledSettings.exitMode.isEmpty && disabledSettings.execution.isEmpty, "disabled Settings graph retained another graph")
 RACE_TESTS
+ORDERED_TESTS
 print("Actual AppKit profiles, deferred catalogs and Settings Add/Load/Update callbacks: \(checks) checks PASS")
+'''
+
+SWIFT_ORDERED = r'''
+@MainActor func chooseOrdered(_ count: Int = 4) -> [[String: String]] {
+    choose(0, 0)
+    let ids = (0..<count).map { "ordered-\($0)" }
+    let tokens = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, String(format: "%064x", $0.offset + 1)) })
+    let rows = ids.enumerated().map { ["id": $0.element, "mode": $0.offset == count - 1 ? "shadowsocks" : "wg"] }
+    owner.routerIDs = ids; owner.profiles = catalogRows(ids, tokens: tokens); owner.routerPopup.selectItem(at: count - 1)
+    owner.connectionProfileCatalogSelectedID = ids.last!
+    owner.multihopEntryPopup.selectItem(at: -1); owner.multihopExitPopup.selectItem(at: -1)
+    owner.connectionProfileSelection = RouterVPNConnectionProfileSelection(selectedNodeID: ids.last!, multihopEnabled: true,
+        entryMode: "", execution: "local", profileTokens: tokens, orderedNodes: rows)
+    owner.api.orderedCurrent = ["selected_id": ids.last!, "profiles": owner.profiles]
+    owner.api.orderedCapabilities = ["ordered_nodes_supported": true]; owner.api.afterOrderedSnapshot = nil
+    return rows
+}
+@MainActor func verifyOrderedSnapshot(_ body: [String: Any], rows: [[String: String]], updating: Bool) {
+    var keys = Set(["name", "mode", "custom_layers", "multihop_enabled", "multihop_nodes", "multihop_execution"])
+    if updating { keys.insert("id") }
+    check(Set(body.keys) == keys, "ordered save mixed pair fields or private credentials")
+    check(body["multihop_nodes"] as? [[String: String]] == rows, "ordered save dropped, substituted or reordered a member")
+    check(body["mode"] as? String == "shadowsocks" && body["custom_layers"] as? [String] == [], "ordered save retained unrelated mode or layers")
+    check(body["multihop_enabled"] as? Bool == true && body["multihop_execution"] as? String == "local", "ordered save lost exact execution")
+}
+for length in [2, 3, 4, 8] {
+    let rows = chooseOrdered(length)
+    let selection = owner.captureConnectionProfileSelection()
+    for updating in [false, true] {
+        let snapshot = try owner.connectionProfileSnapshot(name: "Complete ordered path", id: updating ? "saved-profile" : nil)
+        verifyOrderedSnapshot(snapshot, rows: rows, updating: updating)
+        _ = try settings.write(path: updating ? "/api/connection-profile/setup/update" : "/api/connection-profile/setup/save", updating: updating)
+        verifyOrderedSnapshot(settings.api.calls.last!.body, rows: rows, updating: updating)
+        var payload = snapshot
+        payload["profile"] = ["name": "Loaded ordered path"]; payload["selected_node_id"] = selection.selectedNodeID; payload["profile_tokens"] = selection.profileTokens
+        owner.connectionProfileSelection?.orderedNodes = []
+        try owner.applyLoadedConnectionProfile(payload)
+        check(owner.captureConnectionProfileSelection().orderedNodes == rows, "manager Load lost a middle node")
+        owner.connectionProfileSelection?.orderedNodes = []
+        try settings.applyLoadedMultihop(payload)
+        check(owner.captureConnectionProfileSelection().orderedNodes == rows, "Settings Load lost a middle node")
+    }
+    DispatchQueue.clear()
+    let before = owner.api.calls.count, capturedProgress = owner.multihopProgressGeneration
+    owner.connectMultihop(); check(owner.api.calls.count == before, "ordered Connect did not defer its captured request")
+    DispatchQueue.background.run()
+    check(owner.api.calls.count == before + 1, "ordered Connect never reached the real controller endpoint")
+    let request = owner.api.calls.last!
+    check(request.path == "/api/multihop/connect" && request.timeout == 180, "ordered Connect used the wrong endpoint or deadline")
+    check(Set(request.body.keys) == Set(["nodes", "execution", "expected_selected_node_id", "expected_profile_tokens"]), "ordered Connect copied secrets or omitted freshness owners")
+    check(request.body["nodes"] as? [[String: String]] == rows && request.body["execution"] as? String == "local", "ordered Connect lost the actual full order")
+    check(request.body["expected_profile_tokens"] as? [String: String] == selection.profileTokens && request.body["expected_selected_node_id"] as? String == selection.selectedNodeID, "ordered Connect lost all-source locked-capture preconditions")
+    owner.multihopProgressGeneration = UUID(); DispatchQueue.main.run()
+    check(owner.stoppedProgress.last == capturedProgress, "ordered completion retired a replacement progress owner")
+    DispatchQueue.clear()
+}
+for invalid in [[String: Any](), ["ordered_nodes_supported": false], ["ordered_nodes_supported": "true"], ["ordered_nodes_supported": 1]] {
+    _ = chooseOrdered(); owner.api.orderedCapabilities = invalid; let before = owner.api.calls.count
+    owner.connectMultihop(); DispatchQueue.background.run()
+    check(owner.api.calls.count == before, "an older or malformed controller silently accepted the ordered request")
+}
+for changedIndex in 0..<4 {
+    _ = chooseOrdered(); let before = owner.api.calls.count
+    var changed = owner.profiles; changed[changedIndex]["profile_token"] = String(repeating: "f", count: 64)
+    owner.api.orderedCurrent["profiles"] = changed
+    owner.connectMultihop(); DispatchQueue.background.run()
+    check(owner.api.calls.count == before, "a relinked ordered member reached Connect")
+}
+_ = chooseOrdered(); owner.api.orderedCurrent["selected_id"] = "replacement"
+var orderedBefore = owner.api.calls.count; owner.connectMultihop(); DispatchQueue.background.run()
+check(owner.api.calls.count == orderedBefore, "ordered Connect substituted the original selected control")
+_ = chooseOrdered(); owner.api.afterOrderedSnapshot = { owner.connectionProfileSelectionGeneration = UUID() }
+orderedBefore = owner.api.calls.count; owner.connectMultihop(); DispatchQueue.background.run()
+check(owner.api.calls.count == orderedBefore, "stale ordered callback overwrote a newer selection")
+_ = chooseOrdered(); owner.api.busy = true; orderedBefore = owner.api.calls.count; owner.connectMultihop()
+check(DispatchQueue.background.pending.isEmpty && owner.api.calls.count == orderedBefore, "busy ordered Connect reached its worker")
+_ = chooseOrdered()
+let complete = owner.captureConnectionProfileSelection()
+var missingToken = complete; missingToken.profileTokens.removeValue(forKey: "ordered-1")
+rejects({ _ = try RouterVPNOrderedNodes.connectBody(missingToken, current: owner.api.orderedCurrent) }, "missing middle-source token passed")
+var extraField = complete.orderedNodes; extraField[1]["credential"] = "must-not-copy"
+rejects({ _ = try RouterVPNOrderedNodes.decode(extraField, control: complete.selectedNodeID) }, "private node field entered an ordered reference")
+var wrongFinal = complete.orderedNodes; wrongFinal[3]["id"] = "replacement"
+rejects({ _ = try RouterVPNOrderedNodes.decode(wrongFinal, control: complete.selectedNodeID) }, "arbitrary final member replaced the independently selected control")
+for key in ["multihop_entry_id", "multihop_exit_id", "multihop_exit_mode", "multihop_entry_mode"] {
+    var payload: [String: Any] = ["multihop_nodes": complete.orderedNodes, "multihop_enabled": true, "multihop_execution": "local", "selected_node_id": complete.selectedNodeID, "profile_tokens": complete.profileTokens]
+    payload[key] = "mixed"
+    rejects({ _ = try owner.validatedLoadedConnectionProfileSelection(payload) }, "mixed ordered/pair restore was accepted")
+}
+// Exercise the exact model and apply transaction used by the native editor.
+_ = chooseOrdered(8)
+var draft = try owner.makeOrderedNodeDraft()
+let originalControl = draft.control
+try draft.move(1, by: -1); check(draft.prefixes[0] == "ordered-1" && draft.nodes.last?["id"] == originalControl, "editor move changed the final owner")
+try draft.remove(1); try draft.add("ordered-0")
+check(draft.prefixes.last == "ordered-0", "editor remove/add did not preserve explicit order")
+rejects({ try draft.add("ordered-0") }, "duplicate editor hop accepted")
+rejects({ try draft.add(originalControl) }, "editor accepted the final exit as a prefix")
+rejects({ try draft.move(draft.prefixes.count, by: -1) }, "editor moved its pinned exit")
+rejects({ try draft.remove(draft.prefixes.count) }, "editor removed its pinned exit")
+let staged = try draft.selection(); orderedBefore = owner.api.calls.count
+try owner.applyOrderedNodeDraft(draft)
+check(owner.captureConnectionProfileSelection().orderedNodes == staged.orderedNodes && owner.api.calls.count == orderedBefore, "editor Apply connected or lost its selected order")
+rejects({ try owner.applyOrderedNodeDraft(draft) }, "stale editor generation was accepted twice")
+_ = chooseOrdered(); let staleDraft = try owner.makeOrderedNodeDraft()
+var staleCatalog = owner.profiles; staleCatalog[1]["profile_token"] = String(repeating: "e", count: 64); owner.api.orderedCurrent["profiles"] = staleCatalog
+rejects({ try owner.applyOrderedNodeDraft(staleDraft) }, "editor Apply accepted a relinked middle node")
+_ = chooseOrdered(); let busyDraft = try owner.makeOrderedNodeDraft(); owner.api.busy = true
+rejects({ try owner.applyOrderedNodeDraft(busyDraft) }, "editor Apply changed a running connection")
+_ = chooseOrdered(); var emptyDraft = try owner.makeOrderedNodeDraft()
+while !emptyDraft.prefixes.isEmpty { try emptyDraft.remove(0) }
+rejects({ _ = try emptyDraft.selection() }, "editor accepted a final exit with no entry")
+_ = chooseOrdered()
+owner.routerPopup.selectItem(at: 0); owner.recordConnectionProfileNodeChoice("ordered-0")
+check(owner.connectionProfileSelection?.orderedNodes.isEmpty == true && owner.connectionProfileSelection?.nodeDefaultsPending == true,
+      "explicit new selected node inherited the prior node's ordered path")
+let newOrder = [["id": "ordered-1", "mode": "wg"], ["id": "ordered-2", "mode": "wg"], ["id": "ordered-0", "mode": "shadowsocks"]]
+var newCatalog = owner.profiles
+newCatalog[0]["multihop_nodes"] = newOrder; newCatalog[0]["multihop_enabled"] = true; newCatalog[0]["multihop_execution"] = "local"
+let catalogCapture = owner.beginConnectionProfileRefresh(hops: false)
+check(try owner.applyConnectionProfileNodeCatalog(["profiles": newCatalog, "selected_id": "ordered-0"], capture: catalogCapture), "new selected node's matching catalog was discarded")
+check(owner.captureConnectionProfileSelection().orderedNodes == newOrder && !owner.captureConnectionProfileSelection().nodeDefaultsPending,
+      "new selected node lost its own saved ordered path")
+try owner.requireResolvedConnectionProfileSelection()
+_ = chooseOrdered(); owner.routerPopup.selectItem(at: 0); owner.recordConnectionProfileNodeChoice("ordered-0")
+newCatalog[0]["multihop_nodes"] = [["id": "ordered-1", "mode": "wg"], ["id": "ordered-2", "mode": "shadowsocks"]]
+let invalidCapture = owner.beginConnectionProfileRefresh(hops: false)
+rejects({ _ = try owner.applyConnectionProfileNodeCatalog(["profiles": newCatalog, "selected_id": "ordered-0"], capture: invalidCapture) }, "malformed saved node path fell back to a different pair")
+check(owner.routerPopup.indexOfSelectedItem == -1, "malformed saved ordered path acquired a resolved selected control")
+_ = chooseOrdered(); fixtureDefaults.set(false, forKey: macConnectionMultihopEnabledKey)
+let ordinary = try owner.connectionProfileSnapshot(name: "direct", id: nil)
+check(ordinary["multihop_nodes"] == nil && ordinary["multihop_enabled"] as? Bool == false, "disabled ordered draft contaminated a direct profile")
+DispatchQueue.clear()
 '''
 
 SWIFT_RACES = r'''
@@ -566,7 +706,7 @@ def swift_source():
         product_methods += "\n" + block(telemetry,marker)
     for marker in ("    func refreshAll()", "    func refreshProfiles()", "    func refreshProfiles(order:", "    func refreshAdvanced()", "    @objc func multihopExecutionChanged()"):
         product_methods += "\n" + block(product, marker)
-    for marker in ("    private func connectionProfileSnapshot(", "    private func connectionProfilePOST(", "    private func applyLoadedConnectionProfile("):
+    for marker in ("    func connectionProfileSnapshot(", "    private func connectionProfilePOST(", "    private func applyLoadedConnectionProfile("):
         product_methods += "\n" + block(profiles, marker)
     settings_methods = "\n".join(block(settings, marker) for marker in (
         "    private func requireIdle(", "    private func selectedID(",
@@ -582,7 +722,7 @@ def swift_source():
     methods = methods.replace("@objc ", "").replace("private func ", "func ")
     # Rename only the queue boundary so Swift does not apply its special
     # DispatchQueue.global inference to the deterministic value-only scheduler.
-    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
+    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
 
 
 def replace_once(source, old, new):
@@ -626,6 +766,13 @@ def macos(directory):
         "post-response-settings-idle": replace_once(source,
             '        try owner.requireMutationIdle("loading a connection profile")\n        let selection =',
             '        let selection ='),
+        "ordered-drop-middle": replace_once(source, '"multihop_nodes": selectedPath.orderedNodes',
+            '"multihop_nodes": [selectedPath.orderedNodes.first!, selectedPath.orderedNodes.last!]'),
+        "ordered-final-owner": replace_once(source, 'rows.last?["id"] == control', 'true'),
+        "ordered-middle-source": replace_once(source, 'matches[0]["profile_token"] as? String == token', 'true'),
+        "ordered-capability": replace_once(source, 'CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue', 'true, true'),
+        "ordered-request-owner": replace_once(source, 'self.connectionProfileSelectionGeneration == generation &&', 'true &&'),
+        "ordered-locked-source-preconditions": replace_once(source, '"expected_profile_tokens": tokens', '"expected_profile_tokens": [String: String]()'),
     }
     for name, program in variants.items():
         path, binary = directory / (name + ".swift"), directory / name

@@ -292,6 +292,12 @@ private final class MacConnectionProfileControls: NSObject {
         try requireIdle(updating ? "updating a connection profile" : "adding a connection profile")
         let clean = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 2, userInfo: [NSLocalizedDescriptionKey: "Enter a profile name."]) }
+        if let owner, owner.captureConnectionProfileSelection().multihopEnabled,
+           !owner.captureConnectionProfileSelection().orderedNodes.isEmpty {
+            let body = try owner.connectionProfileSnapshot(name: clean, id: updating ? try selectedID() : nil)
+            let data = try api.request(path, method: "POST", body: body, timeout: 10)
+            return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        }
         let snapshot = macCurrentConnectionModeSnapshot()
         let hops = try currentMultihopSnapshot()
         var body: [String: Any] = [

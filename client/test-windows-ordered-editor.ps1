@@ -54,8 +54,8 @@ if($WPF){
 try{
     $rows=New-Object 'Collections.Generic.List[object]';$id='selected-final'
     $store=[pscustomobject]@{selected_id=$id;profiles=@()}
-    for($i=0;$i-lt7;$i++){$store.profiles+=[pscustomobject]@{id=('prefix-'+$i);name=('Prefix '+$i);node_kind='router-vpn';api_token='must-not-copy'}}
-    $store.profiles+=[pscustomobject]@{id=$id;name='Selected final';node_kind='router-vpn'}
+    for($i=0;$i-lt7;$i++){$store.profiles+=[pscustomobject]@{id=('prefix-'+$i);name=('Prefix '+$i);node_kind='router-vpn';api_token='must-not-copy';profile_token=('{0:x64}' -f ($i+1))}}
+    $store.profiles+=[pscustomobject]@{id=$id;name='Selected final';node_kind='router-vpn';profile_token=('e'*64)}
     $store.profiles+=[pscustomobject]@{id='external';name='External';node_kind='external'}
     $available=$dialog.FindName('Available');$list=$dialog.FindName('Order');$status=$dialog.FindName('Status')
     $rootControls=@{}
@@ -89,12 +89,16 @@ try{
     &$apply;Check ([object]::ReferenceEquals($original,$rootControls['UnifiedNodeChainButton'].Tag)) 'changed selected exit replaced the draft'
     $script:CurrentStore=$store;$RouterCombo.SelectedValue='replacement'
     &$apply;Check ([object]::ReferenceEquals($original,$rootControls['UnifiedNodeChainButton'].Tag)) 'changed visible exit replaced the draft'
-    $RouterCombo.SelectedValue=$id;&$apply
+    $RouterCombo.SelectedValue=$id;$script:CurrentStore=$store|ConvertTo-Json -Depth 8|ConvertFrom-Json
+    $script:CurrentStore.profiles[1].profile_token=('f'*64)
+    &$apply;Check ([object]::ReferenceEquals($original,$rootControls['UnifiedNodeChainButton'].Tag)) 'relinked middle node replaced the original editor draft'
+    $script:CurrentStore=$store;&$apply
     $saved=$rootControls['UnifiedNodeChainButton'].Tag
     Check ($saved.control_id-ceq$id-and$saved.nodes.Count-eq7-and$saved.nodes[-1].id-ceq$id-and$saved.nodes[-1].mode-ceq'shadowsocks') 'Apply lost the fixed selected final or full prefix list'
     Check (($saved.nodes.id-join',')-ceq'prefix-0,prefix-1,prefix-3,prefix-4,prefix-5,prefix-6,selected-final') 'Apply reordered the visible path'
     Check ($rootControls['UnifiedOrdered'].IsChecked-and$rootControls['UnifiedMultihop'].IsChecked) 'Apply did not choose the complete ordered path'
     Check (($saved|ConvertTo-Json -Depth 8)-notmatch'must-not-copy') 'editor copied private node credentials'
+    Check ($saved.profile_tokens.Count-eq7-and$saved.profile_tokens['prefix-1']-ceq$store.profiles[1].profile_token) 'editor lost all-source public preconditions'
     Check ($rootControls['UnifiedNodeChainSummary'].Text.Contains('Prefix 3')-and$rootControls['UnifiedNodeChainSummary'].Text.Contains('Selected final')) 'summary omitted a middle or final node'
     foreach($name in @('UnifiedEntryCombo','UnifiedExitCombo','UnifiedEntryMode','UnifiedExitMode','UnifiedBaseCombo','UnifiedExecution','UnifiedCandidatesButton')){Check (-not$rootControls[$name].IsEnabled) 'ordered path left contradictory pair controls enabled'}
     Check ($rootControls['UnifiedModeCombo'].Visibility-ceq'Collapsed'-and$rootControls['UnifiedOrderedModeSummary'].Visibility-ceq'Visible'-and-not$rootControls['UnifiedPresetsButton'].IsEnabled) 'ordered mode display claimed another direct transport'

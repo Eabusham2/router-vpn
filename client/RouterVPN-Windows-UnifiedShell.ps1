@@ -599,7 +599,7 @@ function UnifiedConnect{
             $Supported=Get-RouterVPNOrderedValue $Capability 'ordered_nodes_supported' $false
             if($Supported-isnot[bool]-or-not$Supported){throw 'This controller has not enabled the ordered native host. The complete path is retained; update the app before connecting it.'}
             $Store=Api '/api/profiles' -Timeout 5
-            $Draft=[pscustomobject]@{control_id=[string]$P.id;nodes=$Ordered.multihop_nodes}
+            $Draft=[pscustomobject]@{control_id=[string]$P.id;nodes=$Ordered.multihop_nodes;profile_tokens=(Get-RouterVPNOrderedValue (Control 'UnifiedNodeChainButton').Tag 'profile_tokens')}
             $Body=New-RouterVPNOrderedConnectPayload $Draft $Store
             $Path='/api/multihop/connect';$Timeout=380;$Label='Connecting ordered nodes…'
         }elseif((Control 'UnifiedMultihop').IsChecked){
@@ -846,13 +846,15 @@ function RefreshUnifiedOrderedSelection($Store) {
     $selected=@($Store.profiles|Where-Object{[string]$_.id-ceq$id})
     if($selected.Count-ne1){$button.Tag=$null;$toggle.IsChecked=$false;$label.Text='Select a linked exit node first.';return}
     if($null-eq$button.Tag-or[string](Get-RouterVPNOrderedValue $button.Tag 'control_id')-cne$id){
-        $button.Tag=[pscustomobject]@{control_id=$id;nodes=@()};$toggle.IsChecked=$false
+        $button.Tag=[pscustomobject]@{control_id=$id;nodes=@();profile_tokens=@{}};$toggle.IsChecked=$false
         $saved=Get-RouterVPNOrderedValue $selected[0] 'multihop_nodes'
         if($null-ne$saved-and@($saved).Count-gt0){
             $button.Tag.nodes=$saved;$toggle.IsChecked=$true
             (Control 'UnifiedMultihop').IsChecked=[bool](Get-RouterVPNOrderedValue $selected[0] 'multihop_enabled' $false)
             try{
                 $button.Tag.nodes=@(Copy-RouterVPNOrderedNodes $saved $id)
+                foreach($node in $button.Tag.nodes){$source=@($Store.profiles|Where-Object{[string]$_.id-ceq[string]$node.id});if($source.Count-ne1){throw 'A saved node is missing.'};$button.Tag.profile_tokens[$node.id]=Get-RouterVPNOrderedValue $source[0] 'profile_token'}
+                [void](New-RouterVPNOrderedConnectPayload $button.Tag $Store)
             }catch{$label.Text='Saved ordered path needs attention: '+$_.Exception.Message;return}
         }
     }
@@ -872,7 +874,7 @@ function ShowUnifiedOrderedNodes {
         $selected=@($store.profiles|Where-Object{[string]$_.id-ceq$id})
         if($selected.Count-ne1-or[string](Get-RouterVPNOrderedValue $selected[0] 'node_kind' '')-cnotin@('','router-vpn')){throw 'Select a linked Router VPN exit first.'}
         $draft=(Control 'UnifiedNodeChainButton').Tag
-        $initial=@();if($null-ne$draft-and[string]$draft.control_id-ceq$id-and@($draft.nodes).Count){$initial=@(Copy-RouterVPNOrderedNodes $draft.nodes $id)}
+        $initial=@();if($null-ne$draft-and[string]$draft.control_id-ceq$id-and@($draft.nodes).Count){[void](New-RouterVPNOrderedConnectPayload $draft $store);$initial=@(Copy-RouterVPNOrderedNodes $draft.nodes $id)}
         [xml]$x=@"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Ordered node path" Width="640" Height="570" MinWidth="510" MinHeight="440" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><StackPanel><TextBlock Text="Entry → hops → selected exit" FontSize="22" FontWeight="Bold"/><TextBlock Text="Add up to seven WireGuard nodes in forwarding order. The selected exit uses Shadowsocks. Each node keeps its own saved credentials and policy." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,7,0,12"/></StackPanel><Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ComboBox Name="Available" DisplayMemberPath="name" SelectedValuePath="id"/><Button Name="Add" Grid.Column="1" Content="Add node" Padding="12,6" Margin="8,0,0,0"/></Grid><ListBox Name="Order" Grid.Row="2" DisplayMemberPath="display" Margin="0,12"/><WrapPanel Grid.Row="3"><Button Name="Up" Content="Move up" Padding="12,6"/><Button Name="Down" Content="Move down" Padding="12,6" Margin="8,0"/><Button Name="Remove" Content="Remove" Padding="12,6"/></WrapPanel><StackPanel Grid.Row="4" Margin="0,12"><TextBlock Name="Final" FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock Name="Status" Foreground="#FFBD8D" TextWrapping="Wrap" Margin="0,7,0,0"/></StackPanel><StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="Cancel" Content="Cancel" Padding="12,7" Margin="4"/><Button Name="Apply" Content="Use this path" Padding="12,7" Margin="4"/></StackPanel></Grid></Window>
 "@
@@ -899,7 +901,8 @@ function ShowUnifiedOrderedNodes {
             $current=Api '/api/profiles' -Timeout 5
             if([string]$RouterCombo.SelectedValue-cne$id){throw 'The selected exit changed while the editor was open.'}
             $nodes=@($rows.ToArray())+@([pscustomobject]@{id=$id;mode='shadowsocks'})
-            $captured=[pscustomobject]@{control_id=$id;nodes=$nodes}
+            $tokens=@{};foreach($node in $nodes){$origin=@($store.profiles|Where-Object{[string]$_.id-ceq[string]$node.id});if($origin.Count-ne1){throw 'The original editor catalog lost a node.'};$tokens[$node.id]=Get-RouterVPNOrderedValue $origin[0] 'profile_token'}
+            $captured=[pscustomobject]@{control_id=$id;nodes=$nodes;profile_tokens=$tokens}
             $validated=New-RouterVPNOrderedConnectPayload $captured $current
             $captured.nodes=@($validated.nodes)
             (Control 'UnifiedNodeChainButton').Tag=$captured;(Control 'UnifiedOrdered').IsChecked=$true;(Control 'UnifiedMultihop').IsChecked=$true

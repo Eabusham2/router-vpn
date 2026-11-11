@@ -1,9 +1,55 @@
 import AppKit
 import Foundation
+import CoreFoundation
 
 private let macConnectionModeKey = "routervpn.unified.selected-mode.v1"
 private let macConnectionCustomPresetsKey = "routervpn.unified.custom-presets.v1"
 private let macConnectionMultihopEnabledKey = "routervpn.unified.multihop-enabled.v1"
+
+enum RouterVPNOrderedNodes {
+    static func issue(_ message: String) -> NSError {
+        NSError(domain: "RouterVPN.OrderedNodes", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+    static func decode(_ raw: Any, control: String) throws -> [[String: String]] {
+        guard let rows = raw as? [[String: String]], (2...8).contains(rows.count) else {
+            throw issue("Choose between two and eight ordered nodes.")
+        }
+        var seen = Set<String>()
+        for (position, row) in rows.enumerated() {
+            guard Set(row.keys) == Set(["id", "mode"]), let id = row["id"],
+                  id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
+                  seen.insert(id).inserted,
+                  row["mode"] == (position == rows.count - 1 ? "shadowsocks" : "wg") else {
+                throw issue("Choose distinct linked WireGuard entry and hops, followed by a Shadowsocks exit.")
+            }
+        }
+        guard !control.isEmpty, rows.last?["id"] == control else {
+            throw issue("The final ordered node must be the independently selected exit.")
+        }
+        return rows
+    }
+    static func connectBody(_ selection: RouterVPNConnectionProfileSelection, current: [String: Any]) throws -> [String: Any] {
+        let rows = try decode(selection.orderedNodes, control: selection.selectedNodeID)
+        guard selection.multihopEnabled, selection.execution == "local",
+              selection.entryID.isEmpty, selection.exitID.isEmpty, selection.entryMode == "", selection.exitMode.isEmpty,
+              current["selected_id"] as? String == selection.selectedNodeID,
+              let profiles = current["profiles"] as? [[String: Any]] else {
+            throw issue("The ordered path or selected exit changed. Reopen its editor.")
+        }
+        for row in rows {
+            let id = row["id"]!
+            let matches = profiles.filter { $0["id"] as? String == id }
+            guard matches.count == 1, ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn"),
+                  let token = selection.profileTokens[id], token.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
+                  matches[0]["profile_token"] as? String == token else {
+                throw issue("An ordered node is missing or has been relinked. Reopen its editor before connecting.")
+            }
+        }
+        let tokens = Dictionary(uniqueKeysWithValues: rows.map { ($0["id"]!, selection.profileTokens[$0["id"]!]!) })
+        return ["nodes": rows, "execution": "local", "expected_selected_node_id": selection.selectedNodeID,
+                "expected_profile_tokens": tokens]
+    }
+}
 
 // Public references only. Source tokens are opaque hashes produced by the
 // controller; credentials remain in its private node store.
@@ -16,6 +62,67 @@ struct RouterVPNConnectionProfileSelection: Equatable, Sendable {
     var exitMode = ""
     var execution = ""
     var profileTokens: [String: String] = [:]
+    var orderedNodes: [[String: String]] = []
+    var nodeDefaultsPending = false
+}
+
+struct RouterVPNOrderedNodeDraft {
+    let control: String
+    let generation: UUID
+    let names: [String: String]
+    let tokens: [String: String]
+    let candidates: [String]
+    private(set) var prefixes: [String]
+
+    init(selection: RouterVPNConnectionProfileSelection, generation: UUID, catalog: [[String: Any]]) throws {
+        control = selection.selectedNodeID; self.generation = generation
+        var names: [String: String] = [:], tokens: [String: String] = [:]
+        for row in catalog {
+            guard let id = row["id"] as? String, names[id] == nil,
+                  id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
+                  let token = row["profile_token"] as? String,
+                  token.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil else {
+                throw RouterVPNOrderedNodes.issue("Refresh the node catalog before opening the ordered editor.")
+            }
+            guard ["", "router-vpn"].contains(row["node_kind"] as? String ?? "router-vpn") else { continue }
+            names[id] = row["name"] as? String ?? id; tokens[id] = token
+        }
+        guard let selectedToken = selection.profileTokens[control], tokens[control] == selectedToken else {
+            throw RouterVPNOrderedNodes.issue("Select the linked final exit before opening the ordered editor.")
+        }
+        self.names = names; self.tokens = tokens
+        candidates = names.keys.filter { $0 != selection.selectedNodeID }.sorted()
+        if selection.orderedNodes.isEmpty { prefixes = [] }
+        else {
+            let nodes = try RouterVPNOrderedNodes.decode(selection.orderedNodes, control: control)
+            guard nodes.allSatisfy({ tokens[$0["id"]!] == selection.profileTokens[$0["id"]!] }) else {
+                throw RouterVPNOrderedNodes.issue("A saved ordered node was relinked. Reload its profile before editing.")
+            }
+            prefixes = nodes.dropLast().map { $0["id"]! }
+        }
+    }
+    var nodes: [[String: String]] { prefixes.map { ["id": $0, "mode": "wg"] } + [["id": control, "mode": "shadowsocks"]] }
+    mutating func add(_ id: String) throws {
+        guard candidates.contains(id), !prefixes.contains(id), prefixes.count < 7 else {
+            throw RouterVPNOrderedNodes.issue("Choose a different entry or hop. The path supports up to eight nodes.")
+        }
+        prefixes.append(id)
+    }
+    mutating func move(_ index: Int, by offset: Int) throws {
+        guard [-1, 1].contains(offset), prefixes.indices.contains(index), prefixes.indices.contains(index + offset) else {
+            throw RouterVPNOrderedNodes.issue("Move an entry or hop within the prefix. The selected final exit stays last.")
+        }
+        prefixes.swapAt(index, index + offset)
+    }
+    mutating func remove(_ index: Int) throws {
+        guard prefixes.indices.contains(index) else { throw RouterVPNOrderedNodes.issue("The selected final exit cannot be removed here.") }
+        prefixes.remove(at: index)
+    }
+    func selection() throws -> RouterVPNConnectionProfileSelection {
+        let ordered = try RouterVPNOrderedNodes.decode(nodes, control: control)
+        return RouterVPNConnectionProfileSelection(selectedNodeID: control, multihopEnabled: true, entryMode: "",
+            execution: "local", profileTokens: tokens.filter { key, _ in ordered.contains { $0["id"] == key } }, orderedNodes: ordered)
+    }
 }
 
 struct RouterVPNConnectionProfileRefresh: Sendable {
@@ -46,6 +153,75 @@ private struct MacConnectionCustomPreset: Codable {
 }
 
 extension ProductWindowController {
+    func makeOrderedNodeDraft() throws -> RouterVPNOrderedNodeDraft {
+        try requireMutationIdle("editing the ordered path")
+        let selection = captureConnectionProfileSelection()
+        guard selection.selectedNodeID == connectionProfileCatalogSelectedID,
+              routerIDs.indices.contains(routerPopup.indexOfSelectedItem),
+              routerIDs[routerPopup.indexOfSelectedItem] == selection.selectedNodeID else {
+            throw RouterVPNOrderedNodes.issue("Wait for the selected exit's captured catalog before editing its path.")
+        }
+        return try RouterVPNOrderedNodeDraft(selection: selection, generation: connectionProfileSelectionGeneration, catalog: profiles)
+    }
+
+    func applyOrderedNodeDraft(_ draft: RouterVPNOrderedNodeDraft) throws {
+        try requireMutationIdle("applying the ordered path")
+        guard connectionProfileSelectionGeneration == draft.generation,
+              captureConnectionProfileSelection().selectedNodeID == draft.control else {
+            throw RouterVPNOrderedNodes.issue("The selected exit or path changed while the editor was open. Open it again.")
+        }
+        let selection = try draft.selection()
+        let current = try api.json("/api/profiles", timeout: 5) as? [String: Any] ?? [:]
+        _ = try RouterVPNOrderedNodes.connectBody(selection, current: current)
+        try requireMutationIdle("retaining the captured ordered path")
+        guard connectionProfileSelectionGeneration == draft.generation,
+              captureConnectionProfileSelection().selectedNodeID == draft.control else {
+            throw RouterVPNOrderedNodes.issue("The selected exit changed while the path was checked.")
+        }
+        adoptLoadedConnectionProfileSelection(selection)
+        UserDefaults.standard.set("shadowsocks", forKey: macConnectionModeKey)
+        refreshUnifiedModeMenu(preferred: "shadowsocks")
+    }
+
+    func clearOrderedNodeDraft() throws {
+        try requireMutationIdle("switching to an entry and exit pair")
+        var selection = captureConnectionProfileSelection()
+        selection.orderedNodes = []
+        connectionProfileSelection = selection
+        recordVisibleConnectionProfileSelection()
+        restoreOwnedConnectionProfileSelection()
+    }
+
+    func connectOrderedMultihopIfSelected() -> Bool {
+        let selection = captureConnectionProfileSelection()
+        guard !selection.orderedNodes.isEmpty else { return false }
+        do {
+            try requireMutationIdle("starting the ordered path")
+            _ = try RouterVPNOrderedNodes.connectBody(selection, current: ["selected_id": connectionProfileCatalogSelectedID, "profiles": profiles])
+        } catch { appendHelp(error.localizedDescription); return true }
+        let generation = connectionProfileSelectionGeneration
+        multihopComparisonLabel.stringValue = "Starting the ordered path on this device…"
+        startMultihopProgress(timeout: 180); let orderedProgressOwner = multihopProgressGeneration
+        asyncAction {
+            defer { DispatchQueue.main.async { self.stopCapturedComparisonProgress(orderedProgressOwner) } }
+            try self.requireMutationIdle("starting the captured ordered path")
+            let capabilities = try self.api.json("/api/multihop/status", timeout: 5) as? [String: Any] ?? [:]
+            guard let enabled = capabilities["ordered_nodes_supported"] as? NSNumber,
+                  CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue else {
+                throw RouterVPNOrderedNodes.issue("This controller has not enabled ordered-node execution on this device.")
+            }
+            let current = try self.api.json("/api/profiles", timeout: 5) as? [String: Any] ?? [:]
+            let body = try RouterVPNOrderedNodes.connectBody(selection, current: current)
+            guard DispatchQueue.main.sync(execute: {
+                self.connectionProfileSelectionGeneration == generation && self.captureConnectionProfileSelection() == selection
+            }) else {
+                throw RouterVPNOrderedNodes.issue("The selected path changed before Connect. Connect the current selection again.")
+            }
+            return String(data: try self.api.request("/api/multihop/connect", method: "POST", body: body, timeout: 180), encoding: .utf8) ?? "Ordered path connected"
+        }
+        return true
+    }
+
     func captureConnectionProfileSelection() -> RouterVPNConnectionProfileSelection {
         var value = connectionProfileSelection ?? RouterVPNConnectionProfileSelection()
         let selected = routerPopup.indexOfSelectedItem
@@ -61,6 +237,12 @@ extension ProductWindowController {
            value.profileTokens[value.selectedNodeID] == nil || value.profileTokens[value.selectedNodeID] == selectedSources[0]["profile_token"] as? String,
            (selectedSources[0]["node_kind"] as? String ?? "router-vpn").lowercased() == "external" {
             value.multihopEnabled = false
+        }
+        if !value.orderedNodes.isEmpty {
+            value.entryID = ""; value.exitID = ""; value.entryMode = ""; value.exitMode = ""; value.execution = "local"
+            let referenced = Set(value.orderedNodes.compactMap { $0["id"] } + [value.selectedNodeID])
+            value.profileTokens = value.profileTokens.filter { referenced.contains($0.key) }
+            return value
         }
         let entry = multihopEntryPopup.indexOfSelectedItem, exit = multihopExitPopup.indexOfSelectedItem
         if multihopNodeIDs.indices.contains(entry) {
@@ -86,7 +268,9 @@ extension ProductWindowController {
     }
 
     func recordConnectionProfileNodeChoice(_ id: String) {
+        let originalID = connectionProfileSelection?.selectedNodeID
         var selection = captureConnectionProfileSelection()
+        if originalID != id { selection.orderedNodes = []; selection.nodeDefaultsPending = true }
         selection.selectedNodeID = id
         let sources = profiles.filter { $0["id"] as? String == id }
         if sources.count == 1, let token = sources[0]["profile_token"] as? String { selection.profileTokens[id] = token }
@@ -181,7 +365,14 @@ extension ProductWindowController {
             execution: payload["multihop_execution"] as? String ?? "local")
         let tokens = payload["profile_tokens"] as? [String: String] ?? [:]
         var referenced = Set([selection.selectedNodeID])
-        if selection.multihopEnabled {
+        if let raw = payload["multihop_nodes"] {
+            selection.orderedNodes = try RouterVPNOrderedNodes.decode(raw, control: selection.selectedNodeID)
+            guard !external, selection.multihopEnabled, selection.execution == "local",
+                  selection.entryID.isEmpty, selection.exitID.isEmpty, selection.entryMode == "", selection.exitMode.isEmpty else {
+                throw RouterVPNOrderedNodes.issue("The loaded ordered path mixes an independent entry, exit or execution.")
+            }
+            referenced.formUnion(selection.orderedNodes.compactMap { $0["id"] })
+        } else if selection.multihopEnabled {
             guard !selection.entryID.isEmpty, !selection.exitID.isEmpty, selection.entryID != selection.exitID,
                   selection.entryMode.flatMap({ RouterVPNNodeEntryModes.index(for: $0) }) != nil,
                   RouterVPNNodeExitModes.index(for: selection.exitMode) != nil,
@@ -230,7 +421,9 @@ extension ProductWindowController {
               routerIDs.indices.contains(routerPopup.indexOfSelectedItem) else {
             throw NSError(domain: "RouterVPN.ConnectionProfile", code: 5, userInfo: [NSLocalizedDescriptionKey: "Wait for the captured node catalog, or explicitly select a linked node. A removed or relinked node cannot substitute for the saved identity."])
         }
-        if selection.multihopEnabled {
+        if selection.multihopEnabled && !selection.orderedNodes.isEmpty {
+            _ = try RouterVPNOrderedNodes.connectBody(selection, current: ["selected_id": connectionProfileCatalogSelectedID, "profiles": profiles])
+        } else if selection.multihopEnabled {
             guard multihopNodeIDs.indices.contains(multihopEntryPopup.indexOfSelectedItem),
                   multihopNodeIDs.indices.contains(multihopExitPopup.indexOfSelectedItem),
                   connectionProfileIdentityIndex(selection.entryID, ids: multihopNodeIDs, tokens: multihopNodeTokens, selection: selection) == multihopEntryPopup.indexOfSelectedItem,
@@ -249,7 +442,17 @@ extension ProductWindowController {
         let ids = nodes.compactMap { $0["id"] as? String }
         let names = nodes.map { $0["name"] as? String ?? $0["id"] as? String ?? "Node" }
         var selection = capture.selection
+        let adoptNodeDefaults = selection.selectedNodeID.isEmpty || selection.nodeDefaultsPending
         if selection.selectedNodeID.isEmpty { selection.selectedNodeID = selected }
+        if adoptNodeDefaults && selection.selectedNodeID == selected {
+            if let profile = nodes.first(where: { $0["id"] as? String == selected }), let raw = profile["multihop_nodes"] {
+                var payload = profile
+                payload["multihop_nodes"] = raw; payload["selected_node_id"] = selected; payload["profile_tokens"] = tokens
+                selection = try validatedLoadedConnectionProfileSelection(payload)
+                UserDefaults.standard.set(selection.multihopEnabled, forKey: macConnectionMultihopEnabledKey)
+            }
+            selection.nodeDefaultsPending = false
+        }
         if selection.profileTokens[selection.selectedNodeID] == nil, let token = tokens[selection.selectedNodeID] {
             selection.profileTokens[selection.selectedNodeID] = token
         }
@@ -283,7 +486,7 @@ extension ProductWindowController {
         var selection = capture.selection
         // Only a never-selected graph may adopt the controller's explicit
         // configured IDs. Missing loaded or user-owned IDs remain missing.
-        if selection.entryID.isEmpty && selection.exitID.isEmpty {
+        if selection.orderedNodes.isEmpty && selection.entryID.isEmpty && selection.exitID.isEmpty {
             selection.entryID = payload["configured_entry_id"] as? String ?? payload["entry_id"] as? String ?? ""
             selection.exitID = payload["configured_exit_id"] as? String ?? payload["exit_id"] as? String ?? ""
         }
@@ -364,9 +567,16 @@ extension ProductWindowController {
         }
     }
 
-    private func connectionProfileSnapshot(name: String, id: String?) throws -> [String: Any] {
+    func connectionProfileSnapshot(name: String, id: String?) throws -> [String: Any] {
         try requireMutationIdle("saving a connection profile")
         try requireResolvedConnectionProfileSelection()
+        let selectedPath = captureConnectionProfileSelection()
+        if selectedPath.multihopEnabled && !selectedPath.orderedNodes.isEmpty {
+            var body: [String: Any] = ["name": name, "mode": "shadowsocks", "custom_layers": [String](),
+                "multihop_enabled": true, "multihop_nodes": selectedPath.orderedNodes, "multihop_execution": "local"]
+            if let id { body["id"] = id }
+            return body
+        }
         let mode = UserDefaults.standard.string(forKey: macConnectionModeKey) ?? "smart-auto"
         var layers: [String] = []
         if mode.hasPrefix("custom:"), let data = UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey), let presets = try? JSONDecoder().decode([MacConnectionCustomPreset].self, from: data) {
@@ -428,3 +638,63 @@ extension ProductWindowController {
 
 // macOS connection-profile contract: Add Load Update Delete; setup-aware endpoints; exact current mode/CUSTOM layers;
 // exact visible multihop entry/exit/exit transport; load never auto-connects; linked node secrets stay only in the private node store.
+
+final class RouterVPNOrderedNodeEditor: NSWindowController {
+    private weak var owner: ProductWindowController?
+    private var draft: RouterVPNOrderedNodeDraft
+    private let path = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let candidates = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let status = NSTextField(wrappingLabelWithString: "")
+
+    init(owner: ProductWindowController, draft: RouterVPNOrderedNodeDraft) {
+        self.owner = owner; self.draft = draft
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 320), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.title = "Ordered multihop"; window.minSize = NSSize(width: 580, height: 300); window.isReleasedWhenClosed = false
+        super.init(window: window)
+        let root = NSStackView(); root.orientation = .vertical; root.alignment = .leading; root.spacing = 12
+        root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
+        let note = NSTextField(wrappingLabelWithString: "Choose one to seven WireGuard entry and hop nodes. The selected Shadowsocks exit stays last. Each node uses its own linked credentials and settings; the complete path runs on this device.")
+        root.addArrangedSubview(note)
+        path.setAccessibilityLabel("Ordered path"); root.addArrangedSubview(path)
+        let move = NSStackView(); move.orientation = .horizontal; move.spacing = 8
+        for (title, action) in [("Move up", #selector(moveUp)), ("Move down", #selector(moveDown)), ("Remove hop", #selector(removeHop))] { move.addArrangedSubview(NSButton(title: title, target: self, action: action)) }
+        root.addArrangedSubview(move)
+        candidates.setAccessibilityLabel("Available linked entry and hop nodes")
+        for id in draft.candidates { candidates.addItem(withTitle: "\(draft.names[id] ?? id) · \(id)"); candidates.lastItem?.representedObject = id }
+        let add = NSStackView(); add.orientation = .horizontal; add.spacing = 8; add.addArrangedSubview(candidates); add.addArrangedSubview(NSButton(title: "Add entry / hop", target: self, action: #selector(addHop))); root.addArrangedSubview(add)
+        status.textColor = .secondaryLabelColor; root.addArrangedSubview(status)
+        let finish = NSStackView(); finish.orientation = .horizontal; finish.spacing = 8
+        finish.addArrangedSubview(NSButton(title: "Cancel", target: self, action: #selector(cancelEditing)))
+        let apply = NSButton(title: "Apply path", target: self, action: #selector(applyPath)); apply.keyEquivalent = "\r"; finish.addArrangedSubview(apply); root.addArrangedSubview(finish)
+        window.contentView = root; render()
+    }
+    required init?(coder: NSCoder) { nil }
+    private func render(selected: Int? = nil) {
+        path.removeAllItems()
+        for (index, row) in draft.nodes.enumerated() {
+            let id = row["id"]!, role = index == draft.prefixes.count ? "Exit · Shadowsocks" : index == 0 ? "Entry · WireGuard" : "Hop \(index) · WireGuard"
+            path.addItem(withTitle: "\(index + 1). \(role) · \(draft.names[id] ?? id) · \(id)")
+        }
+        path.selectItem(at: min(max(selected ?? 0, 0), draft.nodes.count - 1))
+        status.stringValue = "\(draft.nodes.count) of 8 nodes. Apply stages this selection; Connect starts it."
+    }
+    @objc private func addHop() {
+        do { guard let id = candidates.selectedItem?.representedObject as? String else { throw RouterVPNOrderedNodes.issue("Link another router node first.") }; try draft.add(id); render(selected: draft.prefixes.count - 1) }
+        catch { status.stringValue = error.localizedDescription }
+    }
+    private func move(_ offset: Int) {
+        do { let index = path.indexOfSelectedItem; try draft.move(index, by: offset); render(selected: index + offset) }
+        catch { status.stringValue = error.localizedDescription }
+    }
+    @objc private func moveUp() { move(-1) }
+    @objc private func moveDown() { move(1) }
+    @objc private func removeHop() {
+        do { let index = path.indexOfSelectedItem; try draft.remove(index); render(selected: index) }
+        catch { status.stringValue = error.localizedDescription }
+    }
+    @objc private func applyPath() {
+        do { guard let owner else { throw RouterVPNOrderedNodes.issue("Reopen the editor from the current Router VPN window.") }; try owner.applyOrderedNodeDraft(draft); close() }
+        catch { status.stringValue = error.localizedDescription }
+    }
+    @objc private func cancelEditing() { close() }
+}

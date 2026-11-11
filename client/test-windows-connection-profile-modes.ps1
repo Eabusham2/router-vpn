@@ -1,6 +1,6 @@
-param(
+﻿param(
     [string]$Root = (Split-Path $PSScriptRoot -Parent),
-    [ValidateSet('shipping','capture-two-modes','load-fallback','connect-fallback','entry-capture-fallback','entry-load-fallback','entry-connect-fallback','startup-deadline','ordered-drop-middle','ordered-final-owner','ordered-capability')][string]$Mutation = 'shipping'
+    [ValidateSet('shipping','capture-two-modes','load-fallback','connect-fallback','entry-capture-fallback','entry-load-fallback','entry-connect-fallback','startup-deadline','ordered-drop-middle','ordered-final-owner','ordered-capability','ordered-source','ordered-locked-source')][string]$Mutation = 'shipping'
 )
 $ErrorActionPreference='Stop'
 # The real launcher composes these sources before opening WPF. Exercise that
@@ -59,6 +59,8 @@ try{
         'ordered-drop-middle'{$Helpers=ReplaceOnce $Helpers 'return $copy.ToArray()' 'return @($copy[0],$copy[$copy.Count-1])'}
         'ordered-final-owner'{$Helpers=ReplaceOnce $Helpers '$copy[$copy.Count-1].id-cne$ControlID' '$false'}
         'ordered-capability'{$Connect=ReplaceOnce $Connect '$Supported-isnot[bool]-or-not$Supported' '$false'}
+        'ordered-source'{$Helpers=ReplaceOnce $Helpers "-or[string](Get-RouterVPNOrderedValue `$matchingProfiles[0] 'profile_token')-cne`$token" '-or$false'}
+        'ordered-locked-source'{$Helpers=ReplaceOnce $Helpers 'expected_profile_tokens=$tokens' 'expected_profile_tokens=@{}'}
     }
     . ([ScriptBlock]::Create($Helpers))
     . ([ScriptBlock]::Create($Choice))
@@ -246,14 +248,15 @@ public sealed class ProfileModeOwner {
     $Owner.Controls['UnifiedOrdered']=$ordered;$Owner.Controls['UnifiedNodeChainButton']=$chainButton;$Owner.Controls['UnifiedNodeCombo']=$RouterCombo
     $script:OrderedCapability=[pscustomobject]@{ordered_nodes_supported=$true}
     foreach($nodeCount in @(2,3,4,8)){
-        $nodes=@();$profiles=@()
+        $nodes=@();$profiles=@();$tokens=@{}
         for($i=0;$i-lt$nodeCount;$i++){
             $id='ordered-'+$i;$mode=if($i-eq$nodeCount-1){'shadowsocks'}else{'wg'}
             $nodes+=[pscustomobject]@{id=$id;mode=$mode;private_key='never-copy-member-secret'}
-            $profiles+=[pscustomobject]@{id=$id;name=('Node '+$i);node_kind='router-vpn';api_token='never-copy-token'}
+            $tokens[$id]=('{0:x64}' -f ($i+1))
+            $profiles+=[pscustomobject]@{id=$id;name=('Node '+$i);node_kind='router-vpn';api_token='never-copy-token';profile_token=$tokens[$id]}
         }
         $control=$nodes[-1].id;$RouterCombo.SelectedValue=$control;$RouterCombo.Tag=[pscustomobject]@{selected_id=$control;profiles=$profiles}
-        $toggle.IsChecked=$true;$ordered.IsChecked=$true;$chainButton.Tag=[pscustomobject]@{control_id=$control;nodes=$nodes}
+        $toggle.IsChecked=$true;$ordered.IsChecked=$true;$chainButton.Tag=[pscustomobject]@{control_id=$control;nodes=$nodes;profile_tokens=$tokens}
         $MultihopEntryModeCombo.SelectedIndex=-1;$MultihopExitModeCombo.SelectedIndex=-1
         foreach($callback in @($AddCallback,$UpdateCallback)){
             $before=$script:Requests.Count;&$callback
@@ -266,13 +269,16 @@ public sealed class ProfileModeOwner {
         }
         $script:Loaded=$script:Requests[-1].Body
         $script:Loaded|Add-Member -NotePropertyName selected_node_id -NotePropertyValue $control
+        $script:Loaded|Add-Member -NotePropertyName profile_tokens -NotePropertyValue $tokens
         $script:Loaded|Add-Member -NotePropertyName profile -NotePropertyValue ([pscustomobject]@{name='Ordered saved profile'})
         $chainButton.Tag=$null;$ordered.IsChecked=$false;$toggle.IsChecked=$false;$script:ConnectBody=$null
         &$LoadCallback
         Check ($null-eq$script:ConnectBody-and$ordered.IsChecked-and$toggle.IsChecked) 'Ordered Load connected or lost its enabled choice'
         Check ($chainButton.Tag.control_id-ceq$control-and@($chainButton.Tag.nodes).Count-eq$nodeCount-and(@($chainButton.Tag.nodes.id)-join',')-ceq(@($nodes.id)-join',')) 'Ordered Load lost a middle or selected final node'
         UnifiedConnect;$body=$script:ConnectBody
-        Check ($null-ne$body-and(@($body.PSObject.Properties.Name|Sort-Object)-join',')-ceq'execution,nodes') 'Ordered Connect sent legacy pair or private fields'
+        Check ($null-ne$body-and(@($body.PSObject.Properties.Name|Sort-Object)-join',')-ceq'execution,expected_profile_tokens,expected_selected_node_id,nodes') 'Ordered Connect sent legacy pair/private fields or omitted source owners'
+        Check ($body.expected_selected_node_id-ceq$control-and@($body.expected_profile_tokens.PSObject.Properties).Count-eq$nodeCount) 'Ordered Connect lost original selected control or all-source hash preconditions'
+        foreach($node in $nodes){Check ((Get-RouterVPNOrderedValue $body.expected_profile_tokens $node.id)-ceq$tokens[$node.id]) 'Ordered Connect changed a source token'}
         Check ($body.execution-ceq'local'-and(@($body.nodes.id)-join',')-ceq(@($nodes.id)-join',')-and$body.nodes[-1].mode-ceq'shadowsocks') 'Ordered Connect changed its complete path'
         $copy=@(Copy-RouterVPNOrderedNodes $nodes $control);$copy[0].id='replacement'
         Check ($nodes[0].id-ceq'ordered-0') 'Ordered copy retained mutable member references'
@@ -281,7 +287,7 @@ public sealed class ProfileModeOwner {
             Check ($null-eq$script:ConnectBody) 'An older controller received ordered nodes as a legacy pair'
         }
         $script:OrderedCapability=[pscustomobject]@{ordered_nodes_supported=$true}
-        foreach($fault in @('missing-middle','duplicate-middle','external-middle','changed-selected')){
+        foreach($fault in @('missing-middle','duplicate-middle','external-middle','changed-selected','relinked-middle')){
             $saved=$RouterCombo.Tag
             $changed=$saved|ConvertTo-Json -Depth 8|ConvertFrom-Json
             switch($fault){
@@ -289,6 +295,7 @@ public sealed class ProfileModeOwner {
                 'duplicate-middle'{$changed.profiles+=,$changed.profiles[0]}
                 'external-middle'{$changed.profiles[0].node_kind='external'}
                 'changed-selected'{$changed.selected_id='replacement'}
+                'relinked-middle'{$changed.profiles[0].profile_token=('f'*64)}
             }
             $RouterCombo.Tag=$changed;$script:ConnectBody=$null;UnifiedConnect
             Check ($null-eq$script:ConnectBody) ('Changed ordered selection reached Connect: '+$fault)

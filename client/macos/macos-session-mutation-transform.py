@@ -239,7 +239,7 @@ def transform(source: str, mode: str) -> str:
         # Preserve the existing mutation guards while following the shipping
         # profile-selection owner hooks on both sides of each exact anchor.
         for before, after in (
-            ('    @objc func connectMultihop() {\n', '    @objc func connectMultihop() {\n        do { try requireResolvedConnectionProfileSelection() } catch { appendHelp(error.localizedDescription); return }\n'),
+            ('    @objc func connectMultihop() {\n', '    @objc func connectMultihop() {\n        do { try requireResolvedConnectionProfileSelection() } catch { appendHelp(error.localizedDescription); return }\n        if connectOrderedMultihopIfSelected() { return }\n'),
             ('let id = routerIDs[i]; asyncAction', 'let id = routerIDs[i]; recordConnectionProfileNodeChoice(id); asyncAction'),
             ('guard let id = selectedNodeID() else { appendHelp("Select a linked node first."); return }; asyncAction', 'guard let id = selectedNodeID() else { appendHelp("Select a linked node first."); return }; recordConnectionProfileNodeChoice(id); asyncAction'),
             ('UserDefaults.standard.set(sender.state == .on, forKey: unifiedMultihopEnabledKey); refreshUnifiedHopOverlay()', 'UserDefaults.standard.set(sender.state == .on, forKey: unifiedMultihopEnabledKey); recordVisibleConnectionProfileSelection(); refreshUnifiedHopOverlay()'),
