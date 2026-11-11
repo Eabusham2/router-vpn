@@ -48,12 +48,14 @@ import Foundation
                 let captured = try IOSSessionIdentity(connectedAt: identity.connectedAt, engine: identity.engine,
                     rawProfile: identity.rawProfile, bundleData: identity.bundleData,
                     configuration: proto.providerConfiguration ?? [:])
-                guard captured.entryBundleData == identity.entryBundleData, captured.entryMode == identity.entryMode else { throw CancellationError() }
+                guard captured.entryBundleData == identity.entryBundleData, captured.entryMode == identity.entryMode,
+                      captured.nodeChainSource == identity.nodeChainSource else { throw CancellationError() }
             } else {
                 guard idle(manager), !model.connected, !manager.isOnDemandEnabled else { throw CancellationError() }
             }
             var execution: IOSMultihopExecution.Capture?
-            if let identity, try IOSMultihopExecution.requiresCapture(configuration: proto.providerConfiguration ?? [:]) {
+            if let identity, identity.nodeChainSource == nil,
+               try IOSMultihopExecution.requiresCapture(configuration: proto.providerConfiguration ?? [:]) {
                 execution = try await readExecution(manager, model: model, identity: identity, owner: owner)
             }
             return try IOSSpeedLabTunnel(identity: identity, proto: proto, manager: manager, execution: execution)
@@ -88,6 +90,7 @@ import Foundation
               identity?.rawProfile == original.identity?.rawProfile,
               identity?.bundleData == original.identity?.bundleData,
               identity?.entryBundleData == original.identity?.entryBundleData,
+              identity?.nodeChainSource == original.identity?.nodeChainSource,
               identity?.entryMode == original.identity?.entryMode else { throw CancellationError() }
         if original.savedProtocol == nil {
             guard identity == nil, !savedOnDemand,
@@ -387,6 +390,7 @@ import Foundation
             if let restored = model.activeSessionIdentity, model.connected, !model.tunnelTransitioning {
                 guard restored.engine == identity.engine, restored.rawProfile == identity.rawProfile,
                       restored.bundleData == identity.bundleData, restored.entryBundleData == identity.entryBundleData,
+                      restored.nodeChainSource == identity.nodeChainSource,
                       restored.entryMode == identity.entryMode else {
                     throw Self.issue("Restoration proved a different runtime or predecessor source.")
                 }

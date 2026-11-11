@@ -46,7 +46,7 @@ enum Status {case connected,connecting,reasserting,disconnecting,disconnected,in
  var pinsJSON="{}",restorePinsOverride:String?
  func startVPNTunnel(options:[String:NSObject]?=nil)throws{
   if let config=(NETunnelProviderManager.stored.first?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
-     try IOSMultihopExecution.requiresCapture(configuration:config) {
+     config["nodeChainSource"] == nil, try IOSMultihopExecution.requiresCapture(configuration:config) {
    let source=try IOSMultihopExecution.Source(configuration:config,digest:RouterVPNModel.iosStrategyDigest)
    let restored=try IOSMultihopExecution.restoredCapture(option:options?[IOSMultihopExecution.launchKey],source:source,mtuHold:options?["routervpn_mtu_hold"] as? String ?? "")
    if source.requested=="auto",restored==nil{comparisonStarts+=1}
@@ -96,6 +96,7 @@ typealias NETunnelProviderSession=Connection
  let iosSpeedLabOwnership=IOSSpeedLabOwnership()
  var connected=true,tunnelTransitioning=false,iosUserDisconnectInProgress=false,refreshUnknown=false
  var activeSessionIdentity:IOSSessionIdentity?,iosConnectGeneration=UUID()
+ var chainReadbackOverride:String?
  var selectedLogicalMode="base-raw",selectedMode="base-raw",auto=true,message="original",bundleRestores=0
  func restoreIOSSpeedLabBundle(_ data:Data?)throws{bundleRestores+=1}
  static func iosStrategyDigest(_ data:Data)->String{let hash=data.reduce(UInt64(14695981039346656037)){($0 ^ UInt64($1)) &* 1099511628211};return String(repeating:String(format:"%016llx",hash),count:4)}
@@ -106,7 +107,8 @@ typealias NETunnelProviderSession=Connection
   tunnelTransitioning=[.connecting,.reasserting,.disconnecting].contains(m.connection.status) || m.connection.failedProof
   guard connected,let date=m.connection.connectedDate,let bundle=c["bundle"] as? Data else{activeSessionIdentity=nil;return}
   let raw=(c["strategy"] as? [String:Any]).flatMap{($0["candidates"] as? [[String:Any]])?.first?["raw"] as? String} ?? c["rawProfileID"] as? String ?? c["mode"] as? String ?? ""
-  activeSessionIdentity=try! IOSSessionIdentity(connectedAt:date,engine:c["engine"] as! String,rawProfile:raw,bundleData:bundle,configuration:c)
+  var observed=c;if let chainReadbackOverride{observed["nodeChainSource"]=chainReadbackOverride}
+  activeSessionIdentity=try! IOSSessionIdentity(connectedAt:date,engine:c["engine"] as! String,rawProfile:raw,bundleData:bundle,configuration:observed)
  }
 }
 @MainActor @main struct Tests {
@@ -156,7 +158,50 @@ typealias NETunnelProviderSession=Connection
   let owner=try model.iosSpeedLabOwnership.begin{}
   return(model,m,owner)
  }
+ static func chainSource(_ middle:String="original-middle")throws->String {
+  String(decoding:try JSONSerialization.data(withJSONObject:["schema":1,"kind":"routervpn-node-chain-launch-input","execution":"local","nodes":["original-first",middle,"original-final"]],options:[.sortedKeys]),as:UTF8.self)
+ }
+ static func freshChain()throws->(RouterVPNModel,NETunnelProviderManager,UUID) {
+  let (model,m,owner)=try fresh()
+  let p=m.protocolConfiguration as! NETunnelProviderProtocol
+  p.providerConfiguration=["engine":"multihop-libbox","mode":"shadowsocks","rawProfileID":"shadowsocks","nodeChainSource":try chainSource(),"bundle":Data("original independent final bundle".utf8)]
+  model.activeSessionIdentity=try IOSSessionIdentity(connectedAt:m.connection.connectedDate!,engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:Data("original independent final bundle".utf8),configuration:p.providerConfiguration!)
+  return(model,m,owner)
+ }
  static func main()async throws {
+  do {
+   let (model,m,owner)=try freshChain(),before=model.activeSessionIdentity!
+   let captured:IOSSpeedLabTunnel
+   do{captured=try await IOSSpeedLabTunnel.capture(model:model,owner:owner)}catch{fatalError("FAIL: ordered source must not borrow legacy pair proof: "+error.localizedDescription)}
+   try await captured.stopOriginal(model:model,owner:owner)
+   check("ordered original stops once before restoration",m.connection.stops==1 && !model.connected)
+   try await captured.restore(model:model,owner:owner,reconnect:true)
+   check("ordered restoration retains every source byte",model.activeSessionIdentity?.nodeChainSource==before.nodeChainSource && model.activeSessionIdentity?.bundleData==before.bundleData)
+   check("ordered restoration renews one held native connection",m.connection.starts==1 && m.connection.comparisonStarts==0 && model.activeSessionIdentity?.connectedAt != before.connectedAt && !m.connection.hold.isEmpty)
+   let restored=try await IOSSpeedLabTunnel.capture(model:model,owner:owner)
+   try restored.requireSameRestorationSource(as:captured,owner:owner)
+   check("ordered source remains same original across test batch",m.isOnDemandEnabled && m.isEnabled)
+  }
+  do {
+   let (model,m,owner)=try freshChain()
+   (m.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration?["nodeChainSource"]=try chainSource("replacement-middle")
+   await rejected("changed ordered source cannot capture original"){_ = try await IOSSpeedLabTunnel.capture(model:model,owner:owner)}
+   check("stale ordered capture cannot stop native owner",m.connection.stops==0)
+  }
+  do {
+   let (model,m,owner)=try freshChain(),captured=try await IOSSpeedLabTunnel.capture(model:model,owner:owner)
+   try await captured.stopOriginal(model:model,owner:owner)
+   model.chainReadbackOverride=try chainSource("replacement-middle")
+   await rejected("restored ordered observation cannot substitute middle"){try await captured.restore(model:model,owner:owner,reconnect:true)}
+   check("changed ordered restoration cannot enable automatic reconnect",!m.isOnDemandEnabled)
+  }
+  do {
+   let (model,m,owner)=try freshChain(),before=model.activeSessionIdentity!,captured=try await IOSSpeedLabTunnel.capture(model:model,owner:owner)
+   try await captured.stopOriginal(model:model,owner:owner);_ = model.iosSpeedLabOwnership.admit(.disconnect)
+   try await captured.restore(model:model,owner:owner,reconnect:false)
+   let config=(m.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+   check("ordered Disconnect restores sources without restarting",m.connection.starts==0 && !m.isOnDemandEnabled && config["nodeChainSource"] as? String==String(data:before.nodeChainSource!,encoding:.utf8))
+  }
   for kind in ["tor","tor-bridge"] {for execution in ["local","server"] {for requested in [execution,"auto"] {
    do {
     let (model,m,owner)=try fresh("external-libbox","external-"+kind,false,true,false,execution,requested),before=model.activeSessionIdentity!
@@ -353,6 +398,13 @@ def main():
                 assert result.returncode != 0 and negative in result.stdout+result.stderr, 'Pin ownership negative did not fail at the expected assertion'
                 print('Apple Speed Lab negative control rejected: '+negative)
         compile_and_run(source)
+        for before,after,failure in (
+            ('captured.nodeChainSource == identity.nodeChainSource else', 'true else', 'changed ordered source cannot capture original'),
+            ('                      restored.nodeChainSource == identity.nodeChainSource,\n', '', 'restored ordered observation cannot substitute middle'),
+            ('if let identity, identity.nodeChainSource == nil,', 'if let identity,', 'ordered source must not borrow legacy pair proof'),
+        ):
+            assert source.count(before)==1,before
+            compile_and_run(source.replace(before,after,1),failure)
         tor_slot='''let entryKey = identity.engine == "external-libbox"
             ? (["external-tor", "external-tor-bridge"].contains(identity.rawProfile) ? "tor_entry_bundle" : "external_entry_bundle")
             : "entryBundle"'''

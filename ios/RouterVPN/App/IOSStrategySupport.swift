@@ -256,6 +256,12 @@ extension RouterVPNModel {
 
     private func runIOSRouterStartup(mode: String, profile: RouterProfile, intent: IOSStartupIntent) async {
         guard iosStartupMatches(intent) else { return }
+        if profile.multihopNodes != nil {
+            // The explicit ordered graph owns every transport. Startup modes
+            // can request that saved path, but cannot substitute a raw member.
+            await connect()
+            return
+        }
         switch mode {
         case "auto":
             auto = true
@@ -285,6 +291,12 @@ extension RouterVPNModel {
     private func iosStartupCapture() throws -> IOSStartupCapture {
         guard let bundle, let profile = iosStrategyProfile else { throw CancellationError() }
         let entry: Data?
+        if profile.multihopNodes != nil {
+            let chain = try captureIOSNodeChain(bundle)
+            defer { try? chain.plan.close() }
+            return try IOSStartupCapture(bundle: bundle, entry: nil, generation: iosConnectGeneration,
+                                         nodeChainSource: Data(chain.launchInput.utf8))
+        }
         if profile.normalizedNodeKind == "external" {
             entry = try externalTorEntryData(source: bundle)
         } else if profile.multihopEnabled == true {

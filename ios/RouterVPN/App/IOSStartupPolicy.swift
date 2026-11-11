@@ -42,12 +42,18 @@ import Foundation
 struct IOSStartupCapture: Equatable {
     let source: Data
     let entry: Data?
+    let nodeChainSource: Data?
     let generation: UUID
 
-    init(bundle: ClientBundle, entry: Data?, generation: UUID) throws {
+    init(bundle: ClientBundle, entry: Data?, generation: UUID, nodeChainSource: Data? = nil) throws {
         guard !bundle.selectedRouterID.isEmpty,
               bundle.routerProfiles.filter({ $0.id == bundle.selectedRouterID }).count == 1 else {
             throw IOSStartupPolicy.issue("Startup requires one exact selected node.")
+        }
+        let ordered = bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID })?.multihopNodes != nil
+        guard ordered == (nodeChainSource != nil), nodeChainSource == nil || entry == nil,
+              nodeChainSource == nil || ((nodeChainSource?.count ?? 0) > 0 && (nodeChainSource?.count ?? 0) <= 40 * 1024 * 1024) else {
+            throw IOSStartupPolicy.issue("Startup requires the complete original ordered source without a second entry owner.")
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -57,6 +63,7 @@ struct IOSStartupCapture: Equatable {
         }
         self.source = source
         self.entry = entry
+        self.nodeChainSource = nodeChainSource
         self.generation = generation
     }
 }
@@ -70,6 +77,7 @@ struct IOSStartupCapture: Equatable {
         self.captured = captured; generation = captured.generation
     }
     func matches(_ current: IOSStartupCapture) -> Bool {
-        current.source == captured.source && current.entry == captured.entry && current.generation == generation
+        current.source == captured.source && current.entry == captured.entry &&
+            current.nodeChainSource == captured.nodeChainSource && current.generation == generation
     }
 }

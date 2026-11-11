@@ -222,7 +222,17 @@ func LibboxRouterCheckMAXProfile(_ mode: String, _ files: String, _ metadata: St
     do { return try bridge(["Op": "max-check", "Mode": mode, "Files": files, "Policy": metadata]) }
     catch let failure as NSError { error = failure; return nil }
 }
+// Ordered capture executes against Go in test_ios_node_chain_launch.py.
+// This legacy strategy fixture refuses that separate native path explicitly.
+struct FixtureNodeChainBoundary {
+    struct Plan {func close()throws{}}
+    struct Member {let mode:String}
+    let plan=Plan(),members:[Member]=[],launchInput="",startupTimeout:TimeInterval=0,strict=false,homeLANAccess=false
+}
+enum IOSNodeChainProviderCapture {static let key="nodeChainSource"}
 @MainActor final class RouterVPNModel {
+    func captureIOSNodeChain(_ bundle:ClientBundle)throws->FixtureNodeChainBoundary {throw IOSStrategyWire.failure("Separate native chain fixture")}
+    func requireCurrentIOSNodeChain(_ input:String,selected:ClientBundle)throws {throw IOSStrategyWire.failure("Separate native chain fixture")}
     var bundle: ClientBundle?
     var entryBundle: ClientBundle?
     var connected = false, tunnelTransitioning = false, auto = true, baseFallback = false, homeLANAccess = false
@@ -708,7 +718,7 @@ def main(negative=True, selected_mutations=None):
             ('mutable source accepted', 'try iosStrategySource(current) == iosStrategySource(source)', '!current.selectedRouterID.isEmpty', 'changed source before preference readback prevents start'),
             ('mutable MAX entry accepted', 'guard try encoder.encode(iosMultihopEntryBundle(for: bundle)) == capturedEntry else', 'guard !capturedEntry.isEmpty else', 'MAX multihop changed captured entry or LAN prevents start entry-token'),
             ('private Last record omitted', 'try await rememberIOSMultihopExecution(manager: manager, source: bundle,\n                                                              entry: configuration?["entryBundle"] as? Data, generation: generation)', 'throw IOSMultihopExecution.issue()', 'private Router proof records complete Last choice'),
-            ('private Last reruns Compare', 'if IOSSpeedLabContext.startupAdmission != nil,\n           (try? IOSStartupPolicy.mode', 'if false,\n           (try? IOSStartupPolicy.mode', 'private Router Last retains the proved leaf without Compare'),
+            ('private Last reruns Compare', 'if nodeChainSource == nil, IOSSpeedLabContext.startupAdmission != nil,\n           (try? IOSStartupPolicy.mode', 'if false,\n           (try? IOSStartupPolicy.mode', 'private Router Last retains the proved leaf without Compare'),
             ('private Last entry replaced', 'return try encoder.encode(iosMultihopEntryBundle(for: current))', 'return entry', 'private Router Last rejects stale proof or owner entry'),
         ]:
             if selected_mutations and label not in selected_mutations:

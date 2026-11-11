@@ -109,8 +109,13 @@ private struct IOSLastRuntime:Codable {let routerID:String,rawProfileID:String,l
 // This uninhabited receipt cannot authorize optional history. The startup
 // fixture owns no real native status/proof from which to derive that authority.
 enum FixtureOptionalUsageOwner {}
+struct FixtureNodeChainBoundary {
+ struct Plan {func close()throws{}}
+ let plan=Plan(),launchInput=""
+}
 @MainActor final class RouterVPNModel {
  var bundle:ClientBundle?,entry:ClientBundle?
+ func captureIOSNodeChain(_ bundle:ClientBundle)throws->FixtureNodeChainBoundary {throw NSError(domain:"SeparateNativeChainFixture",code:1)}
  var connected=false,tunnelTransitioning=false,iosUserDisconnectInProgress=false
  var profileMutationBlocked:Bool{connected || tunnelTransitioning || iosUserDisconnectInProgress}
  var iosConnectGeneration=UUID(),message="",auto=false,activeRawProfile="",activeEngine="libbox",imports=0,failImport=false
