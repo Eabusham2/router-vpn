@@ -127,9 +127,12 @@ Two unfinished source units were present locally at the interruption: desktop
 ordered Startup Last/autoconnect, and the remaining macOS descriptor/native
 bridge. Neither was frozen, fully tested or published. The detailed ledger
 records their exact file whitelists, unresolved test sessions and required
-compatibility correction. Their source contents cannot currently be read;
-a recovery manifest is not a backup of those bytes. The Naive H2 hostname/DoH3
-investigation remained read-only. Full source completion, native release,
+compatibility correction. The startup draft's four production-file edit payloads are now preserved as
+an [unvalidated recovery patch](recovery/2026-11-11-desktop-ordered-startup.patch)
+with an [explicit manifest](recovery/2026-11-11-desktop-ordered-startup.manifest.json).
+Its two new test-file payloads are incomplete in the retained context. The
+macOS bridge's final source bytes remain unavailable; its manifest is not a
+backup of those bytes. The Naive H2 hostname/DoH3 investigation remained read-only. Full source completion, native release,
 physical-device acceptance and private deployment remain open.
 
 ## Historical November 11 earlier continuation: native repairs and imported-path ownership

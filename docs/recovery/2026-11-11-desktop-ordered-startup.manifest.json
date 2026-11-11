@@ -1,0 +1,133 @@
+{
+  "status": "UNVALIDATED RECOVERY ARTIFACT; NOT SHIPPING SOURCE",
+  "repository": "Eabusham2/router-vpn",
+  "baseline_commit": "c4e55240b431853c1769ce0eb737e5c97e6a4ff6",
+  "baseline_tree": "3b625148cd50cb92126aa353ae801ba9468bebea",
+  "checkpoint_at_export": "367c2e793621dda00b812751be513b1a67282ed3",
+  "patch": "2026-11-11-desktop-ordered-startup.patch",
+  "provenance": [
+    "Reconstructed retained recorded semantic edits, not a read of the final unavailable workspace.",
+    "The complete new production payload survived in agent storage; exact semantic edits to the three existing files were reapplied to exact published baseline text.",
+    "Final filesystem bytes, final gofmt whitespace and original six-file WIP hashes are not verified.",
+    "No pending implementation fix was applied during recovery. Shipping source and Git refs were not changed by this export.",
+    "The original six-file whitelist is below. The patch contains only the four recovered production files."
+  ],
+  "original_whitelist": [
+    "cmd/client/startup_external.go",
+    "cmd/client/strategy_modes.go",
+    "cmd/client/multihop_native_routes.go",
+    "cmd/client/startup_node_chain.go",
+    "cmd/client/startup_node_chain_test.go",
+    "cmd/client/startup_node_chain_owned_test.go"
+  ],
+  "recovered_files": [
+    {
+      "path": "cmd/client/startup_external.go",
+      "baselineCharacters": 11066,
+      "recoveredCharacters": 12228,
+      "oldLines": 305,
+      "newLines": 340,
+      "hunks": 5
+    },
+    {
+      "path": "cmd/client/strategy_modes.go",
+      "baselineCharacters": 28304,
+      "recoveredCharacters": 28934,
+      "oldLines": 824,
+      "newLines": 837,
+      "hunks": 7
+    },
+    {
+      "path": "cmd/client/multihop_native_routes.go",
+      "baselineCharacters": 20587,
+      "recoveredCharacters": 20805,
+      "oldLines": 518,
+      "newLines": 524,
+      "hunks": 2
+    },
+    {
+      "path": "cmd/client/startup_node_chain.go",
+      "baselineCharacters": 0,
+      "recoveredCharacters": 22738,
+      "oldLines": 0,
+      "newLines": 498,
+      "hunks": 1
+    }
+  ],
+  "missing_payloads": [
+    {
+      "path": "cmd/client/startup_node_chain_test.go",
+      "status": "Complete exact edit payload no longer available after context compaction; NOT reconstructed by guessing.",
+      "retained_notes": [
+        "startupOrderedTestApp used desktopNodeChainCaptureFixture, prefixes cycling wg/awg2-fast/awg2-strong, SS final and installOrderedAWGAssets. The latest recorded fixture correction enabled KillSwitch=true and KillSwitchPolicy=on-connect on every profile. It created only an explicit native-boundary manifest, not installed physical acceptance.",
+        "TestStartupNodeChainCapturesAllOriginalModesAndPrivateSources: 2/3/4/8 nodes, AES+XOR start layer, complete original profile tokens/order and deduplicated WG/exact mode/SS asset digests, no profile mutation.",
+        "TestStartupNodeChainDelayRejectsEveryMemberAndSourceReplacement: first/middle/final policy and credentials, selected node, order/mode, duplicate/missing member, canonical root, each original WG/AWG/Start-Layer/SS file, and startup policy changes must invalidate original capture before native ownership.",
+        "TestStartupNodeChainLastKeepsProvedDraftAndNormalizedPolicy: Last keeps the actually proved explicit reordered draft even when saved profile path differs; StartupMode/AutoConnect/EffectiveMTU normalization; no copied API/private credentials; receipt replacement invalidates delayed capture.",
+        "TestStartupNodeChainLastRejectsMalformedOrCrossFamilyReceipt: duplicate/unknown/case-alias fields, null/cross-family capture, malformed source/member inventory, server/Compare execution, wrong final/prefix/base and trailing JSON all refuse with errOrderedNodeChainDispatch.",
+        "startupOrderedDriver supplied explicit native boundary doubles around actual captureNativeNodeChainSelection; the test preflight used newDesktopNodeChainLaunch, unstarted command staging and a proof boundary. This was not OS traffic.",
+        "TestStartupNodeChainAdaptersRejectTransientSourceAndPreflightChanges: actual compile change/revert asset mismatch, preflight policy/cancellation invalidation with retired zeroed unstarted launch, stage/proof source mutation and proof cancellation.",
+        "TestStartupNodeChainCancelledIntentNeverEntersAnotherTransaction: cancellation or a later explicit operation must prevent queued startup from reaching native capture or opening a new connection transaction."
+      ]
+    },
+    {
+      "path": "cmd/client/startup_node_chain_owned_test.go",
+      "status": "Complete exact edit payload no longer available after context compaction; NOT reconstructed by guessing.",
+      "retained_notes": [
+        "TestStartupNodeChainLastRequiresFreshOriginalNativeOwner used newDesktopNodeChainOwnedFixture with the existing explicit Windows kernel/process boundary; actual private staging, child replay, proof heartbeat, owner registry and cleanup paths were exercised, without claiming native OS traffic.",
+        "Last write refused before launch and before Connected admission; an original proved Connected native owner could record complete Local ordered references/modes/normalized profile tokens.",
+        "foreign-context, middle-source replacement, wrong command owner, stale proof, missing proof and lost runtime owner had to reject a new Last write and leave prior durable receipt bytes unchanged.",
+        "The draft tested ordinary recorder refusal for an actual ordered runtime with both ordered and cleared saved preferences; the broader legacy pair compatibility defect remained unresolved."
+      ]
+    }
+  ],
+  "pending_implementation_correction": {
+    "pathKind": {
+      "field": "PathKind string `json:\"path_kind,omitempty\"` on startupSelection",
+      "orderedValue": "node-chain-v1",
+      "writeSites": [
+        "saveNodeChainStartupSelection",
+        "startupOrderedReceipt test helper",
+        "TestStartupNodeChainLastKeepsProvedDraftAndNormalizedPolicy receipt"
+      ],
+      "strictDecode": "Allow canonical path_kind top-level field; when present require exact string node-chain-v1. validateStartupNodeChainSelection must require PathKind==node-chain-v1 when NodeChain exists and reject PathKind!=empty when NodeChain is absent. External plus tagged ordered capture remains refused. Unknown/duplicate/case-aliased fields remain refused.",
+      "load": "loadStartupNodeChainReceipt refusal-only observation must recognize any path_kind presence as new typed receipt intent; remove LogicalMode==multihop inference entirely. Untagged historical pair receipt with no NodeChain returns (nil,false,nil). The strict decoder rejects tagged receipt with omitted NodeChain."
+    },
+    "ordinaryRecorder": {
+      "signature": "ordinaryStartupRecordAllowed(a *app, profile common.RouterProfile, st state) bool",
+      "behavior": "Reject active saved ordered preferences. Allow non-multihop ordinary states. For multihop, inspect nativeMultihopOwners: an exact typed nativeMultihopRuntime with nonnil selection.Native and chain==nil may retain existing pair behavior; chain!=nil must never enter ordinary recorder. If original native owner is absent or invalid under a retained native platform, refuse during cleanup. Legacy nonnative paired host keeps previous behavior, provided no active ordered ChainNodes graph remains. Apply predicate both before ticker capture and under original operationMu/app lock before write.",
+      "caution": "Do not use logical label alone as ordered authority. Do not infer native proof from this predicate; existing session/Connected/ownership checks stay intact."
+    },
+    "tests": [
+      "Exact historical JSON record with logical_mode=multihop, no path_kind and no node_chain must decode/capture through existing ordinary/pair path.",
+      "New ordered receipt with path_kind retained but node_chain omitted must reject before ordinary fallback.",
+      "Unknown/cross-family/duplicate discriminator forms reject canonically.",
+      "Actual retained ordered owner and its cleanup gap never let ordinary recorder overwrite complete receipt.",
+      "Retained native pair/legacy pair behavior remains compatible."
+    ]
+  },
+  "test_status": {
+    "initialStartup": "StartupProfileToken, StartupSelection and OrderedStartupCannotFallback passed before new full tests",
+    "sourceFirst": "Failed only five preflight/stage/proof controls because fixture omitted mandatory KillSwitch=true/on-connect; fixture corrected, rerun57863 pending before environment disappeared",
+    "sourcePendingSession": 57863,
+    "ownerPendingSession": 13164,
+    "logs": [
+      "startup-node-chain-source-tests.log",
+      "startup-node-chain-owned-tests.log"
+    ],
+    "noFinalClaim": true
+  },
+  "recovery_validation": {
+    "scope": "Pure JavaScript unified-diff parsing and application only; not Go parsing, compilation, unit tests, CI, native execution or device acceptance.",
+    "exact_baseline_application": true,
+    "reconstructed_output_matches": true,
+    "hunk_counts_verified": true,
+    "hunks": 15,
+    "paths": 4
+  },
+  "next_steps": [
+    "Recover original workspace/test bytes if the executor returns; otherwise rebuild missing tests explicitly as new work rather than describing their bytes as recovered.",
+    "Implement the explicitly tagged path_kind compatibility correction, preserving historical ordinary/pair/External Last.",
+    "Re-run source, adapter, owned-native-fixture and compatibility gates; inspect complete results and format source before considering a shipping change.",
+    "Keep actual protected installed host capability and physical/native CI gates intact."
+  ]
+}

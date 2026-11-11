@@ -292,6 +292,24 @@ returns, are `startup-node-chain-source-tests.log` and
 `startup-node-chain-owned-tests.log` in its scratch parent. No final hashes
 or successful complete startup suite were recorded.
 
+The recorded edits for the four production files were subsequently exported
+through the still-accessible GitHub API into
+[the unvalidated recovery patch](recovery/2026-11-11-desktop-ordered-startup.patch)
+and [its manifest](recovery/2026-11-11-desktop-ordered-startup.manifest.json).
+The patch is based on exact `c4e55240b431853c1769ce0eb737e5c97e6a4ff6` and
+contains four paths and 15 hunks. Application against the original source
+strings and hunk line counts were checked in memory, and both Git objects
+were read back exactly. The patch blob is
+`27d8c462759752d37e2d0fb2239183ef193f3e15`; the manifest blob is
+`cce468b00db9752190e0f19201b800462e7d8479`.
+
+This preserves the recorded production edit payloads, not verified final
+filesystem bytes or final formatting. Both new test-file payloads became
+incomplete in the retained context; their scenarios and unresolved run notes
+are in the manifest instead of invented test code. The known `path_kind`
+compatibility correction remains unapplied. The recovery patch is documentation
+data and has not been applied to shipping application source.
+
 ### macOS descriptor/native bridge: unfinished
 
 Work was present in the detached isolated checkout
