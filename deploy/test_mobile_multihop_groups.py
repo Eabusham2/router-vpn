@@ -40,6 +40,16 @@ REQUIRED = frozenset((
     'TestCompleteMAXPrivateRelaysPreserveBothProofsAndEveryOwnedLayer',
     'TestPQEntriesPreserveAllExistingExitAndStartLayerPaths',
     'TestNaiveEveryExistingEntryExitLayerAndExecutionGraph',
+    'TestNodeChainCompleteCapturedPaths',
+    'TestNodeChainOrderSourceAndBounds',
+    'TestNodeChainCanonicalIndependentPeers',
+    'TestNodeChainProjectionReopensExactSystemTUN',
+    'TestNodeChainMTURequiresEveryMiddleEnvelope',
+    'TestNodeChainProjectionRetainsFixedAndSourcePolicy',
+    'TestNodeChainRuntimeProvesEveryOriginalPrefix',
+    'TestNodeChainRuntimeRejectsMiddleAndNativeChanges',
+    'TestNodeChainRetainedObserverRetiresDeadMiddle',
+    'TestNodeChainCancellationJoinsLateOriginalCallbacks',
 ))
 
 
@@ -127,6 +137,17 @@ class PartitionTests(unittest.TestCase):
         for label, pattern in (('overlap desktop', r'^TestDesktop'), ('overlap imported', r'^TestImported')):
             with self.subTest(label=label), self.assertRaises(ValueError):
                 partition(self.names, PHASES + ((label, pattern),))
+
+    def test_every_selected_node_chain_root_is_mandatory_and_runs_once(self):
+        required = {name for name in REQUIRED if name.startswith('TestNodeChain')}
+        self.assertEqual(len(required), 10)
+        groups = dict(partition(self.names))
+        self.assertTrue(required.issubset(groups['node capture and packet identities']))
+        selected = [name for names in groups.values() for name in names if name in required]
+        self.assertEqual(sorted(selected), sorted(required))
+        for omitted in required:
+            with self.subTest(omitted=omitted), self.assertRaisesRegex(ValueError, 'Required shared multihop matrix is missing'):
+                inventory('\n'.join(name for name in self.names if name != omitted))
 
     def test_overlapping_predicates_reject(self):
         with self.assertRaises(ValueError):
