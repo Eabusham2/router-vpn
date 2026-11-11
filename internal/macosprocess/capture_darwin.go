@@ -29,11 +29,6 @@ const InstallLockPath = "/opt/router-vpn-client.install.lock"
 const ProcessLockPath = "/opt/router-vpn-client.controller.lock"
 const LifetimePath = "/opt/router-vpn-client.control/controller.sock"
 
-// Scope is the expected policy identity, never a substitute for the original
-// descriptor and native main-image observations. Source is the policy's
-// semantic digest; InputsSHA256 separately binds the exact private documents.
-type Scope struct{ Session, Source, Config, Workspace string }
-
 type pinnedFile struct {
 	file      *os.File
 	info      os.FileInfo
@@ -167,6 +162,10 @@ func (c *Capture) capture(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	manifest, err := c.scope.inputManifest()
+	if err != nil {
+		return err
+	}
 	for i := range c.files {
 		info, err := c.files[i].file.Stat()
 		if err != nil {
@@ -256,7 +255,8 @@ func (c *Capture) capture(ctx context.Context) error {
 		return errors.New("private input directory differs from original descriptor")
 	}
 	inputs := sha256.New()
-	for _, name := range []string{"source.json", "capture.json", "sing-box.json"} {
+	for _, input := range manifest {
+		name := input.name
 		file, err := c.workspaceRoot.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 		if err != nil {
 			return err
@@ -267,7 +267,7 @@ func (c *Capture) capture(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		data, err := readPinned(pin, 16<<20)
+		data, err := readPinned(pin, input.limit)
 		if err != nil {
 			return err
 		}
@@ -280,7 +280,7 @@ func (c *Capture) capture(ctx context.Context) error {
 	}
 	catalogSHA := sha256.Sum256(catalog)
 	st := c.files[0].info.Sys().(*syscall.Stat_t)
-	c.selection = Selection{Session: c.scope.Session, Source: c.scope.Source, Config: c.scope.Config, CallerUID: peer.UID, WorkspaceDevice: uint64(st.Dev), WorkspaceInode: st.Ino, EngineSHA256: hex.EncodeToString(c.engine.SHA256[:]), ControllerSHA256: hex.EncodeToString(c.controller.SHA256[:]), CatalogSHA256: hex.EncodeToString(catalogSHA[:]), InputsSHA256: hex.EncodeToString(inputs.Sum(nil))}
+	c.selection = Selection{Session: c.scope.Session, Source: c.scope.Source, Config: c.scope.Config, CallerUID: peer.UID, WorkspaceDevice: uint64(st.Dev), WorkspaceInode: st.Ino, EngineSHA256: hex.EncodeToString(c.engine.SHA256[:]), ControllerSHA256: hex.EncodeToString(c.controller.SHA256[:]), CatalogSHA256: hex.EncodeToString(catalogSHA[:]), InputsSHA256: hex.EncodeToString(inputs.Sum(nil)), Family: c.scope.Family}
 	return c.Current(ctx)
 }
 func readPinned(p pinnedFile, limit int64) ([]byte, error) {
@@ -332,7 +332,9 @@ func (c *Capture) Current(ctx context.Context) error {
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c == nil || c.closed || ctx == nil || len(c.files) != 7 || len(c.inputs) != 3 || !c.selection.valid() || os.Getuid() != 0 || os.Geteuid() != 0 {
+	manifest, manifestErr := c.scope.inputManifest()
+	if c.closed || ctx == nil || manifestErr != nil || len(c.files) != 7 || len(c.inputs) != len(manifest) ||
+		c.selection.Family != c.scope.Family || !c.selection.valid() || os.Getuid() != 0 || os.Geteuid() != 0 {
 		return errors.New("native child capture is not complete")
 	}
 	if err := ctx.Err(); err != nil {
@@ -351,7 +353,10 @@ func (c *Capture) Current(ctx context.Context) error {
 			return fmt.Errorf("current captured ancestor: %w", err)
 		}
 	}
-	for _, p := range c.inputs {
+	for i, p := range c.inputs {
+		if p.path != filepath.Join(c.scope.Workspace, manifest[i].name) {
+			return errors.New("native child input changed its original policy manifest")
+		}
 		if err := checkPin(p, false); err != nil {
 			return fmt.Errorf("current private input: %w", err)
 		}

@@ -1,0 +1,52 @@
+package macosprocess
+
+import "errors"
+
+// Family identifies the concrete child policy before any private input is
+// opened. The zero value preserves the original external-child wire contract.
+// An ordered child must explicitly opt into its separate manifest and protocol.
+type Family string
+
+const (
+	ExternalFamily  Family = ""
+	NodeChainFamily Family = "ordered-node-chain-v1"
+)
+
+// Scope is the expected policy identity, never a substitute for the original
+// descriptor and native main-image observations. Source is the semantic policy
+// digest; the capture separately binds every exact private input document.
+type Scope struct {
+	Session, Source, Config, Workspace string
+	Family                             Family
+}
+
+type scopeInput struct {
+	name  string
+	limit int64
+}
+
+func (family Family) protocolSchema() int {
+	switch family {
+	case ExternalFamily:
+		return 1
+	case NodeChainFamily:
+		return 2
+	default:
+		return 0
+	}
+}
+
+func (scope Scope) inputManifest() ([]scopeInput, error) {
+	switch scope.Family {
+	case ExternalFamily:
+		// Keep the original filenames, order and per-document limit unchanged.
+		return []scopeInput{{"source.json", 16 << 20}, {"capture.json", 16 << 20}, {"sing-box.json", 16 << 20}}, nil
+	case NodeChainFamily:
+		// The ordered source is the canonical complete launch input. It already
+		// includes its validated capture/projection; no external-policy adapter
+		// or fabricated capture.json participates in this family.
+		return []scopeInput{{"node-chain-source.json", 40 << 20}, {"sing-box.json", 4 << 20}}, nil
+	default:
+		return nil, errors.New("native child scope has an unsupported concrete policy family")
+	}
+}

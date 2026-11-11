@@ -27,10 +27,11 @@ type Selection struct {
 	ControllerSHA256 string `json:"controller_sha256"`
 	CatalogSHA256    string `json:"catalog_sha256"`
 	InputsSHA256     string `json:"inputs_sha256"`
+	Family           Family `json:"family,omitempty"`
 }
 
 func (s Selection) valid() bool {
-	return shortDigest.MatchString(s.Session) && longDigest.MatchString(s.Source) && longDigest.MatchString(s.Config) &&
+	return s.Family.protocolSchema() != 0 && shortDigest.MatchString(s.Session) && longDigest.MatchString(s.Source) && longDigest.MatchString(s.Config) &&
 		s.CallerUID != 0 && s.CallerUID != ^uint32(0) && s.WorkspaceInode != 0 && longDigest.MatchString(s.EngineSHA256) && longDigest.MatchString(s.ControllerSHA256) && longDigest.MatchString(s.CatalogSHA256) && longDigest.MatchString(s.InputsSHA256)
 }
 
@@ -65,6 +66,11 @@ func decodeFrame(raw []byte) (frame, error) {
 		if err != nil || !ok || seen[name] {
 			return value, errors.New("native child frame repeats an identity")
 		}
+		switch name {
+		case "session", "source", "config", "caller_uid", "workspace_device", "workspace_inode", "engine_sha256", "controller_sha256", "catalog_sha256", "inputs_sha256", "schema", "sequence", "stage", "nonce", "family":
+		default:
+			return value, errors.New("native child frame contains a noncanonical identity")
+		}
 		seen[name] = true
 		var field json.RawMessage
 		if err := decoder.Decode(&field); err != nil {
@@ -74,7 +80,7 @@ func decodeFrame(raw []byte) (frame, error) {
 			return value, errors.New("native child frame contains a null identity")
 		}
 	}
-	if last, err := decoder.Token(); err != nil || last != json.Delim('}') || len(seen) != 14 {
+	if last, err := decoder.Token(); err != nil || last != json.Delim('}') || len(seen) != 14 && len(seen) != 15 {
 		return value, errors.New("native child frame has incomplete identities")
 	}
 	decoder = json.NewDecoder(bytes.NewReader(raw))
@@ -83,7 +89,10 @@ func decodeFrame(raw []byte) (frame, error) {
 		return value, err
 	}
 	var extra any
-	if decoder.Decode(&extra) != io.EOF || value.Schema != 1 || !value.Selection.valid() || !longDigest.MatchString(value.Nonce) || value.Sequence > 6 {
+	schema := value.Family.protocolSchema()
+	if decoder.Decode(&extra) != io.EOF || !value.Selection.valid() || value.Schema != schema ||
+		len(seen) != 13+schema || seen["family"] != (value.Family == NodeChainFamily) ||
+		!longDigest.MatchString(value.Nonce) || value.Sequence > 6 {
 		return value, errors.New("native child frame has another bounded capture")
 	}
 	switch value.Stage {
@@ -106,7 +115,7 @@ func (p *protocol) send(ctx context.Context, stage string, sequence uint64) erro
 	if err := p.current(ctx); err != nil {
 		return err
 	}
-	raw, err := json.Marshal(frame{p.selection, 1, sequence, stage, p.nonce})
+	raw, err := json.Marshal(frame{p.selection, p.selection.Family.protocolSchema(), sequence, stage, p.nonce})
 	if err != nil {
 		return err
 	}

@@ -52,7 +52,7 @@ func (c *testTransport) Receive(ctx context.Context, peer uint32) (json.RawMessa
 }
 func (c *testTransport) Close() error { c.once.Do(func() { close(c.done) }); return nil }
 func testSelection() Selection {
-	return Selection{strings.Repeat("1", 32), strings.Repeat("2", 64), strings.Repeat("3", 64), 501, 42, 73, strings.Repeat("4", 64), strings.Repeat("5", 64), strings.Repeat("6", 64), strings.Repeat("9", 64)}
+	return Selection{Session: strings.Repeat("1", 32), Source: strings.Repeat("2", 64), Config: strings.Repeat("3", 64), CallerUID: 501, WorkspaceDevice: 42, WorkspaceInode: 73, EngineSHA256: strings.Repeat("4", 64), ControllerSHA256: strings.Repeat("5", 64), CatalogSHA256: strings.Repeat("6", 64), InputsSHA256: strings.Repeat("9", 64)}
 }
 func protocolPair() (*protocol, *protocol, *testTransport, *testTransport) {
 	a, b := make(chan json.RawMessage, 1), make(chan json.RawMessage, 1)
