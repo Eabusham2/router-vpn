@@ -114,7 +114,10 @@ jobs:
   runtime:
     name: Complete native engine ${{ matrix.target }}
     needs: [targets, tor-windows, macos-physical-sockets]
-    if: always() && needs.targets.result == 'success' && (needs.tor-windows.result == 'success' || needs.tor-windows.result == 'skipped') && (needs.macos-physical-sockets.result == 'success' || needs.macos-physical-sockets.result == 'skipped')
+    # A superseded Linux main push must release its caller's concurrency lane.
+    # The reusable github context names its caller; explicit dispatches and
+    # exact-SHA release callers retain the original prerequisite behavior.
+    if: always() && !(cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.workflow == 'Linux native app') && needs.targets.result == 'success' && (needs.tor-windows.result == 'success' || needs.tor-windows.result == 'skipped') && (needs.macos-physical-sockets.result == 'success' || needs.macos-physical-sockets.result == 'skipped')
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
@@ -203,6 +206,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 deploy/test_linux_native_concurrency.py
           # macOS Bash 3.2 treats an empty array as unset under nounset.
           runtime_args=('${{ matrix.target }}' 'dist/native-runtime/${{ matrix.slug }}')
           if [[ '${{ matrix.target }}' == windows/* ]]; then

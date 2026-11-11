@@ -15,6 +15,8 @@ on:
       - 'mobile/desktop/node_box_linux_lifecycle.go.tmpl'
       - 'mobile/desktop/mtu_node.go.tmpl'
       - 'deploy/test_desktop_native_toolchain.py'
+      - 'deploy/test_linux_native_concurrency.py'
+      - '.github/workflows/desktop-native-runtime.yml'
       - 'deploy/test-linux-rendered-layout.sh'
       - 'deploy/test-linux-via-entry-candidates-ui.py'
       - 'deploy/test_desktop_mtu.py'
@@ -80,6 +82,8 @@ on:
       - 'mobile/desktop/node_box_linux_lifecycle.go.tmpl'
       - 'mobile/desktop/mtu_node.go.tmpl'
       - 'deploy/test_desktop_native_toolchain.py'
+      - 'deploy/test_linux_native_concurrency.py'
+      - '.github/workflows/desktop-native-runtime.yml'
       - 'deploy/test-linux-rendered-layout.sh'
       - 'deploy/test-linux-via-entry-candidates-ui.py'
       - 'deploy/test_desktop_mtu.py'
@@ -137,8 +141,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: linux-native-${{ github.ref }}
-  cancel-in-progress: true
+  # Only newer automatic main pushes supersede this shared lane. Explicit
+  # dispatches and other events retain their own evidence run.
+  group: linux-native-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
   native-runtimes:
