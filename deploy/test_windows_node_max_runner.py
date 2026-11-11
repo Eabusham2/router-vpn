@@ -1838,7 +1838,7 @@ class MAXNativeBoundaries(unittest.TestCase):
         self.assertNotIn('exclude:',workflow)
         self.assertNotRegex(workflow,r'(?m)^    if:')
         self.assertIn("--suite '${{ matrix.suite }}'",workflow)
-        self.assertIn('windows-node-max-${{ github.ref }}-${{ matrix.slug }}-${{ matrix.suite }}',workflow)
+        self.assertIn('windows-node-max-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ matrix.slug }}-${{ matrix.suite }}',workflow)
         shipping = (ROOT/'internal/mobilemultihop/desktop_node_admission.go').read_text()
         try:
             GATE.prospective_predicate(shipping)
@@ -1949,6 +1949,126 @@ class MAXNativeBoundaries(unittest.TestCase):
         self.assertEqual(workload_parents,[parent for family in GATE.MAX.FAMILIES for parent in ('TestRouterVPNDesktopNodeWindowsMAX'+family,'TestRouterVPNDesktopNodeWindowsMAX'+family+'Credentials')] + [GATE.SUCCESSION,GATE.FOREIGN])
         self.assertEqual(len(set(workload_parents)),len(workload_parents))
 
+
+
+class NativeWorkflowConcurrency(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location('native_caller_concurrency_expressions', ROOT / 'deploy/test_linux_native_concurrency.py')
+        cls.policy = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.policy)
+
+    def value(self, raw, values):
+        if raw in ('true', 'false'):
+            return raw == 'true'
+        return self.policy.expression(raw, values)
+
+    def context(self, event='push', ref='refs/heads/main', caller='Windows complete MAX and native WFP', run=101, sha='a'*40):
+        return dict(self.policy.context(event, ref, caller, run), **{'github.sha': sha})
+
+    def check_max(self, raw):
+        p = self.policy
+        outer = p.section(raw, 'concurrency', 0)
+        job = p.section(raw, 'native-max', 2)
+        inner = p.section(job, 'concurrency', 4)
+        outer_group, inner_group = p.field(outer, 'group', 2), p.field(inner, 'group', 6)
+        outer_cancel, inner_cancel = p.field(outer, 'cancel-in-progress', 2), p.field(inner, 'cancel-in-progress', 6)
+        contexts = (
+            (self.context(), True), (self.context(run=202, sha='b'*40), True),
+            (self.context(event='workflow_dispatch'), False),
+            (self.context(event='workflow_dispatch', run=202), False),
+            (self.context(event='pull_request', ref='refs/pull/7/merge'), False),
+            (self.context(ref='refs/heads/release'), False),
+            (self.context(caller='Build all Router VPN release gates'), False),
+            (self.context(caller='Build all Router VPN release gates', run=202), False),
+            (self.context(event='workflow_dispatch', caller='Router VPN release candidate'), False),
+            (self.context(event='workflow_dispatch', caller='Router VPN release candidate', sha='b'*40), False),
+        )
+        for values, automatic in contexts:
+            if self.value(outer_cancel, values) or self.value(inner_cancel, values):
+                raise AssertionError('MAX cancellation changed an original diagnostic or retained evidence run')
+            expected_outer = 'windows-node-max-' + values['github.workflow'] + '-' + (values['github.ref'] if automatic else str(values['github.run_id']))
+            if p.render(outer_group, values) != expected_outer:
+                raise AssertionError('MAX outer group mixed automatic and retained caller evidence')
+            for arch in ('windows-amd64', 'windows-arm64'):
+                for suite in GATE.EXECUTION_SUITES:
+                    selected = inner_group.replace('${{ matrix.slug }}', arch).replace('${{ matrix.suite }}', suite)
+                    expected = 'windows-node-max-' + '-'.join(str(values[key]) for key in ('github.workflow', 'github.ref', 'github.sha', 'github.run_id')) + '-' + arch + '-' + suite
+                    if p.render(selected, values) != expected:
+                        raise AssertionError('MAX job group lost caller, source, run, architecture or suite identity')
+        events = p.section(raw, 'on', 0)
+        for trigger in ('workflow_dispatch', 'workflow_call', 'pull_request', 'push'):
+            p.section(events, trigger, 2)
+        if p.field(p.section(events, 'push', 2), 'branches', 4) != '[main]':
+            raise AssertionError('MAX automatic trigger changed branches')
+
+    def check_mtu(self, raw):
+        p = self.policy
+        block = p.section(raw, 'concurrency', 0)
+        group, cancel = p.field(block, 'group', 2), p.field(block, 'cancel-in-progress', 2)
+        for event in ('push', 'workflow_dispatch', 'pull_request'):
+            for ref in ('refs/heads/main', 'refs/heads/release', 'refs/pull/7/merge'):
+                for run in (101, 202):
+                    values = self.context(event=event, ref=ref, caller='Native MTU integration', run=run)
+                    automatic = event == 'push' and ref == 'refs/heads/main'
+                    expected = 'native-mtu-' + (ref if automatic else str(run))
+                    if p.render(group, values) != expected:
+                        raise AssertionError('Native MTU dispatch or PR evidence shares the automatic push lane')
+                    if self.value(cancel, values) is not automatic:
+                        raise AssertionError('Native MTU cancellation escaped automatic main pushes')
+        events = p.section(raw, 'on', 0)
+        for trigger in ('workflow_dispatch', 'pull_request', 'push'):
+            p.section(events, trigger, 2)
+        if p.field(p.section(events, 'push', 2), 'branches', 4) != '[main]':
+            raise AssertionError('Native MTU automatic trigger changed branches')
+
+    def test_actual_max_groups_isolate_standalone_release_manual_and_pr_evidence(self):
+        self.check_max((ROOT / '.github/workflows/windows-node-max-contract.yml').read_text())
+
+    def test_actual_native_mtu_supersedes_only_automatic_main_pushes(self):
+        self.check_mtu((ROOT / '.github/workflows/native-mtu-integration.yml').read_text())
+
+    def test_max_cross_caller_collision_and_lost_source_or_matrix_identity_are_rejected(self):
+        raw = (ROOT / '.github/workflows/windows-node-max-contract.yml').read_text()
+        job = self.policy.section(raw, 'native-max', 2)
+        group = self.policy.field(self.policy.section(job, 'concurrency', 4), 'group', 6)
+        changes = ['windows-node-max-${{ github.ref }}-${{ matrix.slug }}-${{ matrix.suite }}']
+        changes += [group.replace('${{ ' + field + ' }}-', '') for field in ('github.workflow', 'github.sha', 'github.run_id', 'matrix.slug')]
+        changes.append(group.replace('-${{ matrix.suite }}', ''))
+        for changed in changes:
+            with self.subTest(group=changed), self.assertRaises(AssertionError):
+                self.check_max(raw.replace(group, changed))
+        old_outer = 'windows-node-max-${{ github.workflow }}-${{ github.ref }}'
+        outer = self.policy.field(self.policy.section(raw, 'concurrency', 0), 'group', 2)
+        for changed in (raw.replace(outer, old_outer), raw.replace('cancel-in-progress: false', 'cancel-in-progress: true')):
+            with self.subTest(workflow=changed), self.assertRaises(AssertionError):
+                self.check_max(changed)
+
+    def test_mtu_obsolete_queue_and_broad_cancellation_are_rejected(self):
+        raw = (ROOT / '.github/workflows/native-mtu-integration.yml').read_text()
+        block = self.policy.section(raw, 'concurrency', 0)
+        group, cancel = self.policy.field(block, 'group', 2), self.policy.field(block, 'cancel-in-progress', 2)
+        for changed in (raw.replace(group, 'native-mtu-${{ github.ref }}'),
+                        raw.replace(group, 'native-mtu-${{ github.run_id }}'),
+                        raw.replace(cancel, 'true'), raw.replace(cancel, 'false'),
+                        raw.replace(cancel, "${{ github.event_name == 'push' }}")):
+            with self.subTest(workflow=changed), self.assertRaises(AssertionError):
+                self.check_mtu(changed)
+
+    def test_native_mtu_retains_complete_workload_deadlines_and_cleanup(self):
+        raw = (ROOT / '.github/workflows/native-mtu-integration.yml').read_text()
+        job = self.policy.section(raw, 'pinned-native-mtu', 2)
+        self.assertIn('        os: [ubuntu-latest, macos-15]\n', job)
+        self.assertIn('      fail-fast: false\n', job)
+        self.assertIn('    timeout-minutes: 30\n', job)
+        self.assertNotRegex(job, r'(?m)^    (?:if|continue-on-error):')
+        self.assertEqual(job.count('python3 deploy/prepare-mobile-mtu.py .native-mtu-core'), 2)
+        self.assertEqual(job.count('go test -p 2 -race ./adapter/inbound ./experimental/libbox/routervpn/mobilemtu ./experimental/libbox/routervpn/mtuprobe ./experimental/libbox/routervpn/hopmeasure ./experimental/libbox/internal/oomprofile ./experimental/libbox'), 1)
+        self.assertEqual(job.count('        if: always()\n'), 2)
+        command = 'python3 -m unittest deploy.test_windows_node_max_runner.NativeWorkflowConcurrency'
+        self.assertEqual(job.count(command), 1)
+        self.assertLess(job.index(command), job.index('Prepare exact-pinned native MTU source'))
+        self.assertIn('name: native-mtu-evidence-${{ matrix.os }}-${{ github.sha }}', job)
 
 
 if __name__ == '__main__':

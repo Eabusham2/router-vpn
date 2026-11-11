@@ -79,7 +79,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-node-max-${{ github.workflow }}-${{ github.ref }}
+  # Keep the standalone automatic diagnostic serial; explicit and reusable
+  # evidence runs own their original caller and run instead of its shared lane.
+  group: windows-node-max-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.workflow == 'Windows complete MAX and native WFP' && github.ref || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -102,7 +104,7 @@ jobs:
             target: windows/arm64
             slug: windows-arm64
     concurrency:
-      group: windows-node-max-${{ github.ref }}-${{ matrix.slug }}-${{ matrix.suite }}
+      group: windows-node-max-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ matrix.slug }}-${{ matrix.suite }}
       cancel-in-progress: false
     env:
       CARGO_BUILD_JOBS: '2'
