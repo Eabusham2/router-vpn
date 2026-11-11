@@ -4,6 +4,7 @@ import SwiftUI
 enum RouterVPNMapRole: String {
     case selected = "Selected"
     case entry = "Entry"
+    case hop = "Hop"
     case exit = "Exit"
     case external = "Custom"
     case normal = "Node"
@@ -12,6 +13,7 @@ enum RouterVPNMapRole: String {
         switch self {
         case .selected: return .purple
         case .entry: return .blue
+        case .hop: return .cyan
         case .exit: return .orange
         case .external: return .pink
         case .normal: return .teal
@@ -22,6 +24,7 @@ enum RouterVPNMapRole: String {
         switch self {
         case .selected: return "location.circle.fill"
         case .entry: return "1.circle.fill"
+        case .hop: return "arrow.triangle.branch"
         case .exit: return "2.circle.fill"
         case .external: return "plus.circle.fill"
         case .normal: return "mappin.circle.fill"
@@ -58,16 +61,19 @@ struct RouterVPNNodeMapSheet: View {
 
 @MainActor
 func routerVPNMapPoints(model: RouterVPNModel) -> [RouterVPNMapPoint] {
-    let profiles = model.bundle?.routerProfiles ?? []
-    let selectedID = model.bundle?.selectedRouterID ?? ""
+    let profiles = model.iosMapNodePoints
+    let ordered = model.iosVisibleOrderedNodePath
+    let selectedID = ordered?.last?.id ?? model.bundle?.selectedRouterID ?? ""
 
-    // Planned roles use the selected saved graph. The shared native map draws
-    // a dashed planned route and animates packets only while the VPN is proved.
-    let selected = profiles.first { $0.id == selectedID }
-    let entryID = selected?.multihopEnabled == true ? selected?.multihopEntryID : nil
-    let exitID = selected?.multihopEnabled == true ? selected?.multihopExitID : nil
+    // Active roles use the exact running source; idle roles use the selected
+    // saved graph. Packets animate only while the complete path is connected.
+    let selected = model.allNodeProfiles.first { $0.id == selectedID }
+    let hasOrderedSource = selected?.multihopNodes != nil || model.activeSessionIdentity?.nodeChainSource != nil
+    let entryID = ordered?.first?.id ?? (!hasOrderedSource && selected?.multihopEnabled == true ? selected?.multihopEntryID : nil)
+    let exitID = ordered?.last?.id ?? (!hasOrderedSource && selected?.multihopEnabled == true ? selected?.multihopExitID : nil)
+    let middleIDs = Set(ordered?.dropFirst().dropLast().map(\.id) ?? [])
     return profiles.compactMap { profile in
-        guard let latitude = profile.latitude,
+        guard profile.hasCoordinates, let latitude = profile.latitude,
               let longitude = profile.longitude,
               (-90.0...90.0).contains(latitude),
               (-180.0...180.0).contains(longitude),
@@ -75,13 +81,14 @@ func routerVPNMapPoints(model: RouterVPNModel) -> [RouterVPNMapPoint] {
         let role: RouterVPNMapRole
         if profile.id == entryID { role = .entry }
         else if profile.id == exitID { role = .exit }
+        else if middleIDs.contains(profile.id) { role = .hop }
         else if profile.id == selectedID { role = .selected }
-        else if profile.normalizedNodeKind == "external" { role = .external }
+        else if profile.kind == "external" { role = .external }
         else { role = .normal }
         return RouterVPNMapPoint(
             id: profile.id,
             name: profile.name,
-            location: profile.location ?? profile.endpoint,
+            location: profile.location,
             latitude: latitude,
             longitude: longitude,
             role: role
@@ -115,7 +122,7 @@ struct RouterVPNMapLegend: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 12) {
-                legend(.selected); legend(.entry); legend(.exit); legend(.external); legend(.normal)
+                legend(.selected); legend(.entry); legend(.hop); legend(.exit); legend(.external); legend(.normal)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)

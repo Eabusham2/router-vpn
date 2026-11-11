@@ -14,12 +14,33 @@ extension RouterVPNModel {
         multihopProgressInFlight = ticket
         multihopProgressDeadline = Date().addingTimeInterval(3)
         let generation = multihopProgressGeneration
+        let connectionGeneration = iosConnectGeneration
+        let identity = activeSessionIdentity
         let nodeID = selectedNodeProfile?.id
         guard let managers = try? await NETunnelProviderManager.loadAllFromPreferences(),
+              multihopProgressGeneration == generation, iosConnectGeneration == connectionGeneration,
+              activeSessionIdentity == identity, selectedNodeProfile?.id == nodeID,
+              managers.filter({ ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel" }).count == 1,
               let manager = managers.first(where: { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel" }),
+              let configuration = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
+              let bundleData = configuration["bundle"] as? Data,
               let session = manager.connection as? NETunnelProviderSession,
               [.connecting, .connected, .reasserting].contains(session.status),
               let request = try? JSONSerialization.data(withJSONObject: ["operation": "multihop-progress"]) else {
+            if multihopProgressInFlight == ticket { multihopProgressInFlight = nil }
+            return
+        }
+        let connectedAt = session.connectedDate
+        let chainSource = configuration["nodeChainSource"] as? String
+        if let identity {
+            guard identity.connectedAt == connectedAt, identity.bundleData == bundleData,
+                  identity.nodeChainSource == chainSource.map({ Data($0.utf8) }) else {
+                if multihopProgressInFlight == ticket { multihopProgressInFlight = nil }
+                return
+            }
+        }
+        let orderedNodes = chainSource.flatMap { IOSNodeChainPresentation.captured(source: Data($0.utf8), bundleData: bundleData) }
+        guard configuration["nodeChainSource"] == nil || orderedNodes != nil else {
             if multihopProgressInFlight == ticket { multihopProgressInFlight = nil }
             return
         }
@@ -29,8 +50,17 @@ extension RouterVPNModel {
                 self.multihopProgressInFlight = nil
                 guard let data, data.count <= 16384, Date() <= self.multihopProgressDeadline,
                       self.multihopProgressGeneration == generation,
+                      self.iosConnectGeneration == connectionGeneration, self.activeSessionIdentity == identity,
+                      session.connectedDate == connectedAt, [.connecting, .connected, .reasserting].contains(session.status),
+                      let current = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
+                      current["bundle"] as? Data == bundleData, current["nodeChainSource"] as? String == chainSource,
                       self.selectedNodeProfile?.id == nodeID, self.connected || self.tunnelTransitioning,
                       let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+                if let orderedNodes {
+                    guard let text = IOSNodeChainPresentation.progress(value, expected: orderedNodes.map(\.id)) else { return }
+                    self.multihopProgressText = text
+                    return
+                }
                 var lines = ["Multihop: \(value["stage"] as? String ?? "pending") • \(value["execution"] as? String ?? "comparing")"]
                 let lastKind = value["last_node_measurement"] as? String
                 let lastLabel = lastKind == "tor-relay-http-response-time" ? "last-relay HTTP response" : (lastKind == "https-response-time" ? "node HTTPS response" : "last-node response")

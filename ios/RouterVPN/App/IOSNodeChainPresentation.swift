@@ -1,0 +1,145 @@
+import Foundation
+import CoreFoundation
+
+/// Public map fields projected from the selected record or the running
+/// session's captured source. This projection never authorizes a connection.
+struct IOSNodePathPoint: Equatable {
+    let id: String
+    let name: String
+    let location: String
+    let latitude: Double?
+    let longitude: Double?
+    let kind: String
+    let mode: String?
+    let savedLatency: Double?
+
+    init(_ profile: RouterProfile, mode: String? = nil) {
+        id = profile.id; name = profile.name.isEmpty ? profile.id : profile.name
+        location = profile.location ?? profile.endpoint
+        latitude = profile.latitude; longitude = profile.longitude
+        kind = profile.normalizedNodeKind; self.mode = mode
+        savedLatency = profile.latencyMedianMs
+    }
+
+    var hasCoordinates: Bool {
+        guard let latitude, let longitude else { return false }
+        return latitude.isFinite && longitude.isFinite && (-90...90).contains(latitude) &&
+            (-180...180).contains(longitude) && !(latitude == 0 && longitude == 0)
+    }
+}
+
+enum IOSNodeChainPresentation {
+    private static func boolean(_ value: Any?) -> Bool? {
+        guard let value = value as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+        return value.boolValue
+    }
+    private struct Launch: Decodable {
+        let schema: Int
+        let kind: String
+        let execution: String
+        let nodes: [String]
+        let source_sha256: String
+        let config_sha256: String
+        let original_config_sha256: String
+        let target_os: String?
+        let projection_kind: String?
+        let session_id: String?
+        let restored_mtu: Int?
+    }
+    private struct Member: Decodable {
+        let schema: Int
+        let kind: String
+        let mode: String
+        let profile_json: String
+    }
+
+    static func planned(selected: RouterProfile?, catalog: [RouterProfile]) -> [IOSNodePathPoint]? {
+        guard let selected, selected.multihopEnabled == true, let nodes = selected.multihopNodes,
+              (try? IOSMultihopNodeSelection.validate(nodes, execution: selected.multihopExecution,
+                entryID: selected.multihopEntryID, entryMode: selected.multihopEntryMode,
+                exitID: selected.multihopExitID, exitMode: selected.multihopExitMode, controlID: selected.id)) != nil else { return nil }
+        var points: [IOSNodePathPoint] = []
+        for (position, node) in nodes.enumerated() {
+            let matches = catalog.filter { $0.id == node.id }
+            guard matches.count == 1, let profile = matches.first,
+                  profile.normalizedNodeKind == "router-vpn", profile.external == nil,
+                  node.mode == (position == nodes.count - 1 ? "shadowsocks" : "wg") else { return nil }
+            points.append(IOSNodePathPoint(profile, mode: node.mode))
+        }
+        return points
+    }
+
+    static func active(_ identity: IOSSessionIdentity?) -> [IOSNodePathPoint]? {
+        guard let identity, identity.engine == "multihop-libbox", identity.rawProfile == "shadowsocks",
+              let source = identity.nodeChainSource else { return nil }
+        return captured(source: source, bundleData: identity.bundleData)
+    }
+
+    static func captured(source: Data, bundleData: Data) -> [IOSNodePathPoint]? {
+        guard !source.isEmpty, source.count <= 40 * 1024 * 1024,
+              !bundleData.isEmpty, bundleData.count <= 32 * 1024 * 1024,
+              let bundle = try? JSONDecoder().decode(ClientBundle.self, from: bundleData),
+              bundle.routerProfiles.filter({ $0.id == bundle.selectedRouterID }).count == 1,
+              let control = bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }),
+              let launch = try? JSONDecoder().decode(Launch.self, from: source),
+              launch.schema == 1, launch.kind == "routervpn-node-chain-launch-input", launch.execution == "local",
+              launch.target_os == nil, launch.projection_kind == nil, launch.session_id == nil, launch.restored_mtu == nil,
+              launch.source_sha256.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
+              launch.config_sha256.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
+              launch.original_config_sha256 == launch.config_sha256, (2...8).contains(launch.nodes.count) else { return nil }
+        var profiles: [RouterProfile] = [], nodes: [IOSMultihopNodeSelection] = []
+        for raw in launch.nodes {
+            guard let member = try? JSONDecoder().decode(Member.self, from: Data(raw.utf8)),
+                  member.schema == 1, member.kind == "routervpn-node-launch-input",
+                  !member.profile_json.isEmpty, member.profile_json.utf8.count <= 256 * 1024,
+                  let profile = try? JSONDecoder().decode(RouterProfile.self, from: Data(member.profile_json.utf8)) else { return nil }
+            profiles.append(profile); nodes.append(.init(id: profile.id, mode: member.mode))
+        }
+        guard profiles.last == control, control.multihopNodes == nodes else { return nil }
+        return planned(selected: control, catalog: profiles)
+    }
+
+    /// Progress durations are initial, routed private HTTP verifications.
+    /// Periodic health renewals do not publish fresh RTT samples here.
+    static func progress(_ value: [String: Any], expected: [String]) -> String? {
+        guard (2...8).contains(expected.count), Set(expected).count == expected.count,
+              value["execution"] as? String == "local",
+              let stage = value["stage"] as? String, ["verifying", "selected", "closed"].contains(stage),
+              let rows = value["prefixes"] as? [[String: Any]], rows.count <= expected.count else { return nil }
+        var lines = ["Ordered route • Local • \(stage)"]
+        for (position, row) in rows.enumerated() {
+            guard let reported = row["position"] as? NSNumber, CFGetTypeID(reported) != CFBooleanGetTypeID(),
+                  reported.doubleValue == Double(position), row["profile_id"] as? String == expected[position],
+                  boolean(row["proven"]) == true,
+                  let response = row["response_ms"] as? NSNumber, CFGetTypeID(response) != CFBooleanGetTypeID(),
+                  response.doubleValue.isFinite, response.doubleValue > 0 else { return nil }
+            let role = position == 0 ? "Entry" : position == expected.count - 1 ? "Exit" : "Hop \(position)"
+            lines.append(String(format: "%@ · %@: verification HTTP response %.1f ms", role, expected[position], response.doubleValue))
+        }
+        if rows.count < expected.count { lines.append("Verified \(rows.count) of \(expected.count) nodes") }
+        if boolean(value["dns_proven"]) == true { lines.append("Final-path DNS verified") }
+        if boolean(value["public_proven"]) == true { lines.append("Final public exit verified") }
+        if boolean(value["ready"]) == true && boolean(value["complete"]) == true && rows.count == expected.count && boolean(value["dns_proven"]) == true && boolean(value["public_proven"]) == true {
+            lines.append("Every captured node and final path verified")
+        } else if stage == "selected" { lines.append("The captured path is not currently ready") }
+        if stage == "closed" { lines.append("Captured path is closed") }
+        return lines.joined(separator: "\n")
+    }
+}
+
+@MainActor
+extension RouterVPNModel {
+    var iosVisibleOrderedNodePath: [IOSNodePathPoint]? {
+        if connected { return IOSNodeChainPresentation.active(activeSessionIdentity) }
+        return IOSNodeChainPresentation.planned(selected: selectedNodeProfile, catalog: allNodeProfiles)
+    }
+
+    var iosMapNodePoints: [IOSNodePathPoint] {
+        var points = allNodeProfiles.map { IOSNodePathPoint($0) }
+        for captured in iosVisibleOrderedNodePath ?? [] {
+            if let index = points.firstIndex(where: { $0.id == captured.id }) { points[index] = captured }
+            else { points.append(captured) }
+        }
+        return points
+    }
+}

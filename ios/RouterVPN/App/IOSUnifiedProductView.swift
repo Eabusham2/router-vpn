@@ -140,37 +140,47 @@ struct IOSUnifiedMap: UIViewRepresentable {
         let packet = context.coordinator.packet
         map.removeAnnotations(map.annotations.filter { $0 !== packet })
         RouterVPNVectorMap.clearRoutes(on: map)
-        let profiles = model.allNodeProfiles
-        let selectedID = model.bundle?.selectedRouterID ?? ""
-        let selected = profiles.first(where: { $0.id == selectedID })
-        let entryID = selected?.multihopEnabled == true ? selected?.multihopEntryID : nil
-        let exitID = selected?.multihopEnabled == true ? selected?.multihopExitID : nil
+        let ordered = model.iosVisibleOrderedNodePath
+        let profiles = model.iosMapNodePoints
+        let selectedID = ordered?.last?.id ?? model.bundle?.selectedRouterID ?? ""
+        let selected = model.allNodeProfiles.first(where: { $0.id == selectedID })
+        let hasOrderedSource = selected?.multihopNodes != nil || model.activeSessionIdentity?.nodeChainSource != nil
+        let entryID = ordered?.first?.id ?? (!hasOrderedSource && selected?.multihopEnabled == true ? selected?.multihopEntryID : nil)
+        let exitID = ordered?.last?.id ?? (!hasOrderedSource && selected?.multihopEnabled == true ? selected?.multihopExitID : nil)
+        let middleIDs = Set(ordered?.dropFirst().dropLast().map(\.id) ?? [])
+        let routeIDs = ordered?.map(\.id) ?? ([entryID, exitID].compactMap { $0 })
         var coordinatesByID: [String: CLLocationCoordinate2D] = [:]
         for profile in profiles {
-            guard let lat = profile.latitude, let lon = profile.longitude,
-                  (-90...90).contains(lat), (-180...180).contains(lon), !(lat == 0 && lon == 0) else { continue }
+            guard profile.hasCoordinates, let lat = profile.latitude, let lon = profile.longitude else { continue }
             let role: String
             if profile.id == entryID { role = "entry" }
             else if profile.id == exitID { role = "exit" }
+            else if middleIDs.contains(profile.id) { role = "hop" }
             else if profile.id == selectedID { role = "selected" }
-            else if profile.normalizedNodeKind == "external" { role = "external" }
+            else if profile.kind == "external" { role = "external" }
             else { role = "normal" }
             let annotation = IOSUnifiedMapAnnotation(profileID: profile.id, role: role)
             annotation.coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
             annotation.title = profile.name.isEmpty ? profile.id : profile.name
-            let kind = profile.normalizedNodeKind == "external" ? "Custom / external" : "Router node"
-            let ms = latencyByID[profile.id] ?? profile.latencyMedianMs ?? 0
-            annotation.subtitle = ms > 0 ? String(format: "%@ • %.1f ms", kind, ms) : kind
+            let kind = profile.kind == "external" ? "Custom / external" : "Router node"
+            let ms = latencyByID[profile.id] ?? profile.savedLatency ?? 0
+            annotation.subtitle = ms > 0 ? String(format: "%@ • direct TCP %.1f ms", kind, ms) : kind
             map.addAnnotation(annotation)
             coordinatesByID[profile.id] = annotation.coordinate
         }
-        if let entryID, let exitID, let a = coordinatesByID[entryID], let b = coordinatesByID[exitID] {
-            map.addOverlays(RouterVPNVectorMap.routes(from: a, to: b), level: .aboveLabels)
-            context.coordinator.entry = a; context.coordinator.exit = b
+        for (position, edge) in zip(routeIDs, routeIDs.dropFirst()).enumerated() {
+            guard let a = coordinatesByID[edge.0], let b = coordinatesByID[edge.1] else { continue }
+            let segments = RouterVPNVectorMap.routes(from: a, to: b)
+            for segment in segments { segment.title = position == routeIDs.count - 2 ? "exit" : position == 0 ? "entry" : "hop" }
+            map.addOverlays(segments, level: .aboveLabels)
+        }
+        let completePath = routeIDs.compactMap { coordinatesByID[$0] }
+        if routeIDs.count >= 2 && completePath.count == routeIDs.count {
+            context.coordinator.path = completePath
             if model.connected { context.coordinator.ensurePacket(on: map) }
             else if let packet { map.removeAnnotation(packet); context.coordinator.packet = nil }
         } else {
-            context.coordinator.entry = nil; context.coordinator.exit = nil
+            context.coordinator.path = []
             if let packet { map.removeAnnotation(packet); context.coordinator.packet = nil }
         }
         let regular = map.annotations.filter { $0 !== context.coordinator.packet }
@@ -187,8 +197,7 @@ struct IOSUnifiedMap: UIViewRepresentable {
     final class Coordinator: NSObject, MKMapViewDelegate {
         var parent: IOSUnifiedMap
         weak var map: MKMapView?
-        var entry: CLLocationCoordinate2D?
-        var exit: CLLocationCoordinate2D?
+        var path: [CLLocationCoordinate2D] = []
         fileprivate var packet: IOSUnifiedMapAnnotation?
         var fittedGeometryID = ""
         private var timer: Timer?
@@ -209,14 +218,16 @@ struct IOSUnifiedMap: UIViewRepresentable {
                 // actor before touching MapKit/coordinator state instead of
                 // weakening concurrency checking for the whole target.
                 Task { @MainActor [weak self] in
-                    guard let self, self.parent.model.connected, let a = self.entry, let b = self.exit, let packet = self.packet else { return }
+                    guard let self, self.parent.model.connected, self.path.count >= 2, let packet = self.packet else { return }
                     self.phase += 0.035; if self.phase >= 1 { self.phase -= 1 }
-                    if let coordinate = RouterVPNVectorMap.packetCoordinate(from: a, to: b, fraction: self.phase) { packet.coordinate = coordinate }
+                    let step = self.phase * Double(self.path.count - 1)
+                    let index = min(self.path.count - 2, Int(step))
+                    if let coordinate = RouterVPNVectorMap.packetCoordinate(from: self.path[index], to: self.path[index + 1], fraction: step - Double(index)) { packet.coordinate = coordinate }
                 }
             }
         }
         func ensurePacket(on map: MKMapView) {
-            guard packet == nil, let a = entry else { return }
+            guard packet == nil, path.count >= 2, let a = path.first else { return }
             let p = IOSUnifiedMapAnnotation(profileID: "__packet__", role: "packet"); p.coordinate = a; packet = p; map.addAnnotation(p)
         }
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
@@ -229,6 +240,7 @@ struct IOSUnifiedMap: UIViewRepresentable {
             view.annotation = annotation; view.canShowCallout = true
             switch node.role {
             case "entry": view.markerTintColor = .systemBlue
+            case "hop": view.markerTintColor = .systemCyan
             case "exit": view.markerTintColor = .systemOrange
             case "selected": view.markerTintColor = .systemPurple
             case "external": view.markerTintColor = .systemPink
@@ -246,7 +258,7 @@ struct IOSUnifiedMap: UIViewRepresentable {
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let base = overlay as? RouterVPNVectorMapOverlay { return RouterVPNVectorMapRenderer(overlay: base) }
             guard let line = overlay as? MKPolyline else { return MKOverlayRenderer(overlay: overlay) }
-            let renderer = MKPolylineRenderer(polyline: line); renderer.strokeColor = .systemBlue; renderer.lineWidth = 4; renderer.lineCap = .round; renderer.lineJoin = .round
+            let renderer = MKPolylineRenderer(polyline: line); renderer.strokeColor = line.title == "exit" ? .systemOrange : line.title == "hop" ? .systemCyan : .systemBlue; renderer.lineWidth = 4; renderer.lineCap = .round; renderer.lineJoin = .round
             renderer.lineDashPattern = parent.model.connected ? nil : [6, 5]
             return renderer
         }
@@ -356,6 +368,8 @@ struct IOSUnifiedProductView: View {
         return model.connected ? "Disconnect" : "Connect"
     }
     private var selectedModeTitle: String {
+        if let ordered = model.iosVisibleOrderedNodePath { return "Multihop • \(ordered.count) nodes • Local" }
+        if selectedProfile?.multihopEnabled == true && selectedProfile?.multihopNodes != nil { return "Ordered route • source unavailable" }
         if selectedProfile?.multihopEnabled == true { return "Multihop • " + (selectedProfile?.multihopExitMode ?? "choose exit") }
         if selectedMode == IOSUnifiedModeSelection.smart { return "SMART AUTO" }
         if selectedMode == IOSUnifiedModeSelection.auto { return "AUTO" }
@@ -414,7 +428,7 @@ struct IOSUnifiedProductView: View {
                     unifiedRow(icon: "point.3.connected.trianglepath.dotted", title: "Multihop", value: iosMultihopSummary) { showingMultihop = true }
                     unifiedRow(icon: "person.crop.rectangle.stack", title: "Profiles & bridges", value: "Router / Custom / Tor") { showingNodes = true }
                     unifiedRow(icon: "slider.horizontal.3", title: "Settings", value: settingsSummary) { showingSettings = true }
-                    unifiedRow(icon: "wand.and.stars", title: "Mode", value: selectedModeTitle, disabled: model.profileMutationBlocked) { showingModes = true }
+                    unifiedRow(icon: "wand.and.stars", title: "Mode", value: selectedModeTitle, disabled: model.profileMutationBlocked || (selectedProfile?.multihopEnabled == true && selectedProfile?.multihopNodes != nil)) { showingModes = true }
 
                     HStack {
                         Label("DNS", systemImage: "network").font(.subheadline.bold())
@@ -460,6 +474,8 @@ struct IOSUnifiedProductView: View {
     }
 
     private var iosMultihopSummary: String {
+        if let ordered = model.iosVisibleOrderedNodePath { return ordered.map(\.name).joined(separator: " → ") }
+        if selectedProfile?.multihopEnabled == true && selectedProfile?.multihopNodes != nil { return "Waiting for the complete ordered source" }
         if let p = selectedProfile, p.multihopEnabled == true, let entry = p.multihopEntryID, let exit = p.multihopExitID {
             // Direct node-cache RTT is not a routed per-hop measurement.
             var text = "\(entry) → \(exit)"

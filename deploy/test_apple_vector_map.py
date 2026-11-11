@@ -201,7 +201,9 @@ import Combine
  @Published var connected = false
  @Published var message = ""
  var bundle: ClientBundle?
+ var activeSessionIdentity: IOSSessionIdentity?
  var allNodeProfiles: [RouterProfile] = []
+ var selectedNodeProfile:RouterProfile? { bundle?.routerProfiles.first(where:{$0.id==bundle?.selectedRouterID}) }
  var profileMutationBlocked = false
  func selectNode(_ id: String) {}
 }
@@ -329,7 +331,8 @@ def main():
             ios_source = work / "IOSUnifiedMap.swift"
             ios_source.write_text(IOS_MODEL_BOUNDARY + ios_map)
             command = ["xcrun", "swiftc", "-typecheck", "-swift-version", "6", "-strict-concurrency=complete",
-                       "-target", "arm64-apple-ios17.0", "-sdk", ios_sdk, str(GEOMETRY), str(RENDERER), str(IOS_MODELS), str(ios_source)]
+                       "-target", "arm64-apple-ios17.0", "-sdk", ios_sdk, str(GEOMETRY), str(RENDERER), str(IOS_MODELS),
+                       str(IOS_MODELS.with_name("IOSSessionIdentity.swift")), str(IOS_MODELS.with_name("IOSNodeChainPresentation.swift")), str(ios_source)]
             subprocess.run(command, check=True, timeout=120)
             print("iOS complete shipping map/coordinator: actual SwiftUI/MapKit SDK typecheck PASS (application model boundary substituted)")
             original = ios_map.replace("fileprivate var packet:", "var packet:", 1)
