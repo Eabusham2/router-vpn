@@ -515,6 +515,20 @@ final class NativeSingBoxController {
         start(session, homeSession, false);
     }
 
+    void startNodeChain(SessionInfo session, String homeSession) {
+        if (session == null || !"node-chain".equals(session.modeId) || homeSession == null || homeSession.isEmpty())
+            throw new IllegalArgumentException("Ordered launch has no original native/Home owner.");
+        start(session, homeSession, false);
+    }
+
+    void stopNodeChain(String sessionId) {
+        if (sessionId == null || !sessionId.matches("[0-9a-f]{32}")) throw new IllegalArgumentException("Ordered stop has no exact private owner.");
+        AndroidServiceStopConfirmation.request(STATE_KEY, command -> context.startService(
+                new Intent(context, LayeredVpnService.class).setAction(LayeredVpnService.ACTION_STOP_NODE_CHAIN)
+                        .putExtra(LayeredVpnService.EXTRA_SESSION_ID, sessionId)
+                        .putExtra(AndroidServiceStopConfirmation.EXTRA_COMMAND, command)));
+    }
+
     private void start(SessionInfo session, String homeSession, boolean torComparison) {
         try { if (session.maxPreparation != null) session.maxPreparation.beforeSubmit(session.sessionId, session.modeId); }
         catch (Exception stale) {

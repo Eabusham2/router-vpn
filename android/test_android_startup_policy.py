@@ -86,6 +86,8 @@ public final class MemoryPreferences implements SharedPreferences {
 NODE=r'''final class AndroidNodeStore {
  static final int MAX_BUNDLE=32*1024*1024;static final List<Node> nodes=new ArrayList<>();static String active="";static int imports;
  static final class Node {final String id,name,endpoint="";final File file;Node(String id,File f){this.id=id;name=id;file=f;}}
+ static final class ChainSource {final String id;ChainSource(String id){this.id=id;}}
+ static final class ChainCapture {final ChainSource control=new ChainSource("");final List<ChainSource> members=List.of();final List<String> modes=List.of();}
  AndroidNodeStore(Context c){}List<Node> list(){return new ArrayList<>(nodes);}String activeId(){return active;}
  File file(String id){for(Node n:nodes)if(n.id.equals(id)&&n.file.isFile())return n.file;throw new IllegalStateException("missing private node");}
  static void validateBundle(JSONObject b)throws Exception{b.getJSONObject("profiles");b.getJSONArray("modes");AndroidProfileSelection.selectedRouterProfile(b);}
@@ -139,6 +141,7 @@ final class AndroidMTUDialog {static void show(android.app.Activity a){}}
 final class AndroidConnectionProfilesDialog {static void show(android.app.Activity a,AndroidNodeStore n,AndroidStandardExitStore s,Runnable r){}}
 final class AndroidUnifiedNodeCatalog {AndroidUnifiedNodeCatalog(AndroidNodeStore n,AndroidStandardExitStore e){}}
 final class AndroidTelemetry {AndroidTelemetry(android.app.Activity a,AndroidNodeStore n){}}
+final class AndroidExternalLiveTelemetry {AndroidExternalLiveTelemetry(android.content.Context context,AndroidStandardExitRuntime owner){}}
 final class AndroidForwardingMaster {AndroidForwardingMaster(android.app.Activity a,AndroidNodeStore n){}}
 final class AndroidViaEntryLatencyProbe {AndroidViaEntryLatencyProbe(android.app.Activity a,AndroidRuntimeRegistry r,AndroidTelemetry t){}boolean isBusy(){return false;}}
 final class AndroidProductOnboarding {static void showIfNeeded(android.app.Activity a){}}
@@ -161,7 +164,7 @@ ACTIVITY=r'''package com.eabusham.routervpn;
 import android.os.Bundle;import java.util.*;
 final class StartupActivity extends android.app.Activity {
  static final String STATE_IMPORT_DECISION="routervpn.import.decision",STATE_PROBE_ENTRY="routervpn.via_entry_probe.entry",STATE_PROBE_CANDIDATES="routervpn.via_entry_probe.candidates";
- AndroidNodeStore nodeStore;AndroidStandardExitStore exitStore;AndroidUnifiedNodeCatalog catalog;AndroidUnifiedConnectionController connection;AndroidTelemetry telemetry;AndroidForwardingMaster forwardingMaster;AndroidViaEntryLatencyProbe viaEntryProbe;
+ AndroidNodeStore nodeStore;AndroidStandardExitStore exitStore;AndroidUnifiedNodeCatalog catalog;AndroidUnifiedConnectionController connection;AndroidTelemetry telemetry;AndroidExternalLiveTelemetry externalTelemetry;AndroidForwardingMaster forwardingMaster;AndroidViaEntryLatencyProbe viaEntryProbe;
  String importDecision="",pendingProbeEntryId="";ArrayList<String> pendingProbeCandidateIds=new ArrayList<>();
  android.widget.TextView statusView=new android.widget.TextView(this);final StartupTest.Callback cb=new StartupTest.Callback();
  android.view.View buildUi(){return new android.view.View(this);}void refreshAll(){}AndroidUnifiedConnectionController.Callback callback(){return cb;}static String safe(Throwable e){return e.getMessage();}

@@ -42,6 +42,7 @@ final class AndroidMTUSession implements RouterMTUPlatform {
     private int requestedMTU;
     private volatile boolean invalid, closed;
     private boolean changing, activated, automaticDeferred;
+    private long proofGeneration;
     private boolean torController;
     private volatile RouterMTU controller;
     private volatile String notice = "Connect a proved Auto-MTU Router VPN path first.";
@@ -102,6 +103,11 @@ final class AndroidMTUSession implements RouterMTUPlatform {
         if (!closed && !invalid && value != null && value.matches("[A-Za-z0-9_.:-]{1,64}")) name = value;
     }
     synchronized boolean unchangedPhysicalPath() { return !closed && !invalid && !path.isEmpty() && path.equals(physicalPath()); }
+    // A native health read may overlap the owned TUN transaction. Both ends of
+    // the observation must name the same stable generation before it can fail
+    // the graph; an in-flight mutation is checked after its OS readback.
+    synchronized Long proofObservationToken() { return closed || invalid || changing ? null : proofGeneration; }
+    synchronized boolean proofOwnerCurrent() { return !closed && !invalid; }
     void networkChanged() {
         invalid = true;
         RouterMTU owned = controller; if (owned != null) owned.networkChanged();
@@ -168,13 +174,14 @@ final class AndroidMTUSession implements RouterMTUPlatform {
     @Override public synchronized void beginMTUChange(RouterMTUState expected) throws Exception {
         if (changing || !same(captureMTU(), expected)) throw new IllegalStateException("MTU mutation lost its captured VPN.");
         changing = true;
+        proofGeneration++;
     }
     @Override public synchronized void endMTUChange() throws Exception {
         try {
             long end = android.os.SystemClock.elapsedRealtime() + 2500;
             while (!closed && !invalid && captureMTU() == null && android.os.SystemClock.elapsedRealtime() < end) wait(20);
             if (captureMTU() == null) throw new IllegalStateException("OS VPN readback did not confirm the new MTU.");
-        } finally { changing = false; }
+        } finally { changing = false; proofGeneration++; }
     }
     @Override public synchronized void bindMTUSocket(RouterMTUState expected, long fd) throws Exception {
         if (fd < 0 || fd > Integer.MAX_VALUE || !same(captureMTU(), expected)) throw new IllegalStateException("MTU socket belongs to a stale VPN.");
@@ -250,6 +257,34 @@ final class AndroidMTUSession implements RouterMTUPlatform {
             } catch (Exception error) {
                 notice = closed || invalid ? "MTU session is stopped or stale."
                         : "Auto-MTU has no verified external-path measurement; configured MTU is retained.";
+            }
+        }
+    }
+    void activateNodeChain(AndroidNodeChainSession chain) {
+        synchronized (lifecycle) {
+            if (closed || invalid) return;
+            if (activated) { if (chain.healthy()) resumeDeferredAutomatic(); return; }
+            activated = true;
+            try {
+                long end = android.os.SystemClock.elapsedRealtime() + 2500;
+                while (!closed && !invalid && captureMTU() == null && android.os.SystemClock.elapsedRealtime() < end) Thread.sleep(20);
+                if (closed || invalid) return;
+                chain.requireCurrent();
+                RouterMTU created = chain.newMTU(this);
+                controller = created;
+                if (closed || invalid) { closeController(); return; }
+                chain.requireCurrent();
+                if (created.autoRequested() == false) {
+                    notice = "Configured ordered-path capacity is retained without Auto MTU or Retest; this is not a measured packet-path limit.";
+                    return;
+                }
+                automaticDeferred = true; resumeDeferredAutomatic(); notice = "";
+            } catch (Exception error) {
+                boolean large;
+                synchronized (this) { large = requestedMTU > 1500; }
+                if (!closed && !invalid && large) abortMTU("The original ordered interface capacity could not be verified.");
+                notice = closed || invalid ? "MTU session is stopped or stale."
+                        : "Auto-MTU has no verified measurement for this complete ordered path; configured MTU is retained.";
             }
         }
     }

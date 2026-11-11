@@ -49,6 +49,8 @@ final class AndroidStandardExitStore {static final class Entry{String id,name,pr
 final class AndroidPrivateFileStore {static byte[] read(File f,int max)throws Exception{byte[] data=Files.readAllBytes(f.toPath());if(data.length==0||data.length>max)throw new IllegalArgumentException("bounded source required");return data;}}
 final class AndroidNodeStore {
  static final int MAX_BUNDLE=32*1024*1024;
+ static final class ChainSource{final String id="";}
+ static final class ChainCapture{final ChainSource control=new ChainSource();final java.util.List<ChainSource> members=java.util.List.of();final java.util.List<String> modes=java.util.List.of();}
  static final class Node{final String id,name;final File file;Node(String id,File file){this.id=id;name=id;this.file=file;}}
  static void validateBundle(JSONObject b)throws Exception{b.getJSONObject("profiles");b.getJSONArray("modes");if(b.getString("node_id").isEmpty())throw new IllegalArgumentException("missing paired node");}
 }

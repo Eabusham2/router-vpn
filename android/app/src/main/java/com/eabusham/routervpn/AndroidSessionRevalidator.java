@@ -22,6 +22,11 @@ final class AndroidSessionRevalidator {
     private void revalidate(){
         AndroidHomeStateStore.Snapshot before=AndroidHomeStateStore.snapshot(context);
         if(!before.connected)return;
+        if("node-chain".equals(before.logicalMode)){
+            // The native owner must retire every dependency on a new network.
+            // A final-node probe cannot restore an ordered graph's proof.
+            engines.nodeChain.networkChanged(before);return;
+        }
         if("wg".equals(before.actualBase)||"awg".equals(before.actualBase)){
             if(!"multihop".equals(before.logicalMode)&&!"external".equals(before.logicalMode))return; // native WG/AWG controllers own recovery/reproof.
         }

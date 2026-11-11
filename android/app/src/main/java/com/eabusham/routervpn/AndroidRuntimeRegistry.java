@@ -12,6 +12,7 @@ final class AndroidRuntimeRegistry {
     final NativeXrayController xray;
     final AndroidModeOrchestrator orchestrator;
     final AndroidMultihopRuntime multihop;
+    final AndroidNodeChainRuntime nodeChain;
     final AndroidStandardExitRuntime standardExit;
     final AndroidSessionRevalidator revalidator;
 
@@ -27,6 +28,7 @@ final class AndroidRuntimeRegistry {
         xray = new NativeXrayController(app);
         orchestrator = new AndroidModeOrchestrator(app, wireGuard, amneziaWG, singBox, xray);
         multihop = new AndroidMultihopRuntime(app, singBox);
+        nodeChain = new AndroidNodeChainRuntime(app, singBox);
         standardExit = new AndroidStandardExitRuntime(app, singBox);
         revalidator = new AndroidSessionRevalidator(app, this);
         revalidator.start();

@@ -13,7 +13,7 @@ final class AndroidHomeStateStore {
 
     static final class Snapshot {
         final String sessionId, phase, logicalMode, runtimeMode, actualBase, fallback, warning, pathProof;
-        final String activeNodeId, activeEntryId, activeExitId, activeEntryMode;
+        final String activeNodeId, activeEntryId, activeExitId, activeEntryMode, activeChain;
         final String activeExternalId, activeExternalName, activeExternalProtocol, expectedExternalIp;
         final long pathGeneration;
         final boolean connected;
@@ -31,6 +31,7 @@ final class AndroidHomeStateStore {
                 activeEntryId = p.getString("active_entry_id", "");
                 activeEntryMode = p.getString("active_entry_mode", "wg");
                 activeExitId = p.getString("active_exit_id", "");
+                activeChain = p.getString("active_chain", "");
                 activeExternalId = p.getString("active_external_id", "");
                 activeExternalName = p.getString("active_external_name", "");
                 activeExternalProtocol = p.getString("active_external_protocol", "");
@@ -58,6 +59,58 @@ final class AndroidHomeStateStore {
 
     static synchronized String beginMultihop(Context context, String entryId, String exitId, String runtimeMode) {
         return beginMultihop(context,entryId,exitId,runtimeMode,"wg");
+    }
+
+    static synchronized Snapshot beginNodeChain(Context context, AndroidNodeStore.ChainCapture source) throws Exception {
+        org.json.JSONArray members = new org.json.JSONArray();
+        for (int i = 0; i < source.members.size(); i++) members.put(new org.json.JSONObject()
+                .put("id", source.members.get(i).id).put("mode", source.modes.get(i)));
+        String session = UUID.randomUUID().toString();
+        clearGraphAndExternal(baseSession(context, session, "node-chain", "node-chain", "libbox"))
+                .putString("active_node_id", source.control.id).putString("active_chain", members.toString()).apply();
+        return snapshot(context);
+    }
+
+    private static boolean sameNodeChainOwner(Snapshot captured, Snapshot now) {
+        return captured != null && !captured.sessionId.isEmpty() && "node-chain".equals(captured.logicalMode)
+                && captured.sessionId.equals(now.sessionId) && captured.logicalMode.equals(now.logicalMode)
+                && captured.runtimeMode.equals(now.runtimeMode) && !captured.activeChain.isEmpty()
+                && captured.activeChain.equals(now.activeChain) && captured.activeNodeId.equals(now.activeNodeId)
+                && now.activeEntryId.isEmpty() && now.activeExitId.isEmpty() && now.activeExternalId.isEmpty();
+    }
+
+    static synchronized boolean ownsNodeChain(Context context, Snapshot captured) {
+        Snapshot now = snapshot(context);
+        return sameNodeChainOwner(captured, now) && captured.pathGeneration == now.pathGeneration
+                && !emergencyDisconnectPending(context)
+                && (("connecting".equals(now.phase) && "pending".equals(now.pathProof) && !now.connected)
+                || ("connected".equals(now.phase) && "passed".equals(now.pathProof) && now.connected));
+    }
+
+    static synchronized boolean connectedNodeChain(Context context, Snapshot captured) {
+        Snapshot now = snapshot(context);
+        if (!ownsNodeChain(context, captured) || !"connecting".equals(now.phase)) return false;
+        prefs(context).edit().putString("phase", "connected").putString("path_proof", "passed")
+                .putString("warning", "").putBoolean("connected", true).apply();
+        return true;
+    }
+
+    static synchronized boolean failedNodeChain(Context context, Snapshot captured, String message, boolean released) {
+        Snapshot now = snapshot(context);
+        if (!sameNodeChainOwner(captured, now)) return false;
+        SharedPreferences.Editor edit = prefs(context).edit().putString("phase", "failed")
+                .putString("path_proof", "failed").putBoolean("connected", false)
+                .putString("warning", emergencyDisconnectPending(context) ? now.warning : clean(message));
+        if (released) clearAllIdentity(edit);
+        edit.apply();
+        return true;
+    }
+
+    static synchronized boolean disconnectedNodeChain(Context context, Snapshot captured) {
+        Snapshot now = snapshot(context);
+        if (captured == null || !captured.sessionId.equals(now.sessionId) || !"node-chain".equals(now.logicalMode)) return false;
+        disconnected(context);
+        return snapshot(context).sessionId.isEmpty();
     }
     static synchronized String beginMultihop(Context context, String entryId, String exitId, String runtimeMode, String entryMode) {
         if (!NativeSingBoxController.nativeMultihopEntry(entryMode) && !AndroidImportedRouterPath.supports(entryMode,runtimeMode)) throw new IllegalArgumentException("Invalid live entry transport.");
@@ -294,7 +347,7 @@ final class AndroidHomeStateStore {
 
     private static synchronized SharedPreferences.Editor baseSession(Context context,String session,String logical,String runtime,String base){SharedPreferences p=prefs(context);long generation=p.getLong("path_generation",0L)+1L;return p.edit().putString("session_id",session).putString("phase","connecting").putString("logical_mode",clean(logical)).putString("runtime_mode",clean(runtime)).putString("actual_base",clean(base)).putString("fallback","").putString("warning","").putString("path_proof","pending").putBoolean("connected",false).putLong("path_generation",generation).remove("actual_exit_ip").remove("actual_exit_session");}
     private static synchronized String existingOrNewSession(SharedPreferences p){String session=p.getString("session_id","");return session==null||session.isEmpty()?UUID.randomUUID().toString():session;}
-    private static SharedPreferences.Editor clearRouterGraph(SharedPreferences.Editor e){return e.remove("active_node_id").remove("active_entry_id").remove("active_entry_mode").remove("active_exit_id");}
+    private static SharedPreferences.Editor clearRouterGraph(SharedPreferences.Editor e){return e.remove("active_node_id").remove("active_entry_id").remove("active_entry_mode").remove("active_exit_id").remove("active_chain");}
     private static SharedPreferences.Editor clearExternal(SharedPreferences.Editor e){return e.remove("active_external_id").remove("active_external_name").remove("active_external_protocol").remove("expected_external_ip");}
     private static SharedPreferences.Editor clearGraphAndExternal(SharedPreferences.Editor e){return clearExternal(clearRouterGraph(e));}
     private static SharedPreferences.Editor clearAllIdentity(SharedPreferences.Editor e){return clearGraphAndExternal(e).remove("actual_exit_ip").remove("actual_exit_session");}

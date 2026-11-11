@@ -96,6 +96,19 @@ stub(APP,'AndroidHomeStateStore','''{public static final class Snapshot{public b
  public static boolean ownsPolicyExternal(android.content.Context c,Snapshot s){return s!=null&&s==value&&!emergency;}
  public static boolean failedPolicyExternal(android.content.Context c,Snapshot s,String message,boolean released){if(s==null||s!=value)return false;s.connected=false;s.phase="failed";s.pathProof="failed";if(released)s.activeExternalId="";return true;}
  public static boolean failedTorExternal(android.content.Context c,Snapshot s,String message,boolean released){if(s==null||s!=value)return false;s.connected=false;s.phase="failed";s.pathProof="failed";if(released)s.activeExternalId="";return true;}
+ public static boolean failedNodeChain(android.content.Context c,Snapshot s,String message,boolean released){if(s==null||s!=value)return false;s.connected=false;s.phase="failed";s.pathProof="failed";return true;}
+}''')
+stub(APP,'AndroidNodeChainCapture','{static final String SESSION_FILE="routervpn-node-chain.json";}')
+stub(APP,'AndroidNodeChainSession','''{static final String MODE="node-chain";final String sessionId="";final AndroidHomeStateStore.Snapshot home=null;
+ interface Owner{boolean current(AndroidNodeChainSession source,io.nekohasekai.libbox.CommandServer server);String network();}
+ interface Host{void stop(AndroidNodeChainSession source,Runnable complete);}void adoptHost(Host host){}boolean hasHost(){return false;}void requestStop(Runnable complete){throw new IllegalStateException("No ordered cleanup owner in this boundary");}
+ static AndroidNodeChainSession pending(String id){return null;}
+ static AndroidNodeChainSession retained(){return null;}
+ static AndroidNodeChainSession claim(android.content.Context context,java.io.File directory,String id,String mode,String config,String home)throws Exception{throw new IllegalStateException("No original ordered capture in this boundary");}
+ boolean permitsStart(String mode,String home){return false;}boolean released(){return false;}boolean healthy(){return false;}
+ void requireCurrent()throws Exception{throw new IllegalStateException("No ordered proof in this boundary");}void requireSource()throws Exception{throw new IllegalStateException("No ordered source in this boundary");}
+ void attach(io.nekohasekai.libbox.CommandServer server,Owner owner,String network)throws Exception{throw new IllegalStateException("No ordered owner in this boundary");}
+ void prove()throws Exception{throw new IllegalStateException("No ordered proof in this boundary");}void cancel(){}void closePlan()throws Exception{}void nativeServiceClosed(){}void finishCleanup()throws Exception{}void discardUnstarted()throws Exception{}
 }''')
 stub(APP,'RouterPQNative','{public static void install()throws Exception{} }')
 stub(APP,'NativeSingBoxController','{public static final class SessionInfo{public final String sessionId,modeId;SessionInfo(String session,String mode){sessionId=session;modeId=mode;}}}')
@@ -111,6 +124,7 @@ stub(APP,'AndroidServiceStopConfirmation','{public static final String EXTRA_COM
 stub(APP,'AndroidKillSwitchPolicy','{public static final String SESSION_MARKER="kill-switch";public static String requirementMessage(){return "";} }')
 stub(APP,'AndroidTelemetryNetwork','{public interface Check{void run()throws Exception;}public AndroidTelemetryNetwork retaining(Check check)throws Exception{check.run();return this;}}')
 stub(APP,'AndroidMTUSession','{interface Failure{void abort(AndroidMTUSession owner);}public AndroidMTUSession(android.content.Context c,Failure f){} public void activate(io.nekohasekai.libbox.CommandServer c,String config,String metadata){}public void activate(io.nekohasekai.libbox.CommandServer c,String config,String metadata,io.nekohasekai.libbox.RouterMultihop owner){activate(c,config,metadata);}public void activateExternal(AndroidExternalSession external){}public void activateTor(AndroidTorSession tor){}public String request(String a,String b,String c)throws Exception{return "";}public AndroidTelemetryNetwork captureTelemetryNetwork()throws Exception{return new AndroidTelemetryNetwork();}public boolean running(){return false;}public void drainForMeasurement()throws Exception{}public void resumeAfterResponse(){}public void networkChanged(){}public void close()throws Exception{}public void beforeOpen()throws Exception{}public void established(int mtu)throws Exception{}public void registered(String name){}public boolean unchangedPhysicalPath(){return false;}public void checkNetwork(){} }')
+STUBS['com/eabusham/routervpn/AndroidMTUSession.java'] = STUBS['com/eabusham/routervpn/AndroidMTUSession.java'][:-1] + 'public void activateNodeChain(AndroidNodeChainSession source){}public Long proofObservationToken(){return 0L;}public boolean proofOwnerCurrent(){return true;}}'
 stub(APP,'AndroidStartLayerRelay','implements java.io.Closeable{public interface SocketProtector{void protectRelaySocket(java.net.Socket s)throws Exception;void protectRelaySocket(java.net.DatagramSocket s)throws Exception;}public static AndroidStartLayerRelay prepareIfConfigured(android.content.Context c,java.io.File f,java.util.function.Consumer<String> failure)throws Exception{return null;}public void start(){}public void close(){} }')
 
 STUBS['com/eabusham/routervpn/AndroidExternalProtection.java'] = (SERVICE.parent / 'AndroidExternalProtection.java').read_text(encoding='utf-8')

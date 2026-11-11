@@ -126,6 +126,8 @@ public class Context {
 'com/eabusham/routervpn/Boundaries.java':r'''package com.eabusham.routervpn;
 import org.json.JSONObject;
 final class AndroidNodeStore {
+ static final class ChainSource{String id="";}
+ static final class ChainCapture{ChainSource control;java.util.List<ChainSource> members=java.util.List.of();java.util.List<String> modes=java.util.List.of();}
  static String stableNodeIdentity(JSONObject b)throws Exception {return b.getString("nodeProofId");}
  static void validateBundle(JSONObject b){AndroidProfileSelection.selectedRouterProfile(b);}
 }
@@ -141,7 +143,7 @@ final class AndroidServiceStopConfirmation {
  static String state(String key,java.util.function.Supplier<String> value){return value.get();}
 }
 final class RouterPQNative {static int installs;static boolean fail;static void install()throws Exception{if(fail)throw new java.io.IOException("test PQ initialization failure");installs++;}}
-final class LayeredVpnService {static final String ACTION_START="start",ACTION_STOP="stop",EXTRA_SESSION_ID="session",EXTRA_MODE_ID="mode",EXTRA_HOME_SESSION_ID="home-session",EXTRA_TOR_COMPARISON="tor-comparison";}
+final class LayeredVpnService {static final String ACTION_START="start",ACTION_STOP="stop",ACTION_STOP_NODE_CHAIN="stop-chain",EXTRA_SESSION_ID="session",EXTRA_MODE_ID="mode",EXTRA_HOME_SESSION_ID="home-session",EXTRA_TOR_COMPARISON="tor-comparison";}
 final class XrayVpnService {static final String ACTION_START="start",ACTION_STOP="stop",EXTRA_SESSION_ID="session",EXTRA_MODE_ID="mode";}
 ''',
 'io/nekohasekai/libbox/Libbox.java':r'''package io.nekohasekai.libbox;

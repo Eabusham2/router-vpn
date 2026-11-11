@@ -22,10 +22,12 @@ final class AndroidExternalPolicy {
 }
 final class AndroidTorProfile {static boolean isTor(String p){return p.equals("tor")||p.equals("tor-bridge");}}
 final class AndroidUnderlyingNetworkMonitor {AndroidUnderlyingNetworkMonitor(Context c){}void start(Runnable r){}}
-final class AndroidPathProbe {static boolean prove(File f,int timeout){return true;}}
+final class AndroidPathProbe {static int calls;static boolean prove(File f,int timeout){calls++;return true;}}
 final class AndroidNodeStore {AndroidNodeStore(Context c){}File file(String id){return new File(id);}}
 final class AndroidModeOrchestrator {interface Callback {void progress(String text);void finished(boolean ok,String mode,String text);}}
 final class AndroidRuntimeRegistry {
+ final Ordered nodeChain=new Ordered();
+ static class Ordered{int stops;AndroidHomeStateStore.Snapshot captured;void networkChanged(AndroidHomeStateStore.Snapshot owner){captured=owner;stops++;owner.connected=false;owner.phase="failed";owner.pathProof="failed";}}
  final Standard standardExit=new Standard();final Other multihop=new Other(),orchestrator=new Other();
  static class Standard {
   int externalReads,torReads,stops;boolean healthy=true,failStop;Runnable afterProof;
@@ -108,7 +110,8 @@ public class ExternalRevalidationTest {
    check(f.engines.standardExit.torReads==1&&f.engines.standardExit.externalReads==0,"Tor circuit substituted an ordinary fixed-IP proof");
    check(AndroidHomeStateStore.current.connected&&AndroidHomeStateStore.saves==1,"valid owned Tor circuit was rejected");}
  }
- public static void main(String[]args)throws Exception{if(args.length!=0&&args[0].equals("unproven")){Fixture f=new Fixture();f.engines.standardExit.healthy=false;f.run();check(!AndroidHomeStateStore.current.connected,"unproven path adopted");return;}if(args.length!=0&&args[0].equals("stale")){stale();return;}supported();rejected();stale();retainedTeardown();tor();System.out.println("Android external revalidation: "+checks+" executable checks passed");}
+ static void ordered()throws Exception {for(String base:new String[]{"libbox","wg"}){Fixture f=new Fixture();AndroidHomeStateStore.current.logicalMode="node-chain";AndroidHomeStateStore.current.actualBase=base;AndroidHomeStateStore.Snapshot original=AndroidHomeStateStore.current;int probes=AndroidPathProbe.calls;f.run();check(f.engines.nodeChain.stops==1&&f.engines.nodeChain.captured==original&&!original.connected,"ordered network change did not retire the original complete owner");check(AndroidPathProbe.calls==probes&&AndroidHomeStateStore.begins==0&&AndroidHomeStateStore.completes==0,"ordered network change used a final-node probe");}}
+ public static void main(String[]args)throws Exception{if(args.length!=0&&args[0].equals("unproven")){Fixture f=new Fixture();f.engines.standardExit.healthy=false;f.run();check(!AndroidHomeStateStore.current.connected,"unproven path adopted");return;}if(args.length!=0&&args[0].equals("stale")){stale();return;}if(args.length!=0&&args[0].equals("ordered")){ordered();return;}supported();rejected();stale();retainedTeardown();tor();ordered();System.out.println("Android external revalidation: "+checks+" executable checks passed");}
 }
 '''
 
@@ -138,13 +141,14 @@ def main():
         for old, new, selected in (
             ("observed=engines.standardExit.capturedExternalExit(current);", "observed=current.expectedExternalIp;", "unproven"),
             ("if(!isSameRevalidation(token))return;", "", "stale"),
+            ('if("node-chain".equals(before.logicalMode)){', 'if(false){', 'ordered'),
         ):
             assert source.count(old) == 1, "missing exact native-proof regression boundary"
             target.write_text(source.replace(old, new))
             subprocess.run(compile_args, check=True, timeout=30, capture_output=True)
             failed = subprocess.run([*run_args, selected], timeout=10, capture_output=True, text=True)
             assert failed.returncode != 0 and "AssertionError" in failed.stderr, "external revalidation negative control passed"
-        print("Android external revalidation: 2 behavioral negative controls rejected")
+        print("Android external/ordered revalidation: 3 behavioral negative controls rejected")
 
 
 if __name__ == "__main__":
