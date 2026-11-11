@@ -11,7 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = './internal/mobilemultihop'
 NAME = re.compile(r'(?:Test|Example|Fuzz)\w*')
 PHASES = (
-    ('node capture and packet identities', r'^Test(?:Node|NativeNode|DesktopPredecessor|WireGuard|Amnezia|NativeAmnezia)'),
+    # Ordered graphs have their own bounded phase as their matrix grows. Every
+    # discovered test still runs exactly once with the same race/time limits.
+    ('ordered node chains', r'^TestNodeChain'),
+    ('node capture and packet identities', r'^Test(?:Node(?!Chain)|NativeNode|DesktopPredecessor|WireGuard|Amnezia|NativeAmnezia)'),
     ('proxy transports and native Xray', r'^Test(?:Proxy|Naive|Xray|NativeXray)'),
     ('mandatory PQ', r'^TestPQ'),
     ('Start Layers and composites', r'^Test(?:Composite|EntryStartLayer|EntryLayer|BothStartLayers|ExitLayer|NativeBaseStartLayer)'),
@@ -19,7 +22,8 @@ PHASES = (
     ('external paths and OpenVPN', r'^Test(?:External|OpenVPN|ImportedEntry)'),
     # Keep the growing fallback below the same 180s aggregate bound. Exclude
     # the roots already covered by the node and external phases explicitly.
-    ('desktop execution and ownership', r'^TestDesktop(?!Predecessor)'),
+    ('desktop node policies and ownership', r'^TestDesktop(?:Node|LinuxNode|CompleteMAX)'),
+    ('desktop execution and ownership', r'^TestDesktop(?!Predecessor|Node|LinuxNode|CompleteMAX)'),
     ('imported transports and ownership', r'^TestImported(?!Entry)'),
 )
 REQUIRED = frozenset((
@@ -111,6 +115,7 @@ class PartitionTests(unittest.TestCase):
         self.names = sorted(REQUIRED | {
             'TestEntryStartLayerPreservesAllNativeModesAndChoicePaths',
             'TestDesktopExecution', 'TestDesktopPredecessorOwnership',
+            'TestDesktopNodeFuturePolicy', 'TestDesktopLinuxNodeFuturePolicy',
             'TestImportedTransport',
             'TestFutureController', 'Example', 'FuzzFutureSeed', 'TestÜnicode',
         })
@@ -135,6 +140,8 @@ class PartitionTests(unittest.TestCase):
         groups = dict(partition(self.names))
         self.assertIn('TestDesktopExecution', groups['desktop execution and ownership'])
         self.assertIn('TestDesktopPredecessorOwnership', groups['node capture and packet identities'])
+        for name in ('TestDesktopNodeFuturePolicy', 'TestDesktopLinuxNodeFuturePolicy'):
+            self.assertIn(name, groups['desktop node policies and ownership'])
         self.assertIn('TestImportedTransport', groups['imported transports and ownership'])
         self.assertIn('TestImportedEntryPacketFinalCompleteGraphs', groups['external paths and OpenVPN'])
         for name in ('TestFutureController', 'Example', 'FuzzFutureSeed', 'TestÜnicode'):
@@ -145,9 +152,9 @@ class PartitionTests(unittest.TestCase):
 
     def test_every_selected_node_chain_root_is_mandatory_and_runs_once(self):
         groups = dict(partition(self.names))
-        for prefix, count, phase in (('TestNodeChain', 10, 'node capture and packet identities'),
-                                     ('TestDesktopNodeChainPolicy', 4, 'desktop execution and ownership'),
-                                     ('TestDesktopNodeChainReady', 1, 'desktop execution and ownership')):
+        for prefix, count, phase in (('TestNodeChain', 10, 'ordered node chains'),
+                                     ('TestDesktopNodeChainPolicy', 4, 'desktop node policies and ownership'),
+                                     ('TestDesktopNodeChainReady', 1, 'desktop node policies and ownership')):
             required = {name for name in REQUIRED if name.startswith(prefix)}
             self.assertEqual(len(required), count)
             self.assertTrue(required.issubset(groups[phase]))
@@ -160,6 +167,8 @@ class PartitionTests(unittest.TestCase):
     def test_overlapping_predicates_reject(self):
         with self.assertRaises(ValueError):
             partition(self.names, PHASES + (('duplicate PQ', r'^TestPQ'),))
+        with self.assertRaises(ValueError):
+            partition(self.names, PHASES + (('duplicate ordered nodes', r'^TestNode'),))
 
     def test_missing_duplicate_unknown_and_empty_phase_reject(self):
         for mutation in ('drop', 'duplicate', 'unknown', 'empty'):
