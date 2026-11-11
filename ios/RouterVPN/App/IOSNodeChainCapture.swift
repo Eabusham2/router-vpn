@@ -99,8 +99,11 @@ struct IOSNodeChainCapture {
     }
 
     private init(plan: LibboxRouterNodeChain) throws {
-        let returned: String? = try plan.launchInput()
-        guard let launch = returned, !launch.isEmpty else { throw Self.issue("The native chain returned no private launch source.") }
+        var failure: NSError?
+        let returned: String? = plan.launchInput(&failure)
+        guard failure == nil, let launch = returned, !launch.isEmpty else {
+            throw failure ?? Self.issue("The native chain returned no private launch source.")
+        }
         let root = try Self.object(Data(launch.utf8), maximum: Self.maximumInputBytes)
         guard root["kind"] as? String == "routervpn-node-chain-launch-input", root["execution"] as? String == "local",
               root["projection_kind"] == nil, root["session_id"] == nil, root["target_os"] == nil, root["restored_mtu"] == nil,

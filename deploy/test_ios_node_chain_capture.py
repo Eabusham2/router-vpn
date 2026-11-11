@@ -67,9 +67,20 @@ public final class LibboxRouterNodeChain {
  public func config()->String{receipt["config"]!}
  public func sourceSHA256()->String{receipt["source"]!}
  public func configSHA256()->String{receipt["config_sha"]!}
- public func launchInput()throws->String{receipt["launch"]!}
+ // Match the generated gomobile NSErrorPointer ABI; this method is not
+ // imported as a Swift throwing method by the real Apple framework.
+ public func launchInput(_ error:UnsafeMutablePointer<NSError?>?)->String{
+  if NativeLaunchFault.shared.active{error?.pointee=NSError(domain:"LaunchInputFixture",code:1)}
+  return receipt["launch"]!
+ }
  public func close()throws{}
 }
+private final class NativeLaunchFault: @unchecked Sendable {
+ static let shared=NativeLaunchFault();private let lock=NSLock();private var failed=false
+ var active:Bool{lock.lock();defer{lock.unlock()};return failed}
+ func set(_ failed:Bool){lock.lock();self.failed=failed;lock.unlock()}
+}
+public func LibboxTestLaunchFailure(_ failed:Bool){NativeLaunchFault.shared.set(failed)}
 func api<T>(_ error:UnsafeMutablePointer<NSError?>?,_ action:()throws->T)->T?{
  do{return try action()}catch let caught{error?.pointee=caught as NSError;return nil}
 }
@@ -155,6 +166,11 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
    }
   }}
   let original=try sources(4)
+  LibboxTestLaunchFailure(true)
+  try reject("native launch error cannot return usable source"){
+   _ = try IOSNodeChainCapture.compile(bundles:original)
+  }
+  LibboxTestLaunchFailure(false)
   for fault in ["missing-middle","swapped-middle","duplicate-proof","missing-assets","duplicate-profile","foreign-kind","wrong-mode","implicit-execution","server","disabled","number-enabled","mixed-pair","extra-selection-key","different-control","final-order","missing-layer","unsupported-family","malformed-bootstrap","hostname-middle"] {
    var changed=original
    switch fault {
@@ -208,6 +224,7 @@ def main():
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)
         text = source.read_text()
         for name, before, after, failure in (
+            ('native-launch-error', 'guard failure == nil, let launch = returned, !launch.isEmpty else {', 'guard let launch = returned, !launch.isEmpty else {', 'ACCEPTED native launch error cannot return usable source'),
             ('final-profile-bound', 'try json(selectedProfile, maximum: 256 * 1024) == json(capture.finalProfile, maximum: 256 * 1024)', 'true', 'ACCEPTED replaced final control'),
             ('mobile-projection-bound', 'root["projection_kind"] == nil, root["session_id"] == nil, root["target_os"] == nil, root["restored_mtu"] == nil,', 'true,', 'ACCEPTED foreign or unstaged platform projection'),
         ):
