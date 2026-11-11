@@ -108,6 +108,7 @@ func nativeMultihopLaunchSources(t *testing.T) []string {
 		sourceFunctionForTest(t, "desktop_node_chain_owned.go", "func startDesktopOwnedNodeChainLaunch("),
 		sourceFunctionForTest(t, "desktop_node_chain_owned.go", "func (a *app) publishDesktopNodeChainStartLocked("),
 		sourceFunctionForTest(t, "desktop_node_chain_linux.go", "func (owner *desktopNodeChainPlatformRuntime) start("),
+		sourceFunctionForTest(t, "multihop_node_chain_request.go", "func (a *app) resolveNativeMultihopRequestLocked("),
 	}
 }
 
@@ -116,7 +117,7 @@ func nativeMultihopLaunchSources(t *testing.T) []string {
 // well as the ordinary cmd.Start branch; an unrelated guard, comment or string
 // cannot stand in for either branch's original operation.
 func nativeMultihopLaunchGuards(sources []string) error {
-	if len(sources) != 17 {
+	if len(sources) != 18 {
 		return fmt.Errorf("native multihop launch lost its original Windows and Linux shipping functions")
 	}
 	positions := token.NewFileSet()
@@ -323,9 +324,12 @@ func nativeMultihopLaunchGuards(sources []string) error {
 	// Its internal native fixture seam cannot supply a different operation or
 	// skip the source resolver in the shipping HTTP path.
 	if !ordered(9,
-		exact("operation, finish, guardErr := a.beginConnectionOperation()"),
+		exact("operation, finish, guardErr := a.beginConnectionOperationContext(r.Context())"),
 		exact("defer finish()"),
-		exact("sel, err := resolveNativeMultihopSelection(control, profiles, q)"),
+		exact("q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))"),
+		exact("a.mu.Lock()"),
+		exact("sel, err := a.resolveNativeMultihopRequestLocked(q)"),
+		exact("a.mu.Unlock()"),
 		exact("a.nativeMultihopConnectLocalOwned(w, r, operation, sel, driver)")) {
 		return fmt.Errorf("native Local dispatcher lost its captured request or full source resolver")
 	}
@@ -334,6 +338,31 @@ func nativeMultihopLaunchGuards(sources []string) error {
 			branch, ok := statement.(*ast.IfStmt)
 			return ok && branch.Init == nil && branch.Else == nil && strings.Join(strings.Fields(text(branch.Cond)), " ") == condition && returns(branch.Body)
 		}
+	}
+	// The request helper now owns the catalog snapshot. Trace its complete
+	// ordered revision inventory before resolving either native graph family;
+	// the old direct-resolver marker cannot substitute for this closure.
+	references := func(statement ast.Stmt) bool {
+		branch, ok := statement.(*ast.IfStmt)
+		if !ok || branch.Init != nil || branch.Else != nil || text(branch.Cond) != "q.ordered()" || len(branch.Body.List) != 1 {
+			return false
+		}
+		loop, ok := branch.Body.List[0].(*ast.RangeStmt)
+		return ok && text(loop.X) == "q.Nodes" && loop.Key != nil && text(loop.Key) == "_" && loop.Value != nil && text(loop.Value) == "node" &&
+			len(loop.Body.List) == 1 && text(loop.Body.List[0]) == "required = append(required, node.ID)"
+	}
+	legacyRevisions := func(statement ast.Stmt) bool {
+		branch, ok := statement.(*ast.IfStmt)
+		return ok && branch.Init == nil && branch.Else == nil && text(branch.Cond) == "err == nil && q.present() && !q.ordered()" &&
+			len(branch.Body.List) == 1 && text(branch.Body.List[0]) == "err = a.validateDesktopProfileExpectationsLocked(q.desktopProfileExpectations, []string{selection.Entry.ID, selection.Exit.ID}, false)"
+	}
+	if !ordered(17,
+		checked("err := q.validateOrdered()"), exact("var required []string"), references,
+		checked("err := a.validateDesktopProfileExpectationsLocked(q.desktopProfileExpectations, required, q.ordered())"),
+		exact("store := cloneRouterProfileStore(a.profiles)"),
+		exact("control, ok := profileByID(store.Profiles, store.SelectedID)"), refusing("!ok"), refusing("control.NodeKind == \"external\""),
+		exact("selection, err := resolveNativeMultihopSelection(control, store.Profiles, q)"), legacyRevisions, exact("return selection, err")) {
+		return fmt.Errorf("native Local source resolver lost original complete revisions or immutable catalog ownership")
 	}
 	if len(methods[0].Body.List) == 0 || !refusing("operation == nil || a.checkCapturedConnectionOperation(operation) != nil || driver.capture == nil || driver.preflight == nil || driver.stage == nil || driver.proof == nil")(methods[0].Body.List[0]) {
 		return fmt.Errorf("native Local transaction accepts an uncaptured operation or incomplete driver")
@@ -443,7 +472,18 @@ func TestNativeMultihopLaunchGuardsRejectMutations(t *testing.T) {
 		{"linux-publication-current-omitted", "a.checkCapturedConnectionOperationLocked(h.operation)", "unrelatedGuard()", 8},
 		{"linux-publication-lock-omitted", "desktopnetwork.LockContext(ctx, &a.mu)", "unrelatedGuard()", 8},
 		{"local-operation-substituted", "a.nativeMultihopConnectLocalOwned(w, r, operation, sel, driver)", "a.nativeMultihopConnectLocalOwned(w, r, context.Background(), sel, driver)", 9},
-		{"local-source-resolver-omitted", "resolveNativeMultihopSelection(control, profiles, q)", "unrelatedSelection()", 9},
+		{"local-source-resolver-omitted", "a.resolveNativeMultihopRequestLocked(q)", "unrelatedSelection()", 9},
+		{"local-request-context-substituted", "a.beginConnectionOperationContext(r.Context())", "a.beginConnectionOperation()", 9},
+		{"local-request-decoder-omitted", "decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))", "unrelatedDecoder()", 9},
+		{"local-catalog-lock-omitted", "a.mu.Lock()", "unrelatedLock()", 9},
+		{"source-ordered-validation-omitted", "q.validateOrdered()", "unrelatedGuard()", 17},
+		{"source-middle-revisions-omitted", "required = append(required, node.ID)", "required = nil", 17},
+		{"source-revision-guard-omitted", "a.validateDesktopProfileExpectationsLocked(q.desktopProfileExpectations, required, q.ordered())", "unrelatedGuard()", 17},
+		{"source-revision-inventory-weakened", "q.desktopProfileExpectations, required, q.ordered()", "q.desktopProfileExpectations, required, false", 17},
+		{"source-catalog-alias-substituted", "cloneRouterProfileStore(a.profiles)", "a.profiles", 17},
+		{"source-selected-control-substituted", "profileByID(store.Profiles, store.SelectedID)", "profileByID(store.Profiles, q.ExitID)", 17},
+		{"source-original-catalog-substituted", "resolveNativeMultihopSelection(control, store.Profiles, q)", "resolveNativeMultihopSelection(control, a.profiles.Profiles, q)", 17},
+		{"source-pair-revisions-omitted", "err = a.validateDesktopProfileExpectationsLocked(q.desktopProfileExpectations, []string{selection.Entry.ID, selection.Exit.ID}, false)", "err = nil", 17},
 		{"local-operation-guard-omitted", "a.checkCapturedConnectionOperation(operation) != nil ||", "", 0},
 		{"foreign-platform-family", "launch.chain != nil && launch.chain.platform != nil", "launch.chain != nil", 10},
 		{"chain-platform-source-substitution", "launch.chain.selection.Native != selection.Native", "false", 11},
