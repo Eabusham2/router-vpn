@@ -1,0 +1,415 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"net"
+	"os"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+)
+
+// These controlled proof/engine boundaries exercise the shipping command, MTU
+// owner, exact-reader handoff and heartbeat code. Actual encrypted prefix/DNS
+// proof remains a separate mandatory native gate; a double cannot earn it.
+type desktopNodeChainProofFixture struct {
+	lifetime context.Context
+	ready    bool
+	closed   int
+	onRun    func(context.Context) error
+	onClose  func(context.Context) error
+	events   *[]string
+}
+
+func (proof *desktopNodeChainProofFixture) Run(ctx context.Context, engine mobilemultihop.NodeChainEngine) error {
+	*proof.events = append(*proof.events, "prove")
+	proof.lifetime = ctx
+	if _, err := engine.ObserveChainContext(ctx); err != nil {
+		return err
+	}
+	if proof.onRun != nil {
+		if err := proof.onRun(ctx); err != nil {
+			return err
+		}
+	}
+	proof.ready = true
+	return ctx.Err()
+}
+func (proof *desktopNodeChainProofFixture) HealthyContext(ctx context.Context) error {
+	if ctx.Err() != nil || proof.lifetime == nil || proof.lifetime.Err() != nil || !proof.ready {
+		return routerVPNExternalFailure
+	}
+	return nil
+}
+func (proof *desktopNodeChainProofFixture) CloseContext(ctx context.Context) error {
+	*proof.events = append(*proof.events, "join")
+	proof.closed++
+	proof.ready = false
+	if proof.onClose != nil {
+		return proof.onClose(ctx)
+	}
+	if proof.lifetime != nil && proof.lifetime.Err() == nil {
+		return errors.New("proof was not canceled before join")
+	}
+	return ctx.Err()
+}
+
+type desktopNodeChainEngineFixture struct {
+	identity mobilemultihop.NodeChainIdentity
+	current  func(context.Context) error
+	final    string
+}
+
+func (engine *desktopNodeChainEngineFixture) ObserveChainContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
+	if err := engine.current(ctx); err != nil {
+		return mobilemultihop.NodeChainIdentity{}, err
+	}
+	return engine.identity, nil
+}
+func (*desktopNodeChainEngineFixture) Dial(context.Context, string, string) (net.Conn, error) {
+	return nil, errors.New("fixture cannot prove encrypted prefix traffic")
+}
+func (engine *desktopNodeChainEngineFixture) SelectContext(ctx context.Context, tag string) error {
+	if tag != engine.final {
+		return routerVPNExternalFailure
+	}
+	return engine.current(ctx)
+}
+func (engine *desktopNodeChainEngineFixture) SelectedContext(ctx context.Context) (string, error) {
+	return engine.final, engine.current(ctx)
+}
+func (*desktopNodeChainEngineFixture) DNSProofContext(context.Context, mobilemultihop.NodeChainDNSCapture) error {
+	return errors.New("fixture cannot prove native selected DNS")
+}
+
+type desktopNodeChainCommandRuntimeFixture struct {
+	runtime *routerVPNNodeChainRuntime
+	mtu     *routerVPNNodeMTU
+	native  *desktopNodeMTUEngineFixture
+	proofs  []*desktopNodeChainProofFixture
+	engines []*desktopNodeChainEngineFixture
+	events  []string
+	create  func(int, *desktopNodeChainProofFixture, *desktopNodeChainEngineFixture)
+}
+
+func desktopNodeChainRuntimeFixture(t *testing.T) *desktopNodeChainCommandRuntimeFixture {
+	t.Helper()
+	policy := desktopNodeChainCommandPolicy(t, 3, "linux", 1420)
+	input, _ := policy.NodeChain().LaunchInput()
+	files := desktopImportedCommandFiles(t, map[string]string{"node-chain-source.json": input, "sing-box.json": policy.Config()})
+	mtu, engine, _ := desktopNodeMTUFixture(t)
+	mtu.record.Session, mtu.record.Config = policy.Metadata().SessionID, policy.Metadata().ConfigSHA256
+	mtu.inbound.(*desktopMTUTUNFixture).tag = policy.NodeChain().DNSCapture().TUNTag
+	f := &desktopNodeChainCommandRuntimeFixture{mtu: mtu, native: engine}
+	engine.change = func(ctx context.Context, previous adapter.Inbound, value int) (adapter.Inbound, error) {
+		f.events = append(f.events, "native-change")
+		old := previous.(*desktopMTUTUNFixture)
+		next := &desktopMTUTUNFixture{index: old.index + 1, mtu: value, name: old.name, tag: old.tag, guard: old.guard, guardContext: old.guardContext}
+		engine.current = next
+		return next, ctx.Err()
+	}
+	var err error
+	f.runtime, err = routerVPNNewNodeChainRuntimeFactory(context.Background(), files, policy, strings.Repeat("d", 64),
+		func(ctx context.Context, chain *mobilemultihop.NodeChain, current func(context.Context) error) (routerVPNNodeChainProof, mobilemultihop.NodeChainEngine, error) {
+			actual, err := chain.LaunchInput()
+			if err != nil || actual != input {
+				t.Fatal("proof generation changed its original sealed graph", err)
+			}
+			proof := &desktopNodeChainProofFixture{events: &f.events}
+			engine := &desktopNodeChainEngineFixture{identity: mobilemultihop.NodeChainIdentity{EngineID: "original-box", SessionID: policy.Metadata().SessionID,
+				NetworkID: "original-network", SourceSHA256: chain.SourceSHA256(), ConfigSHA256: chain.ConfigSHA256()}, current: current, final: chain.FinalTag()}
+			if f.create != nil {
+				f.create(len(f.proofs), proof, engine)
+			}
+			f.proofs, f.engines = append(f.proofs, proof), append(f.engines, engine)
+			return proof, engine, ctx.Err()
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = f.runtime.close(ctx)
+	})
+	return f
+}
+
+func (f *desktopNodeChainCommandRuntimeFixture) start(t *testing.T) {
+	t.Helper()
+	if err := f.runtime.attach(context.Background(), f.mtu); err != nil {
+		t.Fatal("chain startup failed", err)
+	}
+	if err := f.runtime.heartbeat(context.Background(), f.mtu.record); err != nil {
+		t.Fatal("chain heartbeat failed", err)
+	}
+}
+
+func (f *desktopNodeChainCommandRuntimeFixture) ready(t *testing.T) mobilemultihop.DesktopNodeChainReadyRecord {
+	t.Helper()
+	raw, err := f.runtime.files.read("node-chain-ready.json", mobilemultihop.DesktopNodeChainReadyRecordLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := mobilemultihop.ParseDesktopNodeChainReadyRecord(raw, f.runtime.policy, f.runtime.transfer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return record
+}
+
+func TestRouterVPNDesktopNodeChainMTUProofHandoff(t *testing.T) {
+	f := desktopNodeChainRuntimeFixture(t)
+	f.start(t)
+	original, oldEngine := f.ready(t), f.engines[0]
+	desktopNodeMTUApply(t, f.mtu, "begin", 0)
+	desktopNodeMTUApply(t, f.mtu, "set", 1360)
+	if !reflect.DeepEqual(f.events, []string{"prove", "join", "native-change", "prove"}) || f.proofs[0].closed != 1 || len(f.proofs) != 2 {
+		t.Fatal("MTU replacement did not join before native mutation and reproof", f.events)
+	}
+	if _, err := oldEngine.ObserveChainContext(context.Background()); err == nil {
+		t.Fatal("old proof adopted the replacement reader")
+	}
+	if err := f.runtime.heartbeat(context.Background(), f.mtu.record); err != nil {
+		t.Fatal(err)
+	}
+	changed := f.ready(t)
+	if changed.Identity != original.Identity || changed.Reader != original.Reader+1 || changed.Generation != original.Generation+1 || changed.MTU != 1360 {
+		t.Fatal("fresh proof lost original source or exact reader generation", original, changed)
+	}
+	// A late old completion cannot make its revoked current callback valid.
+	f.proofs[0].ready = true
+	if _, err := oldEngine.ObserveChainContext(context.Background()); err == nil {
+		t.Fatal("late old proof regained admission")
+	}
+	desktopNodeMTUApply(t, f.mtu, "rollback", 0)
+	if err := f.runtime.heartbeat(context.Background(), f.mtu.record); err != nil {
+		t.Fatal(err)
+	}
+	restored := f.ready(t)
+	if restored.Identity != original.Identity || restored.Reader != original.Reader+2 || restored.Generation != original.Generation+2 || restored.MTU != 1420 {
+		t.Fatal("rollback lost the fresh controller bound to actual returned TUN", restored)
+	}
+	changes := len(f.native.values)
+	if err := f.runtime.close(context.Background()); err != nil || len(f.native.values) != changes || f.native.current != f.mtu.inbound {
+		t.Fatal("proof close acquired native teardown or lost joined cleanup", err)
+	}
+}
+
+func TestRouterVPNDesktopNodeChainMTURejectsUnjoinedCanceledAndForeignReaders(t *testing.T) {
+	for _, fault := range []string{"join", "cancel", "returned-reader", "network", "session", "source", "config", "proof-failure", "ceiling"} {
+		t.Run(fault, func(t *testing.T) {
+			f := desktopNodeChainRuntimeFixture(t)
+			f.start(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			value := 1360
+			if fault == "join" {
+				f.proofs[0].onClose = func(context.Context) error { return errors.New("original proof callback still running") }
+			}
+			if fault == "ceiling" {
+				value = f.runtime.ceiling + 1
+			}
+			if fault == "cancel" || fault == "returned-reader" {
+				change := f.native.change
+				f.native.change = func(call context.Context, previous adapter.Inbound, value int) (adapter.Inbound, error) {
+					next, err := change(call, previous, value)
+					if fault == "cancel" {
+						cancel()
+					} else {
+						old := next.(*desktopMTUTUNFixture)
+						foreign := *old
+						f.native.current = &foreign
+					}
+					return next, err
+				}
+			}
+			f.create = func(position int, proof *desktopNodeChainProofFixture, engine *desktopNodeChainEngineFixture) {
+				if position != 1 {
+					return
+				}
+				switch fault {
+				case "network":
+					engine.identity.NetworkID = "substituted-network"
+				case "session":
+					engine.identity.SessionID = strings.Repeat("f", 32)
+				case "source":
+					engine.identity.SourceSHA256 = strings.Repeat("f", 64)
+				case "config":
+					engine.identity.ConfigSHA256 = strings.Repeat("f", 64)
+				case "proof-failure":
+					proof.onRun = func(context.Context) error { return errors.New("middle prefix proof failed") }
+				}
+			}
+			if err := f.mtu.changeBeforeContext(ctx, value, time.Time{}); err == nil {
+				t.Fatal("invalid chain MTU transition succeeded")
+			}
+			if fault == "ceiling" {
+				if len(f.native.values) != 0 || f.proofs[0].closed != 0 || f.runtime.current(context.Background()) != nil {
+					t.Fatal("out-of-envelope candidate retired or changed the original owner")
+				}
+				return
+			}
+			if fault == "join" && len(f.native.values) != 0 {
+				t.Fatal("native mutation preceded original proof join")
+			}
+			if f.runtime.current(context.Background()) == nil || f.runtime.heartbeat(context.Background(), f.mtu.record) == nil {
+				t.Fatal("failed or canceled generation published readiness")
+			}
+			if _, err := f.runtime.files.root.Lstat("node-chain-ready.json"); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("old heartbeat survived proof retirement", err)
+			}
+			if fault == "join" {
+				if err := f.runtime.resume(context.Background()); err == nil {
+					t.Fatal("failed proof join was bypassed by a new controller")
+				}
+				f.proofs[0].onClose = nil
+			}
+			if err := f.runtime.close(context.Background()); err != nil {
+				t.Fatal("original proof join could not retry", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainHeartbeatRejectsCurrentReaderSubstitution(t *testing.T) {
+	f := desktopNodeChainRuntimeFixture(t)
+	f.start(t)
+	before := f.ready(t)
+	actual := f.native.current.(*desktopMTUTUNFixture)
+	foreign := *actual
+	f.native.current = &foreign
+	if err := f.runtime.heartbeat(context.Background(), f.mtu.record); err == nil {
+		t.Fatal("same-value foreign TUN acquired fresh heartbeat")
+	}
+	after := f.ready(t)
+	if after != before {
+		t.Fatal("invalid current owner updated a successful receipt")
+	}
+}
+
+func TestRouterVPNDesktopNodeChainActualLoopRequiresCurrentProofAndReader(t *testing.T) {
+	for _, fault := range []string{"exact", "cancel", "reader-substitution"} {
+		t.Run(fault, func(t *testing.T) {
+			f := desktopNodeChainRuntimeFixture(t)
+			fixture := &desktopNodeMTUHeartbeatFixture{entered: make(chan struct{}), release: make(chan struct{}), raw: desktopNetworkReceiptFixture(t, 17, 1420, strings.Repeat("d", 32))}
+			registry := include.InboundRegistry()
+			created := 0
+			inbound.Register[option.TunInboundOptions](registry, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+				created++
+				value := fixture
+				if created > 1 {
+					value = &desktopNodeMTUHeartbeatFixture{}
+				}
+				value.Adapter = inbound.NewAdapter(C.TypeTun, tag)
+				return value, nil
+			})
+			graph, stopGraph := context.WithCancel(box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry()))
+			defer stopGraph()
+			// Only the proof/native-interface boundaries are modeled. The Box
+			// manager, original reader capture, private files and entire shipping
+			// loop run unchanged; this is not encrypted/privileged acceptance.
+			options, err := SJ.UnmarshalExtendedContext[option.Options](graph, []byte(`{"log":{"disabled":true},"inbounds":[{"type":"tun","tag":"tun-in","interface_name":"router-vpn","mtu":1420,"address":["10.8.0.2/24"],"auto_route":false,"stack":"system"}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"auto_detect_interface":true,"final":"direct"}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			instance, err := box.New(box.Options{Context: graph, Options: options})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer instance.Close()
+			if err := instance.RouterVPNStrategyStart(); err != nil {
+				t.Fatal(err)
+			}
+			parent, stopParent := context.WithCancel(context.Background())
+			defer stopParent()
+			meta := f.runtime.policy.Metadata()
+			done := make(chan error, 1)
+			go func() {
+				done <- routerVPNRunNodeMTULoopWithChain(parent, graph, f.runtime.files, instance, meta.SessionID, meta.ConfigSHA256, nil,
+					func(ctx context.Context) error { return ctx.Err() }, func() error { return nil }, f.runtime)
+			}()
+			var release sync.Once
+			finished := false
+			defer func() {
+				release.Do(func() { close(fixture.release) })
+				stopParent()
+				stopGraph()
+				if !finished {
+					select {
+					case <-done:
+					case <-time.After(3 * time.Second):
+						t.Error("ordered shipping loop did not join")
+					}
+				}
+			}()
+			select {
+			case <-fixture.entered:
+			case err := <-done:
+				finished = true
+				t.Fatal("ordered loop failed before original native receipt", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("ordered loop never entered original native receipt")
+			}
+			switch fault {
+			case "cancel":
+				stopParent()
+			case "reader-substitution":
+				if err := instance.Inbound().Create(graph, instance.Router(), log.NewNOPFactory().Logger(), "tun-in", C.TypeTun, &option.TunInboundOptions{MTU: 1420}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			release.Do(func() { close(fixture.release) })
+			if fault == "exact" {
+				deadline := time.Now().Add(3 * time.Second)
+				for {
+					if _, err := f.runtime.files.read("node-chain-ready.json", mobilemultihop.DesktopNodeChainReadyRecordLimit); err == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("complete current loop did not publish chain heartbeat")
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				stopParent()
+			}
+			select {
+			case err := <-done:
+				finished = true
+				if (err == nil) != (fault != "reader-substitution") {
+					t.Fatal("actual loop changed cancellation/substitution outcome", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("actual ordered loop did not join captured receipt")
+			}
+			if fault == "exact" {
+				ready := f.ready(t)
+				if ready.Reader != 1 || ready.Generation != 1 || ready.MTU != 1420 {
+					t.Fatal("actual loop published another proof/reader", ready)
+				}
+			} else {
+				for _, name := range []string{"node-chain-ready.json", "node-mtu-status.json"} {
+					if _, err := f.runtime.files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+						t.Fatal("invalid actual loop published success", name, err)
+					}
+				}
+			}
+			if err := f.runtime.close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

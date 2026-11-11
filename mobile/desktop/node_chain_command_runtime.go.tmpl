@@ -1,0 +1,257 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type routerVPNNodeChainProof interface {
+	Run(context.Context, mobilemultihop.NodeChainEngine) error
+	HealthyContext(context.Context) error
+	CloseContext(context.Context) error
+}
+
+type routerVPNNodeChainFactory func(context.Context, *mobilemultihop.NodeChain, func(context.Context) error) (routerVPNNodeChainProof, mobilemultihop.NodeChainEngine, error)
+
+// Only the existing child command/MTU loop mutates this owner. Proof observers
+// read the immutable generation through its atomic revocation capability. It
+// owns proof workers only; the original coordinator owns every native close.
+type routerVPNNodeChainRuntime struct {
+	ctx        context.Context
+	files      *routerVPNExternalFiles
+	policy     *mobilemultihop.DesktopNodeChainPolicy
+	input      string
+	transfer   string
+	ceiling    int
+	factory    routerVPNNodeChainFactory
+	mtu        *routerVPNNodeMTU
+	state      atomic.Pointer[routerVPNNodeChainProofState]
+	identity   mobilemultihop.NodeChainIdentity
+	generation uint64
+}
+
+type routerVPNNodeChainProofState struct {
+	proof      routerVPNNodeChainProof
+	engine     mobilemultihop.NodeChainEngine
+	cancel     context.CancelFunc
+	revoked    atomic.Bool
+	joined     bool
+	inbound    adapter.Inbound
+	record     routerVPNNodeMTURecord
+	generation uint64
+}
+
+func routerVPNNewNodeChainRuntime(ctx context.Context, files *routerVPNExternalFiles,
+	policy *mobilemultihop.DesktopNodeChainPolicy, transfer string, instance *box.Box) (*routerVPNNodeChainRuntime, error) {
+	if instance == nil {
+		return nil, routerVPNExternalFailure
+	}
+	return routerVPNNewNodeChainRuntimeFactory(ctx, files, policy, transfer,
+		func(call context.Context, chain *mobilemultihop.NodeChain, current func(context.Context) error) (routerVPNNodeChainProof, mobilemultihop.NodeChainEngine, error) {
+			engine, err := instance.RouterVPNNewNodeChainEngine(call, chain, policy.Metadata().SessionID, current)
+			return chain, engine, err
+		})
+}
+
+func routerVPNNewNodeChainRuntimeFactory(ctx context.Context, files *routerVPNExternalFiles,
+	policy *mobilemultihop.DesktopNodeChainPolicy, transfer string, factory routerVPNNodeChainFactory) (*routerVPNNodeChainRuntime, error) {
+	if ctx == nil || ctx.Err() != nil || files == nil || files.root == nil || policy == nil ||
+		policy.Validate() != nil || !routerVPNExternalSource.MatchString(transfer) || factory == nil {
+		return nil, routerVPNExternalFailure
+	}
+	chain := policy.NodeChain()
+	if chain == nil {
+		return nil, routerVPNExternalFailure
+	}
+	input, err := chain.LaunchInput()
+	if err != nil {
+		return nil, err
+	}
+	plan, err := chain.MTUPlan()
+	if err != nil {
+		return nil, err
+	}
+	return &routerVPNNodeChainRuntime{ctx: ctx, files: files, policy: policy, input: input, transfer: transfer,
+		ceiling: plan.Ceiling, factory: factory}, nil
+}
+
+// The engine callback observes only the original native owner and this exact
+// returned TUN reader. It never recursively calls the proof controller. The
+// previous proof has joined before the MTU owner can mutate its reader fields.
+func (owner *routerVPNNodeChainRuntime) nativeCurrent(ctx context.Context, state *routerVPNNodeChainProofState) error {
+	if owner == nil || ctx == nil || state == nil || state.revoked.Load() || owner.state.Load() != state ||
+		owner.mtu == nil || owner.ctx.Err() != nil || ctx.Err() != nil {
+		return routerVPNExternalFailure
+	}
+	if err := owner.mtu.currentContext(ctx); err != nil {
+		return err
+	}
+	record := owner.mtu.record
+	if owner.mtu.inbound != state.inbound || record.Reader != state.record.Reader || record.Session != state.record.Session ||
+		record.Config != state.record.Config || record.Path != state.record.Path || record.Interface != state.record.Interface ||
+		record.Index != state.record.Index || record.MTU != state.record.MTU || state.revoked.Load() || owner.state.Load() != state {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func (owner *routerVPNNodeChainRuntime) attach(ctx context.Context, mtu *routerVPNNodeMTU) error {
+	if owner == nil || owner.mtu != nil || mtu == nil || mtu.chain != nil || owner.state.Load() != nil ||
+		mtu.record.Session != owner.policy.Metadata().SessionID || mtu.record.Config != owner.policy.Metadata().ConfigSHA256 {
+		return routerVPNExternalFailure
+	}
+	owner.mtu, mtu.chain = mtu, owner
+	return owner.resume(ctx)
+}
+
+func (owner *routerVPNNodeChainRuntime) resume(ctx context.Context) error {
+	if owner == nil || ctx == nil || ctx.Err() != nil || owner.ctx.Err() != nil || owner.mtu == nil ||
+		owner.mtu.currentContext(ctx) != nil || owner.mtu.record.MTU < 1280 || owner.mtu.record.MTU > owner.ceiling {
+		return routerVPNExternalFailure
+	}
+	if previous := owner.state.Load(); previous != nil && (!previous.revoked.Load() || !previous.joined) {
+		return routerVPNExternalFailure
+	}
+	// Every generation reparses the same complete sealed input. Temporary MTU
+	// replacement changes only the original owner's authenticated reader/MTU;
+	// neither graph bytes nor source/config identity are rewritten here.
+	policy, err := mobilemultihop.ParseDesktopNodeChainLaunchInput(owner.input)
+	if err != nil || policy == nil || policy.Config() != owner.policy.Config() ||
+		policy.Metadata().SourceSHA256 != owner.policy.Metadata().SourceSHA256 {
+		return routerVPNExternalFailure
+	}
+	chain := policy.NodeChain()
+	if chain == nil {
+		return routerVPNExternalFailure
+	}
+	lifetime, cancel := context.WithCancel(owner.ctx)
+	state := &routerVPNNodeChainProofState{proof: chain, cancel: cancel, inbound: owner.mtu.inbound,
+		record: owner.mtu.record, generation: owner.generation + 1}
+	owner.state.Store(state)
+	// Run owns observer lifetime, while this operation owns its startup budget.
+	// Canceling a bounded MTU operation retires this exact generation, including
+	// late proof callbacks; stopping the startup link preserves normal lifetime.
+	stopStartup := context.AfterFunc(ctx, cancel)
+	defer stopStartup()
+	proof, engine, err := owner.factory(ctx, chain, func(call context.Context) error { return owner.nativeCurrent(call, state) })
+	if proof != nil {
+		state.proof = proof
+	}
+	state.engine = engine
+	if err == nil && (proof == nil || engine == nil) {
+		err = routerVPNExternalFailure
+	}
+	if err == nil {
+		err = proof.Run(lifetime, engine)
+	}
+	if !stopStartup() {
+		cancel()
+	}
+	var identity mobilemultihop.NodeChainIdentity
+	if err == nil {
+		identity, err = engine.ObserveChainContext(ctx)
+	}
+	meta := owner.policy.Metadata()
+	if err == nil && (identity.SessionID != meta.SessionID || identity.SourceSHA256 != meta.OriginalSourceSHA256 ||
+		identity.ConfigSHA256 != meta.ConfigSHA256 || owner.generation != 0 && identity != owner.identity) {
+		err = routerVPNExternalFailure
+	}
+	if err == nil {
+		err = proof.HealthyContext(ctx)
+	}
+	if err == nil {
+		err = owner.nativeCurrent(ctx, state)
+	}
+	if err != nil || ctx.Err() != nil || lifetime.Err() != nil {
+		state.revoked.Store(true)
+		cancel()
+		return errors.Join(err, ctx.Err(), lifetime.Err(), routerVPNExternalFailure)
+	}
+	owner.identity, owner.generation = identity, state.generation
+	return nil
+}
+
+func (owner *routerVPNNodeChainRuntime) current(ctx context.Context) error {
+	if owner == nil {
+		return nil
+	}
+	state := owner.state.Load()
+	if state == nil || state.proof == nil || state.engine == nil || state.generation != owner.generation ||
+		owner.nativeCurrent(ctx, state) != nil {
+		return routerVPNExternalFailure
+	}
+	if err := state.proof.HealthyContext(ctx); err != nil {
+		return err
+	}
+	identity, err := state.engine.ObserveChainContext(ctx)
+	if err != nil || identity != owner.identity || owner.nativeCurrent(ctx, state) != nil {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func (owner *routerVPNNodeChainRuntime) beforeChange(ctx context.Context, value int) error {
+	if owner == nil {
+		return nil
+	}
+	if value < 1280 || value > owner.ceiling || owner.current(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	return owner.close(ctx)
+}
+
+func (owner *routerVPNNodeChainRuntime) close(ctx context.Context) error {
+	if owner == nil {
+		return nil
+	}
+	state := owner.state.Load()
+	if state != nil {
+		state.revoked.Store(true)
+		state.cancel()
+	}
+	removeErr := owner.files.remove("node-chain-ready.json")
+	if state != nil && state.proof != nil {
+		// A failed join leaves the exact controller retained for the original
+		// coordinator's bounded cleanup retry, before any native teardown.
+		joinErr := state.proof.CloseContext(ctx)
+		if joinErr == nil {
+			state.joined = true
+		}
+		return errors.Join(removeErr, joinErr)
+	}
+	return errors.Join(removeErr, ctx.Err())
+}
+
+func (owner *routerVPNNodeChainRuntime) heartbeat(ctx context.Context, record routerVPNNodeMTURecord) error {
+	if owner == nil {
+		return nil
+	}
+	state := owner.state.Load()
+	if owner.current(ctx) != nil || state == nil || owner.state.Load() != state ||
+		record.Reader != state.record.Reader || record.Interface != state.record.Interface || record.Index != state.record.Index ||
+		record.MTU != state.record.MTU || record.Session != state.record.Session || record.Config != state.record.Config || record.Path != state.record.Path {
+		return routerVPNExternalFailure
+	}
+	_, meta, capture, err := owner.policy.ReadValidated()
+	if err != nil {
+		return err
+	}
+	ready := mobilemultihop.DesktopNodeChainReadyRecord{Schema: 1, Kind: "routervpn-node-chain-ready-v1",
+		SourceSHA256: meta.SourceSHA256, TransferSHA256: owner.transfer, DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256,
+		Identity: owner.identity, Generation: state.generation, Reader: record.Reader,
+		InterfaceName: record.Interface, InterfaceIndex: uint32(record.Index), MTU: record.MTU, ObservedAt: time.Now().UnixMilli()}
+	if record.Index < 1 || uint64(record.Index) > uint64(^uint32(0)) || ready.Validate(owner.policy, owner.transfer) != nil ||
+		owner.current(ctx) != nil || owner.state.Load() != state || owner.files.publish("node-chain-ready.json", ready) != nil {
+		return routerVPNExternalFailure
+	}
+	if owner.current(ctx) != nil || owner.state.Load() != state || state.revoked.Load() {
+		return errors.Join(routerVPNExternalFailure, owner.files.remove("node-chain-ready.json"))
+	}
+	return nil
+}

@@ -206,6 +206,35 @@ func (owner *routerVPNLinuxNodeControl) compileImported(ctx context.Context, fil
 	return policy, nil
 }
 
+// The chain is replayed from its fully sealed derived launch source only after
+// original parent authentication. Its aggregate protection, complete order and
+// final control identity cannot be replaced by a legacy node or pair capture.
+func (owner *routerVPNLinuxNodeControl) compileChain(ctx context.Context, files *routerVPNExternalFiles,
+	session, source, config, transfer string, mtu int) (*mobilemultihop.DesktopNodeChainPolicy, error) {
+	if owner == nil || owner.policy != nil || owner.external != nil || owner.control != nil || owner.retiring.Load() ||
+		files == nil || files.root == nil || owner.original(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	policy, err := routerVPNNodeChainCommandPhysicalTarget(files, session, config, source, mtu, "linux")
+	if err != nil {
+		return nil, err
+	}
+	meta := policy.Metadata()
+	selection := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
+		ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
+	command, commandErr := selection.CaptureSHA256()
+	selected, selectedErr := selection.ControlSHA256()
+	if commandErr != nil || selectedErr != nil || command != owner.commandHash || selected != transfer || owner.original(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	owner.control, err = linuxprotection.NewNodeChildControl(ctx, owner.bootstrap, selection)
+	if err != nil {
+		return nil, err
+	}
+	owner.policy, owner.selection, owner.selectionHash = policy, selection, selected
+	return policy, nil
+}
+
 func (owner *routerVPNLinuxNodeControl) prepare(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) (context.Context, error) {
 	if owner == nil || owner.control == nil || owner.policy != policy || owner.retiring.Load() || owner.original(ctx) != nil {
 		return nil, routerVPNExternalFailure

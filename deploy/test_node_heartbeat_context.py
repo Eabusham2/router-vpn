@@ -42,6 +42,12 @@ type routerVPNNodeMTUCommand struct{Schema int;Session,Config,Request string;Gen
 func routerVPNMTUStrict([]byte,any)bool{return false}
 type routerVPNNodeMTUBox struct{instance *fixtureBox;tag string;physical *fixturePhysical}
 type routerVPNNodeMTU struct{record routerVPNNodeMTURecord;native *NativeTun;guard,guardContext func(context.Context)error;last error;openVPN *routerVPNImportedOpenVPN}
+// This legacy deadline fixture supplies no ordered source. A nonnil chain
+// must never be accepted by its doubles; native ordered proof is a separate gate.
+type routerVPNNodeChainRuntime struct{}
+func(c *routerVPNNodeChainRuntime)attach(context.Context,*routerVPNNodeMTU)error{return routerVPNExternalFailure}
+func(c *routerVPNNodeChainRuntime)current(ctx context.Context)error{if c!=nil{return routerVPNExternalFailure};return nil}
+func(c *routerVPNNodeChainRuntime)heartbeat(ctx context.Context,_ routerVPNNodeMTURecord)error{if c!=nil{return routerVPNExternalFailure};return nil}
 func newRouterVPNNodeMTUContext(ctx context.Context,b *routerVPNNodeMTUBox,_,_,_ string,guard func(context.Context)error)(*routerVPNNodeMTU,error){
  o:=&routerVPNNodeMTU{native:b.instance.native,guard:guard};b.instance.owner=o;return o,guard(ctx)
 }
@@ -171,7 +177,9 @@ func TestActualOpenVPNHeartbeatFreshness(t *testing.T){
 
 
 def execute():
-    loop = function((ROOT/'mobile/desktop/mtu_node.go.tmpl').read_text(), 'func routerVPNRunNodeMTULoop(')
+    source = (ROOT/'mobile/desktop/mtu_node.go.tmpl').read_text()
+    loop = '\n'.join(function(source, signature) for signature in (
+        'func routerVPNRunNodeMTULoop(', 'func routerVPNRunNodeMTULoopWithChain('))
     # Only native namespace/type aliases change; production control flow stays exact.
     for before, after in [('box.RouterVPNDesktopNodePhysical', 'fixturePhysical'), ('box.Box', 'fixtureBox'),
                           ('adapter.RouterVPNInboundsContext', 'fixtureInboundsContext'), ('adapter.Inbound', 'fixtureInbound')]:

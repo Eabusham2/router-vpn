@@ -1,0 +1,104 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/signal"
+	"runtime"
+	"syscall"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/spf13/cobra"
+)
+
+func routerVPNNodeChainTransfer(record *mobiletor.DesktopProtectionTransferRecord) (string, error) {
+	if record == nil {
+		return "", routerVPNExternalFailure
+	}
+	return mobiletor.DesktopProtectionTransferRecordSHA256(*record)
+}
+
+func init() {
+	var directory, session, config, source, transfer string
+	var mtu int
+	var journal routerVPNNodeJournalOptions
+	var linuxParent routerVPNNodeLinuxParentOptions
+	command := &cobra.Command{Use: "routervpn-node-chain", Short: "Run one complete captured ordered Router path", Args: cobra.NoArgs, SilenceUsage: true,
+		RunE: func(*cobra.Command, []string) error {
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			return routerVPNRunNodeChainWithParents(ctx, directory, session, config, source, transfer, mtu, journal, linuxParent)
+		}}
+	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private runtime directory")
+	command.Flags().StringVar(&session, "session", "", "captured runtime identity")
+	command.Flags().StringVar(&config, "config-sha256", "", "captured complete configuration digest")
+	command.Flags().StringVar(&source, "physical-source-sha256", "", "captured ordered physical owner identity")
+	command.Flags().StringVar(&transfer, "physical-transfer-sha256", "", "captured private protection predecessor record")
+	command.Flags().IntVar(&mtu, "physical-mtu", 0, "captured live TUN value for sealed restoration")
+	command.Flags().Uint64Var(&journal.ParentHandle, "journal-parent-handle", 0, "inherited native controller capability")
+	command.Flags().StringVar(&journal.ParentImage, "journal-parent-image", "", "retained native controller image")
+	command.Flags().StringVar(&journal.Pipe, "journal-pipe", "", "native durable transaction rendezvous")
+	command.Flags().StringVar(&journal.CaptureSHA256, "journal-capture-sha256", "", "captured journal comparison digest")
+	command.Flags().IntVar(&linuxParent.ChannelFD, "linux-parent-channel", 0, "inherited original Linux parent channel")
+	command.Flags().IntVar(&linuxParent.DirectoryFD, "linux-parent-directory", 0, "inherited original Linux parent task directory")
+	command.Flags().StringVar(&linuxParent.CaptureSHA256, "linux-parent-capture", "", "captured Linux command identity")
+	mainCommand.AddCommand(command)
+}
+
+// Dispatch does not open private input until the original platform parent has
+// authenticated. Missing or mixed parents never fall back to a node or pair.
+func routerVPNRunNodeChainWithParents(parent context.Context, directory, session, config, source, transfer string,
+	mtu int, windows routerVPNNodeJournalOptions, linux routerVPNNodeLinuxParentOptions) (failure error) {
+	if parent == nil || !routerVPNExternalSource.MatchString(source) {
+		return routerVPNExternalFailure
+	}
+	if linux != (routerVPNNodeLinuxParentOptions{}) {
+		if windows != (routerVPNNodeJournalOptions{}) {
+			return routerVPNExternalFailure
+		}
+		return routerVPNRunLinuxNodeChainControlled(parent, directory, session, config, source, transfer, mtu, linux)
+	}
+	if runtime.GOOS != "windows" {
+		return routerVPNExternalFailure
+	}
+	journal, err := routerVPNNewNodeJournal(parent, source, windows)
+	if err != nil || journal == nil {
+		return routerVPNExternalFailure
+	}
+	defer func() { failure = errors.Join(failure, journal.close()) }()
+	return routerVPNRunNodeMTUAllFamiliesCaptured(parent, directory, session, config, "", "", source, transfer, mtu, journal)
+}
+
+// The staged input already contains the sealed desktop physical projection.
+// Replay it once, compare every public capture and the exact graph bytes, then
+// retain that concrete policy. No metadata adapter or second projection exists.
+func routerVPNNodeChainCommandPhysicalTarget(files *routerVPNExternalFiles, session, config, source string,
+	mtu int, target string) (*mobilemultihop.DesktopNodeChainPolicy, error) {
+	if files == nil || files.root == nil || !routerVPNExternalSession.MatchString(session) ||
+		!routerVPNExternalSource.MatchString(source) || !routerVPNExternalSource.MatchString(config) ||
+		(target != "linux" && target != "windows") {
+		return nil, routerVPNExternalFailure
+	}
+	raw, err := files.read("node-chain-source.json", mobilemultihop.NodeChainInputLimit)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	policy, err := mobilemultihop.ParseDesktopNodeChainLaunchInput(string(raw))
+	clear(raw)
+	if err != nil || policy == nil {
+		return nil, routerVPNExternalFailure
+	}
+	meta := policy.Metadata()
+	if meta.SessionID != session || meta.TargetOS != target || meta.SourceSHA256 != source ||
+		meta.ConfigSHA256 != config || meta.RestoredMTU != mtu {
+		return nil, routerVPNExternalFailure
+	}
+	staged, err := files.read("sing-box.json", 4<<20)
+	defer clear(staged)
+	if err != nil || string(staged) != policy.Config() || policy.Validate() != nil {
+		return nil, routerVPNExternalFailure
+	}
+	return policy, nil
+}

@@ -1,0 +1,156 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func desktopNodeChainCommandPolicy(t *testing.T, count int, target string, restore int) *mobilemultihop.DesktopNodeChainPolicy {
+	t.Helper()
+	source := mobilemultihop.NodeChainSource{Schema: 1, Execution: "local"}
+	for position := 0; position < count; position++ {
+		server, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(90 + position)}, 32))
+		if err != nil {
+			t.Fatal(err)
+		}
+		private := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(40 + position)}, 32))
+		public := base64.StdEncoding.EncodeToString(server.PublicKey().Bytes())
+		proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+		endpoint := fmt.Sprintf("198.51.100.%d", position+10)
+		profile, _ := json.Marshal(map[string]any{"id": fmt.Sprintf("ordered-router-%d", position), "node_kind": "router-vpn",
+			"node_proof_id": hex.EncodeToString(proof[:]), "router_api": fmt.Sprintf("http://10.%d.0.1:8787", 77+position),
+			"api_token": fmt.Sprintf("ordered-private-token-%d", position), "endpoint": endpoint,
+			"dns_mode": "home", "adguard_ipv4": "192.168.50.133", "kill_switch_policy": "always",
+			"ipv6_mode": "off", "home_lan_access": false, "mtu_policy": "auto"})
+		mode := "wg"
+		config := fmt.Sprintf("[Interface]\nAddress=10.%d.0.2/32\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=%s:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", 77+position, private, public, endpoint)
+		assets := map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(config))}
+		if position == count-1 {
+			mode = "shadowsocks"
+			graph, _ := json.Marshal(map[string]any{
+				"inbounds": []any{map[string]any{"type": "tun", "auto_route": true, "strict_route": true}},
+				"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": endpoint, "server_port": 8388,
+					"method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(130 + position)}, 32))}},
+				"route": map[string]any{"final": "proxy"},
+			})
+			assets = map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(graph)}
+		}
+		files, _ := json.Marshal(assets)
+		node, err := mobilemultihop.NewNodeProfile(mode, string(files), string(profile), "", "")
+		if err != nil {
+			t.Fatal("complete ordered command node", position, err)
+		}
+		input, err := node.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		source.Nodes = append(source.Nodes, input)
+	}
+	raw, _ := json.Marshal(source)
+	chain, err := mobilemultihop.NewNodeChain(string(raw))
+	if err != nil {
+		t.Fatal("complete ordered command source", err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodeChainPolicy(chain, desktopExternalSession, target, restore)
+	if err != nil {
+		t.Fatal("sealed ordered physical policy", err)
+	}
+	return policy
+}
+
+func TestRouterVPNDesktopNodeChainCommandExactSourceReplay(t *testing.T) {
+	for _, target := range []string{"linux", "windows"} {
+		for _, count := range []int{3, 4} {
+			t.Run(fmt.Sprintf("%s/%d", target, count), func(t *testing.T) {
+				policy := desktopNodeChainCommandPolicy(t, count, target, 1400)
+				input, err := policy.NodeChain().LaunchInput()
+				if err != nil {
+					t.Fatal(err)
+				}
+				files := desktopImportedCommandFiles(t, map[string]string{"node-chain-source.json": input, "sing-box.json": policy.Config()})
+				meta := policy.Metadata()
+				actual, err := routerVPNNodeChainCommandPhysicalTarget(files, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, 1400, target)
+				if err != nil || actual == nil || actual == policy || actual.NodeChain() == policy.NodeChain() || actual.Config() != policy.Config() ||
+					!reflect.DeepEqual(actual.Metadata(), meta) || len(actual.NodeChain().ProofInventory()) != count {
+					t.Fatal("child did not independently replay every captured ordered node", err)
+				}
+			})
+		}
+	}
+	policy := desktopNodeChainCommandPolicy(t, 3, "linux", 1400)
+	input, _ := policy.NodeChain().LaunchInput()
+	for _, fault := range []string{"missing-source", "ordinary-source", "unprojected", "middle-token", "unknown", "source", "config", "session", "target", "restore", "graph", "graph-rehash"} {
+		t.Run(fault, func(t *testing.T) {
+			launch, graph := input, policy.Config()
+			meta := policy.Metadata()
+			source, config, session, target, restore := meta.SourceSHA256, meta.ConfigSHA256, meta.SessionID, "linux", 1400
+			switch fault {
+			case "ordinary-source":
+				launch, _ = desktopNodeCommandOriginal(t).LaunchInput()
+			case "unprojected":
+				launch, _ = policy.OriginalChain().LaunchInput()
+			case "middle-token":
+				if !strings.Contains(launch, "ordered-private-token-1") {
+					t.Fatal("middle negative control lost its exact source")
+				}
+				launch = strings.ReplaceAll(launch, "ordered-private-token-1", "changed-middle-token")
+			case "unknown":
+				launch = strings.TrimSuffix(launch, "}") + `,"foreign":true}`
+			case "source":
+				source = meta.OriginalSourceSHA256
+			case "config":
+				config = strings.Repeat("a", 64)
+			case "session":
+				session = strings.Repeat("f", 32)
+				if session == meta.SessionID {
+					t.Fatal("session negative control did not change identity")
+				}
+			case "target":
+				target = "windows"
+			case "restore":
+				restore = 0
+			case "graph", "graph-rehash":
+				graph += "\n"
+				if fault == "graph-rehash" {
+					digest := sha256.Sum256([]byte(graph))
+					config = hex.EncodeToString(digest[:])
+				}
+			}
+			inputs := map[string]string{"node-chain-source.json": launch, "sing-box.json": graph}
+			if fault == "missing-source" {
+				delete(inputs, "node-chain-source.json")
+			}
+			files := desktopImportedCommandFiles(t, inputs)
+			if actual, err := routerVPNNodeChainCommandPhysicalTarget(files, session, config, source, restore, target); err == nil || actual != nil {
+				t.Fatal("ordered child adopted incomplete, altered or wrong-platform source")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainCommandRejectsMissingOrMixedParents(t *testing.T) {
+	linux := routerVPNNodeLinuxParentOptions{ChannelFD: 3, DirectoryFD: 4, CaptureSHA256: strings.Repeat("a", 64)}
+	for _, windows := range []routerVPNNodeJournalOptions{{ParentHandle: 1}, {ParentImage: "/foreign/image"}, {Pipe: "foreign"}, {CaptureSHA256: strings.Repeat("b", 64)}} {
+		if err := routerVPNRunNodeChainWithParents(context.Background(), "/unopened-private-chain", desktopExternalSession,
+			strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64), 0, windows, linux); err == nil {
+			t.Fatal("ordered command mixed original parent capabilities")
+		}
+	}
+	for _, source := range []string{"", "foreign", strings.Repeat("c", 64)} {
+		if err := routerVPNRunNodeChainWithParents(context.Background(), "/unopened-private-chain", desktopExternalSession,
+			strings.Repeat("b", 64), source, strings.Repeat("d", 64), 0, routerVPNNodeJournalOptions{}, routerVPNNodeLinuxParentOptions{}); err == nil {
+			t.Fatal("ordered command opened private input without an original parent")
+		}
+	}
+}

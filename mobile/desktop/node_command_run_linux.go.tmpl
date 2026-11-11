@@ -36,7 +36,17 @@ func routerVPNRunLinuxImportedControlled(parent context.Context, directory, sess
 
 func routerVPNRunLinuxPhysicalControlled(parent context.Context, directory, session, config, source, transfer string,
 	mtu int, options routerVPNNodeLinuxParentOptions, imported bool) (failure error) {
-	if parent == nil {
+	return routerVPNRunLinuxPhysicalFamilyControlled(parent, directory, session, config, source, transfer, mtu, options, imported, false)
+}
+
+func routerVPNRunLinuxNodeChainControlled(parent context.Context, directory, session, config, source, transfer string,
+	mtu int, options routerVPNNodeLinuxParentOptions) error {
+	return routerVPNRunLinuxPhysicalFamilyControlled(parent, directory, session, config, source, transfer, mtu, options, false, true)
+}
+
+func routerVPNRunLinuxPhysicalFamilyControlled(parent context.Context, directory, session, config, source, transfer string,
+	mtu int, options routerVPNNodeLinuxParentOptions, imported, ordered bool) (failure error) {
+	if parent == nil || imported && ordered {
 		return routerVPNExternalFailure
 	}
 	control, err := routerVPNOpenLinuxNodeControl(session, source, config, options)
@@ -59,7 +69,13 @@ func routerVPNRunLinuxPhysicalControlled(parent context.Context, directory, sess
 	ctx, stopPreparation := context.WithTimeout(parent, routerVPNNodeAdmissionLimit)
 	defer stopPreparation()
 	var policy mobilemultihop.DesktopPhysicalPolicy
-	if imported {
+	if ordered {
+		captured, compileErr := control.compileChain(ctx, files, session, source, config, transfer, mtu)
+		if compileErr != nil {
+			return compileErr
+		}
+		policy = captured
+	} else if imported {
 		captured, compileErr := control.compileImported(ctx, files, session, source, config, transfer, mtu)
 		if compileErr != nil {
 			return compileErr
@@ -92,6 +108,7 @@ func routerVPNRunLinuxPhysicalControlled(parent context.Context, directory, sess
 	graph, cancel := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(context.WithoutCancel(lifetime))))
 	native := &routerVPNExternalNative{cancel: cancel}
 	control.native = native
+	var chain *routerVPNNodeChainRuntime
 	var stopped atomic.Bool
 	defer func() {
 		stopped.Store(true)
@@ -99,6 +116,10 @@ func routerVPNRunLinuxPhysicalControlled(parent context.Context, directory, sess
 		readyErr := files.remove("node-ready.json")
 		cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
 		defer stop()
+		if err := chain.close(cleanup); err != nil {
+			failure = errors.Join(failure, err)
+			return
+		}
 		// Retain only this original partial Box/source across cleanup retries.
 		// A failed Box close stays a failure; no replacement or named native
 		// object is discovered to manufacture a joined source receipt.
@@ -133,7 +154,7 @@ func routerVPNRunLinuxPhysicalControlled(parent context.Context, directory, sess
 		}{routerVPNExternalStop{Schema: 1, Session: session, SourceSHA256: config}, true}
 		failure = errors.Join(failure, files.publish("stopped.json", closed))
 	}()
-	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-protection-retired.json", "stopped.json", "node-protection-transfer.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json"} {
+	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-chain-ready.json", "node-protection-retired.json", "stopped.json", "node-protection-transfer.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json"} {
 		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 			return routerVPNExternalFailure
 		}
@@ -202,6 +223,12 @@ func routerVPNRunLinuxPhysicalControlled(parent context.Context, directory, sess
 			control.preparation = prepared
 		}
 		err = prepareErr
+	case *mobilemultihop.DesktopNodeChainPolicy:
+		prepared, prepareErr := instance.RouterVPNDesktopLinuxNodeChainPreparePhysicalOwned(original)
+		if prepared != nil {
+			control.preparation = prepared
+		}
+		err = prepareErr
 	default:
 		return routerVPNExternalFailure
 	}
@@ -225,6 +252,8 @@ func routerVPNRunLinuxPhysicalControlled(parent context.Context, directory, sess
 		physical, err = instance.RouterVPNDesktopLinuxNodeActivatePhysical(proof, original)
 	case *mobilemultihop.DesktopImportedPolicy:
 		physical, err = instance.RouterVPNDesktopLinuxImportedActivatePhysical(proof, original)
+	case *mobilemultihop.DesktopNodeChainPolicy:
+		physical, err = instance.RouterVPNDesktopLinuxNodeChainActivatePhysical(proof, original)
 	}
 	stopProof()
 	if err != nil {
@@ -237,6 +266,8 @@ func routerVPNRunLinuxPhysicalControlled(parent context.Context, directory, sess
 		cover, err = instance.RouterVPNDesktopLinuxNodeActivateCover(activation, original, physical)
 	case *mobilemultihop.DesktopImportedPolicy:
 		cover, err = instance.RouterVPNDesktopLinuxImportedActivateCover(activation, original, physical)
+	case *mobilemultihop.DesktopNodeChainPolicy:
+		cover, err = instance.RouterVPNDesktopLinuxNodeChainActivateCover(activation, original, physical)
 	}
 	stopActivation()
 	if err != nil {
@@ -254,7 +285,13 @@ func routerVPNRunLinuxPhysicalControlled(parent context.Context, directory, sess
 		}
 		return control.current(call)
 	}
-	return routerVPNRunNodeMTULoop(parent, graph, files, instance, session, config, physical, current, func() error {
+	if captured, ok := policy.(*mobilemultihop.DesktopNodeChainPolicy); ok {
+		chain, err = routerVPNNewNodeChainRuntime(graph, files, captured, control.selectionHash, instance)
+		if err != nil {
+			return err
+		}
+	}
+	return routerVPNRunNodeMTULoopWithChain(parent, graph, files, instance, session, config, physical, current, func() error {
 		ctx, cancel := context.WithTimeout(graph, routerVPNNodeAdmissionLimit)
 		defer cancel()
 		if err := control.current(ctx); err != nil {
@@ -264,5 +301,5 @@ func routerVPNRunLinuxPhysicalControlled(parent context.Context, directory, sess
 			return err
 		}
 		return control.current(ctx)
-	})
+	}, chain)
 }
