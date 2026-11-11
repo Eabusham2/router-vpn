@@ -33,7 +33,7 @@ import (
 	"router-vpn/internal/mtuprobe"
 )
 
-var linuxImportedHostCases = []string{"imported-wg-ss-public", "imported-wg-ss-wrong-public", "imported-wg-ss-wrong-node", "imported-wg-ss-dns-failure", "imported-wg-ss-mtu-cancel", "imported-wg-ss-restore", "imported-wg-ss-cover-lost", "imported-wg-ss-temporary"}
+var linuxImportedHostCases = []string{"imported-wg-ss-public", "imported-wg-ss-wrong-public", "imported-wg-ss-wrong-node", "imported-wg-ss-dns-failure", "imported-wg-ss-mtu-cancel", "imported-wg-ss-restore", "imported-wg-ss-cover-lost", "imported-wg-ss-temporary", "imported-wg-ss-mtu-retire-undrained"}
 
 type linuxImportedPeerReply struct {
 	Schema             int    `json:"schema"`
@@ -283,6 +283,9 @@ func linuxHostTUNImportedParent(t *testing.T, installed, scenario string) {
 		if (action == "restore" || action == "temporary") && (result.FreshSession == "" || result.FreshSession == result.Session || result.MTU != 1300 || after.DNSQueries <= before.DNSQueries || after.MTUReplies == 0) {
 			t.Fatal("imported restoration omitted live MTU or fresh source/proofs", result, before, after)
 		}
+		if action == "mtu-retire-undrained" && (result.MTU != 0 || after.MTUReplies == 0) {
+			t.Fatal("imported joined retirement invented a live MTU or skipped authenticated candidate traffic", result, after)
+		}
 		if action == "mtu-cancel" && (result.MTU != 1280 || after.MTUReplies == 0) {
 			t.Fatal("imported MTU cancellation omitted authenticated native rollback", result, after)
 		}
@@ -352,6 +355,7 @@ func linuxHostTUNImportedFixture(controller *ownedDesktopController, scenario st
 	action := strings.TrimPrefix(scenario, "imported-wg-ss-")
 	negative := action == "wrong-public" || action == "wrong-node" || action == "dns-failure"
 	result := linuxImportedHostResult{Scenario: scenario}
+	var retainedMTU *desktopImportedMTUOwner
 	session, err := captureDesktopLinuxNodeSession(ctx, a)
 	if err != nil {
 		return err
@@ -434,6 +438,11 @@ func linuxHostTUNImportedFixture(controller *ownedDesktopController, scenario st
 				case <-ticker.C:
 				}
 			}
+		} else if action == "mtu-retire-undrained" {
+			_, retainedMTU, err = linuxImportedHostMTULease(ctx, a, runtime, false, true)
+			if err != nil {
+				return err
+			}
 		} else if action == "restore" || action == "temporary" || action == "mtu-cancel" {
 			result.MTU, err = linuxImportedHostMTU(ctx, a, runtime, action != "mtu-cancel")
 			if err != nil {
@@ -452,6 +461,31 @@ func linuxHostTUNImportedFixture(controller *ownedDesktopController, scenario st
 	a.disconnect(stop, httptest.NewRequest(http.MethodPost, "/api/disconnect", nil).WithContext(ctx))
 	if stop.Code != http.StatusOK || a.cmd != nil || a.state.Connected || session.active != nil {
 		return fmt.Errorf("imported public Disconnect did not join: %d %s", stop.Code, stop.Body.String())
+	}
+	if retainedMTU != nil {
+		platform, ok := retainedMTU.launch.importedPlatform.(*desktopLinuxImportedConnection)
+		if !ok || platform == nil || platform.host == nil {
+			return errors.New("joined MTU retirement lost its concrete host")
+		}
+		h := platform.host
+		if err := h.enter(ctx); err != nil {
+			return err
+		}
+		retainedMTU.mu.Lock()
+		retainedMTU.kernel.mu.Lock()
+		joined := h.closed && h.released && h.importedMTU == nil && retainedMTU.cleanupJoined.Load() && !retainedMTU.mailboxHeld &&
+			retainedMTU.sockets.Load() == 0 && !retainedMTU.committed.Load() && retainedMTU.kernel.closed && retainedMTU.kernel.runtimeRetired && retainedMTU.kernel.pending == nil
+		retainedMTU.kernel.mu.Unlock()
+		retainedMTU.mu.Unlock()
+		h.gate <- struct{}{}
+		if !joined {
+			return errors.New("joined imported source did not discharge its exact original uncommitted MTU lease")
+		}
+		select {
+		case <-h.process.joined:
+		default:
+			return errors.New("imported MTU discharge preceded original Wait")
+		}
 	}
 	if session.journal == nil {
 		return errors.New("imported retirement omitted its original journal")
@@ -569,38 +603,45 @@ func linuxImportedHostSpeedLab(ctx context.Context, a *app, session *desktopLinu
 }
 
 func linuxImportedHostMTU(ctx context.Context, a *app, runtime *nativeMultihopRuntime, commit bool) (int, error) {
+	mtu, _, err := linuxImportedHostMTULease(ctx, a, runtime, commit, false)
+	return mtu, err
+}
+
+func linuxImportedHostMTULease(ctx context.Context, a *app, runtime *nativeMultihopRuntime, commit, retain bool) (int, *desktopImportedMTUOwner, error) {
 	_, policy, err := readDesktopImportedMTUPolicyContext(ctx, runtime.selection)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	owner, err := newDesktopImportedMTUOwner(ctx, a, runtime, policy)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	work, finish, err := mobilemtu.WithOperationContext(ctx, 10*time.Second, 10*time.Second)
+	workParent, cancelWork := context.WithCancel(ctx)
+	defer cancelWork()
+	work, finish, err := mobilemtu.WithOperationContext(workParent, 10*time.Second, 10*time.Second)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	defer finish()
 	initial, err := owner.CaptureContext(work)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if err := owner.prepare(work, strings.Repeat("c", 32)); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	changed, err := owner.ChangeMTU(work, initial, 1300)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	connection, err := owner.DialThroughTunnel(work, changed, "udp4", "10.77.0.1:45999")
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	request, err := mtuprobe.Request(1252, policy.Token, policy.Proof, time.Now())
 	if err != nil {
 		connection.Close()
-		return 0, err
+		return 0, nil, err
 	}
 	connection.SetDeadline(time.Now().Add(3 * time.Second))
 	_, err = connection.Write(request)
@@ -608,29 +649,59 @@ func linuxImportedHostMTU(ctx context.Context, a *app, runtime *nativeMultihopRu
 	count, readErr := connection.Read(reply)
 	connection.Close()
 	if err != nil || readErr != nil || mtuprobe.ValidateReply(request, reply[:count], policy.Token, policy.Proof, time.Now()) != nil {
-		return 0, errors.Join(err, readErr, errors.New("imported MTU probe did not traverse authenticated final"))
+		return 0, nil, errors.Join(err, readErr, errors.New("imported MTU probe did not traverse authenticated final"))
+	}
+	if retain {
+		platform, ok := runtime.launch.importedPlatform.(*desktopLinuxImportedConnection)
+		if !ok || platform == nil || platform.host == nil {
+			return 0, nil, errors.New("retained MTU lost its concrete original host")
+		}
+		h := platform.host
+		if err := h.enter(ctx); err != nil {
+			return 0, nil, err
+		}
+		owner.mu.Lock()
+		before := owner.record
+		owner.mu.Unlock()
+		err := h.finishImportedMTURetirementLocked(ctx)
+		owner.mu.Lock()
+		invalid := err == nil || !strings.Contains(err.Error(), "preceded authenticated source and process join") ||
+			h.importedMTU != owner || owner.cleanupJoined.Load() || !owner.mailboxHeld || owner.record != before
+		owner.mu.Unlock()
+		h.gate <- struct{}{}
+		if invalid {
+			return 0, nil, errors.New("undrained imported MTU discharged before authenticated source retirement")
+		}
+		cancelWork()
+		return 0, owner, nil
 	}
 	if commit {
 		if err := owner.finish(work, true); err != nil {
-			return 0, err
+			return 0, nil, err
+		}
+	}
+	if !commit {
+		cancelWork()
+		if !errors.Is(work.Err(), context.Canceled) {
+			return 0, nil, errors.New("imported cancellation fixture retained work authority")
 		}
 	}
 	cleanup, err := mobilemtu.OperationCleanupContext(work)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	owner.mu.Lock()
 	err = owner.closeLocked(cleanup)
 	owner.mu.Unlock()
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	live, err := owner.CaptureContext(cleanup)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if commit && live.MTU != 1300 || !commit && live.MTU != initial.MTU {
-		return 0, errors.New("imported MTU native final readback did not match original transaction")
+		return 0, nil, errors.New("imported MTU native final readback did not match original transaction")
 	}
-	return live.MTU, nil
+	return live.MTU, owner, nil
 }

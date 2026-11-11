@@ -234,7 +234,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
 
     def test_imported_requires_independent_encrypted_and_native_completion(self):
         expected = ('imported-wg-ss-public', 'imported-wg-ss-wrong-public', 'imported-wg-ss-wrong-node',
-                    'imported-wg-ss-dns-failure', 'imported-wg-ss-mtu-cancel', 'imported-wg-ss-restore', 'imported-wg-ss-cover-lost', 'imported-wg-ss-temporary')
+                    'imported-wg-ss-dns-failure', 'imported-wg-ss-mtu-cancel', 'imported-wg-ss-restore', 'imported-wg-ss-cover-lost', 'imported-wg-ss-temporary', 'imported-wg-ss-mtu-retire-undrained')
         self.assertEqual(G.IMPORTED_CASES, expected)
         self.assertEqual(G.CASES[-len(expected):], expected)
         for case in expected:

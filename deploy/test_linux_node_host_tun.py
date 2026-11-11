@@ -208,7 +208,7 @@ CASES += EXTERNAL_SS_HYSTERIA_LAYER_CASES
 SS_ENTRY_AUTHORITY_CASES += tuple(SS_ENTRY_AUTHORITY_ROOT + '/layer%d-layer%d' % (entry, final) for entry in range(3) for final in range(3))
 
 IMPORTED_CASES = ('imported-wg-ss-public', 'imported-wg-ss-wrong-public', 'imported-wg-ss-wrong-node',
-                  'imported-wg-ss-dns-failure', 'imported-wg-ss-mtu-cancel', 'imported-wg-ss-restore', 'imported-wg-ss-cover-lost', 'imported-wg-ss-temporary')
+                  'imported-wg-ss-dns-failure', 'imported-wg-ss-mtu-cancel', 'imported-wg-ss-restore', 'imported-wg-ss-cover-lost', 'imported-wg-ss-temporary', 'imported-wg-ss-mtu-retire-undrained')
 CASES += IMPORTED_CASES
 
 
