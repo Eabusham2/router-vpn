@@ -1,0 +1,82 @@
+package route
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
+	"github.com/sagernet/sing/common/logger"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
+)
+
+type chainNetworkMonitorFixture struct {
+	tun.DefaultInterfaceMonitor
+	mu       sync.Mutex
+	physical *control.Interface
+}
+
+func (m *chainNetworkMonitorFixture) RouterVPNDefaultInterfaceContext(ctx context.Context) (*control.Interface, error) {
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return nil, err
+	}
+	defer m.mu.Unlock()
+	return m.physical, ctx.Err()
+}
+
+func chainNetworkFixture() (*NetworkManager, *chainNetworkMonitorFixture) {
+	ctx := pause.WithDefaultManager(context.Background())
+	monitor := &chainNetworkMonitorFixture{physical: &control.Interface{Name: "chain-physical", Index: 17}}
+	r := &NetworkManager{ctx: ctx, logger: logger.NOP(), interfaceMonitor: monitor,
+		pauseManager: service.FromContext[pause.Manager](ctx)}
+	r.started.Store(true)
+	return r, monitor
+}
+
+func TestRouterVPNNodeChainNetworkLostAndRestoredIsNewGeneration(t *testing.T) {
+	r, monitor := chainNetworkFixture()
+	first, err := r.RouterVPNNodeChainNetworkContext(context.Background())
+	if err != nil || first == "" {
+		t.Fatal("initial physical capture", err)
+	}
+	// Exercise the actual registered callback wrapper and pinned loss path.
+	// No live interface, native connection, or DNS result is invented here.
+	r.routerVPNNodeChainInterfaceUpdate(nil, 0)
+	next, err := r.RouterVPNNodeChainNetworkContext(context.Background())
+	if err != nil || next == first {
+		t.Fatal("loss and same interface revived the old epoch", err)
+	}
+	monitor.physical = nil
+	if _, err := r.RouterVPNNodeChainNetworkContext(context.Background()); err == nil {
+		t.Fatal("missing physical interface accepted")
+	}
+	monitor.physical = &control.Interface{Name: "chain-replacement", Index: 18}
+	last, err := r.RouterVPNNodeChainNetworkContext(context.Background())
+	if err != nil || last == next {
+		t.Fatal("physical replacement retained the old identity", err)
+	}
+	r.started.Store(false)
+	if _, err := r.RouterVPNNodeChainNetworkContext(context.Background()); err == nil {
+		t.Fatal("retired native network accepted")
+	}
+}
+
+func TestRouterVPNNodeChainNetworkKeepsOriginalObservationDeadline(t *testing.T) {
+	r, monitor := chainNetworkFixture()
+	monitor.mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	defer cancel()
+	_, err := r.RouterVPNNodeChainNetworkContext(ctx)
+	monitor.mu.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("held monitor lost caller deadline", err)
+	}
+	if _, err := r.RouterVPNNodeChainNetworkContext(context.Background()); err != nil {
+		t.Fatal("expired reader damaged original owner", err)
+	}
+}

@@ -1313,7 +1313,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                  '-ldflags=-checklinkname=0', './protocol/wireguard', '-run', '^TestRouterVPNWireGuard',
                  '-count=1', '-timeout=60s'], cwd=source, env=env, timeout=120)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', './cmd/sing-box', '-run', '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU)',
+                 '-ldflags=-checklinkname=0', './cmd/sing-box', '-run', '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU|NodeChain)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
             verify_imported_desktop_native_dns(source, target, env)
             verify_imported_desktop_native_openvpn(source, target, env)
@@ -1497,10 +1497,10 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_desktop_darwin_guardian.py', source, '--mutations'],
                     env=env, timeout=1800)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', './route', '-run', '^TestRouterVPNDesktopTorNetwork',
+                 '-ldflags=-checklinkname=0', './route', '-run', '^TestRouterVPN(DesktopTorNetwork|NodeChain)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', '.', '-run', '^TestRouterVPNDesktop(Tor|External)',
+                 '-ldflags=-checklinkname=0', '.', '-run', '^TestRouterVPN(Desktop(Tor|External|NodeChain)|NodeChain)',
                  '-count=1', '-timeout=180s' if target.startswith('linux/') else '-timeout=120s'],
                 cwd=source, env=env, timeout=600)
         if target.startswith('linux/'):

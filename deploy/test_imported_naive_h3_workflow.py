@@ -479,6 +479,7 @@ class ImportedNaiveH3Workflow(unittest.TestCase):
             'cmd/client/multihop_native_imported_naive_h3_test.go', 'cmd/client/controller_windows_catalog.go',
             'deploy/prepare-go-windows-sockets.py', 'deploy/test_go_windows_sockets.py',
             'deploy/prepare-relay-core.py', 'deploy/prepare-desktop-external.py', 'deploy/prepare-mobile-multihop.py',
+            'deploy/prepare-mobile-node-chain.py', 'mobile/chain/box.go.tmpl',
             'deploy/build-native-runtime.py', 'deploy/mobile_openvpn_close_policy.py',
             'deploy/native_naive_transport_policy.py', 'deploy/fixtures/windows-node-physical/openvpn_box_overlay.py',
             'deploy/test_windows_node_physical.py', 'deploy/test_windows_node_physical_ci.py',

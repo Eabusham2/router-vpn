@@ -138,6 +138,10 @@ func TestDesktopNodeChainPolicyCombinesProtectionAndKeepsFinalDNS(t *testing.T) 
 	})
 	policy := desktopChainPolicy(t, chain, "linux", 0)
 	_, meta, capture, err := policy.ReadValidated()
+	cover, coverDigest, coverErr := ReadDesktopPhysicalCoverPolicy(policy)
+	if coverErr != nil || len(cover) != 0 || coverDigest != "" {
+		t.Fatal("ordered native graph fabricated a cover worker", coverErr)
+	}
 	if err != nil || meta.ProfileID != chain.proofs[3].ProfileID || meta.KillSwitchPolicy != "always" || meta.IPv6Mode != "off" || meta.HomeLANAccess ||
 		capture.SelectedDNS.Type != "tls" || capture.SelectedDNS.Host != "198.51.100.44" || capture.SelectedDNS.Port != 8853 ||
 		capture.SelectedDNS.ServerName != "selected.example" || capture.SelectedDNS.Detour != chain.FinalTag() || capture.SelectedDNS.Physical ||

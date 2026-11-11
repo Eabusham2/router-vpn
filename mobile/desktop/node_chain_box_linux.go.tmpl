@@ -1,0 +1,63 @@
+//go:build linux
+
+package box
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// Retain the same native cleanup capability as other Linux policies. The
+// embedded owner keeps the exact concrete chain policy through disconnect,
+// source join and parent-authorized baseline retirement, including failures.
+type RouterVPNDesktopLinuxNodeChainPreparation struct {
+	*RouterVPNDesktopLinuxNodePreparation
+}
+
+func (s *Box) RouterVPNDesktopLinuxNodeChainPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeChainPolicy) (*RouterVPNDesktopLinuxNodeChainPreparation, error) {
+	if !routerVPNDesktopNodeChainPhysicalTarget(policy, "linux") {
+		return nil, errors.New("ordered Linux physical preparation lost its complete captured chain")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopLinuxNodeChainPreparation{&RouterVPNDesktopLinuxNodePreparation{network: network, policy: policy}}
+	return owner, network.PrepareNodeChainPhysicalPolicy(policy)
+}
+
+func (s *Box) RouterVPNDesktopLinuxNodeChainActivatePhysical(ctx context.Context, policy *mobilemultihop.DesktopNodeChainPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if ctx == nil || ctx.Err() != nil || !routerVPNDesktopNodeChainPhysicalTarget(policy, "linux") {
+		return nil, errors.New("ordered Linux activation lost its original proof request")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	if err = network.CheckLinuxPhysicalAdmission(policy); err != nil {
+		return nil, err
+	}
+	owner, err := s.routerVPNDesktopNodeActivatePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	if err = owner.ProveSelectedDNS(ctx); err != nil {
+		owner.Cancel()
+		return nil, err
+	}
+	if err = network.CheckLinuxPhysicalAdmission(policy); err != nil || ctx.Err() != nil || !owner.Current() {
+		owner.Cancel()
+		return nil, errors.Join(err, ctx.Err(), errors.New("ordered Linux DNS proof lost its original physical owner"))
+	}
+	return owner, nil
+}
+
+func (s *Box) RouterVPNDesktopLinuxNodeChainActivateCover(ctx context.Context, policy *mobilemultihop.DesktopNodeChainPolicy,
+	physical *RouterVPNDesktopNodePhysical) (*RouterVPNDesktopLinuxNodeCover, error) {
+	if !routerVPNDesktopNodeChainPhysicalTarget(policy, "linux") {
+		return nil, errors.New("ordered Linux cover capture lost its complete native policy")
+	}
+	return s.routerVPNDesktopLinuxActivateCover(ctx, policy, physical)
+}

@@ -136,6 +136,7 @@ class DesktopPTPreparation(unittest.TestCase):
              patch.object(PREP.RELAY.NAIVE, 'prepare') as naive_prepare, \
              patch.object(PREP.MTU, 'prepare'), patch.object(PREP.DESKTOP_MTU, 'prepare'), \
              patch.object(PREP.STRATEGY, 'prepare'), patch.object(PREP.EXTERNAL, 'prepare'), \
+             patch.object(PREP.NODE_CHAIN, 'prepare') as chain, \
              patch.object(PREP, 'prepare_network_startup') as startup, \
              patch.object(PREP, 'prepare_node_capture') as node_capture, \
              patch.object(PREP.RELAY.OPENVPN_REMOTE, 'prepare'), \
@@ -145,6 +146,7 @@ class DesktopPTPreparation(unittest.TestCase):
             selective.assert_called_once_with(self.vendor.resolve(), GO, env=captured)
             startup.assert_called_once_with(self.vendor.resolve())
             node_capture.assert_called_once_with(self.vendor.resolve())
+            chain.assert_called_once_with(self.vendor.resolve(), mobile=False)
             generated = {call.args[1]: call.args[2] for call in writes.call_args_list}
             # The standard-exit creator shares the mandatory native inventory
             # with the socket owner. Both native witnesses must be copied by

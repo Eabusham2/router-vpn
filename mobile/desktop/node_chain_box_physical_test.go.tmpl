@@ -1,0 +1,158 @@
+package box
+
+import (
+	"context"
+	"encoding/json"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
+	"github.com/sagernet/sing-box/protocol/wireguard"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	SJ "github.com/sagernet/sing/common/json"
+)
+
+// The actual Box parses all complete prefix objects and captures its real
+// options at construction. The explicit TUN fixture owns no kernel interface.
+// These construction tests never claim encrypted or OS routing acceptance.
+func desktopChainPhysicalBox(t *testing.T, policy *mobilemultihop.DesktopNodeChainPolicy,
+	change func(map[string]any)) (*Box, *desktopTorBoxTUN) {
+	t.Helper()
+	var graph map[string]any
+	if json.Unmarshal([]byte(policy.Config()), &graph) != nil {
+		t.Fatal("chain physical test lost its sealed source")
+	}
+	if change != nil {
+		change(graph)
+	}
+	raw, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tun *desktopTorBoxTUN
+	ins := inbound.NewRegistry()
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun,
+		func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
+			tun = &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag), name: options.InterfaceName, index: 772, mtu: int(options.MTU)}
+			return tun, nil
+		})
+	outs := outbound.NewRegistry()
+	group.RegisterSelector(outs)
+	shadowsocks.RegisterOutbound(outs)
+	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
+	endpoints := endpoint.NewRegistry()
+	wireguard.RegisterEndpoint(endpoints)
+	resolvers := dns.NewTransportRegistry()
+	DNST.RegisterUDP(resolvers)
+	services := boxService.NewRegistry()
+	routervpndesktoppt.RegisterNodeNetworkOwner(services)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx = Context(ctx, ins, outs, endpoints, resolvers, services, certificate.NewRegistry())
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, raw)
+	if err != nil {
+		t.Fatal("actual ordered graph parse", err)
+	}
+	options.Log = &option.LogOptions{Disabled: true}
+	instance, err := New(Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal("actual ordered Box construction", err)
+	}
+	t.Cleanup(func() {
+		if err := instance.Close(); err != nil {
+			t.Error("original ordered Box did not retire", err)
+		}
+	})
+	if tun == nil {
+		t.Fatal("actual ordered Box omitted its TUN constructor")
+	}
+	return instance, tun
+}
+
+func TestRouterVPNDesktopNodeChainPhysicalCapturesActualBox(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("this physical adapter covers Linux and Windows")
+	}
+	policy, err := mobilemultihop.NewDesktopNodeChainPolicy(chainNativeSource(t), desktopTorBoxSession, runtime.GOOS, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, tun := desktopChainPhysicalBox(t, policy, nil)
+	if !routerVPNDesktopNodeChainPhysicalTarget(policy, runtime.GOOS) {
+		t.Fatal("exact complete chain lost its typed physical factory")
+	}
+	_, network, err := instance.routerVPNDesktopNodePhysical(policy)
+	if err != nil || network == nil || tun.ready || tun.claimed || network.Current() || network.SocketCurrent() {
+		t.Fatal("construction fabricated native preparation or readiness", err)
+	}
+	if owner, err := instance.routerVPNDesktopNodeActivatePhysical(policy); err == nil || owner != nil {
+		t.Fatal("unprepared ordered graph acquired physical TUN authority")
+	}
+	if instance.routerVPNNodeChainOptions == "" {
+		t.Fatal("Box.New omitted its actual ordered configuration snapshot")
+	}
+	if err := instance.RouterVPNStrategyStart(); err == nil {
+		t.Fatal("ordered JSON bypassed original native physical preparation")
+	}
+	if tun.ready || tun.claimed || network.SocketCurrent() {
+		t.Fatal("unprepared ordered graph reached native sockets or TUN")
+	}
+}
+
+func TestRouterVPNDesktopNodeChainPhysicalRejectsSubstitutedBox(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("this physical adapter covers Linux and Windows")
+	}
+	for _, fault := range []string{"middle-key", "dns", "physical-source", "mtu", "interface"} {
+		t.Run(fault, func(t *testing.T) {
+			policy, err := mobilemultihop.NewDesktopNodeChainPolicy(chainNativeSource(t), desktopTorBoxSession, runtime.GOOS, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			instance, tun := desktopChainPhysicalBox(t, policy, func(graph map[string]any) {
+				switch fault {
+				case "middle-key":
+					rows := graph["endpoints"].([]any)
+					rows[1].(map[string]any)["private_key"] = rows[0].(map[string]any)["private_key"]
+				case "dns":
+					for _, raw := range graph["dns"].(map[string]any)["servers"].([]any) {
+						server := raw.(map[string]any)
+						if server["tag"] == policy.NodeChain().DNSCapture().ResolverTag {
+							server["server"] = "192.168.50.134"
+						}
+					}
+				case "physical-source":
+					graph["services"].([]any)[0].(map[string]any)["source_sha256"] = strings.Repeat("f", 64)
+				case "mtu":
+					tun := graph["inbounds"].([]any)[0].(map[string]any)
+					tun["mtu"] = tun["mtu"].(float64) + 16
+				case "interface":
+					graph["inbounds"].([]any)[0].(map[string]any)["interface_name"] = "foreign-chain"
+				}
+			})
+			if _, _, err := instance.routerVPNDesktopNodePhysical(policy); err == nil {
+				t.Fatal("changed running chain acquired the original physical authority")
+			}
+			if owner, err := instance.routerVPNDesktopNodeActivatePhysical(policy); err == nil || owner != nil {
+				t.Fatal("changed running chain acquired a native TUN")
+			}
+			if tun.ready || tun.claimed {
+				t.Fatal("changed chain entered native startup")
+			}
+		})
+	}
+}

@@ -1,0 +1,51 @@
+package route
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+
+	"github.com/sagernet/sing/common/control"
+)
+
+// Every real default-interface event revokes previous chain observations,
+// including loss and a later return to the same interface and addresses.
+// The pinned startup/cancellation implementation remains the sole callback.
+func (r *NetworkManager) routerVPNNodeChainInterfaceUpdate(defaultInterface *control.Interface, flags int) {
+	r.routerVPNNodeChainGeneration.Add(1)
+	r.notifyInterfaceUpdate(defaultInterface, flags)
+}
+
+func (r *NetworkManager) RouterVPNNodeChainNetworkContext(ctx context.Context) (string, error) {
+	if ctx == nil {
+		return "", errors.New("ordered network observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if r == nil || r.ctx == nil || r.ctx.Err() != nil || !r.started.Load() {
+		return "", errors.New("ordered native network is not running")
+	}
+	generation := r.routerVPNNodeChainGeneration.Load()
+	physical, err := r.RouterVPNDefaultNetworkInterfaceContext(ctx)
+	if err != nil || physical == nil || physical.Index < 1 || physical.Name == "" {
+		return "", errors.Join(err, errors.New("ordered native network has no current physical interface"))
+	}
+	encoded, err := json.Marshal(struct {
+		Generation uint64
+		Interface  any
+	}{generation, physical})
+	if err != nil {
+		return "", err
+	}
+	if generation != r.routerVPNNodeChainGeneration.Load() || !r.started.Load() || r.ctx.Err() != nil {
+		return "", errors.New("ordered native network changed during capture")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}

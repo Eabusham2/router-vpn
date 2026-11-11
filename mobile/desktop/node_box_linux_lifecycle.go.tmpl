@@ -16,7 +16,7 @@ import (
 // exact encrypted graph and complete Linux lifecycle.
 type RouterVPNDesktopLinuxNodePreparation struct {
 	network *routervpndesktoppt.NodeNetworkOwner
-	policy  *mobilemultihop.DesktopNodePolicy
+	policy  mobilemultihop.DesktopPhysicalPolicy
 }
 
 func routerVPNDesktopLinuxNodeLifecycleAvailable(policy *mobilemultihop.DesktopNodePolicy) bool {

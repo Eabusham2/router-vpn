@@ -1,0 +1,263 @@
+package box
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
+	"github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// Capture the actual parsed graph at Box construction. Comparing a caller's
+// metadata with itself cannot authorize prefix dials or an ambient DNS query.
+func routerVPNNodeChainOptionsDigest(ctx context.Context, options option.Options) string {
+	if options.Route == nil || options.Route.Final != mobilemultihop.SelectorTag ||
+		len(options.Inbounds) != 1 || options.Inbounds[0].Type != C.TypeTun ||
+		options.Inbounds[0].Tag != "routervpn-chain-tun" {
+		return ""
+	}
+	services := make([]option.Service, 0, len(options.Services))
+	for _, service := range options.Services {
+		if service.Type != C.TypeOOMKiller {
+			services = append(services, service)
+		}
+	}
+	options.Log, options.Services = nil, services
+	encoded, err := json.MarshalContext(ctx, options)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	clear(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+// RouterVPNNodeChainEngine observes the one existing native connection owner.
+// It owns no process, listener, TUN, or protection teardown. The original host
+// cancels and joins chain proofs before retiring that same native connection.
+type RouterVPNNodeChainEngine struct {
+	instance *Box
+	chain    *mobilemultihop.NodeChain
+	identity mobilemultihop.NodeChainIdentity
+	current  func(context.Context) error
+	inbound  adapter.Inbound
+	resolver adapter.DNSTransport
+	selector *group.Selector
+	prefixes map[string]adapter.Outbound
+}
+
+var _ mobilemultihop.NodeChainEngine = (*RouterVPNNodeChainEngine)(nil)
+
+func routerVPNNodeChainSession(value string) bool {
+	if len(value) < 16 || len(value) > 128 || !utf8.ValidString(value) {
+		return false
+	}
+	for _, ch := range value {
+		if ch != '-' && ch != '_' && !(ch >= '0' && ch <= '9') &&
+			!(ch >= 'a' && ch <= 'z') && !(ch >= 'A' && ch <= 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
+// The current callback checks only the original outer native owner. It must
+// retain the caller's context and must not call back into this proof engine.
+func (s *Box) RouterVPNNewNodeChainEngine(ctx context.Context, chain *mobilemultihop.NodeChain,
+	session string, current func(context.Context) error) (*RouterVPNNodeChainEngine, error) {
+	if ctx == nil || s == nil || chain == nil || current == nil || !routerVPNNodeChainSession(session) {
+		return nil, errors.New("ordered native chain needs its captured connection owner")
+	}
+	if _, err := chain.LaunchInput(); err != nil {
+		return nil, err
+	}
+	if err := current(ctx); err != nil {
+		return nil, err
+	}
+	if s.ctx == nil || s.ctx.Err() != nil || s.routerVPNNodeChainOptions == "" {
+		return nil, errors.New("ordered native chain has no actual compiled graph")
+	}
+	compiled, err := json.UnmarshalExtendedContext[option.Options](s.ctx, []byte(chain.Config()))
+	if err != nil || routerVPNNodeChainOptionsDigest(s.ctx, compiled) != s.routerVPNNodeChainOptions {
+		return nil, errors.New("ordered chain source differs from the running native graph")
+	}
+	dns := chain.DNSCapture()
+	engine := &RouterVPNNodeChainEngine{instance: s, chain: chain, current: current,
+		prefixes: make(map[string]adapter.Outbound),
+		identity: mobilemultihop.NodeChainIdentity{EngineID: fmt.Sprintf("%p", s), SessionID: session,
+			SourceSHA256: chain.SourceSHA256(), ConfigSHA256: chain.ConfigSHA256()}}
+	inbounds, err := adapter.RouterVPNInboundsContext(ctx, s.inbound)
+	if err != nil || len(inbounds) != 1 || inbounds[0].Tag() != dns.TUNTag || inbounds[0].Type() != C.TypeTun {
+		return nil, errors.Join(err, errors.New("ordered chain lost its one captured native TUN"))
+	}
+	engine.inbound = inbounds[0]
+	resolver, found, err := adapter.RouterVPNTransportContext(ctx, s.dnsTransport, dns.ResolverTag)
+	if err != nil || !found || resolver == nil {
+		return nil, errors.Join(err, errors.New("ordered chain selected resolver is unavailable"))
+	}
+	engine.resolver = resolver
+	for _, tag := range chain.PrefixTags() {
+		outbound, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, tag)
+		if err != nil || !found || outbound == nil || engine.prefixes[tag] != nil {
+			return nil, errors.Join(err, errors.New("ordered chain prefix is not its captured native outbound"))
+		}
+		engine.prefixes[tag] = outbound
+	}
+	outbound, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, chain.SelectorTag())
+	selector, ok := outbound.(*group.Selector)
+	if err != nil || !found || !ok || selector == nil || len(selector.All()) != 1 ||
+		selector.All()[0] != chain.FinalTag() || selector.Now() != chain.FinalTag() {
+		return nil, errors.Join(err, errors.New("ordered chain native selector has another candidate"))
+	}
+	engine.selector = selector
+	if s.network == nil {
+		return nil, errors.New("ordered chain has no native network owner")
+	}
+	engine.identity.NetworkID, err = s.network.RouterVPNNodeChainNetworkContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := engine.ObserveChainContext(ctx); err != nil {
+		return nil, err
+	}
+	return engine, nil
+}
+
+func (e *RouterVPNNodeChainEngine) ObserveChainContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
+	empty := mobilemultihop.NodeChainIdentity{}
+	if ctx == nil {
+		return empty, errors.New("ordered native observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
+	if e == nil || e.instance == nil || e.chain == nil || e.current == nil {
+		return empty, errors.New("ordered native observation has no retained owner")
+	}
+	if err := e.current(ctx); err != nil {
+		return empty, err
+	}
+	s := e.instance
+	if s.ctx == nil || s.ctx.Err() != nil || s.done == nil || s.network == nil {
+		return empty, errors.New("ordered native connection retired")
+	}
+	select {
+	case <-s.done:
+		return empty, errors.New("ordered native connection is closing")
+	default:
+	}
+	network, err := s.network.RouterVPNNodeChainNetworkContext(ctx)
+	if err != nil || network != e.identity.NetworkID {
+		return empty, errors.Join(err, errors.New("ordered chain network generation changed"))
+	}
+	dns := e.chain.DNSCapture()
+	inbounds, err := adapter.RouterVPNInboundsContext(ctx, s.inbound)
+	if err != nil || len(inbounds) != 1 || inbounds[0] != e.inbound ||
+		e.inbound.Tag() != dns.TUNTag || e.inbound.Type() != C.TypeTun {
+		return empty, errors.Join(err, errors.New("ordered native TUN owner changed"))
+	}
+	resolver, found, err := adapter.RouterVPNTransportContext(ctx, s.dnsTransport, dns.ResolverTag)
+	if err != nil || !found || resolver != e.resolver {
+		return empty, errors.Join(err, errors.New("ordered native DNS owner changed"))
+	}
+	for tag, expected := range e.prefixes {
+		actual, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, tag)
+		if err != nil || !found || actual != expected {
+			return empty, errors.Join(err, errors.New("ordered native prefix owner changed"))
+		}
+	}
+	selector, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, e.chain.SelectorTag())
+	if err != nil || !found || selector != e.selector || e.selector.Now() != e.chain.FinalTag() {
+		return empty, errors.Join(err, errors.New("ordered native selected path changed"))
+	}
+	if err := e.current(ctx); err != nil {
+		return empty, err
+	}
+	network, err = s.network.RouterVPNNodeChainNetworkContext(ctx)
+	if err != nil || network != e.identity.NetworkID {
+		return empty, errors.Join(err, errors.New("ordered chain network changed during observation"))
+	}
+	select {
+	case <-s.done:
+		return empty, errors.New("ordered native connection retired during observation")
+	default:
+	}
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
+	return e.identity, nil
+}
+
+func (e *RouterVPNNodeChainEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return nil, err
+	}
+	outbound := e.prefixes[tag]
+	if outbound == nil {
+		return nil, errors.New("ordered chain cannot dial an uncaptured prefix")
+	}
+	host, port, err := net.SplitHostPort(address)
+	ip, ipErr := netip.ParseAddr(host)
+	if err != nil || ipErr != nil || ip.Zone() != "" || ip.IsUnspecified() || port == "" || strings.Contains(port, "+") {
+		return nil, errors.New("ordered chain proofs require their literal destination")
+	}
+	destination := M.ParseSocksaddr(address)
+	if !destination.IsValid() || destination.Port == 0 {
+		return nil, errors.New("ordered chain proof destination is invalid")
+	}
+	connection, err := outbound.DialContext(ctx, "tcp", destination)
+	_, observed := e.ObserveChainContext(ctx)
+	if err != nil || observed != nil || ctx.Err() != nil {
+		if connection != nil {
+			err = errors.Join(err, connection.Close())
+		}
+		return nil, errors.Join(err, observed, ctx.Err())
+	}
+	if connection == nil {
+		return nil, errors.New("ordered native prefix returned no connection")
+	}
+	return connection, nil
+}
+
+func (e *RouterVPNNodeChainEngine) SelectedContext(ctx context.Context) (string, error) {
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return "", err
+	}
+	return e.chain.FinalTag(), nil
+}
+
+func (e *RouterVPNNodeChainEngine) SelectContext(ctx context.Context, tag string) error {
+	// The sealed selector has exactly one candidate, already started by Box.
+	// Selection cannot widen the graph or switch back to an old pair candidate.
+	if e == nil || e.chain == nil || tag != e.chain.FinalTag() {
+		return errors.New("ordered native selection requires its captured final prefix")
+	}
+	_, err := e.ObserveChainContext(ctx)
+	return err
+}
+
+func (e *RouterVPNNodeChainEngine) DNSProofContext(ctx context.Context, capture mobilemultihop.NodeChainDNSCapture) error {
+	if e == nil || e.chain == nil || capture != e.chain.DNSCapture() {
+		return errors.New("ordered native DNS proof has another source or resolver")
+	}
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return err
+	}
+	if err := e.instance.RouterVPNStrategyDNSProofContext(ctx); err != nil {
+		return err
+	}
+	_, err := e.ObserveChainContext(ctx)
+	return err
+}

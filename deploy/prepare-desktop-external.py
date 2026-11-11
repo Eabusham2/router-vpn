@@ -30,6 +30,7 @@ def load(name):
 EXTERNAL = load('prepare-mobile-external-policy')
 MTU = load('prepare-mobile-mtu')
 STRATEGY = load('prepare-mobile-strategy')
+NODE_CHAIN = load('prepare-mobile-node-chain')
 RELAY = load('prepare-relay-core')
 DESKTOP_MTU = load('prepare-desktop-mtu')
 TOR = load('prepare-mobile-tor')
@@ -58,6 +59,7 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'external_linux_lifecycle_native_test.go.tmpl',
                 'node_network.go.tmpl', 'node_network_test.go.tmpl', 'node_physical.go.tmpl', 'node_admission.go.tmpl', 'node_admission_test.go.tmpl',
                 'node_imported_socks.go.tmpl', 'node_imported_socks_test.go.tmpl', 'node_imported_physical_other.go.tmpl',
+                'node_chain_physical_linux.go.tmpl', 'node_chain_physical_windows.go.tmpl', 'node_chain_physical_other.go.tmpl',
                 'node_physical_linux.go.tmpl', 'node_physical_darwin.go.tmpl',
                 'node_physical_linux_test.go.tmpl', 'node_physical_darwin_test.go.tmpl', 'node_physical_unix_test.go.tmpl',
                 'node_linux_lifecycle.go.tmpl', 'node_linux_lifecycle_test.go.tmpl',
@@ -69,6 +71,9 @@ BOX_TEMPLATES = {
     'network_box.go.tmpl': 'routervpn_desktop_network_box.go',
     'node_box_physical.go.tmpl': 'routervpn_desktop_node_box_physical.go',
     'node_box_imported.go.tmpl': 'routervpn_desktop_node_box_imported.go',
+    'node_chain_box_physical.go.tmpl': 'routervpn_desktop_node_chain_box_physical.go',
+    'node_chain_box_physical_test.go.tmpl': 'routervpn_desktop_node_chain_box_physical_test.go',
+    'node_chain_box_linux.go.tmpl': 'routervpn_desktop_node_chain_box_linux.go',
     'node_box_imported_test.go.tmpl': 'routervpn_desktop_node_box_imported_test.go',
     'node_imported_naive_h3_windows_test.go.tmpl': 'routervpn_desktop_node_imported_naive_h3_windows_test.go',
     'node_imported_naive_h3_windows_peer_test.go.tmpl': 'routervpn_desktop_node_imported_naive_h3_windows_peer_test.go',
@@ -230,7 +235,7 @@ def desktop_pt_notices():
 
 
 def inputs():
-    files = [Path(__file__).resolve(), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *RELAY.OPENVPN_REMOTE.inputs(), *RELAY.NAIVE.inputs(),
+    files = [Path(__file__).resolve(), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *NODE_CHAIN.inputs(), *RELAY.OPENVPN_REMOTE.inputs(), *RELAY.NAIVE.inputs(),
              ROOT/'mobile/toroutbound/box.go.tmpl', ROOT/'mobile/toroutbound/box_test.go.tmpl',
              ROOT/'mobile/toroutbound/padding_box.go.tmpl', ROOT/'mobile/toroutbound/padding_box_test.go.tmpl',
              ROOT/'deploy/prepare-desktop-mtu.py', ROOT/'deploy/prepare-desktop-command-retirement.py', ROOT/'deploy/prepare-desktop-dbus.py', ROOT/'deploy/test_desktop_tun_retirement_projection.py', ROOT/'deploy/prepare-mobile-tor.py',
@@ -320,6 +325,9 @@ def pt_copies():
                    'node_physical_windows_test.go.tmpl': b'//go:build windows\n\n',
                    'node_imported_socks_test.go.tmpl': b'//go:build linux || windows || darwin\n\n',
                    'node_imported_physical_other.go.tmpl': b'//go:build !windows\n\n',
+                   'node_chain_physical_linux.go.tmpl': b'//go:build linux\n\n',
+                   'node_chain_physical_windows.go.tmpl': b'//go:build windows\n\n',
+                   'node_chain_physical_other.go.tmpl': b'//go:build !linux && !windows\n\n',
                    'node_physical_linux.go.tmpl': b'//go:build linux\n\n',
                    'node_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
                    'node_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
@@ -338,6 +346,7 @@ def pt_copies():
         path = ROOT/'mobile/desktop'/name
         raw = path.read_bytes()
         prefix = {'node_box_imported_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
+                  'node_chain_box_linux.go.tmpl': b'//go:build linux\n\n',
                   'node_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
                   'node_imported_naive_h3_windows_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition && with_purego\n\n',
                   'node_imported_naive_h3_windows_peer_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition && with_purego\n\n',
@@ -711,6 +720,7 @@ def prepare(vendor, go='go', *, env=None):
     DESKTOP_MTU.prepare(vendor)
     STRATEGY.prepare(vendor, mobile=False)
     prepare_network_startup(vendor)
+    NODE_CHAIN.prepare(vendor, mobile=False)
     EXTERNAL.prepare(vendor, mobile=False)
     prepare_node_capture(vendor)
     RELAY.OPENVPN_REMOTE.prepare(vendor)

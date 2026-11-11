@@ -1,0 +1,51 @@
+package box
+
+import (
+	"errors"
+	"runtime"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// The ordered constructor seals every prefix, while the original native
+// physical service owns the one permitted lower and its entire lifetime.
+// This factory grants no parent admission and does not report Connected.
+func routerVPNDesktopNodeChainPhysicalTarget(policy *mobilemultihop.DesktopNodeChainPolicy, target string) bool {
+	if policy == nil || policy.Validate() != nil {
+		return false
+	}
+	meta := policy.Metadata()
+	if meta.TargetOS != target || len(meta.Prefixes) < 2 || len(meta.Prefixes) > mobilemultihop.NodeChainMaximumNodes {
+		return false
+	}
+	for position, prefix := range meta.Prefixes {
+		mode := "wg"
+		if position == len(meta.Prefixes)-1 {
+			mode = "shadowsocks"
+		}
+		if prefix.Position != position || prefix.Mode != mode ||
+			!mobilemultihop.DesktopNodePhysicalGraphSupported(prefix.Mode, prefix.StartLayer) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Box) RouterVPNDesktopNodeChainPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeChainPolicy) (*RouterVPNDesktopNodePreparation, error) {
+	if runtime.GOOS != "windows" || !routerVPNDesktopNodeChainPhysicalTarget(policy, "windows") {
+		return nil, errors.New("ordered Windows physical preparation lost its complete captured chain")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopNodePreparation{network: network, policy: policy}
+	return owner, network.PrepareNodeChainPhysicalPolicy(policy)
+}
+
+func (s *Box) RouterVPNDesktopNodeChainActivatePhysical(policy *mobilemultihop.DesktopNodeChainPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if runtime.GOOS != "windows" || !routerVPNDesktopNodeChainPhysicalTarget(policy, "windows") {
+		return nil, errors.New("ordered Windows physical activation lost its complete captured chain")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}

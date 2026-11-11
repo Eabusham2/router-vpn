@@ -1,0 +1,47 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/daemon"
+)
+
+// The native command server remains the sole instance owner. An ordered plan
+// cannot observe a replacement, bypass its mutex, or reuse a retired bridge.
+func TestRouterNodeChainBridgeRejectsMissingAndRetiredOwners(t *testing.T) {
+	if value, err := NewRouterNodeChain(`{"schema":1,"execution":"local","nodes":[]}`); err == nil || value != nil {
+		t.Fatal("incomplete source accepted")
+	}
+	if value, err := NewRouterNodeChainLaunch(`{"config":"borrowed"}`); err == nil || value != nil {
+		t.Fatal("metadata-only native launch accepted")
+	}
+	if err := (*RouterNodeChain)(nil).Run(nil); err == nil {
+		t.Fatal("missing original native owner accepted")
+	}
+	m := new(RouterNodeChain)
+	m.NetworkChanged()
+	if !m.retired || m.Healthy() {
+		t.Fatal("retired empty bridge acquired readiness")
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterNodeChainBridgeRetainsCommandServerReadDeadline(t *testing.T) {
+	started := daemon.NewStartedService(daemon.ServiceOptions{Context: context.Background(), LogMaxLines: 16})
+	defer started.Close()
+	held := routerProofField[sync.RWMutex](t, started, "serviceAccess")
+	held.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	_, err := started.RouterVPNInstanceContext(ctx)
+	cancel()
+	held.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("original command server read abandoned its deadline", err)
+	}
+}

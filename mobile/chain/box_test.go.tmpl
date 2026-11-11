@@ -1,0 +1,344 @@
+package box
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+	"unsafe"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
+	"github.com/sagernet/sing-box/route"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// These tests exercise real managers, parsing, source capture and observation.
+// Explicit fixtures replace the privileged TUN, transport I/O and OS monitor;
+// successful observations are not encrypted-traffic or kernel acceptance.
+func chainNativeField[T any](t *testing.T, owner any, name string) *T {
+	t.Helper()
+	field := reflect.ValueOf(owner).Elem().FieldByName(name)
+	if !field.IsValid() || !field.CanAddr() || field.Type() != reflect.TypeFor[T]() {
+		t.Fatal("pinned native field changed", name)
+	}
+	return (*T)(unsafe.Pointer(field.UnsafeAddr()))
+}
+
+func chainNativeJSON(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func chainNativeSource(t *testing.T) *mobilemultihop.NodeChain {
+	t.Helper()
+	source := mobilemultihop.NodeChainSource{Schema: 1, Execution: "local"}
+	for i := 0; i < 3; i++ {
+		client, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(20 + i)}, 32))
+		server, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(70 + i)}, 32))
+		public := base64.StdEncoding.EncodeToString(server.PublicKey().Bytes())
+		nodeID := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+		address := fmt.Sprintf("198.51.100.%d", i+20)
+		profile := map[string]any{"id": fmt.Sprintf("chain-native-%d", i), "node_kind": "router-vpn", "node_proof_id": hex.EncodeToString(nodeID[:]),
+			"router_api": "http://10.77.0.1:8787", "api_token": fmt.Sprintf("chain-native-token-%d", i), "endpoint": address,
+			"dns_mode": "home", "adguard_ipv4": "192.168.50.133", "mtu_policy": "auto", "ipv6_mode": "off", "home_lan_access": false,
+			"kill_switch_policy": "always"}
+		mode := "wg"
+		files := map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("[Interface]\nAddress=10.77.0.2/24,fd77::2/64\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=%s:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", base64.StdEncoding.EncodeToString(client.Bytes()), public, address)))}
+		if i == 2 {
+			mode = "shadowsocks"
+			graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+				"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": address, "server_port": 8388,
+					"method": mobilemultihop.NativeStartLayerMethod, "password": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{80}, 32))}},
+				"route": map[string]any{"final": "proxy", "rules": []any{}}}
+			files = map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(chainNativeJSON(t, graph)))}
+		}
+		node, err := mobilemultihop.NewNodeProfile(mode, chainNativeJSON(t, files), chainNativeJSON(t, profile), "", "")
+		if err != nil {
+			t.Fatal("native source", i, err)
+		}
+		input, err := node.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		source.Nodes = append(source.Nodes, input)
+	}
+	chain, err := mobilemultihop.NewNodeChain(chainNativeJSON(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return chain
+}
+
+type chainNativePrefix struct {
+	outbound.Adapter
+	dial func(context.Context) (net.Conn, error)
+}
+
+func (p *chainNativePrefix) DialContext(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
+	if p.dial == nil {
+		return nil, errors.New("no traffic fixture installed")
+	}
+	return p.dial(ctx)
+}
+func (*chainNativePrefix) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("no packet fixture")
+}
+func (*chainNativePrefix) Start(adapter.StartStage) error { return nil }
+func (*chainNativePrefix) Close() error                   { return nil }
+
+type chainNativeTUN struct{ inbound.Adapter }
+
+func (*chainNativeTUN) Start(adapter.StartStage) error { return nil }
+func (*chainNativeTUN) Close() error                   { return nil }
+
+type chainNativeDNS struct {
+	adapter.DNSTransport
+	dns.TransportAdapter
+}
+
+func (d *chainNativeDNS) Type() string           { return d.TransportAdapter.Type() }
+func (d *chainNativeDNS) Tag() string            { return d.TransportAdapter.Tag() }
+func (d *chainNativeDNS) Dependencies() []string { return nil }
+
+type chainNativeMonitor struct {
+	tun.DefaultInterfaceMonitor
+	physical *control.Interface
+}
+
+func (m *chainNativeMonitor) RouterVPNDefaultInterfaceContext(ctx context.Context) (*control.Interface, error) {
+	return m.physical, ctx.Err()
+}
+
+type chainNativeFixture struct {
+	chain       *mobilemultihop.NodeChain
+	box         *Box
+	engine      *RouterVPNNodeChainEngine
+	registry    *outbound.Registry
+	inRegistry  *inbound.Registry
+	dnsRegistry *dns.TransportRegistry
+	prefixes    map[string]*chainNativePrefix
+	current     atomic.Bool
+}
+
+func newChainNativeFixture(t *testing.T, edit func(map[string]any)) *chainNativeFixture {
+	t.Helper()
+	f := &chainNativeFixture{chain: chainNativeSource(t), prefixes: map[string]*chainNativePrefix{}}
+	f.current.Store(true)
+	f.registry = outbound.NewRegistry()
+	group.RegisterSelector(f.registry)
+	f.inRegistry = inbound.NewRegistry()
+	endpointRegistry := endpoint.NewRegistry()
+	inbound.Register[option.TunInboundOptions](f.inRegistry, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+		return &chainNativeTUN{inbound.NewAdapter(C.TypeTun, tag)}, nil
+	})
+	outbound.Register[option.ShadowsocksOutboundOptions](f.registry, C.TypeShadowsocks, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.ShadowsocksOutboundOptions) (adapter.Outbound, error) {
+		p := &chainNativePrefix{Adapter: outbound.NewAdapter(C.TypeShadowsocks, tag, []string{"tcp", "udp"}, nil)}
+		f.prefixes[tag] = p
+		return p, nil
+	})
+	endpoint.Register[option.WireGuardEndpointOptions](endpointRegistry, C.TypeWireGuard, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.WireGuardEndpointOptions) (adapter.Endpoint, error) {
+		p := &chainNativePrefix{Adapter: outbound.NewAdapter(C.TypeWireGuard, tag, []string{"tcp", "udp"}, nil)}
+		f.prefixes[tag] = p
+		return p, nil
+	})
+	f.dnsRegistry = dns.NewTransportRegistry()
+	dns.RegisterTransport[option.RemoteDNSServerOptions](f.dnsRegistry, C.DNSTypeUDP, func(_ context.Context, _ log.ContextLogger, tag string, _ option.RemoteDNSServerOptions) (adapter.DNSTransport, error) {
+		return &chainNativeDNS{TransportAdapter: dns.NewTransportAdapter(C.DNSTypeUDP, tag, nil)}, nil
+	})
+	ctx := Context(context.Background(), f.inRegistry, f.registry, endpointRegistry, f.dnsRegistry, boxService.NewRegistry(), certificate.NewRegistry())
+	logger := log.NewNOPFactory().Logger()
+	ends := endpoint.NewManager(logger, endpointRegistry)
+	outs := outbound.NewManager(logger, f.registry, ends, mobilemultihop.SelectorTag)
+	ins := inbound.NewManager(logger, f.inRegistry, ends)
+	transports := dns.NewTransportManager(logger, f.dnsRegistry, outs, f.chain.DNSCapture().ResolverTag)
+	service.MustRegister[adapter.OutboundManager](ctx, outs)
+	var graph map[string]any
+	if err := json.Unmarshal([]byte(f.chain.Config()), &graph); err != nil {
+		t.Fatal(err)
+	}
+	if edit != nil {
+		edit(graph)
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(chainNativeJSON(t, graph)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	network := new(route.NetworkManager)
+	*chainNativeField[context.Context](t, network, "ctx") = ctx
+	chainNativeField[atomic.Bool](t, network, "started").Store(true)
+	*chainNativeField[tun.DefaultInterfaceMonitor](t, network, "interfaceMonitor") = &chainNativeMonitor{physical: &control.Interface{Name: "chain-fixture", Index: 27}}
+	f.box = &Box{ctx: ctx, done: make(chan struct{}), inbound: ins, outbound: outs, endpoint: ends, dnsTransport: transports, network: network,
+		routerVPNNodeChainOptions: routerVPNNodeChainOptionsDigest(ctx, options)}
+	for _, entry := range options.Inbounds {
+		if err := ins.Create(ctx, nil, logger, entry.Tag, entry.Type, entry.Options); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, entry := range options.Endpoints {
+		if err := ends.Create(ctx, nil, logger, entry.Tag, entry.Type, entry.Options); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, entry := range options.Outbounds {
+		if err := outs.Create(ctx, nil, logger, entry.Tag, entry.Type, entry.Options); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, entry := range options.DNS.Servers {
+		if err := transports.Create(ctx, logger, entry.Tag, entry.Type, entry.Options); err != nil {
+			t.Fatal(err)
+		}
+	}
+	selected, found := outs.Outbound(mobilemultihop.SelectorTag)
+	if !found {
+		t.Fatal("selector missing")
+	}
+	if err := selected.(*group.Selector).Start(); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func (f *chainNativeFixture) capture(ctx context.Context) (*RouterVPNNodeChainEngine, error) {
+	return f.box.RouterVPNNewNodeChainEngine(ctx, f.chain, strings.Repeat("a", 64), func(ctx context.Context) error {
+		if !f.current.Load() {
+			return errors.New("native owner replaced")
+		}
+		return ctx.Err()
+	})
+}
+
+func TestRouterVPNNodeChainNativeCaptureAndSubstitution(t *testing.T) {
+	f := newChainNativeFixture(t, nil)
+	engine, err := f.capture(context.Background())
+	if err != nil {
+		t.Fatal("complete native capture", err)
+	}
+	identity, err := engine.ObserveChainContext(context.Background())
+	if err != nil || identity.SourceSHA256 != f.chain.SourceSHA256() || identity.ConfigSHA256 != f.chain.ConfigSHA256() {
+		t.Fatal("wrong native identity", err)
+	}
+	for _, fault := range []string{"middle-key", "dns", "route", "mtu"} {
+		t.Run(fault, func(t *testing.T) {
+			other := newChainNativeFixture(t, func(graph map[string]any) {
+				switch fault {
+				case "middle-key":
+					graph["endpoints"].([]any)[1].(map[string]any)["private_key"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{115}, 32))
+				case "dns":
+					graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["server"] = "192.168.50.134"
+				case "route":
+					graph["route"].(map[string]any)["rules"] = []any{}
+				case "mtu":
+					graph["inbounds"].([]any)[0].(map[string]any)["mtu"] = float64(1400)
+				}
+			})
+			if owned, err := other.capture(context.Background()); err == nil || owned != nil {
+				t.Fatal("substituted actual graph acquired ordered authority")
+			}
+		})
+	}
+	if _, err := engine.Dial(context.Background(), "direct", "1.1.1.1:443"); err == nil {
+		t.Fatal("arbitrary prefix admitted")
+	}
+	if _, err := engine.Dial(context.Background(), f.chain.FinalTag(), "unowned.example:443"); err == nil {
+		t.Fatal("ambient hostname admitted")
+	}
+	dnsCapture := f.chain.DNSCapture()
+	dnsCapture.ResolverSHA256 = strings.Repeat("f", 64)
+	if err := engine.DNSProofContext(context.Background(), dnsCapture); err == nil {
+		t.Fatal("foreign selected DNS admitted")
+	}
+	f.current.Store(false)
+	if _, err := engine.ObserveChainContext(context.Background()); err == nil {
+		t.Fatal("replacement owner adopted old proof")
+	}
+}
+
+func TestRouterVPNNodeChainNativeHeldReadAndLateDial(t *testing.T) {
+	for _, fault := range []string{"manager-held", "cancel", "network", "replacement", "closing"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newChainNativeFixture(t, nil)
+			engine, err := f.capture(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if fault == "manager-held" {
+				mu := chainNativeField[sync.RWMutex](t, f.box.outbound, "access")
+				mu.Lock()
+				bounded, finish := context.WithTimeout(ctx, 15*time.Millisecond)
+				_, err := engine.ObserveChainContext(bounded)
+				finish()
+				mu.Unlock()
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("original manager deadline lost", err)
+				}
+				if _, err := engine.ObserveChainContext(ctx); err != nil {
+					t.Fatal("timed-out observer damaged native owner", err)
+				}
+				return
+			}
+			connection, peer := net.Pipe()
+			defer connection.Close()
+			defer peer.Close()
+			f.prefixes[f.chain.FinalTag()].dial = func(context.Context) (net.Conn, error) {
+				switch fault {
+				case "cancel":
+					cancel()
+				case "network":
+					chainNativeField[atomic.Uint64](t, f.box.network, "routerVPNNodeChainGeneration").Add(1)
+				case "replacement":
+					f.current.Store(false)
+				case "closing":
+					close(f.box.done)
+				}
+				return connection, nil
+			}
+			if result, err := engine.Dial(ctx, f.chain.FinalTag(), "1.1.1.1:443"); err == nil || result != nil {
+				t.Fatal("late unowned connection published")
+			}
+			deadlineErr := peer.SetWriteDeadline(time.Now().Add(time.Second))
+			if deadlineErr != nil && !errors.Is(deadlineErr, io.ErrClosedPipe) {
+				t.Fatal("unexpected peer deadline", deadlineErr)
+			}
+			if deadlineErr == nil {
+				if _, err := peer.Write([]byte{1}); !errors.Is(err, io.ErrClosedPipe) {
+					t.Fatal("late connection was not closed", err)
+				}
+			}
+		})
+	}
+}

@@ -30,7 +30,7 @@ class NativePolicyScope(unittest.TestCase):
             # This fixture owns package copying, not vendored transport files.
             # Every native patcher has its own exact-source/executable tests.
             prepared = {}
-            for hook in ('WHITENING','AMNEZIA','MTU','PERFORMANCE','WIREGUARD_BIND','OPENVPN_CLOSE','OPENVPN_REMOTE','EXTERNAL_POLICY','PQ','STRATEGY','COMPOSITE','HY2_DEADLINES','NAIVE'):
+            for hook in ('WHITENING','AMNEZIA','MTU','PERFORMANCE','WIREGUARD_BIND','OPENVPN_CLOSE','OPENVPN_REMOTE','EXTERNAL_POLICY','PQ','STRATEGY','COMPOSITE','HY2_DEADLINES','NAIVE','NODE_CHAIN'):
                 if hasattr(module,hook):
                     prepared[hook]=mocks.enter_context(mock.patch.object(getattr(module,hook),'prepare'))
             if hasattr(module,'CORE'):
@@ -50,6 +50,8 @@ class NativePolicyScope(unittest.TestCase):
                 self.assertEqual(parent.read_text(),'do not erase unknown test')
                 return
             module.prepare(vendor)
+            if 'NODE_CHAIN' in prepared:
+                prepared['NODE_CHAIN'].assert_called_once_with(vendor.resolve())
             if name=='prepare-mobile-multihop.py':
                 for observer in ('instance_context','instance_context_test'):
                     source=ROOT/'mobile/daemon'/(observer+'.go.tmpl')

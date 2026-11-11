@@ -49,6 +49,9 @@ _observation_spec.loader.exec_module(OBSERVATION)
 _naive_spec = importlib.util.spec_from_file_location('routervpn_naive_transport', ROOT/'deploy/native_naive_transport_policy.py')
 NAIVE = importlib.util.module_from_spec(_naive_spec)
 _naive_spec.loader.exec_module(NAIVE)
+_chain_spec = importlib.util.spec_from_file_location('routervpn_node_chain', ROOT/'deploy/prepare-mobile-node-chain.py')
+NODE_CHAIN = importlib.util.module_from_spec(_chain_spec)
+_chain_spec.loader.exec_module(NODE_CHAIN)
 
 def inputs():
     paths = [ROOT/'ios/RouterVPN/App/IOSHomeDNSPolicy.swift', ROOT/'deploy/test_ios_xray_exits.py', ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift', ROOT/'deploy/testfixtures/xray-entry/main.go', ROOT/'deploy/test_ios_multihop_graph.py', ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_external_policy_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
@@ -70,7 +73,7 @@ def inputs():
     paths.append(ROOT/'mobile/routervpn_multihop_context_test.go.tmpl')
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
-    return paths + NAIVE.inputs() + OBSERVATION.inputs() + HY2_DEADLINES.inputs() + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + EXTERNAL_POLICY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
+    return paths + NODE_CHAIN.inputs() + NAIVE.inputs() + OBSERVATION.inputs() + HY2_DEADLINES.inputs() + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + EXTERNAL_POLICY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
 
 def digest():
     h=hashlib.sha256()
@@ -138,6 +141,7 @@ def prepare(vendor):
     PERFORMANCE.prepare(vendor)
     MTU.prepare(vendor)
     STRATEGY.prepare(vendor)
+    NODE_CHAIN.prepare(vendor)
     EXTERNAL_POLICY.prepare(vendor)
     COMPOSITE.prepare(vendor)
     WIREGUARD_BIND.prepare(vendor)
