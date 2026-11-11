@@ -1,12 +1,33 @@
 # Current implementation status
 
-Updated November 10, 2026 UTC. This file distinguishes published source,
+Updated November 11, 2026 UTC. This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 10 continuation: published measurements, DNS and release repairs
+## November 11 continuation: native repairs and imported-path ownership
+
+The [November 11 evidence ledger](CONTINUATION-EVIDENCE-2026-11-11.md) records
+the continuation from live `94658242`, recovered original requirements, and
+published source through `49319df8`. The bounded Linux imported WG-to-paired-SS
+parent/host is now reconstructed and published; its installed native acceptance
+and public admission are still pending. The independent encrypted peer passed
+component tests, which are not system-TUN acceptance.
+
+The shared short HTTPS response worker and Apple external-path UI retain
+captured session/source/network/execution ownership through native drain. These
+values expire and remain separate from saved 50-sample statistics. Automatic
+refresh now defers to active Auto MTU or Retest using a native idle-only lease.
+Darwin and Windows/Linux fixture repairs preserve their rejection checks and
+need matching native workflows. The latest source-adapter audit failures are
+recorded explicitly; a complete new release is not yet established.
+
+The earlier outage and unpublished-source statements below describe their
+dated checkpoints. The November 11 ledger supersedes those status statements
+only for the specific reconstructed and published units it identifies.
+
+## Historical November 10 continuation: measurements, DNS and release repairs
 
 The [evidence ledger](CONTINUATION-EVIDENCE-2026-11-10.md) records the recovered
 original sources and published source through `885fb23c935b4006d8766e9a0b184bd4184063c5`.

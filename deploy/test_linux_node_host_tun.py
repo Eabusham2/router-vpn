@@ -207,6 +207,10 @@ CASES += EXTERNAL_SS_LAYER_CASES
 CASES += EXTERNAL_SS_HYSTERIA_LAYER_CASES
 SS_ENTRY_AUTHORITY_CASES += tuple(SS_ENTRY_AUTHORITY_ROOT + '/layer%d-layer%d' % (entry, final) for entry in range(3) for final in range(3))
 
+IMPORTED_CASES = ('imported-wg-ss-public', 'imported-wg-ss-wrong-public', 'imported-wg-ss-wrong-node',
+                  'imported-wg-ss-dns-failure', 'imported-wg-ss-mtu-cancel', 'imported-wg-ss-restore', 'imported-wg-ss-cover-lost', 'imported-wg-ss-temporary')
+CASES += IMPORTED_CASES
+
 
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
@@ -216,6 +220,8 @@ NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_B
 def checked_sources(source):
     source, native = CHILD.checked_sources(source)
     app = TRANSACTION.checked_sources()
+    if 'protocol/routervpnamnezia/routervpn_desktop_node_imported_peer_linux_test.go' not in native:
+        raise ValueError('Installed imported host lost its independent WG entry and paired SS final peer')
     if 'protocol/routervpnamnezia/routervpn_desktop_resolved_broker_test.go' not in native:
         raise ValueError('Installed resolved composition lost its original authenticated broker image source')
     for name in ('ui.html', 'logical_ui.js'):
@@ -233,6 +239,10 @@ def checked_sources(source):
                 'cmd/client/desktop_external_wg_hysteria_layer_linux_tun_native_test.go',
                 'cmd/client/desktop_external_wg_hysteria_layer_linux_test.go',
                 'cmd/client/desktop_external_linux_host.go', 'cmd/client/desktop_external_linux_lifecycle.go',
+                'cmd/client/desktop_imported_linux_host.go', 'cmd/client/desktop_imported_linux_lifecycle.go',
+                'cmd/client/desktop_imported_linux_source.go', 'cmd/client/desktop_imported_linux_source_test.go',
+                'cmd/client/desktop_imported_platform.go', 'cmd/client/desktop_imported_platform_test.go',
+                'cmd/client/desktop_imported_linux_tun_native_test.go',
                 'cmd/client/desktop_external_wg_entry.go', 'cmd/client/desktop_external_wg_entry_linux_test.go',
                 'cmd/client/desktop_external_ss_connect_linux_test.go', 'cmd/client/desktop_external_ss_connect_linux_tun_native_test.go', 'cmd/client/desktop_external_ss_entry_linux_test.go', 'cmd/client/desktop_external_ss_entry_linux_tun_native_test.go', 'cmd/client/desktop_external_ss_entry_darwin_native_test.go',
                 'cmd/client/desktop_external_retained.go', 'cmd/client/external_profile_connect.go', 'cmd/client/speed_lab_paths.go',
@@ -379,11 +389,14 @@ def check_verdict(output, case=None):
     ss_entry_receipts = []
     ss_connect_receipts = []
     ss_hysteria_receipts = []
+    imported_receipts = []
     layered_entry_passes = re.findall(r"(?m)^\s*" + re.escape(prefix + "/") + r"(external-wghy2(?:aes|xor)-[a-z-]+) \([0-9.]+s\)$", output)
     for line in output.replace('\r\n', '\n').split('\n')[:-1]:
         _, marker, suffix = line.rpartition('verified installed host ')
         if marker:
             receipts.add(marker + suffix + '\n')
+            if suffix.startswith('imported independent WG entry and paired SS final: '):
+                imported_receipts.append(suffix.removeprefix('imported independent WG entry and paired SS final: '))
             if suffix.startswith('independent SS2022 entry and Hysteria2 final: '):
                 ss_hysteria_receipts.append(suffix.removeprefix('independent SS2022 entry and Hysteria2 final: '))
             if suffix.startswith('independent SS2022 entry and CONNECT final: '):
@@ -401,6 +414,10 @@ def check_verdict(output, case=None):
     if prefix + ' (' not in passed:
         raise ValueError('Installed Linux host omitted its actual native group')
     for value in cases:
+        if value in IMPORTED_CASES:
+            verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
+            if imported_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
+                raise ValueError('Installed imported graph omitted or duplicated its independent encrypted native completion: ' + value)
         if value in EXTERNAL_SS_ENTRY_CASES or value in EXTERNAL_SS_LAYER_CASES:
             verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
             if ss_entry_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:

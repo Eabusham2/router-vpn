@@ -37,6 +37,7 @@ var linuxHostTUNCases = []string{"service-transfer", "service-transfer-lost-repl
 	"layer-aes-connect", "layer-whitening-connect", "layer-whitening-wrong-key", "layer-whitening-resolver-failure", "layer-aes-restore", "layer-whitening-cover-restore"}
 
 func init() {
+	linuxHostTUNCases = append(linuxHostTUNCases, linuxImportedHostCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNWireGuardCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNHysteria2Cases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNAmneziaCases...)
@@ -311,6 +312,9 @@ func linuxHostTUNDNSObservation(ctx context.Context, a *app, host *desktopLinuxN
 // executable, source, native channel, TUN, DNS, Router proof and journal.
 // It changes no public capability predicate or verifier implementation.
 func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string) (failure error) {
+	if strings.HasPrefix(scenario, "imported-wg-ss-") {
+		return linuxHostTUNImportedFixture(controller, scenario)
+	}
 	if linuxHostTUNExternalCase(scenario) {
 		return linuxHostTUNExternalFixture(controller, scenario)
 	}
@@ -803,6 +807,10 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				t.Fatal(err)
 			}
 			linuxHostTUNInstallBundle(t)
+			if strings.HasPrefix(scenario, "imported-wg-ss-") {
+				linuxHostTUNImportedParent(t, installed, scenario)
+				return
+			}
 			if linuxHostTUNExternalCase(scenario) {
 				linuxHostTUNExternalParent(t, installed, scenario)
 				return
