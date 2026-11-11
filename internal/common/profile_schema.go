@@ -255,7 +255,8 @@ func NormalizeRouterProfile(p *RouterProfile) error {
 	p.MTUPolicy = strings.ToLower(strings.TrimSpace(p.MTUPolicy)); if p.MTUPolicy == "" { p.MTUPolicy = "auto" }; switch p.MTUPolicy { case "default", "auto": p.ManualMTU = 0; case "manual": if p.ManualMTU < 576 || p.ManualMTU > 9000 { return fmt.Errorf("manual MTU %d is outside 576..9000", p.ManualMTU) }; default: return fmt.Errorf("invalid MTU policy %q", p.MTUPolicy) }
 	if p.DAITARateKbps != 0 && (p.DAITARateKbps < DAITALikeMinRateKbps || p.DAITARateKbps > DAITALikeMaxRateKbps) { return fmt.Errorf("DAITA-like rate %d kbps is outside bounded %d..%d", p.DAITARateKbps, DAITALikeMinRateKbps, DAITALikeMaxRateKbps) }
 	if p.DiagnosticsRetentionDays == 0 { p.DiagnosticsRetentionDays = 7 }; if p.DiagnosticsRetentionDays < 1 || p.DiagnosticsRetentionDays > 365 { return fmt.Errorf("diagnostics retention must be between 1 and 365 days") }
-	p.MultihopEntryID = strings.TrimSpace(p.MultihopEntryID); p.MultihopExitID = strings.TrimSpace(p.MultihopExitID); if p.MultihopEnabled { if p.MultihopEntryID == "" || p.MultihopExitID == "" { return fmt.Errorf("multihop requires both an entry node and an exit node") }; if p.MultihopEntryID == p.MultihopExitID { return fmt.Errorf("multihop entry and exit nodes must be different") } }
+	if err := validateRouterProfileNodeChain(p); err != nil { return err }
+	p.MultihopEntryID = strings.TrimSpace(p.MultihopEntryID); p.MultihopExitID = strings.TrimSpace(p.MultihopExitID); if p.MultihopEnabled && len(p.MultihopNodes) == 0 { if p.MultihopEntryID == "" || p.MultihopExitID == "" { return fmt.Errorf("multihop requires both an entry node and an exit node") }; if p.MultihopEntryID == p.MultihopExitID { return fmt.Errorf("multihop entry and exit nodes must be different") } }
 	return nil
 }
 

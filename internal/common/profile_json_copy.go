@@ -27,6 +27,7 @@ func copyProfileForJSON(source RouterProfile) RouterProfile {
 	out := source
 	out.LatencyReceipt = copyProfileJSONPointer(source.LatencyReceipt)
 	out.CustomLayers = slices.Clone(source.CustomLayers)
+	out.MultihopNodes = slices.Clone(source.MultihopNodes)
 	out.HomeLANCIDRs = slices.Clone(source.HomeLANCIDRs)
 	out.DNSResults = slices.Clone(source.DNSResults)
 	out.External = copyProfileJSONPointer(source.External)

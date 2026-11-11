@@ -21,7 +21,16 @@ func publicProfileToken(profile common.RouterProfile) string {
 func (a *app) connectionProfileTokensLocked(selected common.RouterProfile) (map[string]string, error) {
 	ids := []string{selected.ID}
 	if selected.MultihopEnabled {
-		ids = append(ids, selected.MultihopEntryID, selected.MultihopExitID)
+		if len(selected.MultihopNodes) != 0 {
+			if err := common.ValidateMultihopNodes(selected.MultihopNodes); err != nil {
+				return nil, err
+			}
+			for _, node := range selected.MultihopNodes {
+				ids = append(ids, node.ID)
+			}
+		} else {
+			ids = append(ids, selected.MultihopEntryID, selected.MultihopExitID)
+		}
 	}
 	tokens := make(map[string]string, len(ids))
 	for _, id := range ids {
