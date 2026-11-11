@@ -250,7 +250,7 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
     GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     gtk_container_set_border_width(GTK_CONTAINER(box), 14);
-    GtkWidget *note = gtk_label_new("Profiles save the selected node, Mode/CUSTOM layers, DNS, protection, MTU and the complete staged path, including every ordered member and transport. Private sources stay in the controller. Load never connects automatically; an unavailable original member cannot be replaced by the first node in the catalog.");
+    GtkWidget *note = gtk_label_new("Profiles save the selected node, Mode/CUSTOM layers, AUTO encryption/obfuscation requirements, DNS, protection, MTU and the complete staged path, including every ordered member and transport. Private sources stay in the controller. Load never connects automatically; an unavailable original member cannot be replaced by the first node in the catalog.");
     gtk_label_set_line_wrap(GTK_LABEL(note), TRUE);
     gtk_label_set_xalign(GTK_LABEL(note), 0.0f);
     gtk_box_pack_start(GTK_BOX(box), note, FALSE, FALSE, 0);
