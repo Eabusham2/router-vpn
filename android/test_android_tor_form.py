@@ -915,6 +915,7 @@ def main():
             if path.endswith("/Boundaries.java"):
                 source = (JAVA / "AndroidNodeStore.java").read_text()
                 methods = source[source.index("    static String stableNodeIdentity("):source.index("    static String deriveId(")]
+                methods += source[source.index("    static JSONArray orderedSelection("):source.index("    synchronized void restoreSelection(")]
                 methods += source[source.index("    private static String wireGuardPeerPublicKey("):source.index("    private static JSONObject load(")]
                 methods += next(line for line in source.splitlines() if "private static String hex(byte[] data)" in line)
                 constants = "\n".join(line for line in source.splitlines() if any(part in line for part in ("private static final String NODE_PROOF_DOMAIN =", "static final int MAX_PROFILE_SCHEMA =", "static final int MAX_BUNDLE =")))
@@ -924,7 +925,7 @@ def main():
                 start, end = text.index("final class AndroidNodeStore {"), text.index("final class AndroidKillSwitchPolicy {")
                 private_files = T.TOR_BOUNDARIES[:T.TOR_BOUNDARIES.index("final class AndroidVpnMutationGuard")]
                 text = text[:start] + "final class AndroidNodeStore {\n" + constants + node + methods + "\n}\n" + text[end:] + private_files + APP
-                text = text.replace("import org.json.JSONObject;", "import org.json.JSONObject; import org.json.JSONArray; import java.security.MessageDigest; import java.nio.charset.StandardCharsets; import android.util.Base64;")
+                text = text.replace("import org.json.JSONObject;", "import org.json.JSONObject; import org.json.JSONArray; import java.security.MessageDigest; import java.nio.charset.StandardCharsets; import android.util.Base64; import java.util.Set; import java.util.HashSet;")
             if path.endswith("/Libbox.java"):
                 begin = text.index(" private static String call(")
                 end = text.index(" public static String routerCompilePQProfile(", begin)

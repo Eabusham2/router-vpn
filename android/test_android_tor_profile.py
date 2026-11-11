@@ -498,13 +498,14 @@ def run():
                 # excluding Android's unrelated preference/storage handles.
                 source = (JAVA / "AndroidNodeStore.java").read_text()
                 methods = source[source.index("    static String stableNodeIdentity("):source.index("    static String deriveId(")]
+                methods += source[source.index("    static JSONArray orderedSelection("):source.index("    synchronized void restoreSelection(")]
                 methods += source[source.index("    private static String wireGuardPeerPublicKey("):source.index("    private static JSONObject load(")]
                 methods += next(line for line in source.splitlines() if "private static String hex(byte[] data)" in line)
                 constants = "\n".join(line for line in source.splitlines() if any(part in line for part in ("private static final String NODE_PROOF_DOMAIN =", "static final int MAX_PROFILE_SCHEMA =", "static final int MAX_BUNDLE =")))
                 start, end = text.index("final class AndroidNodeStore {"), text.index("final class AndroidKillSwitchPolicy {")
                 external_boundary = "" if "AndroidExternalPolicy" in EXTRA_SOURCES else EXTERNAL_BOUNDARY
                 text = text[:start] + "final class AndroidNodeStore {\n" + constants + "\n" + methods + "\n}\n" + text[end:] + TOR_BOUNDARIES + external_boundary
-                text = text.replace("import org.json.JSONObject;", "import org.json.JSONObject; import org.json.JSONArray; import java.security.MessageDigest; import java.nio.charset.StandardCharsets; import android.util.Base64;")
+                text = text.replace("import org.json.JSONObject;", "import org.json.JSONObject; import org.json.JSONArray; import java.security.MessageDigest; import java.nio.charset.StandardCharsets; import android.util.Base64; import java.util.Set; import java.util.HashSet;")
             if path.endswith("/Libbox.java"):
                 begin = text.index(" private static String call(")
                 end = text.index(" public static String routerCompilePQProfile(", begin)
