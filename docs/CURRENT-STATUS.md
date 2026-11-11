@@ -9,7 +9,7 @@ completion of the current commit's packages, physical devices or deployment.
 ## November 11 later continuation: Android ordered native ownership
 
 The [native repair and ordered-path evidence ledger](CONTINUATION-EVIDENCE-2026-11-11-NATIVE-REPAIRS.md)
-continues from live `62bfab03` and records published source through `2ef6c4b4`.
+continues from live `62bfab03` and records published source through `0a3f8e3e`.
 Original requirement passages and the historical 1–356 index, C1–C7, product
 fixes, map-first request and additional-node corrections were recovered again.
 The earlier `745b3e41` release does not certify the current source.
@@ -21,7 +21,8 @@ cleanup. Old service publications cannot overwrite replacements. The map shows
 entry/intermediate/final roles and explicitly identified routed HTTP proof
 responses; its native observation runs off the UI thread. Emergency Disconnect
 and retained usage cover all original members. The published local scope is
-two through eight paired members with WG prefixes and an SS2022 final.
+two through eight paired members with WG, AWG2 Fast or AWG2 Strong prefixes
+and an SS2022 final; Android mode/capture integration is published at `6ec7e96f`.
 
 Startup Last and temporary Speed Lab restoration now retain that complete ordered
 path and require fresh proof of the original Local execution choice. Permission
@@ -32,6 +33,31 @@ Other graph families, general Server/Compare
 composition, broader counts, remaining measurements and Unix host coverage
 remain requirements. Host fixture checks do not establish APK/JNI execution,
 physical-device networking or visual acceptance.
+
+The shared ordered compiler at `62f2e90d` additionally accepts the exact WG,
+AWG2 Fast and AWG2 Strong prefix modes while retaining all original Amnezia
+parameters, peer identities and per-prefix policies. Desktop ordered selection,
+source capture and saved-profile retention are published at `81bb8205`, together
+with mixed native peer and installed-host fixtures. The actual WG/Amnezia
+component suite met all 123 required peer verdicts, and the complete desktop
+source/capture/ownership race gate passed. Installed system-TUN and physical
+execution remain CI evidence; local namespace creation was denied. Apple
+per-prefix editing and complete standard-WG identity capture are published at
+`ccc919c0`. Windows WPF and macOS AppKit retain the selected variants at
+`09b6b148`. Their capability gates remain intact. The public desktop HTTP
+admission path still lacks its complete ordered launch integration, and the
+installed Linux GTK ordered editor is still missing. Those paths and the
+protected macOS ordered native host remain separate implementation work.
+None of these source and component results establish actual device acceptance.
+
+The current source audits and profile fixtures now include the shipping
+asynchronous Speed Lab and Product capture flows. The permission fixture queues
+UI delivery and joins the original workers; its causal controls reject stale
+capture, wrong ownership and impossible inline UI execution. These fixture
+repairs preserve the underlying source checks and native boundaries.
+The Product dialog fixture at `0a3f8e3e` now composes the actual ordered chooser,
+catalog capture and paired identity helpers; its 430 checks and 12 causal
+controls passed without replacing those behaviors with accepting stubs.
 
 The recorded native macOS PF/socket/utun gate passed on Intel and Apple Silicon
 at `52576a3e`. Newer source fixes repair the Tor/usage fixture compositions and
