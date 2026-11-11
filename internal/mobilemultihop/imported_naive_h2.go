@@ -2,6 +2,7 @@ package mobilemultihop
 
 import (
 	"errors"
+	"net/netip"
 	"reflect"
 	"strconv"
 
@@ -57,14 +58,32 @@ func importedNaiveDNS(graph, final map[string]any, mode string, lowerUDP bool) e
 		return err
 	}
 	// The strict Naive validator above requires the original literal endpoint
-	// and self-contained TLS identity. With no final Start Layer, Cronet's
-	// exact literal/SNI mapping establishes H2 without consulting the lower
-	// resolver. Keep that complete resolver attached: it remains an owned,
-	// unusable fallback, not permission to send UDP through CONNECT. Limit
-	// this case to a single literal UDP application resolver; hostname DNS,
-	// DoH3 and layered final bootstraps retain their existing capability gate.
-	literalH2UDP := mode == "naive-h2" && detour == "" && count == 1 &&
+	// and self-contained TLS identity. Cronet's exact literal/SNI mapping
+	// establishes H2 without consulting the lower resolver, including the
+	// remote literal service inside the separately validated AES/XOR layer.
+	// Keep that complete resolver attached to its original layer: it remains
+	// an owned, unusable fallback, not lower UDP authority through CONNECT.
+	// Only a single literal UDP application resolver qualifies; hostname DNS
+	// and DoH3 retain their existing capability gate.
+	literalH2UDP := mode == "naive-h2" && count == 1 &&
 		predecessorText(servers[0].(map[string]any), "type") == "udp"
+	if literalH2UDP && detour != "" {
+		var layer map[string]any
+		outbounds, _ := graph["outbounds"].([]any)
+		for _, raw := range outbounds {
+			value, _ := raw.(map[string]any)
+			if predecessorText(value, "tag") != detour {
+				continue
+			}
+			if layer != nil {
+				return bad
+			}
+			layer = value
+		}
+		// A hostname on the outer AES peer would still require a working
+		// lower resolver. The inner literal/SNI mapping cannot provide it.
+		literalH2UDP = importedNaiveLiteralStartLayer(layer)
+	}
 	names := map[string]string{ExternalDNSTag: "routervpn-predecessor-bootstrap-0"}
 	if count == 2 {
 		names["external-dns-bootstrap"] = "routervpn-predecessor-bootstrap-1"
@@ -120,6 +139,14 @@ func importedNaiveDNS(graph, final map[string]any, mode string, lowerUDP bool) e
 		}
 	}
 	return nil
+}
+
+func importedNaiveLiteralStartLayer(layer map[string]any) bool {
+	if layer == nil || layer["type"] != "shadowsocks" && layer["type"] != "routervpn-aes-xor" || layer["method"] != NativeStartLayerMethod {
+		return false
+	}
+	ip, err := netip.ParseAddr(predecessorText(layer, "server"))
+	return err == nil && ip.Zone() == "" && !ip.Is4In6()
 }
 
 // Called only after the complete original Naive bootstrap tree has passed the

@@ -294,6 +294,10 @@ NAIVE_CONNECT_LITERAL_ROOT = "TestRouterVPNDesktopNodeNaiveCONNECTLiteral"
 NAIVE_CONNECT_LITERAL_CASES = tuple(carrier+"/"+endpoint+"/"+fault
     for carrier in ("http-connect", "https-connect") for endpoint in ("192.0.2.77", "2001:db8::77")
     for fault in ("home-udp", "naive-password", "naive-server-name", "naive-certificate", "forced-query", "connect-auth", "connect-route"))
+NAIVE_CONNECT_LITERAL_CASES += tuple(carrier+"/"+endpoint+"/final-layer/"+layer+"/"+fault
+    for carrier in ("http-connect", "https-connect") for endpoint in ("192.0.2.77", "2001:db8::77")
+    for layer in ("aes-256-gcm", "aes-256-gcm+xor-whitening")
+    for fault in (("home-udp", "layer-password", "layer-whitening", "layer-route", "layer-bypass") if endpoint == "192.0.2.77" else ("home-udp",)))
 NAIVE_CONNECT_LITERAL_VERDICTS = (NAIVE_CONNECT_LITERAL_ROOT, *(NAIVE_CONNECT_LITERAL_ROOT+"/"+case for case in NAIVE_CONNECT_LITERAL_CASES))
 NAIVE_CONNECT_LITERAL_SUITE = ("naive-connect-literal-home", "./protocol/routervpnamnezia", "^"+NAIVE_CONNECT_LITERAL_ROOT+"$", NAIVE_CONNECT_LITERAL_VERDICTS)
 NAIVE_H3_LITERAL_ROOT = "TestRouterVPNDesktopNodeNaiveH3Literal"

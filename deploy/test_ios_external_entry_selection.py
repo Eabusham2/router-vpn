@@ -5,6 +5,7 @@ The node-store and native-mode readiness boundaries are deterministic doubles;
 the separate Swift/Go policy gate validates compiled native configurations.
 """
 from pathlib import Path
+import argparse
 import importlib.util
 import os
 import platform
@@ -450,6 +451,114 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   for other in ["naive-h3","split","max","max-tls-wg"]{try check("Naive H2 does not admit unrelated final "+other,!IOSImportedEntryMultihop.supports(entry:kind,final:other))}
   print("PASS Naive H2 picker \(checks) checks")
  }
+ static func naiveH2LiteralLayers(_ directory:String)throws {
+  func hash(_ data:Data)->String{CryptoKit.SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()}
+  func capturedProfile(_ raw:[String:Any])throws->RouterProfile {
+   var value=raw
+   for (key,fallback) in ["name":"Captured H2 literal path","endpoint":"","router_api":"","api_token":"","adguard_ipv4":"","adguard_ipv6":"","socks_host":"","socks_port":0,"socks_username":"","socks_password":""] as [String:Any] where value[key]==nil {value[key]=fallback}
+   return try JSONDecoder().decode(RouterProfile.self,from:encoded(value))
+  }
+  func compile(_ value:[String:String])throws->[String:Any]{try JSONSerialization.jsonObject(with:Data(RouterVPNTorTestCall(["Op":"imported-router","Config":String(decoding:encoded(value),as:UTF8.self)]).utf8)) as! [String:Any]}
+  let mode="naive-h2",layers=["off","aes-256-gcm","aes-256-gcm+xor-whitening"]
+  for kind in ["http-connect","https-connect"] {for entryLayer in layers {for finalLayer in layers {
+   let path=URL(fileURLWithPath:directory).appendingPathComponent(kind+"--naive-h2--"+entryLayer+"--"+finalLayer+".json"),originalBytes=try Data(contentsOf:path)
+   let source=try JSONDecoder().decode([String].self,from:originalBytes)
+   try check("literal H2 uses complete independently captured layers",source.count==9 && source[2]==mode && source[5].isEmpty==(finalLayer=="off"))
+   let capture=try JSONSerialization.jsonObject(with:Data(source[1].utf8)) as! [String:Any],first=try capturedProfile(capture["profile"] as! [String:Any])
+   var raw=try JSONSerialization.jsonObject(with:Data(source[4].utf8)) as! [String:Any]
+   // Select the original default Home UDP policy without rewriting its
+   // literal resolver, trust, credentials or either independent layer.
+   raw.removeValue(forKey:"dns_protocol")
+   let paired=try capturedProfile(raw)
+   try check("literal H2 retains exact captured CONNECT and layer choices",capture["protocol"] as? String==kind && (first.startLayer ?? "off")==entryLayer && (try IOSMultihopStartLayer.selected(raw))==finalLayer)
+   var original=ClientBundle.empty;original.selectedRouterID=first.id;original.routerProfiles=[first];original.profiles=[:]
+   var final=ClientBundle.empty;final.selectedRouterID=paired.id;final.routerProfiles=[paired];final.profiles=[mode:try JSONDecoder().decode([String:String].self,from:Data(source[3].utf8))]
+   if !source[5].isEmpty {final.profiles["shadowsocks"]=try JSONDecoder().decode([String:String].self,from:Data(source[5].utf8))}
+   let model=RouterVPNModel();model.bundle=final
+   IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:try encoded(final)]
+   try check("literal H2 picker admits its complete original layer pair "+kind+" "+entryLayer+" "+finalLayer,model.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
+   try model.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)
+   let held=try model.iosMultihopEntryBundle(for:model.bundle!)
+   try check("literal H2 save preserves both original layer sources",model.writes==1 && held.routerProfiles==original.routerProfiles && held.profiles==original.profiles && model.bundle!.profiles==final.profiles && model.bundle!.routerProfiles[0].startLayer==paired.startLayer)
+   try check("literal H2 save keeps default Home UDP and paired authority",model.bundle!.routerProfiles[0].dnsProtocol==nil && model.bundle!.routerProfiles[0].dnsMode==paired.dnsMode && model.bundle!.routerProfiles[0].adGuardIPv4==paired.adGuardIPv4 && model.bundle!.routerProfiles[0].nodeProofID==paired.nodeProofID && model.bundle!.routerProfiles[0].apiToken==paired.apiToken)
+   let configuration:[String:Any]=["engine":"multihop-libbox","mode":mode,"bundle":try encoded(model.bundle!),"entryBundle":try encoded(held)],owner=try IOSMultihopExecution.Source(configuration:configuration,digest:hash)
+   let receipt=try IOSMultihopExecution.StartupChoice(source:owner,execution:"local").encoded()
+   try check("literal H2 receipt binds its original selected path",owner.entryID==first.id && owner.exitID==paired.id && owner.entryMode==kind && owner.exitMode==mode && (try IOSMultihopExecution.StartupChoice.decode(receipt,source:owner)).source==owner)
+   let cold=RouterVPNModel();cold.bundle=try JSONDecoder().decode(ClientBundle.self,from:encoded(model.bundle!))
+   let coldEntry=try cold.iosMultihopEntryBundle(for:cold.bundle!),coldConfiguration:[String:Any]=["engine":"multihop-libbox","mode":mode,"bundle":try encoded(cold.bundle!),"entryBundle":try encoded(coldEntry)]
+   try check("literal H2 cold save restores both exact source owners",coldEntry.routerProfiles==original.routerProfiles && coldEntry.profiles==original.profiles && (try IOSMultihopExecution.Source(configuration:coldConfiguration,digest:hash))==owner)
+   let args=["config":source[0],"capture":source[1],"mode":source[2],"files":source[3],"profile":String(decoding:try encoded(raw),as:UTF8.self),"start":source[5],"dns":source[6]],graph=try compile(args),prior=try JSONSerialization.jsonObject(with:Data(source[8].utf8)) as! [String:Any]
+   let resolvers=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
+   try check("literal H2 compiler preserves captured encrypted path and route",try encoded(graph["outbounds"]!)==encoded(prior["outbounds"]!) && encoded(graph["route"]!)==encoded(prior["route"]!))
+   try check("literal H2 compiler keeps Home UDP final-owned",resolvers.count==2 && resolvers[0]["type"] as? String=="udp" && resolvers[0]["server"] as? String==paired.adGuardIPv4 && resolvers[0]["server_port"] as? Int==53 && resolvers[0]["detour"] as? String=="proxy")
+   try check("literal H2 compiler retains dormant lower resolver and layer owner",resolvers[1]["type"] as? String=="udp" && resolvers[1]["server"] as? String==paired.adGuardIPv4 && resolvers[1]["server_port"] as? Int==53 && resolvers[1]["detour"] as? String==(finalLayer=="off" ? "entry-wg":"start-layer-aes"))
+   for fault in ["h3","hostname-udp","literal-bootstrap"] {
+    var changed=raw
+    if fault=="h3"{changed["dns_protocol"]="h3"}
+    else if fault=="hostname-udp"{changed["dns_mode"]="custom";changed["dns_host"]="resolver.example.net"}
+    else {changed["dns_bootstrap"]=["server":["type":"tcp","tag":"external-dns-bootstrap","server":"203.0.113.54","server_port":5354,"detour":"proxy"],"query":["server":"external-dns-bootstrap","timeout":"3s"]] as [String:Any]}
+    var refused=final;refused.routerProfiles=[try capturedProfile(changed)]
+    let rejected=RouterVPNModel();rejected.bundle=refused;let before=try encoded(refused)
+    IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:before]
+    try check("literal H2 picker refuses widened DNS "+fault,!rejected.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
+    try reject("literal H2 save refuses widened DNS "+fault){try rejected.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)}
+    try check("literal H2 rejected DNS does not mutate saved source",rejected.writes==0 && encoded(rejected.bundle!)==before)
+    var changedArgs=args;changedArgs["profile"]=String(decoding:try encoded(changed),as:UTF8.self);changedArgs["dns"]=changed["dns_bootstrap"] == nil ? "":String(decoding:try encoded(changed["dns_bootstrap"]!),as:UTF8.self)
+    try reject("literal H2 compiler refuses widened DNS "+fault){_ = try compile(changedArgs)}
+   }
+   if entryLayer != "off" {
+    var missing=first;missing.external?.startLayer=nil
+    var next=original;next.routerProfiles=[missing]
+    IOSNodeBundleStore.shared.nodes=[first.id:try encoded(next),paired.id:try encoded(final)]
+    let rejected=RouterVPNModel();rejected.bundle=final
+    try check("literal H2 picker requires original entry layer",!rejected.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:missing).contains(mode))
+    try reject("literal H2 save requires original entry layer"){try rejected.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)}
+    try check("literal H2 missing entry layer preserves saved source",rejected.writes==0 && encoded(rejected.bundle!)==encoded(final))
+    var changedCapture=capture,entryRaw=capture["profile"] as! [String:Any],external=entryRaw["external"] as! [String:Any];external.removeValue(forKey:"start_layer");entryRaw["external"]=external;changedCapture["profile"]=entryRaw
+    var changedArgs=args;changedArgs["capture"]=String(decoding:try encoded(changedCapture),as:UTF8.self)
+    try reject("literal H2 compiler requires original entry layer"){_ = try compile(changedArgs)}
+   }
+   if finalLayer != "off" {
+    var missing=final;missing.profiles.removeValue(forKey:"shadowsocks")
+    IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:try encoded(missing)]
+    let rejected=RouterVPNModel();rejected.bundle=missing
+    try check("literal H2 picker requires original final layer",!rejected.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
+    try reject("literal H2 save requires original final layer"){try rejected.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)}
+    try check("literal H2 missing final layer preserves saved source",rejected.writes==0 && encoded(rejected.bundle!)==encoded(missing))
+    var changedArgs=args;changedArgs["start"]=""
+    try reject("literal H2 compiler requires original final layer"){_ = try compile(changedArgs)}
+    for fault in ["hostname","missing-peer","mapped-ipv6","scoped-ipv6"] {
+     var invalid=final,layer=final.profiles["shadowsocks"]!
+     var layerGraph=try JSONSerialization.jsonObject(with:Data(base64Encoded:layer["sing-box.json"]!)!) as! [String:Any],layerRows=layerGraph["outbounds"] as! [[String:Any]]
+     let layerIndex=layerRows.firstIndex(where:{$0["type"] as? String=="shadowsocks"})!
+     if fault=="missing-peer"{layerRows[layerIndex].removeValue(forKey:"server")}
+     else {layerRows[layerIndex]["server"]=fault=="hostname" ? "layer.example.net":fault=="mapped-ipv6" ? "::ffff:192.0.2.44":"2001:db8::44%en0"}
+     layerGraph["outbounds"]=layerRows;layer["sing-box.json"]=try encoded(layerGraph).base64EncodedString();invalid.profiles["shadowsocks"]=layer
+     let refused=RouterVPNModel();refused.bundle=invalid
+     IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:try encoded(invalid)]
+     try check("literal H2 picker refuses final AES "+fault,!refused.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
+     try reject("literal H2 save refuses final AES "+fault){try refused.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)}
+     try check("literal H2 invalid layer refusal preserves captured source",refused.writes==0 && encoded(refused.bundle!)==encoded(invalid))
+     changedArgs=args;changedArgs["start"]=String(decoding:try encoded(layer),as:UTF8.self)
+     try reject("literal H2 compiler refuses final AES "+fault){_ = try compile(changedArgs)}
+     if fault=="hostname" {
+      var tcp=invalid,tcpRaw=raw;tcp.routerProfiles[0].dnsProtocol="tcp";tcpRaw["dns_protocol"]="tcp"
+      let selection=RouterVPNModel();selection.bundle=tcp
+      IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:try encoded(tcp)]
+      try check("H2 TCP picker retains earlier eligibility before native source validation",selection.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
+      try selection.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)
+      try check("H2 hostname layer retains saved TCP policy and original assets",selection.writes==1 && selection.bundle!.routerProfiles[0].dnsProtocol=="tcp" && selection.bundle!.profiles==tcp.profiles)
+      changedArgs["profile"]=String(decoding:try encoded(tcpRaw),as:UTF8.self)
+      // The picker/native-readiness double does not establish executable
+      // source authority: the shared SS compiler already requires a literal.
+      try reject("H2 compiler preserves existing hostname layer refusal with TCP DNS"){_ = try compile(changedArgs)}
+     }
+    }
+   }
+   try check("literal H2 fixture never modifies its exported source",try Data(contentsOf:path)==originalBytes)
+  }}}
+  print("PASS Naive H2 literal layered picker \(checks) checks")
+ }
  static func naiveH3(_ path:String)throws {
   func hash(_ data:Data)->String{CryptoKit.SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()}
   let mode="naive-h3",source=try JSONDecoder().decode([String].self,from:Data(contentsOf:URL(fileURLWithPath:path)))
@@ -656,6 +765,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "pq-reality" {try pqReality(CommandLine.arguments[3]);return}
   if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "xhttp-reality" {try pqReality(CommandLine.arguments[3],"reality-xhttp");return}
   if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "naive-h2" {try naiveH2(CommandLine.arguments[3]);return}
+  if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "naive-h2-literal" {try naiveH2LiteralLayers(CommandLine.arguments[3]);return}
   if CommandLine.arguments.count == 4 && CommandLine.arguments[2] == "naive-h3" {try naiveH3(CommandLine.arguments[3]);return}
   if CommandLine.arguments.count == 5 && CommandLine.arguments[2] == "selected-dns" { try selectedDNS(finalBundle,paired,CommandLine.arguments[3],CommandLine.arguments[4]);return }
   if CommandLine.arguments.count == 5 && CommandLine.arguments[2] == "packet-reality" {try packetReality(CommandLine.arguments[4],CommandLine.arguments[3]);return}
@@ -1203,7 +1313,35 @@ def validate_imported_picker(view):
         raise ValueError('Imported entry requirements must describe its one paired final node')
 
 
-def main():
+def export_naive_h2_sources(work):
+    sources = work / 'naive-h2-sources'
+    sources.mkdir()
+    subprocess.run(['go', 'test', './internal/mobilemultihop', '-run', '^TestImportedNaiveH2IndependentLayers$',
+                    '-count=1', '-timeout=30s'], cwd=ROOT, check=True, timeout=45,
+                   env=dict(os.environ, ROUTERVPN_IMPORTED_NAIVE_H2_FIXTURES=str(sources)))
+    return sources
+
+
+def verify_naive_h2_literal(work, compiler, runtime_env, sources):
+    originals = {}
+    for kind in ('http-connect', 'https-connect'):
+        for first in ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening'):
+            for last in ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening'):
+                name = kind+'--naive-h2--'+first+'--'+last+'.json'
+                path = sources / name
+                if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= 1 << 20:
+                    raise ValueError('Literal H2 picker requires eighteen complete bounded layer captures')
+                originals[name] = path.read_bytes()
+    result = subprocess.run([str(work/'test'), str(compiler), 'naive-h2-literal', str(sources)],
+                            env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
+    if result.stdout != 'PASS Naive H2 literal layered picker 738 checks\n':
+        raise ValueError('Missing or foreign literal H2 layered picker verdict: '+repr(result.stdout))
+    if any((sources/name).read_bytes() != value for name,value in originals.items()):
+        raise ValueError('Literal H2 picker changed its original independent layer captures')
+    print(result.stdout, end='', flush=True)
+
+
+def main(only_naive_h2_literal=False):
     view = (APP / 'IOSMultihopView.swift').read_text()
     validate_imported_picker(view)
     capture = view[view.index('@MainActor\nextension RouterVPNModel {'):view.index('struct IOSMultihopView: View')]
@@ -1226,6 +1364,9 @@ def main():
         subprocess.run(['swiftc', '-swift-version', '6', '-module-cache-path', str(work/'module-cache'), '-emit-module', '-emit-library', '-module-name', 'Libbox', str(library), '-emit-module-path', str(work/'Libbox.swiftmodule'), '-o', str(work/('libLibbox'+suffix))], check=True, timeout=90)
         subprocess.run(['swiftc', '-swift-version', '6', '-module-cache-path', str(work/'module-cache'), *crypto_flags, '-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSMultihopExecution.swift'), str(APP / 'Models.swift'), str(APP / 'IOSExternalExecution.swift'), str(APP / 'IOSMultihopStartLayer.swift'), str(source), '-o', str(work / 'test')], check=True, timeout=90)
         runtime_env = dict(os.environ, **crypto_env, ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-aes-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-xor-client.json'))
+        if only_naive_h2_literal:
+            verify_naive_h2_literal(work, compiler, runtime_env, export_naive_h2_sources(work))
+            return
         baseline = subprocess.run([str(work / 'test'), str(compiler)], env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
         expected_baseline = 'Apple external entry selection: PASS (3231 shipping Swift checks; storage/native-readiness boundaries doubled)\n'
         if baseline.stdout != expected_baseline:
@@ -1259,11 +1400,7 @@ def main():
         if xhttp.stdout != 'PASS XHTTP picker 24 checks\n' or xhttp_source.read_bytes() != original_xhttp:
             raise ValueError('Missing, foreign, or source-mutating XHTTP picker verdict: '+repr(xhttp.stdout))
         print(xhttp.stdout, end='', flush=True)
-        naive_sources = work / 'naive-h2-sources'
-        naive_sources.mkdir()
-        subprocess.run(['go', 'test', './internal/mobilemultihop', '-run', '^TestImportedNaiveH2IndependentLayers$',
-                        '-count=1', '-timeout=30s'], cwd=ROOT, check=True, timeout=45,
-                       env=dict(os.environ, ROUTERVPN_IMPORTED_NAIVE_H2_FIXTURES=str(naive_sources)))
+        naive_sources = export_naive_h2_sources(work)
         naive_source = naive_sources / 'http-connect--naive-h2--off--off.json'
         original_naive = naive_source.read_bytes()
         naive = subprocess.run([str(work/'test'), str(compiler), 'naive-h2', str(naive_source)],
@@ -1271,6 +1408,7 @@ def main():
         if naive.stdout != 'PASS Naive H2 picker 107 checks\n' or naive_source.read_bytes() != original_naive:
             raise ValueError('Missing, foreign, or source-mutating Naive H2 picker verdict: '+repr(naive.stdout))
         print(naive.stdout, end='', flush=True)
+        verify_naive_h2_literal(work, compiler, runtime_env, naive_sources)
         naive_h3_sources = work / 'naive-h3-sources'
         naive_h3_sources.mkdir()
         subprocess.run(['go', 'test', './internal/mobilemultihop', '-run', '^TestImportedNaiveH3IndependentLayers$',
@@ -1339,4 +1477,6 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--only-naive-h2-literal', action='store_true', help='Run only the compiler-linked literal H2 layer matrix')
+    main(parser.parse_args().only_naive_h2_literal)

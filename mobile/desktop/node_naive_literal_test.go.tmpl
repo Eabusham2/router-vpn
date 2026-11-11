@@ -157,13 +157,41 @@ func TestRouterVPNDesktopNodeNaiveCONNECTLiteral(t *testing.T) {
 			}
 		}
 	}
+
+	// These are real final-layer peers. The lower CONNECT transport still
+	// refuses every datagram; Home UDP must use the authenticated Naive UoT.
+	for _, carrier := range []string{"http-connect", "https-connect"} {
+		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, endpoint := range []string{"192.0.2.77", "2001:db8::77"} {
+				faults := []string{""}
+				if endpoint == "192.0.2.77" {
+					faults = append(faults, "layer-password", "layer-whitening", "layer-route", "layer-bypass")
+				}
+				for _, fault := range faults {
+					name := fault
+					if name == "" {
+						name = "home-udp"
+					}
+					t.Run(carrier+"/"+endpoint+"/final-layer/"+layer+"/"+name, func(t *testing.T) {
+						desktopNaiveLiteralTransportCarrierLayer(t, "udp", fault, endpoint, "", carrier, layer)
+					})
+				}
+			}
+		}
+	}
 }
 
 func desktopNaiveLiteralTransportCarrier(t *testing.T, resolverKind, fault, endpoint, hostStyle, carrier string) {
+	desktopNaiveLiteralTransportCarrierLayer(t, resolverKind, fault, endpoint, hostStyle, carrier, "")
+}
+
+func desktopNaiveLiteralTransportCarrierLayer(t *testing.T, resolverKind, fault, endpoint, hostStyle, carrier, layer string) {
 	t.Helper()
 	var peer *desktopNodeLayerServer
 	var lower *desktopNaiveLiteralWitnessLower
 	var sourceSHA string
+	var layerPeer *desktopExternalInstalledSSPeer
+	var layerCapture, entryCapture map[string]any
 	dns := new(desktopNaiveLiteralWitnessDNS)
 	manager := &desktopNaiveLiteralWitnessDNSManager{transport: &desktopNaiveLiteralWitnessDNSTransport{kind: resolverKind}}
 	completed := false
@@ -175,6 +203,13 @@ func desktopNaiveLiteralTransportCarrier(t *testing.T, resolverKind, fault, endp
 		}
 		if !completed {
 			return
+		}
+		if layerPeer != nil {
+			stats := layerPeer.stats()
+			t.Logf("final_layer=%s physical_tcp=%d physical_udp=%d streams=%d packets=%d", layer, stats.PhysicalTCP, stats.PhysicalUDP, stats.Streams, stats.Packets)
+			if stats.PhysicalUDP != 0 || stats.Packets != 0 || fault == "" && stats.Streams == 0 {
+				t.Error("final layer did not retain its actual stream-only route", stats)
+			}
 		}
 		if lower.udp.Load() != 0 {
 			lower.mu.Lock()
@@ -194,7 +229,7 @@ func desktopNaiveLiteralTransportCarrier(t *testing.T, resolverKind, fault, endp
 			if dns.exchanges.Load() != 0 || dns.lookups.Load() != 0 {
 				t.Error("literal/SNI mapping used lower bootstrap DNS")
 			}
-			if strings.HasPrefix(fault, "connect-") {
+			if strings.HasPrefix(fault, "connect-") || strings.HasPrefix(fault, "layer-") {
 				if lower.calls.Load() == 0 || peer.rawTCP.Load() != 0 {
 					t.Error("changed CONNECT authority reached the final TLS peer")
 				}
@@ -244,7 +279,7 @@ func desktopNaiveLiteralTransportCarrier(t *testing.T, resolverKind, fault, endp
 		})
 	}
 	peer, files = startDesktopNodeNaiveServer(t, "naive-h2", netip.MustParseAddr("127.0.0.1"), dnsAddress)
-	if fault != "" && fault != "forced-query" && !strings.HasPrefix(fault, "connect-") {
+	if fault != "" && fault != "forced-query" && !strings.HasPrefix(fault, "connect-") && !strings.HasPrefix(fault, "layer-") {
 		files = desktopNodeNaiveAssets(t, files, fault)
 	}
 	var assets map[string]string
@@ -284,17 +319,40 @@ func desktopNaiveLiteralTransportCarrier(t *testing.T, resolverKind, fault, endp
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest := sha256.Sum256(encoded)
-	sourceSHA = hex.EncodeToString(digest[:])
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	t.Cleanup(cancel)
 	expected := M.ParseSocksaddrHostPort(endpoint, uint16(finalRaw["server_port"].(float64)))
-	lower = &desktopNaiveLiteralWitnessLower{desktopImportedSOCKSXrayPhysical: newDesktopImportedCONNECTXrayPhysical(expected, peer.tcp.Addr().String())}
+	physical := peer.tcp.Addr().String()
+	layerPassword := ""
+	if layer != "" {
+		inner := M.ParseSocksaddrHostPort("127.0.0.1", expected.Port).String()
+		layerCtx, layerCancel := context.WithCancel(ctx)
+		server := &desktopNodeLayerServer{ctx: layerCtx, cancel: layerCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: inner, Physical: physical}}}
+		if fault == "layer-route" {
+			server.routes[0].Destination = "127.0.0.2:4444"
+		}
+		layerPassword = desktopSSReferenceKey("2022-blake3-aes-256-gcm", 'v')
+		kind := "shadowsocks"
+		if layer == "aes-256-gcm+xor-whitening" {
+			kind = "routervpn-aes-xor"
+		}
+		raw := map[string]any{"type": kind, "password": layerPassword}
+		peerFault := ""
+		if fault == "layer-password" {
+			peerFault = "layer-key"
+		}
+		reference := desktopImportedSOCKSLayerProvider(t, server, raw, peerFault)
+		layerPeer = &reference
+		physical = reference.address
+		expected = M.ParseSocksaddrHostPort(endpoint, netip.MustParseAddrPort(physical).Port())
+		finalRaw["server"] = "127.0.0.1"
+	}
+	lower = &desktopNaiveLiteralWitnessLower{desktopImportedSOCKSXrayPhysical: newDesktopImportedCONNECTXrayPhysical(expected, physical)}
 	t.Cleanup(func() {
 		if err := lower.Close(); err != nil {
 			t.Error("original lower cleanup", err)
 		}
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-	t.Cleanup(cancel)
 	owners := &desktopImportedSOCKSXrayManager{owners: map[string]adapter.Outbound{lower.Tag(): lower}}
 	owned := service.ContextWith[adapter.OutboundManager](ctx, owners)
 	owned = service.ContextWith[adapter.DNSTransportManager](owned, manager)
@@ -302,7 +360,7 @@ func desktopNaiveLiteralTransportCarrier(t *testing.T, resolverKind, fault, endp
 	finalRaw["detour"] = lower.Tag()
 	if carrier != "" {
 		entryCtx, entryCancel := context.WithCancel(ctx)
-		entryServer := &desktopNodeLayerServer{ctx: entryCtx, cancel: entryCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: expected.String(), Physical: peer.tcp.Addr().String()}}}
+		entryServer := &desktopNodeLayerServer{ctx: entryCtx, cancel: entryCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: expected.String(), Physical: physical}}}
 		var certificate *STD_TLS.Certificate
 		raw := map[string]any{"type": "http", "tag": "entry-wg", "server": "192.0.2.88", "username": "captured-entry", "password": "captured-entry-secret", "detour": lower.Tag()}
 		if carrier == "https-connect" {
@@ -321,6 +379,7 @@ func desktopNaiveLiteralTransportCarrier(t *testing.T, resolverKind, fault, endp
 		if fault == "connect-auth" {
 			raw["password"] = "foreign-entry-secret"
 		}
+		entryCapture = raw
 		entry := desktopImportedCONNECTXrayOutbound(t, owned, raw)
 		owners.owners["entry-wg"] = entry
 		finalRaw["detour"] = "entry-wg"
@@ -332,7 +391,33 @@ func desktopNaiveLiteralTransportCarrier(t *testing.T, resolverKind, fault, endp
 			}
 		})
 	}
+	if layer != "" {
+		const tag = "start-layer-aes"
+		clientLayer := layer
+		if fault == "layer-whitening" {
+			if layer == "aes-256-gcm" {
+				clientLayer = "aes-256-gcm+xor-whitening"
+			} else {
+				clientLayer = "aes-256-gcm"
+			}
+		}
+		layerCapture = map[string]any{"tag": tag, "mode": clientLayer, "detour": finalRaw["detour"], "server": endpoint, "server_port": expected.Port, "password": layerPassword}
+		outer := desktopSSReferenceLayerClient(t, owned, tag, finalRaw["detour"].(string), endpoint, expected.Port, clientLayer, layerPassword)
+		owners.owners[tag] = outer
+		if fault != "layer-bypass" {
+			finalRaw["detour"] = tag
+		}
+		if err := multihoprelay.ValidateNaiveRoutedTransport(finalRaw, "naive-h2"); err != nil {
+			t.Fatal("original layered native H2 transport changed", err)
+		}
+	}
 	finalRaw["domain_resolver"] = map[string]any{"server": manager.transport.Tag(), "disable_cache": true}
+	identity, err := json.Marshal(map[string]any{"final": finalRaw, "final_layer": layerCapture, "entry": entryCapture, "bootstrap": manager.transport.Tag(), "bootstrap_type": resolverKind})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(identity)
+	sourceSHA = hex.EncodeToString(digest[:])
 	if fault == "forced-query" {
 		// Deliberate native-only mutation: shipping source validation above
 		// forbids this hostname. It proves the DNS observation is live.

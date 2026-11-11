@@ -98,8 +98,8 @@ func compiledPhysicalEgressWithDesktopProof(configJSON string, networks []string
 	return compiledPhysicalEgressWithCapturedNaive(configJSON, networks, desktop, proofTag, false)
 }
 
-// Only the revalidated imported constructor may identify its unlayered literal
-// H2 resolver as dormant. The resolver stays in the executable and capture;
+// Only the revalidated imported constructor may identify its literal H2 and
+// optional literal final-layer resolver as dormant. It stays in the executable and capture;
 // recording its identity must not manufacture an unsupported lower UDP socket.
 func compiledPhysicalEgressWithCapturedNaive(configJSON string, networks []string, desktop *externalDesktopRecorder, proofTag string, dormantNaiveUDP bool) ([]PhysicalEgress, error) {
 	var graph map[string]any
@@ -238,9 +238,15 @@ func (p *nodeEgressProjection) node(tag, payload string) error {
 			server := p.resolvers[query.Server]
 			literal, literalErr := netip.ParseAddr(predecessorText(value, "server"))
 			_, resolverErr := netip.ParseAddr(predecessorText(server, "server"))
+			lower := predecessorText(value, "detour")
+			ownedLower := lower == "entry-wg"
+			if lower == NativeStartLayerTag {
+				layer := p.nodes[lower]
+				ownedLower = importedNaiveLiteralStartLayer(layer) && layer["detour"] == "entry-wg"
+			}
 			if err != nil || !query.Present || query.Server != "routervpn-predecessor-bootstrap-0" ||
 				literalErr != nil || !literal.IsValid() || resolverErr != nil || value["quic"] != false ||
-				value["detour"] != "entry-wg" || server["type"] != "udp" || server["detour"] != "entry-wg" ||
+				!ownedLower || server["type"] != "udp" || server["detour"] != lower ||
 				!externalPort(server["server_port"]) {
 				return nodePhysicalEgressError
 			}

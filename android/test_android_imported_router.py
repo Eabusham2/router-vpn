@@ -291,6 +291,19 @@ public final class ImportedRouterTest {
    reject("Naive H2 replay refuses replaced original "+fault,()->AndroidImportedRouterPath.prepareExecution(compiled.config,compiled.metadata,changed.toString()));
   }
   if(layer.equals("off")&&entry.startLayer==null)naiveH2DNS(entry,bundle);
+  if(connect){
+   JSONObject home=object(before);profile(home).remove("dns_protocol");String capturedHome=home.toString();
+   AndroidImportedRouterPath.Compiled retained=AndroidImportedRouterPath.compile(entry,home,mode,"local");
+   JSONObject homeGraph=object(retained.config);JSONArray homeDNS=homeGraph.getJSONObject("dns").getJSONArray("servers");
+   JSONObject selectedHome=homeDNS.getJSONObject(0),bootstrapHome=homeDNS.getJSONObject(1),homeFinal=outbound(homeGraph,"routervpn-execution-local");
+   check(homeDNS.length()==2&&selectedHome.getString("type").equals("udp")&&selectedHome.getString("server").equals(profile(home).getString("adguard_ipv4"))&&selectedHome.getInt("server_port")==53&&selectedHome.getString("detour").equals("proxy"),"CONNECT literal layered path changed default Home UDP");
+   check(bootstrapHome.getString("type").equals("udp")&&bootstrapHome.getString("server").equals(selectedHome.getString("server"))&&bootstrapHome.getString("detour").equals(outer)&&homeFinal.getString("detour").equals(outer)&&homeFinal.getJSONObject("domain_resolver").getString("server").equals(bootstrapHome.getString("tag")),"CONNECT literal layered path changed its dormant lower owner");
+   RouterMultihop replay=AndroidImportedRouterPath.prepareExecution(retained.config,retained.metadata,retained.input);
+   try{check(replay.config().equals(retained.config)&&replay.sourceSHA256().equals(retained.source),"CONNECT literal layered replay replaced original graph/source");}finally{replay.close();}
+   check(home.toString().equals(capturedHome)&&RouterMultihop.open==0,"CONNECT literal layered capture changed source or leaked owner");
+   JSONObject stale=object(retained.input);stale.put("exit_profile",stale.getString("exit_profile")+" ");
+   reject("CONNECT literal layered replay rejects substituted original source",()->AndroidImportedRouterPath.prepareExecution(retained.config,retained.metadata,stale.toString()));
+  }
   check(bundle.toString().equals(before),"Naive H2 validation rewrote original sources");
  }
  static void naiveH2DNS(AndroidStandardExitStore.Entry entry,JSONObject original)throws Exception{

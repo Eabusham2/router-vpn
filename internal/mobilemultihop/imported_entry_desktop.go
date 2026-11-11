@@ -70,7 +70,7 @@ func (c *Controller) importedPhysicalEgress(desktop *externalDesktopRecorder) ([
 	}
 	dormantNaiveUDP := false
 	if c.meta.ExitMode == "naive-h2" && c.meta.TransportCapability == "naive-h2-stream" &&
-		(c.meta.ExitStartLayer == "" || c.meta.ExitStartLayer == "off") {
+		(c.meta.ExitStartLayer == "" || c.meta.ExitStartLayer == "off" || c.meta.ExitStartLayer == "aes-256-gcm" || c.meta.ExitStartLayer == "aes-256-gcm+xor-whitening") {
 		servers, _ := graph["dns"].(map[string]any)["servers"].([]any)
 		dormantNaiveUDP = len(servers) == 2 && predecessorText(servers[0].(map[string]any), "type") == "udp"
 	}
