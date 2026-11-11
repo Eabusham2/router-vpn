@@ -17,7 +17,8 @@ OWNER = 'routervpn-tor-source.json'
 # standalone Tor tests must compile those same bytes instead of a protocol copy.
 LEASE_PACKAGES = ('multihoprelay', 'applexray', 'awgpolicy', 'mobilepq',
                   'nativecomposite', 'nativeopenvpn', 'nativesip003',
-                  'mobilemultihop', 'routechoice', 'hopmeasure', 'mobileperf')
+                  'mobilemultihop', 'routechoice', 'hopmeasure', 'mobileperf',
+                  'mobilemtu', 'mtuprobe')
 spec = importlib.util.spec_from_file_location('routervpn_native_tor_pack', ROOT/'deploy/prepare-mobile-torpack.py')
 TORPACK = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(TORPACK)

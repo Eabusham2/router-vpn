@@ -11,7 +11,7 @@ CORE='1ac1a339cb1223e9c70eae14c44411c75033c02d'
 VERSION='v3.1.20260814'
 MODULE='github.com/amnezia-vpn/amneziawg-go/v3'
 SUM='h1:l2AhBD+sFycU8Im81n/bZORMxW7fWtlZJEuJ4Hh0+z0='
-POLICY_PACKAGES=('awgpolicy','routechoice','multihoprelay','mobilemultihop','mobilepq','applexray','startwhitening','nativesip003','nativecomposite','mobileperf','hopmeasure','nativeopenvpn')
+POLICY_PACKAGES=('awgpolicy','routechoice','multihoprelay','mobilemultihop','mobilepq','applexray','startwhitening','nativesip003','nativecomposite','mobileperf','hopmeasure','nativeopenvpn','mobilemtu','mtuprobe')
 _scheduler_spec=importlib.util.spec_from_file_location('routervpn_gvisor_scheduler', ROOT/'deploy/prepare-gvisor-scheduler.py')
 SCHEDULER=importlib.util.module_from_spec(_scheduler_spec)
 _scheduler_spec.loader.exec_module(SCHEDULER)

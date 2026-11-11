@@ -17,6 +17,34 @@ spec.loader.exec_module(P)
 
 
 class PQReferencePreparation(unittest.TestCase):
+    def test_ordered_chain_mtu_imports_are_in_the_exact_standalone_policy_closure(self):
+        owner = P.BUILD.POLICY.AMNEZIA
+        with tempfile.TemporaryDirectory() as tmp:
+            core = Path(tmp)
+            owner.prepare_policies(core)
+            for package in ('mobilemtu', 'mtuprobe'):
+                self.assertIn(package, owner.POLICY_PACKAGES)
+                for source in (ROOT/'internal'/package).glob('*.go'):
+                    if source.name.endswith('_test.go'):
+                        continue
+                    expected = owner.OBSERVATION.rewrite(source.read_bytes())
+                    for dependency in owner.POLICY_PACKAGES:
+                        expected = expected.replace(('"router-vpn/internal/'+dependency+'"').encode(),
+                            ('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+dependency+'"').encode())
+                    destination = core/'experimental/libbox/routervpn'/package/source.name
+                    self.assertEqual(destination.read_bytes(), expected)
+                    self.assertIn(source, owner.policy_inputs())
+        # Omitting either real transitive package must still reject before any
+        # generated source is written; accepting unknown imports is not a fix.
+        for missing in ('mobilemtu', 'mtuprobe'):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmp:
+                core = Path(tmp)
+                packages = tuple(value for value in owner.POLICY_PACKAGES if value != missing)
+                with mock.patch.object(owner, 'POLICY_PACKAGES', packages):
+                    with self.assertRaisesRegex(ValueError, 'import closure is incomplete'):
+                        owner.prepare_policies(core)
+                self.assertEqual(list(core.iterdir()), [])
+
     def core(self, root):
         core = root/'core'
         core.mkdir()
