@@ -77,7 +77,7 @@ final class AndroidExternalPolicy {
  static String protocol(String p){return p.equals("http")?"http-connect":p.equals("https")?"https-connect":p;}
 }
 final class AndroidConnectionProfileStore {
- static AndroidNodeStore.ChainCapture orderedChoice;AndroidConnectionProfileStore(Context c,AndroidNodeStore n,AndroidStandardExitStore e){}AndroidNodeStore.ChainCapture currentOrderedPath()throws Exception{if(Thread.currentThread().getName().equals("main"))throw new AssertionError("ordered Product source capture ran on UI");AndroidNodeStore.holdWorker();if(orderedChoice==null)throw new AssertionError("permission UI must cancel before selecting a new ordered path");return orderedChoice;}ExternalSelection currentExternalPath(String id){throw new AssertionError("permission UI must cancel before selecting a new path");}
+ interface OrderedReadHook{void run()throws Exception;}static OrderedReadHook beforeOrderedRead;static AndroidNodeStore.ChainCapture orderedChoice;AndroidConnectionProfileStore(Context c,AndroidNodeStore n,AndroidStandardExitStore e){}AndroidNodeStore.ChainCapture currentOrderedPath()throws Exception{if(Thread.currentThread().getName().equals("main"))throw new AssertionError("ordered Product source capture ran on UI");if(beforeOrderedRead!=null)beforeOrderedRead.run();if(orderedChoice==null)throw new AssertionError("permission UI must cancel before selecting a new ordered path");return orderedChoice;}ExternalSelection currentExternalPath(String id){throw new AssertionError("permission UI must cancel before selecting a new path");}
  static final class ImportedRouterSelection{AndroidStandardExitStore.Entry entry;AndroidNodeStore.Node exit;String exitMode,execution;}ImportedRouterSelection currentImportedRouterPath(){throw new AssertionError("permission UI must cancel before path selection");}
  static final class ExternalSelection{final AndroidNodeStore.Node entry;final AndroidStandardExitStore.Entry ordinaryEntry,exit;final String entryMode,execution;
  ExternalSelection(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry ordinaryEntry,AndroidStandardExitStore.Entry exit,String mode,String execution){this.entry=entry;this.ordinaryEntry=ordinaryEntry;this.exit=exit;entryMode=mode;this.execution=execution;}boolean direct(){return entry==null&&ordinaryEntry==null;}}
@@ -143,7 +143,7 @@ final class AndroidNodeChainRuntime {
  void connect(AndroidNodeStore.ChainCapture capture,AndroidHomeStateStore.Snapshot idle,String selection,Callback callback){try{AndroidConnectionSelection.requireCurrent(context,new AndroidNodeStore(context),selection);connect(capture,idle,callback);}catch(Exception changed){callback.finished(false,changed.toString());}}
  void connectLast(AndroidNodeStore.ChainCapture capture,AndroidHomeStateStore.Snapshot idle,String selection,Callback callback){throw new AssertionError("ordinary permission cannot dispatch historical ordered startup");}
  void connectLast(AndroidNodeStore.ChainCapture capture,AndroidHomeStateStore.Snapshot idle,Callback callback){throw new AssertionError("ordinary permission cannot dispatch historical ordered startup");}
- void connect(AndroidNodeStore.ChainCapture capture,AndroidHomeStateStore.Snapshot idle,Callback callback){try{if(beforeAdmission!=null){beforeAdmission.run();beforeAdmission=null;}AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);if(idle!=null&&(idle.pathGeneration!=home.pathGeneration||!idle.sessionId.equals(home.sessionId)))throw new IllegalStateException("original permission Home owner changed");capture.requireCurrent();source=capture;starts++;callback.finished(true,"captured ordered dispatch");}catch(Exception changed){callback.finished(false,changed.getMessage());}}
+ void connect(AndroidNodeStore.ChainCapture capture,AndroidHomeStateStore.Snapshot idle,Callback callback){new Thread(()->{try{if(beforeAdmission!=null){beforeAdmission.run();beforeAdmission=null;}AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);if(idle!=null&&(idle.pathGeneration!=home.pathGeneration||!idle.sessionId.equals(home.sessionId)))throw new IllegalStateException("original permission Home owner changed");capture.requireCurrent();source=capture;starts++;callback.finished(true,"captured ordered dispatch");}catch(Exception changed){callback.finished(false,changed.getMessage());}},"routervpn-ordered-permission-runtime").start();}
  boolean isActiveOrTransitioning(){return busy;}boolean isConnected(){return connected;}
  List<AndroidNodeStore.ChainSource> activeSources(){return connected&&source!=null?source.members:Collections.emptyList();}
  List<String> activeModes(){return connected&&source!=null?source.modes:Collections.emptyList();}
@@ -199,8 +199,9 @@ import android.app.*;import android.os.*;import java.nio.file.*;import java.nio.
 public class ExternalPermissionTest {
  // ALL_CAPTURED_MODES
  static int checks;static void check(boolean ok,String message){checks++;if(!ok)throw new AssertionError(message);}
- static final class Callback implements AndroidUnifiedConnectionController.Callback {volatile int completions;volatile boolean ok;volatile String message="";Runnable validation;public void validate(){if(validation!=null)validation.run();}public void progress(String s){message=s;}public void finished(boolean b,String s){completions++;ok=b;message=s;}}
- static void awaitOrderedWork(){try{long until=System.nanoTime()+5_000_000_000L;while(true){List<Thread> workers=new ArrayList<>();for(Thread thread:Thread.getAllStackTraces().keySet())if(thread.isAlive()&&(thread.getName().startsWith("routervpn-ordered-permission-")||thread.getName().equals("routervpn-ordered-choice-capture")))workers.add(thread);if(workers.isEmpty())return;for(Thread worker:workers){long left=until-System.nanoTime();if(left<=0)throw new AssertionError("ordered permission worker did not complete");worker.join(Math.max(1,left/1_000_000));}}}catch(InterruptedException error){throw new AssertionError(error);}}
+ static final class Callback implements AndroidUnifiedConnectionController.Callback {volatile int completions;volatile boolean ok;volatile String message="";Runnable validation;public void validate(){if(validation!=null)validation.run();}public void progress(String s){message=s;}public void finished(boolean b,String s){check(Activity.onFixtureUI(),"permission callback ran outside its captured UI owner");completions++;ok=b;message=s;}}
+ static void awaitOrderedWork(){try{long until=System.nanoTime()+5_000_000_000L;while(true){Activity.drainFixtureUI();List<Thread> workers=new ArrayList<>();for(Thread thread:Thread.getAllStackTraces().keySet())if(thread.isAlive()&&(thread.getName().startsWith("routervpn-ordered-permission-")||thread.getName().equals("routervpn-ordered-choice-capture")))workers.add(thread);if(workers.isEmpty()){if(Activity.fixtureUIIdle())return;continue;}for(Thread worker:workers){long left=until-System.nanoTime();if(left<=0)throw new AssertionError("ordered permission worker did not complete");worker.join(Math.max(1,left/1_000_000));}}}catch(InterruptedException error){throw new AssertionError(error);}}
+ static boolean awaitHeldOrderedWorker()throws Exception{long until=System.nanoTime()+3_000_000_000L;while(AndroidNodeStore.workerEntered.getCount()!=0){Activity.drainFixtureUI();List<Thread> prior=new ArrayList<>();for(Thread thread:Thread.getAllStackTraces().keySet())if(thread.isAlive()&&thread.getName().startsWith("routervpn-ordered-permission-")&&!thread.getName().equals(AndroidNodeStore.heldWorker))prior.add(thread);long left=until-System.nanoTime();if(left<=0)return false;if(prior.isEmpty()){if(!Activity.fixtureUIIdle())continue;return AndroidNodeStore.workerEntered.await(left,java.util.concurrent.TimeUnit.NANOSECONDS);}for(Thread worker:prior){left=until-System.nanoTime();if(left<=0)return false;worker.join(Math.max(1,left/1_000_000));}}return true;}
  static void resetOwner()throws Exception{var owner=AndroidUnifiedConnectionController.class.getDeclaredField("permissionOwner");owner.setAccessible(true);owner.set(null,null);}
  static final class Fixture {
   final Activity activity=new Activity();final AndroidNodeStore nodes=new AndroidNodeStore(activity);final AndroidStandardExitStore.Entry exit=new AndroidStandardExitStore.Entry();final AndroidNodeStore.Node entry;
@@ -403,7 +404,7 @@ public class ExternalPermissionTest {
    AndroidNodeStore.heldWorker="routervpn-ordered-permission-admission";AndroidNodeStore.workerEntered=new java.util.concurrent.CountDownLatch(1);AndroidNodeStore.workerRelease=new java.util.concurrent.CountDownLatch(1);
    try{
     if(prompt)f.controller.onActivityResult(f.activity.permissionRequest,Activity.RESULT_OK);else f.controller.connectOrdered(capture,f.callback);
-    check(AndroidNodeStore.workerEntered.await(3,java.util.concurrent.TimeUnit.SECONDS),"ordered permission admission did not run on its worker");
+    check(awaitHeldOrderedWorker(),"ordered permission admission did not run on its worker");
     Bundle state=new Bundle();f.controller.savePending(state);AndroidUnifiedConnectionController old=f.controller;old.close();f.controller=new AndroidUnifiedConnectionController(f.activity,f.nodes);f.controller.restorePending(state,f.callback);
     AndroidNodeStore.workerRelease.countDown();awaitOrderedWork();
     check(f.callback.ok&&f.callback.completions==1&&AndroidRuntimeRegistry.instance.nodeChain.starts==1,"rotated granted ordered permission lost its process-owned approval");
@@ -415,7 +416,7 @@ public class ExternalPermissionTest {
    PermissionActivity ui=new PermissionActivity();ui.connection=f.controller;ui.nodeStore=f.nodes;ui.exitStore=new AndroidStandardExitStore(ui);
    AndroidNodeStore.heldWorker="routervpn-ordered-choice-capture";AndroidNodeStore.workerEntered=new java.util.concurrent.CountDownLatch(1);AndroidNodeStore.workerRelease=new java.util.concurrent.CountDownLatch(1);
    try{
-    ui.beginOrdered();check(AndroidNodeStore.workerEntered.await(3,java.util.concurrent.TimeUnit.SECONDS),"Product ordered capture did not run on worker");
+    ui.beginOrdered();check(awaitHeldOrderedWorker(),"Product ordered capture did not run on worker");
     if(change.equals("cancel"))ui.press();if(change.equals("selection"))android.content.Context.connectionPreferences.put("multihop_nodes","newer-order");if(change.equals("home"))AndroidHomeStateStore.advancePathGeneration(ui);if(change.equals("destroy"))ui.destroyed=true;
     AndroidNodeStore.workerRelease.countDown();awaitOrderedWork();
     if(change.equals("none")){ui.connection.onActivityResult(f.activity.permissionRequest,Activity.RESULT_OK);awaitOrderedWork();check(ui.lastCallback!=null&&ui.lastCallback.ok&&AndroidRuntimeRegistry.instance.nodeChain.source==capture,"Product worker lost original complete ordered capture");}
@@ -436,7 +437,7 @@ public class ExternalPermissionTest {
   check(ui.prefs().getString("mode","").equals("smart-auto"),"ordered mode display overwrote the remembered single-node choice");
   ui.ordered=false;ui.display();check(ui.modeChoices.stream().anyMatch(m->m.id.equals("smart-auto")),"leaving ordered mode lost single-node mode choices");
  }
- public static void main(String[]args)throws Exception{AndroidNodeStore.enforceOrderedWorker=true;Path root=Path.of(args[0]);allModes(root);directAndFrozen(root);execution(root);changes(root);ordinaryPaths(root);selectedChanges(root);owners(root);activity(root);importedPaths(root);orderedPaths(root);orderedWorkerTransfer(root);permissionStopEpoch(root);orderedMode();exhaustion(root);System.out.println("Android external permission: "+checks+" checks;19 Router entries,8 ordinary entries,ordered/imported Router permission,saved selection/rotation/resume,owned cancellation/replacement,actual Product busy/cancel");}
+ public static void main(String[]args)throws Exception{AndroidNodeStore.enforceOrderedWorker=true;AndroidConnectionProfileStore.beforeOrderedRead=AndroidNodeStore::holdWorker;Path root=Path.of(args[0]);allModes(root);directAndFrozen(root);execution(root);changes(root);ordinaryPaths(root);selectedChanges(root);owners(root);activity(root);importedPaths(root);orderedPaths(root);orderedWorkerTransfer(root);permissionStopEpoch(root);orderedMode();exhaustion(root);System.out.println("Android external permission: "+checks+" checks;19 Router entries,8 ordinary entries,ordered/imported Router permission,saved selection/rotation/resume,owned cancellation/replacement,actual Product busy/cancel");}
 }
 '''
 
@@ -447,6 +448,19 @@ def main():
         raise RuntimeError("JDK and Android JSON are required for unified permission tests")
     ui = dict(T.UI)
     ui['android/app/Activity.java']=ui['android/app/Activity.java'][:-1]+'public boolean destroyed;public boolean isDestroyed(){return destroyed;}}'
+    # Android serializes these callbacks on its main thread. Inline execution
+    # on competing capture/admission workers can invent rotation interleavings
+    # and loses the callback delivery boundary that this test must observe.
+    inline_ui = 'public void runOnUiThread(Runnable action){action.run();}'
+    assert ui['android/app/Activity.java'].count(inline_ui) == 1
+    ui['android/app/Activity.java']=ui['android/app/Activity.java'].replace(inline_ui, '''
+ private static final Thread fixtureUI=Thread.currentThread();
+ private static final java.util.concurrent.ConcurrentLinkedQueue<Runnable> fixtureUIQueue=new java.util.concurrent.ConcurrentLinkedQueue<>();
+ public static boolean onFixtureUI(){return Thread.currentThread()==fixtureUI;}
+ public static boolean fixtureUIIdle(){return fixtureUIQueue.isEmpty();}
+ public static void drainFixtureUI(){if(!onFixtureUI())throw new AssertionError("fixture UI pump changed owner");Runnable action;while((action=fixtureUIQueue.poll())!=null)action.run();}
+ public void runOnUiThread(Runnable action){if(onFixtureUI())action.run();else fixtureUIQueue.add(action);}
+ ''')
     ui['android/widget/ArrayAdapter.java']=ui['android/widget/ArrayAdapter.java'].replace('public void setDropDownViewResource', 'public ArrayAdapter(android.content.Context c,int layout,java.util.List<T> source){values=(T[])source.toArray();}public void setDropDownViewResource')
     ui['android/widget/Spinner.java']=ui['android/widget/Spinner.java'].replace('public void setSelection(int value){', 'public void setSelection(int value,boolean animate){setSelection(value);}public void setSelection(int value){')
     ui["android/content/SharedPreferences.java"] = PREFS
@@ -506,6 +520,7 @@ final class OrderedModeSurface extends Activity{
         run = ["java", "-cp", os.pathsep.join((str(temp / "classes"), str(jar))), "com.eabusham.routervpn.ExternalPermissionTest", str(data)]
         subprocess.run(run, check=True, timeout=30)
         controls = (
+            ('@root/android/app/Activity.java','if(onFixtureUI())action.run();else fixtureUIQueue.add(action);','action.run();','permission callback ran outside its captured UI owner'),
             ('AndroidUnifiedConnectionController.java','permissionOwner.attachment=attachment;return permissionOwner;','permissionOwner.approved=false;permissionOwner.attachment=attachment;return permissionOwner;','rotated granted ordered permission lost its process-owned approval'),
             ('AndroidUnifiedConnectionController.java', '||!first.equals(externalDigest(exitStore.get(entry.id)))', '', 'changed imported permission started a different source: entry-key'),
             ('AndroidUnifiedConnectionController.java', '||!last.equals(entryDigest(exit))', '', 'changed imported permission started a different source: final-bytes'),
@@ -522,14 +537,14 @@ final class OrderedModeSurface extends Activity{
             ('OrderedModeSurface.java', 'if(orderedPathEnabled())', 'if(false)', 'ordered mode picker advertised an ignored single-node mode'),
         )
         for name, old, new, assertion in controls:
-            target = app / name
+            target = temp / name.removeprefix('@root/') if name.startswith('@root/') else app / name
             original = target.read_text()
             assert original.count(old) == 1, (name, old)
             target.write_text(original.replace(old, new))
             subprocess.run(compile_args, check=True, timeout=45, capture_output=True)
             broken = subprocess.run(run, timeout=30, capture_output=True, text=True)
             target.write_text(original)
-            assert broken.returncode and assertion in broken.stderr, 'permission negative control escaped its intended assertion: ' + name + '\n' + broken.stdout + broken.stderr
+            assert broken.returncode and assertion in broken.stderr, 'permission negative control escaped its intended assertion: ' + name + '\nExpected: ' + assertion + '\nMutation: ' + old + '\n' + broken.stdout + broken.stderr
         print(f'Android pending permission: {len(controls)} broken selection, owner and UI decisions rejected')
 
 
