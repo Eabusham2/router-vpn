@@ -5,6 +5,41 @@ import subprocess,tempfile,shutil
 root=Path(__file__).resolve().parents[1]
 source=root/'android/app/src/main/java/com/eabusham/routervpn/AndroidServiceStopConfirmation.java'
 java_root = source.parent
+
+
+def block(text, signature):
+    start = text.index(signature)
+    opening = text.index("{", start)
+    depth = 1
+    end = opening + 1
+    while depth:
+        depth += (text[end] == "{") - (text[end] == "}")
+        end += 1
+    return text[start:end]
+
+
+def check_boundary(controller, service, service_name, key):
+    start = controller.split("void start(SessionInfo session)", 1)[1].split("void stop()", 1)[0]
+    stop = controller.split("void stop()", 1)[1].split("String getState()", 1)[0]
+    state = controller.split("String getState()", 1)[1].split("String getMode()", 1)[0]
+    assert "AndroidServiceStopConfirmation.start(STATE_KEY" in start
+    assert "AndroidServiceStopConfirmation.request(STATE_KEY" in stop
+    assert ".putExtra(AndroidServiceStopConfirmation.EXTRA_COMMAND, command)" in stop
+    assert "AndroidServiceStopConfirmation.state(STATE_KEY" in state
+    request = block(service, "if (ACTION_STOP.equals(action)) {")
+    assert "intent.getLongExtra(AndroidServiceStopConfirmation.EXTRA_COMMAND, 0L)" in request
+    acknowledgment = f"AndroidServiceStopConfirmation.acknowledge({key}, command);"
+    cleanup = 'if (!shutdownRetainingOwner("DOWN", "")) return;' if service_name == "LayeredVpnService.java" else 'shutdown("DOWN", "");'
+    assert request.index(cleanup) < request.index(acknowledgment)
+    assert "finally {" not in request
+    if service_name == "LayeredVpnService.java":
+        # A recreated receiver forwards to the exact retained host. Its separate
+        # receipt cannot acknowledge a failed original native drain.
+        assert "retained.requestStop(() -> completeNodeChainStop(retained, command, stopGeneration));" in request
+        receipt = block(service, "private void completeNodeChainStop(")
+        assert receipt.index("if (captured != null && !captured.released()) return;") < receipt.index(acknowledgment)
+
+
 # These checks tie the executable helper to the real service/controller boundary.
 # A stop-intent enqueue is not an acknowledgment; service cleanup must return first.
 for controller_name, service_name, key in (
@@ -13,18 +48,22 @@ for controller_name, service_name, key in (
 ):
     controller = (java_root / controller_name).read_text()
     service = (java_root / service_name).read_text()
-    start = controller.split("void start(SessionInfo session)", 1)[1].split("void stop()", 1)[0]
-    stop = controller.split("void stop()", 1)[1].split("String getState()", 1)[0]
-    state = controller.split("String getState()", 1)[1].split("String getMode()", 1)[0]
-    assert "AndroidServiceStopConfirmation.start(STATE_KEY" in start
-    assert "AndroidServiceStopConfirmation.request(STATE_KEY" in stop
-    assert ".putExtra(AndroidServiceStopConfirmation.EXTRA_COMMAND, command)" in stop
-    assert "AndroidServiceStopConfirmation.state(STATE_KEY" in state
-    request = service.split("if (ACTION_STOP.equals(action)) {", 1)[1].split("return Service.START_NOT_STICKY;", 1)[0]
-    assert "intent.getLongExtra(AndroidServiceStopConfirmation.EXTRA_COMMAND, 0L)" in request
-    acknowledgment = f"AndroidServiceStopConfirmation.acknowledge({key}, command);"
-    assert request.index('shutdown("DOWN", "");') < request.index(acknowledgment)
-    assert "finally {" not in request
+    check_boundary(controller, service, service_name, key)
+    if service_name == "LayeredVpnService.java":
+        controls = (
+            ('if (!shutdownRetainingOwner("DOWN", "")) return;', 'shutdownRetainingOwner("DOWN", "");', "failed cleanup bypassed return"),
+            ('AndroidServiceStopConfirmation.acknowledge(STATE_KEY, command);', '', "missing successful-stop acknowledgment"),
+            ('if (captured != null && !captured.released()) return;', '', "unreleased original host acknowledgment"),
+        )
+        for before, after, label in controls:
+            assert before in service, "Stop acknowledgment control lost its actual service seam: " + label
+            mutated = service.replace(before, after, 1)
+            try:
+                check_boundary(controller, mutated, service_name, key)
+            except (AssertionError, ValueError):
+                print("Stop acknowledgment source control rejected: " + label)
+            else:
+                raise AssertionError("Stop acknowledgment contract accepted: " + label)
 harness=r'''package com.eabusham.routervpn;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
