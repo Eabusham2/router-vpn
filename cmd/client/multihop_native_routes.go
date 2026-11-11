@@ -39,6 +39,9 @@ func desktopMultihopExitModes() []string {
 }
 
 func resolveNativeMultihopSelection(control common.RouterProfile, profiles []common.RouterProfile, q multihopConnectRequest) (multihopSelection, error) {
+	if err := guardLegacyOrderedNodeDispatch(control); err != nil {
+		return multihopSelection{}, err
+	}
 	if q.Base != "" && q.Base != "auto" && q.Base != "wg" && q.Base != "awg" {
 		return multihopSelection{}, errors.New("native multihop entry base must be Auto, WireGuard or AmneziaWG")
 	}

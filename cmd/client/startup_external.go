@@ -55,6 +55,9 @@ func (a *app) captureStartupPolicy() (*startupPolicyCapture, error) {
 	if !ok || !p.AutoConnect || mode == "" || mode == "manual" {
 		return nil, nil
 	}
+	if err := guardLegacyOrderedNodeDispatch(p); err != nil {
+		return nil, err
+	}
 	capture := &startupPolicyCapture{profile: p, profileToken: startupProfileToken(p)}
 	if p.NodeKind != "external" && p.External == nil {
 		return capture, nil

@@ -1052,6 +1052,9 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 	if err != nil {
 		return err
 	}
+	if err := guardLegacyOrderedNodeDispatch(p); err != nil {
+		return err
+	}
 	m, err := a.mode(id)
 	if err != nil {
 		return err

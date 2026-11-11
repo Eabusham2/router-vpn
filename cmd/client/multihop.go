@@ -169,6 +169,9 @@ func resolveMultihopEntryBase(control, entry common.RouterProfile, requested str
 }
 
 func resolveMultihopSelection(control common.RouterProfile, profiles []common.RouterProfile, q multihopConnectRequest) (multihopSelection, error) {
+	if err := guardLegacyOrderedNodeDispatch(control); err != nil {
+		return multihopSelection{}, err
+	}
 	if err := validateMultihopStartLayer(control); err != nil {
 		return multihopSelection{}, err
 	}
