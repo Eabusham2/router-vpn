@@ -51,7 +51,8 @@ func macOSExternalNativeController(owned *ownedDesktopController) (bool, error) 
 		return true, errors.Join(err, errors.New("native external fixture lost its saved private profile"))
 	}
 	raw, err = readPrivateRegular(a.cfg.ModesFile, 256<<10)
-	if err != nil || json.Unmarshal(raw, &a.modes) != nil || len(a.modes) != 20 {
+	// The shipping catalog contains twenty raw runtimes plus SMART AUTO and CUSTOM.
+	if err != nil || json.Unmarshal(raw, &a.modes) != nil || len(a.modes) != 22 {
 		return true, errors.Join(err, errors.New("native external fixture lost its shipping mode catalog"))
 	}
 	captured, err := captureDesktopMacOSSession(context.Background(), a)

@@ -46,7 +46,8 @@ func linuxHostTUNExternalFixture(controller *ownedDesktopController, scenario st
 			ModesFile: filepath.Join(linuxOwnedControllerRoot, "modes.json"), ScriptsDir: filepath.Join(linuxOwnedControllerRoot, "modes"),
 			StateFile: filepath.Join(linuxOwnedControllerRoot, "state.json")}}
 	raw, err = readPrivateRegular(a.cfg.ModesFile, 256<<10)
-	if err != nil || json.Unmarshal(raw, &a.modes) != nil || len(a.modes) != 20 {
+	// The shipping catalog contains twenty raw runtimes plus SMART AUTO and CUSTOM.
+	if err != nil || json.Unmarshal(raw, &a.modes) != nil || len(a.modes) != 22 {
 		return errors.Join(err, errors.New("installed external fixture lost the shipping runtime catalog"))
 	}
 	parent, err := captureDesktopLinuxNodeParent(a)

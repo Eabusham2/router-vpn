@@ -26,7 +26,8 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 	controller *ownedDesktopController, gate *os.File, scenario string) (failure error) {
 	cover := linuxHostTUNCoverCase(scenario)
 	raw, err := readPrivateRegular(a.cfg.ModesFile, 256<<10)
-	if err != nil || json.Unmarshal(raw, &a.modes) != nil || len(a.modes) != 20 {
+	// The shipping catalog contains twenty raw runtimes plus SMART AUTO and CUSTOM.
+	if err != nil || json.Unmarshal(raw, &a.modes) != nil || len(a.modes) != 22 {
 		return errors.Join(err, errors.New("installed public Connect lost the original runtime catalog"))
 	}
 	if cover {
