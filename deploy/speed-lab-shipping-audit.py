@@ -69,18 +69,89 @@ def need_ios_topology_routes(path: str) -> None:
 
 
 def need_android_captured_transaction(path: str) -> None:
-    body = re.sub(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/',
-                  lambda match: match.group(1) or "", read(path), flags=re.S)
-    for marker in ('original=connection.captureRestorePoint()',
-                   'connection.restorePointCurrent(original)',
-                   'connection.stopCaptured(home,topology,',
-                   'if(pathDecisionChanged||!connection.idleCurrent(idle))',
-                   'connection.restoreCaptured(original,idle,',
-                   '!connection.restoredCurrent(original,restoredOwner[0])',
-                   'meter.cancel()', 'nativeHopMeter.cancel()',
-                   'AndroidMTUMeasurementGate.release(lease)'):
-        if marker not in body:
-            errors.append(f"{path}: captured Android transaction lost {marker!r}")
+    # This is source closure, not a native traffic verdict. The ordered native
+    # reads run on workers; their exact original receipts cross back to the UI
+    # only while the captured operation, Home and saved choice still match.
+    tokens, function, positions = _native_module._tokens, _native_module._function, _native_module._positions
+    ordered = _native_module._ordered_once
+    source = tokens(read(path))
+
+    def method(declaration: str):
+        return function(source, declaration)
+
+    run = method("private void run(Request request,Callback callback,Object borrowedLease,ExternalWork work)")
+    capture = positions(run, 'captured=connection.captureRestorePoint()') if run is not None else []
+    home = positions(run, 'connection.pathCurrent(expected)') if run is not None else []
+    if not (ordered(run,
+            'AndroidHomeStateStore.Snapshot expected=AndroidHomeStateStore.snapshot(activity)',
+            'expected.connected&&"node-chain".equals(expected.logicalMode)',
+            'orderedCapturePending=true;orderedCaptureCancelled=false;ticket=++orderedCaptureGeneration',
+            'new Thread(()->{',
+            'captured=connection.captureRestorePoint()',
+            'final AndroidUnifiedConnectionController.RestorePoint originalCapture=captured',
+            'activity.runOnUiThread(()->{synchronized(AndroidSpeedLabController.this){',
+            'if(!orderedCapturePending||ticket!=orderedCaptureGeneration)return',
+            'if(orderedCaptureCancelled){callback.finished(null,cancelled());return;}',
+            'if(error!=null){callback.finished(null,error);return;}',
+            'if(!connection.pathCurrent(expected)||!connection.restoreChoiceCurrent(originalCapture))',
+            'runCaptured(frozen,callback,borrowedLease,work,originalCapture)',
+            '},"routervpn-speedlab-ordered-capture").start()')
+            and len(capture) == 1 and len(home) == 3 and home[0] < capture[0] < home[1] < home[2]):
+        errors.append(f"{path}: ordered Android capture lost its original worker receipt or current UI handoff")
+
+    checks = (
+        ("private void runCaptured(Request request,Callback callback,Object borrowedLease,ExternalWork work,AndroidUnifiedConnectionController.RestorePoint preparedOriginal)", (
+            'owner=++generation',
+            'original=preparedOriginal!=null?preparedOriginal:connection.captureRestorePoint()',
+            'LayeredVpnService.quiesceMTUForSpeedLab(error->activity.runOnUiThread(()->{',
+            'if(!current(owner)||mtuLease!=lease||!quiesced.compareAndSet(false,true))return',
+            'runOwned(captured,ownedCallback,owner)')),
+        ("private void runOwned(Request request,Callback callback,long owner)", (
+            'if(original!=null&&"node-chain".equals(original.topology))',
+            'new Thread(()->{boolean valid=connection.restorePointCurrent(original);activity.runOnUiThread(()->runWithOriginal(request,callback,owner,valid));},"routervpn-speedlab-ordered-admission").start();return',
+            'runWithOriginal(request,callback,owner,connection.restorePointCurrent(original))')),
+        ("private void runWithOriginal(Request request,Callback callback,long owner,boolean valid)", (
+            'if(!current(owner))return;try{',
+            'if(!valid||!connection.pathCurrent(original.home)||!connection.restoreChoiceCurrent(original))',
+            'stopAndDrain(original.home.sessionId,original.topology,owner,new AndroidUnifiedConnectionController.Callback(){',
+            'public void finished(boolean ok,String message){if(!current(owner))return',
+            'if(!ok||pathDecisionChanged)',
+            'originalSuspended=true',
+            'try{idle=connection.captureIdle();}',
+            'if(cancelled){complete(callback,null,cancelled());return;}startTemporary(request,callback,owner)')),
+        ("private void stopAndDrain(String home,String topology,long owner,AndroidUnifiedConnectionController.Callback callback)", (
+            'connection.stopCaptured(home,topology,new AndroidUnifiedConnectionController.Callback(){',
+            'public void superseded(){pathDecisionChanged=true;}',
+            'public void finished(boolean ok,String message){',
+            'if(!current(owner))return',
+            'if(!ok&&home.equals(AndroidHomeStateStore.snapshot(activity).sessionId)&&connection.capturedCleanupPending(home,topology))',
+            'callback.finished(ok,message)')),
+        ("private void restoreOriginal(Callback callback,long owner,AndroidSpeedLab.Result result,Throwable error)", (
+            'if(pathDecisionChanged||!connection.idleCurrent(idle))',
+            'if(!originalSuspended||original==null||!original.connected())',
+            'final String[] restoredOwner={""}',
+            'connection.restoreCaptured(original,idle,new AndroidUnifiedConnectionController.Callback(){',
+            'public void owned(String session){if(current(owner)&&restoredOwner[0].isEmpty())restoredOwner[0]=session;}',
+            'public void finished(boolean ok,String message){',
+            'if(!current(owner))return',
+            'AndroidHomeStateStore.Snapshot observed=AndroidHomeStateStore.snapshot(activity)',
+            'new Thread(()->{boolean proved=ok&&connection.restoredCurrent(original,restoredOwner[0]);activity.runOnUiThread(()->finishRestored(proved,message,observed,callback,owner,result,error,restoredOwner[0]));},"routervpn-speedlab-ordered-restored").start();return',
+            'finishRestored(ok&&connection.restoredCurrent(original,restoredOwner[0]),message,observed,callback,owner,result,error,restoredOwner[0])')),
+        ("private void finishRestored(boolean proved,String message,AndroidHomeStateStore.Snapshot observed,Callback callback,long owner,AndroidSpeedLab.Result result,Throwable error,String restoredOwner)", (
+            'if(!current(owner))return',
+            'if(!proved||!connection.pathCurrent(observed)||!connection.restoreChoiceCurrent(original))',
+            'if(!restoredOwner.equals(restored.sessionId))',
+            'externalWork.returnedHome=restored',
+            'finish(callback,cancelled?null:result,cancelled?cancelled():error)')),
+        ("void cancel()", ('orderedCaptureCancelled=true', 'meter.cancel()', 'nativeHopMeter.cancel()')),
+        ("private void finishOwned(Callback callback,AndroidSpeedLab.Result result,Throwable error)", (
+            'if(callback!=activeCallback||!running.get())return',
+            'if(!borrowed){AndroidMTUMeasurementGate.release(lease)',
+            'callback.finished(cancelled?null:result,cancelled&&error==null?cancelled():error)')),
+    )
+    for declaration, fragments in checks:
+        if not ordered(method(declaration), *fragments):
+            errors.append(f"{path}: captured Android transaction lost its owned {declaration.split('(')[0]} flow")
 
 
 def need_native_multihop_lanes(path: str) -> None:

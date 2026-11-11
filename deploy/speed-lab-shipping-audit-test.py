@@ -87,18 +87,74 @@ class SpeedLabAndroidTransactionAuditTests(unittest.TestCase):
 
     def test_captured_cleanup_and_exact_fresh_restoration_are_required(self):
         self.assertEqual([], self.check_source(self.source))
-        for marker in ('original=connection.captureRestorePoint()',
+        for marker in ('captured=connection.captureRestorePoint()',
+                       'original=preparedOriginal!=null?preparedOriginal:connection.captureRestorePoint()',
                        'connection.restorePointCurrent(original)',
                        'connection.stopCaptured(home,topology,',
+                       'connection.capturedCleanupPending(home,topology)',
                        'if(pathDecisionChanged||!connection.idleCurrent(idle))',
                        'connection.restoreCaptured(original,idle,',
-                       '!connection.restoredCurrent(original,restoredOwner[0])',
+                       'connection.restoredCurrent(original,restoredOwner[0])',
+                       '!connection.pathCurrent(observed)',
+                       '!connection.restoreChoiceCurrent(original)',
                        'meter.cancel()', 'nativeHopMeter.cancel()',
                        'AndroidMTUMeasurementGate.release(lease)'):
             with self.subTest(marker=marker):
+                self.assertIn(marker, self.source)
                 changed = self.source.replace(marker, "removed")
                 self.assertTrue(self.check_source(changed))
                 self.assertTrue(self.check_source(changed + "\n// " + marker))
+
+    def test_async_capture_and_callback_delivery_cannot_adopt_mutable_replacements(self):
+        changes = (
+            ('original=preparedOriginal!=null?preparedOriginal:connection.captureRestorePoint()',
+             'original=connection.captureRestorePoint()'),
+            ('runCaptured(frozen,callback,borrowedLease,work,originalCapture)',
+             'runCaptured(frozen,callback,borrowedLease,work,connection.captureRestorePoint())'),
+            ('connection.restoreCaptured(original,idle,', 'connection.restoreCaptured(connection.captureRestorePoint(),idle,'),
+            ('if(!orderedCapturePending||ticket!=orderedCaptureGeneration)return;', 'if(!orderedCapturePending)return;'),
+            ('if(orderedCaptureCancelled){callback.finished(null,cancelled());return;}', ''),
+            ('if(error!=null){callback.finished(null,error);return;}', ''),
+            ('!connection.pathCurrent(expected)||!connection.restoreChoiceCurrent(originalCapture)',
+             '!connection.pathCurrent(expected)'),
+            ('public void owned(String session){if(current(owner)&&restoredOwner[0].isEmpty())restoredOwner[0]=session;}',
+             'public void owned(String session){}'),
+            ('restoredOwner[0]=session', 'restoredOwner[0]=AndroidHomeStateStore.snapshot(activity).sessionId'),
+            ('boolean proved=ok&&connection.restoredCurrent(original,restoredOwner[0]);', 'boolean proved=ok;'),
+            ('finishRestored(ok&&connection.restoredCurrent(original,restoredOwner[0]),', 'finishRestored(ok,'),
+            ('if(!proved||!connection.pathCurrent(observed)||!connection.restoreChoiceCurrent(original))', 'if(!proved)'),
+            ('public void superseded(){pathDecisionChanged=true;}', 'public void superseded(){}'),
+            ('if(!ok||pathDecisionChanged)', 'if(!ok)'),
+        )
+        for before, after in changes:
+            with self.subTest(before=before):
+                self.assertEqual(self.source.count(before), 1)
+                self.assertTrue(self.check_source(self.source.replace(before, after)))
+
+    def test_comments_strings_and_unrelated_methods_cannot_supply_captured_callbacks(self):
+        for marker in (
+            'runCaptured(frozen,callback,borrowedLease,work,originalCapture)',
+            'public void owned(String session){if(current(owner)&&restoredOwner[0].isEmpty())restoredOwner[0]=session;}',
+            'boolean proved=ok&&connection.restoredCurrent(original,restoredOwner[0]);',
+        ):
+            changed = self.source.replace(marker, 'removed')
+            for witness in ('\n// '+marker, '\n/* '+marker+' */', '\nString witness="'+marker+'";',
+                            '\nvoid unrelatedWitness() { '+marker+' }'):
+                with self.subTest(marker=marker, witness=witness):
+                    self.assertTrue(self.check_source(changed+witness))
+
+    def test_worker_home_is_checked_before_and_after_capture(self):
+        marker = 'if(!connection.pathCurrent(expected))throw'
+        self.assertEqual(self.source.count(marker), 2)
+        for index in range(2):
+            pieces = self.source.split(marker)
+            changed = marker.join(pieces[:index+1])+'if(false)throw'+marker.join(pieces[index+1:])
+            self.assertTrue(self.check_source(changed))
+
+    def test_formatting_does_not_replace_the_exact_semantic_receipt(self):
+        changed = self.source.replace('original=preparedOriginal!=null?preparedOriginal:connection.captureRestorePoint()',
+                                      'original = preparedOriginal != null ? /* retained worker capture */\npreparedOriginal : connection.captureRestorePoint()')
+        self.assertEqual([], self.check_source(changed))
 
 
 class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
