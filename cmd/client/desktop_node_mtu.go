@@ -66,6 +66,11 @@ type desktopNodeMTUOwner struct {
 	unconfirmedCommit *desktopNodeMTUCommand
 	closed, committed bool
 	runtimeRetired    bool
+	// Installed once by the original ordered Darwin host before exposing this
+	// lease. Its caller already holds host.gate, then this owner's mu. The
+	// verifier must observe the exact native proof and kernel successor without
+	// reacquiring the host gate or discovering a replacement owner.
+	verifyReaderChange func(context.Context, desktopNodeMTURecord, desktopNodeMTURecord) error
 }
 
 var errDesktopNodeMTUExpired = errors.New("captured native MTU lease expired and its original value was restored")
@@ -354,6 +359,39 @@ func (owner *desktopNodeMTUOwner) discardCommitRevert() {
 	}
 }
 
+// Only the retained ordered Darwin host can authorize a different kernel name.
+// Fixed-name targets and every ordinary/imported family retain their original
+// interface contract. The mailbox/nonce, lease and reader bounds are checked by
+// the caller before this proof, and no owner state changes until it succeeds.
+func (owner *desktopNodeMTUOwner) verifyReaderChangeContext(ctx context.Context, next desktopNodeMTURecord) error {
+	if ctx == nil {
+		return errors.New("native MTU reader succession has no original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	previous := owner.record
+	if next.Interface == previous.Interface {
+		return nil
+	}
+	launch := owner.launch
+	if owner.verifyReaderChange == nil || launch == nil || launch.chain == nil || launch.chain.platform == nil ||
+		launch.chain.policy == nil || launch.chain.policy.Validate() != nil || launch.chain.policy.Metadata().TargetOS != "darwin" ||
+		launch.external != nil || launch.importedEntry || launch.importedPlatform != nil || launch.tor != nil ||
+		next.Reader <= previous.Reader || !desktopNodeChainDarwinInterfaceName(previous.Interface) ||
+		!desktopNodeChainDarwinInterfaceName(next.Interface) {
+		return errors.New("native MTU acknowledgement changed its captured interface")
+	}
+	meta := launch.chain.policy.Metadata()
+	if meta.SessionID != previous.Session || meta.ConfigSHA256 != previous.Config {
+		return errors.New("native MTU reader succession changed its original ordered policy")
+	}
+	if err := owner.verifyReaderChange(ctx, previous, next); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
 func (owner *desktopNodeMTUOwner) acceptExpiredRestoration(record desktopNodeMTURecord) (bool, error) {
 	return owner.acceptExpiredRestorationContext(context.Background(), record)
 }
@@ -363,7 +401,7 @@ func (owner *desktopNodeMTUOwner) acceptExpiredRestorationContext(ctx context.Co
 		return false, nil
 	}
 	bad := errors.New("native MTU expiry did not prove this captured lease's original reader")
-	if owner.committed && !owner.record.Restored || record.Active || !record.Restored || record.MTU != owner.originalMTU || record.Session != owner.record.Session || record.Config != owner.record.Config || record.Path != owner.record.Path || record.Lease != owner.lease || record.Interface != owner.record.Interface || (record.Failure != "captured MTU lease expired; original MTU restored" && record.Failure != "captured TUN operation rejected") {
+	if owner.committed && !owner.record.Restored || record.Active || !record.Restored || record.MTU != owner.originalMTU || record.Session != owner.record.Session || record.Config != owner.record.Config || record.Path != owner.record.Path || record.Lease != owner.lease || (record.Failure != "captured MTU lease expired; original MTU restored" && record.Failure != "captured TUN operation rejected") {
 		return false, bad
 	}
 	matching := record.Generation == owner.record.Generation && record.Request == owner.record.Request
@@ -383,6 +421,9 @@ func (owner *desktopNodeMTUOwner) acceptExpiredRestorationContext(ctx context.Co
 		if err == nil {
 			return false, nil // The child must consume a pending command first.
 		}
+		return false, err
+	}
+	if err := owner.verifyReaderChangeContext(ctx, record); err != nil {
 		return false, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -495,7 +536,7 @@ func (owner *desktopNodeMTUOwner) drainContext(parent context.Context) error {
 			if _, err := readDesktopRuntimeFileContext(ctx, owner.launch, "node-mtu-request.json", 4096); errors.Is(err, os.ErrNotExist) {
 				// A matching nonce alone is not ownership. Do not replace the
 				// captured reader/lease with a foreign or contradictory response.
-				if record.Lease != owner.lease || record.Interface != owner.record.Interface || record.Reader < owner.record.Reader || record.Reader > owner.record.Reader+1 || (record.Reader == owner.record.Reader && record.Index != owner.record.Index) {
+				if record.Lease != owner.lease || record.Reader < owner.record.Reader || record.Reader > owner.record.Reader+1 || (record.Reader == owner.record.Reader && record.Index != owner.record.Index) {
 					return errors.New("native MTU acknowledgement changed its captured owner")
 				}
 				if record.Failure != "" {
@@ -503,6 +544,9 @@ func (owner *desktopNodeMTUOwner) drainContext(parent context.Context) error {
 					// reader. Keep it only inside this same active lease.
 					if !record.Active && (command.Action != "revert-unconfirmed-commit" || record.Restored || owner.unconfirmedCommit == nil) {
 						return errors.New("failed native MTU command abandoned its active lease")
+					}
+					if err := owner.verifyReaderChangeContext(ctx, record); err != nil {
+						return err
 					}
 					if err := ctx.Err(); err != nil {
 						return err
@@ -516,6 +560,9 @@ func (owner *desktopNodeMTUOwner) drainContext(parent context.Context) error {
 				restoring := command.Action == "rollback" || command.Action == "revert-unconfirmed-commit"
 				if record.Expired || (command.Action == "begin" || command.Action == "set") != record.Active || command.Action == "set" && record.MTU != command.Value || (command.Action == "begin" || command.Action == "commit") && (record.Reader != owner.record.Reader || record.MTU != command.MTU) || restoring && (!record.Restored || record.MTU != owner.originalMTU) || !restoring && record.Restored || (command.Action == "set" || restoring) && record.MTU != owner.record.MTU && record.Reader != owner.record.Reader+1 {
 					return errors.New("native MTU acknowledgement changed its lease or requested value")
+				}
+				if err := owner.verifyReaderChangeContext(ctx, record); err != nil {
+					return err
 				}
 				if err := ctx.Err(); err != nil {
 					return err

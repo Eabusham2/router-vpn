@@ -7,6 +7,34 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## Native MTU reader succession requires the retained Darwin host
+
+The raw native MTU lease now has a one-time verifier installed by its original
+ordered Darwin host before exposure. A changed interface name requires a valid
+sealed Darwin ordered policy, that retained platform, canonical utun names,
+a strictly advanced reader and unchanged original session/configuration.
+Ordinary, imported, Tor, Windows and Linux paths retain their existing fixed-name
+contract. Merely matching a name or nonce cannot grant this capability.
+
+The verifier runs only after the existing exact nonce/generation, lease,
+requested value, bounded reader advance and consumed command checks. It receives
+the same caller and the exact previous/next records under the raw owner lock;
+the host must already hold its original gate and independently prove the native
+reader and kernel succession. Failed or canceled proof retains the pending
+operation and old record for exact retry. Expiry and a failed command's retained
+rollback reader use the same proof requirement. Failure text is never cleared
+to claim a healthy measurement.
+
+Six new authored roots contain forty-two terminal cases using the actual private
+mailbox protocol with explicitly modeled child/native observations. Cases cover
+begin/set/commit/rollback/close, missing proof, exact consumed-ACK retry,
+cancellation, expiry reader bounds, failed-command rollback and fixed-target
+rejection. All previous raw tests remain. The two files and original source base
+were independently reviewed; agent JavaScript guard/lexical checks are source
+evidence only. No local Go execution was available. The public Darwin wrapper
+and outer optimizer capability must still install and consume this verifier
+before the complete Retest path can be accepted.
+
 ## Public ordered MTU snapshots retain the complete native path
 
 The ordinary MTU snapshot previously required desktopNodeOwners even when
