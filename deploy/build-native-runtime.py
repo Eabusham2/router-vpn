@@ -1327,23 +1327,25 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 # Private Node startup uses its own sealed policy and eager
                 # WG/AWG lower phase. The exact native command/Box tests keep
                 # OS permits and TUN as explicit composition boundaries.
-                # At 74bd942a both Linux architectures completed all 19
-                # baseline suites, then exhausted the old 900s aggregate at
-                # the first of 48 compiled controls (run 41393374409, jobs
-                # 125110055580 and 125110055657). Keep serial peer execution
-                # and every individual compiler/suite/control deadline; the
-                # full expanded Linux workload needs its own bounded budget.
+                # At b2673fdf both Linux architectures completed all 77
+                # baseline suites (19 retained package images), then the
+                # 1800s parent expired after 18/64 and 10/64 distinct compiled
+                # controls (run 42928509503, jobs 130221337259/130221337316).
+                # The slowest observed compile+control took 22.397s. At that
+                # rate the remaining 54 controls project 1800+54*22.397 =
+                # 3009.438s; allow a bounded 3600s aggregate. Keep the exact
+                # inventory, serial execution and all individual compiler,
+                # suite, control, socket, lease and cancellation deadlines.
                 # At f41514f7, Windows AMD64 completed all 17 baselines and
                 # 16 of 34 compiled controls, then its 1200s parent stopped
                 # the next compile (run 41507677662, job 125493850421).
-                # Give the complete Windows workload the same aggregate
-                # budget; compiler, suite and control deadlines stay intact.
+                # Its existing 1800s aggregate remains unchanged.
                 run([sys.executable, ROOT/'deploy/test_desktop_node_physical.py', source],
-                    env=env, timeout=1800)
+                    env=env, timeout=3600 if target.startswith('linux/') else 1800)
                 if target.startswith('linux/'):
                     # The desktop reference owns its two native builds and
                     # exact traffic matrix. Keep it outside the existing
-                    # 1200s imported-peer and 1800s node gate envelopes.
+                    # imported-peer and complete node gate envelopes.
                     # The separate mobile gate owns the libbox parser.
                     run([sys.executable, ROOT/'deploy/test_mobile_imported_socks_xray.py',
                          source, '--reference-only'], env=env, timeout=3000)

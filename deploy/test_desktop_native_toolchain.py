@@ -328,7 +328,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(args[2:], [str(source.resolve())])
                         self.assertEqual(kwargs['env']['GOOS'], system)
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
-                        self.assertEqual(kwargs['timeout'], 1800)
+                        self.assertEqual(kwargs['timeout'], 3600 if system == 'linux' else 1800)
                         if node_failure is not None:
                             error = (node_failure(23, args, output=b'captured source gate failure')
                                      if node_failure is subprocess.CalledProcessError else

@@ -322,7 +322,7 @@ class ScopedSOCKSRealitySourceContext(unittest.TestCase):
                              if any(Path(value).name == "test_mobile_imported_socks_xray.py" for value in command)]
                 self.assertEqual(len(node), int(target.startswith(("linux/", "windows/"))))
                 for _, options in node:
-                    self.assertEqual(options["timeout"], 1800)
+                    self.assertEqual(options["timeout"], 3600 if target.startswith("linux/") else 1800)
                 self.assertEqual(len(reference), int(target.startswith("linux/")))
                 for index, command, options in reference:
                     self.assertGreater(index, node[0][0])
