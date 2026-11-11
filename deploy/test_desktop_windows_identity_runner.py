@@ -258,11 +258,13 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
              patch.object(prep.MTU, "prepare"), patch.object(prep.DESKTOP_MTU, "prepare"), \
              patch.object(prep.STRATEGY, "prepare"), patch.object(prep.EXTERNAL, "prepare"), \
              patch.object(prep, "prepare_network_startup"), \
+             patch.object(prep.NODE_CHAIN, "prepare") as node_chain_prepare, \
              patch.object(prep, "prepare_node_capture"), \
              patch.object(prep.RELAY.OPENVPN_REMOTE, "prepare"), \
              contextlib.redirect_stdout(io.StringIO()):
             prep.prepare(vendor)
             naive_prepare.assert_called_once_with(vendor.resolve())
+            node_chain_prepare.assert_called_once_with(vendor.resolve(), mobile=False)
             source, target, package, records = GATE.checked_sources(vendor)
             self.assertEqual((source, target, package),
                              (vendor, vendor / "routervpn/mobiletor", "./routervpn/mobiletor"))
