@@ -287,6 +287,7 @@ struct IOSMultihopView: View {
     @State private var exitMode = "shadowsocks"
     @State private var execution = "local"
     @State private var detail = ""
+    @State private var editingPair = false
     @StateObject private var viaEntry = IOSViaEntryLatency()
     private var nodes: [RouterProfile] {
         model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" ||
@@ -322,6 +323,22 @@ struct IOSMultihopView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Ordered route") {
+                    NavigationLink("Add or reorder nodes") { IOSNodeChainEditorView() }
+                        .disabled(model.profileMutationBlocked || viaEntry.running)
+                    if let saved = model.selectedNodeProfile?.multihopNodes {
+                        Text("Saved: \(saved.count) nodes • Local execution").font(.caption)
+                        Button("Edit an entry and exit pair") { editingPair = true }
+                            .disabled(model.profileMutationBlocked || viaEntry.running)
+                        if model.selectedNodeProfile?.multihopEnabled == true {
+                            Button("Disable multihop") {
+                                do { try model.saveIOSMultihop(enabled: false, entryID: "", exitID: "", exitMode: "shadowsocks"); dismiss() }
+                                catch { detail = error.localizedDescription }
+                            }.disabled(model.profileMutationBlocked || viaEntry.running)
+                        }
+                    }
+                }
+                if model.selectedNodeProfile?.multihopNodes == nil || editingPair {
                 Section("Entry → exit") {
                     Toggle("Use multihop", isOn: $enabled)
                     Picker("Entry node", selection: Binding(get: { entryID }, set: { chooseEntry(id: $0, mode: entryMode) })) {
@@ -507,6 +524,10 @@ struct IOSMultihopView: View {
                         catch { detail = error.localizedDescription }
                     }.disabled(model.profileMutationBlocked || viaEntry.running || (enabled && (entryID.isEmpty || exitID.isEmpty || entryID == exitID)))
                     if !detail.isEmpty { Text(detail).font(.caption) }
+                }
+                }
+                if model.selectedNodeProfile?.multihopNodes != nil && !editingPair && !detail.isEmpty {
+                    Section { Text(detail).font(.caption) }
                 }
             }
             .navigationTitle("Multihop")
