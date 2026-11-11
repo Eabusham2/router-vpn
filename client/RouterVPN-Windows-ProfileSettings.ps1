@@ -267,6 +267,22 @@ function global:Get-RouterVPNOrderedValue {
     $property=$Value.PSObject.Properties[$Name];if($null-ne$property){return $property.Value};return $Default
 }
 
+function global:Test-RouterVPNOrderedPrefixMode {
+    param($Mode)
+    return $Mode-is[string]-and@('wg','awg2-fast','awg2-strong')-ccontains$Mode
+}
+
+function global:Get-RouterVPNOrderedModeTitle {
+    param($Mode)
+    switch -CaseSensitive ($Mode) {
+        'wg' {return 'WireGuard'}
+        'awg2-fast' {return 'AmneziaWG Fast'}
+        'awg2-strong' {return 'AmneziaWG Strong'}
+        'shadowsocks' {return 'Shadowsocks 2022'}
+        default {throw 'The ordered node has an unsupported exact transport.'}
+    }
+}
+
 function global:Copy-RouterVPNOrderedNodes {
     param($Nodes,[string]$ControlID)
     if($Nodes-isnot[Collections.IList]-or$Nodes.Count-lt2-or$Nodes.Count-gt8){throw 'Choose between two and eight ordered nodes.'}
@@ -275,7 +291,7 @@ function global:Copy-RouterVPNOrderedNodes {
     for($i=0;$i-lt$Nodes.Count;$i++){
         $id=Get-RouterVPNOrderedValue $Nodes[$i] 'id';$mode=Get-RouterVPNOrderedValue $Nodes[$i] 'mode'
         if($id-isnot[string]-or$id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or-not$seen.Add($id)){throw 'Ordered nodes require distinct linked node IDs.'}
-        if($mode-isnot[string]-or($i-lt$Nodes.Count-1-and$mode-cne'wg')-or($i-eq$Nodes.Count-1-and$mode-cne'shadowsocks')){throw 'This ordered path requires WireGuard entry and hops, followed by a Shadowsocks exit.'}
+        if($mode-isnot[string]-or($i-lt$Nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $mode))-or($i-eq$Nodes.Count-1-and$mode-cne'shadowsocks')){throw 'Choose WireGuard, AmneziaWG Fast or AmneziaWG Strong for entry and hops, followed by a Shadowsocks 2022 exit.'}
         [void]$copy.Add([pscustomobject]@{id=$id;mode=$mode})
     }
     if([string]::IsNullOrEmpty($ControlID)-or$copy[$copy.Count-1].id-cne$ControlID){throw 'The final ordered node must be the selected exit node.'}

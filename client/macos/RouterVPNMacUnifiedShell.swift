@@ -562,7 +562,7 @@ extension ProductWindowController {
             summary.stringValue = selection.orderedNodes.isEmpty ? "Entry / exit pair" :
                 (ordered ? "Local ordered path: " : "Saved ordered path (Multihop off): ") + selection.orderedNodes.enumerated().map { index, row in
                     let id = row["id"] ?? "", name = profiles.first(where: { $0["id"] as? String == id })?["name"] as? String ?? id
-                    return "\(index + 1). \(name) · \(row["mode"] == "wg" ? "WG" : "Shadowsocks")"
+                    return "\(index + 1). \(name) · \(RouterVPNOrderedNodes.modeName(row["mode"] ?? ""))"
                 }.joined(separator: " → ")
         }
         for popup in [multihopEntryPopup, multihopExitPopup, multihopEntryModePopup, multihopExitModePopup, multihopExecutionPopup, basePopup] { popup.isEnabled = !ordered && !busy }

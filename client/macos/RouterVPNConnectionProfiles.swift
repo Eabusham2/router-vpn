@@ -7,6 +7,16 @@ private let macConnectionCustomPresetsKey = "routervpn.unified.custom-presets.v1
 private let macConnectionMultihopEnabledKey = "routervpn.unified.multihop-enabled.v1"
 
 enum RouterVPNOrderedNodes {
+    static let prefixModes = ["wg", "awg2-fast", "awg2-strong"]
+    static func modeName(_ mode: String) -> String {
+        switch mode {
+        case "wg": return "WireGuard"
+        case "awg2-fast": return "AWG2 Fast"
+        case "awg2-strong": return "AWG2 Strong"
+        case "shadowsocks": return "Shadowsocks 2022"
+        default: return "Unknown saved transport"
+        }
+    }
     static func issue(_ message: String) -> NSError {
         NSError(domain: "RouterVPN.OrderedNodes", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
@@ -19,8 +29,9 @@ enum RouterVPNOrderedNodes {
             guard Set(row.keys) == Set(["id", "mode"]), let id = row["id"],
                   id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
                   seen.insert(id).inserted,
-                  row["mode"] == (position == rows.count - 1 ? "shadowsocks" : "wg") else {
-                throw issue("Choose distinct linked WireGuard entry and hops, followed by a Shadowsocks exit.")
+                  let mode = row["mode"],
+                  position == rows.count - 1 ? mode == "shadowsocks" : prefixModes.contains(mode) else {
+                throw issue("Choose distinct linked WireGuard or AWG2 entry and hops, followed by a Shadowsocks 2022 exit.")
             }
         }
         guard !control.isEmpty, rows.last?["id"] == control else {
@@ -73,6 +84,7 @@ struct RouterVPNOrderedNodeDraft {
     let tokens: [String: String]
     let candidates: [String]
     private(set) var prefixes: [String]
+    private(set) var modes: [String]
 
     init(selection: RouterVPNConnectionProfileSelection, generation: UUID, catalog: [[String: Any]]) throws {
         control = selection.selectedNodeID; self.generation = generation
@@ -92,31 +104,41 @@ struct RouterVPNOrderedNodeDraft {
         }
         self.names = names; self.tokens = tokens
         candidates = names.keys.filter { $0 != selection.selectedNodeID }.sorted()
-        if selection.orderedNodes.isEmpty { prefixes = [] }
+        if selection.orderedNodes.isEmpty { prefixes = []; modes = [] }
         else {
             let nodes = try RouterVPNOrderedNodes.decode(selection.orderedNodes, control: control)
             guard nodes.allSatisfy({ tokens[$0["id"]!] == selection.profileTokens[$0["id"]!] }) else {
                 throw RouterVPNOrderedNodes.issue("A saved ordered node was relinked. Reload its profile before editing.")
             }
             prefixes = nodes.dropLast().map { $0["id"]! }
+            modes = nodes.dropLast().map { $0["mode"]! }
         }
     }
-    var nodes: [[String: String]] { prefixes.map { ["id": $0, "mode": "wg"] } + [["id": control, "mode": "shadowsocks"]] }
+    var nodes: [[String: String]] { prefixes.enumerated().map { ["id": $0.element, "mode": modes[$0.offset]] } + [["id": control, "mode": "shadowsocks"]] }
     mutating func add(_ id: String) throws {
         guard candidates.contains(id), !prefixes.contains(id), prefixes.count < 7 else {
             throw RouterVPNOrderedNodes.issue("Choose a different entry or hop. The path supports up to eight nodes.")
         }
         prefixes.append(id)
+        modes.append("wg")
+    }
+    mutating func chooseMode(_ mode: String, at index: Int) throws {
+        guard prefixes.indices.contains(index), RouterVPNOrderedNodes.prefixModes.contains(mode) else {
+            throw RouterVPNOrderedNodes.issue("Choose WireGuard, AWG2 Fast or AWG2 Strong for an entry or hop. The final exit stays Shadowsocks 2022.")
+        }
+        modes[index] = mode
     }
     mutating func move(_ index: Int, by offset: Int) throws {
         guard [-1, 1].contains(offset), prefixes.indices.contains(index), prefixes.indices.contains(index + offset) else {
             throw RouterVPNOrderedNodes.issue("Move an entry or hop within the prefix. The selected final exit stays last.")
         }
         prefixes.swapAt(index, index + offset)
+        modes.swapAt(index, index + offset)
     }
     mutating func remove(_ index: Int) throws {
         guard prefixes.indices.contains(index) else { throw RouterVPNOrderedNodes.issue("The selected final exit cannot be removed here.") }
         prefixes.remove(at: index)
+        modes.remove(at: index)
     }
     func selection() throws -> RouterVPNConnectionProfileSelection {
         let ordered = try RouterVPNOrderedNodes.decode(nodes, control: control)
@@ -644,18 +666,22 @@ final class RouterVPNOrderedNodeEditor: NSWindowController {
     private var draft: RouterVPNOrderedNodeDraft
     private let path = NSPopUpButton(frame: .zero, pullsDown: false)
     private let candidates = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let transport = NSPopUpButton(frame: .zero, pullsDown: false)
     private let status = NSTextField(wrappingLabelWithString: "")
 
     init(owner: ProductWindowController, draft: RouterVPNOrderedNodeDraft) {
         self.owner = owner; self.draft = draft
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 320), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        window.title = "Ordered multihop"; window.minSize = NSSize(width: 580, height: 300); window.isReleasedWhenClosed = false
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 380), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.title = "Ordered multihop"; window.minSize = NSSize(width: 580, height: 360); window.isReleasedWhenClosed = false
         super.init(window: window)
         let root = NSStackView(); root.orientation = .vertical; root.alignment = .leading; root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        let note = NSTextField(wrappingLabelWithString: "Choose one to seven WireGuard entry and hop nodes. The selected Shadowsocks exit stays last. Each node uses its own linked credentials and settings; the complete path runs on this device.")
+        let note = NSTextField(wrappingLabelWithString: "Choose one to seven entry and hop nodes, each with WireGuard, AWG2 Fast or AWG2 Strong. The selected Shadowsocks 2022 exit stays last. Each node keeps its own linked credentials and settings.")
         root.addArrangedSubview(note)
-        path.setAccessibilityLabel("Ordered path"); root.addArrangedSubview(path)
+        path.setAccessibilityLabel("Ordered path"); path.target = self; path.action = #selector(selectedHopChanged); root.addArrangedSubview(path)
+        transport.setAccessibilityLabel("Selected entry or hop transport")
+        for mode in RouterVPNOrderedNodes.prefixModes { transport.addItem(withTitle: RouterVPNOrderedNodes.modeName(mode)); transport.lastItem?.representedObject = mode }
+        transport.target = self; transport.action = #selector(transportChanged); root.addArrangedSubview(transport)
         let move = NSStackView(); move.orientation = .horizontal; move.spacing = 8
         for (title, action) in [("Move up", #selector(moveUp)), ("Move down", #selector(moveDown)), ("Remove hop", #selector(removeHop))] { move.addArrangedSubview(NSButton(title: title, target: self, action: action)) }
         root.addArrangedSubview(move)
@@ -672,11 +698,23 @@ final class RouterVPNOrderedNodeEditor: NSWindowController {
     private func render(selected: Int? = nil) {
         path.removeAllItems()
         for (index, row) in draft.nodes.enumerated() {
-            let id = row["id"]!, role = index == draft.prefixes.count ? "Exit · Shadowsocks" : index == 0 ? "Entry · WireGuard" : "Hop \(index) · WireGuard"
-            path.addItem(withTitle: "\(index + 1). \(role) · \(draft.names[id] ?? id) · \(id)")
+            let id = row["id"]!, role = index == draft.prefixes.count ? "Exit" : index == 0 ? "Entry" : "Hop \(index)"
+            path.addItem(withTitle: "\(index + 1). \(role) · \(RouterVPNOrderedNodes.modeName(row["mode"]!)) · \(draft.names[id] ?? id) · \(id)")
         }
         path.selectItem(at: min(max(selected ?? 0, 0), draft.nodes.count - 1))
+        selectedHopChanged()
         status.stringValue = "\(draft.nodes.count) of 8 nodes. Apply stages this selection; Connect starts it."
+    }
+    @objc private func selectedHopChanged() {
+        let index = path.indexOfSelectedItem
+        transport.isEnabled = draft.prefixes.indices.contains(index)
+        transport.selectItem(at: transport.isEnabled ? RouterVPNOrderedNodes.prefixModes.firstIndex(of: draft.modes[index]) ?? -1 : -1)
+    }
+    @objc private func transportChanged() {
+        do {
+            guard let mode = transport.selectedItem?.representedObject as? String else { throw RouterVPNOrderedNodes.issue("Choose an entry or hop transport.") }
+            let index = path.indexOfSelectedItem; try draft.chooseMode(mode, at: index); render(selected: index)
+        } catch { status.stringValue = error.localizedDescription }
     }
     @objc private func addHop() {
         do { guard let id = candidates.selectedItem?.representedObject as? String else { throw RouterVPNOrderedNodes.issue("Link another router node first.") }; try draft.add(id); render(selected: draft.prefixes.count - 1) }

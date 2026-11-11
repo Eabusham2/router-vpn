@@ -41,7 +41,7 @@ try{
     [void][ScriptBlock]::Create($ProductSource)
 
     $Helpers=''
-    foreach($Name in @('global:Get-RouterVPNCurrentModeSnapshot','global:Set-RouterVPNLoadedModeSnapshot','global:Get-RouterVPNVisibleConnectionSnapshot','global:Apply-RouterVPNLoadedConnectionSnapshot','global:Get-RouterVPNOrderedValue','global:Copy-RouterVPNOrderedNodes','global:New-RouterVPNOrderedConnectPayload','global:Get-RouterVPNOrderedConnectionSnapshot','global:Set-RouterVPNLoadedOrderedSnapshot')){
+    foreach($Name in @('global:Get-RouterVPNCurrentModeSnapshot','global:Set-RouterVPNLoadedModeSnapshot','global:Get-RouterVPNVisibleConnectionSnapshot','global:Apply-RouterVPNLoadedConnectionSnapshot','global:Get-RouterVPNOrderedValue','global:Test-RouterVPNOrderedPrefixMode','global:Copy-RouterVPNOrderedNodes','global:New-RouterVPNOrderedConnectPayload','global:Get-RouterVPNOrderedConnectionSnapshot','global:Set-RouterVPNLoadedOrderedSnapshot')){
         # Type and storage boundaries only; all selection and payload logic is
         # taken unchanged from the functions loaded by the shipping launcher.
         $Helpers+=(ShippingFunction $ProfileSettingsSource $Name).Replace('[System.Windows.Window]','[object]').Replace('$PSScriptRoot','$FixtureStateRoot')+"`n"
@@ -247,10 +247,10 @@ public sealed class ProfileModeOwner {
     $Window=$Owner;$ordered=[pscustomobject]@{IsChecked=$true};$chainButton=[pscustomobject]@{Tag=$null}
     $Owner.Controls['UnifiedOrdered']=$ordered;$Owner.Controls['UnifiedNodeChainButton']=$chainButton;$Owner.Controls['UnifiedNodeCombo']=$RouterCombo
     $script:OrderedCapability=[pscustomobject]@{ordered_nodes_supported=$true}
-    foreach($nodeCount in @(2,3,4,8)){
+    foreach($mixed in @($false,$true)){foreach($nodeCount in @(2,3,4,8)){
         $nodes=@();$profiles=@();$tokens=@{}
         for($i=0;$i-lt$nodeCount;$i++){
-            $id='ordered-'+$i;$mode=if($i-eq$nodeCount-1){'shadowsocks'}else{'wg'}
+            $id='ordered-'+$i;$mode=if($i-eq$nodeCount-1){'shadowsocks'}elseif($mixed){@('awg2-fast','wg','awg2-strong')[$i%3]}else{'wg'}
             $nodes+=[pscustomobject]@{id=$id;mode=$mode;private_key='never-copy-member-secret'}
             $tokens[$id]=('{0:x64}' -f ($i+1))
             $profiles+=[pscustomobject]@{id=$id;name=('Node '+$i);node_kind='router-vpn';api_token='never-copy-token';profile_token=$tokens[$id]}
@@ -264,6 +264,7 @@ public sealed class ProfileModeOwner {
             $body=$script:Requests[-1].Body
             Check ($body.mode-ceq'shadowsocks'-and@($body.custom_layers).Count-eq0-and$body.multihop_execution-ceq'local') 'Ordered profile borrowed an unrelated logical mode or execution'
             Check (@($body.multihop_nodes).Count-eq$nodeCount-and(@($body.multihop_nodes.id)-join',')-ceq(@($nodes.id)-join',')) 'Ordered profile truncated or reordered a middle node'
+            Check ((@($body.multihop_nodes.mode)-join',')-ceq(@($nodes.mode)-join',')) 'Ordered profile changed per-position transports'
             foreach($field in @('multihop_entry_id','multihop_exit_id','multihop_entry_mode','multihop_exit_mode')){Check ($null-eq$body.PSObject.Properties[$field]) 'Ordered profile mixed legacy pair fields'}
             Check (($body|ConvertTo-Json -Depth 8)-notmatch'never-copy') 'Ordered profile copied private sources'
         }
@@ -275,11 +276,13 @@ public sealed class ProfileModeOwner {
         &$LoadCallback
         Check ($null-eq$script:ConnectBody-and$ordered.IsChecked-and$toggle.IsChecked) 'Ordered Load connected or lost its enabled choice'
         Check ($chainButton.Tag.control_id-ceq$control-and@($chainButton.Tag.nodes).Count-eq$nodeCount-and(@($chainButton.Tag.nodes.id)-join',')-ceq(@($nodes.id)-join',')) 'Ordered Load lost a middle or selected final node'
+        Check ((@($chainButton.Tag.nodes.mode)-join',')-ceq(@($nodes.mode)-join',')) 'Ordered Load replaced selected WG/AWG modes'
         UnifiedConnect;$body=$script:ConnectBody
         Check ($null-ne$body-and(@($body.PSObject.Properties.Name|Sort-Object)-join',')-ceq'execution,expected_profile_tokens,expected_selected_node_id,nodes') 'Ordered Connect sent legacy pair/private fields or omitted source owners'
         Check ($body.expected_selected_node_id-ceq$control-and@($body.expected_profile_tokens.PSObject.Properties).Count-eq$nodeCount) 'Ordered Connect lost original selected control or all-source hash preconditions'
         foreach($node in $nodes){Check ((Get-RouterVPNOrderedValue $body.expected_profile_tokens $node.id)-ceq$tokens[$node.id]) 'Ordered Connect changed a source token'}
         Check ($body.execution-ceq'local'-and(@($body.nodes.id)-join',')-ceq(@($nodes.id)-join',')-and$body.nodes[-1].mode-ceq'shadowsocks') 'Ordered Connect changed its complete path'
+        Check ((@($body.nodes.mode)-join',')-ceq(@($nodes.mode)-join',')) 'Ordered Connect changed exact captured WG/AWG modes'
         $copy=@(Copy-RouterVPNOrderedNodes $nodes $control);$copy[0].id='replacement'
         Check ($nodes[0].id-ceq'ordered-0') 'Ordered copy retained mutable member references'
         foreach($capability in @([pscustomobject]@{},[pscustomobject]@{ordered_nodes_supported=$false},[pscustomobject]@{ordered_nodes_supported='true'})){
@@ -301,7 +304,7 @@ public sealed class ProfileModeOwner {
             Check ($null-eq$script:ConnectBody) ('Changed ordered selection reached Connect: '+$fault)
             $RouterCombo.Tag=$saved
         }
-    }
+    }}
     foreach($bad in @(@(),@([pscustomobject]@{id='final';mode='shadowsocks'}),@($nodes+$nodes[0]),@([pscustomobject]@{id='same';mode='wg'},[pscustomobject]@{id='same';mode='shadowsocks'}),@([pscustomobject]@{id='wrong final';mode='wg'},[pscustomobject]@{id='final';mode='shadowsocks'}),@([pscustomobject]@{id='entry';mode='WG'},[pscustomobject]@{id='final';mode='shadowsocks'}),@([pscustomobject]@{id='entry';mode='wg'},[pscustomobject]@{id='another';mode='shadowsocks'}))){
         $rejected=$false;try{[void](Copy-RouterVPNOrderedNodes $bad 'final')}catch{$rejected=$true}
         Check $rejected 'Invalid or foreign-final ordered selection was accepted'

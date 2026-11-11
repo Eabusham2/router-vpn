@@ -450,9 +450,17 @@ for key in ["multihop_entry_id", "multihop_exit_id", "multihop_exit_mode", "mult
 _ = chooseOrdered(8)
 var draft = try owner.makeOrderedNodeDraft()
 let originalControl = draft.control
+try draft.chooseMode("awg2-fast", at: 0); try draft.chooseMode("awg2-strong", at: 1)
+check(draft.nodes[0]["mode"] == "awg2-fast" && draft.nodes[1]["mode"] == "awg2-strong", "editor substituted the chosen AWG variant")
+for mode in ["awg", "wg-pq", "shadowsocks", "", "AWG2 Fast"] {
+    rejects({ try draft.chooseMode(mode, at: 0) }, "editor accepted an unsupported or normalized prefix transport")
+}
+rejects({ try draft.chooseMode("awg2-fast", at: draft.prefixes.count) }, "editor changed its final exit transport")
 try draft.move(1, by: -1); check(draft.prefixes[0] == "ordered-1" && draft.nodes.last?["id"] == originalControl, "editor move changed the final owner")
+check(draft.nodes[0]["mode"] == "awg2-strong" && draft.nodes[1]["mode"] == "awg2-fast", "editor move lost its member transport")
 try draft.remove(1); try draft.add("ordered-0")
 check(draft.prefixes.last == "ordered-0", "editor remove/add did not preserve explicit order")
+check(draft.nodes[0]["mode"] == "awg2-strong" && draft.nodes[draft.prefixes.count - 1]["mode"] == "wg", "editor remove/add reassigned another member transport")
 rejects({ try draft.add("ordered-0") }, "duplicate editor hop accepted")
 rejects({ try draft.add(originalControl) }, "editor accepted the final exit as a prefix")
 rejects({ try draft.move(draft.prefixes.count, by: -1) }, "editor moved its pinned exit")
@@ -460,6 +468,8 @@ rejects({ try draft.remove(draft.prefixes.count) }, "editor removed its pinned e
 let staged = try draft.selection(); orderedBefore = owner.api.calls.count
 try owner.applyOrderedNodeDraft(draft)
 check(owner.captureConnectionProfileSelection().orderedNodes == staged.orderedNodes && owner.api.calls.count == orderedBefore, "editor Apply connected or lost its selected order")
+let reopenedDraft = try owner.makeOrderedNodeDraft()
+check(reopenedDraft.nodes == staged.orderedNodes, "reopened editor reset selected AWG transport")
 rejects({ try owner.applyOrderedNodeDraft(draft) }, "stale editor generation was accepted twice")
 _ = chooseOrdered(); let staleDraft = try owner.makeOrderedNodeDraft()
 var staleCatalog = owner.profiles; staleCatalog[1]["profile_token"] = String(repeating: "e", count: 64); owner.api.orderedCurrent["profiles"] = staleCatalog
