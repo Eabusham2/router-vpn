@@ -1,0 +1,884 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mtuprobe"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	WG "github.com/sagernet/sing-box/protocol/wireguard"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
+)
+
+// Each reference prefix owns an independent real WG cryptographic device.
+// Only its next encrypted UDP tuple and its own authenticated health service
+// are reachable. The final WG prefix reaches the separately keyed SS2022
+// service. No caller can supply a forwarding destination or executable command.
+type desktopNodeChainPrefixRequest struct {
+	PrivateKey      string `json:"private_key"`
+	ClientPublicKey string `json:"client_public_key"`
+	PreSharedKey    string `json:"pre_shared_key"`
+	NodeProofID     string `json:"node_proof_id"`
+	APIToken        string `json:"api_token"`
+}
+
+type desktopNodeChainPeerRequest struct {
+	Schema           int                             `json:"schema"`
+	Address          string                          `json:"address"`
+	ClientAddress    string                          `json:"client_address"`
+	Prefixes         []desktopNodeChainPrefixRequest `json:"prefixes"`
+	FinalPassword    string                          `json:"final_password"`
+	FinalNodeProofID string                          `json:"final_node_proof_id"`
+	FinalAPIToken    string                          `json:"final_api_token"`
+}
+
+type desktopNodeChainPrefixReply struct {
+	RawUDP       int64  `json:"raw_udp"`
+	TCP          int64  `json:"tcp"`
+	UDP          int64  `json:"udp"`
+	ProofQueries uint64 `json:"proof_queries"`
+	AuthRefusals uint64 `json:"auth_refusals"`
+}
+
+type desktopNodeChainPeerReply struct {
+	Schema   int                           `json:"schema"`
+	Address  string                        `json:"address"`
+	PublicCA string                        `json:"public_ca"`
+	Prefixes []desktopNodeChainPrefixReply `json:"prefixes"`
+	Final    desktopImportedWGSSReply      `json:"final"`
+}
+
+func desktopNodeChainInner(position, count int) (string, string) {
+	if position == count-1 {
+		return "10.78.0.1", "10.78.0.2"
+	}
+	return fmt.Sprintf("10.%d.0.1", 80+position), fmt.Sprintf("10.%d.0.2", 80+position)
+}
+
+func desktopNodeChainNext(position int) string {
+	return fmt.Sprintf("198.51.100.%d:51820", 101+position)
+}
+
+func desktopNodeChainPeerIdentity(request desktopNodeChainPeerRequest) ([]string, error) {
+	bad := errors.New("ordered reference requires complete independent captured peers")
+	if request.Schema != 1 || request.Address != "192.168.210.2" || request.ClientAddress != "192.168.210.1" ||
+		len(request.Prefixes) < 2 || len(request.Prefixes) > 3 {
+		return nil, bad
+	}
+	seenKeys, seenIDs, seenTokens := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	readKey := func(encoded string) ([]byte, error) {
+		raw, err := base64.StdEncoding.Strict().DecodeString(encoded)
+		if err != nil || len(raw) != 32 || bytes.Equal(raw, make([]byte, 32)) || base64.StdEncoding.EncodeToString(raw) != encoded || seenKeys[encoded] {
+			clear(raw)
+			return nil, bad
+		}
+		seenKeys[encoded] = true
+		return raw, nil
+	}
+	checkIdentity := func(node, token string) bool {
+		raw, err := hex.DecodeString(node)
+		if err != nil || len(raw) != 32 || hex.EncodeToString(raw) != node || seenIDs[node] || seenTokens[token] ||
+			len(token) < 16 || len(token) > 256 || strings.ContainsAny(token, "\r\n\x00") {
+			return false
+		}
+		seenIDs[node], seenTokens[token] = true, true
+		return true
+	}
+	var result []string
+	for position, prefix := range request.Prefixes {
+		private, e1 := readKey(prefix.PrivateKey)
+		client, e2 := readKey(prefix.ClientPublicKey)
+		psk, e3 := readKey(prefix.PreSharedKey)
+		if e1 != nil || e2 != nil || e3 != nil {
+			clear(private)
+			clear(client)
+			clear(psk)
+			return nil, bad
+		}
+		server, err := ecdh.X25519().NewPrivateKey(private)
+		if err != nil || bytes.Equal(server.PublicKey().Bytes(), client) || !checkIdentity(prefix.NodeProofID, prefix.APIToken) {
+			clear(private)
+			clear(client)
+			clear(psk)
+			return nil, bad
+		}
+		public := base64.StdEncoding.EncodeToString(server.PublicKey().Bytes())
+		identity := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+		if prefix.NodeProofID != hex.EncodeToString(identity[:]) || seenKeys[public] {
+			clear(private)
+			clear(client)
+			clear(psk)
+			return nil, bad
+		}
+		seenKeys[public] = true
+		_, address := desktopNodeChainInner(position, len(request.Prefixes))
+		result = append(result, fmt.Sprintf("private_key=%x\npublic_key=%x\npreshared_key=%x\nallowed_ip=%s/32\nallowed_ip=fd78:78::2/128\n", private, client, psk, address))
+		clear(private)
+		clear(client)
+		clear(psk)
+	}
+	password, err := readKey(request.FinalPassword)
+	clear(password)
+	if err != nil || !checkIdentity(request.FinalNodeProofID, request.FinalAPIToken) {
+		return nil, bad
+	}
+	return result, nil
+}
+
+type desktopNodeChainPrefixPeer struct {
+	bind          *desktopNodeWGBind
+	handler       *desktopNodeWGHandler
+	proof, denied atomic.Uint64
+	wrong, held   atomic.Bool
+}
+
+type desktopNodeChainPeer struct {
+	prefixes []*desktopNodeChainPrefixPeer
+	final    *desktopImportedWGSSPeer
+}
+
+func (p *desktopNodeChainPeer) snapshot() desktopNodeChainPeerReply {
+	r := desktopNodeChainPeerReply{Schema: 1, Address: p.prefixes[0].bind.address(), PublicCA: p.final.ca, Final: p.final.snapshot()}
+	for _, prefix := range p.prefixes {
+		r.Prefixes = append(r.Prefixes, desktopNodeChainPrefixReply{prefix.bind.packets.Load(), prefix.handler.tcp.Load(), prefix.handler.udp.Load(), prefix.proof.Load(), prefix.denied.Load()})
+	}
+	return r
+}
+
+func (p *desktopNodeChainPeer) control(command string) error {
+	for _, action := range []string{"wrong-node", "restore-node", "hold-node", "release-node"} {
+		if text, found := strings.CutPrefix(command, action+":"); found {
+			index, err := strconv.Atoi(text)
+			if err != nil || index < 0 || index >= len(p.prefixes) || strconv.Itoa(index) != text {
+				return errors.New("uncaptured ordered prefix control")
+			}
+			if action == "wrong-node" || action == "restore-node" {
+				p.prefixes[index].wrong.Store(action == "wrong-node")
+			}
+			if action == "hold-node" || action == "release-node" {
+				p.prefixes[index].held.Store(action == "hold-node")
+			}
+			return nil
+		}
+	}
+	return p.final.control(command, true)
+}
+
+func desktopNodeChainPeerStart(t *testing.T, request desktopNodeChainPeerRequest, local, remote netip.Addr) *desktopNodeChainPeer {
+	t.Helper()
+	ipcs, err := desktopNodeChainPeerIdentity(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loopback := netip.MustParseAddr("127.0.0.1")
+	if !(local == netip.MustParseAddr(request.Address) && remote == netip.MustParseAddr(request.ClientAddress)) && !(local == loopback && remote == loopback) {
+		t.Fatal("ordered reference lost its original isolated physical pair")
+	}
+	count := len(request.Prefixes)
+	p := &desktopNodeChainPeer{prefixes: make([]*desktopNodeChainPrefixPeer, count)}
+	last := request.Prefixes[count-1]
+	p.final = desktopImportedWGSSStart(t, desktopImportedWGSSRequest{Schema: 1, Address: request.Address, ClientAddress: request.ClientAddress,
+		PrivateKey: last.PrivateKey, ClientPublicKey: last.ClientPublicKey, PreSharedKey: last.PreSharedKey,
+		FinalPassword: request.FinalPassword, NodeProofID: request.FinalNodeProofID, Token: request.FinalAPIToken, Cover: true}, loopback, loopback)
+	p.prefixes[count-1] = &desktopNodeChainPrefixPeer{bind: p.final.bind, handler: p.final.entry}
+	delete(p.final.entry.rules, "tcp/1.1.1.1:443")
+	// Keep the original bounded benchmark/health server, requiring the final
+	// captured token before any request reaches it. No public fallback exists.
+	health, found := p.final.final.route("tcp", desktopNodeRouterHealthTarget)
+	if !found {
+		t.Fatal("final reference lost its original private service")
+	}
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, ResponseHeaderTimeout: 2 * time.Second,
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			if network != "tcp" || address != health {
+				return nil, errors.New("uncaptured final health forwarding")
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, address)
+		}}
+	t.Cleanup(transport.CloseIdleConnections)
+	finalHealth := desktopImportedWGSSHTTP(t, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != desktopNodeRouterHealthTarget || r.Header.Get("Authorization") != "Bearer "+request.FinalAPIToken || r.ContentLength > 16<<20 || len(r.TransferEncoding) != 0 {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		captured := r.Clone(r.Context())
+		captured.RequestURI = ""
+		captured.URL.Scheme = "http"
+		captured.URL.Host = health
+		response, err := transport.RoundTrip(captured)
+		if err != nil {
+			http.Error(w, "private service unavailable", http.StatusBadGateway)
+			return
+		}
+		defer response.Body.Close()
+		for name, values := range response.Header {
+			for _, value := range values {
+				w.Header().Add(name, value)
+			}
+		}
+		w.WriteHeader(response.StatusCode)
+		_, _ = io.Copy(w, io.LimitReader(response.Body, 16<<20+1))
+	}))
+	certificate, ca := desktopImportedWGSSCertificate(t)
+	p.final.ca = ca
+	public := desktopImportedWGSSHTTP(t, &certificate, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		nonce := query.Get("routervpn_proof")
+		decoded, nonceError := hex.DecodeString(nonce)
+		if r.Method != http.MethodGet || r.Host != "1.1.1.1" || r.URL.Path != "/cdn-cgi/trace" ||
+			r.ContentLength != 0 || len(r.TransferEncoding) != 0 ||
+			(r.URL.RawQuery != "" && (len(query) != 1 || len(query["routervpn_proof"]) != 1 || nonceError != nil || len(decoded) != 16 || hex.EncodeToString(decoded) != nonce)) {
+			http.NotFound(w, r)
+			return
+		}
+		p.final.finalPublic.Add(1)
+		w.Header().Set("Content-Type", "text/plain")
+		if p.final.wrongPublic.Load() {
+			fmt.Fprint(w, "ip=203.0.113.90\n")
+		} else {
+			fmt.Fprint(w, "ip=203.0.113.89\n")
+		}
+	}))
+	for i := range p.final.final.routes {
+		route := &p.final.final.routes[i]
+		if route.Network == "tcp" && route.Destination == desktopNodeRouterHealthTarget {
+			route.Physical = finalHealth
+		}
+		if route.Network == "tcp" && route.Destination == "1.1.1.1:443" {
+			route.Physical = public
+		}
+	}
+	for position := count - 1; position >= 0; position-- {
+		prefix := p.prefixes[position]
+		if prefix == nil {
+			prefix = &desktopNodeChainPrefixPeer{}
+			p.prefixes[position] = prefix
+		}
+		identity := request.Prefixes[position]
+		inner, _ := desktopNodeChainInner(position, count)
+		target := net.JoinHostPort(inner, "8787")
+		service := desktopImportedWGSSHTTP(t, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.Host != target || r.URL.Path != "/health" || r.URL.RawQuery != "" || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+				http.NotFound(w, r)
+				return
+			}
+			if r.Header.Get("Authorization") != "Bearer "+identity.APIToken {
+				prefix.denied.Add(1)
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			prefix.proof.Add(1)
+			if prefix.held.Load() {
+				<-r.Context().Done()
+				return
+			}
+			node := identity.NodeProofID
+			if prefix.wrong.Load() {
+				node = strings.Repeat("f", 64)
+				if node == identity.NodeProofID {
+					node = strings.Repeat("e", 64)
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(desktopImportedWGSSHealthReply{true, node, "router-vpn-private-agent-v1"})
+		}))
+		if position == count-1 {
+			prefix.handler.rules["tcp/"+target] = desktopReferenceRule{Network: "tcp", Address: inner, Port: 8787, Target: service}
+			continue
+		}
+		next := netip.MustParseAddrPort(desktopNodeChainNext(position + 1))
+		rules := map[string]desktopReferenceRule{
+			"tcp/" + target:        {Network: "tcp", Address: inner, Port: 8787, Target: service},
+			"udp/" + next.String(): {Network: "udp", Address: next.Addr().String(), Port: int(next.Port()), Target: p.prefixes[position+1].bind.address()},
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		prefix.handler = &desktopNodeWGHandler{desktopReferenceHandler: &desktopReferenceHandler{ctx: ctx, cancel: cancel, rules: rules, owned: map[io.Closer]bool{}}}
+		stack, err := wg.NewDevice(wg.DeviceOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), Handler: prefix.handler, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 2000,
+			Address: []netip.Prefix{netip.MustParsePrefix(inner + "/32"), netip.MustParsePrefix("fd78:78::1/128")}})
+		if err != nil {
+			prefix.handler.close()
+			t.Fatal(err)
+		}
+		bindLocal, bindRemote := loopback, loopback
+		if position == 0 {
+			bindLocal, bindRemote = local, remote
+		}
+		prefix.bind = &desktopNodeWGBind{local: bindLocal, remote: bindRemote}
+		device, err := startDesktopNodeWGReferenceDevice(ctx, stack, prefix.bind, ipcs[position])
+		ipcs[position] = ""
+		if err != nil {
+			prefix.handler.close()
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { prefix.handler.close(); device.close() })
+	}
+	clear(ipcs)
+	return p
+}
+
+func TestRouterVPNDesktopNodeChainReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD") == "" {
+		return
+	}
+	if os.Getenv("ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD") != "1" {
+		t.Fatal("uncaptured ordered reference invocation")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, 32<<10+1)
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) > 32<<10 {
+		t.Fatal("ordered reference requires its bounded inherited request")
+	}
+	var request desktopNodeChainPeerRequest
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF {
+		t.Fatal("ordered reference request shape changed")
+	}
+	if _, err := desktopNodeChainPeerIdentity(request); err != nil {
+		t.Fatal(err)
+	}
+	local, remote := netip.MustParseAddr(request.Address), netip.MustParseAddr(request.ClientAddress)
+	interfaces, err := net.Interfaces()
+	found := false
+	for _, iface := range interfaces {
+		addresses, e := iface.Addrs()
+		if e != nil {
+			t.Fatal(e)
+		}
+		for _, address := range addresses {
+			prefix, e := netip.ParsePrefix(address.String())
+			found = found || e == nil && prefix.Addr() == local && iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagLoopback == 0
+		}
+	}
+	if err != nil || !found {
+		t.Fatal("ordered reference requires its original physical namespace", err)
+	}
+	peer := desktopNodeChainPeerStart(t, request, local, remote)
+	respond := func() {
+		if json.NewEncoder(os.Stdout).Encode(peer.snapshot()) != nil {
+			t.Fatal("ordered reply pipe failed")
+		}
+	}
+	respond()
+	for {
+		line, err = reader.ReadSlice('\n')
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return
+		}
+		if err != nil || len(line) > 32 {
+			t.Fatal("ordered reference control pipe failed")
+		}
+		if peer.control(strings.TrimSuffix(string(line), "\n")) != nil {
+			t.Fatal("uncaptured ordered reference control")
+		}
+		respond()
+	}
+}
+
+func desktopNodeChainPeerFixture(t *testing.T, count int) (desktopNodeChainPeerRequest, []string) {
+	t.Helper()
+	r := desktopNodeChainPeerRequest{Schema: 1, Address: "192.168.210.2", ClientAddress: "192.168.210.1", FinalAPIToken: "ordered-final-private-token"}
+	var clients []string
+	encode := base64.StdEncoding.EncodeToString
+	for i := 0; i < count; i++ {
+		server, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var secret [32]byte
+		if _, err := rand.Read(secret[:]); err != nil {
+			t.Fatal(err)
+		}
+		proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + encode(server.PublicKey().Bytes())))
+		r.Prefixes = append(r.Prefixes, desktopNodeChainPrefixRequest{encode(server.Bytes()), encode(client.PublicKey().Bytes()), encode(secret[:]), hex.EncodeToString(proof[:]), fmt.Sprintf("ordered-prefix-private-token-%d", i)})
+		clients = append(clients, encode(client.Bytes()))
+		clear(secret[:])
+	}
+	var secret [32]byte
+	if _, err := rand.Read(secret[:]); err != nil {
+		t.Fatal(err)
+	}
+	r.FinalPassword = encode(secret[:])
+	clear(secret[:])
+	proof := sha256.Sum256([]byte("isolated-final-node\n" + r.FinalPassword))
+	r.FinalNodeProofID = hex.EncodeToString(proof[:])
+	return r, clients
+}
+
+func desktopNodeChainJSON(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func desktopNodeChainPeerSource(t *testing.T, r desktopNodeChainPeerRequest, clients []string, address string) *mobilemultihop.NodeChain {
+	t.Helper()
+	source := mobilemultihop.NodeChainSource{Schema: 1, Execution: "local"}
+	for i := 0; i <= len(r.Prefixes); i++ {
+		mode, endpoint, api, token, proof := "wg", "", "", "", ""
+		files := map[string]string{}
+		if i < len(r.Prefixes) {
+			prefix := r.Prefixes[i]
+			inner, client := desktopNodeChainInner(i, len(r.Prefixes))
+			target := desktopNodeChainNext(i)
+			if i == 0 {
+				target = address
+			}
+			socket := netip.MustParseAddrPort(target)
+			endpoint = socket.Addr().String()
+			private, _ := base64.StdEncoding.DecodeString(prefix.PrivateKey)
+			provider, _ := ecdh.X25519().NewPrivateKey(private)
+			clear(private)
+			text := fmt.Sprintf("[Interface]\nAddress=%s/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=%s\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", client, clients[i], base64.StdEncoding.EncodeToString(provider.PublicKey().Bytes()), prefix.PreSharedKey, target)
+			files["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(text))
+			api, token, proof = "http://"+net.JoinHostPort(inner, "8787"), prefix.APIToken, prefix.NodeProofID
+		} else {
+			mode, endpoint, api, token, proof = "shadowsocks", "10.77.0.1", "http://"+desktopNodeRouterHealthTarget, r.FinalAPIToken, r.FinalNodeProofID
+			graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": endpoint, "server_port": 8388, "method": mobilemultihop.NativeStartLayerMethod, "password": r.FinalPassword}}, "route": map[string]any{"final": "proxy", "rules": []any{}}}
+			files["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(desktopNodeChainJSON(t, graph)))
+		}
+		probeHost, _, err := net.SplitHostPort(strings.TrimPrefix(api, "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		profile := map[string]any{"id": fmt.Sprintf("ordered-reference-node-%d", i), "node_kind": "router-vpn", "node_proof_id": proof, "router_api": api, "api_token": token, "endpoint": endpoint, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "mtu_policy": "auto", "ipv6_mode": "on", "home_lan_access": false, "kill_switch_policy": "on-connect", "daita_host": probeHost, "daita_port": mobilemtu.ProbePort}
+		node, err := mobilemultihop.NewNodeProfile(mode, desktopNodeChainJSON(t, files), desktopNodeChainJSON(t, profile), "", "")
+		if err != nil {
+			t.Fatal("complete ordered private source", i, err)
+		}
+		input, err := node.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		source.Nodes = append(source.Nodes, input)
+	}
+	chain, err := mobilemultihop.NewNodeChain(desktopNodeChainJSON(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return chain
+}
+
+// Execute the original compiler's native endpoint and final constructors.
+// This loopback test maps only the single captured physical tuple to its owned
+// reference socket. The installed fixture separately supplies actual TUN and
+// host protection; no successful physical observation is simulated here.
+type desktopNodeChainRejectInbound struct{ adapter.Router }
+
+func (*desktopNodeChainRejectInbound) RouteConnectionEx(_ context.Context, connection net.Conn, _ adapter.InboundContext, done N.CloseHandlerFunc) {
+	_ = connection.Close()
+	if done != nil {
+		done(errors.New("ordered traffic fixture refuses unsolicited inbound streams"))
+	}
+}
+
+func (*desktopNodeChainRejectInbound) RoutePacketConnectionEx(_ context.Context, connection N.PacketConn, _ adapter.InboundContext, done N.CloseHandlerFunc) {
+	_ = connection.Close()
+	if done != nil {
+		done(errors.New("ordered traffic fixture refuses unsolicited inbound packets"))
+	}
+}
+
+func desktopNodeChainPeerOutbounds(t *testing.T, ctx context.Context, chain *mobilemultihop.NodeChain, physicalAddress string, mutate func(int, map[string]any)) []adapter.Outbound {
+	t.Helper()
+	var graph map[string]any
+	if json.Unmarshal([]byte(chain.Config()), &graph) != nil {
+		t.Fatal("compiled ordered graph lost")
+	}
+	physical, err := chain.PhysicalEgress()
+	if err != nil || len(physical) != 1 {
+		t.Fatal("ordered chain has unexpected physical bypass", err)
+	}
+	lower := &desktopSSReferenceLower{virtual: net.JoinHostPort(physical[0].Host, strconv.Itoa(physical[0].Port)), original: physicalAddress}
+	manager := &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}}
+	owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
+	owned = service.ContextWith[adapter.NetworkManager](owned, &desktopImportedPacketNetwork{})
+	var outbounds []adapter.Outbound
+	for position, tag := range chain.PrefixTags() {
+		var row map[string]any
+		for _, family := range []string{"endpoints", "outbounds"} {
+			for _, raw := range graph[family].([]any) {
+				value := raw.(map[string]any)
+				if value["tag"] == tag {
+					row = value
+				}
+			}
+		}
+		if row == nil {
+			t.Fatal("compiled prefix vanished", tag)
+		}
+		if position == 0 {
+			row["detour"] = "captured-physical"
+		}
+		if mutate != nil {
+			mutate(position, row)
+		}
+		raw := []byte(desktopNodeChainJSON(t, row))
+		var out adapter.Outbound
+		switch row["type"] {
+		case "wireguard":
+			var options option.WireGuardEndpointOptions
+			if json.Unmarshal(raw, &options) != nil {
+				t.Fatal("invalid compiled WG options")
+			}
+			out, err = WG.NewEndpoint(owned, &desktopNodeChainRejectInbound{}, log.NewNOPFactory().Logger(), tag, options)
+		case "shadowsocks":
+			var options option.ShadowsocksOutboundOptions
+			if json.Unmarshal(raw, &options) != nil {
+				t.Fatal("invalid compiled SS options")
+			}
+			out, err = SS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), tag, options)
+		default:
+			t.Fatal("uncaptured reference transport", row["type"])
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		manager.owners[tag] = out
+		outbounds = append(outbounds, out)
+		closer, ok := out.(io.Closer)
+		if !ok {
+			t.Fatal("native prefix lost its close owner")
+		}
+		t.Cleanup(func() {
+			if err := closer.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+		for _, out := range outbounds {
+			if starter, ok := out.(adapter.Lifecycle); ok {
+				if err := starter.Start(stage); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	return outbounds
+}
+
+func TestRouterVPNDesktopNodeChainPeerCapture(t *testing.T) {
+	r, _ := desktopNodeChainPeerFixture(t, 3)
+	if _, err := desktopNodeChainPeerIdentity(r); err != nil {
+		t.Fatal(err)
+	}
+	for _, fault := range []string{"schema", "address", "count", "missing-middle", "key", "same-key", "same-id", "same-token", "wrong-proof", "final-key", "final-id", "final-token"} {
+		t.Run(fault, func(t *testing.T) {
+			bad := r
+			bad.Prefixes = append([]desktopNodeChainPrefixRequest(nil), r.Prefixes...)
+			switch fault {
+			case "schema":
+				bad.Schema = 2
+			case "address":
+				bad.Address = "127.0.0.1"
+			case "count":
+				bad.Prefixes = append(bad.Prefixes, bad.Prefixes[0])
+			case "missing-middle":
+				bad.Prefixes = bad.Prefixes[:1]
+			case "key":
+				bad.Prefixes[1].PrivateKey = "invalid"
+			case "same-key":
+				bad.Prefixes[1].PrivateKey = bad.Prefixes[0].PrivateKey
+			case "same-id":
+				bad.Prefixes[1].NodeProofID = bad.Prefixes[0].NodeProofID
+			case "same-token":
+				bad.Prefixes[1].APIToken = bad.Prefixes[0].APIToken
+			case "wrong-proof":
+				bad.Prefixes[1].NodeProofID = strings.Repeat("e", 64)
+			case "final-key":
+				bad.FinalPassword = bad.Prefixes[1].PreSharedKey
+			case "final-id":
+				bad.FinalNodeProofID = bad.Prefixes[1].NodeProofID
+			case "final-token":
+				bad.FinalAPIToken = ""
+			}
+			if _, err := desktopNodeChainPeerIdentity(bad); err == nil {
+				t.Fatal("foreign ordered reference accepted", fault)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainPeerTraffic(t *testing.T) {
+	for _, count := range []int{2, 3} {
+		var addresses []string
+		t.Run(fmt.Sprintf("%d-nodes", count+1), func(t *testing.T) {
+			request, clients := desktopNodeChainPeerFixture(t, count)
+			loopback := netip.MustParseAddr("127.0.0.1")
+			peer := desktopNodeChainPeerStart(t, request, loopback, loopback)
+			for _, prefix := range peer.prefixes {
+				addresses = append(addresses, prefix.bind.address())
+			}
+			physical := netip.MustParseAddrPort(peer.prefixes[0].bind.address())
+			sourceAddress := net.JoinHostPort(request.Address, strconv.Itoa(int(physical.Port())))
+			chain := desktopNodeChainPeerSource(t, request, clients, sourceAddress)
+			ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 45*time.Second)
+			defer cancel()
+			outbounds := desktopNodeChainPeerOutbounds(t, ctx, chain, peer.prefixes[0].bind.address(), nil)
+			final := outbounds[len(outbounds)-1]
+			get := func(parent context.Context, out adapter.Outbound, target, token string, trust bool) ([]byte, error) {
+				call, stop := context.WithTimeout(parent, 1500*time.Millisecond)
+				defer stop()
+				roots := x509.NewCertPool()
+				if trust && !roots.AppendCertsFromPEM([]byte(peer.final.ca)) {
+					t.Fatal("original private test root missing")
+				}
+				transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, DialContext: func(c context.Context, n, a string) (net.Conn, error) {
+					return out.DialContext(c, n, M.ParseSocksaddr(a))
+				}}
+				defer transport.CloseIdleConnections()
+				req, _ := http.NewRequestWithContext(call, http.MethodGet, target, nil)
+				if token != "" {
+					req.Header.Set("Authorization", "Bearer "+token)
+				}
+				response, err := (&http.Client{Transport: transport}).Do(req)
+				if err != nil {
+					return nil, err
+				}
+				defer response.Body.Close()
+				body, err := io.ReadAll(io.LimitReader(response.Body, 8193))
+				if response.StatusCode != 200 || len(body) > 8192 {
+					return nil, errors.New("unproved private HTTP response")
+				}
+				return body, err
+			}
+			packet := func(out adapter.Outbound, body []byte, target string) ([]byte, error) {
+				call, stop := context.WithTimeout(ctx, 500*time.Millisecond)
+				defer stop()
+				c, err := out.DialContext(call, "udp", M.ParseSocksaddr(target))
+				if err != nil {
+					return nil, err
+				}
+				defer c.Close()
+				deadline, _ := call.Deadline()
+				_ = c.SetDeadline(deadline)
+				if n, err := c.Write(body); err != nil || n != len(body) {
+					return nil, errors.Join(err, io.ErrShortWrite)
+				}
+				reply := make([]byte, mtuprobe.MaxBytes+1)
+				n, err := c.Read(reply)
+				return reply[:n], err
+			}
+			for i, prefix := range request.Prefixes {
+				t.Run(fmt.Sprintf("prefix-%d-authenticated", i), func(t *testing.T) {
+					inner, _ := desktopNodeChainInner(i, count)
+					before := peer.snapshot()
+					body, err := get(ctx, outbounds[i], "http://"+net.JoinHostPort(inner, "8787")+"/health", prefix.APIToken, false)
+					var result desktopImportedWGSSHealthReply
+					after := peer.snapshot()
+					if err != nil || json.Unmarshal(body, &result) != nil || !result.OK || result.NodeID != prefix.NodeProofID || result.Proof != "router-vpn-private-agent-v1" || after.Prefixes[i].ProofQueries != before.Prefixes[i].ProofQueries+1 {
+						t.Fatal("prefix did not prove its own real encrypted path", i, err, after)
+					}
+					for j := 0; j <= i; j++ {
+						if after.Prefixes[j].RawUDP <= before.Prefixes[j].RawUDP {
+							t.Fatal("prefix proof bypassed encrypted predecessor", i, j)
+						}
+					}
+					for j := i + 1; j < count; j++ {
+						// WG may send its own captured keepalive while another
+						// prefix is measured. Only a real private query proves
+						// the successor; a raw UDP packet does not.
+						if after.Prefixes[j].ProofQueries != before.Prefixes[j].ProofQueries {
+							t.Fatal("prefix proof crossed an unrelated successor", i, j)
+						}
+					}
+				})
+			}
+			t.Run("final-private-public-and-selected-dns", func(t *testing.T) {
+				before := peer.snapshot()
+				body, err := get(ctx, final, "http://"+desktopNodeRouterHealthTarget+"/health", request.FinalAPIToken, false)
+				var result desktopImportedWGSSHealthReply
+				if err != nil || json.Unmarshal(body, &result) != nil || result.NodeID != request.FinalNodeProofID {
+					t.Fatal("final private identity was substituted", err)
+				}
+				body, err = get(ctx, final, "https://1.1.1.1/cdn-cgi/trace?routervpn_proof="+strings.Repeat("a", 32), "", true)
+				if err != nil || string(body) != "ip=203.0.113.89\n" {
+					t.Fatal("ordered final TLS proof failed", err)
+				}
+				q := new(dns.Msg).SetQuestion("example.com.", dns.TypeA)
+				wire, _ := q.Pack()
+				reply, err := packet(final, wire, "192.168.50.133:53")
+				var answer dns.Msg
+				if err != nil || answer.Unpack(reply) != nil || answer.Id != q.Id || answer.Rcode != dns.RcodeSuccess {
+					t.Fatal("selected final DNS failed", err)
+				}
+				after := peer.snapshot()
+				if after.Final.RouterQueries != before.Final.RouterQueries+1 || after.Final.FinalPublicQueries != before.Final.FinalPublicQueries+1 || after.Final.DNSQueries != before.Final.DNSQueries+1 {
+					t.Fatal("final service counters changed", after)
+				}
+				for i := range after.Prefixes {
+					if after.Prefixes[i].RawUDP <= before.Prefixes[i].RawUDP || after.Prefixes[i].UDP == 0 || after.Prefixes[i].ProofQueries != before.Prefixes[i].ProofQueries {
+						t.Fatal("final traffic omitted a real middle transport", i, before.Prefixes[i], after.Prefixes[i])
+					}
+				}
+			})
+			t.Run("wrong-middle-token-and-identity", func(t *testing.T) {
+				inner, _ := desktopNodeChainInner(1, count)
+				target := "http://" + net.JoinHostPort(inner, "8787") + "/health"
+				before := peer.snapshot()
+				if _, err := get(ctx, outbounds[1], target, request.Prefixes[0].APIToken, false); err == nil {
+					t.Fatal("another node token reached the middle")
+				}
+				if peer.snapshot().Prefixes[1].AuthRefusals != before.Prefixes[1].AuthRefusals+1 {
+					t.Fatal("wrong token did not reach the actual middle refusal")
+				}
+				for _, control := range []string{"wrong-node:1", "restore-node:1"} {
+					if err := peer.control(control); err != nil {
+						t.Fatal(err)
+					}
+					body, err := get(ctx, outbounds[1], target, request.Prefixes[1].APIToken, false)
+					var response desktopImportedWGSSHealthReply
+					if err != nil || json.Unmarshal(body, &response) != nil || (response.NodeID == request.Prefixes[1].NodeProofID) != (control == "restore-node:1") {
+						t.Fatal("middle identity control did not affect actual response", err)
+					}
+				}
+			})
+			t.Run("middle-cannot-bypass-final-dns", func(t *testing.T) {
+				q := new(dns.Msg).SetQuestion("example.com.", dns.TypeA)
+				wire, _ := q.Pack()
+				before := peer.snapshot()
+				if _, err := packet(outbounds[count-1], wire, "192.168.50.133:53"); err == nil {
+					t.Fatal("middle bypassed final DNS")
+				}
+				if peer.snapshot().Final.DNSQueries != before.Final.DNSQueries {
+					t.Fatal("middle reached final service without final key")
+				}
+			})
+			t.Run("authenticated-final-mtu", func(t *testing.T) {
+				before := peer.snapshot()
+				for _, token := range []string{request.FinalAPIToken, request.Prefixes[1].APIToken} {
+					wire, err := mtuprobe.Request(1252, token, request.FinalNodeProofID, time.Now())
+					if err != nil {
+						t.Fatal(err)
+					}
+					reply, err := packet(final, wire, desktopNodeRouterCoverTarget)
+					valid := err == nil && mtuprobe.ValidateReply(wire, reply, request.FinalAPIToken, request.FinalNodeProofID, time.Now()) == nil
+					if valid != (token == request.FinalAPIToken) {
+						t.Fatal("final MTU accepted another private authority", err)
+					}
+				}
+				after := peer.snapshot()
+				if after.Final.MTUQueries != before.Final.MTUQueries+2 || after.Final.MTUReplies != before.Final.MTUReplies+1 {
+					t.Fatal("MTU did not reach the final encrypted responder", after)
+				}
+			})
+			t.Run("held-middle-cancellation", func(t *testing.T) {
+				_ = peer.control("hold-node:1")
+				defer peer.control("release-node:1")
+				call, stop := context.WithTimeout(ctx, 60*time.Millisecond)
+				defer stop()
+				inner, _ := desktopNodeChainInner(1, count)
+				if _, err := get(call, outbounds[1], "http://"+net.JoinHostPort(inner, "8787")+"/health", request.Prefixes[1].APIToken, false); !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("held middle lost caller cancellation", err)
+				}
+			})
+			for _, fault := range []string{"middle-key", "omit-middle", "final-key"} {
+				t.Run(fault, func(t *testing.T) {
+					// Each negative owns independent peers and client identities.
+					// A second same-key client would rebind the server's original
+					// endpoint and could invalidate the intended fault witness.
+					request, clients := desktopNodeChainPeerFixture(t, count)
+					peer := desktopNodeChainPeerStart(t, request, loopback, loopback)
+					physical := netip.MustParseAddrPort(peer.prefixes[0].bind.address())
+					chain := desktopNodeChainPeerSource(t, request, clients, net.JoinHostPort(request.Address, strconv.Itoa(int(physical.Port()))))
+					before := peer.snapshot()
+					bad := desktopNodeChainPeerOutbounds(t, ctx, chain, peer.prefixes[0].bind.address(), func(i int, row map[string]any) {
+						if fault == "middle-key" && i == 1 {
+							key, _ := ecdh.X25519().GenerateKey(rand.Reader)
+							row["private_key"] = base64.StdEncoding.EncodeToString(key.Bytes())
+						}
+						if fault == "omit-middle" && i == len(request.Prefixes) {
+							row["detour"] = chain.PrefixTags()[0]
+						}
+						if fault == "final-key" && i == len(request.Prefixes) {
+							row["password"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x49}, 32))
+						}
+					})
+					// Establish the intact encrypted predecessor before measuring
+					// the intended refusal. Cold WG handshake time is not evidence
+					// that an incorrect final key was actually rejected.
+					warmPosition := len(request.Prefixes) - 1
+					if fault == "middle-key" {
+						warmPosition = 0
+					}
+					warmAddress, _ := desktopNodeChainInner(warmPosition, len(request.Prefixes))
+					body, err := get(ctx, bad[warmPosition], "http://"+net.JoinHostPort(warmAddress, "8787")+"/health", request.Prefixes[warmPosition].APIToken, false)
+					var proved desktopImportedWGSSHealthReply
+					if err != nil || json.Unmarshal(body, &proved) != nil || proved.NodeID != request.Prefixes[warmPosition].NodeProofID {
+						t.Fatal("negative case lost its intact original predecessor", fault, err)
+					}
+					// An invalid WG identity may already have sent its first
+					// handshake during native Start. Retain that original zero
+					// baseline; the normal handshake retry interval is not a
+					// reason to lengthen this refusal deadline.
+					if fault != "middle-key" {
+						before = peer.snapshot()
+					}
+					call, stop := context.WithTimeout(ctx, 300*time.Millisecond)
+					defer stop()
+					if _, err := get(call, bad[len(bad)-1], "http://"+desktopNodeRouterHealthTarget+"/health", request.FinalAPIToken, false); err == nil {
+						t.Fatal("broken complete chain reached final proof", fault)
+					}
+					after := peer.snapshot()
+					if after.Final.RouterQueries != before.Final.RouterQueries {
+						t.Fatal("broken middle/final acquired final identity", fault, after)
+					}
+					if fault == "middle-key" && (after.Prefixes[1].RawUDP <= before.Prefixes[1].RawUDP || after.Prefixes[1].TCP != before.Prefixes[1].TCP || after.Prefixes[1].UDP != before.Prefixes[1].UDP) {
+						t.Fatal("wrong middle key did not reach independent cryptographic refusal", before.Prefixes[1], after.Prefixes[1])
+					}
+					if fault == "final-key" && (after.Final.FinalRawTCP <= before.Final.FinalRawTCP || after.Final.FinalTCP != before.Final.FinalTCP) {
+						t.Fatal("wrong final key did not reach independent SS refusal")
+					}
+				})
+			}
+		})
+		for _, address := range addresses {
+			connection, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.MustParseAddrPort(address)))
+			if err != nil {
+				t.Fatal("ordered peer leaked its original UDP owner", address, err)
+			}
+			_ = connection.Close()
+		}
+	}
+}
