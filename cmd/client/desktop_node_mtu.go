@@ -540,6 +540,9 @@ func (owner *desktopNodeMTUOwner) drainContext(parent context.Context) error {
 }
 
 func desktopNodeProcessDone(launch *desktopNodeLaunch) <-chan struct{} {
+	if launch != nil && launch.chain != nil && launch.chain.platform != nil {
+		return launch.chain.platform.processDone()
+	}
 	if launch != nil && launch.importedPlatform != nil {
 		return launch.importedPlatform.ProcessDone()
 	}

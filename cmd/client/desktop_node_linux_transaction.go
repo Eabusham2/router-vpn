@@ -35,6 +35,8 @@ type desktopLinuxNodeTransaction struct {
 	external        *mobilemultihop.DesktopExternalPolicy
 	imported        *mobilemultihop.DesktopImportedPolicy
 	importedSources *desktopLinuxImportedSources
+	chain           *mobilemultihop.DesktopNodeChainPolicy
+	chainSources    *desktopNodeChainSources
 	mode            string
 	operation       context.Context
 	startup         context.Context // original startup budget; operation remains request identity
@@ -275,6 +277,11 @@ func (t *desktopLinuxNodeTransaction) accepted(ctx context.Context) error {
 		return err
 	}
 	defer a.mu.Unlock()
+	if t.chain != nil {
+		if t.chainSources == nil || t.chainSources.currentLocked(a) != nil {
+			return errors.New("Linux ordered admission lost a captured member")
+		}
+	}
 	if t.imported != nil {
 		if t.importedSources == nil || t.importedSources.currentLocked(a, true) != nil {
 			return errors.New("Linux imported admission lost its applied independent sources")

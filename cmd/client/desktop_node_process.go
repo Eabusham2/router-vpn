@@ -233,6 +233,25 @@ func validateDesktopNodeProcessArguments(arguments []string, directory string) (
 	return append([]string(nil), arguments...), nil
 }
 
+func validateDesktopNodeChainProcessArguments(arguments []string, directory string) ([]string, error) {
+	if len(arguments) == 0 || arguments[0] != "routervpn-node-chain" {
+		return nil, errors.New("ordered native process requires its exact child command")
+	}
+	for _, argument := range arguments {
+		if argument == "--imported-source-sha256" {
+			return nil, errors.New("ordered native process cannot borrow imported-entry authority")
+		}
+	}
+	copied := append([]string(nil), arguments...)
+	copied[0] = "routervpn-node"
+	validated, err := validateDesktopNodeProcessArguments(copied, directory)
+	if err != nil {
+		return nil, err
+	}
+	validated[0] = "routervpn-node-chain"
+	return validated, nil
+}
+
 // The external command shares bounded public digest syntax, never Router
 // readiness or its optional MTU argument. This is not a generic CLI selector.
 func validateDesktopExternalProcessArguments(arguments []string, directory string) ([]string, error) {

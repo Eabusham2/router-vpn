@@ -24,6 +24,7 @@ type desktopLinuxNodeActivation struct {
 	policy        *mobilemultihop.DesktopNodePolicy
 	external      *mobilemultihop.DesktopExternalPolicy
 	imported      *mobilemultihop.DesktopImportedPolicy
+	chain         *mobilemultihop.DesktopNodeChainPolicy
 	externalProof *desktopLinuxExternalProof
 	launch        *desktopNodeLaunch
 	selection     linuxprotection.NodeSelection
@@ -61,7 +62,7 @@ func (active *desktopLinuxNodeActivation) matches(h *desktopLinuxNodeHost) error
 	if active == nil || h == nil || active.host != h || h.activation != active || active.parent == nil ||
 		active.parent != h.parent || active.operation == nil || active.operation != h.operation ||
 		active.process == nil || active.process != h.process || active.transaction == nil || active.transaction != h.transaction ||
-		(active.policy == nil) == (active.imported == nil) || active.policy != h.policy || active.imported != h.imported || active.launch == nil || active.launch != h.launch ||
+		(active.chain == nil && (active.policy == nil) == (active.imported == nil) || active.chain != nil && (active.policy != nil || active.imported != nil)) || active.policy != h.policy || active.imported != h.imported || active.chain != h.chain || active.launch == nil || active.launch != h.launch ||
 		active.selection != h.selection || active.network == "" || active.network != h.network || active.revision != h.revision || active.options != h.options || active.savedOptions != h.savedOptions ||
 		active.lifetime == nil || active.lifetime.Err() != nil || active.cancel == nil || h.proof == nil || *h.proof != active.proof ||
 		h.ready == nil || *h.ready != active.proof.ready || active.activatedAt.IsZero() || active.activatedAt == active.activatedAt.Round(0) ||
@@ -70,7 +71,7 @@ func (active *desktopLinuxNodeActivation) matches(h *desktopLinuxNodeHost) error
 	}
 	t, p := active.transaction, active.process
 	if !sameDesktopLinuxParentCapture(t.parent, active.parent) || !sameDesktopLinuxParentCapture(p.parent, active.parent) ||
-		t.process != p || t.policy != active.policy || t.imported != active.imported || t.selection != active.selection || t.operation != active.operation ||
+		t.process != p || t.policy != active.policy || t.imported != active.imported || t.chain != active.chain || t.selection != active.selection || t.operation != active.operation ||
 		t.profileID != active.launch.profileID || t.revision != active.revision || t.network != active.network || t.options != active.options || t.savedOptions != active.savedOptions ||
 		p.ctx == nil || p.ctx.Err() != nil || !p.Started() || p.retiring.Load() || p.joined == nil || p.command == nil || p.command != active.launch.command {
 		return errors.New("Linux Node activation substituted an original transaction or process")
@@ -101,7 +102,7 @@ func (h *desktopLinuxNodeHost) Activate(parent context.Context) (failure error) 
 		return h.activateExternalLocked(parent)
 	}
 	if h.activation != nil {
-		if h.imported != nil {
+		if h.imported != nil || h.chain != nil {
 			return h.observeLocked(parent)
 		}
 		return errors.New("Linux Node activation cannot reuse an entered original capability")
@@ -136,7 +137,7 @@ func (h *desktopLinuxNodeHost) Activate(parent context.Context) (failure error) 
 		return err
 	}
 	defer func() { t.gate <- struct{}{} }()
-	if t.process != h.process || t.policy != h.policy || t.imported != h.imported || t.selection != h.selection || !t.complete || !t.served || !t.admitted ||
+	if t.process != h.process || t.policy != h.policy || t.imported != h.imported || t.chain != h.chain || t.selection != h.selection || !t.complete || !t.served || !t.admitted ||
 		!t.nativeCommitted || t.stopRequested.Load() || t.retiring || t.retirement != nil || t.closed || t.retired || t.pending != nil {
 		return errors.New("Linux Node activation lost its original admitted durable transaction")
 	}
@@ -160,12 +161,17 @@ func (h *desktopLinuxNodeHost) Activate(parent context.Context) (failure error) 
 			return err
 		}
 	}
+	if h.chain != nil {
+		if err := h.launch.chain.platform.capture.sources.currentLocked(a); err != nil {
+			return err
+		}
+	}
 	if ctx.Err() != nil || h.parent.currentAppLocked(false) != nil ||
 		a.checkCapturedConnectionOperationLocked(h.operation) != nil || a.connectionCancelIntent == h.operation ||
 		physicalNetworkIdentity() != h.network ||
 		!exists || desktopOwnedNodeProfileToken(profile) != h.revision ||
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != h.savedOptions ||
-		a.cmd != h.process.command || a.state.Connected || a.state.Phase != "starting" && !(h.imported != nil && (a.state.Phase == "multihop:proving-local" || a.state.Phase == "multihop:proving-exit")) ||
+		a.cmd != h.process.command || a.state.Connected || a.state.Phase != "starting" && !((h.imported != nil || h.chain != nil) && (a.state.Phase == "multihop:proving-local" || a.state.Phase == "multihop:proving-exit")) ||
 		a.state.RouterID != h.launch.profileID || a.state.RuntimeMode != h.launch.mode ||
 		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} != h.options ||
 		h.process.ctx == nil || h.process.ctx.Err() != nil || t.stopRequested.Load() {
@@ -186,7 +192,7 @@ func (h *desktopLinuxNodeHost) Activate(parent context.Context) (failure error) 
 		return errors.New("Linux Node activation lost its original controller lifetime")
 	}
 	h.activation = &desktopLinuxNodeActivation{host: h, parent: h.parent, operation: h.operation, process: h.process,
-		transaction: t, policy: h.policy, imported: h.imported, launch: h.launch, selection: h.selection, network: h.network, revision: h.revision,
+		transaction: t, policy: h.policy, imported: h.imported, chain: h.chain, launch: h.launch, selection: h.selection, network: h.network, revision: h.revision,
 		options: h.options, savedOptions: h.savedOptions, proof: *h.proof, activatedAt: now, lifetime: lifetime, cancel: stopLifetime}
 	a.state.Connected, a.state.Phase, a.state.LastError = true, "connected", ""
 	return nil

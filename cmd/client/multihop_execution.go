@@ -217,7 +217,7 @@ func (s *desktopExecutionSession) identityContext(ctx context.Context) string {
 	if capture := s.selection.Native; capture != nil && (g.EntryMode != capture.entryMode || g.SourceSHA != capture.source || capture.validate(s.selection) != nil) {
 		return ""
 	}
-	if s.selection.Native != nil && s.selection.Native.imported && !s.driver.a.nativeMultihopProofOwnerCurrentContext(ctx, s.selection, s.command) {
+	if s.selection.Native != nil && (s.selection.Native.imported || s.selection.Native.chain != nil) && !s.driver.a.nativeMultihopProofOwnerCurrentContext(ctx, s.selection, s.command) {
 		return ""
 	}
 	if ctx.Err() != nil {
@@ -228,6 +228,15 @@ func (s *desktopExecutionSession) identityContext(ctx context.Context) string {
 func (s *desktopExecutionSession) Verify(ctx context.Context) error {
 	if s.identityContext(ctx) == "" {
 		return errors.New("candidate no longer owns its network/session")
+	}
+	if s.native != nil && s.native.chain != nil {
+		if err := proveDesktopNodeChainContext(ctx, s.driver.a, s.selection, s.command); err != nil {
+			return err
+		}
+		if s.native.chain.platform != nil {
+			return s.native.chain.platform.activate(ctx)
+		}
+		return desktopNodeChainCurrent(ctx, s.driver.a, s.native)
 	}
 	if s.native != nil && s.native.importedPlatform != nil {
 		if err := s.native.importedPlatform.Prove(ctx); err != nil {
@@ -353,10 +362,10 @@ func (s *desktopExecutionSession) Close(ctx context.Context) error {
 	// Never stop a replacement runtime. Internal transitions retain the selected
 	// kill-switch guard; explicit user Disconnect owns its release.
 	a := s.driver.a
-	if s.native != nil && s.native.importedPlatform != nil && !a.ownsConnectionRuntime(s.command) {
+	if desktopMultihopPlatformLaunch(s.native) && !a.ownsConnectionRuntime(s.command) {
 		// A child can exist before presentation publication. Its Linux
 		// session still owns complete retirement even with no app command.
-		if err := s.native.importedPlatform.Close(ctx); err != nil {
+		if err := closeDesktopMultihopPlatform(ctx, a, s.native); err != nil {
 			return err
 		}
 	}
@@ -383,6 +392,9 @@ func (s *desktopExecutionSession) Close(ctx context.Context) error {
 func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candidate) (routechoice.Session, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
+	}
+	if d.selection.Native != nil && d.selection.Native.chain != nil && (c.Execution != routechoice.Local || c.Transport != d.selection.ExitMode) {
+		return nil, errors.New("ordered native candidate cannot substitute execution or a captured node mode")
 	}
 	if d.selection.Entry.NodeKind == "external" && c.Execution != routechoice.Local {
 		return nil, errors.New("ordinary imported entry supports only explicit Local execution")
@@ -490,11 +502,11 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 			return s, err
 		}
 	}
-	platform := s.native != nil && s.native.importedPlatform != nil
+	platform := desktopMultihopPlatformLaunch(s.native)
 	protected := s.native != nil && (s.native.ownedNode != nil || platform)
 	if platform {
 		d.a.mu.Unlock()
-		if err := startDesktopImportedPlatform(ctx, d.a, sel, s.native); err != nil {
+		if err := startDesktopMultihopPlatform(ctx, d.a, sel, s.native); err != nil {
 			s.command = s.native.command
 			return s, err
 		}
@@ -507,7 +519,7 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 			return s, errors.New("Linux imported start lost its original operation")
 		}
 	} else if protected {
-		if err := d.a.publishDesktopImportedMultihopStartLocked(operation, s.native, sel); err != nil {
+		if err := d.a.publishDesktopCapturedMultihopStartLocked(operation, s.native, sel); err != nil {
 			d.a.mu.Unlock()
 			return s, err
 		}
@@ -542,7 +554,7 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 		}
 	}
 	if protected && !platform {
-		if err := startDesktopOwnedImportedLaunch(ctx, operation, d.a, s.native); err != nil {
+		if err := startDesktopCapturedMultihopOwned(ctx, operation, d.a, s.native); err != nil {
 			return s, err
 		}
 	}
@@ -553,9 +565,13 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 		if s.identityContext(ctx) == "" {
 			return s, errors.New("entry startup lost ownership")
 		}
-		err = d.a.observeImportedOpenVPN(ctx, sel, s.command)
-		if err == nil {
-			err = proveNativeMultihopLaneContext(ctx, sel.Entry, multihopEntryProofProxy)
+		if s.native != nil && s.native.chain != nil {
+			err = proveDesktopNodeChainContext(ctx, d.a, sel, s.command)
+		} else {
+			err = d.a.observeImportedOpenVPN(ctx, sel, s.command)
+			if err == nil {
+				err = proveNativeMultihopLaneContext(ctx, sel.Entry, multihopEntryProofProxy)
+			}
 		}
 		if err == nil {
 			if s.identityContext(ctx) == "" {

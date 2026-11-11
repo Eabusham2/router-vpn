@@ -169,6 +169,9 @@ func preflightRetainedNativeMultihop(ctx context.Context, binary string, launch 
 	}
 	environment := desktopNativeEnvironment(os.Environ(), launch.root, launch.profileID, launch.endpoint)
 	command := "routervpn-node"
+	if launch.chain != nil {
+		command = "routervpn-node-chain"
+	}
 	if launch.importedPlatform != nil {
 		command = "routervpn-imported"
 	}
@@ -213,7 +216,12 @@ func preflightOwnedNativeMultihopCommand(a *app, sel multihopSelection, descript
 func preflightOwnedNativeMultihopCommandContext(ctx context.Context, a *app, sel multihopSelection, descriptor *desktopExecutionDescriptor) (launch *desktopNodeLaunch, failure error) {
 	var binary string
 	var err error
-	if sel.Native != nil && sel.Native.importedPlatform != nil {
+	if sel.Native != nil && sel.Native.chain != nil {
+		if descriptor != nil {
+			return nil, errors.New("ordered native preflight requires explicit Local execution")
+		}
+		launch, binary, err = prepareDesktopNodeChainHost(ctx, a, sel)
+	} else if sel.Native != nil && sel.Native.importedPlatform != nil {
 		if !sel.Native.imported || descriptor != nil {
 			return nil, errors.New("Linux imported preflight requires its captured Local graph")
 		}
@@ -260,7 +268,7 @@ func stageOwnedNativeMultihopCommandContext(ctx context.Context, a *app, sel mul
 	if err := stageOwnedNativeMultihopInputsContext(ctx, a, sel, launch); err != nil {
 		return err
 	}
-	if launch.importedPlatform != nil {
+	if desktopMultihopPlatformLaunch(launch) {
 		return nil
 	}
 	return registerNativeMultihopDNSRuntime(a, sel, launch.command)
@@ -275,6 +283,14 @@ func stageOwnedNativeMultihopInputs(a *app, sel multihopSelection, launch *deskt
 func stageOwnedNativeMultihopInputsContext(ctx context.Context, a *app, sel multihopSelection, launch *desktopNodeLaunch) error {
 	if launch == nil || sel.Native == nil || sel.Native.validate(sel) != nil || launch.profileID != sel.Exit.ID || launch.policyProfileID != sel.Control.ID || launch.endpoint != sel.Native.endpoint || launch.importedEntry != sel.Native.imported {
 		return errors.New("native multihop source changed before staging")
+	}
+	if launch.chain != nil {
+		if launch.chain.selection.Native != sel.Native || validateDesktopNodeChainLaunch(ctx, launch) != nil {
+			return errors.New("ordered staging changed its complete source")
+		}
+		if launch.chain.platform != nil {
+			return launch.chain.platform.stage(ctx)
+		}
 	}
 	if launch.importedPlatform != nil {
 		return launch.importedPlatform.Stage(ctx)
@@ -310,6 +326,10 @@ func bindNativeMultihopRuntimeContext(ctx context.Context, a *app, launch *deskt
 	if launch != nil && launch.ownedNode != nil && launch.ownedNode.imported != nil {
 		observe = launch.ownedNode.imported.readNetwork
 	}
+	if launch != nil && launch.chain != nil && launch.chain.selection.Native != nil && launch.chain.selection.Native.chain != nil &&
+		launch.chain.selection.Native.chain.host != nil {
+		observe = launch.chain.selection.Native.chain.host.readNetwork
+	}
 	if ctx == nil || observe == nil {
 		return errors.New("native multihop lost its original network observer")
 	}
@@ -321,7 +341,7 @@ func bindNativeMultihopRuntimeContext(ctx context.Context, a *app, launch *deskt
 	if launch == nil || launch.command == nil || sel.Native == nil || !found ||
 		!a.ownsConnectionRuntime(launch.command) || network == "" || actual != network ||
 		graph.EntryID != sel.Entry.ID || graph.ExitID != sel.Exit.ID || graph.Base != sel.Base || graph.EntryMode != sel.Native.entryMode ||
-		graph.SourceSHA != sel.Native.source || graph.ExitMode != sel.ExitMode || graph.Execution != "local" && graph.Execution != "server" {
+		graph.SourceSHA != sel.Native.source || graph.ExitMode != sel.ExitMode || graph.ChainNodes != len(sel.Nodes) || graph.Execution != "local" && graph.Execution != "server" {
 		return errors.New("native multihop changed before its retained TUN could be adopted")
 	}
 	if err := nativeMultihopLaunchCurrent(ctx, a, launch); err != nil {
@@ -341,6 +361,26 @@ func nativeMultihopLaunchStarted(launch *desktopNodeLaunch) bool {
 func retireUnstartedNativeMultihop(launch *desktopNodeLaunch) error {
 	if launch == nil || nativeMultihopLaunchStarted(launch) {
 		return nil
+	}
+	if launch.chain != nil {
+		ctx, cancel := desktopNodeChainRetirementContext()
+		defer cancel()
+		var a *app
+		if capture := launch.chain.selection.Native.chain.host; capture != nil {
+			a = capture.app
+		}
+		if launch.ownedNode == nil && launch.chain.platform == nil && launch.command == nil && launch.directory == "" {
+			clear(launch.config)
+			clear(launch.metadata)
+			return nil
+		}
+		if err := closeDesktopNodeChainLaunch(ctx, a, launch); err != nil {
+			return err
+		}
+		if launch.chain.platform != nil {
+			return nil
+		}
+		clear(launch.ownedNode.source)
 	}
 	if launch.importedPlatform != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -430,6 +470,12 @@ func capturedNativeMultihopRuntimeContext(ctx context.Context, a *app, command *
 func nativeMultihopLaunchCurrent(ctx context.Context, a *app, launch *desktopNodeLaunch) error {
 	if launch == nil {
 		return errors.New("multihop observation lost its original launch")
+	}
+	if launch.chain != nil {
+		if launch.ownedNode != nil && !desktopOwnedNodeCreated(launch) {
+			return a.desktopOwnedNodeCurrentContext(ctx, launch, false)
+		}
+		return desktopNodeChainCurrent(ctx, a, launch)
 	}
 	if launch.importedPlatform != nil {
 		return launch.importedPlatform.Current(ctx)

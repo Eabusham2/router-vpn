@@ -250,6 +250,12 @@ func (owner *desktopLinuxImportedConnection) Restore(ctx context.Context) error 
 }
 
 func (h *desktopLinuxNodeHost) readyPolicy() (mobilemultihop.DesktopPhysicalPolicy, error) {
+	if h != nil && h.chain != nil {
+		if h.policy != nil || h.imported != nil || h.external != nil {
+			return nil, errors.New("Linux ordered readiness mixed native policy families")
+		}
+		return h.chain, h.chain.Validate()
+	}
 	if h == nil || (h.policy == nil) == (h.imported == nil) || h.external != nil {
 		return nil, errors.New("Linux readiness lost its unique typed source")
 	}

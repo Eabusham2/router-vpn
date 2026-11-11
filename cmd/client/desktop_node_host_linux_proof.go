@@ -122,6 +122,12 @@ func sameDesktopLinuxNodeProofTUN(first, second desktopNodeMTURecord) bool {
 
 func (h *desktopLinuxNodeHost) capturedProofProfile() (common.RouterProfile, error) {
 	var profile common.RouterProfile
+	if h.chain != nil {
+		if h.launch == nil || h.launch.chain == nil || h.launch.chain.policy != h.chain || h.chain.Validate() != nil || string(h.source) != h.launch.chain.input {
+			return profile, errors.New("Linux ordered proof lost its concrete source")
+		}
+		return cloneRouterProfile(h.launch.chain.selection.Exit), nil
+	}
 	if h.imported != nil {
 		owner, ok := h.launch.importedPlatform.(*desktopLinuxImportedConnection)
 		if !ok || owner.host != h || h.imported.Validate() != nil || string(h.source) != owner.selection.Native.importedInput || h.imported.Metadata().ExitNodeID != owner.selection.Exit.NodeProofID {

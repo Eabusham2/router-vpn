@@ -270,6 +270,9 @@ func captureNativeMultihopForAppContext(parent context.Context, a *app, sel mult
 	})
 	if err == nil && captured.Native.chain != nil {
 		err = captured.Native.chain.currentContext(ctx, a)
+		if err == nil {
+			_, err = captureDesktopNodeChainHostContext(ctx, a, captured)
+		}
 	}
 	return captured, err
 }
@@ -281,7 +284,7 @@ func (a *app) proveNativeMultihop(sel multihopSelection, command *exec.Cmd) erro
 	ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), nativeMultihopProofTimeout(sel))
 	defer cancel()
 	if sel.Native != nil && sel.Native.chain != nil {
-		return errors.New("ordered native proof requires its complete child heartbeat")
+		return proveDesktopNodeChainContext(ctx, a, sel, command)
 	}
 	if sel.Native != nil && sel.Native.importedPlatform != nil {
 		graph, found := getActiveMultihopGraph(a)
@@ -333,6 +336,14 @@ func (a *app) nativeMultihopProofOwnerCurrentContext(ctx context.Context, sel mu
 	}
 	if !sel.Native.imported && sel.Native.chain == nil {
 		return true
+	}
+	if sel.Native.chain != nil {
+		raw, found := nativeMultihopOwners.Load(a)
+		owner, valid := raw.(*nativeMultihopRuntime)
+		if !found || !valid || owner == nil || owner.launch == nil || owner.launch.command != command || owner.selection.Native != sel.Native ||
+			owner.launch.chain == nil || desktopNodeChainCurrent(ctx, a, owner.launch) != nil {
+			return false
+		}
 	}
 	if sel.Native.importedPlatform != nil {
 		raw, found := nativeMultihopOwners.Load(a)

@@ -30,6 +30,7 @@ type desktopNodeProtectionAttempt struct {
 	policy          *mobilemultihop.DesktopNodePolicy
 	external        *mobilemultihop.DesktopExternalPolicy
 	imported        *mobilemultihop.DesktopImportedPolicy
+	chain           *mobilemultihop.DesktopNodeChainPolicy
 	transfer        mobiletor.DesktopProtectionTransferRecord
 	digest          string
 	prepared        *mobiletor.DesktopWindowsProtectionTarget
@@ -95,8 +96,21 @@ func (s *desktopNodeProtectionSlot) beginImported(ctx context.Context, launch *d
 
 func (s *desktopNodeProtectionSlot) beginPolicyCaptured(ctx context.Context, launch *desktopNodeLaunch, node *mobilemultihop.DesktopNodePolicy,
 	external *mobilemultihop.DesktopExternalPolicy, imported *mobilemultihop.DesktopImportedPolicy, revision string) (*desktopNodeProtectionAttempt, error) {
-	selection, err := desktopProtectionSelectionForCaptured(node, external, imported)
-	if s == nil || ctx == nil || ctx.Err() != nil || launch == nil || err != nil {
+	return s.beginAllPoliciesCaptured(ctx, launch, node, external, imported, nil, revision)
+}
+
+func (s *desktopNodeProtectionSlot) beginNodeChain(ctx context.Context, launch *desktopNodeLaunch, chain *mobilemultihop.DesktopNodeChainPolicy) (*desktopNodeProtectionAttempt, error) {
+	if launch == nil || launch.chain == nil || launch.chain.policy != chain || launch.ownedNode == nil || launch.ownedNode.chain != launch.chain ||
+		launch.ownedNode.policy != nil || launch.ownedNode.imported != nil || launch.external != nil || launch.ownedNode.profileToken == "" {
+		return nil, errors.New("ordered protection lost its concrete captured launch")
+	}
+	return s.beginAllPoliciesCaptured(ctx, launch, nil, nil, nil, chain, launch.ownedNode.profileToken)
+}
+
+func (s *desktopNodeProtectionSlot) beginAllPoliciesCaptured(ctx context.Context, launch *desktopNodeLaunch, node *mobilemultihop.DesktopNodePolicy,
+	external *mobilemultihop.DesktopExternalPolicy, imported *mobilemultihop.DesktopImportedPolicy, chain *mobilemultihop.DesktopNodeChainPolicy, revision string) (*desktopNodeProtectionAttempt, error) {
+	selection, err := desktopProtectionSelectionForAllCaptured(node, external, imported, chain)
+	if s == nil || ctx == nil || ctx.Err() != nil || launch == nil || err != nil || (chain != nil) != (launch.chain != nil) {
 		return nil, errors.Join(err, errors.New("native protection transfer has no captured launch"))
 	}
 	s.mu.Lock()
@@ -117,7 +131,7 @@ func (s *desktopNodeProtectionSlot) beginPolicyCaptured(ctx context.Context, lau
 	if err != nil {
 		return nil, err
 	}
-	attempt := &desktopNodeProtectionAttempt{launch: launch, policy: node, external: external, imported: imported, transfer: transfer, digest: digest, profileRevision: revision}
+	attempt := &desktopNodeProtectionAttempt{launch: launch, policy: node, external: external, imported: imported, chain: chain, transfer: transfer, digest: digest, profileRevision: revision}
 	if external != nil && s.journal != nil {
 		selection, err := s.journal.Snapshot(ctx)
 		head := selection.Record

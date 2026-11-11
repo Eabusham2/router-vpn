@@ -32,6 +32,7 @@ type desktopLinuxNodeHost struct {
 	policy                    *mobilemultihop.DesktopNodePolicy
 	external                  *mobilemultihop.DesktopExternalPolicy
 	imported                  *mobilemultihop.DesktopImportedPolicy
+	chain                     *mobilemultihop.DesktopNodeChainPolicy
 	importedMTU               *desktopImportedMTUOwner
 	importedProjected         bool
 	externalProof             *desktopLinuxExternalProof
@@ -229,6 +230,9 @@ func (h *desktopLinuxNodeHost) enter(ctx context.Context) error {
 }
 
 func (h *desktopLinuxNodeHost) current(ctx context.Context) error {
+	if h != nil && h.chain != nil {
+		return h.currentNodeChain(ctx)
+	}
 	if h != nil && h.imported != nil {
 		return h.currentImported(ctx)
 	}
@@ -344,6 +348,9 @@ func (h *desktopLinuxNodeHost) argumentsLocked(ctx context.Context) ([]string, s
 		return nil, "", err
 	}
 	command := "routervpn-node"
+	if h.chain != nil {
+		command = "routervpn-node-chain"
+	}
 	if h.external != nil {
 		command = "routervpn-external"
 	}
@@ -357,6 +364,9 @@ func (h *desktopLinuxNodeHost) argumentsLocked(ctx context.Context) ([]string, s
 	}
 	if h.imported != nil && h.imported.Metadata().RestoredMTU != 0 {
 		arguments = append(arguments, "--physical-mtu", strconv.Itoa(h.imported.Metadata().RestoredMTU))
+	}
+	if h.chain != nil && h.chain.Metadata().RestoredMTU != 0 {
+		arguments = append(arguments, "--physical-mtu", strconv.Itoa(h.chain.Metadata().RestoredMTU))
 	}
 	arguments, err = validateDesktopLinuxProtectedArguments(arguments, h.launch.directory)
 	if err != nil {
@@ -398,6 +408,9 @@ func (h *desktopLinuxNodeHost) Close(ctx context.Context) error {
 			}
 			retireNativeMultihopGraph(h.parent.app, h.launch)
 		}
+		if h.chain != nil {
+			retireNativeMultihopGraph(h.parent.app, h.launch)
+		}
 		if h.external != nil && h.launch != nil {
 			desktopExternalRetainedLaunches.CompareAndDelete(h.parent.app, h.launch)
 		}
@@ -410,7 +423,7 @@ func (h *desktopLinuxNodeHost) Close(ctx context.Context) error {
 			clear(h.launch.metadata)
 			h.launch.config, h.launch.metadata = nil, nil
 		}
-		h.source, h.policy, h.external, h.imported = nil, nil, nil, nil
+		h.source, h.policy, h.external, h.imported, h.chain = nil, nil, nil, nil, nil
 		h.closed = true
 	}
 	if !h.released {

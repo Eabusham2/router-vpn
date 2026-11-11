@@ -24,6 +24,12 @@ type desktopOwnedImportedRuntime struct {
 }
 
 func (owned *desktopOwnedNodeRuntime) physicalPolicy() (mobilemultihop.DesktopPhysicalPolicy, error) {
+	if owned != nil && owned.chain != nil {
+		if owned.policy != nil || owned.imported != nil || owned.chain.policy == nil {
+			return nil, errors.New("native ordered owner mixed its concrete policy family")
+		}
+		return owned.chain.policy, nil
+	}
 	if owned == nil || (owned.policy == nil) == (owned.imported == nil) {
 		return nil, errors.New("native physical owner requires exactly one captured policy family")
 	}
@@ -95,6 +101,9 @@ func validateDesktopOwnedImportedConfigContext(ctx context.Context, launch *desk
 }
 
 func (owned *desktopOwnedNodeRuntime) sourceFile() (string, int) {
+	if owned != nil && owned.chain != nil {
+		return "node-chain-source.json", mobilemultihop.NodeChainInputLimit
+	}
 	if owned != nil && owned.imported != nil {
 		return "imported-source.json", mobilemultihop.ImportedLaunchInputLimit
 	}
@@ -102,6 +111,13 @@ func (owned *desktopOwnedNodeRuntime) sourceFile() (string, int) {
 }
 
 func (owned *desktopOwnedNodeRuntime) networkContext(ctx context.Context) (string, error) {
+	if owned != nil && owned.chain != nil {
+		if owned.chain.selection.Native == nil || owned.chain.selection.Native.chain == nil ||
+			owned.chain.selection.Native.chain.host == nil || owned.chain.selection.Native.chain.host.readNetwork == nil {
+			return "", errors.New("ordered owner lost its original network observer")
+		}
+		return owned.chain.selection.Native.chain.host.readNetwork(ctx)
+	}
 	if owned != nil && owned.imported != nil {
 		if owned.imported.readNetwork == nil {
 			return "", errors.New("native imported owner lost its original network observer")
@@ -115,7 +131,14 @@ func (owned *desktopOwnedNodeRuntime) importedProtectionSlot(ctx context.Context
 	if owned == nil || owned.imported == nil || owned.imported.app != a || owned.host == nil {
 		return nil, errors.New("native imported protection lost its captured controller")
 	}
-	if err := owned.host.currentContext(ctx); err != nil {
+	return desktopCapturedNodeProtectionSlot(ctx, a, owned.host)
+}
+
+func desktopCapturedNodeProtectionSlot(ctx context.Context, a *app, host *desktopNodeConnectionOwner) (*desktopNodeProtectionSlot, error) {
+	if a == nil || host == nil {
+		return nil, errors.New("native protection lost its captured controller")
+	}
+	if err := host.currentContext(ctx); err != nil {
 		return nil, err
 	}
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
@@ -124,16 +147,16 @@ func (owned *desktopOwnedNodeRuntime) importedProtectionSlot(ctx context.Context
 	slot := a.nodeProtection
 	a.mu.Unlock()
 	if slot != nil {
-		return slot, owned.host.currentContext(ctx)
+		return slot, host.currentContext(ctx)
 	}
-	if owned.host.capture.protectionBackend == nil {
+	if host.capture.protectionBackend == nil {
 		return nil, errors.New("native imported protection lost its original backend")
 	}
-	backend, err := owned.host.capture.protectionBackend()
+	backend, err := host.capture.protectionBackend()
 	if err != nil {
 		return nil, err
 	}
-	if err := owned.host.currentContext(ctx); err != nil {
+	if err := host.currentContext(ctx); err != nil {
 		return nil, err
 	}
 	candidate := &desktopNodeProtectionSlot{backend: backend}
@@ -146,7 +169,7 @@ func (owned *desktopOwnedNodeRuntime) importedProtectionSlot(ctx context.Context
 	}
 	a.nodeProtection = candidate
 	a.mu.Unlock()
-	return candidate, owned.host.currentContext(ctx)
+	return candidate, host.currentContext(ctx)
 }
 
 func (owned *desktopOwnedNodeRuntime) importedSourceCurrentLocked(a *app) bool {
@@ -184,7 +207,7 @@ func (a *app) desktopOwnedNodeCurrentFor(ctx context.Context, launch *desktopNod
 	if ctx == nil || ctx.Err() != nil {
 		return errors.New("native startup lost its original caller")
 	}
-	if launch != nil && launch.ownedNode != nil && launch.ownedNode.imported != nil {
+	if launch != nil && launch.ownedNode != nil && (launch.ownedNode.imported != nil || launch.ownedNode.chain != nil) {
 		return a.desktopOwnedNodeCurrentContext(ctx, launch, processRequired)
 	}
 	if !a.desktopOwnedNodeCurrent(launch, processRequired) {

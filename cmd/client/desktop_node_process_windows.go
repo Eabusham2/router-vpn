@@ -48,7 +48,14 @@ func startDesktopProtectedProcessWithJournal(ctx context.Context, arguments, env
 		if journal != nil && journal.external {
 			return nil, errors.New("native Router process received an external journal")
 		}
-		arguments, err = validateDesktopNodeProcessArguments(arguments, directory)
+		if len(arguments) > 0 && arguments[0] == "routervpn-node-chain" {
+			if journal == nil || journal.launch == nil || journal.launch.chain == nil {
+				return nil, errors.New("ordered native process requires its original typed journal")
+			}
+			arguments, err = validateDesktopNodeChainProcessArguments(arguments, directory)
+		} else {
+			arguments, err = validateDesktopNodeProcessArguments(arguments, directory)
+		}
 	}
 	if err != nil {
 		return nil, err

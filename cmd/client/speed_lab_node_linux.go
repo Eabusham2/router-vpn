@@ -100,6 +100,17 @@ func captureDesktopLinuxNodePathWith(ctx context.Context, a *app, command *exec.
 		return nil, true, err
 	}
 	defer func() { h.gate <- struct{}{} }()
+	if h.chain != nil {
+		if h.activation == nil || h.launch == nil || h.launch.command != command || h.launch.chain == nil || h.launch.chain.platform == nil {
+			return nil, true, errors.New("Linux ordered Speed Lab path has no original activated command")
+		}
+		if err := h.observeLocked(ctx); err != nil {
+			return nil, true, err
+		}
+		// The complete ordered source stays in nativeMultihopOwners. It cannot
+		// be reduced to the ordinary single NodeProfile path below.
+		return nil, false, nil
+	}
 	if h.imported != nil {
 		if h.activation == nil || h.launch == nil || h.launch.command != command || h.launch.importedPlatform == nil {
 			return nil, true, errors.New("Linux imported Speed Lab path has no original activated command")

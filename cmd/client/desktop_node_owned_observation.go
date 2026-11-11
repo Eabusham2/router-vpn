@@ -41,6 +41,11 @@ func (a *app) desktopOwnedNodeCurrentContext(ctx context.Context, launch *deskto
 	if policyErr != nil || owned.network == "" {
 		return errors.New("native Router observation changed its captured policy or network")
 	}
+	if owned.chain != nil {
+		if err := validateDesktopOwnedNodeChainSourceContext(ctx, launch); err != nil {
+			return err
+		}
+	}
 	if owned.imported != nil {
 		if err := validateDesktopOwnedImportedSourceContext(ctx, launch, config, meta); err != nil {
 			return err
@@ -64,7 +69,7 @@ func (a *app) desktopOwnedNodeCurrentContext(ctx context.Context, launch *deskto
 		profile, exists := a.profileByIDLocked(launch.profileID)
 		current := exists && !a.closing && owned.slot != nil && a.nodeProtection == owned.slot && a.cmd == launch.command && a.state.RouterID == launch.profileID &&
 			a.state.RuntimeMode == launch.mode && [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} == owned.options &&
-			desktopOwnedNodeProfileToken(profile) == owned.profileToken && owned.importedSourceCurrentLocked(a)
+			desktopOwnedNodeProfileToken(profile) == owned.profileToken && owned.importedSourceCurrentLocked(a) && owned.chainSourceCurrentLocked(a)
 		a.mu.Unlock()
 		if !current {
 			return errors.New("native Router observation changed its original runtime or profile")
@@ -141,6 +146,14 @@ func (a *app) readDesktopOwnedNodeReadyContext(ctx context.Context, launch *desk
 	}
 	if err := a.desktopOwnedNodeCurrentContext(ctx, launch, true); err != nil {
 		return empty, err
+	}
+	if owned.chain != nil {
+		if _, err := readDesktopNodeChainReadyContext(ctx, launch, owned.attempt.digest, started, fresh, live); err != nil {
+			return empty, err
+		}
+		if err := a.desktopOwnedNodeCurrentContext(ctx, launch, true); err != nil {
+			return empty, err
+		}
 	}
 	return record, ctx.Err()
 }

@@ -47,6 +47,246 @@ def _ordered_once(tokens: list[str] | None, *fragments: str) -> bool:
     return True
 
 
+def native_multihop_ordered_owner(read) -> bool:
+    """Trace complete source, concrete native owner and fresh typed child proof.
+
+    This is structural source closure only; native accepted traffic is a
+    separate required gate. Every dispatched branch keeps its original caller.
+    """
+    if not callable(read):
+        return False
+    expected = (
+        ('cmd/client/desktop_node_chain_dispatch.go', 'func proveDesktopNodeChainContext(ctx context.Context, a *app, selection multihopSelection, command *exec.Cmd) error', r'''
+graph, found := getActiveMultihopGraph(a)
+	owner, err := capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
+	if err != nil || !found || owner == nil || owner.launch.chain == nil || owner.selection.Native != selection.Native ||
+		owner.launch.chain.selection.Native != selection.Native || graph.ChainNodes != len(selection.Nodes) || graph.Execution != "local" {
+		return errors.Join(err, errors.New("ordered native proof lost its full original runtime"))
+	}
+	if owner.launch.chain.platform != nil {
+		return owner.launch.chain.platform.prove(ctx)
+	}
+	// The typed child owns all prefix authentication and the selected final DNS
+	// proof. Its fresh heartbeat is checked alongside the actual native reader;
+	// the legacy pair's loopback proof listeners are not part of this graph.
+	if _, err := a.readDesktopOwnedNodeReadyContext(ctx, owner.launch, false); err != nil {
+		return err
+	}
+	return desktopNodeChainCurrent(ctx, a, owner.launch)
+        '''),
+        ('cmd/client/desktop_node_chain_host.go', 'func desktopNodeChainCurrent(ctx context.Context, a *app, launch *desktopNodeLaunch) error', r'''
+if launch == nil || launch.chain == nil {
+		return errors.New("ordered observation lost its original launch")
+	}
+	if launch.chain.platform != nil {
+		return launch.chain.platform.current(ctx)
+	}
+	if a == nil || launch.ownedNode == nil || launch.ownedNode.chain != launch.chain {
+		return errors.New("ordered observation changed its original native owner")
+	}
+	if err := a.desktopOwnedNodeCurrentContext(ctx, launch, true); err != nil {
+		return err
+	}
+	launch.workspaceMu.Lock()
+	ready := launch.ownedNode.ready != nil
+	launch.workspaceMu.Unlock()
+	if ready {
+		_, err := a.readDesktopOwnedNodeReadyContext(ctx, launch, false)
+		return err
+	}
+	return nil
+        '''),
+        ('cmd/client/desktop_node_chain_host.go', 'func (s *desktopNodeChainSources) currentLocked(a *app) error', r'''
+if s == nil || a == nil || s.selection.Native == nil || s.selection.Native.chain == nil ||
+		s.selected != s.selection.Control.ID || a.profiles.SelectedID != s.selected ||
+		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} != s.options ||
+		s.options != [3]bool{s.selection.Control.DAITAEnabled, s.selection.Control.JumboTUN, s.selection.Control.SocksEnabled} {
+		return errors.New("ordered host changed its final control or runtime options")
+	}
+	if !s.selection.Native.chain.profilesCurrent(s.selection.Control, a.profiles.Profiles) {
+		return errors.New("ordered host changed a selected member's complete saved source")
+	}
+	return nil
+        '''),
+        ('cmd/client/desktop_node_chain_host.go', 'func (capture *desktopNodeChainHostCapture) current(ctx context.Context) error', r'''
+if ctx == nil || ctx.Err() != nil || capture == nil || capture.app == nil || capture.sources == nil ||
+		capture.readNetwork == nil || (capture.windows == nil) == (capture.platform == nil) {
+		return errors.New("ordered host lost its one concrete original controller")
+	}
+	var err error
+	if capture.windows != nil {
+		err = capture.windows.currentContext(ctx)
+	} else {
+		err = capture.platform.current(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	network, err := capture.readNetwork(ctx)
+	if err != nil || network != capture.network || network == "" {
+		return errors.Join(err, errors.New("ordered host changed its original physical network"))
+	}
+	if err := desktopnetwork.LockContext(ctx, &capture.app.mu); err != nil {
+		return err
+	}
+	defer capture.app.mu.Unlock()
+	return capture.sources.currentLocked(capture.app)
+        '''),
+        ('cmd/client/desktop_node_chain_linux.go', 'func (owner *desktopNodeChainPlatformRuntime) current(ctx context.Context) error', r'''
+if owner == nil || owner.session == nil || owner.host == nil {
+		return errors.New("Linux ordered observation lost its retained session")
+	}
+	s, h := owner.session, owner.host
+	if err := s.enter(ctx); err != nil {
+		return err
+	}
+	defer func() { s.gate <- struct{}{} }()
+	if err := s.currentLocked(ctx); err != nil {
+		return err
+	}
+	if s.active != h || s.journal == nil || h.transaction == nil || h.transaction.journal != s.journal {
+		return errors.New("Linux ordered observation belongs to a replaced native session")
+	}
+	if err := h.enter(ctx); err != nil {
+		return err
+	}
+	defer func() { h.gate <- struct{}{} }()
+	if err := h.runningPolicyLocked(ctx); err != nil {
+		return err
+	}
+	if h.ready != nil {
+		_, _, err := h.readReadyLocked(ctx, false)
+		return err
+	}
+	return nil
+        '''),
+        ('cmd/client/desktop_node_chain_linux.go', 'func (owner *desktopNodeChainPlatformRuntime) prove(ctx context.Context) error', r'''
+if owner == nil || owner.host == nil {
+		return errors.New("Linux ordered proof has no original host")
+	}
+	if err := owner.host.enter(ctx); err != nil {
+		return err
+	}
+	active := owner.host.activation != nil
+	owner.host.gate <- struct{}{}
+	if active {
+		return owner.current(ctx)
+	}
+	if _, err := owner.host.WaitReady(ctx); err != nil {
+		return err
+	}
+	_, err := owner.host.Prove(ctx)
+	return err
+        '''),
+        ('cmd/client/desktop_node_chain_linux.go', 'func (h *desktopLinuxNodeHost) currentNodeChain(ctx context.Context) error', r'''
+if h == nil || ctx == nil || ctx.Err() != nil || h.closing || h.closed || h.operation == nil || h.parent == nil ||
+		h.chain == nil || h.policy != nil || h.imported != nil || h.external != nil || h.launch == nil || h.launch.chain == nil ||
+		h.launch.chain.policy != h.chain || h.launch.chain.platform == nil || h.launch.ownedNode != nil {
+		return errors.New("Linux ordered host lost its unique concrete policy")
+	}
+	runtime := h.launch.chain.platform
+	if runtime.host != h || runtime.capture == nil || h.launch.chain.capture != runtime.capture ||
+		h.launch.chain.selection.Native.chain.host != runtime.capture || runtime.capture.platform == nil || runtime.capture.platform.parent != h.parent ||
+		runtime.capture.app != h.parent.app || runtime.capture.sources == nil ||
+		runtime.capture.sources.selection.Native != h.launch.chain.selection.Native {
+		return errors.New("Linux ordered host substituted its captured parent or full source")
+	}
+	if err := runtime.capture.current(ctx); err != nil {
+		return err
+	}
+	if err := validateDesktopNodeChainLaunch(ctx, h.launch); err != nil {
+		return err
+	}
+	meta := h.chain.Metadata()
+	wanted := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
+		ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
+	if meta.TargetOS != "linux" || h.selection != wanted || string(h.source) != h.launch.chain.input || h.network != runtime.capture.network {
+		return errors.New("Linux ordered host changed its native protection or projected source")
+	}
+	if h.activation != nil {
+		if err := h.activation.matches(h); err != nil {
+			return err
+		}
+	} else if h.operation.Err() != nil {
+		return errConnectionOperationCancelled
+	}
+	a := h.parent.app
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
+	defer a.mu.Unlock()
+	if h.activation == nil {
+		if a.checkCapturedConnectionOperationLocked(h.operation) != nil || a.connectionCancelIntent == h.operation {
+			return errConnectionOperationCancelled
+		}
+	} else if h.process == nil || a.cmd != h.process.command || a.state.RouterID != meta.ProfileID || a.state.RuntimeMode != meta.Mode {
+		return errors.New("Linux ordered activation belongs to a replaced connection")
+	}
+	return runtime.capture.sources.currentLocked(a)
+        '''),
+        ('cmd/client/desktop_node_chain_dispatch.go', 'func desktopMultihopPlatformLaunch(launch *desktopNodeLaunch) bool', r'''
+return launch != nil && (launch.importedPlatform != nil || launch.chain != nil && launch.chain.platform != nil)
+        '''),
+        ('cmd/client/desktop_node_chain_dispatch.go', 'func startDesktopMultihopPlatform(ctx context.Context, a *app, selection multihopSelection, launch *desktopNodeLaunch) error', r'''
+if launch == nil || launch.chain == nil {
+		return startDesktopImportedPlatform(ctx, a, selection, launch)
+	}
+	if launch.chain.platform == nil || selection.Native == nil || selection.Native.chain == nil || launch.chain.selection.Native != selection.Native {
+		return errors.New("ordered platform startup lost its exact original source")
+	}
+	budget, err := desktopNodeReadyBudget(launch)
+	if err != nil {
+		return err
+	}
+	startup, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	if err := launch.chain.platform.start(startup); err != nil {
+		return err
+	}
+	if launch.command == nil {
+		return errors.New("ordered platform startup returned no original created command")
+	}
+	if err := launch.chain.platform.current(ctx); err != nil {
+		return err
+	}
+	return registerActiveDNSRuntimeConfigKind(a, selection.Exit.ID, selection.ExitMode, filepath.Join(launch.directory, "sing-box.json"), true)
+        '''),
+        ('cmd/client/desktop_node_chain_dispatch.go', 'func (a *app) publishDesktopCapturedMultihopStartLocked(operation context.Context, launch *desktopNodeLaunch, selection multihopSelection) error', r'''
+if launch != nil && launch.chain != nil {
+		return a.publishDesktopNodeChainStartLocked(operation, launch, selection)
+	}
+	return a.publishDesktopImportedMultihopStartLocked(operation, launch, selection)
+        '''),
+        ('cmd/client/desktop_node_chain_dispatch.go', 'func startDesktopCapturedMultihopOwned(ctx, operation context.Context, a *app, launch *desktopNodeLaunch) error', r'''
+if launch != nil && launch.chain != nil {
+		return startDesktopOwnedNodeChainLaunch(ctx, operation, a, launch)
+	}
+	return startDesktopOwnedImportedLaunch(ctx, operation, a, launch)
+        '''),
+        ('cmd/client/desktop_node_chain_dispatch.go', 'func activateDesktopMultihopPlatform(ctx context.Context, launch *desktopNodeLaunch) error', r'''
+if launch != nil && launch.chain != nil && launch.chain.platform != nil {
+		return launch.chain.platform.activate(ctx)
+	}
+	if launch == nil || launch.importedPlatform == nil {
+		return errors.New("native platform activation lost its original launch")
+	}
+	return launch.importedPlatform.Activate(ctx)
+        '''),
+        ('cmd/client/desktop_node_chain_dispatch.go', 'func closeDesktopMultihopPlatform(ctx context.Context, a *app, launch *desktopNodeLaunch) error', r'''
+if launch != nil && launch.chain != nil {
+		return closeDesktopNodeChainLaunch(ctx, a, launch)
+	}
+	if launch == nil || launch.importedPlatform == nil {
+		return errors.New("native platform retirement lost its original launch")
+	}
+	return launch.importedPlatform.Close(ctx)
+        '''),
+    )
+    sources = {path: _tokens(read(path)) for path, _, _ in expected}
+    return all(_function(sources[path], declaration) == _tokens(body)
+               for path, declaration, body in expected)
+
+
 def native_multihop_platform_chain(read) -> bool:
     """Trace the concrete Linux owner; an arbitrary interface is not proof.
 
@@ -67,7 +307,8 @@ def native_multihop_platform_chain(read) -> bool:
     launch = function("multihop_native_launch.go", "func nativeMultihopLaunchCurrent(ctx context.Context, a *app, launch *desktopNodeLaunch) error")
     prepare = function("desktop_imported_linux_host.go", "func (capture *desktopLinuxImportedCapture) Prepare(ctx context.Context, a *app, sel multihopSelection) (launch *desktopNodeLaunch, failure error)")
     return (
-        start == _tokens('''
+        native_multihop_ordered_owner(read)
+        and start == _tokens('''
             if launch == nil || launch.importedPlatform == nil || sel.Native == nil || !sel.Native.imported {
                 return errors.New("imported startup lost its original typed host")
             }
@@ -146,6 +387,12 @@ def native_multihop_platform_chain(read) -> bool:
             'if err := a.guardDesktopLinuxNodeLegacyTransitionContext(ctx); err != nil { return err }')
         and launch == _tokens('''
             if launch == nil { return errors.New("multihop observation lost its original launch") }
+            if launch.chain != nil {
+                if launch.ownedNode != nil && !desktopOwnedNodeCreated(launch) {
+                    return a.desktopOwnedNodeCurrentContext(ctx, launch, false)
+                }
+                return desktopNodeChainCurrent(ctx, a, launch)
+            }
             if launch.importedPlatform != nil { return launch.importedPlatform.Current(ctx) }
             if current, found := desktopNodeOwners.Load(a); !found || current != launch { return errors.New("multihop system TUN owner was replaced") }
             return ctx.Err()
@@ -251,7 +498,7 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
             ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), nativeMultihopProofTimeout(sel))
             defer cancel()
             if sel.Native != nil && sel.Native.chain != nil {
-                return errors.New("ordered native proof requires its complete child heartbeat")
+                return proveDesktopNodeChainContext(ctx, a, sel, command)
             }
             if sel.Native != nil && sel.Native.importedPlatform != nil {
                 graph, found := getActiveMultihopGraph(a)
@@ -282,6 +529,12 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
             a.mu.Unlock()
             if !owned { return false }
             if !sel.Native.imported && sel.Native.chain == nil { return true }
+            if sel.Native.chain != nil {
+                raw, found := nativeMultihopOwners.Load(a)
+                owner, valid := raw.(*nativeMultihopRuntime)
+                if !found || !valid || owner == nil || owner.launch == nil || owner.launch.command != command || owner.selection.Native != sel.Native ||
+                    owner.launch.chain == nil || desktopNodeChainCurrent(ctx, a, owner.launch) != nil { return false }
+            }
             if sel.Native.importedPlatform != nil {
                 raw, found := nativeMultihopOwners.Load(a)
                 owner, valid := raw.(*nativeMultihopRuntime)
@@ -294,7 +547,7 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
         ''')
         # The existing paired capture still checks Control/Entry/Exit. An
         # ordered capture must retain every original profile in order; tracing
-        # this helper does not admit the separately refused ordered proof.
+        # this helper is separate from the typed native owner and child heartbeat checks.
         and captured_profiles == _tokens('''
             profiles := []common.RouterProfile{selection.Control}
             if len(selection.Nodes) == 0 {
@@ -374,29 +627,45 @@ def native_multihop_shipping_chain(source: str) -> bool:
     routes = _function(tokens, "func registerDesktopMultihopRoutes(h *http.ServeMux, a *app)")
     if routes is None or len(_positions(routes, 'h.HandleFunc("/api/multihop/connect", a.nativeMultihopConnect)')) != 1:
         return False
-    owned = _function(tokens, "func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime)")
-    if owned is None or owned.count("driver") != 4:
+    handler = _function(tokens, "func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime)")
+    if not _ordered_once(handler,
+            "operation, finish, guardErr := a.beginConnectionOperation()",
+            "defer finish()",
+            "if r.Method != http.MethodPost {",
+            "if !nativeMultihopPlatformSupported() {",
+            "sel, err := resolveNativeMultihopSelection(control, profiles, q)",
+            "if execution, err := routeExecution(q); err != nil {",
+            "a.nativeMultihopConnectLocalOwned(w, r, operation, sel, driver)"):
+        return False
+    owned = _function(tokens, "func (a *app) nativeMultihopConnectLocalOwned(w http.ResponseWriter, r *http.Request, operation context.Context, sel multihopSelection, driver nativeMultihopConnectRuntime)")
+    if owned is None or owned.count("driver") != 8:
+        return False
+    if not _ordered_once(owned, '''if operation == nil || a.checkCapturedConnectionOperation(operation) != nil || driver.capture == nil ||
+            driver.preflight == nil || driver.stage == nil || driver.proof == nil {
+        http.Error(w, "native Local launch lost its original operation", http.StatusConflict)
+        return
+    }'''):
         return False
     calls = (
-        "sel, err = driver.capture(a, sel, []string{sel.ExitMode})",
+        "sel, err := driver.capture(a, sel, []string{sel.ExitMode})",
         "native, err := driver.preflight(a, sel, nil)",
-        "a.stopModeWithIntent(native.ownedNode != nil || native.importedPlatform != nil)",
+        "a.stopModeWithIntent(native.ownedNode != nil || desktopMultihopPlatformLaunch(native))",
         "err = driver.stage(a, sel, native)",
         "cmd := native.command",
-        '''protected := native.ownedNode != nil || native.importedPlatform != nil
-        if native.importedPlatform != nil {
-            err = startDesktopImportedPlatform(operation, a, sel, native)
+        '''protected := native.ownedNode != nil || desktopMultihopPlatformLaunch(native)
+        if desktopMultihopPlatformLaunch(native) {
+            err = startDesktopMultihopPlatform(operation, a, sel, native)
             cmd = native.command
         } else if protected {
             a.mu.Lock()
-            err = a.publishDesktopImportedMultihopStartLocked(operation, native, sel)
+            err = a.publishDesktopCapturedMultihopStartLocked(operation, native, sel)
             a.mu.Unlock()
         } else {
             err = cmd.Start()
         }''',
         "err = bindNativeMultihopRuntime(a, native, sel, network)",
-        '''if protected && native.importedPlatform == nil {
-            if err := startDesktopOwnedImportedLaunch(operation, operation, a, native); err != nil {
+        '''if protected && !desktopMultihopPlatformLaunch(native) {
+            if err := startDesktopCapturedMultihopOwned(operation, operation, a, native); err != nil {
                 message, _ := a.multihopStopFailure(cmd, err.Error())
                 sessionTrackerFor(a).markRequestFailure(message)
                 http.Error(w, message, http.StatusInternalServerError)
@@ -404,8 +673,8 @@ def native_multihop_shipping_chain(source: str) -> bool:
             }
         }''',
         "proofErr := driver.proof(a, sel, cmd)",
-        '''if proofErr == nil && native.importedPlatform != nil {
-            proofErr = native.importedPlatform.Activate(operation)
+        '''if proofErr == nil && desktopMultihopPlatformLaunch(native) {
+            proofErr = activateDesktopMultihopPlatform(operation, native)
         }''',
     )
     previous = -1

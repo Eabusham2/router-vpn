@@ -30,6 +30,7 @@ type desktopNodeChainCapture struct {
 	assets                             []viaEntryAsset
 	input                              string
 	chain                              *mobilemultihop.NodeChain
+	host                               *desktopNodeChainHostCapture
 }
 
 func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []common.RouterProfile, nodes []common.MultihopNodeSelection, execution string) ([]desktopNodeChainMember, error) {

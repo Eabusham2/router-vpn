@@ -103,7 +103,9 @@ class SpeedLabAndroidTransactionAuditTests(unittest.TestCase):
 
 class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
     platform_sources = ("cmd/client/desktop_imported_platform.go", "cmd/client/desktop_imported_linux_lifecycle.go",
-                        "cmd/client/desktop_node_owned.go", "cmd/client/desktop_imported_linux_host.go")
+                        "cmd/client/desktop_node_owned.go", "cmd/client/desktop_imported_linux_host.go",
+                        "cmd/client/desktop_node_chain_dispatch.go", "cmd/client/desktop_node_chain_host.go",
+                        "cmd/client/desktop_node_chain_linux.go")
     sources = {path: (Path(__file__).resolve().parents[1]/path).read_text() for path in (
         "cmd/client/speed_lab_paths.go", "cmd/client/desktop_external_path.go",
         "cmd/client/speed_lab.go", "cmd/client/multihop_native_launch.go", *platform_sources)}

@@ -16,6 +16,9 @@ const desktopMultihopMaximumTimeout = 420 * time.Second
 // startup/proof caps stay unchanged; this never lengthens an individual probe.
 func desktopMultihopStartupBudgets(sel multihopSelection, modes []string, execution routechoice.Execution) (startup, total time.Duration) {
 	startup, total = 25*time.Second, 180*time.Second
+	if sel.Native != nil && sel.Native.chain != nil && len(sel.Nodes) >= 2 && len(sel.Nodes) <= 8 {
+		return time.Duration(35+10*len(sel.Nodes)) * time.Second, total
+	}
 	entry := multihoprelay.NativeStartupAllowance(sel.EntryMode)
 	for _, mode := range modes {
 		phases := entry + multihoprelay.NativeStartupAllowance(mode)
@@ -32,6 +35,9 @@ func desktopMultihopStartupBudgets(sel multihopSelection, modes []string, execut
 }
 
 func nativeMultihopProofTimeout(sel multihopSelection) time.Duration {
+	if sel.Native != nil && sel.Native.chain != nil && len(sel.Nodes) >= 2 && len(sel.Nodes) <= 8 {
+		return time.Duration(35+10*len(sel.Nodes)) * time.Second
+	}
 	return 20*time.Second + multihoprelay.NativeStartupAllowance(sel.EntryMode) + multihoprelay.NativeStartupAllowance(sel.ExitMode)
 }
 

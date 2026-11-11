@@ -205,6 +205,14 @@ func (h *desktopLinuxNodeHost) readReadyLocked(ctx context.Context, fresh bool) 
 	if err := h.runningPolicyLocked(ctx); err != nil {
 		return empty, noLive, err
 	}
+	if h.chain != nil {
+		if _, err := readDesktopNodeChainReadyContext(ctx, h.launch, digest, h.started, fresh, live); err != nil {
+			return empty, noLive, err
+		}
+		if err := h.runningPolicyLocked(ctx); err != nil {
+			return empty, noLive, err
+		}
+	}
 	return record, live, nil
 }
 
@@ -237,7 +245,11 @@ func (h *desktopLinuxNodeHost) WaitReady(parent context.Context) (record mobilem
 			failure = h.failProofLocked(failure)
 		}
 	}()
-	ctx, cancel := context.WithTimeout(parent, 25*time.Second)
+	budget, err := desktopNodeReadyBudget(h.launch)
+	if err != nil {
+		return record, err
+	}
+	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
 	if h.operation == nil {
 		return record, errors.New("Linux Router readiness has no original startup operation")

@@ -27,6 +27,7 @@ type desktopOwnedNodeRuntime struct {
 	host         *desktopNodeConnectionOwner // original controller/package; retained by captured restoration
 	policy       *mobilemultihop.DesktopNodePolicy
 	imported     *desktopOwnedImportedRuntime
+	chain        *desktopNodeChainLaunch
 	source       []byte
 	network      string
 	profileToken string
@@ -192,7 +193,7 @@ func (s *desktopNodeProtectionSlot) provedEmptyLocked() bool {
 // while proving a prepared baseline; retirement's join callback likewise must
 // only join the captured child and must not re-enter the slot.
 func (a *app) desktopOwnedNodeCurrent(launch *desktopNodeLaunch, processRequired bool) bool {
-	if launch != nil && launch.ownedNode != nil && launch.ownedNode.imported != nil {
+	if launch != nil && launch.ownedNode != nil && (launch.ownedNode.imported != nil || launch.ownedNode.chain != nil) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		return a.desktopOwnedNodeCurrentContext(ctx, launch, processRequired) == nil
@@ -234,7 +235,7 @@ func stageDesktopOwnedNodeInputsContext(ctx context.Context, a *app, launch *des
 		return errors.New("native Router staging has no captured private owner")
 	}
 	owned := launch.ownedNode
-	if owned.host != nil && (owned.imported != nil && owned.host.currentContext(ctx) != nil || owned.imported == nil && owned.host.current() != nil) {
+	if owned.host != nil && ((owned.imported != nil || owned.chain != nil) && owned.host.currentContext(ctx) != nil || owned.imported == nil && owned.chain == nil && owned.host.current() != nil) {
 		return errors.New("native Router staging lost its captured controller")
 	}
 	config, meta, _, policyErr := owned.physicalState()
@@ -251,6 +252,11 @@ func stageDesktopOwnedNodeInputsContext(ctx context.Context, a *app, launch *des
 		owned.imported.selection.Native.validate(owned.imported.selection) != nil || string(owned.source) != owned.imported.selection.Native.importedInput) {
 		return errors.New("native imported staging changed its original entry or final source")
 	}
+	if owned.chain != nil {
+		if err := validateDesktopOwnedNodeChainSourceContext(ctx, launch); err != nil {
+			return err
+		}
+	}
 	// Copy source first; no kernel mutation occurs in begin. A failed staging
 	// attempt still owns an explicit predecessor expectation for safe discard.
 	name, _ := owned.sourceFile()
@@ -259,7 +265,9 @@ func stageDesktopOwnedNodeInputsContext(ctx context.Context, a *app, launch *des
 	}
 	var slot *desktopNodeProtectionSlot
 	var err error
-	if owned.imported != nil {
+	if owned.chain != nil {
+		slot, err = owned.chainProtectionSlot(ctx, a)
+	} else if owned.imported != nil {
 		slot, err = owned.importedProtectionSlot(ctx, a)
 	} else {
 		slot, err = a.desktopOwnedNodeProtection()
@@ -280,7 +288,9 @@ func stageDesktopOwnedNodeInputsContext(ctx context.Context, a *app, launch *des
 		return err
 	}
 	var attempt *desktopNodeProtectionAttempt
-	if owned.imported != nil {
+	if owned.chain != nil {
+		attempt, err = slot.beginNodeChain(ctx, launch, owned.chain.policy)
+	} else if owned.imported != nil {
 		attempt, err = slot.beginImported(ctx, launch, owned.imported.policy)
 	} else {
 		attempt, err = slot.begin(ctx, launch, owned.policy)
@@ -314,6 +324,10 @@ func desktopOwnedNodeArguments(launch *desktopNodeLaunch) ([]string, error) {
 		sourceFlag, meta.SourceSHA256, "--physical-transfer-sha256", owned.attempt.digest}
 	if meta.RestoredMTU != 0 {
 		args = append(args, "--physical-mtu", strconv.Itoa(meta.RestoredMTU))
+	}
+	if owned.chain != nil {
+		args[0] = "routervpn-node-chain"
+		return validateDesktopNodeChainProcessArguments(args, launch.directory)
 	}
 	return validateDesktopNodeProcessArguments(args, launch.directory)
 }
@@ -475,7 +489,11 @@ func (a *app) admitDesktopOwnedNodeFor(parent, operation context.Context, launch
 	}
 	// The physical baseline acknowledgement precedes native sockets/TUN. It is
 	// not Connected: wait for a fresh selected-DNS query and actual TUN readback.
-	readyContext, cancelReady := context.WithTimeout(parent, 25*time.Second)
+	budget, err := desktopNodeReadyBudget(launch)
+	if err != nil {
+		return err
+	}
+	readyContext, cancelReady := context.WithTimeout(parent, budget)
 	defer cancelReady()
 	for {
 		if readyContext.Err() != nil || !current() {
@@ -483,7 +501,7 @@ func (a *app) admitDesktopOwnedNodeFor(parent, operation context.Context, launch
 		}
 		var record mobilemultihop.DesktopNodeReadyRecord
 		var err error
-		if owned.imported != nil {
+		if owned.imported != nil || owned.chain != nil {
 			record, err = a.readDesktopOwnedNodeReadyContext(readyContext, launch, true)
 		} else {
 			record, err = a.readDesktopOwnedNodeReady(launch, true)
@@ -507,6 +525,11 @@ func (a *app) admitDesktopOwnedNodeFor(parent, operation context.Context, launch
 }
 
 func (a *app) readDesktopOwnedNodeReady(launch *desktopNodeLaunch, fresh bool) (mobilemultihop.DesktopNodeReadyRecord, error) {
+	if launch != nil && launch.chain != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return a.readDesktopOwnedNodeReadyContext(ctx, launch, fresh)
+	}
 	var empty mobilemultihop.DesktopNodeReadyRecord
 	if !a.desktopOwnedNodeCurrent(launch, true) {
 		return empty, errors.New("native Router readiness no longer belongs to this process")
@@ -723,6 +746,17 @@ func (a *app) guardDesktopOwnedNodeTransition(next *desktopNodeLaunch) error {
 func (a *app) guardDesktopOwnedNodeTransitionContext(ctx context.Context, next *desktopNodeLaunch) error {
 	if ctx == nil || ctx.Err() != nil {
 		return errors.New("native transition requires its original live caller")
+	}
+	if next != nil && next.chain != nil {
+		if err := validateDesktopNodeChainLaunch(ctx, next); err != nil {
+			return err
+		}
+		if next.chain.platform != nil {
+			return next.chain.platform.guard(ctx, a, next)
+		}
+		if err := validateDesktopOwnedNodeChainSourceContext(ctx, next); err != nil {
+			return err
+		}
 	}
 	if next != nil && next.importedPlatform != nil {
 		return guardDesktopImportedPlatformTransition(ctx, a, next)

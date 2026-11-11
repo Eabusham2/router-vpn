@@ -148,9 +148,9 @@ class NativeShippingAuditTests(unittest.TestCase):
     def test_platform_start_proof_activation_and_successor_intent_keep_original_caller(self):
         path = "cmd/client/multihop_native_routes.go"
         for before, after in (
-            ("a.stopModeWithIntent(native.ownedNode != nil || native.importedPlatform != nil)", "a.stopModeWithIntent(native.ownedNode != nil)"),
-            ("startDesktopImportedPlatform(operation, a, sel, native)", "startDesktopImportedPlatform(context.Background(), a, sel, native)"),
-            ("proofErr = native.importedPlatform.Activate(operation)", "proofErr = nil"),
+            ("a.stopModeWithIntent(native.ownedNode != nil || desktopMultihopPlatformLaunch(native))", "a.stopModeWithIntent(native.ownedNode != nil)"),
+            ("startDesktopMultihopPlatform(operation, a, sel, native)", "startDesktopMultihopPlatform(context.Background(), a, sel, native)"),
+            ("proofErr = activateDesktopMultihopPlatform(operation, native)", "proofErr = nil"),
         ):
             with self.subTest(before=before):
                 self.changes.clear()
@@ -228,7 +228,7 @@ class NativeShippingAuditTests(unittest.TestCase):
         selection = "cmd/client/multihop_node_chain_selection.go"
         changes = (
             (capture, "if sel.Native != nil && sel.Native.chain != nil {", "if false {"),
-            (capture, 'return errors.New("ordered native proof requires its complete child heartbeat")', "return nil"),
+            (capture, 'return proveDesktopNodeChainContext(ctx, a, sel, command)', "return nil"),
             (capture, "if sel.Native.imported || sel.Native.chain != nil {", "if sel.Native.imported {"),
             (capture, "nativeMultihopCapturedProfiles(sel)", "[]common.RouterProfile{sel.Control, sel.Entry, sel.Exit}"),
             (capture, "if !sel.Native.imported && sel.Native.chain == nil {", "if !sel.Native.imported {"),
@@ -258,6 +258,56 @@ class NativeShippingAuditTests(unittest.TestCase):
         self.changes[path] = self.body(path) + "\nfunc nativeMultihopCapturedProfiles(selection multihopSelection) []common.RouterProfile { return nil }\n"
         self.assert_backend_proof_admission(False)
         self.assert_multihop_scores(False)
+
+    def test_ordered_native_owner_dispatch_requires_complete_original_heartbeat_and_context(self):
+        dispatch = "cmd/client/desktop_node_chain_dispatch.go"
+        host = "cmd/client/desktop_node_chain_host.go"
+        linux = "cmd/client/desktop_node_chain_linux.go"
+        changes = (
+            (dispatch, "capturedNativeMultihopRuntimeContext(ctx, a, command, graph)", "capturedNativeMultihopRuntimeContext(context.Background(), a, command, graph)"),
+            (dispatch, "owner.selection.Native != selection.Native", "false"),
+            (dispatch, "owner.launch.chain.selection.Native != selection.Native", "false"),
+            (dispatch, "graph.ChainNodes != len(selection.Nodes)", "false"),
+            (dispatch, "a.readDesktopOwnedNodeReadyContext(ctx, owner.launch, false)", "a.readDesktopOwnedNodeReadyContext(ctx, otherLaunch, false)"),
+            (dispatch, "return desktopNodeChainCurrent(ctx, a, owner.launch)", "return nil"),
+            (dispatch, "return startDesktopImportedPlatform(ctx, a, selection, launch)", "return nil"),
+            (dispatch, "return a.publishDesktopImportedMultihopStartLocked(operation, launch, selection)", "return nil"),
+            (dispatch, "return startDesktopOwnedImportedLaunch(ctx, operation, a, launch)", "return nil"),
+            (dispatch, "return launch.importedPlatform.Close(ctx)", "return nil"),
+            (dispatch, "return closeDesktopNodeChainLaunch(ctx, a, launch)", "return closeDesktopNodeChainLaunch(context.Background(), a, launch)"),
+            (host, "!s.selection.Native.chain.profilesCurrent(s.selection.Control, a.profiles.Profiles)", "false"),
+            (host, "network, err := capture.readNetwork(ctx)", "network, err := capture.network, error(nil)"),
+            (host, "capture.sources.currentLocked(capture.app)", "error(nil)"),
+            (host, "a.desktopOwnedNodeCurrentContext(ctx, launch, true)", "a.desktopOwnedNodeCurrentContext(context.Background(), launch, true)"),
+            (host, "a.readDesktopOwnedNodeReadyContext(ctx, launch, false)", "a.readDesktopOwnedNodeReadyContext(ctx, otherLaunch, false)"),
+            (linux, "s.active != h || s.journal == nil || h.transaction == nil || h.transaction.journal != s.journal", "false"),
+            (linux, "h.readReadyLocked(ctx, false)", "h.readReadyLocked(context.Background(), false)"),
+            (linux, "h.launch.chain.capture != runtime.capture", "false"),
+            (linux, "runtime.capture.platform.parent != h.parent", "false"),
+        )
+        self.assert_backend_proof_admission(True)
+        self.assert_speedlab_imported_platform(True)
+        for path, before, after in changes:
+            for replacement in (after, "/* " + before + " */"):
+                with self.subTest(path=path, before=before, replacement=replacement):
+                    self.changes.clear()
+                    self.replace(path, before, replacement)
+                    self.changes[path] += "\n// " + before + "\n"
+                    self.assert_backend_proof_admission(False)
+                    self.assert_speedlab_imported_platform(False)
+
+    def test_local_transaction_keeps_public_resolver_and_original_operation(self):
+        path = "cmd/client/multihop_native_routes.go"
+        for before, after in (
+            ("a.nativeMultihopConnectLocalOwned(w, r, operation, sel, driver)", "a.nativeMultihopConnectLocalOwned(w, r, context.Background(), sel, driver)"),
+            ("a.nativeMultihopConnectLocalOwned(w, r, operation, sel, driver)", "a.nativeMultihopConnectLocalOwned(w, r, operation, other, driver)"),
+            ("sel, err := resolveNativeMultihopSelection(control, profiles, q)", "sel, err := unownedSelection(control, profiles, q)"),
+            ("a.checkCapturedConnectionOperation(operation) != nil", "false"),
+        ):
+            with self.subTest(before=before, after=after):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.assert_multihop_chain(False)
 
     def test_imported_selected_dns_is_required_after_transport_before_admission(self):
         capture = "cmd/client/multihop_native_capture.go"
@@ -360,7 +410,7 @@ class NativeShippingAuditTests(unittest.TestCase):
     def test_owned_driver_and_runtime_calls_cannot_move_to_comments_or_other_functions(self):
         path = "cmd/client/multihop_native_routes.go"
         calls = (
-            "sel, err = driver.capture(a, sel, []string{sel.ExitMode})",
+            "sel, err := driver.capture(a, sel, []string{sel.ExitMode})",
             "native, err := driver.preflight(a, sel, nil)",
             "err = driver.stage(a, sel, native)",
             "cmd := native.command",
@@ -399,16 +449,16 @@ class NativeShippingAuditTests(unittest.TestCase):
         path = "cmd/client/multihop_native_routes.go"
         changes = (
             ("protected := native.ownedNode != nil", "protected := false"),
-            ("a.publishDesktopImportedMultihopStartLocked(operation, native, sel)",
-             "a.publishDesktopImportedMultihopStartLocked(context.Background(), native, sel)"),
-            ("a.publishDesktopImportedMultihopStartLocked(operation, native, sel)",
-             "a.publishDesktopImportedMultihopStartLocked(operation, other, sel)"),
-            ("startDesktopOwnedImportedLaunch(operation, operation, a, native)",
-             "startDesktopOwnedImportedLaunch(context.Background(), operation, a, native)"),
-            ("startDesktopOwnedImportedLaunch(operation, operation, a, native)",
-             "startDesktopOwnedImportedLaunch(operation, context.Background(), a, native)"),
-            ("startDesktopOwnedImportedLaunch(operation, operation, a, native)",
-             "startDesktopOwnedImportedLaunch(operation, operation, a, other)"),
+            ("a.publishDesktopCapturedMultihopStartLocked(operation, native, sel)",
+             "a.publishDesktopCapturedMultihopStartLocked(context.Background(), native, sel)"),
+            ("a.publishDesktopCapturedMultihopStartLocked(operation, native, sel)",
+             "a.publishDesktopCapturedMultihopStartLocked(operation, other, sel)"),
+            ("startDesktopCapturedMultihopOwned(operation, operation, a, native)",
+             "startDesktopCapturedMultihopOwned(context.Background(), operation, a, native)"),
+            ("startDesktopCapturedMultihopOwned(operation, operation, a, native)",
+             "startDesktopCapturedMultihopOwned(operation, context.Background(), a, native)"),
+            ("startDesktopCapturedMultihopOwned(operation, operation, a, native)",
+             "startDesktopCapturedMultihopOwned(operation, operation, a, other)"),
         )
         for before, after in changes:
             with self.subTest(before=before, after=after):
@@ -422,6 +472,7 @@ class NativeShippingAuditTests(unittest.TestCase):
         for declaration in (
             "func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request)",
             "func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime)",
+            "func (a *app) nativeMultihopConnectLocalOwned(w http.ResponseWriter, r *http.Request, operation context.Context, sel multihopSelection, driver nativeMultihopConnectRuntime)",
         ):
             with self.subTest(declaration=declaration):
                 self.changes.clear()
@@ -430,7 +481,7 @@ class NativeShippingAuditTests(unittest.TestCase):
 
     def test_owned_calls_must_be_unique_and_in_launch_order(self):
         path = "cmd/client/multihop_native_routes.go"
-        capture = "sel, err = driver.capture(a, sel, []string{sel.ExitMode})"
+        capture = "sel, err := driver.capture(a, sel, []string{sel.ExitMode})"
         preflight = "native, err := driver.preflight(a, sel, nil)"
         self.replace(path, capture, "temporaryCaptureMarker")
         self.replace(path, preflight, capture)

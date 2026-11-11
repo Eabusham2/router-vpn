@@ -11,6 +11,12 @@ func nativeMultihopRuntimeDirFromCommand(cmd *exec.Cmd) (string, error) {
 	if cmd == nil || len(cmd.Args) < 2 {
 		return "", errors.New("native multihop command has no runtime arguments")
 	}
+	if cmd.Args[1] == "routervpn-node-chain" {
+		if _, err := validateDesktopNodeChainProcessArguments(cmd.Args[1:], cmd.Dir); err != nil {
+			return "", err
+		}
+		return cmd.Dir, nil
+	}
 	if cmd.Args[1] == "routervpn-node" {
 		// The typed child descriptor already owns this directory. An edited
 		// --runtime-dir must not authenticate itself as a new DNS workspace.
@@ -45,5 +51,5 @@ func registerNativeMultihopDNSRuntime(a *app, sel multihopSelection, cmd *exec.C
 	if err != nil {
 		return err
 	}
-	return registerActiveDNSRuntimeConfigKind(a, sel.Exit.ID, sel.ExitMode, filepath.Join(dir, "sing-box.json"), sel.Native != nil && sel.Native.imported)
+	return registerActiveDNSRuntimeConfigKind(a, sel.Exit.ID, sel.ExitMode, filepath.Join(dir, "sing-box.json"), sel.Native != nil && (sel.Native.imported || sel.Native.chain != nil))
 }

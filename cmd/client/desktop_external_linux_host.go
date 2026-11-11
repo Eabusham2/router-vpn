@@ -23,6 +23,9 @@ type desktopLinuxPrivateInput struct {
 }
 
 func (h *desktopLinuxNodeHost) privateInputs() []desktopLinuxPrivateInput {
+	if h.chain != nil {
+		return []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config}, {"node-chain-source.json", h.source}}
+	}
 	if h.imported != nil {
 		return []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config}, {"imported-source.json", h.source}}
 	}
@@ -36,6 +39,9 @@ func (h *desktopLinuxNodeHost) privateInputs() []desktopLinuxPrivateInput {
 // The external command has the same inherited parent layout and bounded
 // public digests, but remains a different CLI and sealed policy family.
 func validateDesktopLinuxProtectedArguments(arguments []string, directory string) ([]string, error) {
+	if len(arguments) > 0 && arguments[0] == "routervpn-node-chain" {
+		return validateDesktopNodeChainProcessArguments(arguments, directory)
+	}
 	if (len(arguments) == 11 || len(arguments) == 13) && arguments[0] == "routervpn-imported" {
 		copied := append([]string(nil), arguments...)
 		copied[0] = "routervpn-node"
@@ -381,6 +387,21 @@ func newDesktopLinuxExternalTransactionWithStartup(startup context.Context, h *d
 }
 
 func (t *desktopLinuxNodeTransaction) validatePolicy() error {
+	if t.chain != nil {
+		if t.policy != nil || t.imported != nil || t.external != nil || t.chainSources == nil || t.chain.Validate() != nil {
+			return errors.New("Linux ordered transaction mixed its concrete policy family")
+		}
+		meta := t.chain.Metadata()
+		wanted := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
+		selection := t.chainSources.selection
+		if meta.TargetOS != "linux" || t.selection != wanted || t.mode != meta.Mode || selection.Native == nil ||
+			selection.Native.chain == nil || selection.Native.validate(selection) != nil || selection.Native.source != meta.OriginalSourceSHA256 ||
+			t.chain.OriginalChain() != selection.Native.chain.chain || t.profileID != selection.Control.ID ||
+			meta.ProfileID != selection.Control.ID || meta.NodeID != selection.Exit.NodeProofID || len(meta.Prefixes) != len(selection.Nodes) {
+			return errors.New("Linux ordered transaction changed its original full source")
+		}
+		return nil
+	}
 	if t.imported != nil && t.policy == nil && t.external == nil && t.importedSources != nil && t.imported.Validate() == nil {
 		meta := t.imported.Metadata()
 		wanted := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}

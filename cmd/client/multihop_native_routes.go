@@ -245,13 +245,25 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		a.runMultihopExecution(w, r, sel, q)
 		return
 	}
+	a.nativeMultihopConnectLocalOwned(w, r, operation, sel, driver)
+}
 
+// The internal native acceptance fixture enters this same captured Local
+// transaction. Public source admission remains in the request resolver above;
+// neither a request flag nor a test environment variable can open it.
+func (a *app) nativeMultihopConnectLocalOwned(w http.ResponseWriter, r *http.Request, operation context.Context,
+	sel multihopSelection, driver nativeMultihopConnectRuntime) {
+	if operation == nil || a.checkCapturedConnectionOperation(operation) != nil || driver.capture == nil ||
+		driver.preflight == nil || driver.stage == nil || driver.proof == nil {
+		http.Error(w, "native Local launch lost its original operation", http.StatusConflict)
+		return
+	}
 	network := physicalNetworkIdentity()
 	if network == "" {
 		http.Error(w, "could not capture the physical multihop network", http.StatusConflict)
 		return
 	}
-	sel, err = driver.capture(a, sel, []string{sel.ExitMode})
+	sel, err := driver.capture(a, sel, []string{sel.ExitMode})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -275,7 +287,7 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 	// Failed teardown must keep exact entry/exit identity available for recovery.
 	tracker := sessionTrackerFor(a)
 	tracker.declareRequest("multihop", sel.Base)
-	if err = a.stopModeWithIntent(native.ownedNode != nil || native.importedPlatform != nil); err != nil {
+	if err = a.stopModeWithIntent(native.ownedNode != nil || desktopMultihopPlatformLaunch(native)); err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -296,21 +308,21 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	protected := native.ownedNode != nil || native.importedPlatform != nil
-	if native.importedPlatform != nil {
-		err = startDesktopImportedPlatform(operation, a, sel, native)
+	protected := native.ownedNode != nil || desktopMultihopPlatformLaunch(native)
+	if desktopMultihopPlatformLaunch(native) {
+		err = startDesktopMultihopPlatform(operation, a, sel, native)
 		cmd = native.command
 	} else if protected {
 		a.mu.Lock()
-		err = a.publishDesktopImportedMultihopStartLocked(operation, native, sel)
+		err = a.publishDesktopCapturedMultihopStartLocked(operation, native, sel)
 		a.mu.Unlock()
 	} else {
 		err = cmd.Start()
 	}
 	if err != nil {
-		if native.importedPlatform != nil {
+		if desktopMultihopPlatformLaunch(native) {
 			cleanup, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			err = errors.Join(err, native.importedPlatform.Close(cleanup))
+			err = errors.Join(err, closeDesktopMultihopPlatform(cleanup, a, native))
 			cancel()
 			sessionTrackerFor(a).markRequestFailure(err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -364,8 +376,8 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		http.Error(w, message, status)
 		return
 	}
-	if protected && native.importedPlatform == nil {
-		if err := startDesktopOwnedImportedLaunch(operation, operation, a, native); err != nil {
+	if protected && !desktopMultihopPlatformLaunch(native) {
+		if err := startDesktopCapturedMultihopOwned(operation, operation, a, native); err != nil {
 			message, _ := a.multihopStopFailure(cmd, err.Error())
 			sessionTrackerFor(a).markRequestFailure(message)
 			http.Error(w, message, http.StatusInternalServerError)
@@ -376,8 +388,8 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 	originalGraph, originalGraphOK := getActiveMultihopGraph(a)
 	originalRelay, _ := desktopRelays.Load(a)
 	proofErr := driver.proof(a, sel, cmd)
-	if proofErr == nil && native.importedPlatform != nil {
-		proofErr = native.importedPlatform.Activate(operation)
+	if proofErr == nil && desktopMultihopPlatformLaunch(native) {
+		proofErr = activateDesktopMultihopPlatform(operation, native)
 	}
 	if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
 		message, cleanupFailed := a.multihopStopFailure(cmd, cancelErr.Error())
@@ -404,7 +416,7 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		owned := tracked && currentTracker == tracker && a.connectionContext == operation
 		if cleanupFailed {
 			owned = owned && (a.cmd == nil || a.cmd == cmd) &&
-				(native.importedPlatform != nil && !nodePresent || nodePresent && currentNode == native) && runtimePresent && currentRuntime == originalRuntime &&
+				(desktopMultihopPlatformLaunch(native) && !nodePresent || nodePresent && currentNode == native) && runtimePresent && currentRuntime == originalRuntime &&
 				originalGraphOK && graphPresent && currentGraph == originalGraph &&
 				(!relayPresent || currentRelay == originalRelay)
 		} else {
@@ -451,8 +463,12 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 	a.state.Phase = "connected"
 	a.state.LastError = ""
 	now := time.Now().UTC().Format(time.RFC3339)
+	used := map[string]bool{sel.Entry.ID: true, sel.Exit.ID: true}
+	for _, member := range sel.Nodes {
+		used[member.Profile.ID] = true
+	}
 	for i := range a.profiles.Profiles {
-		if a.profiles.Profiles[i].ID == sel.Entry.ID || a.profiles.Profiles[i].ID == sel.Exit.ID {
+		if used[a.profiles.Profiles[i].ID] {
 			a.profiles.Profiles[i].UseCount++
 			a.profiles.Profiles[i].LastUsedAt = now
 		}
@@ -472,15 +488,19 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	a.startRouterNodeAutomaticMTU()
-	if protected && native.importedPlatform == nil {
+	if protected && !desktopMultihopPlatformLaunch(native) {
 		a.monitorDesktopOwnedNodeRuntime(native)
 	}
 	w.Header().Set("content-type", "application/json")
 	route := "client TUN -> captured exit proxy -> captured entry endpoint -> exit node -> Internet"
-	if sel.ExitMode == "wg" {
+	proof := "passed-through-exit-only-local-proxy"
+	if sel.Native.chain != nil {
+		route = "client TUN through every captured node in selected order to the final Internet exit"
+		proof = "authenticated-every-prefix-and-final-dns-through-original-native-chain"
+	} else if sel.ExitMode == "wg" {
 		route = "client TUN -> captured WireGuard exit endpoint -> captured entry endpoint -> exit node -> Internet"
 	} else if sel.ExitMode == "awg2-fast" || sel.ExitMode == "awg2-strong" {
 		route = "client TUN -> captured AmneziaWG exit endpoint -> captured entry endpoint -> exit node -> Internet"
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": "multihop", "entry_id": sel.Entry.ID, "entry_name": sel.Entry.Name, "exit_id": sel.Exit.ID, "exit_name": sel.Exit.Name, "entry_base": sel.Base, "entry_mode": sel.Native.entryMode, "exit_mode": sel.ExitMode, "exit_path_proof": "passed-through-exit-only-local-proxy", "route": route})
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": "multihop", "entry_id": sel.Entry.ID, "entry_name": sel.Entry.Name, "exit_id": sel.Exit.ID, "exit_name": sel.Exit.Name, "entry_base": sel.Base, "entry_mode": sel.Native.entryMode, "exit_mode": sel.ExitMode, "exit_path_proof": proof, "route": route})
 }
