@@ -11,6 +11,7 @@ import contextlib
 import fnmatch
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -34,6 +35,7 @@ ORDINARY = (
 )
 KINDS = ('socks5', 'shadowsocks', 'hysteria2',
          'wireguard', 'amneziawg', 'openvpn-tcp', 'openvpn-udp')
+WORKFLOW_NAME = 'Imported Naive H3 source and native reference'
 
 
 def section(source, marker, indentation):
@@ -46,6 +48,37 @@ def section(source, marker, indentation):
     end = next((i for i in range(start+1, len(lines)) if lines[i].strip()
                 and len(lines[i])-len(lines[i].lstrip()) <= indentation), len(lines))
     return ''.join(lines[start:end])
+
+
+def direct_patterns(source):
+    push = section(source, 'push:', 2)
+    if '    branches: [main]\n' not in push:
+        raise AssertionError('Direct H3 diagnostics must retain the main branch boundary')
+    paths = section(push, 'paths:', 4)
+    return [ast.literal_eval(line.strip()[2:]) for line in paths.splitlines()[1:]
+            if line.strip().startswith('- ')]
+
+
+def matches_path(path, pattern):
+    # These owned filters use only * and **. A single * cannot cross a directory.
+    return re.fullmatch(re.escape(pattern).replace(r'\*\*', '.*').replace(r'\*', '[^/]*'), path) is not None
+
+
+def concurrency_group(source, *, workflow, event, ref, run):
+    block = section(source, 'concurrency:', 0)
+    if '  cancel-in-progress: false\n' not in block:
+        raise AssertionError('An active direct H3 diagnostic must not be cancelled by the next push')
+    group = next(line.removeprefix('  group: ') for line in block.splitlines() if line.startswith('  group: '))
+    context = {'workflow': workflow, 'event_name': event, 'ref': ref, 'run_id': run}
+    def expression(match):
+        code = re.sub(r'github\.(workflow|event_name|ref|run_id)\b',
+                      lambda item: repr(context[item.group(1)]), match.group(1))
+        tree = ast.parse(code.replace('&&', ' and ').replace('||', ' or ').strip(), mode='eval')
+        if any(not isinstance(node, (ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.Compare, ast.Eq, ast.Constant))
+               for node in ast.walk(tree)):
+            raise AssertionError('Unexpected H3 concurrency expression')
+        return str(eval(compile(tree, '<captured H3 concurrency>', 'eval'), {'__builtins__': {}}))
+    return re.sub(r'\$\{\{\s*(.*?)\s*\}\}', expression, group)
 
 
 def native_stage(source):
@@ -419,6 +452,93 @@ class ImportedNaiveH3Workflow(unittest.TestCase):
                        'deploy/'+GATE, 'deploy/'+CHECKS[0], 'deploy/'+CHECKS[1],
                        '.github/workflows/imported-naive-h3-native.yml'):
             self.assertTrue(any(fnmatch.fnmatchcase(source, pattern) for pattern in patterns), source)
+
+    def check_direct_trigger(self, source):
+        events = section(source, 'on:', 0)
+        self.assertIn('  workflow_call:\n', events)
+        self.assertIn('  workflow_dispatch:\n', events)
+        self.assertEqual([line.strip() for line in events.splitlines()
+                          if line.startswith('  ') and not line.startswith('   ')],
+                         ['workflow_call:', 'workflow_dispatch:', 'push:'])
+        patterns = direct_patterns(source)
+        self.assertEqual(len(patterns), len(set(patterns)))
+        for pattern in patterns:
+            # The root module currently has no go.sum; adding its first locked
+            # dependency must also schedule the same compiled-package gates.
+            self.assertTrue(pattern == 'go.sum' or any(ROOT.glob(pattern)), 'Unowned H3 trigger path: '+pattern)
+        required = (
+            '.github/workflows/imported-naive-h3-native.yml', '.github/actions/go-windows-sockets/action.yml',
+            'go.mod', 'go.sum', 'internal/mobilemultihop/imported_entry.go', 'internal/mobiletor/desktop_socket_renewal.go',
+            'internal/nativeopenvpn/remote.go', 'internal/hopmeasure/response.go',
+            'mobile/routervpn_imported_naive_h3_native_test.go.tmpl',
+            'mobile/routervpn_imported_naive_h3_loader_purego_test.go.tmpl',
+            'mobile/desktop/node_imported_naive_h3_test.go.tmpl',
+            'mobile/naive/transport.go.tmpl', 'mobile/externalpolicy/box.go.tmpl',
+            'android/app/src/main/java/com/eabusham/routervpn/AndroidImportedRouterPath.java',
+            'ios/RouterVPN/App/IOSMultihopExecution.swift', 'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift',
+            'cmd/client/multihop_native_imported_naive_h3_test.go', 'cmd/client/controller_windows_catalog.go',
+            'deploy/prepare-go-windows-sockets.py', 'deploy/test_go_windows_sockets.py',
+            'deploy/prepare-relay-core.py', 'deploy/prepare-desktop-external.py', 'deploy/prepare-mobile-multihop.py',
+            'deploy/build-native-runtime.py', 'deploy/mobile_openvpn_close_policy.py',
+            'deploy/native_naive_transport_policy.py', 'deploy/fixtures/windows-node-physical/openvpn_box_overlay.py',
+            'deploy/test_windows_node_physical.py', 'deploy/test_windows_node_physical_ci.py',
+            'deploy/test_mobile_imported_entry.py', 'deploy/test_native_imported_packet_xray.py',
+            'deploy/test_windows_imported_naive_h3.py', 'deploy/test_windows_imported_naive_h3_runner.py',
+            'deploy/test_ios_tor_profile.py', 'android/test_android_imported_router.py',
+            'deploy/'+GATE, *(('deploy/'+name) for name in CHECKS),
+        )
+        for path in required:
+            self.assertTrue(path == 'go.sum' or (ROOT/path).is_file(), 'H3 dependency moved: '+path)
+            self.assertTrue(any(matches_path(path, pattern) for pattern in patterns), path)
+        for path in ('README.md', 'docs/route-policy.md', '.github/workflows/router-deploy.yml',
+                     'android/app/src/main/java/com/eabusham/routervpn/UnrelatedView.java',
+                     'ios/RouterVPN/App/UnrelatedView.swift', 'internal/unrelated/example.go',
+                     'deploy/unrelated-gate.py', 'mobile/routervpn_multihop_bridge.go.tmpl'):
+            self.assertFalse(any(matches_path(path, pattern) for pattern in patterns), path)
+
+    def test_direct_main_trigger_covers_the_executed_h3_dependencies(self):
+        self.check_direct_trigger(NAIVE_H3_WORKFLOW.read_text())
+
+    def test_missing_dependency_or_broadened_trigger_is_rejected(self):
+        source = NAIVE_H3_WORKFLOW.read_text()
+        changes = (
+            ("      - 'deploy/prepare-mobile-multihop.py'\n", ''),
+            ("      - '.github/actions/go-windows-sockets/**'\n", ''),
+            ("      - 'mobile/routervpn_imported_naive_h3_native_test.go.tmpl'\n", ''),
+            ("      - 'mobile/*.go'\n", "      - 'mobile/**'\n"),
+            ('    branches: [main]\n', '    branches: [development]\n'),
+        )
+        for before, after in changes:
+            self.assertEqual(source.count(before), 1)
+            with self.subTest(change=before), self.assertRaises(AssertionError):
+                self.check_direct_trigger(source.replace(before, after, 1))
+
+    def check_concurrency(self, source):
+        def group(workflow, event='push', ref='refs/heads/main', run='101'):
+            return concurrency_group(source, workflow=workflow, event=event, ref=ref, run=run)
+        direct = group(WORKFLOW_NAME)
+        self.assertEqual(direct, group(WORKFLOW_NAME, run='102'))
+        isolated = [group(WORKFLOW_NAME, event='workflow_dispatch', run=run) for run in ('201', '202')]
+        # A reusable workflow inherits the original caller's github context.
+        isolated += [group(caller, run=run) for caller in ('Build all platforms', 'Imported SOCKS REALITY native reference')
+                     for run in ('101', '102')]
+        isolated += [group(WORKFLOW_NAME, ref='refs/heads/feature', run=run) for run in ('301', '302')]
+        self.assertEqual(len(set([direct, *isolated])), 1+len(isolated))
+
+    def test_automatic_lane_preserves_active_run_and_isolates_each_reusable_caller(self):
+        self.check_concurrency(NAIVE_H3_WORKFLOW.read_text())
+
+    def test_cancellation_and_reusable_caller_collisions_are_rejected(self):
+        source = NAIVE_H3_WORKFLOW.read_text()
+        changes = (
+            ('  cancel-in-progress: false\n', '  cancel-in-progress: true\n'),
+            (" && github.workflow == '"+WORKFLOW_NAME+"'", ''),
+            (' || github.run_id }}', ' || github.ref }}'),
+        )
+        for before, after in changes:
+            self.assertEqual(source.count(before), 1)
+            with self.subTest(change=before), self.assertRaises(AssertionError):
+                self.check_concurrency(source.replace(before, after, 1))
 
     def test_release_still_requires_actual_linux_host_builds(self):
         release = (ROOT/'.github/workflows/release-candidate.yml').read_text()
