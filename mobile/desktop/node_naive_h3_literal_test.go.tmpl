@@ -174,7 +174,59 @@ func TestRouterVPNDesktopNodeNaiveH3Literal(t *testing.T) {
 	}
 }
 
-func desktopNaiveH3LiteralTransport(t *testing.T, resolverKind, fault, endpoint, hostStyle string) {
+func TestRouterVPNDesktopNodeNaiveH3StreamOwner(t *testing.T) {
+	desktopNodeNaiveLibrary(t)
+	for _, behavior := range []string{"owner-cancellation", "caller-deadline"} {
+		t.Run(behavior, func(t *testing.T) {
+			desktopNaiveH3LiteralTransport(t, "udp", "", "192.0.2.77", "", func(ctx context.Context, original adapter.Outbound, cancelOwner context.CancelFunc) {
+				destination := M.ParseSocksaddr("192.0.2.99:9999")
+				if behavior == "caller-deadline" {
+					caller, cancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+					defer cancel()
+					late, err := original.DialContext(caller, "tcp", destination)
+					if late != nil {
+						_ = late.Close()
+					}
+					if late != nil || !errors.Is(err, context.DeadlineExceeded) {
+						t.Fatal("native H3 discarded its original caller deadline", err)
+					}
+					if err := desktopImportedSOCKSXrayEcho(ctx, original, "tcp"); err != nil {
+						t.Fatal("one caller deadline retired the independent native owner", err)
+					}
+					return
+				}
+				held, err := original.DialContext(ctx, "tcp", destination)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = held.Close() })
+				if err := held.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				if err := desktopImportedSOCKSXrayExchange(held); err != nil {
+					t.Fatal("retirement did not first prove its original held stream", err)
+				}
+				cancelOwner()
+				_ = held.SetReadDeadline(time.Now().Add(2 * time.Second))
+				var observed [1]byte
+				if n, err := held.Read(observed[:]); n != 0 || err == nil {
+					t.Fatal("retired original final kept its application stream")
+				} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+					t.Fatal("retirement waited only for the fixture deadline")
+				}
+				late, err := original.DialContext(ctx, "tcp", destination)
+				if late != nil {
+					_ = late.Close()
+				}
+				if late != nil || !errors.Is(err, context.Canceled) {
+					t.Fatal("cancelled native H3 owner admitted another stream", err)
+				}
+			})
+		})
+	}
+}
+
+func desktopNaiveH3LiteralTransport(t *testing.T, resolverKind, fault, endpoint, hostStyle string, observations ...func(context.Context, adapter.Outbound, context.CancelFunc)) {
 	t.Helper()
 	var peer *desktopNodeLayerServer
 	var lower *desktopNaiveH3LiteralWitnessLower
@@ -309,7 +361,9 @@ func desktopNaiveH3LiteralTransport(t *testing.T, resolverKind, fault, endpoint,
 	if err != nil {
 		t.Fatal(err)
 	}
-	final, err := NV.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), "witness-naive-h3", options)
+	nativeContext, cancelNative := context.WithCancel(owned)
+	t.Cleanup(cancelNative)
+	final, err := NV.NewOutbound(nativeContext, nil, log.NewNOPFactory().Logger(), "witness-naive-h3", options)
 	if err != nil {
 		t.Fatal("actual pinned Naive did not construct", err)
 	}
@@ -338,6 +392,9 @@ func desktopNaiveH3LiteralTransport(t *testing.T, resolverKind, fault, endpoint,
 		if fault != "" && err == nil {
 			t.Error("negative control delivered authenticated H3 payload", network)
 		}
+	}
+	for _, observe := range observations {
+		observe(ctx, final, cancelNative)
 	}
 	completed = true
 }

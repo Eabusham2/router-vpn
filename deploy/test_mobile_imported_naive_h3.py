@@ -77,6 +77,7 @@ LOOPBACK = {
     'TestRouterVPNDesktopNodeNaiveH3Literal': PACKET.NODE.NAIVE_LITERAL_CASES,
     'TestRouterVPNImportedNaiveH3SOCKSAssociation': tuple(layer+'/'+fault for layer in LAYERS
         for fault in ('success', 'relay-route', 'control-eof', 'cancelled')),
+    'TestRouterVPNDesktopNodeNaiveH3StreamOwner': ('owner-cancellation', 'caller-deadline'),
 }
 
 

@@ -1,0 +1,25 @@
+package cronet
+
+import (
+	"context"
+	"sync"
+)
+
+// Cancellation closes only the captured native stream. Explicit close and
+// native termination stop the registration and join an already-running
+// callback before releasing the original client's stream accounting.
+func routerVPNNaiveStreamOwner(owner context.Context, closeNative func() error) func() {
+	done := make(chan struct{})
+	stop := context.AfterFunc(owner, func() {
+		defer close(done)
+		_ = closeNative()
+	})
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			if !stop() {
+				<-done
+			}
+		})
+	}
+}

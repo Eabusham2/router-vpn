@@ -1,4 +1,4 @@
-"""Retain captured Naive address/name authority in one verified Cronet Go copy.
+"""Retain captured Naive address/name and stream authority in one verified copy.
 
 The native library and explicit DNS resolver remain unchanged. Derive the
 wire hostname without an RFC 6066-forbidden terminal dot, preserving the caller's
@@ -31,9 +31,25 @@ NEW = (b'\trules, paramsError := routerVPNNaiveLiteralRule(c.serverAddress, c.se
 NAME_OLD = b'\tserverURL := &url.URL{\n'
 NAME_NEW = (b'\tserverName, err = routerVPNNaiveWireName(serverName, config.QUIC)\n'
             b'\tif err != nil {\n\t\treturn nil, err\n\t}\n\n' + NAME_OLD)
-PATCHES = ((NAME_OLD, NAME_NEW), (OLD, NEW))
+DIAL_OLD = b'func (c *NaiveClient) DialEarly(ctx context.Context, destination M.Socksaddr) (NaiveConn, error) {\n'
+DIAL_NEW = DIAL_OLD + (b'\tif err := errors.Join(ctx.Err(), c.ctx.Err()); err != nil {\n'
+                       b'\t\treturn nil, err\n\t}\n')
+OWNER_OLD = b'\tconn.setOnTerminate(trackedConn.release)\n\treturn trackedConn, nil\n'
+OWNER_NEW = (b'\ttrackedConn.stopOwner = routerVPNNaiveStreamOwner(c.ctx, conn.Close)\n'
+             b'\tconn.setOnTerminate(func() {\n\t\ttrackedConn.stopOwner()\n\t\ttrackedConn.release()\n\t})\n'
+             b'\tif err := errors.Join(ctx.Err(), c.ctx.Err()); err != nil {\n'
+             b'\t\t_ = trackedConn.Close()\n\t\treturn nil, err\n\t}\n'
+             b'\treturn trackedConn, nil\n')
+TRACKED_OLD = b'\tclient    *NaiveClient\n\tcloseOnce sync.Once\n'
+TRACKED_NEW = TRACKED_OLD + b'\tstopOwner func()\n'
+CLOSE_OLD = b'func (c *trackedNaiveConn) Close() error {\n\tc.release()\n'
+CLOSE_NEW = b'func (c *trackedNaiveConn) Close() error {\n\tc.stopOwner()\n\tc.release()\n'
+PATCHES = ((NAME_OLD, NAME_NEW), (OLD, NEW), (DIAL_OLD, DIAL_NEW),
+           (OWNER_OLD, OWNER_NEW), (TRACKED_OLD, TRACKED_NEW), (CLOSE_OLD, CLOSE_NEW))
 TEMPLATES = {'cronet_literal.go.tmpl':'routervpn_naive_literal.go',
-             'cronet_literal_test.go.tmpl':'routervpn_naive_literal_test.go'}
+             'cronet_literal_test.go.tmpl':'routervpn_naive_literal_test.go',
+             'cronet_stream_owner.go.tmpl':'routervpn_naive_stream_owner.go',
+             'cronet_stream_owner_test.go.tmpl':'routervpn_naive_stream_owner_test.go'}
 MAX_BYTES = 32*1024*1024
 
 

@@ -93,8 +93,10 @@ class NaiveH3NativeRunner(unittest.TestCase):
             self.assertTrue(all(name.startswith(parent+'/') for name in names[1:]))
 
     def test_literal_gate_preserves_all_ipv4_ipv6_dotted_and_refusal_verdicts(self):
-        self.assertEqual(list(G.LOOPBACK), ['TestRouterVPNDesktopNodeNaiveH3Literal', 'TestRouterVPNImportedNaiveH3SOCKSAssociation'])
+        self.assertEqual(list(G.LOOPBACK), ['TestRouterVPNDesktopNodeNaiveH3Literal', 'TestRouterVPNImportedNaiveH3SOCKSAssociation',
+                                          'TestRouterVPNDesktopNodeNaiveH3StreamOwner'])
         self.assertEqual(len(G.LOOPBACK['TestRouterVPNImportedNaiveH3SOCKSAssociation']),12)
+        self.assertEqual(G.LOOPBACK['TestRouterVPNDesktopNodeNaiveH3StreamOwner'], ('owner-cancellation', 'caller-deadline'))
         cases = next(iter(G.LOOPBACK.values()))
         self.assertEqual(len(cases), 23)
         self.assertTrue({'ipv4-trailing-dot-name', 'ipv6-trailing-dot-name',
@@ -246,6 +248,21 @@ class NaiveH3NativeRunner(unittest.TestCase):
             with self.assertRaises(ValueError): G.SOCKS.require_verdicts(changed,0,names)
         with self.assertRaises(ValueError): G.SOCKS.require_verdicts(complete,1,names)
 
+    def test_stream_owner_gate_requires_both_original_native_lifetimes(self):
+        root = 'TestRouterVPNDesktopNodeNaiveH3StreamOwner'
+        names = [root]+[root+'/'+leaf for leaf in G.LOOPBACK[root]]
+        complete = self.events(names)
+        G.SOCKS.require_verdicts(complete, 0, names)
+        for missing in names:
+            with self.subTest(missing=missing), self.assertRaises(ValueError):
+                G.SOCKS.require_verdicts(self.events([name for name in names if name != missing]), 0, names)
+        for duplicated in names:
+            with self.subTest(duplicated=duplicated), self.assertRaises(ValueError):
+                G.SOCKS.require_verdicts(complete+'\n'+self.events([duplicated]), 0, names)
+        for verdict in ('skip', 'fail'):
+            with self.subTest(verdict=verdict), self.assertRaises(ValueError):
+                G.SOCKS.require_verdicts(complete.replace('"pass"', '"'+verdict+'"', 1), 0, names)
+
     def test_all_stages_seal_library_before_native_image_and_verify_after_execution(self):
         for stage in ('parser','loopback','reference'):
             with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
@@ -273,7 +290,7 @@ class NaiveH3NativeRunner(unittest.TestCase):
                      patch.object(G.PACKET.NODE,'verify_naive_library',side_effect=lambda _:order.append('verify')), patch('builtins.print'):
                     result=G.run(vendor,stage=stage)
                 self.assertEqual(order[:2],['library','compile']); self.assertEqual(order[-1],'verify')
-                self.assertEqual(len(observed), {'parser':64,'loopback':37,'reference':531}[stage])
+                self.assertEqual(len(observed), {'parser':64,'loopback':40,'reference':531}[stage])
                 self.assertEqual(result['native_library'], {'sha256':'a'*64,'bytes':42})
                 self.assertFalse(result['device_acceptance']); self.assertFalse(result['production_router_acceptance'])
 

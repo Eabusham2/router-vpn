@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Retain the exact Cronet source and captured IPv6 resolver authority."""
+"""Retain the exact Cronet source, captured resolver, and original stream owner."""
 from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 import hashlib
@@ -36,7 +36,7 @@ class NativeNaiveLiteral(unittest.TestCase):
             vendor.mkdir()
             (vendor/'go.mod').write_text('module github.com/sagernet/sing-box\n')
             (vendor/'go.sum').write_text('original checksum record\n')
-            original = {POLICY.SOURCE: b'package cronet\nfunc original() {\n'+POLICY.NAME_OLD+POLICY.OLD+b'}\n',
+            original = {POLICY.SOURCE: b'package cronet\n'+b''.join(old for old, _ in POLICY.PATCHES),
                         'go.mod': b'module github.com/sagernet/cronet-go\n',
                         'LICENSE': b'original module license\n', 'sub/source.go': b'package sub\n'}
             archive = base/'module.zip'
@@ -77,7 +77,11 @@ class NativeNaiveLiteral(unittest.TestCase):
             self.assertEqual(set(records), {POLICY.COPY+'/'+name for name in (*original, *POLICY.TEMPLATES.values())})
             for name, raw in original.items():
                 actual = (vendor/POLICY.COPY/name).read_bytes()
-                self.assertEqual(actual, raw.replace(POLICY.NAME_OLD, POLICY.NAME_NEW, 1).replace(POLICY.OLD, POLICY.NEW, 1) if name == POLICY.SOURCE else raw)
+                expected = raw
+                if name == POLICY.SOURCE:
+                    for old, new in POLICY.PATCHES:
+                        expected = expected.replace(old, new, 1)
+                self.assertEqual(actual, expected)
                 self.assertEqual(POLICY.transform(name, actual, reverse=True), raw)
             before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in (vendor/POLICY.COPY).rglob('*') if p.is_file()}
             POLICY.prepare(vendor)
@@ -96,6 +100,11 @@ class NativeNaiveLiteral(unittest.TestCase):
                                      (raw.replace(POLICY.NAME_OLD, POLICY.NAME_NEW, 1), True)):
                 with self.subTest(reverse=reverse, changed=changed), self.assertRaises(ValueError):
                     POLICY.transform(POLICY.SOURCE, changed, reverse=reverse)
+            for old, new in POLICY.PATCHES:
+                for changed, reverse in ((raw.replace(old, b'', 1), False), (raw+old, False),
+                                         (projected.replace(new, old, 1), True), (projected+new, True)):
+                    with self.subTest(preimage=old, reverse=reverse), self.assertRaises(ValueError):
+                        POLICY.transform(POLICY.SOURCE, changed, reverse=reverse)
 
     def test_archive_checksum_and_member_ownership_before_publication(self):
         for fault in ('changed', 'foreign-prefix', 'escape', 'duplicate', 'injected-helper', 'symlink'):
@@ -114,7 +123,7 @@ class NativeNaiveLiteral(unittest.TestCase):
                 self.assertFalse((vendor/POLICY.COPY).exists())
 
     def test_prepared_source_missing_changed_or_extra_is_never_repaired_silently(self):
-        for name in (POLICY.SOURCE, 'LICENSE', 'routervpn_naive_literal.go', 'routervpn_naive_literal_test.go', 'foreign.go'):
+        for name in (POLICY.SOURCE, 'LICENSE', *POLICY.TEMPLATES.values(), 'foreign.go'):
             with self.subTest(name=name), self.source() as (vendor, _, _, _):
                 POLICY.prepare(vendor)
                 path = vendor/POLICY.COPY/name
@@ -128,7 +137,7 @@ class NativeNaiveLiteral(unittest.TestCase):
                     with self.assertRaises(ValueError): POLICY.verify(vendor)
 
     def test_shared_or_linked_source_has_no_write_authority(self):
-        for name in ('go.mod', 'go.sum', POLICY.COPY+'/LICENSE', POLICY.COPY+'/routervpn_naive_literal.go'):
+        for name in ('go.mod', 'go.sum', POLICY.COPY+'/LICENSE', *(POLICY.COPY+'/'+name for name in POLICY.TEMPLATES.values())):
             for kind in ('symbolic', 'hard'):
                 with self.subTest(name=name, kind=kind), self.source() as (vendor, _, _, _):
                     POLICY.prepare(vendor)
@@ -196,8 +205,15 @@ class NativeNaiveLiteral(unittest.TestCase):
     def test_connect_literal_home_gate_requires_every_original_verdict(self):
         node = load('test_desktop_node_physical.py')
         names, suite = node.NAIVE_CONNECT_LITERAL_VERDICTS, node.NAIVE_CONNECT_LITERAL_SUITE
-        self.assertEqual(len(names), 29)
-        self.assertEqual(len(set(names)), 29)
+        self.assertEqual(len(names), 53)
+        self.assertEqual(len(set(names)), 53)
+        expected_layers = {node.NAIVE_CONNECT_LITERAL_ROOT+'/'+carrier+'/'+endpoint+'/final-layer/'+layer+'/'+fault
+            for carrier in ('http-connect', 'https-connect') for endpoint in ('192.0.2.77', '2001:db8::77')
+            for layer in ('aes-256-gcm', 'aes-256-gcm+xor-whitening')
+            for fault in (('home-udp', 'layer-password', 'layer-whitening', 'layer-route', 'layer-bypass')
+                          if endpoint == '192.0.2.77' else ('home-udp',))}
+        self.assertEqual(len(expected_layers), 24)
+        self.assertEqual({name for name in names if '/final-layer/' in name}, expected_layers)
         def output(rows):
             return ''.join('=== RUN   '+name+'\n--- PASS: '+name+' (0.00s)\n' for name in rows)
         baseline = mock.Mock()
@@ -238,6 +254,17 @@ class NativeNaiveLiteral(unittest.TestCase):
                 self.assertIn('--- FAIL: '+root, result.stdout)
                 self.assertNotIn('build failed', result.stdout)
                 self.assertNotIn('DATA RACE', result.stdout)
+            path.write_text(original)
+            owner = directory/'routervpn_naive_stream_owner.go'
+            original_owner = owner.read_text()
+            self.assertEqual(original_owner.count('<-done'), 1)
+            owner.write_text(original_owner.replace('<-done', '// mutation: original native callback was not joined', 1))
+            result = subprocess.run(command, cwd=directory, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
+            self.assertEqual(result.returncode, 1, 'unjoined native cancellation was accepted\n'+result.stdout)
+            self.assertIn('--- FAIL: TestRouterVPNNaiveCleanupJoinsOriginalCancellation', result.stdout)
+            self.assertIn('cleanup returned before its original native callback joined', result.stdout)
+            self.assertNotIn('build failed', result.stdout)
+            self.assertNotIn('DATA RACE', result.stdout)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,70 @@
+package cronet
+
+import (
+	"context"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestRouterVPNNaiveRetiredRegistrationCannotCloseAnotherStream(t *testing.T) {
+	owner, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var original, replacement atomic.Int32
+	stop := routerVPNNaiveStreamOwner(owner, func() error { original.Add(1); return nil })
+	stop()
+	stop()
+	next, cancelNext := context.WithCancel(context.Background())
+	defer cancelNext()
+	stopNext := routerVPNNaiveStreamOwner(next, func() error { replacement.Add(1); return nil })
+	defer stopNext()
+	cancel()
+	stop()
+	if original.Load() != 0 || replacement.Load() != 0 {
+		t.Fatal("retired registration reached an original or replacement stream")
+	}
+}
+
+func TestRouterVPNNaiveCleanupJoinsOriginalCancellation(t *testing.T) {
+	owner, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	stop := routerVPNNaiveStreamOwner(owner, func() error {
+		calls.Add(1)
+		close(entered)
+		<-release
+		return nil
+	})
+	cancel()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("original native stream cancellation absent")
+	}
+	var workers sync.WaitGroup
+	workers.Add(16)
+	done, returned := make(chan struct{}), make(chan struct{}, 16)
+	for i := 0; i < 16; i++ {
+		go func() { defer workers.Done(); stop(); returned <- struct{}{} }()
+	}
+	go func() { workers.Wait(); close(done) }()
+	select {
+	case <-returned:
+		close(release)
+		<-done
+		t.Fatal("cleanup returned before its original native callback joined")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("original cancellation callback failed to join")
+	}
+	if calls.Load() != 1 || len(returned) != 16 {
+		t.Fatal("original callback repeated or cleanup stranded", calls.Load(), len(returned))
+	}
+	stop()
+}
