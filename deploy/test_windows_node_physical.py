@@ -88,7 +88,8 @@ EXTERNAL_OPENVPN_OWNERSHIP_CASES = (EXTERNAL_OPENVPN_OWNERSHIP, *(EXTERNAL_OPENV
 EXTERNAL_OPENVPN_WITNESS_CASES = EXTERNAL_OPENVPN_CODEC_CASES + EXTERNAL_OPENVPN_OWNERSHIP_CASES
 
 EXTERNAL_OPENVPN_MIXED_CONTROL = EXTERNAL_OPENVPN_ROOT + "/mixed/reject/control-key"
-EXTERNAL_OPENVPN_INVOCATIONS = ("alias", "witness", "tcp", "udp", "mixed", "mixed-control-key")
+EXTERNAL_OPENVPN_MIXED_LIFECYCLE = ("on-connect", "always", "successor-and-original-restore")
+EXTERNAL_OPENVPN_INVOCATIONS = ("alias", "witness", "tcp", "udp", "mixed-lifecycle", "mixed-refusals", "mixed-control-key")
 
 
 def external_openvpn_cases(network):
@@ -96,8 +97,12 @@ def external_openvpn_cases(network):
         return EXTERNAL_OPENVPN_ALIAS_CASES
     if network == "witness":
         return EXTERNAL_OPENVPN_WITNESS_CASES
-    if network == "mixed":
-        return tuple(case for case in EXTERNAL_OPENVPN_CASES["mixed"] if case != EXTERNAL_OPENVPN_MIXED_CONTROL)
+    if network in ("mixed-lifecycle", "mixed-refusals"):
+        prefix = EXTERNAL_OPENVPN_ROOT + "/mixed/"
+        lifecycle = tuple(prefix + leaf for leaf in EXTERNAL_OPENVPN_MIXED_LIFECYCLE)
+        selected = tuple(case for case in EXTERNAL_OPENVPN_CASES["mixed"][2:]
+                         if case != EXTERNAL_OPENVPN_MIXED_CONTROL and (case in lifecycle) == (network == "mixed-lifecycle"))
+        return (*EXTERNAL_OPENVPN_CASES["mixed"][:2], *selected)
     if network == "mixed-control-key":
         return (*EXTERNAL_OPENVPN_CASES["mixed"][:2], EXTERNAL_OPENVPN_MIXED_CONTROL)
     return EXTERNAL_OPENVPN_CASES.get(network, ())
@@ -107,9 +112,15 @@ def external_openvpn_arguments(network):
     if network not in EXTERNAL_OPENVPN_INVOCATIONS:
         raise ValueError("Unknown mandatory OpenVPN invocation")
     exact_control = "/".join("^" + part + "$" for part in EXTERNAL_OPENVPN_MIXED_CONTROL.split("/"))
-    expression = "^" + EXTERNAL_OPENVPN_ALIAS + "$" if network == "alias" else "^(" + EXTERNAL_OPENVPN_CODEC + "|" + EXTERNAL_OPENVPN_OWNERSHIP + ")$" if network == "witness" else exact_control if network == "mixed-control-key" else "^" + EXTERNAL_OPENVPN_ROOT + "$/^" + network + "$"
+    if network in ("mixed-lifecycle", "mixed-refusals"):
+        # ARM64 exhausted the remaining mixed batch while its final child was
+        # only one second old. Preserve the 180s alarm for these disjoint groups.
+        names = EXTERNAL_OPENVPN_MIXED_LIFECYCLE if network == "mixed-lifecycle" else ("reject", "cancelled-proof", "foreign-predecessor", "commit-refused")
+        expression = "^" + EXTERNAL_OPENVPN_ROOT + "$/^mixed$/^(" + "|".join(re.escape(name) for name in names) + ")$"
+    else:
+        expression = "^" + EXTERNAL_OPENVPN_ALIAS + "$" if network == "alias" else "^(" + EXTERNAL_OPENVPN_CODEC + "|" + EXTERNAL_OPENVPN_OWNERSHIP + ")$" if network == "witness" else exact_control if network == "mixed-control-key" else "^" + EXTERNAL_OPENVPN_ROOT + "$/^" + network + "$"
     result = ["-test.run=" + expression]
-    if network == "mixed":
+    if network == "mixed-refusals":
         result.append("-test.skip=" + exact_control)
     return result
 EXTERNAL_SERVER_ROOT = "TestRouterVPNDesktopExternalWindowsRouterServerWFP"
@@ -844,7 +855,7 @@ PHASE_TIMEOUTS = {
     "external-hysteria2": _PHASE_COMMON + 600 + 3 * 195 + 2 * (600 + 75),
     "external-socks": _PHASE_COMMON + 600 + 315 + 6 * (600 + 75),
     "external-packet": _PHASE_COMMON + 600 + 2 * 75 + (5 + len(EXTERNAL_SERVER_GROUPS)) * 195 + 2 * (600 + 4 * 75) + len(EXTERNAL_LEASE_CONTROLS) * (600 + 75),
-    "external-openvpn": _PHASE_COMMON + 600 + 2 * 75 + 4 * 195 + 5 * (600 + 75),
+    "external-openvpn": _PHASE_COMMON + 600 + 2 * 75 + (len(EXTERNAL_OPENVPN_INVOCATIONS) - 2) * 195 + 5 * (600 + 75),
 }
 _PHASE_IMAGES = {
     "external-ss-entry": tuple("external-ss-entry" + suffix + "/external-ss-entry.test.exe" for suffix in ("", "-ordinary-udp-deny", "-missing-durable-intent")),
