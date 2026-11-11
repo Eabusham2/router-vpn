@@ -7,6 +7,67 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## Desktop ordered Startup Last source continuation
+
+The four recovered production edits were checked against the actual unchanged
+files at `da38c3d3f5cc396555deeaa998eb4bced46c37d4`, then corrected as new
+source work. Startup Auto/SMART AUTO and Last for the supported ordered Local
+graph now enter the existing owned native transaction. They do not start a
+second connection operation, replace the graph with its final runtime alone,
+or rerun Compare. The bounded graph family remains two through eight paired
+WG/AWG2 Fast/AWG2 Strong prefixes with an SS2022 final on the currently
+admitted protected Windows/Linux hosts. Other graph and host requirements
+remain open.
+
+Durable ordered Last uses the explicit `path_kind: "node-chain-v1"` field
+coupled to its complete reference/digest receipt. The old display label
+`logical_mode: "multihop"` remains compatible with historical ordinary/pair
+records. A present null, empty, aliased, duplicate or unknown discriminator,
+a missing/null ordered capture, cross-family data, or a different selected
+control refuses typed startup instead of falling through to ordinary AUTO.
+Untyped historical pair and External records retain their existing paths.
+
+Delayed startup captures every original member, exact mode, normalized Last
+policy, original node proof identity, canonical private-root digest and
+complete WG/transport/Start-Layer source inventory. The actual compiler,
+preflight, stage and proof adapters recheck that original capture. Rejected
+unstarted preparation retires its own launch. Changed profiles, relinked
+sources, cancellation, a replacement operation or a replaced Last receipt
+cannot acquire a new path through the old intent.
+
+The durable writer additionally requires the retained native owner, actual
+fresh proof and Connected admission. It validates the caller's member order
+against the original compiled selection before writing; retaining only the
+same Native pointer would not prove a caller-supplied reordered list. The
+ordinary recorder classifies the actual native pair/ordered owner under the
+app lock and repeats its check under the original transaction lock. Cleared
+editor preferences or a missing owner/graph during cleanup cannot downgrade
+an ordered receipt into an ordinary record.
+
+The missing test payloads were rebuilt as **new tests**, not described as
+recovered original bytes. Eight source/adapter test roots cover mixed
+2/3/4/8-member captures, source and policy drift, normalized proved drafts,
+strict typed receipts, old pair/External compatibility, each adapter
+boundary and cancelled/replaced admission. Four owned test roots exercise
+the existing explicit controller/kernel model around real source staging,
+typed child replay, heartbeat proof and durable writing; rejected writes
+must leave the previous bytes unchanged. These models do not supply native
+OS traffic or device acceptance.
+
+Validation before publication was source review by two agents, exact
+baseline/hunk application, helper/call-site inspection and lexical delimiter
+checks. **Go compilation, gofmt, execution and race validation for this new
+unit were unavailable locally and remain required hosted evidence.** No
+previous pending local test session is claimed to have completed. The
+original recovery patch and manifest remain unchanged as historical
+artifacts; do not reapply them over this newer source. The inaccessible
+macOS descriptor work remains separate unfinished implementation.
+
+The prepublication `da38c3d3` release-gap job `130817800199` exposed an
+independent Speed Lab cancellation/restoration admission failure (HTTP 409).
+That result is being traced separately; this startup source unit does not
+claim to repair or certify it.
+
 ## Hosted CI follow-up after the execution interruption
 
 The local executor became unavailable during this continuation. Later fixture

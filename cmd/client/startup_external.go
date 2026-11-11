@@ -26,6 +26,7 @@ type startupPolicyCapture struct {
 	entryToken   string
 	sourceToken  string
 	entryMode    string
+	nodeChain    *startupNodeChainCapture
 }
 
 // Durable Last state contains references and digests only. Private imported
@@ -50,17 +51,42 @@ func (a *app) captureStartupPolicy() (*startupPolicyCapture, error) {
 	p = cloneRouterProfile(p)
 	entry, _ := a.profileByIDLocked(p.MultihopEntryID)
 	entry = cloneRouterProfile(entry)
+	profiles := cloneRouterProfileStore(a.profiles).Profiles
 	a.mu.Unlock()
 	mode := strings.ToLower(strings.TrimSpace(p.StartupMode))
 	if !ok || !p.AutoConnect || mode == "" || mode == "manual" {
 		return nil, nil
 	}
-	if err := guardLegacyOrderedNodeDispatch(p); err != nil {
-		return nil, err
-	}
 	capture := &startupPolicyCapture{profile: p, profileToken: startupProfileToken(p)}
 	if p.NodeKind != "external" && p.External == nil {
+		ordered := p.MultihopEnabled && len(p.MultihopNodes) > 0
+		var last *startupSelection
+		if mode == "last" {
+			var captured bool
+			var err error
+			last, captured, err = a.loadStartupNodeChainReceipt(p.ID)
+			if err != nil && (ordered || captured) {
+				return nil, orderedStartupError(err)
+			}
+			ordered = ordered || captured
+			if ordered && last == nil {
+				return nil, orderedStartupError(errors.New("ordered Last has no complete proved receipt"))
+			}
+		}
+		if ordered {
+			var err error
+			capture.nodeChain, err = captureStartupNodeChain(a, p, profiles, last)
+			if err != nil {
+				return nil, orderedStartupError(err)
+			}
+			if err := capture.current(a); err != nil {
+				return nil, orderedStartupError(err)
+			}
+		}
 		return capture, nil
+	}
+	if err := guardLegacyOrderedNodeDispatch(p); err != nil {
+		return nil, err
 	}
 	if p.NodeKind != "external" || p.External == nil {
 		return nil, errors.New("startup external node has no captured private protocol")
@@ -108,6 +134,9 @@ func (capture *startupPolicyCapture) currentLocked(a *app) error {
 			return errors.New("scheduled startup entry or credentials changed")
 		}
 	}
+	if capture.nodeChain != nil {
+		return capture.nodeChain.currentProfilesLocked(a)
+	}
 	return nil
 }
 
@@ -115,6 +144,9 @@ func (capture *startupPolicyCapture) current(a *app) error {
 	a.mu.Lock()
 	err := capture.currentLocked(a)
 	a.mu.Unlock()
+	if err == nil && capture.nodeChain != nil {
+		return capture.nodeChain.currentSourcesContext(context.Background(), a, capture)
+	}
 	if err != nil || capture.sourceToken == "" {
 		return err
 	}
@@ -136,6 +168,9 @@ func (capture *startupPolicyCapture) currentContext(ctx context.Context, a *app)
 	}
 	err := capture.currentLocked(a)
 	a.mu.Unlock()
+	if err == nil && capture.nodeChain != nil {
+		return capture.nodeChain.currentSourcesContext(ctx, a, capture)
+	}
 	if err != nil || capture.sourceToken == "" {
 		return errors.Join(err, ctx.Err())
 	}

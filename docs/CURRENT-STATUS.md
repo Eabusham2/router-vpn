@@ -6,6 +6,22 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## Latest desktop ordered Startup Last source
+
+The [continuation ledger](CONTINUATION-EVIDENCE-2026-11-11-NATIVE-REPAIRS.md)
+now records the corrected ordered startup/Last implementation and twelve new
+source/owned test roots. It restores the complete captured Local graph through
+the existing native transaction and uses an explicit `node-chain-v1` receipt,
+while preserving older untagged pair and External records. Current native
+proof, original member order and ownership remain required before writing.
+This supersedes the unapplied-startup status in the older interruption notes;
+the original recovery artifacts remain historical and must not be replayed.
+
+The new unit has source review only so far. Hosted Go compilation, execution
+and race checks remain pending because the local executor is unavailable.
+The protected ordered macOS host, broader graph families, exact-current
+release and live/device acceptance are still separate open requirements.
+
 ## Hosted follow-up after the local executor interruption
 
 The latest [continuation ledger](CONTINUATION-EVIDENCE-2026-11-11-NATIVE-REPAIRS.md)

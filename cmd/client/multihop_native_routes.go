@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os/exec"
 	"runtime"
@@ -498,6 +499,11 @@ func (a *app) nativeMultihopConnectLocalOwned(w http.ResponseWriter, r *http.Req
 		sessionTrackerFor(a).markRequestFailure(message)
 		http.Error(w, message, http.StatusInternalServerError)
 		return
+	}
+	if sel.Native.chain != nil {
+		if err := a.saveNodeChainStartupSelection(operation, native, sel); err != nil {
+			log.Printf("Router VPN could not persist the proved ordered startup selection: %v", err)
+		}
 	}
 	a.startRouterNodeAutomaticMTU()
 	if protected && !desktopMultihopPlatformLaunch(native) {

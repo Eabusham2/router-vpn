@@ -43,6 +43,8 @@ type startupSelection struct {
 	ProfileToken string                    `json:"profile_token"`
 	UpdatedAt    time.Time                 `json:"updated_at"`
 	External     *startupExternalSelection `json:"external,omitempty"`
+	NodeChain    *startupNodeChainSelection `json:"node_chain,omitempty"`
+	PathKind     string                     `json:"path_kind,omitempty"`
 }
 
 var strategyLocks sync.Map
@@ -635,6 +637,9 @@ func (a *app) saveStartupSelection(selection startupSelection) error {
 	if !validStartupProfileToken(selection.ProfileToken) {
 		return errors.New("last-good startup state requires one exact profile/path-policy token")
 	}
+	if err := validateStartupNodeChainSelection(selection); err != nil {
+		return err
+	}
 	body, err := json.MarshalIndent(selection, "", "  ")
 	if err != nil {
 		return err
@@ -684,8 +689,12 @@ func (a *app) recordLastSuccessfulRuntime(ctx context.Context) {
 		if profileOK {
 			profileToken = startupProfileToken(profile)
 		}
+		ordinaryAllowed := ordinaryStartupRecordAllowed(a, profile, st)
 		a.mu.Unlock()
 		if !st.Connected || st.Phase != "connected" || strings.TrimSpace(st.RuntimeMode) == "" || strings.TrimSpace(st.RouterID) == "" || !profileOK {
+			continue
+		}
+		if !ordinaryAllowed {
 			continue
 		}
 		if _, err := a.mode(st.RuntimeMode); err != nil {
@@ -713,6 +722,7 @@ func (a *app) recordLastSuccessfulRuntime(ctx context.Context) {
 			current.RouterID == st.RouterID && current.RuntimeMode == st.RuntimeMode &&
 			current.LogicalMode == st.LogicalMode && current.Base == st.Base &&
 			currentProfileOK && startupProfileToken(currentProfile) == profileToken &&
+			ordinaryStartupRecordAllowed(a, currentProfile, current) &&
 			sameAsyncMeasurementSession(session, currentSession)
 		a.mu.Unlock()
 		if !fresh {
@@ -744,6 +754,10 @@ func (a *app) applyStartupPolicyWithContext(scheduleCtx context.Context) {
 }
 
 func (a *app) applyCapturedStartupPolicy(scheduleCtx context.Context, capture *startupPolicyCapture, native externalConnectRuntime) {
+	a.applyCapturedStartupPolicyOwned(scheduleCtx, capture, native, startupNodeChainRuntime())
+}
+
+func (a *app) applyCapturedStartupPolicyOwned(scheduleCtx context.Context, capture *startupPolicyCapture, native externalConnectRuntime, ordered nativeMultihopConnectRuntime) {
 	if scheduleCtx == nil {
 		scheduleCtx = context.Background()
 	}
@@ -753,17 +767,12 @@ func (a *app) applyCapturedStartupPolicy(scheduleCtx context.Context, capture *s
 	if err := capture.current(a); err != nil {
 		return
 	}
-	_, finish, guardErr := a.beginConnectionTransaction()
+	operation, finish, guardErr := a.beginConnectionTransactionContext(scheduleCtx)
 	if guardErr != nil {
 		log.Printf("Router VPN startup auto-connect skipped while another transaction is active: %v", guardErr)
 		return
 	}
 	defer finish()
-	a.mu.Lock()
-	operationCancel := a.connectionCancel
-	a.mu.Unlock()
-	stopCancellation := context.AfterFunc(scheduleCtx, operationCancel)
-	defer stopCancellation()
 	if scheduleCtx.Err() != nil {
 		return
 	}
@@ -774,6 +783,12 @@ func (a *app) applyCapturedStartupPolicy(scheduleCtx context.Context, capture *s
 	mode := strings.ToLower(strings.TrimSpace(profile.StartupMode))
 	if mode == "" || mode == "manual" {
 		log.Printf("Router VPN auto-connect is enabled but startup mode is Manual; leaving the app disconnected")
+		return
+	}
+	if capture.nodeChain != nil {
+		if err := a.startNodeChainStartupOwned(operation, capture, ordered); err != nil {
+			log.Printf("Router VPN ordered startup auto-connect failed closed: %v", err)
+		}
 		return
 	}
 	if profile.NodeKind == "external" || profile.External != nil {
