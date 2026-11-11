@@ -9,6 +9,15 @@ failed. Those historical results must not be attached to a later commit.
 
 ## Desktop ordered Startup Last source continuation
 
+The source unit is published at `d00230500812941f84c0061415b41f2f80e4181b`.
+The requirements-closure workflow additionally executes all twelve new test
+roots and their legacy Startup ProfileToken/Selection/External neighbors with
+`go test -race -count=1 -timeout=180s` before the unchanged complete Go suite.
+The explicit selector also retains the earlier OrderedStartupCannotFallback
+coverage. This is required executable race coverage; a race-enabled native
+compile alone is insufficient. The focused gate's outcome is still pending,
+and no operation deadline or existing complete-suite inventory was relaxed.
+
 The four recovered production edits were checked against the actual unchanged
 files at `da38c3d3f5cc396555deeaa998eb4bced46c37d4`, then corrected as new
 source work. Startup Auto/SMART AUTO and Last for the supported ordered Local
