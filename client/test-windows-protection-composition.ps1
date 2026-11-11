@@ -10,8 +10,9 @@ function Assert-ProtectionComposition([bool]$Value,[string]$Message){if(-not$Val
 foreach($Name in @('Test-RouterVPNMutationBusyFromStatus','Test-RouterVPNMutationBusy','Assert-RouterVPNMutationIdle',
     'GetUnifiedStopRetryToken','TestUnifiedProtectionStatusBusy','AssertUnifiedProtectionMutationIdle',
     'SetUnifiedStopRetryPresentation','UnifiedAsyncBusy',
+    'RefreshUnifiedOrderedSelection','RefreshUnifiedOrderedControls',
     'ApplyUnifiedRefreshSnapshot','UnifiedRefreshBusy','CompleteUnifiedRefreshAsync','SetUnifiedAsyncUI',
-    'UnifiedTelemetryBusy','CompleteUnifiedTelemetryRefresh')){
+    'UnifiedTelemetryBusy','CompleteUnifiedTelemetryRefresh','ClearUnifiedLiveHTTPS')){
     $Functions=@($Ast.FindAll({param($N)$N-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$N.Name-ceq$Name},$true))
     Assert-ProtectionComposition ($Functions.Count-eq1) ('Missing or duplicated composed protection function: '+$Name)
     . ([ScriptBlock]::Create($Functions[0].Extent.Text))
@@ -24,7 +25,7 @@ Assert-ProtectionComposition ($KillXml.DocumentElement.GetAttribute('IsEnabled')
 $script:ProtectionControls=@{}
 function Control([string]$Name){
     if(-not$script:ProtectionControls.ContainsKey($Name)){
-        $C=[pscustomobject]@{Name=$Name;Text='';Content='';IsEnabled=$true;IsChecked=$null;ToolTip='';Fill='';Foreground='';ItemsSource=$null;SelectedValue='';Tag=$null;Callback=$null;Registrations=0}
+        $C=[pscustomobject]@{Name=$Name;Text='';Content='';IsEnabled=$true;IsChecked=$null;ToolTip='';Fill='';Foreground='';Visibility='Visible';ItemsSource=$null;SelectedValue='';Tag=$null;Callback=$null;Registrations=0}
         $C|Add-Member ScriptMethod Add_Click {param($Callback)$this.Callback=$Callback;$this.Registrations++}
         $script:ProtectionControls[$Name]=$C
     }
@@ -63,11 +64,13 @@ $Store=@{selected_id='node';profiles=@($Profile)}
 $Session=@{dns_proof=@{mode='home';host='192.168.50.133';status='pending';latency_ms=0;reason=''}}
 $MH=@{nodes=@();entry_id='';exit_id='';platform_supported=$true;connected=$false;actual_exit_id='';runtime_exit_mode='';supported_entry_bases=@();supported_exit_modes=@()}
 $Timeline=@{events=@();last_event_seq=0}
+$MapCanvas=[pscustomobject]@{Children=@()};$script:UnifiedLiveHTTPS=$null
 $script:Busy=$false;$script:EventSeq=[uint64]0;$script:DnsPolicySummary='Home AdGuard';$script:NodeSort='name'
 $script:UnifiedProtectionPending=$false;$script:UnifiedProtectionProfileID='';$script:UnifiedAsyncClosed=$false
 $script:UnifiedAsyncActive=$false;$script:UnifiedAsyncOwnedStopRetry=$false;$script:UnifiedStopRetryToken=''
 $script:UnifiedRefreshTasks=@{};$script:UnifiedRefreshRequests=@{};$script:UnifiedRefreshDiscard=$false
 $script:UnifiedTelemetryTasks=@{};$script:UnifiedTelemetryRequests=@{};$script:UnifiedTelemetryDiscard=$false
+$script:UnifiedTelemetryPending=$null;$script:UnifiedTelemetryOriginal=$null;$script:UnifiedTelemetryStarted=[long]0
 $script:UnifiedRoutePathMs=0.0;$script:UnifiedForwardSync=$false
 $script:UnifiedRefreshPoller=[pscustomobject]@{Stops=0};$script:UnifiedRefreshPoller|Add-Member ScriptMethod Stop {$this.Stops++}
 $script:UnifiedTelemetryPoller=[pscustomobject]@{Stops=0};$script:UnifiedTelemetryPoller|Add-Member ScriptMethod Stop {$this.Stops++}
@@ -113,6 +116,7 @@ function Complete-ProtectionTelemetry{
     $script:UnifiedTelemetryCts=[Threading.CancellationTokenSource]::new()
     CompleteUnifiedTelemetryRefresh
     Assert-ProtectionComposition ($script:UnifiedTelemetryTasks.Count-eq0-and$null-eq$script:UnifiedTelemetryCts) 'Telemetry did not retire its captured completions'
+    Assert-ProtectionComposition ($null-eq$script:UnifiedLiveHTTPS-and(Control 'UnifiedLiveLatency').Text-ceq'-- ms') 'Empty telemetry retained an unrelated live response'
 }
 
 foreach($Phase in @('off-pending','off-unsaved')){
@@ -121,7 +125,7 @@ foreach($Phase in @('off-pending','off-unsaved')){
     $Kill=Control 'UnifiedKillSwitch'
     Assert-ProtectionComposition ($script:UnifiedProtectionPending-and$script:UnifiedProtectionProfileID-ceq'node') 'Seventh refresh argument lost pending protection ownership'
     Assert-ProtectionComposition ($Kill.IsEnabled-and$null-eq$Kill.IsChecked-and$Kill.Content-ceq'Finish Off'-and$Kill.ToolTip-ceq$Protection.message) 'Composed shell hid the effective pending Off state'
-    foreach($Name in @('UnifiedConnectButton','UnifiedModeCombo','UnifiedDnsCombo','UnifiedFastestNode')){
+    foreach($Name in @('UnifiedConnectButton','UnifiedModeCombo','UnifiedDnsCombo','UnifiedFastestNode','UnifiedOrdered','UnifiedNodeChainButton')){
         Assert-ProtectionComposition (-not(Control $Name).IsEnabled) ('Pending Off allowed another mutation: '+$Name)
     }
     SetUnifiedAsyncUI $true 'Working'
