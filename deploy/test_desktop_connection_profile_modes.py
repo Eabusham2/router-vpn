@@ -34,11 +34,11 @@ def block(source, marker):
     return source[start:end]
 
 
-def run(command, *, negative=False):
+def run(command, *, negative=False, witness=None):
     result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=90)
     output = result.stdout + result.stderr
     if negative:
-        if result.returncode == 0 or "PROFILE-CHECK:" not in output:
+        if result.returncode == 0 or "PROFILE-CHECK:" not in output or (witness and witness not in " ".join(output.split())):
             raise RuntimeError("Negative did not fail on a behavioral assertion:\n" + output)
     elif result.returncode:
         raise RuntimeError("Shipping fixture failed:\n" + output)
@@ -49,9 +49,18 @@ def run(command, *, negative=False):
 def windows(shell):
     command = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                str(ROOT / "client/test-windows-connection-profile-modes.ps1")]
-    for mutation in ("shipping", "capture-two-modes", "load-fallback", "connect-fallback", "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback", "startup-deadline", "ordered-drop-middle", "ordered-final-owner", "ordered-capability", "ordered-source", "ordered-locked-source"):
-        run(command + ["-Mutation", mutation], negative=mutation != "shipping")
-    print("WPF pair and ordered capture, load/Connect, capability and startup deadline and all-source negatives: 12 rejected")
+    setup_witnesses = {
+        "setup-expectation": "Setup action discarded its original source inventory",
+        "setup-current-receipt": "A changed setup owner was adopted: visible-off",
+        "setup-response-source": "Malformed setup reply was adopted: changed-token",
+        "setup-response-order": "Malformed setup reply was adopted: reordered-members",
+        "setup-load-inventory": "Load discarded an original saved selection source",
+        "setup-refresh-retirement": "Setup kept its pending catalog refresh",
+        "setup-uncertain-owner": "Uncertain Load retained the old selected-node authority",
+    }
+    for mutation in ("shipping", "capture-two-modes", "load-fallback", "connect-fallback", "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback", "startup-deadline", "ordered-drop-middle", "ordered-final-owner", "ordered-capability", "ordered-source", "ordered-locked-source", "setup-expectation", "setup-current-receipt", "setup-response-source", "setup-response-order", "setup-load-inventory", "setup-refresh-retirement", "setup-uncertain-owner"):
+        run(command + ["-Mutation", mutation], negative=mutation != "shipping", witness=setup_witnesses.get(mutation))
+    print("WPF pair and ordered capture, setup ownership/response, load/Connect, capability and startup deadline negatives: 19 rejected")
     editor = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
               str(ROOT / "client/test-windows-ordered-editor.ps1")]
     if os.name == "nt":

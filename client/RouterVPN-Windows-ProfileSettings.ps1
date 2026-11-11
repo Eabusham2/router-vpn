@@ -373,6 +373,155 @@ function global:Get-RouterVPNVisibleConnectionSnapshot {
     return $result
 }
 
+function global:Get-RouterVPNSetupGraphIDs {
+    param($Graph,[string]$SelectedID)
+    $ids=New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    if($SelectedID-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'){throw 'Refresh the selected node before changing a connection profile.'}
+    [void]$ids.Add($SelectedID)
+    if((Get-RouterVPNOrderedValue $Graph 'multihop_enabled' $false)-eq$true){
+        $raw=Get-RouterVPNOrderedValue $Graph 'multihop_nodes'
+        if($null-ne$raw-and@($raw).Count-gt0){
+            foreach($node in @(Copy-RouterVPNOrderedNodes $raw $SelectedID)){[void]$ids.Add($node.id)}
+        }else{
+            foreach($key in @('multihop_entry_id','multihop_exit_id')){
+                $id=Get-RouterVPNOrderedValue $Graph $key
+                if($id-isnot[string]-or$id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'){throw 'The captured connection profile has an incomplete node selection.'}
+                [void]$ids.Add($id)
+            }
+        }
+    }
+    return @($ids)
+}
+
+function global:Get-RouterVPNSetupViewKey {
+    param($Owner)
+    $view=[ordered]@{}
+    foreach($name in @('UnifiedNodeCombo','UnifiedEntryCombo','UnifiedExitCombo')){
+        $control=$Owner.FindName($name);$view[$name]=if($null-ne$control){[string]$control.SelectedValue}else{''}
+    }
+    foreach($name in @('UnifiedEntryMode','UnifiedExitMode','UnifiedExecution')){
+        $control=$Owner.FindName($name);$view[$name]=if($null-ne$control-and$null-ne$control.SelectedItem){[string]$control.SelectedItem.Tag}else{''}
+    }
+    foreach($name in @('UnifiedMultihop','UnifiedOrdered')){
+        $control=$Owner.FindName($name);$view[$name]=$null-ne$control-and[bool]$control.IsChecked
+    }
+    $draft=$Owner.FindName('UnifiedNodeChainButton');$view['ordered']=if($null-ne$draft){$draft.Tag}else{$null}
+    $view['mode']=Get-RouterVPNCurrentModeSnapshot
+    return ($view|ConvertTo-Json -Depth 16 -Compress)
+}
+
+function global:Get-RouterVPNSetupCapture {
+    param($Owner,$Graph,[bool]$Loading)
+    if($null-eq$Owner){throw 'Reopen Settings from the current Router VPN window.'}
+    $selected=$Owner.FindName('UnifiedNodeCombo')
+    if($null-eq$selected-or$null-eq$selected.Tag){throw 'Refresh the selected node before changing a connection profile.'}
+    $id=[string]$selected.SelectedValue;$store=$selected.Tag
+    if([string](Get-RouterVPNOrderedValue $store 'selected_id')-cne$id){throw 'The selected node changed. Refresh before changing a connection profile.'}
+    $profiles=@(Get-RouterVPNOrderedValue $store 'profiles' @())
+    $control=@($profiles|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$id})
+    if($control.Count-ne1){throw 'The original selected node is no longer available.'}
+    # Load protects the original saved catalog selection. An unsaved editor
+    # draft must not replace that inventory; Save/Update protect their draft.
+    $graphSource=if($Loading-or[string](Get-RouterVPNOrderedValue $control[0] 'node_kind')-ceq'external'){$control[0]}else{$Graph}
+    $graphCopy=$graphSource|ConvertTo-Json -Depth 16|ConvertFrom-Json
+    $tokens=@{};$ids=@(Get-RouterVPNSetupGraphIDs $graphCopy $id)
+    $ordered=Get-RouterVPNOrderedValue $graphCopy 'multihop_nodes'
+    $draftTokens=$null
+    if(-not$Loading-and$null-ne$ordered-and@($ordered).Count-gt0){
+        $draft=$Owner.FindName('UnifiedNodeChainButton')
+        if($null-eq$draft-or$null-eq$draft.Tag){throw 'Reopen the complete ordered path before saving it.'}
+        $checked=New-RouterVPNOrderedConnectPayload $draft.Tag $store
+        if((@($checked.nodes.id)-join',')-cne(@($ordered.id)-join',')-or(@($checked.nodes.mode)-join',')-cne(@($ordered.mode)-join',')){throw 'The ordered draft changed before it could be captured.'}
+        $draftTokens=$checked.expected_profile_tokens
+    }
+    foreach($member in $ids){
+        $matches=@($profiles|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$member})
+        if($matches.Count-ne1){throw 'A captured connection node is missing or duplicated.'}
+        $token=Get-RouterVPNOrderedValue $matches[0] 'profile_token'
+        if($token-isnot[string]-or$token-cnotmatch'\A[0-9a-f]{64}\z'-or($null-ne$draftTokens-and(Get-RouterVPNOrderedValue $draftTokens $member)-cne$token)){throw 'A captured node changed. Refresh before changing a connection profile.'}
+        $tokens[$member]=$token
+    }
+    return [pscustomobject]@{SelectedID=$id;Tokens=$tokens;Graph=$graphCopy;Store=$store;ViewKey=(Get-RouterVPNSetupViewKey $Owner);Loading=$Loading}
+}
+
+function global:Confirm-RouterVPNSetupResponse {
+    param($Owner,$Capture,$Response)
+    $selected=$Owner.FindName('UnifiedNodeCombo')
+    if($null-eq$selected-or[string]$selected.SelectedValue-cne$Capture.SelectedID-or-not[object]::ReferenceEquals($selected.Tag,$Capture.Store)-or(Get-RouterVPNSetupViewKey $Owner)-cne$Capture.ViewKey){throw 'The displayed selection changed while the profile request was completing. Refresh before continuing.'}
+    foreach($id in $Capture.Tokens.Keys){
+        $matches=@((Get-RouterVPNOrderedValue $selected.Tag 'profiles' @())|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$id})
+        if($matches.Count-ne1-or(Get-RouterVPNOrderedValue $matches[0] 'profile_token')-cne$Capture.Tokens[$id]){throw 'A captured node changed while the profile request was completing.'}
+    }
+    $resultID=Get-RouterVPNOrderedValue $Response 'selected_node_id'
+    if($resultID-isnot[string]-or(-not$Capture.Loading-and$resultID-cne$Capture.SelectedID)){throw 'The profile response did not confirm its original selected node.'}
+    $ids=@(Get-RouterVPNSetupGraphIDs $Response $resultID)
+    $rawTokens=Get-RouterVPNOrderedValue $Response 'profile_tokens';$tokens=@{}
+    $keys=if($rawTokens-is[Collections.IDictionary]){@($rawTokens.Keys)}elseif($null-ne$rawTokens){@($rawTokens.PSObject.Properties.Name)}else{@()}
+    if($keys.Count-ne$ids.Count){throw 'The profile response did not return its exact node source inventory.'}
+    foreach($id in $ids){
+        $token=Get-RouterVPNOrderedValue $rawTokens $id
+        if($keys-cnotcontains$id-or$token-isnot[string]-or$token-cnotmatch'\A[0-9a-f]{64}\z'){throw 'The profile response contains an invalid node source receipt.'}
+        if(-not$Capture.Loading-and$token-cne$Capture.Tokens[$id]){throw 'The saved profile response replaced an original node source.'}
+        $tokens[$id]=$token
+    }
+    $nodes=Get-RouterVPNOrderedValue $Response 'multihop_nodes'
+    if($null-ne$nodes-and@($nodes).Count-gt0){
+        $nodes=@(Copy-RouterVPNOrderedNodes $nodes $resultID)
+        $profile=Get-RouterVPNOrderedValue $Response 'profile'
+        if((Get-RouterVPNOrderedValue $Response 'multihop_enabled')-isnot[bool]-or-not$Response.multihop_enabled-or(Get-RouterVPNOrderedValue $Response 'multihop_execution')-cne'local'-or(Get-RouterVPNOrderedValue $profile 'mode')-cne'shadowsocks'){throw 'The profile response changed the ordered execution or final mode.'}
+        foreach($key in @('multihop_entry_id','multihop_exit_id','multihop_entry_mode','multihop_exit_mode')){if([string](Get-RouterVPNOrderedValue $Response $key)){throw 'The profile response mixes ordered and pair selections.'}}
+    }
+    if(-not$Capture.Loading){
+        $expectedNodes=Get-RouterVPNOrderedValue $Capture.Graph 'multihop_nodes'
+        if(($null-ne$nodes-and@($nodes).Count-gt0)-or($null-ne$expectedNodes-and@($expectedNodes).Count-gt0)){
+            if($null-eq$nodes-or$null-eq$expectedNodes-or@($nodes).Count-ne@($expectedNodes).Count-or(@($nodes.id)-join',')-cne(@($expectedNodes.id)-join',')-or(@($nodes.mode)-join',')-cne(@($expectedNodes.mode)-join',')){throw 'The saved profile response changed the original ordered path.'}
+        }
+        if([bool](Get-RouterVPNOrderedValue $Response 'multihop_enabled' $false)-ne[bool](Get-RouterVPNOrderedValue $Capture.Graph 'multihop_enabled' $false)){throw 'The saved profile response changed the requested multihop choice.'}
+        foreach($key in @('multihop_entry_id','multihop_exit_id')){if([string](Get-RouterVPNOrderedValue $Response $key)-cne[string](Get-RouterVPNOrderedValue $Capture.Graph $key)){throw 'The saved profile response changed the requested node selection.'}}
+    }
+    return $tokens
+}
+
+function global:Invoke-RouterVPNConnectionSetup {
+    param([string]$BaseUrl,$Owner,[ValidateSet('save','update','load')][string]$Operation,[hashtable]$Body)
+    $capture=Get-RouterVPNSetupCapture $Owner $Body ($Operation-ceq'load')
+    $request=@{};foreach($key in $Body.Keys){$request[$key]=$Body[$key]}
+    $request.expected_selected_node_id=$capture.SelectedID;$request.expected_profile_tokens=$capture.Tokens
+    # Retire an older catalog request before publishing a new selection. The
+    # existing refresh owner will drain it without applying its stale reply.
+    if($null-ne${function:CancelUnifiedRefreshAsync}){[void](CancelUnifiedRefreshAsync)}
+    try{
+        $response=Invoke-RouterVPNControllerRequest -Uri ($BaseUrl.TrimEnd('/')+'/api/connection-profile/setup/'+$Operation) -Method Post -ContentType 'application/json' -Body ($request|ConvertTo-Json -Depth 16 -Compress) -TimeoutSec 12
+        $tokens=Confirm-RouterVPNSetupResponse $Owner $capture $response
+        if($Operation-ceq'load'){
+            $selected=$Owner.FindName('UnifiedNodeCombo')
+            $catalog=$capture.Store|ConvertTo-Json -Depth 32|ConvertFrom-Json
+            foreach($id in $tokens.Keys){
+                $matches=@($catalog.profiles|Where-Object{[string]$_.id-ceq$id})
+                if($matches.Count-ne1){throw 'The loaded profile contains a node outside this catalog. Refresh before continuing.'}
+                $matches[0]|Add-Member -NotePropertyName profile_token -NotePropertyValue $tokens[$id] -Force
+            }
+            $resultID=[string]$response.selected_node_id
+            $control=@($catalog.profiles|Where-Object{[string]$_.id-ceq$resultID})[0]
+            foreach($key in @('multihop_enabled','multihop_nodes','multihop_entry_id','multihop_exit_id','multihop_entry_mode','multihop_exit_mode','multihop_execution')){
+                $control|Add-Member -NotePropertyName $key -NotePropertyValue (Get-RouterVPNOrderedValue $response $key) -Force
+            }
+            $catalog.selected_id=$resultID
+            $selected.Tag=$catalog;$selected.SelectedValue=$resultID
+        }else{
+            $nodes=Get-RouterVPNOrderedValue $response 'multihop_nodes'
+            if($null-ne$nodes-and@($nodes).Count-gt0){Set-RouterVPNLoadedOrderedSnapshot $Owner $response}
+        }
+        return $response
+    }catch{
+        # The controller may have applied Load before a timeout or malformed
+        # response. Retire only this original display, never a newer choice.
+        $selected=$Owner.FindName('UnifiedNodeCombo')
+        if($Operation-ceq'load'-and$null-ne$selected-and[string]$selected.SelectedValue-ceq$capture.SelectedID-and[object]::ReferenceEquals($selected.Tag,$capture.Store)-and(Get-RouterVPNSetupViewKey $Owner)-ceq$capture.ViewKey){$selected.SelectedValue=$null}
+        throw
+    }
+}
+
 function global:Apply-RouterVPNLoadedConnectionSnapshot {
     param([System.Windows.Window]$Owner,$Loaded)
     if($null -eq $Owner){return}
@@ -523,9 +672,9 @@ function global:Show-RouterVPNProfileSettingsDialog {
     }
     $profileCombo.Add_SelectionChanged({if($profileCombo.SelectedItem){$profileName.Text=[string]$profileCombo.SelectedItem.name}})
     $dialog.FindName('ProfileRefresh').Add_Click({& $refreshProfiles})
-    $profileAdd.Add_Click({try{if(& $syncProfileMutationState){throw 'Disconnect Router VPN before adding a connection profile.'};$name=$profileName.Text.Trim();if(-not$name){throw 'Enter a profile name.'};$body=& $makeSetupBody $name '';$r=Invoke-RouterVPNControllerRequest -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/setup/save') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Depth 8 -Compress) -TimeoutSec 10;$profileStatus.Text="Added $($r.profile.name) • $($r.profile.mode) • exact hop setup saved";& $refreshProfiles}catch{$profileStatus.Text='Add failed: '+$_.Exception.Message}})
-    $profileUpdate.Add_Click({try{if(& $syncProfileMutationState){throw 'Disconnect Router VPN before updating a connection profile.'};if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$name=$profileName.Text.Trim();if(-not$name){throw 'Enter a profile name.'};$body=& $makeSetupBody $name ([string]$profileCombo.SelectedValue);$r=Invoke-RouterVPNControllerRequest -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/setup/update') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Depth 8 -Compress) -TimeoutSec 10;$profileStatus.Text="Updated $($r.profile.name) • exact hop setup refreshed";& $refreshProfiles}catch{$profileStatus.Text='Update failed: '+$_.Exception.Message}})
-    $profileLoad.Add_Click({try{if(& $syncProfileMutationState){throw 'Disconnect Router VPN before loading a connection profile.'};if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$body=@{id=[string]$profileCombo.SelectedValue};$r=Invoke-RouterVPNControllerRequest -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/setup/load') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Compress) -TimeoutSec 12;Set-RouterVPNLoadedModeSnapshot -Loaded $r;Apply-RouterVPNLoadedConnectionSnapshot -Owner $Owner -Loaded $r;if($null -ne $OnConnectionProfileLoaded){& $OnConnectionProfileLoaded $r};$profileStatus.Text="Loaded $($r.profile.name) • node $($r.selected_node_id) • mode $($r.mode) • exact hop setup restored. Connect separately to prove it."}catch{$profileStatus.Text='Load failed: '+$_.Exception.Message}})
+    $profileAdd.Add_Click({try{if(& $syncProfileMutationState){throw 'Disconnect Router VPN before adding a connection profile.'};$name=$profileName.Text.Trim();if(-not$name){throw 'Enter a profile name.'};$body=& $makeSetupBody $name '';$r=Invoke-RouterVPNConnectionSetup -BaseUrl $BaseUrl -Owner $Owner -Operation 'save' -Body $body;$profileStatus.Text="Added $($r.profile.name) • $($r.profile.mode) • exact hop setup saved";& $refreshProfiles}catch{$profileStatus.Text='Add failed: '+$_.Exception.Message}})
+    $profileUpdate.Add_Click({try{if(& $syncProfileMutationState){throw 'Disconnect Router VPN before updating a connection profile.'};if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$name=$profileName.Text.Trim();if(-not$name){throw 'Enter a profile name.'};$body=& $makeSetupBody $name ([string]$profileCombo.SelectedValue);$r=Invoke-RouterVPNConnectionSetup -BaseUrl $BaseUrl -Owner $Owner -Operation 'update' -Body $body;$profileStatus.Text="Updated $($r.profile.name) • exact hop setup refreshed";& $refreshProfiles}catch{$profileStatus.Text='Update failed: '+$_.Exception.Message}})
+    $profileLoad.Add_Click({try{if(& $syncProfileMutationState){throw 'Disconnect Router VPN before loading a connection profile.'};if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$body=@{id=[string]$profileCombo.SelectedValue};$r=Invoke-RouterVPNConnectionSetup -BaseUrl $BaseUrl -Owner $Owner -Operation 'load' -Body $body;Set-RouterVPNLoadedModeSnapshot -Loaded $r;Apply-RouterVPNLoadedConnectionSnapshot -Owner $Owner -Loaded $r;if($null -ne $OnConnectionProfileLoaded){& $OnConnectionProfileLoaded $r};$profileStatus.Text="Loaded $($r.profile.name) • node $($r.selected_node_id) • mode $($r.mode) • exact hop setup restored. Connect separately to prove it."}catch{$profileStatus.Text='Load failed: '+$_.Exception.Message}})
     $profileDelete.Add_Click({try{if(& $syncProfileMutationState){throw 'Disconnect Router VPN before deleting a connection profile.'};if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$body=@{id=[string]$profileCombo.SelectedValue};[void](Invoke-RouterVPNControllerRequest -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/setup/delete') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Compress) -TimeoutSec 10);$profileStatus.Text='Deleted saved connection profile and setup metadata.';& $refreshProfiles}catch{$profileStatus.Text='Delete failed: '+$_.Exception.Message}})
     & $refreshProfiles
     $dialog.FindName('MtuRetest').Add_Click({Show-RouterVPNMTUDialog -BaseUrl $BaseUrl -Owner $dialog})
