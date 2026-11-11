@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -19,6 +20,7 @@ type mtuMultihopSnapshot struct {
 	ControlToken, EntryToken, Token string
 	PhysicalEntry                   string
 	Native                          *nativeMultihopRuntime
+	Chain                           *mtuNodeChainSnapshot
 	Relay                           *desktopRelayOwner
 	RelayToken                      string
 	Command                         *exec.Cmd
@@ -52,7 +54,9 @@ func captureMTUMultihopSnapshot(a *app, selected common.RouterProfile, st state,
 		session.RouterID != exit.ID || session.ActualMode != graph.ExitMode || session.ActualBase != graph.Base {
 		return mtuRetestSnapshot{}, errors.New("multihop MTU session has not proved this exact exit path")
 	}
-	owner, err := capturedNativeMultihopRuntime(a, command, graph)
+	observe, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	owner, err := capturedNativeMultihopRuntimeContext(observe, a, command, graph)
 	if err != nil {
 		return mtuRetestSnapshot{}, err
 	}
@@ -64,6 +68,10 @@ func captureMTUMultihopSnapshot(a *app, selected common.RouterProfile, st state,
 	path := &mtuMultihopSnapshot{Graph: graph, Control: common.CloneRouterProfile(selected), Entry: entry,
 		ControlToken: mtuProfileSnapshotToken(selected), EntryToken: mtuProfileSnapshotToken(entry),
 		PhysicalEntry: owner.launch.endpoint, Native: owner, Command: command}
+	path.Chain, err = captureMTUNodeChainSnapshot(owner)
+	if err != nil {
+		return mtuRetestSnapshot{}, err
+	}
 	if graph.Execution == "server" {
 		raw, found := desktopRelays.Load(a)
 		path.Relay, _ = raw.(*desktopRelayOwner)
@@ -96,7 +104,9 @@ func validateMTUMultihopSource(a *app, snapshot mtuRetestSnapshot) error {
 	if path == nil {
 		return nil
 	}
-	current, err := capturedNativeMultihopRuntime(a, path.Command, path.Graph)
+	observe, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	current, err := capturedNativeMultihopRuntimeContext(observe, a, path.Command, path.Graph)
 	if err != nil || current == nil || current != path.Native || path.PhysicalEntry != current.launch.endpoint {
 		return errors.New("MTU multihop source or native interface owner changed")
 	}
@@ -133,6 +143,12 @@ func validateMTUMultihopLocked(a *app, snapshot mtuRetestSnapshot) error {
 	}
 	if raw, found := nativeMultihopOwners.Load(a); !found || raw != path.Native {
 		return errors.New("retained multihop graph owner was replaced")
+	}
+	if path.Chain != nil {
+		return validateMTUNodeChainLocked(a, path)
+	}
+	if path.Native == nil || path.Native.launch == nil || path.Native.launch.chain != nil || path.Graph.ChainNodes != 0 {
+		return errors.New("ordered MTU source lost its original complete capture")
 	}
 	if raw, found := desktopNodeOwners.Load(a); !found || raw != path.Native.launch {
 		return errors.New("retained multihop system TUN was replaced")

@@ -7,6 +7,46 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## Public ordered MTU snapshots retain the complete native path
+
+The ordinary MTU snapshot previously required desktopNodeOwners even when
+the protected Linux/Darwin ordered host was retained by nativeMultihopOwners
+and its original platform session. Linux's typed MTU snapshot also rejected
+every multihop record. Removing that guard alone would recursively enter the
+same host/session gates during full native Current validation.
+
+The common snapshot now retains the exact launch, ordered chain, native source,
+full member capture, sealed policy, network, configuration, MTU session and
+platform object. Full native/source observation runs outside app.mu with a
+four-second bound; cheap retained-object and complete saved-member comparisons
+run under app.mu. Missing, substituted or reordered original members fail.
+An ordered platform may not fall back to an ambient interface or ordinary
+kernel writer if its original typed host disappears.
+
+The Linux path reuses the existing retained session/host/MTU lease wrapper.
+While those gates are held, it checks captured state without recursively
+entering native Current, and brackets lease actions with the same original
+source, running policy, actual kernel TUN and ready-record observation as its
+host. Activation and transaction records must retain the exact chain. A saved
+source change blocks new measurement without erasing the old owner's obligation
+to retire its original lease.
+
+Five authored roots contain forty-nine terminal source/comparison cases,
+including changed middle members, runtime/command/session/network substitution,
+conflicting registries and forbidden ambient fallback. The existing proved
+three/four-node modeled lifecycle test additionally exercises the actual public
+snapshot, bounded revalidation outside app.mu, preserved measurement metadata
+and rejection of a modified middle private-source file. Comparison fixtures
+explicitly cannot pass full native Current. The existing five-file bases and
+all eight final files were reviewed against current source; local Go execution
+was unavailable, so hosted execution remains required.
+
+This completes this snapshot/dispatch source unit for the protected ordered
+Linux path and common retained capture. Public Darwin MTU adapter, changed-utun
+raw/outer succession and their native acceptance remain separate unfinished
+work. No broader graph, measurement or device requirement is closed by these
+test definitions alone.
+
 ## Darwin native retirement retains exact component progress
 
 A separate opt-in NativeTun.RouterVPNDesktopDarwinNodeChainCloseContext

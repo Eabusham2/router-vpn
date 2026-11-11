@@ -74,6 +74,8 @@ func captureMTULiveOwner(a *app, snapshot mtuRetestSnapshot, live mtuLiveSnapsho
 	if handled || err != nil {
 		// Partial native begin remains with the same live owner below, even
 		// when its acknowledgement or final host readback failed.
+	} else if mtuNodeChainPlatformSnapshot(snapshot) {
+		return nil, errors.New("ordered MTU opening lost its original platform host")
 	} else if raw, found := lookupDesktopNativeLaunch(a); found {
 		launch, ok := raw.(*desktopNodeLaunch)
 		if !ok || launch.command != command || launch.external != nil {

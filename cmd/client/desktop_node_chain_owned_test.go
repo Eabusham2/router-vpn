@@ -253,6 +253,7 @@ func TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement(t *testi
 			if err := validateDesktopNodeChainRestore(f.operation, f.a, f.launch); err != nil {
 				t.Fatal(err)
 			}
+			assertMTUNodeChainProvedCapture(t, f)
 			// A full fresh proof may follow only the same native owner's new reader.
 			f.heartbeat.Lock()
 			f.ready.Generation, f.ready.Reader, f.ready.InterfaceIndex, f.ready.MTU = 2, 2, 92, 1300

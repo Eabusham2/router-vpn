@@ -98,6 +98,10 @@ func withDesktopLinuxNodeMTUHost(ctx context.Context, a *app, action func(*deskt
 		h.transaction.journal != s.journal || h.activation.matches(h) != nil {
 		return true, errors.New("Linux MTU capture has no original proved active host")
 	}
+	if h.chain != nil && (h.launch == nil || h.launch.chain == nil || h.launch.chain.platform == nil ||
+		h.launch.chain.platform.host != h || h.launch.chain.platform.session != s) {
+		return true, errors.New("Linux ordered MTU capture replaced its original native session")
+	}
 	return true, action(s, h)
 }
 
@@ -117,7 +121,7 @@ func desktopLinuxMTUFamily(snapshot mtuRetestSnapshot) (int, error) {
 }
 
 func validateDesktopLinuxMTUSnapshot(h *desktopLinuxNodeHost, snapshot mtuRetestSnapshot) error {
-	if h == nil || h.parent == nil || h.parent.app == nil || h.launch == nil || snapshot.Multihop != nil || snapshot.Profile.ID != h.launch.profileID ||
+	if h == nil || h.parent == nil || h.parent.app == nil || h.launch == nil || snapshot.Profile.ID != h.launch.profileID ||
 		snapshot.Mode != h.launch.mode || snapshot.State.RouterID != h.launch.profileID || !snapshot.State.Connected ||
 		snapshot.State.Phase != "connected" || strings.ToLower(strings.TrimSpace(snapshot.Profile.MTUPolicy)) != "auto" ||
 		desktopOwnedNodeProfileToken(snapshot.Profile) != h.revision ||
@@ -125,7 +129,34 @@ func validateDesktopLinuxMTUSnapshot(h *desktopLinuxNodeHost, snapshot mtuRetest
 		[3]bool{snapshot.State.DAITA, snapshot.State.Jumbo, snapshot.State.Socks} != h.options {
 		return errors.New("Linux MTU Retest changed its captured active Auto profile")
 	}
+	if h.chain != nil || snapshot.Multihop != nil {
+		if err := validateDesktopLinuxOrderedMTUSnapshot(h, snapshot); err != nil {
+			return err
+		}
+		// The caller holds the original session/host and immediately brackets
+		// every lease action with h.readReadyLocked. Full Current here would
+		// recursively acquire those same gates through the multihop registry.
+		return validateMTURetestSnapshotState(h.parent.app, snapshot)
+	}
 	return validateMTURetestSnapshot(h.parent.app, snapshot)
+}
+
+// Only the originally captured ordered platform can use the existing Linux
+// MTU lease wrapper. This comparison supplies no native readiness authority.
+func validateDesktopLinuxOrderedMTUSnapshot(h *desktopLinuxNodeHost, snapshot mtuRetestSnapshot) error {
+	if h == nil || h.chain == nil || h.launch == nil || h.launch.chain == nil || snapshot.Multihop == nil ||
+		snapshot.Multihop.Native == nil || snapshot.Multihop.Native.launch != h.launch || snapshot.Multihop.Chain == nil {
+		return errors.New("Linux ordered MTU snapshot lost its complete original runtime")
+	}
+	captured := snapshot.Multihop.Chain
+	platform := h.launch.chain.platform
+	if platform == nil || captured.Platform != platform || platform.host != h || platform.session == nil ||
+		captured.Launch != h.launch || captured.Chain != h.launch.chain || captured.Policy != h.chain ||
+		h.launch.chain.policy != h.chain || captured.Capture != platform.capture ||
+		captured.Native != h.launch.chain.selection.Native || h.policy != nil || h.imported != nil || h.external != nil {
+		return errors.New("Linux ordered MTU snapshot substituted its original platform host")
+	}
+	return nil
 }
 
 func captureDesktopPlatformMTUSnapshot(a *app, snapshot mtuRetestSnapshot) (live mtuLiveSnapshot, handled bool, failure error) {
@@ -198,18 +229,24 @@ func (owner *desktopLinuxNodeMTUOwner) originalLocked() error {
 		owner.launch == nil || owner.native == nil || h.mtu != owner || h.activation != owner.activation || h.process != owner.process ||
 		h.transaction != owner.transaction || h.launch != owner.launch || owner.native.launch != owner.launch ||
 		owner.activation.host != h || owner.activation.process != owner.process || owner.activation.transaction != owner.transaction ||
-		owner.activation.launch != owner.launch || owner.activation.policy != h.policy || owner.activation.selection != h.selection ||
+		owner.activation.launch != owner.launch || owner.activation.policy != h.policy || owner.activation.chain != h.chain || owner.activation.selection != h.selection ||
 		owner.activation.options != h.options || owner.activation.savedOptions != h.savedOptions ||
 		!sameDesktopLinuxParentCapture(h.parent, owner.activation.parent) ||
 		!sameDesktopLinuxParentCapture(h.parent, owner.session.parent) || !sameDesktopLinuxParentCapture(h.parent, owner.process.parent) ||
 		!sameDesktopLinuxParentCapture(h.parent, owner.transaction.parent) || owner.transaction.journal != owner.session.journal ||
-		owner.transaction.process != owner.process || owner.transaction.policy != h.policy || owner.transaction.selection != h.selection ||
+		owner.transaction.process != owner.process || owner.transaction.policy != h.policy || owner.transaction.chain != h.chain || owner.transaction.selection != h.selection ||
 		owner.transaction.options != h.options || owner.transaction.savedOptions != h.savedOptions ||
 		owner.process.command == nil || owner.process.command != owner.launch.command ||
 		owner.native.record.Session != owner.initial.Session || owner.native.record.Config != owner.initial.Config ||
 		owner.native.record.Path != owner.initial.Path || owner.native.record.Interface != owner.initial.Interface ||
 		owner.launch.mtuSession != owner.initial.Session || owner.launch.configSHA256 != owner.initial.Config {
 		return errors.New("Linux MTU lease substituted its original host, process or private reader")
+	}
+	if h.chain != nil {
+		if h.launch.chain == nil || h.launch.chain.platform == nil || h.launch.chain.platform.session != owner.session {
+			return errors.New("Linux ordered MTU cleanup replaced its original native session")
+		}
+		return validateDesktopLinuxOrderedMTUSnapshot(h, owner.snapshot)
 	}
 	return nil
 }

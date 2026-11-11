@@ -400,15 +400,25 @@ func captureMTUConnectionSnapshot(a *app, snapshot mtuRetestSnapshot) (mtuLiveSn
 	if handled || err != nil {
 		return live, err
 	}
+	if mtuNodeChainPlatformSnapshot(snapshot) {
+		return mtuLiveSnapshot{}, errors.New("ordered MTU capture lost its original platform host")
+	}
 	return captureMTULiveSnapshot(snapshot.Profile)
 }
 
 func validateMTURetestSnapshot(a *app, snapshot mtuRetestSnapshot) error {
-	if sessionTrackerFor(a).snapshot(0).ID != snapshot.SessionID {
-		return errors.New("VPN session changed while MTU Retest was running; stale result was not adopted")
-	}
 	if err := validateMTUMultihopSource(a, snapshot); err != nil {
 		return err
+	}
+	return validateMTURetestSnapshotState(a, snapshot)
+}
+
+// Native platform callers already hold their original host gate and bracket
+// this state check with that host's full source/readiness observation. Reentering
+// native Current here would acquire the same session/host gates a second time.
+func validateMTURetestSnapshotState(a *app, snapshot mtuRetestSnapshot) error {
+	if sessionTrackerFor(a).snapshot(0).ID != snapshot.SessionID {
+		return errors.New("VPN session changed while MTU Retest was running; stale result was not adopted")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
