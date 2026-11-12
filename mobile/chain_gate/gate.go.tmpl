@@ -1,0 +1,506 @@
+// Package routervpnchaingate owns only application outbound admission. The
+// original TUN dispatcher must separately gate hijacked application DNS; native
+// resolver and prefix proof traffic deliberately do not traverse this outbound.
+package routervpnchaingate
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"reflect"
+	"strings"
+	"sync"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/protocol/group"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
+)
+
+const (
+	Type        = "routervpn-node-chain-gate"
+	Tag         = "routervpn-chain-application"
+	SelectorTag = "proxy"
+)
+
+var ErrClosed = errors.New("ordered application gate is closed")
+
+type Options struct {
+	Detour string `json:"detour"`
+}
+
+// Config can name only the original selector. It cannot carry a control owner,
+// an open bit, a fallback, duplicate fields, or case aliases.
+func (o *Options) UnmarshalJSON(raw []byte) error {
+	d := json.NewDecoder(strings.NewReader(string(raw)))
+	token, err := d.Token()
+	if err != nil || token != json.Delim('{') {
+		return errors.New("invalid ordered gate options")
+	}
+	seen := false
+	var value string
+	for d.More() {
+		key, err := d.Token()
+		if err != nil || key != "detour" || seen {
+			return errors.New("unknown or repeated ordered gate option")
+		}
+		seen = true
+		if err := d.Decode(&value); err != nil || value != SelectorTag {
+			return errors.New("ordered gate requires original proxy selector")
+		}
+	}
+	if token, err = d.Token(); err != nil || token != json.Delim('}') || !seen {
+		return errors.New("missing ordered gate selector")
+	}
+	if _, err = d.Token(); err != io.EOF {
+		return errors.New("trailing ordered gate options")
+	}
+	o.Detour = value
+	return nil
+}
+
+func RegisterOutbound(registry *outbound.Registry) {
+	outbound.Register[Options](registry, Type, NewOutbound)
+}
+
+type State struct {
+	Identity   string
+	Generation uint64
+	Open       bool
+	Drained    bool
+	Closed     bool
+}
+
+// Control is a capability, not a reconstructible identifier. Even a copied
+// Control value is rejected because the exact retained pointer owns the gate.
+type Control struct{ gate *Outbound }
+
+type Outbound struct {
+	outbound.Adapter
+	ctx        context.Context
+	manager    *outbound.Manager
+	mu         sync.Mutex
+	changed    chan struct{}
+	selector   *group.Selector
+	started    bool
+	control    *Control
+	identity   string
+	guard      func(context.Context) error
+	generation uint64
+	open       bool
+	closed     bool
+	epoch      context.Context
+	cancel     context.CancelFunc
+	dials      int
+	draining   int
+	flows      map[*flow]struct{}
+}
+
+func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options Options) (adapter.Outbound, error) {
+	if ctx == nil || ctx.Err() != nil || tag != Tag || options.Detour != SelectorTag {
+		return nil, errors.New("invalid ordered application gate")
+	}
+	manager, ok := service.FromContext[adapter.OutboundManager](ctx).(*outbound.Manager)
+	if !ok || manager == nil {
+		return nil, errors.New("ordered gate requires original native outbound manager")
+	}
+	g := &Outbound{Adapter: outbound.NewAdapter(Type, Tag, []string{N.NetworkTCP, N.NetworkUDP}, []string{SelectorTag}), ctx: ctx, manager: manager, changed: make(chan struct{}), flows: make(map[*flow]struct{})}
+	context.AfterFunc(ctx, func() { _ = g.Close() })
+	return g, nil
+}
+
+func (g *Outbound) notifyLocked() { close(g.changed); g.changed = make(chan struct{}) }
+
+func (g *Outbound) Start() error {
+	ctx, cancel := context.WithTimeout(g.ctx, C.StopTimeout)
+	defer cancel()
+	value, found, err := adapter.RouterVPNOutboundContext(ctx, g.manager, SelectorTag)
+	selector, ok := value.(*group.Selector)
+	if err != nil || !found || !ok || selector == nil {
+		return errors.New("ordered gate lost original native selector")
+	}
+	managed, found, err := adapter.RouterVPNOutboundContext(ctx, g.manager, Tag)
+	if err != nil || !found || managed != g {
+		return errors.New("ordered gate is not the original managed outbound")
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.started || g.closed || ctx.Err() != nil {
+		return errors.New("ordered gate cannot restart")
+	}
+	g.selector, g.started = selector, true
+	return nil
+}
+
+func validIdentity(identity string) bool {
+	if len(identity) == 0 || len(identity) > 256 {
+		return false
+	}
+	for _, c := range identity {
+		if c <= 32 || c > 126 {
+			return false
+		}
+	}
+	return true
+}
+
+func (g *Outbound) Bind(ctx context.Context, identity string, current func(context.Context) error) (*Control, error) {
+	if ctx == nil || !validIdentity(identity) || current == nil {
+		return nil, errors.New("invalid ordered gate owner")
+	}
+	if err := g.nativeCurrent(ctx); err != nil {
+		return nil, err
+	}
+	if err := current(ctx); err != nil {
+		return nil, err
+	}
+	if err := g.nativeCurrent(ctx); err != nil {
+		return nil, err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if ctx.Err() != nil || g.ctx.Err() != nil || !g.started || g.closed || g.control != nil {
+		return nil, errors.New("ordered gate owner already bound or retired")
+	}
+	g.identity, g.guard = identity, current
+	g.control = &Control{gate: g}
+	return g.control, nil
+}
+
+func (g *Outbound) nativeCurrent(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("ordered gate observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := g.ctx.Err(); err != nil {
+		return err
+	}
+	g.mu.Lock()
+	selector, started := g.selector, g.started
+	g.mu.Unlock()
+	if !started || selector == nil {
+		return errors.New("ordered gate has not captured its selector")
+	}
+	value, found, err := adapter.RouterVPNOutboundContext(ctx, g.manager, SelectorTag)
+	if err != nil {
+		return err
+	}
+	if !found || value != selector {
+		return errors.New("ordered gate selector was replaced")
+	}
+	value, found, err = adapter.RouterVPNOutboundContext(ctx, g.manager, Tag)
+	if err != nil {
+		return err
+	}
+	if !found || value != g {
+		return errors.New("ordered application gate was replaced")
+	}
+	return ctx.Err()
+}
+
+func (c *Control) owner() (*Outbound, error) {
+	if c == nil || c.gate == nil {
+		return nil, errors.New("missing ordered gate control")
+	}
+	g := c.gate
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.control != c {
+		return nil, errors.New("foreign ordered gate control")
+	}
+	return g, nil
+}
+
+func (g *Outbound) current(ctx context.Context) error {
+	if err := g.nativeCurrent(ctx); err != nil {
+		return err
+	}
+	g.mu.Lock()
+	guard := g.guard
+	g.mu.Unlock()
+	if guard == nil {
+		return errors.New("ordered gate has no retained owner")
+	}
+	if err := guard(ctx); err != nil {
+		return err
+	}
+	// The external guard may perform native I/O. Recheck original pointers after
+	// it returns without holding a gate mutex across a caller-owned lock.
+	return g.nativeCurrent(ctx)
+}
+
+func (c *Control) Observe(ctx context.Context) (State, error) {
+	g, err := c.owner()
+	if err != nil {
+		return State{}, err
+	}
+	if err := g.current(ctx); err != nil {
+		return State{}, err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return State{}, err
+	}
+	return State{g.identity, g.generation, g.open, g.dials == 0 && len(g.flows) == 0, g.closed}, nil
+}
+
+func (c *Control) Open(ctx context.Context) error {
+	g, err := c.owner()
+	if err != nil {
+		return err
+	}
+	g.mu.Lock()
+	generation := g.generation
+	g.mu.Unlock()
+	if err := g.current(ctx); err != nil {
+		return err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if ctx.Err() != nil || g.ctx.Err() != nil || g.closed || generation != g.generation {
+		return ErrClosed
+	}
+	if g.open {
+		return nil
+	}
+	if g.dials != 0 || len(g.flows) != 0 || g.draining != 0 {
+		return errors.New("ordered gate still owns pending cleanup")
+	}
+	g.generation++
+	g.epoch, g.cancel = context.WithCancel(g.ctx)
+	g.open = true
+	g.notifyLocked()
+	return nil
+}
+
+// Revoke closes admission before waiting. Source replacement never prevents
+// cleanup of original sockets. A failed or still-running Close remains owned.
+func (c *Control) Revoke(ctx context.Context) error {
+	g, err := c.owner()
+	if err != nil {
+		return err
+	}
+	return g.revoke(ctx, false)
+}
+func (c *Control) Close(ctx context.Context) error {
+	g, err := c.owner()
+	if err != nil {
+		return err
+	}
+	return g.revoke(ctx, true)
+}
+func (g *Outbound) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), C.StopTimeout)
+	defer cancel()
+	return g.revoke(ctx, true)
+}
+
+func (g *Outbound) revoke(ctx context.Context, terminal bool) error {
+	if ctx == nil {
+		return errors.New("ordered gate cleanup has no caller")
+	}
+	g.mu.Lock()
+	g.draining++
+	if terminal {
+		g.closed = true
+	}
+	// Even an already-closed revoke retires an Open whose owner observation
+	// started earlier. Cleanup retry never authorizes that pending admission.
+	g.generation++
+	if g.open {
+		g.open = false
+		g.cancel()
+	}
+	g.notifyLocked()
+	g.mu.Unlock()
+	defer func() { g.mu.Lock(); g.draining--; g.notifyLocked(); g.mu.Unlock() }()
+	attempted := make(map[*flow]uint64)
+	for {
+		g.mu.Lock()
+		var failures []error
+		for f := range g.flows {
+			if _, seen := attempted[f]; !seen {
+				if !f.closing {
+					g.startCloseLocked(f)
+				}
+				attempted[f] = f.attempt
+			}
+			if !f.closing && f.err != nil {
+				failures = append(failures, f.err)
+			}
+		}
+		drained := g.dials == 0 && len(g.flows) == 0
+		changed := g.changed
+		g.mu.Unlock()
+		if drained {
+			return nil
+		}
+		if len(failures) != 0 {
+			return fmt.Errorf("ordered gate retains failed close: %w", errors.Join(failures...))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
+	}
+}
+
+// TrackInbound gives the original TUN dispatch owner the same epoch and close
+// ledger for traffic consumed before route.final (including hijacked DNS).
+// The caller MUST wrap its input so release is its only Close implementation;
+// closing raw separately cannot establish this gate's close acknowledgement.
+// Any nonnil original input accepted by this exact Control returns a release,
+// including denied admission. The caller must use it on the error path too.
+func (c *Control) TrackInbound(ctx context.Context, raw io.Closer) (context.Context, func() error, error) {
+	g, err := c.owner()
+	if err != nil || nilCloser(raw) {
+		return nil, nil, errors.New("missing ordered inbound owner")
+	}
+	generation, native, done, err := g.begin(ctx)
+	if err != nil {
+		denied, cancel := context.WithCancel(context.Background())
+		cancel()
+		release, cleanupErr := g.RetireInbound(raw)
+		return denied, release, errors.Join(err, cleanupErr)
+	}
+	f, err := g.finish(native, generation, raw, nil)
+	// Cancellation is retained until the actual close starts, rather than
+	// stopping the epoch callback at function return as Dial/Listen do.
+	g.mu.Lock()
+	if _, exists := g.flows[f]; exists && !f.retired {
+		f.release = done
+	} else {
+		done()
+	}
+	g.mu.Unlock()
+	return native, f.Close, err
+}
+
+func nilCloser(raw io.Closer) bool {
+	if raw == nil {
+		return true
+	}
+	value := reflect.ValueOf(raw)
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Chan, reflect.Func, reflect.Map, reflect.Slice:
+		return value.IsNil()
+	}
+	return false
+}
+
+// RetireInbound is the Router's deny-only capability, including before Bind.
+// Discover this exact outbound through the original native manager/type/tag.
+// It grants no forwarding, control binding, or Open/Revoke authority and does
+// not revoke other admitted inputs. Keep the returned release for all retries;
+// never reconstruct a close receipt by passing the same raw resource again.
+func (g *Outbound) RetireInbound(raw io.Closer) (func() error, error) {
+	if g == nil || g.manager == nil || g.ctx == nil || g.flows == nil || nilCloser(raw) {
+		return nil, errors.New("missing original denied ingress")
+	}
+	denied, cancel := context.WithCancel(context.Background())
+	cancel()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	// Native incoming resources are pointers. A duplicate dispatch while its
+	// close is pending joins that exact receipt instead of closing raw twice.
+	if reflect.TypeOf(raw).Comparable() {
+		for existing := range g.flows {
+			if existing.raw == raw {
+				if !existing.closing {
+					g.startCloseLocked(existing)
+				}
+				return existing.Close, nil
+			}
+		}
+	}
+	f := &flow{gate: g, raw: raw, generation: g.generation, epoch: denied}
+	g.flows[f] = struct{}{}
+	g.startCloseLocked(f)
+	g.notifyLocked()
+	return f.Close, nil
+}
+
+func (g *Outbound) begin(ctx context.Context) (uint64, context.Context, func(), error) {
+	if err := g.current(ctx); err != nil {
+		return 0, nil, nil, err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if ctx.Err() != nil || g.ctx.Err() != nil || !g.open || g.closed {
+		return 0, nil, nil, ErrClosed
+	}
+	g.dials++
+	native, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(g.epoch, cancel)
+	return g.generation, native, func() { stop(); cancel() }, nil
+}
+
+func (g *Outbound) finish(ctx context.Context, generation uint64, raw io.Closer, dialErr error) (*flow, error) {
+	if dialErr == nil && raw == nil {
+		dialErr = errors.New("ordered selector returned no connection")
+	}
+	if dialErr == nil {
+		dialErr = g.current(ctx)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.dials--
+	if ctx.Err() != nil {
+		dialErr = ctx.Err()
+	}
+	if !g.open || g.closed || g.generation != generation {
+		dialErr = ErrClosed
+	}
+	var f *flow
+	if raw != nil {
+		f = &flow{gate: g, raw: raw, generation: generation, epoch: g.epoch}
+		g.flows[f] = struct{}{}
+		if dialErr != nil {
+			g.startCloseLocked(f)
+		}
+	}
+	g.notifyLocked()
+	return f, dialErr
+}
+
+func (g *Outbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network != N.NetworkTCP && network != N.NetworkUDP {
+		return nil, errors.New("unsupported ordered gate network")
+	}
+	generation, native, done, err := g.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	raw, err := g.selector.DialContext(native, network, destination)
+	f, err := g.finish(native, generation, raw, err)
+	if err != nil {
+		return nil, err
+	}
+	return &connection{flow: f, raw: raw}, nil
+}
+
+func (g *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	generation, native, done, err := g.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	raw, err := g.selector.ListenPacket(native, destination)
+	f, err := g.finish(native, generation, raw, err)
+	if err != nil {
+		return nil, err
+	}
+	return &packetConnection{flow: f, raw: raw}, nil
+}

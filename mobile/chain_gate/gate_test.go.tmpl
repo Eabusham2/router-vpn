@@ -1,0 +1,919 @@
+package routervpnchaingate
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
+)
+
+// The registry, outbound manager and selector below are the actual pinned
+// native implementations. Only the final transport is an explicit component
+// double. TCP positive/retirement cases use real net.Pipe endpoints; UDP uses
+// real loopback sockets. No TUN, PF, underlay route, or native path proof occurs.
+type transportOptions struct{ target *testTransport }
+type testTransport struct {
+	outbound.Adapter
+	dial   func(context.Context, string, M.Socksaddr) (net.Conn, error)
+	packet func(context.Context, M.Socksaddr) (net.PacketConn, error)
+	calls  atomic.Int64
+}
+
+func (d *testTransport) DialContext(ctx context.Context, network string, dst M.Socksaddr) (net.Conn, error) {
+	d.calls.Add(1)
+	if d.dial == nil {
+		return nil, errors.New("unconfigured test transport")
+	}
+	return d.dial(ctx, network, dst)
+}
+func (d *testTransport) ListenPacket(ctx context.Context, dst M.Socksaddr) (net.PacketConn, error) {
+	d.calls.Add(1)
+	if d.packet == nil {
+		return nil, errors.New("unconfigured packet transport")
+	}
+	return d.packet(ctx, dst)
+}
+
+type fixture struct {
+	ctx       context.Context
+	cancel    context.CancelFunc
+	manager   *outbound.Manager
+	gate      *Outbound
+	selector  *group.Selector
+	control   *Control
+	transport *testTransport
+	valid     atomic.Bool
+}
+
+func newFixture(t *testing.T) *fixture {
+	t.Helper()
+	f := &fixture{}
+	f.valid.Store(true)
+	f.ctx, f.cancel = context.WithCancel(context.Background())
+	registry := outbound.NewRegistry()
+	RegisterOutbound(registry)
+	group.RegisterSelector(registry)
+	outbound.Register[transportOptions](registry, "gate-test-transport", func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options transportOptions) (adapter.Outbound, error) {
+		options.target.Adapter = outbound.NewAdapter("gate-test-transport", tag, []string{N.NetworkTCP, N.NetworkUDP}, nil)
+		return options.target, nil
+	})
+	logger := log.NewNOPFactory().Logger()
+	ends := endpoint.NewManager(logger, endpoint.NewRegistry())
+	f.manager = outbound.NewManager(logger, registry, ends, Tag)
+	f.ctx = service.ContextWith[adapter.OutboundManager](f.ctx, f.manager)
+	f.transport = &testTransport{}
+	if err := f.manager.Create(f.ctx, nil, logger, "original-final", "gate-test-transport", &transportOptions{f.transport}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.Create(f.ctx, nil, logger, SelectorTag, C.TypeSelector, &option.SelectorOutboundOptions{Outbounds: []string{"original-final"}, Default: "original-final"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.Create(f.ctx, nil, logger, Tag, Type, &Options{SelectorTag}); err != nil {
+		t.Fatal(err)
+	}
+	value, _ := f.manager.Outbound(Tag)
+	f.gate = value.(*Outbound)
+	value, _ = f.manager.Outbound(SelectorTag)
+	f.selector = value.(*group.Selector)
+	for _, stage := range adapter.ListStartStages {
+		if err := f.manager.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		if err := f.gate.Close(); err != nil {
+			t.Error("original gate cleanup", err)
+		}
+		f.cancel()
+	})
+	return f
+}
+func (f *fixture) bind(t *testing.T) {
+	t.Helper()
+	var err error
+	f.control, err = f.gate.Bind(f.ctx, "original-preparation:session", func(ctx context.Context) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !f.valid.Load() {
+			return errors.New("original captured owner was replaced")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *fixture) open(t *testing.T) {
+	t.Helper()
+	f.bind(t)
+	if err := f.control.Open(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+func requireError(t *testing.T, err error, witness string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal(witness)
+	}
+}
+func state(t *testing.T, f *fixture) State {
+	t.Helper()
+	s, err := f.control.Observe(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+var destination = M.ParseSocksaddr("198.51.100.7:443")
+
+func TestRouterVPNChainGateOptions(t *testing.T) {
+	for _, raw := range []string{`{}`, `null`, `[]`, `{"detour":null}`, `{"detour":"direct"}`, `{"Detour":"proxy"}`, `{"detour":"proxy","open":true}`, `{"detour":"proxy","identity":"owner"}`, `{"detour":"proxy","detour":"proxy"}`, `{"detour":"proxy"} {}`, `{"detour":"proxy","fallback":"direct"}`} {
+		t.Run(raw, func(t *testing.T) {
+			var value Options
+			requireError(t, json.Unmarshal([]byte(raw), &value), "gate accepted mutable or ambiguous config")
+		})
+	}
+	var value Options
+	if err := json.Unmarshal([]byte(`{"detour":"proxy"}`), &value); err != nil || value.Detour != SelectorTag {
+		t.Fatal("valid original selector refused", err)
+	}
+	f := newFixture(t)
+	for _, tc := range []struct{ tag, detour string }{{"other", SelectorTag}, {Tag, "direct"}, {Tag, ""}} {
+		_, err := NewOutbound(f.ctx, nil, nil, tc.tag, Options{tc.detour})
+		requireError(t, err, "constructor accepted alternate gate")
+	}
+	_, err := NewOutbound(context.Background(), nil, nil, Tag, Options{SelectorTag})
+	requireError(t, err, "gate accepted missing native manager")
+}
+
+func TestRouterVPNChainGateClosedAndBoundOnce(t *testing.T) {
+	f := newFixture(t)
+	_, err := f.gate.DialContext(f.ctx, N.NetworkTCP, destination)
+	requireError(t, err, "unbound application dial escaped")
+	_, err = f.gate.ListenPacket(f.ctx, destination)
+	requireError(t, err, "unbound packet escaped")
+	for _, identity := range []string{"", "has space", "has\nline", strings.Repeat("x", 257)} {
+		_, err := f.gate.Bind(f.ctx, identity, func(context.Context) error { return nil })
+		requireError(t, err, "invalid owner bound")
+	}
+	f.bind(t)
+	s := state(t, f)
+	if s.Open || s.Closed || !s.Drained || s.Generation != 0 || s.Identity != "original-preparation:session" {
+		t.Fatal("gate did not start closed and drained", s)
+	}
+	for _, network := range []string{N.NetworkTCP, N.NetworkUDP, "icmp"} {
+		_, err := f.gate.DialContext(f.ctx, network, destination)
+		requireError(t, err, "pending application dial escaped")
+	}
+	_, err = f.gate.ListenPacket(f.ctx, destination)
+	requireError(t, err, "pending application packet escaped")
+	if f.transport.calls.Load() != 0 {
+		t.Fatal("closed gate reached downstream")
+	}
+	_, err = f.gate.Bind(f.ctx, s.Identity, func(context.Context) error { return nil })
+	requireError(t, err, "same label rebound original owner")
+	_, err = f.gate.Bind(f.ctx, "foreign", func(context.Context) error { return nil })
+	requireError(t, err, "foreign owner rebound")
+	copy := *f.control
+	requireError(t, copy.Open(f.ctx), "copied control opened gate")
+	requireError(t, copy.Revoke(f.ctx), "copied control revoked owner")
+	requireError(t, copy.Close(f.ctx), "copied control retired owner")
+	if _, err = copy.Observe(f.ctx); err == nil {
+		t.Fatal("copied control observed retained owner")
+	}
+	if err := f.control.Open(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	s = state(t, f)
+	if !s.Open || s.Generation != 1 {
+		t.Fatal("proved open missing", s)
+	}
+	if err := f.control.Open(f.ctx); err != nil || state(t, f).Generation != 1 {
+		t.Fatal("idempotent open replaced epoch", err)
+	}
+}
+
+func TestRouterVPNChainGateRealTCPAndUDP(t *testing.T) {
+	t.Run("tcp", func(t *testing.T) {
+		f := newFixture(t)
+		f.open(t)
+		client, peer := net.Pipe()
+		defer peer.Close()
+		f.transport.dial = func(ctx context.Context, network string, dst M.Socksaddr) (net.Conn, error) {
+			if network != N.NetworkTCP || dst != destination {
+				return nil, errors.New("original destination changed")
+			}
+			return client, nil
+		}
+		conn, err := f.gate.DialContext(f.ctx, N.NetworkTCP, destination)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := conn.(interface{ Upstream() any }); ok {
+			t.Fatal("gate exposed ungated raw connection")
+		}
+		peerDone := make(chan error, 1)
+		go func() {
+			b := make([]byte, 4)
+			_, err := io.ReadFull(peer, b)
+			if err == nil {
+				_, err = peer.Write(b)
+			}
+			peerDone <- err
+		}()
+		if _, err := conn.Write([]byte("gate")); err != nil {
+			t.Fatal(err)
+		}
+		b := make([]byte, 4)
+		if _, err := io.ReadFull(conn, b); err != nil || string(b) != "gate" {
+			t.Fatal("actual TCP bytes lost", string(b), err)
+		}
+		if err := <-peerDone; err != nil {
+			t.Fatal(err)
+		}
+		if err := f.control.Revoke(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := conn.Write([]byte("late")); n != 0 || err == nil {
+			t.Fatal("revoked TCP remained usable")
+		}
+		if _, err := peer.Read(b); !errors.Is(err, io.EOF) {
+			t.Fatal("revoke did not close actual peer", err)
+		}
+		if !state(t, f).Drained {
+			t.Fatal("actual TCP callback not joined")
+		}
+	})
+	t.Run("udp", func(t *testing.T) {
+		f := newFixture(t)
+		f.open(t)
+		client, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		peer, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			client.Close()
+			t.Fatal(err)
+		}
+		defer peer.Close()
+		f.transport.packet = func(context.Context, M.Socksaddr) (net.PacketConn, error) { return client, nil }
+		conn, err := f.gate.ListenPacket(f.ctx, destination)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if err := peer.SetDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.WriteTo([]byte("packet"), peer.LocalAddr()); err != nil {
+			t.Fatal(err)
+		}
+		b := make([]byte, 32)
+		n, from, err := peer.ReadFrom(b)
+		if err != nil || string(b[:n]) != "packet" {
+			t.Fatal("actual UDP bytes missing", err)
+		}
+		if _, err := peer.WriteTo(b[:n], from); err != nil {
+			t.Fatal(err)
+		}
+		n, _, err = conn.ReadFrom(b)
+		if err != nil || string(b[:n]) != "packet" {
+			t.Fatal("actual UDP response missing", err)
+		}
+		if err := f.control.Revoke(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.WriteTo([]byte("raw"), peer.LocalAddr()); !errors.Is(err, net.ErrClosed) {
+			t.Fatal("original UDP socket remained open", err)
+		}
+		if n, err := conn.WriteTo([]byte("late"), peer.LocalAddr()); n != 0 || err == nil {
+			t.Fatal("revoked packet remained usable")
+		}
+	})
+}
+
+func TestRouterVPNChainGateClosedAfterRevoke(t *testing.T) {
+	f := newFixture(t)
+	f.open(t)
+	if err := f.control.Revoke(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, network := range []string{N.NetworkTCP, N.NetworkUDP} {
+		_, err := f.gate.DialContext(f.ctx, network, destination)
+		requireError(t, err, "revoked dial accepted")
+	}
+	_, err := f.gate.ListenPacket(f.ctx, destination)
+	requireError(t, err, "revoked packet accepted")
+	if f.transport.calls.Load() != 0 {
+		t.Fatal("closed gate reached downstream")
+	}
+}
+
+type closeConn struct {
+	net.Conn
+	closeFn func() error
+}
+
+func (c *closeConn) Close() error { return c.closeFn() }
+
+func TestRouterVPNChainGateRevokeJoinsOriginalClose(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFixture(t)
+		f.open(t)
+		client, peer := net.Pipe()
+		defer peer.Close()
+		entered, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		f.transport.dial = func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+			return &closeConn{client, func() error { once.Do(func() { close(entered) }); <-release; return client.Close() }}, nil
+		}
+		conn, err := f.gate.DialContext(f.ctx, N.NetworkTCP, destination)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deadline, cancel := context.WithTimeout(f.ctx, time.Second)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- f.control.Revoke(deadline) }()
+		<-entered
+		requireError(t, f.control.Open(f.ctx), "gate reopened before actual close callback")
+		if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal("cleanup caller deadline lost", err)
+		}
+		if state(t, f).Drained {
+			t.Fatal("timed-out Close was declared drained")
+		}
+		if _, err := conn.Write([]byte("late")); err == nil {
+			t.Fatal("pending close connection remained usable")
+		}
+		close(release)
+		if err := f.control.Revoke(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		if !state(t, f).Drained {
+			t.Fatal("joined close not reported")
+		}
+		if err := f.control.Open(f.ctx); err != nil {
+			t.Fatal("drained gate did not reopen", err)
+		}
+		if _, err := conn.Write([]byte("old")); err == nil {
+			t.Fatal("old generation revived after reopen")
+		}
+	})
+}
+
+func TestRouterVPNChainGateFailedCloseRetained(t *testing.T) {
+	f := newFixture(t)
+	f.open(t)
+	client, peer := net.Pipe()
+	defer peer.Close()
+	var closes atomic.Int64
+	f.transport.dial = func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		return &closeConn{client, func() error {
+			if closes.Add(1) == 1 {
+				return errors.New("original close failed")
+			}
+			return client.Close()
+		}}, nil
+	}
+	conn, err := f.gate.DialContext(f.ctx, N.NetworkTCP, destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireError(t, f.control.Revoke(f.ctx), "failed original close was discarded")
+	if state(t, f).Drained || closes.Load() != 1 {
+		t.Fatal("failed owner lost or retried without caller")
+	}
+	requireError(t, f.control.Open(f.ctx), "failed close allowed reopen")
+	if err := f.control.Revoke(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if closes.Load() != 2 || !state(t, f).Drained {
+		t.Fatal("retry did not close same original owner")
+	}
+	if err := conn.Close(); err != nil || closes.Load() != 2 {
+		t.Fatal("successful original close repeated", err)
+	}
+}
+
+func TestRouterVPNChainGateLateDialRetirement(t *testing.T) {
+	for _, network := range []string{N.NetworkTCP, N.NetworkUDP, "packet"} {
+		t.Run(network, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f := newFixture(t)
+				f.open(t)
+				entered, release := make(chan struct{}), make(chan struct{})
+				client, peer := net.Pipe()
+				defer peer.Close()
+				var closes atomic.Int64
+				raw := &closeConn{client, func() error { closes.Add(1); return client.Close() }}
+				f.transport.dial = func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+					close(entered)
+					<-release
+					return raw, nil
+				}
+				f.transport.packet = func(context.Context, M.Socksaddr) (net.PacketConn, error) {
+					close(entered)
+					<-release
+					return &packetDouble{closer: raw}, nil
+				}
+				dialDone := make(chan error, 1)
+				go func() {
+					if network == "packet" {
+						c, err := f.gate.ListenPacket(f.ctx, destination)
+						if c != nil {
+							err = errors.New("late packet returned usable")
+						}
+						dialDone <- err
+					} else {
+						c, err := f.gate.DialContext(f.ctx, network, destination)
+						if c != nil {
+							err = errors.New("late dial returned usable")
+						}
+						dialDone <- err
+					}
+				}()
+				<-entered
+				deadline, cancel := context.WithTimeout(f.ctx, time.Second)
+				defer cancel()
+				if err := f.control.Revoke(deadline); !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("uncooperative original dial not retained", err)
+				}
+				requireError(t, f.control.Open(f.ctx), "pending original dial allowed reopen")
+				close(release)
+				if err := <-dialDone; !errors.Is(err, ErrClosed) {
+					t.Fatal("late dial escaped original closed epoch", err)
+				}
+				if err := f.control.Revoke(f.ctx); err != nil {
+					t.Fatal(err)
+				}
+				if closes.Load() != 1 || !state(t, f).Drained {
+					t.Fatal("late original transport not closed and joined")
+				}
+			})
+		})
+	}
+}
+
+// Explicit packet interface double used only to stage an uncooperative late
+// ListenPacket return. The positive UDP test above uses real sockets.
+type packetDouble struct{ closer io.Closer }
+
+func (p *packetDouble) Close() error                            { return p.closer.Close() }
+func (*packetDouble) ReadFrom([]byte) (int, net.Addr, error)    { return 0, nil, io.EOF }
+func (*packetDouble) WriteTo(b []byte, _ net.Addr) (int, error) { return len(b), nil }
+func (*packetDouble) LocalAddr() net.Addr                       { return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1} }
+func (*packetDouble) SetDeadline(time.Time) error               { return nil }
+func (*packetDouble) SetReadDeadline(time.Time) error           { return nil }
+func (*packetDouble) SetWriteDeadline(time.Time) error          { return nil }
+
+func TestRouterVPNChainGateOriginalPointersAndGuard(t *testing.T) {
+	for _, kind := range []string{"selector", "gate", "guard"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFixture(t)
+			f.open(t)
+			client, peer := net.Pipe()
+			defer peer.Close()
+			f.transport.dial = func(context.Context, string, M.Socksaddr) (net.Conn, error) { return client, nil }
+			conn, err := f.gate.DialContext(f.ctx, N.NetworkTCP, destination)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "selector":
+				if err := f.manager.Create(f.ctx, nil, log.NewNOPFactory().Logger(), SelectorTag, C.TypeSelector, &option.SelectorOutboundOptions{Outbounds: []string{"original-final"}, Default: "original-final"}); err != nil {
+					t.Fatal(err)
+				}
+			case "gate": // Another gate cannot start as this managed original. A different managed outbound at the same tag must also fail pointer observation.
+				err := f.manager.Create(f.ctx, nil, log.NewNOPFactory().Logger(), Tag, Type, &Options{SelectorTag})
+				requireError(t, err, "manager installed substitute gate")
+				if err := f.manager.Create(f.ctx, nil, log.NewNOPFactory().Logger(), Tag, "gate-test-transport", &transportOptions{&testTransport{}}); err != nil {
+					t.Fatal(err)
+				}
+			case "guard":
+				f.valid.Store(false)
+			}
+			_, err = f.control.Observe(f.ctx)
+			requireError(t, err, "replaced original owner still observed")
+			requireError(t, f.control.Open(f.ctx), "replaced original owner reopened gate")
+			if _, err := conn.Write([]byte("bad")); err == nil {
+				t.Fatal("replaced original owner allowed bytes")
+			}
+			if err := f.control.Revoke(f.ctx); err != nil {
+				t.Fatal("stale guard stranded original close", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNChainGateSourceChangesDuringDial(t *testing.T) {
+	f := newFixture(t)
+	f.open(t)
+	client, peer := net.Pipe()
+	defer peer.Close()
+	f.transport.dial = func(context.Context, string, M.Socksaddr) (net.Conn, error) { f.valid.Store(false); return client, nil }
+	if conn, err := f.gate.DialContext(f.ctx, N.NetworkTCP, destination); err == nil || conn != nil {
+		t.Fatal("post-dial original guard was skipped")
+	}
+	if err := f.control.Revoke(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := peer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatal("failed admission leaked actual socket", err)
+	}
+}
+
+func TestRouterVPNChainGateInboundDNSOwnership(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFixture(t)
+		f.bind(t)
+		denied, deniedPeer := net.Pipe()
+		defer deniedPeer.Close()
+		if _, release, err := f.control.TrackInbound(f.ctx, denied); err == nil {
+			t.Fatal("pending hijacked DNS input admitted")
+		} else if release == nil || release() != nil {
+			t.Fatal("denied input lost retained release")
+		}
+		if _, err := deniedPeer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+			t.Fatal("denied input actual close missing", err)
+		}
+		client, peer := net.Pipe()
+		defer peer.Close()
+		if err := f.control.Open(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		entered, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		var closes atomic.Int64
+		raw := &closeConn{client, func() error { closes.Add(1); once.Do(func() { close(entered) }); <-release; return client.Close() }}
+		owned, closeOwned, err := f.control.TrackInbound(f.ctx, raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- closeOwned() }()
+		<-entered
+		deadline, cancel := context.WithTimeout(f.ctx, time.Second)
+		defer cancel()
+		if err := f.control.Revoke(deadline); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal("inbound close callback not joined", err)
+		}
+		if owned.Err() == nil {
+			t.Fatal("revocation did not cancel original inbound context")
+		}
+		requireError(t, f.control.Open(f.ctx), "pending hijacked DNS close allowed reopen")
+		close(release)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if err := f.control.Revoke(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := closeOwned(); err != nil || closes.Load() != 1 {
+			t.Fatal("inbound handler repeated raw Close", err, closes.Load())
+		}
+		if !state(t, f).Drained {
+			t.Fatal("inbound close receipt was lost")
+		}
+	})
+}
+
+func TestRouterVPNChainGateTerminalAndCancelledOwner(t *testing.T) {
+	t.Run("terminal", func(t *testing.T) {
+		f := newFixture(t)
+		f.open(t)
+		if err := f.control.Close(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		s := state(t, f)
+		if !s.Closed || s.Open || !s.Drained {
+			t.Fatal("terminal close receipt missing", s)
+		}
+		requireError(t, f.control.Open(f.ctx), "terminal gate reopened")
+		requireError(t, f.gate.Start(), "terminal gate restarted")
+	})
+	t.Run("cancelled", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			f := newFixture(t)
+			f.open(t)
+			client, peer := net.Pipe()
+			defer peer.Close()
+			f.transport.dial = func(context.Context, string, M.Socksaddr) (net.Conn, error) { return client, nil }
+			conn, err := f.gate.DialContext(f.ctx, N.NetworkTCP, destination)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.cancel()
+			synctest.Wait()
+			if _, err := conn.Write([]byte("late")); err == nil {
+				t.Fatal("cancelled native owner still wrote")
+			}
+			f.gate.mu.Lock()
+			drained := len(f.gate.flows) == 0 && f.gate.closed
+			f.gate.mu.Unlock()
+			if !drained {
+				t.Fatal("native lifetime cancellation failed actual close")
+			}
+		})
+	})
+}
+
+func TestRouterVPNChainGateClosedRevokeRetiresPendingOpen(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFixture(t)
+		entered, resume := make(chan struct{}), make(chan struct{})
+		unblock := sync.OnceFunc(func() { close(resume) })
+		defer unblock()
+		var block atomic.Bool
+		var err error
+		f.control, err = f.gate.Bind(f.ctx, "original-preparation:session", func(ctx context.Context) error {
+			if block.Load() {
+				close(entered)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-resume:
+				}
+			}
+			return ctx.Err()
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		block.Store(true)
+		done := make(chan error, 1)
+		go func() { done <- f.control.Open(f.ctx) }()
+		<-entered
+		// Revoke must not wait for a foreign guard while holding gate.mu.
+		if err := f.control.Revoke(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		unblock()
+		if err := <-done; !errors.Is(err, ErrClosed) {
+			t.Fatal("closed revoke did not retire pending open", err)
+		}
+		f.gate.mu.Lock()
+		opened := f.gate.open
+		f.gate.mu.Unlock()
+		if opened {
+			t.Fatal("older Open replaced newer closed decision")
+		}
+	})
+}
+
+func TestRouterVPNChainGateBindRechecksOriginalSelector(t *testing.T) {
+	f := newFixture(t)
+	_, err := f.gate.Bind(f.ctx, "original-preparation:session", func(ctx context.Context) error {
+		return f.manager.Create(ctx, nil, log.NewNOPFactory().Logger(), SelectorTag, C.TypeSelector, &option.SelectorOutboundOptions{Outbounds: []string{"original-final"}, Default: "original-final"})
+	})
+	requireError(t, err, "bind accepted selector replaced during owner observation")
+}
+
+func TestRouterVPNChainGateDeniedInboundRetainsRelease(t *testing.T) {
+	for _, kind := range []string{"closed", "post-guard"} {
+		t.Run(kind, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f := newFixture(t)
+				f.bind(t)
+				if kind == "post-guard" {
+					if err := f.control.Open(f.ctx); err != nil {
+						t.Fatal(err)
+					}
+					var calls atomic.Int64
+					f.gate.mu.Lock()
+					f.gate.guard = func(ctx context.Context) error {
+						if calls.Add(1) >= 2 {
+							return errors.New("controlled original admission changed")
+						}
+						return ctx.Err()
+					}
+					f.gate.mu.Unlock()
+				}
+				client, peer := net.Pipe()
+				defer peer.Close()
+				var closes atomic.Int64
+				raw := &closeConn{client, func() error {
+					if closes.Add(1) == 1 {
+						return errors.New("denied original close failed")
+					}
+					return client.Close()
+				}}
+				owned, release, err := f.control.TrackInbound(f.ctx, raw)
+				if err == nil || release == nil || owned == nil || owned.Err() == nil {
+					t.Fatal("denied input lost original cleanup handle", err)
+				}
+				synctest.Wait()
+				f.gate.mu.Lock()
+				retained := len(f.gate.flows) == 1
+				f.gate.mu.Unlock()
+				if !retained || closes.Load() != 1 {
+					t.Fatal("denied failed-close owner was discarded")
+				}
+				if err := release(); err != nil {
+					t.Fatal("denied original close retry failed", err)
+				}
+				if closes.Load() != 2 {
+					t.Fatal("denied retry replaced raw owner")
+				}
+				if _, err := peer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+					t.Fatal("denied actual socket not retired", err)
+				}
+			})
+		})
+	}
+}
+
+func TestRouterVPNChainGateRevokeCancelsOriginalDial(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFixture(t)
+		f.open(t)
+		entered := make(chan struct{})
+		f.transport.dial = func(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
+			close(entered)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		done := make(chan error, 1)
+		go func() { _, err := f.gate.DialContext(f.ctx, N.NetworkTCP, destination); done <- err }()
+		<-entered
+		deadline, cancel := context.WithTimeout(f.ctx, time.Second)
+		defer cancel()
+		if err := f.control.Revoke(deadline); err != nil {
+			t.Fatal("revoke did not cancel original native dial", err)
+		}
+		if err := <-done; err == nil {
+			t.Fatal("cancelled original dial succeeded")
+		}
+		if !state(t, f).Drained {
+			t.Fatal("cancelled original dial not joined")
+		}
+	})
+}
+
+type closeOnly struct{ closeFn func() error }
+
+func (c *closeOnly) Close() error { return c.closeFn() }
+
+func TestRouterVPNChainGatePrebindFailedRetirement(t *testing.T) {
+	for _, network := range []string{"tcp", "udp"} {
+		t.Run(network, func(t *testing.T) {
+			f := newFixture(t)
+			var raw io.Closer
+			var closed func()
+			if network == "tcp" {
+				client, peer := net.Pipe()
+				raw = client
+				defer client.Close()
+				defer peer.Close()
+				if err := peer.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				closed = func() {
+					if _, err := peer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+						t.Fatal("prebind TCP owner remained live", err)
+					}
+				}
+			} else {
+				packet, err := net.ListenPacket("udp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw = packet
+				defer packet.Close()
+				closed = func() {
+					if _, _, err := packet.ReadFrom(make([]byte, 1)); !errors.Is(err, net.ErrClosed) {
+						t.Fatal("prebind UDP owner remained live", err)
+					}
+				}
+			}
+			var calls atomic.Int64
+			original := &closeOnly{func() error {
+				if calls.Add(1) == 1 {
+					return errors.New("original prebind close failed")
+				}
+				return raw.Close()
+			}}
+			release, err := f.gate.RetireInbound(original)
+			if err != nil || release == nil {
+				t.Fatal("prebind retirement refused", err)
+			}
+			f.gate.mu.Lock()
+			var receipt *closeResult
+			for owner := range f.gate.flows {
+				receipt = owner.result
+			}
+			f.gate.mu.Unlock()
+			if receipt == nil {
+				t.Fatal("prebind original close not retained")
+			}
+			<-receipt.done
+			f.gate.mu.Lock()
+			retained := len(f.gate.flows) == 1 && !f.gate.open && f.gate.control == nil
+			f.gate.mu.Unlock()
+			if !retained || receipt.err == nil || calls.Load() != 1 {
+				t.Fatal("prebind failed-close ownership disappeared")
+			}
+			f.bind(t)
+			requireError(t, f.control.Open(f.ctx), "prebind failed close allowed forwarding")
+			if err := f.gate.Close(); err != nil {
+				t.Fatal("native gate did not retry original prebind close", err)
+			}
+			if err := release(); err != nil || calls.Load() != 2 {
+				t.Fatal("prebind retry replaced or repeated original close", err, calls.Load())
+			}
+			closed()
+		})
+	}
+}
+
+func TestRouterVPNChainGatePrebindBoundedDrain(t *testing.T) {
+	for _, network := range []string{"tcp", "udp"} {
+		t.Run(network, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f := newFixture(t)
+				client, peer := net.Pipe()
+				defer peer.Close()
+				entered, resume := make(chan struct{}), make(chan struct{})
+				unblock := sync.OnceFunc(func() { close(resume) })
+				defer unblock()
+				var calls atomic.Int64
+				original := &closeConn{client, func() error { calls.Add(1); close(entered); <-resume; return client.Close() }}
+				var raw io.Closer = original
+				if network == "udp" {
+					raw = &packetDouble{closer: original}
+				}
+				release, err := f.gate.RetireInbound(raw)
+				if err != nil || release == nil {
+					t.Fatal(err)
+				}
+				<-entered
+				// The native io.Closer itself retains the existing five-second bound.
+				if err := f.gate.Close(); !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("native prebind drain lost its bound", err)
+				}
+				f.gate.mu.Lock()
+				retained := len(f.gate.flows) == 1 && f.gate.closed
+				f.gate.mu.Unlock()
+				if !retained {
+					t.Fatal("timed-out prebind close lost original owner")
+				}
+				unblock()
+				if err := f.gate.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if err := release(); err != nil || calls.Load() != 1 {
+					t.Fatal("prebind close was not joined exactly once", err, calls.Load())
+				}
+			})
+		})
+	}
+}
+
+func TestRouterVPNChainGateDeniedRetirementDoesNotOpenOrRevoke(t *testing.T) {
+	f := newFixture(t)
+	f.open(t)
+	before := state(t, f)
+	client, peer := net.Pipe()
+	defer peer.Close()
+	release, err := f.gate.RetireInbound(client)
+	if err != nil || release == nil {
+		t.Fatal(err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	after := state(t, f)
+	if !after.Open || after.Closed || !after.Drained || after.Generation != before.Generation || after.Identity != before.Identity {
+		t.Fatal("denied-input retirement changed admission owner", before, after)
+	}
+	if _, err := peer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatal("denied input was not closed", err)
+	}
+	var missing *closeOnly
+	if _, err := f.gate.RetireInbound(missing); err == nil {
+		t.Fatal("typed nil input accepted")
+	}
+}

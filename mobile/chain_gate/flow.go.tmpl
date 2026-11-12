@@ -1,0 +1,195 @@
+package routervpnchaingate
+
+import (
+	"context"
+	"io"
+	"net"
+	"time"
+
+	C "github.com/sagernet/sing-box/constant"
+)
+
+type flow struct {
+	gate       *Outbound
+	raw        io.Closer
+	generation uint64
+	epoch      context.Context
+	// The following fields are accessed only under gate.mu. A successful close
+	// removes the flow; failed close leaves this same raw owner available to retry.
+	closing bool
+	retired bool
+	attempt uint64
+	done    chan struct{}
+	err     error
+	release func()
+	result  *closeResult
+}
+
+type closeResult struct {
+	done chan struct{}
+	err  error
+}
+
+func (g *Outbound) startCloseLocked(f *flow) {
+	f.retired, f.closing = true, true
+	if f.release != nil {
+		f.release()
+		f.release = nil
+	}
+	f.attempt++
+	f.done = make(chan struct{})
+	done := f.done
+	result := &closeResult{done: done}
+	f.result = result
+	go func() {
+		err := f.raw.Close()
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		f.err, f.closing = err, false
+		result.err = err
+		if err == nil {
+			delete(g.flows, f)
+			if f.release != nil {
+				f.release()
+				f.release = nil
+			}
+		}
+		close(done)
+		g.notifyLocked()
+	}()
+}
+
+func (f *flow) Close() error {
+	g := f.gate
+	g.mu.Lock()
+	if _, exists := g.flows[f]; !exists {
+		g.mu.Unlock()
+		return nil
+	}
+	if !f.closing {
+		g.startCloseLocked(f)
+	}
+	result := f.result
+	g.mu.Unlock()
+	<-result.done     // net.Conn.Close has no caller context; join the actual callback.
+	return result.err // This exact callback result cannot be rewritten by a retry.
+}
+
+func (f *flow) allowed() error {
+	g := f.gate
+	g.mu.Lock()
+	active := g.open && !g.closed && g.generation == f.generation && !f.retired
+	g.mu.Unlock()
+	if !active {
+		return ErrClosed
+	}
+	// No public unwrapping interface exposes raw. Every operation retains the
+	// original contextual owner and the exact managed selector on both sides.
+	ctx, cancel := context.WithTimeout(f.epoch, C.StopTimeout)
+	defer cancel()
+	if err := g.current(ctx); err != nil {
+		g.mu.Lock()
+		if _, exists := g.flows[f]; exists && !f.closing {
+			g.startCloseLocked(f)
+		}
+		g.mu.Unlock()
+		return err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.open || g.closed || g.generation != f.generation || f.retired {
+		return ErrClosed
+	}
+	return nil
+}
+
+type connection struct {
+	*flow
+	raw net.Conn
+}
+
+func (c *connection) Read(b []byte) (int, error) {
+	if err := c.allowed(); err != nil {
+		return 0, err
+	}
+	n, err := c.raw.Read(b)
+	if current := c.allowed(); current != nil {
+		return 0, current
+	}
+	return n, err
+}
+func (c *connection) Write(b []byte) (int, error) {
+	if err := c.allowed(); err != nil {
+		return 0, err
+	}
+	n, err := c.raw.Write(b)
+	if current := c.allowed(); current != nil {
+		return 0, current
+	}
+	return n, err
+}
+func (c *connection) LocalAddr() net.Addr  { return c.raw.LocalAddr() }
+func (c *connection) RemoteAddr() net.Addr { return c.raw.RemoteAddr() }
+func (c *connection) SetDeadline(t time.Time) error {
+	if err := c.allowed(); err != nil {
+		return err
+	}
+	return c.raw.SetDeadline(t)
+}
+func (c *connection) SetReadDeadline(t time.Time) error {
+	if err := c.allowed(); err != nil {
+		return err
+	}
+	return c.raw.SetReadDeadline(t)
+}
+func (c *connection) SetWriteDeadline(t time.Time) error {
+	if err := c.allowed(); err != nil {
+		return err
+	}
+	return c.raw.SetWriteDeadline(t)
+}
+
+type packetConnection struct {
+	*flow
+	raw net.PacketConn
+}
+
+func (c *packetConnection) ReadFrom(b []byte) (int, net.Addr, error) {
+	if err := c.allowed(); err != nil {
+		return 0, nil, err
+	}
+	n, address, err := c.raw.ReadFrom(b)
+	if current := c.allowed(); current != nil {
+		return 0, nil, current
+	}
+	return n, address, err
+}
+func (c *packetConnection) WriteTo(b []byte, address net.Addr) (int, error) {
+	if err := c.allowed(); err != nil {
+		return 0, err
+	}
+	n, err := c.raw.WriteTo(b, address)
+	if current := c.allowed(); current != nil {
+		return 0, current
+	}
+	return n, err
+}
+func (c *packetConnection) LocalAddr() net.Addr { return c.raw.LocalAddr() }
+func (c *packetConnection) SetDeadline(t time.Time) error {
+	if err := c.allowed(); err != nil {
+		return err
+	}
+	return c.raw.SetDeadline(t)
+}
+func (c *packetConnection) SetReadDeadline(t time.Time) error {
+	if err := c.allowed(); err != nil {
+		return err
+	}
+	return c.raw.SetReadDeadline(t)
+}
+func (c *packetConnection) SetWriteDeadline(t time.Time) error {
+	if err := c.allowed(); err != nil {
+		return err
+	}
+	return c.raw.SetWriteDeadline(t)
+}
