@@ -1,0 +1,159 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/spf13/cobra"
+)
+
+type routerVPNNodeChainRelayOwner interface {
+	Begin() error
+	Snapshot(context.Context, string) (multihoprelay.NodeChainReceipt, error)
+	Close(context.Context) error
+}
+
+func init() {
+	var directory string
+	command := &cobra.Command{Use: "routervpn-node-chain-relay", Short: "Run one private ordered server lease", Args: cobra.NoArgs, SilenceUsage: true, SilenceErrors: true, RunE: func(command *cobra.Command, _ []string) error {
+		ctx, cancel := signal.NotifyContext(command.Context(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		return routerVPNRunNodeChainRelay(ctx, directory, os.Stdin, os.Stdout, routerVPNNewServerChain)
+	}}
+	command.Flags().StringVar(&directory, "runtime-dir", "", "Original private ordered lease directory")
+	mainCommand.AddCommand(command)
+}
+func routerVPNRunNodeChainRelay(ctx context.Context, directory string, input io.Reader, output io.Writer, factory func(context.Context, *os.Root, string, multihoprelay.NodeChainCapture) (routerVPNNodeChainRelayOwner, error)) error {
+	bad := errors.New("owned native ordered relay failed")
+	if ctx == nil || ctx.Err() != nil || !filepath.IsAbs(directory) || filepath.Clean(directory) != directory || factory == nil {
+		return bad
+	}
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0700 || info.Mode()&os.ModeSymlink != 0 {
+		return bad
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return bad
+	}
+	defer root.Close()
+	actual, err := root.Stat(".")
+	if err != nil || !os.SameFile(info, actual) {
+		return bad
+	}
+	raw, err := routerVPNServerChainRead(root, "node-chain-capture.json", multihoprelay.NodeChainCaptureMaximumBytes)
+	if err != nil {
+		return bad
+	}
+	capture, err := multihoprelay.DecodeNodeChainCapture(raw)
+	clear(raw)
+	if err != nil {
+		return bad
+	}
+	digest, _ := capture.Digest()
+	// Factory returns its original cleanup owner before native acquisition; even
+	// a partial construction failure remains addressable by subsequent Stop.
+	owner, constructionErr := factory(ctx, root, directory, capture)
+	if owner == nil {
+		return bad
+	}
+	encoder := json.NewEncoder(output)
+	defer func() {
+		// EOF/signal cannot abandon an original close that is still pending. Keep
+		// the same worker until its real cleanup barrier succeeds; no early ACK.
+		for {
+			drain, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			err := owner.Close(drain)
+			cancel()
+			if err == nil {
+				_ = encoder.Encode(multihoprelay.NodeChainIPCResponse{Schema: 1, Operation: "closed", Nonce: capture.OwnerID, CaptureSHA256: digest, OK: true})
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+	scanner := bufio.NewScanner(input)
+	scanner.Buffer(make([]byte, 1024), 1025)
+	var interrupted chan struct{}
+	var stop func() bool
+	if closer, ok := input.(io.ReadCloser); ok {
+		interrupted = make(chan struct{})
+		stop = context.AfterFunc(ctx, func() { defer close(interrupted); _ = closer.Close() })
+		defer func() {
+			if !stop() {
+				<-interrupted
+			}
+		}()
+	}
+	for scanner.Scan() {
+		request, err := multihoprelay.DecodeNodeChainIPCRequest(scanner.Bytes())
+		if err != nil || request.CaptureSHA256 != digest {
+			return bad
+		}
+		response := multihoprelay.NodeChainIPCResponse{Schema: 1, Operation: request.Operation, Nonce: request.Nonce, CaptureSHA256: digest}
+		switch request.Operation {
+		case "snapshot":
+			if constructionErr == nil {
+				operation, cancel := context.WithTimeout(ctx, time.Second)
+				receipt, err := owner.Snapshot(operation, request.Nonce)
+				cancel()
+				if err == nil {
+					response.OK = true
+					response.Receipt = &receipt
+				}
+			}
+		case "bootstrap":
+			response.OK = constructionErr == nil && owner.Begin() == nil
+		case "stop":
+			drain, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			response.OK = owner.Close(drain) == nil
+			cancel()
+			if encoder.Encode(response) != nil {
+				return bad
+			}
+			if response.OK {
+				return nil
+			}
+			continue
+		}
+		if encoder.Encode(response) != nil {
+			return bad
+		}
+	}
+	if scanner.Err() != nil {
+		return bad
+	}
+	return nil
+}
+func routerVPNServerChainRead(root *os.Root, name string, limit int64) ([]byte, error) {
+	bad := errors.New("original ordered source is unavailable")
+	before, err := root.Lstat(name)
+	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm() != 0600 || before.Size() <= 0 || before.Size() > limit {
+		return nil, bad
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, bad
+	}
+	defer file.Close()
+	actual, err := file.Stat()
+	if err != nil || !os.SameFile(before, actual) {
+		return nil, bad
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, limit+1))
+	after, pathErr := root.Lstat(name)
+	if err != nil || pathErr != nil || int64(len(raw)) != before.Size() || !os.SameFile(before, after) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+		clear(raw)
+		return nil, bad
+	}
+	return raw, nil
+}

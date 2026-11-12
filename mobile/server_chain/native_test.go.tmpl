@@ -1,0 +1,37 @@
+package main
+
+import (
+	"net/netip"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+func TestServerChainSelectedDNSChecksEveryLiteralAnswer(t *testing.T) {
+	route := mobilemultihop.NodeChainServerFrontRoute{Final: true, BlockIPv6: true, BlockedCIDRs: []string{"10.0.0.0/8", "127.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}}
+	original := M.Socksaddr{Fqdn: "selected.example", Port: 443}
+	good := netip.MustParseAddr("93.184.216.34")
+	for _, network := range []string{"tcp", "udp"} {
+		got, err := routerVPNServerChainResolved(route, network, original, []netip.Addr{good})
+		if err != nil || got.Addr != good || got.Port != 443 || got.Fqdn != "" {
+			t.Fatal("actual selected answer could not be adopted", network, err)
+		}
+	}
+	for name, answers := range map[string][]netip.Addr{"none": nil, "private-first": {netip.MustParseAddr("10.77.0.2"), good}, "private-after-good": {good, netip.MustParseAddr("10.77.0.2")}, "loopback-after-good": {good, netip.MustParseAddr("127.0.0.1")}, "ipv6-after-good": {good, netip.MustParseAddr("2606:4700:4700::1111")}, "mapped-after-good": {good, netip.MustParseAddr("::ffff:93.184.216.34")}, "zoned": {netip.MustParseAddr("fe80::1%eth0")}, "invalid": {{}}, "over-bound": make([]netip.Addr, 129)} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := routerVPNServerChainResolved(route, "tcp", original, answers); err == nil {
+				t.Fatal("foreign selected-DNS alternate gained final authority")
+			}
+		})
+	}
+	route.Final = false
+	if _, err := routerVPNServerChainResolved(route, "tcp", original, []netip.Addr{good}); err == nil {
+		t.Fatal("prefix credential gained hostname DNS authority")
+	}
+	route.Final = true
+	original.Fqdn = ""
+	if _, err := routerVPNServerChainResolved(route, "tcp", original, []netip.Addr{good}); err == nil {
+		t.Fatal("uncaptured hostname was substituted")
+	}
+}

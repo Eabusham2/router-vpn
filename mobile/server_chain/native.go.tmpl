@@ -1,0 +1,512 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"net"
+	"net/netip"
+	"os"
+	"reflect"
+	"sync"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+type routerVPNServerChainFile struct {
+	info   os.FileInfo
+	digest string
+	limit  int64
+}
+type routerVPNServerChain struct {
+	ctx                    context.Context
+	cancel                 context.CancelFunc
+	stopParent             func() bool
+	parentDone             chan struct{}
+	root                   *os.Root
+	directory              string
+	directoryInfo          os.FileInfo
+	files                  map[string]routerVPNServerChainFile
+	capture                multihoprelay.NodeChainCapture
+	policy                 *mobilemultihop.NodeChainServerPolicy
+	binding                mobilemultihop.NodeChainServerBinding
+	dnsCapture             mobilemultihop.NodeChainServerDNSCapture
+	box                    *box.Box
+	dns                    adapter.DNSRouter
+	dnsManager             adapter.DNSTransportManager
+	dnsOwner               adapter.DNSTransport
+	outputs                map[string]adapter.Outbound
+	front                  *routerVPNServerChainFront
+	mu                     sync.Mutex
+	begun, closing, closed bool
+	proof                  mobilemultihop.NodeChainServerProofResult
+	sequence               uint64
+	generation             uint64
+	expiry                 *time.Timer
+	expiryWorkers          sync.WaitGroup
+	expiryJoinOnce         sync.Once
+	expiryJoined           chan struct{}
+	proofDone              chan struct{}
+	closeGate              chan struct{}
+	connectionsMu          sync.Mutex
+	connections            map[*routerVPNServerChainClose]bool
+	boxOnce                sync.Once
+	boxDone                chan struct{}
+	boxError               error
+}
+
+func routerVPNNewServerChain(parent context.Context, root *os.Root, directory string, capture multihoprelay.NodeChainCapture) (result routerVPNNodeChainRelayOwner, failure error) {
+	bad := errors.New("original ordered server construction failed")
+	if parent == nil || globalCtx == nil || root == nil || capture.Validate() != nil {
+		return nil, bad
+	}
+	owned, cancel := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(globalCtx)))
+	n := &routerVPNServerChain{ctx: owned, cancel: cancel, root: root, directory: directory, capture: capture.Clone(), files: make(map[string]routerVPNServerChainFile), outputs: make(map[string]adapter.Outbound), proofDone: make(chan struct{}), closeGate: make(chan struct{}, 1), boxDone: make(chan struct{}), expiryJoined: make(chan struct{}), parentDone: make(chan struct{})}
+	result = n
+	n.stopParent = context.AfterFunc(parent, func() { defer close(n.parentDone); cancel() })
+	if parent.Err() != nil || globalCtx == nil || !time.Now().Before(capture.BootstrapDeadline) {
+		return result, bad
+	}
+	info, err := root.Stat(".")
+	if err != nil {
+		return result, bad
+	}
+	n.directoryInfo = info
+	raw, err := n.captureFile("node-chain-capture.json", multihoprelay.NodeChainCaptureMaximumBytes)
+	if err != nil {
+		return result, bad
+	}
+	actual, err := multihoprelay.DecodeNodeChainCapture(raw)
+	clear(raw)
+	actualDigest, _ := actual.Digest()
+	captureDigest, _ := capture.Digest()
+	if err != nil || actualDigest != captureDigest {
+		return result, bad
+	}
+	raw, err = n.captureFile("node-chain-source.json", mobilemultihop.NodeChainInputLimit)
+	if err != nil {
+		return result, bad
+	}
+	n.policy, err = mobilemultihop.NewNodeChainServerPolicy(string(raw))
+	clear(raw)
+	if err != nil {
+		return result, bad
+	}
+	config, err := n.policy.NativeConfig(capture)
+	if err != nil {
+		return result, bad
+	}
+	configSHA, err := n.policy.ConfigSHA256(capture)
+	if err != nil {
+		return result, bad
+	}
+	n.binding = mobilemultihop.NodeChainServerBinding{SourceSHA256: n.policy.SourceSHA256(), CaptureSHA256: captureDigest, ConfigSHA256: configSHA}
+	n.dnsCapture, err = n.policy.DNSCapture(capture)
+	if err != nil || n.dnsCapture.Binding != n.binding {
+		return result, bad
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](owned, []byte(config))
+	if err != nil || len(options.Inbounds) != 0 {
+		return result, bad
+	}
+	n.box, err = box.New(box.Options{Context: owned, Options: options})
+	if err != nil {
+		return result, bad
+	}
+	if err = n.box.RouterVPNStrategyStart(); err != nil {
+		return result, bad
+	}
+	initialize, finish := context.WithDeadline(owned, capture.BootstrapDeadline)
+	defer finish()
+	for _, proof := range n.policy.ProofInventory() {
+		outbound, found, err := adapter.RouterVPNOutboundContext(initialize, n.box.Outbound(), proof.Tag)
+		if err != nil || !found || outbound == nil || n.outputs[proof.Tag] != nil {
+			return result, bad
+		}
+		n.outputs[proof.Tag] = outbound
+	}
+	n.dns = service.FromContext[adapter.DNSRouter](owned)
+	n.dnsManager = service.FromContext[adapter.DNSTransportManager](owned)
+	if n.dns == nil || n.dnsManager == nil {
+		return result, bad
+	}
+	n.dnsOwner, _, err = adapter.RouterVPNTransportContext(initialize, n.dnsManager, n.dnsCapture.ResolverTag)
+	if err != nil || n.dnsOwner == nil {
+		return result, bad
+	}
+	routes, err := n.policy.FrontRoutes(capture)
+	if err != nil {
+		return result, bad
+	}
+	n.front, err = newRouterVPNServerChainFront(owned, capture, routes, n.trafficCurrent, n.resolve, n.dialApplication, n.packetApplication)
+	if err != nil {
+		return result, bad
+	}
+	if _, err = n.ObserveServerContext(initialize); err != nil {
+		return result, bad
+	}
+	return result, nil
+}
+func (n *routerVPNServerChain) captureFile(name string, limit int64) ([]byte, error) {
+	raw, err := routerVPNServerChainRead(n.root, name, limit)
+	if err != nil {
+		return nil, err
+	}
+	info, err := n.root.Lstat(name)
+	if err != nil {
+		clear(raw)
+		return nil, err
+	}
+	hash := sha256.Sum256(raw)
+	n.files[name] = routerVPNServerChainFile{info, hex.EncodeToString(hash[:]), limit}
+	return raw, nil
+}
+func (n *routerVPNServerChain) sourceCurrent(full bool) bool {
+	if n == nil || n.root == nil || n.directoryInfo == nil {
+		return false
+	}
+	path, err := os.Lstat(n.directory)
+	actual, rootErr := n.root.Stat(".")
+	if err != nil || rootErr != nil || !os.SameFile(path, n.directoryInfo) || !os.SameFile(actual, n.directoryInfo) || path.Mode().Perm() != 0700 {
+		return false
+	}
+	for name, captured := range n.files {
+		info, err := n.root.Lstat(name)
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || !os.SameFile(info, captured.info) || info.Size() != captured.info.Size() || !info.ModTime().Equal(captured.info.ModTime()) {
+			return false
+		}
+		if full {
+			raw, err := routerVPNServerChainRead(n.root, name, captured.limit)
+			if err != nil {
+				return false
+			}
+			hash := sha256.Sum256(raw)
+			clear(raw)
+			if hex.EncodeToString(hash[:]) != captured.digest {
+				return false
+			}
+		}
+	}
+	return len(n.files) == 2
+}
+func (n *routerVPNServerChain) nativeCurrent(ctx context.Context) bool {
+	if n == nil || ctx == nil || ctx.Err() != nil || n.ctx.Err() != nil || n.box == nil || n.dnsOwner == nil || n.dns == nil || !n.sourceCurrent(false) {
+		return false
+	}
+	inbounds, err := adapter.RouterVPNInboundsContext(ctx, n.box.Inbound())
+	if err != nil || len(inbounds) != 0 {
+		return false
+	}
+	if service.FromContext[adapter.DNSRouter](n.ctx) != n.dns || service.FromContext[adapter.DNSTransportManager](n.ctx) != n.dnsManager {
+		return false
+	}
+	resolver, found, err := adapter.RouterVPNTransportContext(ctx, n.dnsManager, n.dnsCapture.ResolverTag)
+	if err != nil || !found || resolver != n.dnsOwner {
+		return false
+	}
+	for tag, original := range n.outputs {
+		outbound, found, err := adapter.RouterVPNOutboundContext(ctx, n.box.Outbound(), tag)
+		if err != nil || !found || outbound != original {
+			return false
+		}
+	}
+	return len(n.outputs) == len(n.capture.Source.Members) && ctx.Err() == nil
+}
+func (n *routerVPNServerChain) ObserveServerContext(ctx context.Context) (mobilemultihop.NodeChainServerBinding, error) {
+	if !n.nativeCurrent(ctx) || !n.sourceCurrent(true) || ctx.Err() != nil {
+		return mobilemultihop.NodeChainServerBinding{}, errServerChainFront
+	}
+	return n.binding, nil
+}
+func (n *routerVPNServerChain) DialServerContext(ctx context.Context, tag, network, address string) (net.Conn, error) {
+	if network != "tcp" || !n.nativeCurrent(ctx) {
+		return nil, errServerChainFront
+	}
+	allowed := tag == n.dnsCapture.FinalTag && address == "1.1.1.1:443"
+	targets, err := n.policy.ProofTargets(n.capture)
+	if err != nil {
+		return nil, errServerChainFront
+	}
+	for _, target := range targets {
+		allowed = allowed || target.Proof.Tag == tag && target.Network == network && target.Address == address
+	}
+	if !allowed {
+		return nil, errServerChainFront
+	}
+	return n.dialOriginal(ctx, tag, network, M.ParseSocksaddr(address))
+}
+func (n *routerVPNServerChain) ProveServerDNSContext(ctx context.Context, dns mobilemultihop.NodeChainServerDNSCapture) error {
+	if !reflect.DeepEqual(dns, n.dnsCapture) || !n.nativeCurrent(ctx) {
+		return errServerChainFront
+	}
+	if err := n.box.RouterVPNServerChainDNSProof(ctx, n.dnsOwner); err != nil {
+		return err
+	}
+	if !n.nativeCurrent(ctx) {
+		return errServerChainFront
+	}
+	return nil
+}
+func (n *routerVPNServerChain) dialOriginal(ctx context.Context, tag, network string, destination M.Socksaddr) (net.Conn, error) {
+	outbound := n.outputs[tag]
+	if outbound == nil || !n.nativeCurrent(ctx) {
+		return nil, errServerChainFront
+	}
+	ctx = adapter.WithContext(ctx, &adapter.InboundContext{Inbound: "routervpn-server-chain-front", InboundType: "socks", Network: network, Destination: destination})
+	original, err := outbound.DialContext(ctx, network, destination)
+	conn := n.trackConnection(original)
+	if err != nil || conn == nil || !n.nativeCurrent(ctx) {
+		if conn != nil {
+			_ = conn.CloseContext(ctx)
+		}
+		return nil, errServerChainFront
+	}
+	return conn, nil
+}
+func (n *routerVPNServerChain) trafficCurrent() bool {
+	n.mu.Lock()
+	ok := !n.closing && !n.closed && n.proof.DNSProven && n.proof.PublicProven && time.Now().Before(n.proof.ProvenAt.Add(n.proofLifetime()))
+	n.mu.Unlock()
+	if !ok {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(n.ctx, time.Second)
+	defer cancel()
+	return n.nativeCurrent(ctx)
+}
+func (n *routerVPNServerChain) resolve(ctx context.Context, route mobilemultihop.NodeChainServerFrontRoute, network string, destination M.Socksaddr) (M.Socksaddr, error) {
+	if !n.trafficCurrent() || route.Binding != n.binding || destination.Port == 0 {
+		return M.Socksaddr{}, errServerChainFront
+	}
+	if destination.Fqdn != "" {
+		if !route.Final {
+			return M.Socksaddr{}, errServerChainFront
+		}
+		bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		lookup := adapter.WithContext(bounded, &adapter.InboundContext{Inbound: "routervpn-server-chain-front", InboundType: "socks", Network: network, Destination: destination, Protocol: "dns"})
+		answers, err := n.dns.Lookup(lookup, destination.Fqdn, adapter.DNSQueryOptions{Transport: n.dnsOwner, DisableCache: true, DisableOptimisticCache: true, Timeout: 5 * time.Second})
+		if err != nil || len(answers) == 0 || len(answers) > 128 || !n.nativeCurrent(bounded) {
+			return M.Socksaddr{}, errServerChainFront
+		}
+		destination, err = routerVPNServerChainResolved(route, network, destination, answers)
+		if err != nil {
+			return M.Socksaddr{}, err
+		}
+	}
+	if !destination.Addr.IsValid() || !route.AllowsDestination(network, destination.String()) || !n.trafficCurrent() {
+		return M.Socksaddr{}, errServerChainFront
+	}
+	return destination, nil
+}
+
+// Every selected-resolver answer must obey the original final policy. A good
+// first record cannot conceal a private, mapped or disabled-family alternate.
+func routerVPNServerChainResolved(route mobilemultihop.NodeChainServerFrontRoute, network string, original M.Socksaddr, answers []netip.Addr) (M.Socksaddr, error) {
+	if !route.Final || original.Fqdn == "" || original.Port == 0 || len(answers) == 0 || len(answers) > 128 {
+		return M.Socksaddr{}, errServerChainFront
+	}
+	for _, address := range answers {
+		literal := M.Socksaddr{Addr: address, Port: original.Port}
+		if !address.IsValid() || address.Zone() != "" || address.Is4In6() || !route.AllowsDestination(network, literal.String()) {
+			return M.Socksaddr{}, errServerChainFront
+		}
+	}
+	return M.Socksaddr{Addr: answers[0], Port: original.Port}, nil
+}
+func (n *routerVPNServerChain) dialApplication(ctx context.Context, tag, network string, destination M.Socksaddr) (net.Conn, error) {
+	if !n.trafficCurrent() {
+		return nil, errServerChainFront
+	}
+	return n.dialOriginal(ctx, tag, network, destination)
+}
+func (n *routerVPNServerChain) packetApplication(ctx context.Context, tag string, destination M.Socksaddr) (net.PacketConn, error) {
+	if tag != n.dnsCapture.FinalTag || !n.trafficCurrent() {
+		return nil, errServerChainFront
+	}
+	outbound := n.outputs[tag]
+	if outbound == nil {
+		return nil, errServerChainFront
+	}
+	ctx = adapter.WithContext(ctx, &adapter.InboundContext{Inbound: "routervpn-server-chain-front", InboundType: "socks", Network: "udp", Destination: destination})
+	original, err := outbound.ListenPacket(ctx, destination)
+	conn := n.trackPacketConnection(original)
+	if err != nil || conn == nil || !n.trafficCurrent() {
+		if conn != nil {
+			_ = conn.CloseContext(ctx)
+		}
+		return nil, errServerChainFront
+	}
+	return conn, nil
+}
+func (n *routerVPNServerChain) proofLifetime() time.Duration {
+	return time.Duration(15+5*len(n.capture.Source.Members)) * time.Second
+}
+func (n *routerVPNServerChain) Begin() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.begun || n.closing || n.ctx.Err() != nil || n.front == nil || !n.front.Current() || !time.Now().Before(n.capture.BootstrapDeadline) {
+		return errServerChainFront
+	}
+	n.begun = true
+	go n.run()
+	return nil
+}
+func (n *routerVPNServerChain) run() {
+	defer close(n.proofDone)
+	defer n.cancel()
+	deadline := n.capture.BootstrapDeadline
+	first := true
+	for {
+		ctx, cancel := context.WithDeadline(n.ctx, deadline)
+		proof, err := n.policy.Prove(ctx, n.capture, n)
+		cancel()
+		if err != nil || proof.Binding != n.binding || !proof.DNSProven || !proof.PublicProven || len(proof.Prefixes) != len(n.capture.Source.Members) || proof.ProvenAt.IsZero() {
+			return
+		}
+		n.mu.Lock()
+		if n.closing || n.ctx.Err() != nil {
+			n.mu.Unlock()
+			return
+		}
+		n.proof = proof
+		n.generation++
+		generation := n.generation
+		if n.expiry != nil {
+			if n.expiry.Stop() {
+				n.expiryWorkers.Done()
+			}
+		}
+		deadline = proof.ProvenAt.Add(n.proofLifetime())
+		n.expiryWorkers.Add(1)
+		n.expiry = time.AfterFunc(time.Until(deadline), func() {
+			defer n.expiryWorkers.Done()
+			n.mu.Lock()
+			expired := n.generation == generation && !time.Now().Before(n.proof.ProvenAt.Add(n.proofLifetime()))
+			n.mu.Unlock()
+			if expired {
+				n.cancel()
+			}
+		})
+		n.mu.Unlock()
+		if first {
+			if n.front.Enable() != nil {
+				return
+			}
+			first = false
+		}
+		timer := time.NewTimer(5 * time.Second)
+		select {
+		case <-n.ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+func (n *routerVPNServerChain) Snapshot(ctx context.Context, nonce string) (multihoprelay.NodeChainReceipt, error) {
+	if _, err := n.ObserveServerContext(ctx); err != nil || n.front == nil || !n.front.Current() {
+		return multihoprelay.NodeChainReceipt{}, errServerChainFront
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if ctx.Err() != nil || n.closing || n.ctx.Err() != nil {
+		return multihoprelay.NodeChainReceipt{}, errServerChainFront
+	}
+	n.sequence++
+	now := time.Now()
+	r := multihoprelay.NodeChainReceipt{Schema: 1, SessionID: n.capture.Request.SessionID, OwnerID: n.capture.OwnerID, Peer: n.capture.Peer, SourceSHA256: n.binding.SourceSHA256, RegistrySHA256: n.capture.RegistrySHA256, DNSPolicySHA256: n.capture.Source.DNSPolicySHA256, CaptureSHA256: n.binding.CaptureSHA256, Nonce: nonce, Sequence: n.sequence, HeartbeatAt: now.UnixMilli(), Phase: multihoprelay.NodeChainPending, FrontReady: true}
+	if !n.proof.ProvenAt.IsZero() && n.front.TrafficAllowed() {
+		if !now.Before(n.proof.ProvenAt.Add(n.proofLifetime())) {
+			return multihoprelay.NodeChainReceipt{}, errServerChainFront
+		}
+		r.Phase = multihoprelay.NodeChainReady
+		r.TrafficAllowed = true
+		r.DNSProven = n.proof.DNSProven
+		r.PublicProven = n.proof.PublicProven
+		r.ProofAt = n.proof.ProvenAt.UnixMilli()
+		for _, row := range n.proof.Prefixes {
+			r.Prefixes = append(r.Prefixes, multihoprelay.NodeChainPrefixReceipt{Position: row.Proof.Position, ProfileID: row.Proof.ProfileID, NodeID: row.Proof.NodeID, Mode: row.Proof.Mode, Proven: true, ResponseMS: row.ResponseMS})
+		}
+	}
+	return r, nil
+}
+func (n *routerVPNServerChain) Close(ctx context.Context) error {
+	if ctx == nil {
+		return errServerChainFront
+	}
+	select {
+	case n.closeGate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-n.closeGate }()
+	n.mu.Lock()
+	if n.closed {
+		n.mu.Unlock()
+		return nil
+	}
+	n.closing = true
+	begun := n.begun
+	if n.expiry != nil {
+		if n.expiry.Stop() {
+			n.expiryWorkers.Done()
+		}
+	}
+	n.mu.Unlock()
+	n.cancel()
+	if n.front != nil {
+		if err := n.front.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if begun {
+		select {
+		case <-n.proofDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	n.expiryJoinOnce.Do(func() { go func() { n.expiryWorkers.Wait(); close(n.expiryJoined) }() })
+	select {
+	case <-n.expiryJoined:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := n.drainConnections(ctx); err != nil {
+		return err
+	}
+	if n.box != nil {
+		n.boxOnce.Do(func() { go func() { n.boxError = n.box.Close(); close(n.boxDone) }() })
+		select {
+		case <-n.boxDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if n.boxError != nil {
+			return errors.New("original ordered native close remains pending")
+		}
+	}
+	if n.stopParent != nil && !n.stopParent() {
+		select {
+		case <-n.parentDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	n.mu.Lock()
+	n.closed = true
+	n.mu.Unlock()
+	return nil
+}
+
+var _ mobilemultihop.NodeChainServerProofEngine = (*routerVPNServerChain)(nil)

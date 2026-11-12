@@ -21,6 +21,7 @@ on:
       - 'deploy/router-agent.Dockerfile'
       - 'deploy/test_native_xray_*.py'
       - 'deploy/test_server_tor_preparation.py'
+      - 'deploy/test_server_node_chain_*.py'
       - 'deploy/test_native_naive_pairing.py'
       - 'deploy/test_mobile_multihop_groups.py'
       - 'server/scripts/provision-multihop-relays.py'
@@ -65,6 +66,8 @@ jobs:
       - name: Shared policy and agent regressions
         run: |
           python3 deploy/test_server_tor_preparation.py
+          python3 deploy/test_server_node_chain_preparation.py
+          python3 deploy/test_server_node_chain_native_runner.py
           python3 deploy/test_native_xray_relay_build.py
           python3 deploy/test_mobile_multihop_groups.py
           go test -race -count=1 -timeout=180s ./internal/applexray ./internal/multihoprelay ./cmd/router-agent

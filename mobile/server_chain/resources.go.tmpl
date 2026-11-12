@@ -1,0 +1,140 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"sync"
+)
+
+// Every returned native socket gets an original close record before any late
+// context/current check. One pending native Close is joined across callers;
+// caller expiry cannot discard it, and an actual error keeps the same object
+// for a later retry. Successful close removes only that exact ledger entry.
+type routerVPNServerChainCloseAttempt struct {
+	done chan struct{}
+	err  error
+}
+type routerVPNServerChainClose struct {
+	original io.Closer
+	release  func(*routerVPNServerChainClose)
+	failed   func()
+	mu       sync.Mutex
+	current  *routerVPNServerChainCloseAttempt
+	closed   bool
+}
+
+func (c *routerVPNServerChainClose) CloseContext(ctx context.Context) error {
+	if ctx == nil {
+		return errServerChainFront
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	attempt := c.current
+	if attempt == nil {
+		attempt = &routerVPNServerChainCloseAttempt{done: make(chan struct{})}
+		c.current = attempt
+		go func() {
+			err := c.original.Close()
+			if errors.Is(err, net.ErrClosed) {
+				err = nil
+			}
+			if err != nil && c.failed != nil {
+				c.failed()
+			}
+			if err == nil && c.release != nil {
+				c.release(c)
+			}
+			c.mu.Lock()
+			attempt.err = err
+			if err == nil {
+				c.closed = true
+			}
+			c.current = nil
+			close(attempt.done)
+			c.mu.Unlock()
+		}()
+	}
+	c.mu.Unlock()
+	select {
+	case <-attempt.done:
+		return attempt.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (c *routerVPNServerChainClose) Close() error { return c.CloseContext(context.Background()) }
+
+type routerVPNServerChainConn struct {
+	net.Conn
+	closeOwner *routerVPNServerChainClose
+}
+
+func (c *routerVPNServerChainConn) Close() error { return c.closeOwner.Close() }
+func (c *routerVPNServerChainConn) CloseContext(ctx context.Context) error {
+	return c.closeOwner.CloseContext(ctx)
+}
+
+type routerVPNServerChainPacketConn struct {
+	net.PacketConn
+	closeOwner *routerVPNServerChainClose
+}
+
+func (c *routerVPNServerChainPacketConn) Close() error { return c.closeOwner.Close() }
+func (c *routerVPNServerChainPacketConn) CloseContext(ctx context.Context) error {
+	return c.closeOwner.CloseContext(ctx)
+}
+func (n *routerVPNServerChain) trackClose(original io.Closer) *routerVPNServerChainClose {
+	owner := &routerVPNServerChainClose{original: original, failed: n.cancel}
+	owner.release = func(exact *routerVPNServerChainClose) {
+		n.connectionsMu.Lock()
+		delete(n.connections, exact)
+		n.connectionsMu.Unlock()
+	}
+	n.connectionsMu.Lock()
+	if n.connections == nil {
+		n.connections = make(map[*routerVPNServerChainClose]bool)
+	}
+	n.connections[owner] = true
+	n.connectionsMu.Unlock()
+	return owner
+}
+func (n *routerVPNServerChain) trackConnection(original net.Conn) *routerVPNServerChainConn {
+	if original == nil {
+		return nil
+	}
+	return &routerVPNServerChainConn{original, n.trackClose(original)}
+}
+func (n *routerVPNServerChain) trackPacketConnection(original net.PacketConn) *routerVPNServerChainPacketConn {
+	if original == nil {
+		return nil
+	}
+	return &routerVPNServerChainPacketConn{original, n.trackClose(original)}
+}
+
+// Front workers and proof callbacks must already be joined before this drain,
+// so no later acquisition can be omitted from the retained original ledger.
+func (n *routerVPNServerChain) drainConnections(ctx context.Context) error {
+	n.connectionsMu.Lock()
+	owners := make([]*routerVPNServerChainClose, 0, len(n.connections))
+	for owner := range n.connections {
+		owners = append(owners, owner)
+	}
+	n.connectionsMu.Unlock()
+	for _, owner := range owners {
+		if err := owner.CloseContext(ctx); err != nil {
+			return err
+		}
+	}
+	n.connectionsMu.Lock()
+	remaining := len(n.connections)
+	n.connectionsMu.Unlock()
+	if remaining != 0 {
+		return errServerChainFront
+	}
+	return nil
+}

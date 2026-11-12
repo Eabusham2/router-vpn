@@ -1,0 +1,366 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing/common/auth"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/common/uot"
+	"github.com/sagernet/sing/protocol/socks"
+	"github.com/sagernet/sing/protocol/socks/socks5"
+)
+
+type serverChainFrontFixture struct {
+	front            *routerVPNServerChainFront
+	ready            atomic.Bool
+	dials, packets   atomic.Int64
+	tcp              net.Listener
+	udp              *net.UDPConn
+	tcpDone, udpDone chan struct{}
+	prefix, final    mobilemultihop.NodeChainServerFrontRoute
+}
+
+func newServerChainFrontFixture(t *testing.T) *serverChainFrontFixture {
+	t.Helper()
+	tcp, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		_ = tcp.Close()
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		_ = tcp.Close()
+		_ = udp.Close()
+		t.Fatal(err)
+	}
+	f := &serverChainFrontFixture{tcp: tcp, udp: udp, tcpDone: make(chan struct{}), udpDone: make(chan struct{})}
+	f.prefix = mobilemultihop.NodeChainServerFrontRoute{Position: 1, Username: strings.Repeat("a", 48), Password: strings.Repeat("b", 48), Tag: "original-prefix", Destinations: []mobilemultihop.NodeChainServerDestination{{Network: "tcp", Address: tcp.Addr().String()}}}
+	f.final = mobilemultihop.NodeChainServerFrontRoute{Position: 2, Username: strings.Repeat("c", 48), Password: strings.Repeat("d", 48), Tag: "original-final", Final: true, UDPOverTCPVersion: 2}
+	ctx, cancel := context.WithCancel(t.Context())
+	// Only the native outbound/selected-resolver boundary is doubled. The exact
+	// shipping accept/auth/UoT/copy/retirement code runs over actual TCP and UDP.
+	front := &routerVPNServerChainFront{ctx: ctx, cancel: cancel, peer: netip.MustParseAddr("127.0.0.1"), routes: map[string]mobilemultihop.NodeChainServerFrontRoute{f.prefix.Username: f.prefix, f.final.Username: f.final}, authenticator: auth.NewAuthenticator([]auth.User{{Username: f.prefix.Username, Password: f.prefix.Password}, {Username: f.final.Username, Password: f.final.Password}}), current: f.ready.Load, originals: make(map[io.Closer]bool), accepted: make(chan struct{}), joined: make(chan struct{}), closeGate: make(chan struct{}, 1)}
+	front.resolve = func(ctx context.Context, route mobilemultihop.NodeChainServerFrontRoute, network string, destination M.Socksaddr) (M.Socksaddr, error) {
+		if ctx.Err() != nil || !destination.IsValid() {
+			return M.Socksaddr{}, errServerChainFront
+		}
+		return destination, nil
+	}
+	front.dial = func(ctx context.Context, tag, network string, destination M.Socksaddr) (net.Conn, error) {
+		if tag != f.prefix.Tag && tag != f.final.Tag {
+			return nil, errServerChainFront
+		}
+		f.dials.Add(1)
+		return (&net.Dialer{}).DialContext(ctx, network, destination.String())
+	}
+	front.packet = func(ctx context.Context, tag string, destination M.Socksaddr) (net.PacketConn, error) {
+		if tag != f.final.Tag {
+			return nil, errServerChainFront
+		}
+		f.packets.Add(1)
+		return (&net.ListenConfig{}).ListenPacket(ctx, "udp4", "127.0.0.1:0")
+	}
+	front.startListener(listener)
+	f.front = front
+	go func() {
+		defer close(f.tcpDone)
+		for {
+			conn, err := tcp.Accept()
+			if err != nil {
+				return
+			}
+			go func() { defer conn.Close(); _, _ = io.Copy(conn, conn) }()
+		}
+	}()
+	go func() {
+		defer close(f.udpDone)
+		buffer := make([]byte, 65535)
+		for {
+			size, peer, err := udp.ReadFromUDP(buffer)
+			if err != nil {
+				return
+			}
+			_, _ = udp.WriteToUDP(buffer[:size], peer)
+		}
+	}()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := front.Close(ctx); err != nil {
+			t.Error("original front did not join", err)
+		}
+		_ = tcp.Close()
+		_ = udp.Close()
+		<-f.tcpDone
+		<-f.udpDone
+	})
+	return f
+}
+func (f *serverChainFrontFixture) enable(t *testing.T) {
+	t.Helper()
+	f.ready.Store(true)
+	if err := f.front.Enable(); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *serverChainFrontFixture) connection(t *testing.T, route mobilemultihop.NodeChainServerFrontRoute, destination M.Socksaddr, command byte) (net.Conn, error) {
+	t.Helper()
+	conn, err := net.DialTimeout("tcp", f.front.listener.Addr().String(), time.Second)
+	if err != nil {
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	_, err = socks.ClientHandshake5(conn, command, destination, route.Username, route.Password)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+func TestServerChainFrontPendingCannotForward(t *testing.T) {
+	f := newServerChainFrontFixture(t)
+	if !f.front.Current() || f.front.TrafficAllowed() {
+		t.Fatal("bound pending front was not explicitly closed")
+	}
+	if conn, err := f.connection(t, f.final, M.SocksaddrFromNet(f.tcp.Addr()), socks5.CommandConnect); err == nil {
+		_ = conn.Close()
+		t.Fatal("pending front authenticated application traffic")
+	}
+	if f.dials.Load() != 0 || f.packets.Load() != 0 {
+		t.Fatal("pending refusal reached a native outbound")
+	}
+}
+func TestServerChainFrontOriginalCredentialAndTCP(t *testing.T) {
+	f := newServerChainFrontFixture(t)
+	f.enable(t)
+	for _, route := range []mobilemultihop.NodeChainServerFrontRoute{f.prefix, f.final} {
+		conn, err := f.connection(t, route, M.SocksaddrFromNet(f.tcp.Addr()), socks5.CommandConnect)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload := []byte("original-position-" + route.Tag)
+		if _, err = conn.Write(payload); err != nil {
+			t.Fatal(err)
+		}
+		reply := make([]byte, len(payload))
+		if _, err = io.ReadFull(conn, reply); err != nil || string(reply) != string(payload) {
+			t.Fatal("captured TCP tuple did not echo", err)
+		}
+		_ = conn.Close()
+	}
+	if f.dials.Load() != 2 || f.packets.Load() != 0 {
+		t.Fatal("TCP used another native family", f.dials.Load(), f.packets.Load())
+	}
+}
+func TestServerChainFrontNativeUoTFinalPacketsAndJoinedClose(t *testing.T) {
+	f := newServerChainFrontFixture(t)
+	f.enable(t)
+	conn, err := f.connection(t, f.final, uot.RequestDestination(2), socks5.CommandConnect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := M.SocksaddrFromNet(f.udp.LocalAddr())
+	request := uot.Request{IsConnect: true, Destination: destination}
+	if err = uot.WriteRequest(conn, request); err != nil {
+		t.Fatal(err)
+	}
+	packets := uot.NewConn(conn, request)
+	payload := []byte("selected-final-real-native-UDP")
+	if _, err = packets.WriteTo(payload, destination); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, 2048)
+	size, _, err := packets.ReadFrom(reply)
+	if err != nil || string(reply[:size]) != string(payload) {
+		t.Fatal("native UoT packet did not reach the exact final sink", err)
+	}
+	if f.packets.Load() != 1 || f.dials.Load() != 0 {
+		t.Fatal("final UDP fell back to TCP/direct", f.packets.Load(), f.dials.Load())
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err = f.front.Close(ctx); err != nil {
+		t.Fatal("original final UDP flow did not join", err)
+	}
+	if _, _, err = packets.ReadFrom(reply); err == nil {
+		t.Fatal("retired original UoT still read packets")
+	}
+	select {
+	case <-f.front.joined:
+	default:
+		t.Fatal("closed receipt preceded actual packet worker join")
+	}
+	f.front.mu.Lock()
+	remaining := len(f.front.originals)
+	f.front.mu.Unlock()
+	if remaining != 0 {
+		t.Fatal("original native sockets retained after acknowledgement")
+	}
+	_ = conn.Close()
+}
+func TestServerChainFrontRejectsForeignAndUnsupportedWire(t *testing.T) {
+	for _, mode := range []string{"wrong-password", "foreign-user", "no-auth", "prefix-foreign-tuple", "prefix-uot", "legacy-uot", "udp-associate", "retired-proof"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newServerChainFrontFixture(t)
+			f.enable(t)
+			route := f.final
+			destination := M.SocksaddrFromNet(f.tcp.Addr())
+			command := byte(socks5.CommandConnect)
+			switch mode {
+			case "wrong-password":
+				route.Password = strings.Repeat("e", 48)
+			case "foreign-user":
+				route.Username = strings.Repeat("e", 48)
+			case "no-auth":
+				route.Username = ""
+				route.Password = ""
+			case "prefix-foreign-tuple":
+				route = f.prefix
+				destination = M.SocksaddrFromNet(f.udp.LocalAddr())
+			case "prefix-uot":
+				route = f.prefix
+				destination = uot.RequestDestination(2)
+			case "legacy-uot":
+				destination = uot.RequestDestination(1)
+			case "udp-associate":
+				command = socks5.CommandUDPAssociate
+			case "retired-proof":
+				f.ready.Store(false)
+			}
+			conn, err := f.connection(t, route, destination, command)
+			if mode == "prefix-uot" && err == nil {
+				_ = conn.Close()
+				t.Fatal("prefix UoT negotiation was accepted")
+			}
+			if err == nil {
+				defer conn.Close()
+				if destination.Fqdn == uot.MagicAddress {
+					_ = uot.WriteRequest(conn, uot.Request{IsConnect: true, Destination: M.SocksaddrFromNet(f.udp.LocalAddr())})
+				}
+				_, writeErr := conn.Write([]byte("must not forward"))
+				var b [1]byte
+				_, readErr := conn.Read(b[:])
+				if writeErr == nil && readErr == nil {
+					t.Fatal("unsupported authority forwarded")
+				}
+			}
+			if f.dials.Load() != 0 || f.packets.Load() != 0 {
+				t.Fatal("refusal reached captured/native routing")
+			}
+		})
+	}
+}
+
+type serverChainOneCloseFailure struct {
+	original net.Conn
+	attempts atomic.Int64
+}
+
+func (c *serverChainOneCloseFailure) Close() error {
+	if c.attempts.Add(1) == 1 {
+		return errors.New("injected original close pending")
+	}
+	return c.original.Close()
+}
+func TestServerChainFrontFailedCloseRetainsExactRetry(t *testing.T) {
+	f := newServerChainFrontFixture(t)
+	left, right := net.Pipe()
+	defer right.Close()
+	original := &serverChainOneCloseFailure{original: left}
+	if !f.front.retain(original) {
+		t.Fatal("fixture original capture failed")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := f.front.Close(ctx); err == nil {
+		t.Fatal("failed native close was acknowledged")
+	}
+	f.front.mu.Lock()
+	retained := f.front.originals[original]
+	f.front.mu.Unlock()
+	if !retained {
+		t.Fatal("failed original close owner was discarded")
+	}
+	if err := f.front.Close(ctx); err != nil {
+		t.Fatal("same original close could not retry", err)
+	}
+	if original.attempts.Load() != 2 {
+		t.Fatal("cleanup adopted another original")
+	}
+}
+
+type serverChainLateConn struct {
+	net.Conn
+	closes atomic.Int64
+}
+
+func (c *serverChainLateConn) Close() error {
+	if c.closes.Add(1) == 1 {
+		return errors.New("late original native close pending")
+	}
+	return c.Conn.Close()
+}
+func TestServerChainFrontLateNativeReturnRetainsFailedClose(t *testing.T) {
+	f := newServerChainFrontFixture(t)
+	f.enable(t)
+	left, right := net.Pipe()
+	defer right.Close()
+	late := &serverChainLateConn{Conn: left}
+	entered, release := make(chan struct{}), make(chan struct{})
+	f.front.dial = func(context.Context, string, string, M.Socksaddr) (net.Conn, error) {
+		close(entered)
+		<-release
+		return late, nil
+	}
+	client, err := net.DialTimeout("tcp", f.front.listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	_ = client.SetDeadline(time.Now().Add(3 * time.Second))
+	clientDone := make(chan struct{})
+	go func() {
+		defer close(clientDone)
+		_, _ = socks.ClientHandshake5(client, socks5.CommandConnect, M.SocksaddrFromNet(f.tcp.Addr()), f.final.Username, f.final.Password)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("original native acquisition did not start")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	closed := make(chan error, 1)
+	go func() { closed <- f.front.Close(ctx) }()
+	<-f.front.ctx.Done()
+	close(release)
+	if err := <-closed; err == nil {
+		t.Fatal("late original native close was acknowledged")
+	}
+	f.front.mu.Lock()
+	retained := f.front.originals[late]
+	f.front.mu.Unlock()
+	if !retained {
+		t.Fatal("late original close owner was discarded")
+	}
+	if err := f.front.Close(ctx); err != nil {
+		t.Fatal("late original close could not retry", err)
+	}
+	<-clientDone
+	if late.closes.Load() != 2 {
+		t.Fatal("late cleanup did not preserve the original native object")
+	}
+}

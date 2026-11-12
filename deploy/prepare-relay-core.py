@@ -45,6 +45,9 @@ _hy2_spec.loader.exec_module(HY2_DEADLINES)
 _tor_spec = importlib.util.spec_from_file_location('routervpn_server_tor', ROOT/'deploy/prepare-server-tor.py')
 SERVER_TOR = importlib.util.module_from_spec(_tor_spec)
 _tor_spec.loader.exec_module(SERVER_TOR)
+_chain_spec = importlib.util.spec_from_file_location('routervpn_server_chain', ROOT/'deploy/prepare-server-node-chain.py')
+SERVER_CHAIN = importlib.util.module_from_spec(_chain_spec)
+_chain_spec.loader.exec_module(SERVER_CHAIN)
 XRAY_VERSION = 'v1.260327.1-0.20260711155151-50231eaff98c'
 
 _observation_spec = importlib.util.spec_from_file_location('routervpn_observation_policy', ROOT/'deploy/native_observation_policy.py')
@@ -55,7 +58,7 @@ NAIVE = importlib.util.module_from_spec(_naive_spec)
 _naive_spec.loader.exec_module(NAIVE)
 
 def inputs():
-    files = [Path(__file__).resolve(), ROOT/'deploy/test_external_openvpn_native.py', ROOT/'mobile/routervpn_openvpn_external_native_test.go.tmpl', *sorted((ROOT/'mobile/relay').glob('*.tmpl'))] + HY2_DEADLINES.inputs() + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs() + PQ.inputs() + COMPOSITE.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + STRATEGY.inputs() + SERVER_TOR.inputs()
+    files = [Path(__file__).resolve(), ROOT/'deploy/test_external_openvpn_native.py', ROOT/'mobile/routervpn_openvpn_external_native_test.go.tmpl', *sorted((ROOT/'mobile/relay').glob('*.tmpl'))] + HY2_DEADLINES.inputs() + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs() + PQ.inputs() + COMPOSITE.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + STRATEGY.inputs() + SERVER_TOR.inputs() + SERVER_CHAIN.inputs()
     for package in PACKAGES: files += sorted((ROOT/'internal'/package).glob('*.go'))
     return list(dict.fromkeys(files + OBSERVATION.inputs() + NAIVE.inputs()))
 
@@ -122,6 +125,7 @@ def prepare_native(vendor, xray):
     OPENVPN_CLOSE.prepare(vendor)
     STRATEGY.prepare(vendor, mobile=False)
     SERVER_TOR.prepare(vendor)
+    SERVER_CHAIN.prepare(vendor)
     subprocess.run(['go','mod','edit','-require=github.com/xtls/xray-core@'+XRAY_VERSION],cwd=vendor,check=True)
     subprocess.run(['go','mod','edit','-replace=github.com/xtls/xray-core='+str(xray)],cwd=vendor,check=True)
     license = xray/'LICENSE'

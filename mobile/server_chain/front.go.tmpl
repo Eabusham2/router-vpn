@@ -1,0 +1,381 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing/common/auth"
+	"github.com/sagernet/sing/common/buf"
+	B "github.com/sagernet/sing/common/bufio"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/common/uot"
+	"github.com/sagernet/sing/protocol/socks"
+)
+
+var errServerChainFront = errors.New("original ordered front is unavailable")
+
+// The wire protocol is SOCKS5 plus captured UoT v2 on the final credential.
+// There is one TCP listener. Unsupported UDP ASSOCIATE never opens a socket.
+// HandleConnectionEx and UoT framing are the exact pinned native primitives;
+// this owner adds original-peer admission, proof gating and joined lifetime.
+type routerVPNServerChainFront struct {
+	ctx               context.Context
+	cancel            context.CancelFunc
+	listener          net.Listener
+	peer              netip.Addr
+	routes            map[string]mobilemultihop.NodeChainServerFrontRoute
+	authenticator     *auth.Authenticator
+	current           func() bool
+	resolve           func(context.Context, mobilemultihop.NodeChainServerFrontRoute, string, M.Socksaddr) (M.Socksaddr, error)
+	dial              func(context.Context, string, string, M.Socksaddr) (net.Conn, error)
+	packet            func(context.Context, string, M.Socksaddr) (net.PacketConn, error)
+	mu                sync.Mutex
+	enabled, retiring bool
+	originals         map[io.Closer]bool
+	workers           sync.WaitGroup
+	accepted          chan struct{}
+	joined            chan struct{}
+	joinOnce          sync.Once
+	closeGate         chan struct{}
+	interrupted       chan struct{}
+	stopInterrupt     func() bool
+}
+
+func newRouterVPNServerChainFront(parent context.Context, capture multihoprelay.NodeChainCapture, routes []mobilemultihop.NodeChainServerFrontRoute, current func() bool, resolve func(context.Context, mobilemultihop.NodeChainServerFrontRoute, string, M.Socksaddr) (M.Socksaddr, error), dial func(context.Context, string, string, M.Socksaddr) (net.Conn, error), packet func(context.Context, string, M.Socksaddr) (net.PacketConn, error)) (*routerVPNServerChainFront, error) {
+	if parent == nil || parent.Err() != nil || capture.Validate() != nil || current == nil || resolve == nil || dial == nil || packet == nil || len(routes) != len(capture.Source.Members) {
+		return nil, errServerChainFront
+	}
+	digest, _ := capture.Digest()
+	users := make([]auth.User, 0, len(routes))
+	byUser := make(map[string]mobilemultihop.NodeChainServerFrontRoute, len(routes))
+	for index, route := range routes {
+		expected := capture.Request.Users[index]
+		if route.Position != expected.Position || route.Username != expected.Username || route.Password != expected.Password || route.Binding.CaptureSHA256 != digest || route.Binding.SourceSHA256 != capture.Source.SourceSHA256 || route.Tag == "" || route.Final != (index == len(routes)-1) || route.Final && route.UDPOverTCPVersion != 2 || !route.Final && route.UDPOverTCPVersion != 0 {
+			return nil, errServerChainFront
+		}
+		route.Destinations = append([]mobilemultihop.NodeChainServerDestination(nil), route.Destinations...)
+		route.BlockedCIDRs = append([]string(nil), route.BlockedCIDRs...)
+		byUser[route.Username] = route
+		users = append(users, auth.User{Username: route.Username, Password: route.Password})
+	}
+	peer, _ := netip.ParseAddr(capture.Peer)
+	ctx, cancel := context.WithCancel(parent)
+	f := &routerVPNServerChainFront{ctx: ctx, cancel: cancel, peer: peer, routes: byUser, authenticator: auth.NewAuthenticator(users), current: current, resolve: resolve, dial: dial, packet: packet, originals: make(map[io.Closer]bool), accepted: make(chan struct{}), joined: make(chan struct{}), closeGate: make(chan struct{}, 1)}
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", net.JoinHostPort(capture.Host, strconv.Itoa(capture.Request.Port)))
+	if err != nil {
+		cancel()
+		return nil, errServerChainFront
+	}
+	f.startListener(listener)
+	return f, nil
+}
+func (f *routerVPNServerChainFront) startListener(listener net.Listener) {
+	f.listener = listener
+	f.interrupted = make(chan struct{})
+	f.stopInterrupt = context.AfterFunc(f.ctx, func() {
+		defer close(f.interrupted)
+		_ = f.listener.Close()
+		f.mu.Lock()
+		owners := make([]io.Closer, 0, len(f.originals))
+		for original := range f.originals {
+			owners = append(owners, original)
+		}
+		f.mu.Unlock()
+		for _, original := range owners {
+			if bounded, ok := original.(interface{ SetDeadline(time.Time) error }); ok {
+				_ = bounded.SetDeadline(time.Now())
+			}
+		}
+	})
+	go f.accept()
+}
+func (f *routerVPNServerChainFront) Current() bool {
+	if f == nil || f.ctx.Err() != nil {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.listener != nil && !f.retiring
+}
+func (f *routerVPNServerChainFront) TrafficAllowed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.enabled && !f.retiring && f.ctx.Err() == nil
+}
+func (f *routerVPNServerChainFront) Enable() error {
+	if !f.current() {
+		return errServerChainFront
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.retiring || f.ctx.Err() != nil || f.enabled {
+		return errServerChainFront
+	}
+	f.enabled = true
+	return nil
+}
+func (f *routerVPNServerChainFront) allowed() bool {
+	f.mu.Lock()
+	ok := f.enabled && !f.retiring && f.ctx.Err() == nil
+	f.mu.Unlock()
+	return ok && f.current()
+}
+func (f *routerVPNServerChainFront) retain(original io.Closer) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Acquisition may finish after retirement. Retain that exact resource
+	// even though it has no permission to forward; failed Close must retry.
+	f.originals[original] = true
+	return !f.retiring && f.ctx.Err() == nil
+}
+func (f *routerVPNServerChainFront) release(original io.Closer) error {
+	return f.releaseContext(context.Background(), original)
+}
+func (f *routerVPNServerChainFront) releaseContext(ctx context.Context, original io.Closer) error {
+	var err error
+	if owned, ok := original.(interface{ CloseContext(context.Context) error }); ok {
+		err = owned.CloseContext(ctx)
+	} else {
+		err = original.Close()
+	}
+	if err == nil || errors.Is(err, net.ErrClosed) {
+		f.mu.Lock()
+		delete(f.originals, original)
+		f.mu.Unlock()
+		return nil
+	}
+	return err
+}
+func (f *routerVPNServerChainFront) accept() {
+	defer close(f.accepted)
+	for {
+		conn, err := f.listener.Accept()
+		if err != nil {
+			return
+		}
+		source := M.SocksaddrFromNet(conn.RemoteAddr()).Unwrap()
+		if source.Addr != f.peer || !f.allowed() {
+			_ = conn.Close()
+			continue
+		}
+		f.mu.Lock()
+		if f.retiring || !f.enabled || len(f.originals) >= 1024 {
+			f.mu.Unlock()
+			_ = conn.Close()
+			continue
+		}
+		f.originals[conn] = true
+		f.workers.Add(1)
+		f.mu.Unlock()
+		go func() {
+			defer f.workers.Done()
+			defer f.release(conn)
+			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+			reader := bufio.NewReader(conn)
+			version, err := reader.Peek(1)
+			if err != nil || version[0] != 5 || !f.allowed() {
+				return
+			}
+			_ = socks.HandleConnectionEx(f.ctx, conn, reader, f.authenticator, f, f, 0, source, nil)
+		}()
+	}
+}
+func (f *routerVPNServerChainFront) ListenPacket(net.ListenConfig, context.Context, string, string) (net.PacketConn, error) {
+	return nil, errors.New("ordered front requires captured UoT version 2")
+}
+func (f *routerVPNServerChainFront) NewPacketConnectionEx(_ context.Context, conn N.PacketConn, _ M.Socksaddr, _ M.Socksaddr, onClose N.CloseHandlerFunc) {
+	_ = conn.Close()
+	if onClose != nil {
+		onClose(errServerChainFront)
+	}
+}
+func (f *routerVPNServerChainFront) NewConnectionEx(ctx context.Context, conn net.Conn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	var failure error = errServerChainFront
+	defer func() {
+		if onClose != nil {
+			onClose(failure)
+		}
+	}()
+	username, ok := auth.UserFromContext[string](ctx)
+	route, found := f.routes[username]
+	if !ok || !found || source.Addr != f.peer || !f.allowed() {
+		_ = conn.Close()
+		return
+	}
+	if destination.Fqdn == uot.MagicAddress {
+		if !route.Final || route.UDPOverTCPVersion != 2 {
+			return
+		}
+		request, err := uot.ReadRequest(conn)
+		if err != nil {
+			return
+		}
+		if conn.SetDeadline(time.Time{}) != nil {
+			return
+		}
+		failure = f.forwardPackets(ctx, uot.NewConn(conn, *request), route)
+		return
+	}
+	if destination.Fqdn == uot.LegacyMagicAddress {
+		return
+	}
+	destination, err := f.resolve(ctx, route, "tcp", destination)
+	if err != nil || !route.AllowsDestination("tcp", destination.String()) || !f.allowed() {
+		return
+	}
+	remote, err := f.dial(ctx, route.Tag, "tcp", destination)
+	if err != nil {
+		return
+	}
+	if !f.retain(remote) {
+		_ = f.release(remote)
+		return
+	}
+	defer f.release(remote)
+	if conn.SetDeadline(time.Time{}) != nil || !f.allowed() {
+		return
+	}
+	if N.ReportConnHandshakeSuccess(conn, remote) != nil {
+		return
+	}
+	failure = B.CopyConn(ctx, conn, remote)
+}
+
+// Every packet is checked against the original credential and policy after
+// selected-DNS resolution. Native replies must match a tuple actually sent by
+// this original flow; an unsolicited remote tuple is never forwarded.
+func (f *routerVPNServerChainFront) forwardPackets(ctx context.Context, source N.PacketConn, route mobilemultihop.NodeChainServerFrontRoute) error {
+	first := buf.NewPacket()
+	destination, err := source.ReadPacket(first)
+	if err != nil {
+		first.Release()
+		return err
+	}
+	destination, err = f.resolve(ctx, route, "udp", destination)
+	if err != nil || !route.AllowsDestination("udp", destination.String()) || !f.allowed() {
+		first.Release()
+		return errServerChainFront
+	}
+	raw, err := f.packet(ctx, route.Tag, destination)
+	if err != nil {
+		first.Release()
+		return err
+	}
+	if !f.retain(raw) {
+		first.Release()
+		_ = f.release(raw)
+		return errServerChainFront
+	}
+	defer f.release(raw)
+	remote := B.NewPacketConn(raw)
+	tracked := &routerVPNServerChainPackets{PacketConn: remote, front: f, route: route, ctx: ctx, sent: map[string]bool{}}
+	if err = tracked.WritePacket(first, destination); err != nil {
+		return err
+	}
+	// CopyPacketConn joins both native packet directions after cancellation and
+	// closes both original endpoints before returning to the front worker.
+	return B.CopyPacketConn(ctx, source, tracked)
+}
+
+type routerVPNServerChainPackets struct {
+	N.PacketConn
+	front *routerVPNServerChainFront
+	route mobilemultihop.NodeChainServerFrontRoute
+	ctx   context.Context
+	mu    sync.Mutex
+	sent  map[string]bool
+}
+
+func (p *routerVPNServerChainPackets) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
+	destination, err := p.front.resolve(p.ctx, p.route, "udp", destination)
+	if err != nil || !p.route.AllowsDestination("udp", destination.String()) || !p.front.allowed() {
+		buffer.Release()
+		return errServerChainFront
+	}
+	p.mu.Lock()
+	if len(p.sent) >= 256 && !p.sent[destination.String()] {
+		p.mu.Unlock()
+		buffer.Release()
+		return errServerChainFront
+	}
+	p.sent[destination.String()] = true
+	p.mu.Unlock()
+	return p.PacketConn.WritePacket(buffer, destination)
+}
+func (p *routerVPNServerChainPackets) ReadPacket(buffer *buf.Buffer) (M.Socksaddr, error) {
+	destination, err := p.PacketConn.ReadPacket(buffer)
+	if err != nil {
+		return M.Socksaddr{}, err
+	}
+	p.mu.Lock()
+	sent := p.sent[destination.String()]
+	p.mu.Unlock()
+	if !sent || !p.front.allowed() {
+		return M.Socksaddr{}, errServerChainFront
+	}
+	return destination, nil
+}
+func (f *routerVPNServerChainFront) Close(ctx context.Context) error {
+	if f == nil {
+		return nil
+	}
+	if ctx == nil {
+		return errServerChainFront
+	}
+	select {
+	case f.closeGate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-f.closeGate }()
+	f.mu.Lock()
+	f.retiring = true
+	f.enabled = false
+	originals := make([]io.Closer, 0, len(f.originals))
+	for original := range f.originals {
+		originals = append(originals, original)
+	}
+	f.mu.Unlock()
+	f.cancel()
+	if !f.stopInterrupt() {
+		select {
+		case <-f.interrupted:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if err := f.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return errServerChainFront
+	}
+	for _, original := range originals {
+		_ = f.releaseContext(ctx, original)
+	}
+	select {
+	case <-f.accepted:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	f.joinOnce.Do(func() { go func() { f.workers.Wait(); close(f.joined) }() })
+	select {
+	case <-f.joined:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	f.mu.Lock()
+	remaining := len(f.originals)
+	f.mu.Unlock()
+	if remaining != 0 {
+		return errServerChainFront
+	}
+	return nil
+}

@@ -33,7 +33,7 @@ type relayTorExecRunner struct {
 	binary   *mobiletor.ServerTorBinary
 }
 
-func installedRelayRunner(cfg multihoprelay.Config, node string) (multihoprelay.Runner, error) {
+func installedTorRelayRunner(cfg multihoprelay.Config, node string) (multihoprelay.Runner, error) {
 	if len(cfg.TorExits) == 0 {
 		return relayExecRunner{}, nil
 	}

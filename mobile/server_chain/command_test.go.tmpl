@@ -1,0 +1,241 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+)
+
+func serverChainCommandCapture(t *testing.T) multihoprelay.NodeChainCapture {
+	t.Helper()
+	source := multihoprelay.NodeChainDescriptor{Schema: 1, EntryID: "original", EntryNodeID: strings.Repeat("1", 64), EntryMode: "wg", SourceSHA256: strings.Repeat("2", 64), DNSPolicySHA256: strings.Repeat("3", 64), Members: []multihoprelay.NodeChainMember{{Position: 1, ProfileID: "suffix", NodeID: strings.Repeat("4", 64), Mode: "shadowsocks", StartLayer: "off"}}}
+	descriptor, _ := source.Digest()
+	key, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{73}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := multihoprelay.NodeChainRequest{Schema: 1, SessionID: strings.Repeat("5", 32), EntryNodeID: source.EntryNodeID, SourceSHA256: source.SourceSHA256, DescriptorSHA256: descriptor, DNSPolicySHA256: source.DNSPolicySHA256, Epoch: strings.Repeat("6", 64), Peer: "10.77.0.2", AcquireExpiresAt: time.Now().Add(time.Minute).Unix(), LocalPacketPublicKeys: []string{base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())}, Port: 26240, Users: []multihoprelay.NodeChainUser{{Position: 1, Username: strings.Repeat("7", 48), Password: strings.Repeat("8", 48)}}}
+	c := multihoprelay.NodeChainCapture{Schema: 1, Request: q, Source: source, RegistrySHA256: descriptor, OwnerID: strings.Repeat("9", 64), Peer: q.Peer, Host: "10.77.0.1", BootstrapDeadline: time.Now().Add(time.Minute).UTC()}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+type serverChainCommandOwner struct {
+	capture multihoprelay.NodeChainCapture
+	fail    atomic.Bool
+	closed  atomic.Bool
+	begun   atomic.Int64
+	stops   atomic.Int64
+	calls   chan struct{}
+}
+
+func (o *serverChainCommandOwner) Begin() error { o.begun.Add(1); return nil }
+func (o *serverChainCommandOwner) Snapshot(ctx context.Context, nonce string) (multihoprelay.NodeChainReceipt, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) > time.Second {
+		return multihoprelay.NodeChainReceipt{}, errors.New("unbounded snapshot")
+	}
+	c := o.capture
+	digest, _ := c.Digest()
+	return multihoprelay.NodeChainReceipt{Schema: 1, SessionID: c.Request.SessionID, OwnerID: c.OwnerID, Peer: c.Peer, SourceSHA256: c.Source.SourceSHA256, RegistrySHA256: c.RegistrySHA256, DNSPolicySHA256: c.Source.DNSPolicySHA256, CaptureSHA256: digest, Nonce: nonce, Sequence: 1, HeartbeatAt: time.Now().UnixMilli(), Phase: multihoprelay.NodeChainPending, FrontReady: true}, nil
+}
+func (o *serverChainCommandOwner) Close(ctx context.Context) error {
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) > 8*time.Second {
+		return errors.New("unbounded close")
+	}
+	o.stops.Add(1)
+	if o.fail.Load() {
+		if o.calls != nil {
+			select {
+			case o.calls <- struct{}{}:
+			default:
+			}
+		}
+		return errors.New("original join pending")
+	}
+	o.closed.Store(true)
+	return nil
+}
+func serverChainCommandDirectory(t *testing.T, capture multihoprelay.NodeChainCapture) string {
+	t.Helper()
+	directory := filepath.Join(t.TempDir(), "lease")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(capture)
+	if err := os.WriteFile(filepath.Join(directory, "node-chain-capture.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+func TestServerChainCommandPendingAndRetryingOriginalStop(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		t.Run(map[bool]string{false: "native-owner", true: "partial-construction"}[partial], func(t *testing.T) {
+			c := serverChainCommandCapture(t)
+			directory := serverChainCommandDirectory(t, c)
+			owner := &serverChainCommandOwner{capture: c}
+			owner.fail.Store(true)
+			input, write := io.Pipe()
+			read, output := io.Pipe()
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() {
+				done <- routerVPNRunNodeChainRelay(ctx, directory, input, output, func(context.Context, *os.Root, string, multihoprelay.NodeChainCapture) (routerVPNNodeChainRelayOwner, error) {
+					if partial {
+						return owner, errors.New("private source construction failed")
+					}
+					return owner, nil
+				})
+				_ = output.Close()
+			}()
+			t.Cleanup(func() { owner.fail.Store(false); cancel(); _ = write.Close(); _ = read.Close() })
+			digest, _ := c.Digest()
+			encoder := json.NewEncoder(write)
+			scanner := bufio.NewScanner(read)
+			call := func(operation string) multihoprelay.NodeChainIPCResponse {
+				t.Helper()
+				if err := encoder.Encode(multihoprelay.NodeChainIPCRequest{Schema: 1, Operation: operation, Nonce: strings.Repeat("a", 64), CaptureSHA256: digest}); err != nil {
+					t.Fatal(err)
+				}
+				if !scanner.Scan() {
+					t.Fatal("original response missing", scanner.Err())
+				}
+				response, err := multihoprelay.DecodeNodeChainIPCResponse(scanner.Bytes())
+				if err != nil {
+					t.Fatal(err)
+				}
+				return response
+			}
+			response := call("snapshot")
+			if response.OK == partial || !partial && (response.Receipt == nil || response.Receipt.TrafficAllowed) {
+				t.Fatal("partial/pending state exposed traffic")
+			}
+			response = call("stop")
+			if response.OK || owner.closed.Load() {
+				t.Fatal("failed original close acknowledged")
+			}
+			owner.fail.Store(false)
+			response = call("stop")
+			if !response.OK || !owner.closed.Load() {
+				t.Fatal("original close retry did not join")
+			}
+			if !scanner.Scan() {
+				t.Fatal("terminal original receipt missing")
+			}
+			terminal, err := multihoprelay.DecodeNodeChainIPCResponse(scanner.Bytes())
+			if err != nil || terminal.Operation != "closed" || terminal.Nonce != c.OwnerID || terminal.CaptureSHA256 != digest {
+				t.Fatal("terminal receipt lost original capture", err)
+			}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("command did not join")
+			}
+			if partial && owner.begun.Load() != 0 {
+				t.Fatal("partial source acquired bootstrap")
+			}
+		})
+	}
+}
+func TestServerChainCommandEOFWithholdsUntilOriginalJoin(t *testing.T) {
+	c := serverChainCommandCapture(t)
+	directory := serverChainCommandDirectory(t, c)
+	owner := &serverChainCommandOwner{capture: c, calls: make(chan struct{}, 1)}
+	owner.fail.Store(true)
+	read, output := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		done <- routerVPNRunNodeChainRelay(t.Context(), directory, strings.NewReader(""), output, func(context.Context, *os.Root, string, multihoprelay.NodeChainCapture) (routerVPNNodeChainRelayOwner, error) {
+			return owner, nil
+		})
+		_ = output.Close()
+	}()
+	receipt := make(chan []byte, 1)
+	go func() { raw, _ := io.ReadAll(read); receipt <- raw }()
+	defer read.Close()
+	defer owner.fail.Store(false)
+	select {
+	case <-owner.calls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("EOF did not retain original close")
+	}
+	select {
+	case <-done:
+		t.Fatal("failed original close let the worker exit")
+	case <-receipt:
+		t.Fatal("failed original close emitted terminal ACK")
+	default:
+	}
+	owner.fail.Store(false)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("same original cleanup did not finish")
+	}
+	raw := <-receipt
+	terminal, err := multihoprelay.DecodeNodeChainIPCResponse(bytes.TrimSpace(raw))
+	if err != nil || terminal.Operation != "closed" || terminal.Nonce != c.OwnerID {
+		t.Fatal("EOF terminal receipt was not original", err)
+	}
+}
+func TestServerChainCommandAmbiguousCaptureNeverCreatesOwner(t *testing.T) {
+	for _, mode := range []string{"duplicate", "null", "alias", "foreign-request", "linked-capture"} {
+		t.Run(mode, func(t *testing.T) {
+			c := serverChainCommandCapture(t)
+			directory := serverChainCommandDirectory(t, c)
+			path := filepath.Join(directory, "node-chain-capture.json")
+			raw, _ := os.ReadFile(path)
+			switch mode {
+			case "duplicate":
+				raw = bytes.Replace(raw, []byte(`"schema":1`), []byte(`"schema":1,"schema":1`), 1)
+			case "null":
+				raw = []byte(`null`)
+			case "alias":
+				raw = bytes.Replace(raw, []byte(`"owner_id"`), []byte(`"Owner_ID"`), 1)
+			case "foreign-request":
+				raw = bytes.Replace(raw, []byte(`"listen_port":26240`), []byte(`"listen_port":0`), 1)
+			case "linked-capture":
+				target := filepath.Join(t.TempDir(), "foreign.json")
+				if os.WriteFile(target, raw, 0600) != nil || os.Remove(path) != nil || os.Symlink(target, path) != nil {
+					t.Fatal("fixture symlink")
+				}
+			}
+			if mode != "linked-capture" {
+				if err := os.WriteFile(path, raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			called := false
+			var output bytes.Buffer
+			err := routerVPNRunNodeChainRelay(t.Context(), directory, strings.NewReader(""), &output, func(context.Context, *os.Root, string, multihoprelay.NodeChainCapture) (routerVPNNodeChainRelayOwner, error) {
+				called = true
+				return nil, nil
+			})
+			if err == nil || called || output.Len() != 0 {
+				t.Fatal("ambiguous staged capture acquired or acknowledged an owner")
+			}
+		})
+	}
+}

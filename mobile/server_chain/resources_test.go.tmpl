@@ -1,0 +1,119 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"net"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type serverChainHeldClose struct {
+	entered, release chan struct{}
+	attempts         atomic.Int64
+	fail             atomic.Bool
+}
+
+func (c *serverChainHeldClose) Close() error {
+	if c.attempts.Add(1) == 1 {
+		close(c.entered)
+		<-c.release
+	}
+	if c.fail.Load() {
+		return errors.New("original close remains pending")
+	}
+	return nil
+}
+func TestServerChainNativeCloseDeadlineRetainsOriginalAttempt(t *testing.T) {
+	n := &routerVPNServerChain{}
+	original := &serverChainHeldClose{entered: make(chan struct{}), release: make(chan struct{})}
+	owner := n.trackClose(original)
+	ctx, cancel := context.WithCancel(t.Context())
+	first := make(chan error, 1)
+	go func() { first <- owner.CloseContext(ctx) }()
+	<-original.entered
+	cancel()
+	if err := <-first; !errors.Is(err, context.Canceled) {
+		t.Fatal("caller expiry did not bound original close", err)
+	}
+	n.connectionsMu.Lock()
+	retained := n.connections[owner]
+	n.connectionsMu.Unlock()
+	if !retained || original.attempts.Load() != 1 {
+		t.Fatal("expired close discarded or replaced original callback")
+	}
+	secondCtx, stop := context.WithTimeout(t.Context(), 2*time.Second)
+	defer stop()
+	second := make(chan error, 1)
+	go func() { second <- n.drainConnections(secondCtx) }()
+	close(original.release)
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+	if original.attempts.Load() != 1 {
+		t.Fatal("concurrent retry issued a second native Close")
+	}
+	if err := owner.CloseContext(secondCtx); err != nil || original.attempts.Load() != 1 {
+		t.Fatal("completed original close was not memoized", err)
+	}
+}
+func TestServerChainNativeCloseErrorRetriesSameObject(t *testing.T) {
+	owned, retire := context.WithCancel(t.Context())
+	defer retire()
+	n := &routerVPNServerChain{ctx: owned, cancel: retire}
+	original := &serverChainHeldClose{entered: make(chan struct{}), release: make(chan struct{})}
+	original.fail.Store(true)
+	close(original.release)
+	owner := n.trackClose(original)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := owner.CloseContext(ctx); err == nil {
+		t.Fatal("failed original close was accepted")
+	}
+	n.connectionsMu.Lock()
+	retained := n.connections[owner]
+	n.connectionsMu.Unlock()
+	if !retained {
+		t.Fatal("failed original native resource was discarded")
+	}
+	if owned.Err() == nil {
+		t.Fatal("failed native Close did not retire traffic")
+	}
+	original.fail.Store(false)
+	if err := n.drainConnections(ctx); err != nil {
+		t.Fatal("same original failed close could not retry", err)
+	}
+	if original.attempts.Load() != 2 {
+		t.Fatal("native retry substituted original object")
+	}
+}
+func TestServerChainNativeUnreturnedTCPAndPacketRemainOwned(t *testing.T) {
+	n := &routerVPNServerChain{}
+	left, right := net.Pipe()
+	defer right.Close()
+	conn := n.trackConnection(left)
+	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp := n.trackPacketConnection(packet)
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	_ = conn.CloseContext(cancelled)
+	_ = udp.CloseContext(cancelled)
+	// The actual sockets were captured before the late cancellation check. A
+	// cancelled immediate close may finish asynchronously; drain joins it either
+	// way, without inventing a successful result or reconstructing the socket.
+	ctx, stop := context.WithTimeout(t.Context(), 2*time.Second)
+	defer stop()
+	if err := n.drainConnections(ctx); err != nil {
+		t.Fatal("original late-return resources did not drain", err)
+	}
+	if _, err := conn.Write([]byte("retired")); err == nil {
+		t.Fatal("retired original stream remained writable")
+	}
+	if _, err := udp.WriteTo([]byte("retired"), udp.LocalAddr()); err == nil {
+		t.Fatal("retired original packet socket remained writable")
+	}
+}

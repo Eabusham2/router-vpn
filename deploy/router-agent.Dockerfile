@@ -77,6 +77,11 @@ RUN python3 /routervpn-source/deploy/prepare-relay-core.py /core /xray-core \
       go test -mod=mod -tags with_quic,with_wireguard,with_gvisor,with_openvpn,routervpn_native_pq,with_naive_outbound,with_musl \
       -ldflags='-checklinkname=0 -linkmode external -extldflags "-static" -s -w -X github.com/sagernet/sing-box/constant.Version=1.14.1-routervpn' \
       ./cmd/sing-box ./routervpn/servertor -run '^TestServerTor' -count=1 -timeout 90s \
+ && CGO_ENABLED=1 CGO_LDFLAGS='-fuse-ld=lld -L/pq-native' CC=clang CXX=clang++ \
+      python3 /routervpn-source/deploy/test_server_node_chain_native.py --core /core \
+      --tags with_quic,with_wireguard,with_gvisor,with_openvpn,routervpn_native_pq,with_naive_outbound,with_musl \
+      --ldflags='-checklinkname=0 -linkmode external -extldflags "-static" -s -w -X github.com/sagernet/sing-box/constant.Version=1.14.1-routervpn' \
+      --receipt /routervpn-server-node-chain-native.json \
  && CGO_ENABLED=1 CGO_LDFLAGS='-fuse-ld=lld -L/pq-native' CC=clang CXX=clang++ go build -mod=mod -trimpath -tags with_quic,with_wireguard,with_gvisor,with_openvpn,routervpn_native_pq,with_naive_outbound,with_musl \
       -ldflags='-checklinkname=0 -linkmode external -extldflags "-static" -s -w -X github.com/sagernet/sing-box/constant.Version=1.14.1-routervpn' \
       -o /usr/local/bin/sing-box ./cmd/sing-box \

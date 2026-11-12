@@ -1,0 +1,29 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+)
+
+// The selected resolver is the original actual transport, not a caller's name
+// or a copied readiness flag. This Box has no TUN or other listening inbound.
+func (s *Box) RouterVPNServerChainDNSProof(ctx context.Context, expected adapter.DNSTransport) error {
+	if s == nil || ctx == nil || ctx.Err() != nil || expected == nil || s.dnsRouter == nil || s.inbound == nil || s.dnsTransport == nil {
+		return errors.New("ordered server DNS owner is unavailable")
+	}
+	inbounds, err := adapter.RouterVPNInboundsContext(ctx, s.inbound)
+	if err != nil || len(inbounds) != 0 {
+		return errors.New("ordered server graph acquired an inbound")
+	}
+	actual, found, err := adapter.RouterVPNTransportContext(ctx, s.dnsTransport, expected.Tag())
+	if err != nil || !found || actual != expected {
+		return errors.New("ordered server resolver was replaced")
+	}
+	ctx = adapter.WithContext(ctx, &adapter.InboundContext{Inbound: "routervpn-server-chain-front", InboundType: "socks", Network: "tcp", Protocol: "dns"})
+	return routerVPNStrategyDNSExchange(ctx, func(ctx context.Context, question *dns.Msg, options adapter.DNSQueryOptions) (*dns.Msg, error) {
+		options.Transport = expected
+		return s.dnsRouter.Exchange(ctx, question, options)
+	})
+}
