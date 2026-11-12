@@ -149,16 +149,24 @@ MUTATIONS = (
      "TestRouterVPNNodeChainDarwinMeasurementStartup/result-regular",
      "preexisting ordered measurement mailbox reached native preparation"),
     ("ordinary-darwin-policy", "experimental/libbox/routervpn/mobilemultihop", "experimental/libbox/routervpn/mobilemultihop/desktop_node_ready.go",
-     'exact && chain != nil && meta.TargetOS == "darwin"',
-     '(exact || true) && (chain != nil || true) && meta.TargetOS == "darwin"',
+     '''switch original := policy.(type) {
+		case *DesktopNodeChainPolicy:
+			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
+		case *DesktopNodeChainExecutionPhysicalPolicy:
+			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
+		}''',
+     'interfaceValid = desktopNodeChainReadyInterface("darwin", r.InterfaceName)',
      "TestDesktopNodeReadyDarwinRequiresExactOrderedPolicy/ordinary-policy",
      "ordinary Darwin policy acquired ordered selected-DNS readiness"),
     ("foreign-ready-target", "experimental/libbox/routervpn/mobilemultihop", "experimental/libbox/routervpn/mobilemultihop/desktop_node_ready.go",
-     'exact && chain != nil && meta.TargetOS == "darwin"', 'exact && chain != nil && meta.TargetOS != ""',
+     'if meta.TargetOS == "darwin" {', 'if true {',
      "TestDesktopNodeReadyDarwinRequiresExactOrderedPolicy/windows-utun",
      "foreign target adopted Darwin interface shape"),
     ("foreign-ready-interface", "experimental/libbox/routervpn/mobilemultihop", "experimental/libbox/routervpn/mobilemultihop/desktop_node_ready.go",
-     'interfaceValid = desktopNodeChainReadyInterface("darwin", r.InterfaceName)', 'interfaceValid = true',
+     '''case *DesktopNodeChainPolicy:
+			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)''',
+     '''case *DesktopNodeChainPolicy:
+			interfaceValid = original != nil''',
      "TestDesktopNodeReadyDarwinRejectsForeignInterface/fixed",
      "Darwin selected-DNS readiness accepted a foreign interface"),
 )
