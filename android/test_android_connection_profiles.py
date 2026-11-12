@@ -896,10 +896,10 @@ def validate_general_inventory(actual):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary", "ordered-chain", "general-stores"), default="all")
+    parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary", "ordered-chain", "ordered-imported", "general-stores"), default="all")
     args = parser.parse_args()
     chain = None
-    if args.case_family in ("all", "ordered-chain"):
+    if args.case_family in ("all", "ordered-chain", "ordered-imported"):
         import test_android_node_chain_capture as chain
     jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
     if not jar.is_file():
@@ -944,8 +944,8 @@ def main():
         data.mkdir()
         env = os.environ.copy(); env["ROUTERVPN_PROFILE_COMPILER"] = str(compiler);env["ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-aes-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-xor-client.json")
         if chain:
-            chain.run(ROOT, work, app, classes, jar, env)
-            if args.case_family == "ordered-chain":
+            chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")
+            if args.case_family in ("ordered-chain", "ordered-imported"):
                 return
         # Each complete case family retains the original finite JVM budget.
         if args.case_family in ("all", "home-dns"):

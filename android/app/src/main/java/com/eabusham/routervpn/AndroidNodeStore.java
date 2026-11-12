@@ -88,8 +88,18 @@ final class AndroidNodeStore {
             if(importedGeneration!=AndroidStandardExitStore.publicationGeneration())throw new IllegalStateException("The imported node changed during capture.");
         }
         static void requireImported(AndroidStandardExitStore.Entry entry) throws Exception {
-            if(entry==null||!"shadowsocks".equals(entry.protocol)||!"2022-blake3-aes-256-gcm".equals(entry.method)
-                    ||entry.startLayer!=null||!"off".equals(entry.policy.optString("start_layer","off")))throw new IllegalStateException("This ordered custom position requires an original Shadowsocks 2022 node with Start Layer Off.");
+            if(entry==null||!"shadowsocks".equals(entry.protocol)
+                    ||entry.startLayer!=null||entry.policy!=null&&!"off".equals(entry.policy.optString("start_layer","off")))throw new IllegalStateException("This ordered custom position requires an original Shadowsocks 2022 node with Start Layer Off.");
+            int expected;
+            switch(entry.method) {
+                case "2022-blake3-aes-128-gcm":expected=16;break;
+                case "2022-blake3-aes-256-gcm":case "2022-blake3-chacha20-poly1305":expected=32;break;
+                default:throw new IllegalStateException("Choose AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305 Shadowsocks 2022 for the custom middle.");
+            }
+            byte[] key;
+            try { key=java.util.Base64.getDecoder().decode(entry.secret); }
+            catch(IllegalArgumentException invalid) { throw new IllegalStateException("The custom middle needs one original canonical base64 PSK.",invalid); }
+            if(key.length!=expected||!java.util.Base64.getEncoder().encodeToString(key).equals(entry.secret))throw new IllegalStateException("The custom middle PSK has the wrong length or encoding.");
             AndroidStandardExitStore.validate(entry);
             AndroidNumericAddress.parse(entry.server);
         }

@@ -409,8 +409,10 @@ public final class NodeChainCaptureHarness {
  }
 
  static void importedMiddle(Path root)throws Exception{
+  for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305")){
+  int keySize=method.equals("2022-blake3-aes-128-gcm")?16:32;
   Fixture f=new Fixture(root,"2/");AndroidStandardExitStore exits=new AndroidStandardExitStore(f.context);
-  AndroidStandardExitStore.Entry custom=new AndroidStandardExitStore.Entry();custom.id="1234567890abcdef1234567890abcdef";custom.name="Original custom middle";custom.protocol="shadowsocks";custom.server="198.51.100.76";custom.serverPort=443;custom.expectedPublicIp="203.0.113.76";custom.method="2022-blake3-aes-256-gcm";custom.secret=Base64.getEncoder().encodeToString(new byte[32]);custom.policy.put("dns_mode","rescue").put("start_layer","off");exits.save(custom);
+  AndroidStandardExitStore.Entry custom=new AndroidStandardExitStore.Entry();custom.id="1234567890abcdef1234567890abcdef";custom.name="Original custom middle";custom.protocol="shadowsocks";custom.server="198.51.100.76";custom.serverPort=443;custom.expectedPublicIp="203.0.113.76";custom.method=method;custom.secret=Base64.getEncoder().encodeToString(new byte[keySize]);custom.policy.put("dns_mode","rescue").put("start_layer","off");exits.save(custom);
   AndroidOrderedPathSelection editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);
   check(editor.prefixModes(custom.id).equals(List.of("shadowsocks")),"original imported middle not offered by editor");editor.addPrefix(custom.id,"shadowsocks");
   reject(()->editor.movePrefix(1,0),"imported source moved into physical first position");
@@ -418,21 +420,33 @@ public final class NodeChainCaptureHarness {
   try(AndroidNodeChainCapture capture=AndroidNodeChainCapture.compile(saved)){
    JSONObject launch=new JSONObject(capture.launchInput),middle=new JSONObject(capture.memberInputs.get(1));
    JSONObject profile=new JSONObject(middle.getString("capture")).getJSONObject("profile");
+   JSONObject ss=profile.getJSONObject("external").getJSONObject("shadowsocks");
+   check(ss.getString("method").equals(method)&&ss.getString("password").equals(custom.secret),"custom cipher or original PSK changed during native compilation");
    check(launch.getInt("schema")==2&&capture.identityInputs.get(1).isEmpty()&&middle.getString("kind").equals("routervpn-node-chain-imported-member"),"custom source did not retain typed schema2");
    check(profile.getString("id").equals(custom.id)&&profile.getString("node_kind").equals("external")&&!profile.has("node_proof_id")&&!profile.has("api_token")&&!profile.has("router_api"),"custom source forged private Router authority");
    try(AndroidNodeChainCapture replay=AndroidNodeChainCapture.reopen(capture.launchInput,saved)){check(replay.launchInput.equals(capture.launchInput),"custom middle replay changed original source");}
   }
   var row=f.profiles.add("Original custom middle route");String serialized=Files.readString(f.rows);check(!serialized.contains(custom.secret)&&!serialized.contains("api_token"),"saved custom route copied credentials");
-  f.profiles.load(row.id);check(f.profiles.currentOrderedPath().members.get(1).imported,"saved profile lost imported member");
+  f.profiles.load(row.id);check(f.profiles.currentOrderedPath().members.get(1).imported&&f.profiles.currentOrderedPath().members.get(1).external().method.equals(method),"saved profile lost imported member or selected cipher");
   AndroidNodeStore.ChainCapture live=f.profiles.currentOrderedPath();AndroidOrderedPathSelection stale=new AndroidOrderedPathSelection(f.nodes,f.profiles);
   String original=custom.name;custom.name="Replaced";exits.save(custom);custom.name=original;exits.save(custom);
   reject(live::requireCurrent,"imported change-away/back revived old native source");reject(stale::save,"imported change-away/back revived old editor");
   AndroidStandardExitStore.Entry changed=AndroidStandardExitStore.copy(custom);changed.method="aes-256-gcm";reject(()->AndroidNodeStore.ChainSource.requireImported(changed),"legacy SS admitted as custom middle");
   changed.method=custom.method;changed.server="example.com";reject(()->AndroidNodeStore.ChainSource.requireImported(changed),"hostname middle bypassed literal source bound");
+  changed.server=custom.server;
+  for(String secret:List.of(Base64.getEncoder().encodeToString(new byte[keySize==16?32:16]),Base64.getEncoder().encodeToString(new byte[keySize+1]),custom.secret.replace("=",""),custom.secret+":"+custom.secret,"invalid!")){
+   changed.secret=secret;reject(()->AndroidNodeStore.ChainSource.requireImported(changed),"invalid single PSK shown as ordered eligible");
+  }
+  changed.secret=custom.secret;
+  for(String server:List.of(":","2001:db8:::1","2001:db8::1::2","192.168.001.1")){
+   changed.server=server;reject(()->AndroidNodeStore.ChainSource.requireImported(changed),"malformed literal shown as ordered eligible");
+  }
+  changed.server="2001:db8::76";AndroidNodeStore.ChainSource.requireImported(changed);check(true,"strict IPv6 custom source eligibility");
+  }
  }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";
-  if(family.equals("imported")){importedMiddle(root);return;}
+  if(family.equals("imported")){importedMiddle(root);System.out.println("Android imported ordered methods: "+checks+" shipping Java/shared Go checks passed");return;}
   if(family.equals("source")){sourceControls(root);return;}if(family.equals("generation")){generationControls(root);return;}
   if(family.equals("atomic")){captureAtomicity(root);return;}
   if(family.equals("restore")){roundtrip(root,"3/");return;}
@@ -501,7 +515,7 @@ static String call(String...args)throws Exception{''')
     boundaries.write_text(source)
 
 
-def run(root, work, app, classes, jar, env):
+def run(root, work, app, classes, jar, env, imported_only=False):
     generator = work / "android_chain_fixture_test.go"
     generator.write_text(GENERATOR)
     overlay = work / "chain-fixture-overlay.json"
@@ -512,7 +526,7 @@ def run(root, work, app, classes, jar, env):
     data = work / "ordered-data"
     data.mkdir()
     command = ["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.NodeChainCaptureHarness", str(data)]
-    subprocess.run(command, env=env, check=True, timeout=180)
+    subprocess.run(command + (["imported"] if imported_only else []), env=env, check=True, timeout=180)
     node = (app / "AndroidNodeStore.java").read_text()
     store = (app / "AndroidConnectionProfileStore.java").read_text()
     permission = (app / "AndroidConnectionSelection.java").read_text()
@@ -531,6 +545,7 @@ def run(root, work, app, classes, jar, env):
     stage = store[stage_start:stage_end]
     assert stage.count("for(int i=0;i<members.length();i++)") == 1
     controls = (
+        ("imported", "AndroidNodeStore", node.replace('if(key.length!=expected||!java.util.Base64.getEncoder().encodeToString(key).equals(entry.secret))', 'if(false)'), "invalid single PSK shown as ordered eligible"),
         ("imported", "AndroidNodeStore", node.replace("source.importedGeneration!=AndroidStandardExitStore.publicationGeneration()", "false"), "imported change-away/back revived old native source"),
         ("native-identity", "AndroidNodeChainCapture", capture.replace('record.getJSONArray("identity_sources")', 'record.has("identity_sources")?record.getJSONArray("identity_sources"):new JSONArray(identityInputs)'), "Android accepted a different native identity inventory: missing"),
         ("native-identity", "AndroidNodeChainCapture", capture.replace('if(!identityInputs.get(i).equals(returnedIdentities.getString(i)))', 'if(false)'), "Android accepted a different native identity inventory: replaced"),
@@ -557,6 +572,8 @@ def run(root, work, app, classes, jar, env):
     )
     assert node.count(source_guard) == node.count(epoch_guard) == node.count(capture_lock) == 1
     for index, (family, name, changed, witness) in enumerate(controls):
+        if imported_only and family != "imported":
+            continue
         control_id = f"{index}-{family}"
         negative = work / ("ordered-negative-" + control_id)
         shutil.copytree(classes, negative)

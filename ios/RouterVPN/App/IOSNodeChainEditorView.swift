@@ -61,7 +61,7 @@ struct IOSNodeChainEditorView: View {
                 Button("Add preceding node") { change { try draft.append() } }.disabled(draft.nodes.count >= IOSMultihopNodeSelection.maximumNodes)
             }
             Section("Local execution") {
-                Text("Traffic follows this order through one VPN connection. Paired preceding nodes use WireGuard or AWG2. A three-node route may use one saved literal Shadowsocks 2022 AES-256-GCM custom node in the middle, with Start Layer Off. The selected final Router node uses Shadowsocks 2022.")
+                Text("Traffic follows this order through one VPN connection. Paired preceding nodes use WireGuard or AWG2. A three-node route may use one saved literal Shadowsocks 2022 custom node (AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305) in the middle, with Start Layer Off. The selected final Router node uses Shadowsocks 2022.")
                 Text("Each node keeps its own saved credentials, Start Layer and protection settings. DNS uses the final node. Every node must pass verification before Connected.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Save ordered route") {

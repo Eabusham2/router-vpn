@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 
 struct VPNMode: Identifiable, Codable, Hashable {
     let id: String
@@ -981,17 +986,18 @@ enum IOSImportedShadowsocksSource {
     static func eligible(_ profile: RouterProfile) -> Bool {
         guard profile.normalizedNodeKind == "external", let external = profile.external,
               external.protocolName == "shadowsocks", let ss = external.shadowsocks,
-              ss.method == "2022-blake3-aes-256-gcm", !ss.password.contains(":"),
-              let key = Data(base64Encoded: ss.password), key.count == 32, key.base64EncodedString() == ss.password,
+              let keySize = ["2022-blake3-aes-128-gcm":16, "2022-blake3-aes-256-gcm":32, "2022-blake3-chacha20-poly1305":32][ss.method],
+              !ss.password.contains(":"), let key = Data(base64Encoded: ss.password),
+              key.count == keySize, key.base64EncodedString() == ss.password,
               external.startLayer == nil, [nil,"","off"].contains(profile.startLayer),
               profile.nodeProofID == nil || profile.nodeProofID == "", profile.routerAPI.isEmpty, profile.apiToken.isEmpty else { return false }
         // Literal-only admission never consults the device resolver.
         return literal(ss.server)
     }
     private static func literal(_ host: String) -> Bool {
-        if host.contains(":") { return !host.contains("%") && host.range(of:"\\A[0-9A-Fa-f:]+\\z",options:.regularExpression) != nil }
-        let parts=host.split(separator:".",omittingEmptySubsequences:false)
-        return parts.count==4 && parts.allSatisfy{ part in !part.isEmpty && part.count<=3 && part.allSatisfy(\.isNumber) && (part.count==1 || part.first != "0") && UInt8(part) != nil }
+        guard !host.utf8.contains(0) else { return false }
+        var v4 = in_addr(), v6 = in6_addr()
+        return inet_pton(AF_INET, host, &v4) == 1 || inet_pton(AF_INET6, host, &v6) == 1
     }
     static func capture(_ profile: RouterProfile) throws -> (config: String, capture: String) {
         guard let external=profile.external, external.protocolName=="shadowsocks", let ss=external.shadowsocks else { throw IOSMultihopNodeSelection.issue("The original imported Shadowsocks source is missing.") }

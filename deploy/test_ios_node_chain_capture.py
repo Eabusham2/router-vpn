@@ -141,12 +141,13 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
  catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
  static func run()throws {
 
+  for (method,keySize) in [("2022-blake3-aes-128-gcm",16),("2022-blake3-aes-256-gcm",32),("2022-blake3-chacha20-poly1305",32)] {
   var imported = try sources(3)
   var middle = try object(imported[1]), custom = try profile(imported[1])
   custom["id"]="original-custom-middle";custom["name"]="Original custom middle";custom["node_kind"]="external";custom.removeValue(forKey:"node_proof_id")
   for key in ["router_api","api_token","adguard_ipv6","socks_host","socks_username","socks_password"] { custom[key]="" }
   custom["socks_port"]=0
-  custom["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":"198.51.100.76","port":443,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:0,count:32).base64EncodedString()]]
+  custom["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":"198.51.100.76","port":443,"method":method,"password":Data(repeating:0,count:keySize).base64EncodedString()]]
   middle["selectedRouterID"]="original-custom-middle";middle["routerProfiles"]=[custom];middle["profiles"]=[String:[String:String]]()
   imported[1]=try data(middle)
   imported[2]=try editProfile(imported[2]) { final in var refs=final["multihop_nodes"] as! [[String:Any]];refs[1]=["id":"original-custom-middle","mode":"shadowsocks"];final["multihop_nodes"]=refs }
@@ -155,6 +156,8 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
   try check("custom middle keeps external source and empty paired identity",receipt["schema"] as? Int == 2 && (receipt["identity_sources"] as? [String])?[1] == "" && complete.members[1].profile["node_kind"] as? String == "external" && complete.members[1].profile["node_proof_id"] == nil)
   let reopened = try IOSNodeChainCapture.reopen(complete.launchInput,selectedProfile:profile(imported[2]));defer{try? reopened.plan.close()}
   try check("typed external original source replays",reopened.launchInput == complete.launchInput)
+  let actualExternal=complete.members[1].profile["external"] as! [String:Any], actualSS=actualExternal["shadowsocks"] as! [String:Any]
+  try check("native source retains exact cipher and original PSK",actualSS["method"] as? String == method && actualSS["password"] as? String == Data(repeating:0,count:keySize).base64EncodedString())
   for fault in ["private-token","proof","hostname","legacy","layer"] {
    var changed=imported
    changed[1]=try editProfile(changed[1]) { p in
@@ -164,6 +167,19 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
     if fault=="hostname" || fault=="legacy" {var ext=p["external"] as! [String:Any];var ss=ext["shadowsocks"] as! [String:Any];ss[fault=="hostname" ? "server":"method"]=fault=="hostname" ? "example.com":"aes-256-gcm";ext["shadowsocks"]=ss;p["external"]=ext}
    }
    try reject("custom intermediate "+fault){_ = try IOSNodeChainCapture.compile(bundles:changed)}
+  }
+  let typed=try JSONDecoder().decode(RouterProfile.self,from:JSONSerialization.data(withJSONObject:custom))
+  try check("supported custom cipher offered \(method)",IOSImportedShadowsocksSource.eligible(typed))
+  for password in [Data(repeating:0,count:keySize == 16 ? 32 : 16).base64EncodedString(),Data(repeating:0,count:keySize+1).base64EncodedString(),Data(repeating:0,count:keySize).base64EncodedString().replacingOccurrences(of:"=",with:""),Data(repeating:0,count:keySize).base64EncodedString()+":"+Data(repeating:0,count:keySize).base64EncodedString(),"invalid!"] {
+   var changed=typed;changed.external?.shadowsocks?.password=password
+   try check("noncanonical or wrong-length PSK excluded \(method)",!IOSImportedShadowsocksSource.eligible(changed))
+  }
+  for host in [":","2001:db8:::1","2001:db8::1::2","[2001:db8::1]","192.168.001.1","198.51.100.76\u{0}other"] {
+   var changed=typed;changed.external?.shadowsocks?.server=host
+   try check("malformed literal excluded \(host)",!IOSImportedShadowsocksSource.eligible(changed))
+  }
+  var v6=typed;v6.external?.shadowsocks?.server="2001:db8::76"
+  try check("strict IPv6 source offered",IOSImportedShadowsocksSource.eligible(v6))
   }
   for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
    let bundles=try sources(4,layer,true),capture=try IOSNodeChainCapture.compile(bundles:bundles)

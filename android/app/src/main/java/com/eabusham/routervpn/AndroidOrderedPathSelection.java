@@ -66,7 +66,7 @@ final class AndroidOrderedPathSelection {
 
     static String prefixModeTitle(String mode) {
         switch(mode) {
-            case "shadowsocks":return "Custom Shadowsocks 2022 (AES-256-GCM)";
+            case "shadowsocks":return "Custom Shadowsocks 2022";
             case "wg":return "WireGuard";
             case "awg2-fast":return "AmneziaWG Fast";
             case "awg2-strong":return "AmneziaWG Strong";

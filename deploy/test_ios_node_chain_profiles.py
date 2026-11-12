@@ -188,21 +188,23 @@ func failure(_ text:String)->NSError{NSError(domain:"AppleChainProfiles",code:1,
  }
 
  static func importedRoundtrip()throws {
+  for (method,keySize) in [("2022-blake3-aes-128-gcm",16),("2022-blake3-aes-256-gcm",32),("2022-blake3-chacha20-poly1305",32)] {
   let(model,ids)=try setup(3),store=IOSNodeBundleStore.shared
   var middle=try stored(ids[1]),profile=middle.routerProfiles[0]
   profile.nodeKind="external";profile.nodeProofID=nil;profile.routerAPI="";profile.apiToken="";profile.startLayer="off";profile.dnsMode="rescue"
-  let source:[String:Any] = ["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":"198.51.100.76","port":443,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:0,count:32).base64EncodedString()]]
+  let source:[String:Any] = ["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":"198.51.100.76","port":443,"method":method,"password":Data(repeating:0,count:keySize).base64EncodedString()]]
   profile.external=try JSONDecoder().decode(ExternalNodeConfig.self,from:JSONSerialization.data(withJSONObject:source))
   middle.routerProfiles=[profile];middle.profiles=[:];try store.save(middle)
   var final=model.bundle!;final.routerProfiles[0].multihopNodes![1].mode="shadowsocks";try store.save(final);model.bundle=try stored(ids.last!)
   let saved=try IOSConnectionProfileStore.add(model:model,name:"Custom middle")
   try check("saved custom middle retains external authority",saved.chainPolicies?[1].nodeKind=="external" && saved.chainPolicies?[1].nodeProofID==nil && saved.chainPolicies?[1].externalProtocol=="shadowsocks")
-  try check("saved custom middle excludes original credentials",!String(decoding:IOSPrivateJSONStore.bytes!,as:UTF8.self).contains(Data(repeating:0,count:32).base64EncodedString()))
+  try check("saved custom middle excludes original credentials",!String(decoding:IOSPrivateJSONStore.bytes!,as:UTF8.self).contains(Data(repeating:0,count:keySize).base64EncodedString()))
   _ = try IOSConnectionProfileStore.load(model:model,id:saved.id)
   let captured=try model.iosNodeChainBundles(for:model.bundle!)
-  try check("loaded custom middle retains every original position",captured.count==3 && captured[1].routerProfiles[0].normalizedNodeKind=="external" && captured[1].routerProfiles[0].nodeProofID==nil)
+  try check("loaded custom middle retains every original position",captured.count==3 && captured[1].routerProfiles[0].normalizedNodeKind=="external" && captured[1].routerProfiles[0].nodeProofID==nil && captured[1].routerProfiles[0].external?.shadowsocks?.method==method)
   try replaceRaw(ids[1]){$0.routerProfiles[0].external?.expectedPublicIP="203.0.113.77"}
   try reject("replaced custom public identity"){_ = try IOSConnectionProfileStore.load(model:model,id:saved.id)}
+  }
  }
  static func main(){do{defer{UserDefaults.standard.removePersistentDomain(forName:UserDefaults.suite)};try matrix();try failures();try normalization();try importedRoundtrip();print("Apple ordered profile persistence: PASS (\(checks) shipping Swift checks)")}
  catch{FileHandle.standardError.write(Data(("FAIL ordered profile persistence: "+error.localizedDescription+"\n").utf8));exit(1)}}
