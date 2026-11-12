@@ -11,11 +11,13 @@ interface, account or firewall is changed.
 from __future__ import annotations
 
 import argparse
+import copy
 import contextlib
 import ctypes
 import errno
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import platform
@@ -23,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import types
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -309,6 +312,113 @@ def check_verdict_inventory():
             raise AssertionError('Native verdict gate accepted an omitted, renamed, duplicate or failed result')
 
 
+def check_fixture_carrier_readiness(module=GUARDIAN):
+    def snapshot(device, suffix, tentative=False, local_route=True):
+        addresses = [{'ifindex': 3 if suffix == 1 else 2, 'ifname': device,
+                      'address': '02:00:00:00:00:0'+str(suffix), 'mtu': 1500,
+                      'flags': ['UP', 'LOWER_UP'], 'addr_info': [
+                          {'family': 'inet', 'local': '198.18.0.'+str(suffix), 'prefixlen': 30},
+                          {'family': 'inet6', 'local': 'fd50::'+str(suffix), 'prefixlen': 64},
+                          {'family': 'inet6', 'local': 'fe80::'+str(suffix), 'prefixlen': 64, 'tentative': tentative}]}]
+        routes = [{'type': 'local', 'dst': 'fd50::'+str(suffix), 'dev': device, 'protocol': 'kernel'}]
+        if local_route:
+            routes.append({'type': 'local', 'dst': 'fe80::'+str(suffix), 'dev': device, 'protocol': 'kernel'})
+        return addresses, routes
+
+    args = ('rvpn-test', '198.18.0.1', 'fd50::1')
+    addresses, routes = snapshot('rvpn-test', 1)
+    original, ready = module.fixture_carrier_ready(addresses, routes, *args)
+    assert ready, 'completed original carrier was refused'
+    for pending in ((True, True), (True, False), (False, False)):
+        _, ready = module.fixture_carrier_ready(*snapshot('rvpn-test', 1, *pending), *args, original)
+        assert not ready, 'carrier admitted before DAD and its original LOCAL route completed'
+    for defect in ('replacement', 'dadfailed', 'foreign-route', 'duplicate', 'selected-lost'):
+        changed, changed_routes = copy.deepcopy(addresses), copy.deepcopy(routes)
+        if defect == 'replacement':
+            changed[0]['ifindex'] += 1
+        elif defect == 'dadfailed':
+            changed[0]['addr_info'][-1]['dadfailed'] = True
+        elif defect == 'foreign-route':
+            changed_routes[-1]['dev'] = 'foreign'
+        elif defect == 'duplicate':
+            changed[0]['addr_info'].append(copy.deepcopy(changed[0]['addr_info'][-1]))
+        else:
+            del changed[0]['addr_info'][1]
+        try:
+            module.fixture_carrier_ready(changed, changed_routes, *args, original)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('carrier accepted '+defect)
+    for defect in ('down', 'no-link-local', 'non-local', 'prefix-route'):
+        changed, changed_routes = copy.deepcopy(addresses), copy.deepcopy(routes)
+        if defect == 'down':
+            changed[0]['flags'] = []
+        elif defect == 'no-link-local':
+            changed[0]['addr_info'].pop(); changed_routes.pop()
+        elif defect == 'non-local':
+            changed_routes[-1]['type'] = 'unicast'
+        else:
+            changed_routes[-1]['dst'] += '/64'
+        try:
+            _, ready = module.fixture_carrier_ready(changed, changed_routes, *args, original)
+        except ValueError:
+            ready = False
+        assert not ready, 'carrier accepted '+defect
+
+    # Exercise the actual bounded readback loop. The peer becomes ready later
+    # than the controller; no sleep or mere successful ip invocation is proof.
+    clock, calls, sleeps = [0.0], [], []
+    def sleep(delay):
+        assert 0 < delay <= 0.02
+        clock[0] += delay
+        sleeps.append(delay)
+    def observe(command, **options):
+        assert command[0] == 'ip' and options['check'] and options['capture_output'] and options['text']
+        assert 0 < options['timeout'] <= 1
+        peer = command[1:5] == ['netns', 'exec', 'rvpn-peer', 'ip']
+        device, suffix = ('rvpn-peer', 2) if peer else ('rvpn-test', 1)
+        assert command[-2:] == ['dev', device]
+        pending = len(sleeps) < (2 if peer else 1)
+        address, route = snapshot(device, suffix, pending, not pending)
+        calls.append((device, 'address' if 'address' in command else 'route'))
+        return types.SimpleNamespace(stdout=json.dumps(address if 'address' in command else route))
+    with patch.object(module.subprocess, 'run', side_effect=observe), \
+            patch.object(module.time, 'monotonic', side_effect=lambda: clock[0]), \
+            patch.object(module.time, 'sleep', side_effect=sleep):
+        module.wait_for_fixture_carriers()
+    assert len(sleeps) == 2 and len(calls) == 12, 'carrier readback did not wait for both original endpoints'
+    clock[:] = [0.0]
+    def stalled(command, **options):
+        peer = command[1:5] == ['netns', 'exec', 'rvpn-peer', 'ip']
+        address, route = snapshot('rvpn-peer' if peer else 'rvpn-test', 2 if peer else 1, True, False)
+        clock[0] += 0.1
+        return types.SimpleNamespace(stdout=json.dumps(address if 'address' in command else route))
+    with patch.object(module.subprocess, 'run', side_effect=stalled), \
+            patch.object(module.time, 'monotonic', side_effect=lambda: clock[0]), \
+            patch.object(module.time, 'sleep', side_effect=sleep):
+        try:
+            module.wait_for_fixture_carriers()
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError('incomplete carrier renewed or escaped its setup deadline')
+    assert 5 <= clock[0] < 5.2, 'carrier setup deadline changed'
+
+
+def check_fixture_carrier_controls():
+    check_fixture_carrier_readiness()
+    for before, after in (("not any(row.get('tentative', False) for row in rows)", 'True'),
+                          ('v6 == local', 'True'),
+                          ('original is not None and owner != original', 'False')):
+        try:
+            check_fixture_carrier_readiness(variant(before, after))
+        except AssertionError:
+            continue
+        raise AssertionError('carrier causal control accepted '+before)
+    print('Carrier readiness: both original IPv6 owners, DAD, LOCAL routes and finite setup wait checked; three causal controls rejected.', flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--isolated', action='store_true', help=argparse.SUPPRESS)
@@ -316,6 +426,7 @@ def main():
     if arguments.isolated:
         raise SystemExit(isolated())
     check_verdict_inventory()
+    check_fixture_carrier_controls()
     from test_linux_guardian_cleanup import check as check_timeout_cleanup
     check_timeout_cleanup()
     sudo = GUARDIAN.UID.privilege_tool()

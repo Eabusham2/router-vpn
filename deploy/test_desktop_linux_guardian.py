@@ -13,6 +13,7 @@ import contextlib
 import ctypes
 import hashlib
 import importlib.util
+import ipaddress
 import json
 import os
 import platform
@@ -297,6 +298,72 @@ def protected_test_image(binary, expected_sha256):
     return executable
 
 
+def fixture_carrier_ready(addresses, routes, device, ipv4, ipv6, original=None):
+    """Readiness of the fixture veth, never authority for a production TUN."""
+    if not isinstance(addresses, list) or len(addresses) != 1 or not isinstance(routes, list):
+        raise ValueError('Linux guardian fixture carrier has no complete native readback')
+    link = addresses[0]
+    owner = (link.get('ifindex'), link.get('ifname'), link.get('address'), link.get('mtu'))
+    if (not isinstance(owner[0], int) or owner[0] <= 0 or owner[1] != device or
+            not isinstance(owner[2], str) or not owner[2] or not isinstance(owner[3], int) or owner[3] < 1280 or
+            original is not None and owner != original):
+        raise ValueError('Linux guardian fixture carrier changed its original interface')
+    rows = link.get('addr_info', [])
+    if not isinstance(rows, list):
+        raise ValueError('Linux guardian fixture carrier lost its address inventory')
+    selected = {(row.get('family'), row.get('local'), row.get('prefixlen')) for row in rows}
+    if len(selected) != len(rows) or any(row.get('dadfailed', False) for row in rows):
+        raise ValueError('Linux guardian fixture carrier has failed or duplicate addresses')
+    if ('inet', ipv4, 30) not in selected or ('inet6', ipv6, 64) not in selected:
+        raise ValueError('Linux guardian fixture carrier lost a selected address')
+    v6 = {ipaddress.IPv6Address(row['local']) for row in rows if row.get('family') == 'inet6'}
+    local = set()
+    for route in routes:
+        if route.get('type') != 'local':
+            continue
+        if route.get('dev') != device or route.get('protocol') != 'kernel':
+            raise ValueError('Linux guardian fixture carrier has a foreign local route')
+        destination = ipaddress.IPv6Network(route['dst'], strict=False)
+        if destination.prefixlen != 128 or destination.network_address in local:
+            raise ValueError('Linux guardian fixture carrier has an ambiguous local route')
+        local.add(destination.network_address)
+    # nodad applies to the explicitly selected ULA, not Linux's separately
+    # generated link-local address. Its LOCAL /128 can arrive later when DAD
+    # finishes. Require both original veths to finish before any TUN capture.
+    ready = ('UP' in link.get('flags', []) and 'LOWER_UP' in link.get('flags', []) and
+             any(address.is_link_local for address in v6) and
+             not any(row.get('tentative', False) for row in rows) and v6 == local)
+    return owner, ready
+
+
+def wait_for_fixture_carriers():
+    deadline = time.monotonic() + 5
+    owners = {}
+    carriers = (([], 'rvpn-test', '198.18.0.1', 'fd50::1'),
+                (['netns', 'exec', 'rvpn-peer', 'ip'], 'rvpn-peer', '198.18.0.2', 'fd50::2'))
+    while True:
+        ready = True
+        for prefix, device, ipv4, ipv6 in carriers:
+            observations = []
+            for arguments in (['-j', 'address', 'show', 'dev', device],
+                              ['-6', '-j', 'route', 'show', 'table', 'local', 'dev', device]):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('Linux guardian fixture carrier did not finish IPv6 readiness')
+                result = subprocess.run(['ip', *prefix, *arguments], check=True, capture_output=True,
+                                        text=True, timeout=min(remaining, 1))
+                observations.append(json.loads(result.stdout))
+            owner, current = fixture_carrier_ready(*observations, device, ipv4, ipv6, owners.get(device))
+            owners[device] = owner
+            ready = ready and current
+        if ready:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('Linux guardian fixture carrier did not finish IPv6 readiness')
+        time.sleep(min(remaining, 0.02))
+
+
 def namespace_test(binary: Path, case=None, expected_sha256=None, group=None) -> int:
     # The expanded native inventory exceeded the old aggregate two-minute
     # test deadline despite successful individual boundaries. Retain that
@@ -372,6 +439,8 @@ def namespace_test(binary: Path, case=None, expected_sha256=None, group=None) ->
                 ]:
                     namespace_progress('ip ' + ' '.join(arguments))
                     subprocess.run(['ip', *arguments], check=True)
+                namespace_progress('wait for original fixture carrier IPv6 addresses and local routes')
+                wait_for_fixture_carriers()
                 environment = dict(os.environ, ROUTERVPN_LINUX_GUARDIAN_TEST_NS='1')
                 namespace_progress('execute owned test process')
                 result = subprocess.run([str(executable), '-test.run=' + selector,
