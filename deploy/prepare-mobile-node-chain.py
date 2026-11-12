@@ -20,6 +20,8 @@ TEMPLATES = {
     'lifecycle.go.tmpl': 'experimental/libbox/routervpn_node_chain_lifecycle.go',
     'lifecycle_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_lifecycle_test.go',
     'mtu.go.tmpl': 'experimental/libbox/routervpn_node_chain_mtu.go',
+    'candidates.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidates.go',
+    'candidates_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidates_test.go',
     'measurement.go.tmpl': 'experimental/libbox/routervpn_node_chain_measurement.go',
     'measurement_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_measurement_test.go',
 }

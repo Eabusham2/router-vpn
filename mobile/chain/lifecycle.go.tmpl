@@ -28,6 +28,7 @@ type RouterNodeChain struct {
 	state       atomic.Pointer[routerNodeChainProofState]
 	mtuOwner    atomic.Pointer[routerMTUOwner]
 	measurement atomic.Pointer[hopmeasure.Service]
+	candidate   atomic.Pointer[RouterNodeChainCandidateMeasurement]
 	measuring   bool // guarded by mu; held until the real measurement worker drains
 }
 
@@ -172,6 +173,9 @@ func (m *RouterNodeChain) NetworkChanged() {
 	if measurement := m.measurement.Load(); measurement != nil {
 		measurement.Invalidate()
 	}
+	if candidate := m.candidate.Load(); candidate != nil {
+		candidate.NetworkChanged()
+	}
 }
 
 func (m *RouterNodeChain) joinProofLocked(ctx context.Context) error {
@@ -206,10 +210,15 @@ func (m *RouterNodeChain) closeContext(ctx context.Context) error {
 	m.retireProof()
 	// Measurement release uses mu. Join outside it so an original worker can
 	// discharge activity before the native host retires its Box/TUN.
+	var joinErr error
+	if candidate := m.candidate.Load(); candidate != nil {
+		joinErr = candidate.closeContext(ctx)
+	}
 	if measurement := m.measurement.Load(); measurement != nil {
-		if err := measurement.CloseContext(ctx); err != nil {
-			return err
-		}
+		joinErr = errors.Join(joinErr, measurement.CloseContext(ctx))
+	}
+	if joinErr != nil {
+		return joinErr
 	}
 	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
 		return err

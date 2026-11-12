@@ -1,0 +1,312 @@
+package libbox
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// The host observes its actual stores, source files and original chain/server
+// ownership. Its digest covers the exact inventory JSON, including a monotonic
+// catalog revision that advances even when a source changes away and back.
+// Return empty on unavailable or changed ownership. Never return a fixed copy
+// of the factory's digest without checking the current host catalog.
+type RouterNodeChainCandidateCatalog interface {
+	CurrentInventorySHA256() string
+}
+
+type routerNodeChainCatalogCall struct {
+	done   chan struct{}
+	digest string
+}
+
+type RouterNodeChainCandidateMeasurement struct {
+	owner          *RouterNodeChain
+	state          *routerNodeChainProofState
+	plan           *mobilemultihop.NodeChainCandidatePlan
+	catalog        RouterNodeChainCandidateCatalog
+	inventorySHA   string
+	service        atomic.Pointer[hopmeasure.CandidateService]
+	retired        atomic.Bool
+	callbackActive atomic.Bool
+	observation    sync.Mutex
+	pending        *routerNodeChainCatalogCall // retained until the foreign callback joins
+}
+
+func RouterNodeChainNewCandidateMeasurement(plan *RouterNodeChain, server *CommandServer, prefixPosition int32, inventory string, catalog RouterNodeChainCandidateCatalog) (*RouterNodeChainCandidateMeasurement, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+	defer cancel()
+	return plan.newCandidateMeasurementContext(ctx, server, int(prefixPosition), inventory, catalog)
+}
+
+func (m *RouterNodeChain) newCandidateMeasurementContext(ctx context.Context, server *CommandServer, position int, inventory string, catalog RouterNodeChainCandidateCatalog) (*RouterNodeChainCandidateMeasurement, error) {
+	if m == nil || m.chain == nil || server == nil || catalog == nil || ctx == nil {
+		return nil, errors.New("candidate measurement requires its original native owner and live catalog")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	plan, err := m.chain.NewCandidatePlan(position, inventory)
+	if err != nil {
+		return nil, err
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return nil, err
+	}
+	if m.server != server || m.candidate.Load() != nil || m.healthyContext(ctx) != nil {
+		m.mu.Unlock()
+		return nil, errors.New("candidate measurement changed its native server, catalog or proof")
+	}
+	digest := sha256.Sum256([]byte(inventory))
+	candidate := &RouterNodeChainCandidateMeasurement{owner: m, state: m.state.Load(), plan: plan, catalog: catalog, inventorySHA: hex.EncodeToString(digest[:])}
+	m.candidate.Store(candidate)
+	m.mu.Unlock()
+	// No native owner lock is held across a foreign host callback. Failed or
+	// timed-out callback work remains reachable from the original chain owner.
+	service, err := plan.NewMeasurementContext(ctx, candidate)
+	if err == nil {
+		candidate.service.Store(service)
+		err = candidate.current(ctx)
+	}
+	if err != nil {
+		return nil, errors.Join(err, candidate.closeContext(ctx))
+	}
+	return candidate, nil
+}
+
+func (m *RouterNodeChainCandidateMeasurement) current(ctx context.Context) error {
+	if ctx == nil || m == nil || m.owner == nil || m.state == nil || m.retired.Load() || m.owner.candidate.Load() != m || m.owner.state.Load() != m.state {
+		return errors.New("candidate measurement lost its original native proof reader")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return m.owner.nativeCurrent(ctx, m.state)
+}
+
+func (m *RouterNodeChainCandidateMeasurement) MeasurementChainContext(ctx context.Context) (*mobilemultihop.NodeChain, error) {
+	if err := m.current(ctx); err != nil {
+		return nil, err
+	}
+	chain, err := m.owner.MeasurementChainContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return chain, m.current(ctx)
+}
+func (m *RouterNodeChainCandidateMeasurement) BeginMeasurementContext(ctx context.Context) (func(), error) {
+	if err := m.current(ctx); err != nil {
+		return nil, err
+	}
+	release, err := m.owner.BeginMeasurementContext(ctx)
+	if err != nil {
+		return release, err
+	}
+	if err := m.current(ctx); err != nil {
+		release()
+		return nil, err
+	}
+	return func() {
+		// The activity release belongs to the worker: a canceled foreign
+		// observation still owns this hold until its actual callback returns.
+		_ = m.joinCatalog(context.Background())
+		release()
+	}, nil
+}
+
+func (m *RouterNodeChainCandidateMeasurement) CandidateInventoryCurrentContext(parent context.Context, capture string) error {
+	if parent == nil {
+		return errors.New("candidate catalog observation has no original caller")
+	}
+	ctx, cancel := context.WithTimeout(parent, hopmeasure.ObservationTimeout)
+	defer cancel()
+	if err := m.current(ctx); err != nil {
+		return err
+	}
+	if m.plan == nil || capture != m.plan.CaptureSHA256() || m.catalog == nil {
+		return errors.New("candidate catalog differs from its original capture")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.observation); err != nil {
+		return err
+	}
+	defer m.observation.Unlock()
+	if m.pending != nil {
+		select {
+		case <-m.pending.done:
+			m.pending = nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if err := m.current(ctx); err != nil {
+		return err
+	}
+	call := &routerNodeChainCatalogCall{done: make(chan struct{})}
+	m.pending = call
+	m.callbackActive.Store(true)
+	go func() {
+		defer func() { m.callbackActive.Store(false); close(call.done) }()
+		call.digest = m.catalog.CurrentInventorySHA256()
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-call.done:
+		m.pending = nil
+		if err := m.current(ctx); err != nil {
+			return err
+		}
+		if call.digest != m.inventorySHA {
+			m.retired.Store(true)
+			return errors.New("original candidate catalog revision or source changed")
+		}
+		return ctx.Err()
+	}
+}
+
+func (m *RouterNodeChainCandidateMeasurement) Metadata() string {
+	if m == nil || m.plan == nil {
+		return ""
+	}
+	return m.plan.Metadata()
+}
+func (m *RouterNodeChainCandidateMeasurement) CaptureSHA256() string {
+	if m == nil || m.plan == nil {
+		return ""
+	}
+	return m.plan.CaptureSHA256()
+}
+func (m *RouterNodeChainCandidateMeasurement) Start(request, candidateID string) error {
+	if m == nil || m.service.Load() == nil {
+		return errors.New("candidate measurement is unavailable")
+	}
+	return m.service.Load().Start(request, candidateID)
+}
+func (m *RouterNodeChainCandidateMeasurement) Cancel(request string) {
+	if m != nil {
+		if service := m.service.Load(); service != nil {
+			service.Cancel(request)
+		}
+	}
+}
+func (m *RouterNodeChainCandidateMeasurement) Drain(request string) error {
+	if m == nil || m.service.Load() == nil {
+		return errors.New("candidate measurement is unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := m.service.Load().Drain(request); err != nil {
+		return err
+	}
+	return m.joinCatalog(ctx)
+}
+func (m *RouterNodeChainCandidateMeasurement) StatusJSON() string {
+	if m == nil || m.service.Load() == nil {
+		return ""
+	}
+	raw := m.service.Load().StatusJSON()
+	if !m.callbackActive.Load() {
+		return raw
+	}
+	var status hopmeasure.CandidateStatus
+	if json.Unmarshal([]byte(raw), &status) != nil {
+		return ""
+	}
+	status.Complete, status.Drained, status.Stage, status.Results = false, false, "draining", []hopmeasure.Result{}
+	encoded, _ := json.Marshal(status)
+	return string(encoded)
+}
+func (m *RouterNodeChainCandidateMeasurement) NetworkChanged() {
+	if m != nil {
+		m.retired.Store(true)
+		if service := m.service.Load(); service != nil {
+			service.Invalidate()
+		}
+	}
+}
+func (m *RouterNodeChainCandidateMeasurement) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return m.closeContext(ctx)
+}
+func (m *RouterNodeChainCandidateMeasurement) closeContext(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
+	if ctx == nil {
+		return errors.New("candidate close has no original caller")
+	}
+	m.retired.Store(true)
+	if service := m.service.Load(); service != nil {
+		if err := service.CloseContext(ctx); err != nil {
+			return err
+		}
+	}
+	if err := m.joinCatalog(ctx); err != nil {
+		return err
+	}
+	if m.owner != nil {
+		m.owner.candidate.CompareAndSwap(m, nil)
+	}
+	return nil
+}
+
+func (m *RouterNodeChainCandidateMeasurement) joinCatalog(ctx context.Context) error {
+	if err := adapter.RouterVPNLockContext(ctx, &m.observation); err != nil {
+		return err
+	}
+	defer m.observation.Unlock()
+	if m.pending != nil {
+		select {
+		case <-m.pending.done:
+			m.pending = nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return ctx.Err()
+}
+
+// RouterNodeChainCandidateInputSupported uses the original shared compiler;
+// unsupported saved rows remain unscored without exposing their destinations.
+func RouterNodeChainCandidateInputSupported(input string) bool {
+	return mobilemultihop.NodeChainCandidateInputSupported(input)
+}
+
+// Retry cleanup of an original factory that failed while its host callback was
+// still running. Exact original arguments prevent a late cleanup from closing
+// a replacement candidate handle on the same retained chain.
+func RouterNodeChainCloseCandidateMeasurement(plan *RouterNodeChain, prefixPosition int32, inventory string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return plan.closeCandidateMeasurementContext(ctx, int(prefixPosition), inventory)
+}
+func (m *RouterNodeChain) closeCandidateMeasurementContext(ctx context.Context, position int, inventory string) error {
+	if m == nil || m.chain == nil || ctx == nil {
+		return errors.New("candidate cleanup requires its original chain capture")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	plan, err := m.chain.NewCandidatePlan(position, inventory)
+	if err != nil {
+		return err
+	}
+	candidate := m.candidate.Load()
+	if candidate == nil {
+		return ctx.Err()
+	}
+	if candidate.plan == nil || candidate.plan.CaptureSHA256() != plan.CaptureSHA256() {
+		return errors.New("candidate cleanup belongs to another captured inventory or prefix")
+	}
+	return candidate.closeContext(ctx)
+}

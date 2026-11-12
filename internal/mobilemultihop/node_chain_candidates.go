@@ -79,6 +79,17 @@ func (c *NodeChain) NewCandidatePlan(position int, inventory string) (*NodeChain
 	return plan, plan.validate()
 }
 
+// NodeChainCandidateInputSupported is a socket-free eligibility check using
+// the same exact original-source compiler as candidate plan construction. It
+// exposes no endpoint, credentials or reusable native route capability.
+func NodeChainCandidateInputSupported(input string) bool {
+	if len(input) == 0 || len(input) > NodeChainInputLimit {
+		return false
+	}
+	_, _, err := nodeChainCandidateTarget(input)
+	return err == nil
+}
+
 // Only original literal SS2022 sources currently supply a candidate TCP
 // endpoint. UDP-only transports never gain a guessed TCP port or a zero score.
 func nodeChainCandidateTarget(input string) (hopmeasure.CandidateTarget, string, error) {

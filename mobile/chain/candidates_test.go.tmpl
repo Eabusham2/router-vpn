@@ -1,0 +1,434 @@
+package libbox
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+	"unsafe"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// Original source parsing and authenticated HTTP/TLS proofs execute. The
+// native route/OS boundary is explicitly doubled; these are bridge lifecycle
+// tests, not encrypted-path, kernel, NDK or device acceptance.
+func candidateBridgeJSON(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func candidateBridgeSource(t *testing.T) *mobilemultihop.NodeChain {
+	t.Helper()
+	return candidateBridgeSourceModes(t, []string{"wg", "wg"})
+}
+func candidateBridgeSourceModes(t *testing.T, modes []string) *mobilemultihop.NodeChain {
+	t.Helper()
+	source := mobilemultihop.NodeChainSource{Schema: 1, Execution: "local"}
+	for i := 0; i <= len(modes); i++ {
+		client, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(20 + i)}, 32))
+		server, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(70 + i)}, 32))
+		public := base64.StdEncoding.EncodeToString(server.PublicKey().Bytes())
+		nodeID := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+		address := fmt.Sprintf("198.51.100.%d", i+20)
+		profile := map[string]any{"id": fmt.Sprintf("chain-native-%d", i), "node_kind": "router-vpn", "node_proof_id": hex.EncodeToString(nodeID[:]),
+			"router_api": "http://10.77.0.1:8787", "api_token": fmt.Sprintf("chain-native-token-%d", i), "endpoint": address,
+			"dns_mode": "home", "adguard_ipv4": "192.168.50.133", "mtu_policy": "auto", "ipv6_mode": "off", "home_lan_access": false,
+			"kill_switch_policy": "always"}
+		mode := "wg"
+		files := map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("[Interface]\nAddress=10.77.0.2/24,fd77::2/64\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=%s:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", base64.StdEncoding.EncodeToString(client.Bytes()), public, address)))}
+		if i < len(modes) {
+			mode = modes[i]
+			if mode != "wg" {
+				config, _ := base64.StdEncoding.DecodeString(files["wg.conf"])
+				params := "Jc=3\nJmin=40\nJmax=900\nS1=56\nS2=48\nS3=24\nS4=32\nH1=10000000-19999999\nH2=20000000-29999999\nH3=30000000-39999999\nH4=40000000-49999999\n"
+				if mode == "awg2-strong" {
+					params = strings.ReplaceAll(strings.ReplaceAll(params, "Jc=3", "Jc=8"), "Jmax=900", "Jmax=1200")
+				}
+				files = map[string]string{"awg.conf": base64.StdEncoding.EncodeToString([]byte(strings.Replace(string(config), "[Peer]", params+"[Peer]", 1)))}
+			}
+		} else {
+			mode = "shadowsocks"
+			graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+				"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": address, "server_port": 8388,
+					"method": mobilemultihop.NativeStartLayerMethod, "password": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{80}, 32))}},
+				"route": map[string]any{"final": "proxy", "rules": []any{}}}
+			files = map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(candidateBridgeJSON(t, graph)))}
+		}
+		node, err := mobilemultihop.NewNodeProfile(mode, candidateBridgeJSON(t, files), candidateBridgeJSON(t, profile), "", "")
+		if err != nil {
+			t.Fatal("native source", i, err)
+		}
+		input, err := node.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		source.Nodes = append(source.Nodes, input)
+	}
+	chain, err := mobilemultihop.NewNodeChain(candidateBridgeJSON(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return chain
+}
+
+type candidateBridgeEngine struct {
+	chain    *mobilemultihop.NodeChain
+	identity mobilemultihop.NodeChainIdentity
+	selected string
+	peers    map[string]string
+	public   string
+	target   string
+	dials    atomic.Int32
+}
+
+func (e *candidateBridgeEngine) ObserveChainContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
+	return e.identity, ctx.Err()
+}
+func (e *candidateBridgeEngine) SelectContext(ctx context.Context, tag string) error {
+	e.selected = tag
+	return ctx.Err()
+}
+func (e *candidateBridgeEngine) SelectedContext(ctx context.Context) (string, error) {
+	return e.selected, ctx.Err()
+}
+func (e *candidateBridgeEngine) DNSProofContext(ctx context.Context, capture mobilemultihop.NodeChainDNSCapture) error {
+	if capture != e.chain.DNSCapture() {
+		return errors.New("foreign final DNS")
+	}
+	return ctx.Err()
+}
+func (e *candidateBridgeEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	peer := e.peers[tag]
+	if address == "1.1.1.1:443" && tag == e.chain.FinalTag() {
+		peer = e.public
+	} else if address == "198.51.100.22:8388" && tag == e.chain.ProofInventory()[1].Tag {
+		peer = e.target
+		e.dials.Add(1)
+	} else if address != "10.77.0.1:8787" {
+		return nil, errors.New("uncaptured candidate or proof address")
+	}
+	return (&net.Dialer{}).DialContext(ctx, "tcp", peer)
+}
+
+type candidateBridgeCatalog struct {
+	mu        sync.Mutex
+	digest    string
+	entered   chan struct{}
+	release   chan struct{}
+	once      sync.Once
+	calls     atomic.Int32
+	blockWhen func() bool
+}
+
+func (c *candidateBridgeCatalog) CurrentInventorySHA256() string {
+	c.calls.Add(1)
+	if c.entered != nil && (c.blockWhen == nil || c.blockWhen()) {
+		c.once.Do(func() { close(c.entered) })
+		<-c.release
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.digest
+}
+func (c *candidateBridgeCatalog) change(digest string) { c.mu.Lock(); c.digest = digest; c.mu.Unlock() }
+
+func candidateBridgeFixture(t *testing.T) (*RouterNodeChain, string, *candidateBridgeCatalog, *candidateBridgeEngine) {
+	t.Helper()
+	m, state := routerNodeChainNativeOwnerFixture(t)
+	chain := candidateBridgeSource(t)
+	m.chain, state.chain = chain, chain
+	engine := &candidateBridgeEngine{chain: chain, identity: mobilemultihop.NodeChainIdentity{EngineID: "original-engine", SessionID: "original-session", NetworkID: "original-network", SourceSHA256: chain.SourceSHA256(), ConfigSHA256: chain.ConfigSHA256()}, peers: map[string]string{}}
+	for i, proof := range chain.ProofInventory() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/health" || r.Host != "10.77.0.1:8787" || r.Header.Get("Authorization") != fmt.Sprintf("Bearer chain-native-token-%d", i) {
+				t.Error("candidate bridge changed original prefix proof")
+				w.WriteHeader(401)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": proof.NodeID, "proof": "router-vpn-private-agent-v1"})
+		}))
+		t.Cleanup(server.Close)
+		engine.peers[proof.Tag] = server.Listener.Addr().String()
+	}
+	public, trust := candidateBridgeTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "1.1.1.1" || r.URL.Path != "/cdn-cgi/trace" || len(r.URL.Query().Get("routervpn_proof")) != 32 {
+			t.Error("candidate bridge changed public proof")
+		}
+		_, _ = w.Write([]byte("ip=203.0.113.88\n"))
+	}))
+	t.Cleanup(public.Close)
+	engine.public = public.Listener.Addr().String()
+	// Only the test's private trust override is set; readiness is established
+	// by chain.Run executing every original proof, never by editing its flags.
+	field := reflect.ValueOf(chain).Elem().FieldByName("runtime").FieldByName("testTLS")
+	*(**tls.Config)(unsafe.Pointer(field.UnsafeAddr())) = trust
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.target = listener.Addr().String()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	t.Cleanup(func() { _ = listener.Close(); <-done })
+	if err := chain.Run(state.lifetime, engine); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := m.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	var source mobilemultihop.NodeChainSource
+	launch, err := chain.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record struct {
+		Nodes []string `json:"nodes"`
+	}
+	if json.Unmarshal([]byte(launch), &record) != nil {
+		t.Fatal("invalid original launch")
+	}
+	source.Nodes = record.Nodes
+	inventory := candidateBridgeJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "catalog-epoch-1", Inputs: []string{source.Nodes[len(source.Nodes)-1]}})
+	sum := sha256.Sum256([]byte(inventory))
+	catalog := &candidateBridgeCatalog{digest: hex.EncodeToString(sum[:])}
+	return m, inventory, catalog, engine
+}
+
+func TestRouterNodeChainBridgeCandidatesShareOriginalOwnerAndMTUExclusion(t *testing.T) {
+	m, inventory, catalog, engine := candidateBridgeFixture(t)
+	hop, err := RouterNodeChainNewHopMeasurement(m, m.server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := RouterNodeChainNewCandidateMeasurement(m, m.server, 1, inventory, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.candidate.Load() != candidate || m.measurement.Load() != hop.service || candidate.state != m.state.Load() || candidate.Metadata() == "" || len(candidate.CaptureSHA256()) != 64 {
+		t.Fatal("candidate replaced original idle measurement/proof")
+	}
+	release, err := m.BeginMeasurementContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := candidate.Start(strings.Repeat("a", 32), "chain-native-2"); err == nil {
+		t.Fatal("candidate bypassed existing native activity")
+	}
+	release()
+	request := strings.Repeat("b", 32)
+	if err := candidate.Start(request, "chain-native-2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := candidate.Drain(request); err != nil {
+		t.Fatal(err)
+	}
+	var status map[string]any
+	if json.Unmarshal([]byte(candidate.StatusJSON()), &status) != nil || status["complete"] != true || status["drained"] != true || engine.dials.Load() != 50 {
+		t.Fatal("candidate lost original fifty connections", status, engine.dials.Load())
+	}
+	catalog.change(strings.Repeat("f", 64))
+	if err := candidate.Start(strings.Repeat("c", 32), "chain-native-2"); err == nil {
+		t.Fatal("live catalog mutation kept old authority")
+	}
+	if err := candidate.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if m.candidate.Load() != nil || m.measurement.Load() != hop.service || m.retired.Load() {
+		t.Fatal("candidate close retired unrelated idle owner")
+	}
+}
+
+func TestRouterNodeChainBridgeCandidatesRetainLateCatalogThroughClose(t *testing.T) {
+	m, inventory, catalog, _ := candidateBridgeFixture(t)
+	candidate, err := RouterNodeChainNewCandidateMeasurement(m, m.server, 1, inventory, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog.entered, catalog.release = make(chan struct{}), make(chan struct{})
+	var release sync.Once
+	defer release.Do(func() { close(catalog.release) })
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	err = candidate.CandidateInventoryCurrentContext(ctx, candidate.CaptureSHA256())
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) || !candidate.callbackActive.Load() {
+		t.Fatal("slow callback escaped original deadline/ownership", err)
+	}
+	firstCalls := catalog.calls.Load()
+	ctx, cancel = context.WithTimeout(context.Background(), 15*time.Millisecond)
+	err = candidate.CandidateInventoryCurrentContext(ctx, candidate.CaptureSHA256())
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) || catalog.calls.Load() != firstCalls {
+		t.Fatal("expired catalog observation spawned another unjoined callback", err)
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), 15*time.Millisecond)
+	err = m.closeContext(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) || m.candidate.Load() != candidate || !m.retired.Load() {
+		t.Fatal("failed close abandoned original candidate callback", err)
+	}
+	release.Do(func() { close(catalog.release) })
+	if err := m.Close(); err != nil {
+		t.Fatal("original retry could not join", err)
+	}
+	if candidate.callbackActive.Load() || m.candidate.Load() != nil {
+		t.Fatal("callback survived successful original close")
+	}
+}
+
+func TestRouterNodeChainBridgeCandidatesRejectForeignFactoryAndRetireOnNetworkChange(t *testing.T) {
+	if value, err := RouterNodeChainNewCandidateMeasurement(nil, nil, 0, "", nil); err == nil || value != nil {
+		t.Fatal("missing owner admitted")
+	}
+	m, inventory, catalog, _ := candidateBridgeFixture(t)
+	for _, server := range []*CommandServer{nil, {}} {
+		if value, err := RouterNodeChainNewCandidateMeasurement(m, server, 1, inventory, catalog); err == nil || value != nil {
+			t.Fatal("foreign server admitted")
+		}
+	}
+	candidate, err := RouterNodeChainNewCandidateMeasurement(m, m.server, 1, inventory, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, err := RouterNodeChainNewCandidateMeasurement(m, m.server, 1, inventory, catalog); err == nil || value != nil {
+		t.Fatal("duplicate handle replaced original")
+	}
+	m.NetworkChanged()
+	if err := candidate.Start(strings.Repeat("d", 32), "chain-native-2"); err == nil {
+		t.Fatal("network change retained candidate capability")
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterNodeChainBridgeCandidatesKeepMTUHoldUntilLateCatalogWorkerJoins(t *testing.T) {
+	m, inventory, catalog, engine := candidateBridgeFixture(t)
+	candidate, err := RouterNodeChainNewCandidateMeasurement(m, m.server, 1, inventory, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog.entered, catalog.release = make(chan struct{}), make(chan struct{})
+	catalog.blockWhen = func() bool { return engine.dials.Load() > 0 }
+	var release sync.Once
+	defer release.Do(func() { close(catalog.release) })
+	request := strings.Repeat("e", 32)
+	if err := candidate.Start(request, "chain-native-2"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-catalog.entered:
+	case <-time.After(time.Second):
+		t.Fatal("candidate never reached live catalog after actual TCP connect")
+	}
+	candidate.Cancel(request)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	err = candidate.closeContext(ctx)
+	cancel()
+	m.mu.Lock()
+	held := m.measuring
+	m.mu.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) || !held || m.candidate.Load() != candidate {
+		t.Fatal("cancel/close released MTU or callback ownership before actual drain", err)
+	}
+	release.Do(func() { close(catalog.release) })
+	if err := candidate.Drain(request); err != nil {
+		t.Fatal(err)
+	}
+	if err := candidate.Close(); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	held = m.measuring
+	m.mu.Unlock()
+	if held || m.candidate.Load() != nil || engine.dials.Load() != 1 {
+		t.Fatal("original canceled callback did not join exactly one retained connection")
+	}
+}
+
+func candidateBridgeTLSServer(t *testing.T, handler http.Handler) (*httptest.Server, *tls.Config) {
+	t.Helper()
+	pub, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := &x509.Certificate{SerialNumber: big.NewInt(1), IPAddresses: []net.IP{net.ParseIP("1.1.1.1")}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, cert, cert, pub, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(handler)
+	server.TLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}
+	server.StartTLS()
+	roots := x509.NewCertPool()
+	roots.AddCert(parsed)
+	return server, &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}
+}
+
+func TestRouterNodeChainBridgeCandidatesFailedFactoryRetainsScopedCleanup(t *testing.T) {
+	m, inventory, catalog, _ := candidateBridgeFixture(t)
+	catalog.entered, catalog.release = make(chan struct{}), make(chan struct{})
+	var release sync.Once
+	defer release.Do(func() { close(catalog.release) })
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	value, err := m.newCandidateMeasurementContext(ctx, m.server, 1, inventory, catalog)
+	cancel()
+	original := m.candidate.Load()
+	if value != nil || !errors.Is(err, context.DeadlineExceeded) || original == nil || !original.callbackActive.Load() {
+		t.Fatal("failed factory lost original callback retirement", err)
+	}
+	if err := RouterNodeChainCloseCandidateMeasurement(m, 0, inventory); err == nil || m.candidate.Load() != original {
+		t.Fatal("late foreign-prefix cleanup adopted failed factory")
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), 15*time.Millisecond)
+	err = m.closeCandidateMeasurementContext(ctx, 1, inventory)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) || m.candidate.Load() != original {
+		t.Fatal("failed cleanup discarded original join handle", err)
+	}
+	release.Do(func() { close(catalog.release) })
+	if err := RouterNodeChainCloseCandidateMeasurement(m, 1, inventory); err != nil {
+		t.Fatal(err)
+	}
+	if m.candidate.Load() != nil || m.retired.Load() || !m.Healthy() {
+		t.Fatal("scoped failed-factory cleanup replaced original live chain")
+	}
+}

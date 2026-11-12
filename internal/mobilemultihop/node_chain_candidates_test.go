@@ -81,6 +81,9 @@ func TestNodeChainCandidateSealsOriginalSourcesAndPrefixes(t *testing.T) {
 						t.Fatal(err)
 					}
 					input, expectedAddress := candidateSourceFixture(t, kind, method)
+					if !NodeChainCandidateInputSupported(input) {
+						t.Fatal("authoritative supported input check rejected original capture")
+					}
 					inventory := candidateInventoryFixture(t, "catalog-epoch-1", input)
 					beforeSource, beforeConfig, beforeLaunch := chain.SourceSHA256(), chain.Config(), chain.sourceJSON
 					plan, err := chain.NewCandidatePlan(0, inventory)
@@ -427,5 +430,39 @@ func TestNodeChainCandidateEngineRejectsForeignTagOrAddress(t *testing.T) {
 	}
 	if engine.count.Load() != 0 {
 		t.Fatal("refused target reached native callback")
+	}
+}
+
+func TestNodeChainCandidateInputSupportedKeepsCompilerBoundary(t *testing.T) {
+	if NodeChainCandidateInputSupported("") || NodeChainCandidateInputSupported(strings.Repeat(" ", NodeChainInputLimit+1)) {
+		t.Fatal("unbounded input admitted")
+	}
+	for _, mode := range []string{"wg", "shadowsocks"} {
+		layer := ""
+		if mode == "shadowsocks" {
+			layer = "aes-256-gcm"
+		}
+		nodes := nodeChainFixtureNodes(t, 3, layer)
+		node := nodes[0]
+		if mode == "shadowsocks" {
+			node = nodes[2]
+		}
+		input, err := node.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if NodeChainCandidateInputSupported(input) {
+			t.Fatal("UDP-only/layered row admitted", mode)
+		}
+	}
+	input, _ := candidateSourceFixture(t, "external", "2022-blake3-aes-256-gcm")
+	var original nodeChainImportedInput
+	_ = json.Unmarshal([]byte(input), &original)
+	graph, capture := externalTestRead(t, original.Config), externalTestRead(t, original.Capture)
+	externalTestFind(t, graph, ExternalFinalTag)["server"] = "candidate.invalid"
+	capture["profile"].(map[string]any)["external"].(map[string]any)["shadowsocks"].(map[string]any)["server"] = "candidate.invalid"
+	original.Config, original.Capture = startJSON(t, graph), startJSON(t, capture)
+	if NodeChainCandidateInputSupported(startJSON(t, original)) {
+		t.Fatal("hostname row guessed a TCP endpoint")
 	}
 }
