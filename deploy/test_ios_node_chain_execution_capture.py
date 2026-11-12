@@ -60,6 +60,7 @@ public func LibboxTestDigest(_ data:Data)throws->[UInt8]{
  let raw=try bridge(["Op":"execution-digest","Source":String(decoding:data,as:UTF8.self)])
  return stride(from:0,to:64,by:2).map{offset in let start=raw.index(raw.startIndex,offsetBy:offset);return UInt8(raw[start..<raw.index(start,offsetBy:2)],radix:16)!}
 }
+public final class LibboxRouterNodeChainExecutionRestoreCapture {}
 public final class LibboxRouterNodeChainExecution {
  private var receipt:[String:String];private var closed=false;private var launchError=false
  init(_ receipt:[String:String])throws{
@@ -92,6 +93,9 @@ public final class LibboxRouterNodeChainExecution {
  public func execution()->String{""}
  public func networkChanged(){}
  public func nativeClosed()->Bool{false}
+ public func captureRestore()throws->LibboxRouterNodeChainExecutionRestoreCapture?{throw NSError(domain:"SourceOnly",code:1)}
+ public func requireRestore(_ value:LibboxRouterNodeChainExecutionRestoreCapture)throws{throw NSError(domain:"SourceOnly",code:1)}
+ public func captureLastJSON(_ error:UnsafeMutablePointer<NSError?>?)->String{error?.pointee=NSError(domain:"SourceOnly",code:1);return ""}
  public func retainsServerCleanup(_ server:LibboxCommandServer)->Bool{false}
  public func close()throws{closed=true}
 }
@@ -100,6 +104,8 @@ func executionMake(_ operation:String,_ source:String,_ requested:String)throws-
 }
 public func LibboxRouterNodeChainExecutionFromLaunch(_ input:String,_ execution:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{api(error){try executionMake("execution-new",input,execution)}}
 public func LibboxNewRouterNodeChainExecutionLaunch(_ input:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{api(error){try executionMake("execution-open",input,"")}}
+public func LibboxNewRouterNodeChainExecutionRestore(_ value:LibboxRouterNodeChainExecutionRestoreCapture,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}
+public func LibboxRouterNodeChainExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}
 '''
 CRYPTO='''import Foundation
 import Libbox
