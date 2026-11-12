@@ -41,6 +41,8 @@ type NodeChainExecutionRuntime struct {
 	progress           NodeChainExecutionProgress
 	checkedAt          time.Time
 	restore            *NodeChainExecutionRestoreCapture
+	mtuPause           *nodeChainExecutionMTUResumeState
+	mtuResume          *nodeChainExecutionMTUResumeState
 	testTLS            *tls.Config
 }
 
@@ -240,9 +242,15 @@ func (r *NodeChainExecutionRuntime) Run(parent context.Context) (failure error) 
 		finish()
 		return errors.Join(err, nodeChainExecutionError)
 	}
-	if r.restore != nil && (identity.EngineID == r.restore.identity.EngineID || identity.SessionID == r.restore.identity.SessionID) {
+	if r.restore != nil && r.mtuResume == nil && (identity.EngineID == r.restore.identity.EngineID || identity.SessionID == r.restore.identity.SessionID) {
 		finish()
 		return nodeChainExecutionError
+	}
+	if r.mtuResume != nil {
+		if err := r.validateMTUResumeContext(ctx, identity); err != nil {
+			finish()
+			return err
+		}
 	}
 	r.mu.Lock()
 	r.identity = identity
