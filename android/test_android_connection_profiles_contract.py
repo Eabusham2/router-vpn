@@ -143,10 +143,11 @@ for marker in ('"multihop_nodes"', 'stageOrderedNodes(updates,row)', 'currentOrd
 # imported-only selector is a separate focused entry point, never a substitute
 # for the all/ordered-chain compiler, source composition or original controls.
 for marker in ('args.case_family in ("all", "ordered-chain", "ordered-imported")',
+               'if args.case_family == "ordered-execution":\n        import test_android_node_chain_execution_capture as chain',
                'chain.compiler_source(GO) if chain else GO',
                'chain.prepare_sources(src, app, JAVA)',
                'chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")',
-               'if args.case_family in ("ordered-chain", "ordered-imported"):'):
+               'if args.case_family in ("ordered-chain", "ordered-imported", "ordered-execution"):'):
     assert marker in harness, f"complete ordered profile compiler/case dispatch missing: {marker}"
 workflow = (ROOT.parent / '.github/workflows/android-multihop-contract.yml').read_text()
 for dependency in ('android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCapture.java',
