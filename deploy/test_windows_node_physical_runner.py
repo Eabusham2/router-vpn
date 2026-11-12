@@ -1025,6 +1025,12 @@ class OrdinaryOpenVPNScope(unittest.TestCase):
         self.assertEqual(len(GATE.EXTERNAL_OPENVPN_PORT_CASES), 8)
         go = shutil.which("go")
         self.assertIsNotNone(go, "required real Go allocator regression")
+        target = json.loads(subprocess.check_output(
+            [go, "env", "-json", "GOOS", "GOARCH"], text=True, timeout=10))
+        # Go does not implement its race runtime on Windows ARM64. Execute the
+        # same real allocator and every causal control there without -race;
+        # retain race checking everywhere else, including Windows AMD64.
+        race = [] if (target.get("GOOS"), target.get("GOARCH")) == ("windows", "arm64") else ["-race"]
         variants = {
             "current": original,
             "borrow-tcp-port": original.replace('if network == "tcp" {', 'if true {', 1),
@@ -1036,7 +1042,7 @@ class OrdinaryOpenVPNScope(unittest.TestCase):
                 work.mkdir()
                 (work / "go.mod").write_text("module owned-port-fixture\n\ngo 1.26.0\n")
                 (work / "port_test.go").write_text('package fixture\nimport("errors";"net";"os";"syscall";"testing")\n' + selected)
-                result = subprocess.run([go, "test", "-race", "-count=1", "-v", "-timeout=20s", "."], cwd=work,
+                result = subprocess.run([go, "test", *race, "-count=1", "-v", "-timeout=20s", "."], cwd=work,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
                 if name == "current":
                     self.assertEqual(result.returncode, 0, result.stdout)
@@ -1048,6 +1054,20 @@ class OrdinaryOpenVPNScope(unittest.TestCase):
                     self.assertIn(expected, result.stdout)
                 for invalid in ("panic:", "fatal error:", "DATA RACE", "[build failed]"):
                     self.assertNotIn(invalid, result.stdout)
+
+    def test_windows_arm64_allocator_executes_all_real_verdicts_without_race(self):
+        # Simulate only the selected compiler target. The unchanged positive
+        # fixture and both deliberately broken allocators still compile/run on
+        # this host, so no target-specific skip can satisfy this control.
+        with patch.object(subprocess, "check_output", return_value=json.dumps({"GOOS": "windows", "GOARCH": "arm64"})), \
+                patch.object(subprocess, "run", wraps=subprocess.run) as executed:
+            self.test_actual_provider_port_allocator_uses_captured_transport_and_preserves_errors()
+        self.assertEqual(len(executed.call_args_list), 3)
+        for call in executed.call_args_list:
+            command = call.args[0]
+            self.assertNotIn("-race", command)
+            self.assertIn("-count=1", command)
+            self.assertIn("-timeout=20s", command)
 
     def test_each_alias_and_transport_verdict_is_unique_and_mandatory(self):
         self.assertEqual(GATE.EXTERNAL_OPENVPN_NETWORKS, ("tcp", "udp", "mixed"))
