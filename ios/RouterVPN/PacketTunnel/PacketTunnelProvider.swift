@@ -104,6 +104,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             completionHandler(libboxEngine?.candidateMeasurementRequest(operation: operation, request: request,
                 session: session, ownerRequest: ownerRequest, prefix: prefix, candidate: candidate)); return
         }
+        if let request = RouterVPNNodeChainExecutionRegistry.Request.parse(messageData) {
+            if request.operation == "ordered-execution-release" {
+                completionHandler(RouterVPNNodeChainExecutionRegistry.shared.release(request)); return
+            }
+            guard let engine = libboxEngine, let proof = currentPathProofGuard() else { completionHandler(nil); return }
+            maxStartOwnerLock.lock(); let generation = maxStartGeneration; maxStartOwnerLock.unlock()
+            engine.orderedExecutionRequest(request) { [weak self] reply in
+                guard let self, self.libboxEngine === engine, self.currentMAXGeneration(generation),
+                      self.currentPathProofGuard() === proof else { completionHandler(nil); return }
+                completionHandler(reply)
+            }
+            return
+        }
         if messageData.count <= 256,
            let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
            Set(request.keys) == Set(["operation", "request_id", "session_id"]),
@@ -507,14 +520,26 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     tunnelProtocol.excludeLocalNetworks == allowLAN else { throw tunnelError(5, "strict Apple kill switch LAN exclusion does not match the imported node policy") }
             }
 
+            let registry = RouterVPNNodeChainExecutionRegistry.shared
+            let orderedStart = try registry.beginProviderStart(
+                temporaryOwner: provider[RouterVPNNodeChainExecutionRegistry.temporaryOwnerKey],
+                restoreValue: options?[RouterVPNNodeChainExecutionRegistry.restoreKey],
+                restoreOwnerValue: options?[RouterVPNNodeChainExecutionRegistry.restoreOwnerKey],
+                lastValue: options?[RouterVPNNodeChainExecutionRegistry.lastKey],
+                executionSourcePresent: provider[IOSNodeChainProviderCapture.executionKey] != nil)
+
             let engine = (provider["engine"] as? String ?? "wireguard").lowercased()
             multihopExecutionSource = nil; restoredMultihopExecution = nil; restoredMultihopIdentityPins = nil
             if provider[IOSNodeChainProviderCapture.executionKey] != nil {
                 guard options?[IOSMultihopExecution.launchKey] == nil,
                       options?[IOSMultihopExecution.startupLaunchKey] == nil,
                       currentMAXGeneration(generation) else { throw IOSNodeChainCapture.issue("Ordered execution cannot borrow a legacy pair receipt.") }
-                let capture = try IOSNodeChainProviderCapture.reopenExecution(provider)
-                try startOrderedExecution(capture, generation: generation, completionHandler: completionHandler)
+                let capture = try IOSNodeChainProviderCapture.reopenExecution(provider, lastRecord: orderedStart.lastRecord)
+                if orderedStart.restoring {
+                    defer { try? capture.close() }
+                    let restored = try registry.consume(orderedStart.admission, original: capture)
+                    try startOrderedExecution(restored.capture, generation: generation, restored: restored, completionHandler: completionHandler)
+                } else { try startOrderedExecution(capture, generation: generation, completionHandler: completionHandler) }
                 return
             }
             if IOSNodeChainProviderCapture.requested(provider, profile: selectedProfile) {
@@ -1016,7 +1041,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /// Server/Compare uses the retained execution host and its complete shared
     /// proof, never the Local controller or a two-node execution receipt.
     private func startOrderedExecution(_ capture: IOSNodeChainExecutionCapture, generation: UUID,
-                                completionHandler: @escaping (Error?) -> Void) throws {
+                                restored: RouterVPNNodeChainExecutionRegistry.Restored? = nil, completionHandler: @escaping (Error?) -> Void) throws {
         var adopted = false
         defer { if !adopted { try? capture.close() } }
         guard currentMAXGeneration(generation),
@@ -1030,7 +1055,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let engine = RouterVPNLibboxEngine(tunnel: self)
         try engine.prepareMTUHold(initialMTUHold)
         libboxEngine = engine
-        do { try engine.start(nodeChainExecution: capture); adopted = true }
+        do {
+            if let restored { try restored.require(capture); try engine.start(restoredNodeChainExecution: restored) }
+            else { try engine.start(nodeChainExecution: capture) }
+            adopted = true
+        }
         catch {
             engine.stop(); adopted = engine.ownsNodeChain
             if !adopted, libboxEngine === engine { libboxEngine = nil }; throw error

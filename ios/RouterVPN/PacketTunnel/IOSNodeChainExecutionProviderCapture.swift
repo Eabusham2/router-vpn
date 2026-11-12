@@ -4,7 +4,7 @@ import Foundation
 extension IOSNodeChainProviderCapture {
     /// A separate preparation source and launch discriminator prevent a
     /// Server/Compare graph from borrowing Local or legacy pair receipts.
-    static func reopenExecution(_ configuration: [String: Any]) throws -> IOSNodeChainExecutionCapture {
+    static func reopenExecution(_ configuration: [String: Any], lastRecord: String? = nil) throws -> IOSNodeChainExecutionCapture {
         guard configuration[key] == nil,
               configuration["engine"] as? String == "multihop-libbox",
               ["entryBundle", "external_entry_bundle", "external_entry_mode", "tor_entry_bundle", "tor_entry_mode",
@@ -18,7 +18,9 @@ extension IOSNodeChainProviderCapture {
               let selected = profiles.first(where: { $0["id"] as? String == id }) else {
             throw IOSNodeChainCapture.issue("The ordered execution provider lost its original private source.")
         }
-        let capture = try IOSNodeChainExecutionCapture.reopen(input, selectedProfile: selected)
+        let capture: IOSNodeChainExecutionCapture
+        if let lastRecord { capture = try IOSNodeChainExecutionCapture.reopenLast(input, selectedProfile: selected, record: lastRecord) }
+        else { capture = try IOSNodeChainExecutionCapture.reopen(input, selectedProfile: selected) }
         var accepted = false
         defer { if !accepted { try? capture.close() } }
         guard let final = capture.members.last, final.id == id,

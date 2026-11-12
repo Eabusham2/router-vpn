@@ -17,6 +17,7 @@ def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 SOURCE=module('execution_source_fixture',ROOT/'deploy/test_ios_node_chain_execution_capture.py')
 PROVIDER=module('ordered_provider_fixture',ROOT/'deploy/test_ios_node_chain_provider.py')
+SAVED=module('execution_saved_fixture',ROOT/'deploy/test_ios_node_chain_execution_restore_last.py')
 CAPTURE_TESTS=SOURCE.SWIFT.split('@main struct Tests {',1)[0]+r'''
 @main struct Tests {
  @MainActor static var checks=0
@@ -33,6 +34,11 @@ CAPTURE_TESTS=SOURCE.SWIFT.split('@main struct Tests {',1)[0]+r'''
    let reopened=try IOSNodeChainProviderCapture.reopenExecution(provider)
    check(reopened.source==capture.source && reopened.config==capture.config && reopened.requested==requested && reopened.members.count==count,"provider source changed after native reopen")
    try reopened.close()
+   let record=try LibboxTestSavedLast(capture.launchInput,requested=="auto" ? "local":"server")
+   let saved=try IOSNodeChainProviderCapture.reopenExecution(provider,lastRecord:record)
+   check(try object(Data(saved.launchInput.utf8))["last"] as? String==record && saved.source==capture.source,"provider Last did not retain explicit original record")
+   try saved.close()
+   reject("provider mutated Last"){_ = try IOSNodeChainProviderCapture.reopenExecution(provider,lastRecord:record+" ")}
    reject("execution source reused Local provider"){_ = try IOSNodeChainProviderCapture.reopen(provider)}
    for field in ["engine","mode","rawProfileID","modeCandidates","entryBundle","external_entry_bundle","external_entry_mode","tor_entry_bundle","tor_entry_mode","strategy","strategy_catalog","max_source_sha256",IOSNodeChainProviderCapture.key]{
     var changed=provider;changed[field]=field=="modeCandidates" ? ["wg"]:"foreign"
@@ -57,9 +63,9 @@ CAPTURE_TESTS=SOURCE.SWIFT.split('@main struct Tests {',1)[0]+r'''
 
 def source_gate(work):
     with tempfile.TemporaryDirectory(prefix='.ios-execution-provider-',dir=ROOT) as gd:
-        gd=Path(gd);(gd/'main.go').write_text(SOURCE.GO);compiler=work/'compiler'
+        gd=Path(gd);(gd/'main.go').write_text(SAVED.GO);compiler=work/'compiler'
         subprocess.run(['go','build','-p','1','-o',str(compiler),str(gd/'main.go')],cwd=ROOT,check=True,timeout=180)
-        (work/'Libbox.swift').write_text(SOURCE.LIBBOX);(work/'CryptoKit.swift').write_text(SOURCE.CRYPTO);(work/'Tests.swift').write_text(CAPTURE_TESTS)
+        (work/'Libbox.swift').write_text(SAVED.LIBBOX);(work/'CryptoKit.swift').write_text(SOURCE.CRYPTO);(work/'Tests.swift').write_text(CAPTURE_TESTS)
         options=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules')]
         suffix='.dylib' if platform.system()=='Darwin' else '.so'
         subprocess.run(options+['-emit-module','-emit-library','-module-name','Libbox',str(work/'Libbox.swift'),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(work/('libLibbox'+suffix))],check=True,timeout=90)
@@ -97,6 +103,12 @@ def startup_gate(work):
     swift=swift.replace('owned=true;self.plan=plan;', 'owned=true;self.plan=capture.plan;',1)
     swift=swift.replace('func completeNodeChainExecution','func completeOrderedExecution').replace('func activatePerformance()','func activateNodeChainExecutionPerformance()').replace('func activateNodeChainMTU()','func activateNodeChainExecutionMTU()')
     swift=swift.replace('try startNodeChain(capture,','try startOrderedExecution(capture,')
+    swift += r'''
+final class RouterVPNNodeChainExecutionRegistry {
+ final class Restored { let capture:IOSNodeChainExecutionCapture;init(_ capture:IOSNodeChainExecutionCapture){self.capture=capture};func require(_ other:IOSNodeChainExecutionCapture)throws{guard capture.plan===other.plan else{throw NSError(domain:"ReplacedRestoreBoundary",code:1)}} }
+}
+extension RouterVPNLibboxEngine { func start(restoredNodeChainExecution value:RouterVPNNodeChainExecutionRegistry.Restored)throws{try value.require(value.capture);try start(nodeChainExecution:value.capture)} }
+'''
     swift=swift.replace(' // SHIPPING_PROVIDER',shipping.replace('IOSNodeChainCapture.issue','IOSNodeChainExecutionCapture.issue'))
     # Reuse original Local handoff cases unchanged except the actual new source
     # and method signatures; this executes the complete production method.

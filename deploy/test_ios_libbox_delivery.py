@@ -1614,7 +1614,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='routervpn-libbox-delivery-') as tmp:
         tmp = Path(tmp)
         stub, harness = tmp/'Libbox.swift', tmp/'Harness.swift'
-        stub.write_text(LIBBOX + DNS.NATIVE + CANDIDATE_NATIVE + EXECUTION.NATIVE); harness.write_text(DNS.STORAGE + HARNESS.replace("    func activateImported(server:", EXECUTION.MTU_METHODS + "    func activateImported(server:", 1) .replace('        let chainText=', EXECUTION.TESTS + '        let chainText=', 1) + CANDIDATE_SOURCE + EXECUTION.SOURCE)
+        stub.write_text(LIBBOX + DNS.NATIVE + CANDIDATE_NATIVE + EXECUTION.NATIVE); harness.write_text(DNS.STORAGE + HARNESS.replace("    func activateImported(server:", EXECUTION.MTU_METHODS + "    func activateImported(server:", 1) .replace('        let chainText=', EXECUTION.TESTS + '        let chainText=', 1) + CANDIDATE_SOURCE + EXECUTION.SOURCE + EXECUTION.IPC_TYPES)
         hop_types = (ROOT/'ios/RouterVPN/App/IOSHopMeasurements.swift').read_text().split('// HOP_RESULT_TYPES_BEGIN',1)[1].split('// HOP_RESULT_TYPES_END',1)[0]
         binding = tmp/'HopBinding.swift'; binding.write_text('import Foundation\n' + hop_types)
         lib = tmp/('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
@@ -1628,7 +1628,7 @@ def main():
             crypto = tmp/'CryptoKit.swift'; crypto.write_text(CRYPTO.LINUX_CRYPTO)
             subprocess.run([swift,'-swift-version','6','-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-lcrypto','-o',str(tmp/'libCryptoKit.so')],cwd=tmp,check=True,timeout=60)
             args += ['-lCryptoKit']
-        args += [str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNTorPaddingReceipt.swift'), str(ROOT/'ios/RouterVPN/App/IOSCandidateCatalogPublication.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidateSession.swift')]
+        args += [str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionRegistry.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNTorPaddingReceipt.swift'), str(ROOT/'ios/RouterVPN/App/IOSCandidateCatalogPublication.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidateSession.swift')]
         subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(ENGINE),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
         if requested.execution_only or not requested.chain_only:
             subprocess.run([str(tmp/'test'),'--execution-only'],env=environment,check=True,timeout=25)

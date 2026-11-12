@@ -215,10 +215,10 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
     }
 
     func activateNodeChainExecution(server: LibboxCommandServer, plan: LibboxRouterNodeChainExecution,
-                                    onAbort: @escaping @Sendable (String) -> Void) throws {
+                                    runAutomatic: Bool = true, onAbort: @escaping @Sendable (String) -> Void) throws {
         let profile = plan.mtuProfile()
         guard !profile.isEmpty, profile.utf8.count <= 65536, plan.healthy(),
-              activateOwned(profile: profile, onAbort: onAbort, nativeExecutionAuthority: true, create: { createError in
+              activateOwned(profile: profile, onAbort: onAbort, nativeExecutionAuthority: true, runAutomatic: runAutomatic, create: { createError in
                   LibboxRouterNodeChainExecutionNewMTU(plan, server, self, &createError)
               }) else { throw failure("Ordered execution MTU lost its exact proved native path") }
     }
@@ -252,7 +252,7 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
     }
 
     private func activateOwned(profile: String, onAbort: @escaping @Sendable (String) -> Void,
-                               nativeTorAuthority: Bool = false, nativeExecutionAuthority: Bool = false,
+                               nativeTorAuthority: Bool = false, nativeExecutionAuthority: Bool = false, runAutomatic: Bool = true,
                                create: (inout NSError?) -> LibboxRouterMTU?) -> Bool {
         commandLock.lock(); defer { commandLock.unlock() }
         stateLock.lock()
@@ -281,8 +281,8 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
         let policy = (try? JSONSerialization.jsonObject(with: Data(profile.utf8))) as? [String: Any]
         let mode = (policy?["mtu_policy"] as? String ?? "auto").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let automatic = (nativeTorAuthority || nativeExecutionAuthority) ? next.autoRequested() : ((mode.isEmpty || mode == "auto") && policy?["jumbo_tun"] as? Bool != true)
-        stateLock.lock(); optimizationAllowed = automatic; automaticPending = automatic && hold; stateLock.unlock()
-        if automatic && !hold {
+        stateLock.lock(); optimizationAllowed = automatic; automaticPending = automatic && runAutomatic && hold; stateLock.unlock()
+        if automatic && runAutomatic && !hold {
             try? next.start(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased(), force: false)
         }
         return true

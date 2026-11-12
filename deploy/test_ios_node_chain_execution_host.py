@@ -86,7 +86,7 @@ final class MTU:@unchecked Sendable {
  var proofObservationToken:UUID?=UUID(),isChanging=false,optimizerRunning=false,failDrain=0,activateFailure=false,activated=false
  func observeNodeChainExecutionMeasurement(_ token:UUID,_ action:()throws->Void)throws->Bool{guard !optimizerRunning,proofObservationToken==token else{return false};try action();return true}
  func drainForNodeChainExecutionCleanup()throws{Trace.shared.add("mtu-drain");if failDrain>0{failDrain-=1;throw failure("optimizer join pending")}}
- func activateNodeChainExecution(server:LibboxCommandServer,plan:LibboxRouterNodeChainExecution,onAbort:@escaping @Sendable(String)->Void)throws{
+ func activateNodeChainExecution(server:LibboxCommandServer,plan:LibboxRouterNodeChainExecution,runAutomatic:Bool=true,onAbort:@escaping @Sendable(String)->Void)throws{
   Trace.shared.add("mtu-activate");guard server.capture === plan.owner,!activateFailure else{throw failure()};activated=true
  }
 }
@@ -111,6 +111,18 @@ final class Result:@unchecked Sendable {
  func wait()->Bool{signal.wait(timeout:.now()+4) == .success}
 }
 final class Current:@unchecked Sendable{let lock=NSLock();private var value=true;func retire(){lock.lock();value=false;lock.unlock()};func get()->Bool{lock.lock();defer{lock.unlock()};return value}}
+'''
+RESTORE_BOUNDARY=r'''
+// Source/native restore has its own gate. These old owner scenarios refuse
+// accidental restoration or Last use instead of fabricating such authority.
+final class RouterVPNNodeChainExecutionRegistry {
+ final class Restored { func require(_ capture:IOSNodeChainExecutionCapture)throws{throw failure("unproved restore")}}
+}
+extension IOSNodeChainExecutionCapture {
+ final class Restoration {}
+ func captureRestoration()throws->Restoration{throw failure("unproved restore")}
+ func captureLastRecord()throws->String{throw failure("unproved Last")}
+}
 '''
 TESTS=r'''
 extension RouterVPNNodeChainExecutionHost { func fixtureHealth(){checkHealth()} }
@@ -231,7 +243,7 @@ def main():
         work=Path(d);source=work/'Host.swift';binary=work/'host'
         command=['swiftc','-j','1','-swift-version','6','-parse-as-library','-module-cache-path',str(work/'modules'),str(source),'-o',str(binary)]
         def run(value):
-            source.write_text(BOUNDARY+value+TESTS)
+            source.write_text(BOUNDARY+RESTORE_BOUNDARY+value+TESTS)
             subprocess.run(command,check=True,timeout=90)
             return subprocess.run([str(binary)],capture_output=True,text=True,timeout=35)
         result=run(text);assert result.returncode==0,result.stdout+result.stderr;print(result.stdout.strip())

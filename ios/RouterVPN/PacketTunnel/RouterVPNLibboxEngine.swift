@@ -77,6 +77,16 @@ final class RouterVPNLibboxEngine {
     /// Bind one exact command-server construction before native Start. The
     /// retained host, including late factory results, owns every cleanup retry.
     func start(nodeChainExecution capture: IOSNodeChainExecutionCapture) throws {
+        try startOrderedExecution(capture, restored: nil)
+    }
+
+    func start(restoredNodeChainExecution restored: RouterVPNNodeChainExecutionRegistry.Restored) throws {
+        try restored.require(restored.capture)
+        try startOrderedExecution(restored.capture, restored: restored)
+    }
+
+    private func startOrderedExecution(_ capture: IOSNodeChainExecutionCapture,
+                                       restored: RouterVPNNodeChainExecutionRegistry.Restored?) throws {
         try Self.torRetirement.requireAvailable()
         try Self.torServerRetirement.requireAvailable()
         try Self.externalRetirement.requireAvailable()
@@ -90,7 +100,7 @@ final class RouterVPNLibboxEngine {
         }
         starting = true
         let generation = ownershipGeneration
-        let host = RouterVPNNodeChainExecutionHost(capture: capture, platform: platform, isCurrent: { [weak self] in
+        let host = RouterVPNNodeChainExecutionHost(capture: capture, platform: platform, restored: restored, isCurrent: { [weak self] in
             guard let self else { return false }
             self.ownershipLock.lock(); defer { self.ownershipLock.unlock() }
             return self.ownershipGeneration == generation && self.nodeChainExecution?.capture === capture && !self.permanentlyStopped
@@ -1067,6 +1077,62 @@ final class RouterVPNLibboxEngine {
         ownershipLock.unlock()
         guard current, plan.healthy() else { platform.mtu.stop(); throw error("Imported MTU belongs to a retired native generation") }
     }
+    /// The worker retains the exact host while native observations run. It
+    /// never calls a native proof or capsule API on the provider message queue.
+    func orderedExecutionRequest(_ request: RouterVPNNodeChainExecutionRegistry.Request,
+                                 completion: @escaping (Data?) -> Void) {
+        ownershipLock.lock()
+        let host = nodeChainExecution, generation = ownershipGeneration
+        let available = !starting && !permanentlyStopped && server != nil
+        ownershipLock.unlock()
+        guard available, let host, request.session.isEmpty || request.session == settingsEpoch else { completion(nil); return }
+        let worker = OrderedExecutionIPC(owner: self, host: host, generation: generation, request: request, completion: completion)
+        DispatchQueue.global(qos: .userInitiated).async { worker.run() }
+    }
+
+    private final class OrderedExecutionIPC: @unchecked Sendable {
+        let owner: RouterVPNLibboxEngine, host: RouterVPNNodeChainExecutionHost
+        let generation: UUID, epoch: UUID
+        let request: RouterVPNNodeChainExecutionRegistry.Request
+        let completion: (Data?) -> Void
+        init(owner: RouterVPNLibboxEngine, host: RouterVPNNodeChainExecutionHost, generation: UUID,
+             request: RouterVPNNodeChainExecutionRegistry.Request, completion: @escaping (Data?) -> Void) {
+            self.owner = owner; self.host = host; self.generation = generation
+            self.request = request; self.completion = completion
+            epoch = RouterVPNNodeChainExecutionRegistry.shared.epoch()
+        }
+        func current() -> Bool {
+            owner.ownershipLock.lock(); defer { owner.ownershipLock.unlock() }
+            return owner.ownershipGeneration == generation && owner.nodeChainExecution === host && !owner.permanentlyStopped
+        }
+        func run() {
+            var result: Data?
+            do {
+                guard current() else { throw owner.error("The ordered IPC owner changed before observation") }
+                let registry = RouterVPNNodeChainExecutionRegistry.shared
+                if request.operation == "ordered-execution-capture" {
+                    result = try registry.capture(host: host, session: owner.settingsEpoch, request: request, epoch: epoch)
+                } else if request.operation == "ordered-execution-verify" {
+                    result = try registry.verify(host: host, session: owner.settingsEpoch, request: request)
+                } else if request.operation == "ordered-execution-last" {
+                    let record = try host.lastRecord()
+                    result = try JSONSerialization.data(withJSONObject: ["schema": 1, "kind": "routervpn-ordered-execution-last",
+                        "request_id": request.request, "session_id": owner.settingsEpoch,
+                        "source_sha256": host.capture.sourceSHA256, "preparation_config_sha256": host.capture.configSHA256,
+                        "last": record], options: [.sortedKeys])
+                    guard (result?.count ?? 0) <= 20 * 1024 else { throw owner.error("The Last reply exceeds its bound") }
+                } else { throw owner.error("The ordered IPC operation has no captured live owner") }
+                guard current() else { throw owner.error("The ordered IPC owner retired before delivery") }
+            } catch {
+                if request.operation == "ordered-execution-capture" {
+                    RouterVPNNodeChainExecutionRegistry.shared.discardReply(host: host, request: request)
+                }
+                result = nil
+            }
+            completion(result)
+        }
+    }
+
     func activateNodeChainExecutionPerformance() throws {
         ownershipLock.lock(); let host = nodeChainExecution; ownershipLock.unlock()
         guard let host else { throw error("The ordered performance owner is unavailable") }

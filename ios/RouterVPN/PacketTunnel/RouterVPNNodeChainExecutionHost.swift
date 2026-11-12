@@ -9,6 +9,7 @@ final class RouterVPNNodeChainExecutionHost: @unchecked Sendable {
     private let platform: RouterVPNLibboxPlatform
     private let isCurrent: () -> Bool
     private let onFailure: (Error) -> Void
+    private let restored: RouterVPNNodeChainExecutionRegistry.Restored?
     private let lock = NSLock()
     private let closeLock = NSLock()
     private var server: LibboxCommandServer?
@@ -27,8 +28,8 @@ final class RouterVPNNodeChainExecutionHost: @unchecked Sendable {
     private static let retirement = Retirement()
 
     init(capture: IOSNodeChainExecutionCapture, platform: RouterVPNLibboxPlatform,
-         isCurrent: @escaping () -> Bool, onFailure: @escaping (Error) -> Void) {
-        self.capture = capture; self.platform = platform
+         restored: RouterVPNNodeChainExecutionRegistry.Restored? = nil, isCurrent: @escaping () -> Bool, onFailure: @escaping (Error) -> Void) {
+        self.capture = capture; self.platform = platform; self.restored = restored
         self.isCurrent = isCurrent; self.onFailure = onFailure
     }
 
@@ -96,6 +97,7 @@ final class RouterVPNNodeChainExecutionHost: @unchecked Sendable {
         lock.lock(); let available = !cancelled && !complete; lock.unlock()
         guard available, isCurrent() else { throw Self.issue("The ordered native owner has retired.") }
         try capture.requireCurrent()
+        try restored?.require(capture)
         guard isCurrent() else { throw Self.issue("The ordered native generation changed.") }
     }
 
@@ -221,11 +223,47 @@ final class RouterVPNNodeChainExecutionHost: @unchecked Sendable {
         try requireCurrent()
         lock.lock(); let original = server; lock.unlock()
         guard let original, capture.healthy() else { throw Self.issue("The ordered MTU owner lost its current native proof.") }
-        try platform.mtu.activateNodeChainExecution(server: original, plan: capture.plan) { [self] message in
+        try platform.mtu.activateNodeChainExecution(server: original, plan: capture.plan, runAutomatic: restored == nil) { [self] message in
             if isCurrent() { onFailure(Self.issue(message)) }
         }
         try requireCurrent()
         guard platform.mtu.isChanging || capture.healthy() else { throw Self.issue("The ordered MTU attachment changed its original native owner.") }
+    }
+
+    /// Native capsules and durable records are captured only while the whole
+    /// optimizer is idle. The hold joins before any IPC callback is delivered.
+    func captureRestoration() throws -> (IOSNodeChainExecutionCapture.Restoration, UUID) {
+        var result: IOSNodeChainExecutionCapture.Restoration?
+        var epoch: UUID?
+        try observe {
+            guard let token = platform.mtu.proofObservationToken,
+                  try platform.mtu.observeNodeChainExecutionMeasurement(token, { result = try capture.captureRestoration() }) else {
+                throw Self.issue("The original MTU observation is not idle and current.")
+            }
+            epoch = token
+        }
+        guard let result, let epoch else { throw Self.issue("The native restoration capsule is unavailable.") }
+        return (result, epoch)
+    }
+
+    func validateRestoration(_ epoch: UUID, execution: String) throws {
+        try observe {
+            guard try platform.mtu.observeNodeChainExecutionMeasurement(epoch, {
+                guard capture.healthy(), try capture.execution() == execution else { throw Self.issue("The original ordered proof changed.") }
+            }) else { throw Self.issue("The original ordered MTU generation changed.") }
+        }
+    }
+
+    func lastRecord() throws -> String {
+        var result: String?
+        try observe {
+            guard let token = platform.mtu.proofObservationToken,
+                  try platform.mtu.observeNodeChainExecutionMeasurement(token, { result = try capture.captureLastRecord() }) else {
+                throw Self.issue("The current ordered Last proof is unavailable while MTU is changing.")
+            }
+        }
+        guard let result else { throw Self.issue("The current ordered Last record is unavailable.") }
+        return result
     }
 
     func progress() -> Data? {

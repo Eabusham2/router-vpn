@@ -541,6 +541,19 @@ for automatic in [false,true] { for startupHold in ["",id] {
  check(retained.observePhysicalPath(name:"en0",signature:"ordered-cleanup-change"),"ordered cleanup disabled physical observation before DELETE")
  try retained.stopChecked()
 }}
+for startupHold in ["",id] {
+ FakeOS.newCloseFailures=0;FakeOS.returnOwnerWithError=false
+ let restored=ready(startupHold),plan=LibboxRouterNodeChainExecution(),calls=FakeOS.startCalls
+ try restored.activateNodeChainExecution(server:LibboxCommandServer(),plan:plan,runAutomatic:false){_ in}
+ let session=restored.captureMTU()!.session
+ check(FakeOS.startCalls==calls,"temporary restore reran automatic MTU immediately")
+ if !startupHold.isEmpty{_=request(restored,"mtu-release",id,session)}
+ check(FakeOS.startCalls==calls,"temporary restore queued automatic MTU after hold")
+ check(request(restored,"mtu-status",other,session)?["optimization_allowed"] as? Bool==true,"temporary restore disabled later explicit Retest")
+ _=request(restored,"mtu-start",other,session)
+ check(FakeOS.startCalls==calls+1,"temporary restore lost explicit native Retest")
+ try restored.stopChecked()
+}
 let invalidExecution=ready(),invalidExecutionPlan=LibboxRouterNodeChainExecution();invalidExecutionPlan.valid=false
 rejects("unproved ordered execution granted MTU"){try invalidExecution.activateNodeChainExecution(server:LibboxCommandServer(),plan:invalidExecutionPlan){_ in}}
 try invalidExecution.stopChecked()
@@ -612,6 +625,8 @@ with tempfile.TemporaryDirectory(prefix='routervpn-ios-mtu-') as directory:
  for label, before, after, expected in (
   ('native-predecessor-authority','(nativeTorAuthority || nativeExecutionAuthority) ? next.autoRequested() : ','','inherited Tor capacity rewrote saved exit preference or entered Auto'),
   ('execution-optimizer-idle','guard available, captured?.running() != true else { return false }','guard available else { return false }','ordered measurement factory ran during full optimizer'),
+  ('restored-automatic-start','if automatic && runAutomatic && !hold {','if automatic && !hold {','temporary restore reran automatic MTU immediately'),
+  ('restored-automatic-pending','automaticPending = automatic && runAutomatic && hold;','automaticPending = automatic && hold;','temporary restore queued automatic MTU after hold'),
   ('execution-path-authority','(nativeTorAuthority || nativeExecutionAuthority) ? next.autoRequested() : ','nativeTorAuthority ? next.autoRequested() : ','ordered full-path native Auto authority ignored'),
   ('configured-retest-admission','guard optimizationAllowed else {','guard true else {','forbidden Tor Retest reached the native controller'),
   ('readback-display','if dead || actual == nil || !readbackMatches {','if dead {','mismatched Tor OS reader retained a configured capacity claim'),
