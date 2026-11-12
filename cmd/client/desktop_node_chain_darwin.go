@@ -49,6 +49,7 @@ type desktopMacOSNodeChainHost struct {
 	gate chan struct{}
 	process *desktopMacOSProcess
 	mtu desktopMacOSNodeChainMTUBridge
+	mtuObservation desktopMacOSMTUObservationSlot
 	baseline *desktopMacOSNodeChainReceipt
 	baselineRun desktopMacOSNodeChainBaselineRunner
 	started time.Time
@@ -690,10 +691,12 @@ func (h *desktopMacOSNodeChainHost) monitor(ctx context.Context) error {
 		end := func() { once.Do(func() { ticker.Stop(); cancel(); close(done) }) }
 		defer end()
 		a, launch := h.parent.app, h.launch
-		observe := func() error {
+		observe := func() (error, bool) {
+			before := h.mtuObservation.value.Load()
 			call, stop := context.WithTimeout(watch, 2*time.Second)
 			defer stop()
-			return h.runtime.current(call)
+			err := h.runtime.current(call)
+			return err, err != nil && h.mtuObservation.deferFailure(h, launch, before)
 		}
 		for {
 			select {
@@ -704,7 +707,7 @@ func (h *desktopMacOSNodeChainHost) monitor(ctx context.Context) error {
 			if !a.ownsConnectionRuntime(launch.command) {
 				return
 			}
-			if err := observe(); err == nil {
+			if err, cleanup := observe(); err == nil || cleanup {
 				continue
 			}
 			release, current := a.claimRuntimeMonitorOperation(launch.command)
@@ -718,7 +721,7 @@ func (h *desktopMacOSNodeChainHost) monitor(ctx context.Context) error {
 				release()
 				return
 			}
-			if err := observe(); err == nil {
+			if err, cleanup := observe(); err == nil || cleanup {
 				release()
 				continue
 			}

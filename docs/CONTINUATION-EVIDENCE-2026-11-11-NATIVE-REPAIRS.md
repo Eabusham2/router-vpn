@@ -7,6 +7,63 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## November 12: original Darwin MTU adapter and bounded monitor coordination
+
+The ordered macOS host now supplies the controller's actual MTU adapter. It
+captures the complete proved host, parent, process, launch, raw lease, source
+and application snapshot. Read, Change and Commit require that same active
+owner. A changed utun reader is accepted only after full native readiness and
+selected-path proof, matching MTU status, kernel interface observation and
+absence of the original retired interface. The outer optimizer's immutable
+original-interface scope is confirmed by this typed owner for every adopted
+transition, including idempotent current-reader confirmation.
+
+Cleanup retains its original objects after selection changes and partial
+begin failures. Parent retirement must join the authenticated child and read
+that exact child's stopped receipt before discharging the raw lease. A locally
+closed begin, process exit, new interface name or replacement owner cannot
+substitute for that evidence. A completed live rollback keeps its exact stored
+receipt separate from native retirement.
+
+Active MTU commands take the existing connection-operation claim. Restore and
+Close remain callable while explicit Stop owns that claim. Their bounded
+cleanup publishes a private observation receipt on the original host so the
+two-second health observer cannot mistake its blocked host gate for a dead
+connection. A receipt that starts or completes during a failed observation
+requires one fresh check; an older completed, expired, foreign-host or
+foreign-command receipt cannot defer ongoing failure. The entire Retest does
+not suspend monitoring, and no command, observation or cleanup budget changed.
+
+The eight adapter test roots preserve 106 comparison cases and parent
+assertions. Two additional monitor roots exercise blocked original host access,
+completion while the caller is still live, completion racing cancellation,
+expired and unbounded claims, duplicate cleanup and replacement command
+identity. The complete cmd/client Darwin/AMD64 test binary compiled successfully
+with Go 1.26.3, CGO disabled, on isolated edf8d105 plus these exact six source and
+test files, including the final monitor controls. Their native process and PF
+boundaries remain explicit doubles.
+Execution of these Darwin-only tests and actual installed-host encrypted
+traffic, utun, PF and rollback acceptance still require the macOS gates.
+Public ordered macOS connection admission remains closed pending that evidence.
+
+The executor became available again. At clean source edf8d105, the seven outer
+MTU Go roots passed in 3.519 seconds, the actual Go helper compiled, and all 25
+shipping Python optimizer integration methods passed in 0.801 seconds. An
+isolated edf8d105 plus the adapter passed the three existing ordered snapshot
+roots with the race detector in 41.354 seconds and the seven outer succession
+roots with the race detector in 18.580 seconds. Six actual generated-manifest
+preflight tests also passed, including repeated valid preparation and
+changed/missing/unowned/foreign/digest rejection. These observations supersede
+the earlier unavailable-local-runtime status below; they do not certify a
+different native host or the whole release.
+
+Concurrent main updates through 9885f554 were preserved, including measured
+ordered-node prefixes, original-caller observation, protected Linux imported
+admission, Windows source-byte preservation and native race compilation
+separation, followed by mobile ordered measurement ownership and the joined
+automatic-MTU latency fixture. No historical recovery worktree was replayed
+or overwritten.
+
 ## Outer MTU measurements preserve original Darwin interface ownership
 
 The controller and optimizer now have an explicit private capability for an
@@ -38,8 +95,9 @@ helper reply-fault cases were independently preserved.
 The four production and three test files were independently reviewed; the
 previous draft's optional-empty-field loophole was closed by exact field
 inventory validation. Source and preservation checks are not execution.
-No local Go/Python runtime was available. Hosted tests and the original Darwin
-wrapper/native acceptance remain necessary before this path is accepted.
+At that publication checkpoint no local Go/Python runtime was available.
+The November 12 execution results above now provide focused local evidence;
+hosted tests and native acceptance remain necessary for the complete path.
 
 
 ## Generated manager fixture stays within its declared ownership category
