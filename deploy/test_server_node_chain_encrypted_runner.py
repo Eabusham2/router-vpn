@@ -43,6 +43,35 @@ def workflow(value):
 
 
 class GateTests(unittest.TestCase):
+    def test_actual_logger_io_copy_obeys_snapshot_mutex(self):
+        template=(ROOT/GATE.TEMPLATE).read_text()
+        begin=template.index('type serverChainEncryptedLog struct {')
+        end=template.index('type serverChainEncryptedProcess struct {',begin)
+        shipping=template[begin:end]
+        harness=r'''package main
+import("bytes";"io";"runtime";"strings";"sync";"testing")
+SHIPPING
+func TestNoPromotedReadFrom(t *testing.T){var log serverChainEncryptedLog;if _,ok:=any(&log).(io.ReaderFrom);ok{t.Fatal("logger exposes unguarded ReaderFrom")}}
+func TestActualCopyAndSnapshot(t *testing.T){
+ var log serverChainEncryptedLog;start:=make(chan struct{});done:=make(chan struct{})
+ go func(){defer close(done);<-start;for i:=0;i<512;i++{if _,err:=io.Copy(&log,struct{io.Reader}{strings.NewReader(strings.Repeat("x",1024))});err!=nil{panic(err)};runtime.Gosched()}}()
+ close(start);for i:=0;i<1000;i++{if len(log.text())>8192{t.Fatal("unbounded snapshot")};runtime.Gosched()};<-done
+ if got:=log.text();len(got)!=8192||got!=strings.Repeat("x",8192){t.Fatal("original complete logger tail lost")}
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='server-actual-log-race-') as directory:
+            root=Path(directory);(root/'go.mod').write_text('module routervpn-server-log-test\n\ngo 1.26\n')
+            test=root/'log_test.go';test.write_text(harness.replace('SHIPPING',shipping))
+            command=['go','test','-race','-count=1','-timeout=30s','.']
+            result=subprocess.run(command,cwd=root,capture_output=True,text=True,timeout=45)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertEqual(shipping.count('buffer bytes.Buffer'),1)
+            old=shipping.replace('buffer bytes.Buffer','bytes.Buffer',1).replace('b.buffer.','b.Buffer.')
+            test.write_text(harness.replace('SHIPPING',old))
+            failed=subprocess.run(command[:-1]+['-run=^TestActualCopyAndSnapshot$','.'],cwd=root,capture_output=True,text=True,timeout=45)
+            self.assertNotEqual(failed.returncode,0,failed.stdout+failed.stderr)
+            self.assertIn('WARNING: DATA RACE',failed.stdout+failed.stderr)
+
     def test_all_required_native_success_and_refusal_shapes(self):
         self.assertEqual(len(GATE.CASES), 14)
         for case in GATE.CASES:

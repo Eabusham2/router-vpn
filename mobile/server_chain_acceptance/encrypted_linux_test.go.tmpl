@@ -95,19 +95,19 @@ type serverChainEncryptedStats struct {
 	Final    serverChainEncryptedFinalStats    `json:"final"`
 }
 type serverChainEncryptedLog struct {
-	mu sync.Mutex
-	bytes.Buffer
+	mu     sync.Mutex
+	buffer bytes.Buffer
 }
 
 func (b *serverChainEncryptedLog) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.Buffer.Write(p)
+	return b.buffer.Write(p)
 }
 func (b *serverChainEncryptedLog) text() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	v := b.Buffer.String()
+	v := b.buffer.String()
 	if len(v) > 8192 {
 		v = v[len(v)-8192:]
 	}
