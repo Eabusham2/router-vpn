@@ -78,6 +78,7 @@ type RouterVPNNodeChainExecutionEngine struct {
 	current           func(context.Context) error
 	discovery         atomic.Pointer[mobilemultihop.NodeChainExecutionDiscoveryOwner]
 	planned           atomic.Pointer[mobilemultihop.NodeChainExecutionProjection]
+	last              *routerVPNExecutionLast // protected by busy; retained through failed discovery join
 	state             atomic.Pointer[routerVPNExecutionState]
 	reader            atomic.Pointer[routerVPNExecutionReader]
 	mtu               atomic.Pointer[routerVPNExecutionMTUTransition]
@@ -428,6 +429,13 @@ func (e *RouterVPNNodeChainExecutionEngine) adoptContext(ctx context.Context, so
 		return nil, errRouterVPNExecutionOwner
 	}
 	defer e.busy.Store(false)
+	if e.last != nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	return e.adoptLockedContext(ctx, sourceSHA, port, original)
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) adoptLockedContext(ctx context.Context, sourceSHA string, port int, original *mobilemultihop.NodeChainExecutionPolicy) (result *mobilemultihop.NodeChainExecutionProjection, failure error) {
 	identity, err := e.ObserveChainContext(ctx)
 	state, owner := e.state.Load(), e.discovery.Load()
 	if err != nil || state == nil || state.stage != 0 || owner == nil || owner.Identity() != identity || e.permit.Load() != nil {

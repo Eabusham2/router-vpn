@@ -2,6 +2,7 @@
 """Require complete native ownership verdicts and causal execution witnesses."""
 import importlib.util
 import json
+import re
 from pathlib import Path
 import unittest
 
@@ -33,8 +34,16 @@ def encoded(rows):
 class Verdict(unittest.TestCase):
     def test_exact_complete_three_package_inventory(self):
         result = RUNNER.verdict(encoded(events()), 0)
-        self.assertEqual(result, {'roots': 18, 'test_records': 49})
-        self.assertEqual(len(RUNNER.CONTROLS), 11)
+        self.assertEqual(result, {'roots': 20, 'test_records': 53})
+        self.assertEqual(len(RUNNER.CONTROLS), 13)
+
+    def test_selection_keeps_only_exact_owner_inventory(self):
+        pattern = re.compile(RUNNER.selection())
+        for roots in RUNNER.ROOTS.values():
+            for root in roots:
+                self.assertIsNotNone(pattern.fullmatch(RUNNER.PREFIX+root))
+        self.assertIsNone(pattern.fullmatch(RUNNER.PREFIX+'TUNDNSAddressCannotBypass'))
+        self.assertIsNone(pattern.fullmatch(RUNNER.PREFIX+'NativeCloseReceiptForeign'))
 
     def test_omitted_root_child_or_package_cannot_pass(self):
         rows = events()

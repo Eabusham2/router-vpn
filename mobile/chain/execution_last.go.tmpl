@@ -1,0 +1,68 @@
+package box
+
+import (
+	"context"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type routerVPNExecutionLast struct {
+	raw   string
+	owner *mobilemultihop.NodeChainExecutionDiscoveryOwner
+	plan  mobilemultihop.NodeChainExecutionLastPlan
+}
+
+// A saved record carries no live proof. Only this engine's original fresh
+// authenticated discovery can create the plan, and the same native closed
+// gate/selector transaction must adopt it before shared Last Run can prove it.
+func (e *RouterVPNNodeChainExecutionEngine) AdoptLastContext(ctx context.Context, last mobilemultihop.NodeChainExecutionLast) (mobilemultihop.NodeChainExecutionLastPlan, error) {
+	empty := mobilemultihop.NodeChainExecutionLastPlan{}
+	if e == nil || ctx == nil || !e.busy.CompareAndSwap(false, true) {
+		return empty, errRouterVPNExecutionOwner
+	}
+	defer e.busy.Store(false)
+	if last.ValidatePreparation(e.prep) != nil {
+		return empty, errRouterVPNExecutionOwner
+	}
+	identity, err := e.ObserveChainContext(ctx)
+	state, owner := e.state.Load(), e.discovery.Load()
+	if err != nil || state == nil || state.stage != 0 || owner == nil || owner.Identity() != identity || e.permit.Load() != nil {
+		return empty, errRouterVPNExecutionOwner
+	}
+	if e.last == nil {
+		if e.planned.Load() != nil {
+			return empty, errRouterVPNExecutionOwner
+		}
+		plan, err := owner.PlanLastContext(ctx, last)
+		if err != nil {
+			return empty, err
+		}
+		// Retain before closing discovery or changing any native graph object.
+		e.last = &routerVPNExecutionLast{raw: last.JSON(), owner: owner, plan: plan}
+		projection, err := plan.Projection()
+		if err != nil {
+			return empty, err
+		}
+		e.planned.Store(projection)
+	}
+	retained := e.last
+	if retained.owner != owner || retained.raw != last.JSON() {
+		return empty, errRouterVPNExecutionOwner
+	}
+	projection, err := retained.plan.Projection()
+	if err != nil || projection != e.planned.Load() {
+		return empty, errRouterVPNExecutionOwner
+	}
+	policy, err := mobilemultihop.NewNodeChainExecutionPolicy(projection.Source())
+	if err != nil {
+		return empty, err
+	}
+	adopted, err := e.adoptLockedContext(ctx, policy.Descriptor().SourceSHA256, policy.Request().Port, nil)
+	if err != nil {
+		return empty, err
+	}
+	if adopted != projection || e.last != retained || retained.plan.RequireJoinedContext(ctx) != nil {
+		return empty, errRouterVPNExecutionOwner
+	}
+	return retained.plan, nil
+}

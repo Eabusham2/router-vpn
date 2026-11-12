@@ -22,7 +22,7 @@ ROOTS = {
               'NativeOpenCannotFinishAfterRevoke', 'NativeDiscoveryKeepsLiteralOriginalEntry',
               'NativeRestoreRetainsOriginalFront', 'NativeRetiredSourceKeepsClosedReceipt',
               'NativeFailedAcquisitionRetainsSealedStop', 'NativeDuplicateBindKeepsOriginalOwner',
-              'NativeCloseReceipt',
+              'NativeCloseReceipt', 'NativeLastUsesOriginalDiscovery', 'NativeLastRetainsPendingPlan',
               'NativeMTUUsesJoinedReader', 'NativeMTURejectsChangedOwnership',
               'NativeMTUReadbackAndRetirementRemainOwned'),
     PACKAGE+'/protocol/tun': ('TUNMTUReadbackRequiresActualOwner',),
@@ -30,6 +30,7 @@ ROOTS = {
                                  'AppendConcurrentTagHasOneOriginalWinner'),
 }
 CHILDREN = {
+    'NativeLastUsesOriginalDiscovery': ('local', 'server'),
     'NativeCloseReceipt': ('success', 'original-error'),
     'NativeMTUUsesJoinedReader': ('candidate', 'rollback', 'unchanged', 'pending-close'),
     'NativeMTURejectsChangedOwnership': ('zero-binding', 'foreign-identity', 'foreign-selector', 'open-gate', 'retired-source', 'invalid-fixed', 'above-bound', 'cancelled', 'foreign-reader'),
@@ -39,6 +40,10 @@ CHILDREN = {
     'AppendRejectsForeignOwnerAndLifecycle': ('entry', 'gate', 'detour', 'lifecycle', 'cancelled', 'closed-manager'),
 }
 PREFIX = 'TestRouterVPNExecution'
+
+
+def selection():
+    return '^'+PREFIX+'('+'|'.join(sorted({name for roots in ROOTS.values() for name in roots}))+')$'
 
 
 def load(name, filename):
@@ -122,6 +127,12 @@ def verify(core):
 
 
 CONTROLS = (
+    ('retained Last adoption slot', 'routervpn_node_chain_execution.go',
+     '\tif e.last != nil {\n\t\treturn nil, errRouterVPNExecutionOwner\n\t}\n', '',
+     '.', 'NativeLastRetainsPendingPlan', 'normal adoption consumed the original Last plan'),
+    ('original Last discovery owner', 'routervpn_node_chain_execution_last.go',
+     'retained.owner != owner || ', '',
+     '.', 'NativeLastRetainsPendingPlan', 'Last retry accepted another discovery owner'),
     ('actual native close join', 'routervpn_node_chain_execution_close.go',
      '\tselect {\n\tcase <-ctx.Done():\n\t\treturn ctx.Err()\n\tcase <-done:\n\t}\n', '',
      '.', 'NativeCloseReceipt/success', 'early done or service slot fabricated joined native close'),
