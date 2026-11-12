@@ -55,6 +55,10 @@ jobs:
     name: Imported Naive H3 native graphs and peers
     uses: ./.github/workflows/imported-naive-h3-native.yml
 
+  server-ordered-encrypted:
+    name: Actual encrypted ordered Server suffix on both Linux architectures
+    uses: ./.github/workflows/server-node-chain-encrypted.yml
+
   source-audit:
     name: Source security and release-gap audits
     runs-on: ubuntu-24.04
@@ -664,7 +668,7 @@ jobs:
 
   aggregate:
     name: Aggregate one-SHA native release candidate
-    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3, darwin-ordered-child, darwin-ordered-host]
+    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3, darwin-ordered-child, darwin-ordered-host, server-ordered-encrypted]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

@@ -8,15 +8,15 @@ ROOT = Path(__file__).resolve().parents[1]
 AUDIT = ROOT / "deploy/native-artifact-workflow-parity-audit.py"
 
 
-def shipping_check():
+def shipping_check(name="check_release_aggregate_gates"):
     tree = ast.parse(AUDIT.read_text())
     functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
-                 and node.name == "check_release_aggregate_gates"]
+                 and node.name == name]
     if len(functions) != 1:
         raise AssertionError("shipping aggregate guard missing or duplicated")
     namespace = {}
     exec(compile(ast.Module(body=functions, type_ignores=[]), str(AUDIT), "exec"), namespace)
-    return namespace["check_release_aggregate_gates"]
+    return namespace[name]
 
 
 class NativeArtifactAggregate(unittest.TestCase):
@@ -55,7 +55,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(without + decoy)
 
     def test_duplicate_aggregate_or_imported_family_job_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "native-runtimes"):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "native-runtimes", "server-ordered-encrypted"):
             with self.subTest(job=job), self.assertRaisesRegex(AssertionError, "missing or duplicate"):
                 self.check(self.source + "\n  " + job + ":\n    runs-on: ubuntu-24.04\n")
 
@@ -67,7 +67,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
 
     def test_condition_or_nonblocking_gate_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "native-runtimes"):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "native-runtimes", "server-ordered-encrypted"):
             for bypass in ("    if: ${{ false }}\n", "    continue-on-error: true\n"):
                 with self.subTest(job=job, bypass=bypass):
                     with self.assertRaisesRegex(AssertionError, "conditional or nonblocking"):
@@ -103,6 +103,42 @@ class NativeArtifactAggregate(unittest.TestCase):
         self.assertEqual(ast.unparse(calls[0].value), "check_release_aggregate_gates(rc)")
         caller = (ROOT / "deploy/release-orchestration-audit.py").read_text()
         self.assertEqual(caller.count('"deploy/test_native_artifact_aggregate.py"'), 1)
+
+    def test_removed_or_changed_encrypted_server_workflow_fails(self):
+        marker = "    uses: ./.github/workflows/server-node-chain-encrypted.yml"
+        for replacement in ("    uses: ./.github/workflows/native-xray-exits.yml", "    runs-on: ubuntu-24.04"):
+            with self.subTest(replacement=replacement), self.assertRaisesRegex(AssertionError, "actual encrypted ordered Server"):
+                self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
+        with self.assertRaisesRegex(AssertionError, "no-input same-SHA"):
+            self.check(self.source.replace(marker, marker + "\n    with:\n      platform: amd64", 1))
+
+    def test_encrypted_server_native_platform_sha_and_receipts_are_required(self):
+        check = shipping_check("check_server_encrypted_workflow")
+        source = (ROOT / ".github/workflows/server-node-chain-encrypted.yml").read_text()
+        check(source)
+        changes = (
+            ("          - arch: arm64\n            runner: ubuntu-24.04-arm\n", ""),
+            ("          - arch: amd64\n            runner: ubuntu-24.04\n", ""),
+            ("          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}", "          ROUTERVPN_EXPECTED_SOURCE: historical"),
+            ("          persist-credentials: false", "          persist-credentials: false\n          ref: historical"),
+            ("  workflow_call:\n", "  workflow_call:\n    inputs: {}\n"),
+            ("  encrypted:\n", "  encrypted:\n    if: false\n"),
+            ("  encrypted:\n", "  encrypted:\n    continue-on-error: true\n"),
+            ("--standalone --require-commit", "--compile-only --require-commit"),
+            ("          if-no-files-found: error", "          if-no-files-found: ignore"),
+        )
+        for old, new in changes:
+            self.assertEqual(source.count(old), 1)
+            with self.subTest(old=old), self.assertRaises(AssertionError):
+                check(source.replace(old, new, 1))
+        caller = (ROOT / "deploy/release-orchestration-audit.py").read_text()
+        self.assertEqual(caller.count('"deploy/test_server_node_chain_encrypted_runner.py"'), 1)
+        tree = ast.parse(AUDIT.read_text())
+        calls = [node for node in tree.body if isinstance(node, ast.Expr)
+                 and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                 and node.value.func.id == "check_server_encrypted_workflow"]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(ast.unparse(calls[0].value), "check_server_encrypted_workflow(read('.github/workflows/server-node-chain-encrypted.yml'))")
 
     def test_removed_or_changed_darwin_child_workflow_fails(self):
         marker = "    uses: ./.github/workflows/darwin-node-child-tun.yml"

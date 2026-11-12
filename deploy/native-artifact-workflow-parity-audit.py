@@ -46,7 +46,7 @@ def check_release_aggregate_gates(source: str) -> None:
     values = [value.strip() for value in needs[0][len("    needs: ["):-1].split(",")]
     required = {"source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
                 "windows-complete-max", "windows-all-controller", "android", "ios", "macos",
-                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host"}
+                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "server-ordered-encrypted"}
     assert len(values) == len(set(values)) and set(values) == required, (
         "native release aggregate changed its complete required gate inventory")
     pq = job("imported-pq-reality")
@@ -64,6 +64,11 @@ def check_release_aggregate_gates(source: str) -> None:
     darwin_child = job("darwin-ordered-child")
     assert "    uses: ./.github/workflows/darwin-node-child-tun.yml" in darwin_child, (
         "native release lost its actual ordered Darwin child acceptance workflow")
+    server_encrypted = job("server-ordered-encrypted")
+    assert server_encrypted.count("    uses: ./.github/workflows/server-node-chain-encrypted.yml") == 1, (
+        "native release lost its actual encrypted ordered Server workflow")
+    assert not any(line.startswith("    with:") for line in server_encrypted), (
+        "native encrypted Server must retain its no-input same-SHA workflow")
     darwin_host = job("darwin-ordered-host")
     assert "    uses: ./.github/workflows/darwin-node-host-tun.yml" in darwin_host, (
         "native release lost its actual installed ordered Darwin host workflow")
@@ -75,9 +80,37 @@ def check_release_aggregate_gates(source: str) -> None:
     for name, lines in (("aggregate", aggregate), ("imported-pq-reality", pq),
                         ("imported-xhttp", xhttp), ("imported-naive-h2", naive_h2), ("imported-naive-h3", naive_h3),
                         ("darwin-ordered-child", darwin_child), ("darwin-ordered-host", darwin_host),
-                        ("native-runtimes", runtimes)):
+                        ("native-runtimes", runtimes), ("server-ordered-encrypted", server_encrypted)):
         assert not any(line.startswith(("    if:", "    continue-on-error:")) for line in lines), (
             f"native release {name} gate became conditional or nonblocking")
+
+
+def check_server_encrypted_workflow(source: str) -> None:
+    """Both native outcomes must use the caller SHA without configurable input."""
+    lines = source.splitlines()
+    for marker in (
+        "  workflow_call:",
+        "  encrypted:",
+        "    runs-on: ${{ matrix.runner }}",
+        "          - arch: amd64",
+        "            runner: ubuntu-24.04",
+        "          - arch: arm64",
+        "            runner: ubuntu-24.04-arm",
+        "      - uses: actions/checkout@v4",
+        "          persist-credentials: false",
+        "          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}",
+        "          ROUTERVPN_SERVER_RECEIPT: ${{ runner.temp }}/server-node-chain-${{ matrix.arch }}.json",
+        '          python3 deploy/test_server_node_chain_encrypted.py --standalone --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_SERVER_RECEIPT"',
+        "        run: python3 deploy/test_server_node_chain_encrypted_runner.py",
+        "          name: RouterVPN-Server-encrypted-${{ matrix.arch }}-${{ github.sha }}",
+        "          path: ${{ runner.temp }}/server-node-chain-${{ matrix.arch }}.json",
+        "          if-no-files-found: error",
+    ):
+        assert lines.count(marker) == 1, ("encrypted Server lost required native platform/SHA/receipt: " + marker)
+    assert not any(line.lstrip().startswith(("if:", "continue-on-error:", "inputs:", "ref:")) for line in lines), (
+        "encrypted Server native inventory/SHA became conditional or configurable")
+    assert "--compile-only" not in source and "|| true" not in source, (
+        "encrypted Server replaced required native acceptance with a nonblocking result")
 
 
 policy = load_policy()
@@ -437,6 +470,7 @@ for request, spec in policy.DIRECT_ARTIFACTS.items():
 
 # Keep the one-SHA aggregate exhaustive rather than silently dropping a platform.
 check_release_aggregate_gates(rc)
+check_server_encrypted_workflow(read(".github/workflows/server-node-chain-encrypted.yml"))
 require(rc, rc_rel,
         "windows-complete-max:",
         "uses: ./.github/workflows/windows-node-max-contract.yml",
