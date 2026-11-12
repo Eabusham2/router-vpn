@@ -18,6 +18,34 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
+## November 12 current evidence refresh
+
+The current [November 12 ledger](CONTINUATION-EVIDENCE-2026-11-12.md#current-evidence-refresh)
+supersedes the earlier AES-256-only and missing-encrypted-middle status. All
+three original single-PSK SS2022 methods now have published mobile/desktop
+source adoption and a distinct nine-path encrypted native witness. Tight-MTU
+codec/fragment evidence, retained-prefix candidate capture/bridge/encrypted
+witness and the Android connected view/sort increment have separately bounded
+receipts. Concurrent ordered Server discovery, leases, trial/restore runtime,
+application/DNS ingress and mandatory encrypted architecture gates are
+preserved; their publication is not itself passing hosted or remote acceptance.
+
+The original #214–224, addendum #336 and August 19 custom-node/map wording still
+require actual selected-prefix candidate latency, independently chosen hops,
+per-hop/final information and the all-device product. The current candidate
+slice means fifty TCP connections through an already-proved WG/AWG prefix to
+literal Off SS2022 candidates. It does not close measured-candidate adoption
+into the builder/next connection, pre-connect use, every map/chooser surface,
+broader protocols/layers/prefixes or physical/package acceptance. The original
+Local/Server/Compare score remains `(last_node + same external endpoint) / 2`;
+this TCP measurement does not replace either response-time term.
+
+All remaining native/platform/protection, Setup Center, profile/default,
+release, physical/private, signing/distribution and ASUS household-safety
+requirements remain in the full ledger. Historical dated evidence below keeps
+its own source cutoff. No completion percentage or reduced denominator follows
+from the newer source or test counts.
+
 ## November 10 original-source recovery and current boundaries
 
 The [November 10 evidence ledger](CONTINUATION-EVIDENCE-2026-11-10.md)

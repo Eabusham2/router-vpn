@@ -6,47 +6,46 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 12: published connection, measurement and DNS continuation
+## November 12: current ordered-source, candidate and acceptance boundaries
 
-The [November 12 requirement and evidence ledger](CONTINUATION-EVIDENCE-2026-11-12.md)
-records this continuation from live `9a7c3f60`, with published source through
-`20e1c10f`. It preserves the original numbered audit and corrections, the
-later direct map/custom-node request, all-device scope and the distinct
-release/device/deployment evidence requirements.
+The [November 12 evidence ledger](CONTINUATION-EVIDENCE-2026-11-12.md)
+retains the full original numbered audit, C1–C7, later product corrections and
+August 19 map/custom-node request. The current additions below supersede the
+earlier AES-256-only and missing-encrypted-middle status. They do not narrow
+the original all-device, graph, prefix-candidate or Server/Compare obligations.
 
-The Linux imported WG-to-paired-SS path now reaches its authenticated installed
-parent and registered native command (`5a2ce21e`). Ordered per-prefix
-measurement now reaches Android and Apple native hosts (`e0c0991b`), desktop
-current/temporary Speed Lab (`5d7c7023`) and the separate Windows/macOS/Linux
-Performance action (`faf7b942`). Intermediate results retain the exact original
-path, cumulative measurement labels and actual worker/socket MTU ownership.
-Status observation and cleanup preserve caller deadlines; unfinished drain
-retains its original cleanup handle and protection.
+| Area | Published source and observed evidence | Still open |
+| --- | --- | --- |
+| Ordered local paths and cumulative per-node speeds | Two through eight paired members retain WG/AWG prefixes and an SS final. Android/Apple native hosts, desktop Speed Lab and the separate Windows/macOS/Linux Performance action adopt all original prefix rows, worker/socket drain and MTU ownership. | Other required graph families, complete package/device proof and isolated inter-server link throughput where requested. Cumulative prefix throughput is labeled as such. |
+| Imported SS2022 middle | The three-member paired WG/AWG → original imported SS2022 → paired SS slice now supports AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 with canonical single PSKs of 16/32/32 bytes and Start Layer Off. Desktop and mobile source/editor/profile/startup adoption is published. The actual encrypted three-entry-mode by three-cipher witness passed all 73 required verdicts. | Other imported protocols, positions, layers and graph compositions; installed TUN, packaged and physical-device acceptance. Public-path checks are not fabricated paired-node API proof. |
+| Tight SS2022 packet envelopes | The pinned codecs and actual encrypted reference peers now have a separate required 134-verdict envelope/fragment inventory. It covers tight 1280/1400 first interfaces and the documented IPv4/IPv6 application datagrams. | Physical path MTU, IPv6 carriers and installed TUN acceptance. This evidence does not change production TUN/TCP ceilings or turn a fragmenting reference path into a nonfragmenting PMTU claim. |
+| Candidate timing through a retained prefix | Shared source capture, the mobile native bridge and a required 28-verdict encrypted WG/AWG witness are published. Android's connected Performance action (`7e4d7e9d24329fbb9aa48bfaddd5fc083d806332`) displays and sorts complete 50-sample TCP connection results from saved eligible SS2022 candidates through the retained original WG/AWG prefix. Its actual store/compiler/UI/cleanup composition passed 58 checks and four causal controls. | Apple and desktop host/UI adoption at their separately tracked source cutoffs; using a measured candidate in the ordered builder or next connection; pre-connect use; broader candidate protocols, Start Layers and prefix capabilities; package/device proof. Unsupported, failed, stale or expired candidates remain unscored. |
+| Ordered Server/Compare | Concurrent published source now includes captured discovery and positional authority, exact fresh attempts, suffix compilation, joined Local/Server trials and restoration, and retained native application/DNS ingress and selection. Both AMD64 and ARM64 encrypted Server jobs are mandatory release dependencies. | Current exact-SHA encrypted workflow success, completed host selection/adoption, off-LAN interoperability and every genuinely eligible original execution family. Source presence and a required workflow are not a passing native receipt. |
+| Current release and physical/private acceptance | Coherent source units and their bounded tests are recorded by commit. Android fixture composition and actual job/phase timeouts were repaired without removing tests or increasing their deadlines. | One converged exact-SHA application/image/release result, applicable signing/distribution, physical routing/DNS/leak/reconnect/transitions, visual/accessibility checks and authorized private production deployment. |
 
-Literal Naive H2/CONNECT selected DNS now includes DoH3 and hostname resolvers
-with explicit bootstrap (`edb2601e`). Its complete lower resolver tree stays
-captured and dormant; actual native tests observed zero lower DNS queries and
-zero lower UDP attempts. Exact endpoint, transport, port, TLS/path, credentials
-and selected resolver are preserved. The dedicated linked evidence records the
-126 native verdicts and Apple/desktop producer checks.
+Candidate results explicitly mean TCP connection time, not HTTP response, ICMP,
+SS credential verification or final private-node proof. Every score requires all
+50 fresh connections and actual drain. The native completion's 120-second
+expiry never renews on reread. Catalog publication generations, source bytes,
+original engine/server/proof reader and network bind admission and display;
+changing away and back cannot revive a capture. Pending cleanup retains its
+original MTU lease. The Android view/sort action does not alter the active route.
 
-The ordered compiler also captures a literal imported SS2022 middle between
-a paired WG/AWG first and paired SS final (`ac72e6e1`). Desktop saved-source,
-editor, profile, startup and measurement flows (`3f88bd3d`) and Android/Apple
-host flows (`44e401f8`) retain that original external identity without inventing
-paired API credentials or node proof. The current slice uses a single AES-256
-PSK and Start Layer Off. Actual encrypted custom-middle and installed-host
-acceptance remains a separate gate; broader imported protocols, layers and
-positions remain accountable to the original request.
+The selected-DNS correction over literal Naive H2/CONNECT (`edb2601e`) remains
+published: selected DoH3 and explicit-bootstrap hostname resolvers retain their
+original lower tree without granting dormant DNS/UDP bypass. Home AdGuard,
+SMART AUTO, IPv6 On, Auto MTU, all three Start Layer choices, complete profiles,
+Local/Server comparison scoring, 30-minute package retention from READY and
+image-only private production remain unchanged.
 
-Focused native, Java 17, Swift, PowerShell and controller race tests passed
-within the recorded boundaries. The full recovered UI source gate passed
-after the position-aware profile audit repair (`20e1c10f`). A full exact-current
-native build, release publication and physical/private acceptance remain
-pending, along with the wider recovered graph/execution and prefix-candidate
-requirements. A safe rejection or a successful smaller gate does not close
-those requirements. No live router, AdGuard configuration or private
-deployment was changed.
+Detailed scopes and receipts are linked from the ledger:
+[three-cipher middle](CONTINUATION-EVIDENCE-2026-11-12-CUSTOM-SS2022-MIDDLE.md),
+[tight MTU envelopes](SS2022-ORDERED-MTU-EVIDENCE.md),
+[candidate core](CONTINUATION-EVIDENCE-2026-11-12-PREFIX-CANDIDATES.md),
+[mobile bridge](CONTINUATION-EVIDENCE-2026-11-12-MOBILE-CANDIDATES.md), and
+[encrypted candidate witness](ORDERED-PREFIX-CANDIDATE-NATIVE-EVIDENCE.md).
+Older dated sections below preserve their original evidence cutoffs. No live
+router, AdGuard setting, household forwarding or private deployment was changed.
 
 ## November 12: ordered Darwin runtime and mandatory native acceptance
 

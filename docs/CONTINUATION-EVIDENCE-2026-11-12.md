@@ -7,6 +7,70 @@ was `9a7c3f60addd06f8696d5b2958a4e0a012d19c74`. The older `5967e9c` and
 including the generated-source ownership and Darwin MTU work, were preserved
 with normal ancestry. No historical patch or recovery bundle was replayed.
 
+## Current evidence refresh
+
+This refresh reviewed live public source through
+`36ecc67cf474384ec311d02f4bd4f7623943b996` and the separately named later host
+unit below. The older sections preserve the first publication and test boundary
+of each change; their initial AES-256-only admission and pending encrypted
+middle statements are historical, superseded by this refresh.
+
+| Increment | Source and evidence | Boundary retained |
+| --- | --- | --- |
+| Three-cipher original imported middle | `35d79f31233fdeb1bedf4873615a043b6560c4f2` adds all three single-PSK SS2022 methods after the real nine-path encrypted matrix passed 73 verdicts. Android/Apple host admission follows in `8055f5b68147af01dc8d57ed7a58597211b8eb8e`; desktop follows in `66fccf43d692b64c52051b9cebd48e0cca210890`. Android rejects colon/malformed/noncanonical keys; Apple uses strict numeric-address parsing. | Exactly one literal imported middle, Off, canonical 16/32/32-byte keys, paired physical first and paired final. Shared source, host/compiler composition and encrypted loopback/user-space reference evidence are distinct from installed/physical acceptance. |
+| Cipher envelopes at tight MTUs | `2f45cb1` records actual pinned codec sizes and mandatory encrypted fragment/reassembly tests, with all 134 required verdicts. | The [envelope evidence](SS2022-ORDERED-MTU-EVIDENCE.md) preserves the 1280 virtual packet, tests its corresponding payloads and explicitly oversized native controls, and leaves production TUN/TCP/Auto/Fixed policy unchanged. It does not certify physical PMTU or IPv6 carriers. |
+| Sealed retained-prefix candidate core and native bridge | `617fc0417503958e42273180736fd1059d2257c1` supplies the captured candidate plan and fifty-connection service. `23955a4` supplies the mobile factory/live-catalog guard, bounded late-callback ownership, scoped failed-factory cleanup and boolean source eligibility. Actual pinned gobind generated Java/Objective-C signatures. | Literal Off SS2022 candidates through the retained paired WG/AWG prefix only. No arbitrary address, new WG identity, guessed UDP probe port or ambient route. Host freshness requires live source/revision observation. |
+| Encrypted prospective-candidate witness | `40c6d5a` requires the 28-verdict three-transport reference fixture. Fifty real handshakes/acceptances/closes, exact source and retained owner, destination and prefix refusal, cancellation and joined close are observed. | The [native witness](ORDERED-PREFIX-CANDIDATE-NATIVE-EVIDENCE.md) uses an explicit native adapter boundary and reference forwarding. It does not replace production host mailbox/catalog/MTU or installed TUN acceptance. The premature reference handshake defect was reproduced and fixed without weakening production acceptance. |
+| Android connected candidate view/sort | `7e4d7e9d24329fbb9aa48bfaddd5fc083d806332` connects the actual Performance chooser to the retained chain and live complete catalog. Actual Java store/shared-Go source/eligibility/metadata, receipt, transaction and dialog composition passes 58 checks plus four causal mutations. The separate Product action suite passes 439 checks and its original controls. | OS UI and native measurement handles are explicit host-test doubles. Original native evidence is separate. Display/sort does not adopt a candidate into the ordered builder or change the active connection. Apple and desktop source increments remain separately tracked. |
+| Concurrent ordered Server source | `dd61a32` adds joined Local/Server trial and restore ownership; `36ecc67` adds retained application/DNS ingress, selection and TUN composition. Earlier discovery, positional leases, original-source suffix compilation and fresh-attempt captures remain preserved. `9c431d0` and `4fe2353` require both encrypted Linux architecture jobs before exact-SHA release publication. | These are published implementation and acceptance-gate changes, not an independently observed passing current Server workflow or remote deployment. Authenticated node authority, same external comparison endpoint and fresh proof remain mandatory. |
+
+The candidate score is the 10%-trimmed mean of exactly fifty fresh destination
+TCP connections. Any failed/partial/stale sample has no score. Complete/drained
+receipt, request, prefix, candidate source, whole capture, finite statistics and
+native completion time are checked before display. Expiry is 120 seconds from
+completion and is never renewed by polling. Original native/source/network and
+catalog publication changes invalidate the result; failed cleanup retains the
+original handle and parent MTU lease until join. Unsupported and failed rows
+remain visible as unscored. This metric does not enter the Local/Server formula,
+HTTP/ICMP metrics or durable direct-node statistics.
+
+### Mobile CI repair evidence
+
+Completed hosted Android multihop job `130920672376` in run `43138858608`
+explicitly reported “The job has exceeded the maximum execution time of
+15m0s.” This was an actual job cap, not an inferred supersession cancellation.
+All original Android commands, shared discovered tests and relay/AWG tests were
+retained. Android, core shared, runtime shared and relay jobs each keep their
+15-minute job cap; each shared race phase keeps 180 seconds and relay retains
+its original five-minute Go bound. The original `contract` aggregate requires
+all four jobs to succeed, including when one fails, cancels or skips. The actual
+Bash result matrix checks all 256 combinations; inventory mutations reject
+omissions, duplicates, overlapping groups and unassigned future phases.
+
+The old combined desktop policy phase also exhausted its 180-second aggregate
+while its current test had run for only eight seconds. Splitting its complete
+inventory produced passing 13-test ordered/readiness and 24-test single-node
+phases in 119.552 and 66.375 seconds. The remaining execution/imported/controller
+phases passed in 54.639/100.253/11.405 seconds; the original relay/AWG command
+passed in 59.360/1.016 seconds. The later complete 48-test ordered phase passed
+in 75.911 seconds after concurrent Server additions. These counts bind to the
+recorded 599-test source inventory at that replay; later discovered tests must
+still run exactly once and are not silently included in those old results.
+
+The runtime-truth command sequence exposed obsolete standalone fixtures, not a
+reason to suppress their checks. The comparison, Router import UI, six-method
+shared private-store transaction guard and final generated SS service capture
+were repaired using current shipping dependencies or explicit unentered native
+boundaries. Original causal controls remain. The continuation replay executed
+the remaining original commands, including all general store families, 4,770
+Speed Lab restoration checks, 145 retained multihop owner checks, the four
+pinned/source gates and the final 15-check SS source-capture gate with its
+service-declaration-loss mutation. This sequential source/host evidence does
+not establish a current APK/IPA or full exact-SHA green release. The old Custom
+Exit failures at `8055f5b` and `a332502` were traced to the already-repaired
+profile-audit marker; their passing `cmd/client` results are not relabeled as
+current complete-release evidence.
+
 ## Requirement authority and source recovery
 
 The recovered source set includes the original user passages in `mm.md`, the
@@ -327,7 +391,9 @@ all-platform package or physical acceptance evidence.
 | Required area | Current evidence | Remaining source or acceptance work |
 | --- | --- | --- |
 | Native applications and complete protected graphs | Existing shipping platform code plus the concrete connection and measurement units above. | Current native package builds and every remaining requested graph/platform capability; safe rejection is not delivery. |
-| Repeated independent nodes and per-hop information | The local chain retains two through eight paired members, WG/AWG2 Fast/Strong prefixes and an SS2022 final. The typed three-member imported SS2022 slice now reaches desktop, Android and Apple hosts. Shared/native measurement, Speed Lab and Performance retain every prefix. | Actual encrypted and installed custom-middle acceptance, remaining custom protocols/layers/positions, candidate measurements through the chosen prefix, other requested graph families and genuinely eligible Server/Compare execution remain separately accountable. No unlimited-hop requirement or fabricated remote execution authority is inferred. |
+| Repeated independent nodes and per-hop information | Two through eight paired members; one original imported middle in the three-member slice; all three SS2022 methods; desktop/mobile source adoption; cumulative prefix measurements; actual nine-path encrypted middle and tight-MTU reference evidence. | Installed/physical acceptance, remaining custom protocols/layers/positions and other requested graph families. No unlimited-hop requirement or fabricated remote execution authority is inferred. |
+| Candidate latency through the chosen prefix | Captured core, mobile bridge, actual encrypted WG/AWG witness and Android connected view/sort as detailed above. | Remaining platform host/UI increments, using a measured candidate in the builder or next connection, pre-connect use, map/chooser integration and wider protocol/layer/prefix capabilities. TCP timing cannot stand in for ICMP, HTTP response, credential proof or a complete candidate path. |
+| Eligible ordered Server/Compare | Published original-source discovery, positional leases, fresh attempts, suffix compilation, joined trials/restore, retained native ingress/selector and mandatory two-architecture encrypted gate. | Current exact-SHA native workflow receipt, full shipping host adoption, off-LAN real-node authority/interoperability and every supported original execution family. An unavailable remote authority remains a truthful limitation, not permission to fabricate it or drop the requirement. |
 | Selected DNS and Home AdGuard | Exact selected-policy compilation and proof now include the proved literal Naive H2/CONNECT DNS and explicit-bootstrap paths above. | Genuinely hostname-dependent lower transports still need their actual supported resolver authority; the new dormant-tree exception does not grant it. Current package/device DNS proof remains separate. |
 | Current exact-SHA release | Coherent source commits are published with their focused evidence. | Native applications, ARM64 images, exact compose, manifests/checksums and publication must converge on one final current SHA. Canceled predecessors and an old successful release cannot supply that evidence. |
 | Original full product/UI/setup scope | Original requests, corrections, source paths and historical evidence are preserved. | Every applicable original requirement still requires appropriate source/runtime/native/device evidence; smaller source gates do not close the full ledger. |
