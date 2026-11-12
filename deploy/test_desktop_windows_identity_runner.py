@@ -252,7 +252,8 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
         vendor = self.vendor.parent / "shipping-prepared"
         vendor.mkdir()
         prep = GATE.PREP
-        with patch.object(GATE, "ROOT", ROOT), \
+        with contextlib.ExitStack() as execution_boundary, \
+             patch.object(GATE, "ROOT", ROOT), \
              patch.object(prep.RELAY.NAIVE, "prepare") as naive_prepare, \
              patch.object(prep, "prepare_desktop_pt"), \
              patch.object(prep.MTU, "prepare"), patch.object(prep.DESKTOP_MTU, "prepare"), \
@@ -262,9 +263,18 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
              patch.object(prep, "prepare_node_capture"), \
              patch.object(prep.RELAY.OPENVPN_REMOTE, "prepare"), \
              contextlib.redirect_stdout(io.StringIO()):
+            # This is the shared-source copy component, with all native
+            # prerequisites explicit. The new ordered gate/owner preparers
+            # need the actual pinned core and are exercised by native gates;
+            # this directory deliberately contains only the copied sources.
+            ordered_preparers = [execution_boundary.enter_context(
+                patch.object(module, "prepare")) for module in prep.NODE_EXECUTION]
             prep.prepare(vendor)
             naive_prepare.assert_called_once_with(vendor.resolve())
             node_chain_prepare.assert_called_once_with(vendor.resolve(), mobile=False)
+            self.assertEqual(len(ordered_preparers), 3)
+            for prepare in ordered_preparers:
+                prepare.assert_called_once_with(vendor.resolve())
             source, target, package, records = GATE.checked_sources(vendor)
             self.assertEqual((source, target, package),
                              (vendor, vendor / "routervpn/mobiletor", "./routervpn/mobiletor"))
