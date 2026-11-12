@@ -139,7 +139,15 @@ for marker in ('"multihop_nodes"', 'stageOrderedNodes(updates,row)', 'currentOrd
                'validateOrderedRow(row,schema)', 'nodes.captureChain(', 'orderedReferences(members)',
                'saved ordered control differs from its exact final member policy'):
     assert marker in store, f"Android ordered profile capture missing: {marker}"
-assert 'args.case_family in ("all", "ordered-chain")' in harness and 'chain.run(ROOT, work, app, classes, jar, env)' in harness
+# The complete ordered family still runs every paired and imported case. The
+# imported-only selector is a separate focused entry point, never a substitute
+# for the all/ordered-chain compiler, source composition or original controls.
+for marker in ('args.case_family in ("all", "ordered-chain", "ordered-imported")',
+               'chain.compiler_source(GO) if chain else GO',
+               'chain.prepare_sources(src, app, JAVA)',
+               'chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")',
+               'if args.case_family in ("ordered-chain", "ordered-imported"):'):
+    assert marker in harness, f"complete ordered profile compiler/case dispatch missing: {marker}"
 workflow = (ROOT.parent / '.github/workflows/android-multihop-contract.yml').read_text()
 for dependency in ('android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCapture.java',
                    'android/test_android_node_chain_capture.py'):
