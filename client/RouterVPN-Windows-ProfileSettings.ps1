@@ -291,11 +291,18 @@ function global:Copy-RouterVPNOrderedNodes {
     for($i=0;$i-lt$Nodes.Count;$i++){
         $id=Get-RouterVPNOrderedValue $Nodes[$i] 'id';$mode=Get-RouterVPNOrderedValue $Nodes[$i] 'mode'
         if($id-isnot[string]-or$id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or-not$seen.Add($id)){throw 'Ordered nodes require distinct linked node IDs.'}
-        if($mode-isnot[string]-or($i-lt$Nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $mode))-or($i-eq$Nodes.Count-1-and$mode-cne'shadowsocks')){throw 'Choose WireGuard, AmneziaWG Fast or AmneziaWG Strong for entry and hops, followed by a Shadowsocks 2022 exit.'}
+        if($mode-isnot[string]-or($i-lt$Nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $mode)-and-not($Nodes.Count-eq3-and$i-eq1-and$mode-ceq'shadowsocks'))-or($i-eq$Nodes.Count-1-and$mode-cne'shadowsocks')){throw 'Choose paired WireGuard or AmneziaWG prefixes, optionally one imported SS2022 middle in a three-node path, and a paired Shadowsocks 2022 exit.'}
         [void]$copy.Add([pscustomobject]@{id=$id;mode=$mode})
     }
     if([string]::IsNullOrEmpty($ControlID)-or$copy[$copy.Count-1].id-cne$ControlID){throw 'The final ordered node must be the selected exit node.'}
     return $copy.ToArray()
+}
+
+function global:Test-RouterVPNOrderedImportedMiddle {
+    param($Profile)
+    $external=Get-RouterVPNOrderedValue $Profile 'external'
+    $supported=Get-RouterVPNOrderedValue $external 'ordered_middle_supported' $false
+    return [string](Get-RouterVPNOrderedValue $Profile 'node_kind')-ceq'external'-and$supported-is[bool]-and$supported
 }
 
 function global:New-RouterVPNOrderedConnectPayload {
@@ -305,9 +312,13 @@ function global:New-RouterVPNOrderedConnectPayload {
     $nodes=@(Copy-RouterVPNOrderedNodes (Get-RouterVPNOrderedValue $Draft 'nodes') $control)
     $profiles=@(Get-RouterVPNOrderedValue $Store 'profiles' @())
     $expected=Get-RouterVPNOrderedValue $Draft 'profile_tokens';$tokens=@{}
-    foreach($node in $nodes){
+    for($position=0;$position-lt$nodes.Count;$position++){
+        $node=$nodes[$position]
         $matchingProfiles=@($profiles|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$node.id})
-        if($matchingProfiles.Count-ne1-or[string](Get-RouterVPNOrderedValue $matchingProfiles[0] 'node_kind' '')-cnotin@('','router-vpn')){throw 'An ordered node is missing or is no longer a linked Router VPN node.'}
+        if($matchingProfiles.Count-ne1){throw 'An ordered node is missing.'}
+        $imported=Test-RouterVPNOrderedImportedMiddle $matchingProfiles[0]
+        if($imported){if($nodes.Count-ne3-or$position-ne1-or$node.mode-cne'shadowsocks'){throw 'An imported SS2022 node requires one middle position between the paired entry and final.'}}
+        elseif([string](Get-RouterVPNOrderedValue $matchingProfiles[0] 'node_kind' '')-cnotin@('','router-vpn')-or($position-lt$nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $node.mode))){throw 'The ordered source kind or transport changed.'}
         $token=Get-RouterVPNOrderedValue $expected $node.id
         if($token-isnot[string]-or$token-cnotmatch'\A[0-9a-f]{64}\z'-or[string](Get-RouterVPNOrderedValue $matchingProfiles[0] 'profile_token')-cne$token){throw 'An ordered node changed or was relinked. Reopen its editor before connecting.'}
         $tokens[$node.id]=$token

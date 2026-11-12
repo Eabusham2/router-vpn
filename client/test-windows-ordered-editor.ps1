@@ -69,7 +69,7 @@ try{
         $found=@($EditorAST.FindAll({param($n)$n-is[Management.Automation.Language.AssignmentStatementAst]-and$n.Left.Extent.Text-ceq$name},$true))
         if($found.Count-ne1){throw ('Shipping mode initialization missing: '+$name)};. ([ScriptBlock]::Create($found[0].Extent.Text))
     }
-    Check (($prefixMode.ItemsSource.id-join',')-ceq'wg,awg2-fast,awg2-strong') 'mode picker offered an unsupported or normalized transport'
+    Check (($prefixMode.ItemsSource.id-join',')-ceq'wg,awg2-fast,awg2-strong,shadowsocks') 'mode picker offered an unsupported or normalized transport'
     foreach($invalid in @('WG','AWG2-FAST','awg','awg2-pq','wg-pq','shadowsocks',' awg2-fast','awg2-strong ',$null,1)){
         $refused=$false;try{[void](Copy-RouterVPNOrderedNodes @([pscustomobject]@{id='prefix-0';mode=$invalid},[pscustomobject]@{id=$id;mode='shadowsocks'}) $id)}catch{$refused=$true}
         Check $refused 'raw ordered mode whitelist admitted an alias or unsupported transport'
@@ -134,6 +134,26 @@ try{
         $rootControls['UnifiedMultihop'].IsChecked=$true;$rootControls['UnifiedOrdered'].IsChecked=$true;RefreshUnifiedOrderedControls
         Check ($rootControls['UnifiedOrderedModeSummary'].Text-ceq'Choose each intermediate transport and the final node.') 'new incomplete ordered selection displayed a previous path transport summary'
     }
+    # Invoke the shipping Add/Apply callbacks with an explicitly advertised
+    # original external middle; its public receipt never supplies paired secrets.
+    $rows.Clear();$store.selected_id=$id;$script:CurrentStore=$store
+    $custom=[pscustomobject]@{id='custom-middle';name='Custom SS2022';node_kind='external';profile_token=('c'*64);external=[pscustomobject]@{protocol='shadowsocks';ordered_middle_supported=$true}}
+    $store.profiles+=$custom
+    &$refresh;$available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),'prefix-0');$prefixMode.SelectedIndex=0;&$add
+    $available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),'custom-middle');&$add
+    Check ($rows.Count-eq2-and$rows[1].id-ceq'custom-middle'-and$rows[1].mode-ceq'shadowsocks') 'custom Add invented a paired transport'
+    &$apply;$customSaved=$rootControls['UnifiedNodeChainButton'].Tag
+    Check (($customSaved.nodes.id-join',')-ceq'prefix-0,custom-middle,selected-final') 'custom Apply lost original order'
+    Check ($customSaved.profile_tokens['custom-middle']-ceq('c'*64)) 'custom Apply lost original source token'
+    $custom.external.ordered_middle_supported=$false
+    $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $customSaved $store)}catch{$rejected=$true};Check $rejected 'unsupported external middle retained admission'
+    $custom.external.ordered_middle_supported='true'
+    $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $customSaved $store)}catch{$rejected=$true};Check $rejected 'malformed custom capability retained admission'
+    $custom.external.ordered_middle_supported=$true
+    $swapped=[pscustomobject]@{control_id=$id;profile_tokens=$customSaved.profile_tokens;nodes=@($customSaved.nodes[1],$customSaved.nodes[0],$customSaved.nodes[2])}
+    $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $swapped $store)}catch{$rejected=$true};Check $rejected 'external source became physical entry'
+    $custom.profile_token=('d'*64)
+    $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $customSaved $store)}catch{$rejected=$true};Check $rejected 'relinked custom source retained admission'
     if(-not$NegativeControl){
         $controls=@{'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary'}
         foreach($key in $controls.Keys){

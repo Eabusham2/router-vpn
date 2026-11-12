@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -32,6 +33,26 @@ type desktopNodeChainCapture struct {
 	host                               *desktopNodeChainHostCapture
 }
 
+// The imported middle retains its original external identity. It has no paired
+// Router API, token or WireGuard identity inventory.
+func desktopNodeChainImported(profile common.RouterProfile, mode string) bool {
+	if profile.NodeKind != "external" || profile.External == nil || profile.External.Protocol != "shadowsocks" || mode != "shadowsocks" || profile.NodeProofID != "" || profile.APIToken != "" || profile.RouterAPI != "" || profile.StartLayer != "" && profile.StartLayer != "off" {
+		return false
+	}
+	ss := profile.External.Shadowsocks
+	if ss == nil || ss.Method != "2022-blake3-aes-256-gcm" || ss.Port < 1 || ss.Port > 65535 {
+		return false
+	}
+	key, err := base64.StdEncoding.DecodeString(ss.Password)
+	if err != nil || len(key) != 32 {
+		clear(key)
+		return false
+	}
+	clear(key)
+	address, err := netip.ParseAddr(ss.Server)
+	return err == nil && address.Zone() == "" && !address.Is4In6() && !address.IsUnspecified() && !address.IsMulticast() && ss.Server == profile.Endpoint
+}
+
 func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []common.RouterProfile, nodes []common.MultihopNodeSelection, execution string) ([]desktopNodeChainMember, error) {
 	if err := common.ValidateMultihopNodes(nodes); err != nil {
 		return nil, err
@@ -57,9 +78,14 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 	var result []desktopNodeChainMember
 	for i, selected := range nodes {
 		profile, found := byID[selected.ID]
-		if !found || profile.NodeKind != "" && profile.NodeKind != "router-vpn" || profile.External != nil || !common.ValidNodeProofID(profile.NodeProofID) ||
-			i < len(nodes)-1 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) || i == len(nodes)-1 && selected.Mode != "shadowsocks" {
-			return nil, errors.New("ordered selection requires linked Router WireGuard or AWG2 prefixes and an SS2022 final")
+		imported := found && desktopNodeChainImported(profile, selected.Mode)
+		paired := found && (profile.NodeKind == "" || profile.NodeKind == "router-vpn") && profile.External == nil && common.ValidNodeProofID(profile.NodeProofID)
+		if imported {
+			if len(nodes) != 3 || i != 1 {
+				return nil, errors.New("imported ordered member requires exactly one middle between a paired physical entry and paired final")
+			}
+		} else if !paired || i < len(nodes)-1 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) || i == len(nodes)-1 && selected.Mode != "shadowsocks" {
+			return nil, errors.New("ordered selection requires paired WireGuard or AWG2 prefixes, an optional literal imported SS2022 middle, and a paired SS2022 final")
 		}
 		// Only the first closure owns physical bootstrap. An ambient lookup of
 		// any later transport would bypass its preceding selected prefix.
@@ -89,6 +115,9 @@ func captureDesktopNodeChain(ctx context.Context, root string, control common.Ro
 	source := mobilemultihop.NodeChainSource{Schema: 1, Execution: "local"}
 	total := 0
 	for i, member := range members {
+		if member.Profile.NodeKind == "external" {
+			source.Schema = 2
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -130,6 +159,21 @@ func captureDesktopNodeChain(ctx context.Context, root string, control common.Ro
 }
 
 func (capture *desktopNodeChainCapture) compileMember(ctx context.Context, member desktopNodeChainMember, total *int, lookup applexray.Lookup) (string, string, string, error) {
+	if member.Profile.NodeKind == "external" {
+		if !desktopNodeChainImported(member.Profile, member.Mode) {
+			return "", "", "", errors.New("ordered imported source changed kind or transport")
+		}
+		config, policy, endpoint, err := desktopImportedEntrySource(ctx, member.Profile, nil)
+		if err != nil {
+			return "", "", "", err
+		}
+		input, err := mobilemultihop.NodeChainImportedMemberInput(config, policy)
+		*total += len(input)
+		if *total > mobilemultihop.NodeChainInputLimit {
+			return "", "", "", errors.New("ordered imported source exceeds aggregate capture bound")
+		}
+		return input, endpoint, "", err
+	}
 	owned := map[string]map[string][]byte{}
 	defer func() {
 		for _, files := range owned {

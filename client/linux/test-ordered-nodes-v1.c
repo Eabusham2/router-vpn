@@ -106,6 +106,12 @@ static gboolean drive_editor(gpointer data) {
     } else if(editor_case==4) {
         for(int i=1;i<=8;i++){char*id=g_strdup_printf("n%d",i);choose(candidate,id);click(d,"Add entry / hop");g_free(id);}
         check(gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),7)!=NULL&&gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),8)==NULL,"cap silently truncated a member");gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_CANCEL);
+    } else if(editor_case==6) {
+        choose(candidate,"n1");click(d,"Add entry / hop");
+        choose(candidate,"n2");click(d,"Add entry / hop");
+        check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"shadowsocks")==0,"custom middle acquired paired transport");
+        choose(transport,"wg");check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"shadowsocks")==0,"custom middle accepted paired mode");
+        gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_APPLY);
     } else if(editor_case==5) {
         gtk_widget_destroy(unified->app->window);
     }
@@ -202,6 +208,13 @@ int main(int argc,char **argv) {
     guint before_close=writes;profiles(5);check(writes==before_close,"destroyed profile dialog issued a write");
     bad_reply=TRUE;profiles(3);before=posts;linux_profile_connect_v11(NULL,&state);check(owned->invalid&&posts==before,"incomplete loaded receipt fell back to a pair");bad_reply=FALSE;
     GKeyFile*key=linux_unified_load_keyfile_v8();char*raw=g_key_file_get_string(key,"connection-profile-selection","ordered_selection",NULL);check(raw&&strcmp(raw,original)==0,"disk save lost original public inventory");g_free(raw);g_key_file_unref(key);
+    JsonObject *custom=external_source_profile_v24(json_node_get_object(catalog),"n2"), *external=json_object_new();
+    json_object_set_string_member(custom,"node_kind","external");json_object_set_string_member(external,"protocol","shadowsocks");json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);json_object_set_object_member(custom,"external",external);
+    refresh_all(&app);edit(6,TRUE);check(owned->selection!=NULL&&linux_ordered_current_v1(owned->selection,json_node_get_object(catalog)),"custom editor Apply lost original source");
+    before=posts;linux_profile_connect_v11(NULL,&state);check(posts==before+1,"custom editor did not reach shipping Connect");
+    request=parse_json(last_body);q=json_node_get_object(request);check(strcmp(obj_string(json_array_get_object_element(linux_ordered_array_v1(q,"nodes"),1),"mode"),"shadowsocks")==0,"custom Connect invented paired transport");json_node_free(request);
+    json_object_set_boolean_member(external,"ordered_middle_supported",FALSE);before=posts;linux_profile_connect_v11(NULL,&state);check(posts==before,"unsupported custom source retained Connect authority");json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);
+    g_free(original);original=snapshot();
     g_object_ref(app.window);edit(5,TRUE);after=snapshot();check(strcmp(original,after)==0,"parent close replaced original path");g_free(after);
     g_free(original);g_object_unref(app.window);gtk_widget_destroy(state.node);gtk_widget_destroy(state.mode);gtk_widget_destroy(state.multihop);json_node_free(catalog);if(saved)json_node_free(saved);g_free(last_body);g_free(last_path);g_free(keypath);
     printf("Shipping GTK ordered editor + Add/Load/Update/Connect: %u checks PASS; real callbacks/persistence, doubled controller boundary.\n",checks);return 0;

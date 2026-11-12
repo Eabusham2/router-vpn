@@ -100,14 +100,32 @@ func desktopNodeChainMeasurementRows(status hopmeasure.Status, members []desktop
 			role = "exit"
 		}
 		p := members[i].Profile
-		if r.ID != p.ID || r.Role != role || r.Kind != "private-node" || !r.Ready || r.Failure != "" || r.Idle == nil || r.Benchmark != nil || r.Response != nil || r.Idle.Samples != 6 || math.IsNaN(r.Idle.Jitter) || math.IsInf(r.Idle.Jitter, 0) || r.Idle.Jitter < 0 || r.Idle.Min > r.Idle.Median || r.Idle.Median > r.Idle.P90 || r.Idle.P90 > r.Idle.Max || r.Idle.Average < r.Idle.Min || r.Idle.Average > r.Idle.Max || !finite(r.Idle.Min) || !finite(r.Idle.Median) || !finite(r.Idle.Average) || !finite(r.Idle.P90) || !finite(r.Idle.Max) || !transfer(r.Download) || !transfer(r.Upload) {
+		kind := "private-node"
+		imported := desktopNodeChainImported(p, members[i].Mode)
+		if imported {
+			if len(members) != 3 || i != 1 {
+				return nil, bad
+			}
+			kind = "public-path"
+		}
+		if p.NodeKind == "external" && !imported {
+			return nil, bad
+		}
+		if r.ID != p.ID || r.Role != role || r.Kind != kind || !r.Ready || r.Failure != "" || r.Idle == nil || r.Benchmark != nil || r.Response != nil || r.Idle.Samples != 6 || math.IsNaN(r.Idle.Jitter) || math.IsInf(r.Idle.Jitter, 0) || r.Idle.Jitter < 0 || r.Idle.Min > r.Idle.Median || r.Idle.Median > r.Idle.P90 || r.Idle.P90 > r.Idle.Max || r.Idle.Average < r.Idle.Min || r.Idle.Average > r.Idle.Max || !finite(r.Idle.Min) || !finite(r.Idle.Median) || !finite(r.Idle.Average) || !finite(r.Idle.P90) || !finite(r.Idle.Max) || !transfer(r.Download) || !transfer(r.Upload) {
 			return nil, bad
 		}
 		label := fmt.Sprintf("Cumulative path through node %d of %d", i+1, len(members))
+		latencyProof := label + " through the retained authenticated native prefix"
+		speedProof := label + " independently transferred exact authenticated bytes"
+		if imported {
+			label += " to the public benchmark"
+			latencyProof = label + " through the original imported SS2022 transport"
+			speedProof = label + " transferred exact public benchmark bytes"
+		}
 		measured := time.Now()
 		rows[i] = speedLabHopMeasurement{Role: role, RouterID: p.ID, Name: p.Name, LatencyLabel: label + " HTTP response", SpeedLabel: label + " transfer",
-			Latency: &connectionLatencyResult{Connected: true, Mode: "multihop", RouterID: p.ID, Name: p.Name, Samples: r.Idle.Samples, MinMs: r.Idle.Min, MedianMs: r.Idle.Median, AverageMs: r.Idle.Average, P90Ms: r.Idle.P90, MaxMs: r.Idle.Max, MeasuredAt: measured, Proof: label + " through the retained authenticated native prefix"},
-			Speed:   &routedSpeedResult{RouterID: p.ID, Name: p.Name, Bytes: int64(size), DownloadMbps: r.Download.Mbps, UploadMbps: r.Upload.Mbps, DownloadMs: r.Download.Seconds * 1000, UploadMs: r.Upload.Seconds * 1000, MeasuredAt: measured, Proof: label + " independently transferred exact authenticated bytes"}}
+			Latency: &connectionLatencyResult{Connected: true, Mode: "multihop", RouterID: p.ID, Name: p.Name, Samples: r.Idle.Samples, MinMs: r.Idle.Min, MedianMs: r.Idle.Median, AverageMs: r.Idle.Average, P90Ms: r.Idle.P90, MaxMs: r.Idle.Max, MeasuredAt: measured, Proof: latencyProof},
+			Speed:   &routedSpeedResult{RouterID: p.ID, Name: p.Name, Bytes: int64(size), DownloadMbps: r.Download.Mbps, UploadMbps: r.Upload.Mbps, DownloadMs: r.Download.Seconds * 1000, UploadMs: r.Upload.Seconds * 1000, MeasuredAt: measured, Proof: speedProof}}
 	}
 	return rows, nil
 }

@@ -223,12 +223,12 @@ func validateConnectionProfileSetupGraphLocked(a *app, q connectionProfileSetupR
 		return nil
 	}
 	if len(q.MultihopNodes) != 0 {
-		for i, selected := range q.MultihopNodes {
-			node, found := a.profileByIDLocked(selected.ID)
-			if !found || node.NodeKind != "" && node.NodeKind != "router-vpn" || node.External != nil ||
-				i < len(q.MultihopNodes)-1 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) || i == len(q.MultihopNodes)-1 && selected.Mode != "shadowsocks" {
-				return errors.New("ordered setup requires linked Router WireGuard or AWG2 prefixes and an SS2022 final")
-			}
+		control, found := a.profileByIDLocked(a.profiles.SelectedID)
+		if !found {
+			return errors.New("ordered setup lost its selected control")
+		}
+		if _, err := resolveDesktopNodeChainSelection(control, a.profiles.Profiles, q.MultihopNodes, q.MultihopExecution); err != nil {
+			return err
 		}
 		return nil
 	}

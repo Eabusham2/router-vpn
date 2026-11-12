@@ -34,14 +34,15 @@ type startupNodeChainCapture struct {
 // Last contains only references, modes and digests. Neither a transport key nor
 // an API credential is copied out of the original private node stores.
 type startupNodeChainSelection struct {
-	Schema     int                     `json:"schema"`
-	Execution  string                  `json:"execution"`
-	RootSHA256 string                  `json:"root_sha256"`
+	Schema     int                      `json:"schema"`
+	Execution  string                   `json:"execution"`
+	RootSHA256 string                   `json:"root_sha256"`
 	Nodes      []startupNodeChainMember `json:"nodes"`
 }
 
 type startupNodeChainMember struct {
 	ID           string                        `json:"id"`
+	NodeKind     string                        `json:"node_kind,omitempty"`
 	Mode         string                        `json:"mode"`
 	NodeProofID  string                        `json:"node_proof_id"`
 	ProfileToken string                        `json:"profile_token"`
@@ -107,8 +108,8 @@ func (capture *startupNodeChainSelection) UnmarshalJSON(data []byte) error {
 }
 
 func (member *startupNodeChainMember) UnmarshalJSON(data []byte) error {
-	fields, err := startupStrictObject(data, "id", "mode", "node_proof_id", "profile_token", "sources")
-	if err != nil || len(fields) != 5 {
+	fields, err := startupStrictObject(data, "id", "mode", "node_proof_id", "profile_token", "sources", "node_kind")
+	if err != nil || len(fields) != 5 && len(fields) != 6 {
 		return errors.Join(err, errors.New("ordered Last member requires its complete original identity"))
 	}
 	var sources []json.RawMessage
@@ -139,7 +140,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 		}
 		return nil
 	}
-	if selection.PathKind != startupNodeChainPathKind || capture.Schema != 1 || capture.Execution != "local" || selection.External != nil ||
+	if selection.PathKind != startupNodeChainPathKind || (capture.Schema != 1 && capture.Schema != 2) || capture.Execution != "local" || selection.External != nil ||
 		selection.RuntimeMode != "shadowsocks" || selection.LogicalMode != "multihop" || selection.UpdatedAt.IsZero() ||
 		!savedNodeChainDigest(capture.RootSHA256) || len(capture.Nodes) < 2 || len(capture.Nodes) > common.MultihopMaximumNodes {
 		return bad
@@ -148,6 +149,15 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 	proofs := make(map[string]bool, len(capture.Nodes))
 	for i, member := range capture.Nodes {
 		refs[i] = common.MultihopNodeSelection{ID: member.ID, Mode: member.Mode}
+		if member.NodeKind == "external" {
+			if capture.Schema != 2 || len(capture.Nodes) != 3 || i != 1 || member.Mode != "shadowsocks" || member.NodeProofID != "" || !savedNodeChainDigest(member.ProfileToken) || len(member.Sources) != 1 || member.Sources[0].Mode != "external-shadowsocks" || !savedNodeChainDigest(member.Sources[0].SHA256) {
+				return bad
+			}
+			continue
+		}
+		if member.NodeKind != "" || capture.Schema == 2 && i == 1 {
+			return bad
+		}
 		if !common.ValidNodeProofID(member.NodeProofID) || proofs[member.NodeProofID] || !savedNodeChainDigest(member.ProfileToken) ||
 			i < len(capture.Nodes)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) ||
 			i == len(capture.Nodes)-1 && member.Mode != "shadowsocks" {
@@ -257,6 +267,10 @@ func (capture *startupNodeChainCapture) receipt() *startupNodeChainSelection {
 	for _, member := range capture.selection.Nodes {
 		node := startupNodeChainMember{ID: member.Profile.ID, Mode: member.Mode, NodeProofID: member.Profile.NodeProofID,
 			ProfileToken: startupExternalProfileToken(member.Profile)}
+		if member.Profile.NodeKind == "external" {
+			node.NodeKind = "external"
+			result.Schema = 2
+		}
 		for _, source := range capture.assets {
 			if source.id == node.ID {
 				node.Sources = append(node.Sources, connectionProfileNodeSource{Mode: source.mode, SHA256: source.digest})

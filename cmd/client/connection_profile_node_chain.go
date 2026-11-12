@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,12 +16,14 @@ import (
 // Ordered captures retain references and policy, never transport credentials.
 // Hops remains the legacy pair's unordered, optional policy inventory.
 type connectionProfileNodeChainCapture struct {
-	ID           string                        `json:"id"`
-	Mode         string                        `json:"mode"`
-	NodeProofID  string                        `json:"node_proof_id"`
-	ProfileToken string                        `json:"profile_token"`
-	Preferences  *connectionProfilePreferences `json:"preferences"`
-	Sources      []connectionProfileNodeSource `json:"sources"`
+	ID           string                            `json:"id"`
+	NodeKind     string                            `json:"node_kind,omitempty"`
+	External     *connectionProfileExternalCapture `json:"external,omitempty"`
+	Mode         string                            `json:"mode"`
+	NodeProofID  string                            `json:"node_proof_id"`
+	ProfileToken string                            `json:"profile_token"`
+	Preferences  *connectionProfilePreferences     `json:"preferences"`
+	Sources      []connectionProfileNodeSource     `json:"sources"`
 }
 
 type connectionProfileNodeSource struct {
@@ -82,9 +85,17 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 	}
 	for i, captured := range record.NodeChain {
 		selected := record.Prefs.MultihopNodes[i]
-		if captured.ID != selected.ID || captured.Mode != selected.Mode || captured.Preferences == nil ||
-			!common.ValidNodeProofID(captured.NodeProofID) || !savedNodeChainDigest(captured.ProfileToken) {
+		if captured.ID != selected.ID || captured.Mode != selected.Mode || !savedNodeChainDigest(captured.ProfileToken) {
 			return errors.New("saved ordered member differs from its selected position or source identity")
+		}
+		if captured.NodeKind == "external" {
+			if len(record.NodeChain) != 3 || i != 1 || captured.Mode != "shadowsocks" || captured.NodeProofID != "" || captured.Preferences != nil || captured.External == nil || captured.External.Protocol != "shadowsocks" || captured.External.validate() != nil || captured.External.StartLayer != "" && captured.External.StartLayer != "off" || len(captured.Sources) != 1 || captured.Sources[0].Mode != "external-shadowsocks" || !savedNodeChainDigest(captured.Sources[0].SHA256) {
+				return errors.New("saved imported middle lost its original external policy or source")
+			}
+			continue
+		}
+		if captured.NodeKind != "" || captured.External != nil || captured.Preferences == nil || !common.ValidNodeProofID(captured.NodeProofID) {
+			return errors.New("saved paired member lost its original Router identity")
 		}
 		if i < len(record.NodeChain)-1 && !mobilemultihop.NodeChainPrefixMode(captured.Mode) || i == len(record.NodeChain)-1 && captured.Mode != "shadowsocks" {
 			return errors.New("saved ordered path requires WireGuard or AWG2 prefixes and an SS2022 final")
@@ -103,6 +114,15 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 }
 
 func captureSavedNodeChainSources(root string, node common.RouterProfile, mode string) ([]connectionProfileNodeSource, error) {
+	if desktopNodeChainImported(node, mode) {
+		raw, err := json.Marshal(node.External)
+		if err != nil {
+			return nil, err
+		}
+		digest := sha256.Sum256(raw)
+		clear(raw)
+		return []connectionProfileNodeSource{{Mode: "external-shadowsocks", SHA256: hex.EncodeToString(digest[:])}}, nil
+	}
 	if node.NodeKind != "" && node.NodeKind != "router-vpn" || node.External != nil || !common.ValidNodeProofID(node.NodeProofID) {
 		return nil, errors.New("ordered path requires linked Router WireGuard, AWG2 or SS2022 sources")
 	}
@@ -143,6 +163,22 @@ func (a *app) snapshotConnectionNodeChainLocked(selected common.RouterProfile, p
 		if !found {
 			return nil, errors.New("ordered path references an unlinked node")
 		}
+		if node.NodeKind == "external" {
+			policy, err := snapshotExternalConnectionPolicy(node)
+			if err != nil {
+				return nil, err
+			}
+			restored, err := policy.apply(node)
+			if err != nil {
+				return nil, err
+			}
+			sources, err := captureSavedNodeChainSources(clientRoot(a), restored, selection.Mode)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, connectionProfileNodeChainCapture{ID: selection.ID, Mode: selection.Mode, NodeKind: "external", External: policy, ProfileToken: mtuProfileSnapshotToken(restored), Sources: sources})
+			continue
+		}
 		policy, err := snapshotConnectionPreferences(node, node.CustomLayers)
 		if node.ID == selected.ID {
 			policy = prefs
@@ -180,7 +216,13 @@ func (a *app) restoreConnectionNodeChainLocked(saved connectionProfileRecord, se
 		if !found || node.NodeProofID != captured.NodeProofID {
 			return nil, errors.New("saved ordered member identity was removed or relinked")
 		}
-		restored, err := applySavedRouterConnectionPolicy(node, captured.Preferences)
+		var restored common.RouterProfile
+		var err error
+		if captured.NodeKind == "external" {
+			restored, err = captured.External.apply(node)
+		} else {
+			restored, err = applySavedRouterConnectionPolicy(node, captured.Preferences)
+		}
 		if err != nil || mtuProfileSnapshotToken(restored) != captured.ProfileToken {
 			return nil, errors.New("saved ordered member credentials or uncaptured policy changed")
 		}

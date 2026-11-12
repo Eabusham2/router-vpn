@@ -498,6 +498,25 @@ check(owner.captureConnectionProfileSelection().orderedNodes == staged.orderedNo
 let reopenedDraft = try owner.makeOrderedNodeDraft()
 check(reopenedDraft.nodes == staged.orderedNodes, "reopened editor reset selected AWG transport")
 rejects({ try owner.applyOrderedNodeDraft(draft) }, "stale editor generation was accepted twice")
+// Imported custom middle is retained as its original external source.
+_ = chooseOrdered(3)
+let customBase = owner.captureConnectionProfileSelection()
+var customCatalog = owner.profiles
+customCatalog[1]["node_kind"] = "external"
+customCatalog[1]["external"] = ["protocol": "shadowsocks", "ordered_middle_supported": true]
+var customSelection = customBase
+customSelection.orderedNodes[1]["mode"] = "shadowsocks"
+var customDraft = try RouterVPNOrderedNodeDraft(selection: customSelection, generation: UUID(), catalog: customCatalog)
+check(customDraft.nodes[1]["mode"] == "shadowsocks", "custom middle lost its imported transport")
+rejects({ try customDraft.chooseMode("wg", at: 1) }, "custom middle acquired paired WireGuard transport")
+let customCaptured = try customDraft.selection()
+let customCurrent: [String: Any] = ["selected_id": customBase.selectedNodeID, "profiles": customCatalog]
+let customBody = try RouterVPNOrderedNodes.connectBody(customCaptured, current: customCurrent)
+check(customBody["nodes"] as? [[String: String]] == customCaptured.orderedNodes, "custom Connect lost original source order")
+try customDraft.move(1, by: -1)
+rejects({ _ = try customDraft.selection() }, "custom source became physical entry")
+customCatalog[1]["profile_token"] = String(repeating: "f", count: 64)
+rejects({ _ = try RouterVPNOrderedNodes.connectBody(customCaptured, current: ["selected_id": customBase.selectedNodeID, "profiles": customCatalog]) }, "relinked custom middle retained permission")
 _ = chooseOrdered(); let staleDraft = try owner.makeOrderedNodeDraft()
 var staleCatalog = owner.profiles; staleCatalog[1]["profile_token"] = String(repeating: "e", count: 64); owner.api.orderedCurrent["profiles"] = staleCatalog
 rejects({ try owner.applyOrderedNodeDraft(staleDraft) }, "editor Apply accepted a relinked middle node")
