@@ -7,11 +7,13 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/inbound"
 	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/routechoice"
 )
@@ -283,5 +285,138 @@ func TestRouterVPNExecutionNativeMTUReadbackAndRetirementRemainOwned(t *testing.
 	}
 	if e.state.Load().stage != 3 || e.mtu.Load() == nil {
 		t.Fatal("native retirement discarded history or kept forwarding state")
+	}
+}
+
+func TestRouterVPNExecutionNativeMTURetainsUnchangedPause(t *testing.T) {
+	for _, scenario := range []string{"work", "cancelled-work-cleanup", "repeat"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := newExecutionNativeFixture(t, "server", nil)
+			p := f.adopt(t)
+			e := f.engine
+			binding := executionMTUBinding(t, f, p)
+			before := e.reader.Load()
+			work, cancelWork := context.WithCancel(t.Context())
+			defer cancelWork()
+			ctx, finish, err := mobilemtu.WithOperationContext(work, time.Second, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer finish()
+			if scenario == "cancelled-work-cleanup" {
+				cancelWork()
+				ctx, err = mobilemtu.OperationCleanupContext(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			var observations int
+			read := func(call context.Context, reader adapter.Inbound) (routerVPNExecutionMTUReadback, error) {
+				observations++
+				if reader != before.inbound || !mobilemtu.SameOperationContext(call, ctx) {
+					t.Fatal("unchanged cleanup replaced the original reader or operation")
+				}
+				return routerVPNExecutionMTUReadback{"original", 11, 1400}, call.Err()
+			}
+			attempts := 1
+			if scenario == "repeat" {
+				attempts = 2
+			}
+			for i := 0; i < attempts; i++ {
+				if err := e.retainUnchangedExecutionMTUContext(ctx, binding, before.inbound, 1400, read); err != nil {
+					t.Fatal("original unchanged pause could not retain its reader", err)
+				}
+				op := e.mtu.Load()
+				if op == nil || !op.joined || op.admitted || op.transaction != nil || op.before != before || op.result != before || e.reader.Load() != before || op.binding.Nonce() != binding.Nonce() || op.observed.mtu != 1400 {
+					t.Fatal("unchanged pause acquired or substituted a native transaction")
+				}
+			}
+			if observations != 2*attempts {
+				t.Fatal("unchanged pause lacked two actual readbacks", observations)
+			}
+			retained := e.mtu.Load()
+			if err := e.RetainUnchangedExecutionMTUContext(ctx, binding, before.inbound, 1400); err == nil || e.mtu.Load() != retained {
+				t.Fatal("public unchanged pause accepted a component TUN double")
+			}
+			if err := e.admitExecutionMTUContext(ctx, binding, read); err != nil {
+				t.Fatal("unchanged receipt failed selected-only proof admission", err)
+			}
+			if open, err := e.ApplicationOpenContext(ctx); err != nil || open {
+				t.Fatal("unchanged pause opened application traffic", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionNativeMTURejectsUnchangedSubstitution(t *testing.T) {
+	for _, scenario := range []string{"zero-binding", "foreign-engine", "foreign-reader", "actual-value", "second-read", "read-error", "pending-previous", "foreign-previous", "no-operation", "unbounded", "cancelled", "retired-source", "open-gate", "reader-during-read"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := newExecutionNativeFixture(t, "server", nil)
+			p := f.adopt(t)
+			e := f.engine
+			binding := executionMTUBinding(t, f, p)
+			before := e.reader.Load()
+			expected := before.inbound
+			ctx, finish, err := mobilemtu.WithOperationContext(t.Context(), time.Second, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer finish()
+			switch scenario {
+			case "zero-binding":
+				binding = mobilemultihop.NodeChainExecutionMTUResumeBinding{}
+			case "foreign-engine":
+				foreign := &struct {
+					mobilemultihop.NodeChainExecutionEngine
+				}{e}
+				executionMTUSet(t, reflect.ValueOf(&binding).Elem().FieldByName("state"), "engine", foreign)
+			case "foreign-reader":
+				expected = executionMTUReader()
+			case "pending-previous", "foreign-previous":
+				op := &routerVPNExecutionMTUTransition{binding: binding, before: before, result: before, epoch: binding.SelectionEpoch(), joined: scenario != "pending-previous"}
+				if scenario == "foreign-previous" {
+					op.result = &routerVPNExecutionReader{inbound: executionMTUReader(), ingress: before.ingress, generation: before.generation}
+				}
+				e.mtu.Store(op)
+			case "no-operation":
+				var stop context.CancelFunc
+				ctx, stop = context.WithTimeout(t.Context(), time.Second)
+				defer stop()
+			case "unbounded":
+				ctx = context.WithoutCancel(ctx)
+			case "cancelled":
+				var stop context.CancelFunc
+				ctx, stop = context.WithCancel(ctx)
+				stop()
+			case "retired-source":
+				f.current.Store(false)
+			case "open-gate":
+				if err := e.OpenApplicationContext(ctx, binding.Identity(), binding.SelectedTag()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			previous := e.mtu.Load()
+			var observations int
+			read := func(call context.Context, reader adapter.Inbound) (routerVPNExecutionMTUReadback, error) {
+				observations++
+				if scenario == "read-error" {
+					return routerVPNExecutionMTUReadback{}, errors.New("original native observation failed")
+				}
+				value := routerVPNExecutionMTUReadback{"original", 11, 1400}
+				if scenario == "actual-value" {
+					value.mtu = 1300
+				}
+				if scenario == "second-read" && observations == 2 {
+					value.index++
+				}
+				if scenario == "reader-during-read" && observations == 2 {
+					e.reader.Store(&routerVPNExecutionReader{inbound: before.inbound, ingress: before.ingress, generation: before.generation + 1})
+				}
+				return value, call.Err()
+			}
+			if err := e.retainUnchangedExecutionMTUContext(ctx, binding, expected, 1400, read); err == nil || e.mtu.Load() != previous {
+				t.Fatal("unchanged cleanup accepted changed native ownership or observation", err)
+			}
+		})
 	}
 }

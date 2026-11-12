@@ -29,6 +29,7 @@ ROOTS = {
               'NativeAdoptionRejectsRetainedSourceReplacement',
               'NativeMTUUsesJoinedReader', 'NativeMTURejectsChangedOwnership',
               'NativeMTUReadbackAndRetirementRemainOwned',
+              'NativeMTURetainsUnchangedPause', 'NativeMTURejectsUnchangedSubstitution',
               'NativeTUNReadbackRetainsOriginal', 'NativeTUNReadbackRejectsAwayAndBack',
               'NativeTUNReadbackRequiresJoinedClose', 'NativeTUNReadbackRejectsReplacedReader',
               'NativeTUNReadbackRejectsInCaptureChange', 'NativeTUNReadbackKeepsTypedTarget', 'NativeTUNReadbackRetainsLateClosedLedger'),
@@ -37,6 +38,8 @@ ROOTS = {
                                  'AppendConcurrentTagHasOneOriginalWinner'),
 }
 CHILDREN = {
+    'NativeMTURetainsUnchangedPause': ('work', 'cancelled-work-cleanup', 'repeat'),
+    'NativeMTURejectsUnchangedSubstitution': ('zero-binding', 'foreign-engine', 'foreign-reader', 'actual-value', 'second-read', 'read-error', 'pending-previous', 'foreign-previous', 'no-operation', 'unbounded', 'cancelled', 'retired-source', 'open-gate', 'reader-during-read'),
     'NativeTUNReadbackRejectsInCaptureChange': ('name', 'index', 'mtu'),
     'NativeTUNReadbackKeepsTypedTarget': ('generic', 'linux', 'windows', 'darwin', 'missing'),
     'TUNTypedReadbackRequiresActualOwner': ('nil', 'unstarted', 'cancelled', 'locked'),
@@ -145,6 +148,9 @@ def verify(core):
 
 
 CONTROLS = (
+    ('unchanged actual MTU', 'routervpn_node_chain_execution_mtu.go', ' || actual.mtu != mtu', '', '.', 'NativeMTURejectsUnchangedSubstitution/actual-value', 'unchanged cleanup accepted changed native ownership or observation'),
+    ('unchanged double native readback', 'routervpn_node_chain_execution_mtu.go', 'err != nil || confirmed != actual || e.reader.Load() != reader', 'err != nil || confirmed.name == "never" || e.reader.Load() != reader', '.', 'NativeMTURejectsUnchangedSubstitution/second-read', 'unchanged cleanup accepted changed native ownership or observation'),
+    ('unchanged pending transaction ownership', 'routervpn_node_chain_execution_mtu.go', '!previous.joined || previous.result != reader', 'previous.result != reader', '.', 'NativeMTURejectsUnchangedSubstitution/pending-previous', 'unchanged cleanup accepted changed native ownership or observation'),
     ('actual typed native reader', 'routervpn_node_chain_execution_readback.go', 'return routerVPNExecutionMTUReadback{}, errRouterVPNExecutionOwner', 'return routerVPNExecutionMTUReadback{"original-tun", 14, 1400}, nil', '.', 'NativeTUNReadbackKeepsTypedTarget', 'typed native reader accepted a component TUN'),
     ('exact original typed target', 'routervpn_node_chain_execution_readback.go', ' || target != metadata.TargetOS', ' || metadata.TargetOS == "never"', '.', 'NativeTUNReadbackKeepsTypedTarget/windows', 'native target substituted original typed platform'),
     ('two actual native observations', 'routervpn_node_chain_execution_readback.go', 'confirmErr != nil || confirmed != actual', 'confirmErr != nil || confirmed.name == "never"', '.', 'NativeTUNReadbackRejectsInCaptureChange/name', 'single native observation accepted an interface changed during capture'),

@@ -6,6 +6,7 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/protocol/tun"
 	"github.com/sagernet/sing-box/route"
@@ -93,6 +94,69 @@ func (e *RouterVPNNodeChainExecutionEngine) ChangeExecutionMTUContext(ctx contex
 		func(call context.Context, reader adapter.Inbound, value int) (*inbound.RouterVPNTunTransaction, error) {
 			return e.instance.RouterVPNChangeMTUTransaction(call, reader, value)
 		}, routerVPNReadExecutionMTU)
+}
+
+// RetainUnchangedExecutionMTUContext finishes an already joined pause when its
+// work was cancelled before native replacement. It cannot acquire, replace or
+// repair a TUN. The original operation, closed binding and two actual native
+// observations must all retain the same reader and the captured actual MTU.
+func (e *RouterVPNNodeChainExecutionEngine) RetainUnchangedExecutionMTUContext(ctx context.Context,
+	binding mobilemultihop.NodeChainExecutionMTUResumeBinding, expected adapter.Inbound, mtu int) error {
+	return e.retainUnchangedExecutionMTUContext(ctx, binding, expected, mtu, routerVPNReadExecutionMTU)
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) retainUnchangedExecutionMTUContext(ctx context.Context,
+	binding mobilemultihop.NodeChainExecutionMTUResumeBinding, expected adapter.Inbound, mtu int,
+	read func(context.Context, adapter.Inbound) (routerVPNExecutionMTUReadback, error)) error {
+	if e == nil || ctx == nil || ctx.Err() != nil || expected == nil || read == nil || !mobilemtu.SameOperationContext(ctx, ctx) {
+		return errRouterVPNExecutionOwner
+	}
+	if _, bounded := ctx.Deadline(); !bounded || !e.busy.CompareAndSwap(false, true) {
+		return errRouterVPNExecutionOwner
+	}
+	defer e.busy.Store(false)
+	if err := binding.ValidateTransitionContext(ctx); err != nil {
+		return err
+	}
+	bound, err := binding.MTUPlan()
+	if err != nil || mtu < 1280 || mtu > bound.Ceiling {
+		return errors.Join(err, errRouterVPNExecutionOwner)
+	}
+	reader := e.reader.Load()
+	if reader == nil || reader.inbound != expected || reader.ingress == nil {
+		return errRouterVPNExecutionOwner
+	}
+	epoch := binding.SelectionEpoch()
+	previous := e.mtu.Load()
+	if previous != nil {
+		// A cleanup shortcut cannot discard an earlier pending transaction.
+		// That transaction must finish through its original replacement path.
+		if !previous.joined || previous.result != reader || previous.binding.ValidateTransitionContext(ctx) != nil {
+			return errRouterVPNExecutionOwner
+		}
+		epoch = previous.epoch
+	}
+	if err := e.closedMTUContext(ctx, binding, epoch); err != nil {
+		return err
+	}
+	if reader.ingress.Current(ctx) != nil || e.nativeCurrent(ctx, e.state.Load()) != nil {
+		return errRouterVPNExecutionOwner
+	}
+	actual, err := read(ctx, expected)
+	if err != nil || actual.name == "" || actual.index < 1 || actual.mtu != mtu {
+		return errors.Join(err, errRouterVPNExecutionOwner)
+	}
+	confirmed, err := read(ctx, expected)
+	if err != nil || confirmed != actual || e.reader.Load() != reader || e.mtu.Load() != previous ||
+		reader.ingress.Current(ctx) != nil || e.closedMTUContext(ctx, binding, epoch) != nil {
+		return errors.Join(err, errRouterVPNExecutionOwner)
+	}
+	retained := &routerVPNExecutionMTUTransition{binding: binding, before: reader, result: reader,
+		original: actual, observed: actual, requested: mtu, epoch: epoch, joined: true}
+	if !e.mtu.CompareAndSwap(previous, retained) {
+		return errRouterVPNExecutionOwner
+	}
+	return e.closedMTUContext(ctx, binding, epoch)
 }
 
 // Native acquisition/readback are explicit private component boundaries. No
