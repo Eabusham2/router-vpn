@@ -21,6 +21,8 @@ spec = importlib.util.spec_from_file_location('apple_dns_boundary', ROOT / 'depl
 DNS = importlib.util.module_from_spec(spec); spec.loader.exec_module(DNS)
 spec = importlib.util.spec_from_file_location('apple_crypto_boundary', ROOT / 'deploy/test_ios_physical_path.py')
 CRYPTO = importlib.util.module_from_spec(spec); spec.loader.exec_module(CRYPTO)
+spec = importlib.util.spec_from_file_location('apple_execution_host_boundary', ROOT / 'deploy/ios_node_chain_execution_host_boundary.py')
+EXECUTION = importlib.util.module_from_spec(spec); spec.loader.exec_module(EXECUTION)
 LIBBOX = r'''
 import Foundation
 #if !canImport(ObjectiveC)
@@ -149,7 +151,7 @@ public final class LibboxCommandServer {
     private var active=false
     private var strategyEvents: [String] = []
     private var failDNS = false, failClose = false
-    private var configuration = ""
+    private var configuration = "", instanceClosed=false
     public init(_ count: Int64 = 0) { paddingCount=count }
     public func activate(_ count: UnsafeMutablePointer<Int64>, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool {
         lock.lock();defer { lock.unlock() }
@@ -163,11 +165,13 @@ public final class LibboxCommandServer {
     public func torCleanup(_ success:Bool) { lock.lock(); strategyEvents.append(success ? "tor-delete" : "tor-delete-failed"); lock.unlock() }
     public func captureConfiguration(_ text:String){lock.lock();configuration=text;lock.unlock()}
     public func capturedConfiguration()->String{lock.lock();defer{lock.unlock()};return configuration}
+    public func instanceJoined()->Bool{lock.lock();defer{lock.unlock()};return instanceClosed}
     public func strategy(_ operation: String, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool {
         lock.lock(); defer { lock.unlock() }; strategyEvents.append(operation)
         if (operation == "dns" && failDNS) || (operation == "close" && failClose) {
             failure?.pointee=NSError(domain:"NativeStrategyFixture",code:8);return false
         }
+        if operation == "close" { instanceClosed=true }
         return true
     }
 
@@ -245,7 +249,7 @@ public func LibboxNewRouterMultihop(_ text: String, _ metadata: String, _ failur
 public func LibboxNewRouterMultihopWithEntryStartLayer(_ text: String, _ metadata: String, _ layer: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text,layer:layer) }
 public func LibboxNewRouterMultihopWithStartLayers(_ text: String, _ metadata: String, _ entry: String, _ exit: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text,layer:entry,exit:exit) }
 public func LibboxSetup(_ setup: LibboxSetupOptions, _ failure: UnsafeMutablePointer<NSError?>?) {LibboxTestState.shared.setup(setup.basePath)}
-public func LibboxNewCommandServer(_ platform: AnyObject, _ handler: AnyObject, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxCommandServer? { LibboxTestState.shared.makeServer() }
+public func LibboxNewCommandServer(_ platform: AnyObject, _ handler: AnyObject, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxCommandServer? { let server=LibboxTestState.shared.makeServer();LibboxExecutionHostFixture.shared.returned(server,failure);return server }
 
 public final class LibboxTorTestState: @unchecked Sendable {
     public static let shared = LibboxTorTestState()
@@ -1599,6 +1603,7 @@ struct IOSNodeChainCapture {
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--chain-only',action='store_true')
+    parser.add_argument('--execution-only',action='store_true')
     parser.add_argument('--shipping-only',action='store_true')
     requested=parser.parse_args()
     swift = shutil.which('swiftc')
@@ -1609,7 +1614,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='routervpn-libbox-delivery-') as tmp:
         tmp = Path(tmp)
         stub, harness = tmp/'Libbox.swift', tmp/'Harness.swift'
-        stub.write_text(LIBBOX + DNS.NATIVE + CANDIDATE_NATIVE); harness.write_text(DNS.STORAGE + HARNESS + CANDIDATE_SOURCE)
+        stub.write_text(LIBBOX + DNS.NATIVE + CANDIDATE_NATIVE + EXECUTION.NATIVE); harness.write_text(DNS.STORAGE + HARNESS.replace("    func activateImported(server:", EXECUTION.MTU_METHODS + "    func activateImported(server:", 1) .replace('        let chainText=', EXECUTION.TESTS + '        let chainText=', 1) + CANDIDATE_SOURCE + EXECUTION.SOURCE)
         hop_types = (ROOT/'ios/RouterVPN/App/IOSHopMeasurements.swift').read_text().split('// HOP_RESULT_TYPES_BEGIN',1)[1].split('// HOP_RESULT_TYPES_END',1)[0]
         binding = tmp/'HopBinding.swift'; binding.write_text('import Foundation\n' + hop_types)
         lib = tmp/('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
@@ -1623,8 +1628,24 @@ def main():
             crypto = tmp/'CryptoKit.swift'; crypto.write_text(CRYPTO.LINUX_CRYPTO)
             subprocess.run([swift,'-swift-version','6','-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-lcrypto','-o',str(tmp/'libCryptoKit.so')],cwd=tmp,check=True,timeout=60)
             args += ['-lCryptoKit']
-        args += [str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNTorPaddingReceipt.swift'), str(ROOT/'ios/RouterVPN/App/IOSCandidateCatalogPublication.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidateSession.swift')]
+        args += [str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNTorPaddingReceipt.swift'), str(ROOT/'ios/RouterVPN/App/IOSCandidateCatalogPublication.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidateSession.swift')]
         subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(ENGINE),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
+        if requested.execution_only or not requested.chain_only:
+            subprocess.run([str(tmp/'test'),'--execution-only'],env=environment,check=True,timeout=25)
+            text=ENGINE.read_text()
+            for name,before,after,witness in (
+                ('execution-retirement','            executionCleanup.retainForRetirement()','            // missing original retirement gate','retained execution blocks replacement native admission'),
+                ('execution-pending-owner','            pendingNodeChainExecutionCleanup = executionCleanup','            // missing original pending owner','execution failed cleanup retains original engine slot'),
+                ('execution-native-bind','        if let created { try host.bindNative(created) }','        if let created { _ = created }','execution startup retains bound original server'),
+                ('execution-hop-adoption','            self.hopMeasurement = probe\n            // Generic ordered hop metadata','            // omitted original probe\n            // Generic ordered hop metadata','execution retains ordinary owned hop metadata'),
+            ):
+                assert text.count(before)==1,name
+                broken=tmp/(name+'.swift');broken.write_text(text.replace(before,after,1));binary=tmp/name
+                subprocess.run(args+[str(ROOT/'ios/RouterVPN/App/IOSMultihopStartLayer.swift'),str(broken),str(harness),'-o',str(binary)],check=True,timeout=90)
+                failed=subprocess.run([str(binary),'--execution-only'],env=environment,capture_output=True,text=True,timeout=25)
+                assert failed.returncode != 0 and 'FAIL: '+witness in failed.stdout+failed.stderr,(name,(failed.stdout+failed.stderr)[-1500:])
+                print('Rejected ordered execution defect mutation:',name)
+            if requested.execution_only:return
         if requested.chain_only or not requested.shipping_only:
             subprocess.run([str(tmp/'test'),'--chain-only'],env=environment,check=True,timeout=25)
             text=ENGINE.read_text()
@@ -1676,8 +1697,17 @@ def main():
             ('measurement-execution-authority', '                guard requested == "local", capture["execution"] == nil else { return nil }', '                guard capture["execution"] == nil else { return nil }', 'external execution Info matches captured policy: missing-paired-auto'),
             ('measurement-config-identity', 'SHA256.hash(data: Data(config.utf8))', 'SHA256.hash(data: Data("uncaptured configuration".utf8))', 'Tor measurement Info retains original auto and proved leaf'),
         ):
-            assert text.count(before)==1,label
-            broken.write_text(text.replace(before,after,1))
+            if label == 'server-retirement-blocks-replacement':
+                # Both ordinary and ordered execution startup enforce this
+                # gate. This existing witness exercises the ordinary entry.
+                begin=text.index('    func start(files: [String: Data], strict: Bool, multihopMetadata:')
+                prefix,scope=text[:begin],text[begin:]
+                assert scope.count(before)==1,label
+                replacement=prefix+scope.replace(before,after,1)
+            else:
+                assert text.count(before)==1,label
+                replacement=text.replace(before,after,1)
+            broken.write_text(replacement)
             executable=tmp/label
             subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(broken),str(harness),'-o',str(executable)],check=True,timeout=90)
             bad=subprocess.run([str(executable)],env=environment,capture_output=True,text=True,timeout=25)

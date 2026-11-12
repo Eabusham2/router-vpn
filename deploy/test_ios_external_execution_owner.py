@@ -74,6 +74,14 @@ final class LibboxRouterNodeChain {
  func healthy()->Bool{false};func progressJSON()->String{"{}"}
  func networkChanged(){};func close()throws{}
 }
+// This ordinary external fixture cannot construct an ordered execution host.
+final class RouterVPNNodeCandidateSession {func invalidate(){};func close()throws{throw FixtureFailure.error}}
+func LibboxRouterNodeChainNewHopMeasurement(_ plan:LibboxRouterNodeChain,_ server:LibboxCommandServer,_ failure:inout NSError?)->LibboxRouterHopMeasurement?{failure=FixtureFailure.error;return nil}
+final class RouterVPNNodeChainExecutionHost {
+ func close()throws{throw FixtureFailure.error}
+ func retainForRetirement(){};func releaseRetirement(){}
+ func progress()->Data?{nil}
+}
 final class LibboxRouterHopMeasurement {func close()throws{Trace.shared.add("hop-close")};func networkChanged(){Trace.shared.add("hop-network")}}
 func LibboxRouterExternalCreateProof(_ server:LibboxCommandServer,_ source:String,_ capture:String,_ session:String,_ error:inout NSError?)->LibboxRouterExternalProofRequest? {
  server.request.source=source;server.request.capture=capture;server.request.session=session;return server.request
@@ -245,7 +253,7 @@ def shipping():
     start = source.index('    private final class MTUFailureDelivery:')
     end = source.index('\n    func ', source.index('\n    }', start))
     failure = source[start:end]
-    hops = source[source.index('    func enableExternalHopMeasurement('):source.index('    func hopMeasurementRequest(')]
+    hops = source[source.index('    func enableExternalHopMeasurement('):source.index('    func candidateMeasurementRequest(')]
     receipts = source[source.index('    func multihopProgress('):source.index('    func invalidateMultihop(')]
     node_chain = source[source.index('    func completeNodeChainExecution('):source.index('    /// Only this delivery object')]
     return fields + stop + proof + retirement + mtu + failure + hops + receipts + node_chain + FIXTURE

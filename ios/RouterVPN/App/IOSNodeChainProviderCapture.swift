@@ -5,13 +5,15 @@ import Libbox
 /// rerun before native service creation; this record is never a live receipt.
 enum IOSNodeChainProviderCapture {
     static let key = "nodeChainSource"
+    static let executionKey = "nodeChainExecutionSource"
 
     static func requested(_ configuration: [String: Any], profile: [String: Any]) -> Bool {
-        configuration[key] != nil || profile["multihop_nodes"] != nil
+        configuration[key] != nil || configuration[executionKey] != nil || profile["multihop_nodes"] != nil
     }
 
     static func reopen(_ configuration: [String: Any]) throws -> IOSNodeChainCapture {
-        guard configuration["engine"] as? String == "multihop-libbox",
+        guard configuration[executionKey] == nil,
+              configuration["engine"] as? String == "multihop-libbox",
               ["entryBundle", "external_entry_bundle", "external_entry_mode", "tor_entry_bundle", "tor_entry_mode",
                "strategy", "strategy_catalog", "max_source_sha256"].allSatisfy({ configuration[$0] == nil }),
               let input = configuration[key] as? String, !input.isEmpty, input.utf8.count <= IOSNodeChainCapture.maximumInputBytes,

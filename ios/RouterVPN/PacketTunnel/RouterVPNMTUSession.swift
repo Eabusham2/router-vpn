@@ -115,6 +115,27 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
         stateLock.lock(); defer { stateLock.unlock() }
         return changing || opening != nil ? nil : proofObservationEpoch
     }
+    /// Serialize probe replacement with every Auto/Retest start. A single TUN
+    /// candidate finishing is insufficient while the original optimizer runs.
+    func observeNodeChainExecutionMeasurement(_ token: UUID, _ action: () throws -> Void) throws -> Bool {
+        commandLock.lock(); defer { commandLock.unlock() }
+        stateLock.lock()
+        let captured = core
+        let available = !stopped && !invalid && !changing && opening == nil && proofObservationEpoch == token
+        stateLock.unlock()
+        guard available, captured?.running() != true else { return false }
+        stateLock.lock()
+        let current = core === captured && !stopped && !invalid && !changing && opening == nil && proofObservationEpoch == token
+        stateLock.unlock()
+        guard current else { return false }
+        try action()
+        stateLock.lock()
+        let retained = core === captured && !stopped && !invalid && !changing && opening == nil && proofObservationEpoch == token
+        stateLock.unlock()
+        guard retained else { throw failure("The ordered measurement attachment crossed a native MTU generation.") }
+        return true
+    }
+
     func invalidate() {
         stateLock.lock(); invalid = true; let captured = core; stateLock.unlock()
         captured?.networkChanged()
@@ -134,6 +155,10 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
         stateLock.lock(); let pending = constructing || !retired.isEmpty; stateLock.unlock()
         if pending { throw failure("Native MTU ownership is still draining before Tor cleanup") }
     }
+    /// Return all original optimizer owners before the ordered remote lease is
+    /// released. The original physical monitor is still needed for that DELETE.
+    func drainForNodeChainExecutionCleanup() throws { try drainForTorCleanup() }
+
     func stopChecked() throws {
         stateLock.lock()
         // Invalidation never waits for the factory/command lock. An in-flight
@@ -189,6 +214,15 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
               }) else { throw failure("Ordered MTU could not retain every captured prefix and its proved native TUN") }
     }
 
+    func activateNodeChainExecution(server: LibboxCommandServer, plan: LibboxRouterNodeChainExecution,
+                                    onAbort: @escaping @Sendable (String) -> Void) throws {
+        let profile = plan.mtuProfile()
+        guard !profile.isEmpty, profile.utf8.count <= 65536, plan.healthy(),
+              activateOwned(profile: profile, onAbort: onAbort, nativeExecutionAuthority: true, create: { createError in
+                  LibboxRouterNodeChainExecutionNewMTU(plan, server, self, &createError)
+              }) else { throw failure("Ordered execution MTU lost its exact proved native path") }
+    }
+
     func activateExternal(server: LibboxCommandServer, proof: LibboxRouterExternalProofRequest,
                           source: String, capture: String,
                           onAbort: @escaping @Sendable (String) -> Void) throws {
@@ -218,7 +252,7 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
     }
 
     private func activateOwned(profile: String, onAbort: @escaping @Sendable (String) -> Void,
-                               nativeTorAuthority: Bool = false,
+                               nativeTorAuthority: Bool = false, nativeExecutionAuthority: Bool = false,
                                create: (inout NSError?) -> LibboxRouterMTU?) -> Bool {
         commandLock.lock(); defer { commandLock.unlock() }
         stateLock.lock()
@@ -246,7 +280,7 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
         // Ordinary owners keep their existing validated profile semantics.
         let policy = (try? JSONSerialization.jsonObject(with: Data(profile.utf8))) as? [String: Any]
         let mode = (policy?["mtu_policy"] as? String ?? "auto").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let automatic = nativeTorAuthority ? next.autoRequested() : ((mode.isEmpty || mode == "auto") && policy?["jumbo_tun"] as? Bool != true)
+        let automatic = (nativeTorAuthority || nativeExecutionAuthority) ? next.autoRequested() : ((mode.isEmpty || mode == "auto") && policy?["jumbo_tun"] as? Bool != true)
         stateLock.lock(); optimizationAllowed = automatic; automaticPending = automatic && hold; stateLock.unlock()
         if automatic && !hold {
             try? next.start(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased(), force: false)

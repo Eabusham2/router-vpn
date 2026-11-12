@@ -31,6 +31,11 @@ public final class LibboxRouterNodeChain:NSObject {
  public func mtuProfile()->String{"{\"mtu_policy\":\"auto\"}"}
 }
 
+public final class LibboxRouterNodeChainExecution:NSObject {
+ public var valid=true,automatic=true
+ public func healthy()->Bool{valid}
+ public func mtuProfile()->String{"{\"mtu_policy\":\"auto\"}"}
+}
 public final class LibboxRouterExternalProofRequest:NSObject { public var valid=true }
 public final class LibboxRouterTorProofRequest:NSObject { public var valid=true;public var entryJumbo=false;public var entryFixedMTU:Int32=0 }
 public enum FakeOS {
@@ -101,6 +106,11 @@ public func LibboxNewRouterExternalMTU(_ server:LibboxCommandServer?,_ platform:
  let core=LibboxRouterMTU();core.closeFailures=FakeOS.newCloseFailures;FakeOS.current=core
  if FakeOS.returnOwnerWithError{error?.pointee=NSError(domain:"ExternalMTUFixture",code:2)}
  FakeOS.externalCreated?();return core
+}
+public func LibboxRouterNodeChainExecutionNewMTU(_ plan:LibboxRouterNodeChainExecution?,_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
+ guard let plan,plan.healthy() else{error?.pointee=NSError(domain:"ExecutionMTUFixture",code:1);return nil}
+ let core=LibboxNewRouterMTU(server,platform,"captured actual execution graph",plan.mtuProfile(),error)
+ core?.automatic=plan.automatic;return core
 }
 public func LibboxNewRouterTorMTU(_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ proof:LibboxRouterTorProofRequest?,_ config:String?,_ profile:String?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
  FakeOS.torArguments=[config ?? "",profile ?? ""];FakeOS.torProof=proof
@@ -514,6 +524,39 @@ for withError in [false,true] {
  let closes=FakeOS.closes;try late.stopChecked()
  check(FakeOS.closes==closes+1 && native==nil,"Tor failed-Close owner was not retained until drain")
 }
+for automatic in [false,true] { for startupHold in ["",id] {
+ FakeOS.newCloseFailures=0;FakeOS.returnOwnerWithError=false
+ let retained=ready(startupHold),plan=LibboxRouterNodeChainExecution(),calls=FakeOS.startCalls
+ plan.automatic=automatic
+ try retained.activateNodeChainExecution(server:LibboxCommandServer(),plan:plan){_ in}
+ let session=retained.captureMTU()!.session
+ let status=request(retained,"mtu-status",other,session)!
+ check(status["tor_connection"] as? Bool==false,"ordered execution mislabeled Tor")
+ check(status["optimization_allowed"] as? Bool==automatic,"ordered full-path native Auto authority ignored")
+ check(FakeOS.startCalls==calls + ((automatic && startupHold.isEmpty) ? 1:0),"ordered native Auto entry ignored original hold")
+ if !startupHold.isEmpty{_=request(retained,"mtu-release",id,session)}
+ check(FakeOS.startCalls==calls + (automatic ? 1:0),"ordered held Auto lost original native policy")
+ try retained.drainForNodeChainExecutionCleanup()
+ check(FakeOS.current?.closed==true,"ordered cleanup lost original optimizer")
+ check(retained.observePhysicalPath(name:"en0",signature:"ordered-cleanup-change"),"ordered cleanup disabled physical observation before DELETE")
+ try retained.stopChecked()
+}}
+let invalidExecution=ready(),invalidExecutionPlan=LibboxRouterNodeChainExecution();invalidExecutionPlan.valid=false
+rejects("unproved ordered execution granted MTU"){try invalidExecution.activateNodeChainExecution(server:LibboxCommandServer(),plan:invalidExecutionPlan){_ in}}
+try invalidExecution.stopChecked()
+let measured=ready(),measuredPlan=LibboxRouterNodeChainExecution()
+try measured.activateNodeChainExecution(server:LibboxCommandServer(),plan:measuredPlan){_ in}
+let observation=measured.proofObservationToken!;var observations=0
+check(try measured.observeNodeChainExecutionMeasurement(observation){observations+=1}==false && observations==0,"ordered measurement factory ran during full optimizer")
+let nativeStatus=try JSONSerialization.jsonObject(with:Data(FakeOS.current!.statusJSON().utf8)) as! [String:Any]
+FakeOS.current!.cancel(nativeStatus["request_id"] as! String)
+check(try measured.observeNodeChainExecutionMeasurement(UUID()){observations+=1}==false && observations==0,"ordered measurement accepted stale MTU observation epoch")
+check(try measured.observeNodeChainExecutionMeasurement(observation){observations+=1} && observations==1,"idle original observation was refused")
+let originalState=measured.captureMTU()!
+rejects("ordered factory admitted generation change during attachment"){
+ _ = try measured.observeNodeChainExecutionMeasurement(observation){try measured.beginMTUChange(originalState)}
+}
+try measured.endMTUChange();try measured.stopChecked()
 print("Production Swift MTU owner: PASS (\(checks) checks; Libbox/OS boundary doubled)")
 """
 GATE=r"""
@@ -567,7 +610,9 @@ with tempfile.TemporaryDirectory(prefix='routervpn-ios-mtu-') as directory:
  assert bad.returncode != 0 and 'late or error-bearing owner was lost or automatically started' in bad.stdout+bad.stderr, 'Lost-owner regression control did not fail at the native lifetime assertion'
  print('Negative control: discarded failed-Close factory owner correctly rejected')
  for label, before, after, expected in (
-  ('native-predecessor-authority','nativeTorAuthority ? next.autoRequested() : ','','inherited Tor capacity rewrote saved exit preference or entered Auto'),
+  ('native-predecessor-authority','(nativeTorAuthority || nativeExecutionAuthority) ? next.autoRequested() : ','','inherited Tor capacity rewrote saved exit preference or entered Auto'),
+  ('execution-optimizer-idle','guard available, captured?.running() != true else { return false }','guard available else { return false }','ordered measurement factory ran during full optimizer'),
+  ('execution-path-authority','(nativeTorAuthority || nativeExecutionAuthority) ? next.autoRequested() : ','nativeTorAuthority ? next.autoRequested() : ','ordered full-path native Auto authority ignored'),
   ('configured-retest-admission','guard optimizationAllowed else {','guard true else {','forbidden Tor Retest reached the native controller'),
   ('readback-display','if dead || actual == nil || !readbackMatches {','if dead {','mismatched Tor OS reader retained a configured capacity claim'),
   ('cleanup-physical-monitor','func drainForTorCleanup() throws {\n        stateLock.lock()\n        invalid = true','func drainForTorCleanup() throws {\n        stateLock.lock()\n        stopped = true; invalid = true','Tor cleanup disabled physical reset observation before DELETE acknowledgment'),
