@@ -93,8 +93,8 @@ class OrderedExecutionCommandVerdicts(unittest.TestCase):
 
     def test_original_execution_runtime_owners_are_required(self):
         names = NODE.ORDERED_EXECUTION_COMMAND_VERDICTS
-        self.assertEqual(len(names), 11)
-        self.assertEqual(len(NODE.ORDERED_EXECUTION_COMMAND_ROOTS), 4)
+        self.assertEqual(len(names), 28)
+        self.assertEqual(len(NODE.ORDERED_EXECUTION_COMMAND_ROOTS), 7)
         text = (ROOT / "deploy/test_desktop_node_physical.py").read_text()
         self.assertEqual(text.count("suites.append(ORDERED_EXECUTION_COMMAND_SUITE)"), 1)
         output = self.output(names)

@@ -36,3 +36,29 @@ func (owner *RouterVPNDesktopNodePhysical) ChangeNodeChainExecutionMTUContext(ct
 		return engine.ChangeExecutionMTUContext(call, binding, reader, value)
 	})
 }
+
+// An unchanged pause retains its existing physical grant. No TUN permission
+// is detached and no native mutation is requested to make a saved value fit.
+func (owner *RouterVPNDesktopNodePhysical) RetainUnchangedNodeChainExecutionMTUContext(ctx context.Context, engine *RouterVPNNodeChainExecutionEngine,
+	binding mobilemultihop.NodeChainExecutionMTUResumeBinding, expected adapter.Inbound, mtu int) error {
+	if owner == nil || engine == nil || owner.instance == nil || engine.instance != owner.instance || expected == nil ||
+		!binding.OwnsEngine(engine) || owner.NodeChainExecutionSourceCurrentContext(ctx, engine.prep) != nil {
+		return errRouterVPNExecutionOwner
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &owner.mu); err != nil {
+		return err
+	}
+	defer owner.mu.Unlock()
+	name, index, actual, err := owner.readbackContext(ctx)
+	if err != nil || owner.inbound != expected || actual != mtu {
+		return errors.Join(err, errRouterVPNExecutionOwner)
+	}
+	if err := engine.RetainUnchangedExecutionMTUContext(ctx, binding, expected, mtu); err != nil {
+		return err
+	}
+	afterName, afterIndex, afterMTU, err := owner.readbackContext(ctx)
+	if err != nil || owner.inbound != expected || name != afterName || index != afterIndex || actual != afterMTU {
+		return errors.Join(err, errRouterVPNExecutionOwner)
+	}
+	return ctx.Err()
+}

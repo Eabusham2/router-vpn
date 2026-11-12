@@ -103,6 +103,16 @@ type routerVPNNodeMTUEngine interface {
 	CurrentContext(context.Context) (adapter.Inbound, error)
 	Change(context.Context, adapter.Inbound, int) (adapter.Inbound, error)
 }
+
+// An ordered execution keeps its original native manager and physical grant
+// across MTU trials. This private companion owns pause, selected-only reproof
+// and cleanup; the ordinary node path never acquires it from serialized data.
+type routerVPNNodeMTUExecution interface {
+	currentCommand(context.Context, *routerVPNNodeMTU, routerVPNNodeMTUCommand) error
+	beforeChange(context.Context, *routerVPNNodeMTU, int) (func(), error)
+	change(context.Context, *routerVPNNodeMTU, adapter.Inbound, int) (adapter.Inbound, error)
+	afterChange(context.Context, *routerVPNNodeMTU) error
+}
 type routerVPNNodeMTUBox struct {
 	instance *box.Box
 	tag      string
@@ -148,6 +158,7 @@ type routerVPNNodeMTU struct {
 	commitRevert *routerVPNNodeCommitRevert
 	openVPN      *routerVPNImportedOpenVPN
 	chain        *routerVPNNodeChainRuntime
+	execution    routerVPNNodeMTUExecution
 	// Diagnostic suppression belongs to this exact reader, not a session
 	// basename or a replacement owner. It is never serialized as evidence.
 	networkReceiptDiagnosticReader uint64
@@ -277,7 +288,10 @@ func (owner *routerVPNNodeMTU) changeBeforeContext(parent context.Context, value
 	if owner.currentContext(parent) != nil || value < 1280 || value > 9000 {
 		return routerVPNExternalFailure
 	}
-	if value == owner.record.MTU {
+	// A closed execution may already have its original interface value while
+	// still needing selected-path proof. Never acknowledge that rollback from
+	// the saved number alone; its companion must retain and reprove the reader.
+	if value == owner.record.MTU && owner.execution == nil {
 		return nil
 	}
 	if !mobilemtu.SameOperationContext(parent, parent) {
@@ -299,10 +313,28 @@ func (owner *routerVPNNodeMTU) changeBeforeContext(parent context.Context, value
 			return err
 		}
 	}
+	if owner.execution != nil {
+		if owner.chain != nil {
+			return routerVPNExternalFailure
+		}
+		finish, err := owner.execution.beforeChange(ctx, owner, value)
+		if finish != nil {
+			defer finish()
+		}
+		if err != nil || finish == nil {
+			return errors.Join(err, routerVPNExternalFailure)
+		}
+	}
 	previous, before := owner.inbound, owner.record
-	next, changeErr := owner.engine.Change(ctx, previous, value)
+	var next adapter.Inbound
+	var changeErr error
+	if owner.execution != nil {
+		next, changeErr = owner.execution.change(ctx, owner, previous, value)
+	} else {
+		next, changeErr = owner.engine.Change(ctx, previous, value)
+	}
 	observe := ctx
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || owner.execution != nil && changeErr != nil {
 		// Only the native transaction's original cleanup allowance may observe
 		// its returned rollback reader. It cannot adopt a late measured winner.
 		var err error
@@ -335,6 +367,15 @@ func (owner *routerVPNNodeMTU) changeBeforeContext(parent context.Context, value
 		}
 	}
 	owner.inbound, owner.record = reader, after
+	if owner.execution != nil {
+		// Reprove this exact returned candidate or rollback reader even when
+		// work was cancelled. Only the original cleanup allowance may finish
+		// that already-owned operation; a new Compare run is never requested.
+		resumeErr := owner.execution.afterChange(observe, owner)
+		if err := errors.Join(changeErr, ctx.Err(), resumeErr); err != nil {
+			return err
+		}
+	}
 	if changeErr != nil || ctx.Err() != nil || mtu != value || owner.currentContext(ctx) != nil {
 		return routerVPNExternalFailure
 	}
@@ -368,11 +409,22 @@ func (owner *routerVPNNodeMTU) command(request routerVPNNodeMTUCommand) error {
 	return owner.commandContext(ctx, request)
 }
 func (owner *routerVPNNodeMTU) commandContext(ctx context.Context, request routerVPNNodeMTUCommand) error {
+	if owner == nil {
+		return routerVPNExternalFailure
+	}
 	if owner != nil && owner.chain != nil && owner.chain.measurementHold.Load() {
 		return routerVPNExternalFailure
 	}
 	if owner.chain != nil {
 		if err := owner.chain.current(ctx); err != nil {
+			return err
+		}
+	}
+	if owner.execution != nil {
+		if owner.chain != nil {
+			return routerVPNExternalFailure
+		}
+		if err := owner.execution.currentCommand(ctx, owner, request); err != nil {
 			return err
 		}
 	}
@@ -767,7 +819,24 @@ func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExtern
 
 func routerVPNRunNodeMTULoopWithChain(parent, ctx context.Context, files *routerVPNExternalFiles, instance *box.Box,
 	session, config string, physical *box.RouterVPNDesktopNodePhysical, current func(context.Context) error, ready func() error, chain *routerVPNNodeChainRuntime) error {
+	return routerVPNRunNodeMTULoopWithOwners(parent, ctx, files, instance, session, config, physical, current, ready, chain, nil)
+}
+
+func routerVPNRunNodeMTULoopWithExecution(parent, ctx context.Context, files *routerVPNExternalFiles, instance *box.Box,
+	session, config string, physical *box.RouterVPNDesktopNodePhysical, current func(context.Context) error, ready func() error, execution *routerVPNNodeChainExecutionRuntime) error {
+	if execution == nil || physical == nil {
+		return routerVPNExternalFailure
+	}
+	return routerVPNRunNodeMTULoopWithOwners(parent, ctx, files, instance, session, config, physical, current, ready, nil, execution)
+}
+
+func routerVPNRunNodeMTULoopWithOwners(parent, ctx context.Context, files *routerVPNExternalFiles, instance *box.Box,
+	session, config string, physical *box.RouterVPNDesktopNodePhysical, current func(context.Context) error, ready func() error,
+	chain *routerVPNNodeChainRuntime, execution *routerVPNNodeChainExecutionRuntime) error {
 	if parent == nil || ctx == nil || files == nil || instance == nil || current == nil || ready == nil {
+		return routerVPNExternalFailure
+	}
+	if chain != nil && execution != nil {
 		return routerVPNExternalFailure
 	}
 	observe, stopObserve := context.WithCancel(parent)
@@ -854,6 +923,14 @@ func routerVPNRunNodeMTULoopWithChain(parent, ctx context.Context, files *router
 			return err
 		}
 	}
+	if execution != nil {
+		if openVPN != nil || execution.run(observe) != nil {
+			return routerVPNExternalFailure
+		}
+		if err := execution.attachMTU(observe, owner, physical); err != nil {
+			return err
+		}
+	}
 	if err := ready(); err != nil {
 		return routerVPNExternalFailure
 	}
@@ -869,6 +946,9 @@ func routerVPNRunNodeMTULoopWithChain(parent, ctx context.Context, files *router
 			return nil
 		}
 		if err := chain.current(observe); err != nil {
+			return err
+		}
+		if err := execution.loopCurrent(observe); err != nil {
 			return err
 		}
 		if err := chain.pollMeasurement(observe); err != nil {
@@ -940,6 +1020,9 @@ func routerVPNRunNodeMTULoopWithChain(parent, ctx context.Context, files *router
 			}
 			if err == nil {
 				err = chain.heartbeat(heartbeatContext, next)
+			}
+			if err == nil {
+				err = execution.heartbeat(heartbeatContext, next)
 			}
 			if err == nil {
 				err = heartbeatContext.Err()

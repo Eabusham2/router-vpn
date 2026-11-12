@@ -1,0 +1,243 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// This is the private execution companion boundary, not a native receipt or
+// encrypted proof. The tests execute the shipping command/MTU coordinator and
+// its real one-shot cleanup-context implementation with an explicit TUN double.
+type desktopExecutionMTUDispatch struct {
+	t                      *testing.T
+	raw                    *routerVPNNodeMTU
+	engine                 *desktopNodeMTUEngineFixture
+	operation              context.Context
+	cancel                 context.CancelFunc
+	fault                  string
+	before, changes, after int
+	releases, commands     int
+	entered, finalized     bool
+}
+
+func (d *desktopExecutionMTUDispatch) currentCommand(ctx context.Context, raw *routerVPNNodeMTU, _ routerVPNNodeMTUCommand) error {
+	d.commands++
+	if raw != d.raw || d.fault == "foreign-owner" {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func (d *desktopExecutionMTUDispatch) beforeChange(ctx context.Context, raw *routerVPNNodeMTU, value int) (func(), error) {
+	d.before++
+	expected := 1360
+	if d.fault == "unchanged-rollback" {
+		expected = 1420
+	}
+	if raw != d.raw || value != expected || !mobilemtu.SameOperationContext(ctx, d.operation) || d.entered {
+		d.t.Fatal("execution pause lost the original native operation")
+	}
+	if d.fault == "unentered" {
+		return nil, errors.New("original execution activity unavailable")
+	}
+	if d.fault == "missing-finish" {
+		return nil, nil
+	}
+	d.entered = true
+	finish := func() {
+		if d.releases != 0 || d.fault != "pause-failure" && !d.finalized {
+			d.t.Fatal("execution activity released before original finalization")
+		}
+		d.releases++
+		d.entered = false
+	}
+	if d.fault == "pause-failure" {
+		return finish, errors.New("original pause retained failed cleanup")
+	}
+	if d.fault == "cancel-before-native" {
+		d.cancel()
+	}
+	return finish, nil
+}
+
+func (d *desktopExecutionMTUDispatch) change(ctx context.Context, raw *routerVPNNodeMTU, expected adapter.Inbound, value int) (adapter.Inbound, error) {
+	d.changes++
+	if raw != d.raw || !d.entered || expected != raw.inbound || expected != d.engine.current || !mobilemtu.SameOperationContext(ctx, d.operation) {
+		d.t.Fatal("execution mutation bypassed the original pause and reader")
+	}
+	if d.fault == "cancel-before-native" {
+		cleanup, err := mobilemtu.OperationCleanupContext(ctx)
+		if err != nil || cleanup.Err() != nil || ctx.Err() == nil || !mobilemtu.SameOperationContext(cleanup, d.operation) {
+			d.t.Fatal("unchanged native recovery lost its original cleanup allowance", err)
+		}
+		return expected, ctx.Err()
+	}
+	if d.fault == "unchanged-rollback" {
+		return expected, nil
+	}
+	next, err := d.engine.Change(ctx, expected, value)
+	if d.fault == "cancel-after-native" {
+		old := expected.(*desktopMTUTUNFixture)
+		rollback := &desktopMTUTUNFixture{index: old.index + 2, mtu: old.mtu, guard: old.guard, guardContext: old.guardContext}
+		d.engine.current = rollback
+		d.cancel()
+		return rollback, context.Canceled
+	}
+	return next, err
+}
+
+func (d *desktopExecutionMTUDispatch) afterChange(ctx context.Context, raw *routerVPNNodeMTU) error {
+	d.after++
+	if raw != d.raw || !d.entered || raw.inbound != d.engine.current || raw.currentContext(ctx) != nil ||
+		!mobilemtu.SameOperationContext(ctx, d.operation) || raw.record.Reader != 2 {
+		d.t.Fatal("execution reproof lost the exact returned native reader")
+	}
+	if strings.HasPrefix(d.fault, "cancel-") {
+		cleanup, err := mobilemtu.OperationCleanupContext(d.operation)
+		deadline, bounded := ctx.Deadline()
+		original, _ := cleanup.Deadline()
+		if err != nil || !bounded || !deadline.Equal(original) || time.Until(deadline) > 3*time.Second || raw.record.MTU != 1420 {
+			d.t.Fatal("cancelled reproof renewed cleanup or retained the candidate", err)
+		}
+	}
+	d.finalized = true
+	if d.fault == "proof-failure" {
+		return errors.New("original selected proof refused its returned reader")
+	}
+	return nil
+}
+
+func TestRouterVPNDesktopNodeChainExecutionMTUDispatchKeepsCleanup(t *testing.T) {
+	for _, fault := range []string{"success", "unchanged-rollback", "cancel-before-native", "cancel-after-native", "proof-failure", "pause-failure", "unentered", "missing-finish", "foreign-owner"} {
+		t.Run(fault, func(t *testing.T) {
+			raw, engine, _ := desktopNodeMTUFixture(t)
+			desktopNodeMTUApply(t, raw, "begin", 0)
+			operation, finish, err := mobilemtu.WithOperationContext(context.Background(), 10*time.Second, 3*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer finish()
+			call, cancel := context.WithCancel(operation)
+			defer cancel()
+			dispatch := &desktopExecutionMTUDispatch{t: t, raw: raw, engine: engine, operation: operation, cancel: cancel, fault: fault}
+			raw.execution = dispatch
+			request := desktopNodeMTURequest(raw, "set", 1360)
+			if fault == "unchanged-rollback" {
+				request = desktopNodeMTURequest(raw, "rollback", 0)
+			}
+			err = raw.commandContext(call, request)
+			if (err == nil) != (fault == "success" || fault == "unchanged-rollback") {
+				t.Fatal("execution operation lost its actual outcome", fault, err)
+			}
+			if dispatch.commands != 1 || dispatch.entered {
+				t.Fatal("command admission or exact activity release was bypassed")
+			}
+			if fault == "foreign-owner" || fault == "unentered" || fault == "missing-finish" {
+				if dispatch.changes != 0 || dispatch.after != 0 || dispatch.releases != 0 || raw.record.Reader != 1 {
+					t.Fatal("unentered operation released or changed another owner")
+				}
+				return
+			}
+			if fault == "pause-failure" {
+				if dispatch.changes != 0 || dispatch.after != 0 || dispatch.releases != 1 || raw.record.Reader != 1 {
+					t.Fatal("failed pause admitted native mutation or lost its owned release")
+				}
+				return
+			}
+			if dispatch.before != 1 || dispatch.changes != 1 || dispatch.after != 1 || dispatch.releases != 1 || raw.inbound != engine.current || raw.record.Reader != 2 {
+				t.Fatal("original execution companion did not finish its native handoff")
+			}
+			if strings.HasPrefix(fault, "cancel-") && (!errors.Is(err, context.Canceled) || raw.record.MTU != 1420) {
+				t.Fatal("cancelled native change discarded rollback readback", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainExecutionMTUCloseJoinsActivity(t *testing.T) {
+	f := newDesktopExecutionRuntimeFixture(t)
+	if err := f.owner.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state := f.owner.state.Load()
+	activity, err := f.owner.claimActivity(context.Background(), state, state.controller.Load())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if another, err := f.owner.claimActivity(context.Background(), state, state.controller.Load()); err == nil || another != nil || f.owner.activity.Load() != activity {
+		t.Fatal("overlapping operation replaced the original native activity")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	err = f.owner.close(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) || f.owner.closed.Load() || f.owner.activity.Load() != activity ||
+		strings.Contains(strings.Join(f.events, ","), "join") || strings.Contains(strings.Join(f.events, ","), "retire") {
+		t.Fatal("execution teardown bypassed its entered MTU activity", err)
+	}
+	activity.release()
+	activity.release()
+	if err := f.owner.close(context.Background()); err != nil || !f.owner.closed.Load() || f.owner.activity.Load() != nil {
+		t.Fatal("joined original native activity could not finish close", err)
+	}
+}
+
+// Only the immutable bookkeeping seam is supplied here. Public attachMTU
+// requires the actual sealed physical policy, Box and native execution engine;
+// this mapping fixture cannot enter that public native path.
+func TestRouterVPNDesktopNodeChainExecutionMTUHeartbeatKeepsDistinctGenerations(t *testing.T) {
+	f := newDesktopExecutionRuntimeFixture(t)
+	if err := f.owner.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state := f.owner.state.Load()
+	state.proofGeneration.Store(2)
+	f.record.Reader = 2 // Unchanged native reader remains at generation one.
+	reader := &desktopMTUTUNFixture{index: f.record.Index, mtu: f.record.MTU}
+	base := &routerVPNNodeMTUBox{physical: &box.RouterVPNDesktopNodePhysical{}}
+	raw := &routerVPNNodeMTU{engine: base, inbound: reader, record: f.record}
+	mtu := &routerVPNDesktopExecutionMTU{owner: f.owner, state: state, raw: raw, base: base}
+	raw.execution = mtu
+	snapshot := &routerVPNDesktopExecutionMTUReadback{controller: state.controller.Load(), inbound: reader, record: f.record, native: f.engine.readback}
+	mtu.readback.Store(snapshot)
+	f.owner.mtu.Store(mtu)
+	if err := f.owner.heartbeat(context.Background(), f.record); err != nil {
+		t.Fatal("issued unchanged reader was confused with command generation", err)
+	}
+	body, err := f.owner.files.read("node-chain-execution-ready.json", mobilemultihop.DesktopNodeChainExecutionReadyRecordLimit)
+	var ready mobilemultihop.DesktopNodeChainExecutionReadyRecord
+	if err != nil || json.Unmarshal(body, &ready) != nil || ready.Generation != 2 || ready.Reader != 2 || f.engine.readback.ReaderGeneration != 1 {
+		t.Fatal("heartbeat relabeled original native generation", err)
+	}
+	for _, fault := range []string{"command-counter", "native-reader", "native-nonce", "controller", "inbound"} {
+		t.Run(fault, func(t *testing.T) {
+			record, observed := f.record, f.engine.readback
+			controller := state.controller.Load()
+			switch fault {
+			case "command-counter":
+				record.Reader++
+			case "native-reader":
+				observed.ReaderGeneration++
+			case "native-nonce":
+				observed.ReaderNonce = strings.Repeat("f", 64)
+			case "controller":
+				state.controller.Store(&routerVPNDesktopExecutionProofRef{controller.value})
+			case "inbound":
+				raw.inbound = &desktopMTUTUNFixture{index: f.record.Index, mtu: f.record.MTU}
+			}
+			if mtu.matchesReadback(context.Background(), record, observed) == nil {
+				t.Fatal("replaced MTU observation borrowed original issued mapping", fault)
+			}
+			state.controller.Store(controller)
+			raw.inbound = reader
+		})
+	}
+}

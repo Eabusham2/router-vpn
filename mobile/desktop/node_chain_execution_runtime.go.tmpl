@@ -50,6 +50,7 @@ type routerVPNNodeChainExecutionRuntime struct {
 	physical *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
 	meta     mobilemultihop.DesktopPhysicalMetadata
 	transfer string
+	instance *box.Box
 	host     func(context.Context) error
 	factory  routerVPNDesktopExecutionFactory
 	proof    routerVPNDesktopExecutionProofFactory
@@ -59,16 +60,19 @@ type routerVPNNodeChainExecutionRuntime struct {
 	retired  atomic.Bool
 	closed   atomic.Bool
 	state    atomic.Pointer[routerVPNDesktopExecutionState]
+	activity atomic.Pointer[routerVPNDesktopExecutionActivity]
+	mtu      atomic.Pointer[routerVPNDesktopExecutionMTU]
 }
 
 type routerVPNDesktopExecutionState struct {
-	lifetime   context.Context
-	cancel     context.CancelFunc
-	runDone    chan struct{}
-	engine     atomic.Pointer[routerVPNDesktopExecutionEngineRef]
-	controller atomic.Pointer[routerVPNDesktopExecutionProofRef]
-	projection atomic.Pointer[mobilemultihop.NodeChainExecutionProjection]
-	identity   atomic.Pointer[mobilemultihop.NodeChainIdentity]
+	lifetime        context.Context
+	cancel          context.CancelFunc
+	runDone         chan struct{}
+	engine          atomic.Pointer[routerVPNDesktopExecutionEngineRef]
+	controller      atomic.Pointer[routerVPNDesktopExecutionProofRef]
+	projection      atomic.Pointer[mobilemultihop.NodeChainExecutionProjection]
+	identity        atomic.Pointer[mobilemultihop.NodeChainIdentity]
+	proofGeneration atomic.Uint64
 }
 
 func routerVPNNewNodeChainExecutionRuntime(ctx context.Context, files *routerVPNExternalFiles,
@@ -76,7 +80,7 @@ func routerVPNNewNodeChainExecutionRuntime(ctx context.Context, files *routerVPN
 	if instance == nil {
 		return nil, routerVPNExternalFailure
 	}
-	return routerVPNNewNodeChainExecutionRuntimeFactory(ctx, files, prep, transfer, current,
+	owner, err := routerVPNNewNodeChainExecutionRuntimeFactory(ctx, files, prep, transfer, current,
 		func(call context.Context, source *mobilemultihop.NodeChainExecutionPreparation, session string, current func(context.Context) error) (routerVPNDesktopExecutionEngine, error) {
 			engine, err := instance.RouterVPNNewNodeChainExecutionEngine(call, source, session, current)
 			if engine == nil {
@@ -86,6 +90,10 @@ func routerVPNNewNodeChainExecutionRuntime(ctx context.Context, files *routerVPN
 		}, func(projection *mobilemultihop.NodeChainExecutionProjection, engine routerVPNDesktopExecutionEngine) (routerVPNDesktopExecutionProof, error) {
 			return mobilemultihop.NewNodeChainExecutionRuntime(projection, engine)
 		})
+	if owner != nil {
+		owner.instance = instance
+	}
+	return owner, err
 }
 
 func routerVPNNewNodeChainExecutionRuntimeFactory(ctx context.Context, files *routerVPNExternalFiles,
@@ -217,6 +225,7 @@ func (owner *routerVPNNodeChainExecutionRuntime) run(ctx context.Context) (failu
 		return errors.Join(err, routerVPNExternalFailure)
 	}
 	state.identity.Store(&identity)
+	state.proofGeneration.Store(1)
 	return owner.current(startup)
 }
 
@@ -269,6 +278,9 @@ func (owner *routerVPNNodeChainExecutionRuntime) close(ctx context.Context) erro
 		case <-ctx.Done():
 			return errors.Join(removeErr, ctx.Err())
 		}
+		if err := owner.joinMTUActivity(ctx); err != nil {
+			return errors.Join(removeErr, err)
+		}
 		if controller := state.controller.Load(); controller != nil {
 			if err := controller.value.CloseContext(ctx); err != nil {
 				return errors.Join(removeErr, err)
@@ -292,6 +304,11 @@ func (owner *routerVPNNodeChainExecutionRuntime) heartbeat(ctx context.Context, 
 		return nil
 	}
 	if err := owner.current(ctx); err != nil {
+		if mtu := owner.mtu.Load(); mtu != nil && mtu.raw.record.Active && mtu.rollbackCurrent(ctx) == nil {
+			// The closed original reader remains available only to rollback.
+			// It must never publish Connected while selected proof is absent.
+			return owner.files.remove("node-chain-execution-ready.json")
+		}
 		return err
 	}
 	state := owner.state.Load()
@@ -299,8 +316,15 @@ func (owner *routerVPNNodeChainExecutionRuntime) heartbeat(ctx context.Context, 
 	readback, err := engine.CaptureExecutionTUNReadbackContext(ctx, identity)
 	if err != nil || record.Session != owner.meta.SessionID || record.Config != owner.prep.ConfigSHA256() || record.Reader == 0 ||
 		readback.Identity != identity || readback.TargetOS != owner.meta.TargetOS || readback.InterfaceName != record.Interface ||
-		readback.InterfaceIndex != record.Index || readback.MTU != record.MTU || readback.ReaderGeneration != record.Reader {
+		readback.InterfaceIndex != record.Index || readback.MTU != record.MTU {
 		return errors.Join(err, routerVPNExternalFailure)
+	}
+	if mtu := owner.mtu.Load(); mtu != nil {
+		if err := mtu.matchesReadback(ctx, record, readback); err != nil {
+			return err
+		}
+	} else if readback.ReaderGeneration != record.Reader {
+		return routerVPNExternalFailure
 	}
 	epoch, err := engine.SelectionEpochContext(ctx)
 	if err != nil {
@@ -313,7 +337,7 @@ func (owner *routerVPNNodeChainExecutionRuntime) heartbeat(ctx context.Context, 
 	ready := mobilemultihop.DesktopNodeChainExecutionReadyRecord{Schema: 1, Kind: "routervpn-node-chain-execution-ready-v1",
 		SourceSHA256: owner.meta.SourceSHA256, PreparationSourceSHA256: owner.prep.SourceSHA256(), PreparationConfigSHA256: owner.prep.ConfigSHA256(),
 		TransferSHA256: owner.transfer, DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256, Identity: identity,
-		SelectionEpoch: epoch, Generation: readback.ReaderGeneration, Reader: record.Reader, InterfaceName: record.Interface,
+		SelectionEpoch: epoch, Generation: state.proofGeneration.Load(), Reader: record.Reader, InterfaceName: record.Interface,
 		InterfaceIndex: uint32(record.Index), MTU: record.MTU, ObservedAt: time.Now().UnixMilli(), Progress: state.controller.Load().value.Progress()}
 	if record.Index < 1 || uint64(record.Index) > uint64(^uint32(0)) || ready.Validate(projection, owner.transfer) != nil || owner.current(ctx) != nil {
 		return routerVPNExternalFailure

@@ -70,13 +70,19 @@ EXECUTION_DESKTOP_SUITES = (
     ("ordered-execution-command", "./cmd/sing-box", "^" + EXECUTION_COMMAND_ROOT, EXECUTION_COMMAND_VERDICTS),
 )
 ORDERED_EXECUTION_COMMAND_ROOTS = tuple("TestRouterVPNDesktopNodeChainExecutionRuntime" + suffix for suffix in (
-    "KeepsActualProjection", "RetainsFailedCleanup", "RejectsReplacedOwners", "JoinsLateConstructor"))
+    "KeepsActualProjection", "RetainsFailedCleanup", "RejectsReplacedOwners", "JoinsLateConstructor")) + tuple(
+    "TestRouterVPNDesktopNodeChainExecutionMTU" + suffix for suffix in (
+        "DispatchKeepsCleanup", "CloseJoinsActivity", "HeartbeatKeepsDistinctGenerations"))
 ORDERED_EXECUTION_COMMAND_VERDICTS = ORDERED_EXECUTION_COMMAND_ROOTS + tuple(
     ORDERED_EXECUTION_COMMAND_ROOTS[1] + "/" + leaf for leaf in ("remote-join", "gate-retire")) + tuple(
     ORDERED_EXECUTION_COMMAND_ROOTS[2] + "/" + leaf for leaf in (
-        "foreign-projection", "preparation-identity", "host", "readback", "late-readback"))
+        "foreign-projection", "preparation-identity", "host", "readback", "late-readback")) + tuple(
+    ORDERED_EXECUTION_COMMAND_ROOTS[4] + "/" + leaf for leaf in (
+        "success", "unchanged-rollback", "cancel-before-native", "cancel-after-native", "proof-failure", "pause-failure", "unentered", "missing-finish", "foreign-owner")) + tuple(
+    ORDERED_EXECUTION_COMMAND_ROOTS[6] + "/" + leaf for leaf in (
+        "command-counter", "native-reader", "native-nonce", "controller", "inbound"))
 ORDERED_EXECUTION_COMMAND_SUITE = ("ordered-execution-owner", "./cmd/sing-box",
-    "^TestRouterVPNDesktopNodeChainExecutionRuntime", ORDERED_EXECUTION_COMMAND_VERDICTS)
+    "^TestRouterVPNDesktopNodeChainExecution(Runtime|MTU)", ORDERED_EXECUTION_COMMAND_VERDICTS)
 MTU_CONTEXT_VERDICTS = {
     "mtu-operation-context": [
         "TestContextOperationAdmissionAndStatusDoNotLeaveWaiters",
@@ -887,6 +893,30 @@ def naive_transport_mutants(source):
     ]
 
 
+def ordered_execution_mtu_mutants(source):
+    """Exact command ownership controls; no privileged or encrypted fixture."""
+    runtime = "cmd/sing-box/routervpn_node_chain_execution_runtime.go"
+    mtu = "cmd/sing-box/routervpn_node_chain_execution_mtu.go"
+    command = "cmd/sing-box/routervpn_mtu_node.go"
+    controls = (
+        ("execution-mtu-unchanged-rollback", command, "TestRouterVPNDesktopNodeChainExecutionMTUDispatchKeepsCleanup", "unchanged-rollback",
+         "original execution companion did not finish its native handoff", "if value == owner.record.MTU && owner.execution == nil {", "if value == owner.record.MTU {"),
+        ("execution-mtu-join", runtime, "TestRouterVPNDesktopNodeChainExecutionMTUCloseJoinsActivity", "",
+         "execution teardown bypassed its entered MTU activity",
+         "\t\tif err := owner.joinMTUActivity(ctx); err != nil {\n\t\t\treturn errors.Join(removeErr, err)\n\t\t}\n", ""),
+        ("execution-mtu-readback", mtu, "TestRouterVPNDesktopNodeChainExecutionMTUHeartbeatKeepsDistinctGenerations", "native-nonce",
+         "replaced MTU observation borrowed original issued mapping", " || snapshot.native != native", ""),
+        ("execution-mtu-release", command, "TestRouterVPNDesktopNodeChainExecutionMTUDispatchKeepsCleanup", "success",
+         "command admission or exact activity release was bypassed", "\t\tif finish != nil {\n\t\t\tdefer finish()\n\t\t}\n", ""),
+        ("execution-mtu-cancelled-resume", command, "TestRouterVPNDesktopNodeChainExecutionMTUDispatchKeepsCleanup", "cancel-before-native",
+         "execution activity released before original finalization", "resumeErr := owner.execution.afterChange(observe, owner)",
+         "var resumeErr error\n\t\tif ctx.Err() == nil { resumeErr = owner.execution.afterChange(observe, owner) }"),
+    )
+    return [(label, relative, "./cmd/sing-box", test, child, witness,
+             BOOT.IDENTITY.replace_once((source/relative).read_text(encoding="utf-8"), before, after))
+            for label, relative, test, child, witness, before, after in controls]
+
+
 def mutants(source, windows):
     def changed(relative, before, after, count=1):
         raw = (source / relative).read_text(encoding="utf-8")
@@ -914,7 +944,7 @@ def mutants(source, windows):
     contextual_entry_lock = "\tif err := adapter.RouterVPNLockContext(ctx, &o.mu); err != nil {\n\t\treturn nil, err\n\t}\n"
     ambient_owner = "func() error { if !owner.SocketCurrent() { return net.ErrClosed }; return nil }()"
     caller_diagnostic = "physical caller used an ambient wait without its original context"
-    result = [
+    result = ordered_execution_mtu_mutants(source) + [
         ("node-lower-ambient-lock", lower, "./routervpn/desktoppt", "TestRouterVPNNodePhysicalCallerContext", "lower",
          caller_diagnostic, changed_function(lower, lower_current, contextual_entry_lock, "\to.mu.Lock()\n")),
         ("node-owner-ambient-lock", lower, "./routervpn/desktoppt", "TestRouterVPNNodePhysicalCallerContext", "owner",

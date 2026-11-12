@@ -1,0 +1,356 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type routerVPNDesktopExecutionActivity struct {
+	owner      *routerVPNNodeChainExecutionRuntime
+	state      *routerVPNDesktopExecutionState
+	controller *routerVPNDesktopExecutionProofRef
+	done       chan struct{}
+	once       sync.Once
+}
+
+func (a *routerVPNDesktopExecutionActivity) release() {
+	if a != nil {
+		a.once.Do(func() { a.owner.activity.CompareAndSwap(a, nil); close(a.done) })
+	}
+}
+
+func (owner *routerVPNNodeChainExecutionRuntime) claimActivity(ctx context.Context, state *routerVPNDesktopExecutionState,
+	controller *routerVPNDesktopExecutionProofRef) (*routerVPNDesktopExecutionActivity, error) {
+	if controller == nil || owner.nativeCurrent(ctx, state) != nil || state.controller.Load() != controller {
+		return nil, routerVPNExternalFailure
+	}
+	activity := &routerVPNDesktopExecutionActivity{owner: owner, state: state, controller: controller, done: make(chan struct{})}
+	if !owner.activity.CompareAndSwap(nil, activity) {
+		return nil, errors.New("the original ordered native activity remains owned")
+	}
+	if err := owner.nativeCurrent(ctx, state); err != nil || state.controller.Load() != controller {
+		activity.release()
+		return nil, errors.Join(err, routerVPNExternalFailure)
+	}
+	return activity, nil
+}
+
+func (owner *routerVPNNodeChainExecutionRuntime) joinMTUActivity(ctx context.Context) error {
+	if activity := owner.activity.Load(); activity != nil {
+		select {
+		case <-activity.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return ctx.Err()
+}
+
+type routerVPNDesktopExecutionMTU struct {
+	owner    *routerVPNNodeChainExecutionRuntime
+	state    *routerVPNDesktopExecutionState
+	raw      *routerVPNNodeMTU
+	base     *routerVPNNodeMTUBox
+	native   *box.RouterVPNNodeChainExecutionEngine
+	pause    atomic.Pointer[routerVPNDesktopExecutionPause]
+	readback atomic.Pointer[routerVPNDesktopExecutionMTUReadback]
+}
+
+type routerVPNDesktopExecutionPause struct {
+	activity   *routerVPNDesktopExecutionActivity
+	controller *routerVPNDesktopExecutionProofRef
+	binding    mobilemultihop.NodeChainExecutionMTUResumeBinding
+}
+
+// The command's transaction counter and the native reader generation have
+// different meanings. An unchanged rollback can advance the former only.
+// This issued snapshot binds both without rewriting either observed value.
+type routerVPNDesktopExecutionMTUReadback struct {
+	controller *routerVPNDesktopExecutionProofRef
+	inbound    adapter.Inbound
+	record     routerVPNNodeMTURecord
+	native     mobilemultihop.NodeChainExecutionTUNReadback
+}
+
+func (owner *routerVPNNodeChainExecutionRuntime) attachMTU(ctx context.Context, raw *routerVPNNodeMTU, physical *box.RouterVPNDesktopNodePhysical) error {
+	if owner == nil || raw == nil || physical == nil || raw.chain != nil || raw.execution != nil || owner.mtu.Load() != nil || owner.current(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	base, ok := raw.engine.(*routerVPNNodeMTUBox)
+	if !ok || base == nil || base.instance != owner.instance || owner.instance == nil || base.physical != physical ||
+		physical.NodeChainExecutionSourceCurrentContext(ctx, owner.prep) != nil || raw.record.Session != owner.meta.SessionID || raw.record.Config != owner.prep.ConfigSHA256() {
+		return routerVPNExternalFailure
+	}
+	state := owner.state.Load()
+	engine := state.engine.Load()
+	if engine == nil {
+		return routerVPNExternalFailure
+	}
+	native, ok := engine.value.(*box.RouterVPNNodeChainExecutionEngine)
+	if !ok || native == nil {
+		return routerVPNExternalFailure
+	}
+	activity, err := owner.claimActivity(ctx, state, state.controller.Load())
+	if err != nil {
+		return err
+	}
+	defer activity.release()
+	retained := &routerVPNDesktopExecutionMTU{owner: owner, state: state, raw: raw, base: base, native: native}
+	if err := retained.captureReadback(ctx); err != nil {
+		return err
+	}
+	if !owner.mtu.CompareAndSwap(nil, retained) {
+		return routerVPNExternalFailure
+	}
+	raw.execution = retained
+	return owner.nativeCurrent(ctx, state)
+}
+
+func (w *routerVPNDesktopExecutionMTU) owns(raw *routerVPNNodeMTU) bool {
+	return w != nil && raw != nil && w.raw == raw && raw.execution == w && w.owner.mtu.Load() == w &&
+		raw.chain == nil && raw.engine == w.base && w.base.physical != nil && w.base.instance == w.owner.instance && w.owner.state.Load() == w.state
+}
+
+func sameDesktopExecutionMTURecord(a, b routerVPNNodeMTURecord) bool {
+	return a.Session == b.Session && a.Config == b.Config && a.Path == b.Path && a.Reader == b.Reader &&
+		a.Interface == b.Interface && a.Index == b.Index && a.MTU == b.MTU
+}
+
+func (w *routerVPNDesktopExecutionMTU) captureReadback(ctx context.Context) error {
+	if w == nil || w.raw == nil || w.state == nil || w.owner.current(ctx) != nil || w.raw.currentContext(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	identity, controller := w.state.identity.Load(), w.state.controller.Load()
+	if identity == nil || controller == nil {
+		return routerVPNExternalFailure
+	}
+	readback, err := w.native.CaptureExecutionTUNReadbackContext(ctx, *identity)
+	record, inbound := w.raw.record, w.raw.inbound
+	if err != nil || readback.Identity != *identity || readback.TargetOS != w.owner.meta.TargetOS || readback.ReaderGeneration == 0 ||
+		readback.TUNTag != inbound.Tag() || readback.InterfaceName != record.Interface || readback.InterfaceIndex != record.Index || readback.MTU != record.MTU ||
+		record.Reader == 0 || w.owner.current(ctx) != nil || w.raw.currentContext(ctx) != nil || w.state.controller.Load() != controller {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	w.readback.Store(&routerVPNDesktopExecutionMTUReadback{controller: controller, inbound: inbound, record: record, native: readback})
+	return nil
+}
+
+func (w *routerVPNDesktopExecutionMTU) matchesReadback(ctx context.Context, record routerVPNNodeMTURecord, native mobilemultihop.NodeChainExecutionTUNReadback) error {
+	if !w.owns(w.raw) || w.owner.nativeCurrent(ctx, w.state) != nil {
+		return routerVPNExternalFailure
+	}
+	snapshot := w.readback.Load()
+	if snapshot == nil || snapshot.controller != w.state.controller.Load() || snapshot.inbound != w.raw.inbound ||
+		!sameDesktopExecutionMTURecord(snapshot.record, record) || !sameDesktopExecutionMTURecord(record, w.raw.record) || snapshot.native != native {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+// Only the exact closed transition may stay available for rollback. This is
+// never Healthy, Connected, measurement authority or an application permit.
+func (w *routerVPNDesktopExecutionMTU) rollbackCurrent(ctx context.Context) error {
+	if !w.owns(w.raw) || w.owner.nativeCurrent(ctx, w.state) != nil || w.raw.currentContext(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	pause := w.pause.Load()
+	if pause == nil || pause.controller != w.state.controller.Load() || pause.binding.Nonce() == "" || !pause.binding.OwnsEngine(w.native) {
+		return routerVPNExternalFailure
+	}
+	if err := pause.binding.ValidateTransitionContext(ctx); err != nil {
+		return err
+	}
+	return w.native.AdmitExecutionMTUResumeContext(ctx, pause.binding)
+}
+
+func (owner *routerVPNNodeChainExecutionRuntime) loopCurrent(ctx context.Context) error {
+	if owner == nil {
+		return nil
+	}
+	if err := owner.current(ctx); err == nil {
+		return nil
+	}
+	if mtu := owner.mtu.Load(); mtu != nil && mtu.raw.record.Active {
+		return mtu.rollbackCurrent(ctx)
+	}
+	return routerVPNExternalFailure
+}
+
+func (w *routerVPNDesktopExecutionMTU) currentCommand(ctx context.Context, raw *routerVPNNodeMTU, request routerVPNNodeMTUCommand) error {
+	if !w.owns(raw) {
+		return routerVPNExternalFailure
+	}
+	if err := w.owner.current(ctx); err == nil {
+		return nil
+	}
+	if request.Action != "rollback" && request.Action != "revert-unconfirmed-commit" {
+		return routerVPNExternalFailure
+	}
+	return w.rollbackCurrent(ctx)
+}
+
+func (w *routerVPNDesktopExecutionMTU) beforeChange(ctx context.Context, raw *routerVPNNodeMTU, value int) (func(), error) {
+	if !w.owns(raw) || w.owner.nativeCurrent(ctx, w.state) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	projection := w.state.projection.Load()
+	bound, err := projection.MTUPlan()
+	if err != nil || value < 1280 || value > bound.Ceiling {
+		return nil, errors.Join(err, routerVPNExternalFailure)
+	}
+	controller := w.state.controller.Load()
+	if controller == nil {
+		return nil, routerVPNExternalFailure
+	}
+	runtime, ok := controller.value.(*mobilemultihop.NodeChainExecutionRuntime)
+	if !ok || runtime == nil {
+		return nil, routerVPNExternalFailure
+	}
+	activity, err := w.owner.claimActivity(ctx, w.state, controller)
+	if err != nil {
+		return nil, err
+	}
+	previous := w.pause.Load()
+	pause := &routerVPNDesktopExecutionPause{activity: activity, controller: controller}
+	w.pause.Store(pause)
+	if err := w.owner.files.remove("node-chain-execution-ready.json"); err != nil {
+		return activity.release, err
+	}
+	var binding mobilemultihop.NodeChainExecutionMTUResumeBinding
+	if runtime.HealthyContext(ctx) == nil {
+		binding, err = runtime.PauseMTUContext(ctx)
+	} else if previous != nil && previous.controller == controller && previous.binding.Nonce() != "" {
+		binding, err = previous.binding, runtime.CloseContext(ctx)
+	} else {
+		err = routerVPNExternalFailure
+	}
+	w.pause.Store(&routerVPNDesktopExecutionPause{activity: activity, controller: controller, binding: binding})
+	if err == nil {
+		err = binding.ValidateTransitionContext(ctx)
+	}
+	if err != nil {
+		// A completed pause can lose its work deadline before native entry.
+		// Recover only a positively joined binding and the same untouched
+		// reader, using the original operation's remaining cleanup allowance.
+		return activity.release, errors.Join(err, w.recoverUnchanged(ctx, raw))
+	}
+	return activity.release, nil
+}
+
+func (w *routerVPNDesktopExecutionMTU) recoverUnchanged(ctx context.Context, raw *routerVPNNodeMTU) error {
+	if ctx == nil {
+		return routerVPNExternalFailure
+	}
+	call := ctx
+	if ctx.Err() != nil {
+		var err error
+		call, err = mobilemtu.OperationCleanupContext(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	if !w.owns(raw) || w.owner.nativeCurrent(call, w.state) != nil || raw.currentContext(call) != nil {
+		return routerVPNExternalFailure
+	}
+	pause := w.pause.Load()
+	if pause == nil || pause.binding.ValidateTransitionContext(call) != nil {
+		return routerVPNExternalFailure
+	}
+	expected := raw.inbound
+	err := w.base.physical.RetainUnchangedNodeChainExecutionMTUContext(call, w.native, pause.binding, expected, raw.record.MTU)
+	if err != nil || raw.inbound != expected || raw.currentContext(call) != nil {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	return w.afterChange(call, raw)
+}
+
+func (w *routerVPNDesktopExecutionMTU) change(ctx context.Context, raw *routerVPNNodeMTU, expected adapter.Inbound, value int) (adapter.Inbound, error) {
+	if w == nil || ctx == nil {
+		return expected, routerVPNExternalFailure
+	}
+	pause := w.pause.Load()
+	if !w.owns(raw) || pause == nil || pause.activity == nil || w.owner.activity.Load() != pause.activity ||
+		pause.controller != w.state.controller.Load() || expected != raw.inbound {
+		return expected, routerVPNExternalFailure
+	}
+	if ctx.Err() != nil {
+		// Cancellation before native entry still owns the joined pause. Keep
+		// its unchanged reader under the original one-shot cleanup allowance;
+		// a cancelled candidate value is never applied as recovery work.
+		call, err := mobilemtu.OperationCleanupContext(ctx)
+		if err != nil || w.owner.nativeCurrent(call, w.state) != nil {
+			return expected, errors.Join(ctx.Err(), err, routerVPNExternalFailure)
+		}
+		return expected, errors.Join(ctx.Err(), w.base.physical.RetainUnchangedNodeChainExecutionMTUContext(call, w.native, pause.binding, expected, raw.record.MTU))
+	}
+	returned, err := w.base.physical.ChangeNodeChainExecutionMTUContext(ctx, w.native, pause.binding, expected, value)
+	if (err != nil || ctx.Err() != nil) && returned == expected {
+		// The physical owner may have retired and restored its old grant
+		// before native entry observed cancellation. Confirm that exact
+		// untouched reader; never invoke another replacement to repair it.
+		cleanup, cleanupErr := mobilemtu.OperationCleanupContext(ctx)
+		if cleanupErr == nil {
+			cleanupErr = w.base.physical.RetainUnchangedNodeChainExecutionMTUContext(cleanup, w.native, pause.binding, expected, raw.record.MTU)
+		}
+		err = errors.Join(err, cleanupErr)
+	}
+	return returned, errors.Join(err, ctx.Err())
+}
+
+func (w *routerVPNDesktopExecutionMTU) afterChange(ctx context.Context, raw *routerVPNNodeMTU) error {
+	if w == nil || ctx == nil {
+		return routerVPNExternalFailure
+	}
+	pause := w.pause.Load()
+	if !w.owns(raw) || pause == nil || pause.activity == nil || w.owner.activity.Load() != pause.activity ||
+		pause.controller != w.state.controller.Load() || w.owner.nativeCurrent(ctx, w.state) != nil {
+		return routerVPNExternalFailure
+	}
+	runtime, err := mobilemultihop.NewNodeChainExecutionMTUResumeRuntime(ctx, pause.binding)
+	if err != nil {
+		return err
+	}
+	controller := &routerVPNDesktopExecutionProofRef{runtime}
+	w.state.controller.Store(controller)
+	w.pause.Store(&routerVPNDesktopExecutionPause{activity: pause.activity, controller: controller, binding: pause.binding})
+	lifetime, cancel := context.WithCancel(w.state.lifetime)
+	joined := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { cancel(); close(joined) })
+	runErr := runtime.Run(lifetime)
+	if !stop() {
+		<-joined
+		runErr = errors.Join(runErr, ctx.Err(), routerVPNExternalFailure)
+	}
+	if runErr == nil {
+		runErr = errors.Join(runtime.HealthyContext(ctx), w.owner.nativeCurrent(ctx, w.state))
+	}
+	if runErr == nil && w.state.controller.Load() == controller && ctx.Err() == nil {
+		if generation := w.state.proofGeneration.Add(1); generation != 0 {
+			if err := w.captureReadback(ctx); err == nil {
+				return nil
+			} else {
+				runErr = err
+			}
+		} else {
+			runErr = routerVPNExternalFailure
+		}
+	}
+	runErr = errors.Join(runErr, routerVPNExternalFailure)
+	cancel()
+	cleanup := ctx
+	if ctx.Err() != nil {
+		var cleanupErr error
+		cleanup, cleanupErr = mobilemtu.OperationCleanupContext(ctx)
+		if cleanupErr != nil {
+			return errors.Join(runErr, cleanupErr)
+		}
+	}
+	return errors.Join(runErr, runtime.CloseContext(cleanup))
+}
