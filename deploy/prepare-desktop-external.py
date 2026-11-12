@@ -31,6 +31,7 @@ EXTERNAL = load('prepare-mobile-external-policy')
 MTU = load('prepare-mobile-mtu')
 STRATEGY = load('prepare-mobile-strategy')
 NODE_CHAIN = load('prepare-mobile-node-chain')
+NODE_EXECUTION = tuple(load(name) for name in ('prepare-node-chain-execution-gate', 'prepare-node-chain-execution', 'prepare-node-chain-execution-owner'))
 RELAY = load('prepare-relay-core')
 DESKTOP_MTU = load('prepare-desktop-mtu')
 TOR = load('prepare-mobile-tor')
@@ -274,7 +275,7 @@ def darwin_node_chain_peer_copies():
 
 
 def inputs():
-    files = [Path(__file__).resolve(), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *NODE_CHAIN.inputs(), *RELAY.OPENVPN_REMOTE.inputs(), *RELAY.NAIVE.inputs(),
+    files = [Path(__file__).resolve(), *(path for module in NODE_EXECUTION for path in module.inputs()), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *NODE_CHAIN.inputs(), *RELAY.OPENVPN_REMOTE.inputs(), *RELAY.NAIVE.inputs(),
              ROOT/'mobile/toroutbound/box.go.tmpl', ROOT/'mobile/toroutbound/box_test.go.tmpl',
              ROOT/'mobile/toroutbound/padding_box.go.tmpl', ROOT/'mobile/toroutbound/padding_box_test.go.tmpl',
              ROOT/'deploy/prepare-desktop-mtu.py', ROOT/'deploy/prepare-desktop-command-retirement.py', ROOT/'deploy/prepare-desktop-dbus.py', ROOT/'deploy/test_desktop_tun_retirement_projection.py', ROOT/'deploy/prepare-mobile-tor.py',
@@ -772,6 +773,8 @@ def prepare(vendor, go='go', *, env=None):
     NODE_CHAIN.prepare(vendor, mobile=False)
     EXTERNAL.prepare(vendor, mobile=False)
     prepare_node_capture(vendor)
+    for module in NODE_EXECUTION:
+        module.prepare(vendor)
     RELAY.OPENVPN_REMOTE.prepare(vendor)
     templates = [*sorted((ROOT/'mobile/desktop').glob('standard*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('external*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('mtu*.go.tmpl')),
                  *sorted((ROOT/'mobile/desktop').glob('node*.go.tmpl')), ROOT/'mobile/desktop/network_command.go.tmpl',

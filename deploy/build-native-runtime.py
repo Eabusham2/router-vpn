@@ -1512,10 +1512,14 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_desktop_darwin_guardian.py', source, '--mutations'],
                     env=env, timeout=1800)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', './route', '-run', '^TestRouterVPN(DesktopTorNetwork|NodeChain)',
+                 '-ldflags=-checklinkname=0', './route', '-run', '^TestRouterVPN(DesktopTorNetwork|NodeChain|Execution)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', '.', '-run', '^TestRouterVPN(Desktop(Tor|External|NodeChain)|NodeChain)',
+                 '-ldflags=-checklinkname=0', './protocol/routervpnchaingate', './protocol/group',
+                 './protocol/tun', './adapter/outbound', '-run', '^TestRouterVPN(Execution|ChainGate)',
+                 '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
+            run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
+                 '-ldflags=-checklinkname=0', '.', '-run', '^TestRouterVPN(Desktop(Tor|External|NodeChain)|NodeChain|Execution)',
                  '-count=1', '-timeout=180s' if target.startswith('linux/') else '-timeout=120s'],
                 cwd=source, env=env, timeout=600)
         if target.startswith('linux/'):
