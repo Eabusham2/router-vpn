@@ -177,8 +177,16 @@ func captureDesktopNodeChain(base, projected *NodeChain) (DesktopPhysicalCapture
 		return bad()
 	}
 	kill, ipv6, lan := "off", "on", true
-	for _, node := range base.nodes {
-		capture, err := node.DesktopCapture()
+	for position, node := range base.nodes {
+		var capture ExternalDesktopCapture
+		var err error
+		if position == 1 && base.importedMiddle != nil {
+			capture, err = base.importedMiddle.policy.DesktopCapture()
+		} else {
+			var paired NodeDesktopCapture
+			paired, err = node.DesktopCapture()
+			capture.KillSwitchPolicy, capture.IPv6Mode, capture.HomeLANAccess = paired.KillSwitchPolicy, paired.IPv6Mode, paired.HomeLANAccess
+		}
 		if err != nil {
 			return bad()
 		}

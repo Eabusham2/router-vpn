@@ -32,7 +32,29 @@ func compileNodeChain(nodes []*NodeProfile) (string, []NodeChainProof, NodeChain
 		}
 		closures[i] = closure
 	}
-	if err := applyNodeChainMTU(nodes, closures); err != nil {
+	members := make([]nodeChainGraphMember, len(nodes))
+	for i, node := range nodes {
+		members[i] = nodeChainGraphMember{profile: node.profile, source: node.source, mode: node.mode}
+	}
+	expected, err := nodes[0].PhysicalEgress()
+	if err != nil {
+		return fail(err)
+	}
+	return compileNodeChainClosures(members, closures, expected)
+}
+
+type nodeChainGraphMember struct {
+	profile      map[string]any
+	source, mode string
+	imported     bool
+}
+
+func compileNodeChainClosures(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
+	bad := errors.New("ordered chain lost a complete captured node closure")
+	fail := func(err error) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
+		return "", nil, NodeChainDNSCapture{}, nil, err
+	}
+	if err := applyNodeChainMemberMTU(nodes, closures); err != nil {
 		return fail(err)
 	}
 	last := closures[len(closures)-1]
@@ -117,8 +139,11 @@ func compileNodeChain(nodes []*NodeProfile) (string, []NodeChainProof, NodeChain
 		if layer == "" {
 			layer = "off"
 		}
-		proofs = append(proofs, NodeChainProof{position, predecessorText(node.profile, "id"),
-			predecessorText(node.profile, "node_proof_id"), node.mode, layer, node.source, finalTag})
+		proof := NodeChainProof{Position: position, ProfileID: predecessorText(node.profile, "id"), NodeID: predecessorText(node.profile, "node_proof_id"), Mode: node.mode, StartLayer: layer, SourceSHA256: node.source, Tag: finalTag}
+		if node.imported {
+			proof.NodeKind, proof.Kind = "external", "public-path"
+		}
+		proofs = append(proofs, proof)
 	}
 	dns["servers"] = servers
 	if err := applyNodeChainRestrictions(graph, closures); err != nil {
@@ -137,10 +162,6 @@ func compileNodeChain(nodes []*NodeProfile) (string, []NodeChainProof, NodeChain
 	projection := predecessorCopy(graph)
 	projection["route"].(map[string]any)["final"] = finalTag
 	projected, _ := json.Marshal(projection)
-	expected, err := nodes[0].PhysicalEgress()
-	if err != nil {
-		return fail(err)
-	}
 	var physical []PhysicalEgress
 	for _, proof := range proofs {
 		physical, err = compiledPhysicalEgressWithDesktopProof(string(projected), []string{"tcp", "udp"}, nil, proof.Tag)

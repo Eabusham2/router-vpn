@@ -9,6 +9,13 @@ import (
 // Fixed settings never clamp and historical effective_mtu never becomes
 // current-path evidence. A prefix too small for the next WG handshake fails.
 func applyNodeChainMTU(nodes []*NodeProfile, closures []*externalPredecessor) error {
+	members := make([]nodeChainGraphMember, len(nodes))
+	for i, node := range nodes {
+		members[i] = nodeChainGraphMember{profile: node.profile, source: node.source, mode: node.mode}
+	}
+	return applyNodeChainMemberMTU(members, closures)
+}
+func applyNodeChainMemberMTU(nodes []nodeChainGraphMember, closures []*externalPredecessor) error {
 	for i := 1; i < len(nodes); i++ {
 		envelope, err := nodePacketEnvelope(closures[i], nodes[i].mode)
 		if err != nil {
@@ -18,6 +25,11 @@ func applyNodeChainMTU(nodes []*NodeProfile, closures []*externalPredecessor) er
 			Entry: predecessorCopy(nodes[i-1].profile)}
 		if err := nodeMultihopMTU(closures[i-1], closures[i], selection, envelope, nodes[i].mode); err != nil {
 			return err
+		}
+		// A proxy can itself be the next predecessor. Keep the computed
+		// integer in the same JSON number representation its parser validates.
+		if value, ok := closures[i].tun["mtu"].(int); ok {
+			closures[i].tun["mtu"] = float64(value)
 		}
 	}
 	return nil

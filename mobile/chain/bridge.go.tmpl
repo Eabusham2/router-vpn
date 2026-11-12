@@ -15,6 +15,11 @@ func RouterNodeChainMemberInput(mode, files, profile, start, bootstrap string) (
 	return node.LaunchInput()
 }
 
+// Preserve original external kind and bytes; no paired credentials are created.
+func RouterNodeChainImportedMemberInput(config, capture string) (string, error) {
+ return mobilemultihop.NodeChainImportedMemberInput(config,capture)
+}
+
 func NewRouterNodeChain(source string) (*RouterNodeChain, error) {
 	chain, err := mobilemultihop.NewNodeChain(source)
 	if err != nil {

@@ -152,7 +152,7 @@ func New(engine Engine, hops []Hop) (*Service, error) {
 // NewContext captures identity without making the returned service's lifetime
 // depend on the short-lived constructor caller.
 func NewContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
-	return newContext(ctx, engine, hops, false)
+	return newContext(ctx, engine, hops, false, false)
 }
 
 // NewOrderedContext admits only the compiler's complete ordered private-node
@@ -161,10 +161,19 @@ func NewOrderedContext(ctx context.Context, engine Engine, hops []Hop) (*Service
 	if len(hops) < 2 {
 		return nil, errors.New("ordered measurement requires a complete node path")
 	}
-	return newContext(ctx, engine, hops, true)
+	return newContext(ctx, engine, hops, true, false)
 }
 
-func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool) (*Service, error) {
+// NewOrderedImportedMiddleContext preserves the ordered tag/position contract
+// while admitting exactly one public path, between two authenticated members.
+func NewOrderedImportedMiddleContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
+	if len(hops) != 3 || hops[0].Kind != "private-node" || hops[1].Kind != "public-path" || hops[2].Kind != "private-node" {
+		return nil, errors.New("ordered imported measurement requires one original public middle")
+	}
+	return newContext(ctx, engine, hops, true, true)
+}
+
+func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, importedMiddle bool) (*Service, error) {
 	if engine == nil || len(hops) < 1 || len(hops) > 8 {
 		return nil, errors.New("a captured native path is required")
 	}
@@ -183,10 +192,12 @@ func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool) (*
 				role = "exit"
 			}
 			if h.Role != role || !orderedPrefixTag.MatchString(h.Tag) || !strings.HasPrefix(h.Tag, "routervpn-chain-"+strconv.Itoa(index)+"-") ||
-				(h.Kind != "" && h.Kind != "private-node") || proofs[h.Proof] {
+				(!(importedMiddle && index == 1) && ((h.Kind != "" && h.Kind != "private-node") || proofs[h.Proof])) {
 				return nil, errors.New("ordered measurement changed prefix order, role or node proof")
 			}
-			proofs[h.Proof] = true
+			if h.Kind != "public-path" {
+				proofs[h.Proof] = true
+			}
 		} else {
 			if h.Tag != "proxy" && h.Tag != "entry-wg" && h.Tag != "routervpn-hop-entry" && h.Tag != "custom-exit" && h.Tag != "external-entry" {
 				return nil, errors.New("unowned measurement route")
@@ -213,7 +224,7 @@ func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool) (*
 				h.Label = "Router VPN " + h.Role + " private API"
 			}
 		case "public-path":
-			if h.API != "" || h.Token != "" || h.Proof != "" || h.Tag != "custom-exit" && h.Tag != "external-entry" {
+			if h.API != "" || h.Token != "" || h.Proof != "" || h.Tag != "custom-exit" && h.Tag != "external-entry" && !(ordered && importedMiddle && index == 1) {
 				return nil, errors.New("public path cannot claim a private node or unowned route")
 			}
 			if h.Label == "" {

@@ -41,6 +41,8 @@ type NodeChainPrefixProgress struct {
 	ProfileID  string  `json:"profile_id"`
 	ResponseMS float64 `json:"response_ms"`
 	Proven     bool    `json:"proven"`
+	Kind       string  `json:"kind,omitempty"`
+	Label      string  `json:"label,omitempty"`
 }
 
 // Progress is public and carries no private source, credential, API or key.
@@ -174,6 +176,13 @@ func (c *NodeChain) provePrefix(parent context.Context, position int) (time.Dura
 	}
 	node, proof := c.nodes[position], c.proofs[position]
 	started := time.Now()
+	if position == 1 && c.importedMiddle != nil {
+		err := proveExternalPublicIP(ctx, c.dial, proof.Tag, c.importedMiddle.selection.ExpectedPublicIP, c.runtime.testTLS)
+		if err != nil {
+			return 0, err
+		}
+		return time.Since(started), c.currentContext(ctx, true)
+	}
 	data, err := externalProofHTTP(ctx, c.dial, proof.Tag,
 		healthURL(predecessorText(node.profile, "router_api")), predecessorText(node.profile, "api_token"), nil)
 	if err != nil {
@@ -206,8 +215,12 @@ func (c *NodeChain) provePrefixes(ctx context.Context, publish bool) error {
 				c.runtime.mu.Unlock()
 				return errors.New("ordered chain retired before prefix publication")
 			}
-			c.runtime.progress.Prefixes = append(c.runtime.progress.Prefixes, NodeChainPrefixProgress{
-				position, proof.ProfileID, float64(elapsed) / float64(time.Millisecond), true})
+			progress := NodeChainPrefixProgress{Position: position, ProfileID: proof.ProfileID, ResponseMS: float64(elapsed) / float64(time.Millisecond), Proven: true}
+			if proof.Kind == "public-path" {
+				progress.Kind = "public-path"
+				progress.Label = "Cumulative path through custom middle to public HTTPS edge"
+			}
+			c.runtime.progress.Prefixes = append(c.runtime.progress.Prefixes, progress)
 			c.runtime.mu.Unlock()
 		}
 	}

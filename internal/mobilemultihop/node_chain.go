@@ -49,6 +49,8 @@ type NodeChainProof struct {
 	StartLayer   string `json:"start_layer"`
 	SourceSHA256 string `json:"source_sha256"`
 	Tag          string `json:"tag"`
+	NodeKind     string `json:"node_kind,omitempty"`
+	Kind         string `json:"kind,omitempty"`
 }
 
 // NodeChainDNSCapture authorizes one existing native resolver path. An adapter
@@ -81,6 +83,7 @@ type nodeChainLaunchRecord struct {
 type NodeChain struct {
 	sourceJSON, sourceSHA, config, metadata, seal string
 	nodes                                         []*NodeProfile
+	importedMiddle                                *nodeChainImportedMember
 	proofs                                        []NodeChainProof
 	dns                                           NodeChainDNSCapture
 	physical                                      []PhysicalEgress
@@ -94,8 +97,11 @@ var nodeChainError = errors.New("ordered node chain requires its complete bounde
 func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 	var source NodeChainSource
 	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil ||
-		source.Schema != 1 || source.Execution != "local" ||
+		(source.Schema != 1 && source.Schema != 2) || source.Execution != "local" ||
 		len(source.Nodes) < 2 || len(source.Nodes) > NodeChainMaximumNodes {
+		return nil, nodeChainError
+	}
+	if source.Schema == 2 && (len(source.Nodes) != 3 || len(source.IdentitySources) != 3 || source.IdentitySources[0] == "" || source.IdentitySources[1] != "" || source.IdentitySources[2] == "") {
 		return nil, nodeChainError
 	}
 	if len(source.IdentitySources) != 0 && len(source.IdentitySources) != len(source.Nodes) {
@@ -111,6 +117,19 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 	clear(digest)
 	ids, peers, clients, servers := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for position, input := range source.Nodes {
+		if source.Schema == 2 && position == 1 {
+			middle, err := parseNodeChainImportedMember(input)
+			if err != nil {
+				return nil, err
+			}
+			if ids[middle.id()] {
+				return nil, nodeChainError
+			}
+			ids[middle.id()] = true
+			c.importedMiddle = middle
+			c.nodes = append(c.nodes, nil)
+			continue
+		}
 		node, err := ParseNodeLaunchInput(input)
 		if err != nil || node == nil {
 			return nil, nodeChainError
@@ -151,7 +170,11 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		}
 		c.nodes = append(c.nodes, node)
 	}
-	c.config, c.proofs, c.dns, c.physical, err = compileNodeChain(c.nodes)
+	if c.importedMiddle != nil {
+		c.config, c.proofs, c.dns, c.physical, err = compileNodeChainImported(c.nodes, c.importedMiddle)
+	} else {
+		c.config, c.proofs, c.dns, c.physical, err = compileNodeChain(c.nodes)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -254,6 +277,13 @@ func (c *NodeChain) validateCapture() error {
 	}
 	for position, node := range c.nodes {
 		proof := c.proofs[position]
+		if position == 1 && c.importedMiddle != nil {
+			m := c.importedMiddle
+			if node != nil || m.validate() != nil || proof.Position != 1 || proof.ProfileID != m.id() || proof.SourceSHA256 != m.source || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" || proof.Mode != "shadowsocks" || proof.StartLayer != "off" {
+				return nodeChainError
+			}
+			continue
+		}
 		if node == nil || node.validateNodeDesktopCapture() != nil || proof.Position != position ||
 			node.source != proof.SourceSHA256 || node.mode != proof.Mode ||
 			predecessorText(node.profile, "id") != proof.ProfileID ||
