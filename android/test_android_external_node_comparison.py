@@ -265,7 +265,15 @@ def sources():
     runtime=RUNTIME.replace('// SHIPPING_MEASUREMENT_SOURCE',U.S.block(source,'    static final class MeasurementSource')).replace('// SHIPPING_CAPTURE',U.S.block(source,'    synchronized MeasurementSource captureMeasurementSource(')).replace('// SHIPPING_REQUIRE',U.S.block(source,'    synchronized void requireMeasurementSource('))
     boundaries=U.S.replace_class(boundaries,'AndroidStandardExitRuntime',runtime)
     policy=U.S.block(boundaries,'final class AndroidExternalPolicy')
-    boundaries=U.S.replace_class(boundaries,'AndroidExternalPolicy',policy[:-1]+U.S.block((JAVA/'AndroidExternalPolicy.java').read_text(),'    static String entryDigest(')+'static void checkPolicy(JSONObject value){if(value==null)throw new IllegalArgumentException("native policy boundary missing");}}')
+    policy_source=(JAVA/'AndroidExternalPolicy.java').read_text()
+    captured=U.S.block(policy_source,'    static final class Captured {')
+    # This comparison fixture restores its original ordinary/pair selection.
+    # Ordered imported compilation is exercised by the real Java/Go source gate;
+    # an unexpected entry into that branch must fail, never invent a native input.
+    imported_boundary='static Captured captureImportedEntry(AndroidStandardExitStore.Entry source)throws Exception{throw new AssertionError("Ordered imported source requires the actual shared-compiler composition gate");}'
+    boundaries=U.S.replace_class(boundaries,'AndroidExternalPolicy',policy[:-1]+captured+imported_boundary+U.S.block(policy_source,'    static String entryDigest(')+'static void checkPolicy(JSONObject value){if(value==null)throw new IllegalArgumentException("native policy boundary missing");}}')
+    libbox='io/nekohasekai/libbox/Libbox.java'
+    ui[libbox]=ui[libbox].rstrip()[:-1]+'public static String routerNodeChainImportedMemberInput(String config,String capture){throw new AssertionError("Ordered imported compilation is outside ordinary comparison");}}'
     speed=U.S.block(R.METERS,'final class AndroidSpeedLab')
     duration=U.S.block((JAVA/'AndroidSpeedLab.java').read_text(),'    static final class DurationPolicy')
     boundaries+=speed.replace(' // PRODUCTION_DURATION',duration)+U.S.block(R.METERS,'final class AndroidHopMeasurementDialog')+U.S.block(R.METERS,'final class AndroidSpeedLabHopMeter')
