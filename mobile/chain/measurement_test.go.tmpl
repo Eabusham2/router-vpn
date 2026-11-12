@@ -3,8 +3,10 @@ package libbox
 import (
 	"context"
 	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -53,5 +55,23 @@ func TestRouterNodeChainBridgeMeasurementBlocksMTUMutationUntilRelease(t *testin
 	paused, err := m.beforeMTUChange(context.Background(), owner, 1280)
 	if paused || err == nil || !strings.Contains(err.Error(), "measurement") || !m.measuring {
 		t.Fatal("MTU bypassed retained measurement activity", paused, err)
+	}
+}
+
+func TestRouterNodeChainBridgeMeasurementCloseKeepsCallerDeadline(t *testing.T) {
+	m := new(RouterNodeChain)
+	service := new(hopmeasure.Service)
+	m.measurement.Store(service)
+	held := routerMTUField[sync.Mutex](t, service, "mu")
+	held.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	err := m.closeContext(ctx)
+	cancel()
+	held.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) || m.measurement.Load() != service || !m.retired.Load() {
+		t.Fatal("ordered close lost deadline or original measurement handle", err)
+	}
+	if err := m.closeContext(context.Background()); err != nil {
+		t.Fatal("original close retry could not join", err)
 	}
 }

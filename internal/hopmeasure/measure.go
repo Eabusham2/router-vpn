@@ -442,7 +442,37 @@ func (s *Service) Invalidate() {
 	s.state = Status{Request: s.state.Request, Stage: "invalidated", Complete: true, Failure: "Native path changed", Results: []Result{}}
 }
 func (s *Service) Close() error {
-	s.mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), DrainTimeout)
+	defer cancel()
+	return s.CloseContext(ctx)
+}
+
+// CloseContext cancels and joins the exact retained admission or worker within
+// the original caller's lifetime. A timeout keeps every cleanup handle so a
+// later original owner can retry; it never acknowledges an unfinished drain.
+func (s *Service) CloseContext(ctx context.Context) error {
+	if s == nil || ctx == nil {
+		return errors.New("hop measurement close has no original caller or service")
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if s.mu.TryLock() {
+			break
+		}
+		timer := time.NewTimer(time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	s.closed = true
 	if s.pending != nil {
 		s.pending.cancel()
@@ -459,11 +489,11 @@ func (s *Service) Close() error {
 	if done != nil {
 		select {
 		case <-done:
-		case <-time.After(DrainTimeout):
-			return errors.New("hop measurement teardown is still pending")
+		case <-ctx.Done():
+			return errors.Join(ctx.Err(), errors.New("hop measurement teardown is still pending"))
 		}
 	}
-	return nil
+	return ctx.Err()
 }
 func (s *Service) StatusJSON() string {
 	ctx, cancel := context.WithTimeout(context.Background(), ObservationTimeout)

@@ -156,17 +156,21 @@ func (m *RouterNodeChain) Healthy() bool {
 	return m.healthyContext(ctx) == nil
 }
 
+func (m *RouterNodeChain) retireProof() {
+	m.retired.Store(true)
+	if state := m.state.Load(); state != nil {
+		state.revoked.Store(true)
+		state.cancel()
+	}
+}
+
 func (m *RouterNodeChain) NetworkChanged() {
 	if m == nil {
 		return
 	}
-	m.retired.Store(true)
+	m.retireProof()
 	if measurement := m.measurement.Load(); measurement != nil {
 		measurement.Invalidate()
-	}
-	if state := m.state.Load(); state != nil {
-		state.revoked.Store(true)
-		state.cancel()
 	}
 }
 
@@ -184,19 +188,26 @@ func (m *RouterNodeChain) joinProofLocked(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// Close joins proof work only. The original host retains service/TUN teardown
+// Close joins proof and measurement work. The original host retains service/TUN teardown
 // and must not report Disconnected before that exact native retirement joins.
 func (m *RouterNodeChain) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return m.closeContext(ctx)
+}
+
+func (m *RouterNodeChain) closeContext(ctx context.Context) error {
 	if m == nil {
 		return nil
 	}
-	m.NetworkChanged()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	if ctx == nil {
+		return errors.New("ordered close has no original caller")
+	}
+	m.retireProof()
 	// Measurement release uses mu. Join outside it so an original worker can
 	// discharge activity before the native host retires its Box/TUN.
 	if measurement := m.measurement.Load(); measurement != nil {
-		if err := measurement.Close(); err != nil {
+		if err := measurement.CloseContext(ctx); err != nil {
 			return err
 		}
 	}
