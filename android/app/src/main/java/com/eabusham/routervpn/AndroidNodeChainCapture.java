@@ -35,7 +35,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static AndroidNodeChainCapture reopen(String input, AndroidNodeStore.ChainCapture original) throws Exception {
         List<String> inputs = memberInputs(original);
         List<String> identities = identityInputs(original);
-        RouterNodeChain plan = Libbox.newRouterNodeChainLaunch(bounded(input, MAX_INPUT));
+        RouterNodeChain plan = Libbox.routerNodeChainLaunch(bounded(input, MAX_INPUT));
         try {
             AndroidNodeChainCapture capture = new AndroidNodeChainCapture(original, inputs, identities, plan);
             if (!input.equals(capture.launchInput)) throw new IllegalStateException("The private ordered launch source is not its original canonical capture.");

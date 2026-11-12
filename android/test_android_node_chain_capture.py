@@ -503,7 +503,7 @@ final class OrderedProductSurface extends Context {
     source = source.replace(marker, r'''public static Runnable afterChainMember;
 public static String routerNodeChainMemberInput(String mode,String files,String profile,String start,String bootstrap)throws Exception{String value=call("chain-member",mode,files,profile,start,bootstrap);Runnable hook=afterChainMember;afterChainMember=null;if(hook!=null)hook.run();return value;}
 public static RouterNodeChain newRouterNodeChain(String source)throws Exception{return new RouterNodeChain(call("chain-new",source));}
-public static RouterNodeChain newRouterNodeChainLaunch(String source)throws Exception{return new RouterNodeChain(call("chain-replay",source));}
+public static RouterNodeChain routerNodeChainLaunch(String source)throws Exception{return new RouterNodeChain(call("chain-replay",source));}
 static String call(String...args)throws Exception{''')
     libbox.write_text(source)
     (src / "io/nekohasekai/libbox/RouterNodeChain.java").write_text(NATIVE)

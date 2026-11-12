@@ -28,7 +28,9 @@ func NewRouterNodeChain(source string) (*RouterNodeChain, error) {
 	return &RouterNodeChain{chain: chain}, nil
 }
 
-func NewRouterNodeChainLaunch(input string) (*RouterNodeChain, error) {
+// Keep this named factory outside gomobile's New<Type> constructor family:
+// both the source constructor and launch parser take one string.
+func RouterNodeChainLaunch(input string) (*RouterNodeChain, error) {
 	chain, err := mobilemultihop.ParseNodeChainLaunchInput(input)
 	if err != nil {
 		return nil, err

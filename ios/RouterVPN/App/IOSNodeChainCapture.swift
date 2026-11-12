@@ -105,7 +105,7 @@ struct IOSNodeChainCapture {
     static func reopen(_ input: String, selectedProfile: [String: Any]) throws -> Self {
         guard !input.isEmpty, input.utf8.count <= maximumInputBytes else { throw issue("The captured chain exceeds its private launch bound.") }
         var failure: NSError?
-        guard let plan = LibboxNewRouterNodeChainLaunch(input, &failure), failure == nil else {
+        guard let plan = LibboxRouterNodeChainLaunch(input, &failure), failure == nil else {
             throw failure ?? issue("The ordered native source could not be reproduced.")
         }
         do {

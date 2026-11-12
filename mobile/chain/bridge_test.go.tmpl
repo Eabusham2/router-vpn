@@ -16,7 +16,7 @@ func TestRouterNodeChainBridgeRejectsMissingAndRetiredOwners(t *testing.T) {
 	if value, err := NewRouterNodeChain(`{"schema":1,"execution":"local","nodes":[]}`); err == nil || value != nil {
 		t.Fatal("incomplete source accepted")
 	}
-	if value, err := NewRouterNodeChainLaunch(`{"config":"borrowed"}`); err == nil || value != nil {
+	if value, err := RouterNodeChainLaunch(`{"config":"borrowed"}`); err == nil || value != nil {
 		t.Fatal("metadata-only native launch accepted")
 	}
 	if err := (*RouterNodeChain)(nil).Run(nil); err == nil {
