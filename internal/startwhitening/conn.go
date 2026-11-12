@@ -6,6 +6,7 @@ package startwhitening
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -206,7 +207,17 @@ func (c *Conn) Close() error {
 	c.closeOnce.Do(func() {
 		// Closing the physical socket must interrupt pending I/O BEFORE taking
 		// the offset locks. This also avoids a close/read deadlock.
-		c.closeErr = c.Conn.Close()
+		if carrier, ok := c.Conn.(*tls.Conn); ok {
+			// A CONNECT TLS carrier owns an alert writer as well as the captured
+			// lower connection. Retire that exact lower connection first: a
+			// concurrent cancellation deadline must not turn the terminal alert
+			// write into a timeout while the original socket remains open.
+			// Never unwrap arbitrary connections or classify timeouts as closed.
+			lowerErr := carrier.NetConn().Close()
+			c.closeErr = errors.Join(lowerErr, carrier.Close())
+		} else {
+			c.closeErr = c.Conn.Close()
+		}
 		// A captured lower owner may already have retired a nested TLS
 		// carrier. Its closeNotify can then return a wrapped ErrClosed even
 		// though the physical connection is joined. Preserve every other
