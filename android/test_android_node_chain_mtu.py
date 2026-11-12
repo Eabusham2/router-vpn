@@ -20,7 +20,7 @@ SOURCES = dict(M.STUBS)
 SOURCES['com/eabusham/routervpn/AndroidNodeChainSession.java'] = r'''package com.eabusham.routervpn;
 final class AndroidNodeChainSession {
  final io.nekohasekai.libbox.CommandServer server=new io.nekohasekai.libbox.CommandServer();
- volatile boolean valid=true;boolean automatic=true;int calls;io.nekohasekai.libbox.RouterMTUPlatform platform;
+ volatile boolean valid=true;boolean automatic=true,restoringExecution;int calls;io.nekohasekai.libbox.RouterMTUPlatform platform;
  void requireCurrent(){if(!valid)throw new IllegalStateException("original ordered source retired");}boolean healthy(){return valid;}
  io.nekohasekai.libbox.RouterMTU newMTU(io.nekohasekai.libbox.RouterMTUPlatform owner)throws Exception {
   requireCurrent();calls++;platform=owner;var result=io.nekohasekai.libbox.Libbox.newRouterMTU(server,owner,"original complete ordered config","native all-member capacity");result.automatic=automatic;return result;
@@ -40,6 +40,13 @@ public final class OrderedMTUTest {
   reject(()->f.owner.request("start",f.owner.identity,"a".repeat(32)),"Retest bypassed the held ordered path");AndroidMTUMeasurementGate.release(hold);
   f.owner.request("start",f.owner.identity,"b".repeat(32));f.owner.request("cancel",f.owner.identity,"b".repeat(32));check(nativeOwner.starts==2&&nativeOwner.cancels==2,"ordered Retest/Cancel replaced its original optimizer");
   f.owner.close();check(nativeOwner.closes==1&&controller(f.owner)==null,"ordered MTU did not acknowledge its native join");
+ }
+ static void restored()throws Exception {
+  reset();Main.Fixture f=new Main.Fixture();f.establish(1360);AndroidNodeChainSession chain=new AndroidNodeChainSession();chain.restoringExecution=true;f.owner.activateNodeChain(chain);RouterMTU nativeOwner=Libbox.latest;
+  check(nativeOwner!=null&&nativeOwner.starts==0&&nativeOwner.attempts==0,"temporary restore replayed automatic MTU search");
+  f.owner.activateNodeChain(chain);f.owner.resumeAfterResponse();check(nativeOwner.starts==0,"restored observation resumed deferred Auto MTU");
+  check(f.owner.captureMTU().getMTU()==1360,"restored effective MTU changed before explicit Retest");
+  f.owner.request("start",f.owner.identity,"d".repeat(32));check(nativeOwner.starts==1,"restored execution could not perform explicit user Retest");f.owner.request("cancel",f.owner.identity,"d".repeat(32));f.owner.close();check(nativeOwner.closes==1,"restored MTU owner did not join exact native close");
  }
  static void policies()throws Exception {
   for(int capacity:new int[]{1280,1408,2000,9000}){
@@ -73,7 +80,7 @@ public final class OrderedMTUTest {
   f.owner.endMTUChange();Long next=f.owner.proofObservationToken();check(next!=null&&!next.equals(original),"MTU mutation revived an old proof observation token");
   f.owner.networkChanged();check(f.owner.proofObservationToken()==null&&!f.owner.proofOwnerCurrent(),"retired MTU could defer ordered proof forever");f.owner.close();
  }
- public static void main(String[] args)throws Exception{String family=args.length==0?"all":args[0];if(family.equals("all")||family.equals("success"))success();if(family.equals("all")||family.equals("policy"))policies();if(family.equals("all")||family.equals("constructor"))constructorRetirement();if(family.equals("all")||family.equals("retry"))retry();if(family.equals("all")||family.equals("observation"))observation();reset();System.out.println("Android ordered MTU adapter: "+checks+" executable checks passed; OS/native handles doubled.");}
+ public static void main(String[] args)throws Exception{String family=args.length==0?"all":args[0];if(family.equals("all")||family.equals("success"))success();if(family.equals("all")||family.equals("restored"))restored();if(family.equals("all")||family.equals("policy"))policies();if(family.equals("all")||family.equals("constructor"))constructorRetirement();if(family.equals("all")||family.equals("retry"))retry();if(family.equals("all")||family.equals("observation"))observation();reset();System.out.println("Android ordered MTU adapter: "+checks+" executable checks passed; OS/native handles doubled.");}
 }'''
 
 
@@ -101,6 +108,7 @@ def main():
         end = original.index('    void activateTor(', start)
         method = original[start:end]
         controls = (
+            (method.replace('automaticDeferred = !chain.restoringExecution;', 'automaticDeferred = true;'), 'restored', 'temporary restore replayed automatic MTU search'),
             (method.replace('                chain.requireCurrent();\n                if (created.autoRequested()', '                if (created.autoRequested()'), 'constructor', 'retired ordered source started its returned MTU controller'),
             (method.replace('                controller = created;', ''), 'constructor', 'retired constructor lost its sole native cleanup handle'),
             (method.replace('if (created.autoRequested() == false)', 'if (false)'), 'policy', 'fixed inherited ordered capacity attempted Auto MTU'),

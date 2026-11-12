@@ -35,6 +35,7 @@ final class AndroidNodeChainSession {
     final AndroidHomeStateStore.Snapshot home;
     final AndroidNodeChainCapture capture;
     final AndroidNodeChainExecutionCapture execution;
+    final boolean restoringExecution;
     private final String config, launchInput;
     final File directory;
     final NativeSingBoxController.SessionInfo request;
@@ -59,6 +60,7 @@ final class AndroidNodeChainSession {
                             AndroidNodeChainExecutionCapture.RestoreCapture restore) throws Exception {
         this.context = context.getApplicationContext();
         this.source = source; this.home = home; this.selectionDigest=selectionDigest;
+        restoringExecution = restore != null;
         source.requireCurrent();
         requireSelection(this.context,source,selectionDigest);
         if (!AndroidHomeStateStore.ownsNodeChain(this.context, home)) throw new IllegalStateException("The ordered launch lost its original Home selection.");

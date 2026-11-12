@@ -61,6 +61,7 @@ public final class RouterNodeChainExecution {
  public String execution(){throw new IllegalStateException("No native execution proof");}public String progressJSON(){return "{}";}
  public void networkChanged(){}public boolean retainsServerCleanup(CommandServer server){return false;}public void close(){closed=true;}
  public RouterNodeChainExecutionRestoreCapture captureRestore(){throw new IllegalStateException("No native restore owner");}
+ public void requireRestore(RouterNodeChainExecutionRestoreCapture capture){throw new IllegalStateException("No native restore authority in pure source fixture");}
 }
 '''
 
@@ -159,7 +160,7 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         ("local-digest", '!local.sourceSHA256.equals(plan.localSourceSHA256())', 'false', 'readback', 'execution accepted native readback substitution: local-digest'),
         ("member-order", '!sameStrings(original.getJSONArray("nodes"), returned.getJSONArray("nodes"))', 'false', 'readback', 'execution accepted native readback substitution: member-order'),
         ("identity-order", '!sameStrings(original.getJSONArray("identity_sources"), returned.getJSONArray("identity_sources"))', 'false', 'readback', 'execution accepted native readback substitution: identity-order'),
-        ("source-change", '        local.requireCurrent();\n    }\n\n    void requireCurrent()', '    }\n\n    void requireCurrent()', 'changed', 'execution survived original source replacement during compile'),
+        ("source-change", '        local.requireCurrent();\n        if (restore != null) plan.requireRestore(restore.nativeCapture);\n    }\n\n    void requireCurrent()', '        if (restore != null) plan.requireRestore(restore.nativeCapture);\n    }\n\n    void requireCurrent()', 'changed', 'execution survived original source replacement during compile'),
     )
     for name, old, new, family, witness in controls:
         assert original.count(old) == 1, name

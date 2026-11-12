@@ -22,6 +22,7 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
     final RouterNodeChainExecution plan;
     final String requested, source, launchInput, config, sourceSHA256, configSHA256;
     private volatile boolean closed;
+    private final RestoreCapture restoredFrom;
 
     static AndroidNodeChainExecutionCapture compile(AndroidNodeChainCapture local, String requested) throws Exception {
         requireRequested(requested);
@@ -51,8 +52,12 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
 
     private static AndroidNodeChainExecutionCapture adopt(AndroidNodeChainCapture local, String requested,
                                                            RouterNodeChainExecution plan) throws Exception {
+        return adopt(local, requested, plan, null);
+    }
+    private static AndroidNodeChainExecutionCapture adopt(AndroidNodeChainCapture local, String requested,
+                                                           RouterNodeChainExecution plan, RestoreCapture restore) throws Exception {
         if (plan == null) throw new IllegalStateException("The native execution compiler returned no original owner.");
-        try { return new AndroidNodeChainExecutionCapture(local, requested, plan); }
+        try { return new AndroidNodeChainExecutionCapture(local, requested, plan, restore); }
         catch (Exception invalid) {
             try { plan.close(); } catch (Exception cleanup) { invalid.addSuppressed(cleanup); }
             throw invalid;
@@ -60,8 +65,9 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
     }
 
     private AndroidNodeChainExecutionCapture(AndroidNodeChainCapture local, String requested,
-                                              RouterNodeChainExecution plan) throws Exception {
-        this.local = local; this.requested = requested; this.plan = plan;
+                                              RouterNodeChainExecution plan, RestoreCapture restore) throws Exception {
+        this.local = local; this.requested = requested; this.plan = plan; restoredFrom = restore;
+        if (restore != null) plan.requireRestore(restore.nativeCapture);
         source = bounded(plan.source(), AndroidNodeChainCapture.MAX_INPUT);
         launchInput = bounded(plan.launchInput(), AndroidNodeChainCapture.MAX_INPUT);
         config = bounded(plan.config(), 4 * 1024 * 1024);
@@ -87,6 +93,7 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
             throw new IllegalStateException("Server execution requires every original paired node in its exact Local order.");
         }
         local.requireCurrent();
+        if (restore != null) plan.requireRestore(restore.nativeCapture);
     }
 
     void requireCurrent() throws Exception {
@@ -150,8 +157,10 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
             throw new IllegalStateException("Execution restore needs the complete original source and acknowledged native drain.");
         local.requireCurrent();
         AndroidNodeChainExecutionCapture result = adopt(local, captured.original.requested,
-                Libbox.newRouterNodeChainExecutionRestore(captured.nativeCapture));
-        if (!captured.original.source.equals(result.source) || !captured.original.config.equals(result.config)) {
+                Libbox.newRouterNodeChainExecutionRestore(captured.nativeCapture), captured);
+        // Effective MTU may honestly change Config/SHA. Only the exact opaque
+        // native capsule can authorize that returned private preparation.
+        if (!captured.original.source.equals(result.source) || !captured.original.requested.equals(result.requested)) {
             try { result.close(); }
             catch (Exception cleanup) { throw new IllegalStateException("The altered restore capture could not retire its native owner.", cleanup); }
             throw new IllegalStateException("Restore substituted a different execution preparation.");
@@ -160,6 +169,8 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
     }
 
     boolean restoredMatches(RestoreCapture captured) throws Exception {
+        if (captured == null || restoredFrom != captured) return false;
+        plan.requireRestore(captured.nativeCapture);
         return captured != null && captured.original != this && captured.original.closed
                 && captured.original.source.equals(source) && captured.execution.equals(execution()) && healthy();
     }

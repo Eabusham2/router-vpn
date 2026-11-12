@@ -55,6 +55,7 @@ public final class RouterNodeChainExecution {
   finally{cleanupToken=false;}
  }
  public RouterNodeChainExecutionRestoreCapture captureRestore(){if(!healthy())throw new IllegalStateException("no original execution proof");return new RouterNodeChainExecutionRestoreCapture(this,selected);}
+ public void requireRestore(RouterNodeChainExecutionRestoreCapture capture){if(capture==null||restore!=capture||capture.original==this||!capture.original.nativeClosed())throw new IllegalStateException("foreign or unjoined native restore capsule");}
 }
 '''
 

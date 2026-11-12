@@ -278,7 +278,10 @@ final class AndroidMTUSession implements RouterMTUPlatform {
                     notice = "Configured ordered-path capacity is retained without Auto MTU or Retest; this is not a measured packet-path limit.";
                     return;
                 }
-                automaticDeferred = true; resumeDeferredAutomatic(); notice = "";
+                // Temporary restoration proves the captured effective MTU;
+                // it must not turn that receipt into a new automatic search.
+                automaticDeferred = !chain.restoringExecution;
+                resumeDeferredAutomatic(); notice = "";
             } catch (Exception error) {
                 boolean large;
                 synchronized (this) { large = requestedMTU > 1500; }
