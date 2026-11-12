@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"runtime"
 	"time"
 
 	"router-vpn/internal/mobilemtu"
@@ -34,9 +35,10 @@ func orderedPerformanceCapture(identity speedLabPathIdentity, ready mobilemultih
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// Status captures references only; it does not replay source or grant permission
-// to measure. POST performs full current source/proof validation under its
-// original measurement deadline before accepting this exact opaque capture.
+// Status never grants permission to measure. Protected platform hosts require
+// their original bounded Current observation outside app.mu; their process
+// ownership is retained by the typed platform, not desktopNodeOwners. POST
+// still performs full current source/proof validation before measurement.
 func captureOrderedPerformanceContext(ctx context.Context, a *app) (speedLabPathIdentity, string, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
@@ -56,12 +58,35 @@ func captureOrderedPerformanceContext(ctx context.Context, a *app) (speedLabPath
 	if !st.Connected || st.Phase != "connected" || st.Mode != "multihop" || !session.Connected || session.Phase != "connected" || session.PathProof != "passed" || session.ID == "" || session.RouterID != st.RouterID || !graphOK || graph.ChainNodes < 2 || !found || !typed || owner == nil || owner.launch == nil || owner.launch.chain == nil || owner.launch.command != command || owner.graph != graph || owner.network == "" {
 		return identity, "", 0, errors.New("ordered Performance requires the retained connected native chain")
 	}
-	retained, found := desktopNodeOwners.Load(a)
-	if !found || retained != owner.launch {
-		return identity, "", 0, errors.New("ordered Performance lost its original native owner")
-	}
-	identity = speedLabPathIdentity{Tracker: tracker, SessionID: session.ID, StateToken: mtuStateSnapshotToken(st), Graph: graph, GraphOK: true, Ordered: owner, Network: owner.network}
+	identity = speedLabPathIdentity{Tracker: tracker, SessionID: session.ID, StateToken: mtuStateSnapshotToken(st), RouterID: st.RouterID,
+		Graph: graph, GraphOK: true, Ordered: owner, Command: command, Network: owner.network}
 	chain := owner.launch.chain
+	var captured *mtuNodeChainSnapshot
+	if chain.platform != nil {
+		// This existing snapshot captures immutable complete source/command
+		// associations only; it starts no MTU transaction or measurement.
+		captured, err = captureMTUNodeChainSnapshot(owner)
+		if err != nil || captured == nil || captured.Platform == nil ||
+			(runtime.GOOS != "linux" && runtime.GOOS != "darwin") || captured.Policy.Metadata().TargetOS != runtime.GOOS {
+			return identity, "", 0, errors.New("ordered Performance lost its original protected platform capture")
+		}
+		if err := nativeMultihopLaunchCurrent(ctx, a, captured.Launch); err != nil {
+			return identity, "", 0, err
+		}
+	}
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return identity, "", 0, err
+	}
+	err = validateOrderedPerformanceOwnerLocked(a, identity, captured)
+	a.mu.Unlock()
+	if err != nil {
+		return identity, "", 0, err
+	}
+	_, currentSession, err := measurementSessionContext(ctx, a, tracker)
+	if err != nil || currentSession.ID != session.ID || !currentSession.Connected || currentSession.Phase != "connected" ||
+		currentSession.PathProof != "passed" || currentSession.RouterID != st.RouterID {
+		return identity, "", 0, errors.New("ordered Performance session changed during original observation")
+	}
 	if err := mobilemtu.LockContext(ctx, &chain.mu); err != nil {
 		return identity, "", 0, err
 	}
@@ -77,6 +102,33 @@ func captureOrderedPerformanceContext(ctx context.Context, a *app) (speedLabPath
 	chain.mu.Unlock()
 	token, err := orderedPerformanceCapture(identity, ready, members)
 	return identity, token, len(members), errors.Join(err, ctx.Err())
+}
+
+// Caller holds app.mu. Recheck the same original command, complete graph and
+// source objects after the platform observation; no native callback runs here.
+func validateOrderedPerformanceOwnerLocked(a *app, identity speedLabPathIdentity, captured *mtuNodeChainSnapshot) error {
+	owner := identity.Ordered
+	graph, graphOK := getActiveMultihopGraph(a)
+	raw, found := nativeMultihopOwners.Load(a)
+	if owner == nil || owner.launch == nil || owner.launch.chain == nil || !found || raw != owner ||
+		!graphOK || graph != identity.Graph || graph != owner.graph || graph.ChainNodes < 2 || graph.ChainNodes > 8 ||
+		a.cmd != identity.Command || owner.launch.command != identity.Command || owner.network != identity.Network ||
+		!a.state.Connected || a.state.Phase != "connected" || a.state.RouterID != identity.RouterID ||
+		mtuStateSnapshotToken(a.state) != identity.StateToken {
+		return errors.New("ordered Performance replaced its original connected runtime")
+	}
+	if captured != nil {
+		if captured.Platform == nil || captured.Policy == nil || captured.Policy.Metadata().TargetOS != runtime.GOOS ||
+			(runtime.GOOS != "linux" && runtime.GOOS != "darwin") {
+			return errors.New("ordered Performance substituted a foreign protected platform")
+		}
+		return validateMTUNodeChainLocked(a, &mtuMultihopSnapshot{Graph: graph, Native: owner, Chain: captured, Command: identity.Command})
+	}
+	retained, found := desktopNodeOwners.Load(a)
+	if owner.launch.chain.platform != nil || !found || retained != owner.launch {
+		return errors.New("ordered Performance lost its original native owner")
+	}
+	return nil
 }
 
 func (a *app) orderedMultihopSpeedTest(w http.ResponseWriter, r *http.Request, q routedSpeedRequest, graph activeMultihopGraph) {

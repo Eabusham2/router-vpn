@@ -67,6 +67,8 @@ class OrderedNativeVerdicts(unittest.TestCase):
         lines = ['=== RUN   '+G.TEST, '=== RUN   '+G.TEST+'/'+case]
         if case in G.MTU_CASES:
             lines += ['    desktop_node_chain_darwin_native_test.go:701: '+G.MTU_RECEIPT]
+        if case in G.MEASUREMENT_CASES:
+            lines += ['    desktop_node_chain_darwin_native_test.go:702: '+G.MEASUREMENT_RECEIPT]
         lines += ['    desktop_node_chain_darwin_native_test.go:555: '+G.receipt(case),
                   '--- PASS: '+G.TEST+' (1.0s)',
                   '    --- PASS: '+G.TEST+'/'+case+' (1.0s)', 'PASS']
@@ -76,6 +78,7 @@ class OrderedNativeVerdicts(unittest.TestCase):
         self.assertEqual(G.case_inventory(), G.CASES)
         self.assertEqual(len(G.CASES), 20)
         self.assertEqual(len(G.MTU_CASES), 2)
+        self.assertEqual(len(G.MEASUREMENT_CASES), 14)
         linux = (ROOT/'cmd/client/desktop_node_chain_linux_tun_native_test.go').read_text()
         import re
         match = re.search(r'var linuxNodeChainHostCases = \[\]string\{([^}]+)\}', linux)
@@ -95,6 +98,18 @@ class OrderedNativeVerdicts(unittest.TestCase):
     def test_complete_unique_execution_accepts_every_original_case(self):
         for case in G.CASES:
             G.check_verdict(self.completed(case), case)
+
+    def test_prefix_measurement_receipt_is_required_only_after_original_native_proof(self):
+        line = '    desktop_node_chain_darwin_native_test.go:702: '+G.MEASUREMENT_RECEIPT+'\n'
+        for case in G.CASES:
+            valid = self.completed(case)
+            if case in G.MEASUREMENT_CASES:
+                changed = (valid.replace(line, ''), valid.replace(line, line+line), valid.replace(line, 'diagnostic: '+line))
+            else:
+                changed = (valid.replace('--- PASS: '+G.TEST+' ', line+'--- PASS: '+G.TEST+' ', 1),)
+            for broken in changed:
+                with self.subTest(case=case), self.assertRaises(ValueError):
+                    G.check_verdict(broken, case)
 
     def test_missing_and_duplicate_run_or_pass_cannot_claim_a_case(self):
         for case in G.CASES:

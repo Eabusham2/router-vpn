@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -208,6 +209,8 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 			desktopProfileExpectations: desktopProfileExpectations{ExpectedSelectedNodeID: &selected, ExpectedProfileTokens: tokens}})
 	})
 	mux.HandleFunc("/api/multihop/connect", func(w http.ResponseWriter, r *http.Request) { macOSNodeChainNativeConnect(a, w, r, driver) })
+	mux.HandleFunc("/api/multihop/status", a.multihopStatus)
+	mux.HandleFunc("/api/multihop/speed-test", a.multihopSpeedTest)
 	mux.HandleFunc("/api/disconnect", a.disconnect)
 	mux.HandleFunc("/api/mtu/retest", a.retestMTU)
 	mux.HandleFunc("/api/mtu/status", a.desktopMTUStatus)
@@ -433,6 +436,7 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 		t.Fatal("ordered native Connect reached wrong verdict", status, err, string(raw))
 	}
 	var live macOSNodeChainNativeResult
+	var performanceCapture string
 	if action == "mtu" {
 		macOSNodeChainNativeAwaitAuto(t, ctx, client, peer)
 	}
@@ -470,6 +474,7 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 			macOSNodeChainNativeMTU(t, ctx, client, peer, live)
 			live = macOSNodeChainNativeRead(t, ctx, client)
 		}
+		performanceCapture = macOSNodeChainNativeMeasurement(t, ctx, client, peer, request, live)
 		if action == "prefix-lost" {
 			peer.observe(t, "wrong-node:1")
 		}
@@ -502,6 +507,25 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 		t.Fatal("actual ordered public Disconnect failed", status, err, string(raw))
 	}
 	retired := macOSNodeChainNativeRead(t, ctx, client)
+	if performanceCapture != "" {
+		status, body, err := macOSExternalNativeHTTP(ctx, client, http.MethodGet, "/api/multihop/status", "")
+		var closed struct {
+			Connected bool   `json:"connected"`
+			Capture   string `json:"ordered_capture"`
+			Count     int    `json:"ordered_nodes"`
+		}
+		if err != nil || status != http.StatusOK || json.Unmarshal(body, &closed) != nil || closed.Connected || closed.Capture != "" || closed.Count != 0 {
+			t.Fatal("retired native owner exposed another public Performance capture", status, err, string(body))
+		}
+		q, err := json.Marshal(routedSpeedRequest{EntryID: request.Nodes[0].ID, ExitID: request.Nodes[len(request.Nodes)-1].ID, Bytes: 8 << 20, OrderedCapture: performanceCapture})
+		if err != nil {
+			t.Fatal(err)
+		}
+		status, body, err = macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/multihop/speed-test", string(q))
+		if err != nil || status != http.StatusConflict {
+			t.Fatal("closed original native owner replayed a former Performance capture", status, err, string(body))
+		}
+	}
 	// A monitor's completed hold retires the native host before the later
 	// public Disconnect releases its durable journal. That closed host keeps
 	// its original historical held receipt; actual PF absence is checked below.
@@ -521,6 +545,100 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 		t.Fatal("original ordered controller did not join", receipt.ExitCode)
 	}
 	t.Logf("actual sealed Darwin ordered host verified %s: original native transaction and intended proof boundary, complete captured identities, stopped acknowledgment, PF and utun retirement, controller join", scenario)
+}
+
+func macOSNodeChainNativeMeasurement(t *testing.T, ctx context.Context, client *http.Client, peer *macOSNodeChainPeer,
+	request multihopConnectRequest, original macOSNodeChainNativeResult) string {
+	t.Helper()
+	before := peer.observe(t, "stats")
+	status, raw, err := macOSExternalNativeHTTP(ctx, client, http.MethodGet, "/api/multihop/status", "")
+	var preflight struct {
+		Connected bool   `json:"connected"`
+		Entry     string `json:"entry_id"`
+		Exit      string `json:"exit_id"`
+		Capture   string `json:"ordered_capture"`
+		Count     int    `json:"ordered_nodes"`
+	}
+	if err != nil || status != http.StatusOK || json.Unmarshal(raw, &preflight) != nil || !preflight.Connected ||
+		preflight.Entry != request.Nodes[0].ID || preflight.Exit != request.Nodes[len(request.Nodes)-1].ID ||
+		preflight.Count != len(request.Nodes) || len(preflight.Capture) != 64 {
+		t.Fatal("original protected host has no complete public Performance capture", status, err, string(raw))
+	}
+	foreign := "0" + preflight.Capture[1:]
+	if foreign == preflight.Capture {
+		foreign = "1" + preflight.Capture[1:]
+	}
+	for _, token := range []string{"", foreign} {
+		body, err := json.Marshal(routedSpeedRequest{EntryID: preflight.Entry, ExitID: preflight.Exit, Bytes: 8 << 20, OrderedCapture: token})
+		if err != nil {
+			t.Fatal(err)
+		}
+		status, raw, err = macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/multihop/speed-test", string(body))
+		if err != nil || status != http.StatusConflict {
+			t.Fatal("public Performance admitted a missing or replaced ordered capture", status, err, string(raw))
+		}
+	}
+	q, err := json.Marshal(routedSpeedRequest{EntryID: preflight.Entry, ExitID: preflight.Exit, Bytes: 8 << 20, OrderedCapture: preflight.Capture})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, raw, err = macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/multihop/speed-test", string(q))
+	var result struct {
+		Connected  bool                     `json:"connected"`
+		Mode       string                   `json:"mode"`
+		Entry      string                   `json:"entry_id"`
+		Exit       string                   `json:"exit_id"`
+		Capture    string                   `json:"ordered_capture"`
+		Count      int                      `json:"ordered_nodes"`
+		Bytes      int64                    `json:"bytes"`
+		Hops       []speedLabHopMeasurement `json:"hops"`
+		MeasuredAt time.Time                `json:"measured_at"`
+		Note       string                   `json:"note"`
+	}
+	if err != nil || status != http.StatusOK || decodeRelayControlJSON(raw, &result) != nil || !result.Connected ||
+		result.Mode != "multihop" || result.Entry != preflight.Entry || result.Exit != preflight.Exit ||
+		result.Capture != preflight.Capture || result.Count != len(request.Nodes) || result.Bytes != 8<<20 || len(result.Hops) != len(request.Nodes) {
+		t.Fatal("actual public ordered measurement omitted complete original rows", status, err, string(raw))
+	}
+	positive := func(value float64) bool { return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0) }
+	for i, row := range result.Hops {
+		role := "intermediate"
+		if i == 0 {
+			role = "entry"
+		}
+		if i == len(request.Nodes)-1 {
+			role = "exit"
+		}
+		label := fmt.Sprintf("Cumulative path through node %d of %d", i+1, len(request.Nodes))
+		if row.RouterID != request.Nodes[i].ID || row.Role != role || row.LatencyLabel != label+" HTTP response" || row.SpeedLabel != label+" transfer" ||
+			row.LatencyError != "" || row.SpeedError != "" || row.Latency == nil || row.Speed == nil ||
+			row.Latency.RouterID != row.RouterID || !row.Latency.Connected || row.Latency.Samples != 6 || !positive(row.Latency.MedianMs) ||
+			row.Speed.RouterID != row.RouterID || row.Speed.Bytes != 8<<20 || !positive(row.Speed.DownloadMs) || !positive(row.Speed.UploadMs) ||
+			!positive(row.Speed.DownloadMbps) || !positive(row.Speed.UploadMbps) {
+			t.Fatal("actual encrypted prefix measurement lost original identity, samples or exact transfer", i, row)
+		}
+	}
+	after := peer.observe(t, "stats")
+	if after.Final.DownloadBytes < before.Final.DownloadBytes+(8<<20) || after.Final.UploadBytes < before.Final.UploadBytes+(8<<20) ||
+		after.Final.DirectQueries != 0 || len(after.Prefixes) != len(before.Prefixes) {
+		t.Fatal("ordered public measurement lacks independent actual final transferred bytes", before, after)
+	}
+	for i, prefix := range after.Prefixes {
+		if prefix.RawUDP <= before.Prefixes[i].RawUDP || prefix.TCP <= before.Prefixes[i].TCP ||
+			prefix.ProofQueries < before.Prefixes[i].ProofQueries+6 || prefix.AuthRefusals != 0 {
+			t.Fatal("ordered measurement skipped an original encrypted prefix", i, before.Prefixes[i], prefix)
+		}
+	}
+	live := macOSNodeChainNativeRead(t, ctx, client)
+	macOSNodeChainNativeProved(t, peer, request, live, 0)
+	if live.Session != original.Session || live.Source != original.Source || live.Config != original.Config ||
+		live.ProcessID != original.ProcessID || live.Transfer != original.Transfer || live.Ready.Generation != original.Ready.Generation ||
+		live.Baseline.Token != original.Baseline.Token || live.MTU.Reader != original.MTU.Reader || live.MTU.Path != original.MTU.Path ||
+		live.MTU.Interface != original.MTU.Interface || live.MTU.Index != original.MTU.Index || live.MTU.MTU != original.MTU.MTU {
+		t.Fatal("public Performance replaced its original native process, PF or TUN reader")
+	}
+	t.Log("actual sealed Darwin ordered measurement: every original prefix transferred 8 MiB per direction with six HTTP samples, original native process PF and TUN reader retained")
+	return preflight.Capture
 }
 
 func macOSNodeChainNativeProved(t *testing.T, peer *macOSNodeChainPeer, request multihopConnectRequest, value macOSNodeChainNativeResult, controllerPID int) {

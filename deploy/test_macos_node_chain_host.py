@@ -32,6 +32,13 @@ CASES = (
 )
 MTU_CASES = CASES[-2:]
 MTU_RECEIPT = 'actual sealed Darwin ordered MTU: Auto and Retest transferred final-only UDP, held Cancel joined exact rollback, original process PF and reader succession retained'
+MEASUREMENT_CASES = tuple(case for case in CASES if case not in (
+    'node-chain-3-wrong-middle-key', 'node-chain-4-wrong-middle-proof',
+    'node-chain-3-final-dns-failure', 'node-chain-4-final-node-failure',
+    'node-chain-4-wg-awg-fast-awg-strong-wrong-middle-key',
+    'node-chain-4-wg-awg-fast-awg-strong-wrong-awg-parameters',
+))
+MEASUREMENT_RECEIPT = 'actual sealed Darwin ordered measurement: every original prefix transferred 8 MiB per direction with six HTTP samples, original native process PF and TUN reader retained'
 SOURCE_FILES = (
     'deploy/test_macos_node_chain_host.py', 'deploy/test_macos_node_chain_host_runner.py',
     'cmd/client/desktop_node_chain_darwin_native_test.go',
@@ -108,7 +115,9 @@ def check_verdict(output, case):
         raise ValueError('Native ordered case omitted its original joined ownership receipt')
     if receipts[MTU_RECEIPT] != (1 if case in MTU_CASES else 0):
         raise ValueError('Native ordered case omitted or borrowed actual MTU transfer receipt')
-    known = {receipt(case), MTU_RECEIPT}
+    if receipts[MEASUREMENT_RECEIPT] != (1 if case in MEASUREMENT_CASES else 0):
+        raise ValueError('Native ordered case omitted or borrowed actual prefix measurement receipt')
+    known = {receipt(case), MTU_RECEIPT, MEASUREMENT_RECEIPT}
     if any(value.startswith('actual sealed Darwin ordered') and value not in known for value in receipts):
         raise ValueError('Native ordered case borrowed another case receipt')
     if package_pass != 1 or not output.rstrip().endswith('\nPASS'):
