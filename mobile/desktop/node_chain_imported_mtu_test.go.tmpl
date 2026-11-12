@@ -1,0 +1,352 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	SSClient "github.com/sagernet/sing-shadowsocks2"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service/pause"
+)
+
+// These observations are on the real WG/AWG device's decrypted IPv4 side.
+// Neither the SS codecs nor the network stack are replaced. Packet sizes here
+// are encrypted proxy datagrams, not virtual TUN or TCP segment ceilings.
+type desktopImportedMTUPacket struct {
+	size, offset int
+	more         bool
+}
+type desktopImportedMTUObservation struct {
+	mu             sync.Mutex
+	request, reply []desktopImportedMTUPacket
+}
+
+func (o *desktopImportedMTUObservation) observe(p []byte, incoming bool) {
+	if len(p) < 20 || p[0]>>4 != 4 || p[9] != 17 {
+		return
+	}
+	size := int(binary.BigEndian.Uint16(p[2:4]))
+	if size < 20 || size > len(p) {
+		return
+	}
+	fragment := binary.BigEndian.Uint16(p[6:8])
+	item := desktopImportedMTUPacket{size: size, offset: int(fragment&0x1fff) * 8, more: fragment&0x2000 != 0}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if incoming {
+		o.request = append(o.request, item)
+	} else {
+		o.reply = append(o.reply, item)
+	}
+}
+
+type desktopImportedMTUDevice struct {
+	wg.Device
+	observation *desktopImportedMTUObservation
+}
+
+func (d *desktopImportedMTUDevice) Read(b [][]byte, s []int, off int) (int, error) {
+	n, e := d.Device.Read(b, s, off)
+	for i := 0; i < n; i++ {
+		d.observation.observe(b[i][off:off+s[i]], false)
+	}
+	return n, e
+}
+func (d *desktopImportedMTUDevice) Write(b [][]byte, off int) (int, error) {
+	for _, p := range b {
+		d.observation.observe(p[off:], true)
+	}
+	return d.Device.Write(b, off)
+}
+
+// Recompile original assets instead of mutating an executable endpoint after
+// source capture. Identity assets and the selected WG/AWG asset retain the
+// same explicit endpoint MTU; the final TUN remains its original1280.
+func desktopImportedMTUSource(t *testing.T, original *mobilemultihop.NodeChain, mtu int) *mobilemultihop.NodeChain {
+	t.Helper()
+	launch, e := original.LaunchInput()
+	if e != nil {
+		t.Fatal(e)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(launch), &source) != nil {
+		t.Fatal("original source")
+	}
+	var first struct {
+		Mode    string `json:"mode"`
+		Files   string `json:"files"`
+		Profile string `json:"profile_json"`
+		Start   string `json:"start"`
+		DNS     string `json:"dns_bootstrap"`
+	}
+	if json.Unmarshal([]byte(source.Nodes[0]), &first) != nil {
+		t.Fatal("original first member")
+	}
+	replace := func(raw string) string {
+		var files map[string]string
+		if json.Unmarshal([]byte(raw), &files) != nil {
+			t.Fatal("original assets")
+		}
+		found := false
+		for name, encoded := range files {
+			if name != "wg.conf" && name != "awg.conf" {
+				continue
+			}
+			data, e := base64.StdEncoding.DecodeString(encoded)
+			if e != nil || strings.Count(string(data), "MTU=2000\n") != 1 {
+				t.Fatal("original endpoint MTU missing")
+			}
+			files[name] = base64.StdEncoding.EncodeToString([]byte(strings.Replace(string(data), "MTU=2000\n", fmt.Sprintf("MTU=%d\n", mtu), 1)))
+			found = true
+		}
+		if !found {
+			t.Fatal("no original packet asset")
+		}
+		return desktopNodeChainJSON(t, files)
+	}
+	first.Files = replace(first.Files)
+	node, e := mobilemultihop.NewNodeProfile(first.Mode, first.Files, first.Profile, first.Start, first.DNS)
+	if e != nil {
+		t.Fatal(e)
+	}
+	source.Nodes[0], e = node.LaunchInput()
+	if e != nil {
+		t.Fatal(e)
+	}
+	source.IdentitySources[0] = replace(source.IdentitySources[0])
+	chain, e := mobilemultihop.NewNodeChain(desktopNodeChainJSON(t, source))
+	if e != nil {
+		t.Fatal(e)
+	}
+	plan, e := chain.MTUPlan()
+	if e != nil || plan.Original != 1280 || plan.Prefixes[0].Ceiling != mtu {
+		t.Fatal("captured tight source", plan, e)
+	}
+	return chain
+}
+
+func desktopImportedMTUAssertPackets(t *testing.T, packets []desktopImportedMTUPacket, datagram, mtu int) {
+	t.Helper()
+	sort.Slice(packets, func(i, j int) bool { return packets[i].offset < packets[j].offset })
+	payload := datagram - 20
+	offset := 0
+	for i, p := range packets {
+		part := payload - offset
+		more := part > mtu-20
+		if more {
+			part = (mtu - 20) / 8 * 8
+		}
+		if p.size != part+20 || p.offset != offset || p.more != more {
+			t.Fatalf("packet%d got%+v; want size%d offset%d more%v (whole%d MTU%d)", i, p, part+20, offset, more, datagram, mtu)
+		}
+		offset += part
+	}
+	if offset != payload {
+		t.Fatalf("incomplete datagram: observed%d expected%d; packets%+v", offset, payload, packets)
+	}
+}
+
+// SS2022 requests carry50/62 bytes(AES IPv4/IPv6 destination), or74/86
+// (ChaCha); server replies add8. NestedSS transports preserve UDP messages,
+// while the actual WG/AWG stack fragments their enclosing IP packet. This
+// fixture proves that distinction at1280/1400, rather than inventing a TCP or
+// TUN ceiling by subtracting datagram overhead. It is not a physical PMTU test.
+func TestRouterVPNDesktopNodeChainImportedMiddleTightMTU(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		for _, method := range []string{"2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"} {
+			for _, mtu := range []int{1280, 1400} {
+				t.Run(fmt.Sprintf("%s/%s/%d", mode, method, mtu), func(t *testing.T) {
+					request, clients := desktopNodeChainPeerFixture(t, 1)
+					desktopNodeChainSetModes(t, &request, []string{mode})
+					finalKey, e := ecdh.X25519().GenerateKey(rand.Reader)
+					if e != nil {
+						t.Fatal(e)
+					}
+					public := base64.StdEncoding.EncodeToString(finalKey.PublicKey().Bytes())
+					proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+					request.FinalNodeProofID = hex.EncodeToString(proof[:])
+					finalWG := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/32\nPrivateKey=%s\nMTU=1420\n[Peer]\nPublicKey=%s\nEndpoint=10.77.0.1:51820\nAllowedIPs=0.0.0.0/0,::/0\n", clients[0], public)
+					identity := desktopNodeChainJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(finalWG))})
+					size := 32
+					if method == "2022-blake3-aes-128-gcm" {
+						size = 16
+					}
+					password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73}, size))
+					observed := new(desktopImportedMTUObservation)
+					wrap := func(start desktopNodeUDPReferenceFactory) desktopNodeUDPReferenceFactory {
+						return func(ctx context.Context, stack wg.Device, bind *desktopNodeWGBind, ipc string) (desktopNodeUDPReferenceDevice, error) {
+							actual, e := stack.MTU()
+							if e != nil || actual != 1400 {
+								t.Fatal("original reference stack MTU", actual, e)
+							}
+							return start(ctx, &desktopImportedMTUDevice{stack, observed}, bind, ipc)
+						}
+					}
+					loopback := netip.MustParseAddr("127.0.0.1")
+					custom := desktopNodeChainImportedPeerStartWithFactory(t, desktopNodeChainImportedRequest{1, request, method, password}, loopback, loopback, wrap)
+					echo, e := net.ListenPacket("udp4", "127.0.0.1:0")
+					if e != nil {
+						t.Fatal(e)
+					}
+					done := make(chan struct{})
+					go func() {
+						defer close(done)
+						b := make([]byte, 65535)
+						for {
+							n, from, e := echo.ReadFrom(b)
+							if e != nil {
+								return
+							}
+							_, _ = echo.WriteTo(b[:n], from)
+						}
+					}()
+					t.Cleanup(func() { _ = echo.Close(); <-done })
+					for _, destination := range []string{"10.77.0.1:9999", "[fd77::1]:9999"} {
+						custom.paired.final.routes = append(custom.paired.final.routes, desktopNodeLayerRoute{Network: "udp", Destination: destination, Physical: echo.LocalAddr().String()})
+					}
+					_, port, e := net.SplitHostPort(custom.paired.bind.address())
+					if e != nil {
+						t.Fatal(e)
+					}
+					chain := desktopImportedMTUSource(t, desktopNodeChainImportedSource(t, request, clients, net.JoinHostPort(request.Address, port), method, password, identity), mtu)
+					ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 10*time.Second)
+					defer cancel()
+					outs := desktopNodeChainPeerOutbounds(t, ctx, chain, custom.paired.bind.address(), nil)
+					ready, e := outs[0].DialContext(ctx, "tcp", M.ParseSocksaddr("10.78.0.1:8787"))
+					if e != nil {
+						t.Fatal(e)
+					}
+					_ = ready.SetDeadline(time.Now().Add(2 * time.Second))
+					_, e = fmt.Fprintf(ready, "GET /health HTTP/1.1\r\nHost: 10.78.0.1:8787\r\nAuthorization: Bearer %s\r\nConnection: close\r\n\r\n", request.Prefixes[0].APIToken)
+					if e != nil {
+						t.Fatal(e)
+					}
+					health, e := io.ReadAll(ready)
+					_ = ready.Close()
+					if e != nil || (!strings.Contains(string(health), "200 OK") || !strings.Contains(string(health), request.Prefixes[0].NodeProofID)) {
+						t.Fatal("first private proof", e)
+					}
+					for _, family := range []string{"ipv4", "ipv6"} {
+						t.Run(family, func(t *testing.T) {
+							target, ipHeader, finalOverhead := "10.77.0.1:9999", 28, 50
+							if family == "ipv6" {
+								target, ipHeader, finalOverhead = "[fd77::1]:9999", 48, 62
+							}
+							c, e := outs[2].DialContext(ctx, "udp", M.ParseSocksaddr(target))
+							if e != nil {
+								t.Fatal(e)
+							}
+							defer c.Close()
+							//1280 is the captured virtualTUN.1500 is an explicit oversized native
+							//control, not a claim that the captured host accepted a1500-byte TUN.
+							for _, virtual := range []int{1280, 1500} {
+								t.Run(fmt.Sprint(virtual), func(t *testing.T) {
+									observed.mu.Lock()
+									observed.request = nil
+									observed.reply = nil
+									observed.mu.Unlock()
+									payload := bytes.Repeat([]byte{93}, virtual-ipHeader)
+									_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+									n, e := c.Write(payload)
+									if e != nil || n != len(payload) {
+										t.Fatal("native datagram write", n, e)
+									}
+									b := make([]byte, 65535)
+									n, e = c.Read(b)
+									if e != nil || !bytes.Equal(payload, b[:n]) {
+										t.Fatal("native datagram round trip", n, e)
+									}
+									middleOverhead := 50
+									if method == "2022-blake3-chacha20-poly1305" {
+										middleOverhead = 74
+									}
+									requestBytes := len(payload) + finalOverhead + middleOverhead + 28
+									replyBytes := requestBytes + 16
+									observed.mu.Lock()
+									requestPackets := append([]desktopImportedMTUPacket(nil), observed.request...)
+									replyPackets := append([]desktopImportedMTUPacket(nil), observed.reply...)
+									observed.mu.Unlock()
+									desktopImportedMTUAssertPackets(t, requestPackets, requestBytes, mtu)
+									desktopImportedMTUAssertPackets(t, replyPackets, replyBytes, 1400)
+									t.Logf("original firstMTU=%d referenceMTU=1400 virtualBytes=%d payload=%d requestEnvelope=%d replyEnvelope=%d requestPackets=%d replyPackets=%d", mtu, virtual, len(payload), requestBytes, replyBytes, len(requestPackets), len(replyPackets))
+								})
+							}
+						})
+					}
+				})
+			}
+		}
+	}
+}
+
+// Observe the actual pinned client codec for both encoded destination families.
+// This checks codec arithmetic only; the encrypted peer fixture above supplies
+// the independent bidirectional fragmentation/delivery evidence.
+type desktopImportedMTUWire struct{ packet []byte }
+
+func (w *desktopImportedMTUWire) Read([]byte) (int, error) { return 0, io.EOF }
+func (w *desktopImportedMTUWire) Write(p []byte) (int, error) {
+	w.packet = append([]byte(nil), p...)
+	return len(p), nil
+}
+func (*desktopImportedMTUWire) Close() error { return nil }
+func (*desktopImportedMTUWire) LocalAddr() net.Addr {
+	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 12345}
+}
+func (*desktopImportedMTUWire) RemoteAddr() net.Addr {
+	return &net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 8388}
+}
+func (*desktopImportedMTUWire) SetDeadline(time.Time) error      { return nil }
+func (*desktopImportedMTUWire) SetReadDeadline(time.Time) error  { return nil }
+func (*desktopImportedMTUWire) SetWriteDeadline(time.Time) error { return nil }
+func TestRouterVPNDesktopNodeChainImportedSS2022Envelope(t *testing.T) {
+	for _, method := range []string{"2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"} {
+		for _, family := range []string{"ipv4", "ipv6"} {
+			t.Run(method+"/"+family, func(t *testing.T) {
+				size, overhead, target := 32, 50, "192.0.2.77:8788"
+				if method == "2022-blake3-aes-128-gcm" {
+					size = 16
+				}
+				if method == "2022-blake3-chacha20-poly1305" {
+					overhead = 74
+				}
+				if family == "ipv6" {
+					overhead += 12
+					target = "[2001:db8::77]:8788"
+				}
+				codec, e := SSClient.CreateMethod(context.Background(), method, SSClient.MethodOptions{Password: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{81}, size))})
+				if e != nil {
+					t.Fatal(e)
+				}
+				wire := new(desktopImportedMTUWire)
+				conn := codec.DialPacketConn(wire)
+				defer conn.Close()
+				payload := bytes.Repeat([]byte{7}, 1252)
+				n, e := conn.WriteTo(payload, M.ParseSocksaddr(target))
+				if e != nil || n != len(payload) || len(wire.packet) != len(payload)+overhead {
+					t.Fatalf("actual pinned codec envelope: bytes%d wire%d overhead%d error%v", n, len(wire.packet), overhead, e)
+				}
+			})
+		}
+	}
+}

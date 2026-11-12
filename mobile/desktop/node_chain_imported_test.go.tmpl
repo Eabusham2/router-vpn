@@ -162,6 +162,9 @@ func desktopNodeChainImportedCertificate(t *testing.T) (tls.Certificate, string)
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
 func desktopNodeChainImportedPeerStart(t *testing.T, request desktopNodeChainImportedRequest, local, remote netip.Addr) *desktopNodeChainImportedPeer {
+	return desktopNodeChainImportedPeerStartWithFactory(t, request, local, remote, nil)
+}
+func desktopNodeChainImportedPeerStartWithFactory(t *testing.T, request desktopNodeChainImportedRequest, local, remote netip.Addr, wrap func(desktopNodeUDPReferenceFactory) desktopNodeUDPReferenceFactory) *desktopNodeChainImportedPeer {
 	t.Helper()
 	if err := desktopNodeChainImportedRequestValid(request); err != nil {
 		t.Fatal(err)
@@ -170,6 +173,9 @@ func desktopNodeChainImportedPeerStart(t *testing.T, request desktopNodeChainImp
 	prefix := r.Prefixes[0]
 	p := &desktopNodeChainImportedPeer{request: request, prefix: &desktopNodeChainPrefixPeer{}}
 	factory := desktopNodeChainPrefixFactory(t, prefix, p.prefix)
+	if wrap != nil {
+		factory = wrap(factory)
+	}
 	p.paired = desktopImportedWGSSStartWithFactory(t, desktopImportedWGSSRequest{Schema: 1, Address: r.Address, ClientAddress: r.ClientAddress, PrivateKey: prefix.PrivateKey, ClientPublicKey: prefix.ClientPublicKey, PreSharedKey: prefix.PreSharedKey, FinalPassword: r.FinalPassword, NodeProofID: r.FinalNodeProofID, Token: r.FinalAPIToken, Cover: true}, local, remote, factory)
 	peer := p.paired
 	p.prefix.bind, p.prefix.handler = peer.bind, peer.entry
