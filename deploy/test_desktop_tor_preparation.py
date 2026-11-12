@@ -196,7 +196,8 @@ class DesktopPTPreparation(unittest.TestCase):
 
     def test_shipping_preparer_calls_selective_pipeline_without_mobile_tor(self):
         captured = dict(os.environ, GOTOOLCHAIN='local', GOWORK='off', GOENV='off')
-        with patch.object(PREP, 'prepare_desktop_pt') as selective, patch.object(PREP, 'write', wraps=PREP.write) as writes, \
+        with contextlib.ExitStack() as execution_stages, \
+             patch.object(PREP, 'prepare_desktop_pt') as selective, patch.object(PREP, 'write', wraps=PREP.write) as writes, \
              patch.object(PREP.RELAY.NAIVE, 'prepare') as naive_prepare, \
              patch.object(PREP.MTU, 'prepare'), patch.object(PREP.DESKTOP_MTU, 'prepare'), \
              patch.object(PREP.STRATEGY, 'prepare'), patch.object(PREP.EXTERNAL, 'prepare'), \
@@ -205,12 +206,24 @@ class DesktopPTPreparation(unittest.TestCase):
              patch.object(PREP, 'prepare_node_capture') as node_capture, \
              patch.object(PREP.RELAY.OPENVPN_REMOTE, 'prepare'), \
              contextlib.redirect_stdout(io.StringIO()):
+            # This orchestration fixture doubles prerequisite preparers. Keep
+            # the newly composed execution stages in that same boundary while
+            # requiring every actual stage exactly once and in shipping order.
+            execution_calls = []
+            for stage in PREP.NODE_EXECUTION:
+                execution_stages.enter_context(patch.object(stage, 'prepare',
+                    side_effect=lambda vendor, name=stage.__name__: execution_calls.append((name, vendor))))
             PREP.prepare(self.vendor, GO, env=captured)
             naive_prepare.assert_called_once_with(self.vendor.resolve())
             selective.assert_called_once_with(self.vendor.resolve(), GO, env=captured)
             startup.assert_called_once_with(self.vendor.resolve())
             node_capture.assert_called_once_with(self.vendor.resolve())
             chain.assert_called_once_with(self.vendor.resolve(), mobile=False)
+            self.assertEqual(execution_calls, [
+                ('desktop_prepare_node_chain_execution_gate', self.vendor.resolve()),
+                ('desktop_prepare_node_chain_execution', self.vendor.resolve()),
+                ('desktop_prepare_node_chain_execution_owner', self.vendor.resolve()),
+            ])
             generated = {call.args[1]: call.args[2] for call in writes.call_args_list}
             # The standard-exit creator shares the mandatory native inventory
             # with the socket owner. Both native witnesses must be copied by
