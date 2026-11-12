@@ -23,6 +23,9 @@ def execute(root):
     owner = owner[owner.index('func desktopSocketObservationOwner('):owner.index('func (s *desktopSocket) recordAdmissionLoss(')]
     observer = (sources/'desktop_socket_native_observation.go').read_text()
     pipe = (sources/'desktop_socket_darwin_observation.go').read_text().split('\n\n', 1)[1]
+    policy = (sources/'desktop_socket_darwin_policy.go').read_text()
+    start = policy.index('func (p *DesktopDarwinSocketPolicy) closeObservation()')
+    close_observation = policy[start:policy.index('\nfunc (p *DesktopDarwinSocketPolicy) ReleaseSocket(', start)]
     fixture = (sources/'desktop_socket_darwin_guardian_test.go').read_text()
     start = fixture.index('func desktopDarwinKernelBroker(')
     broker = fixture[start:fixture.index('\nfunc desktopDarwinKernelTrace(', start)]
@@ -152,10 +155,10 @@ func TestDarwinObservationDropsFullPipe(t *testing.T){
         # real observer/pipe; model only the broker's independent retirement.
         # An expected original test failure remains a failure in both runs.
         fixture_header = r'''package mobiletor
-import("context";"os";"syscall";"testing";"time")
+import("context";"os";"sync";"syscall";"testing";"time")
 type observedProcess struct{}
 func(*observedProcess)Signal(os.Signal)error{return nil}
-type DesktopDarwinSocketPolicy struct{capture DesktopSocketCapture;command struct{Process *observedProcess};observation *os.File}
+type DesktopDarwinSocketPolicy struct{capture DesktopSocketCapture;command struct{Process *observedProcess};observation *os.File;observationMu sync.Mutex;observationLast string;observationClosed bool}
 type DesktopSocketBroker struct{closeOriginal func()}
 var originalObservationBroker *DesktopSocketBroker
 func NewDesktopSocketBroker(context.Context,DesktopSocketCapture,*DesktopDarwinSocketPolicy,func()bool)(*DesktopSocketBroker,error){return originalObservationBroker,nil}
@@ -180,7 +183,7 @@ func TestDarwinLateOriginalReadbackAfterFailedProbe(t *testing.T){
  observation.enter(desktopNativeObservationWait,61)
  originalObservationBroker=&DesktopSocketBroker{closeOriginal:func(){
   if line:=desktopDarwinReadbackMessages(reader);line!=""{t.Error("original observation arrived before the modeled native cancellation",line)}
-  cancelNative();finish()
+  cancelNative();finish();policy.closeObservation()
  }}
  t.Run("original-probe-failed",func(t *testing.T){
   _=desktopDarwinKernelBroker(t,policy)
@@ -188,7 +191,8 @@ func TestDarwinLateOriginalReadbackAfterFailedProbe(t *testing.T){
   if native.Err()!=nil||parent.Err()!=context.Canceled{t.Fatal("independent native owner did not outlive the original probe failure")}
   t.Error("original probe receive timed out")
  })
- if line:=desktopDarwinReadbackMessages(reader);line!=""{t.Error("late original native observation was lost after bounded retirement",line)}
+ if line:=policy.readObservation();line!=""{t.Error("late original native observation was lost after bounded retirement",line)}
+ if line:=policy.readObservation();line!=""{t.Error("closed observation was replayed",line)}
  if after,_:=native.Deadline();after!=deadline||native.Err()!=context.Canceled{t.Fatal("diagnostic changed the native deadline or cancellation")}
 }
 '''
@@ -198,9 +202,10 @@ func TestDarwinLateOriginalReadbackAfterFailedProbe(t *testing.T){
         checkpoint = 'desktopDarwinKernelReadbackTrace(t, policy, "after-broker-drain")'
         if broker.count(checkpoint) != 1:
             raise RuntimeError('Darwin failed cleanup lost its exact late observation checkpoint')
-        for label, selected in (('late-original-observation', broker),
-                                ('missing-late-observation', broker.replace(checkpoint, '// mutation: late original observation omitted', 1))):
-            (folder/'fixture.go').write_text(fixture_header+selected+trace)
+        for label, selected, retention in (('late-original-observation', broker, close_observation),
+                                ('missing-late-observation', broker.replace(checkpoint, '// mutation: late original observation omitted', 1), close_observation),
+                                ('discard-before-final-trace', broker, close_observation.replace('p.observationLast = desktopDarwinReadbackMessages(p.observation)', '// mutation: original unread observation discarded', 1))):
+            (folder/'fixture.go').write_text(fixture_header+selected+trace+retention)
             files = [str(folder/name) for name in ('command.go','observer.go','owner.go','pipe.go','fixture.go','late_test.go')]
             result = subprocess.run([compiler,'test','-race','-v','-timeout=15s',*files],
                                     text=True,capture_output=True,timeout=120,
@@ -213,7 +218,10 @@ func TestDarwinLateOriginalReadbackAfterFailedProbe(t *testing.T){
             if label == 'late-original-observation':
                 if captured not in output or lost in output or 'guardian=41 request=12 operation=probe command=1 kind=pfctl phase=wait child=61' not in output:
                     raise AssertionError(output)
-            elif lost not in output or captured in output:
+            elif label == 'missing-late-observation':
+                if lost not in output or captured in output:
+                    raise AssertionError(output)
+            elif captured in output:
                 raise AssertionError(output)
             if any(invalid in output for invalid in ('panic:','fatal error:','WARNING: DATA RACE','[build failed]','did not join')):
                 raise AssertionError(output)

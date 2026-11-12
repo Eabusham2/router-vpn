@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -134,25 +135,28 @@ func (o DesktopDarwinSocketOptions) binding(owner DesktopSocketKernelOwner, remo
 // guardian. Each physical socket is created by an otherwise empty child under
 // a dedicated locked account and transferred without changing kernel identity.
 type DesktopDarwinSocketPolicy struct {
-	capture     DesktopSocketCapture
-	options     DesktopDarwinSocketOptions
-	owner       DesktopSocketKernelOwner
-	uid         uint32
-	account     string
-	pf          *desktopDarwinPF
-	channel     *net.UnixConn
-	observation *os.File
-	command     *exec.Cmd
-	mu          desktopSocketControlMutex
-	sequence    uint64
-	current     atomic.Bool
-	observed    atomic.Int64
-	loss        atomic.Pointer[desktopDarwinPolicyLoss]
-	closing     atomic.Bool
-	joined      chan struct{}
-	monitorDone chan struct{}
-	joinErr     error
-	parentStop  func() bool
+	capture           DesktopSocketCapture
+	options           DesktopDarwinSocketOptions
+	owner             DesktopSocketKernelOwner
+	uid               uint32
+	account           string
+	pf                *desktopDarwinPF
+	channel           *net.UnixConn
+	observation       *os.File
+	observationMu     sync.Mutex
+	observationLast   string
+	observationClosed bool
+	command           *exec.Cmd
+	mu                desktopSocketControlMutex
+	sequence          uint64
+	current           atomic.Bool
+	observed          atomic.Int64
+	loss              atomic.Pointer[desktopDarwinPolicyLoss]
+	closing           atomic.Bool
+	joined            chan struct{}
+	monitorDone       chan struct{}
+	joinErr           error
+	parentStop        func() bool
 }
 
 // Diagnostic only: this never grants authority or refreshes readback. Preserve
@@ -474,9 +478,27 @@ func (p *DesktopDarwinSocketPolicy) Close(ctx context.Context) error {
 }
 
 func (p *DesktopDarwinSocketPolicy) closeObservation() {
-	if p.observation != nil {
+	p.observationMu.Lock()
+	defer p.observationMu.Unlock()
+	if p.observation != nil && !p.observationClosed {
+		// Native cancellation can report after the first failure trace. Keep
+		// the final bounded bytes before closing the original reader, so the
+		// post-join diagnostic does not silently discard that observation.
+		p.observationLast = desktopDarwinReadbackMessages(p.observation)
+		p.observationClosed = true
 		p.observation.Close()
 	}
+}
+
+func (p *DesktopDarwinSocketPolicy) readObservation() string {
+	p.observationMu.Lock()
+	defer p.observationMu.Unlock()
+	if p.observationClosed {
+		last := p.observationLast
+		p.observationLast = ""
+		return last
+	}
+	return desktopDarwinReadbackMessages(p.observation)
 }
 
 func (p *DesktopDarwinSocketPolicy) ReleaseSocket(ctx context.Context, c DesktopSocketCreation) error {

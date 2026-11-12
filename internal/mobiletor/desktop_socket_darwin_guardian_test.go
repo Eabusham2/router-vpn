@@ -1063,7 +1063,7 @@ func desktopDarwinKernelReadbackTrace(t *testing.T, policy *DesktopDarwinSocketP
 	if policy == nil {
 		return
 	}
-	if messages := desktopDarwinReadbackMessages(policy.observation); messages != "" {
+	if messages := policy.readObservation(); messages != "" {
 		t.Logf("owned native readback observations phase=%s: %s", phase, messages)
 	}
 }
