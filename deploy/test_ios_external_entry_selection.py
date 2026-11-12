@@ -487,9 +487,29 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    try check("literal H2 compiler preserves captured encrypted path and route",try encoded(graph["outbounds"]!)==encoded(prior["outbounds"]!) && encoded(graph["route"]!)==encoded(prior["route"]!))
    try check("literal H2 compiler keeps Home UDP final-owned",resolvers.count==2 && resolvers[0]["type"] as? String=="udp" && resolvers[0]["server"] as? String==paired.adGuardIPv4 && resolvers[0]["server_port"] as? Int==53 && resolvers[0]["detour"] as? String=="proxy")
    try check("literal H2 compiler retains dormant lower resolver and layer owner",resolvers[1]["type"] as? String=="udp" && resolvers[1]["server"] as? String==paired.adGuardIPv4 && resolvers[1]["server_port"] as? Int==53 && resolvers[1]["detour"] as? String==(finalLayer=="off" ? "entry-wg":"start-layer-aes"))
-   for fault in ["h3","hostname-udp","literal-bootstrap"] {
+   // Selected DoH3 is executable over the final Naive UoT owner. Exercise
+   // every independently captured layer pair while retaining the dormant
+   // lower resolver; admission must not grant CONNECT a lower UDP path.
+   var h3Raw=raw;h3Raw["dns_protocol"]="h3";h3Raw["dns_port"]=5443;h3Raw["dns_server_name"]="adguard.home.example";h3Raw["dns_path"]="/owned-query"
+   var h3Final=final;h3Final.routerProfiles=[try capturedProfile(h3Raw)]
+   let h3Selection=RouterVPNModel();h3Selection.bundle=h3Final
+   IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:try encoded(h3Final)]
+   try check("literal H2 picker offers final-owned selected DoH3",h3Selection.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
+   try h3Selection.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)
+   let h3Saved=h3Selection.bundle!,h3Entry=try h3Selection.iosMultihopEntryBundle(for:h3Saved)
+   try check("literal H2 DoH3 save retains selected policy and original final sources",h3Selection.writes==1 && h3Saved.routerProfiles[0].dnsProtocol=="h3" && h3Saved.routerProfiles[0].dnsPort==5443 && h3Saved.routerProfiles[0].dnsServerName=="adguard.home.example" && h3Saved.routerProfiles[0].dnsPath=="/owned-query" && h3Saved.profiles==final.profiles)
+   try check("literal H2 DoH3 retains the exact entry and independent layers",h3Entry.routerProfiles==original.routerProfiles && h3Entry.profiles==original.profiles && h3Saved.routerProfiles[0].startLayer==paired.startLayer)
+   var h3Args=args;h3Args["profile"]=String(decoding:try encoded(h3Raw),as:UTF8.self)
+   let h3Graph=try compile(h3Args),h3Resolvers=(h3Graph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
+   try check("literal H2 DoH3 preserves captured encrypted path and route",try encoded(h3Graph["outbounds"]!)==encoded(graph["outbounds"]!) && encoded(h3Graph["route"]!)==encoded(graph["route"]!))
+   try check("literal H2 compiler keeps exact DoH3 policy final-owned",h3Resolvers.count==2 && h3Resolvers[0]["type"] as? String=="h3" && h3Resolvers[0]["server"] as? String==paired.adGuardIPv4 && h3Resolvers[0]["server_port"] as? Int==5443 && h3Resolvers[0]["path"] as? String=="/owned-query" && (h3Resolvers[0]["tls"] as? [String:Any])?["server_name"] as? String=="adguard.home.example" && h3Resolvers[0]["detour"] as? String=="proxy")
+   var h3Lower=h3Resolvers[1],h3Selected=h3Resolvers[0];h3Lower.removeValue(forKey:"tag");h3Selected.removeValue(forKey:"tag");h3Lower.removeValue(forKey:"detour");h3Selected.removeValue(forKey:"detour")
+   try check("literal H2 compiler retains exact dormant DoH3 tree and layer owner",h3Resolvers[1]["detour"] as? String==(finalLayer=="off" ? "entry-wg":"start-layer-aes") && encoded(h3Lower)==encoded(h3Selected))
+   var h3Configuration=configuration;h3Configuration["bundle"]=try encoded(h3Saved)
+   try reject("literal H2 original receipt cannot adopt selected DoH3 source"){let changedOwner=try IOSMultihopExecution.Source(configuration:h3Configuration,digest:hash);_ = try IOSMultihopExecution.StartupChoice.decode(receipt,source:changedOwner)}
+   for fault in ["unsupported-protocol","hostname-udp","literal-bootstrap"] {
     var changed=raw
-    if fault=="h3"{changed["dns_protocol"]="h3"}
+    if fault=="unsupported-protocol"{changed["dns_protocol"]="unowned-dns"}
     else if fault=="hostname-udp"{changed["dns_mode"]="custom";changed["dns_host"]="resolver.example.net"}
     else {changed["dns_bootstrap"]=["server":["type":"tcp","tag":"external-dns-bootstrap","server":"203.0.113.54","server_port":5354,"detour":"proxy"],"query":["server":"external-dns-bootstrap","timeout":"3s"]] as [String:Any]}
     var refused=final;refused.routerProfiles=[try capturedProfile(changed)]
@@ -540,12 +560,12 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
       var tcp=invalid,tcpRaw=raw;tcp.routerProfiles[0].dnsProtocol="tcp";tcpRaw["dns_protocol"]="tcp"
       let selection=RouterVPNModel();selection.bundle=tcp
       IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:try encoded(tcp)]
-      try check("H2 TCP picker retains earlier eligibility before native source validation",selection.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
-      try selection.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)
-      try check("H2 hostname layer retains saved TCP policy and original assets",selection.writes==1 && selection.bundle!.routerProfiles[0].dnsProtocol=="tcp" && selection.bundle!.profiles==tcp.profiles)
+      try check("H2 TCP picker refuses the unusable hostname layer",!selection.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
+      try reject("H2 TCP save refuses the unusable hostname layer"){try selection.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)}
+      try check("H2 hostname layer refusal retains saved TCP policy and original assets",selection.writes==0 && encoded(selection.bundle!)==encoded(tcp))
       changedArgs["profile"]=String(decoding:try encoded(tcpRaw),as:UTF8.self)
-      // The picker/native-readiness double does not establish executable
-      // source authority: the shared SS compiler already requires a literal.
+      // The real shared compiler independently enforces the same original
+      // literal peer requirement; picker refusal alone cannot establish it.
       try reject("H2 compiler preserves existing hostname layer refusal with TCP DNS"){_ = try compile(changedArgs)}
      }
     }
@@ -1329,7 +1349,7 @@ def verify_naive_h2_literal(work, compiler, runtime_env, sources):
                 originals[name] = path.read_bytes()
     result = subprocess.run([str(work/'test'), str(compiler), 'naive-h2-literal', str(sources)],
                             env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
-    if result.stdout != 'PASS Naive H2 literal layered picker 738 checks\n':
+    if result.stdout != 'PASS Naive H2 literal layered picker 876 checks\n':
         raise ValueError('Missing or foreign literal H2 layered picker verdict: '+repr(result.stdout))
     if any((sources/name).read_bytes() != value for name,value in originals.items()):
         raise ValueError('Literal H2 picker changed its original independent layer captures')
