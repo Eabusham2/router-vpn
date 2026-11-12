@@ -187,7 +187,7 @@ def namespace_program(source_sha256):
     if hashlib.sha256(raw).hexdigest() != source_sha256:
         raise ValueError('Encrypted Server namespace source changed after capture')
     tree = ast.parse(raw, filename=str(path))
-    projected = ast.parse('from pathlib import Path\nimport hashlib\nimport os\nimport platform\nimport stat\nimport subprocess\nimport sys\n').body
+    projected = ast.parse('from pathlib import Path\nimport hashlib\nimport os\nimport platform\nimport re\nimport stat\nimport subprocess\nimport sys\n').body
     for name, captured in (('CASES', CASES), ('NATIVE', NATIVE)):
         definitions = [node for node in tree.body if isinstance(node, ast.Assign)
                        and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)

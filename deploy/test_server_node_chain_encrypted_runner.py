@@ -121,7 +121,7 @@ class GateTests(unittest.TestCase):
         for name in names:
             self.assertEqual(ast.dump(actual[name]), ast.dump(transferred[name]))
         imports = [ast.unparse(node) for node in projected.body if isinstance(node, (ast.Import, ast.ImportFrom))]
-        self.assertEqual(imports, ['from pathlib import Path', 'import hashlib', 'import os', 'import platform', 'import stat', 'import subprocess', 'import sys'])
+        self.assertEqual(imports, ['from pathlib import Path', 'import hashlib', 'import os', 'import platform', 'import re', 'import stat', 'import subprocess', 'import sys'])
         namespace = {'__name__': 'projection_verification'}
         exec(compile(program, '<captured-native-namespace>', 'exec'), namespace)
         self.assertEqual(namespace['CASES'], GATE.CASES)
@@ -135,6 +135,42 @@ class GateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn('Encrypted Server needs its isolated native Linux root', result.stderr)
         self.assertNotIn('ENCRYPTED_SERVER_RECEIPT', result.stdout)
+
+    def test_projected_valid_case_dispatches_exact_driver_and_joins_cleanup(self):
+        original = (ROOT/'deploy/test_server_node_chain_encrypted.py').read_bytes()
+        program = GATE.namespace_program(hashlib.sha256(original).hexdigest())
+        with tempfile.TemporaryDirectory() as directory:
+            images = {role: Path(directory)/role for role in ('driver', 'peer', 'worker')}
+            for role, path in images.items():
+                path.write_bytes(('identity-only regression image: '+role).encode())
+                path.chmod(0o755)
+            identities = {role: GATE.image_identity(path)[-1] for role, path in images.items()}
+            def execute(projected, *, missing_dependency=False):
+                namespace = {'__name__': 'projection_verification'}
+                exec(compile(projected, '<captured-native-namespace>', 'exec'), namespace)
+                # Execute the actual transferred function through valid image,
+                # case and isolated-namespace guards. Only privileged process
+                # effects are mocked; this is not native acceptance evidence.
+                with mock.patch.object(namespace['platform'], 'system', return_value='Linux'), \
+                     mock.patch.object(namespace['os'], 'geteuid', return_value=0), \
+                     mock.patch.dict(namespace['os'].environ, {'ROUTERVPN_SERVER_CHAIN_OUTER_NETNS': '0:0'}), \
+                     mock.patch.object(namespace['subprocess'], 'run', return_value=subprocess.CompletedProcess([], 7)) as run:
+                    if missing_dependency:
+                        with self.assertRaisesRegex(NameError, "name 're' is not defined"):
+                            namespace['inside_namespace'](images['driver'], images['peer'], images['worker'], identities, 'wrong-first-key')
+                    else:
+                        self.assertEqual(namespace['inside_namespace'](images['driver'], images['peer'], images['worker'], identities, 'wrong-first-key'), 7)
+                        calls = [call for call in run.call_args_list if call.args[0][0] == str(images['driver'])]
+                        self.assertEqual(len(calls), 1)
+                        command = [str(images['driver']), '-test.run=^'+GATE.NATIVE+'$/^'+re.escape('wrong-first-key')+'$',
+                                   '-test.v', '-test.count=1', '-test.timeout=90s']
+                        self.assertEqual(calls[0].args, (command,))
+                        self.assertEqual(calls[0].kwargs['timeout'], 105)
+                        self.assertEqual(calls[0].kwargs['env']['ROUTERVPN_SERVER_CHAIN_PEER_SHA256'], identities['peer'])
+                        self.assertEqual(calls[0].kwargs['env']['ROUTERVPN_SERVER_CHAIN_IMAGE_SHA256'], identities['worker'])
+                    self.assertEqual(run.call_args, mock.call(['ip', 'netns', 'delete', 'rvpn-peer'], check=True, timeout=5))
+            execute(program)
+            execute(program.replace('import re\n', '', 1), missing_dependency=True)
 
     def test_namespace_projection_rejects_source_tamper_or_lost_inventory(self):
         path = ROOT/'deploy/test_server_node_chain_encrypted.py'
