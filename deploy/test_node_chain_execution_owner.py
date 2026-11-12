@@ -30,12 +30,16 @@ ROOTS = {
               'NativeMTUUsesJoinedReader', 'NativeMTURejectsChangedOwnership',
               'NativeMTUReadbackAndRetirementRemainOwned',
               'NativeTUNReadbackRetainsOriginal', 'NativeTUNReadbackRejectsAwayAndBack',
-              'NativeTUNReadbackRequiresJoinedClose', 'NativeTUNReadbackRejectsReplacedReader'),
-    PACKAGE+'/protocol/tun': ('TUNMTUReadbackRequiresActualOwner',),
+              'NativeTUNReadbackRequiresJoinedClose', 'NativeTUNReadbackRejectsReplacedReader',
+              'NativeTUNReadbackRejectsInCaptureChange', 'NativeTUNReadbackKeepsTypedTarget', 'NativeTUNReadbackRetainsLateClosedLedger'),
+    PACKAGE+'/protocol/tun': ('TUNMTUReadbackRequiresActualOwner', 'TUNTypedReadbackRequiresActualOwner'),
     PACKAGE+'/adapter/outbound': ('AppendPreservesActualManagers', 'AppendRejectsForeignOwnerAndLifecycle',
                                  'AppendConcurrentTagHasOneOriginalWinner'),
 }
 CHILDREN = {
+    'NativeTUNReadbackRejectsInCaptureChange': ('name', 'index', 'mtu'),
+    'NativeTUNReadbackKeepsTypedTarget': ('generic', 'linux', 'windows', 'darwin', 'missing'),
+    'TUNTypedReadbackRequiresActualOwner': ('nil', 'unstarted', 'cancelled', 'locked'),
     'NativeLastAdoptsFreshClosedGraph': ('auto-local', 'auto-server', 'server-server'),
     'NativeLastCleanupRetainsExactPlan': ('retry', 'changed-choice', 'changed-target', 'changed-port'),
     'NativeLastRejectsKindSubstitution': ('last-ordinary', 'last-restore', 'ordinary-last', 'restore-last', 'ordinary-restore', 'restore-ordinary'),
@@ -141,6 +145,10 @@ def verify(core):
 
 
 CONTROLS = (
+    ('actual typed native reader', 'routervpn_node_chain_execution_readback.go', 'return routerVPNExecutionMTUReadback{}, errRouterVPNExecutionOwner', 'return routerVPNExecutionMTUReadback{"original-tun", 14, 1400}, nil', '.', 'NativeTUNReadbackKeepsTypedTarget', 'typed native reader accepted a component TUN'),
+    ('exact original typed target', 'routervpn_node_chain_execution_readback.go', ' || target != metadata.TargetOS', ' || metadata.TargetOS == "never"', '.', 'NativeTUNReadbackKeepsTypedTarget/windows', 'native target substituted original typed platform'),
+    ('two actual native observations', 'routervpn_node_chain_execution_readback.go', 'confirmErr != nil || confirmed != actual', 'confirmErr != nil || confirmed.name == "never"', '.', 'NativeTUNReadbackRejectsInCaptureChange/name', 'single native observation accepted an interface changed during capture'),
+    ('closed native ledger after Box join', 'routervpn_node_chain_execution_readback.go', 'closed, err := capture.control.ObserveClosedContext(ctx)', 'closed, err := G.State{Identity: e.gateID, Closed: true, Drained: true}, error(nil)', '.', 'NativeTUNReadbackRetainsLateClosedLedger', 'completed Box close hid a late unjoined native gate input'),
     ('Last join before native append', 'routervpn_node_chain_execution.go', '\tif last != nil {\n\t\tif err := last.plan.RequireJoinedContext(ctx); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}\n', '', '.', 'NativeLastJoinsBeforeNativeAppend', 'unjoined Last plan changed original native graph'),
     ('exact native retry kind', 'routervpn_node_chain_execution.go', 'if captured.kind != kind || captured.owner != owner || captured.projection != projection || captured.original != originalSource || captured.last != last || captured.lastSource != lastSource {', 'if false {', '.', 'NativeLastRejectsKindSubstitution/ordinary-restore', 'cleanup retry borrowed another native adoption kind'),
     ('original Last saved choice', 'routervpn_node_chain_execution_last.go', ' || retained.raw != last.JSON()', '', '.', 'NativeLastCleanupRetainsExactPlan/changed-choice', 'Last cleanup retry accepted a replacement saved record'),

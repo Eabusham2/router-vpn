@@ -3,8 +3,11 @@ package box
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -270,5 +273,148 @@ func TestRouterVPNExecutionNativeTUNReadbackRejectsReplacedReader(t *testing.T) 
 	}
 	if e.readback.Load().value != current || !e.readback.Load().retired.Load() {
 		t.Fatal("retirement discarded its exact final reader")
+	}
+}
+
+func TestRouterVPNExecutionNativeTUNReadbackRejectsInCaptureChange(t *testing.T) {
+	for _, field := range []string{"name", "index", "mtu"} {
+		t.Run(field, func(t *testing.T) {
+			f, _, identity := executionReadbackFixture(t)
+			e := f.engine
+			original := routerVPNExecutionMTUReadback{"original-tun", 14, 1400}
+			first, err := e.captureExecutionReadbackContext(t.Context(), identity, "android", executionReadbackReader(original))
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			read := func(ctx context.Context, _ adapter.Inbound) (routerVPNExecutionMTUReadback, error) {
+				calls++
+				value := original
+				if calls == 2 {
+					switch field {
+					case "name":
+						value.name = "changed-tun"
+					case "index":
+						value.index++
+					case "mtu":
+						value.mtu--
+					}
+				}
+				return value, ctx.Err()
+			}
+			if _, err := e.captureExecutionReadbackContext(t.Context(), identity, "android", read); err == nil {
+				t.Fatal("single native observation accepted an interface changed during capture")
+			}
+			if e.readback.Load().value != first || !e.readback.Load().invalid.Load() {
+				t.Fatal("changed capture replaced or revived its original issued receipt")
+			}
+			if open, err := e.ApplicationOpenContext(t.Context()); err != nil || open {
+				t.Fatal("changed native readback did not close original admission", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionNativeTUNReadbackKeepsTypedTarget(t *testing.T) {
+	f := newExecutionNativeFixture(t, "auto", nil)
+	projection := f.adopt(t)
+	if _, err := routerVPNReadExecutionTUN(t.Context(), f.engine.reader.Load().inbound); err == nil {
+		t.Fatal("typed native reader accepted a component TUN")
+	}
+	policy, err := mobilemultihop.NewNodeChainExecutionPolicy(projection.Source())
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := mobilemultihop.NewNodeChain(f.prep.LocalSource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"generic", "linux", "windows", "darwin", "missing"} {
+		t.Run(target, func(t *testing.T) {
+			selected := projection
+			if target == "missing" {
+				selected = nil
+			} else if target != "generic" {
+				original, err := mobilemultihop.NewDesktopNodeChainPolicy(local, "fedcba9876543210fedcba9876543210", target, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				preparation, err := mobilemultihop.NewDesktopNodeChainExecutionPreparation(original, "auto")
+				if err != nil {
+					t.Fatal(err)
+				}
+				selected, err = preparation.BindExecution(policy)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, observed := range []string{"android", "ios", "linux", "windows", "darwin", "", "foreign"} {
+				err := routerVPNExecutionReadbackTarget(selected, observed)
+				allowed := target == "generic" && (observed == "android" || observed == "ios") || target != "generic" && target != "missing" && target == observed
+				if (err == nil) != allowed {
+					t.Fatal("native target substituted original typed platform", target, observed, err)
+				}
+			}
+		})
+	}
+}
+
+type executionReadbackLateClose struct {
+	net.Conn
+	allow *atomic.Bool
+}
+
+func (c *executionReadbackLateClose) Close() error {
+	if !c.allow.Load() {
+		return errors.New("original late denied input close failed")
+	}
+	return c.Conn.Close()
+}
+
+func TestRouterVPNExecutionNativeTUNReadbackRetainsLateClosedLedger(t *testing.T) {
+	f, _, identity := executionReadbackFixture(t)
+	e := f.engine
+	value, err := e.captureExecutionReadbackContext(t.Context(), identity, "ios", executionReadbackReader(routerVPNExecutionMTUReadback{"original-tun", 14, 1400}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.RetireContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	held := executionReadbackCloseFixture(t, f)
+	close(held.release)
+	if err := f.box.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The actual Box close returned; no manager or native callback may be
+	// queried to acknowledge a later original denied ingress close.
+	f.current.Store(false)
+	f.box.inbound, f.box.network = nil, nil
+	if err := e.ExecutionTUNReadbackRetiredContext(t.Context(), value); err != nil {
+		t.Fatal(err)
+	}
+	client, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	var allow atomic.Bool
+	release, err := e.gate.RetireInbound(&executionReadbackLateClose{client, &allow})
+	if err != nil || release == nil {
+		t.Fatal(err)
+	}
+	if err := release(); err == nil {
+		t.Fatal("late raw close boundary did not fail")
+	}
+	if err := e.ExecutionTUNReadbackRetiredContext(t.Context(), value); err == nil {
+		t.Fatal("completed Box close hid a late unjoined native gate input")
+	}
+	allow.Store(true)
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := peer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatal("late original native socket did not close", err)
+	}
+	if err := e.ExecutionTUNReadbackRetiredContext(t.Context(), value); err != nil {
+		t.Fatal("exact late cleanup could not join after Box retirement", err)
 	}
 }

@@ -101,6 +101,35 @@ func (t *Inbound) RouterVPNExecutionMTUReadbackContext(ctx context.Context) (str
 		return "", 0, 0, err
 	}
 	defer t.routervpnLifecycle.Unlock()
+	return t.routerVPNExecutionMTUReadbackLocked(ctx)
+}
+
+// The target is derived from this actual platform-backed reader and the native
+// build. A caller-provided name, GOOS string or options-only TUN cannot grant
+// an execution restore observation.
+func (t *Inbound) RouterVPNExecutionTUNReadbackContext(ctx context.Context) (string, string, int, int, error) {
+	if t == nil || ctx == nil || ctx.Err() != nil {
+		return "", "", 0, 0, errors.New("native TUN readback lost its original caller")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &t.routervpnLifecycle); err != nil {
+		return "", "", 0, 0, err
+	}
+	defer t.routervpnLifecycle.Unlock()
+	if t.routervpnDesktop {
+		if t.platformInterface != nil || runtime.GOOS != "linux" && runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
+			return "", "", 0, 0, errors.New("native desktop TUN readback has another platform owner")
+		}
+	} else if t.platformInterface == nil || runtime.GOOS != "android" && runtime.GOOS != "ios" {
+		return "", "", 0, 0, errors.New("native mobile TUN readback has no original platform owner")
+	}
+	name, index, mtu, err := t.routerVPNExecutionMTUReadbackLocked(ctx)
+	if err != nil || ctx.Err() != nil {
+		return "", "", 0, 0, errors.Join(err, ctx.Err())
+	}
+	return runtime.GOOS, name, index, mtu, nil
+}
+
+func (t *Inbound) routerVPNExecutionMTUReadbackLocked(ctx context.Context) (string, int, int, error) {
 	if !t.routervpnReady || t.tunIf == nil || t.platformInterface == nil && !t.routervpnDesktop || t.autoRedirect != nil {
 		return "", 0, 0, errors.New("native MTU readback requires its active owned TUN")
 	}

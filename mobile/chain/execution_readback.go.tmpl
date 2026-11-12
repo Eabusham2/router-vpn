@@ -11,6 +11,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	G "github.com/sagernet/sing-box/protocol/routervpnchaingate"
+	"github.com/sagernet/sing-box/protocol/tun"
 )
 
 // A value can describe a reader; only this retained original capture can
@@ -30,7 +31,36 @@ type routerVPNExecutionReadbackCapture struct {
 var _ mobilemultihop.NodeChainExecutionTUNReadbackEngine = (*RouterVPNNodeChainExecutionEngine)(nil)
 
 func (e *RouterVPNNodeChainExecutionEngine) CaptureExecutionTUNReadbackContext(ctx context.Context, identity mobilemultihop.NodeChainIdentity) (mobilemultihop.NodeChainExecutionTUNReadback, error) {
-	return e.captureExecutionReadbackContext(ctx, identity, runtime.GOOS, routerVPNReadExecutionMTU)
+	return e.captureExecutionReadbackContext(ctx, identity, runtime.GOOS, routerVPNReadExecutionTUN)
+}
+
+// Only the actual native reader can identify its platform ownership. The
+// public entry point supplies runtime.GOOS, never a caller-selected target.
+func routerVPNReadExecutionTUN(ctx context.Context, reader adapter.Inbound) (routerVPNExecutionMTUReadback, error) {
+	native, ok := reader.(*tun.Inbound)
+	if !ok || native == nil {
+		return routerVPNExecutionMTUReadback{}, errRouterVPNExecutionOwner
+	}
+	target, name, index, mtu, err := native.RouterVPNExecutionTUNReadbackContext(ctx)
+	if err != nil || target != runtime.GOOS || ctx.Err() != nil {
+		return routerVPNExecutionMTUReadback{}, errors.Join(err, ctx.Err(), errRouterVPNExecutionOwner)
+	}
+	return routerVPNExecutionMTUReadback{name, index, mtu}, nil
+}
+
+func routerVPNExecutionReadbackTarget(projection *mobilemultihop.NodeChainExecutionProjection, target string) error {
+	if projection == nil {
+		return errRouterVPNExecutionOwner
+	}
+	if physical, physicalErr := projection.DesktopPhysicalPolicy(); physicalErr == nil {
+		_, metadata, _, err := physical.PhysicalReadValidated()
+		if err != nil || target != metadata.TargetOS {
+			return errors.Join(err, errRouterVPNExecutionOwner)
+		}
+	} else if target != "android" && target != "ios" {
+		return errRouterVPNExecutionOwner
+	}
+	return nil
 }
 
 // The private read function is the explicit privileged-interface component
@@ -77,6 +107,9 @@ func (e *RouterVPNNodeChainExecutionEngine) captureExecutionReadbackContext(ctx 
 	if err := current(); err != nil {
 		return zero, err
 	}
+	if err := routerVPNExecutionReadbackTarget(state.projection, target); err != nil {
+		return zero, err
+	}
 	previous := e.readback.Load()
 	if previous != nil && previous.reader == reader && (previous.invalid.Load() || previous.retired.Load()) {
 		return zero, errRouterVPNExecutionOwner
@@ -88,6 +121,19 @@ func (e *RouterVPNNodeChainExecutionEngine) captureExecutionReadbackContext(ctx 
 			return zero, errors.Join(err, e.RevokeApplicationContext(ctx))
 		}
 		return zero, err
+	}
+	if err := current(); err != nil {
+		return zero, err
+	}
+	confirmed, confirmErr := read(ctx, reader.inbound)
+	if confirmErr != nil || confirmed != actual {
+		if errors.Is(confirmErr, context.Canceled) || errors.Is(confirmErr, context.DeadlineExceeded) {
+			return zero, confirmErr
+		}
+		if previous != nil && previous.reader == reader {
+			previous.invalid.Store(true)
+		}
+		return zero, errors.Join(confirmErr, errRouterVPNExecutionOwner, e.RevokeApplicationContext(ctx))
 	}
 	if err := current(); err != nil {
 		return zero, err
@@ -175,7 +221,13 @@ func (e *RouterVPNNodeChainExecutionEngine) ExecutionTUNReadbackRetiredContext(c
 		e.permit.Load() != nil || e.opening.Load() || e.revoking.Load() != 0 || e.stops.Load() != 0 || e.busy.Load() {
 		return errRouterVPNExecutionOwner
 	}
+	if err := e.closedExecutionReadbackContext(ctx, capture); err != nil {
+		return err
+	}
 	if err := capture.close.JoinContext(ctx, capture.instance); err != nil {
+		return err
+	}
+	if err := e.closedExecutionReadbackContext(ctx, capture); err != nil {
 		return err
 	}
 	if e.readback.Load() != capture || e.state.Load() != state || e.reader.Load() != capture.reader ||
@@ -183,4 +235,15 @@ func (e *RouterVPNNodeChainExecutionEngine) ExecutionTUNReadbackRetiredContext(c
 		return errRouterVPNExecutionOwner
 	}
 	return ctx.Err()
+}
+
+// Actual Box.Close completion is necessary but does not erase ownership of a
+// late denied TUN resource. Only this exact terminal ledger can acknowledge
+// its final drain after managers/source/network have already been destroyed.
+func (e *RouterVPNNodeChainExecutionEngine) closedExecutionReadbackContext(ctx context.Context, capture *routerVPNExecutionReadbackCapture) error {
+	closed, err := capture.control.ObserveClosedContext(ctx)
+	if err != nil || !closed.Closed || closed.Open || !closed.Drained || closed.Identity != e.gateID {
+		return errors.Join(err, errRouterVPNExecutionOwner)
+	}
+	return nil
 }
