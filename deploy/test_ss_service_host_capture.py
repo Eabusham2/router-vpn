@@ -111,7 +111,7 @@ public final class SSServiceCapture {
   var reloaded=new AndroidNodeStore(context);JSONObject updated=new JSONObject(new String(original,StandardCharsets.UTF_8));AndroidProfileSelection.selectedRouterProfile(updated).put("name","same owner policy");byte[] changed=updated.toString().getBytes(StandardCharsets.UTF_8);
   reloaded.applyProfileBundle(node.id,original,changed);check(new JSONObject(Files.readString(node.file.toPath())).getJSONObject("profiles").getJSONObject("shadowsocks").toString().equals(assets.toString()),"apply lost source");
   reloaded.restoreProfileBundle(node.id,original,changed);check(Arrays.equals(original,Files.readAllBytes(node.file.toPath())),"restore lost exact original bytes");
-  JSONObject restored=new JSONObject(Files.readString(node.file.toPath()));var entry=new AndroidStandardExitStore.Entry();entry.id="independent-entry";entry.protocol="socks5";
+  JSONObject restored=new JSONObject(Files.readString(node.file.toPath()));var entry=new AndroidStandardExitStore.Entry();entry.id="independent-entry";entry.protocol="socks5";entry.server="192.0.2.88";entry.serverPort=1080;entry.expectedPublicIp="203.0.113.88";
   for(String layer:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening"))for(String mode:List.of("shadowsocks","wg")){
    AndroidProfileSelection.selectedRouterProfile(restored).put("start_layer",layer);
    var capture=AndroidImportedRouterPath.compile(entry,restored,mode,"local").input;
@@ -130,12 +130,16 @@ def android(bundle,work):
  for name,text in P.STUBS.items():
   path=work/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text)
  app=work/'com/eabusham/routervpn';app.mkdir(parents=True)
+ store_dependencies=load('ss_shipping_store_dependencies',ROOT/'android/android_store_fixture.py')
+ for name,text in store_dependencies.sources().items():
+  if name.endswith('/AndroidExternalPolicy.java'):continue
+  path=work/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text)
  for name in ('AndroidNodeStore','AndroidProfileSelection'):
   shutil.copyfile(JAVA/(name+'.java'),app/(name+'.java'))
  boundaries='package com.eabusham.routervpn; import org.json.*;import java.util.*;import java.io.*;import java.nio.file.*;import java.nio.charset.StandardCharsets;\n'
  boundaries+=block(P.BOUNDARIES,'final class AndroidPrivateFileStore')+block(P.BOUNDARIES,'final class AndroidVpnMutationGuard')
- boundaries+='''final class AndroidStandardExitStore {static final class Entry {String id,protocol,method;JSONObject policy=new JSONObject();}static void validate(Entry e){if(e==null)throw new IllegalArgumentException();}}
-final class AndroidExternalPolicy {static final class Captured{String source="{}",capture="{}";}static Captured captureImportedEntry(AndroidStandardExitStore.Entry e){return new Captured();}
+ boundaries+=block(P.BOUNDARIES,'final class AndroidHomeStateStore')+block(P.BOUNDARIES,'final class AndroidRuntimeRegistry')
+ boundaries+='''final class AndroidExternalPolicy {static JSONObject profile(AndroidStandardExitStore.Entry entry){throw new AssertionError("Unentered imported ordered profile capture");}static final class Captured{String source="{}",capture="{}";}static Captured captureImportedEntry(AndroidStandardExitStore.Entry e){return new Captured();}
 '''+block((JAVA/'AndroidExternalPolicy.java').read_text(),'    static String protocol(')+'}\n'
  layer=(JAVA/'AndroidStartLayer.java').read_text()
  boundaries+='final class AndroidStartLayer {'+'\n'.join(line for line in layer.splitlines() if any('static final String '+name+' =' in line for name in ('OFF','AES','AES_XOR')))
