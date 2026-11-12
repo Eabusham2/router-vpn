@@ -37,7 +37,7 @@ class DarwinNativeDiagnostics(unittest.TestCase):
                     gate.reported_run(command, timeout=5)
                 self.assertEqual(failed.exception.returncode, 42)
                 self.assertIn(diagnostic, shown.getvalue())
-                self.assertIn('Darwin native command failure output (bounded tail):', shown.getvalue())
+                self.assertIn('Darwin native command failure output (bounded', shown.getvalue())
                 self.assertIn('\ufffd', shown.getvalue())
                 self.assertLessEqual(len(shown.getvalue()), 24*1024+128)
                 self.assertGreater(len(failed.exception.output), 60000, 'the original failure evidence was discarded')
@@ -50,6 +50,39 @@ class DarwinNativeDiagnostics(unittest.TestCase):
                     output = gate.reported_run([sys.executable, '-c', "print('actual successful command')"], timeout=5)
                 self.assertEqual(output, 'actual successful command\n')
                 self.assertEqual(shown.getvalue(), '')
+
+    def test_controller_failed_original_leaf_survives_later_successful_inventory(self):
+        gate = GATES[1]
+        original = ('=== RUN   TestOriginal/retirement\n'
+                    '    original_test.go:42: original captured child did not join\n'
+                    '    --- FAIL: TestOriginal/retirement (0.01s)\n'
+                    '--- FAIL: TestOriginal (0.01s)\n')
+        tail = '=== RUN   TestLater\n--- PASS: TestLater (0.01s)\n'*2000+'FAIL\n'
+        raw = (original+tail).encode()
+        command = [sys.executable, '-c', 'import os,sys; os.write(1,'+repr(raw)+'); sys.exit(42)']
+        shown = io.StringIO()
+        with contextlib.redirect_stderr(shown), self.assertRaises(subprocess.CalledProcessError) as failed:
+            gate.reported_run(command, timeout=5)
+        self.assertEqual(failed.exception.returncode, 42)
+        self.assertEqual(failed.exception.output, raw)
+        self.assertIn('original_test.go:42: original captured child did not join', shown.getvalue())
+        self.assertIn('--- FAIL: TestOriginal/retirement', shown.getvalue())
+        self.assertIn('--- PASS: TestLater', shown.getvalue())
+        self.assertTrue(shown.getvalue().rstrip().endswith('FAIL'))
+        self.assertLessEqual(len(shown.getvalue()), 24*1024+128)
+
+    def test_controller_multiple_failure_excerpts_remain_bounded_and_original(self):
+        gate = GATES[1]
+        raw = ''.join('=== RUN   TestOriginal'+str(index)+'\n'+
+                      'x'*6000+'\n    original_test.go:42: assertion '+str(index)+'\n'+
+                      '--- FAIL: TestOriginal'+str(index)+' (0.01s)\n' for index in range(8))
+        raw += 'later successful output\n'*3000+'FAIL\n'
+        shown = gate.native_failure_excerpt(raw)
+        for index in range(4):
+            self.assertIn('original_test.go:42: assertion '+str(index), shown)
+        self.assertLessEqual(len(shown), 24*1024)
+        self.assertTrue(shown.endswith('FAIL\n'))
+        self.assertEqual(gate.native_failure_excerpt('short original failure\n'), 'short original failure\n')
 
 
 class DarwinNativeTimeoutDiagnostics(unittest.TestCase):

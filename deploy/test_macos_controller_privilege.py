@@ -57,17 +57,34 @@ def require_native_verdicts(output):
         raise RuntimeError('Native macOS execution did not finish with one complete PASS verdict')
 
 
+def native_failure_excerpt(output):
+    """Retain original failed Go leaves before a large successful verdict tail."""
+    raw = output.decode('utf-8', errors='replace') if isinstance(output, bytes) else str(output)
+    limit = 24*1024
+    failures = list(re.finditer(r'^\s*--- FAIL: (\S+) \([^\n]*\)$', raw, re.MULTILINE))
+    names = {match.group(1) for match in failures}
+    leaves = [match for match in failures if not any(
+        name.startswith(match.group(1)+'/') for name in names)]
+    if not leaves or len(raw) <= limit:
+        return raw[-limit:]
+    excerpts = []
+    for match in leaves[:4]:
+        name = match.group(1)
+        starts = list(re.finditer(r'^=== RUN\s+'+re.escape(name)+r'\s*$', raw[:match.start()], re.MULTILINE))
+        start = starts[-1].start() if starts else max(0, match.start()-3500)
+        excerpts.append(name+':\n'+raw[max(start, match.end()-3500):match.end()])
+    context = ('Original failed native cases (bounded):\n'+'\n'.join(excerpts))[:16000]
+    separator = '\nNative process tail:\n'
+    return context+separator+raw[-(limit-len(context)-len(separator)):]
+
+
 def reported_run(command, **kwargs):
     """Expose the actual failed native child without changing its verdict."""
     try:
         return UID.run(command, **kwargs)
     except subprocess.CalledProcessError as error:
-        output = error.output or b''
-        if isinstance(output, bytes):
-            output = output[-24*1024:].decode('utf-8', errors='replace')
-        else:
-            output = str(output)[-24*1024:]
-        print('Darwin native command failure output (bounded tail):\n'+output, file=sys.stderr, flush=True)
+        output = native_failure_excerpt(error.output or b'')
+        print('Darwin native command failure output (bounded evidence):\n'+output, file=sys.stderr, flush=True)
         raise
 
 
