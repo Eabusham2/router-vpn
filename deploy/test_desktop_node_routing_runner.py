@@ -47,6 +47,28 @@ class OpenVPNConnectedCapacityVerdicts(unittest.TestCase):
             NODE.execute_baseline_suite(baseline, NODE.OPENVPN_CAPACITY_SUITE)
 
 
+class CandidateCommandVerdicts(unittest.TestCase):
+    def test_complete_actual_owner_inventory_is_mandatory(self):
+        self.assertEqual(len(NODE.CANDIDATE_COMMAND_VERDICTS), 12)
+        text = (ROOT / "deploy/test_desktop_node_physical.py").read_text()
+        self.assertEqual(text.count("suites.append(CANDIDATE_COMMAND_SUITE)"), 1)
+        output = "".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n" for name in NODE.CANDIDATE_COMMAND_VERDICTS)
+        baseline = Mock(); baseline.execute.return_value = (0, output)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(NODE.execute_baseline_suite(baseline, NODE.CANDIDATE_COMMAND_SUITE), output)
+
+    def test_no_omitted_or_failed_candidate_owner_can_pass(self):
+        names = NODE.CANDIDATE_COMMAND_VERDICTS
+        output = lambda values: "".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n" for name in values)
+        controls = [output(tuple(n for n in names if n != missing)) for missing in names]
+        controls += [output(names + (names[0],)), "PASS\n"]
+        controls += [output(names) + marker for marker in ("--- SKIP: owner (0s)\n", "DATA RACE\n", "panic: test timed out\n")]
+        for control in controls:
+            baseline = Mock(); baseline.execute.return_value = (0, control)
+            with self.subTest(control=control), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+                NODE.execute_baseline_suite(baseline, NODE.CANDIDATE_COMMAND_SUITE)
+
+
 class ExactPerformanceMutationBoundary(unittest.TestCase):
     def test_actual_legacy_methods_do_not_mutate_contextual_siblings(self):
         cases = (

@@ -297,6 +297,7 @@ func desktopRuntimeOwnedFile(name string) bool {
 		"node-source.json", "imported-source.json", "node-chain-source.json", "node-protection-transfer.json", "node-protection-retired.json", ".node-protection-retired.json.pending",
 		"node-physical-handoff-ready.json", ".node-physical-handoff-ready.json.pending", "node-physical-handoff-ack.json",
 		"node-chain-measure-request.json", ".node-chain-measure-request.json.pending", "node-chain-measure-cancel.json", ".node-chain-measure-cancel.json.pending", "node-chain-measure-result.json", ".node-chain-measure-result.json.pending",
+		"node-chain-candidate-request.json", ".node-chain-candidate-request.json.pending", "node-chain-candidate-source.json", ".node-chain-candidate-source.json.pending", "node-chain-candidate-live.json", ".node-chain-candidate-live.json.pending", "node-chain-candidate-cancel.json", ".node-chain-candidate-cancel.json.pending", "node-chain-candidate-result.json", ".node-chain-candidate-result.json.pending",
 		"node-ready.json", ".node-ready.json.pending", "node-chain-ready.json", ".node-chain-ready.json.pending",
 		"node-dns-request.json", ".node-dns-request.json.pending", "node-dns-cancel.json", ".node-dns-cancel.json.pending", "node-dns-result.json", ".node-dns-result.json.pending",
 		"external-journal-capture.json", "external-protection-transfer.json", "external-protection-retired.json", ".external-protection-retired.json.pending",
@@ -319,6 +320,11 @@ func cleanupDesktopNodeLaunch(launch *desktopNodeLaunch) error {
 			launch.chain.mu.Lock()
 			release := launch.chain.measurementRelease
 			launch.chain.measurementRelease = nil
+			launch.chain.measurementOwner = nil
+			if pending := launch.chain.candidatePending; pending != nil {
+				pending.joined.Store(true)
+				launch.chain.candidatePending = nil
+			}
 			launch.chain.mu.Unlock()
 			if release != nil {
 				release()

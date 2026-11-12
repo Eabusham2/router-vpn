@@ -117,6 +117,12 @@ func (owner *routerVPNNodeChainRuntime) pollMeasurement(ctx context.Context) err
 	if owner == nil {
 		return nil
 	}
+	if err := owner.pollCandidates(ctx); err != nil {
+		return err
+	}
+	if owner.candidates != nil {
+		return nil
+	}
 	if owner.measurement == nil {
 		info, err := owner.files.root.Lstat("node-chain-measure-request.json")
 		if errors.Is(err, os.ErrNotExist) {

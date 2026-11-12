@@ -1,0 +1,274 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// The controller supplies complete private sources separately from the public
+// receipt. A fresh catalog pulse is emitted only after the original controller
+// rechecks its actual saved catalog and source files, never from a copied list.
+type routerVPNNodeChainCandidateRequest struct {
+	Schema       int                                        `json:"schema"`
+	Request      string                                     `json:"request_id"`
+	Generation   uint64                                     `json:"generation"`
+	Deadline     int64                                      `json:"deadline_at"`
+	Position     int                                        `json:"prefix_position"`
+	Candidate    string                                     `json:"candidate_id"`
+	CaptureSHA   string                                     `json:"capture_sha256"`
+	InventorySHA string                                     `json:"inventory_sha256"`
+	Path         string                                     `json:"path_id"`
+	Capture      mobilemultihop.DesktopNodeChainReadyRecord `json:"capture"`
+}
+
+type routerVPNNodeChainCandidatePulse struct {
+	Schema     int    `json:"schema"`
+	Request    string `json:"request_id"`
+	CaptureSHA string `json:"capture_sha256"`
+	Revision   string `json:"revision"`
+	Sequence   uint64 `json:"sequence"`
+	ObservedAt int64  `json:"observed_at"`
+}
+
+type routerVPNNodeChainCandidateResult struct {
+	routerVPNNodeChainCandidateRequest
+	CompletedAt int64                      `json:"completed_at"`
+	Status      hopmeasure.CandidateStatus `json:"status"`
+}
+
+type routerVPNNodeChainCandidate struct {
+	request                      routerVPNNodeChainCandidateRequest
+	raw                          []byte
+	info, sourceInfo, cancelInfo os.FileInfo
+	configInfo, chainInfo        os.FileInfo
+	service                      *hopmeasure.CandidateService
+	cancel                       context.CancelFunc
+	state                        *routerVPNNodeChainProofState
+	revision                     string
+	config                       string // exact config retained after full admission validation
+	started                      bool
+}
+
+type routerVPNNodeChainCandidateOwner struct {
+	routerVPNNodeChainMeasurementOwner
+	op *routerVPNNodeChainCandidate
+}
+
+func (m *routerVPNNodeChainCandidateOwner) CandidateInventoryCurrentContext(ctx context.Context, capture string) error {
+	if m == nil || m.op == nil || capture != m.op.request.CaptureSHA ||
+		m.owner.candidateInputCurrent(ctx, m.op) != nil {
+		return routerVPNExternalFailure
+	}
+	var raw []byte
+	var err error
+	// The original controller atomically renews this small observation file.
+	// Retry a raced inode snapshot within the same caller; never renew its age
+	// locally or accept a partial, malformed or different-catalog pulse.
+	for attempt := 0; attempt < 4; attempt++ {
+		raw, err = m.owner.files.read("node-chain-candidate-live.json", 4096)
+		if err == nil || ctx.Err() != nil {
+			break
+		}
+	}
+	var pulse routerVPNNodeChainCandidatePulse
+	now := time.Now().UnixMilli()
+	if err != nil || !routerVPNMTUStrict(raw, &pulse) || pulse.Schema != 1 ||
+		pulse.Request != m.op.request.Request || pulse.CaptureSHA != capture ||
+		pulse.Revision != m.op.revision || pulse.Sequence == 0 || pulse.ObservedAt > now ||
+		now-pulse.ObservedAt > 1500 || pulse.ObservedAt > m.op.request.Deadline {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func (owner *routerVPNNodeChainRuntime) candidateRequestCurrent(ctx context.Context, request routerVPNNodeChainCandidateRequest) error {
+	return owner.measurementRequestCurrent(ctx, routerVPNNodeChainMeasurementRequest{
+		Path: request.Path, Capture: request.Capture,
+	})
+}
+
+// Called by probe workers: only immutable state and original source identities
+// are observed here. The command loop exclusively owns operation retirement.
+func (owner *routerVPNNodeChainRuntime) candidateInputCurrent(ctx context.Context, op *routerVPNNodeChainCandidate) error {
+	if ctx == nil || ctx.Err() != nil || op == nil || owner == nil ||
+		owner.state.Load() != op.state || owner.nativeCurrent(ctx, op.state) != nil ||
+		owner.files.stopRequested(op.request.Capture.Identity.SessionID, op.request.Capture.Identity.ConfigSHA256) {
+		return routerVPNExternalFailure
+	}
+	for _, item := range []struct {
+		name     string
+		info     os.FileInfo
+		limit    int64
+		expected string
+	}{
+		{"node-chain-candidate-request.json", op.info, 16384, string(op.raw)},
+		{"sing-box.json", op.configInfo, mobilemultihop.NodeChainInputLimit, op.config},
+		{"node-chain-source.json", op.chainInfo, mobilemultihop.NodeChainInputLimit, owner.input},
+	} {
+		info, err := owner.files.root.Lstat(item.name)
+		raw, readErr := owner.files.read(item.name, item.limit)
+		valid := err == nil && readErr == nil && os.SameFile(info, item.info) && string(raw) == item.expected
+		clear(raw)
+		if !valid {
+			return routerVPNExternalFailure
+		}
+	}
+	info, err := owner.files.root.Lstat("node-chain-candidate-source.json")
+	raw, readErr := owner.files.read("node-chain-candidate-source.json", mobilemultihop.NodeChainInputLimit)
+	sum := sha256.Sum256(raw)
+	clear(raw)
+	if err != nil || readErr != nil || !os.SameFile(info, op.sourceInfo) || hex.EncodeToString(sum[:]) != op.request.InventorySHA {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func (owner *routerVPNNodeChainRuntime) pollCandidates(ctx context.Context) error {
+	if owner == nil {
+		return nil
+	}
+	if owner.candidates == nil {
+		info, err := owner.files.root.Lstat("node-chain-candidate-request.json")
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		raw, readErr := owner.files.read("node-chain-candidate-request.json", 16384)
+		var request routerVPNNodeChainCandidateRequest
+		now := time.Now()
+		if err != nil || readErr != nil || !routerVPNMTUStrict(raw, &request) || request.Schema != 1 ||
+			!routerVPNExternalSession.MatchString(request.Request) || request.Request == owner.candidateLast ||
+			owner.candidateGeneration == ^uint64(0) || request.Generation != owner.candidateGeneration+1 ||
+			!routerVPNExternalSource.MatchString(request.CaptureSHA) || !routerVPNExternalSource.MatchString(request.InventorySHA) ||
+			request.Deadline <= now.UnixMilli() || request.Deadline > now.Add(hopmeasure.RequestTimeout).UnixMilli() ||
+			request.Capture.ObservedAt > now.UnixMilli() || now.UnixMilli()-request.Capture.ObservedAt > 2500 ||
+			owner.measurement != nil || owner.measurementHold.Load() || owner.candidateRequestCurrent(ctx, request) != nil {
+			return routerVPNExternalFailure
+		}
+		state := owner.state.Load()
+		chain, ok := state.proof.(*mobilemultihop.NodeChain)
+		if !ok || chain == nil {
+			return routerVPNExternalFailure
+		}
+		inventory, err := owner.files.read("node-chain-candidate-source.json", mobilemultihop.NodeChainInputLimit)
+		if err != nil {
+			return err
+		}
+		defer clear(inventory)
+		plan, err := chain.NewCandidatePlan(request.Position, string(inventory))
+		if err != nil || plan.CaptureSHA256() != request.CaptureSHA {
+			return routerVPNExternalFailure
+		}
+		var record mobilemultihop.NodeChainCandidateInventory
+		if json.Unmarshal(inventory, &record) != nil {
+			return routerVPNExternalFailure
+		}
+		configInfo, configErr := owner.files.root.Lstat("sing-box.json")
+		chainInfo, chainErr := owner.files.root.Lstat("node-chain-source.json")
+		sourceInfo, sourceErr := owner.files.root.Lstat("node-chain-candidate-source.json")
+		if configErr != nil || chainErr != nil || sourceErr != nil {
+			return routerVPNExternalFailure
+		}
+		work, cancel := context.WithDeadline(owner.ctx, time.UnixMilli(request.Deadline))
+		op := &routerVPNNodeChainCandidate{request: request, raw: raw, info: info, sourceInfo: sourceInfo,
+			configInfo: configInfo, chainInfo: chainInfo, cancel: cancel, state: state, revision: record.Revision, config: chain.Config()}
+		measurementOwner := &routerVPNNodeChainCandidateOwner{routerVPNNodeChainMeasurementOwner{owner, state, chain}, op}
+		service, err := plan.NewMeasurementContext(ctx, measurementOwner)
+		if err != nil {
+			cancel()
+			return err
+		}
+		op.service = service
+		owner.candidates = op // Retain before Start or any fallible cleanup.
+		if info, err := owner.files.root.Lstat("node-chain-candidate-cancel.json"); !errors.Is(err, os.ErrNotExist) {
+			body, readErr := owner.files.read("node-chain-candidate-cancel.json", 16384)
+			if err != nil || readErr != nil || !bytes.Equal(body, raw) {
+				cancel()
+				return routerVPNExternalFailure
+			}
+			op.cancelInfo = info
+			cancel()
+		} else {
+			if err := service.StartContext(work, request.Request, request.Candidate); err != nil {
+				cancel()
+				return err
+			}
+			op.started = true
+		}
+	}
+	op := owner.candidates
+	if owner.candidateInputCurrent(ctx, op) != nil {
+		op.service.Cancel(op.request.Request)
+		return routerVPNExternalFailure
+	}
+	if info, err := owner.files.root.Lstat("node-chain-candidate-cancel.json"); !errors.Is(err, os.ErrNotExist) {
+		raw, readErr := owner.files.read("node-chain-candidate-cancel.json", 16384)
+		if err != nil || readErr != nil || !bytes.Equal(raw, op.raw) || op.cancelInfo != nil && !os.SameFile(info, op.cancelInfo) {
+			op.service.Cancel(op.request.Request)
+			return routerVPNExternalFailure
+		}
+		op.cancelInfo = info
+		op.service.Cancel(op.request.Request)
+	}
+	var status hopmeasure.CandidateStatus
+	if !op.started {
+		status = routerVPNCancelledCandidate(op.request)
+	} else if json.Unmarshal([]byte(op.service.StatusContextJSON(ctx)), &status) != nil || status.Request != op.request.Request {
+		return routerVPNExternalFailure
+	}
+	if !status.Complete || !status.Drained {
+		return nil
+	}
+	if op.started {
+		if err := op.service.Drain(op.request.Request); err != nil {
+			return err
+		}
+	}
+	if owner.measurementHold.Load() || owner.candidateInputCurrent(ctx, op) != nil {
+		return routerVPNExternalFailure
+	}
+	result := routerVPNNodeChainCandidateResult{routerVPNNodeChainCandidateRequest: op.request, CompletedAt: time.Now().UnixMilli(), Status: status}
+	if result.CompletedAt > op.request.Deadline || op.cancelInfo != nil {
+		result.Status = routerVPNCancelledCandidate(op.request)
+	}
+	if err := owner.files.publish("node-chain-candidate-result.json", result); err != nil {
+		return err
+	}
+	if err := owner.candidateInputCurrent(ctx, op); err != nil {
+		return err
+	}
+	if err := op.service.CloseContext(ctx); err != nil {
+		return err
+	}
+	for _, item := range []struct {
+		name string
+		info os.FileInfo
+	}{
+		{"node-chain-candidate-cancel.json", op.cancelInfo},
+		{"node-chain-candidate-request.json", op.info},
+	} {
+		if item.info == nil {
+			continue
+		}
+		info, err := owner.files.root.Lstat(item.name)
+		if err != nil || !os.SameFile(info, item.info) || owner.files.root.Remove(item.name) != nil {
+			return routerVPNExternalFailure
+		}
+	}
+	op.cancel()
+	owner.candidateGeneration, owner.candidateLast, owner.candidates = op.request.Generation, op.request.Request, nil
+	return nil
+}
+
+func routerVPNCancelledCandidate(request routerVPNNodeChainCandidateRequest) hopmeasure.CandidateStatus {
+	return hopmeasure.CandidateStatus{Schema: 1, Measurement: "routed-tcp-connect", PrefixPosition: request.Position, CaptureSHA256: request.CaptureSHA,
+		Status: hopmeasure.Status{Request: request.Request, Stage: "cancelled", Complete: true, Drained: true, Failure: "Candidate timing cancelled", Results: []hopmeasure.Result{}}}
+}

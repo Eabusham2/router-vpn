@@ -31,6 +31,8 @@ type desktopNodeChainMeasurementResult struct {
 
 var errDesktopNodeChainMeasurementPending = errors.New("ordered native measurement drain remains owned")
 
+type desktopNodeChainMeasurementHold struct{ release func() }
+
 func measureSpeedLabOrderedHops(ctx context.Context, a *app, identity speedLabPathIdentity) ([]speedLabHopMeasurement, error) {
 	if identity.Ordered == nil || identity.Ordered.launch == nil || identity.Ordered.launch.chain == nil {
 		return nil, errors.New("ordered measurement has no retained original launch")
@@ -68,14 +70,21 @@ func beginDesktopNodeChainMeasurementHold(ctx context.Context, a *app, launch *d
 		release()
 		return nil, errDesktopNodeChainMeasurementPending
 	}
+	owner := &desktopNodeChainMeasurementHold{release: release}
 	launch.chain.measurementRelease = release
+	launch.chain.measurementOwner = owner
 	launch.chain.mu.Unlock()
 	return func(joined bool) {
 		if !joined {
 			return
 		}
 		launch.chain.mu.Lock()
+		if launch.chain.measurementOwner != owner {
+			launch.chain.mu.Unlock()
+			return
+		}
 		launch.chain.measurementRelease = nil
+		launch.chain.measurementOwner = nil
 		launch.chain.mu.Unlock()
 		release()
 	}, nil
@@ -315,7 +324,8 @@ func publishDesktopNodeChainMeasurement(ctx context.Context, launch *desktopNode
 // visible. Link is atomic and refuses an existing destination on all desktop
 // platforms; Rename could overwrite a replacement owner's request.
 func publishDesktopNodeChainMeasurementWithWriter(ctx context.Context, launch *desktopNodeLaunch, name string, raw []byte, write func(*os.File, []byte) error) error {
-	if launch == nil || launch.directoryRoot == nil || (name != "node-chain-measure-request.json" && name != "node-chain-measure-cancel.json") || len(raw) == 0 || len(raw) > 16384 || write == nil {
+	limit := desktopNodeChainMailboxLimit(name)
+	if launch == nil || launch.directoryRoot == nil || limit == 0 || len(raw) == 0 || len(raw) > limit || write == nil {
 		return errors.New("invalid ordered measurement message")
 	}
 	if err := mobilemtu.LockContext(ctx, &launch.workspaceMu); err != nil {
@@ -362,6 +372,18 @@ func publishDesktopNodeChainMeasurementWithWriter(ctx context.Context, launch *d
 	// After Link the native consumer may immediately consume the public name.
 	// The caller owns cancellation/drain even if its context ends right now.
 	return launch.directoryRoot.Link(temporary, name)
+}
+
+func desktopNodeChainMailboxLimit(name string) int {
+	switch name {
+	case "node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-candidate-request.json", "node-chain-candidate-cancel.json":
+		return 16384
+	case "node-chain-candidate-source.json":
+		return mobilemultihop.NodeChainInputLimit
+	case "node-chain-candidate-live.json":
+		return 4096
+	}
+	return 0
 }
 
 // Cancellation can race an already completed native query. Remove only this

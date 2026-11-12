@@ -187,7 +187,7 @@ func routerVPNRunLinuxPhysicalFamilyControlled(parent context.Context, directory
 		}{routerVPNExternalStop{Schema: 1, Session: session, SourceSHA256: config}, true}
 		failure = errors.Join(failure, files.publish("stopped.json", closed))
 	}()
-	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-chain-ready.json", "node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-measure-result.json", "node-protection-retired.json", "stopped.json", "node-protection-transfer.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json"} {
+	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-chain-ready.json", "node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-measure-result.json", "node-chain-candidate-request.json", "node-chain-candidate-source.json", "node-chain-candidate-live.json", "node-chain-candidate-cancel.json", "node-chain-candidate-result.json", "node-protection-retired.json", "stopped.json", "node-protection-transfer.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json"} {
 		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 			return routerVPNExternalFailure
 		}

@@ -1,0 +1,260 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func TestRouterVPNDesktopNodeChainCandidatesRejectUnprovedAdmission(t *testing.T) {
+	for _, fault := range []string{"unproved", "generation", "deadline", "reader", "capture", "overlap"} {
+		t.Run(fault, func(t *testing.T) {
+			f := desktopNodeChainRuntimeFixture(t)
+			f.start(t)
+			q := routerVPNNodeChainCandidateRequest{Schema: 1, Request: strings.Repeat("a", 32), Generation: 1, Deadline: time.Now().Add(time.Minute).UnixMilli(), Position: 0, Candidate: "saved", CaptureSHA: strings.Repeat("b", 64), InventorySHA: strings.Repeat("c", 64), Path: f.mtu.record.Path, Capture: f.ready(t)}
+			switch fault {
+			case "generation":
+				q.Generation++
+			case "deadline":
+				q.Deadline = time.Now().Add(2 * time.Minute).UnixMilli()
+			case "reader":
+				q.Capture.Reader++
+			case "capture":
+				q.CaptureSHA = "invalid"
+			case "overlap":
+				f.runtime.measurementHold.Store(true)
+				defer f.runtime.measurementHold.Store(false)
+			}
+			raw, _ := json.Marshal(q)
+			if err := os.WriteFile(filepath.Join(f.runtime.files.root.Name(), "node-chain-candidate-request.json"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.runtime.pollMeasurement(context.Background()); err == nil {
+				t.Fatal("unproved candidate admission succeeded")
+			}
+			if f.runtime.candidates != nil {
+				t.Fatal("refused candidate acquired worker")
+			}
+			if _, err := f.runtime.files.root.Lstat("node-chain-candidate-result.json"); !os.IsNotExist(err) {
+				t.Fatal("unproved candidate fabricated receipt", err)
+			}
+		})
+	}
+}
+
+type desktopCandidateHeldClose struct {
+	net.Conn
+	entered chan struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (c *desktopCandidateHeldClose) Close() error {
+	c.once.Do(func() { close(c.entered) })
+	<-c.release
+	return c.Conn.Close()
+}
+
+// Actual authenticated chain proof and fifty actual TCP connections run through
+// the shipping service/mailbox. Native outbound routing remains an explicit
+// double in this test; the mandatory encrypted-prefix witness covers that hop.
+func TestRouterVPNDesktopNodeChainCandidatesOwnedComposition(t *testing.T) {
+	if fault := os.Getenv("ROUTERVPN_CANDIDATE_COMPOSITION"); fault == "" {
+		for _, fault := range []string{"success", "cancel-drain", "stale-catalog", "retirement-drain"} {
+			t.Run(fault, func(t *testing.T) {
+				executable, err := os.Executable()
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+				defer cancel()
+				command := exec.CommandContext(ctx, executable, "-test.run=^TestRouterVPNDesktopNodeChainCandidatesOwnedComposition$", "-test.timeout=30s")
+				command.Env = append(os.Environ(), "ROUTERVPN_CANDIDATE_COMPOSITION="+fault)
+				if output, err := command.CombinedOutput(); err != nil {
+					t.Fatalf("candidate composition: %v\n%s", err, output)
+				}
+			})
+		}
+		return
+	}
+	fault := os.Getenv("ROUTERVPN_CANDIDATE_COMPOSITION")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	var accepted, dials atomic.Int64
+	acceptedAll := make(chan struct{})
+	joined := make(chan struct{})
+	go func() {
+		defer close(joined)
+		for {
+			c, e := listener.Accept()
+			if e != nil {
+				return
+			}
+			if accepted.Add(1) == 50 {
+				close(acceptedAll)
+			}
+			_ = c.Close()
+		}
+	}()
+	defer func() { _ = listener.Close(); <-joined }()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	f := desktopNodeChainHTTPMeasurementFixture(t, func(engine *desktopNodeChainMeasurementHTTPFixture) {
+		engine.candidate = func(ctx context.Context, tag, address string) (net.Conn, bool, error) {
+			if address != "198.51.100.12:8388" {
+				return nil, false, nil
+			}
+			if tag != engine.first {
+				return nil, true, errors.New("candidate bypassed captured first prefix")
+			}
+			sequence := dials.Add(1)
+			conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
+			if err == nil && sequence == 1 && fault != "success" {
+				return &desktopCandidateHeldClose{Conn: conn, entered: entered, release: release}, true, nil
+			}
+			return conn, true, err
+		}
+	})
+	state := f.runtime.state.Load()
+	chain, ok := state.proof.(*mobilemultihop.NodeChain)
+	if !ok {
+		t.Fatal("actual proved chain missing")
+	}
+	input, _ := chain.LaunchInput()
+	var source struct {
+		Nodes []string `json:"nodes"`
+	}
+	if json.Unmarshal([]byte(input), &source) != nil || len(source.Nodes) != 3 {
+		t.Fatal("missing original candidate source")
+	}
+	inventory, _ := json.Marshal(mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "live-catalog-1", Inputs: []string{source.Nodes[2]}})
+	plan, err := chain.NewCandidatePlan(0, string(inventory))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(inventory)
+	request := routerVPNNodeChainCandidateRequest{Schema: 1, Request: strings.Repeat("c", 32), Generation: 1, Deadline: time.Now().Add(20 * time.Second).UnixMilli(), Position: 0, Candidate: chain.ProofInventory()[2].ProfileID,
+		CaptureSHA: plan.CaptureSHA256(), InventorySHA: hex.EncodeToString(sum[:]), Path: f.mtu.record.Path, Capture: f.ready(t)}
+	raw, _ := json.Marshal(request)
+	pulse := routerVPNNodeChainCandidatePulse{Schema: 1, Request: request.Request, CaptureSHA: request.CaptureSHA, Revision: "live-catalog-1", Sequence: 1, ObservedAt: time.Now().UnixMilli()}
+	for name, raw := range map[string][]byte{"node-chain-candidate-source.json": inventory, "node-chain-candidate-request.json": raw} {
+		if err := os.WriteFile(filepath.Join(f.runtime.files.root.Name(), name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.runtime.files.publish("node-chain-candidate-live.json", pulse); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.runtime.pollMeasurement(context.Background()); err != nil {
+		t.Fatal("candidate admission", err)
+	}
+	if fault != "success" {
+		select {
+		case <-entered:
+		case <-time.After(3 * time.Second):
+			t.Fatal("original candidate did not enter its actual socket close")
+		}
+		if !f.runtime.measurementHold.Load() || f.runtime.beforeChange(context.Background(), 1380) == nil {
+			t.Fatal("undrained candidate admitted MTU change")
+		}
+		switch fault {
+		case "cancel-drain":
+			if err := os.WriteFile(filepath.Join(f.runtime.files.root.Name(), "node-chain-candidate-cancel.json"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+		case "stale-catalog":
+			pulse.Revision = "live-catalog-2"
+			if err := f.runtime.files.publish("node-chain-candidate-live.json", pulse); err != nil {
+				t.Fatal(err)
+			}
+		case "retirement-drain":
+			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+			err := f.runtime.close(ctx)
+			cancel()
+			if err == nil || f.runtime.candidates == nil || !f.runtime.measurementHold.Load() || f.runtime.state.Load() != state {
+				t.Fatal("failed candidate drain abandoned original owner", err)
+			}
+			unblock()
+			ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := f.runtime.close(ctx); err != nil {
+				t.Fatal("original candidate retirement retry", err)
+			}
+			if f.runtime.candidates != nil || f.runtime.measurementHold.Load() {
+				t.Fatal("retired candidate retained hold")
+			}
+			return
+		}
+		if err := f.runtime.pollMeasurement(context.Background()); err != nil {
+			t.Fatal("cancellation must preserve healthy chain", err)
+		}
+		if !f.runtime.measurementHold.Load() || f.runtime.candidates == nil {
+			t.Fatal("unjoined socket yielded ownership")
+		}
+		unblock()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for f.runtime.candidates != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("candidate did not drain")
+		}
+		if fault == "success" {
+			pulse.Sequence++
+			pulse.ObservedAt = time.Now().UnixMilli()
+			if err := f.runtime.files.publish("node-chain-candidate-live.json", pulse); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := f.runtime.pollMeasurement(context.Background()); err != nil {
+			t.Fatal("candidate poll", err)
+		}
+		if err := f.runtime.heartbeat(context.Background(), f.mtu.record); err != nil {
+			t.Fatal("candidate disturbed original heartbeat", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	body, err := f.runtime.files.read("node-chain-candidate-result.json", 128<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result routerVPNNodeChainCandidateResult
+	if json.Unmarshal(body, &result) != nil || result.routerVPNNodeChainCandidateRequest != request || !result.Status.Drained || f.runtime.measurementHold.Load() {
+		t.Fatal("invalid original receipt")
+	}
+	if fault == "success" {
+		select {
+		case <-acceptedAll:
+		case <-time.After(time.Second):
+			t.Fatal("native candidate service did not produce fifty accepted destination sockets")
+		}
+		if dials.Load() != 50 || accepted.Load() != 50 || result.Status.Failure != "" || len(result.Status.Results) != 1 || result.Status.Results[0].Benchmark == nil || result.Status.Results[0].Benchmark.Distribution.Samples != 50 || result.Status.Measurement != "routed-tcp-connect" {
+			t.Fatal("missing actual fifty-connection receipt", dials.Load(), accepted.Load(), string(body))
+		}
+	} else if result.Status.Failure == "" || len(result.Status.Results) != 0 || dials.Load() != 1 {
+		t.Fatal("cancelled or stale candidate gained score", string(body))
+	}
+	if f.runtime.state.Load() != state || chain != state.proof || f.runtime.current(context.Background()) != nil {
+		t.Fatal("candidate replaced or retired healthy original chain")
+	}
+	if _, err := f.runtime.files.root.Lstat("node-chain-candidate-request.json"); !os.IsNotExist(err) {
+		t.Fatal("original request remained after drain", err)
+	}
+}

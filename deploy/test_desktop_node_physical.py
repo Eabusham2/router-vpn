@@ -40,6 +40,12 @@ OPENVPN_CAPACITY_VERDICTS = (OPENVPN_CAPACITY_PARENT,) + tuple(
     for network in ("tcp", "udp") for outcome in ("success", "wrong-password"))
 OPENVPN_CAPACITY_SUITE = ("openvpn-connected-capacity", "./protocol/routervpnamnezia",
                           "^" + OPENVPN_CAPACITY_PARENT + "$", OPENVPN_CAPACITY_VERDICTS)
+CANDIDATE_COMMAND_ADMISSION = "TestRouterVPNDesktopNodeChainCandidatesRejectUnprovedAdmission"
+CANDIDATE_COMMAND_COMPOSITION = "TestRouterVPNDesktopNodeChainCandidatesOwnedComposition"
+CANDIDATE_COMMAND_VERDICTS = (CANDIDATE_COMMAND_ADMISSION, CANDIDATE_COMMAND_COMPOSITION,
+    *(CANDIDATE_COMMAND_ADMISSION + "/" + leaf for leaf in ("unproved", "generation", "deadline", "reader", "capture", "overlap")),
+    *(CANDIDATE_COMMAND_COMPOSITION + "/" + leaf for leaf in ("success", "cancel-drain", "stale-catalog", "retirement-drain")))
+CANDIDATE_COMMAND_SUITE = ("ordered-candidate-owner", "./cmd/sing-box", "^TestRouterVPNDesktopNodeChainCandidates", CANDIDATE_COMMAND_VERDICTS)
 MTU_CONTEXT_VERDICTS = {
     "mtu-operation-context": [
         "TestContextOperationAdmissionAndStatusDoNotLeaveWaiters",
@@ -1143,6 +1149,8 @@ def execute_baseline_suite(baselines, suite):
         raise ValueError("Node " + name + " omitted a required native boundary")
     if name == OPENVPN_CAPACITY_SUITE[0]:
         require_native_verdicts(output, OPENVPN_CAPACITY_VERDICTS, "OpenVPN authenticated live capacity")
+    if name == CANDIDATE_COMMAND_SUITE[0]:
+        require_native_verdicts(output, CANDIDATE_COMMAND_VERDICTS, "ordered candidate original native owner")
     if name == NAIVE_TRANSPORT_SUITE[0]:
         require_native_verdicts(output, NAIVE_TRANSPORT_VERDICTS, "Naive H2 TCP, captured literal H3 UDP and original raw hostname owner")
     if name == NAIVE_LITERAL_SUITE[0]:
@@ -1381,6 +1389,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                    ("TestRouterVPNDesktopNodeChainMeasurementAdmissionRetainsReader",
                     "TestRouterVPNDesktopNodeChainMeasurementExcludesMTUAndRetiredReader",
                     "TestRouterVPNDesktopNodeChainMeasurementHTTPComposition")))
+    suites.append(CANDIDATE_COMMAND_SUITE)
     suites.append(("command-observation-context", "./cmd/sing-box",
                    "^TestRouterVPNDesktop(NetworkProjectionContextPreservesObservationErrors|NativeNetworkProjectionCancelsHeldOwnerLock|StopInterruptsOriginalNetworkObserver)$",
                    ("TestRouterVPNDesktopNetworkProjectionContextPreservesObservationErrors", "TestRouterVPNDesktopNativeNetworkProjectionCancelsHeldOwnerLock", "TestRouterVPNDesktopStopInterruptsOriginalNetworkObserver")))

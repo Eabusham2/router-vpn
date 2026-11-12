@@ -38,6 +38,9 @@ type routerVPNNodeChainRuntime struct {
 	measurementGeneration uint64
 	measurementLast       string
 	measurementHold       atomic.Bool
+	candidates            *routerVPNNodeChainCandidate
+	candidateGeneration   uint64
+	candidateLast         string
 }
 
 type routerVPNNodeChainProofState struct {
@@ -229,6 +232,14 @@ func (owner *routerVPNNodeChainRuntime) beforeChange(ctx context.Context, value 
 func (owner *routerVPNNodeChainRuntime) close(ctx context.Context) error {
 	if owner == nil {
 		return nil
+	}
+	if owner.candidates != nil {
+		owner.candidates.cancel()
+		owner.candidates.service.Invalidate()
+		if err := owner.candidates.service.CloseContext(ctx); err != nil {
+			return err
+		}
+		owner.candidates = nil
 	}
 	if owner.measurement != nil {
 		if err := owner.measurement.service.CloseContext(ctx); err != nil {

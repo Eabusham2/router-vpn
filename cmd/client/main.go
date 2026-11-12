@@ -46,6 +46,8 @@ type app struct {
 	localController        *linuxOwnedController
 	modes                  []common.Mode
 	profiles               common.RouterProfileStore
+	profileCatalogEpoch    uint64 // protected by mu; advances on source changes, including change-away/back
+	profileCatalogDigest   string // protected by mu; excludes historical measurement readback
 	mu                     sync.Mutex
 	operationMu            sync.Mutex
 	closing                bool // protected by mu; terminal controller shutdown admission
@@ -777,6 +779,9 @@ func (a *app) persistProfiles() error {
 }
 
 func (a *app) persistProfilesLocked() error {
+	if _, err := a.candidateCatalogRevisionLocked(); err != nil {
+		return err
+	}
 	b, err := json.MarshalIndent(a.profiles, "", "  ")
 	if err != nil {
 		return err

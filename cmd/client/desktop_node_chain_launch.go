@@ -27,6 +27,10 @@ type desktopNodeChainLaunch struct {
 	measurementGeneration uint64
 	measurementLast       string
 	measurementRelease    func()
+	measurementOwner      *desktopNodeChainMeasurementHold     // protected by mu
+	candidateGeneration   uint64                               // serialized by measurementMu
+	candidateLast         string                               // serialized by measurementMu
+	candidatePending      *desktopNodeChainCandidateRetirement // protected by mu
 }
 
 func newDesktopNodeChainLaunch(selection multihopSelection, session, target string) (*desktopNodeLaunch, error) {
