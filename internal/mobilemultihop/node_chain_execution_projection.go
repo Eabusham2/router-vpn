@@ -12,9 +12,10 @@ const NodeChainExecutionGateTag = "routervpn-chain-application"
 // source before entry-authenticated discovery is available. It grants no
 // application forwarding and contains no guessed server source or port.
 type NodeChainExecutionPreparationSource struct {
-	Schema      int    `json:"schema"`
-	Execution   string `json:"execution"`
-	LocalSource string `json:"local_source"`
+	Schema      int                       `json:"schema"`
+	Execution   string                    `json:"execution"`
+	LocalSource string                    `json:"local_source"`
+	Desktop     *DesktopNodeChainMetadata `json:"desktop,omitempty"`
 }
 
 // NodeChainExecutionDiscoveryCapture is private original-route authority. The
@@ -55,6 +56,8 @@ type NodeChainExecutionPreparation struct {
 	discovery                                      NodeChainExecutionDiscoveryCapture
 	dns                                            NodeChainExecutionDNSCapture
 	physical                                       []PhysicalEgress
+	desktop                                        *DesktopNodeChainPolicy
+	desktopPhysical                                *DesktopNodeChainExecutionPhysicalPolicy
 }
 
 // NewNodeChainExecutionPreparation keeps one complete original Local graph,
@@ -63,6 +66,10 @@ type NodeChainExecutionPreparation struct {
 // (including explicit bootstrap) already uses that exact selector so extending
 // the graph never replaces a constructed resolver or its detour pointer.
 func NewNodeChainExecutionPreparation(localSource, execution string) (*NodeChainExecutionPreparation, error) {
+	return newNodeChainExecutionPreparation(localSource, execution, nil)
+}
+
+func newNodeChainExecutionPreparation(localSource, execution string, desktop *DesktopNodeChainPolicy) (*NodeChainExecutionPreparation, error) {
 	if execution != "server" && execution != "auto" {
 		return nil, nodeChainExecutionError
 	}
@@ -73,7 +80,16 @@ func NewNodeChainExecutionPreparation(localSource, execution string) (*NodeChain
 		len(original.IdentitySources) != len(local.nodes) {
 		return nil, nodeChainExecutionError
 	}
-	p := &NodeChainExecutionPreparation{source: NodeChainExecutionPreparationSource{1, execution, localSource}, local: local}
+	p := &NodeChainExecutionPreparation{source: NodeChainExecutionPreparationSource{Schema: 1, Execution: execution, LocalSource: localSource}, local: local, desktop: desktop}
+	config := local.Config()
+	if desktop != nil {
+		var meta DesktopNodeChainMetadata
+		config, meta, _, err = desktop.ReadValidated()
+		if err != nil || desktop.original.sourceJSON != localSource || desktop.original.Config() != local.Config() {
+			return nil, nodeChainExecutionError
+		}
+		p.source.Desktop = &meta
+	}
 	raw, err := json.Marshal(p.source)
 	if err != nil || len(raw) > NodeChainInputLimit {
 		return nil, nodeChainExecutionError
@@ -83,7 +99,7 @@ func NewNodeChainExecutionPreparation(localSource, execution string) (*NodeChain
 	p.sourceSHA = externalDigest(digest)
 	clear(digest)
 	var graph map[string]any
-	if exactJSON([]byte(local.Config()), &graph, 4<<20) != nil || nodeChainExecutionGate(graph) != nil {
+	if exactJSON([]byte(config), &graph, 4<<20) != nil || nodeChainExecutionGate(graph) != nil {
 		return nil, nodeChainExecutionError
 	}
 	final := local.FinalTag()
@@ -132,6 +148,12 @@ func NewNodeChainExecutionPreparation(localSource, execution string) (*NodeChain
 	p.seal = p.captureSeal()
 	if p.validateCapture() != nil {
 		return nil, nodeChainExecutionError
+	}
+	if desktop != nil {
+		p.desktopPhysical, err = newDesktopNodeChainExecutionPhysicalPolicy(p)
+		if err != nil || p.desktopPhysical.Validate() != nil {
+			return nil, nodeChainExecutionError
+		}
 	}
 	return p, nil
 }
@@ -187,6 +209,13 @@ func (p *NodeChainExecutionPreparation) validateCapture() error {
 		p.discovery.Entry != p.local.proofs[0] || p.dns.DNS.SourceSHA256 != p.sourceSHA || p.dns.DNS.ConfigSHA256 != p.configSHA {
 		return nodeChainExecutionError
 	}
+	if p.desktop == nil {
+		if p.source.Desktop != nil {
+			return nodeChainExecutionError
+		}
+	} else if p.validateDesktopCapture() != nil {
+		return nodeChainExecutionError
+	}
 	return nil
 }
 
@@ -236,6 +265,9 @@ func (p *NodeChainExecutionPreparation) BindExecution(policy *NodeChainExecution
 		p.source.Execution != policy.source.Execution || p.local.Config() != policy.local.Config() ||
 		!reflect.DeepEqual(p.physical, policy.physical) || p.dns.DNSPolicySHA256 != policy.source.Server.DNSPolicySHA256 {
 		return nil, nodeChainExecutionError
+	}
+	if p.desktop != nil {
+		return p.bindDesktopExecution(policy)
 	}
 	var before, after map[string]any
 	if exactJSON([]byte(p.config), &before, 4<<20) != nil || exactJSON([]byte(policy.config), &after, 4<<20) != nil || nodeChainExecutionGate(after) != nil {
