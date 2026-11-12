@@ -1,0 +1,162 @@
+package main
+
+import (
+	"context"
+	"io"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func desktopExecutionDispatchFixture(t *testing.T, target, execution string) (*routerVPNExternalFiles, routerVPNNodeChainExecutionCommand) {
+	t.Helper()
+	local := desktopNodeChainCommandPolicyWithIdentity(t, 3, target, 1400, true)
+	prep, err := mobilemultihop.NewDesktopNodeChainExecutionPreparation(local, execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical, err := prep.DesktopPhysicalPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, meta, _, err := physical.PhysicalReadValidated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := desktopImportedCommandFiles(t, map[string]string{"node-chain-execution-source.json": prep.Source(), "sing-box.json": prep.Config()})
+	capture := routerVPNNodeChainExecutionCommand{directory: files.root.Name(), session: meta.SessionID, config: meta.ConfigSHA256,
+		physical: meta.SourceSHA256, source: prep.SourceSHA256(), transfer: strings.Repeat("e", 64), mtu: 1400}
+	if target == "linux" {
+		capture.linux = routerVPNNodeLinuxParentOptions{ChannelFD: 3, DirectoryFD: 4, CaptureSHA256: strings.Repeat("d", 64)}
+	} else {
+		capture.windows = routerVPNNodeJournalOptions{ParentHandle: 9, ParentImage: "original-native-controller", Pipe: "original-pipe", CaptureSHA256: strings.Repeat("d", 64)}
+	}
+	return files, capture
+}
+
+func desktopExecutionDispatchArguments(c routerVPNNodeChainExecutionCommand) []string {
+	args := []string{"--runtime-dir", c.directory, "--session", c.session, "--config-sha256", c.config,
+		"--physical-source-sha256", c.physical, "--execution-source-sha256", c.source, "--physical-transfer-sha256", c.transfer, "--physical-mtu", "1400"}
+	if c.linux != (routerVPNNodeLinuxParentOptions{}) {
+		return append(args, "--linux-parent-channel", "3", "--linux-parent-directory", "4", "--linux-parent-capture", c.linux.CaptureSHA256)
+	}
+	return append(args, "--journal-parent-handle", "9", "--journal-parent-image", c.windows.ParentImage, "--journal-pipe", c.windows.Pipe, "--journal-capture-sha256", c.windows.CaptureSHA256)
+}
+
+func TestRouterVPNDesktopNodeChainExecutionDispatchCapturesOriginal(t *testing.T) {
+	for _, target := range []string{"linux", "windows"} {
+		for _, setting := range []string{"server", "auto"} {
+			t.Run(target+"/"+setting, func(t *testing.T) {
+				files, expected := desktopExecutionDispatchFixture(t, target, setting)
+				type callerKey struct{}
+				ctx := context.WithValue(t.Context(), callerKey{}, "original-start")
+				calls := 0
+				command := routerVPNNewNodeChainExecutionCommand(func(call context.Context, capture routerVPNNodeChainExecutionCommand) error {
+					calls++
+					if !reflect.DeepEqual(capture, expected) || call.Value(callerKey{}) != "original-start" {
+						t.Fatal("execution CLI substituted a captured source or caller")
+					}
+					actual, err := routerVPNNodeChainExecutionCommandTarget(files, capture, target)
+					if err != nil || actual.Execution() != setting || actual.SourceSHA256() != capture.source {
+						t.Fatal("execution CLI did not replay its exact typed preparation", err)
+					}
+					return nil
+				})
+				command.SetOut(io.Discard)
+				command.SetErr(io.Discard)
+				command.SetArgs(desktopExecutionDispatchArguments(expected))
+				if err := command.ExecuteContext(ctx); err != nil || calls != 1 {
+					t.Fatal("complete execution CLI did not enter its original platform exactly once", err, calls)
+				}
+				altered := expected
+				altered.mtu = 0
+				if _, err := routerVPNNodeChainExecutionCommandTarget(files, altered, target); err == nil {
+					t.Fatal("execution CLI accepted a different captured MTU")
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeChainExecutionDispatchRejectsSubstitution(t *testing.T) {
+	_, expected := desktopExecutionDispatchFixture(t, "linux", "server")
+	for _, fault := range []string{"directory", "session", "config", "physical", "execution", "transfer", "mtu-small", "mtu-large", "mixed-parent", "local-source", "darwin-parent", "cancelled"} {
+		t.Run(fault, func(t *testing.T) {
+			args := desktopExecutionDispatchArguments(expected)
+			replace := func(flag, value string) {
+				for i := range args {
+					if args[i] == flag {
+						args[i+1] = value
+						return
+					}
+				}
+				t.Fatal("missing actual flag", flag)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			switch fault {
+			case "directory":
+				replace("--runtime-dir", "relative")
+			case "session":
+				replace("--session", "wrong-session")
+			case "config":
+				replace("--config-sha256", "")
+			case "physical":
+				replace("--physical-source-sha256", "")
+			case "execution":
+				replace("--execution-source-sha256", "")
+			case "transfer":
+				replace("--physical-transfer-sha256", "")
+			case "mtu-small":
+				replace("--physical-mtu", "1279")
+			case "mtu-large":
+				replace("--physical-mtu", "9001")
+			case "mixed-parent":
+				args = append(args, "--journal-parent-handle", "9")
+			case "local-source":
+				args = append(args, "--node-chain-source-sha256", expected.source)
+			case "darwin-parent":
+				args = append(args, "--darwin-control", "inherited-v1")
+			case "cancelled":
+				cancel()
+			}
+			calls := 0
+			command := routerVPNNewNodeChainExecutionCommand(func(context.Context, routerVPNNodeChainExecutionCommand) error { calls++; return nil })
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			command.SetArgs(args)
+			if err := command.ExecuteContext(ctx); err == nil || calls != 0 {
+				t.Fatal("invalid execution CLI entered a native owner", fault, err, calls)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainExecutionDispatchRequiresOriginalParent(t *testing.T) {
+	_, original := desktopExecutionDispatchFixture(t, "linux", "server")
+	for _, fault := range []string{"absent", "mixed", "invalid-source", "cancelled", "nil-caller"} {
+		t.Run(fault, func(t *testing.T) {
+			capture := original
+			capture.directory = "/unopened-original-execution"
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			switch fault {
+			case "absent":
+				capture.linux = routerVPNNodeLinuxParentOptions{}
+			case "mixed":
+				capture.windows.ParentHandle = 9
+			case "invalid-source":
+				capture.source = ""
+			case "cancelled":
+				cancel()
+			case "nil-caller":
+				ctx = nil
+			}
+			if err := routerVPNRunNodeChainExecutionCommand(ctx, capture); err == nil {
+				t.Fatal("execution dispatch accepted no original authenticated parent")
+			}
+		})
+	}
+}

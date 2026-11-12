@@ -48,6 +48,7 @@ CANDIDATE_COMMAND_VERDICTS = (CANDIDATE_COMMAND_ADMISSION, CANDIDATE_COMMAND_COM
 CANDIDATE_COMMAND_SUITE = ("ordered-candidate-owner", "./cmd/sing-box", "^TestRouterVPNDesktopNodeChainCandidates", CANDIDATE_COMMAND_VERDICTS)
 EXECUTION_PHYSICAL_ROOT = "TestRouterVPNDesktopNodeChainExecutionPhysical"
 EXECUTION_COMMAND_ROOT = "TestRouterVPNDesktopNodeChainExecutionCommand"
+EXECUTION_DISPATCH_ROOT = "TestRouterVPNDesktopNodeChainExecutionDispatch"
 EXECUTION_PHYSICAL_VERDICTS = (
     EXECUTION_PHYSICAL_ROOT + "CapturesClosedBox",
     *(EXECUTION_PHYSICAL_ROOT + "CapturesClosedBox/" + execution for execution in ("server", "auto")),
@@ -65,9 +66,21 @@ EXECUTION_COMMAND_VERDICTS = (
     *(EXECUTION_COMMAND_ROOT + "RejectsSubstitution/" + fault for fault in
       ("missing", "local", "generic", "execution", "source", "config", "physical", "session", "target", "graph", "ambiguous-local")),
 )
+EXECUTION_DISPATCH_VERDICTS = (
+    EXECUTION_DISPATCH_ROOT + "CapturesOriginal",
+    *(EXECUTION_DISPATCH_ROOT + "CapturesOriginal/" + target + "/" + execution
+      for target in ("linux", "windows") for execution in ("server", "auto")),
+    EXECUTION_DISPATCH_ROOT + "RejectsSubstitution",
+    *(EXECUTION_DISPATCH_ROOT + "RejectsSubstitution/" + fault for fault in
+      ("directory", "session", "config", "physical", "execution", "transfer", "mtu-small", "mtu-large", "mixed-parent", "local-source", "darwin-parent", "cancelled")),
+    EXECUTION_DISPATCH_ROOT + "RequiresOriginalParent",
+    *(EXECUTION_DISPATCH_ROOT + "RequiresOriginalParent/" + fault for fault in
+      ("absent", "mixed", "invalid-source", "cancelled", "nil-caller")),
+)
 EXECUTION_DESKTOP_SUITES = (
     ("ordered-execution-physical", ".", "^" + EXECUTION_PHYSICAL_ROOT, EXECUTION_PHYSICAL_VERDICTS),
     ("ordered-execution-command", "./cmd/sing-box", "^" + EXECUTION_COMMAND_ROOT, EXECUTION_COMMAND_VERDICTS),
+    ("ordered-execution-dispatch", "./cmd/sing-box", "^" + EXECUTION_DISPATCH_ROOT, EXECUTION_DISPATCH_VERDICTS),
 )
 ORDERED_EXECUTION_COMMAND_ROOTS = tuple("TestRouterVPNDesktopNodeChainExecutionRuntime" + suffix for suffix in (
     "KeepsActualProjection", "RetainsFailedCleanup", "RejectsReplacedOwners", "JoinsLateConstructor")) + tuple(
@@ -893,6 +906,21 @@ def naive_transport_mutants(source):
     ]
 
 
+def ordered_execution_dispatch_mutants(source):
+    relative = "cmd/sing-box/routervpn_node_chain_execution_dispatch.go"
+    controls = (
+        ("execution-dispatch-source", "RejectsSubstitution", "execution", "invalid execution CLI entered a native owner",
+         "!routerVPNExternalSource.MatchString(capture.source) || ", ""),
+        ("execution-dispatch-mtu", "CapturesOriginal", "linux/server", "execution CLI accepted a different captured MTU",
+         "meta.RestoredMTU != capture.mtu", "meta.RestoredMTU < 0"),
+        ("execution-dispatch-caller", "CapturesOriginal", "linux/server", "execution CLI substituted a captured source or caller",
+         "signal.NotifyContext(command.Context(),", "signal.NotifyContext(context.Background(),"),
+    )
+    raw = (source/relative).read_text(encoding="utf-8")
+    return [(label, relative, "./cmd/sing-box", EXECUTION_DISPATCH_ROOT + suffix, child, witness,
+             BOOT.IDENTITY.replace_once(raw, before, after)) for label, suffix, child, witness, before, after in controls]
+
+
 def ordered_execution_mtu_mutants(source):
     """Exact command ownership controls; no privileged or encrypted fixture."""
     runtime = "cmd/sing-box/routervpn_node_chain_execution_runtime.go"
@@ -944,7 +972,7 @@ def mutants(source, windows):
     contextual_entry_lock = "\tif err := adapter.RouterVPNLockContext(ctx, &o.mu); err != nil {\n\t\treturn nil, err\n\t}\n"
     ambient_owner = "func() error { if !owner.SocketCurrent() { return net.ErrClosed }; return nil }()"
     caller_diagnostic = "physical caller used an ambient wait without its original context"
-    result = ordered_execution_mtu_mutants(source) + [
+    result = ordered_execution_dispatch_mutants(source) + ordered_execution_mtu_mutants(source) + [
         ("node-lower-ambient-lock", lower, "./routervpn/desktoppt", "TestRouterVPNNodePhysicalCallerContext", "lower",
          caller_diagnostic, changed_function(lower, lower_current, contextual_entry_lock, "\to.mu.Lock()\n")),
         ("node-owner-ambient-lock", lower, "./routervpn/desktoppt", "TestRouterVPNNodePhysicalCallerContext", "owner",

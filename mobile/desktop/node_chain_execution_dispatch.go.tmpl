@@ -1,0 +1,109 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"syscall"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/spf13/cobra"
+)
+
+// This command carries the preparation identity separately from its physical
+// graph. Server and Compare may share that graph but cannot share the captured
+// execution source. Platform authentication still precedes private source reads.
+type routerVPNNodeChainExecutionCommand struct {
+	directory, session, config, physical, source, transfer string
+	mtu                                                    int
+	windows                                                routerVPNNodeJournalOptions
+	linux                                                  routerVPNNodeLinuxParentOptions
+}
+
+func init() {
+	mainCommand.AddCommand(routerVPNNewNodeChainExecutionCommand(routerVPNRunNodeChainExecutionCommand))
+}
+
+func routerVPNNewNodeChainExecutionCommand(run func(context.Context, routerVPNNodeChainExecutionCommand) error) *cobra.Command {
+	var capture routerVPNNodeChainExecutionCommand
+	command := &cobra.Command{Use: "routervpn-node-chain-execution", Short: "Run one captured ordered Server or Compare path", Args: cobra.NoArgs, SilenceUsage: true,
+		RunE: func(command *cobra.Command, _ []string) error {
+			if run == nil || capture.validate() != nil {
+				return routerVPNExternalFailure
+			}
+			ctx, cancel := signal.NotifyContext(command.Context(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return run(ctx, capture)
+		}}
+	command.Flags().StringVar(&capture.directory, "runtime-dir", "", "absolute private runtime directory")
+	command.Flags().StringVar(&capture.session, "session", "", "captured runtime identity")
+	command.Flags().StringVar(&capture.config, "config-sha256", "", "captured preparation configuration")
+	command.Flags().StringVar(&capture.physical, "physical-source-sha256", "", "captured physical owner")
+	command.Flags().StringVar(&capture.source, "execution-source-sha256", "", "captured Server or Compare preparation")
+	command.Flags().StringVar(&capture.transfer, "physical-transfer-sha256", "", "captured protection predecessor")
+	command.Flags().IntVar(&capture.mtu, "physical-mtu", 0, "captured physical policy MTU")
+	command.Flags().Uint64Var(&capture.windows.ParentHandle, "journal-parent-handle", 0, "inherited native controller capability")
+	command.Flags().StringVar(&capture.windows.ParentImage, "journal-parent-image", "", "retained native controller image")
+	command.Flags().StringVar(&capture.windows.Pipe, "journal-pipe", "", "native durable transaction rendezvous")
+	command.Flags().StringVar(&capture.windows.CaptureSHA256, "journal-capture-sha256", "", "captured journal identity")
+	command.Flags().IntVar(&capture.linux.ChannelFD, "linux-parent-channel", 0, "inherited original Linux parent channel")
+	command.Flags().IntVar(&capture.linux.DirectoryFD, "linux-parent-directory", 0, "inherited original Linux task directory")
+	command.Flags().StringVar(&capture.linux.CaptureSHA256, "linux-parent-capture", "", "captured Linux command identity")
+	return command
+}
+
+func (capture routerVPNNodeChainExecutionCommand) validate() error {
+	if !filepath.IsAbs(capture.directory) || !routerVPNExternalSession.MatchString(capture.session) ||
+		!routerVPNExternalSource.MatchString(capture.config) || !routerVPNExternalSource.MatchString(capture.physical) ||
+		!routerVPNExternalSource.MatchString(capture.source) || !routerVPNExternalSource.MatchString(capture.transfer) ||
+		capture.mtu != 0 && (capture.mtu < 1280 || capture.mtu > 9000) ||
+		capture.windows != (routerVPNNodeJournalOptions{}) && capture.linux != (routerVPNNodeLinuxParentOptions{}) {
+		return routerVPNExternalFailure
+	}
+	return nil
+}
+
+func routerVPNRunNodeChainExecutionCommand(parent context.Context, capture routerVPNNodeChainExecutionCommand) (failure error) {
+	if parent == nil || parent.Err() != nil || capture.validate() != nil {
+		return routerVPNExternalFailure
+	}
+	if capture.linux != (routerVPNNodeLinuxParentOptions{}) {
+		return routerVPNRunLinuxNodeChainExecutionControlled(parent, capture)
+	}
+	if runtime.GOOS != "windows" || capture.windows == (routerVPNNodeJournalOptions{}) {
+		return routerVPNExternalFailure
+	}
+	journal, err := routerVPNNewNodeJournal(parent, capture.physical, capture.windows)
+	if err != nil || journal == nil {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	defer func() { failure = errors.Join(failure, journal.close()) }()
+	return routerVPNRunNodeMTUExecutionFamiliesCaptured(parent, capture.directory, capture.session, capture.config,
+		"", "", capture.physical, capture.source, capture.transfer, capture.mtu, journal)
+}
+
+func routerVPNNodeChainExecutionCommandTarget(files *routerVPNExternalFiles, capture routerVPNNodeChainExecutionCommand,
+	target string) (*mobilemultihop.NodeChainExecutionPreparation, error) {
+	if capture.validate() != nil || target != "linux" && target != "windows" {
+		return nil, routerVPNExternalFailure
+	}
+	prep, err := routerVPNNodeChainExecutionCommandCapture(files, capture.session, capture.config, capture.physical, capture.source, target)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := prep.DesktopPhysicalPolicy()
+	if err != nil {
+		return nil, err
+	}
+	_, meta, _, err := policy.PhysicalReadValidated()
+	if err != nil || meta.RestoredMTU != capture.mtu {
+		return nil, errors.Join(err, routerVPNExternalFailure)
+	}
+	return prep, nil
+}
