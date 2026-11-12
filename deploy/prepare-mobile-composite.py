@@ -17,11 +17,14 @@ def digest():
         value.update(str(source.relative_to(ROOT)).encode() + b'\0' + source.read_bytes())
     return value.hexdigest()
 
-def insert_once(text, anchor, addition):
+def insert_once(text, anchor, addition, *, neighbour=None):
     if text.count(anchor) != 1:
         raise ValueError('pinned composite registry boundary changed')
     if addition.strip() in text:
-        if text.count(addition) != 1 or anchor + '\n' + addition not in text or [line.strip() for line in text.splitlines()].count(addition.strip()) != 1:
+        placed = anchor + '\n' + addition in text
+        if neighbour is not None:
+            placed = placed or (text.count(neighbour) == 1 and anchor + '\n' + neighbour + '\n' + addition in text)
+        if text.count(addition) != 1 or not placed or [line.strip() for line in text.splitlines()].count(addition.strip()) != 1:
             raise ValueError('existing composite registry differs')
         return text
     return text.replace(anchor, anchor + '\n' + addition, 1)
@@ -37,7 +40,8 @@ def prepare(vendor):
     if target.is_symlink() or not target.resolve().is_relative_to(vendor) or registry.is_symlink():
         raise ValueError('linked or escaped native composite destination')
     text = registry.read_text()
-    text = insert_once(text, '\t"github.com/sagernet/sing-box/protocol/group"', '\t"github.com/sagernet/sing-box/protocol/routervpncomposite"')
+    text = insert_once(text, '\t"github.com/sagernet/sing-box/protocol/group"', '\t"github.com/sagernet/sing-box/protocol/routervpncomposite"',
+                       neighbour='\t"github.com/sagernet/sing-box/protocol/routervpnchaingate"')
     text = insert_once(text, '\tgroup.RegisterURLTest(registry)', '\troutervpncomposite.RegisterOutbound(registry)')
     sources = sorted((ROOT / 'mobile/composite').glob('*.tmpl'))
     for source in sources:

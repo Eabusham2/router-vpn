@@ -23,6 +23,7 @@ PREREQUISITES = {
 }
 IMPORT = '\t"github.com/sagernet/sing-box/protocol/routervpnchaingate"\n'
 REGISTER = '\troutervpnchaingate.RegisterOutbound(registry)\n'
+COMPOSITE_IMPORT = '\t"github.com/sagernet/sing-box/protocol/routervpncomposite"\n'
 
 
 def inputs():
@@ -58,7 +59,15 @@ def registry_source(source):
         if source.count(before) != 1:
             raise ValueError('ordered gate native registry anchor changed')
         if addition in source:
-            if source.count(addition) != 1 or before+addition not in source:
+            # Mobile preparation later installs the composite at the same
+            # import anchor. Its exact single import is the only permitted
+            # neighbour; registration still belongs immediately to Selector.
+            placed = before+addition in source
+            if addition == IMPORT:
+                placed = before+addition in imports or (
+                    source.count(COMPOSITE_IMPORT) == 1 and
+                    before+COMPOSITE_IMPORT+addition in imports)
+            if source.count(addition) != 1 or not placed:
                 raise ValueError('ordered gate registry addition moved or duplicated')
         else:
             source = source.replace(before, before+addition)

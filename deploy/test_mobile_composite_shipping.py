@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('native_composite', ROOT/'deploy/prepare-mobile-composite.py')
 PREPARE = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(PREPARE)
+gate_spec = importlib.util.spec_from_file_location('native_ordered_gate', ROOT/'deploy/prepare-node-chain-execution-gate.py')
+GATE = importlib.util.module_from_spec(gate_spec)
+gate_spec.loader.exec_module(GATE)
 
 class CompositeShipping(unittest.TestCase):
     def fixture(self, path):
@@ -70,5 +73,60 @@ class CompositeShipping(unittest.TestCase):
         self.assertIn('source.write_bytes(original)', gate)
         self.assertNotIn('t.Skip', (ROOT/'mobile/composite/traffic_test.go.tmpl').read_text())
         self.assertNotIn('t.Skip', (ROOT/'mobile/composite/xray_traffic_test.go.tmpl').read_text())
+
+    def gate_fixture(self, path):
+        core = self.fixture(path)
+        registry = core/'include/registry.go'
+        registry.write_text(registry.read_text().replace('func register() {', 'func OutboundRegistry() *outbound.Registry {').replace(
+            '\tgroup.RegisterURLTest(registry)', '\tgroup.RegisterSelector(registry)\n\tgroup.RegisterURLTest(registry)'))
+        for relative, template in GATE.PREREQUISITES.items():
+            target = core/relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((ROOT/template).read_bytes())
+        return core
+
+    def test_mobile_repeated_gate_and_composite_preparation(self):
+        # The APK's SIP003 acceptance reruns mobile preparation after the
+        # first complete build preparation; desktop may install composite first.
+        for first in ((GATE, PREPARE), (PREPARE, GATE)):
+            with self.subTest(first=first[0].__name__), tempfile.TemporaryDirectory() as temp:
+                core = self.gate_fixture(temp)
+                with mock.patch.object(PREPARE.subprocess, 'check_output', return_value=PREPARE.PIN+'\n'):
+                    for module in first:
+                        module.prepare(core)
+                    before = {str(p.relative_to(core)):p.read_bytes() for p in core.rglob('*') if p.is_file()}
+                    for _ in range(3):
+                        GATE.prepare(core)
+                        PREPARE.prepare(core)
+                    self.assertEqual(before, {str(p.relative_to(core)):p.read_bytes() for p in core.rglob('*') if p.is_file()})
+                source = (core/'include/registry.go').read_text()
+                self.assertEqual(source.count(GATE.REGISTER), 1)
+                self.assertEqual(source.count('routervpncomposite.RegisterOutbound(registry)'), 1)
+
+    def test_composed_import_neighbours_do_not_accept_foreign_or_moved_sources(self):
+        for first in ((GATE, PREPARE), (PREPARE, GATE)):
+            with tempfile.TemporaryDirectory() as temp:
+                core = self.gate_fixture(temp)
+                with mock.patch.object(PREPARE.subprocess, 'check_output', return_value=PREPARE.PIN+'\n'):
+                    for module in first:
+                        module.prepare(core)
+                    registry = core/'include/registry.go'
+                    original = registry.read_text()
+                    faults = {
+                        'foreign-between-imports': original.replace(GATE.IMPORT, '\t"foreign/module"\n'+GATE.IMPORT),
+                        'duplicate-gate-import': original.replace(GATE.IMPORT, GATE.IMPORT*2),
+                        'duplicate-composite-import': original.replace(GATE.COMPOSITE_IMPORT, GATE.COMPOSITE_IMPORT*2),
+                        'gate-import-outside-block': original.replace(GATE.IMPORT, '')+GATE.IMPORT,
+                        'gate-registration-outside-registry': original.replace(GATE.REGISTER, '')+GATE.REGISTER,
+                        'composite-registration-moved': original.replace('\troutervpncomposite.RegisterOutbound(registry)\n', '')+'\troutervpncomposite.RegisterOutbound(registry)\n',
+                    }
+                    for label, broken in faults.items():
+                        with self.subTest(first=first[0].__name__, fault=label):
+                            registry.write_text(broken)
+                            before = {str(p.relative_to(core)):p.read_bytes() for p in core.rglob('*') if p.is_file()}
+                            with self.assertRaises(ValueError):
+                                GATE.prepare(core)
+                                PREPARE.prepare(core)
+                            self.assertEqual(before, {str(p.relative_to(core)):p.read_bytes() for p in core.rglob('*') if p.is_file()})
 
 if __name__ == '__main__': unittest.main()
