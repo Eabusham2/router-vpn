@@ -53,7 +53,7 @@ final class IOSNodeChainExecutionCapture {
         do { local = try IOSNodeChainCapture(plan: localPlan, selectionExecution: requested) }
         catch { try? localPlan.close(); throw error }
         do {
-            guard try canonical(selectedProfile) == canonical(local.finalProfile) else {
+            guard try canonical(IOSNodeChainCapture.executionProfile(selectedProfile)) == canonical(local.finalProfile) else {
                 throw issue("The selected final node changed its private execution source.")
             }
             failure = nil
@@ -203,7 +203,7 @@ final class IOSNodeChainExecutionCapture {
         do { local = try IOSNodeChainCapture(plan: localPlan, selectionExecution: requested) }
         catch { try? localPlan.close(); throw error }
         defer { try? local.plan.close() }
-        guard try canonical(selectedProfile) == canonical(local.finalProfile) else { throw issue("The selected final node changed before Last.") }
+        guard try canonical(IOSNodeChainCapture.executionProfile(selectedProfile)) == canonical(local.finalProfile) else { throw issue("The selected final node changed before Last.") }
         failure = nil
         let ordinary = LibboxRouterNodeChainExecutionFromLaunch(local.launchInput, requested, &failure)
         defer { try? ordinary?.close() }
@@ -256,7 +256,7 @@ final class IOSNodeChainExecutionCapture {
 
         func makeCapture(ordinaryInput: String, selectedProfile: [String: Any]) throws -> IOSNodeChainExecutionCapture {
             guard ordinaryInput == original.ordinaryLaunchInput,
-                  try IOSNodeChainExecutionCapture.canonical(selectedProfile) == IOSNodeChainExecutionCapture.canonical(original.finalProfile) else {
+                  try IOSNodeChainExecutionCapture.canonical(IOSNodeChainCapture.executionProfile(selectedProfile)) == IOSNodeChainExecutionCapture.canonical(original.finalProfile) else {
                 throw IOSNodeChainExecutionCapture.issue("The original ordered source changed before temporary restore.")
             }
             original.lock.lock(); let closed = original.closed; original.lock.unlock()

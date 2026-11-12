@@ -130,7 +130,8 @@ func fixture(_ count:Int,_ layer:String,_ requested:String,_ awg:Bool)throws->[D
    let bundles=try fixture(count,layer,requested,awg)
    let capture=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested)
    check(capture.members.count==count && capture.requested==requested && capture.local.selectionExecution==requested,"captured count/execution changed")
-   check(try data(capture.finalProfile)==data(profile(bundles.last!)),"original final execution profile normalized")
+   var expectedProfile=try profile(bundles.last!);expectedProfile.removeValue(forKey:"startup_mode");expectedProfile.removeValue(forKey:"auto_connect")
+   check(try data(capture.finalProfile)==data(expectedProfile),"original final execution policy changed beyond startup controls")
    check(capture.strict && !capture.homeLANAccess,"original aggregate protection lost")
    for (position,member) in capture.members.enumerated(){check(try data(member.profile)==data(profile(bundles[position])),"original member profile changed")}
    let graph=try object(Data(capture.config.utf8));let route=graph["route"] as! [String:Any]

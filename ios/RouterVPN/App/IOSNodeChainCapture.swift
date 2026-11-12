@@ -96,9 +96,13 @@ struct IOSNodeChainCapture {
                 start = try json(captured, maximum: 16 * 1024 * 1024)
             }
             let bootstrap = try profile["dns_bootstrap"].map { try json($0, maximum: 16384) } ?? ""
+            // Startup scheduling is owned by the saved app profile, not the
+            // forwarding path. Keep full bundle ownership outside this exact
+            // private Server/Compare compiler projection.
+            let nativeProfile = selectionExecution == "local" ? profile : executionProfile(profile)
             var failure: NSError?
             let input: String? = LibboxRouterNodeChainMemberInput(mode,
-                try json(files, maximum: 16 * 1024 * 1024), try json(profile, maximum: 256 * 1024), start, bootstrap, &failure)
+                try json(files, maximum: 16 * 1024 * 1024), try json(nativeProfile, maximum: 256 * 1024), start, bootstrap, &failure)
             guard let input, failure == nil, !input.isEmpty else {
                 throw failure ?? issue("A selected node could not compile from its original source.")
             }
@@ -193,6 +197,13 @@ struct IOSNodeChainCapture {
             }
         }
         self.plan = plan; self.launchInput = launch; self.members = members; self.strict = strict; self.homeLANAccess = lan; self.selectionExecution = selectionExecution
+    }
+
+    static func executionProfile(_ profile: [String: Any]) -> [String: Any] {
+        var result = profile
+        result.removeValue(forKey: "startup_mode")
+        result.removeValue(forKey: "auto_connect")
+        return result
     }
 
     private static func object(_ data: Data, maximum: Int) throws -> [String: Any] {

@@ -3,26 +3,31 @@ import Foundation
 /// A private in-memory identity of the running NetworkExtension configuration.
 /// It is never logged, exposed as result metadata, or persisted as a profile.
 /// Matching node/mode labels alone cannot distinguish a reconnect or new entry.
-struct IOSSessionIdentity: Equatable {
+struct IOSSessionIdentity: Equatable, Sendable {
     let connectedAt: Date
     let engine: String
     let rawProfile: String
     let bundleData: Data
     let entryBundleData: Data?
     let nodeChainSource: Data?
+    let nodeChainExecutionSource: Data?
     let entryMode: String?
     let providerSession: String?
     let runtimeEpoch: String?
 
     init(connectedAt: Date, engine: String, rawProfile: String,
-         bundleData: Data, entryBundleData: Data?, nodeChainSource: Data? = nil, providerSession: String? = nil,
+         bundleData: Data, entryBundleData: Data?, nodeChainSource: Data? = nil, nodeChainExecutionSource: Data? = nil, providerSession: String? = nil,
          runtimeEpoch: String? = nil, entryMode: String? = nil) throws {
         guard ["wireguard", "libbox", "external-libbox", "multihop-libbox"].contains(engine),
               !rawProfile.isEmpty, rawProfile.utf8.count <= 128,
               !bundleData.isEmpty, bundleData.count <= 32 * 1024 * 1024 else {
             throw Self.invalid()
         }
-        if let nodeChainSource {
+        guard nodeChainSource == nil || nodeChainExecutionSource == nil else { throw Self.invalid() }
+        if let nodeChainExecutionSource {
+            guard engine == "multihop-libbox", rawProfile == "shadowsocks", entryBundleData == nil, entryMode == nil,
+                  Self.executionSource(nodeChainExecutionSource) else { throw Self.invalid() }
+        } else if let nodeChainSource {
             guard engine == "multihop-libbox", entryBundleData == nil, entryMode == nil,
                   !nodeChainSource.isEmpty, nodeChainSource.count <= 40 * 1024 * 1024,
                   let source = try JSONSerialization.jsonObject(with: nodeChainSource) as? [String: Any],
@@ -50,6 +55,7 @@ struct IOSSessionIdentity: Equatable {
         self.bundleData = bundleData
         self.entryBundleData = entryBundleData
         self.nodeChainSource = nodeChainSource
+        self.nodeChainExecutionSource = nodeChainExecutionSource
         self.entryMode = entryMode
         self.providerSession = providerSession
         self.runtimeEpoch = runtimeEpoch
@@ -63,7 +69,11 @@ struct IOSSessionIdentity: Equatable {
         let externalKeys = ["external_entry_bundle", "external_entry_mode", "tor_entry_bundle", "tor_entry_mode"]
         var entry: Data?
         var mode: String?
-        var chain: Data?
+        var chain: Data?, execution: Data?
+        if let source = configuration["nodeChainExecutionSource"] {
+            guard let input = source as? String else { throw Self.invalid() }
+            execution = Data(input.utf8)
+        }
         if let source = configuration["nodeChainSource"] {
             guard let input = source as? String else { throw Self.invalid() }
             chain = Data(input.utf8)
@@ -87,7 +97,31 @@ struct IOSSessionIdentity: Equatable {
             }
         }
         try self.init(connectedAt: connectedAt, engine: engine, rawProfile: rawProfile,
-                      bundleData: bundleData, entryBundleData: entry, nodeChainSource: chain, entryMode: mode)
+                      bundleData: bundleData, entryBundleData: entry, nodeChainSource: chain, nodeChainExecutionSource: execution, entryMode: mode)
+    }
+
+    /// This is a private equality identity, not a native proof. The complete
+    /// ordinary source is recompiled before startup; typed restore authority
+    /// stays in PacketTunnel and is never reconstructed from these bytes.
+    private static func executionSource(_ data: Data) -> Bool {
+        guard !data.isEmpty, data.count <= 40 * 1024 * 1024,
+              let launch = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(launch.keys) == Set(["kind", "schema", "source", "source_sha256", "config_sha256"]),
+              launch["kind"] as? String == "routervpn-node-chain-execution-preparation-input", launch["schema"] as? Int == 1,
+              let digest = launch["source_sha256"] as? String, let config = launch["config_sha256"] as? String,
+              [digest, config].allSatisfy({ $0.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil }),
+              let input = launch["source"] as? String,
+              let source = try? JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any],
+              Set(source.keys) == Set(["schema", "execution", "local_source"]), source["schema"] as? Int == 1,
+              ["server", "auto"].contains(source["execution"] as? String ?? ""),
+              let raw = source["local_source"] as? String,
+              let local = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+              Set(local.keys) == Set(["schema", "execution", "nodes", "identity_sources"]),
+              local["schema"] as? Int == 1, local["execution"] as? String == "local",
+              let nodes = local["nodes"] as? [String], let identities = local["identity_sources"] as? [String],
+              (2...8).contains(nodes.count), identities.count == nodes.count,
+              nodes.allSatisfy({ !$0.isEmpty }), identities.allSatisfy({ !$0.isEmpty }) else { return false }
+        return true
     }
 
     private static func invalid() -> NSError {
