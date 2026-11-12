@@ -218,7 +218,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         java.util.Map<File,String> files=new java.util.LinkedHashMap<>();
         if("node-chain".equals(home.logicalMode)){
             topology="node-chain";execution=selectedExecution="local";orderedCapture=runtime.nodeChain.captureRestore();
-            for(AndroidNodeStore.ChainSource member:orderedCapture.source.members)files.put(requiredNode(member.id).file,AndroidTorProfile.digest(member.bytes()));
+            for(AndroidNodeStore.ChainSource member:orderedCapture.source.members)if(!member.imported)files.put(requiredNode(member.id).file,AndroidTorProfile.digest(member.bytes()));
         }else if("multihop".equals(home.logicalMode)){
             topology="multihop";ordinaryEntry=multihop.capturedOrdinaryEntry(home);
             entry=ordinaryEntry==null?requiredNode(home.activeEntryId):null;exit=requiredNode(home.activeExitId);
@@ -332,8 +332,13 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
             if(point.orderedCapture==null)throw new IllegalStateException("The original ordered native source is unavailable.");
             AndroidConnectionSelection.requireCurrent(activity,nodeStore,point.orderedCapture.selection);
             AndroidNodeStore.ChainCapture original=point.orderedCapture.source;original.requireCurrent();
+            int routerFiles=0;
+            for(AndroidNodeStore.ChainSource member:original.members)if(!member.imported){
+                routerFiles++;
+                if(!AndroidTorProfile.digest(member.bytes()).equals(point.files.get(requiredNode(member.id).file)))throw new IllegalStateException("The original ordered Router file inventory changed.");
+            }
             JSONArray chain=new JSONArray(point.home.activeChain);
-            if(!"node-chain".equals(point.home.logicalMode)||!original.control.id.equals(point.home.activeNodeId)||chain.length()!=original.members.size()||point.files.size()!=original.members.size())throw new IllegalStateException("The original ordered control or complete path changed.");
+            if(!"node-chain".equals(point.home.logicalMode)||!original.control.id.equals(point.home.activeNodeId)||chain.length()!=original.members.size()||point.files.size()!=routerFiles)throw new IllegalStateException("The original ordered control or complete path changed.");
             for(int i=0;i<chain.length();i++){JSONObject member=chain.getJSONObject(i);if(member.length()!=2||!original.members.get(i).id.equals(member.getString("id"))||!original.modes.get(i).equals(member.getString("mode")))throw new IllegalStateException("An original ordered member changed position or transport.");}
         }
         if("external".equals(point.topology))validateExternalRestoreSource(point);

@@ -15,6 +15,32 @@ S = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(S)
 P = S.P
 
+# Store/native handles remain explicit boundaries. Imported members keep a full
+# copied saved-source receipt; they deliberately have no Router file to relink.
+ORDERED_SOURCE = r'''static final class ChainSource {
+ final String id,profileId;final boolean imported;final File file;final byte[] source;
+ ChainSource(Node node)throws Exception{id=profileId=node.id;imported=false;file=node.file;source=Files.readAllBytes(file.toPath());}
+ ChainSource(AndroidStandardExitStore.Entry entry)throws Exception{id=profileId=entry.id;imported=true;file=null;source=AndroidStandardExitStore.snapshot(AndroidStandardExitStore.copy(entry)).getBytes(java.nio.charset.StandardCharsets.UTF_8);}
+ byte[] bytes(){return source.clone();}JSONObject profile()throws Exception{return new JSONObject().put("id",profileId).put("name",id);}
+}'''
+ORDERED_CAPTURE = r'''static final class ChainCapture {
+ final ChainSource control;final List<ChainSource> members;final List<String> modes;boolean revoked;
+ ChainCapture(List<Node> nodes,List<String> modes)throws Exception{this(nodes,modes,null);}
+ ChainCapture(List<Node> nodes,List<String> modes,AndroidStandardExitStore.Entry middle)throws Exception{
+  if(middle!=null&&nodes.size()!=3)throw new IllegalStateException("Imported fixture requires exact middle position");
+  List<ChainSource> selected=new ArrayList<>();for(int i=0;i<nodes.size();i++)selected.add(middle!=null&&i==1?new ChainSource(middle):new ChainSource(nodes.get(i)));
+  members=Collections.unmodifiableList(selected);control=members.get(members.size()-1);this.modes=List.copyOf(modes);
+ }
+ void requireCurrent()throws Exception{
+  if(enforceOrderedWorker&&Thread.currentThread().getName().equals("main"))throw new AssertionError("ordered source validation ran on UI thread");holdWorker();
+  if(revoked)throw new IllegalStateException("changed ordered source epoch");
+  for(ChainSource member:members){
+   byte[] current=member.imported?AndroidStandardExitStore.snapshot(AndroidStandardExitStore.saved.get(member.id)).getBytes(java.nio.charset.StandardCharsets.UTF_8):Files.readAllBytes(member.file.toPath());
+   if(!Arrays.equals(member.source,current))throw new IllegalStateException("changed complete original ordered source");
+  }
+ }
+}'''
+
 OWNERS = r'''
 final class AndroidHomeStateStore {
  static final class Snapshot {boolean connected;long pathGeneration;String sessionId="",phase="off",pathProof="not-run",logicalMode="",runtimeMode="",actualBase="",expectedExternalIp="",fallback="",activeNodeId="",activeEntryId="",activeExitId="",activeEntryMode="",activeExternalId="",activeExternalProtocol="",activeChain="";}
@@ -504,6 +530,50 @@ public final class SpeedLabRestoreTest {
   AndroidNodeStore.ChainCapture source=new AndroidNodeStore.ChainCapture(List.of(f.original,f.first,f.last),modes);
   AndroidNodeStore.active=f.last.id;AndroidNodeChainRuntime runtime=AndroidRuntimeRegistry.instance.nodeChain;runtime.begin(source);AndroidHomeStateStore.proved();f.originalSession=AndroidHomeStateStore.current.sessionId;f.raw="node-chain";return source;
  }
+ static <T>T worker(java.util.concurrent.Callable<T> call)throws Exception{
+  java.util.concurrent.FutureTask<T> task=new java.util.concurrent.FutureTask<>(call);new Thread(task,"original-ordered-restore-fixture").start();return task.get(3,java.util.concurrent.TimeUnit.SECONDS);
+ }
+ static AndroidNodeStore.ChainCapture importedOrderedOriginal(Fixture f)throws Exception{
+  var middle=new AndroidStandardExitStore.Entry();middle.id="ordered-imported-middle";middle.protocol="shadowsocks";middle.secret="captured-private-ss2022-key";middle.policy="captured-home-dns-and-auto-mtu";
+  AndroidStandardExitStore.saved.put(middle.id,AndroidStandardExitStore.copy(middle));
+  var source=new AndroidNodeStore.ChainCapture(List.of(f.original,f.first,f.last),List.of("awg2-fast","shadowsocks","shadowsocks"),middle);
+  AndroidNodeStore.active=f.last.id;AndroidRuntimeRegistry.instance.nodeChain.begin(source);AndroidHomeStateStore.proved();f.originalSession=AndroidHomeStateStore.current.sessionId;f.raw="node-chain";return source;
+ }
+ static void importedOrderedRestoration(Path root)throws Exception{
+  for(String target:List.of("router","multihop","external","system-direct"))for(boolean cancel:new boolean[]{false,true}){
+   Fixture f=new Fixture(root,"node-chain",target);var captured=importedOrderedOriginal(f);
+   try{
+    AndroidUnifiedConnectionController.RestorePoint point;
+    try{point=worker(()->f.connection.captureRestorePoint());}catch(Exception lost){throw new AssertionError("imported ordered capture required a Router file",lost);}
+    check(point.orderedCapture.source==captured&&point.files.size()==2&&point.files.containsKey(f.original.file)&&point.files.containsKey(f.last.file),"imported restore did not retain exact full source and Router-only files");
+    check(captured.members.get(1).imported&&captured.members.get(1).file==null&&f.nodes.file(captured.members.get(1).id)==null,"imported restore fixture fabricated a Router file");
+    f.start();f.quiesce();waitFor(()->AndroidSpeedLab.pending!=null,"imported ordered original never reached temporary measurement");
+    if(cancel){f.controller.cancel();AndroidSpeedLab.drained(true);}else f.measured();f.complete();
+    var home=AndroidHomeStateStore.current;
+    check(home.connected&&home.pathProof.equals("passed")&&home.logicalMode.equals("node-chain")&&!home.sessionId.equals(f.originalSession)&&AndroidRuntimeRegistry.instance.nodeChain.restoredSource==captured,"imported ordered restore lost original capture or fresh proof");
+    check(RuntimeBoundary.restores==1&&home.activeChain.equals(AndroidNodeChainRuntime.chain(captured))&&home.activeNodeId.equals(captured.control.id),"imported ordered restore changed member order or original final");
+    check(cancel?f.result.error!=null:f.result.error==null,"imported ordered restore changed temporary result or cancellation");
+   }finally{AndroidNodeStore.active=null;AndroidRuntimeRegistry.instance.nodeChain.active=false;AndroidHomeStateStore.off();}
+  }
+  for(String fault:List.of("key","policy","protocol","removed","order","mode","router-relink")){
+   Fixture f=new Fixture(root,"node-chain","system-direct");var source=importedOrderedOriginal(f);
+   try{
+    var point=worker(()->f.connection.captureRestorePoint());String id=source.members.get(1).id;
+    if(fault.equals("removed"))AndroidStandardExitStore.saved.remove(id);
+    else if(fault.equals("key"))AndroidStandardExitStore.saved.get(id).secret="replacement-key";
+    else if(fault.equals("policy"))AndroidStandardExitStore.saved.get(id).policy="replacement-DNS";
+    else if(fault.equals("protocol"))AndroidStandardExitStore.saved.get(id).protocol="socks5";
+    else if(fault.equals("order")||fault.equals("mode")){
+     JSONArray rows=new JSONArray(point.home.activeChain);if(fault.equals("order")){Object first=rows.get(0);rows.put(0,rows.get(1));rows.put(1,first);}else rows.getJSONObject(1).put("mode","wg");point.home.activeChain=rows.toString();
+    }else if(fault.equals("router-relink")){
+     Path replacement=Files.createTempFile(root,"relinked-original-",".json");Files.write(replacement,source.members.get(0).bytes());AndroidNodeStore.nodes.set(0,new AndroidNodeStore.Node(f.original.id,replacement.toFile()));
+    }
+    boolean refused=false;try{worker(()->{f.connection.requireRestoreSource(point);return null;});}catch(Exception expected){refused=true;}
+    String witness=fault.equals("order")||fault.equals("mode")?"imported original Home order or mode was accepted":fault.equals("router-relink")?"same-ID Router relink was accepted":"changed imported original source was accepted";
+    check(refused,witness+": "+fault);check(RuntimeBoundary.stops==0&&RuntimeBoundary.restores==0,"invalid imported restore disturbed an owned native path");
+   }finally{AndroidNodeStore.active=null;AndroidRuntimeRegistry.instance.nodeChain.active=false;AndroidHomeStateStore.off();}
+  }
+ }
  static void orderedRestoration(Path root)throws Exception{
   for(List<String> modes:List.of(List.of("wg","wg","shadowsocks"),List.of("awg2-fast","awg2-strong","shadowsocks"),List.of("awg2-strong","wg","shadowsocks")))for(String target:List.of("router","multihop","external","system-direct"))for(boolean cancel:new boolean[]{false,true}){
    Fixture f=new Fixture(root,"node-chain",target);var captured=orderedOriginal(f,modes);var originalPreferences=new HashMap<>(android.content.Context.speedPreferences);
@@ -571,7 +641,7 @@ public final class SpeedLabRestoreTest {
    }finally{android.app.Activity.queuedThread="";android.app.Activity.queuedAction=null;AndroidNodeStore.active=null;AndroidRuntimeRegistry.instance.nodeChain.active=false;AndroidHomeStateStore.off();}
   }
  }
- public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);externalUI(root);ordinaryUI(root);ordinaryRestoration(root);ordinaryRestoreChanges(root);importedMatrix(root);importedUI(root);importedInvalid(root);importedCancellation(root);exactMultihopWinner(root);exactExternalWinner(root);exactTorExecution(root);externalOriginalSources(root);cancellation(root);stale(root);multihopPins(root);permissionCapture(root);permissionSelection(root);uiCancellation(root);orderedRestoration(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks; original native sources before capture and stop,captured winners,all-member ordered restores,40 ordinary and 40 imported paired graph restores,8-protocol typed pickers,cleanup/permission source changes,saved/test selection separation,cancellation phases and newer-user ownership");}
+ public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);if(args.length>1){importedOrderedRestoration(root);System.out.println("Shipping imported ordered restore: "+checks+" checks");return;}matrix(root);externalUI(root);ordinaryUI(root);ordinaryRestoration(root);ordinaryRestoreChanges(root);importedMatrix(root);importedUI(root);importedInvalid(root);importedCancellation(root);exactMultihopWinner(root);exactExternalWinner(root);exactTorExecution(root);externalOriginalSources(root);cancellation(root);stale(root);multihopPins(root);permissionCapture(root);permissionSelection(root);uiCancellation(root);orderedRestoration(root);importedOrderedRestoration(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks; original native sources before capture and stop,captured winners,all-member ordered restores,40 ordinary and 40 imported paired graph restores,8-protocol typed pickers,cleanup/permission source changes,saved/test selection separation,cancellation phases and newer-user ownership");}
 }
 '''
 
@@ -601,6 +671,8 @@ def sources():
     ui['android/widget/SeekBar.java']='package android.widget;public final class SeekBar extends android.view.View{int value;OnSeekBarChangeListener listener;public SeekBar(android.content.Context c){super(c);}public void setMax(int v){}public void setProgress(int v){value=v;if(listener!=null)listener.onProgressChanged(this,v,false);}public int getProgress(){return value;}public void setOnSeekBarChangeListener(OnSeekBarChangeListener l){listener=l;}public interface OnSeekBarChangeListener{void onStartTrackingTouch(SeekBar b);void onStopTrackingTouch(SeekBar b);void onProgressChanged(SeekBar b,int p,boolean u);}}'
     ui['android/app/AlertDialog.java']=ui['android/app/AlertDialog.java'].replace('public void dismiss(){','public boolean isShowing(){return showing;}public void dismiss(){')
     boundaries=P.BOUNDARIES.replace('String id="saved-exit",protocol','String name="Saved exit",id="saved-exit",protocol')
+    boundaries=boundaries.replace(S.block(boundaries,'static final class ChainSource {'),ORDERED_SOURCE)
+    boundaries=boundaries.replace(S.block(boundaries,'static final class ChainCapture {'),ORDERED_CAPTURE)
     for name in ('AndroidHomeStateStore','AndroidModeOrchestrator','AndroidMultihopRuntime','AndroidStandardExitRuntime','AndroidConnectionProfileStore','AndroidNodeChainRuntime'):
         boundaries=replace_class(boundaries,name,'')
     boundaries=boundaries.replace('static void compile(AndroidStandardExitStore.Entry e,JSONObject b,String mode,String execution){requireEntry(e);', 'static void compile(AndroidStandardExitStore.Entry e,JSONObject b,String mode,String execution){if(b.has("availableFinals")&&!b.optJSONArray("availableFinals").toString().contains("\\\""+mode+"\\\""))throw new IllegalArgumentException("original final service unavailable");requireEntry(e);')
@@ -672,5 +744,23 @@ def main():
             assert result.returncode!=0 and 'AssertionError' in result.stderr,label+' negative control escaped'
             path.write_text(source)
         print(f'Android connected Speed Lab negative controls: {len(cases)} rejected')
+        imported_controls=(
+            ('if(!member.imported)files.put(requiredNode(member.id).file,AndroidTorProfile.digest(member.bytes()));',
+             'files.put(requiredNode(member.id).file,AndroidTorProfile.digest(member.bytes()));',
+             'imported ordered capture required a Router file'),
+            ('original.requireCurrent();','', 'changed imported original source was accepted'),
+            ('if(member.length()!=2||!original.members.get(i).id.equals(member.getString("id"))||!original.modes.get(i).equals(member.getString("mode")))',
+             'if(false)', 'imported original Home order or mode was accepted'),
+            ('if(!AndroidTorProfile.digest(member.bytes()).equals(point.files.get(requiredNode(member.id).file)))',
+             'if(false)', 'same-ID Router relink was accepted'),
+        )
+        path=app/'AndroidUnifiedConnectionController.java'
+        for old,new,witness in imported_controls:
+            source=path.read_text();assert source.count(old)==1,witness
+            path.write_text(source.replace(old,new));subprocess.run(compile,check=True,timeout=45,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            result=subprocess.run(run+['imported-ordered'],capture_output=True,text=True,timeout=35)
+            assert result.returncode!=0 and witness in result.stderr,witness+' causal control missed its exact assertion\n'+result.stdout+result.stderr
+            path.write_text(source)
+        print(f'Android imported ordered restoration causal controls: {len(imported_controls)} rejected')
 
 if __name__=='__main__':main()
