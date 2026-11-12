@@ -529,6 +529,86 @@ func TestRouterVPNChainGateOriginalPointersAndGuard(t *testing.T) {
 	}
 }
 
+func TestRouterVPNChainGateRetiredReceiptKeepsOriginalCleanup(t *testing.T) {
+	for _, kind := range []string{"source", "selector", "gate", "copied-control", "cancelled-caller"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFixture(t)
+			f.open(t)
+			if _, err := f.control.ObserveRetired(f.ctx); err == nil {
+				t.Fatal("retirement receipt accepted open admission")
+			}
+			if err := f.control.Revoke(f.ctx); err != nil {
+				t.Fatal(err)
+			}
+			f.valid.Store(false)
+			if _, err := f.control.Observe(f.ctx); err == nil {
+				t.Fatal("retired source regained ordinary proof observation")
+			}
+			if f.control.Open(f.ctx) == nil {
+				t.Fatal("retired source reopened application traffic")
+			}
+			control, ctx := f.control, f.ctx
+			switch kind {
+			case "selector":
+				if err := f.manager.Create(f.ctx, nil, log.NewNOPFactory().Logger(), SelectorTag, C.TypeSelector, &option.SelectorOutboundOptions{Outbounds: []string{"original-final"}, Default: "original-final"}); err != nil {
+					t.Fatal(err)
+				}
+			case "gate":
+				if err := f.manager.Create(f.ctx, nil, log.NewNOPFactory().Logger(), Tag, "gate-test-transport", &transportOptions{&testTransport{}}); err != nil {
+					t.Fatal(err)
+				}
+			case "copied-control":
+				copied := *f.control
+				control = &copied
+			case "cancelled-caller":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(f.ctx)
+				cancel()
+			}
+			receipt, err := control.ObserveRetired(ctx)
+			if kind == "source" {
+				if err != nil || receipt.Open || !receipt.Drained || receipt.Closed || receipt.Identity != "original-preparation:session" {
+					t.Fatal("retired source stranded joined original cleanup", err)
+				}
+			} else if err == nil {
+				t.Fatal("foreign or cancelled owner acquired retirement receipt")
+			}
+		})
+	}
+}
+
+func TestRouterVPNChainGateRetiredReceiptRejectsUnjoinedClose(t *testing.T) {
+	f := newFixture(t)
+	f.open(t)
+	client, peer := net.Pipe()
+	defer peer.Close()
+	var closes atomic.Int64
+	f.transport.dial = func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		return &closeConn{client, func() error {
+			if closes.Add(1) == 1 {
+				return errors.New("original retirement close failed")
+			}
+			return client.Close()
+		}}, nil
+	}
+	if _, err := f.gate.DialContext(f.ctx, N.NetworkTCP, destination); err != nil {
+		t.Fatal(err)
+	}
+	f.valid.Store(false)
+	if f.control.Revoke(f.ctx) == nil {
+		t.Fatal("retirement skipped failed original close")
+	}
+	if _, err := f.control.ObserveRetired(f.ctx); err == nil {
+		t.Fatal("retirement receipt accepted unjoined original close")
+	}
+	if err := f.control.Revoke(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if receipt, err := f.control.ObserveRetired(f.ctx); err != nil || receipt.Open || !receipt.Drained || closes.Load() != 2 {
+		t.Fatal("retirement failed to retry exact original close", err)
+	}
+}
+
 func TestRouterVPNChainGateSourceChangesDuringDial(t *testing.T) {
 	f := newFixture(t)
 	f.open(t)

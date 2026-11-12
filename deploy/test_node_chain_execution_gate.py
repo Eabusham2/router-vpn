@@ -83,6 +83,8 @@ def verdict(raw, code, expected):
 
 
 CONTROLS = (
+    ('retired receipt cannot admit traffic', 'gate.go', 'if ctx.Err() != nil || g.open || g.dials != 0 || len(g.flows) != 0 || g.draining != 0 {', 'if ctx.Err() != nil || g.dials != 0 || len(g.flows) != 0 || g.draining != 0 {', 'RetiredReceiptKeepsOriginalCleanup/source', 'retirement receipt accepted open admission'),
+    ('retired receipt requires joined original close', 'gate.go', 'if ctx.Err() != nil || g.open || g.dials != 0 || len(g.flows) != 0 || g.draining != 0 {', 'if ctx.Err() != nil || g.open || g.dials != 0 || g.draining != 0 {', 'RetiredReceiptRejectsUnjoinedClose', 'retirement receipt accepted unjoined original close'),
     ('copied control', 'gate.go', 'if g.control != c {', 'if false {', 'ClosedAndBoundOnce', 'copied control opened gate'),
     ('closed admission', 'gate.go', 'if ctx.Err() != nil || g.ctx.Err() != nil || !g.open || g.closed {', 'if ctx.Err() != nil || g.ctx.Err() != nil || g.closed {', 'ClosedAfterRevoke', 'closed gate reached downstream'),
     ('original selector pointer', 'gate.go', 'if !found || value != selector {', 'if !found {', 'OriginalPointersAndGuard/selector', 'replaced original owner still observed'),
@@ -261,7 +263,7 @@ class Verdict(unittest.TestCase):
         args = command('go')
         self.assertIn('-race',args); self.assertIn('-timeout=120s',args); self.assertNotIn('-run',args)
         self.assertEqual(args[-1], './protocol/routervpnchaingate')
-        self.assertEqual(len(CONTROLS),14)
+        self.assertEqual(len(CONTROLS),16)
         self.assertTrue(all(control[-1] for control in CONTROLS))
 
 

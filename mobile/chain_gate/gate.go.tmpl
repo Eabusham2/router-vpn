@@ -254,6 +254,27 @@ func (c *Control) Observe(ctx context.Context) (State, error) {
 	return State{g.identity, g.generation, g.open, g.dials == 0 && len(g.flows) == 0, g.closed}, nil
 }
 
+// ObserveRetired is a deny-only cleanup receipt. A retired user/profile guard
+// cannot strand the original native close, but neither an open gate nor an
+// unjoined original operation can use this path. The original capability,
+// managed gate and selector are still required. This never authorizes Open,
+// ordinary observation, or proof of a current selected path.
+func (c *Control) ObserveRetired(ctx context.Context) (State, error) {
+	g, err := c.owner()
+	if err != nil {
+		return State{}, err
+	}
+	if err := g.nativeCurrent(ctx); err != nil {
+		return State{}, err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if ctx.Err() != nil || g.open || g.dials != 0 || len(g.flows) != 0 || g.draining != 0 {
+		return State{}, errors.New("original ordered application cleanup is not joined")
+	}
+	return State{g.identity, g.generation, false, true, g.closed}, nil
+}
+
 func (c *Control) Open(ctx context.Context) error {
 	g, err := c.owner()
 	if err != nil {
