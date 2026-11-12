@@ -238,7 +238,10 @@ def verify_shared_bridge():
     """Compile and call every shipping public wrapper unchanged against the
     actual shared service; native Box creation remains the separate gate."""
     source = (ROOT / 'mobile/routervpn_hop_measurement.go.tmpl').read_text()
-    wrapper = U.S.block(source, 'type RouterHopMeasurement struct') + '\n'
+    # Keep the shipping service interface with its wrapper: native chain owners
+    # implement the same boundary without exposing their raw measurement service.
+    wrapper = U.S.block(source, 'type routerHopMeasurementService interface') + '\n'
+    wrapper += U.S.block(source, 'type RouterHopMeasurement struct') + '\n'
     for name in ('Start', 'StartLatency', 'StartResponse', 'Cancel', 'Drain', 'StatusJSON', 'Close', 'NetworkChanged'):
         wrapper += U.S.block(source, 'func (m *RouterHopMeasurement) ' + name + '(') + '\n'
     test = r'''package libbox
