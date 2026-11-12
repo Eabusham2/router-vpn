@@ -152,23 +152,51 @@ func New(engine Engine, hops []Hop) (*Service, error) {
 // NewContext captures identity without making the returned service's lifetime
 // depend on the short-lived constructor caller.
 func NewContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
+	return newContext(ctx, engine, hops, false)
+}
+
+// NewOrderedContext admits only the compiler's complete ordered private-node
+// prefix inventory. Pair and imported-path constructors keep their old tags.
+func NewOrderedContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
+	if len(hops) < 2 {
+		return nil, errors.New("ordered measurement requires a complete node path")
+	}
+	return newContext(ctx, engine, hops, true)
+}
+
+func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool) (*Service, error) {
 	if engine == nil || len(hops) < 1 || len(hops) > 8 {
 		return nil, errors.New("a captured native path is required")
 	}
 	seen := map[string]bool{}
+	proofs := map[string]bool{}
 	copyHops := append([]Hop(nil), hops...)
 	for index, h := range copyHops {
 		if h.ID == "" || len(h.ID) > 128 || seen[h.ID] || strings.ContainsAny(h.ID, "\r\n\x00") {
 			return nil, errors.New("invalid frozen hop identity")
 		}
-		if h.Tag != "proxy" && h.Tag != "entry-wg" && h.Tag != "routervpn-hop-entry" && h.Tag != "custom-exit" && h.Tag != "external-entry" {
-			return nil, errors.New("unowned measurement route")
-		}
-		if h.Role != "entry" && h.Role != "exit" {
-			return nil, errors.New("unowned measurement role")
-		}
-		if (h.Role == "exit") != (h.Tag == "proxy" || h.Tag == "custom-exit") {
-			return nil, errors.New("hop role differs from native route")
+		if ordered {
+			role := "intermediate"
+			if index == 0 {
+				role = "entry"
+			} else if index == len(copyHops)-1 {
+				role = "exit"
+			}
+			if h.Role != role || !orderedPrefixTag.MatchString(h.Tag) || !strings.HasPrefix(h.Tag, "routervpn-chain-"+strconv.Itoa(index)+"-") ||
+				(h.Kind != "" && h.Kind != "private-node") || proofs[h.Proof] {
+				return nil, errors.New("ordered measurement changed prefix order, role or node proof")
+			}
+			proofs[h.Proof] = true
+		} else {
+			if h.Tag != "proxy" && h.Tag != "entry-wg" && h.Tag != "routervpn-hop-entry" && h.Tag != "custom-exit" && h.Tag != "external-entry" {
+				return nil, errors.New("unowned measurement route")
+			}
+			if h.Role != "entry" && h.Role != "exit" {
+				return nil, errors.New("unowned measurement role")
+			}
+			if (h.Role == "exit") != (h.Tag == "proxy" || h.Tag == "custom-exit") {
+				return nil, errors.New("hop role differs from native route")
+			}
 		}
 		if h.Kind == "" {
 			h.Kind = "private-node"
