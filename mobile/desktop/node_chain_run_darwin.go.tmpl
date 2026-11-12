@@ -128,6 +128,7 @@ func routerVPNRunDarwinNodeChain(parent context.Context, control *routerVPNDarwi
 	}
 	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-chain-ready.json",
 		"stopped.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json",
+		"node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-measure-result.json",
 		"node-protection-retired.json", "node-protection-transfer.json"} {
 		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 			return routerVPNExternalFailure

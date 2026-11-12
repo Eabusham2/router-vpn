@@ -26,7 +26,7 @@ def wire(package, cases):
 
 class DarwinLifecycleRunnerTests(unittest.TestCase):
     def test_exact_required_inventory_and_bounds(self):
-        for package, count in (("protocol/tun", 18), ("adapter/inbound", 12), ("cmd/sing-box", 70),
+        for package, count in (("protocol/tun", 18), ("adapter/inbound", 12), ("cmd/sing-box", 81),
                                ("experimental/libbox/routervpn/mobilemultihop", 33)):
             validator = RUNNER.receipt(package)
             cases = RUNNER.PHASES[package]
@@ -36,7 +36,21 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
             self.assertEqual(validator.PROCESS_TIMEOUT, RUNNER.PROCESS_TIMEOUT)
         self.assertEqual(RUNNER.TEST_TIMEOUT, "120s")
         self.assertEqual(RUNNER.PROCESS_TIMEOUT, 600)
-        self.assertEqual(len(RUNNER.MUTATIONS), 16)
+        self.assertEqual(len(RUNNER.MUTATIONS), 19)
+
+    def test_each_measurement_mailbox_has_original_refusal_and_causal_omission(self):
+        cases = RUNNER.PHASES["cmd/sing-box"]["TestRouterVPNNodeChainDarwinMeasurementStartup"]
+        self.assertEqual(set(cases), {"absent"} | {
+            name + "-" + kind for name in ("request", "cancel", "result")
+            for kind in ("regular", "directory", "symlink")})
+        source = (ROOT / "mobile/desktop/node_chain_control_darwin_test.go.tmpl").read_text()
+        self.assertIn("err := routerVPNRunDarwinNodeChain(context.Background(), control)", source)
+        selected = [control for control in RUNNER.MUTATIONS if control[0].startswith("preexisting-measurement-")]
+        self.assertEqual(len(selected), 3)
+        for name in ("request", "cancel", "result"):
+            control, = [control for control in selected if control[0] == "preexisting-measurement-" + name]
+            self.assertIn('"node-chain-measure-' + name + '.json"', control[3])
+            self.assertEqual(control[5], "TestRouterVPNNodeChainDarwinMeasurementStartup/" + name + "-regular")
 
     def test_missing_original_run_and_package_receipt(self):
         for package, cases in RUNNER.PHASES.items():
