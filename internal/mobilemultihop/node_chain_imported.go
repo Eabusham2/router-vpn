@@ -84,7 +84,7 @@ func parseNodeChainImportedMember(input string) (*nodeChainImportedMember, error
 		return nil, bad
 	}
 	out, ok := outs[0].(map[string]any)
-	if !ok || out["tag"] != ExternalFinalTag || out["type"] != "shadowsocks" || out["method"] != NativeStartLayerMethod || strings.Contains(predecessorText(out, "password"), ":") || !importedSS2022Credentials(predecessorText(out, "method"), predecessorText(out, "password")) || out["detour"] != nil || out["domain_resolver"] != nil || out["udp_over_tcp"] != nil || out["network"] != nil {
+	if !ok || out["tag"] != ExternalFinalTag || out["type"] != "shadowsocks" || strings.Contains(predecessorText(out, "password"), ":") || !importedSS2022Credentials(predecessorText(out, "method"), predecessorText(out, "password")) || out["detour"] != nil || out["domain_resolver"] != nil || out["udp_over_tcp"] != nil || out["network"] != nil {
 		return nil, bad
 	}
 	addr, err := netip.ParseAddr(predecessorText(out, "server"))

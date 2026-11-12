@@ -255,6 +255,8 @@ def checked_sources(source):
         raise ValueError('Installed imported host lost its independent WG entry and paired SS final peer')
     if 'protocol/routervpnamnezia/routervpn_desktop_node_chain_peer_linux_test.go' not in native:
         raise ValueError('Installed ordered host lost its independent complete encrypted prefix peer')
+    if 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_test.go' not in native:
+        raise ValueError('Installed custom ordered host lost its original encrypted middle peer')
     if 'protocol/routervpnamnezia/routervpn_desktop_resolved_broker_test.go' not in native:
         raise ValueError('Installed resolved composition lost its original authenticated broker image source')
     for name in ('ui.html', 'logical_ui.js'):
@@ -347,6 +349,30 @@ LAYERED_ENTRY_AUTHORITY_CASES = (LAYERED_ENTRY_AUTHORITY_ROOT, *(LAYERED_ENTRY_A
 
 def check_layered_entry_authority_verdict(output):
     NODE.require_native_verdicts(output, LAYERED_ENTRY_AUTHORITY_CASES, 'installed layered entry authority')
+
+
+NODE_CHAIN_IMPORTED_TRAFFIC = 'TestRouterVPNDesktopNodeChainImportedMiddleTraffic'
+NODE_CHAIN_IMPORTED_METHODS = ('2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305')
+NODE_CHAIN_IMPORTED_VERDICTS = (NODE_CHAIN_IMPORTED_TRAFFIC, *(
+    NODE_CHAIN_IMPORTED_TRAFFIC + '/' + mode + '/' + method + suffix
+    for mode in ('wg', 'awg2-fast', 'awg2-strong') for method in NODE_CHAIN_IMPORTED_METHODS
+    for suffix in ('', '/public-middle-private-final', '/final-selected-dns', '/middle-refuses-selected-dns',
+                   '/wrong-middle-key', '/omit-middle', '/wrong-final-key', '/stop-drains-middle-socket')))
+
+
+def check_node_chain_imported_verdict(output):
+    NODE.require_native_verdicts(output, NODE_CHAIN_IMPORTED_VERDICTS, 'ordered custom SS2022 middle native reference')
+
+
+def execute_node_chain_imported_peer(peer, source, captured):
+    status, output = NODE.run([str(peer), '-test.v', '-test.timeout=90s',
+                              '-test.run=^' + NODE_CHAIN_IMPORTED_TRAFFIC + '$'],
+                             cwd=source, env=captured, timeout=100)
+    if status:
+        raise ValueError('Ordered custom SS2022 native reference failed:\n' + output[-16384:])
+    check_node_chain_imported_verdict(output)
+    print(output, end='' if output.endswith('\n') else '\n')
+    return output
 
 
 NODE_CHAIN_PEER_CAPTURE = 'TestRouterVPNDesktopNodeChainPeerCapture'
@@ -947,6 +973,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
         # negative controls. The installed namespace/TUN inventory below is
         # still mandatory and supplies separate native-host evidence.
         node_chain_peer_output = execute_node_chain_peer(peer, source, captured)
+        node_chain_imported_output = execute_node_chain_imported_peer(peer, source, captured)
         node_chain_host_authority_output = execute_node_chain_host_authority(binary, captured)
         logs = []
         for case in (*CASES, *REVERSE_CASES):
@@ -989,6 +1016,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'connect_tls_cases': list(CONNECT_TLS_CASES), 'connect_tls_output_sha256': hashlib.sha256(connect_tls_output.encode()).hexdigest(),
                   'layer_peer_cases': list(LAYER_PEER_CASES), 'layer_peer_output_sha256': hashlib.sha256(layer_output.encode()).hexdigest(),
                   'node_chain_host_authority_cases': list(NODE_CHAIN_HOST_AUTHORITY_CASES), 'node_chain_host_authority_output_sha256': hashlib.sha256(node_chain_host_authority_output.encode()).hexdigest(),
+                  'node_chain_imported_cases': list(NODE_CHAIN_IMPORTED_VERDICTS), 'node_chain_imported_output_sha256': hashlib.sha256(node_chain_imported_output.encode()).hexdigest(),
                   'node_chain_peer_cases': list(NODE_CHAIN_PEER_CASES), 'node_chain_peer_output_sha256': hashlib.sha256(node_chain_peer_output.encode()).hexdigest(),
                   'cases': list(CASES), 'reverse_cases': list(REVERSE_CASES), 'compiled_negative_controls': [defect, private_defect, ds_defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
     CHILD.publish_receipt(receipt_path, result, workspace)

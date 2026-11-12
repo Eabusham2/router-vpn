@@ -60,6 +60,40 @@ class InstalledNodeChainPeerPreflight(unittest.TestCase):
         self.assertIn("'node_chain_peer_cases': list(NODE_CHAIN_PEER_CASES)", body)
 
 
+class InstalledCustomMiddlePeerPreflight(unittest.TestCase):
+    def completed(self):
+        return ''.join('=== RUN   ' + name + '\n--- PASS: ' + name + ' (0.01s)\n'
+                       for name in G.NODE_CHAIN_IMPORTED_VERDICTS)
+
+    def test_exact_nine_cipher_paths_and_causal_controls(self):
+        self.assertEqual(len(G.NODE_CHAIN_IMPORTED_VERDICTS), 73)
+        self.assertEqual(len(set(G.NODE_CHAIN_IMPORTED_VERDICTS)), 73)
+        good = self.completed()
+        G.check_node_chain_imported_verdict(good)
+        for line in good.splitlines(True):
+            for changed in (good.replace(line, '', 1), good + line, good.replace(line, 'prefix ' + line, 1)):
+                with self.assertRaises(ValueError):
+                    G.check_node_chain_imported_verdict(changed)
+        for fault in ('--- FAIL:', '--- SKIP:', 'WARNING: DATA RACE', 'panic:'):
+            with self.assertRaises(ValueError):
+                G.check_node_chain_imported_verdict(good + fault)
+
+    def test_actual_gate_retains_fixed_execution_budget_and_receipt(self):
+        peer, source, captured = Path('/captured/peer'), Path('/captured/source'), {'GOWORK': 'off'}
+        with patch.object(G.NODE, 'run', return_value=(0, self.completed())) as execute, redirect_stdout(io.StringIO()):
+            self.assertEqual(G.execute_node_chain_imported_peer(peer, source, captured), self.completed())
+        execute.assert_called_once_with([str(peer), '-test.v', '-test.timeout=90s',
+            '-test.run=^' + G.NODE_CHAIN_IMPORTED_TRAFFIC + '$'], cwd=source, env=captured, timeout=100)
+        for status, output in ((1, self.completed()), (0, 'PASS\n'), (0, '')):
+            with patch.object(G.NODE, 'run', return_value=(status, output)), self.assertRaises(ValueError):
+                G.execute_node_chain_imported_peer(peer, source, captured)
+        body = inspect.getsource(G.execute)
+        self.assertIn('node_chain_imported_output = execute_node_chain_imported_peer(peer, source, captured)', body)
+        self.assertLess(body.index('execute_node_chain_imported_peer(peer, source, captured)'), body.index('for case in (*CASES, *REVERSE_CASES)'))
+        self.assertIn("'node_chain_imported_cases': list(NODE_CHAIN_IMPORTED_VERDICTS)", body)
+        self.assertIn('routervpn_desktop_node_chain_imported_test.go', inspect.getsource(G.checked_sources))
+
+
 class InstalledNodeChainHostGate(unittest.TestCase):
     def test_complete_ordered_host_requires_original_encrypted_receipts(self):
         expected = ('node-chain-3-connect', 'node-chain-4-connect', 'node-chain-3-wrong-middle-key',
