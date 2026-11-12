@@ -1527,7 +1527,7 @@ func TestOriginalSSFinalTrustFault(t *testing.T){
 
     def test_groups_keep_every_original_leaf_once_and_refuse_foreign_or_missing_verdicts(self):
         self.assertEqual(tuple(GATE.EXTERNAL_SS_ENTRY_GROUPS), GATE.EXTERNAL_SS_ENTRY_NETWORKS)
-        self.assertEqual([len(groups) for groups in GATE.EXTERNAL_SS_ENTRY_GROUPS.values()], [4, 2, 2, 3])
+        self.assertEqual([len(groups) for groups in GATE.EXTERNAL_SS_ENTRY_GROUPS.values()], [6, 2, 2, 5])
         for network, groups in GATE.EXTERNAL_SS_ENTRY_GROUPS.items():
             required = GATE.EXTERNAL_SS_ENTRY_CASES[network]
             captured = []
@@ -1535,6 +1535,9 @@ func TestOriginalSSFinalTrustFault(t *testing.T){
                 captured.extend(cases[2:])
                 self.assertEqual(cases[:2], required[:2])
                 self.assertEqual(len(cases), len(set(cases)))
+                if group.startswith("layers-"):
+                    self.assertEqual(len(cases[2:]), 3)
+                    self.assertEqual({case.split("/")[-2] for case in cases[2:]}, {group.removeprefix("layers-")})
                 matches = lambda case: all(re.search(pattern, part) for pattern, part in zip(expression.split("/"), case.split("/")))
                 self.assertEqual({case for case in required if matches(case)}, set(cases))
                 complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in cases)
@@ -1585,7 +1588,7 @@ func TestOriginalSSFinalTrustFault(t *testing.T){
                 self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
                 selected = ((network, group, expression) for network, groups in GATE.EXTERNAL_SS_ENTRY_GROUPS.items()
                             for group, (expression, _) in groups.items()) if not control else (
-                                ("shadowsocks", "layers", GATE.EXTERNAL_SS_ENTRY_GROUPS["shadowsocks"]["layers"][0]),)
+                                ("shadowsocks", "layers-aes-256-gcm+xor-whitening", GATE.EXTERNAL_SS_ENTRY_GROUPS["shadowsocks"]["layers-aes-256-gcm+xor-whitening"][0]),)
                 for network, group, expression in selected:
                     def run():
                         return subprocess.run([str(binary), "-test.run=" + expression, "-test.v", "-test.timeout=5s"],
@@ -1599,7 +1602,7 @@ func TestOriginalSSFinalTrustFault(t *testing.T){
                                 GATE.report_external_ss_entry(result.returncode, output, network, group)
                         else:
                             GATE.report_external_ss_entry(result.returncode, output, network, group)
-                            if network == "shadowsocks" and group == "layers":
+                            if network == "shadowsocks" and group.startswith("layers-"):
                                 duplicate = run()
                                 self.assertEqual(duplicate.returncode, 0, duplicate.stdout + duplicate.stderr)
                                 with self.assertRaisesRegex(ValueError, "required native result"):
@@ -1639,7 +1642,7 @@ func TestOriginalSSFinalTrustFault(t *testing.T){
 
     def test_ss_entry_builds_are_separate_and_all_native_cases_and_controls_execute(self):
         calls = self.dispatch()
-        self.assertEqual([timeout for _, timeout in calls], [600, *([195] * 11), 600, 75, 600, 75])
+        self.assertEqual([timeout for _, timeout in calls], [600, *([195] * 15), 600, 75, 600, 75])
         self.assertEqual(len({command[0] for command, timeout in calls if timeout == 195}), 1)
         expressions = [next(value.removeprefix("-test.run=") for value in command if value.startswith("-test.run=")) for command, timeout in calls if timeout == 195]
         self.assertEqual(expressions, [expression for groups in GATE.EXTERNAL_SS_ENTRY_GROUPS.values() for expression, _ in groups.values()])
@@ -1771,7 +1774,7 @@ class NativePhaseOrchestration(unittest.TestCase):
         self.assertEqual(GATE.PHASE_TIMEOUTS["node-controls"] - GATE.PHASE_TIMEOUTS["node-baseline"], 4 * (600 + 105) - 600 - 1215)
         self.assertEqual(GATE.PHASE_TIMEOUTS["external-socks"], 2 * 180 + 90 + 60 + 600 + 315 + 6 * (600 + 75))
         self.assertEqual(GATE.PHASE_TIMEOUTS["external-packet"], 2 * 180 + 90 + 60 + 600 + 2 * 75 + (5 + len(GATE.EXTERNAL_SERVER_GROUPS)) * 195 + 2 * (600 + 4 * 75) + len(GATE.EXTERNAL_LEASE_CONTROLS) * (600 + 75))
-        self.assertEqual(GATE.PHASE_TIMEOUTS["external-ss-entry"], GATE._PHASE_COMMON + 600 + 11 * 195 + 2 * (600 + 75))
+        self.assertEqual(GATE.PHASE_TIMEOUTS["external-ss-entry"], GATE._PHASE_COMMON + 600 + 15 * 195 + 2 * (600 + 75))
 
     def test_builder_calls_complete_phase_orchestrator_without_old_aggregate(self):
         source = (ROOT / "deploy/build-native-runtime.py").read_text()

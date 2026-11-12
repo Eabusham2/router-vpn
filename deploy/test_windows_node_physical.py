@@ -228,9 +228,10 @@ EXTERNAL_SS_ENTRY_CASES = {network: (EXTERNAL_SS_ENTRY_ROOT, EXTERNAL_SS_ENTRY_R
 
 
 def external_ss_entry_groups():
-    # Both native architectures exhausted the network-wide 180s alarm while
-    # starting a new layer child. Keep that bound for each independent group;
-    # every original leaf still runs once, with its own peer and WFP owner.
+    # The ARM64 nine-pair layer group exhausted its 180s alarm during the
+    # seventh independent child (run 43180100178, job 131084183125). Capture
+    # one entry layer per group so every final layer retains the original
+    # native deadline, peer, WFP owner and exactly-once verdict requirement.
     groups = {}
     for network, cases in EXTERNAL_SS_ENTRY_CASES.items():
         prefix = EXTERNAL_SS_ENTRY_ROOT + "/" + network
@@ -239,7 +240,8 @@ def external_ss_entry_groups():
         selected = {
             "lifecycle": tuple(leaf for leaf in leaves if "/" not in leaf and leaf not in receipt),
             "rejection": tuple(leaf for leaf in leaves if leaf.startswith("reject/")),
-            "layers": tuple(leaf for leaf in leaves if leaf.startswith("layers/")),
+            **{"layers-" + entry: tuple(leaf for leaf in leaves if leaf.startswith("layers/" + entry + "/"))
+               for entry in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")},
             "receipt": tuple(leaf for leaf in leaves if leaf in receipt),
         }
         groups[network] = {}
