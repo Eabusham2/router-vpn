@@ -12,10 +12,19 @@ import (
 // profile. Its original proof choice and original native teardown must join
 // before one replacement can receive it. Durable Last is a separate API.
 type RouterNodeChainExecutionRestoreCapture struct {
-	owner   *RouterNodeChainExecution
-	state   *routerNodeChainExecutionState
-	capture mobilemultihop.NodeChainExecutionRestoreCapture
-	claimed atomic.Bool
+	owner       *RouterNodeChainExecution
+	state       *routerNodeChainExecutionState
+	controller  *routerNodeChainExecutionControllerRef
+	engine      *routerNodeChainExecutionEngineRef
+	native      *routerNodeChainExecutionNative
+	mobile      mobilemultihop.NodeChainExecutionMobileRestoreCapture
+	claimed     atomic.Bool
+	replacement atomic.Pointer[routerNodeChainExecutionRestoreReplacement]
+}
+
+type routerNodeChainExecutionRestoreReplacement struct {
+	owner       *RouterNodeChainExecution
+	preparation *mobilemultihop.NodeChainExecutionPreparation
 }
 
 // The host calls this only after its original native Close. Execution.Close
@@ -51,41 +60,69 @@ func (m *RouterNodeChainExecution) nativeClosedContext(ctx context.Context) erro
 func (m *RouterNodeChainExecution) CaptureRestore() (*RouterNodeChainExecutionRestoreCapture, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
-	if m.healthyContext(ctx) != nil {
-		return nil, errRouterNodeChainExecution
-	}
-	state := m.state.Load()
-	controller := state.controller.Load()
-	if controller == nil {
-		return nil, errRouterNodeChainExecution
-	}
-	capture, err := controller.value.CaptureRestoreContext(ctx)
+	state, controller, runtime, err := m.executionRuntimeContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := m.nativeCurrent(ctx, state); err != nil {
+	engine, native := state.engine.Load(), m.native.Load()
+	if engine == nil || native == nil || native.server != state.server || native.service != state.service ||
+		native.capture == nil || !native.capture.Owns(state.instance, state.box) {
+		return nil, errRouterNodeChainExecution
+	}
+	capture, err := runtime.CaptureMobileRestoreContext(ctx)
+	if err != nil {
 		return nil, err
 	}
-	retained := &RouterNodeChainExecutionRestoreCapture{owner: m, state: state, capture: capture}
-	if !m.restoreCapture.CompareAndSwap(nil, retained) {
-		retained = m.restoreCapture.Load()
+	if m.nativeCurrent(ctx, state) != nil || state.controller.Load() != controller || state.engine.Load() != engine || m.native.Load() != native {
+		return nil, errRouterNodeChainExecution
 	}
-	if retained == nil || retained.owner != m || retained.state != state || retained.claimed.Load() || m.nativeCurrent(ctx, state) != nil {
+	retained := &RouterNodeChainExecutionRestoreCapture{owner: m, state: state, controller: controller, engine: engine, native: native, mobile: capture}
+	for {
+		original := m.restoreCapture.Load()
+		if original != nil && original.claimed.Load() {
+			return nil, errRouterNodeChainExecution
+		}
+		if original != nil && original.state == state && original.controller == controller && original.engine == engine && original.native == native {
+			retained = original
+			break
+		}
+		// A subsequent authorized MTU generation may capture its own actual
+		// readback. The old unclaimed capsule loses authority; it is never
+		// silently relabeled with the new reader or effective MTU.
+		if m.restoreCapture.CompareAndSwap(original, retained) {
+			break
+		}
+	}
+	if retained.owner != m || retained.claimed.Load() || m.restoreCapture.Load() != retained ||
+		m.nativeCurrent(ctx, state) != nil || state.controller.Load() != controller || state.engine.Load() != engine || m.native.Load() != native {
 		return nil, errRouterNodeChainExecution
 	}
 	return retained, nil
 }
 
-func (c *RouterNodeChainExecutionRestoreCapture) originalJoined(ctx context.Context) error {
-	if c == nil || ctx == nil || c.owner == nil || c.state == nil || c.owner.state.Load() != c.state || !c.owner.closed.Load() || !c.owner.retired.Load() || c.state.instance == nil || c.state.box == nil {
+func (c *RouterNodeChainExecutionRestoreCapture) originalNativeJoined(ctx context.Context) error {
+	if c == nil || ctx == nil || c.owner == nil || c.state == nil || c.controller == nil || c.engine == nil || c.native == nil ||
+		c.owner.restoreCapture.Load() != c || c.owner.state.Load() != c.state || c.owner.native.Load() != c.native ||
+		c.state.controller.Load() != c.controller || c.state.engine.Load() != c.engine ||
+		!c.owner.closed.Load() || !c.owner.retired.Load() || c.state.instance == nil || c.state.box == nil {
 		return errRouterNodeChainExecution
 	}
-	if _, err := c.capture.Source(); err != nil {
+	// Native reader retirement and shared remote join do not substitute the
+	// original daemon Instance.Close return value. Require all three owners.
+	if err := c.owner.nativeClosedContext(ctx); err != nil {
 		return err
 	}
-	// A cancelled context, nil StartedService.instance or early Box.done
-	// signal cannot stand in for the original actual Close return value.
-	return c.owner.nativeClosedContext(ctx)
+	return ctx.Err()
+}
+
+func (c *RouterNodeChainExecutionRestoreCapture) originalJoined(ctx context.Context) error {
+	if err := c.originalNativeJoined(ctx); err != nil {
+		return err
+	}
+	if _, err := c.mobile.SourceContext(ctx); err != nil {
+		return err
+	}
+	return ctx.Err()
 }
 
 func NewRouterNodeChainExecutionRestore(capture *RouterNodeChainExecutionRestoreCapture) (*RouterNodeChainExecution, error) {
@@ -94,13 +131,52 @@ func NewRouterNodeChainExecutionRestore(capture *RouterNodeChainExecutionRestore
 	if err := capture.originalJoined(ctx); err != nil {
 		return nil, err
 	}
-	m, err := NewRouterNodeChainExecution(capture.owner.prep.LocalSource(), capture.owner.prep.Execution())
+	preparation, err := capture.mobile.NewPreparationContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if m.Source() != capture.owner.Source() || m.Config() != capture.owner.Config() || !capture.claimed.CompareAndSwap(false, true) {
+	if preparation.Source() != capture.owner.Source() || preparation.LocalSourceSHA256() != capture.owner.LocalSourceSHA256() ||
+		preparation.Execution() != capture.owner.RequestedExecution() {
 		return nil, errRouterNodeChainExecution
 	}
-	m.restore = capture
+	if _, err := preparation.MobileRestoreReadback(); err != nil {
+		return nil, err
+	}
+	if err := capture.originalJoined(ctx); err != nil {
+		return nil, err
+	}
+	if !capture.claimed.CompareAndSwap(false, true) {
+		return nil, errRouterNodeChainExecution
+	}
+	m := &RouterNodeChainExecution{prep: preparation, restore: capture}
+	capture.replacement.Store(&routerNodeChainExecutionRestoreReplacement{owner: m, preparation: preparation})
 	return m, nil
+}
+
+// RequireRestore validates a process-owned returned plan. Its actual Config
+// may differ at the captured TUN MTU; equality with the old initial Config is
+// not proof. No serialized launch, scalar MTU or matching source can recreate
+// this exact capsule-to-preparation-to-object relationship.
+func (m *RouterNodeChainExecution) RequireRestore(capture *RouterNodeChainExecutionRestoreCapture) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if m == nil || capture == nil || capture.owner == nil || m.restore != capture || !capture.claimed.Load() || m.retired.Load() || m.closed.Load() {
+		return errRouterNodeChainExecution
+	}
+	replacement := capture.replacement.Load()
+	if replacement == nil || replacement.owner != m || replacement.preparation != m.prep || m.prep == nil ||
+		m.Source() != capture.owner.Source() || m.LocalSourceSHA256() != capture.owner.LocalSourceSHA256() ||
+		m.RequestedExecution() != capture.owner.RequestedExecution() {
+		return errRouterNodeChainExecution
+	}
+	if _, err := m.prep.MobileRestoreReadback(); err != nil {
+		return err
+	}
+	if err := capture.originalJoined(ctx); err != nil {
+		return err
+	}
+	if capture.replacement.Load() != replacement || m.retired.Load() || m.closed.Load() {
+		return errRouterNodeChainExecution
+	}
+	return ctx.Err()
 }

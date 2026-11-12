@@ -80,6 +80,7 @@ def verdict(raw, code, expected):
 
 
 CONTROLS = (
+    ('restore original Instance join', 'experimental/libbox/routervpn_node_chain_execution_restore.go', '\tif err := c.owner.nativeClosedContext(ctx); err != nil {\n\t\treturn err\n\t}', '\t// Original instance join intentionally omitted.', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeRestoreRequiresOriginalNativeJoin', 'restore used shared close without original native join'),
     ('exact Last capture controller', 'experimental/libbox/routervpn_node_chain_execution_last.go', ' || state.controller.Load() != controller', '', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeLastCaptureKeepsController/replacement', 'Last capture borrowed successor controller'),
     ('saved Last schema replay', 'experimental/libbox/routervpn_node_chain_execution.go', '\t\tm.last = &last', '\t\t_ = last', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeLastLaunchKeepsSavedChoice/server', 'saved Last choice lost or fabricated proof'),
     ('no fresh Compare fallback', 'experimental/libbox/routervpn_node_chain_execution_lifecycle.go', '\tif m.last != nil {\n\t\tif m.restore != nil {', '\tif m.last != nil && false {\n\t\tif m.restore != nil {', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeLastNeverFallsBack', 'saved Last refused without exact discovery/adoption or fell back to Compare'),

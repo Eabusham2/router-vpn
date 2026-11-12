@@ -217,7 +217,7 @@ func (m *RouterNodeChainExecution) runWithFactory(server *CommandServer, factory
 		if err := m.restore.originalJoined(startup); err != nil {
 			return err
 		}
-		source, err := m.restore.capture.Source()
+		source, err := m.restore.mobile.SourceContext(startup)
 		if err != nil {
 			return err
 		}
@@ -251,7 +251,7 @@ func (m *RouterNodeChainExecution) runWithFactory(server *CommandServer, factory
 	if m.last != nil {
 		controller, err = mobilemultihop.NewNodeChainExecutionLastRuntime(startup, lastPlan, engine)
 	} else if m.restore != nil {
-		controller, err = mobilemultihop.NewNodeChainExecutionRestoreRuntime(m.restore.capture, engine)
+		controller, err = mobilemultihop.NewMobileNodeChainExecutionRestoreRuntime(startup, m.restore.mobile, projection, engine)
 	} else {
 		controller, err = mobilemultihop.NewNodeChainExecutionRuntime(projection, engine)
 	}

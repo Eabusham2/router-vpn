@@ -70,6 +70,25 @@ class Preparation(unittest.TestCase):
                 self.prepare(vendor, '0'*40)
             self.assertFalse((vendor/P.OWNER).exists())
 
+    def test_published_restore_test_upgrade_keeps_exact_previous_files(self):
+        restore = {'experimental/libbox/routervpn_node_chain_execution_restore_test.go'}
+        last = {'experimental/libbox/routervpn_node_chain_execution_last.go', 'experimental/libbox/routervpn_node_chain_execution_last_test.go'}
+        for removed in (restore, restore|last, restore|{next(iter(last))}):
+            with self.subTest(removed=removed), tempfile.TemporaryDirectory() as parent:
+                vendor = self.fixture(parent)
+                self.prepare(vendor)
+                record = json.loads((vendor/P.OWNER).read_bytes())
+                for relative in removed:
+                    del record['files'][relative]
+                    (vendor/relative).unlink()
+                (vendor/P.OWNER).write_text(json.dumps(record))
+                if removed == restore|{next(iter(last))}:
+                    with self.assertRaisesRegex(ValueError, 'ownership inventory'):
+                        self.prepare(vendor)
+                else:
+                    self.prepare(vendor)
+                    self.assertEqual(set(json.loads((vendor/P.OWNER).read_bytes())['files']), set(P.TEMPLATES.values()))
+
     def test_original_native_dependencies_are_exact(self):
         for relative in P.PREREQUISITES:
             with self.subTest(relative=relative), tempfile.TemporaryDirectory() as parent:

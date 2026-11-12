@@ -15,6 +15,7 @@ TEMPLATES = {
     'bridge.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution.go',
     'lifecycle.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_lifecycle.go',
     'restore.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_restore.go',
+    'restore_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_restore_test.go',
     'activities.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_activities.go',
     'measurement.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_measurement.go',
     'measurement_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_measurement_test.go',
@@ -128,7 +129,11 @@ def prepare(vendor):
         if not manifest.is_file() or manifest.stat().st_size > 16384:
             raise ValueError('invalid mobile execution ownership file')
         record = json.loads(manifest.read_bytes())
-        if not isinstance(record, dict) or set(record) != {'schema', 'core', 'files'} or record['schema'] != 1 or record['core'] != PIN or not isinstance(record['files'], dict) or set(record['files']) not in (set(TEMPLATES.values()), set(TEMPLATES.values()) - {'experimental/libbox/routervpn_node_chain_execution_last.go', 'experimental/libbox/routervpn_node_chain_execution_last_test.go'}):
+        current = set(TEMPLATES.values())
+        last = {'experimental/libbox/routervpn_node_chain_execution_last.go', 'experimental/libbox/routervpn_node_chain_execution_last_test.go'}
+        restore_test = {'experimental/libbox/routervpn_node_chain_execution_restore_test.go'}
+        inventories = (current, current-last, current-restore_test, current-last-restore_test)
+        if not isinstance(record, dict) or set(record) != {'schema', 'core', 'files'} or record['schema'] != 1 or record['core'] != PIN or not isinstance(record['files'], dict) or set(record['files']) not in inventories:
             raise ValueError('invalid mobile execution ownership inventory')
         previous = record['files']
         for relative, checksum in previous.items():
