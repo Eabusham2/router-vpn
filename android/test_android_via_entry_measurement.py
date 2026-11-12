@@ -5,9 +5,10 @@ Android network handles and WireGuard's OS backend are deterministic doubles.
 The ordinary startup proof uses a real loopback HTTP server. Candidate sockets
 exist only on the captured Network double: .invalid names cannot use host DNS.
 This is lifecycle/routing-boundary coverage, not physical Android VPN evidence.
+The ranking control alone supplies deterministic TCP sample durations; its
+controlled values test statistics and selection, not native network latency.
 """
 from pathlib import Path
-import shutil
 import os
 import subprocess
 import tempfile
@@ -101,6 +102,8 @@ import java.io.*;import java.net.*;import java.nio.charset.StandardCharsets;impo
 import java.util.*;import java.util.concurrent.*;import java.util.concurrent.atomic.*;import javax.net.SocketFactory;import org.json.JSONObject;
 public final class ViaEntryHarness {
  static int checks;static final String ID="a".repeat(64);
+ static final ThreadLocal<Long> sampleClock=new ThreadLocal<>();
+ static long sampleNanoTime(){Long value=sampleClock.get();return value==null?System.nanoTime():value;}
  static void check(boolean value,String text){checks++;if(!value)throw new AssertionError(text);}
  static void await(CountDownLatch value,String text)throws Exception{check(value.await(5,TimeUnit.SECONDS),text);}
  interface Action {void run()throws Exception;}
@@ -165,7 +168,8 @@ public final class ViaEntryHarness {
    int count=(last==10?fixture.aConnects:fixture.bConnects).incrementAndGet();
    if(fixture.blockSocket){fixture.entered.countDown();synchronized(this){while(!closed)try{wait();}catch(InterruptedException ignored){}}throw new SocketException("captured socket closed");}
    if(last==10&&count==fixture.failSample)throw new SocketException("sample timeout");
-   try{Thread.sleep(fixture.inverted?(last==10?(count<=27?1:35):10):(last==10?6:25));}catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new SocketException("interrupted");}
+   if(fixture.inverted){Long current=sampleClock.get();long millis=last==10?(count<=27?1:35):10;sampleClock.set((current==null?0:current)+millis*1_000_000L);}
+   else try{Thread.sleep(last==10?6:25);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new SocketException("interrupted");}
    Runnable changed=fixture.change;if(changed!=null){fixture.change=null;changed.run();}
   }
   public void setSoTimeout(int timeout){}
@@ -208,6 +212,7 @@ public final class ViaEntryHarness {
   f.inverted=true;Receiver r=f.start();await(r.done,"fifty-sample robust candidate round");check(r.error==null&&r.result!=null,"robust routed comparison completed");
   var a=r.result.measurement("a");var b=r.result.measurement("b");
   check(a.samples==50&&b.samples==50&&f.aConnects.get()==51&&f.bConnects.get()==51,"via-entry comparison did not measure exactly fifty actual connections per candidate");
+  check(a.medianMs==1&&a.trimmedMeanMs==17.15&&b.medianMs==10&&b.trimmedMeanMs==10,"controlled socket durations did not reach shipping routed sample statistics");
   check(a.medianMs<b.medianMs&&a.trimmedMeanMs>b.trimmedMeanMs&&r.result.fastest()==f.b,"routed Fastest used favorable median instead of fifty-sample trimmed mean");
   r.result.requireCurrent();f.drained();
   var sameA=new AndroidTelemetry.Result("a","A",1,5,10,10,15,20,50,0);var sameB=new AndroidTelemetry.Result("b","B",1,5,10,10,15,20,50,0);
@@ -267,6 +272,14 @@ SOURCES["com/wireguard/config/Config.java"] = SOURCES["com/wireguard/config/Conf
 SOURCES["com/wireguard/android/backend/GoBackend.java"] = SOURCES["com/wireguard/android/backend/GoBackend.java"].rstrip()[:-1] + "public Tunnel.State getState(Tunnel t){return Tunnel.State.DOWN;}public static class Statistics {public com.wireguard.crypto.Key[] peers(){return new com.wireguard.crypto.Key[0];}}public Statistics getStatistics(Tunnel t){return new Statistics();}}"
 SOURCES["com/eabusham/routervpn/AndroidTelemetryNetwork.java"] = "package com.eabusham.routervpn;final class AndroidTelemetryNetwork {interface Check{void run()throws Exception;}static AndroidTelemetryNetwork addressed(android.content.Context c,java.util.Collection<String> addresses,Check check)throws Exception{throw new IllegalStateException(\"No telemetry native owner in this fixture\");}}"
 
+def sample_clock_boundary(source):
+    # Bind only TCP sample timing in the temporary compiled copy. Native proof,
+    # owner expiry, cancellation and worker deadlines retain the system clock.
+    for boundary in ("long start = System.nanoTime();", "values.add((System.nanoTime() - start) / 1_000_000d);"):
+        assert source.count(boundary) == 1, "shipping routed sample clock boundary changed"
+        source = source.replace(boundary, boundary.replace("System.nanoTime()", "ViaEntryHarness.sampleNanoTime()"), 1)
+    return source
+
 def main():
     with tempfile.TemporaryDirectory(prefix="routervpn-via-entry-") as work:
         base = Path(work)
@@ -275,7 +288,10 @@ def main():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
         for name in CLASSES:
-            shutil.copyfile(JAVA / (name + ".java"), base / "com/eabusham/routervpn" / (name + ".java"))
+            source = (JAVA / (name + ".java")).read_text()
+            if name == "AndroidViaEntryPathMeter":
+                source = sample_clock_boundary(source)
+            (base / "com/eabusham/routervpn" / (name + ".java")).write_text(source)
 
         def run(argument=None):
             built = subprocess.run(["javac", "--release", "17", "-cp", JSON_JAR, "-d", str(base), *map(str, base.rglob("*.java"))], text=True, capture_output=True, timeout=30)
