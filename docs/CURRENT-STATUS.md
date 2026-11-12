@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 The [November 12 requirement and evidence ledger](CONTINUATION-EVIDENCE-2026-11-12.md)
 records this continuation from live `9a7c3f60`, with published source through
-`faf7b942`. It preserves the original numbered audit and corrections, the
+`20e1c10f`. It preserves the original numbered audit and corrections, the
 later direct map/custom-node request, all-device scope and the distinct
 release/device/deployment evidence requirements.
 
@@ -30,14 +30,23 @@ zero lower UDP attempts. Exact endpoint, transport, port, TLS/path, credentials
 and selected resolver are preserved. The dedicated linked evidence records the
 126 native verdicts and Apple/desktop producer checks.
 
+The ordered compiler also captures a literal imported SS2022 middle between
+a paired WG/AWG first and paired SS final (`ac72e6e1`). Desktop saved-source,
+editor, profile, startup and measurement flows (`3f88bd3d`) and Android/Apple
+host flows (`44e401f8`) retain that original external identity without inventing
+paired API credentials or node proof. The current slice uses a single AES-256
+PSK and Start Layer Off. Actual encrypted custom-middle and installed-host
+acceptance remains a separate gate; broader imported protocols, layers and
+positions remain accountable to the original request.
+
 Focused native, Java 17, Swift, PowerShell and controller race tests passed
-within the recorded boundaries. A full exact-current native build, release
-publication and physical/private acceptance remain pending. The ordered
-compiler currently accepts paired WG/AWG prefixes and an SS2022 final;
-custom intermediate members and the other recovered graph/execution and
-prefix-candidate requirements remain source work. A safe rejection or a
-successful smaller gate does not close those requirements. No live router,
-AdGuard configuration or private deployment was changed.
+within the recorded boundaries. The full recovered UI source gate passed
+after the position-aware profile audit repair (`20e1c10f`). A full exact-current
+native build, release publication and physical/private acceptance remain
+pending, along with the wider recovered graph/execution and prefix-candidate
+requirements. A safe rejection or a successful smaller gate does not close
+those requirements. No live router, AdGuard configuration or private
+deployment was changed.
 
 ## November 12: ordered Darwin runtime and mandatory native acceptance
 

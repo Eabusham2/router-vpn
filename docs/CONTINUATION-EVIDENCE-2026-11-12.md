@@ -56,6 +56,8 @@ no invented numbered audit ID is attached to it.
 
 ## Windows SS-to-Hysteria2 certificate-refusal fixture
 
+Published repair: `81d1523b7c092bf8e6171e08c6babd0fda5a4dee`.
+
 The Windows native WFP run `43120160283` at historical `0e934245` failed in
 `hysteria2/reject/final-trust`: the retained peer terminated before sending its
 initial receipt. Source comparison found the same fault-admission block still
@@ -250,12 +252,82 @@ test-only overlay and unchanged executable/library hashes. This is native
 encrypted loopback evidence; physical and packaged host acceptance remains a
 separate gate.
 
+## Original imported intermediate source and native hosts
+
+Published `ac72e6e162546e1f5e8eeeeaa7289c8d7cc137c9` adds a typed imported
+member to the ordered compiler, proof and measurement source. Schema 1 keeps
+its existing two-through-eight paired members. Schema 2 captures exactly
+paired WG/AWG first → original imported SS2022 middle → paired SS final.
+The imported source is its original standalone configuration and external
+policy capture, with an empty paired identity source. It has no invented
+Router API, token, private node proof or WireGuard inventory.
+
+The first published admission is a literal endpoint, canonical single AES-256
+SS2022 PSK and Start Layer Off. The complete original selected DNS capture is
+retained as source; the intermediate's application resolver is not installed
+into the executable path. The independently paired final node continues to
+own the chain's selected DNS. A public-path check through the imported member
+is labeled separately from authenticated paired-node proof.
+
+Shared ordered/compiler/measurement race groups passed in 154.790 and 2.218
+seconds. The mixed private HTTP/public TLS transfer and authority cases passed
+with the race detector in 2.094 seconds. These shared tests do not establish
+the actual encrypted three-hop native receiver or installed host acceptance;
+those dedicated cases remain a separate gate.
+
+Published `3f88bd3d1649bb8ca895feed988709274d4bf698` carries this exact source
+through desktop capture, public request admission, saved profiles, Startup
+Last, measurement rows and the Windows/macOS/Linux ordered editors. Saved
+records retain policy, node references and source fingerprints; credentials
+stay in the linked external store. A changed source or invalid middle position
+cannot be restored or selected as an eligible ordered member.
+
+The focused desktop race selection passed in 12.663 seconds, including mixed
+source, public admission, profile HTTP, startup and measurement cases and the
+paired-source regressions. PowerShell executed 3,115 profile checks and 97
+ordered-editor checks with their causal controls. The AppKit composition
+executed 4,943 checks and 29 causal controls, including strict boolean
+eligibility. The GTK shipping fixture was extended, but actual rendering still
+requires the hosted GTK/Xvfb environment. An earlier broad combined race
+selection exceeded its aggregate command budget; it is not recorded as passed.
+
+Published `44e401f82040587c5e7386e0a50e134b1366e2de` adopts the same source
+through Android and Apple catalog/editor, profiles, capture, startup and map
+presentation. Android retains the original external-store publication epoch
+and rejects change-away-and-back reuse. Imported IDs containing 32 hexadecimal
+characters remain imported when they do not identify a paired-node file.
+Apple retains a typed original external capture and exact member position.
+Neither host supplies paired authentication for the imported middle.
+
+Android passed 896 shipping Java/shared-Go checks and all 23 causal controls;
+the off-main Product observation and stale Home publication checks passed with
+both controls. Actual Swift execution passed capture 143/four controls,
+saved profiles 91/two, editor 98/four, map presentation 97/four and startup
+52/two. These are host/compiler composition checks, not packaged physical
+Android, iPhone or iPad acceptance.
+
+The hosted UI gate at `44e401f8` exposed an old audit marker for the previously
+unindexed iOS loop. Published `20e1c10fa77c67711e2e7c2ad87b03d117fb9a8c`
+checks the shipping position-aware loop and adds controls for missing custom
+position and eligibility boundaries. The full recovered native UI gate then
+passed locally. Earlier `096b1ba6dd12b561eede8144d319da74eb486ca6` similarly
+preserves the actual Windows cumulative-speed callback in its session audit;
+the full release orchestration audit passed after that repair.
+
+Concurrent upstream `e4c1eca49fe7c2c7aca70e89cd0a97f61320d01b` and
+`c6023a7296d668ed8b46463a2846416c21d086ee` add ordered Server capture,
+positional lease authority and suffix compilation. Concurrent
+`6b46c97dc9127f6f78835a3aa3e8387c183ba3e9` extends public Performance to every
+retained protected ordered host. These commits were preserved with normal
+ancestry. Their existence is distinct from current native Server execution,
+all-platform package or physical acceptance evidence.
+
 ## Remaining evidence ledger
 
 | Required area | Current evidence | Remaining source or acceptance work |
 | --- | --- | --- |
 | Native applications and complete protected graphs | Existing shipping platform code plus the concrete connection and measurement units above. | Current native package builds and every remaining requested graph/platform capability; safe rejection is not delivery. |
-| Repeated independent nodes and per-hop information | The shared local chain retains two through eight paired members, WG/AWG2 Fast/Strong prefixes and an SS2022 final. Shared/native measurement, Android, Apple, desktop Speed Lab and desktop Performance retain every prefix. | Custom intermediate members, candidate measurements through the chosen prefix, installed encrypted-prefix acceptance, other requested graph families and genuinely eligible Server/Compare combinations remain separately accountable. No unlimited-hop requirement or fabricated remote execution authority is inferred. |
+| Repeated independent nodes and per-hop information | The local chain retains two through eight paired members, WG/AWG2 Fast/Strong prefixes and an SS2022 final. The typed three-member imported SS2022 slice now reaches desktop, Android and Apple hosts. Shared/native measurement, Speed Lab and Performance retain every prefix. | Actual encrypted and installed custom-middle acceptance, remaining custom protocols/layers/positions, candidate measurements through the chosen prefix, other requested graph families and genuinely eligible Server/Compare execution remain separately accountable. No unlimited-hop requirement or fabricated remote execution authority is inferred. |
 | Selected DNS and Home AdGuard | Exact selected-policy compilation and proof now include the proved literal Naive H2/CONNECT DNS and explicit-bootstrap paths above. | Genuinely hostname-dependent lower transports still need their actual supported resolver authority; the new dormant-tree exception does not grant it. Current package/device DNS proof remains separate. |
 | Current exact-SHA release | Coherent source commits are published with their focused evidence. | Native applications, ARM64 images, exact compose, manifests/checksums and publication must converge on one final current SHA. Canceled predecessors and an old successful release cannot supply that evidence. |
 | Original full product/UI/setup scope | Original requests, corrections, source paths and historical evidence are preserved. | Every applicable original requirement still requires appropriate source/runtime/native/device evidence; smaller source gates do not close the full ledger. |
