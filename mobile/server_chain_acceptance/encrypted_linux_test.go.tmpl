@@ -633,6 +633,7 @@ func serverChainEncryptedScenario(t *testing.T, name string) {
 	negative := strings.HasPrefix(name, "wrong-") || name == "failed-selected-dns" || name == "cancel-prefix"
 	ready := false
 	failed := false
+	lastPhase := multihoprelay.NodeChainPending
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		reply := worker.call(t, "snapshot")
@@ -640,6 +641,7 @@ func serverChainEncryptedScenario(t *testing.T, name string) {
 			failed = true
 			break
 		}
+		lastPhase = reply.Receipt.Phase
 		if reply.Receipt.Phase == multihoprelay.NodeChainReady {
 			ready = true
 			break
@@ -691,6 +693,11 @@ func serverChainEncryptedScenario(t *testing.T, name string) {
 		}
 	} else {
 		if !ready {
+			stats := p.control(t, "stats")
+			t.Logf("encrypted readiness failure: case=%s worker_refused=%t last_phase=%s prefixes=%+v", name, failed, lastPhase, stats.Prefixes)
+			t.Logf("encrypted final counters: raw_tcp=%d raw_udp=%d tcp=%d udp=%d health=%d dns=%d public=%d direct=%d", stats.Final.FinalRawTCP, stats.Final.FinalRawUDP, stats.Final.FinalTCP, stats.Final.FinalUDP, stats.Final.RouterQueries, stats.Final.DNSQueries, stats.Final.FinalPublicQueries, stats.Final.DirectQueries)
+			t.Logf("bounded original worker stderr: %s", worker.process.log.text())
+			t.Logf("bounded independent peer stderr: %s", p.process.log.text())
 			t.Fatal("complete actual encrypted suffix never became ready")
 		}
 		targets, err := policy.ProofTargets(capture)
