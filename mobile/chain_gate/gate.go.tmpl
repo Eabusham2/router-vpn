@@ -286,6 +286,28 @@ func (c *Control) ObserveRetired(ctx context.Context) (State, error) {
 	return State{g.identity, g.generation, false, true, g.closed}, nil
 }
 
+// ObserveClosedContext reads only this exact terminal control's cleanup ledger.
+// It remains usable after native managers/source/network have been torn down;
+// it grants no forwarding, proof, replacement or reopening authority. A late
+// denied inbound is still owned here and must join before this receipt returns.
+func (c *Control) ObserveClosedContext(ctx context.Context) (State, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return State{}, errors.New("closed gate observation lost its caller")
+	}
+	if c == nil || c.gate == nil {
+		return State{}, errors.New("closed gate observation has no original control")
+	}
+	g := c.gate
+	if err := adapter.RouterVPNLockContext(ctx, &g.mu); err != nil {
+		return State{}, err
+	}
+	defer g.mu.Unlock()
+	if ctx.Err() != nil || g.control != c || !g.closed || g.open || g.dials != 0 || len(g.flows) != 0 || g.draining != 0 {
+		return State{}, errors.New("original terminal gate cleanup is not joined")
+	}
+	return State{g.identity, g.generation, false, true, true}, nil
+}
+
 func (c *Control) Open(ctx context.Context) error {
 	g, err := c.owner()
 	if err != nil {

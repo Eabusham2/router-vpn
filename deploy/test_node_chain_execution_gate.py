@@ -83,6 +83,11 @@ def verdict(raw, code, expected):
 
 
 CONTROLS = (
+    ('bounded terminal ledger lock', 'gate.go', 'if err := adapter.RouterVPNLockContext(ctx, &g.mu); err != nil {\n\t\treturn State{}, err\n\t}', 'g.mu.Lock()', 'ClosedLedgerKeepsCallerDeadline', 'closed ledger waited beyond original caller deadline'),
+    ('terminal closed gate receipt', 'gate.go', ' || !g.closed || g.open || g.dials != 0 || len(g.flows) != 0 || g.draining != 0 {',
+     ' || g.open || g.dials != 0 || len(g.flows) != 0 || g.draining != 0 {', 'ClosedLedgerRequiresTerminalOwner/revoked', 'nonterminal or foreign gate acquired closed receipt'),
+    ('late terminal denied input', 'gate.go', ' || g.control != c || !g.closed || g.open || g.dials != 0 || len(g.flows) != 0 || g.draining != 0 {',
+     ' || g.control != c || !g.closed || g.open || g.dials != 0 || g.draining != 0 {', 'ClosedLedgerRetainsLateDeniedClose', 'historical gate close hid a late unjoined input'),
     ('retired receipt cannot admit traffic', 'gate.go', 'if ctx.Err() != nil || g.open || g.dials != 0 || len(g.flows) != 0 || g.draining != 0 {', 'if ctx.Err() != nil || g.dials != 0 || len(g.flows) != 0 || g.draining != 0 {', 'RetiredReceiptKeepsOriginalCleanup/source', 'retirement receipt accepted open admission'),
     ('retired receipt requires joined original close', 'gate.go', 'if ctx.Err() != nil || g.open || g.dials != 0 || len(g.flows) != 0 || g.draining != 0 {', 'if ctx.Err() != nil || g.open || g.dials != 0 || g.draining != 0 {', 'RetiredReceiptRejectsUnjoinedClose', 'retirement receipt accepted unjoined original close'),
     ('copied control', 'gate.go', 'if g.control != c {', 'if false {', 'ClosedAndBoundOnce', 'copied control opened gate'),
@@ -263,7 +268,7 @@ class Verdict(unittest.TestCase):
         args = command('go')
         self.assertIn('-race',args); self.assertIn('-timeout=120s',args); self.assertNotIn('-run',args)
         self.assertEqual(args[-1], './protocol/routervpnchaingate')
-        self.assertEqual(len(CONTROLS),16)
+        self.assertEqual(len(CONTROLS),19)
         self.assertTrue(all(control[-1] for control in CONTROLS))
 
 

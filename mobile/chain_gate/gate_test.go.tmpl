@@ -997,3 +997,146 @@ func TestRouterVPNChainGateDeniedRetirementDoesNotOpenOrRevoke(t *testing.T) {
 		t.Fatal("typed nil input accepted")
 	}
 }
+
+func TestRouterVPNChainGateClosedLedgerRequiresTerminalOwner(t *testing.T) {
+	for _, kind := range []string{"open", "revoked", "closed", "copied-control", "cancelled-caller", "post-manager-close"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFixture(t)
+			f.open(t)
+			control, ctx := f.control, context.Background()
+			if kind == "revoked" {
+				if err := control.Revoke(ctx); err != nil {
+					t.Fatal(err)
+				}
+			} else if kind != "open" {
+				if err := control.Close(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch kind {
+			case "copied-control":
+				copy := *control
+				control = &copy
+			case "cancelled-caller":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			case "post-manager-close":
+				f.valid.Store(false)
+				if err := f.manager.Close(); err != nil {
+					t.Fatal(err)
+				}
+				f.cancel()
+			}
+			value, err := control.ObserveClosedContext(ctx)
+			if kind == "closed" || kind == "post-manager-close" {
+				if err != nil || !value.Closed || value.Open || !value.Drained || value.Identity != "original-preparation:session" {
+					t.Fatal("terminal gate receipt required a live manager/source", err)
+				}
+				if control.Open(context.Background()) == nil {
+					t.Fatal("closed ledger receipt reopened admission")
+				}
+			} else if err == nil {
+				t.Fatal("nonterminal or foreign gate acquired closed receipt")
+			}
+		})
+	}
+}
+
+func TestRouterVPNChainGateClosedLedgerRetainsLateDeniedClose(t *testing.T) {
+	f := newFixture(t)
+	f.bind(t)
+	if err := f.control.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.control.ObserveClosedContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Join the native lifetime callback before installing a separate late
+	// owner, so another concurrent drain cannot hide the ledger assertion.
+	f.gate.mu.Lock()
+	generation := f.gate.generation
+	f.gate.mu.Unlock()
+	f.cancel()
+	joined, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	for {
+		f.gate.mu.Lock()
+		done := f.gate.generation > generation && f.gate.draining == 0
+		changed := f.gate.changed
+		f.gate.mu.Unlock()
+		if done {
+			break
+		}
+		select {
+		case <-changed:
+		case <-joined.Done():
+			t.Fatal("original lifetime close did not join", joined.Err())
+		}
+	}
+	client, peer := net.Pipe()
+	defer peer.Close()
+	var allow atomic.Bool
+	var closes atomic.Int64
+	raw := &closeConn{client, func() error {
+		closes.Add(1)
+		if !allow.Load() {
+			return errors.New("late original denied close failed")
+		}
+		return client.Close()
+	}}
+	release, err := f.gate.RetireInbound(raw)
+	if err != nil || release == nil {
+		t.Fatal("terminal gate abandoned late denied input", err)
+	}
+	if err := release(); err == nil {
+		t.Fatal("late failed native close became joined")
+	}
+	if _, err := f.control.ObserveClosedContext(context.Background()); err == nil {
+		t.Fatal("historical gate close hid a late unjoined input")
+	}
+	allow.Store(true)
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	value, err := f.control.ObserveClosedContext(context.Background())
+	if err != nil || !value.Closed || !value.Drained || closes.Load() < 2 {
+		t.Fatal("late exact denied close could not retry after teardown", err)
+	}
+}
+
+func TestRouterVPNChainGateClosedLedgerKeepsCallerDeadline(t *testing.T) {
+	f := newFixture(t)
+	f.bind(t)
+	if err := f.control.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.gate.mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := f.control.ObserveClosedContext(ctx); done <- err }()
+	select {
+	case err := <-done:
+		// The exact worker already returned while the ledger remained locked.
+		// Unlocking cannot release a late waiter or issue another receipt.
+		f.gate.mu.Unlock()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal("closed ledger lost caller deadline", err)
+		}
+	case <-time.After(time.Second):
+		f.gate.mu.Unlock()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("closed ledger abandoned its original waiter")
+		}
+		t.Fatal("closed ledger waited beyond original caller deadline")
+	}
+	if value, err := f.control.ObserveClosedContext(context.Background()); err != nil || !value.Closed || !value.Drained {
+		t.Fatal("expired observer changed original closed owner", err)
+	}
+}
