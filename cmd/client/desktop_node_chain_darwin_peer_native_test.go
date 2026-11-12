@@ -75,6 +75,9 @@ var macOSNodeChainHostCases = []string{
 	"node-chain-4-wg-awg-fast-awg-strong-connect", "node-chain-4-awg-fast-awg-strong-wg-connect", "node-chain-4-awg-strong-wg-awg-fast-connect",
 	"node-chain-4-wg-awg-fast-awg-strong-wrong-middle-key", "node-chain-4-wg-awg-fast-awg-strong-wrong-awg-parameters",
 	"node-chain-4-wg-awg-fast-awg-strong-middle-source", "node-chain-4-wg-awg-fast-awg-strong-prefix-lost",
+	"node-chain-custom-wg-connect", "node-chain-custom-awg-fast-connect", "node-chain-custom-awg-strong-connect",
+	"node-chain-custom-wg-wrong-middle-key", "node-chain-custom-wg-wrong-middle-public", "node-chain-custom-wg-final-dns-failure",
+	"node-chain-custom-wg-middle-source", "node-chain-custom-wg-prefix-lost",
 	"node-chain-3-mtu", "node-chain-4-wg-awg-fast-awg-strong-mtu",
 }
 
@@ -101,23 +104,26 @@ type macOSNodeChainPeerReply struct {
 		ProofQueries     uint64 `json:"proof_queries"`
 		AuthRefusals     uint64 `json:"auth_refusals"`
 	} `json:"prefixes"`
-	Final     macOSNodeChainFinalReply      `json:"final"`
-	Benchmark *macOSNodeChainBenchmarkReply `json:"benchmark,omitempty"`
+	Middle    *macOSNodeChainImportedCounters `json:"middle,omitempty"`
+	Final     macOSNodeChainFinalReply        `json:"final"`
+	Benchmark *macOSNodeChainBenchmarkReply   `json:"benchmark,omitempty"`
 }
 
 type macOSNodeChainPeer struct {
-	input, output *os.File
-	reader        *bufio.Reader
-	command       *exec.Cmd
-	done          chan struct{}
-	physical      netip.Addr
-	failure       error
-	clients       []*ecdh.PrivateKey
-	requests      []macOSNodeChainPrefixRequest
-	finalClient   *ecdh.PrivateKey
-	finalServer   *ecdh.PrivateKey
-	password      string
-	reply         macOSNodeChainPeerReply
+	input, output  *os.File
+	reader         *bufio.Reader
+	command        *exec.Cmd
+	done           chan struct{}
+	physical       netip.Addr
+	failure        error
+	clients        []*ecdh.PrivateKey
+	requests       []macOSNodeChainPrefixRequest
+	finalClient    *ecdh.PrivateKey
+	finalServer    *ecdh.PrivateKey
+	password       string
+	middlePassword string
+	middleMethod   string
+	reply          macOSNodeChainPeerReply
 }
 
 func macOSNodeChainProofID(key *ecdh.PrivateKey) string {
@@ -152,7 +158,7 @@ func macOSNodeChainScenario(scenario string) ([]string, string, error) {
 	if !found {
 		return nil, "", errors.New("uncaptured ordered installed scenario")
 	}
-	cases := macOSNodeChainCipherCases()
+	cases := append(macOSNodeChainCipherCases(), macOSNodeChainImportedCipherCases()...)
 	// Longest captured prefixes must win over the original WG-only names.
 	for i := len(cases) - 1; i >= 0; i-- {
 		if action, ok := strings.CutPrefix(scenario, cases[i].prefix); ok {
@@ -236,6 +242,9 @@ func (peer *macOSNodeChainPeer) read(t *testing.T) macOSNodeChainPeerReply {
 	// traffic and cannot be borrowed from the previous response.
 	if reply.Benchmark == nil || reply.Benchmark.Port != 45998 || reply.Benchmark.MaximumPayload > 8972 {
 		t.Fatal("ordered peer lost its exact separate bounded benchmark receipt")
+	}
+	if peer.middlePassword != "" && (reply.Middle == nil || reply.Middle.Method != peer.middleMethod) || peer.middlePassword == "" && reply.Middle != nil {
+		t.Fatal("ordered peer replaced its independently captured imported cipher")
 	}
 	for i, prefix := range peer.requests {
 		expected := ""
@@ -328,6 +337,11 @@ func macOSNodeChainInstalledSources(t *testing.T, peer *macOSNodeChainPeer, faul
 		profiles = append(profiles, profile)
 		nodes = append(nodes, common.MultihopNodeSelection{ID: profile.ID, Mode: mode})
 	}
+	if peer.middlePassword != "" {
+		middle := macOSNodeChainImportedProfile(t, peer, fault)
+		profiles = append(profiles, middle)
+		nodes = append(nodes, common.MultihopNodeSelection{ID: middle.ID, Mode: "shadowsocks"})
+	}
 	final := common.RouterProfile{ID: "installed-ordered-final", Name: "Original ordered paired final", NodeProofID: macOSNodeChainProofID(peer.finalServer),
 		Endpoint: "10.77.0.1", RouterAPI: "http://10.77.0.1:8787", APIToken: "installed-ordered-final-token", AdGuardIPv4: "192.168.50.133", DNSMode: "home",
 		IPv6Mode: "off", StartLayer: "off", MTUPolicy: "auto", BaseTunnel: "wg", KillSwitch: true, KillSwitchPolicy: "on-connect",
@@ -360,12 +374,15 @@ func startMacOSNodeChainPeer(t *testing.T, modes []string) *macOSNodeChainPeer {
 	if err != nil || !filepath.IsAbs(image) || hex.EncodeToString(sum[:]) != os.Getenv("ROUTERVPN_MACOS_NODE_CHAIN_PEER_SHA256") {
 		t.Fatal("ordered native fixture lost its captured independent peer image", err)
 	}
-	peer := macOSNodeChainPeerKeys(t, len(modes)+1)
-	macOSNodeChainSetModes(t, peer, modes)
+	peer := macOSNodeChainPeerForModes(t, modes)
 	peer.physical = macOSExternalNativeAddress(t)
-	peer.command = exec.Command(image, "-test.run=^TestRouterVPNDesktopNodeChainReferenceProcess$", "-test.count=1", "-test.timeout=240s")
+	root, child := "TestRouterVPNDesktopNodeChainReferenceProcess", "ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD=1"
+	if peer.middlePassword != "" {
+		root, child = "TestRouterVPNDesktopNodeChainImportedMiddleReferenceProcess", "ROUTERVPN_NODE_CHAIN_IMPORTED_REFERENCE_CHILD=1"
+	}
+	peer.command = exec.Command(image, "-test.run=^"+root+"$", "-test.count=1", "-test.timeout=240s")
 	peer.command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "GORACE=atexit_sleep_ms=0",
-		"ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD=1", "ROUTERVPN_DARWIN_NODE_CHAIN_REFERENCE=1",
+		child, "ROUTERVPN_DARWIN_NODE_CHAIN_REFERENCE=1",
 		"ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS=" + peer.physical.String()}
 	peer.command.Stderr = os.Stderr
 	inputRead, inputWrite, err := os.Pipe()
@@ -407,7 +424,11 @@ func startMacOSNodeChainPeer(t *testing.T, modes []string) *macOSNodeChainPeer {
 	request := map[string]any{"schema": 1, "address": peer.physical.String(), "client_address": peer.physical.String(), "prefixes": peer.requests,
 		"final_password": peer.password, "final_node_proof_id": macOSNodeChainProofID(peer.finalServer), "final_api_token": "installed-ordered-final-token",
 		"benchmark_port": 45998}
-	if err := json.NewEncoder(peer.input).Encode(request); err != nil {
+	var wire any = request
+	if peer.middlePassword != "" {
+		wire = map[string]any{"schema": 1, "paired": request, "middle_method": peer.middleMethod, "middle_password": peer.middlePassword}
+	}
+	if err := json.NewEncoder(peer.input).Encode(wire); err != nil {
 		t.Fatal(err)
 	}
 	peer.read(t)

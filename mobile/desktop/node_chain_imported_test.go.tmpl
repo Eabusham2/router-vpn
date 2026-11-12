@@ -94,18 +94,20 @@ type desktopNodeChainImportedMiddleReply struct {
 	UploadBytes   uint64 `json:"upload_bytes"`
 }
 type desktopNodeChainImportedReply struct {
-	Schema   int                                 `json:"schema"`
-	Address  string                              `json:"address"`
-	PublicCA string                              `json:"public_ca"`
-	Prefixes []desktopNodeChainPrefixReply       `json:"prefixes"`
-	Final    desktopImportedWGSSReply            `json:"final"`
-	Middle   desktopNodeChainImportedMiddleReply `json:"middle"`
+	Schema    int                                 `json:"schema"`
+	Address   string                              `json:"address"`
+	PublicCA  string                              `json:"public_ca"`
+	Prefixes  []desktopNodeChainPrefixReply       `json:"prefixes"`
+	Final     desktopImportedWGSSReply            `json:"final"`
+	Middle    desktopNodeChainImportedMiddleReply `json:"middle"`
+	Benchmark *desktopNodeChainBenchmarkReply     `json:"benchmark,omitempty"`
 }
 type desktopNodeChainImportedPeer struct {
 	request                  desktopNodeChainImportedRequest
 	paired                   *desktopImportedWGSSPeer
 	middle                   *desktopNodeLayerServer
 	provider                 desktopExternalInstalledSSPeer
+	benchmark                *desktopNodeChainBenchmark
 	prefix                   *desktopNodeChainPrefixPeer
 	public, download, upload atomic.Uint64
 	wrongPublic              atomic.Bool
@@ -113,7 +115,7 @@ type desktopNodeChainImportedPeer struct {
 
 func desktopNodeChainImportedRequestValid(request desktopNodeChainImportedRequest) error {
 	r := request.Paired
-	if request.Schema != 1 || r.Schema != 1 || len(r.Prefixes) != 1 || r.BenchmarkPort != 0 || !desktopSS2022Credentials(request.MiddleMethod, request.MiddlePassword) || request.MiddlePassword == r.FinalPassword {
+	if request.Schema != 1 || r.Schema != 1 || len(r.Prefixes) != 1 || (r.BenchmarkPort != 0 && r.BenchmarkPort != 45998) || !desktopSS2022Credentials(request.MiddleMethod, request.MiddlePassword) || request.MiddlePassword == r.FinalPassword {
 		return errors.New("custom reference requires original three-member capture")
 	}
 	p := r.Prefixes[0]
@@ -178,6 +180,10 @@ func desktopNodeChainImportedPeerStartWithFactory(t *testing.T, request desktopN
 	}
 	p.paired = desktopImportedWGSSStartWithFactory(t, desktopImportedWGSSRequest{Schema: 1, Address: r.Address, ClientAddress: r.ClientAddress, PrivateKey: prefix.PrivateKey, ClientPublicKey: prefix.ClientPublicKey, PreSharedKey: prefix.PreSharedKey, FinalPassword: r.FinalPassword, NodeProofID: r.FinalNodeProofID, Token: r.FinalAPIToken, Cover: true}, local, remote, factory)
 	peer := p.paired
+	if r.BenchmarkPort != 0 {
+		p.benchmark = desktopNodeChainBenchmarkStart(t, r.BenchmarkPort)
+		peer.final.routes = append(peer.final.routes, desktopNodeLayerRoute{Network: "udp", Destination: "10.77.0.1:45998", Physical: p.benchmark.address})
+	}
 	p.prefix.bind, p.prefix.handler = peer.bind, peer.entry
 	certificate, ca := desktopNodeChainImportedCertificate(t)
 	peer.ca = ca
@@ -302,9 +308,20 @@ func (p *desktopNodeChainImportedPeer) snapshot() desktopNodeChainImportedReply 
 		digest, _ = prefix.readback()
 	}
 	first := desktopNodeChainPrefixReply{Mode: mode, ParametersSHA256: digest, RawUDP: prefix.bind.packets.Load(), TCP: prefix.handler.tcp.Load(), UDP: prefix.handler.udp.Load(), ProofQueries: prefix.proof.Load(), AuthRefusals: prefix.denied.Load()}
-	return desktopNodeChainImportedReply{Schema: 1, Address: p.paired.address, PublicCA: p.paired.ca, Prefixes: []desktopNodeChainPrefixReply{first}, Final: p.paired.snapshot(), Middle: desktopNodeChainImportedMiddleReply{p.request.MiddleMethod, p.middle.rawTCP.Load(), p.middle.rawUDP.Load(), p.middle.plainTCP.Load(), p.middle.plainUDP.Load(), p.public.Load(), p.download.Load(), p.upload.Load()}}
+	reply := desktopNodeChainImportedReply{Schema: 1, Address: p.paired.address, PublicCA: p.paired.ca, Prefixes: []desktopNodeChainPrefixReply{first}, Final: p.paired.snapshot(), Middle: desktopNodeChainImportedMiddleReply{p.request.MiddleMethod, p.middle.rawTCP.Load(), p.middle.rawUDP.Load(), p.middle.plainTCP.Load(), p.middle.plainUDP.Load(), p.public.Load(), p.download.Load(), p.upload.Load()}}
+	if p.benchmark != nil {
+		reply.Benchmark = p.benchmark.snapshot()
+	}
+	return reply
 }
 func (p *desktopNodeChainImportedPeer) control(command string) error {
+	if command == "hold-benchmark" || command == "release-benchmark" {
+		if p.benchmark == nil {
+			return errors.New("imported benchmark control has no captured sink")
+		}
+		p.benchmark.held.Store(command == "hold-benchmark")
+		return nil
+	}
 	switch command {
 	case "stop-middle":
 		p.provider.close()
@@ -379,10 +396,25 @@ func TestRouterVPNDesktopNodeChainImportedMiddleReferenceProcess(t *testing.T) {
 }
 
 func TestRouterVPNDesktopNodeChainImportedMiddleTraffic(t *testing.T) {
+	// The imported middle keeps the same final-only bounded sink. Absence
+	// grants no control, and no arbitrary destination can be requested.
+	for _, port := range []int{-1, 1, 45999, 65536} {
+		request, _ := desktopNodeChainPeerFixture(t, 1)
+		request.BenchmarkPort = port
+		value := desktopNodeChainImportedRequest{1, request, mobilemultihop.NativeStartLayerMethod, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73}, 32))}
+		if desktopNodeChainImportedRequestValid(value) == nil {
+			t.Fatal("imported reference admitted an uncaptured final benchmark port")
+		}
+	}
+	absent := &desktopNodeChainImportedPeer{}
+	if absent.control("hold-benchmark") == nil || absent.control("release-benchmark") == nil {
+		t.Fatal("missing imported benchmark accepted control")
+	}
 	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		for _, method := range []string{"2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"} {
 			t.Run(mode+"/"+method, func(t *testing.T) {
 				request, clients := desktopNodeChainPeerFixture(t, 1)
+				request.BenchmarkPort = 45998
 				desktopNodeChainSetModes(t, &request, []string{mode})
 				finalServer, err := ecdh.X25519().GenerateKey(rand.Reader)
 				if err != nil {
@@ -498,6 +530,39 @@ func TestRouterVPNDesktopNodeChainImportedMiddleTraffic(t *testing.T) {
 					after := peer.snapshot()
 					if after.DNSQueries != before.DNSQueries+1 || middle.plainUDP.Load() <= middleBefore || after.FinalUDP <= before.FinalUDP {
 						t.Fatal("DNS bypassed custom middle or final", before, after)
+					}
+					benchmarkBefore := custom.snapshot().Benchmark
+					if benchmarkBefore == nil || benchmarkBefore.Port != 45998 {
+						t.Fatal("imported final benchmark lost original receipt")
+					}
+					conn, err := outbounds[2].DialContext(call, "udp", M.ParseSocksaddr("10.77.0.1:45998"))
+					if err != nil {
+						t.Fatal("original imported final benchmark", err)
+					}
+					defer conn.Close()
+					deadline, _ := call.Deadline()
+					_ = conn.SetDeadline(deadline)
+					body := bytes.Repeat([]byte{0x61}, 1252)
+					if n, err := conn.Write(body); err != nil || n != len(body) {
+						t.Fatal("incomplete imported final benchmark packet", n, err)
+					}
+					reply := make([]byte, len(body)+1)
+					n, err := conn.Read(reply)
+					if err != nil || !bytes.Equal(reply[:n], body) {
+						t.Fatal("imported final benchmark did not echo original payload", err)
+					}
+					for {
+						state := custom.snapshot().Benchmark
+						if state != nil && state.Packets > benchmarkBefore.Packets && state.Replies > benchmarkBefore.Replies && state.ReceivedBytes >= benchmarkBefore.ReceivedBytes+1252 && state.SentBytes >= benchmarkBefore.SentBytes+1252 {
+							break
+						}
+						if call.Err() != nil {
+							t.Fatal("imported final benchmark did not join original accounting", state)
+						}
+						time.Sleep(time.Millisecond)
+					}
+					if custom.control("hold-benchmark") != nil || !custom.snapshot().Benchmark.Held || custom.control("release-benchmark") != nil || custom.snapshot().Benchmark.Held {
+						t.Fatal("imported original benchmark hold/release lost receipt")
 					}
 				})
 				t.Run("middle-refuses-selected-dns", func(t *testing.T) {

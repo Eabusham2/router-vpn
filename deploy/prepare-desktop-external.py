@@ -257,6 +257,7 @@ DARWIN_NODE_CHAIN_PEERS = {
     'node_awg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_awg_darwin_test.go',
     'node_imported_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_imported_darwin_test.go',
     'node_chain_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_reference_darwin_test.go',
+    'node_chain_imported_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_imported_middle_darwin_test.go',
 }
 
 

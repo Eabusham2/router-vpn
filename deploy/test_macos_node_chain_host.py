@@ -28,6 +28,9 @@ CASES = (
     'node-chain-4-wg-awg-fast-awg-strong-connect', 'node-chain-4-awg-fast-awg-strong-wg-connect', 'node-chain-4-awg-strong-wg-awg-fast-connect',
     'node-chain-4-wg-awg-fast-awg-strong-wrong-middle-key', 'node-chain-4-wg-awg-fast-awg-strong-wrong-awg-parameters',
     'node-chain-4-wg-awg-fast-awg-strong-middle-source', 'node-chain-4-wg-awg-fast-awg-strong-prefix-lost',
+    'node-chain-custom-wg-connect', 'node-chain-custom-awg-fast-connect', 'node-chain-custom-awg-strong-connect',
+    'node-chain-custom-wg-wrong-middle-key', 'node-chain-custom-wg-wrong-middle-public', 'node-chain-custom-wg-final-dns-failure',
+    'node-chain-custom-wg-middle-source', 'node-chain-custom-wg-prefix-lost',
     'node-chain-3-mtu', 'node-chain-4-wg-awg-fast-awg-strong-mtu',
 )
 MTU_CASES = CASES[-2:]
@@ -37,12 +40,14 @@ MEASUREMENT_CASES = tuple(case for case in CASES if case not in (
     'node-chain-3-final-dns-failure', 'node-chain-4-final-node-failure',
     'node-chain-4-wg-awg-fast-awg-strong-wrong-middle-key',
     'node-chain-4-wg-awg-fast-awg-strong-wrong-awg-parameters',
+    'node-chain-custom-wg-wrong-middle-key', 'node-chain-custom-wg-wrong-middle-public', 'node-chain-custom-wg-final-dns-failure',
 ))
 MEASUREMENT_RECEIPT = 'actual sealed Darwin ordered measurement: every original prefix transferred 8 MiB per direction with six HTTP samples, original native process PF and TUN reader retained'
 SOURCE_FILES = (
     'deploy/test_macos_node_chain_host.py', 'deploy/test_macos_node_chain_host_runner.py',
     'cmd/client/desktop_node_chain_darwin_native_test.go',
     'cmd/client/desktop_node_chain_darwin_peer_native_test.go',
+    'cmd/client/desktop_node_chain_imported_darwin_native_test.go',
     'cmd/client/controller_privilege_darwin_native_test.go',
     'modes/mtu-throughput-tuner.py', 'modes/mtu-throughput-tuner-platform.py',
     'modes/network_context.py', 'modes/private_profile_store.py', 'modes/profile_id.py',
@@ -132,8 +137,8 @@ def source_identity(core):
     if projector is None:
         raise ValueError('Native ordered peer source projection is not installed')
     copies = projector()
-    if len(copies) != 4:
-        raise ValueError('Native ordered peer lost one of its four complete projections')
+    if len(copies) != 5:
+        raise ValueError('Native ordered peer lost one of its five complete projections')
     for relative, expected in copies.items():
         path = Path(core)/relative
         actual = EXTERNAL.sha(path)

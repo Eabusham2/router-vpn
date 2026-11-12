@@ -74,11 +74,11 @@ class OrderedNativeVerdicts(unittest.TestCase):
                   '    --- PASS: '+G.TEST+'/'+case+' (1.0s)', 'PASS']
         return '\n'.join(lines)+'\n'
 
-    def test_exact_source_inventory_preserves_eighteen_paths_and_two_mtu_cases(self):
+    def test_exact_source_inventory_preserves_twenty_six_paths_and_two_mtu_cases(self):
         self.assertEqual(G.case_inventory(), G.CASES)
-        self.assertEqual(len(G.CASES), 20)
+        self.assertEqual(len(G.CASES), 28)
         self.assertEqual(len(G.MTU_CASES), 2)
-        self.assertEqual(len(G.MEASUREMENT_CASES), 14)
+        self.assertEqual(len(G.MEASUREMENT_CASES), 19)
         linux = (ROOT/'cmd/client/desktop_node_chain_linux_tun_native_test.go').read_text()
         import re
         match = re.search(r'var linuxNodeChainHostCases = \[\]string\{([^}]+)\}', linux)
@@ -203,21 +203,21 @@ class OrderedNativeVerdicts(unittest.TestCase):
             files = ('one', 'two')
             for name in files:
                 (root/name).write_text('captured '+name)
-            copies = {f'peer-{i}.go':('original-'+str(i)).encode() for i in range(4)}
+            copies = {f'peer-{i}.go':('original-'+str(i)).encode() for i in range(5)}
             for name, raw in copies.items():
                 (root/name).write_bytes(raw)
             with patch.object(G, 'ROOT', root), patch.object(G, 'SOURCE_FILES', files), \
                  patch.object(G.EXTERNAL, 'source_identity', side_effect=lambda core: {'application':{},'peer':{}}), \
                  patch.object(G.BUILD, 'EXTERNAL', SimpleNamespace(darwin_node_chain_peer_copies=lambda:copies)):
                 original = G.source_identity(root)
-                self.assertEqual(len(original['peer']), 4)
+                self.assertEqual(len(original['peer']), 5)
                 self.assertEqual(set(original['application']), set(files))
                 for name in copies:
                     (root/name).write_bytes(b'replaced')
                     with self.subTest(name=name), self.assertRaises(ValueError):
                         G.source_identity(root)
                     (root/name).write_bytes(copies[name])
-                with patch.object(G.BUILD.EXTERNAL, 'darwin_node_chain_peer_copies', return_value=dict(list(copies.items())[:3])):
+                with patch.object(G.BUILD.EXTERNAL, 'darwin_node_chain_peer_copies', return_value=dict(list(copies.items())[:4])):
                     with self.assertRaises(ValueError):
                         G.source_identity(root)
                 (root/'one').unlink()

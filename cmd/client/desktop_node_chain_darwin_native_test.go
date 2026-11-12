@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -221,7 +222,12 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 			return
 		}
 		a.mu.Lock()
-		a.profiles.Profiles[1].APIToken += "-replaced-after-original-proof"
+		middle := &a.profiles.Profiles[1]
+		if middle.NodeKind == "external" && middle.External != nil && middle.External.Shadowsocks != nil {
+			middle.External.Shadowsocks.Password = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("r", 32)))
+		} else {
+			middle.APIToken += "-replaced-after-original-proof"
+		}
 		a.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	})
@@ -384,6 +390,8 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 	switch action {
 	case "wrong-middle-proof":
 		peer.observe(t, "wrong-node:1")
+	case "wrong-middle-public":
+		peer.observe(t, "wrong-middle-public")
 	case "final-dns-failure":
 		peer.observe(t, "fail-dns")
 	case "final-node-failure":
@@ -431,7 +439,7 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 		t.Fatal("native request lost original complete inventory", status, err, string(body))
 	}
 	status, raw, err := macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/multihop/connect", string(body))
-	negative := action == "wrong-middle-key" || action == "wrong-awg-parameters" || action == "wrong-middle-proof" || action == "final-dns-failure" || action == "final-node-failure"
+	negative := action == "wrong-middle-key" || action == "wrong-middle-public" || action == "wrong-awg-parameters" || action == "wrong-middle-proof" || action == "final-dns-failure" || action == "final-node-failure"
 	if err != nil || negative && status == http.StatusOK || !negative && status != http.StatusOK {
 		t.Fatal("ordered native Connect reached wrong verdict", status, err, string(raw))
 	}
@@ -449,8 +457,11 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 		if action == "wrong-middle-proof" && stats.Prefixes[1].ProofQueries == 0 || action == "final-dns-failure" && stats.Final.DNSQueries == 0 || action == "final-node-failure" && stats.Final.RouterQueries == 0 {
 			t.Fatal("negative failed before intended actual service", stats)
 		}
-		if (action == "wrong-middle-key" || action == "wrong-awg-parameters") && (stats.Prefixes[1].RawUDP == 0 || stats.Prefixes[1].ProofQueries != 0 || stats.Final.RouterQueries != 0) {
+		if peer.middlePassword == "" && (action == "wrong-middle-key" || action == "wrong-awg-parameters") && (stats.Prefixes[1].RawUDP == 0 || stats.Prefixes[1].ProofQueries != 0 || stats.Final.RouterQueries != 0) {
 			t.Fatal("wrong middle cipher bypassed encrypted boundary", stats)
+		}
+		if peer.middlePassword != "" {
+			macOSNodeChainImportedNegativeCounters(t, stats, action)
 		}
 	} else {
 		macOSNodeChainNativeProved(t, peer, request, live, started.ProcessID)
@@ -476,7 +487,11 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 		}
 		performanceCapture = macOSNodeChainNativeMeasurement(t, ctx, client, peer, request, live)
 		if action == "prefix-lost" {
-			peer.observe(t, "wrong-node:1")
+			if peer.middlePassword != "" {
+				peer.observe(t, "stop-middle")
+			} else {
+				peer.observe(t, "wrong-node:1")
+			}
 		}
 		if action == "middle-source" {
 			status, raw, err = macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/native-ordered-replace-middle", "{}")
@@ -610,6 +625,9 @@ func macOSNodeChainNativeMeasurement(t *testing.T, ctx context.Context, client *
 			role = "exit"
 		}
 		label := fmt.Sprintf("Cumulative path through node %d of %d", i+1, len(request.Nodes))
+		if peer.middlePassword != "" && i == 1 {
+			label += " to the public benchmark"
+		}
 		if row.RouterID != request.Nodes[i].ID || row.Role != role || row.LatencyLabel != label+" HTTP response" || row.SpeedLabel != label+" transfer" ||
 			row.LatencyError != "" || row.SpeedError != "" || row.Latency == nil || row.Speed == nil ||
 			row.Latency.RouterID != row.RouterID || !row.Latency.Connected || row.Latency.Samples != 6 || !positive(row.Latency.MedianMs) ||
@@ -627,6 +645,14 @@ func macOSNodeChainNativeMeasurement(t *testing.T, ctx context.Context, client *
 		if prefix.RawUDP <= before.Prefixes[i].RawUDP || prefix.TCP <= before.Prefixes[i].TCP ||
 			prefix.ProofQueries < before.Prefixes[i].ProofQueries+6 || prefix.AuthRefusals != 0 {
 			t.Fatal("ordered measurement skipped an original encrypted prefix", i, before.Prefixes[i], prefix)
+		}
+	}
+	if peer.middlePassword != "" {
+		macOSNodeChainImportedPositiveCounters(t, after)
+		if before.Middle == nil || after.Middle.Method != before.Middle.Method ||
+			after.Middle.DownloadBytes < before.Middle.DownloadBytes+(8<<20) || after.Middle.UploadBytes < before.Middle.UploadBytes+(8<<20) ||
+			after.Middle.PublicQueries < before.Middle.PublicQueries+6 {
+			t.Fatal("ordered measurement skipped the original imported cipher, public samples or transferred bytes", before.Middle, after.Middle)
 		}
 	}
 	live := macOSNodeChainNativeRead(t, ctx, client)
@@ -659,6 +685,10 @@ func macOSNodeChainNativeProved(t *testing.T, peer *macOSNodeChainPeer, request 
 		if prefix.Mode != request.Nodes[i].Mode || prefix.RawUDP == 0 || prefix.TCP == 0 || prefix.UDP == 0 || prefix.ProofQueries == 0 || prefix.AuthRefusals != 0 {
 			t.Fatal("ordered path omitted actual independent authenticated prefix", i, prefix)
 		}
+	}
+	if peer.middlePassword != "" && (len(request.Nodes) != 3 || request.Nodes[1].Mode != "shadowsocks" || stats.Middle == nil ||
+		stats.Middle.Method != peer.middleMethod || stats.Middle.RawTCP == 0 || stats.Middle.RawUDP == 0 || stats.Middle.TCP == 0 || stats.Middle.UDP == 0 || stats.Middle.PublicQueries == 0) {
+		t.Fatal("ordered path omitted actual independent imported cipher or public-path proof", stats.Middle)
 	}
 	if stats.Final.RouterQueries == 0 || stats.Final.DNSQueries == 0 || stats.Final.FinalPublicQueries == 0 || stats.Final.FinalTCP == 0 || stats.Final.FinalUDP == 0 || stats.Final.DirectQueries != 0 {
 		t.Fatal("ordered final did not carry selected DNS/private/public proof", stats)
