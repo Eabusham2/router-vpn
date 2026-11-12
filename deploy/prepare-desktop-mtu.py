@@ -225,8 +225,9 @@ INBOUND_CONTEXT_EDIT = (
     b'tunOptions: tun.Options{\n\t\t\tRouterVPNNetworkContext: ctx,\n\t\t\tRouterVPNNetworkLifetime: ctx,',
 )
 INBOUND_RETIREMENT_EDITS = (
+    (b'\t"sync"', b'\t"sync"\n\t"sync/atomic"'),
     (b'type Inbound struct {',
-     b'type Inbound struct {\n\troutervpnStandardStartup bool\n\troutervpnRetirementReceipt string'),
+     b'type Inbound struct {\n\troutervpnStandardStartup bool\n\troutervpnRetirementReceipt string\n\troutervpnDarwinNodeChain atomic.Bool\n\troutervpnDarwinRetirement any'),
     (b'\t\tt.tunOptions.Name = tunOptions.Name\n\t\tif err != nil {',
      b'\t\tt.tunOptions.Name = tunOptions.Name\n'
      b'\t\tt.tunIf = tunInterface // retain the actual partial constructor before its error\n'
@@ -237,7 +238,11 @@ INBOUND_RETIREMENT_EDITS = (
      b'\tt.routervpnReady = false\n'
      b'\tif runtime.GOOS == "linux" && (t.routervpnStandardStartup || t.routervpnRetirementReceipt != "") {\n'
      b'\t\t_, err := t.routervpnDesktopTunRetireLocked(t.tunOptions.RouterVPNNetworkContext)\n'
-     b'\t\treturn err\n\t}\n\treturn common.Close('),
+     b'\t\treturn err\n\t}\n'
+     b'\tif t.routervpnDarwinNodeChain.Load() {\n'
+     b'\t\towned, ok := any(t).(interface{ routervpnDarwinCloseDefaultLocked() error })\n'
+     b'\t\tif !ok { return E.New("Darwin ordered cleanup lost its original component owner") }\n'
+     b'\t\treturn owned.routervpnDarwinCloseDefaultLocked()\n\t}\n\treturn common.Close('),
 )
 
 

@@ -7,6 +7,42 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## Ordered Darwin inbound and manager cleanup retain original components
+
+The ordered Darwin child now has a separately typed bounded preclose on its
+original inbound manager. It visits only the actual retained inbound and failed
+MTU reader pointers. A successful join removes that exact pointer from the
+ordinary close inventories without erasing a replacement with the same tag.
+Failed or unvisited originals remain retained for the same owner's retry.
+
+Each explicitly enabled Darwin inbound records the original stack, native TUN
+and redirect component and their close progress. Opaque components are closed
+once; ambiguous errors remain failures. The native TUN's retained retryable
+close state supplies route/descriptor/poller/pipe completion. A caller waiting
+for the lifecycle lock remains bounded by its own original context. MTU
+successors inherit only the explicit ordered capability and original startup
+context, with fresh cleanup progress and a fresh OS-selected utun constructor.
+
+Darwin deliberately does not claim Linux retirement JSON evidence. Its native
+close completion, the parent's actual old-interface absence/new-reader check,
+and the child's subsequent ready/stopped receipts form its separate proof
+path. Retained manager transaction history is not an ordinary Box.Close
+inventory; an explicit later retry reaches the same memoized component state.
+The Linux and borrowed-mobile close paths retain their existing contracts.
+
+The prepared Darwin runtime now compiles and runs the actual inbound and manager
+templates under the race detector. The new gate requires 18 inbound and 12
+manager verdicts including roots, exact RUN/terminal/package receipts, five
+compiled causal controls and five runner test methods. These are component
+tests using explicit native boundary doubles; real utun retirement is covered
+by the separate native gate. Existing test timeouts and requirements remain;
+the new phase has its own bounded compilation/execution allowance.
+
+All ten changed source/gate files were independently reviewed against current
+main. No local Go or Python execution was available. Hosted native compilation
+and execution remain required. This component integration does not by itself
+enable or establish acceptance of the complete public ordered Darwin path.
+
 ## Naive H3 fixture distinguishes an exact retired UDP socket
 
 Completed e1204aea native reference job

@@ -1,0 +1,136 @@
+//go:build darwin
+
+package inbound
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+)
+
+type routerVPNDarwinManagerTestInbound struct {
+	tag, kind string
+	enabled bool
+	calls, legacy, enables int
+	failures int
+	after func()
+}
+func (r *routerVPNDarwinManagerTestInbound) Type() string { return r.kind }
+func (r *routerVPNDarwinManagerTestInbound) Tag() string { return r.tag }
+func (r *routerVPNDarwinManagerTestInbound) Start(adapter.StartStage) error { return nil }
+func (r *routerVPNDarwinManagerTestInbound) Close() error {
+	r.legacy++
+	return errors.New("ordinary Close cannot replace ordered manager preclose")
+}
+func (r *routerVPNDarwinManagerTestInbound) RouterVPNDesktopDarwinNodeChainRetirementEnabled() bool { return r.enabled }
+func (r *routerVPNDarwinManagerTestInbound) RouterVPNDesktopDarwinNodeChainRetirementContext(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil { return errors.New("lost original enable caller") }
+	r.enables++
+	r.enabled = true
+	return nil
+}
+func (r *routerVPNDarwinManagerTestInbound) RouterVPNDesktopDarwinNodeChainCloseContext(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil { return errors.New("lost original close caller") }
+	r.calls++
+	if r.after != nil { r.after() }
+	if r.calls <= r.failures { return errors.New("original native component still retained") }
+	return nil
+}
+func routerVPNDarwinManagerContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+func routerVPNDarwinManagerFixture() (*Manager, *routerVPNDarwinManagerTestInbound) {
+	current := &routerVPNDarwinManagerTestInbound{tag: "tun", kind: "tun", enabled: true}
+	return &Manager{started: true, stage: adapter.StartStateStarted,
+		inbounds: []adapter.Inbound{current}, inboundByTag: map[string]adapter.Inbound{"tun": current}}, current
+}
+func TestRouterVPNTunDarwinOrderedManagerRetirement(t *testing.T) {
+	t.Run("retained-retry", func(t *testing.T) {
+		manager, current := routerVPNDarwinManagerFixture()
+		failed := &routerVPNDarwinManagerTestInbound{tag: "tun", kind: "tun", enabled: true, failures: 1}
+		last := &routerVPNDarwinManagerTestInbound{tag: "tun", kind: "tun", enabled: true}
+		manager.routervpnRetired = []adapter.Inbound{current, failed, last}
+		ctx := routerVPNDarwinManagerContext(t)
+		if manager.RouterVPNCloseDarwinNodeChainTunContext(ctx) == nil ||
+			current.calls != 1 || failed.calls != 1 || last.calls != 0 || len(manager.inbounds) != 0 ||
+			len(manager.routervpnRetired) != 2 || manager.routervpnRetired[0] != failed {
+			t.Fatal("failed native owner was dropped or later owner retired before its original join")
+		}
+		if err := manager.RouterVPNCloseDarwinNodeChainTunContext(ctx); err != nil { t.Fatal(err) }
+		if err := manager.RouterVPNCloseDarwinNodeChainTunContext(ctx); err != nil { t.Fatal(err) }
+		if current.calls != 1 || failed.calls != 2 || last.calls != 1 || len(manager.routervpnRetired) != 0 ||
+			len(manager.inboundByTag) != 0 || current.legacy+failed.legacy+last.legacy != 0 {
+			t.Fatal("manager repeated or substituted a joined original native pointer")
+		}
+	})
+	t.Run("cancel-after-close", func(t *testing.T) {
+		manager, current := routerVPNDarwinManagerFixture()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		current.after = cancel
+		if manager.RouterVPNCloseDarwinNodeChainTunContext(ctx) == nil || len(manager.inbounds) != 1 || manager.inbounds[0] != current {
+			t.Fatal("expired original caller discarded its completed but unremoved native owner")
+		}
+		current.after = nil
+		if err := manager.RouterVPNCloseDarwinNodeChainTunContext(routerVPNDarwinManagerContext(t)); err != nil ||
+			len(manager.inbounds) != 0 || current.legacy != 0 {
+			t.Fatal("same original manager could not retry retained close progress", err)
+		}
+	})
+	t.Run("foreign-tag", func(t *testing.T) {
+		manager, current := routerVPNDarwinManagerFixture()
+		foreign := &routerVPNDarwinManagerTestInbound{tag: "tun", kind: "tun", enabled: true}
+		// A tag alone never makes this unretained pointer an owned resource.
+		manager.inboundByTag["tun"] = foreign
+		if err := manager.RouterVPNCloseDarwinNodeChainTunContext(routerVPNDarwinManagerContext(t)); err != nil { t.Fatal(err) }
+		if current.calls != 1 || foreign.calls != 0 || manager.inboundByTag["tun"] != foreign {
+			t.Fatal("original cleanup consumed or erased a replacement tag owner")
+		}
+	})
+	t.Run("unstarted-partial", func(t *testing.T) {
+		manager, current := routerVPNDarwinManagerFixture()
+		current.enabled = false
+		manager.started = false
+		if err := manager.RouterVPNCloseDarwinNodeChainTunContext(routerVPNDarwinManagerContext(t)); err != nil ||
+			current.enables != 1 || current.calls != 1 || current.legacy != 0 || len(manager.inbounds) != 0 {
+			t.Fatal("unstarted original partial constructor escaped retained cleanup", err)
+		}
+	})
+	t.Run("unrelated-reader", func(t *testing.T) {
+		manager, current := routerVPNDarwinManagerFixture()
+		other := &routerVPNDarwinManagerTestInbound{tag: "listener", kind: "mixed"}
+		manager.inbounds = append(manager.inbounds, other)
+		manager.inboundByTag[other.tag] = other
+		if err := manager.RouterVPNCloseDarwinNodeChainTunContext(routerVPNDarwinManagerContext(t)); err != nil { t.Fatal(err) }
+		if current.calls != 1 || other.calls+other.legacy+other.enables != 0 ||
+			len(manager.inbounds) != 1 || manager.inbounds[0] != other {
+			t.Fatal("ordered preclose consumed an unrelated original service")
+		}
+	})
+}
+func TestRouterVPNTunDarwinOrderedManagerAdmission(t *testing.T) {
+	for _, kind := range []string{"nil", "unbounded", "cancelled", "lifecycle", "access"} {
+		t.Run(kind, func(t *testing.T) {
+			manager, current := routerVPNDarwinManagerFixture()
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			switch kind {
+			case "nil": ctx = nil
+			case "unbounded": ctx = context.Background()
+			case "cancelled": cancel()
+			case "lifecycle": manager.routervpnLifecycle.Lock(); defer manager.routervpnLifecycle.Unlock()
+			case "access": manager.access.Lock(); defer manager.access.Unlock()
+			}
+			if manager.RouterVPNCloseDarwinNodeChainTunContext(ctx) == nil || current.calls != 0 ||
+				len(manager.inbounds) != 1 || manager.inbounds[0] != current {
+				t.Fatal("invalid cleanup admission consumed an original native owner")
+			}
+		})
+	}
+}

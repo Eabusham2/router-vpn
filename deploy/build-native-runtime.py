@@ -114,6 +114,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_pt_inventory_runner.py',
                              ROOT/'deploy/test_desktop_darwin_retirement.py',
                              ROOT/'deploy/test_desktop_darwin_retirement_runner.py',
+                             ROOT/'deploy/test_desktop_darwin_node_chain_lifecycle.py',
+                             ROOT/'deploy/test_desktop_darwin_node_chain_lifecycle_runner.py',
                              ROOT/'deploy/test_desktop_imported_runtime.py',
                              ROOT/'deploy/test_desktop_imported_packet_runtime.py',
                              ROOT/'deploy/test_desktop_imported_openvpn_runtime.py',
@@ -1306,6 +1308,10 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             # desktop hosts except Windows ARM64 (internal/platform/supported.go).
             race = [] if target == 'windows/arm64' else ['-race']
             if target.startswith('darwin/'):
+                run([sys.executable, ROOT/'deploy/test_desktop_darwin_node_chain_lifecycle_runner.py'],
+                    env=env, timeout=120)
+                run([sys.executable, ROOT/'deploy/test_desktop_darwin_node_chain_lifecycle.py', source,
+                     '--tags='+','.join(tags(target))], env=env, timeout=1800)
                 # Required low-level utun/route cleanup precedes later installed
                 # host/trust acceptance. This does not enable ordered app hosting.
                 run([sys.executable, ROOT/'deploy/test_desktop_darwin_retirement_runner.py'],

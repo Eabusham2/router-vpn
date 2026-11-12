@@ -46,6 +46,11 @@ func (t *Inbound) RouterVPNMTUReadersContext(ctx context.Context, mtu int) (adap
 	// No physical route, resolver, endpoint or encryption option is changed.
 	if t.routervpnDesktop {
 		options.InterfaceName = t.tunOptions.Name
+		if runtime.GOOS == "darwin" && t.RouterVPNDesktopMTUBoundedTransaction() {
+			// The ordered Darwin source binds the new reader's actual utun
+			// description. A predecessor alias is not a fresh constructor.
+			options.InterfaceName = ""
+		}
 	}
 	options.MTU = uint32(mtu)
 	candidate, err := NewInbound(t.ctx, t.router, t.logger, t.tag, options)
@@ -75,6 +80,11 @@ func (t *Inbound) RouterVPNMTUReadersContext(ctx context.Context, mtu int) (adap
 			next.routervpnDesktopFresh = true
 			next.routervpnDesktopGuard = t.routervpnDesktopGuard
 			next.routervpnDesktopGuardContext = t.routervpnDesktopGuardContext
+			if inherited, ok := any(t).(interface{ routervpnDarwinRetirementSuccessor(*Inbound) error }); ok {
+				if err := inherited.routervpnDarwinRetirementSuccessor(next); err != nil {
+					return candidate, rollback, err
+				}
+			}
 		}
 	}
 	return candidate, rollback, nil
@@ -169,8 +179,16 @@ func (t *Inbound) Start(stage adapter.StartStage) error {
 	return err
 }
 
-// Borrowed mobile VPN handles and non-Linux platform adapters keep their
-// existing native rollback and lifetime contract.
+// Borrowed mobile handles and ordinary platform adapters keep their existing
+// rollback contract. Only explicitly enabled ordered Darwin readers join the
+// same bounded transaction path using their original per-component cleanup.
 func (t *Inbound) RouterVPNDesktopMTUBoundedTransaction() bool {
-	return runtime.GOOS == "linux" && t.platformInterface == nil
+	if t == nil || t.platformInterface != nil {
+		return false
+	}
+	if runtime.GOOS == "darwin" {
+		owned, ok := any(t).(interface{ RouterVPNDesktopDarwinNodeChainRetirementEnabled() bool })
+		return ok && owned.RouterVPNDesktopDarwinNodeChainRetirementEnabled()
+	}
+	return runtime.GOOS == "linux"
 }

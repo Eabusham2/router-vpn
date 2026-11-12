@@ -196,8 +196,13 @@ ROUTE_TEMPLATES = {
     'tor_network_startup.go.tmpl': 'route/routervpn_desktop_tor_network_startup.go',
     'tor_network_startup_test.go.tmpl': 'route/routervpn_desktop_tor_network_startup_test.go',
 }
+INBOUND_TEMPLATES = {
+    'inbound_node_chain_retirement_darwin_test.go.tmpl': 'adapter/inbound/routervpn_node_chain_retirement_darwin_test.go',
+}
 TUN_TEMPLATES = {
     'tun_darwin_control.go.tmpl': 'protocol/tun/routervpn_desktop_control_darwin.go',
+    'tun_node_chain_retirement_darwin.go.tmpl': 'protocol/tun/routervpn_node_chain_retirement_darwin.go',
+    'tun_node_chain_retirement_darwin_test.go.tmpl': 'protocol/tun/routervpn_node_chain_retirement_darwin_test.go',
     'tun_network.go.tmpl': 'protocol/tun/routervpn_desktop_network.go',
     'tun_network_test.go.tmpl': 'protocol/tun/routervpn_desktop_network_test.go',
 }
@@ -375,6 +380,12 @@ def pt_copies():
                   'node_box_linux_cover_test.go.tmpl': b'//go:build linux\n\n'}.get(name, b'')
         if path.is_symlink() or not raw.startswith(prefix+b'package box\n'):
             raise ValueError('Desktop Tor Box package boundary changed')
+        content[relative] = raw
+    for name, relative in INBOUND_TEMPLATES.items():
+        path = ROOT/'mobile/desktop'/name
+        raw = path.read_bytes()
+        if path.is_symlink() or not raw.startswith(b'//go:build darwin\n\npackage inbound\n'):
+            raise ValueError('Desktop Darwin original inbound manager package boundary changed')
         content[relative] = raw
     for name, relative in TUN_TEMPLATES.items():
         tunnel = ROOT/'mobile/desktop'/name

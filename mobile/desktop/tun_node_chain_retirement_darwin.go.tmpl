@@ -1,0 +1,158 @@
+//go:build darwin
+
+package tun
+
+import (
+	"context"
+	"errors"
+	"io"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	T "github.com/sagernet/sing-tun"
+)
+
+// The original inbound lifecycle mutex protects every component pointer and
+// cleanup result. A blocking Close keeps this owner; no waiter goroutine or
+// fresh lookup can claim completion while that original call remains entered.
+type routerVPNDarwinInboundRetirement struct {
+	stack       T.Stack
+	native      T.Tun
+	redirect    T.AutoRedirect
+	stackTried  bool
+	stackJoined bool
+	stackError  error
+	nativeJoined bool
+	redirectTried bool
+	redirectJoined bool
+	redirectError error
+}
+
+func (t *Inbound) RouterVPNDesktopDarwinNodeChainRetirementContext(ctx context.Context) error {
+	if t == nil || ctx == nil || ctx.Err() != nil {
+		return errors.New("Darwin ordered retirement lost its original inbound or caller")
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return errors.New("Darwin ordered retirement requires its original deadline")
+	}
+	if err := desktopnetwork.LockContext(ctx, &t.routervpnLifecycle); err != nil {
+		return err
+	}
+	defer t.routervpnLifecycle.Unlock()
+	if t.platformInterface != nil || t.autoRedirect != nil || t.tunOptions.NetNs != "" || t.tunOptions.EXP_ExternalConfiguration || t.routervpnReady || t.tunIf != nil ||
+		t.tunStack != nil || t.routervpnDarwinRetirement != nil {
+		return errors.New("Darwin ordered retirement must precede this original native constructor")
+	}
+	t.routervpnDarwinNodeChain.Store(true)
+	return ctx.Err()
+}
+
+func (t *Inbound) RouterVPNDesktopDarwinNodeChainRetirementEnabled() bool {
+	return t != nil && t.routervpnDarwinNodeChain.Load()
+}
+
+// Called by RouterVPNMTUReadersContext while the original lifecycle lock is
+// held. Each newly constructed reader gets fresh cleanup progress while it
+// retains the same explicitly enabled ordered-desktop capability.
+func (t *Inbound) routervpnDarwinRetirementSuccessor(next *Inbound) error {
+	if !t.routervpnDarwinNodeChain.Load() {
+		return nil
+	}
+	if next == nil || next == t || next.platformInterface != nil || next.autoRedirect != nil ||
+		next.tunOptions.NetNs != "" || next.tunOptions.EXP_ExternalConfiguration || next.tunIf != nil || next.tunStack != nil || next.routervpnReady || next.routervpnDarwinRetirement != nil {
+		return errors.New("Darwin ordered MTU successor replaced its original constructor")
+	}
+	next.routervpnDarwinNodeChain.Store(true)
+	return nil
+}
+
+func (t *Inbound) routervpnDarwinCloseDefaultLocked() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return t.routervpnDarwinCloseLocked(ctx)
+}
+
+func (t *Inbound) RouterVPNDesktopDarwinNodeChainCloseContext(ctx context.Context) error {
+	if t == nil {
+		return errors.New("Darwin ordered cleanup lost its original inbound")
+	}
+	if err := desktopnetwork.LockContext(ctx, &t.routervpnLifecycle); err != nil {
+		return err
+	}
+	defer t.routervpnLifecycle.Unlock()
+	return t.routervpnDarwinCloseLocked(ctx)
+}
+
+func routervpnDarwinCloseOpaque(ctx context.Context, original io.Closer, tried, joined *bool, retained *error) error {
+	if ctx == nil || ctx.Err() != nil {
+		return errors.New("Darwin inbound cleanup lost its original operation")
+	}
+	if *joined {
+		return nil
+	}
+	if *tried {
+		return errors.Join(*retained, errors.New("Darwin inbound retains an ambiguous original component close"))
+	}
+	*tried = true
+	if original != nil {
+		*retained = original.Close()
+		if *retained != nil {
+			return *retained
+		}
+	}
+	*joined = true
+	return ctx.Err()
+}
+
+func (t *Inbound) routervpnDarwinCloseLocked(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil {
+		return errors.New("Darwin inbound cleanup requires its original caller")
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return errors.New("Darwin inbound cleanup requires its original deadline")
+	}
+	if t.platformInterface != nil || t.autoRedirect != nil || t.tunOptions.NetNs != "" || t.tunOptions.EXP_ExternalConfiguration || !t.routervpnDarwinNodeChain.Load() {
+		return errors.New("Darwin inbound cleanup has no original ordered native capability")
+	}
+	t.routervpnReady = false
+	state, _ := t.routervpnDarwinRetirement.(*routerVPNDarwinInboundRetirement)
+	if t.routervpnDarwinRetirement != nil && state == nil {
+		return errors.New("Darwin inbound cleanup replaced its original progress")
+	}
+	if state == nil {
+		state = &routerVPNDarwinInboundRetirement{stack: t.tunStack, native: t.tunIf, redirect: t.autoRedirect}
+		t.routervpnDarwinRetirement = state
+	}
+	if state.stack != t.tunStack || state.native != t.tunIf || state.redirect != t.autoRedirect {
+		return errors.New("Darwin inbound cleanup replaced an original component")
+	}
+	if err := routervpnDarwinCloseOpaque(ctx, state.stack, &state.stackTried, &state.stackJoined, &state.stackError); err != nil {
+		return err
+	}
+	if !state.nativeJoined {
+		if state.native != nil {
+			native, ok := state.native.(interface {
+				RouterVPNDesktopDarwinNodeChainCloseContext(context.Context) error
+			})
+			if !ok {
+				return errors.New("Darwin inbound lacks its original retryable native cleanup")
+			}
+			if err := native.RouterVPNDesktopDarwinNodeChainCloseContext(ctx); err != nil {
+				return err
+			}
+		}
+		state.nativeJoined = true
+	}
+	if err := routervpnDarwinCloseOpaque(ctx, state.redirect, &state.redirectTried, &state.redirectJoined, &state.redirectError); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+// Keep the compiler checking the exact public capability consumed by the
+// manager; no optional legacy Close fallback can satisfy this boundary.
+var _ interface {
+	adapter.Inbound
+	RouterVPNDesktopDarwinNodeChainCloseContext(context.Context) error
+} = (*Inbound)(nil)

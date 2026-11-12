@@ -444,6 +444,16 @@ func (m *Manager) RouterVPNCloseNativeTunContext(ctx context.Context) error {
 	return nil
 }
 func routervpnCloseTunContext(ctx context.Context, original adapter.Inbound) error {
+	if runtime.GOOS == "darwin" {
+		if native, ok := original.(interface {
+			RouterVPNDesktopDarwinNodeChainRetirementEnabled() bool
+			RouterVPNDesktopDarwinNodeChainCloseContext(context.Context) error
+		}); ok {
+			if native.RouterVPNDesktopDarwinNodeChainRetirementEnabled() {
+				return native.RouterVPNDesktopDarwinNodeChainCloseContext(ctx)
+			}
+		}
+	}
 	if runtime.GOOS == "linux" {
 		if closer, ok := original.(interface{ RouterVPNDesktopTunCloseContext(context.Context) error }); ok {
 			return closer.RouterVPNDesktopTunCloseContext(ctx)
@@ -455,4 +465,72 @@ func routervpnCloseTunContext(ctx context.Context, original adapter.Inbound) err
 func routervpnBoundedMTU(value adapter.Inbound) bool {
 	owner, ok := value.(interface{ RouterVPNDesktopMTUBoundedTransaction() bool })
 	return ok && owner.RouterVPNDesktopMTUBoundedTransaction()
+}
+
+// This separately typed Darwin entry is called only by the original ordered
+// child before its physical source and one-shot Box teardown. It preserves the
+// ordinary Linux/borrowed manager lifecycle unchanged.
+func (m *Manager) RouterVPNCloseDarwinNodeChainTunContext(ctx context.Context) error {
+	if runtime.GOOS != "darwin" || ctx == nil || ctx.Err() != nil {
+		return errors.New("Darwin ordered cleanup lost its original caller")
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return errors.New("Darwin ordered cleanup requires its original deadline")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.routervpnLifecycle); err != nil {
+		return err
+	}
+	defer m.routervpnLifecycle.Unlock()
+	if err := adapter.RouterVPNLockContext(ctx, &m.access); err != nil {
+		return err
+	}
+	originals := append(append([]adapter.Inbound(nil), m.inbounds...), m.routervpnRetired...)
+	m.access.Unlock()
+	visited := make(map[adapter.Inbound]bool)
+	for _, original := range originals {
+		if original == nil || original.Type() != "tun" || visited[original] {
+			continue
+		}
+		visited[original] = true
+		owned, ok := original.(interface {
+			RouterVPNDesktopDarwinNodeChainRetirementEnabled() bool
+			RouterVPNDesktopDarwinNodeChainRetirementContext(context.Context) error
+			RouterVPNDesktopDarwinNodeChainCloseContext(context.Context) error
+		})
+		if !ok {
+			return errors.New("Darwin ordered manager lost an original native retirement capability")
+		}
+		if !owned.RouterVPNDesktopDarwinNodeChainRetirementEnabled() {
+			// Box construction can fail before the explicit preparation. This
+			// capability succeeds only while this same reader has never acquired
+			// any native TUN, stack or borrowed platform handle.
+			if err := owned.RouterVPNDesktopDarwinNodeChainRetirementContext(ctx); err != nil {
+				return err
+			}
+		}
+		if err := owned.RouterVPNDesktopDarwinNodeChainCloseContext(ctx); err != nil {
+			return err
+		}
+		if err := adapter.RouterVPNLockContext(ctx, &m.access); err != nil {
+			return err
+		}
+		// Remove only this successfully joined pointer. Failed/unvisited
+		// originals remain retained, and ordinary Box.Close cannot close a
+		// completed Darwin descriptor/stack a second time.
+		for i := len(m.inbounds)-1; i >= 0; i-- {
+			if m.inbounds[i] == original {
+				m.inbounds = append(m.inbounds[:i], m.inbounds[i+1:]...)
+			}
+		}
+		if m.inboundByTag[original.Tag()] == original {
+			delete(m.inboundByTag, original.Tag())
+		}
+		for i := len(m.routervpnRetired)-1; i >= 0; i-- {
+			if m.routervpnRetired[i] == original {
+				m.routervpnRetired = append(m.routervpnRetired[:i], m.routervpnRetired[i+1:]...)
+			}
+		}
+		m.access.Unlock()
+	}
+	return ctx.Err()
 }

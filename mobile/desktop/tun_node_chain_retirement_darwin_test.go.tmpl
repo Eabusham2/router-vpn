@@ -1,0 +1,181 @@
+//go:build darwin
+
+package tun
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	T "github.com/sagernet/sing-tun"
+)
+
+// These explicit native-boundary doubles exercise the shipping inbound's
+// original pointers and component progress; they claim no utun/route proof.
+type routerVPNDarwinRetirementTestStack struct {
+	T.Stack
+	calls atomic.Int32
+	fail error
+	entered, release chan struct{}
+	after func()
+}
+func (s *routerVPNDarwinRetirementTestStack) Close() error {
+	s.calls.Add(1)
+	if s.entered != nil { close(s.entered); <-s.release }
+	if s.after != nil { s.after() }
+	return s.fail
+}
+type routerVPNDarwinRetirementTestNative struct {
+	T.Tun
+	calls, legacy atomic.Int32
+	failures int32
+}
+func (n *routerVPNDarwinRetirementTestNative) Close() error {
+	n.legacy.Add(1)
+	return errors.New("legacy native Close cannot satisfy ordered retirement")
+}
+func (n *routerVPNDarwinRetirementTestNative) RouterVPNDesktopDarwinNodeChainCloseContext(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil { return errors.New("native boundary lost original caller") }
+	if n.calls.Add(1) <= n.failures { return errors.New("original native route still retained") }
+	return nil
+}
+type routerVPNDarwinRetirementTestPlatform struct { adapter.PlatformInterface }
+func routerVPNDarwinRetirementInbound(t *testing.T) (*Inbound, *routerVPNDarwinRetirementTestStack, *routerVPNDarwinRetirementTestNative) {
+	t.Helper()
+	owner := &Inbound{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := owner.RouterVPNDesktopDarwinNodeChainRetirementContext(ctx); err != nil { t.Fatal(err) }
+	stack := &routerVPNDarwinRetirementTestStack{}
+	native := &routerVPNDarwinRetirementTestNative{}
+	owner.tunStack, owner.tunIf, owner.routervpnReady = stack, native, true
+	return owner, stack, native
+}
+func routerVPNDarwinRetirementClose(owner *Inbound) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return owner.RouterVPNDesktopDarwinNodeChainCloseContext(ctx)
+}
+func TestRouterVPNDarwinNodeChainInboundRetirement(t *testing.T) {
+	t.Run("native-retry", func(t *testing.T) {
+		owner, stack, native := routerVPNDarwinRetirementInbound(t)
+		native.failures = 1
+		if routerVPNDarwinRetirementClose(owner) == nil || owner.routervpnReady || stack.calls.Load() != 1 || native.calls.Load() != 1 {
+			t.Fatal("failed native component was acknowledged or lost its original stack progress")
+		}
+		if err := routerVPNDarwinRetirementClose(owner); err != nil { t.Fatal(err) }
+		if err := routerVPNDarwinRetirementClose(owner); err != nil { t.Fatal(err) }
+		if stack.calls.Load() != 1 || native.calls.Load() != 2 || native.legacy.Load() != 0 ||
+			owner.tunStack != stack || owner.tunIf != native {
+			t.Fatal("original cleanup repeated or replaced an already joined component")
+		}
+	})
+	t.Run("ambiguous-stack", func(t *testing.T) {
+		owner, stack, native := routerVPNDarwinRetirementInbound(t)
+		stack.fail = errors.New("one original stack component failed after another joined")
+		if routerVPNDarwinRetirementClose(owner) == nil || routerVPNDarwinRetirementClose(owner) == nil {
+			t.Fatal("ambiguous stack cleanup was converted to success")
+		}
+		if stack.calls.Load() != 1 || native.calls.Load() != 0 || native.legacy.Load() != 0 {
+			t.Fatal("ambiguous original stack close was reissued or skipped")
+		}
+	})
+	t.Run("replacement-native", func(t *testing.T) {
+		owner, stack, native := routerVPNDarwinRetirementInbound(t)
+		native.failures = 1
+		if routerVPNDarwinRetirementClose(owner) == nil { t.Fatal("original failure vanished") }
+		foreign := &routerVPNDarwinRetirementTestNative{}
+		owner.tunIf = foreign
+		if routerVPNDarwinRetirementClose(owner) == nil || foreign.calls.Load() != 0 || native.calls.Load() != 1 {
+			t.Fatal("replacement native pointer acquired original cleanup authority")
+		}
+		owner.tunIf = native
+		if err := routerVPNDarwinRetirementClose(owner); err != nil || stack.calls.Load() != 1 { t.Fatal(err) }
+	})
+	t.Run("cancel-after-stack", func(t *testing.T) {
+		owner, stack, native := routerVPNDarwinRetirementInbound(t)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		stack.after = cancel
+		if owner.RouterVPNDesktopDarwinNodeChainCloseContext(ctx) == nil || native.calls.Load() != 0 {
+			t.Fatal("expired cleanup advanced into the original native component")
+		}
+		if err := routerVPNDarwinRetirementClose(owner); err != nil || stack.calls.Load() != 1 || native.calls.Load() != 1 {
+			t.Fatal("cancelled caller discarded successful original progress", err)
+		}
+	})
+	t.Run("bounded-waiter", func(t *testing.T) {
+		owner, stack, native := routerVPNDarwinRetirementInbound(t)
+		stack.entered, stack.release = make(chan struct{}), make(chan struct{})
+		first := make(chan error, 1)
+		go func() { first <- routerVPNDarwinRetirementClose(owner) }()
+		select {
+		case <-stack.entered:
+		case <-time.After(time.Second): t.Fatal("original component close was not entered")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		err := owner.RouterVPNDesktopDarwinNodeChainCloseContext(ctx)
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) || stack.calls.Load() != 1 || native.calls.Load() != 0 {
+			close(stack.release); <-first
+			t.Fatal("later waiter duplicated or detached the original blocked close", err)
+		}
+		close(stack.release)
+		if err := <-first; err != nil { t.Fatal(err) }
+		if err := routerVPNDarwinRetirementClose(owner); err != nil || stack.calls.Load() != 1 || native.calls.Load() != 1 { t.Fatal(err) }
+	})
+	t.Run("legacy-close", func(t *testing.T) {
+		owner, stack, native := routerVPNDarwinRetirementInbound(t)
+		if err := owner.Close(); err != nil { t.Fatal(err) }
+		if err := owner.Close(); err != nil { t.Fatal(err) }
+		if stack.calls.Load() != 1 || native.calls.Load() != 1 || native.legacy.Load() != 0 {
+			t.Fatal("one-shot Box cleanup bypassed original ordered component progress")
+		}
+	})
+	t.Run("never-started", func(t *testing.T) {
+		owner := &Inbound{}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := owner.RouterVPNDesktopDarwinNodeChainRetirementContext(ctx); err != nil { t.Fatal(err) }
+		if err := owner.RouterVPNDesktopDarwinNodeChainCloseContext(ctx); err != nil { t.Fatal(err) }
+		if err := owner.Close(); err != nil { t.Fatal(err) }
+	})
+	t.Run("successor", func(t *testing.T) {
+		original, _, _ := routerVPNDarwinRetirementInbound(t)
+		next := &Inbound{}
+		if err := original.routervpnDarwinRetirementSuccessor(next); err != nil { t.Fatal(err) }
+		if !next.RouterVPNDesktopDarwinNodeChainRetirementEnabled() || !next.RouterVPNDesktopMTUBoundedTransaction() ||
+			next.routervpnDarwinRetirement != nil || next.tunIf != nil {
+			t.Fatal("MTU successor lost original capability or inherited old cleanup state")
+		}
+		if original.routervpnDarwinRetirementSuccessor(original) == nil { t.Fatal("original reused as fresh successor") }
+		ordinary := &Inbound{}
+		if ordinary.RouterVPNDesktopMTUBoundedTransaction() { t.Fatal("ordinary Darwin reader entered ordered cleanup") }
+	})
+}
+func TestRouterVPNDarwinNodeChainInboundAdmission(t *testing.T) {
+	for _, kind := range []string{"nil", "unbounded", "cancelled", "borrowed", "started", "namespace", "external", "unenabled"} {
+		t.Run(kind, func(t *testing.T) {
+			owner := &Inbound{}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			switch kind {
+			case "nil": owner = nil
+			case "unbounded": ctx = context.Background()
+			case "cancelled": cancel()
+			case "borrowed": owner.platformInterface = &routerVPNDarwinRetirementTestPlatform{}
+			case "started": owner.tunIf = &routerVPNDarwinRetirementTestNative{}
+			case "namespace": owner.tunOptions.NetNs = "foreign"
+			case "external": owner.tunOptions.EXP_ExternalConfiguration = true
+			}
+			if kind == "unenabled" {
+				if owner.RouterVPNDesktopDarwinNodeChainCloseContext(ctx) == nil { t.Fatal("unenabled cleanup acquired original authority") }
+			} else if owner.RouterVPNDesktopDarwinNodeChainRetirementContext(ctx) == nil {
+				t.Fatal("invalid original inbound acquired ordered retirement authority")
+			}
+		})
+	}
+}
