@@ -27,26 +27,27 @@ type NodeChainExecutionProgress struct {
 // original native Box/TUN. Each trial is immutable and cannot be replaced
 // until its original application, proof, control and server owners join.
 type NodeChainExecutionRuntime struct {
-	mu                 sync.Mutex
-	projection         *NodeChainExecutionProjection
-	engine             NodeChainExecutionEngine
-	identity           NodeChainIdentity
-	lifetime           context.Context
-	cancel             context.CancelFunc
-	runDone, watchDone chan struct{}
-	started, retired   atomic.Bool
-	closed             bool
-	measurementHolds   int
-	lastCaptures       int
-	healthObservations int
-	active             *nodeChainExecutionTrial
-	progress           NodeChainExecutionProgress
-	checkedAt          time.Time
-	restore            *NodeChainExecutionRestoreCapture
-	mtuPause           *nodeChainExecutionMTUResumeState
-	mtuResume          *nodeChainExecutionMTUResumeState
-	lastPlan           *nodeChainExecutionLastPlanState
-	testTLS            *tls.Config
+	mu                   sync.Mutex
+	projection           *NodeChainExecutionProjection
+	engine               NodeChainExecutionEngine
+	identity             NodeChainIdentity
+	lifetime             context.Context
+	cancel               context.CancelFunc
+	runDone, watchDone   chan struct{}
+	started, retired     atomic.Bool
+	closed               bool
+	measurementHolds     int
+	lastCaptures         int
+	healthObservations   int
+	readbackObservations int
+	active               *nodeChainExecutionTrial
+	progress             NodeChainExecutionProgress
+	checkedAt            time.Time
+	restore              *NodeChainExecutionRestoreCapture
+	mtuPause             *nodeChainExecutionMTUResumeState
+	mtuResume            *nodeChainExecutionMTUResumeState
+	lastPlan             *nodeChainExecutionLastPlanState
+	testTLS              *tls.Config
 }
 
 type nodeChainExecutionTrial struct {
@@ -530,6 +531,10 @@ func (r *NodeChainExecutionRuntime) CloseContext(ctx context.Context) error {
 	if r.healthObservations != 0 {
 		r.mu.Unlock()
 		return errors.New("original ordered health observation has not joined")
+	}
+	if r.readbackObservations != 0 {
+		r.mu.Unlock()
+		return errors.New("original ordered TUN observation has not joined")
 	}
 	if r.measurementHolds != 0 {
 		r.mu.Unlock()

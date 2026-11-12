@@ -58,6 +58,7 @@ type NodeChainExecutionPreparation struct {
 	physical                                       []PhysicalEgress
 	desktop                                        *DesktopNodeChainPolicy
 	desktopPhysical                                *DesktopNodeChainExecutionPhysicalPolicy
+	mobile                                         *nodeChainExecutionMobileProjection
 }
 
 // NewNodeChainExecutionPreparation keeps one complete original Local graph,
@@ -70,6 +71,10 @@ func NewNodeChainExecutionPreparation(localSource, execution string) (*NodeChain
 }
 
 func newNodeChainExecutionPreparation(localSource, execution string, desktop *DesktopNodeChainPolicy) (*NodeChainExecutionPreparation, error) {
+	return newNodeChainExecutionPreparationProjected(localSource, execution, desktop, nil)
+}
+
+func newNodeChainExecutionPreparationProjected(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection) (*NodeChainExecutionPreparation, error) {
 	if execution != "server" && execution != "auto" {
 		return nil, nodeChainExecutionError
 	}
@@ -80,8 +85,14 @@ func newNodeChainExecutionPreparation(localSource, execution string, desktop *De
 		len(original.IdentitySources) != len(local.nodes) {
 		return nil, nodeChainExecutionError
 	}
-	p := &NodeChainExecutionPreparation{source: NodeChainExecutionPreparationSource{Schema: 1, Execution: execution, LocalSource: localSource}, local: local, desktop: desktop}
+	p := &NodeChainExecutionPreparation{source: NodeChainExecutionPreparationSource{Schema: 1, Execution: execution, LocalSource: localSource}, local: local, desktop: desktop, mobile: mobile}
 	config := local.Config()
+	if mobile != nil {
+		if desktop != nil || p.validateMobileCapture() != nil {
+			return nil, nodeChainExecutionError
+		}
+		config = mobile.chain.Config()
+	}
 	if desktop != nil {
 		var meta DesktopNodeChainMetadata
 		config, meta, _, err = desktop.ReadValidated()
@@ -194,8 +205,15 @@ func (p *NodeChainExecutionPreparation) captureSeal() string {
 	if p == nil {
 		return ""
 	}
-	raw, err := json.Marshal([]any{"routervpn-node-chain-execution-preparation-capture-v1", p.sourceJSON, p.sourceSHA,
-		p.config, p.configSHA, p.source, p.discovery, p.dns, p.physical})
+	values := []any{"routervpn-node-chain-execution-preparation-capture-v1", p.sourceJSON, p.sourceSHA,
+		p.config, p.configSHA, p.source, p.discovery, p.dns, p.physical}
+	if p.mobile != nil {
+		if p.mobile.chain == nil {
+			return ""
+		}
+		values = append(values, p.mobile.executionSource, p.mobile.readback, p.mobile.chain.seal)
+	}
+	raw, err := json.Marshal(values)
 	if err != nil {
 		return ""
 	}
@@ -214,6 +232,9 @@ func (p *NodeChainExecutionPreparation) validateCapture() error {
 			return nodeChainExecutionError
 		}
 	} else if p.validateDesktopCapture() != nil {
+		return nodeChainExecutionError
+	}
+	if p.mobile != nil && p.validateMobileCapture() != nil {
 		return nodeChainExecutionError
 	}
 	return nil
@@ -266,8 +287,11 @@ func (p *NodeChainExecutionPreparation) BindExecution(policy *NodeChainExecution
 		!reflect.DeepEqual(p.physical, policy.physical) || p.dns.DNSPolicySHA256 != policy.source.Server.DNSPolicySHA256 {
 		return nil, nodeChainExecutionError
 	}
-	if p.desktop != nil {
-		return p.bindDesktopExecution(policy)
+	if p.mobile != nil && p.mobile.executionSource != policy.Source() {
+		return nil, nodeChainExecutionError
+	}
+	if p.desktop != nil || p.mobile != nil {
+		return p.bindProjectedExecution(policy)
 	}
 	var before, after map[string]any
 	if exactJSON([]byte(p.config), &before, 4<<20) != nil || exactJSON([]byte(policy.config), &after, 4<<20) != nil || nodeChainExecutionGate(after) != nil {

@@ -202,7 +202,7 @@ func (p *DesktopNodeChainExecutionPhysicalPolicy) PhysicalReadValidated() (strin
 	return p.preparation.Config(), metadata, capture, nil
 }
 
-func (p *NodeChainExecutionPreparation) bindDesktopExecution(policy *NodeChainExecutionPolicy) (*NodeChainExecutionProjection, error) {
+func (p *NodeChainExecutionPreparation) bindProjectedExecution(policy *NodeChainExecutionPolicy) (*NodeChainExecutionProjection, error) {
 	// First retain the existing generic compiler's exact structural transition
 	// checks. A valid storage seal alone cannot authorize changed original rows.
 	generic, err := NewNodeChainExecutionPreparation(p.source.LocalSource, p.source.Execution)

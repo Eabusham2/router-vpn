@@ -19,6 +19,8 @@ func (p *NodeChainExecutionProjection) MTUPlan() (NodeChainMTUPlan, error) {
 	local := p.policy.local
 	if p.preparation.desktop != nil {
 		local = p.preparation.desktop.chain
+	} else if p.preparation.mobile != nil {
+		local = p.preparation.mobile.chain
 	}
 	bound, err := local.MTUPlan()
 	if err != nil {
