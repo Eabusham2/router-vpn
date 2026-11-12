@@ -37,12 +37,14 @@ type NodeChainExecutionRuntime struct {
 	started, retired   atomic.Bool
 	closed             bool
 	measurementHolds   int
+	lastCaptures       int
 	active             *nodeChainExecutionTrial
 	progress           NodeChainExecutionProgress
 	checkedAt          time.Time
 	restore            *NodeChainExecutionRestoreCapture
 	mtuPause           *nodeChainExecutionMTUResumeState
 	mtuResume          *nodeChainExecutionMTUResumeState
+	lastPlan           *nodeChainExecutionLastPlanState
 	testTLS            *tls.Config
 }
 
@@ -252,6 +254,12 @@ func (r *NodeChainExecutionRuntime) Run(parent context.Context) (failure error) 
 			return err
 		}
 	}
+	if r.lastPlan != nil {
+		if err := r.validateLastContext(ctx, identity); err != nil {
+			finish()
+			return err
+		}
+	}
 	r.mu.Lock()
 	r.identity = identity
 	r.mu.Unlock()
@@ -262,12 +270,15 @@ func (r *NodeChainExecutionRuntime) Run(parent context.Context) (failure error) 
 	options := routechoice.Options{Targets: append([]string(nil), Targets...), StartupTimeout: 2 * time.Minute, ProbeTimeout: 2500 * time.Millisecond, CleanupTimeout: 10 * time.Second, Preferred: routechoice.Local, Notify: r.event}
 	var result routechoice.Result
 	var active routechoice.Session
-	if r.projection.Execution() == "auto" && r.restore == nil {
+	if r.projection.Execution() == "auto" && r.restore == nil && r.lastPlan == nil {
 		result, active, err = routechoice.Compare(lifetime, []routechoice.Candidate{r.candidate("local"), r.candidate("server")}, nodeChainExecutionDriver{r}, options)
 	} else {
 		execution, target := r.projection.Execution(), Targets[0]
 		if r.restore != nil {
 			execution, target = r.restore.execution, r.restore.result.Target
+		}
+		if r.lastPlan != nil {
+			execution, target = r.lastPlan.last.record.Execution, r.lastPlan.last.record.Target
 		}
 		candidate := r.candidate(execution)
 		startup, stop := context.WithTimeout(lifetime, options.StartupTimeout)
@@ -504,6 +515,10 @@ func (r *NodeChainExecutionRuntime) CloseContext(ctx context.Context) error {
 	if r.measurementHolds != 0 {
 		r.mu.Unlock()
 		return errors.New("original ordered measurement activity has not joined")
+	}
+	if r.lastCaptures != 0 {
+		r.mu.Unlock()
+		return errors.New("original ordered Last capture has not joined")
 	}
 	r.closed = true
 	r.progress.Ready = false
