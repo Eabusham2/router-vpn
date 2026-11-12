@@ -505,7 +505,7 @@ class NativeMTUVerdicts(unittest.TestCase):
             elif suite[0] == "native-mtu-transaction":
                 names = [NODE.NATIVE_MTU_TEST] + [NODE.NATIVE_MTU_TEST + "/" + case for case in NODE.NATIVE_MTU_CASES]
             else:
-                names = list(NODE.NATIVE_MTU_MODEL_TESTS) + ["TestRouterVPNTunTransactionRetainsOriginalAndPartialCandidateEvidence/" + case for case in ("candidate", "rollback")] + ["TestRouterVPNTunFullSearchRetainsEveryOriginalAttempt/" + case for case in ("full-search-and-winner", "failed-candidate-and-original-restore", "cancel-after-provisional-winner")]
+                names = list(NODE.NATIVE_MTU_MODEL_TESTS) + ["TestRouterVPNTunTransactionReadbackRequiresJoinedActualOwner/" + case for case in ("candidate", "rollback", "unchanged")] + ["TestRouterVPNTunTransactionRetainsOriginalAndPartialCandidateEvidence/" + case for case in ("candidate", "rollback")] + ["TestRouterVPNTunFullSearchRetainsEveryOriginalAttempt/" + case for case in ("full-search-and-winner", "failed-candidate-and-original-restore", "cancel-after-provisional-winner")]
             lines = [line for name in names for line in ("=== RUN   " + name + "\n", "--- PASS: " + name + " (0.01s)\n")]
             baseline = Mock()
             with contextlib.redirect_stdout(io.StringIO()):

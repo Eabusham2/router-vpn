@@ -204,7 +204,7 @@ STANDARD_RESOLVED_SUITE = ("standard-resolved-observation", "./cmd/sing-box", "^
                           ("TestRouterVPNResolvedFixedCommandObservation", *("TestRouterVPNResolvedFixedCommandObservation/"+case for case in
                            ("success", "lost-parent", "lost-daemon", "local-refusal", "wrong-local-name", "wrong-policy", "lost-send", "late-parent", "cancelled"))))
 NATIVE_MTU_CASES = ("full-search-and-winner", "failed-candidate-and-original-restore", "cancelled-work-and-fresh-stop")
-NATIVE_MTU_MODEL_TESTS = tuple("TestRouterVPNTun" + name for name in ("ReplacementAndRollback", "FailureDoesNotStartAnOverlappingReader", "InvalidationAndStaleCapture", "MutationIsSerialized", "TransactionRetainsOriginalAndPartialCandidateEvidence", "TransactionPreservesFailedConstructionAndRetry", "TransactionBoundsHistoryBeforeAcquisition", "TransactionCancelledAcquisitionAndNativeClose", "BorrowedPlatformKeepsCapturedRollback", "FullSearchRetainsEveryOriginalAttempt"))
+NATIVE_MTU_MODEL_TESTS = tuple("TestRouterVPNTun" + name for name in ("ReplacementAndRollback", "FailureDoesNotStartAnOverlappingReader", "InvalidationAndStaleCapture", "MutationIsSerialized", "TransactionRetainsOriginalAndPartialCandidateEvidence", "TransactionPreservesFailedConstructionAndRetry", "TransactionBoundsHistoryBeforeAcquisition", "TransactionReadbackRequiresJoinedActualOwner", "TransactionReadbackWaitsForOriginalCleanup", "TransactionCancelledAcquisitionAndNativeClose", "BorrowedPlatformKeepsCapturedRollback", "FullSearchRetainsEveryOriginalAttempt"))
 # Admission and cleanup context cases have their own mandatory exact suites.
 # Keep this transaction inventory disjoint when new manager tests are added.
 NATIVE_MTU_MODEL_SUITE = ("mtu-transaction-model", "./adapter/inbound",
@@ -1259,7 +1259,7 @@ def execute_baseline_suite(baselines, suite):
     if name == "native-mtu-transaction":
         require_native_verdicts(output, [NATIVE_MTU_TEST] + [NATIVE_MTU_TEST + "/" + case for case in NATIVE_MTU_CASES], "MTU transaction")
     if name == "mtu-transaction-model":
-        names = list(NATIVE_MTU_MODEL_TESTS) + ["TestRouterVPNTunTransactionRetainsOriginalAndPartialCandidateEvidence/" + case for case in ("candidate", "rollback")] + ["TestRouterVPNTunFullSearchRetainsEveryOriginalAttempt/" + case for case in ("full-search-and-winner", "failed-candidate-and-original-restore", "cancel-after-provisional-winner")]
+        names = list(NATIVE_MTU_MODEL_TESTS) + ["TestRouterVPNTunTransactionReadbackRequiresJoinedActualOwner/" + case for case in ("candidate", "rollback", "unchanged")] + ["TestRouterVPNTunTransactionRetainsOriginalAndPartialCandidateEvidence/" + case for case in ("candidate", "rollback")] + ["TestRouterVPNTunFullSearchRetainsEveryOriginalAttempt/" + case for case in ("full-search-and-winner", "failed-candidate-and-original-restore", "cancel-after-provisional-winner")]
         require_native_verdicts(output, names, "MTU manager")
     if name == "native-resolver-lifetime":
         names = list(NATIVE_RESOLVER_TESTS) + ["TestRouterVPNNativeLinuxResolver" + root + "/" + leaf
