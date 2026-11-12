@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Keep the complete Custom standard-exit Go gate finite and mandatory.
+"""Keep the entire original package gate mandatory in bounded whole-root phases.
 
-The identical 7c4a3eed controller/common inventory completed in 632.093s in
-Multihop CI with its existing 15m package limit. This workflow instead hit Go's
-implicit 10m limit at 600.037s while its current leaf was only 0s old. The bound
-below applies to the aggregate package; runtime and fixture deadlines stay in
-their own source, and every original test/example/fuzz seed still executes.
+Compiled controller roots are exhaustive, including examples and ordinary fuzz
+seeds. The runner keeps each 15m Go alarm and every test-owned operation bound;
+other requested packages remain unfiltered. This guard rejects scope loss.
 """
 from pathlib import Path
 import re
@@ -14,7 +12,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/standard-exit-contract.yml"
-COMMAND = "go test ./cmd/client ./internal/common -timeout=15m"
+COMMAND = "python3 deploy/test_go_source_groups.py --scope client-common"
 STEP = "      - name: Go custom-exit unified-profile and external-entry tests\n"
 CONTRACT = "      - name: Validate complete custom-exit package budget\n"
 
@@ -48,17 +46,21 @@ class CompleteStandardExitBudget(unittest.TestCase):
     def test_rejects_omitted_filtered_and_unbounded_execution(self):
         commands = (
             "true",
-            "go test ./cmd/client ./internal/common",
-            COMMAND.replace("15m", "10m"),
-            COMMAND.replace("15m", "0"),
-            COMMAND.replace("15m", "360m"),
-            COMMAND.replace("./cmd/client ./internal/common", "./internal/common"),
-            COMMAND.replace("./cmd/client ./internal/common", "./cmd/client"),
+            'go test ./cmd/client ./internal/common',
+            'go test ./cmd/client ./internal/common -timeout=10m',
+            'go test ./cmd/client ./internal/common -timeout=0',
+            'go test ./cmd/client ./internal/common -timeout=360m',
+            'go test ./internal/common -timeout=15m',
+            'go test ./cmd/client -timeout=15m',
+            "python3 deploy/test_go_source_groups.py --scope omitted",
+            COMMAND.replace("--scope client-common", "--scope client"),
+            COMMAND + " --timeout=0",
+            COMMAND + " --timeout=360m",
             COMMAND + " -run '^$'",
             COMMAND + " -run '^Test'",
             COMMAND + " -skip '^TestDesktopTor'",
             COMMAND + " -short",
-            COMMAND.replace("go test", "go test -c"),
+            'go test -c ./cmd/client ./internal/common -timeout=15m',
             COMMAND + " || true",
             COMMAND + " &",
             COMMAND + "\n          || true",

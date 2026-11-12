@@ -130,7 +130,7 @@ jobs:
       - name: Validate complete MTU controller package budget
         run: python3 deploy/test_mtu_throughput_budget.py
       - name: Go client MTU Retest and Portable path seam compiles
-        run: go test ./cmd/client -count=1 -timeout=15m
+        run: python3 deploy/test_go_source_groups.py --scope client
       - name: Original native process MTU observation contexts
         run: sudo env PATH="$PATH" GOTOOLCHAIN=local GOCACHE="$(go env GOCACHE)" GOMODCACHE="$(go env GOMODCACHE)" python3 deploy/test_desktop_mtu_client_context.py --native-only --go "$(command -v go)"
 

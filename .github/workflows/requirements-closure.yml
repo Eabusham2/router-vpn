@@ -31,9 +31,9 @@ jobs:
         # Compile once; retain every required case and the 180s alarm per phase.
         run: python3 deploy/test_startup_race_groups.py
       - name: Compile and test Go source
-        # The exact controller suite completed in 670s on the matching CI image.
-        # Keep the full inventory and every per-operation deadline unchanged.
-        run: go test ./... -timeout=15m
+        # Run every compiled controller root in an isolated bounded phase.
+        # Keep all remaining packages unfiltered and every operation bound.
+        run: python3 deploy/test_go_source_groups.py --scope all
       - name: Prove recovered requirements and corrections
         shell: bash
         run: |

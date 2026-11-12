@@ -36,9 +36,9 @@ jobs:
           cache: false
       - uses: ./.github/actions/go-windows-sockets
       - name: Test Go controller and shared API
-        # The exact controller suite completed in 670s on the matching CI image.
-        # Keep the full inventory and every per-operation deadline unchanged.
-        run: go test ./... -timeout=15m
+        # Run every compiled controller root in an isolated bounded phase.
+        # Keep all remaining packages unfiltered and every operation bound.
+        run: python3 deploy/test_go_source_groups.py --scope all
       - name: Validate repository contracts
         run: python3 deploy/validate-repo.py
       - name: Validate logical/raw catalogs and master base model

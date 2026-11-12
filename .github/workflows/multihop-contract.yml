@@ -24,9 +24,9 @@ jobs:
       - name: Build-chain unit contract
         run: python3 modes/test_multihop.py
       - name: Runtime and UI Go contracts
-        # The complete controller suite already takes over nine minutes in CI.
-        # Keep all cases and their explicit operation deadlines unchanged.
-        run: go test ./cmd/client ./internal/common -timeout=15m
+        # Discover every compiled controller root and run each whole root once.
+        # Preserve the 15m Go alarm, all children and the other full packages.
+        run: python3 deploy/test_go_source_groups.py --scope client-common
       - name: Syntax
         run: |
           python3 -m py_compile modes/multihop.py

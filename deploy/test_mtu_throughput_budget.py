@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Keep the entire MTU controller gate mandatory with a finite package budget.
+"""Keep the entire original package gate mandatory in bounded whole-root phases.
 
-The full controller inventory has hosted completion evidence above ten minutes.
-Only its aggregate allowance changes; test selection and operation bounds do not.
+Compiled controller roots are exhaustive, including examples and ordinary fuzz
+seeds. The runner keeps each 15m Go alarm and every test-owned operation bound;
+other requested packages remain unfiltered. This guard rejects scope loss.
 """
 from pathlib import Path
 import re
@@ -11,7 +12,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/mtu-throughput-contract.yml"
-COMMAND = "go test ./cmd/client -count=1 -timeout=15m"
+COMMAND = "python3 deploy/test_go_source_groups.py --scope client"
 STEP = "      - name: Go client MTU Retest and Portable path seam compiles\n"
 CONTRACT = "      - name: Validate complete MTU controller package budget\n"
 
@@ -45,17 +46,21 @@ class CompleteMTUThroughputBudget(unittest.TestCase):
     def test_rejects_omitted_filtered_and_unbounded_execution(self):
         commands = (
             "true",
-            "go test ./cmd/client -count=1",
-            COMMAND.replace("15m", "10m"),
-            COMMAND.replace("15m", "0"),
-            COMMAND.replace("15m", "360m"),
-            COMMAND.replace("./cmd/client", "./internal/common"),
-            COMMAND.replace(" -count=1", ""),
+            'go test ./cmd/client -count=1',
+            'go test ./cmd/client -count=1 -timeout=10m',
+            'go test ./cmd/client -count=1 -timeout=0',
+            'go test ./cmd/client -count=1 -timeout=360m',
+            'go test ./internal/common -count=1 -timeout=15m',
+            'go test ./cmd/client -timeout=15m',
+            "python3 deploy/test_go_source_groups.py --scope omitted",
+            COMMAND.replace("--scope client", "--scope client-common"),
+            COMMAND + " --timeout=0",
+            COMMAND + " --timeout=360m",
             COMMAND + " -run '^$'",
             COMMAND + " -run '^Test'",
             COMMAND + " -skip '^TestDesktopTor'",
             COMMAND + " -short",
-            COMMAND.replace("go test", "go test -c"),
+            'go test -c ./cmd/client -timeout=15m',
             COMMAND + " || true",
             COMMAND + " &",
             COMMAND + "\n          || true",

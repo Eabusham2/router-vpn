@@ -77,9 +77,9 @@ jobs:
       - name: Validate complete custom-exit package budget
         run: python3 deploy/test_standard_exit_budget.py
       - name: Go custom-exit unified-profile and external-entry tests
-        # The same complete package inventory took 632s on this source head.
-        # Match the finite Multihop budget; keep per-operation bounds intact.
-        run: go test ./cmd/client ./internal/common -timeout=15m
+        # Keep the complete compiled inventory in whole-root bounded phases.
+        # Every child, original package and per-operation deadline is retained.
+        run: python3 deploy/test_go_source_groups.py --scope client-common
       - name: Native Unix helper syntax
         run: |
           bash -n modes/native-standard-exit-linux.sh

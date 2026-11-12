@@ -98,7 +98,8 @@ need("modes/test_multihop.py","Multihop builder tests: OK","direct_exit_exceptio
 need("cmd/client/multihop.go","/api/multihop/status","/api/multihop/connect","runtime.GOOS != \"linux\"","multihopCommand","HOMEVPN_ROOT=","multihopNodeSummaries","multihopProofProxy","a.state.RouterID = sel.Exit.ID")
 no("cmd/client/multihop.go",'"HOMEVPN_ROOT=."','"profiles": profiles')
 need("cmd/client/multihop_test.go","HOMEVPN_ROOT=/tmp/router-vpn-data","TestMultihopNodeSummariesNeverExposeSecrets","same-node multihop was accepted")
-need(".github/workflows/multihop-contract.yml","go test ./cmd/client ./internal/common","node --check cmd/client/logical_ui.js")
+need(".github/workflows/multihop-contract.yml","python3 deploy/test_go_source_groups.py --scope client-common","node --check cmd/client/logical_ui.js")
+need("deploy/test_go_source_groups.py", "go", "list", "-test.list=.", "validate_partition(roots, phases)", "complete(roots, results)", "subprocess.run(command, cwd=ROOT, check=True)")
 
 # Linux strict/persistent kill switch, including multihop-aware physical-entry policy.
 need("modes/kill-switch.py","policy drop",'action == "reassert"',"current profile policy is no longer always","use force-off recovery locally","HOMEVPN_POLICY_PROFILE_ID","policy_profile_id","physical entry")

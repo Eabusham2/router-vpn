@@ -22,7 +22,7 @@ import unittest
 from unittest.mock import patch
 
 REPOSITORY = Path(__file__).resolve().parents[1]
-FULL_SOURCE_COMMAND = "go test ./... -timeout=15m"
+FULL_SOURCE_COMMAND = "python3 deploy/test_go_source_groups.py --scope all"
 FULL_SOURCE_GATES = (
     ("requirements-closure.yml", "source-contract", "Compile and test Go source"),
     ("release-candidate.yml", "source-audit", "Go source contracts"),
@@ -136,8 +136,8 @@ def check_full_source_gate(source: str, job_name: str, step_name: str) -> None:
         raise AssertionError("full Go source gate is missing or duplicated")
     gate = job.split(marker, 1)[1].split("      - ", 1)[0]
     # Require the entire one-command step, not a matching substring followed
-    # by a selector, ignored exit status, or a folded YAML continuation. This
-    # keeps every package, test, example and ordinary fuzz seed in the suite.
+    # by a selector, ignored exit status, or a folded YAML continuation. The runner
+    # discovers every package, test, example and ordinary fuzz seed in the suite.
     execution = "\n".join(line for line in gate.splitlines() if line.strip() and not line.lstrip().startswith("#"))
     if execution != "        run: " + FULL_SOURCE_COMMAND:
         raise AssertionError("full Go source gate must run the bounded unfiltered suite: " + FULL_SOURCE_COMMAND)
