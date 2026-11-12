@@ -403,6 +403,11 @@ func TestNodeChainExecutionMeasurementJoinsActivityRelease(t *testing.T) {
 	if err := service.Start(id, 65536); err != nil {
 		t.Fatal(err)
 	}
+	// This case owns the activity-release join, not the duration of a complete
+	// fifty-sample throughput run (covered by UsesSelectedPrivatePrefixes).
+	// Cancel the actual admitted worker so its release reaches our held owner
+	// within the original handoff deadline, including race-instrumented CI.
+	service.Cancel(id)
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
