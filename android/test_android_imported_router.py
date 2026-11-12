@@ -314,16 +314,24 @@ public final class ImportedRouterTest {
   JSONObject home=object(before);profile(home).put("dns_protocol","udp");String saved=home.toString();
   {var homeCompiled=AndroidImportedRouterPath.compile(entry,home,"naive-h2","local");JSONObject graph=object(homeCompiled.config);String homeDirectory=System.getenv("ROUTERVPN_ANDROID_NAIVE_H2_HOME_GRAPHS");if(connect&&homeDirectory!=null)Files.writeString(Path.of(homeDirectory).resolve(entry.protocol.equals("http")?"http-connect.json":"https-connect.json"),homeCompiled.config,StandardOpenOption.CREATE_NEW);JSONObject dns=graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0);check(dns.getString("type").equals("udp")&&dns.getString("server").equals(profile(home).getString("adguard_ipv4"))&&dns.getString("detour").equals("proxy"),"Literal Naive H2 lost original final-owned Home UDP");}
   check(home.toString().equals(saved),"Naive H2 rewrote incompatible saved Home policy");
-  for(String transport:List.of("tcp","tls","https"))for(boolean hostname:List.of(false,true)){
+  for(String transport:List.of("tcp","tls","https","h3"))for(boolean hostname:List.of(false,true)){
    JSONObject bundle=object(before),p=profile(bundle);p.put("dns_mode","custom").put("dns_protocol",transport).put("dns_host",hostname?"resolver.example.net":"203.0.113.53").put("dns_port",8853).put("dns_server_name","resolver.example.net").put("dns_path","/owned-dns-query");
    if(hostname)p.put("dns_bootstrap",new JSONObject().put("server",new JSONObject().put("type","tcp").put("tag","external-dns-bootstrap").put("server","203.0.113.54").put("server_port",5354).put("detour","proxy")).put("query",new JSONObject().put("server","external-dns-bootstrap").put("timeout","3s").put("disable_optimistic_cache",true)));
    String captured=bundle.toString();AndroidImportedRouterPath.Compiled c=AndroidImportedRouterPath.compile(entry,bundle,"naive-h2","local");JSONArray servers=object(c.config).getJSONObject("dns").getJSONArray("servers");JSONObject dns=servers.getJSONObject(0);
    check(captured.equals(bundle.toString())&&servers.length()==(hostname?4:2)&&dns.getString("type").equals(transport)&&dns.getString("server").equals(p.getString("dns_host"))&&dns.getInt("server_port")==8853&&dns.getString("detour").equals("proxy"),"Naive H2 lost captured selected/transport resolver closure");
    for(int i=0;i<servers.length();i++){JSONObject server=servers.getJSONObject(i);check(server.getString("detour").equals(server.getString("tag").startsWith("routervpn-predecessor-bootstrap-")?"entry-wg":"proxy"),"Naive H2 resolver escaped its original owner");}
    if(!transport.equals("tcp"))check(dns.getJSONObject("tls").getString("server_name").equals("resolver.example.net"),"Naive H2 replaced selected DNS trust name");
-   if(transport.equals("https"))check(dns.getString("path").equals("/owned-dns-query"),"Naive H2 replaced selected DNS request path");
+   if(List.of("https","h3").contains(transport))check(dns.getString("path").equals("/owned-dns-query"),"Naive H2 replaced selected DNS request path");
    RouterMultihop restored=AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,c.input);restored.close();
-   if(hostname&&connect)for(String lower:List.of("udp","h3")){JSONObject changed=object(captured);changed.getJSONArray("routerProfiles").getJSONObject(0).getJSONObject("dns_bootstrap").getJSONObject("server").put("type",lower);reject("Naive H2 CONNECT refuses lower "+lower,()->AndroidImportedRouterPath.compile(entry,changed,"naive-h2","local"));}
+   if(hostname&&connect)for(String lower:List.of("udp","h3")){
+    JSONObject changed=object(captured),server=profile(changed).getJSONObject("dns_bootstrap").getJSONObject("server");server.put("type",lower);
+    if(lower.equals("h3"))server.put("tls",new JSONObject().put("enabled",true).put("server_name","bootstrap.example.net")).put("path","/captured-bootstrap");
+    String immutable=changed.toString();AndroidImportedRouterPath.Compiled selected=AndroidImportedRouterPath.compile(entry,changed,"naive-h2","local");JSONArray resolvers=object(selected.config).getJSONObject("dns").getJSONArray("servers");
+    check(changed.toString().equals(immutable)&&resolvers.length()==4&&resolvers.getJSONObject(1).getString("type").equals(lower)&&resolvers.getJSONObject(1).getString("detour").equals("proxy")&&resolvers.getJSONObject(0).getJSONObject("domain_resolver").getString("server").equals("external-dns-bootstrap"),"Naive H2 replaced captured selected bootstrap");
+    for(int i=0;i<resolvers.length();i++){JSONObject resolver=resolvers.getJSONObject(i);check(resolver.getString("detour").equals(resolver.getString("tag").startsWith("routervpn-predecessor-bootstrap-")?"entry-wg":"proxy"),"Naive H2 explicit bootstrap escaped original owner");}
+    RouterMultihop replay=AndroidImportedRouterPath.prepareExecution(selected.config,selected.metadata,selected.input);replay.close();
+    if(lower.equals("h3")){server.remove("tls");reject("Naive H2 refuses malformed captured H3 bootstrap",()->AndroidImportedRouterPath.compile(entry,changed,"naive-h2","local"));}
+   }
   }
   check(before.equals(original.toString()),"Naive H2 DNS coverage mutated original sources");
  }
