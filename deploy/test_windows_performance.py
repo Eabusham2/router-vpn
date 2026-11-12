@@ -28,6 +28,12 @@ def main():
     if result.returncode or "Composed Windows Advanced Performance: PASS" not in result.stdout:
         raise SystemExit(result.stdout or "Composed Performance fixture did not pass")
     print(result.stdout.strip())
+    ordered = subprocess.run([shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+                              str(ROOT / "client/test-windows-ordered-candidates.ps1"), "-Root", str(ROOT)],
+                             text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90)
+    if ordered.returncode or "Composed Windows ordered candidates: PASS" not in ordered.stdout:
+        raise SystemExit(ordered.stdout or "Ordered candidate shipping callbacks did not pass")
+    print(ordered.stdout.strip())
     for mutant, diagnostic in EXPECTED.items():
         result = subprocess.run(command + ["-Mutant", mutant], text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90)

@@ -365,6 +365,11 @@ jobs:
           & $performanceTest -Root $root.FullName
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $performanceTest -Root $root.FullName
           if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 packaged Performance ownership tests failed'}
+          $candidateTest=Join-Path $root.FullName 'client\test-windows-ordered-candidates.ps1'
+          if(-not(Test-Path -LiteralPath $candidateTest)){throw 'shipped Windows package missing ordered candidate callback tests'}
+          & $candidateTest -Root $root.FullName
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $candidateTest -Root $root.FullName
+          if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 packaged ordered candidate callbacks failed'}
           $runtimeTest=Join-Path $root.FullName 'client\test-windows-runtime-install.ps1'
           & $runtimeTest -SourceRoot $root.FullName
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runtimeTest -SourceRoot $root.FullName
