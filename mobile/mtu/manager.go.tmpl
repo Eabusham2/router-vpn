@@ -47,6 +47,61 @@ func (t *RouterVPNTunTransaction) Evidence() []RouterVPNTunEvidence {
 	return append([]RouterVPNTunEvidence(nil), t.readers[:]...)
 }
 
+// This is an observation of one actual manager transaction, not a caller's
+// replacement pointer. Every unused reader must have joined retirement before
+// a higher-level owner can transfer its ingress to the returned active reader.
+func (m *Manager) RouterVPNReadTunTransactionContext(ctx context.Context, t *RouterVPNTunTransaction, original adapter.Inbound) (adapter.Inbound, error) {
+	if ctx == nil || ctx.Err() != nil || m == nil || t == nil || original == nil || t.manager != m {
+		return nil, errors.New("TUN readback has no original manager transaction")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.routervpnLifecycle); err != nil {
+		return nil, err
+	}
+	defer m.routervpnLifecycle.Unlock()
+	if err := adapter.RouterVPNLockContext(ctx, &t.mu); err != nil {
+		return nil, err
+	}
+	defer t.mu.Unlock()
+	if t.original != original || t.readers[0].Inbound != original || t.current == nil || t.pending ||
+		!m.started || m.stage != adapter.StartStateStarted {
+		return nil, errors.New("TUN readback belongs to an unsettled or retired transaction")
+	}
+	active := 0
+	for _, e := range t.readers {
+		if e.Inbound == nil {
+			continue
+		}
+		if e.Pending || e.Inbound.Type() != "tun" || e.Inbound.Tag() != original.Tag() {
+			return nil, errors.New("TUN readback changed its captured reader family")
+		}
+		if e.Inbound == t.current {
+			active++
+			if !e.Started || e.Retired {
+				return nil, errors.New("TUN readback did not retain its started reader")
+			}
+		} else if !e.Retired {
+			return nil, errors.New("TUN readback still owns an unretired reader")
+		}
+	}
+	if active != 1 {
+		return nil, errors.New("TUN readback lacks one exact active reader")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.access); err != nil {
+		return nil, err
+	}
+	defer m.access.Unlock()
+	listed := 0
+	for _, value := range m.inbounds {
+		if value == t.current {
+			listed++
+		}
+	}
+	if listed != 1 || m.inboundByTag[original.Tag()] != t.current || ctx.Err() != nil {
+		return nil, errors.New("TUN transaction no longer owns the actual manager reader")
+	}
+	return t.current, nil
+}
+
 // Existing callers use this same owned transaction. The factory form below is
 // the shipping Box entry: capacity/admission precede candidate construction.
 func (m *Manager) RouterVPNReplaceTun(ctx context.Context, expected, candidate, rollback adapter.Inbound) (adapter.Inbound, error) {
@@ -517,7 +572,7 @@ func (m *Manager) RouterVPNCloseDarwinNodeChainTunContext(ctx context.Context) e
 		// Remove only this successfully joined pointer. Failed/unvisited
 		// originals remain retained, and ordinary Box.Close cannot close a
 		// completed Darwin descriptor/stack a second time.
-		for i := len(m.inbounds)-1; i >= 0; i-- {
+		for i := len(m.inbounds) - 1; i >= 0; i-- {
 			if m.inbounds[i] == original {
 				m.inbounds = append(m.inbounds[:i], m.inbounds[i+1:]...)
 			}
@@ -525,7 +580,7 @@ func (m *Manager) RouterVPNCloseDarwinNodeChainTunContext(ctx context.Context) e
 		if m.inboundByTag[original.Tag()] == original {
 			delete(m.inboundByTag, original.Tag())
 		}
-		for i := len(m.routervpnRetired)-1; i >= 0; i-- {
+		for i := len(m.routervpnRetired) - 1; i >= 0; i-- {
 			if m.routervpnRetired[i] == original {
 				m.routervpnRetired = append(m.routervpnRetired[:i], m.routervpnRetired[i+1:]...)
 			}

@@ -220,6 +220,17 @@ func (c *Control) owner() (*Outbound, error) {
 	return g, nil
 }
 
+// A retained ingress can compare this capability with its original managed
+// gate. This read grants no admission and cannot adopt another control.
+func (c *Control) OwnsOriginal(g *Outbound) bool {
+	if c == nil || g == nil || c.gate != g {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.control == c
+}
+
 func (g *Outbound) current(ctx context.Context) error {
 	if err := g.nativeCurrent(ctx); err != nil {
 		return err

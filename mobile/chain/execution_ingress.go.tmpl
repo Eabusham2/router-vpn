@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/protocol/routervpnchaingate"
 	N "github.com/sagernet/sing/common/network"
@@ -137,6 +138,46 @@ func (o *RouterVPNNodeChainIngress) Retire() {
 	if o != nil {
 		o.retired.Store(true)
 	}
+}
+
+// Only the original closed, drained gate and an actual joined TUN transaction
+// can transfer this ingress. All callbacks remain those captured at Bind; a
+// caller cannot replace source validation or turn the transfer into admission.
+func (o *RouterVPNNodeChainIngress) RouterVPNMTUReplacementContext(ctx context.Context, transaction *inbound.RouterVPNTunTransaction, control *routervpnchaingate.Control) (*RouterVPNNodeChainIngress, error) {
+	if o == nil || ctx == nil || ctx.Err() != nil || o.router == nil || o.retired.Load() ||
+		o.router.routerVPNNodeChainIngress.Load() != o || !control.OwnsOriginal(o.router.routerVPNNodeChainGate.Load()) {
+		return nil, errRouterVPNNodeChainIngress
+	}
+	closed, err := control.ObserveRetired(ctx)
+	if err != nil || closed.Open || !closed.Drained || closed.Closed || o.current(ctx) != nil {
+		return nil, errRouterVPNNodeChainIngress
+	}
+	manager, ok := o.router.inbound.(*inbound.Manager)
+	if !ok || manager == nil {
+		return nil, errRouterVPNNodeChainIngress
+	}
+	reader, err := manager.RouterVPNReadTunTransactionContext(ctx, transaction, o.inbound)
+	if err != nil || reader == nil || reader.Type() != C.TypeTun || reader.Tag() != routerVPNNodeChainTUNTag {
+		return nil, errors.Join(err, errRouterVPNNodeChainIngress)
+	}
+	if reader == o.inbound {
+		return o, o.Current(ctx)
+	}
+	next := &RouterVPNNodeChainIngress{router: o.router, inbound: reader, current: o.current, track: o.track, opened: o.opened}
+	if err := next.original(ctx, false); err != nil {
+		return nil, err
+	}
+	closed, err = control.ObserveRetired(ctx)
+	if err != nil || closed.Open || !closed.Drained || closed.Closed || !o.router.routerVPNNodeChainIngress.CompareAndSwap(o, next) {
+		return nil, errRouterVPNNodeChainIngress
+	}
+	o.retired.Store(true)
+	closed, err = control.ObserveRetired(ctx)
+	if currentErr := next.Current(ctx); err != nil || currentErr != nil || closed.Open || !closed.Drained || closed.Closed {
+		next.retired.Store(true)
+		return next, errors.Join(err, currentErr, errRouterVPNNodeChainIngress)
+	}
+	return next, nil
 }
 
 func (r *Router) routerVPNIngressOwner(ctx context.Context, metadata adapter.InboundContext) (*RouterVPNNodeChainIngress, error) {

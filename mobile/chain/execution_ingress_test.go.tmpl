@@ -218,6 +218,85 @@ func (f *executionIngressFixture) open(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+type executionMTUIngressTUN struct {
+	adapter.Inbound
+	failClose atomic.Bool
+}
+
+func (t *executionMTUIngressTUN) Close() error {
+	if t.failClose.Load() {
+		return errors.New("original unused reader has not joined")
+	}
+	return nil
+}
+
+func TestRouterVPNExecutionIngressMTUUsesJoinedOriginalTransaction(t *testing.T) {
+	for _, scenario := range []string{"candidate", "pending-close", "foreign-control", "open-gate", "retired-source", "unchanged"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := executionNewIngress(t, false, true)
+			f.bind(t)
+			for _, stage := range adapter.ListStartStages {
+				if err := f.ins.Start(stage); err != nil {
+					t.Fatal(err)
+				}
+			}
+			candidate := &executionMTUIngressTUN{Inbound: &executionIngressTUN{inbound.NewAdapter(C.TypeTun, routerVPNNodeChainTUNTag)}}
+			rollback := &executionMTUIngressTUN{Inbound: &executionIngressTUN{inbound.NewAdapter(C.TypeTun, routerVPNNodeChainTUNTag)}}
+			rollback.failClose.Store(scenario == "pending-close")
+			transaction, changeErr := f.ins.RouterVPNReplaceTunOwned(t.Context(), f.tun, func() (adapter.Inbound, adapter.Inbound, error) {
+				if scenario == "unchanged" {
+					return nil, nil, errors.New("constructor acquired no new reader")
+				}
+				return candidate, rollback, nil
+			})
+			if transaction == nil || ((scenario == "pending-close" || scenario == "unchanged") != (changeErr != nil)) {
+				t.Fatal("native transaction fixture", changeErr)
+			}
+			control := f.control
+			switch scenario {
+			case "foreign-control":
+				other := executionNewIngress(t, false, true)
+				other.bind(t)
+				control = other.control
+			case "open-gate":
+				if err := f.control.Open(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			case "retired-source":
+				f.valid.Store(false)
+			}
+			next, err := f.ingress.RouterVPNMTUReplacementContext(t.Context(), transaction, control)
+			if scenario != "candidate" && scenario != "unchanged" {
+				if err == nil || next != nil || f.router.routerVPNNodeChainIngress.Load() != f.ingress {
+					t.Fatal("unjoined, foreign or open native transaction changed ingress")
+				}
+				if scenario != "pending-close" {
+					return
+				}
+				rollback.failClose.Store(false)
+				if err := f.ins.RouterVPNRetryTunTransaction(t.Context(), transaction); err != nil {
+					t.Fatal(err)
+				}
+				next, err = f.ingress.RouterVPNMTUReplacementContext(t.Context(), transaction, control)
+			}
+			if err != nil || next == nil || next.Current(t.Context()) != nil || f.router.routerVPNNodeChainIngress.Load() != next {
+				t.Fatal("exact joined native TUN transaction did not transfer ingress", err)
+			}
+			if scenario == "unchanged" {
+				if next != f.ingress || f.ingress.retired.Load() {
+					t.Fatal("unchanged original reader lost ingress")
+				}
+			} else if next == f.ingress || !f.ingress.retired.Load() || next.inbound != candidate {
+				t.Fatal("native ingress did not retire its exact predecessor")
+			}
+			closed, err := f.control.ObserveRetired(t.Context())
+			if err != nil || closed.Open || !closed.Drained || closed.Closed {
+				t.Fatal("MTU succession opened or replaced the application gate", err)
+			}
+		})
+	}
+}
 func executionDNSQuestion(t *testing.T) []byte {
 	t.Helper()
 	q := new(MD.Msg)

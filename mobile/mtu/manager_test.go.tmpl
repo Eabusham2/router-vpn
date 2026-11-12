@@ -78,6 +78,81 @@ func TestRouterVPNTunReplacementAndRollback(t *testing.T) {
 		}
 	}
 }
+
+func TestRouterVPNTunTransactionReadbackRequiresJoinedActualOwner(t *testing.T) {
+	for _, scenario := range []string{"candidate", "rollback", "unchanged"} {
+		t.Run(scenario, func(t *testing.T) {
+			m, original, candidate, rollback := mtuFixture()
+			candidate.fail, candidate.failure = scenario == "rollback", adapter.StartStatePostStart
+			transaction, changeErr := m.RouterVPNReplaceTunOwned(t.Context(), original, func() (adapter.Inbound, adapter.Inbound, error) {
+				if scenario == "unchanged" {
+					return nil, nil, errors.New("constructor acquired no reader")
+				}
+				return candidate, rollback, nil
+			})
+			if transaction == nil || (scenario == "candidate") != (changeErr == nil) {
+				t.Fatal("unexpected native transaction", changeErr)
+			}
+			want := adapter.Inbound(candidate)
+			if scenario == "rollback" {
+				want = rollback
+			}
+			if scenario == "unchanged" {
+				want = original
+			}
+			actual, err := m.RouterVPNReadTunTransactionContext(t.Context(), transaction, original)
+			if err != nil || actual != want {
+				t.Fatal("joined native transaction lost its exact current reader", err)
+			}
+			foreign, other, _, _ := mtuFixture()
+			if _, err := foreign.RouterVPNReadTunTransactionContext(t.Context(), transaction, original); err == nil {
+				t.Fatal("foreign manager adopted original TUN transaction")
+			}
+			if _, err := m.RouterVPNReadTunTransactionContext(t.Context(), transaction, other); err == nil {
+				t.Fatal("same-tag foreign predecessor adopted original TUN transaction")
+			}
+			if _, err := m.RouterVPNReadTunTransactionContext(t.Context(), &RouterVPNTunTransaction{}, original); err == nil {
+				t.Fatal("caller-created TUN transaction admitted")
+			}
+			m.inboundByTag[original.Tag()] = other
+			if _, err := m.RouterVPNReadTunTransactionContext(t.Context(), transaction, original); err == nil {
+				t.Fatal("changed actual reader retained old transaction authority")
+			}
+		})
+	}
+}
+
+func TestRouterVPNTunTransactionReadbackWaitsForOriginalCleanup(t *testing.T) {
+	m, original, candidate, rollback := mtuFixture()
+	rollback.closeFail = true
+	transaction, err := m.RouterVPNReplaceTunOwned(t.Context(), original, func() (adapter.Inbound, adapter.Inbound, error) { return candidate, rollback, nil })
+	if err == nil || transaction == nil || transaction.Current() != candidate {
+		t.Fatal("fixture did not retain failed unused reader close")
+	}
+	if _, err := m.RouterVPNReadTunTransactionContext(t.Context(), transaction, original); err == nil {
+		t.Fatal("unjoined unused reader authorized ingress succession")
+	}
+	rollback.closeFail = false
+	if err := m.RouterVPNRetryTunTransaction(t.Context(), transaction); err != nil {
+		t.Fatal(err)
+	}
+	if actual, err := m.RouterVPNReadTunTransactionContext(t.Context(), transaction, original); err != nil || actual != candidate {
+		t.Fatal("joined exact cleanup did not release original readback", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := m.RouterVPNReadTunTransactionContext(ctx, transaction, original); err == nil {
+		t.Fatal("cancelled native readback admitted")
+	}
+	m.routervpnLifecycle.Lock()
+	ctx, cancel = context.WithTimeout(t.Context(), 10*time.Millisecond)
+	_, err = m.RouterVPNReadTunTransactionContext(ctx, transaction, original)
+	cancel()
+	m.routervpnLifecycle.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("native transaction readback escaped its caller budget", err)
+	}
+}
 func TestRouterVPNTunFailureDoesNotStartAnOverlappingReader(t *testing.T) {
 	m, a, b, r := mtuFixture()
 	b.fail = true
