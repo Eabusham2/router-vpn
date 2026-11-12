@@ -1,12 +1,42 @@
 #!/usr/bin/env python3
 """Require native compiler ownership and real traffic verification in shipping builds."""
 from pathlib import Path
-import importlib.util,tempfile,unittest
+import importlib.util,tempfile,unittest,inspect
+from contextlib import ExitStack, contextmanager
 from unittest import mock
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('prepare',ROOT/'deploy/prepare-mobile-multihop.py')
 PREPARE=importlib.util.module_from_spec(spec);spec.loader.exec_module(PREPARE)
 class Shipping(unittest.TestCase):
+    @contextmanager
+    def execution_boundaries(self,root):
+        # This sparse byte-copy fixture has no pinned native checkout. Execute
+        # the real shared preparer, observing each native dependency dispatch;
+        # actual pin/owner/gate composition is tested in the native preparation
+        # and encrypted Server suites, never simulated by a fake git identity.
+        expected=('prepare-node-chain-execution-gate','prepare-node-chain-execution','prepare-node-chain-execution-owner')
+        self.assertEqual(tuple(Path(module.__file__).stem for module in PREPARE._execution_modules),expected)
+        order=mock.Mock()
+        with ExitStack() as stack:
+            for index,module in enumerate(PREPARE._execution_modules):
+                observed=stack.enter_context(mock.patch.object(module,'prepare'))
+                order.attach_mock(observed,'owner_'+str(index))
+            yield
+            self.assertEqual(order.mock_calls,[getattr(mock.call,'owner_'+str(index))(root.resolve()) for index in range(3)])
+
+    def test_missing_duplicate_or_reordered_execution_dispatch_is_rejected(self):
+        original=inspect.getsource(PREPARE.prepare)
+        marker='for module in _execution_modules:'
+        self.assertEqual(original.count(marker),1)
+        for replacement in ('for module in _execution_modules[:-1]:',
+                            'for module in _execution_modules+_execution_modules:',
+                            'for module in reversed(_execution_modules):'):
+            namespace=dict(PREPARE.__dict__)
+            exec(compile(original.replace(marker,replacement,1),'<causal-execution-dispatch>','exec'),namespace)
+            with self.subTest(dispatch=replacement),mock.patch.object(PREPARE,'prepare',namespace['prepare']):
+                with self.assertRaises(AssertionError):
+                    self.assert_compiler_and_bridge_are_copied_byte_exactly()
+
     def test_compiler_and_bridge_are_copied_byte_exactly(self):
         self.assert_compiler_and_bridge_are_copied_byte_exactly()
     def test_windows_text_translation_cannot_rewrite_native_source(self):
@@ -27,7 +57,7 @@ class Shipping(unittest.TestCase):
             # fixture still retains the upstream daemon directory used by the
             # real compiler's captured-instance projection.
             (root/'daemon').mkdir()
-            with mock.patch.object(PREPARE.NAIVE,'prepare') as naive_prepare, mock.patch.object(PREPARE.HY2_DEADLINES,'prepare') as hy2_prepare, mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'), mock.patch.object(PREPARE.OPENVPN_CLOSE,'prepare') as openvpn_close_prepare, mock.patch.object(PREPARE.OPENVPN_REMOTE,'prepare') as openvpn_remote_prepare, mock.patch.object(PREPARE.EXTERNAL_POLICY,'prepare') as external_policy_prepare, mock.patch.object(PREPARE.AMNEZIA,'prepare'), mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare,mock.patch.object(PREPARE.COMPOSITE,'prepare') as composite_prepare, mock.patch.object(PREPARE.NODE_CHAIN,'prepare') as node_chain_prepare:
+            with mock.patch.object(PREPARE.NAIVE,'prepare') as naive_prepare, mock.patch.object(PREPARE.HY2_DEADLINES,'prepare') as hy2_prepare, mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'), mock.patch.object(PREPARE.OPENVPN_CLOSE,'prepare') as openvpn_close_prepare, mock.patch.object(PREPARE.OPENVPN_REMOTE,'prepare') as openvpn_remote_prepare, mock.patch.object(PREPARE.EXTERNAL_POLICY,'prepare') as external_policy_prepare, mock.patch.object(PREPARE.AMNEZIA,'prepare'), mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare,mock.patch.object(PREPARE.COMPOSITE,'prepare') as composite_prepare, mock.patch.object(PREPARE.NODE_CHAIN,'prepare') as node_chain_prepare, self.execution_boundaries(root):
                 PREPARE.prepare(root)
                 naive_prepare.assert_called_once_with(root.resolve())
                 hy2_prepare.assert_called_once_with(root.resolve())
