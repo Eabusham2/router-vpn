@@ -134,7 +134,7 @@ class NaiveH2NativeRunner(unittest.TestCase):
             self.assertTrue(all(name.startswith(parent+'/') for name in names[1:]))
 
     def test_literal_gate_preserves_all_ipv4_ipv6_dotted_and_refusal_verdicts(self):
-        self.assertEqual(list(G.LOOPBACK), ['TestRouterVPNDesktopNodeNaiveLiteral', 'TestRouterVPNDesktopNodeNaiveCONNECTLiteral'])
+        self.assertEqual(list(G.LOOPBACK), ['TestRouterVPNDesktopNodeNaiveLiteral', 'TestRouterVPNDesktopNodeNaiveCONNECTLiteral', 'TestRouterVPNDesktopNodeNaiveCONNECTDNSPolicies'])
         connect = G.LOOPBACK['TestRouterVPNDesktopNodeNaiveCONNECTLiteral']
         ordinary = {carrier+'/'+endpoint+'/'+fault
                     for carrier in ('http-connect', 'https-connect')
@@ -167,6 +167,9 @@ class NaiveH2NativeRunner(unittest.TestCase):
         self.assertEqual(G.PACKET.NODE.PREP.PEER_TEMPLATES['node_imported_naive_h2_test.go.tmpl'],
             'protocol/routervpnamnezia/routervpn_desktop_node_imported_naive_h2_test.go')
         self.assertIn(ROOT/'mobile/desktop/node_imported_naive_h2_test.go.tmpl', G.PACKET.NODE.PREP.inputs())
+        self.assertEqual(G.PACKET.NODE.PREP.PEER_TEMPLATES['node_naive_dns_test.go.tmpl'],
+            'protocol/routervpnamnezia/routervpn_desktop_node_naive_dns_test.go')
+        self.assertIn(ROOT/'mobile/desktop/node_naive_dns_test.go.tmpl', G.PACKET.NODE.PREP.inputs())
         self.assertIn('with_purego', G.SOCKS.TAGS.split(','))
         self.assertIn('with_naive_outbound', G.SOCKS.TAGS.split(','))
         self.assertIn('routervpn_openvpn_remote_test', G.PACKET.TAGS.split(','))
@@ -233,7 +236,7 @@ class NaiveH2NativeRunner(unittest.TestCase):
                      patch.object(G.PACKET.NODE,'verify_naive_library',side_effect=lambda _:order.append('verify')), patch('builtins.print'):
                     result=G.run(vendor,stage=stage)
                 self.assertEqual(order[:2],['library','compile']); self.assertEqual(order[-1],'verify')
-                self.assertEqual(len(observed), {'parser':82,'loopback':77,'reference':659}[stage])
+                self.assertEqual(len(observed), {'parser':82,'loopback':126,'reference':659}[stage])
                 self.assertEqual(result['native_library'], {'sha256':'a'*64,'bytes':42})
                 self.assertFalse(result['device_acceptance']); self.assertFalse(result['production_router_acceptance'])
 

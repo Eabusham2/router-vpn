@@ -174,6 +174,7 @@ PEER_TEMPLATES = {
     'node_hysteria2_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_hysteria2_peer_test.go',
     'node_naive_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_peer_test.go',
     'node_naive_literal_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_literal_test.go',
+    'node_naive_dns_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_dns_test.go',
     'node_naive_h3_literal_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_h3_literal_test.go',
     'node_imported_naive_h2_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_imported_naive_h2_test.go',
     'node_imported_naive_h3_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_imported_naive_h3_test.go',

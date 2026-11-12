@@ -186,6 +186,10 @@ func desktopNaiveLiteralTransportCarrier(t *testing.T, resolverKind, fault, endp
 }
 
 func desktopNaiveLiteralTransportCarrierLayer(t *testing.T, resolverKind, fault, endpoint, hostStyle, carrier, layer string) {
+	desktopNaiveLiteralTransportDNS(t, resolverKind, fault, endpoint, hostStyle, carrier, layer, nil)
+}
+
+func desktopNaiveLiteralTransportDNS(t *testing.T, resolverKind, fault, endpoint, hostStyle, carrier, layer string, policy *desktopNaiveDNSPolicy) {
 	t.Helper()
 	var peer *desktopNodeLayerServer
 	var lower *desktopNaiveLiteralWitnessLower
@@ -278,7 +282,15 @@ func desktopNaiveLiteralTransportCarrierLayer(t *testing.T, resolverKind, fault,
 			}
 		})
 	}
-	peer, files = startDesktopNodeNaiveServer(t, "naive-h2", netip.MustParseAddr("127.0.0.1"), dnsAddress)
+	peer, files = startDesktopNodeNaiveServer(t, "naive-h2", netip.MustParseAddr("127.0.0.1"), dnsAddress, func(server *desktopNodeLayerServer) {
+		if policy != nil {
+			server.routes = append([]desktopNodeLayerRoute{
+				{Network: "tcp", Destination: "192.0.2.99:9999"},
+				{Network: "udp", Destination: "192.0.2.99:9999"},
+				{Network: "udp", Destination: "192.168.50.133:53", Physical: dnsAddress},
+			}, policy.routes...)
+		}
+	})
 	if fault != "" && fault != "forced-query" && !strings.HasPrefix(fault, "connect-") && !strings.HasPrefix(fault, "layer-") {
 		files = desktopNodeNaiveAssets(t, files, fault)
 	}
@@ -473,6 +485,9 @@ func desktopNaiveLiteralTransportCarrierLayer(t *testing.T, resolverKind, fault,
 		if fault != "" && (ok || selectedQueries.Load() != 0) {
 			t.Fatal("refused native source reached Home DNS", ok, err)
 		}
+	}
+	if policy != nil {
+		policy.exercise(t, ctx, final)
 	}
 	completed = true
 }

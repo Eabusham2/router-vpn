@@ -138,12 +138,7 @@ func TestImportedNaiveH2PreservesSelectedDNSPolicy(t *testing.T) {
 					source[4] = externalTestJSON(t, profile)
 					original := append([]string(nil), source...)
 					plan, err := NewImportedEntry(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
-					if strings.HasSuffix(kind, "-connect") && protocol == "h3" {
-						if err == nil || plan != nil || !strings.Contains(err.Error(), "captured TCP-compatible DNS bootstrap") || !reflect.DeepEqual(source, original) {
-							t.Fatal("Naive H2 replaced or admitted a lower DNS transport unsupported by CONNECT", err)
-						}
-						return
-					}
+
 					if err != nil || !reflect.DeepEqual(source, original) {
 						t.Fatal("Naive H2 failed or changed its compatible captured DNS policy", err)
 					}
@@ -189,12 +184,7 @@ func TestImportedNaiveH2RetainsCompleteHostnameBootstrap(t *testing.T) {
 					importedNaiveH2HostnameDNS(t, source, protocol)
 					captured := append([]string(nil), source...)
 					plan, err := NewImportedEntry(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
-					if strings.HasSuffix(kind, "-connect") && protocol == "udp" {
-						if err == nil || plan != nil || !strings.Contains(err.Error(), "captured TCP-compatible DNS bootstrap") {
-							t.Fatal("H2 application stream granted lower UDP bootstrap authority", err)
-						}
-						return
-					}
+
 					if err != nil || !reflect.DeepEqual(captured, source) {
 						t.Fatal("original hostname DNS capture changed or failed", err)
 					}

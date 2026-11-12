@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/netip"
 	"sort"
+	"strconv"
 
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/nativecomposite"
@@ -101,7 +102,7 @@ func compiledPhysicalEgressWithDesktopProof(configJSON string, networks []string
 // Only the revalidated imported constructor may identify its literal H2 and
 // optional literal final-layer resolver as dormant. It stays in the executable and capture;
 // recording its identity must not manufacture an unsupported lower UDP socket.
-func compiledPhysicalEgressWithCapturedNaive(configJSON string, networks []string, desktop *externalDesktopRecorder, proofTag string, dormantNaiveUDP bool) ([]PhysicalEgress, error) {
+func compiledPhysicalEgressWithCapturedNaive(configJSON string, networks []string, desktop *externalDesktopRecorder, proofTag string, dormantNaiveDNS bool) ([]PhysicalEgress, error) {
 	var graph map[string]any
 	if exactJSON([]byte(configJSON), &graph, 4<<20) != nil {
 		return nil, nodePhysicalEgressError
@@ -109,7 +110,7 @@ func compiledPhysicalEgressWithCapturedNaive(configJSON string, networks []strin
 	p := nodeEgressProjection{
 		nodes: map[string]map[string]any{}, resolvers: map[string]map[string]any{},
 		active: map[string]bool{}, visited: map[string]bool{}, tuples: map[PhysicalEgress]bool{},
-		desktop: desktop, dormantNaiveUDP: dormantNaiveUDP,
+		desktop: desktop, dormantNaiveDNS: dormantNaiveDNS,
 	}
 	for _, family := range []string{"endpoints", "outbounds"} {
 		rows, _ := graph[family].([]any)
@@ -167,7 +168,7 @@ type nodeEgressProjection struct {
 	active, visited  map[string]bool
 	tuples           map[PhysicalEgress]bool
 	desktop          *externalDesktopRecorder
-	dormantNaiveUDP  bool
+	dormantNaiveDNS  bool
 }
 
 func (p *nodeEgressProjection) add(host string, port any, network string) error {
@@ -233,11 +234,9 @@ func (p *nodeEgressProjection) node(tag, payload string) error {
 		// Naive retains an explicit native resolver even for a literal server.
 		// The desktop wrapper must preserve that compiled bootstrap dependency;
 		// the legacy fixed-tuple projection keeps its existing behavior.
-		if p.dormantNaiveUDP && tag == "proxy" {
+		if p.dormantNaiveDNS && tag == "proxy" {
 			query, err := externalDesktopQuery(value["domain_resolver"])
-			server := p.resolvers[query.Server]
 			literal, literalErr := netip.ParseAddr(predecessorText(value, "server"))
-			_, resolverErr := netip.ParseAddr(predecessorText(server, "server"))
 			lower := predecessorText(value, "detour")
 			ownedLower := lower == "entry-wg"
 			if lower == NativeStartLayerTag {
@@ -245,12 +244,10 @@ func (p *nodeEgressProjection) node(tag, payload string) error {
 				ownedLower = importedNaiveLiteralStartLayer(layer) && layer["detour"] == "entry-wg"
 			}
 			if err != nil || !query.Present || query.Server != "routervpn-predecessor-bootstrap-0" ||
-				literalErr != nil || !literal.IsValid() || resolverErr != nil || value["quic"] != false ||
-				!ownedLower || server["type"] != "udp" || server["detour"] != lower ||
-				!externalPort(server["server_port"]) {
+				literalErr != nil || !literal.IsValid() || value["quic"] != false || !ownedLower {
 				return nodePhysicalEgressError
 			}
-			if err := p.desktop.dns(query.Server, server, true, false, int(server["server_port"].(float64))); err != nil {
+			if err := p.recordDormantNaiveDNS(query.Server, lower, 0); err != nil {
 				return err
 			}
 		} else if err := p.resolve(value); err != nil {
@@ -489,6 +486,37 @@ func (p *nodeEgressProjection) resolve(value map[string]any) error {
 		return nodePhysicalEgressError
 	}
 	return p.dns(predecessorText(query, "server"), true)
+}
+
+// The imported constructor already checked exact equality with the selected
+// resolver tree. Preserve every dormant lower resolver in the desktop capture,
+// but never walk its detour as executable DNS or grant a lower UDP socket.
+func (p *nodeEgressProjection) recordDormantNaiveDNS(tag, lower string, depth int) error {
+	if depth > 1 || tag != "routervpn-predecessor-bootstrap-"+strconv.Itoa(depth) {
+		return nodePhysicalEgressError
+	}
+	server := p.resolvers[tag]
+	if server == nil || server["detour"] != lower || !externalPort(server["server_port"]) {
+		return nodePhysicalEgressError
+	}
+	switch server["type"] {
+	case "udp", "tcp", "tls", "https", "h3":
+	default:
+		return nodePhysicalEgressError
+	}
+	query, err := externalDesktopQuery(server["domain_resolver"])
+	if err != nil {
+		return err
+	}
+	if _, err := netip.ParseAddr(predecessorText(server, "server")); err != nil && !query.Present {
+		return nodePhysicalEgressError
+	}
+	if query.Present {
+		if err := p.recordDormantNaiveDNS(query.Server, lower, depth+1); err != nil {
+			return err
+		}
+	}
+	return p.desktop.dns(tag, server, true, false, int(server["server_port"].(float64)))
 }
 
 func (p *nodeEgressProjection) dns(tag string, bootstrap bool) error {

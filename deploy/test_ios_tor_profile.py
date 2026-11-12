@@ -1274,7 +1274,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   let homeGraph=try object(Data(bridge(["Op":"imported-router","Config":text(homeArgs)]).utf8)),homeDNS=(homeGraph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
   try check("Literal Naive H2 keeps exact final-owned Home UDP",homeDNS[0]["type"] as? String=="udp" && homeDNS[0]["server"] as? String==home["adguard_ipv4"] as? String && homeDNS[0]["detour"] as? String=="proxy")
   if connect,let output=ProcessInfo.processInfo.environment["ROUTERVPN_APPLE_NAIVE_H2_HOME_GRAPHS"]{try json(homeGraph).write(to:URL(fileURLWithPath:output).appendingPathComponent(kind+".json"),options:.withoutOverwriting)}
-  for transport in ["tcp","tls","https"] {for hostname in [false,true] {
+  for transport in ["tcp","tls","https","h3"] {for hostname in [false,true] {
    var selected=final;selected["dns_mode"]="custom";selected["dns_protocol"]=transport;selected["dns_host"]=hostname ? "resolver.example.net":"203.0.113.53";selected["dns_port"]=8853;selected["dns_server_name"]="resolver.example.net";selected["dns_path"]="/owned-dns-query"
    if hostname{selected["dns_bootstrap"]=["server":["type":"tcp","tag":"external-dns-bootstrap","server":"203.0.113.54","server_port":5354,"detour":"proxy"],"query":["server":"external-dns-bootstrap","timeout":"3s","disable_optimistic_cache":true]] as [String:Any]}
    try IOSImportedEntryMultihop.validate(entry:entry,final:selected,profiles:maps)
@@ -1283,12 +1283,13 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    try check("Naive H2 retains complete selected resolver and lower bootstrap",dns.count==(hostname ? 4:2) && dns[0]["type"] as? String==transport && dns[0]["server"] as? String==selected["dns_host"] as? String && dns[0]["server_port"] as? Int==8853)
    for resolver in dns {try check("Naive H2 resolver retains exact lane owner",resolver["detour"] as? String==((resolver["tag"] as! String).hasPrefix("routervpn-predecessor-bootstrap-") ? "entry-wg":"proxy"))}
    if transport != "tcp"{try check("Naive H2 retains selected DNS trust",(dns[0]["tls"] as? [String:Any])?["server_name"] as? String=="resolver.example.net")}
-   if transport=="https"{try check("Naive H2 retains selected DNS path",dns[0]["path"] as? String=="/owned-dns-query")}
+   if ["https","h3"].contains(transport){try check("Naive H2 retains selected DNS path",dns[0]["path"] as? String=="/owned-dns-query")}
    if hostname && connect {for lower in ["udp","h3"] {
-    var rejected=selected,bootstrap=selected["dns_bootstrap"] as! [String:Any],server=bootstrap["server"] as! [String:Any];server["type"]=lower;bootstrap["server"]=server;rejected["dns_bootstrap"]=bootstrap
-    reject("Naive H2 host refuses lower "+lower){try IOSImportedEntryMultihop.validate(entry:entry,final:rejected,profiles:maps)}
-    var rejectedArgs=captured;rejectedArgs["profile"]=try text(rejected);rejectedArgs["dns"]=try text(bootstrap)
-    reject("Naive H2 compiler refuses lower "+lower){_ = try bridge(["Op":"imported-router","Config":text(rejectedArgs)])}
+    var retained=selected,bootstrap=selected["dns_bootstrap"] as! [String:Any],server=bootstrap["server"] as! [String:Any];server["type"]=lower;if lower=="h3" {server["tls"]=["enabled":true,"server_name":"bootstrap.example.net"];server["path"]="/bootstrap-query"};bootstrap["server"]=server;retained["dns_bootstrap"]=bootstrap
+    try IOSImportedEntryMultihop.validate(entry:entry,final:retained,profiles:maps)
+    var retainedArgs=captured;retainedArgs["profile"]=try text(retained);retainedArgs["dns"]=try text(bootstrap)
+    let retainedGraph=try object(Data(bridge(["Op":"imported-router","Config":text(retainedArgs)]).utf8)),retainedDNS=(retainedGraph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
+    try check("Naive H2 retains complete dormant lower transport "+lower,retainedDNS.count==4 && retainedDNS.filter{["external-dns-bootstrap","routervpn-predecessor-bootstrap-1"].contains($0["tag"] as? String ?? "")}.count==2 && retainedDNS.filter{["external-dns-bootstrap","routervpn-predecessor-bootstrap-1"].contains($0["tag"] as? String ?? "")}.allSatisfy{($0["type"] as? String)==lower})
    }}
   }}
   try check("Naive H2 policy controls preserve original source",try before==json(final))

@@ -194,14 +194,8 @@ func TestDesktopImportedNaiveH2CONNECTRetainsSelectedDNSPolicy(t *testing.T) {
 				root, selected := desktopImportedNaiveH2Fixture(t, kind, "aes-256-gcm", "aes-256-gcm+xor-whitening")
 				selected.Exit.DNSProtocol = protocol
 				if protocol == "udp" {
-					// A literal H2 endpoint and literal AES/XOR peers need no
-					// lower DNS query. Preserve Home UDP over authenticated H2
-					// UoT; its dormant lower resolver gains no UDP authority.
-					selected.Exit.DNSProtocol = ""
-					selected.Exit.DNSPort = 0
+					selected.Exit.DNSProtocol, selected.Exit.DNSPort = "", 0
 				} else if protocol == "hostname-bootstrap" {
-					// A selected resolver hostname still needs the captured Home
-					// UDP bootstrap. CONNECT cannot supply that lower datagram.
 					selected.Exit.DNSMode, selected.Exit.DNSProtocol = "doh", "https"
 					selected.Exit.DNSHost, selected.Exit.DNSPort = "resolver.example.net", 8443
 					selected.Exit.DNSServerName, selected.Exit.DNSPath = "resolver.example.net", "/captured-query"
@@ -211,35 +205,46 @@ func TestDesktopImportedNaiveH2CONNECTRetainsSelectedDNSPolicy(t *testing.T) {
 				selected.Control = cloneRouterProfile(selected.Exit)
 				before := mustImportedJSON(t, selected)
 				captured, err := captureNativeMultihopSelection(context.Background(), root, selected, []string{selected.ExitMode}, nil)
-				if protocol == "udp" {
-					if err != nil || captured.Native == nil || captured.Native.validate(captured) != nil || string(before) != string(mustImportedJSON(t, selected)) {
-						t.Fatal("desktop literal H2 changed or rejected the selected Home UDP policy", err)
-					}
-					launch, err := compileRetainedNativeMultihopLaunch(captured, nil)
-					if err != nil {
-						t.Fatal(err)
-					}
-					graph := retainedGraph(t, launch.config)
-					rows := graph["dns"].(map[string]any)["servers"].([]any)
-					if len(rows) != 2 {
-						t.Fatal("literal Home policy lost its exact resolver closure")
-					}
-					resolver, lower := rows[0].(map[string]any), rows[1].(map[string]any)
-					if resolver["type"] != "udp" || resolver["server"] != selected.Exit.AdGuardIPv4 || resolver["server_port"] != float64(53) || resolver["detour"] != "proxy" || lower["type"] != "udp" || lower["server"] != resolver["server"] || lower["server_port"] != resolver["server_port"] || lower["detour"] != mobilemultihop.NativeStartLayerTag {
-						t.Fatal("literal Home DNS changed its transport or selected final/layer owner", resolver, lower)
-					}
-					if len(launch.nodePhysicalEgress) != 1 {
-						t.Fatal("literal H2 changed its original physical CONNECT owner")
-					}
-					for _, tuple := range launch.nodePhysicalEgress {
-						if tuple.Network != "tcp" || tuple.Host != selected.Entry.Endpoint {
-							t.Fatal("literal H2 granted an unowned physical transport", tuple)
-						}
-					}
-					return
+				if err != nil || captured.Native == nil || captured.Native.validate(captured) != nil || string(before) != string(mustImportedJSON(t, selected)) {
+					t.Fatal("desktop literal H2 changed or rejected the selected DNS policy", err)
 				}
-				if err == nil || !strings.Contains(err.Error(), "captured TCP-compatible DNS bootstrap") || captured.Native != nil || string(before) != string(mustImportedJSON(t, selected)) {
-					t.Fatal("desktop H2 changed or admitted an incompatible selected lower DNS transport", err)
+				launch, err := compileRetainedNativeMultihopLaunch(captured, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				graph := retainedGraph(t, launch.config)
+				rows := graph["dns"].(map[string]any)["servers"].([]any)
+				count := 2
+				if protocol == "hostname-bootstrap" {
+					count = 4
+				}
+				if len(rows) != count {
+					t.Fatal("selected DNS lost its complete original tree")
+				}
+				resolver := rows[0].(map[string]any)
+				expected, err := expectedDNSSelection(selected.Exit)
+				if err != nil || resolver["type"] != expected.Protocol || resolver["server"] != expected.Host || resolver["server_port"] != float64(expected.Port) || resolver["detour"] != "proxy" {
+					t.Fatal("selected DNS changed its original endpoint or final owner", err, resolver)
+				}
+				if expected.Protocol == "https" || expected.Protocol == "h3" {
+					tls := resolver["tls"].(map[string]any)
+					if tls["server_name"] != expected.ServerName || resolver["path"] != expected.Path {
+						t.Fatal("selected DNS changed original TLS identity or path", resolver)
+					}
+				}
+				for _, raw := range rows {
+					row := raw.(map[string]any)
+					if strings.HasPrefix(row["tag"].(string), "routervpn-predecessor-bootstrap-") && row["detour"] != mobilemultihop.NativeStartLayerTag {
+						t.Fatal("dormant DNS tree lost its original final layer", row)
+					}
+				}
+				if len(launch.nodePhysicalEgress) != 1 {
+					t.Fatal("selected DNS added a physical owner")
+				}
+				for _, tuple := range launch.nodePhysicalEgress {
+					if tuple.Network != "tcp" || tuple.Host != selected.Entry.Endpoint {
+						t.Fatal("selected DNS granted lower UDP authority", tuple)
+					}
 				}
 			})
 		}

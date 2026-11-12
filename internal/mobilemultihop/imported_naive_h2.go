@@ -63,11 +63,11 @@ func importedNaiveDNS(graph, final map[string]any, mode string, lowerUDP bool) e
 	// remote literal service inside the separately validated AES/XOR layer.
 	// Keep that complete resolver attached to its original layer: it remains
 	// an owned, unusable fallback, not lower UDP authority through CONNECT.
-	// Only a single literal UDP application resolver qualifies; hostname DNS
-	// and DoH3 retain their existing capability gate.
-	literalH2UDP := mode == "naive-h2" && count == 1 &&
-		predecessorText(servers[0].(map[string]any), "type") == "udp"
-	if literalH2UDP && detour != "" {
+	// The complete lower resolver tree is dormant for this literal transport.
+	// Selected DNS, including an explicit hostname bootstrap and DoH3, keeps
+	// its own native transport through the established final UoT path.
+	dormantH2DNS := mode == "naive-h2"
+	if dormantH2DNS && detour != "" {
 		var layer map[string]any
 		outbounds, _ := graph["outbounds"].([]any)
 		for _, raw := range outbounds {
@@ -82,7 +82,7 @@ func importedNaiveDNS(graph, final map[string]any, mode string, lowerUDP bool) e
 		}
 		// A hostname on the outer AES peer would still require a working
 		// lower resolver. The inner literal/SNI mapping cannot provide it.
-		literalH2UDP = importedNaiveLiteralStartLayer(layer)
+		dormantH2DNS = importedNaiveLiteralStartLayer(layer)
 	}
 	names := map[string]string{ExternalDNSTag: "routervpn-predecessor-bootstrap-0"}
 	if count == 2 {
@@ -134,7 +134,7 @@ func importedNaiveDNS(graph, final map[string]any, mode string, lowerUDP bool) e
 		// Equality above preserves the exact selected endpoint, transport,
 		// TLS identity, port/path and query options. Only capability is checked
 		// here; no selected resolver is rewritten for a TCP-only entry.
-		if !lowerUDP && !literalH2UDP && (expected["type"] == "udp" || expected["type"] == "h3") {
+		if !lowerUDP && !dormantH2DNS && (expected["type"] == "udp" || expected["type"] == "h3") {
 			return errors.New("Naive H2 over CONNECT requires an explicitly captured TCP-compatible DNS bootstrap; the selected UDP or DoH3 policy cannot traverse that entry")
 		}
 	}

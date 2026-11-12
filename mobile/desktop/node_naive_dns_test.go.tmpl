@@ -1,0 +1,472 @@
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mdns "github.com/miekg/dns"
+	"github.com/sagernet/quic-go/http3"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/dns/transport"
+	DNSQUIC "github.com/sagernet/sing-box/dns/transport/quic"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/service"
+	"golang.org/x/net/http2"
+)
+
+type desktopNaiveDNSPolicy struct {
+	routes   []desktopNodeLayerRoute
+	exercise func(*testing.T, context.Context, adapter.Outbound)
+}
+
+// All selected DNS sockets belong to the final native Naive owner. The parent
+// witness independently refuses and counts every lower resolver/UDP operation.
+func TestRouterVPNDesktopNodeNaiveCONNECTDNSPolicies(t *testing.T) {
+	desktopNodeNaiveLibrary(t)
+	t.Run("query-shape-controls", func(t *testing.T) {
+		for _, kind := range []string{"udp", "tcp", "tls", "https", "h3"} {
+			q := new(mdns.Msg)
+			q.SetQuestion("selected.routervpn.test.", mdns.TypeA)
+			q.Id = 0
+			if kind == "udp" {
+				q.Id = 1
+			}
+			if desktopNaiveDNSQuestion(q, "selected.routervpn.test.", kind) != 0 {
+				t.Fatal("original application question rejected", kind)
+			}
+			for _, mutation := range []func(*mdns.Msg){
+				func(q *mdns.Msg) { q.Question[0].Name = "resolver.routervpn.test." },
+				func(q *mdns.Msg) { q.Question[0].Qclass = mdns.ClassCHAOS },
+				func(q *mdns.Msg) { q.Question[0].Qtype = mdns.TypeAAAA },
+				func(q *mdns.Msg) { q.Id = 9 },
+				func(q *mdns.Msg) { q.Response = true },
+				func(q *mdns.Msg) { q.Extra = []mdns.RR{new(mdns.OPT)} },
+				func(q *mdns.Msg) { q.Question = append(q.Question, q.Question[0]) },
+			} {
+				changed := q.Copy()
+				mutation(changed)
+				if desktopNaiveDNSQuestion(changed, "selected.routervpn.test.", kind) >= 0 {
+					t.Fatal("foreign question gained application or probe identity", kind, changed)
+				}
+			}
+			for _, probe := range []struct {
+				id, qtype uint16
+				slot      int
+			}{{1, mdns.TypeA, 1}, {2, mdns.TypeAAAA, 2}} {
+				changed := q.Copy()
+				changed.Id = probe.id
+				changed.Question[0].Qtype = probe.qtype
+				got := desktopNaiveDNSQuestion(changed, "selected.routervpn.test.", kind)
+				if kind == "tcp" || kind == "tls" {
+					if got != probe.slot {
+						t.Fatal("exact reuse probe rejected", kind)
+					}
+				} else if got > 0 {
+					t.Fatal("another transport acquired reuse probe authority", kind)
+				}
+			}
+		}
+	})
+	for _, carrier := range []string{"http-connect", "https-connect"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			layerName := layer
+			if layerName == "" {
+				layerName = "off"
+			}
+			for _, policy := range []string{"udp", "tcp", "tls", "https", "h3", "https-hostname-udp", "h3-hostname-udp"} {
+				t.Run(carrier+"/"+layerName+"/"+policy, func(t *testing.T) {
+					p := desktopNaiveSelectedDNSPolicy(t, policy, "")
+					desktopNaiveLiteralTransportDNS(t, strings.Split(policy, "-")[0], "", "192.0.2.77", "", carrier, layer, p)
+				})
+			}
+		}
+	}
+	for _, fault := range []string{"wrong-port", "wrong-path", "wrong-server-name", "wrong-trust", "wrong-bootstrap"} {
+		t.Run("negative/"+fault, func(t *testing.T) {
+			p := desktopNaiveSelectedDNSPolicy(t, "h3-hostname-udp", fault)
+			desktopNaiveLiteralTransportDNS(t, "h3", "", "192.0.2.77", "", "https-connect", "aes-256-gcm+xor-whitening", p)
+		})
+	}
+}
+
+// Only the pinned TCP/TLS multiplexer sends same-name capability probes at
+// ID 1/A and ID 2/AAAA. They cannot satisfy the original application receipt.
+func desktopNaiveDNSQuestion(q *mdns.Msg, question, kind string) int {
+	if q == nil || q.Response || q.Opcode != mdns.OpcodeQuery || q.Rcode != 0 || q.Authoritative || q.Truncated || q.RecursionAvailable || !q.RecursionDesired || q.AuthenticatedData || q.CheckingDisabled || len(q.Question) != 1 || len(q.Answer) != 0 || len(q.Ns) != 0 || len(q.Extra) != 0 || q.Question[0].Name != question || q.Question[0].Qclass != mdns.ClassINET {
+		return -1
+	}
+	if kind == "tcp" || kind == "tls" {
+		if q.Id == 1 && q.Question[0].Qtype == mdns.TypeA {
+			return 1
+		}
+		if q.Id == 2 && q.Question[0].Qtype == mdns.TypeAAAA {
+			return 2
+		}
+		if q.Id != 0 {
+			return -1
+		}
+	} else if kind == "udp" {
+		if q.Id != 1 {
+			return -1
+		} // First native UDP multiplexer generation.
+	} else if q.Id != 0 {
+		return -1
+	} // HTTPS transports use zero wire IDs.
+	if q.Question[0].Qtype != mdns.TypeA {
+		return -1
+	}
+	return 0
+}
+
+type desktopNaiveSelectedDNSRouter struct {
+	adapter.DNSRouter
+	bootstrap adapter.DNSTransport
+	calls     atomic.Int64
+}
+
+func (r *desktopNaiveSelectedDNSRouter) Exchange(ctx context.Context, q *mdns.Msg, o adapter.DNSQueryOptions) (*mdns.Msg, error) {
+	r.calls.Add(1)
+	if r.bootstrap == nil || o.Transport != r.bootstrap {
+		return nil, errors.New("selected DNS used an uncaptured bootstrap")
+	}
+	return r.bootstrap.Exchange(ctx, q)
+}
+func (r *desktopNaiveSelectedDNSRouter) Lookup(ctx context.Context, name string, o adapter.DNSQueryOptions) ([]netip.Addr, error) {
+	q := new(mdns.Msg)
+	q.SetQuestion(mdns.Fqdn(name), mdns.TypeA)
+	reply, err := r.Exchange(ctx, q, o)
+	if err != nil {
+		return nil, err
+	}
+	var result []netip.Addr
+	for _, rr := range reply.Answer {
+		if a, ok := rr.(*mdns.A); ok {
+			if ip, ok := netip.AddrFromSlice(a.A); ok {
+				result = append(result, ip.Unmap())
+			}
+		}
+	}
+	if len(result) == 0 {
+		return nil, errors.New("selected bootstrap omitted its captured resolver address")
+	}
+	return result, nil
+}
+
+func desktopNaiveDNSTransport(t *testing.T, ctx context.Context, row map[string]any) adapter.DNSTransport {
+	t.Helper()
+	raw, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var owner adapter.DNSTransport
+	logger := log.NewNOPFactory().Logger()
+	switch row["type"] {
+	case "udp", "tcp":
+		var o option.RemoteDNSServerOptions
+		if json.Unmarshal(raw, &o) != nil {
+			t.Fatal("DNS options invalid")
+		}
+		if row["type"] == "udp" {
+			owner, err = transport.NewUDP(ctx, logger, row["tag"].(string), o)
+		} else {
+			owner, err = transport.NewTCP(ctx, logger, row["tag"].(string), o)
+		}
+	case "tls":
+		var o option.RemoteTLSDNSServerOptions
+		if json.Unmarshal(raw, &o) != nil {
+			t.Fatal("TLS DNS options invalid")
+		}
+		owner, err = transport.NewTLS(ctx, logger, row["tag"].(string), o)
+	case "https", "h3":
+		var o option.RemoteHTTPSDNSServerOptions
+		if json.Unmarshal(raw, &o) != nil {
+			t.Fatal("HTTPS DNS options invalid")
+		}
+		if row["type"] == "h3" {
+			owner, err = DNSQUIC.NewHTTP3(ctx, logger, row["tag"].(string), o)
+		} else {
+			owner, err = transport.NewHTTPS(ctx, logger, row["tag"].(string), o)
+		}
+	default:
+		t.Fatal("unknown selected policy")
+	}
+	if err != nil {
+		t.Fatal("actual selected DNS did not construct", err)
+	}
+	if err = owner.Start(adapter.StartStateStart); err != nil {
+		_ = owner.Close()
+		t.Fatal("actual selected DNS did not bind final owner", err)
+	}
+	return owner
+}
+
+func desktopNaiveSelectedDNSPolicy(t *testing.T, policy, fault string) *desktopNaiveDNSPolicy {
+	t.Helper()
+	kind := strings.Split(policy, "-")[0]
+	hostname := strings.Contains(policy, "-hostname-")
+	var selected, bootstrap, probeA, probeAAAA atomic.Int64
+	reply := func(q *mdns.Msg, question, transportKind string) *mdns.Msg {
+		result := new(mdns.Msg).SetReply(q)
+		classification := desktopNaiveDNSQuestion(q, question, transportKind)
+		if classification < 0 {
+			t.Error("DNS peer received an uncaptured question, identity or shape", q)
+			result.Rcode = mdns.RcodeRefused
+			return result
+		}
+		if classification == 1 {
+			if probeA.Add(1) != 1 {
+				t.Error("repeated native TCP/TLS A reuse probe")
+			}
+		} else if classification == 2 {
+			if probeAAAA.Add(1) != 1 {
+				t.Error("repeated native TCP/TLS AAAA reuse probe")
+			}
+			result.Rcode = mdns.RcodeRefused
+			return result
+		} else if question == "selected.routervpn.test." {
+			selected.Add(1)
+		} else {
+			bootstrap.Add(1)
+		}
+		address := "203.0.113.77"
+		if question == "resolver.routervpn.test." {
+			address = "203.0.113.53"
+		}
+		result.Answer = []mdns.RR{&mdns.A{Hdr: mdns.RR_Header{Name: question, Rrtype: mdns.TypeA, Class: mdns.ClassINET, Ttl: 1}, A: net.ParseIP(address)}}
+		return result
+	}
+	cert, pem := desktopNodeNaiveCertificate(t)
+	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	startDNS := func(network string, secure bool, question, transportKind string) string {
+		server := &mdns.Server{Handler: mdns.HandlerFunc(func(w mdns.ResponseWriter, q *mdns.Msg) { _ = w.WriteMsg(reply(q, question, transportKind)) })}
+		var address string
+		if network == "udp" {
+			p, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server.PacketConn = p
+			address = p.LocalAddr().String()
+		} else {
+			l, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if secure {
+				l = tls.NewListener(l, tlsConfig)
+			}
+			server.Listener = l
+			address = l.Addr().String()
+		}
+		ready, done := make(chan struct{}), make(chan error, 1)
+		server.NotifyStartedFunc = func() { close(ready) }
+		go func() { done <- server.ActivateAndServe() }()
+		select {
+		case <-ready:
+		case err := <-done:
+			t.Fatal(err)
+		case <-time.After(time.Second):
+			t.Fatal("DNS peer did not start")
+		}
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = server.ShutdownContext(ctx)
+			select {
+			case <-done:
+			case <-ctx.Done():
+				t.Error("DNS peer did not join")
+			}
+		})
+		return address
+	}
+	routes := []desktopNodeLayerRoute{}
+	peer := ""
+	network := "tcp"
+	if kind == "udp" || kind == "tcp" || kind == "tls" {
+		if kind == "udp" {
+			network = "udp"
+		}
+		peer = startDNS(network, kind == "tls", "selected.routervpn.test.", kind)
+	} else {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/owned-query" {
+				http.Error(w, "captured path required", http.StatusNotFound)
+				return
+			}
+			var raw []byte
+			var err error
+			if r.Method == http.MethodGet {
+				raw, err = base64.RawURLEncoding.DecodeString(r.URL.Query().Get("dns"))
+			} else if r.Method == http.MethodPost {
+				raw, err = io.ReadAll(io.LimitReader(r.Body, 65536))
+			} else {
+				http.Error(w, "method", 405)
+				return
+			}
+			var q mdns.Msg
+			if err != nil || q.Unpack(raw) != nil {
+				http.Error(w, "DNS", 400)
+				return
+			}
+			wire, err := reply(&q, "selected.routervpn.test.", kind).Pack()
+			if err != nil {
+				http.Error(w, "DNS", 500)
+				return
+			}
+			w.Header().Set("Content-Type", "application/dns-message")
+			_, _ = w.Write(wire)
+		})
+		done := make(chan error, 1)
+		if kind == "h3" {
+			network = "udp"
+			packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			peer = packet.LocalAddr().String()
+			server := &http3.Server{TLSConfig: tlsConfig, Handler: handler}
+			go func() { done <- server.Serve(packet) }()
+			t.Cleanup(func() {
+				_ = server.Close()
+				_ = packet.Close()
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Error("HTTP3 DNS peer did not join")
+				}
+			})
+		} else {
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			peer = listener.Addr().String()
+			server := &http.Server{Handler: handler, TLSConfig: tlsConfig}
+			if err := http2.ConfigureServer(server, &http2.Server{}); err != nil {
+				t.Fatal(err)
+			}
+			go func() { done <- server.Serve(tls.NewListener(listener, tlsConfig)) }()
+			t.Cleanup(func() {
+				_ = server.Close()
+				_ = listener.Close()
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Error("HTTPS DNS peer did not join")
+				}
+			})
+		}
+	}
+	routes = append(routes, desktopNodeLayerRoute{Network: network, Destination: "203.0.113.53:5443", Physical: peer})
+	if hostname {
+		routes = append(routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.54:5354", Physical: startDNS("udp", false, "resolver.routervpn.test.", "udp")})
+	}
+	return &desktopNaiveDNSPolicy{routes: routes, exercise: func(t *testing.T, parent context.Context, final adapter.Outbound) {
+		ctx, cancel := context.WithTimeout(parent, 3*time.Second)
+		defer cancel()
+		owners := &desktopImportedSOCKSXrayManager{owners: map[string]adapter.Outbound{"proxy": final}}
+		manager := &desktopImportedNaiveH3DNSManager{owners: map[string]adapter.DNSTransport{}}
+		router := &desktopNaiveSelectedDNSRouter{}
+		ctx = service.ContextWith[adapter.OutboundManager](ctx, owners)
+		ctx = service.ContextWith[adapter.DNSTransportManager](ctx, manager)
+		ctx = service.ContextWith[adapter.DNSRouter](ctx, router)
+		row := map[string]any{"type": kind, "tag": "selected-dns", "server": "203.0.113.53", "server_port": 5443, "detour": "proxy"}
+		if kind == "tls" || kind == "https" || kind == "h3" {
+			row["tls"] = map[string]any{"enabled": true, "server_name": "captured-naive.test", "certificate": []string{string(pem)}}
+		}
+		if kind == "https" || kind == "h3" {
+			row["path"] = "/owned-query"
+		}
+		var boot map[string]any
+		if hostname {
+			boot = map[string]any{"type": "udp", "tag": "external-dns-bootstrap", "server": "203.0.113.54", "server_port": 5354, "detour": "proxy"}
+			if fault == "wrong-bootstrap" {
+				boot["server_port"] = 5355
+			}
+			router.bootstrap = desktopNaiveDNSTransport(t, ctx, boot)
+			defer router.bootstrap.Close()
+			manager.owners["external-dns-bootstrap"] = router.bootstrap
+			row["server"] = "resolver.routervpn.test"
+			row["domain_resolver"] = map[string]any{"server": "external-dns-bootstrap", "strategy": "ipv4_only", "timeout": "2s", "disable_cache": true}
+		}
+		switch fault {
+		case "wrong-port":
+			row["server_port"] = 5444
+		case "wrong-path":
+			row["path"] = "/foreign-query"
+		case "wrong-server-name":
+			row["tls"].(map[string]any)["server_name"] = "foreign.invalid"
+		case "wrong-trust":
+			_, foreign := desktopNodeNaiveCertificate(t)
+			row["tls"].(map[string]any)["certificate"] = []string{string(foreign)}
+		}
+		captured := map[string]any{"selected": row, "bootstrap": boot}
+		original, err := json.Marshal(captured)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			after, err := json.Marshal(captured)
+			if err != nil || string(after) != string(original) {
+				t.Error("native selected DNS changed its captured source", err)
+			}
+			t.Logf("selected_dns_source_sha256=%x policy=%s fault=%q application=%d explicit_bootstrap=%d reuse_a=%d reuse_aaaa=%d", sha256.Sum256(original), policy, fault, selected.Load(), bootstrap.Load(), probeA.Load(), probeAAAA.Load())
+		}()
+		owner := desktopNaiveDNSTransport(t, ctx, row)
+		defer owner.Close()
+		q := new(mdns.Msg)
+		q.SetQuestion("selected.routervpn.test.", mdns.TypeA)
+		q.Id = 0
+		answer, err := owner.Exchange(ctx, q)
+		if fault != "" {
+			if err == nil || selected.Load() != 0 {
+				t.Fatal("changed DNS authority delivered a selected response", fault, err)
+			}
+			return
+		}
+		if err != nil || answer == nil || len(answer.Answer) != 1 || selected.Load() != 1 {
+			t.Fatal("actual selected policy did not traverse final Naive", policy, err, selected.Load())
+		}
+		address, ok := answer.Answer[0].(*mdns.A)
+		if !ok || address.Hdr.Name != "selected.routervpn.test." || !address.A.Equal(net.ParseIP("203.0.113.77")) {
+			t.Fatal("selected DNS returned a foreign answer", answer)
+		}
+		if hostname && (bootstrap.Load() != 1 || router.calls.Load() != 1) {
+			t.Fatal("hostname selected DNS bypassed explicit final-path bootstrap")
+		}
+		if kind == "tcp" || kind == "tls" {
+			// The pinned multiplexer runs this two-query capability probe
+			// independently of the application exchange. Join both receipts
+			// within the same operation budget before closing the owner.
+			tick := time.NewTicker(time.Millisecond)
+			defer tick.Stop()
+			for probeA.Load() == 0 || probeAAAA.Load() == 0 {
+				select {
+				case <-ctx.Done():
+					t.Fatal("native TCP/TLS omitted its exact pinned reuse probes", ctx.Err())
+				case <-tick.C:
+				}
+			}
+			if probeA.Load() != 1 || probeAAAA.Load() != 1 {
+				t.Fatal("native TCP/TLS repeated its exact pinned reuse probes")
+			}
+		}
+		if !hostname && (bootstrap.Load() != 0 || router.calls.Load() != 0) {
+			t.Fatal("literal selected DNS invented bootstrap")
+		}
+	}}
+}

@@ -134,7 +134,7 @@ func TestImportedNaiveH2CONNECTHomeUDPRequiresLiteralLayerPeer(t *testing.T) {
 				// as the graph-level dormant-resolver checks above.
 				for _, protocol := range []string{"tcp", "udp"} {
 					profile := externalTestRead(t, source[4])
-					profile["dns_protocol"] = protocol
+					profile["dns_mode"], profile["dns_protocol"] = "custom", protocol
 					source[4] = externalTestJSON(t, profile)
 					original := append([]string(nil), source...)
 					if plan, err := NewImportedEntry(source[0], source[1], source[2], source[3], source[4], source[5], source[6]); err == nil || plan != nil || !strings.Contains(err.Error(), "literal unicast server") || !reflect.DeepEqual(source, original) {
@@ -142,6 +142,77 @@ func TestImportedNaiveH2CONNECTHomeUDPRequiresLiteralLayerPeer(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+func TestImportedNaiveH2CONNECTDormantCompleteResolverTree(t *testing.T) {
+	for _, kind := range []string{"http-connect", "https-connect"} {
+		for _, layer := range importedPQLayers {
+			for _, protocol := range []string{"https", "h3"} {
+				for _, bootstrap := range []string{"udp", "tcp"} {
+					t.Run(kind+"/"+layer+"/"+protocol+"/"+bootstrap, func(t *testing.T) {
+						source := importedNaiveH2Fixture(t, kind, "off", layer)
+						importedNaiveH2HostnameDNS(t, source, bootstrap)
+						profile := externalTestRead(t, source[4])
+						profile["dns_mode"], profile["dns_protocol"] = "custom", protocol
+						source[4] = externalTestJSON(t, profile)
+						captured := append([]string(nil), source...)
+						plan := importedNaiveH2Compile(t, source)
+						defer plan.Close()
+						capture, err := plan.ImportedDesktopCapture()
+						if err != nil || capture.SelectedDNS.Type != protocol || capture.SelectedDNS.Host != "resolver.example.net" || capture.SelectedDNS.Port != 8443 || capture.SelectedDNS.Path != "/owned-query" || capture.SelectedDNS.ServerName != "resolver.example.net" || len(capture.BootstrapDNS) != 3 {
+							t.Fatal("selected hostname policy lost exact captured fields or complete lower tree", err, capture)
+						}
+						if !reflect.DeepEqual(captured, source) || plan.Healthy() {
+							t.Fatal("DNS admission changed source or invented native proof")
+						}
+						for _, resolver := range capture.BootstrapDNS {
+							if resolver.Physical {
+								t.Fatal("dormant lower resolver acquired physical authority", resolver)
+							}
+						}
+						if len(capture.PhysicalRoots) != 1 {
+							t.Fatal("DNS extension added a physical owner", capture.PhysicalRoots)
+						}
+						for _, destination := range capture.PhysicalRoots[0].Destinations {
+							if destination.Network != "tcp" {
+								t.Fatal("final UoT granted lower CONNECT UDP", destination)
+							}
+						}
+						node, err := NewNodeProfile(source[2], source[3], source[4], source[5], source[6])
+						if err != nil {
+							t.Fatal(err)
+						}
+						original := importedPQGraph(t, node.Config())
+						for _, fault := range []string{"missing-bootstrap", "foreign-bootstrap", "cycle", "changed-port", "changed-transport", "changed-tls", "lower-bypass"} {
+							graph := predecessorCopy(original)
+							rows := graph["dns"].(map[string]any)["servers"].([]any)
+							lower := rows[3].(map[string]any)
+							boot := rows[2].(map[string]any)
+							switch fault {
+							case "missing-bootstrap":
+								graph["dns"].(map[string]any)["servers"] = append(rows[:2], rows[3])
+							case "foreign-bootstrap":
+								lower["domain_resolver"].(map[string]any)["server"] = "foreign"
+							case "cycle":
+								boot["domain_resolver"] = map[string]any{"server": "routervpn-predecessor-bootstrap-0"}
+							case "changed-port":
+								boot["server_port"] = float64(53)
+							case "changed-transport":
+								boot["type"] = "https"
+							case "changed-tls":
+								lower["tls"].(map[string]any)["server_name"] = "foreign.invalid"
+							case "lower-bypass":
+								lower["detour"] = "direct"
+							}
+							if err := importedNaiveH2DNS(graph, externalTestFind(t, graph, "proxy"), false); err == nil {
+								t.Fatal("dormant resolver exception accepted a changed original tree", fault)
+							}
+						}
+					})
+				}
+			}
 		}
 	}
 }

@@ -399,31 +399,26 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   }
   for transport in ["udp","h3"] {
    var candidate=final;candidate.routerProfiles[0].dnsProtocol=transport
-   let before=try encoded(candidate),selection=RouterVPNModel();selection.bundle=candidate
-   IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:before]
-   var profile=try JSONSerialization.jsonObject(with:Data(source[4].utf8)) as! [String:Any];profile["dns_protocol"]=transport;var replaced=args;replaced["profile"]=String(decoding:try encoded(profile),as:UTF8.self)
-   if transport=="udp" {
-    try check("Naive H2 picker offers literal unlayered Home UDP",selection.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
-    try selection.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)
-    try check("Naive H2 save retains selected Home UDP and original sources",selection.writes==1 && selection.bundle!.routerProfiles[0].dnsProtocol=="udp" && selection.bundle!.routerProfiles[0].adGuardIPv4==paired.adGuardIPv4 && selection.bundle!.profiles==final.profiles && (try selection.iosMultihopEntryBundle(for:selection.bundle!)).profiles==original.profiles)
-    let graph=try JSONSerialization.jsonObject(with:Data(compile(replaced).utf8)) as! [String:Any],resolvers=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
-    try check("Naive H2 actual Home UDP is final-owned",resolvers.count==2 && resolvers[0]["type"] as? String=="udp" && resolvers[0]["server"] as? String==paired.adGuardIPv4 && resolvers[0]["server_port"] as? Int==53 && resolvers[0]["detour"] as? String=="proxy")
-    try check("Naive H2 retains the original lower resolver owner",resolvers[1]["detour"] as? String=="entry-wg" && resolvers[1]["type"] as? String=="udp" && resolvers[1]["server"] as? String==paired.adGuardIPv4)
-   }else{
-    try check("Naive H2 picker refuses incompatible saved Home "+transport,!selection.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
-    try reject("Naive H2 save refuses lower DNS "+transport){try selection.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)}
-    try check("Naive H2 refusal leaves saved policy unchanged",selection.writes==0 && encoded(selection.bundle!)==before)
-    try reject("Naive H2 actual lower DNS refusal "+transport){_ = try compile(replaced)}
-   }
+   if transport=="h3" {candidate.routerProfiles[0].dnsServerName="resolver.example.net";candidate.routerProfiles[0].dnsPath="/owned-dns-query"}
+   let selection=RouterVPNModel();selection.bundle=candidate
+   IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:try encoded(candidate)]
+   var profile=try JSONSerialization.jsonObject(with:Data(source[4].utf8)) as! [String:Any];profile["dns_protocol"]=transport;if transport=="h3" {profile["dns_server_name"]="resolver.example.net";profile["dns_path"]="/owned-dns-query"};var replaced=args;replaced["profile"]=String(decoding:try encoded(profile),as:UTF8.self)
+   try check("Naive H2 picker offers final-owned selected DNS "+transport,selection.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
+   try selection.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)
+   try check("Naive H2 save retains selected DNS and original sources",selection.writes==1 && selection.bundle!.routerProfiles[0].dnsProtocol==transport && selection.bundle!.routerProfiles[0].adGuardIPv4==paired.adGuardIPv4 && selection.bundle!.profiles==final.profiles && (try selection.iosMultihopEntryBundle(for:selection.bundle!)).profiles==original.profiles)
+   let graph=try JSONSerialization.jsonObject(with:Data(compile(replaced).utf8)) as! [String:Any],resolvers=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
+   try check("Naive H2 actual selected DNS is final-owned",resolvers.count==2 && resolvers[0]["type"] as? String==transport && resolvers[0]["server"] as? String==paired.adGuardIPv4 && resolvers[0]["detour"] as? String=="proxy")
+   try check("Naive H2 retains the dormant lower resolver owner",resolvers[1]["detour"] as? String=="entry-wg" && resolvers[1]["type"] as? String==transport && resolvers[1]["server"] as? String==paired.adGuardIPv4)
   }
-  for transport in ["tcp","tls","https"] {for lower in ["tcp","tcp-custom-exit","udp","h3","missing"] {
+  for transport in ["tcp","tls","https","h3"] {for lower in ["tcp","tcp-custom-exit","udp","h3","missing"] {
    var raw=try JSONSerialization.jsonObject(with:Data(source[4].utf8)) as! [String:Any]
    raw["dns_mode"]="custom";raw["dns_protocol"]=transport;raw["dns_host"]="resolver.example.net";raw["dns_port"]=8853;raw["dns_server_name"]="resolver.example.net";raw["dns_path"]="/owned-dns-query"
    if lower != "missing"{raw["dns_bootstrap"]=["server":["type":lower=="tcp-custom-exit" ? "tcp":lower,"tag":"external-dns-bootstrap","server":"203.0.113.54","server_port":5354,"detour":lower=="tcp-custom-exit" ? "custom-exit":"proxy"],"query":["server":"external-dns-bootstrap","timeout":"3s","disable_optimistic_cache":true]] as [String:Any]}
+   if lower=="h3" {var bootstrap=raw["dns_bootstrap"] as! [String:Any],server=bootstrap["server"] as! [String:Any];server["tls"]=["enabled":true,"server_name":"bootstrap.example.net"];server["path"]="/bootstrap-query";bootstrap["server"]=server;raw["dns_bootstrap"]=bootstrap}
    var candidate=final;candidate.routerProfiles=[try capturedProfile(raw)]
    let selection=RouterVPNModel();selection.bundle=candidate;IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:try encoded(candidate)]
    var selectedArgs=args;selectedArgs["profile"]=String(decoding:try encoded(raw),as:UTF8.self);selectedArgs["dns"]=lower=="missing" ? "":String(decoding:try encoded(raw["dns_bootstrap"]!),as:UTF8.self)
-   if lower.hasPrefix("tcp"){
+   if lower != "missing"{
     try check("Naive H2 picker offers captured compatible hostname bootstrap",selection.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id,entryProfile:first).contains(mode))
     try selection.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:kind)
     try check("Naive H2 save retains selected and bootstrap policy",selection.bundle!.routerProfiles[0].dnsBootstrap==candidate.routerProfiles[0].dnsBootstrap && selection.bundle!.routerProfiles[0].dnsHost=="resolver.example.net" && selection.bundle!.routerProfiles[0].dnsProtocol==transport)
@@ -1341,7 +1336,7 @@ def verify_naive_h2_literal(work, compiler, runtime_env, sources):
     print(result.stdout, end='', flush=True)
 
 
-def main(only_naive_h2_literal=False):
+def main(only_naive_h2_literal=False, only_naive_h2_dns=False):
     view = (APP / 'IOSMultihopView.swift').read_text()
     validate_imported_picker(view)
     capture = view[view.index('@MainActor\nextension RouterVPNModel {'):view.index('struct IOSMultihopView: View')]
@@ -1364,6 +1359,16 @@ def main(only_naive_h2_literal=False):
         subprocess.run(['swiftc', '-swift-version', '6', '-module-cache-path', str(work/'module-cache'), '-emit-module', '-emit-library', '-module-name', 'Libbox', str(library), '-emit-module-path', str(work/'Libbox.swiftmodule'), '-o', str(work/('libLibbox'+suffix))], check=True, timeout=90)
         subprocess.run(['swiftc', '-swift-version', '6', '-module-cache-path', str(work/'module-cache'), *crypto_flags, '-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSMultihopExecution.swift'), str(APP / 'Models.swift'), str(APP / 'IOSExternalExecution.swift'), str(APP / 'IOSMultihopStartLayer.swift'), str(source), '-o', str(work / 'test')], check=True, timeout=90)
         runtime_env = dict(os.environ, **crypto_env, ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-aes-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-xor-client.json'))
+        if only_naive_h2_dns:
+            sources = export_naive_h2_sources(work)
+            original = sources / 'http-connect--naive-h2--off--off.json'
+            captured = original.read_bytes()
+            result = subprocess.run([str(work/'test'), str(compiler), 'naive-h2', str(original)],
+                                    env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
+            if result.stdout != 'PASS Naive H2 picker 122 checks\n' or original.read_bytes() != captured:
+                raise ValueError('Missing or source-mutating Naive H2 DNS verdict')
+            print(result.stdout, end='', flush=True)
+            return
         if only_naive_h2_literal:
             verify_naive_h2_literal(work, compiler, runtime_env, export_naive_h2_sources(work))
             return
@@ -1405,7 +1410,7 @@ def main(only_naive_h2_literal=False):
         original_naive = naive_source.read_bytes()
         naive = subprocess.run([str(work/'test'), str(compiler), 'naive-h2', str(naive_source)],
                                env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
-        if naive.stdout != 'PASS Naive H2 picker 107 checks\n' or naive_source.read_bytes() != original_naive:
+        if naive.stdout != 'PASS Naive H2 picker 122 checks\n' or naive_source.read_bytes() != original_naive:
             raise ValueError('Missing, foreign, or source-mutating Naive H2 picker verdict: '+repr(naive.stdout))
         print(naive.stdout, end='', flush=True)
         verify_naive_h2_literal(work, compiler, runtime_env, naive_sources)
@@ -1479,4 +1484,6 @@ def main(only_naive_h2_literal=False):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--only-naive-h2-literal', action='store_true', help='Run only the compiler-linked literal H2 layer matrix')
-    main(parser.parse_args().only_naive_h2_literal)
+    parser.add_argument("--only-naive-h2-dns", action="store_true", help="Run the compiler-linked selected DNS and original authority cases")
+    args = parser.parse_args()
+    main(args.only_naive_h2_literal, args.only_naive_h2_dns)

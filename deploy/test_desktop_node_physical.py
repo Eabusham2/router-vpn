@@ -300,6 +300,13 @@ NAIVE_CONNECT_LITERAL_CASES += tuple(carrier+"/"+endpoint+"/final-layer/"+layer+
     for fault in (("home-udp", "layer-password", "layer-whitening", "layer-route", "layer-bypass") if endpoint == "192.0.2.77" else ("home-udp",)))
 NAIVE_CONNECT_LITERAL_VERDICTS = (NAIVE_CONNECT_LITERAL_ROOT, *(NAIVE_CONNECT_LITERAL_ROOT+"/"+case for case in NAIVE_CONNECT_LITERAL_CASES))
 NAIVE_CONNECT_LITERAL_SUITE = ("naive-connect-literal-home", "./protocol/routervpnamnezia", "^"+NAIVE_CONNECT_LITERAL_ROOT+"$", NAIVE_CONNECT_LITERAL_VERDICTS)
+NAIVE_CONNECT_DNS_ROOT = "TestRouterVPNDesktopNodeNaiveCONNECTDNSPolicies"
+NAIVE_CONNECT_DNS_CASES = ("query-shape-controls",) + tuple(carrier+"/"+layer+"/"+policy
+    for carrier in ("http-connect", "https-connect") for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
+    for policy in ("udp", "tcp", "tls", "https", "h3", "https-hostname-udp", "h3-hostname-udp")) + tuple(
+    "negative/"+fault for fault in ("wrong-port", "wrong-path", "wrong-server-name", "wrong-trust", "wrong-bootstrap"))
+NAIVE_CONNECT_DNS_VERDICTS = (NAIVE_CONNECT_DNS_ROOT, *(NAIVE_CONNECT_DNS_ROOT+"/"+case for case in NAIVE_CONNECT_DNS_CASES))
+NAIVE_CONNECT_DNS_SUITE = ("naive-connect-selected-dns", "./protocol/routervpnamnezia", "^"+NAIVE_CONNECT_DNS_ROOT+"$", NAIVE_CONNECT_DNS_VERDICTS)
 NAIVE_H3_LITERAL_ROOT = "TestRouterVPNDesktopNodeNaiveH3Literal"
 NAIVE_H3_LITERAL_VERDICTS = (NAIVE_H3_LITERAL_ROOT, *(NAIVE_H3_LITERAL_ROOT+"/"+case for case in NAIVE_LITERAL_CASES))
 NAIVE_H3_LITERAL_SUITE = ("naive-h3-literal-policy", "./protocol/routervpnamnezia", "^"+NAIVE_H3_LITERAL_ROOT+"$", NAIVE_H3_LITERAL_VERDICTS)
@@ -1142,6 +1149,8 @@ def execute_baseline_suite(baselines, suite):
         require_native_verdicts(output, NAIVE_LITERAL_VERDICTS, "Naive captured IPv6 TLS and original DNS owner")
     if name == NAIVE_CONNECT_LITERAL_SUITE[0]:
         require_native_verdicts(output, NAIVE_CONNECT_LITERAL_VERDICTS, "CONNECT literal H2 final-owned Home UDP and retained bootstrap")
+    if name == NAIVE_CONNECT_DNS_SUITE[0]:
+        require_native_verdicts(output, NAIVE_CONNECT_DNS_VERDICTS, "CONNECT literal H2 complete selected DNS policies and dormant lower resolvers")
     if name == NAIVE_H3_LITERAL_SUITE[0]:
         require_native_verdicts(output, NAIVE_H3_LITERAL_VERDICTS, "Naive H3 captured QUIC tuple, IPv6 TLS and original DNS owner")
     if name == "native-lifecycle-admission":
@@ -1348,6 +1357,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         NAIVE_TRANSPORT_SUITE,
         NAIVE_LITERAL_SUITE,
         NAIVE_CONNECT_LITERAL_SUITE,
+        NAIVE_CONNECT_DNS_SUITE,
         NAIVE_H3_LITERAL_SUITE,
         ("naive-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeNaiveWrongCredential$",
          ("TestRouterVPNDesktopNodeNaiveWrongCredential",)),

@@ -470,9 +470,9 @@ enum IOSImportedEntryMultihop {
         }
         guard used == Set(files.keys) else { throw issue() }
         if ["http-connect", "https-connect"].contains(entry) {
-            // Naive's inner UoT does not authorize UDP below its own H2 dial.
-            // Preserve the original selected DNS and bootstrap; refuse an
-            // incompatible tree instead of replacing it with another policy.
+            // Literal Naive H2 and its optional literal AES/XOR peer never
+            // consult the retained lower resolver tree. Selected DNS and its
+            // explicit bootstrap keep their native transports on final UoT.
             let selectedTransport = try selectedDNSTransport(final)
             let dnsMode = (final["dns_mode"] as? String ?? "home").lowercased()
             guard final["dns_host"] == nil || final["dns_host"] is String else { throw issue() }
@@ -484,11 +484,10 @@ enum IOSImportedEntryMultihop {
             // Literal H2 and independently captured AES layer endpoints need
             // no lower DNS query. Retain the resolver tree; this grants only
             // final-owned application UDP, not UDP below the H2 dial.
-            let literalH2UDP = mode == "naive-h2" && selectedTransport == "udp"
+            let dormantH2DNS = mode == "naive-h2"
                 && ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(final["start_layer"] as? String ?? "")
-                && literalAddress(resolverHost) && final["dns_bootstrap"] == nil
-            guard literalH2UDP || ["tcp", "tls", "https"].contains(selectedTransport) else { throw issue() }
-            if literalH2UDP && !["", "off"].contains(final["start_layer"] as? String ?? "") {
+            guard (dormantH2DNS ? ["udp", "tcp", "tls", "https", "h3"] : ["tcp", "tls", "https"]).contains(selectedTransport) else { throw issue() }
+            if dormantH2DNS && !["", "off"].contains(final["start_layer"] as? String ?? "") {
                 // A hostname on the outer AES peer would need the unusable
                 // lower UDP resolver even though Naive itself is literal.
                 _ = try IOSMultihopStartLayer.capture(profile: final, profiles: profiles)
@@ -505,7 +504,7 @@ enum IOSImportedEntryMultihop {
             if let raw = final["dns_bootstrap"] {
                 guard !literalAddress(resolverHost), let bootstrap = raw as? [String: Any],
                       Set(bootstrap.keys) == Set(["server", "query"]), let server = bootstrap["server"] as? [String: Any],
-                      ["tcp", "tls", "https"].contains(server["type"] as? String ?? ""),
+                      (dormantH2DNS ? ["udp", "tcp", "tls", "https", "h3"] : ["tcp", "tls", "https"]).contains(server["type"] as? String ?? ""),
                       server["tag"] as? String == "external-dns-bootstrap",
                       ["proxy", "custom-exit"].contains(server["detour"] as? String ?? ""),
                       let host = server["server"] as? String, literalAddress(host),
@@ -576,10 +575,10 @@ enum IOSImportedEntryMultihop {
             let uot = try configuredCONNECTUoT(final: final, profiles: profiles)
             let datagrams = reality || uot || naiveH2
             let layers = datagrams ? ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"] : ["", "off"]
-            // validateNaiveH2 above has already checked the narrow literal
-            // UDP resolver tree before this common choice list. Captured
-            // Start Layer authority is validated separately for each node.
-            let transports = naiveH2 ? ["udp", "tcp", "tls", "https"] : datagrams ? ["udp", "tcp", "tls", "https", "h3"] : ["tcp", "tls", "https"]
+            // Naive H2's strict literal transport and optional literal final
+            // layer retain the complete dormant lower resolver tree. These
+            // datagrams belong to selected DNS on the established final path.
+            let transports = datagrams ? ["udp", "tcp", "tls", "https", "h3"] : ["tcp", "tls", "https"]
             guard entry["start_layer"] == nil || entry["start_layer"] is String,
                   ["start_layer", "dns_mode", "dns_protocol"].allSatisfy({ final[$0] == nil || final[$0] is String }) else { throw issue() }
             let transport = try selectedDNSTransport(final)
