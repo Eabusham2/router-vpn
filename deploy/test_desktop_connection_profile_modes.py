@@ -12,6 +12,7 @@ import argparse
 import importlib.util
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 
@@ -34,11 +35,21 @@ def block(source, marker):
     return source[start:end]
 
 
+def behavioral_diagnostic(output):
+    # PowerShell 7 decorates each wrapped error line independently. Remove only
+    # SGR styling and its leading continuation gutter; preserve message words,
+    # punctuation and inline pipes before comparing the exact asserted cause.
+    plain = re.sub(r"\x1b\[[0-9;:]*m", "", output)
+    plain = re.sub(r"(?m)^[ \t]*\|[ \t]?", "", plain)
+    return " ".join(plain.split())
+
+
 def run(command, *, negative=False, witness=None):
     result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=90)
     output = result.stdout + result.stderr
     if negative:
-        if result.returncode == 0 or "PROFILE-CHECK:" not in output or (witness and witness not in " ".join(output.split())):
+        diagnostic = behavioral_diagnostic(output)
+        if result.returncode == 0 or "PROFILE-CHECK:" not in diagnostic or (witness and witness not in diagnostic):
             raise RuntimeError("Negative did not fail on a behavioral assertion:\n" + output)
     elif result.returncode:
         raise RuntimeError("Shipping fixture failed:\n" + output)

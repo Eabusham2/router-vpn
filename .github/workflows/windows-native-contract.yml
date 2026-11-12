@@ -333,6 +333,8 @@ jobs:
       - name: Complete profiles preserve every exit transport and execution choice
         shell: pwsh
         run: |
+          python deploy/test_desktop_connection_profile_modes_runner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Windows profile diagnostic verdict regressions failed' }
           python deploy/test_desktop_connection_profile_modes.py --platform windows --shell pwsh
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 connection profile mode regressions failed' }
           python deploy/test_desktop_connection_profile_modes.py --platform windows --shell powershell.exe
