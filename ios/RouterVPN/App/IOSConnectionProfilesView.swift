@@ -312,6 +312,30 @@ private enum IOSConnectionProfileStore {
         let value = try snapshot(model: model, name: name); values.append(value); try persist(values); return value
     }
 
+    static func appendCandidate(name: String, profiles: [RouterProfile], current: () throws -> Void) throws -> IOSConnectionProfileRecord {
+        try current()
+        guard (2...8).contains(profiles.count), let final = profiles.last,
+              final.normalizedNodeKind == "router-vpn", let nodes = final.multihopNodes,
+              nodes.count == profiles.count, nodes.last?.mode == "shadowsocks",
+              nodes.map(\.id) == profiles.map(\.id) else { throw issue("The proposed future chain lost its complete original policies.") }
+        try IOSMultihopNodeSelection.validate(nodes, execution: "local", entryID: nil, entryMode: nil,
+            exitID: nil, exitMode: nil, controlID: final.id)
+        var record = IOSConnectionProfileRecord(id: UUID().uuidString.lowercased(), name: try cleanName(name),
+            nodeID: final.id, nodeKind: "router-vpn", mode: "shadowsocks", customLayers: [],
+            preferences: try capturePreferences(final), updatedAt: Date())
+        record.chainPolicies = try profiles.map { profile in
+            IOSConnectionEntryCapture(nodeID: profile.id, nodeKind: profile.normalizedNodeKind,
+                nodeProofID: profile.nodeProofID, externalProtocol: profile.external?.protocolName,
+                externalPublicIP: profile.external?.expectedPublicIP, preferences: try capturePreferences(profile))
+        }
+        record = try validateStoredProfiles([record])[0]
+        var values = try loadAll(); guard values.count < 64 else { throw issue("Connection profile limit reached.") }
+        values.append(record)
+        try current() // Final fresh source/receipt observation immediately before atomic profile write.
+        try persist(values)
+        return record
+    }
+
     static func update(model: RouterVPNModel, id: String, name: String) throws -> IOSConnectionProfileRecord {
         var values = try loadAll(); guard let index = values.firstIndex(where: { $0.id == id }) else { throw issue("Connection profile was not found.") }
         let value = try snapshot(model: model, name: name, id: id); values[index] = value; try persist(values); return value
@@ -824,6 +848,14 @@ private enum IOSConnectionProfileStore {
     }
 
     private static func issue(_ message: String) -> NSError { NSError(domain: "RouterVPN.ConnectionProfiles", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+}
+
+/// This path stores only a complete named future profile. It never calls Load,
+/// writes a linked node, or changes the connected selection.
+@MainActor enum IOSCandidateConnectionProfiles {
+    static func save(name: String, profiles: [RouterProfile], current: () throws -> Void) throws -> String {
+        try IOSConnectionProfileStore.appendCandidate(name: name, profiles: profiles, current: current).name
+    }
 }
 
 @MainActor

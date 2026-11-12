@@ -70,6 +70,7 @@ func failure(_ text:String)->NSError{NSError(domain:"AppleChainProfiles",code:1,
  // SHIPPING_CHAIN_CAPTURE
 }
 
+extension Optional where Wrapped == RouterProfile {func unwrapCandidate()throws->RouterProfile{guard let self else{throw failure("candidate source missing")};return self}}
 @MainActor @main struct Tests {
  static var checks=0
  static func check(_ name:String,_ value:@autoclosure ()throws->Bool)throws{guard try value()else{throw failure(name)};checks+=1}
@@ -187,6 +188,26 @@ func failure(_ text:String)->NSError{NSError(domain:"AppleChainProfiles",code:1,
   try check("invalid import cannot replace original record",store.records==before)
  }
 
+ static func candidateProfiles()throws {
+  let(model,ids)=try setup(3),store=IOSNodeBundleStore.shared
+  let profiles=try ids.map{try stored($0).routerProfiles[0]}
+  let original=store.records,selection=try encoded(model.bundle!),mode=UserDefaults.standard.string(forKey:iosConnectionModeKey)
+  model.profileMutationBlocked=true
+  var observations=0
+  let saved=try IOSConnectionProfileStore.appendCandidate(name:" Future measured path ",profiles:profiles,current:{observations+=1})
+  try check("candidate future profile captures complete path and explicit mode",saved.mode=="shadowsocks" && saved.chainPolicies?.map(\.nodeID)==ids && saved.preferences?.multihopNodes?.map(\.id)==ids)
+  try check("candidate save cannot apply to active connection",store.records==original && encoded(model.bundle!)==selection && model.imports==0 && UserDefaults.standard.string(forKey:iosConnectionModeKey)==mode)
+  let bytes=IOSPrivateJSONStore.bytes,writes=IOSPrivateJSONStore.writes
+  for secret in ["PRIVATE-TOKEN","PRIVATE-SOCKS","PRIVATE-ASSET","api_token","private_key"]{try check("candidate profile omits "+secret,!String(decoding:bytes!,as:UTF8.self).contains(secret))}
+  var checks=0
+  try reject("candidate changed at atomic profile commit"){_ = try IOSConnectionProfileStore.appendCandidate(name:"Stale",profiles:profiles,current:{checks+=1;if checks==2{throw failure("original receipt/source expired")}})}
+  try check("failed adoption leaves saved profile and active source unchanged",IOSPrivateJSONStore.bytes==bytes && IOSPrivateJSONStore.writes==writes && store.records==original && model.imports==0)
+  try reject("connected normal Load remains blocked"){_ = try IOSConnectionProfileStore.load(model:model,id:saved.id)}
+  model.profileMutationBlocked=false
+  _ = try IOSConnectionProfileStore.load(model:model,id:saved.id)
+  try check("future profile uses normal disconnected Load",model.imports==1 && model.bundle?.selectedRouterID==ids.last! && UserDefaults.standard.string(forKey:iosConnectionModeKey)=="shadowsocks")
+ }
+
  static func importedRoundtrip()throws {
   for (method,keySize) in [("2022-blake3-aes-128-gcm",16),("2022-blake3-aes-256-gcm",32),("2022-blake3-chacha20-poly1305",32)] {
   let(model,ids)=try setup(3),store=IOSNodeBundleStore.shared
@@ -197,6 +218,12 @@ func failure(_ text:String)->NSError{NSError(domain:"AppleChainProfiles",code:1,
   middle.routerProfiles=[profile];middle.profiles=[:];try store.save(middle)
   var final=model.bundle!;final.routerProfiles[0].multihopNodes![1].mode="shadowsocks";try store.save(final);model.bundle=try stored(ids.last!)
   let saved=try IOSConnectionProfileStore.add(model:model,name:"Custom middle")
+  let beforeCandidate=store.records,selectedCandidate=try encoded(model.bundle!),imports=model.imports
+  let complete=try model.iosNodeChainBundles(for:model.bundle!).map{try IOSDNSRuntimePolicy.selectedProfile(in:$0).unwrapCandidate()}
+  let future=try IOSConnectionProfileStore.appendCandidate(name:"Measured custom future",profiles:complete,current:{})
+  try check("custom candidate future profile preserves original source",future.chainPolicies?[1].externalProtocol=="shadowsocks" && future.chainPolicies?[1].nodeProofID==nil && store.records==beforeCandidate && encoded(model.bundle!)==selectedCandidate && model.imports==imports)
+  _ = try IOSConnectionProfileStore.load(model:model,id:future.id)
+  try check("custom candidate future Load preserves cipher",try model.iosNodeChainBundles(for:model.bundle!)[1].routerProfiles[0].external?.shadowsocks?.method==method)
   try check("saved custom middle retains external authority",saved.chainPolicies?[1].nodeKind=="external" && saved.chainPolicies?[1].nodeProofID==nil && saved.chainPolicies?[1].externalProtocol=="shadowsocks")
   try check("saved custom middle excludes original credentials",!String(decoding:IOSPrivateJSONStore.bytes!,as:UTF8.self).contains(Data(repeating:0,count:keySize).base64EncodedString()))
   _ = try IOSConnectionProfileStore.load(model:model,id:saved.id)
@@ -206,7 +233,7 @@ func failure(_ text:String)->NSError{NSError(domain:"AppleChainProfiles",code:1,
   try reject("replaced custom public identity"){_ = try IOSConnectionProfileStore.load(model:model,id:saved.id)}
   }
  }
- static func main(){do{defer{UserDefaults.standard.removePersistentDomain(forName:UserDefaults.suite)};try matrix();try failures();try normalization();try importedRoundtrip();print("Apple ordered profile persistence: PASS (\(checks) shipping Swift checks)")}
+ static func main(){do{defer{UserDefaults.standard.removePersistentDomain(forName:UserDefaults.suite)};try matrix();try failures();try normalization();try candidateProfiles();try importedRoundtrip();print("Apple ordered profile persistence: PASS (\(checks) shipping Swift checks)")}
  catch{FileHandle.standardError.write(Data(("FAIL ordered profile persistence: "+error.localizedDescription+"\n").utf8));exit(1)}}
 }
 '''
@@ -242,6 +269,7 @@ def main():
         subprocess.run([str(binary)], check=True, timeout=30)
         actual = code.read_text()
         controls = {
+            'candidate-final-source-guard': ('        try current() // Final fresh source/receipt observation immediately before atomic profile write.', '        // Mutant omits final original-source observation.'),
             'old-two-record-limit': ('(1...IOSMultihopNodeSelection.maximumNodes).contains(replacements.count)', '(1...2).contains(replacements.count)'),
             'lost-ordered-selection': ('profile.multihopNodes = prefs.multihopNodes', 'profile.multihopNodes = nil'),
         }
@@ -253,6 +281,8 @@ def main():
             result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
             if result.returncode != 1 or 'FAIL ordered profile persistence:' not in result.stderr:
                 raise AssertionError('control did not reject the changed shipping behavior: ' + label + result.stdout + result.stderr)
+            if label == 'candidate-final-source-guard' and 'expected rejection: candidate changed at atomic profile commit' not in result.stderr:
+                raise AssertionError('candidate guard control failed without exercising the stale commit')
             print('Apple ordered profile source control rejected: ' + label)
 
 

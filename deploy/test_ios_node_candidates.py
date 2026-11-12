@@ -32,7 +32,9 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
    return try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:0,proofs:proofs ?? [prefix,tail])
   }
   for(method,size)in[("2022-blake3-aes-128-gcm",16),("2022-blake3-aes-256-gcm",32),("2022-blake3-chacha20-poly1305",32)] {
-   let fixture=try sources(3)
+   let fixture=try sources(3).map{try editProfile($0){p in
+    p["name"]=p["id"];p["adguard_ipv6"]="";p["socks_host"]="";p["socks_port"]=0;p["socks_username"]="";p["socks_password"]=""
+   }}
    var paired=try object(fixture[1]), files=paired["profiles"] as! [String:[String:String]]
    var graph=try object(Data(base64Encoded:files["shadowsocks"]!["sing-box.json"]!)!),out=graph["outbounds"] as! [[String:Any]]
    out[0]["method"]=method;out[0]["password"]=Data(repeating:1,count:size).base64EncodedString();graph["outbounds"]=out
@@ -58,6 +60,30 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
    legacyFiles["shadowsocks"]!["sing-box.json"]=try data(legacyGraph).base64EncodedString();legacy["profiles"]=legacyFiles
    let legacyResult=try compile(["legacy":data(legacy),"custom":data(imported)])
    try check("paired legacy stays unscored",legacyResult.rows.first{$0.id == "chain-node-1"}?.input.isEmpty == true)
+   let original=try IOSNodeChainCapture.compile(bundles:fixture)
+   defer{try? original.plan.close()}
+   let records=["entry":fixture[0],"paired":try data(paired),"final":fixture[2],"custom":try data(imported)]
+   if method == "2022-blake3-aes-256-gcm" {
+    let pairedProposal=try IOSNodeCandidateProposal.compile(original:original,records:records,position:0,candidateID:"chain-node-1",measuredInput:actual.rows[0].input)
+    try check("future paired proposal keeps selected final own policy",pairedProposal.profiles.count==2 && pairedProposal.profiles.last?.id=="chain-node-1" && pairedProposal.profiles.last?.adGuardIPv4 == "10.81.0.53" && pairedProposal.profiles.last?.multihopNodes?.map(\.id)==["chain-node-0","chain-node-1"])
+   } else {
+    do {
+     _ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:0,candidateID:"chain-node-1",measuredInput:actual.rows[0].input)
+     throw NSError(domain:"UnexpectedCandidateProposal",code:1)
+    } catch {
+     try check("unsupported paired final explains independent timing eligibility",error.localizedDescription.contains("AES-256 Shadowsocks 2022 paired final") && error.localizedDescription.contains("score remains usable"))
+    }
+   }
+   let customInput=combined.rows.first{$0.id=="custom"}!.input
+   let customProposal=try IOSNodeCandidateProposal.compile(original:original,records:records,position:0,candidateID:"custom",measuredInput:customInput)
+   try check("future imported proposal preserves original paired final",customProposal.profiles.map(\.id)==["chain-node-0","custom","chain-node-2"] && customProposal.profiles[1].normalizedNodeKind=="external" && customProposal.profiles[1].nodeProofID==nil && customProposal.profiles.last?.adGuardIPv4 == "10.82.0.53")
+   try reject("future custom candidate after second prefix"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:1,candidateID:"custom",measuredInput:customInput)}
+   var stale=records;stale["entry"]=try editProfile(fixture[0]){$0["home_lan_access"]=false}
+   try reject("future proposal changed original prefix"){_ = try IOSNodeCandidateProposal.compile(original:original,records:stale,position:0,candidateID:"custom",measuredInput:customInput)}
+   var changedFinal=records;changedFinal["final"]=try editProfile(fixture[2]){$0["adguard_ipv4"]="10.82.0.54"}
+   try reject("future custom proposal substituted final DNS"){_ = try IOSNodeCandidateProposal.compile(original:original,records:changedFinal,position:0,candidateID:"custom",measuredInput:customInput)}
+   try reject("future proposal changed measured source"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:0,candidateID:"custom",measuredInput:actual.rows[0].input)}
+   try check("proposal compilation leaves original chain unchanged",original.members.count==3 && original.members[1].id=="chain-node-1" && original.members.last?.id=="chain-node-2")
    try reject("no eligible inventory"){_ = try compile(["only-prefix":fixture[0]])}
    let lazy=IOSNodeCandidatePrefix(position:0,profile_id:prefix.profile_id,node_id:prefix.node_id,mode:"shadowsocks")
    try reject("lazy SS prefix"){_ = try compile(["candidate":data(paired)],[lazy,tail])}
@@ -100,18 +126,19 @@ def main():
             subprocess.run(options+['-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-lcrypto','-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/'libCryptoKit.so')],check=True,timeout=90)
             options+=['-lCryptoKit']
         command=options+['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
-        files=['Models.swift','IOSMultihopStartLayer.swift','IOSCandidateCatalogPublication.swift','IOSNodeCandidateCapture.swift','IOSNodeCandidateResult.swift']
+        files=['Models.swift','IOSMultihopStartLayer.swift','IOSCandidateCatalogPublication.swift','IOSNodeChainCapture.swift','IOSNodeCandidateCapture.swift','IOSNodeCandidateResult.swift','IOSNodeCandidateProposal.swift']
         binary=work/'test'
         subprocess.run(command+[str(APP/name) for name in files]+[str(test),'-o',str(binary)],check=True,timeout=90)
         subprocess.run([str(binary),str(compiler)],check=True,timeout=180)
         for filename, before, after, marker in [
             ('IOSNodeCandidateCapture.swift', 'guard LibboxRouterNodeChainCandidateInputSupported(input) else', 'guard true else', 'paired legacy stays unscored'),
             ('IOSNodeCandidateResult.swift', 'expires_at - measured_at == 120000,', 'true,', 'ACCEPTED receipt foreign expires_at'),
+            ('IOSNodeCandidateProposal.swift', 'Array(priorNodes.prefix(position + 1)) == Array(afterNodes.prefix(position + 1)),', 'true,', 'ACCEPTED future proposal changed original prefix'),
         ]:
             code=(APP/filename).read_text();assert code.count(before)==1
             mutant=work/filename;mutant.write_text(code.replace(before,after))
             subprocess.run(command+[str(mutant if name==filename else APP/name) for name in files]+[str(test),'-o',str(binary)],check=True,timeout=90)
             result=subprocess.run([str(binary),str(compiler)],capture_output=True,text=True,timeout=180)
             if result.returncode==0 or marker not in result.stdout+result.stderr:raise AssertionError('candidate causal control failed: '+filename+' '+result.stderr[-1500:])
-        print('Apple candidate capture/receipt: two causal controls rejected')
+        print('Apple candidate capture/receipt/proposal: three causal controls rejected')
 if __name__=='__main__':main()

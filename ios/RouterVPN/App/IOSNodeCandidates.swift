@@ -29,7 +29,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
     private let send: Send
     private let recovered: @MainActor () -> Bool
     private let pause: @MainActor () async -> Void
-    private var cancelled = false
+    private var cancelled = false, observationActive = false
     init(epoch: String, owner: String, send: @escaping Send, recovered: @escaping @MainActor () -> Bool,
          pause: @escaping @MainActor () async -> Void = { try? await Task.sleep(for: .milliseconds(250)) }) throws {
         guard UUID(uuidString: epoch) != nil, IOSCandidateCatalogPublication.validRequest(owner) else { throw IOSNodeCandidateResult.issue() }
@@ -67,6 +67,13 @@ private final class IOSCandidateReply: @unchecked Sendable {
         throw CancellationError()
     }
     func observe(request: String, metadata: IOSNodeCandidateMetadata) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 4
+        while observationActive {
+            guard !cancelled, !Task.isCancelled, ProcessInfo.processInfo.systemUptime < deadline else { throw CancellationError() }
+            await pause()
+        }
+        observationActive = true
+        defer { observationActive = false }
         guard !cancelled, !Task.isCancelled,
               let raw = try await reply("candidate-status", request: request).status else { throw CancellationError() }
         guard !cancelled, !Task.isCancelled else { throw CancellationError() }
@@ -96,6 +103,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
     }
     struct Score: Identifiable {
         let id: String, name: String
+        let token = UUID()
         let receipt: IOSNodeCandidateResult
         let benchmark: IOSNodeCandidateResult.Benchmark
     }
@@ -104,6 +112,15 @@ private final class IOSCandidateReply: @unchecked Sendable {
     @Published var selectedPrefix = 0
     @Published private(set) var scores: [Score] = []
     @Published private(set) var text = "Connect an ordered Local path to compare saved TCP candidates."
+    @Published private(set) var preparing = false
+    @Published private(set) var proposalDescription = ""
+    @Published private(set) var profileMessage = ""
+    private var proposalAction: ((Score) async throws -> IOSNodeCandidateProposal)?
+    private var saveAction: ((Score, IOSNodeCandidateProposal, String) async throws -> String)?
+    private var prepared: (score: Score, proposal: IOSNodeCandidateProposal)?
+    private var proposalGeneration = UUID(), generation = UUID()
+    var canPrepare: Bool { running && !preparing && proposalAction != nil }
+    var canSave: Bool { canPrepare && prepared != nil }
     private var task: Task<Void, Never>?
     private var transaction: IOSNodeCandidateTransaction?
     private var cancelled = false
@@ -141,11 +158,16 @@ private final class IOSCandidateReply: @unchecked Sendable {
     }
     func start(model: RouterVPNModel) {
         guard !running, Self.supported(model), prefixes.contains(where: { $0.position == selectedPrefix }) else { return }
-        let position = selectedPrefix, owner = Self.nonce()
+        let position = selectedPrefix, owner = Self.nonce(), round = UUID()
+        generation = round; prepared = nil; proposalDescription = ""; profileMessage = ""
         cancelled = false; running = true; scores = []; text = "Capturing original saved candidate sources…"
         task = Task { @MainActor [weak self, weak model] in
             guard let self, let model else { return }
-            defer { self.running = false; self.transaction = nil; self.task = nil }
+            defer {
+                self.running = false; self.transaction = nil; self.task = nil
+                self.proposalAction = nil; self.saveAction = nil; self.prepared = nil
+                self.proposalDescription = ""; self.preparing = false; self.generation = UUID()
+            }
             do {
                 try await IOSMTUControl.withHold(model: model) {
                     let binding = try await IOSMTUControl.capture(model), info = try await self.information(binding)
@@ -161,7 +183,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                     var failure: Error?
                     do {
                         let current: @MainActor @Sendable () throws -> Void = {
-                            guard !self.cancelled, !Task.isCancelled, self.selectedPrefix == position, IOSMTUControl.current(binding, model: model) else { throw CancellationError() }
+                            guard self.generation == round, !self.cancelled, !Task.isCancelled, self.selectedPrefix == position, IOSMTUControl.current(binding, model: model) else { throw CancellationError() }
                             try capture.requireCurrent()
                         }
                         let metadata = try await owned.open(prefix: position)
@@ -184,6 +206,44 @@ private final class IOSCandidateReply: @unchecked Sendable {
                             }
                             self.prune()
                         }
+                        let currentResult: @MainActor @Sendable (Score) throws -> Void = { score in
+                            try current()
+                            guard self.scores.contains(where: { $0.token == score.token }),
+                                  let target = metadata.targets.first(where: { $0.id == score.id }) else { throw IOSNodeCandidateResult.issue() }
+                            _ = try score.receipt.score(request: score.receipt.request_id, target: target, metadata: metadata,
+                                now: Int64(Date().timeIntervalSince1970 * 1000))
+                        }
+                        let observedRequest = lastRequest
+                        self.proposalAction = { score in
+                            try currentResult(score)
+                            try await owned.observe(request: observedRequest, metadata: metadata)
+                            try currentResult(score)
+                            guard let originalInput = binding.identity.nodeChainSource,
+                                  let bundle = try JSONSerialization.jsonObject(with: binding.identity.bundleData) as? [String: Any],
+                                  let id = bundle["selectedRouterID"] as? String,
+                                  let profiles = bundle["routerProfiles"] as? [[String: Any]],
+                                  profiles.filter({ $0["id"] as? String == id }).count == 1,
+                                  let final = profiles.first(where: { $0["id"] as? String == id }),
+                                  let row = capture.rows.first(where: { $0.id == score.id }) else { throw IOSNodeCandidateCapture.issue() }
+                            let original = try IOSNodeChainCapture.reopen(String(decoding: originalInput, as: UTF8.self), selectedProfile: final)
+                            defer { try? original.plan.close() }
+                            guard original.sourceSHA256 == capture.chainSource, original.configSHA256 == capture.chainConfig else { throw IOSNodeCandidateCapture.issue() }
+                            let proposal = try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
+                                position: position, candidateID: score.id, measuredInput: row.input)
+                            try currentResult(score)
+                            return proposal
+                        }
+                        self.saveAction = { score, proposal, name in
+                            try currentResult(score)
+                            let selected = self.proposalGeneration
+                            try await owned.observe(request: observedRequest, metadata: metadata)
+                            try currentResult(score)
+                            guard selected == self.proposalGeneration, self.prepared?.score.token == score.token else { throw IOSNodeCandidateResult.issue() }
+                            return try IOSCandidateConnectionProfiles.save(name: name, profiles: proposal.profiles) {
+                                try currentResult(score)
+                                guard selected == self.proposalGeneration, self.prepared?.score.token == score.token else { throw IOSNodeCandidateResult.issue() }
+                            }
+                        }
                         self.text = "TCP connection times through the retained prefix. Scores expire 120 seconds after each completion. Close results to release MTU. Unsupported or failed candidates have no score."
                         while !self.scores.isEmpty {
                             try current(); try await owned.observe(request: lastRequest, metadata: metadata); try current(); self.prune()
@@ -201,14 +261,45 @@ private final class IOSCandidateReply: @unchecked Sendable {
             } catch { self.scores = []; self.text = "Candidate comparison closed or discarded because its original source, request or tunnel changed." }
         }
     }
+    func prepare(_ score: Score) {
+        guard canPrepare, let action = proposalAction else { return }
+        let selected = UUID(); proposalGeneration = selected
+        preparing = true; prepared = nil; proposalDescription = ""; profileMessage = "Compiling the complete future connection…"
+        Task { @MainActor in
+            defer { if self.proposalGeneration == selected { self.preparing = false } }
+            do {
+                let proposal = try await action(score)
+                guard self.proposalGeneration == selected, self.running, !self.cancelled else { throw CancellationError() }
+                self.prepared = (score, proposal); self.proposalDescription = proposal.description
+                self.profileMessage = "Name this complete future profile. The active connection will stay unchanged."
+            } catch { if self.proposalGeneration == selected { self.profileMessage = "Future profile could not be prepared: \(error.localizedDescription)" } }
+        }
+    }
+    func save(name: String) {
+        guard canSave, let prepared, let action = saveAction else { return }
+        let selected = proposalGeneration
+        preparing = true
+        Task { @MainActor in
+            defer { if self.proposalGeneration == selected { self.preparing = false } }
+            do {
+                let saved = try await action(prepared.score, prepared.proposal, name)
+                guard selected == self.proposalGeneration else { return }
+                self.profileMessage = "Saved \(saved) for a future connection. Disconnect, then use Profiles → Load to revalidate it."
+                self.prepared = nil; self.proposalDescription = ""
+            } catch { if selected == self.proposalGeneration { self.profileMessage = "Profile was not saved: \(error.localizedDescription)" } }
+        }
+    }
     private func prune() {
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         scores.removeAll { now < $0.receipt.measured_at || now >= $0.receipt.expires_at }
         scores.sort { $0.benchmark.trimmed_mean_ms < $1.benchmark.trimmed_mean_ms }
+        if let prepared, !scores.contains(where: { $0.token == prepared.score.token }) {
+            self.prepared = nil; proposalDescription = ""; proposalGeneration = UUID(); preparing = false
+        }
     }
     func cancel() {
         guard running else { return }
-        cancelled = true; scores = []; transaction?.cancel(); task?.cancel()
+        cancelled = true; scores = []; prepared = nil; proposalDescription = ""; proposalGeneration = UUID(); transaction?.cancel(); task?.cancel()
         text = "Cancelling; MTU remains paused until the original native owner joins."
     }
 }
@@ -217,6 +308,7 @@ struct IOSNodeCandidatesCard: View {
     @EnvironmentObject private var model: RouterVPNModel
     @ObservedObject var probe: IOSNodeCandidates
     let otherTestRunning: Bool
+    @State private var profileName = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Candidate TCP connection times", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
@@ -229,8 +321,18 @@ struct IOSNodeCandidatesCard: View {
                 if probe.running { probe.cancel() } else { probe.start(model: model) }
             }.disabled(otherTestRunning || (!probe.running && (!IOSNodeCandidates.supported(model) || probe.prefixes.isEmpty)))
             ForEach(probe.scores) { row in
-                Text(String(format: "%@ — %.2f ms (50 TCP connections)", row.name, row.benchmark.trimmed_mean_ms)).font(.caption.monospacedDigit())
+                VStack(alignment: .leading) {
+                    Text(String(format: "%@ — %.2f ms (50 TCP connections)", row.name, row.benchmark.trimmed_mean_ms)).font(.caption.monospacedDigit())
+                    Button("Prepare next connection") { probe.prepare(row) }.disabled(!probe.canPrepare)
+                }
             }
+            if !probe.proposalDescription.isEmpty {
+                Text(probe.proposalDescription).font(.caption)
+                TextField("Future connection profile name", text: $profileName)
+                Button("Save future profile") { probe.save(name: profileName) }
+                    .disabled(!probe.canSave || profileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            if !probe.profileMessage.isEmpty { Text(probe.profileMessage).font(.caption) }
             Text(probe.text).font(.caption).foregroundStyle(.secondary)
         }
         .padding(16).background(.background, in: RoundedRectangle(cornerRadius: 18))

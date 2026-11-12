@@ -67,7 +67,7 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         guard inventory.count <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw issue() }
         return (inventory, rows)
     }
-    private static func member(profile: [String: Any], files: [String: [String: String]]) throws -> String {
+    static func member(profile: [String: Any], files: [String: [String: String]]) throws -> String {
         let layer = profile["start_layer"] as? String ?? "off"
         guard layer.isEmpty || layer == "off" else { throw issue() }
         var failure: NSError?
