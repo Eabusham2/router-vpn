@@ -1,0 +1,850 @@
+//go:build linux && !android && routervpn_server_chain_acceptance
+
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/awgpolicy"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/common/uot"
+	"github.com/sagernet/sing/protocol/socks"
+	"github.com/sagernet/sing/protocol/socks/socks5"
+)
+
+// This is an encrypted acceptance fixture, not a successful native callback
+// double. The unchanged independent peer runs in its own network namespace;
+// the actual shipping CLI owns Box, all WG/AWG/SS2022 engines, selected DNS,
+// the authenticated front, proof lifetime, packet flows, and joined cleanup.
+// The original peer CA is supplied through the OS verifier's SSL_CERT_FILE.
+// No InsecureSkipVerify, fake proof, native registry replacement, or TUN is used.
+var serverChainEncryptedCases = []string{"wg", "awg-fast", "awg-strong", "mixed-three", "wrong-first-key", "wrong-middle-key", "wrong-ss-key", "wrong-awg-parameters", "wrong-node", "failed-selected-dns", "wrong-public-trust", "cancel-prefix", "admission-restrictions", "joined-active-udp"}
+
+type serverChainEncryptedPrefix struct {
+	Mode            string            `json:"mode"`
+	Parameters      map[string]string `json:"parameters,omitempty"`
+	PrivateKey      string            `json:"private_key"`
+	ClientPublicKey string            `json:"client_public_key"`
+	PreSharedKey    string            `json:"pre_shared_key"`
+	NodeProofID     string            `json:"node_proof_id"`
+	APIToken        string            `json:"api_token"`
+}
+type serverChainEncryptedPrefixStats struct {
+	Mode             string `json:"mode"`
+	ParametersSHA256 string `json:"parameters_sha256,omitempty"`
+	RawUDP           int64  `json:"raw_udp"`
+	TCP              int64  `json:"tcp"`
+	UDP              int64  `json:"udp"`
+	ProofQueries     uint64 `json:"proof_queries"`
+	AuthRefusals     uint64 `json:"auth_refusals"`
+}
+type serverChainEncryptedFinalStats struct {
+	Schema             int    `json:"schema"`
+	Address            string `json:"address"`
+	PublicCA           string `json:"public_ca"`
+	EntryPublicIP      string `json:"entry_public_ip"`
+	FinalPublicIP      string `json:"final_public_ip"`
+	EntryRawUDP        int64  `json:"entry_raw_udp"`
+	EntryTCP           int64  `json:"entry_tcp"`
+	EntryUDP           int64  `json:"entry_udp"`
+	FinalRawTCP        int64  `json:"final_raw_tcp"`
+	FinalRawUDP        int64  `json:"final_raw_udp"`
+	FinalTCP           int64  `json:"final_tcp"`
+	FinalUDP           int64  `json:"final_udp"`
+	EntryPublicQueries uint64 `json:"entry_public_queries"`
+	FinalPublicQueries uint64 `json:"final_public_queries"`
+	RouterQueries      uint64 `json:"router_queries"`
+	DirectQueries      uint32 `json:"direct_router_queries"`
+	DNSQueries         uint64 `json:"dns_queries"`
+	MTUQueries         uint64 `json:"mtu_queries"`
+	MTUReplies         uint64 `json:"mtu_replies"`
+	CoverPackets       uint64 `json:"cover_packets"`
+	CoverReplies       uint64 `json:"cover_replies"`
+	CoverMaximum       uint32 `json:"cover_maximum"`
+	DownloadBytes      uint64 `json:"download_bytes"`
+	UploadBytes        uint64 `json:"upload_bytes"`
+}
+type serverChainEncryptedStats struct {
+	Schema   int                               `json:"schema"`
+	Address  string                            `json:"address"`
+	PublicCA string                            `json:"public_ca"`
+	Prefixes []serverChainEncryptedPrefixStats `json:"prefixes"`
+	Final    serverChainEncryptedFinalStats    `json:"final"`
+}
+type serverChainEncryptedLog struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *serverChainEncryptedLog) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(p)
+}
+func (b *serverChainEncryptedLog) text() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	v := b.Buffer.String()
+	if len(v) > 8192 {
+		v = v[len(v)-8192:]
+	}
+	return v
+}
+
+type serverChainEncryptedProcess struct {
+	command       *exec.Cmd
+	input, output *os.File
+	reader        *bufio.Reader
+	done          chan struct{}
+	err           error
+	log           serverChainEncryptedLog
+	joined        bool
+}
+
+func serverChainEncryptedImage(t *testing.T, name string) string {
+	t.Helper()
+	path, wanted := os.Getenv(name), os.Getenv(name+"_SHA256")
+	info, err := os.Lstat(path)
+	if err != nil || !filepath.IsAbs(path) || !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 || info.Mode().Perm()&0111 == 0 || info.Size() <= 0 || info.Size() > 512<<20 || len(wanted) != 64 {
+		t.Fatal("encrypted fixture lost its exact compiled image", name)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := sha256.New()
+	_, err = io.Copy(h, file)
+	_ = file.Close()
+	if err != nil || hex.EncodeToString(h.Sum(nil)) != wanted {
+		t.Fatal("encrypted fixture compiled image changed", name)
+	}
+	return path
+}
+func serverChainEncryptedStart(t *testing.T, command *exec.Cmd) *serverChainEncryptedProcess {
+	t.Helper()
+	p := &serverChainEncryptedProcess{command: command, done: make(chan struct{})}
+	inRead, inWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outRead, outWrite, err := os.Pipe()
+	if err != nil {
+		_ = inRead.Close()
+		_ = inWrite.Close()
+		t.Fatal(err)
+	}
+	p.input, p.output, p.reader = inWrite, outRead, bufio.NewReaderSize(outRead, 32769)
+	command.Stdin, command.Stdout, command.Stderr = inRead, outWrite, &p.log
+	if err = command.Start(); err != nil {
+		_ = inRead.Close()
+		_ = inWrite.Close()
+		_ = outRead.Close()
+		_ = outWrite.Close()
+		t.Fatal(err)
+	}
+	_ = inRead.Close()
+	_ = outWrite.Close()
+	go func() { p.err = command.Wait(); close(p.done) }()
+	t.Cleanup(func() {
+		_ = p.input.Close()
+		if !p.joined {
+			select {
+			case <-p.done:
+			case <-time.After(3 * time.Second):
+				_ = p.command.Process.Kill()
+				<-p.done
+				t.Error("encrypted fixture required emergency process kill; joined retirement not established")
+			}
+		}
+		_ = p.output.Close()
+	})
+	return p
+}
+func (p *serverChainEncryptedProcess) line(t *testing.T) []byte {
+	t.Helper()
+	if p.output.SetReadDeadline(time.Now().Add(10*time.Second)) != nil {
+		t.Fatal("original response pipe lost deadline")
+	}
+	raw, err := p.reader.ReadSlice('\n')
+	if err != nil || len(raw) > 32768 {
+		t.Fatal("encrypted native response missing", err, p.log.text())
+	}
+	return raw
+}
+func (p *serverChainEncryptedProcess) join(t *testing.T) {
+	t.Helper()
+	select {
+	case <-p.done:
+		if p.err != nil {
+			t.Fatal("original encrypted process failed", p.err, p.log.text())
+		}
+		p.joined = true
+	case <-time.After(10 * time.Second):
+		t.Fatal("original encrypted process did not join")
+	}
+}
+func serverChainEncryptedJSON(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+func serverChainEncryptedKey(t *testing.T) *ecdh.PrivateKey {
+	t.Helper()
+	v, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+func serverChainEncryptedRandom(t *testing.T, n int) string {
+	t.Helper()
+	v := make([]byte, n)
+	if _, err := rand.Read(v); err != nil {
+		t.Fatal(err)
+	}
+	return hex.EncodeToString(v)
+}
+func serverChainEncryptedProof(key *ecdh.PrivateKey) string {
+	h := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())))
+	return hex.EncodeToString(h[:])
+}
+
+type serverChainEncryptedPeer struct {
+	process                  *serverChainEncryptedProcess
+	prefixes                 []serverChainEncryptedPrefix
+	clients, servers         []*ecdh.PrivateKey
+	finalClient, finalServer *ecdh.PrivateKey
+	password                 string
+	stats                    serverChainEncryptedStats
+}
+
+func serverChainEncryptedKeys(t *testing.T, name string) *serverChainEncryptedPeer {
+	t.Helper()
+	modes := []string{"wg", "wg"}
+	switch name {
+	case "awg-fast", "wrong-awg-parameters":
+		modes = []string{"wg", "awg2-fast"}
+	case "awg-strong":
+		modes = []string{"awg2-strong", "wg"}
+	case "mixed-three":
+		modes = []string{"wg", "awg2-fast", "awg2-strong"}
+	}
+	p := &serverChainEncryptedPeer{finalClient: serverChainEncryptedKey(t), finalServer: serverChainEncryptedKey(t)}
+	secret, _ := hex.DecodeString(serverChainEncryptedRandom(t, 32))
+	p.password = base64.StdEncoding.EncodeToString(secret)
+	for i, mode := range modes {
+		client, server := serverChainEncryptedKey(t), serverChainEncryptedKey(t)
+		p.clients = append(p.clients, client)
+		p.servers = append(p.servers, server)
+		psk, _ := hex.DecodeString(serverChainEncryptedRandom(t, 32))
+		row := serverChainEncryptedPrefix{Mode: mode, PrivateKey: base64.StdEncoding.EncodeToString(server.Bytes()), ClientPublicKey: base64.StdEncoding.EncodeToString(client.PublicKey().Bytes()), PreSharedKey: base64.StdEncoding.EncodeToString(psk), NodeProofID: serverChainEncryptedProof(server), APIToken: fmt.Sprintf("encrypted-server-prefix-%d-token", i)}
+		if mode != "wg" {
+			row.Parameters = map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32", "h1": "10000000-19999999", "h2": "20000000-29999999", "h3": "30000000-39999999", "h4": "40000000-49999999"}
+			if mode == "awg2-strong" {
+				row.Parameters["jc"], row.Parameters["jmax"] = "8", "1200"
+			}
+		}
+		p.prefixes = append(p.prefixes, row)
+	}
+	return p
+}
+func (p *serverChainEncryptedPeer) read(t *testing.T) serverChainEncryptedStats {
+	t.Helper()
+	var v serverChainEncryptedStats
+	decoder := json.NewDecoder(bytes.NewReader(p.process.line(t)))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&v) != nil || decoder.Decode(new(any)) != io.EOF || v.Schema != 1 || len(v.Prefixes) != len(p.prefixes) || v.PublicCA == "" {
+		t.Fatal("independent encrypted peer reply shape changed")
+	}
+	endpoint, err := netip.ParseAddrPort(v.Address)
+	if err != nil || endpoint.Addr().String() != "192.168.210.2" || endpoint.Port() == 0 || v.Final.DirectQueries != 0 || v.Final.EntryPublicQueries != 0 {
+		t.Fatal("independent peer exposed physical/direct bypass")
+	}
+	if p.stats.Address != "" && (p.stats.Address != v.Address || p.stats.PublicCA != v.PublicCA) {
+		t.Fatal("independent peer replaced original endpoint/TLS identity")
+	}
+	for i, row := range v.Prefixes {
+		expected := p.prefixes[i]
+		if row.Mode != expected.Mode {
+			t.Fatal("independent peer cipher changed")
+		}
+		if row.Mode == "wg" {
+			if row.ParametersSHA256 != "" {
+				t.Fatal("WG gained AWG receipt")
+			}
+		} else {
+			params, err := awgpolicy.ParametersUAPI(expected.Parameters)
+			h := sha256.Sum256([]byte(params))
+			if err != nil || row.ParametersSHA256 != hex.EncodeToString(h[:]) {
+				t.Fatal("independent AWG native parameters changed")
+			}
+		}
+	}
+	p.stats = v
+	return v
+}
+func (p *serverChainEncryptedPeer) control(t *testing.T, action string) serverChainEncryptedStats {
+	t.Helper()
+	if _, err := io.WriteString(p.process.input, action+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	return p.read(t)
+}
+func serverChainEncryptedPeerStart(t *testing.T, name string) *serverChainEncryptedPeer {
+	t.Helper()
+	p := serverChainEncryptedKeys(t, name)
+	image := serverChainEncryptedImage(t, "ROUTERVPN_SERVER_CHAIN_PEER")
+	command := exec.Command("ip", "netns", "exec", "rvpn-peer", image, "-test.run=^TestRouterVPNDesktopNodeChainReferenceProcess$", "-test.count=1", "-test.timeout=100s")
+	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD=1"}
+	p.process = serverChainEncryptedStart(t, command)
+	request := map[string]any{"schema": 1, "address": "192.168.210.2", "client_address": "192.168.210.1", "prefixes": p.prefixes, "final_password": p.password, "final_node_proof_id": serverChainEncryptedProof(p.finalServer), "final_api_token": "encrypted-server-final-token"}
+	if json.NewEncoder(p.process.input).Encode(request) != nil {
+		t.Fatal("original encrypted peer request failed")
+	}
+	p.read(t)
+	return p
+}
+func serverChainEncryptedSource(t *testing.T, p *serverChainEncryptedPeer, fault string) (*mobilemultihop.NodeChainServerPolicy, multihoprelay.NodeChainCapture) {
+	t.Helper()
+	source := mobilemultihop.NodeChainServerSource{Schema: 1, EntryID: "encrypted-server-entry", EntryNodeID: serverChainEncryptedProof(serverChainEncryptedKey(t)), EntryMode: "wg"}
+	for i := 0; i <= len(p.prefixes); i++ {
+		mode, inner, endpoint, port, token, server, client := "shadowsocks", "10.79.0", "10.77.0.1", uint16(8388), "encrypted-server-final-token", p.finalServer, p.finalClient
+		if i < len(p.prefixes) {
+			mode = p.prefixes[i].Mode
+			inner = fmt.Sprintf("10.%d.0", 80+i)
+			if i == len(p.prefixes)-1 {
+				inner = "10.78.0"
+			}
+			endpoint = fmt.Sprintf("198.51.100.%d", 101+i)
+			port = 51820
+			if i == 0 {
+				a, err := netip.ParseAddrPort(p.stats.Address)
+				if err != nil {
+					t.Fatal(err)
+				}
+				endpoint, port = a.Addr().String(), a.Port()
+			}
+			token, server, client = p.prefixes[i].APIToken, p.servers[i], p.clients[i]
+			if fault == "wrong-first-key" && i == 0 || fault == "wrong-middle-key" && i == 1 {
+				server = serverChainEncryptedKey(t)
+			}
+		}
+		api := "http://" + inner + ".1:8787"
+		if i == len(p.prefixes) {
+			api = "http://10.77.0.1:8787"
+		}
+		profile := map[string]any{"id": fmt.Sprintf("encrypted-server-member-%d", i), "node_kind": "router-vpn", "node_proof_id": serverChainEncryptedProof(server), "endpoint": endpoint, "router_api": api, "api_token": token, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "ipv6_mode": "off", "home_lan_access": fault != "admission-restrictions", "mtu_policy": "auto", "kill_switch_policy": "on-connect", "start_layer": "off"}
+		standard := fmt.Sprintf("[Interface]\nAddress=%s.2/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=%s:%d\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", inner, base64.StdEncoding.EncodeToString(client.Bytes()), base64.StdEncoding.EncodeToString(server.PublicKey().Bytes()), endpoint, port)
+		if i < len(p.prefixes) {
+			standard = strings.Replace(standard, "[Peer]\n", "[Peer]\nPresharedKey="+p.prefixes[i].PreSharedKey+"\n", 1)
+		}
+		identity := serverChainEncryptedJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(standard))})
+		files := identity
+		if mode != "wg" && mode != "shadowsocks" {
+			parameters := map[string]string{}
+			for k, v := range p.prefixes[i].Parameters {
+				parameters[k] = v
+			}
+			if fault == "wrong-awg-parameters" && i == 1 {
+				parameters["h1"] = "51000000-51999999"
+			}
+			raw, err := awgpolicy.ParametersUAPI(parameters)
+			if err != nil {
+				t.Fatal(err)
+			}
+			files = serverChainEncryptedJSON(t, map[string]string{"awg.conf": base64.StdEncoding.EncodeToString([]byte(strings.Replace(standard, "[Peer]", raw+"[Peer]", 1)))})
+		}
+		if mode == "shadowsocks" {
+			password := p.password
+			if fault == "wrong-ss-key" {
+				raw, _ := hex.DecodeString(serverChainEncryptedRandom(t, 32))
+				password = base64.StdEncoding.EncodeToString(raw)
+			}
+			graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": endpoint, "server_port": 8388, "method": mobilemultihop.NativeStartLayerMethod, "password": password}}, "route": map[string]any{"final": "proxy"}}
+			files = serverChainEncryptedJSON(t, map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(serverChainEncryptedJSON(t, graph)))})
+		}
+		node, err := mobilemultihop.NewNodeProfile(mode, files, serverChainEncryptedJSON(t, profile), "", "")
+		if err != nil {
+			t.Fatal("real encrypted suffix source rejected", i, err)
+		}
+		launch, err := node.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		source.Nodes = append(source.Nodes, launch)
+		source.IdentitySources = append(source.IdentitySources, identity)
+	}
+	policy, err := mobilemultihop.NewNodeChainServerPolicy(serverChainEncryptedJSON(t, source))
+	if err != nil {
+		t.Fatal("original private suffix compiler refused", err)
+	}
+	descriptor := policy.Descriptor()
+	digest, _ := descriptor.Digest()
+	q := multihoprelay.NodeChainRequest{Schema: 1, SessionID: serverChainEncryptedRandom(t, 16), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: serverChainEncryptedRandom(t, 32), Peer: "192.168.210.1", AcquireExpiresAt: time.Now().Add(30 * time.Second).Unix(), Port: 28440}
+	for i := range descriptor.Members {
+		key := serverChainEncryptedKey(t)
+		q.LocalPacketPublicKeys = append(q.LocalPacketPublicKeys, base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()))
+		q.Users = append(q.Users, multihoprelay.NodeChainUser{Position: i + 1, Username: serverChainEncryptedRandom(t, 24), Password: serverChainEncryptedRandom(t, 24)})
+	}
+	capture := multihoprelay.NodeChainCapture{Schema: 1, Request: q, Source: descriptor, RegistrySHA256: digest, OwnerID: serverChainEncryptedRandom(t, 32), Peer: q.Peer, Host: "192.168.210.1", BootstrapDeadline: time.Now().Add(30 * time.Second).UTC()}
+	if err = capture.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return policy, capture
+}
+
+type serverChainEncryptedWorker struct {
+	process   *serverChainEncryptedProcess
+	capture   multihoprelay.NodeChainCapture
+	digest    string
+	last      uint64
+	started   time.Time
+	directory string
+}
+
+func serverChainEncryptedWorkerStart(t *testing.T, p *serverChainEncryptedPeer, policy *mobilemultihop.NodeChainServerPolicy, capture multihoprelay.NodeChainCapture, fault string) *serverChainEncryptedWorker {
+	t.Helper()
+	directory := filepath.Join(t.TempDir(), "original-worker")
+	if os.Mkdir(directory, 0700) != nil {
+		t.Fatal("original worker directory unavailable")
+	}
+	for name, value := range map[string]string{"node-chain-capture.json": serverChainEncryptedJSON(t, capture), "node-chain-source.json": policy.Source()} {
+		if os.WriteFile(filepath.Join(directory, name), []byte(value), 0600) != nil {
+			t.Fatal("original worker source unavailable")
+		}
+	}
+	ca := filepath.Join(t.TempDir(), "original-peer-ca.pem")
+	trust := p.stats.PublicCA
+	if fault == "wrong-public-trust" {
+		trust = "not the original peer CA\n"
+	}
+	if os.WriteFile(ca, []byte(trust), 0600) != nil {
+		t.Fatal("captured TLS root unavailable")
+	}
+	image := serverChainEncryptedImage(t, "ROUTERVPN_SERVER_CHAIN_IMAGE")
+	command := exec.Command(image, "routervpn-node-chain-relay", "--runtime-dir", directory)
+	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "SSL_CERT_FILE=" + ca, "SSL_CERT_DIR=" + filepath.Join(directory, "no-system-roots"), "GORACE=atexit_sleep_ms=0"}
+	w := &serverChainEncryptedWorker{capture: capture, started: time.Now(), directory: directory}
+	w.digest, _ = capture.Digest()
+	w.process = serverChainEncryptedStart(t, command)
+	return w
+}
+func (w *serverChainEncryptedWorker) call(t *testing.T, operation string) multihoprelay.NodeChainIPCResponse {
+	t.Helper()
+	nonce := serverChainEncryptedRandom(t, 32)
+	if json.NewEncoder(w.process.input).Encode(multihoprelay.NodeChainIPCRequest{Schema: 1, Operation: operation, Nonce: nonce, CaptureSHA256: w.digest}) != nil {
+		t.Fatal("original worker IPC write failed")
+	}
+	response, err := multihoprelay.DecodeNodeChainIPCResponse(w.process.line(t))
+	if err != nil || response.Operation != operation || response.Nonce != nonce || response.CaptureSHA256 != w.digest {
+		t.Fatal("original worker IPC identity changed", err)
+	}
+	if operation == "snapshot" && response.OK {
+		if response.Receipt == nil || multihoprelay.ValidateNodeChainReceipt(*response.Receipt, w.capture, nonce, w.started, time.Now()) != nil || response.Receipt.Sequence <= w.last {
+			t.Fatal("fresh actual native receipt rejected")
+		}
+		w.last = response.Receipt.Sequence
+	}
+	return response
+}
+func (w *serverChainEncryptedWorker) stop(t *testing.T) {
+	t.Helper()
+	if !w.call(t, "stop").OK {
+		t.Fatal("original encrypted worker did not join on Stop")
+	}
+	terminal, err := multihoprelay.DecodeNodeChainIPCResponse(w.process.line(t))
+	if err != nil || !terminal.OK || terminal.Operation != "closed" || terminal.Nonce != w.capture.OwnerID || terminal.CaptureSHA256 != w.digest {
+		t.Fatal("terminal encrypted receipt lost original owner", err)
+	}
+	w.process.join(t)
+	if w.process.output.SetReadDeadline(time.Now().Add(time.Second)) != nil {
+		t.Fatal("terminal pipe lost its read deadline")
+	}
+	if extra, err := io.ReadAll(io.LimitReader(w.process.reader, 2)); err != nil || len(extra) != 0 {
+		t.Fatal("native child wrote after its terminal close", err)
+	}
+	listener, err := net.Listen("tcp4", net.JoinHostPort(w.capture.Host, fmt.Sprint(w.capture.Request.Port)))
+	if err != nil {
+		t.Fatal("joined worker retained its original listener", err)
+	}
+	_ = listener.Close()
+}
+func (w *serverChainEncryptedWorker) connection(user multihoprelay.NodeChainUser, destination M.Socksaddr) (net.Conn, error) {
+	conn, err := net.DialTimeout("tcp4", net.JoinHostPort(w.capture.Host, fmt.Sprint(w.capture.Request.Port)), time.Second)
+	if err != nil {
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	_, err = socks.ClientHandshake5(conn, socks5.CommandConnect, destination, user.Username, user.Password)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+func (w *serverChainEncryptedWorker) refuse(t *testing.T, user multihoprelay.NodeChainUser, destination M.Socksaddr) {
+	t.Helper()
+	if conn, err := w.connection(user, destination); err == nil {
+		_ = conn.Close()
+		t.Fatal("unproven or unauthorized positional front was accepted")
+	}
+}
+func (w *serverChainEncryptedWorker) health(t *testing.T, user multihoprelay.NodeChainUser, api, token, node string) {
+	t.Helper()
+	target := strings.TrimPrefix(api, "http://")
+	conn, err := w.connection(user, M.ParseSocksaddr(target))
+	if err != nil {
+		t.Fatal("authenticated prefix TCP failed", err)
+	}
+	defer conn.Close()
+	request, err := http.NewRequest(http.MethodGet, api+"/health", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Close = true
+	if request.Write(conn) != nil {
+		t.Fatal("actual encrypted HTTP write failed")
+	}
+	response, err := http.ReadResponse(bufio.NewReader(conn), request)
+	if err != nil {
+		t.Fatal("actual encrypted HTTP read failed", err)
+	}
+	defer response.Body.Close()
+	var value struct {
+		OK     bool   `json:"ok"`
+		NodeID string `json:"node_id"`
+		Proof  string `json:"proof"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 8193))
+	decoder.DisallowUnknownFields()
+	if response.StatusCode != 200 || decoder.Decode(&value) != nil || decoder.Decode(new(any)) != io.EOF || !value.OK || value.NodeID != node || value.Proof != "router-vpn-private-agent-v1" {
+		t.Fatal("actual encrypted private proof changed")
+	}
+}
+func (w *serverChainEncryptedWorker) packets(t *testing.T, destination M.Socksaddr) net.PacketConn {
+	t.Helper()
+	user := w.capture.Request.Users[len(w.capture.Request.Users)-1]
+	conn, err := w.connection(user, uot.RequestDestination(2))
+	if err != nil {
+		t.Fatal("captured native UoT2 handshake failed", err)
+	}
+	request := uot.Request{IsConnect: true, Destination: destination}
+	if err = uot.WriteRequest(conn, request); err != nil {
+		_ = conn.Close()
+		t.Fatal(err)
+	}
+	return uot.NewConn(conn, request)
+}
+func (w *serverChainEncryptedWorker) selectedDNS(t *testing.T) {
+	t.Helper()
+	target := M.ParseSocksaddr("192.168.50.133:53")
+	packets := w.packets(t, target)
+	defer packets.Close()
+	question := new(dns.Msg)
+	question.SetQuestion("example.com.", dns.TypeA)
+	question.Id = 27191
+	raw, err := question.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := packets.WriteTo(raw, target); err != nil || n != len(raw) {
+		t.Fatal("selected DNS UoT2 write failed", err)
+	}
+	reply := make([]byte, 4096)
+	n, from, err := packets.ReadFrom(reply)
+	var answer dns.Msg
+	if err != nil || from.String() != target.String() || answer.Unpack(reply[:n]) != nil || answer.Id != question.Id || answer.Rcode != dns.RcodeSuccess || len(answer.Answer) != 1 {
+		t.Fatal("selected DNS escaped final authenticated UDP", err)
+	}
+	a, ok := answer.Answer[0].(*dns.A)
+	if !ok || a.A.String() != "93.184.216.34" {
+		t.Fatal("selected DNS answer changed")
+	}
+}
+func serverChainEncryptedHealthy(stats serverChainEncryptedStats) bool {
+	if stats.Final.FinalRawTCP == 0 || stats.Final.FinalRawUDP == 0 || stats.Final.FinalTCP == 0 || stats.Final.FinalUDP == 0 || stats.Final.RouterQueries == 0 || stats.Final.DNSQueries == 0 || stats.Final.FinalPublicQueries == 0 || stats.Final.EntryPublicQueries != 0 || stats.Final.DirectQueries != 0 {
+		return false
+	}
+	for _, row := range stats.Prefixes {
+		if row.RawUDP == 0 || row.TCP == 0 || row.UDP == 0 || row.ProofQueries == 0 {
+			return false
+		}
+	}
+	return true
+}
+func serverChainEncryptedScenario(t *testing.T, name string) {
+	t.Helper()
+	p := serverChainEncryptedPeerStart(t, name)
+	policy, capture := serverChainEncryptedSource(t, p, name)
+	switch name {
+	case "wrong-node":
+		p.control(t, "wrong-node:1")
+	case "failed-selected-dns":
+		p.control(t, "fail-dns")
+	case "cancel-prefix":
+		p.control(t, "hold-node:0")
+	}
+	worker := serverChainEncryptedWorkerStart(t, p, policy, capture, name)
+	pending := worker.call(t, "snapshot")
+	if !pending.OK || pending.Receipt == nil || pending.Receipt.Phase != multihoprelay.NodeChainPending || pending.Receipt.TrafficAllowed {
+		t.Fatal("new actual encrypted worker is not closed pending proof")
+	}
+	final := capture.Request.Users[len(capture.Request.Users)-1]
+	worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
+	before := p.control(t, "stats")
+	if before.Final.RouterQueries != 0 || before.Final.DNSQueries != 0 || before.Final.FinalPublicQueries != 0 {
+		t.Fatal("pending front forwarded before native proof")
+	}
+	for _, row := range before.Prefixes {
+		if row.ProofQueries != 0 {
+			t.Fatal("pending front acquired a private proof")
+		}
+	}
+	if !worker.call(t, "bootstrap").OK {
+		t.Fatal("original native bootstrap admission failed")
+	}
+	negative := strings.HasPrefix(name, "wrong-") || name == "failed-selected-dns" || name == "cancel-prefix"
+	ready := false
+	failed := false
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		reply := worker.call(t, "snapshot")
+		if !reply.OK {
+			failed = true
+			break
+		}
+		if reply.Receipt.Phase == multihoprelay.NodeChainReady {
+			ready = true
+			break
+		}
+		if name == "cancel-prefix" && p.control(t, "stats").Prefixes[0].ProofQueries > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	var active net.PacketConn
+	if negative {
+		if ready {
+			t.Fatal("invalid encrypted source or proof became ready")
+		}
+		if name != "cancel-prefix" && !failed {
+			t.Fatal("invalid encrypted proof did not retire within its original phase bound")
+		}
+		worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
+		stats := p.control(t, "stats")
+		switch name {
+		case "wrong-first-key":
+			if stats.Prefixes[0].RawUDP == 0 || stats.Prefixes[0].ProofQueries != 0 || stats.Final.RouterQueries != 0 {
+				t.Fatal("wrong first key did not fail at encrypted first peer")
+			}
+		case "wrong-middle-key", "wrong-awg-parameters":
+			if stats.Prefixes[0].ProofQueries == 0 || stats.Prefixes[1].RawUDP == 0 || stats.Prefixes[1].ProofQueries != 0 || stats.Final.RouterQueries != 0 {
+				t.Fatal("wrong middle cipher bypassed its actual encrypted position")
+			}
+		case "wrong-ss-key":
+			if stats.Final.FinalRawTCP == 0 || stats.Final.RouterQueries != 0 {
+				t.Fatal("wrong final SS2022 key reached private health")
+			}
+		case "wrong-node":
+			if stats.Prefixes[1].ProofQueries == 0 || stats.Final.RouterQueries != 0 {
+				t.Fatal("wrong original prefix identity reached final")
+			}
+		case "failed-selected-dns":
+			if stats.Final.RouterQueries == 0 || stats.Final.DNSQueries == 0 || stats.Final.FinalPublicQueries != 0 {
+				t.Fatal("failed selected resolver acquired public readiness")
+			}
+		case "wrong-public-trust":
+			if stats.Final.RouterQueries == 0 || stats.Final.DNSQueries == 0 || stats.Final.FinalPublicQueries != 0 {
+				t.Fatal("untrusted public TLS produced a proved reply")
+			}
+		case "cancel-prefix":
+			if stats.Prefixes[0].ProofQueries == 0 || stats.Final.RouterQueries != 0 {
+				t.Fatal("cancel did not hold the original prefix proof")
+			}
+		}
+	} else {
+		if !ready {
+			t.Fatal("complete actual encrypted suffix never became ready")
+		}
+		targets, err := policy.ProofTargets(capture)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, target := range targets {
+			worker.health(t, capture.Request.Users[i], target.API, target.Token, target.Proof.NodeID)
+		}
+		worker.selectedDNS(t)
+		previous := p.control(t, "stats")
+		foreign := final
+		foreign.Password = serverChainEncryptedRandom(t, 24)
+		worker.refuse(t, foreign, M.ParseSocksaddr("10.77.0.1:8787"))
+		worker.refuse(t, capture.Request.Users[0], M.ParseSocksaddr("10.77.0.1:8787"))
+		worker.refuse(t, capture.Request.Users[0], uot.RequestDestination(2))
+		after := p.control(t, "stats")
+		if after.Final.RouterQueries != previous.Final.RouterQueries || after.Final.DNSQueries != previous.Final.DNSQueries {
+			t.Fatal("foreign or prefix credential reached the final encrypted service")
+		}
+		// The encrypted echo is an explicitly captured LAN-on destination.
+		// The separate LAN-off case must reject it while selected DNS remains
+		// available through its exact original control exception.
+		if name == "admission-restrictions" {
+			target := M.ParseSocksaddr("10.77.0.1:45999")
+			denied := worker.packets(t, target)
+			_, _ = denied.WriteTo([]byte("must-not-reach-original-private-sink"), target)
+			_ = denied.SetReadDeadline(time.Now().Add(time.Second))
+			if _, _, err := denied.ReadFrom(make([]byte, 2048)); err == nil {
+				t.Fatal("captured LAN-off policy forwarded private final UDP")
+			}
+			_ = denied.Close()
+			if p.control(t, "stats").Final.CoverPackets != 0 {
+				t.Fatal("LAN-off refusal reached the independent encrypted sink")
+			}
+		} else {
+			target := M.ParseSocksaddr("10.77.0.1:45999")
+			active = worker.packets(t, target)
+			payload := []byte("encrypted-original-final-UoT2-" + serverChainEncryptedRandom(t, 16))
+			if n, err := active.WriteTo(payload, target); err != nil || n != len(payload) {
+				t.Fatal("actual final UDP write failed", err)
+			}
+			buffer := make([]byte, 2048)
+			n, from, err := active.ReadFrom(buffer)
+			if err != nil || from.String() != target.String() || !bytes.Equal(buffer[:n], payload) {
+				t.Fatal("actual SS2022 final UDP did not echo", err)
+			}
+			if !serverChainEncryptedHealthy(p.control(t, "stats")) {
+				t.Fatal("encrypted counters did not prove every original prefix/final/DNS path")
+			}
+			if name == "joined-active-udp" {
+				p.control(t, "drop-cover")
+				if _, err := active.WriteTo(payload, target); err != nil {
+					t.Fatal(err)
+				}
+				deadline := time.Now().Add(2 * time.Second)
+				for time.Now().Before(deadline) {
+					current := p.control(t, "stats")
+					if current.Final.CoverPackets > current.Final.CoverReplies {
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				stats := p.control(t, "stats")
+				if stats.Final.CoverPackets <= stats.Final.CoverReplies {
+					t.Fatal("joined Stop did not retain an actual waiting UDP flow")
+				}
+			}
+		}
+		if !serverChainEncryptedHealthy(p.control(t, "stats")) {
+			t.Fatal("encrypted counters did not prove every original prefix/final/DNS path")
+		}
+	}
+	worker.stop(t)
+	if active != nil {
+		_ = active.SetReadDeadline(time.Now().Add(time.Second))
+		if _, _, err := active.ReadFrom(make([]byte, 2048)); err == nil {
+			t.Fatal("closed original encrypted UDP flow still received")
+		}
+		_ = active.Close()
+	}
+	stats := p.control(t, "stats")
+	_ = p.process.input.Close()
+	p.process.join(t)
+	modes := make([]string, len(stats.Prefixes))
+	for i, row := range stats.Prefixes {
+		modes[i] = row.Mode
+	}
+	receipt := map[string]any{"modes": modes, "case": name, "capture_sha256": worker.digest, "source_sha256": capture.Source.SourceSHA256, "prefixes": len(stats.Prefixes), "ready": ready, "retired": true, "selected_dns": ready, "final_tcp": stats.Final.FinalRawTCP, "final_udp": stats.Final.FinalRawUDP, "peer_joined": true, "worker_joined": true}
+	t.Log("ENCRYPTED_SERVER_RECEIPT " + serverChainEncryptedJSON(t, receipt))
+}
+func TestServerChainEncryptedNative(t *testing.T) {
+	if os.Getenv("ROUTERVPN_SERVER_CHAIN_NATIVE_NS") != "1" || os.Geteuid() != 0 {
+		t.Fatal("encrypted Server acceptance requires the original isolated native namespace")
+	}
+	original := os.Getenv("ROUTERVPN_SERVER_CHAIN_OUTER_NETNS")
+	info, err := os.Stat("/proc/self/ns/net")
+	if err != nil || original == "" || fmt.Sprintf("%d:%d", info.Sys().(*syscall.Stat_t).Dev, info.Sys().(*syscall.Stat_t).Ino) == original {
+		t.Fatal("encrypted Server fixture did not leave the original host namespace")
+	}
+	interfaces, err := net.Interfaces()
+	found := 0
+	if err != nil {
+		t.Fatal("actual encrypted interface inventory denied", err)
+	}
+	for _, device := range interfaces {
+		addresses, e := device.Addrs()
+		if e != nil {
+			t.Fatal(e)
+		}
+		for _, text := range addresses {
+			prefix, e := netip.ParsePrefix(text.String())
+			if e == nil && prefix.Addr().String() == "192.168.210.1" && device.Flags&net.FlagUp != 0 && device.Flags&net.FlagLoopback == 0 {
+				found++
+			}
+		}
+	}
+	if found != 1 {
+		t.Fatal("encrypted Server lost its original physical veth")
+	}
+	for _, name := range serverChainEncryptedCases {
+		t.Run(name, func(t *testing.T) { serverChainEncryptedScenario(t, name) })
+	}
+}
+func TestServerChainEncryptedSourceInventory(t *testing.T) {
+	for _, name := range serverChainEncryptedCases {
+		t.Run(name, func(t *testing.T) {
+			p := serverChainEncryptedKeys(t, name)
+			p.stats.Address = "192.168.210.2:51820"
+			policy, capture := serverChainEncryptedSource(t, p, name)
+			config, err := policy.NativeConfig(capture)
+			var graph map[string]json.RawMessage
+			if err != nil || json.Unmarshal([]byte(config), &graph) != nil {
+				t.Fatal(err)
+			}
+			if string(graph["inbounds"]) != "[]" {
+				t.Fatal("server acceptance source created TUN/inbound")
+			}
+			if len(policy.ProofInventory()) != len(p.prefixes)+1 {
+				t.Fatal("encrypted fixture source omitted a member")
+			}
+			for _, route := range mustServerChainEncryptedRoutes(t, policy, capture) {
+				if route.Final && (route.UDPOverTCPVersion != 2 || route.AllowsDestination("udp", "10.77.0.1:45999") != (name != "admission-restrictions")) {
+					t.Fatal("actual final source lost UoT2")
+				}
+			}
+		})
+	}
+}
+func mustServerChainEncryptedRoutes(t *testing.T, p *mobilemultihop.NodeChainServerPolicy, c multihoprelay.NodeChainCapture) []mobilemultihop.NodeChainServerFrontRoute {
+	t.Helper()
+	r, err := p.FrontRoutes(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
