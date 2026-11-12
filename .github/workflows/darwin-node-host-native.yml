@@ -1,0 +1,47 @@
+name: Darwin installed ordered host native pipeline
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/client/**'
+      - 'internal/**'
+      - 'mobile/**'
+      - 'modes/**'
+      - 'configs/client/**'
+      - 'client/install-macos-native.sh'
+      - 'deploy/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/darwin-node-host-*.yml'
+      - '.github/workflows/desktop-native-runtime.yml'
+  pull_request:
+    paths:
+      - 'cmd/client/**'
+      - 'internal/**'
+      - 'mobile/**'
+      - 'modes/**'
+      - 'configs/client/**'
+      - 'client/install-macos-native.sh'
+      - 'deploy/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/darwin-node-host-*.yml'
+      - '.github/workflows/desktop-native-runtime.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: darwin-node-host-native-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  native-runtimes:
+    uses: ./.github/workflows/desktop-native-runtime.yml
+    with:
+      platform: darwin
+  host:
+    needs: native-runtimes
+    uses: ./.github/workflows/darwin-node-host-tun.yml

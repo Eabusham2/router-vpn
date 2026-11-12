@@ -115,7 +115,8 @@ func init() {
 	// Only this explicit test binary contains these entry points. They are
 	// absent from the shipping controller and never weaken a production flag.
 	pfUtility := len(os.Args) >= 2 && (os.Args[1] == darwinOwnedPFArgument || os.Args[1] == darwinOwnedPFInstallArgument)
-	privilegedRole := pfUtility || len(os.Args) == 2 && (os.Args[1] == macOSControllerSupervisorArgument || os.Args[1] == macOSOwnedControllerArgument)
+	mtuUtility := len(os.Args) >= 2 && (os.Args[1] == "--mtu-owner-read" || os.Args[1] == "--mtu-owner-set")
+	privilegedRole := pfUtility || mtuUtility || len(os.Args) == 2 && (os.Args[1] == macOSControllerSupervisorArgument || os.Args[1] == macOSOwnedControllerArgument)
 	if privilegedRole {
 		marker := filepath.Join(macOSOwnedControllerRoot, "fixture-native-authority")
 		info, err := os.Lstat(marker)
@@ -124,6 +125,20 @@ func init() {
 			fmt.Fprintln(os.Stderr, "privileged test entry point has no explicit root-owned fixture authority")
 			os.Exit(120)
 		}
+	}
+	if mtuUtility {
+		marker := filepath.Join(macOSOwnedControllerRoot, macOSNodeChainNativeMarker)
+		info, err := os.Lstat(marker)
+		body, readErr := os.ReadFile(marker)
+		if os.Getuid() != 0 || os.Geteuid() != 0 || err != nil || readErr != nil || !info.Mode().IsRegular() || !ownedDesktopInfo(info) || info.Mode().Perm() != 0600 || string(body) != "explicit disposable macOS ordered PF and TUN fixture\n" {
+			fmt.Fprintln(os.Stderr, "MTU test utility has no exact root-owned ordered fixture authority")
+			os.Exit(123)
+		}
+		if handled, err := mtuOwnerUtility(os.Args[1:]); !handled || err != nil {
+			fmt.Fprintln(os.Stderr, "captured actual MTU utility failed", err)
+			os.Exit(124)
+		}
+		os.Exit(0)
 	}
 	if len(os.Args) == 2 && os.Args[1] == macOSControllerSupervisorArgument {
 		main()
@@ -190,6 +205,9 @@ func macOSControllerFixtureChild() error {
 	}
 	if owned == nil || owned.accessToken == "" || owned.ownerToken == "" {
 		return errors.New("native fixture lost actual inherited launch credentials")
+	}
+	if handled, err := macOSNodeChainNativeController(owned); handled {
+		return err
 	}
 	if handled, err := macOSExternalNativeController(owned); handled {
 		return err

@@ -12,15 +12,29 @@ EXPECTED = {
     ".github/workflows/production-release-compose.yml": "  group: production-release-compose-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
 }
 
-for filename, expected in EXPECTED.items():
+CALL_ONLY = {
+    ".github/workflows/darwin-node-host-tun.yml": "  group: darwin-node-host-tun-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
+}
+STANDALONE = {
+    ".github/workflows/darwin-node-host-native.yml": "  group: darwin-node-host-native-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
+}
+
+for filename, expected in {**EXPECTED, **CALL_ONLY, **STANDALONE}.items():
     path = ROOT / filename
     assert path.is_file(), f"missing reusable release workflow: {filename}"
     lines = path.read_text(encoding="utf-8").splitlines()
     assert lines.count(expected) == 1, (
         f"{filename} must isolate each caller-owned exact-SHA evidence run"
     )
-    assert "  workflow_call:" in lines, f"{filename} lost workflow_call"
-    assert "  workflow_dispatch:" in lines, f"{filename} lost workflow_dispatch"
+    if filename in STANDALONE:
+        assert "  workflow_call:" not in lines, f"{filename} must remain the standalone producer wrapper"
+    else:
+        assert "  workflow_call:" in lines, f"{filename} lost workflow_call"
+    if filename in CALL_ONLY:
+        assert not any(line in lines for line in ("  workflow_dispatch:", "  push:", "  pull_request:")), (
+            f"{filename} must consume its successful caller's current-run artifacts")
+    else:
+        assert "  workflow_dispatch:" in lines, f"{filename} lost workflow_dispatch"
     assert lines.count("  cancel-in-progress: true") == 1, (
         f"{filename} lost duplicate-run cancellation within one caller"
     )

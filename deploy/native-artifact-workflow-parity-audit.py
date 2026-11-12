@@ -46,7 +46,7 @@ def check_release_aggregate_gates(source: str) -> None:
     values = [value.strip() for value in needs[0][len("    needs: ["):-1].split(",")]
     required = {"source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
                 "windows-complete-max", "windows-all-controller", "android", "ios", "macos",
-                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child"}
+                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host"}
     assert len(values) == len(set(values)) and set(values) == required, (
         "native release aggregate changed its complete required gate inventory")
     pq = job("imported-pq-reality")
@@ -64,9 +64,18 @@ def check_release_aggregate_gates(source: str) -> None:
     darwin_child = job("darwin-ordered-child")
     assert "    uses: ./.github/workflows/darwin-node-child-tun.yml" in darwin_child, (
         "native release lost its actual ordered Darwin child acceptance workflow")
+    darwin_host = job("darwin-ordered-host")
+    assert "    uses: ./.github/workflows/darwin-node-host-tun.yml" in darwin_host, (
+        "native release lost its actual installed ordered Darwin host workflow")
+    assert [line for line in darwin_host if line.startswith("    needs:")] == ["    needs: native-runtimes"], (
+        "native ordered Darwin host lost its successful current-run runtime producer dependency")
+    runtimes = job("native-runtimes")
+    assert "    uses: ./.github/workflows/desktop-native-runtime.yml" in runtimes and "      platform: all" in runtimes, (
+        "native ordered Darwin host lost its complete current-run runtime producer")
     for name, lines in (("aggregate", aggregate), ("imported-pq-reality", pq),
                         ("imported-xhttp", xhttp), ("imported-naive-h2", naive_h2), ("imported-naive-h3", naive_h3),
-                        ("darwin-ordered-child", darwin_child)):
+                        ("darwin-ordered-child", darwin_child), ("darwin-ordered-host", darwin_host),
+                        ("native-runtimes", runtimes)):
         assert not any(line.startswith(("    if:", "    continue-on-error:")) for line in lines), (
             f"native release {name} gate became conditional or nonblocking")
 

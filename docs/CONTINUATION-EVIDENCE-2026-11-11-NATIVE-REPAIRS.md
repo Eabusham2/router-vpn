@@ -7,6 +7,55 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## November 12: mandatory installed Darwin ordered-host and public MTU gate
+
+The installed-host acceptance runs twenty independent native cases on Intel
+and Apple Silicon: the existing eighteen Linux ordered WG/AWG path scenarios
+plus actual public MTU Auto, Cancel and Retest for three-node WG and four-node
+mixed WG/AWG paths. The signed installed controller, retained native child,
+physical source, encrypted peers, PF journal and utun are real native owners.
+The shipping production local transaction is exercised while the public macOS
+ordered capability remains gated; the same fixture automatically uses the
+public handler after that capability is enabled.
+
+Every case retains complete captured node/source identities, selected Home DNS,
+actual per-prefix encrypted traffic, native heartbeat and the original joined
+Stop/workspace receipt. Incorrect middle keys or AWG parameters, incorrect
+proof/DNS, changed source and lost-prefix failures must reach their intended
+boundary and clean up. A monitor's historical held PF receipt cannot substitute
+for independently observed PF absence and unchanged kernel tunnel inventory
+after public Disconnect.
+
+The MTU cases use the actual installed optimizer and signed owner utility,
+with a separately captured final-node UDP sink and actual byte counters. Auto
+must adopt a measured winner. Retest reaches a deliberately held benchmark;
+foreign Cancel is refused, original Cancel joins exact rollback, and a fresh
+Retest must adopt a new proved reader while preserving process and PF ownership.
+Every peer reply retains its original benchmark identity. A temporary busy
+status during reader replacement cannot become a successful Auto result, and
+failed assertions cancel and join their original HTTP worker. Existing native,
+HTTP, measurement, cleanup and per-case deadlines are preserved.
+
+The release consumer accepts no workflow inputs and downloads only its own
+caller run's exact architecture/SHA native bundle. It requires the existing
+successful runtime producer and verifies the complete bundle before sealing
+an installed copy. The standalone push/manual pipeline explicitly builds both
+Darwin bundles before calling that same consumer. Both architectures, every
+case, exact source/tree, signed images, output digest and new final receipt
+are mandatory. No cross-run download, missing artifact, conditional producer,
+nonblocking gate or alternate workflow can satisfy the release aggregate.
+
+All eighteen runner/refusal methods and fifteen aggregate methods passed after
+integration on current main. Reusable concurrency and native artifact parity
+audits passed. The complete cmd/client Darwin/AMD64 test image with
+routervpn_controller_privileged compiled with Go 1.26.3 and CGO disabled on
+a653953e plus the exact seven frozen source files. This is compiler evidence,
+not native execution. Actual installed Intel/Apple Silicon acceptance and the
+whole release remain pending. The newer independent 5d7c7023 ordered-measurement
+and edb2601e H2 selected-DNS commits were fast-forwarded and preserved before
+publication; the newly added Linux measurement assertions are not claimed as
+Darwin execution by this unit.
+
 ## November 12: mandatory actual ordered Darwin child acceptance
 
 The release now requires a separate no-input ordered-child workflow on actual

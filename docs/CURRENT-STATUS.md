@@ -1,10 +1,35 @@
 # Current implementation status
 
-Updated November 11, 2026 UTC. This file distinguishes published source,
+Updated November 12, 2026 UTC. This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
+
+## November 12: ordered Darwin runtime and mandatory native acceptance
+
+The protected ordered macOS host, authenticated generated child and original
+MTU adapter are now source implementations. The latest
+[continuation evidence](CONTINUATION-EVIDENCE-2026-11-11-NATIVE-REPAIRS.md)
+records their separate compilation and test boundaries. Published commits
+`a971fbb6` and `a708fba8` retain the original process, source, PF baseline,
+selected-DNS proof, changing utun reader and joined retirement. `a653953e`
+adds mandatory actual encrypted child acceptance on Intel and Apple Silicon.
+The installed-host gate additionally exercises three- and four-node WG/AWG
+graphs, the public MTU Auto/Retest/Cancel handlers, source changes, lost prefixes
+and actual native cleanup using exact-source bundles from its own caller run.
+
+The local executor is available again. Focused shared Go and race tests, actual
+MTU optimizer tests, generated-source preflight, native-gate parser controls and
+Darwin cross-compilation have passed with the exact scopes in that ledger.
+They do not replace execution on macOS. Public ordered macOS admission remains
+closed until the actual child and installed-host acceptance passes. The final
+exact-current release, wider graph/execution families and physical/live
+acceptance remain separately open. No private deployment has been performed.
+
+The dated sections below preserve historical observations. In particular,
+their unavailable-executor and absent-Darwin-host statements describe their
+original checkpoints, not the newer source and evidence above.
 
 ## Latest desktop ordered Startup Last source
 

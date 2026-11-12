@@ -20,6 +20,11 @@ jobs:
     name: Actual ordered Darwin child, selected DNS and utun retirement
     uses: ./.github/workflows/darwin-node-child-tun.yml
 
+  darwin-ordered-host:
+    name: Actual installed ordered Darwin host and public MTU
+    needs: native-runtimes
+    uses: ./.github/workflows/darwin-node-host-tun.yml
+
   windows-complete-max:
     name: Actual complete MAX ownership on both Windows architectures
     uses: ./.github/workflows/windows-node-max-contract.yml
@@ -659,7 +664,7 @@ jobs:
 
   aggregate:
     name: Aggregate one-SHA native release candidate
-    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3, darwin-ordered-child]
+    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3, darwin-ordered-child, darwin-ordered-host]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
