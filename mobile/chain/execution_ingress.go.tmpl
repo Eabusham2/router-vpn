@@ -174,7 +174,9 @@ func (o *RouterVPNNodeChainIngress) RouterVPNMTUReplacementContext(ctx context.C
 	o.retired.Store(true)
 	closed, err = control.ObserveRetired(ctx)
 	if currentErr := next.Current(ctx); err != nil || currentErr != nil || closed.Open || !closed.Drained || closed.Closed {
-		next.retired.Store(true)
+		// The exact successor is already published and the gate stays closed.
+		// Retain it for a bounded retry when this caller expires after CAS;
+		// its original source guard still rejects a retired connection.
 		return next, errors.Join(err, currentErr, errRouterVPNNodeChainIngress)
 	}
 	return next, nil

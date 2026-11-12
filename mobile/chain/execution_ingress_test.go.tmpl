@@ -684,3 +684,68 @@ func TestRouterVPNExecutionIngressAdmissionPrecedesDNSRead(t *testing.T) {
 		}
 	}
 }
+
+// Cancellation may land after the irreversible ingress pointer handoff. The
+// exact successor remains owned for retry; neither a short operation budget nor
+// a failed final readback permits retiring an otherwise current replacement.
+func TestRouterVPNExecutionIngressMTURetainsPublishedSuccessor(t *testing.T) {
+	for _, scenario := range []string{"caller-cancel", "source-retired"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := executionNewIngress(t, false, true)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var armed atomic.Bool
+			guard := func(call context.Context) error {
+				if armed.Load() && f.router.routerVPNNodeChainIngress.Load() != f.ingress {
+					if scenario == "caller-cancel" {
+						cancel()
+					} else {
+						f.valid.Store(false)
+					}
+				}
+				return f.current(call)
+			}
+			var err error
+			f.control, err = f.gate.Bind(t.Context(), "original-preparation:session", f.current)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.ingress, err = f.router.RouterVPNBindNodeChainIngress(t.Context(), f.tun, guard, f.control.TrackInbound,
+				func(call context.Context) (bool, error) {
+					state, err := f.control.Observe(call)
+					return state.Open && !state.Closed, err
+				})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, stage := range adapter.ListStartStages {
+				if err := f.ins.Start(stage); err != nil {
+					t.Fatal(err)
+				}
+			}
+			candidate := &executionMTUIngressTUN{Inbound: &executionIngressTUN{inbound.NewAdapter(C.TypeTun, routerVPNNodeChainTUNTag)}}
+			rollback := &executionMTUIngressTUN{Inbound: &executionIngressTUN{inbound.NewAdapter(C.TypeTun, routerVPNNodeChainTUNTag)}}
+			transaction, err := f.ins.RouterVPNReplaceTunOwned(t.Context(), f.tun, func() (adapter.Inbound, adapter.Inbound, error) { return candidate, rollback, nil })
+			if err != nil || transaction == nil {
+				t.Fatal("actual manager replacement", err)
+			}
+			armed.Store(true)
+			next, err := f.ingress.RouterVPNMTUReplacementContext(ctx, transaction, f.control)
+			if err == nil || next == nil || next == f.ingress || next.inbound != candidate || f.router.routerVPNNodeChainIngress.Load() != next || !f.ingress.retired.Load() {
+				t.Fatal("late failed observation lost its published successor", err)
+			}
+			armed.Store(false)
+			if scenario == "caller-cancel" {
+				if ctx.Err() == nil || next.Current(t.Context()) != nil {
+					t.Fatal("expired call permanently retired its owned successor")
+				}
+			} else if next.Current(t.Context()) == nil {
+				t.Fatal("retired source regained ingress")
+			}
+			closed, err := f.control.ObserveRetired(t.Context())
+			if err != nil || closed.Open || !closed.Drained || closed.Closed {
+				t.Fatal("partial handoff changed original closed gate", err)
+			}
+		})
+	}
+}
