@@ -54,7 +54,8 @@ TESTS = r'''
    long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);while((f.engine.starts==0||!f.engine.getState().equals("STARTING"))&&System.nanoTime()<end)Thread.yield();check(f.engine.starts==1&&f.engine.getState().equals("STARTING"),"native startup was not reached");long start=System.nanoTime();
    if(terminal.equals("cancel"))f.runtime.disconnect();else f.engine.state=terminal;
    awaitWithin(c,4);check(!c.ok&&f.engine.stops>=1&&AndroidPathProbe.proofs==0&&LayeredVpnService.mtu==0&&!AndroidHomeStateStore.current.connected,"long startup budget suppressed cancellation or terminal failure: "+terminal);
-   check(System.nanoTime()-start<TimeUnit.SECONDS.toNanos(3),"cancellation waited for the expanded startup timeout");cases++;
+   long cancelledNanos=c.completedNanos-start;
+   check(cancelledNanos>=0&&cancelledNanos<TimeUnit.SECONDS.toNanos(3),"cancellation waited for the expanded startup timeout: "+terminal+" / "+TimeUnit.NANOSECONDS.toMillis(cancelledNanos)+"ms");cases++;
   }
  }
  static void actualDeadlineExpiry()throws Exception{
@@ -121,6 +122,16 @@ def main():
     tests = TESTS.replace('ACTUAL_PQ_BUDGET_MS', str(int(pq_budget[1]) * 1000) + 'L')
     tests = tests.replace('ACTUAL_EXECUTION_BUDGET_MS', str(int(execution_budget[1]) * 1000) + 'L')
     harness = P.HARNESS[:P.HARNESS.index(' public static void main(String[] args)')] + tests
+
+    # Measure the runtime callback's completion, not when the waiting test
+    # thread is next scheduled. The original three-second limit and four-second
+    # latch bound remain unchanged; only this fixture callback records time.
+    for before, after in (
+        ('int completions;String owner="";', 'int completions;long completedNanos;String owner="";'),
+        ('ok=success;completions++;done.countDown();', 'ok=success;completions++;completedNanos=System.nanoTime();done.countDown();'),
+    ):
+        assert harness.count(before) == 1, 'startup completion clock boundary changed'
+        harness = harness.replace(before, after, 1)
 
     with tempfile.TemporaryDirectory(prefix='routervpn-multihop-deadlines-') as directory:
         root = Path(directory)
