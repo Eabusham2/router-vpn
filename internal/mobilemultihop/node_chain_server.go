@@ -116,6 +116,7 @@ func (r NodeChainServerFrontRoute) AllowsDestination(network, address string) bo
 // opens no socket and proves no connectivity. The worker owns the separate
 // authenticated front and must not forward while proofs are pending.
 type NodeChainServerPolicy struct {
+	carrier                                        *NodeChainServerCarrier
 	sourceJSON, sourceSHA, config, configSHA, seal string
 	nodes                                          []*NodeProfile
 	descriptor                                     multihoprelay.NodeChainDescriptor
@@ -129,6 +130,10 @@ type NodeChainServerPolicy struct {
 var nodeChainServerError = errors.New("ordered server path lost its complete operator-owned source")
 
 func NewNodeChainServerPolicy(sourceJSON string) (*NodeChainServerPolicy, error) {
+	return newNodeChainServerPolicy(sourceJSON, nil)
+}
+
+func newNodeChainServerPolicy(sourceJSON string, carrier *NodeChainServerCarrier) (*NodeChainServerPolicy, error) {
 	var source NodeChainServerSource
 	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil || source.Schema != 1 ||
 		!exactID.MatchString(source.EntryID) || !proofID.MatchString(source.EntryNodeID) || !NodeChainPrefixMode(source.EntryMode) ||
@@ -223,6 +228,12 @@ func NewNodeChainServerPolicy(sourceJSON string) (*NodeChainServerPolicy, error)
 	if err != nil {
 		return nil, nodeChainServerError
 	}
+	if carrier != nil {
+		if carrier.sourceSHA != p.sourceSHA || carrier.source != p.sourceJSON || carrier.apply(p.nodes[0], closures[0]) != nil {
+			return nil, nodeChainServerCarrierError
+		}
+		p.carrier = carrier
+	}
 	config, proofs, dns, _, err := compileNodeChainClosures(members, closures, expected)
 	if err != nil {
 		return nil, err
@@ -246,6 +257,9 @@ func NewNodeChainServerPolicy(sourceJSON string) (*NodeChainServerPolicy, error)
 		}
 	}
 	graph["outbounds"] = kept
+	if carrier != nil && carrier.bind(graph, proofs[0].Tag) != nil {
+		return nil, nodeChainServerCarrierError
+	}
 	raw, err = json.Marshal(graph)
 	if err != nil || len(raw) > 4<<20 {
 		return nil, nodeChainServerError
@@ -294,7 +308,11 @@ func (p *NodeChainServerPolicy) captureSeal() string {
 	if p == nil {
 		return ""
 	}
-	raw, err := json.Marshal([]any{"routervpn-server-node-chain-policy-v1", p.sourceJSON, p.sourceSHA, p.config, p.configSHA,
+	carrierSeal := ""
+	if p.carrier != nil {
+		carrierSeal = p.carrier.seal
+	}
+	raw, err := json.Marshal([]any{"routervpn-server-node-chain-policy-v1", carrierSeal, p.sourceJSON, p.sourceSHA, p.config, p.configSHA,
 		p.descriptor, p.proofs, p.proofTargets, p.dns, p.blockIPv6, p.blockedCIDRs})
 	if err != nil {
 		return ""
@@ -305,7 +323,7 @@ func (p *NodeChainServerPolicy) captureSeal() string {
 }
 
 func (p *NodeChainServerPolicy) validateCapture() error {
-	if p == nil || p.seal == "" || p.captureSeal() != p.seal || p.descriptor.Validate() != nil ||
+	if p == nil || p.carrier != nil && !p.carrier.sealed() || p.seal == "" || p.captureSeal() != p.seal || p.descriptor.Validate() != nil ||
 		len(p.nodes) != len(p.proofs) || len(p.proofs) != len(p.proofTargets) {
 		return nodeChainServerError
 	}
