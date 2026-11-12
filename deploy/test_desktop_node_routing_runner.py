@@ -87,6 +87,37 @@ class CandidateCommandVerdicts(unittest.TestCase):
                 NODE.execute_baseline_suite(baseline, NODE.CANDIDATE_COMMAND_SUITE)
 
 
+class OrderedExecutionCommandVerdicts(unittest.TestCase):
+    def output(self, names):
+        return "".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n" for name in names)
+
+    def test_original_execution_runtime_owners_are_required(self):
+        names = NODE.ORDERED_EXECUTION_COMMAND_VERDICTS
+        self.assertEqual(len(names), 11)
+        self.assertEqual(len(NODE.ORDERED_EXECUTION_COMMAND_ROOTS), 4)
+        text = (ROOT / "deploy/test_desktop_node_physical.py").read_text()
+        self.assertEqual(text.count("suites.append(ORDERED_EXECUTION_COMMAND_SUITE)"), 1)
+        output = self.output(names)
+        baseline = Mock(); baseline.execute.return_value = (0, output)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(NODE.execute_baseline_suite(baseline, NODE.ORDERED_EXECUTION_COMMAND_SUITE), output)
+        baseline.execute.assert_called_once_with(*NODE.ORDERED_EXECUTION_COMMAND_SUITE[:3], 90)
+
+    def test_no_missing_replaced_duplicate_or_failed_owner_can_pass(self):
+        names = NODE.ORDERED_EXECUTION_COMMAND_VERDICTS
+        controls = [self.output(tuple(name for name in names if name != missing)) for missing in names]
+        controls += [self.output(names + (names[0],)), self.output(names[1:] + ("TestUnrelatedOwner",)), "PASS\n"]
+        controls += [self.output(names) + marker for marker in (
+            "--- SKIP: owner (0s)\n", "--- FAIL: owner (0s)\n", "DATA RACE\n", "panic: test timed out\n")]
+        for control in controls:
+            baseline = Mock(); baseline.execute.return_value = (0, control)
+            with self.subTest(control=control), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+                NODE.execute_baseline_suite(baseline, NODE.ORDERED_EXECUTION_COMMAND_SUITE)
+        baseline = Mock(); baseline.execute.return_value = (124, self.output(names))
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+            NODE.execute_baseline_suite(baseline, NODE.ORDERED_EXECUTION_COMMAND_SUITE)
+
+
 class ExactPerformanceMutationBoundary(unittest.TestCase):
     def test_actual_legacy_methods_do_not_mutate_contextual_siblings(self):
         cases = (

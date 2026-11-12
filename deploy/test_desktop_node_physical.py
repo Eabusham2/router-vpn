@@ -69,6 +69,14 @@ EXECUTION_DESKTOP_SUITES = (
     ("ordered-execution-physical", ".", "^" + EXECUTION_PHYSICAL_ROOT, EXECUTION_PHYSICAL_VERDICTS),
     ("ordered-execution-command", "./cmd/sing-box", "^" + EXECUTION_COMMAND_ROOT, EXECUTION_COMMAND_VERDICTS),
 )
+ORDERED_EXECUTION_COMMAND_ROOTS = tuple("TestRouterVPNDesktopNodeChainExecutionRuntime" + suffix for suffix in (
+    "KeepsActualProjection", "RetainsFailedCleanup", "RejectsReplacedOwners", "JoinsLateConstructor"))
+ORDERED_EXECUTION_COMMAND_VERDICTS = ORDERED_EXECUTION_COMMAND_ROOTS + tuple(
+    ORDERED_EXECUTION_COMMAND_ROOTS[1] + "/" + leaf for leaf in ("remote-join", "gate-retire")) + tuple(
+    ORDERED_EXECUTION_COMMAND_ROOTS[2] + "/" + leaf for leaf in (
+        "foreign-projection", "preparation-identity", "host", "readback", "late-readback"))
+ORDERED_EXECUTION_COMMAND_SUITE = ("ordered-execution-owner", "./cmd/sing-box",
+    "^TestRouterVPNDesktopNodeChainExecutionRuntime", ORDERED_EXECUTION_COMMAND_VERDICTS)
 MTU_CONTEXT_VERDICTS = {
     "mtu-operation-context": [
         "TestContextOperationAdmissionAndStatusDoNotLeaveWaiters",
@@ -1184,6 +1192,8 @@ def execute_baseline_suite(baselines, suite):
         require_native_verdicts(output, required, name)
     if name == CANDIDATE_COMMAND_SUITE[0]:
         require_native_verdicts(output, CANDIDATE_COMMAND_VERDICTS, "ordered candidate original native owner")
+    if name == ORDERED_EXECUTION_COMMAND_SUITE[0]:
+        require_native_verdicts(output, ORDERED_EXECUTION_COMMAND_VERDICTS, "ordered execution original native owner")
     if name == NAIVE_TRANSPORT_SUITE[0]:
         require_native_verdicts(output, NAIVE_TRANSPORT_VERDICTS, "Naive H2 TCP, captured literal H3 UDP and original raw hostname owner")
     if name == NAIVE_LITERAL_SUITE[0]:
@@ -1424,6 +1434,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                     "TestRouterVPNDesktopNodeChainMeasurementHTTPComposition")))
     suites.append(CANDIDATE_COMMAND_SUITE)
     suites.extend(EXECUTION_DESKTOP_SUITES)
+    suites.append(ORDERED_EXECUTION_COMMAND_SUITE)
     suites.append(("command-observation-context", "./cmd/sing-box",
                    "^TestRouterVPNDesktop(NetworkProjectionContextPreservesObservationErrors|NativeNetworkProjectionCancelsHeldOwnerLock|StopInterruptsOriginalNetworkObserver)$",
                    ("TestRouterVPNDesktopNetworkProjectionContextPreservesObservationErrors", "TestRouterVPNDesktopNativeNetworkProjectionCancelsHeldOwnerLock", "TestRouterVPNDesktopStopInterruptsOriginalNetworkObserver")))

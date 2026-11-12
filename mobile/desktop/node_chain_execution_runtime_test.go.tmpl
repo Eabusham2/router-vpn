@@ -1,0 +1,459 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"reflect"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/routechoice"
+)
+
+func desktopExecutionJSON(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// Compile real complete private sources and independent server-side packet
+// identities. Native I/O/proof doubles below test the child ownership seam;
+// they are not encrypted prefix, DNS, lease or physical-device acceptance.
+func desktopExecutionCommandSource(t *testing.T, target, execution string) (*mobilemultihop.NodeChainExecutionPreparation, *mobilemultihop.NodeChainExecutionProjection) {
+	t.Helper()
+	local := desktopNodeChainCommandPolicy(t, 3, target, 1420).OriginalChain()
+	raw, err := local.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if err := json.Unmarshal([]byte(raw), &source); err != nil {
+		t.Fatal(err)
+	}
+	proofs := local.ProofInventory()
+	serverSource := mobilemultihop.NodeChainServerSource{Schema: 1, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: proofs[0].Mode}
+	keys := []string{}
+	for i, launch := range source.Nodes {
+		var row struct {
+			Mode      string `json:"mode"`
+			Files     string `json:"files"`
+			Profile   string `json:"profile_json"`
+			Start     string `json:"start"`
+			Bootstrap string `json:"dns_bootstrap"`
+		}
+		if err := json.Unmarshal([]byte(launch), &row); err != nil {
+			t.Fatal(err)
+		}
+		identity := row.Files
+		if row.Mode == "shadowsocks" {
+			server, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(90 + i)}, 32))
+			wg := fmt.Sprintf("[Interface]\nAddress=10.%d.0.2/32\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=198.51.100.%d:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", 77+i,
+				base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(40 + i)}, 32)), base64.StdEncoding.EncodeToString(server.PublicKey().Bytes()), 10+i)
+			identity = desktopExecutionJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(wg))})
+		} else {
+			node, err := mobilemultihop.NewNodeProfile(row.Mode, row.Files, row.Profile, row.Start, row.Bootstrap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, err := node.PacketClientPublicKey()
+			if err != nil {
+				t.Fatal(err)
+			}
+			keys = append(keys, key)
+		}
+		source.IdentitySources = append(source.IdentitySources, identity)
+		if i == 0 {
+			continue
+		}
+		if row.Mode == "wg" {
+			var files map[string]string
+			if err := json.Unmarshal([]byte(row.Files), &files); err != nil {
+				t.Fatal(err)
+			}
+			wg, err := base64.StdEncoding.DecodeString(files["wg.conf"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(40 + i)}, 32))
+			next := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(220 + i)}, 32))
+			if !strings.Contains(string(wg), old) {
+				t.Fatal("missing original client key")
+			}
+			files["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(strings.Replace(string(wg), old, next, 1)))
+			row.Files = desktopExecutionJSON(t, files)
+			node, err := mobilemultihop.NewNodeProfile(row.Mode, row.Files, row.Profile, row.Start, row.Bootstrap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			launch, err = node.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity = row.Files
+		}
+		serverSource.Nodes = append(serverSource.Nodes, launch)
+		serverSource.IdentitySources = append(serverSource.IdentitySources, identity)
+	}
+	local, err = mobilemultihop.NewNodeChain(desktopExecutionJSON(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := mobilemultihop.NewDesktopNodeChainPolicy(local, desktopExternalSession, target, 1420)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prep, err := mobilemultihop.NewDesktopNodeChainExecutionPreparation(original, execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := mobilemultihop.NewNodeChainServerPolicy(desktopExecutionJSON(t, serverSource))
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := server.Descriptor()
+	digest, err := descriptor.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := multihoprelay.NodeChainRequest{Schema: 1, SessionID: strings.Repeat("1", 32), EntryNodeID: descriptor.EntryNodeID,
+		SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256,
+		Epoch: strings.Repeat("2", 64), Peer: "10.77.0.2", AcquireExpiresAt: time.Now().Add(time.Minute).Unix(), Port: 32000, LocalPacketPublicKeys: keys}
+	for i := range descriptor.Members {
+		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: i + 1, Username: strings.Repeat(fmt.Sprintf("%x", 3+i*2), 48), Password: strings.Repeat(fmt.Sprintf("%x", 4+i*2), 48)})
+	}
+	policy, err := mobilemultihop.NewNodeChainExecutionPolicy(desktopExecutionJSON(t, mobilemultihop.NodeChainExecutionSource{
+		Schema: 1, Execution: execution, LocalSource: prep.LocalSource(), Server: descriptor, Request: request, FirstPort: 32000, LastPort: 32000}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := prep.BindExecution(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prep, projection
+}
+
+type desktopExecutionProofFixture struct {
+	lifetime context.Context
+	progress mobilemultihop.NodeChainExecutionProgress
+	closeErr error
+	events   *[]string
+}
+
+func (p *desktopExecutionProofFixture) Run(ctx context.Context) error {
+	p.lifetime = ctx
+	*p.events = append(*p.events, "prove")
+	return ctx.Err()
+}
+func (p *desktopExecutionProofFixture) HealthyContext(ctx context.Context) error {
+	if p.lifetime == nil || p.lifetime.Err() != nil {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+func (p *desktopExecutionProofFixture) Progress() mobilemultihop.NodeChainExecutionProgress {
+	return p.progress
+}
+func (p *desktopExecutionProofFixture) CloseContext(ctx context.Context) error {
+	*p.events = append(*p.events, "join")
+	if p.lifetime != nil && p.lifetime.Err() == nil {
+		return errors.New("proof lifetime remained active during final close")
+	}
+	return errors.Join(ctx.Err(), p.closeErr)
+}
+
+type desktopExecutionEngineFixture struct {
+	projection *mobilemultihop.NodeChainExecutionProjection
+	identity   mobilemultihop.NodeChainIdentity
+	readback   mobilemultihop.NodeChainExecutionTUNReadback
+	current    func(context.Context) error
+	events     *[]string
+	retireErr  error
+	read       func()
+}
+
+func (e *desktopExecutionEngineFixture) DiscoverContext(ctx context.Context) (mobilemultihop.NodeChainExecutionDiscovery, error) {
+	*e.events = append(*e.events, "discover")
+	return mobilemultihop.NodeChainExecutionDiscovery{FirstPort: 32000, LastPort: 32000}, e.current(ctx)
+}
+func (e *desktopExecutionEngineFixture) AdoptContext(ctx context.Context, source string, port int) (*mobilemultihop.NodeChainExecutionProjection, error) {
+	if source != "" || port != 32000 {
+		return nil, routerVPNExternalFailure
+	}
+	*e.events = append(*e.events, "adopt")
+	return e.projection, e.current(ctx)
+}
+func (e *desktopExecutionEngineFixture) ObserveChainContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
+	return e.identity, e.current(ctx)
+}
+func (e *desktopExecutionEngineFixture) SelectedContext(ctx context.Context) (string, error) {
+	p, _ := e.projection.ProofInventory("server")
+	return p[len(p)-1].Tag, e.current(ctx)
+}
+func (e *desktopExecutionEngineFixture) SelectionEpochContext(ctx context.Context) (uint64, error) {
+	return 7, e.current(ctx)
+}
+func (e *desktopExecutionEngineFixture) CaptureExecutionTUNReadbackContext(ctx context.Context, identity mobilemultihop.NodeChainIdentity) (mobilemultihop.NodeChainExecutionTUNReadback, error) {
+	if e.read != nil {
+		e.read()
+	}
+	if identity != e.identity {
+		return mobilemultihop.NodeChainExecutionTUNReadback{}, routerVPNExternalFailure
+	}
+	return e.readback, e.current(ctx)
+}
+func (*desktopExecutionEngineFixture) ExecutionTUNReadbackRetiredContext(context.Context, mobilemultihop.NodeChainExecutionTUNReadback) error {
+	return routerVPNExternalFailure
+}
+func (e *desktopExecutionEngineFixture) RetireContext(ctx context.Context) error {
+	*e.events = append(*e.events, "retire")
+	return errors.Join(ctx.Err(), e.retireErr)
+}
+func (*desktopExecutionEngineFixture) Dial(context.Context, string, string) (net.Conn, error) {
+	return nil, errors.New("fixture cannot prove native prefix traffic")
+}
+func (*desktopExecutionEngineFixture) SelectContext(context.Context, string) error {
+	return routerVPNExternalFailure
+}
+func (*desktopExecutionEngineFixture) DNSExecutionProofContext(context.Context, mobilemultihop.NodeChainExecutionDNSCapture) error {
+	return routerVPNExternalFailure
+}
+func (*desktopExecutionEngineFixture) RevokeApplicationContext(context.Context) error {
+	return routerVPNExternalFailure
+}
+func (*desktopExecutionEngineFixture) OpenApplicationContext(context.Context, mobilemultihop.NodeChainIdentity, string) error {
+	return routerVPNExternalFailure
+}
+func (*desktopExecutionEngineFixture) ApplicationOpenContext(context.Context) (bool, error) {
+	return false, routerVPNExternalFailure
+}
+func (*desktopExecutionEngineFixture) CaptureExecutionStop(context.Context, mobilemultihop.NodeChainExecutionStopCapture) (mobilemultihop.LeaseStop, error) {
+	return nil, routerVPNExternalFailure
+}
+
+type desktopExecutionRuntimeFixture struct {
+	owner  *routerVPNNodeChainExecutionRuntime
+	engine *desktopExecutionEngineFixture
+	proof  *desktopExecutionProofFixture
+	record routerVPNNodeMTURecord
+	valid  atomic.Bool
+	events []string
+}
+
+func newDesktopExecutionRuntimeFixture(t *testing.T) *desktopExecutionRuntimeFixture {
+	t.Helper()
+	prep, projection := desktopExecutionCommandSource(t, "linux", "auto")
+	physical, _ := prep.DesktopPhysicalPolicy()
+	_, meta, _, _ := physical.PhysicalReadValidated()
+	files := desktopImportedCommandFiles(t, map[string]string{"node-chain-execution-source.json": prep.Source(), "sing-box.json": prep.Config()})
+	f := &desktopExecutionRuntimeFixture{}
+	f.valid.Store(true)
+	f.record = routerVPNNodeMTURecord{Schema: 1, Session: meta.SessionID, Config: prep.ConfigSHA256(), Path: strings.Repeat("c", 64), Reader: 1, Interface: "router-vpn", Index: 17, MTU: 1420}
+	identity := mobilemultihop.NodeChainIdentity{EngineID: "original-box", SessionID: meta.SessionID, NetworkID: "original-network", SourceSHA256: projection.SourceSHA256(), ConfigSHA256: projection.ConfigSHA256()}
+	plan, _ := projection.MTUPlan()
+	f.engine = &desktopExecutionEngineFixture{projection: projection, identity: identity, events: &f.events,
+		readback: mobilemultihop.NodeChainExecutionTUNReadback{Identity: identity, TargetOS: "linux", TUNTag: plan.TUNTag, ReaderNonce: strings.Repeat("e", 64), ReaderGeneration: 1, InterfaceName: f.record.Interface, InterfaceIndex: 17, MTU: 1420}}
+	f.proof = &desktopExecutionProofFixture{events: &f.events}
+	progress := mobilemultihop.NodeChainExecutionProgress{NodeChainProgress: mobilemultihop.NodeChainProgress{Stage: "selected", Execution: "server", Complete: true, Ready: true, DNSProven: true, PublicProven: true}}
+	proofs, _ := projection.ProofInventory("server")
+	for _, p := range proofs {
+		progress.Prefixes = append(progress.Prefixes, mobilemultihop.NodeChainPrefixProgress{Position: p.Position, ProfileID: p.ProfileID, Proven: true, ResponseMS: 2})
+	}
+	candidate := routechoice.Candidate{Execution: routechoice.Server, Transport: "ordered-node-chain", EntryID: proofs[0].ProfileID, ExitID: proofs[len(proofs)-1].ProfileID}
+	measured, err := routechoice.Score(candidate, 2*time.Millisecond, 4*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress.Comparison = routechoice.Result{Target: mobilemultihop.Targets[0], Winner: &candidate, Final: &measured, Measurements: []routechoice.Measurement{measured}}
+	f.proof.progress = progress
+	f.owner, err = routerVPNNewNodeChainExecutionRuntimeFactory(context.Background(), files, prep, strings.Repeat("d", 64), func(ctx context.Context) error {
+		if !f.valid.Load() {
+			return routerVPNExternalFailure
+		}
+		return ctx.Err()
+	},
+		func(ctx context.Context, p *mobilemultihop.NodeChainExecutionPreparation, session string, current func(context.Context) error) (routerVPNDesktopExecutionEngine, error) {
+			if p != prep || session != meta.SessionID {
+				t.Fatal("factory changed original typed preparation")
+			}
+			f.engine.current = current
+			return f.engine, ctx.Err()
+		}, func(p *mobilemultihop.NodeChainExecutionProjection, e routerVPNDesktopExecutionEngine) (routerVPNDesktopExecutionProof, error) {
+			if p != f.engine.projection || e != f.engine {
+				t.Fatal("proof changed retained native projection")
+			}
+			return f.proof, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		f.proof.closeErr = nil
+		f.engine.retireErr = nil
+		ctx, stop := context.WithTimeout(context.Background(), time.Second)
+		defer stop()
+		if err := f.owner.close(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	return f
+}
+
+func TestRouterVPNDesktopNodeChainExecutionRuntimeKeepsActualProjection(t *testing.T) {
+	f := newDesktopExecutionRuntimeFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := f.owner.run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := f.owner.current(context.Background()); err != nil || f.proof.lifetime.Err() != nil {
+		t.Fatal("startup context became runtime lifetime", err)
+	}
+	if !reflect.DeepEqual(f.events, []string{"discover", "adopt", "prove"}) {
+		t.Fatal(f.events)
+	}
+	if err := f.owner.heartbeat(context.Background(), f.record); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := f.owner.files.read("node-chain-execution-ready.json", mobilemultihop.DesktopNodeChainExecutionReadyRecordLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, err := mobilemultihop.ParseDesktopNodeChainExecutionReadyRecord(raw, f.engine.projection, f.owner.transfer)
+	if err != nil || ready.Identity.ConfigSHA256 == ready.PreparationConfigSHA256 || ready.Identity != f.engine.identity || ready.SelectionEpoch != 7 {
+		t.Fatal("heartbeat relabeled preparation as executed graph", err)
+	}
+	if err := f.owner.close(context.Background()); err != nil || !f.owner.closed.Load() {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(f.events, []string{"discover", "adopt", "prove", "join", "retire"}) {
+		t.Fatal("remote join must precede native gate retirement", f.events)
+	}
+	if _, err := f.owner.files.root.Lstat("node-chain-execution-ready.json"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("closed owner retained readiness", err)
+	}
+	if f.owner.run(context.Background()) == nil {
+		t.Fatal("closed child restarted")
+	}
+}
+
+func TestRouterVPNDesktopNodeChainExecutionRuntimeRetainsFailedCleanup(t *testing.T) {
+	for _, fault := range []string{"remote-join", "gate-retire"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newDesktopExecutionRuntimeFixture(t)
+			if err := f.owner.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if fault == "remote-join" {
+				f.proof.closeErr = errors.New("pending original DELETE")
+			} else {
+				f.engine.retireErr = errors.New("pending original gate")
+			}
+			if f.owner.close(context.Background()) == nil || f.owner.closed.Load() {
+				t.Fatal("unjoined owner allowed native teardown")
+			}
+			if fault == "remote-join" && strings.Contains(strings.Join(f.events, ","), "retire") {
+				t.Fatal("native gate retired before remote join", f.events)
+			}
+			f.proof.closeErr = nil
+			f.engine.retireErr = nil
+			if err := f.owner.close(context.Background()); err != nil || !f.owner.closed.Load() {
+				t.Fatal("original cleanup retry failed", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainExecutionRuntimeRejectsReplacedOwners(t *testing.T) {
+	for _, fault := range []string{"foreign-projection", "preparation-identity", "host", "readback", "late-readback"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newDesktopExecutionRuntimeFixture(t)
+			if fault == "foreign-projection" {
+				_, f.engine.projection = desktopExecutionCommandSource(t, "linux", "auto")
+				f.engine.identity.SourceSHA256 = f.engine.projection.SourceSHA256()
+				f.engine.identity.ConfigSHA256 = f.engine.projection.ConfigSHA256()
+				f.engine.readback.Identity = f.engine.identity
+			}
+			if fault == "preparation-identity" {
+				f.engine.identity.ConfigSHA256 = f.owner.prep.ConfigSHA256()
+			}
+			err := f.owner.run(context.Background())
+			if fault == "foreign-projection" || fault == "preparation-identity" {
+				if err == nil {
+					t.Fatal("foreign execution owner admitted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch fault {
+			case "host":
+				f.valid.Store(false)
+				if f.owner.current(context.Background()) == nil || f.proof.lifetime.Err() == nil {
+					t.Fatal("replacement host kept original lifetime alive")
+				}
+			case "readback":
+				f.engine.readback.MTU--
+			case "late-readback":
+				calls := 0
+				f.engine.read = func() {
+					calls++
+					if calls == 2 {
+						f.engine.readback.MTU--
+					}
+				}
+			}
+			if f.owner.heartbeat(context.Background(), f.record) == nil {
+				t.Fatal("replaced owner published ready")
+			}
+			if _, err := f.owner.files.root.Lstat("node-chain-execution-ready.json"); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("late owner retained heartbeat", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainExecutionRuntimeJoinsLateConstructor(t *testing.T) {
+	f := newDesktopExecutionRuntimeFixture(t)
+	original := f.owner.factory
+	entered, release := make(chan struct{}), make(chan struct{})
+	f.owner.factory = func(ctx context.Context, p *mobilemultihop.NodeChainExecutionPreparation, s string, current func(context.Context) error) (routerVPNDesktopExecutionEngine, error) {
+		close(entered)
+		<-release
+		engine, _ := original(context.Background(), p, s, current)
+		return engine, errors.New("late native constructor")
+	}
+	done := make(chan error, 1)
+	go func() { done <- f.owner.run(context.Background()) }()
+	<-entered
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if f.owner.close(ctx) == nil || f.owner.closed.Load() {
+		t.Fatal("canceled cleanup abandoned entered native factory")
+	}
+	close(release)
+	if err := <-done; err == nil {
+		t.Fatal("late constructor succeeded")
+	}
+	if f.owner.state.Load().engine.Load() == nil {
+		t.Fatal("partial native owner discarded")
+	}
+	if err := f.owner.close(context.Background()); err != nil || !reflect.DeepEqual(f.events, []string{"retire"}) {
+		t.Fatal("original late engine was not retired", err, f.events)
+	}
+}
