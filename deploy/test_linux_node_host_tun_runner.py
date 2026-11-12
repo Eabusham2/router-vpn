@@ -102,7 +102,10 @@ class InstalledNodeChainHostGate(unittest.TestCase):
     'node-chain-3-awg-fast-wg-connect', 'node-chain-3-wg-awg-strong-connect', 'node-chain-3-awg-strong-awg-fast-connect',
     'node-chain-4-wg-awg-fast-awg-strong-connect', 'node-chain-4-awg-fast-awg-strong-wg-connect', 'node-chain-4-awg-strong-wg-awg-fast-connect',
     'node-chain-4-wg-awg-fast-awg-strong-wrong-middle-key', 'node-chain-4-wg-awg-fast-awg-strong-wrong-awg-parameters',
-    'node-chain-4-wg-awg-fast-awg-strong-middle-source', 'node-chain-4-wg-awg-fast-awg-strong-prefix-lost')
+    'node-chain-4-wg-awg-fast-awg-strong-middle-source', 'node-chain-4-wg-awg-fast-awg-strong-prefix-lost',
+    'node-chain-custom-wg-connect', 'node-chain-custom-awg-fast-connect', 'node-chain-custom-awg-strong-connect',
+    'node-chain-custom-wg-wrong-middle-key', 'node-chain-custom-wg-wrong-middle-public', 'node-chain-custom-wg-final-dns-failure',
+    'node-chain-custom-wg-middle-source', 'node-chain-custom-wg-prefix-lost')
         self.assertEqual(G.NODE_CHAIN_HOST_CASES, expected)
         self.assertEqual(G.CASES[-len(expected):], expected)
         self.assertEqual(len(set(G.CASES)), len(G.CASES))
@@ -130,7 +133,9 @@ class InstalledNodeChainHostGate(unittest.TestCase):
             *(G.NODE_CHAIN_HOST_AUTHORITY_ROOT + '/' + name for name in (
                 '3-nodes', '4-nodes', 'awg-fast-wg-3-nodes', 'wg-awg-strong-3-nodes',
                 'awg-strong-awg-fast-3-nodes', 'wg-awg-fast-awg-strong-4-nodes',
-                'awg-fast-awg-strong-wg-4-nodes', 'awg-strong-wg-awg-fast-4-nodes'))))
+                'awg-fast-awg-strong-wg-4-nodes', 'awg-strong-wg-awg-fast-4-nodes')),
+            G.NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT,
+            *(G.NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '/' + name for name in ('custom-wg', 'custom-awg-fast', 'custom-awg-strong'))))
         good = ''.join('=== RUN   ' + name + '\n--- PASS: ' + name + ' (0.01s)\n' for name in names)
         G.check_node_chain_host_authority_verdict(good)
         for line in good.splitlines(True):
@@ -141,7 +146,7 @@ class InstalledNodeChainHostGate(unittest.TestCase):
         with patch.object(G.NODE, 'run', return_value=(0, good)) as run, redirect_stdout(io.StringIO()):
             self.assertEqual(G.execute_node_chain_host_authority(binary, captured), good)
         run.assert_called_once_with([str(binary), '-test.v', '-test.timeout=30s',
-            '-test.run=^' + G.NODE_CHAIN_HOST_AUTHORITY_ROOT + '$'], cwd=G.ROOT, env=captured, timeout=40)
+            '-test.run=^(' + G.NODE_CHAIN_HOST_AUTHORITY_ROOT + '|' + G.NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + ')$'], cwd=G.ROOT, env=captured, timeout=40)
         for status, output in ((1, good), (0, 'PASS\n'), (0, '')):
             with patch.object(G.NODE, 'run', return_value=(status, output)), self.assertRaises(ValueError):
                 G.execute_node_chain_host_authority(binary, captured)

@@ -40,6 +40,9 @@ var linuxNodeChainHostCases = []string{
 	"node-chain-4-wg-awg-fast-awg-strong-connect", "node-chain-4-awg-fast-awg-strong-wg-connect", "node-chain-4-awg-strong-wg-awg-fast-connect",
 	"node-chain-4-wg-awg-fast-awg-strong-wrong-middle-key", "node-chain-4-wg-awg-fast-awg-strong-wrong-awg-parameters",
 	"node-chain-4-wg-awg-fast-awg-strong-middle-source", "node-chain-4-wg-awg-fast-awg-strong-prefix-lost",
+	"node-chain-custom-wg-connect", "node-chain-custom-awg-fast-connect", "node-chain-custom-awg-strong-connect",
+	"node-chain-custom-wg-wrong-middle-key", "node-chain-custom-wg-wrong-middle-public", "node-chain-custom-wg-final-dns-failure",
+	"node-chain-custom-wg-middle-source", "node-chain-custom-wg-prefix-lost",
 }
 
 type linuxNodeChainPrefixRequest struct {
@@ -65,21 +68,24 @@ type linuxNodeChainPeerReply struct {
 		ProofQueries     uint64 `json:"proof_queries"`
 		AuthRefusals     uint64 `json:"auth_refusals"`
 	} `json:"prefixes"`
-	Final linuxImportedPeerReply `json:"final"`
+	Final  linuxImportedPeerReply          `json:"final"`
+	Middle *linuxNodeChainImportedCounters `json:"middle,omitempty"`
 }
 
 type linuxNodeChainPeer struct {
-	input, output *os.File
-	reader        *bufio.Reader
-	command       *exec.Cmd
-	done          chan struct{}
-	diagnostic    linuxHostTUNOutput
-	clients       []*ecdh.PrivateKey
-	requests      []linuxNodeChainPrefixRequest
-	finalClient   *ecdh.PrivateKey
-	finalServer   *ecdh.PrivateKey
-	password      string
-	reply         linuxNodeChainPeerReply
+	input, output  *os.File
+	reader         *bufio.Reader
+	command        *exec.Cmd
+	done           chan struct{}
+	diagnostic     linuxHostTUNOutput
+	clients        []*ecdh.PrivateKey
+	requests       []linuxNodeChainPrefixRequest
+	finalClient    *ecdh.PrivateKey
+	finalServer    *ecdh.PrivateKey
+	password       string
+	middlePassword string
+	middleMethod   string
+	reply          linuxNodeChainPeerReply
 }
 
 func linuxNodeChainProofID(key *ecdh.PrivateKey) string {
@@ -113,6 +119,11 @@ func linuxNodeChainScenario(scenario string) ([]string, string, error) {
 	}
 	if !found {
 		return nil, "", errors.New("uncaptured ordered installed scenario")
+	}
+	for _, item := range linuxNodeChainImportedCipherCases() {
+		if action, ok := strings.CutPrefix(scenario, item.prefix); ok {
+			return append([]string(nil), item.modes...), action, nil
+		}
 	}
 	cases := linuxNodeChainCipherCases()
 	// Longest captured prefixes must win over the original WG-only names.
@@ -209,6 +220,13 @@ func (peer *linuxNodeChainPeer) read(t *testing.T) linuxNodeChainPeerReply {
 			t.Fatal("ordered peer native parameter readback changed", i)
 		}
 	}
+	if peer.middlePassword != "" {
+		if reply.Middle == nil || reply.Middle.Method != peer.middleMethod {
+			t.Fatal("custom peer lost its independently captured middle cipher")
+		}
+	} else if reply.Middle != nil {
+		t.Fatal("paired peer unexpectedly supplied imported middle authority")
+	}
 	peer.reply = reply
 	return reply
 }
@@ -230,11 +248,14 @@ func startLinuxNodeChainPeer(t *testing.T, modes []string) *linuxNodeChainPeer {
 	t.Cleanup(func() { _ = os.RemoveAll(directory) })
 	image := filepath.Join(directory, "peer.test")
 	linuxHostTUNCopy(t, os.Getenv("ROUTERVPN_NODE_HOST_PEER_BINARY"), image, 512<<20, os.Getenv("ROUTERVPN_NODE_HOST_PEER_SHA256"), 0755)
-	peer := linuxNodeChainPeerKeys(t, len(modes)+1)
-	linuxNodeChainSetModes(t, peer, modes)
+	peer := linuxNodeChainPeerForModes(t, modes)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	peer.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", image, "-test.run=^TestRouterVPNDesktopNodeChainReferenceProcess$", "-test.count=1", "-test.timeout=115s")
-	peer.command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD=1"}
+	root, child := "TestRouterVPNDesktopNodeChainReferenceProcess", "ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD=1"
+	if peer.middlePassword != "" {
+		root, child = "TestRouterVPNDesktopNodeChainImportedMiddleReferenceProcess", "ROUTERVPN_NODE_CHAIN_IMPORTED_REFERENCE_CHILD=1"
+	}
+	peer.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", image, "-test.run=^"+root+"$", "-test.count=1", "-test.timeout=115s")
+	peer.command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", child}
 	inputRead, inputWrite, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +275,11 @@ func startLinuxNodeChainPeer(t *testing.T, modes []string) *linuxNodeChainPeer {
 	t.Cleanup(func() { inputWrite.Close(); cancel(); <-peer.done; outputRead.Close() })
 	request := map[string]any{"schema": 1, "address": "192.168.210.2", "client_address": "192.168.210.1", "prefixes": peer.requests,
 		"final_password": peer.password, "final_node_proof_id": linuxNodeChainProofID(peer.finalServer), "final_api_token": "installed-ordered-final-token"}
-	if err := json.NewEncoder(peer.input).Encode(request); err != nil {
+	var wire any = request
+	if peer.middlePassword != "" {
+		wire = map[string]any{"schema": 1, "paired": request, "middle_method": peer.middleMethod, "middle_password": peer.middlePassword}
+	}
+	if err := json.NewEncoder(peer.input).Encode(wire); err != nil {
 		t.Fatal(err)
 	}
 	peer.read(t)
@@ -328,6 +353,11 @@ func linuxNodeChainInstalledSources(t *testing.T, peer *linuxNodeChainPeer, faul
 		Endpoint: "10.77.0.1", RouterAPI: "http://10.77.0.1:8787", APIToken: "installed-ordered-final-token", AdGuardIPv4: "192.168.50.133", DNSMode: "home",
 		IPv6Mode: "off", StartLayer: "off", MTUPolicy: "auto", BaseTunnel: "wg", KillSwitch: true, KillSwitchPolicy: "on-connect",
 		MultihopEnabled: true, MultihopExecution: "local"}
+	if peer.middlePassword != "" {
+		middle := linuxNodeChainImportedProfile(t, peer, fault)
+		profiles = append(profiles, middle)
+		nodes = append(nodes, common.MultihopNodeSelection{ID: middle.ID, Mode: "shadowsocks"})
+	}
 	nodes = append(nodes, common.MultihopNodeSelection{ID: final.ID, Mode: "shadowsocks"})
 	final.MultihopNodes = nodes
 	profiles = append(profiles, final)
@@ -400,8 +430,10 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 	count := len(modes) + 1
 	peer := startLinuxNodeChainPeer(t, modes)
 	installLinuxNodeChainProfiles(t, peer, action)
-	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "final-dns-failure" || action == "final-node-failure"
+	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "wrong-middle-public" || action == "final-dns-failure" || action == "final-node-failure"
 	switch action {
+	case "wrong-middle-public":
+		peer.observe(t, "wrong-middle-public")
 	case "wrong-middle-proof":
 		peer.observe(t, "wrong-node:1")
 	case "final-dns-failure":
@@ -422,8 +454,11 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 		if action == "wrong-middle-proof" && before.Prefixes[1].ProofQueries == 0 || action == "final-dns-failure" && before.Final.DNSQueries == 0 || action == "final-node-failure" && before.Final.RouterQueries == 0 {
 			t.Fatal("ordered negative failed before the intended independent middle/final service", before)
 		}
-		if (action == "wrong-middle-key" || action == "wrong-awg-parameters") && (before.Prefixes[1].RawUDP == 0 || before.Prefixes[1].ProofQueries != 0 || before.Final.RouterQueries != 0) {
+		if peer.middlePassword == "" && (action == "wrong-middle-key" || action == "wrong-awg-parameters") && (before.Prefixes[1].RawUDP == 0 || before.Prefixes[1].ProofQueries != 0 || before.Final.RouterQueries != 0) {
 			t.Fatal("wrong middle key bypassed its actual encrypted boundary", before)
+		}
+		if peer.middlePassword != "" {
+			linuxNodeChainImportedNegativeCounters(t, before, action)
 		}
 	} else {
 		if result.Stage != "ready" || result.Ready == nil || result.Proof == nil || !result.Monitor || len(result.Nodes) != count || result.Proof.Generation != 1 ||
@@ -438,8 +473,15 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 				t.Fatal("ordered path omitted independently encrypted authenticated prefix", i, prefix)
 			}
 		}
+		if peer.middlePassword != "" {
+			linuxNodeChainImportedPositiveCounters(t, before)
+		}
 		if action == "prefix-lost" {
-			peer.observe(t, "wrong-node:1")
+			if peer.middlePassword != "" {
+				peer.observe(t, "stop-middle")
+			} else {
+				peer.observe(t, "wrong-node:1")
+			}
 		}
 		if _, err := process.gate.Write([]byte{2}); err != nil {
 			t.Fatal(err)
@@ -532,7 +574,7 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 			failure = errors.Join(failure, session.Retire(cleanup, session.active, false))
 		}
 	}()
-	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "final-dns-failure" || action == "final-node-failure"
+	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "wrong-middle-public" || action == "final-dns-failure" || action == "final-node-failure"
 	result := linuxNodeChainHostResult{linuxImportedHostResult: linuxImportedHostResult{Scenario: scenario}}
 	if negative {
 		if response.Code == http.StatusOK || a.state.Connected || a.cmd != nil || constructed == nil || constructed.chain == nil || constructed.chain.platform == nil {
@@ -604,7 +646,11 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 		}
 		if action == "middle-source" {
 			a.mu.Lock()
-			a.profiles.Profiles[1].APIToken += "-replaced-after-admission"
+			if a.profiles.Profiles[1].NodeKind == "external" {
+				a.profiles.Profiles[1].External.Shadowsocks.Password = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("r", 32)))
+			} else {
+				a.profiles.Profiles[1].APIToken += "-replaced-after-admission"
+			}
 			a.mu.Unlock()
 		}
 		if action == "middle-source" || action == "prefix-lost" {

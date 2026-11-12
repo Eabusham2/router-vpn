@@ -218,7 +218,10 @@ NODE_CHAIN_HOST_CASES = ('node-chain-3-connect', 'node-chain-4-connect', 'node-c
     'node-chain-3-awg-fast-wg-connect', 'node-chain-3-wg-awg-strong-connect', 'node-chain-3-awg-strong-awg-fast-connect',
     'node-chain-4-wg-awg-fast-awg-strong-connect', 'node-chain-4-awg-fast-awg-strong-wg-connect', 'node-chain-4-awg-strong-wg-awg-fast-connect',
     'node-chain-4-wg-awg-fast-awg-strong-wrong-middle-key', 'node-chain-4-wg-awg-fast-awg-strong-wrong-awg-parameters',
-    'node-chain-4-wg-awg-fast-awg-strong-middle-source', 'node-chain-4-wg-awg-fast-awg-strong-prefix-lost')
+    'node-chain-4-wg-awg-fast-awg-strong-middle-source', 'node-chain-4-wg-awg-fast-awg-strong-prefix-lost',
+    'node-chain-custom-wg-connect', 'node-chain-custom-awg-fast-connect', 'node-chain-custom-awg-strong-connect',
+    'node-chain-custom-wg-wrong-middle-key', 'node-chain-custom-wg-wrong-middle-public', 'node-chain-custom-wg-final-dns-failure',
+    'node-chain-custom-wg-middle-source', 'node-chain-custom-wg-prefix-lost')
 CASES += NODE_CHAIN_HOST_CASES
 NODE_CHAIN_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledNodeChainFixtureKeepsCompiledAuthority'
 NODE_CHAIN_CIPHER_CASES = (
@@ -230,12 +233,16 @@ NODE_CHAIN_CIPHER_CASES = (
 NODE_CHAIN_HOST_AUTHORITY_CASES = (NODE_CHAIN_HOST_AUTHORITY_ROOT,
     *(NODE_CHAIN_HOST_AUTHORITY_ROOT + '/' + name for name, _, _ in NODE_CHAIN_CIPHER_CASES))
 
+NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledImportedNodeChainFixtureKeepsOriginalSources'
+NODE_CHAIN_HOST_AUTHORITY_CASES += (NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT,
+    *(NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '/' + name for name in ('custom-wg', 'custom-awg-fast', 'custom-awg-strong')))
+
 def check_node_chain_host_authority_verdict(output):
     NODE.require_native_verdicts(output, NODE_CHAIN_HOST_AUTHORITY_CASES, 'installed ordered source authority')
 
 def execute_node_chain_host_authority(binary, captured):
     status, output = NODE.run([str(binary), '-test.v', '-test.timeout=30s',
-        '-test.run=^' + NODE_CHAIN_HOST_AUTHORITY_ROOT + '$'], cwd=ROOT, env=captured, timeout=40)
+        '-test.run=^(' + NODE_CHAIN_HOST_AUTHORITY_ROOT + '|' + NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + ')$'], cwd=ROOT, env=captured, timeout=40)
     if status:
         raise ValueError('Installed ordered source authority failed:\n' + output[-16384:])
     check_node_chain_host_authority_verdict(output)
