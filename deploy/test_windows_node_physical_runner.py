@@ -1014,6 +1014,41 @@ func TestOriginalLeaseFixtureRecovery(t *testing.T){
 class OrdinaryOpenVPNScope(unittest.TestCase):
     setUp = OrdinaryHysteria2Scope.setUp
 
+    def test_actual_provider_port_allocator_uses_captured_transport_and_preserves_errors(self):
+        source = (ROOT / "mobile/desktop/external_box_openvpn_reference_test.go.tmpl").read_text()
+        start = source.index("func desktopOpenVPNCompositionPort(")
+        end = source.index("\nfunc desktopOpenVPNCompositionServeStream", start)
+        original = source[start:end]
+        self.assertIn('port, err = desktopOpenVPNCompositionPort(address, request.Network, used)', source)
+        self.assertIn('unavailable, err = desktopOpenVPNCompositionPort(address, "tcp", used)', source)
+        self.assertIn(GATE.EXTERNAL_OPENVPN_PORT, GATE.external_openvpn_arguments("witness")[0])
+        self.assertEqual(len(GATE.EXTERNAL_OPENVPN_PORT_CASES), 8)
+        go = shutil.which("go")
+        self.assertIsNotNone(go, "required real Go allocator regression")
+        variants = {
+            "current": original,
+            "borrow-tcp-port": original.replace('if network == "tcp" {', 'if true {', 1),
+            "hide-access-error": original.replace('return 0, err\n', 'return 0, nil\n'),
+        }
+        for name, selected in variants.items():
+            with self.subTest(name=name):
+                work = self.workspace / name
+                work.mkdir()
+                (work / "go.mod").write_text("module owned-port-fixture\n\ngo 1.26.0\n")
+                (work / "port_test.go").write_text('package fixture\nimport("errors";"net";"os";"syscall";"testing")\n' + selected)
+                result = subprocess.run([go, "test", "-race", "-count=1", "-v", "-timeout=20s", "."], cwd=work,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+                if name == "current":
+                    self.assertEqual(result.returncode, 0, result.stdout)
+                    for case in GATE.EXTERNAL_OPENVPN_PORT_CASES:
+                        self.assertIn("--- PASS: " + case + " (", result.stdout)
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    expected = "UDP consulted unselected TCP reservation" if name == "borrow-tcp-port" else "permission error retried or hidden"
+                    self.assertIn(expected, result.stdout)
+                for invalid in ("panic:", "fatal error:", "DATA RACE", "[build failed]"):
+                    self.assertNotIn(invalid, result.stdout)
+
     def test_each_alias_and_transport_verdict_is_unique_and_mandatory(self):
         self.assertEqual(GATE.EXTERNAL_OPENVPN_NETWORKS, ("tcp", "udp", "mixed"))
         self.assertIn(GATE.EXTERNAL_OPENVPN_ALIAS + "/unavailable-tcp-reservation", GATE.EXTERNAL_OPENVPN_ALIAS_CASES)

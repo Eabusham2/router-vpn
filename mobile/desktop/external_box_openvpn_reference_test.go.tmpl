@@ -146,32 +146,92 @@ func desktopOpenVPNCompositionProviderBox(ctx context.Context, graph map[string]
 	return New(Options{Context: ctx, Options: options})
 }
 
-// Reserve distinct port numbers in this fixture; only genuine bind collisions
-// are retried. Both TCP and UDP are checked before the native server opens one.
-func desktopOpenVPNCompositionPort(address string, used map[int]bool) (int, error) {
+// Discover a port only in the captured provider transport. TCP and UDP have
+// independent dynamic ranges and reservations, particularly on Windows.
+func desktopOpenVPNCompositionPort(address, network string, used map[int]bool) (int, error) {
+	return desktopOpenVPNCompositionPortOwned(address, network, used, net.Listen, net.ListenPacket)
+}
+
+func desktopOpenVPNCompositionPortOwned(address, network string, used map[int]bool,
+	listen func(string, string) (net.Listener, error), packet func(string, string) (net.PacketConn, error)) (int, error) {
+	if network != "tcp" && network != "udp" {
+		return 0, errors.New("owned OpenVPN provider requires its captured transport")
+	}
 	for attempt := 0; attempt < 128; attempt++ {
-		listener, err := net.Listen("tcp4", address+":0")
-		if err != nil {
-			return 0, err
+		var port int
+		if network == "tcp" {
+			listener, err := listen("tcp4", net.JoinHostPort(address, "0"))
+			if err != nil {
+				return 0, err
+			}
+			port = listener.Addr().(*net.TCPAddr).Port
+			if err := listener.Close(); err != nil {
+				return 0, err
+			}
+		} else {
+			owner, err := packet("udp4", net.JoinHostPort(address, "0"))
+			if err != nil {
+				return 0, err
+			}
+			port = owner.LocalAddr().(*net.UDPAddr).Port
+			if err := owner.Close(); err != nil {
+				return 0, err
+			}
 		}
-		port := listener.Addr().(*net.TCPAddr).Port
+		if port < 1 || port > 65535 {
+			return 0, errors.New("owned OpenVPN provider lost selected port")
+		}
 		if used[port] {
-			_ = listener.Close()
 			continue
 		}
-		packet, packetErr := net.ListenPacket("udp4", net.JoinHostPort(address, strconv.Itoa(port)))
-		_ = listener.Close()
-		if errors.Is(packetErr, syscall.EADDRINUSE) {
-			continue
-		}
-		if packetErr != nil {
-			return 0, packetErr
-		}
-		_ = packet.Close()
 		used[port] = true
 		return port, nil
 	}
 	return 0, errors.New("owned OpenVPN provider has no distinct available port")
+}
+
+func TestRouterVPNDesktopOpenVPNProviderPort(t *testing.T) {
+	for _, network := range []string{"tcp", "udp"} {
+		t.Run(network, func(t *testing.T) {
+			denied := &net.OpError{Op: "listen", Net: network + "4", Err: &os.SyscallError{Syscall: "bind", Err: syscall.EACCES}}
+			t.Run("independent-transport", func(t *testing.T) {
+				used := map[int]bool{}
+				listen, packet := net.Listen, net.ListenPacket
+				if network == "tcp" {
+					packet = func(string, string) (net.PacketConn, error) {
+						t.Fatal("TCP consulted unselected UDP reservation")
+						return nil, denied
+					}
+				} else {
+					listen = func(string, string) (net.Listener, error) {
+						t.Fatal("UDP consulted unselected TCP reservation")
+						return nil, denied
+					}
+				}
+				for i := 0; i < 4; i++ {
+					port, err := desktopOpenVPNCompositionPortOwned("127.0.0.1", network, used, listen, packet)
+					if err != nil || !used[port] || len(used) != i+1 {
+						t.Fatal("captured transport allocation", port, err)
+					}
+				}
+			})
+			t.Run("selected-access-denied", func(t *testing.T) {
+				calls := 0
+				listen := func(string, string) (net.Listener, error) { calls++; return nil, denied }
+				packet := func(string, string) (net.PacketConn, error) { calls++; return nil, denied }
+				used := map[int]bool{}
+				port, err := desktopOpenVPNCompositionPortOwned("127.0.0.1", network, used, listen, packet)
+				if port != 0 || !errors.Is(err, syscall.EACCES) || calls != 1 || len(used) != 0 {
+					t.Fatal("permission error retried or hidden", port, err, calls)
+				}
+			})
+		})
+	}
+	t.Run("unknown-transport", func(t *testing.T) {
+		if port, err := desktopOpenVPNCompositionPort("127.0.0.1", "mixed", map[int]bool{}); err == nil || port != 0 {
+			t.Fatal("unselected transport accepted")
+		}
+	})
 }
 
 func desktopOpenVPNCompositionServeStream(p *desktopExternalIntegrationPeer, listener net.Listener, destination string) {
@@ -336,14 +396,14 @@ func desktopOpenVPNReferenceServeOwned(address string, appID []byte, unavailable
 		}
 	} else {
 		// Existing non-Windows fixtures retain their original allocation.
-		unavailable, err = desktopOpenVPNCompositionPort(address, used)
+		unavailable, err = desktopOpenVPNCompositionPort(address, "tcp", used)
 	}
 	if err != nil {
 		return fail("unavailable-port-reservation", err)
 	}
 	var port int
 	for attempt := 0; attempt < 16; attempt++ {
-		port, err = desktopOpenVPNCompositionPort(address, used)
+		port, err = desktopOpenVPNCompositionPort(address, request.Network, used)
 		if err != nil {
 			return fail("provider-port-reservation", err)
 		}

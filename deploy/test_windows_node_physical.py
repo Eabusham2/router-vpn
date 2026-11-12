@@ -85,7 +85,11 @@ EXTERNAL_OPENVPN_OWNERSHIP_LEAVES = (
     "history-truncated", "history-rewritten", "collector-invalid", "collector-overflow",
     "fresh-retry", "retransmission", "same-generation", "same-socket", "same-session", "stale-event", "native-permit-renewal")
 EXTERNAL_OPENVPN_OWNERSHIP_CASES = (EXTERNAL_OPENVPN_OWNERSHIP, *(EXTERNAL_OPENVPN_OWNERSHIP + "/" + case for case in EXTERNAL_OPENVPN_OWNERSHIP_LEAVES))
-EXTERNAL_OPENVPN_WITNESS_CASES = EXTERNAL_OPENVPN_CODEC_CASES + EXTERNAL_OPENVPN_OWNERSHIP_CASES
+EXTERNAL_OPENVPN_PORT = "TestRouterVPNDesktopOpenVPNProviderPort"
+EXTERNAL_OPENVPN_PORT_CASES = (EXTERNAL_OPENVPN_PORT, EXTERNAL_OPENVPN_PORT + "/unknown-transport",
+    *(EXTERNAL_OPENVPN_PORT + "/" + network + suffix for network in ("tcp", "udp")
+      for suffix in ("", "/independent-transport", "/selected-access-denied")))
+EXTERNAL_OPENVPN_WITNESS_CASES = EXTERNAL_OPENVPN_CODEC_CASES + EXTERNAL_OPENVPN_OWNERSHIP_CASES + EXTERNAL_OPENVPN_PORT_CASES
 
 EXTERNAL_OPENVPN_MIXED_CONTROL = EXTERNAL_OPENVPN_ROOT + "/mixed/reject/control-key"
 EXTERNAL_OPENVPN_MIXED_LIFECYCLE = ("on-connect", "always", "successor-and-original-restore")
@@ -118,7 +122,7 @@ def external_openvpn_arguments(network):
         names = EXTERNAL_OPENVPN_MIXED_LIFECYCLE if network == "mixed-lifecycle" else ("reject", "cancelled-proof", "foreign-predecessor", "commit-refused")
         expression = "^" + EXTERNAL_OPENVPN_ROOT + "$/^mixed$/^(" + "|".join(re.escape(name) for name in names) + ")$"
     else:
-        expression = "^" + EXTERNAL_OPENVPN_ALIAS + "$" if network == "alias" else "^(" + EXTERNAL_OPENVPN_CODEC + "|" + EXTERNAL_OPENVPN_OWNERSHIP + ")$" if network == "witness" else exact_control if network == "mixed-control-key" else "^" + EXTERNAL_OPENVPN_ROOT + "$/^" + network + "$"
+        expression = "^" + EXTERNAL_OPENVPN_ALIAS + "$" if network == "alias" else "^(" + EXTERNAL_OPENVPN_CODEC + "|" + EXTERNAL_OPENVPN_OWNERSHIP + "|" + EXTERNAL_OPENVPN_PORT + ")$" if network == "witness" else exact_control if network == "mixed-control-key" else "^" + EXTERNAL_OPENVPN_ROOT + "$/^" + network + "$"
     result = ["-test.run=" + expression]
     if network == "mixed-refusals":
         result.append("-test.skip=" + exact_control)
