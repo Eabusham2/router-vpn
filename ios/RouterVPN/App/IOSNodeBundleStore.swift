@@ -17,6 +17,9 @@ final class IOSNodeBundleStore {
     private var storageError: Error?
 
     private init() {
+        // A process restart also advances the durable publication; an older
+        // extension candidate cannot reuse a prior app's source generation.
+        defer { if storageError == nil { try? IOSCandidateCatalogPublication.shared.publish(records) } }
         do {
             if try encryptedStoreExists() {
                 records = try readEncryptedRecords()
@@ -602,10 +605,20 @@ final class IOSNodeBundleStore {
     }
 
     private func commitRecords(_ next: [String: Data]) throws {
+        let publication = try IOSCandidateCatalogPublication.shared.beginChange()
         try writeEncryptedRecords(next)
         // Adopt RAM only after authenticated encryption + atomic protected-file commit.
         records = next
+        // Publication failure leaves candidates unavailable; the private
+        // durable commit and its adopted RAM must still report success.
+        try? IOSCandidateCatalogPublication.shared.finishChange(publication, records: records)
         cleanupLegacyStoresBestEffort()
+    }
+
+    func candidateSnapshot() throws -> (records: [String: Data], stamp: IOSCandidateCatalogPublication.Stamp) {
+        try ensureStorageReady()
+        guard try readEncryptedRecords() == records else { throw profileRestoreError() }
+        return (records, try IOSCandidateCatalogPublication.shared.current(records: records))
     }
 
     private func persist() throws {
