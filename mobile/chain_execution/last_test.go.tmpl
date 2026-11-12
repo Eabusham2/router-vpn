@@ -1,0 +1,294 @@
+package libbox
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"strings"
+	"testing"
+)
+
+type executionBridgeLastRecord struct {
+	Schema            int                               `json:"schema"`
+	LocalSourceSHA256 string                            `json:"local_source_sha256"`
+	LocalInputSHA256  string                            `json:"local_input_sha256"`
+	Setting           string                            `json:"setting"`
+	Execution         string                            `json:"execution"`
+	Target            string                            `json:"target"`
+	Descriptor        multihoprelay.NodeChainDescriptor `json:"descriptor"`
+	DescriptorSHA256  string                            `json:"descriptor_sha256"`
+	DNSPolicySHA256   string                            `json:"dns_policy_sha256"`
+	EntryHost         string                            `json:"entry_host"`
+	Peer              string                            `json:"peer"`
+	FirstPort         int                               `json:"first_port"`
+	LastPort          int                               `json:"last_port"`
+	Port              int                               `json:"listen_port"`
+	DesktopTargetOS   string                            `json:"desktop_target_os,omitempty"`
+	Digest            string                            `json:"digest"`
+}
+
+// This is a durable source fixture, not a prior live proof. Actual shared
+// constructors validate every original member and the independent Server key.
+func executionBridgeSavedLast(t *testing.T, chosen string) (string, string, string) {
+	t.Helper()
+	raw, launch := executionBridgeSource(t, "auto")
+	var source mobilemultihop.NodeChainSource
+	if err := json.Unmarshal([]byte(raw), &source); err != nil {
+		t.Fatal(err)
+	}
+	chain, err := mobilemultihop.NewNodeChain(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofs := chain.ProofInventory()
+	serverSource := mobilemultihop.NodeChainServerSource{Schema: 1, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: proofs[0].Mode}
+	for i := 1; i < len(source.Nodes); i++ {
+		input, identity := source.Nodes[i], source.IdentitySources[i]
+		if i == 1 {
+			var row struct {
+				Mode      string `json:"mode"`
+				Files     string `json:"files"`
+				Profile   string `json:"profile_json"`
+				Start     string `json:"start"`
+				Bootstrap string `json:"dns_bootstrap"`
+			}
+			if err = json.Unmarshal([]byte(input), &row); err != nil {
+				t.Fatal(err)
+			}
+			var files map[string]string
+			if err = json.Unmarshal([]byte(row.Files), &files); err != nil {
+				t.Fatal(err)
+			}
+			wg, err := base64.StdEncoding.DecodeString(files["wg.conf"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			oldKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{21}, 32))
+			if !strings.Contains(string(wg), oldKey) {
+				t.Fatal("missing independent original key")
+			}
+			files["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(strings.Replace(string(wg), oldKey, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{221}, 32)), 1)))
+			identity = executionBridgeJSON(t, files)
+			node, err := mobilemultihop.NewNodeProfile(row.Mode, identity, row.Profile, row.Start, row.Bootstrap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, err = node.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		serverSource.Nodes = append(serverSource.Nodes, input)
+		serverSource.IdentitySources = append(serverSource.IdentitySources, identity)
+	}
+	policy, err := mobilemultihop.NewNodeChainServerPolicy(executionBridgeJSON(t, serverSource))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prep, err := mobilemultihop.NewNodeChainExecutionPreparation(raw, "auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := policy.Descriptor()
+	digest, err := descriptor.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputDigest := sha256.Sum256([]byte(raw))
+	record := executionBridgeLastRecord{Schema: 1, LocalSourceSHA256: prep.LocalSourceSHA256(), LocalInputSHA256: hex.EncodeToString(inputDigest[:]), Setting: "auto", Execution: chosen, Target: mobilemultihop.Targets[0], Descriptor: descriptor, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, EntryHost: "10.77.0.1", Peer: "10.77.0.2", FirstPort: 32000, LastPort: 32007, Port: 32003}
+	sum := sha256.Sum256(append([]byte("routervpn-node-chain-execution-last-v1\x00"), []byte(executionBridgeJSON(t, record))...))
+	record.Digest = hex.EncodeToString(sum[:])
+	saved := executionBridgeJSON(t, record)
+	if _, err := mobilemultihop.ParseNodeChainExecutionLast(saved, prep); err != nil {
+		t.Fatal("persisted fixture", err)
+	}
+	return raw, launch, saved
+}
+
+func TestRouterNodeChainExecutionBridgeLastLaunchKeepsSavedChoice(t *testing.T) {
+	for _, chosen := range []string{"local", "server"} {
+		t.Run(chosen, func(t *testing.T) {
+			source, local, saved := executionBridgeSavedLast(t, chosen)
+			ordinary, err := RouterNodeChainExecutionFromLaunch(local, "auto")
+			if err != nil {
+				t.Fatal(err)
+			}
+			normal, err := ordinary.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(normal, `"schema":1,`) || strings.Contains(normal, `"last":`) {
+				t.Fatal("ordinary schema changed")
+			}
+			m, err := RouterNodeChainExecutionFromLast(local, "auto", saved)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, err := m.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if json.Unmarshal([]byte(input), &fields) != nil || len(fields) != 6 || string(fields["schema"]) != "2" {
+				t.Fatal("Last launch schema lost")
+			}
+			if json.Unmarshal([]byte(m.Source()), &fields) != nil {
+				t.Fatal("source malformed")
+			}
+			fields = nil
+			_ = json.Unmarshal([]byte(m.Source()), &fields)
+			if len(fields) != 3 || m.Source() != ordinary.Source() || m.prep.LocalSource() != source || m.ConfigSHA256() != ordinary.ConfigSHA256() {
+				t.Fatal("Last changed ordinary source or config")
+			}
+			replay, err := NewRouterNodeChainExecutionLaunch(input)
+			if err != nil {
+				t.Fatal("saved Last choice lost or fabricated proof", err)
+			}
+			if replay.last == nil || replay.last.JSON() != saved || replay.last.Execution() != chosen || replay.Healthy() || replay.Execution() != "" {
+				t.Fatal("saved Last choice lost or fabricated proof")
+			}
+			if captured, err := replay.CaptureLastJSON(); err == nil || captured != "" {
+				t.Fatal("unproved durable record became live Last")
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeLastLaunchRejectsMutation(t *testing.T) {
+	_, local, saved := executionBridgeSavedLast(t, "server")
+	m, err := RouterNodeChainExecutionFromLast(local, "auto", saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := m.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var launch routerNodeChainExecutionLaunch
+	_ = json.Unmarshal([]byte(input), &launch)
+	for _, fault := range []string{"missing", "downgrade", "unknown", "duplicate", "digest", "config"} {
+		t.Run(fault, func(t *testing.T) {
+			changed := launch
+			switch fault {
+			case "missing":
+				changed.Last = ""
+			case "downgrade":
+				changed.Schema = 1
+			case "digest":
+				changed.Last = strings.Replace(saved, `"listen_port":32003`, `"listen_port":32004`, 1)
+			case "config":
+				changed.ConfigSHA256 = strings.Repeat("0", 64)
+			}
+			raw := executionBridgeJSON(t, changed)
+			if fault == "unknown" {
+				raw = strings.TrimSuffix(raw, "}") + `,"extra":true}`
+			}
+			if fault == "duplicate" {
+				raw = strings.Replace(raw, `"schema":2`, `"schema":2,"schema":2`, 1)
+			}
+			if value, err := NewRouterNodeChainExecutionLaunch(raw); err == nil || value != nil {
+				t.Fatal("changed Last framing accepted", fault)
+			}
+		})
+	}
+	_, foreign := executionBridgeSource(t, "server")
+	if value, err := RouterNodeChainExecutionFromLast(foreign, "server", saved); err == nil || value != nil {
+		t.Fatal("Last crossed original settings/source")
+	}
+}
+
+type executionBridgeLastBoundary struct {
+	routerNodeChainExecutionEngine
+	discoveryCalls, normalCalls, lastCalls int
+	last                                   string
+}
+
+func (e *executionBridgeLastBoundary) DiscoverContext(context.Context) (mobilemultihop.NodeChainExecutionDiscovery, error) {
+	e.discoveryCalls++
+	return mobilemultihop.NodeChainExecutionDiscovery{FirstPort: 32000, LastPort: 32007}, nil
+}
+func (e *executionBridgeLastBoundary) AdoptContext(context.Context, string, int) (*mobilemultihop.NodeChainExecutionProjection, error) {
+	e.normalCalls++
+	return nil, errors.New("unexpected Compare fallback")
+}
+func (e *executionBridgeLastBoundary) AdoptLastContext(_ context.Context, last mobilemultihop.NodeChainExecutionLast) (mobilemultihop.NodeChainExecutionLastPlan, error) {
+	e.lastCalls++
+	e.last = last.JSON()
+	return mobilemultihop.NodeChainExecutionLastPlan{}, errors.New("original Last refusal")
+}
+func (e *executionBridgeLastBoundary) RetireContext(context.Context) error { return nil }
+
+func TestRouterNodeChainExecutionBridgeLastNeverFallsBack(t *testing.T) {
+	_, local, saved := executionBridgeSavedLast(t, "server")
+	m, err := RouterNodeChainExecutionFromLast(local, "auto", saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := executionBridgeReservedService(t, m)
+	if err := server.StartedService.StartOrReloadService(server.ctx, executionBridgeEmptyNativeConfig, nil); err != nil {
+		t.Fatal(err)
+	}
+	engine := &executionBridgeLastBoundary{}
+	err = m.runWithFactory(server, func(context.Context, *box.Box, *mobilemultihop.NodeChainExecutionPreparation, string, func(context.Context) error) (routerNodeChainExecutionEngine, error) {
+		return engine, nil
+	})
+	if err == nil || engine.discoveryCalls != 1 || engine.lastCalls != 1 || engine.last != saved || engine.normalCalls != 0 {
+		t.Fatal("saved Last refused without exact discovery/adoption or fell back to Compare", err)
+	}
+	if m.state.Load().controller.Load() != nil || m.Healthy() || m.Execution() != "" {
+		t.Fatal("failed Last fabricated runtime proof")
+	}
+}
+
+// The controller boundary deliberately substitutes only live proof callbacks;
+// native owner checks still use the exact retained StartedService and Instance.
+type executionBridgeLastController struct {
+	routerNodeChainExecutionController
+	capture func(context.Context) (mobilemultihop.NodeChainExecutionLast, error)
+}
+
+func (c *executionBridgeLastController) HealthyContext(ctx context.Context) error { return ctx.Err() }
+func (c *executionBridgeLastController) CaptureLastContext(ctx context.Context) (mobilemultihop.NodeChainExecutionLast, error) {
+	return c.capture(ctx)
+}
+func TestRouterNodeChainExecutionBridgeLastCaptureKeepsController(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		t.Run(map[bool]string{false: "original", true: "replacement"}[replace], func(t *testing.T) {
+			raw, _, saved := executionBridgeSavedLast(t, "server")
+			m, state := executionBridgeNativeFixture(t)
+			var err error
+			m.prep, err = mobilemultihop.NewNodeChainExecutionPreparation(raw, "auto")
+			if err != nil {
+				t.Fatal(err)
+			}
+			last, err := mobilemultihop.ParseNodeChainExecutionLast(saved, m.prep)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := &executionBridgeLastController{}
+			successor := &executionBridgeLastController{}
+			original.capture = func(ctx context.Context) (mobilemultihop.NodeChainExecutionLast, error) {
+				if replace {
+					state.controller.Store(&routerNodeChainExecutionControllerRef{successor})
+				}
+				return last, ctx.Err()
+			}
+			state.controller.Store(&routerNodeChainExecutionControllerRef{original})
+			result, err := m.CaptureLastJSON()
+			if replace {
+				if err == nil || result != "" {
+					t.Fatal("Last capture borrowed successor controller")
+				}
+			} else if err != nil || result != saved {
+				t.Fatal("original proved Last capture lost", err)
+			}
+		})
+	}
+}

@@ -1,0 +1,60 @@
+package libbox
+
+import (
+	"context"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type routerNodeChainExecutionLastEngine interface {
+	AdoptLastContext(context.Context, mobilemultihop.NodeChainExecutionLast) (mobilemultihop.NodeChainExecutionLastPlan, error)
+}
+
+// Revalidate the complete original launch before accepting a saved choice.
+// A Last record grants no native owner, discovery, cleanup or traffic proof.
+func RouterNodeChainExecutionFromLast(localLaunchInput, execution, lastJSON string) (*RouterNodeChainExecution, error) {
+	m, err := RouterNodeChainExecutionFromLaunch(localLaunchInput, execution)
+	if err != nil {
+		return nil, err
+	}
+	last, err := mobilemultihop.ParseNodeChainExecutionLast(lastJSON, m.prep)
+	if err != nil {
+		return nil, err
+	}
+	m.last = &last
+	return m, nil
+}
+
+// Capture only the current runtime's actual proved execution. The shared
+// capture joins its original proof callbacks and retains no live authority in
+// the returned durable record. A simultaneous runtime replacement is refused.
+func (m *RouterNodeChainExecution) CaptureLastJSON() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if m.healthyContext(ctx) != nil {
+		return "", errRouterNodeChainExecution
+	}
+	state := m.state.Load()
+	if state == nil {
+		return "", errRouterNodeChainExecution
+	}
+	controller := state.controller.Load()
+	if controller == nil {
+		return "", errRouterNodeChainExecution
+	}
+	lastController, ok := controller.value.(interface {
+		CaptureLastContext(context.Context) (mobilemultihop.NodeChainExecutionLast, error)
+	})
+	if !ok {
+		return "", errRouterNodeChainExecution
+	}
+	last, err := lastController.CaptureLastContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	if m.nativeCurrent(ctx, state) != nil || state.controller.Load() != controller || last.ValidatePreparation(m.prep) != nil {
+		return "", errRouterNodeChainExecution
+	}
+	return last.JSON(), nil
+}

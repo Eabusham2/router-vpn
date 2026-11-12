@@ -15,6 +15,7 @@ type routerNodeChainExecutionLaunch struct {
 	Source       string `json:"source"`
 	SourceSHA256 string `json:"source_sha256"`
 	ConfigSHA256 string `json:"config_sha256"`
+	Last         string `json:"last,omitempty"`
 }
 
 func NewRouterNodeChainExecution(localSource, execution string) (*RouterNodeChainExecution, error) {
@@ -52,7 +53,7 @@ func NewRouterNodeChainExecutionLaunch(input string) (*RouterNodeChainExecution,
 		return nil, errRouterNodeChainExecution
 	}
 	var launch routerNodeChainExecutionLaunch
-	if json.Unmarshal([]byte(input), &launch) != nil || launch.Kind != routerNodeChainExecutionLaunchKind || launch.Schema != 1 {
+	if json.Unmarshal([]byte(input), &launch) != nil || launch.Kind != routerNodeChainExecutionLaunchKind || (launch.Schema != 1 && launch.Schema != 2) {
 		return nil, errRouterNodeChainExecution
 	}
 	var source mobilemultihop.NodeChainExecutionPreparationSource
@@ -61,6 +62,15 @@ func NewRouterNodeChainExecutionLaunch(input string) (*RouterNodeChainExecution,
 	}
 	m, err := NewRouterNodeChainExecution(source.LocalSource, source.Execution)
 	if err != nil || m.Source() != launch.Source || m.SourceSHA256() != launch.SourceSHA256 || m.ConfigSHA256() != launch.ConfigSHA256 {
+		return nil, errRouterNodeChainExecution
+	}
+	if launch.Schema == 2 {
+		last, lastErr := mobilemultihop.ParseNodeChainExecutionLast(launch.Last, m.prep)
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		m.last = &last
+	} else if launch.Last != "" {
 		return nil, errRouterNodeChainExecution
 	}
 	canonical, err := m.LaunchInput()
@@ -83,7 +93,14 @@ func (m *RouterNodeChainExecution) LaunchInput() (string, error) {
 	if m == nil || m.prep == nil {
 		return "", errRouterNodeChainExecution
 	}
-	raw, err := json.Marshal(routerNodeChainExecutionLaunch{routerNodeChainExecutionLaunchKind, 1, m.Source(), m.SourceSHA256(), m.ConfigSHA256()})
+	launch := routerNodeChainExecutionLaunch{Kind: routerNodeChainExecutionLaunchKind, Schema: 1, Source: m.Source(), SourceSHA256: m.SourceSHA256(), ConfigSHA256: m.ConfigSHA256()}
+	if m.last != nil {
+		launch.Schema, launch.Last = 2, m.last.JSON()
+		if launch.Last == "" || m.last.ValidatePreparation(m.prep) != nil {
+			return "", errRouterNodeChainExecution
+		}
+	}
+	raw, err := json.Marshal(launch)
 	if err != nil || len(raw) > mobilemultihop.NodeChainInputLimit {
 		return "", errRouterNodeChainExecution
 	}

@@ -55,6 +55,7 @@ type RouterNodeChainExecution struct {
 	restoreCapture atomic.Pointer[RouterNodeChainExecutionRestoreCapture]
 	restore        *RouterNodeChainExecutionRestoreCapture
 	activities     routerNodeChainExecutionActivities
+	last           *mobilemultihop.NodeChainExecutionLast
 }
 type routerNodeChainExecutionNative struct {
 	server  *CommandServer
@@ -195,7 +196,24 @@ func (m *RouterNodeChainExecution) runWithFactory(server *CommandServer, factory
 		return err
 	}
 	var projection *mobilemultihop.NodeChainExecutionProjection
-	if m.restore != nil {
+	var lastPlan mobilemultihop.NodeChainExecutionLastPlan
+	if m.last != nil {
+		if m.restore != nil {
+			return errRouterNodeChainExecution
+		}
+		lastEngine, ok := engine.(routerNodeChainExecutionLastEngine)
+		if !ok {
+			return errRouterNodeChainExecution
+		}
+		lastPlan, err = lastEngine.AdoptLastContext(startup, *m.last)
+		if err != nil {
+			return err
+		}
+		projection, err = lastPlan.Projection()
+		if err != nil {
+			return err
+		}
+	} else if m.restore != nil {
 		if err := m.restore.originalJoined(startup); err != nil {
 			return err
 		}
@@ -230,7 +248,9 @@ func (m *RouterNodeChainExecution) runWithFactory(server *CommandServer, factory
 		return err
 	}
 	var controller *mobilemultihop.NodeChainExecutionRuntime
-	if m.restore != nil {
+	if m.last != nil {
+		controller, err = mobilemultihop.NewNodeChainExecutionLastRuntime(startup, lastPlan, engine)
+	} else if m.restore != nil {
 		controller, err = mobilemultihop.NewNodeChainExecutionRestoreRuntime(m.restore.capture, engine)
 	} else {
 		controller, err = mobilemultihop.NewNodeChainExecutionRuntime(projection, engine)

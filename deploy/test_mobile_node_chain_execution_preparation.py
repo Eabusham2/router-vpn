@@ -45,6 +45,24 @@ class Preparation(unittest.TestCase):
             self.assertEqual(set(record['files']), set(P.TEMPLATES.values()))
             self.assertIn(P.CLOSE_AFTER, (vendor/'daemon/instance.go').read_text())
 
+    def test_exact_previous_inventory_migrates_but_partial_inventory_refused(self):
+        additions = {'experimental/libbox/routervpn_node_chain_execution_last.go', 'experimental/libbox/routervpn_node_chain_execution_last_test.go'}
+        for removed in (additions, {next(iter(additions))}):
+            with self.subTest(removed=removed), tempfile.TemporaryDirectory() as parent:
+                vendor = self.fixture(parent)
+                self.prepare(vendor)
+                record = json.loads((vendor/P.OWNER).read_bytes())
+                for relative in removed:
+                    del record['files'][relative]
+                    (vendor/relative).unlink()
+                (vendor/P.OWNER).write_text(json.dumps(record))
+                if removed == additions:
+                    self.prepare(vendor)
+                    self.assertEqual(set(json.loads((vendor/P.OWNER).read_bytes())['files']), set(P.TEMPLATES.values()))
+                else:
+                    with self.assertRaisesRegex(ValueError, 'ownership inventory'):
+                        self.prepare(vendor)
+
     def test_wrong_pin_precedes_writes(self):
         with tempfile.TemporaryDirectory() as parent:
             vendor = self.fixture(parent)

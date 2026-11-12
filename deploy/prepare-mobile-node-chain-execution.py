@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-mobile-node-chain-execution-source.json'
 TEMPLATES = {
+    'last.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_last.go',
+    'last_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_last_test.go',
     'bridge.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution.go',
     'lifecycle.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_lifecycle.go',
     'restore.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_restore.go',
@@ -126,7 +128,7 @@ def prepare(vendor):
         if not manifest.is_file() or manifest.stat().st_size > 16384:
             raise ValueError('invalid mobile execution ownership file')
         record = json.loads(manifest.read_bytes())
-        if not isinstance(record, dict) or set(record) != {'schema', 'core', 'files'} or record['schema'] != 1 or record['core'] != PIN or not isinstance(record['files'], dict) or set(record['files']) != set(TEMPLATES.values()):
+        if not isinstance(record, dict) or set(record) != {'schema', 'core', 'files'} or record['schema'] != 1 or record['core'] != PIN or not isinstance(record['files'], dict) or set(record['files']) not in (set(TEMPLATES.values()), set(TEMPLATES.values()) - {'experimental/libbox/routervpn_node_chain_execution_last.go', 'experimental/libbox/routervpn_node_chain_execution_last_test.go'}):
             raise ValueError('invalid mobile execution ownership inventory')
         previous = record['files']
         for relative, checksum in previous.items():

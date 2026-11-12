@@ -80,6 +80,9 @@ def verdict(raw, code, expected):
 
 
 CONTROLS = (
+    ('exact Last capture controller', 'experimental/libbox/routervpn_node_chain_execution_last.go', ' || state.controller.Load() != controller', '', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeLastCaptureKeepsController/replacement', 'Last capture borrowed successor controller'),
+    ('saved Last schema replay', 'experimental/libbox/routervpn_node_chain_execution.go', '\t\tm.last = &last', '\t\t_ = last', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeLastLaunchKeepsSavedChoice/server', 'saved Last choice lost or fabricated proof'),
+    ('no fresh Compare fallback', 'experimental/libbox/routervpn_node_chain_execution_lifecycle.go', '\tif m.last != nil {\n\t\tif m.restore != nil {', '\tif m.last != nil && false {\n\t\tif m.restore != nil {', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeLastNeverFallsBack', 'saved Last refused without exact discovery/adoption or fell back to Compare'),
     ('observed owner cannot return', 'experimental/libbox/routervpn_node_chain_execution_lifecycle.go',
      '\t\tif failure != nil && ctx.Err() == nil && state.cancel != nil {\n\t\t\tstate.cancel()\n\t\t}', '',
      'experimental/libbox', 'TestRouterNodeChainExecutionBridgeObservedOwnerCannotReturn/instance', 'observed foreign owner revived after pointer restoration'),
