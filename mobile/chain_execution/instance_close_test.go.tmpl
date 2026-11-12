@@ -1,0 +1,74 @@
+package daemon
+
+import (
+	"context"
+	"errors"
+	"os"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+)
+
+// Actual receipt/Close dispatch executes; the delayed Box cleanup boundary
+// is explicit. These do not claim native TUN/OS resource acceptance.
+func TestRouterVPNInstanceCloseReceiptJoinsOriginal(t *testing.T) {
+	original := &box.Box{}
+	i := &Instance{instance: original}
+	if i.RouterVPNClosedContext(context.Background(), original) == nil {
+		t.Fatal("unstarted native close produced receipt")
+	}
+	entered, release, returned := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	var calls atomic.Int32
+	go func() {
+		returned <- i.routerVPNCloseOriginal(func() error { calls.Add(1); close(entered); <-release; return nil })
+	}()
+	<-entered
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	if err := i.RouterVPNClosedContext(ctx, original); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("early native close was acknowledged", err)
+	}
+	cancel()
+	duplicate := make(chan error, 1)
+	go func() {
+		duplicate <- i.routerVPNCloseOriginal(func() error { calls.Add(1); return errors.New("foreign duplicate close") })
+	}()
+	if i.RouterVPNClosedContext(context.Background(), &box.Box{}) == nil {
+		t.Fatal("foreign Box inherited original receipt")
+	}
+	close(release)
+	if err := <-returned; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-duplicate; err != nil || calls.Load() != 1 {
+		t.Fatal("duplicate close replaced original result", err, calls.Load())
+	}
+	if err := i.RouterVPNClosedContext(context.Background(), original); err != nil {
+		t.Fatal(err)
+	}
+	foreign := &Instance{instance: original}
+	if foreign.RouterVPNClosedContext(context.Background(), original) == nil {
+		t.Fatal("different Instance borrowed receipt")
+	}
+}
+
+func TestRouterVPNInstanceCloseReceiptPreservesFailure(t *testing.T) {
+	for _, failure := range []error{errors.New("native close retained resources"), os.ErrClosed} {
+		i := &Instance{instance: &box.Box{}}
+		if err := i.routerVPNCloseOriginal(func() error { return failure }); !errors.Is(err, failure) {
+			t.Fatal(err)
+		}
+		if err := i.RouterVPNClosedContext(context.Background(), i.instance); !errors.Is(err, failure) {
+			t.Fatal("failed native close became successful receipt", err)
+		}
+		if err := i.routerVPNCloseOriginal(func() error { return nil }); !errors.Is(err, failure) {
+			t.Fatal("repeat native Close hid original failure", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if i.RouterVPNClosedContext(ctx, i.instance) == nil {
+			t.Fatal("cancelled receipt read accepted")
+		}
+	}
+}

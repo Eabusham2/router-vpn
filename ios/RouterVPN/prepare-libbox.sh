@@ -173,6 +173,16 @@ for header in headers:
     assert 'LibboxRouterStrategyDNSProof' in header.read_text(), str(header)
     assert 'LibboxRouterStrategyStartService' in header.read_text(), str(header)
     assert 'LibboxRouterStrategyCloseService' in header.read_text(), str(header)
+    for symbol in ('LibboxNewRouterNodeChainExecution', 'LibboxRouterNodeChainExecutionFromLaunch', 'LibboxNewRouterNodeChainExecutionLaunch', 'LibboxNewRouterNodeChainExecutionRestore'):
+        assert symbol+'(' in content, 'Missing ordered execution constructor: '+symbol
+    execution=re.search(r'@interface LibboxRouterNodeChainExecution : NSObject .*?\n(.*?)@end',content,re.S)
+    assert execution, 'Missing native ordered execution owner'
+    for signature in ('- (BOOL)bindNative:(LibboxCommandServer* _Nullable)server error:(NSError* _Nullable* _Nullable)error;',
+                      '- (BOOL)run:(LibboxCommandServer* _Nullable)server error:(NSError* _Nullable* _Nullable)error;',
+                      '- (BOOL)healthy;', '- (NSString* _Nonnull)execution;', '- (BOOL)close:(NSError* _Nullable* _Nullable)error;',
+                      '- (BOOL)nativeClosed;', '- (BOOL)retainsServerCleanup:(LibboxCommandServer* _Nullable)server;',
+                      '- (NSString* _Nonnull)launchInput:(NSError* _Nullable* _Nullable)error;'):
+        assert signature in execution.group(1), 'Ordered execution original-owner API changed: '+signature
 PYHEAD
   test -f "$STAMP"
   test "$(tr -d '\r\n' < "$STAMP")" = "$EXPECTED_STAMP"
@@ -248,6 +258,7 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   go mod tidy
   [[ $(go list -m -f '{{.Version}}' github.com/xtls/xray-core) == "$XRAY_VERSION" ]]
   bash "$ROOT/../../deploy/test_apple_xray_pinned.sh" "$VENDOR" "$XRAY_VENDOR"
+  python3 "$ROOT/../../deploy/test_mobile_node_chain_execution.py" --vendor "$VENDOR" --go "$(command -v go)"
   bash "$ROOT/../../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
   bash "$ROOT/../../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
   bash "$ROOT/../../deploy/test_mobile_external_pinned.sh" "$VENDOR"

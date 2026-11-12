@@ -1,0 +1,106 @@
+package libbox
+
+import (
+	"context"
+	"sync/atomic"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// This capture is process-owned authority, never a JSON receipt or saved
+// profile. Its original proof choice and original native teardown must join
+// before one replacement can receive it. Durable Last is a separate API.
+type RouterNodeChainExecutionRestoreCapture struct {
+	owner   *RouterNodeChainExecution
+	state   *routerNodeChainExecutionState
+	capture mobilemultihop.NodeChainExecutionRestoreCapture
+	claimed atomic.Bool
+}
+
+// The host calls this only after its original native Close. Execution.Close
+// alone never proves native teardown, and an uncaptured owner grants no such
+// receipt. A pure never-started capture is discarded by the host separately.
+func (m *RouterNodeChainExecution) NativeClosed() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	return m.nativeClosedContext(ctx) == nil
+}
+
+func (m *RouterNodeChainExecution) nativeClosedContext(ctx context.Context) error {
+	if m == nil || ctx == nil || !m.retired.Load() || !m.closed.Load() {
+		return errRouterNodeChainExecution
+	}
+	state := m.state.Load()
+	native := m.native.Load()
+	if native == nil || native.server == nil || native.service == nil || native.server.StartedService != native.service || native.capture == nil {
+		return errRouterNodeChainExecution
+	}
+	if state != nil && (state.server != native.server || state.service != native.service || !native.capture.Owns(state.instance, state.box)) {
+		return errRouterNodeChainExecution
+	}
+	if err := native.capture.ClosedContext(ctx); err != nil {
+		return err
+	}
+	if m.state.Load() != state || m.native.Load() != native || !m.retired.Load() || !m.closed.Load() {
+		return errRouterNodeChainExecution
+	}
+	return ctx.Err()
+}
+
+func (m *RouterNodeChainExecution) CaptureRestore() (*RouterNodeChainExecutionRestoreCapture, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if m.healthyContext(ctx) != nil {
+		return nil, errRouterNodeChainExecution
+	}
+	state := m.state.Load()
+	controller := state.controller.Load()
+	if controller == nil {
+		return nil, errRouterNodeChainExecution
+	}
+	capture, err := controller.value.CaptureRestoreContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.nativeCurrent(ctx, state); err != nil {
+		return nil, err
+	}
+	retained := &RouterNodeChainExecutionRestoreCapture{owner: m, state: state, capture: capture}
+	if !m.restoreCapture.CompareAndSwap(nil, retained) {
+		retained = m.restoreCapture.Load()
+	}
+	if retained == nil || retained.owner != m || retained.state != state || retained.claimed.Load() || m.nativeCurrent(ctx, state) != nil {
+		return nil, errRouterNodeChainExecution
+	}
+	return retained, nil
+}
+
+func (c *RouterNodeChainExecutionRestoreCapture) originalJoined(ctx context.Context) error {
+	if c == nil || ctx == nil || c.owner == nil || c.state == nil || c.owner.state.Load() != c.state || !c.owner.closed.Load() || !c.owner.retired.Load() || c.state.instance == nil || c.state.box == nil {
+		return errRouterNodeChainExecution
+	}
+	if _, err := c.capture.Source(); err != nil {
+		return err
+	}
+	// A cancelled context, nil StartedService.instance or early Box.done
+	// signal cannot stand in for the original actual Close return value.
+	return c.owner.nativeClosedContext(ctx)
+}
+
+func NewRouterNodeChainExecutionRestore(capture *RouterNodeChainExecutionRestoreCapture) (*RouterNodeChainExecution, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if err := capture.originalJoined(ctx); err != nil {
+		return nil, err
+	}
+	m, err := NewRouterNodeChainExecution(capture.owner.prep.LocalSource(), capture.owner.prep.Execution())
+	if err != nil {
+		return nil, err
+	}
+	if m.Source() != capture.owner.Source() || m.Config() != capture.owner.Config() || !capture.claimed.CompareAndSwap(false, true) {
+		return nil, errRouterNodeChainExecution
+	}
+	m.restore = capture
+	return m, nil
+}

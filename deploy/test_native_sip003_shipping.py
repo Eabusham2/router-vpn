@@ -14,7 +14,7 @@ class Shipping(unittest.TestCase):
         # the real shared preparer, observing each native dependency dispatch;
         # actual pin/owner/gate composition is tested in the native preparation
         # and encrypted Server suites, never simulated by a fake git identity.
-        expected=('prepare-node-chain-execution-gate','prepare-node-chain-execution','prepare-node-chain-execution-owner')
+        expected=('prepare-node-chain-execution-gate','prepare-node-chain-execution','prepare-node-chain-execution-owner','prepare-mobile-node-chain-execution')
         self.assertEqual(tuple(Path(module.__file__).stem for module in PREPARE._execution_modules),expected)
         order=mock.Mock()
         with ExitStack() as stack:
@@ -22,7 +22,7 @@ class Shipping(unittest.TestCase):
                 observed=stack.enter_context(mock.patch.object(module,'prepare'))
                 order.attach_mock(observed,'owner_'+str(index))
             yield
-            self.assertEqual(order.mock_calls,[getattr(mock.call,'owner_'+str(index))(root.resolve()) for index in range(3)])
+            self.assertEqual(order.mock_calls,[getattr(mock.call,'owner_'+str(index))(root.resolve()) for index in range(4)])
 
     def test_missing_duplicate_or_reordered_execution_dispatch_is_rejected(self):
         original=inspect.getsource(PREPARE.prepare)

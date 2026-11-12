@@ -1,0 +1,438 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
+	"github.com/sagernet/sing/common/logger"
+	"github.com/sagernet/sing/common/x/list"
+	"github.com/sagernet/sing/service"
+)
+
+type executionBridgeEngineBoundary struct {
+	routerNodeChainExecutionEngine
+	retire func(context.Context) error
+}
+
+func executionBridgeReservedService(t *testing.T, m *RouterNodeChainExecution) *CommandServer {
+	t.Helper()
+	ctx := box.Context(service.ContextWith[adapter.PlatformInterface](context.Background(), &executionBridgePlatform{}), include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	service := daemon.NewStartedService(daemon.ServiceOptions{Context: ctx, LogMaxLines: 16})
+	server := &CommandServer{StartedService: service, ctx: ctx}
+	if err := m.BindNative(server); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close(); _ = service.CloseService(); service.Close() })
+	return server
+}
+
+const executionBridgeEmptyNativeConfig = `{"log":{"disabled":true},"outbounds":[{"type":"direct","tag":"direct"}]}`
+
+func (e *executionBridgeEngineBoundary) RetireContext(ctx context.Context) error {
+	return e.retire(ctx)
+}
+
+type executionBridgeControllerBoundary struct {
+	routerNodeChainExecutionController
+	close func(context.Context) error
+}
+
+func (c *executionBridgeControllerBoundary) CloseContext(ctx context.Context) error {
+	return c.close(ctx)
+}
+func (c *executionBridgeControllerBoundary) Progress() mobilemultihop.NodeChainExecutionProgress {
+	return mobilemultihop.NodeChainExecutionProgress{}
+}
+
+func executionBridgeNativeFixture(t *testing.T) (*RouterNodeChainExecution, *routerNodeChainExecutionState) {
+	t.Helper()
+	owner, _, _ := routerMTUContextFixture(t)
+	owner.server.ctx = context.Background()
+	lifetime, cancel := context.WithCancel(owner.server.ctx)
+	t.Cleanup(cancel)
+	m := &RouterNodeChainExecution{}
+	state := &routerNodeChainExecutionState{server: owner.server, service: owner.server.StartedService, instance: owner.instance, box: owner.instance.Box(), lifetime: lifetime, cancel: cancel, runDone: make(chan struct{})}
+	close(state.runDone)
+	m.state.Store(state)
+	return m, state
+}
+
+func TestRouterNodeChainExecutionBridgeNativeOwnerIdentityAndDeadline(t *testing.T) {
+	for _, fault := range []string{"lifetime", "state", "instance", "service", "box", "retired"} {
+		t.Run(fault, func(t *testing.T) {
+			m, state := executionBridgeNativeFixture(t)
+			if err := m.nativeCurrent(context.Background(), state); err != nil {
+				t.Fatal(err)
+			}
+			switch fault {
+			case "lifetime":
+				state.cancel()
+			case "state":
+				m.state.Store(&routerNodeChainExecutionState{})
+			case "instance":
+				*routerMTUField[*daemon.Instance](t, state.service, "instance") = &daemon.Instance{}
+			case "service":
+				state.server.StartedService = &daemon.StartedService{}
+			case "box":
+				*routerMTUField[*box.Box](t, state.instance, "instance") = &box.Box{}
+			case "retired":
+				m.NetworkChanged()
+			}
+			if m.nativeCurrent(context.Background(), state) == nil {
+				t.Fatal("replaced native execution owner retained authority", fault)
+			}
+			if m.Healthy() || m.Execution() != "" {
+				t.Fatal("unproved native owner fabricated execution")
+			}
+		})
+	}
+	m, state := executionBridgeNativeFixture(t)
+	lock := routerMTUField[sync.RWMutex](t, state.service, "serviceAccess")
+	lock.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	err := m.nativeCurrent(ctx, state)
+	cancel()
+	lock.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("native execution observation lost original deadline", err)
+	}
+	if err := m.nativeCurrent(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeRetainsLatePartialFactory(t *testing.T) {
+	source, _ := executionBridgeSource(t, "server")
+	m, err := NewRouterNodeChainExecution(source, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := executionBridgeReservedService(t, m)
+	if err := server.StartedService.StartOrReloadService(server.ctx, executionBridgeEmptyNativeConfig, nil); err != nil {
+		t.Fatal(err)
+	}
+	instance := server.StartedService.Instance()
+	entered, release, returned := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	var retired atomic.Int32
+	partial := &executionBridgeEngineBoundary{retire: func(ctx context.Context) error { retired.Add(1); return ctx.Err() }}
+	go func() {
+		returned <- m.runWithFactory(server, func(ctx context.Context, b *box.Box, p *mobilemultihop.NodeChainExecutionPreparation, session string, current func(context.Context) error) (routerNodeChainExecutionEngine, error) {
+			if b != instance.Box() || p != m.prep || len(session) != 64 || current(ctx) != nil {
+				t.Error("factory lost original native capture")
+			}
+			close(entered)
+			<-release
+			return partial, errors.New("owned partial native construction")
+		})
+	}()
+	<-entered
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	err = m.closeContext(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) || m.closed.Load() || retired.Load() != 0 {
+		t.Fatal("late native factory was discarded or acknowledged", err)
+	}
+	close(release)
+	if err := <-returned; err == nil {
+		t.Fatal("partial native construction accepted")
+	}
+	state := m.state.Load()
+	if state.engine.Load() == nil || state.engine.Load().value != partial {
+		t.Fatal("late owned native handle was lost")
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := m.closeContext(ctx); err != nil || retired.Load() != 1 || !m.closed.Load() {
+		t.Fatal("late original native cleanup failed", err)
+	}
+	if err := m.closeContext(ctx); err != nil || retired.Load() != 1 {
+		t.Fatal("joined native retirement repeated", err)
+	}
+	if err := m.Run(server); err == nil {
+		t.Fatal("retired execution bridge reused")
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeEarlyFailureKeepsNativeReceipt(t *testing.T) {
+	for _, constructed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "before-construction", true: "before-run-state"}[constructed], func(t *testing.T) {
+			source, _ := executionBridgeSource(t, "server")
+			m, err := NewRouterNodeChainExecution(source, "server")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := executionBridgeReservedService(t, m)
+			if err = m.BindNative(server); err == nil {
+				t.Fatal("native binding could be replaced")
+			}
+			if constructed {
+				if err = server.StartedService.StartOrReloadService(server.ctx, executionBridgeEmptyNativeConfig, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Native startup can succeed, then source/cancellation can reject
+			// before Run ever installs its state. The slot still owns that Box.
+			m.NetworkChanged()
+			if err = m.Run(server); err == nil || m.state.Load() != nil {
+				t.Fatal("retired early admission constructed runtime", err)
+			}
+			if err = m.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if constructed && m.NativeClosed() {
+				t.Fatal("early Run failure fabricated native close")
+			}
+			if !constructed && !m.NativeClosed() {
+				t.Fatal("sealed pre-start reservation did not prove no acquisition")
+			}
+			if err = server.CloseService(); err != nil {
+				t.Fatal(err)
+			}
+			if !m.NativeClosed() {
+				t.Fatal("original pre-Run Box cleanup receipt was lost")
+			}
+			originalService := server.StartedService
+			server.StartedService = &daemon.StartedService{}
+			if m.NativeClosed() {
+				t.Fatal("replacement service borrowed original native close receipt")
+			}
+			server.StartedService = originalService
+			if err = server.StartedService.StartOrReloadService(server.ctx, executionBridgeEmptyNativeConfig, nil); err == nil {
+				t.Fatal("closed receipt admitted replacement native service")
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeRemoteJoinPrecedesNativeRetirement(t *testing.T) {
+	m, state := executionBridgeNativeFixture(t)
+	var attempts, native atomic.Int32
+	pending := errors.New("original sealed DELETE still retained")
+	state.engine.Store(&routerNodeChainExecutionEngineRef{&executionBridgeEngineBoundary{retire: func(ctx context.Context) error { native.Add(1); return ctx.Err() }}})
+	state.controller.Store(&routerNodeChainExecutionControllerRef{&executionBridgeControllerBoundary{close: func(ctx context.Context) error {
+		if !m.RetainsServerCleanup(state.server) {
+			t.Error("bounded original cleanup lost physical protection authority")
+		}
+		if m.RetainsServerCleanup(&CommandServer{StartedService: state.service, ctx: context.Background()}) {
+			t.Error("foreign server borrowed cleanup authority")
+		}
+		if attempts.Add(1) == 1 {
+			return pending
+		}
+		return ctx.Err()
+	}}})
+	if m.RetainsServerCleanup(state.server) {
+		t.Fatal("ordinary owner acquired cleanup protection")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := m.closeContext(ctx); !errors.Is(err, pending) || native.Load() != 0 || m.closed.Load() {
+		t.Fatal("unjoined remote stop allowed native teardown", err)
+	}
+	if m.RetainsServerCleanup(state.server) || m.cleanup.Load() != nil {
+		t.Fatal("cleanup socket authority escaped its bounded call")
+	}
+	if err := m.closeContext(ctx); err != nil || native.Load() != 1 || !m.closed.Load() {
+		t.Fatal("original remote cleanup retry failed", err)
+	}
+	if m.RetainsServerCleanup(state.server) {
+		t.Fatal("retired native owner retained socket authority")
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeRetainsFailedNativeRetirement(t *testing.T) {
+	m, state := executionBridgeNativeFixture(t)
+	var attempts atomic.Int32
+	failure := errors.New("native gate still owns an original socket")
+	state.engine.Store(&routerNodeChainExecutionEngineRef{&executionBridgeEngineBoundary{retire: func(ctx context.Context) error {
+		if attempts.Add(1) == 1 {
+			return failure
+		}
+		return ctx.Err()
+	}}})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := m.closeContext(ctx); !errors.Is(err, failure) || m.closed.Load() {
+		t.Fatal("failed native retirement lost original owner", err)
+	}
+	if err := m.closeContext(ctx); err != nil || attempts.Load() != 2 {
+		t.Fatal("native retirement could not retry", err)
+	}
+	if _, err := m.CaptureRestore(); err == nil {
+		t.Fatal("failed/unproved native owner fabricated restore")
+	}
+}
+
+func TestRouterNodeChainExecutionBridgePortProposalRespectsCapturedRange(t *testing.T) {
+	for _, bounds := range [][2]int{{1024, 1024}, {41000, 41063}, {65535, 65535}} {
+		for i := 0; i < 20; i++ {
+			port, err := routerNodeChainExecutionPort(mobilemultihop.NodeChainExecutionDiscovery{FirstPort: bounds[0], LastPort: bounds[1]})
+			if err != nil || port < bounds[0] || port > bounds[1] {
+				t.Fatal("proposal left authenticated range", port, err)
+			}
+		}
+	}
+	for _, bounds := range [][2]int{{0, 0}, {1023, 1024}, {65535, 65536}, {41000, 41064}, {41001, 41000}} {
+		if _, err := routerNodeChainExecutionPort(mobilemultihop.NodeChainExecutionDiscovery{FirstPort: bounds[0], LastPort: bounds[1]}); err == nil {
+			t.Fatal("invalid range fell back to default port", bounds)
+		}
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeStartupBudgetOwnsPendingLifetime(t *testing.T) {
+	m, state := executionBridgeNativeFixture(t)
+	admission := m.startupAdmission(state, 15*time.Millisecond)
+	defer admission.close()
+	select {
+	case <-state.lifetime.Done():
+	case <-time.After(time.Second):
+		t.Fatal("expired startup budget did not retire original runtime")
+	}
+	if admission.commit() == nil || !m.retired.Load() {
+		t.Fatal("exhausted startup budget admitted Connected")
+	}
+	admission.close()
+	select {
+	case <-admission.done:
+	default:
+		t.Fatal("retired startup callback was not joined")
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeSuccessfulLifetimeOutlivesStartup(t *testing.T) {
+	m, state := executionBridgeNativeFixture(t)
+	admission := m.startupAdmission(state, 15*time.Millisecond)
+	defer admission.close()
+	if err := admission.commit(); err != nil {
+		t.Fatal(err)
+	}
+	<-admission.ctx.Done()
+	if state.lifetime.Err() != nil || m.retired.Load() {
+		t.Fatal("successful native lifetime borrowed startup deadline")
+	}
+	admission.close()
+	if state.lifetime.Err() != nil || m.retired.Load() {
+		t.Fatal("successful admission close retired runtime")
+	}
+	state.cancel()
+	if m.nativeCurrent(context.Background(), state) == nil {
+		t.Fatal("successful startup detached original native lifetime")
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeNativeCloseRequiresActualReceipt(t *testing.T) {
+	if (*RouterNodeChainExecution)(nil).NativeClosed() {
+		t.Fatal("missing execution fabricated native close")
+	}
+	m, state := executionBridgeNativeFixture(t)
+	if m.NativeClosed() {
+		t.Fatal("active owner fabricated native retirement")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := m.closeContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !m.closed.Load() || m.NativeClosed() {
+		t.Fatal("execution Close fabricated Box retirement")
+	}
+	*routerMTUField[*daemon.Instance](t, state.service, "instance") = nil
+	if m.NativeClosed() {
+		t.Fatal("idle service fabricated original native close")
+	}
+	state.cancel()
+	if m.NativeClosed() {
+		t.Fatal("cancelled lifetime fabricated original native close")
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeCancelledBeforeBindSealsOriginal(t *testing.T) {
+	for _, closed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cancelled", true: "already-closed"}[closed], func(t *testing.T) {
+			source, _ := executionBridgeSource(t, "server")
+			m, err := NewRouterNodeChainExecution(source, "server")
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.NetworkChanged()
+			if closed {
+				if err = m.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			service := daemon.NewStartedService(daemon.ServiceOptions{Context: context.Background(), LogMaxLines: 16})
+			t.Cleanup(service.Close)
+			server := &CommandServer{StartedService: service, ctx: context.Background()}
+			if err = m.BindNative(server); err == nil {
+				t.Fatal("cancelled binding reopened admission")
+			}
+			if m.native.Load() == nil {
+				t.Fatal("cancel-before-bind lost original empty cleanup capture")
+			}
+			if err = m.Close(); err != nil || !m.NativeClosed() {
+				t.Fatal("cancel-before-bind failed exact no-acquisition receipt", err)
+			}
+			if service.StartOrReloadService(context.Background(), executionBridgeEmptyNativeConfig, nil) == nil {
+				t.Fatal("cleanup-only binding admitted native construction")
+			}
+			foreign := &CommandServer{StartedService: daemon.NewStartedService(daemon.ServiceOptions{Context: context.Background(), LogMaxLines: 16}), ctx: context.Background()}
+			t.Cleanup(foreign.StartedService.Close)
+			if m.BindNative(foreign) == nil || m.native.Load().server != server {
+				t.Fatal("cleanup-only binding retargeted replacement")
+			}
+		})
+	}
+}
+
+// This component fixture supplies the mobile platform API explicitly. Its
+// monitor and empty interface inventory are doubles: no netlink request, TUN,
+// route mutation, packet traffic or OS/native path acceptance occurs here.
+// Actual daemon construction, Box start/close and original receipts still run.
+type executionBridgePlatform struct{ adapter.PlatformInterface }
+
+func (*executionBridgePlatform) Initialize(adapter.NetworkManager) error  { return nil }
+func (*executionBridgePlatform) UsePlatformDefaultInterfaceMonitor() bool { return true }
+func (*executionBridgePlatform) CreateDefaultInterfaceMonitor(logger.Logger) tun.DefaultInterfaceMonitor {
+	return &executionBridgeMonitor{}
+}
+func (*executionBridgePlatform) UsePlatformNetworkInterfaces() bool { return true }
+func (*executionBridgePlatform) NetworkInterfaces() ([]adapter.NetworkInterface, error) {
+	return nil, nil
+}
+func (*executionBridgePlatform) UsePlatformAutoDetectInterfaceControl() bool { return false }
+func (*executionBridgePlatform) UsePlatformInterface() bool                  { return false }
+func (*executionBridgePlatform) UnderNetworkExtension() bool                 { return false }
+func (*executionBridgePlatform) NetworkExtensionIncludeAllNetworks() bool    { return false }
+func (*executionBridgePlatform) UsePlatformConnectionOwnerFinder() bool      { return false }
+func (*executionBridgePlatform) UsePlatformWIFIMonitor() bool                { return false }
+func (*executionBridgePlatform) UsePlatformNotification() bool               { return false }
+func (*executionBridgePlatform) UsePlatformNeighborResolver() bool           { return false }
+func (*executionBridgePlatform) UsePlatformShell() bool                      { return false }
+func (*executionBridgePlatform) UsePlatformBridge() bool                     { return false }
+func (*executionBridgePlatform) ClearDNSCache()                              {}
+
+type executionBridgeMonitor struct{ tun.DefaultInterfaceMonitor }
+
+func (*executionBridgeMonitor) Start() error                         { return nil }
+func (*executionBridgeMonitor) Close() error                         { return nil }
+func (*executionBridgeMonitor) DefaultInterface() *control.Interface { return nil }
+func (*executionBridgeMonitor) RegisterCallback(tun.DefaultInterfaceUpdateCallback) *list.Element[tun.DefaultInterfaceUpdateCallback] {
+	return nil
+}
+func (*executionBridgeMonitor) UnregisterCallback(*list.Element[tun.DefaultInterfaceUpdateCallback]) {
+}
+func (*executionBridgeMonitor) RegisterMyInterface(string) {}
+func (*executionBridgeMonitor) MyInterfaces() []string     { return nil }
+func (*executionBridgeMonitor) OverrideAndroidVPN() bool   { return false }
+func (*executionBridgeMonitor) AndroidVPNEnabled() bool    { return false }

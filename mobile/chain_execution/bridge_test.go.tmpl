@@ -1,0 +1,143 @@
+package libbox
+
+import (
+	"bytes"
+	"crypto/ecdh"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func executionBridgeJSON(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// Actual shared parsers/compilers execute with complete original WG identity
+// companions, including the final SS member. No encrypted path is started.
+func executionBridgeSource(t *testing.T, execution string) (string, string) {
+	t.Helper()
+	source := mobilemultihop.NodeChainSource{Schema: 1, Execution: "local"}
+	for i := 0; i < 3; i++ {
+		client, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(20 + i)}, 32))
+		server, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(70 + i)}, 32))
+		public := base64.StdEncoding.EncodeToString(server.PublicKey().Bytes())
+		nodeID := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+		endpoint := fmt.Sprintf("198.51.100.%d", i+20)
+		profile := map[string]any{"id": fmt.Sprintf("execution-native-%d", i), "node_kind": "router-vpn", "node_proof_id": hex.EncodeToString(nodeID[:]),
+			"router_api": "http://10.77.0.1:8787", "api_token": fmt.Sprintf("execution-native-token-%d", i), "endpoint": endpoint,
+			"dns_mode": "home", "adguard_ipv4": "192.168.50.133", "mtu_policy": "auto", "ipv6_mode": "off", "home_lan_access": false, "kill_switch_policy": "always", "multihop_execution": execution}
+		wg := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/24,fd77::2/64\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=%s:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", base64.StdEncoding.EncodeToString(client.Bytes()), public, endpoint)
+		identity := executionBridgeJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(wg))})
+		files, mode := identity, "wg"
+		if i == 2 {
+			mode = "shadowsocks"
+			graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+				"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": endpoint, "server_port": 8388, "method": mobilemultihop.NativeStartLayerMethod, "password": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{80}, 32))}},
+				"route":     map[string]any{"final": "proxy", "rules": []any{}}}
+			files = executionBridgeJSON(t, map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(executionBridgeJSON(t, graph)))})
+		}
+		node, err := mobilemultihop.NewNodeProfile(mode, files, executionBridgeJSON(t, profile), "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		input, err := node.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		source.Nodes = append(source.Nodes, input)
+		source.IdentitySources = append(source.IdentitySources, identity)
+	}
+	raw := executionBridgeJSON(t, source)
+	chain, err := mobilemultihop.NewNodeChain(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch, err := chain.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw, launch
+}
+
+func TestRouterNodeChainExecutionBridgeSealedOriginalLaunch(t *testing.T) {
+	for _, execution := range []string{"server", "auto"} {
+		t.Run(execution, func(t *testing.T) {
+			source, localLaunch := executionBridgeSource(t, execution)
+			original, err := NewRouterNodeChainExecution(source, execution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fromLaunch, err := RouterNodeChainExecutionFromLaunch(localLaunch, execution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fromLaunch.Source() != original.Source() || fromLaunch.Config() != original.Config() || fromLaunch.RequestedExecution() != execution {
+				t.Fatal("original Local bytes or requested execution changed")
+			}
+			var prep mobilemultihop.NodeChainExecutionPreparationSource
+			if json.Unmarshal([]byte(fromLaunch.Source()), &prep) != nil || prep.LocalSource != source {
+				t.Fatal("original member profiles were normalized")
+			}
+			launch, err := fromLaunch.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			reparsed, err := NewRouterNodeChainExecutionLaunch(launch)
+			if err != nil || reparsed.Source() != fromLaunch.Source() || reparsed.ConfigSHA256() != fromLaunch.ConfigSHA256() || reparsed.LocalSourceSHA256() != fromLaunch.LocalSourceSHA256() {
+				t.Fatal("canonical source handoff lost original identity", err)
+			}
+			if reparsed.Healthy() || reparsed.Execution() != "" {
+				t.Fatal("source construction fabricated path proof")
+			}
+			for name, changed := range map[string]string{
+				"unknown":   strings.TrimSuffix(launch, "}") + `,"extra":true}`,
+				"duplicate": strings.Replace(launch, `"schema":1`, `"schema":1,"schema":1`, 1),
+				"spacing":   " " + launch,
+				"config":    strings.Replace(launch, fromLaunch.ConfigSHA256(), strings.Repeat("0", 64), 1),
+				"source":    strings.Replace(launch, fromLaunch.SourceSHA256(), strings.Repeat("0", 64), 1),
+				"kind":      strings.Replace(launch, routerNodeChainExecutionLaunchKind, "native-node-chain-execution", 1),
+			} {
+				t.Run(name, func(t *testing.T) {
+					if value, err := NewRouterNodeChainExecutionLaunch(changed); err == nil || value != nil {
+						t.Fatal("altered execution launch accepted", name)
+					}
+				})
+			}
+			if value, err := RouterNodeChainExecutionFromLaunch(strings.Replace(localLaunch, `"schema":1`, `"schema":1,"schema":1`, 1), execution); err == nil || value != nil {
+				t.Fatal("unvalidated Local launch projected")
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeRejectsFallbackAndMissingIdentity(t *testing.T) {
+	source, launch := executionBridgeSource(t, "auto")
+	for _, execution := range []string{"", "local", "AUTO", "pair", "server "} {
+		if value, err := RouterNodeChainExecutionFromLaunch(launch, execution); err == nil || value != nil {
+			t.Fatal("unsupported execution fell back", execution)
+		}
+	}
+	var original mobilemultihop.NodeChainSource
+	_ = json.Unmarshal([]byte(source), &original)
+	original.IdentitySources = nil
+	if value, err := NewRouterNodeChainExecution(executionBridgeJSON(t, original), "server"); err == nil || value != nil {
+		t.Fatal("missing original identity companions accepted")
+	}
+	if value, err := NewRouterNodeChainExecutionLaunch(`{"schema":1}`); err == nil || value != nil {
+		t.Fatal("metadata-only preparation accepted")
+	}
+	if value, err := NewRouterNodeChainExecutionRestore(nil); err == nil || value != nil {
+		t.Fatal("metadata-only restore accepted")
+	}
+}

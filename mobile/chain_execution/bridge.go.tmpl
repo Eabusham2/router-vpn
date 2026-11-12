@@ -1,0 +1,112 @@
+package libbox
+
+import (
+	"encoding/json"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+const routerNodeChainExecutionLaunchKind = "routervpn-node-chain-execution-preparation-input"
+
+type routerNodeChainExecutionLaunch struct {
+	Kind         string `json:"kind"`
+	Schema       int    `json:"schema"`
+	Source       string `json:"source"`
+	SourceSHA256 string `json:"source_sha256"`
+	ConfigSHA256 string `json:"config_sha256"`
+}
+
+func NewRouterNodeChainExecution(localSource, execution string) (*RouterNodeChainExecution, error) {
+	prep, err := mobilemultihop.NewNodeChainExecutionPreparation(localSource, execution)
+	if err != nil {
+		return nil, err
+	}
+	return &RouterNodeChainExecution{prep: prep}, nil
+}
+
+// Validate the full original Local launch before projecting its embedded
+// source. Member profile and private asset strings are never normalized.
+func RouterNodeChainExecutionFromLaunch(localLaunchInput, execution string) (*RouterNodeChainExecution, error) {
+	chain, err := mobilemultihop.ParseNodeChainLaunchInput(localLaunchInput)
+	if err != nil {
+		return nil, err
+	}
+	var source mobilemultihop.NodeChainSource
+	if err := json.Unmarshal([]byte(localLaunchInput), &source); err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(source)
+	if err != nil {
+		return nil, err
+	}
+	original, err := mobilemultihop.NewNodeChain(string(raw))
+	if err != nil || original.SourceSHA256() != chain.SourceSHA256() || original.Config() != chain.Config() || original.ConfigSHA256() != chain.ConfigSHA256() {
+		return nil, errors.New("execution preparation cannot discard original Local launch projection")
+	}
+	return NewRouterNodeChainExecution(string(raw), execution)
+}
+
+func NewRouterNodeChainExecutionLaunch(input string) (*RouterNodeChainExecution, error) {
+	if len(input) == 0 || len(input) > mobilemultihop.NodeChainInputLimit {
+		return nil, errRouterNodeChainExecution
+	}
+	var launch routerNodeChainExecutionLaunch
+	if json.Unmarshal([]byte(input), &launch) != nil || launch.Kind != routerNodeChainExecutionLaunchKind || launch.Schema != 1 {
+		return nil, errRouterNodeChainExecution
+	}
+	var source mobilemultihop.NodeChainExecutionPreparationSource
+	if json.Unmarshal([]byte(launch.Source), &source) != nil || source.Schema != 1 {
+		return nil, errRouterNodeChainExecution
+	}
+	m, err := NewRouterNodeChainExecution(source.LocalSource, source.Execution)
+	if err != nil || m.Source() != launch.Source || m.SourceSHA256() != launch.SourceSHA256 || m.ConfigSHA256() != launch.ConfigSHA256 {
+		return nil, errRouterNodeChainExecution
+	}
+	canonical, err := m.LaunchInput()
+	// Canonical equality also rejects unknown/duplicate fields, trailing input,
+	// alternate numbers and ambiguity without losing original embedded bytes.
+	if err != nil || canonical != input {
+		return nil, errRouterNodeChainExecution
+	}
+	return m, nil
+}
+
+func (m *RouterNodeChainExecution) Config() string             { return m.prep.Config() }
+func (m *RouterNodeChainExecution) Source() string             { return m.prep.Source() }
+func (m *RouterNodeChainExecution) SourceSHA256() string       { return m.prep.SourceSHA256() }
+func (m *RouterNodeChainExecution) ConfigSHA256() string       { return m.prep.ConfigSHA256() }
+func (m *RouterNodeChainExecution) LocalSourceSHA256() string  { return m.prep.LocalSourceSHA256() }
+func (m *RouterNodeChainExecution) RequestedExecution() string { return m.prep.Execution() }
+
+func (m *RouterNodeChainExecution) LaunchInput() (string, error) {
+	if m == nil || m.prep == nil {
+		return "", errRouterNodeChainExecution
+	}
+	raw, err := json.Marshal(routerNodeChainExecutionLaunch{routerNodeChainExecutionLaunchKind, 1, m.Source(), m.SourceSHA256(), m.ConfigSHA256()})
+	if err != nil || len(raw) > mobilemultihop.NodeChainInputLimit {
+		return "", errRouterNodeChainExecution
+	}
+	return string(raw), nil
+}
+
+func (m *RouterNodeChainExecution) ProgressJSON() string {
+	progress := mobilemultihop.NodeChainExecutionProgress{NodeChainProgress: mobilemultihop.NodeChainProgress{Stage: "pending", Prefixes: []mobilemultihop.NodeChainPrefixProgress{}}}
+	if m != nil {
+		if m.prep != nil {
+			progress.Execution = m.prep.Execution()
+		}
+		if state := m.state.Load(); state != nil {
+			if controller := state.controller.Load(); controller != nil {
+				progress = controller.value.Progress()
+			}
+		}
+		if m.retired.Load() {
+			progress.Ready = false
+			progress.Complete = true
+			progress.Stage = "retired"
+		}
+	}
+	raw, _ := json.Marshal(progress)
+	return string(raw)
+}

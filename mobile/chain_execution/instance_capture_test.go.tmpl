@@ -1,0 +1,276 @@
+package daemon_test
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
+	"github.com/sagernet/sing/common/logger"
+	"github.com/sagernet/sing/common/x/list"
+	"github.com/sagernet/sing/service"
+)
+
+type executionCaptureNativeService struct {
+	boxService.Adapter
+	entered, release chan struct{}
+	failure          error
+	closes           atomic.Int32
+}
+
+func (s *executionCaptureNativeService) Start(adapter.StartStage) error { return nil }
+func (s *executionCaptureNativeService) Close() error {
+	s.closes.Add(1)
+	if s.entered != nil {
+		close(s.entered)
+		<-s.release
+	}
+	return s.failure
+}
+
+const executionCaptureConfig = `{"log":{"disabled":true},"outbounds":[{"type":"direct","tag":"direct"}],"services":[{"type":"routervpn-execution-capture-test","tag":"capture"}]}`
+
+func executionCaptureService(t *testing.T, native *executionCaptureNativeService, constructor func() error) *daemon.StartedService {
+	t.Helper()
+	services := include.ServiceRegistry()
+	boxService.Register[struct{}](services, "routervpn-execution-capture-test", func(_ context.Context, _ log.ContextLogger, tag string, _ struct{}) (adapter.Service, error) {
+		if constructor != nil {
+			if err := constructor(); err != nil {
+				return nil, err
+			}
+		}
+		native.Adapter = boxService.NewAdapter("routervpn-execution-capture-test", tag)
+		return native, nil
+	})
+	ctx := box.Context(service.ContextWith[adapter.PlatformInterface](context.Background(), &executionCapturePlatform{}), include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), services, include.CertificateProviderRegistry())
+	service := daemon.NewStartedService(daemon.ServiceOptions{Context: ctx, LogMaxLines: 16})
+	t.Cleanup(func() { _ = service.CloseService(); service.Close() })
+	return service
+}
+
+func TestRouterVPNInstanceCloseCaptureActualConstructorAndClose(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "joined", true: "failed"}[failed], func(t *testing.T) {
+			native := &executionCaptureNativeService{entered: make(chan struct{}), release: make(chan struct{})}
+			if failed {
+				native.failure = errors.New("actual original service close failed")
+			}
+			service := executionCaptureService(t, native, nil)
+			var releaseOnce sync.Once
+			releaseNative := func() { releaseOnce.Do(func() { close(native.release) }) }
+			t.Cleanup(releaseNative)
+			capture, err := service.RouterVPNReserveInstanceCloseContext(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = service.RouterVPNReserveInstanceCloseContext(context.Background()); err == nil {
+				t.Fatal("reserved native owner could be replaced")
+			}
+			if err = service.StartOrReloadService(context.Background(), executionCaptureConfig, nil); err != nil {
+				t.Fatal(err)
+			}
+			original, err := capture.InstanceContext(context.Background())
+			if err != nil || original != service.Instance() {
+				t.Fatal("actual constructor did not retain original instance", err)
+			}
+			if err = capture.SealContext(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if capture.ClosedContext(context.Background()) == nil {
+				t.Fatal("constructed Box acknowledged before actual Close")
+			}
+			closed := make(chan error, 1)
+			go func() { closed <- service.CloseService() }()
+			<-native.entered
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+			if err = capture.ClosedContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("early service idle acknowledged native close", err)
+			}
+			cancel()
+			releaseNative()
+			<-closed
+			err = capture.ClosedContext(context.Background())
+			if failed && !errors.Is(err, native.failure) || !failed && err != nil {
+				t.Fatal("actual native close result changed", err)
+			}
+			if service.Instance() != nil || native.closes.Load() != 1 {
+				t.Fatal("original native cleanup did not join once")
+			}
+			if err = service.StartOrReloadService(context.Background(), executionCaptureConfig, nil); err == nil {
+				t.Fatal("sealed construction admitted replacement Box")
+			}
+			retained, err := capture.InstanceContext(context.Background())
+			if err != nil || retained != original {
+				t.Fatal("capture retargeted replacement", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNInstanceCloseCaptureJoinsInFlightConstruction(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	native := &executionCaptureNativeService{}
+	service := executionCaptureService(t, native, func() error { close(entered); <-release; return nil })
+	var releaseOnce sync.Once
+	releaseConstruction := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseConstruction)
+	capture, err := service.RouterVPNReserveInstanceCloseContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan error, 1)
+	go func() { started <- service.StartOrReloadService(context.Background(), executionCaptureConfig, nil) }()
+	<-entered
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	if err = capture.SealContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("in-flight construction was discarded", err)
+	}
+	cancel()
+	ctx, cancel = context.WithTimeout(context.Background(), 15*time.Millisecond)
+	if err = capture.ClosedContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("pending construction fabricated empty receipt", err)
+	}
+	cancel()
+	releaseConstruction()
+	if err = <-started; err != nil {
+		t.Fatal(err)
+	}
+	if capture.ClosedContext(context.Background()) == nil {
+		t.Fatal("late constructed Box lost original cleanup")
+	}
+	if err = service.CloseService(); err != nil {
+		t.Fatal(err)
+	}
+	if err = capture.ClosedContext(context.Background()); err != nil || native.closes.Load() != 1 {
+		t.Fatal("late native construction failed joined cleanup", err)
+	}
+}
+
+func TestRouterVPNInstanceCloseCaptureProvesEmptyAcquisition(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		t.Run(map[bool]string{false: "never-started", true: "parse-failed"}[failure], func(t *testing.T) {
+			var constructions atomic.Int32
+			service := executionCaptureService(t, &executionCaptureNativeService{}, func() error { constructions.Add(1); return nil })
+			capture, err := service.RouterVPNReserveInstanceCloseContext(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if failure && service.StartOrReloadService(context.Background(), `{"unknown":true}`, nil) == nil {
+				t.Fatal("malformed native input accepted")
+			}
+			if capture.ClosedContext(context.Background()) == nil {
+				t.Fatal("unsealed empty slot fabricated receipt")
+			}
+			if err = capture.SealContext(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err = capture.ClosedContext(context.Background()); err != nil {
+				t.Fatal("sealed empty acquisition did not join", err)
+			}
+			if service.StartOrReloadService(context.Background(), executionCaptureConfig, nil) == nil || constructions.Load() != 0 {
+				t.Fatal("positive empty receipt allowed later native construction")
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if capture.ClosedContext(ctx) == nil {
+				t.Fatal("cancelled empty receipt accepted")
+			}
+		})
+	}
+	if (*daemon.RouterVPNInstanceCloseCapture)(nil).ClosedContext(context.Background()) == nil {
+		t.Fatal("missing capture fabricated empty receipt")
+	}
+}
+
+func TestRouterVPNInstanceCloseCapturePreservesUnreservedService(t *testing.T) {
+	native := &executionCaptureNativeService{}
+	service := executionCaptureService(t, native, nil)
+	if err := service.StartOrReloadService(context.Background(), executionCaptureConfig, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RouterVPNReserveInstanceCloseContext(context.Background()); err == nil {
+		t.Fatal("existing instance acquired pre-start capture")
+	}
+	if err := service.CloseService(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RouterVPNReserveInstanceCloseContext(context.Background()); err == nil {
+		t.Fatal("used service became fresh close authority")
+	}
+	if err := service.StartOrReloadService(context.Background(), executionCaptureConfig, nil); err != nil {
+		t.Fatal("ordinary native reload changed", err)
+	}
+	if err := service.CloseService(); err != nil || native.closes.Load() != 2 {
+		t.Fatal("ordinary native close changed", err)
+	}
+}
+
+func TestRouterVPNInstanceCloseCaptureRefusesUnreturnedBox(t *testing.T) {
+	failure := errors.New("Box constructor returned no original owner")
+	service := executionCaptureService(t, &executionCaptureNativeService{}, func() error { return failure })
+	capture, err := service.RouterVPNReserveInstanceCloseContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = service.StartOrReloadService(context.Background(), executionCaptureConfig, nil); !errors.Is(err, failure) {
+		t.Fatal("actual Box construction fault absent", err)
+	}
+	if err = capture.SealContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if capture.ClosedContext(context.Background()) == nil {
+		t.Fatal("attempted Box construction fabricated no-acquisition receipt")
+	}
+}
+
+// This component fixture supplies the mobile platform API explicitly. Its
+// monitor and empty interface inventory are doubles: no netlink request, TUN,
+// route mutation, packet traffic or OS/native path acceptance occurs here.
+// Actual daemon construction, Box start/close and original receipts still run.
+type executionCapturePlatform struct{ adapter.PlatformInterface }
+
+func (*executionCapturePlatform) Initialize(adapter.NetworkManager) error  { return nil }
+func (*executionCapturePlatform) UsePlatformDefaultInterfaceMonitor() bool { return true }
+func (*executionCapturePlatform) CreateDefaultInterfaceMonitor(logger.Logger) tun.DefaultInterfaceMonitor {
+	return &executionCaptureMonitor{}
+}
+func (*executionCapturePlatform) UsePlatformNetworkInterfaces() bool { return true }
+func (*executionCapturePlatform) NetworkInterfaces() ([]adapter.NetworkInterface, error) {
+	return nil, nil
+}
+func (*executionCapturePlatform) UsePlatformAutoDetectInterfaceControl() bool { return false }
+func (*executionCapturePlatform) UsePlatformInterface() bool                  { return false }
+func (*executionCapturePlatform) UnderNetworkExtension() bool                 { return false }
+func (*executionCapturePlatform) NetworkExtensionIncludeAllNetworks() bool    { return false }
+func (*executionCapturePlatform) UsePlatformConnectionOwnerFinder() bool      { return false }
+func (*executionCapturePlatform) UsePlatformWIFIMonitor() bool                { return false }
+func (*executionCapturePlatform) UsePlatformNotification() bool               { return false }
+func (*executionCapturePlatform) UsePlatformNeighborResolver() bool           { return false }
+func (*executionCapturePlatform) UsePlatformShell() bool                      { return false }
+func (*executionCapturePlatform) UsePlatformBridge() bool                     { return false }
+func (*executionCapturePlatform) ClearDNSCache()                              {}
+
+type executionCaptureMonitor struct{ tun.DefaultInterfaceMonitor }
+
+func (*executionCaptureMonitor) Start() error                         { return nil }
+func (*executionCaptureMonitor) Close() error                         { return nil }
+func (*executionCaptureMonitor) DefaultInterface() *control.Interface { return nil }
+func (*executionCaptureMonitor) RegisterCallback(tun.DefaultInterfaceUpdateCallback) *list.Element[tun.DefaultInterfaceUpdateCallback] {
+	return nil
+}
+func (*executionCaptureMonitor) UnregisterCallback(*list.Element[tun.DefaultInterfaceUpdateCallback]) {
+}
+func (*executionCaptureMonitor) RegisterMyInterface(string) {}
+func (*executionCaptureMonitor) MyInterfaces() []string     { return nil }
+func (*executionCaptureMonitor) OverrideAndroidVPN() bool   { return false }
+func (*executionCaptureMonitor) AndroidVPNEnabled() bool    { return false }

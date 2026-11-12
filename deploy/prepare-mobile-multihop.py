@@ -53,7 +53,7 @@ _chain_spec = importlib.util.spec_from_file_location('routervpn_node_chain', ROO
 NODE_CHAIN = importlib.util.module_from_spec(_chain_spec)
 _chain_spec.loader.exec_module(NODE_CHAIN)
 _execution_modules = []
-for _name in ('prepare-node-chain-execution-gate', 'prepare-node-chain-execution', 'prepare-node-chain-execution-owner'):
+for _name in ('prepare-node-chain-execution-gate', 'prepare-node-chain-execution', 'prepare-node-chain-execution-owner', 'prepare-mobile-node-chain-execution'):
     _spec = importlib.util.spec_from_file_location('mobile_'+_name.replace('-', '_'), ROOT/'deploy'/(_name+'.py'))
     _module = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_module)

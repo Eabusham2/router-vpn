@@ -108,6 +108,15 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
+  for symbol in newRouterNodeChainExecution routerNodeChainExecutionFromLaunch newRouterNodeChainExecutionLaunch newRouterNodeChainExecutionRestore; do
+    grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing ordered execution API $symbol" >&2; return 1; }
+  done
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainExecution >"$tmp/router-node-chain-execution.javap"
+  for signature in 'void bindNative(io.nekohasekai.libbox.CommandServer) throws java.lang.Exception;' 'void run(io.nekohasekai.libbox.CommandServer) throws java.lang.Exception;' 'boolean healthy();' 'java.lang.String execution();' 'void close() throws java.lang.Exception;' 'boolean nativeClosed();' 'boolean retainsServerCleanup(io.nekohasekai.libbox.CommandServer);' 'java.lang.String launchInput() throws java.lang.Exception;'; do
+    grep -Fq "$signature" "$tmp/router-node-chain-execution.javap" || {
+      echo 'combined libbox AAR ordered execution has the wrong original-owner API' >&2; return 1
+    }
+  done
   for symbol in routerCompileExternalPolicy routerValidateExternalTransport routerValidateExternalDNS routerPrepareExternalExecutionCapture routerValidateExternalResponseProbe routerExternalCreateProof routerExternalCreateHopMeasurement routerTorCreateHopMeasurement routerExternalCreateDNSMeasurement routerTorCreateDNSMeasurement newRouterExternalMTU; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing external policy API $symbol" >&2; return 1; }
   done
@@ -312,6 +321,7 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
   }
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
   python3 "$ROOT/../deploy/test_hysteria2_deadlines_pinned.py" "$VENDOR"
+  python3 "$ROOT/../deploy/test_mobile_node_chain_execution.py" --vendor "$VENDOR" --go "$(command -v go)"
   go_retry test ./experimental/libbox/routervpn/...
   go_retry test -race ./adapter/inbound -run TestRouterVPN -count=1
   go_retry test -race ./route -run '^TestRouterVPNStrategyInterface' -count=1 -timeout=90s
