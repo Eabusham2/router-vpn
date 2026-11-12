@@ -321,9 +321,15 @@ def fixture_carrier_ready(addresses, routes, device, ipv4, ipv6, original=None):
     for route in routes:
         if route.get('type') != 'local':
             continue
-        if route.get('dev') != device or route.get('protocol') != 'kernel':
-            raise ValueError('Linux guardian fixture carrier has a foreign local route')
+        if not isinstance(route.get('dev'), str) or not route['dev']:
+            raise ValueError('Linux guardian fixture local route lost its device readback')
         destination = ipaddress.IPv6Network(route['dst'], strict=False)
+        if route['dev'] != device:
+            if destination.network_address in v6:
+                raise ValueError('Linux guardian fixture carrier has a foreign local route')
+            continue
+        if route.get('protocol') != 'kernel':
+            raise ValueError('Linux guardian fixture carrier has a foreign local route')
         if destination.prefixlen != 128 or destination.network_address in local:
             raise ValueError('Linux guardian fixture carrier has an ambiguous local route')
         local.add(destination.network_address)
@@ -345,8 +351,11 @@ def wait_for_fixture_carriers():
         ready = True
         for prefix, device, ipv4, ipv6 in carriers:
             observations = []
+            # iproute2 suppresses the JSON dev field when a dev route filter
+            # is supplied. Read the complete local table so the actual route
+            # owner remains observable; the predicate selects this carrier.
             for arguments in (['-j', 'address', 'show', 'dev', device],
-                              ['-6', '-j', 'route', 'show', 'table', 'local', 'dev', device]):
+                              ['-6', '-j', 'route', 'show', 'table', 'local']):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError('Linux guardian fixture carrier did not finish IPv6 readiness')

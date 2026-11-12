@@ -31,3 +31,10 @@ compilation checks passed. These checks are invoked by the mandatory guardian
 namespace regression, whose original native cases also execute the new readiness
 barrier. Actual privileged namespace and ARM64 TUN replay remain hosted evidence;
 the local executor cannot open the required netlink socket.
+# Native JSON owner correction
+
+At `0277f9fc9e425989dbe9850abf94f5369899a2ef`, both jobs in [Linux generated Node command TUN acceptance](https://github.com/Eabusham2/router-vpn/actions/runs/43156396698) failed before the native test with `fixture carrier has a foreign local route`. The readiness command used a `dev` filter while requiring the returned JSON to contain `dev`. The upstream [iproute2 `print_route` implementation](https://github.com/iproute2/iproute2/blob/main/ip/iproute.c) emits `RTA_OIF` only when `filter.oifmask != -1`; a device filter therefore suppresses that field even for JSON output.
+
+The fixture now reads the complete local IPv6 table in each of its two private namespaces. It selects the exact original carrier using the returned device field. Loopback routes are allowed outside that carrier, while missing device fields, another device claiming the carrier's address, and non-kernel carrier routes remain rejected. DAD completion, exact address/LOCAL-route equality, original interface identity, and the five-second setup deadline remain required. No production guardian, TUN route guard, or runtime deadline changed.
+
+Portable checks execute the actual readiness predicate and loop with the upstream field-suppression behavior at the command boundary. All readiness and inventory checks pass, including four causal controls: missing DAD validation, missing LOCAL-route equality, replaced interface ownership, and restoration of the erroneous device-filtered command. Python compilation and `git diff --check` pass. Actual namespace/TUN acceptance on both native architectures remains pending the hosted run of this correction; this executor cannot open the required netlink socket.

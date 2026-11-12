@@ -323,6 +323,7 @@ def check_fixture_carrier_readiness(module=GUARDIAN):
         routes = [{'type': 'local', 'dst': 'fd50::'+str(suffix), 'dev': device, 'protocol': 'kernel'}]
         if local_route:
             routes.append({'type': 'local', 'dst': 'fe80::'+str(suffix), 'dev': device, 'protocol': 'kernel'})
+        routes.insert(0, {'type': 'local', 'dst': '::1', 'dev': 'lo', 'protocol': 'kernel'})
         return addresses, routes
 
     args = ('rvpn-test', '198.18.0.1', 'fd50::1')
@@ -332,7 +333,7 @@ def check_fixture_carrier_readiness(module=GUARDIAN):
     for pending in ((True, True), (True, False), (False, False)):
         _, ready = module.fixture_carrier_ready(*snapshot('rvpn-test', 1, *pending), *args, original)
         assert not ready, 'carrier admitted before DAD and its original LOCAL route completed'
-    for defect in ('replacement', 'dadfailed', 'foreign-route', 'duplicate', 'selected-lost'):
+    for defect in ('replacement', 'dadfailed', 'foreign-route', 'missing-device', 'wrong-protocol', 'duplicate', 'selected-lost'):
         changed, changed_routes = copy.deepcopy(addresses), copy.deepcopy(routes)
         if defect == 'replacement':
             changed[0]['ifindex'] += 1
@@ -340,6 +341,10 @@ def check_fixture_carrier_readiness(module=GUARDIAN):
             changed[0]['addr_info'][-1]['dadfailed'] = True
         elif defect == 'foreign-route':
             changed_routes[-1]['dev'] = 'foreign'
+        elif defect == 'missing-device':
+            del changed_routes[-1]['dev']
+        elif defect == 'wrong-protocol':
+            changed_routes[-1]['protocol'] = 'static'
         elif defect == 'duplicate':
             changed[0]['addr_info'].append(copy.deepcopy(changed[0]['addr_info'][-1]))
         else:
@@ -378,9 +383,14 @@ def check_fixture_carrier_readiness(module=GUARDIAN):
         assert 0 < options['timeout'] <= 1
         peer = command[1:5] == ['netns', 'exec', 'rvpn-peer', 'ip']
         device, suffix = ('rvpn-peer', 2) if peer else ('rvpn-test', 1)
-        assert command[-2:] == ['dev', device]
+        if 'address' in command:
+            assert command[-2:] == ['dev', device]
         pending = len(sleeps) < (2 if peer else 1)
         address, route = snapshot(device, suffix, pending, not pending)
+        if 'route' in command and 'dev' in command:
+            # Exact iproute2 print_route behaviour: filter.oifmask == -1
+            # suppresses RTA_OIF even in JSON. Do not invent the missing owner.
+            route = [{k: v for k, v in row.items() if k != 'dev'} for row in route if row['dev'] == device]
         calls.append((device, 'address' if 'address' in command else 'route'))
         return types.SimpleNamespace(stdout=json.dumps(address if 'address' in command else route))
     with patch.object(module.subprocess, 'run', side_effect=observe), \
@@ -416,7 +426,15 @@ def check_fixture_carrier_controls():
         except AssertionError:
             continue
         raise AssertionError('carrier causal control accepted '+before)
-    print('Carrier readiness: both original IPv6 owners, DAD, LOCAL routes and finite setup wait checked; three causal controls rejected.', flush=True)
+    try:
+        check_fixture_carrier_readiness(variant("['-6', '-j', 'route', 'show', 'table', 'local']",
+                                               "['-6', '-j', 'route', 'show', 'table', 'local', 'dev', device]"))
+    except ValueError as error:
+        if 'local route lost its device readback' not in str(error):
+            raise
+    else:
+        raise AssertionError('carrier readback accepted suppressed native route ownership')
+    print('Carrier readiness: both original IPv6 owners, DAD, LOCAL routes and finite setup wait checked; four causal controls rejected.', flush=True)
 
 
 def main():
