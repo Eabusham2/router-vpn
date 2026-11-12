@@ -128,7 +128,7 @@ try{
     Check ($rootControls['UnifiedModeCombo'].Visibility-ceq'Visible'-and$rootControls['UnifiedOrderedModeSummary'].Visibility-ceq'Collapsed') 'direct mode display remained hidden after disabling multihop'
     $saved.nodes[1].id='altered';Check ($rows[1].id-ceq'prefix-1') 'committed draft retained mutable editor rows'
     foreach($selectedID in @('prefix-2','missing-final')){
-        $rootControls['UnifiedOrderedModeSummary'].Text='AmneziaWG Strong → previous final'
+        $rootControls['UnifiedOrderedModeSummary'].Text='AmneziaWG Strong '+[char]0x2192+' previous final'
         $replacement=$store|ConvertTo-Json -Depth 8|ConvertFrom-Json;$replacement.selected_id=$selectedID
         RefreshUnifiedOrderedSelection $replacement
         $rootControls['UnifiedMultihop'].IsChecked=$true;$rootControls['UnifiedOrdered'].IsChecked=$true;RefreshUnifiedOrderedControls
