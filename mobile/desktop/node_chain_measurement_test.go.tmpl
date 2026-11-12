@@ -135,6 +135,16 @@ func TestRouterVPNDesktopNodeChainMeasurementHTTPComposition(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("SSL_CERT_FILE", ca)
+	// Windows and Apple use native trust stores rather than SSL_CERT_FILE.
+	// This fresh fixture process installs only its exact test root through the
+	// standard Go fallback pool; ordinary hostname, lifetime and chain checks
+	// still run. No trust setting reaches the application or another test.
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})) {
+		t.Fatal("fixture public root could not be parsed")
+	}
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+	x509.SetFallbackRoots(roots)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "ip=203.0.113.89\n") }))
 	server.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: private}}}
 	server.StartTLS()
