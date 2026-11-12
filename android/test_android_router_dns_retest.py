@@ -140,7 +140,9 @@ def main():
         store=app/'AndroidNodeStore.java';source=store.read_text()
         anchor='        requireDNSBenchmarkSource(source);\n        // Shared writer lock'
         if source.count(anchor)!=1:raise AssertionError('DNS transaction witness anchor changed')
-        source=source.replace('private static long selectionGeneration;', 'private static long selectionGeneration; static Runnable dnsChecked;')
+        declaration='final class AndroidNodeStore {'
+        if source.count(declaration)!=1:raise AssertionError('DNS transaction witness owner changed')
+        source=source.replace(declaration,declaration+'\n    static Runnable dnsChecked;',1)
         source=source.replace(anchor,'        requireDNSBenchmarkSource(source);\n        if(dnsChecked!=null)dnsChecked.run();\n        // Shared writer lock',1)
         store.write_text(source)
         parity=(JAVA/'AndroidProductParity.java').read_text();parity=parity.replace(method(parity,'    static void showModes('),'')
