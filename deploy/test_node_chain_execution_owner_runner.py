@@ -33,8 +33,8 @@ def encoded(rows):
 class Verdict(unittest.TestCase):
     def test_exact_complete_two_package_inventory(self):
         result = RUNNER.verdict(encoded(events()), 0)
-        self.assertEqual(result, {'roots': 13, 'test_records': 25})
-        self.assertEqual(len(RUNNER.CONTROLS), 5)
+        self.assertEqual(result, {'roots': 14, 'test_records': 28})
+        self.assertEqual(len(RUNNER.CONTROLS), 7)
 
     def test_omitted_root_child_or_package_cannot_pass(self):
         rows = events()

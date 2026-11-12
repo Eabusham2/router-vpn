@@ -1,0 +1,106 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"os"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-tun"
+)
+
+type executionCloseHeld struct {
+	entered, release chan struct{}
+	failure          error
+}
+type executionCloseMonitor struct{ tun.DefaultInterfaceMonitor }
+
+func (*executionCloseMonitor) Close() error { return nil }
+
+func (*executionCloseHeld) Name() string                   { return "original-close-boundary" }
+func (*executionCloseHeld) Start(adapter.StartStage) error { return nil }
+func (h *executionCloseHeld) Close() error                 { close(h.entered); <-h.release; return h.failure }
+
+// Execute the actual pinned Box.Close and actual managers; only the final
+// internal service is held to expose the real early-done/late-join window.
+func TestRouterVPNExecutionNativeCloseReceipt(t *testing.T) {
+	for _, fault := range []string{"success", "original-error"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newExecutionNativeFixture(t, "server", nil)
+			f.box.logFactory = log.NewNOPFactory()
+			f.box.service = boxService.NewManager(f.box.logger, boxService.NewRegistry())
+			f.box.certificateProvider = certificate.NewManager(f.box.logger, certificate.NewRegistry())
+			monitor := chainNativeField[tun.DefaultInterfaceMonitor](t, f.box.network, "interfaceMonitor")
+			*monitor = &executionCloseMonitor{*monitor}
+			held := &executionCloseHeld{entered: make(chan struct{}), release: make(chan struct{})}
+			var release sync.Once
+			defer release.Do(func() { close(held.release) })
+			sentinel := errors.New("original native service failed to close")
+			if fault == "original-error" {
+				held.failure = sentinel
+			}
+			f.box.internalService = []adapter.LifecycleService{held}
+			receipt := f.box.RouterVPNCaptureCloseReceipt()
+			if err := receipt.JoinContext(t.Context(), f.box); err == nil {
+				t.Fatal("unstarted close fabricated join")
+			}
+			done := make(chan error, 1)
+			joined := make(chan struct{})
+			defer func() {
+				release.Do(func() { close(held.release) })
+				select {
+				case <-joined:
+				case <-time.After(3 * time.Second):
+					t.Error("original close fixture did not join")
+				}
+			}()
+			go func() { defer close(joined); done <- f.box.Close() }()
+			select {
+			case <-held.entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("actual Box did not reach held native close")
+			}
+			select {
+			case <-f.box.done:
+			default:
+				t.Fatal("actual early Box done did not close")
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+			err := receipt.JoinContext(ctx, f.box)
+			cancel()
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("early done or service slot fabricated joined native close", err)
+			}
+			if err := f.box.Close(); !errors.Is(err, os.ErrClosed) {
+				t.Fatal("duplicate close changed original lifetime", err)
+			}
+			if err := receipt.JoinContext(t.Context(), new(Box)); err == nil {
+				t.Fatal("foreign Box adopted original close receipt")
+			}
+			release.Do(func() { close(held.release) })
+			select {
+			case err := <-done:
+				if fault == "success" && err != nil || fault == "original-error" && !errors.Is(err, sentinel) {
+					t.Fatal("actual Close discarded original result", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("native close failed to finish")
+			}
+			err = receipt.JoinContext(t.Context(), f.box)
+			if fault == "success" && err != nil || fault == "original-error" && !errors.Is(err, sentinel) {
+				t.Fatal("native receipt discarded original close result", err)
+			}
+			ctx, cancel = context.WithCancel(t.Context())
+			cancel()
+			if !errors.Is(receipt.JoinContext(ctx, f.box), context.Canceled) {
+				t.Fatal("joined receipt lost caller cancellation")
+			}
+		})
+	}
+}

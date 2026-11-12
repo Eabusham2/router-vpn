@@ -21,11 +21,12 @@ ROOTS = {
               'NativeDNSRejectsAwayAndBackSelection', 'NativeGateRejectsForeignProofAndRetiredSelection',
               'NativeOpenCannotFinishAfterRevoke', 'NativeDiscoveryKeepsLiteralOriginalEntry',
               'NativeRestoreRetainsOriginalFront', 'NativeRetiredSourceKeepsClosedReceipt',
-              'NativeFailedAcquisitionRetainsSealedStop', 'NativeDuplicateBindKeepsOriginalOwner'),
+              'NativeFailedAcquisitionRetainsSealedStop', 'NativeDuplicateBindKeepsOriginalOwner', 'NativeCloseReceipt'),
     PACKAGE+'/adapter/outbound': ('AppendPreservesActualManagers', 'AppendRejectsForeignOwnerAndLifecycle',
                                  'AppendConcurrentTagHasOneOriginalWinner'),
 }
 CHILDREN = {
+    'NativeCloseReceipt': ('success', 'original-error'),
     'NativeRetainsOneGraphThroughDiscovery': ('auto', 'server'),
     'NativeRejectsActualGraphSubstitution': ('mtu', 'dns', 'rule', 'entry-key'),
     'AppendRejectsForeignOwnerAndLifecycle': ('entry', 'gate', 'detour', 'lifecycle', 'cancelled', 'closed-manager'),
@@ -104,6 +105,8 @@ def verify(core):
             raise ValueError('native owner source changed')
     if PREP.box_source((core/'box.go').read_text()) != (core/'box.go').read_bytes():
         raise ValueError('native Box lost original construction snapshot')
+    if PREP.daemon_source((core/'daemon/started_service.go').read_text()) != (core/'daemon/started_service.go').read_bytes():
+        raise ValueError('native daemon lost original close failure')
     ADMISSION.verify_current_templates(core)
     for template, relative in GATE.TEMPLATES.items():
         if GATE.destination(core, relative).read_bytes() != (ROOT/'mobile/chain_gate'/template).read_bytes():
@@ -112,6 +115,12 @@ def verify(core):
 
 
 CONTROLS = (
+    ('actual native close join', 'routervpn_node_chain_execution_close.go',
+     '\tselect {\n\tcase <-ctx.Done():\n\t\treturn ctx.Err()\n\tcase <-done:\n\t}\n', '',
+     '.', 'NativeCloseReceipt/success', 'early done or service slot fabricated joined native close'),
+    ('original native close error', 'routervpn_node_chain_execution_close.go',
+     '\treturn errors.Join(err, ctx.Err())', '\t_ = err\n\treturn ctx.Err()',
+     '.', 'NativeCloseReceipt/original-error', 'native receipt discarded original close result'),
     ('actual construction graph', 'routervpn_node_chain_execution.go',
      'err != nil || routerVPNNodeChainExecutionOptionsDigest(s.ctx, options) != s.routerVPNNodeChainExecutionOptions', 'err != nil',
      '.', 'NativeRejectsActualGraphSubstitution/mtu', 'changed actual graph acquired native preparation'),

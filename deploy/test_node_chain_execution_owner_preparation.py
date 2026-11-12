@@ -5,8 +5,10 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -27,7 +29,9 @@ func New(options Options) (*Box, error) {
 \t\tpreserveOtherState: "original",
 \t}, nil
 }
+func (s *Box) Close() error { return originalManagerClose() }
 '''
+DAEMON = 'package daemon\n'+PREP.DAEMON_CLOSE_ORIGINAL+'\nfunc (s *StartedService) SetError(err error) {}\n'
 
 
 class Preparation(unittest.TestCase):
@@ -37,6 +41,8 @@ class Preparation(unittest.TestCase):
         self.vendor = Path(self.temp.name)/'core'
         self.vendor.mkdir()
         (self.vendor/'box.go').write_text(BOX)
+        (self.vendor/'daemon').mkdir()
+        (self.vendor/'daemon/started_service.go').write_text(DAEMON)
         (self.vendor/'go.mod').write_text('module github.com/sagernet/sing-box\n')
 
     def snapshot(self):
@@ -68,6 +74,64 @@ class Preparation(unittest.TestCase):
         ):
             with self.subTest(before=before), self.assertRaises(ValueError):
                 PREP.box_source(derived.replace(before, after, 1))
+
+    def test_original_close_and_daemon_error_are_exact_and_idempotent(self):
+        derived = PREP.box_source(BOX).decode()
+        self.assertIn('func (s *Box) routerVPNCloseOriginal() error { return originalManagerClose() }', derived)
+        patched = PREP.daemon_source(DAEMON).decode()
+        self.assertEqual(PREP.daemon_source(patched).decode(), patched)
+        self.assertIn('closeErr = instance.Close()', patched)
+        self.assertIn('return closeErr', patched)
+        for wrong in (patched.replace('return closeErr', 'return nil'), patched.replace('closeErr = instance.Close()', '_ = instance.Close()')):
+            with self.assertRaises(ValueError): PREP.daemon_source(wrong)
+        with self.assertRaises(ValueError): PREP.box_source(derived.replace('routerVPNCloseOriginal', 'foreignClose'))
+
+    def test_actual_pinned_daemon_close_keeps_original_failure(self):
+        # The preparer matches the entire pinned method, including its real
+        # lock/instance-removal order. Only the service and native instance
+        # boundary types are substituted in this isolated executable fixture.
+        body = PREP.daemon_source(DAEMON).decode().split('package daemon\n', 1)[1].split('\nfunc (s *StartedService) SetError', 1)[0]
+        prefix = '''package daemon
+import("errors"; "runtime/debug"; "sync"; "testing"; "time")
+var runtimeDebug = struct{FreeOSMemory func()}{debug.FreeOSMemory}
+const(ServiceStatus_STARTING=iota;ServiceStatus_STARTED;ServiceStatus_STOPPING;ServiceStatus_IDLE;ServiceStatus_FATAL)
+type Instance struct{close func()error}
+func(i *Instance)Close()error{return i.close()}
+type StartedService struct{lifecycleAccess,serviceAccess sync.Mutex;instance *Instance;serviceStatus struct{Status int};startedAt time.Time}
+func(s *StartedService)interruptStart(){}
+func(s *StartedService)updateStatus(v int){s.serviceStatus.Status=v}
+func(s *StartedService)updateStatusError(error){s.serviceStatus.Status=ServiceStatus_FATAL}
+'''
+        test = '''
+func TestActualClose(t *testing.T){
+ sentinel:=errors.New("original native close failure");entered,release:=make(chan struct{}),make(chan struct{})
+ s:=&StartedService{instance:&Instance{close:func()error{close(entered);<-release;return sentinel}}}
+ done:=make(chan error,1);go func(){done<-s.CloseService()}();<-entered
+ s.serviceAccess.Lock();empty:=s.instance==nil;status:=s.serviceStatus.Status;s.serviceAccess.Unlock()
+ if !empty||status!=ServiceStatus_STOPPING{t.Fatal("fixture lost actual early service removal")}
+ select{case <-done:t.Fatal("service returned before original close joined");default:}
+ close(release);if err:=<-done;!errors.Is(err,sentinel){t.Fatal("daemon discarded original native close failure",err)}
+ if s.serviceStatus.Status!=ServiceStatus_FATAL{t.Fatal("failed native close reported idle success")}
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path/'go.mod').write_text('module closefixture\ngo 1.25\n')
+            environment = dict(os.environ, GOWORK='off')
+            target = json.loads(subprocess.check_output(['go', 'env', '-json', 'GOOS', 'GOARCH'], cwd=path, env=environment, text=True, timeout=30))
+            race = [] if (target['GOOS'], target['GOARCH']) == ('windows', 'arm64') else ['-race']
+            for label, source in [('positive', body), ('discarded-error', body.replace('return closeErr', 'return nil'))]:
+                # Keep the deleted-return mutant compilable, so a compiler
+                # error can never count as the intended causal rejection.
+                if label != 'positive': source = source.replace('return nil\n}', '_ = closeErr\n\treturn nil\n}')
+                (path/'close_test.go').write_text(prefix+source+test)
+                result = subprocess.run(['go', 'test', *race, '-count=1', '-timeout=10s', '.'], cwd=path,
+                    env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+                if label == 'positive': self.assertEqual(result.returncode, 0, result.stdout)
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn('daemon discarded original native close failure', result.stdout)
+                    self.assertNotIn('[build failed]', result.stdout)
 
     def test_partial_source_change_refuses_all_mutation(self):
         self.prepare()

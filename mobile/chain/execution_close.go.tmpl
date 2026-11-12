@@ -1,0 +1,88 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"os"
+	"sync"
+)
+
+// A completion receipt is separate from Box.done: done closes before native
+// managers and the original TUN finish closing. Only the return of the exact
+// original Close publishes its result. A failed result remains failed.
+type routerVPNNativeCloseState struct {
+	mu      sync.Mutex
+	owner   *Box
+	started bool
+	done    chan struct{}
+	err     error
+}
+
+type RouterVPNNativeCloseReceipt struct {
+	owner *Box
+	state *routerVPNNativeCloseState
+}
+
+func (s *Box) RouterVPNCaptureCloseReceipt() *RouterVPNNativeCloseReceipt {
+	if s == nil {
+		return nil
+	}
+	state := &s.routerVPNNativeClose
+	state.mu.Lock()
+	if state.owner != nil && state.owner != s {
+		state.mu.Unlock()
+		return nil
+	}
+	state.owner = s
+	if state.done == nil {
+		state.done = make(chan struct{})
+	}
+	state.mu.Unlock()
+	return &RouterVPNNativeCloseReceipt{owner: s, state: state}
+}
+
+func (r *RouterVPNNativeCloseReceipt) JoinContext(ctx context.Context, original *Box) error {
+	if ctx == nil || r == nil || original == nil || r.owner != original || r.state != &original.routerVPNNativeClose {
+		return errors.New("native close receipt lost its original Box")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.state.mu.Lock()
+	started, done := r.state.started, r.state.done
+	r.state.mu.Unlock()
+	if !started || done == nil {
+		return errors.New("original native close has not started")
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+	}
+	r.state.mu.Lock()
+	err := r.state.err
+	r.state.mu.Unlock()
+	return errors.Join(err, ctx.Err())
+}
+
+func (s *Box) Close() error {
+	receipt := s.RouterVPNCaptureCloseReceipt()
+	if receipt == nil {
+		return os.ErrInvalid
+	}
+	state := receipt.state
+	state.mu.Lock()
+	if state.started {
+		state.mu.Unlock()
+		return os.ErrClosed
+	}
+	state.started = true
+	state.mu.Unlock()
+	// Do not defer publication: a panic or abandoned close cannot prove join.
+	err := s.routerVPNCloseOriginal()
+	state.mu.Lock()
+	state.err = err
+	close(state.done)
+	state.mu.Unlock()
+	return err
+}
