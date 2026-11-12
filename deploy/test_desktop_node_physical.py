@@ -1376,34 +1376,7 @@ def execute_baseline_suite(baselines, suite):
     return output
 
 
-def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=False):
-    if prospective:
-        raise ValueError("Node native source gate does not admit a prospective OS predicate")
-    source, before = checked_sources(source)
-    compiler, captured, arch = selected_compiler(go, source, dict(os.environ if env is None else env))
-    windows = platform.system() == "Windows"
-    if not windows:
-        with stage("verify complete native retirement preparation"):
-            status, output = run([sys.executable, ROOT / "deploy/test_desktop_tun_retirement_projection.py", "--source", source],
-                                 cwd=ROOT, env=captured, timeout=30)
-            if status:
-                raise ValueError("Native retirement preparation regression failed:\n" + output[-16384:])
-    if not windows:
-        status, output = run([sys.executable, ROOT / "deploy/test_desktop_node_routing_runner.py"],
-                             cwd=ROOT, env=captured, timeout=30)
-        if status:
-            raise ValueError("Node routing runner checks failed:\n" + output[-16384:])
-    if platform.system() == "Linux" and not bootstrap_only:
-        with stage("actual WG/AWG original packet delivery drain"):
-            status, output = run([sys.executable, ROOT / "deploy/test_mobile_wireguard_stack.py", source], cwd=ROOT, env=captured, timeout=600)
-            if status:
-                raise ValueError("WireGuard stack delivery drain failed:\n" + output[-24000:])
-        with stage("actual imported entry and paired final native composition"):
-            status, output = run([sys.executable, ROOT / "deploy/test_mobile_imported_entry.py", source, "--native-peers"], cwd=ROOT, env=captured, timeout=1200)
-            if status:
-                raise ValueError("Imported entry native composition failed:\n" + output[-24000:])
-    race = [] if bootstrap_only or windows and arch == "arm64" else ["-race"]
-    captured["CGO_ENABLED"] = "1" if race else "0"
+def baseline_suites(windows, *, bootstrap_only=False):
     suites = [
         ("tor-registration-owner", "./routervpn/desktoppt", "^TestRouterVPNPhysicalRegistrationKeepsOriginalCaller$", ("TestRouterVPNPhysicalRegistrationKeepsOriginalCaller",)),
         ("native-startup-inbound", "./protocol/tun", "^TestRouterVPNDesktopNetworkStartupKeepsOriginalBudget$", ("TestRouterVPNDesktopNetworkStartupKeepsOriginalBudget",)),
@@ -1552,6 +1525,109 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                            "^TestRouterVPNDesktopNodeAmnezia(Layers|LayerCapture|LayerCover|OuterCannotBypassFinal)$/^" + mode + "$",
                            tuple("TestRouterVPNDesktopNodeAmnezia" + name for name in
                                  ("Layers", "LayerCapture", "LayerCover", "OuterCannotBypassFinal"))))
+    return suites
+
+
+SOURCE_PHASES = ("baselines", "controls")
+SOURCE_PHASE_TIMEOUT = 1800
+
+
+def source_phase_inventory(source):
+    suites = baseline_suites(True)
+    controls = mutants(source, True)
+    names = {"baselines": [suite[0] for suite in suites],
+             "controls": [control[0] for control in controls]}
+    images = {"baselines": ["baseline-%d.test.exe" % index for index, _ in enumerate(dict.fromkeys(suite[1] for suite in suites))],
+              "controls": [name + ".test.exe" for name in names["controls"]]}
+    for phase in SOURCE_PHASES:
+        if not names[phase] or len(names[phase]) != len(set(names[phase])):
+            raise ValueError("Node source phase inventory is empty or duplicated")
+        images[phase] += ["start-layer-relay.exe", "xray-reference.exe"]
+    return names, images
+
+
+def source_records_digest(records):
+    return hashlib.sha256(json.dumps(records, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def validate_source_phase(value, phase, digest, architecture, names, images):
+    if (phase not in SOURCE_PHASES or not isinstance(value, dict) or
+            set(value) != {"format", "phase", "architecture", "source_sha256", "completed", "executables"} or
+            value["format"] != "routervpn-node-source-phase-v1" or value["phase"] != phase or
+            value["architecture"] != architecture or architecture not in ("amd64", "arm64") or
+            value["source_sha256"] != digest or not re.fullmatch(r"[0-9a-f]{64}", digest) or
+            value["completed"] != names[phase]):
+        raise ValueError("Node source phase omitted its exact source, architecture or completed inventory")
+    actual = value["executables"]
+    if (not isinstance(actual, dict) or set(actual) != set(images[phase]) or
+            any(not isinstance(item, str) or not re.fullmatch(r"[0-9a-f]{64}", item) for item in actual.values())):
+        raise ValueError("Node source phase omitted its captured executable receipts")
+
+
+def execute_partitioned(source, env, runner):
+    """Require both serial source phases before the native builder can continue."""
+    if platform.system() != "Windows":
+        raise ValueError("Node source phase packaging requires the actual Windows host")
+    source, before = checked_sources(source)
+    digest, architecture = source_records_digest(before), env.get("GOARCH")
+    names, images = source_phase_inventory(source)
+    results = []
+    with tempfile.TemporaryDirectory(prefix="routervpn-node-source-receipts-") as directory:
+        for phase in SOURCE_PHASES:
+            if checked_sources(source)[1] != before:
+                raise ValueError("Node source changed between original phases")
+            path = Path(directory) / (phase + ".json")
+            output = runner([sys.executable, Path(__file__).resolve(), source,
+                             "--phase", phase, "--receipt", path], env=env, timeout=SOURCE_PHASE_TIMEOUT)
+            print(output, flush=True)
+            if path.is_symlink() or not path.is_file() or not stat.S_ISREG(path.stat().st_mode) or path.stat().st_size > 65536:
+                raise ValueError("Node source phase has no bounded regular receipt")
+            value = json.loads(path.read_text(encoding="utf-8"))
+            validate_source_phase(value, phase, digest, architecture, names, images)
+            if checked_sources(source)[1] != before:
+                raise ValueError("Node source changed during its original phase")
+            results.append(value)
+    if [value["phase"] for value in results] != list(SOURCE_PHASES):
+        raise ValueError("Node source completion requires both original phases")
+    print("Complete native Node source gate: all baseline and control phases passed", flush=True)
+    return results
+
+
+def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=False, phase="complete", receipt_path=None):
+    if phase not in ("complete", *SOURCE_PHASES) or (phase == "complete" and receipt_path is not None):
+        raise ValueError("Node source gate cannot publish a partial complete receipt")
+    if phase != "complete" and (platform.system() != "Windows" or bootstrap_only):
+        raise ValueError("Node source phases require full actual Windows execution")
+    if prospective:
+        raise ValueError("Node native source gate does not admit a prospective OS predicate")
+    source, before = checked_sources(source)
+    compiler, captured, arch = selected_compiler(go, source, dict(os.environ if env is None else env))
+    windows = platform.system() == "Windows"
+    if not windows:
+        with stage("verify complete native retirement preparation"):
+            status, output = run([sys.executable, ROOT / "deploy/test_desktop_tun_retirement_projection.py", "--source", source],
+                                 cwd=ROOT, env=captured, timeout=30)
+            if status:
+                raise ValueError("Native retirement preparation regression failed:\n" + output[-16384:])
+    if not windows:
+        status, output = run([sys.executable, ROOT / "deploy/test_desktop_node_routing_runner.py"],
+                             cwd=ROOT, env=captured, timeout=30)
+        if status:
+            raise ValueError("Node routing runner checks failed:\n" + output[-16384:])
+    if platform.system() == "Linux" and not bootstrap_only:
+        with stage("actual WG/AWG original packet delivery drain"):
+            status, output = run([sys.executable, ROOT / "deploy/test_mobile_wireguard_stack.py", source], cwd=ROOT, env=captured, timeout=600)
+            if status:
+                raise ValueError("WireGuard stack delivery drain failed:\n" + output[-24000:])
+        with stage("actual imported entry and paired final native composition"):
+            status, output = run([sys.executable, ROOT / "deploy/test_mobile_imported_entry.py", source, "--native-peers"], cwd=ROOT, env=captured, timeout=1200)
+            if status:
+                raise ValueError("Imported entry native composition failed:\n" + output[-24000:])
+    race = [] if bootstrap_only or windows and arch == "arm64" else ["-race"]
+    captured["CGO_ENABLED"] = "1" if race else "0"
+    suites = baseline_suites(windows, bootstrap_only=bootstrap_only) if phase != "controls" else []
+    controls = mutants(source, windows) if phase != "baselines" else []
+    completed = []
     with tempfile.TemporaryDirectory(prefix="routervpn-node-physical-") as directory:
         workspace = Path(directory)
         with stage("prepare shipping Start Layer reference"):
@@ -1625,7 +1701,9 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Node composite gate omitted simultaneous original TCP/UDP branches or a Start Layer")
             if name == "composite-credentials" and any("--- PASS: TestRouterVPNDesktopNodeCompositeWrongCredential/" + case + " (" not in output for case in COMPOSITE_CREDENTIAL_CASES):
                 raise ValueError("Node composite gate omitted an independent TCP, UDP or shared Start Layer credential negative")
-        for label, relative, package, test, subtest, witness, replacement in mutants(source, windows):
+            completed.append(name)
+        control_images = {}
+        for label, relative, package, test, subtest, witness, replacement in controls:
             changed = workspace / (label + ".go")
             changed.write_text(replacement, encoding="utf-8")
             overlay = workspace / (label + ".json")
@@ -1635,19 +1713,42 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 status, output = run([*build, "-overlay=" + str(overlay), "-o", binary, package], cwd=source, env=captured, timeout=600)
                 if status:
                     raise ValueError("Node negative control failed to compile: " + label + "\n" + output[-16384:])
+            original_image = retained_binary(binary)
             selector = "^" + test + "$" + ("/^" + subtest + "$" if subtest else "")
             with stage("execute control " + label):
                 status, output = run([binary, "-test.run=" + selector, "-test.count=1", "-test.timeout=45s", "-test.v"], cwd=source, env=captured, timeout=55)
             if status == 0 or "--- FAIL: " + test + " (" not in output or witness not in output or any(value in output for value in ("--- SKIP:", "DATA RACE", "panic: test timed out")):
                 raise ValueError("Node negative control missed its precise production defect: " + label + "\n" + output[-16384:])
+            if retained_binary(binary) != original_image:
+                raise ValueError("Node negative control changed its original compiled image")
+            control_images[binary] = original_image
+            completed.append(label)
             print("Rejected native Node production mutant: " + label, flush=True)
         if relay.is_symlink() or hashlib.sha256(relay.read_bytes()).hexdigest() != relay_digest:
             raise ValueError("Node shipping whitening reference changed during actual execution")
         if xray_binary.is_symlink() or hashlib.sha256(xray_binary.read_bytes()).hexdigest() != xray_digest or xray_reference_sources(xray_source) != xray_records:
             raise ValueError("Node pinned Xray reference changed during actual execution")
         verify_naive_library(naive_library)
+        if phase != "complete":
+            for package in baselines.binaries:
+                baselines.verify(package)
+            for binary, original_image in control_images.items():
+                if retained_binary(binary) != original_image:
+                    raise ValueError("Node source phase replaced a completed control image")
+            names, images = source_phase_inventory(source)
+            value = {"format": "routervpn-node-source-phase-v1", "phase": phase, "architecture": arch,
+                     "source_sha256": source_records_digest(before), "completed": completed,
+                     "executables": {name: retained_binary(workspace / name)[2] for name in images[phase]}}
+            validate_source_phase(value, phase, value["source_sha256"], arch, names, images)
     if checked_sources(source)[1] != before:
         raise ValueError("Node native source changed during actual execution")
+    if phase != "complete":
+        if receipt_path is not None:
+            with Path(receipt_path).open("x", encoding="utf-8") as stream:
+                json.dump(value, stream, sort_keys=True)
+                stream.write("\n")
+        print("Native Node source phase passed: " + phase, flush=True)
+        return value
     print("Exact native Node startup, captured IPC, retained TUN/MTU rollback, real WG/AWG/Shadowsocks/Hysteria2/REALITY Vision/PQ/XHTTP/Naive H2/H3/split/raw-MAX plus AES/XOR encrypted TCP/UDP, fresh selected DNS and wrong-key controls passed. OS permits/TUN remain explicit fixtures; kernel composition and both-direction host activation remain separate.", flush=True)
 
 
@@ -1656,12 +1757,14 @@ if __name__ == "__main__":
     parser.add_argument("source", type=Path, nargs="?")
     parser.add_argument("--go", default="go")
     parser.add_argument("--standalone", action="store_true")
+    parser.add_argument("--phase", choices=("complete", *SOURCE_PHASES), default="complete")
+    parser.add_argument("--receipt", type=Path)
     args = parser.parse_args()
     if args.standalone:
-        if args.source is not None:
+        if args.source is not None or args.phase != "complete" or args.receipt is not None:
             parser.error("--standalone owns a fresh prepared Windows core")
         BOOT.standalone(args.go, native_test=execute)
     else:
         if args.source is None:
             parser.error("a prepared native core or --standalone is required")
-        execute(args.source, args.go)
+        execute(args.source, args.go, phase=args.phase, receipt_path=args.receipt)

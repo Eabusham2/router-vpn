@@ -147,6 +147,7 @@ def inputs():
                              ROOT/'deploy/test_windows_physical_tunnel.py',
                              ROOT/'deploy/test_windows_physical_tunnel_runner.py',
                              ROOT/'deploy/test_desktop_node_physical.py',
+                             ROOT/'deploy/test_desktop_node_phases.py',
                              ROOT/'deploy/test_mobile_imported_socks_xray.py',
                              ROOT/'deploy/test_mobile_imported_socks_xray_runner.py',
                              ROOT/'deploy/test_mobile_imported_proxy_xray.py',
@@ -1351,12 +1352,18 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 # 3009.438s; allow a bounded 3600s aggregate. Keep the exact
                 # inventory, serial execution and all individual compiler,
                 # suite, control, socket, lease and cancellation deadlines.
-                # At f41514f7, Windows AMD64 completed all 17 baselines and
-                # 16 of 34 compiled controls, then its 1200s parent stopped
-                # the next compile (run 41507677662, job 125493850421).
-                # Its existing 1800s aggregate remains unchanged.
-                run([sys.executable, ROOT/'deploy/test_desktop_node_physical.py', source],
-                    env=env, timeout=3600 if target.startswith('linux/') else 1800)
+                if target.startswith('windows/'):
+                    # At 35ff28a7 the 1800s parent expired after every baseline
+                    # and 30 successful controls. Keep that finite bound for
+                    # each serial baseline/control phase and require both exact
+                    # source, inventory and executable receipts before packaging.
+                    run([sys.executable, ROOT/'deploy/test_desktop_node_phases.py'],
+                        cwd=ROOT, env=env, timeout=120)
+                    node_source = load('desktop_windows_node_source_phases', 'test_desktop_node_physical.py')
+                    node_source.execute_partitioned(source, env, run)
+                else:
+                    run([sys.executable, ROOT/'deploy/test_desktop_node_physical.py', source],
+                        env=env, timeout=3600)
                 if target.startswith('linux/'):
                     # The desktop reference owns its two native builds and
                     # exact traffic matrix. Keep it outside the existing
