@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check that tested native performance policy is consumed by shipping owners."""
 from pathlib import Path
+from contextlib import ExitStack
 import importlib.util
 import tempfile
 import re
@@ -17,8 +18,15 @@ class Shipping(unittest.TestCase):
             # Preserve this upstream directory while native transport preparation
             # is doubled; the real projection installs the instance observer here.
             (vendor/'daemon').mkdir()
-            with mock.patch.object(PREPARE.NAIVE,'prepare') as naive_prepare, mock.patch.object(PREPARE.HY2_DEADLINES,'prepare') as hy2_prepare, mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'), mock.patch.object(PREPARE.OPENVPN_CLOSE,'prepare') as openvpn_prepare, mock.patch.object(PREPARE.OPENVPN_REMOTE,'prepare') as openvpn_remote_prepare, mock.patch.object(PREPARE.EXTERNAL_POLICY,'prepare') as external_prepare,mock.patch.object(PREPARE.AMNEZIA,'prepare'),mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare,mock.patch.object(PREPARE.NODE_CHAIN,'prepare') as chain_prepare,mock.patch.object(PREPARE.COMPOSITE,'prepare') as composite_prepare:
+            with mock.patch.object(PREPARE.NAIVE,'prepare') as naive_prepare, mock.patch.object(PREPARE.HY2_DEADLINES,'prepare') as hy2_prepare, mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'), mock.patch.object(PREPARE.OPENVPN_CLOSE,'prepare') as openvpn_prepare, mock.patch.object(PREPARE.OPENVPN_REMOTE,'prepare') as openvpn_remote_prepare, mock.patch.object(PREPARE.EXTERNAL_POLICY,'prepare') as external_prepare,mock.patch.object(PREPARE.AMNEZIA,'prepare'),mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare,mock.patch.object(PREPARE.NODE_CHAIN,'prepare') as chain_prepare,mock.patch.object(PREPARE.COMPOSITE,'prepare') as composite_prepare, ExitStack() as execution_preparation:
+                # This byte-copy fixture has no native checkout. Keep the new
+                # ordered preparers at the same boundary as the other native
+                # dependencies, and require every actual integration call.
+                execution_calls = [execution_preparation.enter_context(mock.patch.object(module, 'prepare'))
+                                   for module in PREPARE._execution_modules]
                 PREPARE.prepare(vendor)
+                for prepare in execution_calls:
+                    prepare.assert_called_once_with(vendor.resolve())
                 naive_prepare.assert_called_once_with(vendor.resolve())
                 hy2_prepare.assert_called_once_with(vendor.resolve())
                 mtu_prepare.assert_called_once_with(vendor.resolve())
