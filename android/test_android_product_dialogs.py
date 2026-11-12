@@ -63,7 +63,7 @@ final class AndroidNodeStore {
  List<Node> list(){return nodes;}String activeId(){return selected;}
  void select(String id){selected=id;selections++;}
  static final class ChainSource {
-  final String id,profileId,proofId;final String original;
+  final String id,profileId,proofId;final String original;final boolean imported=false;
   ChainSource(String id,String fault)throws Exception{
    this.id=id;profileId=id;byte[] key=new byte[32];Arrays.fill(key,(byte)id.charAt(0));
    String config="[Peer]\nPublicKey="+java.util.Base64.getEncoder().encodeToString(key)+"\n";

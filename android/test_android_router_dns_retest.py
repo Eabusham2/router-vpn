@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import android_store_fixture as STORE
 
 ROOT=Path(__file__).resolve().parents[1]
 JAVA=ROOT/'android/app/src/main/java/com/eabusham/routervpn'
@@ -37,6 +38,8 @@ final class AndroidNativeProfilePolicy {
  static String stringPolicy(org.json.JSONObject p,String k,String d){return p.optString(k,d);}
 }
 '''
+BOUNDARIES += '\n' + method(P.BOUNDARIES, 'final class AndroidHomeStateStore {') + '\n' + method(P.BOUNDARIES, 'final class AndroidRuntimeRegistry {')
+
 HARNESS=r'''package com.eabusham.routervpn;
 import android.app.*;import android.widget.*;import android.view.*;import org.json.*;
 import java.io.*;import java.net.*;import java.nio.charset.StandardCharsets;import java.nio.file.*;import java.util.*;import java.util.concurrent.*;
@@ -125,10 +128,11 @@ def main():
         stubs['android/widget/ArrayAdapter.java']=stubs['android/widget/ArrayAdapter.java'].replace('public void setDropDownViewResource', 'public ArrayAdapter(android.content.Context c,int layout,java.util.List<T> source){values=(T[])source.toArray();} public void setDropDownViewResource')
         stubs['android/widget/Spinner.java']=stubs['android/widget/Spinner.java'].replace('public int getSelectedItemPosition()', 'public Object getSelectedItem(){return adapter.getItem(position);}public int getSelectedItemPosition()')
         stubs['android/app/AlertDialog.java']=stubs['android/app/AlertDialog.java'].replace('BUTTON_NEGATIVE=-2','BUTTON_NEGATIVE=-2,BUTTON_NEUTRAL=-3').replace('public void show(){','public boolean isShowing(){return showing;}public void show(){').replace('else if(which==BUTTON_NEGATIVE)', 'else if(which==BUTTON_NEGATIVE||which==BUTTON_NEUTRAL)').replace('public Builder setNegativeButton', 'public Builder setNeutralButton(CharSequence t,OnClickListener l){return button(BUTTON_NEUTRAL,t,l);}public Builder setNegativeButton')
-        stubs['io/nekohasekai/libbox/Libbox.java']='package io.nekohasekai.libbox;public final class Libbox {public static void routerValidatePrivateNodeJSON(String s)throws Exception{new org.json.JSONObject(s);}}'
+        stubs.update(STORE.sources())
+        stubs['io/nekohasekai/libbox/Libbox.java']='package io.nekohasekai.libbox;public final class Libbox {public static void routerValidatePrivateNodeJSON(String s)throws Exception{new org.json.JSONObject(s);}' + STORE.NATIVE_BOUNDARIES + '}'
         for name,content in stubs.items():
             target=src/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(content)
-        app=src/'com/eabusham/routervpn';app.mkdir(parents=True)
+        app=src/'com/eabusham/routervpn';app.mkdir(parents=True,exist_ok=True)
         for name in ('AndroidNodeStore','AndroidProfileSelection','AndroidTelemetryIO','AndroidRouterDNSRetest'):
             shutil.copyfile(JAVA/(name+'.java'),app/(name+'.java'))
         # Observe the actual source-check/publication boundary without changing
