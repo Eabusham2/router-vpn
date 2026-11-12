@@ -30,6 +30,70 @@ def snapshot(root):
             for path in root.rglob('*') if path.is_file() and not path.is_symlink()}
 
 
+class DesktopPTManifestPreflight(unittest.TestCase):
+    """Exercise the actual generated inventory without native toolchain setup."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='desktop-pt-manifest-')
+        self.addCleanup(self.temp.cleanup)
+        self.vendor = Path(self.temp.name)
+        self.content = PREP.pt_copies()
+        for relative, raw in self.content.items():
+            target = self.vendor/relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw)
+        self.record = {'schema': 1, 'core': PREP.PIN,
+                       'files': {name: hashlib.sha256(raw).hexdigest()
+                                 for name, raw in self.content.items()}}
+        self.write_manifest()
+        self.inbound = PREP.INBOUND_TEMPLATES['inbound_node_chain_retirement_darwin_test.go.tmpl']
+
+    def write_manifest(self):
+        (self.vendor/PREP.PT_OWNER).write_text(json.dumps(self.record), encoding='utf-8')
+
+    def rejected_without_writes(self, message):
+        before = snapshot(self.vendor)
+        with self.assertRaisesRegex(ValueError, message):
+            PREP.preflight_pt_files(self.vendor, self.content)
+        self.assertEqual(snapshot(self.vendor), before)
+
+    def test_complete_generated_manifest_accepts_exact_inbound_source_repeatedly(self):
+        before = snapshot(self.vendor)
+        for _ in range(2):
+            self.assertEqual(PREP.preflight_pt_files(self.vendor, self.content), self.record['files'])
+        self.assertEqual(snapshot(self.vendor), before)
+        self.assertEqual((self.vendor/self.inbound).read_bytes(),
+                         (ROOT/'mobile/desktop/inbound_node_chain_retirement_darwin_test.go.tmpl').read_bytes())
+
+    def test_changed_inbound_source_is_rejected(self):
+        target = self.vendor/self.inbound
+        target.write_bytes(target.read_bytes()+b'\n// foreign component\n')
+        self.rejected_without_writes('changed desktop PT generated source')
+
+    def test_missing_inbound_source_is_rejected(self):
+        (self.vendor/self.inbound).unlink()
+        self.rejected_without_writes('changed desktop PT generated source')
+
+    def test_sibling_inbound_source_cannot_be_claimed_by_manifest(self):
+        relative = 'adapter/inbound/unrelated.go'
+        raw = b'package inbound\n'
+        (self.vendor/relative).write_bytes(raw)
+        self.record['files'][relative] = hashlib.sha256(raw).hexdigest()
+        self.write_manifest()
+        self.rejected_without_writes('cannot own unrelated native source')
+
+    def test_invalid_inbound_digest_is_rejected(self):
+        self.record['files'][self.inbound] = 'not-a-sha256'
+        self.write_manifest()
+        self.rejected_without_writes('cannot own unrelated native source')
+
+    def test_unowned_changed_inbound_source_is_rejected(self):
+        del self.record['files'][self.inbound]
+        self.write_manifest()
+        (self.vendor/self.inbound).write_bytes(b'package inbound\n// unowned\n')
+        self.rejected_without_writes('unowned desktop PT source')
+
+
 class DesktopPTPreparation(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='desktop-tor-preparation-')
@@ -106,7 +170,7 @@ class DesktopPTPreparation(unittest.TestCase):
         self.assertEqual(PREP.BOX_TEMPLATES.get('tor_box_lastrelay.go.tmpl'), 'routervpn_desktop_tor_box_lastrelay.go')
         self.assertEqual(PREP.BOX_TEMPLATES.get('tor_box_lastrelay_test.go.tmpl'), 'routervpn_desktop_tor_box_lastrelay_test.go')
         self.assertEqual(PREP.BOX_TEMPLATES.get('tor_box_lastrelay_server_test.go.tmpl'), 'routervpn_desktop_tor_box_lastrelay_server_test.go')
-        for name, relative in {**PREP.BOX_TEMPLATES, **PREP.ROUTE_TEMPLATES, **PREP.TUN_TEMPLATES}.items():
+        for name, relative in {**PREP.BOX_TEMPLATES, **PREP.ROUTE_TEMPLATES, **PREP.INBOUND_TEMPLATES, **PREP.TUN_TEMPLATES}.items():
             self.assertEqual((self.vendor/relative).read_bytes(),
                              (ROOT/'mobile/desktop'/name).read_bytes())
         for name in ('network.go', 'upstream.go'):
@@ -702,5 +766,7 @@ if __name__ == '__main__':
                               'adapter/inbound/manager.go', 'adapter/outbound/manager.go', 'adapter/endpoint/manager.go',
                               'adapter/service/manager.go', 'dns/transport_manager.go',
                               'protocol/group/selector.go', 'common/interrupt/group.go', 'common/urltest/urltest.go')}
-    result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(DesktopPTPreparation))
+    suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case)
+                               for case in (DesktopPTManifestPreflight, DesktopPTPreparation))
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(not result.wasSuccessful())
