@@ -27,6 +27,63 @@ POLICY = load('native_naive_transport_policy.py')
 
 
 class NativeNaiveTransport(unittest.TestCase):
+    def test_amnezia_checkout_preserves_git_bytes_under_inherited_crlf_policy(self):
+        build = load('build-amnezia-runtime.py')
+        with tempfile.TemporaryDirectory(prefix='amnezia-source-checkout-') as tmp:
+            root = Path(tmp)
+            upstream = root/'upstream'
+            upstream.mkdir()
+            global_config = root/'gitconfig'
+            global_config.write_bytes(b'[core]\n\tautocrlf = true\n')
+            env = dict(os.environ, GIT_CONFIG_GLOBAL=str(global_config), GIT_CONFIG_NOSYSTEM='1')
+
+            def git(*args):
+                return subprocess.check_output(['git', *args], env=env, stderr=subprocess.PIPE, timeout=30)
+
+            git('init', str(upstream))
+            git('-C', str(upstream), 'config', '--local', 'core.autocrlf', 'false')
+            files = {'go.mod': b'module github.com/sagernet/sing-box\n\ngo 1.26.3\n',
+                     'protocol/naive/source.go': b'package naive\n// exact checkout fixture\n'}
+            for name, raw in files.items():
+                path = upstream/name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw)
+            git('-C', str(upstream), 'add', '.')
+            git('-C', str(upstream), '-c', 'user.name=Source checkout test', '-c',
+                'user.email=source-checkout@example.invalid', 'commit', '-m', 'Exact LF fixture')
+            revision = git('-C', str(upstream), 'rev-parse', 'HEAD').decode().strip()
+
+            for omit_policy in (False, True):
+                with self.subTest(omit_policy=omit_policy):
+                    destination = root/('omitted' if omit_policy else 'captured')
+
+                    def captured_run(command, **kwargs):
+                        self.assertEqual(kwargs, {})
+                        if command[-3:] == ['--local', 'core.autocrlf', 'false'] and omit_policy:
+                            return ''
+                        command = [str(upstream) if item == 'https://github.com/SagerNet/sing-box.git'
+                                   else item for item in command]
+                        return subprocess.check_output(command, env=env, stderr=subprocess.PIPE,
+                                                       text=True, timeout=30).strip()
+
+                    # Only the remote transport and fixture revision differ;
+                    # initialization, configuration, fetch and checkout use Git.
+                    with mock.patch.object(build, 'PIN', revision), mock.patch.object(build, 'run', side_effect=captured_run):
+                        build.fetch_source(destination)
+                    self.assertEqual(git('-C', str(destination), 'rev-parse', 'HEAD').decode().strip(), revision)
+                    for name, original in files.items():
+                        self.assertEqual(git('-C', str(destination), 'show', revision+':'+name), original)
+                        expected = original.replace(b'\n', b'\r\n') if omit_policy else original
+                        self.assertEqual((destination/name).read_bytes(), expected)
+                    if omit_policy:
+                        # Matching HEAD does not authorize converted source.
+                        with mock.patch.object(POLICY, 'PIN', revision), self.assertRaisesRegex(
+                                ValueError, '^Native Naive transport requires the exact pinned core$'):
+                            POLICY.planned_sources(destination)
+                    else:
+                        self.assertEqual(git('-C', str(destination), 'config', '--local', '--get', 'core.autocrlf'), b'false\n')
+            self.assertEqual(global_config.read_bytes(), b'[core]\n\tautocrlf = true\n')
+
     @contextmanager
     def original(self):
         with tempfile.TemporaryDirectory(prefix='native-naive-transport-source-') as tmp:

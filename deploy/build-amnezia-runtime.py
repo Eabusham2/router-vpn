@@ -78,6 +78,9 @@ def reuse(destination, target, policy, env):
 
 def fetch_source(path):
     run(['git', 'init', str(path)])
+    # Exact-source policy compares working bytes to pinned Git blobs. Keep this
+    # owned checkout independent of a Windows user's automatic CRLF conversion.
+    run(['git', '-C', str(path), 'config', '--local', 'core.autocrlf', 'false'])
     run(['git', '-C', str(path), 'remote', 'add', 'origin', 'https://github.com/SagerNet/sing-box.git'])
     run(['git', '-C', str(path), 'fetch', '--depth=1', 'origin', PIN])
     run(['git', '-C', str(path), 'checkout', '--detach', 'FETCH_HEAD'])
