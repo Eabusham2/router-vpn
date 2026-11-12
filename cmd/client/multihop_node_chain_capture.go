@@ -40,11 +40,19 @@ func desktopNodeChainImported(profile common.RouterProfile, mode string) bool {
 		return false
 	}
 	ss := profile.External.Shadowsocks
-	if ss == nil || ss.Method != "2022-blake3-aes-256-gcm" || ss.Port < 1 || ss.Port > 65535 {
+	if ss == nil || ss.Port < 1 || ss.Port > 65535 {
+		return false
+	}
+	keyBytes := 32
+	switch ss.Method {
+	case "2022-blake3-aes-128-gcm":
+		keyBytes = 16
+	case "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305":
+	default:
 		return false
 	}
 	key, err := base64.StdEncoding.DecodeString(ss.Password)
-	if err != nil || len(key) != 32 {
+	if err != nil || len(key) != keyBytes {
 		clear(key)
 		return false
 	}

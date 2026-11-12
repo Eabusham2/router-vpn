@@ -16,8 +16,13 @@ import (
 
 func installDesktopOrderedImported(t *testing.T, a *app, nodes []common.MultihopNodeSelection) {
 	t.Helper()
+	installDesktopOrderedImportedCipher(t, a, nodes, "2022-blake3-aes-256-gcm", 32)
+}
+
+func installDesktopOrderedImportedCipher(t *testing.T, a *app, nodes []common.MultihopNodeSelection, method string, keyBytes int) {
+	t.Helper()
 	q := createRequestFor("shadowsocks")
-	q.Method, q.Secret = "2022-blake3-aes-256-gcm", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("m", 32)))
+	q.Method, q.Secret = method, base64.StdEncoding.EncodeToString([]byte(strings.Repeat("m", keyBytes)))
 	p, err := externalProfileFromCreateRequest(q)
 	if err != nil {
 		t.Fatal(err)
@@ -247,5 +252,75 @@ func TestDesktopOrderedImportedPreservesExactAWGPhysicalEntry(t *testing.T) {
 				t.Fatal("custom graph added a physical bypass", egress, err)
 			}
 		})
+	}
+}
+
+// The actual encrypted 3-by-3 native matrix is required by the native runner.
+// This adapter witness additionally binds its public eligibility, saved profile
+// and all desktop projections to the original method and correctly sized key.
+func TestDesktopOrderedImportedThreeCiphersRetainOriginalSource(t *testing.T) {
+	for _, cipher := range []struct {
+		method string
+		bytes  int
+	}{
+		{"2022-blake3-aes-128-gcm", 16}, {"2022-blake3-aes-256-gcm", 32}, {"2022-blake3-chacha20-poly1305", 32},
+	} {
+		for _, entry := range []string{"wg", "awg2-fast", "awg2-strong"} {
+			t.Run(entry+"/"+cipher.method, func(t *testing.T) {
+				a, nodes := desktopNodeChainCaptureFixture(t, 3)
+				installOrderedAWGAssets(t, a, nodes, []string{entry, "wg", "shadowsocks"}, "off")
+				installDesktopOrderedImportedCipher(t, a, nodes, cipher.method, cipher.bytes)
+				original := common.CloneRouterProfile(a.profiles.Profiles[1])
+				if view := publicProfileFor(original); view.External == nil || !view.External.OrderedMiddle {
+					t.Fatal("verified cipher is absent from original external candidate")
+				}
+				capture := captureNodeChainTest(t, a, nodes)
+				proof := capture.chain.ProofInventory()[1]
+				if proof.Kind != "public-path" || proof.NodeKind != "external" || proof.NodeID != "" {
+					t.Fatal("cipher selection invented paired identity")
+				}
+				for _, target := range []string{"linux", "windows", "darwin"} {
+					projected, err := capture.project(context.Background(), target, 0)
+					if err != nil {
+						t.Fatal(target, err)
+					}
+					var graph map[string]any
+					if json.Unmarshal([]byte(projected.Config()), &graph) != nil {
+						t.Fatal("projected native graph unavailable")
+					}
+					found := false
+					for _, item := range graph["outbounds"].([]any) {
+						out := item.(map[string]any)
+						if out["tag"] != proof.Tag {
+							continue
+						}
+						found = true
+						if out["type"] != "shadowsocks" || out["method"] != cipher.method || out["password"] != original.External.Shadowsocks.Password {
+							t.Fatal("desktop projection substituted original imported cipher or key", target)
+						}
+					}
+					if !found {
+						t.Fatal("original imported outbound missing", target)
+					}
+				}
+				id := saveOrderedConnectionFixture(t, a, nodes)
+				a.profiles.Profiles[1].DNSPort = 53
+				response := postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": id})
+				if response.Code != http.StatusOK || a.profiles.Profiles[1].DNSPort != original.DNSPort || !reflect.DeepEqual(a.profiles.Profiles[1].External, original.External) {
+					t.Fatal("saved profile changed original cipher/key or policy", response.Code, response.Body.String())
+				}
+				for _, key := range []string{
+					base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", cipher.bytes-1))),
+					base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", cipher.bytes+1))),
+					original.External.Shadowsocks.Password + ":" + original.External.Shadowsocks.Password,
+				} {
+					changed := common.CloneRouterProfile(original)
+					changed.External.Shadowsocks.Password = key
+					if desktopNodeChainImported(changed, "shadowsocks") || publicProfileFor(changed).External.OrderedMiddle {
+						t.Fatal("wrong-sized or identity-chain key acquired ordered admission")
+					}
+				}
+			})
+		}
 	}
 }
