@@ -12,20 +12,23 @@ import (
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 )
 
 type RouterNodeChain struct {
-	chain    *mobilemultihop.NodeChain
-	mu       sync.Mutex
-	retired  atomic.Bool
-	running  bool
-	server   *CommandServer
-	instance *daemon.Instance
-	session  string
-	identity mobilemultihop.NodeChainIdentity
-	state    atomic.Pointer[routerNodeChainProofState]
-	mtuOwner atomic.Pointer[routerMTUOwner]
+	chain       *mobilemultihop.NodeChain
+	mu          sync.Mutex
+	retired     atomic.Bool
+	running     bool
+	server      *CommandServer
+	instance    *daemon.Instance
+	session     string
+	identity    mobilemultihop.NodeChainIdentity
+	state       atomic.Pointer[routerNodeChainProofState]
+	mtuOwner    atomic.Pointer[routerMTUOwner]
+	measurement atomic.Pointer[hopmeasure.Service]
+	measuring   bool // guarded by mu; held until the real measurement worker drains
 }
 
 type routerNodeChainProofState struct {
@@ -158,6 +161,9 @@ func (m *RouterNodeChain) NetworkChanged() {
 		return
 	}
 	m.retired.Store(true)
+	if measurement := m.measurement.Load(); measurement != nil {
+		measurement.Invalidate()
+	}
 	if state := m.state.Load(); state != nil {
 		state.revoked.Store(true)
 		state.cancel()
@@ -187,6 +193,13 @@ func (m *RouterNodeChain) Close() error {
 	m.NetworkChanged()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	// Measurement release uses mu. Join outside it so an original worker can
+	// discharge activity before the native host retires its Box/TUN.
+	if measurement := m.measurement.Load(); measurement != nil {
+		if err := measurement.Close(); err != nil {
+			return err
+		}
+	}
 	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
 		return err
 	}

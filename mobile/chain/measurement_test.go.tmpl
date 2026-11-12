@@ -1,0 +1,57 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestRouterNodeChainBridgeMeasurementRequiresOriginalProvedOwner(t *testing.T) {
+	if probe, err := RouterNodeChainNewHopMeasurement(nil, nil); err == nil || probe != nil {
+		t.Fatal("missing owner acquired measurement")
+	}
+	m, state := routerNodeChainNativeOwnerFixture(t)
+	m.chain = new(mobilemultihop.NodeChain)
+	if probe, err := m.newHopMeasurementContext(context.Background(), m.server); err == nil || probe != nil {
+		t.Fatal("native service alone fabricated ordered proof")
+	}
+	if release, err := m.BeginMeasurementContext(context.Background()); err == nil || release != nil || m.measuring {
+		t.Fatal("unproved owner acquired native activity")
+	}
+	state.revoked.Store(true)
+	if chain, err := m.MeasurementChainContext(context.Background()); err == nil || chain != nil {
+		t.Fatal("revoked chain retained measurement authority")
+	}
+}
+
+func TestRouterNodeChainBridgeMeasurementRetainsOriginalActivityDeadline(t *testing.T) {
+	m := &RouterNodeChain{chain: new(mobilemultihop.NodeChain)}
+	m.mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	release, err := m.BeginMeasurementContext(ctx)
+	cancel()
+	m.mu.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) || release != nil || m.measuring {
+		t.Fatal("blocked activity lost original caller deadline", err)
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	cancel()
+	if release, err = m.BeginMeasurementContext(ctx); !errors.Is(err, context.Canceled) || release != nil {
+		t.Fatal("cancelled native caller admitted", err)
+	}
+}
+
+func TestRouterNodeChainBridgeMeasurementBlocksMTUMutationUntilRelease(t *testing.T) {
+	m := &RouterNodeChain{measuring: true}
+	owner := new(routerMTUOwner)
+	m.mtuOwner.Store(owner)
+	// An occupied measurement must be rejected before consulting or revoking
+	// proof. The deliberately absent source would panic if MTU admission passed.
+	paused, err := m.beforeMTUChange(context.Background(), owner, 1280)
+	if paused || err == nil || !strings.Contains(err.Error(), "measurement") || !m.measuring {
+		t.Fatal("MTU bypassed retained measurement activity", paused, err)
+	}
+}

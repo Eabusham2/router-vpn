@@ -1,0 +1,73 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func RouterNodeChainNewHopMeasurement(plan *RouterNodeChain, server *CommandServer) (*RouterHopMeasurement, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	return plan.newHopMeasurementContext(ctx, server)
+}
+
+func (m *RouterNodeChain) newHopMeasurementContext(ctx context.Context, server *CommandServer) (*RouterHopMeasurement, error) {
+	if m == nil || server == nil || m.chain == nil {
+		return nil, errors.New("ordered measurement has no original native owner")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return nil, err
+	}
+	defer m.mu.Unlock()
+	if m.server != server || m.measurement.Load() != nil || m.healthyContext(ctx) != nil {
+		return nil, errors.New("ordered measurement changed its native server or proof")
+	}
+	service, err := m.chain.NewHopMeasurementContext(ctx, m)
+	if err != nil {
+		return nil, err
+	}
+	m.measurement.Store(service)
+	if err := m.healthyContext(ctx); err != nil {
+		service.Invalidate()
+		return nil, err
+	}
+	return &RouterHopMeasurement{service: service}, nil
+}
+
+// The complete source and native identity stay fixed across an authorized MTU
+// reader replacement. Only the original bridge may supply its new proved
+// controller; callers never supply tokens, route tags or destination addresses.
+func (m *RouterNodeChain) MeasurementChainContext(ctx context.Context) (*mobilemultihop.NodeChain, error) {
+	if m == nil {
+		return nil, errors.New("ordered measurement owner retired")
+	}
+	state := m.state.Load()
+	if err := m.healthyContext(ctx); err != nil {
+		return nil, err
+	}
+	if state == nil || m.state.Load() != state || state.revoked.Load() {
+		return nil, errors.New("ordered measurement proof changed during observation")
+	}
+	return state.chain, ctx.Err()
+}
+
+func (m *RouterNodeChain) BeginMeasurementContext(ctx context.Context) (func(), error) {
+	if m == nil {
+		return nil, errors.New("ordered measurement owner retired")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return nil, err
+	}
+	defer m.mu.Unlock()
+	if m.measuring || m.healthyContext(ctx) != nil {
+		return nil, errors.New("ordered native activity is changing or occupied")
+	}
+	m.measuring = true
+	var once sync.Once
+	return func() { once.Do(func() { m.mu.Lock(); m.measuring = false; m.mu.Unlock() }) }, nil
+}

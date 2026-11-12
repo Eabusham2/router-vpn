@@ -80,6 +80,9 @@ func (m *RouterNodeChain) beforeMTUChange(ctx context.Context, owner *routerMTUO
 		return false, err
 	}
 	defer m.mu.Unlock()
+	if m.measuring {
+		return false, errors.New("ordered measurement still owns the native TUN")
+	}
 	plan, err := m.chain.MTUPlan()
 	if err != nil || mtu < 1280 || mtu > plan.Ceiling || m.healthyContext(ctx) != nil {
 		return false, errors.Join(err, errors.New("ordered MTU lost its proved path or prefix bounds"))
