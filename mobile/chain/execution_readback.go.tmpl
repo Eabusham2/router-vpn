@@ -1,0 +1,186 @@
+package box
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"runtime"
+	"sync/atomic"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	G "github.com/sagernet/sing-box/protocol/routervpnchaingate"
+)
+
+// A value can describe a reader; only this retained original capture can
+// acknowledge that reader's final retirement and the actual Box.Close result.
+// A later authorized reader invalidates the earlier restore observation.
+type routerVPNExecutionReadbackCapture struct {
+	engine   *RouterVPNNodeChainExecutionEngine
+	instance *Box
+	reader   *routerVPNExecutionReader
+	control  *G.Control
+	close    *RouterVPNNativeCloseReceipt
+	value    mobilemultihop.NodeChainExecutionTUNReadback
+	invalid  atomic.Bool
+	retired  atomic.Bool
+}
+
+var _ mobilemultihop.NodeChainExecutionTUNReadbackEngine = (*RouterVPNNodeChainExecutionEngine)(nil)
+
+func (e *RouterVPNNodeChainExecutionEngine) CaptureExecutionTUNReadbackContext(ctx context.Context, identity mobilemultihop.NodeChainIdentity) (mobilemultihop.NodeChainExecutionTUNReadback, error) {
+	return e.captureExecutionReadbackContext(ctx, identity, runtime.GOOS, routerVPNReadExecutionMTU)
+}
+
+// The private read function is the explicit privileged-interface component
+// test boundary. Shipping callers always use the actual native TUN readback.
+func (e *RouterVPNNodeChainExecutionEngine) captureExecutionReadbackContext(ctx context.Context, identity mobilemultihop.NodeChainIdentity,
+	target string, read func(context.Context, adapter.Inbound) (routerVPNExecutionMTUReadback, error)) (mobilemultihop.NodeChainExecutionTUNReadback, error) {
+	var zero mobilemultihop.NodeChainExecutionTUNReadback
+	if e == nil || ctx == nil || read == nil {
+		return zero, errRouterVPNExecutionOwner
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+	if !e.busy.CompareAndSwap(false, true) {
+		return zero, errRouterVPNExecutionOwner
+	}
+	defer e.busy.Store(false)
+	state, reader, permit := e.state.Load(), e.reader.Load(), e.permit.Load()
+	if state == nil || state.stage != 2 || state.identity != identity || state.projection == nil || reader == nil ||
+		reader.inbound == nil || reader.ingress == nil || reader.generation == 0 || permit == nil ||
+		(target != "android" && target != "ios" && target != "linux" && target != "darwin" && target != "windows") {
+		return zero, errRouterVPNExecutionOwner
+	}
+	current := func() error {
+		refuse := func(err error) error {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				if issued := e.readback.Load(); issued != nil && issued.engine == e {
+					issued.invalid.Store(true)
+				}
+				return errors.Join(err, e.RevokeApplicationContext(ctx))
+			}
+			return err
+		}
+		observed, err := e.ObserveChainContext(ctx)
+		if err != nil || observed != identity || e.state.Load() != state || e.reader.Load() != reader || e.permit.Load() != permit {
+			return refuse(errors.Join(err, errRouterVPNExecutionOwner))
+		}
+		open, err := e.ApplicationOpenContext(ctx)
+		if err != nil || !open || e.state.Load() != state || e.reader.Load() != reader || e.permit.Load() != permit {
+			return refuse(errors.Join(err, errRouterVPNExecutionOwner))
+		}
+		return ctx.Err()
+	}
+	if err := current(); err != nil {
+		return zero, err
+	}
+	previous := e.readback.Load()
+	if previous != nil && previous.reader == reader && (previous.invalid.Load() || previous.retired.Load()) {
+		return zero, errRouterVPNExecutionOwner
+	}
+	actual, err := read(ctx, reader.inbound)
+	if err != nil {
+		if previous != nil && previous.reader == reader && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			previous.invalid.Store(true)
+			return zero, errors.Join(err, e.RevokeApplicationContext(ctx))
+		}
+		return zero, err
+	}
+	if err := current(); err != nil {
+		return zero, err
+	}
+	if previous != nil && previous.reader == reader && (previous.value.InterfaceName != actual.name ||
+		previous.value.InterfaceIndex != actual.index || previous.value.MTU != actual.mtu) {
+		previous.invalid.Store(true)
+		return zero, errors.Join(errRouterVPNExecutionOwner, e.RevokeApplicationContext(ctx))
+	}
+	bound, boundErr := state.projection.MTUPlan()
+	if boundErr != nil || actual.name == "" || actual.index <= 0 || actual.mtu < 1280 || actual.mtu > bound.Ceiling {
+		return zero, errors.Join(boundErr, errRouterVPNExecutionOwner)
+	}
+	value := mobilemultihop.NodeChainExecutionTUNReadback{Identity: identity, TargetOS: target, TUNTag: reader.inbound.Tag(),
+		ReaderGeneration: reader.generation, InterfaceName: actual.name, InterfaceIndex: actual.index, MTU: actual.mtu}
+	if previous != nil && previous.reader == reader {
+		value.ReaderNonce = previous.value.ReaderNonce
+		if previous.engine != e || previous.instance != e.instance || previous.control != e.control || previous.value != value {
+			previous.invalid.Store(true)
+			// The same reader changed outside an admitted replacement. Fence its
+			// application flows; restoring old OS values cannot revive its receipt.
+			return zero, errors.Join(errRouterVPNExecutionOwner, e.RevokeApplicationContext(ctx))
+		}
+		if previous.invalid.Load() || previous.retired.Load() || e.readback.Load() != previous {
+			return zero, errRouterVPNExecutionOwner
+		}
+		return value, ctx.Err()
+	}
+	var nonce [32]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return zero, err
+	}
+	value.ReaderNonce = hex.EncodeToString(nonce[:])
+	closeReceipt := e.instance.RouterVPNCaptureCloseReceipt()
+	if closeReceipt == nil {
+		return zero, errRouterVPNExecutionOwner
+	}
+	capture := &routerVPNExecutionReadbackCapture{engine: e, instance: e.instance, reader: reader, control: e.control, close: closeReceipt, value: value}
+	if err := current(); err != nil {
+		return zero, err
+	}
+	if !e.readback.CompareAndSwap(previous, capture) {
+		return zero, errRouterVPNExecutionOwner
+	}
+	if previous != nil {
+		previous.invalid.Store(true)
+	}
+	if err := current(); err != nil {
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			capture.invalid.Store(true)
+		}
+		return zero, err
+	}
+	return value, nil
+}
+
+// Called under the original engine's exclusive operation claim, only after
+// its exact stop capabilities, gate and current ingress have all retired.
+func (e *RouterVPNNodeChainExecutionEngine) retireExecutionReadback(state *routerVPNExecutionState) {
+	capture := e.readback.Load()
+	if capture == nil {
+		return
+	}
+	if capture.engine != e || capture.instance != e.instance || capture.control != e.control ||
+		capture.reader != e.reader.Load() || capture.value.Identity != state.identity || capture.invalid.Load() {
+		capture.invalid.Store(true)
+		return
+	}
+	capture.retired.Store(true)
+}
+
+// No manager, interface, source callback or OS lookup is performed here. The
+// exact retained retirement and actual Close result survive host teardown.
+func (e *RouterVPNNodeChainExecutionEngine) ExecutionTUNReadbackRetiredContext(ctx context.Context, value mobilemultihop.NodeChainExecutionTUNReadback) error {
+	if e == nil || ctx == nil {
+		return errRouterVPNExecutionOwner
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	capture, state := e.readback.Load(), e.state.Load()
+	if capture == nil || capture.engine != e || capture.instance != e.instance || capture.control != e.control ||
+		capture.value != value || capture.invalid.Load() || !capture.retired.Load() || state == nil || state.stage != 3 ||
+		state.identity != value.Identity || capture.reader != e.reader.Load() || !e.revoked.Load() ||
+		e.permit.Load() != nil || e.opening.Load() || e.revoking.Load() != 0 || e.stops.Load() != 0 || e.busy.Load() {
+		return errRouterVPNExecutionOwner
+	}
+	if err := capture.close.JoinContext(ctx, capture.instance); err != nil {
+		return err
+	}
+	if e.readback.Load() != capture || e.state.Load() != state || e.reader.Load() != capture.reader ||
+		capture.invalid.Load() || !capture.retired.Load() {
+		return errRouterVPNExecutionOwner
+	}
+	return ctx.Err()
+}

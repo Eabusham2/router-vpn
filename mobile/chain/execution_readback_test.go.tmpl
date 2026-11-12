@@ -1,0 +1,274 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-tun"
+)
+
+// Real Box managers, selector, ingress, discovery and actual Box.Close remain
+// in this component test. Privileged interface readback is explicit; the public
+// adapter must reject these fixture TUNs rather than manufacture OS evidence.
+func executionReadbackFixture(t *testing.T) (*executionNativeFixture, *mobilemultihop.NodeChainExecutionProjection, mobilemultihop.NodeChainIdentity) {
+	t.Helper()
+	f := newExecutionNativeFixture(t, "auto", nil)
+	p := f.adopt(t)
+	identity, err := f.engine.ObserveChainContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.engine.OpenApplicationContext(t.Context(), identity, f.engine.selector.Now()); err != nil {
+		t.Fatal(err)
+	}
+	return f, p, identity
+}
+
+func executionReadbackReader(value routerVPNExecutionMTUReadback) func(context.Context, adapter.Inbound) (routerVPNExecutionMTUReadback, error) {
+	return func(ctx context.Context, _ adapter.Inbound) (routerVPNExecutionMTUReadback, error) {
+		return value, ctx.Err()
+	}
+}
+
+func TestRouterVPNExecutionNativeTUNReadbackRetainsOriginal(t *testing.T) {
+	for _, target := range []string{"android", "ios"} {
+		t.Run(target, func(t *testing.T) {
+			f, _, identity := executionReadbackFixture(t)
+			e := f.engine
+			if _, err := e.CaptureExecutionTUNReadbackContext(t.Context(), identity); err == nil {
+				t.Fatal("public readback accepted a fixture instead of the actual native TUN")
+			}
+			read := executionReadbackReader(routerVPNExecutionMTUReadback{"original-tun", 14, 1400})
+			first, err := e.captureExecutionReadbackContext(t.Context(), identity, target, read)
+			if err != nil || first.Identity != identity || first.TargetOS != target || first.TUNTag != e.reader.Load().inbound.Tag() ||
+				len(first.ReaderNonce) != 64 || first.ReaderGeneration != 1 || first.InterfaceName != "original-tun" || first.InterfaceIndex != 14 || first.MTU != 1400 {
+				t.Fatal("native readback lost its original reader, target or effective interface", first, err)
+			}
+			second, err := e.captureExecutionReadbackContext(t.Context(), identity, target, read)
+			if err != nil || first != second {
+				t.Fatal("unchanged original reader did not retain its issued observation", err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			if _, err := e.captureExecutionReadbackContext(ctx, identity, target, read); !errors.Is(err, context.Canceled) {
+				t.Fatal("canceled readback lost original caller cancellation", err)
+			}
+			e.busy.Store(true)
+			if _, err := e.captureExecutionReadbackContext(t.Context(), identity, target, read); err == nil {
+				t.Fatal("readback overlapped another native operation")
+			}
+			e.busy.Store(false)
+			second, err = e.captureExecutionReadbackContext(t.Context(), identity, target, read)
+			if err != nil || first != second {
+				t.Fatal("ordinary caller cancellation retired a valid original readback", err)
+			}
+			if err := e.ExecutionTUNReadbackRetiredContext(t.Context(), first); err == nil {
+				t.Fatal("live readback fabricated original native retirement")
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionNativeTUNReadbackRejectsAwayAndBack(t *testing.T) {
+	for _, fault := range []string{"name", "index", "mtu", "invalid-mtu", "source", "read-error"} {
+		t.Run(fault, func(t *testing.T) {
+			f, _, identity := executionReadbackFixture(t)
+			e := f.engine
+			original := routerVPNExecutionMTUReadback{"original-tun", 14, 1400}
+			read := executionReadbackReader(original)
+			first, err := e.captureExecutionReadbackContext(t.Context(), identity, "android", read)
+			if err != nil {
+				t.Fatal(err)
+			}
+			changed := original
+			switch fault {
+			case "name":
+				changed.name = "foreign-tun"
+			case "index":
+				changed.index++
+			case "mtu":
+				changed.mtu = 1300
+			case "invalid-mtu":
+				changed.mtu = 1200
+			case "source":
+				f.current.Store(false)
+			}
+			changedRead := executionReadbackReader(changed)
+			if fault == "read-error" {
+				changedRead = func(context.Context, adapter.Inbound) (routerVPNExecutionMTUReadback, error) {
+					return routerVPNExecutionMTUReadback{}, errors.New("original native TUN disappeared")
+				}
+			}
+			if _, err := e.captureExecutionReadbackContext(t.Context(), identity, "android", changedRead); err == nil {
+				t.Fatal("readback accepted changed original native ownership")
+			}
+			f.current.Store(true)
+			if _, err := e.captureExecutionReadbackContext(t.Context(), identity, "android", read); err == nil {
+				t.Fatal("restored OS values revived a retired readback")
+			}
+			if !e.readback.Load().invalid.Load() {
+				t.Fatal("observed native change did not invalidate its issued receipt")
+			}
+			if err := e.RetireContext(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if e.ExecutionTUNReadbackRetiredContext(t.Context(), first) == nil || e.readback.Load().retired.Load() {
+				t.Fatal("invalid readback became restorable after retirement")
+			}
+		})
+	}
+}
+
+func executionReadbackCloseFixture(t *testing.T, f *executionNativeFixture) *executionCloseHeld {
+	t.Helper()
+	f.box.logFactory = log.NewNOPFactory()
+	f.box.service = boxService.NewManager(f.box.logger, boxService.NewRegistry())
+	f.box.certificateProvider = certificate.NewManager(f.box.logger, certificate.NewRegistry())
+	monitor := chainNativeField[tun.DefaultInterfaceMonitor](t, f.box.network, "interfaceMonitor")
+	*monitor = &executionCloseMonitor{*monitor}
+	held := &executionCloseHeld{entered: make(chan struct{}), release: make(chan struct{})}
+	f.box.internalService = []adapter.LifecycleService{held}
+	return held
+}
+
+func TestRouterVPNExecutionNativeTUNReadbackRequiresJoinedClose(t *testing.T) {
+	for _, fault := range []string{"success", "original-error"} {
+		t.Run(fault, func(t *testing.T) {
+			f, _, identity := executionReadbackFixture(t)
+			e := f.engine
+			value, err := e.captureExecutionReadbackContext(t.Context(), identity, "ios", executionReadbackReader(routerVPNExecutionMTUReadback{"original-tun", 14, 1400}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := e.RetireContext(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.ExecutionTUNReadbackRetiredContext(t.Context(), value); err == nil {
+				t.Fatal("retired gate substituted for original actual Box close")
+			}
+			held := executionReadbackCloseFixture(t, f)
+			sentinel := errors.New("actual original close failed")
+			if fault == "original-error" {
+				held.failure = sentinel
+			}
+			var release sync.Once
+			joined := make(chan struct{})
+			done := make(chan error, 1)
+			defer func() {
+				release.Do(func() { close(held.release) })
+				select {
+				case <-joined:
+				case <-time.After(3 * time.Second):
+					t.Error("actual readback close did not join")
+				}
+			}()
+			go func() { defer close(joined); done <- f.box.Close() }()
+			select {
+			case <-held.entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("actual Box close never entered original held service")
+			}
+			select {
+			case <-f.box.done:
+			default:
+				t.Fatal("actual Box early-done receipt is missing")
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+			err = e.ExecutionTUNReadbackRetiredContext(ctx, value)
+			cancel()
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("early Box done fabricated readback retirement", err)
+			}
+			release.Do(func() { close(held.release) })
+			select {
+			case err = <-done:
+				if fault == "success" && err != nil || fault == "original-error" && !errors.Is(err, sentinel) {
+					t.Fatal("actual native close result changed", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("actual native close did not return")
+			}
+			// Retired readback must not use the destroyed native managers, source
+			// callback, or OS. Their absence is not itself a close receipt.
+			f.current.Store(false)
+			f.box.inbound, f.box.network = nil, nil
+			err = e.ExecutionTUNReadbackRetiredContext(t.Context(), value)
+			if fault == "success" && err != nil || fault == "original-error" && !errors.Is(err, sentinel) {
+				t.Fatal("retained readback lost actual original close result", err)
+			}
+			for _, modify := range []func(*mobilemultihop.NodeChainExecutionTUNReadback){
+				func(v *mobilemultihop.NodeChainExecutionTUNReadback) { v.ReaderNonce = strings.Repeat("f", 64) },
+				func(v *mobilemultihop.NodeChainExecutionTUNReadback) { v.ReaderGeneration++ },
+				func(v *mobilemultihop.NodeChainExecutionTUNReadback) { v.InterfaceIndex++ },
+				func(v *mobilemultihop.NodeChainExecutionTUNReadback) { v.MTU-- },
+				func(v *mobilemultihop.NodeChainExecutionTUNReadback) { v.Identity.SessionID += "-foreign" },
+			} {
+				changed := value
+				modify(&changed)
+				if e.ExecutionTUNReadbackRetiredContext(t.Context(), changed) == nil {
+					t.Fatal("retired readback accepted a caller-forged observation")
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionNativeTUNReadbackRejectsReplacedReader(t *testing.T) {
+	f, p, identity := executionReadbackFixture(t)
+	e := f.engine
+	originalReader := e.reader.Load()
+	actual := map[adapter.Inbound]routerVPNExecutionMTUReadback{originalReader.inbound: {"old-tun", 14, 1400}}
+	read := func(ctx context.Context, reader adapter.Inbound) (routerVPNExecutionMTUReadback, error) {
+		return actual[reader], ctx.Err()
+	}
+	old, err := e.captureExecutionReadbackContext(t.Context(), identity, "android", read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range adapter.ListStartStages {
+		if err := f.box.inbound.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.RevokeApplicationContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	binding := executionMTUBinding(t, f, p)
+	candidate, rollback := executionMTUReader(), executionMTUReader()
+	actual[candidate], actual[rollback] = routerVPNExecutionMTUReadback{"new-tun", 15, 1300}, routerVPNExecutionMTUReadback{"rollback-tun", 16, 1400}
+	acquire := func(ctx context.Context, reader adapter.Inbound, _ int) (*inbound.RouterVPNTunTransaction, error) {
+		return f.box.inbound.RouterVPNReplaceTunOwned(ctx, reader, func() (adapter.Inbound, adapter.Inbound, error) { return candidate, rollback, nil })
+	}
+	if _, err := e.changeExecutionMTUContext(t.Context(), binding, originalReader.inbound, 1300, acquire, read); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.admitExecutionMTUContext(t.Context(), binding, read); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.OpenApplicationContext(t.Context(), identity, e.selector.Now()); err != nil {
+		t.Fatal(err)
+	}
+	current, err := e.captureExecutionReadbackContext(t.Context(), identity, "android", read)
+	if err != nil || current.ReaderNonce == old.ReaderNonce || current.ReaderGeneration != old.ReaderGeneration+1 || current.MTU != 1300 {
+		t.Fatal("authorized reader replacement retained a stale readback", current, err)
+	}
+	if err := e.RetireContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ExecutionTUNReadbackRetiredContext(t.Context(), old); err == nil {
+		t.Fatal("retirement accepted an earlier replaced reader")
+	}
+	if e.readback.Load().value != current || !e.readback.Load().retired.Load() {
+		t.Fatal("retirement discarded its exact final reader")
+	}
+}

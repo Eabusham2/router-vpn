@@ -93,6 +93,7 @@ type RouterVPNNodeChainExecutionEngine struct {
 	last              *routerVPNExecutionLast // protected by busy; retained through failed discovery join
 	state             atomic.Pointer[routerVPNExecutionState]
 	reader            atomic.Pointer[routerVPNExecutionReader]
+	readback          atomic.Pointer[routerVPNExecutionReadbackCapture]
 	mtu               atomic.Pointer[routerVPNExecutionMTUTransition]
 	permit            atomic.Pointer[routerVPNExecutionPermit]
 	busy              atomic.Bool
@@ -874,6 +875,7 @@ func (e *RouterVPNNodeChainExecutionEngine) RetireContext(ctx context.Context) e
 	}
 	state := e.state.Load()
 	if state != nil {
+		e.retireExecutionReadback(state)
 		e.state.Store(&routerVPNExecutionState{stage: 3, identity: state.identity, prefixes: state.prefixes, local: state.local, server: state.server})
 	}
 	return ctx.Err()

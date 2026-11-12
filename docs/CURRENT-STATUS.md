@@ -6,6 +6,30 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+### Latest verified native ownership additions
+
+The original-engine MTU guard (`b535a16`), mobile lifetime retirement
+(`a683e62`), and [native TUN readback adapter](NATIVE-EXECUTION-TUN-READBACK.md)
+retain the actual original engine, reader, selected execution, and joined native
+close. The readback adapter's complete local native inventory passed 31 roots and
+98 root/child verdicts with the race detector; its privileged TUN boundary remains
+explicit. Mobile and desktop host integration, packaged execution and device
+acceptance still require their own evidence.
+
+The [encrypted Server gate at `01cc839`](https://github.com/Eabusham2/router-vpn/actions/runs/43163222337)
+passed on both AMD64 and ARM64, including all 14 original cases and the actual
+carrier-change refusal after an interface MTU changed away and back. This closes
+that commit's collector/worker acceptance gap. It does not establish every outer
+carrier, graph family, latest release or private deployment.
+
+Desktop candidate API, Windows, AppKit and GTK source adoption is now published
+at `edf69b3`, `f30990f`, `2a7101a` and `baec547`; their details and bounded native
+checks are in [desktop candidate evidence](CONTINUATION-EVIDENCE-2026-11-12-DESKTOP-PREFIX-CANDIDATES.md).
+The older table's host-adoption statement is historical for these paths. Current
+package, physical-device, broader protocol and pre-connect acceptance remains
+open. The Windows source-copy fixture (`9f6a1ce`) and Linux native readback
+inventory (`c5d4786`) repairs preserve their mandatory production checks.
+
 ## November 12: current ordered-source, candidate and acceptance boundaries
 
 The [November 12 evidence ledger](CONTINUATION-EVIDENCE-2026-11-12.md)

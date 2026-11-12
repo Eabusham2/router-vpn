@@ -43,6 +43,8 @@ TEMPLATES = {
     'execution_box_test.go.tmpl': 'routervpn_node_chain_execution_test.go',
     'execution_mtu.go.tmpl': 'routervpn_node_chain_execution_mtu.go',
     'execution_mtu_test.go.tmpl': 'routervpn_node_chain_execution_mtu_test.go',
+    'execution_readback.go.tmpl': 'routervpn_node_chain_execution_readback.go',
+    'execution_readback_test.go.tmpl': 'routervpn_node_chain_execution_readback_test.go',
     'execution_tun_mtu_test.go.tmpl': 'protocol/tun/routervpn_node_chain_execution_mtu_test.go',
     'execution_outbound.go.tmpl': 'adapter/outbound/routervpn_node_chain_execution.go',
     'execution_outbound_test.go.tmpl': 'adapter/outbound/routervpn_node_chain_execution_test.go',
