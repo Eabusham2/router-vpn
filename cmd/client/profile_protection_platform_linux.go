@@ -262,18 +262,21 @@ func (a *app) guardPlatformProtectionOffPending() error {
 }
 
 func (a *app) guardPlatformProtectionOffPendingContext(ctx context.Context) error {
-	if ctx == nil || ctx.Err() != nil {
+	if ctx == nil {
 		return errors.New("Linux protection admission requires its original live caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	capture := a.capturePlatformProfileProtectionContext(ctx)
 	if capture != nil && capture.standard != nil {
 		if capture.failure != nil || capture.standard.Failure != nil || capture.standard.Pending || capture.standard.Active {
-			return errors.New("finish the pending original standard-service protection change before another operation")
+			return errors.Join(errors.New("finish the pending original standard-service protection change before another operation"), capture.failure, capture.standard.Failure, ctx.Err())
 		}
 		return ctx.Err()
 	}
 	if capture != nil && (capture.off != nil || capture.failure != nil) {
-		return errors.New("finish the pending Linux Kill Switch Off change or original protection cleanup before another operation")
+		return errors.Join(errors.New("finish the pending Linux Kill Switch Off change or original protection cleanup before another operation"), capture.failure, ctx.Err())
 	}
 	return ctx.Err()
 }

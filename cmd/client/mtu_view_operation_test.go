@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -246,7 +247,7 @@ func TestMTUViewCompletedManualRecordDoesNotHideLaterAutomaticOwner(t *testing.T
 	cancel()
 	select {
 	case err := <-done:
-		if err != context.Canceled {
+		if !errors.Is(err, context.Canceled) {
 			t.Fatal("automatic cancellation did not retain its error", err)
 		}
 	case <-time.After(5 * time.Second):
