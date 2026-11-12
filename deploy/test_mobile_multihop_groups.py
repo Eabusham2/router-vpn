@@ -11,9 +11,17 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = './internal/mobilemultihop'
 NAME = re.compile(r'(?:Test|Example|Fuzz)\w*')
 PHASES = (
-    # Ordered graphs have their own bounded phase as their matrix grows. Every
-    # discovered test still runs exactly once with the same race/time limits.
-    ('ordered node chains', r'^TestNodeChain'),
+    # The complete ordered matrix exceeded one 180s phase. Partition by
+    # authority boundary; future roots still enter one explicit fallback.
+    ('ordered execution discovery and Last', r'^TestNodeChainExecution(?:Discovery|Last)'),
+    ('ordered execution runtime and Stop', r'^TestNodeChainExecution(?:Runtime|Healthy|Stop)'),
+    ('ordered execution MTU', r'^TestNodeChainExecutionMTU'),
+    ('ordered execution measurements', r'^TestNodeChainExecutionMeasurement'),
+    ('ordered execution capture and projection', r'^TestNodeChainExecution(?!(?:Discovery|Last|Runtime|Healthy|Stop|MTU|Measurement))'),
+    ('ordered Server carrier and proof', r'^TestNodeChainServer'),
+    ('ordered imported middle', r'^TestNodeChainImported'),
+    ('ordered candidates and prefix measurements', r'^TestNodeChain(?:Candidate|Measurement)'),
+    ('ordered original graphs and ownership', r'^TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement))'),
     ('node capture and packet identities', r'^Test(?:Node(?!Chain)|NativeNode|DesktopPredecessor|WireGuard|Amnezia|NativeAmnezia)'),
     ('proxy transports and native Xray', r'^Test(?:Proxy|Naive|Xray|NativeXray)'),
     ('mandatory PQ', r'^TestPQ'),
@@ -24,7 +32,12 @@ PHASES = (
     # the roots already covered by the node and external phases explicitly.
     # Ordered replay and readiness have grown beyond the combined desktop
     # phase; keep their complete matrix under the same 180-second limit.
-    ('desktop ordered policies and readiness', r'^TestDesktopNode(?:Chain|Ready)'),
+    # The complete physical graph matrix needs its own unchanged deadline;
+    # its independent invalid-authority and readiness controls still all run.
+    ('desktop ordered physical graph matrix', r'^TestDesktopNodeChainExecutionKeepsActualPhysicalGraph$'),
+    ('desktop ordered execution authority', r'^TestDesktopNodeChainExecution(?!KeepsActualPhysicalGraph$)'),
+    ('desktop ordered policies', r'^TestDesktopNodeChain(?!Execution|Ready)'),
+    ('desktop ordered readiness', r'^TestDesktopNode(?:ChainReady|Ready)'),
     ('desktop node policies and ownership', r'^TestDesktop(?:Node(?!Chain|Ready)|LinuxNode|CompleteMAX)'),
     ('desktop execution and ownership', r'^TestDesktop(?!Predecessor|Node|LinuxNode|CompleteMAX)'),
     ('imported transports and ownership', r'^TestImported(?!Entry)'),
@@ -33,13 +46,18 @@ PHASES = (
 # newly introduced phase. The default invocation still runs every group.
 CI_GROUPS = {
     'core': (
-        'ordered node chains', 'node capture and packet identities',
+        'ordered execution discovery and Last', 'ordered execution runtime and Stop',
+        'ordered execution MTU', 'ordered execution measurements',
+        'ordered execution capture and projection', 'ordered Server carrier and proof',
+        'ordered imported middle', 'ordered candidates and prefix measurements',
+        'ordered original graphs and ownership', 'node capture and packet identities',
         'proxy transports and native Xray', 'mandatory PQ',
         'Start Layers and composites', 'complete MAX chains',
         'external paths and OpenVPN',
     ),
     'runtime': (
-        'desktop ordered policies and readiness', 'desktop node policies and ownership',
+        'desktop ordered physical graph matrix', 'desktop ordered execution authority',
+        'desktop ordered policies', 'desktop ordered readiness', 'desktop node policies and ownership',
         'desktop execution and ownership', 'imported transports and ownership',
         'controller, proof and remaining ownership',
     ),
@@ -150,7 +168,15 @@ class PartitionTests(unittest.TestCase):
             'TestDesktopExecution', 'TestDesktopPredecessorOwnership',
             'TestDesktopNodeFuturePolicy', 'TestDesktopLinuxNodeFuturePolicy',
             'TestDesktopNodeChainFuturePolicy', 'TestDesktopNodeReadyFutureReceipt',
-            'TestImportedTransport',
+            'TestImportedTransport', 'TestNodeChainExecutionDiscoveryFuture',
+            'TestNodeChainExecutionLastFuture', 'TestNodeChainExecutionRuntimeFuture',
+            'TestNodeChainExecutionHealthyFuture', 'TestNodeChainExecutionStopFuture',
+            'TestNodeChainExecutionMTUFuture', 'TestNodeChainExecutionMeasurementFuture',
+            'TestNodeChainExecutionFuture', 'TestNodeChainServerFuture',
+            'TestNodeChainImportedFuture', 'TestNodeChainCandidateFuture',
+            'TestNodeChainMeasurementFuture', 'TestNodeChainFuture',
+            'TestDesktopNodeChainExecutionKeepsActualPhysicalGraph',
+            'TestDesktopNodeChainExecutionFuture',
             'TestFutureController', 'Example', 'FuzzFutureSeed', 'TestÜnicode',
         })
 
@@ -199,8 +225,8 @@ class PartitionTests(unittest.TestCase):
         self.assertIn('TestDesktopPredecessorOwnership', groups['node capture and packet identities'])
         for name in ('TestDesktopNodeFuturePolicy', 'TestDesktopLinuxNodeFuturePolicy'):
             self.assertIn(name, groups['desktop node policies and ownership'])
-        for name in ('TestDesktopNodeChainFuturePolicy', 'TestDesktopNodeReadyFutureReceipt'):
-            self.assertIn(name, groups['desktop ordered policies and readiness'])
+        self.assertIn('TestDesktopNodeChainFuturePolicy', groups['desktop ordered policies'])
+        self.assertIn('TestDesktopNodeReadyFutureReceipt', groups['desktop ordered readiness'])
         self.assertIn('TestImportedTransport', groups['imported transports and ownership'])
         self.assertIn('TestImportedEntryPacketFinalCompleteGraphs', groups['external paths and OpenVPN'])
         for name in ('TestFutureController', 'Example', 'FuzzFutureSeed', 'TestÜnicode'):
@@ -211,9 +237,9 @@ class PartitionTests(unittest.TestCase):
 
     def test_every_selected_node_chain_root_is_mandatory_and_runs_once(self):
         groups = dict(partition(self.names))
-        for prefix, count, phase in (('TestNodeChain', 10, 'ordered node chains'),
-                                     ('TestDesktopNodeChainPolicy', 4, 'desktop ordered policies and readiness'),
-                                     ('TestDesktopNodeChainReady', 1, 'desktop ordered policies and readiness')):
+        for prefix, count, phase in (('TestNodeChain', 10, 'ordered original graphs and ownership'),
+                                     ('TestDesktopNodeChainPolicy', 4, 'desktop ordered policies'),
+                                     ('TestDesktopNodeChainReady', 1, 'desktop ordered readiness')):
             required = {name for name in REQUIRED if name.startswith(prefix)}
             self.assertEqual(len(required), count)
             self.assertTrue(required.issubset(groups[phase]))
@@ -222,6 +248,33 @@ class PartitionTests(unittest.TestCase):
             for omitted in required:
                 with self.subTest(omitted=omitted), self.assertRaisesRegex(ValueError, 'Required shared multihop matrix is missing'):
                     inventory('\n'.join(name for name in self.names if name != omitted))
+
+    def test_ordered_semantic_boundaries_keep_future_roots(self):
+        groups = dict(partition(self.names))
+        expected = {
+            'ordered execution discovery and Last': ('Discovery', 'Last'),
+            'ordered execution runtime and Stop': ('Runtime', 'Healthy', 'Stop'),
+            'ordered execution MTU': ('MTU',),
+            'ordered execution measurements': ('Measurement',),
+            'ordered execution capture and projection': ('',),
+        }
+        for phase, suffixes in expected.items():
+            for suffix in suffixes:
+                self.assertIn('TestNodeChainExecution'+suffix+'Future', groups[phase])
+        for phase, suffix in (
+            ('ordered Server carrier and proof','Server'),
+            ('ordered imported middle','Imported'),
+            ('ordered candidates and prefix measurements','Candidate'),
+            ('ordered candidates and prefix measurements','Measurement'),
+            ('ordered original graphs and ownership','')):
+            self.assertIn('TestNodeChain'+suffix+'Future',groups[phase])
+        self.assertEqual(groups['desktop ordered physical graph matrix'],
+            ['TestDesktopNodeChainExecutionKeepsActualPhysicalGraph'])
+        self.assertEqual(groups['desktop ordered execution authority'],
+            ['TestDesktopNodeChainExecutionFuture'])
+        for prefix in ('^TestNodeChainExecution', '^TestNodeChainServer', '^TestDesktopNodeChainExecution'):
+            with self.subTest(prefix=prefix), self.assertRaises(ValueError):
+                partition(self.names, PHASES+(('overlapping ordered boundary',prefix),))
 
     def test_overlapping_predicates_reject(self):
         with self.assertRaises(ValueError):
