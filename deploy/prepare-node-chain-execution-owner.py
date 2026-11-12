@@ -39,6 +39,9 @@ TEMPLATES = {
     'execution_close_test.go.tmpl': 'routervpn_node_chain_execution_close_test.go',
     'execution_box.go.tmpl': 'routervpn_node_chain_execution.go',
     'execution_box_test.go.tmpl': 'routervpn_node_chain_execution_test.go',
+    'execution_mtu.go.tmpl': 'routervpn_node_chain_execution_mtu.go',
+    'execution_mtu_test.go.tmpl': 'routervpn_node_chain_execution_mtu_test.go',
+    'execution_tun_mtu_test.go.tmpl': 'protocol/tun/routervpn_node_chain_execution_mtu_test.go',
     'execution_outbound.go.tmpl': 'adapter/outbound/routervpn_node_chain_execution.go',
     'execution_outbound_test.go.tmpl': 'adapter/outbound/routervpn_node_chain_execution_test.go',
 }
@@ -49,8 +52,11 @@ def inputs():
     spec = importlib.util.spec_from_file_location('execution_owner_admission_inputs', path)
     admission = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(admission)
+    mtu_spec = importlib.util.spec_from_file_location('execution_owner_mtu_inputs', ROOT/'deploy/prepare-mobile-mtu.py')
+    mtu = importlib.util.module_from_spec(mtu_spec)
+    mtu_spec.loader.exec_module(mtu)
     return list(dict.fromkeys([Path(__file__).resolve(), *(ROOT/'mobile/chain'/name for name in sorted(TEMPLATES)),
-                              *admission.inputs(), *sorted((ROOT/'internal/mobilemultihop').glob('node_chain*.go'))]))
+                              *admission.inputs(), *mtu.inputs(), *sorted((ROOT/'internal/mobilemultihop').glob('node_chain*.go'))]))
 
 
 def digest():

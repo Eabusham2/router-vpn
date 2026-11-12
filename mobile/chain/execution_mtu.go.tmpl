@@ -1,0 +1,288 @@
+package box
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/protocol/tun"
+	"github.com/sagernet/sing-box/route"
+)
+
+// Reader states are immutable once published. The original Box, endpoints,
+// resolver, selected execution and gate survive this authorized TUN replacement.
+type routerVPNExecutionReader struct {
+	inbound    adapter.Inbound
+	ingress    *route.RouterVPNNodeChainIngress
+	generation uint64
+}
+
+type routerVPNExecutionMTUReadback struct {
+	name       string
+	index, mtu int
+}
+
+type routerVPNExecutionMTUTransition struct {
+	binding            mobilemultihop.NodeChainExecutionMTUResumeBinding
+	before, result     *routerVPNExecutionReader
+	transaction        *inbound.RouterVPNTunTransaction
+	original, observed routerVPNExecutionMTUReadback
+	requested          int
+	epoch              uint64
+	joined, admitted   bool
+}
+
+func routerVPNReadExecutionMTU(ctx context.Context, reader adapter.Inbound) (routerVPNExecutionMTUReadback, error) {
+	native, ok := reader.(*tun.Inbound)
+	if !ok || native == nil {
+		return routerVPNExecutionMTUReadback{}, errRouterVPNExecutionOwner
+	}
+	name, index, mtu, err := native.RouterVPNExecutionMTUReadbackContext(ctx)
+	if err != nil || name == "" || index < 1 || mtu < 1280 || mtu > 9000 || ctx.Err() != nil {
+		return routerVPNExecutionMTUReadback{}, errors.Join(err, ctx.Err(), errRouterVPNExecutionOwner)
+	}
+	return routerVPNExecutionMTUReadback{name, index, mtu}, nil
+}
+
+// This observation does not need the predecessor TUN to remain current while
+// joining an already owned replacement. It grants no traffic and requires the
+// same closed gate, source, managers and selector, including away/back epochs.
+func (e *RouterVPNNodeChainExecutionEngine) closedMTUContext(ctx context.Context, binding mobilemultihop.NodeChainExecutionMTUResumeBinding, epoch uint64) error {
+	if e == nil || ctx == nil || ctx.Err() != nil || e.control == nil || e.instance == nil || e.current == nil ||
+		e.current(ctx) != nil || binding.Nonce() == "" || epoch == 0 || e.opening.Load() || e.revoking.Load() != 0 ||
+		!e.revoked.Load() || e.permit.Load() != nil || e.stops.Load() != 0 {
+		return errRouterVPNExecutionOwner
+	}
+	state := e.state.Load()
+	if state == nil || state.stage != 2 || state.identity != binding.Identity() || state.projection == nil ||
+		binding.TUNTag() != e.dnsCapture.DNS.TUNTag || binding.SelectedTag() != e.selector.Now() ||
+		e.selector.RouterVPNNodeChainSelectionEpoch() != epoch ||
+		e.selector.RouterVPNNodeChainSelectionContext(ctx, state.identity.SourceSHA256, state.identity.ConfigSHA256, state.local, state.server) != nil {
+		return errRouterVPNExecutionOwner
+	}
+	closed, err := e.control.ObserveRetired(ctx)
+	if err != nil || closed.Open || !closed.Drained || closed.Closed || closed.Identity != e.gateID {
+		return errors.Join(err, errRouterVPNExecutionOwner)
+	}
+	if err := e.originalManagers(ctx); err != nil {
+		return err
+	}
+	if e.instance.ctx == nil || e.instance.ctx.Err() != nil || e.instance.done == nil {
+		return errRouterVPNExecutionOwner
+	}
+	select {
+	case <-e.instance.done:
+		return errRouterVPNExecutionOwner
+	default:
+	}
+	network, err := e.instance.network.RouterVPNNodeChainNetworkContext(ctx)
+	if err != nil || network != state.identity.NetworkID || e.state.Load() != state || e.current(ctx) != nil || ctx.Err() != nil {
+		return errRouterVPNExecutionOwner
+	}
+	return nil
+}
+
+// The shared pause binding is sealed by the exact closed runtime and cannot be
+// forged from a node ID, saved settings or a fresh manager. The operation owns
+// the native receipt before any partial result can escape to a caller.
+func (e *RouterVPNNodeChainExecutionEngine) ChangeExecutionMTUContext(ctx context.Context, binding mobilemultihop.NodeChainExecutionMTUResumeBinding, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+	return e.changeExecutionMTUContext(ctx, binding, expected, mtu,
+		func(call context.Context, reader adapter.Inbound, value int) (*inbound.RouterVPNTunTransaction, error) {
+			return e.instance.RouterVPNChangeMTUTransaction(call, reader, value)
+		}, routerVPNReadExecutionMTU)
+}
+
+// Native acquisition/readback are explicit private component boundaries. No
+// public caller can supply either provider or a caller-created native receipt.
+func (e *RouterVPNNodeChainExecutionEngine) changeExecutionMTUContext(ctx context.Context, binding mobilemultihop.NodeChainExecutionMTUResumeBinding, expected adapter.Inbound, mtu int,
+	acquire func(context.Context, adapter.Inbound, int) (*inbound.RouterVPNTunTransaction, error), read func(context.Context, adapter.Inbound) (routerVPNExecutionMTUReadback, error)) (adapter.Inbound, error) {
+	if e == nil || ctx == nil || ctx.Err() != nil || acquire == nil || read == nil || !e.busy.CompareAndSwap(false, true) {
+		return expected, errRouterVPNExecutionOwner
+	}
+	defer e.busy.Store(false)
+	if err := binding.ValidateTransitionContext(ctx); err != nil {
+		return expected, err
+	}
+	plan, err := binding.MTUPlan()
+	if err != nil || expected == nil || mtu < 1280 || mtu > plan.Ceiling {
+		return expected, errors.Join(err, errRouterVPNExecutionOwner)
+	}
+	previous := e.mtu.Load()
+	epoch := binding.SelectionEpoch()
+	if previous != nil {
+		if err := previous.binding.ValidateTransitionContext(ctx); err != nil {
+			return expected, err
+		}
+		epoch = previous.epoch
+	}
+	if err := e.closedMTUContext(ctx, binding, epoch); err != nil {
+		return expected, err
+	}
+	if previous != nil && !previous.joined {
+		joined, joinErr := e.finishMTUContext(ctx, previous, read)
+		if joined != nil {
+			previous = joined
+		}
+		if joinErr != nil {
+			return e.retainedMTUReader(expected), joinErr
+		}
+		// A retry of the already owned operation returns that exact result. A new
+		// requested change is admitted only on its actual current reader below.
+		if previous.binding.Nonce() == binding.Nonce() && previous.before.inbound == expected && previous.requested == mtu {
+			if previous.observed.mtu != mtu {
+				return previous.result.inbound, errors.New("native MTU transaction retained its rollback reader")
+			}
+			return previous.result.inbound, nil
+		}
+	}
+	reader := e.reader.Load()
+	if reader == nil || reader.inbound != expected || reader.ingress == nil || reader.ingress.Current(ctx) != nil || e.nativeCurrent(ctx, e.state.Load()) != nil {
+		return e.retainedMTUReader(expected), errRouterVPNExecutionOwner
+	}
+	actual, err := read(ctx, expected)
+	if err != nil || actual.mtu > plan.Ceiling {
+		return expected, errors.Join(err, errRouterVPNExecutionOwner)
+	}
+	op := &routerVPNExecutionMTUTransition{binding: binding, before: reader, original: actual, requested: mtu, epoch: epoch}
+	e.mtu.Store(op)
+	if actual.mtu == mtu {
+		// Even an unchanged interface needs fresh native readback and this exact
+		// pause receipt before a same-Box runtime may attempt proof again.
+		next := *op
+		next.result, next.observed, next.joined = reader, actual, true
+		e.mtu.Store(&next)
+		return expected, e.closedMTUContext(ctx, binding, epoch)
+	}
+	transaction, changeErr := acquire(ctx, expected, mtu)
+	retained := *op
+	retained.transaction = transaction
+	e.mtu.Store(&retained)
+	completed, joinErr := e.finishMTUContext(ctx, &retained, read)
+	result := e.retainedMTUReader(expected)
+	if completed != nil && completed.result != nil {
+		result = completed.result.inbound
+	}
+	if changeErr != nil || joinErr != nil {
+		return result, errors.Join(changeErr, joinErr)
+	}
+	if completed == nil || completed.observed.mtu != mtu {
+		return result, errors.New("native MTU change did not retain its requested readback")
+	}
+	return result, nil
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) retainedMTUReader(fallback adapter.Inbound) adapter.Inbound {
+	if op := e.mtu.Load(); op != nil && op.transaction != nil {
+		if current := op.transaction.Current(); current != nil {
+			return current
+		}
+	}
+	if reader := e.reader.Load(); reader != nil && reader.inbound != nil {
+		return reader.inbound
+	}
+	return fallback
+}
+
+// The private reader seam is used only by component tests. Shipping callers
+// always pass routerVPNReadExecutionMTU, which requires the real native TUN.
+func (e *RouterVPNNodeChainExecutionEngine) finishMTUContext(ctx context.Context, op *routerVPNExecutionMTUTransition,
+	read func(context.Context, adapter.Inbound) (routerVPNExecutionMTUReadback, error)) (*routerVPNExecutionMTUTransition, error) {
+	if op == nil || e.mtu.Load() != op || ctx == nil || ctx.Err() != nil || read == nil {
+		return op, errRouterVPNExecutionOwner
+	}
+	if err := e.closedMTUContext(ctx, op.binding, op.epoch); err != nil {
+		return op, err
+	}
+	active := op.before.inbound
+	if op.transaction != nil {
+		if err := e.instance.RouterVPNRetryMTUTransaction(ctx, op.transaction); err != nil {
+			return op, err
+		}
+		var err error
+		active, err = e.instance.inbound.RouterVPNReadTunTransactionContext(ctx, op.transaction, op.before.inbound)
+		if err != nil {
+			return op, err
+		}
+	}
+	observed, err := read(ctx, active)
+	plan, planErr := op.binding.MTUPlan()
+	if err != nil || planErr != nil || observed.mtu < 1280 || observed.mtu > plan.Ceiling || observed.name == "" || observed.index < 1 {
+		return op, errors.Join(err, planErr, errRouterVPNExecutionOwner)
+	}
+	reader := e.reader.Load()
+	if reader == nil {
+		return op, errRouterVPNExecutionOwner
+	}
+	if active != op.before.inbound && reader == op.before {
+		interim := &routerVPNExecutionReader{inbound: active, ingress: op.before.ingress, generation: op.before.generation + 1}
+		if interim.generation == 0 || !e.reader.CompareAndSwap(reader, interim) {
+			return op, errRouterVPNExecutionOwner
+		}
+		reader = interim
+	}
+	if reader.inbound != active || reader.generation < op.before.generation || reader.ingress == nil {
+		return op, errRouterVPNExecutionOwner
+	}
+	if active != op.before.inbound && reader.ingress == op.before.ingress {
+		next, handoffErr := op.before.ingress.RouterVPNMTUReplacementContext(ctx, op.transaction, e.control)
+		if next != nil {
+			transferred := &routerVPNExecutionReader{inbound: active, ingress: next, generation: reader.generation}
+			if !e.reader.CompareAndSwap(reader, transferred) {
+				return op, errRouterVPNExecutionOwner
+			}
+			reader = transferred
+		}
+		if handoffErr != nil {
+			return op, handoffErr
+		}
+	}
+	if reader.ingress.Current(ctx) != nil || e.reader.Load() != reader || e.closedMTUContext(ctx, op.binding, op.epoch) != nil {
+		return op, errRouterVPNExecutionOwner
+	}
+	next := *op
+	next.result, next.observed, next.joined, next.admitted = reader, observed, true, false
+	e.mtu.Store(&next)
+	return &next, nil
+}
+
+// The shared constructor and its Run call this same idempotent native check.
+// It grants proof/reacquisition only; the original application gate stays shut.
+func (e *RouterVPNNodeChainExecutionEngine) AdmitExecutionMTUResumeContext(ctx context.Context, binding mobilemultihop.NodeChainExecutionMTUResumeBinding) error {
+	return e.admitExecutionMTUContext(ctx, binding, routerVPNReadExecutionMTU)
+}
+func (e *RouterVPNNodeChainExecutionEngine) admitExecutionMTUContext(ctx context.Context, binding mobilemultihop.NodeChainExecutionMTUResumeBinding, read func(context.Context, adapter.Inbound) (routerVPNExecutionMTUReadback, error)) error {
+	if e == nil || ctx == nil || ctx.Err() != nil || read == nil || !e.busy.CompareAndSwap(false, true) {
+		return errRouterVPNExecutionOwner
+	}
+	defer e.busy.Store(false)
+	if err := binding.ValidateClosedContext(ctx); err != nil {
+		return err
+	}
+	op := e.mtu.Load()
+	if op == nil || !op.joined || op.result == nil || op.binding.Nonce() != binding.Nonce() || op.binding.Identity() != binding.Identity() ||
+		e.reader.Load() != op.result || e.closedMTUContext(ctx, binding, op.epoch) != nil || op.result.ingress.Current(ctx) != nil {
+		return errRouterVPNExecutionOwner
+	}
+	actual, err := read(ctx, op.result.inbound)
+	if err != nil || actual != op.observed || ctx.Err() != nil {
+		return errors.Join(err, ctx.Err(), errRouterVPNExecutionOwner)
+	}
+	if !op.admitted {
+		next := *op
+		next.admitted = true
+		e.mtu.Store(&next)
+	}
+	return nil
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) retireMTUContext(ctx context.Context) error {
+	op := e.mtu.Load()
+	if op == nil || op.transaction == nil {
+		return ctx.Err()
+	}
+	// This exact already-owned transaction may join after source cancellation.
+	// No replacement, interface acquisition, native proof or admission occurs.
+	return e.instance.RouterVPNRetryMTUTransaction(ctx, op.transaction)
+}

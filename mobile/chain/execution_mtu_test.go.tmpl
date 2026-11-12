@@ -1,0 +1,276 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"unsafe"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/routechoice"
+)
+
+// These native component cases execute the real Box owner, manager transaction,
+// gate, selector and ingress. Shared pause issuance and privileged OS readback
+// are explicit boundaries: the shared suite exercises the real pause issuer;
+// these fixtures install its closed capsule and substitute native TUN readback.
+// Public shipping entry points still reject every fixture TUN as non-native.
+func executionMTUSet(t *testing.T, value reflect.Value, name string, input any) {
+	t.Helper()
+	field := value.Elem().FieldByName(name)
+	if !field.IsValid() || !field.CanAddr() {
+		t.Fatal("closed pause fixture field changed", name)
+	}
+	source := reflect.ValueOf(input)
+	if !source.Type().AssignableTo(field.Type()) {
+		t.Fatal("closed pause fixture type changed", name)
+	}
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(source)
+}
+
+func executionMTUBinding(t *testing.T, f *executionNativeFixture, p *mobilemultihop.NodeChainExecutionProjection) mobilemultihop.NodeChainExecutionMTUResumeBinding {
+	t.Helper()
+	r, err := mobilemultihop.NewNodeChainExecutionRuntime(p, f.engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var binding mobilemultihop.NodeChainExecutionMTUResumeBinding
+	slot := reflect.ValueOf(&binding).Elem().FieldByName("state")
+	state := reflect.New(slot.Type().Elem())
+	identity, err := f.engine.ObserveChainContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution := "local"
+	if f.engine.selector.Now() == f.engine.state.Load().server.Tag() {
+		execution = "server"
+	}
+	for name, value := range map[string]any{"owner": r, "projection": p, "engine": f.engine, "identity": identity,
+		"nonce": strings.Repeat("7", 64), "execution": execution, "selectedTag": f.engine.selector.Now(),
+		"selectionEpoch": f.engine.selector.RouterVPNNodeChainSelectionEpoch(), "tunTag": "routervpn-chain-tun",
+		"result": routechoice.Result{Target: mobilemultihop.Targets[0], Winner: &routechoice.Candidate{Execution: routechoice.Execution(execution), Transport: "ordered", EntryID: "entry", ExitID: "exit"}}} {
+		executionMTUSet(t, state, name, value)
+	}
+	executionMTUSet(t, reflect.ValueOf(r), "identity", identity)
+	executionMTUSet(t, reflect.ValueOf(r), "closed", true)
+	field := reflect.ValueOf(r).Elem().FieldByName("mtuPause")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(state)
+	reflect.NewAt(slot.Type(), unsafe.Pointer(slot.UnsafeAddr())).Elem().Set(state)
+	if err := binding.ValidateTransitionContext(t.Context()); err != nil {
+		t.Fatal("closed shared boundary fixture", err)
+	}
+	return binding
+}
+
+type executionMTUNativeReader struct {
+	adapter.Inbound
+	failClose, failStart atomic.Bool
+}
+
+func (r *executionMTUNativeReader) Close() error {
+	if r.failClose.Load() {
+		return errors.New("original native reader close remains pending")
+	}
+	return nil
+}
+func (r *executionMTUNativeReader) Start(stage adapter.StartStage) error {
+	if r.failStart.Load() {
+		return errors.New("candidate native reader failed startup")
+	}
+	return r.Inbound.Start(stage)
+}
+func executionMTUReader() *executionMTUNativeReader {
+	return &executionMTUNativeReader{Inbound: &chainNativeTUN{inbound.NewAdapter(C.TypeTun, "routervpn-chain-tun")}}
+}
+
+func TestRouterVPNExecutionNativeMTUUsesJoinedReader(t *testing.T) {
+	for _, scenario := range []string{"candidate", "rollback", "unchanged", "pending-close"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := newExecutionNativeFixture(t, "server", nil)
+			p := f.adopt(t)
+			e := f.engine
+			for _, stage := range adapter.ListStartStages {
+				if err := f.box.inbound.Start(stage); err != nil {
+					t.Fatal(err)
+				}
+			}
+			binding := executionMTUBinding(t, f, p)
+			before := e.reader.Load()
+			candidate, rollback := executionMTUReader(), executionMTUReader()
+			candidate.failStart.Store(scenario == "rollback")
+			rollback.failClose.Store(scenario == "pending-close")
+			readbacks := map[adapter.Inbound]routerVPNExecutionMTUReadback{before.inbound: {"original", 11, 1400}, candidate: {"candidate", 12, 1300}, rollback: {"rollback", 13, 1400}}
+			read := func(ctx context.Context, r adapter.Inbound) (routerVPNExecutionMTUReadback, error) {
+				value, ok := readbacks[r]
+				if !ok {
+					return value, errRouterVPNExecutionOwner
+				}
+				return value, ctx.Err()
+			}
+			var acquisitions int
+			acquire := func(ctx context.Context, r adapter.Inbound, mtu int) (*inbound.RouterVPNTunTransaction, error) {
+				acquisitions++
+				return f.box.inbound.RouterVPNReplaceTunOwned(ctx, r, func() (adapter.Inbound, adapter.Inbound, error) { return candidate, rollback, nil })
+			}
+			value := 1300
+			if scenario == "unchanged" {
+				value = 1400
+			}
+			result, err := e.changeExecutionMTUContext(t.Context(), binding, before.inbound, value, acquire, read)
+			if scenario == "pending-close" {
+				if err == nil || result != candidate || e.mtu.Load() == nil || e.mtu.Load().joined || e.reader.Load() != before {
+					t.Fatal("unjoined native replacement escaped its original owner", err)
+				}
+				if err := e.admitExecutionMTUContext(t.Context(), binding, read); err == nil {
+					t.Fatal("unjoined replacement admitted resume")
+				}
+				rollback.failClose.Store(false)
+				result, err = e.changeExecutionMTUContext(t.Context(), binding, before.inbound, value, acquire, read)
+			}
+			if scenario == "rollback" {
+				if err == nil || result != rollback {
+					t.Fatal("failed candidate did not retain actual rollback", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			op := e.mtu.Load()
+			if op == nil || !op.joined || op.result == nil || op.result.inbound != result || e.reader.Load() != op.result || op.result.ingress.Current(t.Context()) != nil {
+				t.Fatal("native transaction did not retain its exact joined reader")
+			}
+			expectedAcquisitions := 1
+			if scenario == "unchanged" {
+				expectedAcquisitions = 0
+			}
+			if acquisitions != expectedAcquisitions {
+				t.Fatal("native retry reacquired another TUN", acquisitions)
+			}
+			if err := e.admitExecutionMTUContext(t.Context(), binding, read); err != nil {
+				t.Fatal("joined native readback did not admit proof", err)
+			}
+			if err := e.admitExecutionMTUContext(t.Context(), binding, read); err != nil {
+				t.Fatal("same receipt admission was not idempotent", err)
+			}
+			if err := e.SelectContext(t.Context(), binding.SelectedTag()); err != nil {
+				t.Fatal(err)
+			}
+			other := e.state.Load().local.Tag()
+			if other == binding.SelectedTag() {
+				other = e.state.Load().server.Tag()
+			}
+			if err := e.SelectContext(t.Context(), other); err == nil {
+				t.Fatal("MTU resume reselected another execution")
+			}
+			open, err := e.ApplicationOpenContext(t.Context())
+			if err != nil || open {
+				t.Fatal("MTU proof admission opened traffic", err)
+			}
+			if e.instance != f.box || e.entry != f.prefixes[f.prep.ProofInventory()[0].Tag] || e.resolver != f.dns {
+				t.Fatal("MTU replaced original physical or DNS graph")
+			}
+			if err := e.AdmitExecutionMTUResumeContext(t.Context(), binding); err == nil {
+				t.Fatal("public native readback accepted a component TUN double")
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionNativeMTURejectsChangedOwnership(t *testing.T) {
+	for _, scenario := range []string{"zero-binding", "foreign-identity", "foreign-selector", "open-gate", "retired-source", "invalid-fixed", "above-bound", "cancelled", "foreign-reader"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := newExecutionNativeFixture(t, "server", nil)
+			p := f.adopt(t)
+			e := f.engine
+			binding := executionMTUBinding(t, f, p)
+			expected := e.reader.Load().inbound
+			value := 1300
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			switch scenario {
+			case "zero-binding":
+				binding = mobilemultihop.NodeChainExecutionMTUResumeBinding{}
+			case "foreign-identity":
+				other := newExecutionNativeFixture(t, "server", nil)
+				projection := other.adopt(t)
+				binding = executionMTUBinding(t, other, projection)
+			case "foreign-selector":
+				if !e.selector.SelectOutbound(e.state.Load().local.Tag()) {
+					t.Fatal("foreign selector fixture")
+				}
+			case "open-gate":
+				if err := e.OpenApplicationContext(ctx, binding.Identity(), binding.SelectedTag()); err != nil {
+					t.Fatal(err)
+				}
+			case "retired-source":
+				f.current.Store(false)
+			case "invalid-fixed":
+				value = 1279
+			case "above-bound":
+				bound, err := binding.MTUPlan()
+				if err != nil {
+					t.Fatal(err)
+				}
+				value = bound.Ceiling + 1
+			case "cancelled":
+				cancel()
+			case "foreign-reader":
+				expected = executionMTUReader()
+			}
+			var acquired bool
+			acquire := func(context.Context, adapter.Inbound, int) (*inbound.RouterVPNTunTransaction, error) {
+				acquired = true
+				return nil, errors.New("unexpected native acquisition")
+			}
+			read := func(context.Context, adapter.Inbound) (routerVPNExecutionMTUReadback, error) {
+				return routerVPNExecutionMTUReadback{"fixture", 1, 1400}, nil
+			}
+			if _, err := e.changeExecutionMTUContext(ctx, binding, expected, value, acquire, read); err == nil || acquired || e.mtu.Load() != nil {
+				t.Fatal("changed ownership acquired native MTU transaction", err, acquired)
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionNativeMTUReadbackAndRetirementRemainOwned(t *testing.T) {
+	f := newExecutionNativeFixture(t, "server", nil)
+	p := f.adopt(t)
+	e := f.engine
+	for _, stage := range adapter.ListStartStages {
+		if err := f.box.inbound.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binding := executionMTUBinding(t, f, p)
+	before := e.reader.Load()
+	candidate, rollback := executionMTUReader(), executionMTUReader()
+	rollback.failClose.Store(true)
+	acquire := func(ctx context.Context, r adapter.Inbound, _ int) (*inbound.RouterVPNTunTransaction, error) {
+		return f.box.inbound.RouterVPNReplaceTunOwned(ctx, r, func() (adapter.Inbound, adapter.Inbound, error) { return candidate, rollback, nil })
+	}
+	read := func(ctx context.Context, r adapter.Inbound) (routerVPNExecutionMTUReadback, error) {
+		if r == before.inbound {
+			return routerVPNExecutionMTUReadback{"original", 1, 1400}, ctx.Err()
+		}
+		return routerVPNExecutionMTUReadback{"candidate", 2, 1300}, ctx.Err()
+	}
+	if _, err := e.changeExecutionMTUContext(t.Context(), binding, before.inbound, 1300, acquire, read); err == nil {
+		t.Fatal("pending close accepted")
+	}
+	f.current.Store(false)
+	if err := e.RetireContext(t.Context()); err == nil {
+		t.Fatal("retired source abandoned original unused reader")
+	}
+	rollback.failClose.Store(false)
+	if err := e.RetireContext(t.Context()); err != nil {
+		t.Fatal("exact pending native cleanup did not join after source retirement", err)
+	}
+	if e.state.Load().stage != 3 || e.mtu.Load() == nil {
+		t.Fatal("native retirement discarded history or kept forwarding state")
+	}
+}

@@ -21,12 +21,19 @@ ROOTS = {
               'NativeDNSRejectsAwayAndBackSelection', 'NativeGateRejectsForeignProofAndRetiredSelection',
               'NativeOpenCannotFinishAfterRevoke', 'NativeDiscoveryKeepsLiteralOriginalEntry',
               'NativeRestoreRetainsOriginalFront', 'NativeRetiredSourceKeepsClosedReceipt',
-              'NativeFailedAcquisitionRetainsSealedStop', 'NativeDuplicateBindKeepsOriginalOwner', 'NativeCloseReceipt'),
+              'NativeFailedAcquisitionRetainsSealedStop', 'NativeDuplicateBindKeepsOriginalOwner',
+              'NativeCloseReceipt',
+              'NativeMTUUsesJoinedReader', 'NativeMTURejectsChangedOwnership',
+              'NativeMTUReadbackAndRetirementRemainOwned'),
+    PACKAGE+'/protocol/tun': ('TUNMTUReadbackRequiresActualOwner',),
     PACKAGE+'/adapter/outbound': ('AppendPreservesActualManagers', 'AppendRejectsForeignOwnerAndLifecycle',
                                  'AppendConcurrentTagHasOneOriginalWinner'),
 }
 CHILDREN = {
     'NativeCloseReceipt': ('success', 'original-error'),
+    'NativeMTUUsesJoinedReader': ('candidate', 'rollback', 'unchanged', 'pending-close'),
+    'NativeMTURejectsChangedOwnership': ('zero-binding', 'foreign-identity', 'foreign-selector', 'open-gate', 'retired-source', 'invalid-fixed', 'above-bound', 'cancelled', 'foreign-reader'),
+    'TUNMTUReadbackRequiresActualOwner': ('nil', 'unstarted', 'cancelled', 'locked'),
     'NativeRetainsOneGraphThroughDiscovery': ('auto', 'server'),
     'NativeRejectsActualGraphSubstitution': ('mtu', 'dns', 'rule', 'entry-key'),
     'AppendRejectsForeignOwnerAndLifecycle': ('entry', 'gate', 'detour', 'lifecycle', 'cancelled', 'closed-manager'),
@@ -121,6 +128,18 @@ CONTROLS = (
     ('original native close error', 'routervpn_node_chain_execution_close.go',
      '\treturn errors.Join(err, ctx.Err())', '\t_ = err\n\treturn ctx.Err()',
      '.', 'NativeCloseReceipt/original-error', 'native receipt discarded original close result'),
+    ('native MTU readback', 'routervpn_node_chain_execution_mtu.go',
+     'actual, err := read(ctx, op.result.inbound)', 'actual, err := op.observed, error(nil)',
+     '.', 'NativeMTUUsesJoinedReader/candidate', 'public native readback accepted a component TUN double'),
+    ('MTU retained execution', 'routervpn_node_chain_execution.go',
+     ' || tag != op.binding.SelectedTag()', '',
+     '.', 'NativeMTUUsesJoinedReader/candidate', 'MTU resume reselected another execution'),
+    ('MTU pending native retirement', 'routervpn_node_chain_execution.go',
+     '\tif err := e.retireMTUContext(ctx); err != nil {\n\t\treturn err\n\t}\n', '',
+     '.', 'NativeMTUReadbackAndRetirementRemainOwned', 'retired source abandoned original unused reader'),
+    ('MTU fixed bounds', 'routervpn_node_chain_execution_mtu.go',
+     ' || mtu < 1280 || mtu > plan.Ceiling', '',
+     '.', 'NativeMTURejectsChangedOwnership/invalid-fixed', 'changed ownership acquired native MTU transaction'),
     ('actual construction graph', 'routervpn_node_chain_execution.go',
      'err != nil || routerVPNNodeChainExecutionOptionsDigest(s.ctx, options) != s.routerVPNNodeChainExecutionOptions', 'err != nil',
      '.', 'NativeRejectsActualGraphSubstitution/mtu', 'changed actual graph acquired native preparation'),
@@ -167,7 +186,9 @@ def run(core, go, tags, race, ldflags, receipt):
     if ldflags:
         command.extend(['-ldflags', ldflags])
     environment = dict(os.environ, GOMAXPROCS='1')
-    baseline = subprocess.run([*command, '.', './adapter/outbound', '-run', '^'+PREFIX], cwd=core,
+    selected_packages = ['.'+package.removeprefix(PACKAGE) for package in ROOTS]
+    selected_roots = '^('+ '|'.join(PREFIX+name for names in ROOTS.values() for name in names)+')$'
+    baseline = subprocess.run([*command, *selected_packages, '-run', selected_roots], cwd=core,
                               env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=900)
     try:
         result = verdict(baseline.stdout, baseline.returncode)

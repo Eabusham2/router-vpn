@@ -1,0 +1,37 @@
+package tun
+
+import (
+	"context"
+	"testing"
+	"time"
+)
+
+func TestRouterVPNExecutionTUNMTUReadbackRequiresActualOwner(t *testing.T) {
+	for _, scenario := range []string{"nil", "unstarted", "cancelled", "locked"} {
+		t.Run(scenario, func(t *testing.T) {
+			reader := new(Inbound)
+			if scenario == "nil" {
+				reader = nil
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+			defer cancel()
+			if scenario == "cancelled" {
+				cancel()
+			}
+			if scenario == "locked" {
+				reader.routervpnLifecycle.Lock()
+				defer reader.routervpnLifecycle.Unlock()
+			}
+			done := make(chan error, 1)
+			go func() { _, _, _, err := reader.RouterVPNExecutionMTUReadbackContext(ctx); done <- err }()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("unowned or expired native TUN readback succeeded")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("native readback abandoned original observation deadline")
+			}
+		})
+	}
+}

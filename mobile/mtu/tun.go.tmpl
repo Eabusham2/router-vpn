@@ -90,6 +90,36 @@ func (t *Inbound) RouterVPNMTUReadersContext(ctx context.Context, mtu int) (adap
 	return candidate, rollback, nil
 }
 
+// RouterVPNExecutionMTUReadbackContext observes the actual active native reader.
+// Configuration text or a supplied interface name never substitutes for this
+// bounded lifecycle read; the platform retains the original TUN descriptor.
+func (t *Inbound) RouterVPNExecutionMTUReadbackContext(ctx context.Context) (string, int, int, error) {
+	if t == nil || ctx == nil || ctx.Err() != nil {
+		return "", 0, 0, errors.New("native MTU readback lost its original caller")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &t.routervpnLifecycle); err != nil {
+		return "", 0, 0, err
+	}
+	defer t.routervpnLifecycle.Unlock()
+	if !t.routervpnReady || t.tunIf == nil || t.platformInterface == nil && !t.routervpnDesktop || t.autoRedirect != nil {
+		return "", 0, 0, errors.New("native MTU readback requires its active owned TUN")
+	}
+	if t.routervpnDesktop {
+		bounded, ok := any(t).(interface {
+			routervpnDesktopInterfaceContext(context.Context) (string, int, int, error)
+		})
+		if !ok {
+			return "", 0, 0, errors.New("desktop MTU readback has no bounded native reader")
+		}
+		return bounded.routervpnDesktopInterfaceContext(ctx)
+	}
+	name, index, mtu, err := t.routervpnDesktopInterface()
+	if err != nil || ctx.Err() != nil {
+		return "", 0, 0, errors.Join(err, ctx.Err())
+	}
+	return name, index, mtu, nil
+}
+
 // RouterVPNDesktopMTU grants one explicitly captured desktop owner permission
 // to replace this reader. Mobile adapters keep their existing retained handles.
 // The guard is read-only and must not call back into the Box's proof mutex.

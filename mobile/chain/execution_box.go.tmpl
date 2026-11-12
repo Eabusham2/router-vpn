@@ -79,6 +79,8 @@ type RouterVPNNodeChainExecutionEngine struct {
 	discovery         atomic.Pointer[mobilemultihop.NodeChainExecutionDiscoveryOwner]
 	planned           atomic.Pointer[mobilemultihop.NodeChainExecutionProjection]
 	state             atomic.Pointer[routerVPNExecutionState]
+	reader            atomic.Pointer[routerVPNExecutionReader]
+	mtu               atomic.Pointer[routerVPNExecutionMTUTransition]
 	permit            atomic.Pointer[routerVPNExecutionPermit]
 	busy              atomic.Bool
 	opening           atomic.Bool
@@ -130,6 +132,7 @@ func (s *Box) RouterVPNNewNodeChainExecutionEngine(ctx context.Context, prep *mo
 		return nil, errRouterVPNExecutionOwner
 	}
 	e.inbound = inbounds[0]
+	e.reader.Store(&routerVPNExecutionReader{inbound: e.inbound, generation: 1})
 	resolver, found, err := adapter.RouterVPNTransportContext(ctx, s.dnsTransport, dns.DNS.ResolverTag)
 	if err != nil || !found || resolver == nil || s.dnsRouter == nil {
 		return nil, errRouterVPNExecutionOwner
@@ -201,6 +204,7 @@ func (s *Box) RouterVPNNewNodeChainExecutionEngine(ctx context.Context, prep *mo
 		return nil, err
 	}
 	e.ingress, err = s.router.RouterVPNBindNodeChainIngress(ctx, e.inbound, e.gateCurrent, e.control.TrackInbound, e.ApplicationOpenContext)
+	e.reader.Store(&routerVPNExecutionReader{inbound: e.inbound, ingress: e.ingress, generation: 1})
 	if err != nil {
 		return e, err
 	}
@@ -224,6 +228,10 @@ func (e *RouterVPNNodeChainExecutionEngine) nativeCurrent(ctx context.Context, s
 		e.instance == nil || e.current == nil || e.current(ctx) != nil {
 		return errRouterVPNExecutionOwner
 	}
+	reader := e.reader.Load()
+	if reader == nil || reader.inbound == nil || reader.generation == 0 {
+		return errRouterVPNExecutionOwner
+	}
 	s := e.instance
 	if s.ctx == nil || s.ctx.Err() != nil || s.done == nil || s.network == nil || s.routerVPNNodeChainExecutionOptions == "" {
 		return errRouterVPNExecutionOwner
@@ -238,11 +246,11 @@ func (e *RouterVPNNodeChainExecutionEngine) nativeCurrent(ctx context.Context, s
 		return errRouterVPNExecutionOwner
 	}
 	inbounds, err := adapter.RouterVPNInboundsContext(ctx, s.inbound)
-	if err != nil || len(inbounds) != 1 || inbounds[0] != e.inbound {
+	if err != nil || len(inbounds) != 1 || inbounds[0] != reader.inbound {
 		return errRouterVPNExecutionOwner
 	}
 	dns := e.dnsCapture
-	if e.inbound.Type() != C.TypeTun || e.inbound.Tag() != dns.DNS.TUNTag {
+	if reader.inbound.Type() != C.TypeTun || reader.inbound.Tag() != dns.DNS.TUNTag {
 		return errRouterVPNExecutionOwner
 	}
 	resolver, found, err := adapter.RouterVPNTransportContext(ctx, s.dnsTransport, dns.DNS.ResolverTag)
@@ -276,7 +284,7 @@ func (e *RouterVPNNodeChainExecutionEngine) nativeCurrent(ctx context.Context, s
 	if permit := e.permit.Load(); permit != nil && (permit.state != state || permit.tag != e.selector.Now() || permit.epoch != e.selector.RouterVPNNodeChainSelectionEpoch() || permit.generation != e.admission.Load() || permit.ctx.Err() != nil) {
 		return errRouterVPNExecutionOwner
 	}
-	if e.current(ctx) != nil || e.state.Load() != state {
+	if e.current(ctx) != nil || e.state.Load() != state || e.reader.Load() != reader {
 		return errRouterVPNExecutionOwner
 	}
 	network, err = s.network.RouterVPNNodeChainNetworkContext(ctx)
@@ -331,8 +339,9 @@ func (e *RouterVPNNodeChainExecutionEngine) ObserveChainContext(ctx context.Cont
 		return mobilemultihop.NodeChainIdentity{}, errRouterVPNExecutionOwner
 	}
 	state := e.state.Load()
+	reader := e.reader.Load()
 	if state == nil || state.stage != 0 && state.stage != 2 || e.nativeCurrent(ctx, state) != nil ||
-		e.ingress == nil || e.ingress.Current(ctx) != nil || e.state.Load() != state {
+		reader == nil || reader.ingress == nil || reader.ingress.Current(ctx) != nil || e.reader.Load() != reader || e.state.Load() != state {
 		return mobilemultihop.NodeChainIdentity{}, errRouterVPNExecutionOwner
 	}
 	return state.identity, nil
@@ -563,7 +572,21 @@ func (e *RouterVPNNodeChainExecutionEngine) SelectContext(ctx context.Context, t
 	if err != nil || closed.Open || !closed.Drained || closed.Closed {
 		return errRouterVPNExecutionOwner
 	}
-	return e.selector.RouterVPNSelectOutboundContext(ctx, tag, func(ctx context.Context) error { return e.nativeCurrent(ctx, state) })
+	op := e.mtu.Load()
+	if op != nil && (!op.joined || !op.admitted || op.result != e.reader.Load() || tag != op.binding.SelectedTag() || op.epoch != e.selector.RouterVPNNodeChainSelectionEpoch()) {
+		return errRouterVPNExecutionOwner
+	}
+	err = e.selector.RouterVPNSelectOutboundContext(ctx, tag, func(ctx context.Context) error { return e.nativeCurrent(ctx, state) })
+	if op != nil {
+		epoch := e.selector.RouterVPNNodeChainSelectionEpoch()
+		if e.selector.Now() != tag || epoch == 0 || (epoch != op.epoch && epoch != op.epoch+2) {
+			return errors.Join(err, errRouterVPNExecutionOwner)
+		}
+		next := *op
+		next.epoch = epoch
+		e.mtu.Store(&next)
+	}
+	return err
 }
 
 func (e *RouterVPNNodeChainExecutionEngine) DNSExecutionProofContext(ctx context.Context, capture mobilemultihop.NodeChainExecutionDNSCapture) error {
@@ -628,6 +651,9 @@ func (e *RouterVPNNodeChainExecutionEngine) OpenApplicationContext(ctx context.C
 	state := e.state.Load()
 	if err != nil || observed != identity || state.stage != 2 || e.control == nil || !e.revoked.Load() ||
 		selectedTag != state.local.Tag() && selectedTag != state.server.Tag() || e.selector.Now() != selectedTag {
+		return errRouterVPNExecutionOwner
+	}
+	if op := e.mtu.Load(); op != nil && (!op.joined || !op.admitted || op.result != e.reader.Load() || selectedTag != op.binding.SelectedTag() || op.epoch != e.selector.RouterVPNNodeChainSelectionEpoch()) {
 		return errRouterVPNExecutionOwner
 	}
 	// Caller cancellation fences this Open operation; the retained permit's
@@ -791,11 +817,17 @@ func (e *RouterVPNNodeChainExecutionEngine) RetireContext(ctx context.Context) e
 			return err
 		}
 	}
+	if err := e.retireMTUContext(ctx); err != nil {
+		return err
+	}
 	if err := e.control.Close(ctx); err != nil {
 		return err
 	}
 	if e.ingress != nil {
 		e.ingress.Retire()
+	}
+	if reader := e.reader.Load(); reader != nil && reader.ingress != nil {
+		reader.ingress.Retire()
 	}
 	state := e.state.Load()
 	if state != nil {
