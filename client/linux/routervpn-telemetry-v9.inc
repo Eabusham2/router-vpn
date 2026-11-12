@@ -222,7 +222,7 @@ static void linux_external_comparison_open(App*app){
 static gboolean linux_live_paused(LinuxTelemetryV9*t){
     if(linux_async_busy_v16(t->app))return TRUE;
     gboolean paused=FALSE;GList*windows=gtk_window_list_toplevels();
-    for(GList*i=windows;i!=NULL;i=i->next){GtkWidget*w=i->data;if(gtk_widget_get_visible(w)&&gtk_window_get_transient_for(GTK_WINDOW(w))==GTK_WINDOW(t->app->window)&&(g_object_get_data(G_OBJECT(w),"linux-performance-v17")!=NULL||g_object_get_data(G_OBJECT(w),"linux-speed-lab-v12")!=NULL||g_object_get_data(G_OBJECT(w),"external-comparison-state")!=NULL))paused=TRUE;}
+    for(GList*i=windows;i!=NULL;i=i->next){GtkWidget*w=i->data;if(gtk_widget_get_visible(w)&&gtk_window_get_transient_for(GTK_WINDOW(w))==GTK_WINDOW(t->app->window)&&(g_object_get_data(G_OBJECT(w),"linux-performance-v17")!=NULL||g_object_get_data(G_OBJECT(w),"linux-speed-lab-v12")!=NULL||g_object_get_data(G_OBJECT(w),"external-comparison-state")!=NULL||g_object_get_data(G_OBJECT(w),"ordered-candidate-state")!=NULL))paused=TRUE;}
     g_list_free(windows);return paused;
 }
 static void linux_live_clear(LinuxTelemetryV9*t){t->live_ms=0;t->live_deadline=0;g_clear_pointer(&t->live_id,g_free);gtk_label_set_text(GTK_LABEL(t->live),"-- ms");if(t->app->map!=NULL)gtk_widget_queue_draw(t->app->map);}
