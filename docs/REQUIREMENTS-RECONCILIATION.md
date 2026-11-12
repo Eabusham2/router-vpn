@@ -34,8 +34,10 @@ The original #214–224, addendum #336 and August 19 custom-node/map wording sti
 require actual selected-prefix candidate latency, independently chosen hops,
 per-hop/final information and the all-device product. The current candidate
 slice means fifty TCP connections through an already-proved WG/AWG prefix to
-literal Off SS2022 candidates. It does not close measured-candidate adoption
-into the builder/next connection, pre-connect use, every map/chooser surface,
+literal Off SS2022 candidates. Android now validates and saves a named next-connection profile from the fresh
+receipt; normal Load after disconnect applies its complete builder choices.
+This does not close equivalent adoption on other hosts at their individual
+source cutoffs, pre-connect measurement, every map/chooser surface,
 broader protocols/layers/prefixes or physical/package acceptance. The original
 Local/Server/Compare score remains `(last_node + same external endpoint) / 2`;
 this TCP measurement does not replace either response-time term.
