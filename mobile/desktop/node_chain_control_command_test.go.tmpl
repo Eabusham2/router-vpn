@@ -116,7 +116,10 @@ func TestRouterVPNNodeChainDarwinManifestReplay(t *testing.T) {
 			case "config":
 				meta.ConfigSHA256 = strings.Repeat("a", 64)
 			case "session":
-				meta.SessionID = strings.Repeat("a", 32)
+				meta.SessionID = strings.Repeat("b", 32)
+				if meta.SessionID == policy.Metadata().SessionID {
+					t.Fatal("session mutation did not change the original identity")
+				}
 			case "platform":
 				target = "linux"
 			case "graph":
