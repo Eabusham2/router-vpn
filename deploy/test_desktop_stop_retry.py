@@ -105,7 +105,7 @@ if($errors.Count){throw ($errors.Message -join '; ')}
 [IO.File]::WriteAllText($Output,$composed,[Text.UTF8Encoding]::new($false))
 ''',encoding='utf-8-sig')
     run([shell,'-NoProfile','-File',str(builder),str(composed)])
-    source=composed.read_text()
+    source=composed.read_text(encoding='utf-8')
     functions='\n'.join(section(source,r'^function '+name+r'(?:\([^\n]*\))?\{.*?^\}') for name in ['GetUnifiedStopRetryToken','TestUnifiedProtectionStatusBusy','AssertUnifiedProtectionMutationIdle','SetUnifiedStopRetryPresentation','StartUnifiedStopRetry','UnifiedConnect'])
     functions += '\n'+'\n'.join(section(source,r'^function '+name+r'[^\n]*') for name in ['Test-RouterVPNMutationBusyFromStatus','Test-RouterVPNMutationBusy','Assert-RouterVPNMutationIdle'])
     assert 'SetUnifiedStopRetryPresentation $Status' in source
