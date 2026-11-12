@@ -20,6 +20,7 @@ struct IOSNodeChainCapture {
     let members: [Member]
     let strict: Bool
     let homeLANAccess: Bool
+    let selectionExecution: String
 
     var config: String { plan.config() }
     var sourceSHA256: String { plan.sourceSHA256() }
@@ -28,6 +29,17 @@ struct IOSNodeChainCapture {
     var startupTimeout: TimeInterval { TimeInterval(25 + 10 * members.count) }
 
     static func compile(bundles: [Data]) throws -> Self {
+        try compile(bundles: bundles, selectionExecution: "local")
+    }
+
+    /// An execution preparation keeps every saved member byte. Its Local
+    /// packet graph is source material only; the execution owner gates traffic.
+    static func compileOriginalForExecution(bundles: [Data], requested: String) throws -> Self {
+        guard requested == "server" || requested == "auto" else { throw issue("Choose the captured Server or Compare execution.") }
+        return try compile(bundles: bundles, selectionExecution: requested)
+    }
+
+    private static func compile(bundles: [Data], selectionExecution: String) throws -> Self {
         guard (2...8).contains(bundles.count) else { throw issue("Capture every ordered node before compiling the chain.") }
         // The final captured profile owns the exact selected order. It is
         // never inferred from map labels or from the current UI selection.
@@ -98,7 +110,7 @@ struct IOSNodeChainCapture {
         guard let plan = LibboxNewRouterNodeChain(source, &failure), failure == nil else {
             throw failure ?? issue("The selected ordered native graph is unavailable.")
         }
-        do { return try Self(plan: plan) }
+        do { return try Self(plan: plan, selectionExecution: selectionExecution) }
         catch { try? plan.close(); throw error }
     }
 
@@ -119,7 +131,8 @@ struct IOSNodeChainCapture {
     }
 
     // Inspect the retained original source without constructing another native plan.
-    init(plan: LibboxRouterNodeChain) throws {
+    init(plan: LibboxRouterNodeChain, selectionExecution: String = "local") throws {
+        guard ["local", "server", "auto"].contains(selectionExecution) else { throw Self.issue("The ordered source lost its explicit execution selection.") }
         var failure: NSError?
         let returned: String? = plan.launchInput(&failure)
         guard failure == nil, let launch = returned, !launch.isEmpty else {
@@ -167,10 +180,10 @@ struct IOSNodeChainCapture {
         }
         guard let final = members.last,
               let enabled = final.profile["multihop_enabled"] as? NSNumber, CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue,
-              final.profile["multihop_execution"] as? String == "local",
+              final.profile["multihop_execution"] as? String == selectionExecution,
               ["multihop_entry_id", "multihop_entry_mode", "multihop_exit_id", "multihop_exit_mode"].allSatisfy({ final.profile[$0] == nil || final.profile[$0] as? String == "" }),
               let selection = final.profile["multihop_nodes"] as? [[String: Any]], selection.count == members.count else {
-            throw Self.issue("The chain's final profile lost its explicit ordered Local selection.")
+            throw Self.issue("The chain's final profile lost its explicit ordered execution selection.")
         }
         for (position, member) in members.enumerated() {
             guard Set(selection[position].keys) == Set(["id", "mode"]),
@@ -179,7 +192,7 @@ struct IOSNodeChainCapture {
                 throw Self.issue("The original member order or selected transport changed.")
             }
         }
-        self.plan = plan; self.launchInput = launch; self.members = members; self.strict = strict; self.homeLANAccess = lan
+        self.plan = plan; self.launchInput = launch; self.members = members; self.strict = strict; self.homeLANAccess = lan; self.selectionExecution = selectionExecution
     }
 
     private static func object(_ data: Data, maximum: Int) throws -> [String: Any] {

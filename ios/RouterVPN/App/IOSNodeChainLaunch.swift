@@ -23,7 +23,8 @@ extension IOSRuntimeSelector {
     /// Only a complete native compilation can make an ordered selection.
     /// The app retains this source across its first system-manager lookup.
     static func selectNodeChain(_ capture: IOSNodeChainCapture) throws -> IOSRuntimeSelection {
-        guard (2...IOSMultihopNodeSelection.maximumNodes).contains(capture.members.count),
+        guard capture.selectionExecution == "local",
+              (2...IOSMultihopNodeSelection.maximumNodes).contains(capture.members.count),
               capture.members.dropLast().enumerated().allSatisfy({ position, member in
                   IOSMultihopNodeSelection.supportsNativePrefix(member.mode) && member.profile["node_kind"] as? String == "router-vpn" ||
                   capture.members.count == 3 && position == 1 && member.mode == "shadowsocks" && member.profile["node_kind"] as? String == "external"
