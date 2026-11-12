@@ -48,6 +48,7 @@ type routerVPNNodeChainRuntime struct{}
 func(c *routerVPNNodeChainRuntime)attach(context.Context,*routerVPNNodeMTU)error{return routerVPNExternalFailure}
 func(c *routerVPNNodeChainRuntime)current(ctx context.Context)error{if c!=nil{return routerVPNExternalFailure};return nil}
 func(c *routerVPNNodeChainRuntime)heartbeat(ctx context.Context,_ routerVPNNodeMTURecord)error{if c!=nil{return routerVPNExternalFailure};return nil}
+func(c *routerVPNNodeChainRuntime)pollMeasurement(context.Context)error{if c!=nil{return routerVPNExternalFailure};return nil}
 func newRouterVPNNodeMTUContext(ctx context.Context,b *routerVPNNodeMTUBox,_,_,_ string,guard func(context.Context)error)(*routerVPNNodeMTU,error){
  o:=&routerVPNNodeMTU{native:b.instance.native,guard:guard};b.instance.owner=o;return o,guard(ctx)
 }
