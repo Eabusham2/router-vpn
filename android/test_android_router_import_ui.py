@@ -117,8 +117,30 @@ def run(overrides=None):
     sources['android/content/ContentResolver.java']=r'''package android.content;public final class ContentResolver {public byte[] bytes;public int opens,closed;public java.io.InputStream openInputStream(android.net.Uri uri){opens++;return new java.io.ByteArrayInputStream(bytes){public void close(){closed++;}};}}'''
     sources['android/graphics/Color.java']='package android.graphics;public final class Color {public static final int WHITE=-1;}'
     sources['android/widget/Spinner.java']=sources['android/widget/Spinner.java'].replace('public void setSelection(int value){','public void setSelection(int value,boolean animate){setSelection(value);}public void setSelection(int value){')
-    sources['com/eabusham/routervpn/AndroidStandardExitStore.java']=r'''package com.eabusham.routervpn;public class AndroidStandardExitStore {static class Entry{String id="exit",name="External",server="192.0.2.2",protocol="shadowsocks",expectedPublicIp="";String location="";Double latitude,longitude;int serverPort=443;org.json.JSONObject policy,torPolicy;}final Entry entry=new Entry();Entry get(String id){return entry;}java.util.List<Entry> list(){return java.util.List.of();}}'''
-    sources['com/eabusham/routervpn/PolicyUIBoundaries.java']=r'''package com.eabusham.routervpn;final class AndroidTorProfile{static boolean isTor(String protocol){return protocol.startsWith("tor");}}final class AndroidConnectionProfileStore{static class ExternalSelection{AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry ordinaryEntry,exit;String entryMode,execution;boolean direct(){return entry==null&&ordinaryEntry==null;}}static final ExternalSelection path=new ExternalSelection();AndroidConnectionProfileStore(android.content.Context c,AndroidNodeStore n,AndroidStandardExitStore e){}ExternalSelection currentExternalPath(String id){return path;}}final class Connection{AndroidStandardExitStore.Entry activeImportedMultihopEntry(){return null;}boolean isMultihopConnected(){return false;}String activeMultihopEntryId(){return "";}String activeMultihopExitId(){return "";}String activeMultihopExitMode(){return "";}String activeMultihopEntryMode(){return "";}}'''
+    # External policy rows are UI boundary values here (including deliberately
+    # incomplete Tor policies). Reuse the complete shipping Entry structure;
+    # actual custom capture/validation must fail if this fixture enters it.
+    store_source=(JAVA/'AndroidStandardExitStore.java').read_text()
+    entry_start=store_source.index('    static final class Entry {')
+    entry=store_source[entry_start:store_source.index('    private final Context context;',entry_start)]
+    sources['com/eabusham/routervpn/AndroidStandardExitStore.java']=r'''package com.eabusham.routervpn;
+import java.util.*;import org.json.*;
+final class AndroidStandardExitStore {
+'''+entry+r'''
+ final Entry entry=new Entry();
+ AndroidStandardExitStore(){entry.id="exit";entry.name="External";entry.server="192.0.2.2";entry.protocol="shadowsocks";entry.serverPort=443;}
+ AndroidStandardExitStore(android.content.Context context){this();}
+ Entry get(String id){return entry;}List<Entry> list(){return List.of();}
+ static long publicationGeneration(){return 0;}
+ interface OrderedPublication<T>{T run()throws Exception;}
+ static <T>T publishOrdered(long generation,OrderedPublication<T> operation){throw new AssertionError("Unentered imported ordered publication");}
+ static Entry copy(Entry value){throw new AssertionError("Unentered imported ordered capture");}
+ static Entry capturedEntry(android.content.Context context,String id){throw new AssertionError("Unentered imported ordered source");}
+ static String snapshot(Entry value){throw new AssertionError("Unentered imported ordered snapshot");}
+ static void validate(Entry value){throw new AssertionError("Unentered imported native validation");}
+ static void writeLocation(JSONObject result,Entry value){throw new AssertionError("Unentered external catalog summary");}
+}'''
+    sources['com/eabusham/routervpn/PolicyUIBoundaries.java']=r'''package com.eabusham.routervpn;final class AndroidConnectionProfileStore{static class ExternalSelection{AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry ordinaryEntry,exit;String entryMode,execution;boolean direct(){return entry==null&&ordinaryEntry==null;}}static final ExternalSelection path=new ExternalSelection();AndroidConnectionProfileStore(android.content.Context c,AndroidNodeStore n,AndroidStandardExitStore e){}ExternalSelection currentExternalPath(String id){return path;}}final class Connection{AndroidStandardExitStore.Entry activeImportedMultihopEntry(){return null;}boolean isMultihopConnected(){return false;}String activeMultihopEntryId(){return "";}String activeMultihopExitId(){return "";}String activeMultihopExitMode(){return "";}String activeMultihopEntryMode(){return "";}}'''
     profile_source=(JAVA/'AndroidConnectionProfileStore.java').read_text()
     start=profile_source.index('    static void applySelection(')
     selection_publication=profile_source[start:profile_source.index('\n',start)]
