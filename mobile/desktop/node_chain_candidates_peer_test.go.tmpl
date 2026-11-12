@@ -1,0 +1,467 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service/pause"
+)
+
+// Explicit native-adapter boundary for the encrypted transport witness. The
+// actual host mailbox, catalog, fully proved chain and system TUN are exercised
+// by their separate installed-host/command tests. This adapter captures one
+// already-created native packet outbound and original source/target inventory;
+// it cannot create a replacement runtime or choose an ambient network dialer.
+type desktopCandidateNativeBoundary struct {
+	original                                    adapter.Outbound
+	active                                      adapter.Outbound
+	chain                                       *mobilemultihop.NodeChain
+	source, config, inventory, currentInventory string
+	prefix                                      hopmeasure.CandidatePrefix
+	target                                      hopmeasure.CandidateTarget
+	proof                                       mobilemultihop.NodeChainProof
+	token                                       string
+	mu                                          sync.Mutex
+	revoked                                     atomic.Bool
+	held                                        atomic.Bool
+	dials, closed, released                     atomic.Int32
+	onClose                                     func()
+	closeEntered, closeRelease                  chan struct{}
+}
+
+func (e *desktopCandidateNativeBoundary) Identity() string {
+	panic("detached native candidate observation")
+}
+func (e *desktopCandidateNativeBoundary) IdentityContext(ctx context.Context) (string, error) {
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.revoked.Load() || e.active != e.original || e.chain.SourceSHA256() != e.source || e.chain.ConfigSHA256() != e.config || e.currentInventory != e.inventory {
+		e.revoked.Store(true)
+		return "", hopmeasure.ErrStale
+	}
+	return e.source + "/" + e.config + "/" + e.prefix.CaptureSHA256, nil
+}
+func (e *desktopCandidateNativeBoundary) VerifyMeasurement(ctx context.Context) (failure error) {
+	defer func() {
+		if failure != nil && ctx.Err() == nil {
+			e.revoked.Store(true)
+		}
+	}()
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return err
+	}
+	// This is an authenticated observation through the same retained encrypted
+	// prefix, not a copied healthy flag or a probe to the candidate itself.
+	call, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+		if network != "tcp" || address != "10.78.0.1:8787" {
+			return nil, hopmeasure.ErrStale
+		}
+		return e.original.DialContext(ctx, network, M.ParseSocksaddr(address))
+	}}
+	defer transport.CloseIdleConnections()
+	req, err := http.NewRequestWithContext(call, http.MethodGet, "http://10.78.0.1:8787/health", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+e.token)
+	response, err := transport.RoundTrip(req)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	var proof desktopImportedWGSSHealthReply
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 4097))
+	if err != nil || len(raw) > 4096 || response.StatusCode != 200 || json.Unmarshal(raw, &proof) != nil || !proof.OK || proof.NodeID != e.proof.NodeID {
+		return errors.New("retained prefix private proof failed")
+	}
+	_, err = e.IdentityContext(ctx)
+	return err
+}
+func (e *desktopCandidateNativeBoundary) BeginMeasurementContext(ctx context.Context) (func(), error) {
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return nil, err
+	}
+	if !e.held.CompareAndSwap(false, true) {
+		return nil, errors.New("original measurement hold busy")
+	}
+	return func() { e.released.Add(1); e.held.Store(false) }, nil
+}
+func (e *desktopCandidateNativeBoundary) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return nil, err
+	}
+	if tag != e.prefix.Tag || address != e.target.Address || !e.held.Load() {
+		return nil, hopmeasure.ErrStale
+	}
+	e.dials.Add(1)
+	conn, err := e.original.DialContext(ctx, "tcp", M.ParseSocksaddr(address))
+	if err != nil {
+		return nil, err
+	}
+	return &desktopCandidateNativeConnection{Conn: conn, owner: e}, nil
+}
+
+type desktopCandidateNativeConnection struct {
+	net.Conn
+	owner *desktopCandidateNativeBoundary
+	once  sync.Once
+	err   error
+}
+
+func (c *desktopCandidateNativeConnection) Close() error {
+	c.once.Do(func() {
+		if c.owner.closeEntered != nil {
+			close(c.owner.closeEntered)
+			<-c.owner.closeRelease
+		}
+		c.err = c.Conn.Close()
+		c.owner.closed.Add(1)
+		if c.owner.onClose != nil {
+			c.owner.onClose()
+		}
+	})
+	return c.err
+}
+
+func desktopCandidateNativeStatus(t *testing.T, s *hopmeasure.CandidateService) hopmeasure.CandidateStatus {
+	t.Helper()
+	var status hopmeasure.CandidateStatus
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if json.Unmarshal([]byte(s.StatusContextJSON(ctx)), &status) != nil {
+		t.Fatal("candidate receipt")
+	}
+	return status
+}
+
+// Completion may use the original request budget; Drain's separate five-second
+// join is for cleanup and must not become a new latency benchmark deadline.
+func desktopCandidateNativeDrain(ctx context.Context, s *hopmeasure.CandidateService, request string) error {
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		var status hopmeasure.CandidateStatus
+		if err := json.Unmarshal([]byte(s.StatusContextJSON(ctx)), &status); err != nil {
+			return err
+		}
+		if status.Complete && status.Drained {
+			return s.Drain(request)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
+	}
+}
+
+func desktopCandidateNativeCount(t *testing.T, peer *desktopNodeLayerServer, want int64) {
+	t.Helper()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		if got := peer.rawTCP.Load(); got == want {
+			return
+		} else if got > want {
+			t.Fatalf("candidate target handshakes%d want%d", got, want)
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("candidate target handshakes%d want%d", peer.rawTCP.Load(), want)
+		case <-tick.C:
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeChainEncryptedPrefixCandidates(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			request, clients := desktopNodeChainPeerFixture(t, 2)
+			desktopNodeChainSetModes(t, &request, []string{mode, mode})
+			loopback := netip.MustParseAddr("127.0.0.1")
+			peer := desktopNodeChainPeerStart(t, request, loopback, loopback)
+			_, port, err := net.SplitHostPort(peer.prefixes[0].bind.address())
+			if err != nil {
+				t.Fatal(err)
+			}
+			chain := desktopNodeChainPeerSource(t, request, clients, net.JoinHostPort(request.Address, port))
+			lifetime, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 45*time.Second)
+			defer cancel()
+			outbounds := desktopNodeChainPeerOutbounds(t, lifetime, chain, peer.prefixes[0].bind.address(), nil)
+			original, err := chain.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var source mobilemultihop.NodeChainSource
+			if json.Unmarshal([]byte(original), &source) != nil {
+				t.Fatal("original source")
+			}
+			inventory := desktopNodeChainJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-native-peer-catalog-1", Inputs: []string{source.Nodes[2]}})
+			plan, err := chain.NewCandidatePlan(1, inventory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := mobilemultihop.ParseNodeLaunchInput(source.Nodes[2])
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A valid newly compiled original credential source, with the same ID
+			// and catalog revision, must still revoke the old capture.
+			var candidateInput struct {
+				Mode    string `json:"mode"`
+				Files   string `json:"files"`
+				Profile string `json:"profile_json"`
+				Start   string `json:"start"`
+				DNS     string `json:"dns_bootstrap"`
+			}
+			if json.Unmarshal([]byte(source.Nodes[2]), &candidateInput) != nil {
+				t.Fatal("candidate original inputs")
+			}
+			var assets map[string]string
+			if json.Unmarshal([]byte(candidateInput.Files), &assets) != nil {
+				t.Fatal("candidate original assets")
+			}
+			asset, e := base64.StdEncoding.DecodeString(assets["sing-box.json"])
+			if e != nil || strings.Count(string(asset), request.FinalPassword) != 1 {
+				t.Fatal("original SS credential source")
+			}
+			replacement := "A" + request.FinalPassword[1:]
+			if replacement == request.FinalPassword {
+				replacement = "B" + request.FinalPassword[1:]
+			}
+			assets["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(strings.Replace(string(asset), request.FinalPassword, replacement, 1)))
+			changedNode, e := mobilemultihop.NewNodeProfile(candidateInput.Mode, desktopNodeChainJSON(t, assets), candidateInput.Profile, candidateInput.Start, candidateInput.DNS)
+			if e != nil || changedNode.SourceSHA256() == candidate.SourceSHA256() {
+				t.Fatal("changed original source", e)
+			}
+			changedInput, e := changedNode.LaunchInput()
+			if e != nil {
+				t.Fatal(e)
+			}
+			changedInventory := desktopNodeChainJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-native-peer-catalog-1", Inputs: []string{changedInput}})
+			proofs := chain.ProofInventory()
+			target := hopmeasure.CandidateTarget{ID: proofs[2].ProfileID, SourceSHA256: candidate.SourceSHA256(), Address: "10.77.0.1:8388"}
+			// The literal endpoint must come from that exact original compiled source.
+			var config map[string]any
+			if json.Unmarshal([]byte(chain.Config()), &config) != nil {
+				t.Fatal("compiled graph")
+			}
+			matched := false
+			for _, raw := range config["outbounds"].([]any) {
+				row := raw.(map[string]any)
+				if row["tag"] == proofs[2].Tag {
+					matched = row["type"] == "shadowsocks" && row["server"] == "10.77.0.1" && row["server_port"] == float64(8388) && row["password"] == request.FinalPassword
+				}
+			}
+			if !matched {
+				t.Fatal("candidate endpoint is not its original SS2022 source")
+			}
+			prefix := hopmeasure.CandidatePrefix{Position: 1, ID: proofs[1].ProfileID, Tag: proofs[1].Tag, CaptureSHA256: plan.CaptureSHA256()}
+			newService := func(t *testing.T) (*hopmeasure.CandidateService, *desktopCandidateNativeBoundary) {
+				t.Helper()
+				engine := &desktopCandidateNativeBoundary{original: outbounds[1], active: outbounds[1], chain: chain, source: chain.SourceSHA256(), config: chain.ConfigSHA256(), inventory: inventory, currentInventory: inventory, prefix: prefix, target: target, proof: proofs[1], token: request.Prefixes[1].APIToken}
+				service, err := hopmeasure.NewPrefixCandidatesContext(lifetime, engine, prefix, []hopmeasure.CandidateTarget{target})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := service.Close(); err != nil {
+						t.Error(err)
+					}
+				})
+				return service, engine
+			}
+			requestID := strings.Repeat("a", 32)
+			t.Run("fifty-original-destination-handshakes", func(t *testing.T) {
+				service, engine := newService(t)
+				before := peer.final.final.rawTCP.Load()
+				firstPackets := peer.prefixes[0].bind.packets.Load()
+				if err := service.StartContext(lifetime, requestID, target.ID); err != nil {
+					t.Fatal(err)
+				}
+				if err := desktopCandidateNativeDrain(lifetime, service, requestID); err != nil {
+					t.Fatal(err)
+				}
+				status := desktopCandidateNativeStatus(t, service)
+				if !status.Complete || !status.Drained || status.Failure != "" || len(status.Results) != 1 {
+					t.Fatal("complete candidate receipt", status)
+				}
+				result := status.Results[0]
+				if !result.Ready || result.Kind != "tcp-connect" || result.Role != "candidate" || result.Benchmark == nil || result.Benchmark.Attempts != 50 || result.Benchmark.Distribution.Samples != 50 || result.Benchmark.TrimmedMean <= 0 || result.Benchmark.Measurement != "routed-tcp-connect" || result.Benchmark.Endpoint != "" || status.CandidateSourceSHA256 != target.SourceSHA256 || status.CaptureSHA256 != plan.CaptureSHA256() {
+					t.Fatal("wrong TCP timing semantics", status)
+				}
+				desktopCandidateNativeCount(t, peer.final.final, before+50)
+				if engine.dials.Load() != 50 || engine.closed.Load() != 50 || engine.released.Load() != 1 || engine.held.Load() || peer.prefixes[0].bind.packets.Load() <= firstPackets || peer.final.final.plainTCP.Load() != 0 || peer.final.health.Load() != 0 {
+					t.Fatal("candidate reused native runtime but lost exact socket/hold ownership or claimed final authentication")
+				}
+				raw := service.StatusJSON()
+				if strings.Contains(raw, target.Address) || strings.Contains(raw, request.FinalPassword) || strings.Contains(raw, "icmp") {
+					t.Fatal("private endpoint/credential or false ICMP result")
+				}
+			})
+			t.Run("uncaptured-candidate-and-prefix", func(t *testing.T) {
+				service, engine := newService(t)
+				before := peer.final.final.rawTCP.Load()
+				if service.StartContext(lifetime, requestID, "foreign") == nil {
+					t.Fatal("foreign candidate admitted")
+				}
+				release, e := engine.BeginMeasurementContext(lifetime)
+				if e != nil {
+					t.Fatal(e)
+				}
+				defer release()
+				for _, v := range [][2]string{{proofs[2].Tag, target.Address}, {prefix.Tag, "10.77.0.1:8389"}} {
+					if c, e := engine.Dial(lifetime, v[0], v[1]); e == nil || c != nil {
+						t.Fatal("foreign native routing capability")
+					}
+				}
+				if peer.final.final.rawTCP.Load() != before || engine.dials.Load() != 0 {
+					t.Fatal("foreign input reached peer")
+				}
+				if _, e := chain.NewCandidatePlan(2, inventory); e == nil {
+					t.Fatal("lazy SS prefix timed upstream handshake")
+				}
+			})
+			for _, fault := range []string{"source-change", "prefix-owner-change"} {
+				t.Run(fault, func(t *testing.T) {
+					service, engine := newService(t)
+					before := peer.final.final.rawTCP.Load()
+					engine.onClose = func() {
+						engine.mu.Lock()
+						if fault == "source-change" {
+							engine.currentInventory = changedInventory
+						} else {
+							engine.active = nil
+						}
+						engine.mu.Unlock()
+					}
+					if e := service.StartContext(lifetime, requestID, target.ID); e != nil {
+						t.Fatal(e)
+					}
+					if e := desktopCandidateNativeDrain(lifetime, service, requestID); e != nil {
+						t.Fatal(e)
+					}
+					status := desktopCandidateNativeStatus(t, service)
+					if status.Stage != "invalidated" || len(status.Results) != 0 || engine.dials.Load() != 1 || engine.held.Load() {
+						t.Fatal("changed source/prefix retained score", status)
+					}
+					desktopCandidateNativeCount(t, peer.final.final, before+1)
+					engine.mu.Lock()
+					engine.currentInventory = inventory
+					engine.active = engine.original
+					engine.mu.Unlock()
+					if _, e := engine.IdentityContext(lifetime); e == nil {
+						t.Fatal("old capture revived after change-back")
+					}
+				})
+			}
+			t.Run("cancel-retains-real-socket-drain", func(t *testing.T) {
+				service, engine := newService(t)
+				engine.closeEntered = make(chan struct{})
+				engine.closeRelease = make(chan struct{})
+				var once sync.Once
+				release := func() { once.Do(func() { close(engine.closeRelease) }) }
+				defer release()
+				before := peer.final.final.rawTCP.Load()
+				if e := service.StartContext(lifetime, requestID, target.ID); e != nil {
+					t.Fatal(e)
+				}
+				select {
+				case <-engine.closeEntered:
+				case <-lifetime.Done():
+					t.Fatal("actual native socket never reached close")
+				}
+				service.Cancel(requestID)
+				short, stop := context.WithTimeout(lifetime, 25*time.Millisecond)
+				e := service.CloseContext(short)
+				stop()
+				if e == nil || !engine.held.Load() || engine.closed.Load() != 0 {
+					t.Fatal("cancel released live original socket ownership", e)
+				}
+				release()
+				if e := service.CloseContext(lifetime); e != nil {
+					t.Fatal(e)
+				}
+				status := desktopCandidateNativeStatus(t, service)
+				if len(status.Results) != 0 || engine.held.Load() || engine.closed.Load() != 1 || engine.released.Load() != 1 {
+					t.Fatal("original socket drain failed", status)
+				}
+				desktopCandidateNativeCount(t, peer.final.final, before+1)
+			})
+			t.Run("wrong-live-private-proof", func(t *testing.T) {
+				service, engine := newService(t)
+				before := peer.final.final.rawTCP.Load()
+				peer.prefixes[1].wrong.Store(true)
+				defer peer.prefixes[1].wrong.Store(false)
+				if e := service.StartContext(lifetime, requestID, target.ID); e != nil {
+					t.Fatal(e)
+				}
+				if e := desktopCandidateNativeDrain(lifetime, service, requestID); e != nil {
+					t.Fatal(e)
+				}
+				status := desktopCandidateNativeStatus(t, service)
+				if len(status.Results) != 0 || status.Stage != "invalidated" || engine.dials.Load() != 0 || peer.final.final.rawTCP.Load() != before {
+					t.Fatal("foreign live proof scored candidate", status)
+				}
+			})
+			t.Run("destination-listener-refused", func(t *testing.T) {
+				service, engine := newService(t)
+				before := peer.final.final.rawTCP.Load()
+				if e := peer.final.final.tcp.Close(); e != nil {
+					t.Fatal(e)
+				}
+				if e := service.StartContext(lifetime, requestID, target.ID); e != nil {
+					t.Fatal(e)
+				}
+				if e := desktopCandidateNativeDrain(lifetime, service, requestID); e != nil {
+					t.Fatal(e)
+				}
+				status := desktopCandidateNativeStatus(t, service)
+				if len(status.Results) != 1 || status.Results[0].Ready || status.Results[0].Benchmark != nil || status.Results[0].Failure == "" || engine.dials.Load() != 1 || peer.final.final.rawTCP.Load() != before {
+					t.Fatal("refused actual destination produced a score", status)
+				}
+			})
+			t.Run("retained-encrypted-prefix-lost", func(t *testing.T) {
+				service, _ := newService(t)
+				before := peer.final.final.rawTCP.Load()
+				if e := peer.prefixes[1].bind.Close(); e != nil {
+					t.Fatal(e)
+				}
+				if e := service.StartContext(lifetime, requestID, target.ID); e != nil {
+					t.Fatal(e)
+				}
+				if e := desktopCandidateNativeDrain(lifetime, service, requestID); e != nil {
+					t.Fatal(e)
+				}
+				status := desktopCandidateNativeStatus(t, service)
+				if len(status.Results) != 0 || peer.final.final.rawTCP.Load() != before {
+					t.Fatal("lost retained encrypted path retained score", status)
+				}
+			})
+		})
+	}
+}

@@ -307,9 +307,9 @@ func (h *desktopReferenceHandler) NewConnectionEx(_ context.Context, c net.Conn,
 	go func() {
 		defer h.workers.Done()
 		defer h.forget(c)
-		_ = c.SetDeadline(time.Now().Add(30 * time.Second))
 		var result error
 		if rule.Target == "" {
+			_ = c.SetDeadline(time.Now().Add(30 * time.Second))
 			_, result = io.Copy(c, c)
 		} else {
 			upstream, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(h.ctx, "tcp", rule.Target)
@@ -320,6 +320,10 @@ func (h *desktopReferenceHandler) NewConnectionEx(_ context.Context, c net.Conn,
 				result = err
 			} else {
 				defer h.forget(upstream)
+				// gLazyConn.SetDeadline completes its TCP handshake. The original
+				// target must have accepted first; otherwise candidate timing would
+				// measure only this reference forwarder, even after target refusal.
+				_ = c.SetDeadline(time.Now().Add(30 * time.Second))
 				_ = upstream.SetDeadline(time.Now().Add(30 * time.Second))
 				joined := make(chan error, 1)
 				go func() { _, err := io.Copy(upstream, c); _ = upstream.Close(); _ = c.Close(); joined <- err }()

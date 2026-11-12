@@ -262,6 +262,8 @@ def checked_sources(source):
         raise ValueError('Installed imported host lost its independent WG entry and paired SS final peer')
     if 'protocol/routervpnamnezia/routervpn_desktop_node_chain_peer_linux_test.go' not in native:
         raise ValueError('Installed ordered host lost its independent complete encrypted prefix peer')
+    if 'protocol/routervpnamnezia/routervpn_desktop_node_chain_candidates_peer_test.go' not in native:
+        raise ValueError('Encrypted prefix candidate native source is absent')
     if 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_mtu_test.go' not in native:
         raise ValueError('Ordered custom tight MTU native source is absent')
     if 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_test.go' not in native:
@@ -405,6 +407,30 @@ def execute_node_chain_imported_mtu(peer, source, captured):
     if status:
         raise ValueError('Ordered SS2022 tight native MTU failed:\n' + output[-16384:])
     check_node_chain_imported_mtu_verdict(output)
+    print(output, end='' if output.endswith('\n') else '\n')
+    return output
+
+
+NODE_CHAIN_CANDIDATES = 'TestRouterVPNDesktopNodeChainEncryptedPrefixCandidates'
+NODE_CHAIN_CANDIDATE_VERDICTS = (NODE_CHAIN_CANDIDATES, *(
+    NODE_CHAIN_CANDIDATES + '/' + mode + suffix
+    for mode in ('wg', 'awg2-fast', 'awg2-strong')
+    for suffix in ('', '/fifty-original-destination-handshakes', '/uncaptured-candidate-and-prefix',
+                   '/source-change', '/prefix-owner-change', '/cancel-retains-real-socket-drain',
+                   '/wrong-live-private-proof', '/destination-listener-refused', '/retained-encrypted-prefix-lost')))
+
+
+def check_node_chain_candidate_verdict(output):
+    NODE.require_native_verdicts(output, NODE_CHAIN_CANDIDATE_VERDICTS, 'encrypted original-prefix candidate connections')
+
+
+def execute_node_chain_candidates(peer, source, captured):
+    status, output = NODE.run([str(peer), '-test.v', '-test.timeout=90s',
+                              '-test.run=^' + NODE_CHAIN_CANDIDATES + '$'],
+                             cwd=source, env=captured, timeout=100)
+    if status:
+        raise ValueError('Encrypted original-prefix candidate reference failed:\n' + output[-16384:])
+    check_node_chain_candidate_verdict(output)
     print(output, end='' if output.endswith('\n') else '\n')
     return output
 
@@ -1009,6 +1035,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
         node_chain_peer_output = execute_node_chain_peer(peer, source, captured)
         node_chain_imported_output = execute_node_chain_imported_peer(peer, source, captured)
         node_chain_imported_mtu_output = execute_node_chain_imported_mtu(peer, source, captured)
+        node_chain_candidate_output = execute_node_chain_candidates(peer, source, captured)
         node_chain_host_authority_output = execute_node_chain_host_authority(binary, captured)
         logs = []
         for case in (*CASES, *REVERSE_CASES):
@@ -1051,6 +1078,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'connect_tls_cases': list(CONNECT_TLS_CASES), 'connect_tls_output_sha256': hashlib.sha256(connect_tls_output.encode()).hexdigest(),
                   'layer_peer_cases': list(LAYER_PEER_CASES), 'layer_peer_output_sha256': hashlib.sha256(layer_output.encode()).hexdigest(),
                   'node_chain_host_authority_cases': list(NODE_CHAIN_HOST_AUTHORITY_CASES), 'node_chain_host_authority_output_sha256': hashlib.sha256(node_chain_host_authority_output.encode()).hexdigest(),
+                  'node_chain_candidate_cases': list(NODE_CHAIN_CANDIDATE_VERDICTS), 'node_chain_candidate_output_sha256': hashlib.sha256(node_chain_candidate_output.encode()).hexdigest(),
                   'node_chain_imported_mtu_cases': list(NODE_CHAIN_IMPORTED_MTU_VERDICTS), 'node_chain_imported_mtu_output_sha256': hashlib.sha256(node_chain_imported_mtu_output.encode()).hexdigest(),
                   'node_chain_imported_cases': list(NODE_CHAIN_IMPORTED_VERDICTS), 'node_chain_imported_output_sha256': hashlib.sha256(node_chain_imported_output.encode()).hexdigest(),
                   'node_chain_peer_cases': list(NODE_CHAIN_PEER_CASES), 'node_chain_peer_output_sha256': hashlib.sha256(node_chain_peer_output.encode()).hexdigest(),
