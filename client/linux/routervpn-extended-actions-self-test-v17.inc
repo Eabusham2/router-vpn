@@ -60,7 +60,16 @@ static gboolean linux_extended_probe_v17(gpointer data) {
         gtk_button_clicked(GTK_BUTTON(p->panel->actions[3]));p->stage=3;p->beats=0;
     }else if(p->stage==3&&p->panel->generation==0){
         if(strstr(gtk_label_get_text(GTK_LABEL(p->panel->result)),"finished")==NULL){p->failure=8;goto finish;}
-        puts("Linux extended actions: Performance current-path and exact routed-hop requests completed asynchronously: PASS");
+        gtk_button_clicked(GTK_BUTTON(p->panel->actions[3]));p->stage=10;p->beats=0;
+    }else if(p->stage==10&&p->panel->generation==0){
+        GtkTextIter start,end;GtkTextBuffer *buffer=gtk_text_view_get_buffer(GTK_TEXT_VIEW(p->panel->detail));
+        gtk_text_buffer_get_bounds(buffer,&start,&end);char *text=gtk_text_buffer_get_text(buffer,&start,&end,FALSE);
+        gboolean complete=strstr(text,"middle-kept")!=NULL&&strstr(text,"Cumulative path through node 2 of 3")!=NULL;g_free(text);
+        if(!complete){p->failure=22;goto finish;}
+        gtk_button_clicked(GTK_BUTTON(p->panel->actions[3]));p->stage=11;p->beats=0;
+    }else if(p->stage==11&&p->panel->generation==0){
+        if(strstr(gtk_label_get_text(GTK_LABEL(p->panel->result)),"Connect an actual") == NULL){p->failure=23;goto finish;}
+        puts("Linux extended actions: Performance pair and ordered captures, intermediate rows and invalid-capture rejection: PASS");
         gtk_button_clicked(GTK_BUTTON(p->panel->actions[2]));p->stage=4;p->beats=0;
     }else if(p->stage==4&&p->beats>=6){
         gtk_dialog_response(GTK_DIALOG(p->panel->dialog),6);p->stage=5;p->beats=0;

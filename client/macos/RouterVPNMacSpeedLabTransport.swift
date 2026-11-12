@@ -50,7 +50,12 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
         case "/api/connection/live-latency": performanceValid = Set(body?.keys.map { $0 } ?? []) == Set(["samples"]) && number("samples", equals: 5) && bounded(12)
         case "/api/connection/speed-test": performanceValid = Set(body?.keys.map { $0 } ?? []) == Set(["bytes"]) && number("bytes", equals: 8388608) && bounded(45)
         case "/api/profile/latency": performanceValid = Set(body?.keys.map { $0 } ?? []) == Set(["id", "samples"]) && identifier("id") != nil && number("samples", equals: 50) && bounded(180)
-        case "/api/multihop/speed-test": performanceValid = Set(body?.keys.map { $0 } ?? []) == Set(["entry_id", "exit_id", "bytes"]) && identifier("entry_id") != nil && identifier("exit_id") != nil && identifier("entry_id") != identifier("exit_id") && number("bytes", equals: 4194304) && bounded(70)
+        case "/api/multihop/speed-test":
+            let keys = Set(body?.keys.map { $0 } ?? [])
+            let pair = keys == Set(["entry_id", "exit_id", "bytes"]) && number("bytes", equals: 4194304) && bounded(70)
+            let ordered = keys == Set(["entry_id", "exit_id", "bytes", "ordered_capture"]) &&
+                identifier("ordered_capture")?.utf8.count == 64 && identifier("ordered_capture")?.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil && number("bytes", equals: 8388608) && bounded(100)
+            performanceValid = identifier("entry_id") != nil && identifier("exit_id") != nil && identifier("entry_id") != identifier("exit_id") && (pair || ordered)
         default: performanceValid = true
         }
         guard performanceValid else {

@@ -45,14 +45,20 @@ static gboolean linux_performance_poll_v17(gpointer data) {
         gboolean valid=connected&&JSON_NODE_HOLDS_VALUE(connected)&&json_node_get_value_type(connected)==G_TYPE_BOOLEAN&&json_node_get_boolean(connected)&&
             entry&&JSON_NODE_HOLDS_VALUE(entry)&&json_node_get_value_type(entry)==G_TYPE_STRING&&exit&&JSON_NODE_HOLDS_VALUE(exit)&&json_node_get_value_type(exit)==G_TYPE_STRING;
         const char *in=valid?json_node_get_string(entry):"",*out=valid?json_node_get_string(exit):"";
-        if(valid&&in[0]&&out[0]&&strcmp(in,out)!=0){
+        JsonNode *capture=obj!=NULL?json_object_get_member(obj,"ordered_capture"):NULL;
+        JsonNode *count=obj!=NULL?json_object_get_member(obj,"ordered_nodes"):NULL;
+        gboolean ordered=capture!=NULL||count!=NULL;
+        const char *token=capture&&JSON_NODE_HOLDS_VALUE(capture)&&json_node_get_value_type(capture)==G_TYPE_STRING?json_node_get_string(capture):NULL;
+        gboolean ordered_valid=!ordered||(token&&strlen(token)==64&&strspn(token,"0123456789abcdef")==64&&count&&JSON_NODE_HOLDS_VALUE(count)&&json_node_get_value_type(count)==G_TYPE_INT64&&json_node_get_int(count)>=2&&json_node_get_int(count)<=8);
+        if(valid&&ordered_valid&&in[0]&&out[0]&&strcmp(in,out)!=0){
             JsonBuilder *b=json_builder_new();json_builder_begin_object(b);
             json_builder_set_member_name(b,"entry_id");json_builder_add_string_value(b,in);
             json_builder_set_member_name(b,"exit_id");json_builder_add_string_value(b,out);
-            json_builder_set_member_name(b,"bytes");json_builder_add_int_value(b,4194304);
+            json_builder_set_member_name(b,"bytes");json_builder_add_int_value(b,ordered?8388608:4194304);
+            if(ordered){json_builder_set_member_name(b,"ordered_capture");json_builder_add_string_value(b,token);}
             json_builder_end_object(b);JsonNode *payload=json_builder_get_root(b);JsonGenerator *g=json_generator_new();json_generator_set_root(g,payload);
             char *body=json_generator_to_data(g,NULL);
-            linux_performance_begin_v17(p,"/api/multihop/speed-test",body,70000,FALSE);
+            linux_performance_begin_v17(p,"/api/multihop/speed-test",body,ordered?100000:70000,FALSE);
             g_free(body);g_object_unref(g);json_node_free(payload);g_object_unref(b);json_node_free(root);
             if(p->poll!=0)return G_SOURCE_REMOVE; /* New generation owns the next source. */
         }else{

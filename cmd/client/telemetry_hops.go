@@ -18,10 +18,11 @@ import (
 )
 
 type routedSpeedRequest struct {
-	ID      string `json:"id,omitempty"`
-	EntryID string `json:"entry_id,omitempty"`
-	ExitID  string `json:"exit_id,omitempty"`
-	Bytes   int64  `json:"bytes,omitempty"`
+	ID             string `json:"id,omitempty"`
+	EntryID        string `json:"entry_id,omitempty"`
+	ExitID         string `json:"exit_id,omitempty"`
+	Bytes          int64  `json:"bytes,omitempty"`
+	OrderedCapture string `json:"ordered_capture,omitempty"`
 }
 
 type routedSpeedResult struct {
@@ -415,6 +416,11 @@ func (a *app) multihopSpeedTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer finishMeasurement()
+
+	if graph.ChainNodes != 0 || q.OrderedCapture != "" {
+		a.orderedMultihopSpeedTest(w, r, q, graph)
+		return
+	}
 
 	measurementCtx, stopMeasurement, validatePath, err := routedSpeedPathContext(r.Context(), a, st, graph, sessionAtStart, entry, exit)
 	if err != nil {

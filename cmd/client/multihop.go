@@ -261,7 +261,7 @@ func (a *app) multihopStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	payload := map[string]any{
 		"platform":              runtime.GOOS,
 		"platform_supported":    runtime.GOOS == "linux",
 		"entry_id":              entryID,
@@ -292,7 +292,16 @@ func (a *app) multihopStatus(w http.ResponseWriter, r *http.Request) {
 			return ""
 		}(),
 		"nodes": multihopNodeSummaries(profiles),
-	})
+	}
+	if state.Connected && state.Mode == "multihop" && graph.ChainNodes != 0 {
+		identity, capture, count, err := captureOrderedPerformanceContext(r.Context(), a)
+		if err != nil || identity.Graph != graph {
+			http.Error(w, "ordered native route changed or is not ready for measurement", http.StatusConflict)
+			return
+		}
+		payload["ordered_capture"], payload["ordered_nodes"] = capture, count
+	}
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func multihopCommand(a *app, sel multihopSelection) *exec.Cmd {

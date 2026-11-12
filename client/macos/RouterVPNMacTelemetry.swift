@@ -430,7 +430,7 @@ private final class RouterVPNMacPerformanceMeasurement {
             changed?("Transferring 8 MiB down and 8 MiB up through the current VPN path; Auto MTU is held during the transfer…")
             perform("/api/connection/speed-test", body: ["bytes": 8 * 1024 * 1024], timeout: 45, owner: owner)
         case .hops:
-            changed?("Checking the active multihop graph before testing its entry and exit…")
+            changed?("Checking the complete active multihop graph before measuring every cumulative prefix…")
             perform("/api/multihop/status", body: nil, timeout: 5, owner: owner) { [weak self] data in
                 guard let self else { return }
                 guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
@@ -441,7 +441,18 @@ private final class RouterVPNMacPerformanceMeasurement {
                       !exit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, entry != exit else {
                     self.finish(.failure(Self.issue("Connect an actual multihop graph with different entry and exit nodes first.")), owner: owner); return
                 }
-                self.perform("/api/multihop/speed-test", body: ["entry_id": entry, "exit_id": exit, "bytes": 4 * 1024 * 1024], timeout: 70, owner: owner)
+                var body: [String: Any] = ["entry_id": entry, "exit_id": exit, "bytes": 4 * 1024 * 1024]
+                var timeout: TimeInterval = 70
+                if root["ordered_capture"] != nil || root["ordered_nodes"] != nil {
+                    guard let capture = root["ordered_capture"] as? String, capture.utf8.count == 64,
+                          capture.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
+                          let count = root["ordered_nodes"] as? NSNumber, CFGetTypeID(count) != CFBooleanGetTypeID(),
+                          count.doubleValue.rounded() == count.doubleValue, (2...8).contains(count.intValue) else {
+                        self.finish(.failure(Self.issue("The ordered native route has no complete measurement capture.")), owner: owner); return
+                    }
+                    body["ordered_capture"] = capture; body["bytes"] = 8 * 1024 * 1024; timeout = 100
+                }
+                self.perform("/api/multihop/speed-test", body: body, timeout: timeout, owner: owner)
             }
         }
         return true

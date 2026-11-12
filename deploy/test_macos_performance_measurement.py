@@ -69,6 +69,11 @@ def run_case(directory, mutation):
                     return
                 if self.path == '/api/multihop/status':
                     value = {'connected': True, 'entry_id': 'active-entry', 'exit_id': 'active-exit'}
+                    if mode.startswith('ordered'):
+                        value.update(ordered_capture='a' * 64, ordered_nodes=3)
+                        if mode == 'ordered-missing': value.pop('ordered_capture')
+                        if mode == 'ordered-count': value['ordered_nodes'] = True
+                        if mode == 'ordered-token': value['ordered_capture'] = 'bad'
                     if mode == 'disconnected':
                         value['connected'] = False
                     if mode == 'numeric-connected':
@@ -81,6 +86,8 @@ def run_case(directory, mutation):
                     value = {'selected_id': 'selected-node'}
                 else:
                     value = {'mode': mode, 'path': self.path, 'download_bytes': 12345, 'download_ms': 67, 'error': 'kept per-hop error'}
+                if mode == 'ordered' and self.path == '/api/multihop/speed-test':
+                    value['hops'] = [{'role': 'entry', 'router_id': 'a'}, {'role': 'intermediate', 'router_id': 'middle-kept', 'speed_label': 'Cumulative path through node 2 of 3'}, {'role': 'exit', 'router_id': 'c'}]
                 raw = json.dumps(value).encode()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
@@ -157,6 +164,15 @@ for kind: RouterVPNMacPerformanceMeasurement.Kind in [.hops, .node, .live, .spee
     wait({ !active.running }, "valid measurement did not complete")
     require(messages.last!.contains("12345") && messages.last!.contains("67") && messages.last!.contains("kept per-hop error"), "actual bytes/time or hop errors were replaced")
 }
+mode("ordered")
+require(active.start(.hops), "ordered measurement did not start")
+wait({ !active.running }, "ordered measurement did not complete")
+require(messages.last!.contains("middle-kept") && messages.last!.contains("Cumulative path through node 2 of 3"), "ordered intermediate row or cumulative label lost")
+for invalid in ["ordered-missing", "ordered-count", "ordered-token"] {
+    mode(invalid); require(active.start(.hops), "invalid ordered preflight did not start")
+    wait({ !active.running }, "invalid ordered preflight did not complete")
+    require(messages.last!.contains("no complete measurement capture"), "invalid ordered capture reached pair endpoint")
+}
 for invalid in ["disconnected", "numeric-connected", "same-hop", "missing-hop"] {
     mode(invalid)
     require(active.start(.hops), "invalid graph preflight did not start")
@@ -191,6 +207,9 @@ let invalid: [(String, [String: Any]?, Double)] = [
     ("/api/profile/latency", ["id": "", "samples": 50], 180),
     ("/api/multihop/speed-test", ["entry_id": "same", "exit_id": "same", "bytes": 4194304], 70),
     ("/api/multihop/speed-test", ["entry_id": "in", "exit_id": "out", "bytes": 4194304, "mutate": true], 70),
+    ("/api/multihop/speed-test", ["entry_id": "in", "exit_id": "out", "bytes": 8388608, "ordered_capture": "bad"], 100),
+    ("/api/multihop/speed-test", ["entry_id": "in", "exit_id": "out", "bytes": 4194304, "ordered_capture": String(repeating: "a", count: 64)], 100),
+    ("/api/multihop/speed-test", ["entry_id": "in", "exit_id": "out", "bytes": 8388608, "ordered_capture": String(repeating: "a", count: 64)], 101),
     ("/api/connection/speed-test", ["bytes": 8388608], Double.infinity)
 ]
 for (path, body, timeout) in invalid {
@@ -210,7 +229,7 @@ print("Shipping macOS Performance: real cancellation, panel close, preflight, 50
             assert result.returncode == 0, result.stdout + repr(hits) + repr(errors)
             assert not errors, errors
             hops = [body for _, path, body in hits if path == '/api/multihop/speed-test']
-            assert hops == [{'entry_id': 'active-entry', 'exit_id': 'active-exit', 'bytes': 4194304}], hops
+            assert hops == [{'entry_id': 'active-entry', 'exit_id': 'active-exit', 'bytes': 4194304}, {'entry_id': 'active-entry', 'exit_id': 'active-exit', 'bytes': 8388608, 'ordered_capture': 'a' * 64}], hops
             nodes = [body for _, path, body in hits if path == '/api/profile/latency']
             assert nodes == [{'id': 'selected-node', 'samples': 50}], nodes
             assert len([1 for mode, path, _ in hits if mode == 'preflight' and path != '/api/multihop/status']) == 0, hits

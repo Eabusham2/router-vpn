@@ -148,6 +148,22 @@ Check ($Requests.Count-eq2-and$Requests[1].Path-ceq'/api/multihop/speed-test'-an
 Finish-Performance
 Check ($State.Result.Text.Contains('actual-result')-and$null-eq$State.Current) 'Actual hop result was not adopted'
 
+# Ordered native routes capture every member through an opaque exact-owner token.
+Reset-Performance;$State=New-Panel;& $Hop
+$Capture=('a'*64)
+Finish-Performance ('{"connected":true,"entry_id":"active-entry","exit_id":"active-exit","ordered_capture":"'+$Capture+'","ordered_nodes":3}')
+& $Tick
+$Body=$Requests[1].Body|ConvertFrom-Json
+Check ($Body.ordered_capture-ceq$Capture-and$Body.bytes-eq8388608-and$Body.entry_id-ceq'active-entry'-and$Body.exit_id-ceq'active-exit') 'Ordered hop preflight lost exact capture or payload'
+Finish-Performance '{"hops":[{"role":"entry","router_id":"a"},{"role":"intermediate","router_id":"middle-kept","speed_label":"Cumulative path through node 2 of 3"},{"role":"exit","router_id":"c"}]}'
+Check ($State.Result.Text.Contains('middle-kept')-and$State.Result.Text.Contains('Cumulative path through node 2 of 3')) 'Ordered Performance dropped intermediate result or cumulative label'
+foreach($Ordered in @('{"ordered_nodes":3}','{"ordered_capture":"bad","ordered_nodes":3}',('{"ordered_capture":"'+$Capture+'","ordered_nodes":true}'),('{"ordered_capture":"'+$Capture+'","ordered_nodes":9}'))){
+ Reset-Performance;$State=New-Panel;& $Hop
+ $Invalid='{"connected":true,"entry_id":"a","exit_id":"b",'+$Ordered.Substring(1)
+ Finish-Performance $Invalid;& $Tick
+ Check ($Requests.Count-eq1-and$null-eq$State.Pending) 'Invalid ordered capture reached pair endpoint'
+}
+
 foreach($Invalid in @('{}','{"connected":false,"entry_id":"a","exit_id":"b"}','{"connected":"true","entry_id":"a","exit_id":"b"}','{"connected":true,"entry_id":"a","exit_id":"a"}','{"connected":true,"entry_id":" ","exit_id":"b"}','{"connected":true,"entry_id":1,"exit_id":"b"}','{"connected":true,"entry_id":"a"}')){
  Reset-Performance;$State=New-Panel;& $Hop;Finish-Performance $Invalid;& $Tick
  Check ($Requests.Count-eq1-and$null-eq$State.Pending-and$null-eq$State.Current-and$State.Buttons[0].IsEnabled) ('Invalid active graph reached speed endpoint: '+$Invalid)

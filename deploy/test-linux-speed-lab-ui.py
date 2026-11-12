@@ -30,7 +30,7 @@ def main() -> int:
         raise SystemExit("Speed Lab test requires the executable shipping app")
     if shutil.which("xvfb-run") is None:
         raise SystemExit("Speed Lab UI test needs xvfb and xauth")
-    state = {"get": 0, "post": 0, "cancelled": 0, "errors": [], "actions": [], "action_cancelled": 0, "extended": [], "extended_cancelled": 0, "selected": False, "custom_connects": 0, "mtu_request": ""}
+    state = {"get": 0, "post": 0, "cancelled": 0, "errors": [], "actions": [], "action_cancelled": 0, "extended": [], "extended_cancelled": 0, "selected": False, "custom_connects": 0, "mtu_request": "", "hop_tests": 0}
     lock = threading.Lock()
 
     class Server(http.server.ThreadingHTTPServer):
@@ -83,6 +83,9 @@ def main() -> int:
             }
             nodes=[{"id":"fixture-entry","name":"Test entry"},{"id":"fixture-exit","name":"Test exit"}]
             fixtures["/api/multihop/status"]={"connected":state["selected"],"platform_supported":True,"entry_id":"fixture-entry","exit_id":"fixture-exit","nodes":nodes,"supported_exit_modes":["shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","naive-h2","naive-h3","wg","awg2-fast","awg2-strong","ss-v2ray","split","max","wg-pq","awg2-pq"],"supported_entry_modes":["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","naive-h2","naive-h3","ss-v2ray","split","max","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"]}
+            if state["hop_tests"]:
+                fixtures["/api/multihop/status"].update(ordered_capture="a"*64 if state["hop_tests"]==1 else "bad",ordered_nodes=3)
+
             fixtures["/api/forwarding/master"]={"enabled":False}
             fixtures["/api/connection/live-latency"]={}
             if state["selected"]:
@@ -147,11 +150,16 @@ def main() -> int:
                     state["extended"].append(self.path)
                     speed_index=state["extended"].count("/api/connection/speed-test")
                 expected={"/api/profile/fastest":{"samples":50,"select":True},"/api/connection/speed-test":{"bytes":8388608},"/api/multihop/speed-test":{"entry_id":"fixture-entry","exit_id":"fixture-exit","bytes":4194304},"/api/multihop/connect":{"entry_id":"fixture-entry","entry_mode":"","exit_id":"fixture-exit","exit_mode":"shadowsocks","execution":"auto"},"/api/disconnect":{}}
+                if self.path=="/api/multihop/speed-test" and state["hop_tests"]:
+                    expected[self.path].update(ordered_capture="a"*64,bytes=8388608)
                 if body!=expected[self.path]:
                     state["errors"].append([self.path,body]);self.respond(400,b"wrong captured identity");return
                 delayed=self.path=="/api/multihop/connect" or (self.path=="/api/connection/speed-test" and speed_index>1)
                 if not self.wait_for_response(6 if delayed else .4,"extended_cancelled"):return
                 if self.path=="/api/profile/fastest":state["selected"]=True
+                if self.path=="/api/multihop/speed-test":
+                    state["hop_tests"]+=1
+                    self.respond(200,json.dumps({"hops":[{"role":"entry","router_id":"a"},{"role":"intermediate","router_id":"middle-kept","speed_label":"Cumulative path through node 2 of 3"},{"role":"exit","router_id":"c"}]}).encode());return
                 self.respond(200,b'{"ok":true,"fixture":"owned result"}')
                 return
             if self.path=="/api/multihop/live-latency":
@@ -229,7 +237,7 @@ def main() -> int:
         expected_actions = ["/api/strategy/smart-auto", "/api/strategy/smart-auto", "/api/disconnect", "/api/emergency-stop", "/api/mtu/retest"]
         if state["actions"] != expected_actions or state["action_cancelled"] != 3:
             raise SystemExit("Linux asynchronous action ordering/cancellation verification failed")
-        expected_extended=["/api/profile/fastest","/api/connection/speed-test","/api/multihop/speed-test","/api/connection/speed-test","/api/connection/speed-test","/api/multihop/connect","/api/disconnect"]
+        expected_extended=["/api/profile/fastest","/api/connection/speed-test","/api/multihop/speed-test","/api/multihop/speed-test","/api/connection/speed-test","/api/connection/speed-test","/api/multihop/connect","/api/disconnect"]
         if state["extended"]!=expected_extended or state["extended_cancelled"]!=3:
             raise SystemExit("Fastest/Performance/multihop request ownership verification failed")
         if state["custom_connects"] != 1:
