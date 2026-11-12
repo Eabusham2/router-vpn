@@ -240,6 +240,29 @@ func TestOrderedCandidateSaveHTTPRequiresFreshOriginalOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := orderedCandidateSaveRequest{RequestID: owner.id, ViewToken: owner.ordered.view.token, CandidateID: id, Name: "Next connection only", ProposedPath: nodes}
+	// Exercise expiry while this original receipt is still usable. Successful
+	// publication consumes it; no later test may revive its acceptance or rows.
+	c.mu.Lock()
+	if len(owner.ordered.results) != 1 {
+		c.mu.Unlock()
+		t.Fatal("original native receipt has no candidate row")
+	}
+	originalRow := owner.ordered.results[0]
+	expired := originalRow
+	expired.MeasuredAt = time.Now().Add(-hopmeasure.CandidateReceiptLifetime - time.Second).UnixMilli()
+	expired.ExpiresAt = expired.MeasuredAt + hopmeasure.CandidateReceiptLifetime.Milliseconds()
+	owner.ordered.results[0] = expired
+	c.mu.Unlock()
+	if expiredSave := orderedCandidateHTTP(t, f.a, "/api/multihop/prefix-candidates/save-profile", q); expiredSave.Code != 409 {
+		t.Fatal("expired receipt saved", expiredSave.Code, expiredSave.Body.String())
+	}
+	c.mu.Lock()
+	if !owner.ordered.accepted || len(owner.ordered.results) != 1 {
+		c.mu.Unlock()
+		t.Fatal("expiry fixture lost original unconsumed receipt")
+	}
+	owner.ordered.results[0] = originalRow
+	c.mu.Unlock()
 	original, _ := json.Marshal(f.a.profiles)
 	command := f.a.cmd
 	w := httptest.NewRecorder()
@@ -277,11 +300,6 @@ func TestOrderedCandidateSaveHTTPRequiresFreshOriginalOwner(t *testing.T) {
 	}
 	if w = orderedCandidateHTTP(t, f.a, "/api/multihop/prefix-candidates/save-profile", q); w.Code != 409 {
 		t.Fatal("same receipt saved twice", w.Body.String())
-	}
-	owner.ordered.accepted = true
-	owner.ordered.results[0].ExpiresAt = time.Now().Add(-time.Second).UnixMilli()
-	if w = orderedCandidateHTTP(t, f.a, "/api/multihop/prefix-candidates/save-profile", q); w.Code != 409 {
-		t.Fatal("expired receipt saved", w.Body.String())
 	}
 }
 
