@@ -24,7 +24,7 @@ struct IOSNodeCandidateResult: Decodable {
         var valid: Bool {
             let values = [min_ms, median_ms, average_ms, p90_ms, max_ms, jitter_ms]
             return samples == 50 && values.allSatisfy({ $0.isFinite && $0 >= 0 && $0 <= 60000 }) && min_ms > 0 &&
-                min_ms <= median_ms && median_ms <= p90_ms && p90_ms <= max_ms && min_ms <= average_ms && average_ms <= max_ms
+                min_ms <= median_ms && median_ms <= p90_ms && p90_ms <= max_ms && min_ms <= average_ms && average_ms <= max_ms && jitter_ms <= max_ms - min_ms
         }
     }
     struct Benchmark: Decodable {

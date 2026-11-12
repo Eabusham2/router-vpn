@@ -96,7 +96,8 @@ class Tests(unittest.TestCase):
                        'await cleanup.value', '["multihop-libbox", "external-libbox"]'):
             self.assertIn(marker,ui)
         view=(ROOT/'ios/RouterVPN/App/IOSSpeedLabView.swift').read_text()
-        self.assertIn('.disabled(runDisabled || hopProbe.running)',view)
+        self.assertIn('.disabled(runDisabled || hopProbe.running || candidateProbe.running)',view)
+        self.assertIn('IOSNodeCandidatesCard(probe: candidateProbe, otherTestRunning: runner.running || hopProbe.running)',view)
     def test_android_real_service_owns_callbacks_and_metadata(self):
         service=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java').read_text()
         graph=service.split('if(hopMetadata!=null){',1)[1].split('long performanceServices',1)[0]

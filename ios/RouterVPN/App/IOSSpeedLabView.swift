@@ -5,6 +5,7 @@ struct IOSSpeedLabView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var runner = IOSSpeedLabRunner()
     @StateObject private var hopProbe = IOSHopMeasurements()
+    @StateObject private var candidateProbe = IOSNodeCandidates()
 
     @State private var scope = IOSSpeedLabRunRequest.Scope.current
     @State private var topology = IOSSpeedLabRunRequest.Topology.systemDirect
@@ -28,7 +29,8 @@ struct IOSSpeedLabView: View {
                     hero
                     pathCard
                     durationCard
-                    IOSHopMeasurementsCard(probe: hopProbe, otherTestRunning: runner.running)
+                    IOSHopMeasurementsCard(probe: hopProbe, otherTestRunning: runner.running || candidateProbe.running)
+                    IOSNodeCandidatesCard(probe: candidateProbe, otherTestRunning: runner.running || hopProbe.running)
                     if let result = runner.lastResult { resultCards(result) }
                     if !runner.lastError.isEmpty { errorCard }
                     runCard
@@ -44,7 +46,7 @@ struct IOSSpeedLabView: View {
         .onChange(of: nodeID) { _ in loadAutoRequirementsFromNode() }
         .onChange(of: minSeconds) { value in if maxSeconds < value { maxSeconds = value } }
         .onChange(of: maxSeconds) { value in if minSeconds > value { minSeconds = value } }
-        .onDisappear { runner.cancel(); hopProbe.cancel() }
+        .onDisappear { runner.cancel(); hopProbe.cancel(); candidateProbe.cancel() }
     }
 
     private var hero: some View {
@@ -241,7 +243,7 @@ struct IOSSpeedLabView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(runDisabled || hopProbe.running)
+            .disabled(runDisabled || hopProbe.running || candidateProbe.running)
             if runner.running {
                 Button("Cancel and restore", role: .cancel) { runner.cancel() }
                     .buttonStyle(.bordered)

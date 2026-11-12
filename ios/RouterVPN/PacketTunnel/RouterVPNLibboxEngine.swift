@@ -15,6 +15,7 @@ final class RouterVPNLibboxEngine {
     private var multihop: LibboxRouterMultihop?
     private var nodeChain: LibboxRouterNodeChain?
     private var nodeChainDelivery: NodeChainDelivery?
+    private var nodeCandidate: RouterVPNNodeCandidateSession?
     private var pendingNodeChainCleanup: NodeChainCleanup?
     private var importedMultihop = false
     private var multihopExecutionSource: IOSMultihopExecution.Source?
@@ -209,12 +210,12 @@ final class RouterVPNLibboxEngine {
         ownershipGeneration = UUID()
         let plan = multihop, owned = server, health = multihopHealth, directory = runtimeRoot, probe = hopMeasurement, paddingHealth = performanceHealth, torDelivery = torProofDelivery, capturedTor = torOwned, torHealth = self.torHealth
         let externalDelivery = externalProofDelivery, externalHealth = self.externalHealth, capturedExternal = externalPolicy != nil
-        let chain = nodeChain, chainDelivery = nodeChainDelivery
+        let chain = nodeChain, chainDelivery = nodeChainDelivery, candidate = nodeCandidate
         let dnsProbe = dnsMeasurement; dnsMeasurement = nil
         var chainCleanup: NodeChainCleanup?
         if let chain {
             chainCleanup = NodeChainCleanup(server: owned, platform: platform, directory: directory, plan: chain,
-                delivery: chainDelivery, measurement: probe, dns: dnsProbe)
+                delivery: chainDelivery, measurement: probe, dns: dnsProbe, candidate: candidate)
             pendingNodeChainCleanup = chainCleanup
             Self.measurementRetirement.retain(chainCleanup!)
         }
@@ -228,7 +229,7 @@ final class RouterVPNLibboxEngine {
         torProofDelivery = nil
         self.torHealth = nil
         externalProofDelivery = nil; self.externalHealth = nil; externalPolicy = nil
-        nodeChain = nil; nodeChainDelivery = nil
+        nodeChain = nil; nodeChainDelivery = nil; nodeCandidate = nil
         ownershipLock.unlock()
         chainDelivery?.cancel()
         torDelivery?.cancel()
@@ -344,22 +345,23 @@ final class RouterVPNLibboxEngine {
         private let delivery: NodeChainDelivery?
         private let measurement: LibboxRouterHopMeasurement?
         private let dns: RouterVPNDNSMeasurementSession?
+        private let candidate: RouterVPNNodeCandidateSession?
         private var nativeClosed = false, resourcesClosed = false, complete = false
         init(server: LibboxCommandServer?, platform: RouterVPNLibboxPlatform, directory: URL?, plan: LibboxRouterNodeChain,
-             delivery: NodeChainDelivery?, measurement: LibboxRouterHopMeasurement?, dns: RouterVPNDNSMeasurementSession?) {
+             delivery: NodeChainDelivery?, measurement: LibboxRouterHopMeasurement?, dns: RouterVPNDNSMeasurementSession?, candidate: RouterVPNNodeCandidateSession? = nil) {
             self.server = server; self.platform = platform; self.directory = directory; self.plan = plan
-            self.delivery = delivery; self.measurement = measurement; self.dns = dns
+            self.delivery = delivery; self.measurement = measurement; self.dns = dns; self.candidate = candidate
         }
         func close() throws {
             lock.lock(); defer { lock.unlock() }
             if complete { return }
             delivery?.cancel()
             plan.networkChanged(); platform.mtu.invalidate()
-            measurement?.networkChanged(); dns?.networkChanged()
+            measurement?.networkChanged(); dns?.networkChanged(); candidate?.invalidate()
             // Cancel all original I/O before closing the Box. A failed first
             // join is retried after that exact service has released its sockets.
             try? plan.close(); try? platform.mtu.stopChecked()
-            try? measurement?.close(); try? dns?.close()
+            try? measurement?.close(); try? dns?.close(); try? candidate?.close()
             var nativeFailure: Error?
             if !nativeClosed {
                 if let server {
@@ -374,6 +376,7 @@ final class RouterVPNLibboxEngine {
             do { try plan.close() } catch { drainFailure = error }
             do { try measurement?.close() } catch { if drainFailure == nil { drainFailure = error } }
             do { try dns?.close() } catch { if drainFailure == nil { drainFailure = error } }
+            do { try candidate?.close() } catch { if drainFailure == nil { drainFailure = error } }
             do { try platform.mtu.stopChecked() } catch { if drainFailure == nil { drainFailure = error } }
             if let failure = nativeFailure ?? drainFailure { throw failure }
             if !resourcesClosed { server?.close(); platform.reset(); resourcesClosed = true }
@@ -1263,6 +1266,74 @@ final class RouterVPNLibboxEngine {
         ownershipLock.unlock()
         guard current else { try probe.close(); throw error("External measurement belongs to a retired native generation") }
     }
+    func candidateMeasurementRequest(operation: String, request: String, session: String,
+                                     ownerRequest: String, prefix: String, candidate: String) -> Data? {
+        func reply(_ value: [String: Any]) -> Data? { try? JSONSerialization.data(withJSONObject: value) }
+        if operation == "candidate-close" {
+            guard session == settingsEpoch, request == ownerRequest, prefix.isEmpty, candidate.isEmpty else { return nil }
+            let drained = RouterVPNNodeCandidateRegistry.shared.close(epoch: session, request: ownerRequest)
+            if drained {
+                ownershipLock.lock(); if nodeCandidate?.request == ownerRequest { nodeCandidate = nil }; ownershipLock.unlock()
+            }
+            return reply(["session_id": session, "owner_request": ownerRequest, "request_id": request, "closed": drained])
+        }
+        ownershipLock.lock()
+        let plan = nodeChain, owned = server, generation = ownershipGeneration
+        let available = nodeChainDelivery != nil && !starting && !permanentlyStopped
+        ownershipLock.unlock()
+        guard available, let plan, let owned else { return nil }
+        if operation == "candidate-info" {
+            guard session.isEmpty, ownerRequest.isEmpty, prefix.isEmpty, candidate.isEmpty,
+                  let source = try? IOSNodeChainCapture(plan: plan),
+                  let mtu = platform.mtu.request(operation: "mtu-status", request: request, session: ""),
+                  let mtuValue = try? JSONSerialization.jsonObject(with: mtu) as? [String: Any],
+                  mtuValue["ack_id"] as? String == request, let mtuSession = mtuValue["session_id"] as? String else { return nil }
+            let safe: [[String: Any]] = source.members.enumerated().map { position, member in
+                ["position": position, "profile_id": member.id, "node_id": member.profile["node_proof_id"] as? String ?? "", "mode": member.mode]
+            }
+            return reply(["session_id": settingsEpoch, "request_id": request, "mtu_session_id": mtuSession,
+                "source_sha256": plan.sourceSHA256(), "config_sha256": plan.configSHA256(), "proofs": safe])
+        }
+        guard session == settingsEpoch, IOSCandidateCatalogPublication.validRequest(ownerRequest) else { return nil }
+        if operation == "candidate-open" {
+            guard request == ownerRequest, candidate.isEmpty, let position = Int32(prefix), (0...7).contains(position),
+                  !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
+            let originalSource = try? IOSCandidateCatalogPublication.shared.reopen(request: ownerRequest)
+            ownershipLock.lock()
+            var captured = nodeCandidate
+            if captured == nil, nodeChain === plan, server === owned, ownershipGeneration == generation, !permanentlyStopped,
+               let source = originalSource {
+                let proposed = RouterVPNNodeCandidateSession(plan: plan, server: owned, prefix: position,
+                    epoch: settingsEpoch, source: source, publication: IOSCandidateCatalogPublication.shared, current: { [weak self] in
+                        guard let self else { return false }
+                        self.ownershipLock.lock(); defer { self.ownershipLock.unlock() }
+                        return self.nodeChain === plan && self.server === owned && self.ownershipGeneration == generation &&
+                            !self.starting && !self.permanentlyStopped
+                    })
+                if RouterVPNNodeCandidateRegistry.shared.retain(proposed) { nodeCandidate = proposed; captured = proposed }
+            }
+            ownershipLock.unlock()
+            guard let captured, captured.request == ownerRequest else { return nil }
+            do {
+                let metadata = try captured.open()
+                return reply(["session_id": session, "owner_request": ownerRequest, "request_id": request, "metadata": metadata])
+            } catch { return nil } // Registry retains failed factory until exact Close joins.
+        }
+        ownershipLock.lock(); let captured = nodeCandidate; ownershipLock.unlock()
+        guard let captured, captured.request == ownerRequest, prefix.isEmpty else { return nil }
+        do {
+            let raw: String
+            if operation == "candidate-start" {
+                guard !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
+                raw = try captured.start(request: request, candidate: candidate)
+            } else if operation == "candidate-status", candidate.isEmpty { raw = try captured.status(request: request) }
+            else if operation == "candidate-cancel", candidate.isEmpty { captured.cancel(request: request); raw = try captured.status(request: request) }
+            else { return nil }
+            guard raw.utf8.count <= 65536 else { return nil }
+            return reply(["session_id": session, "owner_request": ownerRequest, "request_id": request, "status": raw])
+        } catch { return nil }
+    }
+
     func hopMeasurementRequest(operation: String, request: String, session: String) -> Data? {
         if operation == "hop-measure-info" {
             guard session.isEmpty else { return nil }

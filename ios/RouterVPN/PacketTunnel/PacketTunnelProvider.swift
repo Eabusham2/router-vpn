@@ -89,6 +89,21 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
            request == ["operation": "multihop-progress"] {
             completionHandler(currentTorComparison()?.progressData() ?? libboxEngine?.multihopProgress()); return
         }
+        if messageData.count <= 1024,
+           let body = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
+           Set(body.keys) == Set(["operation", "request_id", "session_id", "owner_request", "prefix", "candidate"]),
+           let operation = body["operation"], ["candidate-info", "candidate-open", "candidate-start", "candidate-status", "candidate-cancel", "candidate-close"].contains(operation),
+           let request = body["request_id"], IOSCandidateCatalogPublication.validRequest(request),
+           let session = body["session_id"], operation == "candidate-info" && session.isEmpty || UUID(uuidString: session) != nil,
+           let ownerRequest = body["owner_request"], let prefix = body["prefix"], let candidate = body["candidate"] {
+            if operation == "candidate-close", request == ownerRequest, prefix.isEmpty, candidate.isEmpty,
+               IOSCandidateCatalogPublication.validRequest(ownerRequest), libboxEngine == nil {
+                let drained = RouterVPNNodeCandidateRegistry.shared.close(epoch: session, request: ownerRequest)
+                completionHandler(try? JSONSerialization.data(withJSONObject: ["session_id": session, "owner_request": ownerRequest, "request_id": request, "closed": drained])); return
+            }
+            completionHandler(libboxEngine?.candidateMeasurementRequest(operation: operation, request: request,
+                session: session, ownerRequest: ownerRequest, prefix: prefix, candidate: candidate)); return
+        }
         if messageData.count <= 256,
            let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
            Set(request.keys) == Set(["operation", "request_id", "session_id"]),

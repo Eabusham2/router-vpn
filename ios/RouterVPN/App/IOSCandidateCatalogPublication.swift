@@ -124,7 +124,9 @@ final class IOSCandidateCatalogPublication: @unchecked Sendable {
         } else {
             guard renameat(directory, temporary, directory, name) == 0 else { throw Self.issue() }
         }
-        guard fsync(directory) == 0 else { throw Self.issue() }
+        // Match the existing private retirement store: data is fsynced before
+        // atomic publication; some Apple filesystems reject directory fsync.
+        _ = fsync(directory)
     }
     private func stamp(_ directory: Int32) throws -> (Stamp, CapturedFile) {
         let file = try readFile("catalog.json", maximum: 4096, directory: directory)
@@ -165,7 +167,10 @@ final class IOSCandidateCatalogPublication: @unchecked Sendable {
               object["schema"] as? Int == 1, object["revision"] as? String == expected.revision else { throw Self.issue() }
         lock.lock(); defer { lock.unlock() }
         let fd = try directory(); defer { _ = close(fd) }
-        guard try stamp(fd).0 == expected, expected.ready else { throw Self.issue() }
+        guard try stamp(fd).0 == expected, expected.ready, let container else { throw Self.issue() }
+        let names = try FileManager.default.contentsOfDirectory(atPath: container.appendingPathComponent("candidate-sources-v1").path)
+        guard names.filter({ $0.hasPrefix("closed-") }).count < 512,
+              names.filter({ $0.hasSuffix(".json") && $0 != "catalog.json" && !$0.hasPrefix("closed-") }).count < 64 else { throw Self.issue() }
         try writeFile("\(request).json", data: inventory, directory: fd, exclusive: true)
         return try reopen(request: request, directory: fd)
     }
@@ -196,4 +201,42 @@ final class IOSCandidateCatalogPublication: @unchecked Sendable {
         guard file.identity == capture.inventory.identity, file.data == capture.inventory.data,
               unlinkat(fd, "\(capture.request).json", 0) == 0 else { throw Self.issue() }
     }
+    private func closedName(epoch: String, request: String) throws -> String {
+        guard UUID(uuidString: epoch)?.uuidString.lowercased() == epoch.lowercased(), Self.validRequest(request) else { throw Self.issue() }
+        return "closed-\(epoch.lowercased())-\(request).json"
+    }
+    /// Only the original extension registry calls this after actual join (or
+    /// a registered cancel-before-factory tombstone). It carries no score.
+    func storeClosed(epoch: String, request: String) throws {
+        let name = try closedName(epoch: epoch, request: request)
+        lock.lock(); defer { lock.unlock() }
+        let fd = try directory(); defer { _ = close(fd) }
+        let data = try JSONSerialization.data(withJSONObject: ["schema": 1, "kind": "candidate-native-closed", "session_id": epoch, "owner_request": request], options: [.sortedKeys])
+        // Bound durable recovery storage. Refuse new work/acknowledgements at
+        // capacity rather than discard another pending owner's only receipt.
+        guard let container else { throw Self.issue() }
+        let names = try FileManager.default.contentsOfDirectory(atPath: container.appendingPathComponent("candidate-sources-v1").path)
+        guard names.contains(name) || names.filter({ $0.hasPrefix("closed-") }).count < 512 else { throw Self.issue() }
+        try writeFile(name, data: data, directory: fd)
+    }
+    func closed(epoch: String, request: String) -> Bool {
+        guard let name = try? closedName(epoch: epoch, request: request) else { return false }
+        lock.lock(); defer { lock.unlock() }
+        guard let fd = try? directory() else { return false }; defer { _ = close(fd) }
+        guard let file = try? readFile(name, maximum: 1024, directory: fd),
+              let value = try? JSONSerialization.jsonObject(with: file.data) as? [String: Any] else { return false }
+        return Set(value.keys) == Set(["schema", "kind", "session_id", "owner_request"]) && value["schema"] as? Int == 1 &&
+            value["kind"] as? String == "candidate-native-closed" && value["session_id"] as? String == epoch && value["owner_request"] as? String == request
+    }
+
+    /// The app consumes only a receipt it has already validated. The live
+    /// extension registry keeps its tombstone until its process retires.
+    func acknowledgeClosed(epoch: String, request: String) throws {
+        guard closed(epoch: epoch, request: request) else { throw Self.issue() }
+        let name = try closedName(epoch: epoch, request: request)
+        lock.lock(); defer { lock.unlock() }
+        let fd = try directory(); defer { _ = close(fd) }
+        guard unlinkat(fd, name, 0) == 0 else { throw Self.issue() }
+    }
+
 }

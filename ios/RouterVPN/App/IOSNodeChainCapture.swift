@@ -118,7 +118,8 @@ struct IOSNodeChainCapture {
         } catch { try? plan.close(); throw error }
     }
 
-    private init(plan: LibboxRouterNodeChain) throws {
+    // Inspect the retained original source without constructing another native plan.
+    init(plan: LibboxRouterNodeChain) throws {
         var failure: NSError?
         let returned: String? = plan.launchInput(&failure)
         guard failure == nil, let launch = returned, !launch.isEmpty else {
