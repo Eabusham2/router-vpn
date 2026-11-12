@@ -1,0 +1,255 @@
+//go:build darwin
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/macosprocess"
+)
+
+// Only native capture/handshake read observations are doubled. The manifest
+// is parsed by the shipping complete compiler and real private-root identity
+// is checked. This fixture makes no installed-image, PF, or utun claim.
+type routerVPNDarwinChainCaptureRead struct {
+	selection macosprocess.Selection
+	files     []*os.File
+	failure   bool
+	reads     int
+	after     func()
+}
+
+func (capture *routerVPNDarwinChainCaptureRead) Current(ctx context.Context) error {
+	capture.reads++
+	if capture.after != nil {
+		capture.after()
+	}
+	if capture.failure {
+		return errors.New("original capture retired")
+	}
+	return ctx.Err()
+}
+func (capture *routerVPNDarwinChainCaptureRead) Selection() macosprocess.Selection {
+	return capture.selection
+}
+func (capture *routerVPNDarwinChainCaptureRead) Files() []*os.File {
+	return append([]*os.File(nil), capture.files...)
+}
+
+type routerVPNDarwinChainBootstrapRead struct{ failure bool }
+
+func (bootstrap *routerVPNDarwinChainBootstrapRead) Current(ctx context.Context) error {
+	if bootstrap.failure {
+		return errors.New("original handshake retired")
+	}
+	return ctx.Err()
+}
+func routerVPNDarwinChainControlFixture(t *testing.T) (*routerVPNDarwinNodeChainControl, *routerVPNExternalFiles,
+	*routerVPNDarwinChainCaptureRead, *routerVPNDarwinChainBootstrapRead) {
+	t.Helper()
+	policy := desktopNodeChainCommandPolicy(t, 3, "darwin", 1400)
+	input, err := policy.NodeChain().LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := desktopImportedCommandFiles(t, map[string]string{"node-chain-source.json": input, "sing-box.json": policy.Config()})
+	root, err := files.root.Open(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	meta := policy.Metadata()
+	selection := macosprocess.Selection{Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256,
+		CallerUID: 501, WorkspaceDevice: 7, WorkspaceInode: 9, Family: macosprocess.NodeChainFamily,
+		EngineSHA256: strings.Repeat("1", 64), ControllerSHA256: strings.Repeat("2", 64),
+		CatalogSHA256: strings.Repeat("3", 64), InputsSHA256: strings.Repeat("4", 64)}
+	capture := &routerVPNDarwinChainCaptureRead{selection: selection, files: make([]*os.File, 7)}
+	capture.files[0], capture.files[3], capture.files[4] = root, root, root
+	bootstrap := &routerVPNDarwinChainBootstrapRead{}
+	transfer, err := macosprocess.NodeChainTransferSHA256(selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control := &routerVPNDarwinNodeChainControl{capture: capture, bootstrap: bootstrap, selection: selection, transfer: transfer,
+		scope: macosprocess.Scope{Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, Workspace: files.root.Name(), Family: macosprocess.NodeChainFamily}}
+	return control, files, capture, bootstrap
+}
+func routerVPNDarwinChainControlContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+func TestRouterVPNNodeChainDarwinOriginalControl(t *testing.T) {
+	t.Run("exact", func(t *testing.T) {
+		control, files, capture, _ := routerVPNDarwinChainControlFixture(t)
+		ctx := routerVPNDarwinChainControlContext(t)
+		policy, err := control.compile(ctx, files)
+		if err != nil || policy == nil || control.policy != policy || capture.reads < 2 ||
+			policy.Metadata().RestoredMTU != 1400 || control.current(ctx) != nil {
+			t.Fatal("original native capture did not bind complete restored manifest", err)
+		}
+		if prepared, err := control.prepare(ctx, policy); err != nil || prepared == nil {
+			t.Fatal(err)
+		}
+		if again, err := control.compile(ctx, files); err == nil || again != nil {
+			t.Fatal("native capture compiled a second policy owner")
+		}
+	})
+	t.Run("policy-pointer", func(t *testing.T) {
+		control, files, _, _ := routerVPNDarwinChainControlFixture(t)
+		ctx := routerVPNDarwinChainControlContext(t)
+		policy, err := control.compile(ctx, files)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input, _ := policy.NodeChain().LaunchInput()
+		foreign, err := mobilemultihop.ParseDesktopNodeChainLaunchInput(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if prepared, err := control.prepare(ctx, foreign); err == nil || prepared != nil {
+			t.Fatal("equal metadata replaced original policy pointer")
+		}
+	})
+	t.Run("replacement-root", func(t *testing.T) {
+		control, files, capture, _ := routerVPNDarwinChainControlFixture(t)
+		foreign, err := os.Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer foreign.Close()
+		capture.files[0] = foreign
+		if policy, err := control.compile(routerVPNDarwinChainControlContext(t), files); err == nil || policy != nil {
+			t.Fatal("replacement workspace inherited original command authority")
+		}
+	})
+	t.Run("late-source", func(t *testing.T) {
+		control, files, capture, _ := routerVPNDarwinChainControlFixture(t)
+		capture.after = func() {
+			if capture.reads == 2 {
+				capture.failure = true
+			}
+		}
+		if policy, err := control.compile(routerVPNDarwinChainControlContext(t), files); err == nil || policy != nil || control.policy != nil {
+			t.Fatal("source retired during replay was published as current")
+		}
+	})
+	t.Run("missing-authority", func(t *testing.T) {
+		control, files, capture, _ := routerVPNDarwinChainControlFixture(t)
+		ctx := routerVPNDarwinChainControlContext(t)
+		policy, err := control.compile(ctx, files)
+		if err != nil {
+			t.Fatal(err)
+		}
+		capture.files[4] = nil
+		if prepared, err := control.prepare(ctx, policy); err == nil || prepared != nil {
+			t.Fatal("missing original guardian lock description was replaced")
+		}
+	})
+	for _, kind := range []string{"capture", "handshake", "retiring"} {
+		t.Run(kind, func(t *testing.T) {
+			control, files, capture, bootstrap := routerVPNDarwinChainControlFixture(t)
+			ctx := routerVPNDarwinChainControlContext(t)
+			policy, err := control.compile(ctx, files)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "capture":
+				capture.failure = true
+			case "handshake":
+				bootstrap.failure = true
+			case "retiring":
+				control.retiring.Store(true)
+			}
+			if control.current(ctx) == nil {
+				t.Fatal("retired original authority stayed healthy")
+			}
+			if prepared, err := control.prepare(ctx, policy); err == nil || prepared != nil {
+				t.Fatal("retired original authority prepared another native source")
+			}
+		})
+	}
+}
+func TestRouterVPNNodeChainDarwinSelectionBinding(t *testing.T) {
+	for _, field := range []string{"session", "source", "config", "uid", "device", "inode", "engine", "controller", "catalog", "inputs", "family"} {
+		t.Run(field, func(t *testing.T) {
+			control, files, capture, _ := routerVPNDarwinChainControlFixture(t)
+			switch field {
+			case "session":
+				capture.selection.Session = strings.Repeat("a", 32)
+			case "source":
+				capture.selection.Source = strings.Repeat("a", 64)
+			case "config":
+				capture.selection.Config = strings.Repeat("a", 64)
+			case "uid":
+				capture.selection.CallerUID++
+			case "device":
+				capture.selection.WorkspaceDevice++
+			case "inode":
+				capture.selection.WorkspaceInode++
+			case "engine":
+				capture.selection.EngineSHA256 = strings.Repeat("a", 64)
+			case "controller":
+				capture.selection.ControllerSHA256 = strings.Repeat("a", 64)
+			case "catalog":
+				capture.selection.CatalogSHA256 = strings.Repeat("a", 64)
+			case "inputs":
+				capture.selection.InputsSHA256 = strings.Repeat("a", 64)
+			case "family":
+				capture.selection.Family = macosprocess.ExternalFamily
+			}
+			if policy, err := control.compile(routerVPNDarwinChainControlContext(t), files); err == nil || policy != nil {
+				t.Fatal("changed original inherited selection reached policy replay")
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeChainDarwinEarlyStop(t *testing.T) {
+	t.Run("receipt-before-acquisition", func(t *testing.T) {
+		control, _, _, _ := routerVPNDarwinChainControlFixture(t)
+		if control.native != nil || control.retirementReceipt() == nil {
+			t.Fatal("unpublished no-resource retirement acknowledged authenticated Stop")
+		}
+	})
+	t.Run("authenticated-before-run", func(t *testing.T) {
+		control, files, capture, _ := routerVPNDarwinChainControlFixture(t)
+		acknowledged := false
+		err := routerVPNExternalControlledLifetime(context.Background(), func(ctx context.Context) error {
+			// The actual joined command does not begin until authenticated
+			// Stop has cancelled it, before source parsing or native creation.
+			<-ctx.Done()
+			return routerVPNRunDarwinNodeChain(ctx, control)
+		}, func(ctx context.Context, retire func(context.Context) error) error {
+			if err := retire(ctx); err != nil {
+				return err
+			}
+			acknowledged = true
+			return nil
+		}, control.retirementReceipt, func() error { return nil })
+		if err != nil || !acknowledged || control.retirementReceipt() != nil ||
+			control.policy != nil || capture.reads != 0 || control.native == nil ||
+			!control.native.joined || control.native.manager != nil || control.native.source != nil ||
+			control.native.proof != nil || len(control.native.components) != 0 {
+			t.Fatal("early authenticated Stop omitted its original no-resource retirement", err)
+		}
+		raw, err := files.read("stopped.json", 1024)
+		var actual struct {
+			routerVPNExternalStop
+			Closed bool `json:"closed"`
+		}
+		if err != nil || json.Unmarshal(raw, &actual) != nil || actual.Schema != 1 ||
+			actual.Session != control.scope.Session || actual.SourceSHA256 != control.scope.Config || !actual.Closed {
+			t.Fatal("early stopped receipt lost original session/config authority", err)
+		}
+	})
+}

@@ -7,6 +7,53 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## November 12: authenticated ordered Darwin child and retirement receipts
+
+The generated native command now accepts the separately typed Darwin inherited
+control family. Explicit Windows/Linux predecessor, transfer or MTU flags are
+refused, including explicitly supplied default values. The child authenticates
+the original process capture and bootstrap, reopens only the same inherited
+workspace object, replays the complete sealed ordered source and exact graph,
+and retains the original installed/process lock descriptions. Restored MTU comes
+from that authenticated manifest rather than a fresh preference or flag.
+
+The child prepares and activates the actual native Box and physical source,
+then runs the existing selected-DNS, every-node proof and owned MTU loop. Darwin
+selected-DNS readiness is admitted only for a concrete validated ordered policy
+and canonical OS-assigned utun name; ordinary node/imported/external policies
+cannot acquire that capability by copying public metadata. Other targets keep
+their existing interface and cover-service contracts.
+
+Retirement joins the original proof owner, retained inbound/TUN components and
+physical source before the one-shot Box close. Progress survives bounded retry;
+an ambiguous opaque close remains a failure. The exact stopped receipt is
+published before authenticated Stop acknowledgement. Even a Stop that arrives
+before semantic source parsing or native acquisition must join an explicitly
+retained no-resource owner and publish that receipt in its original workspace.
+A foreign receipt writer cannot mutate another workspace or prevent already
+owned native resources from joining. Failed publication retains the process
+authority and does not repeat completed component closes on the next retry.
+
+The required component runner adds the child, source and readiness cases to its
+original inbound/manager inventory: 133 exact verdicts and 16 compiled causal
+controls, with the existing 120-second test, 600-second process and 15-second
+cleanup limits unchanged. The six strict runner tests passed locally after
+integration. The shared readiness/chain-readiness race gate passed in 114.143
+seconds, and three compiled controls rejected an ordinary Darwin policy, wrong
+target and foreign interface at their intended assertions. All ten Go source
+and test files were parsed/formatted; frozen Git blob identities were checked
+independently before copying into current main.
+
+Fresh normal pinned preparation followed by the complete Darwin/ARM64
+cross-compiles passed for the actual encrypted peer package, cmd/sing-box,
+protocol/tun and adapter/inbound, including this child and the separately
+authored native acceptance harness. These are compiler and focused local test
+results. The full 133-case Darwin execution, real encrypted native child tests,
+installed-host tests and final release remain separate pending evidence.
+The public ordered macOS connection gate is not enabled by this source unit.
+The previously published generated-source ownership repair and actual manifest
+preflight tests are preserved.
+
 ## November 12: original Darwin MTU adapter and bounded monitor coordination
 
 The ordered macOS host now supplies the controller's actual MTU adapter. It

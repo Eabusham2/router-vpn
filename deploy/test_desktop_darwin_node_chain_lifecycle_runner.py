@@ -26,7 +26,8 @@ def wire(package, cases):
 
 class DarwinLifecycleRunnerTests(unittest.TestCase):
     def test_exact_required_inventory_and_bounds(self):
-        for package, count in (("protocol/tun", 18), ("adapter/inbound", 12)):
+        for package, count in (("protocol/tun", 18), ("adapter/inbound", 12), ("cmd/sing-box", 70),
+                               ("experimental/libbox/routervpn/mobilemultihop", 33)):
             validator = RUNNER.receipt(package)
             cases = RUNNER.PHASES[package]
             output = "\n".join(json.dumps(row) for row in wire(package, cases))
@@ -35,7 +36,7 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
             self.assertEqual(validator.PROCESS_TIMEOUT, RUNNER.PROCESS_TIMEOUT)
         self.assertEqual(RUNNER.TEST_TIMEOUT, "120s")
         self.assertEqual(RUNNER.PROCESS_TIMEOUT, 600)
-        self.assertEqual(len(RUNNER.MUTATIONS), 5)
+        self.assertEqual(len(RUNNER.MUTATIONS), 16)
 
     def test_missing_original_run_and_package_receipt(self):
         for package, cases in RUNNER.PHASES.items():
@@ -46,7 +47,7 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
                     RUNNER.receipt(package).require_pass("\n".join(json.dumps(r) for r in changed), cases)
 
     def test_phase_cannot_substitute_for_other_original(self):
-        first, second = RUNNER.PHASES
+        first, second = list(RUNNER.PHASES)[:2]
         output = "\n".join(json.dumps(row) for row in wire(first, RUNNER.PHASES[first]))
         with self.assertRaises(ValueError):
             RUNNER.receipt(second).require_pass(output, RUNNER.PHASES[second])
@@ -60,6 +61,14 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
             for changed in (roots[:-1], [*roots, roots[0]], [*roots[:-1], "TestForeign"]):
                 with self.assertRaises(ValueError):
                     RUNNER.discover("\n".join(changed), cases)
+
+    def test_every_control_names_actual_shipping_boundary(self):
+        original_by_target = {target: ROOT / source for source, target in RUNNER.COPIES.items()}
+        for label, _, target, before, after, _, _ in RUNNER.MUTATIONS:
+            self.assertIn(target, original_by_target, label)
+            source = original_by_target[target].read_text()
+            self.assertEqual(source.count(before), 1, label)
+            self.assertNotEqual(before, after, label)
 
     def test_every_control_requires_exact_runtime_witness(self):
         for _, package, _, _, _, witness, message in RUNNER.MUTATIONS:

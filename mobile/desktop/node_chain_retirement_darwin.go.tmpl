@@ -1,0 +1,164 @@
+//go:build darwin
+
+package main
+
+import (
+	"context"
+	"errors"
+	"io"
+	"sync"
+
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	"github.com/sagernet/sing-box/routervpn/macosprocess"
+)
+
+type routerVPNDarwinNodeChainManager interface {
+	RouterVPNCloseDarwinNodeChainTunContext(context.Context) error
+}
+type routerVPNDarwinNodeChainSource interface{ CloseSource(context.Context) error }
+type routerVPNDarwinNodeChainProofOwner interface{ close(context.Context) error }
+
+// A component is the exact Box or partial manager returned by this command's
+// one constructor. A successful opaque Close is never repeated; an ambiguous
+// Close error remains a failure rather than acquiring another object's close.
+type routerVPNDarwinNodeChainComponent struct {
+	original        io.Closer
+	entered, joined bool
+	failure         error
+}
+
+func (part *routerVPNDarwinNodeChainComponent) close(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil || part == nil || part.original == nil {
+		return routerVPNExternalFailure
+	}
+	if part.joined {
+		return nil
+	}
+	if part.entered {
+		return errors.Join(part.failure, errors.New("Darwin ordered component retains an ambiguous original close"))
+	}
+	part.entered = true
+	part.failure = part.original.Close()
+	if part.failure != nil {
+		return part.failure
+	}
+	part.joined = true
+	return ctx.Err()
+}
+
+// The single joined command loop assigns these original resources. Cleanup
+// never discovers a later manager, policy, interface name or service. Its
+// partial progress survives caller cancellation and failed native source join.
+type routerVPNDarwinNodeChainNative struct {
+	mu                                               sync.Mutex
+	cancel                                           context.CancelFunc
+	proof                                            routerVPNDarwinNodeChainProofOwner
+	manager                                          routerVPNDarwinNodeChainManager
+	managerRequired                                  bool
+	source                                           routerVPNDarwinNodeChainSource
+	components                                       []routerVPNDarwinNodeChainComponent
+	proofJoined, managerJoined, sourceJoined, joined bool
+}
+
+func (owner *routerVPNDarwinNodeChainNative) close(ctx context.Context) error {
+	if owner == nil || ctx == nil || ctx.Err() != nil {
+		return routerVPNExternalFailure
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return routerVPNExternalFailure
+	}
+	if err := desktopnetwork.LockContext(ctx, &owner.mu); err != nil {
+		return err
+	}
+	defer owner.mu.Unlock()
+	if owner.joined {
+		return nil
+	}
+	if owner.managerRequired && owner.manager == nil {
+		return errors.New("Darwin ordered cleanup lost its original native manager")
+	}
+	if !owner.proofJoined {
+		if owner.proof != nil {
+			if err := owner.proof.close(ctx); err != nil {
+				return err
+			}
+		}
+		owner.proofJoined = true
+	}
+	if owner.cancel != nil {
+		owner.cancel()
+	}
+	if !owner.managerJoined {
+		if owner.manager != nil {
+			if err := owner.manager.RouterVPNCloseDarwinNodeChainTunContext(ctx); err != nil {
+				return err
+			}
+		}
+		owner.managerJoined = true
+	}
+	if !owner.sourceJoined {
+		if owner.source != nil {
+			if err := owner.source.CloseSource(ctx); err != nil {
+				return err
+			}
+		}
+		owner.sourceJoined = true
+	}
+	// Upstream Box.Close visits its service before inbound and is one-shot.
+	// Both original native TUNs and the physical source have now joined, so
+	// that order cannot poison a retriable route/guardian close.
+	for index := range owner.components {
+		if err := owner.components[index].close(ctx); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	owner.joined = true
+	return nil
+}
+
+// finish is the sole native stopped-receipt producer. The authenticated stop
+// callback observes retired only after this exact source/manager/Box join and
+// successful publication under the original private workspace handle.
+func (control *routerVPNDarwinNodeChainControl) finish(ctx context.Context, files *routerVPNExternalFiles) error {
+	if control == nil || control.native == nil || ctx == nil || ctx.Err() != nil ||
+		control.scope.Family != macosprocess.NodeChainFamily || !routerVPNExternalSession.MatchString(control.scope.Session) ||
+		!routerVPNExternalSource.MatchString(control.scope.Source) || !routerVPNExternalSource.MatchString(control.scope.Config) {
+		return routerVPNExternalFailure
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return routerVPNExternalFailure
+	}
+	workspaceErr := control.workspace(files)
+	if control.retired.Load() {
+		return workspaceErr
+	}
+	control.retiring.Store(true)
+	var removeErr error
+	if workspaceErr == nil {
+		removeErr = errors.Join(files.remove("node-ready.json"), files.remove("node-chain-ready.json"))
+	}
+	// A refused receipt writer must not suppress retirement of resources
+	// already held by this original native owner.
+	joinErr := control.native.close(ctx)
+	if workspaceErr != nil || removeErr != nil || joinErr != nil {
+		return errors.Join(workspaceErr, removeErr, joinErr)
+	}
+	if ctx.Err() != nil || !control.native.joined {
+		return routerVPNExternalFailure
+	}
+	closed := struct {
+		routerVPNExternalStop
+		Closed bool `json:"closed"`
+	}{routerVPNExternalStop{Schema: 1, Session: control.scope.Session, SourceSHA256: control.scope.Config}, true}
+	if err := files.publish("stopped.json", closed); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	control.retired.Store(true)
+	return nil
+}

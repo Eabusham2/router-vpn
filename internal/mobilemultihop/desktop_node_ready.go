@@ -55,11 +55,18 @@ func (r DesktopNodeReadyRecord) Validate(policy DesktopPhysicalPolicy, transfer 
 	if meta.RestoredMTU != 0 {
 		mtu = meta.RestoredMTU
 	}
-	if r.Schema != 1 || r.Kind != "routervpn-node-ready-v1" || (meta.TargetOS != "windows" && meta.TargetOS != "linux") ||
+	// Darwin allocation is admitted only for this complete sealed ordered
+	// policy. An ordinary node/imported/external capture cannot opt into it
+	// by presenting a utun-shaped name or copying public metadata.
+	interfaceValid := (meta.TargetOS == "windows" || meta.TargetOS == "linux") && r.InterfaceName == "router-vpn"
+	if chain, exact := policy.(*DesktopNodeChainPolicy); exact && chain != nil && meta.TargetOS == "darwin" {
+		interfaceValid = desktopNodeChainReadyInterface("darwin", r.InterfaceName)
+	}
+	if r.Schema != 1 || r.Kind != "routervpn-node-ready-v1" || !interfaceValid ||
 		r.SessionID != meta.SessionID || r.SourceSHA256 != meta.SourceSHA256 || r.ConfigSHA256 != meta.ConfigSHA256 ||
 		r.TransferSHA256 != transfer || r.DNSConfigSHA256 != capture.SelectedDNS.ConfigSHA256 ||
 		r.CoverServices != coverCount || r.CoverSHA256 != coverSHA256 ||
-		r.InterfaceName != "router-vpn" || r.InterfaceIndex == 0 || r.MTU != mtu || r.ProvedAt <= 0 ||
+		r.InterfaceIndex == 0 || r.MTU != mtu || r.ProvedAt <= 0 ||
 		r.DNSMilliseconds <= 0 || r.DNSMilliseconds > 5000 || math.IsNaN(r.DNSMilliseconds) || math.IsInf(r.DNSMilliseconds, 0) {
 		return errors.New("native Router readiness differs from its captured path")
 	}

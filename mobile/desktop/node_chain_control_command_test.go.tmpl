@@ -1,0 +1,137 @@
+package main
+
+import (
+	"context"
+	"io"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestRouterVPNNodeChainDarwinCommandFlags(t *testing.T) {
+	for _, flag := range []string{"physical-transfer-sha256", "physical-mtu", "journal-parent-handle",
+		"journal-parent-image", "journal-pipe", "journal-capture-sha256",
+		"linux-parent-channel", "linux-parent-directory", "linux-parent-capture"} {
+		t.Run(flag, func(t *testing.T) {
+			calls := 0
+			command := routerVPNNewNodeChainCommandWithRun(func(context.Context, string, string, string, string, string, int,
+				routerVPNNodeJournalOptions, routerVPNNodeLinuxParentOptions, string) error {
+				calls++
+				return nil
+			})
+			value := ""
+			if flag == "physical-mtu" || flag == "journal-parent-handle" ||
+				flag == "linux-parent-channel" || flag == "linux-parent-directory" {
+				value = "0"
+			}
+			command.SetArgs([]string{"--darwin-control=inherited-v1", "--" + flag + "=" + value})
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			if command.Execute() == nil || calls != 0 {
+				t.Fatal("explicit foreign platform flag reached inherited Darwin dispatch")
+			}
+		})
+	}
+	t.Run("exact-captured-arguments", func(t *testing.T) {
+		calls := 0
+		command := routerVPNNewNodeChainCommandWithRun(func(ctx context.Context, directory, session, config, source, transfer string, mtu int,
+			windows routerVPNNodeJournalOptions, linux routerVPNNodeLinuxParentOptions, darwin string) error {
+			calls++
+			if ctx == nil || ctx.Err() != nil || directory != "/original-private-workspace" || session != desktopExternalSession ||
+				config != strings.Repeat("b", 64) || source != strings.Repeat("c", 64) || transfer != "" || mtu != 0 ||
+				windows != (routerVPNNodeJournalOptions{}) || linux != (routerVPNNodeLinuxParentOptions{}) || darwin != "inherited-v1" {
+				t.Fatal("command replaced its original inherited argument capture")
+			}
+			return nil
+		})
+		command.SetArgs([]string{"--runtime-dir=/original-private-workspace", "--session=" + desktopExternalSession,
+			"--config-sha256=" + strings.Repeat("b", 64), "--physical-source-sha256=" + strings.Repeat("c", 64),
+			"--darwin-control=inherited-v1"})
+		command.SetOut(io.Discard)
+		command.SetErr(io.Discard)
+		if err := command.Execute(); err != nil || calls != 1 {
+			t.Fatal("exact inherited dispatch was not preserved", err)
+		}
+	})
+	for _, value := range []string{"", "foreign"} {
+		name := "empty-family"
+		if value != "" {
+			name = "unknown-family"
+		}
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			command := routerVPNNewNodeChainCommandWithRun(func(context.Context, string, string, string, string, string, int,
+				routerVPNNodeJournalOptions, routerVPNNodeLinuxParentOptions, string) error {
+				calls++
+				return nil
+			})
+			command.SetArgs([]string{"--darwin-control=" + value})
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			if command.Execute() == nil || calls != 0 {
+				t.Fatal("noncanonical Darwin family reached dispatch")
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeChainDarwinManifestReplay(t *testing.T) {
+	for _, restore := range []int{0, 1400} {
+		name := "configured"
+		if restore != 0 {
+			name = "restored"
+		}
+		t.Run(name, func(t *testing.T) {
+			policy := desktopNodeChainCommandPolicy(t, 3, "darwin", restore)
+			input, err := policy.NodeChain().LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			files := desktopImportedCommandFiles(t, map[string]string{"node-chain-source.json": input, "sing-box.json": policy.Config()})
+			meta := policy.Metadata()
+			replayed, err := routerVPNNodeChainCommandPhysicalCapture(files, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, "darwin")
+			if err != nil || replayed == nil || replayed == policy || replayed.OriginalChain() == policy.OriginalChain() ||
+				replayed.Config() != policy.Config() || !reflect.DeepEqual(replayed.Metadata(), meta) ||
+				replayed.Metadata().RestoredMTU != restore || len(replayed.NodeChain().ProofInventory()) != 3 {
+				t.Fatal("Darwin manifest lost original complete source or restored MTU", err)
+			}
+			if actual, err := routerVPNNodeChainCommandPhysicalTarget(files, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, restore, "darwin"); err == nil || actual != nil {
+				t.Fatal("legacy unauthenticated target gate admitted Darwin")
+			}
+		})
+	}
+	policy := desktopNodeChainCommandPolicy(t, 3, "darwin", 1400)
+	input, _ := policy.NodeChain().LaunchInput()
+	for _, fault := range []string{"missing", "unprojected", "middle", "source", "config", "session", "platform", "graph", "ordinary"} {
+		t.Run(fault, func(t *testing.T) {
+			meta := policy.Metadata()
+			raw, graph, target := input, policy.Config(), "darwin"
+			switch fault {
+			case "unprojected":
+				raw, _ = policy.OriginalChain().LaunchInput()
+			case "middle":
+				raw = strings.ReplaceAll(raw, "ordered-private-token-1", "foreign-middle-token")
+			case "source":
+				meta.SourceSHA256 = strings.Repeat("a", 64)
+			case "config":
+				meta.ConfigSHA256 = strings.Repeat("a", 64)
+			case "session":
+				meta.SessionID = strings.Repeat("a", 32)
+			case "platform":
+				target = "linux"
+			case "graph":
+				graph += "\n"
+			case "ordinary":
+				raw, _ = desktopNodeCommandOriginal(t).LaunchInput()
+			}
+			inputs := map[string]string{"node-chain-source.json": raw, "sing-box.json": graph}
+			if fault == "missing" {
+				delete(inputs, "node-chain-source.json")
+			}
+			files := desktopImportedCommandFiles(t, inputs)
+			if actual, err := routerVPNNodeChainCommandPhysicalCapture(files, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, target); err == nil || actual != nil {
+				t.Fatal("Darwin manifest admitted altered or incomplete original source")
+			}
+		})
+	}
+}

@@ -1,0 +1,291 @@
+//go:build darwin
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"reflect"
+	"testing"
+	"time"
+)
+
+type routerVPNDarwinChainTestClose struct {
+	order           *[]string
+	name            string
+	calls, failures int
+	after           func()
+}
+
+func (part *routerVPNDarwinChainTestClose) step(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil {
+		return routerVPNExternalFailure
+	}
+	part.calls++
+	*part.order = append(*part.order, part.name)
+	if part.after != nil {
+		part.after()
+	}
+	if part.calls <= part.failures {
+		return errors.New("original component retained")
+	}
+	return nil
+}
+func (part *routerVPNDarwinChainTestClose) close(ctx context.Context) error { return part.step(ctx) }
+func (part *routerVPNDarwinChainTestClose) RouterVPNCloseDarwinNodeChainTunContext(ctx context.Context) error {
+	return part.step(ctx)
+}
+func (part *routerVPNDarwinChainTestClose) CloseSource(ctx context.Context) error {
+	return part.step(ctx)
+}
+func (part *routerVPNDarwinChainTestClose) Close() error { return part.step(context.Background()) }
+func routerVPNDarwinChainTestRetirement() (*routerVPNDarwinNodeChainNative, []*routerVPNDarwinChainTestClose, *[]string) {
+	order := []string{}
+	parts := []*routerVPNDarwinChainTestClose{}
+	for _, name := range []string{"proof", "tun", "source", "box"} {
+		parts = append(parts, &routerVPNDarwinChainTestClose{order: &order, name: name})
+	}
+	owner := &routerVPNDarwinNodeChainNative{proof: parts[0], manager: parts[1], managerRequired: true, source: parts[2],
+		components: []routerVPNDarwinNodeChainComponent{{original: parts[3]}}}
+	return owner, parts, &order
+}
+func routerVPNDarwinChainTestContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+func TestRouterVPNNodeChainDarwinNativeRetirementOrder(t *testing.T) {
+	t.Run("exact-order", func(t *testing.T) {
+		owner, parts, order := routerVPNDarwinChainTestRetirement()
+		ctx := routerVPNDarwinChainTestContext(t)
+		if err := owner.close(ctx); err != nil || !owner.joined ||
+			!reflect.DeepEqual(*order, []string{"proof", "tun", "source", "box"}) {
+			t.Fatal("source or Box cleanup preceded original TUN/proof join", err, *order)
+		}
+		if err := owner.close(ctx); err != nil {
+			t.Fatal(err)
+		}
+		for _, part := range parts {
+			if part.calls != 1 {
+				t.Fatal("joined original component closed twice")
+			}
+		}
+	})
+	for position, name := range []string{"proof", "tun", "source"} {
+		t.Run(name+"-retry", func(t *testing.T) {
+			owner, parts, order := routerVPNDarwinChainTestRetirement()
+			parts[position].failures = 1
+			ctx := routerVPNDarwinChainTestContext(t)
+			if owner.close(ctx) == nil || owner.joined || len(*order) != position+1 {
+				t.Fatal("failed original native stage acknowledged later cleanup", *order)
+			}
+			for index := position + 1; index < len(parts); index++ {
+				if parts[index].calls != 0 {
+					t.Fatal("later native owner closed before original failure joined")
+				}
+			}
+			if err := owner.close(ctx); err != nil || !owner.joined {
+				t.Fatal("original native retry failed", err)
+			}
+			for index, part := range parts {
+				wanted := 1
+				if index == position {
+					wanted = 2
+				}
+				if part.calls != wanted {
+					t.Fatal("retry repeated a joined predecessor or replaced original owner")
+				}
+			}
+		})
+	}
+	t.Run("ambiguous-box", func(t *testing.T) {
+		owner, parts, _ := routerVPNDarwinChainTestRetirement()
+		parts[3].failures = 1
+		ctx := routerVPNDarwinChainTestContext(t)
+		if owner.close(ctx) == nil || owner.close(ctx) == nil || owner.joined || parts[3].calls != 1 {
+			t.Fatal("one-shot Box error was retried or converted to native success")
+		}
+	})
+	t.Run("cancel-after-source", func(t *testing.T) {
+		owner, parts, _ := routerVPNDarwinChainTestRetirement()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		parts[2].after = cancel
+		if owner.close(ctx) == nil || owner.joined || parts[3].calls != 0 {
+			t.Fatal("expired source join advanced into Box or ACK")
+		}
+		parts[2].after = nil
+		if err := owner.close(routerVPNDarwinChainTestContext(t)); err != nil || !owner.joined ||
+			parts[0].calls != 1 || parts[1].calls != 1 || parts[2].calls != 1 || parts[3].calls != 1 {
+			t.Fatal("same original retry discarded completed source progress", err)
+		}
+	})
+	t.Run("missing-manager", func(t *testing.T) {
+		owner, parts, _ := routerVPNDarwinChainTestRetirement()
+		owner.manager = nil
+		if owner.close(routerVPNDarwinChainTestContext(t)) == nil || owner.joined || parts[2].calls != 0 || parts[3].calls != 0 {
+			t.Fatal("missing original manager allowed source/Box teardown")
+		}
+	})
+	t.Run("partial-components", func(t *testing.T) {
+		order := []string{}
+		first := &routerVPNDarwinChainTestClose{order: &order, name: "first"}
+		last := &routerVPNDarwinChainTestClose{order: &order, name: "last", failures: 1}
+		owner := &routerVPNDarwinNodeChainNative{components: []routerVPNDarwinNodeChainComponent{{original: first}, {original: last}}}
+		ctx := routerVPNDarwinChainTestContext(t)
+		if owner.close(ctx) == nil || owner.close(ctx) == nil || owner.joined || first.calls != 1 || last.calls != 1 {
+			t.Fatal("partial constructor discarded joined progress or repeated ambiguous close")
+		}
+	})
+}
+func TestRouterVPNNodeChainDarwinNativeRetirementAdmission(t *testing.T) {
+	for _, kind := range []string{"nil", "unbounded", "cancelled", "locked"} {
+		t.Run(kind, func(t *testing.T) {
+			owner, _, order := routerVPNDarwinChainTestRetirement()
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			switch kind {
+			case "nil":
+				ctx = nil
+			case "unbounded":
+				ctx = context.Background()
+			case "cancelled":
+				cancel()
+			case "locked":
+				owner.mu.Lock()
+				defer owner.mu.Unlock()
+			}
+			if owner.close(ctx) == nil || owner.joined || len(*order) != 0 {
+				t.Fatal("invalid original cleanup caller acquired native resources")
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeChainDarwinStoppedReceipt(t *testing.T) {
+	for _, kind := range []string{"joined", "source-retry", "box-failure", "foreign-file"} {
+		t.Run(kind, func(t *testing.T) {
+			native, parts, _ := routerVPNDarwinChainTestRetirement()
+			control, files, _, _ := routerVPNDarwinChainControlFixture(t)
+			control.native = native
+			for _, name := range []string{"node-ready.json", "node-chain-ready.json"} {
+				if err := files.publish(name, map[string]any{"fixture": true}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch kind {
+			case "source-retry":
+				parts[2].failures = 1
+			case "box-failure":
+				parts[3].failures = 1
+			case "foreign-file":
+				file, err := files.root.OpenFile("stopped.json", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = file.WriteString("foreign"); err != nil {
+					t.Fatal(err)
+				}
+				if err := file.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx := routerVPNDarwinChainTestContext(t)
+			err := control.finish(ctx, files)
+			if kind != "joined" {
+				if err == nil || control.retired.Load() {
+					t.Fatal("unjoined source/Box or foreign file produced stopped ACK")
+				}
+				if kind == "foreign-file" {
+					raw, readErr := files.read("stopped.json", 1024)
+					if readErr != nil || string(raw) != "foreign" {
+						t.Fatal("cleanup replaced an unowned stopped file", readErr)
+					}
+				} else if _, statErr := files.root.Lstat("stopped.json"); !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatal("failed native cleanup published a stopped receipt")
+				}
+			} else if err != nil || !control.retired.Load() {
+				t.Fatal("joined original native cleanup omitted stopped receipt", err)
+			}
+			for _, name := range []string{"node-ready.json", "node-chain-ready.json"} {
+				if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("retirement retained a published active proof", name, err)
+				}
+			}
+			if kind == "source-retry" {
+				if err := control.finish(ctx, files); err != nil || !control.retired.Load() || parts[2].calls != 2 || parts[1].calls != 1 {
+					t.Fatal("same original source retry failed to publish its joined receipt", err)
+				}
+			}
+			if control.retired.Load() {
+				raw, err := files.read("stopped.json", 1024)
+				var actual struct {
+					routerVPNExternalStop
+					Closed bool `json:"closed"`
+				}
+				if err != nil || json.Unmarshal(raw, &actual) != nil || actual.Schema != 1 ||
+					actual.Session != control.scope.Session || actual.SourceSHA256 != control.scope.Config || !actual.Closed {
+					t.Fatal("stopped receipt changed original MTU/config binding", err)
+				}
+			}
+		})
+	}
+
+	t.Run("foreign-workspace", func(t *testing.T) {
+		native, parts, _ := routerVPNDarwinChainTestRetirement()
+		control, original, _, _ := routerVPNDarwinChainControlFixture(t)
+		control.native = native
+		foreign := desktopImportedCommandFiles(t, map[string]string{"fixture-input": "foreign"})
+		if err := foreign.publish("node-ready.json", map[string]any{"foreign": true}); err != nil {
+			t.Fatal(err)
+		}
+		ctx := routerVPNDarwinChainTestContext(t)
+		if err := control.finish(ctx, foreign); err == nil || control.retired.Load() || !native.joined {
+			t.Fatal("foreign workspace granted receipt authority or suppressed original native join", err)
+		}
+		if _, err := foreign.root.Lstat("node-ready.json"); err != nil {
+			t.Fatal("retirement mutated foreign readiness", err)
+		}
+		for _, files := range []*routerVPNExternalFiles{original, foreign} {
+			if _, err := files.root.Lstat("stopped.json"); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("foreign writer produced a stopped receipt", err)
+			}
+		}
+		if err := control.finish(ctx, original); err != nil || control.retirementReceipt() != nil {
+			t.Fatal("original receipt retry lost joined native progress", err)
+		}
+		for _, part := range parts {
+			if part.calls != 1 {
+				t.Fatal("original receipt retry closed a joined component twice")
+			}
+		}
+	})
+	t.Run("authenticated-ack", func(t *testing.T) {
+		native, parts, _ := routerVPNDarwinChainTestRetirement()
+		parts[2].failures = 1
+		control, files, _, _ := routerVPNDarwinChainControlFixture(t)
+		control.native = native
+		started := make(chan struct{})
+		acknowledged := false
+		err := routerVPNExternalControlledLifetime(context.Background(), func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			return control.finish(cleanup, files)
+		}, func(ctx context.Context, retire func(context.Context) error) error {
+			<-started
+			if err := retire(ctx); err != nil {
+				return err
+			}
+			acknowledged = true
+			return nil
+		}, control.retirementReceipt, func() error { return nil })
+		if err == nil || acknowledged || control.retired.Load() || parts[3].calls != 0 {
+			t.Fatal("authenticated stop acknowledged an unjoined original physical source")
+		}
+	})
+}

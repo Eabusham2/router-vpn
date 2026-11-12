@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Required ordered Darwin inbound/manager component progress; no utun claim."""
+"""Required ordered Darwin child/source/component progress; no native utun claim."""
 from pathlib import Path
 import argparse
 import hashlib
@@ -27,6 +27,33 @@ PHASES = {
         "TestRouterVPNTunDarwinOrderedManagerAdmission": (
             "nil", "unbounded", "cancelled", "lifecycle", "access"),
     },
+    "cmd/sing-box": {
+        "TestRouterVPNNodeChainDarwinCommandFlags": (
+            "physical-transfer-sha256", "physical-mtu", "journal-parent-handle", "journal-parent-image",
+            "journal-pipe", "journal-capture-sha256", "linux-parent-channel", "linux-parent-directory",
+            "linux-parent-capture", "exact-captured-arguments", "empty-family", "unknown-family"),
+        "TestRouterVPNNodeChainDarwinManifestReplay": (
+            "configured", "restored", "missing", "unprojected", "middle", "source", "config",
+            "session", "platform", "graph", "ordinary"),
+        "TestRouterVPNNodeChainDarwinNativeRetirementOrder": (
+            "exact-order", "proof-retry", "tun-retry", "source-retry", "ambiguous-box",
+            "cancel-after-source", "missing-manager", "partial-components"),
+        "TestRouterVPNNodeChainDarwinNativeRetirementAdmission": ("nil", "unbounded", "cancelled", "locked"),
+        "TestRouterVPNNodeChainDarwinStoppedReceipt": ("joined", "source-retry", "box-failure", "foreign-file", "foreign-workspace", "authenticated-ack"),
+        "TestRouterVPNNodeChainDarwinOriginalControl": (
+            "exact", "policy-pointer", "replacement-root", "late-source", "missing-authority", "capture", "handshake", "retiring"),
+        "TestRouterVPNNodeChainDarwinEarlyStop": ("receipt-before-acquisition", "authenticated-before-run"),
+        "TestRouterVPNNodeChainDarwinSelectionBinding": (
+            "session", "source", "config", "uid", "device", "inode", "engine", "controller", "catalog", "inputs", "family"),
+    },
+    "experimental/libbox/routervpn/mobilemultihop": {
+        "TestDesktopNodeReadyDarwinRequiresExactOrderedPolicy": ("configured", "restored", "ordinary-policy", "windows-utun", "linux-utun"),
+        "TestDesktopNodeReadyDarwinPreservesOriginalDNSAndTUN": (
+            "schema", "kind", "session", "source", "config", "transfer", "dns", "index",
+            "mtu", "time", "query", "bound", "nan", "infinite", "cover-count", "cover-digest"),
+        "TestDesktopNodeReadyDarwinRejectsForeignInterface": (
+            "empty", "fixed", "missing-unit", "negative", "plus", "suffix", "unicode", "case", "newline"),
+    },
 }
 COPIES = {
     "mobile/mtu/manager.go.tmpl": "adapter/inbound/routervpn_mtu.go",
@@ -34,6 +61,16 @@ COPIES = {
     "mobile/desktop/tun_node_chain_retirement_darwin.go.tmpl": "protocol/tun/routervpn_node_chain_retirement_darwin.go",
     "mobile/desktop/tun_node_chain_retirement_darwin_test.go.tmpl": "protocol/tun/routervpn_node_chain_retirement_darwin_test.go",
     "mobile/desktop/inbound_node_chain_retirement_darwin_test.go.tmpl": "adapter/inbound/routervpn_node_chain_retirement_darwin_test.go",
+    "mobile/desktop/node_chain_command.go.tmpl": "cmd/sing-box/routervpn_node_chain_command.go",
+    "mobile/desktop/node_chain_control_other.go.tmpl": "cmd/sing-box/routervpn_node_chain_control_other.go",
+    "mobile/desktop/node_chain_control_darwin.go.tmpl": "cmd/sing-box/routervpn_node_chain_control_darwin.go",
+    "mobile/desktop/node_chain_run_darwin.go.tmpl": "cmd/sing-box/routervpn_node_chain_run_darwin.go",
+    "mobile/desktop/node_chain_retirement_darwin.go.tmpl": "cmd/sing-box/routervpn_node_chain_retirement_darwin.go",
+    "mobile/desktop/node_chain_control_command_test.go.tmpl": "cmd/sing-box/routervpn_node_chain_control_command_test.go",
+    "mobile/desktop/node_chain_control_darwin_test.go.tmpl": "cmd/sing-box/routervpn_node_chain_control_darwin_test.go",
+    "mobile/desktop/node_chain_retirement_darwin_test.go.tmpl": "cmd/sing-box/routervpn_node_chain_retirement_darwin_test.go",
+    "internal/mobilemultihop/desktop_node_ready.go": "experimental/libbox/routervpn/mobilemultihop/desktop_node_ready.go",
+    "internal/mobilemultihop/desktop_node_ready_darwin_chain_test.go": "experimental/libbox/routervpn/mobilemultihop/desktop_node_ready_darwin_chain_test.go",
 }
 MUTATIONS = (
     ("repeat-stack", "protocol/tun", "protocol/tun/routervpn_node_chain_retirement_darwin.go",
@@ -58,6 +95,56 @@ MUTATIONS = (
      "if m.inboundByTag[original.Tag()] == original {", "if true {",
      "TestRouterVPNTunDarwinOrderedManagerRetirement/foreign-tag",
      "original cleanup consumed or erased a replacement tag owner"),
+    ("foreign-command-flag", "cmd/sing-box", "cmd/sing-box/routervpn_node_chain_command.go",
+     "if command.Flags().Changed(name) {", "if command.Flags().Changed(name) && false {",
+     "TestRouterVPNNodeChainDarwinCommandFlags/physical-mtu",
+     "explicit foreign platform flag reached inherited Darwin dispatch"),
+    ("changed-inherited-selection", "cmd/sing-box", "cmd/sing-box/routervpn_node_chain_control_darwin.go",
+     "owner.capture.Selection() != owner.selection", "false",
+     "TestRouterVPNNodeChainDarwinSelectionBinding/inputs",
+     "changed original inherited selection reached policy replay"),
+    ("source-before-tun-join", "cmd/sing-box", "cmd/sing-box/routervpn_node_chain_retirement_darwin.go",
+     "if err := owner.manager.RouterVPNCloseDarwinNodeChainTunContext(ctx); err != nil {\n\t\t\t\treturn err\n\t\t\t}",
+     "if err := owner.manager.RouterVPNCloseDarwinNodeChainTunContext(ctx); err != nil {\n\t\t\t\t_ = err\n\t\t\t}",
+     "TestRouterVPNNodeChainDarwinNativeRetirementOrder/tun-retry",
+     "failed original native stage acknowledged later cleanup"),
+    ("box-before-source-join", "cmd/sing-box", "cmd/sing-box/routervpn_node_chain_retirement_darwin.go",
+     "if err := owner.source.CloseSource(ctx); err != nil {\n\t\t\t\treturn err\n\t\t\t}",
+     "if err := owner.source.CloseSource(ctx); err != nil {\n\t\t\t\t_ = err\n\t\t\t}",
+     "TestRouterVPNNodeChainDarwinNativeRetirementOrder/source-retry",
+     "failed original native stage acknowledged later cleanup"),
+    ("unpublished-stopped-ack", "cmd/sing-box", "cmd/sing-box/routervpn_node_chain_retirement_darwin.go",
+     "if err := files.publish(\"stopped.json\", closed); err != nil {\n\t\treturn err\n\t}",
+     "if err := files.publish(\"stopped.json\", closed); err != nil {\n\t\t_ = err\n\t}",
+     "TestRouterVPNNodeChainDarwinStoppedReceipt/foreign-file",
+     "unjoined source/Box or foreign file produced stopped ACK"),
+    ("unpublished-early-stop", "cmd/sing-box", "cmd/sing-box/routervpn_node_chain_control_darwin.go",
+     "if owner == nil || !owner.retired.Load() {",
+     "if owner == nil || (owner.native != nil && !owner.retired.Load()) {",
+     "TestRouterVPNNodeChainDarwinEarlyStop/receipt-before-acquisition",
+     "unpublished no-resource retirement acknowledged authenticated Stop"),
+    ("cancelled-admission-before-cleanup", "cmd/sing-box", "cmd/sing-box/routervpn_node_chain_run_darwin.go",
+     "defer stopAdmission()\n\tfiles, err := routerVPNOpenExternalFiles(control.scope.Workspace)",
+     "defer stopAdmission()\n\tif err := control.original(admission); err != nil { return err }\n\tfiles, err := routerVPNOpenExternalFiles(control.scope.Workspace)",
+     "TestRouterVPNNodeChainDarwinEarlyStop/authenticated-before-run",
+     "early authenticated Stop omitted its original no-resource retirement"),
+    ("foreign-cleanup-writer", "cmd/sing-box", "cmd/sing-box/routervpn_node_chain_retirement_darwin.go",
+     "workspaceErr := control.workspace(files)", "workspaceErr := error(nil)",
+     "TestRouterVPNNodeChainDarwinStoppedReceipt/foreign-workspace",
+     "foreign workspace granted receipt authority or suppressed original native join"),
+    ("ordinary-darwin-policy", "experimental/libbox/routervpn/mobilemultihop", "experimental/libbox/routervpn/mobilemultihop/desktop_node_ready.go",
+     'exact && chain != nil && meta.TargetOS == "darwin"',
+     '(exact || true) && (chain != nil || true) && meta.TargetOS == "darwin"',
+     "TestDesktopNodeReadyDarwinRequiresExactOrderedPolicy/ordinary-policy",
+     "ordinary Darwin policy acquired ordered selected-DNS readiness"),
+    ("foreign-ready-target", "experimental/libbox/routervpn/mobilemultihop", "experimental/libbox/routervpn/mobilemultihop/desktop_node_ready.go",
+     'exact && chain != nil && meta.TargetOS == "darwin"', 'exact && chain != nil && meta.TargetOS != ""',
+     "TestDesktopNodeReadyDarwinRequiresExactOrderedPolicy/windows-utun",
+     "foreign target adopted Darwin interface shape"),
+    ("foreign-ready-interface", "experimental/libbox/routervpn/mobilemultihop", "experimental/libbox/routervpn/mobilemultihop/desktop_node_ready.go",
+     'interfaceValid = desktopNodeChainReadyInterface("darwin", r.InterfaceName)', 'interfaceValid = true',
+     "TestDesktopNodeReadyDarwinRejectsForeignInterface/fixed",
+     "Darwin selected-DNS readiness accepted a foreign interface"),
 )
 
 
