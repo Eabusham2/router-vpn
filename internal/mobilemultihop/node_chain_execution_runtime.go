@@ -38,6 +38,7 @@ type NodeChainExecutionRuntime struct {
 	closed             bool
 	measurementHolds   int
 	lastCaptures       int
+	healthObservations int
 	active             *nodeChainExecutionTrial
 	progress           NodeChainExecutionProgress
 	checkedAt          time.Time
@@ -447,15 +448,29 @@ func (r *NodeChainExecutionRuntime) HealthyContext(ctx context.Context) (failure
 	if r == nil || ctx == nil {
 		return nodeChainExecutionError
 	}
+	if err := externalObservationLock(ctx, &r.mu); err != nil {
+		return err
+	}
+	// An observation belongs only to its original live runtime. Once retired,
+	// even its failure cleanup must not touch a same-Box resumed owner.
+	if r.retired.Load() || r.closed {
+		r.mu.Unlock()
+		return nodeChainExecutionError
+	}
+	r.healthObservations++
+	s, ready, at := r.active, r.progress.Ready, r.checkedAt
+	r.mu.Unlock()
 	defer func() {
 		if failure != nil && ctx.Err() == nil {
 			r.retire("Captured ordered execution observation failed")
 			failure = errors.Join(failure, r.engine.RevokeApplicationContext(ctx))
 		}
+		// Include late failure cleanup in the join. Close cannot acknowledge
+		// this runtime while any original native observation/revoke can return.
+		r.mu.Lock()
+		r.healthObservations--
+		r.mu.Unlock()
 	}()
-	r.mu.Lock()
-	s, ready, at := r.active, r.progress.Ready, r.checkedAt
-	r.mu.Unlock()
 	if !ready || s == nil || at.IsZero() || time.Since(at) > r.proofLifetime() {
 		return nodeChainExecutionError
 	}
@@ -512,6 +527,10 @@ func (r *NodeChainExecutionRuntime) CloseContext(ctx context.Context) error {
 		return errors.Join(revokeErr, err, ctx.Err(), nodeChainExecutionError)
 	}
 	r.mu.Lock()
+	if r.healthObservations != 0 {
+		r.mu.Unlock()
+		return errors.New("original ordered health observation has not joined")
+	}
 	if r.measurementHolds != 0 {
 		r.mu.Unlock()
 		return errors.New("original ordered measurement activity has not joined")

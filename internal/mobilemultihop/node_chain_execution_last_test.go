@@ -480,18 +480,23 @@ func TestNodeChainExecutionLastRequiresFreshServerReceipt(t *testing.T) {
 
 func TestNodeChainExecutionLastRetainsLateNativeObservationUntilClose(t *testing.T) {
 	f := newNodeChainExecutionRuntimeFixture(t, "server")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	entered, release := make(chan struct{}), make(chan struct{})
 	var armed atomic.Bool
 	var once, unblockOnce sync.Once
 	unblock := func() { unblockOnce.Do(func() { close(release) }) }
 	t.Cleanup(unblock)
-	f.engine.beforeObserve = func(context.Context) {
-		if armed.Load() {
+	f.engine.beforeObserve = func(observed context.Context) {
+		// Retain Last's own Verify observation after the first Healthy call
+		// has returned. Its outer hold must remain independently necessary.
+		f.runtime.mu.Lock()
+		healthEntered := f.runtime.healthObservations != 0
+		f.runtime.mu.Unlock()
+		if armed.Load() && observed == ctx && !healthEntered {
 			once.Do(func() { close(entered); <-release })
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
 	if err := f.runtime.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
