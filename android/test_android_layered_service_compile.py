@@ -99,8 +99,32 @@ stub(APP,'AndroidHomeStateStore','''{public static final class Snapshot{public b
  public static boolean failedNodeChain(android.content.Context c,Snapshot s,String message,boolean released){if(s==null||s!=value)return false;s.connected=false;s.phase="failed";s.pathProof="failed";return true;}
 }''')
 stub(APP,'AndroidNodeChainCapture','{static final String SESSION_FILE="routervpn-node-chain.json";}')
+stub(PKG,'RouterMTU','{}')
+STUBS[PKG.replace('.', '/') + '/RouterMTUPlatform.java'] = '''package io.nekohasekai.libbox;public interface RouterMTUPlatform {
+ default RouterMTUState captureMTU(){return null;}default void beginMTUChange(RouterMTUState expected)throws Exception{throw new IllegalStateException("No native MTU change in this boundary");}
+ default void endMTUChange()throws Exception{throw new IllegalStateException("No native MTU change in this boundary");}default void bindMTUSocket(RouterMTUState expected,long fd)throws Exception{throw new IllegalStateException("No native MTU socket in this boundary");}
+ default String readMTUCache(){return "";}default boolean compareAndSwapMTUCache(String expected,String replacement){return false;}default void abortMTU(String reason){throw new IllegalStateException(reason);}
+}'''
+STUBS[PKG.replace('.', '/') + '/RouterMTUState.java'] = '''package io.nekohasekai.libbox;public class RouterMTUState {
+ private String session="",path="",name="";private int mtu;public String getSession(){return session;}public void setSession(String v){session=v;}public String getPath(){return path;}public void setPath(String v){path=v;}
+ public String getInterface(){return name;}public void setInterface(String v){name=v;}public int getMTU(){return mtu;}public void setMTU(int v){mtu=v;}
+}'''
+stub(APP,'AndroidNodeChainExecutionCapture','''{final String config="",launchInput="";
+ static final class RestoreCapture{}
+ static AndroidNodeChainExecutionCapture compile(AndroidNodeChainCapture local,String requested)throws Exception{throw new IllegalStateException("No execution preparation in this boundary");}
+ static AndroidNodeChainExecutionCapture restore(AndroidNodeChainCapture local,RestoreCapture capture)throws Exception{throw new IllegalStateException("No execution restore in this boundary");}
+ void bindNative(io.nekohasekai.libbox.CommandServer server)throws Exception{throw new IllegalStateException("No execution native construction in this boundary");}
+ void run(io.nekohasekai.libbox.CommandServer server)throws Exception{throw new IllegalStateException("No execution native owner in this boundary");}
+ boolean healthy(){return false;}String execution()throws Exception{throw new IllegalStateException("No execution winner in this boundary");}
+ String progressJSON(){return "{}";}void networkChanged(){}void close()throws Exception{throw new IllegalStateException("No execution cleanup owner in this boundary");}
+ RestoreCapture captureRestore()throws Exception{throw new IllegalStateException("No execution restore in this boundary");}boolean restoredMatches(RestoreCapture capture){return false;}
+ boolean retainsServerCleanup(io.nekohasekai.libbox.CommandServer server){return false;}boolean nativeClosed(){return false;}
+ io.nekohasekai.libbox.RouterMTU newMTU(io.nekohasekai.libbox.CommandServer server,io.nekohasekai.libbox.RouterMTUPlatform platform)throws Exception{throw new IllegalStateException("No execution MTU in this boundary");}
+ io.nekohasekai.libbox.RouterHopMeasurement newHopMeasurement(io.nekohasekai.libbox.CommandServer server)throws Exception{throw new IllegalStateException("No execution measurement in this boundary");}
+}''')
 stub(APP,'AndroidNodeChainSession','''{static final String MODE="node-chain";final String sessionId="";final AndroidHomeStateStore.Snapshot home=null;
- interface Owner{boolean current(AndroidNodeChainSession source,io.nekohasekai.libbox.CommandServer server);String network();}
+ final AndroidNodeChainExecutionCapture execution=null;boolean retainsServerCleanup(io.nekohasekai.libbox.CommandServer server){return false;}
+ interface Owner{boolean current(AndroidNodeChainSession source,io.nekohasekai.libbox.CommandServer server);String network();default AutoCloseable beginMTUCleanup(AndroidNodeChainSession source,io.nekohasekai.libbox.CommandServer server,io.nekohasekai.libbox.RouterMTUPlatform platform)throws Exception{throw new IllegalStateException("No execution cleanup in this boundary");}}
  interface Host{void stop(AndroidNodeChainSession source,Runnable complete);}void adoptHost(Host host){}boolean hasHost(){return false;}void requestStop(Runnable complete){throw new IllegalStateException("No ordered cleanup owner in this boundary");}
  static AndroidNodeChainSession pending(String id){return null;}
  static AndroidNodeChainSession retained(){return null;}
@@ -109,7 +133,8 @@ stub(APP,'AndroidNodeChainSession','''{static final String MODE="node-chain";fin
  void requireCurrent()throws Exception{throw new IllegalStateException("No ordered proof in this boundary");}void requireSource()throws Exception{throw new IllegalStateException("No ordered source in this boundary");}
  void attach(io.nekohasekai.libbox.CommandServer server,Owner owner,String network)throws Exception{throw new IllegalStateException("No ordered owner in this boundary");}
  io.nekohasekai.libbox.RouterHopMeasurement newHopMeasurement()throws Exception{throw new IllegalStateException("No ordered measurement in this boundary");}
- void prove()throws Exception{throw new IllegalStateException("No ordered proof in this boundary");}void cancel(){}void closePlan()throws Exception{}void nativeServiceClosed(){}void finishCleanup()throws Exception{}void discardUnstarted()throws Exception{}
+ void bindNative(io.nekohasekai.libbox.CommandServer server)throws Exception{throw new IllegalStateException("No ordered native construction in this boundary");}
+ void prove()throws Exception{throw new IllegalStateException("No ordered proof in this boundary");}void cancel(){}void closePlan()throws Exception{}void requireNativeBindingDrain(){}void nativeServiceClosed(){}void finishCleanup()throws Exception{}void discardUnstarted()throws Exception{}
 }''')
 stub(APP,'RouterPQNative','{public static void install()throws Exception{} }')
 stub(APP,'NativeSingBoxController','{public static final class SessionInfo{public final String sessionId,modeId;SessionInfo(String session,String mode){sessionId=session;modeId=mode;}}}')
@@ -125,6 +150,7 @@ stub(APP,'AndroidServiceStopConfirmation','{public static final String EXTRA_COM
 stub(APP,'AndroidKillSwitchPolicy','{public static final String SESSION_MARKER="kill-switch";public static String requirementMessage(){return "";} }')
 stub(APP,'AndroidTelemetryNetwork','{public interface Check{void run()throws Exception;}public AndroidTelemetryNetwork retaining(Check check)throws Exception{check.run();return this;}}')
 stub(APP,'AndroidMTUSession','{interface Failure{void abort(AndroidMTUSession owner);}public AndroidMTUSession(android.content.Context c,Failure f){} public void activate(io.nekohasekai.libbox.CommandServer c,String config,String metadata){}public void activate(io.nekohasekai.libbox.CommandServer c,String config,String metadata,io.nekohasekai.libbox.RouterMultihop owner){activate(c,config,metadata);}public void activateExternal(AndroidExternalSession external){}public void activateTor(AndroidTorSession tor){}public String request(String a,String b,String c)throws Exception{return "";}public AndroidTelemetryNetwork captureTelemetryNetwork()throws Exception{return new AndroidTelemetryNetwork();}public boolean running(){return false;}public void drainForMeasurement()throws Exception{}public void resumeAfterResponse(){}public void networkChanged(){}public void close()throws Exception{}public void beforeOpen()throws Exception{}public void established(int mtu)throws Exception{}public void registered(String name){}public boolean unchangedPhysicalPath(){return false;}public void checkNetwork(){} }')
+STUBS['com/eabusham/routervpn/AndroidMTUSession.java'] = STUBS['com/eabusham/routervpn/AndroidMTUSession.java'].replace('public class AndroidMTUSession {', 'public class AndroidMTUSession implements io.nekohasekai.libbox.RouterMTUPlatform {')
 STUBS['com/eabusham/routervpn/AndroidMTUSession.java'] = STUBS['com/eabusham/routervpn/AndroidMTUSession.java'][:-1] + 'public void activateNodeChain(AndroidNodeChainSession source){}public Long proofObservationToken(){return 0L;}public boolean proofOwnerCurrent(){return true;}}'
 stub(APP,'AndroidStartLayerRelay','implements java.io.Closeable{public interface SocketProtector{void protectRelaySocket(java.net.Socket s)throws Exception;void protectRelaySocket(java.net.DatagramSocket s)throws Exception;}public static AndroidStartLayerRelay prepareIfConfigured(android.content.Context c,java.io.File f,java.util.function.Consumer<String> failure)throws Exception{return null;}public void start(){}public void close(){} }')
 

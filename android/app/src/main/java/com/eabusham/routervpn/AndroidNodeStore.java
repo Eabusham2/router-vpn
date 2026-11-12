@@ -137,12 +137,14 @@ final class AndroidNodeStore {
         final ChainSource control;
         final List<ChainSource> members;
         final List<String> modes;
+        final String execution;
         private final AndroidNodeStore owner;
         private final long generation;
-        private ChainCapture(AndroidNodeStore owner, ChainSource control, List<ChainSource> members, List<String> modes) {
+        private ChainCapture(AndroidNodeStore owner, ChainSource control, List<ChainSource> members, List<String> modes) throws Exception {
             this.owner = owner; this.control = control; this.generation = selectionGeneration;
             this.members = Collections.unmodifiableList(new ArrayList<>(members));
             this.modes = Collections.unmodifiableList(new ArrayList<>(modes));
+            this.execution = control.profile().getString("multihop_execution");
         }
         void requireCurrent() throws Exception { owner.requireChainCapture(this); }
     }

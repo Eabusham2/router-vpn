@@ -99,7 +99,6 @@ SOURCES[NATIVE + 'RouterHopMeasurement.java'] = r'''package io.nekohasekai.libbo
  public void cancel(String id){if(!request.equals(id))throw new AssertionError("cancelled another request");cancels++;}public void drain(String id){if(!request.equals(id))throw new AssertionError("drained another request");drains++;}
  public String statusJSON(){return "{\"results\":[]}";}public void close(){invalidated=true;closes++;}
 }'''
-SOURCES[NATIVE + 'RouterMTUPlatform.java'] = 'package io.nekohasekai.libbox;public interface RouterMTUPlatform{}'
 SOURCES[NATIVE + 'RouterMTU.java'] = 'package io.nekohasekai.libbox;public class RouterMTU{}'
 SOURCES[NATIVE + 'Libbox.java'] = SOURCES[NATIVE + 'Libbox.java'].replace('public static void routerStrategyCloseService(CommandServer server)throws Exception{}', 'public static void routerStrategyCloseService(CommandServer server)throws Exception{server.checkedCloses++;if(server.failClose)throw new IllegalStateException("native Box drain pending");server.closed=true;}')[:-1] + r'''
  public static RouterHopMeasurement routerNodeChainNewHopMeasurement(RouterNodeChain plan,CommandServer server)throws Exception{if(plan.server!=server||!plan.healthy())throw new IllegalStateException("unproved ordered measurement");return new RouterHopMeasurement();}
@@ -111,7 +110,7 @@ SOURCES[APP + 'AndroidNodeStore.java'] = r'''package com.eabusham.routervpn;fina
  AndroidNodeStore(android.content.Context context){}String activeId(){return "";}
  static final class ChainSource {final String id;ChainSource(String id){this.id=id;}}
  static final class ChainCapture {
-  final ChainSource control;final java.util.List<ChainSource> members;final java.util.List<String> modes;volatile boolean valid=true;boolean strict;volatile Runnable beforeCurrent;volatile Thread hookThread;
+  final ChainSource control;final java.util.List<ChainSource> members;final java.util.List<String> modes;final String execution="local";volatile boolean valid=true;boolean strict;volatile Runnable beforeCurrent;volatile Thread hookThread;
   ChainCapture(int count){java.util.List<ChainSource> list=new java.util.ArrayList<>();java.util.List<String> selected=new java.util.ArrayList<>();for(int i=0;i<count;i++){list.add(new ChainSource(String.format("%032x",i+1)));selected.add(i==count-1?"shadowsocks":"wg");}members=java.util.List.copyOf(list);modes=java.util.List.copyOf(selected);control=members.get(count-1);}
   void requireCurrent(){Runnable hook=beforeCurrent;if(hook!=null&&Thread.currentThread()==hookThread){beforeCurrent=null;hook.run();}if(!valid)throw new IllegalStateException("original middle source replaced");}
  }
@@ -123,7 +122,7 @@ SOURCES[APP + 'AndroidNodeChainCapture.java'] = r'''package com.eabusham.routerv
  static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture source){source.requireCurrent();return new AndroidNodeChainCapture(source);}
  void requireCurrent(){source.requireCurrent();}void close()throws Exception{plan.close();}
 }'''
-SOURCES[APP + 'AndroidMTUSession.java'] = SOURCES[APP + 'AndroidMTUSession.java'].replace('public void activateNodeChain(AndroidNodeChainSession source){}', 'public AndroidNodeChainSession activated;public Exception failure;public void activateNodeChain(AndroidNodeChainSession source){try{activated=source;source.newMTU(new io.nekohasekai.libbox.RouterMTUPlatform(){});}catch(Exception stale){failure=stale;}}').replace('public Long proofObservationToken(){return 0L;}', 'public Long token=0L;public Long proofObservationToken(){return token;}').replace('public boolean proofOwnerCurrent(){return true;}', 'public boolean current=true;public boolean proofOwnerCurrent(){return current;}')
+SOURCES[APP + 'AndroidMTUSession.java'] = SOURCES[APP + 'AndroidMTUSession.java'].replace('public void activateNodeChain(AndroidNodeChainSession source){}', 'public AndroidNodeChainSession activated;public Exception failure;public void activateNodeChain(AndroidNodeChainSession source){try{activated=source;source.newMTU(this);}catch(Exception stale){failure=stale;}}').replace('public Long proofObservationToken(){return 0L;}', 'public Long token=0L;public Long proofObservationToken(){return token;}').replace('public boolean proofOwnerCurrent(){return true;}', 'public boolean current=true;public boolean proofOwnerCurrent(){return current;}')
 SOURCES[APP + 'NativeSingBoxController.java'] = r'''package com.eabusham.routervpn;final class NativeSingBoxController {
  static final class SessionInfo{final String sessionId,modeId;SessionInfo(String id,String mode){sessionId=id;modeId=mode;}}
  LayeredVpnService service;boolean delay;android.content.Intent late;Runnable beforeStart;
@@ -444,7 +443,7 @@ def main():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
         app = src / APP
-        names = ('AndroidHomeStateStore', 'AndroidConnectionSelection', 'AndroidNodeChainSession', 'AndroidNodeChainRuntime', 'LayeredVpnService')
+        names = ('AndroidHomeStateStore', 'AndroidConnectionSelection', 'AndroidNodeChainSession', 'AndroidNodeChainMTUPlatform', 'AndroidNodeChainRuntime', 'LayeredVpnService')
         originals = {}
         for name in names:
             originals[name] = (JAVA / (name + '.java')).read_text()
@@ -472,7 +471,7 @@ def main():
             ('AndroidNodeChainRuntime', 'if(operation==selectedOperation){connected = false; transitioning = false; reconcile();}', '{connected = false; transitioning = false; reconcile();}', 'same-runtime', 'old runtime catch cancelled the queued replacement operation'),
             ('LayeredVpnService', 'synchronized (PUBLICATION_LOCK) {\n            if (currentService.get() != this) return;', 'synchronized (new Object()) {\n            if (currentService.get() != this) return;', 'publication', 'replacement claimed ownership inside an unfinished old state publication'),
             ('LayeredVpnService', 'synchronized (PUBLICATION_LOCK) {\n            currentService=new java.lang.ref.WeakReference<>(this);', 'synchronized (new Object()) {\n            currentService=new java.lang.ref.WeakReference<>(this);', 'publication', 'replacement claimed ownership inside an unfinished old state publication'),
-            ('AndroidNodeChainRuntime', 'connect(capture.source, idle, capture.selection, false, callback);', 'connect(capture.source, idle, capture.selection, true, callback);', 'success', 'temporary restoration overwrote ordered Last history'),
+            ('AndroidNodeChainRuntime', 'connect(capture.source, idle, capture.selection, false, capture.execution, callback);', 'connect(capture.source, idle, capture.selection, true, capture.execution, callback);', 'success', 'temporary restoration overwrote ordered Last history'),
             ('AndroidNodeChainRuntime', 'recordOrderedExecution(context, history,', 'recordOrderedExecution(context, null,', 'success', 'fresh proved ordered connection did not record its captured Local choice'),
             ('AndroidNodeChainRuntime', 'connectSelected(capture,idle,false,callback);', 'connectSelected(capture,idle,true,callback);', 'success', 'Startup Last overwrote its original ordered history'),
             ('AndroidNodeChainRuntime', 'capturedDrain == captured && capturedDrainOperation == operation', 'false', 'captured-drain', 'same captured drain could not retry its original native cleanup'),

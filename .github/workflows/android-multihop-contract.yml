@@ -8,6 +8,7 @@ on:
       - 'android/test_android_node_chain_capture.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java'
       - 'android/test_android_node_chain_execution_capture.py'
+      - 'android/test_android_node_chain_execution_runtime.py'
       - 'android/test_android_runtime_contract.py'
       - 'android/test_android_node_candidates.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidate*.java'
@@ -20,6 +21,7 @@ on:
       - 'android/test_android_startup_policy.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainRuntime.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSession.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainMTUPlatform.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidHomeStateStore.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidMTUSession.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidRuntimeRegistry.java'
@@ -66,6 +68,7 @@ on:
       - 'android/test_android_node_chain_capture.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java'
       - 'android/test_android_node_chain_execution_capture.py'
+      - 'android/test_android_node_chain_execution_runtime.py'
       - 'android/test_android_runtime_contract.py'
       - 'android/test_android_node_candidates.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidate*.java'
@@ -78,6 +81,7 @@ on:
       - 'android/test_android_startup_policy.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainRuntime.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSession.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainMTUPlatform.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidHomeStateStore.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidMTUSession.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidRuntimeRegistry.java'
@@ -150,6 +154,7 @@ jobs:
           python3 android/test_android_node_candidates.py
           python3 android/test_android_ordered_presentation.py
           python3 android/test_android_node_chain_runtime.py
+          python3 android/test_android_node_chain_execution_runtime.py
           python3 android/test_android_node_chain_mtu.py
           python3 android/test_android_multihop_modes.py
           python3 android/test_android_home_dns.py

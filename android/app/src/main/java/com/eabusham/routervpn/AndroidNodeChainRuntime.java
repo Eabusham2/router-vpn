@@ -88,16 +88,21 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
     void connect(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, String selected, Callback callback) { connect(capture,idle,selected,true,callback); }
     void connectLast(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, String selected, Callback callback) { connect(capture,idle,selected,false,callback); }
     private synchronized void connect(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, String selected, boolean remember, Callback callback) {
+        connect(capture, idle, selected, remember, null, callback);
+    }
+    private synchronized void connect(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, String selected,
+                                      boolean remember, AndroidNodeChainExecutionCapture.RestoreCapture restore, Callback callback) {
         reconcile();
         if (closed || transitioning || owner != null || !terminal(singBox.getState())) {
             callback.finished(false, "The previous native owner must finish cleanup before an ordered path can start."); return;
         }
         transitioning = true; stopping = false; submitted = false;
         long selectedOperation=++operation;
-        executor.execute(() -> launch(capture, idle, selected, selectedOperation, remember, callback));
+        executor.execute(() -> launch(capture, idle, selected, selectedOperation, remember, restore, callback));
     }
 
-    private void launch(AndroidNodeStore.ChainCapture source, AndroidHomeStateStore.Snapshot idle, String selected, long selectedOperation, boolean remember, Callback callback) {
+    private void launch(AndroidNodeStore.ChainCapture source, AndroidHomeStateStore.Snapshot idle, String selected, long selectedOperation, boolean remember,
+                        AndroidNodeChainExecutionCapture.RestoreCapture restore, Callback callback) {
         AndroidHomeStateStore.Snapshot home = null;
         AndroidNodeChainSession session = null;
         try {
@@ -118,7 +123,7 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
             }
             callback.owned(home.sessionId);
             callback.progress("Preparing every original ordered node and authenticated layer…");
-            session = new AndroidNodeChainSession(context, source, home, selected);
+            session = new AndroidNodeChainSession(context, source, home, selected, restore);
             synchronized (this) { requireStarting(selectedOperation); owner = session; }
             requireStarting(selectedOperation); session.stage(); requireStarting(selectedOperation);
             synchronized (this) { requireStarting(selectedOperation); submitted = true; }
@@ -268,7 +273,11 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
         final AndroidNodeStore.ChainCapture source;
         final String selection;
         private final AndroidNodeChainSession original;
-        private RestoreCapture(AndroidNodeChainSession owner) { original = owner; source = owner.source; selection = owner.selectionDigest; }
+        private final AndroidNodeChainExecutionCapture.RestoreCapture execution;
+        private RestoreCapture(AndroidNodeChainSession owner) throws Exception {
+            original = owner; source = owner.source; selection = owner.selectionDigest;
+            execution = owner.execution == null ? null : owner.execution.captureRestore();
+        }
     }
     RestoreCapture captureRestore() throws Exception {
         AndroidNodeChainSession captured = connectedOwner();
@@ -289,6 +298,8 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
             if (capture == null || !capture.original.released()) return false;
             AndroidNodeChainSession current = connectedOwner();
             if (current == null || current == capture.original || current.source != capture.source) return false;
+            if (capture.execution == null ? current.execution != null
+                    : current.execution == null || !current.execution.restoredMatches(capture.execution)) return false;
             capture.source.requireCurrent(); AndroidNodeChainSession.requireSelection(context,capture.source,capture.selection); current.requireCurrent();
             return connectedOwner() == current;
         } catch (Exception stale) { return false; }
@@ -298,7 +309,7 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
             if (capture == null || idle == null || !capture.original.released()) throw new IllegalStateException("The original ordered native owner has not completed its drain.");
             capture.source.requireCurrent();
             AndroidNodeChainSession.requireSelection(context,capture.source,capture.selection);
-            connect(capture.source, idle, capture.selection, false, callback);
+            connect(capture.source, idle, capture.selection, false, capture.execution, callback);
         } catch (Exception stale) { callback.finished(false, safe(stale)); }
     }
     @Override public void close() { synchronized (this) { closed = true; } disconnect(); }

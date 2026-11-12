@@ -56,6 +56,7 @@ public final class RouterNodeChainExecution {
  public String config()throws Exception{current();return value.getString("config");}public String sourceSHA256()throws Exception{current();return value.getString("source_sha256");}
  public String configSHA256()throws Exception{current();return value.getString("config_sha256");}public String localSourceSHA256()throws Exception{current();return value.getString("local_source_sha256");}
  public String requestedExecution()throws Exception{current();return value.getString("requested");}
+ public void bindNative(CommandServer server){throw new AssertionError("Source-only gate cannot bind a native execution");}public boolean nativeClosed(){return false;}
  public void run(CommandServer server){throw new AssertionError("Source-only gate cannot run a native execution");}public boolean healthy(){return false;}
  public String execution(){throw new IllegalStateException("No native execution proof");}public String progressJSON(){return "{}";}
  public void networkChanged(){}public boolean retainsServerCleanup(CommandServer server){return false;}public void close(){closed=true;}

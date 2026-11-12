@@ -85,6 +85,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private final Object tunAccess = new Object();
     private volatile AndroidMTUSession mtuSession;
     private volatile AndroidNodeChainSession nodeChainSession;
+    private volatile NodeChainCleanup nodeChainCleanup;
+    private final Object nodeChainCleanupLock = new Object();
     private Network nodeChainPhysicalNetwork;
     private volatile boolean hostDestroyed;
     private final ExecutorService nodeChainObservations = Executors.newSingleThreadExecutor();
@@ -418,6 +420,55 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         }
     }
     private volatile TorCleanup torCleanup;
+    private static final class NodeChainCleanup {
+        final AndroidNodeChainSession chain;
+        final CommandServer server;
+        final Network network;
+        final String networkIdentity;
+        final NodeChainCleanup previous;
+        volatile boolean closed;
+        // Exact native RouterNodeChainExecution.Close budget. This scope grants
+        // only original cleanup sockets while the native close token is live.
+        final long deadline = System.nanoTime() + 5_000_000_000L;
+        NodeChainCleanup(AndroidNodeChainSession chain, CommandServer server, Network network, String identity) {
+            this(chain, server, network, identity, null);
+        }
+        NodeChainCleanup(AndroidNodeChainSession chain, CommandServer server, Network network, String identity,
+                         NodeChainCleanup previous) {
+            this.chain = chain; this.server = server; this.network = network; networkIdentity = identity;
+            this.previous = previous;
+        }
+    }
+    private NodeChainCleanup beginNodeChainCleanup(AndroidNodeChainSession chain, CommandServer server) {
+        synchronized (nodeChainCleanupLock) {
+            if (chain == null || chain != nodeChainSession || server == null || server != commandServer
+                    || nodeChainPhysicalNetwork == null || executionNetwork.isEmpty())
+                throw new IllegalStateException("The original ordered cleanup owners changed.");
+            NodeChainCleanup previous = currentNodeChainCleanup();
+            if (previous != null && (previous.chain != chain || previous.server != server
+                    || previous.network != nodeChainPhysicalNetwork || !previous.networkIdentity.equals(executionNetwork)))
+                throw new IllegalStateException("Another ordered cleanup call remains owned.");
+            NodeChainCleanup value = new NodeChainCleanup(chain, server, nodeChainPhysicalNetwork, executionNetwork, nodeChainCleanup);
+            nodeChainCleanup = value;
+            return value;
+        }
+    }
+    private void endNodeChainCleanup(NodeChainCleanup original) {
+        synchronized (nodeChainCleanupLock) {
+            original.closed = true;
+            while (nodeChainCleanup != null && nodeChainCleanup.closed) nodeChainCleanup = nodeChainCleanup.previous;
+        }
+    }
+    private NodeChainCleanup currentNodeChainCleanup() {
+        synchronized (nodeChainCleanupLock) {
+            NodeChainCleanup original = null;
+            // A later Close may join the MTU worker. It cannot refresh the
+            // older call's cleanup deadline while that worker is outstanding.
+            for (NodeChainCleanup item = nodeChainCleanup; item != null; item = item.previous)
+                if (!item.closed) original = item;
+            return original;
+        }
+    }
     private volatile AndroidHomeStateStore.Snapshot torHomeOwner;
     private volatile AndroidExternalSession externalSession;
     private volatile boolean externalOwner;
@@ -1057,6 +1108,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 }));
                 if(startLayerRelay!=null)startLayerRelay.start();
                 commandServer = new CommandServer(this, this);
+                if (preparedChain != null) preparedChain.bindNative(commandServer);
                 commandServer.start();
                 commandServer.startOrReloadService(config, new OverrideOptions());
                 if (tunDescriptor == null || tunDescriptor.getFileDescriptor() == null || !tunDescriptor.getFileDescriptor().valid()) {
@@ -1073,6 +1125,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                                 && activeSession != null && sessionId.equals(activeSession.getName());
                     }
                     @Override public String network() { return executionNetworkIdentity(); }
+                    @Override public AutoCloseable beginMTUCleanup(AndroidNodeChainSession candidate, CommandServer nativeServer,
+                                                                  io.nekohasekai.libbox.RouterMTUPlatform platform) {
+                        if (candidate != capturedChain || !current(candidate, nativeServer) || platform != mtuSession)
+                            throw new IllegalStateException("MTU cleanup lost its original host, server, or interface owner.");
+                        NodeChainCleanup original = beginNodeChainCleanup(candidate, nativeServer);
+                        return () -> endNodeChainCleanup(original);
+                    }
                 }, chainNetwork);
                 executionNetwork = chainNetwork;
                 executionHandler.post(executionWatch);
@@ -1406,6 +1465,37 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             chain.cancel();
             AndroidMTUSession mtu = mtuSession;
             if (mtu != null) mtu.networkChanged();
+            if (chain.execution != null) {
+                // Server cleanup owns authenticated DELETE through the original
+                // lower path. Destroying that Box first would discard its only
+                // cleanup authority; every failed join must remain retryable.
+                closeNodeChainMeasurementsLocked();
+                if (capturedServer == null) {
+                    // The fresh server constructor failed before BindNative.
+                    // No native instance or remote cleanup authority was lent.
+                    try { if (mtu != null) mtu.close(); chain.closePlan(); chain.nativeServiceClosed(); }
+                    catch (Exception pending) { throw new IllegalStateException("The unbound ordered preparation has not drained.", pending); }
+                } else {
+                if (mtu != null) {
+                    NodeChainCleanup mtuCleanup = beginNodeChainCleanup(chain, capturedServer);
+                    try { mtu.close(); }
+                    catch (Exception pending) { throw new IllegalStateException("Ordered execution MTU cleanup has not drained.", pending); }
+                    finally { endNodeChainCleanup(mtuCleanup); }
+                }
+                NodeChainCleanup cleanup = beginNodeChainCleanup(chain, capturedServer);
+                try { chain.closePlan(); chain.requireNativeBindingDrain(); }
+                catch (Exception pending) {
+                    publish("STOPPING", activeMode, "The original ordered execution cleanup is pending; its native Box and source remain owned.");
+                    throw new IllegalStateException("The original ordered Server execution has not acknowledged cleanup.", pending);
+                } finally { endNodeChainCleanup(cleanup); }
+                try {
+                    if (capturedServer != null) { Libbox.routerStrategyCloseService(capturedServer); capturedServer.close(); }
+                    chain.nativeServiceClosed();
+                } catch (Exception pending) {
+                    throw new IllegalStateException("The original ordered execution Box has not acknowledged cleanup.", pending);
+                }
+                }
+            } else {
             // Native graph/MTU drains can need the exact service to close its
             // sockets. Retain all owners, close that Box, then retry both joins.
             try { chain.closePlan(); } catch (Exception pending) { /* retry after core close */ }
@@ -1421,6 +1511,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             } catch (Exception pending) {
                 publish("STOPPING", activeMode, "The original ordered native cleanup is still pending; its owners are retained for retry.");
                 throw new IllegalStateException("The complete ordered native drain has not been acknowledged.", pending);
+            }
             }
             commandServer = null;
         }
@@ -1524,6 +1615,17 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         nodeChainPhysicalNetwork = null;
     }
 
+    private void closeNodeChainMeasurementsLocked() {
+        if (hopMeasurement != null) {
+            hopMeasurement.networkChanged();
+            try { hopMeasurement.close(); }
+            catch (Exception pending) { throw new IllegalStateException("The original ordered execution measurement has not drained.", pending); }
+            hopMeasurement = null;
+        }
+        if (dnsMeasurement != null) dnsMeasurement.networkChanged();
+        closeDNSMeasurementLocked();
+    }
+
     private void closeTorMeasurementsLocked(){
         if(hopMeasurement!=null){
             hopMeasurement.networkChanged();
@@ -1604,9 +1706,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private void requireNodeChainNetwork(Network captured) throws Exception {
         AndroidNodeChainSession chain=nodeChainSession;
         NetworkCapabilities caps=captured==null?null:connectivity.getNetworkCapabilities(captured);
-        if(chain==null||explicitStop||captured!=nodeChainPhysicalNetwork||caps==null||caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+        NodeChainCleanup cleanup = currentNodeChainCleanup();
+        boolean closing = cleanup != null && !cleanup.closed && System.nanoTime() < cleanup.deadline && cleanup.chain == chain
+                && cleanup.server != null && cleanup.server == commandServer && cleanup.network == captured
+                && cleanup.networkIdentity.equals(executionNetwork) && chain != null && chain.retainsServerCleanup(cleanup.server);
+        if(chain==null||explicitStop&&!closing||captured!=nodeChainPhysicalNetwork||caps==null||caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
                 ||!executionNetwork.equals(executionNetworkIdentity()))throw new IllegalStateException("The ordered physical socket owner changed.");
-        chain.requireSource();
+        if (!closing) chain.requireSource();
     }
     private void requireMAXNetwork(AndroidMAXProfilePreparation.Adopted captured) {
         boolean cleanup=torCleanupCurrent();

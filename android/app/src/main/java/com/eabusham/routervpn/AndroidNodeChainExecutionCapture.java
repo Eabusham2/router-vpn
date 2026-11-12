@@ -4,6 +4,9 @@ import io.nekohasekai.libbox.CommandServer;
 import io.nekohasekai.libbox.Libbox;
 import io.nekohasekai.libbox.RouterNodeChainExecution;
 import io.nekohasekai.libbox.RouterNodeChainExecutionRestoreCapture;
+import io.nekohasekai.libbox.RouterMTU;
+import io.nekohasekai.libbox.RouterMTUPlatform;
+import io.nekohasekai.libbox.RouterHopMeasurement;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -91,6 +94,10 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         local.requireCurrent();
     }
 
+    // Binding also retains deny-only cleanup when cancellation won before the
+    // fresh native construction. The Session validates source after this call,
+    // before Start; Run and every proof still require a current source.
+    void bindNative(CommandServer server) throws Exception { plan.bindNative(server); }
     void run(CommandServer server) throws Exception { requireCurrent(); plan.run(server); requireCurrent(); }
     boolean healthy() {
         try { requireCurrent(); boolean result = plan.healthy(); requireCurrent(); return result; }
@@ -106,6 +113,17 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
     String progressJSON() throws Exception { requireCurrent(); String result = plan.progressJSON(); requireCurrent(); return result; }
     void networkChanged() { plan.networkChanged(); }
     boolean retainsServerCleanup(CommandServer server) { return !closed && plan.retainsServerCleanup(server); }
+    boolean nativeClosed() { return closed && plan.nativeClosed(); }
+    RouterMTU newMTU(CommandServer server, RouterMTUPlatform platform) throws Exception {
+        requireCurrent();
+        if (!healthy()) throw new IllegalStateException("MTU requires the original proved execution.");
+        return Libbox.routerNodeChainExecutionNewMTU(plan, server, platform);
+    }
+    RouterHopMeasurement newHopMeasurement(CommandServer server) throws Exception {
+        requireCurrent();
+        if (!healthy()) throw new IllegalStateException("Measurement requires the original proved execution.");
+        return Libbox.routerNodeChainExecutionNewHopMeasurement(plan, server);
+    }
 
     static final class RestoreCapture {
         private final AndroidNodeChainExecutionCapture original;
