@@ -37,7 +37,7 @@ func (n *NodeNetworkOwner) prepareNodePhysicalDarwin(policy mobilemultihop.Deskt
 		return errors.New("Darwin Router node physical sockets lost their captured policy")
 	}
 	_, meta, captured, err := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
-	if err != nil || meta.Kind != "node" && meta.Kind != "node-chain" || meta.TargetOS != "darwin" || !n.Matches(meta.SessionID, meta.SourceSHA256) {
+	if err != nil || meta.Kind != "node" && meta.Kind != "node-chain" && meta.Kind != "node-chain-execution" || meta.TargetOS != "darwin" || !n.Matches(meta.SessionID, meta.SourceSHA256) {
 		return errors.New("Darwin Router node physical sockets belong to another native target")
 	}
 	options := mobiletor.DesktopDarwinSocketOptions{}

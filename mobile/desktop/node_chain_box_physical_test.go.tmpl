@@ -21,6 +21,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/group"
 	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
+	G "github.com/sagernet/sing-box/protocol/routervpnchaingate"
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing-box/protocol/wireguard"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
@@ -30,7 +31,7 @@ import (
 // The actual Box parses all complete prefix objects and captures its real
 // options at construction. The explicit TUN fixture owns no kernel interface.
 // These construction tests never claim encrypted or OS routing acceptance.
-func desktopChainPhysicalBox(t *testing.T, policy *mobilemultihop.DesktopNodeChainPolicy,
+func desktopChainPhysicalBox(t *testing.T, policy interface{ Config() string },
 	change func(map[string]any)) (*Box, *desktopTorBoxTUN) {
 	t.Helper()
 	var graph map[string]any
@@ -53,6 +54,7 @@ func desktopChainPhysicalBox(t *testing.T, policy *mobilemultihop.DesktopNodeCha
 		})
 	outs := outbound.NewRegistry()
 	group.RegisterSelector(outs)
+	G.RegisterOutbound(outs)
 	shadowsocks.RegisterOutbound(outs)
 	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
 	endpoints := endpoint.NewRegistry()

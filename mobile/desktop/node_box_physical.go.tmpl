@@ -23,7 +23,7 @@ import (
 // options at Box construction without widening the External/Tor source gate.
 // Only the separate compiled Node service makes this snapshot eligible.
 func routerVPNNodeOptionsDigest(ctx context.Context, options option.Options) string {
-	if options.Route == nil || options.Route.Final != "proxy" {
+	if options.Route == nil || options.Route.Final != "proxy" && options.Route.Final != mobilemultihop.NodeChainExecutionGateTag {
 		return ""
 	}
 	owned := 0

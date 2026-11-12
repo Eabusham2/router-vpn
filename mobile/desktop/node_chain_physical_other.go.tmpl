@@ -11,3 +11,7 @@ import (
 func (*NodeNetworkOwner) PrepareNodeChainPhysicalPolicy(*mobilemultihop.DesktopNodeChainPolicy) error {
 	return errors.New("ordered chain physical protection requires its platform's original native owner")
 }
+
+func (*NodeNetworkOwner) PrepareNodeChainExecutionPhysicalPolicy(*mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy) error {
+	return errors.New("ordered execution physical protection requires its platform's original native owner")
+}

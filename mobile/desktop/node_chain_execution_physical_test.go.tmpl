@@ -1,0 +1,128 @@
+package box
+
+import (
+	"encoding/json"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func desktopExecutionPhysicalPolicy(t *testing.T, execution, target string) (*mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy, *mobilemultihop.DesktopNodeChainPolicy) {
+	t.Helper()
+	generic, _ := executionNativeSources(t, execution)
+	chain, err := mobilemultihop.NewNodeChain(generic.LocalSource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := mobilemultihop.NewDesktopNodeChainPolicy(chain, desktopTorBoxSession, target, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparation, err := mobilemultihop.NewDesktopNodeChainExecutionPreparation(original, execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := preparation.DesktopPhysicalPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy, original
+}
+
+// The Box and encrypted prefix constructors are real. The shared TUN double
+// is explicitly unstarted, so these checks grant no native network admission.
+func TestRouterVPNDesktopNodeChainExecutionPhysicalCapturesClosedBox(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
+		t.Skip("ordered physical adapter requires a desktop target")
+	}
+	for _, execution := range []string{"server", "auto"} {
+		t.Run(execution, func(t *testing.T) {
+			policy, original := desktopExecutionPhysicalPolicy(t, execution, runtime.GOOS)
+			instance, tun := desktopChainPhysicalBox(t, policy, nil)
+			if !routerVPNDesktopNodeChainExecutionPhysicalTarget(policy, runtime.GOOS) || instance.routerVPNNodeOptions == "" || instance.routerVPNNodeChainExecutionOptions == "" {
+				t.Fatal("closed execution graph lost its original native physical digest")
+			}
+			_, network, err := instance.routerVPNDesktopNodePhysical(policy)
+			if err != nil || network == nil || network.Current() || network.SocketCurrent() || tun.ready || tun.claimed {
+				t.Fatal("closed execution graph fabricated physical readiness", err)
+			}
+			if _, _, err := instance.routerVPNDesktopNodePhysical(original); err == nil {
+				t.Fatal("ordinary Local policy substituted for execution preparation")
+			}
+			if owner, err := instance.routerVPNDesktopNodeActivatePhysical(policy); err == nil || owner != nil {
+				t.Fatal("unprepared execution graph acquired native TUN authority")
+			}
+			if err := instance.RouterVPNStrategyStart(); err == nil {
+				t.Fatal("closed execution graph bypassed captured physical preparation")
+			}
+			if network.SocketCurrent() || tun.ready || tun.claimed {
+				t.Fatal("unprepared execution graph opened a socket or TUN")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainExecutionPhysicalRejectsChangedBox(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
+		t.Skip("ordered physical adapter requires a desktop target")
+	}
+	for _, fault := range []string{"middle-key", "dns", "physical-source", "mtu", "local-final"} {
+		t.Run(fault, func(t *testing.T) {
+			policy, _ := desktopExecutionPhysicalPolicy(t, "server", runtime.GOOS)
+			instance, tun := desktopChainPhysicalBox(t, policy, func(graph map[string]any) {
+				switch fault {
+				case "middle-key":
+					rows := graph["endpoints"].([]any)
+					rows[1].(map[string]any)["private_key"] = rows[0].(map[string]any)["private_key"]
+				case "dns":
+					for _, raw := range graph["dns"].(map[string]any)["servers"].([]any) {
+						row := raw.(map[string]any)
+						if row["detour"] == mobilemultihop.SelectorTag {
+							row["server"] = "192.168.50.134"
+						}
+					}
+				case "physical-source":
+					graph["services"].([]any)[0].(map[string]any)["source_sha256"] = strings.Repeat("f", 64)
+				case "mtu":
+					row := graph["inbounds"].([]any)[0].(map[string]any)
+					row["mtu"] = row["mtu"].(float64) + 16
+				case "local-final":
+					graph["route"].(map[string]any)["final"] = mobilemultihop.SelectorTag
+				}
+			})
+			if _, _, err := instance.routerVPNDesktopNodePhysical(policy); err == nil {
+				t.Fatal("changed execution graph acquired original physical authority")
+			}
+			if tun.ready || tun.claimed {
+				t.Fatal("changed execution graph entered native startup")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainExecutionPhysicalKeepsTypedTarget(t *testing.T) {
+	for _, target := range []string{"linux", "windows", "darwin"} {
+		t.Run(target, func(t *testing.T) {
+			policy, _ := desktopExecutionPhysicalPolicy(t, "auto", target)
+			if !routerVPNDesktopNodeChainExecutionPhysicalTarget(policy, target) {
+				t.Fatal("original typed desktop execution target was refused")
+			}
+			for _, other := range []string{"linux", "windows", "darwin", "android", ""} {
+				if other != target && routerVPNDesktopNodeChainExecutionPhysicalTarget(policy, other) {
+					t.Fatal("execution preparation borrowed a foreign desktop target")
+				}
+			}
+			config, meta, capture, err := policy.PhysicalReadValidated()
+			var graph map[string]any
+			if err != nil || json.Unmarshal([]byte(config), &graph) != nil || meta.Kind != "node-chain-execution" || capture.SelectedDNS.Detour != mobilemultihop.SelectorTag ||
+				graph["route"].(map[string]any)["final"] != mobilemultihop.NodeChainExecutionGateTag {
+				t.Fatal("execution preparation lost its closed graph and selected DNS")
+			}
+		})
+	}
+	if routerVPNDesktopNodeChainExecutionPhysicalTarget(nil, "linux") {
+		t.Fatal("missing typed execution policy was admitted")
+	}
+}

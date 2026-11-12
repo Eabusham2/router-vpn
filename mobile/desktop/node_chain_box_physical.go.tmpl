@@ -49,3 +49,37 @@ func (s *Box) RouterVPNDesktopNodeChainActivatePhysical(policy *mobilemultihop.D
 	}
 	return s.routerVPNDesktopNodeActivatePhysical(policy)
 }
+
+// Execution preparation has a distinct closed application graph and config
+// identity. Its original ordered policy supplies the supported physical root,
+// but cannot substitute for this exact preparation-time capability.
+func routerVPNDesktopNodeChainExecutionPhysicalTarget(policy *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy, target string) bool {
+	if policy == nil || policy.Validate() != nil {
+		return false
+	}
+	original, err := policy.OriginalDesktopPolicy()
+	if err != nil || !routerVPNDesktopNodeChainPhysicalTarget(original, target) {
+		return false
+	}
+	_, meta, _, err := policy.PhysicalReadValidated()
+	return err == nil && meta.Kind == "node-chain-execution" && meta.TargetOS == target
+}
+
+func (s *Box) RouterVPNDesktopNodeChainExecutionPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy) (*RouterVPNDesktopNodePreparation, error) {
+	if runtime.GOOS != "windows" || !routerVPNDesktopNodeChainExecutionPhysicalTarget(policy, "windows") {
+		return nil, errors.New("ordered Windows execution lost its original physical preparation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopNodePreparation{network: network, policy: policy}
+	return owner, network.PrepareNodeChainExecutionPhysicalPolicy(policy)
+}
+
+func (s *Box) RouterVPNDesktopNodeChainExecutionActivatePhysical(policy *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if runtime.GOOS != "windows" || !routerVPNDesktopNodeChainExecutionPhysicalTarget(policy, "windows") {
+		return nil, errors.New("ordered Windows execution lost its original physical activation")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}

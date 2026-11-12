@@ -46,3 +46,34 @@ func (s *Box) RouterVPNDesktopDarwinNodeChainActivatePhysical(policy *mobilemult
 	}
 	return s.routerVPNDesktopNodeActivatePhysical(policy)
 }
+
+type RouterVPNDesktopDarwinNodeChainExecutionPreparation struct {
+	network *routervpndesktoppt.NodeNetworkOwner
+	policy  *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
+}
+
+func (s *Box) RouterVPNDesktopDarwinNodeChainExecutionPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy) (*RouterVPNDesktopDarwinNodeChainExecutionPreparation, error) {
+	if !routerVPNDesktopNodeChainExecutionPhysicalTarget(policy, "darwin") {
+		return nil, errors.New("Darwin ordered execution lost its original physical preparation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopDarwinNodeChainExecutionPreparation{network: network, policy: policy}
+	return owner, network.PrepareNodeChainExecutionPhysicalPolicy(policy)
+}
+
+func (p *RouterVPNDesktopDarwinNodeChainExecutionPreparation) CloseSource(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil {
+		return errors.New("Darwin execution cleanup lost its retained preparation")
+	}
+	return p.network.CloseNodeChainExecutionPhysicalSource(ctx, p.policy)
+}
+
+func (s *Box) RouterVPNDesktopDarwinNodeChainExecutionActivatePhysical(policy *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if !routerVPNDesktopNodeChainExecutionPhysicalTarget(policy, "darwin") {
+		return nil, errors.New("Darwin ordered execution lost its original physical activation")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}
