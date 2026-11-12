@@ -2,6 +2,7 @@ package libbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -436,3 +437,50 @@ func (*executionBridgeMonitor) RegisterMyInterface(string) {}
 func (*executionBridgeMonitor) MyInterfaces() []string     { return nil }
 func (*executionBridgeMonitor) OverrideAndroidVPN() bool   { return false }
 func (*executionBridgeMonitor) AndroidVPNEnabled() bool    { return false }
+
+// A completed observation of another native owner cannot become valid again
+// when the original pointers are restored. Cancellation belongs to the exact
+// observed lifetime; an unrelated successor state remains untouched.
+func TestRouterNodeChainExecutionBridgeObservedOwnerCannotReturn(t *testing.T) {
+	for _, fault := range []string{"instance", "service", "box", "state"} {
+		t.Run(fault, func(t *testing.T) {
+			m, state := executionBridgeNativeFixture(t)
+			if err := m.nativeCurrent(t.Context(), state); err != nil {
+				t.Fatal(err)
+			}
+			originalService := state.server.StartedService
+			originalInstance := *routerMTUField[*daemon.Instance](t, state.service, "instance")
+			originalBox := *routerMTUField[*box.Box](t, state.instance, "instance")
+			successorCtx, successorCancel := context.WithCancel(t.Context())
+			defer successorCancel()
+			successor := &routerNodeChainExecutionState{lifetime: successorCtx, cancel: successorCancel}
+			switch fault {
+			case "instance":
+				*routerMTUField[*daemon.Instance](t, state.service, "instance") = &daemon.Instance{}
+			case "service":
+				state.server.StartedService = &daemon.StartedService{}
+			case "box":
+				*routerMTUField[*box.Box](t, state.instance, "instance") = &box.Box{}
+			case "state":
+				m.state.Store(successor)
+			}
+			if err := m.nativeCurrent(t.Context(), state); err == nil {
+				t.Fatal("foreign original owner observation succeeded")
+			}
+			state.server.StartedService = originalService
+			*routerMTUField[*daemon.Instance](t, state.service, "instance") = originalInstance
+			*routerMTUField[*box.Box](t, state.instance, "instance") = originalBox
+			m.state.Store(state)
+			if state.lifetime.Err() == nil || m.nativeCurrent(t.Context(), state) == nil {
+				t.Fatal("observed foreign owner revived after pointer restoration")
+			}
+			if successorCtx.Err() != nil {
+				t.Fatal("late observation retired a different successor")
+			}
+			var progress mobilemultihop.NodeChainExecutionProgress
+			if json.Unmarshal([]byte(m.ProgressJSON()), &progress) != nil || progress.Ready || !progress.Complete || progress.Stage != "retired" {
+				t.Fatal("retired observed owner retained publishable progress")
+			}
+		})
+	}
+}

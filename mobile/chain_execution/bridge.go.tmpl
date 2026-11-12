@@ -101,7 +101,8 @@ func (m *RouterNodeChainExecution) ProgressJSON() string {
 				progress = controller.value.Progress()
 			}
 		}
-		if m.retired.Load() {
+		state := m.state.Load()
+		if m.retired.Load() || state != nil && state.lifetime != nil && state.lifetime.Err() != nil {
 			progress.Ready = false
 			progress.Complete = true
 			progress.Stage = "retired"

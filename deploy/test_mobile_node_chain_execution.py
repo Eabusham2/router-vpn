@@ -80,6 +80,9 @@ def verdict(raw, code, expected):
 
 
 CONTROLS = (
+    ('observed owner cannot return', 'experimental/libbox/routervpn_node_chain_execution_lifecycle.go',
+     '\t\tif failure != nil && ctx.Err() == nil && state.cancel != nil {\n\t\t\tstate.cancel()\n\t\t}', '',
+     'experimental/libbox', 'TestRouterNodeChainExecutionBridgeObservedOwnerCannotReturn/instance', 'observed foreign owner revived after pointer restoration'),
     ('pending startup lifetime', 'experimental/libbox/routervpn_node_chain_execution_lifecycle.go', '\t\tstate.cancel()\n\t\tclose(a.done)', '\t\tclose(a.done)', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeStartupBudgetOwnsPendingLifetime', 'expired startup budget did not retire original runtime'),
     ('successful lifetime independence', 'experimental/libbox/routervpn_node_chain_execution_lifecycle.go', '\tif !a.committed {', '\tif true {', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeSuccessfulLifetimeOutlivesStartup', 'successful admission close retired runtime'),
     ('original daemon failure', 'daemon/routervpn_instance_close.go', '\tif result != nil {\n\t\treturn result\n\t}', '\t_ = result', 'daemon', 'TestRouterVPNInstanceCloseReceiptPreservesFailure', 'failed native close became successful receipt'),

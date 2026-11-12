@@ -326,7 +326,18 @@ func routerNodeChainExecutionPort(discovery mobilemultihop.NodeChainExecutionDis
 	return discovery.FirstPort + int(n.Int64()), nil
 }
 
-func (m *RouterNodeChainExecution) nativeCurrent(ctx context.Context, state *routerNodeChainExecutionState) error {
+func (m *RouterNodeChainExecution) nativeCurrent(ctx context.Context, state *routerNodeChainExecutionState) (failure error) {
+	if m == nil || ctx == nil || state == nil {
+		return errRouterNodeChainExecution
+	}
+	defer func() {
+		// Retire only the observed original state. A late old callback must not
+		// cancel a successor, and ordinary caller cancellation is not evidence
+		// that the original native owner changed.
+		if failure != nil && ctx.Err() == nil && state.cancel != nil {
+			state.cancel()
+		}
+	}()
 	if m == nil || ctx == nil || ctx.Err() != nil || state == nil || m.state.Load() != state || m.retired.Load() || state.lifetime == nil || state.lifetime.Err() != nil ||
 		state.server == nil || state.server.ctx == nil || state.server.ctx.Err() != nil || state.service == nil || state.server.StartedService != state.service || state.instance == nil || state.box == nil || state.instance.Box() != state.box {
 		return errRouterNodeChainExecution
