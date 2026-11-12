@@ -13,6 +13,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"router-vpn/internal/mobilemtu"
 )
 
 // The compiler, captured private files, monitor, and Stop transaction are real.
@@ -76,6 +78,72 @@ func desktopOwnedNodeMonitorDone(launch *desktopNodeLaunch) <-chan struct{} {
 	launch.workspaceMu.Lock()
 	defer launch.workspaceMu.Unlock()
 	return launch.ownedNode.monitorDone
+}
+
+// monitorDone acknowledges the watch loop, deliberately before its Stop
+// transaction. Join that transaction separately: synctest.Wait alone may return
+// while a context-aware workspace lock is durably blocked on its retry timer.
+func joinDesktopOwnedNodeMonitorStop(ctx context.Context, a *app, done <-chan struct{}) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+	}
+	if err := mobilemtu.LockContext(ctx, &a.operationMu); err != nil {
+		return err
+	}
+	a.operationMu.Unlock()
+	return nil
+}
+
+func TestDesktopOwnedNodeMonitorStopJoinRequiresWatchAndTransaction(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		a := &app{}
+		a.operationMu.Lock()
+		watchDone := make(chan struct{})
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		joined := make(chan error, 1)
+		go func() { joined <- joinDesktopOwnedNodeMonitorStop(ctx, a, watchDone) }()
+		synctest.Wait()
+		select {
+		case <-joined:
+			t.Fatal("Stop join completed before its watch loop")
+		default:
+		}
+		close(watchDone)
+		synctest.Wait()
+		select {
+		case <-joined:
+			t.Fatal("watch completion was mistaken for serialized Stop completion")
+		default:
+		}
+		a.operationMu.Unlock()
+		if err := <-joined; err != nil {
+			t.Fatal("joined Stop did not release its original operation", err)
+		}
+	})
+}
+
+func TestDesktopOwnedNodeMonitorStopJoinKeepsCleanupDeadline(t *testing.T) {
+	for _, blocked := range []string{"watch", "transaction"} {
+		t.Run(blocked, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				a := &app{}
+				done := make(chan struct{})
+				if blocked == "transaction" {
+					close(done)
+					a.operationMu.Lock()
+					defer a.operationMu.Unlock()
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				if err := joinDesktopOwnedNodeMonitorStop(ctx, a, done); !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("unjoined Stop escaped its original cleanup deadline", err)
+				}
+			})
+		})
+	}
 }
 
 func desktopOwnedNodeMonitorCleanup(t *testing.T, f *desktopOwnedNodeTestFixture, process *desktopOwnedNodeMonitorProcess) {
@@ -205,9 +273,11 @@ func TestDesktopOwnedNodeMonitorRetiresFailureAfterJoiningWatch(t *testing.T) {
 			t.Fatal(err)
 		}
 		f.a.monitorDesktopOwnedNodeRuntime(f.launch)
-		synctest.Wait()
-		time.Sleep(500 * time.Millisecond)
-		synctest.Wait()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := joinDesktopOwnedNodeMonitorStop(ctx, f.a, desktopOwnedNodeMonitorDone(f.launch)); err != nil {
+			t.Fatal("failed watcher did not finish its captured Stop transaction", err)
+		}
 		if !joinedBeforeChild || !f.process.closed || !f.launch.ownedNode.retired || f.kernel.locked {
 			t.Fatal("failed watcher did not join itself before exact child and Job retirement")
 		}
