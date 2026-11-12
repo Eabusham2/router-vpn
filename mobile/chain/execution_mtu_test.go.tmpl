@@ -182,7 +182,7 @@ func TestRouterVPNExecutionNativeMTUUsesJoinedReader(t *testing.T) {
 }
 
 func TestRouterVPNExecutionNativeMTURejectsChangedOwnership(t *testing.T) {
-	for _, scenario := range []string{"zero-binding", "foreign-identity", "foreign-selector", "open-gate", "retired-source", "invalid-fixed", "above-bound", "cancelled", "foreign-reader"} {
+	for _, scenario := range []string{"zero-binding", "foreign-identity", "foreign-engine", "foreign-selector", "open-gate", "retired-source", "invalid-fixed", "above-bound", "cancelled", "foreign-reader"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newExecutionNativeFixture(t, "server", nil)
 			p := f.adopt(t)
@@ -199,6 +199,17 @@ func TestRouterVPNExecutionNativeMTURejectsChangedOwnership(t *testing.T) {
 				other := newExecutionNativeFixture(t, "server", nil)
 				projection := other.adopt(t)
 				binding = executionMTUBinding(t, other, projection)
+			case "foreign-engine":
+				// Equal identity and delegated observations do not grant another
+				// engine the original runtime's opaque native mutation authority.
+				foreign := &struct {
+					mobilemultihop.NodeChainExecutionEngine
+				}{e}
+				state := reflect.ValueOf(&binding).Elem().FieldByName("state")
+				executionMTUSet(t, state, "engine", foreign)
+				if err := binding.ValidateTransitionContext(ctx); err != nil {
+					t.Fatal("foreign engine fixture lost its equal closed identity", err)
+				}
 			case "foreign-selector":
 				if !e.selector.SelectOutbound(e.state.Load().local.Tag()) {
 					t.Fatal("foreign selector fixture")

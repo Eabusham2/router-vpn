@@ -51,6 +51,7 @@ func routerVPNReadExecutionMTU(ctx context.Context, reader adapter.Inbound) (rou
 // same closed gate, source, managers and selector, including away/back epochs.
 func (e *RouterVPNNodeChainExecutionEngine) closedMTUContext(ctx context.Context, binding mobilemultihop.NodeChainExecutionMTUResumeBinding, epoch uint64) error {
 	if e == nil || ctx == nil || ctx.Err() != nil || e.control == nil || e.instance == nil || e.current == nil ||
+		!binding.OwnsEngine(e) ||
 		e.current(ctx) != nil || binding.Nonce() == "" || epoch == 0 || e.opening.Load() || e.revoking.Load() != 0 ||
 		!e.revoked.Load() || e.permit.Load() != nil || e.stops.Load() != 0 {
 		return errRouterVPNExecutionOwner

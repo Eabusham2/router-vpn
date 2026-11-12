@@ -3,6 +3,7 @@ package mobilemultihop
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 
 	"router-vpn/internal/routechoice"
@@ -43,6 +44,16 @@ func (b NodeChainExecutionMTUResumeBinding) Identity() NodeChainIdentity {
 		return NodeChainIdentity{}
 	}
 	return b.state.identity
+}
+
+// Identity strings are observations, not native pointer authority. A resume
+// adapter must also own the exact engine retained by the original runtime.
+func (b NodeChainExecutionMTUResumeBinding) OwnsEngine(engine NodeChainExecutionEngine) bool {
+	if b.state == nil || engine == nil {
+		return false
+	}
+	value := reflect.ValueOf(engine)
+	return value.Kind() == reflect.Pointer && !value.IsNil() && b.state.engine == engine
 }
 func (b NodeChainExecutionMTUResumeBinding) Nonce() string {
 	if b.state == nil {

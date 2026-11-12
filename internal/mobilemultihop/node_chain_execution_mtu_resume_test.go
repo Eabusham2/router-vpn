@@ -217,6 +217,17 @@ func TestNodeChainExecutionMTUResumeRequiresActualNativeReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var typedNil *nodeChainExecutionMTUEngine
+	uncomparable := struct {
+		NodeChainExecutionEngine
+		bytes []byte
+	}{NodeChainExecutionEngine: e, bytes: []byte{1}}
+	if !b.OwnsEngine(e) || b.OwnsEngine(e.nodeChainExecutionRuntimeEngine) ||
+		b.OwnsEngine(&nodeChainExecutionMTUEngine{nodeChainExecutionRuntimeEngine: e.nodeChainExecutionRuntimeEngine}) ||
+		b.OwnsEngine(nil) || b.OwnsEngine(typedNil) || b.OwnsEngine(uncomparable) ||
+		(NodeChainExecutionMTUResumeBinding{}).OwnsEngine(e) {
+		t.Fatal("native MTU binding substituted pointer ownership with identity or a wrapper")
+	}
 	if _, err := NewNodeChainExecutionMTUResumeRuntime(ctx, b); err == nil {
 		t.Fatal("shared closed state replaced actual native reader/readback receipt")
 	}

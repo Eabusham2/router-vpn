@@ -34,8 +34,8 @@ def encoded(rows):
 class Verdict(unittest.TestCase):
     def test_exact_complete_three_package_inventory(self):
         result = RUNNER.verdict(encoded(events()), 0)
-        self.assertEqual(result, {'roots': 20, 'test_records': 53})
-        self.assertEqual(len(RUNNER.CONTROLS), 13)
+        self.assertEqual(result, {'roots': 20, 'test_records': 54})
+        self.assertEqual(len(RUNNER.CONTROLS), 14)
 
     def test_selection_keeps_only_exact_owner_inventory(self):
         pattern = re.compile(RUNNER.selection())
