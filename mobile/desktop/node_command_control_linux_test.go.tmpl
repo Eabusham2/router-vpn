@@ -3,11 +3,68 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/sagernet/sing-box/routervpn/linuxprotection"
+	"github.com/spf13/cobra"
 )
+
+func TestRouterVPNDesktopNodePhysicalCommandLinuxImportedDispatcher(t *testing.T) {
+	registered := 0
+	for _, command := range mainCommand.Commands() {
+		if command.Name() == "routervpn-imported" {
+			registered++
+		}
+	}
+	if registered != 1 {
+		t.Fatal("installed imported command is not registered exactly once", registered)
+	}
+	for _, scenario := range []string{"help", "missing-parent", "foreign-parent", "positional", "windows-parent", "duplicate", "empty", "cancelled"} {
+		t.Run(scenario, func(t *testing.T) {
+			root := &cobra.Command{Use: "sing-box", SilenceUsage: true, SilenceErrors: true}
+			root.SetOut(io.Discard)
+			root.SetErr(io.Discard)
+			root.AddCommand(routerVPNNewLinuxImportedCommand())
+			args := []string{"routervpn-imported", "--runtime-dir", t.TempDir(), "--session", strings.Repeat("a", 32),
+				"--config-sha256", strings.Repeat("b", 64), "--physical-source-sha256", strings.Repeat("c", 64),
+				"--physical-transfer-sha256", strings.Repeat("d", 64), "--physical-mtu", "1280"}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			switch scenario {
+			case "help":
+				args = []string{"routervpn-imported", "--help"}
+			case "foreign-parent":
+				// A mismatched digest refuses before consuming FD 3, 4 or 5.
+				args = append(args, "--linux-parent-channel", "3", "--linux-parent-directory", "4", "--linux-parent-capture", strings.Repeat("e", 64))
+			case "positional":
+				args = append(args, "foreign-source")
+			case "windows-parent":
+				args = append(args, "--journal-parent-handle", "5")
+			case "duplicate":
+				args = append(args, "--session", strings.Repeat("f", 32))
+			case "empty":
+				args = append(args, "--linux-parent-capture=")
+			case "cancelled":
+				cancel()
+			}
+			root.SetArgs(args)
+			err := root.ExecuteContext(ctx)
+			if (err == nil) != (scenario == "help") {
+				t.Fatal("imported command accepted missing or foreign ownership", err)
+			}
+			if (scenario == "missing-parent" || scenario == "foreign-parent") && !errors.Is(err, routerVPNExternalFailure) {
+				t.Fatal("imported command did not reach its actual authenticated child", err)
+			}
+			if scenario == "cancelled" && !errors.Is(err, context.Canceled) {
+				t.Fatal("imported dispatcher lost its original cancellation", err)
+			}
+		})
+	}
+}
 
 func TestRouterVPNDesktopNodePhysicalCommandLinuxParentBounds(t *testing.T) {
 	session, source, config := strings.Repeat("a", 32), strings.Repeat("b", 64), strings.Repeat("c", 64)

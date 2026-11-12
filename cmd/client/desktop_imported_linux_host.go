@@ -62,14 +62,25 @@ func (capture *desktopLinuxImportedCapture) Verify(ctx context.Context) (string,
 	return image, capture.current(ctx)
 }
 
-// The public dispatcher stays closed until the installed-controller fixture
-// passes with independent encrypted peers. Private native fixtures call the
-// same concrete capture below, never a mutable environment admission switch.
+// The installed Linux path uses its original authenticated parent and retained
+// session. Its bounded graph check remains in the concrete capture; unsupported
+// imported graphs cannot fall through to the legacy unprotected launcher.
 func captureDesktopImportedPlatformContext(ctx context.Context, a *app, sel multihopSelection, modes []string) (multihopSelection, bool, error) {
-	if sel.Entry.NodeKind != "external" || a == nil || a.desktopNodeConnectionHost() != nil {
+	if sel.Entry.NodeKind != "external" {
 		return sel, false, nil
 	}
-	return sel, true, errors.New("Linux imported protected host is not yet admitted")
+	if ctx == nil || a == nil {
+		return sel, true, errors.New("Linux imported capture requires its original caller and application")
+	}
+	host, err := a.desktopNodeConnectionHostContext(ctx)
+	if err != nil {
+		return sel, true, err
+	}
+	if host != nil {
+		return sel, false, nil
+	}
+	captured, err := captureDesktopLinuxImportedForApp(ctx, a, sel, modes)
+	return captured, true, err
 }
 
 func captureDesktopLinuxImportedForApp(ctx context.Context, a *app, sel multihopSelection, modes []string) (multihopSelection, error) {

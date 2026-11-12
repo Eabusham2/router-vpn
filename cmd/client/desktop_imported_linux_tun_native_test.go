@@ -338,9 +338,7 @@ func linuxHostTUNImportedFixture(controller *ownedDesktopController, scenario st
 	}
 	defer releaseMTU()
 	var constructed *desktopNodeLaunch
-	driver := nativeMultihopConnectRuntime{capture: func(a *app, s multihopSelection, m []string) (multihopSelection, error) {
-		return captureDesktopLinuxImportedForApp(a.connectionOperationContextOrBackground(), a, s, m)
-	},
+	driver := nativeMultihopConnectRuntime{capture: captureNativeMultihopForApp,
 		preflight: func(a *app, selection multihopSelection, descriptor *desktopExecutionDescriptor) (*desktopNodeLaunch, error) {
 			var err error
 			constructed, err = preflightOwnedNativeMultihopCommand(a, selection, descriptor)

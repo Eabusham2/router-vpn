@@ -7,7 +7,9 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/signal"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	box "github.com/sagernet/sing-box"
@@ -15,7 +17,39 @@ import (
 	"github.com/sagernet/sing-box/option"
 	SJ "github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
+	"github.com/spf13/cobra"
 )
+
+func init() { mainCommand.AddCommand(routerVPNNewLinuxImportedCommand()) }
+
+// The installed parent launches this distinct family. Cobra only captures its
+// exact arguments; the controlled child authenticates inherited descriptors
+// before opening the independently captured imported graph.
+func routerVPNNewLinuxImportedCommand() *cobra.Command {
+	var directory, session, config, source, transfer string
+	var mtu int
+	var parent routerVPNNodeLinuxParentOptions
+	command := &cobra.Command{Use: "routervpn-imported", Short: "Run one captured imported entry and paired Router exit", Args: cobra.NoArgs, SilenceUsage: true,
+		RunE: func(command *cobra.Command, _ []string) error {
+			ctx, cancel := signal.NotifyContext(command.Context(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return routerVPNRunLinuxImportedControlled(ctx, directory, session, config, source, transfer, mtu, parent)
+		}}
+	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private runtime directory")
+	command.Flags().StringVar(&session, "session", "", "captured runtime identity")
+	command.Flags().StringVar(&config, "config-sha256", "", "captured complete configuration digest")
+	command.Flags().StringVar(&source, "physical-source-sha256", "", "captured imported physical owner identity")
+	command.Flags().StringVar(&transfer, "physical-transfer-sha256", "", "captured protection selection")
+	command.Flags().IntVar(&mtu, "physical-mtu", 0, "captured live TUN value for sealed restoration")
+	command.Flags().IntVar(&parent.ChannelFD, "linux-parent-channel", 0, "inherited original Linux parent channel")
+	command.Flags().IntVar(&parent.DirectoryFD, "linux-parent-directory", 0, "inherited original Linux parent task directory")
+	command.Flags().StringVar(&parent.CaptureSHA256, "linux-parent-capture", "", "captured Linux command identity")
+	routerVPNExternalOwnedFlags(command.Flags())
+	return command
+}
 
 // The ordinary Linux host predicate stays closed until complete native
 // acceptance. This explicit command path additionally requires the original
@@ -26,9 +60,8 @@ func routerVPNRunLinuxNodeControlled(parent context.Context, directory, session,
 	return routerVPNRunLinuxPhysicalControlled(parent, directory, session, config, source, transfer, mtu, options, false)
 }
 
-// The public imported dispatcher stays closed until the complete Linux parent
-// path is integrated. This child entry point still requires the actual inherited
-// descriptors and authenticated selection before any private source read.
+// This child entry point requires the actual inherited descriptors and
+// authenticated selection before any private source read.
 func routerVPNRunLinuxImportedControlled(parent context.Context, directory, session, config, source, transfer string,
 	mtu int, options routerVPNNodeLinuxParentOptions) error {
 	return routerVPNRunLinuxPhysicalControlled(parent, directory, session, config, source, transfer, mtu, options, true)

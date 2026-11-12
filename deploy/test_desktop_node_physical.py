@@ -1311,7 +1311,11 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          tuple(IMPORTED_COMMAND_ROOT + name for name in ("SourceBoundary", "RestoredMTU", "JournalBeforePrivateInputs", "ExclusiveFamily", "LinuxSource")) +
          tuple(IMPORTED_COMMAND_ROOT + "LinuxSource/" + fault for fault in ("valid", "source", "config", "entry", "final", "dns", "mtu", "target", "ordinary-source", "missing-source")) +
          tuple(IMPORTED_COMMAND_ROOT + "ExclusiveFamily/" + fault for fault in ("both-flags", "missing-journal", "public-missing-journal")) +
-         (IMPORTED_COMMAND_CASES if windows else ())),
+         (IMPORTED_COMMAND_CASES if windows else ()) +
+         (("TestRouterVPNDesktopNodePhysicalCommandLinuxImportedDispatcher",) +
+          tuple("TestRouterVPNDesktopNodePhysicalCommandLinuxImportedDispatcher/" + case for case in
+                ("help", "missing-parent", "foreign-parent", "positional", "windows-parent", "duplicate", "empty", "cancelled"))
+          if platform.system() == "Linux" else ())),
         ("factory", "./routervpn/desktoppt", "^TestRouterVPNNodePhysical" if windows else "^TestRouterVPNNode(Physical|LinuxLifecycle)",
          tuple("TestRouterVPNNodePhysical" + name for name in ("SeparateRegistriesAndUnpreparedRejection", "HandshakePhaseAndExactPolicy", "FactoryCancellationJoinsPartialOwner", "RetirementKeepsExactJoinedSource", "AdmissionRetainsExactPolicy", "AdmissionCapturesExactPredecessor", "JournalAdmissionCapturesDurableBarrier")) +
          (IMPORTED_FACTORY_ROOT + "StaticAndCapturedAdmission", IMPORTED_FACTORY_ROOT + "SOCKSCallerContext", "TestRouterVPNNodePhysicalCallerContext") +
