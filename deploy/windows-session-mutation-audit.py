@@ -170,7 +170,7 @@ for marker in (
     "StartUnifiedApiAsync 'Selecting node…'",
     "Testing 50-sample node latency…",
     "Testing real path speed…",
-    "Testing routed hop speeds…",
+    "StartUnifiedPerformanceRequest $State 'Testing cumulative routed hop speeds…' '/api/multihop/speed-test' $Body $Timeout",
 ):
     assert marker in telemetry, f'Windows telemetry session/async guard missing {marker}'
 assert "selecting/connecting a fastest Router VPN node" not in telemetry, 'Fastest selection must not silently connect'
