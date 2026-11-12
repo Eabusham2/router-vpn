@@ -2,6 +2,7 @@ package mobilemultihop
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"reflect"
 	"strings"
@@ -217,6 +218,78 @@ func TestNodeChainServerCarrierBindsOnlyOriginalOuterTransport(t *testing.T) {
 			other, err := serverCarrierCaptureFixture(t, original, &snapshot).ProjectContext(context.Background())
 			if err != nil || other.configSHA == projected.configSHA {
 				t.Fatal("equal MTUs across different route owners reused config binding", err)
+			}
+		})
+	}
+}
+
+func TestNodeChainServerCarrierIPv6OuterEnvelopeAndBinding(t *testing.T) {
+	for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		t.Run(layer, func(t *testing.T) {
+			original := serverCarrierPolicyFixture(t, "wg", layer, 0, 2)
+			var source NodeChainServerSource
+			_ = json.Unmarshal([]byte(original.sourceJSON), &source)
+			first, err := ParseNodeLaunchInput(source.Nodes[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			replaceFiles := func(raw string) string {
+				var assets map[string]string
+				if json.Unmarshal([]byte(raw), &assets) != nil {
+					t.Fatal("fixture assets")
+				}
+				for name, value := range assets {
+					decoded, err := base64.StdEncoding.DecodeString(value)
+					if err != nil {
+						t.Fatal(err)
+					}
+					text := strings.ReplaceAll(string(decoded), "198.51.100.10:51820", "[2001:db8:1::10]:51820")
+					text = strings.ReplaceAll(text, "198.51.100.10", "2001:db8:1::10")
+					assets[name] = base64.StdEncoding.EncodeToString([]byte(text))
+				}
+				return startJSON(t, assets)
+			}
+			files := replaceFiles(first.inputs.Files)
+			start := first.inputs.Start
+			if start != "" {
+				start = replaceFiles(start)
+			}
+			profile := predecessorCopy(first.profile)
+			profile["endpoint"] = "2001:db8:1::10"
+			first, err = NewNodeProfile("wg", files, startJSON(t, profile), start, first.inputs.DNSBootstrap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source.Nodes[0], err = first.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			source.IdentitySources[0] = replaceFiles(source.IdentitySources[0])
+			original, err = NewNodeChainServerPolicy(startJSON(t, source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot := serverCarrierSnapshotFixture()
+			snapshot.SourceAddress = "2001:db8::2"
+			projected, err := serverCarrierCaptureFixture(t, original, &snapshot).ProjectContext(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			mtu := serverCarrierEndpointMTUs(t, projected)[0]
+			if layer == "" && mtu != 1408 || layer != "" && mtu >= 1408 {
+				t.Fatal("IPv6/layer envelope lost its outer bound", mtu)
+			}
+			var graph map[string]any
+			_ = json.Unmarshal([]byte(projected.config), &graph)
+			found := false
+			for _, raw := range graph["outbounds"].([]any) {
+				node := raw.(map[string]any)
+				if node["type"] == "direct" {
+					found = node["inet6_bind_address"] == snapshot.SourceAddress && node["inet4_bind_address"] == nil
+				}
+			}
+			if !found {
+				t.Fatal("IPv6 route acquired IPv4 or unbound physical dialer")
 			}
 		})
 	}

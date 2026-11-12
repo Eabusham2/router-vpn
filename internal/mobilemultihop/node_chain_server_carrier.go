@@ -19,8 +19,10 @@ type NodeChainServerCarrier struct {
 	target                  PhysicalEgress
 	snapshot                nodeChainServerCarrierSnapshot
 	read                    func(context.Context) (nodeChainServerCarrierSnapshot, error)
+	check                   func(context.Context) error
 	invalid                 atomic.Bool
 	close                   func(context.Context) error
+	retired                 <-chan struct{}
 }
 
 type nodeChainServerCarrierSnapshot struct {
@@ -256,5 +258,44 @@ func (c *NodeChainServerCarrier) bind(graph map[string]any, firstTag string) err
 	bound[field] = c.snapshot.SourceAddress
 	outer["detour"] = tag
 	graph["outbounds"] = append(graph["outbounds"].([]any), bound)
+	return nil
+}
+
+// Done closes only when the original native observation has retired and its
+// event reader has joined. It carries no new routing authority.
+func (c *NodeChainServerCarrier) Done() <-chan struct{} {
+	if c == nil {
+		return nil
+	}
+	return c.retired
+}
+
+// NativeCarrierRequired identifies the bounded WG/AWG first-carrier family.
+// Other existing Server families retain their separate admission boundaries.
+func (p *NodeChainServerPolicy) NativeCarrierRequired() bool {
+	if p == nil || p.validateCapture() != nil || len(p.nodes) == 0 {
+		return false
+	}
+	mode := p.nodes[0].mode
+	return mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong"
+}
+
+// AdmitContext checks queued kernel changes on the original retained observer.
+// Hot traffic admission must not perform a fresh route dump per packet. Full
+// CurrentContext observation remains required at proof/status boundaries.
+func (c *NodeChainServerCarrier) AdmitContext(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil || !c.sealed() {
+		return nodeChainServerCarrierError
+	}
+	if c.check == nil {
+		return c.CurrentContext(ctx)
+	}
+	if err := c.check(ctx); err != nil {
+		c.invalid.Store(true)
+		return errors.Join(nodeChainServerCarrierError, err)
+	}
+	if ctx.Err() != nil || !c.sealed() {
+		return nodeChainServerCarrierError
+	}
 	return nil
 }

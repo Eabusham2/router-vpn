@@ -48,7 +48,7 @@ OWNER = 'routervpn-server-encrypted-test-source.json'
 NATIVE = 'TestServerChainEncryptedNative'
 SOURCE = 'TestServerChainEncryptedSourceInventory'
 RECEIPT_FIELDS = {'modes', 'case', 'capture_sha256', 'source_sha256', 'prefixes', 'ready', 'retired', 'selected_dns',
-                  'final_tcp', 'final_udp', 'peer_joined', 'worker_joined'}
+                  'final_tcp', 'final_udp', 'peer_joined', 'worker_joined', 'carrier_change_refused'}
 
 
 def run(*arguments, **options):
@@ -167,6 +167,8 @@ def check_verdict(output, case, *, source_only=False):
                 raise ValueError('Encrypted Server omitted original joined cleanup')
             if any(not isinstance(value[name], str) or re.fullmatch('[0-9a-f]{64}', value[name]) is None for name in ('capture_sha256', 'source_sha256')):
                 raise ValueError('Encrypted Server lost source/capture identity')
+            if value['carrier_change_refused'] is not (case == 'wg'):
+                raise ValueError('Encrypted Server lost original carrier generation refusal')
             ready = case not in NEGATIVE
             if value['ready'] is not ready or value['selected_dns'] is not ready or any(type(value[key]) is not int or value[key] < 0 for key in ('final_tcp', 'final_udp')):
                 raise ValueError('Encrypted Server changed its required success/refusal verdict')

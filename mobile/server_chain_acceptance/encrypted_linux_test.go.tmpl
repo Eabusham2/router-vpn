@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
@@ -19,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -848,6 +850,32 @@ func serverChainEncryptedScenario(t *testing.T, name string) {
 			t.Fatal("encrypted counters did not prove every original prefix/final/DNS path")
 		}
 	}
+	carrierChangeRefused := false
+	if name == "wg" {
+		// Change and restore only this fixture's original private-namespace veth.
+		// Equality after restoration cannot revive the old native route generation.
+		for _, mtu := range []int{carrier.MTU - 16, carrier.MTU} {
+			change, finish := context.WithTimeout(context.Background(), 2*time.Second)
+			err := exec.CommandContext(change, "ip", "link", "set", "dev", "rvpn-test", "mtu", strconv.Itoa(mtu)).Run()
+			finish()
+			actual, readErr := net.InterfaceByName("rvpn-test")
+			if err != nil || readErr != nil || actual.Index != carrier.Index || actual.MTU != mtu {
+				t.Fatal("original isolated carrier change/readback failed", err, readErr)
+			}
+		}
+		refusal := time.Now().Add(2 * time.Second)
+		for time.Now().Before(refusal) {
+			if !worker.call(t, "snapshot").OK {
+				carrierChangeRefused = true
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if !carrierChangeRefused {
+			t.Fatal("restored first carrier revived original native route authority")
+		}
+		worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
+	}
 	worker.stop(t)
 	if active != nil {
 		_ = active.SetReadDeadline(time.Now().Add(time.Second))
@@ -863,7 +891,7 @@ func serverChainEncryptedScenario(t *testing.T, name string) {
 	for i, row := range stats.Prefixes {
 		modes[i] = row.Mode
 	}
-	receipt := map[string]any{"modes": modes, "case": name, "capture_sha256": worker.digest, "source_sha256": capture.Source.SourceSHA256, "prefixes": len(stats.Prefixes), "ready": ready, "retired": true, "selected_dns": ready, "final_tcp": stats.Final.FinalRawTCP, "final_udp": stats.Final.FinalRawUDP, "peer_joined": true, "worker_joined": true}
+	receipt := map[string]any{"modes": modes, "case": name, "capture_sha256": worker.digest, "source_sha256": capture.Source.SourceSHA256, "prefixes": len(stats.Prefixes), "ready": ready, "retired": true, "selected_dns": ready, "final_tcp": stats.Final.FinalRawTCP, "final_udp": stats.Final.FinalRawUDP, "peer_joined": true, "worker_joined": true, "carrier_change_refused": carrierChangeRefused}
 	t.Log("ENCRYPTED_SERVER_RECEIPT " + serverChainEncryptedJSON(t, receipt))
 }
 func TestServerChainEncryptedNative(t *testing.T) {

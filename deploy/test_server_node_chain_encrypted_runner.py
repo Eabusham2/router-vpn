@@ -21,7 +21,7 @@ def sample(case='wg'):
     ready = case not in GATE.NEGATIVE
     receipt = dict(modes=list(GATE.MODES[case]), case=case, capture_sha256='a'*64, source_sha256='b'*64, prefixes=3 if case == 'mixed-three' else 2,
                    ready=ready, retired=True, selected_dns=ready, final_tcp=14 if ready else 0, final_udp=9 if ready else 0,
-                   peer_joined=True, worker_joined=True)
+                   peer_joined=True, worker_joined=True, carrier_change_refused=case=='wg')
     # Go's real nested output reports the parent PASS before buffered child
     # PASS. A receipt belongs to native work and must precede that parent.
     return '\n'.join(('=== RUN   '+GATE.NATIVE, '=== RUN   '+GATE.NATIVE+'/'+case,
@@ -95,7 +95,7 @@ func TestActualCopyAndSnapshot(t *testing.T){
         with self.assertRaises(ValueError): GATE.check_verdict('\n'.join(lines), 'wg')
 
     def test_exact_original_retirement_and_source_identity_required(self):
-        for before,after in (('"retired": true','"retired": false'), ('"peer_joined": true','"peer_joined": false'),
+        for before,after in (('"carrier_change_refused": true','"carrier_change_refused": false'), ('"retired": true','"retired": false'), ('"peer_joined": true','"peer_joined": false'),
              ('"worker_joined": true','"worker_joined": false'), ('"prefixes": 2','"prefixes": 1'),
              ('"ready": true','"ready": false'), ('"final_udp": 9','"final_udp": 0'),
              ('"selected_dns": true','"selected_dns": false'), ('"case": "wg"','"case": "awg-fast"'),

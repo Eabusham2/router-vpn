@@ -38,6 +38,8 @@ type routerVPNServerChain struct {
 	files                  map[string]routerVPNServerChainFile
 	capture                multihoprelay.NodeChainCapture
 	policy                 *mobilemultihop.NodeChainServerPolicy
+	carrier                *mobilemultihop.NodeChainServerCarrier
+	carrierJoined          chan struct{}
 	binding                mobilemultihop.NodeChainServerBinding
 	dnsCapture             mobilemultihop.NodeChainServerDNSCapture
 	box                    *box.Box
@@ -97,8 +99,32 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 		return result, bad
 	}
 	n.policy, err = mobilemultihop.NewNodeChainServerPolicy(string(raw))
+	carrierAdmission := false
+	if err == nil && n.policy.NativeCarrierRequired() {
+		carrierAdmission = true
+		construction, finish := context.WithDeadline(owned, capture.BootstrapDeadline)
+		n.carrier, err = mobilemultihop.NewNodeChainServerCarrierContext(construction, owned, string(raw))
+		if err == nil {
+			n.policy, err = n.carrier.ProjectContext(construction)
+		}
+		finish()
+		if err == nil {
+			n.carrierJoined = make(chan struct{})
+			go func() {
+				defer close(n.carrierJoined)
+				select {
+				case <-n.carrier.Done():
+					n.cancel()
+				case <-n.ctx.Done():
+				}
+			}()
+		}
+	}
 	clear(raw)
 	if err != nil {
+		if carrierAdmission {
+			return result, errors.Join(errors.New("original Server first-carrier admission failed"), err)
+		}
 		return result, bad
 	}
 	config, err := n.policy.NativeConfig(capture)
@@ -202,6 +228,10 @@ func (n *routerVPNServerChain) nativeCurrent(ctx context.Context) bool {
 	if n == nil || ctx == nil || ctx.Err() != nil || n.ctx.Err() != nil || n.box == nil || n.dnsOwner == nil || n.dns == nil || !n.sourceCurrent(false) {
 		return false
 	}
+	if n.carrier != nil && n.carrier.AdmitContext(ctx) != nil || n.carrier == nil && n.policy != nil && n.policy.NativeCarrierRequired() {
+		n.cancel()
+		return false
+	}
 	inbounds, err := adapter.RouterVPNInboundsContext(ctx, n.box.Inbound())
 	if err != nil || len(inbounds) != 0 {
 		return false
@@ -222,7 +252,7 @@ func (n *routerVPNServerChain) nativeCurrent(ctx context.Context) bool {
 	return len(n.outputs) == len(n.capture.Source.Members) && ctx.Err() == nil
 }
 func (n *routerVPNServerChain) ObserveServerContext(ctx context.Context) (mobilemultihop.NodeChainServerBinding, error) {
-	if !n.nativeCurrent(ctx) || !n.sourceCurrent(true) || ctx.Err() != nil {
+	if !n.nativeCurrent(ctx) || n.carrier != nil && n.carrier.CurrentContext(ctx) != nil || !n.sourceCurrent(true) || ctx.Err() != nil {
 		return mobilemultihop.NodeChainServerBinding{}, errServerChainFront
 	}
 	return n.binding, nil
@@ -494,6 +524,18 @@ func (n *routerVPNServerChain) Close(ctx context.Context) error {
 		}
 		if n.boxError != nil {
 			return errors.New("original ordered native close remains pending")
+		}
+	}
+	if n.carrier != nil {
+		if err := n.carrier.CloseContext(ctx); err != nil {
+			return err
+		}
+	}
+	if n.carrierJoined != nil {
+		select {
+		case <-n.carrierJoined:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 	if n.stopParent != nil && !n.stopParent() {
