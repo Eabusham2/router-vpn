@@ -109,12 +109,16 @@ func TestActualCopyAndSnapshot(t *testing.T){
             GATE.check_verdict(text.replace('"modes": ["wg", "awg2-fast"]','"modes": ["wg", "wg"]',1),'awg-fast')
 
     def test_source_inventory_is_separate_from_encrypted_receipts(self):
-        lines=['=== RUN   '+GATE.SOURCE]
+        lines=['=== RUN   '+GATE.SOURCE, '    fixture.go:1: ENCRYPTED_SERVER_CARRIER_CAPACITY 2092']
         for case in GATE.CASES: lines.append('=== RUN   '+GATE.SOURCE+'/'+case)
         lines.append('--- PASS: '+GATE.SOURCE+' (1.00s)')
         for case in GATE.CASES: lines.append('    --- PASS: '+GATE.SOURCE+'/'+case+' (0.01s)')
         lines.append('PASS');text='\n'.join(lines)
         self.assertEqual(GATE.check_verdict(text,None,source_only=True)['source_cases'],list(GATE.CASES))
+        self.assertEqual(GATE.check_verdict(text,None,source_only=True)['carrier_mtu'],2092)
+        for declaration in ('', 'ENCRYPTED_SERVER_CARRIER_CAPACITY 1279', 'ENCRYPTED_SERVER_CARRIER_CAPACITY 9001', 'ENCRYPTED_SERVER_CARRIER_CAPACITY 02092', 'ENCRYPTED_SERVER_CARRIER_CAPACITY 2092 junk', 'ENCRYPTED_SERVER_CARRIER_CAPACITY 2092\nENCRYPTED_SERVER_CARRIER_CAPACITY 2092'):
+            with self.subTest(declaration=declaration), self.assertRaises(ValueError):
+                GATE.check_verdict(text.replace('ENCRYPTED_SERVER_CARRIER_CAPACITY 2092',declaration),None,source_only=True)
         with self.assertRaises(ValueError): GATE.check_verdict(text,'wg')
         with self.assertRaises(ValueError): GATE.check_verdict(text.replace('=== RUN   '+GATE.SOURCE+'/awg-fast','=== RUN   foreign'),None,source_only=True)
 
@@ -174,7 +178,8 @@ func TestActualCopyAndSnapshot(t *testing.T){
                 path.write_bytes(('identity-only regression image: '+role).encode())
                 path.chmod(0o755)
             identities = {role: GATE.image_identity(path)[-1] for role, path in images.items()}
-            def execute(projected, *, missing_dependency=False):
+            declared = 2092  # Unit-boundary declaration; production derives this in native source inventory.
+            def execute(projected, *, missing_dependency=False, carrier=None):
                 namespace = {'__name__': 'projection_verification'}
                 exec(compile(projected, '<captured-native-namespace>', 'exec'), namespace)
                 # Execute the actual transferred function through valid image,
@@ -182,24 +187,46 @@ func TestActualCopyAndSnapshot(t *testing.T){
                 # effects are mocked; this is not native acceptance evidence.
                 with mock.patch.object(namespace['platform'], 'system', return_value='Linux'), \
                      mock.patch.object(namespace['os'], 'geteuid', return_value=0), \
-                     mock.patch.dict(namespace['os'].environ, {'ROUTERVPN_SERVER_CHAIN_OUTER_NETNS': '0:0'}), \
-                     mock.patch.object(namespace['subprocess'], 'run', return_value=subprocess.CompletedProcess([], 7)) as run:
+                     mock.patch.dict(namespace['os'].environ, {'ROUTERVPN_SERVER_CHAIN_OUTER_NETNS': '0:0', 'ROUTERVPN_SERVER_CHAIN_CARRIER_MTU':str(declared)}), \
+                     mock.patch.object(namespace['subprocess'], 'run', return_value=subprocess.CompletedProcess([], 7)) as run, \
+                     mock.patch.object(namespace['subprocess'], 'check_output', side_effect=carrier or [f'1: rvpn-test: mtu {declared} state UP',f'2: rvpn-peer: mtu {declared} state UP']) as read:
                     if missing_dependency:
                         with self.assertRaisesRegex(NameError, "name 're' is not defined"):
                             namespace['inside_namespace'](images['driver'], images['peer'], images['worker'], identities, 'wrong-first-key')
+                    elif carrier:
+                        with self.assertRaisesRegex(ValueError,'actual carrier differs'):
+                            namespace['inside_namespace'](images['driver'], images['peer'], images['worker'], identities, 'wrong-first-key')
+                        self.assertFalse(any(call.args[0][0]==str(images['driver']) for call in run.call_args_list))
                     else:
+                        self.assertEqual(read.call_count,0)
                         self.assertEqual(namespace['inside_namespace'](images['driver'], images['peer'], images['worker'], identities, 'wrong-first-key'), 7)
                         calls = [call for call in run.call_args_list if call.args[0][0] == str(images['driver'])]
                         self.assertEqual(len(calls), 1)
+                        self.assertEqual(read.call_count,2)
+                        for name in ('rvpn-test','rvpn-peer'):
+                            self.assertIn(mock.call(['ip','link','set',name,'mtu',str(declared)],check=True,timeout=5),run.call_args_list)
                         command = [str(images['driver']), '-test.run=^'+GATE.NATIVE+'$/^'+re.escape('wrong-first-key')+'$',
                                    '-test.v', '-test.count=1', '-test.timeout=90s']
                         self.assertEqual(calls[0].args, (command,))
                         self.assertEqual(calls[0].kwargs['timeout'], 105)
                         self.assertEqual(calls[0].kwargs['env']['ROUTERVPN_SERVER_CHAIN_PEER_SHA256'], identities['peer'])
                         self.assertEqual(calls[0].kwargs['env']['ROUTERVPN_SERVER_CHAIN_IMAGE_SHA256'], identities['worker'])
-                    self.assertEqual(run.call_args, mock.call(['ip', 'netns', 'delete', 'rvpn-peer'], check=True, timeout=5))
+                    if not missing_dependency:
+                        self.assertEqual(run.call_args, mock.call(['ip', 'netns', 'delete', 'rvpn-peer'], check=True, timeout=5))
+            for invalid in ('', '1500junk', '01280', '1279', '9001'):
+                namespace = {'__name__': 'projection_verification'}
+                exec(compile(program, '<captured-native-namespace>', 'exec'), namespace)
+                with mock.patch.object(namespace['platform'], 'system', return_value='Linux'), \
+                     mock.patch.object(namespace['os'], 'geteuid', return_value=0), \
+                     mock.patch.dict(namespace['os'].environ, {'ROUTERVPN_SERVER_CHAIN_OUTER_NETNS':'0:0', 'ROUTERVPN_SERVER_CHAIN_CARRIER_MTU':invalid}), \
+                     mock.patch.object(namespace['subprocess'], 'run') as run:
+                    with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError,'compiled carrier declaration'):
+                        namespace['inside_namespace'](images['driver'], images['peer'], images['worker'], identities, 'wrong-first-key')
+                    run.assert_not_called()
             execute(program)
             execute(program.replace('import re\n', '', 1), missing_dependency=True)
+            execute(program,carrier=['1: rvpn-test: mtu 1500 state UP'])
+            execute(program,carrier=[f'1: rvpn-test: mtu {declared} state UP','2: rvpn-peer: mtu 1500 state UP'])
 
     def test_namespace_projection_rejects_source_tamper_or_lost_inventory(self):
         path = ROOT/'deploy/test_server_node_chain_encrypted.py'

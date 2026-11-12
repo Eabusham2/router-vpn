@@ -124,6 +124,7 @@ def check_verdict(output, case, *, source_only=False):
     root = SOURCE if source_only else NATIVE
     expected = {root, *(root+'/'+name for name in (CASES if source_only else (case,)))}
     runs, passes, receipts = set(), set(), []
+    carrier_mtu = None
     root_passed = False
     for line in output.splitlines():
         stripped = line.strip()
@@ -147,6 +148,11 @@ def check_verdict(output, case, *, source_only=False):
                     raise ValueError('Encrypted Server parent passed before original retirement')
                 root_passed = True
             passes.add(name)
+        if 'ENCRYPTED_SERVER_CARRIER_CAPACITY ' in line:
+            raw = line.split('ENCRYPTED_SERVER_CARRIER_CAPACITY ', 1)[1]
+            if not source_only or root not in runs or root_passed or carrier_mtu is not None or re.fullmatch(r'[1-9][0-9]{3}', raw) is None or not 1280 <= int(raw) <= 9000:
+                raise ValueError('Encrypted Server lost its exact compiled carrier declaration')
+            carrier_mtu = int(raw)
         if 'ENCRYPTED_SERVER_RECEIPT ' in line:
             if source_only or root_passed or root+'/'+case not in runs or root+'/'+case in passes:
                 raise ValueError('Encrypted Server emitted a late or foreign receipt')
@@ -169,7 +175,9 @@ def check_verdict(output, case, *, source_only=False):
             receipts.append(value)
     if runs != expected or passes != expected or not root_passed or (len(receipts) != (0 if source_only else 1)) or not re.search(r'^PASS\r?$', output, re.M):
         raise ValueError('Encrypted Server omitted an exact required verdict')
-    return receipts[0] if receipts else {'source_cases': list(CASES)}
+    if source_only and carrier_mtu is None:
+        raise ValueError('Encrypted Server omitted compiled carrier declaration')
+    return receipts[0] if receipts else {'source_cases': list(CASES), 'carrier_mtu': carrier_mtu}
 
 
 
@@ -220,12 +228,18 @@ def inside_namespace(driver, peer, worker, identities, case):
     current = os.stat('/proc/self/ns/net')
     if not original or original == f'{current.st_dev}:{current.st_ino}':
         raise ValueError('Encrypted Server refused the original host network namespace')
+    declared = os.environ.get('ROUTERVPN_SERVER_CHAIN_CARRIER_MTU', '')
+    if re.fullmatch(r'[1-9][0-9]{3}', declared) is None or not 1280 <= int(declared) <= 9000:
+        raise ValueError('Encrypted Server requires its compiled carrier declaration')
+    carrier_mtu = int(declared)
     # Every mutation is below the newly owned mount/network/PID namespaces.
     subprocess.run(['mount', '--make-rprivate', '/'], check=True, timeout=5)
     subprocess.run(['mount', '-t', 'tmpfs', '-o', 'mode=755', 'tmpfs', '/run'], check=True, timeout=5)
     commands = (
         ('link', 'set', 'lo', 'up'), ('netns', 'add', 'rvpn-peer'),
         ('link', 'add', 'rvpn-test', 'type', 'veth', 'peer', 'name', 'rvpn-peer'),
+        ('link', 'set', 'rvpn-test', 'mtu', str(carrier_mtu)),
+        ('link', 'set', 'rvpn-peer', 'mtu', str(carrier_mtu)),
         ('link', 'set', 'rvpn-peer', 'netns', 'rvpn-peer'),
         ('addr', 'add', '192.168.210.1/30', 'dev', 'rvpn-test'), ('link', 'set', 'rvpn-test', 'up'),
         ('route', 'add', 'default', 'via', '192.168.210.2', 'dev', 'rvpn-test'),
@@ -238,6 +252,13 @@ def inside_namespace(driver, peer, worker, identities, case):
                ROUTERVPN_SERVER_CHAIN_PEER_SHA256=identities['peer'], ROUTERVPN_SERVER_CHAIN_IMAGE=str(worker),
                ROUTERVPN_SERVER_CHAIN_IMAGE_SHA256=identities['worker'], GORACE='atexit_sleep_ms=0')
     try:
+        # Read both actual endpoints before running the unchanged proof graph.
+        for command in (['ip', '-o', 'link', 'show', 'dev', 'rvpn-test'],
+                        ['ip', 'netns', 'exec', 'rvpn-peer', 'ip', '-o', 'link', 'show', 'dev', 'rvpn-peer']):
+            actual = subprocess.check_output(command, text=True, timeout=5)
+            value = re.search(r'\bmtu ([0-9]+)\b', actual)
+            if value is None or int(value.group(1)) != carrier_mtu:
+                raise ValueError('Encrypted Server actual carrier differs from its declared packet envelope')
         result = subprocess.run([str(driver), '-test.run=^'+NATIVE+'$/^'+re.escape(case)+'$', '-test.v', '-test.count=1', '-test.timeout=90s'], env=env, timeout=105)
     finally:
         subprocess.run(['ip', 'netns', 'delete', 'rvpn-peer'], check=True, timeout=5)
@@ -291,20 +312,20 @@ def execute(core, go='go', *, env=None, receipt=None, compile_only=False):
         if checked_sources(core)[1] != before:
             raise ValueError('Encrypted Server source changed during compilation')
         source_output = run([driver, '-test.run=^'+SOURCE+'$', '-test.v', '-test.count=1', '-test.timeout=60s'], cwd=core, env=captured, timeout=75)
-        check_verdict(source_output, None, source_only=True)
+        source_verdict = check_verdict(source_output, None, source_only=True)
         print(source_output, end='')
         verdicts = []
         if not compile_only:
             sudo = UID.privilege_tool()
             original = os.stat('/proc/self/ns/net')
-            native_env = dict(captured, TMPDIR='/tmp', ROUTERVPN_SERVER_CHAIN_OUTER_NETNS=f'{original.st_dev}:{original.st_ino}')
+            native_env = dict(captured, TMPDIR='/tmp', ROUTERVPN_SERVER_CHAIN_CARRIER_MTU=str(source_verdict['carrier_mtu']), ROUTERVPN_SERVER_CHAIN_OUTER_NETNS=f'{original.st_dev}:{original.st_ino}')
             program = namespace_program(before['acceptance/deploy/test_server_node_chain_encrypted.py'])
             for case in CASES:
                 command = ['unshare', '--user', '--map-root-user', '--mount', '--net', '--pid', '--fork', '--mount-proc',
                            sys.executable, '-I', '-c', program, str(driver), str(peer), str(worker),
                            images['driver'][-1], images['peer'][-1], images['worker'][-1], case]
                 if sudo:
-                    command = [sudo, '-n', '--preserve-env=ROUTERVPN_SERVER_CHAIN_OUTER_NETNS', '--', *command]
+                    command = [sudo, '-n', '--preserve-env=ROUTERVPN_SERVER_CHAIN_OUTER_NETNS,ROUTERVPN_SERVER_CHAIN_CARRIER_MTU', '--', *command]
                 output = run(command, cwd=workspace, env=native_env, timeout=125, sudo=sudo)
                 verdicts.append(check_verdict(output, case)); print(output, end='')
         if checked_sources(core)[1] != before or any(image_identity(path) != images[role] for role, path in (('driver', driver), ('peer', peer), ('worker', worker))):

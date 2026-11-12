@@ -41,6 +41,11 @@ import (
 // the authenticated front, proof lifetime, packet flows, and joined cleanup.
 // The original peer CA is supplied through the OS verifier's SSL_CERT_FILE.
 // No InsecureSkipVerify, fake proof, native registry replacement, or TUN is used.
+// This fixture declares a 2000-byte reference interface, not a measured PMTU.
+// Carry its largest first-hop IPv4/WG/AWG envelope without silently borrowing
+// the default1500 veth capacity. Source inventory checks the pinned helper.
+const serverChainEncryptedReferenceMTU = 2000
+
 var serverChainEncryptedCases = []string{"wg", "awg-fast", "awg-strong", "mixed-three", "wrong-first-key", "wrong-middle-key", "wrong-ss-key", "wrong-awg-parameters", "wrong-node", "failed-selected-dns", "wrong-public-trust", "cancel-prefix", "admission-restrictions", "joined-active-udp"}
 
 type serverChainEncryptedPrefix struct {
@@ -274,6 +279,26 @@ func serverChainEncryptedKeys(t *testing.T, name string) *serverChainEncryptedPe
 	}
 	return p
 }
+
+// This graph-ownership fixture declares enough carrier capacity for every
+// original first endpoint. It does not claim a measured physical-path PMTU.
+func serverChainEncryptedCarrierCapacity(t *testing.T) int {
+	t.Helper()
+	carrier := 1280
+	for _, name := range serverChainEncryptedCases {
+		p := serverChainEncryptedKeys(t, name)
+		envelope, err := awgpolicy.Envelope(p.prefixes[0].Parameters, false, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		packet := ((serverChainEncryptedReferenceMTU+15)/16)*16 + envelope.DataOverhead
+		carrier = max(carrier, packet, envelope.ControlMax)
+	}
+	if carrier > 9000 {
+		t.Fatal("declared encrypted carrier exceeds fixture bounds")
+	}
+	return carrier
+}
 func (p *serverChainEncryptedPeer) read(t *testing.T) serverChainEncryptedStats {
 	t.Helper()
 	var v serverChainEncryptedStats
@@ -330,8 +355,17 @@ func serverChainEncryptedPeerStart(t *testing.T, name string) *serverChainEncryp
 	p.read(t)
 	return p
 }
-func serverChainEncryptedSource(t *testing.T, p *serverChainEncryptedPeer, fault string) (*mobilemultihop.NodeChainServerPolicy, multihoprelay.NodeChainCapture) {
+func serverChainEncryptedSource(t *testing.T, p *serverChainEncryptedPeer, fault string, carrierMTU int) (*mobilemultihop.NodeChainServerPolicy, multihoprelay.NodeChainCapture) {
 	t.Helper()
+	envelope, err := awgpolicy.Envelope(p.prefixes[0].Parameters, false, 0)
+	firstMTU, capacityErr := envelope.Capacity(carrierMTU, serverChainEncryptedReferenceMTU, false)
+	if err != nil || capacityErr != nil || firstMTU != serverChainEncryptedReferenceMTU ||
+		((firstMTU+15)/16)*16+envelope.DataOverhead > carrierMTU || envelope.ControlMax > carrierMTU {
+		t.Fatal("declared original first interface does not fit the captured encrypted carrier")
+	}
+	if _, fixedErr := envelope.Capacity(1500, serverChainEncryptedReferenceMTU, true); fixedErr == nil {
+		t.Fatal("oversized2000 Fixed source unexpectedly fits ordinary1500 carrier")
+	}
 	source := mobilemultihop.NodeChainServerSource{Schema: 1, EntryID: "encrypted-server-entry", EntryNodeID: serverChainEncryptedProof(serverChainEncryptedKey(t)), EntryMode: "wg"}
 	for i := 0; i <= len(p.prefixes); i++ {
 		mode, inner, endpoint, port, token, server, client := "shadowsocks", "10.79.0", "10.77.0.1", uint16(8388), "encrypted-server-final-token", p.finalServer, p.finalClient
@@ -360,7 +394,7 @@ func serverChainEncryptedSource(t *testing.T, p *serverChainEncryptedPeer, fault
 			api = "http://10.77.0.1:8787"
 		}
 		profile := map[string]any{"id": fmt.Sprintf("encrypted-server-member-%d", i), "node_kind": "router-vpn", "node_proof_id": serverChainEncryptedProof(server), "endpoint": endpoint, "router_api": api, "api_token": token, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "ipv6_mode": "off", "home_lan_access": fault != "admission-restrictions", "mtu_policy": "auto", "kill_switch_policy": "on-connect", "start_layer": "off"}
-		standard := fmt.Sprintf("[Interface]\nAddress=%s.2/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=%s:%d\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", inner, base64.StdEncoding.EncodeToString(client.Bytes()), base64.StdEncoding.EncodeToString(server.PublicKey().Bytes()), endpoint, port)
+		standard := fmt.Sprintf("[Interface]\nAddress=%s.2/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=%d\n[Peer]\nPublicKey=%s\nEndpoint=%s:%d\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", inner, base64.StdEncoding.EncodeToString(client.Bytes()), serverChainEncryptedReferenceMTU, base64.StdEncoding.EncodeToString(server.PublicKey().Bytes()), endpoint, port)
 		if i < len(p.prefixes) {
 			standard = strings.Replace(standard, "[Peer]\n", "[Peer]\nPresharedKey="+p.prefixes[i].PreSharedKey+"\n", 1)
 		}
@@ -641,8 +675,13 @@ func serverChainEncryptedDiagnostic(reply multihoprelay.NodeChainIPCResponse, st
 
 func serverChainEncryptedScenario(t *testing.T, name string) {
 	t.Helper()
+	carrier, err := net.InterfaceByName("rvpn-test")
+	if err != nil || carrier.MTU != serverChainEncryptedCarrierCapacity(t) || carrier.Flags&net.FlagUp == 0 {
+		t.Fatal("actual encrypted worker lost its declared original carrier capacity", err)
+	}
 	p := serverChainEncryptedPeerStart(t, name)
-	policy, capture := serverChainEncryptedSource(t, p, name)
+	policy, capture := serverChainEncryptedSource(t, p, name, carrier.MTU)
+	t.Logf("declared graph carrier MTU=%d first interface MTU=%d; not a measured physical PMTU", carrier.MTU, serverChainEncryptedReferenceMTU)
 	switch name {
 	case "wrong-node":
 		p.control(t, "wrong-node:1")
@@ -861,11 +900,13 @@ func TestServerChainEncryptedNative(t *testing.T) {
 	}
 }
 func TestServerChainEncryptedSourceInventory(t *testing.T) {
+	carrierMTU := serverChainEncryptedCarrierCapacity(t)
+	t.Logf("ENCRYPTED_SERVER_CARRIER_CAPACITY %d", carrierMTU)
 	for _, name := range serverChainEncryptedCases {
 		t.Run(name, func(t *testing.T) {
 			p := serverChainEncryptedKeys(t, name)
 			p.stats.Address = "192.168.210.2:51820"
-			policy, capture := serverChainEncryptedSource(t, p, name)
+			policy, capture := serverChainEncryptedSource(t, p, name, carrierMTU)
 			config, err := policy.NativeConfig(capture)
 			var graph map[string]json.RawMessage
 			if err != nil || json.Unmarshal([]byte(config), &graph) != nil {
