@@ -1372,6 +1372,79 @@ class OpenVPNWitnessCompilerScope(unittest.TestCase):
 class OrdinarySSEntryScope(unittest.TestCase):
     setUp = OrdinaryHysteria2Scope.setUp
 
+    def test_actual_peer_fault_admission_reaches_only_the_captured_final_trust_case(self):
+        source = (ROOT / "mobile/desktop/external_box_windows_hysteria2_test.go.tmpl").read_text()
+        start = source.index('\tif protocol != "packet" && protocol != "router-server" {',
+                             source.index('func desktopExternalWFPRunPeer('))
+        end = source.index('\n\tcertificate, err := tls.X509KeyPair(', start)
+        admission = source[start:end]
+        # Execute the original provider's admission block. Only Fatal and the
+        # request's data holders are doubled; no socket or WFP result is faked.
+        fixture = r'''package admission
+import("fmt";"testing")
+type layer struct{Mode string}
+type ssEntry struct{Final string}
+type requestData struct{Fault string;Packet *int;Layer *layer;SSEntry *ssEntry}
+type rejected string
+type recorder struct{}
+func(recorder)Fatal(v ...any){panic(rejected(fmt.Sprint(v...)))}
+func check(protocol string,request requestData)(failure string){
+ defer func(){if value:=recover();value!=nil{if reason,ok:=value.(rejected);ok{failure=string(reason)}else{panic(value)}}}()
+ t:=recorder{}
+ // ORIGINAL_ADMISSION
+ return ""
+}
+func TestOriginalSSFinalTrustFault(t *testing.T){
+ cases:=[]struct{name,protocol,final string;member,want bool}{
+  {"captured-hysteria2-final","ss-entry","hysteria2",true,true},
+  {"missing-middle-family","ss-entry","",false,false},
+  {"ss-final","ss-entry","shadowsocks",true,false},
+  {"http-final","ss-entry","http-connect",true,false},
+  {"https-final","ss-entry","https-connect",true,false},
+  {"wrong-family","hysteria2","hysteria2",true,false},
+  {"wrong-layer-family","hysteria2-layer","hysteria2",true,false},
+ }
+ for _,test:=range cases{t.Run(test.name,func(t *testing.T){
+  request:=requestData{Fault:"final-trust"};if test.member{request.SSEntry=&ssEntry{Final:test.final}}
+  failure:=check(test.protocol,request)
+  if (failure=="")!=test.want{t.Fatalf("captured final trust admission: accepted=%v want=%v reason=%s",failure=="",test.want,failure)}
+ })}
+ for _,fault:=range []string{"","password","trust","dns","exit","held","entry-key","entry-exit","final-key","entry-layer-key","final-layer-key","entry-whitening","final-whitening","entry-layer-inner","final-layer-inner"}{
+  if failure:=check("ss-entry",requestData{Fault:fault,SSEntry:&ssEntry{Final:"hysteria2"}});failure!=""{t.Fatalf("legacy captured fault changed: %q %s",fault,failure)}
+ }
+ if check("ss-entry",requestData{Fault:"foreign",SSEntry:&ssEntry{Final:"hysteria2"}})==""{t.Fatal("unknown fault admitted")}
+ if check("hysteria2",requestData{Fault:"entry-key"})==""{t.Fatal("SS-only credential fault escaped family")}
+}
+'''
+        compiler = shutil.which("go")
+        self.assertIsNotNone(compiler, "Go is required for actual peer fault admission")
+        with tempfile.TemporaryDirectory(prefix="windows-ss-final-trust-") as directory:
+            path = Path(directory) / "admission_test.go"
+            def execute(block):
+                path.write_text(fixture.replace("// ORIGINAL_ADMISSION", block))
+                return subprocess.run([compiler, "test", "-count=1", "-timeout=10s", str(path)],
+                                      capture_output=True, text=True, timeout=90,
+                                      env=dict(os.environ, GOTOOLCHAIN="local", GOMAXPROCS="1"))
+            actual = execute(admission)
+            self.assertEqual(actual.returncode, 0, actual.stdout + actual.stderr)
+            begin = admission.index('\t\tcase "final-trust":')
+            finish = admission.index('\n\t\tcase "layer-key", "whitening":', begin)
+            scoped = 'protocol != "ss-entry" || request.SSEntry == nil || request.SSEntry.Final != "hysteria2"'
+            self.assertEqual(admission.count(scoped), 1)
+            controls = {
+                "original omitted fault": admission[:begin] + admission[finish:],
+                "foreign final family": admission.replace(scoped, 'protocol != "ss-entry" || request.SSEntry == nil'),
+                "foreign provider family": admission.replace(scoped, 'request.SSEntry == nil || request.SSEntry.Final != "hysteria2"'),
+            }
+            for label, changed in controls.items():
+                with self.subTest(control=label):
+                    result = execute(changed)
+                    output = result.stdout + result.stderr
+                    self.assertEqual(result.returncode, 1, output)
+                    self.assertIn("captured final trust admission:", output)
+                    self.assertNotIn("test timed out", output)
+                    self.assertNotIn("[build failed]", output)
+
     def test_each_alias_and_transport_verdict_is_unique_and_mandatory(self):
         self.assertEqual(GATE.EXTERNAL_SS_ENTRY_NETWORKS, ("shadowsocks", "http-connect", "https-connect", "hysteria2"))
         self.assertEqual(len(GATE.EXTERNAL_SS_ENTRY_LEAVES), 13)

@@ -54,6 +54,24 @@ no invented numbered audit ID is attached to it.
 | `411af92c22dc3834ba04249754abe1a613b9a103` | Compile one race-enabled native form test image, then run the unchanged catalog and five payload roots with separate build/execution reporting. | Actual compilation completed in 55.39 seconds; the catalog and six runner-control groups passed. The execution cap remains 180 seconds. Full GTK/AppKit/Windows producer execution remains a native job. |
 | `d8bbd6f4a15c7d1c2baf251099aa22839389a62a` | Join the automatic MTU parent before latency-fixture teardown. | A real child IPC regression holds the original parent at retention after the child reports Complete, proves the join cannot finish early, then verifies drained ownership and durable/native MTU 1380. All three affected roots passed three repetitions with the race detector in 18.335 seconds. Production deadlines are unchanged. |
 
+## Windows SS-to-Hysteria2 certificate-refusal fixture
+
+The Windows native WFP run `43120160283` at historical `0e934245` failed in
+`hysteria2/reject/final-trust`: the retained peer terminated before sending its
+initial receipt. Source comparison found the same fault-admission block still
+present in the current tree. Its parent constructed the wrong-certificate
+scenario, but the peer rejected the `final-trust` name as unknown before the
+actual Hysteria2 TLS refusal could run. The peer now accepts that fixture fault
+only for its original SS-entry family with a captured Hysteria2 final.
+
+The regression compiles and executes the actual peer admission block. It
+reproduced the old failure, then passed the corrected case while rejecting
+missing/foreign final and provider families. Three executable causal controls
+reject the original omission and each removed family boundary. The complete
+six-test `OrdinarySSEntryScope` group passed in 3.064 seconds. The existing
+actual encrypted Windows/WFP certificate-refusal case, required verdicts,
+proof counters and deadlines are unchanged and still require hosted execution.
+
 ## Protected Linux imported connection
 
 Published `5a2ce21e8b1293e1675103677de9e2e3d14a9ee5` closes two concrete source

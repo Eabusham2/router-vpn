@@ -271,6 +271,10 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 			if protocol != "ss-entry" {
 				t.Fatal("unowned SS entry credential fault")
 			}
+		case "final-trust":
+			if protocol != "ss-entry" || request.SSEntry == nil || request.SSEntry.Final != "hysteria2" {
+				t.Fatal("unowned SS entry final trust fault")
+			}
 		case "layer-key", "whitening":
 			if request.Layer == nil || request.Fault == "whitening" && request.Layer.Mode != "aes-256-gcm+xor-whitening" {
 				t.Fatal("unowned HY2 layer negative")
