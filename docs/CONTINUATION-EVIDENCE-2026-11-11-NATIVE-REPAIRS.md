@@ -7,6 +7,22 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## Generated manager fixture stays within its declared ownership category
+
+At commit 58a003b9, Linux generated-command acceptance failed on both AMD64
+job 130877495138 and ARM64 job 130877495455 in run
+[43125820298](https://github.com/Eabusham2/router-vpn/actions/runs/43125820298).
+Preparation stopped before native tests: the new declared
+adapter/inbound/routervpn_node_chain_retirement_darwin_test.go fixture was
+written into the owned-source manifest, but the next preparation verification
+omitted INBOUND_TEMPLATES from its exact allowed target categories.
+
+The validator now admits that declared category alongside the existing box,
+route and TUN templates. Exact paths, stored hashes, unowned-file rejection and
+all native tests remain. This fixes the identified preparation contradiction;
+hosted reruns must still establish execution. The concurrent upstream Windows
+UTF-8 fixture correction dfffe6084b213ebc56996a0683dd9dcafc5c17af is preserved.
+
 ## Ordered Darwin inbound and manager cleanup retain original components
 
 The ordered Darwin child now has a separately typed bounded preclose on its

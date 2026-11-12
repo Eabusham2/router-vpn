@@ -482,7 +482,7 @@ def preflight_pt_files(vendor, content):
             raise ValueError('Desktop PT ownership record is invalid')
         previous = record['files']
         for relative, checksum in previous.items():
-            if (not relative.startswith(PT_NAMESPACES) and relative not in (*BOX_TEMPLATES.values(), *ROUTE_TEMPLATES.values(), *TUN_TEMPLATES.values())) or not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum):
+            if (not relative.startswith(PT_NAMESPACES) and relative not in (*BOX_TEMPLATES.values(), *ROUTE_TEMPLATES.values(), *INBOUND_TEMPLATES.values(), *TUN_TEMPLATES.values())) or not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum):
                 raise ValueError('Desktop PT cannot own unrelated native source')
             path = TOR.destination(vendor, relative)
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != checksum:
