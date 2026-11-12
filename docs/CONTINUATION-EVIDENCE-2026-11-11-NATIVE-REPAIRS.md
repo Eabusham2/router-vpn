@@ -7,6 +7,41 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## Outer MTU measurements preserve original Darwin interface ownership
+
+The controller and optimizer now have an explicit private capability for an
+ordered Darwin reader to change its actual utun name. The original sealed
+Darwin chain, platform, launch, command, execution choice and initial interface
+remain mandatory. Each previous/current or previous/successor receipt must be
+confirmed by the original typed native wrapper; the outer controller does not
+grant authority from an interface name or advance ownership after failed proof.
+A joined cleanup receipt is checked separately from a live measurement.
+
+The loopback utility retains the original six-field protocol for fixed-name
+owners. Only the explicit original Darwin scope enables the exact eight-field
+reply carrying the original interface and policy. Empty, missing, extra,
+duplicate, foreign or malformed scope fields are rejected. The optimizer
+addresses the same retained capability throughout measurement, restoration and
+adoption, reports the actual final interface, and checks its fresh final
+readback before persistence. Final-read failure remains inside rollback.
+Ordinary Windows/Linux and other fixed-name owners cannot accept a rename.
+
+Seven new Go test roots contain 72 terminal cases, including actual controller
+or utility HTTP requests, exact reply inventories, refusal before HTTP,
+measurement ownership and retained cleanup retry. Darwin native proof in these
+outer tests is explicitly a comparison double with a real sealed policy.
+Fourteen new Python methods drive the shipping optimizer through the actual Go
+helper subprocess for succession, malformed scope, restoration, adoption and
+final-read failure. All eleven original Python test methods and twenty original
+helper reply-fault cases were independently preserved.
+
+The four production and three test files were independently reviewed; the
+previous draft's optional-empty-field loophole was closed by exact field
+inventory validation. Source and preservation checks are not execution.
+No local Go/Python runtime was available. Hosted tests and the original Darwin
+wrapper/native acceptance remain necessary before this path is accepted.
+
+
 ## Generated manager fixture stays within its declared ownership category
 
 At commit 58a003b9, Linux generated-command acceptance failed on both AMD64

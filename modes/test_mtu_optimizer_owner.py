@@ -48,7 +48,7 @@ class OwnerConsumerTests(unittest.TestCase):
             "HOMEVPN_MTU_OWNER_TOKEN": TOKEN, "HOMEVPN_MTU_OWNER_URL": "http://127.0.0.1:34567/mtu",
             "HOMEVPN_MTU_MINIMUM": "576", "MTU_OWNER_FIXTURE": str(self.path)}, clear=False)
         self.env.start()
-        for name in MOD.MTU_GRAPH_FIELDS:
+        for name in (*MOD.MTU_GRAPH_FIELDS, "HOMEVPN_MTU_ORIGINAL_INTERFACE", "HOMEVPN_MTU_INTERFACE_POLICY"):
             os.environ.pop(name, None)
         self.addCleanup(self.env.stop)
         self.addCleanup(self.directory.cleanup)
@@ -218,6 +218,238 @@ class OwnerConsumerTests(unittest.TestCase):
                 MOD.optimize(defer_adopt=True)
         persist.assert_not_called()
         self.assertEqual([row for row in self.calls() if row[0] == "--mtu-owner-set"], [["--mtu-owner-set", "1400"]])
+
+
+    def darwin_state(self):
+        self.state.update(interface="utun991", index=991, identity="captured-reader:991",
+                          original_interface="utun991", interface_policy="darwin-ordered-reader-v1",
+                          mode="darwin-reader", sets=0)
+        self.save()
+        return {"HOMEVPN_MTU_ORIGINAL_INTERFACE": "utun991",
+                "HOMEVPN_MTU_INTERFACE_POLICY": "darwin-ordered-reader-v1",
+                "HOMEVPN_MTU_MINIMUM": "1280"}
+
+    def helper_state(self):
+        return json.loads(self.path.read_text())
+
+    def set_calls(self):
+        return [row for row in self.calls() if row[0] == "--mtu-owner-set"]
+
+    @staticmethod
+    def successful_benchmark(_host, _port, _family, mtu):
+        return {"mtu": mtu, "working": True, "success_ratio": 1,
+                "mbps": 100 if mtu == 1320 else 70, "median_rtt_ms": 4}
+
+    def test_legacy_reply_and_result_keep_exact_six_field_protocol(self):
+        reply = MOD.owner_state("owned-tun", 4)
+        self.assertEqual(set(reply), {"owner_token", "interface", "family", "index", "mtu", "identity"})
+        with self.optimize_context(), mock.patch.object(MOD, "bench_candidate", side_effect=self.successful_benchmark), mock.patch.object(MOD, "persist"):
+            result = MOD.optimize(defer_adopt=True)
+        self.assertEqual(result["interface"], "owned-tun")
+        self.assertNotIn("original_interface", result)
+        self.assertNotIn("interface_policy", result)
+        for mode in ("scope-empty-extras", "scope-empty-original", "scope-empty-policy"):
+            with self.subTest(mode=mode):
+                self.state["mode"] = mode
+                self.save()
+                with self.assertRaises(RuntimeError):
+                    MOD.owner_state("owned-tun", 4)
+
+    def test_darwin_successor_uses_original_anchor_for_every_helper_operation(self):
+        with mock.patch.dict(os.environ, self.darwin_state()):
+            initial = MOD.owner_state("utun991", 4)
+            self.assertEqual(set(initial), {"owner_token", "interface", "family", "index", "mtu", "identity",
+                                            "original_interface", "interface_policy"})
+            next_state = MOD.set_interface_mtu("utun991", 4, 1320)
+            self.assertEqual((next_state["interface"], next_state["index"], next_state["mtu"]), ("utun992", 992, 1320))
+            self.assertEqual(next_state["original_interface"], "utun991")
+            self.assertEqual(MOD.owner_state("utun991", 4), next_state)
+            before = list(self.calls())
+            with self.assertRaises(RuntimeError):
+                MOD.set_interface_mtu("utun992", 4, 1400)
+            self.assertEqual(self.calls(), before, "the replacement name became a mutation capability")
+            restored = MOD.set_interface_mtu("utun991", 4, 1400)
+            self.assertEqual((restored["interface"], restored["mtu"]), ("utun993", 1400))
+            self.assertEqual(restored["original_interface"], "utun991")
+            self.assertEqual(restored["interface_policy"], "darwin-ordered-reader-v1")
+        self.assertEqual(self.set_calls(), [["--mtu-owner-set", "1320"], ["--mtu-owner-set", "1400"]])
+        self.assertTrue(all(row[0] in {"--mtu-owner-read", "--mtu-owner-set"} and "utun991" not in row
+                            and "utun992" not in row and "utun993" not in row for row in self.calls()))
+
+    def test_darwin_partial_or_malformed_environment_never_spawns_helper(self):
+        good = self.darwin_state()
+        cases = [
+            ("missing-original", "", good["HOMEVPN_MTU_INTERFACE_POLICY"]),
+            ("missing-policy", "utun991", ""),
+            ("wrong-policy", "utun991", "darwin-any-interface"),
+            ("fixed-original", "router-vpn", good["HOMEVPN_MTU_INTERFACE_POLICY"]),
+            ("empty-number", "utun", good["HOMEVPN_MTU_INTERFACE_POLICY"]),
+            ("upper-case", "UTUN991", good["HOMEVPN_MTU_INTERFACE_POLICY"]),
+            ("unicode-number", "utun９９１", good["HOMEVPN_MTU_INTERFACE_POLICY"]),
+            ("separator", "utun-991", good["HOMEVPN_MTU_INTERFACE_POLICY"]),
+            ("whitespace", "utun991 ", good["HOMEVPN_MTU_INTERFACE_POLICY"]),
+        ]
+        for name, original, policy in cases:
+            with self.subTest(name=name), mock.patch.dict(os.environ, dict(good,
+                    HOMEVPN_MTU_ORIGINAL_INTERFACE=original, HOMEVPN_MTU_INTERFACE_POLICY=policy)):
+                with self.assertRaises(RuntimeError):
+                    MOD.set_interface_mtu("utun991", 4, 1320)
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.helper_state()["mtu"], 1400)
+
+    def test_darwin_foreign_origin_policy_and_malformed_reply_never_reach_set(self):
+        environment = self.darwin_state()
+        cases = ["scope-wrong-original", "scope-wrong-policy", "scope-missing-original",
+                 "scope-missing-policy", "scope-missing-core", "scope-empty-extras", "scope-empty-original",
+                 "scope-empty-policy", "scope-current-fixed", "scope-current-upper", "scope-current-unicode",
+                 "scope-current-separator", "scope-current-empty-number", "wrong-token", "wrong-family",
+                 "wrong-index", "unknown", "duplicate", "escaped-duplicate"]
+        with mock.patch.dict(os.environ, environment):
+            for mode in cases:
+                with self.subTest(mode=mode):
+                    self.state["mode"] = mode
+                    self.save()
+                    with self.assertRaises(RuntimeError):
+                        MOD.set_interface_mtu("utun991", 4, 1320)
+        self.assertEqual(self.set_calls(), [])
+        self.assertEqual(self.helper_state()["mtu"], 1400)
+
+    def test_darwin_reply_cannot_opt_in_without_original_environment(self):
+        self.darwin_state()
+        with self.assertRaises(RuntimeError):
+            MOD.set_interface_mtu("utun991", 4, 1320)
+        self.assertEqual(self.set_calls(), [])
+        self.state.pop("original_interface")
+        self.state.pop("interface_policy")
+        self.save()
+        self.assertEqual(MOD.owner_state("utun991", 4)["interface"], "utun991")
+        with self.assertRaises(RuntimeError):
+            MOD.set_interface_mtu("utun991", 4, 1320)
+        self.assertEqual(self.set_calls(), [["--mtu-owner-set", "1320"]])
+        self.assertEqual(self.helper_state()["interface"], "utun992",
+                         "fixture must expose the actual rejected rename, not silently suppress it")
+
+    def test_darwin_measurement_restores_and_reports_actual_final_interface(self):
+        with mock.patch.dict(os.environ, self.darwin_state()), self.optimize_context(), \
+                mock.patch.object(MOD, "route_interface", return_value="utun991"), \
+                mock.patch.object(MOD, "bench_candidate", side_effect=self.successful_benchmark), \
+                mock.patch.object(MOD, "persist") as persist:
+            result = MOD.optimize(defer_adopt=True)
+            actual = MOD.owner_state("utun991", 4)
+        self.assertEqual((result["interface"], result["original_interface"], result["interface_policy"]),
+                         ("utun993", "utun991", "darwin-ordered-reader-v1"))
+        self.assertEqual((actual["interface"], actual["mtu"]), ("utun993", 1400))
+        self.assertEqual(result["winner"]["mtu"], 1320)
+        self.assertFalse(result["adopted"])
+        self.assertEqual(self.set_calls(), [["--mtu-owner-set", value] for value in ("1400", "1320", "1320", "1400")])
+        persist.assert_not_called()
+
+    def test_darwin_direct_optimizer_persists_only_confirmed_current_interface(self):
+        with mock.patch.dict(os.environ, self.darwin_state()), self.optimize_context(), \
+                mock.patch.object(MOD, "route_interface", return_value="utun991"), \
+                mock.patch.object(MOD, "bench_candidate", side_effect=self.successful_benchmark), \
+                mock.patch.object(MOD, "persist") as persist:
+            result = MOD.optimize(defer_adopt=False)
+        self.assertEqual((result["interface"], result["original_interface"], result["winner"]["mtu"]),
+                         ("utun992", "utun991", 1320))
+        self.assertTrue(result["adopted"])
+        self.assertEqual((self.helper_state()["interface"], self.helper_state()["mtu"]), ("utun992", 1320))
+        persist.assert_called_once()
+
+    def test_darwin_failed_final_read_is_inside_optimizer_rollback(self):
+        environment = self.darwin_state()
+        self.state.update(read_fault="scope-wrong-original", read_fault_after_sets=4)
+        self.save()
+        with mock.patch.dict(os.environ, environment), self.optimize_context(), \
+                mock.patch.object(MOD, "route_interface", return_value="utun991"), \
+                mock.patch.object(MOD, "bench_candidate", side_effect=self.successful_benchmark), \
+                mock.patch.object(MOD, "persist") as persist:
+            with self.assertRaisesRegex(RuntimeError, "owner or exact kernel readback changed"):
+                MOD.optimize(defer_adopt=True)
+        self.assertEqual(self.set_calls(), [["--mtu-owner-set", value] for value in ("1400", "1320", "1320", "1400", "1400")])
+        self.assertEqual((self.helper_state()["interface"], self.helper_state()["mtu"]), ("utun993", 1400))
+        persist.assert_not_called()
+
+    def test_darwin_mid_measurement_failure_restores_original_anchor(self):
+        def benchmark(*arguments):
+            if arguments[-1] == 1320:
+                raise RuntimeError("original ordered measurement was cancelled")
+            return self.successful_benchmark(*arguments)
+        with mock.patch.dict(os.environ, self.darwin_state()), self.optimize_context(), \
+                mock.patch.object(MOD, "route_interface", return_value="utun991"), \
+                mock.patch.object(MOD, "bench_candidate", side_effect=benchmark), \
+                mock.patch.object(MOD, "persist") as persist:
+            with self.assertRaisesRegex(RuntimeError, "original ordered measurement was cancelled"):
+                MOD.optimize(defer_adopt=True)
+        self.assertEqual((self.helper_state()["interface"], self.helper_state()["mtu"]), ("utun993", 1400))
+        self.assertEqual(self.set_calls(), [["--mtu-owner-set", value] for value in ("1400", "1320", "1400")])
+        persist.assert_not_called()
+
+    def measured_darwin_state(self):
+        environment = self.darwin_state()
+        self.state.update(interface="utun993", index=993, identity="native-owned-reader:993", sets=4)
+        self.save()
+        return dict(environment, HOMEVPN_MTU_APPLY_INTERFACE="utun993", HOMEVPN_MTU_APPLY_FAMILY="4",
+                    HOMEVPN_MTU_APPLY_VALUE="1320", HOMEVPN_MTU_EXPECTED_PATH_KEY="captured")
+
+    def test_darwin_apply_and_rollback_bind_measured_current_but_write_original_anchor(self):
+        environment = self.measured_darwin_state()
+        with mock.patch.dict(os.environ, environment), self.optimize_context(), \
+                mock.patch.object(MOD, "route_interface", return_value="utun993") as route:
+            applied = MOD.apply_measured_result()
+            self.assertEqual((applied["interface"], applied["original_interface"], applied["applied_mtu"]),
+                             ("utun994", "utun991", 1320))
+            self.assertEqual(applied["interface_policy"], "darwin-ordered-reader-v1")
+            self.assertFalse(applied["rollback"])
+            route.assert_called_once_with("10.77.0.1")
+            os.environ["HOMEVPN_MTU_APPLY_INTERFACE"] = applied["interface"]
+            os.environ["HOMEVPN_MTU_APPLY_VALUE"] = "1400"
+            restored = MOD.apply_measured_result(rollback=True)
+        self.assertEqual((restored["interface"], restored["original_interface"], restored["applied_mtu"]),
+                         ("utun995", "utun991", 1400))
+        self.assertTrue(restored["rollback"])
+        self.assertEqual(self.set_calls(), [["--mtu-owner-set", "1320"], ["--mtu-owner-set", "1400"]])
+
+    def test_darwin_apply_rejects_changed_current_interface_before_mutation(self):
+        for phase in ("adopt", "rollback"):
+            with self.subTest(phase=phase):
+                environment = self.measured_darwin_state()
+                environment["HOMEVPN_MTU_APPLY_INTERFACE"] = "utun992"
+                before = list(self.set_calls())
+                with mock.patch.dict(os.environ, environment), self.optimize_context(), \
+                        mock.patch.object(MOD, "route_interface", return_value="utun993"):
+                    with self.assertRaisesRegex(RuntimeError, "measured MTU interface changed"):
+                        MOD.apply_measured_result(rollback=phase == "rollback")
+                self.assertEqual(self.set_calls(), before)
+                self.assertEqual((self.helper_state()["interface"], self.helper_state()["mtu"]), ("utun993", 1400))
+
+    def test_darwin_apply_route_uses_actual_current_not_original_name(self):
+        with mock.patch.dict(os.environ, self.measured_darwin_state()), self.optimize_context(), \
+                mock.patch.object(MOD, "route_interface", return_value="utun991"):
+            with self.assertRaisesRegex(RuntimeError, "active MTU path interface changed"):
+                MOD.apply_measured_result()
+        self.assertEqual(self.set_calls(), [])
+
+    def test_darwin_failed_adoption_proof_restores_via_same_original_anchor(self):
+        environment = self.measured_darwin_state()
+        with mock.patch.dict(os.environ, environment), self.optimize_context(), \
+                mock.patch.object(MOD, "route_interface", return_value="utun993"), \
+                mock.patch.object(MOD, "prove_node", side_effect=[None, RuntimeError("original proof retired after adoption")]):
+            with self.assertRaisesRegex(RuntimeError, "original proof retired after adoption"):
+                MOD.apply_measured_result()
+        self.assertEqual((self.helper_state()["interface"], self.helper_state()["mtu"]), ("utun995", 1400))
+        self.assertEqual(self.set_calls(), [["--mtu-owner-set", "1320"], ["--mtu-owner-set", "1400"]])
+
+    def test_darwin_failed_adoption_final_read_also_restores_original_anchor(self):
+        environment = self.measured_darwin_state()
+        self.state.update(read_fault="scope-wrong-original", read_fault_after_sets=5)
+        self.save()
+        with mock.patch.dict(os.environ, environment), self.optimize_context(), \
+                mock.patch.object(MOD, "route_interface", return_value="utun993"):
+            with self.assertRaisesRegex(RuntimeError, "owner or exact kernel readback changed"):
+                MOD.apply_measured_result()
+        self.assertEqual((self.helper_state()["interface"], self.helper_state()["mtu"]), ("utun995", 1400))
+        self.assertEqual(self.set_calls(), [["--mtu-owner-set", "1320"], ["--mtu-owner-set", "1400"]])
 
 
 if __name__ == "__main__":

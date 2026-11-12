@@ -56,6 +56,8 @@ type mtuMeasurementResult struct {
 	OwnerToken         string      `json:"owner_token"`
 	OK                 bool        `json:"ok"`
 	Interface          string      `json:"interface"`
+	OriginalInterface  string      `json:"original_interface,omitempty"`
+	InterfacePolicy    string      `json:"interface_policy,omitempty"`
 	Family             int         `json:"family"`
 	OriginalMTU        int         `json:"original_mtu"`
 	Winner             mtuWinner   `json:"winner"`
@@ -489,8 +491,14 @@ func validateMTUMeasurementAgainstLiveSnapshot(measurement mtuMeasurementResult,
 	if live.Owner != nil && measurement.OwnerToken != live.Owner.token {
 		return errors.New("MTU result belongs to a different captured interface operation")
 	}
-	if measurement.Interface != live.Interface || measurement.Family != live.Family || measurement.OriginalMTU != live.OriginalMTU {
+	if measurement.Family != live.Family || measurement.OriginalMTU != live.OriginalMTU {
 		return errors.New("MTU measurement live interface/family/original value changed after the controller snapshot; stale result was not adopted")
+	}
+	if live.Owner != nil {
+		return live.Owner.validateMeasurementInterface(measurement, live)
+	}
+	if measurement.Interface != live.Interface || measurement.OriginalInterface != "" || measurement.InterfacePolicy != "" {
+		return errors.New("MTU measurement changed its fixed captured interface")
 	}
 	return nil
 }

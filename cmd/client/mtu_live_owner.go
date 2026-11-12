@@ -44,6 +44,8 @@ type mtuOwnerReply struct {
 	Index     int    `json:"index"`
 	MTU       int    `json:"mtu"`
 	Identity  string `json:"identity"`
+	OriginalInterface string `json:"original_interface,omitempty"`
+	InterfacePolicy string `json:"interface_policy,omitempty"`
 }
 
 // A failed begin/close still owns its native command. Keep that handle until
@@ -138,7 +140,7 @@ func (owner *mtuLiveOwner) ownershipLocked(requireNetwork bool) error {
 	if err != nil || state != owner.current {
 		return errors.New("MTU kernel interface or readback changed outside its captured operation")
 	}
-	return nil
+	return owner.validateInterfaceReadbackLocked(owner.current, state, false)
 }
 
 func (owner *mtuLiveOwner) Validate() error {
@@ -159,6 +161,8 @@ func (owner *mtuLiveOwner) ValidateMTU(expected int) error {
 	return nil
 }
 func (owner *mtuLiveOwner) Environment() []string {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
 	executable, _ := os.Executable()
 	minimum := "576"
 	if _, native := owner.kernel.(interface {
@@ -166,7 +170,13 @@ func (owner *mtuLiveOwner) Environment() []string {
 	}); native || owner.initial.Family == 6 {
 		minimum = "1280"
 	}
-	return []string{"HOMEVPN_MTU_OWNER_URL=" + owner.endpoint, "HOMEVPN_MTU_OWNER_TOKEN=" + owner.token, "HOMEVPN_MTU_OWNER_HELPER=" + executable, "HOMEVPN_MTU_MINIMUM=" + minimum}
+	original, policy := "", ""
+	if capability, err := owner.interfaceSuccessionCapabilityLocked(); err == nil && capability != nil {
+		original, policy = owner.initial.Interface, mtuDarwinOrderedInterfacePolicy
+	}
+	environment := []string{"HOMEVPN_MTU_OWNER_URL=" + owner.endpoint, "HOMEVPN_MTU_OWNER_TOKEN=" + owner.token, "HOMEVPN_MTU_OWNER_HELPER=" + executable, "HOMEVPN_MTU_MINIMUM=" + minimum,
+		"HOMEVPN_MTU_ORIGINAL_INTERFACE=" + original, "HOMEVPN_MTU_INTERFACE_POLICY=" + policy}
+	return environment
 }
 
 func (owner *mtuLiveOwner) serve(w http.ResponseWriter, r *http.Request) {
@@ -195,7 +205,7 @@ func (owner *mtuLiveOwner) serve(w http.ResponseWriter, r *http.Request) {
 		// A native transaction may return its own rollback reader on failure.
 		// Retain it only when its exact kernel readback confirms that identity.
 		actual, readErr := owner.kernel.Read()
-		if readErr == nil && next == actual && next.Interface == owner.initial.Interface && next.Family == owner.initial.Family && next.Index > 0 && next.Identity != "" {
+		if readErr == nil && next == actual && owner.validateInterfaceReadbackLocked(owner.current, next, false) == nil {
 			owner.current = next
 		}
 		if changeErr != nil || readErr != nil || next != actual || actual.MTU != request.MTU || owner.validLocked() != nil {
@@ -203,9 +213,13 @@ func (owner *mtuLiveOwner) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	state := owner.current
+	reply, err := owner.interfaceReplyLocked(owner.current)
+	if err != nil {
+		http.Error(w, "captured MTU reply lost its original owner", http.StatusConflict)
+		return
+	}
 	w.Header().Set("content-type", "application/json")
-	_ = json.NewEncoder(w).Encode(mtuOwnerReply{Owner: owner.token, Interface: state.Interface, Family: state.Family, Index: state.Index, MTU: state.MTU, Identity: state.Identity})
+	_ = json.NewEncoder(w).Encode(reply)
 }
 
 // Stop requests first, then acquire the same mutation lock before rollback.
@@ -228,6 +242,9 @@ func (owner *mtuLiveOwner) Restore() error {
 	}); ok {
 		state, err := native.Restore()
 		if err != nil {
+			return err
+		}
+		if err := owner.validateInterfaceReadbackLocked(owner.current, state, false); err != nil {
 			return err
 		}
 		owner.current = state
@@ -322,7 +339,7 @@ func (owner *mtuLiveOwner) Close() error {
 	if native, ok := owner.kernel.(interface{ CleanupRestored() (mtuKernelState, bool) }); ok {
 		state, restored := native.CleanupRestored()
 		if restored && validMTUKernelState(owner.initial) {
-			if !validMTUKernelState(state) || state.MTU != owner.initial.MTU || state.Interface != owner.initial.Interface || state.Family != owner.initial.Family {
+			if state.MTU != owner.initial.MTU || owner.validateInterfaceReadbackLocked(owner.current, state, true) != nil {
 				return errors.New("native cleanup returned a different captured rollback receipt")
 			}
 			owner.current, owner.changed, owner.restored = state, false, true
@@ -397,6 +414,10 @@ func mtuOwnerUtility(args []string) (bool, error) {
 		}
 		request["action"], request["mtu"] = "set", value
 	}
+	originalInterface, interfacePolicy := os.Getenv("HOMEVPN_MTU_ORIGINAL_INTERFACE"), os.Getenv("HOMEVPN_MTU_INTERFACE_POLICY")
+	if err := validateMTUInterfaceScope(originalInterface, interfacePolicy); err != nil {
+		return true, err
+	}
 	endpoint, err := url.Parse(os.Getenv("HOMEVPN_MTU_OWNER_URL"))
 	token := os.Getenv("HOMEVPN_MTU_OWNER_TOKEN")
 	if err != nil || endpoint.Scheme != "http" || endpoint.Hostname() != "127.0.0.1" || endpoint.Port() == "" || endpoint.User != nil || endpoint.Path != "/mtu" || endpoint.RawQuery != "" || endpoint.Fragment != "" || !desktopMTURequestPattern.MatchString(token) {
@@ -427,6 +448,12 @@ func mtuOwnerUtility(args []string) (bool, error) {
 	var result mtuOwnerReply
 	if err != nil || len(body) > 4096 || response.StatusCode != http.StatusOK || decodeRelayControlJSON(body, &result) != nil || result.Owner != token || !validMTUKernelState(mtuKernelState{Interface: result.Interface, Family: result.Family, Index: result.Index, MTU: result.MTU, Identity: result.Identity}) {
 		return true, errors.New("captured MTU operation was rejected or its readback was invalid")
+	}
+	if err := validateMTUOwnerReplyFields(body, interfacePolicy != ""); err != nil {
+		return true, err
+	}
+	if err := validateMTUOwnerReplyScope(result, originalInterface, interfacePolicy); err != nil {
+		return true, err
 	}
 	if request["action"] == "set" && result.MTU != request["mtu"] {
 		return true, errors.New("MTU operation returned a different value")

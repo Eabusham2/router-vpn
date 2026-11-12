@@ -200,6 +200,25 @@ def minimum_mtu(*, captured: bool = False) -> int:
     return int(raw)
 
 
+MTU_DARWIN_INTERFACE_POLICY = "darwin-ordered-reader-v1"
+
+
+def owner_interface_scope() -> tuple[str, str]:
+    original = os.environ.get("HOMEVPN_MTU_ORIGINAL_INTERFACE", "")
+    policy = os.environ.get("HOMEVPN_MTU_INTERFACE_POLICY", "")
+    if not original and not policy:
+        return "", ""
+    if policy != MTU_DARWIN_INTERFACE_POLICY or re.fullmatch(r"utun[0-9]+", original) is None:
+        raise RuntimeError("invalid original MTU interface succession scope")
+    return original, policy
+
+
+def owner_result_scope(state: dict[str, Any]) -> dict[str, str]:
+    if "original_interface" not in state:
+        return {}
+    return {"original_interface": state["original_interface"], "interface_policy": state["interface_policy"]}
+
+
 def owner_capability() -> tuple[str, str]:
     # The controller keeps the actual native TUN/sysfs descriptor/Windows LUID.
     # This subprocess receives only the capability for that captured operation;
@@ -210,6 +229,7 @@ def owner_capability() -> tuple[str, str]:
     helper = os.environ.get("HOMEVPN_MTU_OWNER_HELPER", "")
     mtu_graph_context()
     minimum_mtu(captured=True)
+    owner_interface_scope()
     if not re.fullmatch(r"[0-9a-f]{32}", token):
         raise RuntimeError("missing captured MTU operation capability")
     try:
@@ -238,7 +258,9 @@ def owner_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def owner_state(alias: str, family: int, mtu: int | None = None) -> dict[str, Any]:
     helper, token = owner_capability()
-    if not alias or family not in {4, 6} or type(family) is not int:
+    original_interface, interface_policy = owner_interface_scope()
+    if (not alias or family not in {4, 6} or type(family) is not int
+            or interface_policy and alias != original_interface):
         raise RuntimeError("invalid captured MTU interface request")
     arguments = [helper, "--mtu-owner-read"]
     if mtu is not None:
@@ -255,9 +277,16 @@ def owner_state(alias: str, family: int, mtu: int | None = None) -> dict[str, An
         reply = json.loads(proc.stdout.decode("utf-8"), object_pairs_hook=owner_json_object)
     except (UnicodeError, ValueError) as exc:
         raise RuntimeError("invalid captured MTU owner reply") from exc
-    if (not isinstance(reply, dict)
-            or set(reply) != {"owner_token", "interface", "family", "index", "mtu", "identity"}
-            or reply["owner_token"] != token or reply["interface"] != alias
+    fields = {"owner_token", "interface", "family", "index", "mtu", "identity"}
+    if interface_policy:
+        fields |= {"original_interface", "interface_policy"}
+    if (not isinstance(reply, dict) or set(reply) != fields
+            or reply["owner_token"] != token
+            or (not interface_policy and reply["interface"] != alias)
+            or (interface_policy and (reply["original_interface"] != original_interface
+                or reply["interface_policy"] != interface_policy
+                or not isinstance(reply["interface"], str)
+                or re.fullmatch(r"utun[0-9]+", reply["interface"]) is None))
             or type(reply["family"]) is not int or reply["family"] != family
             or type(reply["index"]) is not int or not 0 < reply["index"] <= 0x7fffffff
             or type(reply["mtu"]) is not int or not minimum_mtu(captured=True) <= reply["mtu"] <= 9000
@@ -270,11 +299,11 @@ def owner_state(alias: str, family: int, mtu: int | None = None) -> dict[str, An
     return reply
 
 
-def set_interface_mtu(alias: str, family: int, mtu: int) -> None:
+def set_interface_mtu(alias: str, family: int, mtu: int) -> dict[str, Any]:
     # Validate the caller's alias/family before a set, since the helper itself
     # deliberately addresses only its captured owner, never a supplied alias.
     owner_state(alias, family)
-    owner_state(alias, family, mtu)
+    return owner_state(alias, family, mtu)
 
 
 def candidate_mtus(ceiling: int) -> list[int]:
@@ -502,12 +531,16 @@ def optimize(*, defer_adopt: bool = False) -> dict[str, Any]:
             # The controller owns the transaction. Never leave a measured winner
             # live or durable until it has re-proved the same session/profile/path.
             set_interface_mtu(alias, family, original)
-        else:
+        final_state = owner_state(alias, family)
+        if final_state["mtu"] != (original if defer_adopt else int(winner["mtu"])):
+            raise RuntimeError("final captured MTU readback changed before measurement completion")
+        if not defer_adopt:
             persist(root, store, profile, winner, results)
         return {
             "ok": True,
             "owner_token": owner_capability()[1],
-            "interface": alias,
+            "interface": final_state["interface"],
+            **owner_result_scope(final_state),
             "family": family,
             "original_mtu": original,
             "winner": winner,
@@ -533,10 +566,17 @@ def apply_measured_result(*, rollback: bool = False) -> dict[str, Any]:
         raise RuntimeError("MTU apply requires an explicit measured interface, IP family, and MTU")
     value = int(raw_mtu)
     family = int(raw_family)
-    previous = interface_mtu(raw_alias, family)
+    original_interface, _interface_policy = owner_interface_scope()
+    alias = original_interface or raw_alias
+    before = owner_state(alias, family)
+    if before["interface"] != raw_alias:
+        raise RuntimeError("measured MTU interface changed before adoption or rollback")
+    previous = before["mtu"]
     if rollback:
-        set_interface_mtu(raw_alias, family, value)
-        return {"ok": True, "owner_token": owner_capability()[1], "interface": raw_alias, "family": family, "previous_mtu": previous, "applied_mtu": value, "rollback": True}
+        final_state = set_interface_mtu(alias, family, value)
+        return {"ok": True, "owner_token": owner_capability()[1], "interface": final_state["interface"],
+                **owner_result_scope(final_state), "family": family, "previous_mtu": previous,
+                "applied_mtu": value, "rollback": True}
 
     policy = str(profile.get("mtu_policy") or "default").strip().lower()
     if policy != "auto":
@@ -547,22 +587,27 @@ def apply_measured_result(*, rollback: bool = False) -> dict[str, Any]:
     ip = private_ip(host)
     if ip.version != family:
         raise RuntimeError("active MTU path IP family changed before adoption")
-    if route_interface(host) != raw_alias:
+    if route_interface(host) != before["interface"]:
         raise RuntimeError("active MTU path interface changed before adoption")
     expected = os.environ.get("HOMEVPN_MTU_EXPECTED_PATH_KEY", "").strip()
     current = measurement_context(profile, root)
     if not expected or current["path_key"] != expected:
         raise RuntimeError("active MTU path fingerprint changed before adoption")
     try:
-        set_interface_mtu(raw_alias, family, value)
+        set_interface_mtu(alias, family, value)
         prove_node(profile)
+        final_state = owner_state(alias, family)
+        if final_state["mtu"] != value:
+            raise RuntimeError("adopted MTU readback changed before completion")
     except Exception:
         try:
-            set_interface_mtu(raw_alias, family, previous)
+            set_interface_mtu(alias, family, previous)
         except Exception as restore_error:
             raise RuntimeError("MTU adoption failed and captured interface rollback was not confirmed") from restore_error
         raise
-    return {"ok": True, "owner_token": owner_capability()[1], "interface": raw_alias, "family": family, "previous_mtu": previous, "applied_mtu": value, **current, "rollback": False}
+    return {"ok": True, "owner_token": owner_capability()[1], "interface": final_state["interface"],
+            **owner_result_scope(final_state), "family": family, "previous_mtu": previous,
+            "applied_mtu": value, **current, "rollback": False}
 
 
 def main() -> int:
