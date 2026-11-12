@@ -1086,8 +1086,13 @@ def main():
         # A per-instance transaction can still lose an update between separate
         # Activities. Reproduce that defect only in isolated compiled classes.
         original = (app / "AndroidStandardExitStore.java").read_text()
-        if original.count("synchronized(STORE_LOCK)") != 5:
-            raise AssertionError("Shared private-store transaction boundary changed")
+        transactions = ("static <T> T publishOrdered(", "synchronized List<Entry> list(",
+                        "synchronized Entry save(", "synchronized String storedSnapshot(",
+                        "synchronized Entry saveIfUnchanged(", "synchronized void remove(")
+        if original.count("synchronized(STORE_LOCK)") != len(transactions) or any(
+                method("AndroidStandardExitStore.java", signature).count("synchronized(STORE_LOCK)") != 1
+                for signature in transactions):
+            raise AssertionError("A captured private-store transaction lost its shared publication lock")
         mutation = work / "negative-source" / "AndroidStandardExitStore.java"
         mutation.parent.mkdir()
         mutation.write_text(original.replace("synchronized(STORE_LOCK)", "synchronized(new Object())"))
