@@ -14,10 +14,14 @@ SPEC.loader.exec_module(POLICY)
 class Tests(unittest.TestCase):
     def test_exact_pin_idempotency_and_drift(self):
         self.assertEqual(POLICY.SOURCE_SHA, '9a0bd5edd56c4ef64f8d8ae335e2a6dfe4d921dc')
-        original = 'func Close() {\n'+POLICY.OLD+'\n}\n'
+        original = 'func Close() {\n'+POLICY.OLD+'\n}\n'+'\n'.join(old for old, _ in POLICY.DIAL_PATCHES)
         with mock.patch.object(POLICY, 'SOURCE_SHA', POLICY.blobsha(original.encode())):
             fixed = POLICY.patch(original)
             self.assertEqual(POLICY.patch(fixed), fixed)
+            self.assertEqual(POLICY.patch(original.replace(POLICY.OLD, POLICY.NEW)), fixed)
+            for old, new in POLICY.DIAL_PATCHES:
+                with self.subTest(partial=old), self.assertRaises(ValueError):
+                    POLICY.patch(fixed.replace(new, old))
             for changed in (original+'drift', fixed+'drift', fixed+POLICY.NEW,
                             fixed.replace('d.endpoint.Attach(nil)', 'd.endpoint.Attach(other)')):
                 with self.subTest(changed=changed), self.assertRaises(ValueError):
@@ -40,7 +44,7 @@ class Tests(unittest.TestCase):
                 self.assertEqual(unrelated.read_text(), 'untouched unrelated')
 
     def test_exact_capacity_source_is_prepared_and_owned(self):
-        original = 'func Close() {\n'+POLICY.OLD+'\n}\n'
+        original = 'func Close() {\n'+POLICY.OLD+'\n}\n'+'\n'.join(old for old, _ in POLICY.DIAL_PATCHES)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root/'transport/openvpn/device_stack.go'; source.parent.mkdir(parents=True)

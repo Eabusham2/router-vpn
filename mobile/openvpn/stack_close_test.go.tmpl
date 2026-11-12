@@ -4,6 +4,8 @@ package openvpn
 
 import (
 	"context"
+	"errors"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +15,8 @@ import (
 	"github.com/sagernet/gvisor/pkg/tcpip"
 	"github.com/sagernet/gvisor/pkg/tcpip/network/ipv4"
 	"github.com/sagernet/gvisor/pkg/tcpip/stack"
+	"github.com/sagernet/sing-tun"
+	M "github.com/sagernet/sing/common/metadata"
 )
 
 type routerVPNPausedStackDelivery struct {
@@ -152,5 +156,62 @@ func TestRouterVPNOpenVPNStackLiveCapacityObservation(t *testing.T) {
 	}
 	if _, err := device.RouterVPNPortMTUContext(context.Background()); err == nil {
 		t.Fatal("closed packet device retained capacity authority")
+	}
+}
+
+// The pinned gonet functions return concrete pointer types. Real failed binds
+// and cancellation must not box those nil pointers into public interfaces: the
+// retained external engine legitimately closes any non-nil returned carrier.
+func TestRouterVPNOpenVPNStackFailedDialReturnsNilInterface(t *testing.T) {
+	for _, mode := range []string{"tcp-cancel", "tcp-bind", "udp-bind", "packet-bind", "udp-success"} {
+		t.Run(mode, func(t *testing.T) {
+			address := netip.MustParsePrefix("10.89.0.2/24")
+			device, err := newStackDevice(DeviceOptions{Context: context.Background(), MTU: 1400,
+				Configuration: Configuration{Address: []netip.Prefix{address}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer device.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			destination := M.ParseSocksaddr("10.89.0.1:443")
+			if mode == "tcp-cancel" {
+				cancel()
+			}
+			if mode == "tcp-bind" || mode == "udp-bind" || mode == "packet-bind" {
+				// Keep the captured configured source but make the actual stack
+				// refuse its NIC bind, as an unavailable native source must do.
+				if err := device.stack.RemoveNIC(tun.DefaultNIC); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "packet-bind" {
+				connection, err := device.ListenPacket(ctx, destination)
+				if err == nil || connection != nil {
+					t.Fatalf("failed packet bind returned carrier %T or lost error: %v", connection, err)
+				}
+				return
+			}
+			network := "tcp"
+			if mode == "udp-bind" || mode == "udp-success" {
+				network = "udp"
+			}
+			connection, err := device.DialContext(ctx, network, destination)
+			if mode == "udp-success" {
+				if err != nil || connection == nil {
+					t.Fatalf("live UDP carrier lost: %v", err)
+				}
+				if err := connection.Close(); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || connection != nil {
+				t.Fatalf("failed dial returned carrier %T or lost error: %v", connection, err)
+			}
+			if mode == "tcp-cancel" && !errors.Is(err, context.Canceled) {
+				t.Fatalf("caller cancellation replaced: %v", err)
+			}
+		})
 	}
 }

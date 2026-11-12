@@ -14,6 +14,18 @@ NEW = ('\t\tclose(d.endpoint.done)\n'
        '\t\tif d.udpForwarder != nil {')
 
 
+# These three concrete pointer returns must be unboxed before conversion to the
+# public net.Conn/net.PacketConn interface. A nil *gonet.TCPConn is otherwise a
+# non-nil interface and its caller's ordinary failure cleanup panics in Close.
+DIAL_PATCHES = tuple((old, old.replace('return '+call, 'connection, err := '+call)+
+    '\n'+indent+'if connection == nil {\n'+indent+'\treturn nil, err\n'+indent+'}\n'+indent+'return connection, err')
+    for indent, call in (
+        ('\t\t', 'gonet.DialTCPWithBind(ctx, d.stack, bind, address, networkProtocol)'),
+        ('\t\t', 'gonet.DialUDP(d.stack, &bind, &address, networkProtocol)'),
+        ('\t', 'gonet.DialUDP(d.stack, &bind, nil, networkProtocol)'),
+    ) for old in (indent+'return '+call,))
+
+
 def inputs():
     return [Path(__file__).resolve(), ROOT/'deploy/test_mobile_openvpn_stack_policy.py',
             ROOT/'mobile/openvpn/stack_close_test.go.tmpl', ROOT/'mobile/openvpn/stack_capacity.go.tmpl']
@@ -25,11 +37,19 @@ def blobsha(data):
 
 def patch(source):
     original = source.replace(NEW, OLD, 1) if source.count(NEW) == 1 else source
-    if original.count(OLD) != 1 or blobsha(original.encode()) != SOURCE_SHA:
-        raise ValueError('Pinned OpenVPN stack changed; delivery-drain patch refused')
-    fixed = original.replace(OLD, NEW, 1)
-    if source not in (original, fixed):
-        raise ValueError('Partial OpenVPN delivery-drain patch')
+    for old, new in DIAL_PATCHES:
+        if original.count(new) == 1:
+            original = original.replace(new, old, 1)
+    if original.count(OLD) != 1 or any(original.count(old) != 1 for old, _ in DIAL_PATCHES) or blobsha(original.encode()) != SOURCE_SHA:
+        raise ValueError('Pinned OpenVPN stack changed; delivery-drain/dial patch refused')
+    # Admit the exact original, previous owned drain-only version, and the fully
+    # current projection. Any partial dial update remains a source error.
+    previous = original.replace(OLD, NEW, 1)
+    fixed = previous
+    for old, new in DIAL_PATCHES:
+        fixed = fixed.replace(old, new, 1)
+    if source not in (original, previous, fixed):
+        raise ValueError('Partial OpenVPN delivery-drain/dial patch')
     return fixed
 
 
