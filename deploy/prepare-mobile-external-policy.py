@@ -45,15 +45,34 @@ def selection_sources(vendor):
         values[relative] = (original, source.encode())
     return values
 
-def check_selection_sources(vendor):
+def check_selection_sources(vendor, *, preparing=False):
     for relative, (_, expected) in selection_sources(vendor).items():
+        expected = composed_selection_source(vendor, relative, expected, current=not preparing)
         path = vendor / relative
         if path.is_symlink() or not path.is_file() or path.read_bytes() != expected:
             raise ValueError('changed native selection commit: ' + relative)
 
+def execution_preparer():
+    spec = importlib.util.spec_from_file_location('routervpn_execution_selector_owner', ROOT/'deploy/prepare-node-chain-execution.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+def composed_selection_source(vendor, relative, expected, *, current=True):
+    if relative != 'protocol/group/selector.go':
+        return expected
+    execution = execution_preparer()
+    owner = execution.target(vendor.resolve(), execution.OWNER)
+    if owner.exists():
+        # Only the complete current owned extension may coexist with this
+        # exact original commit. Never strip unknown lines to make an audit pass.
+        execution.verify_owned_templates(vendor.resolve(), current=current)
+        return execution.selector_source(expected.decode())
+    return expected
+
 
 def inputs():
-    return [Path(__file__).resolve(), ROOT/'deploy/test_mobile_external_pinned.sh'] + sorted((ROOT/'mobile/externalpolicy').glob('*.tmpl')) + GRAPHS.inputs()
+    return list(dict.fromkeys([Path(__file__).resolve(), ROOT/'deploy/test_mobile_external_pinned.sh'] + sorted((ROOT/'mobile/externalpolicy').glob('*.tmpl')) + GRAPHS.inputs() + execution_preparer().inputs()))
 
 def digest():
     value=hashlib.sha256()
@@ -84,9 +103,11 @@ def prepare(vendor, *, mobile=True):
     # partial or foreign patch cannot erase cache/interrupt/history semantics.
     for relative, (original, expected) in selection_sources(vendor).items():
         path = vendor / relative
-        if path.is_symlink() or path.read_bytes() not in (original, expected):
+        composed = composed_selection_source(vendor, relative, expected, current=False)
+        accepted = (original, expected) if composed == expected else (composed,)
+        if path.is_symlink() or path.read_bytes() not in accepted:
             raise ValueError('changed native selection commit: ' + relative)
-        path.write_bytes(expected)
+        path.write_bytes(composed)
     for name, relative in {
         'selector_context.go': 'protocol/group/routervpn_selector_context.go',
         'interrupt_context.go': 'common/interrupt/routervpn_selector_context.go',

@@ -1,0 +1,317 @@
+package group
+
+import (
+	"context"
+	"errors"
+	"net"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// Actual native manager, selector, guarded selection and commit body. The two
+// final outbounds are explicit nondialing boundaries; this is not path proof.
+type executionSelectionOutbound struct{ outbound.Adapter }
+
+func (*executionSelectionOutbound) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+	return nil, errors.New("test final cannot dial")
+}
+func (*executionSelectionOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("test final cannot listen")
+}
+
+type executionSelectionOptions struct{ original *executionSelectionOutbound }
+type executionSelectionFixture struct {
+	ctx            context.Context
+	manager        *outbound.Manager
+	selector       *Selector
+	local, server  *executionSelectionOutbound
+	source, config string
+}
+
+func executionNewSelection(t *testing.T, cache adapter.CacheFile) *executionSelectionFixture {
+	t.Helper()
+	f := &executionSelectionFixture{source: strings.Repeat("a", 64), config: strings.Repeat("b", 64)}
+	registry := outbound.NewRegistry()
+	RegisterSelector(registry)
+	for _, kind := range []string{C.TypeShadowsocks, C.TypeSOCKS} {
+		outbound.Register[executionSelectionOptions](registry, kind, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, _ string, options executionSelectionOptions) (adapter.Outbound, error) {
+			return options.original, nil
+		})
+	}
+	logger := log.NewNOPFactory().Logger()
+	ends := endpoint.NewManager(logger, endpoint.NewRegistry())
+	f.manager = outbound.NewManager(logger, registry, ends, "proxy")
+	f.ctx = service.ContextWith[adapter.OutboundManager](context.Background(), f.manager)
+	if cache != nil {
+		f.ctx = service.ContextWith[adapter.CacheFile](f.ctx, cache)
+	}
+	f.local = &executionSelectionOutbound{outbound.NewAdapter(C.TypeShadowsocks, "original-local", []string{"tcp", "udp"}, nil)}
+	f.server = &executionSelectionOutbound{outbound.NewAdapter(C.TypeSOCKS, "routervpn-chain-server-original", []string{"tcp", "udp"}, nil)}
+	for _, value := range []*executionSelectionOutbound{f.local, f.server} {
+		if err := f.manager.Create(f.ctx, nil, logger, value.Tag(), value.Type(), &executionSelectionOptions{value}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.manager.Create(f.ctx, nil, logger, "proxy", C.TypeSelector, &option.SelectorOutboundOptions{Outbounds: []string{f.local.Tag()}, Default: f.local.Tag()}); err != nil {
+		t.Fatal(err)
+	}
+	value, _ := f.manager.Outbound("proxy")
+	f.selector = value.(*Selector)
+	if err := f.selector.Start(); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+func (f *executionSelectionFixture) current(ctx context.Context) error { return ctx.Err() }
+func (f *executionSelectionFixture) admit(t *testing.T, selected string) {
+	t.Helper()
+	if err := f.selector.RouterVPNAdmitNodeChainServer(f.ctx, f.source, f.config, selected, f.local, f.server, f.current); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNExecutionSelectorAdmission(t *testing.T) {
+	for _, selected := range []string{"local", "server"} {
+		t.Run(selected, func(t *testing.T) {
+			f := executionNewSelection(t, nil)
+			if f.selector.RouterVPNNodeChainSelectionEpoch() != 0 {
+				t.Fatal("ordinary selector claimed an admitted epoch")
+			}
+			tag := f.local.Tag()
+			if selected == "server" {
+				tag = f.server.Tag()
+			}
+			f.admit(t, tag)
+			if f.selector.Now() != tag || f.selector.RouterVPNNodeChainSelectionEpoch() != 2 {
+				t.Fatal("initial selected epoch missing")
+			}
+			if err := f.selector.RouterVPNNodeChainSelectionContext(f.ctx, f.source, f.config, f.local, f.server); err != nil {
+				t.Fatal(err)
+			}
+			inventory := f.selector.All()
+			if len(inventory) != 2 || inventory[0] != f.local.Tag() || inventory[1] != f.server.Tag() {
+				t.Fatal("original two-choice inventory changed", inventory)
+			}
+			inventory[0] = "foreign"
+			if f.selector.All()[0] != f.local.Tag() {
+				t.Fatal("selector exposed mutable admitted inventory")
+			}
+			if err := f.selector.RouterVPNAdmitNodeChainServer(f.ctx, f.source, f.config, tag, f.local, f.server, f.current); err == nil {
+				t.Fatal("selector readmitted another owner")
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionSelectorRefusesSubstitution(t *testing.T) {
+	for _, fault := range []string{"source", "config", "default", "nil-current", "stale-current", "local-pointer", "server-pointer", "server-type", "server-tag", "foreign-manager", "ordinary-pair", "cancelled"} {
+		t.Run(fault, func(t *testing.T) {
+			f := executionNewSelection(t, nil)
+			source, config, selected, current, ctx := f.source, f.config, f.local.Tag(), f.current, f.ctx
+			var local, server adapter.Outbound = f.local, f.server
+			switch fault {
+			case "source":
+				source = strings.Repeat("A", 64)
+			case "config":
+				config = ""
+			case "default":
+				selected = "missing"
+			case "nil-current":
+				current = nil
+			case "stale-current":
+				current = func(context.Context) error { return errors.New("source changed") }
+			case "local-pointer":
+				local = &executionSelectionOutbound{outbound.NewAdapter(C.TypeShadowsocks, f.local.Tag(), nil, nil)}
+			case "server-pointer":
+				server = &executionSelectionOutbound{outbound.NewAdapter(C.TypeSOCKS, f.server.Tag(), nil, nil)}
+			case "server-type":
+				server = &executionSelectionOutbound{outbound.NewAdapter(C.TypeDirect, f.server.Tag(), nil, nil)}
+			case "server-tag":
+				server = &executionSelectionOutbound{outbound.NewAdapter(C.TypeSOCKS, "foreign", nil, nil)}
+			case "foreign-manager":
+				replacement := &executionSelectionOutbound{outbound.NewAdapter(C.TypeSOCKS, f.server.Tag(), nil, nil)}
+				if err := f.manager.Create(ctx, nil, log.NewNOPFactory().Logger(), replacement.Tag(), replacement.Type(), &executionSelectionOptions{replacement}); err != nil {
+					t.Fatal(err)
+				}
+			case "ordinary-pair":
+				f.selector.tags = append(f.selector.tags, f.server.Tag())
+				f.selector.outbounds[f.server.Tag()] = f.server
+			case "cancelled":
+				cancelled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = cancelled
+			}
+			if err := f.selector.RouterVPNAdmitNodeChainServer(ctx, source, config, selected, local, server, current); err == nil {
+				t.Fatal("substituted selector admission accepted", fault)
+			}
+			if f.selector.RouterVPNNodeChainSelectionEpoch() != 0 || f.selector.selected.Load() != f.local {
+				t.Fatal("rejected admission mutated original selection")
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionSelectorEpochAndCallbacks(t *testing.T) {
+	f := executionNewSelection(t, nil)
+	f.admit(t, f.local.Tag())
+	check := func(ctx context.Context) error {
+		return f.selector.RouterVPNNodeChainSelectionContext(ctx, f.source, f.config, f.local, f.server)
+	}
+	before := f.selector.RouterVPNNodeChainSelectionEpoch()
+	if err := f.selector.RouterVPNSelectOutboundContext(f.ctx, f.server.Tag(), check); err != nil {
+		t.Fatal("readback recursed into held selector lock", err)
+	}
+	if f.selector.RouterVPNNodeChainSelectionEpoch() != before+2 {
+		t.Fatal("actual native swap did not advance epoch")
+	}
+	if err := f.selector.RouterVPNSelectOutboundContext(f.ctx, f.local.Tag(), check); err != nil {
+		t.Fatal(err)
+	}
+	if f.selector.Now() != f.local.Tag() || f.selector.RouterVPNNodeChainSelectionEpoch() != before+4 {
+		t.Fatal("away-and-back reused original proof epoch")
+	}
+	before = f.selector.RouterVPNNodeChainSelectionEpoch()
+	if !f.selector.SelectOutbound(f.local.Tag()) || f.selector.RouterVPNNodeChainSelectionEpoch() != before {
+		t.Fatal("same-pointer selection changed epoch")
+	}
+	if f.selector.SelectOutbound("missing") || f.selector.RouterVPNNodeChainSelectionEpoch() != before {
+		t.Fatal("unknown selection changed epoch or fell back")
+	}
+	f.selector.routerVPNNodeChainEpoch.Add(1)
+	if f.selector.RouterVPNNodeChainSelectionEpoch() != 0 || f.selector.RouterVPNNodeChainSelectionContext(f.ctx, f.source, f.config, f.local, f.server) == nil {
+		t.Fatal("partially published selection was observable")
+	}
+	f.selector.routerVPNNodeChainEpoch.Add(1)
+}
+
+type executionSelectionCache struct {
+	adapter.CacheFile
+	events *[]string
+}
+
+func (*executionSelectionCache) LoadSelected(string) string { return "" }
+func (c *executionSelectionCache) StoreSelected(string, string) error {
+	*c.events = append(*c.events, "cache")
+	return errors.New("controlled original cache error")
+}
+func TestRouterVPNExecutionSelectorPreservesCommitOrder(t *testing.T) {
+	events := []string{}
+	f := executionNewSelection(t, &executionSelectionCache{events: &events})
+	f.admit(t, f.local.Tag())
+	f.selector.routerVPNSelectionAccess.Lock()
+	ok := f.selector.routerVPNSelectOutboundLocked(f.server.Tag(), func() { events = append(events, "interrupt") }, func() { events = append(events, "history") })
+	f.selector.routerVPNSelectionAccess.Unlock()
+	if !ok || strings.Join(events, ",") != "cache,interrupt,history" || f.selector.Now() != f.server.Tag() || f.selector.RouterVPNNodeChainSelectionEpoch() != 4 {
+		t.Fatal("original cache/interrupt/history commit changed", events)
+	}
+}
+
+func TestRouterVPNExecutionSelectorConcurrentReadback(t *testing.T) {
+	f := executionNewSelection(t, nil)
+	f.admit(t, f.local.Tag())
+	var workers sync.WaitGroup
+	var bad atomic.Bool
+	workers.Add(2)
+	go func() {
+		defer workers.Done()
+		for i := 0; i < 1000; i++ {
+			if !f.selector.SelectOutbound(f.server.Tag()) || !f.selector.SelectOutbound(f.local.Tag()) {
+				bad.Store(true)
+			}
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		for i := 0; i < 1000; i++ {
+			epoch := f.selector.RouterVPNNodeChainSelectionEpoch()
+			if epoch&1 != 0 {
+				bad.Store(true)
+			}
+			tags := f.selector.All()
+			if len(tags) != 2 || tags[0] != f.local.Tag() || tags[1] != f.server.Tag() {
+				bad.Store(true)
+			}
+			tags[0] = "foreign"
+			_ = f.selector.RouterVPNNodeChainSelectionContext(f.ctx, f.source, f.config, f.local, f.server)
+		}
+	}()
+	workers.Wait()
+	if bad.Load() || f.selector.RouterVPNNodeChainSelectionEpoch() != 4002 || f.selector.Now() != f.local.Tag() {
+		t.Fatal("concurrent original readback or epoch lost")
+	}
+}
+
+func TestRouterVPNExecutionSelectorBoundedAdmission(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := executionNewSelection(t, nil)
+		f.selector.routerVPNSelectionAccess.Lock()
+		ctx, cancel := context.WithTimeout(f.ctx, time.Second)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() {
+			done <- f.selector.RouterVPNAdmitNodeChainServer(ctx, f.source, f.config, f.local.Tag(), f.local, f.server, f.current)
+		}()
+		if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal("selector admission lost original caller bound", err)
+		}
+		f.selector.routerVPNSelectionAccess.Unlock()
+		if f.selector.RouterVPNNodeChainSelectionEpoch() != 0 {
+			t.Fatal("expired native admission completed late")
+		}
+	})
+}
+
+func TestRouterVPNExecutionSelectorFailedCommitRemainsOwned(t *testing.T) {
+	f := executionNewSelection(t, nil)
+	var calls int
+	err := f.selector.RouterVPNAdmitNodeChainServer(f.ctx, f.source, f.config, f.server.Tag(), f.local, f.server, func(context.Context) error {
+		calls++
+		if calls >= 3 {
+			return errors.New("controlled source retirement after original publication")
+		}
+		return nil
+	})
+	if err == nil || f.selector.RouterVPNNodeChainSelectionEpoch() != 2 || f.selector.Now() != f.server.Tag() {
+		t.Fatal("failed publication lost original cleanup identity", err)
+	}
+	if err := f.selector.RouterVPNAdmitNodeChainServer(f.ctx, f.source, f.config, f.local.Tag(), f.local, f.server, f.current); err == nil {
+		t.Fatal("failed publication relinked to another execution")
+	}
+}
+
+func TestRouterVPNExecutionSelectorReadbackRetainsCapture(t *testing.T) {
+	for _, fault := range []string{"source", "config", "local", "server"} {
+		t.Run(fault, func(t *testing.T) {
+			f := executionNewSelection(t, nil)
+			f.admit(t, f.local.Tag())
+			source, config := f.source, f.config
+			var local, server adapter.Outbound = f.local, f.server
+			switch fault {
+			case "source":
+				source = strings.Repeat("c", 64)
+			case "config":
+				config = strings.Repeat("d", 64)
+			case "local":
+				local = &executionSelectionOutbound{outbound.NewAdapter(f.local.Type(), f.local.Tag(), nil, nil)}
+			case "server":
+				server = &executionSelectionOutbound{outbound.NewAdapter(f.server.Type(), f.server.Tag(), nil, nil)}
+			}
+			if err := f.selector.RouterVPNNodeChainSelectionContext(f.ctx, source, config, local, server); err == nil {
+				t.Fatal("native selector readback accepted substituted capture", fault)
+			}
+		})
+	}
+}

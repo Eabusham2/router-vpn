@@ -1,0 +1,290 @@
+package route
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"sync/atomic"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/protocol/routervpnchaingate"
+	N "github.com/sagernet/sing/common/network"
+)
+
+const routerVPNNodeChainApplicationTag = "routervpn-chain-application"
+const routerVPNNodeChainTUNTag = "routervpn-chain-tun"
+
+// The original native TUN must consult PreMatch before its address-based DNS
+// shortcut. Once admitted, Continue retains the full tracked UDP dispatch.
+func (r *Router) RouterVPNNodeChainGated() bool { return r != nil && r.routerVPNNodeChainGated }
+
+var errRouterVPNNodeChainIngress = errors.New("original ordered application ingress is closed")
+
+type routerVPNNodeChainGate = routervpnchaingate.Outbound
+
+// Capture the real gate before any TUN can start. Failed/cancelled admission
+// subsequently retires only through this original pointer, including when its
+// current manager entry has been replaced or the original caller has expired.
+func (r *Router) routerVPNPrepareNodeChainIngress() error {
+	if !r.routerVPNNodeChainGated {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(r.ctx, C.StartTimeout)
+	defer cancel()
+	_, err := r.routerVPNOriginalNodeChainGate(ctx)
+	return err
+}
+
+func (r *Router) routerVPNOriginalNodeChainGate(ctx context.Context) (*routerVPNNodeChainGate, error) {
+	if r == nil || !r.routerVPNNodeChainGated || ctx == nil {
+		return nil, errRouterVPNNodeChainIngress
+	}
+	value, found, err := adapter.RouterVPNOutboundContext(ctx, r.outbound, routerVPNNodeChainApplicationTag)
+	gate, ok := value.(*routervpnchaingate.Outbound)
+	if err != nil || !found || !ok || gate == nil || gate.Tag() != routerVPNNodeChainApplicationTag || gate.Type() != routervpnchaingate.Type {
+		return nil, errRouterVPNNodeChainIngress
+	}
+	if original := r.routerVPNNodeChainGate.Load(); original != nil {
+		if original != gate {
+			return nil, errRouterVPNNodeChainIngress
+		}
+	} else if !r.routerVPNNodeChainGate.CompareAndSwap(nil, gate) && r.routerVPNNodeChainGate.Load() != gate {
+		return nil, errRouterVPNNodeChainIngress
+	}
+	return gate, ctx.Err()
+}
+
+func (r *Router) routerVPNRetireNodeChainInput(ctx context.Context, raw io.Closer, cause error) (context.Context, func() error, error) {
+	gate := r.routerVPNNodeChainGate.Load()
+	if gate == nil {
+		// An ordinary native TUN cannot reach this case: Start captures the gate
+		// before inbound startup. Still close an early caller through the same
+		// actual manager when construction has completed but Start has not run.
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), C.StopTimeout)
+		gate, _ = r.routerVPNOriginalNodeChainGate(cleanup)
+		cancel()
+	}
+	if gate == nil {
+		return ctx, nil, cause
+	}
+	release, err := gate.RetireInbound(raw)
+	return ctx, release, errors.Join(cause, err)
+}
+
+// The Router enables default-deny at construction from the gated route's
+// actual final tag. Binding later cannot create a startup DNS-hijack window.
+// This owner guards true TUN dispatch, before inbound detours, sniffing,
+// route rules, or either direct/rule-based DNS hijack. Internal proof calls
+// exercise the retained DNS router directly and never enter these methods.
+type RouterVPNNodeChainIngress struct {
+	router  *Router
+	inbound adapter.Inbound
+	current func(context.Context) error
+	track   func(context.Context, io.Closer) (context.Context, func() error, error)
+	opened  func(context.Context) (bool, error)
+	retired atomic.Bool
+}
+
+func (r *Router) RouterVPNBindNodeChainIngress(ctx context.Context, inbound adapter.Inbound,
+	current func(context.Context) error,
+	track func(context.Context, io.Closer) (context.Context, func() error, error),
+	opened func(context.Context) (bool, error)) (*RouterVPNNodeChainIngress, error) {
+	if r == nil || !r.routerVPNNodeChainGated || ctx == nil || ctx.Err() != nil || inbound == nil ||
+		inbound.Tag() != routerVPNNodeChainTUNTag || inbound.Type() != C.TypeTun || current == nil || track == nil || opened == nil {
+		return nil, errRouterVPNNodeChainIngress
+	}
+	owner := &RouterVPNNodeChainIngress{router: r, inbound: inbound, current: current, track: track, opened: opened}
+	if err := owner.original(ctx, false); err != nil {
+		return nil, err
+	}
+	if !r.routerVPNNodeChainIngress.CompareAndSwap(nil, owner) {
+		return nil, errRouterVPNNodeChainIngress
+	}
+	if err := owner.Current(ctx); err != nil {
+		owner.retired.Store(true)
+		return owner, err
+	}
+	return owner, nil
+}
+
+func (o *RouterVPNNodeChainIngress) original(ctx context.Context, bound bool) error {
+	if o == nil || o.router == nil || ctx == nil || ctx.Err() != nil || o.retired.Load() ||
+		!o.router.routerVPNNodeChainGated || o.router.ctx == nil || o.router.ctx.Err() != nil ||
+		bound && o.router.routerVPNNodeChainIngress.Load() != o {
+		return errRouterVPNNodeChainIngress
+	}
+	if err := o.current(ctx); err != nil {
+		return err
+	}
+	if _, err := o.router.routerVPNOriginalNodeChainGate(ctx); err != nil {
+		return err
+	}
+	inbounds, err := adapter.RouterVPNInboundsContext(ctx, o.router.inbound)
+	if err != nil || len(inbounds) != 1 || inbounds[0] != o.inbound || o.inbound.Tag() != routerVPNNodeChainTUNTag || o.inbound.Type() != C.TypeTun {
+		return errRouterVPNNodeChainIngress
+	}
+	if err := o.current(ctx); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func (o *RouterVPNNodeChainIngress) Current(ctx context.Context) error { return o.original(ctx, true) }
+func (o *RouterVPNNodeChainIngress) Retire() {
+	if o != nil {
+		o.retired.Store(true)
+	}
+}
+
+func (r *Router) routerVPNIngressOwner(ctx context.Context, metadata adapter.InboundContext) (*RouterVPNNodeChainIngress, error) {
+	if r == nil || ctx == nil || ctx.Err() != nil {
+		return nil, errRouterVPNNodeChainIngress
+	}
+	if !r.routerVPNNodeChainGated {
+		return nil, nil
+	}
+	// A gated Box has exactly one TUN. Another inlet, detour, or relabeled
+	// metadata cannot bypass its original admission by pretending to be proof.
+	if metadata.Inbound != routerVPNNodeChainTUNTag || metadata.InboundType != C.TypeTun || metadata.InboundDetour != "" {
+		return nil, errRouterVPNNodeChainIngress
+	}
+	owner := r.routerVPNNodeChainIngress.Load()
+	if owner == nil || owner.Current(ctx) != nil {
+		return nil, errRouterVPNNodeChainIngress
+	}
+	open, err := owner.opened(ctx)
+	if err != nil || !open || owner.Current(ctx) != nil {
+		return nil, errRouterVPNNodeChainIngress
+	}
+	return owner, nil
+}
+
+func (r *Router) routerVPNTrackIngress(ctx context.Context, raw io.Closer, metadata adapter.InboundContext) (context.Context, func() error, error) {
+	owner, err := r.routerVPNIngressOwner(ctx, metadata)
+	if err != nil {
+		if r != nil && r.routerVPNNodeChainGated {
+			return r.routerVPNRetireNodeChainInput(ctx, raw, err)
+		}
+		return ctx, nil, err
+	}
+	if owner == nil {
+		return ctx, nil, nil
+	}
+	owned, release, err := owner.track(ctx, raw)
+	if err != nil || owned == nil || release == nil {
+		return ctx, release, errRouterVPNNodeChainIngress
+	}
+	if owned.Err() != nil || owner.Current(owned) != nil {
+		return owned, release, errRouterVPNNodeChainIngress
+	}
+	return owned, release, nil
+}
+
+type routerVPNIngressConn struct {
+	net.Conn
+	release func() error
+}
+
+func (c *routerVPNIngressConn) Close() error { return c.release() }
+
+type routerVPNIngressPacket struct {
+	N.PacketConn
+	release func() error
+}
+
+func (c *routerVPNIngressPacket) Close() error { return c.release() }
+
+func routerVPNIngressOnClose(release func() error, next N.CloseHandlerFunc) N.CloseHandlerFunc {
+	return N.OnceClose(func(err error) {
+		if release != nil {
+			err = errors.Join(err, release())
+		}
+		if next != nil {
+			next(err)
+		}
+	})
+}
+
+func (r *Router) RouteConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext) error {
+	owned, release, err := r.routerVPNTrackIngress(ctx, conn, metadata)
+	if release != nil {
+		conn = &routerVPNIngressConn{conn, release}
+		defer conn.Close()
+	}
+	if err != nil {
+		if release == nil {
+			return errors.Join(err, conn.Close())
+		}
+		return err
+	}
+	return r.routerVPNRouteConnectionUngated(owned, conn, metadata)
+}
+
+func (r *Router) RouteConnectionEx(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
+	owned, release, err := r.routerVPNTrackIngress(ctx, conn, metadata)
+	if release != nil {
+		conn = &routerVPNIngressConn{conn, release}
+		onClose = routerVPNIngressOnClose(release, onClose)
+	}
+	if err != nil {
+		N.CloseOnHandshakeFailure(conn, onClose, err)
+		return
+	}
+	r.routerVPNRouteConnectionExUngated(owned, conn, metadata, onClose)
+}
+
+func (r *Router) RoutePacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext) error {
+	owned, release, err := r.routerVPNTrackIngress(ctx, conn, metadata)
+	if release != nil {
+		conn = &routerVPNIngressPacket{conn, release}
+		defer conn.Close()
+	}
+	if err != nil {
+		if release == nil {
+			return errors.Join(err, conn.Close())
+		}
+		return err
+	}
+	return r.routerVPNRoutePacketConnectionUngated(owned, conn, metadata)
+}
+
+func (r *Router) RoutePacketConnectionEx(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
+	owned, release, err := r.routerVPNTrackIngress(ctx, conn, metadata)
+	if release != nil {
+		conn = &routerVPNIngressPacket{conn, release}
+		onClose = routerVPNIngressOnClose(release, onClose)
+	}
+	if err != nil {
+		N.CloseOnHandshakeFailure(conn, onClose, err)
+		return
+	}
+	r.routerVPNRoutePacketConnectionExUngated(owned, conn, metadata, onClose)
+}
+
+func (r *Router) PreMatch(metadata adapter.InboundContext, firstPacket []byte) adapter.PreMatchResult {
+	if r.routerVPNNodeChainGated {
+		ctx, cancel := context.WithTimeout(r.ctx, time.Second)
+		_, err := r.routerVPNIngressOwner(ctx, metadata)
+		cancel()
+		if err != nil {
+			return adapter.PreMatchResult{Action: adapter.PreMatchDrop}
+		}
+		// Native flow/DNS shortcuts would bypass the tracked dispatch above.
+		// Evaluate the same rules later through the original owned connection.
+		return adapter.PreMatchResult{Action: adapter.PreMatchContinue}
+	}
+	return r.routerVPNPreMatchUngated(metadata, firstPacket)
+}
+
+// This fast packet callback has no original closable connection to track.
+// A gated TUN always takes owned normal UDP dispatch, even while open. Native
+// proof uses the retained DNSRouter directly and never calls this shortcut.
+func (r *Router) HijackDNSPacket(ctx context.Context, payload []byte, writer N.PacketWriter, metadata adapter.InboundContext) {
+	if r.routerVPNNodeChainGated {
+		return
+	}
+	r.routerVPNHijackDNSPacketUngated(ctx, payload, writer, metadata)
+}

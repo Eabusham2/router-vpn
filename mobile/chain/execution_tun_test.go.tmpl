@@ -1,0 +1,124 @@
+package tun
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
+	"github.com/sagernet/sing-box/protocol/routervpnchaingate"
+	"github.com/sagernet/sing-box/route"
+	T "github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing-tun/gtcpip/header"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+type executionTUNFinal struct{ outbound.Adapter }
+
+func (*executionTUNFinal) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+	return nil, errors.New("component final cannot dial")
+}
+func (*executionTUNFinal) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("component final cannot listen")
+}
+
+// Exercises the actual native TUN JudgeFlow and actual Router, without calling
+// TUN.Start or creating any interface. Only its final network transport is a
+// refusing component double; manager/selector/gate/admission are native code.
+func TestRouterVPNExecutionTUNDNSAddressCannotBypass(t *testing.T) {
+	for _, phase := range []string{"ordinary", "pending", "closed", "open", "revoked"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			logger := log.NewNOPFactory()
+			registry := outbound.NewRegistry()
+			group.RegisterSelector(registry)
+			routervpnchaingate.RegisterOutbound(registry)
+			final := &executionTUNFinal{outbound.NewAdapter(C.TypeShadowsocks, "original-final", []string{"tcp", "udp"}, nil)}
+			outbound.Register[struct{}](registry, C.TypeShadowsocks, func(context.Context, adapter.Router, log.ContextLogger, string, struct{}) (adapter.Outbound, error) {
+				return final, nil
+			})
+			ends := endpoint.NewManager(logger.Logger(), endpoint.NewRegistry())
+			outs := outbound.NewManager(logger.Logger(), registry, ends, routervpnchaingate.Tag)
+			ctx = service.ContextWith[adapter.OutboundManager](ctx, outs)
+			inRegistry := inbound.NewRegistry()
+			ins := inbound.NewManager(logger.Logger(), inRegistry, ends)
+			service.MustRegister[adapter.InboundManager](ctx, ins)
+			finalTag := routervpnchaingate.Tag
+			if phase == "ordinary" {
+				finalTag = "proxy"
+			}
+			router := route.NewRouter(ctx, logger, option.RouteOptions{Final: finalTag}, option.DNSOptions{})
+			address := netip.MustParseAddr("198.51.100.53")
+			tun := &Inbound{ctx: ctx, router: router, tag: "routervpn-chain-tun", dnsHijackAddress: []netip.Addr{address}, logger: logger.Logger()}
+			inbound.Register[struct{}](inRegistry, C.TypeTun, func(context.Context, adapter.Router, log.ContextLogger, string, struct{}) (adapter.Inbound, error) {
+				return tun, nil
+			})
+			if err := ins.Create(ctx, router, logger.Logger(), tun.tag, C.TypeTun, &struct{}{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := outs.Create(ctx, router, logger.Logger(), final.Tag(), final.Type(), &struct{}{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := outs.Create(ctx, router, logger.Logger(), "proxy", C.TypeSelector, &option.SelectorOutboundOptions{Outbounds: []string{final.Tag()}, Default: final.Tag()}); err != nil {
+				t.Fatal(err)
+			}
+			if err := outs.Create(ctx, router, logger.Logger(), routervpnchaingate.Tag, routervpnchaingate.Type, &routervpnchaingate.Options{Detour: "proxy"}); err != nil {
+				t.Fatal(err)
+			}
+			for _, stage := range adapter.ListStartStages {
+				if err := outs.Start(stage); err != nil {
+					t.Fatal(err)
+				}
+			}
+			value, _ := outs.Outbound(routervpnchaingate.Tag)
+			gate := value.(*routervpnchaingate.Outbound)
+			defer gate.Close()
+			if err := router.Start(adapter.StartStateInitialize); err != nil {
+				t.Fatal(err)
+			}
+			if phase != "pending" && phase != "ordinary" {
+				current := func(ctx context.Context) error { return ctx.Err() }
+				control, err := gate.Bind(ctx, "original-preparation:session", current)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := router.RouterVPNBindNodeChainIngress(ctx, tun, current, control.TrackInbound, func(ctx context.Context) (bool, error) { state, err := control.Observe(ctx); return state.Open, err }); err != nil {
+					t.Fatal(err)
+				}
+				if phase == "open" || phase == "revoked" {
+					if err := control.Open(ctx); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if phase == "revoked" {
+					if err := control.Revoke(ctx); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			source := netip.MustParseAddrPort("192.0.2.7:41000")
+			destination := netip.AddrPortFrom(address, 53)
+			result := tun.JudgeFlow(uint8(header.UDPProtocolNumber), source, destination, []byte{1, 2})
+			expected := T.ActionDrop
+			if phase == "ordinary" {
+				expected = T.ActionHijackDNS
+			} else if phase == "open" {
+				expected = T.ActionAccept
+			}
+			if result.Action != expected {
+				t.Fatal("native TUN DNS shortcut bypassed original tracked admission", phase, result.Action, expected)
+			}
+		})
+	}
+}

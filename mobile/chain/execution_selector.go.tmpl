@@ -1,0 +1,108 @@
+package group
+
+import (
+	"context"
+	"encoding/hex"
+	"errors"
+	"strings"
+
+	"github.com/sagernet/sing-box/adapter"
+)
+
+type routerVPNNodeChainSelection struct {
+	source, config string
+	local, server  adapter.Outbound
+	tags           []string
+}
+
+func routerVPNNodeChainDigest(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == 32 && strings.ToLower(value) == value
+}
+
+// Admit exactly one captured Server final into the original one-choice Local
+// selector. The caller retains a closed TUN ingress/application gate throughout
+// this transition. Existing ordinary two-choice selectors cannot enter here.
+// The original tags slice never changes; All reads the immutable published
+// inventory so concurrent UI observations cannot race an in-place slice edit.
+func (s *Selector) RouterVPNAdmitNodeChainServer(ctx context.Context, source, config, defaultTag string,
+	local, server adapter.Outbound, current func(context.Context) error) error {
+	bad := errors.New("ordered native selector admission lost its original owner")
+	if s == nil || ctx == nil || current == nil || !routerVPNNodeChainDigest(source) || !routerVPNNodeChainDigest(config) ||
+		local == nil || server == nil || local == server || s.Tag() != "proxy" || server.Type() != "socks" ||
+		!strings.HasPrefix(server.Tag(), "routervpn-chain-server-") || local.Tag() == server.Tag() ||
+		defaultTag != local.Tag() && defaultTag != server.Tag() {
+		return bad
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &s.routerVPNSelectionAccess); err != nil {
+		return err
+	}
+	defer s.routerVPNSelectionAccess.Unlock()
+	if s.routerVPNNodeChainSelection.Load() != nil || len(s.tags) != 1 || s.tags[0] != local.Tag() ||
+		len(s.outbounds) != 1 || s.outbounds[local.Tag()] != local || s.selected.Load() != local || s.defaultTag != local.Tag() {
+		return bad
+	}
+	if err := current(ctx); err != nil {
+		return err
+	}
+	for _, original := range []adapter.Outbound{local, server} {
+		actual, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, original.Tag())
+		if err != nil || !found || actual != original {
+			return bad
+		}
+	}
+	if err := current(ctx); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// There are no native callbacks between these writes. Failed validation
+	// afterwards retains this one admitted graph for original Box retirement;
+	// it never authorizes another extension or opens application traffic.
+	s.outbounds[server.Tag()] = server
+	s.defaultTag = defaultTag
+	// Publish no stable readback between pointer change and immutable admission.
+	// Even an unchanged Local default receives a nonzero admitted epoch.
+	s.routerVPNNodeChainEpoch.Add(1)
+	if defaultTag == server.Tag() {
+		s.selected.Store(server)
+	}
+	s.routerVPNNodeChainSelection.Store(&routerVPNNodeChainSelection{source, config, local, server, []string{local.Tag(), server.Tag()}})
+	s.routerVPNNodeChainEpoch.Add(1)
+	return errors.Join(current(ctx), ctx.Err())
+}
+
+// Stable epochs are nonzero/even. Returning zero during a transition prevents
+// a nonlocking observer from pairing a new pointer with its previous epoch.
+// Existing ordinary selectors never acquire an admitted execution identity.
+func (s *Selector) RouterVPNNodeChainSelectionEpoch() uint64 {
+	if s == nil || s.routerVPNNodeChainSelection.Load() == nil {
+		return 0
+	}
+	epoch := s.routerVPNNodeChainEpoch.Load()
+	if epoch == 0 || epoch&1 != 0 {
+		return 0
+	}
+	return epoch
+}
+
+func (s *Selector) RouterVPNNodeChainSelectionContext(ctx context.Context, source, config string, local, server adapter.Outbound) error {
+	bad := errors.New("ordered native selector readback changed")
+	if s == nil || ctx == nil || ctx.Err() != nil || local == nil || server == nil || s.RouterVPNNodeChainSelectionEpoch() == 0 {
+		return bad
+	}
+	// The immutable admission is published only after the exact map write.
+	// Selection callbacks already hold routerVPNSelectionAccess; readback must
+	// not acquire that lock recursively or inspect the mutable selection map.
+	// The native owner separately checks retained manager pointers, and ordinary
+	// selection cannot widen the admitted immutable two-choice inventory.
+	owned := s.routerVPNNodeChainSelection.Load()
+	selected := s.selected.Load()
+	if owned == nil || owned.source != source || owned.config != config || owned.local != local || owned.server != server ||
+		len(s.tags) != 1 || s.tags[0] != local.Tag() || len(owned.tags) != 2 || owned.tags[0] != local.Tag() || owned.tags[1] != server.Tag() ||
+		selected != local && selected != server {
+		return bad
+	}
+	return ctx.Err()
+}

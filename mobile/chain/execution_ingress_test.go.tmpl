@@ -1,0 +1,607 @@
+package route
+
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"io"
+	"net"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	MD "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	C "github.com/sagernet/sing-box/constant"
+	D "github.com/sagernet/sing-box/dns"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
+	"github.com/sagernet/sing-box/protocol/routervpnchaingate"
+	"github.com/sagernet/sing/common/buf"
+	"github.com/sagernet/sing/common/bufio"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// Actual native Router, DNSRouter, managers, selector and gate. The TUN device
+// and final DNS/network transports are explicit component doubles: no system
+// tunnel or native encrypted path is created. DNS framing and incoming socket
+// retirement use real pipes/loopback UDP and the shipping protocol handlers.
+type executionIngressTUN struct{ inbound.Adapter }
+
+func (*executionIngressTUN) Start(adapter.StartStage) error { return nil }
+func (*executionIngressTUN) Close() error                   { return nil }
+
+type executionIngressFinal struct {
+	outbound.Adapter
+	calls atomic.Int64
+}
+
+func (f *executionIngressFinal) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+	f.calls.Add(1)
+	return nil, errors.New("controlled final cannot dial")
+}
+func (f *executionIngressFinal) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	f.calls.Add(1)
+	return nil, errors.New("controlled final cannot listen")
+}
+
+type executionIngressDNS struct {
+	D.TransportAdapter
+	calls atomic.Int64
+}
+
+func (*executionIngressDNS) Start(adapter.StartStage) error { return nil }
+func (*executionIngressDNS) Close() error                   { return nil }
+func (*executionIngressDNS) Reset()                         {}
+func (d *executionIngressDNS) Exchange(ctx context.Context, q *MD.Msg) (*MD.Msg, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	d.calls.Add(1)
+	response := new(MD.Msg)
+	response.SetReply(q)
+	return response, nil
+}
+func (d *executionIngressDNS) ExchangeAsync(ctx context.Context, q *MD.Msg, callback func(*MD.Msg, error)) {
+	response, err := d.Exchange(ctx, q)
+	callback(response, err)
+}
+
+type executionIngressFixture struct {
+	ctx               context.Context
+	cancel            context.CancelFunc
+	router            *Router
+	ins               *inbound.Manager
+	outs              *outbound.Manager
+	gate              *routervpnchaingate.Outbound
+	control           *routervpnchaingate.Control
+	ingress           *RouterVPNNodeChainIngress
+	tun               *executionIngressTUN
+	selected, foreign *executionIngressDNS
+	dns               *D.Router
+	final             *executionIngressFinal
+	valid             atomic.Bool
+}
+
+func executionNewIngress(t *testing.T, ruleDNS, gated bool) *executionIngressFixture {
+	t.Helper()
+	f := &executionIngressFixture{}
+	f.valid.Store(true)
+	f.ctx, f.cancel = context.WithCancel(context.Background())
+	logger := log.NewNOPFactory()
+	outs := outbound.NewRegistry()
+	ins := inbound.NewRegistry()
+	ends := endpoint.NewManager(logger.Logger(), endpoint.NewRegistry())
+	group.RegisterSelector(outs)
+	routervpnchaingate.RegisterOutbound(outs)
+	f.final = &executionIngressFinal{Adapter: outbound.NewAdapter(C.TypeShadowsocks, "original-final", []string{"tcp", "udp"}, nil)}
+	outbound.Register[struct{}](outs, C.TypeShadowsocks, func(context.Context, adapter.Router, log.ContextLogger, string, struct{}) (adapter.Outbound, error) {
+		return f.final, nil
+	})
+	f.tun = &executionIngressTUN{inbound.NewAdapter(C.TypeTun, routerVPNNodeChainTUNTag)}
+	inbound.Register[struct{}](ins, C.TypeTun, func(context.Context, adapter.Router, log.ContextLogger, string, struct{}) (adapter.Inbound, error) {
+		return f.tun, nil
+	})
+	finalTag := routerVPNNodeChainApplicationTag
+	if !gated {
+		finalTag = "proxy"
+	}
+	f.outs = outbound.NewManager(logger.Logger(), outs, ends, finalTag)
+	f.ins = inbound.NewManager(logger.Logger(), ins, ends)
+	f.ctx = service.ContextWith[adapter.OutboundManager](f.ctx, f.outs)
+	service.MustRegister[adapter.InboundManager](f.ctx, f.ins)
+	if err := f.ins.Create(f.ctx, nil, logger.Logger(), routerVPNNodeChainTUNTag, C.TypeTun, &struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.outs.Create(f.ctx, nil, logger.Logger(), f.final.Tag(), f.final.Type(), &struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.outs.Create(f.ctx, nil, logger.Logger(), "proxy", C.TypeSelector, &option.SelectorOutboundOptions{Outbounds: []string{f.final.Tag()}, Default: f.final.Tag()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.outs.Create(f.ctx, nil, logger.Logger(), routervpnchaingate.Tag, routervpnchaingate.Type, &routervpnchaingate.Options{Detour: "proxy"}); err != nil {
+		t.Fatal(err)
+	}
+	value, _ := f.outs.Outbound(routervpnchaingate.Tag)
+	f.gate = value.(*routervpnchaingate.Outbound)
+	dnsRegistry := D.NewTransportRegistry()
+	D.RegisterTransport[struct{}](dnsRegistry, C.DNSTypeUDP, func(_ context.Context, _ log.ContextLogger, tag string, _ struct{}) (adapter.DNSTransport, error) {
+		d := &executionIngressDNS{TransportAdapter: D.NewTransportAdapter(C.DNSTypeUDP, tag, nil)}
+		if tag == "original-home-adguard" {
+			f.selected = d
+		} else {
+			f.foreign = d
+		}
+		return d, nil
+	})
+	transports := D.NewTransportManager(logger.Logger(), dnsRegistry, f.outs, "original-home-adguard")
+	service.MustRegister[adapter.DNSTransportManager](f.ctx, transports)
+	for _, tag := range []string{"original-home-adguard", "foreign-resolver"} {
+		if err := transports.Create(f.ctx, logger.Logger(), tag, C.DNSTypeUDP, &struct{}{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var err error
+	f.dns, err = D.NewRouter(f.ctx, logger, option.DNSOptions{RawDNSOptions: option.RawDNSOptions{DNSClientOptions: option.DNSClientOptions{DisableCache: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.MustRegister[adapter.DNSRouter](f.ctx, f.dns)
+	f.router = NewRouter(f.ctx, logger, option.RouteOptions{Final: finalTag}, option.DNSOptions{})
+	service.MustRegister[adapter.Router](f.ctx, f.router)
+	var rules []option.Rule
+	if ruleDNS {
+		rules = []option.Rule{{Type: C.RuleTypeDefault, DefaultOptions: option.DefaultRule{RawDefaultRule: option.RawDefaultRule{Port: []uint16{53}}, RuleAction: option.RuleAction{Action: C.RuleActionTypeHijackDNS}}}}
+	}
+	if err := f.router.Initialize(rules, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range adapter.ListStartStages {
+		if err := f.outs.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+		if err := transports.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.dns.Initialize(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.dns.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.router.Start(adapter.StartStateInitialize); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.gate.Close(); err != nil {
+			t.Error(err)
+		}
+		f.cancel()
+		_ = f.dns.Close()
+	})
+	return f
+}
+func (f *executionIngressFixture) current(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !f.valid.Load() {
+		return errors.New("original owner changed")
+	}
+	return nil
+}
+func (f *executionIngressFixture) bind(t *testing.T) {
+	t.Helper()
+	var err error
+	f.control, err = f.gate.Bind(f.ctx, "original-preparation:session", f.current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.ingress, err = f.router.RouterVPNBindNodeChainIngress(f.ctx, f.tun, f.current, f.control.TrackInbound, func(ctx context.Context) (bool, error) {
+		s, err := f.control.Observe(ctx)
+		return s.Open && !s.Closed, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *executionIngressFixture) open(t *testing.T) {
+	t.Helper()
+	f.bind(t)
+	if err := f.control.Open(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+func executionDNSQuestion(t *testing.T) []byte {
+	t.Helper()
+	q := new(MD.Msg)
+	q.SetQuestion("owned-ingress.invalid.", MD.TypeA)
+	raw, err := q.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+func executionDNSMetadata(ruleDNS bool) adapter.InboundContext {
+	meta := adapter.InboundContext{Inbound: routerVPNNodeChainTUNTag, InboundType: C.TypeTun, Source: M.ParseSocksaddr("127.0.0.1:41000"), Destination: M.ParseSocksaddr("198.51.100.53:53")}
+	if !ruleDNS {
+		meta.Protocol = C.ProtocolDNS
+	}
+	return meta
+}
+
+func TestRouterVPNExecutionIngressDefaultDeny(t *testing.T) {
+	for _, kind := range []string{"tcp", "tcp-ex", "udp", "udp-ex"} {
+		for _, ruleDNS := range []bool{false, true} {
+			t.Run(kind+map[bool]string{false: "/direct", true: "/rule"}[ruleDNS], func(t *testing.T) {
+				f := executionNewIngress(t, ruleDNS, true)
+				meta := executionDNSMetadata(ruleDNS)
+				var raw io.Closer
+				var invoke func() error
+				client, peer := net.Pipe()
+				defer client.Close()
+				defer peer.Close()
+				if kind == "tcp" || kind == "tcp-ex" {
+					raw = client
+					if kind == "tcp" {
+						invoke = func() error { return f.router.RouteConnection(f.ctx, client, meta) }
+					} else {
+						invoke = func() error {
+							var result error
+							f.router.RouteConnectionEx(f.ctx, client, meta, func(err error) { result = err })
+							return result
+						}
+					}
+				} else {
+					packet := &executionIngressPacket{close: client.Close}
+					raw = packet
+					if kind == "udp" {
+						invoke = func() error { return f.router.RoutePacketConnection(f.ctx, packet, meta) }
+					} else {
+						invoke = func() error {
+							var result error
+							f.router.RoutePacketConnectionEx(f.ctx, packet, meta, func(err error) { result = err })
+							return result
+						}
+					}
+				}
+				if err := invoke(); err == nil {
+					t.Fatal("pending DNS dispatch accepted")
+				}
+				if f.selected.calls.Load() != 0 || f.foreign.calls.Load() != 0 || f.final.calls.Load() != 0 {
+					t.Fatal("pending DNS reached original resolver or final")
+				}
+				if _, err := peer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+					t.Fatal("pending input actual close missing", err)
+				}
+				_ = raw
+				if got := f.router.PreMatch(meta, executionDNSQuestion(t)); got.Action != adapter.PreMatchDrop {
+					t.Fatal("pending PreMatch bypassed owned dispatch", got.Action)
+				}
+			})
+		}
+	}
+}
+
+// Explicit PacketConn double for deny-before-read and failed-close controls.
+// Positive UDP DNS below uses bufio over an actual loopback UDP socket.
+type executionIngressPacket struct {
+	close func() error
+	reads atomic.Int64
+}
+
+func (p *executionIngressPacket) ReadPacket(*buf.Buffer) (M.Socksaddr, error) {
+	p.reads.Add(1)
+	return M.Socksaddr{}, errors.New("denied packet read")
+}
+func (*executionIngressPacket) WritePacket(buffer *buf.Buffer, _ M.Socksaddr) error {
+	buffer.Release()
+	return errors.New("denied packet write")
+}
+func (p *executionIngressPacket) Close() error { return p.close() }
+func (*executionIngressPacket) LocalAddr() net.Addr {
+	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1}
+}
+func (*executionIngressPacket) SetDeadline(time.Time) error      { return nil }
+func (*executionIngressPacket) SetReadDeadline(time.Time) error  { return nil }
+func (*executionIngressPacket) SetWriteDeadline(time.Time) error { return nil }
+
+func TestRouterVPNExecutionIngressOpenDNSUsesOriginalResolver(t *testing.T) {
+	for _, kind := range []string{"tcp", "tcp-ex", "udp", "udp-ex"} {
+		for _, ruleDNS := range []bool{false, true} {
+			t.Run(kind+map[bool]string{false: "/direct", true: "/rule"}[ruleDNS], func(t *testing.T) {
+				f := executionNewIngress(t, ruleDNS, true)
+				f.open(t)
+				meta := executionDNSMetadata(ruleDNS)
+				query := executionDNSQuestion(t)
+				if got := f.router.PreMatch(meta, query); got.Action != adapter.PreMatchContinue {
+					t.Fatal("open PreMatch escaped tracked dispatch", got.Action)
+				}
+				done := make(chan error, 1)
+				if kind == "tcp" || kind == "tcp-ex" {
+					incoming, client := net.Pipe()
+					defer client.Close()
+					defer incoming.Close()
+					_ = client.SetDeadline(time.Now().Add(2 * time.Second))
+					go func() {
+						if kind == "tcp" {
+							done <- f.router.RouteConnection(f.ctx, incoming, meta)
+						} else {
+							f.router.RouteConnectionEx(f.ctx, incoming, meta, func(err error) { done <- err })
+						}
+					}()
+					request := make([]byte, len(query)+2)
+					binary.BigEndian.PutUint16(request, uint16(len(query)))
+					copy(request[2:], query)
+					if _, err := client.Write(request); err != nil {
+						t.Fatal("open original DNS request refused", err)
+					}
+					var length uint16
+					if err := binary.Read(client, binary.BigEndian, &length); err != nil {
+						t.Fatal("tracked DNS response absent", err)
+					}
+					response := make([]byte, int(length))
+					if _, err := io.ReadFull(client, response); err != nil {
+						t.Fatal(err)
+					}
+					var message MD.Msg
+					if err := message.Unpack(response); err != nil || !message.Response {
+						t.Fatal("original DNS framing lost", err)
+					}
+				} else {
+					server, err := net.ListenPacket("udp", "127.0.0.1:0")
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer server.Close()
+					incoming := bufio.NewPacketConn(server)
+					client, err := net.ListenPacket("udp", "127.0.0.1:0")
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer client.Close()
+					_ = client.SetDeadline(time.Now().Add(2 * time.Second))
+					go func() {
+						if kind == "udp" {
+							done <- f.router.RoutePacketConnection(f.ctx, incoming, meta)
+						} else {
+							f.router.RoutePacketConnectionEx(f.ctx, incoming, meta, func(err error) { done <- err })
+						}
+					}()
+					if _, err := client.WriteTo(query, server.LocalAddr()); err != nil {
+						t.Fatal(err)
+					}
+					response := make([]byte, 1024)
+					n, _, err := client.ReadFrom(response)
+					if err != nil {
+						t.Fatal("tracked UDP DNS response absent", err)
+					}
+					var message MD.Msg
+					if err := message.Unpack(response[:n]); err != nil || !message.Response {
+						t.Fatal("original UDP DNS framing lost", err)
+					}
+				}
+				if f.selected.calls.Load() != 1 || f.foreign.calls.Load() != 0 || f.final.calls.Load() != 0 {
+					t.Fatal("tracked DNS substituted selected resolver", f.selected.calls.Load(), f.foreign.calls.Load(), f.final.calls.Load())
+				}
+				if err := f.control.Revoke(f.ctx); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case <-done:
+				case <-time.After(2 * time.Second):
+					t.Fatal("original DNS dispatch did not join after revoke")
+				}
+				if s, err := f.control.Observe(f.ctx); err != nil || !s.Drained || s.Open {
+					t.Fatal("original DNS raw close not acknowledged", s, err)
+				}
+			})
+		}
+	}
+}
+
+type executionDNSWriter struct{ calls atomic.Int64 }
+
+func (w *executionDNSWriter) WritePacket(buffer *buf.Buffer, _ M.Socksaddr) error {
+	w.calls.Add(1)
+	buffer.Release()
+	return nil
+}
+func TestRouterVPNExecutionIngressRejectsFastDNSButKeepsProof(t *testing.T) {
+	for _, opened := range []bool{false, true} {
+		t.Run(map[bool]string{false: "closed", true: "open"}[opened], func(t *testing.T) {
+			f := executionNewIngress(t, false, true)
+			if opened {
+				f.open(t)
+			}
+			writer := new(executionDNSWriter)
+			f.router.HijackDNSPacket(f.ctx, executionDNSQuestion(t), writer, executionDNSMetadata(false))
+			if f.selected.calls.Load() != 0 || writer.calls.Load() != 0 {
+				t.Fatal("untracked DNS fast callback reached original resolver")
+			}
+			query := new(MD.Msg)
+			query.SetQuestion("owned-proof.invalid.", MD.TypeA)
+			if _, err := f.dns.Exchange(f.ctx, query, adapter.DNSQueryOptions{}); err != nil || f.selected.calls.Load() != 1 || f.foreign.calls.Load() != 0 {
+				t.Fatal("pending gate blocked retained native DNS proof", err)
+			}
+		})
+	}
+	t.Run("ordinary", func(t *testing.T) {
+		f := executionNewIngress(t, false, false)
+		writer := new(executionDNSWriter)
+		f.router.HijackDNSPacket(f.ctx, executionDNSQuestion(t), writer, executionDNSMetadata(false))
+		if f.selected.calls.Load() != 1 || writer.calls.Load() != 1 {
+			t.Fatal("ordinary DNS fast callback changed")
+		}
+	})
+}
+
+type executionIngressCloseConn struct {
+	net.Conn
+	close func() error
+}
+
+func (c *executionIngressCloseConn) Close() error { return c.close() }
+func TestRouterVPNExecutionIngressRetainsFailedEarlyClose(t *testing.T) {
+	for _, kind := range []string{"tcp", "tcp-ex", "udp", "udp-ex"} {
+		t.Run(kind, func(t *testing.T) {
+			f := executionNewIngress(t, false, true)
+			var fail atomic.Bool
+			fail.Store(true)
+			var calls atomic.Int64
+			client, peer := net.Pipe()
+			defer client.Close()
+			defer peer.Close()
+			closeRaw := func() error {
+				calls.Add(1)
+				if fail.Load() {
+					return errors.New("controlled original early close failed")
+				}
+				return client.Close()
+			}
+			meta := executionDNSMetadata(false)
+			switch kind {
+			case "tcp":
+				_ = f.router.RouteConnection(f.ctx, &executionIngressCloseConn{client, closeRaw}, meta)
+			case "tcp-ex":
+				f.router.RouteConnectionEx(f.ctx, &executionIngressCloseConn{client, closeRaw}, meta, func(error) {})
+			case "udp":
+				_ = f.router.RoutePacketConnection(f.ctx, &executionIngressPacket{close: closeRaw}, meta)
+			case "udp-ex":
+				f.router.RoutePacketConnectionEx(f.ctx, &executionIngressPacket{close: closeRaw}, meta, func(error) {})
+			}
+			f.bind(t)
+			s, err := f.control.Observe(f.ctx)
+			if err != nil || s.Drained || calls.Load() == 0 {
+				t.Fatal("failed early input close lost original gate receipt", s, err)
+			}
+			if err := f.control.Open(f.ctx); err == nil {
+				t.Fatal("failed early close permitted application traffic")
+			}
+			before := calls.Load()
+			fail.Store(false)
+			if err := f.control.Revoke(f.ctx); err != nil {
+				t.Fatal(err)
+			}
+			if calls.Load() != before+1 {
+				t.Fatal("cleanup did not retry original early close exactly once")
+			}
+			if _, err := peer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+				t.Fatal("original early socket stayed live", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionIngressRefusesForeignAdmission(t *testing.T) {
+	for _, fault := range []string{"closed", "retired", "source", "inbound", "type", "detour", "cancelled"} {
+		t.Run(fault, func(t *testing.T) {
+			f := executionNewIngress(t, false, true)
+			f.open(t)
+			meta := executionDNSMetadata(false)
+			ctx := f.ctx
+			switch fault {
+			case "closed":
+				_ = f.control.Revoke(ctx)
+			case "retired":
+				f.ingress.Retire()
+			case "source":
+				f.valid.Store(false)
+			case "inbound":
+				meta.Inbound = "foreign"
+			case "type":
+				meta.InboundType = "mixed"
+			case "detour":
+				meta.InboundDetour = "foreign"
+			case "cancelled":
+				cancelled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = cancelled
+			}
+			client, peer := net.Pipe()
+			defer client.Close()
+			defer peer.Close()
+			if err := f.router.RouteConnection(ctx, client, meta); err == nil {
+				t.Fatal("foreign or retired TUN ingress admitted", fault)
+			}
+			if f.selected.calls.Load() != 0 || f.final.calls.Load() != 0 {
+				t.Fatal("rejected original ingress reached downstream")
+			}
+			if _, err := peer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+				t.Fatal("rejected input not retired under original gate", err)
+			}
+			if _, err := f.router.RouterVPNBindNodeChainIngress(f.ctx, f.tun, f.current, f.control.TrackInbound, func(context.Context) (bool, error) { return true, nil }); err == nil {
+				t.Fatal("foreign owner rebound original router")
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionIngressCurrentRetainsNativePointers(t *testing.T) {
+	for _, fault := range []string{"inbound", "gate", "retired"} {
+		t.Run(fault, func(t *testing.T) {
+			f := executionNewIngress(t, false, true)
+			f.open(t)
+			switch fault {
+			case "inbound":
+				f.tun = &executionIngressTUN{inbound.NewAdapter(C.TypeTun, routerVPNNodeChainTUNTag)}
+				if err := f.ins.Create(f.ctx, nil, log.NewNOPFactory().Logger(), routerVPNNodeChainTUNTag, C.TypeTun, &struct{}{}); err != nil {
+					t.Fatal(err)
+				}
+			case "gate":
+				if err := f.outs.Create(f.ctx, nil, log.NewNOPFactory().Logger(), routervpnchaingate.Tag, C.TypeShadowsocks, &struct{}{}); err != nil {
+					t.Fatal(err)
+				}
+			case "retired":
+				f.ingress.Retire()
+			}
+			if err := f.ingress.Current(f.ctx); err == nil {
+				t.Fatal("native ingress pointer replacement accepted", fault)
+			}
+		})
+	}
+}
+
+type executionIngressReadWitness struct {
+	net.Conn
+	reads atomic.Int64
+}
+
+func (c *executionIngressReadWitness) Read([]byte) (int, error) { c.reads.Add(1); return 0, io.EOF }
+
+// The EOF transport is an explicit causal witness: entering the shipping DNS
+// parser returns immediately, so omitting Router admission cannot hide behind
+// a blocked pipe or a later outbound gate. The actual parser must never read.
+func TestRouterVPNExecutionIngressAdmissionPrecedesDNSRead(t *testing.T) {
+	for _, variant := range []string{"direct", "rule"} {
+		for _, method := range []string{"legacy", "ex"} {
+			t.Run(variant+"/"+method, func(t *testing.T) {
+				ruleDNS := variant == "rule"
+				f := executionNewIngress(t, ruleDNS, true)
+				f.bind(t)
+				client, peer := net.Pipe()
+				defer client.Close()
+				defer peer.Close()
+				input := &executionIngressReadWitness{Conn: client}
+				var err error
+				if method == "legacy" {
+					err = f.router.RouteConnection(f.ctx, input, executionDNSMetadata(ruleDNS))
+				} else {
+					f.router.RouteConnectionEx(f.ctx, input, executionDNSMetadata(ruleDNS), func(value error) { err = value })
+				}
+				if input.reads.Load() != 0 {
+					t.Fatal("closed DNS read before original admission")
+				}
+				if err == nil {
+					t.Fatal("closed DNS admission returned success")
+				}
+			})
+		}
+	}
+}
