@@ -10,7 +10,7 @@ import unittest
 
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/android-multihop-contract.yml'
 ANDROID = tuple('python3 android/test_android_' + name + '.py' for name in (
-    'multihop_contract', 'node_chain_capture', 'ordered_presentation',
+    'multihop_contract', 'node_chain_capture', 'node_candidates', 'ordered_presentation',
     'node_chain_runtime', 'node_chain_mtu', 'multihop_modes', 'home_dns',
     'router_dns_retest', 'multihop_graph', 'pq_selection', 'max_selection',
     'naive_multihop',

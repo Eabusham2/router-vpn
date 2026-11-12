@@ -160,7 +160,7 @@ public final class ProductDialogHarness extends android.app.Activity {
  AlertDialog fastestProgressDialog;AndroidOrderedPathSelection ordered;
  public android.content.SharedPreferences getSharedPreferences(String name,int mode){return saved;}
  void showOrderedEditor(AndroidOrderedPathSelection draft){ordered=draft;} // Explicit editor-presentation sink; constructor and capture checks are shipping code.
- boolean busy;String selected="",profile="",pair="",entry="",exit="",message="",infoTitle="",info="";int routed,refreshes,externalBenchmarks,externalComparisons;boolean externalComparisonAdopt;
+ boolean busy;String selected="",profile="",pair="",entry="",exit="",message="",infoTitle="",info="";int candidateTimes,routed,refreshes,externalBenchmarks,externalComparisons;boolean externalComparisonAdopt;
  SharedPreferences prefs(){return saved;}boolean mutationBusy(){return busy;}void toast(String text){message=text;}
  void refreshNodes(){}void refreshAll(){refreshes++;}void refreshMap(){}void dialog(String title,String text){infoTitle=title;info=text;}
  public boolean isDestroyed(){return false;}void showNodeSort(){pair="sort";}void showSavedStatistics(){infoTitle="Saved statistics";}void runCurrentSpeed(){if(!connection.isConnected()){toast("Connect first");return;}telemetry.speedTest(8<<20,(r,e)->dialog("Real VPN path speed",r.detail()));}void showAddRouter(){showPairDialog();}void showPairDialog(){pair="router";}void openStandardExits(){pair="external";}
@@ -170,7 +170,7 @@ public final class ProductDialogHarness extends android.app.Activity {
  void selectCatalog(AndroidUnifiedNodeCatalog.Item item){selected=item.id;}
  void showProfileActions(AndroidNodeStore.Node node){profile=node.id;}
  AndroidNodeStore.Node nodeById(String id){for(AndroidNodeStore.Node n:nodeStore.nodes)if(n.id.equals(id))return n;return null;}
- JSONObject activeRouterProfile(){return new JSONObject();}void runRoutedHopSpeeds(){routed++;}
+ JSONObject activeRouterProfile(){return new JSONObject();}void runRoutedHopSpeeds(){routed++;}void runCandidateTimes(){candidateTimes++;}
  void refreshMultihopSummary(){}
  void prepareViaEntryExitMeasurement(AndroidNodeStore.Node node,List<AndroidNodeStore.Node> nodes){entry=node.id;exit=Integer.toString(nodes.size());}
  void chooseImportedRouterFinal(AndroidStandardExitStore.Entry first,List<AndroidNodeStore.Node> finals){importedEntry=first;importedFinals=finals;}
@@ -211,18 +211,18 @@ HARNESS_SUFFIX = r'''
  }
  static void performance(){
   for(boolean close:new boolean[]{false,true}){
-   ProductDialogHarness held=new ProductDialogHarness();held.telemetry.delayFastest=true;held.showPerformance();shown(9,"Performance").clickItem(2);AlertDialog progress=AlertDialog.last;
+   ProductDialogHarness held=new ProductDialogHarness();held.telemetry.delayFastest=true;held.showPerformance();shown(10,"Performance").clickItem(2);AlertDialog progress=AlertDialog.last;
    check(held.telemetry.allSamples==50&&progress.showing,"Performance comparison uses owned fifty-sample progress");
    if(close)progress.dismiss();else progress.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();
    check(held.telemetry.fastestCancels==1&&held.fastestProgressDialog==progress,"Performance cancellation retains original batch until drain");
    held.telemetry.pendingFastest.result(null,new IllegalStateException("drained cancellation"));
    check(held.fastestProgressDialog==null&&held.nodeStore.selections==0&&held.saved.writes==0,"Performance cancellation cannot select a node");
   }
-  ProductDialogHarness compared=new ProductDialogHarness();compared.showPerformance();shown(9,"Performance").clickItem(2);
+  ProductDialogHarness compared=new ProductDialogHarness();compared.showPerformance();shown(10,"Performance").clickItem(2);
   check(compared.infoTitle.equals("50-sample Router comparison")&&compared.info.contains("10% trimmed mean")&&compared.nodeStore.selections==0&&compared.saved.writes==0,"compare-only displays complete statistics without winner adoption");
-  ProductDialogHarness selected=new ProductDialogHarness();selected.saved.values.put(SELECTED_KIND,"external");selected.saved.values.put(SELECTED_ID,"provider-only");selected.showPerformance();shown(9,"Performance").clickItem(1);check(selected.externalBenchmarks==1&&selected.telemetry.nodeSamples==0,"selected external benchmark fell back to the active Router node");
-  for(int action=0;action<9;action++){
-   ProductDialogHarness h=new ProductDialogHarness();h.showPerformance();AlertDialog d=shown(9,"Performance");d.clickItem(action);
+  ProductDialogHarness selected=new ProductDialogHarness();selected.saved.values.put(SELECTED_KIND,"external");selected.saved.values.put(SELECTED_ID,"provider-only");selected.showPerformance();shown(10,"Performance").clickItem(1);check(selected.externalBenchmarks==1&&selected.telemetry.nodeSamples==0,"selected external benchmark fell back to the active Router node");
+  for(int action=0;action<10;action++){
+   ProductDialogHarness h=new ProductDialogHarness();h.showPerformance();AlertDialog d=shown(10,"Performance");d.clickItem(action);
    switch(action){case 0:check(h.telemetry.currentSamples==5,"current path actual callback");break;
     case 1:check(h.telemetry.nodeSamples==50&&h.telemetry.measuredNode.equals("a"),"durable 50-sample selected node");break;
     case 2:check(h.telemetry.allSamples==50,"all-node callback");break;
@@ -231,12 +231,13 @@ HARNESS_SUFFIX = r'''
     case 6:check(h.infoTitle.equals("Saved statistics"),"saved durable statistics action");break;
     case 7:check(h.externalComparisons==1&&!h.externalComparisonAdopt,"external comparison dispatch preserves compare-only choice");break;
     case 8:check(h.externalComparisons==1&&h.externalComparisonAdopt,"external comparison dispatch preserves compare-and-connect choice");break;
+    case 9:check(h.candidateTimes==1&&h.nodeStore.selections==0&&h.saved.writes==0,"retained-prefix TCP timing dispatch cannot mutate the route");break;
     default:check(h.infoTitle.equals("Path throughput / Auto MTU")&&h.info.contains("No proven"),"unmeasured MTU is truthful");
    }
    check(action>=7||h.externalComparisons==0,"existing Performance actions cannot start an external comparison");
    check(action<7||h.telemetry.allSamples==0&&h.telemetry.nodeSamples==0&&h.telemetry.currentSamples==0&&h.telemetry.speedBytes==0&&h.routed==0,"external comparison dispatch cannot substitute Router or current-path measurement");
   }
-  for(int action:new int[]{0,3}){ProductDialogHarness h=new ProductDialogHarness();h.connection.connected=false;h.showPerformance();shown(9,"Performance").clickItem(action);check(h.telemetry.currentSamples==0&&h.telemetry.speedBytes==0,"disconnected path speed cannot run");}
+  for(int action:new int[]{0,3}){ProductDialogHarness h=new ProductDialogHarness();h.connection.connected=false;h.showPerformance();shown(10,"Performance").clickItem(action);check(h.telemetry.currentSamples==0&&h.telemetry.speedBytes==0,"disconnected path speed cannot run");}
  }
  static void nodes(){
   ProductDialogHarness h=new ProductDialogHarness();h.showNodes();AlertDialog d=shown(2,"Choose node");check(d.items[1].contains("list only"),"no invented external coordinates");d.clickItem(1);check(h.selected.equals("external"),"exact external node callback");

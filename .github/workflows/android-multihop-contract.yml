@@ -6,6 +6,8 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCapture.java'
       - 'android/test_android_node_chain_capture.py'
+      - 'android/test_android_node_candidates.py'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidate*.java'
       - 'android/test_android_ordered_presentation.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedPathPresentation.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java'
@@ -59,6 +61,8 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCapture.java'
       - 'android/test_android_node_chain_capture.py'
+      - 'android/test_android_node_candidates.py'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidate*.java'
       - 'android/test_android_ordered_presentation.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedPathPresentation.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java'
@@ -136,6 +140,7 @@ jobs:
         run: |
           python3 android/test_android_multihop_contract.py
           python3 android/test_android_node_chain_capture.py
+          python3 android/test_android_node_candidates.py
           python3 android/test_android_ordered_presentation.py
           python3 android/test_android_node_chain_runtime.py
           python3 android/test_android_node_chain_mtu.py

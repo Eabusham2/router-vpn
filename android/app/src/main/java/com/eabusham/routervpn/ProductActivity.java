@@ -64,6 +64,7 @@ public final class ProductActivity extends Activity {
     private AlertDialog currentSpeedDialog;
     private AlertDialog fastestProgressDialog;
     private AndroidHopMeasurementDialog routedHopDialog;
+    private AndroidNodeCandidateDialog candidateDialog;
     private AndroidExternalBenchmarkDialog externalBenchmarkDialog;
     private AndroidExternalComparisonDialog externalComparisonDialog;
     private AndroidTelemetry.PathResult currentPathReceipt;
@@ -81,9 +82,9 @@ public final class ProductActivity extends Activity {
 
     @Override protected void onCreate(Bundle state){super.onCreate(state);nodeStore=new AndroidNodeStore(this);exitStore=new AndroidStandardExitStore(this);catalog=new AndroidUnifiedNodeCatalog(nodeStore,exitStore);connection=new AndroidUnifiedConnectionController(this,nodeStore);telemetry=new AndroidTelemetry(this,nodeStore);externalTelemetry=new AndroidExternalLiveTelemetry(this,AndroidRuntimeRegistry.get(this).standardExit);forwardingMaster=new AndroidForwardingMaster(this,nodeStore);viaEntryProbe=new AndroidViaEntryLatencyProbe(this,AndroidRuntimeRegistry.get(this),telemetry);if(state!=null){importDecision=state.getString(STATE_IMPORT_DECISION,"");pendingProbeEntryId=state.getString(STATE_PROBE_ENTRY,"");ArrayList<String> ids=state.getStringArrayList(STATE_PROBE_CANDIDATES);if(ids!=null)pendingProbeCandidateIds=ids;}setContentView(buildUi());refreshAll();if(state!=null&&!AndroidExternalNodeComparison.hasActiveOperation())connection.restorePending(state,callback());applyStartupPolicy(state!=null);AndroidProductOnboarding.showIfNeeded(this);}
     @Override protected void onResume(){super.onResume();resumed=true;if(connection!=null)connection.resumePending();telemetryHandler.removeCallbacks(telemetryTick);telemetryHandler.post(telemetryTick);refreshAll();if(viaEntryProbe!=null&&viaEntryProbe.isBusy()&&!pendingProbeEntryId.isEmpty())statusView.setText("Measuring live via-entry multihop candidate RTT…");}
-    @Override protected void onPause(){closeRoutedHopMeasurement();resumed=false;telemetryGeneration++;telemetryHandler.removeCallbacks(telemetryTick);if(externalTelemetry!=null)externalTelemetry.cancel();clearCurrentTelemetry();if(telemetry!=null){telemetry.cancelCurrent();telemetry.cancelFastest();}if(currentSpeedDialog!=null){currentSpeedDialog.dismiss();currentSpeedDialog=null;}if(externalBenchmarkDialog!=null){externalBenchmarkDialog.close();externalBenchmarkDialog=null;}super.onPause();}
+    @Override protected void onPause(){closeRoutedHopMeasurement();closeCandidateMeasurement();resumed=false;telemetryGeneration++;telemetryHandler.removeCallbacks(telemetryTick);if(externalTelemetry!=null)externalTelemetry.cancel();clearCurrentTelemetry();if(telemetry!=null){telemetry.cancelCurrent();telemetry.cancelFastest();}if(currentSpeedDialog!=null){currentSpeedDialog.dismiss();currentSpeedDialog=null;}if(externalBenchmarkDialog!=null){externalBenchmarkDialog.close();externalBenchmarkDialog=null;}super.onPause();}
     @Override protected void onSaveInstanceState(Bundle out){if(!importDecision.isEmpty())out.putString(STATE_IMPORT_DECISION,importDecision);if(connection!=null)connection.savePending(out);if(viaEntryProbe==null||!viaEntryProbe.isBusy()){if(!pendingProbeEntryId.isEmpty())out.putString(STATE_PROBE_ENTRY,pendingProbeEntryId);if(!pendingProbeCandidateIds.isEmpty())out.putStringArrayList(STATE_PROBE_CANDIDATES,new ArrayList<>(pendingProbeCandidateIds));}super.onSaveInstanceState(out);}
-    @Override protected void onDestroy(){closeRoutedHopMeasurement();importGeneration++;telemetryGeneration++;telemetryHandler.removeCallbacks(telemetryTick);if(externalTelemetry!=null)externalTelemetry.cancel();if(telemetry!=null)telemetry.close();if(fastestProgressDialog!=null){fastestProgressDialog.dismiss();fastestProgressDialog=null;}if(externalBenchmarkDialog!=null){externalBenchmarkDialog.close();externalBenchmarkDialog=null;}viaEntryGeneration++;if(viaEntryProbe!=null)viaEntryProbe.cancel();if(viaEntryDialog!=null){viaEntryDialog.dismiss();viaEntryDialog=null;}if(externalComparisonDialog!=null){externalComparisonDialog.close();externalComparisonDialog=null;}if(isFinishing())AndroidStartupPolicy.cancelPending();if(connection!=null)connection.close();super.onDestroy();}
+    @Override protected void onDestroy(){closeRoutedHopMeasurement();closeCandidateMeasurement();importGeneration++;telemetryGeneration++;telemetryHandler.removeCallbacks(telemetryTick);if(externalTelemetry!=null)externalTelemetry.cancel();if(telemetry!=null)telemetry.close();if(fastestProgressDialog!=null){fastestProgressDialog.dismiss();fastestProgressDialog=null;}if(externalBenchmarkDialog!=null){externalBenchmarkDialog.close();externalBenchmarkDialog=null;}viaEntryGeneration++;if(viaEntryProbe!=null)viaEntryProbe.cancel();if(viaEntryDialog!=null){viaEntryDialog.dismiss();viaEntryDialog=null;}if(externalComparisonDialog!=null){externalComparisonDialog.close();externalComparisonDialog=null;}if(isFinishing())AndroidStartupPolicy.cancelPending();if(connection!=null)connection.close();super.onDestroy();}
     @Override protected void onActivityResult(int requestCode,int resultCode,Intent data){if(requestCode==IMPORT_ROUTER_BUNDLE){receiveRouterBundle(resultCode,data);return;}if(requestCode==PREPARE_VIA_ENTRY_RTT){if(resultCode==RESULT_OK)runPendingViaEntryProbe();else{AndroidNodeStore.Node entry=quietNode(pendingProbeEntryId);List<AndroidNodeStore.Node> exits=quietNodes(pendingProbeCandidateIds);clearPendingProbe();try{showViaEntryExitPicker(viaEntryProbe.unmeasured(entry,exits),new IllegalStateException("Android VPN permission was not granted; via-entry RTT is unavailable."));}catch(Exception error){toast(safe(error));}}return;}if(connection!=null&&connection.onActivityResult(requestCode,resultCode)){refreshConnectionLater();return;}super.onActivityResult(requestCode,resultCode,data);}
 
     @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){if(AndroidUpdateDialog.onPermissionResult(this,requestCode))return;super.onRequestPermissionsResult(requestCode,permissions,grantResults);}
@@ -271,7 +272,7 @@ public final class ProductActivity extends Activity {
     private void refreshMultihopTelemetry(){refreshMultihopSummary();}
 
     private void showPerformance(){
-        String[] actions={"Live current path response","50-sample selected node","Compare all Router nodes (50 TCP)","Real current VPN path speed","Routed multihop speeds","Path throughput / Auto MTU status","Last saved 50-sample statistics","Compare all external exits (50 HTTPS)","Compare and connect fastest external path"};
+        String[] actions={"Live current path response","50-sample selected node","Compare all Router nodes (50 TCP)","Real current VPN path speed","Routed multihop speeds","Path throughput / Auto MTU status","Last saved 50-sample statistics","Compare all external exits (50 HTTPS)","Compare and connect fastest external path","Candidate TCP through connected prefix"};
         choiceDialog("Performance","Router node benchmarks use direct TCP while disconnected. A selected external node uses 50 HTTPS responses through its connected, proved native path and selected DNS. These saved measurement types remain separate; external HTTPS results do not enter direct TCP Fastest or Lowest latency rankings. Current-path RTT and throughput are separate actions.").setItems(actions,(d,w)->{
             if(w==0){showLiveTelemetry();
             }else if(w==1){
@@ -286,6 +287,7 @@ public final class ProductActivity extends Activity {
             else if(w==6){showSavedStatistics();}
             else if(w==7){showExternalComparison(false);}
             else if(w==8){showExternalComparison(true);}
+            else if(w==9){runCandidateTimes();}
             else{JSONObject p=activeRouterProfile();if(p==null){toast("Select a Router VPN node first.");return;}double mbps=p.optDouble("effective_mtu_mbps",0),rtt=p.optDouble("effective_mtu_median_rtt_ms",0);int mtu=p.optInt("effective_mtu",0);String value=mbps>0?String.format(Locale.US,"Last MTU-path optimizer result: %.1f Mbps • MTU %d • RTT %.1f ms\n\nThis is separate from the real 8 MiB down/up path speed test.",mbps,mtu,rtt):"No proven Auto-MTU optimizer result is stored for this path yet. Open Settings / MTU to configure Auto or Fixed MTU. Real path Mbps is a separate Performance action.";dialog("Path throughput / Auto MTU",value);}
         }).setNegativeButton("Close",null).show();
     }
@@ -326,6 +328,10 @@ public final class ProductActivity extends Activity {
                 AndroidConnectionProfileStore.applySelection(prefs(),prefs().edit().putString("node_sort",new String[]{AndroidUnifiedNodeCatalog.SORT_CURRENT,AndroidUnifiedNodeCatalog.SORT_LAST_USED,AndroidUnifiedNodeCatalog.SORT_NAME,AndroidUnifiedNodeCatalog.SORT_LATENCY}[w]));showNodes();
             }).setNegativeButton("Close",null).show();
     }
+
+    private void runCandidateTimes(){closeCandidateMeasurement();candidateDialog=new AndroidNodeCandidateDialog(this);candidateDialog.show();}
+
+    private void closeCandidateMeasurement(){AndroidNodeCandidateDialog owned=candidateDialog;candidateDialog=null;if(owned!=null)owned.close();}
 
     private void runRoutedHopSpeeds(){
         if(!connection.isMultihopConnected()){toast("Connect the actual Android multihop graph before testing routed hop speeds.");return;}

@@ -25,7 +25,8 @@ final class AndroidNodeStore {
     // Process-local publication epoch: advance before writes/rollback so an
     // old measurement cannot revive after change-away/back or a failed restore.
     // All access used for DNS authority is under the shared writer lock.
-    private static long selectionGeneration;
+    private static volatile long selectionGeneration;
+    static long publicationGeneration() { return selectionGeneration; }
     static final int MAX_NODES = 24;
     static final int MAX_BUNDLE = 32 * 1024 * 1024;
     static final int MAX_CHAIN_SOURCE = 40 * 1024 * 1024;
@@ -323,6 +324,8 @@ final class AndroidNodeStore {
         }
         return result;
     }
+    ChainSource candidateSource(String id) throws Exception { return chainSource(id); }
+
     private ChainSource chainSource(String id) throws Exception {
         if(safeId(id)&&nodeFile(id).isFile())return new ChainSource(id,readLimited(nodeFile(id),MAX_BUNDLE));
         return new ChainSource(AndroidStandardExitStore.capturedEntry(context,id));

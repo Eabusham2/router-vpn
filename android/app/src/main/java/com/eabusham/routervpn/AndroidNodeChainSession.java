@@ -138,6 +138,8 @@ final class AndroidNodeChainSession {
         requireCurrent();
     }
 
+    CommandServer candidateServer() throws Exception { requireCurrent(); return server; }
+
     RouterHopMeasurement newHopMeasurement() throws Exception {
         requireCurrent();
         if (!capture.plan.healthy()) throw new IllegalStateException("The ordered measurement lost its complete path proof.");
