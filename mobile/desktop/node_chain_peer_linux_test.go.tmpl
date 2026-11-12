@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -66,6 +67,7 @@ type desktopNodeChainPeerRequest struct {
 	FinalPassword    string                          `json:"final_password"`
 	FinalNodeProofID string                          `json:"final_node_proof_id"`
 	FinalAPIToken    string                          `json:"final_api_token"`
+	BenchmarkPort    int                             `json:"benchmark_port,omitempty"`
 }
 
 type desktopNodeChainPrefixReply struct {
@@ -79,11 +81,12 @@ type desktopNodeChainPrefixReply struct {
 }
 
 type desktopNodeChainPeerReply struct {
-	Schema   int                           `json:"schema"`
-	Address  string                        `json:"address"`
-	PublicCA string                        `json:"public_ca"`
-	Prefixes []desktopNodeChainPrefixReply `json:"prefixes"`
-	Final    desktopImportedWGSSReply      `json:"final"`
+	Schema    int                             `json:"schema"`
+	Address   string                          `json:"address"`
+	PublicCA  string                          `json:"public_ca"`
+	Prefixes  []desktopNodeChainPrefixReply   `json:"prefixes"`
+	Final     desktopImportedWGSSReply        `json:"final"`
+	Benchmark *desktopNodeChainBenchmarkReply `json:"benchmark,omitempty"`
 }
 
 func desktopNodeChainInner(position, count int) (string, string) {
@@ -97,10 +100,49 @@ func desktopNodeChainNext(position int) string {
 	return fmt.Sprintf("198.51.100.%d:51820", 101+position)
 }
 
+// Linux retains its original isolated namespace pair. The separate Darwin
+// executable accepts only the one currently owned physical IPv4 observed by
+// its explicit native runner; these values grant no client socket/PF rights.
+func desktopNodeChainReferenceAddressPair(address, client string) bool {
+	if runtime.GOOS == "linux" {
+		return address == "192.168.210.2" && client == "192.168.210.1"
+	}
+	if runtime.GOOS != "darwin" || os.Geteuid() != 0 || os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_REFERENCE") != "1" ||
+		address != client || address != os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS") {
+		return false
+	}
+	wanted, err := netip.ParseAddr(address)
+	if err != nil || wanted.String() != address || !wanted.Is4() || !wanted.IsGlobalUnicast() || wanted.IsLoopback() {
+		return false
+	}
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return false
+	}
+	found := 0
+	for _, device := range interfaces {
+		if device.Flags&net.FlagUp == 0 || device.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addresses, err := device.Addrs()
+		if err != nil {
+			return false
+		}
+		for _, value := range addresses {
+			prefix, err := netip.ParsePrefix(value.String())
+			if err == nil && prefix.Addr().Unmap() == wanted {
+				found++
+			}
+		}
+	}
+	return found == 1
+}
+
 func desktopNodeChainPeerIdentity(request desktopNodeChainPeerRequest) ([]string, error) {
 	bad := errors.New("ordered reference requires complete independent captured peers")
-	if request.Schema != 1 || request.Address != "192.168.210.2" || request.ClientAddress != "192.168.210.1" ||
-		len(request.Prefixes) < 2 || len(request.Prefixes) > 3 {
+	if request.Schema != 1 || !desktopNodeChainReferenceAddressPair(request.Address, request.ClientAddress) ||
+		len(request.Prefixes) < 2 || len(request.Prefixes) > 3 ||
+		(request.BenchmarkPort != 0 && request.BenchmarkPort != 45998) {
 		return nil, bad
 	}
 	seenKeys, seenIDs, seenTokens := map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -182,8 +224,9 @@ type desktopNodeChainPrefixPeer struct {
 }
 
 type desktopNodeChainPeer struct {
-	prefixes []*desktopNodeChainPrefixPeer
-	final    *desktopImportedWGSSPeer
+	prefixes  []*desktopNodeChainPrefixPeer
+	final     *desktopImportedWGSSPeer
+	benchmark *desktopNodeChainBenchmark
 }
 
 func (p *desktopNodeChainPeer) snapshot() desktopNodeChainPeerReply {
@@ -199,10 +242,20 @@ func (p *desktopNodeChainPeer) snapshot() desktopNodeChainPeerReply {
 			RawUDP: prefix.bind.packets.Load(), TCP: prefix.handler.tcp.Load(), UDP: prefix.handler.udp.Load(),
 			ProofQueries: prefix.proof.Load(), AuthRefusals: prefix.denied.Load()})
 	}
+	if p.benchmark != nil {
+		r.Benchmark = p.benchmark.snapshot()
+	}
 	return r
 }
 
 func (p *desktopNodeChainPeer) control(command string) error {
+	if command == "hold-benchmark" || command == "release-benchmark" {
+		if p.benchmark == nil {
+			return errors.New("ordered benchmark control has no captured sink")
+		}
+		p.benchmark.held.Store(command == "hold-benchmark")
+		return nil
+	}
 	for _, action := range []string{"wrong-node", "restore-node", "hold-node", "release-node"} {
 		if text, found := strings.CutPrefix(command, action+":"); found {
 			index, err := strconv.Atoi(text)
@@ -290,6 +343,10 @@ func desktopNodeChainPeerStart(t *testing.T, request desktopNodeChainPeerRequest
 		PrivateKey: last.PrivateKey, ClientPublicKey: last.ClientPublicKey, PreSharedKey: last.PreSharedKey,
 		FinalPassword: request.FinalPassword, NodeProofID: request.FinalNodeProofID, Token: request.FinalAPIToken, Cover: true}, loopback, loopback, lastFactory)
 	p.prefixes[count-1].bind, p.prefixes[count-1].handler = p.final.bind, p.final.entry
+	if request.BenchmarkPort != 0 {
+		p.benchmark = desktopNodeChainBenchmarkStart(t, request.BenchmarkPort)
+		p.final.final.routes = append(p.final.final.routes, desktopNodeLayerRoute{Network: "udp", Destination: "10.77.0.1:45998", Physical: p.benchmark.address})
+	}
 	delete(p.final.entry.rules, "tcp/1.1.1.1:443")
 	// Keep the original bounded benchmark/health server, requiring the final
 	// captured token before any request reaches it. No public fallback exists.
@@ -1084,4 +1141,153 @@ func TestRouterVPNDesktopNodeChainPeerTraffic(t *testing.T) {
 			_ = connection.Close()
 		}
 	}
+}
+
+// This optional private benchmark is a separate final-only route. The existing
+// unauthenticated cover endpoint and its 1200-byte limit are unchanged.
+type desktopNodeChainBenchmarkReply struct {
+	Port           int    `json:"port"`
+	Packets        uint64 `json:"packets"`
+	Replies        uint64 `json:"replies"`
+	ReceivedBytes  uint64 `json:"received_bytes"`
+	SentBytes      uint64 `json:"sent_bytes"`
+	Held           bool   `json:"held"`
+	HeldPackets    uint64 `json:"held_packets"`
+	MaximumPayload uint64 `json:"maximum_payload"`
+}
+type desktopNodeChainBenchmark struct {
+	address                                                string
+	held                                                   atomic.Bool
+	packets, replies, received, sent, heldPackets, maximum atomic.Uint64
+}
+
+func (p *desktopNodeChainBenchmark) snapshot() *desktopNodeChainBenchmarkReply {
+	return &desktopNodeChainBenchmarkReply{45998, p.packets.Load(), p.replies.Load(), p.received.Load(), p.sent.Load(), p.held.Load(), p.heldPackets.Load(), p.maximum.Load()}
+}
+func desktopNodeChainBenchmarkStart(t *testing.T, port int) *desktopNodeChainBenchmark {
+	t.Helper()
+	if port != 45998 {
+		t.Fatal("ordered benchmark requires its exact captured final port")
+	}
+	connection, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &desktopNodeChainBenchmark{address: connection.LocalAddr().String()}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		body := make([]byte, 8973)
+		for {
+			n, from, err := connection.ReadFrom(body)
+			if err != nil {
+				return
+			}
+			if n < 1 || n > 8972 {
+				continue
+			}
+			p.packets.Add(1)
+			p.received.Add(uint64(n))
+			for old := p.maximum.Load(); uint64(n) > old; old = p.maximum.Load() {
+				if p.maximum.CompareAndSwap(old, uint64(n)) {
+					break
+				}
+			}
+			if p.held.Load() {
+				p.heldPackets.Add(1)
+				continue
+			}
+			if wrote, err := connection.WriteTo(body[:n], from); err == nil && wrote == n {
+				p.replies.Add(1)
+				p.sent.Add(uint64(wrote))
+			}
+		}
+	}()
+	t.Cleanup(func() { connection.Close(); <-done })
+	return p
+}
+
+func TestRouterVPNDesktopNodeChainBenchmarkCapture(t *testing.T) {
+	for _, port := range []int{-1, 1, 45999, 65536} {
+		t.Run(fmt.Sprintf("reject-port-%d", port), func(t *testing.T) {
+			request, _ := desktopNodeChainPeerFixture(t, 2)
+			request.BenchmarkPort = port
+			if _, err := desktopNodeChainPeerIdentity(request); err == nil {
+				t.Fatal("uncaptured final benchmark port accepted")
+			}
+		})
+	}
+	t.Run("absent-control", func(t *testing.T) {
+		p := &desktopNodeChainPeer{}
+		if p.control("hold-benchmark") == nil || p.control("release-benchmark") == nil {
+			t.Fatal("missing original benchmark accepted control")
+		}
+	})
+	t.Run("real-bounded-echo-and-hold", func(t *testing.T) {
+		p := desktopNodeChainBenchmarkStart(t, 45998)
+		peer := &desktopNodeChainPeer{benchmark: p}
+		c, err := net.Dial("udp4", p.address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		// UDP delivery can precede the sender's post-WriteTo accounting. Join
+		// the exact monotonic receipt instead of racing that original writer.
+		snapshot := func(packets, replies, received, sent uint64) *desktopNodeChainBenchmarkReply {
+			t.Helper()
+			deadline := time.Now().Add(time.Second)
+			for {
+				state := p.snapshot()
+				if state.Packets >= packets && state.Replies >= replies && state.ReceivedBytes >= received && state.SentBytes >= sent {
+					return state
+				}
+				if !time.Now().Before(deadline) {
+					t.Fatal("original benchmark accounting did not join", state)
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}
+		body := bytes.Repeat([]byte{0x71}, 8972)
+		for _, size := range []int{1, 1200, 1252, 8972} {
+			c.SetDeadline(time.Now().Add(time.Second))
+			if _, err := c.Write(body[:size]); err != nil {
+				t.Fatal(err)
+			}
+			reply := make([]byte, size+1)
+			n, err := c.Read(reply)
+			if err != nil || n != size || !bytes.Equal(reply[:n], body[:size]) {
+				t.Fatal("original native UDP benchmark changed bounded payload", size, err)
+			}
+		}
+		before := snapshot(4, 4, 11425, 11425)
+		if before.Packets != 4 || before.Replies != 4 || before.ReceivedBytes != 11425 || before.SentBytes != 11425 || before.MaximumPayload != 8972 {
+			t.Fatal("native benchmark counters changed", before)
+		}
+		if err := peer.control("hold-benchmark"); err != nil {
+			t.Fatal(err)
+		}
+		c.SetDeadline(time.Now().Add(150 * time.Millisecond))
+		c.Write(body[:1252])
+		reply := make([]byte, 1253)
+		if _, err := c.Read(reply); err == nil {
+			t.Fatal("held original benchmark replied")
+		}
+		held := snapshot(5, 4, 12677, 11425)
+		if held.HeldPackets != 1 || held.Replies != before.Replies || held.SentBytes != before.SentBytes || !held.Held {
+			t.Fatal("held benchmark lost original packet/counters", held)
+		}
+		if err := peer.control("release-benchmark"); err != nil {
+			t.Fatal(err)
+		}
+		c.SetDeadline(time.Now().Add(time.Second))
+		c.Write(body[:1252])
+		n, err := c.Read(reply)
+		if err != nil || n != 1252 || !bytes.Equal(reply[:n], body[:1252]) {
+			t.Fatal("released original benchmark did not resume", err)
+		}
+		after := snapshot(6, 5, 13929, 12677)
+		if after.Replies != before.Replies+1 || after.HeldPackets != 1 || after.Held {
+			t.Fatal("benchmark replayed a held packet", after)
+		}
+	})
 }

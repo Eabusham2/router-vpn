@@ -55,7 +55,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(without + decoy)
 
     def test_duplicate_aggregate_or_imported_family_job_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3"):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child"):
             with self.subTest(job=job), self.assertRaisesRegex(AssertionError, "missing or duplicate"):
                 self.check(self.source + "\n  " + job + ":\n    runs-on: ubuntu-24.04\n")
 
@@ -67,7 +67,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
 
     def test_condition_or_nonblocking_gate_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3"):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child"):
             for bypass in ("    if: ${{ false }}\n", "    continue-on-error: true\n"):
                 with self.subTest(job=job, bypass=bypass):
                     with self.assertRaisesRegex(AssertionError, "conditional or nonblocking"):
@@ -103,6 +103,13 @@ class NativeArtifactAggregate(unittest.TestCase):
         self.assertEqual(ast.unparse(calls[0].value), "check_release_aggregate_gates(rc)")
         caller = (ROOT / "deploy/release-orchestration-audit.py").read_text()
         self.assertEqual(caller.count('"deploy/test_native_artifact_aggregate.py"'), 1)
+
+    def test_removed_or_changed_darwin_child_workflow_fails(self):
+        marker = "    uses: ./.github/workflows/darwin-node-child-tun.yml"
+        for replacement in ("    uses: ./.github/workflows/macos-native-installer-contract.yml", "    runs-on: macos-15"):
+            with self.subTest(replacement=replacement):
+                with self.assertRaisesRegex(AssertionError, "actual ordered Darwin child"):
+                    self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
 
 
 if __name__ == "__main__":

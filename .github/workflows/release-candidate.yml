@@ -16,6 +16,10 @@ jobs:
     name: Native macOS controller ownership on both architectures
     uses: ./.github/workflows/macos-native-installer-contract.yml
 
+  darwin-ordered-child:
+    name: Actual ordered Darwin child, selected DNS and utun retirement
+    uses: ./.github/workflows/darwin-node-child-tun.yml
+
   windows-complete-max:
     name: Actual complete MAX ownership on both Windows architectures
     uses: ./.github/workflows/windows-node-max-contract.yml
@@ -655,7 +659,7 @@ jobs:
 
   aggregate:
     name: Aggregate one-SHA native release candidate
-    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3]
+    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3, darwin-ordered-child]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

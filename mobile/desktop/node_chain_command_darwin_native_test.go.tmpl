@@ -1,0 +1,1241 @@
+//go:build darwin && routervpn_darwin_node_child_tun
+
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/awgpolicy"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/routervpn/macosprocess"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/service"
+)
+
+const darwinChildFlag = "ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE"
+
+var darwinChildCases = []string{"wg-three", "mixed-four", "captured-mtu", "mtu-rollback", "wrong-middle-key", "wrong-middle-proof", "final-dns-failure", "foreign-mtu-session"}
+
+// Only this explicitly tagged native acceptance executable dispatches its real
+// generated command from init. The command itself is unchanged shipping code.
+func init() {
+	if len(os.Args) > 1 && os.Args[1] == "routervpn-node-chain" {
+		globalCtx = include.Context(service.ContextWithDefaultRegistry(context.Background()))
+		mainCommand.SilenceUsage = true
+		mainCommand.SilenceErrors = true
+		mainCommand.SetArgs(os.Args[1:])
+		if _, err := mainCommand.ExecuteC(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(122)
+		}
+		os.Exit(0)
+	}
+}
+func darwinChildJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, e := json.Marshal(v)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return b
+}
+func darwinChildDigest(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
+func darwinChildNonce(t *testing.T, n int) string {
+	t.Helper()
+	b := make([]byte, n)
+	if _, e := rand.Read(b); e != nil {
+		t.Fatal(e)
+	}
+	return hex.EncodeToString(b)
+}
+func darwinChildCommand(ctx context.Context, path string, args ...string) ([]byte, error) {
+	c := exec.CommandContext(ctx, path, args...)
+	c.Dir = "/"
+	c.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
+	return c.CombinedOutput()
+}
+func darwinChildNative(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "darwin" || os.Getuid() != 0 || os.Geteuid() != 0 || os.Getenv(darwinChildFlag) != "1" {
+		t.Fatal("actual disposable Darwin root fixture is required")
+	}
+}
+func darwinChildImage(t *testing.T, source, target, expected string) {
+	t.Helper()
+	if !filepath.IsAbs(source) || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(expected) {
+		t.Fatal("native image lost its original captured digest")
+	}
+	f, e := os.OpenFile(source, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer f.Close()
+	before, e := f.Stat()
+	if e != nil || !before.Mode().IsRegular() || before.Size() < 1 || before.Size() > 512<<20 || before.Mode().Perm()&0022 != 0 || before.Mode().Perm()&0111 == 0 {
+		t.Fatal("unsafe original native image", e)
+	}
+	b, e := io.ReadAll(io.LimitReader(f, 512<<20+1))
+	after, e2 := f.Stat()
+	if e != nil || e2 != nil || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() || darwinChildDigest(b) != expected {
+		t.Fatal("original native image changed during copy")
+	}
+	out, e := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0755)
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = out.Write(b)
+	e = errors.Join(e, out.Sync(), out.Close())
+	if e != nil {
+		t.Fatal(e)
+	}
+}
+
+// The parent creates only a new disposable fixed installation. It refuses any
+// pre-existing installed source/lock/socket and never adopts or deletes one.
+func TestRouterVPNNodeChainDarwinNativeHarness(t *testing.T) {
+	darwinChildNative(t)
+	for _, p := range []string{macosprocess.InstallRoot, macosprocess.InstallLockPath, macosprocess.ProcessLockPath, filepath.Dir(macosprocess.LifetimePath)} {
+		if _, e := os.Lstat(p); !errors.Is(e, os.ErrNotExist) {
+			t.Fatal("native child fixture requires an absent installation", p, e)
+		}
+	}
+	if e := os.Mkdir(macosprocess.InstallRoot, 0755); e != nil {
+		t.Fatal(e)
+	}
+	root, e := os.Lstat(macosprocess.InstallRoot)
+	if e != nil {
+		t.Fatal(e)
+	}
+	complete := false
+	t.Cleanup(func() {
+		current, e := os.Lstat(macosprocess.InstallRoot)
+		if !complete || e != nil || !os.SameFile(root, current) {
+			t.Error("native fixture retained its installation because original joined cleanup was not proved")
+			return
+		}
+		for _, p := range []string{macosprocess.InstallLockPath, macosprocess.ProcessLockPath} {
+			f, e := os.OpenFile(p, os.O_RDWR|syscall.O_NOFOLLOW, 0)
+			if e != nil {
+				t.Error(e)
+				return
+			}
+			e = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+			if e != nil {
+				f.Close()
+				t.Error("native fixture locks remain held", e)
+				return
+			}
+			f.Close()
+		}
+		if e := os.RemoveAll(macosprocess.InstallRoot); e != nil {
+			t.Error(e)
+		}
+		for _, p := range []string{macosprocess.InstallLockPath, macosprocess.ProcessLockPath} {
+			if e := os.Remove(p); e != nil {
+				t.Error(e)
+			}
+		}
+		if e := os.Remove(filepath.Dir(macosprocess.LifetimePath)); e != nil {
+			t.Error(e)
+		}
+	})
+	for _, p := range []string{filepath.Dir(macosprocess.EnginePath), macosprocess.InstallRoot + "/run/native-node", filepath.Dir(macosprocess.LifetimePath)} {
+		if e := os.MkdirAll(p, 0755); e != nil {
+			t.Fatal(e)
+		}
+	}
+	image, e := os.Executable()
+	if e != nil {
+		t.Fatal(e)
+	}
+	expected := os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_SHA256")
+	for _, p := range []string{macosprocess.ControllerPath, macosprocess.EnginePath} {
+		darwinChildImage(t, image, p, expected)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		out, e := darwinChildCommand(ctx, "/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none", "--identifier", "routervpn.fixture."+filepath.Base(p), p)
+		cancel()
+		if e != nil {
+			t.Fatal("native fixture signing", e, string(out))
+		}
+	}
+	peer := macosprocess.InstallRoot + "/peer.test"
+	darwinChildImage(t, os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_PEER"), peer, os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256"))
+	engine, e := os.ReadFile(macosprocess.EnginePath)
+	if e != nil {
+		t.Fatal(e)
+	}
+	digest := darwinChildDigest(engine)
+	catalog := map[string]any{"Runtime": "sing-box-routervpn", "Target": "darwin/" + runtime.GOARCH, "Size": len(engine), "SHA256": digest, "Files": map[string]any{"sing-box-routervpn": map[string]any{"Size": len(engine), "SHA256": digest}}}
+	if e := os.WriteFile(macosprocess.CatalogPath, darwinChildJSON(t, catalog), 0644); e != nil {
+		t.Fatal(e)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, macosprocess.ControllerPath, "-test.run=^TestRouterVPNNodeChainDarwinNativeCommand$", "-test.v", "-test.count=1", "-test.timeout=890s")
+	command.Dir = "/"
+	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0", darwinChildFlag + "=1", "ROUTERVPN_DARWIN_NODE_CHILD_INSTALLED=1", "ROUTERVPN_DARWIN_NODE_CHILD_UID=" + os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_UID"), "ROUTERVPN_DARWIN_NODE_CHAIN_PEER=" + peer, "ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256=" + os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256")}
+	output, e := command.CombinedOutput()
+	fmt.Print(string(output))
+	if e != nil {
+		t.Fatal("actual installed generated-child acceptance failed", e)
+	}
+	marker, e := os.ReadFile(macosprocess.InstallRoot + "/native-child-complete")
+	if e != nil || string(marker) != "all original child owners joined\n" {
+		t.Fatal("native harness lacks complete joined original receipt", e)
+	}
+	complete = true
+}
+
+type darwinChildAuthority struct {
+	install, process, lifetime *os.File
+	listener                   *net.UnixListener
+	gui                        *exec.Cmd
+	done                       chan struct{}
+	failure                    error
+}
+
+func TestRouterVPNNodeChainDarwinNativeGUIPeer(t *testing.T) {
+	if os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_GUI") != "1" || os.Getuid() == 0 || os.Geteuid() == 0 {
+		t.Fatal("native GUI peer requires its actual unprivileged task")
+	}
+	c, e := net.DialUnix("unix", nil, &net.UnixAddr{Name: macosprocess.LifetimePath, Net: "unix"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer c.Close()
+	var b [1]byte
+	n, e := c.Read(b[:])
+	if n != 0 || !errors.Is(e, io.EOF) {
+		t.Fatal("native GUI lifetime received an unexpected frame", n, e)
+	}
+}
+func darwinChildAuthorityStart(t *testing.T) *darwinChildAuthority {
+	t.Helper()
+	a := &darwinChildAuthority{done: make(chan struct{})}
+	for i, p := range []string{macosprocess.InstallLockPath, macosprocess.ProcessLockPath} {
+		f, e := os.OpenFile(p, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
+		if e != nil {
+			t.Fatal(e)
+		}
+		mode := syscall.LOCK_SH
+		if i == 1 {
+			mode = syscall.LOCK_EX
+		}
+		if e := syscall.Flock(int(f.Fd()), mode|syscall.LOCK_NB); e != nil {
+			t.Fatal(e)
+		}
+		if i == 0 {
+			a.install = f
+		} else {
+			a.process = f
+		}
+	}
+	uid, e := strconv.ParseUint(os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_UID"), 10, 32)
+	if e != nil || uid < 1 || uid == uint64(^uint32(0)) {
+		t.Fatal("native fixture lost its original unprivileged UID")
+	}
+	a.listener, e = net.ListenUnix("unix", &net.UnixAddr{Name: macosprocess.LifetimePath, Net: "unix"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Chmod(macosprocess.LifetimePath, 0666); e != nil {
+		t.Fatal(e)
+	}
+	a.gui = exec.Command(macosprocess.ControllerPath, "-test.run=^TestRouterVPNNodeChainDarwinNativeGUIPeer$", "-test.count=1", "-test.timeout=900s")
+	a.gui.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "ROUTERVPN_DARWIN_NODE_CHILD_GUI=1", "GORACE=atexit_sleep_ms=0"}
+	a.gui.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(uid)}}
+	a.gui.Stderr = os.Stderr
+	if e := a.gui.Start(); e != nil {
+		t.Fatal(e)
+	}
+	go func() { a.failure = a.gui.Wait(); close(a.done) }()
+	if e := a.listener.SetDeadline(time.Now().Add(10 * time.Second)); e != nil {
+		t.Fatal(e)
+	}
+	c, e := a.listener.AcceptUnix()
+	if e != nil {
+		t.Fatal(e)
+	}
+	a.lifetime, e = c.File()
+	c.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	return a
+}
+func (a *darwinChildAuthority) close() error {
+	result := a.lifetime.Close()
+	result = errors.Join(result, a.listener.Close())
+	select {
+	case <-a.done:
+		result = errors.Join(result, a.failure)
+	case <-time.After(5 * time.Second):
+		return errors.Join(result, errors.New("original GUI peer did not join"))
+	}
+	return errors.Join(result, a.process.Close(), a.install.Close())
+}
+
+type darwinChildPrefix struct {
+	Mode            string            `json:"mode"`
+	Parameters      map[string]string `json:"parameters,omitempty"`
+	PrivateKey      string            `json:"private_key"`
+	ClientPublicKey string            `json:"client_public_key"`
+	PreSharedKey    string            `json:"pre_shared_key"`
+	NodeProofID     string            `json:"node_proof_id"`
+	APIToken        string            `json:"api_token"`
+}
+type darwinChildFinalStats struct {
+	Schema             int    `json:"schema"`
+	Address            string `json:"address"`
+	PublicCA           string `json:"public_ca"`
+	EntryPublicIP      string `json:"entry_public_ip"`
+	FinalPublicIP      string `json:"final_public_ip"`
+	EntryRawUDP        int64  `json:"entry_raw_udp"`
+	EntryTCP           int64  `json:"entry_tcp"`
+	EntryUDP           int64  `json:"entry_udp"`
+	FinalRawTCP        int64  `json:"final_raw_tcp"`
+	FinalRawUDP        int64  `json:"final_raw_udp"`
+	FinalTCP           int64  `json:"final_tcp"`
+	FinalUDP           int64  `json:"final_udp"`
+	EntryPublicQueries uint64 `json:"entry_public_queries"`
+	FinalPublicQueries uint64 `json:"final_public_queries"`
+	RouterQueries      uint64 `json:"router_queries"`
+	DirectQueries      uint32 `json:"direct_router_queries"`
+	DNSQueries         uint64 `json:"dns_queries"`
+	MTUQueries         uint64 `json:"mtu_queries"`
+	MTUReplies         uint64 `json:"mtu_replies"`
+	CoverPackets       uint64 `json:"cover_packets"`
+	CoverReplies       uint64 `json:"cover_replies"`
+	CoverMaximum       uint32 `json:"cover_maximum"`
+	DownloadBytes      uint64 `json:"download_bytes"`
+	UploadBytes        uint64 `json:"upload_bytes"`
+}
+type darwinChildPeerReply struct {
+	Schema   int    `json:"schema"`
+	Address  string `json:"address"`
+	PublicCA string `json:"public_ca"`
+	Prefixes []struct {
+		Mode             string `json:"mode"`
+		ParametersSHA256 string `json:"parameters_sha256,omitempty"`
+		RawUDP           int64  `json:"raw_udp"`
+		TCP              int64  `json:"tcp"`
+		UDP              int64  `json:"udp"`
+		ProofQueries     uint64 `json:"proof_queries"`
+		AuthRefusals     uint64 `json:"auth_refusals"`
+	} `json:"prefixes"`
+	Final darwinChildFinalStats `json:"final"`
+}
+type darwinChildPeer struct {
+	command                  *exec.Cmd
+	input                    io.WriteCloser
+	output                   *os.File
+	reader                   *bufio.Reader
+	done                     chan struct{}
+	failure                  error
+	prefixes                 []darwinChildPrefix
+	clients                  []*ecdh.PrivateKey
+	finalClient, finalServer *ecdh.PrivateKey
+	password                 string
+	physical                 netip.Addr
+	reply                    darwinChildPeerReply
+}
+
+func darwinChildKey(t *testing.T) *ecdh.PrivateKey {
+	t.Helper()
+	key, e := ecdh.X25519().GenerateKey(rand.Reader)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return key
+}
+func darwinChildProof(key *ecdh.PrivateKey) string {
+	return darwinChildDigest([]byte("router-vpn-node-proof-v1\n" + base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())))
+}
+func darwinChildPhysical(t *testing.T) netip.Addr {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	raw, e := darwinChildCommand(ctx, "/sbin/route", "-n", "get", "default")
+	if e != nil || len(raw) > 8192 {
+		t.Fatal("native default route unavailable", e)
+	}
+	name := ""
+	for _, line := range strings.Split(string(raw), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && f[0] == "interface:" {
+			if name != "" {
+				t.Fatal("ambiguous physical default")
+			}
+			name = f[1]
+		}
+	}
+	device, e := net.InterfaceByName(name)
+	if e != nil || device.Flags&net.FlagUp == 0 || device.Flags&net.FlagLoopback != 0 {
+		t.Fatal("missing physical default interface", e)
+	}
+	addresses, e := device.Addrs()
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, value := range addresses {
+		prefix, e := netip.ParsePrefix(value.String())
+		if e == nil && prefix.Addr().Is4() && prefix.Addr().IsGlobalUnicast() {
+			return prefix.Addr()
+		}
+	}
+	t.Fatal("physical default has no captured IPv4")
+	return netip.Addr{}
+}
+func (p *darwinChildPeer) read(t *testing.T) darwinChildPeerReply {
+	t.Helper()
+	if e := p.output.SetReadDeadline(time.Now().Add(15 * time.Second)); e != nil {
+		t.Fatal(e)
+	}
+	raw, e := p.reader.ReadSlice('\n')
+	var r darwinChildPeerReply
+	if e != nil || len(raw) > 32768 || !routerVPNMTUStrict(raw, &r) || r.Schema != 1 || len(r.Prefixes) != len(p.prefixes) {
+		t.Fatal("ordered native peer lost its complete receipt", e)
+	}
+	addr, e := netip.ParseAddrPort(r.Address)
+	if e != nil || addr.Addr() != p.physical || addr.Port() == 0 || r.PublicCA == "" || r.Final.FinalPublicIP != "203.0.113.89" {
+		t.Fatal("ordered native peer substituted original physical identity", e)
+	}
+	if p.reply.Address != "" && (p.reply.Address != r.Address || p.reply.PublicCA != r.PublicCA) {
+		t.Fatal("ordered native peer replaced its original endpoint")
+	}
+	for i, v := range p.prefixes {
+		expected := ""
+		if v.Mode != "wg" {
+			params, e := awgpolicy.ParametersUAPI(v.Parameters)
+			if e != nil {
+				t.Fatal(e)
+			}
+			expected = darwinChildDigest([]byte(params))
+		}
+		if r.Prefixes[i].Mode != v.Mode || r.Prefixes[i].ParametersSHA256 != expected {
+			t.Fatal("real ordered cipher parameter readback changed", i)
+		}
+	}
+	p.reply = r
+	return r
+}
+func (p *darwinChildPeer) observe(t *testing.T, action string) darwinChildPeerReply {
+	t.Helper()
+	if _, e := io.WriteString(p.input, action+"\n"); e != nil {
+		t.Fatal(e)
+	}
+	return p.read(t)
+}
+func darwinChildPeerStart(t *testing.T, mixed bool) *darwinChildPeer {
+	t.Helper()
+	p := &darwinChildPeer{done: make(chan struct{}), physical: darwinChildPhysical(t), finalClient: darwinChildKey(t), finalServer: darwinChildKey(t)}
+	secret := func() string {
+		b := make([]byte, 32)
+		if _, e := rand.Read(b); e != nil {
+			t.Fatal(e)
+		}
+		return base64.StdEncoding.EncodeToString(b)
+	}
+	p.password = secret()
+	modes := []string{"wg", "wg"}
+	if mixed {
+		modes = []string{"wg", "awg2-fast", "awg2-strong"}
+	}
+	for i, mode := range modes {
+		client, server := darwinChildKey(t), darwinChildKey(t)
+		p.clients = append(p.clients, client)
+		v := darwinChildPrefix{Mode: mode, PrivateKey: base64.StdEncoding.EncodeToString(server.Bytes()), ClientPublicKey: base64.StdEncoding.EncodeToString(client.PublicKey().Bytes()), PreSharedKey: secret(), NodeProofID: darwinChildProof(server), APIToken: fmt.Sprintf("native-ordered-prefix-%d-token", i)}
+		if mode != "wg" {
+			v.Parameters = map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32", "h1": "10000000-19999999", "h2": "20000000-29999999", "h3": "30000000-39999999", "h4": "40000000-49999999"}
+			if mode == "awg2-strong" {
+				v.Parameters["jc"], v.Parameters["jmax"] = "8", "1200"
+			}
+		}
+		p.prefixes = append(p.prefixes, v)
+	}
+	image := os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_PEER")
+	raw, e := os.ReadFile(image)
+	if e != nil || image != macosprocess.InstallRoot+"/peer.test" || darwinChildDigest(raw) != os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256") {
+		t.Fatal("ordered native peer lost original compiled image", e)
+	}
+	p.command = exec.Command(image, "-test.run=^TestRouterVPNDesktopNodeChainReferenceProcess$", "-test.count=1", "-test.timeout=180s")
+	p.command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD=1", "ROUTERVPN_DARWIN_NODE_CHAIN_REFERENCE=1", "ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS=" + p.physical.String()}
+	p.command.Stderr = os.Stderr
+	p.input, e = p.command.StdinPipe()
+	if e != nil {
+		t.Fatal(e)
+	}
+	var writer *os.File
+	p.output, writer, e = os.Pipe()
+	if e != nil {
+		t.Fatal(e)
+	}
+	p.reader = bufio.NewReaderSize(p.output, 32769)
+	p.command.Stdout = writer
+	if e := p.command.Start(); e != nil {
+		t.Fatal(e)
+	}
+	writer.Close()
+	go func() { p.failure = p.command.Wait(); close(p.done) }()
+	t.Cleanup(func() {
+		p.input.Close()
+		select {
+		case <-p.done:
+			if p.failure != nil {
+				t.Error("real encrypted peer failed joined cleanup", p.failure)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("real encrypted peer did not join")
+			p.command.Process.Kill()
+			<-p.done
+		}
+		p.output.Close()
+	})
+	request := map[string]any{"schema": 1, "address": p.physical.String(), "client_address": p.physical.String(), "prefixes": p.prefixes, "final_password": p.password, "final_node_proof_id": darwinChildProof(p.finalServer), "final_api_token": "native-ordered-final-token"}
+	if e := json.NewEncoder(p.input).Encode(request); e != nil {
+		t.Fatal(e)
+	}
+	r := p.read(t)
+	for _, v := range r.Prefixes {
+		if v.RawUDP != 0 || v.TCP != 0 || v.UDP != 0 || v.ProofQueries != 0 {
+			t.Fatal("peer fabricated traffic before child start")
+		}
+	}
+	if r.Final.FinalRawTCP != 0 || r.Final.DNSQueries != 0 || r.Final.RouterQueries != 0 {
+		t.Fatal("final peer fabricated proof before child start")
+	}
+	return p
+}
+
+func darwinChildPolicy(t *testing.T, p *darwinChildPeer, scenario string) *mobilemultihop.DesktopNodeChainPolicy {
+	t.Helper()
+	source := mobilemultihop.NodeChainSource{Schema: 1, Execution: "local"}
+	encode := base64.StdEncoding.EncodeToString
+	for i := 0; i <= len(p.prefixes); i++ {
+		mode, endpoint, api, token, proof := "wg", "", "", "", ""
+		files := map[string]string{}
+		wgText := ""
+		if i < len(p.prefixes) {
+			v := p.prefixes[i]
+			inner := fmt.Sprintf("10.%d.0", 80+i)
+			if i == len(p.prefixes)-1 {
+				inner = "10.78.0"
+			}
+			address := fmt.Sprintf("198.51.100.%d:51820", 101+i)
+			if i == 0 {
+				address = p.reply.Address
+			}
+			parsed, e := netip.ParseAddrPort(address)
+			if e != nil {
+				t.Fatal(e)
+			}
+			private, e := base64.StdEncoding.DecodeString(v.PrivateKey)
+			if e != nil {
+				t.Fatal(e)
+			}
+			server, e := ecdh.X25519().NewPrivateKey(private)
+			clear(private)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if scenario == "wrong-middle-key" && i == 1 {
+				server = darwinChildKey(t)
+			}
+			wgText = fmt.Sprintf("[Interface]\nAddress=%s.2/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=%s\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", inner, encode(p.clients[i].Bytes()), encode(server.PublicKey().Bytes()), v.PreSharedKey, address)
+			mode, endpoint, api, token, proof = v.Mode, parsed.Addr().String(), "http://"+inner+".1:8787", v.APIToken, darwinChildProof(server)
+			text, name := wgText, "wg.conf"
+			if mode != "wg" {
+				params, e := awgpolicy.ParametersUAPI(v.Parameters)
+				if e != nil {
+					t.Fatal(e)
+				}
+				text = strings.Replace(text, "[Peer]", params+"[Peer]", 1)
+				name = "awg.conf"
+			}
+			files[name] = encode([]byte(text))
+		} else {
+			mode, endpoint, api, token, proof = "shadowsocks", "10.77.0.1", "http://10.77.0.1:8787", "native-ordered-final-token", darwinChildProof(p.finalServer)
+			graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": endpoint, "server_port": 8388, "method": mobilemultihop.NativeStartLayerMethod, "password": p.password}}, "route": map[string]any{"final": "proxy"}}
+			files["sing-box.json"] = encode(darwinChildJSON(t, graph))
+			wgText = fmt.Sprintf("[Interface]\nAddress=10.79.0.2/32,fd79:79::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=10.77.0.1:51820\nAllowedIPs=0.0.0.0/0,::/0\n", encode(p.finalClient.Bytes()), encode(p.finalServer.PublicKey().Bytes()))
+		}
+		profile := map[string]any{"id": fmt.Sprintf("native-ordered-node-%d", i), "node_kind": "router-vpn", "node_proof_id": proof, "router_api": api, "api_token": token, "endpoint": endpoint, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "mtu_policy": "auto", "ipv6_mode": "off", "home_lan_access": false, "kill_switch_policy": "on-connect"}
+		node, e := mobilemultihop.NewNodeProfile(mode, string(darwinChildJSON(t, files)), string(darwinChildJSON(t, profile)), "", "")
+		if e != nil {
+			t.Fatal("original ordered source", i, e)
+		}
+		input, e := node.LaunchInput()
+		if e != nil {
+			t.Fatal(e)
+		}
+		source.Nodes = append(source.Nodes, input)
+		source.IdentitySources = append(source.IdentitySources, string(darwinChildJSON(t, map[string]string{"wg.conf": encode([]byte(wgText))})))
+	}
+	chain, e := mobilemultihop.NewNodeChain(string(darwinChildJSON(t, source)))
+	if e != nil {
+		t.Fatal(e)
+	}
+	restored := 0
+	if scenario == "captured-mtu" || scenario == "mtu-rollback" {
+		restored = 1280
+	}
+	policy, e := mobilemultihop.NewDesktopNodeChainPolicy(chain, darwinChildNonce(t, 16), "darwin", restored)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return policy
+}
+
+func darwinChildTrust(t *testing.T, p *darwinChildPeer, joined func() bool) {
+	t.Helper()
+	block, rest := pem.Decode([]byte(p.reply.PublicCA))
+	if block == nil || block.Type != "CERTIFICATE" || len(rest) != 0 {
+		t.Fatal("native peer lacks complete root")
+	}
+	cert, e := x509.ParseCertificate(block.Bytes)
+	if e != nil || !cert.IsCA {
+		t.Fatal("native peer root invalid", e)
+	}
+	fingerprint := strings.ToUpper(darwinChildDigest(block.Bytes))
+	file := macosprocess.InstallRoot + "/peer-root.pem"
+	if e := os.WriteFile(file, []byte(p.reply.PublicCA), 0600); e != nil {
+		t.Fatal(e)
+	}
+	call := func(args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return darwinChildCommand(ctx, "/usr/bin/security", args...)
+	}
+	before, e := call("find-certificate", "-a", "-Z", "/Library/Keychains/System.keychain")
+	if e != nil || len(before) > 1<<20 || bytes.Contains(before, []byte(fingerprint)) {
+		t.Fatal("native trust preimage unavailable", e)
+	}
+	trust := func() ([]byte, error) {
+		raw, e := call("dump-trust-settings", "-d")
+		var exit *exec.ExitError
+		if errors.As(e, &exit) && exit.ExitCode() == 1 && bytes.Contains(raw, []byte("No Trust Settings were found")) {
+			e = nil
+		}
+		if len(raw) > 1<<20 {
+			return nil, errors.New("unbounded native trust inventory")
+		}
+		return raw, e
+	}
+	beforeTrust, e := trust()
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() {
+		if !joined() {
+			t.Error("native trust remains retained until original child joins")
+			return
+		}
+		captured, e := os.ReadFile(file)
+		if e != nil || string(captured) != p.reply.PublicCA {
+			t.Error("native certificate file replaced")
+			return
+		}
+		_, _ = call("remove-trusted-cert", "-d", file)
+		current, e := call("find-certificate", "-a", "-Z", "/Library/Keychains/System.keychain")
+		if e != nil {
+			t.Error(e)
+			return
+		}
+		if bytes.Contains(current, []byte(fingerprint)) {
+			_, _ = call("delete-certificate", "-Z", fingerprint, "/Library/Keychains/System.keychain")
+		}
+		after, e := call("find-certificate", "-a", "-Z", "/Library/Keychains/System.keychain")
+		afterTrust, e2 := trust()
+		if e != nil || e2 != nil || !bytes.Equal(before, after) || !bytes.Equal(beforeTrust, afterTrust) {
+			t.Error("native trust did not restore original inventories", e, e2)
+		}
+		os.Remove(file)
+	})
+	if raw, e := call("add-trusted-cert", "-d", "-r", "trustRoot", "-k", "/Library/Keychains/System.keychain", file); e != nil {
+		t.Fatal("native system peer root could not be installed", e, string(raw))
+	}
+}
+
+type darwinChildOutput struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (o *darwinChildOutput) Write(raw []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.b.Len() < 32768 {
+		remaining := 32768 - o.b.Len()
+		o.b.Write(raw[:min(len(raw), remaining)])
+	}
+	return len(raw), nil
+}
+func (o *darwinChildOutput) String() string { o.mu.Lock(); defer o.mu.Unlock(); return o.b.String() }
+
+type darwinChildOwner struct {
+	command   *exec.Cmd
+	done      chan struct{}
+	failure   error
+	capture   *macosprocess.Capture
+	bootstrap *macosprocess.Bootstrap
+	channel   *mobiletor.DesktopDarwinControl
+	files     *routerVPNExternalFiles
+	policy    *mobilemultihop.DesktopNodeChainPolicy
+	transfer  string
+	baseline  *mobiletor.DesktopDarwinPFBaselineResult
+	output    darwinChildOutput
+	observed  map[int]string
+	closed    bool
+	stopped   bool
+}
+
+func darwinChildBaseline(ctx context.Context, r mobiletor.DesktopDarwinPFBaselineRequest, apply bool) (mobiletor.DesktopDarwinPFBaselineResult, error) {
+	var result mobiletor.DesktopDarwinPFBaselineResult
+	raw, e := mobiletor.EncodeDesktopDarwinPFBaselineRequest(r)
+	if e != nil {
+		return result, e
+	}
+	body, e := mobiletor.RunDesktopDarwinPFBaseline(ctx, raw, apply)
+	if e != nil {
+		return result, e
+	}
+	if !routerVPNMTUStrict(body, &result) || result.Schema != 1 || result.RequestSHA256 != darwinChildDigest(raw) || result.Applied != apply {
+		return result, errors.New("native PF baseline response changed original request")
+	}
+	return result, nil
+}
+func (o *darwinChildOwner) start(t *testing.T, ctx context.Context, a *darwinChildAuthority, policy *mobilemultihop.DesktopNodeChainPolicy) {
+	t.Helper()
+	o.policy = policy
+	o.observed = map[int]string{}
+	meta := policy.Metadata()
+	directory, e := os.MkdirTemp(macosprocess.InstallRoot+"/run/native-node", "session-")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Chmod(directory, 0700); e != nil {
+		t.Fatal(e)
+	}
+	input, e := policy.NodeChain().LaunchInput()
+	if e != nil {
+		t.Fatal(e)
+	}
+	for name, body := range map[string]string{"node-chain-source.json": input, "sing-box.json": policy.Config()} {
+		if e := os.WriteFile(filepath.Join(directory, name), []byte(body), 0600); e != nil {
+			t.Fatal(e)
+		}
+	}
+	o.files, e = routerVPNOpenExternalFiles(directory)
+	if e != nil {
+		t.Fatal(e)
+	}
+	scope := macosprocess.Scope{Family: macosprocess.NodeChainFamily, Workspace: directory, Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256}
+	workspace, e := os.OpenFile(directory, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer workspace.Close()
+	o.capture, e = macosprocess.OpenCapture(ctx, scope, workspace, a.install, a.process, a.lifetime)
+	if e != nil {
+		t.Fatal("actual original process capture", e)
+	}
+	if e := o.capture.Current(ctx); e != nil {
+		t.Fatal(e)
+	}
+	o.transfer, e = macosprocess.NodeChainTransferSHA256(o.capture.Selection())
+	if e != nil {
+		t.Fatal(e)
+	}
+	request := mobiletor.DesktopDarwinPFBaselineRequest{Schema: 1, Action: "replace", SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, Expected: []mobiletor.DesktopDarwinPFBaselineProof{{}}}
+	plan, e := darwinChildBaseline(ctx, request, false)
+	if e != nil || plan.Previous.Present || !plan.Target.Present {
+		t.Fatal("actual baseline plan lost absent original", e)
+	}
+	receipt, e := darwinChildBaseline(ctx, request, true)
+	o.baseline = &receipt
+	if e != nil || receipt.Previous != plan.Previous || receipt.Target != plan.Target {
+		t.Fatal("actual baseline did not match original plan", e)
+	}
+	var child *os.File
+	o.channel, child, e = mobiletor.NewDesktopDarwinControlPair()
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer child.Close()
+	o.command = exec.Command(macosprocess.EnginePath, "routervpn-node-chain", "--runtime-dir", directory, "--session", scope.Session, "--physical-source-sha256", scope.Source, "--config-sha256", scope.Config, "--darwin-control", "inherited-v1")
+	o.command.Dir = directory
+	o.command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
+	o.command.ExtraFiles = append([]*os.File{child}, o.capture.Files()...)
+	o.command.Stdout = &o.output
+	o.command.Stderr = &o.output
+	if e := o.command.Start(); e != nil {
+		t.Fatal(e)
+	}
+	o.done = make(chan struct{})
+	go func() { o.failure = o.command.Wait(); close(o.done) }()
+	binding, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	o.bootstrap, e = macosprocess.BindCreated(binding, o.capture, o.channel, o.command)
+	if e != nil {
+		t.Fatal("actual inherited child handshake", e, o.output.String())
+	}
+}
+func (o *darwinChildOwner) current(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil || o.closed || o.capture == nil || o.bootstrap == nil || o.command == nil || o.command.Process == nil {
+		return errors.New("native acceptance lost original child")
+	}
+	select {
+	case <-o.done:
+		return errors.Join(o.failure, errors.New("native child exited before authenticated stop"))
+	default:
+	}
+	if e := o.capture.Current(ctx); e != nil {
+		return e
+	}
+	if e := o.bootstrap.Current(ctx); e != nil {
+		return e
+	}
+	transfer, e := macosprocess.NodeChainTransferSHA256(o.capture.Selection())
+	if e != nil || transfer != o.transfer {
+		return errors.Join(e, errors.New("native capture transfer changed"))
+	}
+	return nil
+}
+func darwinChildInterface(name string) bool {
+	if !strings.HasPrefix(name, "utun") || len(name) == 4 {
+		return false
+	}
+	for _, r := range name[4:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+func (o *darwinChildOwner) observation(ctx context.Context) (routerVPNNodeMTURecord, mobilemultihop.DesktopNodeChainReadyRecord, error) {
+	var mtu routerVPNNodeMTURecord
+	var proof mobilemultihop.DesktopNodeChainReadyRecord
+	if e := o.current(ctx); e != nil {
+		return mtu, proof, e
+	}
+	raw, e := o.files.read("node-mtu-status.json", routerVPNNodeMTURecordLimit)
+	if e != nil {
+		return mtu, proof, e
+	}
+	if !routerVPNMTUStrict(raw, &mtu) {
+		return mtu, proof, errors.New("malformed exact native MTU readback")
+	}
+	raw, e = o.files.read("node-chain-ready.json", mobilemultihop.DesktopNodeChainReadyRecordLimit)
+	if e != nil {
+		return mtu, proof, e
+	}
+	proof, e = mobilemultihop.ParseDesktopNodeChainReadyRecord(raw, o.policy, o.transfer)
+	if e != nil {
+		return mtu, proof, e
+	}
+	meta := o.policy.Metadata()
+	now := time.Now().UnixMilli()
+	iface, e := net.InterfaceByName(mtu.Interface)
+	if e != nil || !darwinChildInterface(mtu.Interface) || iface.Index != mtu.Index || iface.MTU != mtu.MTU || iface.Flags&net.FlagUp == 0 || mtu.Session != meta.SessionID || mtu.Config != meta.ConfigSHA256 || mtu.Reader == 0 || mtu.Schema != 1 || mtu.Failure != "" || mtu.Heartbeat > now || now-mtu.Heartbeat > 10000 || proof.ObservedAt > now || now-proof.ObservedAt > 10000 || proof.Reader != mtu.Reader || proof.InterfaceName != mtu.Interface || int(proof.InterfaceIndex) != mtu.Index || proof.MTU != mtu.MTU {
+		return mtu, proof, errors.Join(e, errors.New("native heartbeat differs from actual utun/reader"))
+	}
+	o.observed[mtu.Index] = mtu.Interface
+	return mtu, proof, o.current(ctx)
+}
+func (o *darwinChildOwner) wait(t *testing.T, ctx context.Context, request string) (routerVPNNodeMTURecord, mobilemultihop.DesktopNodeChainReadyRecord) {
+	t.Helper()
+	var last error
+	for {
+		mtu, proof, e := o.observation(ctx)
+		if e == nil && (request == "" || mtu.Request == request) {
+			return mtu, proof
+		}
+		last = e
+		select {
+		case <-ctx.Done():
+			t.Fatal("actual child did not publish matching original proof/utun", ctx.Err(), last, o.output.String())
+		case <-o.done:
+			t.Fatal("actual child exited before readiness", o.failure, o.output.String())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+func (o *darwinChildOwner) stop(ctx context.Context) error {
+	if o.closed {
+		return nil
+	}
+	if o.command == nil || o.command.Process == nil || o.bootstrap == nil {
+		return errors.New("native partial child has no authenticated original stop")
+	}
+	if !o.stopped {
+		if e := o.bootstrap.Stop(ctx); e != nil {
+			return e
+		}
+		o.stopped = true
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-o.done:
+		if o.failure != nil {
+			return o.failure
+		}
+	}
+	raw, e := o.files.read("stopped.json", 4096)
+	var record struct {
+		routerVPNExternalStop
+		Closed bool `json:"closed"`
+	}
+	meta := o.policy.Metadata()
+	if e != nil || !routerVPNMTUStrict(raw, &record) || record.Schema != 1 || record.Session != meta.SessionID || record.SourceSHA256 != meta.ConfigSHA256 || !record.Closed {
+		return errors.Join(e, errors.New("native stop lacks original joined receipt"))
+	}
+	for _, name := range []string{"node-ready.json", "node-chain-ready.json"} {
+		if _, e := o.files.root.Lstat(name); !errors.Is(e, os.ErrNotExist) {
+			return errors.New("retired child retained readiness")
+		}
+	}
+	interfaces, e := net.Interfaces()
+	if e != nil {
+		return e
+	}
+	for _, iface := range interfaces {
+		if _, found := o.observed[iface.Index]; found {
+			return errors.New("native stop acknowledged before original utun disappeared")
+		}
+	}
+	if o.baseline == nil {
+		return errors.New("retired child lost original PF receipt")
+	}
+	clearRequest := mobiletor.DesktopDarwinPFBaselineRequest{Schema: 1, Action: "clear", Expected: []mobiletor.DesktopDarwinPFBaselineProof{o.baseline.Target}}
+	retired, e := darwinChildBaseline(ctx, clearRequest, true)
+	if e != nil || retired.Previous != o.baseline.Target || retired.Target.Present {
+		return errors.Join(e, errors.New("native stop did not retire exact PF baseline"))
+	}
+	if e := o.capture.Current(ctx); e != nil {
+		return e
+	}
+	e = errors.Join(o.bootstrap.Close(), o.channel.Close(), o.capture.Close(), o.files.root.Close())
+	if e != nil {
+		return e
+	}
+	o.closed = true
+	return nil
+}
+
+func darwinChildTraffic(t *testing.T, ctx context.Context, p *darwinChildPeer) {
+	t.Helper()
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true}
+	defer transport.CloseIdleConnections()
+	request, e := http.NewRequestWithContext(ctx, http.MethodGet, "http://10.77.0.1:8787/api/benchmark/download?bytes=65536", nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	request.Header.Set("Authorization", "Bearer native-ordered-final-token")
+	response, e := transport.RoundTrip(request)
+	if e != nil {
+		t.Fatal("actual utun TCP did not reach original encrypted final", e)
+	}
+	body, e := io.ReadAll(io.LimitReader(response.Body, 65537))
+	response.Body.Close()
+	if e != nil || response.StatusCode != 200 || len(body) != 65536 || response.Header.Get("X-Routervpn-Benchmark") != "download-v1" {
+		t.Fatal("actual encrypted TCP payload changed", e)
+	}
+	connection, e := (&net.Dialer{}).DialContext(ctx, "udp4", "10.77.0.1:45999")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer connection.Close()
+	if e := connection.SetDeadline(time.Now().Add(3 * time.Second)); e != nil {
+		t.Fatal(e)
+	}
+	payload := bytes.Repeat([]byte("actual-darwin-ordered-utun-"), 30)
+	if _, e := connection.Write(payload); e != nil {
+		t.Fatal(e)
+	}
+	reply := make([]byte, len(payload)+1)
+	n, e := connection.Read(reply)
+	if e != nil || n != len(payload) || !bytes.Equal(payload, reply[:n]) {
+		t.Fatal("actual encrypted UDP payload changed", e)
+	}
+	stats := p.observe(t, "stats")
+	for i, v := range stats.Prefixes {
+		if v.RawUDP <= 0 || v.TCP <= 0 || v.UDP <= 0 || v.ProofQueries == 0 || v.AuthRefusals != 0 {
+			t.Fatal("every original encrypted prefix did not prove and carry traffic", i, v)
+		}
+	}
+	if stats.Final.FinalRawTCP <= 0 || stats.Final.FinalRawUDP <= 0 || stats.Final.FinalTCP <= 0 || stats.Final.FinalUDP <= 0 || stats.Final.RouterQueries == 0 || stats.Final.DNSQueries == 0 || stats.Final.FinalPublicQueries == 0 || stats.Final.EntryPublicQueries != 0 || stats.Final.DirectQueries != 0 || stats.Final.DownloadBytes < 65536 || stats.Final.CoverReplies == 0 {
+		t.Fatal("final selected DNS/TCP/UDP/exit proof bypassed its original encrypted path", stats.Final)
+	}
+}
+func (o *darwinChildOwner) consume(t *testing.T, ctx context.Context) {
+	t.Helper()
+	for {
+		actual, e := o.files.root.Lstat("node-mtu-request.json")
+		if errors.Is(e, os.ErrNotExist) {
+			delete(o.files.owned, "node-mtu-request.json")
+			return
+		}
+		if e != nil || o.files.owned["node-mtu-request.json"] == nil || !os.SameFile(actual, o.files.owned["node-mtu-request.json"]) {
+			t.Fatal("native MTU request was replaced before consumption", e)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("native MTU request was not consumed", ctx.Err())
+		case <-o.done:
+			t.Fatal("native child exited before mailbox consumption")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+func darwinChildMTURollback(t *testing.T, ctx context.Context, o *darwinChildOwner) {
+	t.Helper()
+	status, proof := o.wait(t, ctx, "")
+	original := status.MTU
+	lease := darwinChildNonce(t, 16)
+	plan, e := o.policy.NodeChain().MTUPlan()
+	if e != nil {
+		t.Fatal(e)
+	}
+	candidate := original + 32
+	if candidate > plan.Ceiling {
+		candidate = original - 32
+	}
+	if candidate < 1280 || candidate == original {
+		t.Fatal("actual MTU fixture has no distinct valid candidate")
+	}
+	for _, action := range []string{"begin", "set", "rollback"} {
+		command := routerVPNNodeMTUCommand{Schema: 1, Session: status.Session, Config: status.Config, Path: status.Path, Generation: status.Generation + 1, Request: darwinChildNonce(t, 16), Lease: lease, Action: action, Reader: status.Reader, MTU: status.MTU}
+		if action == "set" {
+			command.Value = candidate
+		}
+		if e := o.files.publish("node-mtu-request.json", command); e != nil {
+			t.Fatal(e)
+		}
+		old, priorProof := status, proof
+		status, proof = o.wait(t, ctx, command.Request)
+		o.consume(t, ctx)
+		if status.Generation != command.Generation || status.Path != old.Path || status.Lease != lease || proof.Identity != priorProof.Identity || proof.TransferSHA256 != priorProof.TransferSHA256 {
+			t.Fatal("native MTU changed the original ordered identity")
+		}
+		if action == "begin" {
+			if status.Reader != old.Reader || status.Index != old.Index || status.Interface != old.Interface || status.MTU != original || !status.Active || proof.Generation != priorProof.Generation {
+				t.Fatal("begin replaced the original native reader")
+			}
+		} else {
+			if status.Reader != old.Reader+1 || proof.Generation != priorProof.Generation+1 || status.Index == old.Index {
+				t.Fatal("real MTU mutation did not install a fresh original native reader")
+			}
+			interfaces, e := net.Interfaces()
+			if e != nil {
+				t.Fatal(e)
+			}
+			for _, device := range interfaces {
+				if device.Index == old.Index {
+					t.Fatal("replacement utun published before original utun retired")
+				}
+			}
+			if action == "set" && (!status.Active || status.MTU != candidate) || action == "rollback" && (status.Active || !status.Restored || status.MTU != original) {
+				t.Fatal("native MTU rollback lost exact original value")
+			}
+		}
+	}
+}
+func darwinChildForeignMTU(t *testing.T, ctx context.Context, o *darwinChildOwner) {
+	t.Helper()
+	before, proof := o.wait(t, ctx, "")
+	command := routerVPNNodeMTUCommand{Schema: 1, Session: darwinChildNonce(t, 16), Config: before.Config, Path: before.Path, Generation: before.Generation + 1, Request: darwinChildNonce(t, 16), Lease: darwinChildNonce(t, 16), Action: "begin", Reader: before.Reader, MTU: before.MTU}
+	if e := o.files.publish("node-mtu-request.json", command); e != nil {
+		t.Fatal(e)
+	}
+	for {
+		current, next := o.wait(t, ctx, "")
+		if current.Generation != before.Generation || current.Reader != before.Reader || current.Interface != before.Interface || current.Index != before.Index || current.MTU != before.MTU || current.Active || next.Generation != proof.Generation {
+			t.Fatal("foreign session acquired original native MTU reader")
+		}
+		if current.Heartbeat >= before.Heartbeat+500 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if e := o.files.remove("node-mtu-request.json"); e != nil {
+		t.Fatal(e)
+	}
+}
+func darwinChildAwaitRefusal(t *testing.T, ctx context.Context, o *darwinChildOwner, p *darwinChildPeer, scenario string) {
+	t.Helper()
+	for {
+		if e := o.current(ctx); e != nil {
+			t.Fatal(e, o.output.String())
+		}
+		for _, name := range []string{"node-ready.json", "node-chain-ready.json"} {
+			if _, e := o.files.root.Lstat(name); !errors.Is(e, os.ErrNotExist) {
+				t.Fatal("invalid original path published readiness", name, e)
+			}
+		}
+		if _, e := o.files.read("stopped.json", 4096); e == nil {
+			break
+		} else if !errors.Is(e, os.ErrNotExist) {
+			t.Fatal(e)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("invalid original native path did not join its refused proof", ctx.Err(), o.output.String())
+		case <-o.done:
+			t.Fatal("native refusal exited without authenticated stop")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	stats := p.observe(t, "stats")
+	if stats.Final.EntryPublicQueries != 0 || stats.Final.DirectQueries != 0 || stats.Final.CoverPackets != 0 || stats.Final.DownloadBytes != 0 {
+		t.Fatal("refused ordered path forwarded a bypass payload", stats.Final)
+	}
+	switch scenario {
+	case "wrong-middle-key":
+		if stats.Prefixes[0].RawUDP == 0 || stats.Prefixes[1].ProofQueries != 0 || stats.Final.RouterQueries != 0 || stats.Final.DNSQueries != 0 {
+			t.Fatal("wrong middle key bypassed its original encrypted prefix", stats)
+		}
+	case "wrong-middle-proof":
+		if stats.Prefixes[1].ProofQueries == 0 || stats.Final.RouterQueries != 0 || stats.Final.DNSQueries != 0 {
+			t.Fatal("wrong middle proof advanced to its final", stats)
+		}
+	case "final-dns-failure":
+		if stats.Final.DNSQueries == 0 {
+			t.Fatal("selected DNS refusal never queried its original resolver")
+		}
+	}
+}
+func TestRouterVPNNodeChainDarwinNativeCommand(t *testing.T) {
+	darwinChildNative(t)
+	image, e := os.Executable()
+	if e != nil || image != macosprocess.ControllerPath || os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_INSTALLED") != "1" {
+		t.Fatal("native child acceptance requires its original installed controller")
+	}
+	authority := darwinChildAuthorityStart(t)
+	authorityClosed := false
+	t.Cleanup(func() {
+		if !authorityClosed {
+			t.Error("original native authority remains retained after failed cleanup")
+		}
+	})
+	enable, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	raw, e := darwinChildCommand(enable, "/sbin/pfctl", "-E")
+	cancel()
+	match := regexp.MustCompile(`(?m)^Token\s*:\s*([0-9]+)\s*$`).FindSubmatch(raw)
+	if e != nil || len(match) != 2 {
+		t.Fatal("native PF enable reference unavailable", e, string(raw))
+	}
+	pfToken := string(match[1])
+	allJoined := true
+	t.Cleanup(func() {
+		if !allJoined {
+			t.Error("original PF enable reference retained until native join")
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if raw, e := darwinChildCommand(ctx, "/sbin/pfctl", "-X", pfToken); e != nil {
+			t.Error("original PF reference did not retire", e, string(raw))
+		}
+	})
+	for _, scenario := range darwinChildCases {
+		if !t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			peer := darwinChildPeerStart(t, scenario == "mixed-four")
+			owner := &darwinChildOwner{}
+			darwinChildTrust(t, peer, func() bool { return owner.closed || owner.command == nil })
+			t.Cleanup(func() {
+				cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
+				defer stop()
+				if e := owner.stop(cleanup); e != nil {
+					allJoined = false
+					t.Error("original native child cleanup unproved", e, owner.output.String())
+				}
+			})
+			if scenario == "wrong-middle-proof" {
+				peer.observe(t, "wrong-node:1")
+			}
+			if scenario == "final-dns-failure" {
+				peer.observe(t, "fail-dns")
+			}
+			policy := darwinChildPolicy(t, peer, scenario)
+			owner.start(t, ctx, authority, policy)
+			refused := scenario == "wrong-middle-key" || scenario == "wrong-middle-proof" || scenario == "final-dns-failure"
+			if refused {
+				darwinChildAwaitRefusal(t, ctx, owner, peer, scenario)
+			} else {
+				status, _ := owner.wait(t, ctx, "")
+				raw, e := owner.files.read("node-ready.json", mobilemultihop.DesktopNodeReadyRecordLimit)
+				ready, e2 := mobilemultihop.ParseDesktopNodeReadyRecord(raw, policy, owner.transfer)
+				if e != nil || e2 != nil || ready.InterfaceName != status.Interface || int(ready.InterfaceIndex) != status.Index || ready.MTU != status.MTU || ready.DNSMilliseconds <= 0 {
+					t.Fatal("original selected DNS readiness lost actual utun", e, e2)
+				}
+				if scenario == "captured-mtu" || scenario == "mtu-rollback" {
+					if status.MTU != 1280 {
+						t.Fatal("child ignored manifest restored MTU")
+					}
+				}
+				if scenario == "mtu-rollback" {
+					darwinChildMTURollback(t, ctx, owner)
+				}
+				if scenario == "foreign-mtu-session" {
+					darwinChildForeignMTU(t, ctx, owner)
+				}
+				darwinChildTraffic(t, ctx, peer)
+			}
+			cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
+			e := owner.stop(cleanup)
+			stop()
+			if e != nil {
+				allJoined = false
+				t.Fatal("authenticated original stop did not join native owners", e, owner.output.String())
+			}
+			t.Log("verified original Darwin child retirement: " + scenario)
+		}) {
+			break
+		}
+	}
+	if t.Failed() || !allJoined {
+		return
+	}
+	if e := authority.close(); e != nil {
+		t.Fatal(e)
+	}
+	authorityClosed = true
+	if e := os.WriteFile(macosprocess.InstallRoot+"/native-child-complete", []byte("all original child owners joined\n"), 0600); e != nil {
+		t.Fatal(e)
+	}
+}

@@ -99,7 +99,7 @@ type desktopImportedWGSSHealthReply struct {
 
 func desktopImportedWGSSIdentity(request desktopImportedWGSSRequest) (string, error) {
 	bad := errors.New("imported WG/SS reference lost its independent captured identities")
-	if request.Schema != 1 || request.Address != "192.168.210.2" || request.ClientAddress != "192.168.210.1" ||
+	if request.Schema != 1 || !desktopNodeChainReferenceAddressPair(request.Address, request.ClientAddress) ||
 		len(request.Token) < 16 || len(request.Token) > 256 || strings.ContainsAny(request.Token, "\r\n\x00") {
 		return "", bad
 	}

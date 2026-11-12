@@ -19,8 +19,6 @@ import (
 	HY "github.com/sagernet/sing-box/protocol/hysteria2"
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
-	tun "github.com/sagernet/sing-tun"
-	"github.com/sagernet/sing/common/control"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
@@ -35,13 +33,6 @@ import (
 	"testing"
 	"time"
 )
-
-type desktopImportedPacketNetwork struct{ adapter.NetworkManager }
-
-func (*desktopImportedPacketNetwork) DefaultOptions() adapter.NetworkOptions { return adapter.NetworkOptions{} }
-func (*desktopImportedPacketNetwork) InterfaceFinder() control.InterfaceFinder      { return nil }
-func (*desktopImportedPacketNetwork) InterfaceMonitor() tun.DefaultInterfaceMonitor { return nil }
-func (*desktopImportedPacketNetwork) AutoRedirectOutputMark() uint32                { return 0 }
 
 // Exact source compiler + shipping WG/AWG endpoint constructors, independent
 // pinned cryptographic providers and actual SS/HY2 finals. Only captured physical

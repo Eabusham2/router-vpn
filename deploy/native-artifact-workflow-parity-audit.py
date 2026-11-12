@@ -46,7 +46,7 @@ def check_release_aggregate_gates(source: str) -> None:
     values = [value.strip() for value in needs[0][len("    needs: ["):-1].split(",")]
     required = {"source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
                 "windows-complete-max", "windows-all-controller", "android", "ios", "macos",
-                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3"}
+                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child"}
     assert len(values) == len(set(values)) and set(values) == required, (
         "native release aggregate changed its complete required gate inventory")
     pq = job("imported-pq-reality")
@@ -61,8 +61,12 @@ def check_release_aggregate_gates(source: str) -> None:
     naive_h3 = job("imported-naive-h3")
     assert "    uses: ./.github/workflows/imported-naive-h3-native.yml" in naive_h3, (
         "native release lost its actual imported Naive H3 producer/reference workflow")
+    darwin_child = job("darwin-ordered-child")
+    assert "    uses: ./.github/workflows/darwin-node-child-tun.yml" in darwin_child, (
+        "native release lost its actual ordered Darwin child acceptance workflow")
     for name, lines in (("aggregate", aggregate), ("imported-pq-reality", pq),
-                        ("imported-xhttp", xhttp), ("imported-naive-h2", naive_h2), ("imported-naive-h3", naive_h3)):
+                        ("imported-xhttp", xhttp), ("imported-naive-h2", naive_h2), ("imported-naive-h3", naive_h3),
+                        ("darwin-ordered-child", darwin_child)):
         assert not any(line.startswith(("    if:", "    continue-on-error:")) for line in lines), (
             f"native release {name} gate became conditional or nonblocking")
 

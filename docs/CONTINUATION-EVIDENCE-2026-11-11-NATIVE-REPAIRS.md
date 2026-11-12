@@ -7,6 +7,52 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## November 12: mandatory actual ordered Darwin child acceptance
+
+The release now requires a separate no-input ordered-child workflow on actual
+Intel and Apple Silicon macOS runners. It builds the pinned generated shipping
+command and retained encrypted peers with native CGO, executes the installed
+signed child under its original captured authority, and requires all eight
+native cases: three WireGuard nodes, four mixed nodes, captured MTU, MTU rollback,
+incorrect middle key, incorrect middle proof, final selected-DNS failure and
+foreign MTU session. The public ordered macOS connection gate remains closed
+until the required actual child and installed-host evidence passes.
+
+Successful retirement requires authenticated Stop, the sole original process
+wait, the exact configuration-bound stopped receipt, disappearance of the
+observed utun interfaces and the original PF baseline. Process death alone is
+insufficient. The disposable CI trust setup retains and restores its original
+inventory only after the owned child has joined. Failure to retire keeps the
+failure visible instead of emitting a successful receipt.
+
+Darwin peer preparation projects four existing encrypted-peer sources by
+changing only their original Linux build constraints. The explicit native
+fixture binds the one captured physical IPv4 interface. Its benchmark sink is
+restricted to the final encrypted node and records actual transferred bytes;
+the existing cover-service port and packet bound remain unchanged. The existing
+Linux namespace and imported dispatcher cases are preserved. The only merge
+into the newer physical runner is an additive call to copy the Darwin peers.
+
+The workflow is mandatory in the authoritative release aggregate, including
+exact commit, native architecture, source closure, toolchain, artifact and output
+identity. A missing architecture, altered workflow, conditional or nonblocking
+invocation, missing receipt or fallback cannot satisfy the aggregate. Its
+concurrency is isolated to the original caller run. The strict parser also
+preserves Go's real buffered child-PASS ordering while refusing late case work,
+missing retirement, skips, failures and duplicate or unknown verdicts.
+
+The final native runner's 16 tests and the aggregate's 13 tests passed locally;
+the reusable-workflow concurrency and native artifact parity audits passed.
+The acceptance source independently passed 30 existing preparation checks in
+9.708 seconds, three real encrypted-peer test roots with 28 terminal verdicts
+in 0.185 seconds, and the 2,392-file generated source closure. Fresh pinned
+preparation compiled all four composed Darwin/ARM64 CGO-disabled test binaries.
+Those compiler results do not establish actual macOS execution. The mandatory
+Intel/Apple Silicon native cases, installed-host acceptance and complete release
+are pending their own exact-SHA workflow results. All ten frozen acceptance
+file identities were checked before integration, with the one additive merge
+explicitly compared against current main.
+
 ## November 12: authenticated ordered Darwin child and retirement receipts
 
 The generated native command now accepts the separately typed Darwin inherited

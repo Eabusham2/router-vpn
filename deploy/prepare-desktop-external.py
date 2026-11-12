@@ -128,6 +128,7 @@ BOX_TEMPLATES = {
     'tor_plain_box_test.go.tmpl': 'routervpn_desktop_tor_plain_box_test.go',
 }
 PEER_TEMPLATES = {
+    'node_peer_network_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_network_test.go',
     'node_external_amnezia_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_amnezia_installed_test.go',
     'node_imported_router_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_router_entry_test.go',
     'node_imported_connect_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_connect_entry_test.go',
@@ -242,6 +243,30 @@ def desktop_pt_notices():
     for name, raw in PFABI.checked_files(ROOT/'internal/mobiletor').items():
         notices['internal/mobiletor/'+name] = raw.decode('utf-8')
     return (json.dumps(notices, indent=2, sort_keys=True)+'\n').encode()
+
+
+DARWIN_NODE_CHAIN_PEERS = {
+    'node_wg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_wg_darwin_test.go',
+    'node_awg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_awg_darwin_test.go',
+    'node_imported_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_imported_darwin_test.go',
+    'node_chain_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_reference_darwin_test.go',
+}
+
+
+def darwin_node_chain_peer_copies():
+    """Same real encrypted peer core; only its explicit native test selector changes."""
+    result = {}
+    before = b'//go:build linux && !android\n\npackage routervpnamnezia\n'
+    after = b'//go:build darwin && routervpn_darwin_node_chain && routervpn_darwin_external_host\n\npackage routervpnamnezia\n'
+    for name, target in DARWIN_NODE_CHAIN_PEERS.items():
+        source = ROOT/'mobile/desktop'/name
+        if source.is_symlink() or not source.is_file():
+            raise ValueError('Darwin ordered peer lost its original encrypted source')
+        raw = source.read_bytes()
+        if not raw.startswith(before):
+            raise ValueError('Darwin ordered peer changed its original test-only package selector')
+        result[target] = after + raw[len(before):]
+    return result
 
 
 def inputs():
@@ -794,6 +819,9 @@ def copy_encrypted_peer_templates(vendor):
         raw = path.read_bytes()
         if not raw.startswith(prefix):
             raise ValueError('Desktop encrypted peer test changed its test-only package or platform: ' + name)
+        write(vendor, relative, raw)
+
+    for relative, raw in darwin_node_chain_peer_copies().items():
         write(vendor, relative, raw)
 
 

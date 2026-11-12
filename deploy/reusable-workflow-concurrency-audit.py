@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPECTED = {
     ".github/workflows/source-snapshot.yml": "  group: source-snapshot-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
     ".github/workflows/release-candidate.yml": "  group: release-candidate-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
+    ".github/workflows/darwin-node-child-tun.yml": "  group: darwin-node-child-tun-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
     ".github/workflows/arm64-portainer-preflight.yml": "  group: arm64-portainer-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
     ".github/workflows/publish-arm64-images.yml": "  group: publish-arm64-portainer-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
     ".github/workflows/production-release-compose.yml": "  group: production-release-compose-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",

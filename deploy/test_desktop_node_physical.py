@@ -356,6 +356,7 @@ def checked_sources(source):
     PREP.preflight_pt_files(source, copies)
     for name, relative in PREP.PEER_TEMPLATES.items():
         copies[relative] = (ROOT / "mobile/desktop" / name).read_bytes()
+    copies.update(PREP.darwin_node_chain_peer_copies())
     for name, relative in (("manager.go", "adapter/inbound/routervpn_mtu.go"), ("manager_test.go", "adapter/inbound/routervpn_mtu_test.go"), ("manager_native_linux_test.go", "adapter/inbound/routervpn_mtu_native_linux_test.go"), ("box.go", "routervpn_mtu.go"), ("box_test.go", "routervpn_mtu_test.go"), ("tun.go", "protocol/tun/routervpn_mtu.go"), ("tun_native_linux_test.go", "protocol/tun/routervpn_mtu_native_linux_test.go"), ("desktop_transaction_native_linux_test.go", "routervpn_mtu_transaction_native_linux_test.go")):
         copies[relative] = (ROOT / "mobile/mtu" / (name + ".tmpl")).read_bytes()
     for path in sorted((ROOT / "mobile/desktop").glob("*.go.tmpl")):
