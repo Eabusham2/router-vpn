@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -694,5 +695,434 @@ func TestRouterVPNExecutionNativeFailedAcquisitionRetainsSealedStop(t *testing.T
 	}
 	if err := f.engine.RetireContext(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// This is an explicit private-storage boundary, not a fabricated live proof.
+// Build the canonical nonsecret Last wire record from actual captured source
+// types, then pass it through the shipping parser. The native tests below must
+// still perform fresh authenticated discovery and leave application I/O closed.
+type executionNativeLastRecord struct {
+	Schema          int                               `json:"schema"`
+	LocalSource     string                            `json:"local_source_sha256"`
+	LocalInput      string                            `json:"local_input_sha256"`
+	Setting         string                            `json:"setting"`
+	Execution       string                            `json:"execution"`
+	Target          string                            `json:"target"`
+	Descriptor      multihoprelay.NodeChainDescriptor `json:"descriptor"`
+	DescriptorSHA   string                            `json:"descriptor_sha256"`
+	DNSPolicySHA    string                            `json:"dns_policy_sha256"`
+	EntryHost       string                            `json:"entry_host"`
+	Peer            string                            `json:"peer"`
+	FirstPort       int                               `json:"first_port"`
+	LastPort        int                               `json:"last_port"`
+	Port            int                               `json:"listen_port"`
+	DesktopTargetOS string                            `json:"desktop_target_os,omitempty"`
+	Digest          string                            `json:"digest"`
+}
+
+func executionNativeStoredLast(t *testing.T, f *executionNativeFixture, winner string, edit func(*executionNativeLastRecord)) mobilemultihop.NodeChainExecutionLast {
+	t.Helper()
+	discovery, err := f.prep.Discovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, _, err := net.SplitHostPort(discovery.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := f.server.Descriptor()
+	descriptorSHA, err := descriptor.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := sha256.Sum256([]byte(f.prep.LocalSource()))
+	record := executionNativeLastRecord{Schema: 1, LocalSource: f.prep.LocalSourceSHA256(), LocalInput: hex.EncodeToString(input[:]),
+		Setting: f.prep.Execution(), Execution: winner, Target: mobilemultihop.Targets[0], Descriptor: descriptor,
+		DescriptorSHA: descriptorSHA, DNSPolicySHA: descriptor.DNSPolicySHA256, EntryHost: host,
+		Peer: "10.77.0.2", FirstPort: 32000, LastPort: 32007, Port: 32003}
+	if edit != nil {
+		edit(&record)
+	}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(append([]byte("routervpn-node-chain-execution-last-v1\x00"), raw...))
+	record.Digest = hex.EncodeToString(digest[:])
+	raw, err = json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, err := mobilemultihop.ParseNodeChainExecutionLast(string(raw), f.prep)
+	if err != nil {
+		t.Fatal("stored Last boundary failed actual parser", err)
+	}
+	return last
+}
+
+func executionNativeDiscoverLast(t *testing.T, f *executionNativeFixture) *RouterVPNNodeChainExecutionEngine {
+	t.Helper()
+	e, err := f.capture(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.discovery(t)
+	if _, err := e.DiscoverContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func TestRouterVPNExecutionNativeLastAdoptsFreshClosedGraph(t *testing.T) {
+	for _, choice := range []string{"auto-local", "auto-server", "server-server"} {
+		t.Run(choice, func(t *testing.T) {
+			parts := strings.Split(choice, "-")
+			first := newExecutionNativeFixture(t, parts[0], nil)
+			last := executionNativeStoredLast(t, first, parts[1], nil)
+			e := executionNativeDiscoverLast(t, first)
+			originalBox, originalTUN, originalEntry, originalDNS, originalGate := e.instance, e.inbound, e.entry, e.resolver, e.gate
+			plan, err := e.AdoptLastContext(t.Context(), last)
+			if err != nil {
+				t.Fatal("fresh Last native adoption failed", err)
+			}
+			projection, err := plan.Projection()
+			if err != nil || plan.RequireJoinedContext(t.Context()) != nil {
+				t.Fatal("Last adoption did not join exact discovery", err)
+			}
+			if e.instance != originalBox || e.inbound != originalTUN || e.entry != originalEntry || e.resolver != originalDNS || e.gate != originalGate {
+				t.Fatal("Last replaced original preparation Box/TUN/entry/DNS/gate")
+			}
+			identity, err := e.ObserveChainContext(t.Context())
+			if err != nil || identity.SourceSHA256 != projection.SourceSHA256() || identity.ConfigSHA256 != projection.ConfigSHA256() {
+				t.Fatal("Last native projection was not adopted under original identity", err)
+			}
+			if first.requests.Load() != 2 {
+				t.Fatal("Last skipped or repeated original fresh discovery")
+			}
+			if open, err := e.ApplicationOpenContext(t.Context()); err != nil || open {
+				t.Fatal("stored Last granted application traffic", err)
+			}
+			runtime, err := mobilemultihop.NewNodeChainExecutionLastRuntime(t.Context(), plan, e)
+			if err != nil {
+				t.Fatal("exact native Last plan did not construct its runtime", err)
+			}
+			if progress := runtime.Progress(); progress.Ready || progress.Complete || progress.Stage != "pending" || len(progress.Comparison.Measurements) != 0 {
+				t.Fatal("stored Last became live or compared proof without Run", progress)
+			}
+			if _, err := mobilemultihop.NewNodeChainExecutionLastRuntime(t.Context(), plan, e); err == nil {
+				t.Fatal("native Last plan was consumed twice")
+			}
+			if _, err := runtime.CaptureLastContext(t.Context()); err == nil {
+				t.Fatal("unproved native Last recorded a new proof")
+			}
+			if _, err := e.AdoptLastContext(t.Context(), last); err == nil {
+				t.Fatal("native Last appended twice")
+			}
+			if err := runtime.CloseContext(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			second := newExecutionNativeFixture(t, parts[0], nil)
+			fresh := executionNativeDiscoverLast(t, second)
+			freshPlan, err := fresh.AdoptLastContext(t.Context(), last)
+			if err != nil {
+				t.Fatal(err)
+			}
+			freshProjection, err := freshPlan.Projection()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var before, after mobilemultihop.NodeChainExecutionSource
+			if json.Unmarshal([]byte(projection.Source()), &before) != nil || json.Unmarshal([]byte(freshProjection.Source()), &after) != nil {
+				t.Fatal("invalid native Last projection")
+			}
+			if before.Request.SessionID == after.Request.SessionID || reflect.DeepEqual(before.Request.Users, after.Request.Users) ||
+				before.Request.Port != after.Request.Port || !reflect.DeepEqual(before.Server, after.Server) || fresh.instance == originalBox || fresh.inbound == originalTUN {
+				t.Fatal("Last reused old credentials/owner or changed original source/listener")
+			}
+		})
+	}
+}
+
+// Cancellation is injected by the caller's actual context at the first Done
+// observation after the immutable proposal is published. No sleeps, native
+// hooks or accepting Close double decide whether the original close joined.
+type executionNativeLastCloseContext struct {
+	context.Context
+	engine *RouterVPNNodeChainExecutionEngine
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (c *executionNativeLastCloseContext) Done() <-chan struct{} {
+	if c.engine.adoption.Load() != nil {
+		c.once.Do(c.cancel)
+	}
+	return c.Context.Done()
+}
+
+func executionNativePendingAdoption(t *testing.T, e *RouterVPNNodeChainExecutionEngine, kind string, last mobilemultihop.NodeChainExecutionLast, policy *mobilemultihop.NodeChainExecutionPolicy, source string) *routerVPNExecutionAdoption {
+	t.Helper()
+	base, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx := &executionNativeLastCloseContext{Context: base, engine: e, cancel: cancel}
+	var err error
+	switch kind {
+	case "last":
+		_, err = e.AdoptLastContext(ctx, last)
+	case "restore":
+		_, err = e.AdoptOriginalContext(ctx, policy)
+	case "ordinary":
+		_, err = e.AdoptContext(ctx, source, 32003)
+	default:
+		t.Fatal("unknown fixture adoption kind")
+	}
+	captured := e.adoption.Load()
+	if err == nil || ctx.Err() == nil || captured == nil || e.state.Load().stage != 0 {
+		t.Fatal("interrupted native discovery cleanup did not retain its exact proposal", err)
+	}
+	if open, err := e.ApplicationOpenContext(t.Context()); err != nil || open {
+		t.Fatal("pending Last cleanup opened traffic", err)
+	}
+	return captured
+}
+
+func TestRouterVPNExecutionNativeLastCleanupRetainsExactPlan(t *testing.T) {
+	for _, fault := range []string{"retry", "changed-choice", "changed-target", "changed-port"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newExecutionNativeFixture(t, "auto", nil)
+			last := executionNativeStoredLast(t, f, "local", nil)
+			e := executionNativeDiscoverLast(t, f)
+			retained := executionNativePendingAdoption(t, e, "last", last, nil, f.server.SourceSHA256())
+			if fault != "retry" {
+				changed := executionNativeStoredLast(t, f, "local", func(row *executionNativeLastRecord) {
+					switch fault {
+					case "changed-choice":
+						row.Execution = "server"
+					case "changed-target":
+						row.Target = mobilemultihop.Targets[1]
+					case "changed-port":
+						row.Port++
+					}
+				})
+				if _, err := e.AdoptLastContext(t.Context(), changed); err == nil {
+					t.Fatal("Last cleanup retry accepted a replacement saved record")
+				}
+			}
+			if e.adoption.Load() != retained || e.state.Load().stage != 0 {
+				t.Fatal("Last failed retry replaced original plan/native state")
+			}
+			plan, err := e.AdoptLastContext(t.Context(), last)
+			if err != nil || e.adoption.Load() != retained || plan != retained.last.plan {
+				t.Fatal("Last retry lost its exact opaque plan", err)
+			}
+			projection, err := plan.Projection()
+			if err != nil || projection != retained.projection || plan.RequireJoinedContext(t.Context()) != nil || f.requests.Load() != 2 {
+				t.Fatal("Last cleanup retry rediscovered or replanned original source", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionNativeLastRejectsKindSubstitution(t *testing.T) {
+	for _, direction := range []string{"last-ordinary", "last-restore", "ordinary-last", "restore-last", "ordinary-restore", "restore-ordinary"} {
+		t.Run(direction, func(t *testing.T) {
+			original := newExecutionNativeFixture(t, "auto", nil)
+			policy, err := mobilemultihop.NewNodeChainExecutionPolicy(original.adopt(t).Source())
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := newExecutionNativeFixture(t, "auto", nil)
+			last := executionNativeStoredLast(t, f, "local", nil)
+			e := executionNativeDiscoverLast(t, f)
+			kinds := strings.Split(direction, "-")
+			retained := executionNativePendingAdoption(t, e, kinds[0], last, policy, f.server.SourceSHA256())
+			// A restore substitution receives the exact pending policy, not merely
+			// another valid graph. The admission kind itself must reject it.
+			matching, err := mobilemultihop.NewNodeChainExecutionPolicy(retained.projection.Source())
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch kinds[1] {
+			case "last":
+				_, err = e.AdoptLastContext(t.Context(), last)
+			case "restore":
+				_, err = e.AdoptOriginalContext(t.Context(), matching)
+			case "ordinary":
+				_, err = e.AdoptContext(t.Context(), f.server.SourceSHA256(), 32003)
+			}
+			if err == nil {
+				t.Fatal("cleanup retry borrowed another native adoption kind")
+			}
+			if e.adoption.Load() != retained || e.state.Load().stage != 0 {
+				t.Fatal("rejected kind changed retained native proposal")
+			}
+			switch kinds[0] {
+			case "last":
+				_, err = e.AdoptLastContext(t.Context(), last)
+			case "restore":
+				_, err = e.AdoptOriginalContext(t.Context(), policy)
+			case "ordinary":
+				_, err = e.AdoptContext(t.Context(), f.server.SourceSHA256(), 32003)
+			}
+			if err != nil || e.adoption.Load() != retained || e.state.Load().stage != 2 || f.requests.Load() != 2 {
+				t.Fatal("rejected substitution prevented exact original adoption retry", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionNativeLastRejectsForeignAdmission(t *testing.T) {
+	for _, fault := range []string{"zero", "foreign-preparation", "peer", "range", "before-discovery", "cancelled", "retired-source", "foreign-discovery"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newExecutionNativeFixture(t, "auto", nil)
+			last := executionNativeStoredLast(t, f, "local", nil)
+			e, err := f.capture(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fault != "before-discovery" {
+				f.discovery(t)
+				if _, err := e.DiscoverContext(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx := t.Context()
+			switch fault {
+			case "zero":
+				last = mobilemultihop.NodeChainExecutionLast{}
+			case "foreign-preparation":
+				other := newExecutionNativeFixture(t, "server", nil)
+				last = executionNativeStoredLast(t, other, "server", nil)
+			case "peer":
+				last = executionNativeStoredLast(t, f, "local", func(row *executionNativeLastRecord) { row.Peer = "10.77.0.3" })
+			case "range":
+				last = executionNativeStoredLast(t, f, "local", func(row *executionNativeLastRecord) { row.LastPort++ })
+			case "cancelled":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			case "retired-source":
+				f.current.Store(false)
+			case "foreign-discovery":
+				other := newExecutionNativeFixture(t, "auto", nil)
+				foreign := executionNativeDiscoverLast(t, other)
+				e.discovery.Store(foreign.discovery.Load()) // explicit private-pointer substitution control
+			}
+			if _, err := e.AdoptLastContext(ctx, last); err == nil {
+				t.Fatal("foreign or stale Last admitted native graph")
+			}
+			if e.adoption.Load() != nil || e.state.Load().stage != 0 || len(e.selector.All()) != 1 {
+				t.Fatal("refused Last modified original native graph")
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionNativeLastRuntimeRejectsForeignEngine(t *testing.T) {
+	f := newExecutionNativeFixture(t, "auto", nil)
+	e := executionNativeDiscoverLast(t, f)
+	plan, err := e.AdoptLastContext(t.Context(), executionNativeStoredLast(t, f, "local", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := newExecutionNativeFixture(t, "auto", nil)
+	foreign.adopt(t)
+	runtime, err := mobilemultihop.NewNodeChainExecutionLastRuntime(t.Context(), plan, foreign.engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := foreign.requests.Load()
+	if err := runtime.Run(t.Context()); err == nil {
+		t.Fatal("Last plan ran with a foreign native engine")
+	}
+	if foreign.requests.Load() != before || runtime.Progress().Ready {
+		t.Fatal("foreign Last runtime entered control or acquired live proof")
+	}
+	if open, err := e.ApplicationOpenContext(t.Context()); err != nil || open {
+		t.Fatal("foreign runtime opened original Last owner", err)
+	}
+}
+
+func TestRouterVPNExecutionNativeLastJoinsBeforeNativeAppend(t *testing.T) {
+	f := newExecutionNativeFixture(t, "auto", nil)
+	last := executionNativeStoredLast(t, f, "local", nil)
+	e := executionNativeDiscoverLast(t, f)
+	original := e.discovery.Load()
+	other, err := mobilemultihop.NewNodeChainExecutionDiscoveryOwner(f.prep, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := other.Close(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := other.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := other.PlanLastContext(t.Context(), last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := plan.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Explicit opaque-plan substitution at the private native boundary: closing
+	// this engine's original discovery cannot join a different plan's owner.
+	e.last = &routerVPNExecutionLast{raw: last.JSON(), owner: original, plan: plan}
+	e.planned.Store(projection)
+	if _, err := e.AdoptLastContext(t.Context(), last); err == nil || e.state.Load().stage != 0 || len(e.selector.All()) != 1 {
+		t.Fatal("unjoined Last plan changed original native graph", err)
+	}
+	if plan.RequireJoinedContext(t.Context()) == nil {
+		t.Fatal("original close joined a foreign discovery plan")
+	}
+}
+
+func TestRouterVPNExecutionNativeAdoptionRejectsRetainedSourceReplacement(t *testing.T) {
+	for _, fault := range []string{"owner", "projection"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newExecutionNativeFixture(t, "auto", nil)
+			e := executionNativeDiscoverLast(t, f)
+			retained := executionNativePendingAdoption(t, e, "ordinary", mobilemultihop.NodeChainExecutionLast{}, nil, f.server.SourceSHA256())
+			original := e.discovery.Load()
+			other, err := mobilemultihop.NewNodeChainExecutionDiscoveryOwner(f.prep, e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := other.Close(context.Background()); err != nil {
+					t.Error(err)
+				}
+			})
+			if _, err := other.Discover(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if other.Identity() != original.Identity() {
+				t.Fatal("replacement fixture did not keep the same native identity")
+			}
+			if fault == "owner" {
+				e.discovery.Store(other)
+			} else {
+				projection, err := other.PlanContext(t.Context(), f.server.SourceSHA256(), 32003)
+				if err != nil {
+					t.Fatal(err)
+				}
+				e.planned.Store(projection)
+			}
+			if _, err := e.AdoptContext(t.Context(), f.server.SourceSHA256(), 32003); err == nil {
+				t.Fatal("pending native adoption accepted replacement " + fault)
+			}
+			if e.adoption.Load() != retained || e.state.Load().stage != 0 {
+				t.Fatal("refused source replacement changed original native state")
+			}
+			e.discovery.Store(original)
+			e.planned.Store(retained.projection)
+			if _, err := e.AdoptContext(t.Context(), f.server.SourceSHA256(), 32003); err != nil {
+				t.Fatal("original native proposal could not retry after refused replacement", err)
+			}
+		})
 	}
 }

@@ -57,7 +57,7 @@ func (e *RouterVPNNodeChainExecutionEngine) AdoptLastContext(ctx context.Context
 	if err != nil {
 		return empty, err
 	}
-	adopted, err := e.adoptLockedContext(ctx, policy.Descriptor().SourceSHA256, policy.Request().Port, nil)
+	adopted, err := e.adoptLockedContext(ctx, policy.Descriptor().SourceSHA256, policy.Request().Port, nil, retained)
 	if err != nil {
 		return empty, err
 	}

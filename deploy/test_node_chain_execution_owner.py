@@ -23,6 +23,10 @@ ROOTS = {
               'NativeRestoreRetainsOriginalFront', 'NativeRetiredSourceKeepsClosedReceipt',
               'NativeFailedAcquisitionRetainsSealedStop', 'NativeDuplicateBindKeepsOriginalOwner',
               'NativeCloseReceipt', 'NativeLastUsesOriginalDiscovery', 'NativeLastRetainsPendingPlan',
+              'NativeLastAdoptsFreshClosedGraph', 'NativeLastCleanupRetainsExactPlan',
+              'NativeLastRejectsKindSubstitution', 'NativeLastRejectsForeignAdmission',
+              'NativeLastRuntimeRejectsForeignEngine', 'NativeLastJoinsBeforeNativeAppend',
+              'NativeAdoptionRejectsRetainedSourceReplacement',
               'NativeMTUUsesJoinedReader', 'NativeMTURejectsChangedOwnership',
               'NativeMTUReadbackAndRetirementRemainOwned'),
     PACKAGE+'/protocol/tun': ('TUNMTUReadbackRequiresActualOwner',),
@@ -30,6 +34,11 @@ ROOTS = {
                                  'AppendConcurrentTagHasOneOriginalWinner'),
 }
 CHILDREN = {
+    'NativeLastAdoptsFreshClosedGraph': ('auto-local', 'auto-server', 'server-server'),
+    'NativeLastCleanupRetainsExactPlan': ('retry', 'changed-choice', 'changed-target', 'changed-port'),
+    'NativeLastRejectsKindSubstitution': ('last-ordinary', 'last-restore', 'ordinary-last', 'restore-last', 'ordinary-restore', 'restore-ordinary'),
+    'NativeLastRejectsForeignAdmission': ('zero', 'foreign-preparation', 'peer', 'range', 'before-discovery', 'cancelled', 'retired-source', 'foreign-discovery'),
+    'NativeAdoptionRejectsRetainedSourceReplacement': ('owner', 'projection'),
     'NativeLastUsesOriginalDiscovery': ('local', 'server'),
     'NativeCloseReceipt': ('success', 'original-error'),
     'NativeMTUUsesJoinedReader': ('candidate', 'rollback', 'unchanged', 'pending-close'),
@@ -127,6 +136,11 @@ def verify(core):
 
 
 CONTROLS = (
+    ('Last join before native append', 'routervpn_node_chain_execution.go', '\tif last != nil {\n\t\tif err := last.plan.RequireJoinedContext(ctx); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}\n', '', '.', 'NativeLastJoinsBeforeNativeAppend', 'unjoined Last plan changed original native graph'),
+    ('exact native retry kind', 'routervpn_node_chain_execution.go', 'if captured.kind != kind || captured.owner != owner || captured.projection != projection || captured.original != originalSource || captured.last != last || captured.lastSource != lastSource {', 'if false {', '.', 'NativeLastRejectsKindSubstitution/ordinary-restore', 'cleanup retry borrowed another native adoption kind'),
+    ('original Last saved choice', 'routervpn_node_chain_execution_last.go', ' || retained.raw != last.JSON()', '', '.', 'NativeLastCleanupRetainsExactPlan/changed-choice', 'Last cleanup retry accepted a replacement saved record'),
+    ('original native discovery on retry', 'routervpn_node_chain_execution.go', ' || captured.owner != owner', '', '.', 'NativeAdoptionRejectsRetainedSourceReplacement/owner', 'pending native adoption accepted replacement owner'),
+    ('original native projection on retry', 'routervpn_node_chain_execution.go', ' || captured.projection != projection', '', '.', 'NativeAdoptionRejectsRetainedSourceReplacement/projection', 'pending native adoption accepted replacement projection'),
     ('retained Last adoption slot', 'routervpn_node_chain_execution.go',
      '\tif e.last != nil {\n\t\treturn nil, errRouterVPNExecutionOwner\n\t}\n', '',
      '.', 'NativeLastRetainsPendingPlan', 'normal adoption consumed the original Last plan'),

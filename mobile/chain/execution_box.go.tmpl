@@ -59,6 +59,17 @@ type routerVPNExecutionState struct {
 	server     adapter.Outbound
 }
 
+// Publication precedes discovery cleanup, so a pending close cannot lend the
+// original projection to a different admission kind or discovery owner.
+type routerVPNExecutionAdoption struct {
+	kind       uint8 // 0 ordinary, 1 original restore, 2 durable Last
+	owner      *mobilemultihop.NodeChainExecutionDiscoveryOwner
+	projection *mobilemultihop.NodeChainExecutionProjection
+	original   string
+	last       *routerVPNExecutionLast
+	lastSource string
+}
+
 type routerVPNExecutionPermit struct {
 	state      *routerVPNExecutionState
 	tag        string
@@ -78,6 +89,7 @@ type RouterVPNNodeChainExecutionEngine struct {
 	current           func(context.Context) error
 	discovery         atomic.Pointer[mobilemultihop.NodeChainExecutionDiscoveryOwner]
 	planned           atomic.Pointer[mobilemultihop.NodeChainExecutionProjection]
+	adoption          atomic.Pointer[routerVPNExecutionAdoption]
 	last              *routerVPNExecutionLast // protected by busy; retained through failed discovery join
 	state             atomic.Pointer[routerVPNExecutionState]
 	reader            atomic.Pointer[routerVPNExecutionReader]
@@ -432,10 +444,10 @@ func (e *RouterVPNNodeChainExecutionEngine) adoptContext(ctx context.Context, so
 	if e.last != nil {
 		return nil, errRouterVPNExecutionOwner
 	}
-	return e.adoptLockedContext(ctx, sourceSHA, port, original)
+	return e.adoptLockedContext(ctx, sourceSHA, port, original, nil)
 }
 
-func (e *RouterVPNNodeChainExecutionEngine) adoptLockedContext(ctx context.Context, sourceSHA string, port int, original *mobilemultihop.NodeChainExecutionPolicy) (result *mobilemultihop.NodeChainExecutionProjection, failure error) {
+func (e *RouterVPNNodeChainExecutionEngine) adoptLockedContext(ctx context.Context, sourceSHA string, port int, original *mobilemultihop.NodeChainExecutionPolicy, last *routerVPNExecutionLast) (result *mobilemultihop.NodeChainExecutionProjection, failure error) {
 	identity, err := e.ObserveChainContext(ctx)
 	state, owner := e.state.Load(), e.discovery.Load()
 	if err != nil || state == nil || state.stage != 0 || owner == nil || owner.Identity() != identity || e.permit.Load() != nil {
@@ -453,6 +465,24 @@ func (e *RouterVPNNodeChainExecutionEngine) adoptLockedContext(ctx context.Conte
 		}
 		e.planned.Store(projection)
 	}
+	kind, originalSource, lastSource := uint8(0), "", ""
+	if original != nil {
+		kind, originalSource = 1, original.Source()
+	}
+	if last != nil {
+		if original != nil {
+			return nil, errRouterVPNExecutionOwner
+		}
+		kind, lastSource = 2, last.raw
+	}
+	captured := e.adoption.Load()
+	if captured == nil {
+		captured = &routerVPNExecutionAdoption{kind, owner, projection, originalSource, last, lastSource}
+		e.adoption.Store(captured)
+	}
+	if captured.kind != kind || captured.owner != owner || captured.projection != projection || captured.original != originalSource || captured.last != last || captured.lastSource != lastSource {
+		return nil, errRouterVPNExecutionOwner
+	}
 	// A retry cannot replace the already captured proposal while an original
 	// late discovery operation or failed socket close is still being joined.
 	var source mobilemultihop.NodeChainExecutionSource
@@ -462,6 +492,11 @@ func (e *RouterVPNNodeChainExecutionEngine) adoptLockedContext(ctx context.Conte
 	}
 	if err := owner.Close(ctx); err != nil {
 		return nil, err
+	}
+	if last != nil {
+		if err := last.plan.RequireJoinedContext(ctx); err != nil {
+			return nil, err
+		}
 	}
 	if observed, err := e.ObserveChainContext(ctx); err != nil || observed != identity || e.state.Load() != state {
 		return nil, errRouterVPNExecutionOwner
