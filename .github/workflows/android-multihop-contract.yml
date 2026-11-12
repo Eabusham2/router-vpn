@@ -40,6 +40,7 @@ on:
       - 'android/test_android_max_selection.py'
       - 'android/test_android_naive_multihop.py'
       - 'deploy/test_mobile_multihop_groups.py'
+      - 'deploy/test_android_multihop_workflow.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeMAXProfile.java'
       - 'internal/mobilepq/**'
       - 'internal/mobilemultihop/**'
@@ -92,6 +93,7 @@ on:
       - 'android/test_android_max_selection.py'
       - 'android/test_android_naive_multihop.py'
       - 'deploy/test_mobile_multihop_groups.py'
+      - 'deploy/test_android_multihop_workflow.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeMAXProfile.java'
       - 'internal/mobilepq/**'
       - 'internal/mobilemultihop/**'
@@ -110,8 +112,13 @@ on:
 permissions:
   contents: read
 
+# Superseded runs cannot produce acceptance for the current source.
+concurrency:
+  group: android-multihop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  contract:
+  android:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -121,6 +128,8 @@ jobs:
           python-version: '3.12'
       - uses: actions/setup-go@v5
         with: {go-version: '1.26.3', cache: false}
+      - name: Verify complete workflow inventory and required aggregate
+        run: python3 deploy/test_android_multihop_workflow.py
       - name: Install Android JSON for shipping-controller tests
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
       - name: Verify Android multihop boundaries and executable graph
@@ -137,8 +146,43 @@ jobs:
           python3 android/test_android_pq_selection.py
           python3 android/test_android_max_selection.py
           python3 android/test_android_naive_multihop.py
-          # Use the same complete, disjoint phases as the native Xray gate.
-          # Every discovered graph and lifecycle test runs exactly once;
-          # each phase retains its existing 180-second race deadline.
-          python3 deploy/test_mobile_multihop_groups.py
-          go test -race -count=1 -timeout=5m ./internal/multihoprelay ./internal/awgpolicy
+
+  shared:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Verify every shared graph and lifecycle test
+        # Complete disjoint phases retain their 180-second race deadlines.
+        run: python3 deploy/test_mobile_multihop_groups.py
+
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Verify relay and Amnezia policy
+        run: go test -race -count=1 -timeout=5m ./internal/multihoprelay ./internal/awgpolicy
+
+  contract:
+    if: ${{ always() }}
+    needs: [android, shared, relay]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every contract group to pass
+        env:
+          ANDROID_RESULT: ${{ needs.android.result }}
+          SHARED_RESULT: ${{ needs.shared.result }}
+          RELAY_RESULT: ${{ needs.relay.result }}
+        run: |
+          test "$ANDROID_RESULT" = success
+          test "$SHARED_RESULT" = success
+          test "$RELAY_RESULT" = success
