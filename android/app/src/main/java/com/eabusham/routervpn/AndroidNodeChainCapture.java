@@ -25,7 +25,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture original) throws Exception {
         List<String> inputs = memberInputs(original);
         List<String> identities = identityInputs(original);
-        String source = bounded(new JSONObject().put("schema", 1).put("execution", "local")
+        String source = bounded(new JSONObject().put("schema", sourceSchema(original.members)).put("execution", "local")
                 .put("nodes", new JSONArray(inputs)).put("identity_sources",new JSONArray(identities)).toString(), MAX_INPUT);
         RouterNodeChain plan = Libbox.newRouterNodeChain(source);
         try { return new AndroidNodeChainCapture(original, inputs, identities, plan); }
@@ -53,7 +53,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         config = bounded(plan.config(), 4 * 1024 * 1024);
         sourceSHA256 = plan.sourceSHA256(); configSHA256 = plan.configSHA256();
         JSONObject record = new JSONObject(launchInput);
-        if (!"routervpn-node-chain-launch-input".equals(record.getString("kind")) || record.getInt("schema") != 1
+        if (!"routervpn-node-chain-launch-input".equals(record.getString("kind")) || record.getInt("schema") != sourceSchema(original.members)
                 || !"local".equals(record.getString("execution")) || !sourceSHA256.matches("[0-9a-f]{64}")
                 || !configSHA256.equals(digest(config)) || !sourceSHA256.equals(record.getString("source_sha256"))
                 || !configSHA256.equals(record.getString("config_sha256")) || !configSHA256.equals(record.getString("original_config_sha256"))) {
@@ -87,6 +87,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     }
 
     static String identityInput(AndroidNodeStore.ChainSource member) throws Exception {
+        if(member.imported)return "";
         member.requirePairedIdentity();
         return bounded(member.bundle().getJSONObject("profiles").getJSONObject("wg").toString(),16*1024*1024);
     }
@@ -112,6 +113,11 @@ final class AndroidNodeChainCapture implements AutoCloseable {
 
     /** Pure compiler input shared by the editor preview and the launch capture. */
     static String memberInput(AndroidNodeStore.ChainSource member, String mode, JSONObject profile) throws Exception {
+        if(member.imported) {
+            if(!"shadowsocks".equals(mode)||!member.profileId.equals(profile.getString("id"))||!"external".equals(profile.getString("node_kind"))||profile.has("node_proof_id")||profile.has("router_api")||profile.has("api_token"))throw new IllegalStateException("The imported source cannot borrow a paired Router identity.");
+            AndroidExternalPolicy.Captured captured=AndroidExternalPolicy.captureImportedEntry(member.external());
+            return bounded(Libbox.routerNodeChainImportedMemberInput(captured.source,captured.capture),MAX_INPUT);
+        }
         member.requirePairedIdentity();
         if (!member.profileId.equals(profile.getString("id")) || !member.proofId.equals(profile.getString("node_proof_id"))) {
             throw new IllegalStateException("The ordered compiler input lost its original paired member.");
@@ -124,6 +130,12 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         if (!"off".equals(layer) && !"shadowsocks".equals(mode)) start = bounded(assets.getJSONObject("shadowsocks").toString(), 16 * 1024 * 1024);
         String bootstrap = profile.has("dns_bootstrap") ? bounded(profile.getJSONObject("dns_bootstrap").toString(), 16384) : "";
         return bounded(Libbox.routerNodeChainMemberInput(mode, files, bounded(profile.toString(), 256 * 1024), start, bootstrap), MAX_INPUT);
+    }
+
+    static int sourceSchema(List<AndroidNodeStore.ChainSource> members) throws Exception {
+        int imported=0;for(int i=0;i<members.size();i++)if(members.get(i).imported){imported++;if(members.size()!=3||i!=1)throw new IllegalStateException("A custom node requires one paired first node and one paired final node.");}
+        if(imported>1)throw new IllegalStateException("This custom path supports one imported intermediate node.");
+        return imported==0?1:2;
     }
 
     JSONObject controlProfile() throws Exception { return original.control.profile(); }

@@ -59,12 +59,14 @@ final class AndroidOrderedPathSelection {
 
     List<String> prefixModes(String id) throws Exception {
         requireCurrent();AndroidNodeStore.ChainSource source=catalog.source(id);List<String> result=new ArrayList<>();
-        for(String mode:PREFIX_MODES)if(hasMode(source,mode))result.add(mode);
+        if(source.imported){if(members.size()==2&&!members.get(0).source.imported)result.add("shadowsocks");}
+        else for(String mode:PREFIX_MODES)if(hasMode(source,mode))result.add(mode);
         requireCurrent();return Collections.unmodifiableList(result);
     }
 
     static String prefixModeTitle(String mode) {
         switch(mode) {
+            case "shadowsocks":return "Custom Shadowsocks 2022 (AES-256-GCM)";
             case "wg":return "WireGuard";
             case "awg2-fast":return "AmneziaWG Fast";
             case "awg2-strong":return "AmneziaWG Strong";
@@ -75,7 +77,7 @@ final class AndroidOrderedPathSelection {
     void setFinal(String id) throws Exception {
         requireCurrent();
         AndroidNodeStore.ChainSource source=catalog.source(id);
-        if(!hasMode(source,"shadowsocks"))throw new IllegalStateException("The selected final node has no complete Shadowsocks source.");
+        if(source.imported||!hasMode(source,"shadowsocks"))throw new IllegalStateException("The selected final node has no complete Shadowsocks source.");
         for(int i=0;i<members.size()-1;i++)if(members.get(i).source.id.equals(id))throw new IllegalStateException("Choose a different final node.");
         Member previous=members.isEmpty()?null:members.get(members.size()-1),selected=new Member(source,"shadowsocks");
         if(members.isEmpty())members.add(selected);else members.set(members.size()-1,selected);
@@ -107,6 +109,7 @@ final class AndroidOrderedPathSelection {
     }
 
     private static void requirePrefixMode(AndroidNodeStore.ChainSource source,String mode) throws Exception {
+        if(source.imported){AndroidNodeStore.ChainSource.requireImported(source.external());if(!"shadowsocks".equals(mode))throw new IllegalStateException("Keep the original imported Shadowsocks transport.");return;}
         if(!PREFIX_MODES.contains(mode))throw new IllegalStateException("Choose WireGuard, AmneziaWG Fast or AmneziaWG Strong for this intermediate node.");
         if(!hasMode(source,mode))throw new IllegalStateException("The selected intermediate node has no complete "+prefixModeTitle(mode)+" source.");
     }
@@ -116,12 +119,14 @@ final class AndroidOrderedPathSelection {
         if(position<0||destination<0||position>=members.size()-1||destination>=members.size()-1)
             throw new IllegalStateException("Reorder the intermediate nodes without replacing the final node.");
         Member member=members.remove(position);members.add(destination,member);
+        try{requireBound();}catch(Exception failure){members.remove(destination);members.add(position,member);throw failure;}
     }
 
     void removePrefix(int position) throws Exception {
         requireCurrent();
         if(position<0||position>=members.size()-1)throw new IllegalStateException("Choose an intermediate node to remove.");
-        members.remove(position);
+        Member old=members.remove(position);
+        try{requireBound();}catch(Exception failure){members.add(position,old);throw failure;}
     }
 
     /** Use the real pure native compiler before publishing any selected node. */
@@ -142,7 +147,7 @@ final class AndroidOrderedPathSelection {
             identities.put(AndroidNodeChainCapture.identityInput(member.source));
             sources.add(member.source);modes.add(member.mode);
         }
-        String source=new JSONObject().put("schema",1).put("execution","local").put("nodes",inputs).put("identity_sources",identities).toString();
+        String source=new JSONObject().put("schema",AndroidNodeChainCapture.sourceSchema(sources)).put("execution","local").put("nodes",inputs).put("identity_sources",identities).toString();
         if(source.getBytes(StandardCharsets.UTF_8).length>AndroidNodeChainCapture.MAX_INPUT)throw new IllegalStateException("The complete ordered path exceeds its private source bound.");
         RouterNodeChain preview=Libbox.newRouterNodeChain(source);
         if(preview==null)throw new IllegalStateException("The native compiler returned no complete ordered path.");
@@ -164,8 +169,10 @@ final class AndroidOrderedPathSelection {
         long size=0;Set<String> proofs=new HashSet<>();
         for(Member member:members) {
             size+=member.source.bytes().length;
-            if(!proofs.add(member.source.proofId))throw new IllegalStateException("Ordered members must retain distinct paired node identities.");
+            if(!proofs.add(member.source.identityKey()))throw new IllegalStateException("Ordered members must retain distinct paired node identities.");
         }
+        List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();for(Member member:members)sources.add(member.source);
+        AndroidNodeChainCapture.sourceSchema(sources);
         if(size>AndroidNodeStore.MAX_CHAIN_SOURCE)throw new IllegalStateException("The complete ordered path exceeds its private source bound.");
     }
 

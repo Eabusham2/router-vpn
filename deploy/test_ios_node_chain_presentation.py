@@ -111,6 +111,20 @@ TESTS = r'''
  }
  static func run()async throws {
   do {
+   var nodes=try sources(3)
+   var custom=nodes[1].routerProfiles[0]
+   custom.nodeKind="external";custom.nodeProofID=nil;custom.routerAPI="";custom.apiToken=""
+   custom.external=try JSONDecoder().decode(ExternalNodeConfig.self,from:encoded(["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":"198.51.100.76","port":443,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:0,count:32).base64EncodedString()]]))
+   custom.startLayer="off";nodes[1].routerProfiles=[custom];nodes[1].nodeProofID="";nodes[1].profiles=[:]
+   nodes[2].routerProfiles[0].multihopNodes?[1].mode="shadowsocks"
+   let captured=try IOSNodeChainCapture.compile(bundles:nodes.map{try bundleData($0)});defer{try? captured.plan.close()}
+   let points=IOSNodeChainPresentation.captured(source:Data(captured.launchInput.utf8),bundleData:try bundleData(nodes[2]))
+   try check("custom middle map retains original external identity",points?.count==3 && points?[1].id==custom.id && points?[1].kind=="external" && points?[1].mode=="shadowsocks")
+   var value=progress(3),rows=value["prefixes"] as! [[String:Any]];rows[1]["kind"]="public-path";value["prefixes"]=rows
+   let text=IOSNodeChainPresentation.progress(value,expected:nodes.map(\.selectedRouterID))
+   try check("custom middle timing uses truthful public path wording",text?.contains("public path via custom node")==true && text?.components(separatedBy:"verification HTTP response").count==3)
+  }
+  do {
    let(model,_,_)=try setup(4,true)
    let modes=["awg2-fast","awg2-strong","wg","shadowsocks"]
    try check("active mixed path retains exact raw modes",model.iosVisibleOrderedNodePath?.compactMap(\.mode)==modes)

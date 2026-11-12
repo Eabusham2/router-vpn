@@ -974,3 +974,32 @@ struct ClientBundle: Codable {
         socks5Password = ""
     }
 }
+
+/// Original standalone imported SS source, shared by ordinary and ordered
+/// producers. It carries external authority only, never a paired Router proof.
+enum IOSImportedShadowsocksSource {
+    static func eligible(_ profile: RouterProfile) -> Bool {
+        guard profile.normalizedNodeKind == "external", let external = profile.external,
+              external.protocolName == "shadowsocks", let ss = external.shadowsocks,
+              ss.method == "2022-blake3-aes-256-gcm", !ss.password.contains(":"),
+              let key = Data(base64Encoded: ss.password), key.count == 32, key.base64EncodedString() == ss.password,
+              external.startLayer == nil, [nil,"","off"].contains(profile.startLayer),
+              profile.nodeProofID == nil || profile.nodeProofID == "", profile.routerAPI.isEmpty, profile.apiToken.isEmpty else { return false }
+        // Literal-only admission never consults the device resolver.
+        return literal(ss.server)
+    }
+    private static func literal(_ host: String) -> Bool {
+        if host.contains(":") { return !host.contains("%") && host.range(of:"\\A[0-9A-Fa-f:]+\\z",options:.regularExpression) != nil }
+        let parts=host.split(separator:".",omittingEmptySubsequences:false)
+        return parts.count==4 && parts.allSatisfy{ part in !part.isEmpty && part.count<=3 && part.allSatisfy(\.isNumber) && (part.count==1 || part.first != "0") && UInt8(part) != nil }
+    }
+    static func capture(_ profile: RouterProfile) throws -> (config: String, capture: String) {
+        guard let external=profile.external, external.protocolName=="shadowsocks", let ss=external.shadowsocks else { throw IOSMultihopNodeSelection.issue("The original imported Shadowsocks source is missing.") }
+        let outbound:[String:Any] = ["tag":"custom-exit","type":"shadowsocks","server":ss.server,"server_port":ss.port,"method":ss.method,"password":ss.password]
+        let config:[String:Any] = ["inbounds":[["type":"tun","tag":"tun-in","address":["172.29.94.1/30","fd29:94::1/126"],"mtu":1280,"auto_route":true,"strict_route":true,"stack":"system"]],"endpoints":[],"outbounds":[outbound],"route":["final":"custom-exit","auto_detect_interface":true]]
+        let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
+        let frozen=try JSONSerialization.jsonObject(with:encoder.encode(profile))
+        let selected:[String:Any] = ["schema":1,"exit_id":profile.id,"protocol":external.protocolName,"expected_public_ip":external.expectedPublicIP,"profile":frozen]
+        return (String(decoding:try JSONSerialization.data(withJSONObject:config,options:[.sortedKeys]),as:UTF8.self),String(decoding:try JSONSerialization.data(withJSONObject:selected,options:[.sortedKeys]),as:UTF8.self))
+    }
+}

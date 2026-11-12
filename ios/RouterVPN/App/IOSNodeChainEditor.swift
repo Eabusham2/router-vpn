@@ -15,7 +15,7 @@ struct IOSNodeChainDraft {
         (2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) &&
             nodes.allSatisfy({ $0.id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil }) &&
             Set(nodes.map(\.id)).count == nodes.count && nodes.last?.id == controlID &&
-            nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) && nodes.last?.mode == "shadowsocks"
+            nodes.dropLast().enumerated().allSatisfy({ position, node in IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || nodes.count == 3 && position == 1 && node.mode == "shadowsocks" }) && nodes.last?.mode == "shadowsocks"
     }
 
     mutating func choose(_ id: String, at position: Int) throws {
@@ -28,7 +28,7 @@ struct IOSNodeChainDraft {
 
     mutating func chooseMode(_ mode: String, at position: Int) throws {
         guard nodes.indices.contains(position), position < nodes.count - 1,
-              IOSMultihopNodeSelection.supportsNativePrefix(mode) else {
+              (IOSMultihopNodeSelection.supportsNativePrefix(mode) || nodes.count == 3 && position == 1 && mode == "shadowsocks") else {
             throw IOSMultihopNodeSelection.issue("Choose WireGuard, AWG2 Fast or AWG2 Strong for a preceding node.")
         }
         nodes[position].mode = mode
@@ -74,8 +74,8 @@ extension RouterVPNModel {
         let source = try JSONDecoder().decode(ClientBundle.self, from: data)
         guard source.routerProfiles.filter({ $0.id == id }).count == 1,
               let profile = source.routerProfiles.first(where: { $0.id == id }),
-              profile.normalizedNodeKind == "router-vpn", profile.external == nil else {
-            throw IOSMultihopNodeSelection.issue("Choose independently linked Router VPN nodes.")
+              (profile.normalizedNodeKind == "router-vpn" && profile.external == nil || IOSImportedShadowsocksSource.eligible(profile)) else {
+            throw IOSMultihopNodeSelection.issue("Choose independently linked Router nodes or the supported original custom intermediate.")
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         return Self.iosStrategyDigest(try encoder.encode(source))
@@ -87,7 +87,7 @@ extension RouterVPNModel {
             throw IOSMultihopNodeSelection.issue("Choose the final Router VPN node while the VPN and temporary tests are idle.")
         }
         var fingerprints: [String: String] = [:]
-        for profile in allNodeProfiles where profile.normalizedNodeKind == "router-vpn" && profile.external == nil {
+        for profile in allNodeProfiles where profile.normalizedNodeKind == "router-vpn" && profile.external == nil || IOSImportedShadowsocksSource.eligible(profile) {
             fingerprints[profile.id] = try? iosNodeChainEditorFingerprint(profile.id)
         }
         guard fingerprints[selected.id] != nil else {

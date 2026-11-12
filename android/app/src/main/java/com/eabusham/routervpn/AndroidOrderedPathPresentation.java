@@ -13,9 +13,10 @@ import java.util.List;
 final class AndroidOrderedPathPresentation {
     static final class Member {
         final String id, name, mode;
+        final boolean imported;
         final double httpResponseMs;
         Member(AndroidNodeStore.ChainSource source,String mode,double response)throws Exception {
-            id=source.id;name=source.profile().optString("name",source.profileId);this.mode=mode;httpResponseMs=response;
+            id=source.id;imported=source.imported;name=imported?source.external().name:source.profile().optString("name",source.profileId);this.mode=mode;httpResponseMs=response;
         }
     }
     final List<Member> members;
@@ -57,6 +58,7 @@ final class AndroidOrderedPathPresentation {
             if(live) {
                 JSONObject prefix=prefixes.getJSONObject(i);
                 if(prefix.optInt("position",-1)!=i||!sources.get(i).profileId.equals(prefix.optString("profile_id"))||!prefix.optBoolean("proven"))throw new IllegalStateException("The ordered response belongs to another prefix.");
+                if(sources.get(i).imported ? !"public-path".equals(prefix.optString("kind")) : prefix.has("kind")&&!"private-node".equals(prefix.optString("kind")))throw new IllegalStateException("The ordered proof changed its private or public path identity.");
                 ms=prefix.getDouble("response_ms");
                 if(!Double.isFinite(ms)||ms<=0)throw new IllegalStateException("The ordered HTTP proof response is unavailable.");
             }

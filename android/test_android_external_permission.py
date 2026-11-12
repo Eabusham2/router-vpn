@@ -73,6 +73,7 @@ final class AndroidStandardExitStore {
  static String snapshot(Entry e)throws Exception{return new JSONObject().put("startup_mode",e.startupMode).put("auto_connect",e.autoConnect).put("id",e.id).put("name",e.name).put("protocol",e.protocol).put("secret",e.secret).put("policy",e.policy).put("expected",e.expectedPublicIp).put("openvpn_response_probes",e.responseMap).toString();}
 }
 final class AndroidExternalPolicy {
+ static JSONObject profile(AndroidStandardExitStore.Entry entry)throws Exception{throw new AssertionError("Imported ordered native capture belongs to the shipping shared-compiler composition gate.");}
  static boolean supports(String p){return List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn").contains(p);}
  static String protocol(String p){return p.equals("http")?"http-connect":p.equals("https")?"https-connect":p;}
 }

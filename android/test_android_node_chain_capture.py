@@ -407,8 +407,32 @@ public final class NodeChainCaptureHarness {
    check(!startup.startupCapturePending&&startup.startupCaptureTicket==ticket+1&&AndroidStartupPolicy.cancellations==cancelled+1&&startup.connection.starts==0&&startup.uiCallbacks.isEmpty(),"Product cancelled startup capture fell through to a new connection");
   }finally{AndroidHomeStateStore.current=previous;}
  }
+
+ static void importedMiddle(Path root)throws Exception{
+  Fixture f=new Fixture(root,"2/");AndroidStandardExitStore exits=new AndroidStandardExitStore(f.context);
+  AndroidStandardExitStore.Entry custom=new AndroidStandardExitStore.Entry();custom.id="1234567890abcdef1234567890abcdef";custom.name="Original custom middle";custom.protocol="shadowsocks";custom.server="198.51.100.76";custom.serverPort=443;custom.expectedPublicIp="203.0.113.76";custom.method="2022-blake3-aes-256-gcm";custom.secret=Base64.getEncoder().encodeToString(new byte[32]);custom.policy.put("dns_mode","rescue").put("start_layer","off");exits.save(custom);
+  AndroidOrderedPathSelection editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+  check(editor.prefixModes(custom.id).equals(List.of("shadowsocks")),"original imported middle not offered by editor");editor.addPrefix(custom.id,"shadowsocks");
+  reject(()->editor.movePrefix(1,0),"imported source moved into physical first position");
+  AndroidNodeStore.ChainCapture saved=editor.save();check(saved.members.size()==3&&saved.members.get(1).imported&&saved.members.get(1).proofId.isEmpty(),"custom member borrowed paired identity");
+  try(AndroidNodeChainCapture capture=AndroidNodeChainCapture.compile(saved)){
+   JSONObject launch=new JSONObject(capture.launchInput),middle=new JSONObject(capture.memberInputs.get(1));
+   JSONObject profile=new JSONObject(middle.getString("capture")).getJSONObject("profile");
+   check(launch.getInt("schema")==2&&capture.identityInputs.get(1).isEmpty()&&middle.getString("kind").equals("routervpn-node-chain-imported-member"),"custom source did not retain typed schema2");
+   check(profile.getString("id").equals(custom.id)&&profile.getString("node_kind").equals("external")&&!profile.has("node_proof_id")&&!profile.has("api_token")&&!profile.has("router_api"),"custom source forged private Router authority");
+   try(AndroidNodeChainCapture replay=AndroidNodeChainCapture.reopen(capture.launchInput,saved)){check(replay.launchInput.equals(capture.launchInput),"custom middle replay changed original source");}
+  }
+  var row=f.profiles.add("Original custom middle route");String serialized=Files.readString(f.rows);check(!serialized.contains(custom.secret)&&!serialized.contains("api_token"),"saved custom route copied credentials");
+  f.profiles.load(row.id);check(f.profiles.currentOrderedPath().members.get(1).imported,"saved profile lost imported member");
+  AndroidNodeStore.ChainCapture live=f.profiles.currentOrderedPath();AndroidOrderedPathSelection stale=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+  String original=custom.name;custom.name="Replaced";exits.save(custom);custom.name=original;exits.save(custom);
+  reject(live::requireCurrent,"imported change-away/back revived old native source");reject(stale::save,"imported change-away/back revived old editor");
+  AndroidStandardExitStore.Entry changed=AndroidStandardExitStore.copy(custom);changed.method="aes-256-gcm";reject(()->AndroidNodeStore.ChainSource.requireImported(changed),"legacy SS admitted as custom middle");
+  changed.method=custom.method;changed.server="example.com";reject(()->AndroidNodeStore.ChainSource.requireImported(changed),"hostname middle bypassed literal source bound");
+ }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";
+  if(family.equals("imported")){importedMiddle(root);return;}
   if(family.equals("source")){sourceControls(root);return;}if(family.equals("generation")){generationControls(root);return;}
   if(family.equals("atomic")){captureAtomicity(root);return;}
   if(family.equals("restore")){roundtrip(root,"3/");return;}
@@ -428,7 +452,7 @@ public final class NodeChainCaptureHarness {
   sourceControls(root);generationControls(root);validationControls(root);compilationRace(root);captureAtomicity(root);
   editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);editorFinalBudget(root);editorHandlers(root);productHandoff(root);
   pairedIdentity(root);nativeIdentityReceipt(root);identityCompilerAdmission(root);editorMixed(root);editorMixedHandlers(root);
-  System.out.println("Android ordered sources: "+checks+" checks; actual Go compilation, exact all-member saved capture and rollback passed");
+  importedMiddle(root);System.out.println("Android ordered sources: "+checks+" checks; actual Go compilation, exact all-member saved capture and rollback passed");
  }
 }
 '''
@@ -499,7 +523,7 @@ def run(root, work, app, classes, jar, env):
     preview_start = editor.index("        RouterNodeChain preview=")
     preview_end = editor.index("        AndroidNodeStore.ChainCapture captured=", preview_start)
     publication_lock = "synchronized <T> T publishChainCatalog(ChainCatalog captured, ChainPublication<T> publication) throws Exception { synchronized (STORE_LOCK)"
-    source_guard = "!java.util.Arrays.equals(source.original, snapshotOptional(nodeFile(source.id)))"
+    source_guard = "!java.util.Arrays.equals(source.original, chainSourceBytes(source))"
     epoch_guard = "captured.generation != selectionGeneration"
     capture_lock = "synchronized ChainCapture captureChain(String controlId) throws Exception { synchronized (STORE_LOCK)"
     stage_start = store.index("    private void stageOrderedNodes(")
@@ -507,6 +531,7 @@ def run(root, work, app, classes, jar, env):
     stage = store[stage_start:stage_end]
     assert stage.count("for(int i=0;i<members.length();i++)") == 1
     controls = (
+        ("imported", "AndroidNodeStore", node.replace("source.importedGeneration!=AndroidStandardExitStore.publicationGeneration()", "false"), "imported change-away/back revived old native source"),
         ("native-identity", "AndroidNodeChainCapture", capture.replace('record.getJSONArray("identity_sources")', 'record.has("identity_sources")?record.getJSONArray("identity_sources"):new JSONArray(identityInputs)'), "Android accepted a different native identity inventory: missing"),
         ("native-identity", "AndroidNodeChainCapture", capture.replace('if(!identityInputs.get(i).equals(returnedIdentities.getString(i)))', 'if(false)'), "Android accepted a different native identity inventory: replaced"),
         ("identity-compiler", "AndroidOrderedPathSelection", editor.replace('.put("identity_sources",identities)', ''), "ordered editor skipped full native identity source validation"),

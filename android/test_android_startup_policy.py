@@ -162,6 +162,7 @@ MULTIHOP=MULTIHOP.replace('// MULTIHOP_CAPTURE_TYPES',P.MULTIHOP_CAPTURE_TYPES.r
 
 EXTRA=r'''
 final class AndroidExternalPolicy {
+ static JSONObject profile(AndroidStandardExitStore.Entry entry)throws Exception{throw new AssertionError("Imported ordered native capture belongs to the shipping shared-compiler composition gate.");}
  static boolean supports(String s){return List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn").contains(s);}
  static String protocol(String s){return s.equals("http")?"http-connect":s.equals("https")?"https-connect":s;}
 }

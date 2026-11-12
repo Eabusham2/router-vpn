@@ -49,8 +49,9 @@ enum IOSNodeChainPresentation {
     private struct Member: Decodable {
         let schema: Int
         let kind: String
-        let mode: String
-        let profile_json: String
+        let mode: String?
+        let profile_json: String?
+        let capture: String?
     }
 
     static func planned(selected: RouterProfile?, catalog: [RouterProfile]) -> [IOSNodePathPoint]? {
@@ -62,8 +63,9 @@ enum IOSNodeChainPresentation {
         for (position, node) in nodes.enumerated() {
             let matches = catalog.filter { $0.id == node.id }
             guard matches.count == 1, let profile = matches.first,
-                  profile.normalizedNodeKind == "router-vpn", profile.external == nil,
-                  position == nodes.count - 1 ? node.mode == "shadowsocks" : IOSMultihopNodeSelection.supportsNativePrefix(node.mode) else { return nil }
+                  (profile.normalizedNodeKind == "router-vpn" && profile.external == nil &&
+                   (position == nodes.count - 1 ? node.mode == "shadowsocks" : IOSMultihopNodeSelection.supportsNativePrefix(node.mode)) ||
+                   nodes.count == 3 && position == 1 && node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile)) else { return nil }
             points.append(IOSNodePathPoint(profile, mode: node.mode))
         }
         return points
@@ -82,18 +84,29 @@ enum IOSNodeChainPresentation {
               bundle.routerProfiles.filter({ $0.id == bundle.selectedRouterID }).count == 1,
               let control = bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }),
               let launch = try? JSONDecoder().decode(Launch.self, from: source),
-              launch.schema == 1, launch.kind == "routervpn-node-chain-launch-input", launch.execution == "local",
+              (launch.schema == 1 || launch.schema == 2 && launch.nodes.count == 3), launch.kind == "routervpn-node-chain-launch-input", launch.execution == "local",
               launch.target_os == nil, launch.projection_kind == nil, launch.session_id == nil, launch.restored_mtu == nil,
               launch.source_sha256.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
               launch.config_sha256.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
               launch.original_config_sha256 == launch.config_sha256, (2...8).contains(launch.nodes.count) else { return nil }
         var profiles: [RouterProfile] = [], nodes: [IOSMultihopNodeSelection] = []
-        for raw in launch.nodes {
-            guard let member = try? JSONDecoder().decode(Member.self, from: Data(raw.utf8)),
-                  member.schema == 1, member.kind == "routervpn-node-launch-input",
-                  !member.profile_json.isEmpty, member.profile_json.utf8.count <= 256 * 1024,
-                  let profile = try? JSONDecoder().decode(RouterProfile.self, from: Data(member.profile_json.utf8)) else { return nil }
-            profiles.append(profile); nodes.append(.init(id: profile.id, mode: member.mode))
+        for (position,raw) in launch.nodes.enumerated() {
+            guard let member = try? JSONDecoder().decode(Member.self, from: Data(raw.utf8)), member.schema == 1 else { return nil }
+            let profile: RouterProfile, mode: String
+            if member.kind == "routervpn-node-chain-imported-member" {
+                guard launch.schema == 2, position == 1, launch.nodes.count == 3,
+                      let raw=member.capture, raw.utf8.count<=8*1024*1024,
+                      let capture=(try? JSONSerialization.jsonObject(with:Data(raw.utf8))) as? [String:Any],
+                      let saved=capture["profile"], let data=try? JSONSerialization.data(withJSONObject:saved),
+                      let source=try? JSONDecoder().decode(RouterProfile.self,from:data), IOSImportedShadowsocksSource.eligible(source) else { return nil }
+                profile=source; mode="shadowsocks"
+            } else {
+                guard member.kind == "routervpn-node-launch-input", !(launch.schema == 2 && position == 1),
+                      let raw=member.profile_json, !raw.isEmpty, raw.utf8.count<=256*1024, let transport=member.mode,
+                      let source=try? JSONDecoder().decode(RouterProfile.self,from:Data(raw.utf8)) else { return nil }
+                profile=source;mode=transport
+            }
+            profiles.append(profile); nodes.append(.init(id: profile.id, mode: mode))
         }
         guard profiles.last == control, control.multihopNodes == nodes else { return nil }
         return planned(selected: control, catalog: profiles)
@@ -114,7 +127,9 @@ enum IOSNodeChainPresentation {
                   let response = row["response_ms"] as? NSNumber, CFGetTypeID(response) != CFBooleanGetTypeID(),
                   response.doubleValue.isFinite, response.doubleValue > 0 else { return nil }
             let role = position == 0 ? "Entry" : position == expected.count - 1 ? "Exit" : "Hop \(position)"
-            lines.append(String(format: "%@ · %@: verification HTTP response %.1f ms", role, expected[position], response.doubleValue))
+            let publicPath = row["kind"] as? String == "public-path"
+            guard row["kind"] == nil || publicPath && expected.count == 3 && position == 1 || row["kind"] as? String == "private-node" else { return nil }
+            lines.append(String(format: publicPath ? "%@ · %@: public path via custom node %.1f ms" : "%@ · %@: verification HTTP response %.1f ms", role, expected[position], response.doubleValue))
         }
         if rows.count < expected.count { lines.append("Verified \(rows.count) of \(expected.count) nodes") }
         if boolean(value["dns_proven"]) == true { lines.append("Final-path DNS verified") }

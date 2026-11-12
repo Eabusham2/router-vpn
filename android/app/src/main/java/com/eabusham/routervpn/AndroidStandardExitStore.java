@@ -26,6 +26,15 @@ final class AndroidStandardExitStore {
     // Activities and connection-profile owners instantiate separate stores.
     // Their snapshot checks and private publication still share one transaction.
     private static final Object STORE_LOCK = new Object();
+    private static volatile long publicationGeneration;
+    static long publicationGeneration() { return publicationGeneration; }
+    interface OrderedPublication<T> { T run() throws Exception; }
+    static <T> T publishOrdered(long expected, OrderedPublication<T> operation) throws Exception {
+        synchronized(STORE_LOCK) {
+            if(expected!=publicationGeneration)throw new IllegalStateException("The imported ordered source changed while editing.");
+            return operation.run();
+        }
+    }
     private static final Set<String> SS_METHODS = new HashSet<>(Arrays.asList(
             "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305",
             "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"));
@@ -161,6 +170,7 @@ final class AndroidStandardExitStore {
         JSONArray array=new JSONArray(); for(Entry e:rows){validate(e);array.put(toJson(e));}
         byte[] raw=(new JSONObject().put("schema_version",SCHEMA_VERSION).put("exits",array).toString(2)+"\n").getBytes(StandardCharsets.UTF_8);
         if(raw.length>MAX_STORE)throw new IllegalStateException("Custom exit store exceeds safety limit.");
+        publicationGeneration++;
         AndroidPrivateFileStore.write(storeFile, raw, MAX_STORE);
     }
 

@@ -17,7 +17,7 @@ extension RouterVPNModel {
             entryID: control.multihopEntryID, entryMode: control.multihopEntryMode,
             exitID: control.multihopExitID, exitMode: control.multihopExitMode, controlID: control.id)
         var result: [ClientBundle] = [], proofs = Set<String>()
-        for node in nodes {
+        for (position, node) in nodes.enumerated() {
             var source: ClientBundle
             if node.id == control.id { source = selected }
             else if let capturedBundles {
@@ -32,6 +32,15 @@ extension RouterVPNModel {
                     throw IOSMultihopNodeSelection.issue("A selected chain node no longer has its linked private source.")
                 }
                 source = try JSONDecoder().decode(ClientBundle.self, from: data)
+            }
+            if let profile = source.routerProfiles.first(where: { $0.id == node.id }), profile.normalizedNodeKind == "external" {
+                guard source.routerProfiles.filter({ $0.id == node.id }).count == 1, nodes.count == 3, position == 1,
+                      node.mode == "shadowsocks", IOSImportedShadowsocksSource.eligible(profile) else {
+                    throw IOSMultihopNodeSelection.issue("A custom middle requires its original literal Shadowsocks 2022 source between two paired Router nodes.")
+                }
+                source.selectedRouterID = profile.id; source.nodeProofID = ""
+                source.routerAPI = profile.routerAPI; source.apiToken = profile.apiToken; source.endpoint = profile.endpoint
+                result.append(source); continue
             }
             guard source.routerProfiles.filter({ $0.id == node.id }).count == 1,
                   let profile = source.routerProfiles.first(where: { $0.id == node.id }),

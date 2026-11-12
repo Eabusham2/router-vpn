@@ -8,7 +8,7 @@ struct IOSNodeChainEditorView: View {
     @State private var detail = ""
 
     private var available: [RouterProfile] {
-        model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" && $0.external == nil }
+        model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" && $0.external == nil || IOSImportedShadowsocksSource.eligible($0) }
     }
 
     var body: some View {
@@ -23,10 +23,13 @@ struct IOSNodeChainEditorView: View {
                         } else {
                         Picker("Node \(position + 1)", selection: Binding(
                             get: { draft.nodes[position].id },
-                            set: { id in change { try draft.choose(id, at: position) } }
+                            set: { id in change {
+                                try draft.choose(id, at: position)
+                                if let profile=available.first(where:{$0.id==id}) { try draft.chooseMode(profile.normalizedNodeKind=="external" ? "shadowsocks" : "wg", at:position) }
+                            } }
                         )) {
                             Text("Choose linked node").tag("")
-                            ForEach(available.filter { candidate in candidate.id == node.id || !draft.nodes.contains(where: { $0.id == candidate.id }) }) { candidate in
+                            ForEach(available.filter { candidate in (candidate.normalizedNodeKind != "external" || draft.nodes.count == 3 && position == 1) && (candidate.id == node.id || !draft.nodes.contains(where: { $0.id == candidate.id })) }) { candidate in
                                 Text(candidate.name.isEmpty ? candidate.id : candidate.name).tag(candidate.id)
                             }
                             if !node.id.isEmpty && !available.contains(where: { $0.id == node.id }) {
@@ -37,10 +40,10 @@ struct IOSNodeChainEditorView: View {
                             get: { draft.nodes[position].mode },
                             set: { mode in change { try draft.chooseMode(mode, at: position) } }
                         )) {
-                            ForEach(IOSMultihopNodeSelection.nativePrefixModes, id: \.self) { mode in
+                            ForEach(available.first(where:{$0.id==node.id})?.normalizedNodeKind == "external" ? ["shadowsocks"] : IOSMultihopNodeSelection.nativePrefixModes, id: \.self) { mode in
                                 Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
                             }
-                            if !IOSMultihopNodeSelection.supportsNativePrefix(node.mode) {
+                            if !IOSMultihopNodeSelection.supportsNativePrefix(node.mode) && node.mode != "shadowsocks" {
                                 Text(IOSMultihopNodeSelection.transportName(node.mode)).tag(node.mode)
                             }
                         }
@@ -58,7 +61,7 @@ struct IOSNodeChainEditorView: View {
                 Button("Add preceding node") { change { try draft.append() } }.disabled(draft.nodes.count >= IOSMultihopNodeSelection.maximumNodes)
             }
             Section("Local execution") {
-                Text("Traffic follows this order through one VPN connection. Each preceding node uses its selected WireGuard or AWG2 transport; the selected final node uses Shadowsocks 2022.")
+                Text("Traffic follows this order through one VPN connection. Paired preceding nodes use WireGuard or AWG2. A three-node route may use one saved literal Shadowsocks 2022 AES-256-GCM custom node in the middle, with Start Layer Off. The selected final Router node uses Shadowsocks 2022.")
                 Text("Each node keeps its own saved credentials, Start Layer and protection settings. DNS uses the final node. Every node must pass verification before Connected.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Save ordered route") {

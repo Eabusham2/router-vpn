@@ -62,9 +62,12 @@ final class AndroidNodeStore {
     /** One immutable private source, including assets not selected by the UI. */
     static final class ChainSource {
         final String id, profileId, proofId;
+        final boolean imported;
+        final long importedGeneration;
+        private final AndroidStandardExitStore.Entry external;
         private final byte[] original;
         private ChainSource(String id, byte[] original) throws Exception {
-            this.id = id;
+            this.id = id; imported=false; importedGeneration=0; external=null;
             this.original = original.clone();
             JSONObject bundle = bundle();
             validateBundle(bundle);
@@ -77,8 +80,27 @@ final class AndroidNodeStore {
                 throw new IllegalStateException("Every ordered member needs its original paired profile identity.");
             }
         }
+        private ChainSource(AndroidStandardExitStore.Entry entry) throws Exception {
+            importedGeneration=AndroidStandardExitStore.publicationGeneration();
+            external=AndroidStandardExitStore.copy(entry);requireImported(external);
+            id=external.id;profileId=id;proofId="";imported=true;
+            original=AndroidStandardExitStore.snapshot(external).getBytes(StandardCharsets.UTF_8);
+            if(importedGeneration!=AndroidStandardExitStore.publicationGeneration())throw new IllegalStateException("The imported node changed during capture.");
+        }
+        static void requireImported(AndroidStandardExitStore.Entry entry) throws Exception {
+            if(entry==null||!"shadowsocks".equals(entry.protocol)||!"2022-blake3-aes-256-gcm".equals(entry.method)
+                    ||entry.startLayer!=null||!"off".equals(entry.policy.optString("start_layer","off")))throw new IllegalStateException("This ordered custom position requires an original Shadowsocks 2022 node with Start Layer Off.");
+            AndroidStandardExitStore.validate(entry);
+            AndroidNumericAddress.parse(entry.server);
+        }
+        AndroidStandardExitStore.Entry external() throws Exception {
+            if(!imported)throw new IllegalStateException("This ordered source is a paired Router node.");
+            return AndroidStandardExitStore.copy(external);
+        }
+        String identityKey() { return imported?"external:"+profileId:"router:"+proofId; }
         byte[] bytes() { return original.clone(); }
         JSONObject bundle() throws Exception {
+            if(imported)throw new IllegalStateException("An imported ordered source has no paired Router bundle.");
             String source = StandardCharsets.UTF_8.newDecoder()
                     .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
                     .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
@@ -86,8 +108,9 @@ final class AndroidNodeStore {
             io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(source);
             return new JSONObject(source);
         }
-        JSONObject profile() throws Exception { return selectedProfile(bundle()); }
+        JSONObject profile() throws Exception { return imported?AndroidExternalPolicy.profile(external()):selectedProfile(bundle()); }
         void requirePairedIdentity() throws Exception {
+            if(imported)throw new IllegalStateException("A custom node cannot claim a paired Router identity.");
             String peer=wireGuardPeerPublicKey(bundle());
             byte[] key;
             try { key=java.util.Base64.getDecoder().decode(peer); }
@@ -121,8 +144,9 @@ final class AndroidNodeStore {
         private final AndroidNodeStore owner;
         private final SelectionSnapshot selected;
         private final Map<String, String> fingerprints;
+        private final long importedGeneration;
         private ChainCatalog(AndroidNodeStore owner, List<Node> nodes, Map<String, String> fingerprints, SelectionSnapshot selected) {
-            this.owner = owner; this.selected = selected; this.selectedId = selected.id;
+            this.owner = owner; this.selected = selected; this.selectedId = selected.id; this.importedGeneration=AndroidStandardExitStore.publicationGeneration();
             this.nodes = Collections.unmodifiableList(new ArrayList<>(nodes));
             this.fingerprints = Collections.unmodifiableMap(new LinkedHashMap<>(fingerprints));
         }
@@ -280,6 +304,26 @@ final class AndroidNodeStore {
         }
     }
 
+    private List<Node> chainNodes() throws Exception {
+        List<Node> result=new ArrayList<>(list());
+        for(AndroidStandardExitStore.Entry entry:new AndroidStandardExitStore(context).list()) {
+            try { ChainSource.requireImported(entry); }
+            catch(IllegalArgumentException|IllegalStateException unsupported){continue;}
+            result.add(new Node(entry.id,entry.name,entry.server,null));
+        }
+        return result;
+    }
+    private ChainSource chainSource(String id) throws Exception {
+        if(safeId(id)&&nodeFile(id).isFile())return new ChainSource(id,readLimited(nodeFile(id),MAX_BUNDLE));
+        return new ChainSource(AndroidStandardExitStore.capturedEntry(context,id));
+    }
+    private byte[] chainSourceBytes(ChainSource source) throws Exception {
+        if(!source.imported)return snapshotOptional(nodeFile(source.id));
+        if(source.importedGeneration!=AndroidStandardExitStore.publicationGeneration())throw new IllegalStateException("The imported ordered source publication changed.");
+        byte[] bytes=AndroidStandardExitStore.snapshot(AndroidStandardExitStore.capturedEntry(context,source.id)).getBytes(StandardCharsets.UTF_8);
+        if(source.importedGeneration!=AndroidStandardExitStore.publicationGeneration())throw new IllegalStateException("The imported ordered source changed during observation.");
+        return bytes;
+    }
     synchronized ChainCapture captureChain(String controlId) throws Exception { synchronized (STORE_LOCK) {
         if (!safeId(controlId) || !controlId.equals(activeId())) throw new IllegalStateException("The ordered control is not the original selected Router node.");
         ChainSource control = new ChainSource(controlId, readLimited(nodeFile(controlId), MAX_BUNDLE));
@@ -289,8 +333,8 @@ final class AndroidNodeStore {
         Set<String> wanted = new HashSet<>(), linked = new HashSet<>();
         for (int i = 0; i < selected.length(); i++) wanted.add(selected.getJSONObject(i).getString("id"));
         long total = 0;
-        for (Node node : list()) {
-            ChainSource source = node.id.equals(control.id) ? control : new ChainSource(node.id, readLimited(node.file, MAX_BUNDLE));
+        for (Node node : chainNodes()) {
+            ChainSource source = node.id.equals(control.id) ? control : chainSource(node.id);
             if (!linked.add(source.profileId)) throw new IllegalStateException("The ordered catalog has duplicate selected profile identities.");
             if (wanted.contains(source.profileId)) {
                 total += source.original.length;
@@ -303,11 +347,16 @@ final class AndroidNodeStore {
         for (int i = 0; i < selected.length(); i++) {
             JSONObject reference = selected.getJSONObject(i);
             ChainSource source = catalog.get(reference.getString("id"));
-            if (source == null || !proofs.add(source.proofId)) throw new IllegalStateException("An ordered member is missing or shares another node's paired identity.");
-            source.requirePairedIdentity();
+            if (source == null || !proofs.add(source.identityKey())) throw new IllegalStateException("An ordered member is missing or shares another node's paired identity.");
             String mode = reference.getString("mode");
-            JSONObject assets = source.bundle().getJSONObject("profiles").optJSONObject(mode);
-            if (assets == null || assets.length() == 0) throw new IllegalStateException("An ordered member lost its exact selected transport assets.");
+            if(source.imported) {
+                if(selected.length()!=3||i!=1||!"shadowsocks".equals(mode))throw new IllegalStateException("A custom ordered node belongs only between the paired first and final nodes of this three-node path.");
+                ChainSource.requireImported(source.external());
+            } else {
+                source.requirePairedIdentity();
+                JSONObject assets = source.bundle().getJSONObject("profiles").optJSONObject(mode);
+                if (assets == null || assets.length() == 0) throw new IllegalStateException("An ordered member lost its exact selected transport assets.");
+            }
             members.add(source); modes.add(mode);
         }
         ChainSource last = members.get(members.size() - 1);
@@ -320,11 +369,11 @@ final class AndroidNodeStore {
     synchronized ChainCatalog captureChainCatalog() throws Exception { synchronized (STORE_LOCK) {
         requireMutable("editing an ordered Router path");
         SelectionSnapshot selected = snapshotSelection();
-        List<Node> nodes = list();
+        List<Node> nodes = chainNodes();
         Map<String, String> fingerprints = new LinkedHashMap<>();
         Set<String> profiles = new HashSet<>();
         for (Node node : nodes) {
-            ChainSource source = new ChainSource(node.id, readLimited(node.file, MAX_BUNDLE));
+            ChainSource source = chainSource(node.id);
             if (!profiles.add(source.profileId)) throw new IllegalStateException("The ordered catalog has duplicate selected profile identities.");
             fingerprints.put(node.id, hex(MessageDigest.getInstance("SHA-256").digest(source.original)));
         }
@@ -334,15 +383,15 @@ final class AndroidNodeStore {
     } }
 
     private synchronized void requireChainCatalog(ChainCatalog captured) throws Exception { synchronized (STORE_LOCK) {
-        if (captured == null || captured.owner != this || captured.selected.generation != selectionGeneration
+        if (captured == null || captured.owner != this || captured.selected.generation != selectionGeneration || captured.importedGeneration!=AndroidStandardExitStore.publicationGeneration()
                 || !captured.selected.id.equals(activeId())
                 || !java.util.Arrays.equals(captured.selected.activeBundle, snapshotOptional(activeBundleFile()))) {
             throw new IllegalStateException("The ordered editor's original selection or publication generation changed.");
         }
-        List<Node> current = list();
+        List<Node> current = chainNodes();
         if (current.size() != captured.nodes.size()) throw new IllegalStateException("The ordered node catalog changed while editing.");
         for (Node node : current) {
-            byte[] bytes = snapshotOptional(nodeFile(node.id));
+            byte[] bytes = chainSource(node.id).bytes();
             if (bytes == null || !hex(MessageDigest.getInstance("SHA-256").digest(bytes)).equals(captured.fingerprints.get(node.id))) {
                 throw new IllegalStateException("An original ordered editor source changed or disappeared.");
             }
@@ -352,11 +401,11 @@ final class AndroidNodeStore {
     private synchronized ChainSource chainCatalogSource(ChainCatalog captured, String id) throws Exception { synchronized (STORE_LOCK) {
         requireChainCatalog(captured);
         if (!captured.fingerprints.containsKey(id)) throw new IllegalStateException("The ordered editor lost an original saved node.");
-        byte[] bytes = readLimited(nodeFile(id), MAX_BUNDLE);
+        ChainSource source=chainSource(id);byte[] bytes=source.bytes();
         if (!captured.fingerprints.get(id).equals(hex(MessageDigest.getInstance("SHA-256").digest(bytes)))) {
             throw new IllegalStateException("The selected ordered editor source changed during capture.");
         }
-        return new ChainSource(id, bytes);
+        return source;
     } }
 
     interface ChainPublication<T> { T run() throws Exception; }
@@ -365,7 +414,7 @@ final class AndroidNodeStore {
     synchronized <T> T publishChainCatalog(ChainCatalog captured, ChainPublication<T> publication) throws Exception { synchronized (STORE_LOCK) {
         requireMutable("saving an ordered Router path");
         requireChainCatalog(captured);
-        return publication.run();
+        return AndroidStandardExitStore.publishOrdered(captured.importedGeneration,publication::run);
     } }
 
     private synchronized void requireChainCapture(ChainCapture captured) throws Exception { synchronized (STORE_LOCK) {
@@ -375,7 +424,7 @@ final class AndroidNodeStore {
             throw new IllegalStateException("The ordered source selection or publication generation changed.");
         }
         for (ChainSource source : captured.members) {
-            if (!java.util.Arrays.equals(source.original, snapshotOptional(nodeFile(source.id)))) {
+            if (!java.util.Arrays.equals(source.original, chainSourceBytes(source))) {
                 throw new IllegalStateException("An original ordered member changed or disappeared.");
             }
         }

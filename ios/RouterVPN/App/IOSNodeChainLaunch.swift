@@ -24,7 +24,10 @@ extension IOSRuntimeSelector {
     /// The app retains this source across its first system-manager lookup.
     static func selectNodeChain(_ capture: IOSNodeChainCapture) throws -> IOSRuntimeSelection {
         guard (2...IOSMultihopNodeSelection.maximumNodes).contains(capture.members.count),
-              capture.members.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }),
+              capture.members.dropLast().enumerated().allSatisfy({ position, member in
+                  IOSMultihopNodeSelection.supportsNativePrefix(member.mode) && member.profile["node_kind"] as? String == "router-vpn" ||
+                  capture.members.count == 3 && position == 1 && member.mode == "shadowsocks" && member.profile["node_kind"] as? String == "external"
+              }),
               let final = capture.members.last, final.mode == "shadowsocks" else {
             throw IOSMultihopNodeSelection.issue("This ordered path requires WireGuard or AWG2 nodes followed by a Shadowsocks 2022 final node.")
         }

@@ -156,6 +156,14 @@ enum IOSExternalExecution {
     static func validateLayerDraft(_ profile: RouterProfile) throws {
         guard let external = profile.external,
               external.matchesStartLayer(profile.startLayer) else { throw issue() }
+        if external.protocolName == "shadowsocks" {
+            let original = try IOSImportedShadowsocksSource.capture(profile)
+            var failure: NSError?
+            let valid = LibboxRouterValidateExternalTransport(original.config, original.capture, &failure)
+            if let failure { throw failure }
+            guard valid else { throw issue() }
+            return
+        }
         let host = try host(external)
         var exit: [String: Any] = ["tag": "custom-exit", "server": host]
         let packet = ExternalNodeConfig.packetProtocols.contains(external.protocolName) || external.protocolName == "openvpn"

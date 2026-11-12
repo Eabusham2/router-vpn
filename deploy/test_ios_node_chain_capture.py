@@ -23,6 +23,7 @@ assert GO.count(anchor) == 1
 GO = GO.replace(anchor, r'''
  case "chain-fixture":var count int;count,err=strconv.Atoi(r.Mode);if err==nil{value,err=chainFixture(count,r.Policy)}
  case "chain-awg-fixture":var count int;count,err=strconv.Atoi(r.Mode);if err==nil{value,err=chainFixtureModes(count,r.Policy,true)}
+ case "chain-imported":value,err=mobilemultihop.NodeChainImportedMemberInput(r.Source,r.Policy)
  case "chain-member":
   var node *mobilemultihop.NodeProfile;node,err=mobilemultihop.NewNodeProfile(r.Mode,r.Files,r.Policy,r.Source,r.Node)
   if err==nil{value,err=node.LaunchInput()}
@@ -96,6 +97,9 @@ public func LibboxTestLaunchFailure(_ failed:Bool){NativeLaunchFault.shared.set(
 func api<T>(_ error:UnsafeMutablePointer<NSError?>?,_ action:()throws->T)->T?{
  do{return try action()}catch let caught{error?.pointee=caught as NSError;return nil}
 }
+public func LibboxRouterNodeChainImportedMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String?{
+ api(error){try bridge(["Op":"chain-imported","Source":config,"Policy":capture])}
+}
 public func LibboxRouterNodeChainMemberInput(_ mode:String,_ files:String,_ profile:String,_ start:String,_ bootstrap:String,_ error:UnsafeMutablePointer<NSError?>?)->String?{
  api(error){try bridge(["Op":"chain-member","Mode":mode,"Files":files,"Policy":profile,"Source":start,"Node":bootstrap])}
 }
@@ -136,6 +140,31 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
  static func main(){defer{LibboxTestClose()};do{try run();print("Apple ordered native capture: PASS (\(checks) shipping Swift / shared Go checks; no native connection)")}
  catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
  static func run()throws {
+
+  var imported = try sources(3)
+  var middle = try object(imported[1]), custom = try profile(imported[1])
+  custom["id"]="original-custom-middle";custom["name"]="Original custom middle";custom["node_kind"]="external";custom.removeValue(forKey:"node_proof_id")
+  for key in ["router_api","api_token","adguard_ipv6","socks_host","socks_username","socks_password"] { custom[key]="" }
+  custom["socks_port"]=0
+  custom["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":"198.51.100.76","port":443,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:0,count:32).base64EncodedString()]]
+  middle["selectedRouterID"]="original-custom-middle";middle["routerProfiles"]=[custom];middle["profiles"]=[String:[String:String]]()
+  imported[1]=try data(middle)
+  imported[2]=try editProfile(imported[2]) { final in var refs=final["multihop_nodes"] as! [[String:Any]];refs[1]=["id":"original-custom-middle","mode":"shadowsocks"];final["multihop_nodes"]=refs }
+  let complete = try IOSNodeChainCapture.compile(bundles:imported);defer{try? complete.plan.close()}
+  let receipt=try object(Data(complete.launchInput.utf8))
+  try check("custom middle keeps external source and empty paired identity",receipt["schema"] as? Int == 2 && (receipt["identity_sources"] as? [String])?[1] == "" && complete.members[1].profile["node_kind"] as? String == "external" && complete.members[1].profile["node_proof_id"] == nil)
+  let reopened = try IOSNodeChainCapture.reopen(complete.launchInput,selectedProfile:profile(imported[2]));defer{try? reopened.plan.close()}
+  try check("typed external original source replays",reopened.launchInput == complete.launchInput)
+  for fault in ["private-token","proof","hostname","legacy","layer"] {
+   var changed=imported
+   changed[1]=try editProfile(changed[1]) { p in
+    if fault=="private-token" {p["api_token"]="borrowed-private-token"}
+    if fault=="proof" {p["node_proof_id"]=String(repeating:"a",count:64)}
+    if fault=="layer" {p["start_layer"]="aes-256-gcm"}
+    if fault=="hostname" || fault=="legacy" {var ext=p["external"] as! [String:Any];var ss=ext["shadowsocks"] as! [String:Any];ss[fault=="hostname" ? "server":"method"]=fault=="hostname" ? "example.com":"aes-256-gcm";ext["shadowsocks"]=ss;p["external"]=ext}
+   }
+   try reject("custom intermediate "+fault){_ = try IOSNodeChainCapture.compile(bundles:changed)}
+  }
   for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
    let bundles=try sources(4,layer,true),capture=try IOSNodeChainCapture.compile(bundles:bundles)
    defer{try? capture.plan.close()}
@@ -241,7 +270,7 @@ def main():
         options = ['swiftc', '-j', '1', '-swift-version', '6', '-module-cache-path', str(work / 'modules')]
         library = work / ('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(stub), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
-        command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSMultihopStartLayer.swift')]
+        command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSMultihopStartLayer.swift'), str(APP / 'Models.swift')]
         provider = APP / 'IOSNodeChainProviderCapture.swift'
         source = APP / 'IOSNodeChainCapture.swift'
         binary = work / 'tests'

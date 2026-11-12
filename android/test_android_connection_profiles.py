@@ -19,7 +19,7 @@ JAVA = ROOT / "android/app/src/main/java/com/eabusham/routervpn"
 
 GO = r'''package main
 import("encoding/json";"fmt";"io";"os";"router-vpn/internal/mobilemultihop";"router-vpn/mobile")
-func main(){raw,err:=io.ReadAll(os.Stdin);var args []string;if err==nil{err=json.Unmarshal(raw,&args)};var result string;if err==nil{switch {case len(args)==2:result,err=mobilemultihop.CompileAmneziaProfile(args[0],args[1]);case len(args)==1:err=libbox.RouterValidatePrivateNodeJSON(args[0]);case len(args)==6&&args[0]=="openvpn-endpoint":result,err=libbox.RouterOpenVPNEndpoint(args[1],args[2],args[3],args[4],args[5]);case len(args)==3&&args[0]=="openvpn-pairing":err=libbox.RouterValidateExternalOpenVPNPairing(args[1],args[2]);case len(args)==3&&args[0]=="openvpn-probes":err=libbox.RouterValidateExternalOpenVPNResponseProbes(args[1],args[2]);case len(args)==5&&args[0]=="openvpn-layers":err=libbox.RouterValidateExternalOpenVPNStartLayers(args[1],args[2],args[3],args[4]);default:panic("invalid fixture request")}};if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};fmt.Print(result)}'''
+func main(){raw,err:=io.ReadAll(os.Stdin);var args []string;if err==nil{err=json.Unmarshal(raw,&args)};var result string;if err==nil{switch {case len(args)==2:result,err=mobilemultihop.CompileAmneziaProfile(args[0],args[1]);case len(args)==1:err=libbox.RouterValidatePrivateNodeJSON(args[0]);case len(args)==3&&args[0]=="chain-imported":result,err=mobilemultihop.NodeChainImportedMemberInput(args[1],args[2]);case len(args)==3&&args[0]=="original-wg":result,err=mobilemultihop.CompileWireGuardProfile(args[1],args[2]);case len(args)==6&&args[0]=="openvpn-endpoint":result,err=libbox.RouterOpenVPNEndpoint(args[1],args[2],args[3],args[4],args[5]);case len(args)==3&&args[0]=="openvpn-pairing":err=libbox.RouterValidateExternalOpenVPNPairing(args[1],args[2]);case len(args)==3&&args[0]=="openvpn-probes":err=libbox.RouterValidateExternalOpenVPNResponseProbes(args[1],args[2]);case len(args)==5&&args[0]=="openvpn-layers":err=libbox.RouterValidateExternalOpenVPNStartLayers(args[1],args[2],args[3],args[4]);default:panic("invalid fixture request")}};if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};fmt.Print(result)}'''
 
 
 def method(name, signature):
@@ -66,6 +66,8 @@ public final class MemoryPreferences implements SharedPreferences {
 public final class Libbox {public static String routerCompileAmneziaProfile(String profile,String identity)throws Exception{return call(profile,identity);}
 public static void routerValidatePrivateNodeJSON(String source)throws Exception{call(source);}
 public static String version(){return "1.14.1";}
+public static String routerNodeChainImportedMemberInput(String config,String capture)throws Exception{return call("chain-imported",config,capture);}
+public static String routerCompileWireGuardProfile(String config,String node)throws Exception{return call("original-wg",config,node);}
 public static String routerOpenVPNEndpoint(String config,String user,String password,String tag,String detour)throws Exception{return call("openvpn-endpoint",config,user,password,tag,detour);}
 public static void routerValidateExternalOpenVPNPairing(String profile,String pairing)throws Exception{call("openvpn-pairing",profile,pairing);}
 public static void routerValidateExternalOpenVPNResponseProbes(String profile,String probes)throws Exception{call("openvpn-probes",profile,probes);}
@@ -76,7 +78,7 @@ private static String call(String...args)throws Exception{
 }
 
 BOUNDARIES = r'''package com.eabusham.routervpn;
-import org.json.*;import java.util.*;import java.io.*;import java.nio.file.*;import android.content.Context;import java.nio.charset.StandardCharsets;
+import org.json.*;import java.util.*;import java.io.*;import java.nio.file.*;import android.content.Context;import java.nio.charset.StandardCharsets;import io.nekohasekai.libbox.Libbox;
 final class AndroidPrivateFileStore {
  static String failPath="";static int failures;static int writes;static volatile Runnable beforeWrite;
  static void ensurePrivateDirectory(File file)throws Exception{Files.createDirectories(file.toPath());}
@@ -140,14 +142,18 @@ final class AndroidMultihopController {
 final class AndroidExternalPolicy {
  EXTERNAL_POLICY_FIELDS
  static final int MAX_CAPTURE=8*1024*1024;static boolean bounded(String value,int max){return value!=null&&!value.isEmpty()&&value.length()<=max;}
+ static final class Captured {final String source,capture;Captured(String source,String capture){this.source=source;this.capture=capture;}}
  EXTERNAL_METHODS
 }
+final class AndroidExternalEntry {JSONObject profile;String config;}
+final class AndroidDirectStandardExitController { EXTERNAL_TRANSPORT }
+
 '''
 
 PRODUCT = r'''package com.eabusham.routervpn;
 import android.content.*;import java.util.*;import org.json.*;import java.nio.charset.StandardCharsets;
 // Native-owned ordered display capture is exercised by the ordered usage suite.
-final class AndroidOrderedPathPresentation {static final class Member{String name,mode;double httpResponseMs;}boolean live;List<Member> members;}
+final class AndroidOrderedPathPresentation {static final class Member{String name,mode;double httpResponseMs;boolean imported;}boolean live;List<Member> members;}
 // Only UI rendering and runtime dispatch are doubled. The shipping handler reads
 // the same actual profile/node/exit stores used by the persistence regression.
 final class ProductConnectSurface extends Context {
@@ -915,14 +921,15 @@ def main():
         app.mkdir(parents=True)
         for name in ("AndroidExternalProtection", "AndroidKillSwitchPolicy", "AndroidConnectionProfileStore", "AndroidConnectionProfilePolicy", "AndroidConnectionSelection", "AndroidNodeStore", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidExternalAmnezia", "AndroidOpenVPN"):
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
-        methods = "\n".join(method("AndroidExternalPolicy.java", signature) for signature in ("static boolean supports(", "static String protocol(", "static void checkPolicy("))
+        methods = "\n".join(method("AndroidExternalPolicy.java", signature) for signature in ("static boolean supports(", "static String protocol(", "static void checkPolicy(", "static JSONObject profile(", "static Captured captureImportedEntry(", "private static Captured capture(", "private static JSONObject copy("))
+        methods = methods.replace("Base64.", "android.util.Base64.")
         policy_source = (JAVA / "AndroidExternalPolicy.java").read_text(encoding="utf-8")
         policy_fields = policy_source[policy_source.index("    private static final Set<String> POLICY"):policy_source.index("\n\n    static boolean supports", policy_source.index("    private static final Set<String> POLICY"))]
         controller = (JAVA / "AndroidMultihopController.java").read_text()
         captured = controller[controller.index("    static final class Source {"):controller.index("    private static final class EntryPrivate {")]
         captured += "\n" + "\n".join(method("AndroidMultihopController.java", signature) for signature in ("private static String sourceDigest(", "private static byte[] readBundleBytes("))
         imported_capture = "\n".join(method("AndroidImportedRouterPath.java", signature) for signature in ("static boolean supports(", "static void requireEntry(", "static AndroidMultihopController.Source captureSource(", "static AndroidStandardExitStore.Entry entry("))
-        (app / "Boundaries.java").write_text(BOUNDARIES.replace("EXTERNAL_METHODS", methods).replace("EXTERNAL_POLICY_FIELDS", policy_fields).replace("CAPTURE_SOURCE", captured).replace("IMPORTED_CAPTURE_METHODS", imported_capture), encoding="utf-8")
+        (app / "Boundaries.java").write_text(BOUNDARIES.replace("EXTERNAL_METHODS", methods).replace("EXTERNAL_POLICY_FIELDS", policy_fields).replace("CAPTURE_SOURCE", captured).replace("IMPORTED_CAPTURE_METHODS", imported_capture).replace("EXTERNAL_TRANSPORT", method("AndroidDirectStandardExitController.java", "static JSONObject customExitJson(")), encoding="utf-8")
         protection = "\n".join(method("ProductActivity.java", signature) for signature in ("private boolean isExternalSelected(", "private void setQuickKillSwitch(", "private void refreshSettingsState(", "private void setQuickDns("))
         connect = "\n".join(method("ProductActivity.java", signature) for signature in ("private void connectOrDisconnect(", "private void connectSavedOrderedPath("))
         (app / "ProductConnectSurface.java").write_text(PRODUCT.replace("PRODUCT_CONNECT", connect).replace("PRODUCT_PROTECTION", protection).replace("PRODUCT_IMPORTED", "\n".join(method("ProductActivity.java", signature) for signature in ("private void chooseImportedRouterFinal(", "private void chooseImportedRouterTransport(", "private void refreshMultihopSummary("))), encoding="utf-8")
