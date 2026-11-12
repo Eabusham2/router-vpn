@@ -59,7 +59,8 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
             "profile.nodeProofID == prior.nodeProofID", "profile.external == prior.external", "profile.apiToken == prior.apiToken",
             "try validate(selected.bundle, prepared)", "guard records == originalRecords", "try commitRecords(next)")),
         ("capture", "original selected sources", "func iosNodeChainBundles(", "static let ordinaryExternalHopProtocols", (
-            "controlID: control.id", "for node in nodes", "proofs.insert(proof).inserted",
+            "controlID: control.id", "for (position, node) in nodes.enumerated()", "proofs.insert(proof).inserted",
+            "nodes.count == 3, position == 1", "IOSImportedShadowsocksSource.eligible(profile)",
             "let files = source.profiles[node.mode], !files.isEmpty", "source.selectedRouterID = profile.id", "result.append(source)")),
     )
     for owner, label, begin, end, markers in scopes:
@@ -321,6 +322,8 @@ if not ordered_issues:
         ("profiles", "captures.count == nodes.count", "captures.count >= 2"),
         ("profiles", "profile.nodeProofID == capture.nodeProofID", "true"),
         ("profiles", "data == original, capture.preferences == saved.preferences", "data == original"),
+        ("capture", "nodes.count == 3, position == 1", "nodes.count >= 2"),
+        ("capture", "IOSImportedShadowsocksSource.eligible(profile)", "true"),
         ("store", "replacement.updated.profiles == original.profiles", "true"),
         ("store", "guard records == originalRecords", "guard true"),
     ):
