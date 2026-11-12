@@ -564,6 +564,20 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 		if err != nil || !found || runtime == nil || runtime.launch != h.launch || graph.ChainNodes != count || len(runtime.selection.Nodes) != count {
 			return errors.Join(err, errors.New("ordered graph lost its original full Linux runtime"))
 		}
+		status, err := exchangeDesktopNodeChainMeasurement(ctx, h.launch, func(call context.Context) error {
+			actual, err := capturedNativeMultihopRuntimeContext(call, a, a.cmd, graph)
+			if err != nil || actual != runtime || !a.nativeMultihopProofOwnerCurrentContext(call, runtime.selection, a.cmd) {
+				return errors.Join(err, errors.New("installed ordered measurement lost original owner"))
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("installed ordered prefix measurement: %w", err)
+		}
+		rows, err := desktopNodeChainMeasurementRows(status, runtime.selection.Nodes, 8<<20)
+		if err != nil || len(rows) != count {
+			return errors.Join(err, errors.New("installed ordered measurement omitted a captured prefix"))
+		}
 		h.launch.chain.mu.Lock()
 		proof := h.launch.chain.ready
 		if proof != nil {

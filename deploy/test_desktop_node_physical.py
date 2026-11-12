@@ -1127,7 +1127,7 @@ def execute_baseline_suite(baselines, suite):
     # Encrypted graph/layer and selected-DNS cases alone consumed 89.58 s on
     # Windows before the required pre-ready cases began. Keep those aggregate
     # bounds and every per-operation bound; each disjoint HY2 phase keeps 90 s.
-    duration = 180 if name in ("encrypted", "composite-credentials", "sip003-retained") else 90
+    duration = 180 if name in ("encrypted", "composite-credentials", "sip003-retained", "ordered-measurement") else 90
     if name == OPENVPN_CAPACITY_SUITE[0]:
         duration = 60
     status, output = baselines.execute(name, package, selector, duration)
@@ -1367,6 +1367,10 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                    ("TestDesktopBrokerContextExpiryDoesNotRetireOriginal", "TestDesktopBrokerContextRequiresExplicitObserver", "TestDesktopBrokerConfirmedLossSurvivesRacedCallerCancellation",
                     "TestServerTorCurrentContextExpiresWithoutRetiringLease", "TestServerTorCurrentContextKeepsCancellationSeparateFromIdentityLoss", "TestServerTorConfirmedLossSurvivesRacedCallerCancellation",
                     "TestObservationCancellationCannotHideConfirmedOwnerLoss", "TestObservationExpiryRequiresOriginalCaller", "TestPaddingNativeReceiptContextPreservesOwnerOnObserverExpiry")))
+    suites.append(("ordered-measurement", "./cmd/sing-box", "^TestRouterVPNDesktopNodeChainMeasurement",
+                   ("TestRouterVPNDesktopNodeChainMeasurementAdmissionRetainsReader",
+                    "TestRouterVPNDesktopNodeChainMeasurementExcludesMTUAndRetiredReader",
+                    "TestRouterVPNDesktopNodeChainMeasurementHTTPComposition")))
     suites.append(("command-observation-context", "./cmd/sing-box",
                    "^TestRouterVPNDesktop(NetworkProjectionContextPreservesObservationErrors|NativeNetworkProjectionCancelsHeldOwnerLock|StopInterruptsOriginalNetworkObserver)$",
                    ("TestRouterVPNDesktopNetworkProjectionContextPreservesObservationErrors", "TestRouterVPNDesktopNativeNetworkProjectionCancelsHeldOwnerLock", "TestRouterVPNDesktopStopInterruptsOriginalNetworkObserver")))

@@ -368,6 +368,9 @@ func (owner *routerVPNNodeMTU) command(request routerVPNNodeMTUCommand) error {
 	return owner.commandContext(ctx, request)
 }
 func (owner *routerVPNNodeMTU) commandContext(ctx context.Context, request routerVPNNodeMTUCommand) error {
+	if owner != nil && owner.chain != nil && owner.chain.measurementHold.Load() {
+		return routerVPNExternalFailure
+	}
 	if owner.chain != nil {
 		if err := owner.chain.current(ctx); err != nil {
 			return err
@@ -525,7 +528,7 @@ func routerVPNRunNodeMTUAllFamiliesCaptured(parent context.Context, directory, s
 			return err
 		}
 	}
-	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-chain-ready.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json", "node-protection-retired.json", "stopped.json"} {
+	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-chain-ready.json", "node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-measure-result.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json", "node-protection-retired.json", "stopped.json"} {
 		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 			return routerVPNExternalFailure
 		}
@@ -866,6 +869,9 @@ func routerVPNRunNodeMTULoopWithChain(parent, ctx context.Context, files *router
 			return nil
 		}
 		if err := chain.current(observe); err != nil {
+			return err
+		}
+		if err := chain.pollMeasurement(observe); err != nil {
 			return err
 		}
 		if owner.expire(time.Now()) != nil || openVPN == nil && owner.currentContext(observe) != nil {

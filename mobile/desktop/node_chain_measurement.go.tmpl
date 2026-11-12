@@ -1,0 +1,233 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+const routerVPNNodeChainMeasurementLimit = 128 << 10
+
+type routerVPNNodeChainMeasurementRequest struct {
+	Schema     int                                        `json:"schema"`
+	Request    string                                     `json:"request_id"`
+	Generation uint64                                     `json:"generation"`
+	Deadline   int64                                      `json:"deadline_at"`
+	Bytes      int                                        `json:"bytes"`
+	Path       string                                     `json:"path_id"`
+	Capture    mobilemultihop.DesktopNodeChainReadyRecord `json:"capture"`
+}
+
+type routerVPNNodeChainMeasurementResult struct {
+	routerVPNNodeChainMeasurementRequest
+	CompletedAt int64             `json:"completed_at"`
+	Status      hopmeasure.Status `json:"status"`
+}
+
+type routerVPNNodeChainMeasurement struct {
+	request    routerVPNNodeChainMeasurementRequest
+	raw        []byte
+	info       os.FileInfo
+	sourceInfo os.FileInfo
+	configInfo os.FileInfo
+	cancelInfo os.FileInfo
+	service    *hopmeasure.Service
+	cancel     context.CancelFunc
+	state      *routerVPNNodeChainProofState
+	started    bool
+}
+
+// The worker observes its immutable proved reader. The command loop retains
+// mutation ownership and checks that reader again before adopting any result.
+type routerVPNNodeChainMeasurementOwner struct {
+	owner *routerVPNNodeChainRuntime
+	state *routerVPNNodeChainProofState
+	chain *mobilemultihop.NodeChain
+}
+
+func (m *routerVPNNodeChainMeasurementOwner) MeasurementChainContext(ctx context.Context) (*mobilemultihop.NodeChain, error) {
+	if m == nil || m.owner == nil || m.state == nil || m.chain == nil || m.state.proof != m.chain {
+		return nil, routerVPNExternalFailure
+	}
+	if err := m.owner.nativeCurrent(ctx, m.state); err != nil {
+		return nil, err
+	}
+	return m.chain, nil
+}
+
+func (m *routerVPNNodeChainMeasurementOwner) BeginMeasurementContext(ctx context.Context) (func(), error) {
+	if _, err := m.MeasurementChainContext(ctx); err != nil {
+		return nil, err
+	}
+	if !m.owner.measurementHold.CompareAndSwap(false, true) {
+		return nil, routerVPNExternalFailure
+	}
+	var once sync.Once
+	release := func() { once.Do(func() { m.owner.measurementHold.Store(false) }) }
+	if _, err := m.MeasurementChainContext(ctx); err != nil {
+		return release, err
+	}
+	return release, nil
+}
+
+func (owner *routerVPNNodeChainRuntime) measurementRequestCurrent(ctx context.Context, request routerVPNNodeChainMeasurementRequest) error {
+	if owner == nil || owner.current(ctx) != nil || owner.mtu.record.Active || owner.mtu.record.Failure != "" ||
+		request.Capture.Validate(owner.policy, owner.transfer) != nil {
+		return routerVPNExternalFailure
+	}
+	state, record := owner.state.Load(), owner.mtu.record
+	if state == nil || request.Capture.Identity != owner.identity || request.Capture.Generation != state.generation ||
+		request.Path != record.Path || request.Capture.Reader != record.Reader || request.Capture.InterfaceName != record.Interface ||
+		request.Capture.InterfaceIndex != uint32(record.Index) || request.Capture.MTU != record.MTU {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func (owner *routerVPNNodeChainRuntime) measurementInputCurrent(ctx context.Context, op *routerVPNNodeChainMeasurement) error {
+	if op == nil || owner.measurementRequestCurrent(ctx, op.request) != nil || owner.state.Load() != op.state ||
+		owner.files.stopRequested(op.request.Capture.Identity.SessionID, op.request.Capture.Identity.ConfigSHA256) {
+		return routerVPNExternalFailure
+	}
+	info, err := owner.files.root.Lstat("node-chain-measure-request.json")
+	raw, readErr := owner.files.read("node-chain-measure-request.json", 16384)
+	configInfo, configStat := owner.files.root.Lstat("sing-box.json")
+	sourceInfo, sourceStat := owner.files.root.Lstat("node-chain-source.json")
+	config, configErr := owner.files.read("sing-box.json", mobilemultihop.NodeChainInputLimit)
+	source, sourceErr := owner.files.read("node-chain-source.json", mobilemultihop.NodeChainInputLimit)
+	defer clear(config)
+	defer clear(source)
+	if err != nil || readErr != nil || !os.SameFile(info, op.info) || !bytes.Equal(raw, op.raw) ||
+		configStat != nil || sourceStat != nil || !os.SameFile(configInfo, op.configInfo) || !os.SameFile(sourceInfo, op.sourceInfo) || configErr != nil || sourceErr != nil || string(config) != owner.policy.Config() || string(source) != owner.input {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+// Polling never waits for a transfer. The same loop keeps native heartbeats and
+// Stop processing alive while the service owns all network work and its hold.
+func (owner *routerVPNNodeChainRuntime) pollMeasurement(ctx context.Context) error {
+	if owner == nil {
+		return nil
+	}
+	if owner.measurement == nil {
+		info, err := owner.files.root.Lstat("node-chain-measure-request.json")
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		raw, readErr := owner.files.read("node-chain-measure-request.json", 16384)
+		var request routerVPNNodeChainMeasurementRequest
+		now := time.Now()
+		if err != nil || readErr != nil || !routerVPNMTUStrict(raw, &request) || request.Schema != 1 ||
+			!routerVPNExternalSession.MatchString(request.Request) || request.Request == owner.measurementLast ||
+			owner.measurementGeneration == ^uint64(0) || request.Generation != owner.measurementGeneration+1 ||
+			request.Bytes < 64<<10 || request.Bytes > hopmeasure.MaxBytes || request.Deadline <= now.UnixMilli() ||
+			request.Deadline > now.Add(hopmeasure.RequestTimeout).UnixMilli() ||
+			request.Capture.ObservedAt > now.UnixMilli() || now.UnixMilli()-request.Capture.ObservedAt > 2500 ||
+			owner.measurementRequestCurrent(ctx, request) != nil {
+			return routerVPNExternalFailure
+		}
+		state := owner.state.Load()
+		chain, ok := state.proof.(*mobilemultihop.NodeChain)
+		if !ok || chain == nil {
+			return routerVPNExternalFailure
+		}
+		service, err := chain.NewHopMeasurementContext(ctx, &routerVPNNodeChainMeasurementOwner{owner, state, chain})
+		if err != nil {
+			return err
+		}
+		work, cancel := context.WithDeadline(owner.ctx, time.UnixMilli(request.Deadline))
+		configInfo, configErr := owner.files.root.Lstat("sing-box.json")
+		sourceInfo, sourceErr := owner.files.root.Lstat("node-chain-source.json")
+		if configErr != nil || sourceErr != nil {
+			cancel()
+			_ = service.CloseContext(ctx)
+			return routerVPNExternalFailure
+		}
+		op := &routerVPNNodeChainMeasurement{request: request, raw: raw, info: info, configInfo: configInfo, sourceInfo: sourceInfo, service: service, cancel: cancel, state: state}
+		owner.measurement = op // Retain every returned service before admission/cleanup.
+		if err := owner.measurementInputCurrent(ctx, op); err != nil {
+			cancel()
+			return err
+		}
+		if info, err := owner.files.root.Lstat("node-chain-measure-cancel.json"); !errors.Is(err, os.ErrNotExist) {
+			body, readErr := owner.files.read("node-chain-measure-cancel.json", 16384)
+			if err != nil || readErr != nil || !bytes.Equal(body, raw) {
+				cancel()
+				return routerVPNExternalFailure
+			}
+			op.cancelInfo = info
+			cancel()
+		} else {
+			if err := service.StartContext(work, request.Request, request.Bytes); err != nil {
+				cancel()
+				return err
+			}
+			op.started = true
+		}
+	}
+	op := owner.measurement
+	if err := owner.measurementInputCurrent(ctx, op); err != nil {
+		op.service.Cancel(op.request.Request)
+		return err
+	}
+	if info, err := owner.files.root.Lstat("node-chain-measure-cancel.json"); !errors.Is(err, os.ErrNotExist) {
+		raw, readErr := owner.files.read("node-chain-measure-cancel.json", 16384)
+		if err != nil || readErr != nil || !bytes.Equal(raw, op.raw) || op.cancelInfo != nil && !os.SameFile(info, op.cancelInfo) {
+			op.service.Cancel(op.request.Request)
+			return routerVPNExternalFailure
+		}
+		op.cancelInfo = info
+		op.service.Cancel(op.request.Request)
+	}
+	var status hopmeasure.Status
+	if !op.started {
+		status = hopmeasure.Status{Request: op.request.Request, Stage: "cancelled", Complete: true, Drained: true, Failure: "Ordered measurement cancelled", Results: []hopmeasure.Result{}}
+	} else if json.Unmarshal([]byte(op.service.StatusContextJSON(ctx)), &status) != nil || status.Request != op.request.Request {
+		return routerVPNExternalFailure
+	}
+	if !status.Complete || !status.Drained {
+		return nil
+	}
+	if op.started {
+		if err := op.service.Drain(op.request.Request); err != nil {
+			return err
+		}
+	}
+	if owner.measurementHold.Load() || owner.measurementInputCurrent(ctx, op) != nil {
+		return routerVPNExternalFailure
+	}
+	result := routerVPNNodeChainMeasurementResult{routerVPNNodeChainMeasurementRequest: op.request, CompletedAt: time.Now().UnixMilli(), Status: status}
+	if result.CompletedAt > op.request.Deadline || op.cancelInfo != nil {
+		result.Status = hopmeasure.Status{Request: op.request.Request, Stage: "cancelled", Complete: true, Drained: true, Failure: "Ordered measurement cancelled", Results: []hopmeasure.Result{}}
+	}
+	if err := owner.files.publish("node-chain-measure-result.json", result); err != nil {
+		return err
+	}
+	if err := owner.measurementInputCurrent(ctx, op); err != nil {
+		return err
+	}
+	if op.cancelInfo != nil {
+		info, err := owner.files.root.Lstat("node-chain-measure-cancel.json")
+		if err != nil || !os.SameFile(info, op.cancelInfo) || owner.files.root.Remove("node-chain-measure-cancel.json") != nil {
+			return routerVPNExternalFailure
+		}
+	}
+	info, err := owner.files.root.Lstat("node-chain-measure-request.json")
+	if err != nil || !os.SameFile(info, op.info) || owner.files.root.Remove("node-chain-measure-request.json") != nil {
+		return routerVPNExternalFailure
+	}
+	if err := op.service.CloseContext(ctx); err != nil {
+		return err
+	}
+	op.cancel()
+	owner.measurementGeneration, owner.measurementLast, owner.measurement = op.request.Generation, op.request.Request, nil
+	return nil
+}

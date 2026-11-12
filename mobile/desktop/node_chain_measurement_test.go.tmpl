@@ -1,0 +1,237 @@
+package main
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// The control fixture supplies native reader boundaries, not encrypted traffic.
+// The installed ordered-host gate separately invokes this exact mailbox against
+// the actual child, encrypted prefixes and authenticated benchmark peers.
+func TestRouterVPNDesktopNodeChainMeasurementAdmissionRetainsReader(t *testing.T) {
+	for _, fault := range []string{"unproved-model", "request", "generation", "deadline", "bytes", "source", "config", "session", "engine", "network", "reader", "mtu", "path", "active"} {
+		t.Run(fault, func(t *testing.T) {
+			f := desktopNodeChainRuntimeFixture(t)
+			f.start(t)
+			request := routerVPNNodeChainMeasurementRequest{Schema: 1, Request: strings.Repeat("a", 32), Generation: 1, Deadline: time.Now().Add(time.Minute).UnixMilli(), Bytes: 65536, Path: f.mtu.record.Path, Capture: f.ready(t)}
+			if err := f.runtime.measurementRequestCurrent(context.Background(), request); err != nil {
+				t.Fatal("fixture lost initial owned reader", err)
+			}
+			switch fault {
+			case "request":
+				request.Request = "foreign"
+			case "generation":
+				request.Generation++
+			case "deadline":
+				request.Deadline = time.Now().Add(2 * time.Minute).UnixMilli()
+			case "bytes":
+				request.Bytes = 1
+			case "source":
+				request.Capture.SourceSHA256 = strings.Repeat("e", 64)
+			case "config":
+				request.Capture.Identity.ConfigSHA256 = strings.Repeat("e", 64)
+			case "session":
+				request.Capture.Identity.SessionID = strings.Repeat("e", 32)
+			case "engine":
+				request.Capture.Identity.EngineID = "replaced-box"
+			case "network":
+				request.Capture.Identity.NetworkID = "replaced-network"
+			case "reader":
+				request.Capture.Reader++
+			case "mtu":
+				request.Capture.MTU--
+			case "path":
+				request.Path = "foreign-path"
+			case "active":
+				f.mtu.record.Active = true
+			}
+			raw, _ := json.Marshal(request)
+			if err := os.WriteFile(f.runtime.files.root.Name()+"/node-chain-measure-request.json", raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.runtime.pollMeasurement(context.Background()); err == nil {
+				t.Fatal("unproved or substituted chain measured")
+			}
+			if f.runtime.measurement != nil || f.runtime.measurementHold.Load() {
+				t.Fatal("rejected admission borrowed measurement")
+			}
+			if _, err := f.runtime.files.root.Lstat("node-chain-measure-result.json"); !os.IsNotExist(err) {
+				t.Fatal("rejected admission fabricated result", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainMeasurementExcludesMTUAndRetiredReader(t *testing.T) {
+	f := desktopNodeChainRuntimeFixture(t)
+	f.start(t)
+	original := f.runtime.state.Load()
+	f.runtime.measurementHold.Store(true)
+	if err := f.runtime.beforeChange(context.Background(), 1380); err == nil {
+		t.Fatal("measurement admitted MTU mutation")
+	}
+	if original != f.runtime.state.Load() || original.revoked.Load() {
+		t.Fatal("rejected MTU retired original chain")
+	}
+	if err := f.runtime.heartbeat(context.Background(), f.mtu.record); err != nil {
+		t.Fatal("measurement stopped native heartbeat", err)
+	}
+	f.runtime.measurementHold.Store(false)
+	original.revoked.Store(true)
+	if err := f.runtime.nativeCurrent(context.Background(), original); err == nil {
+		t.Fatal("retired reader remained observable")
+	}
+}
+
+// A fresh test process gives the public TLS fixture its own trust pool. The
+// shipping NodeChain, HTTP transfer service, mailbox and MTU hold all execute;
+// physical TUN and encrypted links remain the installed-host gate's authority.
+func TestRouterVPNDesktopNodeChainMeasurementHTTPComposition(t *testing.T) {
+	if os.Getenv("ROUTERVPN_ORDERED_MEASURE_HTTP_CHILD") != "1" {
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		command := exec.CommandContext(ctx, executable, "-test.run=^TestRouterVPNDesktopNodeChainMeasurementHTTPComposition$", "-test.timeout=40s")
+		command.Env = append(os.Environ(), "ROUTERVPN_ORDERED_MEASURE_HTTP_CHILD=1")
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("HTTP/native mailbox composition: %v\n%s", err, output)
+		}
+		return
+	}
+	f := desktopNodeChainRuntimeFixture(t)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IPAddresses: []net.IP{net.ParseIP("1.1.1.1")}, IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, certificate, certificate, public, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := filepath.Join(t.TempDir(), "public.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", ca)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "ip=203.0.113.89\n") }))
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: private}}}
+	server.StartTLS()
+	defer server.Close()
+	f.runtime.factory = func(ctx context.Context, chain *mobilemultihop.NodeChain, current func(context.Context) error) (routerVPNNodeChainProof, mobilemultihop.NodeChainEngine, error) {
+		engine := &desktopNodeChainMeasurementHTTPFixture{desktopNodeChainEngineFixture: desktopNodeChainEngineFixture{identity: mobilemultihop.NodeChainIdentity{EngineID: "original-box", SessionID: f.runtime.policy.Metadata().SessionID, NetworkID: "original-network", SourceSHA256: chain.SourceSHA256(), ConfigSHA256: chain.ConfigSHA256()}, current: current, final: chain.FinalTag()}, peers: map[string]string{}, public: server.Listener.Addr().String(), dns: chain.DNSCapture()}
+		for i, proof := range chain.ProofInventory() {
+			target := fmt.Sprintf("10.%d.0.1:8787", 77+i)
+			token := fmt.Sprintf("ordered-private-token-%d", i)
+			peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Host != target || r.Header.Get("Authorization") != "Bearer "+token {
+					http.Error(w, "wrong captured prefix", 401)
+					return
+				}
+				switch r.URL.Path {
+				case "/health":
+					_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": proof.NodeID, "proof": "router-vpn-private-agent-v1"})
+				case "/api/benchmark/download":
+					w.Header().Set("Content-Length", "65536")
+					w.Header().Set("X-Routervpn-Benchmark", "download-v1")
+					w.Header().Set("X-Routervpn-Benchmark-Bytes", "65536")
+					_, _ = w.Write(make([]byte, 65536))
+				case "/api/benchmark/upload":
+					n, _ := io.Copy(io.Discard, r.Body)
+					_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "direction": "upload", "bytes": n, "server_receive_ms": 1, "peer": "captured", "proof": "authenticated tunnel-peer private throughput sink"})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(peer.Close)
+			engine.peers[proof.Tag+"/"+target] = peer.Listener.Addr().String()
+		}
+		return chain, engine, nil
+	}
+	f.start(t)
+	request := routerVPNNodeChainMeasurementRequest{Schema: 1, Request: strings.Repeat("b", 32), Generation: 1, Deadline: time.Now().Add(30 * time.Second).UnixMilli(), Bytes: 65536, Path: f.mtu.record.Path, Capture: f.ready(t)}
+	raw, _ := json.Marshal(request)
+	if err := os.WriteFile(filepath.Join(f.runtime.files.root.Name(), "node-chain-measure-request.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if err := f.runtime.pollMeasurement(context.Background()); err != nil {
+			t.Fatal("shipping native mailbox", err)
+		}
+		if err := f.runtime.heartbeat(context.Background(), f.mtu.record); err != nil {
+			t.Fatal("measurement blocked heartbeat", err)
+		}
+		if f.runtime.measurement == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("measurement did not drain")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	resultRaw, err := f.runtime.files.read("node-chain-measure-result.json", 128<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result routerVPNNodeChainMeasurementResult
+	if json.Unmarshal(resultRaw, &result) != nil || result.routerVPNNodeChainMeasurementRequest != request || !result.Status.Complete || !result.Status.Drained || result.Status.Failure != "" || len(result.Status.Results) != 3 || f.runtime.measurementHold.Load() {
+		t.Fatalf("incomplete native receipt: %s", resultRaw)
+	}
+	for i, row := range result.Status.Results {
+		if !row.Ready || row.Download == nil || row.Upload == nil || row.Download.Bytes != 65536 || row.Upload.Bytes != 65536 || i == 1 && row.Role != "intermediate" {
+			t.Fatal("missing real prefix transfer", row)
+		}
+	}
+	if _, err := f.runtime.files.root.Lstat("node-chain-measure-request.json"); !os.IsNotExist(err) {
+		t.Fatal("request not joined", err)
+	}
+}
+
+type desktopNodeChainMeasurementHTTPFixture struct {
+	desktopNodeChainEngineFixture
+	peers  map[string]string
+	public string
+	dns    mobilemultihop.NodeChainDNSCapture
+}
+
+func (e *desktopNodeChainMeasurementHTTPFixture) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if err := e.current(ctx); err != nil {
+		return nil, err
+	}
+	target := e.peers[tag+"/"+address]
+	if tag == e.final && address == "1.1.1.1:443" {
+		target = e.public
+	}
+	if target == "" {
+		return nil, errors.New("unowned native prefix destination")
+	}
+	return (&net.Dialer{}).DialContext(ctx, "tcp", target)
+}
+func (e *desktopNodeChainMeasurementHTTPFixture) DNSProofContext(ctx context.Context, capture mobilemultihop.NodeChainDNSCapture) error {
+	if capture != e.dns {
+		return errors.New("changed selected final DNS")
+	}
+	return e.current(ctx)
+}

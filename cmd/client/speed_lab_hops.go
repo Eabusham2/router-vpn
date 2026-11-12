@@ -38,6 +38,10 @@ func measureSpeedLabMultihopHopsContext(ctx context.Context, a *app, identity sp
 		return nil, err
 	}
 
+	if identity.Ordered != nil {
+		return measureSpeedLabOrderedHops(ctx, a, identity)
+	}
+
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
 		return nil, err
 	}

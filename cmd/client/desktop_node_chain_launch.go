@@ -15,14 +15,18 @@ import (
 // This adjunct seals source and proof observations inside the existing launch.
 // It owns no native process, protection, TUN, journal or independent registry.
 type desktopNodeChainLaunch struct {
-	policy    *mobilemultihop.DesktopNodeChainPolicy
-	selection multihopSelection
-	input     string
-	platform  *desktopNodeChainPlatformRuntime
-	capture   *desktopNodeChainHostCapture
-	mu        sync.Mutex
-	ready     *mobilemultihop.DesktopNodeChainReadyRecord
-	mtuPath   string
+	policy                *mobilemultihop.DesktopNodeChainPolicy
+	selection             multihopSelection
+	input                 string
+	platform              *desktopNodeChainPlatformRuntime
+	capture               *desktopNodeChainHostCapture
+	mu                    sync.Mutex
+	ready                 *mobilemultihop.DesktopNodeChainReadyRecord
+	mtuPath               string
+	measurementMu         sync.Mutex
+	measurementGeneration uint64
+	measurementLast       string
+	measurementRelease    func()
 }
 
 func newDesktopNodeChainLaunch(selection multihopSelection, session, target string) (*desktopNodeLaunch, error) {

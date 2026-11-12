@@ -296,6 +296,7 @@ func desktopRuntimeOwnedFile(name string) bool {
 		"latency-request.json", "latency-cancel.json", "latency-status.json", ".latency-status.json.pending",
 		"node-source.json", "imported-source.json", "node-chain-source.json", "node-protection-transfer.json", "node-protection-retired.json", ".node-protection-retired.json.pending",
 		"node-physical-handoff-ready.json", ".node-physical-handoff-ready.json.pending", "node-physical-handoff-ack.json",
+		"node-chain-measure-request.json", ".node-chain-measure-request.json.pending", "node-chain-measure-cancel.json", ".node-chain-measure-cancel.json.pending", "node-chain-measure-result.json", ".node-chain-measure-result.json.pending",
 		"node-ready.json", ".node-ready.json.pending", "node-chain-ready.json", ".node-chain-ready.json.pending",
 		"node-dns-request.json", ".node-dns-request.json.pending", "node-dns-cancel.json", ".node-dns-cancel.json.pending", "node-dns-result.json", ".node-dns-result.json.pending",
 		"external-journal-capture.json", "external-protection-transfer.json", "external-protection-retired.json", ".external-protection-retired.json.pending",
@@ -312,6 +313,18 @@ func cleanupDesktopNodeLaunch(launch *desktopNodeLaunch) error {
 	if launch == nil || launch.directory == "" {
 		return nil
 	}
+	retired := false
+	defer func() {
+		if retired && launch.chain != nil {
+			launch.chain.mu.Lock()
+			release := launch.chain.measurementRelease
+			launch.chain.measurementRelease = nil
+			launch.chain.mu.Unlock()
+			if release != nil {
+				release()
+			}
+		}
+	}()
 	launch.workspaceMu.Lock()
 	defer launch.workspaceMu.Unlock()
 	if launch.ownedNode != nil && (launch.ownedNode.attempt != nil || launch.ownedNode.process != nil) && !launch.ownedNode.retired {
@@ -370,5 +383,7 @@ func cleanupDesktopNodeLaunch(launch *desktopNodeLaunch) error {
 	if err = parent.Remove(name); err != nil { // Only an empty directory; never replacement contents.
 		return err
 	}
-	return launch.directoryRoot.Close()
+	err = launch.directoryRoot.Close()
+	retired = err == nil
+	return err
 }

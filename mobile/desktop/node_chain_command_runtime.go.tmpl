@@ -23,17 +23,21 @@ type routerVPNNodeChainFactory func(context.Context, *mobilemultihop.NodeChain, 
 // read the immutable generation through its atomic revocation capability. It
 // owns proof workers only; the original coordinator owns every native close.
 type routerVPNNodeChainRuntime struct {
-	ctx        context.Context
-	files      *routerVPNExternalFiles
-	policy     *mobilemultihop.DesktopNodeChainPolicy
-	input      string
-	transfer   string
-	ceiling    int
-	factory    routerVPNNodeChainFactory
-	mtu        *routerVPNNodeMTU
-	state      atomic.Pointer[routerVPNNodeChainProofState]
-	identity   mobilemultihop.NodeChainIdentity
-	generation uint64
+	ctx                   context.Context
+	files                 *routerVPNExternalFiles
+	policy                *mobilemultihop.DesktopNodeChainPolicy
+	input                 string
+	transfer              string
+	ceiling               int
+	factory               routerVPNNodeChainFactory
+	mtu                   *routerVPNNodeMTU
+	state                 atomic.Pointer[routerVPNNodeChainProofState]
+	identity              mobilemultihop.NodeChainIdentity
+	generation            uint64
+	measurement           *routerVPNNodeChainMeasurement
+	measurementGeneration uint64
+	measurementLast       string
+	measurementHold       atomic.Bool
 }
 
 type routerVPNNodeChainProofState struct {
@@ -89,16 +93,26 @@ func (owner *routerVPNNodeChainRuntime) nativeCurrent(ctx context.Context, state
 		owner.mtu == nil || owner.ctx.Err() != nil || ctx.Err() != nil {
 		return routerVPNExternalFailure
 	}
-	if err := owner.mtu.currentContext(ctx); err != nil {
+	// Worker observations use this immutable proved reader, not the command
+	// loop's mutable heartbeat record. MTU replacement first joins this state.
+	if err := owner.mtu.guardContext(ctx); err != nil {
 		return err
 	}
-	record := owner.mtu.record
-	if owner.mtu.inbound != state.inbound || record.Reader != state.record.Reader || record.Session != state.record.Session ||
-		record.Config != state.record.Config || record.Path != state.record.Path || record.Interface != state.record.Interface ||
-		record.Index != state.record.Index || record.MTU != state.record.MTU || state.revoked.Load() || owner.state.Load() != state {
+	actual, err := owner.mtu.engine.CurrentContext(ctx)
+	if err != nil || actual != state.inbound {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	reader, ok := state.inbound.(interface {
+		RouterVPNDesktopMTUInterfaceContext(context.Context) (string, int, int, error)
+	})
+	if !ok {
 		return routerVPNExternalFailure
 	}
-	return ctx.Err()
+	name, index, mtu, err := reader.RouterVPNDesktopMTUInterfaceContext(ctx)
+	if err != nil || name != state.record.Interface || index != state.record.Index || mtu != state.record.MTU || state.revoked.Load() || owner.state.Load() != state {
+		return routerVPNExternalFailure
+	}
+	return errors.Join(ctx.Err(), owner.mtu.guardContext(ctx))
 }
 
 func (owner *routerVPNNodeChainRuntime) attach(ctx context.Context, mtu *routerVPNNodeMTU) error {
@@ -186,6 +200,12 @@ func (owner *routerVPNNodeChainRuntime) current(ctx context.Context) error {
 		owner.nativeCurrent(ctx, state) != nil {
 		return routerVPNExternalFailure
 	}
+	record := owner.mtu.record
+	if owner.mtu.inbound != state.inbound || record.Reader != state.record.Reader || record.Session != state.record.Session ||
+		record.Config != state.record.Config || record.Path != state.record.Path || record.Interface != state.record.Interface ||
+		record.Index != state.record.Index || record.MTU != state.record.MTU {
+		return routerVPNExternalFailure
+	}
 	if err := state.proof.HealthyContext(ctx); err != nil {
 		return err
 	}
@@ -200,7 +220,7 @@ func (owner *routerVPNNodeChainRuntime) beforeChange(ctx context.Context, value 
 	if owner == nil {
 		return nil
 	}
-	if value < 1280 || value > owner.ceiling || owner.current(ctx) != nil {
+	if value < 1280 || value > owner.ceiling || owner.measurementHold.Load() || owner.current(ctx) != nil {
 		return routerVPNExternalFailure
 	}
 	return owner.close(ctx)
@@ -209,6 +229,13 @@ func (owner *routerVPNNodeChainRuntime) beforeChange(ctx context.Context, value 
 func (owner *routerVPNNodeChainRuntime) close(ctx context.Context) error {
 	if owner == nil {
 		return nil
+	}
+	if owner.measurement != nil {
+		if err := owner.measurement.service.CloseContext(ctx); err != nil {
+			return err
+		}
+		owner.measurement.cancel()
+		owner.measurement = nil
 	}
 	state := owner.state.Load()
 	if state != nil {

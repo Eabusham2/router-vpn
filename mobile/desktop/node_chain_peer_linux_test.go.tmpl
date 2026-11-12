@@ -424,6 +424,44 @@ func desktopNodeChainPeerStart(t *testing.T, request desktopNodeChainPeerRequest
 		inner, _ := desktopNodeChainInner(position, count)
 		target := net.JoinHostPort(inner, "8787")
 		service := desktopImportedWGSSHTTP(t, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Host != target {
+				http.NotFound(w, r)
+				return
+			}
+			if r.URL.Path == "/api/benchmark/download" || r.URL.Path == "/api/benchmark/upload" {
+				if r.Header.Get("Authorization") != "Bearer "+identity.APIToken {
+					prefix.denied.Add(1)
+					http.Error(w, "forbidden", http.StatusForbidden)
+					return
+				}
+				if prefix.held.Load() {
+					<-r.Context().Done()
+					return
+				}
+				if r.URL.Path == "/api/benchmark/download" {
+					n, err := strconv.Atoi(r.URL.Query().Get("bytes"))
+					if err != nil || n < 65536 || n > 8<<20 || r.Method != http.MethodGet || len(r.URL.Query()) != 1 || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+						http.NotFound(w, r)
+						return
+					}
+					w.Header().Set("Content-Length", strconv.Itoa(n))
+					w.Header().Set("X-Routervpn-Benchmark", "download-v1")
+					w.Header().Set("X-Routervpn-Benchmark-Bytes", strconv.Itoa(n))
+					_, _ = w.Write(make([]byte, n))
+					return
+				}
+				if r.Method != http.MethodPost || r.URL.RawQuery != "" || r.ContentLength < 65536 || r.ContentLength > 8<<20 || len(r.TransferEncoding) != 0 {
+					http.NotFound(w, r)
+					return
+				}
+				n, err := io.Copy(io.Discard, io.LimitReader(r.Body, (8<<20)+1))
+				if err != nil || n != r.ContentLength {
+					http.Error(w, "short upload", 400)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "direction": "upload", "bytes": n, "server_receive_ms": 1, "peer": "captured", "proof": "authenticated tunnel-peer private throughput sink"})
+				return
+			}
 			if r.Method != http.MethodGet || r.Host != target || r.URL.Path != "/health" || r.URL.RawQuery != "" || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
 				http.NotFound(w, r)
 				return

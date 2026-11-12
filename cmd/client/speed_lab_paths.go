@@ -77,6 +77,7 @@ type speedLabPathIdentity struct {
 	Graph           activeMultihopGraph
 	GraphOK         bool
 	Imported        *nativeMultihopRuntime
+	Ordered         *nativeMultihopRuntime
 	ImportedOpenVPN *nativeMultihopRuntime
 	Command         *exec.Cmd
 	Network         string
@@ -136,11 +137,14 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 		return speedLabPathIdentity{}, speedLabPath{}, errors.New("active multihop graph identity is unavailable")
 	}
 	var network string
-	var imported *nativeMultihopRuntime
-	if st.Mode == "multihop" && graphOK && graph.ImportedEntry {
+	var imported, ordered *nativeMultihopRuntime
+	if st.Mode == "multihop" && graphOK && (graph.ImportedEntry || graph.ChainNodes > 0) {
 		imported, err = capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
 		if err == nil {
 			network = imported.network
+			if graph.ChainNodes > 0 {
+				ordered, imported = imported, nil
+			}
 		}
 	} else {
 		network, err = physicalNetworkIdentityContext(ctx)
@@ -148,7 +152,7 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 	if err != nil {
 		return speedLabPathIdentity{}, speedLabPath{}, err
 	}
-	identity := speedLabPathIdentity{Tracker: tracker, SessionID: session.ID, StateToken: mtuStateSnapshotToken(st), RouterID: st.RouterID, Graph: graph, GraphOK: graphOK && st.Mode == "multihop", Imported: imported, Command: command, Network: network, ProfileToken: liveMeasurementProfileToken(profile), Options: [3]bool{st.DAITA, st.Jumbo, st.Socks}}
+	identity := speedLabPathIdentity{Tracker: tracker, SessionID: session.ID, StateToken: mtuStateSnapshotToken(st), RouterID: st.RouterID, Graph: graph, GraphOK: graphOK && st.Mode == "multihop", Imported: imported, Ordered: ordered, Command: command, Network: network, ProfileToken: liveMeasurementProfileToken(profile), Options: [3]bool{st.DAITA, st.Jumbo, st.Socks}}
 	if identity.Network == "" {
 		return speedLabPathIdentity{}, speedLabPath{}, errors.New("Speed Lab cannot capture the current physical network")
 	}
@@ -281,6 +285,16 @@ func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
 }
 
 func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speedLabPathIdentity) error {
+	if identity.GraphOK && identity.Graph.ChainNodes > 0 || identity.Ordered != nil {
+		if !identity.GraphOK || identity.Graph.ChainNodes < 2 || identity.Ordered == nil || identity.Imported != nil || identity.ImportedOpenVPN != nil || identity.Standard != nil || identity.External != nil || identity.Node != nil || identity.Tor != nil || identity.TorEntry != nil || identity.Linux != nil {
+			return errors.New("Speed Lab ordered identity changed topology")
+		}
+		owner, err := capturedNativeMultihopRuntimeContext(ctx, a, identity.Command, identity.Graph)
+		if err != nil || owner != identity.Ordered || owner.launch.chain == nil || !a.nativeMultihopProofOwnerCurrentContext(ctx, owner.selection, identity.Command) {
+			return errors.Join(err, errors.New("Speed Lab ordered owner changed"))
+		}
+	}
+
 	if identity.Imported != nil && (!identity.GraphOK || !identity.Graph.ImportedEntry || identity.External != nil || identity.Tor != nil || identity.Node != nil || identity.Linux != nil) {
 		return errors.New("Speed Lab imported identity belongs to another topology")
 	}
@@ -342,7 +356,9 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 		return errors.New("Speed Lab result became stale because the captured node policy or credentials changed")
 	}
 	var network string
-	if identity.Imported != nil {
+	if identity.Ordered != nil {
+		network, err = identity.Ordered.physicalNetworkContext(ctx)
+	} else if identity.Imported != nil {
 		network, err = identity.Imported.physicalNetworkContext(ctx)
 	} else {
 		network, err = physicalNetworkIdentityContext(ctx)

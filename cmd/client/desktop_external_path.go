@@ -367,6 +367,11 @@ func verifySpeedLabPath(ctx context.Context, a *app, identity speedLabPathIdenti
 			return err
 		}
 	}
+	if identity.Ordered != nil {
+		if err := proveDesktopNodeChainContext(ctx, a, identity.Ordered.selection, identity.Command); err != nil {
+			return err
+		}
+	}
 	if identity.Imported != nil {
 		if _, err := a.proveImportedNativeDNS(ctx, identity.Imported.selection, identity.Command); err != nil {
 			return errors.Join(err, ctx.Err())

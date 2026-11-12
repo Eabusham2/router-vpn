@@ -183,7 +183,7 @@ def need_imported_speed_lab_current() -> None:
     valid = (
         _native_module.native_multihop_platform_chain(read)
         and has(capture,
-            'if st.Mode == "multihop" && graphOK && graph.ImportedEntry {',
+            'if st.Mode == "multihop" && graphOK && (graph.ImportedEntry || graph.ChainNodes > 0) {',
             'imported, err = capturedNativeMultihopRuntimeContext(ctx, a, command, graph)',
             'Imported: imported')
         and has(validate,
@@ -206,7 +206,7 @@ def need_imported_speed_lab_current() -> None:
             }
         ''')
         and has(temporary,
-            'if identity.External != nil || identity.Standard != nil || identity.Imported != nil {',
+            'if identity.External != nil || identity.Standard != nil || identity.Imported != nil || identity.Ordered != nil {',
             'if err := verifySpeedLabPath(pathCtx, a, identity); err != nil { return err }')
         and legacy_bind == tokens('return bindNativeMultihopRuntimeContext(context.Background(), a, launch, sel, network)')
         and _native_module._ordered_once(bind,
