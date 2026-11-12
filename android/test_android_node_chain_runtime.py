@@ -10,6 +10,7 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,9 +92,17 @@ SOURCES[NATIVE + 'RouterNodeChain.java'] = r'''package io.nekohasekai.libbox;pub
  public void networkChanged(){cancelled=true;if(release!=null)release.countDown();}public String progressJSON(){return "{}";}
  public void close()throws Exception{closes++;if(failCloses-->0)throw new IllegalStateException("native ordered join pending");cancelled=true;}
 }'''
+SOURCES[NATIVE + 'RouterHopMeasurement.java'] = r'''package io.nekohasekai.libbox;public class RouterHopMeasurement {
+ public int starts,cancels,drains,closes;public String request="";public boolean invalidated;
+ public void networkChanged(){invalidated=true;}public void start(String id,long size){if(invalidated)throw new IllegalStateException("retired native measurement");request=id;starts++;}
+ public void startLatency(String id,String exit){throw new AssertionError("ordered transfer used external latency");}public void startResponse(String id,String exit){throw new AssertionError("ordered transfer used external response");}
+ public void cancel(String id){if(!request.equals(id))throw new AssertionError("cancelled another request");cancels++;}public void drain(String id){if(!request.equals(id))throw new AssertionError("drained another request");drains++;}
+ public String statusJSON(){return "{\"results\":[]}";}public void close(){invalidated=true;closes++;}
+}'''
 SOURCES[NATIVE + 'RouterMTUPlatform.java'] = 'package io.nekohasekai.libbox;public interface RouterMTUPlatform{}'
 SOURCES[NATIVE + 'RouterMTU.java'] = 'package io.nekohasekai.libbox;public class RouterMTU{}'
 SOURCES[NATIVE + 'Libbox.java'] = SOURCES[NATIVE + 'Libbox.java'].replace('public static void routerStrategyCloseService(CommandServer server)throws Exception{}', 'public static void routerStrategyCloseService(CommandServer server)throws Exception{server.checkedCloses++;if(server.failClose)throw new IllegalStateException("native Box drain pending");server.closed=true;}')[:-1] + r'''
+ public static RouterHopMeasurement routerNodeChainNewHopMeasurement(RouterNodeChain plan,CommandServer server)throws Exception{if(plan.server!=server||!plan.healthy())throw new IllegalStateException("unproved ordered measurement");return new RouterHopMeasurement();}
  public static RouterNodeChain mtuPlan;public static CommandServer mtuServer;public static RouterMTUPlatform mtuPlatform;
  public static RouterMTU routerNodeChainNewMTU(RouterNodeChain plan,CommandServer server,RouterMTUPlatform platform)throws Exception{
   if(plan.server!=server||!plan.healthy())throw new IllegalStateException("unproved or replaced ordered MTU");mtuPlan=plan;mtuServer=server;mtuPlatform=platform;return new RouterMTU();}
@@ -396,10 +405,23 @@ public final class OrderedRuntimeTest {
    reject(original::requireCurrent,"changed Home still authorized the original native source");
   }
  }
+ static void orderedMeasurement()throws Exception {
+  for(int count:new int[]{3,8})try(Fixture f=new Fixture(count)){
+   f.connected();AndroidNodeChainSession chain=f.owner();RouterHopMeasurement probe=(RouterHopMeasurement)get(f.service,"hopMeasurement");
+   check(probe!=null,"proved ordered chain never adopted native measurement");String request="a".repeat(32);
+   LayeredVpnService.HopMeasurementOwner owner=LayeredVpnService.captureHopMeasurement(request);owner.start();owner.status();
+   check(probe.starts==1&&probe.request.equals(request),"ordered path dispatched another native measurement");
+   f.source.valid=false;reject(owner::status,"changed intermediate source published ordered measurements");
+   owner.cancel();owner.drain();check(probe.cancels==1&&probe.drains==1,"stale source lost original measurement cleanup");f.source.valid=true;
+   chain.capture.plan.valid=false;reject(owner::status,"expired ordered proof published measurements");chain.capture.plan.valid=true;
+   f.stop();check(probe.invalidated&&probe.closes>0,"ordered Stop dropped native measurement without close");reject(owner::status,"retired ordered owner published measurements");
+  }
+ }
  public static void main(String[] args)throws Exception {
   Thread.UncaughtExceptionHandler previous=Thread.getDefaultUncaughtExceptionHandler();Thread.setDefaultUncaughtExceptionHandler((thread,failure)->uncaught.add(failure));
   try {
   String family=args.length==0?"all":args[0];
+  if(family.equals("all")||family.equals("measurement"))orderedMeasurement();
   if(family.equals("all")||family.equals("success"))success();if(family.equals("all")||family.equals("source"))staleSources();if(family.equals("all")||family.equals("cleanup"))pendingCleanup();if(family.equals("all")||family.equals("late"))lateDelivery();if(family.equals("all")||family.equals("proof"))ownedProof();if(family.equals("all")||family.equals("destroyed"))destroyedHost();if(family.equals("all")||family.equals("idle"))idleEpoch();if(family.equals("all")||family.equals("watchdog"))watchdog();if(family.equals("all")||family.equals("late-destroyed"))lateDestroyedProof();if(family.equals("all")||family.equals("preclaim"))preclaim();if(family.equals("all")||family.equals("same-runtime"))sameRuntimeReplacement();if(family.equals("all")||family.equals("publication"))publicationFence();if(family.equals("all")||family.equals("captured-drain"))capturedDrainRetry();if(family.equals("all")||family.equals("selection"))selectionOwnership();
   check(uncaught.isEmpty(),"native cleanup failure escaped the ordered worker and could terminate Android");
   System.out.println("Android ordered native host ownership: "+checks+" executable checks passed; OS/native handles doubled.");
@@ -409,6 +431,8 @@ public final class OrderedRuntimeTest {
 
 
 def main():
+    measurement_only = sys.argv[1:] == ['--measurement-only']
+    if sys.argv[1:] and not measurement_only: raise ValueError('Unknown ordered runtime test selection')
     jar = Path(os.environ.get('ANDROID_JSON_JAR', '/usr/share/java/com.android.json.jar'))
     if not jar.is_file() or not shutil.which('javac'):
         raise RuntimeError('JDK and the actual Android JSON library are required')
@@ -430,8 +454,10 @@ def main():
         command = ['javac', '--release', '17', '-encoding', 'UTF-8', '-proc:none', '-cp', str(jar), '-d', str(classes), *map(str, src.rglob('*.java'))]
         subprocess.run(command, check=True, timeout=60)
         run = ['java', '-cp', os.pathsep.join((str(classes), str(jar))), 'com.eabusham.routervpn.OrderedRuntimeTest']
-        subprocess.run(run, check=True, timeout=120)
+        subprocess.run(run + (["measurement"] if measurement_only else []), check=True, timeout=120)
         controls = (
+            ('LayeredVpnService', '                adoptHopMeasurement(capturedChain.newHopMeasurement(), ownedServer, generation);', '', 'measurement', 'proved ordered chain never adopted native measurement'),
+            ('LayeredVpnService', 'if(chain!=service.nodeChainSession || chain!=null&&!chain.healthy())', 'if(false)', 'measurement', 'changed intermediate source published ordered measurements'),
             ('AndroidNodeChainSession', '        value.requireFiles();', '', 'source', 'stale ordered source/proof reached Connected: launch'),
             ('AndroidNodeChainSession', '        capture.requireCurrent();', '', 'source', 'stale ordered source/proof reached Connected: middle'),
             ('AndroidNodeChainSession', '        if (!AndroidHomeStateStore.ownsNodeChain(context, home))', '        if (false)', 'proof', 'changed Home still authorized the original native source'),
@@ -456,6 +482,7 @@ def main():
             ('LayeredVpnService', 'Log.w(TAG,"Native cleanup remains owned for retry",pending);', 'if(pending!=null)throw new IllegalStateException("uncaught native cleanup regression",pending);', 'captured-drain', 'native cleanup failure escaped the ordered worker and could terminate Android'),
         )
         for number, (name, old, new, family, witness) in enumerate(controls):
+            if measurement_only and family != "measurement": continue
             source = originals[name]
             if source.count(old) != 1:
                 raise AssertionError('Ordered causal control lost its exact seam: ' + name + ':' + old)

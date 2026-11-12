@@ -30,9 +30,15 @@ protocol ObservableObject {}
  var mtuBusy=false,mtuOperations:[String]=[],mtuRequests:[String]=[]
  var captured:[String:Any]?,pending:((Data?)->Void)?,pendingRequest:[String:Any]?
  var informationHook:(()->Void)?
- func reset(_ mode:String){self.mode=mode;mtuBusy=false;mtuOperations=[];mtuRequests=[];drained=mode=="stable";starts=0;cancels=0;statuses=0;releases=0;held=false;captured=nil;pending=nil;pendingRequest=nil;informationHook=nil;connection.status = .connected;connection.connectedDate=Date(timeIntervalSince1970:10)}
+ func reset(_ mode:String){self.mode=mode;mtuBusy=false;mtuOperations=[];mtuRequests=[];drained=["stable","ordered","oversized"].contains(mode);starts=0;cancels=0;statuses=0;releases=0;held=false;captured=nil;pending=nil;pendingRequest=nil;informationHook=nil;connection.status = .connected;connection.connectedDate=Date(timeIntervalSince1970:10)}
  func body(_ request:[String:Any],complete:Bool,drained:Bool)->Data {
-  try! JSONSerialization.data(withJSONObject:["request_id":request["request_id"]!,"session_id":request["session_id"]!,"stage":complete ? "complete":"running","complete":complete,"drained":drained,"results":[]])
+  var rows:[[String:Any]]=[]
+  if ["ordered","oversized"].contains(mode), request["operation"] as? String != "hop-measure-cancel" {
+   let latency:[String:Any]=["samples":6,"min_ms":1.0,"median_ms":2.0,"average_ms":2.0,"p90_ms":3.0,"max_ms":3.0,"jitter_ms":1.0]
+   let transfer:[String:Any]=["bytes":65536,"seconds":0.5,"mbps":1.048576,"loaded_reason":"short transfer"]
+   for i in 0..<(mode=="ordered" ? 8:9){rows.append(["node_id":"node-\(i)","role":i==0 ? "entry":i==7 ? "exit":"intermediate","kind":"private-node","label":"Cumulative path through node \(i+1)","ready":true,"idle":latency,"download":transfer,"upload":transfer])}
+  }
+  return try! JSONSerialization.data(withJSONObject:["request_id":request["request_id"]!,"session_id":request["session_id"]!,"stage":complete ? "complete":"running","complete":complete,"drained":drained,"results":rows])
  }
  func handle(_ data:Data,_ reply:@escaping(Data?)->Void) {
   let request=try! JSONSerialization.jsonObject(with:data) as! [String:Any]
@@ -93,6 +99,13 @@ TEST=r'''
    check("bounded fixture progress",condition())
   }
   let native=Native.shared
+  for mode in ["ordered","oversized"] {
+   native.reset(mode);let model=RouterVPNModel(),probe=IOSHopMeasurements();model.activeEngine="multihop-libbox";probe.start(model:model)
+   await wait{native.starts==1 && !probe.running}
+   if mode=="ordered" {check("complete ordered rows reach UI",probe.text.contains("node 8") && probe.text.components(separatedBy:"Download 1.05 Mbps").count==9)}
+   else {check("oversized ordered result is discarded",!probe.text.contains("Mbps") && native.cancels>0)}
+   check("ordered native drain releases MTU",native.releases==1 && !IOSMTUMeasurementGate.held)
+  }
   for idleOnly in [true,false] {
    native.reset("stable");let model=RouterVPNModel();var ran=false
    try await IOSMTUControl.withHold(model:model,idleOnly:idleOnly){

@@ -551,18 +551,20 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         private final AndroidTorSession tor;
         private final AndroidExternalSession external;
         private final AndroidMTUSession mtu;
+        private final AndroidNodeChainSession chain;
         private final AndroidHomeStateStore.Snapshot home;
         private final Network physical;
         private volatile boolean started;
         private HopMeasurementOwner(LayeredVpnService service,String request){this(service,request,"","",null);}
         private HopMeasurementOwner(LayeredVpnService service,String request,String exitID,String nativeSession,AndroidHomeStateStore.Snapshot home){
             this.service=service;probe=service.hopMeasurement;server=service.commandServer;generation=service.lifecycle.get();network=service.executionNetwork;this.request=request;
-            this.exitID=exitID;this.nativeSession=nativeSession;this.home=home;config=service.activeConfig;sessionFile=service.activeSession;tor=service.torSession;external=service.externalSession;mtu=service.mtuSession;
+            this.exitID=exitID;this.nativeSession=nativeSession;this.home=home;config=service.activeConfig;sessionFile=service.activeSession;tor=service.torSession;external=service.externalSession;mtu=service.mtuSession;chain=service.nodeChainSession;
             physical=tor!=null?service.torPhysicalNetwork:service.externalPhysicalNetwork;
         }
         private void requireCurrent(){
             if(probe==null||server==null||service.hopMeasurement!=probe||service.commandServer!=server||service.mtuSession!=mtu||generation!=service.lifecycle.get()
                     ||service.explicitStop||!"UP".equals(service.state)||!network.equals(service.executionNetworkIdentity()))throw new IllegalStateException("The captured path measurement session changed.");
+            if(chain!=service.nodeChainSession || chain!=null&&!chain.healthy())throw new IllegalStateException("The ordered measurement lost its captured nodes or native proof.");
             if(!exitID.isEmpty()){
                 AndroidHomeStateStore.Snapshot now=AndroidHomeStateStore.snapshot(service),proofHome=tor!=null?service.torHomeOwner:service.externalHomeOwner;
                 if(currentService.get()!=service||network.isEmpty()||"[]".equals(network)||!service.executionProved
@@ -1076,6 +1078,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 executionHandler.post(executionWatch);
                 updateForeground("Proving every ordered member and selected DNS…");
                 capturedChain.prove();
+                adoptHopMeasurement(capturedChain.newHopMeasurement(), ownedServer, generation);
             }
             if (preparedMAX != null) executionHandler.post(executionWatch);
             if (torMetadata != null) {

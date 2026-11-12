@@ -108,6 +108,7 @@ stub(APP,'AndroidNodeChainSession','''{static final String MODE="node-chain";fin
  boolean permitsStart(String mode,String home){return false;}boolean released(){return false;}boolean healthy(){return false;}
  void requireCurrent()throws Exception{throw new IllegalStateException("No ordered proof in this boundary");}void requireSource()throws Exception{throw new IllegalStateException("No ordered source in this boundary");}
  void attach(io.nekohasekai.libbox.CommandServer server,Owner owner,String network)throws Exception{throw new IllegalStateException("No ordered owner in this boundary");}
+ io.nekohasekai.libbox.RouterHopMeasurement newHopMeasurement()throws Exception{throw new IllegalStateException("No ordered measurement in this boundary");}
  void prove()throws Exception{throw new IllegalStateException("No ordered proof in this boundary");}void cancel(){}void closePlan()throws Exception{}void nativeServiceClosed(){}void finishCleanup()throws Exception{}void discardUnstarted()throws Exception{}
 }''')
 stub(APP,'RouterPQNative','{public static void install()throws Exception{} }')

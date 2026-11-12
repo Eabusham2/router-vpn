@@ -19,7 +19,7 @@ final class AndroidHopMeasurementDialog {
     void show(){
         if(activity.isFinishing()||activity.isDestroyed()||!connection.isConnected())return;
         output=new TextView(activity);output.setPadding(32,24,32,24);output.setTextIsSelectable(true);
-        output.setText("Measuring the captured VPN paths. Private Router VPN nodes use their authenticated API; imported and Tor exits use HTTPS through the captured route. Rates describe cumulative paths, not inferred inter-server link speeds. Up to 32 MiB will be transferred. MTU stays paused until native cleanup finishes.");
+        output.setText("Measuring the captured VPN paths. Private Router VPN nodes use their authenticated API; imported and Tor exits use HTTPS through the captured route. Rates describe cumulative paths, not inferred inter-server link speeds. Up to 128 MiB will be transferred. MTU stays paused until native cleanup finishes.");
         ScrollView scroll=new ScrollView(activity);scroll.addView(output);
         dialog=new AlertDialog.Builder(activity).setTitle("Routed path measurements").setView(scroll).setNegativeButton("Close / cancel",(d,w)->close()).create();
         dialog.setOnDismissListener(d->close());dialog.show();
@@ -47,7 +47,7 @@ final class AndroidHopMeasurementDialog {
 
     static String renderStatus(String raw)throws Exception{
         if(raw==null||raw.length()>16384)throw new IllegalArgumentException("Oversized measurement status.");
-        JSONObject status=new JSONObject(raw);JSONArray rows=status.getJSONArray("results");if(rows.length()>2)throw new IllegalArgumentException("Too many measured paths.");
+        JSONObject status=new JSONObject(raw);JSONArray rows=status.getJSONArray("results");if(rows.length()>8)throw new IllegalArgumentException("Too many measured paths.");
         StringBuilder text=new StringBuilder("Routed paths: ").append(status.optString("stage","pending"));
         for(int i=0;i<rows.length();i++)text.append("\n\n").append(render(rows.getJSONObject(i)));
         if(!status.optString("failure").isEmpty())text.append("\n").append(status.optString("failure"));
@@ -55,7 +55,7 @@ final class AndroidHopMeasurementDialog {
     }
     private static String render(JSONObject row)throws Exception{
         String kind=row.optString("kind"),name=row.optString("label"),role=row.optString("role");
-        if(!("private-node".equals(kind)||"public-path".equals(kind))||!("entry".equals(role)||"exit".equals(role))||name.isEmpty()||name.length()>160||name.matches("(?s).*[\\x00-\\x1f\\x7f].*"))return "Path unavailable — invalid measurement identity";
+        if(!("private-node".equals(kind)||"public-path".equals(kind))||!("entry".equals(role)||"intermediate".equals(role)||"exit".equals(role))||name.isEmpty()||name.length()>160||name.matches("(?s).*[\\x00-\\x1f\\x7f].*"))return "Path unavailable — invalid measurement identity";
         String label=("public-path".equals(kind)?"Public routed path • ":"Private node • ")+name;
         if(row.has("benchmark")||row.has("response"))return label+": unavailable — another measurement type";
         if(!row.optBoolean("ready"))return label+": unavailable — "+row.optString("failure","unverified result");

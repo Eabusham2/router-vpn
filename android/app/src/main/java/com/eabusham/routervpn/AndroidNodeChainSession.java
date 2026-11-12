@@ -4,6 +4,7 @@ import android.content.Context;
 import io.nekohasekai.libbox.CommandServer;
 import io.nekohasekai.libbox.Libbox;
 import io.nekohasekai.libbox.RouterMTU;
+import io.nekohasekai.libbox.RouterHopMeasurement;
 import io.nekohasekai.libbox.RouterMTUPlatform;
 
 import java.io.File;
@@ -135,6 +136,12 @@ final class AndroidNodeChainSession {
         requireCurrent();
         if (!capture.plan.healthy()) throw new IllegalStateException("The complete ordered native path did not prove every node and selected DNS.");
         requireCurrent();
+    }
+
+    RouterHopMeasurement newHopMeasurement() throws Exception {
+        requireCurrent();
+        if (!capture.plan.healthy()) throw new IllegalStateException("The ordered measurement lost its complete path proof.");
+        return Libbox.routerNodeChainNewHopMeasurement(capture.plan, server);
     }
 
     void requireSource() throws Exception {

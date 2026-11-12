@@ -121,7 +121,7 @@ final class AndroidNativeHopMeasurement {
     private static JSONObject validate(String response,String id)throws Exception{
         if(response==null||response.length()>16384)throw new IllegalStateException("Oversized native measurement response.");
         JSONObject status=new JSONObject(response);JSONArray results=status.optJSONArray("results");
-        if(!id.equals(status.optString("request_id"))||!(status.get("complete") instanceof Boolean)||!(status.get("drained") instanceof Boolean)||results==null||results.length()>2)throw new IllegalStateException("Native measurement returned another request or invalid results.");
+        if(!id.equals(status.optString("request_id"))||!(status.get("complete") instanceof Boolean)||!(status.get("drained") instanceof Boolean)||results==null||results.length()>8)throw new IllegalStateException("Native measurement returned another request or invalid results.");
         return status;
     }
     private static String draining(String id){return "{\"request_id\":\""+id+"\",\"stage\":\"draining native workers; MTU remains held\",\"complete\":false,\"drained\":false,\"results\":[]}";}

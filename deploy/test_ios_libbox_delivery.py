@@ -111,6 +111,7 @@ public final class LibboxRouterNodeChain {
     private var valid=true,closed=false,completed=false,running=false
     private var closeFailures=0,closeCount=0
     private var healthHook:(()->Void)?
+    private var measurementServer:LibboxCommandServer?
     public let entered=DispatchSemaphore(value:0)
     private let release=DispatchSemaphore(value:0),exited=DispatchSemaphore(value:0)
     public init(_ text:String,block:Bool=false,fail:Bool=false){self.text=text;self.block=block;self.fail=fail}
@@ -118,7 +119,7 @@ public final class LibboxRouterNodeChain {
     public func sourceSHA256()->String{String(repeating:"c",count:64)}
     public func configSHA256()->String{String(repeating:"d",count:64)}
     public func run(_ server:LibboxCommandServer)throws{
-        lock.lock();running=true;lock.unlock();entered.signal()
+        lock.lock();running=true;measurementServer=server;lock.unlock();entered.signal()
         if block{_ = release.wait(timeout:.now()+5)}
         lock.lock();let bad=closed || !valid || fail;running=false;completed = !bad;lock.unlock();exited.signal()
         if bad{throw NSError(domain:"NodeChainFixture",code:1)}
@@ -139,6 +140,7 @@ public final class LibboxRouterNodeChain {
         if join && exited.wait(timeout:.now()+3) != .success{throw NSError(domain:"NodeChainJoinFixture",code:2)}
     }
     public func progressJSON()->String{lock.lock();defer{lock.unlock()};return String(decoding:try! JSONSerialization.data(withJSONObject:["stage":completed ? "ready":"pending","complete":completed,"ready":completed && valid && !closed,"execution":"local"]),as:UTF8.self)}
+    public func measurement(_ server:LibboxCommandServer)->LibboxRouterHopMeasurement?{lock.lock();defer{lock.unlock()};return measurementServer === server && completed && valid && !closed ? LibboxRouterHopMeasurement():nil}
 }
 public final class LibboxCommandServer {
     private let lock=NSLock()
@@ -236,6 +238,7 @@ public func LibboxRouterStrategyDNSProof(_ server: LibboxCommandServer, _ failur
 public func LibboxRouterStrategyCloseService(_ server: LibboxCommandServer, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool { server.strategy("close",failure) }
 
 public func LibboxRouterImportedEntryNewHopMeasurement(_ plan:LibboxRouterMultihop,_ server:LibboxCommandServer,_ failure:UnsafeMutablePointer<NSError?>?)->LibboxRouterHopMeasurement? { plan.healthy() ? LibboxRouterHopMeasurement():nil }
+public func LibboxRouterNodeChainNewHopMeasurement(_ plan:LibboxRouterNodeChain,_ server:LibboxCommandServer,_ failure:UnsafeMutablePointer<NSError?>?)->LibboxRouterHopMeasurement? {plan.measurement(server)}
 public func LibboxNewRouterHopMeasurement(_ server: LibboxCommandServer, _ metadata: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterHopMeasurement? { LibboxRouterHopMeasurement() }
 
 public func LibboxNewRouterMultihop(_ text: String, _ metadata: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text) }
@@ -1578,6 +1581,7 @@ def main():
     if swift is None:
         raise SystemExit('swiftc required to compile the shipping concurrency boundary')
     subprocess.run([sys.executable,str(ROOT/'deploy/test_ios_proof_cancel_delivery.py')],check=True,timeout=180)
+    subprocess.run([sys.executable,str(ROOT/'deploy/test_ios_node_chain_measurement_delivery.py')],check=True,timeout=90)
     with tempfile.TemporaryDirectory(prefix='routervpn-libbox-delivery-') as tmp:
         tmp = Path(tmp)
         stub, harness = tmp/'Libbox.swift', tmp/'Harness.swift'

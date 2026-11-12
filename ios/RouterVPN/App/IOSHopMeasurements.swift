@@ -130,7 +130,7 @@ struct IOSHopMeasurementResult: Decodable {
         let safeLabel = !label.isEmpty && label.utf8.count <= 160 && !label.contains(where: { $0.isNewline || $0 == "\0" })
         let heading = "\(role.capitalized) • \(node_id) • \(safeLabel ? label : "unverified path")"
         guard ready, safeLabel, benchmark == nil, response == nil, ["private-node", "public-path"].contains(kind),
-              !node_id.isEmpty, node_id.utf8.count <= 128, ["entry", "exit"].contains(role), let idle, idle.valid,
+              !node_id.isEmpty, node_id.utf8.count <= 128, ["entry", "intermediate", "exit"].contains(role), let idle, idle.valid,
               let download, download.valid, let upload, upload.valid else {
             return "\(heading): unavailable — \(failure ?? "unverified or incomplete result")"
         }
@@ -186,7 +186,7 @@ private final class IOSHopReply: @unchecked Sendable {
         let data = try await send(operation)
         guard !data.isEmpty, data.count <= 16384 else { throw CancellationError() }
         let status = try JSONDecoder().decode(IOSHopMeasurementStatus.self, from: data)
-        guard status.request_id == id, status.session_id == session, status.results.count <= 2 else { throw CancellationError() }
+        guard status.request_id == id, status.session_id == session, status.results.count <= 8 else { throw CancellationError() }
         return status
     }
     func cancel() {
@@ -295,7 +295,7 @@ struct IOSHopMeasurementsCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Routed hop measurements", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
-            Text("Measures each captured cumulative route with actual transferred bytes. Router VPN hops use their private node API; external and Tor paths use the labelled Cloudflare HTTPS endpoint. These response times include the named path, and do not infer a server-to-server link speed. Up to 32 MiB is transferred while MTU adaptation is held.")
+            Text("Measures each captured cumulative route with actual transferred bytes. Router VPN hops use their private node API; external and Tor paths use the labelled Cloudflare HTTPS endpoint. These response times include the named path, and do not infer a server-to-server link speed. Up to 128 MiB is transferred while MTU adaptation is held.")
                 .font(.caption).foregroundStyle(.secondary)
             Button(probe.running ? "Cancel hop measurements" : "Measure routed paths") {
                 if probe.running { probe.cancel() } else { probe.start(model: model) }

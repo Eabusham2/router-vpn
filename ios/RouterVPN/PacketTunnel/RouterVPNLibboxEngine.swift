@@ -1114,6 +1114,18 @@ final class RouterVPNLibboxEngine {
                 guard let owner, current(owner) else { throw retired() }
                 try plan.run(server)
                 guard current(owner), plan.healthy(), current(owner) else { throw retired() }
+                var measurementFailure: NSError?
+                guard let probe = LibboxRouterNodeChainNewHopMeasurement(plan, server, &measurementFailure), measurementFailure == nil else {
+                    throw measurementFailure ?? retired()
+                }
+                // The Go plan retains this probe even if delivery loses its owner;
+                // original plan cleanup must drain it before the native TUN closes.
+                owner.ownershipLock.lock()
+                let measurementCurrent = owner.nodeChain === plan && owner.server === server && owner.nodeChainDelivery === self &&
+                    owner.ownershipGeneration == generation && !owner.permanentlyStopped && owner.hopMeasurement == nil
+                if measurementCurrent { owner.hopMeasurement = probe }
+                owner.ownershipLock.unlock()
+                guard measurementCurrent else { probe.networkChanged(); throw retired() }
                 let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
                 timer.schedule(deadline: .now() + 1, repeating: 1)
                 timer.setEventHandler { [self] in checkHealth() }
