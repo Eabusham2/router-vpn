@@ -166,6 +166,25 @@ type desktopImportedCONNECTPeer struct {
 	address                  string
 	close                    func()
 	auth, denied, tlsRefused atomic.Int64
+	tlsResult                chan error
+}
+
+// Join the original peer's first TLS handshake before teardown can cancel its
+// read of the client's certificate alert. A local verifier error alone does
+// not prove the peer received that alert.
+func (p *desktopImportedCONNECTPeer) awaitCertificateRefusal(ctx context.Context) error {
+	select {
+	case err := <-p.tlsResult:
+		if err == nil {
+			return errors.New("original CONNECT peer completed TLS without a certificate refusal")
+		}
+		if !desktopExternalCONNECTCertificateRefused(err) {
+			return fmt.Errorf("original CONNECT peer did not receive a certificate refusal: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func desktopStartImportedCONNECTPeer(t *testing.T, s *desktopNodeLayerServer, username, password string, cert *tls.Certificate, cancelOriginal context.CancelFunc, fault string) *desktopImportedCONNECTPeer {
@@ -174,7 +193,7 @@ func desktopStartImportedCONNECTPeer(t *testing.T, s *desktopNodeLayerServer, us
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &desktopImportedCONNECTPeer{address: listener.Addr().String()}
+	p := &desktopImportedCONNECTPeer{address: listener.Addr().String(), tlsResult: make(chan error, 1)}
 	var once sync.Once
 	p.close = func() {
 		once.Do(func() {
@@ -219,10 +238,15 @@ func desktopStartImportedCONNECTPeer(t *testing.T, s *desktopNodeLayerServer, us
 				var c net.Conn = raw
 				if cert != nil {
 					secured := tls.Server(raw, &tls.Config{Certificates: []tls.Certificate{*cert}, MinVersion: tls.VersionTLS12})
-					if e := secured.HandshakeContext(s.ctx); e != nil {
-						if desktopExternalCONNECTCertificateRefused(e) {
-							p.tlsRefused.Add(1)
-						}
+					e := secured.HandshakeContext(s.ctx)
+					if desktopExternalCONNECTCertificateRefused(e) {
+						p.tlsRefused.Add(1)
+					}
+					select {
+					case p.tlsResult <- e:
+					default:
+					}
+					if e != nil {
 						return
 					}
 					c = secured

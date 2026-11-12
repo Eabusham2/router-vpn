@@ -47,6 +47,7 @@ PEER_COPIES = (
 )
 SUPPORT = ('TestRouterVPNImportedCONNECTRealityPhysicalOwner', 'TestRouterVPNImportedCONNECTRealityDoTProbeAdmission',
            'TestRouterVPNImportedCONNECTRealityAuthenticatedRouteRefusal',
+           'TestRouterVPNImportedCONNECTRealityTLSRefusal',
            'TestRouterVPNImportedCONNECTRealityDNSCertificateRefusal')
 
 

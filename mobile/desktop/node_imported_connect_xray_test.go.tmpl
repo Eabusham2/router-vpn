@@ -546,6 +546,9 @@ func desktopImportedCONNECTXrayTraffic(t *testing.T, original []string, kind, fa
 		if fault == "entry-sni" && !errors.As(err, &hostname) || fault == "entry-trust" && !errors.As(err, &authority) {
 			t.Fatal("captured CONNECT TLS rejection lost its typed certificate cause", err)
 		}
+		if err := originalPeer.awaitCertificateRefusal(ctx); err != nil {
+			t.Fatal("captured CONNECT TLS rejection did not join its original peer", err)
+		}
 	}
 
 	beforeFinal := entryRoute.calls.Load()
@@ -738,6 +741,84 @@ func TestRouterVPNImportedCONNECTRealityAuthenticatedRouteRefusal(t *testing.T) 
 			t.Fatal(err)
 		}
 		cancel()
+	}
+}
+
+func TestRouterVPNImportedCONNECTRealityTLSRefusal(t *testing.T) {
+	for _, fault := range []string{"captured", "sni", "trust", "eof"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{}}
+		certificate, ca := desktopExternalInstalledPeerCertificate(t, false, "proxy.example.com")
+		if fault == "trust" {
+			certificate, _ = desktopExternalInstalledPeerCertificate(t, false, "proxy.example.com")
+		}
+		peer := desktopStartImportedCONNECTPeer(t, server, "original-user", "original-password", &certificate, nil, "")
+		if fault == "eof" {
+			connection, err := net.DialTimeout("tcp4", peer.address, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = connection.Close()
+			if err := peer.awaitCertificateRefusal(ctx); err == nil || !errors.Is(err, io.EOF) || peer.tlsRefused.Load() != 0 {
+				t.Fatal("ordinary peer EOF fabricated a TLS certificate refusal", err)
+			}
+			peer.close()
+			continue
+		}
+		lower := newDesktopImportedCONNECTXrayPhysical(M.ParseSocksaddr("203.0.113.20:443"), peer.address)
+		defer lower.Close()
+		manager := &desktopImportedSOCKSXrayManager{owners: map[string]adapter.Outbound{lower.Tag(): lower}}
+		owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM([]byte(ca)) {
+			t.Fatal("original CONNECT TLS refusal trust missing")
+		}
+		owned = service.ContextWith[adapter.CertificateStore](owned, &desktopImportedHysteriaTrust{roots: roots})
+		name := "proxy.example.com"
+		if fault == "sni" {
+			name = "foreign-proxy.example"
+		}
+		options := map[string]any{"type": "http", "server": "203.0.113.20", "server_port": 443,
+			"username": "original-user", "password": "original-password", "detour": lower.Tag(),
+			"tls": map[string]any{"enabled": true, "server_name": name}}
+		entry := desktopImportedCONNECTXrayOutbound(t, owned, options)
+		connection, clientError := entry.DialContext(ctx, "tcp", M.ParseSocksaddr("198.51.100.240:443"))
+		if connection != nil {
+			_ = connection.Close()
+		}
+		// The native outbound has returned and closed its original lower stream;
+		// joining the server's handshake must precede any fixture cancellation.
+		peerError := peer.awaitCertificateRefusal(ctx)
+		if connection != nil || clientError == nil || lower.calls.Load() != 1 || server.rawTCP.Load() != 1 || peer.auth.Load() != 0 {
+			t.Fatal("original CONNECT TLS attempt lost its captured physical owner", fault, clientError)
+		}
+		if fault == "captured" {
+			if peerError == nil || peer.tlsRefused.Load() != 0 || peer.denied.Load() != 1 {
+				t.Fatal("successful TLS followed by HTTP refusal fabricated a certificate alert", peerError)
+			}
+		} else {
+			var hostname x509.HostnameError
+			var authority x509.UnknownAuthorityError
+			if peerError != nil || peer.tlsRefused.Load() != 1 || peer.denied.Load() != 0 ||
+				fault == "sni" && !errors.As(clientError, &hostname) || fault == "trust" && !errors.As(clientError, &authority) {
+				t.Fatal("native CONNECT certificate rejection lost its independent joined peer alert", fault, clientError, peerError)
+			}
+		}
+		if err := lower.empty(ctx); err != nil {
+			t.Fatal("native CONNECT TLS attempt retained its original lower stream", err)
+		}
+		peer.close()
+		if err := lower.Close(); err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	missing := &desktopImportedCONNECTPeer{tlsResult: make(chan error, 1)}
+	if err := missing.awaitCertificateRefusal(ctx); !errors.Is(err, context.Canceled) || missing.tlsRefused.Load() != 0 {
+		t.Fatal("missing original TLS handshake fabricated certificate refusal", err)
 	}
 }
 
