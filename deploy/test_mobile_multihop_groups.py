@@ -29,6 +29,23 @@ PHASES = (
     ('desktop execution and ownership', r'^TestDesktop(?!Predecessor|Node|LinuxNode|CompleteMAX)'),
     ('imported transports and ownership', r'^TestImported(?!Entry)'),
 )
+# Explicit complete ownership keeps CI groups bounded without silently losing a
+# newly introduced phase. The default invocation still runs every group.
+CI_GROUPS = {
+    'core': (
+        'ordered node chains', 'node capture and packet identities',
+        'proxy transports and native Xray', 'mandatory PQ',
+        'Start Layers and composites', 'complete MAX chains',
+        'external paths and OpenVPN',
+    ),
+    'runtime': (
+        'desktop ordered policies and readiness', 'desktop node policies and ownership',
+        'desktop execution and ownership', 'imported transports and ownership',
+        'controller, proof and remaining ownership',
+    ),
+}
+
+
 REQUIRED = frozenset((
     'TestImportedEntryPacketFinalCompleteGraphs', 'TestImportedEntryPacketFinalOwnershipAndMTU',
     'TestImportedEntryPacketCompleteGraphs', 'TestImportedEntryPacketSourceAndMTUOwnership', 'TestImportedEntryHysteriaFinalCompleteGraphs',
@@ -102,6 +119,19 @@ def partition(names, predicates=PHASES):
     return groups
 
 
+def select_ci_group(groups, selected=None, assignment=CI_GROUPS):
+    labels = [label for label, _ in groups]
+    assigned = [label for members in assignment.values() for label in members]
+    if (len(labels) != len(set(labels)) or len(assigned) != len(set(assigned))
+            or set(labels) != set(assigned) or any(not members for members in assignment.values())):
+        raise ValueError('CI groups must cover every discovered phase exactly once')
+    if selected is None:
+        return groups
+    if selected not in assignment:
+        raise ValueError('Unknown CI group')
+    return [(label, names) for label, names in groups if label in assignment[selected]]
+
+
 def exact_selector(names):
     # Go test does not support Python's noncapturing group syntax. These names
     # are compiler-discovered identifiers, so regex metacharacters cannot enter.
@@ -132,6 +162,29 @@ class PartitionTests(unittest.TestCase):
             args = command(selected)
             self.assertEqual(args[:6], ['go', 'test', '-race', '-count=1', '-timeout=180s', PACKAGE])
             self.assertEqual([name for name in actual if re.fullmatch(args[-1], name)], selected)
+
+    def test_ci_groups_retain_complete_disjoint_discovered_inventory(self):
+        groups = partition(self.names)
+        self.assertEqual(select_ci_group(groups), groups)
+        selected = [entry for group in CI_GROUPS for entry in select_ci_group(groups, group)]
+        self.assertEqual(selected, groups)
+        validate_partition(self.names, selected)
+        for mutation in ('omitted', 'overlap', 'unknown', 'empty'):
+            assignment = {key: list(value) for key, value in CI_GROUPS.items()}
+            if mutation == 'omitted':
+                assignment['core'].pop()
+            elif mutation == 'overlap':
+                assignment['core'].append(assignment['runtime'][0])
+            elif mutation == 'unknown':
+                assignment['core'].append('not a discovered phase')
+            else:
+                assignment['runtime'] = []
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                select_ci_group(groups, 'core', assignment)
+        with self.assertRaises(ValueError):
+            select_ci_group(groups + [('new unassigned phase', ['TestNew'])], 'core')
+        with self.assertRaises(ValueError):
+            select_ci_group(groups, 'not a CI group')
 
     def test_empty_duplicate_malformed_and_missing_inventories(self):
         for output in ('', '\n'.join(self.names + [self.names[0]]),
@@ -194,6 +247,7 @@ class PartitionTests(unittest.TestCase):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--self-test', action='store_true')
+    parser.add_argument('--group', choices=tuple(CI_GROUPS), help='Run one fully inventoried CI group')
     args = parser.parse_args()
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(PartitionTests)
     if not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful():
@@ -204,10 +258,13 @@ def main():
                                          cwd=ROOT, text=True, timeout=300)
     names = inventory(discovered)
     groups = partition(names)
-    for label, selected in groups:
+    selected_groups = select_ci_group(groups, args.group)
+    for label, selected in selected_groups:
         print(f'Shared multihop: {label}; {len(selected)} discovered tests', flush=True)
         subprocess.run(command(selected), cwd=ROOT, check=True, timeout=240)
-    print(f'All {len(names)} discovered shared multihop tests passed exactly once in {len(groups)} phases', flush=True)
+    count = sum(len(selected) for _, selected in selected_groups)
+    print(f'All {count} selected shared multihop tests passed exactly once in {len(selected_groups)} phases '
+          f'(complete inventory: {len(names)} tests in {len(groups)} phases)', flush=True)
     return 0
 
 
