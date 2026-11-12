@@ -1,0 +1,38 @@
+package box
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// The execution engine independently observes the actual TUN and its selector
+// epoch. Its lifetime callback observes the original physical generation only:
+// the same callback must remain usable while the existing physical owner has
+// deliberately detached its old TUN grant during an authorized replacement.
+func (owner *RouterVPNDesktopNodePhysical) NodeChainExecutionSourceCurrentContext(ctx context.Context, preparation *mobilemultihop.NodeChainExecutionPreparation) error {
+	if owner == nil || owner.instance == nil || preparation == nil {
+		return errRouterVPNExecutionOwner
+	}
+	policy, err := preparation.DesktopPhysicalPolicy()
+	if err != nil || policy == nil || owner.policy != policy {
+		return errors.Join(err, errRouterVPNExecutionOwner)
+	}
+	return owner.generationCurrentContext(ctx)
+}
+
+// Retain the existing physical permission transaction around the exact native
+// execution manager transaction. A same-identity wrapper, foreign Box or another
+// sealed physical policy cannot borrow this original pause/reader authority.
+func (owner *RouterVPNDesktopNodePhysical) ChangeNodeChainExecutionMTUContext(ctx context.Context, engine *RouterVPNNodeChainExecutionEngine,
+	binding mobilemultihop.NodeChainExecutionMTUResumeBinding, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+	if owner == nil || engine == nil || owner.instance == nil || engine.instance != owner.instance || !binding.OwnsEngine(engine) ||
+		owner.NodeChainExecutionSourceCurrentContext(ctx, engine.prep) != nil {
+		return expected, errRouterVPNExecutionOwner
+	}
+	return owner.changeMTU(ctx, expected, mtu, func(call context.Context, reader adapter.Inbound, value int) (adapter.Inbound, error) {
+		return engine.ChangeExecutionMTUContext(call, binding, reader, value)
+	})
+}

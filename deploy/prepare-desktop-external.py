@@ -76,6 +76,7 @@ BOX_TEMPLATES = {
     'node_box_tunnel_control_darwin_test.go.tmpl': 'routervpn_desktop_node_box_tunnel_control_darwin_test.go',
     'node_box_imported.go.tmpl': 'routervpn_desktop_node_box_imported.go',
     'node_chain_box_physical.go.tmpl': 'routervpn_desktop_node_chain_box_physical.go',
+    'node_chain_execution_box_mtu.go.tmpl': 'routervpn_desktop_node_chain_execution_box_mtu.go',
     'node_chain_box_physical_test.go.tmpl': 'routervpn_desktop_node_chain_box_physical_test.go',
     'node_chain_execution_physical_test.go.tmpl': 'routervpn_desktop_node_chain_execution_physical_test.go',
     'node_chain_box_linux.go.tmpl': 'routervpn_desktop_node_chain_box_linux.go',

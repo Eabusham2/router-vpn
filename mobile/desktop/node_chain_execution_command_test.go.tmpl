@@ -1,0 +1,98 @@
+package main
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func TestRouterVPNDesktopNodeChainExecutionCommandExactSourceReplay(t *testing.T) {
+	for _, target := range []string{"windows", "linux", "darwin"} {
+		original := desktopNodeChainCommandPolicyWithIdentity(t, 3, target, 1400, true)
+		for _, execution := range []string{"server", "auto"} {
+			t.Run(target+"/"+execution, func(t *testing.T) {
+				prep, err := mobilemultihop.NewDesktopNodeChainExecutionPreparation(original, execution)
+				if err != nil {
+					t.Fatal(err)
+				}
+				physical, err := prep.DesktopPhysicalPolicy()
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, meta, _, err := physical.PhysicalReadValidated()
+				if err != nil {
+					t.Fatal(err)
+				}
+				files := desktopImportedCommandFiles(t, map[string]string{"node-chain-execution-source.json": prep.Source(), "sing-box.json": prep.Config()})
+				actual, err := routerVPNNodeChainExecutionCommandCapture(files, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, prep.SourceSHA256(), target)
+				if err != nil || actual == nil || actual == prep || actual.Source() != prep.Source() || actual.Config() != prep.Config() {
+					t.Fatal("typed original execution did not replay", err)
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeChainExecutionCommandRejectsSubstitution(t *testing.T) {
+	original := desktopNodeChainCommandPolicyWithIdentity(t, 3, "linux", 0, true)
+	prep, err := mobilemultihop.NewDesktopNodeChainExecutionPreparation(original, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical, err := prep.DesktopPhysicalPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, meta, _, err := physical.PhysicalReadValidated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fault := range []string{"missing", "local", "generic", "execution", "source", "config", "physical", "session", "target", "graph", "ambiguous-local"} {
+		t.Run(fault, func(t *testing.T) {
+			input, graph := prep.Source(), prep.Config()
+			session, config, source, execution, target := meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, prep.SourceSHA256(), "linux"
+			extra := map[string]string{}
+			switch fault {
+			case "missing":
+				input = ""
+			case "local":
+				input, _ = original.NodeChain().LaunchInput()
+			case "generic":
+				generic, e := mobilemultihop.NewNodeChainExecutionPreparation(prep.LocalSource(), "server")
+				if e != nil {
+					t.Fatal(e)
+				}
+				input = generic.Source()
+			case "execution":
+				other, e := mobilemultihop.NewDesktopNodeChainExecutionPreparation(original, "auto")
+				if e != nil {
+					t.Fatal(e)
+				}
+				input = other.Source()
+			case "source":
+				execution = strings.Repeat("d", 64)
+			case "config":
+				config = strings.Repeat("d", 64)
+			case "physical":
+				source = strings.Repeat("d", 64)
+			case "session":
+				session = strings.Repeat("d", 32)
+			case "target":
+				target = "windows"
+			case "graph":
+				graph = original.Config()
+			case "ambiguous-local":
+				extra["node-chain-source.json"], _ = original.NodeChain().LaunchInput()
+			}
+			if input != "" {
+				extra["node-chain-execution-source.json"] = input
+			}
+			extra["sing-box.json"] = graph
+			files := desktopImportedCommandFiles(t, extra)
+			if _, e := routerVPNNodeChainExecutionCommandCapture(files, session, config, source, execution, target); e == nil {
+				t.Fatal("substituted execution source accepted")
+			}
+		})
+	}
+}

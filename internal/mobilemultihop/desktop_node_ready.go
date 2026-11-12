@@ -59,8 +59,13 @@ func (r DesktopNodeReadyRecord) Validate(policy DesktopPhysicalPolicy, transfer 
 	// policy. An ordinary node/imported/external capture cannot opt into it
 	// by presenting a utun-shaped name or copying public metadata.
 	interfaceValid := (meta.TargetOS == "windows" || meta.TargetOS == "linux") && r.InterfaceName == "router-vpn"
-	if chain, exact := policy.(*DesktopNodeChainPolicy); exact && chain != nil && meta.TargetOS == "darwin" {
-		interfaceValid = desktopNodeChainReadyInterface("darwin", r.InterfaceName)
+	if meta.TargetOS == "darwin" {
+		switch original := policy.(type) {
+		case *DesktopNodeChainPolicy:
+			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
+		case *DesktopNodeChainExecutionPhysicalPolicy:
+			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
+		}
 	}
 	if r.Schema != 1 || r.Kind != "routervpn-node-ready-v1" || !interfaceValid ||
 		r.SessionID != meta.SessionID || r.SourceSHA256 != meta.SourceSHA256 || r.ConfigSHA256 != meta.ConfigSHA256 ||

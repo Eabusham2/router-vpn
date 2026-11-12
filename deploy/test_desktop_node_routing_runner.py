@@ -47,6 +47,24 @@ class OpenVPNConnectedCapacityVerdicts(unittest.TestCase):
             NODE.execute_baseline_suite(baseline, NODE.OPENVPN_CAPACITY_SUITE)
 
 
+class ExecutionAdmissionGate(unittest.TestCase):
+    def test_complete_and_incomplete_native_verdicts(self):
+        for suite in NODE.EXECUTION_DESKTOP_SUITES:
+            name, _, _, required = suite
+            output = "".join("=== RUN   " + case + "\n--- PASS: " + case + " (0.01s)\n" for case in required)
+            outputs = [output.replace("--- PASS: " + case + " (0.01s)\n", "") for case in required]
+            outputs += [output + output, output + "--- SKIP: foreign (0.01s)\n", output + "DATA RACE\n"]
+            with self.subTest(suite=name), contextlib.redirect_stdout(io.StringIO()):
+                baseline = Mock()
+                baseline.execute.return_value = (0, output)
+                self.assertEqual(NODE.execute_baseline_suite(baseline, suite), output)
+                baseline.execute.assert_called_once_with(*suite[:3], 90)
+                for invalid in outputs:
+                    baseline.execute.return_value = (0, invalid)
+                    with self.assertRaises(ValueError):
+                        NODE.execute_baseline_suite(baseline, suite)
+
+
 class CandidateCommandVerdicts(unittest.TestCase):
     def test_complete_actual_owner_inventory_is_mandatory(self):
         self.assertEqual(len(NODE.CANDIDATE_COMMAND_VERDICTS), 12)

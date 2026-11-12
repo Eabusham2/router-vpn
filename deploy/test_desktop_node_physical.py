@@ -46,6 +46,29 @@ CANDIDATE_COMMAND_VERDICTS = (CANDIDATE_COMMAND_ADMISSION, CANDIDATE_COMMAND_COM
     *(CANDIDATE_COMMAND_ADMISSION + "/" + leaf for leaf in ("unproved", "generation", "deadline", "reader", "capture", "overlap")),
     *(CANDIDATE_COMMAND_COMPOSITION + "/" + leaf for leaf in ("success", "cancel-drain", "stale-catalog", "retirement-drain")))
 CANDIDATE_COMMAND_SUITE = ("ordered-candidate-owner", "./cmd/sing-box", "^TestRouterVPNDesktopNodeChainCandidates", CANDIDATE_COMMAND_VERDICTS)
+EXECUTION_PHYSICAL_ROOT = "TestRouterVPNDesktopNodeChainExecutionPhysical"
+EXECUTION_COMMAND_ROOT = "TestRouterVPNDesktopNodeChainExecutionCommand"
+EXECUTION_PHYSICAL_VERDICTS = (
+    EXECUTION_PHYSICAL_ROOT + "CapturesClosedBox",
+    *(EXECUTION_PHYSICAL_ROOT + "CapturesClosedBox/" + execution for execution in ("server", "auto")),
+    EXECUTION_PHYSICAL_ROOT + "RejectsChangedBox",
+    *(EXECUTION_PHYSICAL_ROOT + "RejectsChangedBox/" + fault for fault in
+      ("middle-key", "dns", "physical-source", "mtu", "local-final")),
+    EXECUTION_PHYSICAL_ROOT + "KeepsTypedTarget",
+    *(EXECUTION_PHYSICAL_ROOT + "KeepsTypedTarget/" + target for target in ("linux", "windows", "darwin")),
+)
+EXECUTION_COMMAND_VERDICTS = (
+    EXECUTION_COMMAND_ROOT + "ExactSourceReplay",
+    *(EXECUTION_COMMAND_ROOT + "ExactSourceReplay/" + target + "/" + execution
+      for target in ("windows", "linux", "darwin") for execution in ("server", "auto")),
+    EXECUTION_COMMAND_ROOT + "RejectsSubstitution",
+    *(EXECUTION_COMMAND_ROOT + "RejectsSubstitution/" + fault for fault in
+      ("missing", "local", "generic", "execution", "source", "config", "physical", "session", "target", "graph", "ambiguous-local")),
+)
+EXECUTION_DESKTOP_SUITES = (
+    ("ordered-execution-physical", ".", "^" + EXECUTION_PHYSICAL_ROOT, EXECUTION_PHYSICAL_VERDICTS),
+    ("ordered-execution-command", "./cmd/sing-box", "^" + EXECUTION_COMMAND_ROOT, EXECUTION_COMMAND_VERDICTS),
+)
 MTU_CONTEXT_VERDICTS = {
     "mtu-operation-context": [
         "TestContextOperationAdmissionAndStatusDoNotLeaveWaiters",
@@ -1157,6 +1180,8 @@ def execute_baseline_suite(baselines, suite):
         raise ValueError("Node " + name + " omitted a required native boundary")
     if name == OPENVPN_CAPACITY_SUITE[0]:
         require_native_verdicts(output, OPENVPN_CAPACITY_VERDICTS, "OpenVPN authenticated live capacity")
+    if name in {suite[0] for suite in EXECUTION_DESKTOP_SUITES}:
+        require_native_verdicts(output, required, name)
     if name == CANDIDATE_COMMAND_SUITE[0]:
         require_native_verdicts(output, CANDIDATE_COMMAND_VERDICTS, "ordered candidate original native owner")
     if name == NAIVE_TRANSPORT_SUITE[0]:
@@ -1398,6 +1423,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                     "TestRouterVPNDesktopNodeChainMeasurementExcludesMTUAndRetiredReader",
                     "TestRouterVPNDesktopNodeChainMeasurementHTTPComposition")))
     suites.append(CANDIDATE_COMMAND_SUITE)
+    suites.extend(EXECUTION_DESKTOP_SUITES)
     suites.append(("command-observation-context", "./cmd/sing-box",
                    "^TestRouterVPNDesktop(NetworkProjectionContextPreservesObservationErrors|NativeNetworkProjectionCancelsHeldOwnerLock|StopInterruptsOriginalNetworkObserver)$",
                    ("TestRouterVPNDesktopNetworkProjectionContextPreservesObservationErrors", "TestRouterVPNDesktopNativeNetworkProjectionCancelsHeldOwnerLock", "TestRouterVPNDesktopStopInterruptsOriginalNetworkObserver")))

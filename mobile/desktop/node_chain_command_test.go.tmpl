@@ -17,6 +17,10 @@ import (
 )
 
 func desktopNodeChainCommandPolicy(t *testing.T, count int, target string, restore int) *mobilemultihop.DesktopNodeChainPolicy {
+	return desktopNodeChainCommandPolicyWithIdentity(t, count, target, restore, false)
+}
+
+func desktopNodeChainCommandPolicyWithIdentity(t *testing.T, count int, target string, restore int, withIdentity bool) *mobilemultihop.DesktopNodeChainPolicy {
 	t.Helper()
 	source := mobilemultihop.NodeChainSource{Schema: 1, Execution: "local"}
 	for position := 0; position < count; position++ {
@@ -36,6 +40,10 @@ func desktopNodeChainCommandPolicy(t *testing.T, count int, target string, resto
 		mode := "wg"
 		config := fmt.Sprintf("[Interface]\nAddress=10.%d.0.2/32\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=%s:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", 77+position, private, public, endpoint)
 		assets := map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(config))}
+		if withIdentity {
+			identity, _ := json.Marshal(assets)
+			source.IdentitySources = append(source.IdentitySources, string(identity))
+		}
 		if position == count-1 {
 			mode = "shadowsocks"
 			graph, _ := json.Marshal(map[string]any{

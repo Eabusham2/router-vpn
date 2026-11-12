@@ -1,0 +1,48 @@
+package main
+
+import (
+	"errors"
+	"os"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// Called only after the original platform parent authenticates. The physical
+// source deliberately remains unchanged by execution; the distinct preparation
+// digest is therefore mandatory to bind Server versus Compare as well as the
+// original private graph. No Local parser fallback is permitted.
+func routerVPNNodeChainExecutionCommandCapture(files *routerVPNExternalFiles, session, config, physicalSource, executionSource, target string) (*mobilemultihop.NodeChainExecutionPreparation, error) {
+	if files == nil || files.root == nil || !routerVPNExternalSession.MatchString(session) ||
+		!routerVPNExternalSource.MatchString(config) || !routerVPNExternalSource.MatchString(physicalSource) ||
+		!routerVPNExternalSource.MatchString(executionSource) || target != "linux" && target != "windows" && target != "darwin" {
+		return nil, routerVPNExternalFailure
+	}
+	for _, name := range []string{"node-source.json", "node-chain-source.json", "imported-source.json"} {
+		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			return nil, routerVPNExternalFailure
+		}
+	}
+	raw, err := files.read("node-chain-execution-source.json", mobilemultihop.NodeChainInputLimit)
+	if err != nil {
+		return nil, err
+	}
+	prep, err := mobilemultihop.ParseDesktopNodeChainExecutionPreparation(string(raw))
+	clear(raw)
+	if err != nil || prep == nil || prep.SourceSHA256() != executionSource || prep.ConfigSHA256() != config {
+		return nil, routerVPNExternalFailure
+	}
+	policy, err := prep.DesktopPhysicalPolicy()
+	if err != nil {
+		return nil, err
+	}
+	_, meta, _, err := policy.PhysicalReadValidated()
+	if err != nil || meta.Kind != "node-chain-execution" || meta.TargetOS != target || meta.SessionID != session || meta.SourceSHA256 != physicalSource || meta.ConfigSHA256 != config {
+		return nil, routerVPNExternalFailure
+	}
+	staged, err := files.read("sing-box.json", 4<<20)
+	defer clear(staged)
+	if err != nil || string(staged) != prep.Config() || policy.Validate() != nil {
+		return nil, routerVPNExternalFailure
+	}
+	return prep, nil
+}
