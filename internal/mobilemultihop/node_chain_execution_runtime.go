@@ -36,6 +36,7 @@ type NodeChainExecutionRuntime struct {
 	runDone, watchDone chan struct{}
 	started, retired   atomic.Bool
 	closed             bool
+	measurementHolds   int
 	active             *nodeChainExecutionTrial
 	progress           NodeChainExecutionProgress
 	checkedAt          time.Time
@@ -492,6 +493,10 @@ func (r *NodeChainExecutionRuntime) CloseContext(ctx context.Context) error {
 		return errors.Join(revokeErr, err, ctx.Err(), nodeChainExecutionError)
 	}
 	r.mu.Lock()
+	if r.measurementHolds != 0 {
+		r.mu.Unlock()
+		return errors.New("original ordered measurement activity has not joined")
+	}
 	r.closed = true
 	r.progress.Ready = false
 	r.progress.Stage = "closed"

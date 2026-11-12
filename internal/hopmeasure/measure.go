@@ -152,7 +152,7 @@ func New(engine Engine, hops []Hop) (*Service, error) {
 // NewContext captures identity without making the returned service's lifetime
 // depend on the short-lived constructor caller.
 func NewContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
-	return newContext(ctx, engine, hops, false, false)
+	return newContext(ctx, engine, hops, false, false, false)
 }
 
 // NewOrderedContext admits only the compiler's complete ordered private-node
@@ -161,7 +161,7 @@ func NewOrderedContext(ctx context.Context, engine Engine, hops []Hop) (*Service
 	if len(hops) < 2 {
 		return nil, errors.New("ordered measurement requires a complete node path")
 	}
-	return newContext(ctx, engine, hops, true, false)
+	return newContext(ctx, engine, hops, true, false, false)
 }
 
 // NewOrderedImportedMiddleContext preserves the ordered tag/position contract
@@ -170,15 +170,16 @@ func NewOrderedImportedMiddleContext(ctx context.Context, engine Engine, hops []
 	if len(hops) != 3 || hops[0].Kind != "private-node" || hops[1].Kind != "public-path" || hops[2].Kind != "private-node" {
 		return nil, errors.New("ordered imported measurement requires one original public middle")
 	}
-	return newContext(ctx, engine, hops, true, true)
+	return newContext(ctx, engine, hops, true, true, false)
 }
 
-func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, importedMiddle bool) (*Service, error) {
+func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, importedMiddle bool, serverOrdered bool) (*Service, error) {
 	if engine == nil || len(hops) < 1 || len(hops) > 8 {
 		return nil, errors.New("a captured native path is required")
 	}
 	seen := map[string]bool{}
 	proofs := map[string]bool{}
+	serverDigest := ""
 	copyHops := append([]Hop(nil), hops...)
 	for index, h := range copyHops {
 		if h.ID == "" || len(h.ID) > 128 || seen[h.ID] || strings.ContainsAny(h.ID, "\r\n\x00") {
@@ -191,7 +192,16 @@ func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, im
 			} else if index == len(copyHops)-1 {
 				role = "exit"
 			}
-			if h.Role != role || !orderedPrefixTag.MatchString(h.Tag) || !strings.HasPrefix(h.Tag, "routervpn-chain-"+strconv.Itoa(index)+"-") ||
+			validTag := orderedPrefixTag.MatchString(h.Tag) && strings.HasPrefix(h.Tag, "routervpn-chain-"+strconv.Itoa(index)+"-")
+			if serverOrdered && index > 0 {
+				validTag = orderedServerPrefixTag.MatchString(h.Tag) && strings.HasPrefix(h.Tag, "routervpn-chain-server-"+strconv.Itoa(index)+"-")
+				if validTag {
+					digest := h.Tag[len(h.Tag)-16:]
+					validTag = serverDigest == "" || serverDigest == digest
+					serverDigest = digest
+				}
+			}
+			if h.Role != role || !validTag ||
 				(!(importedMiddle && index == 1) && ((h.Kind != "" && h.Kind != "private-node") || proofs[h.Proof])) {
 				return nil, errors.New("ordered measurement changed prefix order, role or node proof")
 			}
