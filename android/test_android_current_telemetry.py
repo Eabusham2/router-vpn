@@ -2,8 +2,10 @@
 """Execute shipping current telemetry, native capture methods and durable ranking.
 
 Android network/native readback handles and private-file syscalls are doubled;
+the ranking-causal case also controls only the TCP sample clock boundary.
 all capture, HTTP framing, token ordering, cancellation, statistics and ranking
-logic below is the shipping Java. No public service, VPN or fabricated RTT.
+logic below is the shipping Java. Controlled durations are fixture inputs, not
+native VPN traffic or measured RTT evidence.
 """
 from pathlib import Path
 import os
@@ -80,6 +82,8 @@ HARNESS=r'''package com.eabusham.routervpn;
 import java.io.*;import java.net.*;import java.nio.charset.StandardCharsets;import java.nio.file.*;import java.util.*;import java.util.concurrent.*;import java.util.concurrent.atomic.*;import javax.net.SocketFactory;import android.content.*;import android.net.*;import org.json.*;
 public final class CurrentTelemetryTest {
  static int checks,attachRefusals;static final String PROOF="a".repeat(64),TOKEN="private-node-token";
+ static final ThreadLocal<Long> sampleClock=new ThreadLocal<>();
+ static long sampleNanoTime(){Long value=sampleClock.get();return value==null?System.nanoTime():value;}
  interface Task{void run()throws Exception;}static void check(boolean condition,String message){checks++;if(!condition)throw new AssertionError(message);}static void rejects(Task task,String message)throws Exception{try{task.run();}catch(Exception expected){checks++;return;}throw new AssertionError(message);}
  static void await(CountDownLatch latch,String name)throws Exception{check(latch.await(4,TimeUnit.SECONDS),name);}
  static class Factory extends SocketFactory {
@@ -89,7 +93,7 @@ public final class CurrentTelemetryTest {
  static class FakeSocket extends Socket {
   final Factory owner;final ByteArrayOutputStream output=new ByteArrayOutputStream();volatile boolean closed;int closes;SocketAddress target;
   FakeSocket(Factory owner){this.owner=owner;}
-  public void connect(SocketAddress target,int timeout)throws IOException{this.target=target;if(timeout<=0)throw new AssertionError("unbounded connect");if(owner.made.indexOf(this)==1&&owner.secondConnectHook!=null)owner.secondConnectHook.run();if(owner.failAll||(owner.failSamples&&owner.made.indexOf(this)>0&&owner.made.indexOf(this)%7==0))throw new IOException("bounded sample failed");try{int sample=owner.made.indexOf(this);Thread.sleep(owner.rankPattern?(sample<=26?1:sample<=50?20:5):1);}catch(InterruptedException error){throw new IOException(error);}}
+  public void connect(SocketAddress target,int timeout)throws IOException{this.target=target;if(timeout<=0)throw new AssertionError("unbounded connect");if(owner.made.indexOf(this)==1&&owner.secondConnectHook!=null)owner.secondConnectHook.run();if(owner.failAll||(owner.failSamples&&owner.made.indexOf(this)>0&&owner.made.indexOf(this)%7==0))throw new IOException("bounded sample failed");try{int sample=owner.made.indexOf(this);if(owner.rankPattern){long previous=sampleClock.get()==null?0:sampleClock.get();sampleClock.set(previous+(sample<=26?1:sample<=50?20:5)*1_000_000L);}else Thread.sleep(1);}catch(InterruptedException error){throw new IOException(error);}}
   public void setSoTimeout(int timeout){if(timeout<=0)throw new AssertionError();}
   public OutputStream getOutputStream(){return output;}
   public InputStream getInputStream()throws IOException{
@@ -230,7 +234,9 @@ public final class CurrentTelemetryTest {
    f.telemetry.measureFastest((r,e)->{result.set(r);error.set(e);done.countDown();});await(done,"robust Fastest50 completion");
    check(error.get()==null&&result.get().size()==2,"both complete candidates missing: "+error.get());
    check(result.get().get(0).trimmedMeanMs<result.get().get(1).trimmedMeanMs&&result.get().get(0).medianMs>result.get().get(1).medianMs,"Fastest used favorable median rather than robust trimmed mean");
+   check(result.get().get(0).medianMs==5&&result.get().get(0).trimmedMeanMs==5&&result.get().get(1).medianMs==1&&result.get().get(1).trimmedMeanMs==10.025,"controlled socket durations did not reach the actual statistics calculation");
    check(f.physicalFactory.made.size()==102,"Fastest skipped samples for one candidate");
+   for(FakeSocket socket:f.physicalFactory.made)check(socket.closed,"ranked Fastest returned before actual socket drain");
   }
   for(String change:new String[]{"decision","catalog"})try(Fixture f=new Fixture()){
    f.direct();CountDownLatch done=new CountDownLatch(1);AtomicReference<List<AndroidTelemetry.Result>> result=new AtomicReference<>();
@@ -256,13 +262,24 @@ public final class CurrentTelemetryTest {
 '''
 
 PRODUCTION=['AndroidTelemetryNetwork','AndroidTelemetryCapture','AndroidTelemetryIO','AndroidTelemetryHttp','AndroidTelemetry','AndroidNodeStatistics','AndroidRouterBundleImport','AndroidUnifiedNodeCatalog','AndroidNodeStore','AndroidProfileSelection','AndroidPrivateBenchmarkHttp','AndroidNumericAddress','AndroidMTUMeasurementGate']
+def sample_clock_boundary(source):
+    # Only the socket-duration reads use this fixture clock. Every connection,
+    # source/owner check, drain, sample count, statistic and comparator still runs
+    # through shipping code. Lifecycle deadlines retain the real monotonic clock.
+    # The ordinary cases also retain real elapsed reads; only rankPattern opts in.
+    boundary='long start=System.nanoTime();socket.connect(target,900);double elapsed=(System.nanoTime()-start)'
+    assert source.count(boundary)==1,'shipping TCP sample clock boundary changed'
+    return source.replace(boundary,boundary.replace('System.nanoTime()','CurrentTelemetryTest.sampleNanoTime()'),1)
+
 def run(overrides=None,group=None):
     with tempfile.TemporaryDirectory(prefix='routervpn-current-telemetry-') as directory:
         root=Path(directory)
         for name,source in SOURCES.items():
             path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(source)
         for name in PRODUCTION:
-            path=root/'com/eabusham/routervpn'/f'{name}.java';path.write_text((overrides or {}).get(name,(JAVA/(name+'.java')).read_text()))
+            source=(overrides or {}).get(name,(JAVA/(name+'.java')).read_text())
+            if name=='AndroidTelemetry':source=sample_clock_boundary(source)
+            path=root/'com/eabusham/routervpn'/f'{name}.java';path.write_text(source)
         (root/'com/eabusham/routervpn/CurrentTelemetryTest.java').write_text(HARNESS)
         files=[str(p) for p in root.rglob('*.java')]
         build=subprocess.run(['javac','-cp',JSON_JAR,'-d',str(root),*files],capture_output=True,text=True,timeout=60)
