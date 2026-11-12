@@ -6,6 +6,39 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 12: published connection, measurement and DNS continuation
+
+The [November 12 requirement and evidence ledger](CONTINUATION-EVIDENCE-2026-11-12.md)
+records this continuation from live `9a7c3f60`, with published source through
+`faf7b942`. It preserves the original numbered audit and corrections, the
+later direct map/custom-node request, all-device scope and the distinct
+release/device/deployment evidence requirements.
+
+The Linux imported WG-to-paired-SS path now reaches its authenticated installed
+parent and registered native command (`5a2ce21e`). Ordered per-prefix
+measurement now reaches Android and Apple native hosts (`e0c0991b`), desktop
+current/temporary Speed Lab (`5d7c7023`) and the separate Windows/macOS/Linux
+Performance action (`faf7b942`). Intermediate results retain the exact original
+path, cumulative measurement labels and actual worker/socket MTU ownership.
+Status observation and cleanup preserve caller deadlines; unfinished drain
+retains its original cleanup handle and protection.
+
+Literal Naive H2/CONNECT selected DNS now includes DoH3 and hostname resolvers
+with explicit bootstrap (`edb2601e`). Its complete lower resolver tree stays
+captured and dormant; actual native tests observed zero lower DNS queries and
+zero lower UDP attempts. Exact endpoint, transport, port, TLS/path, credentials
+and selected resolver are preserved. The dedicated linked evidence records the
+126 native verdicts and Apple/desktop producer checks.
+
+Focused native, Java 17, Swift, PowerShell and controller race tests passed
+within the recorded boundaries. A full exact-current native build, release
+publication and physical/private acceptance remain pending. The ordered
+compiler currently accepts paired WG/AWG prefixes and an SS2022 final;
+custom intermediate members and the other recovered graph/execution and
+prefix-candidate requirements remain source work. A safe rejection or a
+successful smaller gate does not close those requirements. No live router,
+AdGuard configuration or private deployment was changed.
+
 ## November 12: ordered Darwin runtime and mandatory native acceptance
 
 The protected ordered macOS host, authenticated generated child and original
