@@ -7,6 +7,7 @@ native stop. Missing native privileges are a failure, never a mocked success.
 """
 from pathlib import Path
 import argparse
+import ast
 import hashlib
 import importlib.util
 import json
@@ -171,6 +172,44 @@ def check_verdict(output, case, *, source_only=False):
     return receipts[0] if receipts else {'source_cases': list(CASES)}
 
 
+
+def namespace_program(source_sha256):
+    """Transfer only sealed stdlib namespace code across the private UID boundary.
+
+    Namespace root maps to outer root, not the runner account. It must not
+    reopen the runner's private checkout or import repository modules there.
+    The exact source hash was already captured by checked_sources before build.
+    """
+    path = Path(__file__).resolve()
+    if path.is_symlink() or not path.is_file():
+        raise ValueError('Encrypted Server lost original namespace source')
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != source_sha256:
+        raise ValueError('Encrypted Server namespace source changed after capture')
+    tree = ast.parse(raw, filename=str(path))
+    projected = ast.parse('from pathlib import Path\nimport hashlib\nimport os\nimport platform\nimport stat\nimport subprocess\nimport sys\n').body
+    for name, captured in (('CASES', CASES), ('NATIVE', NATIVE)):
+        definitions = [node for node in tree.body if isinstance(node, ast.Assign)
+                       and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                       and node.targets[0].id == name]
+        if len(definitions) != 1 or ast.literal_eval(definitions[0].value) != captured:
+            raise ValueError('Encrypted Server namespace changed original case inventory')
+        projected.append(definitions[0])
+    for name in ('image_identity', 'inside_namespace'):
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]
+        if len(functions) != 1 or functions[0].decorator_list:
+            raise ValueError('Encrypted Server namespace lost an original required function')
+        projected.append(functions[0])
+    projected.extend(ast.parse("""
+if __name__ == '__main__':
+    if len(sys.argv) != 8:
+        raise ValueError('Encrypted Server namespace requires exact original arguments')
+    sys.exit(inside_namespace(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]),
+        {'driver': sys.argv[4], 'peer': sys.argv[5], 'worker': sys.argv[6]}, sys.argv[7]))
+""").body)
+    return ast.unparse(ast.Module(body=projected, type_ignores=[]))
+
+
 def inside_namespace(driver, peer, worker, identities, case):
     if platform.system() != 'Linux' or os.geteuid() != 0 or case not in CASES:
         raise ValueError('Encrypted Server needs its isolated native Linux root')
@@ -259,13 +298,14 @@ def execute(core, go='go', *, env=None, receipt=None, compile_only=False):
             sudo = UID.privilege_tool()
             original = os.stat('/proc/self/ns/net')
             native_env = dict(captured, TMPDIR='/tmp', ROUTERVPN_SERVER_CHAIN_OUTER_NETNS=f'{original.st_dev}:{original.st_ino}')
+            program = namespace_program(before['acceptance/deploy/test_server_node_chain_encrypted.py'])
             for case in CASES:
                 command = ['unshare', '--user', '--map-root-user', '--mount', '--net', '--pid', '--fork', '--mount-proc',
-                           sys.executable, str(Path(__file__).resolve()), '--inside', '--driver', str(driver), '--peer', str(peer), '--worker', str(worker), '--case', case,
-                           '--driver-sha256', images['driver'][-1], '--peer-sha256', images['peer'][-1], '--worker-sha256', images['worker'][-1]]
+                           sys.executable, '-I', '-c', program, str(driver), str(peer), str(worker),
+                           images['driver'][-1], images['peer'][-1], images['worker'][-1], case]
                 if sudo:
                     command = [sudo, '-n', '--preserve-env=ROUTERVPN_SERVER_CHAIN_OUTER_NETNS', '--', *command]
-                output = run(command, cwd=ROOT, env=native_env, timeout=125, sudo=sudo)
+                output = run(command, cwd=workspace, env=native_env, timeout=125, sudo=sudo)
                 verdicts.append(check_verdict(output, case)); print(output, end='')
         if checked_sources(core)[1] != before or any(image_identity(path) != images[role] for role, path in (('driver', driver), ('peer', peer), ('worker', worker))):
             raise ValueError('Encrypted Server original source/image changed during acceptance')

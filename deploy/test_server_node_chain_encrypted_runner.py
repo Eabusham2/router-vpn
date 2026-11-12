@@ -2,6 +2,10 @@
 """Causal tests of the encrypted Server gate; these are not native acceptance."""
 from pathlib import Path
 import importlib.util
+import ast
+import hashlib
+import subprocess
+import sys
 import json
 import re
 import tempfile
@@ -103,6 +107,55 @@ class GateTests(unittest.TestCase):
             with self.assertRaises(ValueError): GATE.image_identity(linked)
             path.chmod(0o777)
             with self.assertRaises(ValueError): GATE.image_identity(path)
+
+    def test_namespace_projection_preserves_exact_functions_and_guards(self):
+        path = ROOT/'deploy/test_server_node_chain_encrypted.py'
+        original = path.read_bytes()
+        program = GATE.namespace_program(hashlib.sha256(original).hexdigest())
+        source = ast.parse(original)
+        projected = ast.parse(program)
+        names = ('image_identity', 'inside_namespace')
+        actual = {node.name: node for node in source.body if isinstance(node, ast.FunctionDef) and node.name in names}
+        transferred = {node.name: node for node in projected.body if isinstance(node, ast.FunctionDef)}
+        self.assertEqual(set(transferred), set(names))
+        for name in names:
+            self.assertEqual(ast.dump(actual[name]), ast.dump(transferred[name]))
+        imports = [ast.unparse(node) for node in projected.body if isinstance(node, (ast.Import, ast.ImportFrom))]
+        self.assertEqual(imports, ['from pathlib import Path', 'import hashlib', 'import os', 'import platform', 'import stat', 'import subprocess', 'import sys'])
+        namespace = {'__name__': 'projection_verification'}
+        exec(compile(program, '<captured-native-namespace>', 'exec'), namespace)
+        self.assertEqual(namespace['CASES'], GATE.CASES)
+        self.assertEqual(namespace['NATIVE'], GATE.NATIVE)
+        # This real interpreter test stops at the mandatory case/privilege
+        # boundary before any native image, mount or network operation.
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run([sys.executable, '-I', '-c', program, 'driver', 'peer', 'worker',
+                                     'a'*64, 'b'*64, 'c'*64, 'foreign-case'], cwd=directory,
+                                    text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('Encrypted Server needs its isolated native Linux root', result.stderr)
+        self.assertNotIn('ENCRYPTED_SERVER_RECEIPT', result.stdout)
+
+    def test_namespace_projection_rejects_source_tamper_or_lost_inventory(self):
+        path = ROOT/'deploy/test_server_node_chain_encrypted.py'
+        original = path.read_bytes()
+        captured = hashlib.sha256(original).hexdigest()
+        with self.assertRaisesRegex(ValueError, 'source changed after capture'):
+            GATE.namespace_program('0'*64)
+        mutations = (
+            original.replace(b'def inside_namespace(', b'def lost_inside_namespace(', 1),
+            original + b'\ndef image_identity(path):\n    return None\n',
+            original.replace(b"CASES = ('wg',", b"CASES = ('missing-wg',", 1),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            copy = Path(directory)/'source.py'
+            for changed in mutations:
+                copy.write_bytes(changed)
+                with mock.patch.object(GATE, '__file__', str(copy)):
+                    with self.assertRaisesRegex(ValueError, 'source changed after capture'):
+                        GATE.namespace_program(captured)
+                    with self.assertRaisesRegex(ValueError, 'required function|case inventory'):
+                        GATE.namespace_program(hashlib.sha256(changed).hexdigest())
 
     def test_required_workflow_and_native_architectures(self):
         value=(ROOT/'.github/workflows/server-node-chain-encrypted.yml').read_text();workflow(value)
