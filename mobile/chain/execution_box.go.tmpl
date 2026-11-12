@@ -1,0 +1,805 @@
+package box
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"reflect"
+	"strings"
+	"sync/atomic"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
+	G "github.com/sagernet/sing-box/protocol/routervpnchaingate"
+	"github.com/sagernet/sing-box/protocol/socks"
+	"github.com/sagernet/sing-box/route"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+var errRouterVPNExecutionOwner = errors.New("original ordered execution owner changed or is not admitted")
+
+// This receipt is made from the actual parsed options at Box construction,
+// before any inbound starts. Only the dedicated closed application graph can
+// enter this API. Ordinary Local and pair graphs retain their existing APIs.
+func routerVPNNodeChainExecutionOptionsDigest(ctx context.Context, options option.Options) string {
+	if options.Route == nil || options.Route.Final != mobilemultihop.NodeChainExecutionGateTag ||
+		len(options.Inbounds) != 1 || options.Inbounds[0].Type != C.TypeTun || options.Inbounds[0].Tag != "routervpn-chain-tun" {
+		return ""
+	}
+	services := make([]option.Service, 0, len(options.Services))
+	for _, item := range options.Services {
+		if item.Type != C.TypeOOMKiller {
+			services = append(services, item)
+		}
+	}
+	options.Log, options.Services = nil, services
+	raw, err := SJ.MarshalContext(ctx, options)
+	if err != nil {
+		return ""
+	}
+	digest := sha256.Sum256(raw)
+	clear(raw)
+	return hex.EncodeToString(digest[:])
+}
+
+type routerVPNExecutionState struct {
+	stage      uint8 // 0 preparation, 1 original graph extension, 2 admitted, 3 retired
+	identity   mobilemultihop.NodeChainIdentity
+	prefixes   map[string]adapter.Outbound // immutable after publication
+	projection *mobilemultihop.NodeChainExecutionProjection
+	local      adapter.Outbound
+	server     adapter.Outbound
+}
+
+type routerVPNExecutionPermit struct {
+	state      *routerVPNExecutionState
+	tag        string
+	epoch      uint64
+	generation uint64
+	ctx        context.Context
+	cancel     context.CancelFunc
+}
+
+// One retained Box, TUN, selected resolver and entry survive discovery and
+// candidate comparison. The application ingress and outbound gates begin
+// closed. Neither a metadata-only projection nor a second temporary tunnel
+// can be adopted as this original native owner.
+type RouterVPNNodeChainExecutionEngine struct {
+	instance          *Box
+	prep              *mobilemultihop.NodeChainExecutionPreparation
+	current           func(context.Context) error
+	discovery         atomic.Pointer[mobilemultihop.NodeChainExecutionDiscoveryOwner]
+	planned           atomic.Pointer[mobilemultihop.NodeChainExecutionProjection]
+	state             atomic.Pointer[routerVPNExecutionState]
+	permit            atomic.Pointer[routerVPNExecutionPermit]
+	busy              atomic.Bool
+	opening           atomic.Bool
+	revoked           atomic.Bool
+	revoking          atomic.Int64
+	admission         atomic.Uint64
+	stops             atomic.Int64
+	inbound           adapter.Inbound
+	resolver          adapter.DNSTransport
+	dnsCapture        mobilemultihop.NodeChainExecutionDNSCapture
+	originalOutbounds map[string]adapter.Outbound
+	originalResolvers map[string]adapter.DNSTransport
+	originalServices  map[string]adapter.Service
+	selector          *group.Selector
+	gate              *G.Outbound
+	control           *G.Control
+	ingress           *route.RouterVPNNodeChainIngress
+	entry             adapter.Outbound
+	gateID            string
+}
+
+var _ mobilemultihop.NodeChainExecutionEngine = (*RouterVPNNodeChainExecutionEngine)(nil)
+
+func (s *Box) RouterVPNNewNodeChainExecutionEngine(ctx context.Context, prep *mobilemultihop.NodeChainExecutionPreparation,
+	session string, current func(context.Context) error) (*RouterVPNNodeChainExecutionEngine, error) {
+	if s == nil || ctx == nil || ctx.Err() != nil || prep == nil || current == nil || !routerVPNNodeChainSession(session) ||
+		s.ctx == nil || s.ctx.Err() != nil || s.routerVPNNodeChainExecutionOptions == "" || s.router == nil || s.network == nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	capture, err := prep.Discovery()
+	if err != nil || current(ctx) != nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](s.ctx, []byte(prep.Config()))
+	if err != nil || routerVPNNodeChainExecutionOptionsDigest(s.ctx, options) != s.routerVPNNodeChainExecutionOptions {
+		return nil, errRouterVPNExecutionOwner
+	}
+	e := &RouterVPNNodeChainExecutionEngine{instance: s, prep: prep, current: current,
+		originalOutbounds: make(map[string]adapter.Outbound), originalResolvers: make(map[string]adapter.DNSTransport), originalServices: make(map[string]adapter.Service)}
+	state := &routerVPNExecutionState{identity: mobilemultihop.NodeChainIdentity{EngineID: fmt.Sprintf("%p", s), SessionID: session,
+		SourceSHA256: prep.SourceSHA256(), ConfigSHA256: prep.ConfigSHA256()}, prefixes: make(map[string]adapter.Outbound)}
+	state.identity.NetworkID, err = s.network.RouterVPNNodeChainNetworkContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	dns, err := prep.DNSCapture()
+	inbounds, inErr := adapter.RouterVPNInboundsContext(ctx, s.inbound)
+	if err != nil || inErr != nil || len(inbounds) != 1 || inbounds[0].Type() != C.TypeTun || inbounds[0].Tag() != dns.DNS.TUNTag {
+		return nil, errRouterVPNExecutionOwner
+	}
+	e.inbound = inbounds[0]
+	resolver, found, err := adapter.RouterVPNTransportContext(ctx, s.dnsTransport, dns.DNS.ResolverTag)
+	if err != nil || !found || resolver == nil || s.dnsRouter == nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	e.resolver = resolver
+	e.dnsCapture = dns
+	// Preserve every original graph object, including explicit DNS bootstrap
+	// transports and desktop physical detours/services, not just proof prefixes.
+	var outboundTags []string
+	for _, row := range options.Outbounds {
+		outboundTags = append(outboundTags, row.Tag)
+	}
+	for _, row := range options.Endpoints {
+		outboundTags = append(outboundTags, row.Tag)
+	}
+	for _, tag := range outboundTags {
+		retained, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, tag)
+		if err != nil || !found || retained == nil || tag == "" || e.originalOutbounds[tag] != nil {
+			return nil, errRouterVPNExecutionOwner
+		}
+		e.originalOutbounds[tag] = retained
+	}
+	for _, row := range options.DNS.Servers {
+		retained, found, err := adapter.RouterVPNTransportContext(ctx, s.dnsTransport, row.Tag)
+		if err != nil || !found || retained == nil || row.Tag == "" || e.originalResolvers[row.Tag] != nil {
+			return nil, errRouterVPNExecutionOwner
+		}
+		e.originalResolvers[row.Tag] = retained
+	}
+	for _, row := range options.Services {
+		if row.Type == C.TypeOOMKiller {
+			continue
+		}
+		retained, found, err := adapter.RouterVPNServiceContext(ctx, s.service, row.Tag)
+		if err != nil || !found || retained == nil || row.Tag == "" || e.originalServices[row.Tag] != nil {
+			return nil, errRouterVPNExecutionOwner
+		}
+		e.originalServices[row.Tag] = retained
+	}
+	for _, proof := range prep.ProofInventory() {
+		outbound, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, proof.Tag)
+		if err != nil || !found || outbound == nil || state.prefixes[proof.Tag] != nil {
+			return nil, errRouterVPNExecutionOwner
+		}
+		state.prefixes[proof.Tag] = outbound
+	}
+	e.entry = state.prefixes[capture.Entry.Tag]
+	state.local = state.prefixes[dns.SelectedTag]
+	outbound, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, mobilemultihop.SelectorTag)
+	selector, ok := outbound.(*group.Selector)
+	if err != nil || !found || !ok || selector == nil || e.entry == nil || state.local == nil ||
+		!reflect.DeepEqual(selector.All(), []string{state.local.Tag()}) || selector.Now() != state.local.Tag() {
+		return nil, errRouterVPNExecutionOwner
+	}
+	e.selector = selector
+	outbound, found, err = adapter.RouterVPNOutboundContext(ctx, s.outbound, mobilemultihop.NodeChainExecutionGateTag)
+	gate, ok := outbound.(*G.Outbound)
+	if err != nil || !found || !ok || gate == nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	e.gate = gate
+	e.state.Store(state)
+	e.gateID = state.identity.EngineID + ":" + session + ":" + prep.SourceSHA256()
+	e.control, err = gate.Bind(ctx, e.gateID, e.gateCurrent)
+	if err != nil {
+		// Bind publishes its control only on success. No native capability or
+		// resource belongs to this attempted owner yet; a duplicate Bind must
+		// never return a cleanup handle for the already-bound original gate.
+		return nil, err
+	}
+	e.ingress, err = s.router.RouterVPNBindNodeChainIngress(ctx, e.inbound, e.gateCurrent, e.control.TrackInbound, e.ApplicationOpenContext)
+	if err != nil {
+		return e, err
+	}
+	observed, err := e.ObserveChainContext(ctx)
+	if err != nil || observed != state.identity {
+		return e, errRouterVPNExecutionOwner
+	}
+	closed, err := e.control.Observe(ctx)
+	if err != nil || closed.Open || !closed.Drained || closed.Closed || closed.Identity != e.gateID {
+		return e, errRouterVPNExecutionOwner
+	}
+	e.revoked.Store(true)
+	return e, nil
+}
+
+// Do not call the ingress or gate's Observe from this callback: both retain
+// this function as their original native guard. Every published state is
+// immutable, and the end comparison disqualifies a concurrent transition.
+func (e *RouterVPNNodeChainExecutionEngine) nativeCurrent(ctx context.Context, state *routerVPNExecutionState) error {
+	if e == nil || ctx == nil || ctx.Err() != nil || state == nil || state.stage == 3 || e.state.Load() != state ||
+		e.instance == nil || e.current == nil || e.current(ctx) != nil {
+		return errRouterVPNExecutionOwner
+	}
+	s := e.instance
+	if s.ctx == nil || s.ctx.Err() != nil || s.done == nil || s.network == nil || s.routerVPNNodeChainExecutionOptions == "" {
+		return errRouterVPNExecutionOwner
+	}
+	select {
+	case <-s.done:
+		return errRouterVPNExecutionOwner
+	default:
+	}
+	network, err := s.network.RouterVPNNodeChainNetworkContext(ctx)
+	if err != nil || network != state.identity.NetworkID {
+		return errRouterVPNExecutionOwner
+	}
+	inbounds, err := adapter.RouterVPNInboundsContext(ctx, s.inbound)
+	if err != nil || len(inbounds) != 1 || inbounds[0] != e.inbound {
+		return errRouterVPNExecutionOwner
+	}
+	dns := e.dnsCapture
+	if e.inbound.Type() != C.TypeTun || e.inbound.Tag() != dns.DNS.TUNTag {
+		return errRouterVPNExecutionOwner
+	}
+	resolver, found, err := adapter.RouterVPNTransportContext(ctx, s.dnsTransport, dns.DNS.ResolverTag)
+	if err != nil || !found || resolver != e.resolver {
+		return errRouterVPNExecutionOwner
+	}
+	if err := e.originalManagers(ctx); err != nil {
+		return err
+	}
+	for tag, retained := range state.prefixes {
+		actual, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, tag)
+		if err != nil || !found || actual != retained {
+			return errRouterVPNExecutionOwner
+		}
+	}
+	for tag, retained := range map[string]adapter.Outbound{mobilemultihop.SelectorTag: e.selector, mobilemultihop.NodeChainExecutionGateTag: e.gate} {
+		actual, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, tag)
+		if err != nil || !found || actual != retained {
+			return errRouterVPNExecutionOwner
+		}
+	}
+	if state.stage == 0 && (!reflect.DeepEqual(e.selector.All(), []string{state.local.Tag()}) || e.selector.Now() != state.local.Tag()) {
+		return errRouterVPNExecutionOwner
+	}
+	if state.stage == 2 {
+		if state.projection == nil || state.server == nil ||
+			e.selector.RouterVPNNodeChainSelectionContext(ctx, state.identity.SourceSHA256, state.identity.ConfigSHA256, state.local, state.server) != nil {
+			return errRouterVPNExecutionOwner
+		}
+	}
+	if permit := e.permit.Load(); permit != nil && (permit.state != state || permit.tag != e.selector.Now() || permit.epoch != e.selector.RouterVPNNodeChainSelectionEpoch() || permit.generation != e.admission.Load() || permit.ctx.Err() != nil) {
+		return errRouterVPNExecutionOwner
+	}
+	if e.current(ctx) != nil || e.state.Load() != state {
+		return errRouterVPNExecutionOwner
+	}
+	network, err = s.network.RouterVPNNodeChainNetworkContext(ctx)
+	if err != nil || network != state.identity.NetworkID || ctx.Err() != nil {
+		return errRouterVPNExecutionOwner
+	}
+	select {
+	case <-s.done:
+		return errRouterVPNExecutionOwner
+	default:
+		return nil
+	}
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) gateCurrent(ctx context.Context) error {
+	if e == nil {
+		return errRouterVPNExecutionOwner
+	}
+	return e.nativeCurrent(ctx, e.state.Load())
+}
+
+// This native-pointer check is also usable by the narrowly sealed DELETE
+// capability after the user/source guard has retired. It cannot select another
+// graph or substitute new physical policy while cleaning the original lease.
+func (e *RouterVPNNodeChainExecutionEngine) originalManagers(ctx context.Context) error {
+	if e == nil || ctx == nil || ctx.Err() != nil || e.instance == nil || len(e.originalOutbounds) == 0 || len(e.originalResolvers) == 0 {
+		return errRouterVPNExecutionOwner
+	}
+	for tag, original := range e.originalOutbounds {
+		actual, found, err := adapter.RouterVPNOutboundContext(ctx, e.instance.outbound, tag)
+		if err != nil || !found || actual != original {
+			return errRouterVPNExecutionOwner
+		}
+	}
+	for tag, original := range e.originalResolvers {
+		actual, found, err := adapter.RouterVPNTransportContext(ctx, e.instance.dnsTransport, tag)
+		if err != nil || !found || actual != original {
+			return errRouterVPNExecutionOwner
+		}
+	}
+	for tag, original := range e.originalServices {
+		actual, found, err := adapter.RouterVPNServiceContext(ctx, e.instance.service, tag)
+		if err != nil || !found || actual != original {
+			return errRouterVPNExecutionOwner
+		}
+	}
+	return ctx.Err()
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) ObserveChainContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
+	if e == nil {
+		return mobilemultihop.NodeChainIdentity{}, errRouterVPNExecutionOwner
+	}
+	state := e.state.Load()
+	if state == nil || state.stage != 0 && state.stage != 2 || e.nativeCurrent(ctx, state) != nil ||
+		e.ingress == nil || e.ingress.Current(ctx) != nil || e.state.Load() != state {
+		return mobilemultihop.NodeChainIdentity{}, errRouterVPNExecutionOwner
+	}
+	return state.identity, nil
+}
+
+// A caller must retain even a nonnil connection returned with an error. The
+// shared I/O owner joins its exact Close; discarding a late returned socket
+// here would lose retry authority if that native Close failed.
+func (e *RouterVPNNodeChainExecutionEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return nil, err
+	}
+	state := e.state.Load()
+	retained := state.prefixes[tag]
+	if retained == nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	if state.stage == 0 {
+		capture, err := e.prep.Discovery()
+		if err != nil || tag != capture.Entry.Tag || address != capture.Address {
+			return nil, errRouterVPNExecutionOwner
+		}
+	}
+	destination, err := routerVPNExecutionDestination(address)
+	if err != nil {
+		return nil, err
+	}
+	conn, dialErr := retained.DialContext(ctx, "tcp", destination)
+	observed, err := e.ObserveChainContext(ctx)
+	if err != nil || observed != state.identity || e.state.Load() != state || ctx.Err() != nil || conn == nil {
+		return conn, errors.Join(dialErr, err, ctx.Err(), errRouterVPNExecutionOwner)
+	}
+	return conn, dialErr
+}
+
+func routerVPNExecutionDestination(address string) (M.Socksaddr, error) {
+	host, port, err := net.SplitHostPort(address)
+	ip, ipErr := netip.ParseAddr(host)
+	destination := M.ParseSocksaddr(address)
+	if err != nil || ipErr != nil || ip.Zone() != "" || ip.IsUnspecified() || port == "" || strings.Contains(port, "+") ||
+		!destination.IsValid() || destination.Port == 0 {
+		return M.Socksaddr{}, errRouterVPNExecutionOwner
+	}
+	return destination, nil
+}
+
+// The owner itself creates discovery against its private original-entry Dial;
+// a caller cannot submit a forged discovery object backed by another engine.
+func (e *RouterVPNNodeChainExecutionEngine) DiscoverContext(ctx context.Context) (mobilemultihop.NodeChainExecutionDiscovery, error) {
+	if e == nil || !e.busy.CompareAndSwap(false, true) {
+		return mobilemultihop.NodeChainExecutionDiscovery{}, errRouterVPNExecutionOwner
+	}
+	defer e.busy.Store(false)
+	if _, err := e.ObserveChainContext(ctx); err != nil || e.state.Load().stage != 0 || e.discovery.Load() != nil {
+		return mobilemultihop.NodeChainExecutionDiscovery{}, errRouterVPNExecutionOwner
+	}
+	owner, err := mobilemultihop.NewNodeChainExecutionDiscoveryOwner(e.prep, e)
+	if err != nil {
+		return mobilemultihop.NodeChainExecutionDiscovery{}, err
+	}
+	e.discovery.Store(owner)
+	return owner.Discover(ctx)
+}
+
+// Adopt only the proposal produced by this object's authenticated discovery.
+// Plan and join may be retried if cleanup timed out; native extension itself
+// is one-shot. A failed partial extension requires retiring this original Box.
+func (e *RouterVPNNodeChainExecutionEngine) AdoptContext(ctx context.Context, sourceSHA string, port int) (*mobilemultihop.NodeChainExecutionProjection, error) {
+	return e.adoptContext(ctx, sourceSHA, port, nil)
+}
+
+// Restoration rechecks fresh authenticated discovery but retains the complete
+// original private graph. It must not mint replacement front credentials or
+// silently turn a proved Local/Server restoration into another comparison.
+func (e *RouterVPNNodeChainExecutionEngine) AdoptOriginalContext(ctx context.Context, original *mobilemultihop.NodeChainExecutionPolicy) (*mobilemultihop.NodeChainExecutionProjection, error) {
+	if original == nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	return e.adoptContext(ctx, original.Descriptor().SourceSHA256, original.Request().Port, original)
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) adoptContext(ctx context.Context, sourceSHA string, port int, original *mobilemultihop.NodeChainExecutionPolicy) (result *mobilemultihop.NodeChainExecutionProjection, failure error) {
+	if e == nil || !e.busy.CompareAndSwap(false, true) {
+		return nil, errRouterVPNExecutionOwner
+	}
+	defer e.busy.Store(false)
+	identity, err := e.ObserveChainContext(ctx)
+	state, owner := e.state.Load(), e.discovery.Load()
+	if err != nil || state == nil || state.stage != 0 || owner == nil || owner.Identity() != identity || e.permit.Load() != nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	projection := e.planned.Load()
+	if projection == nil {
+		if original == nil {
+			projection, err = owner.PlanContext(ctx, sourceSHA, port)
+		} else {
+			projection, err = owner.PlanOriginalContext(ctx, original)
+		}
+		if err != nil {
+			return nil, err
+		}
+		e.planned.Store(projection)
+	}
+	// A retry cannot replace the already captured proposal while an original
+	// late discovery operation or failed socket close is still being joined.
+	var source mobilemultihop.NodeChainExecutionSource
+	if SJ.Unmarshal([]byte(projection.Source()), &source) != nil || source.Request.Port != port || original != nil && projection.Source() != original.Source() ||
+		sourceSHA != "" && source.Server.SourceSHA256 != sourceSHA {
+		return nil, errRouterVPNExecutionOwner
+	}
+	if err := owner.Close(ctx); err != nil {
+		return nil, err
+	}
+	if observed, err := e.ObserveChainContext(ctx); err != nil || observed != identity || e.state.Load() != state {
+		return nil, errRouterVPNExecutionOwner
+	}
+	closed, err := e.control.Observe(ctx)
+	if err != nil || closed.Open || !closed.Drained || closed.Closed || closed.Identity != e.gateID || !e.revoked.Load() {
+		return nil, errRouterVPNExecutionOwner
+	}
+	transition, err := projection.Transition()
+	if err != nil || projection.ValidateTransition(e.prep.Config(), projection.Config()) != nil ||
+		transition.PreparationSourceSHA256 != identity.SourceSHA256 || transition.PreparationConfigSHA256 != identity.ConfigSHA256 ||
+		transition.EntryTag != e.entry.Tag() || transition.TUNTag != e.inbound.Tag() || transition.GateTag != e.gate.Tag() ||
+		transition.SelectorTag != e.selector.Tag() {
+		return nil, errRouterVPNExecutionOwner
+	}
+	// Construct only the pinned concrete, resource-free SOCKS implementation.
+	// Parsing and validation complete before the first live append.
+	added := make([]adapter.Outbound, 0, len(transition.AddedOutbounds))
+	next := &routerVPNExecutionState{stage: 2, identity: identity, projection: projection,
+		local: state.local, prefixes: make(map[string]adapter.Outbound)}
+	next.identity.SourceSHA256, next.identity.ConfigSHA256 = projection.SourceSHA256(), projection.ConfigSHA256()
+	for tag, retained := range state.prefixes {
+		next.prefixes[tag] = retained
+	}
+	for _, raw := range transition.AddedOutbounds {
+		spec, err := SJ.UnmarshalExtendedContext[option.Outbound](e.instance.ctx, []byte(raw))
+		options, ok := spec.Options.(*option.SOCKSOutboundOptions)
+		if err != nil || !ok || options == nil || spec.Type != C.TypeSOCKS || options.Version != "5" || options.Detour != e.entry.Tag() || next.prefixes[spec.Tag] != nil {
+			return nil, errRouterVPNExecutionOwner
+		}
+		outbound, err := socks.NewOutbound(e.instance.ctx, e.instance.router, e.instance.logger, spec.Tag, *options)
+		actual, ok := outbound.(*socks.Outbound)
+		if err != nil || !ok || actual == nil {
+			return nil, errRouterVPNExecutionOwner
+		}
+		added = append(added, actual)
+		next.prefixes[spec.Tag] = actual
+	}
+	serverDNS, err := projection.DNSCapture("server")
+	if err != nil || len(added) == 0 || next.prefixes[serverDNS.SelectedTag] == nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	next.server = next.prefixes[serverDNS.SelectedTag]
+	defaultTag := next.local.Tag()
+	if projection.Execution() == "server" {
+		defaultTag = next.server.Tag()
+	}
+	adopting := &routerVPNExecutionState{stage: 1, identity: state.identity, prefixes: state.prefixes, local: state.local}
+	if !e.state.CompareAndSwap(state, adopting) {
+		return nil, errRouterVPNExecutionOwner
+	}
+	defer func() {
+		if failure != nil {
+			// No application permit was opened. Seal off all later adoption,
+			// while the platform still owns and must close this same Box/TUN.
+			e.state.Store(&routerVPNExecutionState{stage: 3, identity: state.identity, prefixes: next.prefixes, local: state.local})
+		}
+	}()
+	for _, outbound := range added {
+		if e.nativeCurrent(ctx, adopting) != nil || e.instance.outbound.RouterVPNAppendNodeChainSOCKS(ctx, outbound, e.entry, e.gate) != nil {
+			return nil, errRouterVPNExecutionOwner
+		}
+	}
+	if err := e.selector.RouterVPNAdmitNodeChainServer(ctx, next.identity.SourceSHA256, next.identity.ConfigSHA256,
+		defaultTag, next.local, next.server, func(ctx context.Context) error { return e.nativeCurrent(ctx, adopting) }); err != nil {
+		return nil, err
+	}
+	if !e.state.CompareAndSwap(adopting, next) {
+		return nil, errRouterVPNExecutionOwner
+	}
+	observed, err := e.ObserveChainContext(ctx)
+	if err != nil || observed != next.identity || e.selector.Now() != defaultTag {
+		return nil, errRouterVPNExecutionOwner
+	}
+	closed, err = e.control.Observe(ctx)
+	if err != nil || closed.Open || closed.Closed || !closed.Drained {
+		return nil, errRouterVPNExecutionOwner
+	}
+	return projection, nil
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) SelectedContext(ctx context.Context) (string, error) {
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return "", err
+	}
+	return e.selector.Now(), ctx.Err()
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) SelectionEpochContext(ctx context.Context) (uint64, error) {
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return 0, err
+	}
+	if e.state.Load().stage != 2 {
+		return 0, errRouterVPNExecutionOwner
+	}
+	epoch := e.selector.RouterVPNNodeChainSelectionEpoch()
+	if epoch == 0 || ctx.Err() != nil {
+		return 0, errRouterVPNExecutionOwner
+	}
+	return epoch, nil
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) SelectContext(ctx context.Context, tag string) error {
+	if e == nil || !e.busy.CompareAndSwap(false, true) {
+		return errRouterVPNExecutionOwner
+	}
+	defer e.busy.Store(false)
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return err
+	}
+	state := e.state.Load()
+	if state.stage != 2 || tag != state.local.Tag() && tag != state.server.Tag() || e.permit.Load() != nil || !e.revoked.Load() || e.revoking.Load() != 0 {
+		return errRouterVPNExecutionOwner
+	}
+	closed, err := e.control.Observe(ctx)
+	if err != nil || closed.Open || !closed.Drained || closed.Closed {
+		return errRouterVPNExecutionOwner
+	}
+	return e.selector.RouterVPNSelectOutboundContext(ctx, tag, func(ctx context.Context) error { return e.nativeCurrent(ctx, state) })
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) DNSExecutionProofContext(ctx context.Context, capture mobilemultihop.NodeChainExecutionDNSCapture) error {
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return err
+	}
+	state := e.state.Load()
+	if state.stage != 2 || state.projection == nil {
+		return errRouterVPNExecutionOwner
+	}
+	expected, err := state.projection.DNSCapture(capture.Execution)
+	epoch := e.selector.RouterVPNNodeChainSelectionEpoch()
+	if err != nil || expected != capture || capture.SelectedTag != e.selector.Now() {
+		return errRouterVPNExecutionOwner
+	}
+	if err := e.instance.RouterVPNStrategyDNSProofContext(ctx); err != nil {
+		return err
+	}
+	observed, err := e.ObserveChainContext(ctx)
+	if err != nil || observed != state.identity || e.state.Load() != state || capture.SelectedTag != e.selector.Now() ||
+		epoch != e.selector.RouterVPNNodeChainSelectionEpoch() {
+		return errRouterVPNExecutionOwner
+	}
+	return nil
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) RevokeApplicationContext(ctx context.Context) error {
+	if e == nil || e.control == nil || ctx == nil {
+		return errRouterVPNExecutionOwner
+	}
+	// Revoke invalidates an older pending Open immediately, even if the gate
+	// was already closed. Cleanup is independent of the retired source guard.
+	e.revoking.Add(1)
+	defer e.revoking.Add(-1)
+	e.admission.Add(1)
+	permit := e.permit.Load()
+	if permit != nil {
+		permit.cancel()
+	}
+	e.revoked.Store(false)
+	err := e.control.Revoke(ctx)
+	if !e.opening.Load() {
+		e.permit.CompareAndSwap(permit, nil)
+	}
+	if err != nil {
+		return err
+	}
+	e.revoked.Store(true)
+	return ctx.Err()
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) OpenApplicationContext(ctx context.Context, identity mobilemultihop.NodeChainIdentity, selectedTag string) error {
+	if e == nil || !e.busy.CompareAndSwap(false, true) {
+		return errRouterVPNExecutionOwner
+	}
+	defer e.busy.Store(false)
+	generation := e.admission.Load()
+	if e.revoking.Load() != 0 {
+		return errRouterVPNExecutionOwner
+	}
+	observed, err := e.ObserveChainContext(ctx)
+	state := e.state.Load()
+	if err != nil || observed != identity || state.stage != 2 || e.control == nil || !e.revoked.Load() ||
+		selectedTag != state.local.Tag() && selectedTag != state.server.Tag() || e.selector.Now() != selectedTag {
+		return errRouterVPNExecutionOwner
+	}
+	// Caller cancellation fences this Open operation; the retained permit's
+	// lifetime belongs to the original Box and explicit Revoke, not a short
+	// observation timeout that the caller releases after successful return.
+	owned, cancel := context.WithCancel(e.instance.ctx)
+	permit := &routerVPNExecutionPermit{state: state, tag: selectedTag, epoch: e.selector.RouterVPNNodeChainSelectionEpoch(), generation: generation, ctx: owned, cancel: cancel}
+	e.opening.Store(true)
+	defer func() {
+		e.opening.Store(false)
+		if owned.Err() != nil {
+			e.permit.CompareAndSwap(permit, nil)
+		}
+	}()
+	if !e.permit.CompareAndSwap(nil, permit) {
+		cancel()
+		return errRouterVPNExecutionOwner
+	}
+	if e.revoking.Load() != 0 || generation != e.admission.Load() || owned.Err() != nil {
+		cancel()
+		e.permit.CompareAndSwap(permit, nil)
+		return errRouterVPNExecutionOwner
+	}
+	e.revoked.Store(false)
+	if err := e.control.Open(ctx); err != nil {
+		cancel()
+		_ = e.RevokeApplicationContext(ctx)
+		e.permit.CompareAndSwap(permit, nil)
+		return err
+	}
+	open, err := e.ApplicationOpenContext(ctx)
+	if err != nil || !open || e.state.Load() != state || e.permit.Load() != permit {
+		cancel()
+		_ = e.RevokeApplicationContext(ctx)
+		e.permit.CompareAndSwap(permit, nil)
+		return errRouterVPNExecutionOwner
+	}
+	return ctx.Err()
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) ApplicationOpenContext(ctx context.Context) (bool, error) {
+	if e == nil || ctx == nil || e.control == nil {
+		return false, errRouterVPNExecutionOwner
+	}
+	// Cleanup must remain observable after the selected profile/source guard
+	// retires. Only the positively revoked, fully joined original capability
+	// may report closed without treating that source as a current path.
+	if e.revoked.Load() && e.revoking.Load() == 0 && !e.opening.Load() && e.permit.Load() == nil {
+		closed, err := e.control.ObserveRetired(ctx)
+		if err != nil || closed.Identity != e.gateID || closed.Open || !closed.Drained ||
+			!e.revoked.Load() || e.revoking.Load() != 0 || e.opening.Load() || e.permit.Load() != nil {
+			return false, errors.Join(err, errRouterVPNExecutionOwner)
+		}
+		return false, ctx.Err()
+	}
+	state := e.state.Load()
+	if state == nil || e.nativeCurrent(ctx, state) != nil {
+		return false, errRouterVPNExecutionOwner
+	}
+	observed, err := e.control.Observe(ctx)
+	if err != nil || observed.Identity != e.gateID || observed.Closed || e.state.Load() != state {
+		return false, errRouterVPNExecutionOwner
+	}
+	if !observed.Open {
+		return false, nil
+	}
+	permit := e.permit.Load()
+	if state.stage != 2 || permit == nil || permit.state != state || permit.tag != e.selector.Now() ||
+		permit.epoch != e.selector.RouterVPNNodeChainSelectionEpoch() || permit.ctx.Err() != nil || permit.generation != e.admission.Load() || ctx.Err() != nil {
+		return false, errRouterVPNExecutionOwner
+	}
+	return true, nil
+}
+
+// A sealed stop grants only DELETE for the request captured before PUT. Its
+// cleanup observation deliberately survives a cancelled user/profile proof.
+// It still requires the exact original Box and entry pointer, a completed
+// application revoke barrier, and the original native connection remaining
+// available. It never starts a replacement connection or uses a physical dial.
+func (e *RouterVPNNodeChainExecutionEngine) CaptureExecutionStop(ctx context.Context, capture mobilemultihop.NodeChainExecutionStopCapture) (mobilemultihop.LeaseStop, error) {
+	if e == nil || !e.busy.CompareAndSwap(false, true) {
+		return nil, errRouterVPNExecutionOwner
+	}
+	defer e.busy.Store(false)
+	identity, err := e.ObserveChainContext(ctx)
+	if err != nil || capture.Identity() != identity || e.state.Load().stage != 2 || !e.revoked.Load() {
+		return nil, errRouterVPNExecutionOwner
+	}
+	tag, address := capture.Route()
+	discovery, err := e.prep.Discovery()
+	if err != nil || tag != discovery.Entry.Tag || address != discovery.Address || e.entry == nil || e.entry.Tag() != tag {
+		return nil, errRouterVPNExecutionOwner
+	}
+	destination, err := routerVPNExecutionDestination(address)
+	if err != nil {
+		return nil, err
+	}
+	state, original := e.state.Load(), e.entry
+	var discarded atomic.Bool
+	cleanupCurrent := func(ctx context.Context) error {
+		if ctx == nil || ctx.Err() != nil || discarded.Load() || !e.revoked.Load() || e.revoking.Load() != 0 || e.permit.Load() != nil || e.state.Load() != state ||
+			e.instance == nil || e.instance.ctx == nil || e.instance.ctx.Err() != nil || e.instance.done == nil {
+			return errRouterVPNExecutionOwner
+		}
+		select {
+		case <-e.instance.done:
+			return errRouterVPNExecutionOwner
+		default:
+		}
+		actual, found, err := adapter.RouterVPNOutboundContext(ctx, e.instance.outbound, tag)
+		if err != nil || !found || actual != original || e.originalManagers(ctx) != nil || ctx.Err() != nil {
+			return errRouterVPNExecutionOwner
+		}
+		return nil
+	}
+	if err := cleanupCurrent(ctx); err != nil {
+		return nil, err
+	}
+	stop, err := mobilemultihop.NewOwnedNodeChainExecutionStop(capture, func(ctx context.Context) (net.Conn, error) {
+		if err := cleanupCurrent(ctx); err != nil {
+			return nil, err
+		}
+		connection, dialErr := original.DialContext(ctx, "tcp", destination)
+		// Shared stop I/O retains nonnil+error and joins a failed Close retry.
+		return connection, errors.Join(dialErr, cleanupCurrent(ctx))
+	}, cleanupCurrent, func() {
+		if discarded.CompareAndSwap(false, true) {
+			e.stops.Add(-1)
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	e.stops.Add(1)
+	if e.nativeCurrent(ctx, state) != nil || cleanupCurrent(ctx) != nil {
+		stop.Discard() // no PUT or stop operation has been entered
+		return nil, errRouterVPNExecutionOwner
+	}
+	return stop, nil
+}
+
+// The platform calls this only after the shared execution runtime has joined
+// proofs and its exact lease stop. This method never closes the Box/TUN; that
+// remains the original platform owner's next checked teardown step.
+func (e *RouterVPNNodeChainExecutionEngine) RetireContext(ctx context.Context) error {
+	if e == nil || ctx == nil || e.control == nil {
+		return errRouterVPNExecutionOwner
+	}
+	if err := e.RevokeApplicationContext(ctx); err != nil {
+		return err
+	}
+	if !e.busy.CompareAndSwap(false, true) {
+		return errors.New("original ordered native operation is not joined")
+	}
+	defer e.busy.Store(false)
+	if e.stops.Load() != 0 {
+		return errors.New("original ordered lease cleanup is not joined")
+	}
+	if owner := e.discovery.Load(); owner != nil {
+		if err := owner.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if err := e.control.Close(ctx); err != nil {
+		return err
+	}
+	if e.ingress != nil {
+		e.ingress.Retire()
+	}
+	state := e.state.Load()
+	if state != nil {
+		e.state.Store(&routerVPNExecutionState{stage: 3, identity: state.identity, prefixes: state.prefixes, local: state.local, server: state.server})
+	}
+	return ctx.Err()
+}

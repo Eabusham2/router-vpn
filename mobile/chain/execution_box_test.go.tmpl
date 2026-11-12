@@ -1,0 +1,698 @@
+package box
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mdns "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
+	G "github.com/sagernet/sing-box/protocol/routervpnchaingate"
+	"github.com/sagernet/sing-box/protocol/socks"
+	"github.com/sagernet/sing-box/route"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
+	SJ "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
+)
+
+// These fixtures use real pinned managers, route/DNS dispatch, selector,
+// application gate, SOCKS constructors and shared discovery HTTP. Explicit
+// substitutes are the privileged TUN/OS monitor, encrypted prefix I/O and DNS
+// transport. They establish ownership, not encrypted device acceptance.
+type executionNativeDNS struct {
+	dns.TransportAdapter
+	calls  atomic.Int64
+	mu     sync.Mutex
+	during func()
+}
+
+func (*executionNativeDNS) Start(adapter.StartStage) error { return nil }
+func (*executionNativeDNS) Close() error                   { return nil }
+func (*executionNativeDNS) Reset()                         {}
+func (d *executionNativeDNS) Exchange(ctx context.Context, q *mdns.Msg) (*mdns.Msg, error) {
+	d.calls.Add(1)
+	d.mu.Lock()
+	during := d.during
+	d.mu.Unlock()
+	if during != nil {
+		during()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	answer := new(mdns.Msg)
+	answer.SetReply(q)
+	answer.Answer = []mdns.RR{&mdns.A{Hdr: mdns.RR_Header{Name: q.Question[0].Name, Rrtype: mdns.TypeA, Class: mdns.ClassINET, Ttl: 30}, A: net.IPv4(93, 184, 216, 34)}}
+	return answer, nil
+}
+func (d *executionNativeDNS) ExchangeAsync(ctx context.Context, q *mdns.Msg, callback func(*mdns.Msg, error)) {
+	answer, err := d.Exchange(ctx, q)
+	callback(answer, err)
+}
+
+type executionNativeFixture struct {
+	prep     *mobilemultihop.NodeChainExecutionPreparation
+	server   *mobilemultihop.NodeChainServerPolicy
+	box      *Box
+	engine   *RouterVPNNodeChainExecutionEngine
+	prefixes map[string]*chainNativePrefix
+	dns      *executionNativeDNS
+	current  atomic.Bool
+	guardMu  sync.Mutex
+	guard    func(context.Context) error
+	requests atomic.Int64
+	control  func(http.ResponseWriter, *http.Request) bool
+	ctx      context.Context
+}
+
+func executionNativeSources(t *testing.T, execution string) (*mobilemultihop.NodeChainExecutionPreparation, *mobilemultihop.NodeChainServerPolicy) {
+	t.Helper()
+	chain := chainNativeSourceModes(t, []string{"wg", "wg"})
+	launch, err := chain.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if err := json.Unmarshal([]byte(launch), &source); err != nil {
+		t.Fatal(err)
+	}
+	proofs := chain.ProofInventory()
+	serverSource := mobilemultihop.NodeChainServerSource{Schema: 1, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: proofs[0].Mode}
+	for i, launch := range source.Nodes {
+		var row struct {
+			Mode      string `json:"mode"`
+			Files     string `json:"files"`
+			Profile   string `json:"profile_json"`
+			Start     string `json:"start"`
+			Bootstrap string `json:"dns_bootstrap"`
+		}
+		if err := json.Unmarshal([]byte(launch), &row); err != nil {
+			t.Fatal(err)
+		}
+		identity := row.Files
+		if row.Mode == "shadowsocks" {
+			client, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(20 + i)}, 32))
+			server, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(70 + i)}, 32))
+			wg := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/24,fd77::2/64\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=198.51.100.%d:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", base64.StdEncoding.EncodeToString(client.Bytes()), base64.StdEncoding.EncodeToString(server.PublicKey().Bytes()), 20+i)
+			identity = chainNativeJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(wg))})
+		}
+		source.IdentitySources = append(source.IdentitySources, identity)
+		if i == 0 {
+			continue
+		}
+		if row.Mode == "wg" {
+			var files map[string]string
+			if err := json.Unmarshal([]byte(row.Files), &files); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := base64.StdEncoding.DecodeString(files["wg.conf"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			oldKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(20 + i)}, 32))
+			newKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(220 + i)}, 32))
+			if !strings.Contains(string(raw), oldKey) {
+				t.Fatal("missing original independent client key")
+			}
+			files["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(strings.Replace(string(raw), oldKey, newKey, 1)))
+			row.Files = chainNativeJSON(t, files)
+			node, err := mobilemultihop.NewNodeProfile(row.Mode, row.Files, row.Profile, row.Start, row.Bootstrap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			launch, err = node.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity = row.Files
+		}
+		serverSource.Nodes = append(serverSource.Nodes, launch)
+		serverSource.IdentitySources = append(serverSource.IdentitySources, identity)
+	}
+	prep, err := mobilemultihop.NewNodeChainExecutionPreparation(chainNativeJSON(t, source), execution)
+	if err != nil {
+		t.Fatal("preparation", err)
+	}
+	server, err := mobilemultihop.NewNodeChainServerPolicy(chainNativeJSON(t, serverSource))
+	if err != nil {
+		t.Fatal("server policy", err)
+	}
+	return prep, server
+}
+
+func newExecutionNativeFixture(t *testing.T, execution string, edit func(map[string]any)) *executionNativeFixture {
+	t.Helper()
+	f := &executionNativeFixture{prefixes: map[string]*chainNativePrefix{}}
+	f.prep, f.server = executionNativeSources(t, execution)
+	f.current.Store(true)
+	insRegistry, outsRegistry, endsRegistry, dnsRegistry := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry(), dns.NewTransportRegistry()
+	group.RegisterSelector(outsRegistry)
+	G.RegisterOutbound(outsRegistry)
+	socks.RegisterOutbound(outsRegistry)
+	inbound.Register[option.TunInboundOptions](insRegistry, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+		return &chainNativeTUN{inbound.NewAdapter(C.TypeTun, tag)}, nil
+	})
+	outbound.Register[option.ShadowsocksOutboundOptions](outsRegistry, C.TypeShadowsocks, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.ShadowsocksOutboundOptions) (adapter.Outbound, error) {
+		p := &chainNativePrefix{Adapter: outbound.NewAdapter(C.TypeShadowsocks, tag, []string{"tcp", "udp"}, nil)}
+		f.prefixes[tag] = p
+		return p, nil
+	})
+	endpoint.Register[option.WireGuardEndpointOptions](endsRegistry, C.TypeWireGuard, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.WireGuardEndpointOptions) (adapter.Endpoint, error) {
+		p := &chainNativePrefix{Adapter: outbound.NewAdapter(C.TypeWireGuard, tag, []string{"tcp", "udp"}, nil)}
+		f.prefixes[tag] = p
+		return p, nil
+	})
+	dns.RegisterTransport[option.RemoteDNSServerOptions](dnsRegistry, C.DNSTypeUDP, func(_ context.Context, _ log.ContextLogger, tag string, opts option.RemoteDNSServerOptions) (adapter.DNSTransport, error) {
+		p := &executionNativeDNS{TransportAdapter: dns.NewTransportAdapterWithRemoteOptions(C.DNSTypeUDP, tag, opts)}
+		capture, err := f.prep.DNSCapture()
+		if err != nil {
+			return nil, err
+		}
+		if tag == capture.DNS.ResolverTag {
+			f.dns = p
+		}
+		return p, nil
+	})
+	f.ctx = Context(t.Context(), insRegistry, outsRegistry, endsRegistry, dnsRegistry, boxService.NewRegistry(), certificate.NewRegistry())
+	factory := log.NewNOPFactory()
+	logger := factory.Logger()
+	var graph map[string]any
+	if err := json.Unmarshal([]byte(f.prep.Config()), &graph); err != nil {
+		t.Fatal(err)
+	}
+	if edit != nil {
+		edit(graph)
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](f.ctx, []byte(chainNativeJSON(t, graph)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ends := endpoint.NewManager(logger, endsRegistry)
+	outs := outbound.NewManager(logger, outsRegistry, ends, options.Route.Final)
+	ins := inbound.NewManager(logger, insRegistry, ends)
+	transports := dns.NewTransportManager(logger, dnsRegistry, outs, options.DNS.Final)
+	service.MustRegister[adapter.EndpointManager](f.ctx, ends)
+	service.MustRegister[adapter.OutboundManager](f.ctx, outs)
+	service.MustRegister[adapter.InboundManager](f.ctx, ins)
+	service.MustRegister[adapter.DNSTransportManager](f.ctx, transports)
+	dnsRouter, err := dns.NewRouter(f.ctx, factory, *options.DNS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.MustRegister[adapter.DNSRouter](f.ctx, dnsRouter)
+	network := new(route.NetworkManager)
+	*chainNativeField[context.Context](t, network, "ctx") = f.ctx
+	chainNativeField[atomic.Bool](t, network, "started").Store(true)
+	*chainNativeField[tun.DefaultInterfaceMonitor](t, network, "interfaceMonitor") = &chainNativeMonitor{physical: &control.Interface{Name: "ordered-execution-fixture", Index: 31}}
+	service.MustRegister[adapter.NetworkManager](f.ctx, network)
+	connection := route.NewConnectionManager(logger)
+	service.MustRegister[adapter.ConnectionManager](f.ctx, connection)
+	router := route.NewRouter(f.ctx, factory, *options.Route, *options.DNS)
+	service.MustRegister[adapter.Router](f.ctx, router)
+	f.box = &Box{ctx: f.ctx, done: make(chan struct{}), logger: logger, inbound: ins, outbound: outs, endpoint: ends, dnsTransport: transports, dnsRouter: dnsRouter, network: network, router: router, connection: connection, routerVPNNodeChainExecutionOptions: routerVPNNodeChainExecutionOptionsDigest(f.ctx, options)}
+	for _, row := range options.Inbounds {
+		if err := ins.Create(f.ctx, router, logger, row.Tag, row.Type, row.Options); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, row := range options.Endpoints {
+		if err := ends.Create(f.ctx, router, logger, row.Tag, row.Type, row.Options); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, row := range options.Outbounds {
+		if err := outs.Create(f.ctx, router, logger, row.Tag, row.Type, row.Options); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, row := range options.DNS.Servers {
+		if err := transports.Create(f.ctx, logger, row.Tag, row.Type, row.Options); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := dnsRouter.Initialize(options.DNS.Rules); err != nil {
+		t.Fatal(err)
+	}
+	if err := router.Initialize(options.Route.Rules, options.Route.RuleSet); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range adapter.ListStartStages {
+		if err := outs.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+		if err := transports.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+		if err := dnsRouter.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if f.engine != nil {
+			if err := f.engine.RetireContext(ctx); err != nil {
+				t.Error("native owner retirement", err)
+			}
+		}
+		if err := outs.Close(); err != nil {
+			t.Error(err)
+		}
+		_ = dnsRouter.Close()
+		_ = transports.Close()
+	})
+	return f
+}
+
+func (f *executionNativeFixture) capture(ctx context.Context) (*RouterVPNNodeChainExecutionEngine, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return nil, err
+	}
+	e, err := f.box.RouterVPNNewNodeChainExecutionEngine(ctx, f.prep, hex.EncodeToString(nonce[:]), func(ctx context.Context) error {
+		if !f.current.Load() {
+			return errors.New("original native owner changed")
+		}
+		f.guardMu.Lock()
+		guard := f.guard
+		f.guardMu.Unlock()
+		if guard != nil {
+			return guard(ctx)
+		}
+		return ctx.Err()
+	})
+	f.engine = e
+	return e, err
+}
+
+func TestRouterVPNExecutionNativeDuplicateBindKeepsOriginalOwner(t *testing.T) {
+	f := newExecutionNativeFixture(t, "auto", nil)
+	original, err := f.capture(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := original.ObserveChainContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := f.box.RouterVPNNewNodeChainExecutionEngine(t.Context(), f.prep, strings.Repeat("d", 32), func(ctx context.Context) error { return ctx.Err() })
+	if err == nil || failed != nil {
+		t.Fatal("failed duplicate Bind returned ownership of the original gate")
+	}
+	observed, err := original.ObserveChainContext(t.Context())
+	if err != nil || observed != identity {
+		t.Fatal("failed duplicate Bind changed the retained original owner", err)
+	}
+	if open, err := original.ApplicationOpenContext(t.Context()); err != nil || open {
+		t.Fatal("failed duplicate Bind changed original closed admission", open, err)
+	}
+}
+
+func (f *executionNativeFixture) discovery(t *testing.T) {
+	t.Helper()
+	capture, err := f.prep.Discovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.requests.Add(1)
+		if r.Header.Get("Authorization") != "Bearer "+capture.Token {
+			http.Error(w, "wrong private owner", http.StatusUnauthorized)
+			return
+		}
+		if f.control != nil && f.control(w, r) {
+			return
+		}
+		switch r.URL.Path {
+		case "/health":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": capture.Entry.NodeID, "proof": "router-vpn-private-agent-v1"})
+		case "/api/multihop/chain/lease":
+			_ = json.NewEncoder(w).Encode(mobilemultihop.NodeChainExecutionDiscovery{NodeID: capture.Entry.NodeID, Challenge: multihoprelay.ExternalPacketChallenge{Epoch: strings.Repeat("c", 64), Peer: "10.77.0.2", ExpiresAt: time.Now().Add(55 * time.Second).Unix()}, Sources: []multihoprelay.NodeChainDescriptor{f.server.Descriptor()}, FirstPort: 32000, LastPort: 32007})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	f.prefixes[capture.Entry.Tag].dial = func(ctx context.Context) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+	}
+}
+
+func (f *executionNativeFixture) adopt(t *testing.T) *mobilemultihop.NodeChainExecutionProjection {
+	t.Helper()
+	e, err := f.capture(t.Context())
+	if err != nil {
+		t.Fatal("capture", err)
+	}
+	f.discovery(t)
+	if _, err := e.DiscoverContext(t.Context()); err != nil {
+		t.Fatal("discovery", err)
+	}
+	p, err := e.AdoptContext(t.Context(), f.server.SourceSHA256(), 32003)
+	if err != nil {
+		t.Fatal("native adopt", err)
+	}
+	return p
+}
+
+func TestRouterVPNExecutionNativeRetainsOneGraphThroughDiscovery(t *testing.T) {
+	for _, mode := range []string{"auto", "server"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newExecutionNativeFixture(t, mode, nil)
+			inbounds, _ := adapter.RouterVPNInboundsContext(t.Context(), f.box.inbound)
+			p := f.adopt(t)
+			e := f.engine
+			identity, err := e.ObserveChainContext(t.Context())
+			if err != nil || identity.SourceSHA256 != p.SourceSHA256() || identity.ConfigSHA256 != p.ConfigSHA256() {
+				t.Fatal("final identity did not retain actual projected graph", err)
+			}
+			after, _ := adapter.RouterVPNInboundsContext(t.Context(), f.box.inbound)
+			if len(after) != 1 || after[0] != inbounds[0] || e.instance != f.box || e.resolver != f.dns || e.entry != f.prefixes[f.prep.ProofInventory()[0].Tag] {
+				t.Fatal("native adoption replaced original TUN/resolver/entry")
+			}
+			if f.requests.Load() != 2 {
+				t.Fatal("discovery did not use exactly original authenticated health and GET")
+			}
+			if open, err := e.ApplicationOpenContext(t.Context()); err != nil || open {
+				t.Fatal("discovery/adoption opened application traffic", err)
+			}
+			if epoch, err := e.SelectionEpochContext(t.Context()); err != nil || epoch == 0 {
+				t.Fatal("admitted selection has no monotonic identity", err)
+			}
+			if _, err := e.AdoptContext(t.Context(), f.server.SourceSHA256(), 32003); err == nil {
+				t.Fatal("same original native graph admitted a second extension")
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionNativeRejectsActualGraphSubstitution(t *testing.T) {
+	for _, fault := range []string{"mtu", "dns", "rule", "entry-key"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newExecutionNativeFixture(t, "auto", func(graph map[string]any) {
+				switch fault {
+				case "mtu":
+					graph["inbounds"].([]any)[0].(map[string]any)["mtu"] = float64(1400)
+				case "dns":
+					graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["server"] = "192.168.50.134"
+				case "rule":
+					graph["route"].(map[string]any)["rules"] = []any{}
+				case "entry-key":
+					graph["endpoints"].([]any)[0].(map[string]any)["private_key"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{99}, 32))
+				}
+			})
+			if e, err := f.capture(t.Context()); err == nil || e != nil {
+				t.Fatal("changed actual graph acquired native preparation")
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionNativeDNSRejectsAwayAndBackSelection(t *testing.T) {
+	f := newExecutionNativeFixture(t, "auto", nil)
+	p := f.adopt(t)
+	e := f.engine
+	local, _ := p.DNSCapture("local")
+	server, _ := p.DNSCapture("server")
+	if err := e.SelectContext(t.Context(), local.SelectedTag); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DNSExecutionProofContext(t.Context(), local); err != nil {
+		t.Fatal("original DNS proof", err)
+	}
+	f.dns.mu.Lock()
+	f.dns.during = func() {
+		if !e.selector.SelectOutbound(server.SelectedTag) || !e.selector.SelectOutbound(local.SelectedTag) {
+			t.Error("actual selector change failed")
+		}
+	}
+	f.dns.mu.Unlock()
+	if err := e.DNSExecutionProofContext(t.Context(), local); err == nil {
+		t.Fatal("away-and-back selected DNS proof was accepted")
+	}
+	if f.dns.calls.Load() != 2 {
+		t.Fatal("native DNS owner was bypassed or cached")
+	}
+}
+
+func TestRouterVPNExecutionNativeGateRejectsForeignProofAndRetiredSelection(t *testing.T) {
+	f := newExecutionNativeFixture(t, "auto", nil)
+	p := f.adopt(t)
+	e := f.engine
+	identity, err := e.ObserveChainContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, _ := p.DNSCapture("local")
+	server, _ := p.DNSCapture("server")
+	wrong := identity
+	wrong.SourceSHA256 = strings.Repeat("e", 64)
+	if e.OpenApplicationContext(t.Context(), wrong, local.SelectedTag) == nil {
+		t.Fatal("foreign capture opened original application gate")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	if err := e.OpenApplicationContext(ctx, identity, local.SelectedTag); err != nil {
+		t.Fatal("original permit", err)
+	}
+	cancel()
+	if open, err := e.ApplicationOpenContext(t.Context()); err != nil || !open {
+		t.Fatal("finished observation timeout retired a valid owned connection", err)
+	}
+	if err := e.SelectContext(t.Context(), server.SelectedTag); err == nil {
+		t.Fatal("selection changed while application traffic admitted")
+	}
+	if !e.selector.SelectOutbound(server.SelectedTag) || !e.selector.SelectOutbound(local.SelectedTag) {
+		t.Fatal("actual selector mutation failed")
+	}
+	if open, err := e.ApplicationOpenContext(t.Context()); err == nil || open {
+		t.Fatal("old permit survived away-and-back native selection")
+	}
+	if err := e.RevokeApplicationContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if open, err := e.ApplicationOpenContext(t.Context()); err != nil || open {
+		t.Fatal("original traffic gate did not retire", err)
+	}
+}
+
+func TestRouterVPNExecutionNativeOpenCannotFinishAfterRevoke(t *testing.T) {
+	f := newExecutionNativeFixture(t, "auto", nil)
+	p := f.adopt(t)
+	e := f.engine
+	identity, err := e.ObserveChainContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, _ := p.DNSCapture("local")
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	f.guardMu.Lock()
+	f.guard = func(ctx context.Context) error { once.Do(func() { close(entered); <-release }); return ctx.Err() }
+	f.guardMu.Unlock()
+	result := make(chan error, 1)
+	go func() { result <- e.OpenApplicationContext(t.Context(), identity, local.SelectedTag) }()
+	<-entered
+	if err := e.RevokeApplicationContext(t.Context()); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-result; err == nil {
+		t.Fatal("older pending native open completed after revoke")
+	}
+	f.guardMu.Lock()
+	f.guard = nil
+	f.guardMu.Unlock()
+	if open, err := e.ApplicationOpenContext(t.Context()); err != nil || open {
+		t.Fatal("late open escaped original cancellation", err)
+	}
+}
+
+func TestRouterVPNExecutionNativeDiscoveryKeepsLiteralOriginalEntry(t *testing.T) {
+	f := newExecutionNativeFixture(t, "auto", nil)
+	e, err := f.capture(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.discovery(t)
+	capture, _ := f.prep.Discovery()
+	if conn, err := e.Dial(t.Context(), capture.Entry.Tag, "10.77.0.2:8787"); err == nil || conn != nil {
+		t.Fatal("preparation dial accepted another destination")
+	}
+	if conn, err := e.Dial(t.Context(), f.prep.ProofInventory()[1].Tag, capture.Address); err == nil || conn != nil {
+		t.Fatal("preparation dial accepted another prefix")
+	}
+	if f.requests.Load() != 0 {
+		t.Fatal("refused preparation dial reached native control")
+	}
+	if _, err := e.DiscoverContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	f.current.Store(false)
+	if _, err := e.AdoptContext(t.Context(), f.server.SourceSHA256(), 32003); err == nil {
+		t.Fatal("changed original owner adopted server graph")
+	}
+	f.current.Store(true)
+	if !reflect.DeepEqual(e.selector.All(), []string{e.state.Load().local.Tag()}) {
+		t.Fatal("failed adoption changed original selector")
+	}
+}
+
+func TestRouterVPNExecutionNativeRestoreRetainsOriginalFront(t *testing.T) {
+	first := newExecutionNativeFixture(t, "auto", nil)
+	original := first.adopt(t)
+	policy, err := mobilemultihop.NewNodeChainExecutionPolicy(original.Source())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.engine.RetireContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	second := newExecutionNativeFixture(t, "auto", nil)
+	engine, err := second.capture(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second.discovery(t)
+	if _, err := engine.DiscoverContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := engine.AdoptOriginalContext(t.Context(), policy)
+	if err != nil || restored.Source() != original.Source() || restored.Config() != original.Config() {
+		t.Fatal("restoration re-planned original graph or private front", err)
+	}
+	if first.engine.instance == engine.instance || first.engine.inbound == engine.inbound || first.engine.gate == engine.gate {
+		t.Fatal("restoration reused a retired native connection owner")
+	}
+	if open, err := engine.ApplicationOpenContext(t.Context()); err != nil || open {
+		t.Fatal("restored graph skipped fresh proof admission", err)
+	}
+}
+
+func TestRouterVPNExecutionNativeRetiredSourceKeepsClosedReceipt(t *testing.T) {
+	f := newExecutionNativeFixture(t, "auto", nil)
+	projection := f.adopt(t)
+	identity, err := f.engine.ObserveChainContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, _ := projection.DNSCapture("local")
+	if err := f.engine.OpenApplicationContext(t.Context(), identity, local.SelectedTag); err != nil {
+		t.Fatal(err)
+	}
+	f.current.Store(false)
+	if _, err := f.engine.ObserveChainContext(t.Context()); err == nil {
+		t.Fatal("retired source retained current native proof")
+	}
+	if err := f.engine.RevokeApplicationContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if open, err := f.engine.ApplicationOpenContext(t.Context()); err != nil || open {
+		t.Fatal("retired source stranded closed native receipt", err)
+	}
+	if f.engine.OpenApplicationContext(t.Context(), identity, local.SelectedTag) == nil {
+		t.Fatal("retired source used cleanup receipt to reopen traffic")
+	}
+	if err := f.engine.RetireContext(t.Context()); err != nil {
+		t.Fatal("retired source stranded original native retirement", err)
+	}
+}
+
+func TestRouterVPNExecutionNativeFailedAcquisitionRetainsSealedStop(t *testing.T) {
+	f := newExecutionNativeFixture(t, "server", nil)
+	var allowStop atomic.Bool
+	var acquisitions, deletions atomic.Int64
+	var requestMu sync.Mutex
+	var original multihoprelay.NodeChainRequest
+	f.control = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method != http.MethodPut && r.Method != http.MethodDelete {
+			return false
+		}
+		if r.URL.Path != "/api/multihop/chain/lease" {
+			t.Error("sealed native control changed original route")
+			http.Error(w, "wrong route", 400)
+			return true
+		}
+		var request multihoprelay.NodeChainRequest
+		if json.NewDecoder(r.Body).Decode(&request) != nil {
+			t.Error("original native control lost request")
+			http.Error(w, "bad request", 400)
+			return true
+		}
+		if r.Method == http.MethodPut {
+			if f.engine.stops.Load() != 1 {
+				t.Error("native acquisition preceded sealed original stop")
+			}
+			requestMu.Lock()
+			original = request.Clone()
+			requestMu.Unlock()
+			acquisitions.Add(1)
+			f.current.Store(false)
+			http.Error(w, "acquisition reply lost after source retirement", 503)
+			return true
+		}
+		requestMu.Lock()
+		same := reflect.DeepEqual(original, request)
+		requestMu.Unlock()
+		if !same {
+			t.Error("sealed native cleanup replaced original acquisition")
+			http.Error(w, "foreign request", 400)
+			return true
+		}
+		deletions.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"node_id": request.EntryNodeID, "session_id": request.SessionID, "stopped": allowStop.Load()})
+		return true
+	}
+	projection := f.adopt(t)
+	runtime, err := mobilemultihop.NewNodeChainExecutionRuntime(projection, f.engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.Run(t.Context()) == nil {
+		t.Fatal("failed native acquisition became ready")
+	}
+	if acquisitions.Load() != 1 || deletions.Load() == 0 || f.engine.stops.Load() != 1 {
+		t.Fatal("failed native acquisition lost exact cleanup authority", acquisitions.Load(), deletions.Load(), f.engine.stops.Load())
+	}
+	if f.engine.RetireContext(t.Context()) == nil {
+		t.Fatal("native owner retired before remote cleanup joined")
+	}
+	allowStop.Store(true)
+	if err := runtime.CloseContext(t.Context()); err != nil {
+		t.Fatal("retired source stranded original runtime cleanup", err)
+	}
+	if f.engine.stops.Load() != 0 || acquisitions.Load() != 1 || deletions.Load() < 2 {
+		t.Fatal("native cleanup did not join same original stop")
+	}
+	if err := f.engine.RetireContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}

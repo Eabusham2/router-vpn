@@ -1,0 +1,75 @@
+package outbound
+
+import (
+	"context"
+	"errors"
+	"io"
+	"strings"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+)
+
+// Append one already constructed, resource-free SOCKS outbound. The native
+// execution owner constructs the pinned concrete SOCKS implementation itself;
+// registry replacement and ordinary Manager.Create are deliberately excluded.
+// Existing endpoints, outbounds and the closed default gate cannot be replaced.
+// A failed post-admission observation leaves this same Box owning the append.
+func (m *Manager) RouterVPNAppendNodeChainSOCKS(ctx context.Context, added, entry, gate adapter.Outbound) error {
+	bad := errors.New("ordered native append lost its original managed graph")
+	if m == nil || ctx == nil || ctx.Err() != nil || added == nil || entry == nil || gate == nil ||
+		added.Type() != C.TypeSOCKS || !strings.HasPrefix(added.Tag(), "routervpn-chain-server-") ||
+		gate.Tag() != "routervpn-chain-application" || gate.Type() != "routervpn-node-chain-gate" ||
+		added.Tag() == entry.Tag() || len(added.Dependencies()) != 1 || added.Dependencies()[0] != entry.Tag() {
+		return bad
+	}
+	// The pinned SOCKS constructor opens no resource and needs no startup or
+	// close callback. Refuse a changed implementation rather than omit an owned
+	// lifecycle or acknowledge a partially started replacement.
+	if _, ok := added.(io.Closer); ok {
+		return bad
+	}
+	if _, ok := added.(interface{ Start() error }); ok {
+		return bad
+	}
+	if _, ok := added.(interface {
+		Start(adapter.StartStage) error
+	}); ok {
+		return bad
+	}
+	actual, found, err := m.RouterVPNOutboundContext(ctx, entry.Tag())
+	if err != nil || !found || actual != entry {
+		return bad
+	}
+	if endpoint, found, err := adapter.RouterVPNEndpointContext(ctx, m.endpoint, added.Tag()); err != nil || found || endpoint != nil {
+		return bad
+	}
+	if err := adapter.RouterVPNWriteLockContext(ctx, &m.access); err != nil {
+		return err
+	}
+	defer m.access.Unlock()
+	if ctx.Err() != nil || !m.started || m.stage != adapter.StartStateStarted ||
+		m.defaultTag != gate.Tag() || m.defaultOutbound != gate || m.outboundByTag[gate.Tag()] != gate ||
+		m.outboundByTag[added.Tag()] != nil {
+		return bad
+	}
+	// An endpoint entry is checked through its original endpoint manager while
+	// holding only this manager's append lock; an outbound entry is checked here.
+	if candidate := m.outboundByTag[entry.Tag()]; candidate != nil {
+		if candidate != entry {
+			return bad
+		}
+	} else {
+		candidate, found, err := adapter.RouterVPNEndpointContext(ctx, m.endpoint, entry.Tag())
+		if err != nil || !found || candidate != entry {
+			return bad
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.outbounds = append(m.outbounds, added)
+	m.outboundByTag[added.Tag()] = added
+	m.dependByTag[entry.Tag()] = append(m.dependByTag[entry.Tag()], added.Tag())
+	return nil
+}

@@ -1,0 +1,163 @@
+package outbound_test
+
+import (
+	"context"
+	"errors"
+	"net"
+	"sync"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/socks"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// Actual native managers and the pinned concrete SOCKS constructor exercise
+// insertion. These fixture outbounds perform no routing or packet proof.
+type executionManagedFixture struct{ outbound.Adapter }
+
+func (*executionManagedFixture) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+	return nil, errors.New("native fixture does not route traffic")
+}
+func (*executionManagedFixture) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("native fixture does not route traffic")
+}
+
+type executionManagedCloseFixture struct{ executionManagedFixture }
+
+func (*executionManagedCloseFixture) Close() error { return nil }
+
+func executionAppendFixture(t *testing.T) (context.Context, *outbound.Manager, adapter.Outbound, adapter.Outbound) {
+	t.Helper()
+	ctx := service.ContextWithDefaultRegistry(t.Context())
+	logger := log.NewNOPFactory().Logger()
+	registry := outbound.NewRegistry()
+	for _, kind := range []string{C.TypeDirect, "routervpn-node-chain-gate"} {
+		kind := kind
+		outbound.Register[struct{}](registry, kind, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ struct{}) (adapter.Outbound, error) {
+			return &executionManagedFixture{outbound.NewAdapter(kind, tag, []string{"tcp", "udp"}, nil)}, nil
+		})
+	}
+	ends := endpoint.NewManager(logger, endpoint.NewRegistry())
+	m := outbound.NewManager(logger, registry, ends, "routervpn-chain-application")
+	service.MustRegister[adapter.OutboundManager](ctx, m)
+	for _, row := range [][2]string{{"entry", C.TypeDirect}, {"routervpn-chain-application", "routervpn-node-chain-gate"}} {
+		if err := m.Create(ctx, nil, logger, row[0], row[1], &struct{}{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, stage := range adapter.ListStartStages {
+		if err := m.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		if err := m.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	entry, _ := m.Outbound("entry")
+	gate, _ := m.Outbound("routervpn-chain-application")
+	return ctx, m, entry, gate
+}
+
+func executionActualSOCKS(t *testing.T, ctx context.Context, tag, detour string) adapter.Outbound {
+	t.Helper()
+	value, err := socks.NewOutbound(ctx, nil, log.NewNOPFactory().Logger(), tag, option.SOCKSOutboundOptions{
+		DialerOptions: option.DialerOptions{Detour: detour}, ServerOptions: option.ServerOptions{Server: "10.77.0.1", ServerPort: 32003},
+		Version: "5", Username: "captured-position", Password: "captured-private-front"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+func TestRouterVPNExecutionAppendPreservesActualManagers(t *testing.T) {
+	ctx, manager, entry, gate := executionAppendFixture(t)
+	added := executionActualSOCKS(t, ctx, "routervpn-chain-server-1-original", entry.Tag())
+	if err := manager.RouterVPNAppendNodeChainSOCKS(ctx, added, entry, gate); err != nil {
+		t.Fatal("original exact append failed", err)
+	}
+	actual, found := manager.Outbound(added.Tag())
+	if !found || actual != added || manager.Default() != gate || len(manager.Outbounds()) != 3 {
+		t.Fatal("append replaced original graph or failed to retain concrete SOCKS")
+	}
+	if manager.RouterVPNAppendNodeChainSOCKS(ctx, executionActualSOCKS(t, ctx, added.Tag(), entry.Tag()), entry, gate) == nil {
+		t.Fatal("second object replaced original managed tag")
+	}
+	actual, _ = manager.Outbound(added.Tag())
+	if actual != added {
+		t.Fatal("failed duplicate changed original outbound")
+	}
+}
+
+func TestRouterVPNExecutionAppendRejectsForeignOwnerAndLifecycle(t *testing.T) {
+	for _, fault := range []string{"entry", "gate", "detour", "lifecycle", "cancelled", "closed-manager"} {
+		t.Run(fault, func(t *testing.T) {
+			ctx, manager, entry, gate := executionAppendFixture(t)
+			added := executionActualSOCKS(t, ctx, "routervpn-chain-server-1-original", entry.Tag())
+			switch fault {
+			case "entry":
+				entry = &executionManagedFixture{outbound.NewAdapter(C.TypeDirect, entry.Tag(), nil, nil)}
+			case "gate":
+				gate = &executionManagedFixture{outbound.NewAdapter("routervpn-node-chain-gate", gate.Tag(), nil, nil)}
+			case "detour":
+				added = executionActualSOCKS(t, ctx, added.Tag(), "another-entry")
+			case "lifecycle":
+				added = &executionManagedCloseFixture{executionManagedFixture{outbound.NewAdapter(C.TypeSOCKS, added.Tag(), nil, []string{entry.Tag()})}}
+			case "cancelled":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			case "closed-manager":
+				if err := manager.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if manager.RouterVPNAppendNodeChainSOCKS(ctx, added, entry, gate) == nil {
+				t.Fatal("foreign/retired append was accepted", fault)
+			}
+			if actual, found := manager.Outbound(added.Tag()); found || actual != nil {
+				t.Fatal("failed append published a new owner")
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionAppendConcurrentTagHasOneOriginalWinner(t *testing.T) {
+	ctx, manager, entry, gate := executionAppendFixture(t)
+	left := executionActualSOCKS(t, ctx, "routervpn-chain-server-1-original", entry.Tag())
+	right := executionActualSOCKS(t, ctx, left.Tag(), entry.Tag())
+	start := make(chan struct{})
+	results := make(chan adapter.Outbound, 2)
+	var workers sync.WaitGroup
+	for _, value := range []adapter.Outbound{left, right} {
+		workers.Add(1)
+		go func(value adapter.Outbound) {
+			defer workers.Done()
+			<-start
+			if manager.RouterVPNAppendNodeChainSOCKS(ctx, value, entry, gate) == nil {
+				results <- value
+			}
+		}(value)
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	var winner adapter.Outbound
+	count := 0
+	for value := range results {
+		winner = value
+		count++
+	}
+	actual, found := manager.Outbound(left.Tag())
+	if count != 1 || !found || actual != winner || manager.Default() != gate {
+		t.Fatal("concurrent append replaced or duplicated original tag")
+	}
+}
