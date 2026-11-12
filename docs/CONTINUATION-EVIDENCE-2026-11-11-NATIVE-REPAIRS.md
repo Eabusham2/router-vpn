@@ -7,6 +7,43 @@ October checkpoints in the supplied handoff. The initial authoritative release
 run was `42962724746`; 18 of the 29 observed push workflows at that source were
 failed. Those historical results must not be attached to a later commit.
 
+## Naive H3 fixture distinguishes an exact retired UDP socket
+
+Completed e1204aea native reference job
+[130844419903](https://github.com/Eabusham2/router-vpn/actions/runs/43112976569/job/130844419903)
+reported four WireGuard cancel/replacement cases at the fixture's unsolicited
+ingress assertion after their authenticated path, DNS and application traffic
+checks. The original final QUIC socket can close while its entry remains active;
+a late UDP response can then reach the actual endpoint's inbound callback.
+This is the observed fixture failure, not evidence that a shipping tunnel routed
+unsolicited traffic.
+
+The H3 fixture now observes its actual WG/AWG outbound socket's literal local
+and remote tuple, successful writes and entered/completed original Close.
+Its router still closes every inbound socket and invokes the original callback.
+Only a response matching that exact retired, previously written UDP flow may
+avoid the active-unsolicited counter. A live replacement sharing the local
+socket always blocks exemption, including a different remote. Unknown/foreign
+tuples, unclosed or merely canceled callers, failed closes, wrong original
+endpoint metadata and TCP remain rejected. Any provisional classification
+during synchronous Close must later prove that exact Close joined successfully.
+
+The original f.first endpoint, lifecycle, physical boundary and native transport
+remain; the observer is confined to this H3 fixture's detour. All twelve existing
+real endpoint ingress controls are byte-identical. Sixty-eight added loopback
+cases exercise the actual observed socket reads/writes/closes and causal
+active/replacement/foreign controls for both endpoint metadata shapes and
+Dial/Listen. They are fixture bookkeeping evidence, separate from encrypted
+native reference acceptance. The gate now requires 122 loopback verdict names
+including roots and preserves all 531 reference names; omission, duplicate,
+skip, failure, foreign-name and nonzero-exit runner controls cover the addition.
+
+All three final files and the pinned native callback/transport behavior were
+reviewed, and the original callback block was independently compared byte for
+byte. No local Go/Python execution was available. Current hosted reference
+execution must verify this correction; neither the old failed run nor these
+authored tests establish the new release as green.
+
 ## Native MTU reader succession requires the retained Darwin host
 
 The raw native MTU lease now has a one-time verifier installed by its original

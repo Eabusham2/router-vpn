@@ -115,11 +115,357 @@ func TestRouterVPNImportedNaiveH3PacketIngress(t *testing.T) {
 	}
 }
 
+// Only this H3 fixture observes the real entry's UDP sockets. It never routes
+// an inbound callback or changes the native dial/write/read operation. An
+// unmatched packet after an original socket closes can be a delayed QUIC
+// reply, even while another final still owns the same WG/AWG entry.
+type desktopImportedNaiveH3UDPFlows struct {
+	mu sync.Mutex
+	tag, kind string
+	flows []*desktopImportedNaiveH3UDPFlow
+	failure error
+}
+type desktopImportedNaiveH3UDPFlow struct {
+	owner *desktopImportedNaiveH3UDPFlows
+	caller context.Context
+	local netip.AddrPort
+	remotes map[netip.AddrPort]bool // true only after an actual successful write
+	closeOnce sync.Once
+	closing, closed, exempted bool
+	closeErr error
+}
+func desktopImportedNaiveH3Addr(address net.Addr) (netip.AddrPort, error) {
+	if address == nil { return netip.AddrPort{}, errors.New("H3 UDP observer has no original socket address") }
+	value, err := netip.ParseAddrPort(address.String())
+	if err != nil || !value.Addr().IsValid() || value.Addr().IsUnspecified() || value.Port() == 0 {
+		return netip.AddrPort{}, errors.New("H3 UDP observer lost its literal original socket tuple")
+	}
+	return netip.AddrPortFrom(value.Addr().Unmap(), value.Port()), nil
+}
+func desktopImportedNaiveH3Tuple(address M.Socksaddr) (netip.AddrPort, bool) {
+	if !address.IsIP() || address.Addr.IsUnspecified() || address.Port == 0 { return netip.AddrPort{}, false }
+	return netip.AddrPortFrom(address.Addr.Unmap(), address.Port), true
+}
+func (flows *desktopImportedNaiveH3UDPFlows) capture(ctx context.Context, local net.Addr, remote M.Socksaddr) (*desktopImportedNaiveH3UDPFlow, error) {
+	address, err := desktopImportedNaiveH3Addr(local)
+	target, valid := desktopImportedNaiveH3Tuple(remote)
+	if flows == nil || ctx == nil || err != nil || !valid {
+		return nil, errors.New("H3 UDP observation lost its original caller or exact tuple")
+	}
+	flow := &desktopImportedNaiveH3UDPFlow{owner: flows, caller: ctx, local: address, remotes: map[netip.AddrPort]bool{target:false}}
+	flows.mu.Lock()
+	flows.flows = append(flows.flows, flow)
+	flows.mu.Unlock()
+	return flow, nil
+}
+func (flow *desktopImportedNaiveH3UDPFlow) wrote(remote netip.AddrPort) {
+	flow.owner.mu.Lock()
+	flow.remotes[remote] = true
+	flow.owner.mu.Unlock()
+}
+func (flow *desktopImportedNaiveH3UDPFlow) close(original func() error) error {
+	flow.closeOnce.Do(func() {
+		flow.owner.mu.Lock()
+		flow.closing = true
+		flow.owner.mu.Unlock()
+		// Entry into this exact original Close is recorded first. A synchronous
+		// native callback cannot deadlock on our bookkeeping mutex. The final
+		// audit still requires this Close to have actually joined successfully.
+		err := original()
+		flow.owner.mu.Lock()
+		flow.closeErr, flow.closed = err, true
+		flow.owner.mu.Unlock()
+	})
+	return flow.closeErr
+}
+func (flows *desktopImportedNaiveH3UDPFlows) retired(metadata adapter.InboundContext) bool {
+	if flows == nil || metadata.Inbound != flows.tag || metadata.InboundType != flows.kind { return false }
+	local := metadata.Destination
+	switch flows.kind {
+	case "wireguard":
+		// The actual WG callback preserves its pre-loopback destination here.
+		original := metadata.OriginDestination
+		if !original.IsIP() || !local.IsIP() || local.Port != original.Port ||
+			original.Addr.Is4() && local.Addr != netip.MustParseAddr("127.0.0.1") ||
+			original.Addr.Is6() && local.Addr != netip.IPv6Loopback() {
+			return false
+		}
+		local = original
+	case mobilemultihop.AmneziaType:
+		// AWG's packet callback retains its original destination directly.
+		if metadata.OriginDestination.IsValid() { return false }
+	default:
+		return false
+	}
+	source, sourceOK := desktopImportedNaiveH3Tuple(metadata.Source)
+	destination, destinationOK := desktopImportedNaiveH3Tuple(local)
+	if !sourceOK || !destinationOK { return false }
+	flows.mu.Lock()
+	defer flows.mu.Unlock()
+	var retired *desktopImportedNaiveH3UDPFlow
+	for _, flow := range flows.flows {
+		if flow.local != destination { continue }
+		// Any live replacement of this local socket wins over retired history,
+		// including a new connected remote or an unconnected UDP listener.
+		// Caller cancellation alone is not the original socket's Close.
+		if !flow.closing { return false }
+		written, known := flow.remotes[source]
+		if !known { continue }
+		if flow.closed && flow.closeErr != nil { return false }
+		if written { retired = flow }
+	}
+	if retired == nil { return false }
+	retired.exempted = true
+	return true
+}
+func (flows *desktopImportedNaiveH3UDPFlows) joined() error {
+	flows.mu.Lock()
+	defer flows.mu.Unlock()
+	if flows.failure != nil { return flows.failure }
+	for _, flow := range flows.flows {
+		if flow.exempted && (!flow.closing || !flow.closed || flow.closeErr != nil) {
+			return errors.Join(flow.closeErr, errors.New("H3 late UDP classification has no joined original close"))
+		}
+	}
+	return nil
+}
+
+type desktopImportedNaiveH3ObservedConn struct {
+	net.Conn
+	flow *desktopImportedNaiveH3UDPFlow
+	remote netip.AddrPort
+}
+func (conn *desktopImportedNaiveH3ObservedConn) Write(body []byte) (int,error) {
+	n, err := conn.Conn.Write(body)
+	if n > 0 && err == nil { conn.flow.wrote(conn.remote) }
+	return n, err
+}
+func (conn *desktopImportedNaiveH3ObservedConn) Close() error { return conn.flow.close(conn.Conn.Close) }
+
+type desktopImportedNaiveH3ObservedPacket struct {
+	net.PacketConn
+	flow *desktopImportedNaiveH3UDPFlow
+}
+func (conn *desktopImportedNaiveH3ObservedPacket) WriteTo(body []byte, destination net.Addr) (int,error) {
+	n, err := conn.PacketConn.WriteTo(body, destination)
+	if n > 0 && err == nil {
+		remote, parseErr := desktopImportedNaiveH3Addr(destination)
+		if parseErr != nil {
+			conn.flow.owner.mu.Lock()
+			conn.flow.owner.failure = parseErr
+			conn.flow.owner.mu.Unlock()
+		} else { conn.flow.wrote(remote) }
+	}
+	return n, err
+}
+func (conn *desktopImportedNaiveH3ObservedPacket) Close() error { return conn.flow.close(conn.PacketConn.Close) }
+
+// The manager's detour uses only N.Dialer. The original f.first endpoint,
+// native lifecycle, handler, transport, and physical boundary stay unchanged.
+type desktopImportedNaiveH3ObservedEntry struct {
+	adapter.Outbound
+	flows *desktopImportedNaiveH3UDPFlows
+}
+func (entry *desktopImportedNaiveH3ObservedEntry) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn,error) {
+	conn, err := entry.Outbound.DialContext(ctx, network, destination)
+	if err != nil || conn == nil || N.NetworkName(network) != N.NetworkUDP { return conn, err }
+	actual, addressErr := desktopImportedNaiveH3Addr(conn.RemoteAddr())
+	expected, valid := desktopImportedNaiveH3Tuple(destination)
+	if addressErr != nil || !valid || actual != expected {
+		_ = conn.Close()
+		return nil, errors.New("H3 native connected UDP returned a different original destination")
+	}
+	flow, err := entry.flows.capture(ctx, conn.LocalAddr(), destination)
+	if err != nil { _ = conn.Close(); return nil, err }
+	return &desktopImportedNaiveH3ObservedConn{Conn:conn, flow:flow, remote:actual}, nil
+}
+func (entry *desktopImportedNaiveH3ObservedEntry) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn,error) {
+	conn, err := entry.Outbound.ListenPacket(ctx, destination)
+	if err != nil || conn == nil { return conn, err }
+	flow, err := entry.flows.capture(ctx, conn.LocalAddr(), destination)
+	if err != nil { _ = conn.Close(); return nil, err }
+	return &desktopImportedNaiveH3ObservedPacket{PacketConn:conn, flow:flow}, nil
+}
+type desktopImportedNaiveH3Ingress struct {
+	*desktopImportedOpenVPNIngress
+	flows *desktopImportedNaiveH3UDPFlows
+}
+func (router *desktopImportedNaiveH3Ingress) RoutePacketConnectionEx(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, done N.CloseHandlerFunc) {
+	if !router.retiring.Load() && ctx.Err() == nil && !router.flows.retired(metadata) { router.active.Add(1) }
+	err := conn.Close()
+	if done != nil { done(err) }
+}
+
+// The observer controls use actual loopback UDP sockets. They prove exact
+// write/close bookkeeping and the rejecting callback only; encrypted WG/AWG,
+// original physical inventory and final traffic remain the separate reference
+// matrix below, and the 12 actual endpoint callback controls above are intact.
+type desktopImportedNaiveH3ObserverTestEntry struct {
+	adapter.Outbound
+	bind string
+}
+func (entry *desktopImportedNaiveH3ObserverTestEntry) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn,error) {
+	dialer := &net.Dialer{}
+	if entry.bind != "" {
+		address, err := net.ResolveUDPAddr("udp4", entry.bind)
+		if err != nil { return nil, err }
+		dialer.LocalAddr = address
+	}
+	return dialer.DialContext(ctx, network, destination.String())
+}
+func (entry *desktopImportedNaiveH3ObserverTestEntry) ListenPacket(ctx context.Context, _ M.Socksaddr) (net.PacketConn,error) {
+	bind := entry.bind
+	if bind == "" { bind = "127.0.0.1:0" }
+	return (&net.ListenConfig{}).ListenPacket(ctx, "udp4", bind)
+}
+func TestRouterVPNImportedNaiveH3RetiredUDPIngress(t *testing.T) {
+	faults := []string{"closed", "closing-joined", "closing-failed", "active", "cancelled-caller",
+		"replacement", "replacement-remote", "foreign-remote-ip", "foreign-remote-port", "foreign-local-ip", "foreign-local-port",
+		"unwritten", "close-failed", "foreign-entry", "foreign-kind", "origin", "rewrite"}
+	for _, kind := range []string{"wireguard", "amneziawg"} {
+		for _, api := range []string{"dial", "listen"} {
+			for _, fault := range faults {
+				t.Run(kind+"/"+api+"/"+fault, func(t *testing.T) {
+					peer, err := net.ListenPacket("udp4", "127.0.0.1:0")
+					if err != nil { t.Fatal(err) }
+					defer peer.Close()
+					remote := M.SocksaddrFromNet(peer.LocalAddr())
+					typeName := "wireguard"
+					if kind == "amneziawg" { typeName = mobilemultihop.AmneziaType }
+					flows := &desktopImportedNaiveH3UDPFlows{tag:"entry-wg", kind:typeName}
+					native := &desktopImportedNaiveH3ObserverTestEntry{}
+					entry := &desktopImportedNaiveH3ObservedEntry{Outbound:native, flows:flows}
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					var original io.Closer
+					var local net.Addr
+					var flow *desktopImportedNaiveH3UDPFlow
+					var rawClose func() error
+					write := func() error { return nil }
+					if api == "dial" {
+						connection, err := entry.DialContext(ctx, "udp", remote)
+						if err != nil { t.Fatal(err) }
+						observed, ok := connection.(*desktopImportedNaiveH3ObservedConn)
+						if !ok { t.Fatal("actual UDP dial escaped the fixture observer") }
+						original, local, flow, rawClose = observed, observed.LocalAddr(), observed.flow, observed.Conn.Close
+						write = func() error { _, err := observed.Write([]byte{1}); return err }
+					} else {
+						connection, err := entry.ListenPacket(ctx, remote)
+						if err != nil { t.Fatal(err) }
+						observed, ok := connection.(*desktopImportedNaiveH3ObservedPacket)
+						if !ok { t.Fatal("actual UDP listen escaped the fixture observer") }
+						original, local, flow, rawClose = observed, observed.LocalAddr(), observed.flow, observed.PacketConn.Close
+						write = func() error { _, err := observed.WriteTo([]byte{1}, peer.LocalAddr()); return err }
+					}
+					defer original.Close()
+					if fault != "unwritten" {
+						if err := write(); err != nil { t.Fatal(err) }
+					}
+					metadata := adapter.InboundContext{Inbound:"entry-wg", InboundType:typeName,
+						Source:remote, Destination:M.SocksaddrFromNet(local)}
+					if kind == "wireguard" {
+						metadata.OriginDestination = metadata.Destination
+						metadata.Destination.Addr = netip.MustParseAddr("127.0.0.1")
+					}
+					base := &desktopImportedOpenVPNIngress{t:t}
+					router := &desktopImportedNaiveH3Ingress{desktopImportedOpenVPNIngress:base, flows:flows}
+					invoke := func() {
+						incoming, err := net.ListenPacket("udp4", "127.0.0.1:0")
+						if err != nil { t.Fatal(err) }
+						defer incoming.Close()
+						callbacks := 0
+						router.RoutePacketConnectionEx(context.Background(), bufio.NewPacketConn(incoming), metadata,
+							func(error) { callbacks++ })
+						if callbacks != 1 { t.Fatal("H3 ingress lost its original close callback") }
+						if _, err := incoming.WriteTo([]byte{1}, peer.LocalAddr()); !errors.Is(err, net.ErrClosed) {
+							t.Fatal("H3 classification routed or retained the original unsolicited socket", err)
+						}
+					}
+					if fault == "closing-joined" || fault == "closing-failed" {
+						if fault == "closing-failed" {
+							if err := rawClose(); err != nil { t.Fatal(err) }
+						}
+						err := flow.close(func() error {
+							invoke()
+							if flows.joined() == nil { t.Fatal("entered Close was accepted before it actually joined") }
+							return rawClose()
+						})
+						if (err != nil) != (fault == "closing-failed") { t.Fatal("original Close result changed", err) }
+						if base.active.Load() != 0 { t.Fatal("exact synchronous closing flow was counted as active") }
+						if (flows.joined() != nil) != (fault == "closing-failed") {
+							t.Fatal("late packet classification discarded a failed original close")
+						}
+						return
+					}
+					switch fault {
+					case "active":
+					case "cancelled-caller":
+						cancel() // The dialer's canceled context is not socket retirement.
+					default:
+						if fault == "close-failed" {
+							if err := rawClose(); err != nil { t.Fatal(err) }
+						}
+						err := original.Close()
+						if (err != nil) != (fault == "close-failed") { t.Fatal("original observer close changed", err) }
+					}
+					switch fault {
+					case "replacement", "replacement-remote":
+						// Reuse the actual released UDP port with another live socket;
+						// identical tuple history cannot suppress that replacement.
+						replacementRemote := remote
+						if fault == "replacement-remote" {
+							other, err := net.ListenPacket("udp4", "127.0.0.1:0")
+							if err != nil { t.Fatal(err) }
+							defer other.Close()
+							replacementRemote = M.SocksaddrFromNet(other.LocalAddr())
+						}
+						native.bind = local.String()
+						if api == "dial" {
+							replacement, err := entry.DialContext(context.Background(), "udp", replacementRemote)
+							if err != nil { t.Fatal(err) }
+							defer replacement.Close()
+							if replacement.LocalAddr().String() != local.String() { t.Fatal("replacement tuple fixture changed") }
+						} else {
+							replacement, err := entry.ListenPacket(context.Background(), replacementRemote)
+							if err != nil { t.Fatal(err) }
+							defer replacement.Close()
+							if replacement.LocalAddr().String() != local.String() { t.Fatal("replacement tuple fixture changed") }
+						}
+					case "foreign-remote-ip":
+						metadata.Source.Addr = netip.MustParseAddr("192.0.2.77")
+					case "foreign-remote-port":
+						metadata.Source.Port = 1
+					case "foreign-local-ip":
+						if kind == "wireguard" { metadata.OriginDestination.Addr = netip.MustParseAddr("192.0.2.78") } else { metadata.Destination.Addr = netip.MustParseAddr("192.0.2.78") }
+					case "foreign-local-port":
+						metadata.Destination.Port = 1
+						if kind == "wireguard" { metadata.OriginDestination.Port = 1 }
+					case "foreign-entry":
+						metadata.Inbound += "-replacement"
+					case "foreign-kind":
+						metadata.InboundType = "socks"
+					case "origin":
+						if kind == "wireguard" { metadata.OriginDestination = M.Socksaddr{} } else { metadata.OriginDestination = metadata.Destination }
+					case "rewrite":
+						metadata.Destination.Addr = netip.MustParseAddr("127.0.0.2")
+					}
+					invoke()
+					want := int64(1)
+					if fault == "closed" { want = 0 }
+					if base.active.Load() != want { t.Fatal("retired UDP classification concealed an active, foreign or replacement tuple", fault) }
+					if err := flows.joined(); err != nil { t.Fatal(err) }
+				})
+			}
+		}
+	}
+}
+
 // These are userspace protocol/proof witnesses using the original captured
 // source and a mandatory real physical-interface inventory. They never mark
 // the compiler plan healthy or substitute for a system-TUN/device result.
 type desktopImportedNaiveH3Fixture struct {
 	*desktopPacketRealityFixture
+	udpFlows                           *desktopImportedNaiveH3UDPFlows
 	finalOptions                       option.NaiveOutboundOptions
 	bootstrapRaw                       []byte
 	bootstrap, selectedTransport       adapter.DNSTransport
@@ -607,13 +953,23 @@ func desktopImportedNaiveH3New(t *testing.T, kind, firstLayer, lastLayer, fault 
 	owned = service.ContextWith[adapter.CertificateStore](owned, &desktopImportedHysteriaTrust{roots: f.roots})
 	owned = service.ContextWith[adapter.NetworkManager](owned, &desktopImportedPacketNetwork{})
 	f.ingress = &desktopImportedOpenVPNIngress{t: t}
-	owned = service.ContextWith[adapter.Router](owned, f.ingress)
+	if kind == "wireguard" || kind == "amneziawg" {
+		typeName := "wireguard"
+		if kind == "amneziawg" { typeName = mobilemultihop.AmneziaType }
+		f.udpFlows = &desktopImportedNaiveH3UDPFlows{tag: "entry-wg", kind: typeName}
+		owned = service.ContextWith[adapter.Router](owned, &desktopImportedNaiveH3Ingress{desktopImportedOpenVPNIngress:f.ingress, flows:f.udpFlows})
+	} else {
+		owned = service.ContextWith[adapter.Router](owned, f.ingress)
+	}
 	t.Cleanup(func() {
 		if err := f.close(); err != nil {
 			t.Error("original imported Naive H3 native owners did not join before fixture cleanup", err)
 		}
 		if f.ingress.active.Load() != 0 {
 			t.Error("imported Naive H3 routed unsolicited inbound traffic")
+		}
+		if f.udpFlows != nil {
+			if err := f.udpFlows.joined(); err != nil { t.Error(err) }
 		}
 	})
 	f.firstRaw = desktopImportedSOCKSXrayObject(t, desktopImportedSOCKSXrayJSON(t, firstRaw))
@@ -625,6 +981,12 @@ func desktopImportedNaiveH3New(t *testing.T, kind, firstLayer, lastLayer, fault 
 	}
 	f.first = desktopImportedNaiveH3Entry(t, owned, firstRaw)
 	f.manager.owners["entry-wg"] = f.first
+	if f.udpFlows != nil {
+		if f.first.Tag() != f.udpFlows.tag || f.first.Type() != f.udpFlows.kind {
+			t.Fatal("H3 UDP observer changed its original native packet entry")
+		}
+		f.manager.owners["entry-wg"] = &desktopImportedNaiveH3ObservedEntry{Outbound:f.first, flows:f.udpFlows}
+	}
 	if openvpnPeer != nil {
 		f.openvpn = f.first.(*OV.ClientEndpoint)
 	}
