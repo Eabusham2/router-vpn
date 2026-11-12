@@ -550,6 +550,18 @@ func desktopLiveResponseMTUResumption(t *testing.T) {
 				if record.Generation != 1 {
 					t.Fatal("deferred first Auto did not start exactly once", record)
 				}
+				drain, cancelDrain := context.WithTimeout(context.Background(), 5*time.Second)
+				err := desktopMTUJoinAutomatic(drain, a)
+				cancelDrain()
+				if err != nil {
+					t.Fatal("resumed automatic parent did not drain", err)
+				}
+				owner.mu.Lock()
+				drained := owner.active == "" && owner.cancel == nil && owner.automatic
+				owner.mu.Unlock()
+				if !drained {
+					t.Fatal("resumed original owner retained active work or lost Auto completion")
+				}
 				release()
 				a.startDesktopExternalAutomaticMTU(launch)
 				time.Sleep(50 * time.Millisecond)

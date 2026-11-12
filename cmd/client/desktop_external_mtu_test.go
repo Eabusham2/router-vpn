@@ -58,12 +58,17 @@ func desktopMTUChildFixture(kind, directory string, expected mobilemultihop.Exte
 			}
 		}
 		var cancel, commit desktopMTUControl
+		commitReleased := kind != "mtu-commit-drain"
+		if !commitReleased {
+			_, releaseErr := os.Stat(filepath.Join(directory, "mtu-commit-release.fixture"))
+			commitReleased = releaseErr == nil
+		}
 		if record.Status.Request != "" && read("mtu-cancel.json", &cancel) && cancel.Request == record.Status.Request && cancel.Generation == record.Generation && cancel.Session == expected.SessionID {
 			record.WaitingCommit, record.PreparedMTU, record.PreparedPathKey = false, 0, ""
 			record.Status.Running, record.Status.Complete, record.Status.Measured, record.Status.Restored = false, true, false, true
 			record.Status.Source, record.Status.Phase, record.Status.EffectiveMTU = "restored-unmeasured", "restored", record.Status.OriginalMTU
 			remove()
-		} else if active != "" && kind != "mtu-commit-hold" && read("mtu-commit.json", &commit) && commit.Request == active && commit.Generation == record.Generation && commit.Session == expected.SessionID && commit.PathKey == record.PreparedPathKey && commit.MTU == record.PreparedMTU {
+		} else if active != "" && kind != "mtu-commit-hold" && commitReleased && read("mtu-commit.json", &commit) && commit.Request == active && commit.Generation == record.Generation && commit.Session == expected.SessionID && commit.PathKey == record.PreparedPathKey && commit.MTU == record.PreparedMTU {
 			record.Status.Running, record.Status.Complete, record.Status.Measured = false, true, true
 			record.Status.Source, record.Status.Phase, record.Status.EffectiveMTU = "measured-public-system-tun-transfer", "complete", record.PreparedMTU
 			record.WaitingCommit, record.PreparedMTU, record.PreparedPathKey = false, 0, ""
@@ -121,6 +126,82 @@ func desktopMTUWaitRecord(t *testing.T, launch *desktopNodeLaunch, condition fun
 			t.Fatal("owned native MTU record did not arrive", err, record.Status.Phase)
 		case <-ticker.C:
 		}
+	}
+}
+
+// A native Complete receipt precedes the parent's verification, retention, and
+// deferred owner cleanup. Join the automatic worker before fixture teardown can
+// kill its child or remove the profile directory used by commit/rollback.
+func desktopMTUJoinAutomatic(ctx context.Context, a *app) error {
+	lock := mtuRetestLockFor(a)
+	if err := mobilemtu.LockContext(ctx, lock); err != nil {
+		return err
+	}
+	lock.Unlock()
+	return nil
+}
+
+func TestDesktopExternalMTUAutomaticDrainJoinsParentAfterChildComplete(t *testing.T) {
+	a, launch := desktopMTUControllerFixture(t, "mtu-commit-drain")
+	owner := desktopMeasurementMTUSession(launch)
+	a.startDesktopExternalAutomaticMTU(launch)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := readDesktopRuntimeFile(launch, "mtu-commit.json", 4096); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("automatic parent never wrote its durable commit request")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// The child cannot complete until explicitly released. Hold the original
+	// owner's retention lock after the parent has persisted and sent commit.
+	owner.mu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			owner.mu.Unlock()
+		}
+	}()
+	if owner.active == "" || owner.cancel == nil || !owner.automatic {
+		t.Fatal("commit request did not belong to an active automatic parent")
+	}
+	if err := os.WriteFile(filepath.Join(launch.directory, "mtu-commit-release.fixture"), []byte("true"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	record := desktopMTUWaitRecord(t, launch, func(r desktopMTURecord) bool { return r.Status.Complete && r.Status.Measured })
+	if record.Generation != 1 || record.Status.EffectiveMTU != 1380 {
+		t.Fatal("released child did not commit the exact automatic result", record)
+	}
+	blocked, cancelBlocked := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	err := desktopMTUJoinAutomatic(blocked, a)
+	cancelBlocked()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("child Complete incorrectly joined the still-held original parent", err)
+	}
+	owner.mu.Unlock()
+	locked = false
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := desktopMTUJoinAutomatic(ctx, a); err != nil {
+		t.Fatal("automatic parent did not drain after retention was released", err)
+	}
+	owner.mu.Lock()
+	drained := owner.active == "" && owner.cancel == nil && owner.automatic
+	owner.mu.Unlock()
+	if !drained {
+		t.Fatal("joined original owner retained active work or lost Auto completion")
+	}
+	var persisted common.RouterProfileStore
+	raw, err := os.ReadFile(a.cfg.ProfilesFile)
+	if err != nil || json.Unmarshal(raw, &persisted) != nil || len(persisted.Profiles) != 1 || persisted.Profiles[0].EffectiveMTU != 1380 {
+		t.Fatal("joined parent did not retain its durable committed winner", err)
+	}
+	record, err = readDesktopMTURecord(launch)
+	if err != nil || !record.Status.Measured || record.Status.Restored || record.Status.EffectiveMTU != 1380 {
+		t.Fatal("joined parent rolled back the native committed winner", err, record)
 	}
 }
 
