@@ -108,6 +108,27 @@ class NaiveH3NativeRunner(unittest.TestCase):
             'literal-ipv6-with-udp-bootstrap', 'literal-with-udp-bootstrap',
             'forced-nonliteral-query-control', 'fresh-ipv6-after-refusals'} <= set(cases))
 
+    def test_retired_udp_inventory_keeps_every_original_and_both_openvpn_wires(self):
+        faults = ('closed', 'closing-joined', 'closing-failed', 'active', 'cancelled-caller',
+                  'replacement', 'replacement-remote', 'foreign-remote-ip', 'foreign-remote-port',
+                  'foreign-local-ip', 'foreign-local-port', 'unwritten', 'close-failed',
+                  'foreign-entry', 'foreign-kind', 'origin', 'rewrite')
+        original = tuple(kind+'/'+api+'/'+fault for kind in ('wireguard', 'amneziawg')
+                         for api in ('dial', 'listen') for fault in faults)
+        openvpn = tuple(kind+'/'+api+'/'+fault for kind in ('openvpn-tcp', 'openvpn-udp')
+                        for api in ('dial', 'listen') for fault in faults)
+        actual = G.LOOPBACK['TestRouterVPNImportedNaiveH3RetiredUDPIngress']
+        self.assertEqual(actual, original+openvpn)
+        self.assertEqual(len(original), 68)
+        self.assertEqual(len(openvpn), 68)
+        self.assertEqual(len(set(actual)), 136)
+        # No whole-entry retirement or production routing exception is added.
+        source = (ROOT/'mobile/desktop/node_imported_naive_h3_test.go.tmpl').read_text()
+        self.assertIn('case "wireguard", C.TypeOpenVPNClient:', source)
+        self.assertIn('if !flow.closing { return false }', source)
+        self.assertIn('if flow.closed && flow.closeErr != nil { return false }', source)
+        self.assertIn('if written { retired = flow }', source)
+
     def test_exact_mobile_and_desktop_preparation_bind_readers_loader_and_peer(self):
         mobile = G.module('naive_h3_mobile_preparation', 'prepare-mobile-multihop.py')
         inputs = set(mobile.inputs())
@@ -269,14 +290,14 @@ class NaiveH3NativeRunner(unittest.TestCase):
 
     def test_retired_udp_gate_keeps_every_original_and_replacement_control(self):
         root = 'TestRouterVPNImportedNaiveH3RetiredUDPIngress'
-        leaves = tuple(kind+'/'+api+'/'+fault for kind in ('wireguard', 'amneziawg')
+        leaves = tuple(kind+'/'+api+'/'+fault for kind in ('wireguard', 'amneziawg', 'openvpn-tcp', 'openvpn-udp')
             for api in ('dial', 'listen')
             for fault in ('closed', 'closing-joined', 'closing-failed', 'active', 'cancelled-caller',
                           'replacement', 'replacement-remote', 'foreign-remote-ip', 'foreign-remote-port', 'foreign-local-ip',
                           'foreign-local-port', 'unwritten', 'close-failed', 'foreign-entry', 'foreign-kind',
                           'origin', 'rewrite'))
         self.assertEqual(G.LOOPBACK[root], leaves)
-        self.assertEqual(len(leaves), 68)
+        self.assertEqual(len(leaves), 136)
         names = [root]+[root+'/'+leaf for leaf in leaves]
         complete = self.events(names)
         G.SOCKS.require_verdicts(complete, 0, names)
@@ -321,7 +342,7 @@ class NaiveH3NativeRunner(unittest.TestCase):
                      patch.object(G.PACKET.NODE,'verify_naive_library',side_effect=lambda _:order.append('verify')), patch('builtins.print'):
                     result=G.run(vendor,stage=stage)
                 self.assertEqual(order[:2],['library','compile']); self.assertEqual(order[-1],'verify')
-                self.assertEqual(len(observed), {'parser':64,'loopback':122,'reference':531}[stage])
+                self.assertEqual(len(observed), {'parser':64,'loopback':190,'reference':531}[stage])
                 self.assertEqual(result['native_library'], {'sha256':'a'*64,'bytes':42})
                 self.assertFalse(result['device_acceptance']); self.assertFalse(result['production_router_acceptance'])
 

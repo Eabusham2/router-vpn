@@ -29,6 +29,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
 	transport "github.com/sagernet/sing-box/dns/transport"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
@@ -118,7 +119,7 @@ func TestRouterVPNImportedNaiveH3PacketIngress(t *testing.T) {
 // Only this H3 fixture observes the real entry's UDP sockets. It never routes
 // an inbound callback or changes the native dial/write/read operation. An
 // unmatched packet after an original socket closes can be a delayed QUIC
-// reply, even while another final still owns the same WG/AWG entry.
+// reply, even while another final still owns the same packet entry.
 type desktopImportedNaiveH3UDPFlows struct {
 	mu sync.Mutex
 	tag, kind string
@@ -182,8 +183,9 @@ func (flows *desktopImportedNaiveH3UDPFlows) retired(metadata adapter.InboundCon
 	if flows == nil || metadata.Inbound != flows.tag || metadata.InboundType != flows.kind { return false }
 	local := metadata.Destination
 	switch flows.kind {
-	case "wireguard":
-		// The actual WG callback preserves its pre-loopback destination here.
+	case "wireguard", C.TypeOpenVPNClient:
+		// The actual WG and OpenVPN client callbacks preserve their original
+		// local destination before rewriting it to loopback here.
 		original := metadata.OriginDestination
 		if !original.IsIP() || !local.IsIP() || local.Port != original.Port ||
 			original.Addr.Is4() && local.Addr != netip.MustParseAddr("127.0.0.1") ||
@@ -297,7 +299,7 @@ func (router *desktopImportedNaiveH3Ingress) RoutePacketConnectionEx(ctx context
 }
 
 // The observer controls use actual loopback UDP sockets. They prove exact
-// write/close bookkeeping and the rejecting callback only; encrypted WG/AWG,
+// write/close bookkeeping and the rejecting callback only; encrypted WG/AWG/OpenVPN,
 // original physical inventory and final traffic remain the separate reference
 // matrix below, and the 12 actual endpoint callback controls above are intact.
 type desktopImportedNaiveH3ObserverTestEntry struct {
@@ -322,7 +324,7 @@ func TestRouterVPNImportedNaiveH3RetiredUDPIngress(t *testing.T) {
 	faults := []string{"closed", "closing-joined", "closing-failed", "active", "cancelled-caller",
 		"replacement", "replacement-remote", "foreign-remote-ip", "foreign-remote-port", "foreign-local-ip", "foreign-local-port",
 		"unwritten", "close-failed", "foreign-entry", "foreign-kind", "origin", "rewrite"}
-	for _, kind := range []string{"wireguard", "amneziawg"} {
+	for _, kind := range []string{"wireguard", "amneziawg", "openvpn-tcp", "openvpn-udp"} {
 		for _, api := range []string{"dial", "listen"} {
 			for _, fault := range faults {
 				t.Run(kind+"/"+api+"/"+fault, func(t *testing.T) {
@@ -332,6 +334,7 @@ func TestRouterVPNImportedNaiveH3RetiredUDPIngress(t *testing.T) {
 					remote := M.SocksaddrFromNet(peer.LocalAddr())
 					typeName := "wireguard"
 					if kind == "amneziawg" { typeName = mobilemultihop.AmneziaType }
+					if strings.HasPrefix(kind, "openvpn-") { typeName = C.TypeOpenVPNClient }
 					flows := &desktopImportedNaiveH3UDPFlows{tag:"entry-wg", kind:typeName}
 					native := &desktopImportedNaiveH3ObserverTestEntry{}
 					entry := &desktopImportedNaiveH3ObservedEntry{Outbound:native, flows:flows}
@@ -363,7 +366,7 @@ func TestRouterVPNImportedNaiveH3RetiredUDPIngress(t *testing.T) {
 					}
 					metadata := adapter.InboundContext{Inbound:"entry-wg", InboundType:typeName,
 						Source:remote, Destination:M.SocksaddrFromNet(local)}
-					if kind == "wireguard" {
+					if kind == "wireguard" || strings.HasPrefix(kind, "openvpn-") {
 						metadata.OriginDestination = metadata.Destination
 						metadata.Destination.Addr = netip.MustParseAddr("127.0.0.1")
 					}
@@ -436,16 +439,16 @@ func TestRouterVPNImportedNaiveH3RetiredUDPIngress(t *testing.T) {
 					case "foreign-remote-port":
 						metadata.Source.Port = 1
 					case "foreign-local-ip":
-						if kind == "wireguard" { metadata.OriginDestination.Addr = netip.MustParseAddr("192.0.2.78") } else { metadata.Destination.Addr = netip.MustParseAddr("192.0.2.78") }
+						if kind == "wireguard" || strings.HasPrefix(kind, "openvpn-") { metadata.OriginDestination.Addr = netip.MustParseAddr("192.0.2.78") } else { metadata.Destination.Addr = netip.MustParseAddr("192.0.2.78") }
 					case "foreign-local-port":
 						metadata.Destination.Port = 1
-						if kind == "wireguard" { metadata.OriginDestination.Port = 1 }
+						if kind == "wireguard" || strings.HasPrefix(kind, "openvpn-") { metadata.OriginDestination.Port = 1 }
 					case "foreign-entry":
 						metadata.Inbound += "-replacement"
 					case "foreign-kind":
 						metadata.InboundType = "socks"
 					case "origin":
-						if kind == "wireguard" { metadata.OriginDestination = M.Socksaddr{} } else { metadata.OriginDestination = metadata.Destination }
+						if kind == "wireguard" || strings.HasPrefix(kind, "openvpn-") { metadata.OriginDestination = M.Socksaddr{} } else { metadata.OriginDestination = metadata.Destination }
 					case "rewrite":
 						metadata.Destination.Addr = netip.MustParseAddr("127.0.0.2")
 					}
@@ -953,9 +956,10 @@ func desktopImportedNaiveH3New(t *testing.T, kind, firstLayer, lastLayer, fault 
 	owned = service.ContextWith[adapter.CertificateStore](owned, &desktopImportedHysteriaTrust{roots: f.roots})
 	owned = service.ContextWith[adapter.NetworkManager](owned, &desktopImportedPacketNetwork{})
 	f.ingress = &desktopImportedOpenVPNIngress{t: t}
-	if kind == "wireguard" || kind == "amneziawg" {
+	if kind == "wireguard" || kind == "amneziawg" || strings.HasPrefix(kind, "openvpn-") {
 		typeName := "wireguard"
 		if kind == "amneziawg" { typeName = mobilemultihop.AmneziaType }
+		if strings.HasPrefix(kind, "openvpn-") { typeName = C.TypeOpenVPNClient }
 		f.udpFlows = &desktopImportedNaiveH3UDPFlows{tag: "entry-wg", kind: typeName}
 		owned = service.ContextWith[adapter.Router](owned, &desktopImportedNaiveH3Ingress{desktopImportedOpenVPNIngress:f.ingress, flows:f.udpFlows})
 	} else {

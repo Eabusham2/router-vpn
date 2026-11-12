@@ -82,7 +82,7 @@ LOOPBACK = {
         for kind in ('wireguard', 'amneziawg')
         for state in ('active', 'retiring', 'cancelled') for network in ('tcp', 'udp')),
     'TestRouterVPNImportedNaiveH3RetiredUDPIngress': tuple(kind+'/'+api+'/'+fault
-        for kind in ('wireguard', 'amneziawg') for api in ('dial', 'listen')
+        for kind in ('wireguard', 'amneziawg', 'openvpn-tcp', 'openvpn-udp') for api in ('dial', 'listen')
         for fault in ('closed', 'closing-joined', 'closing-failed', 'active', 'cancelled-caller',
                       'replacement', 'replacement-remote', 'foreign-remote-ip', 'foreign-remote-port', 'foreign-local-ip',
                       'foreign-local-port', 'unwritten', 'close-failed', 'foreign-entry', 'foreign-kind',
