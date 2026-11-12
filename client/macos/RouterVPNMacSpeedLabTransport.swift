@@ -18,10 +18,14 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
     private static let limit = 2 * 1024 * 1024
 
     init(url: URL, body: [String: Any]?, timeout: TimeInterval, completion: @escaping (Result<Data, Error>) -> Void) throws {
+        let candidateBase = "/api/multihop/prefix-candidates"
+        let candidateCatalog = url.path == candidateBase + "/catalog" && url.query?.range(of: "^prefix_position=[0-7]$", options: .regularExpression) != nil
+        let candidateStatus = url.path == candidateBase && url.query?.range(of: "^request_id=[a-f0-9]{32}$", options: .regularExpression) != nil
         guard url.scheme == "http", url.host == "127.0.0.1", url.user == nil, url.password == nil,
               ["/api/speed-lab/options", "/api/speed-lab/run", "/api/profile/fastest",
                "/api/profiles", "/api/multihop/status", "/api/connection/live-latency",
-               "/api/connection/speed-test", "/api/profile/latency", "/api/multihop/speed-test"].contains(url.path), url.query == nil, url.fragment == nil else {
+               "/api/connection/speed-test", "/api/profile/latency", "/api/multihop/speed-test",
+               candidateBase, candidateBase + "/catalog", candidateBase + "/cancel", candidateBase + "/save-profile"].contains(url.path), (url.query == nil || candidateCatalog || candidateStatus), url.fragment == nil else {
             throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid local Speed Lab endpoint."])
         }
         if url.path == "/api/profile/fastest" {
@@ -46,6 +50,29 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
         }
         let performanceValid: Bool
         switch url.path {
+        case candidateBase + "/catalog": performanceValid = candidateCatalog && body == nil && bounded(25)
+        case candidateBase, candidateBase + "/cancel", candidateBase + "/save-profile":
+            func token(_ key: String, _ count: Int) -> Bool { guard let id = identifier(key) else {return false};return id.utf8.count == count && id.range(of:"^[a-f0-9]+$",options:.regularExpression) != nil }
+            let keys = Set(body?.keys.map { $0 } ?? [])
+            let original = token("request_id",32)
+            if url.path == candidateBase + "/cancel" {
+                performanceValid = original && keys == Set(["request_id"]) && bounded(25)
+            } else if url.path == candidateBase && body == nil {
+                performanceValid = candidateStatus && bounded(25)
+            } else if url.path == candidateBase {
+                let ids = body?["candidate_ids"] as? [String] ?? []
+                let position = body?["prefix_position"] as? NSNumber
+                performanceValid = url.query == nil && original && token("view_token",64) && keys == Set(["request_id","view_token","prefix_position","candidate_ids","samples"]) && number("samples",equals:50) && bounded(180) &&
+                    position != nil && CFGetTypeID(position!) != CFBooleanGetTypeID() && position!.doubleValue.rounded() == position!.doubleValue && (0...7).contains(position!.intValue) &&
+                    !ids.isEmpty && ids.count <= 64 && Set(ids).count == ids.count && ids.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128 })
+            } else {
+                let nodes = body?["proposed_path"] as? [[String:Any]] ?? []
+                let name = identifier("name") ?? ""
+                performanceValid = original && token("view_token",64) && identifier("candidate_id") != nil && keys == Set(["request_id","view_token","candidate_id","name","proposed_path"]) && bounded(25) &&
+                    !name.isEmpty && name.utf8.count <= 64 && (2...8).contains(nodes.count) && nodes.allSatisfy { node in
+                        Set(node.keys) == Set(["id","mode"]) && !(node["id"] as? String ?? "").isEmpty && ["wg","awg2-fast","awg2-strong","shadowsocks"].contains(node["mode"] as? String ?? "")
+                    }
+            }
         case "/api/profiles", "/api/multihop/status": performanceValid = body == nil && bounded(5)
         case "/api/connection/live-latency": performanceValid = Set(body?.keys.map { $0 } ?? []) == Set(["samples"]) && number("samples", equals: 5) && bounded(12)
         case "/api/connection/speed-test": performanceValid = Set(body?.keys.map { $0 } ?? []) == Set(["bytes"]) && number("bytes", equals: 8388608) && bounded(45)

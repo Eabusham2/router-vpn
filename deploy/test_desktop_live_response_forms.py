@@ -132,8 +132,10 @@ final class RouterAnnotation{let routerID="selected";let storedSubtitle:String?=
 final class Map{var annotations:[Any]=[RouterAnnotation()]}
 final class RouterVPNMacPerformanceController{var window:Window?=Window()}
 final class RouterVPNMacExternalComparisonController{var window:Window?=Window()}
-var telemetryPerformanceControllerKey:UInt8=0,telemetryExternalComparisonControllerKey:UInt8=0
-func objc_getAssociatedObject(_ value:AnyObject,_ key:UnsafeRawPointer)->Any?{nil}
+final class RouterVPNMacOrderedCandidates{var window:Window?=Window()}
+var candidatePresented=false
+var telemetryPerformanceControllerKey:UInt8=0,telemetryExternalComparisonControllerKey:UInt8=0,telemetryOrderedCandidatesKey:UInt8=0
+func objc_getAssociatedObject(_ value:AnyObject,_ key:UnsafeRawPointer)->Any?{candidatePresented ? RouterVPNMacOrderedCandidates():nil}
 final class ProductAPI {
  var calls:[String]=[];var replies:[[String:Any]]=[]
  func json(_ path:String,timeout:TimeInterval=15)throws->Any{calls.append(path);if replies.isEmpty{throw NSError(domain:"no fixture",code:1)};return replies.removeFirst()}
@@ -181,6 +183,7 @@ for fault in ["valid","source","selection","generation","closed","disconnect","p
  DispatchQueue.main.timers=[]
 }
 let f=Form();f.paused=true;f.refreshUnifiedTelemetry();check(f.api.calls.isEmpty,"background polling starved explicit measurement")
+f.paused=false;candidatePresented=true;f.refreshUnifiedTelemetry();check(f.api.calls.isEmpty,"connected prefix dialog did not pause background live measurement");candidatePresented=false
 let r=decode(value())!;check(!r.current(r.deadline),"deadline remained current")
 print("Shipping Swift live HTTPS decoder/delivery: \(checks) checks PASS; native controls/HTTP are fixture boundaries.")
 '''.replace('POLICY',policy).replace('OWNER',owner).replace('METHODS',methods)

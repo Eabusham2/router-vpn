@@ -188,6 +188,8 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--platform',choices=['linux','darwin','windows'],default='windows' if sys.platform=='win32' else sys.platform)
     args=parser.parse_args()
+    if args.platform == 'darwin':
+        subprocess.run([sys.executable,str(ROOT/'deploy/test_desktop_ordered_candidates.py'),'--platform',args.platform],check=True,timeout=300)
     # The live3 receipt is a distinct ephemeral value; execute its shipping UI
     # ownership checks in every existing native comparison-forms lane.
     subprocess.run([sys.executable,str(ROOT/'deploy/test_desktop_live_response_forms.py'),'--platform',args.platform,'--negative-controls'],check=True,timeout=240)

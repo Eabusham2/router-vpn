@@ -61,6 +61,7 @@ on:
       - 'deploy/test_desktop_tor_bridge_forms_runner.py'
       - 'deploy/test_desktop_speed_lab_forms.py'
       - 'deploy/test_desktop_external_comparison_forms.py'
+      - 'deploy/test_desktop_ordered_candidates.py'
       - 'deploy/test_desktop_live_response_forms.py'
       - 'deploy/test_desktop_network_cohort*.py'
       - 'internal/desktopnetwork/**'
