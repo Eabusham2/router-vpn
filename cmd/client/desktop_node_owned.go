@@ -632,9 +632,9 @@ func (a *app) retireDesktopOwnedNode(ctx context.Context, launch *desktopNodeLau
 	if err := join(ctx); err != nil || ctx.Err() != nil {
 		return errors.Join(err, ctx.Err())
 	}
-	raw, err := readDesktopRuntimeFile(launch, "node-protection-retired.json", mobiletor.DesktopProtectionTransferRecordLimit)
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, "node-protection-retired.json", mobiletor.DesktopProtectionTransferRecordLimit)
 	if err == nil {
-		closed, closedErr := readDesktopNodeStopped(launch)
+		closed, closedErr := readDesktopNodeStoppedContext(ctx, launch)
 		if closedErr != nil || !closed {
 			return errors.Join(closedErr, errors.New("native Router retirement has no joined stop acknowledgement"))
 		}
