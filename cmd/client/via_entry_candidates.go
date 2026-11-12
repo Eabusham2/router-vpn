@@ -92,12 +92,15 @@ type viaEntryOwner struct {
 	receipt   *viaEntryReceipt
 	network   func(context.Context) (string, error)
 	closeMu   sync.Mutex
+	ordered   *orderedCandidateJob
+	cleanup   func(context.Context) error
 }
 
 type viaEntryControl struct {
-	mu    sync.Mutex
-	owner *viaEntryOwner
-	seen  map[string]time.Time
+	mu          sync.Mutex
+	owner       *viaEntryOwner
+	seen        map[string]time.Time
+	orderedView *orderedCandidateView
 }
 
 var viaEntryControls sync.Map // map[*app]*viaEntryControl; failed cleanup retains its owner
@@ -623,7 +626,9 @@ func cleanupViaEntryOwnerContext(caller context.Context, c *viaEntryControl, own
 	}
 	defer owner.closeMu.Unlock()
 	var err error
-	if owner.lane != nil {
+	if owner.cleanup != nil {
+		err = owner.cleanup(ctx)
+	} else if owner.lane != nil {
 		err = owner.lane.Close(ctx)
 	}
 	if lockErr := desktopnetwork.LockContext(ctx, &c.mu); lockErr != nil {
@@ -766,6 +771,9 @@ func guardViaEntryDecisionContext(ctx context.Context, a *app) error {
 			return errors.New("candidate entry cleanup is pending; finish Cancel before another operation")
 		}
 		c.owner.receipt = nil
+		if c.owner.ordered != nil {
+			invalidateOrderedCandidateLocked(c.owner, "Another operation retired this candidate receipt; retest.")
+		}
 	}
 	return nil
 }

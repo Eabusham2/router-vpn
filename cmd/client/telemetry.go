@@ -82,6 +82,7 @@ type connectionSpeedResult struct {
 }
 
 func registerTelemetryRoutes(h *http.ServeMux, a *app) {
+	registerOrderedCandidateRoutes(h, a)
 	h.HandleFunc("/api/profile/live-latency", a.liveProfileLatency)
 	h.HandleFunc("/api/profile/fastest", a.fastestProfile)
 	h.HandleFunc("/api/connection/live-latency", a.connectionLiveLatency)
