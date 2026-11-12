@@ -68,6 +68,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
     }
     private String currentSignature()throws Exception {
         long generation=AndroidNodeStore.publicationGeneration(), imported=AndroidStandardExitStore.publicationGeneration();
+        String importedIdentity=importedFileIdentity();
         List<String> original=new ArrayList<>();
         for(AndroidNodeStore.Node node:nodes.list()){
             if(node.file==null)throw new IllegalStateException("Candidate source file changed");
@@ -79,8 +80,21 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         }
         for(AndroidStandardExitStore.Entry entry:external.list())original.add("external:"+entry.id+":"+digest(AndroidStandardExitStore.snapshot(entry)));
         java.util.Collections.sort(original);
-        if(generation!=AndroidNodeStore.publicationGeneration()||imported!=AndroidStandardExitStore.publicationGeneration())throw new IllegalStateException("Candidate publication changed");
-        return digest(generation+":"+imported+":"+new JSONArray(original));
+        if(generation!=AndroidNodeStore.publicationGeneration()||imported!=AndroidStandardExitStore.publicationGeneration()||!importedIdentity.equals(importedFileIdentity()))throw new IllegalStateException("Candidate publication changed");
+        return digest(generation+":"+imported+":"+importedIdentity+":"+new JSONArray(original));
+    }
+    // Imported rows share one private container. Preserve that exact file as
+    // well as the store generation and each complete row: an out-of-store
+    // same-byte replacement must not revive a captured measurement or Save.
+    private String importedFileIdentity()throws Exception {
+        java.io.File file=external.candidateSourceFile();
+        android.system.StructStat before;
+        try {before=android.system.Os.lstat(file.getAbsolutePath());}
+        catch(android.system.ErrnoException missing){if(missing.errno==android.system.OsConstants.ENOENT)return "absent";throw missing;}
+        byte[] bytes=AndroidPrivateFileStore.read(file,AndroidStandardExitStore.MAX_STORE);
+        android.system.StructStat after=android.system.Os.lstat(file.getAbsolutePath());
+        if(before.st_dev!=after.st_dev||before.st_ino!=after.st_ino)throw new IllegalStateException("Imported candidate file was replaced during capture");
+        return before.st_dev + ":" + before.st_ino + ":" + AndroidTorProfile.digest(bytes);
     }
     @Override public String currentInventorySHA256(){
         try {if(invalidated||session.candidateServer()!=server||!signature.equals(currentSignature())){invalidated=true;return "";}session.requireCurrent();return inventorySHA;}

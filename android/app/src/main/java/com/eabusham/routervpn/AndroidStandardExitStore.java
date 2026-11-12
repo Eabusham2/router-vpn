@@ -21,7 +21,7 @@ import java.util.Set;
 final class AndroidStandardExitStore {
     static final int SCHEMA_VERSION = 1;
     static final int MAX_EXITS = 64;
-    private static final int MAX_STORE = 512 * 1024;
+    static final int MAX_STORE = 512 * 1024;
     private static final SecureRandom RANDOM = new SecureRandom();
     // Activities and connection-profile owners instantiate separate stores.
     // Their snapshot checks and private publication still share one transaction.
@@ -82,6 +82,7 @@ final class AndroidStandardExitStore {
     private final Context context;
     private final File storeFile;
     AndroidStandardExitStore(Context context) { this.context=context.getApplicationContext(); storeFile = new File(this.context.getFilesDir(), "standard-exits.json"); }
+    File candidateSourceFile() { return storeFile; }
 
     static List<Capability> capabilities() {
         List<Capability> r=new ArrayList<>();
