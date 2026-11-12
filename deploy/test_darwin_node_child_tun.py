@@ -192,6 +192,14 @@ def publish_receipt(path, result, workspace):
             output.write('\n')
 
 
+def native_fixture_compile(compiler, image, package):
+    # The installed fixture signs exact copies of these original race images.
+    # Omit only linker symbols/DWARF so codesign does not rewrite debug data
+    # unrelated to native acceptance within its unchanged ten-second bound.
+    return [compiler, 'test', '-c', '-race', '-mod=readonly', '-tags='+','.join(TAGS),
+            '-ldflags=-checklinkname=0 -s -w', '-o', image, package]
+
+
 def execute(source, go='go', *, environment=None):
     environment = dict(os.environ if environment is None else environment)
     arch, uid = required_host(environment)
@@ -203,8 +211,7 @@ def execute(source, go='go', *, environment=None):
         work.chmod(0o755)
         child, peer = work/'child.test', work/'peer.test'
         for image, package in ((child, './cmd/sing-box'), (peer, './protocol/routervpnamnezia')):
-            UID.run([compiler, 'test', '-c', '-race', '-mod=readonly', '-tags='+','.join(TAGS),
-                     '-ldflags=-checklinkname=0', '-o', image, package], cwd=source, env=captured, timeout=600)
+            UID.run(native_fixture_compile(compiler, image, package), cwd=source, env=captured, timeout=600)
             image.chmod(0o755)
         if checked_sources(source)[1] != before:
             raise ValueError('Darwin native sources changed while compiling original images')

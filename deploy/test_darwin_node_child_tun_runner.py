@@ -155,6 +155,28 @@ class NativeVerdict(unittest.TestCase):
 
 
 class ActualHostSelection(unittest.TestCase):
+    def test_fixture_debug_stripping_keeps_actual_race_and_native_tags(self):
+        for package in ('./cmd/sing-box', './protocol/routervpnamnezia'):
+            command = G.native_fixture_compile('/captured/go', Path('/captured/native.test'), package)
+            self.assertEqual(command[:6], ['/captured/go', 'test', '-c', '-race', '-mod=readonly', '-tags='+','.join(G.TAGS)])
+            self.assertEqual(command[6:], ['-ldflags=-checklinkname=0 -s -w', '-o', Path('/captured/native.test'), package])
+        source = (ROOT/'deploy/test_darwin_node_child_tun.py').read_text()
+        self.assertIn('UID.run(native_fixture_compile(compiler, image, package), cwd=source, env=captured, timeout=600)', source)
+        self.assertIn("identities = {path: image_identity(path) for path in (child, peer)}", source)
+        self.assertIn('any(image_identity(path) != value for path, value in identities.items())', source)
+
+    def test_signing_failure_keeps_original_deadline_and_uncancelled_cause(self):
+        source = (ROOT/'mobile/desktop/node_chain_command_darwin_native_test.go.tmpl').read_text()
+        start = source.index('for _, p := range []string{macosprocess.ControllerPath, macosprocess.EnginePath}')
+        stop = source.index('\n\tpeer := macosprocess.InstallRoot', start)
+        signing = source[start:stop]
+        self.assertIn('darwinChildImage(t, image, p, expected)', signing)
+        self.assertIn('context.WithTimeout(context.Background(), 10*time.Second)', signing)
+        self.assertIn('cause := ctx.Err()\n\t\tcancel()', signing)
+        self.assertIn('native fixture signing image=%s bytes=%d elapsed=%s context=%v: %v', signing)
+        self.assertIn('p, before.Size(), time.Since(started), cause, e, out', signing)
+        self.assertNotIn('continue', signing)
+
     def test_explicit_native_host_and_ordinary_uid(self):
         with patch.object(G.platform, 'system', return_value='Darwin'), patch.object(G.platform, 'machine', return_value='arm64'), patch.object(G.os, 'getuid', return_value=501):
             self.assertEqual(G.required_host({G.FLAG: '1'}), ('arm64', 501))

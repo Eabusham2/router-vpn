@@ -179,11 +179,17 @@ func TestRouterVPNNodeChainDarwinNativeHarness(t *testing.T) {
 	expected := os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_SHA256")
 	for _, p := range []string{macosprocess.ControllerPath, macosprocess.EnginePath} {
 		darwinChildImage(t, image, p, expected)
+		before, statErr := os.Lstat(p)
+		if statErr != nil {
+			t.Fatal("native fixture signing input", p, statErr)
+		}
+		started := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		out, e := darwinChildCommand(ctx, "/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none", "--identifier", "routervpn.fixture."+filepath.Base(p), p)
+		cause := ctx.Err()
 		cancel()
 		if e != nil {
-			t.Fatal("native fixture signing", e, string(out))
+			t.Fatalf("native fixture signing image=%s bytes=%d elapsed=%s context=%v: %v\n%s", p, before.Size(), time.Since(started), cause, e, out)
 		}
 	}
 	peer := macosprocess.InstallRoot + "/peer.test"
