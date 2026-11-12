@@ -9,12 +9,46 @@ macOS build separately compiles the complete AppKit window.
 from pathlib import Path
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
+CATALOG_ROOTS = ('TestDesktopExternalEntryModeFormCatalog',)
+PAYLOAD_ROOTS = tuple('TestDesktop'+name+'FormPayload' for name in (
+    'Amnezia', 'ExternalProxy', 'ExternalPacket', 'ExternalEntryMode', 'ExternalOpenVPN'))
+
+
+def compile_form_image(directory):
+    binary = directory/('client-forms.test.exe' if sys.platform == 'win32' else 'client-forms.test')
+    print('Amnezia forms: compiling original race-enabled client image (300s build bound)', flush=True)
+    started = time.monotonic()
+    subprocess.run(['go', 'test', '-c', '-race', '-o', str(binary), './cmd/client'],
+                   cwd=ROOT, check=True, timeout=300)
+    print(f'Amnezia forms: race image compiled in {time.monotonic()-started:.2f}s', flush=True)
+    return binary
+
+
+def run_go_form_phase(binary, roots, env):
+    selector = '^('+'|'.join(re.escape(name) for name in roots)+')$'
+    print('Amnezia forms: executing '+', '.join(roots)+' (180s execution bound)', flush=True)
+    result = subprocess.run([str(binary), '-test.run='+selector, '-test.count=1',
+                             '-test.v', '-test.timeout=180s'], cwd=ROOT/'cmd/client', env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=180)
+    print(result.stdout, end='', flush=True)
+    result.check_returncode()
+    if re.search(r'(?m)^\s*(?:--- (?:FAIL|SKIP):|WARNING: DATA RACE|panic:|fatal error:)', result.stdout):
+        raise RuntimeError('Native form consumer failed, skipped, or reported a race')
+    for name in roots:
+        if len(re.findall(r'^=== RUN\s+'+re.escape(name)+r'$', result.stdout, re.MULTILINE)) != 1 or len(re.findall(
+                r'^--- PASS: '+re.escape(name)+r' \([0-9]+(?:\.[0-9]+)?s\)$', result.stdout, re.MULTILINE)) != 1:
+            raise RuntimeError('Missing or repeated original form consumer verdict: '+name)
+    if result.stdout.splitlines().count('PASS') != 1 or not result.stdout.rstrip().endswith('\nPASS'):
+        raise RuntimeError('Native form consumer did not complete its original test image')
+    print('Amnezia forms: completed '+', '.join(roots), flush=True)
 
 
 def block(source, marker):
@@ -549,6 +583,14 @@ def main():
         shells = [shell for shell in ('pwsh', 'powershell.exe') if shutil.which(shell)]
         if not shells:
             raise SystemExit('PowerShell is required to execute the actual Save callback')
+    subprocess.run([sys.executable, str(ROOT/'deploy/test_desktop_amnezia_forms_runner.py')], check=True, timeout=60)
+    with tempfile.TemporaryDirectory(prefix='router-vpn-amnezia-form-image-') as image_directory:
+        binary = compile_form_image(Path(image_directory))
+        run_forms(args.platform, shells, binary)
+    print('Verified native '+args.platform+' forms to exact Go AWG/WG profiles and authenticated proxy/layer runtime graphs', flush=True)
+
+
+def run_forms(platform_name, shells, binary):
     for shell in shells:
         with tempfile.TemporaryDirectory(prefix='router-vpn-amnezia-form-') as temporary:
             directory = Path(temporary)
@@ -558,16 +600,15 @@ def main():
                 name = 'external-openvpn-multihost-layered-'+flavor+'-client.json'
                 shutil.copyfile(ROOT/'deploy/fixtures'/name, directory/name)
             env = dict(os.environ, ROUTERVPN_AWG_FORM_PAYLOADS=str(directory), ROUTERVPN_EXTERNAL_FORM_PAYLOADS=str(directory))
-            subprocess.run(['go', 'test', '-count=1', './cmd/client', '-run', '^TestDesktopExternalEntryModeFormCatalog$'], cwd=ROOT, env=env, check=True, timeout=180)
-            if args.platform == 'linux':
+            run_go_form_phase(binary, CATALOG_ROOTS, env)
+            if platform_name == 'linux':
                 linux_form(directory)
-            elif args.platform == 'darwin':
+            elif platform_name == 'darwin':
                 swift_form(directory)
             else:
                 windows_form(directory, shell)
             env = dict(os.environ, ROUTERVPN_AWG_FORM_PAYLOADS=str(directory), ROUTERVPN_EXTERNAL_FORM_PAYLOADS=str(directory))
-            subprocess.run(['go', 'test', '-race', '-count=1', './cmd/client', '-run', '^TestDesktop(Amnezia|ExternalProxy|ExternalPacket|ExternalEntryMode|ExternalOpenVPN)FormPayload$'], cwd=ROOT, env=env, check=True, timeout=180)
-    print('Verified native '+args.platform+' forms to exact Go AWG/WG profiles and authenticated proxy/layer runtime graphs', flush=True)
+            run_go_form_phase(binary, PAYLOAD_ROOTS, env)
 
 
 if __name__ == '__main__':
