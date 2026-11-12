@@ -402,3 +402,27 @@ func TestMeasurementCancelledFinalObservationCannotPublishFiftySamples(t *testin
 		t.Fatal("late final identity published a cancelled benchmark", actual)
 	}
 }
+
+func TestStatusContextJSONPreservesCallerCancellation(t *testing.T) {
+	engine := &observedMeasurementEngine{}
+	service, err := NewOrderedContext(context.Background(), engine, orderedHops(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	engine.setObserve(func(observed context.Context) (string, error) {
+		if observed != ctx {
+			t.Error("status detached caller")
+		}
+		cancel()
+		<-observed.Done()
+		return "", observed.Err()
+	})
+	var status Status
+	if err := json.Unmarshal([]byte(service.StatusContextJSON(ctx)), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Stage != "invalidated" || len(status.Results) != 0 || engine.legacy.Load() != 0 {
+		t.Fatal("cancelled original owner retained status", status)
+	}
+}

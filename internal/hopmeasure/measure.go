@@ -471,6 +471,11 @@ func (s *Service) StatusJSON() string {
 	return s.statusJSON(ctx)
 }
 
+// StatusContextJSON observes the original native owner within the caller lifetime.
+func (s *Service) StatusContextJSON(ctx context.Context) string {
+	return s.statusJSON(ctx)
+}
+
 func (s *Service) statusJSON(ctx context.Context) string {
 	s.mu.Lock()
 	request, done, pending := s.state.Request, s.done, s.pending
