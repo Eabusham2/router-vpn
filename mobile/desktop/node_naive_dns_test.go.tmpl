@@ -32,6 +32,26 @@ type desktopNaiveDNSPolicy struct {
 	exercise func(*testing.T, context.Context, adapter.Outbound)
 }
 
+// Selected DNS fixtures share this retained owner under the ordinary native
+// package tags as well as the separate imported-H3 remote-test tags.
+type desktopImportedNaiveH3DNSManager struct {
+	adapter.DNSTransportManager
+	owners map[string]adapter.DNSTransport
+	reads  atomic.Int64
+}
+
+func (m *desktopImportedNaiveH3DNSManager) Transport(tag string) (adapter.DNSTransport, bool) {
+	m.reads.Add(1)
+	owner, ok := m.owners[tag]
+	return owner, ok
+}
+func (*desktopImportedNaiveH3DNSManager) Default() adapter.DNSTransport {
+	panic("H3 must retain explicit captured bootstrap")
+}
+func (*desktopImportedNaiveH3DNSManager) Transports() []adapter.DNSTransport {
+	panic("H3 must not enumerate replacement DNS owners")
+}
+
 // All selected DNS sockets belong to the final native Naive owner. The parent
 // witness independently refuses and counts every lower resolver/UDP operation.
 func TestRouterVPNDesktopNodeNaiveCONNECTDNSPolicies(t *testing.T) {
