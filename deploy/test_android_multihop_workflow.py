@@ -3,14 +3,16 @@
 from collections import Counter
 from itertools import product
 from pathlib import Path
+import ast
 import os
 import re
 import subprocess
 import unittest
 
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/android-multihop-contract.yml'
+RUNTIME = WORKFLOW.parents[2] / 'android/test_android_runtime_contract.py'
 ANDROID = tuple('python3 android/test_android_' + name + '.py' for name in (
-    'multihop_contract', 'node_chain_capture', 'node_candidates', 'ordered_presentation',
+    'multihop_contract', 'node_chain_capture', 'node_chain_execution_capture', 'node_candidates', 'ordered_presentation',
     'node_chain_runtime', 'node_chain_mtu', 'multihop_modes', 'home_dns',
     'router_dns_retest', 'multihop_graph', 'pq_selection', 'max_selection',
     'naive_multihop',
@@ -23,6 +25,19 @@ EXPECTED = {
 }
 
 
+def validate_runtime(source):
+    loops = [node for node in ast.parse(source).body
+             if isinstance(node, ast.For) and isinstance(node.target, ast.Name)
+             and node.target.id == 'executable_contract']
+    assert len(loops) == 1 and isinstance(loops[0].iter, ast.Tuple), 'Runtime gate loop missing'
+    values = [node.value for node in loops[0].iter.elts if isinstance(node, ast.Constant)]
+    assert len(values) == len(loops[0].iter.elts), 'Runtime gate inventory is not literal'
+    assert values.count('test_android_node_chain_execution_capture.py') == 1, 'Runtime execution capture gate missing/duplicate'
+    expected = ast.parse('subprocess.run([sys.executable, str(ROOT / executable_contract)], cwd=ROOT.parent, check=True)').body
+    assert not loops[0].orelse and len(loops[0].body) == 1, 'Runtime gate can be conditionally skipped'
+    assert ast.dump(loops[0].body[0]) == ast.dump(expected[0]), 'Runtime gate no longer executes its exact checked script'
+
+
 def validate(source):
     # This intentionally checks this workflow's simple explicit jobs; introducing
     # matrix/conditional execution requires updating this executable contract.
@@ -32,6 +47,8 @@ def validate(source):
             for i, m in enumerate(matches)}
     assert len(matches) == 5 and set(jobs) == {*EXPECTED, 'contract'}, 'Missing/duplicate job'
     assert source.count("- 'deploy/test_android_multihop_workflow.py'") == 2, 'Audit trigger missing'
+    for path in ('android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java', 'android/test_android_node_chain_execution_capture.py', 'android/test_android_runtime_contract.py'):
+        assert source.count("- '" + path + "'") == 2, 'Execution capture source/test trigger missing'
     for name, expected in EXPECTED.items():
         body = jobs[name]
         assert '    timeout-minutes: 15\n' in body, 'Job deadline changed'
@@ -61,6 +78,20 @@ class WorkflowContract(unittest.TestCase):
     def test_complete_inventory(self):
         validate(self.source)
 
+    def test_runtime_execution_capture_gate(self):
+        validate_runtime(RUNTIME.read_text())
+
+    def test_runtime_execution_capture_controls(self):
+        source = RUNTIME.read_text()
+        gate = '    "test_android_node_chain_execution_capture.py",'
+        for old, new in ((gate, ''), (gate, gate + '\n' + gate),
+                         ('    subprocess.run(\n', '    ignored.run(\n'),
+                         ('        check=True,\n', '        check=False,\n')):
+            with self.subTest(change=old):
+                self.assertEqual(source.count(old), 1)
+                with self.assertRaises(AssertionError):
+                    validate_runtime(source.replace(old, new, 1))
+
     def test_actual_aggregate_rejects_every_incomplete_result(self):
         script = validate(self.source)
         for results in product(('success', 'failure', 'cancelled', 'skipped'), repeat=4):
@@ -73,6 +104,10 @@ class WorkflowContract(unittest.TestCase):
     def test_inventory_controls(self):
         changes = (
             (ANDROID[1], '# omitted'),
+            (ANDROID[2], '# omitted execution capture'),
+            ("- 'android/test_android_runtime_contract.py'", "- 'android/omitted-runtime.py'"),
+            ("- 'android/test_android_node_chain_execution_capture.py'", "- 'android/omitted-execution.py'"),
+            ("- 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java'", "- 'android/omitted-execution.java'"),
             (ANDROID[1], ANDROID[0]),
             ('go test -race -count=1 -timeout=5m', 'go test -count=1 -timeout=5m'),
             ('timeout-minutes: 15', 'timeout-minutes: 30'),
