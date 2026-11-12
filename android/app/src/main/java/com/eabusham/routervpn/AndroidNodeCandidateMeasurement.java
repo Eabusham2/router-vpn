@@ -18,6 +18,13 @@ final class AndroidNodeCandidateMeasurement {
     private volatile RouterNodeChainCandidateMeasurement nativeOwner;
     private volatile String request="";
     private Object lease;
+    private volatile List<AndroidNodeCandidateResult> admitted=java.util.Collections.emptyList();
+    synchronized void requireResult(AndroidNodeCandidateResult result)throws Exception {
+        if(cancelled||nativeOwner==null||!admitted.contains(result)||!result.current(System.currentTimeMillis()))throw new IllegalStateException("Retest this candidate before saving its next connection.");
+        catalog.requireCurrent();JSONObject current=new JSONObject(nativeOwner.statusJSON());
+        if("invalidated".equals(current.optString("stage"))||!current.optString("failure").isEmpty())throw new IllegalStateException("The original native prefix proof changed.");
+        catalog.requireCurrent();
+    }
     private AndroidNodeCandidateMeasurement(AndroidNodeCandidateCatalog catalog,Callback callback){this.catalog=catalog;this.callback=callback;}
     static synchronized AndroidNodeCandidateMeasurement start(AndroidNodeCandidateCatalog catalog,Callback callback){
         if(active!=null)throw new IllegalStateException("An original candidate test still owns native cleanup.");
@@ -27,7 +34,7 @@ final class AndroidNodeCandidateMeasurement {
     }
     static synchronized boolean cancelActive(){if(active==null)return false;active.cancel();return true;}
     static synchronized boolean busy(){return active!=null;}
-    void cancel(){cancelled=true;RouterNodeChainCandidateMeasurement value=nativeOwner;if(value!=null&&!request.isEmpty())value.cancel(request);}
+    void cancel(){synchronized(this){cancelled=true;}RouterNodeChainCandidateMeasurement value=nativeOwner;if(value!=null&&!request.isEmpty())value.cancel(request);}
     private void run(){
         Throwable failure=null;List<AndroidNodeCandidateResult> results=new ArrayList<>();
         try {
@@ -67,7 +74,7 @@ final class AndroidNodeCandidateMeasurement {
             }
         } catch(Throwable error){failure=error;}
         finally {
-            cancelled=true;
+            synchronized(this){cancelled=true;}
             // A failed constructor can still retain a late native callback. The
             // exact captured factory args let cleanup recover that original slot.
             boolean joined=false;
@@ -90,6 +97,6 @@ final class AndroidNodeCandidateMeasurement {
     }
     private void publish(List<AndroidNodeCandidateResult> values,String detail){
         catalog.requireCurrent();long now=System.currentTimeMillis();values.removeIf(result->!result.current(now));
-        values.sort(Comparator.comparingDouble(result->result.score));callback.changed(java.util.Collections.unmodifiableList(new ArrayList<>(values)),detail);
+        values.sort(Comparator.comparingDouble(result->result.score));admitted=java.util.Collections.unmodifiableList(new ArrayList<>(values));callback.changed(admitted,detail);
     }
 }

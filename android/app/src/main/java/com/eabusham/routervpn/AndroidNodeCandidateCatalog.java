@@ -86,6 +86,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         try {if(invalidated||session.candidateServer()!=server||!signature.equals(currentSignature())){invalidated=true;return "";}session.requireCurrent();return inventorySHA;}
         catch(Exception changed){invalidated=true;return "";}
     }
+    AndroidNodeStore.ChainSource source(String localID)throws Exception { requireCurrent();AndroidNodeStore.ChainSource source=nodes.candidateSource(localID);requireCurrent();return source; }
     void requireCurrent(){if(!inventorySHA.equals(currentInventorySHA256()))throw new IllegalStateException("The original prefix, network or saved candidate catalog changed.");}
     static String digest(String raw)throws Exception{return AndroidTorProfile.digest(raw.getBytes(StandardCharsets.UTF_8));}
 }
