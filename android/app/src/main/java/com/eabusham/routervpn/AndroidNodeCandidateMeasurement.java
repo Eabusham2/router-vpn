@@ -79,7 +79,8 @@ final class AndroidNodeCandidateMeasurement {
                     joined=true;
                 } catch(Exception pending){
                     if(failure==null)failure=pending;
-                    callback.changed(java.util.Collections.emptyList(),"Cancelling; the original native callbacks are still draining and MTU remains paused.");
+                    try { callback.changed(java.util.Collections.emptyList(),"Cancelling; the original native callbacks are still draining and MTU remains paused."); }
+                    catch(Throwable observerFailure){ /* An observer cannot abandon retained native cleanup. */ }
                     try{Thread.sleep(250);}catch(InterruptedException ignored){}
                 }
             }

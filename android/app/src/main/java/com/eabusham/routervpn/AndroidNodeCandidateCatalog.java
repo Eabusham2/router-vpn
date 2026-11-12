@@ -25,6 +25,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
     final int prefix;
     final List<Row> rows;
     final String inventory, inventorySHA, signature;
+    private volatile boolean invalidated;
     private final AndroidNodeStore nodes;
     private final AndroidStandardExitStore external;
 
@@ -70,7 +71,11 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         List<String> original=new ArrayList<>();
         for(AndroidNodeStore.Node node:nodes.list()){
             if(node.file==null)throw new IllegalStateException("Candidate source file changed");
-            original.add("router:"+node.id+":"+AndroidTorProfile.digest(AndroidPrivateFileStore.read(node.file,AndroidNodeStore.MAX_BUNDLE)));
+            android.system.StructStat before=android.system.Os.lstat(node.file.getAbsolutePath());
+            byte[] bytes=AndroidPrivateFileStore.read(node.file,AndroidNodeStore.MAX_BUNDLE);
+            android.system.StructStat after=android.system.Os.lstat(node.file.getAbsolutePath());
+            if(before.st_dev!=after.st_dev||before.st_ino!=after.st_ino)throw new IllegalStateException("Candidate file was replaced during capture");
+            original.add("router:"+node.id+":"+before.st_dev+":"+before.st_ino+":"+AndroidTorProfile.digest(bytes));
         }
         for(AndroidStandardExitStore.Entry entry:external.list())original.add("external:"+entry.id+":"+digest(AndroidStandardExitStore.snapshot(entry)));
         java.util.Collections.sort(original);
@@ -78,8 +83,8 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         return digest(generation+":"+imported+":"+new JSONArray(original));
     }
     @Override public String currentInventorySHA256(){
-        try {if(session.candidateServer()!=server||!signature.equals(currentSignature()))return "";session.requireCurrent();return inventorySHA;}
-        catch(Exception changed){return "";}
+        try {if(invalidated||session.candidateServer()!=server||!signature.equals(currentSignature())){invalidated=true;return "";}session.requireCurrent();return inventorySHA;}
+        catch(Exception changed){invalidated=true;return "";}
     }
     void requireCurrent(){if(!inventorySHA.equals(currentInventorySHA256()))throw new IllegalStateException("The original prefix, network or saved candidate catalog changed.");}
     static String digest(String raw)throws Exception{return AndroidTorProfile.digest(raw.getBytes(StandardCharsets.UTF_8));}
