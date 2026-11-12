@@ -599,6 +599,46 @@ func serverChainEncryptedHealthy(stats serverChainEncryptedStats) bool {
 	}
 	return true
 }
+
+// Failure diagnostics contain only the original public mode and numeric
+// traffic/proof counters. Never serialize peer keys, API tokens, source/config,
+// CA material, raw worker logs or an unbounded native error into CI output.
+func serverChainEncryptedDiagnostic(reply multihoprelay.NodeChainIPCResponse, stats serverChainEncryptedStats) string {
+	type prefix struct {
+		Mode         string `json:"mode"`
+		RawUDP       int64  `json:"raw_udp"`
+		TCP          int64  `json:"tcp"`
+		UDP          int64  `json:"udp"`
+		Proof        uint64 `json:"proof"`
+		AuthRefusals uint64 `json:"auth_refusals"`
+	}
+	value := struct {
+		SnapshotOK   bool                         `json:"snapshot_ok"`
+		Phase        multihoprelay.NodeChainPhase `json:"phase"`
+		Sequence     uint64                       `json:"sequence"`
+		Prefixes     []prefix                     `json:"prefixes"`
+		FinalRawTCP  int64                        `json:"final_raw_tcp"`
+		FinalRawUDP  int64                        `json:"final_raw_udp"`
+		FinalTCP     int64                        `json:"final_tcp"`
+		FinalUDP     int64                        `json:"final_udp"`
+		FinalPrivate uint64                       `json:"final_private"`
+		FinalDNS     uint64                       `json:"final_dns"`
+		FinalPublic  uint64                       `json:"final_public"`
+		EntryPublic  uint64                       `json:"entry_public"`
+		Direct       uint32                       `json:"direct"`
+	}{SnapshotOK: reply.OK, Prefixes: []prefix{}, FinalRawTCP: stats.Final.FinalRawTCP, FinalRawUDP: stats.Final.FinalRawUDP,
+		FinalTCP: stats.Final.FinalTCP, FinalUDP: stats.Final.FinalUDP, FinalPrivate: stats.Final.RouterQueries, FinalDNS: stats.Final.DNSQueries,
+		FinalPublic: stats.Final.FinalPublicQueries, EntryPublic: stats.Final.EntryPublicQueries, Direct: stats.Final.DirectQueries}
+	if reply.Receipt != nil {
+		value.Phase, value.Sequence = reply.Receipt.Phase, reply.Receipt.Sequence
+	}
+	for _, row := range stats.Prefixes {
+		value.Prefixes = append(value.Prefixes, prefix{row.Mode, row.RawUDP, row.TCP, row.UDP, row.ProofQueries, row.AuthRefusals})
+	}
+	raw, _ := json.Marshal(value)
+	return string(raw)
+}
+
 func serverChainEncryptedScenario(t *testing.T, name string) {
 	t.Helper()
 	p := serverChainEncryptedPeerStart(t, name)
@@ -634,9 +674,11 @@ func serverChainEncryptedScenario(t *testing.T, name string) {
 	ready := false
 	failed := false
 	lastPhase := multihoprelay.NodeChainPending
+	lastSnapshot := pending
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		reply := worker.call(t, "snapshot")
+		lastSnapshot = reply
 		if !reply.OK {
 			failed = true
 			break
@@ -693,12 +735,8 @@ func serverChainEncryptedScenario(t *testing.T, name string) {
 		}
 	} else {
 		if !ready {
-			stats := p.control(t, "stats")
-			t.Logf("encrypted readiness failure: case=%s worker_refused=%t last_phase=%s prefixes=%+v", name, failed, lastPhase, stats.Prefixes)
-			t.Logf("encrypted final counters: raw_tcp=%d raw_udp=%d tcp=%d udp=%d health=%d dns=%d public=%d direct=%d", stats.Final.FinalRawTCP, stats.Final.FinalRawUDP, stats.Final.FinalTCP, stats.Final.FinalUDP, stats.Final.RouterQueries, stats.Final.DNSQueries, stats.Final.FinalPublicQueries, stats.Final.DirectQueries)
-			t.Logf("bounded original worker stderr: %s", worker.process.log.text())
-			t.Logf("bounded independent peer stderr: %s", p.process.log.text())
-			t.Fatal("complete actual encrypted suffix never became ready")
+			t.Logf("encrypted readiness failure: case=%s worker_refused=%t last_phase=%s", name, failed, lastPhase)
+			t.Fatal("complete actual encrypted suffix never became ready", serverChainEncryptedDiagnostic(lastSnapshot, p.control(t, "stats")))
 		}
 		targets, err := policy.ProofTargets(capture)
 		if err != nil {
@@ -838,6 +876,15 @@ func TestServerChainEncryptedSourceInventory(t *testing.T) {
 			}
 			if len(policy.ProofInventory()) != len(p.prefixes)+1 {
 				t.Fatal("encrypted fixture source omitted a member")
+			}
+			// The same formatter used by native failures must retain useful
+			// counters without emitting any source/peer secret or certificate.
+			stats := serverChainEncryptedStats{Prefixes: []serverChainEncryptedPrefixStats{{Mode: "awg2-fast", RawUDP: 7, TCP: 3, UDP: 5, ProofQueries: 2, AuthRefusals: 1}}, PublicCA: "forbidden-public-ca"}
+			stats.Final.RouterQueries = 4
+			stats.Final.DNSQueries = 6
+			diagnostic := serverChainEncryptedDiagnostic(multihoprelay.NodeChainIPCResponse{OK: false}, stats)
+			if !strings.Contains(diagnostic, `"raw_udp":7`) || !strings.Contains(diagnostic, `"final_dns":6`) || strings.Contains(diagnostic, "forbidden-public-ca") || strings.Contains(diagnostic, p.prefixes[0].APIToken) || strings.Contains(diagnostic, p.prefixes[0].PrivateKey) || strings.Contains(diagnostic, policy.Source()) {
+				t.Fatal("native failure diagnostic lost counters or exposed private source")
 			}
 			for _, route := range mustServerChainEncryptedRoutes(t, policy, capture) {
 				if route.Final && (route.UDPOverTCPVersion != 2 || route.AllowsDestination("udp", "10.77.0.1:45999") != (name != "admission-restrictions")) {
