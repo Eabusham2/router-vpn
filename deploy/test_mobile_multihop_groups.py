@@ -22,7 +22,10 @@ PHASES = (
     ('external paths and OpenVPN', r'^Test(?:External|OpenVPN|ImportedEntry)'),
     # Keep the growing fallback below the same 180s aggregate bound. Exclude
     # the roots already covered by the node and external phases explicitly.
-    ('desktop node policies and ownership', r'^TestDesktop(?:Node|LinuxNode|CompleteMAX)'),
+    # Ordered replay and readiness have grown beyond the combined desktop
+    # phase; keep their complete matrix under the same 180-second limit.
+    ('desktop ordered policies and readiness', r'^TestDesktopNode(?:Chain|Ready)'),
+    ('desktop node policies and ownership', r'^TestDesktop(?:Node(?!Chain|Ready)|LinuxNode|CompleteMAX)'),
     ('desktop execution and ownership', r'^TestDesktop(?!Predecessor|Node|LinuxNode|CompleteMAX)'),
     ('imported transports and ownership', r'^TestImported(?!Entry)'),
 )
@@ -116,6 +119,7 @@ class PartitionTests(unittest.TestCase):
             'TestEntryStartLayerPreservesAllNativeModesAndChoicePaths',
             'TestDesktopExecution', 'TestDesktopPredecessorOwnership',
             'TestDesktopNodeFuturePolicy', 'TestDesktopLinuxNodeFuturePolicy',
+            'TestDesktopNodeChainFuturePolicy', 'TestDesktopNodeReadyFutureReceipt',
             'TestImportedTransport',
             'TestFutureController', 'Example', 'FuzzFutureSeed', 'TestÜnicode',
         })
@@ -142,6 +146,8 @@ class PartitionTests(unittest.TestCase):
         self.assertIn('TestDesktopPredecessorOwnership', groups['node capture and packet identities'])
         for name in ('TestDesktopNodeFuturePolicy', 'TestDesktopLinuxNodeFuturePolicy'):
             self.assertIn(name, groups['desktop node policies and ownership'])
+        for name in ('TestDesktopNodeChainFuturePolicy', 'TestDesktopNodeReadyFutureReceipt'):
+            self.assertIn(name, groups['desktop ordered policies and readiness'])
         self.assertIn('TestImportedTransport', groups['imported transports and ownership'])
         self.assertIn('TestImportedEntryPacketFinalCompleteGraphs', groups['external paths and OpenVPN'])
         for name in ('TestFutureController', 'Example', 'FuzzFutureSeed', 'TestÜnicode'):
@@ -153,8 +159,8 @@ class PartitionTests(unittest.TestCase):
     def test_every_selected_node_chain_root_is_mandatory_and_runs_once(self):
         groups = dict(partition(self.names))
         for prefix, count, phase in (('TestNodeChain', 10, 'ordered node chains'),
-                                     ('TestDesktopNodeChainPolicy', 4, 'desktop node policies and ownership'),
-                                     ('TestDesktopNodeChainReady', 1, 'desktop node policies and ownership')):
+                                     ('TestDesktopNodeChainPolicy', 4, 'desktop ordered policies and readiness'),
+                                     ('TestDesktopNodeChainReady', 1, 'desktop ordered policies and readiness')):
             required = {name for name in REQUIRED if name.startswith(prefix)}
             self.assertEqual(len(required), count)
             self.assertTrue(required.issubset(groups[phase]))
