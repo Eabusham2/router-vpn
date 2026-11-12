@@ -1,0 +1,163 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// The private interface preserves the shared execution wrapper's stronger
+// close contract. It never extracts that wrapper's raw hopmeasure.Service.
+type routerNodeChainExecutionMeasurementService interface {
+	routerHopMeasurementService
+	CloseContext(context.Context) error
+}
+
+type routerNodeChainExecutionMeasurement struct {
+	owner      *RouterNodeChainExecution
+	state      *routerNodeChainExecutionState
+	controller *routerNodeChainExecutionControllerRef
+	service    routerNodeChainExecutionMeasurementService
+	closed     atomic.Bool
+}
+
+func RouterNodeChainExecutionNewHopMeasurement(m *RouterNodeChainExecution, server *CommandServer) (*RouterHopMeasurement, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	return m.newExecutionHopMeasurementContext(ctx, server)
+}
+
+func (m *RouterNodeChainExecution) newExecutionHopMeasurementContext(ctx context.Context, server *CommandServer) (*RouterHopMeasurement, error) {
+	state, controller, runtime, err := m.executionRuntimeContext(ctx)
+	if err != nil || server == nil || state.server != server || m.activities.measurement.Load() != nil {
+		return nil, errors.Join(err, errRouterNodeChainExecution)
+	}
+	return m.captureExecutionMeasurementContext(ctx, state, controller, func(call context.Context) (routerNodeChainExecutionMeasurementService, error) {
+		return runtime.NewHopMeasurementContext(call, m)
+	})
+}
+
+// The factory seam is package-private and used only by component tests for
+// late acquisition and failed-close ownership. Shipping always uses the exact
+// shared runtime captured above, including its selected routes and held I/O.
+func (m *RouterNodeChainExecution) captureExecutionMeasurementContext(ctx context.Context, state *routerNodeChainExecutionState, controller *routerNodeChainExecutionControllerRef,
+	factory func(context.Context) (routerNodeChainExecutionMeasurementService, error)) (*RouterHopMeasurement, error) {
+	if m == nil || factory == nil || m.activities.measurement.Load() != nil {
+		return nil, errRouterNodeChainExecution
+	}
+	activity, err := m.claimActivity(ctx, state, controller, "measurement-capture")
+	if err != nil {
+		return nil, err
+	}
+	defer activity.release()
+	if m.activities.measurement.Load() != nil {
+		return nil, errRouterNodeChainExecution
+	}
+	service, acquireErr := factory(ctx)
+	var retained *routerNodeChainExecutionMeasurement
+	if service != nil {
+		retained = &routerNodeChainExecutionMeasurement{owner: m, state: state, controller: controller, service: service}
+		// The activity claim excludes every competing constructor. Store even
+		// nonnil+error results before observing cancellation or native drift.
+		if !m.activities.measurement.CompareAndSwap(nil, retained) {
+			return nil, errRouterNodeChainExecution
+		}
+	}
+	if acquireErr != nil || retained == nil || m.nativeCurrent(ctx, state) != nil || state.controller.Load() != controller || ctx.Err() != nil {
+		if retained != nil {
+			retained.Invalidate()
+		}
+		return nil, errors.Join(acquireErr, ctx.Err(), errRouterNodeChainExecution)
+	}
+	return &RouterHopMeasurement{service: retained}, nil
+}
+
+func (m *RouterNodeChainExecution) MeasurementExecutionContext(ctx context.Context) (*mobilemultihop.NodeChainExecutionRuntime, error) {
+	_, _, runtime, err := m.executionRuntimeContext(ctx)
+	return runtime, err
+}
+
+func (m *RouterNodeChainExecution) BeginMeasurementContext(ctx context.Context) (func(), error) {
+	state, controller, _, err := m.executionRuntimeContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.activities.admission); err != nil {
+		return nil, err
+	}
+	defer m.activities.admission.Unlock()
+	if mtu := m.activities.mtu.Load(); mtu != nil {
+		if controller := mtu.controller.Load(); controller != nil && controller.Running() {
+			return nil, errors.New("original MTU benchmark remains active")
+		}
+	}
+	measurement := m.activities.measurement.Load()
+	if measurement == nil || measurement.closed.Load() || measurement.state != state || measurement.controller != controller {
+		return nil, errRouterNodeChainExecution
+	}
+	activity, err := m.claimActivity(ctx, state, controller, "measurement")
+	if err != nil {
+		return nil, err
+	}
+	if m.activities.measurement.Load() != measurement || measurement.closed.Load() {
+		activity.release()
+		return nil, errRouterNodeChainExecution
+	}
+	return activity.release, nil
+}
+
+func (s *routerNodeChainExecutionMeasurement) current(ctx context.Context) error {
+	if s == nil || s.owner == nil || s.closed.Load() || s.service == nil || s.owner.activities.measurement.Load() != s ||
+		s.owner.nativeCurrent(ctx, s.state) != nil || s.state.controller.Load() != s.controller {
+		return errRouterNodeChainExecution
+	}
+	return ctx.Err()
+}
+func (s *routerNodeChainExecutionMeasurement) begin(work func() error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if err := s.current(ctx); err != nil {
+		return err
+	}
+	return work()
+}
+func (s *routerNodeChainExecutionMeasurement) Start(request string, bytes int) error {
+	return s.begin(func() error { return s.service.Start(request, bytes) })
+}
+func (s *routerNodeChainExecutionMeasurement) StartLatency(request, exit string) error {
+	return s.begin(func() error { return s.service.StartLatency(request, exit) })
+}
+func (s *routerNodeChainExecutionMeasurement) StartResponse(request, exit string) error {
+	return s.begin(func() error { return s.service.StartResponse(request, exit) })
+}
+func (s *routerNodeChainExecutionMeasurement) Cancel(request string) { s.service.Cancel(request) }
+func (s *routerNodeChainExecutionMeasurement) Drain(request string) error {
+	return s.service.Drain(request)
+}
+func (s *routerNodeChainExecutionMeasurement) StatusJSON() string { return s.service.StatusJSON() }
+func (s *routerNodeChainExecutionMeasurement) Invalidate()        { s.service.Invalidate() }
+func (s *routerNodeChainExecutionMeasurement) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.CloseContext(ctx)
+}
+func (s *routerNodeChainExecutionMeasurement) CloseContext(ctx context.Context) error {
+	if s == nil || s.owner == nil || s.service == nil || ctx == nil {
+		return errRouterNodeChainExecution
+	}
+	// No healthy/source check here: original failed-close authority survives
+	// source retirement and must never be redirected to a newer generation.
+	if err := s.service.CloseContext(ctx); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.closed.Store(true)
+	s.owner.activities.measurement.CompareAndSwap(s, nil)
+	return nil
+}

@@ -13,6 +13,11 @@ TEMPLATES = {
     'bridge.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution.go',
     'lifecycle.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_lifecycle.go',
     'restore.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_restore.go',
+    'activities.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_activities.go',
+    'measurement.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_measurement.go',
+    'measurement_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_measurement_test.go',
+    'mtu.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_mtu.go',
+    'mtu_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_mtu_test.go',
     'bridge_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_test.go',
     'lifecycle_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_lifecycle_test.go',
     'instance_close.go.tmpl': 'daemon/routervpn_instance_close.go',
@@ -24,6 +29,8 @@ PREREQUISITES = {
     'routervpn_node_chain_execution.go': 'mobile/chain/execution_box.go.tmpl',
     'adapter/outbound/routervpn_node_chain_execution.go': 'mobile/chain/execution_outbound.go.tmpl',
     'experimental/libbox/routervpn_node_chain.go': 'mobile/chain/bridge.go.tmpl',
+    'experimental/libbox/routervpn_mtu_bridge.go': 'mobile/mtu/bridge.go.tmpl',
+    'experimental/libbox/routervpn_hop_measurement.go': 'mobile/routervpn_hop_measurement.go.tmpl',
 }
 CLOSE_BEFORE = '''func (i *Instance) Close() error {
 	i.cancel()

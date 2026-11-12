@@ -1,0 +1,207 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+)
+
+type executionMTUDispatchBoundary struct {
+	*routerMTUChainLeaseFixture
+	changes, finishes, closes, starts int
+	closeErr                          error
+}
+
+func (c *executionMTUDispatchBoundary) startMTU(string, bool) error {
+	c.starts++
+	return c.closeErr
+}
+
+func (c *executionMTUDispatchBoundary) changeMTUContext(ctx context.Context, owner *routerMTUOwner, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+	c.changes++
+	if owner != c.owner || expected != owner.inbound || c.live || !c.platform.changing || !mobilemtu.SameOperationContext(ctx, c.op) {
+		c.t.Fatal("execution MTU bypassed original closed native transition")
+	}
+	if ctx.Err() != nil {
+		return expected, ctx.Err()
+	}
+	c.platform.state.MTU = int32(mtu)
+	return expected, nil
+}
+func (c *executionMTUDispatchBoundary) finishMTUChange(owner *routerMTUOwner) {
+	c.finishes++
+	if owner != c.owner || c.platform.changing {
+		c.t.Fatal("execution activity released before original platform finalization")
+	}
+}
+func (c *executionMTUDispatchBoundary) closeMTUContext(ctx context.Context, owner *routerMTUOwner) error {
+	c.closes++
+	if owner != c.owner {
+		c.t.Fatal("execution close retargeted native MTU owner")
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) > 5*time.Second {
+		c.t.Fatal("execution close lost bounded original scope")
+	}
+	return errors.Join(c.closeErr, ctx.Err())
+}
+
+// The shipping generic MTU coordinator executes with its original native
+// service/manager identities. Only kernel mutation/proof are explicit doubles.
+// No mobile device, native encrypted traffic or real TUN is claimed here.
+func TestRouterNodeChainExecutionBridgeMTUUsesOwnedNativeCompanion(t *testing.T) {
+	for _, fault := range []string{"success", "cancel"} {
+		t.Run(fault, func(t *testing.T) {
+			owner, _, original := routerMTUContextFixture(t)
+			platform := &routerMTUChainPlatformFixture{routerMTUContextPlatform: original}
+			owner.platform = platform
+			before, err := owner.CaptureContext(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			op, finish, err := mobilemtu.WithOperationContext(context.Background(), time.Minute, 3*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer finish()
+			ctx, cancel := context.WithCancel(op)
+			defer cancel()
+			chain := &executionMTUDispatchBoundary{routerMTUChainLeaseFixture: &routerMTUChainLeaseFixture{t: t, owner: owner, platform: platform, fault: fault, live: true, op: op, cancel: cancel}}
+			owner.chain = chain
+			owner.proofCurrentContext = func(ctx context.Context) error {
+				if !chain.live {
+					return errors.New("fixture proof closed")
+				}
+				return ctx.Err()
+			}
+			after, err := owner.ChangeMTU(ctx, before, 1400)
+			if chain.changes != 1 || chain.before != 1 || chain.after != 1 || chain.finishes != 1 || platform.begins != 1 || platform.ends != 1 || platform.changing || owner.invalid.Load() {
+				t.Fatal("execution companion or joined activity bypassed", chain.changes, chain.finishes, err)
+			}
+			if fault == "success" && (err != nil || after.MTU != 1400) || fault == "cancel" && (!errors.Is(err, context.Canceled) || after != before) {
+				t.Fatal("execution native result or cancellation changed", after, err)
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeMTUClosePropagatesExactCleanup(t *testing.T) {
+	owner, _, original := routerMTUContextFixture(t)
+	platform := &routerMTUChainPlatformFixture{routerMTUContextPlatform: original}
+	failure := errors.New("exact execution cleanup pending")
+	chain := &executionMTUDispatchBoundary{routerMTUChainLeaseFixture: &routerMTUChainLeaseFixture{t: t, owner: owner, platform: platform, live: true}, closeErr: failure}
+	owner.chain = chain
+	public := &RouterMTU{owner: owner, controller: &mobilemtu.Controller{}}
+	if err := public.Start("captured", true); !errors.Is(err, failure) || chain.starts != 1 {
+		t.Fatal("generic Start bypassed original execution admission", err)
+	}
+	if err := public.Close(); !errors.Is(err, failure) || chain.closes != 1 || chain.owner != owner {
+		t.Fatal("generic Close discarded execution cleanup failure", err)
+	}
+	chain.closeErr = nil
+	if err := public.Close(); err != nil || chain.closes != 2 {
+		t.Fatal("original execution close could not retry", err)
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeMTUConstructionMustJoinBeforeClose(t *testing.T) {
+	m, state, _ := executionMeasurementFixture(t)
+	native, _, _ := routerMTUContextFixture(t)
+	ready := make(chan struct{})
+	w := &routerNodeChainExecutionMTU{owner: m, state: state, native: native, constructed: ready}
+	m.activities.mtu.Store(w)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	err := w.closeContext(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) || w.closed.Load() || m.activities.mtu.Load() != w {
+		t.Fatal("pending MTU constructor lost its original ownership", err)
+	}
+	close(ready)
+	if err := w.closeContext(context.Background()); err != nil || !w.closed.Load() || m.activities.mtu.Load() != nil {
+		t.Fatal("joined original MTU constructor could not retire", err)
+	}
+}
+
+type executionCleanupGateBoundary struct {
+	*executionBridgeEngineBoundary
+	open bool
+	err  error
+}
+
+func (e *executionCleanupGateBoundary) ApplicationOpenContext(ctx context.Context) (bool, error) {
+	return e.open, errors.Join(e.err, ctx.Err())
+}
+
+func TestRouterNodeChainExecutionBridgePauseProtectionRequiresExactClosedGate(t *testing.T) {
+	for _, fault := range []string{"valid", "open", "unknown", "server", "generation", "owner", "expired"} {
+		t.Run(fault, func(t *testing.T) {
+			m, state, controller := executionMeasurementFixture(t)
+			gate := &executionCleanupGateBoundary{executionBridgeEngineBoundary: &executionBridgeEngineBoundary{}}
+			state.engine.Store(&routerNodeChainExecutionEngineRef{gate})
+			native, _, _ := routerMTUContextFixture(t)
+			w := &routerNodeChainExecutionMTU{owner: m, state: state, native: native}
+			m.activities.mtu.Store(w)
+			activity, err := m.claimActivity(context.Background(), state, controller, "mtu")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer activity.release()
+			pause := &routerNodeChainExecutionPause{activity: activity, controller: controller}
+			w.pause.Store(pause)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			err = w.withPauseCleanupContext(ctx, pause, func(call context.Context) error {
+				server := state.server
+				switch fault {
+				case "open":
+					gate.open = true
+				case "unknown":
+					gate.err = errors.New("native gate not observed")
+				case "server":
+					server = &CommandServer{}
+				case "generation":
+					state.controller.Store(&routerNodeChainExecutionControllerRef{controller.value})
+				case "owner":
+					m.activities.mtu.Store(&routerNodeChainExecutionMTU{})
+				case "expired":
+					cancel()
+					<-call.Done()
+				}
+				accepted := m.RetainsServerCleanup(server)
+				if accepted != (fault == "valid") {
+					t.Fatal("pause socket protection escaped exact original closed gate", fault, accepted)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.cleanup.Load() != nil || m.RetainsServerCleanup(state.server) {
+				t.Fatal("pause cleanup token survived its original bounded call")
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeMTUProfileRequiresProvedRuntime(t *testing.T) {
+	var missing *RouterNodeChainExecution
+	if missing.MTUProfile() != "" {
+		t.Fatal("missing native owner supplied MTU policy")
+	}
+	source, _ := executionBridgeSource(t, "server")
+	captured, err := NewRouterNodeChainExecution(source, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if captured.MTUProfile() != "" {
+		t.Fatal("source capture supplied an active MTU policy")
+	}
+	captured.NetworkChanged()
+	if captured.MTUProfile() != "" {
+		t.Fatal("retired source supplied an active MTU policy")
+	}
+}

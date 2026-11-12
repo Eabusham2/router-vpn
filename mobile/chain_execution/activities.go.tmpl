@@ -1,0 +1,131 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// Every native activity retains an exact controller generation. A failed
+// constructor or close remains visible to execution.Close until its original
+// work has joined; absence from a public UI is never a cleanup receipt.
+type routerNodeChainExecutionActivities struct {
+	admission   sync.Mutex
+	operation   atomic.Pointer[routerNodeChainExecutionActivity]
+	measurement atomic.Pointer[routerNodeChainExecutionMeasurement]
+	mtu         atomic.Pointer[routerNodeChainExecutionMTU]
+}
+
+type routerNodeChainExecutionActivity struct {
+	owner      *RouterNodeChainExecution
+	state      *routerNodeChainExecutionState
+	controller *routerNodeChainExecutionControllerRef
+	kind       string
+	done       chan struct{}
+	once       sync.Once
+}
+
+func (m *RouterNodeChainExecution) claimActivity(ctx context.Context, state *routerNodeChainExecutionState, controller *routerNodeChainExecutionControllerRef, kind string) (*routerNodeChainExecutionActivity, error) {
+	if kind != "measurement" && kind != "measurement-capture" && kind != "mtu" && kind != "mtu-capture" ||
+		controller == nil || m.nativeCurrent(ctx, state) != nil || state.controller.Load() != controller {
+		return nil, errRouterNodeChainExecution
+	}
+	activity := &routerNodeChainExecutionActivity{owner: m, state: state, controller: controller, kind: kind, done: make(chan struct{})}
+	if !m.activities.operation.CompareAndSwap(nil, activity) {
+		return nil, errors.New("original ordered native activity remains owned")
+	}
+	if err := m.nativeCurrent(ctx, state); err != nil || state.controller.Load() != controller {
+		activity.release()
+		return nil, errors.Join(err, errRouterNodeChainExecution)
+	}
+	return activity, nil
+}
+
+func (a *routerNodeChainExecutionActivity) release() {
+	if a != nil {
+		a.once.Do(func() {
+			a.owner.activities.operation.CompareAndSwap(a, nil)
+			close(a.done)
+		})
+	}
+}
+
+func (m *RouterNodeChainExecution) executionRuntimeContext(ctx context.Context) (*routerNodeChainExecutionState, *routerNodeChainExecutionControllerRef, *mobilemultihop.NodeChainExecutionRuntime, error) {
+	if m == nil {
+		return nil, nil, nil, errRouterNodeChainExecution
+	}
+	state := m.state.Load()
+	if err := m.nativeCurrent(ctx, state); err != nil {
+		return nil, nil, nil, err
+	}
+	controller := state.controller.Load()
+	if controller == nil {
+		return nil, nil, nil, errRouterNodeChainExecution
+	}
+	runtime, ok := controller.value.(*mobilemultihop.NodeChainExecutionRuntime)
+	if !ok || runtime == nil {
+		return nil, nil, nil, errRouterNodeChainExecution
+	}
+	if err := runtime.HealthyContext(ctx); err != nil {
+		return nil, nil, nil, err
+	}
+	if state.controller.Load() != controller || m.nativeCurrent(ctx, state) != nil {
+		return nil, nil, nil, errRouterNodeChainExecution
+	}
+	return state, controller, runtime, nil
+}
+
+// Network callbacks only deny work. Original handles stay retained until the
+// bounded close path obtains their actual completion receipts.
+func (m *RouterNodeChainExecution) retireActivities() {
+	if m == nil {
+		return
+	}
+	if measurement := m.activities.measurement.Load(); measurement != nil {
+		measurement.Invalidate()
+	}
+	if mtu := m.activities.mtu.Load(); mtu != nil {
+		mtu.invalidate()
+	}
+}
+
+func (m *RouterNodeChainExecution) closeActivitiesContext(ctx context.Context) error {
+	if m == nil || ctx == nil || ctx.Err() != nil {
+		return errRouterNodeChainExecution
+	}
+	// Close published workers before waiting on their activity callback. That
+	// callback is released only after their original sockets have joined.
+	if measurement := m.activities.measurement.Load(); measurement != nil {
+		if err := measurement.CloseContext(ctx); err != nil {
+			return err
+		}
+	}
+	if mtu := m.activities.mtu.Load(); mtu != nil {
+		if err := mtu.closeContext(ctx); err != nil {
+			return err
+		}
+	}
+	if activity := m.activities.operation.Load(); activity != nil {
+		select {
+		case <-activity.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	// An entered constructor publishes a late owned handle before releasing
+	// its claim. Re-read after joining it rather than acknowledging its absence.
+	if measurement := m.activities.measurement.Load(); measurement != nil {
+		if err := measurement.CloseContext(ctx); err != nil {
+			return err
+		}
+	}
+	if mtu := m.activities.mtu.Load(); mtu != nil {
+		if err := mtu.closeContext(ctx); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}

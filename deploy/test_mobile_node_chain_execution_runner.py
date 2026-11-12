@@ -71,6 +71,8 @@ class Runner(unittest.TestCase):
             with self.subTest(label=label):
                 if target=='daemon/instance.go':
                     raw=G.PREP.instance_source(G.PREP.FIELD_BEFORE+'}\n'+G.PREP.CLOSE_BEFORE+'\n'+G.PREP.CONSTRUCT_BEFORE+G.PREP.BOX_BEFORE+G.PREP.ACQUIRE_BEFORE+'}\n').decode()
+                elif target=='experimental/libbox/routervpn_mtu_bridge.go':
+                    raw=(ROOT/'mobile/mtu/bridge.go.tmpl').read_text()
                 else:
                     raw=(ROOT/'mobile/chain_execution'/inverse[target]).read_text()
                 self.assertEqual(raw.count(before),1)

@@ -54,6 +54,7 @@ type RouterNodeChainExecution struct {
 	cleanup        atomic.Pointer[routerNodeChainExecutionCleanup]
 	restoreCapture atomic.Pointer[RouterNodeChainExecutionRestoreCapture]
 	restore        *RouterNodeChainExecutionRestoreCapture
+	activities     routerNodeChainExecutionActivities
 }
 type routerNodeChainExecutionNative struct {
 	server  *CommandServer
@@ -61,8 +62,10 @@ type routerNodeChainExecutionNative struct {
 	capture *daemon.RouterVPNInstanceCloseCapture
 }
 type routerNodeChainExecutionCleanup struct {
-	state *routerNodeChainExecutionState
-	ctx   context.Context
+	state      *routerNodeChainExecutionState
+	ctx        context.Context
+	pause      *routerNodeChainExecutionMTU
+	generation *routerNodeChainExecutionPause
 }
 type routerNodeChainExecutionState struct {
 	server     *CommandServer
@@ -76,6 +79,7 @@ type routerNodeChainExecutionState struct {
 	closeMu    sync.Mutex
 	engine     atomic.Pointer[routerNodeChainExecutionEngineRef]
 	controller atomic.Pointer[routerNodeChainExecutionControllerRef]
+	projection atomic.Pointer[mobilemultihop.NodeChainExecutionProjection]
 }
 type routerNodeChainExecutionFactory func(context.Context, *box.Box, *mobilemultihop.NodeChainExecutionPreparation, string, func(context.Context) error) (routerNodeChainExecutionEngine, error)
 
@@ -234,6 +238,7 @@ func (m *RouterNodeChainExecution) runWithFactory(server *CommandServer, factory
 	if err != nil {
 		return err
 	}
+	state.projection.Store(projection)
 	state.controller.Store(&routerNodeChainExecutionControllerRef{controller})
 	if err := m.nativeCurrent(startup, state); err != nil {
 		return err
@@ -392,6 +397,7 @@ func (m *RouterNodeChainExecution) NetworkChanged() {
 	if state := m.state.Load(); state != nil {
 		state.cancel()
 	}
+	m.retireActivities()
 }
 func (m *RouterNodeChainExecution) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -402,10 +408,16 @@ func (m *RouterNodeChainExecution) Close() error {
 // This only permits the host's original physical socket protection while an
 // explicit bounded cleanup joins sealed stop. It never reopens native traffic.
 func (m *RouterNodeChainExecution) RetainsServerCleanup(server *CommandServer) bool {
-	if m == nil || server == nil || !m.retired.Load() || m.closed.Load() {
+	if m == nil || server == nil {
 		return false
 	}
 	token := m.cleanup.Load()
+	if token != nil && token.pause != nil {
+		return m.retainsPauseCleanup(token, server)
+	}
+	if !m.retired.Load() || m.closed.Load() {
+		return false
+	}
 	if token == nil || token.ctx == nil || token.ctx.Err() != nil {
 		return false
 	}
@@ -462,6 +474,9 @@ func (m *RouterNodeChainExecution) closeContext(ctx context.Context) error {
 	case <-state.runDone:
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+	if err := m.closeActivitiesContext(ctx); err != nil {
+		return err
 	}
 	// Source/lifetime revocation must not discard sealed DELETE authority.
 	// Do not call nativeCurrent here: its admission is deliberately retired.

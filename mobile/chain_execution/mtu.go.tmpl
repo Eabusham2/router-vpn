@@ -1,0 +1,450 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type routerNodeChainExecutionMTUEngine interface {
+	ChangeExecutionMTUContext(context.Context, mobilemultihop.NodeChainExecutionMTUResumeBinding, adapter.Inbound, int) (adapter.Inbound, error)
+	AdmitExecutionMTUResumeContext(context.Context, mobilemultihop.NodeChainExecutionMTUResumeBinding) error
+}
+
+type routerNodeChainExecutionMTU struct {
+	owner       *RouterNodeChainExecution
+	state       *routerNodeChainExecutionState
+	native      *routerMTUOwner
+	constructed chan struct{}
+	controller  atomic.Pointer[mobilemtu.Controller]
+	pause       atomic.Pointer[routerNodeChainExecutionPause]
+	closed      atomic.Bool
+}
+
+// Each snapshot is immutable after publication. The original native MTU
+// owner serializes mutations; physical socket callbacks only read this state.
+type routerNodeChainExecutionPause struct {
+	activity   *routerNodeChainExecutionActivity
+	controller *routerNodeChainExecutionControllerRef
+	binding    mobilemultihop.NodeChainExecutionMTUResumeBinding
+}
+
+// This is the original captured policy used to label the optimizer. It is not
+// a current-MTU receipt or permission to construct a replacement native owner.
+func (m *RouterNodeChainExecution) MTUProfile() string {
+	ctx, cancel := context.WithTimeout(context.Background(), routerMTUObservationBudget)
+	defer cancel()
+	state, controller, _, err := m.executionRuntimeContext(ctx)
+	if err != nil {
+		return ""
+	}
+	projection := state.projection.Load()
+	if projection == nil {
+		return ""
+	}
+	profile := projection.MTUProfile()
+	if profile == "" || len(profile) > 65536 || m.healthyContext(ctx) != nil ||
+		state.controller.Load() != controller || state.projection.Load() != projection {
+		return ""
+	}
+	return profile
+}
+
+func RouterNodeChainExecutionNewMTU(m *RouterNodeChainExecution, server *CommandServer, platform RouterMTUPlatform) (*RouterMTU, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), routerMTUObservationBudget)
+	defer cancel()
+	return m.newExecutionMTUContext(ctx, server, platform)
+}
+
+func (m *RouterNodeChainExecution) newExecutionMTUContext(ctx context.Context, server *CommandServer, platform RouterMTUPlatform) (*RouterMTU, error) {
+	state, controller, runtime, err := m.executionRuntimeContext(ctx)
+	if err != nil || server == nil || platform == nil || state.server != server || m.activities.mtu.Load() != nil {
+		return nil, errors.Join(err, errRouterNodeChainExecution)
+	}
+	// This runtime-owned factory observes the original native reader and
+	// derives a sealed current-MTU config. Preparation.Config is intentionally
+	// not patched or reused as if it were live readback after an earlier run.
+	engine := state.engine.Load()
+	if engine == nil {
+		return nil, errRouterNodeChainExecution
+	}
+	if _, ok := engine.value.(routerNodeChainExecutionMTUEngine); !ok {
+		return nil, errRouterNodeChainExecution
+	}
+	activity, err := m.claimActivity(ctx, state, controller, "mtu-capture")
+	if err != nil {
+		return nil, err
+	}
+	defer activity.release()
+	actual, err := routerMTUState(platform.CaptureMTU())
+	if err != nil {
+		return nil, err
+	}
+	dns, err := m.prep.DNSCapture()
+	if err != nil {
+		return nil, err
+	}
+	inbound, found, err := adapter.RouterVPNInboundContext(ctx, state.box.Inbound(), dns.DNS.TUNTag)
+	if err != nil || !found || inbound == nil || inbound.Type() != "tun" {
+		return nil, errors.Join(err, errRouterNodeChainExecution)
+	}
+	retained := &routerNodeChainExecutionMTU{owner: m, state: state, constructed: make(chan struct{})}
+	defer close(retained.constructed)
+	native := &routerMTUOwner{platform: platform, server: server, instance: state.instance, inbound: inbound,
+		session: actual.Session, path: actual.Path, chain: retained, initialContext: ctx}
+	retained.native, native.proofCurrentContext = native, retained.currentProofContext
+	defer func() { native.initialContext = nil }()
+	if !m.activities.mtu.CompareAndSwap(nil, retained) {
+		return nil, errRouterNodeChainExecution
+	}
+	optimizer, acquireErr := runtime.NewMTUControllerContext(ctx, native, mobilemtu.NewCache(routerMTUPreferences{platform}))
+	if optimizer != nil {
+		retained.controller.Store(optimizer)
+	}
+	if acquireErr != nil || optimizer == nil {
+		if optimizer == nil {
+			m.activities.mtu.CompareAndSwap(retained, nil)
+		} else {
+			retained.invalidate()
+		}
+		return nil, errors.Join(acquireErr, errRouterNodeChainExecution)
+	}
+	observed, observeErr := native.CaptureContext(ctx)
+	if observeErr != nil || observed != actual || m.nativeCurrent(ctx, state) != nil || state.controller.Load() != controller {
+		retained.invalidate()
+		return nil, errors.Join(observeErr, errRouterNodeChainExecution)
+	}
+	return &RouterMTU{controller: optimizer, owner: native}, nil
+}
+
+func (w *routerNodeChainExecutionMTU) ownsMTU(native *routerMTUOwner) bool {
+	return w != nil && w.owner != nil && native != nil && w.native == native && !w.closed.Load() && w.owner.activities.mtu.Load() == w
+}
+func (w *routerNodeChainExecutionMTU) releaseMTU(native *routerMTUOwner) {
+	// Execution cleanup has a checked, error-returning companion below. The
+	// ordinary void release hook cannot discard failed remote/native cleanup.
+	if w != nil && w.native == native && w.closed.Load() {
+		w.owner.activities.mtu.CompareAndSwap(w, nil)
+	}
+}
+
+// The shared runtime uses this only when attaching an optimizer. The same raw
+// owner can subsequently follow an authorized selected-only resume, but a
+// constructor must still compare the exact runtime it captured before entry.
+func (o *routerMTUOwner) MTUExecutionContext(ctx context.Context) (*mobilemultihop.NodeChainExecutionRuntime, error) {
+	if o == nil {
+		return nil, errRouterNodeChainExecution
+	}
+	w, ok := o.chain.(*routerNodeChainExecutionMTU)
+	if !ok || !w.ownsMTU(o) {
+		return nil, errRouterNodeChainExecution
+	}
+	state, _, runtime, err := w.owner.executionRuntimeContext(ctx)
+	if err != nil || state != w.state {
+		return nil, errors.Join(err, errRouterNodeChainExecution)
+	}
+	return runtime, nil
+}
+func (w *routerNodeChainExecutionMTU) NetworkChanged() { w.owner.NetworkChanged() }
+
+func (w *routerNodeChainExecutionMTU) startMTU(request string, force bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), routerMTUObservationBudget)
+	defer cancel()
+	if w == nil || !w.ownsMTU(w.native) || w.owner.nativeCurrent(ctx, w.state) != nil {
+		return errRouterNodeChainExecution
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &w.owner.activities.admission); err != nil {
+		return err
+	}
+	defer w.owner.activities.admission.Unlock()
+	controller := w.controller.Load()
+	if controller == nil || w.owner.retired.Load() || w.closed.Load() || w.owner.activities.operation.Load() != nil {
+		return errors.New("original ordered measurement or native activity remains active")
+	}
+	// Start publishes Controller.Running synchronously under this same gate.
+	// BeginMeasurement cannot slip between admission and worker publication.
+	return controller.Start(request, force)
+}
+func (w *routerNodeChainExecutionMTU) invalidate() {
+	if w == nil {
+		return
+	}
+	if w.native != nil {
+		w.native.invalid.Store(true)
+	}
+	if controller := w.controller.Load(); controller != nil {
+		controller.Invalidate()
+	}
+}
+
+func (w *routerNodeChainExecutionMTU) engineContext(ctx context.Context) (routerNodeChainExecutionMTUEngine, error) {
+	if w == nil || !w.ownsMTU(w.native) || w.owner.nativeCurrent(ctx, w.state) != nil {
+		return nil, errRouterNodeChainExecution
+	}
+	engine := w.state.engine.Load()
+	if engine == nil {
+		return nil, errRouterNodeChainExecution
+	}
+	result, ok := engine.value.(routerNodeChainExecutionMTUEngine)
+	if !ok {
+		return nil, errRouterNodeChainExecution
+	}
+	return result, nil
+}
+
+// The raw MTU owner's lock is held by its caller. An exact failed reproof may
+// still be observed for optimizer rollback, but Healthy/Connected never use
+// this path. It requires joined shared cleanup plus actual native readback.
+func (w *routerNodeChainExecutionMTU) currentProofContext(ctx context.Context) error {
+	engine, err := w.engineContext(ctx)
+	if err != nil {
+		return err
+	}
+	if err := w.owner.healthyContext(ctx); err == nil {
+		return nil
+	}
+	pause := w.pause.Load()
+	if pause == nil || pause.binding.Nonce() == "" || pause.controller != w.state.controller.Load() {
+		return errRouterNodeChainExecution
+	}
+	if err := pause.binding.ValidateTransitionContext(ctx); err != nil {
+		return err
+	}
+	if err := engine.AdmitExecutionMTUResumeContext(ctx, pause.binding); err != nil {
+		return err
+	}
+	return w.owner.nativeCurrent(ctx, w.state)
+}
+
+func (w *routerNodeChainExecutionMTU) beforeMTUChange(ctx context.Context, native *routerMTUOwner, mtu int) (paused bool, failure error) {
+	if !w.ownsMTU(native) || w.owner.nativeCurrent(ctx, w.state) != nil {
+		return false, errRouterNodeChainExecution
+	}
+	controller := w.state.controller.Load()
+	if controller == nil {
+		return false, errRouterNodeChainExecution
+	}
+	runtime, ok := controller.value.(*mobilemultihop.NodeChainExecutionRuntime)
+	if !ok {
+		return false, errRouterNodeChainExecution
+	}
+	activity, err := w.owner.claimActivity(ctx, w.state, controller, "mtu")
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		if failure != nil {
+			activity.release()
+		}
+	}()
+	if measurement := w.owner.activities.measurement.Load(); measurement != nil {
+		if err := measurement.CloseContext(ctx); err != nil {
+			return false, err
+		}
+	}
+	previous := w.pause.Load()
+	var binding mobilemultihop.NodeChainExecutionMTUResumeBinding
+	current := &routerNodeChainExecutionPause{activity: activity, controller: controller}
+	w.pause.Store(current)
+	if runtime.HealthyContext(ctx) == nil {
+		failure = w.withPauseCleanupContext(ctx, current, func(call context.Context) error {
+			var err error
+			binding, err = runtime.PauseMTUContext(call)
+			return err
+		})
+	} else if previous != nil && previous.binding.Nonce() != "" && previous.controller == controller {
+		binding = previous.binding
+		failure = w.withPauseCleanupContext(ctx, current, runtime.CloseContext)
+	} else {
+		failure = errRouterNodeChainExecution
+	}
+	current = &routerNodeChainExecutionPause{activity: activity, controller: controller, binding: binding}
+	w.pause.Store(current)
+	if failure != nil {
+		return binding.Nonce() != "", failure
+	}
+	plan, err := binding.MTUPlan()
+	if err != nil || mtu < 1280 || mtu > plan.Ceiling || binding.ValidateTransitionContext(ctx) != nil {
+		return true, errors.Join(err, errRouterNodeChainExecution)
+	}
+	return true, nil
+}
+
+func (w *routerNodeChainExecutionMTU) changeMTUContext(ctx context.Context, native *routerMTUOwner, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+	engine, err := w.engineContext(ctx)
+	pause := w.pause.Load()
+	if err != nil || !w.ownsMTU(native) || pause == nil || pause.activity == nil || w.owner.activities.operation.Load() != pause.activity {
+		return expected, errors.Join(err, errRouterNodeChainExecution)
+	}
+	current, err := engine.ChangeExecutionMTUContext(ctx, pause.binding, expected, mtu)
+	return current, err
+}
+
+func (w *routerNodeChainExecutionMTU) finishMTUChange(native *routerMTUOwner) {
+	if w == nil || w.native != native {
+		return
+	}
+	if pause := w.pause.Load(); pause != nil && pause.activity != nil {
+		pause.activity.release()
+	}
+	if native.invalid.Load() {
+		w.owner.NetworkChanged()
+	}
+}
+
+func (w *routerNodeChainExecutionMTU) afterMTUChange(ctx context.Context, native *routerMTUOwner) error {
+	pause := w.pause.Load()
+	if !w.ownsMTU(native) || pause == nil || pause.activity == nil || w.owner.activities.operation.Load() != pause.activity ||
+		pause.controller != w.state.controller.Load() || w.owner.nativeCurrent(ctx, w.state) != nil {
+		return errRouterNodeChainExecution
+	}
+	runtime, err := mobilemultihop.NewNodeChainExecutionMTUResumeRuntime(ctx, pause.binding)
+	if err != nil {
+		return err
+	}
+	controller := &routerNodeChainExecutionControllerRef{runtime}
+	w.state.controller.Store(controller)
+	current := &routerNodeChainExecutionPause{activity: pause.activity, controller: controller, binding: pause.binding}
+	w.pause.Store(current)
+	// Temporary candidate proof owns only its child lifetime. A failed probe
+	// cannot cancel the enclosing Box needed to restore the original MTU.
+	lifetime, cancel := context.WithCancel(w.state.lifetime)
+	joined := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { cancel(); close(joined) })
+	runErr := runtime.Run(lifetime)
+	if !stop() {
+		<-joined
+		runErr = errors.Join(runErr, ctx.Err(), errRouterNodeChainExecution)
+	}
+	if runErr == nil {
+		runErr = errors.Join(runtime.HealthyContext(ctx), w.owner.nativeCurrent(ctx, w.state))
+	}
+	if runErr == nil && w.state.controller.Load() == controller && ctx.Err() == nil {
+		// The child remains a live runtime generation until its next pause or
+		// execution.Close; the successful operation's deadline cannot cancel it.
+		return nil
+	}
+	cancel()
+	cleanup := ctx
+	if ctx.Err() != nil {
+		var cleanupErr error
+		cleanup, cleanupErr = mobilemtu.OperationCleanupContext(ctx)
+		if cleanupErr != nil {
+			return errors.Join(runErr, cleanupErr)
+		}
+	}
+	return errors.Join(runErr, w.withPauseCleanupContext(cleanup, current, runtime.CloseContext))
+}
+
+func (w *routerNodeChainExecutionMTU) closeMTUContext(ctx context.Context, native *routerMTUOwner) error {
+	if w == nil || native != w.native {
+		return errRouterNodeChainExecution
+	}
+	return w.closeContext(ctx)
+}
+
+func (w *routerNodeChainExecutionMTU) closeContext(ctx context.Context) error {
+	if w == nil || ctx == nil || w.owner == nil || w.native == nil {
+		return errRouterNodeChainExecution
+	}
+	if w.closed.Load() {
+		return ctx.Err()
+	}
+	w.invalidate()
+	if w.constructed == nil {
+		return errRouterNodeChainExecution
+	}
+	select {
+	case <-w.constructed:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	w.invalidate()
+	if controller := w.controller.Load(); controller != nil {
+		if err := controller.CloseContext(ctx); err != nil {
+			return err
+		}
+	}
+	pause := w.pause.Load()
+	if pause != nil {
+		if pause.controller == nil || pause.controller != w.state.controller.Load() {
+			return errRouterNodeChainExecution
+		}
+		// A healthy idle generation survives closing its optimizer. Failed or
+		// retired generations must join their exact remote cleanup first.
+		if w.owner.retired.Load() || pause.controller.value.HealthyContext(ctx) != nil {
+			if err := w.withPauseCleanupContext(ctx, pause, pause.controller.value.CloseContext); err != nil {
+				return err
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	w.closed.Store(true)
+	w.owner.activities.mtu.CompareAndSwap(w, nil)
+	return nil
+}
+
+func (w *routerNodeChainExecutionMTU) withPauseCleanupContext(ctx context.Context, pause *routerNodeChainExecutionPause, work func(context.Context) error) error {
+	if w == nil || pause == nil || work == nil || ctx == nil || ctx.Err() != nil || w.pause.Load() != pause ||
+		w.owner.activities.mtu.Load() != w || pause.controller != w.state.controller.Load() {
+		return errRouterNodeChainExecution
+	}
+	deadline, bounded := ctx.Deadline()
+	if !bounded {
+		return errRouterNodeChainExecution
+	}
+	// Android's same-original-network protection scope is five seconds. Keep
+	// one child bound at or before both that limit and the caller's allowance.
+	if limit := time.Now().Add(5 * time.Second); deadline.After(limit) {
+		deadline = limit
+	}
+	call, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	if original := w.owner.cleanup.Load(); original != nil {
+		if original.pause == nil && original.state == w.state && original.ctx != nil && original.ctx.Err() == nil && w.owner.retired.Load() {
+			return work(call)
+		}
+		return errRouterNodeChainExecution
+	}
+	token := &routerNodeChainExecutionCleanup{state: w.state, ctx: call, pause: w, generation: pause}
+	if !w.owner.cleanup.CompareAndSwap(nil, token) {
+		return errRouterNodeChainExecution
+	}
+	defer w.owner.cleanup.CompareAndSwap(token, nil)
+	return work(call)
+}
+
+func (m *RouterNodeChainExecution) retainsPauseCleanup(token *routerNodeChainExecutionCleanup, server *CommandServer) bool {
+	if m == nil || token == nil || token.state == nil || token.pause == nil || token.generation == nil || token.ctx == nil || token.ctx.Err() != nil ||
+		m.closed.Load() || m.cleanup.Load() != token || token.pause.owner != m || token.pause.state != token.state ||
+		token.pause.pause.Load() != token.generation || m.activities.mtu.Load() != token.pause ||
+		token.generation.controller != token.state.controller.Load() {
+		return false
+	}
+	state := token.state
+	if state == nil || m.state.Load() != state || state.server != server || server == nil || server.StartedService != state.service ||
+		state.instance == nil || state.box == nil || state.instance.Box() != state.box {
+		return false
+	}
+	if _, bounded := token.ctx.Deadline(); !bounded {
+		return false
+	}
+	current, err := state.service.RouterVPNInstanceContext(token.ctx)
+	engine := state.engine.Load()
+	if err != nil || current != state.instance || engine == nil {
+		return false
+	}
+	// (false,nil) is a positive actual native closed/drained-gate receipt.
+	// Failure, unknown state or still-open forwarding cannot protect a socket.
+	open, err := engine.value.ApplicationOpenContext(token.ctx)
+	return err == nil && !open && token.ctx.Err() == nil && m.cleanup.Load() == token &&
+		token.pause.pause.Load() == token.generation && m.activities.mtu.Load() == token.pause &&
+		state.controller.Load() == token.generation.controller && m.state.Load() == state
+}

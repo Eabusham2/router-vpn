@@ -96,11 +96,19 @@ func newRouterMTUContext(ctx context.Context, server *CommandServer, platform Ro
  if err!=nil||current!=state{_ = controller.Close();return nil,errors.Join(err,errors.New("MTU native owner changed during capture"))}
  return &RouterMTU{controller:controller,owner:owner},nil
 }
-func (m *RouterMTU) Start(request string,force bool) error { if m==nil||m.controller==nil{return errors.New("MTU owner is missing")};return m.controller.Start(request,force) }
+func (m *RouterMTU) Start(request string,force bool) error {
+ if m==nil||m.controller==nil{return errors.New("MTU owner is missing")}
+ if captured,ok:=m.owner.chain.(interface{startMTU(string,bool)error});ok{return captured.startMTU(request,force)}
+ return m.controller.Start(request,force)
+}
 func (m *RouterMTU) Cancel(request string) { if m!=nil&&m.controller!=nil{m.controller.Cancel(request)} }
 func (m *RouterMTU) NetworkChanged() { if m!=nil&&m.owner!=nil{m.owner.invalid.Store(true);if m.owner.chain!=nil{m.owner.chain.NetworkChanged()};m.controller.Invalidate()} }
 func (m *RouterMTU) Close() error {
  if m==nil||m.controller==nil{return nil}
+ if captured,ok:=m.owner.chain.(interface{closeMTUContext(context.Context,*routerMTUOwner)error});ok{
+  ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second);defer cancel()
+  return captured.closeMTUContext(ctx,m.owner)
+ }
  m.owner.invalid.Store(true)
  if err:=m.controller.Close();err!=nil{return err}
  // A timed-out drain retains the exact claim, so a replacement optimizer
@@ -177,10 +185,13 @@ func (o *routerMTUOwner) ChangeMTU(ctx context.Context, expected mobilemtu.State
    if paused||endErr!=nil{o.invalid.Store(true);o.platform.AbortMTU("Ordered path proof did not join before MTU change")}
    return state,errors.Join(pauseErr,endErr)
   }
+  if captured,ok:=o.chain.(interface{finishMTUChange(*routerMTUOwner)});ok{defer captured.finishMTUChange(o)}
  }
  var current adapter.Inbound
  var changeErr error
- if o.external!=nil{current,changeErr=o.external.ChangeMTU(ctx,o.inbound,mtu)}else{current,changeErr=o.instance.Box().RouterVPNChangeMTU(ctx,o.inbound,mtu)}
+ if captured,ok:=o.chain.(interface{changeMTUContext(context.Context,*routerMTUOwner,adapter.Inbound,int)(adapter.Inbound,error)});ok{
+  current,changeErr=captured.changeMTUContext(ctx,o,o.inbound,mtu)
+ }else if o.external!=nil{current,changeErr=o.external.ChangeMTU(ctx,o.inbound,mtu)}else{current,changeErr=o.instance.Box().RouterVPNChangeMTU(ctx,o.inbound,mtu)}
  o.inbound=current
  if o.chain!=nil&&current!=nil {
   proofCtx,proofErr:=routerNodeChainMTUProofContext(ctx)

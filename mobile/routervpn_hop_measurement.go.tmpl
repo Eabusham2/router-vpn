@@ -14,7 +14,17 @@ import (
 // RouterHopMeasurement retains one native engine and its frozen node metadata.
 // Callers can only start/cancel bounded measurements, never request an arbitrary
 // address, change an outbound, or retrieve node tokens through the public status.
-type RouterHopMeasurement struct{ service *hopmeasure.Service }
+type routerHopMeasurementService interface {
+	Start(string, int) error
+	StartLatency(string, string) error
+	StartResponse(string, string) error
+	Cancel(string)
+	Drain(string) error
+	StatusJSON() string
+	Close() error
+	Invalidate()
+}
+type RouterHopMeasurement struct{ service routerHopMeasurementService }
 
 func NewRouterHopMeasurement(server *CommandServer, metadata string) (*RouterHopMeasurement, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), routerMultihopObservationTimeout)
