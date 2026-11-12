@@ -247,8 +247,25 @@ INBOUND_RETIREMENT_EDITS = (
 
 
 
+def ordered_execution_preparer():
+    specification = importlib.util.spec_from_file_location('desktop_ordered_execution', ROOT/'deploy/prepare-node-chain-execution.py')
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
 def inbound_retirement_patch(raw):
     original = raw
+    # The later application/DNS gate owns one exact JudgeFlow insertion. Strip
+    # only its canonical complete projection before checking the pinned MTU
+    # base, then restore it byte-for-byte; no partial or foreign edit is repaired.
+    ordered = None
+    if b'RouterVPNNodeChainGated' in raw:
+        ordered = ordered_execution_preparer()
+        source = raw.decode('utf-8')
+        if ordered.tun_source(source) != raw or source.count(ordered.TUN_DISPATCH_AFTER) != 1:
+            raise ValueError('Incomplete or changed ordered native TUN dispatch projection')
+        raw = source.replace(ordered.TUN_DISPATCH_AFTER, ordered.TUN_DISPATCH_BEFORE, 1).encode()
     marked = any(token in raw for token in (b'routervpnStandardStartup', b'routervpnRetirementReceipt',
                  b'routervpnDesktopTunRetireLocked', b'retain the actual partial constructor'))
     if marked:
@@ -273,6 +290,8 @@ def inbound_retirement_patch(raw):
         if raw.count(before) != 1:
             raise ValueError('Pinned native inbound retirement boundary changed')
         raw = raw.replace(before, after, 1)
+    if ordered is not None:
+        raw = ordered.tun_source(raw.decode('utf-8'))
     if marked and original != raw and not upgrading_context:
         raise ValueError('Modified completed native inbound retirement projection')
     return raw

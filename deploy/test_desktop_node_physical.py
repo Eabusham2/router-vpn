@@ -342,6 +342,19 @@ def layer_reference_sources():
             *(path for path in sorted((ROOT / "cmd/start-layer-relay").glob("*.go")) if not path.name.endswith("_test.go"))]
 
 
+def verify_composed_outbound_registry(original_registry):
+    gate = PREP.NODE_EXECUTION[0]
+    if gate.registry_source(original_registry) != original_registry.encode():
+        raise ValueError("Node ordered application gate is missing from the actual native registry")
+    original_composite = original_registry.replace(gate.IMPORT, '', 1).replace(gate.REGISTER, '', 1)
+    registered = PREP.RELAY.COMPOSITE.insert_once(original_composite,
+        '\t"github.com/sagernet/sing-box/protocol/group"', '\t"github.com/sagernet/sing-box/protocol/routervpncomposite"')
+    registered = PREP.RELAY.COMPOSITE.insert_once(registered,
+        '\tgroup.RegisterURLTest(registry)', '\troutervpncomposite.RegisterOutbound(registry)')
+    if registered != original_composite or gate.registry_source(registered) != original_registry.encode():
+        raise ValueError("Node composite is missing or changed in the composed native registry")
+
+
 def checked_sources(source):
     source = PREP.checked_vendor(Path(source))
     records = PREP.MTU.RETAINED.verify(source)
@@ -412,12 +425,7 @@ def checked_sources(source):
     if registry.is_symlink() or not registry.is_file():
         raise ValueError("Node composite lost its shipping native outbound registry")
     original_registry = registry.read_text(encoding="utf-8")
-    registered = PREP.RELAY.COMPOSITE.insert_once(original_registry,
-        '\t"github.com/sagernet/sing-box/protocol/group"', '\t"github.com/sagernet/sing-box/protocol/routervpncomposite"')
-    registered = PREP.RELAY.COMPOSITE.insert_once(registered,
-        '\tgroup.RegisterURLTest(registry)', '\troutervpncomposite.RegisterOutbound(registry)')
-    if registered != original_registry:
-        raise ValueError("Node composite is missing from the actual shipping native registry")
+    verify_composed_outbound_registry(original_registry)
     records["include/registry.go"] = hashlib.sha256(registry.read_bytes()).hexdigest()
     box = source / "box.go"
     if box.is_symlink() or PREP.node_capture_source(box.read_text(encoding="utf-8")) != box.read_bytes():

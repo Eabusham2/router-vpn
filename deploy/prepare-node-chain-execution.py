@@ -67,10 +67,12 @@ def dns_source(source):
     return replace_owned(source.replace('\r\n', '\n'), 'func (r *Router) HijackDNSPacket(', 'func (r *Router) routerVPNHijackDNSPacketUngated(').encode()
 
 
+TUN_DISPATCH_BEFORE = 'func (t *Inbound) JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, firstPacket []byte) tun.FlowVerdict {\n'
+TUN_DISPATCH_AFTER = TUN_DISPATCH_BEFORE+'\tif gated, ok := t.router.(interface{ RouterVPNNodeChainGated() bool }); ok && gated.RouterVPNNodeChainGated() {\n\t\treturn adapter.JudgeFlow(t.router, t.tag, C.TypeTun, network, source, destination, firstPacket)\n\t}\n'
+
+
 def tun_source(source):
-    before = 'func (t *Inbound) JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, firstPacket []byte) tun.FlowVerdict {\n'
-    after = before+'\tif gated, ok := t.router.(interface{ RouterVPNNodeChainGated() bool }); ok && gated.RouterVPNNodeChainGated() {\n\t\treturn adapter.JudgeFlow(t.router, t.tag, C.TypeTun, network, source, destination, firstPacket)\n\t}\n'
-    source = replace_owned(source.replace('\r\n', '\n'), before, after)
+    source = replace_owned(source.replace('\r\n', '\n'), TUN_DISPATCH_BEFORE, TUN_DISPATCH_AFTER)
     if source.count('RouterVPNNodeChainGated()') != 2:
         raise ValueError('partial ordered TUN dispatch source')
     return source.encode()

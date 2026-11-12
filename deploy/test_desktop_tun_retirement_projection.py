@@ -101,6 +101,47 @@ class NativeRetirementProjection(unittest.TestCase):
             RETAINED.prepare(vendor)
             self.assertEqual({path.relative_to(vendor): path.read_bytes() for path in manager.parent.iterdir() if path.is_file()}, expected)
 
+    def test_complete_ordered_dispatch_preserves_pinned_retirement(self):
+        ordered = PREP.ordered_execution_preparer()
+        current = (SOURCE/'protocol/tun/inbound.go').read_bytes()
+        if ordered.TUN_DISPATCH_AFTER.encode() in current:
+            current = current.replace(ordered.TUN_DISPATCH_AFTER.encode(), ordered.TUN_DISPATCH_BEFORE.encode(), 1)
+        retirement = PREP.inbound_retirement_patch(current)
+        complete = ordered.tun_source(retirement.decode())
+        self.assertEqual(PREP.inbound_retirement_patch(complete), complete)
+        self.assertEqual(PREP.inbound_retirement_patch(retirement), retirement)
+        self.assertNotEqual(complete, retirement)
+        mutations = (
+            complete.replace(b'ok && gated.RouterVPNNodeChainGated()', b'ok', 1),
+            complete.replace(b'return adapter.JudgeFlow(t.router, t.tag, C.TypeTun, network, source, destination, firstPacket)', b'return tun.FlowVerdict{Action: tun.ActionAccept}', 1),
+            complete + ordered.TUN_DISPATCH_AFTER.encode(),
+            complete.replace(b'RouterVPNNetworkLifetime: ctx,', b'RouterVPNNetworkLifetime: nil,', 1),
+            complete + b'\n// foreign completed source\n',
+        )
+        for mutant in mutations:
+            with self.subTest(source=mutant[-80:]), self.assertRaises(ValueError):
+                PREP.inbound_retirement_patch(mutant)
+
+    def test_actual_composed_outbound_registry_refuses_lost_or_moved_owners(self):
+        specification = importlib.util.spec_from_file_location('native_registry_projection', ROOT/'deploy/test_desktop_node_physical.py')
+        native = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(native)
+        original = (SOURCE/'include/registry.go').read_text()
+        native.verify_composed_outbound_registry(original)
+        gate = native.PREP.NODE_EXECUTION[0]
+        mutations = (
+            original.replace(gate.IMPORT, '', 1),
+            original.replace(gate.REGISTER, '', 1),
+            original.replace(gate.IMPORT, gate.IMPORT*2, 1),
+            original.replace(gate.REGISTER, gate.REGISTER*2, 1),
+            original.replace('\troutervpncomposite.RegisterOutbound(registry)\n', '', 1),
+            original.replace('\t"github.com/sagernet/sing-box/protocol/routervpncomposite"\n', '', 1),
+            original.replace(gate.IMPORT, '').replace('\t"github.com/sagernet/sing-box/protocol/group"\n', gate.IMPORT+'\t"github.com/sagernet/sing-box/protocol/group"\n'),
+        )
+        for mutant in mutations:
+            with self.subTest(registry=mutant[-80:]), self.assertRaises(ValueError):
+                native.verify_composed_outbound_registry(mutant)
+
     def test_actual_reprepare_and_incomplete_refusal(self):
         with tempfile.TemporaryDirectory(prefix='native-retirement-reprepare-') as directory:
             vendor = Path(directory)
