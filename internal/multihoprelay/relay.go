@@ -57,6 +57,9 @@ type Config struct {
 	// These private references are not capabilities. They remain unavailable
 	// unless the runner implements the separately owned native Tor contract.
 	TorExits []TorExitSource `json:"tor_exits,omitempty"`
+	// Immutable public descriptors resolve separately installed private sources.
+	// An explicit native NodeChainRunner is required before discovery or use.
+	NodeChains []NodeChainDescriptor `json:"node_chains,omitempty"`
 }
 type Request struct {
 	SessionID      string `json:"session_id"`
@@ -110,6 +113,10 @@ type live struct {
 	p       Process
 	retired bool
 	tor     *torOwnedProcess
+	chain   *nodeChainOwnedProcess
+	// Retain the identities actually used by this original process. A later
+	// registry replacement cannot free a still-live roaming packet identity.
+	packetPins []string
 }
 type Manager struct {
 	mu             sync.Mutex
@@ -122,6 +129,7 @@ type Manager struct {
 	packetEpoch    string
 	packetAttempts map[string]int64
 	torAttempts    map[string]torAttempt
+	chainAttempts  map[string]nodeChainAttempt
 }
 
 func New(c Config, node string, r Runner) (*Manager, error) {
@@ -136,7 +144,7 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 	if c.TTLSeconds == 0 {
 		c.TTLSeconds = 90
 	}
-	if c.TTLSeconds < 15 || c.TTLSeconds > 300 || len(c.Exits)+len(c.TorExits) > MaxPairedExits {
+	if c.TTLSeconds < 15 || c.TTLSeconds > 300 || len(c.Exits)+len(c.TorExits)+len(c.NodeChains) > MaxPairedExits {
 		return nil, errors.New("relay TTL or exit limit is invalid")
 	}
 	seen := map[string]bool{}
@@ -182,6 +190,12 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 		}
 		seen[source.ID+"/"+source.Mode+"/"] = true
 	}
+	for _, source := range c.NodeChains {
+		if source.Validate() != nil || source.EntryNodeID != node || seen["node-chain/"+source.SourceSHA256] {
+			return nil, errors.New("invalid or duplicate private ordered source reference")
+		}
+		seen["node-chain/"+source.SourceSHA256] = true
+	}
 	// Copy the supplied private configuration so callers cannot mutate live plans.
 	raw, _ := json.Marshal(c)
 	var frozen Config
@@ -193,7 +207,7 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 		return nil, errors.New("relay ownership epoch could not be generated")
 	}
 	return &Manager{cfg: frozen, node: node, runner: r, leases: map[string]*live{}, now: time.Now,
-		packetEpoch: hex.EncodeToString(epochBytes), packetAttempts: map[string]int64{}, torAttempts: map[string]torAttempt{}}, nil
+		packetEpoch: hex.EncodeToString(epochBytes), packetAttempts: map[string]int64{}, torAttempts: map[string]torAttempt{}, chainAttempts: map[string]nodeChainAttempt{}}, nil
 }
 func PeerKey(peer netip.Addr) string { return peer.Unmap().String() }
 func (m *Manager) Available() []map[string]string {
@@ -258,7 +272,7 @@ func ValidateIdentityPins(mode, packetPublic, pqClientIdentity string) error {
 func (m *Manager) validate(peer netip.Addr, q Request) error {
 	// The ordinary API cannot renew/delete an asynchronous Tor owner merely
 	// by guessing its base fields and omitting the captured source identity.
-	if torMode(q.ExitMode) {
+	if torMode(q.ExitMode) || q.ExitMode == "node-chain" {
 		return ErrOwnership
 	}
 	if err := ValidateIdentityPins(q.ExitMode, q.ExpectedPacketPublicKey, q.ExpectedPQClientIdentity); err != nil {
@@ -379,6 +393,7 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 	if err := m.validateOpenVPNConcurrentOwnerLocked(*exit); err != nil {
 		return Lease{}, err
 	}
+	var packetPins []string
 	if PacketMode(exit.Mode) || CompleteMAXMode(exit.Mode) {
 		// A WireGuard peer key identifies one roaming endpoint. Two independent
 		// processes using that key would steal each other's reply endpoint.
@@ -389,22 +404,9 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 		if err != nil {
 			return Lease{}, err
 		}
-		for _, active := range m.leases {
-			if !PacketMode(active.ExitMode) && !CompleteMAXMode(active.ExitMode) {
-				continue
-			}
-			for _, paired := range m.cfg.Exits {
-				if paired.ID != active.ExitID || paired.Mode != active.ExitMode || ExitLayerMode(paired) != active.ExitStartLayer || (!PacketMode(paired.Mode) && !CompleteMAXMode(paired.Mode)) {
-					continue
-				}
-				other, err := clientIdentity(relayPacketTransport(paired))
-				if err != nil {
-					return Lease{}, err
-				}
-				if identity == other {
-					return Lease{}, errors.New("paired WireGuard credentials already own another relay; provision distinct client credentials for concurrent use")
-				}
-			}
+		packetPins = []string{identity}
+		if err := m.validatePacketPinsLocked(packetPins); err != nil {
+			return Lease{}, err
 		}
 	}
 	if mobilepq.IsMode(exit.Mode) || CompleteMAXMode(exit.Mode) {
@@ -479,7 +481,7 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 	if err != nil || process == nil || ctx.Err() != nil || !process.Alive() {
 		if process != nil {
 			// Retain ownership on cleanup failure. Its port must not be reused.
-			m.leases[key] = &live{Lease: lease, peer: peer, p: process}
+			m.leases[key] = &live{Lease: lease, peer: peer, p: process, packetPins: packetPins}
 			if clean := m.stopLocked(context.Background(), key); clean != nil {
 				return Lease{}, clean
 			}
@@ -490,7 +492,7 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 	// Lease lifetime starts only when that owner is actually ready; otherwise a
 	// legitimate slow startup could return an already-expired short-TTL lease.
 	lease.ExpiresAt = m.now().Add(time.Duration(m.cfg.TTLSeconds) * time.Second)
-	m.leases[key] = &live{Lease: lease, peer: peer, p: process}
+	m.leases[key] = &live{Lease: lease, peer: peer, p: process, packetPins: packetPins}
 	return lease, nil
 }
 func (m *Manager) Delete(ctx context.Context, peer netip.Addr, q Request) error {
@@ -538,6 +540,9 @@ func (m *Manager) stopLocked(ctx context.Context, key string) error {
 	if s.tor != nil {
 		_ = m.rememberTorAttemptLocked(s.peer, s.tor.capture.Request, true)
 	}
+	if s.chain != nil {
+		_ = m.rememberChainAttemptLocked(s.peer, s.chain.capture.Request, true)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	if err := s.p.Stop(ctx); err != nil || s.p.Alive() {
@@ -549,7 +554,7 @@ func (m *Manager) stopLocked(ctx context.Context, key string) error {
 func (m *Manager) reapLocked(ctx context.Context) error {
 	m.sweepPacketAttemptsLocked()
 	for key, s := range m.leases {
-		if !s.ExpiresAt.After(m.now()) || !s.p.Alive() || s.tor != nil && s.tor.terminal() {
+		if !s.ExpiresAt.After(m.now()) || !s.p.Alive() || s.tor != nil && s.tor.terminal() || s.chain != nil && s.chain.terminal() {
 			if err := m.stopLocked(ctx, key); err != nil {
 				return err
 			}
