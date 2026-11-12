@@ -98,11 +98,16 @@ func TestNodeChainExecutionRuntimeClosedTrialCannotRevokeNewWinner(t *testing.T)
 	f.engine.beforeDNS = func(context.Context) {
 		once.Do(func() { f.runtime.mu.Lock(); original = f.runtime.active; f.runtime.mu.Unlock() })
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
-	defer cancel()
-	if err := f.runtime.Run(ctx); err != nil {
+	// The deadline below bounds stale Close and the winner's health check.
+	// Admission first performs both complete routed trials and their repeat,
+	// under the runtime's unchanged startup/probe/cleanup deadlines.
+	runContext, retire := context.WithCancel(context.Background())
+	defer retire()
+	if err := f.runtime.Run(runContext); err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
 	if original == nil || original.execution != "local" {
 		t.Fatal("original local trial not captured")
 	}
@@ -600,19 +605,52 @@ func (f *nodeChainExecutionRuntimeFixture) serveControl(w http.ResponseWriter, r
 
 func TestNodeChainExecutionRuntimeComparesExactPathsAndFreshWinner(t *testing.T) {
 	f := newNodeChainExecutionRuntimeFixture(t, "auto")
+	var trialMu sync.Mutex
+	var trials []*nodeChainExecutionTrial
+	f.engine.beforeDNS = func(context.Context) {
+		f.runtime.mu.Lock()
+		trial := f.runtime.active
+		f.runtime.mu.Unlock()
+		trialMu.Lock()
+		if len(trials) == 0 || trials[len(trials)-1] != trial {
+			trials = append(trials, trial)
+		}
+		trialMu.Unlock()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := f.runtime.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
 	progress := f.runtime.Progress()
-	if !progress.Ready || !progress.Complete || progress.Execution != "server" || !progress.DNSProven || !progress.PublicProven || len(progress.Prefixes) != 3 || len(progress.Comparison.Measurements) != 2 || progress.Comparison.Final == nil || progress.Comparison.Winner == nil || progress.Comparison.Winner.Execution != routechoice.Server {
+	if !progress.Ready || !progress.Complete || !progress.DNSProven || !progress.PublicProven || len(progress.Prefixes) != 3 || len(progress.Comparison.Measurements) != 2 || progress.Comparison.Final == nil || progress.Comparison.Winner == nil {
 		t.Fatal("comparison did not publish complete repeated winner", progress)
 	}
 	for _, m := range append(progress.Comparison.Measurements, *progress.Comparison.Final) {
 		if !m.Eligible || m.ScoreMS == nil || *m.ScoreMS != (m.LastNodeMS+m.ExternalMS)/2 {
 			t.Fatal("comparison lost required two-probe formula", m)
 		}
+	}
+	// These are actual HTTP/TLS durations. Scheduler and validation costs can
+	// exceed the peer's configured delay, so the measured minimum is authority.
+	// Keep both candidate identities, the independent formula above, and the
+	// fresh third trial mandatory whichever path was actually faster.
+	measured := progress.Comparison.Measurements
+	if measured[0].Candidate != f.runtime.candidate("local") || measured[1].Candidate != f.runtime.candidate("server") {
+		t.Fatal("comparison changed the captured candidate identities", measured)
+	}
+	winner := measured[0]
+	if *measured[1].ScoreMS < *winner.ScoreMS {
+		winner = measured[1]
+	}
+	if *progress.Comparison.Winner != winner.Candidate || progress.Comparison.Final.Candidate != winner.Candidate || progress.Execution != string(winner.Candidate.Execution) {
+		t.Fatal("comparison did not retain the lowest actual two-probe average", progress)
+	}
+	trialMu.Lock()
+	captured := append([]*nodeChainExecutionTrial(nil), trials...)
+	trialMu.Unlock()
+	if len(captured) != 3 || captured[0] == nil || captured[1] == nil || captured[2] == nil || captured[0].execution != "local" || captured[1].execution != "server" || captured[2].execution != progress.Execution || captured[0].id == captured[1].id || captured[0].id == captured[2].id || captured[1].id == captured[2].id {
+		t.Fatal("comparison reused a retired trial instead of proving a fresh winner", captured)
 	}
 	if err := f.runtime.HealthyContext(ctx); err != nil {
 		t.Fatal(err)
@@ -629,14 +667,18 @@ func TestNodeChainExecutionRuntimeComparesExactPathsAndFreshWinner(t *testing.T)
 			deletes = append(deletes, q.session)
 		}
 	}
-	if len(puts) != 2 || puts[0] == puts[1] || len(deletes) != 1 || deletes[0] != puts[0] {
+	wantPuts, wantStops := 1, 0
+	if winner.Candidate.Execution == routechoice.Server {
+		wantPuts, wantStops = 2, 1
+	}
+	if len(puts) != wantPuts || len(deletes) != 1 || deletes[0] != puts[0] || len(puts) == 2 && puts[0] == puts[1] {
 		t.Fatal("winner reused tombstoned trial or skipped its join", puts, deletes)
 	}
 	f.engine.mu.Lock()
 	opens, stops := f.engine.opens, f.engine.stops
 	calls := append([]string(nil), f.engine.publicCalls...)
 	f.engine.mu.Unlock()
-	if opens != 1 || stops != 1 {
+	if opens != 1 || stops != wantStops {
 		t.Fatal("unproved trial admitted application traffic or dropped stop capability", opens, stops)
 	}
 	targetHost := strings.Split(strings.TrimPrefix(progress.Comparison.Target, "https://"), "/")[0]
