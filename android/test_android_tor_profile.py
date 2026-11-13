@@ -22,6 +22,7 @@ EXTERNAL_BOUNDARY = r'''
 final class AndroidExternalPolicy {
  static boolean supports(String value){return false;}
  static String protocol(String value){return value;}
+ static void checkPolicy(JSONObject value){throw new AssertionError("ordinary external policy is outside this Router-entry Tor fixture");}
  static JSONObject captureTorPredecessor(AndroidStandardExitStore.Entry value){throw new AssertionError("ordinary entry is outside this Router-entry fixture");}
  static NativeSingBoxController.SessionInfo prepare(android.content.Context c,java.io.File f,AndroidStandardExitStore.Entry e,String m){throw new AssertionError("ordinary exit is outside this Tor fixture");}
  static NativeSingBoxController.SessionInfo prepare(android.content.Context c,java.io.File f,AndroidStandardExitStore.Entry e,String m,String x){throw new AssertionError("ordinary exit is outside this Tor fixture");}
