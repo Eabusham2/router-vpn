@@ -18,6 +18,7 @@ on:
           - legacy-clock
           - android-tor
           - android-prefix-owner
+          - android-socks-host
           - linux-hy2
           - socks-source
           - macos-profiles
@@ -59,7 +60,7 @@ jobs:
           for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
               if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
                   raise SystemExit(name + " must be a complete lowercase Git commit.")
-          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge"):
+          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host"):
               raise SystemExit("Unknown focused validation suite.")
           PY
       - name: Check out the trusted validator
@@ -101,6 +102,9 @@ jobs:
           if [[ "$SUITE" == "socks-runtime" ]]; then
             python3 validator/deploy/test_focused_socks_runtime_runner.py
           fi
+          if [[ "$SUITE" == "android-socks-host" ]]; then
+            python3 validator/deploy/validate-android-socks-host.py --self-test
+          fi
           if [[ "$SUITE" == "socks-bridge" ]]; then
             python3 validator/deploy/test_focused_socks_bridge_runner.py
           fi
@@ -124,13 +128,13 @@ jobs:
           go-version: '1.26.3'
           cache-dependency-path: candidate/go.sum
       - name: Install the Java fixture toolchain
-        if: inputs.suite == 'android-tor' || inputs.suite == 'android-prefix-owner'
+        if: inputs.suite == 'android-tor' || inputs.suite == 'android-prefix-owner' || inputs.suite == 'android-socks-host'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
       - name: Install the original Android JSON implementation
-        if: inputs.suite == 'android-tor' || inputs.suite == 'android-prefix-owner'
+        if: inputs.suite == 'android-tor' || inputs.suite == 'android-prefix-owner' || inputs.suite == 'android-socks-host'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libandroid-json-java
@@ -209,6 +213,14 @@ jobs:
           python3 validator/deploy/validate-linux-hy2-source.py \
             --source "$GITHUB_WORKSPACE/candidate" --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests" --go "$(command -v go)"
+      - name: Compile typed Android SOCKS source and shipping lifecycle controls
+        if: inputs.suite == 'android-socks-host'
+        shell: bash
+        run: |
+          python3 validator/deploy/validate-android-socks-host.py \
+            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
+            --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests"
       - name: Execute the original Android fixture and required rejection controls
         if: inputs.suite == 'android-tor' || inputs.suite == 'android-prefix-owner'
         shell: bash
