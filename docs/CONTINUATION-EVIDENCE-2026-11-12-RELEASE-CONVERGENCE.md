@@ -48,7 +48,7 @@ release publication and physical-device acceptance.
 | [6cb2d22f](https://github.com/Eabusham2/router-vpn/commit/6cb2d22fd0b0dd9c239b0f61c96ab500ae977fee) | Rebind three Darwin readiness mutations to the current typed policy switch. | Seven lifecycle-runner and eighteen child-runner tests passed. The actual compiled baseline passed; each mutated implementation failed at its required original root/leaf and witness. |
 | [1f56e41f](https://github.com/Eabusham2/router-vpn/commit/1f56e41fee25899fb0509c90fd706eb910f3aec1) | Remove scheduler assumptions from routed Android fifty-sample ranking. | All 128 Java 17 checks and the three captured-owner, resolver-bypass and wrong-ranking controls passed. Exact controlled statistics, all 102 connections, proof and drain remain mandatory. |
 | [20a03b71](https://github.com/Eabusham2/router-vpn/commit/20a03b71120f6f4d23c2351c4c1a4a0cc2cbbda7) | Assert the actual lowest measured Local/Server average and three fresh trial identities. Start the stale-Close action's six-second deadline after admission. | After executor recovery, the exact final test blob passed both affected roots for ten race repetitions (77.928 seconds). An isolated production mutation reversing the score comparator failed at the required lowest-actual-average witness (3.169 seconds). Original six-second stale-Close action and production deadlines remain unchanged. |
-| [d2d2a0d1](https://github.com/Eabusham2/router-vpn/commit/d2d2a0d1bcfb3c023be81a78549d7f9fdb5ab2a8) | Join the original CONNECT peer's TLS certificate alert before fixture teardown. | Sixteen Python runner tests, Python compilation and diff checks passed. The native compiler was interrupted before execution. All original native verdicts and the new real TLS/HTTP/EOF/cancellation distinction remain mandatory: 176 verdicts in total. |
+| [d2d2a0d1](https://github.com/Eabusham2/router-vpn/commit/d2d2a0d1bcfb3c023be81a78549d7f9fdb5ab2a8) | Join the original CONNECT peer's TLS certificate alert before fixture teardown. | Sixteen Python runner tests passed. After recovery, both actual imported CONNECT support roots passed under the race detector (1.135 seconds), covering TLS alert versus HTTP refusal, wrong SNI/trust, ordinary EOF and cancelled absent-peer outcomes; source copies matched the published templates. The full 176-verdict native reference inventory remains separately required. |
 | [bc6540e8](https://github.com/Eabusham2/router-vpn/commit/bc6540e8d767cc9d5c0944cae175f96812abfd9d) | Record Android cancellation completion immediately before the fixture latch release. | After recovery, the actual Java 17 fixture passed 3,785 checks across 1,089 cases and all three original causal controls. Delayed native-UP and ordinary expiry took 21.057 and 20.034 seconds. The three-second completion and four-second latch limits and production runtime deadlines remain unchanged. |
 | [5c045946](https://github.com/Eabusham2/router-vpn/commit/5c04594661af7a5577d7f86b20690c794f45ff09) | Add eight imported-middle scenarios to mandatory Darwin installed acceptance, retaining the original twenty and both MTU cases. | Nineteen host-runner and eighteen child-runner cases passed; the Darwin ARM64 controller test image crosscompiled. Actual encrypted peer and installed-host execution remain mandatory on both architectures. Public Darwin ordered admission remains closed. |
 
@@ -265,6 +265,27 @@ aggregate is not a passing native result. Their current hosted execution remains
 required. The separate Windows failure in the one-second full connected-identity
 fixture wait precedes this DNS helper and remains under investigation; no shared
 cause or timeout repair is assumed.
+
+## Independent GTK negative-response fixture
+
+The exact 7be4 Linux job (131596687443 in
+[run 43337286034](https://github.com/Eabusham2/router-vpn/actions/runs/43337286034))
+compiled the explicit C guards successfully, then exposed the next real GTK
+assertion: the fixture could not save its expected complete next path. The
+negative response had used json_node_copy on a mutable object. That retains the
+same underlying object, as [JSON-GLib documents](https://gnome.pages.gitlab.gnome.org/json-glib/method.Node.copy.html),
+so clearing the negative response also cleared the original valid response reused
+by the next test. Save correctly refused that now-unaccepted empty result.
+
+The fixture now serializes and reparses only that mutable negative response and
+asserts that its source still has the original accepted flag and complete result.
+The production Save guard and existing named-profile/path assertion remain.
+The actual fixture parser/generator helpers and old/new clone expressions were
+compiled with GCC and linked against the installed real JSON-GLib: the corrected
+expression passed; the original shallow copy failed the new source-isolation
+witness. Python compilation and diff checks passed. The complete GTK widget
+sequence still requires hosted execution; this focused library check does not
+substitute for it.
 
 ## Physical and private acceptance
 
