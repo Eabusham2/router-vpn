@@ -154,8 +154,9 @@ access:
   with one literal, unlayered SS2022 imported middle in the three-member
   shipping composition. The shared compiler now also preserves an imported
   SS2022 hostname with its explicitly saved Custom TCP resolver through the
-  preceding prefix; native hostname execution and platform producer integration
-  remain in progress. Other explicitly requested protocols, positions, layers and graph families
+  preceding prefix. The actual encrypted DNS/SS transport test now passes
+  and is mandatory in the Linux host preflight; platform producer integration
+  and installed hostname-path acceptance remain in progress. Other explicitly requested protocols, positions, layers and graph families
   remain requirements. This is not an invented requirement for every theoretical
   protocol permutation. Safe rejection is not implementation.
 - Public ordered macOS admission requires actual generated-child and installed
@@ -1751,6 +1752,40 @@ hostname-source changes still require exact-publication hosted verification.
 The tagged installed fixture, private test admission seams, six-case native
 gate and macOS interface action are separate work. Public Darwin candidate
 and ordered admission remain closed pending actual native acceptance.
+
+## Executed encrypted hostname middle and mandatory host preflight
+
+The pinned native DNS router, DNS transport manager, TCP/UDP resolvers and
+WG/AWG/SS outbounds now execute the shared hostname graph against the existing
+encrypted peer fixtures. The only physical translation maps the captured
+first UDP tuple to its loopback peer. The hostname resolver is reachable only
+inside that encrypted first peer; ambient fallback explicitly fails. The
+original mixed-case name, cipher and credential remain unchanged.
+
+The race-instrumented native image passed all 64 mandatory verdicts: WG,
+AWG Fast and AWG Strong, each with all three SS2022 ciphers and six cases.
+These exercised the preceding-prefix DNS lookup and public-middle/private-final
+proofs, separate final Home DNS, wrong transport resolver, wrong middle key,
+held DNS cancellation/join and Stop draining the original middle socket.
+Packet, encrypted transport and DNS counters are observed rather than replaced
+with manufactured successful probes. Native execution took 12.760 seconds
+with the original 90-second test limit; compilation took 154.818 seconds.
+Image SHA-256:
+`99e50644a35dcc4bb3535da77f3adbfde4df51e43442d9cb62253280e001b711`.
+
+The five changed files matched an immutable
+`062441b15ab07111cb187bd6abd63fc4d46a8c8f` snapshot plus those files. All
+5,077 repository source inputs and 2,487 prepared native source records stayed
+unchanged. The dedicated runner passed nine checks; the existing Linux host
+runner passed 68 checks. The installed Linux host gate now executes this strict
+64-verdict family in its existing encrypted peer image before host/TUN cases,
+retains every previous case and bound, and records the hostname output digest
+separately in its receipt.
+
+This family does not instantiate Box/TUN or exercise an OS firewall. It is
+native encrypted transport evidence, not installed hostname-path or physical
+device acceptance. Desktop, Android and iOS producers remain independently
+validated units, and the publication SHA requires its own hosted release.
 
 ## Physical and private acceptance
 

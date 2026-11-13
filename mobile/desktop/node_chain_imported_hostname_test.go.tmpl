@@ -1,0 +1,415 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	D "github.com/sagernet/sing-box/dns"
+	DT "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
+)
+
+const desktopImportedHostname = "Middle.EXAMPLE.test"
+const desktopImportedHostnameDNS = "10.78.0.53:5353"
+
+// The only physical socket translation is the unchanged encrypted peer helper's
+// captured first UDP tuple. DNS uses the real pinned router/transport through
+// that WG/AWG endpoint, followed by the real independently keyed SS2022 middle.
+// No TUN, OS route/firewall or installed native-host acceptance is claimed here.
+func desktopImportedHostnameOwners(t *testing.T, ctx context.Context, chain *mobilemultihop.NodeChain, physical string) ([]adapter.Outbound, *D.Router, *D.TransportManager) {
+	t.Helper()
+	var graph map[string]any
+	if json.Unmarshal([]byte(chain.Config()), &graph) != nil {
+		t.Fatal("lost original hostname graph")
+	}
+	registry := D.NewTransportRegistry()
+	DT.RegisterTCP(registry)
+	DT.RegisterUDP(registry)
+	owners := &desktopSSReferenceManager{owners: map[string]adapter.Outbound{}}
+	logger := log.NewNOPFactory()
+	originalDNS := graph["dns"].(map[string]any)
+	manager := D.NewTransportManager(logger.Logger(), registry, owners, originalDNS["final"].(string))
+	manager.Initialize(func() (adapter.DNSTransport, error) {
+		return nil, errors.New("hostname fixture forbids ambient DNS fallback")
+	})
+	ctx = service.ContextWith[adapter.OutboundManager](ctx, owners)
+	ctx = service.ContextWith[adapter.NetworkManager](ctx, &desktopImportedPacketNetwork{})
+	ctx = service.ContextWith[adapter.DNSTransportManager](ctx, manager)
+	ctx = service.ContextWith[option.DNSTransportOptionsRegistry](ctx, registry)
+	options, err := SJ.UnmarshalExtendedContext[option.DNSOptions](ctx, []byte(desktopNodeChainJSON(t, originalDNS)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	router, err := D.NewRouter(ctx, logger, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx = service.ContextWith[adapter.DNSRouter](ctx, router)
+	if err := router.Initialize(options.Rules); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range options.Servers {
+		if row.Type != "tcp" && row.Type != "udp" {
+			t.Fatal("hostname graph introduced unsupported resolver", row.Type)
+		}
+		if err := manager.Create(ctx, logger.Logger(), row.Tag, row.Type, row.Options); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outbounds := desktopNodeChainPeerOutbounds(t, ctx, chain, physical, nil)
+	for i, tag := range chain.PrefixTags() {
+		owners.owners[tag] = outbounds[i]
+	}
+	for _, stage := range adapter.ListStartStages {
+		if err := manager.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+		if err := router.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		if err := router.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := manager.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return outbounds, router, manager
+}
+
+type desktopImportedHostnameFixture struct {
+	chain       *mobilemultihop.NodeChain
+	peer        *desktopNodeChainImportedPeer
+	request     desktopNodeChainPeerRequest
+	out         []adapter.Outbound
+	router      *D.Router
+	transports  *D.TransportManager
+	ctx         context.Context
+	queries     atomic.Int64
+	entered     chan struct{}
+	release     chan struct{}
+	releaseOnce sync.Once
+}
+
+func desktopImportedHostnameFixtureStart(t *testing.T, mode, method, fault string) *desktopImportedHostnameFixture {
+	t.Helper()
+	f := &desktopImportedHostnameFixture{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 30*time.Second)
+	f.ctx = ctx
+	t.Cleanup(cancel)
+	request, clients := desktopNodeChainPeerFixture(t, 1)
+	desktopNodeChainSetModes(t, &request, []string{mode})
+	finalServer, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalPublic := base64.StdEncoding.EncodeToString(finalServer.PublicKey().Bytes())
+	proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + finalPublic))
+	request.FinalNodeProofID = hex.EncodeToString(proof[:])
+	finalWG := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/32\nPrivateKey=%s\nMTU=1420\n[Peer]\nPublicKey=%s\nEndpoint=10.77.0.1:51820\nAllowedIPs=0.0.0.0/0,::/0\n", clients[0], finalPublic)
+	finalIdentity := desktopNodeChainJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(finalWG))})
+	size := 32
+	if method == "2022-blake3-aes-128-gcm" {
+		size = 16
+	}
+	password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73}, size))
+	loopback := netip.MustParseAddr("127.0.0.1")
+	f.peer = desktopNodeChainImportedPeerStart(t, desktopNodeChainImportedRequest{1, request, method, password}, loopback, loopback)
+	f.request = request
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &dns.Server{Listener: listener, Net: "tcp", Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		if len(q.Question) != 1 || !strings.EqualFold(q.Question[0].Name, desktopImportedHostname+".") || q.Question[0].Qclass != dns.ClassINET || q.Question[0].Qtype != dns.TypeA && q.Question[0].Qtype != dns.TypeAAAA {
+			t.Error("transport DNS changed the captured hostname question")
+			return
+		}
+		f.queries.Add(1)
+		select {
+		case f.entered <- struct{}{}:
+		default:
+		}
+		if fault == "held-dns-cancel-join" {
+			select {
+			case <-f.release:
+			case <-ctx.Done():
+				return
+			}
+		}
+		answer := new(dns.Msg).SetReply(q)
+		if fault == "wrong-transport-dns" {
+			answer.Rcode = dns.RcodeNameError
+		} else if q.Question[0].Qtype == dns.TypeA {
+			answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}, A: net.ParseIP("10.79.0.1")}}
+		}
+		_ = w.WriteMsg(answer)
+	})}
+	done := make(chan error, 1)
+	go func() { done <- server.ActivateAndServe() }()
+	t.Cleanup(func() {
+		f.releaseOnce.Do(func() { close(f.release) })
+		_ = server.Shutdown()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	})
+	// This destination exists only inside the independently encrypted first peer.
+	f.peer.paired.entry.rules["tcp/"+desktopImportedHostnameDNS] = desktopReferenceRule{Network: "tcp", Address: "10.78.0.53", Port: 5353, Target: listener.Addr().String()}
+	socket := netip.MustParseAddrPort(f.peer.paired.bind.address())
+	literal := desktopNodeChainImportedSource(t, request, clients, net.JoinHostPort(request.Address, strconv.Itoa(int(socket.Port()))), method, password, finalIdentity)
+	launch, err := literal.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(launch), &source) != nil {
+		t.Fatal("source missing")
+	}
+	var imported struct {
+		Kind    string `json:"kind"`
+		Schema  int    `json:"schema"`
+		Config  string `json:"config"`
+		Capture string `json:"capture"`
+	}
+	if json.Unmarshal([]byte(source.Nodes[1]), &imported) != nil {
+		t.Fatal("middle source missing")
+	}
+	var graph, capture map[string]any
+	if json.Unmarshal([]byte(imported.Config), &graph) != nil || json.Unmarshal([]byte(imported.Capture), &capture) != nil {
+		t.Fatal("original middle source invalid")
+	}
+	out := graph["outbounds"].([]any)[0].(map[string]any)
+	profile := capture["profile"].(map[string]any)
+	ss := profile["external"].(map[string]any)["shadowsocks"].(map[string]any)
+	out["server"], ss["server"], profile["endpoint"] = desktopImportedHostname, desktopImportedHostname, desktopImportedHostname
+	profile["dns_mode"], profile["dns_protocol"], profile["dns_host"], profile["dns_port"] = "custom", "tcp", "10.78.0.53", 5353
+	profile["ipv6_mode"] = "off"
+	if fault == "wrong-middle-key" {
+		wrong := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{94}, size))
+		out["password"], ss["password"] = wrong, wrong
+	}
+	source.Nodes[1], err = mobilemultihop.NodeChainImportedMemberInput(desktopNodeChainJSON(t, graph), desktopNodeChainJSON(t, capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.chain, err = mobilemultihop.NewNodeChain(desktopNodeChainJSON(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.out, f.router, f.transports = desktopImportedHostnameOwners(t, ctx, f.chain, f.peer.paired.bind.address())
+	return f
+}
+
+func (f *desktopImportedHostnameFixture) get(ctx context.Context, position int, address string) ([]byte, error) {
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(f.peer.paired.ca)) {
+		return nil, errors.New("reference TLS root missing")
+	}
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, DialContext: func(c context.Context, n, a string) (net.Conn, error) {
+		return f.out[position].DialContext(c, n, M.ParseSocksaddr(a))
+	}}
+	defer transport.CloseIdleConnections()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return nil, err
+	}
+	if strings.HasPrefix(address, "http://") {
+		req.Header.Set("Authorization", "Bearer "+f.request.FinalAPIToken)
+	}
+	response, err := (&http.Client{Transport: transport}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(response.Body, 8193))
+	if response.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP proof status %d", response.StatusCode)
+	}
+	return data, err
+}
+
+func TestRouterVPNDesktopNodeChainImportedHostnameTraffic(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		for _, method := range []string{"2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"} {
+			t.Run(mode+"/"+method, func(t *testing.T) {
+				for _, scenario := range []string{"prefix-dns-public-middle-private-final", "final-selected-dns", "wrong-transport-dns", "wrong-middle-key", "held-dns-cancel-join", "stop-drains-middle-socket"} {
+					t.Run(scenario, func(t *testing.T) {
+						f := desktopImportedHostnameFixtureStart(t, mode, method, scenario)
+						original, _ := f.chain.LaunchInput()
+						originalConfig := f.chain.Config()
+						before := f.peer.snapshot()
+						switch scenario {
+						case "prefix-dns-public-middle-private-final":
+							call, stop := context.WithTimeout(f.ctx, 1500*time.Millisecond)
+							data, err := f.get(call, 1, "https://1.1.1.1/cdn-cgi/trace")
+							stop()
+							if err != nil || !strings.Contains(string(data), "ip=203.0.113.88") {
+								t.Fatal("hostname middle public proof failed", err)
+							}
+							call, stop = context.WithTimeout(f.ctx, 1500*time.Millisecond)
+							data, err = f.get(call, 2, "http://"+desktopNodeRouterHealthTarget+"/health")
+							stop()
+							var health desktopImportedWGSSHealthReply
+							if err != nil || json.Unmarshal(data, &health) != nil || !health.OK || health.NodeID != f.request.FinalNodeProofID {
+								t.Fatal("hostname middle lost paired final proof", err)
+							}
+							after := f.peer.snapshot()
+							if f.queries.Load() == 0 || after.Prefixes[0].RawUDP <= before.Prefixes[0].RawUDP || after.Prefixes[0].TCP <= before.Prefixes[0].TCP || after.Middle.RawTCP <= before.Middle.RawTCP || after.Middle.TCP < before.Middle.TCP+2 || after.Final.FinalTCP <= before.Final.FinalTCP || after.Final.DNSQueries != before.Final.DNSQueries {
+								t.Fatal("hostname lookup/proof bypassed its original encrypted path", before, after)
+							}
+						case "final-selected-dns":
+							var graph map[string]any
+							_ = json.Unmarshal([]byte(f.chain.Config()), &graph)
+							found := false
+							for _, raw := range graph["dns"].(map[string]any)["servers"].([]any) {
+								row := raw.(map[string]any)
+								if row["tag"] == f.chain.DNSCapture().ResolverTag {
+									found = true
+									if row["type"] != "udp" || row["server"] != "192.168.50.133" || row["detour"] != f.chain.FinalTag() {
+										t.Fatal("final Home DNS changed", row)
+									}
+								}
+							}
+							if !found {
+								t.Fatal("final resolver missing")
+							}
+							call, stop := context.WithTimeout(f.ctx, 2*time.Second)
+							question := new(dns.Msg)
+							question.SetQuestion("example.com.", dns.TypeA)
+							response, err := f.router.Exchange(call, question, adapter.DNSQueryOptions{})
+							stop()
+							if err != nil || response == nil || response.Id != question.Id || len(response.Answer) != 1 {
+								t.Fatal("original final DNS exchange failed", err)
+							}
+							answer, ok := response.Answer[0].(*dns.A)
+							if !ok || !answer.A.Equal(net.ParseIP("93.184.216.34")) {
+								t.Fatal("wrong final DNS answer")
+							}
+							after := f.peer.snapshot()
+							if f.queries.Load() == 0 || after.Final.DNSQueries <= before.Final.DNSQueries || after.Middle.UDP <= before.Middle.UDP || after.Final.FinalUDP <= before.Final.FinalUDP {
+								t.Fatal("selected application DNS bypassed hostname middle or final", before, after)
+							}
+						case "wrong-transport-dns", "wrong-middle-key":
+							call, stop := context.WithTimeout(f.ctx, 1500*time.Millisecond)
+							_, err := f.get(call, 2, "http://"+desktopNodeRouterHealthTarget+"/health")
+							stop()
+							after := f.peer.snapshot()
+							if err == nil || f.queries.Load() == 0 || after.Final.RouterQueries != before.Final.RouterQueries || after.Middle.TCP != before.Middle.TCP {
+								t.Fatal("wrong hostname dependency reached authenticated final", scenario, err, before, after)
+							}
+							if scenario == "wrong-transport-dns" && after.Middle.RawTCP != before.Middle.RawTCP {
+								t.Fatal("failed DNS fell back to an SS endpoint")
+							}
+							if scenario == "wrong-middle-key" && after.Middle.RawTCP <= before.Middle.RawTCP {
+								t.Fatal("wrong-key control never reached original encrypted SS provider")
+							}
+						case "held-dns-cancel-join":
+							call, stop := context.WithTimeout(f.ctx, 2*time.Second)
+							result := make(chan error, 1)
+							go func() { _, err := f.get(call, 2, "http://"+desktopNodeRouterHealthTarget+"/health"); result <- err }()
+							select {
+							case <-f.entered:
+							case <-call.Done():
+								stop()
+								t.Fatal("native hostname lookup never reached captured prefix resolver")
+							}
+							select {
+							case <-result:
+								stop()
+								t.Fatal("held original DNS work completed before cancellation")
+							default:
+							}
+							stop()
+							select {
+							case err := <-result:
+								if err == nil {
+									t.Fatal("cancelled hostname work succeeded")
+								}
+							case <-time.After(time.Second):
+								t.Fatal("held hostname operation did not join cancellation")
+							}
+							if f.peer.snapshot().Middle.RawTCP != before.Middle.RawTCP || f.peer.snapshot().Final.RouterQueries != before.Final.RouterQueries {
+								t.Fatal("cancelled resolver admitted downstream work")
+							}
+							f.releaseOnce.Do(func() { close(f.release) })
+						case "stop-drains-middle-socket":
+							call, stop := context.WithTimeout(f.ctx, 2*time.Second)
+							conn, err := f.out[1].DialContext(call, "tcp", M.ParseSocksaddr("10.77.0.1:8388"))
+							if err != nil {
+								stop()
+								t.Fatal(err)
+							}
+							deadline, _ := call.Deadline()
+							_ = conn.SetDeadline(deadline)
+							if _, err = conn.Write([]byte("held-owned-middle")); err != nil {
+								stop()
+								_ = conn.Close()
+								t.Fatal(err)
+							}
+							readDone := make(chan error, 1)
+							go func() { buffer := make([]byte, 1); _, err := conn.Read(buffer); readDone <- err }()
+							done := make(chan struct{})
+							var once sync.Once
+							closeConn := func() { once.Do(func() { _ = conn.Close(); close(done) }) }
+							cancelClose := context.AfterFunc(call, closeConn)
+							stop()
+							<-done
+							cancelClose()
+							select {
+							case err := <-readDone:
+								if err == nil {
+									t.Fatal("held original middle read survived Stop")
+								}
+							case <-time.After(time.Second):
+								t.Fatal("held original middle read did not join")
+							}
+							if _, err = conn.Write([]byte("after-stop")); err == nil {
+								t.Fatal("retired hostname middle stream accepted bytes")
+							}
+							if f.queries.Load() == 0 {
+								t.Fatal("held middle socket bypassed native hostname resolution")
+							}
+						}
+						after, _ := f.chain.LaunchInput()
+						if after != original || f.chain.Config() != originalConfig {
+							t.Fatal("native traffic mutated original hostname source")
+						}
+					})
+				}
+			})
+		}
+	}
+}

@@ -35,6 +35,7 @@ def load(name, relative):
 
 CHILD = load('linux_installed_host_child', 'test_linux_node_child_tun.py')
 TRANSACTION = load('linux_installed_host_transaction', 'test_linux_node_transaction.py')
+HOSTNAME = load('linux_hostname_native_preflight', 'test_desktop_node_imported_hostname.py')
 BUILD, NODE, GUARD = CHILD.BUILD, CHILD.NODE, CHILD.GUARD
 WIREGUARD_CASES = tuple('wg-' + case for case in ('public-connect', 'home-lan', 'wrong-key', 'resolver-failure', 'wrong-node',
                                                 'active-network-change', 'cancelled-proof', 'restore-sealed', 'always',
@@ -280,6 +281,13 @@ def checked_sources(source):
         raise ValueError('Ordered custom tight MTU native source is absent')
     if 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_test.go' not in native:
         raise ValueError('Installed custom ordered host lost its original encrypted middle peer')
+    if HOSTNAME.NATIVE_TEMPLATE not in native:
+        raise ValueError('Ordered hostname native preflight lost its original encrypted peer source')
+    for name in ('test_desktop_node_imported_hostname.py', 'test_desktop_node_imported_hostname_runner.py'):
+        path = ROOT / 'deploy' / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError('Ordered hostname native preflight lost its original runner')
+        app['deploy/' + name] = hashlib.sha256(path.read_bytes()).hexdigest()
     if 'protocol/routervpnamnezia/routervpn_desktop_resolved_broker_test.go' not in native:
         raise ValueError('Installed resolved composition lost its original authenticated broker image source')
     for name in ('ui.html', 'logical_ui.js'):
@@ -1065,6 +1073,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
         # still mandatory and supplies separate native-host evidence.
         node_chain_peer_output = execute_node_chain_peer(peer, source, captured)
         node_chain_imported_output = execute_node_chain_imported_peer(peer, source, captured)
+        node_chain_hostname_output = HOSTNAME.execute_peer(peer, source, captured)
         node_chain_imported_mtu_output = execute_node_chain_imported_mtu(peer, source, captured)
         node_chain_candidate_output = execute_node_chain_candidates(peer, source, captured)
         node_chain_host_authority_output = execute_node_chain_host_authority(binary, captured)
@@ -1113,6 +1122,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'node_chain_candidate_cases': list(NODE_CHAIN_CANDIDATE_VERDICTS), 'node_chain_candidate_output_sha256': hashlib.sha256(node_chain_candidate_output.encode()).hexdigest(),
                   'node_chain_imported_mtu_cases': list(NODE_CHAIN_IMPORTED_MTU_VERDICTS), 'node_chain_imported_mtu_output_sha256': hashlib.sha256(node_chain_imported_mtu_output.encode()).hexdigest(),
                   'node_chain_imported_cases': list(NODE_CHAIN_IMPORTED_VERDICTS), 'node_chain_imported_output_sha256': hashlib.sha256(node_chain_imported_output.encode()).hexdigest(),
+                  'node_chain_hostname_transport_cases': list(HOSTNAME.VERDICTS), 'node_chain_hostname_transport_output_sha256': hashlib.sha256(node_chain_hostname_output.encode()).hexdigest(),
                   'node_chain_peer_cases': list(NODE_CHAIN_PEER_CASES), 'node_chain_peer_output_sha256': hashlib.sha256(node_chain_peer_output.encode()).hexdigest(),
                   'cases': list(CASES), 'reverse_cases': list(REVERSE_CASES), 'compiled_negative_controls': [defect, private_defect, ds_defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
     CHILD.publish_receipt(receipt_path, result, workspace)
