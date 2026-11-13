@@ -3012,3 +3012,16 @@ private-provider checks or deliberate AI Board/ASUS deployment. No private
 router, AdGuard, forwarding or production deployment was changed during this
 continuation. The original product scope remains open wherever appropriate
 implementation or acceptance evidence is still missing.
+
+
+## 2026-11-13 — Combined typed SOCKS native gate prepared
+
+Main before this publication: `3ce85801872e240da84500d741cf2f74b9eca58e`.
+
+The new `socks-bridge` focused suite permits exactly twenty deduplicated source paths. It composes the corrected original native owner fixture, typed CommandServer/Box construction hooks, and libbox source/lifecycle/measurement wrappers. The original owner gate still requires all 22 owner and 15 encrypted-peer records plus four independently compiled causal controls. The typed composition requires 50 records, all 13 original libbox and 27 original Box records, and six compiled causal controls with exact expected inventories. All twenty child phases keep their captured bounds and require process-group joins. Source, generated/native projections, compiled image identities, and the trusted selection are rechecked after execution. The generic SOCKS transport and global registry are unchanged.
+
+The previous owner candidate `62eb3b34b0c1a6b84f63390bfc484cad2642751e` compiled but failed before encrypted execution because its saved SOCKS fixture supplied `server` instead of the canonical saved-profile `host`. The corrected fixture blob is `cc36e2441b9c96e79806b988c123193b6f067540`; only that saved key and fixed constructor-stage labels changed. Production validation, native outbound `server`, all original controls and bounds remain unchanged. Failed run 43420957734/job 131870530069 and its baseline log SHA-256 `cb832b75493a54b7db96125849a229706e65282ba9ef136cbc4e1077c254193c` remain evidence, not acceptance.
+
+Root independently ran the new trusted runner (10 tests, exit 0) and source-identity tests (12 tests, exit 0), parsed the complete workflow YAML, and compiled both embedded Python programs. The macOS profile runner remains `macos-15-intel`. Runner log SHA-256: `0648b25ea2a2dc7e6f8cd53ad3ecbae804b7b451d9ac25b5b0d852fa7e12a23b`; identity log: `7f4e476893f942f4930cfd28f661ece24e8b61f56f97b88a450e2ff17e4090ab`.
+
+This publication adds trusted validation infrastructure only. Actual combined native compilation/execution, successful composed Run/measurement, native MTU continuation, Android/Apple host admission, and physical-device acceptance are not established by Python validation. The source candidate is separate and will only be published after its relevant actual native evidence passes.
