@@ -5,6 +5,7 @@ Only compiler/process execution is substituted here. Native Swift execution and
 the real iOS SDK acceptance remain mandatory in test_ios_via_entry_candidates.py.
 """
 from pathlib import Path
+import ast
 import contextlib
 import errno
 import importlib.util
@@ -26,7 +27,7 @@ SPEC.loader.exec_module(GATE)
 
 
 class ViaEntrySourceBoundary(unittest.TestCase):
-    def run_gate(self, negative_result=None, *, require_overlap=False, fail_mutant_compile=False):
+    def run_gate(self, negative_result=None, *, phase=None, actor_result=None, require_overlap=False, fail_mutant_compile=False):
         original = (GATE.APP / 'IOSViaEntryTCP.swift').read_text()
         sdk_sources = []
         executable_sources = []
@@ -46,8 +47,10 @@ class ViaEntrySourceBoundary(unittest.TestCase):
 
         def run(command, **options):
             if '-emit-module' in command:
+                self.assertEqual(options, dict(check=True, timeout=120))
                 return subprocess.CompletedProcess(command, 0)
             if '-sdk' in command:
+                self.assertEqual(options['timeout'], 120)
                 self.assertNotIn('-I', command)
                 self.assertNotIn('-lNetwork', command)
                 helper = next(Path(value) for value in command if str(value).endswith('/ActualTCP.swift'))
@@ -55,12 +58,15 @@ class ViaEntrySourceBoundary(unittest.TestCase):
                 sdk_sources.append(source)
                 self.assertNotIn('NWTest', source)
                 self.assertEqual(source.count('DispatchTime.now().uptimeNanoseconds'), 2)
-                if len(sdk_sources) == 1:
+                if phase != 'sdk-actor' and len(sdk_sources) == 1:
                     self.assertEqual(source, original)
                     return subprocess.CompletedProcess(command, 0)
                 self.assertIn('static func measure(_ target: RouterProfile,', source)
+                if actor_result is not None:
+                    return subprocess.CompletedProcess(command, *actor_result)
                 return subprocess.CompletedProcess(command, 1, '', "sending 'candidate' risks causing data races")
             if '-parse-as-library' in command:
+                self.assertEqual(options['timeout'], 150)
                 helper = next(Path(value) for value in command if str(value).endswith('/IOSViaEntryTCP.swift'))
                 source = helper.read_text()
                 output = Path(command[command.index('-o') + 1])
@@ -82,6 +88,8 @@ class ViaEntrySourceBoundary(unittest.TestCase):
                 self.assertEqual(source.count('NWTest.shared.measurementNow()'), 2)
                 self.assertNotIn('DispatchTime.now().uptimeNanoseconds', source)
                 if 'static func measure(_ target: RouterProfile,' in source:
+                    if actor_result is not None:
+                        return subprocess.CompletedProcess(command, *actor_result)
                     return subprocess.CompletedProcess(command, 1, '', "IOSViaEntryLatency.swift: sending 'candidate' risks causing data races")
                 return subprocess.CompletedProcess(command, 0)
             target = (None, 'statistics', 'statistics', 'statistics', 'retirement-network', 'socket-drain', 'physical-binding')[len(executions)]
@@ -103,16 +111,30 @@ class ViaEntrySourceBoundary(unittest.TestCase):
              patch.object(GATE.subprocess, 'check_output', return_value='/fixture/iphoneos-sdk\n'), \
              patch.object(GATE.subprocess, 'run', side_effect=run), \
              patch.object(GATE.OwnedCandidateCompiler, 'run', side_effect=run), \
-             contextlib.redirect_stdout(io.StringIO()):
-            GATE.main()
-        self.assertEqual(len(executions), 7)
-        self.assertEqual(len(executable_sources), 8)
-        self.assertEqual(len(sdk_sources), 2)
-        self.assertEqual(len(set(compiled_paths)), 8)
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            GATE.main(phase)
+        expected = {None: (7, 8, 2), 'runtime': (7, 7, 0), 'actor': (0, 1, 0), 'sdk': (0, 0, 1), 'sdk-actor': (0, 0, 1)}[phase]
+        self.assertEqual((len(executions), len(executable_sources), len(sdk_sources)), expected)
+        self.assertEqual(len(set(compiled_paths)), expected[1])
+        receipts = [line for line in output.getvalue().splitlines() if line.startswith(GATE.PHASE_RECEIPT)]
+        self.assertEqual(receipts, [GATE.PHASE_RECEIPT + name for name in (GATE.PHASES if phase is None else (phase,))])
         self.assertEqual((GATE.APP / 'IOSViaEntryTCP.swift').read_text(), original)
 
     def test_exact_targeted_mutations_preserve_the_full_baseline_and_real_sdk_clock(self):
         self.run_gate()
+
+    def test_independent_phases_keep_the_exact_complete_native_inventory(self):
+        for phase in GATE.PHASES:
+            with self.subTest(phase=phase):
+                self.run_gate(phase=phase)
+
+    def test_real_sdk_phase_cannot_be_substituted_with_a_portable_host(self):
+        for phase in ('sdk', 'sdk-actor'):
+            with self.subTest(phase=phase), patch('platform.system', return_value='Linux'), \
+                 patch.object(GATE.subprocess, 'run') as compiler, \
+                 self.assertRaisesRegex(RuntimeError, 'native Darwin host'):
+                GATE.main(phase)
+            compiler.assert_not_called()
 
     def test_targeted_negative_must_fail_at_its_own_assertion(self):
         for result, message in [((0, 'unexpected pass', ''), 'Negative control escaped'),
@@ -121,12 +143,62 @@ class ViaEntrySourceBoundary(unittest.TestCase):
             with self.subTest(result=result), self.assertRaisesRegex(AssertionError, message):
                 self.run_gate(result)
 
+    def test_both_actor_phases_require_the_original_swift_diagnostic(self):
+        for phase in ('actor', 'sdk-actor'):
+            for result in ((0, 'unsafe source accepted', ''), (1, '', 'unrelated compiler error')):
+                with self.subTest(phase=phase, result=result), self.assertRaisesRegex(AssertionError, 'actor crossing'):
+                    self.run_gate(phase=phase, actor_result=result)
+
     def test_mutant_compilation_overlaps_full_baseline_with_isolated_sources(self):
         self.run_gate(require_overlap=True)
 
     def test_background_mutant_compiler_failure_cannot_become_acceptance(self):
         with self.assertRaises(subprocess.CalledProcessError):
             self.run_gate(fail_mutant_compile=True)
+
+
+class ShippingCandidatePhases(unittest.TestCase):
+    def execute_shipping_loop(self, receipt=None, fail_phase=None):
+        # Execute the shipping contract's actual loop, substituting only its
+        # child processes. This catches omission, reordering, receipt replay,
+        # swallowed compiler failure and an accidental aggregate timeout.
+        path = ROOT / 'ios/RouterVPN/test_runtime_selection_contract.py'
+        tree = ast.parse(path.read_text())
+        loops = [node for node in ast.walk(tree) if isinstance(node, ast.For)
+                 and isinstance(node.target, ast.Name) and node.target.id == 'candidate_phase']
+        self.assertEqual(len(loops), 1)
+        self.assertEqual(ast.literal_eval(loops[0].iter), GATE.PHASES)
+        calls = []
+        def run(command, **options):
+            phase = GATE.PHASES[len(calls)]
+            self.assertEqual(command, [sys.executable, str(ROOT / 'deploy/test_ios_via_entry_candidates.py'), '--phase', phase])
+            self.assertEqual(options, dict(check=False, timeout=150, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT))
+            calls.append(phase)
+            output = GATE.PHASE_RECEIPT + phase + '\n' if receipt is None else receipt(phase)
+            return subprocess.CompletedProcess(command, 1 if phase == fail_phase else 0, output)
+        with patch.object(subprocess, 'run', side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+            exec(compile(ast.Module(body=loops, type_ignores=[]), str(path), 'exec'),
+                 dict(root=ROOT, sys=sys, subprocess=subprocess))
+        self.assertEqual(calls, list(GATE.PHASES))
+
+    def test_shipping_contract_requires_each_exact_phase_with_its_original_bound(self):
+        self.execute_shipping_loop()
+
+    def test_missing_wrong_duplicate_or_foreign_receipts_cannot_complete_the_suite(self):
+        receipts = {
+            'missing': lambda phase: '',
+            'wrong': lambda phase: GATE.PHASE_RECEIPT + 'sdk-actor\n',
+            'duplicate': lambda phase: (GATE.PHASE_RECEIPT + phase + '\n') * 2,
+            'foreign': lambda phase: GATE.PHASE_RECEIPT + phase + '\n' + GATE.PHASE_RECEIPT + 'sdk-actor\n',
+        }
+        for fault, receipt in receipts.items():
+            with self.subTest(fault=fault), self.assertRaises(AssertionError):
+                self.execute_shipping_loop(receipt)
+
+    def test_every_phase_failure_prevents_shipping_acceptance(self):
+        for phase in GATE.PHASES:
+            with self.subTest(phase=phase), self.assertRaises(subprocess.CalledProcessError):
+                self.execute_shipping_loop(fail_phase=phase)
 
 
 class OriginalCompilerLifetime(unittest.TestCase):

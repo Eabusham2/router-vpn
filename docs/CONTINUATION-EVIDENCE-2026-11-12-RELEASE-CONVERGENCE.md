@@ -287,6 +287,26 @@ witness. Python compilation and diff checks passed. The complete GTK widget
 sequence still requires hosted execution; this focused library check does not
 substitute for it.
 
+## Individually bounded iOS candidate phases
+
+The exact 7db iOS compile job (131594824616 in
+[run 43336777137](https://github.com/Eabusham2/router-vpn/actions/runs/43336777137))
+passed the 259-check baseline, all six runtime controls and private-profile actor
+rejection, then its outer 150-second aggregate killed the child during the real
+iOS SDK compile. The repair makes four existing phases explicit: runtime, actor,
+SDK compile and SDK actor rejection. Both shipping lanes invoke all four and
+require one exact phase receipt with a successful child exit. Every existing
+120/150-second subprocess bound and the runtime aggregate bound is retained.
+
+Thirteen runner tests passed, including actual shipping-loop execution and
+missing, foreign, duplicated or failed phase rejection. The complete portable
+Swift runtime phase passed in 64.240 seconds (259 checks and six negative
+controls), and the actor phase passed in 8.280 seconds, each under its unchanged
+150-second outer limit. The two SDK phases require Darwin and cannot be replaced
+with portable results. Their actual current-SHA SDK execution remains pending.
+A separate full local runtime-selection invocation stopped at a later SIP003
+toolchain-path requirement; it is not reported as a completed aggregate.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

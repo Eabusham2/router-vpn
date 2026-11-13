@@ -6,6 +6,7 @@ boundaries doubled. This is not a claim of physical-device routed traffic.
 """
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+import argparse
 import importlib.util
 import json
 import os
@@ -20,6 +21,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / 'ios/RouterVPN/App'
+PHASES = ('runtime', 'actor', 'sdk', 'sdk-actor')
+PHASE_RECEIPT = 'Apple candidate phase complete: '
 spec = importlib.util.spec_from_file_location('speed_path_fixture', ROOT / 'deploy/test_ios_speed_lab_external_paths.py')
 P = importlib.util.module_from_spec(spec); spec.loader.exec_module(P)
 
@@ -442,7 +445,12 @@ import Network
 '''
 
 
-def main():
+def main(phase=None):
+    if phase is not None and phase not in PHASES:
+        raise ValueError('Unknown Apple candidate phase')
+    import platform
+    if phase in ('sdk', 'sdk-actor') and platform.system() != 'Darwin':
+        raise RuntimeError('Real iOS SDK phase requires its native Darwin host')
     aggregate_deadline = time.monotonic() + 150
     swift = shutil.which('swiftc')
     if not swift: raise SystemExit('swiftc is required')
@@ -469,11 +477,11 @@ def main():
     code['Fixture.swift'] = 'import Foundation\n' + types + '\n' + boundaries + '\n' + FIXTURE.replace('// SHIPPING_MANUAL_EXIT_CHOICE', manual)
     with tempfile.TemporaryDirectory(prefix='ios-via-entry-') as temporary:
         folder = Path(temporary); network = folder / 'Network.swift'; network.write_text(NETWORK)
-        import platform
         suffix = '.dylib' if platform.system() == 'Darwin' else '.so'
         args = [swift, '-swift-version', '6', '-module-cache-path', str(folder / 'modules')]
-        subprocess.run(args + ['-emit-module', '-emit-library', '-module-name', 'Network', str(network),
-            '-emit-module-path', str(folder / 'Network.swiftmodule'), '-o', str(folder / ('libNetwork' + suffix))], check=True, timeout=120)
+        if phase in (None, 'runtime', 'actor'):
+            subprocess.run(args + ['-emit-module', '-emit-library', '-module-name', 'Network', str(network),
+                '-emit-module-path', str(folder / 'Network.swiftmodule'), '-o', str(folder / ('libNetwork' + suffix))], check=True, timeout=120)
         def write_sources(contents, destination=folder):
             destination.mkdir(parents=True, exist_ok=True)
             paths = []
@@ -538,25 +546,27 @@ def main():
         for name, (before, after) in mutations.items():
             assert sum(source.count(before) for source in code.values()) == 1, f'Mutation anchor changed: {name}'
             variants.append((name, {path: source.replace(before, after) for path, source in code.items()}))
-        baseline = compile_fixture(code, 'shipping baseline', folder / 'baseline')
-        # The full baseline spends real time delivering every response and
-        # draining every owned socket. Compile independent mutant executables
-        # during that work, with at most one compiler and one running fixture.
-        # Each compiler input/output directory is immutable after compilation;
-        # all six native witnesses still execute serially after the baseline.
-        # No shipping sample count, timer, deadline or aggregate bound changes.
-        owned_compiler = OwnedCandidateCompiler(aggregate_deadline)
-        with ThreadPoolExecutor(max_workers=1) as compiler:
-            pending = [(name, compiler.submit(compile_fixture, contents, name, folder / ('mutation-' + str(index)), owned_compiler))
-                       for index, (name, contents) in enumerate(variants)]
-            try:
-                execute(baseline)
-                for name, compiled in pending:
-                    execute(compiled.result(), name, expected_witnesses[name], focused_witnesses[name])
-            finally:
-                owned_compiler.cancel()
-                for _, compiled in pending:
-                    compiled.cancel()
+        if phase in (None, 'runtime'):
+            baseline = compile_fixture(code, 'shipping baseline', folder / 'baseline')
+            # The full baseline spends real time delivering every response and
+            # draining every owned socket. Compile independent mutant executables
+            # during that work, with at most one compiler and one running fixture.
+            # Each compiler input/output directory is immutable after compilation;
+            # all six native witnesses still execute serially after the baseline.
+            # Keep every shipping sample count, timer and runtime aggregate bound.
+            owned_compiler = OwnedCandidateCompiler(aggregate_deadline)
+            with ThreadPoolExecutor(max_workers=1) as compiler:
+                pending = [(name, compiler.submit(compile_fixture, contents, name, folder / ('mutation-' + str(index)), owned_compiler))
+                           for index, (name, contents) in enumerate(variants)]
+                try:
+                    execute(baseline)
+                    for name, compiled in pending:
+                        execute(compiled.result(), name, expected_witnesses[name], focused_witnesses[name])
+                finally:
+                    owned_compiler.cancel()
+                    for _, compiled in pending:
+                        compiled.cancel()
+            print(PHASE_RECEIPT + 'runtime', flush=True)
         unsafe = dict(code)
         before = '_ target: IOSViaEntryTCPTarget, excluding excluded:'
         assert unsafe['IOSViaEntryTCP.swift'].count(before) == 1
@@ -580,15 +590,17 @@ extension IOSViaEntryTCP {
         unsafe['Fixture.swift'] = unsafe['Fixture.swift'].replace('IOSViaEntryTCPTarget(id:p.id,name:p.name,endpoint:p.endpoint)', 'p')
         # Region-isolation diagnostics are emitted during SIL/code generation;
         # a typecheck-only invocation can accept the historical broken call.
-        print('Apple candidate stage: reject full-profile actor crossing', flush=True)
-        binary = folder / 'tests'
-        rejected = subprocess.run(args + ['-parse-as-library', '-I', str(folder), '-L', str(folder), '-lNetwork',
-            '-Xlinker', '-rpath', '-Xlinker', str(folder)] + write_sources(unsafe) + ['-o', str(binary)],
-            text=True, capture_output=True, timeout=150)
-        assert rejected.returncode != 0 and "sending 'candidate' risks causing data races" in rejected.stderr and 'IOSViaEntryLatency.swift' in rejected.stderr, (
-            'Historical full-profile actor crossing was not rejected at the shipping call site:\n' + rejected.stdout + rejected.stderr)
-        print('Apple candidate negative control rejected: full private profile crosses MainActor')
-        if platform.system() == 'Darwin':
+        if phase in (None, 'actor'):
+            print('Apple candidate stage: reject full-profile actor crossing', flush=True)
+            binary = folder / 'tests'
+            rejected = subprocess.run(args + ['-parse-as-library', '-I', str(folder), '-L', str(folder), '-lNetwork',
+                '-Xlinker', '-rpath', '-Xlinker', str(folder)] + write_sources(unsafe) + ['-o', str(binary)],
+                text=True, capture_output=True, timeout=150)
+            assert rejected.returncode != 0 and "sending 'candidate' risks causing data races" in rejected.stderr and 'IOSViaEntryLatency.swift' in rejected.stderr, (
+                'Historical full-profile actor crossing was not rejected at the shipping call site:\n' + rejected.stdout + rejected.stderr)
+            print('Apple candidate negative control rejected: full private profile crosses MainActor')
+            print(PHASE_RECEIPT + 'actor', flush=True)
+        if platform.system() == 'Darwin' and phase in (None, 'sdk', 'sdk-actor'):
             # The executable fixture doubles OS behavior. Independently typecheck
             # the real helper and its actor crossing against the iOS SDK, with
             # the same deployment target as the shipping application.
@@ -631,18 +643,25 @@ extension IOSViaEntryTCP {
             output_map.write_text(json.dumps({str(path): {'object': str(folder / (path.stem + '.o'))} for path in sdk_sources}))
             sdk_args = [swift, '-swift-version', '6', '-parse-as-library', '-c', '-sdk', sdk, '-target', 'arm64-apple-ios17.0',
                         '-module-cache-path', str(folder / 'sdk-modules'), '-output-file-map', str(output_map)] + [str(path) for path in sdk_sources]
-            print('Apple candidate stage: compile shipping helper against real iOS SDK', flush=True)
-            subprocess.run(sdk_args, check=True, timeout=120)
-            unsafe_sdk = unsafe['IOSViaEntryTCP.swift']
-            assert unsafe_sdk.count('NWTest.shared.measurementNow()') == 2
-            unsafe_sdk = unsafe_sdk.replace('NWTest.shared.measurementNow()', elapsed)
-            helper.write_text(unsafe_sdk)
-            actor.write_text(actor_code.replace('IOSViaEntryTCP.measure(target,', 'IOSViaEntryTCP.measure(candidate,'))
-            print('Apple candidate stage: reject full-profile crossing against real iOS SDK', flush=True)
-            rejected = subprocess.run(sdk_args, text=True, capture_output=True, timeout=120)
-            assert rejected.returncode != 0 and "sending 'candidate' risks causing data races" in rejected.stderr, (
-                'Real iOS SDK failed to reject the full-profile actor crossing:\n' + rejected.stdout + rejected.stderr)
-            print('Apple candidate network owner: real iOS SDK actor crossing PASS; full-profile negative rejected')
+            if phase in (None, 'sdk'):
+                print('Apple candidate stage: compile shipping helper against real iOS SDK', flush=True)
+                subprocess.run(sdk_args, check=True, timeout=120)
+                print(PHASE_RECEIPT + 'sdk', flush=True)
+            if phase in (None, 'sdk-actor'):
+                unsafe_sdk = unsafe['IOSViaEntryTCP.swift']
+                assert unsafe_sdk.count('NWTest.shared.measurementNow()') == 2
+                unsafe_sdk = unsafe_sdk.replace('NWTest.shared.measurementNow()', elapsed)
+                helper.write_text(unsafe_sdk)
+                actor.write_text(actor_code.replace('IOSViaEntryTCP.measure(target,', 'IOSViaEntryTCP.measure(candidate,'))
+                print('Apple candidate stage: reject full-profile crossing against real iOS SDK', flush=True)
+                rejected = subprocess.run(sdk_args, text=True, capture_output=True, timeout=120)
+                assert rejected.returncode != 0 and "sending 'candidate' risks causing data races" in rejected.stderr, (
+                    'Real iOS SDK failed to reject the full-profile actor crossing:\n' + rejected.stdout + rejected.stderr)
+                print('Apple candidate network owner: real iOS SDK actor crossing PASS; full-profile negative rejected')
+                print(PHASE_RECEIPT + 'sdk-actor', flush=True)
 
 
-if __name__ == '__main__': main()
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--phase', choices=PHASES)
+    main(parser.parse_args().phase)

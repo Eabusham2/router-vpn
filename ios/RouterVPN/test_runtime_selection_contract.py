@@ -117,9 +117,23 @@ import sys
 subprocess.run([sys.executable, str(root / 'deploy/test_ios_provenance_order.py')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'deploy/test_ios_via_entry_runner.py')], check=True, timeout=30)
 if platform.system() == 'Darwin':
-    # This self-contained native fixture also compiles against the real SDK.
-    # Keep its full budget/negative controls early in both shipping lanes.
-    subprocess.run([sys.executable, str(root / 'deploy/test_ios_via_entry_candidates.py')], check=True, timeout=150)
+    # Each existing independent phase retains its own compiler/runtime bounds.
+    # Both shipping lanes require the complete runtime inventory and both real
+    # SDK results; a portable result cannot stand in for native SDK acceptance.
+    for candidate_phase in ('runtime', 'actor', 'sdk', 'sdk-actor'):
+        try:
+            candidate_result = subprocess.run([sys.executable, str(root / 'deploy/test_ios_via_entry_candidates.py'),
+                                               '--phase', candidate_phase], check=False, timeout=150,
+                                              text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        except subprocess.TimeoutExpired as error:
+            candidate_output = error.output or ''
+            print(candidate_output.decode(errors='replace') if isinstance(candidate_output, bytes) else candidate_output, end='', flush=True)
+            raise
+        print(candidate_result.stdout, end='', flush=True)
+        candidate_result.check_returncode()
+        candidate_receipt = 'Apple candidate phase complete: ' + candidate_phase
+        assert candidate_result.stdout.splitlines().count(candidate_receipt) == 1, 'Missing or duplicated Apple candidate phase receipt: ' + candidate_phase
+        assert [line for line in candidate_result.stdout.splitlines() if line.startswith('Apple candidate phase complete: ')] == [candidate_receipt], 'Apple candidate phase returned another phase receipt'
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_startup_policy.py')], check=True, timeout=300)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_quick_protection.py')], check=True, timeout=180)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_node_usage.py')], check=True, timeout=180)
