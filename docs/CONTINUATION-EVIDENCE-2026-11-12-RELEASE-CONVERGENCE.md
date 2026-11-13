@@ -2342,6 +2342,37 @@ diagnostics, their seven required verdicts and native validation remain pending
 at this publication; the interrupted native compiler supplied no observed
 verdict. Their source is preserved independently and is not counted as passed.
 
+## H3 aggregate respects cancelled release runs
+
+The obsolete `2137d952` authoritative run `43390650387` cancelled both
+Windows native jobs at 08:12:32 UTC, but aggregate job `131772010905` still
+started at 08:19:00 and failed with `NATIVE_RESULT=cancelled`. The same
+behavior recurred after the `764745c4` run was superseded: aggregate
+`131783836698` ran from 08:42:16 to 08:42:22 and failed its existing
+both-architectures assertion. These were cancellation bookkeeping failures,
+not completed native test failures.
+
+The H3 Windows inventory job now uses the documented
+`if: ${{ !cancelled() }}` guard. It still executes after a real dependency
+failure and requires both original Windows architecture jobs to succeed.
+Cancelled workflows no longer start or preserve this aggregate. The original
+dependency, five-minute bound, exact source/run/commit receipts, architecture
+inventory, missing-file rejection and mandatory success assertion are
+unchanged. No native gate or release requirement was disabled.
+See GitHub's [status-expression semantics](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions)
+and [cancellation behavior](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation).
+
+Validation used the exact `45081f87` archive with all 5,095 original source
+files checked; only the workflow and its contract changed. All 18 workflow
+tests passed in 0.934 seconds, including rejection of the old `always()`,
+success-only execution, missing condition and missing dependency. All 14
+Python receipt/orchestration test methods passed in 1.552 seconds, retaining
+two-architecture and original needs-result/source/run/commit rejection.
+The three unchanged compiled native methods were not rerun for this workflow
+change; these results do not stand in for them or a completed hosted release.
+The validation manifest SHA256 is
+`87e57037dffb9a8dd357e8d65a5b354e7650c4e3f8638523e0225f5c75a0d2d5`.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

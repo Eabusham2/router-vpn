@@ -365,7 +365,7 @@ jobs:
   imported-naive-h3-windows-complete:
     name: Complete protected imported H3 Windows inventory
     needs: imported-naive-h3-windows
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

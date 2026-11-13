@@ -219,7 +219,7 @@ class ImportedNaiveH3Workflow(unittest.TestCase):
         self.assertIn('          if-no-files-found: error\n', native)
         complete = section(source, 'imported-naive-h3-windows-complete:', 2)
         self.assertIn('    needs: imported-naive-h3-windows\n', complete)
-        self.assertIn('    if: always()\n', complete)
+        self.assertIn('    if: ${{ !cancelled() }}\n', complete)
         self.assertIn('    timeout-minutes: 5\n', complete)
         self.assertNotIn('continue-on-error:', complete)
         self.assertEqual(complete.count('          NATIVE_RESULT: ${{ needs.imported-naive-h3-windows.result }}\n'), 2)
@@ -239,6 +239,10 @@ class ImportedNaiveH3Workflow(unittest.TestCase):
     def test_incomplete_or_nonblocking_windows_companion_is_rejected(self):
         source = NAIVE_H3_WORKFLOW.read_text()
         for before, after in (
+            ('    if: ${{ !cancelled() }}\n', '    if: always()\n'),
+            ('    if: ${{ !cancelled() }}\n', '    if: success()\n'),
+            ('    if: ${{ !cancelled() }}\n', ''),
+            ('    needs: imported-naive-h3-windows\n', ''),
             ('- architecture: arm64', '- architecture: amd64'),
             ('runner: windows-11-arm', 'runner: windows-latest'),
             ('  imported-naive-h3-windows:\n', '  imported-naive-h3-windows:\n    if: false\n'),
