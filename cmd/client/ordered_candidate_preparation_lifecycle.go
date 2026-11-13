@@ -273,6 +273,12 @@ func (p *orderedCandidatePreparation) finish() error {
 	p.finishOnce.Do(func() {
 		p.finishError = cleanupViaEntryOwner(p.control, p.owner)
 		p.control.mu.Lock()
+		if job := p.owner.prepared; job != nil {
+			job.nativeDown = p.nativeDown
+			if p.finishError != nil {
+				job.cleanupError = "Original native or network observer cleanup is pending; Cancel retries the retained owner."
+			}
+		}
 		p.owner.running = false
 		close(p.owner.done)
 		p.control.mu.Unlock()

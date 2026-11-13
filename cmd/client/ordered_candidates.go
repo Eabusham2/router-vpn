@@ -64,6 +64,7 @@ type orderedCandidateRequest struct {
 }
 
 func registerOrderedCandidateRoutes(h *http.ServeMux, a *app) {
+	registerOrderedCandidatePreparedRoutes(h, a)
 	h.HandleFunc("/api/multihop/prefix-candidates/catalog", a.orderedCandidateCatalog)
 	h.HandleFunc("/api/multihop/prefix-candidates", a.orderedCandidates)
 	h.HandleFunc("/api/multihop/prefix-candidates/cancel", a.viaEntryCandidatesCancel)

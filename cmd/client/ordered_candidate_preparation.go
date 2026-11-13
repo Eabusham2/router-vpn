@@ -52,10 +52,9 @@ type orderedCandidatePreparation struct {
 	invalidated       atomic.Bool
 }
 
-// No public route calls this foundation yet. The caller owns the entire batch
-// lifetime, including cleanup; an asynchronous route must not pass the context
-// of a response that returns before the worker joins. Native activation and
-// detached receipt integrations are required before exposing temporary Test.
+// Synchronous callers own the entire batch lifetime, including cleanup. The
+// public 202 route uses the explicit lifetime-aware admission below so ending
+// its response cannot revoke the retained native worker.
 func beginOrderedCandidatePreparation(ctx context.Context, a *app, q orderedCandidatePreparationRequest) (*orderedCandidatePreparation, error) {
 	return beginOrderedCandidatePreparationWithNetwork(ctx, a, q, physicalNetworkIdentityContext)
 }
@@ -64,7 +63,15 @@ func beginOrderedCandidatePreparation(ctx context.Context, a *app, q orderedCand
 // saved graph/source compilation and candidate eligibility use shipping code.
 func beginOrderedCandidatePreparationWithNetwork(ctx context.Context, a *app, q orderedCandidatePreparationRequest,
 	observe func(context.Context) (string, error)) (result *orderedCandidatePreparation, failure error) {
-	if ctx == nil || ctx.Err() != nil || a == nil || observe == nil || !validViaEntryRequestID(q.RequestID) ||
+	return beginOrderedCandidatePreparationWithLifetime(ctx, ctx, a, q, observe)
+}
+
+// A 202 response has a separate bounded, registered worker lifetime. Admission
+// still uses its request deadline; ending that response cannot revoke the
+// original background worker, while explicit Cancel/Stop retains its join.
+func beginOrderedCandidatePreparationWithLifetime(ctx, lifetime context.Context, a *app, q orderedCandidatePreparationRequest,
+	observe func(context.Context) (string, error)) (result *orderedCandidatePreparation, failure error) {
+	if ctx == nil || ctx.Err() != nil || lifetime == nil || lifetime.Err() != nil || a == nil || observe == nil || !validViaEntryRequestID(q.RequestID) ||
 		q.Samples != 50 || q.Position < 0 || q.Position > 7 || len(q.CandidateIDs) < 1 || len(q.CandidateIDs) > hopmeasure.CandidateMaximumTargets {
 		return nil, errors.New("temporary candidates require an original caller, saved IDs and exactly 50 samples")
 	}
@@ -153,16 +160,16 @@ func beginOrderedCandidatePreparationWithNetwork(ctx context.Context, a *app, q 
 	c.pruneNoncesLocked()
 	_, repeated = c.seen[q.RequestID]
 	currentRevision, err := a.candidateCatalogRevisionLocked()
-	if err != nil || ctx.Err() != nil || repeated || len(c.seen) >= 1024 ||
+	if err != nil || ctx.Err() != nil || lifetime.Err() != nil || repeated || len(c.seen) >= 1024 ||
 		c.owner != nil && (c.owner.running || !c.owner.drained) || !orderedCandidatePreparationIdleLocked(a) ||
 		a.state != initial || currentRevision != revision || !selection.Native.chain.profilesCurrent(control, a.profiles.Profiles) {
 		return nil, errors.Join(err, ctx.Err(), errors.New("temporary candidate capture changed before original admission"))
 	}
-	operation, cancel := context.WithCancel(ctx)
+	operation, cancel := context.WithCancel(lifetime)
 	q.CandidateIDs = append([]string(nil), q.CandidateIDs...)
 	p := &orderedCandidatePreparation{app: a, control: c, operation: operation, cancel: cancel, request: q,
 		selection: selection, inventory: inventory, state: initial, revision: revision, network: network, observeNetwork: observe}
-	p.owner = &viaEntryOwner{id: q.RequestID, cancel: cancel, done: make(chan struct{}), running: true}
+	p.owner = &viaEntryOwner{id: q.RequestID, cancel: cancel, done: make(chan struct{}), running: true, preparation: p}
 	p.owner.cleanup = p.retire
 	c.owner, c.seen[q.RequestID] = p.owner, time.Now()
 	a.candidatePreparation, a.connectionContext, a.connectionCancel = p, operation, cancel
@@ -206,11 +213,32 @@ func (p *orderedCandidatePreparation) sourceCurrent(ctx context.Context) (failur
 		return err
 	}
 	err := p.currentLocked()
-	profiles := cloneRouterProfileStore(p.app.profiles).Profiles
 	p.app.mu.Unlock()
 	if err != nil {
 		return err
 	}
+	if err := p.savedSourcesCurrent(ctx); err != nil {
+		return err
+	}
+	if err := desktopnetwork.LockContext(ctx, &p.app.mu); err != nil {
+		return err
+	}
+	defer p.app.mu.Unlock()
+	return errors.Join(p.currentLocked(), ctx.Err())
+}
+
+// Shared immutable source inventory checks for running and detached-DOWN
+// observations. Each caller separately validates its concrete owner boundary.
+func (p *orderedCandidatePreparation) savedSourcesCurrent(ctx context.Context) error {
+	if ctx == nil || p == nil || p.app == nil || p.inventory == nil || p.selection.Native == nil ||
+		p.selection.Native.chain == nil || p.observeNetwork == nil {
+		return errors.New("candidate saved source observation lost its original capture")
+	}
+	if err := desktopnetwork.LockContext(ctx, &p.app.mu); err != nil {
+		return err
+	}
+	profiles := cloneRouterProfileStore(p.app.profiles).Profiles
+	p.app.mu.Unlock()
 	if err := p.selection.Native.chain.validate(ctx, p.selection.Control, profiles); err != nil {
 		return err
 	}
@@ -231,11 +259,7 @@ func (p *orderedCandidatePreparation) sourceCurrent(ctx context.Context) (failur
 	if err != nil || network != p.network {
 		return errors.Join(err, errors.New("temporary candidate original physical network changed"))
 	}
-	if err := desktopnetwork.LockContext(ctx, &p.app.mu); err != nil {
-		return err
-	}
-	defer p.app.mu.Unlock()
-	return errors.Join(p.currentLocked(), ctx.Err())
+	return ctx.Err()
 }
 
 func (p *orderedCandidatePreparation) currentLocked() (failure error) {

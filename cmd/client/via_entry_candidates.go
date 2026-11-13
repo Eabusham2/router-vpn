@@ -80,27 +80,32 @@ type viaEntrySnapshot struct {
 }
 
 type viaEntryOwner struct {
-	id        string
-	entry     string
-	cancel    context.CancelFunc
-	done      chan struct{}
-	running   bool
-	cancelled bool
-	drained   bool
-	lane      viaEntryLane
-	snapshot  viaEntrySnapshot
-	receipt   *viaEntryReceipt
-	network   func(context.Context) (string, error)
-	closeMu   sync.Mutex
-	ordered   *orderedCandidateJob
-	cleanup   func(context.Context) error
+	id          string
+	entry       string
+	cancel      context.CancelFunc
+	done        chan struct{}
+	running     bool
+	cancelled   bool
+	drained     bool
+	lane        viaEntryLane
+	snapshot    viaEntrySnapshot
+	receipt     *viaEntryReceipt
+	network     func(context.Context) (string, error)
+	closeMu     sync.Mutex
+	ordered     *orderedCandidateJob
+	prepared    *orderedCandidatePreparedJob
+	preparation *orderedCandidatePreparation // bound at original admission, before HTTP worker handoff
+	cleanup     func(context.Context) error
 }
 
 type viaEntryControl struct {
-	mu          sync.Mutex
-	owner       *viaEntryOwner
-	seen        map[string]time.Time
-	orderedView *orderedCandidateView
+	mu                 sync.Mutex
+	owner              *viaEntryOwner
+	seen               map[string]time.Time
+	orderedView        *orderedCandidateView
+	preparedView       *orderedCandidatePreparedView
+	preparedAdmissions map[string]*orderedCandidatePreparedAdmission
+	preparedViews      map[string]*orderedCandidatePreparedAdmission
 }
 
 var viaEntryControls sync.Map // map[*app]*viaEntryControl; failed cleanup retains its owner
@@ -116,6 +121,16 @@ func validViaEntryRequestID(id string) bool {
 }
 
 func (c *viaEntryControl) pruneNoncesLocked() {
+	for token, record := range c.preparedViews {
+		if time.Since(record.created) > 5*time.Minute {
+			delete(c.preparedViews, token)
+		}
+	}
+	for id, record := range c.preparedAdmissions {
+		if time.Since(record.created) > 5*time.Minute && (c.owner == nil || c.owner.id != id) {
+			delete(c.preparedAdmissions, id)
+		}
+	}
 	for id, created := range c.seen {
 		if time.Since(created) > 5*time.Minute && (c.owner == nil || c.owner.id != id) {
 			delete(c.seen, id)
@@ -658,21 +673,30 @@ func (a *app) viaEntryCandidatesCancel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid candidate request identity", http.StatusBadRequest)
 		return
 	}
+	a.cancelViaEntryCandidate(w, r, q.RequestID, nil)
+}
+
+func (a *app) cancelViaEntryCandidate(w http.ResponseWriter, r *http.Request, requestID string, admission *orderedCandidatePreparedAdmission) {
 	c := viaEntryControlFor(a)
 	if err := desktopnetwork.LockContext(r.Context(), &c.mu); err != nil {
 		http.Error(w, "candidate cancellation could not enter its original control", http.StatusRequestTimeout)
 		return
 	}
 	c.pruneNoncesLocked()
-	if _, exists := c.seen[q.RequestID]; !exists && len(c.seen) >= 1024 {
+	if admission != nil && (c.preparedAdmissions[requestID] != admission || c.owner != nil && c.owner.id == requestID && c.owner.preparation == nil) {
+		c.mu.Unlock()
+		http.Error(w, "saved cancellation cannot adopt another original purpose", http.StatusConflict)
+		return
+	}
+	if _, exists := c.seen[requestID]; !exists && len(c.seen) >= 1024 {
 		c.mu.Unlock()
 		http.Error(w, "candidate cancellation history is full; retry shortly", http.StatusTooManyRequests)
 		return
 	}
 	// Remember cancellation even if its start POST has not arrived yet.
-	c.seen[q.RequestID] = time.Now()
+	c.seen[requestID] = time.Now()
 	owner := c.owner
-	if owner != nil && owner.id == q.RequestID {
+	if owner != nil && owner.id == requestID {
 		owner.cancelled, owner.receipt = true, nil
 		owner.cancel()
 	} else {
@@ -683,18 +707,42 @@ func (a *app) viaEntryCandidatesCancel(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-owner.done:
 		case <-r.Context().Done():
+			if admission != nil {
+				viaEntryJSON(w, orderedCandidatePreparedAdmissionCancelResponse(c, owner, requestID, admission, errors.New("original candidate is still draining")))
+				return
+			}
 			http.Error(w, "candidate cancellation is still draining", http.StatusRequestTimeout)
 			return
 		case <-time.After(15 * time.Second):
+			if admission != nil {
+				viaEntryJSON(w, orderedCandidatePreparedAdmissionCancelResponse(c, owner, requestID, admission, errors.New("original candidate is still draining")))
+				return
+			}
 			http.Error(w, "candidate cancellation is still draining", http.StatusServiceUnavailable)
 			return
 		}
 		if err := cleanupViaEntryOwner(c, owner); err != nil {
+			if admission != nil {
+				viaEntryJSON(w, orderedCandidatePreparedAdmissionCancelResponse(c, owner, requestID, admission, err))
+				return
+			}
+			if response := orderedCandidatePreparedCancelResponse(c, owner, err); response != nil {
+				viaEntryJSON(w, response)
+				return
+			}
 			http.Error(w, "candidate cleanup is pending; protection and ownership retained", http.StatusServiceUnavailable)
 			return
 		}
 	}
-	viaEntryJSON(w, map[string]any{"ok": true, "request_id": q.RequestID, "drained": true})
+	if admission != nil {
+		viaEntryJSON(w, orderedCandidatePreparedAdmissionCancelResponse(c, owner, requestID, admission, nil))
+		return
+	}
+	if response := orderedCandidatePreparedCancelResponse(c, owner, nil); response != nil {
+		viaEntryJSON(w, response)
+		return
+	}
+	viaEntryJSON(w, map[string]any{"ok": true, "request_id": requestID, "drained": true})
 }
 
 func (a *app) viaEntryCandidatesValidate(w http.ResponseWriter, r *http.Request) {

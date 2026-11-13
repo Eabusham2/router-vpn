@@ -956,6 +956,77 @@ runner lost-communication annotation; its first log fetch returned
 output-pipe bound has been demonstrated to be the cause of that failure. Real
 macOS PF/utun execution and the complete native acceptance remain outstanding.
 
+## Desktop saved Local candidate API and explicit profile adoption
+
+The new `/api/multihop/saved-candidates` routes use the already implemented
+temporary-purpose native runtime. Catalog capture freezes the complete saved
+Local graph, private source identities, candidate inventory, prefix and
+physical network. A successful POST admits its immutable owner and returns
+202; a bounded background operation outlives the HTTP response. Polling,
+Cancel and Save retain the exact original request/view. This complete-graph
+flow still requires the existing final node to be reachable; it does not
+substitute for the separate prefix-only preparation requirement.
+
+Native shutdown precedes accepted results. The physical observer remains
+owned during the 120-second review window, so an accepted DOWN review is
+intentionally not fully drained. Disconnect/Cancel join that observer;
+expiry, source replacement and physical changes invalidate adoption. A
+failed cleanup remains retryable against its original owner. Cancellation
+before admission uses a separate typed, bounded request/view tombstone with
+`started=false` and no assertion of native DOWN. The original view history
+outlives admission expiry and newer catalog windows, preventing delayed POSTs
+from reviving a cancelled operation or stranding its cancellation.
+
+Save explicitly creates one separately named next-connection profile. It
+recompiles the complete proposed path and checks the captured sources,
+credentials, catalog, settings, node/runtime identity and physical observer
+again immediately before the atomic rename. Rollback is restricted to the
+exact inode and bytes this operation published and restores the original
+bytes. A committed write whose observer later changes is still reported by
+its real profile identity; identical retries only finish original cleanup.
+A second Save cannot create a duplicate or overwrite a newer writer.
+
+The final baseline passed nine new API test roots and the existing
+cancel-before-start/during-probe regression under the race detector in
+24.045 seconds. These exercise real route handlers and profile-file
+transactions with explicit native runtime/physical observer boundaries;
+they are not an installed controller or physical tunnel acceptance claim.
+The tests retain early cancellation, replaced/expired views, source/network
+replacement, exact proposal, retained cleanup and committed-write behavior.
+Two compiled causal controls independently removed native-DOWN admission
+and the final pre-rename guard; both failed their required assertions. The
+mutated test run exited 1 in 3.242 seconds, while the unchanged baseline
+passed. The source protections and all negative cases remain enabled.
+
+## Fresh native execution after the Server carrier correction
+
+At `c1a626e0013dcb57c75e12f8e3706ccc0e02edd4`, the actual encrypted
+Server suffix gate passed both AMD64 job `131652515716` and ARM64 job
+`131652516057` in [run 43354300417](https://github.com/Eabusham2/router-vpn/actions/runs/43354300417).
+The AMD64 log was independently read: its 14 required records include the
+WG/AWG Fast/AWG Strong and mixed three-member compositions, wrong-key,
+parameter, node, selected-DNS and trust refusals, prefix cancellation and
+joined active UDP retirement. The receipt identifies the built driver, peer
+and worker images and the recorded repository/source tree. These are actual
+native results for that commit, not inferred success from its fixture tests.
+
+At `07a426275bb753ca52d3f749ff4292ce2c8ce4cc`, the generated Linux Node
+command/TUN gate passed AMD64 job `131655922381` and ARM64 job
+`131655922260` in [run 43354987682](https://github.com/Eabusham2/router-vpn/actions/runs/43354987682).
+The independently read AMD64 log records the real kernel command fixture's
+six cases: on-connect, always, captured MTU, MTU rollback, resolver failure
+and wrong key. It passed in 20.63 seconds with selected-DNS traffic, encrypted
+TUN traffic and exact owned namespace/peer retirement. This existing gate
+does not yet exercise the new saved-candidate HTTP API through an installed
+host. No physical-device or private deployment acceptance follows from it.
+
+The earlier `fcfee433` Darwin child jobs on both architectures ended with
+runner communication loss. Their final logs remained unavailable from the
+job-log endpoint. No source assertion can be assigned to that observation.
+The bounded output join and retained pre-start baseline fixes are now in
+`07a426275`; their effect on actual Darwin execution still requires a newer
+native run. The required gates remain enabled.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
