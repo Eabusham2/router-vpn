@@ -8,6 +8,7 @@ separate native runner owns all source inventories and protocol verdicts.
 import ast
 import copy
 import contextlib
+import importlib.util
 import fnmatch
 import os
 from pathlib import Path
@@ -18,6 +19,10 @@ import textwrap
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+DRIVER_SPEC = importlib.util.spec_from_file_location('imported_native_driver_fixture',
+    ROOT/'deploy/test_mobile_imported_socks_xray_runner.py')
+DRIVER = importlib.util.module_from_spec(DRIVER_SPEC)
+DRIVER_SPEC.loader.exec_module(DRIVER)
 BUILDER = ROOT/'deploy/build-native-runtime.py'
 WORKFLOW = ROOT/'.github/workflows/imported-socks-reality-native.yml'
 PQ_WORKFLOW = ROOT/'.github/workflows/imported-pq-reality-native.yml'
@@ -74,14 +79,15 @@ def capture_native(source, target, failure=None):
         stage = command[-1] if name == GATE and command[-1].startswith('--') else name
         if failure == stage:
             raise RuntimeError('modeled subprocess failure: '+stage)
-    namespace = dict(ROOT=ROOT, sys=sys, target=target, source=Path('captured-core'),
-                     pq=Path('captured-pq'), cache=None, env={'CAPTURED_ENV': '1'}, run=run)
+    namespace, loader, phases = DRIVER.native_stage_namespace(target=target, source=Path('captured-core'),
+                     pq=Path('captured-pq'), env={'CAPTURED_ENV': '1'}, run=run)
     try:
         exec(compile(native_stage(source), str(BUILDER), 'exec'), namespace)
     except RuntimeError as error:
         if failure is None or not str(error).startswith('modeled subprocess failure: '):
             raise
         return calls, error
+    DRIVER.require_native_stage_phases(namespace, loader, phases)
     return calls, None
 
 

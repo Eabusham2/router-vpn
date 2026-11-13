@@ -868,6 +868,23 @@ for the future explicit Save boundary; the result-review lifetime and complete
 transactional Save are the next unit. Public macOS capability is not opened by
 this source change and still requires both real installed/generated native gates.
 
+## Imported protocol workflow fixtures retain both Windows stages
+
+The d030a147 Naive H3 run passed Apple source graphs and both protected Windows
+native architectures, including their aggregate. Its separate imported reference
+job 131628935095 then failed the workflow fixture before reference execution:
+the fixture lacked the new Windows source loader, and its physical-stage
+selector matched both the source and physical `execute_partitioned` branches.
+
+The PQ, XHTTP, Naive H2 and Naive H3 workflow fixtures now use the same explicit
+recorded source-phase boundary as the imported runner fixtures. H3 identifies
+the original physical orchestrator specifically before checking its following
+H3 and PQ gates. The exact host condition, unique physical caller, command order,
+original source/environment, individual bounds and failure propagation remain
+mandatory. Forty-five workflow checks passed in 2.933 seconds, including the
+original missing-gate, substituted-budget and child-failure controls. Production
+build code, protocol inventories and native verdict requirements are unchanged.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
