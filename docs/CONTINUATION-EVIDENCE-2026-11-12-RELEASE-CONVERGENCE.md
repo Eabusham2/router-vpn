@@ -1251,6 +1251,28 @@ removing the explicit ordinary-Ready refusal failed at both original Linux
 and Windows false-upgrade witnesses. Native child execution, owned teardown,
 API integration and public UI activation are separate subsequent work.
 
+## Windows and GTK retain exact saved-test reply purpose
+
+The Windows and GTK saved-path dialogs now require the original scope, schema,
+selected prefix and routed-TCP measurement on catalog and every Run, Poll,
+Save and Cancel response. Responses must explicitly confirm that the active
+path was unchanged and match the captured catalog purpose. Missing numeric
+fields cannot become prefix zero, and string/boolean values cannot substitute
+for protocol numbers. Validation happens before recording a saved profile or
+releasing native-operation ownership. AppKit already enforced these boundaries.
+
+The actual composed Windows callbacks passed 86 candidate checks and the
+existing 38 Performance checks. GTK's shipping compiled guards passed 38
+checks and all five causal controls; the additional controls remove scope and
+prefix validation independently. Its complete real-widget fixture includes
+foreign-purpose and missing-prefix catalogs plus rejected Run/Poll/Save/Cancel
+replies that must preserve the original reservation and committed-write state.
+That widget fixture compiled with warnings as errors; actual display execution
+remains a CI requirement because local AF_UNIX creation is denied. Existing
+native-DOWN review, never-admitted cancellation, saved-write retention and
+measurement-expiry behavior remain exercised. Prefix-only UI activation is
+not part of this current complete-saved protocol repair.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

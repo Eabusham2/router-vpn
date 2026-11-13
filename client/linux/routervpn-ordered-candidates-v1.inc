@@ -25,6 +25,12 @@ static double linux_oc_score(JsonObject *o,gint64 now){
 }
 static JsonObject*linux_oc_root(JsonNode*n){return n&&JSON_NODE_HOLDS_OBJECT(n)?json_node_get_object(n):NULL;}
 static const char*linux_oc_base(LinuxOrderedCandidates*s){return s->saved_path?"/api/multihop/saved-candidates":"/api/multihop/prefix-candidates";}
+static gboolean linux_oc_saved_envelope(LinuxOrderedCandidates*s,JsonObject*o,gboolean catalog){
+    if(strcmp(linux_ec_string(o,"scope"),"saved-complete-local")||linux_ec_number(o,"schema")!=1||linux_ec_number(o,"prefix_position")!=s->position||strcmp(linux_ec_string(o,"measurement"),"routed-tcp-connect"))return FALSE;
+    if(catalog)return linux_ec_number(o,"samples")==50;
+    JsonNode*changed=linux_ec_member(o,"active_path_changed");
+    return changed&&JSON_NODE_HOLDS_VALUE(changed)&&json_node_get_value_type(changed)==G_TYPE_BOOLEAN&&!json_node_get_boolean(changed)&&strcmp(linux_ec_string(linux_oc_root(s->view),"scope"),linux_ec_string(o,"scope"))==0;
+}
 static gboolean linux_oc_before_start(JsonObject*o){
     JsonNode*started=linux_ec_member(o,"started");
     return linux_ec_bool(o,"admission_cancelled")&&started&&JSON_NODE_HOLDS_VALUE(started)&&json_node_get_value_type(started)==G_TYPE_BOOLEAN&&!json_node_get_boolean(started);
@@ -32,7 +38,7 @@ static gboolean linux_oc_before_start(JsonObject*o){
 static gboolean linux_oc_ready(LinuxOrderedCandidates*s){
     JsonObject*receipt=linux_oc_root(s->receipt);
     if(s->cancel_wanted||s->close_wanted||!linux_ec_bool(receipt,"accepted"))return FALSE;
-    if(s->saved_path)return !linux_oc_before_start(receipt)&&linux_ec_bool(receipt,"native_down")&&linux_ec_bool(receipt,"reviewing")&&!linux_ec_bool(receipt,"cleanup_pending")&&!s->saved_profile[0];
+    if(s->saved_path)return linux_oc_saved_envelope(s,receipt,FALSE)&&!linux_oc_before_start(receipt)&&linux_ec_bool(receipt,"native_down")&&linux_ec_bool(receipt,"reviewing")&&!linux_ec_bool(receipt,"cleanup_pending")&&!s->saved_profile[0];
     return !s->pending;
 }
 static JsonObject*linux_oc_result(LinuxOrderedCandidates*s,const char*id){
@@ -92,6 +98,7 @@ static void linux_oc_rows(LinuxOrderedCandidates*s,gboolean measured){
 }
 static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase){
     if(phase==1){
+        if(s->saved_path&&!linux_oc_saved_envelope(s,o,TRUE))return FALSE;
         const char*token=linux_ec_string(o,"view_token");JsonArray*choices=linux_ec_array(o,"candidates");double expires=linux_ec_number(o,"expires_at");
         if(!linux_ec_token(token,64)||linux_ec_number(o,"prefix_position")!=s->position||!isfinite(expires)||expires<=g_get_real_time()/1000||!choices||json_array_get_length(choices)<1)return FALSE;
         gtk_list_store_clear(s->store);if(s->view)json_node_free(s->view);s->view=json_node_new(JSON_NODE_OBJECT);json_node_set_object(s->view,o);
@@ -100,6 +107,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
         s->saved_profile[0]=0;linux_oc_rows(s,FALSE);gtk_label_set_text(GTK_LABEL(s->status),s->saved_path?"Test the complete saved Local path temporarily. It must return to Disconnected before future-profile choices appear.":"Select saved candidates and test through this captured packet prefix.");return TRUE;
     }
     if(s->saved_path){
+        if(!linux_oc_saved_envelope(s,o,FALSE))return FALSE;
         if(strcmp(linux_ec_string(o,"request_id"),s->request)||strcmp(linux_ec_string(o,"view_token"),linux_ec_string(linux_oc_root(s->view),"view_token")))return FALSE;
         if(linux_oc_before_start(o)&&s->saved_admitted)return FALSE;
         if(linux_ec_bool(o,"running")||linux_ec_bool(o,"started")||linux_ec_bool(o,"native_down")||linux_ec_bool(o,"reviewing"))s->saved_admitted=TRUE;

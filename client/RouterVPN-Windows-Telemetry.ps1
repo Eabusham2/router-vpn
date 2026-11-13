@@ -267,6 +267,17 @@ function OrderedCandidateScore($Row,[long]$Now){
 function OrderedCandidateBase($S){
  if([bool](ExternalComparisonValue $S 'SavedPath')){return '/api/multihop/saved-candidates'};return '/api/multihop/prefix-candidates'
 }
+function OrderedCandidateNumber($Value,[string]$Key){
+ $N=ExternalComparisonValue $Value $Key
+ if($N-isnot[int]-and$N-isnot[long]-and$N-isnot[double]-and$N-isnot[decimal]){return [double]::NaN}
+ $Number=[double]$N;if([double]::IsNaN($Number)-or[double]::IsInfinity($Number)){return [double]::NaN};return $Number
+}
+function OrderedCandidateSavedEnvelope($S,$Value,[bool]$Catalog=$false){
+ if([string](ExternalComparisonValue $Value 'scope')-cne'saved-complete-local'-or(OrderedCandidateNumber $Value 'schema')-ne1-or(OrderedCandidateNumber $Value 'prefix_position')-ne$S.Position-or[string](ExternalComparisonValue $Value 'measurement')-cne'routed-tcp-connect'){return $false}
+ if($Catalog){return (OrderedCandidateNumber $Value 'samples')-eq50}
+ $Changed=ExternalComparisonValue $Value 'active_path_changed'
+ return $Changed-is[bool]-and-not$Changed-and[string](ExternalComparisonValue $S.View 'scope')-ceq[string](ExternalComparisonValue $Value 'scope')
+}
 function OrderedCandidateBeforeStart($Value){
  $Started=ExternalComparisonValue $Value 'started';$Cancelled=ExternalComparisonValue $Value 'admission_cancelled'
  return $Cancelled-is[bool]-and$Cancelled-and$Started-is[bool]-and-not$Started
@@ -276,7 +287,7 @@ function OrderedCandidateCancelBody($S){
 }
 function OrderedCandidateReady($S){
  if($S.CancelWanted-or$S.CloseWanted-or$null-eq$S.Receipt-or-not[bool](ExternalComparisonValue $S.Receipt 'accepted')){return $false}
- if([bool](ExternalComparisonValue $S 'SavedPath')){return -not(OrderedCandidateBeforeStart $S.Receipt)-and[bool](ExternalComparisonValue $S.Receipt 'native_down')-and[bool](ExternalComparisonValue $S.Receipt 'reviewing')-and-not[bool](ExternalComparisonValue $S.Receipt 'cleanup_pending')-and-not[string](ExternalComparisonValue $S 'SavedProfileID')}
+ if([bool](ExternalComparisonValue $S 'SavedPath')){return (OrderedCandidateSavedEnvelope $S $S.Receipt)-and-not(OrderedCandidateBeforeStart $S.Receipt)-and[bool](ExternalComparisonValue $S.Receipt 'native_down')-and[bool](ExternalComparisonValue $S.Receipt 'reviewing')-and-not[bool](ExternalComparisonValue $S.Receipt 'cleanup_pending')-and-not[string](ExternalComparisonValue $S 'SavedProfileID')}
  return -not$S.PendingDrain
 }
 function SetOrderedCandidateControls($S){
@@ -297,12 +308,14 @@ function StartOrderedCandidateRequest($S,[string]$Phase,[string]$Path,$Body=$nul
 function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
  $SavedPath=[bool](ExternalComparisonValue $S 'SavedPath')
  if($Phase-ceq'catalog'){
+  if($SavedPath-and-not(OrderedCandidateSavedEnvelope $S $Value $true)){throw 'The catalog belongs to another saved-path purpose or prefix.'}
   if(-not(ExternalComparisonToken ([string]$Value.view_token) 64)-or[int]$Value.prefix_position-ne$S.Position-or[long]$Value.expires_at-le[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()){throw 'The saved catalog is expired or belongs to another prefix.'}
   $S.View=$Value;$S.Receipt=$null;$S.Rows=@();foreach($C in @($Value.candidates)){$S.Rows+= [pscustomobject]@{Name=[string]$C.name;ID=[string]$C.id;Timing='Not tested';Choice=$C;Receipt=$null}}
   $S.Table.ItemsSource=$S.Rows;$S.Prefix.ItemsSource=@($Value.prefixes|ForEach-Object{[pscustomobject]@{position=[int]$_.position;display=('After node '+([int]$_.position+1)+' · '+[string]$_.name+' · '+[string]$_.mode)}});$S.Prefix.SelectedValue=$S.Position
   $S.SavedProfileID='';$S.Status.Text=if($SavedPath){'Test the complete saved Local path temporarily. It must return to Disconnected before future-profile choices appear.'}else{'Select candidates, then test 50 TCP handshakes through this connected prefix.'};return
  }
  if($SavedPath){
+  if(-not(OrderedCandidateSavedEnvelope $S $Value)){throw 'The response changed its original saved-path purpose or prefix.'}
   if([string](ExternalComparisonValue $Value 'request_id')-cne$S.RequestID-or[string](ExternalComparisonValue $Value 'view_token')-cne[string]$S.View.view_token){throw 'Saved-path response belongs to another captured test.'}
   if((OrderedCandidateBeforeStart $Value)-and[bool](ExternalComparisonValue $S 'SavedAdmitted')){throw 'A previously admitted test still requires its original native shutdown.'}
   if([bool](ExternalComparisonValue $Value 'running')-or[bool](ExternalComparisonValue $Value 'started')-or[bool](ExternalComparisonValue $Value 'native_down')-or[bool](ExternalComparisonValue $Value 'reviewing')){$S.SavedAdmitted=$true}
