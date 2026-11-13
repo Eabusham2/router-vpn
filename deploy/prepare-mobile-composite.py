@@ -39,7 +39,7 @@ def prepare(vendor):
     registry = vendor / 'include/registry.go'
     if target.is_symlink() or not target.resolve().is_relative_to(vendor) or registry.is_symlink():
         raise ValueError('linked or escaped native composite destination')
-    text = registry.read_text()
+    text = registry.read_text(encoding='utf-8')
     text = insert_once(text, '\t"github.com/sagernet/sing-box/protocol/group"', '\t"github.com/sagernet/sing-box/protocol/routervpncomposite"',
                        neighbour='\t"github.com/sagernet/sing-box/protocol/routervpnchaingate"')
     text = insert_once(text, '\tgroup.RegisterURLTest(registry)', '\troutervpncomposite.RegisterOutbound(registry)')

@@ -63,7 +63,7 @@ def prepare(vendor):
     PACKET.prepare(vendor)
     WIREGUARD_BIND.prepare(vendor)
     prepare_policies(vendor)
-    registry=vendor/'include/registry.go';text=registry.read_text()
+    registry=vendor/'include/registry.go';text=registry.read_text(encoding='utf-8')
     for old,extra in [('"github.com/sagernet/sing-box/protocol/tor"','\n\t"github.com/sagernet/sing-box/protocol/routervpnamnezia"'),
                       ('\tregisterWireGuardEndpoint(registry)','\n\troutervpnamnezia.RegisterEndpoint(registry)')]:
         if text.count(old)!=1:raise ValueError('native AWG registration boundary changed')
@@ -72,7 +72,7 @@ def prepare(vendor):
             text=text.replace(old,old+extra,1)
     output=vendor/'protocol/routervpnamnezia';output.mkdir(parents=True,exist_ok=True)
     for path in (ROOT/'mobile/amnezia').glob('*.tmpl'):(output/path.name.removesuffix('.tmpl')).write_bytes(path.read_bytes())
-    registry.write_text(text)
+    registry.write_bytes(text.encode('utf-8'))
     subprocess.run(['go','mod','edit','-require='+MODULE+'@'+VERSION],cwd=vendor,check=True)
     TIMERS.prepare(vendor)
     print('Native AmneziaWG endpoint:',VERSION,digest())

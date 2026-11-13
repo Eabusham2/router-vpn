@@ -40,7 +40,7 @@ def prepare(vendor):
     vendor=vendor.resolve()
     checkout(vendor)
     registry=vendor/'include/registry.go'
-    text=registry.read_text()
+    text=registry.read_text(encoding='utf-8')
     old='\t"github.com/sagernet/sing-box/protocol/shadowsocks"'
     text=replace_once(text,old,old+'\n\t"github.com/sagernet/sing-box/protocol/routervpnwhitening"')
     old='\tshadowsocks.RegisterOutbound(registry)'
@@ -52,7 +52,7 @@ def prepare(vendor):
     for p in (ROOT/'mobile/startwhitening').glob('*.tmpl'):
         if p.name in STREAM.TEMPLATES: continue
         (adapter/p.name.removesuffix('.tmpl')).write_bytes(p.read_bytes())
-    registry.write_text(text)
+    registry.write_bytes(text.encode('utf-8'))
     print('Native authenticated Start Layer source:',digest())
 
 if __name__=='__main__':

@@ -81,14 +81,14 @@ def prepare(sing, xray):
     (sing/'experimental/libbox/routervpn_xray_compiler_test.go').write_bytes((ROOT/'mobile/applexray/bridge_test.go.tmpl').read_bytes())
     (xray/'core/routervpn_packet.go').write_bytes((ROOT/'mobile/applexray/core_packet.go.tmpl').read_bytes())
     registry=sing/'include/registry.go'
-    text=registry.read_text()
+    text=registry.read_text(encoding='utf-8')
     anchor='\t"github.com/sagernet/sing-box/protocol/vless"'
     call='\tvless.RegisterOutbound(registry)'
     native_import='\t"github.com/sagernet/sing-box/protocol/routervpnxray"'
     native_call='\troutervpnxray.RegisterOutbound(registry)'
     text=insert_once(text,anchor,native_import,'native outbound import')
     text=insert_once(text,call,native_call,'native outbound registration')
-    registry.write_text(text)
+    registry.write_bytes(text.encode('utf-8'))
     # Upstream REALITY normally spawns a decoy HTTP crawler after receiving an
     # ordinary certificate instead of its authenticated REALITY response. A
     # native VPN must fail immediately, not retain a detached unverified socket.

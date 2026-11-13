@@ -290,7 +290,7 @@ def prepare(vendor, go='go'):
                 if child.is_symlink() or child.is_file() and str(child.relative_to(vendor)) not in previous and str(child.relative_to(vendor)) not in content:
                     raise ValueError('Unowned file in native Tor generated namespace')
     registry = destination(vendor, 'include/registry.go')
-    registry_text = insert_once(registry.read_text(), '\t"'+MODULE+'/protocol/socks"', '\t"'+MODULE+'/protocol/routervpntor"')
+    registry_text = insert_once(registry.read_text(encoding='utf-8'), '\t"'+MODULE+'/protocol/socks"', '\t"'+MODULE+'/protocol/routervpntor"')
     registry_text = insert_once(registry_text, '\tsocks.RegisterOutbound(registry)', '\troutervpntor.RegisterOutbound(registry)')
     dns_adapter = destination(vendor, 'dns/transport_adapter.go')
     dns_adapter_source = bootstrap_dns_source(vendor, (ROOT/'mobile/toroutbound/dns_adapter.go.tmpl').read_bytes())
@@ -303,7 +303,7 @@ def prepare(vendor, go='go'):
         path.write_bytes(data)
     for relative in set(previous)-set(content):
         destination(vendor, relative).unlink()
-    registry.write_text(registry_text)
+    registry.write_bytes(registry_text.encode('utf-8'))
     dns_adapter.write_bytes(dns_adapter_source)
     owner_path.write_text(json.dumps(dict(schema=1, core=CORE, source_sha256=digest(),
         dns_adapter_sha256=hashlib.sha256(dns_adapter_source).hexdigest(),

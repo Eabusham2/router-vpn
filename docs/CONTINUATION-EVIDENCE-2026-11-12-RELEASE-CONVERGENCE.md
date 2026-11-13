@@ -764,6 +764,23 @@ this local environment. It is not recorded as a native pass. The encrypted
 hosted gate must establish whether this fixes its observed construction failure
 and still prove selected DNS, all encrypted hops and joined Stop.
 
+## All shared native registry writers preserve the same bytes
+
+Following the observed Windows composite failure, the other production writers
+of the same `include/registry.go` were checked. Whitening, AmneziaWG, performance,
+Xray and Tor preparation could each reintroduce host text newline translation
+after another preparer had produced the canonical registry. All five now write
+explicit UTF-8 bytes; these writers and composite also decode the registry with
+explicit UTF-8. Other source transformations, exact pins, registration anchors
+and the ordered gate's strict validation are unchanged.
+
+Forty focused preparation/composition checks passed in 3.174 seconds, covering
+whitening, Xray, performance, native runner dependencies, composite and Tor's
+module graph. This includes the existing Windows text-translation regression
+for actual gate/composite preparation in both orders, exact copy/idempotence
+checks and original malformed-source refusal cases. This local preparation
+evidence does not replace real Windows native compilation or traffic acceptance.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

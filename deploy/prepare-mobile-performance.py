@@ -14,7 +14,7 @@ def digest():
 def prepare(vendor):
     vendor=vendor.resolve()
     if subprocess.check_output(['git','-C',str(vendor),'rev-parse','HEAD'],text=True).strip()!=PIN:raise ValueError('performance requires exact native core')
-    registry=vendor/'include/registry.go';source=registry.read_text()
+    registry=vendor/'include/registry.go';source=registry.read_text(encoding='utf-8')
     for anchor,addition in [('"github.com/sagernet/sing-box/service/ssmapi"','\n\t"github.com/sagernet/sing-box/service/routervpnperformance"'),
                             ('\tssmapi.RegisterService(registry)','\n\troutervpnperformance.RegisterService(registry)')]:
         if source.count(anchor)!=1:raise ValueError('performance registration boundary changed')
@@ -26,7 +26,7 @@ def prepare(vendor):
     (directory/'service_test.go').write_bytes((ROOT/'mobile/performance/service_test.go.tmpl').read_bytes())
     (vendor/'routervpn_services.go').write_bytes((ROOT/'mobile/performance/box.go.tmpl').read_bytes())
     (vendor/'experimental/libbox/routervpn_performance.go').write_bytes((ROOT/'mobile/performance/bridge.go.tmpl').read_bytes())
-    registry.write_text(source)
+    registry.write_bytes(source.encode('utf-8'))
     network=vendor/'route/network.go';text=network.read_text();anchor='\tfor _, endpoint := range r.endpoint.Endpoints() {'
     addition='''\t// Invalidate native performance proofs before endpoints rebind.
 \tif manager := service.FromContext[adapter.ServiceManager](r.ctx); manager != nil {
