@@ -54,6 +54,13 @@ func(c *routerVPNNodeChainExecutionRuntime)run(context.Context)error{return rout
 func(c *routerVPNNodeChainExecutionRuntime)attachMTU(context.Context,*routerVPNNodeMTU,*fixturePhysical)error{return routerVPNExternalFailure}
 func(c *routerVPNNodeChainExecutionRuntime)loopCurrent(context.Context)error{if c!=nil{return routerVPNExternalFailure};return nil}
 func(c *routerVPNNodeChainExecutionRuntime)heartbeat(context.Context,routerVPNNodeMTURecord)error{if c!=nil{return routerVPNExternalFailure};return nil}
+// The ordinary heartbeat fixture cannot construct a selected-prefix owner.
+// Preserve its nil path while refusing every attempted nonnil prefix admission.
+type routerVPNNodeCandidatePrefixRuntime struct{}
+func(c *routerVPNNodeCandidatePrefixRuntime)attach(context.Context,*routerVPNNodeMTU)error{return routerVPNExternalFailure}
+func(c *routerVPNNodeCandidatePrefixRuntime)current(context.Context)error{if c!=nil{return routerVPNExternalFailure};return nil}
+func(c *routerVPNNodeCandidatePrefixRuntime)pollCandidates(context.Context)error{if c!=nil{return routerVPNExternalFailure};return nil}
+func(c *routerVPNNodeCandidatePrefixRuntime)heartbeat(context.Context,routerVPNNodeMTURecord)error{if c!=nil{return routerVPNExternalFailure};return nil}
 func newRouterVPNNodeMTUContext(ctx context.Context,b *routerVPNNodeMTUBox,_,_,_ string,guard func(context.Context)error)(*routerVPNNodeMTU,error){
  o:=&routerVPNNodeMTU{native:b.instance.native,guard:guard};b.instance.owner=o;return o,guard(ctx)
 }
@@ -186,7 +193,7 @@ def execute():
     source = (ROOT/'mobile/desktop/mtu_node.go.tmpl').read_text()
     loop = '\n'.join(function(source, signature) for signature in (
         'func routerVPNRunNodeMTULoop(', 'func routerVPNRunNodeMTULoopWithChain(',
-        'func routerVPNRunNodeMTULoopWithOwners('))
+        'func routerVPNRunNodeMTULoopWithOwners(', 'func routerVPNRunNodeMTULoopWithPrefix('))
     # Only native namespace/type aliases change; production control flow stays exact.
     for before, after in [('box.RouterVPNDesktopNodePhysical', 'fixturePhysical'), ('box.Box', 'fixtureBox'),
                           ('adapter.RouterVPNInboundsContext', 'fixtureInboundsContext'), ('adapter.Inbound', 'fixtureInbound')]:

@@ -1617,6 +1617,28 @@ fixture before reporting failure. The original early-cancellation and routed
 probe-cancellation regressions also passed. The published source hashes match
 the tested snapshot.
 
+## Linux heartbeat fixture follows the shipping prefix-aware loop
+
+Exact-`c6b963b5e55b74ae691dd754c34c3554ad7875b1` Linux ARM64 job
+`131728757857` in run `43377910429` failed before the installed 38-case gate.
+The portable heartbeat fixture extracted the ordinary MTU-loop wrapper but
+omitted its newer `routerVPNRunNodeMTULoopWithPrefix` dependency, producing
+an undefined-function compiler error. The fixture now extracts that exact
+shipping body and supplies explicit nil-only prefix boundaries. Every nonnil
+prefix is refused by this ordinary heartbeat fixture; it cannot supply native
+prefix acceptance. Production heartbeat, cancellation and freshness bounds
+are unchanged.
+
+An immutable capture of the six fixture inputs at that source, with the one
+corrected Python file, passed both actual heartbeat roots and all 13 leaves
+under the race detector. All five separately compiled causal controls rejected
+the original missing-deadline, terminal-expiry, stale-publication, missing
+post-query-observation and extended-freshness behaviors at their required
+assertions. The complete gate exited successfully in 4.986 seconds, and all
+captured input hashes remained unchanged. This repairs the demonstrated Linux
+prerequisite; it does not establish installed networking acceptance. The
+Windows runtime lane does not invoke this Linux-only prerequisite.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
