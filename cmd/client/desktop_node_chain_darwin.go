@@ -960,6 +960,14 @@ func (owner *desktopNodeChainPlatformRuntime) close(ctx context.Context) error {
 	return owner.host.Close(ctx)
 }
 
+func (owner *desktopNodeChainPlatformRuntime) closePreparation(ctx context.Context, p *orderedCandidatePreparation) error {
+	if owner == nil || owner.host == nil || p == nil || p.launch == nil || p.launch.chain == nil ||
+		owner.host.launch != p.launch || p.launch.chain.platform != owner || p.launch.chain.preparation != p {
+		return errors.New("macOS candidate disconnect lost its captured original host")
+	}
+	return owner.host.Close(ctx) // Existing disconnect preserves Always and releases on-connect.
+}
+
 func (owner *desktopNodeChainPlatformRuntime) processDone() <-chan struct{} {
 	if owner == nil || owner.host == nil || owner.host.process == nil {
 		return nil

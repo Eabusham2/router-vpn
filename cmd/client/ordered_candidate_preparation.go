@@ -39,10 +39,14 @@ type orderedCandidatePreparation struct {
 	observeNetwork    func(context.Context) (string, error)
 	mu                sync.Mutex // lifecycle; if both are needed, acquire before app.mu
 	launch            *desktopNodeLaunch
+	runtime           *orderedCandidatePreparedRuntime
 	workerDone        <-chan struct{}
 	pending           error
 	releaseLease      func()
 	down              bool
+	nativeDown        bool
+	workspaceDown     bool
+	windowsRelease    *orderedCandidateWindowsRelease
 	finishOnce        sync.Once
 	finishError       error
 	invalidated       atomic.Bool

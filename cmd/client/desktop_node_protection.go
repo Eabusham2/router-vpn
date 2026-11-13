@@ -254,6 +254,11 @@ func (s *desktopNodeProtectionSlot) release(ctx context.Context) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.releaseLocked(ctx)
+}
+
+// Caller retains the original slot lock across its capture check and release.
+func (s *desktopNodeProtectionSlot) releaseLocked(ctx context.Context) error {
 	if !s.known || s.active != nil || s.off != nil || s.backend.read == nil || s.backend.release == nil {
 		return errors.New("native protection is still active or unknown")
 	}

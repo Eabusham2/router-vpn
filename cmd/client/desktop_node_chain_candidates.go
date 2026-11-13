@@ -107,8 +107,19 @@ func finishDesktopNodeChainCandidateRetirement(retirement *desktopNodeChainCandi
 // before renewing its bounded pulse and before adopting the completed receipt.
 // Every failure joins or retains the original measurement/MTU owner.
 func exchangeDesktopNodeChainCandidate(parent context.Context, catalog *desktopNodeChainCandidateCatalog, id string) (hopmeasure.CandidateStatus, error) {
+	if catalog == nil {
+		return hopmeasure.CandidateStatus{}, errors.New("candidate measurement requires its complete original catalog")
+	}
+	return exchangeDesktopNodeChainCandidateObserved(parent, catalog, id, catalog.current, catalog.pulseCurrent)
+}
+
+// Both callers retain their concrete original observation: the ordinary
+// connected catalog above, or the separately typed temporary native runtime.
+// The child protocol, fifty-sample validation and exact drain are shared.
+func exchangeDesktopNodeChainCandidateObserved(parent context.Context, catalog *desktopNodeChainCandidateCatalog, id string,
+	current, pulseCurrent func(context.Context) error) (hopmeasure.CandidateStatus, error) {
 	var empty hopmeasure.CandidateStatus
-	if parent == nil || parent.Err() != nil || catalog == nil || catalog.plan == nil || catalog.launch == nil || catalog.launch.chain == nil || catalog.profiles[id] == "" {
+	if parent == nil || parent.Err() != nil || catalog == nil || catalog.plan == nil || catalog.launch == nil || catalog.launch.chain == nil || catalog.profiles[id] == "" || current == nil || pulseCurrent == nil {
 		return empty, errors.New("candidate measurement requires its complete original catalog")
 	}
 	ctx, cancel := context.WithTimeout(parent, hopmeasure.RequestTimeout)
@@ -124,7 +135,7 @@ func exchangeDesktopNodeChainCandidate(parent context.Context, catalog *desktopN
 	if pending {
 		return empty, errDesktopNodeChainMeasurementPending
 	}
-	if err := catalog.current(ctx); err != nil {
+	if err := current(ctx); err != nil {
 		return empty, err
 	}
 	live, err := readDesktopNodeMTUContext(ctx, launch)
@@ -163,7 +174,7 @@ func exchangeDesktopNodeChainCandidate(parent context.Context, catalog *desktopN
 		InventorySHA: catalog.inventorySHA, Path: live.Path, Capture: capture}
 	raw, _ := json.Marshal(request)
 	check := func(call context.Context) error {
-		if err := catalog.pulseCurrent(call); err != nil {
+		if err := pulseCurrent(call); err != nil {
 			return err
 		}
 		after, err := readDesktopNodeMTUContext(call, launch)
@@ -330,7 +341,7 @@ func exchangeDesktopNodeChainCandidate(parent context.Context, catalog *desktopN
 			if err := check(ctx); err != nil {
 				return empty, err
 			}
-			if err := catalog.current(ctx); err != nil {
+			if err := current(ctx); err != nil {
 				return empty, err
 			}
 			if err := validateDesktopNodeChainCandidateStatus(catalog.plan, id, result.Status, time.Now()); err != nil {

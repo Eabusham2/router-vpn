@@ -836,6 +836,38 @@ seconds. The original Android failure was reproduced locally before the change.
 No native test, production deadline or receipt validator was removed or relaxed.
 Actual APK completion remains a later hosted-build result.
 
+## Desktop temporary saved-graph runtime and exact retirement
+
+The dedicated desktop preparation now drives its captured native preflight,
+staging, start, complete graph/prefix/DNS proof and measurement exchange. Its
+separate observation retains the original graph, runtime, native MTU/routing
+receipt, source inventory and physical-network tracker. It does not satisfy the
+ordinary Connected catalog or record ordinary startup usage. Fifty-sample
+validation, cancellation and pending native drain still use the existing child
+protocol; only the temporary observation authority differs.
+
+Native retirement is separate from later result review. Linux uses its exact
+captured host's disconnect retirement, with the session gate rechecking host
+identity. Darwin keeps its existing exact-host Close. Windows waits for its
+captured child/protection join, then retains the original slot mutex while
+checking session, source, policy, target and release generation. It releases
+only its own on-connect successor, preserves Always and any untouched
+predecessor, and retains a failed release transaction for retry. Replacement
+commands, graphs and protection targets are never discovered for cleanup.
+
+Twenty-four focused race-test roots passed in 121.055 seconds: eight original
+preparation roots, seven temporary runtime/retirement roots and nine existing
+protection roots. A separately compiled omission of the successor check failed
+all four source/session/baseline/policy cases at the intended foreign-target
+release witness. These tests use the identified source and modeled native
+boundaries; this environment did not execute the actual platform tunnel.
+
+This runtime is still dormant until the public request/result and native UI
+wiring is committed. The physical observer remains retained after native DOWN
+for the future explicit Save boundary; the result-review lifetime and complete
+transactional Save are the next unit. Public macOS capability is not opened by
+this source change and still requires both real installed/generated native gates.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

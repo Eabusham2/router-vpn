@@ -316,6 +316,31 @@ func (owner *desktopNodeChainPlatformRuntime) close(ctx context.Context) error {
 	return h.Close(ctx)
 }
 
+func (owner *desktopNodeChainPlatformRuntime) closePreparation(ctx context.Context, p *orderedCandidatePreparation) error {
+	if owner == nil || owner.host == nil || p == nil || p.launch == nil || p.launch.chain == nil ||
+		owner.host.launch != p.launch || p.launch.chain.platform != owner || p.launch.chain.preparation != p {
+		return errors.New("Linux candidate disconnect lost its captured original host")
+	}
+	h := owner.host
+	if !owner.registered {
+		return owner.close(ctx)
+	}
+	if owner.session != nil {
+		if err := owner.session.enter(ctx); err != nil {
+			return err
+		}
+		selected := owner.session.active == h
+		owner.session.gate <- struct{}{}
+		if selected {
+			return owner.session.Retire(ctx, h, true)
+		}
+	}
+	if err := h.Retire(ctx, true); err != nil {
+		return err
+	}
+	return h.Close(ctx)
+}
+
 func (owner *desktopNodeChainPlatformRuntime) processDone() <-chan struct{} {
 	if owner == nil || owner.host == nil || owner.host.process == nil {
 		return nil

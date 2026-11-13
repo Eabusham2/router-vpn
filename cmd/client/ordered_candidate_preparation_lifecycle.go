@@ -119,10 +119,37 @@ func (p *orderedCandidatePreparation) retire(ctx context.Context) error {
 		return errors.New("candidate retirement lost its original owner")
 	}
 	p.cancel()
+	if err := p.retireNative(ctx); err != nil {
+		return err
+	}
+	if p.runtime != nil {
+		if err := p.runtime.closeCohort(); err != nil {
+			return err
+		}
+	}
 	if err := desktopnetwork.LockContext(ctx, &p.mu); err != nil {
 		return err
 	}
-	if p.down {
+	defer p.mu.Unlock()
+	if err := desktopnetwork.LockContext(ctx, &p.app.mu); err != nil {
+		return err
+	}
+	defer p.app.mu.Unlock()
+	if p.app.candidatePreparation == p {
+		p.app.candidatePreparation = nil
+	}
+	p.down = true
+	return ctx.Err()
+}
+
+// Only the native worker/graph/lease retire here. A successful result retains
+// its physical observer and candidate reservation until explicit Save, Cancel
+// or expiry joins that observer. Full retirement above closes both lifetimes.
+func (p *orderedCandidatePreparation) retireNative(ctx context.Context) error {
+	if err := desktopnetwork.LockContext(ctx, &p.mu); err != nil {
+		return err
+	}
+	if p.nativeDown {
 		p.mu.Unlock()
 		return ctx.Err()
 	}
@@ -153,6 +180,11 @@ func (p *orderedCandidatePreparation) retire(ctx context.Context) error {
 		p.pending = nil
 		p.mu.Unlock()
 	}
+	if p.runtime != nil {
+		// A lost physical cohort invalidates results but cannot prevent this
+		// original owner from joining its own native child and protection.
+		p.runtime.beforeNativeDown(ctx)
+	}
 	if launch != nil {
 		if launch.chain == nil || launch.chain.preparation != p {
 			return errors.New("candidate retirement lost its bound original purpose")
@@ -161,12 +193,25 @@ func (p *orderedCandidatePreparation) retire(ctx context.Context) error {
 			// Socket-free preparation can be cancelled before a native host is staged.
 			clear(launch.config)
 			clear(launch.metadata)
-		} else if err := closeDesktopNodeChainLaunch(ctx, p.app, launch); err != nil {
+		} else if err := closeOrderedCandidateNativeLaunch(ctx, p, launch); err != nil {
 			return err
+		}
+		if launch.ownedNode != nil {
+			if err := p.finishWindowsNativeDown(ctx, launch); err != nil {
+				return err
+			}
 		}
 		// The successful native retirement above owns only this launch. Its
 		// coupled graph can now retire; a replacement registry never matches.
 		retireNativeMultihopGraph(p.app, launch)
+		if p.runtime != nil && p.runtime.graphSet {
+			// Binding can fail after publication. Retire only the exact value
+			// this preparation published, never a discovered replacement.
+			activeMultihopGraphs.CompareAndDelete(p.app, p.runtime.graph)
+		}
+	}
+	if p.runtime != nil {
+		p.runtime.afterNativeDown(ctx)
 	}
 	if err := desktopnetwork.LockContext(ctx, &p.mu); err != nil {
 		return err
@@ -189,10 +234,9 @@ func (p *orderedCandidatePreparation) retire(ctx context.Context) error {
 				p.app.connectionCancelIntent = nil
 			}
 		}
-		p.app.candidatePreparation = nil
 	}
 	release := p.releaseLease
-	p.releaseLease, p.down = nil, true
+	p.releaseLease, p.nativeDown = nil, true
 	p.app.mu.Unlock()
 	p.mu.Unlock()
 	if release != nil {

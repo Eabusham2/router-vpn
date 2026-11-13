@@ -45,4 +45,7 @@ func (*desktopNodeChainPlatformRuntime) activate(context.Context) error {
 func (*desktopNodeChainPlatformRuntime) close(context.Context) error {
 	return errors.New("ordered native platform retirement unavailable")
 }
+func (*desktopNodeChainPlatformRuntime) closePreparation(context.Context, *orderedCandidatePreparation) error {
+	return errors.New("ordered native candidate retirement unavailable")
+}
 func (*desktopNodeChainPlatformRuntime) processDone() <-chan struct{} { return nil }
