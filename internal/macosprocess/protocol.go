@@ -91,7 +91,7 @@ func decodeFrame(raw []byte) (frame, error) {
 	var extra any
 	schema := value.Family.protocolSchema()
 	if decoder.Decode(&extra) != io.EOF || !value.Selection.valid() || value.Schema != schema ||
-		len(seen) != 13+schema || seen["family"] != (value.Family == NodeChainFamily) ||
+		len(seen) != 13+schema || seen["family"] != (schema == 2) ||
 		!longDigest.MatchString(value.Nonce) || value.Sequence > 6 {
 		return value, errors.New("native child frame has another bounded capture")
 	}

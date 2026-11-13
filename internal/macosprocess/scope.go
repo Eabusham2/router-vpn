@@ -8,8 +8,9 @@ import "errors"
 type Family string
 
 const (
-	ExternalFamily  Family = ""
-	NodeChainFamily Family = "ordered-node-chain-v1"
+	ExternalFamily        Family = ""
+	NodeChainFamily       Family = "ordered-node-chain-v1"
+	CandidatePrefixFamily Family = "node-candidate-prefix-v1"
 )
 
 // Scope is the expected policy identity, never a substitute for the original
@@ -29,7 +30,7 @@ func (family Family) protocolSchema() int {
 	switch family {
 	case ExternalFamily:
 		return 1
-	case NodeChainFamily:
+	case NodeChainFamily, CandidatePrefixFamily:
 		return 2
 	default:
 		return 0
@@ -46,6 +47,11 @@ func (scope Scope) inputManifest() ([]scopeInput, error) {
 		// includes its validated capture/projection; no external-policy adapter
 		// or fabricated capture.json participates in this family.
 		return []scopeInput{{"node-chain-source.json", 40 << 20}, {"sing-box.json", 4 << 20}}, nil
+	case CandidatePrefixFamily:
+		// This sealed input retains the full saved path for provenance while
+		// authorizing only its selected packet prefix. Ordinary chain inputs
+		// cannot stand in for this independent, application-closed purpose.
+		return []scopeInput{{"node-candidate-prefix-source.json", 40 << 20}, {"sing-box.json", 4 << 20}}, nil
 	default:
 		return nil, errors.New("native child scope has an unsupported concrete policy family")
 	}

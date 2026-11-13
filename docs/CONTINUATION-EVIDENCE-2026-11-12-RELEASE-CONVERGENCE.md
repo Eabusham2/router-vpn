@@ -1473,6 +1473,12 @@ The retained Windows native job 131664017817 failed the imported MTU controller 
 
 On an immutable source snapshot containing only this correction, all 67 shared MTU roots passed under the race detector (176 verdicts), as did 17 checked-clock roots (45 verdicts) and all 19 imported MTU client roots (105 verdicts). The latter include the real private-peer tests that correspond to the reported Windows failures, including cached Auto/Retest, cancellation, periodic reader and previous-commit rejection. A compiled omission of the captured interval was rejected at the authenticated-packet timing witness. The two source hashes stayed unchanged. These local results are not Windows QPC/kernel acceptance; the actual Windows workflow must rerun this source.
 
+## Darwin captures a distinct prefix process identity
+
+The macOS authenticated process protocol now has a separate candidate-prefix family and private input manifest. Its prefix source cannot be substituted with an ordinary ordered-chain or external-policy input. Readiness transfers bind the complete captured selection using a separate hash domain, and the strict frame decoder preserves the existing legacy external and full-chain schemas while validating the new explicit family.
+
+The complete macosprocess package passed under the race detector. Two compiled defects were rejected: omitting the prefix transfer domain and bypassing the captured family during the handshake. These four files provide the process-identity foundation for the Darwin prefix child and host adapters. They do not enable public prefix admission or establish real PF, utun, encrypted-path or installed-host acceptance.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
