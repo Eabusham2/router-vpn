@@ -30,6 +30,13 @@ BOX_ROOT = "TestRouterVPNNodeMTUSourceJoinsBeforeIrreversibleBoxClose"
 SOURCE_CASES = (SOURCE_ROOT,) + tuple(SOURCE_ROOT + "/" + leaf for leaf in (
     "foreign-policy", "foreign-capture", "non-windows", "expired-caller",
     "held-owner", "pending-retry", "never-prepared"))
+COMBINED_ROOT = "TestRouterVPNNodeCapturedSourceRetirementWithProtection"
+COMBINED_CASES = (COMBINED_ROOT,) + tuple(COMBINED_ROOT + "/" + leaf for leaf in (
+    "foreign-policy", "foreign-capture", "non-windows", "expired-caller",
+    "nil-caller", "wrapped-policy", "held-owner", "pending-retry", "failed-source-retry",
+    "foreign-outcome", "failed-outcome-retry", "policy-after-join", "capture-after-join",
+    "cancel-after-join", "never-prepared", "joined"))
+SOURCE_OPERATION_CASES = SOURCE_CASES + COMBINED_CASES
 BOX_CASES = (BOX_ROOT,) + tuple(BOX_ROOT + "/" + leaf for leaf in (
     "pending-retry", "cancelled-wait", "expired-caller", "permanent-box-failure", "ordinary-external")) + (
     "TestRouterVPNNodeMTUNativeBoxCloseFailureRemainsUnacknowledged",)
@@ -42,7 +49,7 @@ ORIGINAL_CASES = ORIGINAL_ROOTS + tuple(ORIGINAL_ROOTS[0] + "/" + leaf for leaf 
     ("started", "partial-before-admission")) + tuple(ORIGINAL_ROOTS[2] + "/" + leaf for leaf in
     ("lower", "owner", "manager"))
 BASELINES = (
-    ("source-owner", "./routervpn/desktoppt", "^" + SOURCE_ROOT + "$", SOURCE_CASES),
+    ("source-owner", "./routervpn/desktoppt", "^" + SOURCE_ROOT + "(WithProtection)?$", SOURCE_OPERATION_CASES),
     ("source-before-box", "./cmd/sing-box",
      "^TestRouterVPNNodeMTU(SourceJoinsBeforeIrreversibleBoxClose|NativeBoxCloseFailureRemainsUnacknowledged)$", BOX_CASES),
     ("original-physical", "./routervpn/desktoppt",
@@ -53,7 +60,11 @@ CONTROLS = (
     ("node-source-original-policy", "routervpn/desktoppt/node_network.go", "./routervpn/desktoppt",
      SOURCE_ROOT, "foreign-policy", "foreign cleanup acquired original source"),
     ("node-source-original-caller", "routervpn/desktoppt/node_network.go", "./routervpn/desktoppt",
-     SOURCE_ROOT, "pending-retry", "source cleanup widened original caller or three-second bound"))
+     SOURCE_ROOT, "pending-retry", "source cleanup widened original caller or three-second bound"),
+    ("node-source-combined-outcome", "routervpn/desktoppt/node_network.go", "./routervpn/desktoppt",
+     COMBINED_ROOT, "foreign-outcome", "combined cleanup accepted foreign retained WFP outcome"),
+    ("node-source-combined-post-join-owner", "routervpn/desktoppt/node_network.go", "./routervpn/desktoppt",
+     COMBINED_ROOT, "policy-after-join", "combined cleanup ignored changed original owner after join"))
 PROJECTIONS = {
     "external.go.tmpl": "cmd/sing-box/routervpn_external.go",
     "mtu_node.go.tmpl": "cmd/sing-box/routervpn_mtu_node.go",
@@ -440,8 +451,10 @@ def self_tests():
                     with self.assertRaises(ValueError):selected_identity(source,record["source_sha"],output)
 
         def test_exact_inventory_and_original_case(self):
-            self.assertEqual([len(item[3]) for item in BASELINES], [8, 7, 10])
-            self.assertEqual(len(CONTROLS), 3)
+            self.assertEqual([len(item[3]) for item in BASELINES], [25, 7, 10])
+            self.assertEqual((len(SOURCE_CASES), len(COMBINED_CASES)), (8, 17))
+            self.assertEqual(len(set(SOURCE_OPERATION_CASES)), 25)
+            self.assertEqual(len(CONTROLS), 5)
             self.assertIn("TestRouterVPNNodeMTUNativeBoxCloseFailureRemainsUnacknowledged", BOX_CASES)
             self.assertEqual(FAILED_CASE, "max-quic-awg/off/packet-peer")
 
@@ -473,15 +486,38 @@ def self_tests():
                 with self.assertRaises(ValueError):
                     parse(good, "./routervpn/desktoppt", SOURCE_CASES, status, joined)
 
-        def test_control_requires_real_expected_failure_and_exact_witness(self):
-            names = (SOURCE_ROOT, SOURCE_ROOT + "/foreign-policy")
-            witness = CONTROLS[1][5]
-            raw = self.events(names, failure=True, witness=witness)
-            self.assertTrue(parse(raw, "./routervpn/desktoppt", names, 1, True, witness=witness, leaf=names[1])["accepted"])
-            for value, code in ((raw, 0), (raw, 2), (raw.replace(witness, "unrelated failure"), 1),
-                                (raw + "\n[build failed]\n", 1), (raw + "\npanic: test timed out\n", 1)):
+        def test_combined_operation_requires_every_new_owner_and_outcome_record(self):
+            good = self.events(SOURCE_OPERATION_CASES)
+            self.assertTrue(parse(good, "./routervpn/desktoppt", SOURCE_OPERATION_CASES, 0, True)["accepted"])
+            for missing in COMBINED_CASES:
+                with self.subTest(missing=missing), self.assertRaises(ValueError):
+                    parse(self.events(tuple(name for name in SOURCE_OPERATION_CASES if name != missing)),
+                          "./routervpn/desktoppt", SOURCE_OPERATION_CASES, 0, True)
+            for value, code, joined in (
+                    (self.events(SOURCE_OPERATION_CASES + (COMBINED_CASES[-1],)), 0, True),
+                    (good.replace('"Action": "pass"', '"Action": "skip"', 1), 0, True),
+                    (good + "\npanic: unexpected retirement\n", 0, True),
+                    (good, -15, True), (good, 0, False)):
                 with self.assertRaises(ValueError):
-                    parse(value, "./routervpn/desktoppt", names, code, True, witness=witness, leaf=names[1])
+                    parse(value, "./routervpn/desktoppt", SOURCE_OPERATION_CASES, code, joined)
+
+        def test_control_requires_real_expected_failure_and_exact_witness(self):
+            # All source controls, including both post-join guards, must fail
+            # their exact root and leaf with the original assertion witness.
+            for control in CONTROLS[1:]:
+                names = (control[3], control[3] + "/" + control[4])
+                witness = control[5]
+                raw = self.events(names, failure=True, witness=witness)
+                with self.subTest(control=control[0]):
+                    self.assertTrue(parse(raw, "./routervpn/desktoppt", names, 1, True,
+                                          witness=witness, leaf=names[1])["accepted"])
+                    for value, code in ((raw, 0), (raw, 2), (raw, -15),
+                                        (raw.replace(witness, "unrelated failure"), 1),
+                                        (raw + "\n[build failed]\n", 1),
+                                        (raw + "\npanic: test timed out\n", 1)):
+                        with self.assertRaises(ValueError):
+                            parse(value, "./routervpn/desktoppt", names, code, True,
+                                  witness=witness, leaf=names[1])
 
         def test_max_receipt_cannot_drop_failed_case_or_native_scope(self):
             module = Mock()
