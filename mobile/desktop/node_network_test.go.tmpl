@@ -431,3 +431,223 @@ func TestRouterVPNNodePhysicalRetirementKeepsExactJoinedSource(t *testing.T) {
 		t.Fatal("never-entered node source fabricated retained native protection", err)
 	}
 }
+
+type nodePhysicalCloseGateSource struct {
+	*nodePhysicalRetirementSource
+	hold atomic.Bool
+	entered chan struct{}
+	enter sync.Once
+	bound chan time.Duration
+	calls atomic.Int32
+	afterClose func()
+}
+
+func (s *nodePhysicalCloseGateSource) Close(ctx context.Context) error {
+	s.calls.Add(1)
+	if deadline, ok := ctx.Deadline(); ok {
+		select { case s.bound <- time.Until(deadline): default: }
+	}
+	s.enter.Do(func() { close(s.entered) })
+	if s.hold.Load() { <-ctx.Done(); return ctx.Err() }
+	err := s.nodePhysicalRetirementSource.Close(ctx)
+	if err == nil && s.afterClose != nil { s.afterClose() }
+	return err
+}
+
+// The native service and sealed Windows policy are real. Only its already
+// returned OS source is a controlled join boundary; this does not prove WFP.
+func nodePhysicalCloseGateFixture(t *testing.T) (*NodeNetworkOwner, *mobilemultihop.DesktopNodePolicy, *nodePhysicalCloseGateSource) {
+	t.Helper()
+	policy := nodePhysicalPolicyFixture(t, "windows")
+	meta := policy.Metadata()
+	raw, err := NewNodeNetworkOwner(context.Background(), nil, mobilemultihop.DesktopNodeNetworkTag, NodeCaptureOptions{meta.SessionID, meta.SourceSHA256})
+	if err != nil { t.Fatal(err) }
+	n := raw.(*NodeNetworkOwner)
+	source := &nodePhysicalCloseGateSource{
+		nodePhysicalRetirementSource: &nodePhysicalRetirementSource{
+			physicalFactorySource: &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()},
+			target: mobiletor.DesktopWindowsProtectionTarget{Capture:n.brokerCapture(), Policy:"always", BaselineSHA256:strings.Repeat("a",64)},
+		},
+		entered:make(chan struct{}), bound:make(chan time.Duration,2),
+	}
+	n.policy, n.source = policy, source
+	t.Cleanup(func() { source.afterClose = nil; source.hold.Store(false); source.closeFail.Store(false); if err:=n.Close();err!=nil{t.Error(err)} })
+	return n, policy, source
+}
+
+func TestRouterVPNNodeCapturedSourceRetirement(t *testing.T) {
+	for _, fault := range []string{"foreign-policy","foreign-capture","non-windows","expired-caller"} {
+		t.Run(fault,func(t *testing.T){
+			n,policy,source := nodePhysicalCloseGateFixture(t)
+			selected,caller := policy,context.Background()
+			switch fault {
+			case "foreign-policy": selected=nodePhysicalPolicyFixture(t,"windows")
+			case "foreign-capture": n.capture.SourceSHA256=strings.Repeat("e",64)
+			case "non-windows": selected=nodePhysicalPolicyFixture(t,"linux")
+			case "expired-caller":
+				cancelled,cancel:=context.WithCancel(context.Background());cancel();caller=cancelled
+			}
+			if err:=n.CloseCapturedPhysicalSourceContext(caller,selected);err==nil{t.Fatal("foreign cleanup acquired original source")}
+			if n.retired||n.closed||n.ctx.Err()!=nil||source.calls.Load()!=0||source.cancelled.Load(){
+				t.Fatal("rejected source cleanup cancelled or joined the original owner")
+			}
+		})
+	}
+	t.Run("held-owner",func(t *testing.T){
+		n,policy,source := nodePhysicalCloseGateFixture(t)
+		nodePhysicalCancelHeldLock(t,&n.mu,func(ctx context.Context)error{return n.CloseCapturedPhysicalSourceContext(ctx,policy)})
+		if n.retired||n.ctx.Err()!=nil||source.calls.Load()!=0{t.Fatal("cancelled owner-lock wait retired original source")}
+	})
+	t.Run("pending-retry",func(t *testing.T){
+		n,policy,source:=nodePhysicalCloseGateFixture(t);source.hold.Store(true)
+		ctx,cancel:=context.WithTimeout(context.Background(),50*time.Millisecond)
+		err:=n.CloseCapturedPhysicalSourceContext(ctx,policy);cancel()
+		if !errors.Is(err,context.DeadlineExceeded)||n.closed||!n.retired||source.calls.Load()!=1{
+			t.Fatal("pending source became joined or lost its caller deadline",err)
+		}
+		if _,_,err=n.RetainedPhysicalProtection(context.Background(),policy);err==nil||source.readCalls!=0{
+			t.Fatal("pending source published protection retirement")
+		}
+		source.hold.Store(false)
+		if err=n.CloseCapturedPhysicalSourceContext(context.Background(),policy);err!=nil||!n.closed||source.calls.Load()!=2{
+			t.Fatal("same retained source did not join on retry",err)
+		}
+		for count:=0;count<2;count++{
+			select{case bound:=<-source.bound:
+				if bound<=0||bound>3*time.Second||count==0&&bound>50*time.Millisecond{t.Fatal("source cleanup widened original caller or three-second bound",bound)}
+			default:t.Fatal("source close lacked original bounded context")}
+		}
+		target,captured,err:=n.RetainedPhysicalProtection(context.Background(),policy)
+		if err!=nil||!captured||target==nil||*target!=source.target{t.Fatal("joined source lost exact original protection receipt",err)}
+	})
+	t.Run("never-prepared",func(t *testing.T){
+		n,policy,source:=nodePhysicalCloseGateFixture(t);n.policy,n.source=nil,nil
+		if err:=n.CloseCapturedPhysicalSourceContext(context.Background(),policy);err!=nil||!n.closed||source.calls.Load()!=0{
+			t.Fatal("sealed never-entered source could not join without acquisition",err)
+		}
+		target,captured,err:=n.RetainedPhysicalProtection(context.Background(),policy)
+		if err!=nil||captured||target!=nil{t.Fatal("never-entered source fabricated native protection",err)}
+	})
+}
+
+type nodeSourceRetirementWrapper struct { mobilemultihop.DesktopPhysicalPolicy }
+
+func TestRouterVPNNodeCapturedSourceRetirementWithProtection(t *testing.T) {
+	for _, fault := range []string{"foreign-policy", "foreign-capture", "non-windows", "expired-caller", "nil-caller", "wrapped-policy"} {
+		t.Run(fault, func(t *testing.T) {
+			n, policy, source := nodePhysicalCloseGateFixture(t)
+			var selected mobilemultihop.DesktopPhysicalPolicy = policy
+			var caller context.Context = context.Background()
+			switch fault {
+			case "foreign-policy":
+				selected = nodePhysicalPolicyFixture(t, "windows")
+			case "foreign-capture":
+				n.capture.SourceSHA256 = strings.Repeat("e", 64)
+			case "non-windows":
+				selected = nodePhysicalPolicyFixture(t, "linux")
+			case "expired-caller":
+				cancelled, cancel := context.WithCancel(context.Background()); cancel(); caller = cancelled
+			case "nil-caller":
+				caller = nil
+			case "wrapped-policy":
+				selected = nodeSourceRetirementWrapper{policy}
+			}
+			if err := n.CloseCapturedPhysicalSourceWithProtectionContext(caller, selected); err == nil {
+				t.Fatal("combined cleanup acquired a foreign or unbounded source")
+			}
+			if n.retired || n.closed || n.ctx.Err() != nil || source.calls.Load() != 0 || source.readCalls != 0 {
+				t.Fatal("rejected combined cleanup entered original native retirement")
+			}
+		})
+	}
+	t.Run("held-owner", func(t *testing.T) {
+		n, policy, source := nodePhysicalCloseGateFixture(t)
+		nodePhysicalCancelHeldLock(t, &n.mu, func(ctx context.Context) error {
+			return n.CloseCapturedPhysicalSourceWithProtectionContext(ctx, policy)
+		})
+		if n.retired || n.ctx.Err() != nil || source.calls.Load() != 0 || source.readCalls != 0 {
+			t.Fatal("cancelled combined lock wait entered original source")
+		}
+	})
+	t.Run("pending-retry", func(t *testing.T) {
+		n, policy, source := nodePhysicalCloseGateFixture(t); source.hold.Store(true)
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		err := n.CloseCapturedPhysicalSourceWithProtectionContext(ctx, policy); cancel()
+		if !errors.Is(err, context.DeadlineExceeded) || n.closed || !n.retired || source.calls.Load() != 1 || source.readCalls != 0 {
+			t.Fatal("pending combined cleanup acquired joined source protection", err)
+		}
+		source.hold.Store(false)
+		if err = n.CloseCapturedPhysicalSourceWithProtectionContext(context.Background(), policy); err != nil || !n.closed || source.calls.Load() != 2 || source.readCalls != 1 {
+			t.Fatal("combined cleanup lost original source retry or protection outcome", err)
+		}
+		for count := 0; count < 2; count++ {
+			select {
+			case bound := <-source.bound:
+				if bound <= 0 || bound > 3*time.Second || count == 0 && bound > 50*time.Millisecond {
+					t.Fatal("combined cleanup widened original caller or source bound", bound)
+				}
+			default: t.Fatal("combined source close lost its original bounded caller")
+			}
+		}
+	})
+	t.Run("failed-source-retry", func(t *testing.T) {
+		n, policy, source := nodePhysicalCloseGateFixture(t); source.closeFail.Store(true)
+		if err := n.CloseCapturedPhysicalSourceWithProtectionContext(context.Background(), policy); err == nil || n.closed || source.readCalls != 0 {
+			t.Fatal("failed original source close acquired combined protection")
+		}
+		source.closeFail.Store(false)
+		if err := n.CloseCapturedPhysicalSourceWithProtectionContext(context.Background(), policy); err != nil || !n.closed || source.calls.Load() != 2 || source.readCalls != 1 {
+			t.Fatal("failed source receipt prevented the exact retained cleanup retry", err)
+		}
+	})
+	t.Run("foreign-outcome", func(t *testing.T) {
+		n, policy, source := nodePhysicalCloseGateFixture(t)
+		source.target.Capture.NetworkID = strings.Repeat("e", 32)
+		if err := n.CloseCapturedPhysicalSourceWithProtectionContext(context.Background(), policy); err == nil || !n.closed || source.readCalls != 1 {
+			t.Fatal("combined cleanup accepted foreign retained WFP outcome")
+		}
+	})
+	t.Run("failed-outcome-retry", func(t *testing.T) {
+		n, policy, source := nodePhysicalCloseGateFixture(t); source.readErr = errors.New("fixture original protection pending")
+		if err := n.CloseCapturedPhysicalSourceWithProtectionContext(context.Background(), policy); err == nil || !n.closed || source.readCalls != 1 {
+			t.Fatal("failed retained protection became successful combined cleanup")
+		}
+		source.readErr = nil
+		if err := n.CloseCapturedPhysicalSourceWithProtectionContext(context.Background(), policy); err != nil || source.calls.Load() != 2 || source.readCalls != 2 {
+			t.Fatal("combined cleanup lost original retained protection retry", err)
+		}
+	})
+	for _, fault := range []string{"policy-after-join", "capture-after-join", "cancel-after-join"} {
+		t.Run(fault, func(t *testing.T) {
+			n, policy, source := nodePhysicalCloseGateFixture(t)
+			ctx, cancel := context.WithCancel(context.Background()); defer cancel()
+			replacement := nodePhysicalPolicyFixture(t, "windows")
+			source.afterClose = func() {
+				switch fault {
+				case "policy-after-join": n.policy = replacement
+				case "capture-after-join": n.capture.SourceSHA256 = strings.Repeat("e", 64)
+				case "cancel-after-join": cancel()
+				}
+			}
+			if err := n.CloseCapturedPhysicalSourceWithProtectionContext(ctx, policy); err == nil || !n.closed || source.readCalls != 0 {
+				t.Fatal("combined cleanup ignored changed original owner after join")
+			}
+		})
+	}
+	t.Run("never-prepared", func(t *testing.T) {
+		n, policy, source := nodePhysicalCloseGateFixture(t); n.policy, n.source = nil, nil
+		if err := n.CloseCapturedPhysicalSourceWithProtectionContext(context.Background(), policy); err != nil || !n.closed || source.calls.Load() != 0 || source.readCalls != 0 {
+			t.Fatal("combined never-entered cleanup acquired a native source", err)
+		}
+	})
+	t.Run("joined", func(t *testing.T) {
+		n, policy, source := nodePhysicalCloseGateFixture(t)
+		if err := n.CloseCapturedPhysicalSourceWithProtectionContext(context.Background(), policy); err != nil || !n.closed || source.calls.Load() != 1 || source.readCalls != 1 {
+			t.Fatal("combined cleanup lost exact joined source and WFP outcome", err)
+		}
+		target, captured, err := n.RetainedPhysicalProtection(context.Background(), policy)
+		if err != nil || !captured || target == nil || *target != source.target {
+			t.Fatal("standalone retirement lost its independent original readback", err)
+		}
+	})
+}

@@ -29,6 +29,29 @@ BOOT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BOOT)
 PREP = BOOT.PREP
 TAGS = tuple(value for value in BOOT.TAGS if value not in ("routervpn_native_pq", "routervpn_windows_physical_composition"))
+NODE_SOURCE_RETIRE_ROOT = "TestRouterVPNNodeCapturedSourceRetirement"
+NODE_SOURCE_RETIRE_VERDICTS = (NODE_SOURCE_RETIRE_ROOT,) + tuple(
+    NODE_SOURCE_RETIRE_ROOT + "/" + case for case in (
+        "foreign-policy", "foreign-capture", "non-windows", "expired-caller",
+        "held-owner", "pending-retry", "never-prepared"))
+NODE_SOURCE_RETIRE_COMBINED_ROOT = "TestRouterVPNNodeCapturedSourceRetirementWithProtection"
+NODE_SOURCE_RETIRE_COMBINED_VERDICTS = (NODE_SOURCE_RETIRE_COMBINED_ROOT,) + tuple(
+    NODE_SOURCE_RETIRE_COMBINED_ROOT + "/" + case for case in (
+        "foreign-policy", "foreign-capture", "non-windows", "expired-caller",
+        "nil-caller", "wrapped-policy", "held-owner", "pending-retry", "failed-source-retry",
+        "foreign-outcome", "failed-outcome-retry", "policy-after-join", "capture-after-join",
+        "cancel-after-join", "never-prepared", "joined"))
+NODE_SOURCE_RETIRE_VERDICTS += NODE_SOURCE_RETIRE_COMBINED_VERDICTS
+NODE_SOURCE_RETIRE_SUITE = ("node-source-retirement", "./routervpn/desktoppt",
+                            "^" + NODE_SOURCE_RETIRE_ROOT + "(WithProtection)?$", NODE_SOURCE_RETIRE_VERDICTS)
+NODE_BOX_RETIRE_ROOT = "TestRouterVPNNodeMTUSourceJoinsBeforeIrreversibleBoxClose"
+NODE_BOX_RETIRE_VERDICTS = (NODE_BOX_RETIRE_ROOT,) + tuple(
+    NODE_BOX_RETIRE_ROOT + "/" + case for case in (
+        "pending-retry", "cancelled-wait", "expired-caller", "permanent-box-failure", "ordinary-external")) + (
+    "TestRouterVPNNodeMTUNativeBoxCloseFailureRemainsUnacknowledged",)
+NODE_BOX_RETIRE_SUITE = ("node-box-source-retirement", "./cmd/sing-box",
+                         "^TestRouterVPNNodeMTU(SourceJoinsBeforeIrreversibleBoxClose|NativeBoxCloseFailureRemainsUnacknowledged)$",
+                         NODE_BOX_RETIRE_VERDICTS)
 LINUX_IMPORTED_LIFECYCLE_ROOT = "TestRouterVPNNodeLinuxLifecycleImportedCapturedPair"
 LINUX_IMPORTED_LIFECYCLE_VERDICTS = (LINUX_IMPORTED_LIFECYCLE_ROOT,) + tuple(
     LINUX_IMPORTED_LIFECYCLE_ROOT + "/" + kill + "/" + fault
@@ -1061,6 +1084,47 @@ def ordered_physical_mutants(source):
     ]
 
 
+def node_source_retirement_mutants(source):
+    external = "cmd/sing-box/routervpn_external.go"
+    network = "routervpn/desktoppt/node_network.go"
+    external_raw = (source / external).read_text(encoding="utf-8")
+    network_raw = (source / network).read_text(encoding="utf-8")
+    return (
+        ("node-source-before-box-close", external, "./cmd/sing-box",
+         NODE_BOX_RETIRE_ROOT, "pending-retry",
+         "pending source poisoned irreversible native Box receipt",
+         mutation_in_function(external_raw,
+             "func (n *routerVPNExternalNative) CloseContext(ctx context.Context) error {",
+             "if n.retirePhysical != nil {",
+             "if false && n.retirePhysical != nil {")),
+        ("node-source-original-policy", network, "./routervpn/desktoppt",
+         NODE_SOURCE_RETIRE_ROOT, "foreign-policy",
+         "foreign cleanup acquired original source",
+         mutation_in_function(network_raw,
+             "func (n *NodeNetworkOwner) closeCapturedPhysicalSourceContext(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy, meta mobilemultihop.DesktopPhysicalMetadata) error {",
+             "n.policy == policy", "n.policy != nil")),
+        ("node-source-original-caller", network, "./routervpn/desktoppt",
+         NODE_SOURCE_RETIRE_ROOT, "pending-retry",
+         "source cleanup widened original caller or three-second bound",
+         mutation_in_function(network_raw,
+             "func (n *NodeNetworkOwner) CloseContext(parent context.Context) error {",
+             "context.WithTimeout(parent, 3*time.Second)",
+             "context.WithTimeout(context.Background(), 3*time.Second)")),
+        ("node-source-combined-outcome", network, "./routervpn/desktoppt",
+         NODE_SOURCE_RETIRE_COMBINED_ROOT, "foreign-outcome",
+         "combined cleanup accepted foreign retained WFP outcome",
+         mutation_in_function(network_raw,
+             "func (n *NodeNetworkOwner) CloseCapturedPhysicalSourceWithProtectionContext(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) error {",
+             "_, _, err = n.retainedPhysicalProtection(ctx, policy, meta)", "err = nil")),
+        ("node-source-combined-post-join-owner", network, "./routervpn/desktoppt",
+         NODE_SOURCE_RETIRE_COMBINED_ROOT, "policy-after-join",
+         "combined cleanup ignored changed original owner after join",
+         mutation_in_function(network_raw,
+             "func (n *NodeNetworkOwner) retainedPhysicalProtection(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy, meta mobilemultihop.DesktopPhysicalMetadata) (*mobiletor.DesktopWindowsProtectionTarget, bool, error) {",
+             "n.policy == policy", "n.policy != nil")),
+    )
+
+
 def mutants(source, windows):
     def changed(relative, before, after, count=1):
         raw = (source / relative).read_text(encoding="utf-8")
@@ -1309,6 +1373,7 @@ def mutants(source, windows):
              'if err := t.routervpnLinuxRetireCalls(ctx, ""); err != nil {\n\t\t\t_ = s.file.Close()\n\t\t\treturn "", err')),
         ))
         result.extend(native_resolver_mutants(source))
+    result.extend(node_source_retirement_mutants(source))
     return result
 
 
@@ -1360,6 +1425,8 @@ def execute_baseline_suite(baselines, suite):
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
     if status or any("--- PASS: " + test + " (" not in output for test in required) or "--- SKIP:" in output or "DATA RACE" in output:
         raise ValueError("Node " + name + " omitted a required native boundary")
+    if name in (NODE_SOURCE_RETIRE_SUITE[0], NODE_BOX_RETIRE_SUITE[0]):
+        require_native_verdicts(output, required, "captured source before irreversible Box retirement")
     if name == OPENVPN_CAPACITY_SUITE[0]:
         require_native_verdicts(output, OPENVPN_CAPACITY_VERDICTS, "OpenVPN authenticated live capacity")
     if name in {suite[0] for suite in (ORDERED_PHYSICAL_SUITE, *EXECUTION_DESKTOP_SUITES, *CANDIDATE_PREFIX_DESKTOP_SUITES)}:
@@ -1494,6 +1561,8 @@ def execute_baseline_suite(baselines, suite):
 
 def baseline_suites(windows, *, bootstrap_only=False):
     suites = [
+        NODE_SOURCE_RETIRE_SUITE,
+        NODE_BOX_RETIRE_SUITE,
         ("tor-registration-owner", "./routervpn/desktoppt", "^TestRouterVPNPhysicalRegistrationKeepsOriginalCaller$", ("TestRouterVPNPhysicalRegistrationKeepsOriginalCaller",)),
         ("native-startup-inbound", "./protocol/tun", "^TestRouterVPNDesktopNetworkStartupKeepsOriginalBudget$", ("TestRouterVPNDesktopNetworkStartupKeepsOriginalBudget",)),
         ("native-startup-box", ".", "^TestRouterVPNDesktopStartupKeepsCallerAndLifetime$", ("TestRouterVPNDesktopStartupKeepsCallerAndLifetime",)),

@@ -862,7 +862,10 @@ func nodeMAXWFPBoxWithAdmissionGuard(t *testing.T, original *mobilemultihop.Node
 		return routervpndesktoppt.WithNodePhysicalSuccessorAdmission(ctx, policy, *predecessor, admit)
 	}, func(registry *outbound.Registry) { HYOUT.RegisterOutbound(registry); XR.RegisterOutbound(registry) })
 	if prepare {
-		if err := f.box.RouterVPNDesktopNodePreparePhysical(policy); err != nil {
+		captured, err := f.box.RouterVPNDesktopNodePreparePhysicalOwned(policy)
+		// Retain partial preparation before inspecting its result.
+		f.preparation = captured
+		if err != nil {
 			t.Fatal("actual sealed Windows MAX factory preparation", err)
 		}
 	}

@@ -812,6 +812,9 @@ func routerVPNRunNodeMTUPrefixFamiliesCaptured(parent context.Context, directory
 		}
 		if captured != nil {
 			preparation = captured
+			if runtime.GOOS == "windows" {
+				native.retirePhysical = captured.CloseSourceContext
+			}
 		}
 		if prepareErr != nil {
 			return routerVPNExternalFailure

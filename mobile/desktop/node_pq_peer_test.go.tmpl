@@ -643,10 +643,41 @@ type nodePQFixture struct {
 	endpoint  *Endpoint
 	closeOnce sync.Once
 	closeErr  error
+	closeMu sync.Mutex
+	boxClosed bool
+	preparation *box.RouterVPNDesktopNodePreparation
+	cancel context.CancelFunc
+}
+
+// Failure-only fixture observation. Preserve the original source deadline,
+// native owner, shutdown order and errors.Is identity. No production path uses it.
+func nodePQRetirementFailure(stage string, started time.Time, failure error) error {
+	if failure == nil { return nil }
+	var stack [64 << 10]byte
+	n := runtime.Stack(stack[:], true)
+	return fmt.Errorf("original Node retirement stage=%s elapsed=%s: %w\nretained fixture goroutines:\n%s", stage, time.Since(started), failure, stack[:n])
 }
 
 func (f *nodePQFixture) close() error {
-	f.closeOnce.Do(func() { f.closeErr = f.box.Close() })
+	f.closeMu.Lock()
+	defer f.closeMu.Unlock()
+	if !f.boxClosed && f.preparation != nil {
+		// Native Windows fixtures retain the same pre-start preparation as
+		// the shipping command. Pending source cleanup leaves Box.Close
+		// unentered, so the exact original source may be joined on retry.
+		if f.cancel == nil { return errors.New("captured Windows Node cleanup lost its original Box lifetime") }
+		f.cancel()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		started := time.Now()
+		err := f.preparation.CloseSourceContext(ctx)
+		cancel()
+		if err != nil { return nodePQRetirementFailure("source-close", started, err) }
+	}
+	f.closeOnce.Do(func() {
+		started := time.Now()
+		f.closeErr = nodePQRetirementFailure("box-close", started, f.box.Close())
+		f.boxClosed = true
+	})
 	return f.closeErr
 }
 
@@ -848,6 +879,7 @@ func buildNodePQCapturedBox(t *testing.T, f *nodePQFixture,
 		return owned, err
 	})
 	ctx, cancel := context.WithCancel(context.Background())
+	f.cancel = cancel
 	t.Cleanup(cancel)
 	if captureContext != nil {
 		owned, err := captureContext(ctx)

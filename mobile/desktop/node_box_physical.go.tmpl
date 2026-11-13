@@ -77,6 +77,22 @@ func (s *Box) RouterVPNDesktopNodePreparePhysicalOwned(policy *mobilemultihop.De
 	return owner, network.PrepareNodePhysicalPolicy(policy)
 }
 
+// CloseSourceContext retires only this original Windows preparation. Join its
+// bounded native source before Box.Close, whose failure receipt is permanent.
+// A pending join does not authorize a different service or a closed receipt.
+func (p *RouterVPNDesktopNodePreparation) CloseSourceContext(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil || ctx == nil {
+		return errors.New("Router node source cleanup lost its original preparation or caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// One complete concrete policy read belongs to this synchronous cleanup.
+	// The original source join and retained WFP outcome both remain required;
+	// the command still independently retires its journal after Box closure.
+	return p.network.CloseCapturedPhysicalSourceWithProtectionContext(ctx, p.policy)
+}
+
 func (p *RouterVPNDesktopNodePreparation) RetainedProtection(ctx context.Context) (*mobiletor.DesktopWindowsProtectionTarget, bool, error) {
 	if p == nil || p.network == nil || p.policy == nil {
 		return nil, false, errors.New("Router node preparation has no captured retirement owner")

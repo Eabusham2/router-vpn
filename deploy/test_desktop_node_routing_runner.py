@@ -20,6 +20,80 @@ NODE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(NODE)
 
 
+class NodeSourceRetirementVerdicts(unittest.TestCase):
+    SUITES = (NODE.NODE_SOURCE_RETIRE_SUITE, NODE.NODE_BOX_RETIRE_SUITE)
+
+    @staticmethod
+    def output(names):
+        return "".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n" for name in names)
+
+    def test_shipping_suites_require_each_exact_owner_and_original_box_failure(self):
+        self.assertEqual([len(suite[3]) for suite in self.SUITES], [25, 7])
+        for windows in (False, True):
+            for bootstrap in (False, True):
+                suites = NODE.baseline_suites(windows, bootstrap_only=bootstrap)
+                for suite in self.SUITES:
+                    self.assertEqual(suites.count(suite), 1)
+        self.assertIn("TestRouterVPNNodeMTUNativeBoxCloseFailureRemainsUnacknowledged", self.SUITES[1][3])
+
+    def test_actual_existing_runner_keeps_original_ninety_second_bound(self):
+        for suite in self.SUITES:
+            baseline = Mock()
+            output = self.output(suite[3])
+            baseline.execute.return_value = (0, output)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(NODE.execute_baseline_suite(baseline, suite), output)
+            baseline.execute.assert_called_once_with(*suite[:3], 90)
+
+    def test_every_missing_duplicate_unselected_or_failed_verdict_rejects(self):
+        for suite in self.SUITES:
+            names = suite[3]
+            outputs = [self.output(names + (names[0],)),
+                       self.output(names + ("TestUnselectedOwner",)),
+                       "testing: warning: no tests to run\nPASS\n"]
+            outputs.extend(self.output(tuple(name for name in names if name != missing)) for missing in names)
+            outputs.extend(self.output(names) + failure for failure in
+                           ("--- FAIL: native (0s)\n", "--- SKIP: native (0s)\n", "DATA RACE\n", "panic: test timed out\n"))
+            for output in outputs:
+                with self.subTest(suite=suite[0], output=output), contextlib.redirect_stdout(io.StringIO()):
+                    baseline = Mock(); baseline.execute.return_value = (0, output)
+                    with self.assertRaises(ValueError):
+                        NODE.execute_baseline_suite(baseline, suite)
+
+    def test_nonzero_process_cannot_borrow_complete_verdicts(self):
+        for suite in self.SUITES:
+            for status in (1, 124):
+                with self.subTest(suite=suite[0], status=status), contextlib.redirect_stdout(io.StringIO()):
+                    baseline = Mock(); baseline.execute.return_value = (status, self.output(suite[3]))
+                    with self.assertRaises(ValueError):
+                        NODE.execute_baseline_suite(baseline, suite)
+
+    def test_five_compiled_controls_bind_exact_shipping_functions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            for template, generated in (
+                    ("external.go.tmpl", "cmd/sing-box/routervpn_external.go"),
+                    ("node_network.go.tmpl", "routervpn/desktoppt/node_network.go")):
+                path = source / generated
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes((ROOT / "mobile/desktop" / template).read_bytes())
+            controls = NODE.node_source_retirement_mutants(source)
+            self.assertEqual([control[0] for control in controls],
+                             ["node-source-before-box-close", "node-source-original-policy", "node-source-original-caller",
+                              "node-source-combined-outcome", "node-source-combined-post-join-owner"])
+            for label, relative, package, root, leaf, witness, changed in controls:
+                with self.subTest(control=label):
+                    original = (source / relative).read_text()
+                    self.assertNotEqual(changed, original)
+                    self.assertTrue(witness)
+                    self.assertIn(root + "/" + leaf,
+                                  NODE.NODE_SOURCE_RETIRE_VERDICTS + NODE.NODE_BOX_RETIRE_VERDICTS)
+                    self.assertEqual(package, "./cmd/sing-box" if relative.startswith("cmd/") else "./routervpn/desktoppt")
+            broken = source / controls[0][1]
+            broken.write_text(broken.read_text().replace("if n.retirePhysical != nil {", "if true {"))
+            with self.assertRaises(ValueError):
+                NODE.node_source_retirement_mutants(source)
+
 class OpenVPNConnectedCapacityVerdicts(unittest.TestCase):
     def output(self, names):
         return "".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n" for name in names)

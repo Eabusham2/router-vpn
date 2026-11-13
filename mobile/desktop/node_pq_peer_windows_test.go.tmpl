@@ -921,7 +921,10 @@ func nodePQWFPBox(t *testing.T, original *mobilemultihop.NodeProfile, predecesso
 		return routervpndesktoppt.WithNodePhysicalSuccessorAdmission(ctx, policy, *predecessor, admit)
 	}, nil)
 	if prepare {
-		if err := f.box.RouterVPNDesktopNodePreparePhysical(policy); err != nil {
+		captured, err := f.box.RouterVPNDesktopNodePreparePhysicalOwned(policy)
+		// Retain partial preparation before inspecting its result.
+		f.preparation = captured
+		if err != nil {
 			t.Fatal("actual sealed Windows PQ factory preparation", err)
 		}
 	}

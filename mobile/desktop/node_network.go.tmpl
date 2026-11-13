@@ -336,12 +336,25 @@ func (n *NodeNetworkOwner) InterfaceUpdated(_ context.Context) {
 }
 
 func (n *NodeNetworkOwner) Close() error {
+	return n.CloseContext(context.Background())
+}
+
+// CloseContext keeps the original three-second source-join limit and a shorter
+// caller deadline. A failed attempt retains the same broker and native source;
+// a later cleanup call may join them before irreversible native Box closure.
+func (n *NodeNetworkOwner) CloseContext(parent context.Context) error {
 	if n == nil {
 		return nil
 	}
-	n.retire()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	if parent == nil {
+		return errors.New("Router node source cleanup has no captured caller")
+	}
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 	defer cancel()
+	n.retire()
 	n.mu.Lock()
 	preparing := n.preparing
 	n.mu.Unlock()
@@ -371,6 +384,67 @@ func (n *NodeNetworkOwner) Close() error {
 	return nil
 }
 
+
+// CloseCapturedPhysicalSourceContext validates this exact retained Windows
+// policy before cancelling anything. Once retirement is claimed under the
+// same mutex, no later preparation can replace its original native source.
+func (n *NodeNetworkOwner) CloseCapturedPhysicalSourceContext(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) error {
+	meta, err := n.sourceRetirementMetadata(ctx, policy)
+	if err != nil {
+		return err
+	}
+	return n.closeCapturedPhysicalSourceContext(ctx, policy, meta)
+}
+
+// CloseCapturedPhysicalSourceWithProtectionContext is one synchronous cleanup
+// operation. Validate the complete concrete policy once, then keep that exact
+// operation-local read through source join and retained protection readback.
+// Nothing is cached between calls; the standalone entry points still perform
+// their own complete validation.
+func (n *NodeNetworkOwner) CloseCapturedPhysicalSourceWithProtectionContext(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) error {
+	meta, err := n.sourceRetirementMetadata(ctx, policy)
+	if err != nil {
+		return err
+	}
+	if err = n.closeCapturedPhysicalSourceContext(ctx, policy, meta); err != nil {
+		return err
+	}
+	_, _, err = n.retainedPhysicalProtection(ctx, policy, meta)
+	return err
+}
+
+func (n *NodeNetworkOwner) sourceRetirementMetadata(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) (mobilemultihop.DesktopPhysicalMetadata, error) {
+	var empty mobilemultihop.DesktopPhysicalMetadata
+	if n == nil || ctx == nil || policy == nil {
+		return empty, errors.New("Router node source cleanup lost its captured request")
+	}
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
+	_, meta, _, err := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
+	if err != nil || meta.TargetOS != "windows" {
+		return empty, errors.Join(err, errors.New("Router node source cleanup requires its original Windows policy"))
+	}
+	return meta, nil
+}
+
+func (n *NodeNetworkOwner) closeCapturedPhysicalSourceContext(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy, meta mobilemultihop.DesktopPhysicalMetadata) error {
+	if err := adapter.RouterVPNLockContext(ctx, &n.mu); err != nil {
+		return err
+	}
+	exact := n.ctx != nil && n.capture.SessionID == meta.SessionID && n.capture.SourceSHA256 == meta.SourceSHA256 &&
+		(n.policy == policy || n.policy == nil && n.factory == nil && n.preparing == nil)
+	if !exact {
+		n.mu.Unlock()
+		return errors.New("Router node source cleanup cannot replace its original preparation")
+	}
+	// Claim retirement before releasing the identity check. CloseContext
+	// retains the original three-second limit and any shorter caller bound.
+	n.retired = true
+	n.mu.Unlock()
+	return errors.Join(n.CloseContext(ctx), ctx.Err())
+}
+
 // RetainedPhysicalProtection is available only after this exact network
 // service has joined every entered constructor, socket and native source. The
 // bool says whether a native source was returned at all; false is not proof
@@ -382,6 +456,16 @@ func (n *NodeNetworkOwner) RetainedPhysicalProtection(ctx context.Context, polic
 	_, meta, _, err := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
 	if err != nil {
 		return nil, false, err
+	}
+	return n.retainedPhysicalProtection(ctx, policy, meta)
+}
+
+// Only callers that performed a complete read in this synchronous operation
+// can reach this private continuation. The original live owner and WFP outcome
+// checks below remain fresh after the source join.
+func (n *NodeNetworkOwner) retainedPhysicalProtection(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy, meta mobilemultihop.DesktopPhysicalMetadata) (*mobiletor.DesktopWindowsProtectionTarget, bool, error) {
+	if n == nil || ctx == nil || ctx.Err() != nil || policy == nil {
+		return nil, false, errors.New("Router node retirement lost its captured cleanup request")
 	}
 	n.mu.Lock()
 	valid := n.closed && n.retired && n.ctx != nil && !n.ready && !n.sockets && n.capture.SessionID == meta.SessionID && n.capture.SourceSHA256 == meta.SourceSHA256 &&

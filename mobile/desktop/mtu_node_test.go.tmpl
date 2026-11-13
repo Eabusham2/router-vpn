@@ -841,3 +841,94 @@ func (f *desktopNodeMTUHeartbeatFixture) RouterVPNDesktopNetworkReceiptContext(c
 		return f.raw, ctx.Err()
 	}
 }
+
+type desktopNodeSourceCloseService struct {
+	boxService.Adapter
+	closes atomic.Int32
+	failure error
+}
+func (*desktopNodeSourceCloseService) Start(adapter.StartStage) error { return nil }
+func (s *desktopNodeSourceCloseService) Close() error { s.closes.Add(1); return s.failure }
+
+func desktopNodeSourceCloseFixture(t *testing.T, failure error) (*routerVPNExternalNative,*desktopNodeSourceCloseService,*atomic.Int32) {
+	t.Helper()
+	fixture:=&desktopNodeSourceCloseService{failure:failure}
+	registry:=include.ServiceRegistry()
+	boxService.Register[struct{}](registry,"routervpn-node-source-close-fixture",func(_ context.Context,_ log.ContextLogger,tag string,_ struct{})(adapter.Service,error){
+		fixture.Adapter=boxService.NewAdapter("routervpn-node-source-close-fixture",tag);return fixture,nil
+	})
+	ctx,cancel:=context.WithCancel(box.Context(context.Background(),include.InboundRegistry(),include.OutboundRegistry(),include.EndpointRegistry(),include.DNSTransportRegistry(),registry,include.CertificateProviderRegistry()))
+	options,err:=SJ.UnmarshalExtendedContext[option.Options](ctx,[]byte(`{"log":{"disabled":true},"outbounds":[{"type":"direct","tag":"direct"}],"services":[{"type":"routervpn-node-source-close-fixture","tag":"owned-source-close"}]}`))
+	if err!=nil{cancel();t.Fatal(err)}
+	instance,err:=box.New(box.Options{Context:ctx,Options:options})
+	if err!=nil{cancel();t.Fatal(err)}
+	t.Cleanup(func(){cancel();_=instance.Close()})
+	if err=instance.RouterVPNStrategyStart();err!=nil{t.Fatal(err)}
+	calls:=&atomic.Int32{}
+	owner:=&routerVPNExternalNative{box:instance,cancel:func(){calls.Add(1);cancel()}}
+	return owner,fixture,calls
+}
+
+func TestRouterVPNNodeMTUSourceJoinsBeforeIrreversibleBoxClose(t *testing.T) {
+	t.Run("pending-retry",func(t *testing.T){
+		owner,fixture,cancels:=desktopNodeSourceCloseFixture(t,nil)
+		pending:=errors.New("original source cleanup still pending")
+		attempts:=0
+		owner.retirePhysical=func(ctx context.Context)error{
+			attempts++
+			deadline,ok:=ctx.Deadline()
+			if !ok||time.Until(deadline)<=0||time.Until(deadline)>3*time.Second||fixture.closes.Load()!=0{
+				t.Error("source close lost its original bound or ran after Box close")
+			}
+			if attempts==1{return pending};return nil
+		}
+		if err:=owner.Close();!errors.Is(err,pending)||owner.boxClosed||owner.joined||owner.boxCloseFail!=nil||fixture.closes.Load()!=0||cancels.Load()!=1{
+			t.Fatal("pending source poisoned irreversible native Box receipt",err)
+		}
+		if err:=owner.Close();err!=nil||!owner.boxClosed||!owner.joined||owner.boxCloseFail!=nil||fixture.closes.Load()!=1||attempts!=2{
+			t.Fatal("same source retry did not precede original Box close",err)
+		}
+		if err:=owner.Close();err!=nil||fixture.closes.Load()!=1||attempts!=2{
+			t.Fatal("joined Box re-entered retired source",err)
+		}
+	})
+	t.Run("cancelled-wait",func(t *testing.T){
+		owner,fixture,_:=desktopNodeSourceCloseFixture(t,nil)
+		entered:=make(chan struct{});finished:=make(chan error,1)
+		ctx,cancel:=context.WithCancel(context.Background())
+		defer cancel()
+		owner.retirePhysical=func(call context.Context)error{close(entered);<-call.Done();return call.Err()}
+		go func(){finished<-owner.CloseContext(ctx)}()
+		select{case <-entered:case <-time.After(3*time.Second):cancel();<-finished;t.Fatal("source cleanup never entered")}
+		cancel()
+		select{case err:=<-finished:
+			if !errors.Is(err,context.Canceled)||owner.boxClosed||fixture.closes.Load()!=0||owner.joined{t.Fatal("cancelled source wait closed original Box",err)}
+		case <-time.After(3*time.Second):t.Fatal("source cleanup ignored original caller cancellation")}
+		owner.retirePhysical=func(context.Context)error{return nil}
+		if err:=owner.Close();err!=nil||fixture.closes.Load()!=1{t.Fatal("cancelled source owner lost retry",err)}
+	})
+	t.Run("expired-caller",func(t *testing.T){
+		owner,fixture,cancels:=desktopNodeSourceCloseFixture(t,nil)
+		called:=false;owner.retirePhysical=func(context.Context)error{called=true;return nil}
+		ctx,cancel:=context.WithCancel(context.Background());cancel()
+		if err:=owner.CloseContext(ctx);!errors.Is(err,context.Canceled)||called||cancels.Load()!=0||fixture.closes.Load()!=0||owner.boxClosed{
+			t.Fatal("expired caller cancelled or closed original source",err)
+		}
+		if err:=owner.Close();err!=nil||!called||fixture.closes.Load()!=1{t.Fatal("expired caller consumed the retained cleanup",err)}
+	})
+	t.Run("permanent-box-failure",func(t *testing.T){
+		nativeFailure:=errors.New("original native Box close failed")
+		owner,fixture,_:=desktopNodeSourceCloseFixture(t,nativeFailure)
+		attempts:=0;owner.retirePhysical=func(context.Context)error{attempts++;return nil}
+		for retry:=0;retry<2;retry++{
+			if err:=owner.Close();err==nil||!owner.boxClosed||owner.joined||!errors.Is(owner.boxCloseFail,nativeFailure)||fixture.closes.Load()!=1||attempts!=1{
+				t.Fatal("actual failed Box close became a clean or repeated receipt",err)
+			}
+		}
+	})
+	t.Run("ordinary-external",func(t *testing.T){
+		owner,fixture,_:=desktopNodeSourceCloseFixture(t,nil)
+		if owner.retirePhysical!=nil{t.Fatal("ordinary external borrowed Node source cleanup")}
+		if err:=owner.Close();err!=nil||!owner.joined||fixture.closes.Load()!=1{t.Fatal("ordinary external close changed",err)}
+	})
+}

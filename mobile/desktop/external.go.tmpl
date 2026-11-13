@@ -234,6 +234,7 @@ type routerVPNExternalNative struct {
 	proof        *box.RouterVPNExternalProofRequest
 	physical     *mobilemultihop.DesktopExternalPolicy
 	preparation  *box.RouterVPNDesktopExternalPreparation
+	retirePhysical func(context.Context) error
 	cancel       context.CancelFunc
 	source       string
 	capture      string
@@ -473,6 +474,27 @@ func (n *routerVPNExternalNative) CloseContext(ctx context.Context) error {
 		}
 	}
 	if !n.boxClosed {
+		if n.retirePhysical != nil {
+			// Proof/lease and measurement cleanup above still owns the live
+			// graph. Only after it joins may this captured physical source
+			// retire. A pending source must not poison Box.Close's permanent
+			// receipt; leave this same Box available for a cleanup retry.
+			cleanup := ctx
+			var stop context.CancelFunc
+			if cleanup == nil {
+				cleanup, stop = context.WithTimeout(context.Background(), 3*time.Second)
+			} else if err := cleanup.Err(); err != nil {
+				return err
+			}
+			n.cancel()
+			err := n.retirePhysical(cleanup)
+			if stop != nil {
+				stop()
+			}
+			if err != nil {
+				return err
+			}
+		}
 		if ctx != nil {
 			if closer, ok := any(n.box).(interface{ RouterVPNCloseNativeTunContext(context.Context) error }); ok {
 				if err := closer.RouterVPNCloseNativeTunContext(ctx); err != nil {
