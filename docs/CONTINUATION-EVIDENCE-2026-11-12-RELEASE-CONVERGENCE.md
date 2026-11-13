@@ -79,8 +79,10 @@ cleanup; 78 cancellation checks and three controls; 3,165 external Speed Lab
 checks and seven controls; 4,883 restoration checks with thirty-four controls
 and four imported ordered restoration controls; and 145 retained-winner
 whole-service checks with four ownership controls and three MTU mutations.
-The separate profile/editor-budget diagnostic and generated SS host capture
-are still pending at this documentation cutoff.
+The canonical profile editor-budget and editor-order mutations subsequently
+failed at their exact required witnesses with the bounded JVM, without source
+or fixture changes. Remaining ordinary profile families and generated SS host
+capture still require their own completed result at this cutoff.
 
 Concurrent native compilers were also killed under resource pressure. On
 November 12 the workspace then became explicitly unavailable, with
@@ -227,6 +229,21 @@ All twenty-one Python runner tests passed. The actual execute orchestration
 rejects a missing child, foreign root, process failure, timeout or replaced image
 before any host case can run. This is local gate validation; the tagged authority
 root and installed PF/utun cases still require actual macOS execution.
+
+## Linux candidate-widget compiler repair
+
+The actual Linux job in [AWG run 43332868755](https://github.com/Eabusham2/router-vpn/actions/runs/43332868755)
+failed before executing its GTK controls: GCC rejected five single-line guard
+and following-statement sequences in the shipping ordered-candidate include
+under the existing -Werror=misleading-indentation setting. The repair adds
+explicit braces and separate following lines to those five guards. Conditions,
+returns, sample filtering, receipt replacement, HTTP cleanup and dialog reuse
+are unchanged; the compiler warning and strict fixture remain enabled.
+
+Focused diff validation passed. This local executor lacks GTK 3/json-glib
+headers and Xvfb, so it does not provide a native GTK compilation or widget
+result. The existing actual shipping-widget test in hosted Linux remains the
+required executable acceptance for this repair.
 
 ## Physical and private acceptance
 
