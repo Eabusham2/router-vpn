@@ -175,9 +175,10 @@ class ProxyRealityInventory(unittest.TestCase):
             calls = []
             def capture(command, **options):
                 calls.append(([str(part) for part in command], options))
-            namespace = dict(ROOT=ROOT, sys=sys, target=target, source=Path('captured-core'),
-                             pq=Path('captured-pq'), cache=None, env={'CAPTURED_ENV': '1'}, run=capture)
+            namespace, loader, phases = contracts.native_stage_namespace(target=target, source=Path('captured-core'),
+                             pq=Path('captured-pq'), env={'CAPTURED_ENV': '1'}, run=capture)
             exec(compile(stage, str(path), 'exec'), namespace)
+            contracts.require_native_stage_phases(namespace, loader, phases)
             original = [(i, options) for i, (command, options) in enumerate(calls)
                         if any(Path(part).name == 'test_mobile_imported_socks_xray.py' for part in command)]
             addition = [(i, command, options) for i, (command, options) in enumerate(calls)

@@ -815,6 +815,27 @@ prefix-only native flow, which must work without the old final node, remains
 separate work. Real NetworkExtension permissions, full SDK packaging and device
 acceptance are not established by these local composition checks.
 
+## Imported native driver fixtures follow Windows phase composition
+
+Android combined-runtime jobs 131604106992 (cad6996f) and 131616888233
+(b725c615) reached the imported source runner after their source/graph checks,
+then failed with the same `NameError: name 'load' is not defined`. The runner
+executes the actual release driver's selected AST branch across Linux, Windows
+and Darwin targets. Its fixture predated the Windows source-phase orchestrator
+and supplied only the older direct-command boundary. The SOCKS and UDP-443
+driver fixtures had the same missing dependency.
+
+Those three fixtures now share an explicit recorded Windows loader/phase call
+boundary and require the exact original source, environment and runner. They
+continue executing the shipping driver's unchanged branch. Linux reference
+ordering and finite bounds remain required; Windows requires its independent
+phase-contract invocation and orchestrator call. The real phase-orchestrator
+tests remain separate and reject missing, changed, duplicated, foreign or failed
+receipts before packaging. Forty-four runner and phase checks passed in 0.881
+seconds. The original Android failure was reproduced locally before the change.
+No native test, production deadline or receipt validator was removed or relaxed.
+Actual APK completion remains a later hosted-build result.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

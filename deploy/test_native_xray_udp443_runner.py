@@ -153,7 +153,9 @@ class NativeUDP443Contracts(unittest.TestCase):
         for target in ('linux/amd64','linux/arm64','windows/amd64','darwin/arm64'):
             calls=[]
             def capture(command,**options):calls.append(([str(part)for part in command],options))
-            exec(compile(stage,str(path),'exec'),dict(ROOT=ROOT,sys=sys,target=target,source=Path('captured-core'),pq=Path('captured-pq'),cache=None,env={'CAPTURED_ENV':'1'},run=capture))
+            namespace,loader,phases=contracts.native_stage_namespace(target=target,source=Path('captured-core'),pq=Path('captured-pq'),env={'CAPTURED_ENV':'1'},run=capture)
+            exec(compile(stage,str(path),'exec'),namespace)
+            contracts.require_native_stage_phases(namespace,loader,phases)
             relevant=[(Path(command[1]).name,command,options)for command,options in calls if len(command)>1 and Path(command[1]).name in names]
             self.assertEqual(tuple(name for name,_,_ in relevant),names if target.startswith('linux/')else())
             for _,_,options in relevant:self.assertEqual(options,{'env':{'CAPTURED_ENV':'1'},'timeout':3000})

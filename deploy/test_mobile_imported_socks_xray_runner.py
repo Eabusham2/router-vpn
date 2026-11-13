@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -16,6 +17,32 @@ spec = importlib.util.spec_from_file_location(
     "socks_xray_gate", ROOT / "deploy/test_mobile_imported_socks_xray.py")
 gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate)
+
+
+def native_stage_namespace(*, target, source, pq, env, run):
+    # The Windows source phases are a separate native execution boundary.
+    # Their real receipt/ordering rules execute in test_desktop_node_phases.py;
+    # this fixture records only the driver's exact call into that boundary.
+    phases = mock.Mock(name="Windows source phase execution boundary")
+
+    def original_loader(name, filename):
+        if (name, filename) != ('desktop_windows_node_source_phases', 'test_desktop_node_physical.py'):
+            raise AssertionError('native stage requested an unrecognized source loader')
+        return SimpleNamespace(execute_partitioned=phases)
+
+    loader = mock.Mock(side_effect=original_loader)
+    namespace = dict(ROOT=ROOT, sys=sys, target=target, source=source, pq=pq,
+                     cache=None, env=env, run=run, load=loader)
+    return namespace, loader, phases
+
+
+def require_native_stage_phases(namespace, loader, phases):
+    if namespace['target'].startswith('windows/'):
+        loader.assert_called_once_with('desktop_windows_node_source_phases', 'test_desktop_node_physical.py')
+        phases.assert_called_once_with(namespace['source'], namespace['env'], namespace['run'])
+    else:
+        loader.assert_not_called()
+        phases.assert_not_called()
 
 
 class ScopedSOCKSRealityVerdicts(unittest.TestCase):
@@ -359,16 +386,22 @@ class ScopedSOCKSRealitySourceContext(unittest.TestCase):
                 def capture(command, **options):
                     calls.append(([str(value) for value in command], options))
 
-                namespace = dict(ROOT=ROOT, sys=sys, target=target, source=Path("original-core"),
-                                 pq=Path("original-pq"), cache=None, env={"ORIGINAL_ENV": "1"}, run=capture)
+                namespace, loader, phases = native_stage_namespace(target=target, source=Path("original-core"),
+                                 pq=Path("original-pq"), env={"ORIGINAL_ENV": "1"}, run=capture)
                 exec(compile(stage, str(path), "exec"), namespace)
+                require_native_stage_phases(namespace, loader, phases)
                 node = [(i, options) for i, (command, options) in enumerate(calls)
                         if any(Path(value).name == "test_desktop_node_physical.py" for value in command)]
+                phase_checks = [(i, options) for i, (command, options) in enumerate(calls)
+                                if any(Path(value).name == "test_desktop_node_phases.py" for value in command)]
                 reference = [(i, command, options) for i, (command, options) in enumerate(calls)
                              if any(Path(value).name == "test_mobile_imported_socks_xray.py" for value in command)]
-                self.assertEqual(len(node), int(target.startswith(("linux/", "windows/"))))
+                self.assertEqual(len(node), int(target.startswith("linux/")))
+                self.assertEqual(len(phase_checks), int(target.startswith("windows/")))
+                for _, options in phase_checks:
+                    self.assertEqual(options, {'cwd': ROOT, 'env': {'ORIGINAL_ENV': '1'}, 'timeout': 120})
                 for _, options in node:
-                    self.assertEqual(options["timeout"], 3600 if target.startswith("linux/") else 1800)
+                    self.assertEqual(options["timeout"], 3600)
                 self.assertEqual(len(reference), int(target.startswith("linux/")))
                 for index, command, options in reference:
                     self.assertGreater(index, node[0][0])
