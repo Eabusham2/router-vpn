@@ -17,6 +17,7 @@ enum IOSExternalExecution {
         for profile in bundle.routerProfiles {
             guard let external = profile.external else { continue }
             guard profile.normalizedNodeKind == "external", external.matchesStartLayer(profile.startLayer) else { throw issue() }
+            if IOSImportedShadowsocksSource.hasHostnameTransport(profile) { try validateLayerDraft(profile) }
             if let probes = external.openVPNResponseProbes {
                 guard external.protocolName == "openvpn", let original = external.openVPN,
                       external.responseProbe == nil, external.startLayer == nil else { throw issue() }
@@ -159,6 +160,12 @@ enum IOSExternalExecution {
         if external.protocolName == "shadowsocks" {
             let original = try IOSImportedShadowsocksSource.capture(profile)
             var failure: NSError?
+            if IOSImportedShadowsocksSource.hasHostnameTransport(profile) {
+                guard IOSImportedShadowsocksSource.eligible(profile),
+                      let source = LibboxRouterNodeChainImportedMemberInput(original.config, original.capture, &failure),
+                      failure == nil, !source.isEmpty else { throw failure ?? issue() }
+                return
+            }
             let valid = LibboxRouterValidateExternalTransport(original.config, original.capture, &failure)
             if let failure { throw failure }
             guard valid else { throw issue() }

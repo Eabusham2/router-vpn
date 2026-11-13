@@ -24,6 +24,7 @@ GO = GO.replace(anchor, r'''
  case "chain-fixture":var count int;count,err=strconv.Atoi(r.Mode);if err==nil{value,err=chainFixture(count,r.Policy)}
  case "chain-awg-fixture":var count int;count,err=strconv.Atoi(r.Mode);if err==nil{value,err=chainFixtureModes(count,r.Policy,true)}
  case "chain-imported":value,err=mobilemultihop.NodeChainImportedMemberInput(r.Source,r.Policy)
+ case "chain-ordinary":value,err=mobilemultihop.CompileExternalPolicy(r.Source,r.Policy)
  case "chain-member":
   var node *mobilemultihop.NodeProfile;node,err=mobilemultihop.NewNodeProfile(r.Mode,r.Files,r.Policy,r.Source,r.Node)
   if err==nil{value,err=node.LaunchInput()}
@@ -117,6 +118,9 @@ public func LibboxTestProjection(_ launch:String,_ target:String)throws->String{
  return try object(Data(raw.utf8))["launch"] as! String
 }
 public func LibboxTestClose(){TestCompiler.shared.close()}
+public func LibboxTestOrdinarySource(_ config:String,_ capture:String)throws->String {
+ try bridge(["Op":"chain-ordinary","Source":config,"Policy":capture])
+}
 '''
 
 SWIFT = r'''
@@ -140,6 +144,8 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
  static func main(){defer{LibboxTestClose()};do{try run();print("Apple ordered native capture: PASS (\(checks) shipping Swift / shared Go checks; no native connection)")}
  catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
  static func run()throws {
+
+  try hostnameMiddle()
 
   for (method,keySize) in [("2022-blake3-aes-128-gcm",16),("2022-blake3-aes-256-gcm",32),("2022-blake3-chacha20-poly1305",32)] {
   var imported = try sources(3)
@@ -270,6 +276,63 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
   try reject("one-node chain"){_ = try IOSNodeChainCapture.compile(bundles:[original[0]])}
   try reject("nine-node chain"){_ = try IOSNodeChainCapture.compile(bundles:Array(repeating:original[0],count:9))}
   try reject("oversized private transfer"){_ = try IOSNodeChainCapture.reopen(String(repeating:" ",count:IOSNodeChainCapture.maximumInputBytes+1),selectedProfile:profile(original.last!))}
+ }
+ static func hostnameMiddle()throws {
+  for mode in ["wg","awg2-fast","awg2-strong"] {
+   for (method,keySize) in [("2022-blake3-aes-128-gcm",16),("2022-blake3-aes-256-gcm",32),("2022-blake3-chacha20-poly1305",32)] {
+    var bundles=try sources(3),middle=try profile(bundles[1])
+    let host="Middle.Example.Test",secret=Data(repeating:79,count:keySize).base64EncodedString()
+    middle["id"]="original-hostname-middle";middle["name"]="Saved hostname middle";middle["node_kind"]="external";middle["endpoint"]=host
+    middle.removeValue(forKey:"node_proof_id")
+    for key in ["router_api","api_token","adguard_ipv6","socks_host","socks_username","socks_password"] { middle[key]="" }
+    middle["socks_port"]=0;middle["start_layer"]="off";middle["dns_mode"]="custom";middle["dns_protocol"]="tcp";middle["dns_host"]="10.81.0.53";middle["dns_port"]=5353
+    middle["home_lan_access"]=false;middle["ipv6_mode"]="off";middle["kill_switch_policy"]="always"
+    middle["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":host,"port":8388,"method":method,"password":secret]]
+    bundles[1]=try data(["selectedRouterID":"original-hostname-middle","routerProfiles":[middle],"profiles":[String:[String:String]]()])
+    bundles[2]=try editProfile(bundles[2]) { p in
+     var nodes=p["multihop_nodes"] as! [[String:Any]];nodes[0]["mode"]=mode;nodes[1]=["id":"original-hostname-middle","mode":"shadowsocks"];p["multihop_nodes"]=nodes
+    }
+    let original=bundles,typed=try JSONDecoder().decode(RouterProfile.self,from:data(middle))
+    try check("saved hostname middle eligible "+mode+"/"+method,IOSImportedShadowsocksSource.eligible(typed))
+    let raw=try IOSImportedShadowsocksSource.capture(typed),source=try object(Data(raw.config.utf8)),capture=try object(Data(raw.capture.utf8))
+    try check("hostname capture performs no bootstrap or application DNS",source["dns"]==nil && capture["dns_bootstrap"]==nil)
+    try check("original hostname survives all typed source copies",(capture["profile"] as? [String:Any])?["endpoint"] as? String==host && ((source["outbounds"] as? [[String:Any]])?.first?["server"] as? String)==host)
+    try reject("hostname cannot become ordinary physical authority"){_ = try LibboxTestOrdinarySource(raw.config,raw.capture)}
+    let chain=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? chain.plan.close()}
+    let replay=try IOSNodeChainCapture.reopen(chain.launchInput,selectedProfile:profile(bundles[2]));defer{try? replay.plan.close()}
+    try check("hostname exact source replay",replay.launchInput==chain.launchInput && bundles==original)
+    let graph=try object(Data(chain.config.utf8)),outs=graph["outbounds"] as! [[String:Any]],dns=graph["dns"] as! [String:Any],servers=dns["servers"] as! [[String:Any]]
+    let transport=outs.first{$0["server"] as? String==host}!,query=transport["domain_resolver"] as! [String:Any]
+    let resolver=servers.first{$0["tag"] as? String==query["server"] as? String}!,selected=servers.first{$0["tag"] as? String==dns["final"] as? String}!
+    try check("hostname lookup follows preceding transport",resolver["type"] as? String=="tcp" && resolver["server"] as? String=="10.81.0.53" && resolver["server_port"] as? Int==5353 && resolver["detour"] as? String==transport["detour"] as? String)
+    let final=try profile(bundles[2]),selector=outs.first{$0["tag"] as? String==((graph["route"] as? [String:Any])?["final"] as? String)}!
+    try check("final selector retains one captured member",selector["type"] as? String=="selector" && selector["outbounds"] as? [String]==[selector["default"] as! String])
+    try check("final Home resolver remains separate",selected["tag"] as? String != resolver["tag"] as? String && selected["server"] as? String==final["adguard_ipv4"] as? String && selected["detour"] as? String==selector["default"] as? String)
+    try check("hostname device restrictions remain captured",chain.strict && !chain.homeLANAccess)
+    for fault in ["home","rescue","udp","tls","zero-port","missing-port","resolver-name","noncanonical-resolver","bootstrap","tls-name","dns-path","endpoint-case","credential","private-token","first-position"] {
+     var changed=bundles
+     changed[1]=try editProfile(changed[1]) { p in
+      switch fault {
+      case "home","rescue":p["dns_mode"]=fault
+      case "udp","tls":p["dns_protocol"]=fault
+      case "zero-port":p["dns_port"]=0
+      case "missing-port":p.removeValue(forKey:"dns_port")
+      case "resolver-name":p["dns_host"]="resolver.example.test"
+      case "noncanonical-resolver":p["dns_host"]="2001:0DB8::53"
+      case "bootstrap":p["dns_bootstrap"]=["server":["type":"tcp","server":"10.81.0.53","server_port":5353]]
+      case "tls-name":p["dns_server_name"]="resolver.example.test"
+      case "dns-path":p["dns_path"]="/dns-query"
+      case "endpoint-case":p["endpoint"]=host.lowercased()
+      case "credential":var ext=p["external"] as! [String:Any],ss=ext["shadowsocks"] as! [String:Any];ss["password"]="invalid!";ext["shadowsocks"]=ss;p["external"]=ext
+      case "private-token":p["api_token"]="borrowed-secret"
+      default:break
+      }
+     }
+     if fault=="first-position" { changed.swapAt(0,1) }
+     try reject("hostname middle rejects "+fault){_ = try IOSNodeChainCapture.compile(bundles:changed)}
+    }
+   }
+  }
  }
 }
 '''

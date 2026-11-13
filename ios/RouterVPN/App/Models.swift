@@ -991,8 +991,44 @@ enum IOSImportedShadowsocksSource {
               key.count == keySize, key.base64EncodedString() == ss.password,
               external.startLayer == nil, [nil,"","off"].contains(profile.startLayer),
               profile.nodeProofID == nil || profile.nodeProofID == "", profile.routerAPI.isEmpty, profile.apiToken.isEmpty else { return false }
-        // Literal-only admission never consults the device resolver.
-        return literal(ss.server)
+        if literal(ss.server) { return true }
+        // A hostname is source authority for the ordered middle only. Its
+        // explicitly selected TCP resolver is bound to the preceding prefix
+        // by the shared compiler; eligibility performs no device DNS lookup.
+        guard hostname(ss.server), profile.endpoint == ss.server,
+              profile.dnsMode == "custom", profile.dnsProtocol == "tcp",
+              let resolver = profile.dnsHost, canonicalLiteral(resolver),
+              let port = profile.dnsPort, (1...65535).contains(port),
+              profile.dnsBootstrap == nil, [nil,""].contains(profile.dnsServerName),
+              [nil,""].contains(profile.dnsPath) else { return false }
+        return true
+    }
+    static func hasHostnameTransport(_ profile: RouterProfile) -> Bool {
+        guard profile.external?.protocolName == "shadowsocks", let host = profile.external?.shadowsocks?.server else { return false }
+        return !literal(host)
+    }
+    private static func hostname(_ host: String) -> Bool {
+        let bytes = Array(host.utf8), labels = host.split(separator:".",omittingEmptySubsequences:false)
+        guard bytes.count <= 253, labels.count >= 2,
+              bytes.contains(where:{(65...90).contains($0) || (97...122).contains($0)}),
+              host.lowercased() != "localhost", !host.lowercased().hasSuffix(".localhost") else { return false }
+        return labels.allSatisfy { label in
+            let part = Array(label.utf8)
+            return !part.isEmpty && part.count <= 63 && part.first != 45 && part.last != 45 &&
+                part.allSatisfy { $0 == 45 || (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) }
+        }
+    }
+    private static func canonicalLiteral(_ host: String) -> Bool {
+        guard !host.utf8.contains(0) else { return false }
+        var v4 = in_addr(), v6 = in6_addr()
+        var buffer = [CChar](repeating:0,count:Int(INET6_ADDRSTRLEN))
+        if inet_pton(AF_INET,host,&v4) == 1 {
+            return inet_ntop(AF_INET,&v4,&buffer,socklen_t(buffer.count)) != nil && String(cString:buffer) == host
+        }
+        if !host.contains("."), inet_pton(AF_INET6,host,&v6) == 1 {
+            return inet_ntop(AF_INET6,&v6,&buffer,socklen_t(buffer.count)) != nil && String(cString:buffer) == host
+        }
+        return false
     }
     private static func literal(_ host: String) -> Bool {
         guard !host.utf8.contains(0) else { return false }

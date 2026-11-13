@@ -66,7 +66,9 @@ extension RouterVPNModel {
         serverPeerJSON: String = "",
         openVPNPairingJSON: String = "",
         openVPNResponseProbesJSON: String = "",
-        openVPNStartLayersJSON: String = ""
+        openVPNStartLayersJSON: String = "",
+        orderedMiddleDNSHost: String = "",
+        orderedMiddleDNSPort: Int = 0
     ) throws {
         guard !profileMutationBlocked else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before adding an external node."])
@@ -98,7 +100,15 @@ extension RouterVPNModel {
         if compiledOpenVPN != nil && (primaryOpenVPN?["server"] as? String == nil || primaryOpenVPN?["server_port"] as? Int == nil) {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 33, userInfo: [NSLocalizedDescriptionKey: "Native OpenVPN compiler returned no valid primary remote."])
         }
-        let server = tor ? "tor" : try iosExternalLiteralIP(primaryOpenVPN?["server"] as? String ?? rawServer, label: "External server")
+        let proposedServer = rawServer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hostnameMiddle = protocolName == "shadowsocks" && IPv4Address(proposedServer) == nil && IPv6Address(proposedServer) == nil
+        let server: String
+        if tor { server = "tor" }
+        else if hostnameMiddle { server = proposedServer }
+        else { server = try iosExternalLiteralIP(primaryOpenVPN?["server"] as? String ?? rawServer, label: "External server") }
+        if !hostnameMiddle && (!orderedMiddleDNSHost.isEmpty || orderedMiddleDNSPort != 0) {
+            throw NSError(domain: "RouterVPN.ExternalNode", code: 39, userInfo: [NSLocalizedDescriptionKey: "The ordered hostname lookup belongs only to its Shadowsocks 2022 middle node."])
+        }
         let port = primaryOpenVPN?["server_port"] as? Int ?? port
         let expected = tor ? "" : try iosExternalPublicIP(rawExpected, label: "Expected public exit IP")
         guard tor || (1...65535).contains(port) else {
@@ -241,8 +251,8 @@ extension RouterVPNModel {
         }
 
         let profileID = "ios-ext-" + UUID().uuidString.lowercased()
-        let endpoint = tor ? "tor" : iosExternalEndpoint(server: server, port: port)
-        let profile: [String: Any] = [
+        let endpoint = tor ? "tor" : hostnameMiddle ? server : iosExternalEndpoint(server: server, port: port)
+        var profile: [String: Any] = [
             "schema_version": 4,
             "id": profileID,
             "name": name,
@@ -264,6 +274,14 @@ extension RouterVPNModel {
             "dns_mode": "home",
             "start_layer": exitStartLayer,
         ]
+        if hostnameMiddle {
+            guard (1...65535).contains(orderedMiddleDNSPort) else {
+                throw NSError(domain: "RouterVPN.ExternalNode", code: 40, userInfo: [NSLocalizedDescriptionKey: "Enter the Custom TCP resolver's explicit port for this ordered middle."])
+            }
+            profile["dns_mode"] = "custom"; profile["dns_protocol"] = "tcp"
+            profile["dns_host"] = try iosExternalLiteralIP(orderedMiddleDNSHost, label: "Ordered middle resolver")
+            profile["dns_port"] = orderedMiddleDNSPort
+        }
         if tor {
             let captured = try JSONSerialization.data(withJSONObject: profile, options: [.sortedKeys])
             var failure: NSError?
@@ -372,6 +390,8 @@ struct IOSExternalNodeBuilderView: View {
     @State private var openVPNPairingJSON = ""
     @State private var openVPNResponseProbesJSON = ""
     @State private var openVPNStartLayersJSON = ""
+    @State private var orderedMiddleDNSHost = ""
+    @State private var orderedMiddleDNSPort = ""
     @State private var wgPrivate = ""
     @State private var wgPeer = ""
     @State private var wgPSK = ""
@@ -386,6 +406,11 @@ struct IOSExternalNodeBuilderView: View {
     @State private var torBridges = ""
     @State private var errorText = ""
 
+    private var hostnameMiddle: Bool {
+        let value = server.trimmingCharacters(in: .whitespacesAndNewlines)
+        return selected == .shadowsocks && !value.isEmpty && IPv4Address(value) == nil && IPv6Address(value) == nil
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -399,7 +424,7 @@ struct IOSExternalNodeBuilderView: View {
                 Section("Identity") {
                     TextField("Display name", text: $name)
                     if selected != .openvpn && !selected.isTor {
-                        TextField("Server literal IP", text: $server).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        TextField(selected == .shadowsocks ? "Server IP or hostname" : "Server literal IP", text: $server).textInputAutocapitalization(.never).autocorrectionDisabled()
                         TextField("Port", text: $port).keyboardType(.numberPad)
                     }
                     if !selected.isTor {
@@ -426,8 +451,15 @@ struct IOSExternalNodeBuilderView: View {
                     }
                 } else {
                     Section("DNS") {
-                        Text("Home AdGuard is the default and uses your paired Router VPN entry. You can save this node now, then choose its entry in Multihop. To connect directly, select a reachable resolver in DNS settings.")
-                            .font(.caption).foregroundStyle(.secondary)
+                        if hostnameMiddle {
+                            TextField("Custom TCP resolver IP", text: $orderedMiddleDNSHost).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            TextField("Resolver port", text: $orderedMiddleDNSPort).keyboardType(.numberPad)
+                            Text("Use this Shadowsocks 2022 hostname as an ordered middle hop. Its resolver must be reachable through the preceding WireGuard or AmneziaWG node. The final node keeps its own DNS settings.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text("Home AdGuard is the default and uses your paired Router VPN entry. You can save this node now, then choose its entry in Multihop. To connect directly, select a reachable resolver in DNS settings.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 if selected == .socks5 || selected == .httpConnect || selected == .httpsConnect {
@@ -573,7 +605,9 @@ struct IOSExternalNodeBuilderView: View {
                 serverPeerJSON: selected.isWireGuardFamily ? serverPeerJSON : "",
                 openVPNPairingJSON: selected == .openvpn ? openVPNPairingJSON : "",
                 openVPNResponseProbesJSON: selected == .openvpn ? openVPNResponseProbesJSON : "",
-                openVPNStartLayersJSON: selected == .openvpn ? openVPNStartLayersJSON : ""
+                openVPNStartLayersJSON: selected == .openvpn ? openVPNStartLayersJSON : "",
+                orderedMiddleDNSHost: hostnameMiddle ? orderedMiddleDNSHost : "",
+                orderedMiddleDNSPort: hostnameMiddle ? (Int(orderedMiddleDNSPort) ?? 0) : 0
             )
             dismiss()
         } catch { errorText = error.localizedDescription }

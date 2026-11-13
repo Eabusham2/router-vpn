@@ -156,8 +156,8 @@ access:
   SS2022 hostname with its explicitly saved Custom TCP resolver through the
   preceding prefix. The actual encrypted DNS/SS transport test now passes
   and is mandatory in the Linux host preflight. Android and desktop saved-source
-  producers are published; iOS producer integration and installed hostname-path
-  acceptance remain in progress. Other explicitly requested protocols, positions, layers and graph families
+  producers and the iOS capture, profile/settings and node-creation paths are
+  published. Installed hostname-path acceptance remains in progress. Other explicitly requested protocols, positions, layers and graph families
   remain requirements. This is not an invented requirement for every theoretical
   protocol permutation. Safe rejection is not implementation.
 - Public ordered macOS admission requires actual generated-child and installed
@@ -1909,6 +1909,54 @@ published 64-verdict encrypted peer gate supplies separate native transport
 evidence. Native installed Windows/Linux/macOS hostname paths and physical
 network, leak and transition acceptance still require their own evidence at
 the publication commit.
+
+## iOS hostname-middle creation, capture and saved policy
+
+The iOS ordered source now accepts an original, unlayered SS2022 hostname
+middle only when its endpoint, selected transport and original hostname agree,
+with explicit Custom TCP DNS, a canonical literal resolver and positive port.
+The existing three-member/middle-position restriction remains. Imported-node
+validation and device-policy saves call the actual shared imported-member
+constructor; ordinary physical transport admission is unchanged. Capture,
+replay and saved profiles retain the selected credential, resolver and device
+policy without performing an ordinary-network hostname lookup.
+
+The native node-creation form now provides resolver IP/port fields when an
+SS hostname is entered. It preserves the original host separately from the
+transport port, validates the complete private profile with the shared
+constructor before linking it, and explains how to place the node between
+its packet entry and final node. Literal-IP creation retains its Home AdGuard
+default. Invalid keys, legacy hostname ciphers, malformed names, loopback or
+hostname resolvers and missing explicit ports cannot publish a new node.
+
+All seven changed files matched the immutable
+`cf89341641e9674958a003eb4a35e090d71662e9` snapshot plus those files, with all
+5,080 captured source inputs unchanged. Actual shipping Swift and real shared
+Go capture/replay passed 415 checks, including all three packet prefix modes
+and SS2022 ciphers, exact source case, isolated transport/final DNS, source
+replay and policy rejection. Four separately compiled source controls rejected
+ignored native launch failure, changed final profile, foreign platform
+projection and replaced final assets. The ordinary native physical compiler
+also rejected the unresolved hostname source.
+
+The profile/store suite passed 140 checks and three separately compiled
+controls for stale candidate commit, reduced ordered inventory and discarded
+ordered selection. This suite used the earlier recorded `b4c31e15` snapshot;
+its actual shipping Models, profile/store and callback closure hashes remain
+identical in this publication. Actual device settings and the shipping node
+creation method passed 756 additional checks with the real native policy
+parsers. Unrelated nodes/private assets stayed unchanged, and saved hostname
+profiles restored their explicit resolver policy transactionally. The new
+capture fixture supplies all required Codable fields and checks final DNS
+against the selector's actual captured default member, rather than mistaking
+the selector tag for the final transport.
+
+These are portable Swift/model/controller and compiler results with explicit
+storage and platform-type boundaries. They do not establish a current Xcode
+package, Apple signing, PacketTunnel/TUN/firewall execution or physical iPhone
+and iPad networking. Exact-publication native build and live acceptance remain
+required. The separate encrypted native hostname gate is transport evidence,
+not a substitute for those device checks.
 
 ## Physical and private acceptance
 

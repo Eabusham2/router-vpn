@@ -209,11 +209,14 @@ extension Optional where Wrapped == RouterProfile {func unwrapCandidate()throws-
  }
 
  static func importedRoundtrip()throws {
+  for hostname in [false,true] {
   for (method,keySize) in [("2022-blake3-aes-128-gcm",16),("2022-blake3-aes-256-gcm",32),("2022-blake3-chacha20-poly1305",32)] {
   let(model,ids)=try setup(3),store=IOSNodeBundleStore.shared
   var middle=try stored(ids[1]),profile=middle.routerProfiles[0]
   profile.nodeKind="external";profile.nodeProofID=nil;profile.routerAPI="";profile.apiToken="";profile.startLayer="off";profile.dnsMode="rescue"
-  let source:[String:Any] = ["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":"198.51.100.76","port":443,"method":method,"password":Data(repeating:0,count:keySize).base64EncodedString()]]
+  let host=hostname ? "Middle.Example.Test":"198.51.100.76"
+  if hostname {profile.endpoint=host;profile.dnsMode="custom";profile.dnsProtocol="tcp";profile.dnsHost="10.81.0.53";profile.dnsPort=5353;profile.dnsServerName=nil;profile.dnsPath=nil;profile.dnsBootstrap=nil}
+  let source:[String:Any] = ["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":host,"port":443,"method":method,"password":Data(repeating:0,count:keySize).base64EncodedString()]]
   profile.external=try JSONDecoder().decode(ExternalNodeConfig.self,from:JSONSerialization.data(withJSONObject:source))
   middle.routerProfiles=[profile];middle.profiles=[:];try store.save(middle)
   var final=model.bundle!;final.routerProfiles[0].multihopNodes![1].mode="shadowsocks";try store.save(final);model.bundle=try stored(ids.last!)
@@ -229,8 +232,15 @@ extension Optional where Wrapped == RouterProfile {func unwrapCandidate()throws-
   _ = try IOSConnectionProfileStore.load(model:model,id:saved.id)
   let captured=try model.iosNodeChainBundles(for:model.bundle!)
   try check("loaded custom middle retains every original position",captured.count==3 && captured[1].routerProfiles[0].normalizedNodeKind=="external" && captured[1].routerProfiles[0].nodeProofID==nil && captured[1].routerProfiles[0].external?.shadowsocks?.method==method)
+  if hostname {
+   try check("hostname profile restores exact resolver and transport",captured[1].routerProfiles[0].endpoint==host && captured[1].routerProfiles[0].external?.shadowsocks?.server==host && captured[1].routerProfiles[0].dnsHost=="10.81.0.53" && captured[1].routerProfiles[0].dnsProtocol=="tcp" && captured[1].routerProfiles[0].dnsPort==5353)
+   try replaceRaw(ids[1]){$0.routerProfiles[0].dnsHost="10.81.0.54"}
+   _ = try IOSConnectionProfileStore.load(model:model,id:saved.id)
+   try check("Load restores the saved hostname resolver transactionally",try stored(ids[1]).routerProfiles[0].dnsHost=="10.81.0.53")
+  }
   try replaceRaw(ids[1]){$0.routerProfiles[0].external?.expectedPublicIP="203.0.113.77"}
   try reject("replaced custom public identity"){_ = try IOSConnectionProfileStore.load(model:model,id:saved.id)}
+  }
   }
  }
  static func main(){do{defer{UserDefaults.standard.removePersistentDomain(forName:UserDefaults.suite)};try matrix();try failures();try normalization();try candidateProfiles();try importedRoundtrip();print("Apple ordered profile persistence: PASS (\(checks) shipping Swift checks)")}

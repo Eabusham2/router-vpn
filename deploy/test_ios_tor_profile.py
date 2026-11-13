@@ -72,6 +72,7 @@ GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile
  case "imported-router","imported-router-metadata","imported-router-source":var a map[string]string;err=json.Unmarshal([]byte(r.Config),&a);if err==nil{var plan *mobilemultihop.Controller;plan,err=mobilemultihop.NewImportedEntry(a["config"],a["capture"],a["mode"],a["files"],a["profile"],a["start"],a["dns"]);if err==nil{value=plan.Config();if r.Op=="imported-router-metadata"{value=plan.Metadata()};if r.Op=="imported-router-source"{value=plan.SourceSHA256()};err=plan.Close()}}
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "external-validate-transport":err=mobilemultihop.ValidateExternalTransport(r.Config,r.Policy);value="checked"
+ case "ordered-imported-source":value,err=mobilemultihop.NodeChainImportedMemberInput(r.Config,r.Policy)
  case "external-validate-dns":err=mobilemultihop.ValidateExternalDNS(r.Config,r.Policy);value="checked"
  case "external-prepare":value,err=mobilemultihop.PrepareExternalExecutionCapture(r.Config,r.Policy,r.Source)
  case "external-response-probe":err=mobilemultihop.ValidateExternalResponseProbe(r.Node,r.Config);value="checked"
@@ -142,6 +143,10 @@ public func LibboxRouterCompileExternalPolicy(_ config:String,_ capture:String,_
 }
 public func LibboxRouterValidateExternalTransport(_ config:String,_ capture:String,_ error:inout NSError?)->Bool {
  result(&error,["Op":"external-validate-transport","Config":config,"Policy":capture]) == "checked"
+}
+public func LibboxRouterNodeChainImportedMemberInput(_ config:String,_ capture:String,_ error:inout NSError?)->String? {
+ let value=result(&error,["Op":"ordered-imported-source","Config":config,"Policy":capture])
+ return error == nil && !value.isEmpty ? value:nil
 }
 public func LibboxRouterValidateExternalDNS(_ profile:String,_ entry:String,_ error:inout NSError?)->Bool {
  result(&error,["Op":"external-validate-dns","Config":profile,"Policy":entry]) == "checked"

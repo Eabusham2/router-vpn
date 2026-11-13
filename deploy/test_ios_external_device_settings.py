@@ -48,12 +48,13 @@ enum IOSDNSRuntimePolicy {
  // SELECTED_PROFILE
 }
 @MainActor final class RouterVPNModel {
- var bundle:ClientBundle?,profileMutationBlocked=false,imports=0,failImport=false,separateEntry=false
+ var bundle:ClientBundle?,profileMutationBlocked=false,imports=0,failImport=false,separateEntry=false,message=""
  func importBundle(_ data:Data)throws {
   if failImport {throw NSError(domain:"DeviceStoreWrite",code:1)}
   let prepared=try JSONDecoder().decode(ClientBundle.self,from:data)
   bundle=prepared;imports+=1
  }
+ func linkNodeBundle(_ data:Data)throws {try importBundle(data)}
  func iosMultihopEntryBundle(for source:ClientBundle)throws->ClientBundle {
   guard let selected=IOSDNSRuntimePolicy.selectedProfile(in:source)else{throw CancellationError()}
   let entries=source.routerProfiles.filter{$0.id==selected.multihopEntryID && $0.id != selected.id}
@@ -233,8 +234,57 @@ enum IOSDNSRuntimePolicy {
  }
  static func main(){
   defer{RouterVPNTorTestClose()}
-  do{try saveMatrix();try invalidDrafts();try nativeRejections();try torJumboNativePolicy();try torJumboEditor();try torPaddingEditor();print("Apple external device settings: PASS (\(checks) shipping editor/model checks with real native ordinary/Tor transport-policy validation)")}
+  do{try saveMatrix();try invalidDrafts();try nativeRejections();try hostnameMiddleSettings();try hostnameMiddleCreation();try torJumboNativePolicy();try torJumboEditor();try torPaddingEditor();print("Apple external device settings: PASS (\(checks) shipping editor/model checks with real native ordinary/Tor transport-policy validation)")}
   catch{FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1)}
+ }
+ static func hostnameMiddleSettings()throws {
+  for (method,size) in [("2022-blake3-aes-128-gcm",16),("2022-blake3-aes-256-gcm",32),("2022-blake3-chacha20-poly1305",32)] {
+   var p=try profile("shadowsocks")
+   p.endpoint="Middle.Example.Test";p.external!.shadowsocks!.server=p.endpoint;p.external!.shadowsocks!.method=method;p.external!.shadowsocks!.password=Data(repeating:79,count:size).base64EncodedString()
+   p.dnsMode="custom";p.dnsProtocol="tcp";p.dnsHost="10.81.0.53";p.dnsPort=5353;p.dnsServerName=nil;p.dnsPath=nil;p.dnsBootstrap=nil
+   p.multihopEnabled=nil;p.multihopEntryID=nil;p.multihopEntryMode=nil;p.multihopExitID=nil;p.multihopExitMode=nil;p.multihopExecution=nil
+   let model=RouterVPNModel();model.bundle=try bundle(p);let before=model.bundle!,editor=Settings(model);editor.load();editor.ipv6Mode="off";editor.homeLANAccess=false
+   editor.saveExternalDevicePolicy()
+   try check("hostname settings save through actual ordered source compiler: "+editor.status,model.imports==1)
+   let saved=model.bundle!.routerProfiles[1]
+   try check("hostname settings preserve exact transport and resolver",saved.external==p.external && saved.endpoint==p.endpoint && saved.dnsHost==p.dnsHost && saved.dnsProtocol==p.dnsProtocol && saved.dnsPort==p.dnsPort && saved.dnsBootstrap==nil)
+   try check("hostname settings preserve unrelated private sources",model.bundle!.routerProfiles[0]==before.routerProfiles[0] && model.bundle!.routerProfiles[2]==before.routerProfiles[2] && model.bundle!.profiles==before.profiles)
+   try IOSExternalExecution.validateImported(model.bundle!)
+   var bad=saved;bad.dnsPort=0
+   var rejected=false;do{try IOSExternalExecution.validateDeviceDraft(bad)}catch{rejected=true}
+   try check("hostname settings cannot replace explicit resolver port with default",rejected)
+   bad=saved;bad.endpoint=bad.endpoint.lowercased();rejected=false;do{try IOSExternalExecution.validateDeviceDraft(bad)}catch{rejected=true}
+   try check("hostname settings preserve original endpoint case identity",rejected)
+  }
+ }
+ static func hostnameMiddleCreation()throws {
+  for (method,size) in [("2022-blake3-aes-128-gcm",16),("2022-blake3-aes-256-gcm",32),("2022-blake3-chacha20-poly1305",32)] {
+   let model=RouterVPNModel(),secret=Data(repeating:79,count:size).base64EncodedString()
+   func create(_ host:String="Middle.Example.Test",_ resolver:String="10.81.0.53",_ port:Int=5353,_ cipher:String?=nil,_ key:String?=nil)throws {
+    try model.createIOSExternalNode(protocolName:"shadowsocks",name:"Original hostname",server:host,port:8388,expectedPublicIP:"203.0.113.76",username:"",password:"",method:cipher ?? method,secret:key ?? secret,tlsServerName:"",wgPrivateKey:"",wgPeerPublicKey:"",wgPresharedKey:"",wgAddresses:[],wgAllowedIPs:[],wgDNS:[],wgMTU:nil,orderedMiddleDNSHost:resolver,orderedMiddleDNSPort:port)
+   }
+   try create()
+   let saved=model.bundle!,p=saved.routerProfiles[0],before=try encoded(saved)
+   try check("creation retains exact hostname and source authority",model.imports==1 && p.endpoint=="Middle.Example.Test" && p.external?.shadowsocks?.server==p.endpoint && p.external?.shadowsocks?.method==method && p.external?.shadowsocks?.password==secret && p.apiToken.isEmpty && p.routerAPI.isEmpty && p.nodeProofID==nil)
+   try check("creation saves explicit transport DNS without changing global defaults",p.dnsMode=="custom" && p.dnsProtocol=="tcp" && p.dnsHost=="10.81.0.53" && p.dnsPort==5353 && p.ipv6Mode=="on")
+   for fault in ["resolver-hostname","resolver-loopback","zero-port","invalid-port","legacy-method","bad-key","malformed-ip","trailing-dot"] {
+    var rejected=false
+    do {
+     switch fault {
+     case "resolver-hostname":try create("Middle.Example.Test","dns.example.test")
+     case "resolver-loopback":try create("Middle.Example.Test","127.0.0.1")
+     case "zero-port":try create("Middle.Example.Test","10.81.0.53",0)
+     case "invalid-port":try create("Middle.Example.Test","10.81.0.53",65536)
+     case "legacy-method":try create("Middle.Example.Test","10.81.0.53",5353,"aes-256-gcm")
+     case "bad-key":try create("Middle.Example.Test","10.81.0.53",5353,nil,"invalid!")
+     case "malformed-ip":try create("192.168.001.1")
+     case "trailing-dot":try create("Middle.Example.Test.")
+     default:fatalError()
+     }
+    }catch{rejected=true}
+    try check("hostname creation refuses invalid original "+fault,rejected && model.imports==1 && encoded(model.bundle!)==before)
+   }
+  }
  }
  static func torPaddingEditor()throws {
   for kind in ["tor","tor-bridge"] {for execution in ["local","server"] {for rate in [32,64,192] {for enabled in [false,true] {for separate in [false,true] {
@@ -302,6 +352,11 @@ def main():
     source = SWIFT.replace(' // SETTINGS_METHODS', methods).replace(' // SELECTED_PROFILE', selected).replace(' // TRANSPORT_FIXTURES', fixtures)
     source = source.replace(' // CAPTURE_ENTRY', member((APP / 'RouterVPNModelExternal.swift').read_text(), 'func externalTorEntryData('))
     policy = (APP / 'IOSDevicePolicySettings.swift').read_text()
+    builder = (APP / 'IOSExternalNodeBuilderView.swift').read_text()
+    creation = builder[builder.index('@MainActor\nextension RouterVPNModel {'):builder.index('struct IOSExternalNodeBuilderView:')]
+    assert 'TextField("Custom TCP resolver IP", text: $orderedMiddleDNSHost)' in builder
+    assert 'orderedMiddleDNSHost: hostnameMiddle ? orderedMiddleDNSHost : ""' in builder
+    assert 'orderedMiddleDNSPort: hostnameMiddle ? (Int(orderedMiddleDNSPort) ?? 0) : 0' in builder
     assert 'Button("Save device policy for next connection") { saveExternalDevicePolicy() }' in view
     assert 'if torNode {\n                            Toggle("Jumbo virtual interface (9000)", isOn: $jumboTUN)' in view
     assert 'not a measured Internet packet limit' in view and 'Jumbo disables Auto MTU and Retest' in view
@@ -316,11 +371,16 @@ def main():
         libbox = work / 'Libbox.swift'; libbox.write_text(T.LIBBOX)
         suffix = '.dylib' if platform.system() == 'Darwin' else '.so'
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(libbox), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(work / ('libLibbox' + suffix))], check=True, timeout=90)
+        if platform.system() != 'Darwin':
+            network = work / 'Network.swift'; network.write_text(T.NETWORK)
+            subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Network', str(network), '-emit-module-path', str(work / 'Network.swiftmodule'), '-o', str(work / 'libNetwork.so')], check=True, timeout=60)
+            options += ['-lNetwork']
         options += ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
         code = work / 'Tests.swift'; code.write_text(source)
+        creator = work / 'CreateNode.swift'; creator.write_text('import Foundation\nimport Network\nimport Libbox\n' + creation)
         draft = work / 'IOSDevicePolicySettings.swift'; draft.write_text(policy)
         binary = work / 'tests'
-        command = options + ['-Onone', '-whole-module-optimization', str(APP / 'Models.swift'), str(APP / 'IOSStartupPolicy.swift'), str(APP / 'IOSExternalExecution.swift'), str(draft), str(code), '-o', str(binary)]
+        command = options + ['-Onone', '-whole-module-optimization', str(APP / 'Models.swift'), str(APP / 'IOSStartupPolicy.swift'), str(APP / 'IOSExternalExecution.swift'), str(draft), str(creator), str(code), '-o', str(binary)]
         subprocess.run(command, check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=60)
         if args.shipping_only: return
