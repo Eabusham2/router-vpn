@@ -19,12 +19,14 @@ on:
           - android-tor
           - android-prefix-owner
           - android-socks-host
+          - ios-socks-host
           - linux-hy2
           - socks-source
           - macos-profiles
           - socks-runtime
           - socks-owner
           - socks-bridge
+          - socks-run
           - socks-mtu
           - darwin-hy2
 
@@ -43,8 +45,8 @@ env:
 
 jobs:
   validate:
-    runs-on: ${{ (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2') && 'macos-15-intel' || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2') && 45 || 30 }}
+    runs-on: ${{ (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2' || inputs.suite == 'ios-socks-host') && 'macos-15-intel' || 'ubuntu-24.04' }}
+    timeout-minutes: ${{ (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2' || inputs.suite == 'ios-socks-host') && 45 || 30 }}
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
       SUITE: ${{ inputs.suite }}
@@ -60,7 +62,7 @@ jobs:
           for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
               if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
                   raise SystemExit(name + " must be a complete lowercase Git commit.")
-          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host"):
+          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host"):
               raise SystemExit("Unknown focused validation suite.")
           PY
       - name: Check out the trusted validator
@@ -78,12 +80,12 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
       - name: Install Python for the native macOS source fixtures
-        if: inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2'
+        if: inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2' || inputs.suite == 'ios-socks-host'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Use the original canonical macOS temporary root
-        if: inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2'
+        if: inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2' || inputs.suite == 'ios-socks-host'
         run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Verify source identity and required validator controls
         shell: bash
@@ -104,6 +106,12 @@ jobs:
           fi
           if [[ "$SUITE" == "android-socks-host" ]]; then
             python3 validator/deploy/validate-android-socks-host.py --self-test
+          fi
+          if [[ "$SUITE" == "ios-socks-host" ]]; then
+            python3 validator/deploy/validate-ios-socks-host.py --self-test
+          fi
+          if [[ "$SUITE" == "socks-run" ]]; then
+            python3 validator/deploy/test_focused_socks_run_runner.py
           fi
           if [[ "$SUITE" == "socks-bridge" ]]; then
             python3 validator/deploy/test_focused_socks_bridge_runner.py
@@ -139,7 +147,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libandroid-json-java
       - name: Install the Linux encrypted-reference compiler dependencies
-        if: inputs.suite == 'linux-hy2' || inputs.suite == 'socks-owner' || inputs.suite == 'socks-bridge'
+        if: inputs.suite == 'linux-hy2' || inputs.suite == 'socks-owner' || inputs.suite == 'socks-bridge' || inputs.suite == 'socks-run'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential pkg-config
@@ -183,6 +191,14 @@ jobs:
             --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
             --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Execute typed SOCKS Run and measurement over original encrypted peers
+        if: inputs.suite == 'socks-run'
+        shell: bash
+        run: |
+          python3 validator/deploy/test_focused_socks_run.py \
+            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
+            --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests"
       - name: Compile typed native SOCKS composition and original encrypted owners
         if: inputs.suite == 'socks-bridge'
         shell: bash
@@ -213,6 +229,14 @@ jobs:
           python3 validator/deploy/validate-linux-hy2-source.py \
             --source "$GITHUB_WORKSPACE/candidate" --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests" --go "$(command -v go)"
+      - name: Compile typed Apple SOCKS source and retained native host controls
+        if: inputs.suite == 'ios-socks-host'
+        shell: bash
+        run: |
+          python3 validator/deploy/validate-ios-socks-host.py \
+            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
+            --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests"
       - name: Compile typed Android SOCKS source and shipping lifecycle controls
         if: inputs.suite == 'android-socks-host'
         shell: bash
