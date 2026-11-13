@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib.util
 import json
@@ -37,6 +38,56 @@ TARGETS = {
     "windows/amd64": ("Windows", ("AMD64", "x86_64")),
     "windows/arm64": ("Windows", ("ARM64", "aarch64")),
 }
+
+
+# One shipping profile case, its nineteen original mutations, and one native
+# ordered-editor process each keep the fixture's existing ninety-second bound.
+WINDOWS_PROFILE_MUTATIONS = (
+    "shipping", "capture-two-modes", "load-fallback", "connect-fallback",
+    "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback",
+    "startup-deadline", "ordered-drop-middle", "ordered-final-owner",
+    "ordered-capability", "ordered-source", "ordered-locked-source",
+    "setup-expectation", "setup-current-receipt", "setup-response-source",
+    "setup-response-order", "setup-load-inventory", "setup-refresh-retirement",
+    "setup-uncertain-owner",
+)
+WINDOWS_CHILD_SECONDS = 90
+
+
+def windows_suite_budget(raw):
+    """Account for the original bounded processes without changing any child."""
+    tree = ast.parse(raw)
+    functions = {}
+    for name in ("run", "windows"):
+        found = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]
+        if len(found) != 1:
+            raise ValueError("original Windows fixture function inventory changed")
+        functions[name] = found[0]
+    children = [node for node in ast.walk(functions["run"]) if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute) and node.func.attr == "run"
+                and isinstance(node.func.value, ast.Name) and node.func.value.id == "subprocess"]
+    if len(children) != 1:
+        raise ValueError("original Windows subprocess inventory changed")
+    deadlines = [item.value for item in children[0].keywords if item.arg == "timeout"]
+    if (len(deadlines) != 1 or not isinstance(deadlines[0], ast.Constant)
+            or type(deadlines[0].value) is not int or deadlines[0].value != WINDOWS_CHILD_SECONDS):
+        raise ValueError("original Windows child deadline changed")
+    loops = [node for node in functions["windows"].body if isinstance(node, ast.For)
+             and isinstance(node.target, ast.Name) and node.target.id == "mutation"]
+    if len(loops) != 1 or not isinstance(loops[0].iter, ast.Tuple):
+        raise ValueError("original Windows profile inventory changed")
+    try:
+        mutations = ast.literal_eval(loops[0].iter)
+    except (ValueError, TypeError):
+        raise ValueError("original Windows profile inventory is not literal") from None
+    if mutations != WINDOWS_PROFILE_MUTATIONS:
+        raise ValueError("original Windows profile inventory changed")
+    def calls(node):
+        return [item for item in ast.walk(node) if isinstance(item, ast.Call)
+                and isinstance(item.func, ast.Name) and item.func.id == "run"]
+    if len(calls(loops[0])) != 1 or len(calls(functions["windows"])) != 2:
+        raise ValueError("original Windows owned command inventory changed")
+    return (len(mutations) + 1) * WINDOWS_CHILD_SECONDS
 
 
 def load(name, path):
@@ -179,6 +230,9 @@ def validate(args):
     save()
     try:
         if system == "Windows":
+            suite_bound = windows_suite_budget((source / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8"))
+            manifest["per_child_seconds"] = WINDOWS_CHILD_SECONDS
+            manifest["profile_suite_seconds"] = suite_bound
             for name, wanted in (("powershell.exe", "Desktop"), ("pwsh", "Core")):
                 shell = shutil.which(name)
                 if shell is None:
@@ -195,7 +249,7 @@ def validate(args):
                 manifest.setdefault("shells", []).append({"path": shell, **version})
                 command = [sys.executable, source / "deploy/test_desktop_connection_profile_modes.py",
                            "--platform", "windows", "--shell", shell]
-                raw, code, timed_out, joined, row = execute(name + "-profiles", command, 900)
+                raw, code, timed_out, joined, row = execute(name + "-profiles", command, suite_bound)
                 row["verdict"] = verdict(raw, args.target, code, timed_out, joined)
                 save()
                 if not row["verdict"]["accepted"]:

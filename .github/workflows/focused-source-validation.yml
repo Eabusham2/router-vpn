@@ -604,7 +604,7 @@ jobs:
     if: inputs.suite == 'desktop-socks-editor'
     name: Native Windows saved SOCKS editor on ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:

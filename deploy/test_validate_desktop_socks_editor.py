@@ -75,5 +75,27 @@ class DesktopEditorVerdicts(unittest.TestCase):
         self.assertFalse(D.verdict(b"".join(raw), "linux/amd64", 0, False, True)["accepted"])
 
 
+    def test_windows_suite_budget_covers_each_original_bounded_command(self):
+        source = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
+        self.assertEqual(D.windows_suite_budget(source), 1890)
+        self.assertEqual(D.windows_suite_budget(source), (20 + 1) * 90)
+        self.assertIn('execute("gtk-profiles", command, 900)', Path(D.__file__).read_text(encoding="utf-8"))
+
+    def test_windows_suite_budget_refuses_changed_child_or_case_inventory(self):
+        source = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
+        changes = (
+            source.replace("timeout=90", "timeout=91", 1),
+            source.replace("timeout=90", "timeout=None", 1),
+            source.replace('"shipping", "capture-two-modes", ', '"shipping", ', 1),
+            source.replace('"shipping", "capture-two-modes", ', '"shipping", "shipping", "capture-two-modes", ', 1),
+            source.replace('    run(editor', '    run(editor)\n    run(editor', 1),
+            source.replace('def windows(shell):', 'def omitted_windows(shell):', 1),
+        )
+        for changed in changes:
+            self.assertNotEqual(source, changed)
+            with self.assertRaises(ValueError):
+                D.windows_suite_budget(changed)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
