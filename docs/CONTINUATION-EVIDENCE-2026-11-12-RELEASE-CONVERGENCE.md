@@ -500,6 +500,33 @@ native verdict or receipt. All eighteen existing runner tests passed, preserving
 both required architectures, every child case, authenticated retirement and
 source/image identity checks. Actual hosted execution remains required.
 
+## Android retained temporary candidate owner
+
+The initially idle candidate supervisor now captures one complete saved Local
+graph and its original physical network, selected source, settings and Home
+identity before requesting VPN permission. It owns the outer measurement hold,
+the temporary graph and the fifty-sample candidate worker independently of the
+Activity. It seals proposed profiles while their proof is live, then waits for
+both candidate and graph retirement before exposing Save. A failed join retains
+the same cleanup owner and hold for retry. Observer recreation can reattach to
+retained results; closing those results revokes their authority.
+
+Detached Save checks the exact final idle state, source/catalog identity,
+selection, settings, network, original result and fixed expiry. An observed
+source mismatch remains invalid even if original bytes are restored. The final
+guard rechecks that sticky invalidation after its snapshot, including an overlap
+where a concurrent live reader detects a change during detached Save.
+
+Focused executable evidence: 159 real catalog/source/result/drain checks and
+thirteen causal mutations passed; the composed supervisor passed thirty-nine
+checks and five causal mutations, with explicit OS/native/source fixture
+boundaries. The overlap mutation removes only the final sticky check and fails
+at the restored-source acceptance witness. Both durable process exits are zero.
+The nine mandatory workflow-contract tests also pass. This publishes the helper
+and its mandatory gates; permission/UI wiring and actual device acceptance are
+separate. It still requires a usable complete original graph, rather than
+claiming disconnected prefix-only discovery or arbitrary candidate transports.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

@@ -26,6 +26,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
     final List<Row> rows;
     final String inventory, inventorySHA, signature;
     private volatile boolean invalidated;
+    private volatile boolean savedSourcesInvalidated;
     private final AndroidNodeStore nodes;
     private final AndroidStandardExitStore external;
 
@@ -67,6 +68,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         if(!signature.equals(currentSignature())||!inventorySHA.equals(currentInventorySHA256()))throw new IllegalStateException("Candidate sources changed during capture.");
     }
     private String currentSignature()throws Exception {
+        try {
         long generation=AndroidNodeStore.publicationGeneration(), imported=AndroidStandardExitStore.publicationGeneration();
         String importedIdentity=importedFileIdentity();
         List<String> original=new ArrayList<>();
@@ -81,7 +83,10 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         for(AndroidStandardExitStore.Entry entry:external.list())original.add("external:"+entry.id+":"+digest(AndroidStandardExitStore.snapshot(entry)));
         java.util.Collections.sort(original);
         if(generation!=AndroidNodeStore.publicationGeneration()||imported!=AndroidStandardExitStore.publicationGeneration()||!importedIdentity.equals(importedFileIdentity()))throw new IllegalStateException("Candidate publication changed");
-        return digest(generation+":"+imported+":"+importedIdentity+":"+new JSONArray(original));
+        String current=digest(generation+":"+imported+":"+importedIdentity+":"+new JSONArray(original));
+        if(signature!=null&&!signature.equals(current))savedSourcesInvalidated=true;
+        return current;
+        } catch(Exception changed){if(signature!=null)savedSourcesInvalidated=true;throw changed;}
     }
     // Imported rows share one private container. Preserve that exact file as
     // well as the store generation and each complete row: an out-of-store
@@ -102,5 +107,10 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
     }
     AndroidNodeStore.ChainSource source(String localID)throws Exception { requireCurrent();AndroidNodeStore.ChainSource source=nodes.candidateSource(localID);requireCurrent();return source; }
     void requireCurrent(){if(!inventorySHA.equals(currentInventorySHA256()))throw new IllegalStateException("The original prefix, network or saved candidate catalog changed.");}
+    void requireSavedSourcesCurrent()throws Exception {
+        if(savedSourcesInvalidated)throw new IllegalStateException("The observed original candidate source change cannot be undone by restoring bytes.");
+        String observed=currentSignature();
+        if(savedSourcesInvalidated||!signature.equals(observed))throw new IllegalStateException("The original saved candidate catalog changed; retest before saving.");
+    }
     static String digest(String raw)throws Exception{return AndroidTorProfile.digest(raw.getBytes(StandardCharsets.UTF_8));}
 }

@@ -69,15 +69,30 @@ public final class NodeCandidateHarness {
    JSONObject inventory=new JSONObject(catalog.inventory);check(inventory.getJSONArray("inputs").length()==2,"complete paired/custom candidate inventory lost a source");
    check(catalog.inventorySHA.equals(catalog.currentInventorySHA256()),"original live catalog was rejected");
    check(catalog.rows.size()==session.source.members.size()+1&&catalog.rows.stream().anyMatch(row->row.id.equals(unsupported.id)&&row.input.isEmpty()),"unsupported transport was hidden or fabricated a TCP score");
-   Path allSources=f.context.getFilesDir().toPath().resolve("standard-exits.json");byte[] originalCatalog=Files.readAllBytes(allSources);Files.writeString(allSources,new String(originalCatalog,StandardCharsets.UTF_8).replace("Unscored SOCKS","Changed unscored SOCKS"));check(catalog.currentInventorySHA256().isEmpty(),"unsupported candidate source replacement accepted");Files.write(allSources,originalCatalog);catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
+   Path allSources=f.context.getFilesDir().toPath().resolve("standard-exits.json");byte[] originalCatalog=Files.readAllBytes(allSources);Files.writeString(allSources,new String(originalCatalog,StandardCharsets.UTF_8).replace("Unscored SOCKS","Changed unscored SOCKS"));check(catalog.currentInventorySHA256().isEmpty(),"unsupported candidate source replacement accepted");Files.write(allSources,originalCatalog);reject(catalog::requireSavedSourcesCurrent,"observed source change-away/back revived post-DOWN catalog authority");catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
    Path retainedImports=allSources.resolveSibling("retained-imported-original");Files.move(allSources,retainedImports);Files.write(allSources,originalCatalog);check(catalog.currentInventorySHA256().isEmpty(),"same-byte imported container replacement revived original identity");Files.delete(allSources);Files.move(retainedImports,allSources);check(catalog.currentInventorySHA256().isEmpty(),"observed imported container replacement revived after restoring original inode");catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
    byte[] old=Files.readAllBytes(f.control().file.toPath());Files.writeString(f.control().file.toPath(),new String(old,StandardCharsets.UTF_8)+" ");check(catalog.currentInventorySHA256().isEmpty(),"raw source replacement accepted");Files.write(f.control().file.toPath(),old);catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
-   session.current=false;check(catalog.currentInventorySHA256().isEmpty(),"retired native session/network accepted");session.current=true;catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
+   session.current=false;check(catalog.currentInventorySHA256().isEmpty(),"retired native session/network accepted");catalog.requireSavedSourcesCurrent();check(true,"normal native retirement wrongly invalidated saved sources");session.current=true;catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
    CommandServer original=session.server;session.server=new CommandServer();check(catalog.currentInventorySHA256().isEmpty(),"replaced native server accepted");session.server=original;catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
    Path replaced=f.control().file.toPath(),retained=replaced.resolveSibling("retained-original");Files.move(replaced,retained);Files.write(replaced,old);check(catalog.currentInventorySHA256().isEmpty(),"same-byte replacement revived original file identity");Files.delete(replaced);Files.move(retained,replaced);check(catalog.currentInventorySHA256().isEmpty(),"observed file replacement revived after restoring original inode");catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
    String saved=entry.name;entry.name="temporary";exits.save(entry);entry.name=saved;exits.save(entry);check(catalog.currentInventorySHA256().isEmpty(),"catalog change-away/back revived a capture");
   }
   var f=fixture(root);var session=new AndroidNodeChainSession(f.profiles.currentOrderedPath());reject(()->new AndroidNodeCandidateCatalog(f.context,session,1),"lazy SS prefix falsely timed destination TCP");
+ }
+ static void overlappingSavedSources(Path root)throws Exception{
+  var f=fixture(root);new AndroidStandardExitStore(f.context).save(custom("2022-blake3-aes-256-gcm"));
+  var session=new AndroidNodeChainSession(f.profiles.currentOrderedPath());var catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
+  Path imported=f.context.getFilesDir().toPath().resolve("standard-exits.json");byte[] original=Files.readAllBytes(imported);
+  CountDownLatch reading=new CountDownLatch(1),resume=new CountDownLatch(1);var rejected=new java.util.concurrent.atomic.AtomicReference<Throwable>();
+  Thread detached=new Thread(()->{try{catalog.requireSavedSourcesCurrent();}catch(Throwable failure){rejected.set(failure);}},"detached-source-authority");
+  android.system.Os.beforeLstat=path->{if(Thread.currentThread()==detached&&path.equals(imported.toString())){reading.countDown();try{if(!resume.await(10,TimeUnit.SECONDS))throw new AssertionError("source overlap was not released");}catch(InterruptedException failure){throw new RuntimeException(failure);}}};
+  try{
+   detached.start();check(reading.await(10,TimeUnit.SECONDS),"detached authority never reached the original source-read boundary");
+   Files.writeString(imported,new String(original,StandardCharsets.UTF_8).replace("Custom candidate","Changed custom candidate"));
+   check(catalog.currentInventorySHA256().isEmpty(),"overlapping live source observer did not invalidate changed bytes");Files.write(imported,original);
+   resume.countDown();detached.join(10000);check(!detached.isAlive(),"detached source read did not finish");
+   check(rejected.get() instanceof IllegalStateException,"overlapping observed source change revived detached authority");
+  }finally{Files.write(imported,original);resume.countDown();android.system.Os.beforeLstat=null;detached.join(10000);}
  }
  static void receipts(Path root)throws Exception{
   var f=fixture(root);var session=new AndroidNodeChainSession(f.profiles.currentOrderedPath());var catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
@@ -159,7 +174,7 @@ public final class NodeCandidateHarness {
    f.profiles.load(other.id);try(var compiled=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){check(new JSONObject(compiled.launchInput).getJSONArray("nodes").length()==2,"future paired profile did not compile its exact truncated suffix");}
   }
  }
- public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);sources(root);receipts(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
+ public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);sources(root);overlappingSavedSources(root);receipts(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
 }'''
 
 
@@ -169,7 +184,7 @@ def prepare(src, app, java):
         shutil.copyfile(java/(name+'.java'),app/(name+'.java'))
     ui = {
         'android/system/StructStat.java': 'package android.system;public final class StructStat{public long st_dev,st_ino;}',
-        'android/system/Os.java': 'package android.system;public final class Os{public static StructStat lstat(String path)throws Exception{try{java.util.Map<String,Object> a=java.nio.file.Files.readAttributes(java.nio.file.Path.of(path),"unix:dev,ino",java.nio.file.LinkOption.NOFOLLOW_LINKS);StructStat s=new StructStat();s.st_dev=((Number)a.get("dev")).longValue();s.st_ino=((Number)a.get("ino")).longValue();return s;}catch(java.nio.file.NoSuchFileException missing){throw new ErrnoException("lstat",OsConstants.ENOENT);}}}',
+        'android/system/Os.java': 'package android.system;public final class Os{public static volatile java.util.function.Consumer<String> beforeLstat;public static StructStat lstat(String path)throws Exception{var hook=beforeLstat;if(hook!=null)hook.accept(path);try{java.util.Map<String,Object> a=java.nio.file.Files.readAttributes(java.nio.file.Path.of(path),"unix:dev,ino",java.nio.file.LinkOption.NOFOLLOW_LINKS);StructStat s=new StructStat();s.st_dev=((Number)a.get("dev")).longValue();s.st_ino=((Number)a.get("ino")).longValue();return s;}catch(java.nio.file.NoSuchFileException missing){throw new ErrnoException("lstat",OsConstants.ENOENT);}}}',
         'android/system/ErrnoException.java': 'package android.system;public final class ErrnoException extends Exception{public final int errno;public ErrnoException(String operation,int errno){super(operation);this.errno=errno;}}',
         'android/system/OsConstants.java': 'package android.system;public final class OsConstants{public static final int ENOENT=2;}',
         'android/app/Activity.java': 'package android.app;public class Activity extends android.content.Context{final android.content.Context original;public Activity(android.content.Context original){super(original.getFilesDir());this.original=original;}public android.content.Context getApplicationContext(){return original;}public android.content.MemoryPreferences getSharedPreferences(String key,int mode){return original.getSharedPreferences(key,mode);}public boolean isFinishing(){return false;}public boolean isDestroyed(){return false;}public void runOnUiThread(Runnable action){action.run();}}',
@@ -220,6 +235,8 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         ('AndroidNodeCandidateMeasurement', 'if(!borrowedLease)AndroidMTUMeasurementGate.release(lease);', 'AndroidMTUMeasurementGate.release(lease);', 'borrowed candidate released the outer graph MTU lease'),
         ('AndroidNodeCandidateMeasurement', 'boolean joined=false;', 'this.joined.countDown();boolean joined=false;', 'borrowed candidate published join before native cleanup'),
         ('AndroidNodeCandidateMeasurement', 'try{callback.finished(failure);}catch(Throwable ignored){}', 'callback.finished(failure);', 'disposed completion observer escaped the retained cleanup worker'),
+        ('AndroidNodeCandidateCatalog', 'if(signature!=null&&!signature.equals(current))savedSourcesInvalidated=true;', '', 'observed source change-away/back revived post-DOWN catalog authority'),
+        ('AndroidNodeCandidateCatalog', 'if(savedSourcesInvalidated||!signature.equals(observed))', 'if(!signature.equals(observed))', 'overlapping observed source change revived detached authority'),
     )
     for index,(name,old,new,witness) in enumerate(controls):
         original=(app/(name+'.java')).read_text();assert original.count(old)==1,old
