@@ -540,6 +540,66 @@ class EncryptedPeerSourceClosure(unittest.TestCase):
 
 
 class StreamingNativeOutput(unittest.TestCase):
+    def assert_sink_flags_restored(self, actual, original, *, platform=None):
+        # Darwin records successful writes in sticky FWASWRITTEN (0x10000).
+        # XNU F_GETFL exposes it, while F_SETFL preserves it outside
+        # FCNTLFLAGS. Only its transition from clear to set is incidental;
+        # access mode, nonblocking, append and every other bit remain exact.
+        # https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h
+        # https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_descrip.c
+        # https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/sys_generic.c
+        platform = sys.platform if platform is None else platform
+        allowed = (original, original | 0x10000) if platform == 'darwin' else (original,)
+        self.assertIn(actual, allowed)
+
+    def test_only_darwin_sticky_write_history_is_incidental(self):
+        for original in (os.O_WRONLY, os.O_WRONLY | os.O_NONBLOCK,
+                         os.O_WRONLY | os.O_APPEND,
+                         os.O_WRONLY | os.O_NONBLOCK | os.O_APPEND):
+            with self.subTest(original=original):
+                self.assert_sink_flags_restored(original, original, platform='darwin')
+                self.assert_sink_flags_restored(original | 0x10000, original, platform='darwin')
+                with self.assertRaises(AssertionError):
+                    self.assert_sink_flags_restored(original, original | 0x10000, platform='darwin')
+                with self.assertRaises(AssertionError):
+                    self.assert_sink_flags_restored(original | 0x10000, original, platform='linux')
+                changes = (os.O_NONBLOCK, os.O_APPEND, os.O_RDWR,
+                           getattr(os, 'O_ASYNC', 0), getattr(os, 'O_SYNC', 0),
+                           getattr(os, 'O_DSYNC', 0), 0x40000000)
+                for changed in filter(None, changes):
+                    with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                        self.assert_sink_flags_restored((original ^ changed) | 0x10000,
+                                                        original, platform='darwin')
+
+    def test_actual_pipe_write_history_and_refused_flags_join_original_reader(self):
+        # Exercise the real reporting subprocess/pipe on every host. Inject
+        # only Darwin's observed sticky bit at final readback on other hosts;
+        # an additional nonblocking drift must still fail after reader join.
+        check = self.assert_sink_flags_restored
+        popen = subprocess.Popen
+        for drift in (False, True):
+            children = []
+            observed = []
+            def capture(*args, **kwargs):
+                child = popen(*args, **kwargs); children.append(child); return child
+            def readback(actual, original):
+                observed.append((actual, original))
+                check(actual | 0x10000 | (os.O_NONBLOCK if drift else 0),
+                      original, platform='darwin')
+            with self.subTest(drift=drift), patch.object(subprocess, 'Popen', side_effect=capture), patch.object(self, 'assert_sink_flags_restored', side_effect=readback):
+                expected = self.assertRaises(AssertionError) if drift else contextlib.nullcontext()
+                with expected:
+                    with self.captured_sink() as sink:
+                        output = G.native_output([sys.executable, '-c',
+                            'print("original written pipe",flush=True)'], timeout=3)
+                    self.assertEqual(output, 'original written pipe\n')
+                    self.assertEqual(sink['output'], b'original written pipe\n')
+            self.assertEqual(len(observed), 1)
+            self.assertEqual(len(children), 2)
+            for child in children:
+                self.assertEqual(child.returncode, 0)
+                with self.assertRaises(ProcessLookupError): os.killpg(child.pid, 0)
+
     @contextlib.contextmanager
     def captured_sink(self, *, ack=None, partial=False):
         import fcntl
@@ -572,15 +632,17 @@ pathlib.Path(sys.argv[2]).write_bytes(body)
                 with patch.object(G.sys, 'stdout', Sink()), patch.object(G.os, 'write', side_effect=shorter):
                     yield captured
             finally:
-                self.assertEqual(fcntl.fcntl(write, fcntl.F_GETFL), original_flags)
-                stream.close()
                 try:
-                    _, errors = reader.communicate(timeout=5)
-                except subprocess.TimeoutExpired:
-                    os.killpg(reader.pid, signal.SIGKILL); reader.communicate(timeout=2)
-                    raise
-                self.assertEqual(reader.returncode, 0, errors.decode())
-                captured['output'] = output.read_bytes()
+                    self.assert_sink_flags_restored(fcntl.fcntl(write, fcntl.F_GETFL), original_flags)
+                finally:
+                    stream.close()
+                    try:
+                        _, errors = reader.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(reader.pid, signal.SIGKILL); reader.communicate(timeout=2)
+                        raise
+                    self.assertEqual(reader.returncode, 0, errors.decode())
+                    captured['output'] = output.read_bytes()
 
     def test_actual_native_bytes_arrive_before_original_process_exit(self):
         source = (ROOT/'deploy/test_darwin_node_child_tun.py').read_text()
