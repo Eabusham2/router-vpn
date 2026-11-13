@@ -117,6 +117,19 @@ func TestDesktopNodeChainPolicyExactPhysicalProjection(t *testing.T) {
 				if before != after || policy.OriginalChain() != original {
 					t.Fatal("desktop projection changed original capture or original owner pointer")
 				}
+				replayed, retained, replayErr := parseNodeChainLaunchInput(launch)
+				if replayErr != nil || replayed == nil || retained == nil || retained.chain != replayed ||
+					retained.original == nil || retained.original == original || retained == child || retained.chain == child.chain || retained.original == child.original {
+					t.Fatal("typed replay lost its constructed owner or reused another parse", replayErr)
+				}
+				retainedLaunch, replayErr := retained.chain.LaunchInput()
+				if replayErr != nil || retainedLaunch != launch || retained.Validate() != nil {
+					t.Fatal("retained constructor changed exact launch bytes", replayErr)
+				}
+				retained.original.nodes[1].inputs.ProfileJSON += " "
+				if retained.Validate() == nil || child.Validate() != nil || policy.Validate() != nil {
+					t.Fatal("reused replay cached a changed middle source or aliased another owner")
+				}
 			})
 		}
 	}
@@ -247,10 +260,42 @@ func TestDesktopNodeChainPolicyLaunchOwnerReceiptAndClosedConstructor(t *testing
 				t.Fatal("receipt mutation unavailable")
 			}
 			canonical, _ := json.Marshal(record)
-			if _, err := ParseDesktopNodeChainLaunchInput(string(canonical)); err == nil {
+			if actual, retained, err := parseNodeChainLaunchInput(string(canonical)); err == nil || actual != nil || retained != nil {
+				t.Fatal("failed receipt validation leaked a partially constructed owner")
+			}
+			if actual, err := ParseDesktopNodeChainLaunchInput(string(canonical)); err == nil || actual != nil {
 				t.Fatal("changed owner replayed an earlier source/config receipt")
 			}
 		})
+	}
+	for _, field := range []string{"metadata", "original-config"} {
+		var record nodeChainLaunchRecord
+		if json.Unmarshal([]byte(launch), &record) != nil {
+			t.Fatal("launch fixture unavailable")
+		}
+		if field == "metadata" {
+			record.MetadataSHA256 = strings.Repeat("f", 64)
+		} else {
+			record.OriginalConfigSHA256 = strings.Repeat("f", 64)
+		}
+		canonical, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if actual, retained, err := parseNodeChainLaunchInput(string(canonical)); err == nil || actual != nil || retained != nil {
+			t.Fatal("reused constructor bypassed an original metadata/config receipt", field)
+		}
+		if actual, err := ParseDesktopNodeChainLaunchInput(string(canonical)); err == nil || actual != nil {
+			t.Fatal("typed replay accepted a foreign metadata/config receipt", field)
+		}
+	}
+	for _, malformed := range []string{"", launch + "\n", strings.TrimSuffix(launch, "}") + `,"foreign":true}`} {
+		if actual, retained, err := parseNodeChainLaunchInput(malformed); err == nil || actual != nil || retained != nil {
+			t.Fatal("noncanonical launch leaked a chain or desktop owner")
+		}
+		if actual, err := ParseDesktopNodeChainLaunchInput(malformed); err == nil || actual != nil {
+			t.Fatal("typed replay adopted noncanonical launch bytes")
+		}
 	}
 	plain, _ := chain.LaunchInput()
 	if _, err := ParseDesktopNodeChainLaunchInput(plain); err == nil {

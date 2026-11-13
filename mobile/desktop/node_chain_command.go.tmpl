@@ -140,14 +140,18 @@ func routerVPNNodeChainCommandPhysicalCapture(files *routerVPNExternalFiles, ses
 	if err != nil || policy == nil {
 		return nil, routerVPNExternalFailure
 	}
-	meta := policy.Metadata()
-	if meta.SessionID != session || meta.TargetOS != target || meta.SourceSHA256 != source ||
-		meta.ConfigSHA256 != config {
-		return nil, routerVPNExternalFailure
-	}
 	staged, err := files.read("sing-box.json", 4<<20)
 	defer clear(staged)
-	if err != nil || string(staged) != policy.Config() || policy.Validate() != nil {
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	// This newly parsed policy is private until admission returns. Validate
+	// its complete derivation once, after both owned file reads, and compare
+	// the graph and metadata from that same snapshot. Separate accessors each
+	// replay the entire graph and cannot add a newer external owner here.
+	actual, meta, _, err := policy.ReadValidated()
+	if err != nil || meta.SessionID != session || meta.TargetOS != target || meta.SourceSHA256 != source ||
+		meta.ConfigSHA256 != config || string(staged) != actual {
 		return nil, routerVPNExternalFailure
 	}
 	return policy, nil

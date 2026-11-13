@@ -347,44 +347,52 @@ func (c *NodeChain) LaunchInput() (string, error) {
 }
 
 func ParseNodeChainLaunchInput(input string) (*NodeChain, error) {
+	chain, _, err := parseNodeChainLaunchInput(input)
+	return chain, err
+}
+
+// Return the physical constructor together with the chain it already owns.
+// Both public parsers use the same canonical source and receipt checks; the
+// typed desktop parser must not reconstruct that private owner a second time.
+func parseNodeChainLaunchInput(input string) (*NodeChain, *DesktopNodeChainPolicy, error) {
 	var record nodeChainLaunchRecord
 	if exactJSON([]byte(input), &record, NodeChainInputLimit) != nil ||
 		record.Kind != "routervpn-node-chain-launch-input" ||
 		!proofID.MatchString(record.SourceSHA256) || !proofID.MatchString(record.ConfigSHA256) ||
 		!proofID.MatchString(record.MetadataSHA256) || !proofID.MatchString(record.OriginalConfigSHA256) {
-		return nil, nodeChainError
+		return nil, nil, nodeChainError
 	}
 	canonical, err := json.Marshal(record)
 	if err != nil || string(canonical) != input {
-		return nil, nodeChainError
+		return nil, nil, nodeChainError
 	}
 	clear(canonical)
 	source, err := json.Marshal(record.NodeChainSource)
 	if err != nil {
-		return nil, nodeChainError
+		return nil, nil, nodeChainError
 	}
 	chain, err := NewNodeChain(string(source))
 	clear(source)
+	var policy *DesktopNodeChainPolicy
 	if err == nil && record.ProjectionKind == nodeChainDesktopPhysicalKind {
-		var policy *DesktopNodeChainPolicy
 		policy, err = NewDesktopNodeChainPolicy(chain, record.SessionID, record.TargetOS, record.RestoredMTU)
 		if err == nil {
 			chain = policy.chain
 		}
 	} else if record.ProjectionKind != "" || record.SessionID != "" {
-		return nil, nodeChainError
+		return nil, nil, nodeChainError
 	} else if err == nil && record.TargetOS != "" {
 		chain, err = ProjectNodeChain(chain, record.TargetOS, record.RestoredMTU)
 	} else if record.RestoredMTU != 0 {
-		return nil, nodeChainError
+		return nil, nil, nodeChainError
 	}
 	if err != nil || chain.sourceSHA != record.SourceSHA256 ||
 		chain.dns.ConfigSHA256 != record.ConfigSHA256 ||
 		externalDigest([]byte(chain.metadata)) != record.MetadataSHA256 ||
 		chain.originalConfigSHA != record.OriginalConfigSHA256 {
-		return nil, nodeChainError
+		return nil, nil, nodeChainError
 	}
-	return chain, nil
+	return chain, policy, nil
 }
 
 func nodeChainNamespace(position int, source, family, original string) string {

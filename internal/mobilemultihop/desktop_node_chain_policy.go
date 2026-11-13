@@ -349,16 +349,9 @@ func (p *DesktopNodeChainPolicy) PhysicalReadValidated() (string, DesktopPhysica
 // It does not project an already-derived chain a second time or adopt caller
 // supplied graph bytes. The embedded source and derivation receipt must agree.
 func ParseDesktopNodeChainLaunchInput(input string) (*DesktopNodeChainPolicy, error) {
-	chain, err := ParseNodeChainLaunchInput(input)
-	if err != nil || chain.projection.Kind != nodeChainDesktopPhysicalKind {
-		return nil, desktopNodeChainPolicyError
-	}
-	base, err := NewNodeChain(chain.sourceJSON)
-	if err != nil {
-		return nil, desktopNodeChainPolicyError
-	}
-	policy, err := NewDesktopNodeChainPolicy(base, chain.projection.SessionID, chain.projection.TargetOS, chain.projection.RestoredMTU)
-	if err != nil {
+	chain, policy, err := parseNodeChainLaunchInput(input)
+	if err != nil || chain == nil || policy == nil || policy.chain != chain ||
+		chain.projection.Kind != nodeChainDesktopPhysicalKind {
 		return nil, desktopNodeChainPolicyError
 	}
 	actual, err := policy.chain.LaunchInput()

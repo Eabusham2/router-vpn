@@ -91,6 +91,14 @@ func routerVPNDarwinChainControlContext(t *testing.T) context.Context {
 func TestRouterVPNNodeChainDarwinOriginalControl(t *testing.T) {
 	t.Run("exact", func(t *testing.T) {
 		control, files, capture, _ := routerVPNDarwinChainControlFixture(t)
+		if policy, err := control.compile(nil, files); err == nil || policy != nil || control.policy != nil || capture.reads != 0 {
+			t.Fatal("missing caller reached original manifest replay")
+		}
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if policy, err := control.compile(cancelled, files); err == nil || policy != nil || control.policy != nil || capture.reads != 0 {
+			t.Fatal("cancelled caller reached original manifest replay")
+		}
 		ctx := routerVPNDarwinChainControlContext(t)
 		policy, err := control.compile(ctx, files)
 		if err != nil || policy == nil || control.policy != policy || capture.reads < 2 ||
@@ -142,6 +150,18 @@ func TestRouterVPNNodeChainDarwinOriginalControl(t *testing.T) {
 		if policy, err := control.compile(routerVPNDarwinChainControlContext(t), files); err == nil || policy != nil || control.policy != nil {
 			t.Fatal("source retired during replay was published as current")
 		}
+		control, files, capture, _ = routerVPNDarwinChainControlFixture(t)
+		ctx, cancel := context.WithCancel(routerVPNDarwinChainControlContext(t))
+		defer cancel()
+		capture.after = func() {
+			if capture.reads == 2 {
+				cancel()
+			}
+		}
+		if policy, err := control.compile(ctx, files); err == nil || policy != nil || control.policy != nil ||
+			capture.reads != 2 || !errors.Is(ctx.Err(), context.Canceled) {
+			t.Fatal("caller cancelled during replay was published as current")
+		}
 	})
 	t.Run("missing-authority", func(t *testing.T) {
 		control, files, capture, _ := routerVPNDarwinChainControlFixture(t)
@@ -186,7 +206,7 @@ func TestRouterVPNNodeChainDarwinSelectionBinding(t *testing.T) {
 			control, files, capture, _ := routerVPNDarwinChainControlFixture(t)
 			switch field {
 			case "session":
-				capture.selection.Session = strings.Repeat("a", 32)
+				capture.selection.Session = strings.Repeat("b", 32)
 			case "source":
 				capture.selection.Source = strings.Repeat("a", 64)
 			case "config":
@@ -207,6 +227,9 @@ func TestRouterVPNNodeChainDarwinSelectionBinding(t *testing.T) {
 				capture.selection.InputsSHA256 = strings.Repeat("a", 64)
 			case "family":
 				capture.selection.Family = macosprocess.ExternalFamily
+			}
+			if capture.selection == control.selection {
+				t.Fatal("inherited selection mutation did not change original identity")
 			}
 			if policy, err := control.compile(routerVPNDarwinChainControlContext(t), files); err == nil || policy != nil {
 				t.Fatal("changed original inherited selection reached policy replay")

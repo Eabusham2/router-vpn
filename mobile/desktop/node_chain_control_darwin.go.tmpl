@@ -87,8 +87,8 @@ func (owner *routerVPNDarwinNodeChainControl) current(ctx context.Context) error
 	if owner == nil || owner.policy == nil || owner.retiring.Load() || owner.original(ctx) != nil {
 		return routerVPNExternalFailure
 	}
-	meta := owner.policy.Metadata()
-	if owner.policy.Validate() != nil || meta.TargetOS != "darwin" || meta.SessionID != owner.scope.Session ||
+	_, meta, _, err := owner.policy.ReadValidated()
+	if err != nil || meta.TargetOS != "darwin" || meta.SessionID != owner.scope.Session ||
 		meta.SourceSHA256 != owner.scope.Source || meta.ConfigSHA256 != owner.scope.Config {
 		return routerVPNExternalFailure
 	}

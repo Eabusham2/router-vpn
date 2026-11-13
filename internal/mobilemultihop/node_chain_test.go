@@ -174,6 +174,15 @@ func TestNodeChainCompleteCapturedPaths(t *testing.T) {
 				!reflect.DeepEqual(reopened.ProofInventory(), chain.ProofInventory()) {
 				t.Fatal("child did not reproduce the complete original ordered source", err)
 			}
+			replayed, physicalPolicy, replayErr := parseNodeChainLaunchInput(launch)
+			if replayErr != nil || replayed == nil || physicalPolicy != nil || replayed.Config() != reopened.Config() ||
+				replayed.Metadata() != reopened.Metadata() {
+				t.Fatal("ordinary replay changed its graph or acquired desktop authority", replayErr)
+			}
+			actual, replayErr := reopened.LaunchInput()
+			if replayErr != nil || actual != launch {
+				t.Fatal("ordinary replay changed canonical launch bytes", replayErr)
+			}
 			for i, node := range nodes {
 				input, _ := node.LaunchInput()
 				if input != before[i] {

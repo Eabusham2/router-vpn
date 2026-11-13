@@ -182,6 +182,36 @@ and an unchanged network cohort alone does not prove which physical Network
 the native owner actually used. Broader candidate protocols, layers and graph
 positions remain separate requirements.
 
+## Typed launch-policy reconstruction
+
+The shared launch parser now returns the desktop policy it constructed while
+validating the canonical original source and all receipt hashes. The desktop
+entry point retains that exact private owner and still compares the final
+LaunchInput bytes with the complete original input. It no longer reconstructs
+the same chain and projection again. The generated host compares one validated
+configuration/metadata snapshot after both owned file reads, and Darwin current
+validation likewise obtains one validated snapshot. Final caller/source and
+inherited-owner checks remain; there is no cached validation or wider deadline.
+
+The shared parser race suite passed in 46.926 seconds. The actual generated
+command/control source composition passed its 51 root/child verdicts in 46.995
+seconds, including all original manifest, selection, source and replay negatives,
+nil/pre-cancelled callers and cancellation at the final source read. Three
+observed repaired replays took 413.086, 394.897 and 408.042 milliseconds within
+the unchanged one-second context. Replaying published 5c source under the same
+conditions reproduced the failure: one call took 981.219 milliseconds and the
+next expired at 1.028808 seconds. These are local fixture observations, not
+physical-device networking benchmarks.
+
+The faster valid replay exposed a no-op negative fixture: its replacement
+session ID equaled the original. The replacement is now different and each of
+the eleven selection mutations must demonstrably change its captured identity.
+Independent compiled mutations bypassing the staged graph, final owned-source
+check and inherited selection each failed at their required original root/leaf
+and witness. Seven lifecycle-runner and eighteen child-runner tests passed; all
+nineteen existing native causal needles remain present. Native macOS PF/utun and
+installed-host execution remain required separately.
+
 ## Required Darwin imported-source execution
 
 The installed-host gate now executes the tagged imported-source authority root
