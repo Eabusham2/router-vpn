@@ -1,0 +1,93 @@
+package box
+
+import (
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func desktopCandidatePrefixPhysicalPolicy(t *testing.T, target string) *mobilemultihop.DesktopNodeCandidatePreparationPolicy {
+	t.Helper()
+	base := candidatePreparationNativeSource(t, "wg")
+	policy, err := mobilemultihop.NewDesktopNodeCandidatePreparationPolicy(base, desktopTorBoxSession, target, 0)
+	if err != nil {
+		t.Fatal("original desktop prefix source", err)
+	}
+	return policy
+}
+
+// Box/options and encrypted endpoint constructors are real. The explicit TUN
+// double remains unstarted: these cases cannot establish OS/native acceptance.
+func TestRouterVPNDesktopCandidatePrefixPhysicalCapturesClosedBox(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("native prefix platform is not admitted")
+	}
+	policy := desktopCandidatePrefixPhysicalPolicy(t, runtime.GOOS)
+	instance, tun := desktopChainPhysicalBox(t, policy, nil)
+	if !routerVPNDesktopCandidatePrefixPhysicalTarget(policy, runtime.GOOS) || instance.routerVPNNodeOptions == "" || instance.routerVPNNodeChainExecutionOptions == "" {
+		t.Fatal("prefix construction lost its exact native configuration snapshot")
+	}
+	_, network, err := instance.routerVPNDesktopNodePhysical(policy)
+	if err != nil || network == nil || network.Current() || network.SocketCurrent() || tun.ready || tun.claimed {
+		t.Fatal("prefix construction fabricated native readiness", err)
+	}
+	if owner, err := instance.routerVPNDesktopNodeActivatePhysical(policy); err == nil || owner != nil {
+		t.Fatal("unprepared prefix acquired physical TUN authority")
+	}
+	if err := instance.RouterVPNStrategyStart(); err == nil {
+		t.Fatal("prefix JSON bypassed original physical preparation")
+	}
+	if tun.ready || tun.claimed || network.SocketCurrent() {
+		t.Fatal("unprepared prefix opened a native socket or TUN")
+	}
+}
+
+func TestRouterVPNDesktopCandidatePrefixPhysicalRejectsChangedBox(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("native prefix platform is not admitted")
+	}
+	for _, fault := range []string{"prefix-key", "dns", "physical-source", "mtu", "application-gate"} {
+		t.Run(fault, func(t *testing.T) {
+			policy := desktopCandidatePrefixPhysicalPolicy(t, runtime.GOOS)
+			instance, tun := desktopChainPhysicalBox(t, policy, func(graph map[string]any) {
+				switch fault {
+				case "prefix-key":
+					rows := graph["endpoints"].([]any)
+					rows[1].(map[string]any)["private_key"] = rows[0].(map[string]any)["private_key"]
+				case "dns":
+					graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["server"] = "192.168.50.134"
+				case "physical-source":
+					graph["services"].([]any)[0].(map[string]any)["source_sha256"] = strings.Repeat("f", 64)
+				case "mtu":
+					graph["inbounds"].([]any)[0].(map[string]any)["mtu"] = float64(1300)
+				case "application-gate":
+					graph["route"].(map[string]any)["final"] = mobilemultihop.SelectorTag
+				}
+			})
+			if _, _, err := instance.routerVPNDesktopNodePhysical(policy); err == nil {
+				t.Fatal("changed prefix graph acquired original physical authority")
+			}
+			if tun.ready || tun.claimed {
+				t.Fatal("changed prefix entered native startup")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopCandidatePrefixPhysicalKeepsTypedTarget(t *testing.T) {
+	for _, target := range []string{"linux", "windows", "darwin"} {
+		t.Run(target, func(t *testing.T) {
+			policy := desktopCandidatePrefixPhysicalPolicy(t, target)
+			if routerVPNDesktopCandidatePrefixPhysicalTarget(policy, target) != (target != "darwin") {
+				t.Fatal("prefix changed accepted native platform boundary")
+			}
+			for _, other := range []string{"linux", "windows", "darwin", "android"} {
+				if other != target && routerVPNDesktopCandidatePrefixPhysicalTarget(policy, other) {
+					t.Fatal("prefix borrowed another target's physical authority")
+				}
+			}
+		})
+	}
+}

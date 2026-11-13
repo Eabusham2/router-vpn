@@ -1,0 +1,45 @@
+package main
+
+import (
+	"errors"
+	"os"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// Called only after authenticating the exact platform parent. The separate
+// source path prevents an ordinary node/full-chain/execution input from being
+// silently reinterpreted as this never-connected temporary purpose.
+func routerVPNNodeCandidatePrefixCommandCapture(files *routerVPNExternalFiles, session, config, source, capture, target string, restoredMTU int) (*mobilemultihop.DesktopNodeCandidatePreparationPolicy, error) {
+	if files == nil || files.root == nil || !routerVPNExternalSession.MatchString(session) ||
+		!routerVPNExternalSource.MatchString(config) || !routerVPNExternalSource.MatchString(source) ||
+		!routerVPNExternalSource.MatchString(capture) || target != "linux" && target != "windows" {
+		return nil, routerVPNExternalFailure
+	}
+	for _, name := range []string{"node-source.json", "node-chain-source.json", "imported-source.json", "node-chain-execution-source.json"} {
+		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			return nil, routerVPNExternalFailure
+		}
+	}
+	raw, err := files.read("node-candidate-prefix-source.json", mobilemultihop.NodeChainInputLimit)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := mobilemultihop.ParseDesktopNodeCandidatePreparationPolicy(string(raw))
+	clear(raw)
+	if err != nil || policy == nil {
+		return nil, routerVPNExternalFailure
+	}
+	meta := policy.Metadata()
+	if meta.SessionID != session || meta.TargetOS != target || meta.SourceSHA256 != source ||
+		meta.ConfigSHA256 != config || meta.CaptureSHA256 != capture || meta.RestoredMTU != restoredMTU ||
+		meta.ApplicationOpen || meta.DNSOpen {
+		return nil, routerVPNExternalFailure
+	}
+	staged, err := files.read("sing-box.json", 4<<20)
+	defer clear(staged)
+	if err != nil || string(staged) != policy.Config() || policy.Validate() != nil {
+		return nil, routerVPNExternalFailure
+	}
+	return policy, nil
+}

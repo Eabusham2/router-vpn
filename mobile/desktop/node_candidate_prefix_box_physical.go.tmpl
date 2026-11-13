@@ -1,0 +1,57 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"runtime"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// Native prefix construction is distinct from ordinary ordered readiness. The
+// Darwin public admission gate stays closed; a derived source alone cannot
+// grant PF/utun ownership or claim that platform's accepted native lifecycle.
+func routerVPNDesktopCandidatePrefixPhysicalTarget(policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy, target string) bool {
+	if policy == nil || policy.Validate() != nil || target != "linux" && target != "windows" {
+		return false
+	}
+	meta := policy.Metadata()
+	if meta.TargetOS != target || meta.ApplicationOpen || meta.DNSOpen || len(meta.Prefixes) != meta.PrefixPosition+1 ||
+		len(meta.Prefixes) < 1 || len(meta.Prefixes) >= mobilemultihop.NodeChainMaximumNodes {
+		return false
+	}
+	for position, prefix := range meta.Prefixes {
+		if prefix.Position != position || !mobilemultihop.NodeChainPrefixMode(prefix.Mode) ||
+			!mobilemultihop.DesktopNodePhysicalGraphSupported(prefix.Mode, prefix.StartLayer) {
+			return false
+		}
+	}
+	_, physical, _, err := policy.PhysicalReadValidated()
+	return err == nil && physical.Kind == "node-candidate-prefix" && physical.SourceSHA256 == meta.SourceSHA256 && physical.ConfigSHA256 == meta.ConfigSHA256
+}
+
+func (s *Box) RouterVPNDesktopCandidatePrefixPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy) (*RouterVPNDesktopNodePreparation, error) {
+	if runtime.GOOS != "windows" || !routerVPNDesktopCandidatePrefixPhysicalTarget(policy, "windows") {
+		return nil, errors.New("Windows candidate prefix lost its original closed physical preparation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopNodePreparation{network: network, policy: policy}
+	return owner, network.PrepareCandidatePrefixPhysicalPolicy(policy)
+}
+
+func (s *Box) RouterVPNDesktopCandidatePrefixActivatePhysical(policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if runtime.GOOS != "windows" || !routerVPNDesktopCandidatePrefixPhysicalTarget(policy, "windows") {
+		return nil, errors.New("Windows candidate prefix lost its original physical activation")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}
+
+func (owner *RouterVPNDesktopNodePhysical) CandidatePrefixSourceCurrentContext(ctx context.Context, policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy) error {
+	if owner == nil || owner.instance == nil || policy == nil || owner.policy != policy || policy.Validate() != nil {
+		return errors.New("candidate prefix changed its exact original physical owner")
+	}
+	return owner.generationCurrentContext(ctx)
+}

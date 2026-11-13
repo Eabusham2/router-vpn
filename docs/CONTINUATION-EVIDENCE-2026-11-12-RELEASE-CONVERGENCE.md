@@ -1380,6 +1380,14 @@ compiled negative controls still rejected their intended broken behavior.
 The import fixture does not start a native tunnel or supply private networking
 acceptance. The repaired aggregate must be verified on its new exact SHA.
 
+## Desktop temporary prefix child capture and physical construction
+
+The desktop child now has a separate canonical prefix-preparation heartbeat and source command. It binds the original session, full-source and selected-prefix fingerprints, exact staged runtime configuration, configured MTU, and authenticated parent purpose. Ordinary node/chain/execution inputs cannot be substituted. The record requires proved selected prefixes with both application and DNS ingress closed; it cannot stand in for full connection readiness or selected-DNS proof.
+
+Windows and Linux physical factories construct the original native Box and captured protection owner for this purpose. The Darwin public admission boundary remains closed pending its real native acceptance. These are child construction foundations; the parent process loop and public API activation are a subsequent unit.
+
+Validation: three shared receipt roots passed with the race detector (4.888 seconds); the actual native Box fixture produced 11 passing verdicts (4.606 seconds), and command substitution fixtures produced 19 (6.312 seconds). Both compiled omission controls failed at their intended source-capture and Darwin-admission witnesses. All 2,458 shipping source hashes were identical before and after the native suites. Nine runner checks passed. The TUN in these fixtures is explicitly unstarted: these results do not establish privileged OS networking or device acceptance.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

@@ -1,0 +1,13 @@
+//go:build !linux && !windows
+
+package routervpndesktoppt
+
+import (
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func (*NodeNetworkOwner) PrepareCandidatePrefixPhysicalPolicy(*mobilemultihop.DesktopNodeCandidatePreparationPolicy) error {
+	return errors.New("candidate prefix requires an accepted Windows or Linux native physical owner")
+}

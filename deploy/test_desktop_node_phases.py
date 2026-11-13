@@ -152,6 +152,53 @@ class SourcePhases(unittest.TestCase):
         self.assertIn("ROOT/'deploy/test_desktop_node_phases.py'", source)
         self.assertNotIn("timeout=3600 if target.startswith('linux/') else 1800", source)
 
+    def test_prefix_source_and_physical_suites_are_mandatory_with_exact_verdicts(self):
+        with patch.object(NODE.platform, "system", return_value="Windows"):
+            suites = NODE.baseline_suites(True)
+        for suite in NODE.CANDIDATE_PREFIX_DESKTOP_SUITES:
+            self.assertIn(suite, suites)
+            required = suite[3]
+            complete = "\n".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)" for name in required)
+            NODE.require_native_verdicts(complete, required, "captured prefix")
+            for fault in (complete.replace("--- PASS: " + required[-1] + " (0.01s)", ""),
+                          complete + "\n--- PASS: " + required[0] + " (0.01s)",
+                          complete + "\n--- PASS: TestForeign (0.01s)",
+                          complete.replace("--- PASS: " + required[-1], "--- SKIP: " + required[-1]),
+                          "PASS"):
+                with self.subTest(suite=suite[0], fault=fault[-80:]), self.assertRaises(ValueError):
+                    NODE.require_native_verdicts(fault, required, "captured prefix")
+
+    def test_prefix_templates_have_explicit_original_native_package_placement(self):
+        projected = NODE.PREP.pt_copies()
+        for name in ("node_candidate_prefix_physical_linux.go.tmpl", "node_candidate_prefix_physical_windows.go.tmpl",
+                     "node_candidate_prefix_physical_other.go.tmpl"):
+            self.assertIn(name, NODE.PREP.PT_TEMPLATES)
+            self.assertEqual(projected["routervpn/desktoppt/" + name.removesuffix(".tmpl")],
+                             (ROOT / "mobile/desktop" / name).read_bytes())
+        for name in ("node_candidate_prefix_box_physical.go.tmpl", "node_candidate_prefix_box_linux.go.tmpl",
+                     "node_candidate_prefix_box_physical_test.go.tmpl"):
+            self.assertEqual(NODE.PREP.BOX_TEMPLATES[name], "routervpn_desktop_" + name.removesuffix(".tmpl"))
+            self.assertEqual(projected[NODE.PREP.BOX_TEMPLATES[name]], (ROOT / "mobile/desktop" / name).read_bytes())
+        self.assertNotIn("node_candidate_prefix_command.go.tmpl", NODE.PREP.BOX_TEMPLATES)
+        self.assertNotIn("node_candidate_prefix_command_test.go.tmpl", NODE.PREP.PT_TEMPLATES)
+
+    def test_prefix_controls_compile_exact_source_and_platform_omissions(self):
+        command = self.source / "cmd/sing-box/routervpn_node_candidate_prefix_command.go"
+        physical = self.source / "routervpn_desktop_node_candidate_prefix_box_physical.go"
+        command.parent.mkdir(parents=True)
+        command.write_bytes((ROOT / "mobile/desktop/node_candidate_prefix_command.go.tmpl").read_bytes())
+        physical.write_bytes((ROOT / "mobile/desktop/node_candidate_prefix_box_physical.go.tmpl").read_bytes())
+        controls = NODE.candidate_prefix_mutants(self.source)
+        self.assertEqual([control[0] for control in controls], ["candidate-prefix-capture", "candidate-prefix-darwin-admission"])
+        self.assertEqual([control[4] for control in controls], ["capture", "darwin"])
+        self.assertNotIn("meta.CaptureSHA256 != capture", controls[0][-1])
+        self.assertIn("meta.SourceSHA256 != source", controls[0][-1])
+        self.assertNotIn('target != "linux" && target != "windows"', controls[1][-1])
+        self.assertIn("meta.TargetOS != target", controls[1][-1])
+        command.write_text(command.read_text().replace("meta.CaptureSHA256 != capture || ", ""))
+        with self.assertRaises(ValueError):
+            NODE.candidate_prefix_mutants(self.source)
+
 
 if __name__ == "__main__":
     unittest.main()

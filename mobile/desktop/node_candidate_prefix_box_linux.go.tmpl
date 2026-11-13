@@ -1,0 +1,55 @@
+//go:build linux
+
+package box
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func (s *Box) RouterVPNDesktopLinuxCandidatePrefixPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy) (*RouterVPNDesktopLinuxNodePreparation, error) {
+	if !routerVPNDesktopCandidatePrefixPhysicalTarget(policy, "linux") {
+		return nil, errors.New("Linux candidate prefix lost its original physical preparation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopLinuxNodePreparation{network: network, policy: policy}
+	return owner, network.PrepareCandidatePrefixPhysicalPolicy(policy)
+}
+
+// Only original physical admission and actual TUN readback occur here. The
+// separate prefix runtime proves private packet prefixes with application/DNS
+// ingress closed throughout; this method cannot perform a selected DNS query.
+func (s *Box) RouterVPNDesktopLinuxCandidatePrefixActivatePhysical(ctx context.Context, policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if ctx == nil || ctx.Err() != nil || !routerVPNDesktopCandidatePrefixPhysicalTarget(policy, "linux") {
+		return nil, errors.New("Linux candidate prefix lost its original physical activation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	if err = network.CheckLinuxPhysicalAdmission(policy); err != nil {
+		return nil, err
+	}
+	owner, err := s.routerVPNDesktopNodeActivatePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	if err = network.CheckLinuxPhysicalAdmission(policy); err != nil || ctx.Err() != nil || !owner.Current() {
+		owner.Cancel()
+		return nil, errors.Join(err, ctx.Err(), errors.New("Linux candidate prefix changed its physical owner"))
+	}
+	return owner, nil
+}
+
+func (s *Box) RouterVPNDesktopLinuxCandidatePrefixActivateCover(ctx context.Context, policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy,
+	physical *RouterVPNDesktopNodePhysical) (*RouterVPNDesktopLinuxNodeCover, error) {
+	if !routerVPNDesktopCandidatePrefixPhysicalTarget(policy, "linux") {
+		return nil, errors.New("Linux candidate prefix lost its captured service inventory")
+	}
+	return s.routerVPNDesktopLinuxActivateCover(ctx, policy, physical)
+}

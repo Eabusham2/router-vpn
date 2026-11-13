@@ -82,6 +82,28 @@ EXECUTION_DESKTOP_SUITES = (
     ("ordered-execution-command", "./cmd/sing-box", "^" + EXECUTION_COMMAND_ROOT, EXECUTION_COMMAND_VERDICTS),
     ("ordered-execution-dispatch", "./cmd/sing-box", "^" + EXECUTION_DISPATCH_ROOT, EXECUTION_DISPATCH_VERDICTS),
 )
+CANDIDATE_PREFIX_PHYSICAL_ROOT = "TestRouterVPNDesktopCandidatePrefixPhysical"
+CANDIDATE_PREFIX_COMMAND_ROOT = "TestRouterVPNDesktopCandidatePrefixCommand"
+CANDIDATE_PREFIX_PHYSICAL_VERDICTS = (
+    CANDIDATE_PREFIX_PHYSICAL_ROOT + "CapturesClosedBox",
+    CANDIDATE_PREFIX_PHYSICAL_ROOT + "RejectsChangedBox",
+    *(CANDIDATE_PREFIX_PHYSICAL_ROOT + "RejectsChangedBox/" + fault for fault in
+      ("prefix-key", "dns", "physical-source", "mtu", "application-gate")),
+    CANDIDATE_PREFIX_PHYSICAL_ROOT + "KeepsTypedTarget",
+    *(CANDIDATE_PREFIX_PHYSICAL_ROOT + "KeepsTypedTarget/" + target for target in ("linux", "windows", "darwin")),
+)
+CANDIDATE_PREFIX_COMMAND_VERDICTS = (
+    CANDIDATE_PREFIX_COMMAND_ROOT + "ExactSourceReplay",
+    *(CANDIDATE_PREFIX_COMMAND_ROOT + "ExactSourceReplay/" + target for target in ("linux", "windows")),
+    CANDIDATE_PREFIX_COMMAND_ROOT + "RejectsSubstitution",
+    *(CANDIDATE_PREFIX_COMMAND_ROOT + "RejectsSubstitution/" + fault for fault in
+      ("missing", "ordinary", "generic", "source", "capture", "config", "session", "target", "darwin", "restore", "graph",
+       "ambiguous-node", "ambiguous-chain", "ambiguous-execution", "ambiguous-imported")),
+)
+CANDIDATE_PREFIX_DESKTOP_SUITES = (
+    ("candidate-prefix-physical", ".", "^" + CANDIDATE_PREFIX_PHYSICAL_ROOT, CANDIDATE_PREFIX_PHYSICAL_VERDICTS),
+    ("candidate-prefix-command", "./cmd/sing-box", "^" + CANDIDATE_PREFIX_COMMAND_ROOT, CANDIDATE_PREFIX_COMMAND_VERDICTS),
+)
 ORDERED_EXECUTION_COMMAND_ROOTS = tuple("TestRouterVPNDesktopNodeChainExecutionRuntime" + suffix for suffix in (
     "KeepsActualProjection", "RetainsFailedCleanup", "RejectsReplacedOwners", "JoinsLateConstructor")) + tuple(
     "TestRouterVPNDesktopNodeChainExecutionMTU" + suffix for suffix in (
@@ -906,6 +928,19 @@ def naive_transport_mutants(source):
     ]
 
 
+def candidate_prefix_mutants(source):
+    command = "cmd/sing-box/routervpn_node_candidate_prefix_command.go"
+    physical = "routervpn_desktop_node_candidate_prefix_box_physical.go"
+    return [
+        ("candidate-prefix-capture", command, "./cmd/sing-box", CANDIDATE_PREFIX_COMMAND_ROOT + "RejectsSubstitution", "capture",
+         "prefix child accepted foreign or ambiguous source", BOOT.IDENTITY.replace_once(
+             (source / command).read_text(encoding="utf-8"), "meta.CaptureSHA256 != capture || ", "")),
+        ("candidate-prefix-darwin-admission", physical, ".", CANDIDATE_PREFIX_PHYSICAL_ROOT + "KeepsTypedTarget", "darwin",
+         "prefix changed accepted native platform boundary", BOOT.IDENTITY.replace_once(
+             (source / physical).read_text(encoding="utf-8"), ' || target != "linux" && target != "windows"', "")),
+    ]
+
+
 def ordered_execution_dispatch_mutants(source):
     relative = "cmd/sing-box/routervpn_node_chain_execution_dispatch.go"
     controls = (
@@ -972,7 +1007,7 @@ def mutants(source, windows):
     contextual_entry_lock = "\tif err := adapter.RouterVPNLockContext(ctx, &o.mu); err != nil {\n\t\treturn nil, err\n\t}\n"
     ambient_owner = "func() error { if !owner.SocketCurrent() { return net.ErrClosed }; return nil }()"
     caller_diagnostic = "physical caller used an ambient wait without its original context"
-    result = ordered_execution_dispatch_mutants(source) + ordered_execution_mtu_mutants(source) + [
+    result = candidate_prefix_mutants(source) + ordered_execution_dispatch_mutants(source) + ordered_execution_mtu_mutants(source) + [
         ("node-lower-ambient-lock", lower, "./routervpn/desktoppt", "TestRouterVPNNodePhysicalCallerContext", "lower",
          caller_diagnostic, changed_function(lower, lower_current, contextual_entry_lock, "\to.mu.Lock()\n")),
         ("node-owner-ambient-lock", lower, "./routervpn/desktoppt", "TestRouterVPNNodePhysicalCallerContext", "owner",
@@ -1246,7 +1281,7 @@ def execute_baseline_suite(baselines, suite):
         raise ValueError("Node " + name + " omitted a required native boundary")
     if name == OPENVPN_CAPACITY_SUITE[0]:
         require_native_verdicts(output, OPENVPN_CAPACITY_VERDICTS, "OpenVPN authenticated live capacity")
-    if name in {suite[0] for suite in EXECUTION_DESKTOP_SUITES}:
+    if name in {suite[0] for suite in (*EXECUTION_DESKTOP_SUITES, *CANDIDATE_PREFIX_DESKTOP_SUITES)}:
         require_native_verdicts(output, required, name)
     if name == CANDIDATE_COMMAND_SUITE[0]:
         require_native_verdicts(output, CANDIDATE_COMMAND_VERDICTS, "ordered candidate original native owner")
@@ -1465,6 +1500,7 @@ def baseline_suites(windows, *, bootstrap_only=False):
                     "TestRouterVPNDesktopNodeChainMeasurementHTTPComposition")))
     suites.append(CANDIDATE_COMMAND_SUITE)
     suites.extend(EXECUTION_DESKTOP_SUITES)
+    suites.extend(CANDIDATE_PREFIX_DESKTOP_SUITES)
     suites.append(ORDERED_EXECUTION_COMMAND_SUITE)
     suites.append(("command-observation-context", "./cmd/sing-box",
                    "^TestRouterVPNDesktop(NetworkProjectionContextPreservesObservationErrors|NativeNetworkProjectionCancelsHeldOwnerLock|StopInterruptsOriginalNetworkObserver)$",

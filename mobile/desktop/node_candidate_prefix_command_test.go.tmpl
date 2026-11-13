@@ -1,0 +1,110 @@
+package main
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func desktopCandidatePrefixCommandPolicy(t *testing.T, target string) *mobilemultihop.DesktopNodeCandidatePreparationPolicy {
+	t.Helper()
+	original := desktopNodeChainCommandPolicy(t, 3, target, 0)
+	input, err := original.OriginalChain().LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(input), &source) != nil {
+		t.Fatal("fixture lost original source")
+	}
+	raw, err := json.Marshal(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := json.Marshal(mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-desktop-catalog", Inputs: []string{source.Nodes[2]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := mobilemultihop.NewNodeChainCandidatePreparation(string(raw), 1, string(inventory))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodeCandidatePreparationPolicy(base, desktopExternalSession, target, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
+
+func TestRouterVPNDesktopCandidatePrefixCommandExactSourceReplay(t *testing.T) {
+	for _, target := range []string{"linux", "windows"} {
+		t.Run(target, func(t *testing.T) {
+			policy := desktopCandidatePrefixCommandPolicy(t, target)
+			meta := policy.Metadata()
+			files := desktopImportedCommandFiles(t, map[string]string{"node-candidate-prefix-source.json": policy.Source(), "sing-box.json": policy.Config()})
+			actual, err := routerVPNNodeCandidatePrefixCommandCapture(files, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, meta.CaptureSHA256, target, 0)
+			if err != nil || actual == nil || actual == policy || actual.Preparation() == policy.Preparation() || actual.Source() != policy.Source() || actual.Config() != policy.Config() {
+				t.Fatal("child did not independently replay original prefix source", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopCandidatePrefixCommandRejectsSubstitution(t *testing.T) {
+	policy := desktopCandidatePrefixCommandPolicy(t, "linux")
+	for _, fault := range []string{"missing", "ordinary", "generic", "source", "capture", "config", "session", "target", "darwin", "restore", "graph", "ambiguous-node", "ambiguous-chain", "ambiguous-execution", "ambiguous-imported"} {
+		t.Run(fault, func(t *testing.T) {
+			meta := policy.Metadata()
+			input, graph, target, restore := policy.Source(), policy.Config(), "linux", 0
+			extra := map[string]string{}
+			switch fault {
+			case "missing":
+				input = ""
+			case "ordinary":
+				input, _ = desktopNodeChainCommandPolicy(t, 3, "linux", 0).NodeChain().LaunchInput()
+			case "generic":
+				var raw struct {
+					Preparation string `json:"preparation"`
+				}
+				if json.Unmarshal([]byte(input), &raw) != nil || raw.Preparation == "" {
+					t.Fatal("fixture lost generic source")
+				}
+				input = raw.Preparation
+			case "source":
+				meta.SourceSHA256 = strings.Repeat("f", 64)
+			case "capture":
+				meta.CaptureSHA256 = strings.Repeat("f", 64)
+			case "config":
+				meta.ConfigSHA256 = strings.Repeat("f", 64)
+			case "session":
+				meta.SessionID = strings.Repeat("f", 32)
+			case "target":
+				target = "windows"
+			case "darwin":
+				target = "darwin"
+			case "restore":
+				restore = 1300
+			case "graph":
+				graph += " "
+			case "ambiguous-node":
+				extra["node-source.json"] = "{}"
+			case "ambiguous-chain":
+				extra["node-chain-source.json"] = "{}"
+			case "ambiguous-execution":
+				extra["node-chain-execution-source.json"] = "{}"
+			case "ambiguous-imported":
+				extra["imported-source.json"] = "{}"
+			}
+			extra["sing-box.json"] = graph
+			if input != "" {
+				extra["node-candidate-prefix-source.json"] = input
+			}
+			files := desktopImportedCommandFiles(t, extra)
+			if _, err := routerVPNNodeCandidatePrefixCommandCapture(files, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, meta.CaptureSHA256, target, restore); err == nil {
+				t.Fatal("prefix child accepted foreign or ambiguous source")
+			}
+		})
+	}
+}
