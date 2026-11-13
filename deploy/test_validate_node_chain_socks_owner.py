@@ -98,7 +98,18 @@ class Composition:
 
     def execute_process(self, command, cwd, env, log, bound):
         self.calls.append((command, bound))
-        number = len(self.calls)
+        number = len(self.calls)-1
+        if number == 0:
+            text = ('test_shipping_desktop_daemon_capture_is_exact_idempotent_and_fail_closed '
+                '(__main__.DesktopDaemonCapturePreparation.test_shipping_desktop_daemon_capture_is_exact_idempotent_and_fail_closed) ... ok\n'
+                +'\n'+'-'*70+'\nRan 1 test in 0.01s\n\nOK\n')
+            if self.fault == 'preflight-missing':
+                text = 'Ran 0 tests in 0.01s\nOK\n'
+            elif self.fault == 'preflight-foreign':
+                text = text.replace(' ... ok', ' ... skipped')
+            log.write_text(text)
+            return (1 if self.fault == 'preflight-fail' else 0,
+                    self.fault == 'preflight-timeout', self.fault != 'preflight-unjoined')
         if self.fault == 'spawn-exception' and number == 1:
             raise OSError('original compiler spawn refused')
         status, text = 0, ''
@@ -116,7 +127,7 @@ class Composition:
                 status = 1
         elif number == 3:
             text = verdict(V.ORIGINAL[:-1] if self.fault == 'missing-original' else V.ORIGINAL)
-        elif 4 <= number <= 6:
+        elif 4 <= number <= 7:
             control = V.CONTROLS[number-4]
             overlay = Path(next(arg.split('=', 1)[1] for arg in command if arg.startswith('-overlay=')))
             replacement = Path(json.loads(overlay.read_text())['Replace'][str(cwd/V.OWNER_PROJECTION)])
@@ -130,7 +141,7 @@ class Composition:
                 status = -9
             if number == 4 and self.fault == 'control-unrelated':
                 text += 'panic: unrelated worker\n'
-            if number == 6:
+            if number == 7:
                 if self.fault == 'image-change':
                     self.image.write_bytes(b'replaced owner image')
                 if self.fault == 'source-change':
@@ -162,14 +173,14 @@ class NativeSOCKSOwnerValidator(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             f = Composition(Path(directory))
             receipt = f.run()
-            self.assertEqual(len(V.VERDICTS), 21)
-            self.assertEqual((len(V.ENCRYPTED), len(V.FACTORY)), (16, 5))
+            self.assertEqual(len(V.VERDICTS), 22)
+            self.assertEqual((len(V.ENCRYPTED), len(V.FACTORY)), (16, 6))
             self.assertEqual(receipt['cases'], list(V.VERDICTS))
-            self.assertEqual(len(receipt['controls']), 3)
+            self.assertEqual(len(receipt['controls']), 4)
             self.assertEqual(len(receipt['original_peer_cases']), 15)
-            self.assertEqual([bound for _, bound in f.calls], [600, 100, 100, 600, 600, 600])
-            self.assertIn('-test.timeout=90s', f.calls[1][0])
-            for command, _ in f.calls[3:]:
+            self.assertEqual([bound for _, bound in f.calls], [60, 600, 100, 100, 600, 600, 600, 600])
+            self.assertIn('-test.timeout=90s', f.calls[2][0])
+            for command, _ in f.calls[4:]:
                 self.assertIn('-timeout=90s', command)
                 self.assertIn('-json', command)
                 self.assertIn('-race', command)
@@ -178,11 +189,11 @@ class NativeSOCKSOwnerValidator(unittest.TestCase):
             self.assertFalse(receipt['public_native_admission'])
             self.assertEqual(receipt['scope'], 'encrypted-box-owner-only')
             self.assertEqual(json.loads((f.output/'receipt.json').read_text()), receipt)
-            self.assertEqual(len(json.loads((f.output/'progress.json').read_text())['phases']), 6)
+            self.assertEqual(len(json.loads((f.output/'progress.json').read_text())['phases']), 8)
             self.assertNotEqual(receipt['selection']['validator_sha'], receipt['selection']['source_sha'])
 
     def test_every_phase_failure_withholds_acceptance(self):
-        for fault in ('source-refusal', 'compile-fail', 'spawn-exception', 'missing-baseline',
+        for fault in ('preflight-missing', 'preflight-foreign', 'preflight-fail', 'preflight-timeout', 'preflight-unjoined', 'source-refusal', 'compile-fail', 'spawn-exception', 'missing-baseline',
                       'foreign-baseline', 'baseline-fail', 'missing-original', 'control-pass', 'control-signal',
                       'control-unrelated', 'control-timeout', 'control-unjoined',
                       'image-change', 'source-change', 'selection-change'):
@@ -195,8 +206,8 @@ class NativeSOCKSOwnerValidator(unittest.TestCase):
                 if fault in ('compile-fail', 'spawn-exception'):
                     progress = json.loads((f.output/'progress.json').read_text())
                     self.assertEqual(progress['compiler'], '/captured/go')
-                    self.assertEqual(len(progress['phases']), 1)
-                    self.assertEqual(progress['phases'][0]['timeout'], 600)
+                    self.assertEqual(len(progress['phases']), 2)
+                    self.assertEqual(progress['phases'][1]['timeout'], 600)
 
     def test_exact_selection_and_fresh_output_precede_preparation(self):
         for fault in ('dirty-source', 'foreign-suite', 'foreign-sha', 'missing-selection', 'existing-output', 'inside-output'):
@@ -217,7 +228,7 @@ class NativeSOCKSOwnerValidator(unittest.TestCase):
                 self.assertFalse(f.prepared)
 
     def test_every_control_requires_original_unique_source_mutation(self):
-        for index in range(3):
+        for index in range(4):
             for duplicate in (False, True):
                 with self.subTest(index=index, duplicate=duplicate), tempfile.TemporaryDirectory() as directory:
                     f = Composition(Path(directory))
@@ -226,7 +237,7 @@ class NativeSOCKSOwnerValidator(unittest.TestCase):
                     (f.source/V.OWNER).write_text(f.owner)
                     with self.assertRaisesRegex(ValueError, 'causal seam'):
                         f.run()
-                    self.assertEqual(len(f.calls), 3+index)
+                    self.assertEqual(len(f.calls), 4+index)
                     self.assertFalse((f.output/'receipt.json').exists())
 
     def test_control_requires_every_original_sibling_and_exact_leaf_witness(self):
@@ -294,7 +305,8 @@ class NativeSOCKSOwnerValidator(unittest.TestCase):
 
     def test_actual_source_capture_requires_native_projection_and_pinned_callers(self):
         for fault in (None, 'missing-projection', 'changed-projection', 'linked-projection',
-                      'changed-pinned', 'ordinary-registration', 'changed-sing'):
+                      'changed-pinned', 'ordinary-registration', 'changed-sing',
+                      'missing-daemon', 'changed-daemon', 'linked-daemon', 'missing-daemon-hook'):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
                 work = Path(directory)
                 source, core = work/'candidate', work/'native'
@@ -304,6 +316,34 @@ class NativeSOCKSOwnerValidator(unittest.TestCase):
                     a.parent.mkdir(parents=True, exist_ok=True)
                     b.parent.mkdir(parents=True, exist_ok=True)
                     a.write_text('exact original '+original); b.write_bytes(a.read_bytes())
+                captures = {
+                    'instance_close.go.tmpl': 'daemon/routervpn_instance_close.go',
+                    'instance_close_test.go.tmpl': 'daemon/routervpn_instance_close_test.go',
+                    'instance_capture.go.tmpl': 'daemon/routervpn_instance_capture.go',
+                    'instance_capture_test.go.tmpl': 'daemon/routervpn_instance_capture_test.go',
+                }
+                for name, relative in captures.items():
+                    original, native = source/'mobile/chain_execution'/name, core/relative
+                    original.parent.mkdir(parents=True, exist_ok=True); native.parent.mkdir(parents=True, exist_ok=True)
+                    original.write_text('exact capture '+name); native.write_bytes(original.read_bytes())
+                for relative in ('daemon/instance.go', 'daemon/started_service.go'):
+                    (core/relative).write_text('original sealed hook '+relative)
+                def daemon_sources(path):
+                    originals = {relative:(path/relative).read_bytes()
+                        for relative in ('daemon/instance.go', 'daemon/started_service.go')}
+                    derived = dict(originals)
+                    if fault == 'missing-daemon-hook':
+                        derived['daemon/instance.go'] += b' original missing capture'
+                    return originals, derived
+                desktop = types.SimpleNamespace(DAEMON_CAPTURE_TEMPLATES=captures,
+                    daemon_capture_sources=daemon_sources)
+                native_capture = core/captures['instance_capture.go.tmpl']
+                if fault == 'missing-daemon':
+                    native_capture.unlink()
+                elif fault == 'changed-daemon':
+                    native_capture.write_text('foreign original capture')
+                elif fault == 'linked-daemon':
+                    native_capture.unlink(); native_capture.symlink_to(source/'mobile/chain_execution/instance_capture.go.tmpl')
                 pinned = ('dns/transport/conn_pool.go', 'dns/transport/multiplexer.go',
                           'dns/transport/udp.go', 'protocol/socks/outbound.go')
                 for relative in pinned:
@@ -337,7 +377,7 @@ class NativeSOCKSOwnerValidator(unittest.TestCase):
                 def pinned_read(command, cwd, timeout):
                     relative = command[2].split(':', 1)[1]
                     return ('pinned '+relative).encode()
-                with patch.object(V, 'module', return_value=packet), \
+                with patch.object(V, 'module', side_effect=lambda name, path: desktop if path.name == 'prepare-desktop-external.py' else packet), \
                         patch.object(V.COMMON.subprocess, 'check_output', side_effect=pinned_read):
                     if fault:
                         with self.assertRaises(ValueError):
@@ -345,9 +385,10 @@ class NativeSOCKSOwnerValidator(unittest.TestCase):
                     else:
                         records = V.checked_sources(gate, source, core)
                         self.assertEqual(verified, [core])
-                        self.assertEqual(len(records), 9)
+                        self.assertEqual(len(records), 15)
                         self.assertEqual(records['original-full-closure'], 'a'*64)
                         self.assertIn('owner-sing/association.go', records)
+
 
 
 if __name__ == '__main__':

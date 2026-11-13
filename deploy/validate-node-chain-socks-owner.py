@@ -21,7 +21,7 @@ ROOTS = ('TestRouterVPNNodeSOCKSMiddleEncryptedOwnership',
 MODES = ('wg', 'awg2-fast', 'awg2-strong')
 LEAVES = ('closed-source-and-native-capture', 'encrypted-private-public', 'selected-dns',
           'invalidated-association-keeps-box-close')
-REFUSALS = ('password', 'auth-downgrade', 'relay-domain', 'late-original-factory')
+REFUSALS = ('password', 'auth-downgrade', 'relay-domain', 'failed-association-close', 'late-original-factory')
 ENCRYPTED = (ROOTS[0], *(ROOTS[0]+'/'+mode+suffix for mode in MODES
                        for suffix in ('', *('/'+leaf for leaf in LEAVES))))
 FACTORY = (ROOTS[1], *(ROOTS[1]+'/'+leaf for leaf in REFUSALS))
@@ -54,6 +54,10 @@ CONTROLS = (
     dict(name='original-source-owner', before=' || original != o.capture.source',
          after='', root=ROOTS[0], cases=ENCRYPTED, leaf=LEAVES[0],
          witness='foreign reconstructed source gained original native owner'),
+    dict(name='failed-association-retention', before='if s.closeErr == nil {',
+         after='if true { // causal erasure of failed original association',
+         root=ROOTS[1], cases=FACTORY, leaf='failed-association-close',
+         witness='failed original SOCKS association disappeared before Box close'),
 )
 HEX40 = re.compile(r'[0-9a-f]{40}')
 
@@ -109,6 +113,18 @@ def checked_sources(gate, source, core):
                 or native.read_bytes() != template.read_bytes():
             raise ValueError('SOCKS owner lost exact native projection: '+projected)
         records['owner/'+projected] = hashlib.sha256(native.read_bytes()).hexdigest()
+    desktop = module('socks_owner_desktop_capture', source/'deploy/prepare-desktop-external.py')
+    originals, derived = desktop.daemon_capture_sources(core)
+    if originals != derived:
+        raise ValueError('SOCKS owner original daemon capture hooks are absent or changed')
+    for relative, raw in originals.items():
+        records['owner-daemon/'+relative] = hashlib.sha256(raw).hexdigest()
+    for name, relative in desktop.DAEMON_CAPTURE_TEMPLATES.items():
+        template, native = source/'mobile/chain_execution'/name, core/relative
+        if template.is_symlink() or native.is_symlink() or not template.is_file() or not native.is_file() \
+                or native.read_bytes() != template.read_bytes():
+            raise ValueError('SOCKS owner original daemon capture projection changed')
+        records['owner-daemon/'+relative] = hashlib.sha256(native.read_bytes()).hexdigest()
     for relative in ('dns/transport/conn_pool.go', 'dns/transport/multiplexer.go',
                      'dns/transport/udp.go', 'protocol/socks/outbound.go'):
         native = core/relative
@@ -130,6 +146,15 @@ def checked_sources(gate, source, core):
     if 'routervpnnodesocks' in registry:
         raise ValueError('Dormant SOCKS owner gained ordinary registry admission')
     return records
+
+
+def require_daemon_preflight(text, status):
+    expected = ('test_shipping_desktop_daemon_capture_is_exact_idempotent_and_fail_closed '
+                '(__main__.DesktopDaemonCapturePreparation.test_shipping_desktop_daemon_capture_is_exact_idempotent_and_fail_closed) ... ok')
+    lines = [line for line in text.splitlines() if line.strip()]
+    if status != 0 or len(lines) != 4 or lines[0] != expected or lines[1] != '-'*70 \
+            or not re.fullmatch(r'Ran 1 test in [0-9]+(?:\.[0-9]+)?s', lines[2]) or lines[3] != 'OK':
+        raise ValueError('Original desktop daemon capture preflight lost its exact verdict')
 
 
 def required_failures(control):
@@ -254,6 +279,10 @@ def validate(source, source_sha, output, go='go'):
         if timed_out or not joined:
             raise RuntimeError('Original owner validation process timed out or did not join')
         return status, text
+    status, text = run('daemon-capture-preflight',
+        [sys.executable, source/'deploy/test_desktop_tor_preparation.py', '--daemon-capture-only'],
+        source, env, 60)
+    require_daemon_preflight(text, status)
     with tempfile.TemporaryDirectory(prefix='routervpn-focused-socks-owner-', dir=output.parent) as temporary:
         work = Path(temporary)
         core, xray = work/'core', work/'xray'

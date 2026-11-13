@@ -2798,6 +2798,100 @@ macOS profile candidate `615470fb` remains queued in focused run
 release and publication remain required.
 
 
+
+## November 13 11:55 UTC: published SOCKS runtime and the next bounded native gates
+
+The five-file typed SOCKS runtime is now published on main as
+[d2d674f4441f666e07af6f3a8ecc5557ec0d3cd2](https://github.com/Eabusham2/router-vpn/commit/d2d674f4441f666e07af6f3a8ecc5557ec0d3cd2),
+with parent `7142b4503eca68dd110739c849adfce4b5d9f2f1`.
+This is exactly the candidate tested by focused run
+[43416898817](https://github.com/Eabusham2/router-vpn/actions/runs/43416898817),
+job `131856966806`, under the captured parent validator. Its Go 1.26.3 race
+execution passed 36 new runtime records, 27 original runtime/measurement
+records and 17 original schema-one/two projection records. Three separately
+compiled causal controls required the exact nine, five and one failing
+records and original witnesses. All six process groups joined; no timeout
+was accepted as a test failure. The before/after selection and 5,116 source
+files were unchanged. Artifact `14031914183` was downloaded and every raw
+log independently reparsed using the original strict verdict:
+SHA256 `63b18246370c48f969e3d237c6218d568aad4a51cba8ccd132b4116183a130a3`.
+This implements the shared typed runtime; it does not establish native
+Box/CommandServer, actual TUN readback, UI admission or device acceptance.
+
+The first dormant native owner candidate `49f6599388a0b4a1a045c2f452d21d60c2f854bb`
+was not published. Run
+[43416898834](https://github.com/Eabusham2/router-vpn/actions/runs/43416898834),
+job `131856966455`, reached an actual native build and failed because the
+desktop projection omitted `daemon.RouterVPNInstanceCloseCapture` and
+`RouterVPNReserveInstanceCloseContext`. It executed no native owner test.
+The original compiler process joined after 269.932 seconds; the downloaded
+artifact `14031614411` has SHA256
+`22171f3a8c0795f81a31e351ea5c238c423890832a455fee54fc83a7576b1ca4`.
+A separate source review found that a failed original association Close
+could disappear from the owner registry before Box Close. Both findings
+are retained as failure evidence, not renamed successful validation.
+
+The repaired six-file candidate preserves failed original Close receipts
+and projects the four original daemon capture templates using the existing
+mobile instance/service transforms. Its exact projection, idempotence,
+missing-source, symlink and tamper cases live in the candidate preparation
+test. The trusted driver executes that one-root Python preflight before
+native preparation, requires its exact verdict and joins its original
+process. Trusted selftests run against the unchanged base preparer; they
+do not import a helper that exists only in the candidate. Native compilation,
+22 owner records, 15 original peer records and four compiled causal controls
+remain required before this repaired candidate is published.
+
+The manual focused workflow now adds separate `socks-mtu` and
+`darwin-hy2` lanes while preserving the original nine lanes and fixed
+single-parent/path allowlists. It extends the owner allowlist by the
+candidate preparation test. The SOCKS MTU adapter delegates to the original
+captured planner/controller, checks the same owner before and after capture,
+and does not report configured ceilings as measured path MTU. Its planned
+hosted proof requires 24 new records, 19 original MTU records, 36 already
+published runtime records and three compiled causal controls. The Darwin
+lane compiles the original controller and encrypted reference, retains the
+four original imported-source records, adds four HY2 source records, requires
+the intended four Salamander-control failures and runs the original 37
+encrypted HY2 records. Its source adoption preserves the previous 28 host
+and 19 measurement cases as prefixes of the 37/24 inventories. This lane
+explicitly records that installed native acceptance is still unproved.
+
+Root verification of this infrastructure passed all 22 MTU runner tests,
+eight Darwin runner tests, seven owner runner tests against the unchanged
+current base preparer, and twelve identity tests, plus YAML and both embedded
+Python programs. The new owner preflight is checked through the existing
+process-family executor and strict exact verdict. These are orchestration
+tests; the candidate Go/native executions still have to pass.
+
+The retained Darwin generated-child run
+[43408867759](https://github.com/Eabusham2/router-vpn/actions/runs/43408867759)
+has now ended, superseding the preceding ongoing status. Both original
+signed-child preflights passed. ARM64 job `131829943981` failed with a hosted
+runner communication-loss annotation. Intel job `131829943709` was cancelled;
+its annotation explicitly reports that the job exceeded its one-hour maximum.
+The native phase remained marked in progress in each terminal timeline.
+Terminal log fetches returned BlobNotFound and the aggregate had zero
+artifacts. These outcomes do not identify a failing network assertion and
+provide no native acceptance. A separate fixed-case diagnostic is being
+prepared to preserve a completed, source-bound checkpoint before native
+network preparation; it does not replace the exhaustive release gate.
+
+Mac profile candidate `615470fb8a7e638f761483031727d9002a099bf5` remains queued
+in run `43414997838`; no Swift compilation or success is asserted.
+An older Windows auxiliary image build also exposed a concrete test
+assumption: the 300 ms original MTU deadline had correctly elapsed before
+the test demanded a still-running worker. The pending fixture correction
+keeps the original deadline/rollback test and separates explicit observation
+cancellation from captured-operation lifetime. The production deadlines and
+cancellation protections are unchanged. It requires actual native execution
+and causal controls before publication.
+
+The current exact-SHA all-platform release, package/image provenance,
+publication, full native graph coverage and physical/private acceptance
+remain open. No success for a previous SHA is substituted for that evidence.
+
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

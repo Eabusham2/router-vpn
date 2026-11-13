@@ -42,8 +42,22 @@ ALLOWLISTS = {
         "internal/mobilemultihop/node_chain_runtime.go",
         "internal/mobilemultihop/node_chain_measurement.go",
     }),
+    "socks-mtu": frozenset({
+        "internal/mobilemultihop/node_chain_socks_mtu.go",
+        "internal/mobilemultihop/node_chain_socks_mtu_test.go",
+    }),
+    "darwin-hy2": frozenset({
+        "cmd/client/desktop_node_chain_hysteria_darwin_native_test.go",
+        "cmd/client/desktop_node_chain_darwin_peer_native_test.go",
+        "cmd/client/desktop_node_chain_darwin_native_test.go",
+        "deploy/test_macos_node_chain_host.py",
+        "deploy/test_macos_node_chain_host_runner.py",
+        "deploy/prepare-desktop-external.py",
+        "deploy/test_macos_node_candidate_prefix_host_runner.py",
+    }),
     "socks-owner": frozenset({
         "mobile/chain/socks_owner.go.tmpl",
+        "deploy/test_desktop_tor_preparation.py",
         "mobile/desktop/node_chain_socks_middle_test.go.tmpl",
         "mobile/desktop/node_imported_peer_linux_test.go.tmpl",
         "deploy/prepare-mobile-node-chain.py",

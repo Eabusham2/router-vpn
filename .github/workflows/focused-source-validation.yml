@@ -23,6 +23,8 @@ on:
           - macos-profiles
           - socks-runtime
           - socks-owner
+          - socks-mtu
+          - darwin-hy2
 
 permissions:
   contents: read
@@ -39,8 +41,8 @@ env:
 
 jobs:
   validate:
-    runs-on: ${{ inputs.suite == 'macos-profiles' && 'macos-15' || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ inputs.suite == 'macos-profiles' && 45 || 30 }}
+    runs-on: ${{ (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2') && 'macos-15' || 'ubuntu-24.04' }}
+    timeout-minutes: ${{ (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2') && 45 || 30 }}
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
       SUITE: ${{ inputs.suite }}
@@ -56,7 +58,7 @@ jobs:
           for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
               if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
                   raise SystemExit(name + " must be a complete lowercase Git commit.")
-          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles", "socks-runtime", "socks-owner"):
+          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2"):
               raise SystemExit("Unknown focused validation suite.")
           PY
       - name: Check out the trusted validator
@@ -73,13 +75,13 @@ jobs:
           path: candidate
           fetch-depth: 2
           persist-credentials: false
-      - name: Install Python for the native macOS source fixture
-        if: inputs.suite == 'macos-profiles'
+      - name: Install Python for the native macOS source fixtures
+        if: inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Use the original canonical macOS temporary root
-        if: inputs.suite == 'macos-profiles'
+        if: inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2'
         run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Verify source identity and required validator controls
         shell: bash
@@ -88,6 +90,12 @@ jobs:
           python3 validator/deploy/test_focused_multihop_clocks.py --self-test
           if [[ "$SUITE" == "macos-profiles" ]]; then
             python3 validator/deploy/test_validate_macos_profile_source.py
+          fi
+          if [[ "$SUITE" == "socks-mtu" ]]; then
+            python3 validator/deploy/test_focused_socks_mtu_runner.py
+          fi
+          if [[ "$SUITE" == "darwin-hy2" ]]; then
+            python3 validator/deploy/test_validate_darwin_hy2_source.py
           fi
           if [[ "$SUITE" == "socks-runtime" ]]; then
             python3 validator/deploy/test_focused_socks_runtime_runner.py
@@ -140,6 +148,23 @@ jobs:
         shell: bash
         run: |
           python3 validator/deploy/validate-macos-profile-source.py \
+            --source "$GITHUB_WORKSPACE/candidate" --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Require original typed SOCKS MTU planner and owner controls
+        if: inputs.suite == 'socks-mtu'
+        shell: bash
+        run: |
+          python3 validator/deploy/test_focused_socks_mtu.py \
+            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
+            --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Compile original Darwin HY2 sources and encrypted reference
+        if: inputs.suite == 'darwin-hy2'
+        shell: bash
+        run: |
+          python3 candidate/deploy/test_macos_node_chain_host_runner.py
+          python3 candidate/deploy/test_macos_node_candidate_prefix_host_runner.py
+          python3 validator/deploy/validate-darwin-hy2-source.py \
             --source "$GITHUB_WORKSPACE/candidate" --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests"
       - name: Require typed SOCKS runtime and preserved proof lifecycle controls
