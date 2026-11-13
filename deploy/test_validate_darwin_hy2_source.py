@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import types
@@ -73,7 +74,7 @@ class Composition:
                 EXTERNAL=types.SimpleNamespace(darwin_node_chain_peer_copies=lambda:
                     {V.PEER_PROJECTION:self.projected, **{str(i):b'original projection' for i in range(6)}})),
             CONTROLLER=types.SimpleNamespace(UID=types.SimpleNamespace(compiler_toolchain=lambda source, go, env:
-                (Path('/captured/go'), env))),
+                (Path('/captured/go'), env), privilege_tool=lambda:'/usr/bin/sudo')),
             EXTERNAL=types.SimpleNamespace(NODE=types.SimpleNamespace(require_native_verdicts=PARSER)),
             source_identity=self.checked_sources)
 
@@ -141,7 +142,19 @@ class Composition:
             if self.fault == 'control-image':
                 self.mutated_image.write_bytes(b'foreign image')
             return 1, mask_verdict(self.fault)
+        if index in (7, 8, 9):
+            self.assert_reference_command(command, index)
         if index == 7:
+            text = verdict((V.CAPTURE_ROOT,)).replace('--- PASS:', '    desktop_node_chain_hysteria_darwin_native_test.go:300: '+V.CAPTURE_MARKER+'10.20.30.40\n--- PASS:', 1)
+            if self.fault == 'capture-missing':
+                text = verdict((V.CAPTURE_ROOT,))
+            if self.fault == 'capture-duplicate':
+                text += '    desktop_node_chain_hysteria_darwin_native_test.go:300: '+V.CAPTURE_MARKER+'10.20.30.40\n'
+            return (1 if self.fault == 'capture-failure' else 0), text
+        if index == 8:
+            names = V.REFERENCE_CASES[:-1] if self.fault == 'missing-reference-authority' else V.REFERENCE_CASES
+            return (1 if self.fault == 'reference-failure' else 0), verdict(names)
+        if index == 9:
             names = V.ENCRYPTED[:-1] if self.fault == 'missing-encrypted' else V.ENCRYPTED
             if self.fault == 'foreign-encrypted':
                 names = (*names, 'TestForeignPeer')
@@ -154,6 +167,23 @@ class Composition:
             return (1 if self.fault == 'encrypted-failure' else 0), verdict(names)
         raise AssertionError('Unexpected extra compiler or execution')
 
+    def assert_reference_command(self, command, index):
+        if command[:5] != ['/usr/bin/sudo', '-n', '--', '/usr/bin/env', '-i']:
+            raise AssertionError('Reference lost original elevation or clean environment')
+        if command.count('ROUTERVPN_DARWIN_NODE_CHAIN_REFERENCE=1') != 1:
+            raise AssertionError('Reference lost its explicit captured purpose')
+        if index == 7:
+            if 'ROUTERVPN_DARWIN_NODE_CHAIN_CAPTURE=1' not in command or any(
+                    value.startswith('ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS=') for value in command):
+                raise AssertionError('Capture borrowed an ambient address')
+        elif command.count('ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS=10.20.30.40') != 1:
+            raise AssertionError('Reference lost its original physical capture')
+
+    def execute_privileged(self, gate, command, cwd, env, log, bound, sudo):
+        if gate is not self.gate or sudo != '/usr/bin/sudo':
+            raise AssertionError('Reference lost its original privilege cleanup')
+        return self.execute_process(command, cwd, env, log, bound)
+
     def execute_process(self, command, cwd, env, log, bound):
         status, text = self.run(list(map(str, command)), cwd=cwd, env=env, timeout=bound)
         log.write_text(text)
@@ -162,7 +192,7 @@ class Composition:
 
     def execute(self):
         with patch.object(V, 'load_gate', return_value=self.gate), patch.object(V, 'prepare', side_effect=self.prepare), \
-                patch.object(V, 'git', side_effect=self.git), patch.object(V, 'execute', side_effect=self.execute_process), patch.object(V.platform, 'system', return_value='Darwin'), patch.object(V.platform, 'machine', return_value='arm64'):
+                patch.object(V, 'git', side_effect=self.git), patch.object(V, 'execute', side_effect=self.execute_process), patch.object(V, 'execute_privileged', side_effect=self.execute_privileged), patch.object(V.platform, 'system', return_value='Darwin'), patch.object(V.platform, 'machine', return_value='arm64'):
             return V.validate(self.source, self.metadata['source_sha'], self.output, '/captured/go')
 
 
@@ -213,11 +243,13 @@ class FocusedDarwinHysteriaValidation(unittest.TestCase):
             result = f.execute()
             self.assertEqual(tuple(result['authority_cases']), V.AUTHORITY)
             self.assertEqual((len(V.AUTHORITY), len(V.ENCRYPTED)), (8, 37))
-            self.assertEqual([bound for _, bound in f.calls], [300, 40, 40, 300, 40, 600, 100])
+            self.assertEqual([bound for _, bound in f.calls], [300, 40, 40, 300, 40, 600, 40, 40, 100])
             self.assertIn('-test.timeout=30s', f.calls[1][0])
             self.assertIn('-test.timeout=30s', f.calls[4][0])
             self.assertEqual(f.calls[4][0][1:3], ['tool', 'test2json'])
-            self.assertIn('-test.timeout=90s', f.calls[6][0])
+            self.assertIn('-test.timeout=90s', f.calls[8][0])
+            self.assertEqual(result['reference_cases'], list(V.REFERENCE_CASES))
+            self.assertEqual(result['reference_capture']['address'], '10.20.30.40')
             self.assertIn(V.MASK_AFTER, f.mutated)
             self.assertNotEqual(f.mutated, (f.source/V.HELPER).read_text())
             self.assertEqual(result['selection'], f.metadata)
@@ -232,7 +264,7 @@ class FocusedDarwinHysteriaValidation(unittest.TestCase):
             self.assertEqual(json.loads((f.output/'receipt.json').read_text()), result)
             progress = json.loads((f.output/'progress.json').read_text())
             self.assertEqual(progress['compiler'], '/captured/go')
-            self.assertEqual(len(progress['phases']), 7)
+            self.assertEqual(len(progress['phases']), 9)
 
     def test_path_compiler_preserves_failed_and_exception_receipts(self):
         for failure in ('compile-failure', 'spawn-exception'):
@@ -267,6 +299,7 @@ class FocusedDarwinHysteriaValidation(unittest.TestCase):
                       'control-pass', 'control-wrong', 'control-build', 'control-race',
                       'control-missing-leaf', 'control-wrong-leaf', 'control-panic', 'control-signal',
                       'control-timeout', 'control-unjoined', 'control-early-root',
+                      'capture-failure', 'capture-missing', 'capture-duplicate', 'missing-reference-authority', 'reference-failure',
                       'missing-encrypted', 'foreign-encrypted', 'encrypted-failure',
                       'source-change', 'image-change', 'selection-change'):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
@@ -319,6 +352,91 @@ class FocusedDarwinHysteriaValidation(unittest.TestCase):
                 self.assertEqual(len(f.calls), 3)
                 self.assertFalse((f.output/'receipt.json').exists())
 
+
+
+    def test_physical_receipt_is_unique_canonical_and_from_original_native_root(self):
+        text = verdict((V.CAPTURE_ROOT,)).replace('--- PASS:', '    desktop_node_chain_hysteria_darwin_native_test.go:300: '+V.CAPTURE_MARKER+'10.20.30.40\n--- PASS:', 1)
+        self.assertEqual(V.captured_reference_address(text, PARSER), '10.20.30.40')
+        for changed in (text.replace('10.20.30.40', address) for address in
+                        ('127.0.0.1', '0.0.0.0', '224.0.0.1', '169.254.1.2', '255.255.255.255',
+                         '::1', '010.20.30.40', '10.20.30.40;foreign')):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                V.captured_reference_address(changed, PARSER)
+        for changed in (verdict((V.CAPTURE_ROOT,)), text+text,
+                        text.replace('desktop_node_chain_hysteria_darwin_native_test.go', 'foreign.go'),
+                        text.replace('--- PASS:', '--- FAIL:'), text.replace('=== RUN', '=== SKIP')):
+            with self.assertRaises(ValueError):
+                V.captured_reference_address(changed, PARSER)
+
+    def test_reference_argv_captures_privilege_address_and_finite_original_bounds(self):
+        for root in (V.CAPTURE_ROOT, V.REFERENCE_ROOT, V.ENCRYPTED_ROOT):
+            address = None if root == V.CAPTURE_ROOT else '10.20.30.40'
+            command = V.reference_command('/original/peer.test', root, '/usr/bin/sudo', address)
+            self.assertEqual(command[:5], ['/usr/bin/sudo', '-n', '--', '/usr/bin/env', '-i'])
+            self.assertEqual(command.count('ROUTERVPN_DARWIN_NODE_CHAIN_REFERENCE=1'), 1)
+            self.assertIn('-test.run=^'+root+'$', command)
+            self.assertIn('-test.timeout='+('90s' if root == V.ENCRYPTED_ROOT else '30s'), command)
+            if address:
+                self.assertIn('ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS='+address, command)
+            else:
+                self.assertFalse(any(value.startswith('ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS=') for value in command))
+        with patch.object(V.os, 'geteuid', return_value=0):
+            self.assertEqual(V.reference_command('/original/peer.test', V.CAPTURE_ROOT, None)[:2], ['/usr/bin/env', '-i'])
+        with patch.object(V.os, 'geteuid', return_value=501), self.assertRaises(ValueError):
+            V.reference_command('/original/peer.test', V.CAPTURE_ROOT, None)
+        for root, sudo, address in (('foreign', '/usr/bin/sudo', None),
+                                   (V.CAPTURE_ROOT, '/tmp/sudo', None),
+                                   (V.CAPTURE_ROOT, '/usr/bin/sudo', '10.20.30.40'),
+                                   (V.ENCRYPTED_ROOT, '/usr/bin/sudo', None),
+                                   (V.ENCRYPTED_ROOT, '/usr/bin/sudo', '127.0.0.1')):
+            with self.assertRaises(ValueError):
+                V.reference_command('/original/peer.test', root, sudo, address)
+
+    def test_privileged_executor_keeps_original_cleanup_and_never_accepts_failed_join(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calls = []
+            def original(command, **kwargs):
+                calls.append((command, kwargs))
+                return 'original root output\n'
+            gate = types.SimpleNamespace(CONTROLLER=types.SimpleNamespace(UID=types.SimpleNamespace(run=original)))
+            args = (gate, ['/usr/bin/sudo', '-n', '--', '/original/image'], root, {},
+                    root/'root.log', 100, '/usr/bin/sudo')
+            self.assertEqual(V.execute_privileged(*args), (0, False, True))
+            self.assertEqual(calls[0][1]['sudo'], '/usr/bin/sudo')
+            self.assertEqual(calls[0][1]['timeout'], 100)
+            self.assertEqual(args[4].read_text(), 'original root output\n')
+            def failed(*unused, **kwargs):
+                raise subprocess.CalledProcessError(1, 'original', output=b'original native failure\n')
+            gate.CONTROLLER.UID.run = failed
+            self.assertEqual(V.execute_privileged(*args), (1, False, True))
+            self.assertEqual(args[4].read_text(), 'original native failure\n')
+            for error in (RuntimeError('original group timeout was joined'),
+                          RuntimeError('original group could not be joined'), OSError('spawn refused')):
+                def refused(*unused, **kwargs):
+                    raise error
+                gate.CONTROLLER.UID.run = refused
+                with self.assertRaises(type(error)):
+                    V.execute_privileged(*args)
+                self.assertIn(str(error), args[4].read_text())
+
+    def test_orchestration_rejects_omitted_reference_flag_elevation_and_address(self):
+        original = V.reference_command
+        for omitted in ('elevation', 'flag', 'address'):
+            def mutant(image, root, sudo, address=None):
+                command = original(image, root, sudo, address)
+                if root != V.ENCRYPTED_ROOT:
+                    return command
+                if omitted == 'elevation':
+                    return command[3:]
+                if omitted == 'flag':
+                    return [value for value in command if value != 'ROUTERVPN_DARWIN_NODE_CHAIN_REFERENCE=1']
+                return [value for value in command if not value.startswith('ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS=')]
+            with self.subTest(omitted=omitted), tempfile.TemporaryDirectory() as directory:
+                f = Composition(Path(directory))
+                with patch.object(V, 'reference_command', side_effect=mutant), self.assertRaises(AssertionError):
+                    f.execute()
+                self.assertFalse((f.output/'receipt.json').exists())
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

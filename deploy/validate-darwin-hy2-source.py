@@ -4,6 +4,7 @@ from pathlib import Path
 import argparse
 import hashlib
 import importlib.util
+import ipaddress
 import json
 import os
 import platform
@@ -41,6 +42,11 @@ HEX40 = re.compile(r'[0-9a-f]{40}')
 
 CLIENT_PACKAGE = 'router-vpn/cmd/client'
 MASK_CASES = AUTHORITY[-4:]
+CAPTURE_ROOT = 'TestDesktopDarwinHysteriaReferencePhysicalCapture'
+REFERENCE_ROOT = 'TestRouterVPNDesktopNodeChainDarwinReferenceCapture'
+REFERENCE_CASES = (REFERENCE_ROOT, *(REFERENCE_ROOT+'/'+name for name in
+    ('missing-reference', 'foreign-address', 'linux-pair', 'source-address')))
+CAPTURE_MARKER = 'ROUTERVPN_DARWIN_NODE_CHAIN_CAPTURED_IPV4='
 
 
 def execute(command, cwd, env, log, timeout):
@@ -52,6 +58,65 @@ def execute(command, cwd, env, log, timeout):
     spec.loader.exec_module(module)
     return module.execute(list(map(str, command)), cwd, env, log, timeout)
 
+
+
+def captured_reference_address(text, require_verdicts):
+    require_verdicts(text, (CAPTURE_ROOT,), 'original Darwin physical capture')
+    lines = [line for line in text.splitlines() if CAPTURE_MARKER in line]
+    if len(lines) != 1:
+        raise ValueError('Darwin reference needs one original physical address receipt')
+    match = re.fullmatch(r'\s+desktop_node_chain_hysteria_darwin_native_test\.go:[0-9]+: '
+                         + re.escape(CAPTURE_MARKER) + r'([^\s]+)', lines[0])
+    if match is None:
+        raise ValueError('Darwin reference physical receipt lost its original test source')
+    value = match.group(1)
+    address = ipaddress.IPv4Address(value)
+    if str(address) != value or address.is_unspecified or address.is_loopback or address.is_link_local \
+            or address.is_multicast or value == '255.255.255.255':
+        raise ValueError('Darwin reference lacks a captured unicast physical IPv4')
+    return value
+
+
+def reference_command(image, root, sudo, address=None):
+    if sudo not in (None, '/usr/bin/sudo') or sudo is None and os.geteuid() != 0:
+        raise ValueError('Darwin reference lost its original privilege tool')
+    if root not in (CAPTURE_ROOT, REFERENCE_ROOT, ENCRYPTED_ROOT):
+        raise ValueError('Darwin reference selected a foreign execution root')
+    values = ['PATH=/usr/bin:/bin:/usr/sbin:/sbin', 'GORACE=atexit_sleep_ms=0',
+              'ROUTERVPN_DARWIN_NODE_CHAIN_REFERENCE=1']
+    if root == CAPTURE_ROOT:
+        if address is not None:
+            raise ValueError('Physical discovery must not borrow an existing address')
+        values.append('ROUTERVPN_DARWIN_NODE_CHAIN_CAPTURE=1')
+    else:
+        if not isinstance(address, str):
+            raise ValueError('Darwin reference requires its captured physical address')
+        parsed = ipaddress.IPv4Address(address)
+        if str(parsed) != address or parsed.is_unspecified or parsed.is_loopback or parsed.is_link_local \
+                or parsed.is_multicast or address == '255.255.255.255':
+            raise ValueError('Darwin reference requires a captured unicast IPv4')
+        values.append('ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS='+address)
+    seconds = 90 if root == ENCRYPTED_ROOT else 30
+    command = ['/usr/bin/env', '-i', *values, str(image), '-test.run=^'+root+'$',
+               '-test.count=1', '-test.timeout='+str(seconds)+'s', '-test.v']
+    return ([sudo, '-n', '--'] if sudo else []) + command
+
+
+def execute_privileged(gate, command, cwd, env, log, timeout, sudo):
+    # The existing native runner owns privilege-aware cleanup of this exact
+    # process group. Its timeout/failed-join exception can never become PASS.
+    try:
+        output = gate.CONTROLLER.UID.run(command, cwd=cwd, env=env, timeout=timeout, sudo=sudo)
+        code = 0
+    except subprocess.CalledProcessError as error:
+        output, code = error.output or b'', error.returncode
+    except BaseException as error:
+        log.write_text(str(error)+'\n')
+        raise
+    if isinstance(output, bytes):
+        output = output.decode('utf-8', errors='replace')
+    log.write_text(output)
+    return code, False, True
 
 def require_mask_verdict(text, status):
     if status != 1 or any(token in text for token in ('WARNING: DATA RACE', 'panic:', 'fatal error:', '[build failed]')):
@@ -190,10 +255,13 @@ def validate(source, source_sha, output, go='go'):
     receipt = dict(schema=1, suite=SUITE, selection=metadata,
                    scope='source-authority-and-encrypted-reference-only',
                    installed_native_accepted=False, phases=[])
-    def run(name, command, cwd, captured, timeout):
+    def run(name, command, cwd, captured, timeout, *, privileged=False):
         started = time.monotonic()
         try:
-            status, timed_out, joined = execute(command, cwd, captured, output/(name+'.log'), timeout)
+            if privileged:
+                status, timed_out, joined = execute_privileged(gate, command, cwd, captured, output/(name+'.log'), timeout, sudo)
+            else:
+                status, timed_out, joined = execute(command, cwd, captured, output/(name+'.log'), timeout)
             text = (output/(name+'.log')).read_text(errors='replace')
         except Exception as error:
             log = output/(name+'.log')
@@ -278,8 +346,21 @@ def validate(source, source_sha, output, go='go'):
         if status:
             raise ValueError('Actual complete Darwin encrypted reference image failed to compile')
         peer_identity = image_identity(peer)
-        status, text = run('encrypted-hysteria-final', [str(peer), '-test.run=^'+ENCRYPTED_ROOT+'$',
-            '-test.count=1', '-test.timeout=90s', '-test.v'], core, captured, 100)
+        sudo = gate.CONTROLLER.UID.privilege_tool()
+        status, text = run('reference-physical-capture', reference_command(controller, CAPTURE_ROOT, sudo),
+                           source, captured, 40, privileged=True)
+        if status:
+            raise ValueError('Original Darwin physical capture failed')
+        address = captured_reference_address(text, gate.EXTERNAL.NODE.require_native_verdicts)
+        receipt['reference_capture'] = dict(address=address, root=CAPTURE_ROOT, privilege_tool=sudo,
+                                            authority='reference-peer-only')
+        status, text = run('reference-address-authority', reference_command(peer, REFERENCE_ROOT, sudo, address),
+                           core, captured, 40, privileged=True)
+        if status:
+            raise ValueError('Original Darwin reference address authority failed')
+        gate.EXTERNAL.NODE.require_native_verdicts(text, REFERENCE_CASES, 'original Darwin reference address authority')
+        status, text = run('encrypted-hysteria-final', reference_command(peer, ENCRYPTED_ROOT, sudo, address),
+                           core, captured, 100, privileged=True)
         if status:
             raise ValueError('Actual original encrypted HY2 reference failed')
         gate.EXTERNAL.NODE.require_native_verdicts(text, ENCRYPTED, 'focused original encrypted HY2 reference')
@@ -288,7 +369,7 @@ def validate(source, source_sha, output, go='go'):
             raise ValueError('HY2 validation changed original source or compiled image identity')
         if selection(source, source_sha, output)[1] != original_selection:
             raise ValueError('HY2 validation replaced its original source selection')
-        receipt.update(authority_cases=list(AUTHORITY), encrypted_cases=list(ENCRYPTED),
+        receipt.update(authority_cases=list(AUTHORITY), encrypted_cases=list(ENCRYPTED), reference_cases=list(REFERENCE_CASES),
                        mask_control=dict(witness=MASK_WITNESS, mutated_sha256=hashlib.sha256(mutated.encode()).hexdigest()),
                        images={name: dict(bytes=identity[2], sha256=identity[-1]) for name, identity in
                                (('controller', controller_identity), ('source-mask-control', mutated_identity), ('encrypted-peer', peer_identity))})

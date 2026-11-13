@@ -12,10 +12,12 @@ import json
 import os
 import platform
 import sys
+import stat
 import re
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 REPOSITORY = "Eabusham2/router-vpn"
 WORKFLOW_REF = "refs/heads/main"
@@ -297,6 +299,7 @@ ALLOWLISTS = {
         "internal/mobilemultihop/node_chain_socks_mtu_test.go",
     }),
     "darwin-hy2": frozenset({
+        "mobile/desktop/node_chain_peer_linux_test.go.tmpl",
         "cmd/client/desktop_node_chain_hysteria_darwin_native_test.go",
         "cmd/client/desktop_node_chain_darwin_peer_native_test.go",
         "cmd/client/desktop_node_chain_darwin_native_test.go",
@@ -368,13 +371,76 @@ def checkout_failure_diagnostics(root, status):
         pass
     return dict(schema=1,checkout=Path(root).name,platform=sys.platform,
                 os_name=os.name,machine=platform.machine(),release=platform.release(),
-                forced_file_mode=True,status=bounded(status),
+                forced_file_mode=not windows_mode_projection(),status=bounded(status),
                 git_version=observe("--version"),
                 local_checkout_settings=observe("config","--local","--get-regexp",
                     r"^core\.(filemode|autocrlf|eol|safecrlf|symlinks|ignorecase)$"),
                 raw_tracked_diff=observe("diff","--raw","--abbrev=40","--no-renames","HEAD","--"),
                 changed_tracked_eol=observe("ls-files","--eol","--",*changed) if changed else
                     dict(total_lines=0,lines=[],truncated=False))
+
+
+
+def windows_mode_projection():
+    # Windows Git checkouts cannot represent the commit's POSIX executable bit.
+    # This is a host property, never candidate configuration or a CLI exemption.
+    return os.name == "nt"
+
+
+def original_windows_tracked_files(root, expected):
+    """Verify every committed mode/index object and unfiltered worktree byte."""
+    committed = {}
+    for entry in git(root, "ls-tree", "-r", "-z", "--full-tree", expected).split(b"\0"):
+        if not entry:
+            continue
+        header, path = entry.split(b"\t", 1)
+        mode, kind, blob = header.decode("ascii").split()
+        if mode not in REGULAR_MODES or kind != "blob" or path in committed:
+            raise ValueError("Windows source identity requires original regular tracked files")
+        exact_sha(blob, "tracked source blob")
+        committed[path] = (mode, blob)
+    indexed = {}
+    for entry in git(root, "ls-files", "--stage", "-z").split(b"\0"):
+        if not entry:
+            continue
+        header, path = entry.split(b"\t", 1)
+        mode, blob, stage = header.decode("ascii").split()
+        if stage != "0" or path in indexed:
+            raise ValueError("Windows source identity refuses ambiguous index stages")
+        indexed[path] = (mode, blob)
+    if indexed != committed:
+        raise ValueError("Windows source index mode or object differs from captured commit")
+    for raw_path, (_, blob) in committed.items():
+        path = raw_path.decode("utf-8", "strict")
+        target = root/path
+        # A regular leaf under a substituted symlink/junction is not original.
+        if (not path or Path(path).is_absolute() or ".." in Path(path).parts or
+                target.resolve(strict=True) != target):
+            raise ValueError("Windows tracked source path is not original: " + path)
+        for component in (target, *target.parents):
+            if component == root:
+                break
+            if component.is_symlink() or getattr(component, "is_junction", lambda: False)():
+                raise ValueError("Windows tracked source path is linked: " + path)
+        before = target.lstat()
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("Windows tracked source is not regular: " + path)
+        digest = hashlib.sha1(b"blob " + str(before.st_size).encode("ascii") + b"\0")
+        with target.open("rb") as opened:
+            captured = os.fstat(opened.fileno())
+            if (captured.st_dev, captured.st_ino, captured.st_size, captured.st_mtime_ns) != (
+                    before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns):
+                raise ValueError("Windows tracked source changed during capture: " + path)
+            for chunk in iter(lambda: opened.read(1024*1024), b""):
+                digest.update(chunk)
+            after = os.fstat(opened.fileno())
+        current = target.lstat()
+        if ((after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) !=
+                (captured.st_dev, captured.st_ino, captured.st_size, captured.st_mtime_ns) or
+                (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns) !=
+                (captured.st_dev, captured.st_ino, captured.st_size, captured.st_mtime_ns) or
+                not stat.S_ISREG(current.st_mode) or digest.hexdigest() != blob):
+            raise ValueError("Windows tracked source bytes differ from captured Git blob: " + path)
 
 
 def original_checkout(path, expected):
@@ -392,7 +458,15 @@ def original_checkout(path, expected):
         raise ValueError("source identity refuses hidden index observation flags")
     # Ignored files also cannot silently become dependencies of the fixture.
     # All compiler outputs and Python bytecode belong outside these checkouts.
-    status = git(root, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none")
+    if windows_mode_projection():
+        original_windows_tracked_files(root, expected)
+        # Only filesystem execute-bit projection is unobservable on Windows.
+        # Commit/index modes and all raw bytes were checked above; dirty,
+        # untracked and ignored paths still fail the original status gate.
+        status = git(root, "-c", "core.fileMode=false", "status", "--porcelain=v1",
+                     "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none")
+    else:
+        status = git(root, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none")
     if status:
         diagnostics = checkout_failure_diagnostics(root, status)
         raise ValueError("source identity refuses a dirty or untracked checkout; diagnostics=" +
@@ -712,6 +786,111 @@ class IdentityTests(unittest.TestCase):
         self.assertNotIn("private-file-contents-must-not-print",str(caught.exception))
         self.assertEqual(len(list(self.source.glob("untracked-*.ignored"))),65)
         self.assertEqual(self.command(self.source,"rev-parse","HEAD"),self.base)
+
+
+
+    def test_windows_mode_projection_preserves_commit_index_and_all_raw_bytes(self):
+        executable = "internal/mobilemultihop/plan.go"
+        self.edit("internal/mobilemultihop/node_chain_execution_proof.go")
+        child = self.commit(self.source, "real single parent candidate")
+        for root in (self.validator, self.source):
+            self.command(root, "config", "core.fileMode", "false")
+            (root/executable).chmod(0o644)
+        with mock.patch(__name__+".windows_mode_projection", return_value=True):
+            result = self.capture()
+        self.assertEqual(result["source_sha"], child)
+        self.assertEqual(result["relation"], "single-parent")
+        for root in (self.validator, self.source):
+            self.assertTrue(self.command(root, "ls-files", "--stage", "--", executable).startswith("100755 "))
+            self.assertEqual((root/executable).stat().st_mode & 0o111, 0)
+            # The original forced POSIX observation would reject this projection.
+            self.assertIn(executable, git(root, "status", "--porcelain=v1").decode())
+
+    def test_windows_same_bytes_different_index_mode_and_object_are_refused(self):
+        executable = "internal/mobilemultihop/plan.go"
+        original = (self.source/executable).read_bytes()
+        for change in ("mode", "object"):
+            with self.subTest(change=change):
+                self.command(self.source, "reset", "--hard", self.base)
+                if change == "mode":
+                    self.command(self.source, "update-index", "--chmod=-x", executable)
+                else:
+                    self.edit(executable, "different staged object\n")
+                    self.command(self.source, "add", executable)
+                    (self.source/executable).write_bytes(original)
+                with mock.patch(__name__+".windows_mode_projection", return_value=True):
+                    with self.assertRaisesRegex(ValueError, "index mode or object"):
+                        self.capture()
+                self.assertEqual((self.source/executable).read_bytes(), original)
+
+    def test_windows_raw_bytes_eol_and_hidden_index_flags_remain_strict(self):
+        path = "internal/mobilemultihop/node_chain_execution_proof.go"
+        for change in ("same-size", "crlf", "assume-unchanged", "skip-worktree"):
+            with self.subTest(change=change):
+                self.command(self.source, "reset", "--hard", self.base)
+                if change in ("assume-unchanged", "skip-worktree"):
+                    self.command(self.source, "update-index", "--"+change, path)
+                elif change == "crlf":
+                    self.command(self.source, "config", "core.autocrlf", "true")
+                original = (self.source/path).read_bytes()
+                (self.source/path).write_bytes(original.replace(b"original", b"altered!") if change == "same-size"
+                                               else original.replace(b"\n", b"\r\n"))
+                with mock.patch(__name__+".windows_mode_projection", return_value=True):
+                    with self.assertRaisesRegex(ValueError, "bytes differ|index observation flags"):
+                        self.capture()
+                if change in ("assume-unchanged", "skip-worktree"):
+                    self.command(self.source, "update-index", "--no-"+change, path)
+                self.command(self.source, "config", "core.autocrlf", "false")
+
+    def test_windows_symlinked_leaf_and_parent_are_refused(self):
+        target = self.source/"internal/mobilemultihop/node_chain_execution_proof.go"
+        original = target.read_bytes()
+        outside = self.work/"outside.go"
+        outside.write_bytes(original)
+        target.unlink()
+        target.symlink_to(outside)
+        with mock.patch(__name__+".windows_mode_projection", return_value=True):
+            with self.assertRaisesRegex(ValueError, "path is not original|path is linked"):
+                self.capture()
+        target.unlink()
+        self.command(self.source, "reset", "--hard", self.base)
+        parent = self.source/"internal/mobilemultihop"
+        moved = self.work/"outside-directory"
+        parent.rename(moved)
+        parent.symlink_to(moved, target_is_directory=True)
+        with mock.patch(__name__+".windows_mode_projection", return_value=True):
+            with self.assertRaisesRegex(ValueError, "path is not original|path is linked"):
+                self.capture()
+
+    def test_windows_ignored_and_untracked_outputs_are_still_refused(self):
+        for name in ("untracked.py", "hidden.ignored"):
+            with self.subTest(name=name):
+                target = self.source/name
+                target.write_text("unexpected build input\n")
+                with mock.patch(__name__+".windows_mode_projection", return_value=True):
+                    with self.assertRaisesRegex(ValueError, "dirty or untracked"):
+                        self.capture()
+                target.unlink()
+
+    def test_windows_committed_mode_change_and_new_executable_still_fail(self):
+        for path, change in (("internal/mobilemultihop/plan.go", "existing"),
+                             ("internal/mobilemultihop/runtime_proof_clock_test.go", "new")):
+            with self.subTest(change=change):
+                self.command(self.source, "reset", "--hard", self.base)
+                self.command(self.source, "clean", "-fdx")
+                if change == "existing":
+                    (self.source/path).chmod(0o644)
+                else:
+                    self.edit(path)
+                    (self.source/path).chmod(0o755)
+                self.commit(self.source, "forbidden committed mode")
+                for root in (self.validator, self.source):
+                    (root/"internal/mobilemultihop/plan.go").chmod(0o644)
+                if change == "new":
+                    (self.source/path).chmod(0o644)
+                with mock.patch(__name__+".windows_mode_projection", return_value=True):
+                    with self.assertRaisesRegex(ValueError, "existing mode|non-executable"):
+                        self.capture("legacy-clock")
 
 
     def test_actual_cli_binds_its_validator_checkout_and_workflow_sha(self):
