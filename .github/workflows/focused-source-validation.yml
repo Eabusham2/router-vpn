@@ -39,6 +39,7 @@ on:
           - desktop-socks-editor
           - desktop-socks-child
           - android-policy-fixtures
+          - darwin-socks-child
 
 permissions:
   contents: read
@@ -55,6 +56,7 @@ env:
 
 jobs:
   validate:
+    if: inputs.suite != 'darwin-socks-child'
     runs-on: ${{ (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2' || inputs.suite == 'ios-socks-host' || inputs.suite == 'ios-sdk') && 'macos-15-intel' || 'ubuntu-24.04' }}
     timeout-minutes: ${{ inputs.suite == 'ios-sdk' && 300 || inputs.suite == 'android-sdk' && 180 || inputs.suite == 'android-policy-fixtures' && 95 || (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2' || inputs.suite == 'ios-socks-host') && 45 || 30 }}
     env:
@@ -669,5 +671,104 @@ jobs:
         with:
           name: focused-desktop-socks-editor-${{ matrix.slug }}-${{ inputs.source_sha }}
           path: validation-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  darwin-socks-child:
+    if: inputs.suite == 'darwin-socks-child'
+    name: Original and typed generated Darwin child on ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      SUITE: darwin-socks-child
+      VALIDATOR_SHA: ${{ github.sha }}
+      GOOS: darwin
+      GOARCH: ${{ matrix.arch }}
+    steps:
+      - name: Validate fixed native dispatch identity
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, re
+          if os.environ.get("GITHUB_REPOSITORY") != "Eabusham2/router-vpn" or os.environ.get("GITHUB_REF") != "refs/heads/main":
+              raise SystemExit("Native validation requires the captured main workflow")
+          for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
+              if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
+                  raise SystemExit("Exact lowercase source identity is required")
+          if os.environ.get("SUITE") != "darwin-socks-child":
+              raise SystemExit("Foreign native validation purpose")
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: validator
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: candidate
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Use the original canonical macOS temporary root
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Verify exact candidate and every original native boundary
+        shell: bash
+        run: |
+          python3 validator/deploy/focused_source_identity.py --self-test
+          python3 validator/deploy/test_validate_darwin_socks_child.py
+          python3 validator/deploy/focused_source_identity.py --suite "$SUITE" --source candidate --source-sha "$SOURCE_SHA" --base-sha "$VALIDATOR_SHA" --output validation-output/selection.json
+          python3 candidate/deploy/test_darwin_node_child_tun_runner.py
+          python3 candidate/deploy/test_darwin_socks_child_tun_runner.py
+          python3 candidate/deploy/test_desktop_socks_child_sources.py
+      - name: Preserve scheduled source checkpoint before native PF work
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          selection = pathlib.Path("validation-output/selection.json")
+          value = {"schema":1, "suite":"darwin-socks-child", "source_sha":os.environ["SOURCE_SHA"],
+                   "validator_sha":os.environ["VALIDATOR_SHA"], "target":"darwin/"+os.environ["GOARCH"],
+                   "state":"scheduled", "native_accepted":False,
+                   "original_cases":8, "typed_cases":8,
+                   "selection_sha256":hashlib.sha256(selection.read_bytes()).hexdigest()}
+          pathlib.Path("validation-output/scheduled.json").write_text(json.dumps(value,indent=2)+"\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Focused-darwin-socks-child-scheduled-${{ matrix.arch }}-${{ inputs.source_sha }}-${{ github.run_id }}
+          path: |
+            validation-output/selection.json
+            validation-output/scheduled.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Require original eight and typed eight signed native PF and utun cases
+        shell: bash
+        run: python3 validator/deploy/validate-darwin-socks-child.py --source candidate --source-sha "$SOURCE_SHA" --output validation-output/tests --go "$(command -v go)"
+      - name: Recheck the original candidate after native execution
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python3 validator/deploy/focused_source_identity.py --suite "$SUITE" --source candidate --source-sha "$SOURCE_SHA" --base-sha "$VALIDATOR_SHA" --output validation-output/selection-after.json
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: Focused-darwin-socks-child-${{ matrix.arch }}-${{ inputs.source_sha }}-${{ github.run_id }}
+          path: validation-output
           if-no-files-found: error
           retention-days: 14
