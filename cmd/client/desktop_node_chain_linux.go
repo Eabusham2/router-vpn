@@ -44,6 +44,11 @@ func (capture *desktopNodeChainPlatformCapture) current(ctx context.Context) err
 
 func (capture *desktopNodeChainPlatformCapture) prepare(ctx context.Context, owner *desktopNodeChainHostCapture,
 	selection multihopSelection) (launch *desktopNodeLaunch, image string, failure error) {
+	return capture.prepareForPurpose(ctx, owner, selection, nil)
+}
+
+func (capture *desktopNodeChainPlatformCapture) prepareForPurpose(ctx context.Context, owner *desktopNodeChainHostCapture,
+	selection multihopSelection, purpose *orderedCandidatePreparation) (launch *desktopNodeLaunch, image string, failure error) {
 	if owner == nil || owner.platform != capture || owner.windows != nil || owner.sources == nil ||
 		selection.Native == nil || selection.Native.chain == nil || selection.Native.chain.host != owner ||
 		owner.sources.selection.Native != selection.Native || owner.app != capture.parent.app {
@@ -70,7 +75,7 @@ func (capture *desktopNodeChainPlatformCapture) prepare(ctx context.Context, own
 	if err != nil {
 		return nil, "", err
 	}
-	launch, err = newDesktopNodeChainLaunch(selection, sessionID, "linux")
+	launch, err = newDesktopNodeChainLaunchForPurpose(ctx, selection, sessionID, "linux", purpose)
 	if err != nil {
 		return nil, "", err
 	}

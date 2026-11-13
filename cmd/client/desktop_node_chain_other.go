@@ -21,6 +21,9 @@ func (*desktopNodeChainPlatformCapture) current(context.Context) error {
 func (*desktopNodeChainPlatformCapture) prepare(context.Context, *desktopNodeChainHostCapture, multihopSelection) (*desktopNodeLaunch, string, error) {
 	return nil, "", errors.New("ordered native platform preparation unavailable")
 }
+func (*desktopNodeChainPlatformCapture) prepareForPurpose(context.Context, *desktopNodeChainHostCapture, multihopSelection, *orderedCandidatePreparation) (*desktopNodeLaunch, string, error) {
+	return nil, "", errors.New("ordered native platform preparation unavailable")
+}
 func (*desktopNodeChainPlatformRuntime) guard(context.Context, *app, *desktopNodeLaunch) error {
 	return errors.New("ordered native platform transition unavailable")
 }

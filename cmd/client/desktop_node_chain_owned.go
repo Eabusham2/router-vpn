@@ -9,6 +9,11 @@ import (
 
 func prepareDesktopOwnedNodeChainLaunch(ctx context.Context, capture *desktopNodeChainHostCapture,
 	selection multihopSelection) (*desktopNodeLaunch, error) {
+	return prepareDesktopOwnedNodeChainLaunchForPurpose(ctx, capture, selection, nil)
+}
+
+func prepareDesktopOwnedNodeChainLaunchForPurpose(ctx context.Context, capture *desktopNodeChainHostCapture,
+	selection multihopSelection, purpose *orderedCandidatePreparation) (*desktopNodeLaunch, error) {
 	if capture == nil || capture.windows == nil || capture.platform != nil || capture.app == nil || capture.sources == nil ||
 		selection.Native == nil || selection.Native.chain == nil || selection.Native.chain.host != capture || capture.sources.selection.Native != selection.Native {
 		return nil, errors.New("ordered Windows launch lost its original full source and controller")
@@ -30,7 +35,7 @@ func prepareDesktopOwnedNodeChainLaunch(ctx context.Context, capture *desktopNod
 	if err != nil {
 		return nil, err
 	}
-	launch, err := newDesktopNodeChainLaunch(selection, session, "windows")
+	launch, err := newDesktopNodeChainLaunchForPurpose(ctx, selection, session, "windows", purpose)
 	if err != nil {
 		return nil, err
 	}
@@ -113,6 +118,9 @@ func (a *app) publishDesktopNodeChainStartLocked(operation context.Context, laun
 	if launch == nil || launch.command == nil || launch.chain == nil || launch.ownedNode == nil ||
 		launch.ownedNode.chain != launch.chain || a.cmd != nil || launch.chain.selection.Native != selection.Native {
 		return errors.New("ordered Windows publication changed its unused original launch")
+	}
+	if _, err := orderedCandidateLaunchPurposeLocked(a, launch); err != nil {
+		return err
 	}
 	owned := launch.ownedNode
 	if owned.operation != operation || owned.slot == nil || owned.slot != a.nodeProtection || owned.attempt == nil ||

@@ -7,7 +7,7 @@ import (
 	"errors"
 	"net"
 	"os"
-		"os/exec"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -27,8 +27,8 @@ type desktopNodeChainPlatformCapture struct {
 }
 
 type desktopNodeChainPlatformRuntime struct {
-	capture *desktopNodeChainHostCapture
-	host *desktopMacOSNodeChainHost
+	capture    *desktopNodeChainHostCapture
+	host       *desktopMacOSNodeChainHost
 	registered bool
 }
 
@@ -40,28 +40,28 @@ type desktopMacOSNodeChainMTUBridge interface {
 }
 
 type desktopMacOSNodeChainHost struct {
-	parent *desktopMacOSSessionCapture
-	runtime *desktopNodeChainPlatformRuntime
-	launch *desktopNodeLaunch
-	policy *mobilemultihop.DesktopNodeChainPolicy
-	selection desktopMacOSNodeChainSelection
-	operation context.Context
-	gate chan struct{}
-	process *desktopMacOSProcess
-	mtu desktopMacOSNodeChainMTUBridge
-	mtuObservation desktopMacOSMTUObservationSlot
-	baseline *desktopMacOSNodeChainReceipt
-	baselineRun desktopMacOSNodeChainBaselineRunner
-	started time.Time
-	transfer string
-	bound *nativeMultihopRuntime
-	graph *activeMultihopGraph // Exact value published before native bind.
-	entered, staged, published, proved, activated, baselineEntered bool
+	parent                                                             *desktopMacOSSessionCapture
+	runtime                                                            *desktopNodeChainPlatformRuntime
+	launch                                                             *desktopNodeLaunch
+	policy                                                             *mobilemultihop.DesktopNodeChainPolicy
+	selection                                                          desktopMacOSNodeChainSelection
+	operation                                                          context.Context
+	gate                                                               chan struct{}
+	process                                                            *desktopMacOSProcess
+	mtu                                                                desktopMacOSNodeChainMTUBridge
+	mtuObservation                                                     desktopMacOSMTUObservationSlot
+	baseline                                                           *desktopMacOSNodeChainReceipt
+	baselineRun                                                        desktopMacOSNodeChainBaselineRunner
+	started                                                            time.Time
+	transfer                                                           string
+	bound                                                              *nativeMultihopRuntime
+	graph                                                              *activeMultihopGraph // Exact value published before native bind.
+	entered, staged, published, proved, activated, baselineEntered     bool
 	retiring, nativeRetired, baselineRetired, workspaceRetired, closed bool
-	stageDirectory string
-	stageInfo os.FileInfo // Original creation witness survives a failed workspace open.
-	monitorCancel context.CancelFunc
-	monitorDone chan struct{}
+	stageDirectory                                                     string
+	stageInfo                                                          os.FileInfo // Original creation witness survives a failed workspace open.
+	monitorCancel                                                      context.CancelFunc
+	monitorDone                                                        chan struct{}
 }
 
 func captureDesktopNodeChainPlatform(ctx context.Context, a *app, selection multihopSelection) (*desktopNodeChainPlatformCapture, error) {
@@ -84,6 +84,11 @@ func (capture *desktopNodeChainPlatformCapture) current(ctx context.Context) err
 
 func (capture *desktopNodeChainPlatformCapture) prepare(ctx context.Context, owner *desktopNodeChainHostCapture,
 	selection multihopSelection) (launch *desktopNodeLaunch, image string, failure error) {
+	return capture.prepareForPurpose(ctx, owner, selection, nil)
+}
+
+func (capture *desktopNodeChainPlatformCapture) prepareForPurpose(ctx context.Context, owner *desktopNodeChainHostCapture,
+	selection multihopSelection, purpose *orderedCandidatePreparation) (launch *desktopNodeLaunch, image string, failure error) {
 	if capture == nil || capture.parent == nil || owner == nil || owner.platform != capture || owner.windows != nil ||
 		owner.sources == nil || owner.app != capture.parent.app || selection.Native == nil || selection.Native.chain == nil ||
 		selection.Native.chain.host != owner || owner.sources.selection.Native != selection.Native {
@@ -110,7 +115,7 @@ func (capture *desktopNodeChainPlatformCapture) prepare(ctx context.Context, own
 	if err != nil {
 		return nil, "", err
 	}
-	launch, err = newDesktopNodeChainLaunch(selection, session, "darwin")
+	launch, err = newDesktopNodeChainLaunchForPurpose(ctx, selection, session, "darwin", purpose)
 	if err != nil {
 		return nil, "", err
 	}
@@ -356,7 +361,10 @@ func (owner *desktopNodeChainPlatformRuntime) stage(ctx context.Context) error {
 	if err := h.captureWorkspace(); err != nil {
 		return err
 	}
-	for _, input := range []struct { name string; body []byte }{
+	for _, input := range []struct {
+		name string
+		body []byte
+	}{
 		{"node-chain-source.json", []byte(h.launch.chain.input)},
 		{"sing-box.json", h.launch.config},
 	} {
@@ -390,7 +398,9 @@ func (h *desktopMacOSNodeChainHost) captureWorkspace() error {
 	}
 	pending := &desktopNodeLaunch{}
 	if err := captureDesktopRuntimeDirectory(pending, h.stageDirectory); err != nil {
-		if pending.directoryRoot != nil { _ = pending.directoryRoot.Close() }
+		if pending.directoryRoot != nil {
+			_ = pending.directoryRoot.Close()
+		}
 		return err
 	}
 	if !os.SameFile(pending.directoryInfo, h.stageInfo) {
@@ -994,8 +1004,8 @@ func invalidateDesktopMacOSNodeChainMeasurements(a *app, launch *desktopNodeLaun
 }
 
 type desktopMacOSNodeChainStopCapture struct {
-	host *desktopMacOSNodeChainHost
-	command *exec.Cmd
+	host      *desktopMacOSNodeChainHost
+	command   *exec.Cmd
 	operation context.Context
 }
 

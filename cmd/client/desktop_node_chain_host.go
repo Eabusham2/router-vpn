@@ -135,6 +135,13 @@ func (capture *desktopNodeChainHostCapture) current(ctx context.Context) error {
 }
 
 func prepareDesktopNodeChainHost(ctx context.Context, a *app, selection multihopSelection) (*desktopNodeLaunch, string, error) {
+	return prepareDesktopNodeChainHostForPurpose(ctx, a, selection, nil)
+}
+
+func prepareDesktopNodeChainHostForPurpose(ctx context.Context, a *app, selection multihopSelection, purpose *orderedCandidatePreparation) (*desktopNodeLaunch, string, error) {
+	if purpose != nil && (purpose.app != a || purpose.selection.Native != selection.Native) {
+		return nil, "", errors.New("ordered preparation purpose belongs to another original source")
+	}
 	capture, err := captureDesktopNodeChainHostContext(ctx, a, selection)
 	if err != nil {
 		return nil, "", err
@@ -144,10 +151,10 @@ func prepareDesktopNodeChainHost(ctx context.Context, a *app, selection multihop
 		if err != nil {
 			return nil, "", err
 		}
-		launch, err := prepareDesktopOwnedNodeChainLaunch(ctx, capture, selection)
+		launch, err := prepareDesktopOwnedNodeChainLaunchForPurpose(ctx, capture, selection, purpose)
 		return launch, binary, err
 	}
-	return capture.platform.prepare(ctx, capture, selection)
+	return capture.platform.prepareForPurpose(ctx, capture, selection, purpose)
 }
 
 func closeDesktopNodeChainLaunch(ctx context.Context, a *app, launch *desktopNodeLaunch) error {

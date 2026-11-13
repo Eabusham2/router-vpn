@@ -25,6 +25,7 @@ type desktopLinuxNodeActivation struct {
 	external      *mobilemultihop.DesktopExternalPolicy
 	imported      *mobilemultihop.DesktopImportedPolicy
 	chain         *mobilemultihop.DesktopNodeChainPolicy
+	preparation   *orderedCandidatePreparation
 	externalProof *desktopLinuxExternalProof
 	launch        *desktopNodeLaunch
 	selection     linuxprotection.NodeSelection
@@ -68,6 +69,11 @@ func (active *desktopLinuxNodeActivation) matches(h *desktopLinuxNodeHost) error
 		h.ready == nil || *h.ready != active.proof.ready || active.activatedAt.IsZero() || active.activatedAt == active.activatedAt.Round(0) ||
 		active.activatedAt.Sub(active.proof.provedAt) < 0 || active.activatedAt.Sub(active.proof.provedAt) > 30*time.Second {
 		return errors.New("Linux Node lost its original proved activation capability")
+	}
+	if h.chain == nil && active.preparation != nil || h.chain != nil &&
+		(h.launch.chain == nil || active.preparation != h.launch.chain.preparation || active.preparation != nil &&
+			(active.preparation.launch != h.launch || active.preparation.operation != active.operation)) {
+		return errors.New("Linux ordered activation changed its original immutable purpose")
 	}
 	t, p := active.transaction, active.process
 	if !sameDesktopLinuxParentCapture(t.parent, active.parent) || !sameDesktopLinuxParentCapture(p.parent, active.parent) ||
@@ -161,8 +167,14 @@ func (h *desktopLinuxNodeHost) Activate(parent context.Context) (failure error) 
 			return err
 		}
 	}
+	var preparation *orderedCandidatePreparation
 	if h.chain != nil {
 		if err := h.launch.chain.platform.capture.sources.currentLocked(a); err != nil {
+			return err
+		}
+		var err error
+		preparation, err = orderedCandidateLaunchPurposeLocked(a, h.launch)
+		if err != nil {
 			return err
 		}
 	}
@@ -193,8 +205,12 @@ func (h *desktopLinuxNodeHost) Activate(parent context.Context) (failure error) 
 	}
 	h.activation = &desktopLinuxNodeActivation{host: h, parent: h.parent, operation: h.operation, process: h.process,
 		transaction: t, policy: h.policy, imported: h.imported, chain: h.chain, launch: h.launch, selection: h.selection, network: h.network, revision: h.revision,
-		options: h.options, savedOptions: h.savedOptions, proof: *h.proof, activatedAt: now, lifetime: lifetime, cancel: stopLifetime}
-	a.state.Connected, a.state.Phase, a.state.LastError = true, "connected", ""
+		options: h.options, savedOptions: h.savedOptions, proof: *h.proof, activatedAt: now, lifetime: lifetime, cancel: stopLifetime, preparation: preparation}
+	if preparation != nil {
+		a.state.Connected, a.state.Phase, a.state.LastError = false, "candidate:testing", ""
+	} else {
+		a.state.Connected, a.state.Phase, a.state.LastError = true, "connected", ""
+	}
 	return nil
 }
 

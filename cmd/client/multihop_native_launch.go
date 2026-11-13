@@ -214,13 +214,20 @@ func preflightOwnedNativeMultihopCommand(a *app, sel multihopSelection, descript
 }
 
 func preflightOwnedNativeMultihopCommandContext(ctx context.Context, a *app, sel multihopSelection, descriptor *desktopExecutionDescriptor) (launch *desktopNodeLaunch, failure error) {
+	return preflightOwnedNativeMultihopCommandForPurpose(ctx, a, sel, descriptor, nil)
+}
+
+func preflightOwnedNativeMultihopCommandForPurpose(ctx context.Context, a *app, sel multihopSelection, descriptor *desktopExecutionDescriptor, purpose *orderedCandidatePreparation) (launch *desktopNodeLaunch, failure error) {
 	var binary string
 	var err error
+	if purpose != nil && (purpose.app != a || sel.Native == nil || sel.Native.chain == nil || purpose.selection.Native != sel.Native || descriptor != nil) {
+		return nil, errors.New("temporary candidate preflight requires its exact complete Local purpose")
+	}
 	if sel.Native != nil && sel.Native.chain != nil {
 		if descriptor != nil {
 			return nil, errors.New("ordered native preflight requires explicit Local execution")
 		}
-		launch, binary, err = prepareDesktopNodeChainHost(ctx, a, sel)
+		launch, binary, err = prepareDesktopNodeChainHostForPurpose(ctx, a, sel, purpose)
 	} else if sel.Native != nil && sel.Native.importedPlatform != nil {
 		if !sel.Native.imported || descriptor != nil {
 			return nil, errors.New("Linux imported preflight requires its captured Local graph")
@@ -287,6 +294,14 @@ func stageOwnedNativeMultihopInputsContext(ctx context.Context, a *app, sel mult
 	if launch.chain != nil {
 		if launch.chain.selection.Native != sel.Native || validateDesktopNodeChainLaunch(ctx, launch) != nil {
 			return errors.New("ordered staging changed its complete source")
+		}
+		if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+			return err
+		}
+		_, purposeErr := orderedCandidateLaunchPurposeLocked(a, launch)
+		a.mu.Unlock()
+		if purposeErr != nil {
+			return purposeErr
 		}
 		if launch.chain.platform != nil {
 			return launch.chain.platform.stage(ctx)

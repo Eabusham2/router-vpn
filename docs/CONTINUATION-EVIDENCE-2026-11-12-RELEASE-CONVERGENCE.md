@@ -679,6 +679,26 @@ All eight scope checks pass, including all four rejection subcases; the fourteen
 independent execution-gate preparation/verdict checks also pass. Full native
 composition and packaged builds remain required hosted checks.
 
+## Desktop temporary-purpose native constructors
+
+The original Windows, Linux and Darwin ordered launch constructors now accept
+the captured temporary-candidate purpose before registering any partial native
+owner. Ordinary callers retain the existing entry point with no temporary
+purpose. Missing, foreign, cancelled or substituted preparation identities are
+refused before native staging; staging and Windows publication recheck the
+exact captured purpose. Failed preflight therefore leaves its original partial
+launch reachable for owned cleanup.
+
+Linux retains that purpose in its existing native activation capability. All
+original process, policy, proof, MTU/readback and transaction checks remain; only
+the exact temporary purpose publishes Testing instead of ordinary Connected.
+Five new focused test roots and three existing Linux activation roots passed
+under the race detector in 31.896 seconds. The constructor projections exercise
+the shipping source, while activation comparisons explicitly model capability
+identity and do not claim native proof. This unit does not yet expose a public
+desktop temporary-test route: the supervised runtime, measurements, detached
+Save and native UI remain the next integration unit.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
