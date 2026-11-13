@@ -87,7 +87,9 @@ class Composition:
             else:self.owner_core,self.owner_xray=core,xray
             (xray/"original.go").write_text("original xray")
             by_path={}
-            for control in V.CONTROLS:by_path.setdefault(control["path"],[]).append(control["before"])
+            for control in V.CONTROLS:
+                anchors=by_path.setdefault(control["path"],[])
+                if control["before"] not in anchors:anchors.append(control["before"])
             by_path[V.OWNER.OWNER_PROJECTION]=[control["before"] for control in V.OWNER.CONTROLS]
             for relative,anchors in by_path.items():
                 path=core/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_text("\n".join(anchors))
@@ -109,7 +111,7 @@ class Composition:
         else:
             control=next(x for x in V.CONTROLS if name==x["name"])
             self.check_overlay(command,cwd,control["path"],control)
-            raw=encoded(events(V.LIBBOX,control["cases"],control));status=1
+            raw=encoded(events(V.control_target(control)[0],control["cases"],control));status=1
         if self.fault=="preflight-missing" and name=="original-owner-preflight":raw=b"Ran 0 tests\nOK\n"
         if self.fault=="prepare-fail" and name=="prepare-mobile":status=1
         if self.fault=="owner-prepare-fail" and name=="prepare-owner":status=1
@@ -142,7 +144,7 @@ class Composition:
              patch.object(V,"checked_owner_sources",side_effect=self.checked),\
              patch.object(V.OWNER,"load_gate",return_value=self.gate),patch.object(V.shutil,"which",return_value="/captured/go"),\
              patch.object(V.subprocess,"check_output",return_value="go version go1.26.3 linux/amd64"):
-            return V.validate(self.source,self.metadata["source_sha"],self.output,"/captured/go")
+            return getattr(self,"validator",V.validate)(self.source,self.metadata["source_sha"],self.output,"/captured/go")
 
 class TypedSOCKSBridgeValidator(unittest.TestCase):
     def test_exact_combined_inventory_and_every_original_bound(self):

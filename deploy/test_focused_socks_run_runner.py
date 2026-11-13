@@ -123,6 +123,7 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
             self.assertTrue(receipt["successful_run_accepted"]);self.assertTrue(receipt["ordered_measurement_accepted"])
             self.assertFalse(receipt["public_native_admission"]);self.assertFalse(receipt["installed_native_accepted"])
             self.assertFalse(receipt["native_mtu_continuation_accepted"])
+            self.assertTrue(receipt["native_mtu_constructor_accepted"])
             self.assertEqual(json.loads((c.output/"receipt.json").read_text()),receipt)
             for name,command,_,_,_ in c.calls:
                 if name.endswith("-build") or name in {v["name"] for v in V.CONTROLS}:
@@ -168,21 +169,30 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
             for text in ("foreign",original+original):
                 with self.assertRaises(ValueError):V.BASE.mutate(control,text)
     def test_both_template_maps_and_original_peer_source_are_bound(self):
-        for fault in (None,"mobile-map","peer-map","mobile-bytes","peer-bytes","old-peer","mobile-closure","owner-closure"):
+        mtu_faults=tuple("mtu-"+str(i)+"-"+kind for i in range(len(V.MTU_PROJECTIONS)) for kind in ("map","bytes","symlink"))
+        for fault in (None,"mobile-map","peer-map","mobile-bytes","peer-bytes","old-peer","mobile-closure","owner-closure",*mtu_faults):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
                 work=Path(directory);source=work/"candidate";mobile=work/"mobile";owner=work/"owner";mx=work/"mx";ox=work/"ox"
                 for p in (source,mobile,owner,mx,ox):p.mkdir()
                 for template,projection,root in ((V.RUN_TEMPLATE,V.RUN_PROJECTION,mobile),(V.PEER_TEMPLATE,V.PEER_PROJECTION,owner),
-                    ("mobile/desktop/node_chain_imported_test.go.tmpl","protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_test.go",owner)):
+                    ("mobile/desktop/node_chain_imported_test.go.tmpl","protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_test.go",owner),
+                    *((original,projected,mobile) for original,projected in V.MTU_PROJECTIONS)):
                     a,b=source/template,root/projection;a.parent.mkdir(parents=True,exist_ok=True);b.parent.mkdir(parents=True,exist_ok=True)
                     a.write_text("original "+template);b.write_bytes(a.read_bytes())
-                mp=types.SimpleNamespace(TEMPLATES={Path(V.RUN_TEMPLATE).name:V.RUN_PROJECTION})
+                mp=types.SimpleNamespace(TEMPLATES={Path(V.RUN_TEMPLATE).name:V.RUN_PROJECTION,
+                    **{Path(original).name:projected for original,projected in V.MTU_PROJECTIONS}})
                 dp=types.SimpleNamespace(PEER_TEMPLATES={Path(V.PEER_TEMPLATE).name:V.PEER_PROJECTION})
                 if fault=="mobile-map":mp.TEMPLATES.clear()
                 elif fault=="peer-map":dp.PEER_TEMPLATES.clear()
                 elif fault=="mobile-bytes":(mobile/V.RUN_PROJECTION).write_text("foreign")
                 elif fault=="peer-bytes":(owner/V.PEER_PROJECTION).write_text("foreign")
                 elif fault=="old-peer":(owner/"protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_test.go").write_text("foreign")
+                if fault and fault.startswith("mtu-"):
+                    _,number,kind=fault.split("-");original,projected=V.MTU_PROJECTIONS[int(number)]
+                    if kind=="map":mp.TEMPLATES.pop(Path(original).name)
+                    elif kind=="bytes":(mobile/projected).write_text("foreign")
+                    else:
+                        (mobile/projected).unlink();(mobile/projected).symlink_to(source/original)
                 def checked_mobile(*args):
                     if fault=="mobile-closure":raise ValueError("mobile closure changed")
                     return {"mobile":"original"}

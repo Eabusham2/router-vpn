@@ -314,6 +314,14 @@ def require_events(raw,status,package,expected,control=None):
         raise ValueError("Original native verdict refused: "+record["reason"])
     return record
 
+def control_target(control):
+    package = control.get("package", LIBBOX)
+    if package == LIBBOX:
+        return package, "./experimental/libbox"
+    if package == BOX:
+        return package, "."
+    raise ValueError("Foreign original native control package")
+
 def mutate(control,original):
     if original.count(control["before"])!=1:
         raise ValueError("Original native causal seam changed: "+control["name"])
@@ -447,13 +455,14 @@ def validate(source,source_sha,output,go="go"):
                 records.append(dict(name=name,**require_events(raw,status,package,expected)))
             controls=[]
             for control in CONTROLS:
+                package,target=control_target(control)
                 original=core/control["path"];changed=mutate(control,original.read_text())
                 replacement,overlay=work/(control["name"]+".go"),work/(control["name"]+".json")
                 replacement.write_text(changed)
                 overlay.write_text(json.dumps({"Replace":{str(original):str(replacement)}}))
                 status,raw=run(control["name"],[compiler,"test",*flags,"-json","-overlay="+str(overlay),
-                    "-run=^"+control["root"]+"$","-count=1","-timeout=90s","./experimental/libbox"],core,600)
-                result=require_events(raw,status,LIBBOX,control["cases"],control)
+                    "-run=^"+control["root"]+"$","-count=1","-timeout=90s",target],core,600)
+                result=require_events(raw,status,package,control["cases"],control)
                 controls.append(dict(name=control["name"],original_sha256=hashlib.sha256(original.read_bytes()).hexdigest(),
                     mutated_sha256=hashlib.sha256(changed.encode()).hexdigest(),**result))
             native_after={"mobile":checked_sources(source,core,xray),

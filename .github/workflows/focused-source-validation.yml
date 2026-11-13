@@ -28,6 +28,8 @@ on:
           - socks-bridge
           - socks-run
           - socks-mtu
+          - socks-native-mtu
+          - android-sdk
           - darwin-hy2
 
 permissions:
@@ -46,7 +48,7 @@ env:
 jobs:
   validate:
     runs-on: ${{ (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2' || inputs.suite == 'ios-socks-host') && 'macos-15-intel' || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2' || inputs.suite == 'ios-socks-host') && 45 || 30 }}
+    timeout-minutes: ${{ inputs.suite == 'android-sdk' && 180 || (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2' || inputs.suite == 'ios-socks-host') && 45 || 30 }}
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
       SUITE: ${{ inputs.suite }}
@@ -62,7 +64,7 @@ jobs:
           for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
               if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
                   raise SystemExit(name + " must be a complete lowercase Git commit.")
-          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host"):
+          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host", "socks-native-mtu", "android-sdk"):
               raise SystemExit("Unknown focused validation suite.")
           PY
       - name: Check out the trusted validator
@@ -77,10 +79,10 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           path: candidate
-          fetch-depth: 2
+          fetch-depth: ${{ inputs.suite == 'android-sdk' && '0' || '2' }}
           persist-credentials: false
-      - name: Install Python for the native macOS source fixtures
-        if: inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2' || inputs.suite == 'ios-socks-host'
+      - name: Install Python for native source and Android SDK fixtures
+        if: inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2' || inputs.suite == 'ios-socks-host' || inputs.suite == 'android-sdk'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -113,6 +115,13 @@ jobs:
           if [[ "$SUITE" == "socks-run" ]]; then
             python3 validator/deploy/test_focused_socks_run_runner.py
           fi
+          if [[ "$SUITE" == "android-sdk" ]]; then
+            python3 validator/deploy/validate-android-sdk-source.py --self-test
+          fi
+          if [[ "$SUITE" == "socks-native-mtu" ]]; then
+            python3 validator/deploy/test_focused_socks_bridge_runner.py
+            python3 validator/deploy/test_focused_socks_native_mtu_runner.py
+          fi
           if [[ "$SUITE" == "socks-bridge" ]]; then
             python3 validator/deploy/test_focused_socks_bridge_runner.py
           fi
@@ -136,7 +145,7 @@ jobs:
           go-version: '1.26.3'
           cache-dependency-path: candidate/go.sum
       - name: Install the Java fixture toolchain
-        if: inputs.suite == 'android-tor' || inputs.suite == 'android-prefix-owner' || inputs.suite == 'android-socks-host'
+        if: inputs.suite == 'android-tor' || inputs.suite == 'android-prefix-owner' || inputs.suite == 'android-socks-host' || inputs.suite == 'android-sdk'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -147,10 +156,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libandroid-json-java
       - name: Install the Linux encrypted-reference compiler dependencies
-        if: inputs.suite == 'linux-hy2' || inputs.suite == 'socks-owner' || inputs.suite == 'socks-bridge' || inputs.suite == 'socks-run'
+        if: inputs.suite == 'linux-hy2' || inputs.suite == 'socks-owner' || inputs.suite == 'socks-bridge' || inputs.suite == 'socks-run' || inputs.suite == 'socks-native-mtu'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential pkg-config
+      - name: Install the original Android delivery Gradle
+        if: inputs.suite == 'android-sdk'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Install the original Android SDK and native build dependencies
+        if: inputs.suite == 'android-sdk'
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends build-essential autoconf automake libtool pkg-config perl patch libandroid-json-java cmake ninja-build clang
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build exact Android SDK bindings and the complete shipping APK
+        if: inputs.suite == 'android-sdk'
+        shell: bash
+        run: |
+          python3 validator/deploy/validate-android-sdk-source.py \
+            --source "$GITHUB_WORKSPACE/candidate" --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests" \
+            --gradle gradle --sdk "$ANDROID_HOME"
       - name: Require the original clock cases and compiled negative controls
         if: inputs.suite == 'ordered-clock' || inputs.suite == 'legacy-clock'
         shell: bash
@@ -188,6 +218,14 @@ jobs:
         shell: bash
         run: |
           python3 validator/deploy/test_focused_socks_runtime.py \
+            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
+            --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Execute retained native SOCKS MTU and every original bridge control
+        if: inputs.suite == 'socks-native-mtu'
+        shell: bash
+        run: |
+          python3 validator/deploy/test_focused_socks_native_mtu.py \
             --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
             --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests"

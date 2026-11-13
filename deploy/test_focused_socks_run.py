@@ -31,6 +31,12 @@ PEER_TEMPLATE="mobile/desktop/node_chain_socks_process_test.go.tmpl"
 PEER_PROJECTION="protocol/routervpnamnezia/routervpn_desktop_node_chain_socks_process_test.go"
 RUN_TEMPLATE="mobile/chain/socks_run_test.go.tmpl"
 RUN_PROJECTION="experimental/libbox/routervpn_node_chain_socks_run_test.go"
+MTU_PROJECTIONS=(
+    ("mobile/chain/socks_mtu.go.tmpl","experimental/libbox/routervpn_node_chain_socks_mtu.go"),
+    ("mobile/chain/socks_mtu_test.go.tmpl","experimental/libbox/routervpn_node_chain_socks_mtu_test.go"),
+    ("mobile/chain/socks_mtu_box.go.tmpl","routervpn_node_chain_socks_mtu.go"),
+    ("mobile/chain/socks_mtu_box_test.go.tmpl","routervpn_node_chain_socks_mtu_test.go"),
+)
 ORIGINAL_ROOT="TestRouterVPNDesktopNodeChainImportedMiddleTraffic"
 ORIGINAL=(
     ORIGINAL_ROOT,*(ORIGINAL_ROOT+"/"+mode+"/"+method+suffix
@@ -66,7 +72,8 @@ def sources(source,mobile,mobile_xray,owner,owner_xray):
     desktop=BASE.module("socks_run_candidate_desktop",source/"deploy/prepare-desktop-external.py")
     for original,projected,root,table in (
         (RUN_TEMPLATE,RUN_PROJECTION,mobile,mobile_prep.TEMPLATES),
-        (PEER_TEMPLATE,PEER_PROJECTION,owner,desktop.PEER_TEMPLATES)):
+        (PEER_TEMPLATE,PEER_PROJECTION,owner,desktop.PEER_TEMPLATES),
+        *((original,projected,mobile,mobile_prep.TEMPLATES) for original,projected in MTU_PROJECTIONS)):
         a,b=source/original,root/projected
         if table.get(Path(original).name)!=projected or a.is_symlink() or b.is_symlink() or a.read_bytes()!=b.read_bytes():
             raise ValueError("Original positive native projection changed: "+original)
@@ -99,6 +106,7 @@ def validate(source,source_sha,output,go="go"):
         scope="actual typed Run/Healthy/ordered measurement over original encrypted WG/AWG-SOCKS-SS peers",
         boundaries=["loopback mapping of one captured physical UDP tuple","TUN reader and OS interface monitor","isolated TLS root"],
         installed_native_accepted=False,public_native_admission=False,native_mtu_continuation_accepted=False,
+        native_mtu_constructor_accepted=False,
         original_external_final_fifty_scope_unchanged=True,go_version=version,compiler=compiler,
         resource_limits=dict(parallel_packages=1,GOMAXPROCS=2,GOGC=100,GOMEMLIMIT="2GiB"),
         trusted_bridge_sha256=hashlib.sha256(BASE_PATH.read_bytes()).hexdigest(),
@@ -172,7 +180,7 @@ def validate(source,source_sha,output,go="go"):
             if BASE.COMMON.image_identity(peer)!=peer_identity or BASE.COMMON.image_identity(client)!=client_identity:
                 raise ValueError("Original compiled encrypted image changed")
             receipt.update(status="passed",cases=list(CASES),case_records=records,original_cases=list(ORIGINAL),controls=controls,
-                peer_image=list(peer_identity),client_image=list(client_identity),successful_run_accepted=True,ordered_measurement_accepted=True)
+                peer_image=list(peer_identity),client_image=list(client_identity),successful_run_accepted=True,ordered_measurement_accepted=True,native_mtu_constructor_accepted=True)
             (output/"receipt.json").write_text(json.dumps(receipt,indent=2)+"\n")
     except BaseException as error:
         receipt.update(status="failed",error=str(error));raise
