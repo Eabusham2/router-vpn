@@ -1589,6 +1589,34 @@ optional broad toolchain test attempt timed out and is not counted as passed.
 Actual matching-Windows kernel/driver, race where supported, native-PQ/CGO and
 installed-case execution remain required in the new mandatory gate.
 
+## Cancel replies cannot wait on the lifecycle they report
+
+The saved-path Cancel handler could reach caller cancellation or its existing
+15-second drain timeout and then block indefinitely while reading the
+preparation lifecycle mutex. Its reply helper also acquired the original
+control mutex without a bound. The four saved-purpose reply paths now take
+nonblocking snapshots; a busy original lifecycle or result control produces a
+retryable HTTP 503 without claiming native DOWN or replacing a saved result.
+The same owner, cancellation reservation and cleanup operation remain retained.
+After the lock is available, retry returns the original joined receipt or the
+already-committed profile. Native cleanup bounds and proof requirements are
+unchanged. Existing desktop dialogs retain their pending operation and retry
+Cancel on this response.
+
+An immutable snapshot based on
+`bc6927694a22b34087c12a32dab7ea9237194152` plus the four changed files passed
+seven focused Go roots and 15 exact verdicts under the race detector in
+17.708 seconds. The new tests hold the lifecycle or result mutex until the
+actual reply returns, including an HTTP request cancelled after capturing its
+original owner. They also check both saved purposes, the retained cancellation
+reservation, and committed-profile visibility on retry. These are actual
+handler/DTO tests with modeled lifecycle state, not native DOWN evidence.
+Two separately compiled reversions to blocking locks failed at their exact
+held-lifecycle and held-saved-result assertions; each released and joined its
+fixture before reporting failure. The original early-cancellation and routed
+probe-cancellation regressions also passed. The published source hashes match
+the tested snapshot.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

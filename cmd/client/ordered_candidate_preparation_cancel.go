@@ -98,7 +98,15 @@ func (a *app) orderedCandidatePreparedCancel(w http.ResponseWriter, request *htt
 
 func orderedCandidatePreparedAdmissionCancelResponse(control *viaEntryControl, owner *viaEntryOwner, id string,
 	admission *orderedCandidatePreparedAdmission, failure error) map[string]any {
-	if response := orderedCandidatePreparedCancelResponse(control, owner, failure); response != nil {
+	// This reply is also reached after request cancellation or the bounded
+	// drain timeout. Observation must not wait on the lifecycle it is reporting.
+	// A busy exact snapshot produces a retryable HTTP failure, never a fabricated
+	// DOWN result or an empty replacement for an already committed Save.
+	if !control.mu.TryLock() {
+		return nil
+	}
+	defer control.mu.Unlock()
+	if response := orderedCandidatePreparedCancelResponseLocked(owner, failure); response != nil {
 		return response
 	}
 	// Before worker handoff the admitted preparation already retains its exact
@@ -106,12 +114,12 @@ func orderedCandidatePreparedAdmissionCancelResponse(control *viaEntryControl, o
 	// supplies its DOWN result. A never-admitted nonce asserts no native DOWN.
 	nativeDown := false
 	if owner != nil && owner.preparation != nil {
-		owner.preparation.mu.Lock()
+		if !owner.preparation.mu.TryLock() {
+			return nil
+		}
 		nativeDown = owner.preparation.nativeDown
 		owner.preparation.mu.Unlock()
 	}
-	control.mu.Lock()
-	defer control.mu.Unlock()
 	started, drained, running := owner != nil, true, false
 	if owner != nil {
 		drained, running = owner.drained, owner.running
@@ -127,4 +135,14 @@ func orderedCandidatePreparedAdmissionCancelResponse(control *viaEntryControl, o
 		"cleanup_pending": !drained, "cleanup_error": cleanup, "failure": "",
 		"results": []hopmeasure.CandidateStatus{}, "errors": []viaEntryCandidateError{},
 		"saved_profile_id": "", "active_path_changed": false, "ok": failure == nil && drained}, admission.scope)
+}
+
+func writeOrderedCandidatePreparedAdmissionCancelResponse(w http.ResponseWriter, control *viaEntryControl, owner *viaEntryOwner,
+	id string, admission *orderedCandidatePreparedAdmission, failure error) {
+	response := orderedCandidatePreparedAdmissionCancelResponse(control, owner, id, admission, failure)
+	if response == nil {
+		http.Error(w, "Original temporary cleanup is still joining; Cancel retries the same owner.", http.StatusServiceUnavailable)
+		return
+	}
+	viaEntryJSON(w, response)
 }

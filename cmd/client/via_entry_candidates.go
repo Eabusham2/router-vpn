@@ -708,14 +708,14 @@ func (a *app) cancelViaEntryCandidate(w http.ResponseWriter, r *http.Request, re
 		case <-owner.done:
 		case <-r.Context().Done():
 			if admission != nil {
-				viaEntryJSON(w, orderedCandidatePreparedAdmissionCancelResponse(c, owner, requestID, admission, errors.New("original candidate is still draining")))
+				writeOrderedCandidatePreparedAdmissionCancelResponse(w, c, owner, requestID, admission, errors.New("original candidate is still draining"))
 				return
 			}
 			http.Error(w, "candidate cancellation is still draining", http.StatusRequestTimeout)
 			return
 		case <-time.After(15 * time.Second):
 			if admission != nil {
-				viaEntryJSON(w, orderedCandidatePreparedAdmissionCancelResponse(c, owner, requestID, admission, errors.New("original candidate is still draining")))
+				writeOrderedCandidatePreparedAdmissionCancelResponse(w, c, owner, requestID, admission, errors.New("original candidate is still draining"))
 				return
 			}
 			http.Error(w, "candidate cancellation is still draining", http.StatusServiceUnavailable)
@@ -723,7 +723,7 @@ func (a *app) cancelViaEntryCandidate(w http.ResponseWriter, r *http.Request, re
 		}
 		if err := cleanupViaEntryOwner(c, owner); err != nil {
 			if admission != nil {
-				viaEntryJSON(w, orderedCandidatePreparedAdmissionCancelResponse(c, owner, requestID, admission, err))
+				writeOrderedCandidatePreparedAdmissionCancelResponse(w, c, owner, requestID, admission, err)
 				return
 			}
 			if response := orderedCandidatePreparedCancelResponse(c, owner, err); response != nil {
@@ -735,7 +735,7 @@ func (a *app) cancelViaEntryCandidate(w http.ResponseWriter, r *http.Request, re
 		}
 	}
 	if admission != nil {
-		viaEntryJSON(w, orderedCandidatePreparedAdmissionCancelResponse(c, owner, requestID, admission, nil))
+		writeOrderedCandidatePreparedAdmissionCancelResponse(w, c, owner, requestID, admission, nil)
 		return
 	}
 	if response := orderedCandidatePreparedCancelResponse(c, owner, nil); response != nil {

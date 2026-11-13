@@ -249,6 +249,15 @@ func orderedCandidatePreparedCancelResponse(control *viaEntryControl, owner *via
 	}
 	control.mu.Lock()
 	defer control.mu.Unlock()
+	return orderedCandidatePreparedCancelResponseLocked(owner, failure)
+}
+
+// Caller holds the original control mutex. The saved-admission reply also
+// uses this path after a nonblocking snapshot, including after caller timeout.
+func orderedCandidatePreparedCancelResponseLocked(owner *viaEntryOwner, failure error) map[string]any {
+	if owner == nil {
+		return nil
+	}
 	if owner.prepared == nil {
 		return nil
 	}
