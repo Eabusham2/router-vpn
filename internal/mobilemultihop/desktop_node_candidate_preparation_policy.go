@@ -22,6 +22,7 @@ type DesktopNodeCandidatePreparationMetadata struct {
 	OriginalCaptureSHA256 string                    `json:"original_capture_sha256"`
 	PrefixPosition        int                       `json:"prefix_position"`
 	ProfileID             string                    `json:"profile_id"`
+	PolicyProfileID       string                    `json:"policy_profile_id"`
 	NodeID                string                    `json:"node_id"`
 	Mode                  string                    `json:"mode"`
 	StartLayer            string                    `json:"start_layer"`
@@ -111,10 +112,14 @@ func NewDesktopNodeCandidatePreparationPolicy(original *NodeChainCandidatePrepar
 		return bad()
 	}
 	prefix := derived.proofs[derived.position]
+	// Native proof names the selected prefix. Durable protection belongs to
+	// the original complete saved control, whose restrictions were aggregated
+	// above, even when that final node is deliberately absent from this graph.
+	control := derived.original.proofs[len(derived.original.proofs)-1].ProfileID
 	meta := DesktopNodeCandidatePreparationMetadata{Schema: 1, SessionID: sessionID, TargetOS: targetOS,
 		OriginalSourceSHA256: original.original.sourceSHA, PreparationSHA256: original.sourceSHA,
 		OriginalCaptureSHA256: original.capture, PrefixPosition: original.position,
-		ProfileID: prefix.ProfileID, NodeID: prefix.NodeID, Mode: prefix.Mode, StartLayer: prefix.StartLayer,
+		ProfileID: prefix.ProfileID, PolicyProfileID: control, NodeID: prefix.NodeID, Mode: prefix.Mode, StartLayer: prefix.StartLayer,
 		TUNTag: capture.TUNTag, OriginalTUNSHA256: originalTUN, DerivedTUNSHA256: desktopExternalObjectDigest(tun),
 		Prefixes: append([]NodeChainProof(nil), derived.proofs...), KillSwitchPolicy: kill,
 		IPv6Mode: capture.IPv6Mode, HomeLANAccess: lan, RestoredMTU: restoredMTU}
@@ -270,6 +275,7 @@ func (p *DesktopNodeCandidatePreparationPolicy) Validate() error {
 	if p == nil || p.original == nil || p.preparation == nil || p.original == p.preparation ||
 		p.original.validate() != nil || p.preparation.validate() != nil || p.seal == "" || p.currentSeal() != p.seal ||
 		p.metadata.ApplicationOpen || p.metadata.DNSOpen || p.metadata.SourceSHA256 != p.preparation.sourceSHA ||
+		p.metadata.PolicyProfileID != p.original.original.proofs[len(p.original.original.proofs)-1].ProfileID ||
 		p.metadata.ConfigSHA256 != p.preparation.configSHA || p.metadata.CaptureSHA256 != p.preparation.capture {
 		return desktopNodeCandidatePreparationError
 	}

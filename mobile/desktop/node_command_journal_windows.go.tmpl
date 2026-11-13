@@ -82,15 +82,9 @@ func (owner *routerVPNNodeWindowsJournal) prepare(ctx context.Context, policy mo
 	if owner == nil || owner.client == nil || ctx == nil || ctx.Err() != nil || policy == nil || policy.Validate() != nil || expected == nil {
 		return nil, nil, routerVPNExternalFailure
 	}
-	_, meta, _, readErr := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
-	if readErr != nil {
-		return nil, nil, readErr
-	}
-	digest, err := mobiletor.DesktopProtectionTransferRecordSHA256(*expected)
-	captured, capturedErr := mobiletor.DesktopProtectionTransferRecordSHA256(owner.capture.Transfer)
-	if err != nil || capturedErr != nil || digest != captured || owner.capture.ProfileID != meta.ProfileID ||
-		expected.SessionID != meta.SessionID || expected.SourceSHA256 != meta.SourceSHA256 || expected.ConfigSHA256 != meta.ConfigSHA256 || expected.Policy != meta.KillSwitchPolicy {
-		return nil, nil, routerVPNExternalFailure
+	meta, digest, err := routerVPNNodeJournalPolicyBinding(policy, owner.capture.ProfileID, expected, &owner.capture.Transfer)
+	if err != nil {
+		return nil, nil, err
 	}
 	admission := &routerVPNNodeAdmission{metadata: meta, transfer: digest, joined: make(chan struct{}), retired: make(chan struct{}), nativeClose: owner.close}
 	admission.nativeAdmit = func(ctx context.Context, prepared routervpndesktoppt.NodePhysicalPrepared) error {

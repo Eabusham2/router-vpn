@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
 func desktopCandidatePrefixCommandPolicy(t *testing.T, target string) *mobilemultihop.DesktopNodeCandidatePreparationPolicy {
@@ -36,6 +37,74 @@ func desktopCandidatePrefixCommandPolicy(t *testing.T, target string) *mobilemul
 		t.Fatal(err)
 	}
 	return policy
+}
+
+func TestRouterVPNDesktopCandidatePrefixCommandJournalAttribution(t *testing.T) {
+	for _, target := range []string{"linux", "windows"} {
+		t.Run(target, func(t *testing.T) {
+			policy := desktopCandidatePrefixCommandPolicy(t, target)
+			meta := policy.Metadata()
+			if meta.PolicyProfileID != "ordered-router-2" || meta.ProfileID != "ordered-router-1" || meta.KillSwitchPolicy != "always" {
+				t.Fatal("prefix journal fixture lost distinct saved control and native proof")
+			}
+			transfer := mobiletor.DesktopProtectionTransferRecord{Schema: 1, Kind: "routervpn-windows-protection-transfer-v1",
+				SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy}
+			physical, digest, err := routerVPNNodeJournalPolicyBinding(policy, meta.PolicyProfileID, &transfer, &transfer)
+			if err != nil || digest == "" || physical.ProfileID != meta.ProfileID || physical.NodeID != meta.NodeID {
+				t.Fatal("journal lost full saved control or changed actual prefix proof", err)
+			}
+			for _, fault := range []string{"prefix-profile", "foreign-profile", "session", "source", "config", "policy", "captured-transfer", "nil-expected", "nil-captured"} {
+				t.Run(fault, func(t *testing.T) {
+					profile, expected, captured := meta.PolicyProfileID, transfer, transfer
+					switch fault {
+					case "prefix-profile":
+						profile = meta.ProfileID
+					case "foreign-profile":
+						profile = "foreign-original-control"
+					case "session":
+						expected.SessionID = strings.Repeat("f", 32)
+						captured = expected
+					case "source":
+						expected.SourceSHA256 = strings.Repeat("f", 64)
+						captured = expected
+					case "config":
+						expected.ConfigSHA256 = strings.Repeat("f", 64)
+						captured = expected
+					case "policy":
+						expected.Policy = "on-connect"
+						captured = expected
+					case "captured-transfer":
+						captured.SessionID = strings.Repeat("f", 32)
+					}
+					wanted, original := &expected, &captured
+					if fault == "nil-expected" {
+						wanted = nil
+					}
+					if fault == "nil-captured" {
+						original = nil
+					}
+					if _, _, err := routerVPNNodeJournalPolicyBinding(policy, profile, wanted, original); err == nil {
+						t.Fatal("journal accepted foreign saved control or physical transfer", fault)
+					}
+				})
+			}
+			// Existing complete-graph journal attribution remains its physical
+			// final profile; prefix support grants no alternative ordinary ID.
+			ordinary := desktopNodeChainCommandPolicy(t, 3, target, 0)
+			_, ordinaryMeta, _, err := mobilemultihop.ReadDesktopPhysicalPolicy(ordinary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ordinaryTransfer := transfer
+			ordinaryTransfer.SourceSHA256, ordinaryTransfer.ConfigSHA256 = ordinaryMeta.SourceSHA256, ordinaryMeta.ConfigSHA256
+			if _, _, err := routerVPNNodeJournalPolicyBinding(ordinary, ordinaryMeta.ProfileID, &ordinaryTransfer, &ordinaryTransfer); err != nil {
+				t.Fatal("ordinary journal lost original profile binding", err)
+			}
+			if _, _, err := routerVPNNodeJournalPolicyBinding(ordinary, meta.ProfileID, &ordinaryTransfer, &ordinaryTransfer); err == nil {
+				t.Fatal("ordinary journal borrowed prefix profile")
+			}
+		})
+	}
 }
 
 func TestRouterVPNDesktopCandidatePrefixCommandExactSourceReplay(t *testing.T) {

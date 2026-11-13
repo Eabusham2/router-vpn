@@ -1443,6 +1443,12 @@ This is a reporting repair, not an identified PF/utun failure cause. Both archit
 
 All 28 runner tests passed. Actual Go and Python child fixtures require their output to be observed before exiting; withholding each tee is rejected. Nonzero exits preserve their original bytes and remain failures. The original escaped-output WaitDelay and 11 pre-start ownership controls remain enforced. The native 960-second process-group bound, nested native bounds, five-second pipe/timeout cleanup, ten exact required verdicts, eight joined receipts and source/image after-checks are unchanged. Real hosted native results are still required.
 
+## Prefix protection retains the complete saved profile
+
+A temporary prefix proves its selected node, while retained protection must remain attributable to the complete saved profile that owns the operation. The sealed desktop prefix policy now records those two identities separately. Its typed protection accessor returns the original full saved control only after validating the concrete source; caller metadata, substituted prefixes and interface wrappers cannot supply that authority. The child journal binds its authenticated capture to this full control while preserving the original session, source, configuration, transfer and protection checks.
+
+The shared policy race suite passed eight roots and 42 verdicts. The actual prepared native command package passed five roots and 42 verdicts, including 21 journal-attribution cases and the existing prefix replay, substitution and authentication cases. Two compiled defects were rejected at their original witnesses: wrong protection attribution and an omitted journal-profile match. Nine native gate inventory checks passed, and the seven source files matched their frozen hashes. These are source and command-composition results; actual Windows authenticated IPC, WFP and TUN acceptance remain separate. Parent/API activation continues in its own unit.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

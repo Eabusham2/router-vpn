@@ -19,6 +19,32 @@ type routerVPNNodeJournal interface {
 	close() error
 }
 
+// Authentication binds the original saved protection control separately from
+// native proof identity. A closed prefix cannot substitute its tested node for
+// that control, nor reuse another policy's transfer or journal capture.
+func routerVPNNodeJournalPolicyBinding(policy mobilemultihop.DesktopPhysicalPolicy, profileID string,
+	expected, captured *mobiletor.DesktopProtectionTransferRecord) (mobilemultihop.DesktopPhysicalMetadata, string, error) {
+	var empty mobilemultihop.DesktopPhysicalMetadata
+	if expected == nil || captured == nil {
+		return empty, "", routerVPNExternalFailure
+	}
+	_, meta, _, err := mobilemultihop.ReadDesktopPhysicalPolicy(policy)
+	if err != nil {
+		return empty, "", err
+	}
+	control, err := mobilemultihop.ReadDesktopProtectionProfileID(policy)
+	if err != nil || control == "" || profileID != control {
+		return empty, "", routerVPNExternalFailure
+	}
+	digest, err := mobiletor.DesktopProtectionTransferRecordSHA256(*expected)
+	actual, capturedErr := mobiletor.DesktopProtectionTransferRecordSHA256(*captured)
+	if err != nil || capturedErr != nil || digest != actual || expected.SessionID != meta.SessionID ||
+		expected.SourceSHA256 != meta.SourceSHA256 || expected.ConfigSHA256 != meta.ConfigSHA256 || expected.Policy != meta.KillSwitchPolicy {
+		return empty, "", routerVPNExternalFailure
+	}
+	return meta, digest, nil
+}
+
 // The public command selects the authenticated form before it can open any
 // private node input. The old private runner remains a bounded fixture entry;
 // no command flag or environment switch selects its file-only acknowledgment.

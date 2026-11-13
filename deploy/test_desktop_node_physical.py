@@ -93,6 +93,11 @@ CANDIDATE_PREFIX_PHYSICAL_VERDICTS = (
     *(CANDIDATE_PREFIX_PHYSICAL_ROOT + "KeepsTypedTarget/" + target for target in ("linux", "windows", "darwin")),
 )
 CANDIDATE_PREFIX_COMMAND_VERDICTS = (
+    CANDIDATE_PREFIX_COMMAND_ROOT + "JournalAttribution",
+    *(CANDIDATE_PREFIX_COMMAND_ROOT + "JournalAttribution/" + target for target in ("linux", "windows")),
+    *(CANDIDATE_PREFIX_COMMAND_ROOT + "JournalAttribution/" + target + "/" + fault
+      for target in ("linux", "windows") for fault in
+      ("prefix-profile", "foreign-profile", "session", "source", "config", "policy", "captured-transfer", "nil-expected", "nil-captured")),
     CANDIDATE_PREFIX_COMMAND_ROOT + "ExactSourceReplay",
     *(CANDIDATE_PREFIX_COMMAND_ROOT + "ExactSourceReplay/" + target for target in ("linux", "windows")),
     CANDIDATE_PREFIX_COMMAND_ROOT + "RejectsSubstitution",

@@ -45,6 +45,7 @@ func TestDesktopNodeCandidatePreparationPolicyOnlyPrefixPhysicalGraph(t *testing
 					config, meta, capture, err := ReadDesktopPhysicalPolicy(p)
 					if err != nil || config != p.Preparation().Config() || meta.Kind != "node-candidate-prefix" ||
 						meta.ProfileID != p.original.proofs[position].ProfileID || meta.ConfigSHA256 != p.Preparation().ConfigSHA256() ||
+						p.Metadata().PolicyProfileID != p.original.original.proofs[2].ProfileID ||
 						meta.SourceSHA256 != p.Preparation().SourceSHA256() || p.metadata.OriginalSourceSHA256 != p.original.OriginalSourceSHA256() ||
 						len(p.Preparation().ProofInventory()) != position+1 || len(capture.PhysicalRoots) != 1 {
 						t.Fatal("prefix lost original physical/source authority", err)
@@ -158,7 +159,9 @@ func TestDesktopNodeCandidatePreparationPolicyPreservesSavedRestrictions(t *test
 		}
 	})
 	_, meta, capture, err := p.PhysicalReadValidated()
+	control, controlErr := ReadDesktopProtectionProfileID(p)
 	if err != nil || meta.KillSwitchPolicy != "always" || meta.IPv6Mode != "off" || meta.HomeLANAccess ||
+		controlErr != nil || control != p.original.original.proofs[2].ProfileID || control == meta.ProfileID ||
 		capture.SelectedDNS.Host == "198.51.100.44" || strings.Contains(p.Config(), "unreachable-final.example") {
 		t.Fatal("saved restrictions lost or unreachable final entered executable prefix", err)
 	}
@@ -206,12 +209,13 @@ func TestDesktopNodeCandidatePreparationPolicyRejectsMutatedOwner(t *testing.T) 
 		"candidate": func(p *DesktopNodeCandidatePreparationPolicy) {
 			p.preparation.candidates.targets[0].Address = "192.0.2.99:443"
 		},
-		"physical":    func(p *DesktopNodeCandidatePreparationPolicy) { p.capture.PhysicalRoots[0].Destinations[0].Port++ },
-		"session":     func(p *DesktopNodeCandidatePreparationPolicy) { p.inputs.sessionID = strings.Repeat("f", 32) },
-		"target":      func(p *DesktopNodeCandidatePreparationPolicy) { p.inputs.targetOS = "windows" },
-		"restore":     func(p *DesktopNodeCandidatePreparationPolicy) { p.inputs.restoredMTU = 1300 },
-		"application": func(p *DesktopNodeCandidatePreparationPolicy) { p.metadata.ApplicationOpen = true },
-		"dns":         func(p *DesktopNodeCandidatePreparationPolicy) { p.metadata.DNSOpen = true },
+		"physical":       func(p *DesktopNodeCandidatePreparationPolicy) { p.capture.PhysicalRoots[0].Destinations[0].Port++ },
+		"session":        func(p *DesktopNodeCandidatePreparationPolicy) { p.inputs.sessionID = strings.Repeat("f", 32) },
+		"target":         func(p *DesktopNodeCandidatePreparationPolicy) { p.inputs.targetOS = "windows" },
+		"restore":        func(p *DesktopNodeCandidatePreparationPolicy) { p.inputs.restoredMTU = 1300 },
+		"application":    func(p *DesktopNodeCandidatePreparationPolicy) { p.metadata.ApplicationOpen = true },
+		"dns":            func(p *DesktopNodeCandidatePreparationPolicy) { p.metadata.DNSOpen = true },
+		"policy-control": func(p *DesktopNodeCandidatePreparationPolicy) { p.metadata.PolicyProfileID = p.metadata.ProfileID },
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := desktopCandidatePreparationFixture(t, "wg", "linux", 0, 0, nil)
@@ -219,7 +223,34 @@ func TestDesktopNodeCandidatePreparationPolicyRejectsMutatedOwner(t *testing.T) 
 			if p.Validate() == nil || p.Config() != "" || p.Source() != "" || p.Preparation() != nil {
 				t.Fatal("changed original prefix owner remained usable")
 			}
+			if _, err := ReadDesktopProtectionProfileID(p); err == nil {
+				t.Fatal("changed prefix acquired durable protection attribution")
+			}
 		})
+	}
+}
+
+type desktopCandidateProtectionWrapper struct{ DesktopPhysicalPolicy }
+
+func TestDesktopNodeCandidatePreparationPolicyProtectionAttributionIsSealed(t *testing.T) {
+	for _, target := range []string{"linux", "windows", "darwin"} {
+		p := desktopCandidatePreparationFixture(t, "wg", target, 0, 0, nil)
+		before := p.Metadata()
+		before.PolicyProfileID = before.ProfileID
+		id, err := ReadDesktopProtectionProfileID(p)
+		if err != nil || id == before.PolicyProfileID || id != p.original.original.proofs[2].ProfileID {
+			t.Fatal("public metadata changed original saved protection control", err)
+		}
+		round, err := ParseDesktopNodeCandidatePreparationPolicy(p.Source())
+		if err != nil || round.Metadata().PolicyProfileID != id {
+			t.Fatal("child replay lost original saved protection control", err)
+		}
+		if _, err := ReadDesktopProtectionProfileID(desktopCandidateProtectionWrapper{p}); err == nil {
+			t.Fatal("caller wrapper supplied durable protection authority")
+		}
+	}
+	if _, err := ReadDesktopProtectionProfileID(nil); err == nil {
+		t.Fatal("nil policy supplied durable protection authority")
 	}
 }
 

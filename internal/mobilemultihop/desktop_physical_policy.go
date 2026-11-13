@@ -51,6 +51,20 @@ func ReadDesktopPhysicalPolicy(policy DesktopPhysicalPolicy) (string, DesktopPhy
 	}
 }
 
+// ReadDesktopProtectionProfileID keeps durable protection attribution separate
+// from a prefix's native proof identity. Only a validated concrete policy can
+// supply this identity; caller-provided metadata or interface wrappers cannot.
+func ReadDesktopProtectionProfileID(policy DesktopPhysicalPolicy) (string, error) {
+	_, metadata, _, err := ReadDesktopPhysicalPolicy(policy)
+	if err != nil {
+		return "", err
+	}
+	if prefix, ok := policy.(*DesktopNodeCandidatePreparationPolicy); ok {
+		return prefix.Metadata().PolicyProfileID, nil
+	}
+	return metadata.ProfileID, nil
+}
+
 func (*DesktopNodePolicy) desktopPhysicalPolicy() {}
 
 func (p *DesktopNodePolicy) PhysicalReadValidated() (string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error) {
