@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise command admission and actual Windows descendant retirement."""
 from pathlib import Path
+import ast
 import ctypes
 import importlib.util
 import json
@@ -419,6 +420,7 @@ class OriginalBootstrapLifetime(unittest.TestCase):
 TREE_CHILD = r'''
 import ctypes,importlib.util,json,os,subprocess,sys,time
 from pathlib import Path
+sys.dont_write_bytecode = True
 root, depth, orphan = Path(sys.argv[1]), int(sys.argv[2]), sys.argv[3] == "orphan"
 def publish(name, value):
     temporary = root/(name+".writing")
@@ -487,6 +489,52 @@ if depth == 1:
 time.sleep(120)
 kernel.CloseHandle(handle)
 '''
+
+
+
+class IsolatedTreeBytecode(unittest.TestCase):
+    def test_original_isolated_import_preserves_checkout_without_python_environment(self):
+        # Execute the actual TREE_CHILD import statements without its Windows
+        # API acquisition. Isolated Python intentionally ignores PYTHON* env.
+        tree = ast.parse(TREE_CHILD)
+        preamble = []
+        imports = None
+        for statement in tree.body:
+            if isinstance(statement, (ast.Import, ast.ImportFrom)):
+                preamble.append(statement)
+            elif (isinstance(statement, ast.Assign) and
+                  ast.unparse(statement.targets[0]) == "sys.dont_write_bytecode"):
+                preamble.append(statement)
+            elif (imports is None and isinstance(statement, ast.If) and
+                  ast.unparse(statement.test) == "depth == 1"):
+                imports = statement.body[:3]
+        self.assertIsNotNone(imports)
+        self.assertEqual([ast.unparse(item) for item in imports], [
+            "spec = importlib.util.spec_from_file_location('original_nested_build_owner', sys.argv[4])",
+            "owner = importlib.util.module_from_spec(spec)",
+            "spec.loader.exec_module(owner)"])
+        flag = [item for item in preamble if isinstance(item, ast.Assign)]
+        self.assertEqual(len(flag), 1, "Original isolated child lost bytecode suppression")
+        for omitted in (False, True):
+            with self.subTest(omitted=omitted), tempfile.TemporaryDirectory(prefix="tree-bytecode-") as directory:
+                root = Path(directory)
+                original = root/"windows_build_owner.py"
+                original.write_bytes((ROOT/"deploy/windows_build_owner.py").read_bytes())
+                body = [item for item in preamble if not omitted or item is not flag[0]]
+                program = ast.unparse(ast.Module(body=body + imports, type_ignores=[]))
+                command = [sys.executable, "-I", "-S", "-c", program,
+                           str(root), "1", "joined", str(original)]
+                result = subprocess.run(command, cwd=root,
+                    env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                bytecode = list(root.rglob("*.pyc"))
+                if omitted:
+                    self.assertEqual(len(bytecode), 1,
+                                     "Isolated child omission did not reproduce ignored-environment bytecode")
+                else:
+                    self.assertEqual(bytecode, [],
+                                     "Original isolated owner import changed the trusted checkout")
 
 
 class NativeRetirementObservation:
