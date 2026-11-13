@@ -2533,6 +2533,58 @@ Trusted clock-driver SHA256:
 `dbe2ecf83e4e4951465403f1801426f878a9ad5a2227bd3cebaf231453ea648d`.
 The pending candidate sources have not yet passed these hosted gates.
 
+## Hosted Android acceptance and Darwin workspace correction — November 13, 2026
+
+Focused run `43407404738` used trusted validator `04569ef7` to test source
+`51e668f897f6dfacb613cc8fb346f4c2134b2d59`. The original Android fixture
+completed in 36.072 seconds: 348 shipping Java/Go graphs with 20,613 checks,
+160 padding captures with 1,601 source/policy/session checks, and both actual
+compiler/host capacity rejection controls. Its original process group joined;
+all 5,098 source files and before/after selection metadata were unchanged.
+The tested commit was then advanced to main. The actual artifact was downloaded
+and its contents and digest independently checked:
+`af87f67525ac5ae8819c2dcb85bc4cdd7a12960780b3d64b924bc04596100c68`.
+These Java/Go composition results retain their explicit OS/startup doubles;
+they are not actual Tor traffic or physical Android acceptance.
+
+Both c8 Darwin child images compiled. Intel job `131818204827` and ARM job
+`131818205210` then correctly refused the diagnostic's `handshake-*`
+workspace because the unchanged production capture permits only the fixed
+`native-node/session-*` scope. Commit `97c7ebba` changes that one fixture
+prefix to the original permitted prefix. All 32 selected Python diagnostics
+passed in 3.729 seconds, zero skips. Privilege, descriptor, image and policy
+checks were not weakened; corrected signed native execution remains pending.
+
+The Linux generated-command gate `43405342542` passed on both architectures
+at `c8c6a44e`. Each actual hosted native run completed its root and six cases:
+on-connect, always, captured-MTU, rollback, resolver failure and wrong key.
+That result is separate from the installed ordered-path/HY2 acceptance.
+
+## Linux HY2 focused validation extension — November 13, 2026
+
+The same read-only hosted workflow now admits one additional exact seven-file
+Linux HY2 test-adoption candidate. Its fixed gate requires all 21 original/new
+controller source-authority records, all 37 existing encrypted HY2 peer
+records, and a separately compiled changed-Salamander control with its root
+and all three original cipher leaves failing at their specific witness.
+Timeout, signal, missing/foreign/mixed verdict, panic and unjoined-process
+outcomes cannot satisfy a positive or negative control. The original pinned
+native preparer, Go toolchain, source/image checks and phase deadlines remain.
+The receipt explicitly reports `installed_native_accepted=false`; the full
+47-case installed kernel/TUN gate is still independently required.
+
+The extension's six Python test roots passed in 0.103 seconds, including
+30 refusal subcases and an actual short child through the unchanged joined
+process executor. The expanded identity helper's 12 actual Git/CLI tests
+passed in 2.352 seconds; workflow YAML parsed. The native 21/37 records and
+compiled cipher control have not yet executed for the pending seven files.
+
+The first hosted ordered-clock candidate `04bb241e` compiled, then its new
+Local setups failed at the original preparation guard before proof execution;
+the new Server cases passed. The full candidate was not accepted or pushed.
+Its failure log and source snapshot were preserved. No timing requirement,
+negative case or production guard was removed.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

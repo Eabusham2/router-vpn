@@ -17,6 +17,7 @@ on:
           - ordered-clock
           - legacy-clock
           - android-tor
+          - linux-hy2
 
 permissions:
   contents: read
@@ -50,7 +51,7 @@ jobs:
           for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
               if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
                   raise SystemExit(name + " must be a complete lowercase Git commit.")
-          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor"):
+          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "linux-hy2"):
               raise SystemExit("Unknown focused validation suite.")
           PY
       - name: Check out the trusted validator
@@ -72,6 +73,9 @@ jobs:
         run: |
           python3 validator/deploy/focused_source_identity.py --self-test
           python3 validator/deploy/test_focused_multihop_clocks.py --self-test
+          if [[ "$SUITE" == "linux-hy2" ]]; then
+            python3 validator/deploy/test_validate_linux_hy2_source.py
+          fi
           python3 validator/deploy/focused_source_identity.py \
             --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
             --source-sha "$SOURCE_SHA" --base-sha "$VALIDATOR_SHA" \
@@ -92,14 +96,26 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libandroid-json-java
+      - name: Install the Linux encrypted-reference compiler dependencies
+        if: inputs.suite == 'linux-hy2'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config
       - name: Require the original clock cases and compiled negative controls
-        if: inputs.suite != 'android-tor'
+        if: inputs.suite == 'ordered-clock' || inputs.suite == 'legacy-clock'
         shell: bash
         run: |
           python3 validator/deploy/test_focused_multihop_clocks.py \
             --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
             --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Require complete installed HY2 sources and original encrypted peers
+        if: inputs.suite == 'linux-hy2'
+        shell: bash
+        run: |
+          python3 validator/deploy/validate-linux-hy2-source.py \
+            --source "$GITHUB_WORKSPACE/candidate" --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests" --go "$(command -v go)"
       - name: Execute the original Android Tor fixture and capacity controls
         if: inputs.suite == 'android-tor'
         shell: bash

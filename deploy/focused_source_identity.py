@@ -30,6 +30,15 @@ ALLOWLISTS = {
         "internal/mobilemultihop/runtime_proof_clock_test.go",
     }),
     "android-tor": frozenset({"android/test_android_tor_profile.py"}),
+    "linux-hy2": frozenset({
+        "mobile/desktop/node_chain_peer_linux_test.go.tmpl",
+        "mobile/desktop/node_chain_hysteria_final_test.go.tmpl",
+        "cmd/client/desktop_node_chain_linux_tun_native_test.go",
+        "cmd/client/desktop_node_chain_linux_hysteria_tun_native_test.go",
+        "deploy/test_linux_node_host_tun.py",
+        "deploy/test_linux_node_host_tun_runner.py",
+        "deploy/test_macos_node_chain_host_runner.py",
+    }),
 }
 REGULAR_MODES = {"100644", "100755"}
 
