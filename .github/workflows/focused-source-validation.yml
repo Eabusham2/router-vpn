@@ -42,7 +42,7 @@ env:
 
 jobs:
   validate:
-    runs-on: ${{ inputs.suite == 'macos-profiles' && 'macos-15-intel' || inputs.suite == 'darwin-hy2' && 'macos-15' || 'ubuntu-24.04' }}
+    runs-on: ${{ (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2') && 'macos-15-intel' || 'ubuntu-24.04' }}
     timeout-minutes: ${{ (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2') && 45 || 30 }}
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
