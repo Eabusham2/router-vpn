@@ -138,10 +138,40 @@ struct Identity {let engine="multihop-libbox";let nodeChainSource:Data?}
 }
 '''
 
+# These are explicit, unreachable independent-prefix boundaries for the existing
+# complete-saved gate. The prefix composition executes its own real branch.
+PREFIX_BOUNDARY = r"""
+@MainActor struct IOSNodeCandidatePrefixCapture {
+ let native=IOSNodeChainCapture.Plan(),sourceSHA256="prefix-source",configSHA256="prefix-config",captureSHA256="prefix-capture"
+ static func compile(original:IOSNodeChainCapture,position:Int,inventory:String)throws->Self{throw Failure(message:"unexpected prefix compiler in complete-saved gate")}
+}
+@MainActor struct IOSNodeCandidatePrefixBinding {
+ let connection=NETunnelProviderSession()
+ func require(_ model:RouterVPNModel)throws{throw Failure(message:"unexpected prefix binding in complete-saved gate")}
+}
+@MainActor extension RouterVPNModel {
+ func connectCandidatePrefix(_ capture:IOSNodeCandidatePrefixCapture,bundle:ClientBundle,owner:UUID,epoch:UUID,request:String,current:@escaping @MainActor @Sendable ()throws->Void)async throws->IOSNodeCandidatePrefixBinding{throw Failure(message:"unexpected independent prefix launch in complete-saved gate")}
+}
+"""
+OWNER_PREFIX_BOUNDARY = r"""
+@MainActor final class NETunnelProviderSession{}
+extension IOSCandidateCatalogPublication {
+ struct Capture {struct Inventory{let data=Data("inventory".utf8)};let inventory=Inventory();let request="request"}
+ @MainActor static let shared=Store()
+ @MainActor final class Store {func remove(_ source:Capture)throws{};func acknowledgeClosed(epoch:String,request:String)throws{}}
+}
+@MainActor struct IOSNodeCandidateCapture {
+ struct Row {let id:String;let name:String;let input:String}
+ let source:IOSCandidateCatalogPublication.Capture,records:[String:Data],rows:[Row],prefix:IOSNodeCandidatePrefix,chainSource:String,chainConfig:String
+ static func make(request:String,prefixPosition:Int,proofs:[IOSNodeCandidatePrefix],chainSource:String,chainConfig:String)throws->Self{throw Failure(message:"unexpected prefix publication in complete-saved gate")}
+ func requireCurrent()throws{throw Failure(message:"unexpected prefix source in complete-saved gate")}
+}
+"""
+
 def main():
     original = (APP / 'IOSNodeCandidatePreparation.swift').read_text()
     last_writer = member((APP / 'IOSStrategySupport.swift').read_text(), '    func recordIOSLastRuntime(')
-    fixture = SWIFT.replace('// SHIPPING_LAST_WRITER', last_writer)
+    fixture = SWIFT.replace('// SHIPPING_LAST_WRITER', last_writer) + PREFIX_BOUNDARY + OWNER_PREFIX_BOUNDARY
     with tempfile.TemporaryDirectory(prefix='ios-candidate-preparation-') as directory:
         work = Path(directory); source = work / 'Preparation.swift'; test = work / 'Test.swift'
         source.write_text(original); test.write_text(fixture)

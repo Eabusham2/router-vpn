@@ -31,7 +31,7 @@ protocol ObservableObject:AnyObject {}
 }
 @MainActor enum IOSCandidateCatalogPublication {
  struct Stamp:Equatable{let generation:Int}
- struct Capture{}
+ struct Capture{struct Inventory{let data=Data("inventory".utf8)};let inventory=Inventory();let request="request"}
  static let shared=SelfStore()
  nonisolated static func validRequest(_ text:String)->Bool{text.count==32 && text.allSatisfy{$0.isHexDigit}}
  nonisolated static func isDigest(_ text:String)->Bool{text.count==64 && text.allSatisfy{$0.isHexDigit}}
@@ -43,10 +43,12 @@ protocol ObservableObject:AnyObject {}
 }
 @MainActor struct IOSNodeCandidateCapture {
  struct Row{let id:String;let name:String;let input:String}
- let source=IOSCandidateCatalogPublication.Capture(),rows=[Row(id:"candidate",name:"Original candidate",input:"measured original")]
- let records:[String:Data],prefix:IOSNodeCandidatePrefix,chainSource:String,chainConfig:String
+ let source:IOSCandidateCatalogPublication.Capture
+ let records:[String:Data]
+ let rows:[Row]
+ let prefix:IOSNodeCandidatePrefix,chainSource:String,chainConfig:String
  static func make(request:String,prefixPosition:Int,proofs:[IOSNodeCandidatePrefix],chainSource:String,chainConfig:String)throws->Self{
-  Self(records:IOSNodeBundleStore.shared.records,prefix:proofs[prefixPosition],chainSource:chainSource,chainConfig:chainConfig)
+  Self(source:IOSCandidateCatalogPublication.Capture(),records:IOSNodeBundleStore.shared.records,rows:[Row(id:"candidate",name:"Original candidate",input:"measured original")],prefix:proofs[prefixPosition],chainSource:chainSource,chainConfig:chainConfig)
  }
  func requireCurrent()throws{guard records==IOSNodeBundleStore.shared.records else{throw CancellationError()}}
  static func issue()->NSError{NSError(domain:"OriginalSourceBoundary",code:1)}
@@ -142,7 +144,7 @@ TEST = r'''
 }
 '''
 
-def main():
+def fixture_boundary(boundaries=BOUNDARIES, prefix_boundary=P.PREFIX_BOUNDARY):
     owner_boundaries = P.SWIFT[:P.SWIFT.index('@MainActor @main struct Test')]
     owner_boundaries = owner_boundaries.replace('enum IOSCandidateCatalogPublication {struct Stamp:Equatable {let generation:Int}}', '')
     block = member(owner_boundaries, '@MainActor final class IOSNodeCandidateTransaction')
@@ -156,7 +158,11 @@ def main():
     owner_boundaries = owner_boundaries.replace(' var selectedNodeProfile:Profile?', ' struct Status {enum Phase{case blocked};let phase:Phase};var iosStrategyStatus:Status?\n var selectedNodeProfile:Profile?')
     ui = (APP/'IOSUnifiedProductView.swift').read_text()
     labels = '@MainActor final class ProductLabels {let model:RouterVPNModel;init(_ model:RouterVPNModel){self.model=model}\n' + member(ui, '    private var connectionStateTitle:') + '\n' + member(ui, '    private var connectionButtonTitle:') + '\nfunc state()->String{connectionStateTitle};func button()->String{connectionButtonTitle}}'
-    boundary = owner_boundaries + BOUNDARIES.replace('// SHIPPING_SAVE_WRAPPER', save) + labels
+    return owner_boundaries + boundaries.replace('// SHIPPING_SAVE_WRAPPER', save) + prefix_boundary + labels
+
+
+def main():
+    boundary = fixture_boundary()
     source = (APP/'IOSNodeCandidates.swift').read_text()
     controller = source[source.index('private final class IOSCandidateReply:'):source.index('struct IOSNodeCandidatesCard:')]
     with tempfile.TemporaryDirectory(prefix='ios-candidate-flow-') as directory:

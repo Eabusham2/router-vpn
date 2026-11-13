@@ -18,6 +18,8 @@ final class RouterVPNLibboxEngine {
     private var nodeCandidate: RouterVPNNodeCandidateSession?
     private var pendingNodeChainCleanup: NodeChainCleanup?
     private var nodeChainExecution: RouterVPNNodeChainExecutionHost?
+    private var nodeCandidatePrefix: RouterVPNNodeCandidatePrefixHost?
+    private var pendingNodeCandidatePrefixCleanup: RouterVPNNodeCandidatePrefixHost?
     private var pendingNodeChainExecutionCleanup: RouterVPNNodeChainExecutionHost?
     private var importedMultihop = false
     private var multihopExecutionSource: IOSMultihopExecution.Source?
@@ -85,6 +87,83 @@ final class RouterVPNLibboxEngine {
         try startOrderedExecution(restored.capture, restored: restored)
     }
 
+    func start(candidatePrefix input: IOSNodeCandidatePrefixProviderCapture) throws {
+        try Self.torRetirement.requireAvailable()
+        try Self.torServerRetirement.requireAvailable()
+        try Self.externalRetirement.requireAvailable()
+        try Self.measurementRetirement.requireAvailable()
+        try RouterVPNNodeChainExecutionHost.requireAvailable()
+        try RouterVPNNodeCandidatePrefixHost.requireAvailable()
+        try RouterVPNLibboxCompileProbe.verifyPinnedRuntime()
+        try input.requireCurrent()
+        ownershipLock.lock()
+        guard server == nil, nodeCandidatePrefix == nil, !starting, !permanentlyStopped else {
+            ownershipLock.unlock(); throw error("The ordered execution host is already owned or retired")
+        }
+        starting = true
+        let generation = ownershipGeneration
+        let host = RouterVPNNodeCandidatePrefixHost(input: input, platform: platform, current: { [weak self] in
+            guard let self else { return false }
+            self.ownershipLock.lock(); defer { self.ownershipLock.unlock() }
+            return self.ownershipGeneration == generation && self.nodeCandidatePrefix?.input.capture.native === input.capture.native && !self.permanentlyStopped
+        }, failure: { [weak self] failure in
+            guard let self else { return }
+            self.ownershipLock.lock()
+            let current = self.ownershipGeneration == generation && self.nodeCandidatePrefix?.input.capture.native === input.capture.native && !self.permanentlyStopped
+            self.ownershipLock.unlock()
+            if current { self.tunnel?.nativeLibboxFailure(self, error: failure) }
+        })
+        nodeCandidatePrefix = host
+        ownershipLock.unlock()
+        var adopted = false
+        defer {
+            host.finishConstruction()
+            ownershipLock.lock()
+            if ownershipGeneration == generation { starting = false }
+            ownershipLock.unlock()
+            if !adopted { _ = stopGeneration(generation) }
+        }
+        try RouterVPNPQFactory.install()
+        let config = Data(input.capture.config.utf8)
+        guard !config.isEmpty, config.count <= 4 * 1024 * 1024 else { throw error("The ordered preparation config exceeds its native bound") }
+        platform.includeAllNetworksRequested = input.capture.strict
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent("routervpn-libbox-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: base, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        try host.retainDirectory(base)
+        let work = base.appendingPathComponent("working", isDirectory: true), temp = base.appendingPathComponent("temp", isDirectory: true)
+        try fm.createDirectory(at: work, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        try fm.createDirectory(at: temp, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        let destination = base.appendingPathComponent("sing-box.json")
+        try config.write(to: destination, options: [.atomic])
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+        ownershipLock.lock()
+        guard ownershipGeneration == generation, nodeCandidatePrefix === host else { ownershipLock.unlock(); throw error("Ordered construction was cancelled") }
+        configContent = input.capture.config; runtimeRoot = base
+        ownershipLock.unlock()
+        let setup = LibboxSetupOptions(); setup.basePath = base.path; setup.workingPath = work.path; setup.tempPath = temp.path
+        setup.logMaxLines = 1000; setup.oomKillerEnabled = true; setup.commandServerSecret = UUID().uuidString
+        var setupError: NSError?; LibboxSetup(setup, &setupError)
+        if let setupError { throw setupError }
+        var createError: NSError?
+        try host.beginFactory()
+        let created = LibboxNewCommandServer(platform, platform, &createError)
+        // Even a failed or cancelled factory can return the original resource.
+        // Retain and bind it before inspecting the error or current generation.
+        try host.finishFactory(created)
+        if let createError { throw createError }
+        guard let created else { throw error("Ordered command server creation returned no original owner") }
+        ownershipLock.lock()
+        guard ownershipGeneration == generation, nodeCandidatePrefix === host else { ownershipLock.unlock(); throw error("Ordered construction changed its owner") }
+        server = created
+        ownershipLock.unlock()
+        try host.startNative()
+        ownershipLock.lock()
+        adopted = ownershipGeneration == generation && nodeCandidatePrefix === host && server === created && !permanentlyStopped
+        ownershipLock.unlock()
+        guard adopted else { throw error("Ordered service startup was cancelled") }
+    }
+
     private func startOrderedExecution(_ capture: IOSNodeChainExecutionCapture,
                                        restored: RouterVPNNodeChainExecutionRegistry.Restored?) throws {
         try Self.torRetirement.requireAvailable()
@@ -92,6 +171,7 @@ final class RouterVPNLibboxEngine {
         try Self.externalRetirement.requireAvailable()
         try Self.measurementRetirement.requireAvailable()
         try RouterVPNNodeChainExecutionHost.requireAvailable()
+        try RouterVPNNodeCandidatePrefixHost.requireAvailable()
         try RouterVPNLibboxCompileProbe.verifyPinnedRuntime()
         try capture.requireCurrent()
         ownershipLock.lock()
@@ -167,6 +247,7 @@ final class RouterVPNLibboxEngine {
         try Self.externalRetirement.requireAvailable()
         try Self.measurementRetirement.requireAvailable()
         try RouterVPNNodeChainExecutionHost.requireAvailable()
+        try RouterVPNNodeCandidatePrefixHost.requireAvailable()
         let capturedLayer = try IOSMultihopStartLayer.requiredSource(metadata: multihopMetadata, source: entryStartLayerSource)
         let capturedExit = try IOSMultihopStartLayer.requiredExitSource(metadata: multihopMetadata, source: exitStartLayerSource)
         try RouterVPNLibboxCompileProbe.verifyPinnedRuntime()
@@ -273,7 +354,7 @@ final class RouterVPNLibboxEngine {
     func stop() { _ = stopGeneration(nil) }
     var ownsNodeChain: Bool {
         ownershipLock.lock(); defer { ownershipLock.unlock() }
-        return nodeChain != nil || pendingNodeChainCleanup != nil || nodeChainExecution != nil || pendingNodeChainExecutionCleanup != nil
+        return nodeChain != nil || pendingNodeChainCleanup != nil || nodeChainExecution != nil || pendingNodeChainExecutionCleanup != nil || nodeCandidatePrefix != nil || pendingNodeCandidatePrefixCleanup != nil
     }
     func stopCheckedForStrategy() throws {
         if let failure = stopGeneration(nil) { throw failure }
@@ -282,6 +363,11 @@ final class RouterVPNLibboxEngine {
         ownershipLock.lock()
         if let expected, expected != ownershipGeneration { ownershipLock.unlock(); return nil }
         if permanentlyStopped {
+            if let cleanup = pendingNodeCandidatePrefixCleanup, !stopInProgress {
+                stopInProgress = true
+                ownershipLock.unlock()
+                return finishNodeCandidatePrefixCleanup(cleanup)
+            }
             if let cleanup = pendingNodeChainExecutionCleanup, !stopInProgress {
                 stopInProgress = true
                 ownershipLock.unlock()
@@ -307,6 +393,11 @@ final class RouterVPNLibboxEngine {
         let externalDelivery = externalProofDelivery, externalHealth = self.externalHealth, capturedExternal = externalPolicy != nil
         let chain = nodeChain, chainDelivery = nodeChainDelivery, candidate = nodeCandidate
         let executionCleanup = nodeChainExecution
+        let prefixCleanup = nodeCandidatePrefix
+        if let prefixCleanup {
+            pendingNodeCandidatePrefixCleanup = prefixCleanup
+            prefixCleanup.retainForRetirement()
+        }
         if let executionCleanup {
             pendingNodeChainExecutionCleanup = executionCleanup
             executionCleanup.retainForRetirement()
@@ -329,13 +420,17 @@ final class RouterVPNLibboxEngine {
         torProofDelivery = nil
         self.torHealth = nil
         externalProofDelivery = nil; self.externalHealth = nil; externalPolicy = nil
-        nodeChain = nil; nodeChainDelivery = nil; nodeCandidate = nil; nodeChainExecution = nil
+        nodeChain = nil; nodeChainDelivery = nil; nodeCandidate = nil; nodeChainExecution = nil; nodeCandidatePrefix = nil
         ownershipLock.unlock()
         chainDelivery?.cancel()
         torDelivery?.cancel()
         torHealth?.cancel()
         externalDelivery?.cancel()
         externalHealth?.cancel()
+        if let prefixCleanup {
+            health?.cancel(); paddingHealth?.cancel()
+            return finishNodeCandidatePrefixCleanup(prefixCleanup)
+        }
         if let executionCleanup {
             health?.cancel(); paddingHealth?.cancel()
             if let owned { LibboxRouterInvalidatePerformance(owned) }
@@ -424,6 +519,31 @@ final class RouterVPNLibboxEngine {
         let result = nativeCloseFailure
         ownershipLock.unlock()
         return result
+    }
+
+    private func finishNodeCandidatePrefixCleanup(_ cleanup: RouterVPNNodeCandidatePrefixHost) -> Error? {
+        var failure: Error?
+        do { try cleanup.close(); cleanup.releaseRetirement() } catch { failure = error }
+        ownershipLock.lock()
+        if pendingNodeCandidatePrefixCleanup === cleanup {
+            if failure == nil { pendingNodeCandidatePrefixCleanup = nil }
+            nativeCloseFailure = failure
+        }
+        stopInProgress = false
+        ownershipLock.unlock()
+        return failure
+    }
+
+    func completeCandidatePrefix(_ completion: @escaping (Error?) -> Void) {
+        ownershipLock.lock(); let host = nodeCandidatePrefix; let available = !starting && !permanentlyStopped; ownershipLock.unlock()
+        guard available, let host else { completion(error("The temporary prefix has no original native host")); return }
+        host.run(completion: completion)
+    }
+    func candidatePrefixRequest(operation: String, request: String, session: String, owner: String,
+                                prefix: String, candidate: String) -> Data? {
+        ownershipLock.lock(); let host = nodeCandidatePrefix; let available = !starting && !permanentlyStopped; ownershipLock.unlock()
+        guard available, let host else { return nil }
+        return host.reply(operation: operation, request: request, epoch: session, owner: owner, prefix: prefix, candidate: candidate)
     }
 
     private func finishNodeChainExecutionCleanup(_ cleanup: RouterVPNNodeChainExecutionHost) -> Error? {
@@ -1808,8 +1928,8 @@ final class RouterVPNLibboxEngine {
     }
     func invalidateMultihop() {
         platform.mtu.invalidate()
-        ownershipLock.lock(); let plan = multihop, probe = hopMeasurement, dnsProbe = dnsMeasurement, owned = server, torDelivery = torProofDelivery, externalDelivery = externalProofDelivery, chain = nodeChainDelivery, chainPlan = nodeChain, execution = nodeChainExecution; ownershipLock.unlock()
-        execution?.cancel()
+        ownershipLock.lock(); let plan = multihop, probe = hopMeasurement, dnsProbe = dnsMeasurement, owned = server, torDelivery = torProofDelivery, externalDelivery = externalProofDelivery, chain = nodeChainDelivery, chainPlan = nodeChain, execution = nodeChainExecution, prefix = nodeCandidatePrefix; ownershipLock.unlock()
+        execution?.cancel(); prefix?.cancel()
         chainPlan?.networkChanged()
         chain?.cancel()
         torDelivery?.cancel()
@@ -1820,8 +1940,8 @@ final class RouterVPNLibboxEngine {
     }
     func pause() {
         platform.mtu.invalidate()
-        ownershipLock.lock(); let plan = multihop, owned = server, probe = hopMeasurement, dnsProbe = dnsMeasurement, torDelivery = torProofDelivery, externalDelivery = externalProofDelivery, chain = nodeChainDelivery, chainPlan = nodeChain, execution = nodeChainExecution; ownershipLock.unlock()
-        execution?.cancel()
+        ownershipLock.lock(); let plan = multihop, owned = server, probe = hopMeasurement, dnsProbe = dnsMeasurement, torDelivery = torProofDelivery, externalDelivery = externalProofDelivery, chain = nodeChainDelivery, chainPlan = nodeChain, execution = nodeChainExecution, prefix = nodeCandidatePrefix; ownershipLock.unlock()
+        execution?.cancel(); prefix?.cancel()
         chainPlan?.networkChanged()
         chain?.cancel()
         torDelivery?.cancel()
@@ -1829,7 +1949,7 @@ final class RouterVPNLibboxEngine {
         if let owned { LibboxRouterInvalidatePerformance(owned) }
         probe?.networkChanged(); plan?.networkChanged()
         // The original entry must remain live until ordered remote DELETE joins.
-        if execution == nil { owned?.pause() }
+        if execution == nil && prefix == nil { owned?.pause() }
         dnsProbe?.networkChanged()
     }
     func wake() { ownershipLock.lock(); let owned = server; ownershipLock.unlock(); owned?.wake() }
@@ -1852,7 +1972,7 @@ final class RouterVPNLibboxEngine {
     }
     private func reloadService() throws {
         guard !strategyOwned, !torOwned, externalPolicy == nil else { throw error("Provider strategies, Tor and external policies require a fresh owned native generation") }
-        ownershipLock.lock(); let comparing = multihop != nil || nodeChain != nil || nodeChainExecution != nil || pendingNodeChainExecutionCleanup != nil || hopMeasurement != nil || performanceHealth != nil; ownershipLock.unlock()
+        ownershipLock.lock(); let comparing = multihop != nil || nodeChain != nil || nodeChainExecution != nil || pendingNodeChainExecutionCleanup != nil || nodeCandidatePrefix != nil || pendingNodeCandidatePrefixCleanup != nil || hopMeasurement != nil || performanceHealth != nil; ownershipLock.unlock()
         guard !comparing, !platform.mtu.hasOwner else { throw error("Native reload requires a fresh owned comparison and MTU session") }
         try startService()
     }

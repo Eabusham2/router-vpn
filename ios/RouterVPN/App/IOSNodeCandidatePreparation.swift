@@ -15,6 +15,10 @@ import Foundation
     let sourceSHA256: String
     let configSHA256: String
     let prefixes: [IOSNodeCandidatePrefix]
+    let prefixCapture: IOSNodeCandidatePrefixCapture?
+    let prefixCandidate: IOSNodeCandidateCapture?
+    let prefixEpoch = UUID()
+    private(set) var prefixBinding: IOSNodeCandidatePrefixBinding?
     private let model: RouterVPNModel
     private let originalBundle: Data
     private let persistedBundle: Data?
@@ -36,7 +40,7 @@ import Foundation
     private let onCancelled: @MainActor () -> Void
 
     private init(model: RouterVPNModel, bundle: ClientBundle, capture: IOSNodeChainCapture,
-                 onCancelled: @escaping @MainActor () -> Void) throws {
+                 prefixPosition: Int?, request: String?, onCancelled: @escaping @MainActor () -> Void) throws {
         self.model = model; self.bundle = bundle; self.onCancelled = onCancelled
         launchInput = capture.launchInput; sourceSHA256 = capture.sourceSHA256; configSHA256 = capture.configSHA256
         prefixes = capture.members.enumerated().map { position, member in
@@ -49,9 +53,25 @@ import Foundation
         selection = try Self.selection(model); initialDecision = model.iosConnectGeneration
         let snapshot = try IOSNodeBundleStore.shared.candidateSnapshot()
         records = snapshot.records; stamp = snapshot.stamp
+        if let position = prefixPosition, let request {
+            let candidate = try IOSNodeCandidateCapture.make(request: request, prefixPosition: position,
+                proofs: capture.members.enumerated().map { IOSNodeCandidatePrefix(position: $0.offset,
+                    profile_id: $0.element.id, node_id: $0.element.profile["node_proof_id"] as? String ?? "", mode: $0.element.mode) },
+                chainSource: capture.sourceSHA256, chainConfig: capture.configSHA256)
+            do {
+                let prefix = try IOSNodeCandidatePrefixCapture.compile(original: capture, position: position,
+                    inventory: String(decoding: candidate.source.inventory.data, as: UTF8.self))
+                prefixCapture = prefix
+                prefixCandidate = IOSNodeCandidateCapture(source: candidate.source, records: candidate.records,
+                    rows: candidate.rows, prefix: candidate.prefix, chainSource: prefix.sourceSHA256, chainConfig: prefix.configSHA256)
+            } catch { try? IOSCandidateCatalogPublication.shared.remove(candidate.source); throw error }
+        } else {
+            guard prefixPosition == nil, request == nil else { throw CancellationError() }
+            prefixCapture = nil; prefixCandidate = nil
+        }
     }
 
-    static func reserve(model: RouterVPNModel, onCancelled: @escaping @MainActor () -> Void) throws -> IOSNodeCandidatePreparation {
+    static func reserve(model: RouterVPNModel, prefixPosition: Int? = nil, request: String? = nil, onCancelled: @escaping @MainActor () -> Void) throws -> IOSNodeCandidatePreparation {
         guard retained == nil, !model.connected, !model.tunnelTransitioning,
               !model.iosUserDisconnectInProgress, !model.iosSpeedLabOwnership.active,
               !IOSMTUMeasurementGate.held, let bundle = model.bundle,
@@ -60,8 +80,13 @@ import Foundation
         let capture = try model.captureIOSNodeChain(bundle)
         defer { try? capture.plan.close() }
         _ = try IOSRuntimeSelector.selectNodeChain(capture)
-        let value = try Self(model: model, bundle: bundle, capture: capture, onCancelled: onCancelled)
-        _ = try model.iosSpeedLabOwnership.begin(owner: value.owner) { [weak value] in value?.cancel() }
+        let value = try Self(model: model, bundle: bundle, capture: capture, prefixPosition: prefixPosition, request: request, onCancelled: onCancelled)
+        do { _ = try model.iosSpeedLabOwnership.begin(owner: value.owner) { [weak value] in value?.cancel() } }
+        catch {
+            try? value.prefixCapture?.native.close()
+            if let candidate = value.prefixCandidate { try? IOSCandidateCatalogPublication.shared.remove(candidate.source) }
+            throw error
+        }
         value.outerHold = IOSMTUMeasurementGate.acquire()
         retained = value; model.objectWillChange.send()
         return value
@@ -88,6 +113,7 @@ import Foundation
                   network == nil || IOSViaEntryNetwork.shared.current == network else { throw CancellationError() }
             let now = try IOSNodeBundleStore.shared.candidateSnapshot()
             guard now.records == records, now.stamp == stamp else { throw CancellationError() }
+            if !retired { try prefixCandidate?.requireCurrent() }
         } catch { invalidated = true; throw error }
     }
 
@@ -100,6 +126,14 @@ import Foundation
         original = try await IOSSpeedLabTunnel.capture(model: model, owner: owner)
         guard original?.identity == nil else { throw CancellationError() }
         try requireFrozen(); launching = true
+        if let prefixCapture, let candidate = prefixCandidate {
+            prefixBinding = try await model.connectCandidatePrefix(prefixCapture, bundle: bundle,
+                owner: owner, epoch: prefixEpoch, request: candidate.source.request) { [self] in
+                try requireFrozen(); try model.iosSpeedLabOwnership.require(owner)
+            }
+            try requireLive()
+            return
+        }
         let capture = try IOSNodeChainCapture.reopen(launchInput, selectedProfile: try selectedProfile())
         defer { try? capture.plan.close() }
         try await model.connectCandidatePreparation(capture, bundle: bundle) { [self] in
@@ -119,9 +153,20 @@ import Foundation
 
     func requireLive() throws {
         try requireFrozen(); try model.iosSpeedLabOwnership.require(owner)
-        guard !retired, launching, model.connected, !model.tunnelTransitioning,
-              let identity = model.activeSessionIdentity, identity.engine == "multihop-libbox",
-              identity.nodeChainSource == Data(launchInput.utf8), outerHold != nil else { throw CancellationError() }
+        guard !retired, launching, outerHold != nil else { throw CancellationError() }
+        if prefixCapture != nil {
+            guard let prefixBinding else { throw CancellationError() }
+            try prefixBinding.require(model)
+        } else {
+            guard model.connected, !model.tunnelTransitioning,
+                  let identity = model.activeSessionIdentity, identity.engine == "multihop-libbox",
+                  identity.nodeChainSource == Data(launchInput.utf8) else { throw CancellationError() }
+        }
+    }
+
+    func originalForProposal() throws -> IOSNodeChainCapture {
+        try requireLive()
+        return try IOSNodeChainCapture.reopen(launchInput, selectedProfile: selectedProfile())
     }
 
     func bind(_ value: IOSNodeCandidateTransaction) throws {
@@ -174,6 +219,11 @@ import Foundation
                 guard !model.connected, !model.tunnelTransitioning, model.activeSessionIdentity == nil else { throw CancellationError() }
                 returnedDecision = model.iosConnectGeneration
                 retired = true
+                try? prefixCapture?.native.close()
+                if let candidate = prefixCandidate {
+                    try? IOSCandidateCatalogPublication.shared.remove(candidate.source)
+                    try? IOSCandidateCatalogPublication.shared.acknowledgeClosed(epoch: prefixEpoch.uuidString, request: candidate.source.request)
+                }
                 if let hold = outerHold { _ = IOSMTUMeasurementGate.release(hold); outerHold = nil }
                 model.iosSpeedLabOwnership.finish(owner); model.objectWillChange.send()
                 return

@@ -82,6 +82,16 @@ final class RouterVPNNodeChainExecutionHost {
  func retainForRetirement(){};func releaseRetirement(){}
  func progress()->Data?{nil}
 }
+// The ordinary external fixture cannot acquire a prefix host. Its actual
+// implementation is compiled/executed by the whole-engine and prefix gates.
+final class RouterVPNNodeCandidatePrefixHost {
+ private init(){}
+ func close()throws{throw FixtureFailure.error}
+ func retainForRetirement(){fatalError("unexpected prefix retirement in external fixture")}
+ func releaseRetirement(){fatalError("unexpected prefix release in external fixture")}
+ func run(completion:(Error?)->Void){completion(FixtureFailure.error)}
+ func reply(operation:String,request:String,epoch:String,owner:String,prefix:String,candidate:String)->Data?{nil}
+}
 final class LibboxRouterHopMeasurement {func close()throws{Trace.shared.add("hop-close")};func networkChanged(){Trace.shared.add("hop-network")}}
 func LibboxRouterExternalCreateProof(_ server:LibboxCommandServer,_ source:String,_ capture:String,_ session:String,_ error:inout NSError?)->LibboxRouterExternalProofRequest? {
  server.request.source=source;server.request.capture=capture;server.request.session=session;return server.request

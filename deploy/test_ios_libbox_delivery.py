@@ -23,6 +23,8 @@ spec = importlib.util.spec_from_file_location('apple_crypto_boundary', ROOT / 'd
 CRYPTO = importlib.util.module_from_spec(spec); spec.loader.exec_module(CRYPTO)
 spec = importlib.util.spec_from_file_location('apple_execution_host_boundary', ROOT / 'deploy/ios_node_chain_execution_host_boundary.py')
 EXECUTION = importlib.util.module_from_spec(spec); spec.loader.exec_module(EXECUTION)
+spec = importlib.util.spec_from_file_location('apple_prefix_host_boundary', ROOT / 'deploy/ios_node_candidate_prefix_host_boundary.py')
+PREFIX = importlib.util.module_from_spec(spec); spec.loader.exec_module(PREFIX)
 LIBBOX = r'''
 import Foundation
 #if !canImport(ObjectiveC)
@@ -1604,6 +1606,7 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--chain-only',action='store_true')
     parser.add_argument('--execution-only',action='store_true')
+    parser.add_argument('--prefix-only',action='store_true')
     parser.add_argument('--shipping-only',action='store_true')
     requested=parser.parse_args()
     swift = shutil.which('swiftc')
@@ -1614,7 +1617,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='routervpn-libbox-delivery-') as tmp:
         tmp = Path(tmp)
         stub, harness = tmp/'Libbox.swift', tmp/'Harness.swift'
-        stub.write_text(LIBBOX + DNS.NATIVE + CANDIDATE_NATIVE + EXECUTION.NATIVE); harness.write_text(DNS.STORAGE + HARNESS.replace("    func activateImported(server:", EXECUTION.MTU_METHODS + "    func activateImported(server:", 1) .replace('        let chainText=', EXECUTION.TESTS + '        let chainText=', 1) + CANDIDATE_SOURCE + EXECUTION.SOURCE + EXECUTION.IPC_TYPES)
+        stub.write_text(LIBBOX + DNS.NATIVE + CANDIDATE_NATIVE + EXECUTION.NATIVE + PREFIX.NATIVE); harness.write_text(DNS.STORAGE + HARNESS.replace("    func activateImported(server:", EXECUTION.MTU_METHODS + "    func activateImported(server:", 1) .replace('        let chainText=', PREFIX.TESTS + EXECUTION.TESTS + '        let chainText=', 1) + CANDIDATE_SOURCE + EXECUTION.SOURCE + EXECUTION.IPC_TYPES + PREFIX.SOURCE)
         hop_types = (ROOT/'ios/RouterVPN/App/IOSHopMeasurements.swift').read_text().split('// HOP_RESULT_TYPES_BEGIN',1)[1].split('// HOP_RESULT_TYPES_END',1)[0]
         binding = tmp/'HopBinding.swift'; binding.write_text('import Foundation\n' + hop_types)
         lib = tmp/('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
@@ -1628,8 +1631,26 @@ def main():
             crypto = tmp/'CryptoKit.swift'; crypto.write_text(CRYPTO.LINUX_CRYPTO)
             subprocess.run([swift,'-swift-version','6','-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-lcrypto','-o',str(tmp/'libCryptoKit.so')],cwd=tmp,check=True,timeout=60)
             args += ['-lCryptoKit']
-        args += [str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionRegistry.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNTorPaddingReceipt.swift'), str(ROOT/'ios/RouterVPN/App/IOSCandidateCatalogPublication.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidateSession.swift')]
+        args += [str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionRegistry.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNTorPaddingReceipt.swift'), str(ROOT/'ios/RouterVPN/App/IOSCandidateCatalogPublication.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidateSession.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidatePrefixHost.swift')]
         subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(ENGINE),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
+        subprocess.run([str(tmp/'test'),'--prefix-only'],env=environment,check=True,timeout=25)
+        text=ENGINE.read_text()
+        for name,before,after,witness in (
+            ('prefix-pending-owner','            pendingNodeCandidatePrefixCleanup = prefixCleanup','            // omitted original prefix pending owner','prefix failed close retains original pending owner'),
+            ('prefix-retirement','        try RouterVPNNodeCandidatePrefixHost.requireAvailable()','        // omitted original prefix retirement gate','prefix pending native close blocks replacement'),
+        ):
+            if name=='prefix-retirement':
+                begin=text.index('    func start(files: [String: Data], strict: Bool, multihopMetadata:')
+                prefix,scope=text[:begin],text[begin:];assert scope.count(before)==1,name
+                changed=prefix+scope.replace(before,after,1)
+            else:
+                assert text.count(before)==1,name;changed=text.replace(before,after,1)
+            broken=tmp/(name+'.swift');broken.write_text(changed);binary=tmp/name
+            subprocess.run(args+[str(ROOT/'ios/RouterVPN/App/IOSMultihopStartLayer.swift'),str(broken),str(harness),'-o',str(binary)],check=True,timeout=90)
+            failed=subprocess.run([str(binary),'--prefix-only'],env=environment,capture_output=True,text=True,timeout=25)
+            assert failed.returncode!=0 and 'FAIL: '+witness in failed.stdout+failed.stderr,(name,(failed.stdout+failed.stderr)[-1500:])
+            print('Rejected prefix whole-engine defect mutation:',name)
+        if requested.prefix_only:return
         if requested.execution_only or not requested.chain_only:
             subprocess.run([str(tmp/'test'),'--execution-only'],env=environment,check=True,timeout=25)
             text=ENGINE.read_text()

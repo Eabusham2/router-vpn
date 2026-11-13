@@ -744,6 +744,17 @@ final class RouterVPNModel: ObservableObject {
                       let connectedAt = manager.connection.connectedDate else {
                     throw IOSRuntimeSelectionError.unsupportedMode("The connected tunnel did not provide its frozen session identity.")
                 }
+                if configuration[IOSNodeCandidatePrefixProviderCapture.key] != nil || configuration["engine"] as? String == IOSNodeCandidatePrefixProviderCapture.engine {
+                    // NE connected means only the isolated prefix worker is
+                    // prepared. No ordinary identity, telemetry or Last exists.
+                    connected = false; activeEngine = IOSNodeCandidatePrefixProviderCapture.engine; activeRawProfile = ""
+                    iosStrategyStatus = nil
+                    if !iosSpeedLabOwnership.active {
+                        tunnelTransitioning = true
+                        message = "A temporary prefix test needs cleanup. Disconnect to finish retiring it."
+                    }
+                    return
+                }
                 if configuration["strategy_catalog"] != nil {
                     connected = false
                     guard let session = manager.connection as? NETunnelProviderSession else {

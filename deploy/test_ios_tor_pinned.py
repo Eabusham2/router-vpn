@@ -67,6 +67,7 @@ def inputs() -> list[Path]:
     # they are not compiled by the graph-emitter source list above.
     extra = [Path(__file__).resolve(), TEMPLATE, PADDING_TEMPLATE, ROOT/'deploy/test_ios_tor_pinned_contract.py',
              TUN/'RouterVPNTorPaddingReceipt.swift', TUN/'RouterVPNLibboxEngine.swift',
+             TUN/'RouterVPNNodeCandidatePrefixHost.swift', ROOT/'deploy/ios_node_candidate_prefix_host_boundary.py',
              ROOT/'deploy/test_ios_libbox_delivery.py', ROOT/'ios/RouterVPN/prepare-libbox.sh',
              ROOT/'ios/RouterVPN/test_libbox_build_contract.py',
              ROOT/'deploy/test_ios_pq_selection.py', ROOT/'deploy/test_ios_wireguard_parser.py',

@@ -104,6 +104,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             completionHandler(libboxEngine?.candidateMeasurementRequest(operation: operation, request: request,
                 session: session, ownerRequest: ownerRequest, prefix: prefix, candidate: candidate)); return
         }
+        if messageData.count <= 1024,
+           let body = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
+           Set(body.keys) == Set(["operation", "request_id", "session_id", "owner_request", "prefix", "candidate"]),
+           let operation = body["operation"], ["prefix-candidate-open", "prefix-candidate-start", "prefix-candidate-status", "prefix-candidate-close"].contains(operation),
+           let request = body["request_id"], let session = body["session_id"], let owner = body["owner_request"],
+           let prefix = body["prefix"], let candidate = body["candidate"] {
+            completionHandler(libboxEngine?.candidatePrefixRequest(operation: operation, request: request,
+                session: session, owner: owner, prefix: prefix, candidate: candidate)); return
+        }
         if let request = RouterVPNNodeChainExecutionRegistry.Request.parse(messageData) {
             if request.operation == "ordered-execution-release" {
                 completionHandler(RouterVPNNodeChainExecutionRegistry.shared.release(request)); return
@@ -515,9 +524,21 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 // The two-node validator below checks the intersection of both
                 // LAN policies. Comparing only the exit here rejects a valid
                 // entry-LAN-Off / exit-LAN-On graph before that check can run.
-                guard (provider["engine"] as? String) == "multihop-libbox" ||
+                guard (provider["engine"] as? String) == "multihop-libbox" || (provider["engine"] as? String) == IOSNodeCandidatePrefixProviderCapture.engine ||
                     ((provider["engine"] as? String) == "external-libbox" && (provider["tor_entry_bundle"] != nil || provider["external_entry_bundle"] != nil)) ||
                     tunnelProtocol.excludeLocalNetworks == allowLAN else { throw tunnelError(5, "strict Apple kill switch LAN exclusion does not match the imported node policy") }
+            }
+
+            if provider[IOSNodeCandidatePrefixProviderCapture.key] != nil || provider["engine"] as? String == IOSNodeCandidatePrefixProviderCapture.engine {
+                guard !initialMTUHold.isEmpty,
+                      options?[IOSMultihopExecution.launchKey] == nil, options?[IOSMultihopExecution.startupLaunchKey] == nil,
+                      options?[RouterVPNNodeChainExecutionRegistry.restoreKey] == nil,
+                      options?[RouterVPNNodeChainExecutionRegistry.restoreOwnerKey] == nil,
+                      options?[RouterVPNNodeChainExecutionRegistry.lastKey] == nil,
+                      currentMAXGeneration(generation) else { throw IOSNodeCandidatePrefixCapture.issue() }
+                let input = try IOSNodeCandidatePrefixProviderCapture.reopen(provider)
+                try startCandidatePrefix(input, generation: generation, completionHandler: completionHandler)
+                return
             }
 
             let registry = RouterVPNNodeChainExecutionRegistry.shared
@@ -985,6 +1006,36 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 completionHandler(nil)
             }
         }
+        }
+    }
+
+    /// A separately captured temporary prefix never enables application/DNS
+    /// forwarding, normal MTU optimization, telemetry, or Last authority.
+    private func startCandidatePrefix(_ input: IOSNodeCandidatePrefixProviderCapture, generation: UUID,
+                                      completionHandler: @escaping (Error?) -> Void) throws {
+        var adopted = false
+        defer { if !adopted { try? input.capture.native.close() } }
+        guard currentMAXGeneration(generation), !initialMTUHold.isEmpty,
+              let proto = protocolConfiguration as? NETunnelProviderProtocol,
+              proto.includeAllNetworks == input.capture.strict, proto.enforceRoutes == input.capture.strict,
+              proto.excludeLocalNetworks == (input.capture.strict && input.capture.homeLANAccess) else { throw IOSNodeCandidatePrefixCapture.issue() }
+        let engine = RouterVPNLibboxEngine(tunnel: self)
+        try engine.prepareMTUHold(initialMTUHold)
+        libboxEngine = engine
+        do { try engine.start(candidatePrefix: input); adopted = true }
+        catch {
+            engine.stop(); adopted = engine.ownsNodeChain
+            if !adopted, libboxEngine === engine { libboxEngine = nil }
+            throw error
+        }
+        engine.completeCandidatePrefix { [weak self] failure in
+            guard let self, self.libboxEngine === engine, self.currentMAXGeneration(generation) else {
+                engine.stop(); completionHandler(IOSNodeCandidatePrefixCapture.issue()); return
+            }
+            if let failure { engine.stop(); completionHandler(failure); return }
+            do { try input.requireCurrent() }
+            catch { engine.stop(); completionHandler(error); return }
+            completionHandler(nil)
         }
     }
 

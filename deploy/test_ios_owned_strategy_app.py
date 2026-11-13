@@ -233,6 +233,8 @@ struct FixtureNodeChainBoundary {
     let plan=Plan(),members:[Member]=[],launchInput="",startupTimeout:TimeInterval=0,strict=false,homeLANAccess=false
 }
 enum IOSNodeChainProviderCapture {static let key="nodeChainSource"}
+// Prefix source decoding is covered by its real shared-compiler/provider gate.
+enum IOSNodeCandidatePrefixProviderCapture {static let key="candidatePrefixSource",engine="candidate-prefix-libbox"}
 @MainActor final class RouterVPNModel {
     func captureIOSNodeChain(_ bundle:ClientBundle)throws->FixtureNodeChainBoundary {throw IOSStrategyWire.failure("Separate native chain fixture")}
     func requireCurrentIOSNodeChain(_ input:String,selected:ClientBundle)throws {throw IOSStrategyWire.failure("Separate native chain fixture")}

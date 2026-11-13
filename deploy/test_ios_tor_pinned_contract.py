@@ -412,13 +412,17 @@ class AppleTorNativeGate(unittest.TestCase):
                      'mobile/routervpn_tor_ios_padding_graph_test.go.tmpl',
                      'ios/RouterVPN/PacketTunnel/RouterVPNTorPaddingReceipt.swift',
                      'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift',
+                     'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidatePrefixHost.swift',
+                     'deploy/ios_node_candidate_prefix_host_boundary.py',
                      'deploy/test_ios_libbox_delivery.py',
                      'deploy/native_tor_graph_host.py', 'mobile/torpack/backend.go.tmpl', 'mobile/torpt/SOURCE_LOCK.json'):
             changed = ROOT/name; self.assertIn(changed, paths)
             with mock.patch.object(Path, 'read_bytes', lambda path: original(path)+(b'changed' if path == changed else b'')):
                 self.assertNotEqual(before, GATE.digest())
         for name in ('ios/RouterVPN/PacketTunnel/RouterVPNTorPaddingReceipt.swift',
-                     'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift', 'deploy/test_ios_libbox_delivery.py'):
+                     'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift', 'deploy/test_ios_libbox_delivery.py',
+                     'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidatePrefixHost.swift',
+                     'deploy/ios_node_candidate_prefix_host_boundary.py'):
             self.assertNotIn(ROOT/name, GATE.host_sources(), 'separate delivery gate was falsely presented as graph-emitter source')
         with mock.patch.object(GATE.HOST, 'environment', return_value={}) as selected:
             GATE.host_environment('go', Path('/host/libroutervpn_tor.so'), '/llvm/clang')

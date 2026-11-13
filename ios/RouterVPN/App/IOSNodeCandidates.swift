@@ -110,6 +110,8 @@ private final class IOSCandidateReply: @unchecked Sendable {
     @Published private(set) var running = false
     @Published private(set) var prefixes: [IOSNodeCandidatePrefix] = []
     @Published var selectedPrefix = 0
+    @Published private(set) var independentPrefixes = Set<Int>()
+    var canTestIndependentPrefix: Bool { !running && independentPrefixes.contains(selectedPrefix) }
     @Published private(set) var scores: [Score] = []
     @Published private(set) var text = "Choose a complete saved Local path to compare TCP candidates."
     @Published private(set) var preparing = false
@@ -159,12 +161,15 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 let capture = try model.captureIOSNodeChain(bundle)
                 defer { try? capture.plan.close() }
                 _ = try IOSRuntimeSelector.selectNodeChain(capture)
+                independentPrefixes = Set(capture.members.indices.filter { position in
+                    position < capture.members.count - 1 && capture.members.prefix(position + 1).allSatisfy { ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }
+                })
                 prefixes = capture.members.enumerated().map { position, member in
                     IOSNodeCandidatePrefix(position: position, profile_id: member.id,
                         node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode)
                 }.filter(\.supported)
                 if !prefixes.contains(where: { $0.position == selectedPrefix }) { selectedPrefix = prefixes.first?.position ?? 0 }
-                text = "Test the complete saved Local path temporarily. It will return to Disconnected before future-profile choices appear."
+                text = "Test only the selected packet prefix, or test the complete saved Local path. Both return to Disconnected before future-profile choices appear."
                 return
             }
             let binding = try await IOSMTUControl.capture(model), info = try await information(binding)
@@ -174,13 +179,15 @@ private final class IOSCandidateReply: @unchecked Sendable {
             text = prefixes.isEmpty ? "This path has no supported packet prefix for TCP timing." : "Choose an original prefix. Each eligible candidate receives 50 fresh TCP connections."
         } catch { prefixes = []; text = "The original ordered prefix is unavailable." }
     }
-    func start(model: RouterVPNModel) {
-        guard !running, Self.supported(model), prefixes.contains(where: { $0.position == selectedPrefix }) else { return }
+    func startPrefix(model: RouterVPNModel) { start(model: model, prefixOnly: true) }
+    func start(model: RouterVPNModel, prefixOnly: Bool = false) {
+        guard !running, Self.supported(model), prefixes.contains(where: { $0.position == selectedPrefix }),
+              !prefixOnly || (!model.connected && canTestIndependentPrefix) else { return }
+        let position = selectedPrefix, owner = Self.nonce(), round = UUID()
         let temporary: IOSNodeCandidatePreparation?
-        do { temporary = model.connected ? nil : try IOSNodeCandidatePreparation.reserve(model: model) { [weak self] in self?.cancel() } }
+        do { temporary = model.connected ? nil : try IOSNodeCandidatePreparation.reserve(model: model, prefixPosition: prefixOnly ? position : nil, request: prefixOnly ? owner : nil) { [weak self] in self?.cancel() } }
         catch { text = "The saved Local path could not acquire its temporary test owner."; return }
         preparation = temporary
-        let position = selectedPrefix, owner = Self.nonce(), round = UUID()
         generation = round; prepared = nil; proposalDescription = ""; profileMessage = ""
         cancelled = false; running = true; scores = []; text = "Capturing original saved candidate sources…"
         // The task owns cleanup even if its view disappears before this first
@@ -193,6 +200,12 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 temporary?.closeResults(); self.preparation = nil
             }
             await IOSSpeedLabContext.$owner.withValue(temporary?.owner) {
+            if let temporary, temporary.prefixCapture != nil {
+                do { try await self.runPrefix(temporary, model: model, position: position, owner: owner, round: round) }
+                catch { self.scores = []; self.text = "Prefix comparison closed or discarded because its original source, request or physical path changed." }
+                await Task { @MainActor in await temporary.retire() }.value
+                return
+            }
             var detachedScores: [Score] = [], detachedProposals: [UUID: IOSNodeCandidateProposal] = [:], detachedFailures: [UUID: String] = [:]
             do {
                 if let temporary { try await temporary.start() }
@@ -350,6 +363,94 @@ private final class IOSCandidateReply: @unchecked Sendable {
             }
         }
     }
+    private func runPrefix(_ temporary: IOSNodeCandidatePreparation, model: RouterVPNModel,
+                           position: Int, owner: String, round: UUID) async throws {
+        try await temporary.start()
+        guard let prefix = temporary.prefixCapture, let capture = temporary.prefixCandidate,
+              let binding = temporary.prefixBinding, capture.source.request == owner else { throw CancellationError() }
+        let owned = try IOSNodeCandidateTransaction(epoch: temporary.prefixEpoch.uuidString, owner: owner,
+            send: { op, request, candidate, selected in
+                try await self.send(binding.connection, operation: "prefix-" + op, request: request,
+                    epoch: temporary.prefixEpoch.uuidString, owner: owner, candidate: candidate, prefix: selected)
+            }, recovered: { IOSCandidateCatalogPublication.shared.closed(epoch: temporary.prefixEpoch.uuidString, request: owner) })
+        transaction = owned; try temporary.bind(owned)
+        let current: @MainActor @Sendable () throws -> Void = {
+            guard self.generation == round, !self.cancelled, !Task.isCancelled,
+                  self.selectedPrefix == position else { throw CancellationError() }
+            try temporary.requireLive(); try capture.requireCurrent()
+        }
+        let metadata = try await owned.open(prefix: position)
+        try current()
+        try metadata.validate(prefix: capture.prefix, source: prefix.sourceSHA256, config: prefix.configSHA256,
+            ids: Set(capture.rows.filter { !$0.input.isEmpty }.map(\.id)))
+        guard metadata.capture_sha256 == prefix.captureSHA256 else { throw IOSNodeCandidateResult.issue() }
+        var detached: [Score] = [], proposals: [UUID: IOSNodeCandidateProposal] = [:], failures: [UUID: String] = [:]
+        var last = ""
+        for target in metadata.targets {
+            try current()
+            guard let row = capture.rows.first(where: { $0.id == target.id }) else { throw IOSNodeCandidateResult.issue() }
+            let request = Self.nonce(); last = request
+            text = "50 TCP connections through the selected prefix: \(row.name.prefix(100)). The saved suffix remains unused."
+            let raw = try await owned.measure(request: request, candidate: target.id, current: current)
+            try current()
+            if let receipt = try? JSONDecoder().decode(IOSNodeCandidateResult.self, from: raw),
+               let score = try? receipt.score(request: request, target: target, metadata: metadata,
+                   now: Int64(Date().timeIntervalSince1970 * 1000)) {
+                detached.append(Score(id: target.id, name: String(row.name.prefix(100)), receipt: receipt, benchmark: score))
+            }
+        }
+        var admitted: [Score] = []
+        for score in detached {
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            if now < score.receipt.measured_at || now >= score.receipt.expires_at { continue }
+            try current(); try await owned.observe(request: last, metadata: metadata); try current()
+            guard let target = metadata.targets.first(where: { $0.id == score.id }),
+                  let row = capture.rows.first(where: { $0.id == score.id }) else { throw IOSNodeCandidateResult.issue() }
+            _ = try score.receipt.score(request: score.receipt.request_id, target: target, metadata: metadata,
+                now: Int64(Date().timeIntervalSince1970 * 1000))
+            let original = try temporary.originalForProposal()
+            defer { try? original.plan.close() }
+            guard original.sourceSHA256 == temporary.sourceSHA256, original.configSHA256 == temporary.configSHA256 else { throw IOSNodeCandidateResult.issue() }
+            do { proposals[score.token] = try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
+                position: position, candidateID: score.id, measuredInput: row.input) }
+            catch { try current(); failures[score.token] = error.localizedDescription }
+            try current()
+            try temporary.seal(token: score.token, measured: score.receipt.measured_at, expires: score.receipt.expires_at)
+            admitted.append(score)
+        }
+        text = "Closing the prefix worker and original temporary tunnel before showing choices…"
+        await Task { @MainActor in await temporary.retire() }.value
+        guard generation == round, !cancelled, !Task.isCancelled else { throw CancellationError() }
+        scores = admitted; prune()
+        for score in scores { try temporary.requireSaved(token: score.token) }
+        let savedProposals = proposals, savedFailures = failures
+        proposalAction = { score in
+            try temporary.requireSaved(token: score.token)
+            guard self.scores.contains(where: { $0.token == score.token }) else { throw IOSNodeCandidateResult.issue() }
+            guard let proposal = savedProposals[score.token] else {
+                throw NSError(domain: "RouterVPN.PrefixCandidate", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: savedFailures[score.token] ?? "This timed source cannot form a supported future connection."])
+            }
+            return proposal
+        }
+        saveAction = { score, proposal, name in
+            try temporary.requireSaved(token: score.token)
+            let selected = self.proposalGeneration
+            guard self.prepared?.score.token == score.token,
+                  savedProposals[score.token]?.profiles == proposal.profiles else { throw IOSNodeCandidateResult.issue() }
+            return try IOSCandidateConnectionProfiles.save(name: name, profiles: proposal.profiles) {
+                try temporary.requireSaved(token: score.token)
+                guard selected == self.proposalGeneration, self.prepared?.score.token == score.token else { throw IOSNodeCandidateResult.issue() }
+            }
+        }
+        text = "Disconnected. Prefix-only results expire 120 seconds after completion. Save explicitly to create a future profile."
+        while !scores.isEmpty {
+            prune()
+            for score in scores { try temporary.requireSaved(token: score.token) }
+            try await Task.sleep(for: .seconds(1))
+        }
+    }
+
     func prepare(_ score: Score) {
         guard canPrepare, let action = proposalAction else { return }
         let selected = UUID(); proposalGeneration = selected
@@ -407,11 +508,17 @@ struct IOSNodeCandidatesCard: View {
             Label("Candidate TCP connection times", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
             Text(model.connected && !model.iosCandidateTesting ?
                  "Compares original literal Shadowsocks 2022 endpoints through a retained WG/AWG prefix. Each score is the 10% trimmed mean of 50 successful TCP handshakes. This does not measure ICMP latency, authenticate the candidate proxy, or change your active route." :
-                 "Temporarily starts the complete saved Local path and measures 50 TCP connections per supported candidate. The test returns to Disconnected before you can save a future profile. Timings do not authenticate a candidate proxy or select a new connection.")
+                 "Choose a selected-prefix test or a complete saved Local path test. Each measures 50 TCP connections per supported candidate and returns to Disconnected before future-profile choices. Timings do not authenticate a candidate proxy or select a new connection.")
                 .font(.caption).foregroundStyle(.secondary)
             Picker("Retained prefix", selection: $probe.selectedPrefix) {
                 ForEach(probe.prefixes, id: \.position) { prefix in Text("\(prefix.position + 1) • \(prefix.profile_id) • \(prefix.mode)").tag(prefix.position) }
             }.disabled(probe.running || otherTestRunning)
+            if !model.connected && !probe.running {
+                Button("Test selected prefix only") { probe.startPrefix(model: model) }
+                    .disabled(otherTestRunning || !IOSNodeCandidates.supported(model) || !probe.canTestIndependentPrefix)
+                Text("Starts only the selected WG/AWG prefix. The saved suffix, application traffic and DNS stay closed; only the 50-connection candidate worker can use the prepared prefix.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Button(probe.running ? "Close candidate comparison" : "Compare saved candidates") {
                 if probe.running { probe.cancel() } else { probe.start(model: model) }
             }.disabled(otherTestRunning || (!probe.running && (!IOSNodeCandidates.supported(model) || probe.prefixes.isEmpty)))

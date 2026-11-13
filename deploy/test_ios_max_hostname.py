@@ -316,8 +316,33 @@ final class PrestartEngine {let trace:PrestartTrace;var ownsNodeChain:Bool{false
 typealias RouterVPNLibboxEngine=PrestartEngine
 struct IOSNodeChainCapture {static func issue(_ text:String)->NSError{NSError(domain:"SeparateOrderedSourceBoundary",code:1,userInfo:[NSLocalizedDescriptionKey:text])}}
 enum IOSNodeChainProviderCapture {
+ static let executionKey="nodeChainExecutionSource"
  static func requested(_ provider:[String:Any],profile:[String:Any])->Bool{provider["nodeChainSource"] != nil || profile["multihop_nodes"] != nil}
  static func reopen(_ provider:[String:Any])throws->IOSNodeChainCapture{throw IOSNodeChainCapture.issue("Ordered source runs in its separate shipping compiler and provider fixture")}
+ static func reopenExecution(_ provider:[String:Any],lastRecord:String?)throws->IOSNodeChainExecutionCapture{throw IOSNodeChainCapture.issue("Ordered execution source has its separate compiler/provider gate")}
+}
+// Keep the actual process-owned launch registry in this whole-dispatch gate.
+// MAX cannot construct an ordered native capsule through these boundaries.
+final class IOSNodeChainExecutionCapture {
+ private init(){}
+ var sourceSHA256:String{fatalError("unexpected ordered source")};var configSHA256:String{fatalError("unexpected ordered config")}
+ var ordinaryLaunchInput:String{fatalError("unexpected ordered launch")};var finalProfile:[String:Any]{fatalError("unexpected ordered profile")}
+ final class Restoration {
+  var selected:String{fatalError("unexpected ordered restoration")}
+  func makeCapture(ordinaryInput:String,selectedProfile:[String:Any])throws->IOSNodeChainExecutionCapture{throw IOSNodeChainCapture.issue("unexpected ordered restoration")}
+ }
+ func requireCurrent()throws{throw IOSNodeChainCapture.issue("unexpected ordered source")}
+ func close()throws{throw IOSNodeChainCapture.issue("unexpected ordered native close")}
+}
+final class RouterVPNNodeChainExecutionHost {
+ var capture:IOSNodeChainExecutionCapture{fatalError("unexpected ordered host")}
+ func captureRestoration()throws->(IOSNodeChainExecutionCapture.Restoration,UUID){throw IOSNodeChainCapture.issue("unexpected ordered host")}
+ func validateRestoration(_ observation:UUID,execution:String)throws{throw IOSNodeChainCapture.issue("unexpected ordered host")}
+}
+struct IOSNodeCandidatePrefixCapture {static func issue()->NSError{IOSNodeChainCapture.issue("Prefix source has its separate compiler/provider gate")}}
+enum IOSNodeCandidatePrefixProviderCapture {
+ static let key="candidatePrefixSource",engine="candidate-prefix-libbox"
+ static func reopen(_ provider:[String:Any])throws->Self{throw IOSNodeCandidatePrefixCapture.issue()}
 }
 final class PrestartAdapter {func stop(_ complete:(Error?)->Void){complete(nil)}}
 final class PrestartStrategy {let currentEpoch="test-epoch";func stop(){}}
@@ -365,6 +390,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
  private func startLibbox(provider:[String:Any],root:[String:Any],selectedProfile:[String:Any],strict:Bool,completionHandler:@escaping(Error?)->Void)throws{try native(provider,completionHandler)}
  private func startMultihop(provider:[String:Any],root:[String:Any],selectedProfile:[String:Any],completionHandler:@escaping(Error?)->Void)throws{try native(provider,completionHandler)}
  private func startNodeChain(_ capture:IOSNodeChainCapture,generation:UUID,completionHandler:@escaping(Error?)->Void)throws{throw IOSNodeChainCapture.issue("Ordered startup must not fabricate MAX proof")}
+ private func startCandidatePrefix(_ capture:IOSNodeCandidatePrefixProviderCapture,generation:UUID,completionHandler:@escaping(Error?)->Void)throws{throw IOSNodeCandidatePrefixCapture.issue()}
+ private func startOrderedExecution(_ capture:IOSNodeChainExecutionCapture,generation:UUID,restored:RouterVPNNodeChainExecutionRegistry.Restored?=nil,completionHandler:@escaping(Error?)->Void)throws{throw IOSNodeChainCapture.issue("Ordered execution cannot grant MAX startup proof")}
  private func startExternalLibbox(provider:[String:Any],selectedProfile:[String:Any],strict:Bool,completionHandler:@escaping(Error?)->Void)throws{try native(provider,completionHandler)}
  private func beginProviderStrategy(provider:[String:Any],bundleData:Data,root:[String:Any],selectedProfile:[String:Any],strict:Bool,maxSources:[String:String],completionHandler:@escaping(Error?)->Void)throws{throw tunnelError(1,"Strategies execute in their separate actual-driver gate")}
 __PRODUCTION__
@@ -545,7 +572,7 @@ def main():
         run(['swiftc', '-swift-version', '6', '-I', str(work), '-L', str(work), *libraries,
              '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSNativePQProfile.swift'),
               str(APP / 'IOSMultihopStartLayer.swift'), str(APP / 'IOSMultihopExecution.swift'), str(TUN / 'RouterVPNMAXDNSOwner.swift'),
-             str(TUN / 'RouterVPNMAXPreparation.swift'), str(TUN / 'RouterVPNNodeChainStop.swift'), str(tests), '-o', str(work / 'tests')])
+             str(TUN / 'RouterVPNMAXPreparation.swift'), str(TUN / 'RouterVPNNodeChainStop.swift'), str(TUN / 'RouterVPNNodeChainExecutionRegistry.swift'), str(tests), '-o', str(work / 'tests')])
         run([str(work / 'tests'), str(work / 'compiler'), str(fixtures), str(multihop)], timeout=150)
 
 

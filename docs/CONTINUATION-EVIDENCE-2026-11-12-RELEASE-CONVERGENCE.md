@@ -141,9 +141,10 @@ access:
   shipping Android/iOS source and the desktop API/dialog integration described
   below. It uses the captured native graph, proves its existing final node,
   performs routed candidate timings and retires the path before review.
-  Prefix-only preparation, usable when the old final node is unreachable,
-  remains a separate native integration requirement; ordinary WireGuard or
-  Android Network calls cannot substitute for that owner. Native acceptance
+  Independent selected-prefix preparation, usable when the old final node is
+  unreachable, now has the iOS app/provider/engine integration recorded below.
+  Android and desktop activation remain in progress; ordinary WireGuard or
+  Android Network calls cannot substitute for their captured native owners. Native acceptance
   of each new platform flow must be recorded separately from these source tests.
 - Ordered graphs still cover a bounded set of WG/AWG prefixes and SS finals,
   with one literal, unlayered SS2022 imported middle in the three-member
@@ -1395,6 +1396,14 @@ The Android service, session and temporary runtime now retain a distinct selecte
 The catalog can now capture immutable saved source inventory before permission or native startup. An observed change to the original source permanently invalidates its saved authority, including when those bytes are subsequently restored. This fixes a real change-away/change-back gap: an earlier original-source exception could bypass the separate catalog-signature invalidation latch.
 
 Validation used the actual Java service/session/runtime composition with explicit OS and native boundaries: prefix host 77 checks and five compiled controls; MTU adapter 74 and 12; ordinary runtime regression 342 and 24; complete saved temporary runtime 164 and ten; process supervisor 42 and seven; catalog and measurement 167 and 15. The original-source invalidation omission control was rejected. The actual service typecheck and four controls passed, along with 12 mandatory-workflow checks. Helper, measurement and user-interface activation are deliberately a subsequent integration unit; this foundation does not claim new encrypted-host or physical-device acceptance.
+
+## iPhone and iPad independent selected-prefix testing flow
+
+The native app now offers an explicit selected-prefix test alongside complete saved Local testing. For an eligible saved graph it captures the full original source and candidate inventory before preference or permission operations, starts only the selected WG/AWG packet prefix, proves that prefix through the original PacketTunnel engine, and measures 50 TCP connections per eligible candidate. The saved suffix need not connect. Application and DNS ingress stay closed, and this prepared NetworkExtension session never grants ordinary Connected, Last, telemetry or complete-path MTU authority.
+
+The provider uses the separately captured prefix binding and original native host. The candidate worker must join, the original native VPN must acknowledge DOWN, and the idle configuration must be restored before candidate choices appear. A future profile preserves original full-source provenance and requires explicit Save with a final source/owner/expiry check. Failed native close retains the original cleanup owner and MTU hold. Existing connected-path and complete saved Local testing remain separate actions.
+
+Focused executable validation passed: launch/status 72 checks with six compiled controls; owner/controller/50-sample/Save flow 36 with five; shipping provider delivery and Stop 29 with four; shipping engine construction and actual host 25 with three. Regressions passed for the complete preparation owner (26 with seven), complete controller flow (28 with three), and ordered provider (48 with three). The portable runtime contract passed, including SIP003 191 checks, provenance 34 with four controls, and 13 runner checks. The actual entire shipping engine and actual prefix host then passed 28 integrated prefix checks, the original 41 ordered execution and 30 ordered-chain checks, the ordinary 1,453-check baseline and four original special closure invocations. All 22 compiled engine negative controls passed, including retained prefix ownership and blocked replacement after failed close. The affected MAX whole-dispatch fixture now composes the actual process-owned ordered registry and passed 24 real Go launch graphs and 280 source/DNS/lifetime checks; ordinary external execution passed 131 checks and owned strategies passed 196 plus eight controls. Twelve source-digest tests bind the new host and fixture helper into the existing mandatory Tor delivery evidence. All six changed production Swift files parsed; Python compilation and diff checks passed. These tests explicitly double NetworkExtension/OS boundaries. Actual Xcode app/extension compilation and physical iPhone/iPad networking remain required release and device evidence.
 
 ## Physical and private acceptance
 
