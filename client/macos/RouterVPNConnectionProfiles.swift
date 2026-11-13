@@ -8,7 +8,18 @@ private let macConnectionMultihopEnabledKey = "routervpn.unified.multihop-enable
 
 enum RouterVPNOrderedNodes {
     static let prefixModes = ["wg", "awg2-fast", "awg2-strong"]
-    static let editorModes = prefixModes + ["shadowsocks"]
+    static let finalModes = ["shadowsocks", "hysteria2"]
+    static let editorModes = prefixModes + finalModes
+    static func finalProfile(_ profile: [String: Any], mode: String) -> Bool {
+        guard finalModes.contains(mode), profile["external"] == nil else { return false }
+        if let kind = profile["node_kind"] {
+            guard let kind = kind as? String, ["", "router-vpn"].contains(kind) else { return false }
+        }
+        if mode == "shadowsocks" { return true }
+        guard let raw = profile["start_layer"] else { return true }
+        guard let layer = raw as? String else { return false }
+        return layer.isEmpty || layer == "off"
+    }
     static func importedMiddle(_ profile: [String: Any]) -> Bool {
         guard profile["node_kind"] as? String == "external", let value = (profile["external"] as? [String: Any])?["ordered_middle_supported"] as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else { return false }
         return value.boolValue
@@ -19,6 +30,7 @@ enum RouterVPNOrderedNodes {
         case "awg2-fast": return "AWG2 Fast"
         case "awg2-strong": return "AWG2 Strong"
         case "shadowsocks": return "Shadowsocks 2022"
+        case "hysteria2": return "Hysteria2"
         default: return "Unknown saved transport"
         }
     }
@@ -35,8 +47,8 @@ enum RouterVPNOrderedNodes {
                   id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
                   seen.insert(id).inserted,
                   let mode = row["mode"],
-                  position == rows.count - 1 ? mode == "shadowsocks" : prefixModes.contains(mode) || (rows.count == 3 && position == 1 && mode == "shadowsocks") else {
-                throw issue("Choose paired WireGuard or AWG2 prefixes, optionally one imported SS2022 middle in a three-node path, and a paired Shadowsocks 2022 exit.")
+                  position == rows.count - 1 ? finalModes.contains(mode) : prefixModes.contains(mode) || (rows.count == 3 && position == 1 && mode == "shadowsocks" && rows.last?["mode"] == "shadowsocks") else {
+                throw issue("Choose paired WireGuard or AWG2 prefixes and a paired Shadowsocks 2022 or unlayered Hysteria2 exit. An imported SS2022 middle requires a three-node path ending in Shadowsocks 2022.")
             }
         }
         guard !control.isEmpty, rows.last?["id"] == control else {
@@ -57,7 +69,10 @@ enum RouterVPNOrderedNodes {
             let matches = profiles.filter { $0["id"] as? String == id }
             guard matches.count == 1 else { throw issue("An ordered source is missing.") }
             let imported = importedMiddle(matches[0])
-            guard imported ? rows.count == 3 && position == 1 && row["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!)) else { throw issue("The ordered source kind or position changed.") }
+            guard imported ? rows.count == 3 && position == 1 && row["mode"] == "shadowsocks" && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!)) else { throw issue("The ordered source kind or position changed.") }
+            if position == rows.count - 1 {
+                guard finalProfile(matches[0], mode: row["mode"]!) else { throw issue("Choose a paired final transport supported by its captured settings. Hysteria2 requires StartLayer Off.") }
+            }
             guard
                   let token = selection.profileTokens[id], token.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
                   matches[0]["profile_token"] as? String == token else {
@@ -92,6 +107,8 @@ struct RouterVPNOrderedNodeDraft {
     let tokens: [String: String]
     let candidates: [String]
     let importedIDs: Set<String>
+    let finalModes: [String]
+    private(set) var finalMode: String
     private(set) var prefixes: [String]
     private(set) var modes: [String]
 
@@ -114,9 +131,11 @@ struct RouterVPNOrderedNodeDraft {
         guard let selectedToken = selection.profileTokens[control], tokens[control] == selectedToken, !importedIDs.contains(control) else {
             throw RouterVPNOrderedNodes.issue("Select the linked final exit before opening the ordered editor.")
         }
+        guard let finalProfile = catalog.first(where: { $0["id"] as? String == selection.selectedNodeID }) else { throw RouterVPNOrderedNodes.issue("The selected final source is missing.") }
+        finalModes = RouterVPNOrderedNodes.finalModes.filter { RouterVPNOrderedNodes.finalProfile(finalProfile, mode: $0) }
         self.names = names; self.tokens = tokens; self.importedIDs = importedIDs
         candidates = names.keys.filter { $0 != selection.selectedNodeID }.sorted()
-        if selection.orderedNodes.isEmpty { prefixes = []; modes = [] }
+        if selection.orderedNodes.isEmpty { prefixes = []; modes = []; finalMode = "shadowsocks" }
         else {
             let nodes = try RouterVPNOrderedNodes.decode(selection.orderedNodes, control: control)
             guard nodes.allSatisfy({ tokens[$0["id"]!] == selection.profileTokens[$0["id"]!] }) else {
@@ -124,21 +143,30 @@ struct RouterVPNOrderedNodeDraft {
             }
             prefixes = nodes.dropLast().map { $0["id"]! }
             modes = nodes.dropLast().map { $0["mode"]! }
+            finalMode = nodes.last!["mode"]!
         }
+        guard finalModes.contains(finalMode) else { throw RouterVPNOrderedNodes.issue("The saved final transport no longer matches its paired source settings.") }
     }
-    var nodes: [[String: String]] { prefixes.enumerated().map { ["id": $0.element, "mode": modes[$0.offset]] } + [["id": control, "mode": "shadowsocks"]] }
+    var nodes: [[String: String]] { prefixes.enumerated().map { ["id": $0.element, "mode": modes[$0.offset]] } + [["id": control, "mode": finalMode]] }
+    func allowedModes(at index: Int) -> [String] {
+        if prefixes.indices.contains(index) { return importedIDs.contains(prefixes[index]) ? ["shadowsocks"] : RouterVPNOrderedNodes.prefixModes }
+        if index == prefixes.count { return finalModes.filter { $0 == "shadowsocks" || !modes.contains("shadowsocks") } }
+        return []
+    }
     mutating func add(_ id: String) throws {
-        guard candidates.contains(id), !prefixes.contains(id), prefixes.count < 7 else {
+        guard candidates.contains(id), !prefixes.contains(id), prefixes.count < 7,
+              !importedIDs.contains(id) || finalMode == "shadowsocks" else {
             throw RouterVPNOrderedNodes.issue("Choose a different entry or hop. The path supports up to eight nodes.")
         }
         prefixes.append(id)
         modes.append(importedIDs.contains(id) ? "shadowsocks" : "wg")
     }
     mutating func chooseMode(_ mode: String, at index: Int) throws {
-        guard prefixes.indices.contains(index), importedIDs.contains(prefixes[index]) ? mode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(mode) else {
-            throw RouterVPNOrderedNodes.issue("Choose WireGuard, AWG2 Fast or AWG2 Strong for an entry or hop. The final exit stays Shadowsocks 2022.")
+        guard allowedModes(at: index).contains(mode) else {
+            throw RouterVPNOrderedNodes.issue("Choose a supported transport for this captured node. Hysteria2 requires a paired final with StartLayer Off and paired WireGuard or AWG2 prefixes.")
         }
-        modes[index] = mode
+        if index == prefixes.count { finalMode = mode }
+        else { modes[index] = mode }
     }
     mutating func move(_ index: Int, by offset: Int) throws {
         guard [-1, 1].contains(offset), prefixes.indices.contains(index), prefixes.indices.contains(index + offset) else {
@@ -155,7 +183,7 @@ struct RouterVPNOrderedNodeDraft {
     func selection() throws -> RouterVPNConnectionProfileSelection {
         let ordered = try RouterVPNOrderedNodes.decode(nodes, control: control)
         for (index, id) in prefixes.enumerated() {
-            guard importedIDs.contains(id) ? ordered.count == 3 && index == 1 && modes[index] == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("An imported SS2022 member requires one middle position between a paired entry and final.") }
+            guard importedIDs.contains(id) ? ordered.count == 3 && index == 1 && modes[index] == "shadowsocks" && finalMode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("An imported SS2022 member requires one middle position between a paired entry and final.") }
         }
         return RouterVPNConnectionProfileSelection(selectedNodeID: control, multihopEnabled: true, entryMode: "",
             execution: "local", profileTokens: tokens.filter { key, _ in ordered.contains { $0["id"] == key } }, orderedNodes: ordered)
@@ -216,8 +244,9 @@ extension ProductWindowController {
             throw RouterVPNOrderedNodes.issue("The selected exit changed while the path was checked.")
         }
         adoptLoadedConnectionProfileSelection(selection)
-        UserDefaults.standard.set("shadowsocks", forKey: macConnectionModeKey)
-        refreshUnifiedModeMenu(preferred: "shadowsocks")
+        let mode = selection.orderedNodes.last!["mode"]!
+        UserDefaults.standard.set(mode, forKey: macConnectionModeKey)
+        refreshUnifiedModeMenu(preferred: mode)
     }
 
     func clearOrderedNodeDraft() throws {
@@ -406,7 +435,7 @@ extension ProductWindowController {
             selection.orderedNodes = try RouterVPNOrderedNodes.decode(raw, control: selection.selectedNodeID)
             guard !external, selection.multihopEnabled, selection.execution == "local",
                   selection.entryID.isEmpty, selection.exitID.isEmpty, selection.entryMode == "", selection.exitMode.isEmpty,
-                  fromCatalog || stored?["mode"] as? String == "shadowsocks" else {
+                  fromCatalog || (stored?["mode"] as? String == selection.orderedNodes.last?["mode"] && payload["mode"] as? String == selection.orderedNodes.last?["mode"]) else {
                 throw RouterVPNOrderedNodes.issue("The loaded ordered path mixes an independent entry, exit or execution.")
             }
             referenced.formUnion(selection.orderedNodes.compactMap { $0["id"] })
@@ -494,6 +523,10 @@ extension ProductWindowController {
                 payload["multihop_nodes"] = raw; payload["selected_node_id"] = selected
                 payload["profile_tokens"] = tokens.filter { referenced.contains($0.key) }
                 selection = try validatedLoadedConnectionProfileSelection(payload, fromCatalog: true)
+                _ = try RouterVPNOrderedNodes.connectBody(selection, current: ["selected_id": selected, "profiles": nodes])
+                let mode = selection.orderedNodes.last!["mode"]!
+                UserDefaults.standard.set(mode, forKey: macConnectionModeKey)
+                refreshUnifiedModeMenu(preferred: mode)
                 UserDefaults.standard.set(selection.multihopEnabled, forKey: macConnectionMultihopEnabledKey)
             }
             selection.nodeDefaultsPending = false
@@ -689,7 +722,7 @@ extension ProductWindowController {
         try requireResolvedConnectionProfileSelection()
         let selectedPath = captureConnectionProfileSelection()
         if selectedPath.multihopEnabled && !selectedPath.orderedNodes.isEmpty {
-            var body: [String: Any] = ["name": name, "mode": "shadowsocks", "custom_layers": [String](),
+            var body: [String: Any] = ["name": name, "mode": selectedPath.orderedNodes.last!["mode"]!, "custom_layers": [String](),
                 "multihop_enabled": true, "multihop_nodes": selectedPath.orderedNodes, "multihop_execution": "local"]
             if let id { body["id"] = id }
             body.merge(try connectionProfileSetupExpectations(body, selection: selectedPath, loading: false)) { _, original in original }
@@ -831,11 +864,10 @@ final class RouterVPNOrderedNodeEditor: NSWindowController {
         super.init(window: window)
         let root = NSStackView(); root.orientation = .vertical; root.alignment = .leading; root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        let note = NSTextField(wrappingLabelWithString: "Choose one to seven entry and hop nodes, each with WireGuard, AWG2 Fast or AWG2 Strong. The selected Shadowsocks 2022 exit stays last. Each node keeps its own linked credentials and settings.")
+        let note = NSTextField(wrappingLabelWithString: "Choose one to seven entry and hop nodes, each with WireGuard, AWG2 Fast or AWG2 Strong. Choose Shadowsocks 2022 or Hysteria2 for the selected final exit; Hysteria2 requires StartLayer Off. An imported SS2022 middle requires a Shadowsocks 2022 final. Each node keeps its own linked credentials and settings.")
         root.addArrangedSubview(note)
         path.setAccessibilityLabel("Ordered path"); path.target = self; path.action = #selector(selectedHopChanged); root.addArrangedSubview(path)
-        transport.setAccessibilityLabel("Selected entry or hop transport")
-        for mode in RouterVPNOrderedNodes.editorModes { transport.addItem(withTitle: RouterVPNOrderedNodes.modeName(mode)); transport.lastItem?.representedObject = mode }
+        transport.setAccessibilityLabel("Selected node transport")
         transport.target = self; transport.action = #selector(transportChanged); root.addArrangedSubview(transport)
         let move = NSStackView(); move.orientation = .horizontal; move.spacing = 8
         for (title, action) in [("Move up", #selector(moveUp)), ("Move down", #selector(moveDown)), ("Remove hop", #selector(removeHop))] { move.addArrangedSubview(NSButton(title: title, target: self, action: action)) }
@@ -862,12 +894,15 @@ final class RouterVPNOrderedNodeEditor: NSWindowController {
     }
     @objc private func selectedHopChanged() {
         let index = path.indexOfSelectedItem
-        transport.isEnabled = draft.prefixes.indices.contains(index)
-        transport.selectItem(at: transport.isEnabled ? RouterVPNOrderedNodes.editorModes.firstIndex(of: draft.modes[index]) ?? -1 : -1)
+        let modes = draft.allowedModes(at: index)
+        transport.removeAllItems()
+        for mode in modes { transport.addItem(withTitle: RouterVPNOrderedNodes.modeName(mode)); transport.lastItem?.representedObject = mode }
+        transport.isEnabled = !modes.isEmpty
+        transport.selectItem(at: draft.nodes.indices.contains(index) ? modes.firstIndex(of: draft.nodes[index]["mode"]!) ?? -1 : -1)
     }
     @objc private func transportChanged() {
         do {
-            guard let mode = transport.selectedItem?.representedObject as? String else { throw RouterVPNOrderedNodes.issue("Choose an entry or hop transport.") }
+            guard let mode = transport.selectedItem?.representedObject as? String else { throw RouterVPNOrderedNodes.issue("Choose a transport for the selected node.") }
             let index = path.indexOfSelectedItem; try draft.chooseMode(mode, at: index); render(selected: index)
         } catch { status.stringValue = error.localizedDescription }
     }

@@ -196,7 +196,8 @@ SWIFT_PRODUCT = r'''
     func stopMultihopProgress() {}
     func refreshModes() {}
     func refreshLive() {}
-    func refreshUnifiedModeMenu(preferred: String?) {}
+    var shownMode: String?
+    func refreshUnifiedModeMenu(preferred: String?) { shownMode = preferred }
     func refreshUnifiedHopOverlay() {}
     func refreshUnifiedChrome() {}
     func refreshUnifiedTelemetry() {}
@@ -397,12 +398,33 @@ SETUP_TESTS
 print("Actual AppKit profiles, deferred catalogs and Settings Add/Load/Update callbacks: \(checks) checks PASS")
 '''
 
+SWIFT_ORDERED_EDITOR = r'''
+// Only AppKit widget values are doubled. Selection/render/transport callbacks
+// below are extracted unchanged from the shipping ordered editor.
+@MainActor final class EditorPopup {
+    var indexOfSelectedItem = -1
+    var isEnabled = true
+    var items: [Item] = []
+    var lastItem: Item? { items.last }
+    var selectedItem: Item? { items.indices.contains(indexOfSelectedItem) ? items[indexOfSelectedItem] : nil }
+    func selectItem(at index: Int) { indexOfSelectedItem = index }
+    func removeAllItems() { items.removeAll(); indexOfSelectedItem = -1 }
+    func addItem(withTitle: String) { items.append(Item()) }
+}
+@MainActor final class OrderedEditor {
+    var draft: RouterVPNOrderedNodeDraft
+    let path = EditorPopup(), transport = EditorPopup(), status = Field()
+    init(_ draft: RouterVPNOrderedNodeDraft) { self.draft = draft; render() }
+    EDITOR_METHODS
+}
+'''
+
 SWIFT_ORDERED = r'''
-@MainActor func chooseOrdered(_ count: Int = 4) -> [[String: String]] {
+@MainActor func chooseOrdered(_ count: Int = 4, finalMode: String = "shadowsocks", prefixMode: String = "wg") -> [[String: String]] {
     choose(0, 0)
     let ids = (0..<count).map { "ordered-\($0)" }
     let tokens = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, String(format: "%064x", $0.offset + 1)) })
-    let rows = ids.enumerated().map { ["id": $0.element, "mode": $0.offset == count - 1 ? "shadowsocks" : "wg"] }
+    let rows = ids.enumerated().map { ["id": $0.element, "mode": $0.offset == count - 1 ? finalMode : prefixMode] }
     owner.routerIDs = ids; owner.profiles = catalogRows(ids, tokens: tokens); owner.routerPopup.selectItem(at: count - 1)
     owner.connectionProfileCatalogSelectedID = ids.last!
     owner.multihopEntryPopup.selectItem(at: -1); owner.multihopExitPopup.selectItem(at: -1)
@@ -410,6 +432,7 @@ SWIFT_ORDERED = r'''
         entryMode: "", execution: "local", profileTokens: tokens, orderedNodes: rows)
     owner.api.orderedCurrent = ["selected_id": ids.last!, "profiles": owner.profiles]
     owner.api.orderedCapabilities = ["ordered_nodes_supported": true]; owner.api.afterOrderedSnapshot = nil
+    fixtureDefaults.set(finalMode, forKey: macConnectionModeKey)
     return rows
 }
 @MainActor func verifyOrderedSnapshot(_ body: [String: Any], rows: [[String: String]], updating: Bool) {
@@ -417,11 +440,11 @@ SWIFT_ORDERED = r'''
     if updating { keys.insert("id") }
     check(Set(body.keys) == keys, "ordered save mixed pair fields or private credentials")
     check(body["multihop_nodes"] as? [[String: String]] == rows, "ordered save dropped, substituted or reordered a member")
-    check(body["mode"] as? String == "shadowsocks" && body["custom_layers"] as? [String] == [], "ordered save retained unrelated mode or layers")
+    check(body["mode"] as? String == rows.last?["mode"] && body["custom_layers"] as? [String] == [], "ordered save retained unrelated mode or layers")
     check(body["multihop_enabled"] as? Bool == true && body["multihop_execution"] as? String == "local", "ordered save lost exact execution")
 }
-for length in [2, 3, 4, 8] {
-    let rows = chooseOrdered(length)
+for finalMode in ["shadowsocks", "hysteria2"] { for prefixMode in ["wg", "awg2-fast", "awg2-strong"] { for length in [2, 3, 4, 8] {
+    let rows = chooseOrdered(length, finalMode: finalMode, prefixMode: prefixMode)
     let selection = owner.captureConnectionProfileSelection()
     for updating in [false, true] {
         let snapshot = try owner.connectionProfileSnapshot(name: "Complete ordered path", id: updating ? "saved-profile" : nil)
@@ -429,10 +452,11 @@ for length in [2, 3, 4, 8] {
         _ = try settings.write(path: updating ? "/api/connection-profile/setup/update" : "/api/connection-profile/setup/save", updating: updating)
         verifyOrderedSnapshot(settings.api.calls.last!.body, rows: rows, updating: updating)
         var payload = snapshot
-        payload["profile"] = ["name": "Loaded ordered path", "mode": "shadowsocks"]; payload["selected_node_id"] = selection.selectedNodeID; payload["profile_tokens"] = selection.profileTokens
+        payload["profile"] = ["name": "Loaded ordered path", "mode": finalMode]; payload["selected_node_id"] = selection.selectedNodeID; payload["profile_tokens"] = selection.profileTokens
         owner.connectionProfileSelection?.orderedNodes = []
         try owner.applyLoadedConnectionProfile(payload)
         check(owner.captureConnectionProfileSelection().orderedNodes == rows, "manager Load lost a middle node")
+        check(fixtureDefaults.string(forKey: macConnectionModeKey) == finalMode && owner.shownMode == finalMode, "manager Load substituted the ordered final mode")
         owner.connectionProfileSelection?.orderedNodes = []
         try settings.applyLoadedMultihop(payload)
         check(owner.captureConnectionProfileSelection().orderedNodes == rows, "Settings Load lost a middle node")
@@ -450,7 +474,7 @@ for length in [2, 3, 4, 8] {
     owner.multihopProgressGeneration = UUID(); DispatchQueue.main.run()
     check(owner.stoppedProgress.last == capturedProgress, "ordered completion retired a replacement progress owner")
     DispatchQueue.clear()
-}
+} } }
 for invalid in [[String: Any](), ["ordered_nodes_supported": false], ["ordered_nodes_supported": "true"], ["ordered_nodes_supported": 1]] {
     _ = chooseOrdered(); owner.api.orderedCapabilities = invalid; let before = owner.api.calls.count
     owner.connectMultihop(); DispatchQueue.background.run()
@@ -493,7 +517,7 @@ check(draft.nodes[0]["mode"] == "awg2-fast" && draft.nodes[1]["mode"] == "awg2-s
 for mode in ["awg", "wg-pq", "shadowsocks", "", "AWG2 Fast"] {
     rejects({ try draft.chooseMode(mode, at: 0) }, "editor accepted an unsupported or normalized prefix transport")
 }
-rejects({ try draft.chooseMode("awg2-fast", at: draft.prefixes.count) }, "editor changed its final exit transport")
+rejects({ try draft.chooseMode("awg2-fast", at: draft.prefixes.count) }, "editor accepted a prefix transport as its final exit")
 try draft.move(1, by: -1); check(draft.prefixes[0] == "ordered-1" && draft.nodes.last?["id"] == originalControl, "editor move changed the final owner")
 check(draft.nodes[0]["mode"] == "awg2-strong" && draft.nodes[1]["mode"] == "awg2-fast", "editor move lost its member transport")
 try draft.remove(1); try draft.add("ordered-0")
@@ -509,6 +533,96 @@ check(owner.captureConnectionProfileSelection().orderedNodes == staged.orderedNo
 let reopenedDraft = try owner.makeOrderedNodeDraft()
 check(reopenedDraft.nodes == staged.orderedNodes, "reopened editor reset selected AWG transport")
 rejects({ try owner.applyOrderedNodeDraft(draft) }, "stale editor generation was accepted twice")
+// The final transport is selected by the actual AppKit callbacks, then retained
+// by the shipping Apply transaction and a reopened editor.
+for prefixMode in ["wg", "awg2-fast", "awg2-strong"] {
+    _ = chooseOrdered(3, prefixMode: prefixMode)
+    let editor = OrderedEditor(try owner.makeOrderedNodeDraft())
+    editor.path.selectItem(at: editor.draft.prefixes.count); editor.selectedHopChanged()
+    check(editor.transport.isEnabled && editor.transport.items.compactMap { $0.representedObject as? String } == ["shadowsocks", "hysteria2"],
+          "ordered editor did not expose the supported final transport")
+    editor.transport.selectItem(at: 1); editor.transportChanged()
+    check(editor.draft.nodes.last?["mode"] == "hysteria2" && editor.draft.nodes.dropLast().allSatisfy { $0["mode"] == prefixMode },
+          "ordered final callback substituted a member transport")
+    let captured = try editor.draft.selection(), before = owner.api.calls.count
+    try owner.applyOrderedNodeDraft(editor.draft)
+    check(owner.captureConnectionProfileSelection() == captured && owner.api.calls.count == before,
+          "Hysteria2 editor Apply connected or replaced the captured sources")
+    check(fixtureDefaults.string(forKey: macConnectionModeKey) == "hysteria2" && owner.shownMode == "hysteria2",
+          "ordered Apply displayed a different final transport")
+    let reopened = OrderedEditor(try owner.makeOrderedNodeDraft())
+    reopened.path.selectItem(at: reopened.draft.prefixes.count); reopened.selectedHopChanged()
+    check(reopened.transport.selectedItem?.representedObject as? String == "hysteria2" && reopened.draft.nodes == captured.orderedNodes,
+          "reopened editor substituted its Hysteria2 final")
+    reopened.transport.selectItem(at: 0); reopened.transportChanged()
+    check(reopened.draft.nodes.last?["mode"] == "shadowsocks", "final callback could not explicitly return to Shadowsocks")
+}
+for layer in ["", "off"] {
+    _ = chooseOrdered(2, finalMode: "hysteria2")
+    owner.profiles[1]["start_layer"] = layer; owner.api.orderedCurrent["profiles"] = owner.profiles
+    let original = owner.captureConnectionProfileSelection()
+    let captured = try owner.makeOrderedNodeDraft()
+    check(captured.finalMode == "hysteria2", "explicit Off final was rejected")
+    _ = try RouterVPNOrderedNodes.connectBody(original, current: owner.api.orderedCurrent)
+}
+for layer in ["aes", "xor", "garbage", "OFF", "off ", NSNull(), 0, true] as [Any] {
+    _ = chooseOrdered(2, finalMode: "hysteria2")
+    let original = owner.captureConnectionProfileSelection()
+    owner.profiles[1]["start_layer"] = layer; owner.api.orderedCurrent["profiles"] = owner.profiles
+    rejects({ _ = try RouterVPNOrderedNodes.connectBody(original, current: owner.api.orderedCurrent) }, "Hysteria2 accepted a non-Off final source")
+    rejects({ _ = try owner.makeOrderedNodeDraft() }, "Hysteria2 editor reopened an incompatible final source")
+    rejects({ _ = try owner.connectionProfileSnapshot(name: "Invalid final", id: nil) }, "Hysteria2 snapshot saved an incompatible final source")
+    let before = owner.api.calls.count
+    owner.connectMultihop()
+    check(DispatchQueue.background.pending.isEmpty && owner.api.calls.count == before, "Hysteria2 Connect bypassed the final source policy")
+}
+_ = chooseOrdered(2)
+owner.profiles[1]["start_layer"] = "aes"; owner.api.orderedCurrent["profiles"] = owner.profiles
+var layeredDraft = try owner.makeOrderedNodeDraft()
+check(layeredDraft.allowedModes(at: 1) == ["shadowsocks"], "layered final editor offered Hysteria2")
+rejects({ try layeredDraft.chooseMode("hysteria2", at: 1) }, "layered final changed to Hysteria2")
+for invalidMode in ["HYSTERIA2", "hysteria2 ", "wg", "reality-vision", ""] {
+    _ = chooseOrdered(2)
+    var badFinal = owner.captureConnectionProfileSelection().orderedNodes; badFinal[1]["mode"] = invalidMode
+    rejects({ _ = try RouterVPNOrderedNodes.decode(badFinal, control: "ordered-1") }, "ordered decoder normalized an unsupported final mode")
+}
+_ = chooseOrdered(3, finalMode: "hysteria2")
+let hysteriaOriginal = owner.captureConnectionProfileSelection()
+for execution in ["server", "auto", "LOCAL", ""] {
+    var changed = hysteriaOriginal; changed.execution = execution
+    rejects({ _ = try RouterVPNOrderedNodes.connectBody(changed, current: owner.api.orderedCurrent) }, "Hysteria2 ordered path acquired another execution")
+}
+for changedIndex in owner.profiles.indices {
+    var changed = owner.profiles; changed[changedIndex]["profile_token"] = String(repeating: "e", count: 64)
+    rejects({ _ = try RouterVPNOrderedNodes.connectBody(hysteriaOriginal, current: ["selected_id": hysteriaOriginal.selectedNodeID, "profiles": changed]) }, "Hysteria2 reused a relinked original source")
+}
+let hysteriaDraft = try owner.makeOrderedNodeDraft()
+var changedFinal = owner.profiles; changedFinal[2]["start_layer"] = "xor"
+owner.api.orderedCurrent["profiles"] = changedFinal
+rejects({ try owner.applyOrderedNodeDraft(hysteriaDraft) }, "Hysteria2 Apply missed a changed final policy")
+for fault in ["stored-mode", "public-mode", "missing-public-mode", "server"] {
+    var payload: [String: Any] = ["profile": ["mode": "hysteria2"], "mode": "hysteria2", "multihop_nodes": hysteriaOriginal.orderedNodes,
+        "multihop_enabled": true, "multihop_execution": "local", "selected_node_id": hysteriaOriginal.selectedNodeID, "profile_tokens": hysteriaOriginal.profileTokens]
+    if fault == "stored-mode" { payload["profile"] = ["mode": "shadowsocks"] }
+    if fault == "public-mode" { payload["mode"] = "shadowsocks" }
+    if fault == "missing-public-mode" { payload.removeValue(forKey: "mode") }
+    if fault == "server" { payload["multihop_execution"] = "server" }
+    rejects({ _ = try owner.validatedLoadedConnectionProfileSelection(payload) }, "Hysteria2 Load accepted inconsistent final metadata: " + fault)
+}
+// The selected node's own saved defaults retain the same mode only after the
+// original catalog source and final policy have been validated.
+_ = chooseOrdered(3, finalMode: "hysteria2")
+let catalogHysteria = owner.captureConnectionProfileSelection()
+owner.connectionProfileSelection?.nodeDefaultsPending = true
+owner.profiles[2]["multihop_nodes"] = catalogHysteria.orderedNodes
+owner.profiles[2]["multihop_enabled"] = true; owner.profiles[2]["multihop_execution"] = "local"
+fixtureDefaults.set("shadowsocks", forKey: macConnectionModeKey)
+let hysteriaRefresh = owner.beginConnectionProfileRefresh(hops: false)
+check(try owner.applyConnectionProfileNodeCatalog(["profiles": owner.profiles, "selected_id": catalogHysteria.selectedNodeID], capture: hysteriaRefresh),
+      "Hysteria2 saved defaults were discarded")
+check(owner.captureConnectionProfileSelection().orderedNodes == catalogHysteria.orderedNodes && fixtureDefaults.string(forKey: macConnectionModeKey) == "hysteria2" && owner.shownMode == "hysteria2",
+      "Hysteria2 catalog defaults displayed another final mode")
+
 // Imported custom middle is retained as its original external source.
 _ = chooseOrdered(3)
 let customBase = owner.captureConnectionProfileSelection()
@@ -519,6 +633,14 @@ var customSelection = customBase
 customSelection.orderedNodes[1]["mode"] = "shadowsocks"
 var customDraft = try RouterVPNOrderedNodeDraft(selection: customSelection, generation: UUID(), catalog: customCatalog)
 check(customDraft.nodes[1]["mode"] == "shadowsocks", "custom middle lost its imported transport")
+check(customDraft.allowedModes(at: 2) == ["shadowsocks"], "imported middle editor offered a Hysteria2 final")
+rejects({ try customDraft.chooseMode("hysteria2", at: 2) }, "imported middle acquired a Hysteria2 final")
+var mixedFinal = customSelection.orderedNodes; mixedFinal[2]["mode"] = "hysteria2"
+rejects({ _ = try RouterVPNOrderedNodes.decode(mixedFinal, control: customBase.selectedNodeID) }, "imported middle references acquired a Hysteria2 final")
+var plainHysteria = customBase; plainHysteria.orderedNodes = [customBase.orderedNodes[0], ["id": customBase.selectedNodeID, "mode": "hysteria2"]]
+plainHysteria.profileTokens.removeValue(forKey: "ordered-1")
+var addImported = try RouterVPNOrderedNodeDraft(selection: plainHysteria, generation: UUID(), catalog: customCatalog)
+rejects({ try addImported.add("ordered-1") }, "Hysteria2 editor added an imported middle")
 rejects({ try customDraft.chooseMode("wg", at: 1) }, "custom middle acquired paired WireGuard transport")
 let customCaptured = try customDraft.selection()
 let customCurrent: [String: Any] = ["selected_id": customBase.selectedNodeID, "profiles": customCatalog]
@@ -560,12 +682,12 @@ DispatchQueue.clear()
 '''
 
 SWIFT_SETUP = r'''
-@MainActor func setupRows(_ count: Int = 4) -> [[String: String]] {
+@MainActor func setupRows(_ count: Int = 4, finalMode: String = "shadowsocks") -> [[String: String]] {
     owner.api.afterSetup = nil; settings.api.afterSetup = nil
     owner.api.setupResponse = nil; settings.api.setupResponse = nil
     owner.api.afterLoad = nil; settings.api.afterLoad = nil
     owner.api.afterStatus = nil; settings.api.afterStatus = nil
-    var rows = chooseOrdered(count)
+    var rows = chooseOrdered(count, finalMode: finalMode)
     for i in 0..<(count - 1) { rows[i]["mode"] = ["awg2-fast", "wg", "awg2-strong"][i % 3] }
     owner.connectionProfileSelection?.orderedNodes = rows
     owner.profiles[count - 1]["multihop_enabled"] = true
@@ -574,7 +696,7 @@ SWIFT_SETUP = r'''
     return rows
 }
 @MainActor func setupLoaded(_ rows: [[String: String]], tokens: [String: String]) -> [String: Any] {
-    ["profile": ["name": "Captured ordered setup", "mode": "shadowsocks"], "mode": "shadowsocks", "custom_layers": [String](),
+    ["profile": ["name": "Captured ordered setup", "mode": rows.last!["mode"]!], "mode": rows.last!["mode"]!, "custom_layers": [String](),
      "multihop_nodes": rows, "multihop_enabled": true, "multihop_execution": "local",
      "selected_node_id": rows.last!["id"]!, "profile_tokens": tokens]
 }
@@ -589,8 +711,8 @@ SWIFT_SETUP = r'''
     }
 }
 for manager in [true, false] {
-    for count in [2, 3, 4, 8] { for operation in ["save", "update", "load"] {
-        let rows = setupRows(count), original = owner.captureConnectionProfileSelection()
+    for finalMode in ["shadowsocks", "hysteria2"] { for count in [2, 3, 4, 8] { for operation in ["save", "update", "load"] {
+        let rows = setupRows(count, finalMode: finalMode), original = owner.captureConnectionProfileSelection()
         let api = manager ? owner.api : settings.api
         api.loaded = setupLoaded(rows, tokens: original.profileTokens)
         let before = api.calls.count
@@ -602,7 +724,9 @@ for manager in [true, false] {
         check(owner.captureConnectionProfileSelection().orderedNodes == rows && owner.captureConnectionProfileSelection().profileTokens == original.profileTokens,
               "finalized setup response lost a member mode or source receipt")
         check(!String(data: try JSONSerialization.data(withJSONObject: request), encoding: .utf8)!.contains("private_key"), "setup request copied private sources")
-    } }
+        check(fixtureDefaults.string(forKey: macConnectionModeKey) == finalMode, "setup action replaced the selected ordered final mode")
+        if operation != "load" { verifyOrderedSnapshot(request, rows: rows, updating: operation == "update") }
+    } } }
     for operation in ["save", "update", "load"] { for fault in ["new-generation", "visible-off", "mode-change", "source-relinked"] {
         let rows = setupRows(), original = owner.captureConnectionProfileSelection()
         let api = manager ? owner.api : settings.api
@@ -910,6 +1034,12 @@ def swift_source():
         "    private func write(", "    @objc private func addProfile(",
         "    @objc private func updateProfile(", "    @objc private func loadProfile(",
     ))
+    editor_source = profiles[profiles.index("final class RouterVPNOrderedNodeEditor:"):]
+    editor_methods = "\n".join(block(editor_source, marker) for marker in (
+        "    private func render(", "    @objc private func selectedHopChanged()",
+        "    @objc private func transportChanged()",
+    ))
+    editor = SWIFT_ORDERED_EDITOR.replace("EDITOR_METHODS", editor_methods).replace("@objc ", "").replace("private func ", "func ")
     # Allow the fixture to invoke the real private callbacks. AppKit ordinarily
     # provides main-actor isolation; the value-only owner classes do so here.
     methods = SWIFT_PRODUCT.replace("PRODUCT_METHODS", product_methods).replace("SETTINGS_METHODS", settings_methods)
@@ -918,7 +1048,7 @@ def swift_source():
     methods = methods.replace("@objc ", "").replace("private func ", "func ")
     # Rename only the queue boundary so Swift does not apply its special
     # DispatchQueue.global inference to the deterministic value-only scheduler.
-    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED).replace("SETUP_TESTS", SWIFT_SETUP)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
+    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + editor + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED).replace("SETUP_TESTS", SWIFT_SETUP)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
 
 
 def replace_once(source, old, new):
@@ -981,13 +1111,25 @@ def macos(directory):
         "setup-response-inventory": ('Set(tokens.keys) == referenced,', 'true,', "Load accepted unrelated response source receipts"),
         "setup-stale-body": ('if writing && !(profiles.first(where:', 'if false && !(profiles.first(where:', "old setup body overrode a newer Off choice before dispatch"),
     }
+    final_variants = {
+        "ordered-final-draft": ('[["id": control, "mode": finalMode]]', '[["id": control, "mode": "shadowsocks"]]', "ordered final callback substituted a member transport"),
+        "ordered-final-snapshot": ('"mode": selectedPath.orderedNodes.last!["mode"]!', '"mode": "shadowsocks"', "ordered save retained unrelated mode or layers"),
+        "ordered-final-apply": ('let mode = selection.orderedNodes.last!["mode"]!\\n        fixtureDefaults.set(mode, forKey: macConnectionModeKey)', 'let mode = "shadowsocks"\\n        fixtureDefaults.set(mode, forKey: macConnectionModeKey)', "ordered Apply displayed a different final transport"),
+        "ordered-final-widget": ('transport.isEnabled = !modes.isEmpty', 'transport.isEnabled = draft.prefixes.indices.contains(index)', "ordered editor did not expose the supported final transport"),
+        "ordered-final-layer": ('return layer.isEmpty || layer == "off"', 'return true', "Hysteria2 accepted a non-Off final source"),
+        "ordered-imported-final": ('mode == "shadowsocks" && rows.last?["mode"] == "shadowsocks")', 'mode == "shadowsocks")', "imported middle references acquired a Hysteria2 final"),
+        "ordered-imported-choice": ('return finalModes.filter { $0 == "shadowsocks" || !modes.contains("shadowsocks") }', 'return finalModes', "imported middle editor offered a Hysteria2 final"),
+        "ordered-loaded-final": ('fromCatalog || (stored?["mode"] as? String == selection.orderedNodes.last?["mode"] && payload["mode"] as? String == selection.orderedNodes.last?["mode"])', 'true', "Hysteria2 Load accepted inconsistent final metadata: stored-mode"),
+    }
+    for name, (old, new, _) in final_variants.items():
+        variants[name] = replace_once(source, old.replace("\\n", "\n"), new.replace("\\n", "\n"))
     for name, (old, new, _) in setup_variants.items():
         variants[name] = replace_once(source, old.replace("UserDefaults.standard", "fixtureDefaults"), new)
     for name, program in variants.items():
         path, binary = directory / (name + ".swift"), directory / name
         path.write_text(program, encoding="utf-8")
         run(["swiftc", "-swift-version", "6", "-module-cache-path", str(directory / "swift-module-cache"), str(path), "-o", str(binary)])
-        run([str(binary)], negative=name != "shipping", witness=setup_variants[name][2] if name in setup_variants else None)
+        run([str(binary)], negative=name != "shipping", witness=(setup_variants.get(name) or final_variants.get(name) or (None, None, None))[2])
         if name != "shipping": print("PASS causal AppKit " + name, flush=True)
     print(f"AppKit capture, refresh ownership, relink and post-response idle negatives: {len(variants) - 1} rejected")
 
