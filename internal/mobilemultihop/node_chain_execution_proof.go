@@ -6,6 +6,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"router-vpn/internal/hopmeasure"
 )
 
 func nodeChainExecutionTarget(target string) bool {
@@ -66,7 +68,14 @@ func (s *nodeChainExecutionTrial) provePrefix(parent context.Context, position i
 	}
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
-	started := time.Now()
+	captureInterval := hopmeasure.StartInterval
+	if s.runtime.testInterval != nil {
+		captureInterval = s.runtime.testInterval
+	}
+	started, err := captureInterval()
+	if err != nil {
+		return 0, err
+	}
 	_, err = s.proofIO.run(ctx, func(call context.Context, operation *leaseStopIO) ([]byte, error) {
 		node, proof := s.runtime.projection.policy.local.nodes[position], proofs[position]
 		data, err := externalProofHTTP(call, func(dialCtx context.Context, tag, address string) (net.Conn, error) {
@@ -89,7 +98,7 @@ func (s *nodeChainExecutionTrial) provePrefix(parent context.Context, position i
 	if err != nil {
 		return 0, err
 	}
-	return time.Since(started), nil
+	return started.Duration()
 }
 
 func (s *nodeChainExecutionTrial) proveDNS(parent context.Context) error {
@@ -115,7 +124,14 @@ func (s *nodeChainExecutionTrial) proveExternal(parent context.Context, target s
 	if err != nil {
 		return 0, err
 	}
-	started := time.Now()
+	captureInterval := hopmeasure.StartInterval
+	if s.runtime.testInterval != nil {
+		captureInterval = s.runtime.testInterval
+	}
+	started, err := captureInterval()
+	if err != nil {
+		return 0, err
+	}
 	_, err = s.proofIO.run(ctx, func(call context.Context, operation *leaseStopIO) ([]byte, error) {
 		data, err := externalProofHTTP(call, func(dialCtx context.Context, tag, address string) (net.Conn, error) {
 			return s.retainDial(operation, dialCtx, tag, address)
@@ -137,7 +153,7 @@ func (s *nodeChainExecutionTrial) proveExternal(parent context.Context, target s
 	if err != nil {
 		return 0, err
 	}
-	return time.Since(started), nil
+	return started.Duration()
 }
 
 func (s *nodeChainExecutionTrial) proveComplete(ctx context.Context) error {

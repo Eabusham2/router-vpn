@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/routechoice"
 )
 
@@ -48,6 +49,7 @@ type NodeChainExecutionRuntime struct {
 	mtuResume            *nodeChainExecutionMTUResumeState
 	lastPlan             *nodeChainExecutionLastPlanState
 	testTLS              *tls.Config
+	testInterval         func() (hopmeasure.Interval, error)
 }
 
 type nodeChainExecutionTrial struct {
