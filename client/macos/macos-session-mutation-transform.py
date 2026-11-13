@@ -287,6 +287,23 @@ def transform(source: str, mode: str) -> str:
             raise SystemExit("macOS live response connect completion drifted")
         method = method.replace(old,'guard let self else { return }\n            defer { DispatchQueue.main.async { self.endLiveHTTPSMutation(liveMutation) } }\n            do {',1)
         source = source[:start]+method+source[end:]
+    # A temporary saved-path test is a transition even though it intentionally
+    # never advertises ordinary Connected. After native DOWN, its review owner
+    # still reserves editing until explicit Save/Cancel joins the observer.
+    if mode == "product":
+        old = 'return ["connecting", "starting", "checking", "trying", "proving", "reasserting", "disconnecting", "stopping", "switching", "reconnecting"].contains { phase.contains($0) }'
+        if source.count(old) != 1: raise SystemExit("macOS candidate phase mutation boundary drifted")
+        source = source.replace(old, 'return phase.hasPrefix("candidate:") || ' + old[len('return '):], 1)
+    if mode == "unified":
+        old = 'if connected || ["connecting", "starting", "checking", "trying", "proving", "reasserting", "switching", "reconnecting"].contains(where: { phase.contains($0) }) {'
+        if source.count(old) != 1: raise SystemExit("macOS candidate Disconnect boundary drifted")
+        source = source.replace(old, old.replace('if connected || ', 'if connected || phase.hasPrefix("candidate:") || '), 1)
+        old = '                DispatchQueue.main.async { self.startUnifiedSelectedMode() }'
+        if source.count(old) != 1: raise SystemExit("macOS candidate review Connect boundary drifted")
+        source = source.replace(old, '                if MacViaEntryCandidateReservation.shared.active { DispatchQueue.main.async { self.appendHelp("Finish Save or Cancel in the original candidate test before connecting."); self.refreshUnifiedChrome() }; return }\n' + old, 1)
+        old = 'kill.isEnabled = valid && known && !connected && stable && stopPresentation.enabled'
+        if source.count(old) != 1: raise SystemExit("macOS candidate review protection boundary drifted")
+        source = source.replace(old, 'kill.isEnabled = valid && known && !connected && stable && !MacViaEntryCandidateReservation.shared.active && stopPresentation.enabled', 1)
     return source
 
 def main() -> None:

@@ -162,7 +162,7 @@ base.SPECS['routervpn-unified-shell-v8.inc'] = ('93acb4605c44dc779265cb719f73b5b
     '*obj=json_node_get_object(root);const char '
     '*phase=obj_string(obj,"phase");status_ok=TRUE;busy=routervpn_mutation_busy_from_status(obj);disconnecting=routervpn_phase_disconnecting(phase);gtk_button_set_label(GTK_BUTTON(state->connect),disconnecting?"Disconnecting…":busy?"Disconnect":"Connect");char '
     '*text=g_strdup_printf("%s • logical %s • runtime %s • base '
-    '%s",phase[0]?phase:"disconnected",obj_string(obj,"logical_mode"),obj_string(obj,"runtime_mode"),obj_string(obj,"base"));gtk_label_set_text(GTK_LABEL(state->status),text);g_free(text);json_node_free(root);}}g_free(err);free(out.data);if(!status_ok){gtk_button_set_label(GTK_BUTTON(state->connect),"Checking…");gtk_label_set_text(GTK_LABEL(state->status),"Controller/status '
+    '%s",g_str_has_prefix(phase,"candidate:")?"Testing saved path":phase[0]?phase:"disconnected",obj_string(obj,"logical_mode"),obj_string(obj,"runtime_mode"),obj_string(obj,"base"));gtk_label_set_text(GTK_LABEL(state->status),text);g_free(text);json_node_free(root);}}g_free(err);free(out.data);if(!status_ok){gtk_button_set_label(GTK_BUTTON(state->connect),"Checking…");gtk_label_set_text(GTK_LABEL(state->status),"Controller/status '
     'unavailable • session mutation '
     'locked");busy=TRUE;}gtk_widget_set_sensitive(state->connect,status_ok&&!disconnecting);gtk_widget_set_sensitive(state->node,!busy);gtk_widget_set_sensitive(state->kill_switch,!busy);gtk_widget_set_sensitive(state->multihop,!busy);gtk_widget_set_sensitive(state->mode,!busy);gtk_widget_set_sensitive(state->dns,!busy);\n'])])
 
@@ -193,7 +193,7 @@ base.SPECS['routervpn-gtk-product.c'] = ('a1f087cb2260183b8f75320d177336f2578ee0
     '        strstr(lower, "checking") != NULL || strstr(lower, "trying") != NULL ||\n',
     '        strstr(lower, "proving") != NULL || strstr(lower, "reasserting") != NULL ||\n',
     '        strstr(lower, "disconnecting") != NULL || strstr(lower, "stopping") != NULL ||\n',
-    '        strstr(lower, "switching") != NULL || strstr(lower, "reconnecting") != NULL;\n',
+    '        strstr(lower, "switching") != NULL || strstr(lower, "reconnecting") != NULL || g_str_has_prefix(lower, "candidate:");\n',
     '    g_free(lower);\n',
     '    return busy;\n',
     '}\n',
@@ -214,7 +214,7 @@ base.SPECS['routervpn-gtk-product.c'] = ('a1f087cb2260183b8f75320d177336f2578ee0
     '}\n',
     '\n',
     'static gboolean routervpn_mutation_busy(App *app) {\n',
-    '    (void)app;\n',
+    '    if(app&&app->window&&g_object_get_data(G_OBJECT(app->window),"linux-ordered-candidates-pending")!=NULL)return TRUE;\n',
     '    Buffer out = {0}; char *err = NULL; gboolean busy = TRUE;\n',
     '    if (api_request("/api/status", "GET", NULL, 3500, &out, &err)) {\n',
     '        JsonNode *root = parse_json(out.data);\n',
@@ -277,9 +277,9 @@ def _owned_stop_retry(path):
         text = text.replace(old, new, 1)
     replace('    if (linux_async_stopping_v16(state->app)) return;', '    const char *captured_retry=g_object_get_data(G_OBJECT(state->connect),"routervpn-stop-retry-token");\n    if(captured_retry!=NULL){g_autofree char *token=g_strdup(captured_retry);linux_unified_retry_stop_v26(state,token);return;}\n    if (linux_async_stopping_v16(state->app)) return;')
     replace('gboolean status_ok=FALSE, active=FALSE, disconnecting=FALSE;', 'gboolean status_ok=FALSE, active=FALSE, disconnecting=FALSE; g_autofree char *retry_token=NULL;')
-    replace('status_ok=TRUE;active=routervpn_mutation_busy_from_status(obj);', 'const char *retry=linux_stop_retry_token_v26(obj,&status_ok);retry_token=g_strdup(retry);active=routervpn_mutation_busy_from_status(obj);')
+    replace('status_ok=TRUE;active=routervpn_mutation_busy_from_status(obj);', 'const char *retry=linux_stop_retry_token_v26(obj,&status_ok);retry_token=g_strdup(retry);active=routervpn_mutation_busy_from_status(obj)||g_object_get_data(G_OBJECT(state->app->window),"linux-ordered-candidates-pending")!=NULL;')
     replace('    if(active){post_and_log(state->app,"/api/disconnect","{}",30000,"Disconnect");return;}', '    if(retry_token!=NULL){linux_unified_retry_stop_v26(state,retry_token);return;}\n    if(active){post_and_log(state->app,"/api/disconnect","{}",30000,"Disconnect");return;}')
-    replace('status_ok=TRUE;busy=routervpn_mutation_busy_from_status(obj);', 'const char *retry=linux_stop_retry_token_v26(obj,&status_ok);g_object_set_data_full(G_OBJECT(state->connect),"routervpn-stop-retry-token",g_strdup(retry),g_free);busy=routervpn_mutation_busy_from_status(obj)||retry!=NULL||!status_ok;')
+    replace('status_ok=TRUE;busy=routervpn_mutation_busy_from_status(obj);', 'const char *retry=linux_stop_retry_token_v26(obj,&status_ok);g_object_set_data_full(G_OBJECT(state->connect),"routervpn-stop-retry-token",g_strdup(retry),g_free);busy=routervpn_mutation_busy_from_status(obj)||retry!=NULL||!status_ok||g_object_get_data(G_OBJECT(state->app->window),"linux-ordered-candidates-pending")!=NULL;')
     replace('disconnecting?"Disconnecting…":busy?"Disconnect":"Connect"', 'disconnecting?"Disconnecting…":retry!=NULL?"Retry Disconnect":busy?"Disconnect":"Connect"')
     replace('if(!status_ok){gtk_button_set_label', 'if(!status_ok){g_object_set_data(G_OBJECT(state->connect),"routervpn-stop-retry-token",NULL);gtk_button_set_label')
     path.write_text(text)

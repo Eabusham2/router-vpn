@@ -23,6 +23,7 @@ func productStopRetryPresentation(_ status: [String: Any]?, busy: Bool) -> (titl
         let phase = (status?["phase"] as? String ?? "").lowercased()
         if phase.contains("disconnecting") || phase.contains("stopping") { return ("Disconnecting…", false, nil) }
         if let token { return ("Retry Disconnect", true, token) }
+        if !(status?["connected"] as? Bool ?? false), !phase.hasPrefix("candidate:"), MacViaEntryCandidateReservation.shared.active { return ("Review test", false, nil) }
         return ((status?["connected"] as? Bool ?? false) || busy ? "Disconnect" : "Connect", true, nil)
     } catch { return ("Checking…", false, nil) }
 }

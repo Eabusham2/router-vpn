@@ -403,7 +403,7 @@ function StartUnifiedRefreshAsync {
 function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Timeline,$Protection){
     $script:Busy=$true
     try{
-        $Connected=[bool]$Status.connected;$Phase=[string]$Status.phase
+        $Phase=[string]$Status.phase;$CandidateTest=$Phase-like'candidate:*';$Connected=[bool]$Status.connected-and-not$CandidateTest
         $ControllerBusy=Test-RouterVPNMutationBusyFromStatus $Status
         try{if(GetUnifiedStopRetryToken $Status){$ControllerBusy=$true}}catch{$ControllerBusy=$true}
         $ProtectionView=Get-RouterVPNProtectionPresentation -Captured $Protection -DisplayedProfileID ([string]$Store.selected_id)
@@ -411,13 +411,13 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
         $script:UnifiedProtectionProfileID=if($ProtectionView.Valid){[string]$Store.selected_id}else{''}
         $MutationBusy=$ControllerBusy -or $script:UnifiedProtectionPending
         $Disconnecting=$Phase -match '(?i)(disconnecting|stopping)'
-        $StateText.Text=if($Connected){'Connected'}elseif($Phase){$Phase}else{'Off'}
+        $StateText.Text=if($CandidateTest){'Testing saved path'}elseif($Connected){'Connected'}elseif($Phase){$Phase}else{'Off'}
         $StateDot.Fill=if($Connected){'#35D07F'}elseif($Phase-eq'failed'){'#FF5D6C'}else{'#6B7280'}
         $Runtime=if($Status.runtime_mode){$Status.runtime_mode}else{$Status.mode}
         $ConnectionDetail.Text="Phase: $Phase Logical: $($Status.logical_mode) Runtime: $Runtime Base: $($Status.base) Router: $($Status.router_id)"
         $LastErrorText.Text=[string]$Status.last_error
         if($Store.selected_id -and -not[string]::IsNullOrWhiteSpace([string]$ProtectionView.Message)){$LastErrorText.Text+=([Environment]::NewLine+[string]$ProtectionView.Message)}
-        if($Connected){$ProofText.Text='Connected - selected-router private path proof passed.'}
+        if($CandidateTest){$ProofText.Text='Temporary path test. Disconnect stops this test; it does not select a daily connection.'}elseif($Connected){$ProofText.Text='Connected - selected-router private path proof passed.'}else{$ProofText.Text='Selected-node private path proof is not active.'}
         $DnsSaveButton.IsEnabled=-not$MutationBusy;$DnsButton.IsEnabled=$Connected
         foreach($Name in @('PairNodeButton','ImportNodeButton','DeleteNodeButton','SelectNodeButton','SelectLowestLatencyButton','ExternalDirectButton','ExternalViaEntryButton','MultihopConnectButton','UnifiedCandidatesButton','AutoButton','ConnectButton')){
             $C=Control $Name;if($null-ne$C){$C.IsEnabled=-not$MutationBusy}

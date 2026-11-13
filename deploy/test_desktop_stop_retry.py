@@ -176,6 +176,19 @@ try recovery.protection(false)
 var caught=false;do{try recovery.protection(true)}catch{caught=true};check(caught,"Protection On bypassed pending Stop")
 recovery.api.status["connected"]=true;caught=false;do{try recovery.protection(false)}catch{caught=true};check(caught,"Off cleanup bypassed connected guard")
 check(mutationBusy(from:["connected":false,"phase":"off","stop_pending":0]),"malformed Stop state left editor idle")
+let candidate=Fixture();candidate.api.status=["connected":false,"phase":"candidate:testing","stop_pending":false]
+check(mutationBusy(from:candidate.api.status),"temporary candidate phase left editing idle")
+check(productStopRetryPresentation(candidate.api.status,busy:mutationBusy(from:candidate.api.status)).title=="Disconnect","temporary candidate primary action was not Disconnect")
+candidate.connectUnified();check(candidate.api.paths==["/api/disconnect"] && candidate.starts==0,"temporary candidate Connect callback started ordinary VPN")
+let reviewLease=MacViaEntryCandidateReservation.shared.acquire()!
+let review=Fixture();review.api.status=["connected":false,"phase":"off","stop_pending":false]
+check(mutationBusy(from:review.api.status),"retained DOWN review allowed editing")
+let reviewPaint=productStopRetryPresentation(review.api.status,busy:mutationBusy(from:review.api.status))
+check(!reviewPaint.enabled && reviewPaint.title=="Review test","retained DOWN review offered ordinary Connect")
+review.connectUnified();check(review.starts==0 && review.api.paths.isEmpty,"retained DOWN review callback started ordinary VPN")
+MacViaEntryCandidateReservation.shared.release(UUID());check(MacViaEntryCandidateReservation.shared.active,"foreign review release lost original ownership")
+MacViaEntryCandidateReservation.shared.release(reviewLease);review.connectUnified();check(review.starts==1,"joined review did not restore ordinary Connect")
+print("Swift composed Stop/Retry and saved-candidate Home checks PASS")
 
 '''
 
@@ -184,7 +197,7 @@ def macos(directory):
     source=transform.transform(read('client/macos/RouterVPNMacUnifiedShell.swift'),'unified')
     helpers=section(source,r'^final class MacUnifiedConnectButton: NSButton \{.*?^\}')+'\n'+section(source,r'^func productStopRetryToken\(.*?^\}')+'\n'+section(source,r'^func productStopRetryPresentation\(.*?^\}')
     product=transform.transform(read('client/macos/RouterVPNMacProduct.swift'),'product')
-    helpers += '\nstruct MacViaEntryCandidateReservation: Sendable {static let shared=MacViaEntryCandidateReservation();let active=false}\n'+section(product,r'^    func mutationBusy\(from status:.*?^    \}')+'\n'
+    helpers += '\n'+section(read('client/macos/RouterVPNMacViaEntryPolicy.swift'),r'^final class MacViaEntryCandidateReservation:.*?^\}')+'\n'+section(product,r'^    func mutationBusy\(from status:.*?^    \}')+'\n'
     protection=section(source,r'^    private func requireUnifiedProtectionIdle\(.*?^    \}')
     callback=section(source,r'^    @objc func connectUnified\(.*?^    \}').replace('@objc ','').replace('DispatchQueue.','FixtureQueue.')
     telemetry=read('client/macos/RouterVPNMacTelemetry.swift')
@@ -199,6 +212,24 @@ def macos(directory):
         path.write_text(prelude+body.replace('class NSButton { var title=""; var isEnabled=true }','')+SWIFT_TEST)
         run(['swiftc','-swift-version','6','-module-cache-path',str(directory/'swift-cache'),str(path),'-o',str(binary)])
         run([str(binary)],broken=name!='shipping')
+    original=helpers+boundary+protection+'\n'+callback+'\n}\n'
+    controls=[
+        ('candidate-mutation','return phase.hasPrefix("candidate:") || ','return ','temporary candidate phase left editing idle'),
+        ('candidate-disconnect','if connected || phase.hasPrefix("candidate:") || ','if connected || ','temporary candidate Connect callback started ordinary VPN'),
+        ('review-connect','if MacViaEntryCandidateReservation.shared.active { DispatchQueue.main.async { self.appendHelp','if false { DispatchQueue.main.async { self.appendHelp','retained DOWN review callback started ordinary VPN'),
+    ]
+    # Callback extraction has replaced dispatch with its explicit synchronous
+    # boundary, while executing the actual shipping admission and HTTP body.
+    for name,old,new,witness in controls:
+        old=old.replace('DispatchQueue.','FixtureQueue.');new=new.replace('DispatchQueue.','FixtureQueue.')
+        assert original.count(old)==1,(name,original.count(old))
+        body=original.replace(old,new,1);assert body!=original
+        path,binary=directory/(name+'.swift'),directory/name
+        path.write_text(prelude+body.replace('class NSButton { var title=""; var isEnabled=true }','')+SWIFT_TEST)
+        run(['swiftc','-swift-version','6','-module-cache-path',str(directory/'swift-cache'),str(path),'-o',str(binary)])
+        result=subprocess.run([str(binary)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=30)
+        assert result.returncode!=0 and witness in result.stdout,(name,result.stdout[-4000:])
+        print('Swift candidate Home causal control rejected: '+name,flush=True)
 
 C_BOUNDARY=r'''
 #include <json-glib/json-glib.h>

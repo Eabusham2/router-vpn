@@ -59,7 +59,11 @@ def shipping(model=None, settings=None, build=None):
 
 
 def extracts(source):
-    sections = []
+    # Compose the existing shipping reservation used by modal candidate review.
+    reservation = (ROOT / 'client/macos/RouterVPNMacViaEntryPolicy.swift').read_text()
+    matches = re.findall(r'^final class MacViaEntryCandidateReservation:.*?^\}', reservation, re.M | re.S)
+    assert len(matches) == 1
+    sections = [matches[0]]
     for expression in (
         r"^private struct RouterVPNProfileSettingsPayloadV2: Codable \{.*?^\}",
         r"^private struct MacProfileStartupSettings: Decodable, Sendable \{.*?^\}",
@@ -732,6 +736,27 @@ do {
     check(owner.error.isEmpty && api.writes.count == 1 && api.writes[0].0 == "/api/profile/settings", "Router Settings changed routes")
     check(!api.reads.contains("/api/profile/device") && !api.reads.contains("/api/profile/startup"), "Router Settings adopted an external capture")
 }
+// Native DOWN still leaves the original saved-test review owner alive. Both
+// initial controls and the final actual Save callback must honor that owner.
+do {
+    let lease=MacViaEntryCandidateReservation.shared.acquire()!,api=ProductAPI()
+    let owner=runEditor(api) {alert,_ in
+        check(!button(alert,"Allow home LAN access").isEnabled && !popup(alert,"MTU").isEnabled,"Retained candidate review enabled Settings controls")
+        return .alertFirstButtonReturn
+    }
+    check(owner.message.contains("Settings locked") && api.writes.isEmpty,"Retained candidate review reached Settings persistence")
+    MacViaEntryCandidateReservation.shared.release(lease)
+}
+do {
+    let api=ProductAPI();var lease:UUID?
+    let owner=runEditor(api) {alert,_ in
+        check(button(alert,"Allow home LAN access").isEnabled,"Joined review left Settings disabled")
+        lease=MacViaEntryCandidateReservation.shared.acquire()
+        return .alertFirstButtonReturn
+    }
+    check(lease != nil && !owner.error.isEmpty && api.writes.isEmpty,"Late candidate reservation reached Settings persistence")
+    MacViaEntryCandidateReservation.shared.release(lease!)
+}
 print("PASS: \(checks) captured device serializer, transaction and actual Settings callback/control checks")
 '''
 
@@ -766,6 +791,8 @@ def executable(negative=True):
         exercise("shipping")
         if negative:
             variants = (
+                ("candidate-review", "settings", "    if MacViaEntryCandidateReservation.shared.active { return true }\n", ""),
+                ("candidate-final-save", "settings", '            if MacViaEntryCandidateReservation.shared.active { throw MacProfileDeviceSettings.issue("Finish Save or Cancel in the original candidate test before saving Settings.") }\n', ""),
                 ("cover-capability", "model", "guard !changed || torCoverSupported == true else", "guard true else"),
                 ("cover-bounds", "model", "let rate = Int(text), rate == 0 || (32...192).contains(rate) else", "let rate = Int(text) else"),
                 ("cover-dormant-budget", "model", 'body["daita_rate_kbps"] = rate', 'body["daita_rate_kbps"] = 192'),

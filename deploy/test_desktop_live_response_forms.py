@@ -97,6 +97,7 @@ def swift(directory):
     source = shipping((ROOT/'client/macos/RouterVPNMacTelemetry.swift').read_text())
     policy = block(source, 'private struct RouterVPNLiveHTTPSReceipt {').replace('private struct','struct',1)
     owner = block(source, 'private final class RouterVPNLiveTelemetryDelivery {').replace('private final','final',1)
+    owner += '\n'+block((ROOT/'client/macos/RouterVPNMacViaEntryPolicy.swift').read_text(), 'final class MacViaEntryCandidateReservation:')
     methods = '\n'.join(block(source, 'func '+name+'(') for name in
         ['clearLiveHTTPS', 'liveHTTPSPaused', 'beginLiveHTTPSMutation', 'endLiveHTTPSMutation', 'showLiveHTTPS', 'refreshUnifiedTelemetry'])
     spec=importlib.util.spec_from_file_location('live_mutation_transform',ROOT/'client/macos/macos-session-mutation-transform.py')

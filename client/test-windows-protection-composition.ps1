@@ -160,6 +160,19 @@ Complete-ProtectionTelemetry
 Assert-ProtectionComposition (-not(Control 'UnifiedKillSwitch').IsEnabled-and-not(Control 'UnifiedFastestNode').IsEnabled) 'Connected snapshot lost mutation guards'
 Write-Host 'PASS composed completed Off and connected mutation guards'
 
+$script:ProtectionStatus.connected=$false;$script:ProtectionStatus.phase='candidate:testing'
+Complete-ProtectionSnapshot $Done
+Assert-ProtectionComposition ($StateText.Text-ceq'Testing saved path'-and$ProofText.Text.Contains('Temporary path test')-and(Control 'UnifiedConnectButton').Content-ceq'Disconnect') 'Temporary candidate path was presented as a daily connection or lost Disconnect'
+Assert-ProtectionComposition (-not(Control 'UnifiedModeCombo').IsEnabled-and-not(Control 'UnifiedFastestNode').IsEnabled) 'Temporary candidate test allowed persistent path mutation'
+$script:ProtectionStatus.phase='off';$script:RouterVPNOrderedCandidates=@{Closed=$false;PendingDrain=$true}
+Complete-ProtectionSnapshot $Done
+Assert-ProtectionComposition ($StateText.Text-cne'Connected'-and-not(Control 'UnifiedModeCombo').IsEnabled-and(Control 'UnifiedConnectButton').Content-ceq'Disconnect') 'DOWN review released original observer mutation ownership'
+$script:RouterVPNOrderedCandidates.PendingDrain=$false
+Complete-ProtectionSnapshot $Done
+Assert-ProtectionComposition ((Control 'UnifiedModeCombo').IsEnabled-and(Control 'UnifiedConnectButton').Content-ceq'Connect') 'Joined candidate cleanup did not release ordinary controls'
+Remove-Variable RouterVPNOrderedCandidates -Scope Script
+Write-Host 'PASS candidate Testing and retained DOWN review preserve truthful Home and Disconnect'
+
 $script:ProtectionStatus.connected=$false;$script:ProtectionStatus.phase='off'
 $Done.profile_id='replacement'
 Complete-ProtectionSnapshot $Done

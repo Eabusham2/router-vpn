@@ -18,7 +18,8 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
     private static let limit = 2 * 1024 * 1024
 
     init(url: URL, body: [String: Any]?, timeout: TimeInterval, completion: @escaping (Result<Data, Error>) -> Void) throws {
-        let candidateBase = "/api/multihop/prefix-candidates"
+        let savedBase = "/api/multihop/saved-candidates"
+        let candidateBase = url.path == savedBase || url.path.hasPrefix(savedBase + "/") ? savedBase : "/api/multihop/prefix-candidates"
         let candidateCatalog = url.path == candidateBase + "/catalog" && url.query?.range(of: "^prefix_position=[0-7]$", options: .regularExpression) != nil
         let candidateStatus = url.path == candidateBase && url.query?.range(of: "^request_id=[a-f0-9]{32}$", options: .regularExpression) != nil
         guard url.scheme == "http", url.host == "127.0.0.1", url.user == nil, url.password == nil,
@@ -56,7 +57,8 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
             let keys = Set(body?.keys.map { $0 } ?? [])
             let original = token("request_id",32)
             if url.path == candidateBase + "/cancel" {
-                performanceValid = original && keys == Set(["request_id"]) && bounded(25)
+                let saved = candidateBase == savedBase
+                performanceValid = original && (!saved || token("view_token",64)) && keys == (saved ? Set(["request_id","view_token"]) : Set(["request_id"])) && bounded(25)
             } else if url.path == candidateBase && body == nil {
                 performanceValid = candidateStatus && bounded(25)
             } else if url.path == candidateBase {

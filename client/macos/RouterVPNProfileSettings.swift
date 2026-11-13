@@ -131,6 +131,7 @@ private func macApplyLoadedConnectionMode(_ root: [String: Any]) {
 }
 
 private func macMutationBusy(_ api: ProductAPI) -> Bool {
+    if MacViaEntryCandidateReservation.shared.active { return true }
     do {
         try MacProfileDeviceSettings.requireIdle(api.request("/api/status", timeout: 4))
         return false
@@ -525,6 +526,7 @@ extension ProductWindowController {
             if !validationError.isEmpty { throw NSError(domain: "RouterVPN.Settings", code: 1, userInfo: [NSLocalizedDescriptionKey: validationError]) }
             if !supportsStartupSettings { return "Connection profile manager closed; node settings are unchanged." }
             if !save { return settingsMutationBusy ? "Settings locked until Router VPN is fully disconnected." : "Settings unchanged." }
+            if MacViaEntryCandidateReservation.shared.active { throw MacProfileDeviceSettings.issue("Finish Save or Cancel in the original candidate test before saving Settings.") }
             if let capturedDevice, supportsDeviceSettings, let deviceEdits {
                 try capturedDevice.save(edits: deviceEdits, displayedProfileID: {
                     var current = ""

@@ -89,8 +89,10 @@ extension ProductWindowController {
     }
 
     private func formatHomeSummary(_ s: RouterVPNDesktopHomeSummary) -> String {
+        let testing = s.connectionPhase.lowercased().hasPrefix("candidate:")
         let exit: String
-        if s.actualExitStatus == "proved", let value = s.actualExitIP, !value.isEmpty { exit = value }
+        if testing { exit = "Testing — temporary path" }
+        else if s.actualExitStatus == "proved", let value = s.actualExitIP, !value.isEmpty { exit = value }
         else if s.connected { exit = "Unproven — click Prove actual exit" }
         else { exit = "Not connected" }
         var dns = [s.dnsMode, s.dnsHost].compactMap { value -> String? in
@@ -107,7 +109,7 @@ extension ProductWindowController {
             "Node: \(s.nodeName ?? "—") • \(s.location ?? "Location not labeled")",
             "Public endpoint: \(s.publicEndpoint ?? "—")",
             "Actual public VPN exit: \(exit)",
-            "Connection: \(s.connectionPhase) • path proof \(s.pathProof)",
+            testing ? "Connection: Testing • temporary path" : "Connection: \(s.connectionPhase) • path proof \(s.pathProof)",
             "Logical/runtime/base: \(s.logicalMode ?? "—") • \(s.actualRuntime ?? "—") • \(s.actualBase ?? "—")",
             "Fallback: \((s.fallback?.isEmpty == false) ? s.fallback! : "None")",
             "DNS: \(dns.isEmpty ? "—" : dns) • proof \(s.dnsStatus)",

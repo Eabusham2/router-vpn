@@ -4,7 +4,7 @@ $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 # witness, then extract this new dialog's shipping functions and callbacks.
 . (Join-Path $Root 'client/test-windows-performance.ps1') -Root $Root
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
-foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
+foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','OrderedCandidateBase','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
  $F=@($Ast.FindAll({param($n)$n-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq$Name},$true));if($F.Count-ne1){throw "Missing shipping candidate function $Name"};. ([ScriptBlock]::Create($F[0].Extent.Text))
 }
 $Count=0
@@ -50,4 +50,56 @@ $S.Table.SelectedItem.Choice=@{id='custom-original';save_reason='Unsupported ins
 $Response=[System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Conflict);$Response.Content=[System.Net.Http.StringContent]::new('Original source is no longer current')
 $Completion=New-Object 'System.Threading.Tasks.TaskCompletionSource[System.Net.Http.HttpResponseMessage]';[void]$Completion.TrySetResult($Response);$S.Task=$Completion.Task;$S.Phase='poll';$S.Request=$null;$S.Cts=$null;$S.Receipt=$Value;$S.Rows=@([pscustomobject]@{Timing='2 ms';Receipt=(New-CandidateRow)})
 TickOrderedCandidates $S;Assert-Candidate ($null-eq$S.Receipt-and$S.Rows.Count-eq0-and-not$S.Save.IsEnabled) 'failed status request left scored rows visible'
+# The saved-path purpose keeps its physical observer while the tunnel is DOWN.
+# Review can therefore enable Save while the exact request remains undrained;
+# it must never enable another measurement or ordinary path replacement.
+$S.SavedPath=$true;$S.SavedProfileID='';$S.CancelWanted=$false;$S.CloseWanted=$false;$S.RequestID=('d'*32);$S.PendingDrain=$false;$S.Table.SelectedItem=$null
+ReceiveOrderedCandidates $S $Catalog 'catalog';SetOrderedCandidateControls $S
+Assert-Candidate ((OrderedCandidateBase $S)-ceq'/api/multihop/saved-candidates'-and$S.Run.IsEnabled-and$S.Status.Text.Contains('Disconnected')) 'saved dialog did not capture its separate temporary purpose'
+$Now=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+$SavedValue=@{request_id=$S.RequestID;view_token=$Catalog.view_token;prefix_position=0;running=$true;drained=$false;accepted=$false;native_down=$false;reviewing=$false;cleanup_pending=$false;results=@((New-CandidateRow));failure=''}
+ReceiveOrderedCandidates $S $SavedValue 'run';SetOrderedCandidateControls $S
+Assert-Candidate ($S.PendingDrain-and$S.Rows.Count-eq0-and-not$S.Save.IsEnabled-and-not$S.Run.IsEnabled-and$S.Cancel.IsEnabled) '202 response exposed results or lost the original temporary request'
+$S.Next=[DateTime]::UtcNow.AddSeconds(-1);$script:SavedRequest=$null;TickOrderedCandidates $S
+Assert-Candidate ($SavedRequest.Path-ceq('/api/multihop/saved-candidates?request_id='+$S.RequestID)) 'temporary test polling used another purpose or request'
+$SavedValue.accepted=$true;$SavedValue.running=$false;$SavedValue.reviewing=$true
+ReceiveOrderedCandidates $S $SavedValue 'poll';SetOrderedCandidateControls $S
+Assert-Candidate ($S.Rows.Count-eq0-and-not$S.Save.IsEnabled) 'accepted result before native DOWN exposed a selectable choice'
+$SavedValue.native_down=$true;ReceiveOrderedCandidates $S $SavedValue 'poll';$S.Table.SelectedItem=$S.Rows[0];SetOrderedCandidateControls $S
+Assert-Candidate ($S.Save.IsEnabled-and$S.PendingDrain-and-not$S.Run.IsEnabled-and-not$S.Refresh.IsEnabled-and$S.Cancel.IsEnabled-and$S.Status.Text.StartsWith('Disconnected.')) 'post-DOWN review did not preserve observer ownership and explicit Save'
+$Selected=$S.Table.SelectedItem;ReceiveOrderedCandidates $S $SavedValue 'poll';Assert-Candidate ($S.Table.SelectedItem.ID-ceq$Selected.ID) 'review polling silently changed the selected candidate'
+$S.ProfileName.Text='Saved path for later';$script:SavedRequest=$null;&$Click
+Assert-Candidate ($SavedRequest.Path-ceq'/api/multihop/saved-candidates/save-profile'-and$SavedRequest.Body.request_id-ceq$S.RequestID-and$SavedRequest.Body.view_token-ceq$Catalog.view_token-and$SavedRequest.Body.proposed_path.Count-eq3) 'saved purpose callback changed the exact future profile or request'
+$SavedValue.reviewing=$false;ReceiveOrderedCandidates $S $SavedValue 'poll';SetOrderedCandidateControls $S
+Assert-Candidate ($S.Rows.Count-eq0-and-not$S.Save.IsEnabled) 'closed review retained adoptable rows'
+$SavedValue.reviewing=$true;$SavedValue.cleanup_pending=$true;ReceiveOrderedCandidates $S $SavedValue 'poll';SetOrderedCandidateControls $S
+Assert-Candidate ($S.Rows.Count-eq0-and-not$S.Save.IsEnabled-and$S.CancelWanted-and$S.PendingDrain) 'pending cleanup exposed a future-profile choice'
+$SavedValue.cleanup_pending=$false;$S.CancelWanted=$false;ReceiveOrderedCandidates $S $SavedValue 'poll';$S.Table.SelectedItem=$S.Rows[0]
+$S.Rows[0].Receipt.measured_at=$Now-120001;$S.Rows[0].Receipt.expires_at=$Now-1;SetOrderedCandidateControls $S
+Assert-Candidate (-not$S.Save.IsEnabled) 'saved observer polling renewed the original measurement deadline'
+$SavedValue.results=@((New-CandidateRow));ReceiveOrderedCandidates $S $SavedValue 'poll';$S.Table.SelectedItem=$S.Rows[0]
+$S.CloseWanted=$true;$S.CancelWanted=$true;ReceiveOrderedCandidates $S $SavedValue 'poll';SetOrderedCandidateControls $S
+Assert-Candidate ($S.Rows.Count-eq0-and$null-eq$S.Receipt-and-not$S.Save.IsEnabled-and$S.PendingDrain) 'closing temporary review revived scored results'
+$S.Next=[DateTime]::UtcNow.AddSeconds(-1);$script:SavedRequest=$null;TickOrderedCandidates $S
+Assert-Candidate ($SavedRequest.Path-ceq'/api/multihop/saved-candidates/cancel'-and$SavedRequest.Body.request_id-ceq$S.RequestID-and$SavedRequest.Body.view_token-ceq$Catalog.view_token) 'saved review cancellation lost its exact request or view'
+$Cancelled=@{request_id=$S.RequestID;view_token=$Catalog.view_token;drained=$true;native_down=$false}
+$Rejected=$false;try{ReceiveOrderedCandidates $S $Cancelled 'cancel'}catch{$Rejected=$true};Assert-Candidate ($Rejected-and$S.PendingDrain) 'drained response without native DOWN released saved review'
+$Cancelled.native_down=$true;$Cancelled.request_id=('e'*32);$Rejected=$false;try{ReceiveOrderedCandidates $S $Cancelled 'cancel'}catch{$Rejected=$true};Assert-Candidate ($Rejected-and$S.PendingDrain) 'foreign saved cancellation retired original owner'
+$Early=@{request_id=$S.RequestID;view_token=$Catalog.view_token;drained=$true;native_down=$false;admission_cancelled=$true;started=$true;active_path_changed=$false}
+$Rejected=$false;try{ReceiveOrderedCandidates $S $Early 'cancel'}catch{$Rejected=$true};Assert-Candidate ($Rejected-and$S.PendingDrain) 'already-started cancellation bypassed native DOWN'
+$Early.Remove('started');$Rejected=$false;try{ReceiveOrderedCandidates $S $Early 'cancel'}catch{$Rejected=$true};Assert-Candidate ($Rejected-and$S.PendingDrain) 'missing started receipt was treated as proven absence'
+$Early.started=$false;$Early.view_token=('f'*64);$Rejected=$false;try{ReceiveOrderedCandidates $S $Early 'cancel'}catch{$Rejected=$true};Assert-Candidate ($Rejected-and$S.PendingDrain) 'never-started receipt from another view retired original request'
+$Early.view_token=$Catalog.view_token;$Rejected=$false;try{ReceiveOrderedCandidates $S $Early 'cancel'}catch{$Rejected=$true};Assert-Candidate ($Rejected-and$S.PendingDrain) 'never-started cancellation erased previously observed admission'
+$Cancelled.request_id=$S.RequestID;ReceiveOrderedCandidates $S $Cancelled 'cancel';Assert-Candidate (-not$S.PendingDrain) 'joined original saved cancellation retained temporary ownership'
+$S.RequestID=('9'*32);$S.SavedAdmitted=$false;$S.PendingDrain=$true;$Early.request_id=$S.RequestID
+ReceiveOrderedCandidates $S $Early 'cancel';Assert-Candidate (-not$S.PendingDrain-and$S.Status.Text-ceq'Cancelled before the temporary path started.'-and$null-eq$S.Receipt) 'exact never-started cancellation claimed native shutdown or retained ownership'
+$S.CloseWanted=$false;$S.CancelWanted=$false;$S.SavedProfileID=''
+$SavedReply=@{request_id=$S.RequestID;view_token=$Catalog.view_token;drained=$false;native_down=$true;saved_profile_id='original-profile';profile_name='Saved path for later';active_path_changed=$false;failure='Original observer changed after append'}
+ReceiveOrderedCandidates $S $SavedReply 'save';SetOrderedCandidateControls $S
+Assert-Candidate ($S.SavedProfileID-ceq'original-profile'-and$S.PendingDrain-and$S.CancelWanted-and-not$S.Save.IsEnabled-and$S.Rows.Count-eq0-and$S.Status.Text.Contains('Saved path for later')-and$S.Status.Text.Contains('invalidated')) 'committed file with pending cleanup was hidden or offered a duplicate Save'
+$SavedReply.drained=$true;$SavedReply.native_down=$false;ReceiveOrderedCandidates $S $SavedReply 'cancel'
+Assert-Candidate ($S.PendingDrain-and$S.SavedProfileID-ceq'original-profile'-and-not$S.Status.Text.Contains('path is disconnected')) 'committed-file response falsely claimed native DOWN'
+$SavedReply.native_down=$true;ReceiveOrderedCandidates $S $SavedReply 'cancel';SetOrderedCandidateControls $S
+Assert-Candidate (-not$S.PendingDrain-and-not$S.Save.IsEnabled-and$S.Status.Text.Contains('Use Profiles')) 'final cleanup lost the saved write or automatically applied it'
+$SavedReply.saved_profile_id='replacement-profile';$Rejected=$false;try{ReceiveOrderedCandidates $S $SavedReply 'poll'}catch{$Rejected=$true};Assert-Candidate $Rejected 'retry changed the original committed profile identity'
 Write-Output "Composed Windows ordered candidates: PASS ($Count checks; actual functions and save callback, no WPF or VPN connection)"

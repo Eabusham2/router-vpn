@@ -137,10 +137,14 @@ These are actual implementation boundaries, distinct from missing device
 access:
 
 - The original single-WireGuard Router-node X-to-Y/Z temporary measurement
-  flow already exists. The saved ordered-prefix chooser is a separate bounded
-  continuation: it currently requires an active ordered session. Its pre-connect
-  implementation must use the captured libbox plan; the older WireGuard backend
-  and Android Network path cannot substitute for that native owner.
+  flow already exists. The complete-saved Local ordered preparation now has
+  shipping Android/iOS source and the desktop API/dialog integration described
+  below. It uses the captured native graph, proves its existing final node,
+  performs routed candidate timings and retires the path before review.
+  Prefix-only preparation, usable when the old final node is unreachable,
+  remains a separate native integration requirement; ordinary WireGuard or
+  Android Network calls cannot substitute for that owner. Native acceptance
+  of each new platform flow must be recorded separately from these source tests.
 - Ordered graphs still cover a bounded set of WG/AWG prefixes and SS finals,
   with one literal, unlayered SS2022 imported middle in the three-member
   composition. Other explicitly requested protocols, positions, layers and graph families
@@ -163,10 +167,11 @@ per-hop status/measurement. The next bounded extensions are prefix-only
 preparation for already accepted WG/AWG prefixes and the named AWG Fast/Strong
 variants, not an unrestricted Cartesian product of all protocols.
 
-### Approved Android pre-connect design, not an implementation claim
+### Historical Android pre-connect design, now followed by shipping work
 
-No production pre-connect code had been written when the executor failed.
-The inspected design starts an actual saved Local ordered path only while
+At the earlier failed executor checkpoint, no production pre-connect code
+had been written. The later Android/iOS and desktop sections below supersede
+that source status while preserving its requirements. The inspected design starts an actual saved Local ordered path only while
 idle, captures the complete sources/settings/Home/physical-network identity
 before permission, and retains an unforgeable temporary-operation owner.
 Testing must be reported truthfully, without implicit StartupLast, usage or
@@ -997,6 +1002,44 @@ Two compiled causal controls independently removed native-DOWN admission
 and the final pre-rename guard; both failed their required assertions. The
 mutated test run exited 1 in 3.242 seconds, while the unchanged baseline
 passed. The source protections and all negative cases remain enabled.
+
+## Native desktop saved-path test dialogs
+
+Windows, AppKit and GTK now have a distinct saved Local path test action
+alongside the connected-prefix flow. Each dialog captures its purpose and
+view, displays temporary Testing rather than Connected, hides adoption until
+actual native DOWN, and retains the observer reservation through review,
+Cancel and cleanup. Central session/settings mutation guards and the primary
+Disconnect behavior recognize that retained reservation even while Home is
+DOWN. Save explicitly adds one named next-connection profile; it never
+silently selects or reconnects it.
+
+The exact original request/view is included in saved-path Cancel. A typed
+never-admitted response displays `Cancelled before the temporary path
+started.` without claiming a native shutdown. Once admission has been
+observed, a later never-started response cannot release the owner. Missing
+shutdown, foreign view/request, expired measurements and incomplete cleanup
+keep Save unavailable. A committed profile identity remains visible through
+later cleanup failure, and repeat Save is blocked.
+
+Validation used the actual shipping functions and callbacks with controlled
+HTTP/platform boundaries: Windows passed 46 candidate checks and 38 Advanced
+Performance checks, with the existing Help, candidate and composed protection
+checks retained. Mac passed 63 dialog checks and ten executable causal
+controls, 37 transport checks, existing and new Stop/Retry controls, 2,434
+settings checks and 22 controls, and 71 telemetry checks with six controls.
+The strict composed Swift sources parse successfully. AppKit SDK typecheck
+and the required native Darwin child/host runs remain separate gates; public
+ordered macOS admission was not opened by this UI change.
+
+GTK passed 19 compiled status/GObject/readiness checks and three compiled
+causal controls. The final real-widget fixture compiles with warnings as
+errors, including retained review, original Cancel, Save/cleanup and late
+never-started rejection. Local display execution was blocked because the
+sandbox rejects AF_UNIX socket creation; it is not reported as a widget
+runtime pass. The full existing GTK test remains mandatory in CI. Strict
+Windows/Linux session transform audits passed. These results do not establish
+physical rendering, orientation/accessibility, network transitions or leaks.
 
 ## Fresh native execution after the Server carrier correction
 
