@@ -113,7 +113,7 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 		return identity, path, err
 	}
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
-		return speedLabPathIdentity{}, speedLabPath{}, err
+		return speedLabPathIdentity{}, speedLabPath{}, fmt.Errorf("Speed Lab identity app observation: %w", err)
 	}
 	st, command := a.state, a.cmd
 	profile, profileOK := a.profileByIDLocked(strings.TrimSpace(st.RouterID))
@@ -124,7 +124,7 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 	}
 	tracker, session, err := measurementSessionContext(ctx, a, nil)
 	if err != nil {
-		return speedLabPathIdentity{}, speedLabPath{}, err
+		return speedLabPathIdentity{}, speedLabPath{}, fmt.Errorf("Speed Lab identity session observation: %w", err)
 	}
 	if session.ID == "" || !session.Connected || session.Phase != "connected" || session.PathProof != "passed" || strings.TrimSpace(st.RouterID) == "" || session.RouterID != st.RouterID {
 		return speedLabPathIdentity{}, speedLabPath{}, errors.New("active Speed Lab path identity is unavailable or disagrees with the session tracker")
@@ -150,7 +150,7 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 		network, err = physicalNetworkIdentityContext(ctx)
 	}
 	if err != nil {
-		return speedLabPathIdentity{}, speedLabPath{}, err
+		return speedLabPathIdentity{}, speedLabPath{}, fmt.Errorf("Speed Lab identity physical-network capture: %w", err)
 	}
 	identity := speedLabPathIdentity{Tracker: tracker, SessionID: session.ID, StateToken: mtuStateSnapshotToken(st), RouterID: st.RouterID, Graph: graph, GraphOK: graphOK && st.Mode == "multihop", Imported: imported, Ordered: ordered, Command: command, Network: network, ProfileToken: liveMeasurementProfileToken(profile), Options: [3]bool{st.DAITA, st.Jumbo, st.Socks}}
 	if identity.Network == "" {
@@ -215,7 +215,7 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 				}
 				proof, err := a.readDesktopTorProofContext(ctx, launch)
 				if err != nil {
-					return speedLabPathIdentity{}, speedLabPath{}, err
+					return speedLabPathIdentity{}, speedLabPath{}, fmt.Errorf("Speed Lab identity Tor-proof capture: %w", err)
 				}
 				identity.Tor, identity.TorSession, identity.Execution = launch, proof.SessionID, desktopTorExecution(proof.Policy.Execution)
 				identity.TorEntry = launch.tor.predecessor
@@ -275,7 +275,7 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 		}
 	}
 	if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
-		return speedLabPathIdentity{}, speedLabPath{}, err
+		return speedLabPathIdentity{}, speedLabPath{}, fmt.Errorf("Speed Lab identity revalidation: %w", err)
 	}
 	return identity, path, nil
 }
@@ -325,13 +325,13 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 	}
 	_, session, err := measurementSessionContext(ctx, a, identity.Tracker)
 	if err != nil {
-		return err
+		return fmt.Errorf("session observation: %w", err)
 	}
 	if identity.SessionID == "" || session.ID != identity.SessionID || !session.Connected || session.Phase != "connected" || session.PathProof != "passed" || session.RouterID != identity.RouterID {
 		return errors.New("Speed Lab result became stale because the VPN session/path changed")
 	}
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
-		return err
+		return fmt.Errorf("app observation: %w", err)
 	}
 	st, command := a.state, a.cmd
 	profile, profileOK := a.profileByIDLocked(identity.RouterID)
@@ -364,7 +364,7 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 		network, err = physicalNetworkIdentityContext(ctx)
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("physical-network observation: %w", err)
 	}
 	if identity.Network == "" || network != identity.Network {
 		return errors.New("Speed Lab result became stale because the physical network changed")
@@ -407,7 +407,7 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 		}
 		proof, err := a.readDesktopTorProofContext(ctx, identity.Tor)
 		if err != nil {
-			return err
+			return fmt.Errorf("Tor-proof observation: %w", err)
 		}
 		if identity.TorSession == "" || proof.SessionID != identity.TorSession || identity.Execution == "" || identity.Execution != desktopTorExecution(proof.Policy.Execution) {
 			return errors.New("Speed Lab result belongs to a different Tor execution")
@@ -530,21 +530,30 @@ func (a *app) applySpeedLabTemporaryProfile(nodeID string, q speedLabRequest) (c
 func waitForSpeedLabConnectedIdentity(a *app, timeout time.Duration) (speedLabPathIdentity, error) {
 	ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), timeout)
 	defer cancel()
+	var lastObservation error
 	for ctx.Err() == nil {
 		identity, _, err := captureSpeedLabIdentityContext(ctx, a)
 		if err == nil {
 			return identity, nil
 		}
+		if ctx.Err() != nil {
+			// A final capture may meet cancellation at its first lock rather
+			// than reaching the observation that kept the path unavailable.
+			// Keep both failures without accumulating every retry.
+			lastObservation = errors.Join(lastObservation, err)
+		} else {
+			lastObservation = err
+		}
 		if opErr := a.checkConnectionOperation(); opErr != nil {
-			return speedLabPathIdentity{}, opErr
+			return speedLabPathIdentity{}, errors.Join(opErr, lastObservation)
 		}
 		select {
 		case <-ctx.Done():
-			return speedLabPathIdentity{}, ctx.Err()
+			return speedLabPathIdentity{}, errors.Join(ctx.Err(), lastObservation)
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
-	return speedLabPathIdentity{}, errors.New("temporary Speed Lab path connected but typed path proof did not become current")
+	return speedLabPathIdentity{}, errors.Join(ctx.Err(), lastObservation, errors.New("temporary Speed Lab path connected but typed path proof did not become current"))
 }
 
 func (a *app) startSpeedLabRouterPath(q speedLabRequest) (path speedLabPath, resultErr error) {

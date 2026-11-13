@@ -34,22 +34,14 @@ func speedLabTorPipelineFixture(t *testing.T) *desktopTorConnectFixture {
 	// Its selected-DNS verifier reads the explicit native peer's exact receipt;
 	// the connected fixture below also joins its real asynchronous adoption.
 	tracker := sessionTrackerFor(f.a)
-	stop, done := make(chan struct{}), make(chan struct{})
+	observer, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(5 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ticker.C:
-				tracker.observe(tracker.capture())
-			}
-		}
+		tracker.loop(observer)
 	}()
 	t.Cleanup(func() {
-		close(stop)
+		stop()
 		<-done
 		// Retire the explicit fixture lifetime before killing its last child.
 		// Joining any in-flight monitor transaction prevents a late cleanup

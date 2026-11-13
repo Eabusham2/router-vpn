@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -332,27 +333,36 @@ func (a *app) readDesktopTorProofContext(ctx context.Context, launch *desktopNod
 	// Serialize file read and receipt adoption so an older concurrent reader
 	// cannot regress the retained native interface revision.
 	if err := mobilemtu.LockContext(ctx, &launch.tor.proofMu); err != nil {
-		return desktopTorProof{}, err
+		return desktopTorProof{}, fmt.Errorf("Tor proof reader lock: %w", err)
 	}
 	defer launch.tor.proofMu.Unlock()
 	if err := a.desktopTorCurrentContext(ctx, launch); err != nil {
-		return desktopTorProof{}, err
+		return desktopTorProof{}, fmt.Errorf("Tor proof initial owner observation: %w", err)
 	}
 	raw, err := readDesktopRuntimeFileContext(ctx, launch, "proof.json", 64<<10)
 	if err != nil {
-		return desktopTorProof{}, err
+		return desktopTorProof{}, fmt.Errorf("Tor proof receipt read: %w", err)
 	}
 	if err := mobilemtu.LockContext(ctx, &launch.tor.mu); err != nil {
-		return desktopTorProof{}, err
+		return desktopTorProof{}, fmt.Errorf("Tor proof adoption lock: %w", err)
 	}
 	launch.tor.admissionObserved = true
 	launch.tor.mu.Unlock()
 	proof, err := validateDesktopTorProofAtContext(ctx, raw, launch.tor, time.Now(), time.Now())
+	if err != nil {
+		err = fmt.Errorf("Tor proof receipt validation: %w", err)
+	}
 	if err == nil {
 		err = a.desktopTorCurrentContext(ctx, launch)
+		if err != nil {
+			err = fmt.Errorf("Tor proof final owner observation: %w", err)
+		}
 	}
 	if err == nil {
 		err = noteDesktopTorStrictHeartbeatContext(ctx, launch.tor, proof)
+		if err != nil {
+			err = fmt.Errorf("Tor proof heartbeat adoption: %w", err)
+		}
 	}
 	return proof, errors.Join(err, ctx.Err())
 }

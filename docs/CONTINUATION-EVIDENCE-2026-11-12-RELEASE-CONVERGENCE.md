@@ -81,8 +81,11 @@ and four imported ordered restoration controls; and 145 retained-winner
 whole-service checks with four ownership controls and three MTU mutations.
 The canonical profile editor-budget and editor-order mutations subsequently
 failed at their exact required witnesses with the bounded JVM, without source
-or fixture changes. Remaining ordinary profile families and generated SS host
-capture still require their own completed result at this cutoff.
+or fixture changes. The ordinary-profile continuation subsequently completed
+with a durable exit-zero record, retaining ordinary/imported/Tor/OpenVPN/router
+families and their original controls; only the already separately verified
+ordered invocation was excluded from that continuation. Generated SS host
+capture still requires its own completed result at this cutoff.
 
 Concurrent native compilers were also killed under resource pressure. On
 November 12 the workspace then became explicitly unavailable, with
@@ -286,6 +289,54 @@ expression passed; the original shallow copy failed the new source-isolation
 witness. Python compilation and diff checks passed. The complete GTK widget
 sequence still requires hosted execution; this focused library check does not
 substitute for it.
+
+The subsequent exact 2bc1dcd3 Linux job (131601452748 in
+[run 43338705271](https://github.com/Eabusham2/router-vpn/actions/runs/43338705271))
+completed successfully, including the complete actual GTK/Speed Lab widget
+sequence, Save/cancel behavior and downstream runtime checks. This closes that
+hosted Linux repair check, not the complete release or physical-device gates.
+
+## CONNECT reference execution boundary after recovery
+
+The full native reference attempt at immutable 7be4ca43 accepted all 2,737
+required pinned/prepared files. All 2,552 repository-source inputs independently
+matched that Git commit; pinned Xray source and final race binaries retained
+their original hashes. The shared-source matrix, original Xray detector controls
+and all five mandatory native support roots passed. The actual HTTP traffic
+root then failed at the kernel route capture with `netlinkrib: operation not
+permitted`, before encrypted traffic; later HTTPS/DNS roots were not reached.
+No full 176-verdict acceptance receipt was produced. Hosted native execution
+remains required; this environment failure was not replaced with a synthetic
+route or used to weaken the gate.
+
+## Current Windows identity diagnostic and Tor fixture observation
+
+The prior Tor selected-DNS join repair passed the complete actual desktop Go
+contract job (131596556760) in 7be4ca43
+[run 43337284595](https://github.com/Eabusham2/router-vpn/actions/runs/43337284595),
+including the original Tor preflight siblings. A separate one-second connected
+identity wait reproduced in Windows job 131601452692 at 2bc1dcd3
+[run 43338705271](https://github.com/Eabusham2/router-vpn/actions/runs/43338705271).
+Its previous successful 7be4 step does not establish a cause or close that
+subsequent failure.
+
+The identity waiter now retains its actual last failed capture alongside caller
+cancellation. Capture and revalidation errors identify session, physical-network
+and Tor-proof stages without changing proof admission or the original deadlines.
+The Tor fixture now invokes the actual shipping session loop with a cancelled
+and joined lifetime, replacing its separate five-millisecond polling copy; the
+shipping loop uses its existing one-hundred-millisecond interval. This removes
+an unnecessary fixture divergence. It is not a proven explanation for the
+Windows timeout; actual hosted execution must establish the result.
+
+Four new diagnostic regressions and the two existing selected-DNS adoption
+tests passed together under the race detector (1.063 seconds). The fake-clock
+tests retain the exact one-second caller bound, reject any fabricated identity,
+preserve preexisting cancellation and identify a held real Tor proof reader.
+The first diagnostic iteration exposed a deadline-edge error-loss case; the
+final implementation retains the preceding observation plus the interrupted
+last capture without accumulating all retry errors. Independent review verified
+the original proof checks, lock releases and guarded adoption order remain.
 
 ## Individually bounded iOS candidate phases
 
