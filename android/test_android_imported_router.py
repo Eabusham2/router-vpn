@@ -33,8 +33,6 @@ def block(source, signature):
 
 GO_CASE = r'''case "proxy-entry":
  out,err=mobilemultihop.CompileProxyEntry(args[1],args[2])
- case "chain-imported":
- out,err=mobilemultihop.NodeChainImportedMemberInput(args[1],args[2])
  case "ss-service":
  err=mobilemultihop.ValidateCapturedSSService(args[1],args[2]);if err==nil{out="true"}
  case "imported-router":
@@ -834,7 +832,7 @@ def main(phases=None):
         subprocess.run(["go", "build", "-o", str(temp / "compiler"), str(temp / "main.go")], cwd=ROOT, check=True, timeout=120)
         stubs = dict(E.STUBS)
         lib = stubs["io/nekohasekai/libbox/Libbox.java"]
-        addition = '''public static String routerNodeChainImportedMemberInput(String config,String capture)throws Exception{return call("chain-imported",config,capture);} public static String routerCompileProxyEntry(String files,String mode)throws Exception{return call("proxy-entry",files,mode);} public static boolean rejectSSService; public static boolean routerValidateSSService(String files,String node)throws Exception{return !rejectSSService && "true".equals(call("ss-service",files,node));} public static RouterMultihop newRouterImportedEntryMultihop(String a,String b,String c,String d,String e,String f,String g)throws Exception{String result=call("imported-router",a,b,c,d,e,f,g);Runnable h=hook;hook=null;if(h!=null)h.run();return new RouterMultihop(result);}'''
+        addition = '''public static String routerCompileProxyEntry(String files,String mode)throws Exception{return call("proxy-entry",files,mode);} public static boolean rejectSSService; public static boolean routerValidateSSService(String files,String node)throws Exception{return !rejectSSService && "true".equals(call("ss-service",files,node));} public static RouterMultihop newRouterImportedEntryMultihop(String a,String b,String c,String d,String e,String f,String g)throws Exception{String result=call("imported-router",a,b,c,d,e,f,g);Runnable h=hook;hook=null;if(h!=null)h.run();return new RouterMultihop(result);}'''
         stubs["io/nekohasekai/libbox/Libbox.java"] = lib[:lib.rindex("}")] + addition + "}"
         stubs["io/nekohasekai/libbox/RouterMultihop.java"] = OWNER
         for name, source in stubs.items():

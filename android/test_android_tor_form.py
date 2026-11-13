@@ -442,6 +442,16 @@ public final class TorFormHarness {
   if(kind.equals("openvpn")){e.username=" private OpenVPN user ";e.password=" private OpenVPN password ";e.openVPNConfig="client\ndev tun\nproto udp\nremote 203.0.113.20 443\nremote 203.0.113.21 1194 tcp-client\nauth-user-pass\nremote-cert-tls server\n<ca>\n-----BEGIN CERTIFICATE-----\nfixture-only\n-----END CERTIFICATE-----\n</ca>\n";}
   return e;
  }
+
+ static void importedMemberBoundary()throws Exception{
+  AndroidStandardExitStore.Entry entry=ordinary("shadowsocks");entry.server="Middle.Example";entry.tlsServerName="";entry.policy=new JSONObject().put("dns_mode","custom").put("dns_protocol","tcp").put("dns_host","192.0.2.53").put("dns_port",53).put("ipv6_mode","off").put("kill_switch",true);
+  AndroidStandardExitStore.validate(entry);AndroidExternalPolicy.validateDraft(entry);AndroidExternalPolicy.Captured captured=AndroidExternalPolicy.captureImportedEntry(entry);
+  JSONObject member=new JSONObject(io.nekohasekai.libbox.Libbox.routerNodeChainImportedMemberInput(captured.source,captured.capture));
+  check(member.getInt("schema")==1&&member.getString("kind").equals("routervpn-node-chain-imported-member"),"Tor form imported member lost actual shared constructor");
+  check(member.getString("config").equals(captured.source)&&member.getString("capture").equals(captured.capture),"Tor form imported member replaced original source");
+  rejectOrdinary(()->io.nekohasekai.libbox.Libbox.routerNodeChainImportedMemberInput("{}",captured.capture),"malformed imported member source");
+  rejectOrdinary(()->io.nekohasekai.libbox.Libbox.routerNodeChainImportedMemberInput(captured.source,"{}"),"malformed imported member capture");
+ }
  static JSONObject torOwner(JSONObject graph)throws Exception{
   JSONObject owner=null;JSONArray rows=graph.getJSONArray("outbounds");
   for(int i=0;i<rows.length();i++)if(AndroidTorProfile.OUTBOUND.equals(rows.getJSONObject(i).optString("tag"))){check(owner==null,"ordinary Tor duplicated native owner");owner=rows.getJSONObject(i);}
@@ -875,7 +885,7 @@ public final class TorFormHarness {
   }
  }
 
- public static void main(String[] args)throws Exception{root=Path.of(args[0]);if(args.length>1&&args[1].equals("location-only")){locationSettings();return;}if(args.length>1&&args[1].equals("padding-only")){paddingCompiler();return;}if(args.length>1&&args[1].equals("ordinary-tor-only")){ordinaryTorProfiles();return;}roundtrips();independentPolicyEdits();jumboPolicyEdits();paddingPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();ordinaryTorProfiles();ordinaryTorUI();externalExecutionForm();packetExecutionForms();openVPNExecutionForms();openVPNResponseMaps();openVPNLayerMaps();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();protectionSettings();locationSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
+ public static void main(String[] args)throws Exception{root=Path.of(args[0]);if(args.length>1&&args[1].equals("imported-member-only")){importedMemberBoundary();return;}if(args.length>1&&args[1].equals("location-only")){locationSettings();return;}if(args.length>1&&args[1].equals("padding-only")){paddingCompiler();return;}if(args.length>1&&args[1].equals("ordinary-tor-only")){ordinaryTorProfiles();return;}importedMemberBoundary();roundtrips();independentPolicyEdits();jumboPolicyEdits();paddingPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();ordinaryTorProfiles();ordinaryTorUI();externalExecutionForm();packetExecutionForms();openVPNExecutionForms();openVPNResponseMaps();openVPNLayerMaps();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();protectionSettings();locationSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
 }
 '''
 
@@ -898,7 +908,8 @@ def main():
  case "external-openvpn-probes":err=nativeopenvpn.RouterValidateExternalOpenVPNResponseProbes(r.Config,r.Policy)
  case "external-openvpn-layers":var layers struct{Probes,Layers,Mode string};err=json.Unmarshal([]byte(r.Policy),&layers);if err==nil{err=nativeopenvpn.RouterValidateExternalOpenVPNStartLayers(r.Config,layers.Probes,layers.Layers,layers.Mode)}
  case "external-openvpn-pairing":err=nativeopenvpn.RouterValidateExternalOpenVPNPairing(r.Config,r.Policy)
- case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
+ case "chain-imported":value,err=mobilemultihop.NodeChainImportedMemberInput(r.Config,r.Policy)
+  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "external-response":err=mobilemultihop.ValidateExternalResponseProbe(r.Config,r.Policy)
  case "external-transport":err=mobilemultihop.ValidateExternalTransport(r.Config,r.Policy)
  case "external-dns":err=mobilemultihop.ValidateExternalDNS(r.Config,r.Policy)
@@ -939,6 +950,7 @@ def main():
  public static String routerCompileTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
  public static String routerCompileTorProfileWithExternalPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-external-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
  public static String routerCompileServerTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-server-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
+ public static String routerNodeChainImportedMemberInput(String config,String capture)throws Exception{return call("chain-imported",config,capture);}
  public static String routerCompileExternalPolicy(String config,String capture)throws Exception{return call("external-policy",config,capture);}
  public static void routerValidatePrivateNodeJSON(String raw)throws Exception{call("private-node-json",raw,"");}
  public static void routerValidateExternalOpenVPNResponseProbes(String profile,String probes)throws Exception{call("external-openvpn-probes",profile,probes);}
@@ -1080,6 +1092,25 @@ def main():
             rejected = subprocess.run(["java", "-cp", classpath, "com.eabusham.routervpn.TorFormHarness", str(data)] + (["location-only"] if label.startswith("external-location-") else []), env=environment, capture_output=True, text=True, timeout=120)
             if rejected.returncode == 0 or failure not in rejected.stderr:
                 raise AssertionError("Original Tor form defect did not fail its executable check: " + label + "\n" + rejected.stderr)
+
+        # Exercise the new ABI through its real shared parser. The negative
+        # changes only the isolated fixture and must fail at the source guard.
+        libbox = src / "io/nekohasekai/libbox/Libbox.java"
+        original_libbox = libbox.read_text()
+        imported_call = 'return call("chain-imported",config,capture);'
+        if original_libbox.count(imported_call) != 1:
+            raise AssertionError("Tor form imported member ABI changed")
+        negative_classes = work / "negative-imported-member"
+        shutil.copytree(work / "classes", negative_classes)
+        negative_source = work / "source-imported-member" / "Libbox.java"
+        negative_source.parent.mkdir()
+        negative_source.write_text(original_libbox.replace(imported_call, 'if(config.equals("{}"))return "{}";' + imported_call, 1))
+        classpath = str(negative_classes) + os.pathsep + str(jar)
+        subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", classpath, "-d", str(negative_classes), str(negative_source)], check=True, timeout=60)
+        rejected = subprocess.run(["java", "-cp", classpath, "com.eabusham.routervpn.TorFormHarness", str(data), "imported-member-only"], env=environment, capture_output=True, text=True, timeout=120)
+        if rejected.returncode == 0 or "ordinary Tor accepted malformed imported member source" not in rejected.stderr:
+            raise AssertionError("Tor form imported member ABI control missed malformed source: " + rejected.stderr)
+        print("Android Tor form imported member ABI control rejected: malformed original source")
         print(f"Android Tor form: all {len(controls)} original-source negative controls rejected")
         enabled=work/"padding-policy"
         T.build_padding_policy(go_dir,enabled)
