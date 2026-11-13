@@ -23,6 +23,7 @@ on:
           - linux-hy2
           - socks-source
           - connect-source
+          - connect-runtime
           - macos-profiles
           - socks-runtime
           - socks-owner
@@ -77,7 +78,7 @@ jobs:
           for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
               if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
                   raise SystemExit(name + " must be a complete lowercase Git commit.")
-          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "connect-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host", "socks-native-mtu", "socks-preclose", "android-sdk", "ios-sdk", "windows-source-retirement", "desktop-socks-capture", "desktop-socks-policy", "desktop-socks-parent", "desktop-socks-editor", "desktop-socks-child", "android-policy-fixtures"):
+          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "connect-source", "connect-runtime", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host", "socks-native-mtu", "socks-preclose", "android-sdk", "ios-sdk", "windows-source-retirement", "desktop-socks-capture", "desktop-socks-policy", "desktop-socks-parent", "desktop-socks-editor", "desktop-socks-child", "android-policy-fixtures"):
               raise SystemExit("Unknown focused validation suite.")
           PY
       - name: Check out the trusted validator
@@ -139,6 +140,10 @@ jobs:
           fi
           if [[ "$SUITE" == "socks-runtime" ]]; then
             python3 validator/deploy/test_focused_socks_runtime_runner.py
+          fi
+          if [[ "$SUITE" == "connect-runtime" ]]; then
+            python3 validator/deploy/test_focused_socks_runtime_runner.py
+            python3 validator/deploy/test_focused_connect_runtime_runner.py
           fi
           if [[ "$SUITE" == "android-socks-host" ]]; then
             python3 validator/deploy/validate-android-socks-host.py --self-test
@@ -282,6 +287,14 @@ jobs:
         shell: bash
         run: |
           python3 validator/deploy/test_focused_socks_runtime.py \
+            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
+            --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Require typed CONNECT runtime and preserved proof lifecycle controls
+        if: inputs.suite == 'connect-runtime'
+        shell: bash
+        run: |
+          python3 validator/deploy/test_focused_connect_runtime.py \
             --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
             --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests"
