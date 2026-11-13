@@ -36,6 +36,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mtuprobe"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	HY "github.com/sagernet/sing-box/protocol/hysteria2"
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
 	wg "github.com/sagernet/sing-box/transport/wireguard"
@@ -755,6 +756,12 @@ func desktopNodeChainPeerOutbounds(t *testing.T, ctx context.Context, chain *mob
 				t.Fatal("invalid compiled SS options")
 			}
 			out, err = SS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), tag, options)
+		case "hysteria2":
+			var options option.Hysteria2OutboundOptions
+			if json.Unmarshal(raw, &options) != nil {
+				t.Fatal("invalid compiled Hysteria2 options")
+			}
+			out, err = HY.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), tag, options)
 		default:
 			t.Fatal("uncaptured reference transport", row["type"])
 		}

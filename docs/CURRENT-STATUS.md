@@ -24,8 +24,11 @@ paths with WG/AWG prefixes and final Start Layer Off. iOS (`d5fa4a7f`) and Andro
 and Windows/GTK editor changes preserve the same selected final through
 complete profiles, Startup Last and prefix-only preparation. The detailed
 [release-convergence evidence](CONTINUATION-EVIDENCE-2026-11-12-RELEASE-CONVERGENCE.md)
-records exact source, test boundaries and retained failure logs. Actual encrypted
-Hysteria2 acceptance, current native packages and device tests remain separate.
+records exact source, test boundaries and retained failure logs. The mandatory
+Linux preflight's encrypted Hysteria2 gate passed all 37 verdicts for three
+three-node WG/AWG families, with actual TLS, selected DNS and owned shutdown.
+Installed TUN/firewall acceptance, current native packages and device tests
+remain separate.
 Imported SS2022 middles still require an SS final; broader graph families,
 Server/Compare adoption and public ordered macOS acceptance remain open.
 

@@ -2114,6 +2114,49 @@ network tunnel or physical visual/accessibility acceptance. All seven UI file
 hashes remained unchanged after the passing runs. The held AppKit draft is not
 included in this publication, and public ordered macOS admission remains closed.
 
+## Actual encrypted ordered Hysteria2 preflight
+
+The mandatory Linux installed-host preflight now runs a separate encrypted
+Hysteria2 inventory through its original retained peer image. All 37 required
+root/group/case verdicts passed: two independently keyed packet prefixes in
+WG/WG, AWG Fast/Strong and AWG Strong/Fast order feed the original Hysteria2
+final. The gate uses the pinned native WG/AWG endpoints, native QUIC/TLS,
+original password, CA/SNI and Salamander mask. It checks every prefix's private
+identity, the final private/public proof services, selected Home DNS, original
+AWG parameter readback, wrong keys/trust/credentials/routes, cancellation and
+owned client shutdown. Public, private and DNS services are explicit loopback
+reference peers; this does not claim public Internet or private-deployment access.
+
+The six changed files were frozen against `4bf0ed8e`; all 5,091 source files,
+2,489 native source records and the final binary identity remained unchanged.
+The race-instrumented native test root passed in 16.60 seconds. Its image
+SHA-256 is `81534318b7db3ce3d4d3dd79ee3fd80250eaf44e6d1529fde6d2062eaecfa43c`.
+A separately compiled image omitting the exact retained local Hysteria2
+Close call failed the intended held-request join witness. The new strict
+verdict/source runner passed nine tests, and the existing installed-host
+runner passed all 68 tests. Original installed-host cases, negative controls
+and bounds remain required; its receipt now includes the Hysteria2 verdict
+inventory and output digest.
+
+Two new-fixture corrections were necessary and their failed logs/source/image
+identities remain recorded. First, remote UDP disappearance was incorrectly
+used as evidence of local owner retirement. The fixture now closes the exact
+retained local outbound, joins the held request and separately retires the
+remote provider. Second, eager packet endpoint startup could create its reusable
+UDP session before the initial counter snapshot. The snapshot now precedes
+construction of the native clients; all packet/session/proof delta assertions
+are retained. The original two-second join and three-second held-request
+deadlines did not change. Repreparing a warm private test core also required
+restoring its inherited TUN projection from the verified pinned Git blob before
+rerunning the complete original preparers; no shipping guard was bypassed.
+
+This encrypted inventory covers these three three-node paths with unlayered
+prefixes and Hysteria2 final Off. The broader 2–8-node source/projection and
+existing prefix-layer support retain their separate evidence. Actual Box/TUN,
+kernel firewall, installed-host, packaged/device and off-LAN acceptance remain
+separate requirements. No imported-middle, Server/Compare, candidate-target
+or public Darwin admission boundary was widened by this gate.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

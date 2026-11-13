@@ -1,0 +1,376 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	QUIC "github.com/sagernet/quic-go"
+	"github.com/sagernet/sing-box/adapter"
+	D "github.com/sagernet/sing-box/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service/pause"
+)
+
+// Real independently keyed WG/AWG prefixes feed the pinned QUIC/TLS/Hysteria2
+// final. Only the first physical UDP tuple is translated to a retained loopback
+// peer. The provider's explicit inner routes are the existing private health,
+// public HTTPS and selected Home DNS services. This is not a TUN/kernel test.
+type desktopNodeChainHysteriaFixture struct {
+	ctx         context.Context
+	chain       *mobilemultihop.NodeChain
+	peer        *desktopNodeChainPeer
+	request     desktopNodeChainPeerRequest
+	before      desktopNodeChainPeerReply
+	final       *desktopNodeLayerServer
+	observation *desktopExternalHysteriaObservation
+	out         []adapter.Outbound
+	dns         *D.Router
+	stop        func()
+	held        chan struct{}
+}
+
+func desktopNodeChainHysteriaStart(t *testing.T, modes []string, fault string) *desktopNodeChainHysteriaFixture {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 20*time.Second)
+	t.Cleanup(cancel)
+	request, clients := desktopNodeChainPeerFixture(t, len(modes))
+	desktopNodeChainSetModes(t, &request, modes)
+	loopback := netip.MustParseAddr("127.0.0.1")
+	peer := desktopNodeChainPeerStart(t, request, loopback, loopback)
+	f := &desktopNodeChainHysteriaFixture{ctx: ctx, peer: peer, request: request, held: make(chan struct{}, 1)}
+	finalCtx, finalCancel := context.WithCancel(ctx)
+	f.final = &desktopNodeLayerServer{ctx: finalCtx, cancel: finalCancel, connections: map[io.Closer]bool{},
+		routes: append([]desktopNodeLayerRoute(nil), peer.final.final.routes...)}
+	held := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "10.77.0.1:8790" || r.Header.Get("Authorization") != "Bearer "+request.FinalAPIToken {
+			http.Error(w, "foreign", http.StatusForbidden)
+			return
+		}
+		select {
+		case f.held <- struct{}{}:
+		default:
+		}
+		<-r.Context().Done()
+	}))
+	t.Cleanup(held.Close)
+	f.final.routes = append(f.final.routes, desktopNodeLayerRoute{Network: "tcp", Destination: "10.77.0.1:8790", Physical: held.Listener.Addr().String()})
+	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate, ca := desktopImportedFinalCertificate(t)
+	f.observation = &desktopExternalHysteriaObservation{}
+	const password, mask = "original-ordered-Hysteria2-password", "original-ordered-Salamander-mask"
+	closeNative := desktopStartImportedFinalHysteria(t, f.final, packet, certificate, password, mask, f.observation)
+	var once sync.Once
+	f.stop = func() {
+		once.Do(func() {
+			f.final.mu.Lock()
+			f.final.closing = true
+			owned := make([]io.Closer, 0, len(f.final.connections))
+			for connection := range f.final.connections {
+				owned = append(owned, connection)
+			}
+			f.final.mu.Unlock()
+			finalCancel()
+			closeNative()
+			for _, connection := range owned {
+				_ = connection.Close()
+			}
+			joined := make(chan struct{})
+			go func() { defer close(joined); f.final.workers.Wait() }()
+			select {
+			case <-joined:
+			case <-time.After(2 * time.Second):
+				t.Error("original Hysteria2 provider failed to join its retained sockets")
+			}
+		})
+	}
+	t.Cleanup(f.stop)
+	// No prefix receives a physical resolver, final public service or DNS rule.
+	// Only this captured UDP destination reaches the independent HY2 provider.
+	peer.prefixes[len(modes)-1].handler.rules["udp/10.77.0.1:443"] = desktopReferenceRule{
+		Network: "udp", Address: "10.77.0.1", Port: 443, Target: packet.LocalAddr().String()}
+	socket := netip.MustParseAddrPort(peer.prefixes[0].bind.address())
+	original := desktopNodeChainPeerSource(t, request, clients, net.JoinHostPort(request.Address, strconv.Itoa(int(socket.Port()))))
+	launch, err := original.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(launch), &source) != nil {
+		t.Fatal("original ordered source missing")
+	}
+	var originalFinal struct {
+		Profile string `json:"profile_json"`
+	}
+	if json.Unmarshal([]byte(source.Nodes[len(source.Nodes)-1]), &originalFinal) != nil || originalFinal.Profile == "" {
+		t.Fatal("original final profile missing")
+	}
+	var profile map[string]any
+	if json.Unmarshal([]byte(originalFinal.Profile), &profile) != nil {
+		t.Fatal("original final profile malformed")
+	}
+	out := map[string]any{"type": "hysteria2", "tag": "proxy", "server": "10.77.0.1", "server_port": 443,
+		"password": password, "obfs": map[string]any{"type": "salamander", "password": mask},
+		"tls": map[string]any{"enabled": true, "server_name": "captured-final.example", "certificate_path": "cert.pem"}}
+	switch fault {
+	case "final-password":
+		out["password"] = "wrong-final-password"
+	case "final-sni":
+		out["tls"].(map[string]any)["server_name"] = "wrong-final.example"
+	case "final-trust":
+		_, ca = desktopExternalInstalledPeerCertificate(t, false)
+	case "final-mask":
+		out["obfs"].(map[string]any)["password"] = "wrong-final-mask"
+	case "final-route":
+		out["server"], profile["endpoint"] = "10.77.0.9", "10.77.0.9"
+	case "dns-route":
+		profile["adguard_ipv4"] = "192.168.50.134"
+	}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+		"outbounds": []any{out}, "route": map[string]any{"final": "proxy", "rules": []any{}}}
+	assets := map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(desktopNodeChainJSON(t, graph))), "cert.pem": base64.StdEncoding.EncodeToString([]byte(ca))}
+	final, err := mobilemultihop.NewNodeProfile("hysteria2", desktopNodeChainJSON(t, assets), desktopNodeChainJSON(t, profile), "", "")
+	if err != nil {
+		t.Fatal("complete original Hysteria2 source", err)
+	}
+	source.Nodes[len(source.Nodes)-1], err = final.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fault == "prefix-key" {
+		var record map[string]any
+		_ = json.Unmarshal([]byte(source.Nodes[len(modes)-1]), &record)
+		var files map[string]string
+		_ = json.Unmarshal([]byte(record["files"].(string)), &files)
+		asset := "wg.conf"
+		if modes[len(modes)-1] != "wg" {
+			asset = "awg.conf"
+		}
+		raw, _ := base64.StdEncoding.DecodeString(files[asset])
+		old := request.Prefixes[len(modes)-1].PreSharedKey
+		if !strings.Contains(string(raw), old) {
+			t.Fatal("prefix control lost its original captured PSK")
+		}
+		files[asset] = base64.StdEncoding.EncodeToString([]byte(strings.Replace(string(raw), old, desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'z'), 1)))
+		changed, err := mobilemultihop.NewNodeProfile(record["mode"].(string), desktopNodeChainJSON(t, files), record["profile_json"].(string), "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		source.Nodes[len(modes)-1], err = changed.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.chain, err = mobilemultihop.NewNodeChain(desktopNodeChainJSON(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Eager packet endpoints can establish the next encrypted UDP session
+	// during Start. Capture the original counter baseline before any native
+	// client is constructed; later proof must retain and reuse that session.
+	f.before = peer.snapshot()
+	f.out, f.dns, _ = desktopImportedHostnameOwners(t, ctx, f.chain, peer.prefixes[0].bind.address())
+	return f
+}
+
+func (f *desktopNodeChainHysteriaFixture) get(ctx context.Context, position int, address, token string) ([]byte, error) {
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(f.peer.final.ca)) {
+		return nil, errors.New("original HTTPS proof trust missing")
+	}
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return f.out[position].DialContext(ctx, network, M.ParseSocksaddr(address))
+		}}
+	defer transport.CloseIdleConnections()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	response, err := (&http.Client{Transport: transport}).Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != 200 {
+		return nil, fmt.Errorf("original proof HTTP status %d", response.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(response.Body, 8193))
+}
+
+func TestRouterVPNDesktopNodeChainHysteriaFinalTraffic(t *testing.T) {
+	for _, modes := range [][]string{{"wg", "wg"}, {"awg2-fast", "awg2-strong"}, {"awg2-strong", "awg2-fast"}} {
+		t.Run(strings.Join(modes, "--"), func(t *testing.T) {
+			for _, scenario := range []string{"complete-private-public-proof", "final-selected-dns", "final-password", "final-sni", "final-trust", "final-mask", "prefix-key", "final-route", "dns-route", "held-cancel-join", "stop-drains-final-socket"} {
+				t.Run(scenario, func(t *testing.T) {
+					f := desktopNodeChainHysteriaStart(t, modes, scenario)
+					original, _ := f.chain.LaunchInput()
+					config := f.chain.Config()
+					before := f.before
+					last := len(f.out) - 1
+					switch scenario {
+					case "complete-private-public-proof":
+						for position, prefix := range f.request.Prefixes {
+							inner, _ := desktopNodeChainInner(position, len(modes))
+							call, stop := context.WithTimeout(f.ctx, 1500*time.Millisecond)
+							body, err := f.get(call, position, "http://"+net.JoinHostPort(inner, "8787")+"/health", prefix.APIToken)
+							stop()
+							var health desktopImportedWGSSHealthReply
+							if err != nil || json.Unmarshal(body, &health) != nil || !health.OK || health.NodeID != prefix.NodeProofID {
+								t.Fatal("original encrypted prefix identity failed", position, err)
+							}
+						}
+						call, stop := context.WithTimeout(f.ctx, 2*time.Second)
+						body, err := f.get(call, last, "http://"+desktopNodeRouterHealthTarget+"/health", f.request.FinalAPIToken)
+						stop()
+						var health desktopImportedWGSSHealthReply
+						if err != nil || json.Unmarshal(body, &health) != nil || !health.OK || health.NodeID != f.request.FinalNodeProofID {
+							t.Fatal("ordered Hysteria2 final private proof failed", err)
+						}
+						call, stop = context.WithTimeout(f.ctx, 2*time.Second)
+						body, err = f.get(call, last, "https://1.1.1.1/cdn-cgi/trace", "")
+						stop()
+						if err != nil || string(body) != "ip=203.0.113.89\n" {
+							t.Fatal("ordered Hysteria2 final public proof failed", err)
+						}
+						after := f.peer.snapshot()
+						for i, prefix := range after.Prefixes {
+							if prefix.Mode != modes[i] {
+								t.Fatal("encrypted prefix changed its selected raw mode", i)
+							}
+							if modes[i] != "wg" {
+								parameters, err := desktopNodeAWGParameterDigest(f.request.Prefixes[i].Parameters)
+								if err != nil || prefix.ParametersSHA256 != parameters {
+									t.Fatal("encrypted prefix lost original AWG parameter readback", i, err)
+								}
+							}
+							if prefix.RawUDP <= before.Prefixes[i].RawUDP || prefix.ProofQueries != before.Prefixes[i].ProofQueries+1 || prefix.UDP <= before.Prefixes[i].UDP {
+								t.Fatal("proof skipped an encrypted packet prefix", i, before.Prefixes, after.Prefixes)
+							}
+						}
+						if f.final.rawUDP.Load() == 0 || f.final.plainTCP.Load() != 2 || after.Final.RouterQueries != before.Final.RouterQueries+1 || after.Final.FinalPublicQueries != before.Final.FinalPublicQueries+1 || after.Final.FinalRawTCP != before.Final.FinalRawTCP {
+							t.Fatal("final proof used a substitute SS/plaintext owner", before, after)
+						}
+					case "final-selected-dns", "dns-route":
+						call, stop := context.WithTimeout(f.ctx, 1500*time.Millisecond)
+						question := new(dns.Msg)
+						question.SetQuestion("example.com.", dns.TypeA)
+						answer, err := f.dns.Exchange(call, question, adapter.DNSQueryOptions{})
+						stop()
+						after := f.peer.snapshot()
+						if scenario == "dns-route" {
+							if err == nil || after.Final.DNSQueries != before.Final.DNSQueries {
+								t.Fatal("failed selected Home DNS found a fallback", err)
+							}
+						} else {
+							if err != nil || answer == nil || answer.Id != question.Id || len(answer.Answer) != 1 {
+								t.Fatal("original selected Home DNS failed", err)
+							}
+							value, ok := answer.Answer[0].(*dns.A)
+							if !ok || !value.A.Equal(net.ParseIP("93.184.216.34")) || after.Final.DNSQueries != before.Final.DNSQueries+1 || f.final.plainUDP.Load() == 0 {
+								t.Fatal("selected DNS escaped Hysteria2 final")
+							}
+						}
+						if f.final.rawUDP.Load() == 0 {
+							t.Fatal("DNS control never reached actual encrypted final")
+						}
+					case "held-cancel-join", "stop-drains-final-socket":
+						call, cancel := context.WithTimeout(f.ctx, 3*time.Second)
+						defer cancel()
+						done := make(chan error, 1)
+						go func() {
+							_, err := f.get(call, last, "http://10.77.0.1:8790/held", f.request.FinalAPIToken)
+							done <- err
+						}()
+						select {
+						case <-f.held:
+						case <-call.Done():
+							t.Fatal("retained final stream never reached held service", call.Err())
+						}
+						if scenario == "held-cancel-join" {
+							cancel()
+						} else {
+							// Host/Box retirement closes this exact LOCAL native
+							// outbound. A remote UDP peer disappearing is network
+							// loss, not positive local-owner retirement evidence.
+							if err := f.out[last].(io.Closer).Close(); err != nil {
+								t.Fatal("original local Hysteria2 owner failed to close", err)
+							}
+						}
+						select {
+						case err := <-done:
+							if err == nil {
+								t.Fatal("held operation invented a successful completion")
+							}
+						case <-time.After(2 * time.Second):
+							t.Fatal("cancel/stop failed to join actual Hysteria2 request")
+						}
+						f.stop()
+						f.final.mu.Lock()
+						retained := len(f.final.connections)
+						f.final.mu.Unlock()
+						if retained != 0 {
+							t.Fatal("retired Hysteria2 service retained original sockets")
+						}
+					default:
+						call, stop := context.WithTimeout(f.ctx, 750*time.Millisecond)
+						_, err := f.get(call, last, "http://"+desktopNodeRouterHealthTarget+"/health", f.request.FinalAPIToken)
+						stop()
+						after := f.peer.snapshot()
+						if err == nil || after.Final.RouterQueries != before.Final.RouterQueries || f.final.plainTCP.Load() != 0 || f.final.plainUDP.Load() != 0 {
+							t.Fatal("invalid captured dependency reached authenticated final", scenario, err)
+						}
+						if scenario == "prefix-key" || scenario == "final-route" {
+							if f.final.rawUDP.Load() != 0 {
+								t.Fatal("unowned prefix/final route reached Hysteria2 socket")
+							}
+						} else if f.final.rawUDP.Load() == 0 {
+							t.Fatal("negative control never reached original Hysteria2 UDP provider")
+						}
+						if scenario == "final-password" && f.observation.authFailures.Load() == 0 {
+							t.Fatal("wrong password control did not reach native Hysteria2 authentication")
+						}
+						if scenario == "final-sni" || scenario == "final-trust" {
+							var original *QUIC.TransportError
+							cause := "x509: certificate signed by unknown authority"
+							if scenario == "final-sni" {
+								cause = "x509: certificate is valid for captured-final.example, not wrong-final.example"
+							}
+							if !errors.As(err, &original) || original.Remote || !strings.Contains(original.ErrorMessage, "tls: failed to verify certificate: "+cause) || f.observation.authFailures.Load() != 0 {
+								t.Fatal("wrong SNI/CA lost native TLS refusal", err)
+							}
+						}
+					}
+					again, err := f.chain.LaunchInput()
+					if err != nil || again != original || f.chain.Config() != config || f.chain.Progress().Ready {
+						t.Fatal("component proof rewrote original capture or fabricated ordinary Ready", err)
+					}
+				})
+			}
+		})
+	}
+}
