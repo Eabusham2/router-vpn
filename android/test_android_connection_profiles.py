@@ -167,8 +167,8 @@ final class ProductConnectSurface extends Context {
  final View killSwitch=new View(),autoRequirementsHint=new View();private String externalProtectionID="",externalProtectionSource="";
  static final class Probe{boolean isBusy(){return false;}}final Probe viaEntryProbe=new Probe();
  static final class Connection{
-  int starts;boolean direct;AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry ordinaryEntry,exit;String mode,execution;
-  boolean cancelStartupPending(){return false;}boolean cancelPermissionPending(){return false;}boolean isActiveOrTransitioning(){return false;}void disconnect(Object callback){throw new AssertionError("unexpected disconnect");}
+  int starts,permissionCancellations;boolean direct;AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry ordinaryEntry,exit;String mode,execution;
+  boolean cancelStartupPending(){return false;}boolean cancelPermissionPending(){permissionCancellations++;return false;}boolean isActiveOrTransitioning(){return false;}void disconnect(Object callback){throw new AssertionError("unexpected disconnect");}
   void connectExternal(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,boolean direct,String mode,String execution,Object callback){starts++;this.entry=entry;this.exit=exit;this.direct=direct;this.mode=mode;this.execution=execution;}
   void connectExternal(AndroidConnectionProfileStore.ExternalSelection path,Object callback){if(path.ordinaryEntry!=null){starts++;ordinaryEntry=path.ordinaryEntry;exit=path.exit;mode=path.entryMode;execution=path.execution;direct=false;}else connectExternal(path.entry,path.exit,path.direct(),path.entryMode,path.execution,callback);}
   AndroidNodeStore.Node importedFinal;
@@ -215,6 +215,9 @@ final class AndroidUnifiedNodeCatalog {static final class Item{final String id;f
 // actual native drain/restoration lifecycle.
 final class AndroidExternalNodeComparison {static boolean active;static int cancellations;static boolean cancelActiveOperation(){if(!active)return false;cancellations++;return true;}}
 final class AndroidViaEntryLatencyProbe {static boolean active;static int cancellations;static boolean cancelActiveOperation(){if(!active)return false;cancellations++;return true;}}
+// Product's process-owned testing cancellation is exercised in its dedicated
+// preparation/UI fixture; ordinary profile tests retain an explicit boundary.
+final class AndroidNodeCandidatePreparation {static boolean active;static int cancellations;static boolean cancelActive(){if(!active)return false;cancellations++;return true;}}
 '''
 
 HARNESS = r'''package com.eabusham.routervpn;
@@ -310,6 +313,9 @@ public final class ConnectionProfilesHarness {
    check(restored.getString("dns_mode").equals("home")&&restored.getString("dns_protocol").equals("tcp")&&restored.getString("dns_host").equals("192.168.50.133")&&restored.getInt("dns_port")==5353&&restored.getString("start_layer").equals("off"),"CONNECT profile changed exact saved DNS or layer");
    check(!text(f.rows).contains(originalPassword)&&!text(f.rows).contains(entry.password),"CONNECT row persisted transport secret");
    ProductConnectSurface ui=new ProductConnectSurface(f);ui.displayMultihop();check(ui.multihopHint.text.equals(entry.name+" → "+f.first.name+" • "+(protocol.equals("http")?"HTTP CONNECT":"HTTPS CONNECT")+" → Shadowsocks • Local"),"CONNECT UI changed its captured entry, final or Local identity");ui.multihopToggle.setChecked(true);ui.pressConnect();check(ui.connection.starts==1&&ui.connection.ordinaryEntry.password.equals(entry.password)&&ui.connection.mode.equals("shadowsocks"),"CONNECT public selection replaced original credentials");
+   int cancelled=AndroidNodeCandidatePreparation.cancellations,permissionCancelled=ui.connection.permissionCancellations;State idleBefore=new State(f);AndroidNodeCandidatePreparation.active=true;
+   try{ui.pressConnect();check(AndroidNodeCandidatePreparation.cancellations==cancelled+1&&ui.connection.permissionCancellations==permissionCancelled+1&&ui.connection.starts==1&&ui.statusView.text.startsWith("Cancelling candidate testing"),"active temporary purpose started another connection instead of exact cancellation");idleBefore.same(f,"temporary purpose cancellation leaves profile sources and selection unchanged");}
+   finally{AndroidNodeCandidatePreparation.active=false;}
    JSONObject original=f.row();for(String fault:List.of("udp","layer","execution","source","alias")){
     JSONObject row=new JSONObject(original.toString());
     if(fault.equals("udp"))row.getJSONObject("exit_policy").put("dns_protocol","udp");
@@ -894,6 +900,22 @@ def validate_general_inventory(actual):
         raise AssertionError("An original profile case was selected twice")
 
 
+def run_temporary_cancel_control(work, app, classes, jar, env):
+    original = (app / "ProductConnectSurface.java").read_text()
+    marker = "if(AndroidNodeCandidatePreparation.cancelActive())"
+    if original.count(marker) != 1: raise AssertionError("Actual Product temporary cancellation boundary changed")
+    private = work / "temporary-cancel-control"; private.mkdir()
+    mutation = private / "ProductConnectSurface.java"; mutation.write_text(original.replace(marker, "if(false)"))
+    negative = private / "classes"; shutil.copytree(classes, negative)
+    classpath = str(negative) + os.pathsep + str(jar)
+    subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", classpath, "-d", str(negative), str(mutation)], check=True, timeout=60)
+    negative_data = private / "data"; negative_data.mkdir()
+    result = subprocess.run(["java", "-cp", classpath, "com.eabusham.routervpn.ConnectionProfilesHarness", str(negative_data), "connect-router"], env=env, capture_output=True, text=True, timeout=180)
+    if result.returncode == 0 or "active temporary purpose started another connection instead of exact cancellation" not in result.stderr:
+        raise AssertionError("Actual Product temporary cancellation control missed its defect\n" + result.stderr)
+    print("Android profile Product causal control: original temporary purpose must cancel before connecting")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary", "ordered-chain", "ordered-imported", "ordered-execution", "general-stores"), default="all")
@@ -1062,6 +1084,8 @@ def main():
         families=("connect-router",) if args.case_family=="connect-router" else ("imported-final-wg", "imported-final-awg2-fast", "imported-final-awg2-strong", "imported-nested-wg", "imported-nested-awg2-fast", "imported-nested-awg2-strong") if args.case_family=="packet-finals" else ("connect-router", "imported-router", "imported-wireguard-router", "imported-amneziawg-router", "imported-final-wg", "imported-final-awg2-fast", "imported-final-awg2-strong", "imported-nested-wg", "imported-nested-awg2-fast", "imported-nested-awg2-strong")
         for family in (() if args.case_family == "general-stores" else families):
             subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), family], env=env, check=True, timeout=180)
+        if args.case_family != "general-stores" and "connect-router" in families:
+            run_temporary_cancel_control(work, app, classes, jar, env)
         if args.case_family in ("connect-router", "imported-router", "packet-finals"):
             return
         general_command = ["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data)]

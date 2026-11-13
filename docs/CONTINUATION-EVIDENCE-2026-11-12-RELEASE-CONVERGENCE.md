@@ -1189,6 +1189,25 @@ warnings as errors; display execution remains required in CI because local
 AF_UNIX creation is denied. No backend timeout, history retention or
 measurement expiration policy was changed.
 
+## Android profile fixture retains temporary-test cancellation
+
+Both Android runtime-truth run `43359634276` and combined-runtime run
+`43359633555` at `a13ca63dc1e0fed0bfc8f93d39b87a1b9ed4eb98` failed
+when the shared profile fixture compiled the actual Product Connect handler:
+its isolated source set omitted `AndroidNodeCandidatePreparation`. The full
+LayeredVpnService type check preceding that failure passed. This is a fixture
+composition failure; removing production cancellation would be an invalid fix.
+
+The shared fixture now supplies an explicit controlled temporary-purpose
+boundary and exercises its active branch for both HTTP and HTTPS profile
+families. It requires cancellation of the original test and pending permission,
+unchanged source/profile selection, and no replacement connection start. The
+focused actual extracted-handler fixture passed 126 checks, and a separately
+compiled control removing that cancellation branch failed at the intended
+witness. The standalone prefix-source fixture also compiles the repaired shared
+source set. No production cancellation or timeout behavior was changed; fresh
+CI and actual APK acceptance remain separate evidence.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
