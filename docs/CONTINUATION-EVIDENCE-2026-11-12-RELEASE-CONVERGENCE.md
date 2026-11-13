@@ -2373,6 +2373,46 @@ change; these results do not stand in for them or a completed hosted release.
 The validation manifest SHA256 is
 `87e57037dffb9a8dd357e8d65a5b354e7650c4e3f8638523e0225f5c75a0d2d5`.
 
+## Selected-prefix native heartbeat diagnostics — November 13, 2026
+
+This completes the separately held native diagnostics from the checked
+selected-prefix interval change. The original combined heartbeat rejection
+now identifies the failed owner-state, owner-current, MTU-binding,
+ready-validation, before-publication, publication or after-publication stage.
+Public errors use fixed labels and retain the original typed failure privately.
+An already-cancelled caller is captured before the current-owner check;
+later cleanup still joins its original error without substituting another
+session's state. Original ready validation, MTU binding, exclusive publication
+and captured-owner cleanup remain mandatory.
+
+The required native inventory is now 27 records: all 20 previous parent/leaf
+records plus seven diagnostic records. The pinned native command and shared
+prefix runtime passed that exact inventory under the race detector in
+32.151 seconds. This includes actual authenticated HTTP and the original
+fifty TCP connections, with an explicit modeled outbound/TUN boundary.
+The 2,480 captured native dependency files were unchanged before and after
+execution. A separately compiled printable-cause control failed the intended
+"heartbeat diagnostic leaked a cause or lost typed ownership" assertion in
+0.533 seconds; the driver accepted only that causal rejection, and the original
+process group joined.
+
+The earlier local executor outage produced no observed native verdict.
+The first remote cold compile reached its unchanged 600-second outer bound
+before any observed test start; that original process group was joined before
+the successful warm attempt. The complete original timeout traceback was not
+preserved, but its observed outcome and tail were recorded. The successful
+run retained the original 600-second outer and 90-second Go test bounds.
+No timeout, required case or negative control was removed.
+
+Validation used the recovered exact `764745c4` snapshot plus the five frozen
+files; its native source is equivalent to `d746d3bf` plus the three files
+published here because the shared interval pair is already in `45081f87`.
+The final manifest SHA256 is
+`98536c74a07c59d75f88bb7ca2720c3c8b6533cc49e70c8b42ff1cce6a6ec925`.
+This is native runtime fixture evidence, not installed TUN, Windows counter
+execution or physical-device acceptance. The exact cause of the historical
+generic Windows ARM heartbeat failure remains unconfirmed.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

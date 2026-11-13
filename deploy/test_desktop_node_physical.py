@@ -132,6 +132,9 @@ CANDIDATE_PREFIX_COMMAND_VERDICTS = (
 CANDIDATE_PREFIX_RUNTIME_ROOT = "TestRouterVPNDesktopCandidatePrefixRuntime"
 CANDIDATE_PREFIX_RUNTIME_VERDICTS = (
     CANDIDATE_PREFIX_RUNTIME_ROOT + "ClosedFifty",
+    CANDIDATE_PREFIX_RUNTIME_ROOT + "HeartbeatFailureStages",
+    *(CANDIDATE_PREFIX_RUNTIME_ROOT + "HeartbeatFailureStages/" + stage for stage in
+      ("owner-state", "owner-current", "mtu-binding", "ready-validation", "publication", "redaction")),
     CANDIDATE_PREFIX_RUNTIME_ROOT + "RejectsSubstitution",
     *(CANDIDATE_PREFIX_RUNTIME_ROOT + "RejectsSubstitution/" + fault for fault in
       ("reader", "config", "source-inode", "native-mtu", "capture", "position", "path", "application", "dns", "stale-ready",

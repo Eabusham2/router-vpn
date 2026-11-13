@@ -204,19 +204,45 @@ func (owner *routerVPNNodeCandidatePrefixRuntime) heartbeat(ctx context.Context,
 		return nil
 	}
 	state := owner.state.Load()
-	if state == nil || owner.current(ctx) != nil || record.Reader != state.record.Reader || record.Interface != state.record.Interface || record.Index != state.record.Index || record.MTU != state.record.MTU || record.Session != state.record.Session || record.Config != state.record.Config || record.Path != state.record.Path || record.Active || record.Index < 1 || uint64(record.Index) > uint64(^uint32(0)) {
-		return routerVPNExternalFailure
+	if state == nil {
+		return routerVPNNodeCandidatePrefixHeartbeatFailure("owner-state", nil)
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return routerVPNNodeCandidatePrefixHeartbeatFailure("owner-current", err)
+		}
+	}
+	if err := owner.current(ctx); err != nil {
+		return routerVPNNodeCandidatePrefixHeartbeatFailure("owner-current", err)
+	}
+	if record.Reader != state.record.Reader || record.Interface != state.record.Interface || record.Index != state.record.Index || record.MTU != state.record.MTU || record.Session != state.record.Session || record.Config != state.record.Config || record.Path != state.record.Path || record.Active || record.Index < 1 || uint64(record.Index) > uint64(^uint32(0)) {
+		return routerVPNNodeCandidatePrefixHeartbeatFailure("mtu-binding", nil)
 	}
 	meta := owner.metadata
 	progress := state.proof.Progress()
 	ready := mobilemultihop.DesktopNodeCandidatePreparationReadyRecord{Schema: 1, Kind: "routervpn-node-candidate-prefix-ready-v1", SourceSHA256: meta.SourceSHA256, CaptureSHA256: meta.CaptureSHA256, TransferSHA256: owner.transfer, Identity: state.identity, Generation: 1, Reader: record.Reader, InterfaceName: record.Interface, InterfaceIndex: uint32(record.Index), MTU: record.MTU, ObservedAt: time.Now().UnixMilli(), Prepared: progress.Prepared, ApplicationOpen: progress.ApplicationOpen, DNSOpen: progress.DNSOpen, Prefixes: progress.Prefixes}
-	if ready.Validate(owner.policy, owner.transfer) != nil || owner.current(ctx) != nil || owner.files.publish("node-candidate-prefix-ready.json", ready) != nil {
-		return routerVPNExternalFailure
+	if err := ready.Validate(owner.policy, owner.transfer); err != nil {
+		return routerVPNNodeCandidatePrefixHeartbeatFailure("ready-validation", err)
 	}
-	if owner.current(ctx) != nil {
-		return errors.Join(routerVPNExternalFailure, owner.files.remove("node-candidate-prefix-ready.json"))
+	if err := owner.current(ctx); err != nil {
+		return routerVPNNodeCandidatePrefixHeartbeatFailure("before-publication", err)
+	}
+	if err := owner.files.publish("node-candidate-prefix-ready.json", ready); err != nil {
+		return routerVPNNodeCandidatePrefixHeartbeatFailure("publication", err)
+	}
+	if err := owner.current(ctx); err != nil {
+		return routerVPNNodeCandidatePrefixHeartbeatFailure("after-publication", errors.Join(err, owner.files.remove("node-candidate-prefix-ready.json")))
 	}
 	return nil
+}
+
+// Only fixed stage labels enter the printable error. Retain typed causes for
+// ownership/cancellation decisions without exposing provider or file details.
+func routerVPNNodeCandidatePrefixHeartbeatFailure(stage string, cause error) error {
+	return routerVPNPrivateCommandFailure{
+		public: errors.New("candidate prefix heartbeat " + stage + " failed; private credentials were not logged"),
+		cause:  errors.Join(routerVPNExternalFailure, cause),
+	}
 }
 
 func (owner *routerVPNNodeCandidatePrefixRuntime) close(ctx context.Context) error {
