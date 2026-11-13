@@ -116,7 +116,7 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             c=Composition(Path(directory));receipt=c.run()
             self.assertEqual(len(c.calls),18)
-            self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,*([100]*8),*([600]*4)])
+            self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,*([190]*8),*([600]*4)])
             self.assertEqual(c.original,[V.ORIGINAL])
             self.assertEqual([x["case"] for x in receipt["case_records"]],list(V.CASES))
             self.assertEqual(len(receipt["controls"]),4)
@@ -128,7 +128,9 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
             for name,command,_,_,_ in c.calls:
                 if name.endswith("-build") or name in {v["name"] for v in V.CONTROLS}:
                     self.assertIn("-race",command);self.assertIn("-p=1",command)
-                if name.startswith("run-"):self.assertIn("-test.timeout=90s",command)
+                if name.startswith("run-"):self.assertIn("-test.timeout=180s",command)
+                if name in {v["name"] for v in V.CONTROLS}:self.assertIn("-timeout=180s",command)
+                if name=="original-imported-middle":self.assertIn("-test.timeout=90s",command)
     def test_no_failed_missing_or_unjoined_phase_can_publish_acceptance(self):
         for fault in ("preflight","owner-prepare","mobile-prepare","build","original-missing","case-missing","case-failed",
                       "control-pass","control-signal","control-panic","control-witness","candidate-changed","owner-changed",

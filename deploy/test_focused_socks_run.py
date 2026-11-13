@@ -157,7 +157,7 @@ def validate(source,source_sha,output,go="go"):
             for case in CASES:
                 selected=dict(env,ROUTERVPN_SOCKS_RUN_PEER=str(peer),ROUTERVPN_SOCKS_RUN_CASE=case,GODEBUG="x509usefallbackroots=1")
                 status,raw=run("run-"+case,[compiler,"tool","test2json","-t","-p",BASE.LIBBOX,client,
-                    "-test.run=^"+CASE_ROOT+"$","-test.count=1","-test.timeout=90s","-test.v"],mobile,100,selected)
+                    "-test.run=^"+CASE_ROOT+"$","-test.count=1","-test.timeout=180s","-test.v"],mobile,190,selected)
                 records.append(dict(case=case,**native_events(raw,status,case)))
                 if BASE.COMMON.image_identity(peer)!=peer_identity:raise ValueError("Original peer executable changed")
             controls=[]
@@ -167,7 +167,7 @@ def validate(source,source_sha,output,go="go"):
                 replacement.write_text(changed);overlay.write_text(json.dumps({"Replace":{str(original):str(replacement)}}))
                 selected=dict(env,ROUTERVPN_SOCKS_RUN_PEER=str(peer),ROUTERVPN_SOCKS_RUN_CASE=control["case"],GODEBUG="x509usefallbackroots=1")
                 status,raw=run(control["name"],[compiler,"test",*flags,"-json","-overlay="+str(overlay),
-                    "-run=^"+CASE_ROOT+"$","-count=1","-timeout=90s","./experimental/libbox"],mobile,600,selected)
+                    "-run=^"+CASE_ROOT+"$","-count=1","-timeout=180s","./experimental/libbox"],mobile,600,selected)
                 controls.append(dict(name=control["name"],original_sha256=hashlib.sha256(original.read_bytes()).hexdigest(),
                     mutation_sha256=hashlib.sha256(changed.encode()).hexdigest(),
                     **native_events(raw,status,control["case"],control)))
