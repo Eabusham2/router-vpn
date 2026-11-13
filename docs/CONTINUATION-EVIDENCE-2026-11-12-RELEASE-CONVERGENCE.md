@@ -1364,6 +1364,22 @@ substitute compilation for acceptance. The existing compiled output-pipe and
 pre-start ownership fixtures were unchanged. Actual hosted execution of both
 architectures is still required.
 
+## Android import fixture preserves the temporary telemetry boundary
+
+The d2c97bcb combined Android run
+[43361251242](https://github.com/Eabusham2/router-vpn/actions/runs/43361251242)
+passed the earlier candidate checks, then its import UI fixture failed Java
+compilation: its local AndroidNodeCandidatePreparation double omitted the
+testingHome method called by the actual AndroidTelemetryCapture. The import
+fixture now extends the existing telemetry boundary instead of replacing it
+with an incomplete local class. No production telemetry admission changed.
+
+The real Java 17 import, atomic store, stale-response, durable ranking, DNS
+default and execution-summary composition passed 74 checks. All seven existing
+compiled negative controls still rejected their intended broken behavior.
+The import fixture does not start a native tunnel or supply private networking
+acceptance. The repaired aggregate must be verified on its new exact SHA.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
