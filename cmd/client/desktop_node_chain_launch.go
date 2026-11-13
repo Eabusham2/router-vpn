@@ -15,6 +15,7 @@ import (
 // This adjunct seals source and proof observations inside the existing launch.
 // It owns no native process, protection, TUN, journal or independent registry.
 type desktopNodeChainLaunch struct {
+	preparation           *orderedCandidatePreparation // bound once before staging; nil for ordinary connections
 	policy                *mobilemultihop.DesktopNodeChainPolicy
 	selection             multihopSelection
 	input                 string

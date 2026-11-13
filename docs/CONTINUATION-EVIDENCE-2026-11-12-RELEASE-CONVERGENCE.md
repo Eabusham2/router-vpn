@@ -527,6 +527,31 @@ and its mandatory gates; permission/UI wiring and actual device acceptance are
 separate. It still requires a usable complete original graph, rather than
 claiming disconnected prefix-only discovery or arbitrary candidate transports.
 
+## Desktop temporary candidate ownership foundation
+
+A separate desktop preparation owner now captures the selected complete saved
+Local graph, candidate sources, idle Home state and original physical inventory.
+It compiles the real saved graph and eligible SS candidates without inventing
+an active connection. Its immutable purpose binds once to the original launch
+before staging. Ordinary connected-catalog guards remain strict; a source-only
+capture has no process, tracker or proof and cannot satisfy them.
+
+The owner retains its operation slot and outer MTU hold until the actual
+candidate worker joins and the original native graph confirms DOWN. Context
+deadlines apply to lifecycle lock acquisition as well as worker waits. A failed
+cleanup retains the same owner for retry. Idle admission and final retirement
+require absence of raw native/graph/relay registrations, including malformed
+records that the public graph accessor intentionally hides. They never erase a
+foreign or replacement record to manufacture successful cleanup. An observed
+pre-bind Home, source or network mismatch is permanently invalid for that owner.
+
+Eight focused race-test roots with thirty-four leaves passed in 55.383 seconds.
+Four unchanged connected-catalog/source/admission roots passed in 7.142 seconds.
+The omitted-worker-join mutation failed at its intended premature-release
+witness. These are source/compiler/ownership tests with explicit native
+boundaries. This unit exposes no public temporary-Test route yet: actual native
+purpose wiring, detached result Save, native UI and device acceptance follow.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

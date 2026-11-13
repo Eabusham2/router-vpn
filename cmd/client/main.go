@@ -53,7 +53,8 @@ type app struct {
 	closing                bool // protected by mu; terminal controller shutdown admission
 	connectionContext      context.Context
 	connectionCancel       context.CancelFunc
-	connectionCancelIntent context.Context // protected by mu; exact operation requested to cancel
+	connectionCancelIntent context.Context              // protected by mu; exact operation requested to cancel
+	candidatePreparation   *orderedCandidatePreparation // protected by mu; exact temporary candidate purpose, never a connected session
 	state                  state
 	cmd                    *exec.Cmd
 	daitaCancel            context.CancelFunc
