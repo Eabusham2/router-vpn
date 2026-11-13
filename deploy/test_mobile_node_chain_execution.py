@@ -17,6 +17,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 PREFIX = 'github.com/sagernet/sing-box/'
 TAGS = 'with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego'
+MAX_BUILD_OUTPUT_BYTES = 64 * 1024
 spec = importlib.util.spec_from_file_location('mobile_execution_component_preparer', ROOT/'deploy/prepare-mobile-node-chain-execution.py')
 PREP = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(PREP)
@@ -45,8 +46,26 @@ def verdict(raw, code, expected):
     if code != 0:
         raise ValueError('mobile execution component command failed')
     seen, passed, finished, started, records = {}, {}, set(), set(), []
+    build_packages = {PREFIX+package+'.test': package for package in expected}
+    build_output_bytes = {}
     for line in raw.splitlines():
         event = json.loads(line)
+        if not isinstance(event, dict):
+            raise ValueError('invalid component event')
+        if event.get('Action') == 'build-output':
+            # Go emits BuildEvent records with ImportPath, independently of
+            # TestEvent.Package. Linker diagnostics are not test acceptance.
+            package = build_packages.get(event.get('ImportPath'))
+            output = event.get('Output')
+            if (set(event) != {'ImportPath', 'Action', 'Output'} or
+                    package is None or package in started or
+                    not isinstance(output, str) or not output or 'DATA RACE' in output):
+                raise ValueError('foreign, late or malformed component build output')
+            size = build_output_bytes.get(package, 0) + len(output.encode('utf-8'))
+            if size > MAX_BUILD_OUTPUT_BYTES:
+                raise ValueError('component build output exceeded its diagnostic bound')
+            build_output_bytes[package] = size
+            continue
         package = event.get('Package', '').removeprefix(PREFIX)
         action, name = event.get('Action'), event.get('Test')
         if package not in expected or package in finished or action in ('fail', 'skip') or 'DATA RACE' in event.get('Output', ''):

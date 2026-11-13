@@ -1504,6 +1504,12 @@ The native Windows and GTK Performance panels now offer **Test selected prefix o
 
 The exact Windows action source passed 42 composed Performance checks and the existing 109 ordered-dialog checks. The Linux publication's actual callback source passed six action checks plus its compiled wrong-purpose control; all 50 GObject status guards and eight existing causal controls passed. These fixture tests execute the shipping callbacks and lifetime guards with explicit HTTP and toolkit-construction boundaries. Physical rendering, accessibility and the installed native network flow require their platform gates. AppKit activation is retained with the Darwin integration work; this UI publication does not claim macOS native prefix acceptance.
 
+## Mobile execution parser preserves real Go build diagnostics
+
+The retained iOS Libbox job at 552d8f4e completed its runtime cases, but the exact-verdict parser rejected the Go JSON `build-output` records containing a duplicate-linker-library warning. The parser now accepts only the expected test binary's separate build-event schema before that package starts, with a 64 KiB aggregate diagnostic limit. A build diagnostic never contributes a test or package PASS. Foreign or late events, failed builds, runtime failures, skipped or missing cases, unknown actions, races and nonzero command exits still fail the gate.
+
+All 13 parser runner tests passed. Replaying the actual hosted job's 374 JSON events now returns the same 91 passing record bytes across the 35 required roots as the original parser produces when only its two build diagnostics are separated. The original parser rejects the unmodified stream, establishing the actual cause. Five mutations of that real stream remained rejected: build failure, foreign output, missing package completion, runtime failure and nonzero exit. This is a corrected interpretation of recorded execution, not a new iOS SDK, native-network or release acceptance claim.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

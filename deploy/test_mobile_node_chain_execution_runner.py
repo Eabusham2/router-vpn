@@ -31,6 +31,61 @@ class Runner(unittest.TestCase):
     def test_complete_exact_two_packages(self):
         self.assertEqual(len(self.check(self.events())),2*sum(map(len,G.inventory().values())))
 
+    def build_output(self, package='experimental/libbox', output=None):
+        # Exact Go 1.26 record emitted by the hosted Darwin linker, before
+        # the original libbox/daemon package start events.
+        return {'ImportPath': G.PREFIX+package+'.test', 'Action': 'build-output',
+                'Output': output if output is not None else
+                '# '+G.PREFIX+package+'.test\nld: warning: ignoring duplicate libraries: \'-lobjc\'\n'}
+
+    def test_actual_darwin_linker_records_preserve_exact_test_receipts(self):
+        events=self.events()
+        with_build=[]
+        for event in events:
+            if event['Action']=='start':
+                with_build.append(self.build_output(event['Package'].removeprefix(G.PREFIX)))
+            with_build.append(event)
+        self.assertEqual(self.check(with_build),self.check(events))
+        # Go may split build output over multiple records for one package.
+        split=[self.build_output(output='linker warning, first fragment\n'),self.build_output()]+events
+        self.assertEqual(self.check(split),self.check(events))
+
+    def test_build_output_cannot_replace_missing_runtime_acceptance(self):
+        events=self.events()
+        for changed in ([self.build_output()], [self.build_output()]+events[:-1],
+                        [self.build_output()]+[e for e in events if e.get('Action')!='run']):
+            with self.assertRaises(ValueError):self.check(changed)
+
+    def test_build_output_foreign_late_named_or_racing_refused(self):
+        base=self.build_output()
+        for changed in (dict(base,ImportPath=G.PREFIX+'foreign.test'),
+                        dict(base,ImportPath=G.PREFIX+'experimental/libbox'),
+                        dict(base,Package=G.PREFIX+'experimental/libbox'),
+                        dict(base,Test='TestOtherOwner'),dict(base,Output='DATA RACE'),
+                        dict(base,Output=None),dict(base,Output='')):
+            with self.subTest(record=changed),self.assertRaises(ValueError):
+                self.check([changed]+self.events())
+        events=self.events()
+        for position in (1,len(events)):
+            changed=copy.deepcopy(events);changed.insert(position,base)
+            with self.assertRaises(ValueError):self.check(changed)
+
+    def test_build_output_bound_counts_all_fragments_and_utf8_bytes(self):
+        exact='é'*(G.MAX_BUILD_OUTPUT_BYTES//2)
+        self.assertEqual(self.check([self.build_output(output=exact)]+self.events()),self.check(self.events()))
+        for diagnostics in ([self.build_output(output=exact+'x')],
+                            [self.build_output(output=exact),self.build_output(output='x')]):
+            with self.assertRaises(ValueError):self.check(diagnostics+self.events())
+
+    def test_failed_build_runtime_failure_unknown_action_and_exit_still_refused(self):
+        for action in ('build-fail','build-unknown'):
+            with self.assertRaises(ValueError):
+                self.check([dict(self.build_output(),Action=action)]+self.events())
+        for action in ('fail','skip','unknown'):
+            events=self.events();events[2]['Action']=action
+            with self.assertRaises(ValueError):self.check([self.build_output()]+events)
+        with self.assertRaises(ValueError):self.check([self.build_output()]+self.events(),1)
+
     def test_missing_root_or_terminal_package_refused(self):
         events=self.events()
         for changed in (events[:-1], [e for e in events if e.get('Test')!=next(iter(G.inventory()['daemon']))]):
