@@ -65,6 +65,10 @@ CONTROL_NAMES = (
     "setup-load-inventory",
     "setup-response-inventory",
     "setup-stale-body",
+    "ordered-socks-protocol",
+    "ordered-socks-draft-mode",
+    "ordered-socks-capability",
+    "ordered-socks-final",
 )
 SCRIPT = "deploy/test_desktop_connection_profile_modes.py"
 SOURCE_PATH = "client/macos/RouterVPNConnectionProfiles.swift"
