@@ -7,6 +7,10 @@ import importlib.util
 import tempfile
 import unittest
 ROOT=Path(__file__).resolve().parents[1]
+EXECUTION_PREPARERS = (
+    'prepare-node-chain-execution-gate.py', 'prepare-node-chain-execution.py',
+    'prepare-node-chain-execution-owner.py', 'prepare-mobile-node-chain-execution.py',
+)
 
 def load(name):
     spec=importlib.util.spec_from_file_location(name.replace('-','_'),ROOT/'deploy'/name)
@@ -14,7 +18,7 @@ def load(name):
     return module
 
 class NativePolicyScope(unittest.TestCase):
-    def copied(self,name,stale=None,windows_text=False):
+    def copied(self,name,stale=None,windows_text=False,rejected_execution=None):
         module=load(name)
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as mocks:
             vendor=Path(tmp);(vendor/'go.mod').write_text('module github.com/sagernet/sing-box\n')
@@ -30,9 +34,23 @@ class NativePolicyScope(unittest.TestCase):
             # This fixture owns package copying, not vendored transport files.
             # Every native patcher has its own exact-source/executable tests.
             prepared = {}
+            preparation_order = mock.Mock()
             for hook in ('WHITENING','AMNEZIA','MTU','PERFORMANCE','WIREGUARD_BIND','OPENVPN_CLOSE','OPENVPN_REMOTE','EXTERNAL_POLICY','PQ','STRATEGY','COMPOSITE','HY2_DEADLINES','NAIVE','NODE_CHAIN'):
                 if hasattr(module,hook):
                     prepared[hook]=mocks.enter_context(mock.patch.object(getattr(module,hook),'prepare'))
+                    preparation_order.attach_mock(prepared[hook], hook)
+            execution = []
+            if name == 'prepare-mobile-multihop.py':
+                self.assertEqual(tuple(Path(native.__file__).name for native in module._execution_modules), EXECUTION_PREPARERS)
+                captured_inputs = set(module.inputs())
+                for index, native in enumerate(module._execution_modules):
+                    # This fixture exercises real package projection. These
+                    # pinned registry/Box/TUN patchers have separate exact-source
+                    # and executable gates, like the native hooks above.
+                    boundary = mocks.enter_context(mock.patch.object(native, 'prepare'))
+                    preparation_order.attach_mock(boundary, 'execution_' + str(index))
+                    execution.append(boundary)
+                    for source in native.inputs(): self.assertIn(source, captured_inputs)
             if hasattr(module,'CORE'):
                 mocks.enter_context(mock.patch.object(module.subprocess,'check_output',return_value=module.CORE+'\n'))
             if windows_text:
@@ -49,10 +67,26 @@ class NativePolicyScope(unittest.TestCase):
                 with self.assertRaises(ValueError):module.prepare(vendor)
                 self.assertEqual(parent.read_text(),'do not erase unknown test')
                 return
+            if rejected_execution is not None:
+                execution[rejected_execution].side_effect = ValueError('captured ordered native source rejected')
+                with self.assertRaisesRegex(ValueError, 'captured ordered native source rejected'):
+                    module.prepare(vendor)
+                for index, boundary in enumerate(execution):
+                    if index <= rejected_execution: boundary.assert_called_once_with(vendor.resolve())
+                    else: boundary.assert_not_called()
+                for hook in ('COMPOSITE', 'WIREGUARD_BIND', 'OPENVPN_CLOSE', 'OPENVPN_REMOTE'):
+                    prepared[hook].assert_not_called()
+                return
             module.prepare(vendor)
             if 'NODE_CHAIN' in prepared:
                 prepared['NODE_CHAIN'].assert_called_once_with(vendor.resolve())
             if name=='prepare-mobile-multihop.py':
+                for boundary in execution: boundary.assert_called_once_with(vendor.resolve())
+                ordered = [mock.call.NODE_CHAIN(vendor.resolve()), mock.call.EXTERNAL_POLICY(vendor.resolve()),
+                           *(getattr(mock.call, 'execution_' + str(index))(vendor.resolve()) for index in range(len(execution))),
+                           mock.call.COMPOSITE(vendor.resolve())]
+                positions = [preparation_order.mock_calls.index(call) for call in ordered]
+                self.assertEqual(positions, sorted(positions))
                 for observer in ('instance_context','instance_context_test'):
                     source=ROOT/'mobile/daemon'/(observer+'.go.tmpl')
                     self.assertIn(source,module.inputs())
@@ -112,6 +146,8 @@ class NativePolicyScope(unittest.TestCase):
                 self.assertNotIn('"router-vpn/internal/', source.read_text())
             before={str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()}
             module.prepare(vendor)
+            for boundary in execution:
+                self.assertEqual(boundary.call_args_list, [mock.call(vendor.resolve())]*2)
             for hook in ('OPENVPN_CLOSE','OPENVPN_REMOTE','HY2_DEADLINES','NAIVE'):
                 if hook in prepared:
                     expected=[] if name=='prepare-relay-core.py' and hook=='HY2_DEADLINES' else [mock.call(vendor.resolve())]*2
@@ -180,6 +216,10 @@ class NativePolicyScope(unittest.TestCase):
             calls.server_tor.assert_called_once_with(vendor)
             calls.go.assert_not_called()
             self.assertEqual(calls.mock_calls[-1],mock.call.server_tor(vendor))
+    def test_mobile_execution_rejection_stops_later_native_preparation(self):
+        for index, name in enumerate(EXECUTION_PREPARERS):
+            with self.subTest(preparer=name):
+                self.copied('prepare-mobile-multihop.py', rejected_execution=index)
     def test_mobile_copy_does_not_export_parent_build_audits(self):self.copied('prepare-mobile-multihop.py')
     def test_relay_copy_does_not_export_parent_build_audits(self):self.copied('prepare-relay-core.py')
     def test_relay_copy_preserves_exact_source_bytes_on_windows(self):self.copied('prepare-relay-core.py',windows_text=True)

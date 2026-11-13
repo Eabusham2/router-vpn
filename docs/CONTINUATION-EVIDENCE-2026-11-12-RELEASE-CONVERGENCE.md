@@ -660,6 +660,25 @@ mutant's second call. This explains the fixture mismatch; it is not a Darwin
 compiler, utun or installed-host pass. Those native gates must rerun on the
 published source, including all nineteen original causal controls.
 
+## Native package-scope fixture integration
+
+Native Xray job 131629453850 at 8b2e4d97 passed the complete 700-test shared
+multihop inventory before failing the parent package-scope fixture. That fixture
+creates an empty native directory and already doubles transport patchers, but
+had not included the four later ordered execution preparers. Their production
+pinned-Git check therefore correctly rejected the directory before the intended
+package-copy assertions could run. The same two fixture errors were reproduced
+locally.
+
+The fixture now explicitly names and doubles those four preparer boundaries,
+checks their original source inputs, required order and repeated calls, and
+proves each rejection stops later native preparation. Package copying, foreign
+file refusal and removal of only owned parent tests still exercise the actual
+producer. Production preparers and their pinned-source checks are unchanged.
+All eight scope checks pass, including all four rejection subcases; the fourteen
+independent execution-gate preparation/verdict checks also pass. Full native
+composition and packaged builds remain required hosted checks.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
