@@ -740,6 +740,30 @@ socket-free shared source foundation. The dedicated native Box/ingress owner,
 prefix proofs, measurement lifecycle and Android activation are not yet supplied
 by this unit and remain in progress.
 
+## Pending Server carrier event scope
+
+The newer bcacb838 encrypted Server AMD64 failure (job 131634521054) reports
+construction/carrier refusal with neither deadline nor cancellation, before any
+peer traffic or proof; ARM64 passed. That diagnostic does not yet identify the
+exact kernel event. Source review found a concrete pending-capture defect:
+before its first identity snapshot, the event classifier invalidated every
+notification, including an address/route/rule event in the opposite IP family.
+The same unrelated family was already excluded once an identity existed.
+
+The classifier now checks a complete family-bearing header before pending
+identity handling. Opposite-family notifications cannot invalidate that literal
+carrier. Same-family events, link changes, malformed events and later original
+route/source changes retain refusal and sticky invalidation. No retry, timeout,
+proof or Connected check was relaxed.
+
+The targeted Server-carrier suite passed under the race detector in 3.419
+seconds. Two compiled controls reproduce the old unrelated-family refusal and
+reject omission of pending same-family protection. Actual read-only Linux route
+acquisition was attempted separately and returned `operation not permitted` in
+this local environment. It is not recorded as a native pass. The encrypted
+hosted gate must establish whether this fixes its observed construction failure
+and still prove selected DNS, all encrypted hops and joined Stop.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

@@ -133,6 +133,39 @@ func TestNodeChainServerCarrierLinuxFIBAndPolicyAmbiguityRefused(t *testing.T) {
 func TestNodeChainServerCarrierLinuxEventsMatchOriginalOwnership(t *testing.T) {
 	snapshot := serverCarrierSnapshotFixture()
 	route, target := serverCarrierRouteFixture(false)
+	for _, ipv6 := range []bool{false, true} {
+		_, captured := serverCarrierRouteFixture(ipv6)
+		family, other := byte(syscall.AF_INET), byte(syscall.AF_INET6)
+		if ipv6 {
+			family, other = other, family
+		}
+		for _, kind := range []uint16{syscall.RTM_NEWADDR, syscall.RTM_DELADDR, syscall.RTM_NEWROUTE, syscall.RTM_DELROUTE, syscall.RTM_NEWRULE, syscall.RTM_DELRULE} {
+			size := syscall.SizeofRtMsg
+			if kind == syscall.RTM_NEWADDR || kind == syscall.RTM_DELADDR {
+				size = syscall.SizeofIfAddrmsg
+			}
+			message := syscall.NetlinkMessage{Header: syscall.NlMsghdr{Type: kind}, Data: make([]byte, size)}
+			message.Data[0] = other
+			if relevant, err := nodeChainServerCarrierEvent(message, captured, nil); err != nil || relevant {
+				t.Fatal("opposite-family event retired a pending original carrier", kind, err)
+			}
+			message.Data[0] = family
+			if relevant, err := nodeChainServerCarrierEvent(message, captured, nil); err != nil || !relevant {
+				t.Fatal("pending original carrier accepted a same-family change", kind, err)
+			}
+			message.Data = message.Data[:1]
+			message.Data[0] = other
+			if _, err := nodeChainServerCarrierEvent(message, captured, nil); err == nil {
+				t.Fatal("opposite-family classification accepted a truncated event", kind)
+			}
+		}
+		for _, kind := range []uint16{syscall.RTM_NEWLINK, syscall.RTM_DELLINK} {
+			message := syscall.NetlinkMessage{Header: syscall.NlMsghdr{Type: kind}, Data: make([]byte, syscall.SizeofIfInfomsg)}
+			if relevant, err := nodeChainServerCarrierEvent(message, captured, nil); err != nil || !relevant {
+				t.Fatal("pending original carrier ignored a link change", kind, err)
+			}
+		}
+	}
 	if relevant, err := nodeChainServerCarrierEvent(route, target, &snapshot); err != nil || !relevant {
 		t.Fatal("original route change ignored", err)
 	}

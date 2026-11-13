@@ -634,6 +634,34 @@ func nodeChainServerValidateRule(message syscall.NetlinkMessage, family byte) er
 }
 
 func nodeChainServerCarrierEvent(message syscall.NetlinkMessage, target PhysicalEgress, original *nodeChainServerCarrierSnapshot) (bool, error) {
+	// The subscription precedes the first snapshot. An address/route event in
+	// the opposite IP family cannot change this original literal carrier, even
+	// while that snapshot is pending (for example IPv6 DAD on an IPv4 veth).
+	// Link changes and all same-family events remain invalidating until the
+	// exact original interface/source has been captured.
+	header := 0
+	switch message.Header.Type {
+	case syscall.RTM_NEWADDR, syscall.RTM_DELADDR:
+		header = syscall.SizeofIfAddrmsg
+	case syscall.RTM_NEWROUTE, syscall.RTM_DELROUTE, syscall.RTM_NEWRULE, syscall.RTM_DELRULE:
+		header = syscall.SizeofRtMsg
+	}
+	if header != 0 {
+		if len(message.Data) < header {
+			return false, nodeChainServerCarrierError
+		}
+		destination, err := netip.ParseAddr(target.Host)
+		if err != nil {
+			return false, nodeChainServerCarrierError
+		}
+		otherFamily := byte(syscall.AF_INET6)
+		if destination.Is6() {
+			otherFamily = syscall.AF_INET
+		}
+		if message.Data[0] == otherFamily {
+			return false, nil
+		}
+	}
 	if original == nil {
 		return true, nil
 	}
