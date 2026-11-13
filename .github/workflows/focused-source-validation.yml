@@ -20,6 +20,7 @@ on:
           - android-prefix-owner
           - linux-hy2
           - socks-source
+          - macos-profiles
 
 permissions:
   contents: read
@@ -36,8 +37,8 @@ env:
 
 jobs:
   validate:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    runs-on: ${{ inputs.suite == 'macos-profiles' && 'macos-15' || 'ubuntu-24.04' }}
+    timeout-minutes: ${{ inputs.suite == 'macos-profiles' && 45 || 30 }}
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
       SUITE: ${{ inputs.suite }}
@@ -53,7 +54,7 @@ jobs:
           for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
               if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
                   raise SystemExit(name + " must be a complete lowercase Git commit.")
-          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source"):
+          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles"):
               raise SystemExit("Unknown focused validation suite.")
           PY
       - name: Check out the trusted validator
@@ -70,11 +71,22 @@ jobs:
           path: candidate
           fetch-depth: 2
           persist-credentials: false
+      - name: Install Python for the native macOS source fixture
+        if: inputs.suite == 'macos-profiles'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Use the original canonical macOS temporary root
+        if: inputs.suite == 'macos-profiles'
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Verify source identity and required validator controls
         shell: bash
         run: |
           python3 validator/deploy/focused_source_identity.py --self-test
           python3 validator/deploy/test_focused_multihop_clocks.py --self-test
+          if [[ "$SUITE" == "macos-profiles" ]]; then
+            python3 validator/deploy/test_validate_macos_profile_source.py
+          fi
           if [[ "$SUITE" == "socks-source" ]]; then
             python3 validator/deploy/test_focused_socks_source_runner.py
           fi
@@ -86,6 +98,7 @@ jobs:
             --source-sha "$SOURCE_SHA" --base-sha "$VALIDATOR_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/selection.json"
       - name: Install the pinned Go toolchain
+        if: inputs.suite != 'macos-profiles'
         uses: actions/setup-go@v5
         with:
           go-version: '1.26.3'
@@ -113,6 +126,13 @@ jobs:
           python3 validator/deploy/test_focused_multihop_clocks.py \
             --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
             --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Compile original macOS profile callbacks and all causal controls
+        if: inputs.suite == 'macos-profiles'
+        shell: bash
+        run: |
+          python3 validator/deploy/validate-macos-profile-source.py \
+            --source "$GITHUB_WORKSPACE/candidate" --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests"
       - name: Require dormant SOCKS source and original schema compiler controls
         if: inputs.suite == 'socks-source'

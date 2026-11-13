@@ -2677,6 +2677,76 @@ a successful release. A fresh authoritative release at the final published
 source identity is still required; no current release-green claim follows
 from the focused results above.
 
+
+## Published Android repair, SOCKS source and encrypted HY2 evidence — November 13, 2026
+
+Android source `f09c3c61bd4f35f0137fd602939ed59b658e366c` passed focused
+run `43412639522` at its exact commit, then was pushed without rebasing.
+Actual Java completed 47 composed host checks and all seven separately
+compiled supervisor rejection controls in 38.585 seconds. All 5,104 source
+files and the before/after selection remained unchanged; the original
+process group joined. Downloaded artifact SHA256:
+`e7364e20c720968a6841d56f04ca47de32d77149c9c0c7ff607f57b5f2d98ae2`.
+The fixture keeps its explicit OS/native/source boundaries. This closes
+the observed stale fallback fixture failure, not physical Android acceptance.
+
+The dormant SOCKS compiler's actual Go1.26.3 race run `43412684215`
+passed all 70 new and 44 preserved schema 1/2 records at candidate
+`944503d336c726ea8fffb05835d8faab2f3a2df4`. The compiled omitted-seal
+and omitted-Local-only controls failed their required two and three
+records. All original groups joined and 5,107 source files were unchanged.
+Artifact SHA256:
+`0cebed4753ea595c550b2aaf6d24bbc5c0cd8280121513c8cd6969303a6b232a`.
+The identical three blobs were published in `01950c59` after the unrelated
+Android fixture repair. Native owner, shared runtime and platform adoption
+remain separate implementation and validation tasks; no usable SOCKS
+middle-hop connection is claimed by the source-only result.
+
+Linux HY2 run `43412658920` then passed at candidate
+`c5394aa7184579a249b2bdc57b0abc97f39be2c8`: 21 exact controller authority
+records, 37 actual encrypted WG/AWG-to-HY2 peer records, and a compiled
+changed-mask control failing its root and all three required cipher leaves.
+All five compiler/execution process groups joined; the artifact's logs and
+unchanged before/after selection were independently verified. Its digest is
+`6d399f9d6cc52bb2777141c99440e5023d6166cdc5f6fdf2bbfa5a6ddf49692c`.
+Controller and native peer images were actually compiled with race support;
+the receipt retains their sizes and hashes and 4,852 prepared source hashes.
+The identical seven files were published in `8eb747ed`, preserving the
+newer Android and dormant SOCKS source work. This result explicitly records
+`installed_native_accepted=false`. The complete 47-case installed Linux
+kernel/TUN suite and final exact-head native release are still required.
+
+## Native macOS profile validation lane — November 13, 2026
+
+A fixed `macos-profiles` lane now checks exactly the shipping macOS
+connection-profile source and its existing executable callback fixture.
+It runs on a native `macos-15` runner with Python3.12 and records the actual
+Apple Swift compiler/version and architecture. The original script compiles
+Swift6 and runs every shipping callback and compiled mutation using its
+unchanged 90-second per-command limits. The new outer process bound is
+1,800 seconds; its job bound is 45 minutes. Other focused suites keep their
+original runner, toolchain and limits.
+
+The gate requires one original AppKit positive receipt and all 37 rejection
+controls in their fixed order: the original 20 base controls, eight new
+ordered-final controls, then the original nine setup controls. Missing,
+duplicated, foreign or reordered controls, a wrong aggregate, failed/late
+children or an unjoined original process cannot pass. The trusted clock
+process executor/source snapshot remains byte-identical. Seven Python
+validator roots passed in 0.035 seconds, including every single missing
+control and actual short process success/failure through that executor;
+the seven-suite identity helper passed 12 actual Git/CLI tests in
+2.827 seconds. Workflow YAML and embedded Python parsed successfully.
+No Swift compilation is established by these Python/process tests.
+
+The pending macOS editor/profile candidate now retains its actual selected
+SS2022 or Hysteria2 final across Apply, reopen, saved Add/Load/Update and
+Connect preparation. Hysteria2 requires a paired final with StartLayer Off;
+the existing imported SS middle family still ends in SS. The production
+native capability guard remains unchanged. Actual Swift acceptance,
+complete native app packaging and the separate installed Darwin tunnel
+gate must still run before claiming their respective outcomes.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

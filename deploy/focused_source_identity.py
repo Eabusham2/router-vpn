@@ -31,6 +31,10 @@ ALLOWLISTS = {
     }),
     "android-tor": frozenset({"android/test_android_tor_profile.py"}),
     "android-prefix-owner": frozenset({"android/test_android_node_candidate_preparation_owner.py"}),
+    "macos-profiles": frozenset({
+        "client/macos/RouterVPNConnectionProfiles.swift",
+        "deploy/test_desktop_connection_profile_modes.py",
+    }),
     "socks-source": frozenset({
         "internal/mobilemultihop/node_chain_imported_socks.go",
         "internal/mobilemultihop/node_chain_socks_source.go",
