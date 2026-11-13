@@ -96,7 +96,8 @@ class DesktopSOCKSCaptureGateTests(unittest.TestCase):
                     G.command_for("/pinned/go", case)
 
     def test_catalog_and_asset_controls_need_exact_original_guards(self):
-        source = "capture.seal != capture.digest() ||\n\t\t!original.profilesCurrent(control, profiles)\n"
+        source = '\t"router-vpn/internal/mobilemtu"\n'
+        source += "capture.seal != capture.digest() ||\n\t\t!original.profilesCurrent(control, profiles)\n"
         source += "if err != nil || !original.profilesCurrent(control, profiles) {\n"
         source += "\t\tif !matches {\n"
         source += "\t\tif err := mobilemtu.LockContext(ctx, &a.mu); err != nil {\n"
@@ -108,6 +109,24 @@ class DesktopSOCKSCaptureGateTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     G.mutation_source(case, wrong)
 
+
+
+    def test_unbounded_wait_requires_and_removes_only_its_unused_import(self):
+        case = next(case for case in G.cases() if case.mutation == "unbounded-catalog-wait")
+        imported = '\t"router-vpn/internal/mobilemtu"\n'
+        unchanged_import = '\t"router-vpn/internal/mobilemultihop"\n'
+        guard = ("\t\tif err := mobilemtu.LockContext(ctx, &a.mu); err != nil {\n"
+                 "\t\t\treturn common.RouterProfile{}, nil, err\n\t\t}\n")
+        source = "package main\n\nimport (\n" + imported + unchanged_import + ")\n" + guard
+        changed = G.mutation_source(case, source)
+        self.assertEqual(changed, source.replace(guard, "\t\ta.mu.Lock()\n", 1).replace(imported, "", 1))
+        self.assertNotIn("mobilemtu", changed)
+        self.assertIn(unchanged_import, changed)
+        for wrong in (source.replace(imported, "", 1),
+                      source.replace(imported, imported + imported, 1),
+                      source.replace(imported, '\tmtu "router-vpn/internal/mobilemtu"\n', 1)):
+            with self.assertRaisesRegex(ValueError, "one exact original guard"):
+                G.mutation_source(case, wrong)
 
 if __name__ == "__main__":
     unittest.main()

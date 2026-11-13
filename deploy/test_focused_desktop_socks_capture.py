@@ -98,7 +98,8 @@ def mutation_source(case: Case, source: str) -> str:
     elif case.mutation == "unbounded-catalog-wait":
         edits = (("\t\tif err := mobilemtu.LockContext(ctx, &a.mu); err != nil {\n"
                   "\t\t\treturn common.RouterProfile{}, nil, err\n\t\t}\n",
-                  "\t\ta.mu.Lock()\n"),)
+                  "\t\ta.mu.Lock()\n"),
+                 ('\t"router-vpn/internal/mobilemtu"\n', ""),)
     else:
         raise ValueError("unknown desktop SOCKS source control")
     for old, new in edits:

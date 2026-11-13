@@ -127,7 +127,12 @@ def require_omitted_target_failure(result):
         b"fatal error: 'TargetConditionals.h' file not found",
     )
     if result.returncode != 1 or not any(witness in result.stdout for witness in witnesses):
-        raise RuntimeError("Missing Apple CPP target did not produce its intended target/header rejection")
+        diagnostics = result.stdout.decode("utf-8", "replace")
+        error_lines = [line[:1000] for line in diagnostics.splitlines()
+                       if "error:" in line or "warning:" in line][:20]
+        raise RuntimeError("Missing Apple CPP target did not produce its intended target/header rejection; "
+                           "exit=" + str(result.returncode) + "; diagnostics=" + repr(error_lines) +
+                           "; output_tail=" + diagnostics[-3000:])
 
 
 def native_checks(package):
@@ -201,6 +206,9 @@ def self_test(package):
                                    (1, b"clang: unexpected unrelated compiler failure")):
                 with self.subTest(status=status), self.assertRaises(RuntimeError):
                     require_omitted_target_failure(subprocess.CompletedProcess([], status, output))
+            with self.assertRaisesRegex(RuntimeError, "exit=1; diagnostics=.*unrelated compiler failure"):
+                require_omitted_target_failure(subprocess.CompletedProcess(
+                    [], 1, b"error: unrelated compiler failure\n" + b"large header output\n" * 500))
 
         def test_native_probe_requires_each_architecture_variant_and_sdk(self):
             for target in targets(package):

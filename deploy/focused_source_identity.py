@@ -10,6 +10,8 @@ import argparse
 import hashlib
 import json
 import os
+import platform
+import sys
 import re
 import subprocess
 import tempfile
@@ -19,6 +21,16 @@ REPOSITORY = "Eabusham2/router-vpn"
 WORKFLOW_REF = "refs/heads/main"
 HEX40 = re.compile(r"[0-9a-f]{40}")
 ALLOWLISTS = {
+    "desktop-socks-policy": frozenset({
+        "internal/mobilemultihop/desktop_node_chain_policy.go",
+        "internal/mobilemultihop/desktop_node_chain_socks_policy.go",
+        "internal/mobilemultihop/desktop_node_chain_socks_policy_test.go",
+        "internal/mobilemultihop/desktop_node_cover.go",
+        "internal/mobilemultihop/desktop_physical_policy.go",
+        "internal/mobilemultihop/node_chain_projection.go",
+        "internal/mobilemultihop/node_chain_socks_runtime.go",
+        "internal/mobilemultihop/node_chain_socks_source.go",
+    }),
     "windows-source-retirement": frozenset({
         "deploy/test_desktop_node_physical.py",
         "deploy/test_desktop_node_routing_runner.py",
@@ -336,6 +348,35 @@ def exact_sha(value, label):
     return value
 
 
+
+def checkout_failure_diagnostics(root, status):
+    """Bounded read-only observations; never relax the failed identity decision."""
+    def bounded(raw):
+        rows=raw.decode("utf-8","backslashreplace").splitlines()
+        return dict(total_lines=len(rows),sha256=hashlib.sha256(raw).hexdigest(),
+                    lines=[row[:2048] for row in rows[:40]],
+                    truncated=len(rows)>40 or any(len(row)>2048 for row in rows[:40]))
+    def observe(*arguments):
+        try:return bounded(git(root,*arguments))
+        except (OSError,ValueError,subprocess.SubprocessError):
+            return dict(unavailable=True)
+    changed=[]
+    try:
+        changed=[path.decode("utf-8","strict") for path in
+                 git(root,"diff","--name-only","-z","HEAD","--").split(b"\0") if path][:40]
+    except (OSError,ValueError,UnicodeError,subprocess.SubprocessError):
+        pass
+    return dict(schema=1,checkout=Path(root).name,platform=sys.platform,
+                os_name=os.name,machine=platform.machine(),release=platform.release(),
+                forced_file_mode=True,status=bounded(status),
+                git_version=observe("--version"),
+                local_checkout_settings=observe("config","--local","--get-regexp",
+                    r"^core\.(filemode|autocrlf|eol|safecrlf|symlinks|ignorecase)$"),
+                raw_tracked_diff=observe("diff","--raw","--abbrev=40","--no-renames","HEAD","--"),
+                changed_tracked_eol=observe("ls-files","--eol","--",*changed) if changed else
+                    dict(total_lines=0,lines=[],truncated=False))
+
+
 def original_checkout(path, expected):
     path = Path(path)
     if path.is_symlink() or not path.is_dir():
@@ -351,8 +392,11 @@ def original_checkout(path, expected):
         raise ValueError("source identity refuses hidden index observation flags")
     # Ignored files also cannot silently become dependencies of the fixture.
     # All compiler outputs and Python bytecode belong outside these checkouts.
-    if git(root, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none"):
-        raise ValueError("source identity refuses a dirty or untracked checkout")
+    status = git(root, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none")
+    if status:
+        diagnostics = checkout_failure_diagnostics(root, status)
+        raise ValueError("source identity refuses a dirty or untracked checkout; diagnostics=" +
+                         json.dumps(diagnostics, sort_keys=True, ensure_ascii=True))
     return root
 
 
@@ -632,6 +676,42 @@ class IdentityTests(unittest.TestCase):
         output_link.symlink_to(self.work, target_is_directory=True)
         with self.assertRaisesRegex(ValueError, "linked"):
             write_selection(output_link/"selection.json", metadata, source=self.source, validator=self.validator)
+
+
+
+    def test_dirty_diagnostic_reports_actual_modes_eol_and_only_safe_settings(self):
+        path="internal/mobilemultihop/node_chain_execution_proof.go"
+        self.command(self.source,"config","core.fileMode","false")
+        self.command(self.source,"config","core.autocrlf","false")
+        self.command(self.source,"config","http.extraheader","private-header-must-not-print")
+        before_tree=self.command(self.source,"rev-parse","HEAD^{tree}")
+        (self.source/path).chmod(0o755)
+        with self.assertRaisesRegex(ValueError,"dirty or untracked checkout") as caught:
+            self.capture()
+        record=json.loads(str(caught.exception).split("; diagnostics=",1)[1])
+        self.assertEqual(record["checkout"],"candidate")
+        self.assertTrue(record["forced_file_mode"])
+        self.assertTrue(any(path in row for row in record["status"]["lines"]))
+        self.assertTrue(any("100644 100755" in row for row in record["raw_tracked_diff"]["lines"]))
+        self.assertTrue(any("core.filemode false" in row for row in record["local_checkout_settings"]["lines"]))
+        self.assertTrue(any(path in row for row in record["changed_tracked_eol"]["lines"]))
+        self.assertTrue(record["git_version"]["lines"][0].startswith("git version "))
+        self.assertNotIn("private-header-must-not-print",str(caught.exception))
+        self.assertEqual(self.command(self.source,"rev-parse","HEAD^{tree}"),before_tree)
+        self.assertEqual((self.source/path).stat().st_mode & 0o111,0o111)
+
+    def test_dirty_diagnostic_bounds_paths_without_contents_or_acceptance(self):
+        for number in range(65):
+            (self.source/("untracked-%03d.ignored"%number)).write_text("private-file-contents-must-not-print")
+        with self.assertRaisesRegex(ValueError,"dirty or untracked checkout") as caught:
+            self.capture()
+        record=json.loads(str(caught.exception).split("; diagnostics=",1)[1])
+        self.assertEqual(record["status"]["total_lines"],65)
+        self.assertEqual(len(record["status"]["lines"]),40)
+        self.assertTrue(record["status"]["truncated"])
+        self.assertNotIn("private-file-contents-must-not-print",str(caught.exception))
+        self.assertEqual(len(list(self.source.glob("untracked-*.ignored"))),65)
+        self.assertEqual(self.command(self.source,"rev-parse","HEAD"),self.base)
 
 
     def test_actual_cli_binds_its_validator_checkout_and_workflow_sha(self):
