@@ -44,6 +44,7 @@ ALLOWLISTS = {
         "mobile/desktop/mtu_node_test.go.tmpl",
         "mobile/desktop/mtu_node.go.tmpl",
         "mobile/desktop/node_box_physical.go.tmpl",
+        "mobile/desktop/node_chain_command_runtime_test.go.tmpl",
         "mobile/desktop/node_chain_socks_box_darwin.go.tmpl",
         "mobile/desktop/node_chain_socks_box_linux.go.tmpl",
         "mobile/desktop/node_chain_socks_box_physical_test.go.tmpl",

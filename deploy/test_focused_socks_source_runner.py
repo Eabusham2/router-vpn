@@ -160,6 +160,12 @@ class RunnerTests(unittest.TestCase):
             original = "before\n" + anchor + "\nafter\n"
             self.assertEqual(D.mutation_source(case, original), "before\n" + replacement + "\nafter\n")
         self.assertEqual(D.CONTROL_MUTATIONS["omitted-source-seal"][1], "p.config != saved.config || ")
+        self.assertEqual(D.CONTROL_MUTATIONS["aliased-paired-profile"][1:], [
+            "saved.paired.values[i].profile, err = nodeChainSOCKSIntegrityCopy(node.profile)",
+            "saved.paired.values[i].profile, err = node.profile, nil"])
+        self.assertEqual(D.CONTROL_MUTATIONS["aliased-imported-policy"][1:], [
+            "saved.imported.compiled.capture, err = nodeChainSOCKSIntegrityCopy(middle.policy.capture)",
+            "saved.imported.compiled.capture, err = middle.policy.capture, nil"])
         with self.assertRaises(ValueError):
             D.mutation_path(D.cases()[0])
 

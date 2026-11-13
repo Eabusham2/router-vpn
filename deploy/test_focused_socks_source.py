@@ -141,13 +141,13 @@ CONTROL_MUTATIONS = {
     ],
     "aliased-paired-profile": [
         "internal/mobilemultihop/node_chain_socks_integrity.go",
-        "saved.paired.values[i].profile,err = nodeChainSOCKSIntegrityCopy(node.profile)",
-        "saved.paired.values[i].profile,err = node.profile,nil"
+        "saved.paired.values[i].profile, err = nodeChainSOCKSIntegrityCopy(node.profile)",
+        "saved.paired.values[i].profile, err = node.profile, nil"
     ],
     "aliased-imported-policy": [
         "internal/mobilemultihop/node_chain_socks_integrity.go",
-        "saved.imported.compiled.capture,err=nodeChainSOCKSIntegrityCopy(middle.policy.capture)",
-        "saved.imported.compiled.capture,err=middle.policy.capture,nil"
+        "saved.imported.compiled.capture, err = nodeChainSOCKSIntegrityCopy(middle.policy.capture)",
+        "saved.imported.compiled.capture, err = middle.policy.capture, nil"
     ],
     "borrowed-source-receipt": [
         "internal/mobilemultihop/node_chain_socks_integrity.go",
