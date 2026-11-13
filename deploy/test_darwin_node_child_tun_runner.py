@@ -8,6 +8,9 @@ import json
 import os
 import re
 import shutil
+import signal
+import sys
+import time
 import subprocess
 import tempfile
 import unittest
@@ -249,7 +252,7 @@ class CompilationDiagnostics(unittest.TestCase):
             return transcript()
         source=Path('/captured/source');before={'original':'a'*64}
         inventory=[(source,before),(source,{'changed':'b'*64})] if source_changed else None
-        with contextlib.redirect_stdout(io.StringIO()), patch.object(G,'required_host',return_value=('arm64',501)), patch.object(G,'checked_sources',side_effect=inventory,return_value=(source,before)), patch.object(G,'selected_compiler',return_value=('/captured/go',{})), patch.object(G.UID,'privilege_tool',return_value='/usr/bin/sudo'), patch.object(G.UID,'run',side_effect=run):
+        with contextlib.redirect_stdout(io.StringIO()), patch.object(G,'required_host',return_value=('arm64',501)), patch.object(G,'checked_sources',side_effect=inventory,return_value=(source,before)), patch.object(G,'selected_compiler',return_value=('/captured/go',{})), patch.object(G.UID,'privilege_tool',return_value='/usr/bin/sudo'), patch.object(G.UID,'run',side_effect=run), patch.object(G,'native_output',side_effect=run):
             result=G.execute(source,environment={},compile_only=compile_only)
         for command,kwargs in calls[:2]:
             self.assertEqual(command[:6],G.native_fixture_compile('/captured/go',Path('/unused'),command[-1])[:6])
@@ -324,12 +327,159 @@ class EncryptedPeerSourceClosure(unittest.TestCase):
         self.assertNotIn('45998',imported)
 
 
+class StreamingNativeOutput(unittest.TestCase):
+    def test_actual_native_bytes_arrive_before_original_process_exit(self):
+        source = (ROOT/'deploy/test_darwin_node_child_tun.py').read_text()
+        helper = source[source.index('def native_output('):source.index('\ndef execute_native_images(')]
+        needle = 'stream.write(chunk); stream.flush()'
+        self.assertEqual(helper.count(needle), 1)
+        child = '''import pathlib,sys,time
+ack=pathlib.Path(sys.argv[1])
+print("original native stage",flush=True)
+for _ in range(100):
+ if ack.exists():
+  print("original command completed",flush=True)
+  sys.exit(0)
+ time.sleep(0.01)
+sys.exit("native output stayed buffered before child exit")
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            for mutated in (False, True):
+                ack = Path(directory)/('mutant' if mutated else 'original')
+                class Bytes(io.BytesIO):
+                    def write(self, body):
+                        count = super().write(body)
+                        if b'original native stage\n' in self.getvalue(): ack.write_text('observed original bytes')
+                        return count
+                class Sink:
+                    buffer = Bytes()
+                namespace = dict(G.__dict__)
+                changed = helper.replace(needle, 'pass # withheld output', 1) if mutated else helper
+                self.assertEqual(changed != helper, mutated)
+                exec(changed, namespace)
+                sink = Sink()
+                with patch.object(G.sys, 'stdout', sink):
+                    if mutated:
+                        with self.assertRaises(subprocess.CalledProcessError) as refused:
+                            namespace['native_output']([sys.executable, '-c', child, str(ack)], timeout=3)
+                        self.assertIn(b'native output stayed buffered before child exit', refused.exception.output)
+                    else:
+                        output = namespace['native_output']([sys.executable, '-c', child, str(ack)], timeout=3)
+                        self.assertEqual(output, 'original native stage\noriginal command completed\n')
+                        self.assertEqual(sink.buffer.getvalue(), output.encode())
+                        with self.assertRaises(ValueError): G.check_verdict(output)
+
+    def test_actual_failure_preserves_same_captured_output_and_exit(self):
+        sink = io.StringIO()
+        with contextlib.redirect_stdout(sink), self.assertRaises(subprocess.CalledProcessError) as failed:
+            G.native_output([sys.executable, '-c', 'import sys;print("actual native refusal",flush=True);sys.exit(17)'], timeout=3)
+        self.assertEqual(failed.exception.returncode, 17)
+        self.assertEqual(failed.exception.output, b'actual native refusal\n')
+        self.assertEqual(sink.getvalue(), 'actual native refusal\n')
+
+    def test_actual_timeout_signals_only_new_original_group_and_stays_failed(self):
+        kill = os.killpg
+        calls = []
+        def captured(group, sig):
+            calls.append((group, sig)); return kill(group, sig)
+        started = time.monotonic()
+        with contextlib.redirect_stdout(io.StringIO()) as output, patch.object(G.os, 'killpg', side_effect=captured), self.assertRaisesRegex(RuntimeError, 'timed out after its process group was joined'):
+            G.native_output([sys.executable, '-c', 'import os,time;print("original-group="+str(os.getpid()),flush=True);time.sleep(30)'], timeout=0.25)
+        self.assertLess(time.monotonic()-started, 3)
+        group = int(output.getvalue().strip().split('=')[1])
+        self.assertNotEqual(group, os.getpgrp())
+        self.assertEqual(calls, [(group, signal.SIGKILL)])
+
+    def test_sudo_timeout_keeps_captured_negative_group_delimiter(self):
+        source = (ROOT/'deploy/test_darwin_node_child_tun.py').read_text()
+        helper = source[source.index('def native_output('):source.index('\ndef execute_native_images(')]
+        self.assertIn("[sudo, '-n', '--', '/bin/kill', '-KILL', '--', '-'+str(process.pid)]", helper)
+        self.assertIn('start_new_session=True', helper)
+        self.assertIn('receive(time.monotonic() + 5)', helper)
+        self.assertNotIn('native_down', helper)
+        self.assertNotIn('pfctl', helper)
+
+
 class BoundedHarnessReporting(unittest.TestCase):
+    def test_actual_inner_command_streams_before_original_exit(self):
+        source = (ROOT/'mobile/desktop/node_chain_command_darwin_native_test.go.tmpl').read_text()
+        begin = source.index('func darwinChildHarnessOutput(')
+        helper = source[begin:source.index('\n}', begin)+2]
+        needle = 'command.Stdout = io.MultiWriter(&output, os.Stdout)'
+        self.assertEqual(helper.count(needle), 1)
+        fixture = r'''package main
+import (
+ "bufio"
+ "bytes"
+ "context"
+ "errors"
+ "fmt"
+ "io"
+ "os"
+ "os/exec"
+ "strings"
+ "time"
+)
+var _ io.Writer = (*bytes.Buffer)(nil)
+// SHIPPING_HARNESS_OUTPUT
+func main() {
+ if len(os.Args)>1 && os.Args[1]=="child" {
+  fmt.Println("original native stage")
+  deadline:=time.Now().Add(time.Second)
+  for time.Now().Before(deadline) {
+   if _,err:=os.Stat(os.Args[2]);err==nil {fmt.Println("original command joined");return}
+   time.Sleep(time.Millisecond)
+  }
+  fmt.Fprintln(os.Stderr,"original native diagnostic was buffered until command exit")
+  os.Exit(7)
+ }
+ if err:=verify(os.Args[1]);err!=nil {fmt.Fprintln(os.Stderr,err);os.Exit(1)}
+ fmt.Println("actual original native output streamed once before exit")
+}
+func verify(ack string) error {
+ r,w,err:=os.Pipe();if err!=nil{return err};defer r.Close()
+ original:=os.Stdout
+ os.Stdout=w
+ observed:=make(chan string,1)
+ go func(){
+  var output strings.Builder
+  scanner:=bufio.NewScanner(r)
+  for scanner.Scan(){line:=scanner.Text();output.WriteString(line+"\n");if line=="original native stage" {_=os.WriteFile(ack,[]byte("same original bytes"),0600)}}
+  observed<-output.String()
+ }()
+ ctx,cancel:=context.WithTimeout(context.Background(),3*time.Second);defer cancel()
+ command:=exec.CommandContext(ctx,os.Args[0],"child",ack)
+ output,failure:=darwinChildHarnessOutput(command)
+ os.Stdout=original
+ w.Close()
+ streamed:=<-observed
+ expected:="original native stage\noriginal command joined\n"
+ if failure!=nil || string(output)!=expected || streamed!=expected {
+  return errors.New("original native diagnostic was buffered until command exit")
+ }
+ return nil
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='darwin-child-streaming-') as directory:
+            work=Path(directory);code=work/'main.go';image=work/'streaming'
+            for mutated in (False, True):
+                changed=helper.replace(needle,'command.Stdout = &output',1) if mutated else helper
+                self.assertEqual(changed != helper, mutated)
+                code.write_text(fixture.replace('// SHIPPING_HARNESS_OUTPUT',changed))
+                subprocess.run([shutil.which('go'),'build','-p=1','-o',str(image),str(code)],cwd=work,check=True,timeout=90)
+                result=subprocess.run([str(image),str(work/('mutant' if mutated else 'original'))],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=10)
+                if mutated:
+                    self.assertNotEqual(result.returncode,0,result.stdout)
+                    self.assertIn('original native diagnostic was buffered until command exit',result.stdout)
+                else:
+                    self.assertEqual(result.returncode,0,result.stdout)
+                    self.assertIn('actual original native output streamed once before exit',result.stdout)
+
     def test_actual_escaped_output_writer_cannot_hide_controller_failure(self):
         source = (ROOT/'mobile/desktop/node_chain_command_darwin_native_test.go.tmpl').read_text()
         signature = 'func darwinChildHarnessOutput(command *exec.Cmd) ([]byte, error) {'
         self.assertEqual(source.count(signature), 1)
-        self.assertEqual(source.count('output, e := darwinChildHarnessOutput(command)'), 1)
+        self.assertEqual(source.count('_, e = darwinChildHarnessOutput(command)'), 1)
         start = source.index(signature)
         end = source.index('\n}', start) + 2
         original = source[start:end]
@@ -339,6 +489,8 @@ class BoundedHarnessReporting(unittest.TestCase):
         self.assertIsNotNone(go, 'actual process-pipe reporting requires Go')
         fixture = r'''package main
 import (
+ "bytes"
+ "io"
  "context"
  "errors"
  "fmt"

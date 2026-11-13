@@ -15,10 +15,13 @@ import json
 import os
 import platform
 import re
+import selectors
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 FLAG = 'ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE'
@@ -251,6 +254,55 @@ def execute(source, go='go', *, environment=None, compile_only=False):
     return result
 
 
+
+def native_output(command, *, cwd=None, env=None, timeout=960, sudo=None):
+    # Preserve the original newly-owned process group and complete merged
+    # transcript, but expose diagnostic bytes before a native PF transition
+    # can interrupt the runner. Streaming is never a verdict or a joined proof.
+    process = subprocess.Popen([str(value) for value in command], cwd=cwd, env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               start_new_session=True)
+    output = bytearray()
+    with selectors.DefaultSelector() as selector:
+        selector.register(process.stdout, selectors.EVENT_READ)
+        def receive(deadline):
+            while selector.get_map() or process.poll() is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout, output=bytes(output))
+                for key, _ in selector.select(min(remaining, 0.1)):
+                    chunk = os.read(key.fd, 65536)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    output.extend(chunk)
+                    stream = getattr(sys.stdout, 'buffer', None)
+                    if stream is not None:
+                        stream.write(chunk); stream.flush()
+                    else:
+                        sys.stdout.write(chunk.decode('utf-8', errors='replace')); sys.stdout.flush()
+        try:
+            receive(time.monotonic() + timeout)
+        except subprocess.TimeoutExpired as expired:
+            try:
+                if sudo is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    subprocess.run([sudo, '-n', '--', '/bin/kill', '-KILL', '--', '-'+str(process.pid)],
+                                   check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+                receive(time.monotonic() + 5)
+            except (OSError, subprocess.SubprocessError) as cleanup:
+                raise RuntimeError('Darwin native fixture timed out and its process group could not be joined: '+
+                                   bytes(output)[-8192:].decode('utf-8', errors='replace')) from cleanup
+            raise RuntimeError('Darwin native fixture timed out after its process group was joined: '+
+                               bytes(output)[-8192:].decode('utf-8', errors='replace')) from expired
+        finally:
+            process.stdout.close()
+    if process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, command, output=bytes(output))
+    return bytes(output).decode('utf-8')
+
+
 def execute_native_images(source, before, captured, sudo, arch, uid, child, peer, identities):
     command = ['/usr/bin/env', FLAG+'=1', 'ROUTERVPN_DARWIN_NODE_CHILD_UID='+str(uid),
                    'ROUTERVPN_DARWIN_NODE_CHILD_SHA256='+identities[child][-1],
@@ -261,9 +313,8 @@ def execute_native_images(source, before, captured, sudo, arch, uid, child, peer
     if sudo:
         command = [sudo, '-n', '--', *command]
     native_stage('starting actual inherited child, PF, utun and encrypted peer cases')
-    output = UID.run(command, cwd=ROOT, env=captured, timeout=960, sudo=sudo)
+    output = native_output(command, cwd=ROOT, env=captured, timeout=960, sudo=sudo)
     native_stage('native process returned zero; exact verdict still required')
-    print(output, end='' if output.endswith('\n') else '\n')
     check_verdict(output)
     if checked_sources(source)[1] != before or any(image_identity(path) != value for path, value in identities.items()):
         raise ValueError('Darwin native acceptance changed its original sources or images')

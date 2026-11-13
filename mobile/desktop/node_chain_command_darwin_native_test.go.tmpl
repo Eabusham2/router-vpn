@@ -123,7 +123,11 @@ func darwinChildImage(t *testing.T, source, target, expected string) {
 // context expires. ErrWaitDelay remains a failed test, never native retirement.
 func darwinChildHarnessOutput(command *exec.Cmd) ([]byte, error) {
 	command.WaitDelay = 5 * time.Second
-	return command.CombinedOutput()
+	var output bytes.Buffer
+	command.Stdout = io.MultiWriter(&output, os.Stdout)
+	command.Stderr = command.Stdout
+	err := command.Run()
+	return output.Bytes(), err
 }
 
 // The parent creates only a new disposable fixed installation. It refuses any
@@ -216,8 +220,7 @@ func TestRouterVPNNodeChainDarwinNativeHarness(t *testing.T) {
 	command := exec.CommandContext(ctx, macosprocess.ControllerPath, "-test.run=^TestRouterVPNNodeChainDarwinNativeCommand$", "-test.v", "-test.count=1", "-test.timeout=890s")
 	command.Dir = "/"
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0", darwinChildFlag + "=1", "ROUTERVPN_DARWIN_NODE_CHILD_INSTALLED=1", "ROUTERVPN_DARWIN_NODE_CHILD_UID=" + os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_UID"), "ROUTERVPN_DARWIN_NODE_CHAIN_PEER=" + peer, "ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256=" + os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256")}
-	output, e := darwinChildHarnessOutput(command)
-	fmt.Print(string(output))
+	_, e = darwinChildHarnessOutput(command)
 	if e != nil {
 		t.Fatal("actual installed generated-child acceptance failed", e)
 	}
@@ -861,6 +864,7 @@ func (o *darwinChildOwner) start(t *testing.T, ctx context.Context, a *darwinChi
 	if e != nil {
 		t.Fatal(e)
 	}
+	fmt.Println("Darwin native child stage: installing exact captured PF baseline")
 	if e := o.installBaseline(ctx); e != nil {
 		t.Fatal(e)
 	}
@@ -876,6 +880,7 @@ func (o *darwinChildOwner) start(t *testing.T, ctx context.Context, a *darwinChi
 	o.command.ExtraFiles = append([]*os.File{child}, o.capture.Files()...)
 	o.command.Stdout = &o.output
 	o.command.Stderr = &o.output
+	fmt.Println("Darwin native child stage: starting original inherited child")
 	o.childStartAttempted = true
 	if e := o.command.Start(); e != nil {
 		t.Fatal(e)
@@ -884,6 +889,7 @@ func (o *darwinChildOwner) start(t *testing.T, ctx context.Context, a *darwinChi
 	go func() { o.failure = o.command.Wait(); close(o.done) }()
 	binding, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	fmt.Println("Darwin native child stage: binding original child authority")
 	o.bootstrap, e = macosprocess.BindCreated(binding, o.capture, o.channel, o.command)
 	if e != nil {
 		t.Fatal("actual inherited child handshake", e, o.output.String())
@@ -1231,6 +1237,7 @@ func TestRouterVPNNodeChainDarwinNativeCommand(t *testing.T) {
 			t.Error("original native authority remains retained after failed cleanup")
 		}
 	})
+	fmt.Println("Darwin native child stage: acquiring original PF enable reference")
 	enable, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	raw, e := darwinChildCommand(enable, "/sbin/pfctl", "-E")
 	cancel()
@@ -1253,6 +1260,7 @@ func TestRouterVPNNodeChainDarwinNativeCommand(t *testing.T) {
 	})
 	for _, scenario := range darwinChildCases {
 		if !t.Run(scenario, func(t *testing.T) {
+			fmt.Println("Darwin native child case:", scenario)
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
 			peer := darwinChildPeerStart(t, scenario == "mixed-four")
@@ -1261,6 +1269,7 @@ func TestRouterVPNNodeChainDarwinNativeCommand(t *testing.T) {
 			t.Cleanup(func() {
 				cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
 				defer stop()
+				fmt.Println("Darwin native child stage: joining original cleanup")
 				var e error
 				if owner.childStartAttempted {
 					e = owner.stop(cleanup)
@@ -1268,6 +1277,7 @@ func TestRouterVPNNodeChainDarwinNativeCommand(t *testing.T) {
 					e = owner.stopUnstarted(cleanup, t.Failed())
 				}
 				if e != nil {
+					fmt.Println("Darwin native child stage: original cleanup remains unproved")
 					allJoined = false
 					t.Error("original native child cleanup unproved", e, owner.output.String())
 				}
@@ -1303,6 +1313,7 @@ func TestRouterVPNNodeChainDarwinNativeCommand(t *testing.T) {
 				}
 				darwinChildTraffic(t, ctx, peer)
 			}
+			fmt.Println("Darwin native child stage: requesting authenticated original Stop")
 			cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
 			e := owner.stop(cleanup)
 			stop()

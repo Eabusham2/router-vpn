@@ -1435,6 +1435,14 @@ The measurement helper borrows the prefix's original native proof owner. A succe
 
 The final prefix helper/service composition passed 48 checks and eight compiled controls, including held Drain and premature prefix.Close defects. Final connected candidate tests passed 167 checks and 15 controls; source capture passed 65 and five; UI flow passed 53 and six. The complete-saved helper had passed 42 and seven before the final prefix-only Drain refinement; its connected cleanup branch is unchanged and the final shared worker bytes passed the connected and prefix suites above. Presentation checks and eight controls, usage checks 243/40/50 and 19 controls, import checks 74 and seven controls, and 13 mandatory-workflow checks passed. The fixture source compiler and canonical display validator were verified before reuse. These Java/native and OS boundaries are explicit component fixtures: full SDK/APK build, encrypted Android TUN operation and physical-device acceptance remain separate release evidence.
 
+## Darwin native diagnostics reach the runner before process exit
+
+Two source-level buffers prevented the generated Darwin fixture from exposing its native case and cleanup output until the command returned: the inner Go helper used CombinedOutput, and the outer Python invocation captured that complete output again. The Darwin-only runners now tee the same bytes immediately while retaining the complete transcript for the unchanged exact-verdict check. Fixed stage messages identify original PF enable, baseline installation, child start/bind, authenticated Stop and cleanup without printing private source material.
+
+This is a reporting repair, not an identified PF/utun failure cause. Both architectures of the retained 688be5d5 hosted run completed their compilation-only steps; native acceptance was still in progress at the latest observation used for this unit. The public Darwin admission remains closed. Streaming output cannot satisfy native success, fabricate DOWN, remove a negative case or alter protection.
+
+All 28 runner tests passed. Actual Go and Python child fixtures require their output to be observed before exiting; withholding each tee is rejected. Nonzero exits preserve their original bytes and remain failures. The original escaped-output WaitDelay and 11 pre-start ownership controls remain enforced. The native 960-second process-group bound, nested native bounds, five-second pipe/timeout cleanup, ten exact required verdicts, eight joined receipts and source/image after-checks are unchanged. Real hosted native results are still required.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
