@@ -1,0 +1,208 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"reflect"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type routerVPNNodeCandidatePrefixRequest struct {
+	Schema     int                                                       `json:"schema"`
+	Request    string                                                    `json:"request_id"`
+	Generation uint64                                                    `json:"generation"`
+	Deadline   int64                                                     `json:"deadline_at"`
+	Position   int                                                       `json:"prefix_position"`
+	Candidate  string                                                    `json:"candidate_id"`
+	CaptureSHA string                                                    `json:"capture_sha256"`
+	Path       string                                                    `json:"path_id"`
+	Capture    mobilemultihop.DesktopNodeCandidatePreparationReadyRecord `json:"capture"`
+}
+
+type routerVPNNodeCandidatePrefixPulse struct {
+	Schema     int    `json:"schema"`
+	Request    string `json:"request_id"`
+	CaptureSHA string `json:"capture_sha256"`
+	Sequence   uint64 `json:"sequence"`
+	ObservedAt int64  `json:"observed_at"`
+}
+
+type routerVPNNodeCandidatePrefixResult struct {
+	routerVPNNodeCandidatePrefixRequest
+	CompletedAt int64                      `json:"completed_at"`
+	Status      hopmeasure.CandidateStatus `json:"status"`
+}
+
+type routerVPNNodeCandidatePrefixOperation struct {
+	request          routerVPNNodeCandidatePrefixRequest
+	raw              []byte
+	info, cancelInfo os.FileInfo
+	service          *hopmeasure.CandidateService
+	cancel           context.CancelFunc
+	state            *routerVPNNodeCandidatePrefixState
+	started          bool
+}
+
+func (owner *routerVPNNodeCandidatePrefixRuntime) candidateRequestCurrent(ctx context.Context, request routerVPNNodeCandidatePrefixRequest) error {
+	if owner.current(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	state := owner.state.Load()
+	r := request.Capture
+	meta := owner.metadata
+	if state == nil || request.CaptureSHA != meta.CaptureSHA256 || request.Position != meta.PrefixPosition || request.Path != state.record.Path ||
+		r.Validate(owner.policy, owner.transfer) != nil || r.Identity != state.identity || r.Generation != 1 || r.Reader != state.record.Reader ||
+		r.InterfaceName != state.record.Interface || r.InterfaceIndex != uint32(state.record.Index) || r.MTU != state.record.MTU ||
+		!reflect.DeepEqual(r.Prefixes, state.proof.Progress().Prefixes) {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+// The capture digest already binds the exact catalog revision and its complete
+// private candidate inventory. Only the original host, after source/cohort
+// validation, may refresh this pulse; the child never refreshes it itself.
+func (owner *routerVPNNodeCandidatePrefixRuntime) candidateInputCurrent(ctx context.Context, op *routerVPNNodeCandidatePrefixOperation, capture string) error {
+	if owner == nil || op == nil || owner.op.Load() != op || capture != owner.metadata.CaptureSHA256 || capture != op.request.CaptureSHA ||
+		owner.state.Load() != op.state || owner.nativeCurrent(ctx, op.state) != nil {
+		return routerVPNExternalFailure
+	}
+	info, err := owner.files.root.Lstat("node-candidate-prefix-request.json")
+	raw, readErr := owner.files.read("node-candidate-prefix-request.json", 16384)
+	if err != nil || readErr != nil || !os.SameFile(info, op.info) || !bytes.Equal(raw, op.raw) {
+		return routerVPNExternalFailure
+	}
+	var pulse routerVPNNodeCandidatePrefixPulse
+	for attempt := 0; attempt < 4; attempt++ {
+		raw, err = owner.files.read("node-candidate-prefix-live.json", 4096)
+		if err == nil || ctx.Err() != nil {
+			break
+		}
+	}
+	now := time.Now().UnixMilli()
+	if err != nil || !routerVPNMTUStrict(raw, &pulse) || pulse.Schema != 1 || pulse.Request != op.request.Request || pulse.CaptureSHA != capture ||
+		pulse.Sequence == 0 || pulse.ObservedAt > now || now-pulse.ObservedAt > 1500 || pulse.ObservedAt > op.request.Deadline {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func (owner *routerVPNNodeCandidatePrefixRuntime) pollCandidates(ctx context.Context) error {
+	if owner == nil {
+		return nil
+	}
+	if owner.op.Load() == nil {
+		info, err := owner.files.root.Lstat("node-candidate-prefix-request.json")
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		raw, readErr := owner.files.read("node-candidate-prefix-request.json", 16384)
+		var request routerVPNNodeCandidatePrefixRequest
+		now := time.Now()
+		if err != nil || readErr != nil || !routerVPNMTUStrict(raw, &request) || request.Schema != 1 ||
+			!routerVPNExternalSession.MatchString(request.Request) || request.Request == owner.last || owner.generation == ^uint64(0) || request.Generation != owner.generation+1 ||
+			request.Deadline <= now.UnixMilli() || request.Deadline > now.Add(hopmeasure.RequestTimeout).UnixMilli() ||
+			request.Capture.ObservedAt > now.UnixMilli() || now.UnixMilli()-request.Capture.ObservedAt > 2500 || owner.measurementHold.Load() || owner.candidateRequestCurrent(ctx, request) != nil {
+			return routerVPNExternalFailure
+		}
+		work, cancel := context.WithDeadline(owner.ctx, time.UnixMilli(request.Deadline))
+		op := &routerVPNNodeCandidatePrefixOperation{request: request, raw: raw, info: info, cancel: cancel, state: owner.state.Load()}
+		owner.op.Store(op) // Retain original work before any construction or fallible join.
+		service, err := op.state.proof.NewMeasurementContext(ctx)
+		if err != nil {
+			cancel()
+			return errors.Join(errors.New("prefix measurement construction refused original live capture"), err)
+		}
+		op.service = service
+		if info, err := owner.files.root.Lstat("node-candidate-prefix-cancel.json"); !errors.Is(err, os.ErrNotExist) {
+			body, readErr := owner.files.read("node-candidate-prefix-cancel.json", 16384)
+			if err != nil || readErr != nil || !bytes.Equal(body, raw) {
+				cancel()
+				return routerVPNExternalFailure
+			}
+			op.cancelInfo = info
+			cancel()
+		} else {
+			if err := service.StartContext(work, request.Request, request.Candidate); err != nil {
+				cancel()
+				return errors.Join(errors.New("prefix candidate start refused original worker"), err)
+			}
+			op.started = true
+		}
+	}
+	op := owner.op.Load()
+	if op.service == nil || owner.candidateInputCurrent(ctx, op, op.request.CaptureSHA) != nil {
+		if op.service != nil {
+			op.service.Cancel(op.request.Request)
+		}
+		return errors.Join(errors.New("prefix worker lost original input observation"), routerVPNExternalFailure)
+	}
+	if info, err := owner.files.root.Lstat("node-candidate-prefix-cancel.json"); !errors.Is(err, os.ErrNotExist) {
+		raw, readErr := owner.files.read("node-candidate-prefix-cancel.json", 16384)
+		if err != nil || readErr != nil || !bytes.Equal(raw, op.raw) || op.cancelInfo != nil && !os.SameFile(info, op.cancelInfo) {
+			op.service.Cancel(op.request.Request)
+			return routerVPNExternalFailure
+		}
+		op.cancelInfo = info
+		op.service.Cancel(op.request.Request)
+	}
+	var status hopmeasure.CandidateStatus
+	if !op.started {
+		status = routerVPNCancelledPrefixCandidate(op.request)
+	} else if json.Unmarshal([]byte(op.service.StatusContextJSON(ctx)), &status) != nil || status.Request != op.request.Request {
+		return routerVPNExternalFailure
+	}
+	if !status.Complete || !status.Drained {
+		return nil
+	}
+	if op.started {
+		if err := op.service.Drain(op.request.Request); err != nil {
+			return err
+		}
+	}
+	if owner.measurementHold.Load() || owner.candidateInputCurrent(ctx, op, op.request.CaptureSHA) != nil {
+		return routerVPNExternalFailure
+	}
+	result := routerVPNNodeCandidatePrefixResult{routerVPNNodeCandidatePrefixRequest: op.request, CompletedAt: time.Now().UnixMilli(), Status: status}
+	if result.CompletedAt > op.request.Deadline || op.cancelInfo != nil {
+		result.Status = routerVPNCancelledPrefixCandidate(op.request)
+	}
+	if err := op.service.CloseContext(ctx); err != nil {
+		return err
+	}
+	if owner.candidateInputCurrent(ctx, op, op.request.CaptureSHA) != nil {
+		return routerVPNExternalFailure
+	}
+	if err := owner.files.publish("node-candidate-prefix-result.json", result); err != nil {
+		return err
+	}
+	for _, item := range []struct {
+		name string
+		info os.FileInfo
+	}{
+		{"node-candidate-prefix-cancel.json", op.cancelInfo}, {"node-candidate-prefix-request.json", op.info},
+	} {
+		if item.info == nil {
+			continue
+		}
+		info, err := owner.files.root.Lstat(item.name)
+		if err != nil || !os.SameFile(info, item.info) || owner.files.root.Remove(item.name) != nil {
+			return routerVPNExternalFailure
+		}
+	}
+	op.cancel()
+	owner.generation, owner.last = op.request.Generation, op.request.Request
+	owner.op.CompareAndSwap(op, nil)
+	return nil
+}
+
+func routerVPNCancelledPrefixCandidate(request routerVPNNodeCandidatePrefixRequest) hopmeasure.CandidateStatus {
+	return hopmeasure.CandidateStatus{Schema: 1, Measurement: "routed-tcp-connect", PrefixPosition: request.Position, CaptureSHA256: request.CaptureSHA,
+		Status: hopmeasure.Status{Request: request.Request, Stage: "cancelled", Complete: true, Drained: true, Failure: "Candidate timing cancelled", Results: []hopmeasure.Result{}}}
+}

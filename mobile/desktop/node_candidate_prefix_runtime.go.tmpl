@@ -1,0 +1,305 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"net"
+	"os"
+	"sync/atomic"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// This owner cannot select a final path, open ingress or prove selected DNS.
+// Its enclosing platform coordinator owns the actual Box/TUN and publishes
+// stopped.json only after this worker/proof/gate join and native retirement.
+type routerVPNNodeCandidatePrefixEngine interface {
+	ObservePreparationContext(context.Context) (mobilemultihop.NodeChainIdentity, error)
+	Dial(context.Context, string, string) (net.Conn, error)
+	RetireContext(context.Context) error
+}
+
+type routerVPNNodeCandidatePrefixFactory func(context.Context, *mobilemultihop.NodeChainCandidatePreparation, func(context.Context) error) (routerVPNNodeCandidatePrefixEngine, error)
+
+type routerVPNNodeCandidatePrefixRuntime struct {
+	ctx                    context.Context
+	files                  *routerVPNExternalFiles
+	policy                 *mobilemultihop.DesktopNodeCandidatePreparationPolicy
+	preparation            *mobilemultihop.NodeChainCandidatePreparation
+	metadata               mobilemultihop.DesktopNodeCandidatePreparationMetadata
+	input, config          string
+	transfer               string
+	factory                routerVPNNodeCandidatePrefixFactory
+	configInfo, sourceInfo os.FileInfo
+	mtu                    *routerVPNNodeMTU
+	state                  atomic.Pointer[routerVPNNodeCandidatePrefixState]
+	op                     atomic.Pointer[routerVPNNodeCandidatePrefixOperation]
+	measurementHold        atomic.Bool
+	generation             uint64
+	last                   string
+}
+
+// Only the command loop mutates the operation and publishes a state. Workers
+// read this immutable TUN snapshot, never the mutable heartbeat record.
+type routerVPNNodeCandidatePrefixState struct {
+	engine   routerVPNNodeCandidatePrefixEngine
+	proof    *mobilemultihop.NodeChainCandidatePreparationRuntime
+	cancel   context.CancelFunc
+	revoked  atomic.Bool
+	joined   bool
+	inbound  adapter.Inbound
+	record   routerVPNNodeMTURecord
+	identity mobilemultihop.NodeChainIdentity
+}
+
+func routerVPNNewNodeCandidatePrefixRuntime(ctx context.Context, files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy, transfer string, instance *box.Box) (*routerVPNNodeCandidatePrefixRuntime, error) {
+	if instance == nil {
+		return nil, routerVPNExternalFailure
+	}
+	return routerVPNNewNodeCandidatePrefixRuntimeFactory(ctx, files, policy, transfer,
+		func(call context.Context, prep *mobilemultihop.NodeChainCandidatePreparation, current func(context.Context) error) (routerVPNNodeCandidatePrefixEngine, error) {
+			return instance.RouterVPNNewNodeChainCandidatePreparationEngine(call, prep, policy.Metadata().SessionID, current)
+		})
+}
+
+func routerVPNNewNodeCandidatePrefixRuntimeFactory(ctx context.Context, files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy, transfer string, factory routerVPNNodeCandidatePrefixFactory) (*routerVPNNodeCandidatePrefixRuntime, error) {
+	if ctx == nil || ctx.Err() != nil || files == nil || files.root == nil || policy == nil || policy.Validate() != nil || factory == nil || !routerVPNExternalSource.MatchString(transfer) {
+		return nil, routerVPNExternalFailure
+	}
+	if target := policy.Metadata().TargetOS; target != "linux" && target != "windows" {
+		return nil, routerVPNExternalFailure
+	}
+	owner := &routerVPNNodeCandidatePrefixRuntime{ctx: ctx, files: files, policy: policy, preparation: policy.Preparation(), metadata: policy.Metadata(), input: policy.Source(), config: policy.Config(), transfer: transfer, factory: factory}
+	var err error
+	owner.configInfo, err = files.root.Lstat("sing-box.json")
+	if err != nil {
+		return nil, err
+	}
+	owner.sourceInfo, err = files.root.Lstat("node-candidate-prefix-source.json")
+	if err != nil || owner.sourceCurrent(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	return owner, nil
+}
+
+func (owner *routerVPNNodeCandidatePrefixRuntime) sourceCurrent(ctx context.Context) error {
+	if owner == nil || ctx == nil || ctx.Err() != nil || owner.ctx.Err() != nil || owner.files.stopRequested(owner.metadata.SessionID, owner.metadata.ConfigSHA256) {
+		return routerVPNExternalFailure
+	}
+	for _, item := range []struct {
+		name     string
+		info     os.FileInfo
+		expected string
+	}{
+		{"sing-box.json", owner.configInfo, owner.config},
+		{"node-candidate-prefix-source.json", owner.sourceInfo, owner.input},
+	} {
+		info, err := owner.files.root.Lstat(item.name)
+		raw, readErr := owner.files.read(item.name, mobilemultihop.NodeChainInputLimit)
+		valid := err == nil && readErr == nil && item.info != nil && os.SameFile(info, item.info) && string(raw) == item.expected
+		clear(raw)
+		if !valid {
+			return routerVPNExternalFailure
+		}
+	}
+	return ctx.Err()
+}
+
+// Deliberately acyclic: the native engine invokes this while it owns ingress
+// and gate readers. Never call that engine or the proof controller from here.
+func (owner *routerVPNNodeCandidatePrefixRuntime) nativeCurrent(ctx context.Context, state *routerVPNNodeCandidatePrefixState) error {
+	if owner == nil || state == nil || state.revoked.Load() || owner.state.Load() != state || owner.mtu == nil || owner.sourceCurrent(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	if err := owner.mtu.guardContext(ctx); err != nil {
+		return err
+	}
+	actual, err := owner.mtu.engine.CurrentContext(ctx)
+	if err != nil || actual != state.inbound {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	reader, ok := state.inbound.(interface {
+		RouterVPNDesktopMTUInterfaceContext(context.Context) (string, int, int, error)
+	})
+	if !ok {
+		return routerVPNExternalFailure
+	}
+	name, index, mtu, err := reader.RouterVPNDesktopMTUInterfaceContext(ctx)
+	if err != nil || name != state.record.Interface || index != state.record.Index || mtu != state.record.MTU || state.revoked.Load() || owner.state.Load() != state {
+		return routerVPNExternalFailure
+	}
+	return errors.Join(ctx.Err(), owner.mtu.guardContext(ctx))
+}
+
+func (owner *routerVPNNodeCandidatePrefixRuntime) attach(ctx context.Context, mtu *routerVPNNodeMTU) error {
+	if owner == nil || ctx == nil || ctx.Err() != nil || owner.mtu != nil || mtu == nil || mtu.chain != nil || mtu.execution != nil || mtu.prefix != nil || owner.state.Load() != nil {
+		return routerVPNExternalFailure
+	}
+	meta := owner.metadata
+	plan, err := owner.preparation.MTUPlan()
+	if err != nil || mtu.record.Session != meta.SessionID || mtu.record.Config != meta.ConfigSHA256 || mtu.record.MTU < 1280 || mtu.record.MTU > plan.Ceiling || mtu.record.Active || mtu.currentContext(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	owner.mtu, mtu.prefix = mtu, owner
+	lifetime, cancel := context.WithCancel(owner.ctx)
+	state := &routerVPNNodeCandidatePrefixState{cancel: cancel, inbound: mtu.inbound, record: mtu.record}
+	owner.state.Store(state)
+	stopStartup := context.AfterFunc(ctx, cancel)
+	defer stopStartup()
+	state.engine, err = owner.factory(ctx, owner.preparation, func(call context.Context) error { return owner.nativeCurrent(call, state) })
+	// A partial native engine is retained even if construction failed. Its gate
+	// must join before the enclosing owner is allowed to close the actual Box.
+	if err == nil && state.engine == nil {
+		err = routerVPNExternalFailure
+	}
+	if err == nil {
+		state.proof, err = mobilemultihop.NewNodeChainCandidatePreparationRuntime(owner.preparation, &routerVPNNodeCandidatePrefixOwner{owner, state})
+	}
+	if err == nil {
+		err = state.proof.StartContext(lifetime)
+	}
+	if !stopStartup() {
+		cancel()
+	}
+	if err == nil {
+		state.identity, err = state.engine.ObservePreparationContext(ctx)
+	}
+	if err == nil && (state.identity.SessionID != meta.SessionID || state.identity.SourceSHA256 != meta.SourceSHA256 || state.identity.ConfigSHA256 != meta.ConfigSHA256) {
+		err = routerVPNExternalFailure
+	}
+	if err == nil {
+		err = owner.current(ctx)
+	}
+	if err != nil || ctx.Err() != nil || lifetime.Err() != nil {
+		state.revoked.Store(true)
+		cancel()
+		return errors.Join(err, ctx.Err(), lifetime.Err(), routerVPNExternalFailure)
+	}
+	return nil
+}
+
+func (owner *routerVPNNodeCandidatePrefixRuntime) current(ctx context.Context) error {
+	if owner == nil {
+		return nil
+	}
+	state := owner.state.Load()
+	if state == nil || state.engine == nil || state.proof == nil || owner.nativeCurrent(ctx, state) != nil {
+		return routerVPNExternalFailure
+	}
+	if err := state.proof.HealthyContext(ctx); err != nil {
+		return err
+	}
+	identity, err := state.engine.ObservePreparationContext(ctx)
+	if err != nil || identity != state.identity || owner.nativeCurrent(ctx, state) != nil {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func (owner *routerVPNNodeCandidatePrefixRuntime) heartbeat(ctx context.Context, record routerVPNNodeMTURecord) error {
+	if owner == nil {
+		return nil
+	}
+	state := owner.state.Load()
+	if state == nil || owner.current(ctx) != nil || record.Reader != state.record.Reader || record.Interface != state.record.Interface || record.Index != state.record.Index || record.MTU != state.record.MTU || record.Session != state.record.Session || record.Config != state.record.Config || record.Path != state.record.Path || record.Active || record.Index < 1 || uint64(record.Index) > uint64(^uint32(0)) {
+		return routerVPNExternalFailure
+	}
+	meta := owner.metadata
+	progress := state.proof.Progress()
+	ready := mobilemultihop.DesktopNodeCandidatePreparationReadyRecord{Schema: 1, Kind: "routervpn-node-candidate-prefix-ready-v1", SourceSHA256: meta.SourceSHA256, CaptureSHA256: meta.CaptureSHA256, TransferSHA256: owner.transfer, Identity: state.identity, Generation: 1, Reader: record.Reader, InterfaceName: record.Interface, InterfaceIndex: uint32(record.Index), MTU: record.MTU, ObservedAt: time.Now().UnixMilli(), Prepared: progress.Prepared, ApplicationOpen: progress.ApplicationOpen, DNSOpen: progress.DNSOpen, Prefixes: progress.Prefixes}
+	if ready.Validate(owner.policy, owner.transfer) != nil || owner.current(ctx) != nil || owner.files.publish("node-candidate-prefix-ready.json", ready) != nil {
+		return routerVPNExternalFailure
+	}
+	if owner.current(ctx) != nil {
+		return errors.Join(routerVPNExternalFailure, owner.files.remove("node-candidate-prefix-ready.json"))
+	}
+	return nil
+}
+
+func (owner *routerVPNNodeCandidatePrefixRuntime) close(ctx context.Context) error {
+	if owner == nil {
+		return nil
+	}
+	if ctx == nil {
+		return routerVPNExternalFailure
+	}
+	state := owner.state.Load()
+	if state != nil {
+		state.revoked.Store(true)
+		state.cancel()
+	}
+	removeErr := owner.files.remove("node-candidate-prefix-ready.json")
+	if op := owner.op.Load(); op != nil {
+		op.cancel()
+		if op.service != nil {
+			op.service.Invalidate()
+			if err := op.service.CloseContext(ctx); err != nil {
+				return errors.Join(removeErr, err)
+			}
+		}
+		owner.op.CompareAndSwap(op, nil)
+	}
+	if state != nil && !state.joined {
+		if state.proof != nil {
+			if err := state.proof.CloseContext(ctx); err != nil {
+				return errors.Join(removeErr, err)
+			}
+		}
+		if state.engine != nil {
+			if err := state.engine.RetireContext(ctx); err != nil {
+				return errors.Join(removeErr, err)
+			}
+		}
+		if owner.measurementHold.Load() {
+			return errors.Join(removeErr, routerVPNExternalFailure)
+		}
+		state.joined = true
+	}
+	return errors.Join(removeErr, ctx.Err())
+}
+
+type routerVPNNodeCandidatePrefixOwner struct {
+	owner *routerVPNNodeCandidatePrefixRuntime
+	state *routerVPNNodeCandidatePrefixState
+}
+
+func (m *routerVPNNodeCandidatePrefixOwner) ObservePreparationContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
+	if m == nil || m.owner.nativeCurrent(ctx, m.state) != nil || m.state.engine == nil {
+		return mobilemultihop.NodeChainIdentity{}, routerVPNExternalFailure
+	}
+	return m.state.engine.ObservePreparationContext(ctx)
+}
+func (m *routerVPNNodeCandidatePrefixOwner) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if _, err := m.ObservePreparationContext(ctx); err != nil {
+		return nil, err
+	}
+	return m.state.engine.Dial(ctx, tag, address)
+}
+func (m *routerVPNNodeCandidatePrefixOwner) BeginMeasurementContext(ctx context.Context) (func(), error) {
+	if _, err := m.ObservePreparationContext(ctx); err != nil {
+		return nil, err
+	}
+	if !m.owner.measurementHold.CompareAndSwap(false, true) {
+		return nil, routerVPNExternalFailure
+	}
+	var done atomic.Bool
+	release := func() {
+		if done.CompareAndSwap(false, true) {
+			m.owner.measurementHold.Store(false)
+		}
+	}
+	if _, err := m.ObservePreparationContext(ctx); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
+}
+func (m *routerVPNNodeCandidatePrefixOwner) CandidateInventoryCurrentContext(ctx context.Context, capture string) error {
+	if m == nil || m.owner == nil || m.owner.state.Load() != m.state {
+		return routerVPNExternalFailure
+	}
+	return m.owner.candidateInputCurrent(ctx, m.owner.op.Load(), capture)
+}

@@ -159,6 +159,7 @@ type routerVPNNodeMTU struct {
 	openVPN      *routerVPNImportedOpenVPN
 	chain        *routerVPNNodeChainRuntime
 	execution    routerVPNNodeMTUExecution
+	prefix       *routerVPNNodeCandidatePrefixRuntime
 	// Diagnostic suppression belongs to this exact reader, not a session
 	// basename or a replacement owner. It is never serialized as evidence.
 	networkReceiptDiagnosticReader uint64
@@ -409,7 +410,9 @@ func (owner *routerVPNNodeMTU) command(request routerVPNNodeMTUCommand) error {
 	return owner.commandContext(ctx, request)
 }
 func (owner *routerVPNNodeMTU) commandContext(ctx context.Context, request routerVPNNodeMTUCommand) error {
-	if owner == nil {
+	// Candidate preparation holds its captured TUN for the complete test. A
+	// separate optimizer cannot mutate that never-connected measurement owner.
+	if owner == nil || owner.prefix != nil {
 		return routerVPNExternalFailure
 	}
 	if owner != nil && owner.chain != nil && owner.chain.measurementHold.Load() {
@@ -563,7 +566,14 @@ func routerVPNRunNodeMTUAllFamiliesCaptured(parent context.Context, directory, s
 	return routerVPNRunNodeMTUExecutionFamiliesCaptured(parent, directory, session, config, physicalSource, importedSource, chainSource, "", physicalTransfer, physicalMTU, journal)
 }
 
-func routerVPNRunNodeMTUExecutionFamiliesCaptured(parent context.Context, directory, session, config, physicalSource, importedSource, chainSource, executionSource, physicalTransfer string, physicalMTU int, journal routerVPNNodeJournal) (failure error) {
+func routerVPNRunNodeMTUExecutionFamiliesCaptured(parent context.Context, directory, session, config, physicalSource, importedSource, chainSource, executionSource, physicalTransfer string, physicalMTU int, journal routerVPNNodeJournal) error {
+	return routerVPNRunNodeMTUPrefixFamiliesCaptured(parent, directory, session, config, physicalSource, importedSource, chainSource, executionSource, "", "", physicalTransfer, physicalMTU, journal)
+}
+
+func routerVPNRunNodeMTUPrefixFamiliesCaptured(parent context.Context, directory, session, config, physicalSource, importedSource, chainSource, executionSource, prefixSource, prefixCapture, physicalTransfer string, physicalMTU int, journal routerVPNNodeJournal) (failure error) {
+	if prefixSource != "" && (physicalSource != "" || importedSource != "" || chainSource != "" || executionSource != "" || journal == nil || runtime.GOOS != "windows" || !routerVPNExternalSource.MatchString(prefixSource) || !routerVPNExternalSource.MatchString(prefixCapture)) || prefixSource == "" && prefixCapture != "" {
+		return routerVPNExternalFailure
+	}
 	if executionSource != "" && (chainSource == "" || !routerVPNExternalSource.MatchString(executionSource)) {
 		return routerVPNExternalFailure
 	}
@@ -587,7 +597,7 @@ func routerVPNRunNodeMTUExecutionFamiliesCaptured(parent context.Context, direct
 			return err
 		}
 	}
-	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-chain-ready.json", "node-chain-execution-ready.json", "node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-measure-result.json", "node-chain-candidate-request.json", "node-chain-candidate-source.json", "node-chain-candidate-live.json", "node-chain-candidate-cancel.json", "node-chain-candidate-result.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json", "node-protection-retired.json", "stopped.json"} {
+	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-chain-ready.json", "node-chain-execution-ready.json", "node-candidate-prefix-ready.json", "node-candidate-prefix-request.json", "node-candidate-prefix-result.json", "node-candidate-prefix-live.json", "node-candidate-prefix-cancel.json", "node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-measure-result.json", "node-chain-candidate-request.json", "node-chain-candidate-source.json", "node-chain-candidate-live.json", "node-chain-candidate-cancel.json", "node-chain-candidate-result.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json", "node-protection-retired.json", "stopped.json"} {
 		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 			return routerVPNExternalFailure
 		}
@@ -602,7 +612,12 @@ func routerVPNRunNodeMTUExecutionFamiliesCaptured(parent context.Context, direct
 	}
 	var physicalPolicy mobilemultihop.DesktopPhysicalPolicy
 	var executionPreparation *mobilemultihop.NodeChainExecutionPreparation
-	if executionSource != "" {
+	if prefixSource != "" {
+		physicalPolicy, err = routerVPNNodeCandidatePrefixCommandCapture(files, session, config, prefixSource, prefixCapture, "windows", physicalMTU)
+		if err != nil {
+			return err
+		}
+	} else if executionSource != "" {
 		capture := routerVPNNodeChainExecutionCommand{directory: directory, session: session, config: config, physical: chainSource, source: executionSource, transfer: physicalTransfer, mtu: physicalMTU}
 		executionPreparation, err = routerVPNNodeChainExecutionCommandTarget(files, capture, "windows")
 		if err != nil {
@@ -670,11 +685,21 @@ func routerVPNRunNodeMTUExecutionFamiliesCaptured(parent context.Context, direct
 	var preparation routerVPNNodeProtectionOwner
 	var chain *routerVPNNodeChainRuntime
 	var execution *routerVPNNodeChainExecutionRuntime
+	var prefix *routerVPNNodeCandidatePrefixRuntime
 	var stopped atomic.Bool
 	defer func() {
 		stopped.Store(true)
 		readyRetired := files.remove("node-ready.json")
 		dnsRetired := files.remove("node-dns-result.json")
+		if prefix != nil {
+			join, stopJoin := context.WithTimeout(context.Background(), 15*time.Second)
+			joinErr := prefix.close(join)
+			stopJoin()
+			if joinErr != nil {
+				failure = errors.Join(failure, joinErr)
+				return
+			}
+		}
 		if execution != nil {
 			join, stopJoin := context.WithTimeout(context.Background(), 15*time.Second)
 			joinErr := execution.close(join)
@@ -780,6 +805,8 @@ func routerVPNRunNodeMTUExecutionFamiliesCaptured(parent context.Context, direct
 			captured, prepareErr = instance.RouterVPNDesktopNodeChainPreparePhysicalOwned(policy)
 		case *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy:
 			captured, prepareErr = instance.RouterVPNDesktopNodeChainExecutionPreparePhysicalOwned(policy)
+		case *mobilemultihop.DesktopNodeCandidatePreparationPolicy:
+			captured, prepareErr = instance.RouterVPNDesktopCandidatePrefixPreparePhysicalOwned(policy)
 		default:
 			return routerVPNExternalFailure
 		}
@@ -807,6 +834,8 @@ func routerVPNRunNodeMTUExecutionFamiliesCaptured(parent context.Context, direct
 			physical, err = instance.RouterVPNDesktopNodeChainActivatePhysical(policy)
 		case *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy:
 			physical, err = instance.RouterVPNDesktopNodeChainExecutionActivatePhysical(policy)
+		case *mobilemultihop.DesktopNodeCandidatePreparationPolicy:
+			physical, err = instance.RouterVPNDesktopCandidatePrefixActivatePhysical(policy)
 		default:
 			return routerVPNExternalFailure
 		}
@@ -839,7 +868,17 @@ func routerVPNRunNodeMTUExecutionFamiliesCaptured(parent context.Context, direct
 			return err
 		}
 	}
-	return routerVPNRunNodeMTULoopWithOwners(parent, ctx, files, instance, session, config, physical,
+	if policy, ok := physicalPolicy.(*mobilemultihop.DesktopNodeCandidatePreparationPolicy); ok {
+		transfer, transferErr := routerVPNNodeChainTransfer(protectionTransfer)
+		if transferErr != nil {
+			return transferErr
+		}
+		prefix, err = routerVPNNewNodeCandidatePrefixRuntime(ctx, files, policy, transfer, instance)
+		if err != nil {
+			return err
+		}
+	}
+	return routerVPNRunNodeMTULoopWithPrefix(parent, ctx, files, instance, session, config, physical,
 		func(call context.Context) error {
 			if err := call.Err(); err != nil {
 				return err
@@ -849,11 +888,11 @@ func routerVPNRunNodeMTUExecutionFamiliesCaptured(parent context.Context, direct
 			}
 			return nil
 		}, func() error {
-			if physical == nil {
+			if physical == nil || prefix != nil {
 				return nil
 			}
 			return routerVPNProveNodeReady(ctx, files, physicalPolicy, protectionTransfer, physical)
-		}, chain, execution)
+		}, chain, execution, prefix)
 }
 
 // Both native child coordinators use the same retained TUN command loop. The
@@ -880,10 +919,16 @@ func routerVPNRunNodeMTULoopWithExecution(parent, ctx context.Context, files *ro
 func routerVPNRunNodeMTULoopWithOwners(parent, ctx context.Context, files *routerVPNExternalFiles, instance *box.Box,
 	session, config string, physical *box.RouterVPNDesktopNodePhysical, current func(context.Context) error, ready func() error,
 	chain *routerVPNNodeChainRuntime, execution *routerVPNNodeChainExecutionRuntime) error {
+	return routerVPNRunNodeMTULoopWithPrefix(parent, ctx, files, instance, session, config, physical, current, ready, chain, execution, nil)
+}
+
+func routerVPNRunNodeMTULoopWithPrefix(parent, ctx context.Context, files *routerVPNExternalFiles, instance *box.Box,
+	session, config string, physical *box.RouterVPNDesktopNodePhysical, current func(context.Context) error, ready func() error,
+	chain *routerVPNNodeChainRuntime, execution *routerVPNNodeChainExecutionRuntime, prefix *routerVPNNodeCandidatePrefixRuntime) error {
 	if parent == nil || ctx == nil || files == nil || instance == nil || current == nil || ready == nil {
 		return routerVPNExternalFailure
 	}
-	if chain != nil && execution != nil {
+	if chain != nil && execution != nil || prefix != nil && (chain != nil || execution != nil || physical == nil) {
 		return routerVPNExternalFailure
 	}
 	observe, stopObserve := context.WithCancel(parent)
@@ -978,6 +1023,14 @@ func routerVPNRunNodeMTULoopWithOwners(parent, ctx context.Context, files *route
 			return err
 		}
 	}
+	if prefix != nil {
+		if openVPN != nil {
+			return routerVPNExternalFailure
+		}
+		if err := prefix.attach(observe, owner); err != nil {
+			return err
+		}
+	}
 	if err := ready(); err != nil {
 		return routerVPNExternalFailure
 	}
@@ -996,6 +1049,12 @@ func routerVPNRunNodeMTULoopWithOwners(parent, ctx context.Context, files *route
 			return err
 		}
 		if err := execution.loopCurrent(observe); err != nil {
+			return err
+		}
+		if err := prefix.current(observe); err != nil {
+			return err
+		}
+		if err := prefix.pollCandidates(observe); err != nil {
 			return err
 		}
 		if err := chain.pollMeasurement(observe); err != nil {
@@ -1021,6 +1080,13 @@ func routerVPNRunNodeMTULoopWithOwners(parent, ctx context.Context, files *route
 			case <-ticker.C:
 			}
 			continue
+		}
+		if prefix != nil {
+			for _, name := range []string{"node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json", "node-chain-measure-request.json", "node-chain-candidate-request.json", "node-mtu-request.json"} {
+				if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+					return routerVPNExternalFailure
+				}
+			}
 		}
 		previousDNSGeneration := dnsGeneration
 		if err := routerVPNConsumeImportedDNS(observe, files, owner, &dnsGeneration, instance.RouterVPNStrategyDNSProofContext, openVPN); err != nil {
@@ -1070,6 +1136,9 @@ func routerVPNRunNodeMTULoopWithOwners(parent, ctx context.Context, files *route
 			}
 			if err == nil {
 				err = execution.heartbeat(heartbeatContext, next)
+			}
+			if err == nil {
+				err = prefix.heartbeat(heartbeatContext, next)
 			}
 			if err == nil {
 				err = heartbeatContext.Err()

@@ -1,0 +1,405 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// This fixture substitutes only outbound routing and native TUN readers. The
+// shared prefix proof, authenticated HTTP replies, fifty TCP connections,
+// mailbox, lease and retained cleanup are the shipping implementations. It
+// does not stand in for the installed encrypted native host acceptance.
+type desktopCandidatePrefixEngineFixture struct {
+	prep        *mobilemultihop.NodeChainCandidatePreparation
+	identity    mobilemultihop.NodeChainIdentity
+	current     func(context.Context) error
+	peers       map[string]string
+	candidate   func(context.Context) (net.Conn, error)
+	retire      func(context.Context) error
+	retired     atomic.Bool
+	retireCalls int
+}
+
+func (e *desktopCandidatePrefixEngineFixture) ObservePreparationContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
+	if e.retired.Load() || e.current(ctx) != nil {
+		return mobilemultihop.NodeChainIdentity{}, routerVPNExternalFailure
+	}
+	return e.identity, nil
+}
+func (e *desktopCandidatePrefixEngineFixture) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if _, err := e.ObservePreparationContext(ctx); err != nil {
+		return nil, err
+	}
+	if !e.prep.AllowsDial(tag, address) {
+		return nil, routerVPNExternalFailure
+	}
+	if target := e.peers[tag+"/"+address]; target != "" {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", target)
+	}
+	if e.candidate == nil {
+		return nil, errors.New("fixture has no candidate TCP transport")
+	}
+	return e.candidate(ctx)
+}
+func (e *desktopCandidatePrefixEngineFixture) RetireContext(ctx context.Context) error {
+	e.retireCalls++
+	e.retired.Store(true)
+	if e.retire != nil {
+		return e.retire(ctx)
+	}
+	return ctx.Err()
+}
+
+type desktopCandidatePrefixRuntimeFixture struct {
+	owner  *routerVPNNodeCandidatePrefixRuntime
+	mtu    *routerVPNNodeMTU
+	native *desktopNodeMTUEngineFixture
+	engine *desktopCandidatePrefixEngineFixture
+}
+
+func desktopCandidatePrefixRuntime(t *testing.T) *desktopCandidatePrefixRuntimeFixture {
+	t.Helper()
+	policy := desktopCandidatePrefixCommandPolicy(t, "linux")
+	meta := policy.Metadata()
+	files := desktopImportedCommandFiles(t, map[string]string{"node-candidate-prefix-source.json": policy.Source(), "sing-box.json": policy.Config()})
+	mtu, native, _ := desktopNodeMTUFixture(t)
+	mtu.record.Session, mtu.record.Config = meta.SessionID, meta.ConfigSHA256
+	tun := mtu.inbound.(*desktopMTUTUNFixture)
+	tun.tag, tun.name = "routervpn-chain-tun", "router-vpn"
+	mtu.record.Interface = tun.name
+	f := &desktopCandidatePrefixRuntimeFixture{mtu: mtu, native: native}
+	peers := map[string]string{}
+	for i, proof := range policy.Preparation().ProofInventory() {
+		target, token := fmt.Sprintf("10.%d.0.1:8787", 77+i), fmt.Sprintf("ordered-private-token-%d", i)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/health" || r.Host != target || r.Header.Get("Authorization") != "Bearer "+token {
+				http.Error(w, "foreign private prefix", 401)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": proof.NodeID, "proof": "router-vpn-private-agent-v1"})
+		}))
+		t.Cleanup(server.Close)
+		peers[proof.Tag+"/"+target] = server.Listener.Addr().String()
+	}
+	var err error
+	f.owner, err = routerVPNNewNodeCandidatePrefixRuntimeFactory(context.Background(), files, policy, strings.Repeat("d", 64), func(ctx context.Context, prep *mobilemultihop.NodeChainCandidatePreparation, current func(context.Context) error) (routerVPNNodeCandidatePrefixEngine, error) {
+		f.engine = &desktopCandidatePrefixEngineFixture{prep: prep, current: current, peers: peers, identity: mobilemultihop.NodeChainIdentity{EngineID: "original-prefix-box", SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, NetworkID: "original-physical-network"}}
+		return f.engine, ctx.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := f.owner.close(ctx); err != nil {
+			t.Error("original prefix cleanup", err)
+		}
+	})
+	return f
+}
+func (f *desktopCandidatePrefixRuntimeFixture) start(t *testing.T) {
+	t.Helper()
+	if err := f.owner.attach(t.Context(), f.mtu); err != nil {
+		t.Fatal("actual private prefix proof", err)
+	}
+	if err := f.owner.heartbeat(t.Context(), f.mtu.record); err != nil {
+		t.Fatal("prefix heartbeat", err)
+	}
+}
+func (f *desktopCandidatePrefixRuntimeFixture) request(t *testing.T) routerVPNNodeCandidatePrefixRequest {
+	t.Helper()
+	raw, err := f.owner.files.read("node-candidate-prefix-ready.json", 8192)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, err := mobilemultihop.ParseDesktopNodeCandidatePreparationReadyRecord(raw, f.owner.policy, f.owner.transfer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta struct {
+		Targets []struct {
+			ID string `json:"id"`
+		} `json:"targets"`
+	}
+	if json.Unmarshal([]byte(f.owner.policy.Preparation().Metadata()), &meta) != nil || len(meta.Targets) != 1 {
+		t.Fatal("missing captured candidate")
+	}
+	return routerVPNNodeCandidatePrefixRequest{Schema: 1, Request: strings.Repeat("a", 32), Generation: 1, Deadline: time.Now().Add(30 * time.Second).UnixMilli(), Position: f.owner.policy.Metadata().PrefixPosition, Candidate: meta.Targets[0].ID, CaptureSHA: f.owner.policy.Metadata().CaptureSHA256, Path: f.mtu.record.Path, Capture: ready}
+}
+func (f *desktopCandidatePrefixRuntimeFixture) write(t *testing.T, name string, value any) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(f.owner.files.root.Name(), name), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *desktopCandidatePrefixRuntimeFixture) pulse(t *testing.T, q routerVPNNodeCandidatePrefixRequest) {
+	t.Helper()
+	f.write(t, "node-candidate-prefix-live.json", routerVPNNodeCandidatePrefixPulse{Schema: 1, Request: q.Request, CaptureSHA: q.CaptureSHA, Sequence: 1, ObservedAt: time.Now().UnixMilli()})
+}
+
+func TestRouterVPNDesktopCandidatePrefixRuntimeClosedFifty(t *testing.T) {
+	f := desktopCandidatePrefixRuntime(t)
+	f.start(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var accepted atomic.Int64
+	joined := make(chan struct{})
+	go func() {
+		defer close(joined)
+		for {
+			c, e := listener.Accept()
+			if e != nil {
+				return
+			}
+			accepted.Add(1)
+			_ = c.Close()
+		}
+	}()
+	defer func() { _ = listener.Close(); <-joined }()
+	f.engine.candidate = func(ctx context.Context) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
+	}
+	q := f.request(t)
+	f.write(t, "node-candidate-prefix-request.json", q)
+	for {
+		f.pulse(t, q)
+		if err := f.owner.pollCandidates(t.Context()); err != nil {
+			t.Fatalf("actual prefix candidate worker: %v; operation=%t; progress=%+v", err, f.owner.op.Load() != nil, f.owner.state.Load().proof.Progress())
+		}
+		if err := f.owner.heartbeat(t.Context(), f.mtu.record); err != nil {
+			t.Fatalf("prefix heartbeat during worker: %v; progress=%+v", err, f.owner.state.Load().proof.Progress())
+		}
+		if f.owner.op.Load() == nil {
+			break
+		}
+		if time.Now().UnixMilli() > q.Deadline {
+			t.Fatal("actual fifty connections did not drain")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	raw, err := f.owner.files.read("node-candidate-prefix-result.json", 128<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result routerVPNNodeCandidatePrefixResult
+	if json.Unmarshal(raw, &result) != nil || !result.Status.Complete || !result.Status.Drained || result.Status.Failure != "" || len(result.Status.Results) != 1 || result.Status.Results[0].Benchmark == nil || result.Status.Results[0].Benchmark.Attempts != 50 || result.Status.Results[0].Benchmark.Distribution == nil || result.Status.Results[0].Benchmark.Distribution.Samples != 50 || result.Status.Results[0].Benchmark.Failed != 0 || accepted.Load() != 50 || f.owner.measurementHold.Load() {
+		t.Fatalf("lost actual fifty-connect receipt: %s (accepted %d)", raw, accepted.Load())
+	}
+	for _, name := range []string{"node-ready.json", "node-chain-ready.json", "node-dns-result.json", "stopped.json"} {
+		if _, err := f.owner.files.root.Lstat(name); !os.IsNotExist(err) {
+			t.Fatal("prefix fabricated ordinary/native-DOWN evidence", name, err)
+		}
+	}
+	if err := f.mtu.command(desktopNodeMTURequest(f.mtu, "begin", 0)); err == nil {
+		t.Fatal("temporary prefix allowed a second MTU owner")
+	}
+	if err := f.owner.close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if f.engine.retireCalls != 1 || !f.owner.state.Load().joined {
+		t.Fatal("original closed gate was not joined exactly once")
+	}
+}
+
+func TestRouterVPNDesktopCandidatePrefixRuntimeRejectsSubstitution(t *testing.T) {
+	for _, fault := range []string{"reader", "config", "source-inode", "native-mtu", "capture", "position", "path", "application", "dns", "stale-ready", "stale-pulse", "wrong-pulse", "missing-pulse", "generation"} {
+		t.Run(fault, func(t *testing.T) {
+			f := desktopCandidatePrefixRuntime(t)
+			f.start(t)
+			q := f.request(t)
+			f.pulse(t, q)
+			switch fault {
+			case "reader":
+				q.Capture.Reader++
+			case "config":
+				q.Capture.Identity.ConfigSHA256 = strings.Repeat("f", 64)
+			case "source-inode":
+				path := filepath.Join(f.owner.files.root.Name(), "node-candidate-prefix-source.json")
+				if err := os.Rename(path, path+".old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(f.owner.policy.Source()), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "native-mtu":
+				f.mtu.inbound.(*desktopMTUTUNFixture).mtu--
+			case "capture":
+				q.CaptureSHA = strings.Repeat("f", 64)
+			case "position":
+				q.Position--
+			case "path":
+				q.Path = strings.Repeat("f", 64)
+			case "application":
+				q.Capture.ApplicationOpen = true
+			case "dns":
+				q.Capture.DNSOpen = true
+			case "stale-ready":
+				q.Capture.ObservedAt = time.Now().Add(-3 * time.Second).UnixMilli()
+			case "stale-pulse":
+				f.write(t, "node-candidate-prefix-live.json", routerVPNNodeCandidatePrefixPulse{Schema: 1, Request: q.Request, CaptureSHA: q.CaptureSHA, Sequence: 1, ObservedAt: time.Now().Add(-2 * time.Second).UnixMilli()})
+			case "wrong-pulse":
+				f.write(t, "node-candidate-prefix-live.json", routerVPNNodeCandidatePrefixPulse{Schema: 1, Request: strings.Repeat("f", 32), CaptureSHA: q.CaptureSHA, Sequence: 1, ObservedAt: time.Now().UnixMilli()})
+			case "missing-pulse":
+				if err := f.owner.files.root.Remove("node-candidate-prefix-live.json"); err != nil {
+					t.Fatal(err)
+				}
+			case "generation":
+				q.Generation++
+			}
+			f.write(t, "node-candidate-prefix-request.json", q)
+			if err := f.owner.pollCandidates(t.Context()); err == nil {
+				t.Fatal("prefix mailbox accepted a foreign captured owner")
+			}
+			if op := f.owner.op.Load(); op != nil && op.started {
+				t.Fatal("rejected prefix started candidate work")
+			}
+			if _, err := f.owner.files.root.Lstat("node-candidate-prefix-result.json"); !os.IsNotExist(err) {
+				t.Fatal("rejected prefix fabricated result", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopCandidatePrefixRuntimeRetainsPartialJoin(t *testing.T) {
+	f := desktopCandidatePrefixRuntime(t)
+	factory := f.owner.factory
+	f.owner.factory = func(ctx context.Context, p *mobilemultihop.NodeChainCandidatePreparation, current func(context.Context) error) (routerVPNNodeCandidatePrefixEngine, error) {
+		engine, err := factory(ctx, p, current)
+		if err != nil {
+			return engine, err
+		}
+		return engine, errors.New("late native construction refusal")
+	}
+	if err := f.owner.attach(t.Context(), f.mtu); err == nil {
+		t.Fatal("partial native construction was accepted")
+	}
+	original := f.owner.state.Load()
+	originalEngine := f.engine
+	f.engine.retire = func(ctx context.Context) error { return errors.New("original deny-gate close remains pending") }
+	if err := f.owner.close(t.Context()); err == nil || f.owner.state.Load() != original || original.engine != originalEngine || original.joined {
+		t.Fatal("failed original prefix join lost cleanup authority")
+	}
+	f.engine.retire = nil
+	if err := f.owner.close(t.Context()); err != nil || !original.joined || f.engine.retireCalls != 2 {
+		t.Fatal("exact original prefix cleanup did not retry", err)
+	}
+	if _, err := f.owner.files.root.Lstat("stopped.json"); !os.IsNotExist(err) {
+		t.Fatal("private gate join fabricated native Box/TUN DOWN", err)
+	}
+}
+
+func TestRouterVPNDesktopCandidatePrefixRuntimeJoinsWorkerBeforeGate(t *testing.T) {
+	for _, action := range []string{"cancel", "retire"} {
+		t.Run(action, func(t *testing.T) {
+			f := desktopCandidatePrefixRuntime(t)
+			f.start(t)
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			joined := make(chan struct{})
+			go func() {
+				defer close(joined)
+				for {
+					c, err := listener.Accept()
+					if err != nil {
+						return
+					}
+					_ = c.Close()
+				}
+			}()
+			defer func() { _ = listener.Close(); <-joined }()
+			entered, release := make(chan struct{}), make(chan struct{})
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			defer unblock()
+			f.engine.candidate = func(ctx context.Context) (net.Conn, error) {
+				conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
+				if err != nil {
+					return conn, err
+				}
+				return &desktopCandidateHeldClose{Conn: conn, entered: entered, release: release}, nil
+			}
+			q := f.request(t)
+			f.write(t, "node-candidate-prefix-request.json", q)
+			f.pulse(t, q)
+			if err := f.owner.pollCandidates(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("original prefix worker did not enter its real socket close")
+			}
+			original := f.owner.op.Load()
+			if original == nil || !f.owner.measurementHold.Load() {
+				t.Fatal("held prefix socket has no retained worker lease")
+			}
+			if action == "cancel" {
+				f.write(t, "node-candidate-prefix-cancel.json", q)
+				f.pulse(t, q)
+				if err := f.owner.pollCandidates(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				if f.owner.op.Load() != original || !f.owner.measurementHold.Load() || f.engine.retireCalls != 0 {
+					t.Fatal("prefix cancellation abandoned unjoined socket ownership")
+				}
+			} else {
+				ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+				err := f.owner.close(ctx)
+				cancel()
+				if err == nil || f.owner.op.Load() != original || !f.owner.measurementHold.Load() || f.engine.retireCalls != 0 || f.owner.state.Load().joined {
+					t.Fatal("prefix gate retired before its original worker joined")
+				}
+			}
+			if _, err := f.owner.files.root.Lstat("node-candidate-prefix-result.json"); !os.IsNotExist(err) {
+				t.Fatal("unjoined prefix worker published a result", err)
+			}
+			unblock()
+			if action == "cancel" {
+				deadline := time.Now().Add(3 * time.Second)
+				for f.owner.op.Load() != nil {
+					f.pulse(t, q)
+					if err := f.owner.pollCandidates(t.Context()); err != nil {
+						t.Fatal(err)
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("cancelled prefix worker did not join")
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+				raw, err := f.owner.files.read("node-candidate-prefix-result.json", 128<<10)
+				var result routerVPNNodeCandidatePrefixResult
+				if err != nil || json.Unmarshal(raw, &result) != nil || !result.Status.Complete || !result.Status.Drained || result.Status.Stage != "cancelled" || len(result.Status.Results) != 0 {
+					t.Fatal("cancelled prefix invented a partial score", err)
+				}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := f.owner.close(ctx); err != nil || f.owner.measurementHold.Load() || f.owner.op.Load() != nil || !f.owner.state.Load().joined || f.engine.retireCalls != 1 {
+				t.Fatal("original prefix worker and gate did not finish exact cleanup", err)
+			}
+		})
+	}
+}

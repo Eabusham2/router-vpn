@@ -1,0 +1,45 @@
+//go:build linux && !android
+
+package main
+
+import (
+	"context"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/linuxprotection"
+)
+
+func routerVPNRunLinuxNodeCandidatePrefixControlled(parent context.Context, capture routerVPNNodeCandidatePrefixCommand) error {
+	if capture.validate() != nil || capture.windows != (routerVPNNodeJournalOptions{}) || capture.linux == (routerVPNNodeLinuxParentOptions{}) {
+		return routerVPNExternalFailure
+	}
+	return routerVPNRunLinuxPrefixFamilyControlled(parent, capture.directory, capture.session, capture.config, capture.physical, "", capture.capture, capture.transfer, capture.mtu, capture.linux, false, false)
+}
+
+func (owner *routerVPNLinuxNodeControl) compileCandidatePrefix(ctx context.Context, files *routerVPNExternalFiles,
+	capture routerVPNNodeCandidatePrefixCommand) (*mobilemultihop.DesktopNodeCandidatePreparationPolicy, error) {
+	if owner == nil || owner.policy != nil || owner.external != nil || owner.control != nil || owner.retiring.Load() ||
+		files == nil || files.root == nil || owner.original(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	policy, err := routerVPNNodeCandidatePrefixCommandCapture(files, capture.session, capture.config, capture.physical, capture.capture, "linux", capture.mtu)
+	if err != nil {
+		return nil, err
+	}
+	_, meta, _, err := policy.PhysicalReadValidated()
+	if err != nil {
+		return nil, err
+	}
+	selection := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
+		ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
+	command, commandErr := selection.CaptureSHA256()
+	selected, selectedErr := selection.ControlSHA256()
+	if commandErr != nil || selectedErr != nil || command != owner.commandHash || selected != capture.transfer || owner.original(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	owner.control, err = linuxprotection.NewNodeChildControl(ctx, owner.bootstrap, selection)
+	if err != nil {
+		return nil, err
+	}
+	owner.policy, owner.selection, owner.selectionHash = policy, selection, selected
+	return policy, nil
+}

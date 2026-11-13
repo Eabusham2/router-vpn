@@ -188,9 +188,11 @@ class SourcePhases(unittest.TestCase):
         command.parent.mkdir(parents=True)
         command.write_bytes((ROOT / "mobile/desktop/node_candidate_prefix_command.go.tmpl").read_bytes())
         physical.write_bytes((ROOT / "mobile/desktop/node_candidate_prefix_box_physical.go.tmpl").read_bytes())
+        for name in ("node_candidate_prefix_runtime.go", "node_candidate_prefix_measurement.go"):
+            (self.source / "cmd/sing-box" / ("routervpn_" + name)).write_bytes((ROOT / "mobile/desktop" / (name + ".tmpl")).read_bytes())
         controls = NODE.candidate_prefix_mutants(self.source)
-        self.assertEqual([control[0] for control in controls], ["candidate-prefix-capture", "candidate-prefix-darwin-admission"])
-        self.assertEqual([control[4] for control in controls], ["capture", "darwin"])
+        self.assertEqual([control[0] for control in controls], ["candidate-prefix-capture", "candidate-prefix-darwin-admission", "candidate-prefix-original-pulse", "candidate-prefix-original-inode", "candidate-prefix-worker-before-gate"])
+        self.assertEqual([control[4] for control in controls], ["capture", "darwin", "wrong-pulse", "source-inode", "retire"])
         self.assertNotIn("meta.CaptureSHA256 != capture", controls[0][-1])
         self.assertIn("meta.SourceSHA256 != source", controls[0][-1])
         self.assertNotIn('target != "linux" && target != "windows"', controls[1][-1])

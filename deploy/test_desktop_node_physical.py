@@ -100,9 +100,29 @@ CANDIDATE_PREFIX_COMMAND_VERDICTS = (
       ("missing", "ordinary", "generic", "source", "capture", "config", "session", "target", "darwin", "restore", "graph",
        "ambiguous-node", "ambiguous-chain", "ambiguous-execution", "ambiguous-imported")),
 )
+CANDIDATE_PREFIX_RUNTIME_ROOT = "TestRouterVPNDesktopCandidatePrefixRuntime"
+CANDIDATE_PREFIX_RUNTIME_VERDICTS = (
+    CANDIDATE_PREFIX_RUNTIME_ROOT + "ClosedFifty",
+    CANDIDATE_PREFIX_RUNTIME_ROOT + "RejectsSubstitution",
+    *(CANDIDATE_PREFIX_RUNTIME_ROOT + "RejectsSubstitution/" + fault for fault in
+      ("reader", "config", "source-inode", "native-mtu", "capture", "position", "path", "application", "dns", "stale-ready",
+       "stale-pulse", "wrong-pulse", "missing-pulse", "generation")),
+    CANDIDATE_PREFIX_RUNTIME_ROOT + "RetainsPartialJoin",
+    CANDIDATE_PREFIX_RUNTIME_ROOT + "JoinsWorkerBeforeGate",
+    *(CANDIDATE_PREFIX_RUNTIME_ROOT + "JoinsWorkerBeforeGate/" + action for action in ("cancel", "retire")),
+)
+CANDIDATE_PREFIX_DISPATCH_ROOT = "TestRouterVPNDesktopCandidatePrefixDispatch"
+CANDIDATE_PREFIX_DISPATCH_VERDICTS = (
+    CANDIDATE_PREFIX_DISPATCH_ROOT + "KeepsTypedCapture",
+    CANDIDATE_PREFIX_DISPATCH_ROOT + "RejectsForeignPurpose",
+    *(CANDIDATE_PREFIX_DISPATCH_ROOT + "RejectsForeignPurpose/" + fault for fault in
+      ("capture", "relative", "session", "restore", "mixed-parent", "missing-parent", "cancelled")),
+)
 CANDIDATE_PREFIX_DESKTOP_SUITES = (
     ("candidate-prefix-physical", ".", "^" + CANDIDATE_PREFIX_PHYSICAL_ROOT, CANDIDATE_PREFIX_PHYSICAL_VERDICTS),
     ("candidate-prefix-command", "./cmd/sing-box", "^" + CANDIDATE_PREFIX_COMMAND_ROOT, CANDIDATE_PREFIX_COMMAND_VERDICTS),
+    ("candidate-prefix-runtime", "./cmd/sing-box", "^" + CANDIDATE_PREFIX_RUNTIME_ROOT, CANDIDATE_PREFIX_RUNTIME_VERDICTS),
+    ("candidate-prefix-dispatch", "./cmd/sing-box", "^" + CANDIDATE_PREFIX_DISPATCH_ROOT, CANDIDATE_PREFIX_DISPATCH_VERDICTS),
 )
 ORDERED_EXECUTION_COMMAND_ROOTS = tuple("TestRouterVPNDesktopNodeChainExecutionRuntime" + suffix for suffix in (
     "KeepsActualProjection", "RetainsFailedCleanup", "RejectsReplacedOwners", "JoinsLateConstructor")) + tuple(
@@ -931,6 +951,8 @@ def naive_transport_mutants(source):
 def candidate_prefix_mutants(source):
     command = "cmd/sing-box/routervpn_node_candidate_prefix_command.go"
     physical = "routervpn_desktop_node_candidate_prefix_box_physical.go"
+    runtime = "cmd/sing-box/routervpn_node_candidate_prefix_runtime.go"
+    measurement = "cmd/sing-box/routervpn_node_candidate_prefix_measurement.go"
     return [
         ("candidate-prefix-capture", command, "./cmd/sing-box", CANDIDATE_PREFIX_COMMAND_ROOT + "RejectsSubstitution", "capture",
          "prefix child accepted foreign or ambiguous source", BOOT.IDENTITY.replace_once(
@@ -938,6 +960,16 @@ def candidate_prefix_mutants(source):
         ("candidate-prefix-darwin-admission", physical, ".", CANDIDATE_PREFIX_PHYSICAL_ROOT + "KeepsTypedTarget", "darwin",
          "prefix changed accepted native platform boundary", BOOT.IDENTITY.replace_once(
              (source / physical).read_text(encoding="utf-8"), ' || target != "linux" && target != "windows"', "")),
+        ("candidate-prefix-original-pulse", measurement, "./cmd/sing-box", CANDIDATE_PREFIX_RUNTIME_ROOT + "RejectsSubstitution", "wrong-pulse",
+         "prefix mailbox accepted a foreign captured owner", BOOT.IDENTITY.replace_once(
+             (source / measurement).read_text(encoding="utf-8"), "pulse.Request != op.request.Request || ", "")),
+        ("candidate-prefix-original-inode", runtime, "./cmd/sing-box", CANDIDATE_PREFIX_RUNTIME_ROOT + "RejectsSubstitution", "source-inode",
+         "prefix mailbox accepted a foreign captured owner", BOOT.IDENTITY.replace_once(
+             (source / runtime).read_text(encoding="utf-8"), " && os.SameFile(info, item.info)", " && info != nil")),
+        ("candidate-prefix-worker-before-gate", runtime, "./cmd/sing-box", CANDIDATE_PREFIX_RUNTIME_ROOT + "JoinsWorkerBeforeGate", "retire",
+         "prefix gate retired before its original worker joined", BOOT.IDENTITY.replace_once(
+             (source / runtime).read_text(encoding="utf-8"), "if op := owner.op.Load(); op != nil {",
+             "if state != nil && state.engine != nil { _ = state.engine.RetireContext(ctx) }; if op := owner.op.Load(); op != nil {")),
     ]
 
 

@@ -1,0 +1,87 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"syscall"
+
+	"github.com/spf13/cobra"
+)
+
+// This separate command can run only the captured, never-connected selected
+// prefix. Original platform authentication precedes every private source read.
+type routerVPNNodeCandidatePrefixCommand struct {
+	directory, session, config, physical, capture, transfer string
+	mtu                                                     int
+	windows                                                 routerVPNNodeJournalOptions
+	linux                                                   routerVPNNodeLinuxParentOptions
+}
+
+func init() {
+	mainCommand.AddCommand(routerVPNNewNodeCandidatePrefixCommand(routerVPNRunNodeCandidatePrefixCommand))
+}
+
+func routerVPNNewNodeCandidatePrefixCommand(run func(context.Context, routerVPNNodeCandidatePrefixCommand) error) *cobra.Command {
+	var capture routerVPNNodeCandidatePrefixCommand
+	command := &cobra.Command{Use: "routervpn-node-candidate-prefix", Short: "Run one captured closed candidate prefix", Args: cobra.NoArgs, SilenceUsage: true,
+		RunE: func(command *cobra.Command, _ []string) error {
+			if run == nil || capture.validate() != nil {
+				return routerVPNExternalFailure
+			}
+			ctx, cancel := signal.NotifyContext(command.Context(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return run(ctx, capture)
+		}}
+	command.Flags().StringVar(&capture.directory, "runtime-dir", "", "absolute private runtime directory")
+	command.Flags().StringVar(&capture.session, "session", "", "captured runtime identity")
+	command.Flags().StringVar(&capture.config, "config-sha256", "", "captured preparation configuration")
+	command.Flags().StringVar(&capture.physical, "physical-source-sha256", "", "captured physical owner")
+	command.Flags().StringVar(&capture.capture, "prefix-capture-sha256", "", "captured finite prefix candidate inventory")
+	command.Flags().StringVar(&capture.transfer, "physical-transfer-sha256", "", "captured protection predecessor")
+	command.Flags().IntVar(&capture.mtu, "physical-mtu", 0, "captured physical policy MTU")
+	command.Flags().Uint64Var(&capture.windows.ParentHandle, "journal-parent-handle", 0, "inherited native controller capability")
+	command.Flags().StringVar(&capture.windows.ParentImage, "journal-parent-image", "", "retained native controller image")
+	command.Flags().StringVar(&capture.windows.Pipe, "journal-pipe", "", "native durable transaction rendezvous")
+	command.Flags().StringVar(&capture.windows.CaptureSHA256, "journal-capture-sha256", "", "captured journal identity")
+	command.Flags().IntVar(&capture.linux.ChannelFD, "linux-parent-channel", 0, "inherited original Linux parent channel")
+	command.Flags().IntVar(&capture.linux.DirectoryFD, "linux-parent-directory", 0, "inherited original Linux task directory")
+	command.Flags().StringVar(&capture.linux.CaptureSHA256, "linux-parent-capture", "", "captured Linux command identity")
+	return command
+}
+
+func (capture routerVPNNodeCandidatePrefixCommand) validate() error {
+	if !filepath.IsAbs(capture.directory) || !routerVPNExternalSession.MatchString(capture.session) ||
+		!routerVPNExternalSource.MatchString(capture.config) || !routerVPNExternalSource.MatchString(capture.physical) ||
+		!routerVPNExternalSource.MatchString(capture.capture) || !routerVPNExternalSource.MatchString(capture.transfer) ||
+		capture.mtu != 0 && (capture.mtu < 1280 || capture.mtu > 9000) ||
+		capture.windows != (routerVPNNodeJournalOptions{}) && capture.linux != (routerVPNNodeLinuxParentOptions{}) {
+		return routerVPNExternalFailure
+	}
+	return nil
+}
+
+func routerVPNRunNodeCandidatePrefixCommand(parent context.Context, capture routerVPNNodeCandidatePrefixCommand) (failure error) {
+	if parent == nil || parent.Err() != nil || capture.validate() != nil {
+		return routerVPNExternalFailure
+	}
+	if capture.linux != (routerVPNNodeLinuxParentOptions{}) {
+		return routerVPNRunLinuxNodeCandidatePrefixControlled(parent, capture)
+	}
+	if runtime.GOOS != "windows" || capture.windows == (routerVPNNodeJournalOptions{}) {
+		return routerVPNExternalFailure
+	}
+	journal, err := routerVPNNewNodeJournal(parent, capture.physical, capture.windows)
+	if err != nil || journal == nil {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	defer func() { failure = errors.Join(failure, journal.close()) }()
+	return routerVPNRunNodeMTUPrefixFamiliesCaptured(parent, capture.directory, capture.session, capture.config,
+		"", "", "", "", capture.physical, capture.capture, capture.transfer, capture.mtu, journal)
+}

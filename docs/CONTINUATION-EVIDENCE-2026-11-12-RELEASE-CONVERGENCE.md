@@ -1419,6 +1419,14 @@ The main map and node list now label only the immutable members of the original 
 
 The actual owner/controller composition passed 42 checks and six compiled controls. The shared-Go/shipping-Swift ordered map composition passed 139 checks and all eight controls, including deliberate defects that mark the unused suffix Testing or mislabel the node list. The vector map passed 298 geometry checks plus its existing shipping selection/access and short-route controls. The portable fixtures retain explicit SDK/IPC boundaries; actual Xcode/MapKit bitmap rendering and physical-device visual acceptance remain required.
 
+## Desktop child executes and retires closed prefix measurements
+
+The dedicated desktop child command now reaches its captured prefix engine on Windows and Linux. It retains the original private input inode and bytes, finite candidate inventory, physical protection, configured MTU reader, proof generation, authenticated parent and live observation pulse. It rejects ordinary DNS, MTU-optimizer and full-chain measurement commands during preparation. It does not create ordinary connection readiness.
+
+A candidate operation uses 50 routed TCP connection samples through the proved prefix. The original worker must drain before proof-gate retirement and before the enclosing Box/TUN/protection owner may publish DOWN. Failed engine construction or incomplete closure retains its original cleanup owner; cancellation, substituted captures, stale pulses and replaced source files cannot publish a valid result. The parent observation deadline remains 1.5 seconds, with the existing worker and cleanup bounds unchanged. Immutable policy data is captured once to avoid repeatedly rebuilding its source during hot-path ownership checks; original inode/byte, native reader and physical-policy observations remain mandatory.
+
+Exact prepared-source race suites passed: 11 Box verdicts, 19 source replay verdicts, 20 runtime verdicts and nine dispatcher verdicts. The runtime suite includes a real private HTTP proof and 50 real TCP samples, 14 source/reader/capture/pulse substitutions, partial native cleanup retry and held-worker Cancel/retire cases. All 2,465 prepared shipping source hashes stayed unchanged through the suites. Three compiled causal controls were rejected at the original-pulse, source-inode and worker-before-gate witnesses; nine runner checks passed. These suites use an explicitly unstarted TUN and controlled physical I/O. They do not establish privileged installed-host or device acceptance. The public parent/API activation remains a separate unit.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

@@ -1,0 +1,62 @@
+package main
+
+import (
+	"context"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestRouterVPNDesktopCandidatePrefixDispatchKeepsTypedCapture(t *testing.T) {
+	want := routerVPNNodeCandidatePrefixCommand{directory: filepath.Join(t.TempDir(), "private"), session: strings.Repeat("a", 32), config: strings.Repeat("b", 64), physical: strings.Repeat("c", 64), capture: strings.Repeat("d", 64), transfer: strings.Repeat("e", 64), mtu: 1420,
+		linux: routerVPNNodeLinuxParentOptions{ChannelFD: 3, DirectoryFD: 4, CaptureSHA256: strings.Repeat("f", 64)}}
+	called := false
+	command := routerVPNNewNodeCandidatePrefixCommand(func(ctx context.Context, got routerVPNNodeCandidatePrefixCommand) error {
+		called = true
+		if !reflect.DeepEqual(got, want) || ctx.Err() != nil {
+			t.Fatal("prefix dispatcher changed its immutable typed capture")
+		}
+		return nil
+	})
+	command.SetArgs([]string{"--runtime-dir", want.directory, "--session", want.session, "--config-sha256", want.config, "--physical-source-sha256", want.physical, "--prefix-capture-sha256", want.capture, "--physical-transfer-sha256", want.transfer, "--physical-mtu", "1420", "--linux-parent-channel", "3", "--linux-parent-directory", "4", "--linux-parent-capture", want.linux.CaptureSHA256})
+	if err := command.ExecuteContext(t.Context()); err != nil || !called {
+		t.Fatal("prefix command lost its original dispatch", err)
+	}
+}
+
+func TestRouterVPNDesktopCandidatePrefixDispatchRejectsForeignPurpose(t *testing.T) {
+	base := routerVPNNodeCandidatePrefixCommand{directory: t.TempDir(), session: strings.Repeat("a", 32), config: strings.Repeat("b", 64), physical: strings.Repeat("c", 64), capture: strings.Repeat("d", 64), transfer: strings.Repeat("e", 64)}
+	for _, fault := range []string{"capture", "relative", "session", "restore", "mixed-parent", "missing-parent", "cancelled"} {
+		t.Run(fault, func(t *testing.T) {
+			q := base
+			switch fault {
+			case "capture":
+				q.capture = ""
+			case "relative":
+				q.directory = "relative"
+			case "session":
+				q.session = "another"
+			case "restore":
+				q.mtu = 9001
+			case "mixed-parent":
+				q.windows.ParentHandle = 1
+				q.linux.ChannelFD = 3
+			}
+			if fault != "missing-parent" && fault != "cancelled" {
+				if q.validate() == nil {
+					t.Fatal("prefix dispatcher accepted an ambiguous capture")
+				}
+				return
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if fault == "cancelled" {
+				cancel()
+			}
+			if err := routerVPNRunNodeCandidatePrefixCommand(ctx, q); err == nil {
+				t.Fatal("prefix dispatcher bypassed original platform parent")
+			}
+		})
+	}
+}
