@@ -372,6 +372,10 @@ ALLOWLISTS = {
         "mobile/desktop/node_imported_peer_linux_test.go.tmpl",
     }),
     "socks-run": frozenset({
+        "internal/mobilemultihop/node_chain_socks_source.go",
+        "internal/mobilemultihop/desktop_node_chain_socks_policy.go",
+        "internal/mobilemultihop/node_chain_socks_integrity.go",
+        "internal/mobilemultihop/node_chain_socks_integrity_test.go",
         "android/build-sing-box-libbox.sh",
         "deploy/prepare-desktop-external.py",
         "deploy/prepare-mobile-node-chain.py",
@@ -453,6 +457,9 @@ ALLOWLISTS = {
         "deploy/prepare-desktop-external.py",
     }),
     "socks-source": frozenset({
+        "internal/mobilemultihop/desktop_node_chain_socks_policy.go",
+        "internal/mobilemultihop/node_chain_socks_integrity.go",
+        "internal/mobilemultihop/node_chain_socks_integrity_test.go",
         "internal/mobilemultihop/node_chain_imported_socks.go",
         "internal/mobilemultihop/node_chain_socks_source.go",
         "internal/mobilemultihop/node_chain_socks_source_test.go",

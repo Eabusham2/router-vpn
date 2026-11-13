@@ -41,7 +41,7 @@ def events(case, action=None):
 
 class RunnerTests(unittest.TestCase):
     @contextmanager
-    def fixture(self, mutate=None, toolchain=None):
+    def fixture(self, mutate=None, toolchain=None, format_result=None):
         # Only process/Git observations are doubled. The production source
         # snapshot, overlay files, strict verdict and manifest are exercised.
         # No Go binary, native provider or network connection is executed here.
@@ -53,10 +53,9 @@ class RunnerTests(unittest.TestCase):
                 path = source / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("package mobilemultihop\n")
-            (source / D.COMPILER).write_text(
-                "package mobilemultihop\n"
-                "if source.Execution != \"local\" || source.Schema != 3 {}\n"
-                "if p.digest() != p.seal || p.seal == \"\" {}\n")
+            for relative in {entry[0] for entry in D.CONTROL_MUTATIONS.values()}:
+                anchors = [entry[1] for entry in D.CONTROL_MUTATIONS.values() if entry[0] == relative]
+                (source / relative).write_text("package mobilemultihop\n" + "\n".join(anchors) + "\n")
             args = argparse.Namespace(suite=D.SUITE, source=str(source), source_sha=SHA, output=str(output))
             calls = []
             selected = {case.selection: case for case in D.cases()}
@@ -87,6 +86,12 @@ class RunnerTests(unittest.TestCase):
 
             def execute(command, candidate, env, log, bound):
                 self.assertEqual(candidate, source)
+                if command[0] == str(root / "go/bin/gofmt"):
+                    self.assertEqual(bound, 60)
+                    self.assertEqual(command, [str(root / "go/bin/gofmt"), "-d",
+                        *(str(source / path) for path in D.FORMAT_PATHS)])
+                    log.write_bytes(b"diff original.go original.go\n-owned unformatted\n+owned formatted\n")
+                    return format_result or (0, False, True)
                 self.assertEqual(bound, 600)
                 self.assertEqual(env["GOMAXPROCS"], "2")
                 self.assertEqual(env["GOGC"], "100")
@@ -111,7 +116,7 @@ class RunnerTests(unittest.TestCase):
                 yield args, source, output, calls
 
     def test_exact_new_and_preserved_inventory(self):
-        self.assertEqual([len(case.expected) for case in D.cases()], [70, 44, 2, 3])
+        self.assertEqual([len(case.expected) for case in D.cases()], [70, 44, 2, 3, 49, 2, 2, 2, 2])
         self.assertEqual((len(D.MEMBER_FAULTS), len(D.ORDER_FAULTS), len(D.SEAL_FAULTS)), (29, 17, 9))
         self.assertEqual(len(D.SCHEMA2_FAULTS), 22)
         self.assertEqual(len(D.PRESERVATION_ROOTS), 4)
@@ -142,20 +147,29 @@ class RunnerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             D.mutation_source(D.cases()[0], "anything")
 
-    def test_both_unique_guard_mutations_are_disjoint(self):
-        original = 'if source.Execution != "local" || source.Schema != 3 {}\nif p.digest() != p.seal || p.seal == "" {}\n'
-        seal, local = (D.mutation_source(case, original) for case in D.cases()[2:])
-        self.assertNotEqual(seal, local)
-        self.assertNotIn("p.digest() != p.seal", seal)
-        self.assertIn('source.Execution != "local"', seal)
-        self.assertIn("p.digest() != p.seal", local)
-        self.assertNotIn('source.Execution != "local"', local)
+    def test_fixed_per_control_source_and_replacement(self):
+        self.assertEqual(len(D.SOURCE_PATHS), 6)
+        self.assertEqual(len(set(D.SOURCE_PATHS)), 6)
+        controls = [case for case in D.cases() if case.mutation]
+        self.assertEqual(len(controls), 6)
+        for case in controls:
+            path, anchor, replacement = D.CONTROL_MUTATIONS[case.mutation]
+            expected = D.COMPILER if case.mutation == "omitted-local-only" else D.INTEGRITY
+            self.assertEqual(path, expected)
+            self.assertEqual(D.mutation_path(case), path)
+            original = "before\n" + anchor + "\nafter\n"
+            self.assertEqual(D.mutation_source(case, original), "before\n" + replacement + "\nafter\n")
+        self.assertEqual(D.CONTROL_MUTATIONS["omitted-source-seal"][1], "p.config != saved.config || ")
+        with self.assertRaises(ValueError):
+            D.mutation_path(D.cases()[0])
 
     def test_changed_or_duplicate_guard_refused(self):
-        for case in D.cases()[2:]:
+        for case in D.cases():
+            if not case.mutation:
+                continue
             with self.assertRaises(ValueError):
                 D.mutation_source(case, "changed original source")
-            anchor = "p.digest() != p.seal || " if case.mutation == "omitted-source-seal" else 'source.Execution != "local" || '
+            anchor = D.CONTROL_MUTATIONS[case.mutation][1]
             with self.assertRaises(ValueError):
                 D.mutation_source(case, anchor + anchor)
 
@@ -183,9 +197,26 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse(D.CORE.verdict(b"\n".join([rows[-1], *rows[:-1]]), case, 1)["accepted"])
 
     def test_each_negative_leaf_requires_its_own_witness(self):
-        case = D.cases()[3]
-        raw = events(case).replace(case.witness.encode(), b"unrelated failure", 1)
-        self.assertFalse(D.CORE.verdict(raw + case.witness.encode(), case, 1)["accepted"])
+        for case in D.cases():
+            if not case.mutation:
+                continue
+            with self.subTest(case=case.name):
+                raw = events(case).replace(case.witness.encode(), b"unrelated failure", 1)
+                self.assertFalse(D.CORE.verdict(raw + case.witness.encode(), case, 1)["accepted"])
+
+    def test_every_integrity_record_is_mandatory(self):
+        case = D.cases()[4]
+        self.assertEqual(len(case.expected), 49)
+        original = [json.loads(row) for row in events(case).splitlines()]
+        for removed in case.expected:
+            with self.subTest(record=removed):
+                raw = b"\n".join(json.dumps(row).encode() for row in original if row.get("Test") != removed)
+                self.assertFalse(D.CORE.verdict(raw, case, 0)["accepted"])
+        for case in D.cases()[5:]:
+            for code, timed, joined in ((0, False, True), (1, True, True), (1, False, False), (-9, False, True)):
+                with self.subTest(control=case.name, code=code, timed=timed, joined=joined):
+                    self.assertFalse(D.CORE.verdict(events(case), case, code, timed_out=timed,
+                                                   process_group_joined=joined)["accepted"])
 
     def test_build_timeout_unjoined_signal_not_controls(self):
         case = D.cases()[2]
@@ -225,16 +256,20 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(manifest["tree_sha"], TREE)
             self.assertEqual(manifest["trusted_executor_sha256"], hashlib.sha256(D.CORE_PATH.read_bytes()).hexdigest())
             self.assertEqual(manifest["validator_sha256"], hashlib.sha256(DRIVER_PATH.read_bytes()).hexdigest())
-            self.assertEqual(len(calls), 4)
+            self.assertEqual(len(calls), 9)
+            self.assertTrue(manifest["formatting"]["diff_present"])
+            self.assertTrue(manifest["formatting"]["process_group_joined"])
+            self.assertNotIn("-w", manifest["formatting"]["command"])
             self.assertEqual(D.CORE.snapshot(source), before)
             for case, _ in calls:
                 overlay = output / (case.name + ".overlay.json")
                 if case.mutation:
                     mapping = json.loads(overlay.read_text())["Replace"]
-                    self.assertEqual(set(mapping), {str(source / D.COMPILER)})
-                    changed = Path(mapping[str(source / D.COMPILER)])
+                    original = source / D.mutation_path(case)
+                    self.assertEqual(set(mapping), {str(original)})
+                    changed = Path(mapping[str(original)])
                     self.assertEqual(changed.parent, output)
-                    self.assertEqual(changed.read_text(), D.mutation_source(case, (source / D.COMPILER).read_text()))
+                    self.assertEqual(changed.read_text(), D.mutation_source(case, original.read_text()))
                 else:
                     self.assertFalse(overlay.exists())
 
@@ -287,6 +322,25 @@ class RunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "GOPATH"):
                 D.validate(args)
             self.assertEqual(calls, [])
+
+    def test_formatter_failure_timeout_or_unknown_join_stops_before_tests(self):
+        for result in ((1, False, True), (0, True, True), (0, False, False), (0, False, None)):
+            with self.subTest(result=result), self.fixture(format_result=result) as (args, source, output, calls):
+                with self.assertRaisesRegex(RuntimeError, "formatter did not complete and join"):
+                    D.validate(args)
+                self.assertEqual(calls, [])
+                manifest = json.loads((output / "manifest.json").read_text())
+                self.assertEqual(manifest["status"], "failed")
+                self.assertEqual(manifest["formatting"]["process_group_joined"], result[2])
+                self.assertEqual(D.CORE.snapshot(source), json.loads((output / "source-before.json").read_text()))
+
+    def test_missing_new_integrity_source_refused_before_execution(self):
+        for relative in D.FORMAT_PATHS[1:]:
+            with self.subTest(path=relative), self.fixture() as (args, source, output, calls):
+                (source / relative).unlink()
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    D.validate(args)
+                self.assertEqual(calls, [])
 
     def test_cli_does_not_accept_arbitrary_suite(self):
         with patch.object(sys, "argv", ["validator", "--suite", "arbitrary"]), redirect_stderr(io.StringIO()):

@@ -28,10 +28,16 @@ Case = CORE.Case
 SUITE = "socks-source"
 PREFIX = "TestNodeChainSOCKSSource"
 COMPILER = "internal/mobilemultihop/node_chain_socks_source.go"
+INTEGRITY = "internal/mobilemultihop/node_chain_socks_integrity.go"
+FORMAT_PATHS = (
+    COMPILER, "internal/mobilemultihop/desktop_node_chain_socks_policy.go",
+    INTEGRITY, "internal/mobilemultihop/node_chain_socks_integrity_test.go",
+)
 SOURCE_PATHS = (
     "internal/mobilemultihop/node_chain_imported_socks.go",
     COMPILER,
     "internal/mobilemultihop/node_chain_socks_source_test.go",
+    *FORMAT_PATHS[1:],
 )
 PRESERVATION_ROOTS = (
     "TestNodeChainCompleteCapturedPaths",
@@ -69,6 +75,97 @@ ROOT_SUFFIXES = (
     "KeepsSelectedDNSAndPrivateImport",
 )
 
+INTEGRITY_ROOTS = (
+    "TestNodeChainSOCKSIntegrityPreservesOriginalCompiler",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs",
+    "TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding",
+    "TestNodeChainSOCKSIntegrityConcurrentReadbackOwnsCopies",
+    "TestNodeChainSOCKSIntegrityFieldInventory",
+)
+INTEGRITY_CASES = frozenset((
+    "TestNodeChainSOCKSIntegrityPreservesOriginalCompiler",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs",
+    "TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding",
+    "TestNodeChainSOCKSIntegrityConcurrentReadbackOwnsCopies",
+    "TestNodeChainSOCKSIntegrityFieldInventory",
+    "TestNodeChainSOCKSIntegrityPreservesOriginalCompiler/wg",
+    "TestNodeChainSOCKSIntegrityPreservesOriginalCompiler/awg2-fast",
+    "TestNodeChainSOCKSIntegrityPreservesOriginalCompiler/awg2-strong",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/source",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/config",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/seal",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/proof",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/mtu",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/device",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/pair",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/pair-source",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/pair-config",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/pair-metadata",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/pair-seal",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/pair-proof",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/pair-dns",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/pair-physical",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/pair-projection",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/node-owner",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/node-config",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/node-input",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/node-profile",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/member-owner",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/member-input",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/member-source",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/member-seal",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/member-profile",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/policy-owner",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/policy-config",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/policy-metadata",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/policy-source",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/policy-seal",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/policy-profile",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/missing-receipt",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/foreign-receipt",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/copied-source",
+    "TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding/binding-owner",
+    "TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding/original-owner",
+    "TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding/original-source",
+    "TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding/projection",
+    "TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding/metadata",
+    "TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding/native-metadata",
+    "TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding/seal",
+    "TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding/removed",
+))
+CONTROL_MUTATIONS = {
+    "omitted-source-seal": [
+        "internal/mobilemultihop/node_chain_socks_integrity.go",
+        "p.config != saved.config || ",
+        ""
+    ],
+    "aliased-paired-profile": [
+        "internal/mobilemultihop/node_chain_socks_integrity.go",
+        "saved.paired.values[i].profile,err = nodeChainSOCKSIntegrityCopy(node.profile)",
+        "saved.paired.values[i].profile,err = node.profile,nil"
+    ],
+    "aliased-imported-policy": [
+        "internal/mobilemultihop/node_chain_socks_integrity.go",
+        "saved.imported.compiled.capture,err=nodeChainSOCKSIntegrityCopy(middle.policy.capture)",
+        "saved.imported.compiled.capture,err=middle.policy.capture,nil"
+    ],
+    "borrowed-source-receipt": [
+        "internal/mobilemultihop/node_chain_socks_integrity.go",
+        "saved.owner != p ||",
+        ""
+    ],
+    "omitted-original-desktop-source": [
+        "internal/mobilemultihop/node_chain_socks_integrity.go",
+        "binding.original.validate() != nil ||",
+        ""
+    ],
+    "omitted-local-only": [
+        "internal/mobilemultihop/node_chain_socks_source.go",
+        "source.Execution != \"local\" || ",
+        ""
+    ]
+}
+
 
 def cases(suite: str = SUITE) -> tuple[Case, ...]:
     if suite != SUITE:
@@ -101,18 +198,27 @@ def cases(suite: str = SUITE) -> tuple[Case, ...]:
         Case("omitted-local-only", "^" + local + "$/^(server|auto)$",
              frozenset((local, local + "/server", local + "/auto")), 120, 600, "omitted-local-only",
              "unsupported SOCKS composition was admitted", frozenset((local + "/server", local + "/auto"))),
+        Case("sealed-socks-integrity", "^(" + "|".join(INTEGRITY_ROOTS) + ")$", INTEGRITY_CASES, 120, 600),
+        Case("aliased-paired-profile", "^TestNodeChainSOCKSIntegrityRejectsChangedInputs$/^node-profile$", frozenset(["TestNodeChainSOCKSIntegrityRejectsChangedInputs","TestNodeChainSOCKSIntegrityRejectsChangedInputs/node-profile"]), 120, 600, "aliased-paired-profile", "changed captured input retained integrity authority", frozenset(["TestNodeChainSOCKSIntegrityRejectsChangedInputs/node-profile"])),
+        Case("aliased-imported-policy", "^TestNodeChainSOCKSIntegrityRejectsChangedInputs$/^policy-profile$", frozenset(["TestNodeChainSOCKSIntegrityRejectsChangedInputs","TestNodeChainSOCKSIntegrityRejectsChangedInputs/policy-profile"]), 120, 600, "aliased-imported-policy", "changed captured input retained integrity authority", frozenset(["TestNodeChainSOCKSIntegrityRejectsChangedInputs/policy-profile"])),
+        Case("borrowed-source-receipt", "^TestNodeChainSOCKSIntegrityRejectsChangedInputs$/^copied-source$", frozenset(["TestNodeChainSOCKSIntegrityRejectsChangedInputs","TestNodeChainSOCKSIntegrityRejectsChangedInputs/copied-source"]), 120, 600, "borrowed-source-receipt", "copied source borrowed original integrity owner", frozenset(["TestNodeChainSOCKSIntegrityRejectsChangedInputs/copied-source"])),
+        Case("omitted-original-desktop-source", "^TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding$/^original-source$", frozenset(["TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding","TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding/original-source"]), 120, 600, "omitted-original-desktop-source", "changed desktop binding retained integrity authority", frozenset(["TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding/original-source"])),
     )
 
 
+def mutation_path(case: Case) -> str:
+    entry = CONTROL_MUTATIONS.get(case.mutation)
+    if entry is None or entry[0] not in SOURCE_PATHS:
+        raise ValueError("SOCKS control has no fixed original source")
+    return entry[0]
+
+
 def mutation_source(case: Case, source: str) -> str:
-    anchors = {
-        "omitted-source-seal": "p.digest() != p.seal || ",
-        "omitted-local-only": 'source.Execution != "local" || ',
-    }
-    needle = anchors.get(case.mutation)
-    if needle is None or source.count(needle) != 1:
+    mutation_path(case)
+    _, needle, replacement = CONTROL_MUTATIONS[case.mutation]
+    if source.count(needle) != 1:
         raise ValueError("SOCKS control lost its one exact original guard")
-    return source.replace(needle, "", 1)
+    return source.replace(needle, replacement, 1)
 
 
 def command_for(go: str, case: Case, overlay: Path | None = None) -> list[str]:
@@ -176,15 +282,36 @@ def validate(args: argparse.Namespace) -> None:
 
     save()
     try:
+        # Read-only formatting evidence for these four new compiler files.
+        # A nonempty diff is retained for review; it never skips native tests.
+        formatting = [str(goroot / "bin/gofmt"), "-d",
+                      *(str(source / path) for path in FORMAT_PATHS)]
+        format_log = output / "gofmt.patch"
+        started = time.monotonic()
+        code, timed_out, joined = CORE.execute(formatting, source, env, format_log, 60)
+        format_raw = format_log.read_bytes()
+        manifest["formatting"] = {
+            "command": formatting, "outer_seconds": 60,
+            "exit": code, "timed_out": timed_out, "process_group_joined": joined,
+            "seconds": round(time.monotonic() - started, 3),
+            "log": format_log.name, "log_sha256": hashlib.sha256(format_raw).hexdigest(),
+            "diff_present": bool(format_raw),
+        }
+        save()
+        if CORE.snapshot(source) != before or CORE.git(source, "status", "--porcelain", "--untracked-files=all"):
+            raise RuntimeError("candidate source changed during read-only formatting")
+        if code != 0 or timed_out or joined is not True:
+            raise RuntimeError("original read-only formatter did not complete and join")
         for case in selected:
             overlay_record, overlay = None, None
             if case.mutation:
-                original = source / COMPILER
+                relative = mutation_path(case)
+                original = source / relative
                 changed = output / (case.name + ".go")
                 changed.write_text(mutation_source(case, original.read_text()))
                 overlay = output / (case.name + ".overlay.json")
                 overlay.write_text(json.dumps({"Replace": {str(original): str(changed)}}) + "\n")
-                overlay_record = {"path": COMPILER, "original_sha256": before[COMPILER]["sha256"],
+                overlay_record = {"path": relative, "original_sha256": before[relative]["sha256"],
                                   "mutant_sha256": hashlib.sha256(changed.read_bytes()).hexdigest()}
             command = command_for(go, case, overlay)
             log = output / (case.name + ".jsonl")
