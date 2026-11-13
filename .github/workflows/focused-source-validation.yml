@@ -35,6 +35,7 @@ on:
           - windows-source-retirement
           - desktop-socks-capture
           - desktop-socks-policy
+          - desktop-socks-parent
 
 permissions:
   contents: read
@@ -68,7 +69,7 @@ jobs:
           for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
               if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
                   raise SystemExit(name + " must be a complete lowercase Git commit.")
-          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host", "socks-native-mtu", "android-sdk", "ios-sdk", "windows-source-retirement", "desktop-socks-capture", "desktop-socks-policy"):
+          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host", "socks-native-mtu", "android-sdk", "ios-sdk", "windows-source-retirement", "desktop-socks-capture", "desktop-socks-policy", "desktop-socks-parent"):
               raise SystemExit("Unknown focused validation suite.")
           PY
       - name: Check out the trusted validator
@@ -100,6 +101,9 @@ jobs:
           python3 validator/deploy/test_focused_multihop_clocks.py --self-test
           if [[ "$SUITE" == "windows-source-retirement" ]]; then
             python3 validator/deploy/validate-windows-source-retirement.py --self-test
+          fi
+          if [[ "$SUITE" == "desktop-socks-parent" ]]; then
+            python3 validator/deploy/test_focused_desktop_socks_parent_runner.py
           fi
           if [[ "$SUITE" == "desktop-socks-policy" ]]; then
             python3 validator/deploy/test_focused_desktop_socks_policy_runner.py
@@ -293,6 +297,13 @@ jobs:
             --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
             --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Verify typed desktop parent and original ownership
+        if: inputs.suite == 'desktop-socks-parent'
+        shell: bash
+        run: |
+          python3 validator/deploy/test_focused_desktop_socks_parent.py \
+            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
+            --source-sha "$SOURCE_SHA" --output "$GITHUB_WORKSPACE/validation-output/tests"
       - name: Verify original desktop SOCKS sources and catalog retirement
         if: inputs.suite == 'desktop-socks-capture'
         shell: bash
