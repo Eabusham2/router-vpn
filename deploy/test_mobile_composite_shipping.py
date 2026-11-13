@@ -19,7 +19,7 @@ class CompositeShipping(unittest.TestCase):
         core = Path(path)
         (core/'go.mod').write_text('module github.com/sagernet/sing-box\n')
         (core/'include').mkdir()
-        (core/'include/registry.go').write_text('import (\n\t"github.com/sagernet/sing-box/protocol/group"\n)\nfunc register() {\n\tgroup.RegisterURLTest(registry)\n}\n')
+        (core/'include/registry.go').write_bytes(b'import (\n\t"github.com/sagernet/sing-box/protocol/group"\n)\nfunc register() {\n\tgroup.RegisterURLTest(registry)\n}\n')
         return core
 
     def test_native_source_and_tests_are_exact_and_idempotent(self):
@@ -42,8 +42,8 @@ class CompositeShipping(unittest.TestCase):
                 core = self.fixture(temp)
                 registry = core/'include/registry.go'
                 if fault == 'module': (core/'go.mod').write_text('module unowned\n')
-                if fault == 'registry': registry.write_text(registry.read_text().replace('group.RegisterURLTest', 'changed.RegisterURLTest'))
-                if fault == 'duplicate': registry.write_text(registry.read_text()+'\nroutervpncomposite.RegisterOutbound(registry)\n')
+                if fault == 'registry': registry.write_bytes(registry.read_text().replace('group.RegisterURLTest', 'changed.RegisterURLTest').encode())
+                if fault == 'duplicate': registry.write_bytes((registry.read_text()+'\nroutervpncomposite.RegisterOutbound(registry)\n').encode())
                 target = core/'protocol/routervpncomposite'
                 if fault in ('target-link','source-link'):
                     (core/'unowned').mkdir()
@@ -77,8 +77,8 @@ class CompositeShipping(unittest.TestCase):
     def gate_fixture(self, path):
         core = self.fixture(path)
         registry = core/'include/registry.go'
-        registry.write_text(registry.read_text().replace('func register() {', 'func OutboundRegistry() *outbound.Registry {').replace(
-            '\tgroup.RegisterURLTest(registry)', '\tgroup.RegisterSelector(registry)\n\tgroup.RegisterURLTest(registry)'))
+        registry.write_bytes(registry.read_text().replace('func register() {', 'func OutboundRegistry() *outbound.Registry {').replace(
+            '\tgroup.RegisterURLTest(registry)', '\tgroup.RegisterSelector(registry)\n\tgroup.RegisterURLTest(registry)').encode())
         for relative, template in GATE.PREREQUISITES.items():
             target = core/relative
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -100,8 +100,18 @@ class CompositeShipping(unittest.TestCase):
                         PREPARE.prepare(core)
                     self.assertEqual(before, {str(p.relative_to(core)):p.read_bytes() for p in core.rglob('*') if p.is_file()})
                 source = (core/'include/registry.go').read_text()
+                self.assertNotIn(b'\r', (core/'include/registry.go').read_bytes())
                 self.assertEqual(source.count(GATE.REGISTER), 1)
                 self.assertEqual(source.count('routervpncomposite.RegisterOutbound(registry)'), 1)
+
+    def test_windows_text_translation_preserves_actual_composed_source(self):
+        original = Path.write_text
+        def windows_text(path, data, *args, **kwargs):
+            kwargs.setdefault('newline', '\r\n')
+            return original(path, data, *args, **kwargs)
+        with mock.patch.object(Path, 'write_text', windows_text):
+            self.test_mobile_repeated_gate_and_composite_preparation()
+            self.test_composed_import_neighbours_do_not_accept_foreign_or_moved_sources()
 
     def test_composed_import_neighbours_do_not_accept_foreign_or_moved_sources(self):
         for first in ((GATE, PREPARE), (PREPARE, GATE)):
@@ -122,7 +132,7 @@ class CompositeShipping(unittest.TestCase):
                     }
                     for label, broken in faults.items():
                         with self.subTest(first=first[0].__name__, fault=label):
-                            registry.write_text(broken)
+                            registry.write_bytes(broken.encode())
                             before = {str(p.relative_to(core)):p.read_bytes() for p in core.rglob('*') if p.is_file()}
                             with self.assertRaises(ValueError):
                                 GATE.prepare(core)

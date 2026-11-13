@@ -51,7 +51,9 @@ def prepare(vendor):
     target.mkdir(parents=True, exist_ok=True)
     for source in sources:
         (target / source.stem).write_bytes(source.read_bytes())
-    registry.write_text(text)
+    # Registry composition is an exact source contract on every host. Windows
+    # default text translation must not rewrite the next preparer's LF anchors.
+    registry.write_bytes(text.encode('utf-8'))
     print('Owned composite source:', digest())
 
 if __name__ == '__main__':

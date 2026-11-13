@@ -699,6 +699,23 @@ identity and do not claim native proof. This unit does not yet expose a public
 desktop temporary-test route: the supervised runtime, measurements, detached
 Save and native UI remain the next integration unit.
 
+## Windows composite registry byte preservation
+
+The completed cad6996f Windows native contract job 131605513788 failed only
+`TestNativeCompositeShippingCompilerAndEncryptedProof`. Its repeated ordered
+gate/composite fixture reached the exact registry declaration guard after text
+writes introduced Windows line endings. The production composite preparer also
+used a default text write, so changing the fixture alone would leave the same
+failure in repeated native preparation.
+
+The producer now writes the original UTF-8 registry bytes explicitly. Fixture
+registries and deliberate malformed variants also preserve their exact intended
+bytes. Six shipping-composition tests pass, including both preparation orders,
+repeated projection and all original foreign/moved-source rejections under
+Windows text translation. Reintroducing the original text writer fails that
+new executable regression at the exact registry boundary. The strict ordered
+gate parser is unchanged; real Windows native build confirmation remains in CI.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
