@@ -194,6 +194,8 @@ def receipt_path(path):
 
 
 def publish_receipt(path, result, workspace):
+    if result.get('native_accepted') is False or result.get('scope') == 'native-compilation-only':
+        raise ValueError('Compilation diagnostics are not native acceptance receipts')
     if workspace.exists() or workspace.is_symlink():
         raise ValueError('Darwin native build workspace did not retire')
     if path is not None:
@@ -210,7 +212,9 @@ def native_fixture_compile(compiler, image, package):
             '-ldflags=-checklinkname=0 -s -w', '-o', image, package]
 
 
-def execute(source, go='go', *, environment=None):
+def execute(source, go='go', *, environment=None, compile_only=False):
+    if type(compile_only) is not bool:
+        raise ValueError('Darwin compilation purpose must be explicit')
     environment = dict(os.environ if environment is None else environment)
     arch, uid = required_host(environment)
     source, before = checked_sources(source)
@@ -228,35 +232,54 @@ def execute(source, go='go', *, environment=None):
         if checked_sources(source)[1] != before:
             raise ValueError('Darwin native sources changed while compiling original images')
         identities = {path: image_identity(path) for path in (child, peer)}
-        command = ['/usr/bin/env', FLAG+'=1', 'ROUTERVPN_DARWIN_NODE_CHILD_UID='+str(uid),
+        if compile_only:
+            # A separate completed Actions step can retain these diagnostics
+            # before the mandatory native step changes host PF/routes. These
+            # temporary images are deleted, never promoted to an acceptance
+            # receipt or reused as authority by the later native invocation.
+            result = dict(schema=1, gate='generated-darwin-ordered-child-compilation',
+                          scope='native-compilation-only', native_accepted=False,
+                          target='darwin/'+arch, toolchain=BUILD.TOOLCHAIN,
+                          source_sha256=hashlib.sha256(json.dumps(before, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
+                          artifacts={role: {'bytes': identities[path][2], 'sha256': identities[path][-1]}
+                                     for role, path in (('generated-child-test', child), ('independent-ordered-peer', peer))})
+            print(json.dumps(result, sort_keys=True), flush=True)
+        else:
+            result = execute_native_images(source, before, captured, sudo, arch, uid, child, peer, identities)
+    if work.exists():
+        raise ValueError('Darwin native acceptance did not retire its compilation workspace')
+    return result
+
+
+def execute_native_images(source, before, captured, sudo, arch, uid, child, peer, identities):
+    command = ['/usr/bin/env', FLAG+'=1', 'ROUTERVPN_DARWIN_NODE_CHILD_UID='+str(uid),
                    'ROUTERVPN_DARWIN_NODE_CHILD_SHA256='+identities[child][-1],
                    'ROUTERVPN_DARWIN_NODE_CHAIN_PEER='+str(peer),
                    'ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256='+identities[peer][-1],
                    'GORACE=atexit_sleep_ms=0', str(child), '-test.run=^'+HARNESS+'$',
                    '-test.v', '-test.count=1', '-test.timeout=930s']
-        if sudo:
-            command = [sudo, '-n', '--', *command]
-        native_stage('starting actual inherited child, PF, utun and encrypted peer cases')
-        output = UID.run(command, cwd=ROOT, env=captured, timeout=960, sudo=sudo)
-        native_stage('native process returned zero; exact verdict still required')
-        print(output, end='' if output.endswith('\n') else '\n')
-        check_verdict(output)
-        if checked_sources(source)[1] != before or any(image_identity(path) != value for path, value in identities.items()):
-            raise ValueError('Darwin native acceptance changed its original sources or images')
-        native_stage('verified every native case, joined receipt and original image')
-        result = dict(schema=1, gate='generated-darwin-ordered-child', scope='generated-command-utun',
+    if sudo:
+        command = [sudo, '-n', '--', *command]
+    native_stage('starting actual inherited child, PF, utun and encrypted peer cases')
+    output = UID.run(command, cwd=ROOT, env=captured, timeout=960, sudo=sudo)
+    native_stage('native process returned zero; exact verdict still required')
+    print(output, end='' if output.endswith('\n') else '\n')
+    check_verdict(output)
+    if checked_sources(source)[1] != before or any(image_identity(path) != value for path, value in identities.items()):
+        raise ValueError('Darwin native acceptance changed its original sources or images')
+    native_stage('verified every native case, joined receipt and original image')
+    return dict(schema=1, gate='generated-darwin-ordered-child', scope='generated-command-utun',
                       target='darwin/'+arch, toolchain=BUILD.TOOLCHAIN,
                       pins={'sing-box': BUILD.PIN, 'xray': BUILD.POLICY.XRAY.XRAY_PIN},
                       source_files=before, source_sha256=hashlib.sha256(json.dumps(before, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                       artifacts={role: {'bytes': identities[path][2], 'sha256': identities[path][-1]}
                                  for role, path in (('generated-child-test', child), ('independent-ordered-peer', peer))},
                       cases=list(CASES), output_sha256=hashlib.sha256(output.encode()).hexdigest())
-    if work.exists():
-        raise ValueError('Darwin native acceptance did not retire its compilation workspace')
-    return result
 
 
-def standalone(go='go', *, environment=None, receipt=None, required_commit=None):
+def standalone(go='go', *, environment=None, receipt=None, required_commit=None, compile_only=False):
+    if type(compile_only) is not bool or compile_only and receipt is not None:
+        raise ValueError('Compilation-only diagnostics cannot publish a native receipt')
     environment = dict(os.environ if environment is None else environment)
     required_host(environment)
     repository = repository_identity(required_commit)
@@ -281,15 +304,20 @@ def standalone(go='go', *, environment=None, receipt=None, required_commit=None)
             BUILD.run([compiler, 'mod', 'verify'], cwd=core, env=captured)
             BUILD.POLICY.AMNEZIA.verify(core)
             native_stage('pinned module graph verified; entering native compilation')
-            result = execute(core, str(compiler), environment=captured)
+            result = execute(core, str(compiler), environment=captured, compile_only=compile_only)
         finally:
             os.environ.clear(); os.environ.update(previous)
     if repository_identity(required_commit) != repository:
         raise ValueError('Darwin source checkout changed during native acceptance')
     result['repository'] = repository
-    publish_receipt(path, result, workspace)
-    native_stage('owned workspace retired and required receipt written' if path is not None
-                 else 'owned workspace retired; native validation complete without a requested receipt')
+    if compile_only:
+        if workspace.exists() or workspace.is_symlink():
+            raise ValueError('Compilation-only diagnostic workspace remains owned')
+        native_stage('compilation-only workspace retired; native acceptance was not executed')
+    else:
+        publish_receipt(path, result, workspace)
+        native_stage('owned workspace retired and required receipt written' if path is not None
+                     else 'owned workspace retired; native validation complete without a requested receipt')
     return result
 
 
@@ -300,14 +328,17 @@ if __name__ == '__main__':
     parser.add_argument('--go', default=os.environ.get('GO', 'go'))
     parser.add_argument('--require-commit')
     parser.add_argument('--receipt', type=Path)
+    parser.add_argument('--compile-only', action='store_true', help='diagnose exact native compilation without PF, utun or an acceptance receipt')
     args = parser.parse_args()
     if args.standalone == (args.source is not None) or not args.standalone and (args.receipt or args.require_commit):
         parser.error('provide exact prepared source or --standalone; receipt/commit require standalone')
+    if args.compile_only and args.receipt:
+        parser.error('compilation-only diagnostics cannot publish a native receipt')
     try:
         if args.standalone:
-            standalone(args.go, receipt=args.receipt, required_commit=args.require_commit)
+            standalone(args.go, receipt=args.receipt, required_commit=args.require_commit, compile_only=args.compile_only)
         else:
-            execute(args.source, args.go)
+            execute(args.source, args.go, compile_only=args.compile_only)
     except subprocess.CalledProcessError as failure:
         if failure.output:
             raw = failure.output[-32768:]

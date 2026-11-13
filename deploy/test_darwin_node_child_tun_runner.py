@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Causal source/runner boundary tests; these never claim native Darwin acceptance."""
 from pathlib import Path
+import contextlib
 import importlib.util
+import io
+import json
 import os
 import re
 import shutil
@@ -51,6 +54,8 @@ def workflow_inventory(raw):
         '          if-no-files-found: error',
         '          name: RouterVPN-Darwin-ordered-child-${{ matrix.arch }}-${{ github.sha }}',
         '          path: ${{ runner.temp }}/darwin-node-child-${{ matrix.arch }}.json',
+        '      - name: Compile exact native fixtures before changing host networking\n        timeout-minutes: 25',
+        '        run: ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE=1 CGO_ENABLED=1 python3 deploy/test_darwin_node_child_tun.py --standalone --compile-only --require-commit "$GITHUB_SHA"',
     )
     if any(raw.count(value) != 1 for value in required):
         raise ValueError('native workflow lost its exact required architecture/source/receipt inventory')
@@ -63,6 +68,8 @@ def workflow_inventory(raw):
     commands = [line.strip() for line in run[0].splitlines() if line.strip() and not line.lstrip().startswith('#')]
     if commands != [command] or raw.count('run: python3 deploy/test_darwin_node_child_tun_runner.py') != 1:
         raise ValueError('native workflow weakened actual invocation or its runner checks')
+    if raw.count('--compile-only') != 1 or raw.index('--compile-only') > raw.index(command):
+        raise ValueError('compilation diagnostics replaced or followed mandatory native acceptance')
 
 
 class NativeVerdict(unittest.TestCase):
@@ -227,6 +234,57 @@ class ActualHostSelection(unittest.TestCase):
             self.assertIn('actual',path.read_text())
             with self.assertRaises(ValueError):G.receipt_path(path)
             with self.assertRaises(FileExistsError):G.publish_receipt(path, {'overwrite':True}, workspace)
+
+
+class CompilationDiagnostics(unittest.TestCase):
+    def execute_boundary(self, *, compile_only=True, failure=False, source_changed=False):
+        calls=[]
+        def run(command, **kwargs):
+            calls.append((command,kwargs))
+            if command[1:3] == ['test','-c']:
+                if failure: raise subprocess.CalledProcessError(1,command,output='actual compiler failed')
+                Path(command[command.index('-o')+1]).write_bytes(b'controlled native image')
+                return ''
+            if compile_only: self.fail('compilation-only diagnostic entered native PF/utun execution')
+            return transcript()
+        source=Path('/captured/source');before={'original':'a'*64}
+        inventory=[(source,before),(source,{'changed':'b'*64})] if source_changed else None
+        with contextlib.redirect_stdout(io.StringIO()), patch.object(G,'required_host',return_value=('arm64',501)), patch.object(G,'checked_sources',side_effect=inventory,return_value=(source,before)), patch.object(G,'selected_compiler',return_value=('/captured/go',{})), patch.object(G.UID,'privilege_tool',return_value='/usr/bin/sudo'), patch.object(G.UID,'run',side_effect=run):
+            result=G.execute(source,environment={},compile_only=compile_only)
+        for command,kwargs in calls[:2]:
+            self.assertEqual(command[:6],G.native_fixture_compile('/captured/go',Path('/unused'),command[-1])[:6])
+            self.assertEqual(kwargs['timeout'],600)
+            self.assertFalse(Path(command[command.index('-o')+1]).exists())
+        return result,calls
+
+    def test_compilation_diagnostics_never_execute_or_publish_native_acceptance(self):
+        result,calls=self.execute_boundary()
+        self.assertEqual(len(calls),2)
+        self.assertEqual(result['scope'],'native-compilation-only')
+        self.assertIs(result['native_accepted'],False)
+        self.assertNotIn('cases',result)
+        self.assertEqual(set(result['artifacts']),{'generated-child-test','independent-ordered-peer'})
+        with self.assertRaises(ValueError):G.check_verdict(json.dumps(result))
+        with tempfile.TemporaryDirectory() as directory:
+            receipt=Path(directory)/'native.json'
+            with self.assertRaisesRegex(ValueError,'not native acceptance'):
+                G.publish_receipt(receipt,result,Path(directory)/'retired')
+            self.assertFalse(receipt.exists())
+            with self.assertRaisesRegex(ValueError,'cannot publish'):
+                G.standalone(compile_only=True,receipt=receipt)
+
+    def test_original_default_still_requires_all_native_verdicts(self):
+        result,calls=self.execute_boundary(compile_only=False)
+        self.assertEqual(len(calls),3)
+        self.assertEqual(calls[-1][1]['timeout'],960)
+        self.assertIn('-test.timeout=930s',calls[-1][0])
+        self.assertEqual(result['scope'],'generated-command-utun')
+        self.assertEqual(result['cases'],list(G.CASES))
+
+    def test_failed_compilation_or_changed_source_has_no_diagnostic_success(self):
+        with self.assertRaises(subprocess.CalledProcessError):self.execute_boundary(failure=True)
+        with self.assertRaisesRegex(ValueError,'sources changed'):self.execute_boundary(source_changed=True)
+        with self.assertRaisesRegex(ValueError,'purpose must be explicit'):G.execute(Path('/unused'),compile_only='true')
 
 
 class EncryptedPeerSourceClosure(unittest.TestCase):
@@ -486,7 +544,9 @@ class RequiredWorkflowInventory(unittest.TestCase):
             ('nonblocking-job', '  child:\n', '  child:\n    continue-on-error: true\n'),
             ('caller-input', '  workflow_call:\n', '  workflow_call:\n    inputs:\n'),
             ('cross-caller-cancel', '-${{ github.sha }}-${{ github.run_id }}', ''),
-            ('no-standalone', ' --standalone ', ' '),
+            ('no-standalone', ' --standalone --require-commit "$ROUTERVPN_EXPECTED_SOURCE"', ' --require-commit "$ROUTERVPN_EXPECTED_SOURCE"'),
+            ('no-compilation-boundary', ' --standalone --compile-only --require-commit "$GITHUB_SHA"', ' --standalone --require-commit "$GITHUB_SHA"'),
+            ('compilation-replaces-native', ' --receipt "$ROUTERVPN_CHILD_RECEIPT"', ' --compile-only'),
             ('no-exact-commit', ' --require-commit "$ROUTERVPN_EXPECTED_SOURCE"', ''),
             ('no-receipt', ' --receipt "$ROUTERVPN_CHILD_RECEIPT"', ''),
             ('ignored-native-failure', ' --receipt "$ROUTERVPN_CHILD_RECEIPT"', ' --receipt "$ROUTERVPN_CHILD_RECEIPT" || true'),

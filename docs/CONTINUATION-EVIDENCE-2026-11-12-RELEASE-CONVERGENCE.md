@@ -1338,6 +1338,32 @@ native CI because local AF_UNIX display sockets are denied. This protocol
 unit does not add the public prefix button; native child/API integration and
 its executable acceptance precede that separate activation.
 
+## Darwin compilation is recorded before host-network acceptance
+
+The retained 07a42627 ARM64 native child job
+[131654788951](https://github.com/Eabusham2/router-vpn/actions/runs/43354988101/job/131654788951)
+finished with GitHub's hosted-runner communication-loss annotation. Its final
+log request still returned BlobNotFound. This is not evidence identifying a
+compiler, memory, PF or utun root cause. The earlier stage notices did not
+survive as useful check annotations on that attempt.
+
+The workflow now completes a separate compilation-only step before the
+mandatory native step. It uses the exact pinned source preparation, generated
+source inventory, native race compiler arguments and original image checks.
+It records source and image hashes, deletes its temporary images/workspace,
+and explicitly reports native_accepted=false. Such diagnostics cannot publish
+an acceptance receipt. The subsequent native invocation independently retains
+all original cases, source/image checks, PF policy, deadlines and joined
+retirement requirements. Compilation success only establishes that earlier
+step; it does not identify the cause of a later native runner loss.
+
+All 21 affected Python runner tests passed, including compilation failure,
+changed source, rejected diagnostic receipts, the unchanged default native
+command/verdict path, and workflow mutations that remove the native run or
+substitute compilation for acceptance. The existing compiled output-pipe and
+pre-start ownership fixtures were unchanged. Actual hosted execution of both
+architectures is still required.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
