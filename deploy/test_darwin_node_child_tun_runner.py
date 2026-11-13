@@ -209,7 +209,12 @@ class ActualHostSelection(unittest.TestCase):
             with self.assertRaises(ValueError): G.image_identity(path)
             path.chmod(0o755); path.write_bytes(b'')
             with self.assertRaises(ValueError): G.image_identity(path)
-            path.unlink(); path.write_bytes(b'owned compiled fixture');path.chmod(0o755)
+            # Allocate the replacement while the original inode still exists;
+            # unlink/recreate can immediately recycle that same inode on tmpfs.
+            replacement = path.with_name('replacement')
+            replacement.write_bytes(b'owned compiled fixture'); replacement.chmod(0o755)
+            self.assertNotEqual(replacement.stat().st_ino, path.stat().st_ino)
+            replacement.replace(path)
             self.assertNotEqual(G.image_identity(path), original)
         with self.assertRaises(ValueError): G.image_identity(Path('relative'))
 
@@ -357,6 +362,113 @@ func verify(pidFile string) error {
                 else:
                     self.assertEqual(result.returncode, 0, result.stdout)
                     self.assertIn('actual escaped output pipe bounded; native retirement remains unproved', result.stdout)
+
+
+class UnstartedFixtureRetirement(unittest.TestCase):
+    def test_actual_prestart_plan_and_monotonic_start_barriers(self):
+        source = (ROOT/'mobile/desktop/node_chain_command_darwin_native_test.go.tmpl').read_text()
+        def member(signature):
+            self.assertEqual(source.count(signature), 1)
+            begin = source.index(signature)
+            return source[begin:source.index('\n}', begin)+2]
+        install = member('func (o *darwinChildOwner) installBaseline(ctx context.Context) error {')
+        retire = member('func (o *darwinChildOwner) stopUnstarted(ctx context.Context, failed bool) error {')
+        start = member('func (o *darwinChildOwner) start(')
+        self.assertEqual(start.count('o.childStartAttempted = true'), 1)
+        self.assertLess(start.index('o.childStartAttempted = true'), start.index('o.command.Start()'))
+        self.assertEqual(source.count('o.childStartAttempted = true'), 1)
+        self.assertNotIn('o.childStartAttempted = false', source)
+        self.assertIn('if owner.childStartAttempted {\n\t\t\t\t\te = owner.stop(cleanup)\n\t\t\t\t} else {\n\t\t\t\t\te = owner.stopUnstarted(cleanup, t.Failed())', source)
+        # Only the PF/syscall and retained-descriptor boundaries are replaced.
+        # Both complete fixture methods above execute with their actual guards.
+        fixture = r"""package main
+import("context";"errors";"fmt";"os";"os/exec";"time")
+type DesktopDarwinPFBaselineProof struct {Present bool;RulesSHA256 string}
+type DesktopDarwinPFBaselineRequest struct {Schema int;Action,SessionID,SourceSHA256 string;Expected []DesktopDarwinPFBaselineProof}
+type DesktopDarwinPFBaselineResult struct {Schema int;Applied bool;Previous,Target DesktopDarwinPFBaselineProof}
+type metadata struct{SessionID,SourceSHA256 string}
+type policy struct{}
+func(*policy)Metadata()metadata{return metadata{"original-session","original-source"}}
+type retained struct{failure bool;closes int}
+func(r *retained)Current(ctx context.Context)error{if r.failure{return errors.New("changed retained source")};return ctx.Err()}
+func(r *retained)Close()error{r.closes++;return nil}
+type files struct{root *retained}
+type darwinChildOwner struct{
+ policy *policy;baseline *DesktopDarwinPFBaselineResult;childStartAttempted bool
+ command *exec.Cmd;bootstrap *int;done chan struct{};observed map[int]string
+ closed bool;capture,channel *retained;files *files
+}
+var absent=DesktopDarwinPFBaselineProof{}
+var target=DesktopDarwinPFBaselineProof{true,"exact-original-target"}
+var actual DesktopDarwinPFBaselineProof
+var lateFailure,children bool
+var writes int
+func darwinChildBaseline(ctx context.Context,r DesktopDarwinPFBaselineRequest,apply bool)(DesktopDarwinPFBaselineResult,error){
+ if err:=ctx.Err();err!=nil{return DesktopDarwinPFBaselineResult{},err}
+ accepted:=false;for _,value:=range r.Expected{accepted=accepted || value==actual}
+ if !accepted || children{return DesktopDarwinPFBaselineResult{},errors.New("unknown PF owner remains")}
+ next:=target;if r.Action=="clear"{next=absent}
+ result:=DesktopDarwinPFBaselineResult{Schema:1,Applied:apply,Previous:actual,Target:next}
+ if apply{writes++;actual=next;if lateFailure && r.Action=="replace"{return DesktopDarwinPFBaselineResult{},errors.New("committed but readback unavailable")}}
+ return result,nil
+}
+// SHIPPING_PRESTART_METHODS
+func fresh()*darwinChildOwner{actual=absent;lateFailure=false;children=false;writes=0;return &darwinChildOwner{policy:&policy{},capture:&retained{},channel:&retained{},files:&files{root:&retained{}}}}
+func check(ok bool,text string){if !ok{panic(text)}}
+func main(){
+ ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second);defer cancel()
+ for _,committed:=range []bool{false,true}{
+  owner:=fresh();lateFailure=committed;err:=owner.installBaseline(ctx)
+  check((err!=nil)==committed,"baseline boundary did not exercise late apply failure")
+  check(owner.baseline!=nil && owner.baseline.Previous==absent && owner.baseline.Target==target,"lost original PF plan after partial apply")
+  if !committed{actual=absent} // An apply that made no change is also an allowed exact prior.
+  check(owner.stopUnstarted(ctx,true)==nil && owner.closed && actual==absent,"never-started failed fixture did not retire its exact PF plan")
+  check(owner.capture.closes==1 && owner.channel.closes==1 && owner.files.root.closes==1,"never-started cleanup lost original descriptor joins")
+ }
+ for _,fault:=range []string{"attempted","process","bootstrap","joined-channel","utun","capture","missing-capture","foreign-baseline","child-rules","not-failed","deadline"}{
+  owner:=fresh();check(owner.installBaseline(ctx)==nil,"original baseline install");before:=writes;failed:=true;call:=ctx
+  switch fault{
+  case "attempted":owner.childStartAttempted=true
+  case "process":owner.command=&exec.Cmd{Process:&os.Process{Pid:os.Getpid()}}
+  case "bootstrap":value:=1;owner.bootstrap=&value
+  case "joined-channel":owner.done=make(chan struct{})
+  case "utun":owner.observed=map[int]string{7:"utun-original"}
+  case "capture":owner.capture.failure=true
+  case "missing-capture":owner.capture=nil
+  case "foreign-baseline":actual=DesktopDarwinPFBaselineProof{true,"foreign-owner"}
+  case "child-rules":children=true
+  case "not-failed":failed=false
+  case "deadline":var cancel context.CancelFunc;call,cancel=context.WithCancel(ctx);cancel()
+  }
+  err:=owner.stopUnstarted(call,failed)
+  check(err!=nil && !owner.closed && writes==before,"unproved pre-start cleanup erased PF: "+fault)
+ }
+ fmt.Println("actual pre-start fixture: planned late failure, both exact prior states, descriptor joins and11 ownership refusals PASS")
+}
+"""
+        with tempfile.TemporaryDirectory(prefix='darwin-child-prestart-') as temporary:
+            work = Path(temporary); code = work/'main.go'; image = work/'prestart'
+            original = install+'\n'+retire
+            controls = (
+                ('baseline plan', 'o.baseline = &plan', '', 'lost original PF plan after partial apply'),
+                ('attempted start', '|| o.childStartAttempted ||', '||', 'unproved pre-start cleanup erased PF: attempted'),
+                ('failed fixture', '!failed ||', '', 'unproved pre-start cleanup erased PF: not-failed'),
+            )
+            for label,before,after,witness in (('baseline','','',''),*controls):
+                helper=original
+                if before:
+                    self.assertEqual(helper.count(before),1,label)
+                    helper=helper.replace(before,after,1)
+                    self.assertNotEqual(helper,original,label)
+                code.write_text(fixture.replace('// SHIPPING_PRESTART_METHODS',helper.replace('mobiletor.','')))
+                subprocess.run([shutil.which('go'),'build','-p=1','-o',str(image),str(code)],cwd=work,check=True,timeout=90)
+                result=subprocess.run([str(image)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=15)
+                if witness:
+                    self.assertNotEqual(result.returncode,0,label+result.stdout)
+                    self.assertIn(witness,result.stdout)
+                else:
+                    self.assertEqual(result.returncode,0,result.stdout)
+                    self.assertIn('and11 ownership refusals PASS',result.stdout)
 
 
 class RequiredWorkflowInventory(unittest.TestCase):

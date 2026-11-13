@@ -929,6 +929,33 @@ are unchanged. This proves bounded failure reporting, not the cause of the
 earlier lost-runner failures or successful native cleanup. A retained PF owner
 could still block log upload after a separate cleanup failure.
 
+## Failed Darwin fixture cleanup before child startup
+
+The native generated-child fixture now retains its validated absent-to-target
+PF plan before applying that transaction. A transaction can commit and then
+lose readback; cleanup must not replace that original plan with an empty error
+receipt. The fixture records a monotonic start-attempt flag immediately before
+`exec.Start`. Only an already-failed test with no attempt, process, bootstrap,
+wait channel or observed utun can use the separate pre-start cleanup path.
+That path rechecks the retained process capture and the existing PF utility
+accepts only the exact previous or planned target rules with no child owners.
+Every attempted child start still requires the unchanged authenticated Stop.
+
+All twenty runner checks passed in 14.116 seconds. The added executable test
+runs both extracted fixture methods against explicit PF/descriptor boundaries,
+covering a late apply failure, both original PF states, descriptor joins and
+eleven ownership refusals. Three compiled controls reject a dropped plan,
+bypassed start-attempt guard and cleanup of a successful test. The existing
+same-byte file-replacement test now allocates a distinct inode before replacing
+the original; unlinking first could reuse that original inode and invalidate
+the intended negative case. Native identity checks are unchanged.
+
+The older `fcfee` ARM generated-child job `131624756212` ended with a hosted
+runner lost-communication annotation; its first log fetch returned
+`BlobNotFound`. Neither this source-backed cleanup correction nor the preceding
+output-pipe bound has been demonstrated to be the cause of that failure. Real
+macOS PF/utun execution and the complete native acceptance remain outstanding.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

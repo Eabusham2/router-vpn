@@ -729,6 +729,9 @@ type darwinChildOwner struct {
 	observed  map[int]string
 	closed    bool
 	stopped   bool
+	// Set before exec.Start and never reset. Even a failed start attempt keeps
+	// authenticated native Stop mandatory; nil bootstrap is not absence proof.
+	childStartAttempted bool
 }
 
 func darwinChildBaseline(ctx context.Context, r mobiletor.DesktopDarwinPFBaselineRequest, apply bool) (mobiletor.DesktopDarwinPFBaselineResult, error) {
@@ -746,6 +749,76 @@ func darwinChildBaseline(ctx context.Context, r mobiletor.DesktopDarwinPFBaselin
 	}
 	return result, nil
 }
+
+func (o *darwinChildOwner) installBaseline(ctx context.Context) error {
+	meta := o.policy.Metadata()
+	request := mobiletor.DesktopDarwinPFBaselineRequest{Schema: 1, Action: "replace", SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, Expected: []mobiletor.DesktopDarwinPFBaselineProof{{}}}
+	plan, e := darwinChildBaseline(ctx, request, false)
+	if e != nil || plan.Previous.Present || !plan.Target.Present {
+		return errors.Join(e, errors.New("actual baseline plan lost absent original"))
+	}
+	// The native transaction can commit and then fail readback. Retain the
+	// independently validated plan before apply, including on that failure.
+	o.baseline = &plan
+	receipt, e := darwinChildBaseline(ctx, request, true)
+	if e != nil || receipt.Previous != plan.Previous || receipt.Target != plan.Target {
+		return errors.Join(e, errors.New("actual baseline did not match original plan"))
+	}
+	o.baseline = &receipt
+	return nil
+}
+
+// Only a failing fixture that never attempted to start its native child may
+// retire a planned baseline without a child receipt. The existing PF utility
+// still requires the exact previous/target rules and absence of child owners.
+func (o *darwinChildOwner) stopUnstarted(ctx context.Context, failed bool) error {
+	if o == nil || !failed || ctx == nil || ctx.Err() != nil || o.childStartAttempted ||
+		o.command != nil && o.command.Process != nil || o.bootstrap != nil || o.done != nil || len(o.observed) != 0 {
+		return errors.New("native pre-start cleanup has no proof of an unstarted failed fixture")
+	}
+	if o.closed {
+		return nil
+	}
+	if o.capture == nil {
+		if o.baseline != nil || o.channel != nil {
+			return errors.New("native pre-start cleanup lost its original process capture")
+		}
+	} else if e := o.capture.Current(ctx); e != nil {
+		return e
+	}
+	if o.baseline != nil {
+		plan := o.baseline
+		if plan.Schema != 1 || plan.Previous.Present || !plan.Target.Present {
+			return errors.New("native pre-start cleanup lost its original baseline plan")
+		}
+		request := mobiletor.DesktopDarwinPFBaselineRequest{Schema: 1, Action: "clear", Expected: []mobiletor.DesktopDarwinPFBaselineProof{plan.Previous, plan.Target}}
+		retired, e := darwinChildBaseline(ctx, request, true)
+		if e != nil || retired.Previous != plan.Previous && retired.Previous != plan.Target || retired.Target.Present {
+			return errors.Join(e, errors.New("native pre-start cleanup did not retire its exact baseline"))
+		}
+	}
+	if o.capture != nil {
+		if e := o.capture.Current(ctx); e != nil {
+			return e
+		}
+	}
+	var joined error
+	if o.channel != nil {
+		joined = errors.Join(joined, o.channel.Close())
+	}
+	if o.capture != nil {
+		joined = errors.Join(joined, o.capture.Close())
+	}
+	if o.files != nil {
+		joined = errors.Join(joined, o.files.root.Close())
+	}
+	if joined != nil || ctx.Err() != nil {
+		return errors.Join(joined, ctx.Err())
+	}
+	o.closed = true
+	return nil
+}
+
 func (o *darwinChildOwner) start(t *testing.T, ctx context.Context, a *darwinChildAuthority, policy *mobilemultihop.DesktopNodeChainPolicy) {
 	t.Helper()
 	o.policy = policy
@@ -788,15 +861,8 @@ func (o *darwinChildOwner) start(t *testing.T, ctx context.Context, a *darwinChi
 	if e != nil {
 		t.Fatal(e)
 	}
-	request := mobiletor.DesktopDarwinPFBaselineRequest{Schema: 1, Action: "replace", SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, Expected: []mobiletor.DesktopDarwinPFBaselineProof{{}}}
-	plan, e := darwinChildBaseline(ctx, request, false)
-	if e != nil || plan.Previous.Present || !plan.Target.Present {
-		t.Fatal("actual baseline plan lost absent original", e)
-	}
-	receipt, e := darwinChildBaseline(ctx, request, true)
-	o.baseline = &receipt
-	if e != nil || receipt.Previous != plan.Previous || receipt.Target != plan.Target {
-		t.Fatal("actual baseline did not match original plan", e)
+	if e := o.installBaseline(ctx); e != nil {
+		t.Fatal(e)
 	}
 	var child *os.File
 	o.channel, child, e = mobiletor.NewDesktopDarwinControlPair()
@@ -810,6 +876,7 @@ func (o *darwinChildOwner) start(t *testing.T, ctx context.Context, a *darwinChi
 	o.command.ExtraFiles = append([]*os.File{child}, o.capture.Files()...)
 	o.command.Stdout = &o.output
 	o.command.Stderr = &o.output
+	o.childStartAttempted = true
 	if e := o.command.Start(); e != nil {
 		t.Fatal(e)
 	}
@@ -1194,7 +1261,13 @@ func TestRouterVPNNodeChainDarwinNativeCommand(t *testing.T) {
 			t.Cleanup(func() {
 				cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
 				defer stop()
-				if e := owner.stop(cleanup); e != nil {
+				var e error
+				if owner.childStartAttempted {
+					e = owner.stop(cleanup)
+				} else {
+					e = owner.stopUnstarted(cleanup, t.Failed())
+				}
+				if e != nil {
 					allJoined = false
 					t.Error("original native child cleanup unproved", e, owner.output.String())
 				}
