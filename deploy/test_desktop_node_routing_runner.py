@@ -47,6 +47,52 @@ class OpenVPNConnectedCapacityVerdicts(unittest.TestCase):
             NODE.execute_baseline_suite(baseline, NODE.OPENVPN_CAPACITY_SUITE)
 
 
+class OrderedPhysicalFactoryVerdicts(unittest.TestCase):
+    def test_full_factory_inventory_is_mandatory(self):
+        self.assertEqual(len(NODE.ORDERED_PHYSICAL_VERDICTS), 52)
+        for windows in (False, True):
+            self.assertIn(NODE.ORDERED_PHYSICAL_SUITE, NODE.baseline_suites(windows))
+        source = (ROOT / "mobile/desktop/node_chain_box_physical_test.go.tmpl").read_text()
+        roots = tuple(re.findall(r"^func (TestRouterVPNDesktopNodeChainPhysical\w+)\(", source, re.M))
+        self.assertEqual(set(roots), {n for n in NODE.ORDERED_PHYSICAL_VERDICTS if "/" not in n})
+
+    def test_controls_mutate_only_exact_original_factory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "routervpn_desktop_node_chain_box_physical.go"
+            raw = (ROOT / "mobile/desktop/node_chain_box_physical.go.tmpl").read_text()
+            path.write_text(raw)
+            controls = NODE.ordered_physical_mutants(root)
+            self.assertEqual([c[0] for c in controls], ["ordered-final-legacy-factory", "ordered-final-foreign-platform"])
+            self.assertEqual([c[4] for c in controls], ["wg", "darwin"])
+            for control in controls:
+                self.assertEqual(control[1], path.name)
+                self.assertEqual(control[2], ".")
+                self.assertNotEqual(control[6], raw)
+                self.assertEqual(path.read_text(), raw)
+            path.write_text(raw.replace('(target == "linux" || target == "windows") && prefix.Mode == "hysteria2"', 'true && prefix.Mode == "hysteria2"'))
+            with self.assertRaises(ValueError):
+                NODE.ordered_physical_mutants(root)
+
+    def test_no_missing_duplicate_or_failed_original_factory_can_pass(self):
+        names = NODE.ORDERED_PHYSICAL_VERDICTS
+        output = lambda values: "".join("=== RUN   " + n + "\n--- PASS: " + n + " (0.01s)\n" for n in values)
+        baseline = Mock(); baseline.execute.return_value = (0, output(names))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(NODE.execute_baseline_suite(baseline, NODE.ORDERED_PHYSICAL_SUITE), output(names))
+        baseline.execute.assert_called_once_with(*NODE.ORDERED_PHYSICAL_SUITE[:3], 90)
+        invalid = [output(tuple(n for n in names if n != missing)) for missing in names]
+        invalid += [output(names + (names[0],)), "PASS\n"]
+        invalid += [output(names) + marker for marker in ("--- SKIP: factory (0s)\n", "--- FAIL: factory (0s)\n", "DATA RACE\n", "panic: test timed out\n")]
+        for text in invalid:
+            with self.subTest(text=text), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+                baseline.execute.return_value = (0, text)
+                NODE.execute_baseline_suite(baseline, NODE.ORDERED_PHYSICAL_SUITE)
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+            baseline.execute.return_value = (124, output(names))
+            NODE.execute_baseline_suite(baseline, NODE.ORDERED_PHYSICAL_SUITE)
+
+
 class ExecutionAdmissionGate(unittest.TestCase):
     def test_complete_and_incomplete_native_verdicts(self):
         for suite in NODE.EXECUTION_DESKTOP_SUITES:

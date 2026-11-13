@@ -21,7 +21,9 @@ func routerVPNDesktopNodeChainPhysicalTarget(policy *mobilemultihop.DesktopNodeC
 	for position, prefix := range meta.Prefixes {
 		modeSupported := mobilemultihop.NodeChainPrefixMode(prefix.Mode)
 		if position == len(meta.Prefixes)-1 {
-			modeSupported = prefix.Mode == "shadowsocks"
+			modeSupported = prefix.Mode == "shadowsocks" ||
+				((target == "linux" || target == "windows") && prefix.Mode == "hysteria2" &&
+					(prefix.StartLayer == "" || prefix.StartLayer == "off"))
 		}
 		if prefix.Position != position || !modeSupported ||
 			!mobilemultihop.DesktopNodePhysicalGraphSupported(prefix.Mode, prefix.StartLayer) {

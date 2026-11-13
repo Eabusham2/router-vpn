@@ -2,7 +2,10 @@ package box
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -20,6 +23,7 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/group"
+	"github.com/sagernet/sing-box/protocol/hysteria2"
 	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
 	G "github.com/sagernet/sing-box/protocol/routervpnchaingate"
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
@@ -56,6 +60,7 @@ func desktopChainPhysicalBox(t *testing.T, policy interface{ Config() string },
 	group.RegisterSelector(outs)
 	G.RegisterOutbound(outs)
 	shadowsocks.RegisterOutbound(outs)
+	hysteria2.RegisterOutbound(outs)
 	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
 	endpoints := endpoint.NewRegistry()
 	wireguard.RegisterEndpoint(endpoints)
@@ -259,6 +264,198 @@ func TestRouterVPNDesktopNodeChainPhysicalRejectsChangedModeProof(t *testing.T) 
 			}
 			if routerVPNDesktopNodeChainPhysicalTarget(policy, "linux") {
 				t.Fatal("changed mode/proof receipt acquired typed physical authority")
+			}
+		})
+	}
+}
+
+func desktopChainPhysicalHysteriaSource(t *testing.T, mode string) *mobilemultihop.NodeChain {
+	t.Helper()
+	original, err := chainNativeSourceModes(t, []string{mode}).LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(original), &source) != nil {
+		t.Fatal("original paired chain missing")
+	}
+	var final struct {
+		Profile string `json:"profile_json"`
+	}
+	if json.Unmarshal([]byte(source.Nodes[1]), &final) != nil || final.Profile == "" {
+		t.Fatal("original paired final missing")
+	}
+	var profile map[string]any
+	if json.Unmarshal([]byte(final.Profile), &profile) != nil {
+		t.Fatal("original paired profile malformed")
+	}
+	ca := newDesktopExternalIntegrationCA(t)
+	graph := map[string]any{
+		"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+		"outbounds": []any{map[string]any{"type": "hysteria2", "tag": "proxy", "server": profile["endpoint"], "server_port": 443,
+			"password": "original-final-password", "obfs": map[string]any{"type": "salamander", "password": "original-final-mask"},
+			"tls": map[string]any{"enabled": true, "server_name": "captured-proxy.example", "certificate_path": "cert.pem"}}},
+		"route": map[string]any{"final": "proxy", "rules": []any{}},
+	}
+	assets := map[string]string{
+		"sing-box.json": base64.StdEncoding.EncodeToString([]byte(chainNativeJSON(t, graph))),
+		"cert.pem":      base64.StdEncoding.EncodeToString(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.der})),
+	}
+	node, err := mobilemultihop.NewNodeProfile("hysteria2", chainNativeJSON(t, assets), final.Profile, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Nodes[1], err = node.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := mobilemultihop.NewNodeChain(chainNativeJSON(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return chain
+}
+
+func TestRouterVPNDesktopNodeChainPhysicalHysteriaCapturesActualBox(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("this physical adapter covers Linux and Windows")
+	}
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			policy, err := mobilemultihop.NewDesktopNodeChainPolicy(desktopChainPhysicalHysteriaSource(t, mode), desktopTorBoxSession, runtime.GOOS, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !routerVPNDesktopNodeChainPhysicalTarget(policy, runtime.GOOS) {
+				t.Fatal("exact paired Hysteria2 final lost its typed physical factory")
+			}
+			instance, tun := desktopChainPhysicalBox(t, policy, nil)
+			_, network, err := instance.routerVPNDesktopNodePhysical(policy)
+			if err != nil || network == nil || tun.ready || tun.claimed || network.Current() || network.SocketCurrent() {
+				t.Fatal("Hysteria2 construction fabricated native readiness", err)
+			}
+			meta := policy.Metadata()
+			if meta.Prefixes[0].Mode != mode || meta.Prefixes[1].Mode != "hysteria2" || meta.Prefixes[1].StartLayer != "off" {
+				t.Fatal("Hysteria2 factory changed original prefix/final proof")
+			}
+			if owner, err := instance.routerVPNDesktopNodeActivatePhysical(policy); err == nil || owner != nil {
+				t.Fatal("unprepared Hysteria2 acquired physical authority")
+			}
+			if err := instance.RouterVPNStrategyStart(); err == nil {
+				t.Fatal("Hysteria2 JSON bypassed original native preparation")
+			}
+			if tun.ready || tun.claimed || network.SocketCurrent() {
+				t.Fatal("unprepared Hysteria2 reached native sockets or TUN")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainPhysicalHysteriaKeepsTypedScope(t *testing.T) {
+	for _, target := range []string{"linux", "windows", "darwin"} {
+		t.Run(target, func(t *testing.T) {
+			policy, err := mobilemultihop.NewDesktopNodeChainPolicy(desktopChainPhysicalHysteriaSource(t, "wg"), desktopTorBoxSession, target, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if routerVPNDesktopNodeChainPhysicalTarget(policy, target) != (target != "darwin") {
+				t.Fatal("Hysteria2 factory lost exact supported platform boundary")
+			}
+			if routerVPNDesktopNodeChainPhysicalTarget(policy, "foreign") {
+				t.Fatal("Hysteria2 factory accepted another platform")
+			}
+		})
+	}
+	for _, fault := range []string{"layer", "mode", "position", "target"} {
+		t.Run(fault, func(t *testing.T) {
+			policy, err := mobilemultihop.NewDesktopNodeChainPolicy(desktopChainPhysicalHysteriaSource(t, "wg"), desktopTorBoxSession, "linux", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta := chainNativeField[mobilemultihop.DesktopNodeChainMetadata](t, policy, "metadata")
+			switch fault {
+			case "layer":
+				meta.Prefixes[1].StartLayer = "aes-256-gcm"
+			case "mode":
+				meta.Prefixes[1].Mode = "shadowsocks"
+			case "position":
+				meta.Prefixes[1].Position = 0
+			case "target":
+				meta.TargetOS = "windows"
+			}
+			if routerVPNDesktopNodeChainPhysicalTarget(policy, meta.TargetOS) {
+				t.Fatal("changed Hysteria2 receipt acquired typed physical authority")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainPhysicalHysteriaRejectsSubstitutedBox(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("this physical adapter covers Linux and Windows")
+	}
+	for _, fault := range []string{"password", "sni", "mask", "detour", "dns", "mtu", "physical-source", "interface"} {
+		t.Run(fault, func(t *testing.T) {
+			policy, err := mobilemultihop.NewDesktopNodeChainPolicy(desktopChainPhysicalHysteriaSource(t, "awg2-strong"), desktopTorBoxSession, runtime.GOOS, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			instance, tun := desktopChainPhysicalBox(t, policy, func(graph map[string]any) {
+				for _, row := range graph["outbounds"].([]any) {
+					out := row.(map[string]any)
+					if out["type"] != "hysteria2" {
+						continue
+					}
+					switch fault {
+					case "password":
+						out["password"] = "another-password"
+					case "sni":
+						out["tls"].(map[string]any)["server_name"] = "another.example"
+					case "mask":
+						out["obfs"].(map[string]any)["password"] = "another-mask"
+					case "detour":
+						delete(out, "detour")
+					}
+				}
+				switch fault {
+				case "dns":
+					for _, raw := range graph["dns"].(map[string]any)["servers"].([]any) {
+						row := raw.(map[string]any)
+						if row["tag"] == policy.NodeChain().DNSCapture().ResolverTag {
+							row["server"] = "192.168.50.134"
+						}
+					}
+				case "mtu":
+					row := graph["inbounds"].([]any)[0].(map[string]any)
+					row["mtu"] = row["mtu"].(float64) + 16
+				case "physical-source":
+					graph["services"].([]any)[0].(map[string]any)["source_sha256"] = strings.Repeat("f", 64)
+				case "interface":
+					graph["inbounds"].([]any)[0].(map[string]any)["interface_name"] = "foreign-chain"
+				}
+			})
+			if _, _, err := instance.routerVPNDesktopNodePhysical(policy); err == nil {
+				t.Fatal("changed Hysteria2 Box borrowed original policy")
+			}
+			if owner, err := instance.routerVPNDesktopNodeActivatePhysical(policy); err == nil || owner != nil {
+				t.Fatal("changed Hysteria2 Box acquired original TUN")
+			}
+			// Invoke the actual current-platform shipping prepare/restore entry.
+			// The original-options refusal must occur before OS acquisition.
+			method := "RouterVPNDesktopNodeChainPreparePhysicalOwned"
+			if runtime.GOOS == "linux" {
+				method = "RouterVPNDesktopLinuxNodeChainPreparePhysicalOwned"
+			}
+			prepare := reflect.ValueOf(instance).MethodByName(method)
+			if !prepare.IsValid() {
+				t.Fatal("current platform lost its owned preparation entry")
+			}
+			result := prepare.Call([]reflect.Value{reflect.ValueOf(policy)})
+			if len(result) != 2 || !result[0].IsNil() || result[1].IsNil() {
+				t.Fatal("changed Hysteria2 Box entered native owned preparation")
+			}
+			if tun.ready || tun.claimed {
+				t.Fatal("changed Hysteria2 Box reached native startup")
 			}
 		})
 	}

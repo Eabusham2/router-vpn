@@ -46,6 +46,30 @@ CANDIDATE_COMMAND_VERDICTS = (CANDIDATE_COMMAND_ADMISSION, CANDIDATE_COMMAND_COM
     *(CANDIDATE_COMMAND_ADMISSION + "/" + leaf for leaf in ("unproved", "generation", "deadline", "reader", "capture", "overlap")),
     *(CANDIDATE_COMMAND_COMPOSITION + "/" + leaf for leaf in ("success", "cancel-drain", "stale-catalog", "retirement-drain")))
 CANDIDATE_COMMAND_SUITE = ("ordered-candidate-owner", "./cmd/sing-box", "^TestRouterVPNDesktopNodeChainCandidates", CANDIDATE_COMMAND_VERDICTS)
+ORDERED_PHYSICAL_ROOT = "TestRouterVPNDesktopNodeChainPhysical"
+ORDERED_PHYSICAL_VERDICTS = (
+    ORDERED_PHYSICAL_ROOT + "CapturesActualBox",
+    ORDERED_PHYSICAL_ROOT + "RejectsSubstitutedBox",
+    *(ORDERED_PHYSICAL_ROOT + "RejectsSubstitutedBox/" + fault for fault in
+      ("middle-key", "dns", "physical-source", "mtu", "interface")),
+    ORDERED_PHYSICAL_ROOT + "AWGModesAndOriginalBox",
+    *(ORDERED_PHYSICAL_ROOT + "AWGModesAndOriginalBox/" + modes + suffix
+      for modes in ("awg2-fast/wg", "awg2-strong/wg", "wg/awg2-fast", "wg/awg2-strong",
+                    "wg/awg2-fast/wg", "wg/awg2-strong/wg", "awg2-fast/awg2-strong/wg", "awg2-strong/wg/awg2-fast")
+      for suffix in ("", "/different-original-mode")),
+    ORDERED_PHYSICAL_ROOT + "RejectsChangedModeProof",
+    *(ORDERED_PHYSICAL_ROOT + "RejectsChangedModeProof/" + fault for fault in
+      ("unsupported-prefix", "mode-alias", "final-as-prefix", "wrong-original-mode", "wrong-final", "wrong-position")),
+    ORDERED_PHYSICAL_ROOT + "HysteriaCapturesActualBox",
+    *(ORDERED_PHYSICAL_ROOT + "HysteriaCapturesActualBox/" + mode for mode in ("wg", "awg2-fast", "awg2-strong")),
+    ORDERED_PHYSICAL_ROOT + "HysteriaKeepsTypedScope",
+    *(ORDERED_PHYSICAL_ROOT + "HysteriaKeepsTypedScope/" + fault for fault in
+      ("linux", "windows", "darwin", "layer", "mode", "position", "target")),
+    ORDERED_PHYSICAL_ROOT + "HysteriaRejectsSubstitutedBox",
+    *(ORDERED_PHYSICAL_ROOT + "HysteriaRejectsSubstitutedBox/" + fault for fault in
+      ("password", "sni", "mask", "detour", "dns", "mtu", "physical-source", "interface")),
+)
+ORDERED_PHYSICAL_SUITE = ("ordered-local-physical", ".", "^" + ORDERED_PHYSICAL_ROOT, ORDERED_PHYSICAL_VERDICTS)
 EXECUTION_PHYSICAL_ROOT = "TestRouterVPNDesktopNodeChainExecutionPhysical"
 EXECUTION_COMMAND_ROOT = "TestRouterVPNDesktopNodeChainExecutionCommand"
 EXECUTION_DISPATCH_ROOT = "TestRouterVPNDesktopNodeChainExecutionDispatch"
@@ -1017,6 +1041,23 @@ def ordered_execution_mtu_mutants(source):
             for label, relative, test, child, witness, before, after in controls]
 
 
+def ordered_physical_mutants(source):
+    relative = "routervpn_desktop_node_chain_box_physical.go"
+    raw = (source / relative).read_text(encoding="utf-8")
+    supported = ('modeSupported = prefix.Mode == "shadowsocks" ||\n'
+                 '\t\t\t\t((target == "linux" || target == "windows") && prefix.Mode == "hysteria2" &&\n'
+                 '\t\t\t\t\t(prefix.StartLayer == "" || prefix.StartLayer == "off"))')
+    return [
+        ("ordered-final-legacy-factory", relative, ".", ORDERED_PHYSICAL_ROOT + "HysteriaCapturesActualBox", "wg",
+         "exact paired Hysteria2 final lost its typed physical factory",
+         BOOT.IDENTITY.replace_once(raw, supported, 'modeSupported = prefix.Mode == "shadowsocks"')),
+        ("ordered-final-foreign-platform", relative, ".", ORDERED_PHYSICAL_ROOT + "HysteriaKeepsTypedScope", "darwin",
+         "Hysteria2 factory lost exact supported platform boundary",
+         BOOT.IDENTITY.replace_once(raw, '(target == "linux" || target == "windows") && prefix.Mode == "hysteria2"',
+                                    'true && prefix.Mode == "hysteria2"')),
+    ]
+
+
 def mutants(source, windows):
     def changed(relative, before, after, count=1):
         raw = (source / relative).read_text(encoding="utf-8")
@@ -1044,7 +1085,7 @@ def mutants(source, windows):
     contextual_entry_lock = "\tif err := adapter.RouterVPNLockContext(ctx, &o.mu); err != nil {\n\t\treturn nil, err\n\t}\n"
     ambient_owner = "func() error { if !owner.SocketCurrent() { return net.ErrClosed }; return nil }()"
     caller_diagnostic = "physical caller used an ambient wait without its original context"
-    result = candidate_prefix_mutants(source) + ordered_execution_dispatch_mutants(source) + ordered_execution_mtu_mutants(source) + [
+    result = ordered_physical_mutants(source) + candidate_prefix_mutants(source) + ordered_execution_dispatch_mutants(source) + ordered_execution_mtu_mutants(source) + [
         ("node-lower-ambient-lock", lower, "./routervpn/desktoppt", "TestRouterVPNNodePhysicalCallerContext", "lower",
          caller_diagnostic, changed_function(lower, lower_current, contextual_entry_lock, "\to.mu.Lock()\n")),
         ("node-owner-ambient-lock", lower, "./routervpn/desktoppt", "TestRouterVPNNodePhysicalCallerContext", "owner",
@@ -1318,7 +1359,7 @@ def execute_baseline_suite(baselines, suite):
         raise ValueError("Node " + name + " omitted a required native boundary")
     if name == OPENVPN_CAPACITY_SUITE[0]:
         require_native_verdicts(output, OPENVPN_CAPACITY_VERDICTS, "OpenVPN authenticated live capacity")
-    if name in {suite[0] for suite in (*EXECUTION_DESKTOP_SUITES, *CANDIDATE_PREFIX_DESKTOP_SUITES)}:
+    if name in {suite[0] for suite in (ORDERED_PHYSICAL_SUITE, *EXECUTION_DESKTOP_SUITES, *CANDIDATE_PREFIX_DESKTOP_SUITES)}:
         require_native_verdicts(output, required, name)
     if name == CANDIDATE_COMMAND_SUITE[0]:
         require_native_verdicts(output, CANDIDATE_COMMAND_VERDICTS, "ordered candidate original native owner")
@@ -1535,6 +1576,7 @@ def baseline_suites(windows, *, bootstrap_only=False):
                    ("TestRouterVPNDesktopNodeChainMeasurementAdmissionRetainsReader",
                     "TestRouterVPNDesktopNodeChainMeasurementExcludesMTUAndRetiredReader",
                     "TestRouterVPNDesktopNodeChainMeasurementHTTPComposition")))
+    suites.append(ORDERED_PHYSICAL_SUITE)
     suites.append(CANDIDATE_COMMAND_SUITE)
     suites.extend(EXECUTION_DESKTOP_SUITES)
     suites.extend(CANDIDATE_PREFIX_DESKTOP_SUITES)

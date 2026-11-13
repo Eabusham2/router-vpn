@@ -2157,6 +2157,47 @@ kernel firewall, installed-host, packaged/device and off-LAN acceptance remain
 separate requirements. No imported-middle, Server/Compare, candidate-target
 or public Darwin admission boundary was widened by this gate.
 
+## Desktop Hysteria2 physical factory and mandatory caller coverage
+
+The follow-through audit found an additional shipping blocker after the editor
+and direct encrypted-outbound work: the shared desktop Box physical factory
+still required an SS final. That guard prevented otherwise valid Hysteria2
+captures from reaching the owned Windows/Linux prepare, activation and restore
+paths. The factory now admits the exact sealed paired Hysteria2 final with
+Start Layer Off on Windows and Linux. It still validates the complete original
+policy, target, positions, every prefix and physical graph support. Darwin's
+Hysteria2 factory boundary remains closed, alongside its separate public
+ordered-path admission gate.
+
+Focused execution used a frozen `00622b16` source snapshot plus this four-file
+change and the actual pinned Box, WG/AWG and Hysteria2 constructors, with the
+privileged TUN boundary explicitly doubled. The passing race image has SHA256
+`4303611f59e42ba5bd90afa9347910c592a0701cd95853785fa55198539ea8c0`.
+All 65 selected native
+root/child verdicts passed: 52 ordinary factory verdicts (including 21 new
+Hysteria2 verdicts) and 13 existing execution-policy verdicts. Valid construction
+cannot fabricate socket/TUN readiness, and unprepared activation and strategy
+startup are rejected. Changed password, SNI, mask, detour, DNS, MTU, original
+physical source or interface cannot borrow the sealed policy. The tests also
+invoke the current platform's actual owned preparation entry and require its
+changed-Box refusal before OS acquisition.
+
+The regular Windows/Linux native source gate previously omitted the ordinary
+ordered Box factory roots. Its mandatory inventory now requires every one of
+the 52 original/new factory verdicts and exact RUN/PASS coverage. Two separately
+compiled controls prove rejection when the old SS-only guard is restored or
+the new Windows/Linux final-family restriction is omitted. A proposed control
+that removed the first Validate call remained refused by Metadata/ReadValidated;
+that independent defense was preserved, and the ineffective proposed control
+was not counted as a meaningful rejection. All 68 routing-runner tests passed
+with the pinned Go toolchain. The first broad runner attempt used the ambient Go
+launcher for two existing helpers; correcting only PATH produced the full pass.
+All 2,489 native dependency hashes remained unchanged.
+
+This repairs the concrete native factory call path. Installed TUN/WFP/PF,
+packaged networking, physical devices, other graph families and Darwin admission
+still require their own appropriate acceptance evidence.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

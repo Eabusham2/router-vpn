@@ -27,6 +27,9 @@ complete profiles, Startup Last and prefix-only preparation. The detailed
 records exact source, test boundaries and retained failure logs. The mandatory
 Linux preflight's encrypted Hysteria2 gate passed all 37 verdicts for three
 three-node WG/AWG families, with actual TLS, selected DNS and owned shutdown.
+The Windows/Linux physical factory now accepts the exact sealed Hysteria2
+final; its actual Box constructor/caller checks passed 65 selected verdicts,
+and all 52 ordinary factory verdicts are mandatory in native source gates.
 Installed TUN/firewall acceptance, current native packages and device tests
 remain separate.
 Imported SS2022 middles still require an SS final; broader graph families,
