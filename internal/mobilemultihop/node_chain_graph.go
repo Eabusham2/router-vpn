@@ -26,8 +26,7 @@ func compileNodeChain(nodes []*NodeProfile) (string, []NodeChainProof, NodeChain
 			return fail(errors.New("ordered chain cover services require their per-position native owner integration"))
 		}
 		if i < len(nodes)-1 && (!NodeChainPrefixMode(node.mode) || closure.final["type"] != nodeChainPrefixType(node.mode)) ||
-			i == len(nodes)-1 && (node.mode != "shadowsocks" || closure.final["method"] != NativeStartLayerMethod ||
-				closure.final["type"] != "shadowsocks" && closure.final["type"] != "routervpn-aes-xor") {
+			i == len(nodes)-1 && !nodeChainFinalClosure(node, closure) {
 			return fail(bad)
 		}
 		closures[i] = closure

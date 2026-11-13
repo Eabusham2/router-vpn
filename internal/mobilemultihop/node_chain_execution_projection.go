@@ -81,6 +81,7 @@ func newNodeChainExecutionPreparationProjected(localSource, execution string, de
 	local, err := NewNodeChain(localSource)
 	var original NodeChainSource
 	if err != nil || local.validateCapture() != nil || local.importedMiddle != nil ||
+		local.nodes[len(local.nodes)-1].mode != "shadowsocks" ||
 		exactJSON([]byte(localSource), &original, NodeChainInputLimit) != nil || original.Schema != 1 ||
 		len(original.IdentitySources) != len(local.nodes) {
 		return nil, nodeChainExecutionError

@@ -140,8 +140,8 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 			}
 		}
 		if position < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) ||
-			position == len(source.Nodes)-1 && node.mode != "shadowsocks" {
-			return nil, errors.New("ordered Local chains require captured WG or AWG2 Fast/Strong prefixes and an SS2022 final")
+			position == len(source.Nodes)-1 && !nodeChainFinalCapture(node) {
+			return nil, errors.New("ordered Local chains require captured WG or AWG2 Fast/Strong prefixes and an SS2022 or unlayered paired Hysteria2 final")
 		}
 		id, peer := predecessorText(node.profile, "id"), predecessorText(node.profile, "node_proof_id")
 		if ids[id] || peers[peer] {

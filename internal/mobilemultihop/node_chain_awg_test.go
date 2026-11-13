@@ -30,10 +30,10 @@ func TestNodeChainAWGAdmissionKeepsExactModesAndFinal(t *testing.T) {
 				}
 			})
 		}
-		if mode != "shadowsocks" {
+		if mode != "shadowsocks" && mode != "hysteria2" {
 			t.Run("final/"+mode, func(t *testing.T) {
 				if _, err := NewNodeChain(startJSON(t, nodeChainFixtureSource(t, []*NodeProfile{baseline[0], node}))); err == nil {
-					t.Fatal("AWG prefix support broadened the captured SS2022 final", mode)
+					t.Fatal("ordered final support admitted an unimplemented captured family", mode)
 				}
 			})
 		}

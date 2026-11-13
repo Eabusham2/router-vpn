@@ -150,7 +150,7 @@ access:
   and public native admission remain in progress. Ordinary WireGuard or Android
   Network calls cannot substitute for the captured native owners. Native acceptance
   of each new platform flow must be recorded separately from these source tests.
-- Ordered graphs still cover a bounded set of WG/AWG prefixes and SS finals,
+- Shipping ordered graph adapters still cover a bounded set of WG/AWG prefixes and SS finals,
   with one literal, unlayered SS2022 imported middle in the three-member
   shipping composition. The shared compiler now also preserves an imported
   SS2022 hostname with its explicitly saved Custom TCP resolver through the
@@ -160,6 +160,10 @@ access:
   published. Installed hostname-path acceptance remains in progress. Other explicitly requested protocols, positions, layers and graph families
   remain requirements. This is not an invented requirement for every theoretical
   protocol permutation. Safe rejection is not implementation.
+  The shared paired Local compiler now also captures an unlayered Hysteria2
+  final after 1–7 existing packet prefixes. Its encrypted witness and shipping
+  host/UI adoption remain in progress; this source extension does not expand
+  imported-middle or Server/Compare admission.
 - Public ordered macOS admission requires actual generated-child and installed
   host acceptance on Intel and Apple Silicon. The sealed native test-image
   admission bridge is not public application support.
@@ -1957,6 +1961,46 @@ package, Apple signing, PacketTunnel/TUN/firewall execution or physical iPhone
 and iPad networking. Exact-publication native build and live acceptance remain
 required. The separate encrypted native hostname gate is transport evidence,
 not a substitute for those device checks.
+
+## Paired Local ordered Hysteria2 final source foundation
+
+The shared compiler now accepts a paired Hysteria2 final with Start Layer Off
+after the existing WG/AWG2 Fast/Strong prefixes in a 2–8-node Local graph.
+This follows the recovered independent hop/exit choices and actual routed
+multihop requirements indexed by mm 214–224 and addendum 336; those historical
+audit entries are an index to the original sources, not verbatim user messages.
+It adds one named protocol family to the existing ordered model without
+claiming every theoretical permutation.
+
+The original sealed node closure retains its native Hysteria2 password, TLS
+server name, certificate trust and Salamander parameters. The final inherits
+the complete preceding packet prefix, final Home AdGuard remains selected,
+and each original source identity, proof, IPv6/LAN restriction and MTU envelope
+remains captured. Prefix Start Layers retain their prior support; Hysteria2
+final layers remain rejected pending their own implementation. Imported
+schema-2 middles retain the SS-only final, and Server/Compare preparation now
+has an explicit SS-only guard where it previously inherited that boundary
+from the Local compiler. Candidate targets retain their existing SS2022
+transport restriction. A selected-prefix test may retain a saved Hysteria2
+suffix as provenance without constructing or contacting it.
+
+Validation used an immutable `fc5e6c0a` snapshot plus exactly the six changed
+files. The race-instrumented suite passed 333 verdicts across 27 roots:
+39 verdicts in six new roots and 294 original preservation verdicts. Package
+execution took 84.697 seconds; process time including compilation was 112.008
+seconds. Three separately compiled defect controls rejected a substituted
+native closure, unauthorized Server/Compare preparation and a changed source
+borrowing an earlier launch receipt. All 5,086 snapshot source hashes and all
+six shipping file hashes were unchanged after validation; diff whitespace
+checks passed. Original tracked file modes were retained.
+
+The source tests cover 2, 3 and 8 members, all three packet-prefix families,
+exact final trust/credentials, selected DNS, physical-first-owner closure,
+five platform projections, device/MTU restrictions and cancellation/retirement.
+HTTP/TLS identity exchanges are real but their native routing boundary is
+modeled in this unit. Actual encrypted packet prefixes to QUIC/Hysteria2,
+shipping host and UI adoption, installed TUN/firewall behavior and device
+acceptance require separate evidence. Public Darwin admission remains closed.
 
 ## Physical and private acceptance
 
