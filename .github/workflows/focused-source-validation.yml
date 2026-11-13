@@ -176,6 +176,11 @@ jobs:
         if: inputs.suite == 'ios-sdk'
         shell: bash
         run: brew install xcodegen autoconf automake libtool pkg-config
+      - name: Verify original Apple Tor preprocessing targets
+        if: inputs.suite == 'ios-sdk'
+        shell: bash
+        run: |
+          python3 validator/deploy/test_mobile_tor_apple_preprocessor.py --native --source "$GITHUB_WORKSPACE/candidate"
       - name: Build exact Apple SDK bindings and the complete iPhone and iPad PacketTunnel app
         if: inputs.suite == 'ios-sdk'
         shell: bash

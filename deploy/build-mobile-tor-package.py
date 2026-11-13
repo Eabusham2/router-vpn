@@ -280,6 +280,9 @@ def compile_dependencies(target, work, archives, source_lock, jobs, ndk=None):
                    NM=run(['xcrun', '--find', 'nm'], capture=True).strip(), SDKROOT=sdk,
                    IPHONEOS_DEPLOYMENT_TARGET=source_lock['ios_minimum'])
         env['CFLAGS'] += ' ' + flags
+        # Autoconf's preprocessor probes use CPPFLAGS, not CFLAGS. Keep the
+        # exact Apple target/SDK there too, including device versus simulator.
+        env['CPPFLAGS'] += ' ' + flags
         env['LDFLAGS'] += ' ' + flags
         host = ('aarch64' if target['arch'] == 'arm64' else target['arch']) + '-apple-darwin'
         env['CHOST'] = host
