@@ -17,12 +17,15 @@ APP = ROOT / 'ios/RouterVPN/App'
 spec = importlib.util.spec_from_file_location('chain_policy_boundary', ROOT / 'deploy/test_ios_pq_selection.py')
 P = importlib.util.module_from_spec(spec); spec.loader.exec_module(P)
 
-GO = P.GO.replace('"crypto/sha256"', '"crypto/sha256";"crypto/ecdh";"strconv"', 1)
+GO = P.GO.replace('"crypto/sha256"', '"crypto/sha256";"crypto/ecdh";"crypto/ed25519";"crypto/rand";"crypto/x509";"crypto/x509/pkix";"encoding/pem";"math/big";"strconv";"time"', 1)
 anchor = ' case "compile":value,err=mobilemultihop.CompilePQProfile(r.Mode,r.Files,r.Node)'
 assert GO.count(anchor) == 1
 GO = GO.replace(anchor, r'''
  case "chain-fixture":var count int;count,err=strconv.Atoi(r.Mode);if err==nil{value,err=chainFixture(count,r.Policy)}
  case "chain-awg-fixture":var count int;count,err=strconv.Atoi(r.Mode);if err==nil{value,err=chainFixtureModes(count,r.Policy,true)}
+ case "chain-hysteria-fixture":var count int;count,err=strconv.Atoi(r.Node);if err==nil{value,err=chainHysteriaFixture(count,r.Mode,r.Policy)}
+ case "chain-execution":_,err=mobilemultihop.NewNodeChainExecutionPreparation(r.Source,r.Mode)
+ case "chain-candidate-supported":value=strconv.FormatBool(mobilemultihop.NodeChainCandidateInputSupported(r.Source))
  case "chain-imported":value,err=mobilemultihop.NodeChainImportedMemberInput(r.Source,r.Policy)
  case "chain-ordinary":value,err=mobilemultihop.CompileExternalPolicy(r.Source,r.Policy)
  case "chain-member":
@@ -39,6 +42,14 @@ GO = GO.replace(anchor, r'''
 ''' + anchor, 1)
 GO += r'''
 func chainFixture(count int,layer string)(string,error){return chainFixtureModes(count,layer,false)}
+func chainHysteriaFixture(count int,first,layer string)(string,error){
+ raw,err:=chainFixtureModes(count,layer,true);if err!=nil{return "",err}
+ var bundles []map[string]any;if err=json.Unmarshal([]byte(raw),&bundles);err!=nil{return "",err}
+ final:=bundles[count-1]["routerProfiles"].([]any)[0].(map[string]any)
+ selection:=final["multihop_nodes"].([]any);selection[0].(map[string]any)["mode"]=first
+ selection[count-1].(map[string]any)["mode"]="hysteria2";final["start_layer"]="off"
+ encoded,err:=json.Marshal(bundles);return string(encoded),err
+}
 func chainFixtureModes(count int,layer string,mixed bool)(string,error){
  if count<2||count>8{return "",fmt.Errorf("fixture node count")}
  bundles:=make([]any,0,count);selection:=make([]any,0,count)
@@ -56,6 +67,13 @@ func chainFixtureModes(count int,layer string,mixed bool)(string,error){
   graph:=map[string]any{"inbounds":[]any{map[string]any{"type":"tun","tag":"tun-in","auto_route":true,"strict_route":true,"mtu":1280}},"outbounds":[]any{map[string]any{"type":"shadowsocks","tag":"proxy","server":endpoint,"server_port":443,"method":"2022-blake3-aes-256-gcm","password":key(byte(141+i))},map[string]any{"type":"direct","tag":"direct"}},"route":map[string]any{"auto_detect_interface":true,"final":"proxy","rules":[]any{map[string]any{"protocol":"dns","action":"hijack-dns"}}},"dns":map[string]any{"servers":[]any{map[string]any{"type":"udp","tag":"home-dns","server":fmt.Sprintf("10.%d.0.53",80+i),"detour":"proxy"}},"final":"home-dns"}}
   ss,e:=json.Marshal(graph);if e!=nil{return "",e}
   assets:=map[string]any{"wg":map[string]string{"wg.conf":base64.StdEncoding.EncodeToString([]byte(raw))},"shadowsocks":map[string]string{"sing-box.json":base64.StdEncoding.EncodeToString(ss)}}
+  private:=ed25519.NewKeyFromSeed(bytes.Repeat([]byte{byte(41+i)},ed25519.SeedSize))
+  cert:=&x509.Certificate{SerialNumber:big.NewInt(int64(i+1)),Subject:pkix.Name{CommonName:"ordered-final.example.test"},DNSNames:[]string{"ordered-final.example.test"},NotBefore:time.Unix(1577836800,0),NotAfter:time.Unix(2051222400,0),KeyUsage:x509.KeyUsageDigitalSignature|x509.KeyUsageCertSign,IsCA:true,BasicConstraintsValid:true}
+  der,e:=x509.CreateCertificate(rand.Reader,cert,cert,private.Public(),private);if e!=nil{return "",e}
+  certificate:=pem.EncodeToMemory(&pem.Block{Type:"CERTIFICATE",Bytes:der})
+  graph["outbounds"].([]any)[0]=map[string]any{"type":"hysteria2","tag":"proxy","server":endpoint,"server_port":8443,"password":fmt.Sprintf("original-hy2-password-%d",i),"obfs":map[string]any{"type":"salamander","password":fmt.Sprintf("original-hy2-salamander-%d",i)},"tls":map[string]any{"enabled":true,"server_name":"ordered-final.example.test","certificate_path":"hy2-ca.pem"}}
+  hy2,e:=json.Marshal(graph);if e!=nil{return "",e}
+  assets["hysteria2"]=map[string]string{"sing-box.json":base64.StdEncoding.EncodeToString(hy2),"hy2-ca.pem":base64.StdEncoding.EncodeToString(certificate)}
   for _,mode:=range []string{"awg2-fast","awg2-strong"}{
    jc:=3;if mode=="awg2-strong"{jc=8}
    parameters:=fmt.Sprintf("[Interface]\nJc=%d\nJmin=40\nJmax=900\nS1=56\nS2=48\nS3=24\nS4=32\nH1=10000000-19999999\nH2=20000000-29999999\nH3=30000000-39999999\nH4=40000000-49999999\n",jc)
@@ -113,6 +131,9 @@ public func LibboxNewRouterNodeChain(_ source:String,_ error:UnsafeMutablePointe
 public func LibboxRouterNodeChainLaunch(_ source:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChain?{api(error){try make("chain-open",source)}}
 public func LibboxTestFixture(_ count:Int,_ layer:String)throws->String{try bridge(["Op":"chain-fixture","Mode":String(count),"Policy":layer])}
 public func LibboxTestAWGFixture(_ count:Int,_ layer:String)throws->String{try bridge(["Op":"chain-awg-fixture","Mode":String(count),"Policy":layer])}
+public func LibboxTestHysteriaFixture(_ count:Int,_ first:String,_ layer:String="off")throws->String{try bridge(["Op":"chain-hysteria-fixture","Node":String(count),"Mode":first,"Policy":layer])}
+public func LibboxTestChainExecution(_ source:String,_ mode:String)throws{_ = try bridge(["Op":"chain-execution","Source":source,"Mode":mode])}
+public func LibboxTestCandidateSupported(_ input:String)throws->Bool{try bridge(["Op":"chain-candidate-supported","Source":input]) == "true"}
 public func LibboxTestProjection(_ launch:String,_ target:String)throws->String{
  let raw=try bridge(["Op":"chain-project","Source":launch,"Mode":target])
  return try object(Data(raw.utf8))["launch"] as! String
@@ -164,6 +185,9 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
   try check("typed external original source replays",reopened.launchInput == complete.launchInput)
   let actualExternal=complete.members[1].profile["external"] as! [String:Any], actualSS=actualExternal["shadowsocks"] as! [String:Any]
   try check("native source retains exact cipher and original PSK",actualSS["method"] as? String == method && actualSS["password"] as? String == Data(repeating:0,count:keySize).base64EncodedString())
+  var wrongFinal=imported
+  wrongFinal[2]=try editProfile(wrongFinal[2]) { p in var refs=p["multihop_nodes"] as! [[String:Any]];refs[2]["mode"]="hysteria2";p["multihop_nodes"]=refs }
+  try reject("imported schema2 retains SS-only final"){_ = try IOSNodeChainCapture.compile(bundles:wrongFinal)}
   for fault in ["private-token","proof","hostname","legacy","layer"] {
    var changed=imported
    changed[1]=try editProfile(changed[1]) { p in
@@ -276,6 +300,38 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
   try reject("one-node chain"){_ = try IOSNodeChainCapture.compile(bundles:[original[0]])}
   try reject("nine-node chain"){_ = try IOSNodeChainCapture.compile(bundles:Array(repeating:original[0],count:9))}
   try reject("oversized private transfer"){_ = try IOSNodeChainCapture.reopen(String(repeating:" ",count:IOSNodeChainCapture.maximumInputBytes+1),selectedProfile:profile(original.last!))}
+  try hysteriaFinal()
+ }
+ static func hysteriaFinal()throws {
+  for mode in ["wg","awg2-fast","awg2-strong"] { for prefixLayer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+   let raw=try LibboxTestHysteriaFixture(3,mode,prefixLayer)
+   let bundles=try (JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [Any]).map{try data($0)}
+   let capture=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? capture.plan.close()}
+   let final=capture.members.last!,originalFiles=try object(Data(final.filesJSON.utf8))
+   let graph=try object(Data(capture.config.utf8)),outbounds=graph["outbounds"] as! [[String:Any]],hy2=outbounds.first{$0["type"] as? String=="hysteria2"}!
+   let original=try object(Data(base64Encoded:originalFiles["sing-box.json"] as! String)!),native=(original["outbounds"] as! [[String:Any]])[0]
+   try check("HY2 native password and Salamander stay original",hy2["password"] as? String==native["password"] as? String && NSDictionary(dictionary:hy2["obfs"] as! [String:Any]).isEqual(to:native["obfs"] as! [String:Any]))
+   let tls=hy2["tls"] as! [String:Any],ca=String(decoding:Data(base64Encoded:originalFiles["hy2-ca.pem"] as! String)!,as:UTF8.self)
+   try check("HY2 original TLS trust and name retained",tls["server_name"] as? String=="ordered-final.example.test" && tls["certificate"] as? [String]==[ca] && tls["insecure"] as? Bool != true)
+   try check("HY2 keeps selected prefix modes and one TUN",capture.members.first?.mode==mode && final.mode=="hysteria2" && (graph["inbounds"] as! [Any]).count==1)
+   let provider:[String:Any]=["engine":"multihop-libbox","mode":"hysteria2","rawProfileID":"hysteria2","modeCandidates":["hysteria2"],"bundle":bundles.last!,IOSNodeChainProviderCapture.key:capture.launchInput]
+   let reopened=try IOSNodeChainProviderCapture.reopen(provider);defer{try? reopened.plan.close()}
+   try check("HY2 provider reproduces entire original source",reopened.launchInput==capture.launchInput && reopened.config==capture.config && reopened.members.last?.profileJSON==final.profileJSON)
+   for fault in ["raw-mode","candidate-mode","changed-ca"] {
+    var changed=provider
+    if fault=="raw-mode" {changed["rawProfileID"]="shadowsocks"}
+    if fault=="candidate-mode" {changed["modeCandidates"]=["shadowsocks"]}
+    if fault=="changed-ca" {changed["bundle"]=try edit(bundles.last!){var assets=$0["profiles"] as! [String:[String:String]];assets["hysteria2"]!["hy2-ca.pem"]=Data("different original CA".utf8).base64EncodedString();$0["profiles"]=assets}}
+    try reject("HY2 provider "+fault){_ = try IOSNodeChainProviderCapture.reopen(changed)}
+   }
+   let record=try object(Data(capture.launchInput.utf8)),last=(record["nodes"] as! [String]).last!
+   try check("UDP-only HY2 stays excluded from TCP candidate targets",try !LibboxTestCandidateSupported(last))
+   for execution in ["server","auto"] {try reject("HY2 remains Local-only "+execution){try LibboxTestChainExecution(capture.originalSource!,execution)}}
+   for layer in ["aes-256-gcm","aes-256-gcm+xor-whitening"] {
+    var changed=bundles;changed[2]=try editProfile(changed[2]){$0["start_layer"]=layer}
+    try reject("HY2 final layer "+layer){_ = try IOSNodeChainCapture.compile(bundles:changed)}
+   }
+  }}
  }
  static func hostnameMiddle()throws {
   for mode in ["wg","awg2-fast","awg2-strong"] {

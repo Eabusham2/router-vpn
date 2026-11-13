@@ -86,17 +86,18 @@ TESTS = r'''
  static func encoded(_ value:Any)throws->Data{try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys])}
  static func bundleData(_ bundle:ClientBundle)throws->Data {let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys];return try encoder.encode(bundle)}
  // ORIGINAL_COMPILER_SOURCES
- static func setup(_ count:Int=4,_ mixed:Bool=false)throws->(RouterVPNModel,NETunnelProviderManager,[ClientBundle]) {
+ static func setup(_ count:Int=4,_ mixed:Bool=false,_ hysteriaPrefix:String="")throws->(RouterVPNModel,NETunnelProviderManager,[ClientBundle]) {
   NETunnelProviderManager.reset()
-  var nodes=try sources(count,mixed)
+  var nodes=try sources(count,mixed,hysteriaPrefix)
   for i in nodes.indices{nodes[i].routerProfiles[0].name="Original node \(i)";nodes[i].routerProfiles[0].latitude=20+Double(i)*7;nodes[i].routerProfiles[0].longitude = -120+Double(i)*25}
   let source=try IOSNodeChainCapture.compile(bundles:nodes.map{try bundleData($0)});defer{try? source.plan.close()}
   let model=RouterVPNModel(),manager=NETunnelProviderManager(),proto=NETunnelProviderProtocol()
   let data=try bundleData(nodes.last!),connectedAt=Date(timeIntervalSince1970:123456)
   model.bundle=nodes.last;model.allNodeProfiles=nodes.flatMap(\.routerProfiles);model.connected=true
-  model.activeSessionIdentity=try IOSSessionIdentity(connectedAt:connectedAt,engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:data,entryBundleData:nil,nodeChainSource:Data(source.launchInput.utf8))
+  let finalMode=source.members.last!.mode
+  model.activeSessionIdentity=try IOSSessionIdentity(connectedAt:connectedAt,engine:"multihop-libbox",rawProfile:finalMode,bundleData:data,entryBundleData:nil,nodeChainSource:Data(source.launchInput.utf8))
   proto.providerBundleIdentifier="com.eabusham.routervpn.PacketTunnel"
-  proto.providerConfiguration=["bundle":data,"engine":"multihop-libbox","mode":"shadowsocks","rawProfileID":"shadowsocks","nodeChainSource":source.launchInput]
+  proto.providerConfiguration=["bundle":data,"engine":"multihop-libbox","mode":finalMode,"rawProfileID":finalMode,"nodeChainSource":source.launchInput]
   manager.protocolConfiguration=proto;manager.connection.status = .connected;manager.connection.connectedDate=connectedAt
   return(model,manager,nodes)
  }
@@ -113,6 +114,18 @@ TESTS = r'''
   catch{FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1)}
  }
  static func run()async throws {
+  try await runOriginal()
+  for mode in ["wg","awg2-fast","awg2-strong"] {
+   let (model,_,nodes)=try setup(3,false,mode)
+   try check("HY2 saved and active map retain every exact mode",IOSNodeChainPresentation.planned(selected:nodes.last!.routerProfiles[0],catalog:nodes.flatMap(\.routerProfiles))?.map(\.mode)==nodes.last!.routerProfiles[0].multihopNodes!.map{Optional($0.mode)} && model.iosVisibleOrderedNodePath?.last?.mode=="hysteria2")
+   let identity=model.activeSessionIdentity!
+   model.activeSessionIdentity=try IOSSessionIdentity(connectedAt:identity.connectedAt,engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:identity.bundleData,entryBundleData:nil,nodeChainSource:identity.nodeChainSource)
+   try check("HY2 map rejects another final raw transport",model.iosVisibleOrderedNodePath==nil)
+   var layered=nodes.last!.routerProfiles[0];layered.startLayer="aes-256-gcm"
+   try check("HY2 planned map refuses layered final",IOSNodeChainPresentation.planned(selected:layered,catalog:Array(nodes.dropLast()).flatMap(\.routerProfiles)+[layered])==nil)
+  }
+ }
+ static func runOriginal()async throws {
   do {
    var nodes=try sources(3)
    var custom=nodes[1].routerProfiles[0]
@@ -299,6 +312,7 @@ def main(selected_mutations=None):
         subprocess.run(command, check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)
         mutants = (
+            ('hysteria-final-identity', presentation.replace('identity.rawProfile == path.last?.mode else', 'true else', 1), body, 'FAIL HY2 map rejects another final raw transport'),
             ('prefix-suffix-testing', presentation.replace('return testing.contains(id) ? "Testing" : "Saved"','return "Testing"',1), body, 'FAIL prefix markers distinguish only tested members'),
             ('prefix-list-scope', presentation, body.replace('location: IOSNodeChainPresentation.candidateLabel(id: profile.id, path: ordered, testing: model.iosCandidateTestingNodeIDs)', 'location: IOSNodeChainPresentation.candidateLabel(id: profile.id, path: ordered, testing: Set(ordered?.map(\\.id) ?? []))',1), 'FAIL node list distinguishes unused saved suffix'),
             ('testing-map-source', presentation.replace('if connected && !iosCandidateTesting {', 'if connected {', 1), body, 'FAIL temporary Testing uses saved path without live packet animation'),
@@ -320,5 +334,5 @@ def main(selected_mutations=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mutation', action='append', choices=['prefix-suffix-testing', 'prefix-list-scope', 'testing-map-source', 'testing-map-animation', 'mutable-map-source', 'middle-map-shortcut', 'stale-session', 'stale-provider-source'])
+    parser.add_argument('--mutation', action='append', choices=['hysteria-final-identity', 'prefix-suffix-testing', 'prefix-list-scope', 'testing-map-source', 'testing-map-animation', 'mutable-map-source', 'middle-map-shortcut', 'stale-session', 'stale-provider-source'])
     main(parser.parse_args().mutation)

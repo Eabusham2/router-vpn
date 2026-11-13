@@ -113,8 +113,8 @@ TESTS = r'''
   do{try await action()}catch{checks+=1;return};throw NSError(domain:"ChainAppRejected",code:1,userInfo:[NSLocalizedDescriptionKey:"ACCEPTED "+name])
  }
  static func reset(){NETunnelProviderManager.reset();IOSNodeBundleStore.shared.records=[:];IOSMAXSourceSelection.calls=0;IOSStartupLastChoice.restores=0;IOSMTUMeasurementGate.current=""}
- static func sources(_ count:Int,_ mixed:Bool=false)throws->[ClientBundle] {
-  let raw=try mixed ? LibboxTestAWGFixture(count,"off"):LibboxTestFixture(count,"off")
+ static func sources(_ count:Int,_ mixed:Bool=false,_ hysteriaPrefix:String="")throws->[ClientBundle] {
+  let raw=try !hysteriaPrefix.isEmpty ? LibboxTestHysteriaFixture(count,hysteriaPrefix) : (mixed ? LibboxTestAWGFixture(count,"off"):LibboxTestFixture(count,"off"))
   let roots=try JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [[String:Any]]
   return try roots.map{original in
    var root=original,profiles=root["routerProfiles"] as! [[String:Any]],p=profiles[0]
@@ -123,8 +123,8 @@ TESTS = r'''
    return try JSONDecoder().decode(ClientBundle.self,from:JSONSerialization.data(withJSONObject:root))
   }
  }
- static func setup(_ count:Int=3,_ mixed:Bool=false)throws->(RouterVPNModel,NETunnelProviderManager,ClientBundle,IOSRuntimeSelection) {
-  reset();let nodes=try sources(count,mixed),final=nodes.last!,model=RouterVPNModel(),manager=NETunnelProviderManager()
+ static func setup(_ count:Int=3,_ mixed:Bool=false,_ hysteriaPrefix:String="")throws->(RouterVPNModel,NETunnelProviderManager,ClientBundle,IOSRuntimeSelection) {
+  reset();let nodes=try sources(count,mixed,hysteriaPrefix),final=nodes.last!,model=RouterVPNModel(),manager=NETunnelProviderManager()
   model.bundle=final
   for node in nodes {IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
   let capture=try model.captureIOSNodeChain(final);defer{try? capture.plan.close()}
@@ -251,6 +251,15 @@ TESTS = r'''
    try await reject("cancelled app launch"){_ = try await task.value}
    try check("cancelled task cannot start native connection",manager.connection.starts==0)
   }
+  for mode in ["wg","awg2-fast","awg2-strong"] {
+   let (model,manager,final,selection)=try setup(3,false,mode)
+   try check("HY2 runtime selector preserves exact final mode",selection.rawProfileID=="hysteria2" && selection.nodeChainInput != nil)
+   _ = try await model.launch(manager,final,selection)
+   let configuration=(manager.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+   let reopened=try IOSNodeChainProviderCapture.reopen(configuration);defer{try? reopened.plan.close()}
+   try check("HY2 original source reaches one original PacketTunnel manager",NETunnelProviderManager.starts==1 && configuration[IOSNodeChainProviderCapture.key] as? String==selection.nodeChainInput && reopened.members.first?.mode==mode && reopened.members.last?.mode=="hysteria2")
+   try check("HY2 source capture cannot invent Connected or usage",!model.connected && model.usageWrites==0)
+  }
  }
 }
 '''
@@ -304,6 +313,17 @@ def main():
             failed = subprocess.run([str(binary), str(compiler)], capture_output=True, text=True, timeout=180)
             assert failed.returncode != 0 and failure in failed.stdout + failed.stderr, name + ': no causal failure: ' + (failed.stdout + failed.stderr)[-1000:]
             print('Rejected ordered app launch defect mutation: ' + name)
+        source = APP / 'IOSNodeChainLaunch.swift'
+        original = source.read_text()
+        needle = 'rawProfileID: final.mode,'
+        assert original.count(needle) == 1
+        mutation = work / 'HY2RawMode.swift'; mutation.write_text(original.replace(needle, 'rawProfileID: "shadowsocks",', 1))
+        mutated_command = [str(mutation) if item == str(source) else item for item in command]
+        code.write_text(body + TESTS)
+        subprocess.run(mutated_command + [str(code), '-o', str(binary)], check=True, timeout=120)
+        failed = subprocess.run([str(binary), str(compiler)], capture_output=True, text=True, timeout=180)
+        assert failed.returncode != 0 and 'HY2 runtime selector preserves exact final mode' in failed.stdout + failed.stderr, failed.stdout + failed.stderr
+        print('Rejected ordered app launch defect mutation: hysteria-final-raw-mode')
 
 
 if __name__ == '__main__':

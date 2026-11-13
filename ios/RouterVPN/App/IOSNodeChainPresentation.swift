@@ -71,7 +71,9 @@ enum IOSNodeChainPresentation {
             let matches = catalog.filter { $0.id == node.id }
             guard matches.count == 1, let profile = matches.first,
                   (profile.normalizedNodeKind == "router-vpn" && profile.external == nil &&
-                   (position == nodes.count - 1 ? node.mode == "shadowsocks" : IOSMultihopNodeSelection.supportsNativePrefix(node.mode)) ||
+                   (position == nodes.count - 1 ? node.mode == "shadowsocks" || node.mode == "hysteria2" &&
+                    ["", "off"].contains(profile.startLayer ?? "") &&
+                    points.allSatisfy({ $0.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix($0.mode ?? "") }) : IOSMultihopNodeSelection.supportsNativePrefix(node.mode)) ||
                    nodes.count == 3 && position == 1 && node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile)) else { return nil }
             points.append(IOSNodePathPoint(profile, mode: node.mode))
         }
@@ -79,9 +81,11 @@ enum IOSNodeChainPresentation {
     }
 
     static func active(_ identity: IOSSessionIdentity?) -> [IOSNodePathPoint]? {
-        guard let identity, identity.engine == "multihop-libbox", identity.rawProfile == "shadowsocks",
-              let source = identity.nodeChainSource else { return nil }
-        return captured(source: source, bundleData: identity.bundleData)
+        guard let identity, identity.engine == "multihop-libbox",
+              let source = identity.nodeChainSource,
+              let path = captured(source: source, bundleData: identity.bundleData),
+              identity.rawProfile == path.last?.mode else { return nil }
+        return path
     }
 
     static func captured(source: Data, bundleData: Data) -> [IOSNodePathPoint]? {

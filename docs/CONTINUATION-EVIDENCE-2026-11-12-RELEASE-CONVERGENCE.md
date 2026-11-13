@@ -2002,6 +2002,33 @@ modeled in this unit. Actual encrypted packet prefixes to QUIC/Hysteria2,
 shipping host and UI adoption, installed TUN/firewall behavior and device
 acceptance require separate evidence. Public Darwin admission remains closed.
 
+## iPhone and iPad ordered Hysteria2 final adoption
+
+The native iOS ordered editor now offers an explicit final transport choice
+between SS2022 and paired Hysteria2. Capture, saved profiles, startup launch
+and map/session presentation retain that exact final mode through the existing
+owned multihop runtime. Hysteria2 requires paired WG/AWG preceding nodes and
+Start Layer Off on the final. An imported SS2022 middle still requires an SS
+final; Server/Compare and measured-candidate admission retain their existing
+separate bounds. No PacketTunnel provider or saved-profile format was changed.
+
+The ten shipping/test files were frozen against `4bf0ed8e`, and the actual
+shared Go compiler helpers were built from that same source. All 1,257 shared
+source records matched before and after execution (manifest digest
+`ec9dc7650cb005bb2379c8e782bb25824c664c984465ffed6a155d50f2647d8f`).
+The five original Swift suites passed 1,103 checks and 26 separately compiled
+defect controls: capture 526/4, editor 112/5, launch 165/5, presentation 148/9,
+and profiles 152/3. They preserve wrong-source, changed-private-assets, stale
+selection, ignored-launch-failure, discarded-profile and mismatched active
+final-mode refusals, in addition to the new Hysteria2 cases.
+
+These checks execute shipping source, callbacks and the real shared compiler;
+NetworkExtension, MapKit and persistence boundaries are explicitly doubled.
+SwiftUI source was parsed, while current Xcode/Apple SDK compilation, actual
+PacketTunnel/TUN execution, signed distribution and physical iPhone/iPad
+acceptance remain separate gates. This unit does not grant public ordered
+Darwin desktop admission or establish a completed current release.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

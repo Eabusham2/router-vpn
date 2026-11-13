@@ -15,7 +15,8 @@ struct IOSNodeChainDraft {
         (2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) &&
             nodes.allSatisfy({ $0.id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil }) &&
             Set(nodes.map(\.id)).count == nodes.count && nodes.last?.id == controlID &&
-            nodes.dropLast().enumerated().allSatisfy({ position, node in IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || nodes.count == 3 && position == 1 && node.mode == "shadowsocks" }) && nodes.last?.mode == "shadowsocks"
+            nodes.dropLast().enumerated().allSatisfy({ position, node in IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || nodes.count == 3 && position == 1 && node.mode == "shadowsocks" && nodes.last?.mode == "shadowsocks" }) &&
+            IOSMultihopNodeSelection.nativeFinalModes.contains(nodes.last?.mode ?? "")
     }
 
     mutating func choose(_ id: String, at position: Int) throws {
@@ -39,6 +40,14 @@ struct IOSNodeChainDraft {
             throw IOSMultihopNodeSelection.issue("An ordered route supports at most eight nodes.")
         }
         nodes.insert(.init(id: "", mode: "wg"), at: nodes.count - 1)
+    }
+
+    mutating func chooseFinalMode(_ mode: String) throws {
+        guard !nodes.isEmpty, IOSMultihopNodeSelection.nativeFinalModes.contains(mode),
+              mode == "shadowsocks" || nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) else {
+            throw IOSMultihopNodeSelection.issue("Hysteria2 requires paired WireGuard or AWG2 preceding nodes and Start Layer Off on the final node.")
+        }
+        nodes[nodes.count - 1].mode = mode
     }
 
     mutating func remove(at position: Int) throws {

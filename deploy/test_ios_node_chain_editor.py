@@ -78,9 +78,9 @@ TESTS = r'''
   do{try body()}catch{checks+=1;return};throw IOSMultihopNodeSelection.issue("ACCEPTED "+name)
  }
  // ORIGINAL_COMPILER_SOURCES
- static func setup(_ count:Int=3,_ mixed:Bool=false)throws->RouterVPNModel {
+ static func setup(_ count:Int=3,_ mixed:Bool=false,_ hysteriaPrefix:String="")throws->RouterVPNModel {
   IOSNodeBundleStore.shared.records=[:];IOSDNSRuntimePolicy.beforePatch=nil
-  let nodes=try sources(count,mixed),model=RouterVPNModel();model.bundle=nodes.last!
+  let nodes=try sources(count,mixed,hysteriaPrefix),model=RouterVPNModel();model.bundle=nodes.last!
   for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
   return model
  }
@@ -95,6 +95,24 @@ TESTS = r'''
   catch{FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1)}
  }
  static func run()throws {
+  try runOriginal()
+  for mode in ["wg","awg2-fast","awg2-strong"] {
+   let model=try setup(3,false,mode),owner=try model.captureIOSNodeChainEditorOwner()
+   var draft=IOSNodeChainDraft(saved:model.selectedNodeProfile!.multihopNodes,finalID:owner.controlID)
+   try check("HY2 editor retains selected final and complete paired prefix",draft.canSave && draft.nodes.last?.mode=="hysteria2" && draft.nodes.first?.mode==mode)
+   try draft.chooseFinalMode("shadowsocks");try draft.chooseFinalMode("hysteria2")
+   try model.saveIOSNodeChain(draft.nodes,owner:owner)
+   let captured=try model.captureIOSNodeChain(model.bundle!);defer{try? captured.plan.close()}
+   try check("HY2 editor commits exact original transport",model.writes==1 && captured.members.last?.mode=="hysteria2" && captured.members.last?.id==owner.controlID)
+   let stale=try model.captureIOSNodeChainEditorOwner()
+   model.bundle!.profiles["hysteria2"]!["hy2-ca.pem"]=Data("changed original CA".utf8).base64EncodedString()
+   try reject("HY2 editor changed original CA"){try model.saveIOSNodeChain(draft.nodes,owner:stale)}
+  }
+  var importedDraft=IOSNodeChainDraft(saved:[.init(id:"entry",mode:"wg"),.init(id:"custom",mode:"shadowsocks"),.init(id:"final",mode:"shadowsocks")],finalID:"final")
+  try reject("HY2 final cannot adopt imported middle"){try importedDraft.chooseFinalMode("hysteria2")}
+  for mode in ["wg","naive-h3","Hysteria2",""] {try reject("unsupported final chooser "+mode){try importedDraft.chooseFinalMode(mode)}}
+ }
+ static func runOriginal()throws {
   var draft=IOSNodeChainDraft(finalID:"final")
   try check("new draft pins independently selected final",draft.nodes==[.init(id:"",mode:"wg"),.init(id:"final",mode:"shadowsocks")] && !draft.canSave)
   try draft.choose("entry",at:0)
@@ -231,7 +249,7 @@ def main(selected_mutations=None):
     # directory is included by the real Xcode project, including this view.
     for call in ('draft.choose(id, at: position)', 'draft.move(from: position, to: position - 1)',
                  'draft.move(from: position, to: position + 1)', 'draft.remove(at: position)',
-                 'draft.append()', 'draft.chooseMode(mode, at: position)', 'model.saveIOSNodeChain(draft.nodes, owner: owner)',
+                 'draft.append()', 'draft.chooseFinalMode(mode)', 'draft.chooseMode(mode, at: position)', 'model.saveIOSNodeChain(draft.nodes, owner: owner)',
                  'model.captureIOSNodeChainEditorOwner()'):
         assert call in view, 'shipping editor callback removed: ' + call
     with tempfile.TemporaryDirectory(prefix='.ios-chain-editor-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-chain-editor-') as directory:
@@ -254,6 +272,7 @@ def main(selected_mutations=None):
         late = '        try requireIOSNodeChainEditorOwner(owner, nodes: nodes)'
         compile_source = '        let capture = try captureIOSNodeChain(value)\n        defer { try? capture.plan.close() }\n        _ = try IOSRuntimeSelector.selectNodeChain(capture)'
         mutants = (
+            ('hysteria-final-scope', editor.replace('mode == "shadowsocks" || nodes.dropLast().allSatisfy(', 'true || nodes.dropLast().allSatisfy(', 1), 'ACCEPTED HY2 final cannot adopt imported middle'),
             ('pinned-final', editor.replace('position < nodes.count - 1,\n              id.isEmpty', 'position < nodes.count,\n              id.isEmpty', 1), 'ACCEPTED changing pinned final'),
             ('original-fingerprints', editor.replace('try iosNodeChainEditorFingerprint(node.id) == expected', '!expected.isEmpty', 1), 'ACCEPTED stale editor middle-token'),
             ('late-source-owner', editor[:editor.rindex(late)] + editor[editor.rindex(late):].replace(late, '        // Lost final editor ownership check', 1), 'ACCEPTED source changed during compile preparation middle-token'),
@@ -272,5 +291,5 @@ def main(selected_mutations=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mutation', action='append', choices=['pinned-final', 'original-fingerprints', 'late-source-owner', 'compile-before-save'])
+    parser.add_argument('--mutation', action='append', choices=['hysteria-final-scope', 'pinned-final', 'original-fingerprints', 'late-source-owner', 'compile-before-save'])
     main(parser.parse_args().mutation)

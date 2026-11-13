@@ -29,8 +29,11 @@ extension IOSRuntimeSelector {
                   IOSMultihopNodeSelection.supportsNativePrefix(member.mode) && member.profile["node_kind"] as? String == "router-vpn" ||
                   capture.members.count == 3 && position == 1 && member.mode == "shadowsocks" && member.profile["node_kind"] as? String == "external"
               }),
-              let final = capture.members.last, final.mode == "shadowsocks" else {
-            throw IOSMultihopNodeSelection.issue("This ordered path requires WireGuard or AWG2 nodes followed by a Shadowsocks 2022 final node.")
+              let final = capture.members.last, final.profile["node_kind"] as? String == "router-vpn",
+              final.mode == "shadowsocks" || final.mode == "hysteria2" &&
+                ["", "off"].contains(final.profile["start_layer"] as? String ?? "") &&
+                capture.members.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) && $0.profile["node_kind"] as? String == "router-vpn" }) else {
+            throw IOSMultihopNodeSelection.issue("This Local ordered path needs paired WireGuard or AWG2 nodes followed by Shadowsocks 2022 or unlayered Hysteria2. An imported middle requires a Shadowsocks 2022 final node.")
         }
         return IOSRuntimeSelection(engine: .multihop, logicalModeID: "multihop", rawProfileID: final.mode,
                                    files: [:], nodeChainInput: capture.launchInput)

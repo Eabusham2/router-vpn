@@ -20,6 +20,14 @@ struct IOSNodeChainEditorView: View {
                             LabeledContent("Selected final node", value: available.first(where: { $0.id == node.id })?.name ?? node.id)
                             Text("Choose a different final node from the main node selector before opening this editor.")
                                 .font(.caption).foregroundStyle(.secondary)
+                            Picker("Final transport", selection: Binding(
+                                get: { draft.nodes[position].mode },
+                                set: { mode in change { try draft.chooseFinalMode(mode) } }
+                            )) {
+                                ForEach(IOSMultihopNodeSelection.nativeFinalModes, id: \.self) { mode in
+                                    Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
+                                }
+                            }
                         } else {
                         Picker("Node \(position + 1)", selection: Binding(
                             get: { draft.nodes[position].id },
@@ -61,7 +69,7 @@ struct IOSNodeChainEditorView: View {
                 Button("Add preceding node") { change { try draft.append() } }.disabled(draft.nodes.count >= IOSMultihopNodeSelection.maximumNodes)
             }
             Section("Local execution") {
-                Text("Traffic follows this order through one VPN connection. Paired preceding nodes use WireGuard or AWG2. A three-node route may use one saved literal Shadowsocks 2022 custom node (AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305) in the middle, with Start Layer Off. The selected final Router node uses Shadowsocks 2022.")
+                Text("Traffic follows this order through one VPN connection. Paired preceding nodes use WireGuard or AWG2. The selected final Router node can use Shadowsocks 2022 or Hysteria2; Hysteria2 requires Start Layer Off on that final node. A three-node route with one saved Shadowsocks 2022 custom middle (AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305, Start Layer Off) still requires a Shadowsocks 2022 final node.")
                 Text("Each node keeps its own saved credentials, Start Layer and protection settings. DNS uses the final node. Every node must pass verification before Connected.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Save ordered route") {

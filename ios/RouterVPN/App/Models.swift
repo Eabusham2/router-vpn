@@ -618,6 +618,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
 
     static let maximumNodes = 8
     static let nativePrefixModes = ["wg", "awg2-fast", "awg2-strong"]
+    static let nativeFinalModes = ["shadowsocks", "hysteria2"]
 
     static func supportsNativePrefix(_ mode: String) -> Bool {
         nativePrefixModes.contains(mode)
@@ -629,6 +630,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         case "awg2-fast": return "AWG2 Fast"
         case "awg2-strong": return "AWG2 Strong"
         case "shadowsocks": return "Shadowsocks 2022"
+        case "hysteria2": return "Hysteria2"
         default: return "Saved transport: \(mode)"
         }
     }
