@@ -22,6 +22,11 @@ if($NegativeControl-ceq'add-mode'){$Editor=$Editor.Replace('id=[string]$availabl
 if($NegativeControl-ceq'change-mode'){$Editor=$Editor.Replace('id=$rows[$position].id;mode=$mode',"id=`$rows[`$position].id;mode='wg'")}
 if($NegativeControl-ceq'final-mode'){$Editor=$Editor.Replace('mode=[string]$finalMode.SelectedValue',"mode='shadowsocks'")}
 if($NegativeControl-ceq'row-label'){$Editor=$Editor.Replace('(Get-RouterVPNOrderedModeTitle $node.mode)',"'WireGuard'")}
+if($NegativeControl-ceq'socks-mode'){
+    $anchor='$mode=Get-RouterVPNOrderedImportedMode $available.SelectedItem'
+    if(([regex]::Matches($Editor,[regex]::Escape($anchor))).Count-ne1){throw 'Shipping SOCKS Add anchor changed.'}
+    $Editor=$Editor.Replace($anchor,'$mode=''shadowsocks''')
+}
 $EditorAST=([ScriptBlock]::Create($Editor)).Ast
 function Callback([string]$Name){
     $target='$dialog.FindName('''+$Name+''')'
@@ -70,8 +75,8 @@ try{
         $found=@($EditorAST.FindAll({param($n)$n-is[Management.Automation.Language.AssignmentStatementAst]-and$n.Left.Extent.Text-ceq$name},$true))
         if($found.Count-ne1){throw ('Shipping mode initialization missing: '+$name)};. ([ScriptBlock]::Create($found[0].Extent.Text))
     }
-    Check (($prefixMode.ItemsSource.id-join',')-ceq'wg,awg2-fast,awg2-strong,shadowsocks') 'mode picker offered an unsupported or normalized transport'
-    foreach($invalid in @('WG','AWG2-FAST','awg','awg2-pq','wg-pq','shadowsocks',' awg2-fast','awg2-strong ',$null,1)){
+    Check (($prefixMode.ItemsSource.id-join',')-ceq'wg,awg2-fast,awg2-strong,shadowsocks,socks5') 'mode picker offered an unsupported or normalized transport'
+    foreach($invalid in @('WG','AWG2-FAST','awg','awg2-pq','wg-pq','shadowsocks','socks5',' awg2-fast','awg2-strong ',$null,1)){
         $refused=$false;try{[void](Copy-RouterVPNOrderedNodes @([pscustomobject]@{id='prefix-0';mode=$invalid},[pscustomobject]@{id=$id;mode='shadowsocks'}) $id)}catch{$refused=$true}
         Check $refused 'raw ordered mode whitelist admitted an alias or unsupported transport'
     }
@@ -156,6 +161,32 @@ try{
     $custom.profile_token=('d'*64)
     $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $customSaved $store)}catch{$rejected=$true};Check $rejected 'relinked custom source retained admission'
     # The same visible editor now selects a distinct paired final transport.
+    $rows.Clear();$finalMode.SelectedIndex=0
+    $socks=[pscustomobject]@{id='socks-middle';name='Original SOCKS5';node_kind='external';profile_token=('e'*64);external=[pscustomobject]@{protocol='socks5';ordered_middle_supported=$true}}
+    $store.profiles+=$socks;$script:CurrentStore=$store;&$refresh
+    $available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),'prefix-0');$prefixMode.SelectedIndex=1;&$add
+    $available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),'socks-middle');&$add
+    Check ($rows.Count-eq2-and$rows[1].id-ceq'socks-middle'-and$rows[1].mode-ceq'socks5') 'SOCKS Add substituted its saved transport'
+    Check (($finalMode.ItemsSource.id-join',')-ceq'shadowsocks') 'SOCKS middle offered an unsupported final'
+    $list.SelectedIndex=1;$prefixMode.SelectedIndex=3;&$changeMode
+    Check ($rows[1].mode-ceq'socks5') 'SOCKS Change mode substituted Shadowsocks'
+    &$apply;$socksSaved=$rootControls['UnifiedNodeChainButton'].Tag
+    $socksPayload=New-RouterVPNOrderedConnectPayload $socksSaved $store
+    Check (($socksPayload.nodes.mode-join',')-ceq'awg2-fast,socks5,shadowsocks'-and$socksPayload.execution-ceq'local') 'SOCKS Connect lost complete Local ordering'
+    Check ($socksPayload.expected_profile_tokens['socks-middle']-ceq('e'*64)) 'SOCKS Connect lost original source token'
+    Check ($rootControls['UnifiedNodeChainSummary'].Text.Contains('SOCKS5')) 'SOCKS summary concealed selected transport'
+    foreach($foreign in @('shadowsocks','SOCKS5','socks5 ','http-connect')){
+        $socks.external.protocol=$foreign;$rejected=$false
+        try{[void](New-RouterVPNOrderedConnectPayload $socksSaved $store)}catch{$rejected=$true}
+        Check $rejected 'SOCKS Connect accepted a different saved transport'
+    }
+    $socks.external.protocol='socks5';$socks.external.ordered_middle_supported=$false
+    $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $socksSaved $store)}catch{$rejected=$true};Check $rejected 'SOCKS Connect ignored native capability'
+    $socks.external.ordered_middle_supported=$true
+    $swapped=[pscustomobject]@{control_id=$id;profile_tokens=$socksSaved.profile_tokens;nodes=@($socksSaved.nodes[1],$socksSaved.nodes[0],$socksSaved.nodes[2])}
+    $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $swapped $store)}catch{$rejected=$true};Check $rejected 'SOCKS middle became physical entry'
+    $socks.profile_token=('f'*64)
+    $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $socksSaved $store)}catch{$rejected=$true};Check $rejected 'SOCKS relinking retained old draft authority'
     $rows.Clear();$finalMode.SelectedIndex=0;&$refresh
     $available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),'prefix-0');$prefixMode.SelectedIndex=2;&$add
     Check (($finalMode.ItemsSource.id-join',')-ceq'shadowsocks,hysteria2') 'unlayered paired final choices omitted Hysteria2'
@@ -180,7 +211,7 @@ try{
     $mixed=@([pscustomobject]@{id='prefix-0';mode='wg'},[pscustomobject]@{id='custom-middle';mode='shadowsocks'},[pscustomobject]@{id=$id;mode='hysteria2'})
     $rejected=$false;try{[void](Copy-RouterVPNOrderedNodes $mixed $id)}catch{$rejected=$true};Check $rejected 'imported schema two acquired Hysteria2 final authority'
     if(-not$NegativeControl){
-        $controls=@{'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary'}
+        $controls=@{'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary'}
         foreach($key in $controls.Keys){
             $command="try { & '"+$PSCommandPath.Replace("'","''")+"' -Root '"+$Root.Replace("'","''")+"' -NegativeControl '"+$key+"' } catch { [Console]::Error.WriteLine(`$_.Exception.Message); exit 1 }"
             $child=New-Object Diagnostics.Process
@@ -192,7 +223,8 @@ try{
                 [void]$child.Start();$stdout=$child.StandardOutput.ReadToEndAsync();$stderr=$child.StandardError.ReadToEndAsync()
                 if(-not$child.WaitForExit(45000)){$child.Kill();throw ('Causal editor child exceeded its bound: '+$key)}
                 $output=$stdout.GetAwaiter().GetResult()+$stderr.GetAwaiter().GetResult()
-                Check ($child.ExitCode-ne0-and$output.Contains($controls[$key])) ('causal control missed its exact defect: '+$key)
+                Check ($child.ExitCode-eq1-and$output.Contains($controls[$key])) ('causal control missed its exact defect: '+$key)
+                Write-Output ('Actual ordered editor causal control '+$key+': rejected')
             }finally{$child.Dispose()}
         }
     }

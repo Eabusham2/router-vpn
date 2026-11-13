@@ -44,6 +44,7 @@ def main():
     assert 'linux_profile_choose_hops_v11' in block(profiles, 'static void linux_install_connection_profiles_v11(')
     original = (HERE/'routervpn-ordered-nodes-v1.inc').read_text()
     controls = [
+        ('socks-mode', 'g_strdup(linux_ordered_imported_v1(profile) ? linux_ordered_imported_mode_v1(profile) : "wg")', 'g_strdup(linux_ordered_imported_v1(profile) ? "shadowsocks" : "wg")', 'SOCKS Add substituted its saved transport'),
         ('final-mode', 'strcmp(linux_ordered_string_v1(payload, "mode"), linux_ordered_string_v1(json_array_get_object_element(nodes, json_array_get_length(nodes) - 1), "mode")) != 0', 'FALSE', 'different final mode borrowed committed receipt'),
         ('source-token', 'strcmp(linux_ordered_string_v1(profile, "profile_token"), linux_ordered_string_v1(selection->tokens, id)) != 0', 'FALSE', 'replaced middle source connected'),
         ('generation', 'owned->generation == generation &&', '(void)generation,', 'late choice applied'),
@@ -82,7 +83,7 @@ def main():
                 assert 'CRITICAL' not in output and 'WARNING' not in output, output
                 print(output.strip())
             else:
-                assert result.returncode != 0 and witness in output, f'{name}: {output}'
+                assert result.returncode == 1 and witness in output, f'{name}: {output}'
                 print('GTK ordered causal control '+name+': rejected')
 
 

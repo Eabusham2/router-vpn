@@ -58,5 +58,27 @@ class PowerShellDiagnosticVerdict(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Negative did not fail"):
             self.classify(WRAPPED, code=0)
 
+    def test_only_the_original_assertion_exit_one_is_accepted(self):
+        for code in (2, 124, 125, -4, -6, -9, -11, 3221225477):
+            with self.subTest(code=code), self.assertRaisesRegex(RuntimeError, "Negative did not fail"):
+                self.classify(WRAPPED, code=code)
+
+    def test_late_crash_cannot_borrow_an_earlier_assertion(self):
+        for crash in ("panic: late native failure", "fatal error: late runtime failure",
+                      "Fatal: native cleanup failed", "Segmentation fault",
+                      "*** Signal 4: Backtracing", "SIGSEGV", "SIGABRT", "SIGBUS"):
+            with self.subTest(crash=crash), self.assertRaisesRegex(RuntimeError, "Negative did not fail"):
+                self.classify(WRAPPED + "\n" + crash, code=1)
+
+    def test_timeout_preserves_original_exception_and_bound(self):
+        command = ["captured-pwsh"]
+        expired = subprocess.TimeoutExpired(command, 90, output="PROFILE-CHECK: " + WITNESS)
+        with patch.object(G.subprocess, "run", side_effect=expired) as original:
+            with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                G.run(command, negative=True, witness=WITNESS)
+        self.assertIs(caught.exception, expired)
+        original.assert_called_once_with(command, cwd=G.ROOT, text=True,
+                                         capture_output=True, timeout=90)
+
 if __name__ == "__main__":
     unittest.main()

@@ -112,6 +112,13 @@ static gboolean drive_editor(gpointer data) {
         check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"shadowsocks")==0,"custom middle acquired paired transport");
         choose(transport,"wg");check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"shadowsocks")==0,"custom middle accepted paired mode");
         gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_APPLY);
+    } else if(editor_case==9) {
+        choose(candidate,"n1");click(d,"Add entry / hop");choose(transport,"awg2-fast");
+        choose(candidate,"n2");click(d,"Add entry / hop");
+        check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"socks5")==0,"SOCKS Add substituted its saved transport");
+        choose(transport,"shadowsocks");check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"socks5")==0,"SOCKS Change mode substituted Shadowsocks");
+        select_row(list,2);choose(transport,"hysteria2");check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"shadowsocks")==0,"SOCKS middle admitted an unsupported final");
+        gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_APPLY);
     } else if(editor_case==7) {
         choose(candidate,"n1");click(d,"Add entry / hop");choose(transport,"awg2-fast");
         select_row(list,1);choose(transport,"hysteria2");
@@ -239,6 +246,27 @@ int main(int argc,char **argv) {
     before=posts;linux_profile_connect_v11(NULL,&state);check(posts==before+1,"custom editor did not reach shipping Connect");
     request=parse_json(last_body);q=json_node_get_object(request);check(strcmp(obj_string(json_array_get_object_element(linux_ordered_array_v1(q,"nodes"),1),"mode"),"shadowsocks")==0,"custom Connect invented paired transport");json_node_free(request);
     json_object_set_boolean_member(external,"ordered_middle_supported",FALSE);before=posts;linux_profile_connect_v11(NULL,&state);check(posts==before,"unsupported custom source retained Connect authority");json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);
+    json_object_set_string_member(external,"protocol","socks5");
+    refresh_all(&app);edit(9,TRUE);check(owned->selection!=NULL&&linux_ordered_current_v1(owned->selection,json_node_get_object(catalog)),"SOCKS editor Apply lost original source");
+    before=posts;linux_profile_connect_v11(NULL,&state);check(posts==before+1,"SOCKS editor did not reach shipping Connect");
+    request=parse_json(last_body);q=json_node_get_object(request);
+    check(strcmp(obj_string(json_array_get_object_element(linux_ordered_array_v1(q,"nodes"),1),"mode"),"socks5")==0&&strcmp(obj_string(q,"execution"),"local")==0,"SOCKS Connect lost complete Local ordering");
+    check(strcmp(linux_ordered_string_v1(linux_ordered_object_v1(q,"expected_profile_tokens"),"n2"),obj_string(custom,"profile_token"))==0,"SOCKS Connect lost original source token");json_node_free(request);
+    char *socks_saved=snapshot();profiles(0);linux_ordered_store_v1(owned,NULL,FALSE);profiles(1);
+    after=snapshot();check(strcmp(socks_saved,after)==0,"SOCKS Save Load Update replaced original typed selection");g_free(after);
+    const char *foreign_protocols[]={"shadowsocks","SOCKS5","socks5 ","http-connect"};
+    for(guint i=0;i<G_N_ELEMENTS(foreign_protocols);i++){
+        json_object_set_string_member(external,"protocol",foreign_protocols[i]);
+        check(!linux_ordered_current_v1(owned->selection,json_node_get_object(catalog)),"SOCKS selection accepted a changed source transport");
+    }
+    json_object_set_string_member(external,"protocol","socks5");
+    json_object_set_boolean_member(external,"ordered_middle_supported",FALSE);before=posts;linux_profile_connect_v11(NULL,&state);check(posts==before,"SOCKS Connect ignored native capability");json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);
+    char *socks_token=g_strdup(obj_string(custom,"profile_token"));json_object_set_string_member(custom,"profile_token","eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+    check(!linux_ordered_current_v1(owned->selection,json_node_get_object(catalog)),"SOCKS relinking retained old draft authority");json_object_set_string_member(custom,"profile_token",socks_token);g_free(socks_token);
+    JsonObject *socks_entry=json_array_get_object_element(owned->selection->nodes,0);char *socks_entry_mode=g_strdup(obj_string(socks_entry,"mode"));
+    json_object_set_string_member(socks_entry,"mode","socks5");check(!linux_ordered_rows_v1(owned->selection->nodes,"exit"),"SOCKS middle became physical entry");
+    json_object_set_string_member(socks_entry,"mode",socks_entry_mode);g_free(socks_entry_mode);
+    g_free(socks_saved);json_object_set_string_member(external,"protocol","shadowsocks");
     refresh_all(&app);edit(7,TRUE);check(owned->selection!=NULL&&strcmp(obj_string(json_array_get_object_element(owned->selection->nodes,1),"mode"),"hysteria2")==0,"editor did not retain Hysteria2 final");
     g_free(original);original=snapshot();edit(8,FALSE);after=snapshot();check(strcmp(original,after)==0,"cancel replaced selected Hysteria2 final");g_free(after);
     before=posts;linux_profile_connect_v11(NULL,&state);check(posts==before+1,"Hysteria2 path did not reach Connect");request=parse_json(last_body);q=json_node_get_object(request);check(strcmp(obj_string(json_array_get_object_element(linux_ordered_array_v1(q,"nodes"),1),"mode"),"hysteria2")==0,"Connect replaced Hysteria2 final");json_node_free(request);

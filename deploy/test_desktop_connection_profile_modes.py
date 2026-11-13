@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,17 +45,25 @@ def behavioral_diagnostic(output):
     return " ".join(plain.split())
 
 
-def run(command, *, negative=False, witness=None):
+def run(command, *, negative=False, witness=None, observation=None):
+    started = time.monotonic()
+    if observation is not None:
+        print("Native profile fixture started: " + observation, flush=True)
     result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=90)
+    if observation is not None:
+        print("Native profile fixture finished: " + observation +
+              "; exit=" + str(result.returncode) +
+              "; elapsed=" + format(time.monotonic() - started, ".3f"), flush=True)
     output = result.stdout + result.stderr
     if negative:
         diagnostic = behavioral_diagnostic(output)
-        if result.returncode == 0 or "PROFILE-CHECK:" not in diagnostic or (witness and witness not in diagnostic):
+        crashed = re.search(r"(?i)(?:\b(?:panic|fatal(?: error)?):|\bsegmentation fault\b|\b(?:SIGABRT|SIGSEGV|SIGILL|SIGBUS)\b|\*\*\*\s*Signal\s+\d+)", diagnostic)
+        if result.returncode != 1 or crashed or "PROFILE-CHECK:" not in diagnostic or (witness and witness not in diagnostic):
             raise RuntimeError("Negative did not fail on a behavioral assertion:\n" + output)
     elif result.returncode:
         raise RuntimeError("Shipping fixture failed:\n" + output)
     elif output.strip():
-        print(output.strip())
+        print(output.strip(), flush=True)
 
 
 def windows(shell):
@@ -70,13 +79,14 @@ def windows(shell):
         "setup-uncertain-owner": "Uncertain Load retained the old selected-node authority",
     }
     for mutation in ("shipping", "capture-two-modes", "load-fallback", "connect-fallback", "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback", "startup-deadline", "ordered-drop-middle", "ordered-final-owner", "ordered-capability", "ordered-source", "ordered-locked-source", "setup-expectation", "setup-current-receipt", "setup-response-source", "setup-response-order", "setup-load-inventory", "setup-refresh-retirement", "setup-uncertain-owner"):
-        run(command + ["-Mutation", mutation], negative=mutation != "shipping", witness=setup_witnesses.get(mutation))
-    print("WPF pair and ordered capture, setup ownership/response, load/Connect, capability and startup deadline negatives: 19 rejected")
+        run(command + ["-Mutation", mutation], negative=mutation != "shipping",
+            witness=setup_witnesses.get(mutation), observation="profile:" + mutation)
+    print("WPF pair and ordered capture, setup ownership/response, load/Connect, capability and startup deadline negatives: 19 rejected", flush=True)
     editor = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
               str(ROOT / "client/test-windows-ordered-editor.ps1")]
     if os.name == "nt":
         editor.append("-WPF")
-    run(editor)
+    run(editor, observation="ordered-editor")
 
 
 SWIFT_BOUNDARIES = r'''
