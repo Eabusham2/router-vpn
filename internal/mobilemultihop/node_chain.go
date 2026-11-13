@@ -84,6 +84,7 @@ type NodeChain struct {
 	sourceJSON, sourceSHA, config, metadata, seal string
 	nodes                                         []*NodeProfile
 	importedMiddle                                *nodeChainImportedMember
+	socksSource                                   *NodeChainSOCKSSource
 	proofs                                        []NodeChainProof
 	dns                                           NodeChainDNSCapture
 	physical                                      []PhysicalEgress
@@ -275,8 +276,14 @@ func (c *NodeChain) validateCapture() error {
 	if c == nil || c.seal == "" || c.captureSeal() != c.seal || len(c.nodes) != len(c.proofs) {
 		return nodeChainError
 	}
+	if c.socksSource != nil && c.validateSOCKSSource() != nil {
+		return nodeChainError
+	}
 	for position, node := range c.nodes {
 		proof := c.proofs[position]
+		if position == 1 && c.socksSource != nil {
+			continue // The exact source, nil middle and complete proof inventory were validated above.
+		}
 		if position == 1 && c.importedMiddle != nil {
 			m := c.importedMiddle
 			if node != nil || m.validate() != nil || proof.Position != 1 || proof.ProfileID != m.id() || proof.SourceSHA256 != m.source || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" || proof.Mode != "shadowsocks" || proof.StartLayer != "off" {
@@ -324,7 +331,7 @@ func (c *NodeChain) PhysicalEgress() ([]PhysicalEgress, error) {
 }
 
 func (c *NodeChain) LaunchInput() (string, error) {
-	if c.validateCapture() != nil {
+	if c.validateCapture() != nil || c.socksSource != nil {
 		return "", nodeChainError
 	}
 	var source NodeChainSource

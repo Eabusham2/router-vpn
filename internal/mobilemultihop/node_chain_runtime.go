@@ -125,6 +125,9 @@ func (c *NodeChain) currentContext(ctx context.Context, selected bool) error {
 	if observed != identity {
 		return errors.New("ordered chain native source, session or network changed")
 	}
+	if err := c.observeSOCKSMiddleContext(ctx, engine); err != nil {
+		return err
+	}
 	if selected {
 		actual, err := engine.SelectedContext(ctx)
 		if err != nil {
@@ -186,8 +189,8 @@ func (c *NodeChain) provePrefix(parent context.Context, position int) (time.Dura
 	if err != nil {
 		return 0, err
 	}
-	if position == 1 && c.importedMiddle != nil {
-		if err := proveExternalPublicIP(ctx, c.dial, proof.Tag, c.importedMiddle.selection.ExpectedPublicIP, c.runtime.testTLS); err != nil {
+	if position == 1 && c.hasImportedMiddle() {
+		if err := proveExternalPublicIP(ctx, c.dial, proof.Tag, c.importedMiddlePublicIP(), c.runtime.testTLS); err != nil {
 			return 0, err
 		}
 	} else {
@@ -331,6 +334,9 @@ func (c *NodeChain) Run(parent context.Context, engine NodeChainEngine) (failure
 	identity, err := engine.ObserveChainContext(ctx)
 	if err != nil || !c.identityMatches(identity) {
 		return errors.Join(ctx.Err(), err, errors.New("ordered chain native capture differs from its original source"))
+	}
+	if err := c.observeSOCKSMiddleContext(ctx, engine); err != nil {
+		return err
 	}
 	if err := externalObservationLock(ctx, &c.runtime.mu); err != nil {
 		return err
