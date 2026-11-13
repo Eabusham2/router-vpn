@@ -32,6 +32,11 @@ type DesktopNodeReadyRecord struct {
 }
 
 func (r DesktopNodeReadyRecord) Validate(policy DesktopPhysicalPolicy, transfer string) error {
+	// A private prefix never opens application/DNS ingress or proves the saved
+	// final. Even exact positive fields cannot upgrade its distinct purpose.
+	if _, prefixOnly := policy.(*DesktopNodeCandidatePreparationPolicy); prefixOnly {
+		return errors.New("candidate prefix preparation cannot become ordinary Router readiness")
+	}
 	if policy == nil || policy.Validate() != nil || !proofID.MatchString(transfer) {
 		return errors.New("native Router readiness lost its captured policy")
 	}

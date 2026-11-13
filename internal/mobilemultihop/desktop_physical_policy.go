@@ -44,6 +44,8 @@ func ReadDesktopPhysicalPolicy(policy DesktopPhysicalPolicy) (string, DesktopPhy
 		return policy.PhysicalReadValidated()
 	case *DesktopNodeChainExecutionPhysicalPolicy:
 		return policy.PhysicalReadValidated()
+	case *DesktopNodeCandidatePreparationPolicy:
+		return policy.PhysicalReadValidated()
 	default:
 		return "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, errors.New("native physical policy has no admitted sealed constructor")
 	}

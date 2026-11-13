@@ -1230,6 +1230,27 @@ and the aggregate runtime contract. Service ownership, catalog lifetime,
 temporary TUN cleanup and the public prefix-only UI flow remain separate work;
 these source checks are not encrypted packet or physical-device acceptance.
 
+## Distinct desktop prefix source and physical policy
+
+Desktop prefix preparation now has its own sealed source constructor and
+strict parser. It derives executable lower endpoints only from the selected
+packet prefix, retaining the complete saved graph as protection restrictions
+and explicit-Save provenance. Its physical metadata is `node-candidate-prefix`;
+application/DNS ingress stays closed. The generic mobile source parser cannot
+accept this desktop projection, and the desktop parser cannot accept a generic
+prefix or an ordinary full-chain launch. Public macOS admission is unchanged.
+
+The policy has explicit physical and empty-cover reader arms. Ordinary Router
+readiness now explicitly rejects this distinct policy, even when a supplied
+record otherwise has matching positive DNS/interface fields. Seven new policy
+roots and seven existing ordinary-readiness roots passed under the race
+detector in 33.936 seconds. Coverage includes all three desktop OS policies,
+WG/AWG Fast/AWG Strong, both selected prefix positions, source reconstruction,
+independent query copies and invalid/restored MTU bounds. A compiled control
+removing the explicit ordinary-Ready refusal failed at both original Linux
+and Windows false-upgrade witnesses. Native child execution, owned teardown,
+API integration and public UI activation are separate subsequent work.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

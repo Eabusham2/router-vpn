@@ -57,6 +57,12 @@ func ReadDesktopPhysicalCoverPolicy(policy DesktopPhysicalPolicy) ([]DesktopNode
 			return nil, "", err
 		}
 		return desktopPhysicalCoverPolicy(config, meta.NodeID)
+	case *DesktopNodeCandidatePreparationPolicy:
+		config, meta, _, err := original.PhysicalReadValidated()
+		if err != nil {
+			return nil, "", err
+		}
+		return desktopPhysicalCoverPolicy(config, meta.NodeID)
 	default:
 		return nil, "", errors.New("cover requires an original sealed physical policy")
 	}
