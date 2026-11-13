@@ -181,12 +181,75 @@ def selection(source,sha,output):
     full_history_version(source)
     return record,raw
 
+def require_pristine_candidate(source, sha, expected):
+    if (CORE.git(source,"rev-parse","HEAD").decode().strip()!=sha or
+            CORE.snapshot(source)!=expected or
+            CORE.git(source,"status","--porcelain","--untracked-files=all") or
+            CORE.git(source,"ls-files","--others","--ignored","--exclude-standard","-z")):
+        raise ValueError("Original SDK candidate is no longer pristine")
+
+class OwnedBuildCheckout:
+    """Own one independent build tree; never clean the selected source."""
+    def __init__(self, source, output, sha, expected, version, parent=None):
+        self.source=Path(source).resolve(strict=True)
+        self.evidence=Path(output).absolute().parent.resolve()
+        self.sha,self.expected,self.version=sha,expected,version
+        require_pristine_candidate(self.source,sha,expected)
+        self.tree=CORE.git(self.source,"rev-parse","HEAD^{tree}").decode().strip()
+        temporary=Path(parent if parent is not None else os.environ.get("RUNNER_TEMP",tempfile.gettempdir())).resolve(strict=True)
+        if (temporary==self.source or self.source in temporary.parents or
+                temporary==self.evidence or self.evidence in temporary.parents):
+            raise ValueError("SDK build workspace must be outside source and uploaded evidence")
+        self.root=Path(tempfile.mkdtemp(prefix="routervpn-android-sdk-build-",dir=temporary))
+        state=self.root.lstat()
+        self.identity=(state.st_dev,state.st_ino)
+        self.path=self.root/"checkout"
+        self.prepared=False
+
+    def prepare(self, run):
+        run("clone-owned-build-source",
+            ["git","clone","--no-local","--no-hardlinks","--no-checkout","--",self.source.as_uri(),str(self.path)],
+            120,self.root)
+        run("checkout-owned-build-source",["git","checkout","--detach",self.sha],60,self.path)
+        if (self.path/".git").is_symlink() or not (self.path/".git").is_dir() or (self.path/".git/objects/info/alternates").exists():
+            raise ValueError("SDK build source is not an independently owned clone")
+        self.prepared=True
+        result=self.verify()
+        if CORE.git(self.path,"ls-files","--others","--ignored","--exclude-standard","-z"):
+            raise ValueError("Fresh SDK build clone already contains generated files")
+        return result
+
+    def verify(self):
+        if not self.prepared:
+            raise ValueError("SDK build clone was never captured")
+        require_pristine_candidate(self.source,self.sha,self.expected)
+        if (CORE.git(self.path,"rev-parse","HEAD").decode().strip()!=self.sha or
+                CORE.git(self.path,"rev-parse","HEAD^{tree}").decode().strip()!=self.tree or
+                full_history_version(self.path)!=self.version or
+                CORE.snapshot(self.path)!=self.expected or
+                CORE.git(self.path,"status","--porcelain","--untracked-files=all")):
+            raise ValueError("Owned SDK build clone changed its original tracked source or history")
+        return dict(source_sha=self.sha,source_tree=self.tree,complete_history=True,
+                    version_code=self.version,tracked_file_count=len(self.expected),
+                    independent_clone=True,build_path=str(self.path),
+                    generated_files_outside_candidate=True,generated_files_outside_evidence=True)
+
+    def cleanup(self, joined):
+        if not joined:
+            return dict(joined=False,removed=False,retained_path=str(self.root))
+        state=self.root.lstat()
+        if self.root.is_symlink() or not self.root.is_dir() or (state.st_dev,state.st_ino)!=self.identity:
+            raise ValueError("Original SDK build workspace identity changed before cleanup")
+        shutil.rmtree(self.root)
+        return dict(joined=True,removed=True)
+
 def validate(source,sha,output,gradle,sdk):
     source=Path(source).resolve(strict=True);output=Path(output).absolute();sdk=Path(sdk).resolve(strict=True)
     if output.exists() or output.is_symlink() or output==source or source in output.parents:
         raise ValueError("SDK output must be fresh and outside candidate")
     selected,selection_bytes=selection(source,sha,output)
     before=CORE.snapshot(source)
+    require_pristine_candidate(source,sha,before)
     if platform.system()!="Linux" or platform.machine()!="x86_64":raise ValueError("SDK gate requires Ubuntu amd64")
     for tool in (gradle,"go","java","javac","javap","jar","rustup","cmake","ninja","clang","make","autoconf","automake","libtoolize","pkg-config","perl","patch","git","unzip"):
         if not shutil.which(tool):raise ValueError("Original Android build dependency is missing: "+tool)
@@ -205,24 +268,31 @@ def validate(source,sha,output,gradle,sdk):
         native_traffic_accepted=False,source_file_mutation_allowed=False,phases=[],
         trusted_executor_sha256=sha_file(CORE_PATH),scope="actual-generated-Android-AAR-and-shipping-Java-Gradle-APK")
     def save():(output/"progress.json").write_text(json.dumps(receipt,indent=2)+"\n")
-    def run(name,command,bound):
+    workspace=None;work=source;children_joined=True
+    def run(name,command,bound,cwd=None):
+        nonlocal children_joined
         log=output/(name+".log");start=time.monotonic()
-        code,timed_out,joined=CORE.execute(command,source,env,log,bound)
+        children_joined=False
+        code,timed_out,joined=CORE.execute(command,work if cwd is None else cwd,env,log,bound)
+        children_joined=joined
         receipt["phases"].append(dict(name=name,command=command,seconds=time.monotonic()-start,outer_seconds=bound,
             exit=code,timed_out=timed_out,process_group_joined=joined,log_sha256=sha_file(log)));save()
         if code!=0 or timed_out or not joined:raise ValueError("Original SDK phase failed or did not join: "+name)
         return log.read_bytes()
     save()
     try:
+        workspace=OwnedBuildCheckout(source,output,sha,before,version)
+        receipt["build_checkout"]=workspace.prepare(run);save()
+        work=workspace.path
         gradle_version=run("gradle-version",[gradle,"--version"],60).decode("utf-8","strict")
         if len(re.findall(r"^Gradle 9\.5\.0$",gradle_version,re.M))!=1:raise ValueError("Original Gradle9.5.0 is required")
-        run("original-debug-delivery",[sys.executable,str(source/"android/build-delivery.py"),"--root",str(source/"android"),"--gradle",gradle],BUILD_SECONDS)
-        aar=regular(source/"android/app/libs/libbox.aar")
-        apk=regular(source/"android/app/build/outputs/routervpn/app-debug.apk")
+        run("original-debug-delivery",[sys.executable,str(work/"android/build-delivery.py"),"--root",str(work/"android"),"--gradle",gradle],BUILD_SECONDS)
+        aar=regular(work/"android/app/libs/libbox.aar")
+        apk=regular(work/"android/app/build/outputs/routervpn/app-debug.apk")
         built_aar=sha_file(aar);built_apk=sha_file(apk)
-        run("canonical-aar-readback",["bash",str(source/"android/build-sing-box-libbox.sh")],READBACK_SECONDS)
+        run("canonical-aar-readback",["bash",str(work/"android/build-sing-box-libbox.sh")],READBACK_SECONDS)
         if sha_file(aar)!=built_aar or sha_file(apk)!=built_apk:raise ValueError("Readback rebuilt or replaced the assembled native package")
-        if (source/"android/app/libs/libxray.aar").exists():raise ValueError("Standalone second Go runtime remains")
+        if (work/"android/app/libs/libxray.aar").exists():raise ValueError("Standalone second Go runtime remains")
         libraries,classes=archive_shape(aar,apk)
         classes_path=output/"captured-classes.jar";classes_path.write_bytes(classes);classes_sha=sha_file(classes_path)
         plan=run("generated-socks-api",["javap","-classpath",str(classes_path),PACKAGE+"RouterNodeChainSOCKS"],60)
@@ -236,22 +306,34 @@ def validate(source,sha,output,gradle,sdk):
         if delivered!=original:raise ValueError("Original assembled delivery receipt changed")
         receipt["delivery"]=delivered;receipt["native_libraries"]=libraries
         receipt["artifacts"]=[]
-        for path in (aar,apk,apk.parent/"android-delivery.json",source/"android/app/libs/libbox.commit",source/"android/app/libs/libbox.openvpn.sha256",source/"android/app/libs/amneziawg-tunnel.commit",source/"android/app/libs/rosenpass-native/source.json"):
-            path=regular(path);receipt["artifacts"].append(dict(path=str(path.relative_to(source)),bytes=path.stat().st_size,sha256=sha_file(path)))
+        for path in (aar,apk,apk.parent/"android-delivery.json",work/"android/app/libs/libbox.commit",work/"android/app/libs/libbox.openvpn.sha256",work/"android/app/libs/amneziawg-tunnel.commit",work/"android/app/libs/rosenpass-native/source.json"):
+            path=regular(path);receipt["artifacts"].append(dict(path=str(path.relative_to(work)),bytes=path.stat().st_size,sha256=sha_file(path)))
         artifacts=output/"artifacts";artifacts.mkdir(mode=0o700)
         for original_path,name in ((aar,"libbox.aar"),(apk,"app-debug.apk"),(apk.parent/"android-delivery.json","android-delivery.json")):
             captured=artifacts/name;shutil.copyfile(original_path,captured)
             if sha_file(captured)!=sha_file(original_path):raise ValueError("Owned SDK artifact copy changed")
-        if CORE.snapshot(source)!=before or CORE.git(source,"status","--porcelain","--untracked-files=all"):
-            raise ValueError("Candidate source changed during the original SDK build")
+        receipt["build_checkout_after"]=workspace.verify()
+        require_pristine_candidate(source,sha,before)
         if (output.parent/"selection.json").read_bytes()!=selection_bytes or selection(source,sha,output)[0]!=selected:
             raise ValueError("Original trusted SDK selection changed")
         if sha_file(aar)!=built_aar or sha_file(apk)!=built_apk:raise ValueError("Assembled SDK/APK identity changed")
-        receipt.update(status="passed",generated_sdk_accepted=True,shipping_java_compiled=True,apk_verified=True)
-        (output/"receipt.json").write_text(json.dumps(receipt,indent=2)+"\n")
+        receipt.update(status="validated")
     except BaseException as error:
         receipt.update(status="failed",error=str(error));raise
-    finally:save()
+    finally:
+        if workspace is not None:
+            try:
+                receipt["build_cleanup"]=workspace.cleanup(children_joined)
+                if not receipt["build_cleanup"]["removed"]:
+                    receipt.update(status="failed",cleanup_error="Original SDK child group did not join; build workspace retained")
+            except BaseException as error:
+                receipt.update(status="failed",cleanup_error=str(error),retained_build_path=str(workspace.root))
+        save()
+    if receipt["status"]!="validated":
+        raise ValueError("Original SDK build workspace did not retire safely")
+    receipt.update(status="passed",generated_sdk_accepted=True,shipping_java_compiled=True,apk_verified=True)
+    save()
+    (output/"receipt.json").write_text(json.dumps(receipt,indent=2)+"\n")
     return receipt
 
 def self_test():
@@ -273,7 +355,122 @@ def self_test():
             for abi in ABIS:
                 for name in ("libbox.so","libroutervpn_tor.so","libroutervpn_rosenpass_jni.so","libwg-go.so","libawg-go.so"):z.writestr("lib/"+abi+"/"+name,elf(abi))
         return aar,apk
+
+    def git_fixture(root):
+        source=root/"candidate";source.mkdir()
+        def git(*args):
+            return subprocess.check_output(["git",*map(str,args)],stderr=subprocess.STDOUT,timeout=10)
+        git("init","-q",source)
+        git("-C",source,"config","user.name","SDK workspace fixture")
+        git("-C",source,"config","user.email","sdk-workspace@example.invalid")
+        (source/".gitignore").write_text("generated/\n")
+        for index in range(3):
+            (source/"source.txt").write_text("original "+str(index))
+            git("-C",source,"add",".gitignore","source.txt")
+            git("-C",source,"commit","-qm","source "+str(index))
+        sha=git("-C",source,"rev-parse","HEAD").decode().strip()
+        output=root/"validation-output"/"tests";output.parent.mkdir()
+        scratch=root/"scratch";scratch.mkdir()
+        return source,sha,output,scratch
+
+    def prepare_fixture(workspace, output):
+        output.mkdir()
+        phases=[]
+        def run(name,command,bound,cwd):
+            status,timed_out,joined=CORE.execute(command,cwd,dict(os.environ),output/(name+".log"),bound)
+            phases.append((name,status,timed_out,joined))
+            if status or timed_out or not joined:
+                raise ValueError("Git workspace fixture failed: "+name)
+        record=workspace.prepare(run)
+        return record,phases
+
     class Checks(unittest.TestCase):
+        def test_real_owned_clone_keeps_complete_history_and_generated_files_separate(self):
+            with tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);source,sha,output,scratch=git_fixture(root)
+                before=CORE.snapshot(source)
+                workspace=OwnedBuildCheckout(source,output,sha,before,4,parent=scratch)
+                try:
+                    record,phases=prepare_fixture(workspace,output)
+                    self.assertEqual(record["source_sha"],sha);self.assertEqual(record["version_code"],4)
+                    self.assertTrue(all(status==0 and not expired and joined for _,status,expired,joined in phases))
+                    self.assertEqual(CORE.snapshot(workspace.path),before)
+                    source_inodes={(p.stat().st_dev,p.stat().st_ino) for p in (source/".git/objects").rglob("*") if p.is_file()}
+                    clone_inodes={(p.stat().st_dev,p.stat().st_ino) for p in (workspace.path/".git/objects").rglob("*") if p.is_file()}
+                    self.assertFalse(source_inodes&clone_inodes)
+                    generated=workspace.path/"generated";generated.mkdir();(generated/"native-output").write_bytes(b"fixture build result")
+                    self.assertTrue(CORE.git(workspace.path,"ls-files","--others","--ignored","--exclude-standard","-z"))
+                    workspace.verify()
+                    require_pristine_candidate(source,sha,before)
+                    self.assertNotIn(output.parent,workspace.path.parents)
+                    self.assertNotIn(source,workspace.path.parents)
+                finally:
+                    self.assertEqual(workspace.cleanup(True),{"joined":True,"removed":True})
+                self.assertFalse(workspace.root.exists());self.assertTrue(source.is_dir())
+                self.assertTrue((output/"clone-owned-build-source.log").is_file())
+
+        def test_owned_clone_rejects_tracked_changes_and_ignored_candidate_files(self):
+            with tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);source,sha,output,scratch=git_fixture(root)
+                before=CORE.snapshot(source);workspace=OwnedBuildCheckout(source,output,sha,before,4,parent=scratch)
+                try:
+                    prepare_fixture(workspace,output)
+                    (workspace.path/"source.txt").write_text("foreign")
+                    with self.assertRaisesRegex(ValueError,"tracked source"):
+                        workspace.verify()
+                    require_pristine_candidate(source,sha,before)
+                    generated=source/"generated";generated.mkdir();(generated/"unexpected").write_bytes(b"unowned")
+                    with self.assertRaisesRegex(ValueError,"no longer pristine"):
+                        require_pristine_candidate(source,sha,before)
+                finally:workspace.cleanup(True)
+
+        def test_owned_clone_refuses_wrong_history_or_commit(self):
+            with tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);source,sha,output,scratch=git_fixture(root)
+                before=CORE.snapshot(source)
+                with self.assertRaises(ValueError):OwnedBuildCheckout(source,output,"a"*40,before,4,parent=scratch)
+                workspace=OwnedBuildCheckout(source,output,sha,before,5,parent=scratch)
+                try:
+                    with self.assertRaisesRegex(ValueError,"tracked source or history"):
+                        prepare_fixture(workspace,output)
+                finally:workspace.cleanup(True)
+
+        def test_build_workspace_refuses_candidate_or_uploaded_evidence_roots(self):
+            with tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);source,sha,output,scratch=git_fixture(root)
+                before=CORE.snapshot(source)
+                for parent in (source,source/".git",output.parent):
+                    with self.subTest(parent=parent):
+                        with self.assertRaisesRegex(ValueError,"outside source and uploaded evidence"):
+                            OwnedBuildCheckout(source,output,sha,before,4,parent=parent)
+
+        def test_cleanup_retains_unknown_child_and_foreign_workspace(self):
+            with tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);source,sha,output,scratch=git_fixture(root)
+                workspace=OwnedBuildCheckout(source,output,sha,CORE.snapshot(source),4,parent=scratch)
+                prepare_fixture(workspace,output)
+                retained=workspace.cleanup(False)
+                self.assertFalse(retained["removed"]);self.assertTrue(workspace.path.is_dir())
+                moved=scratch/"original-retained";workspace.root.rename(moved);workspace.root.mkdir()
+                (workspace.root/"foreign").write_bytes(b"replacement")
+                with self.assertRaisesRegex(ValueError,"workspace identity changed"):workspace.cleanup(True)
+                self.assertTrue((workspace.root/"foreign").is_file());self.assertTrue((moved/"checkout").is_dir())
+                workspace.root.joinpath("foreign").unlink();workspace.root.rmdir();moved.rename(workspace.root)
+                workspace.cleanup(True)
+
+        def test_failed_joined_child_keeps_logs_and_only_owned_build_is_removed(self):
+            with tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);source,sha,output,scratch=git_fixture(root)
+                before=CORE.snapshot(source);workspace=OwnedBuildCheckout(source,output,sha,before,4,parent=scratch)
+                prepare_fixture(workspace,output)
+                log=output/"failed-build.log"
+                result=CORE.execute([sys.executable,"-c","print('original build failure'); raise SystemExit(7)"],workspace.path,dict(os.environ),log,3)
+                self.assertEqual(result,(7,False,True))
+                workspace.cleanup(result[2])
+                self.assertEqual(log.read_text().strip(),"original build failure")
+                require_pristine_candidate(source,sha,before)
+                self.assertFalse(workspace.root.exists())
+
         def test_exact_signature_inventory(self):
             self.assertEqual(len(PLAN_SIGNATURES),15);self.assertEqual(len(STATIC_SIGNATURES),4)
             for owner,signatures in (("RouterNodeChainSOCKS",PLAN_SIGNATURES),("Libbox",STATIC_SIGNATURES)):

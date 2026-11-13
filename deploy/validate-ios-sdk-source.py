@@ -197,8 +197,66 @@ def selection(source,sha,output):
             raise ValueError("Original iOS SDK source checkout changed")
     return record,raw
 
+
+def require_checkout(root, sha, tree, expected, *, generated=False):
+    """Require exact tracked bytes/modes; only the owned build may contain outputs."""
+    if (CORE.git(root,"rev-parse","HEAD").decode().strip()!=sha or
+            CORE.git(root,"rev-parse","HEAD^{tree}").decode().strip()!=tree or
+            CORE.snapshot(root)!=expected):
+        raise ValueError("Original SDK checkout source identity changed")
+    CORE.git(root,"-c","core.fileMode=true","diff","--exit-code","--")
+    CORE.git(root,"diff","--cached","--exit-code","--")
+    arguments=["status","--porcelain","--untracked-files=all"]
+    if not generated:arguments.append("--ignored=matching")
+    if CORE.git(root,*arguments):
+        raise ValueError("Original SDK checkout is not clean")
+
+class OwnedBuildCheckout:
+    """One isolated, non-shared clone; never remove it while child join is uncertain."""
+    def __init__(self, source, output, parent=None):
+        source=Path(source).resolve(strict=True)
+        forbidden=(source,Path(output).absolute().parent.resolve(strict=True))
+        parent=Path(parent or os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()).resolve(strict=True)
+        if any(parent==path or path in parent.parents for path in forbidden):
+            raise ValueError("SDK build ownership must be outside candidate and uploaded output")
+        self.root=Path(tempfile.mkdtemp(prefix="routervpn-ios-sdk-build-",dir=parent))
+        state=self.root.lstat();self.identity=(state.st_dev,state.st_ino)
+        self.checkout=self.root/"source";self.joined=True;self.verified=False
+
+    def execute(self, command, cwd, env, log, bound):
+        if not self.joined:raise ValueError("SDK original child has not proved its join")
+        self.joined=False
+        result=CORE.execute(command,cwd,env,log,bound)
+        self.joined=result[2]
+        return result
+
+    def populate(self, source, sha, tree, before, run):
+        require_checkout(source,sha,tree,before)
+        run("source-clone",["git","clone","--no-local","--no-hardlinks","--no-checkout","--",
+                           Path(source).as_uri(),str(self.checkout)],60,self.root)
+        run("source-detach",["git","checkout","--detach",sha],30,self.checkout)
+        gitdir=self.checkout/".git"
+        if gitdir.is_symlink() or not gitdir.is_dir() or (gitdir/"objects/info/alternates").exists():
+            raise ValueError("SDK build clone shares or redirects its original object database")
+        require_checkout(self.checkout,sha,tree,before)
+        require_checkout(source,sha,tree,before)
+        self.verified=True
+        return self.checkout
+
+    def cleanup(self):
+        if not self.joined:return False
+        if self.root.is_symlink() or not self.root.is_dir():
+            raise ValueError("SDK build directory ownership changed before cleanup")
+        state=self.root.lstat()
+        if (state.st_dev,state.st_ino)!=self.identity:
+            raise ValueError("SDK build directory identity changed before cleanup")
+        shutil.rmtree(self.root)
+        return not self.root.exists()
+
 def validate(source,sha,output):
     source=Path(source).resolve(strict=True);output=Path(output).absolute()
+    if output.is_symlink():raise ValueError("SDK output may not be redirected")
+    output=output.parent.resolve(strict=True)/output.name
     if output.exists() or output.is_symlink() or output==source or source in output.parents:
         raise ValueError("SDK output must be fresh and outside candidate")
     selected,selection_bytes=selection(source,sha,output);before=CORE.snapshot(source)
@@ -210,33 +268,43 @@ def validate(source,sha,output):
     architecture={"x86_64":"amd64","arm64":"arm64"}[platform.machine()]
     go=subprocess.check_output(["go","version"],text=True,env=env,timeout=15).strip()
     if go!="go version go1.26.3 darwin/"+architecture:raise ValueError("Original pinned Go1.26.3 changed")
-    app_root=source/"ios/RouterVPN";framework=app_root/".deps/Libbox.xcframework"
-    require_project_sources(regular(app_root/"project.yml").read_text())
+    require_checkout(source,sha,selected["source_tree"],before)
+    require_project_sources(regular(source/"ios/RouterVPN/project.yml").read_text())
     output.mkdir(mode=0o700);(output/"source-before.json").write_text(json.dumps(before,sort_keys=True)+"\n")
     receipt=dict(schema=1,suite=SUITE,selection=selected,status="running",go_version=go,
         source_file_count=len(before),source_closure_sha256=hashlib.sha256(json.dumps(before,sort_keys=True,separators=(",",":")).encode()).hexdigest(),
         scope="actual-generated-Apple-SDK-and-shipping-iOS-iPadOS-app-and-PacketTunnel",signing="unsigned-resignable",
         generated_sdk_accepted=False,shipping_swift_compiled=False,packet_tunnel_build_accepted=False,
-        device_accepted=False,native_traffic_accepted=False,visible_socks_editor_enabled=False,
+        device_accepted=False,native_traffic_accepted=False,visible_editor_device_accepted=False,
         native_mtu_device_accepted=False,source_file_mutation_allowed=False,phases=[],
-        trusted_executor_sha256=sha_file(CORE_PATH))
+        trusted_executor_sha256=sha_file(CORE_PATH),build_checkout_removed=False,
+        build_checkout_source_verified=False,build_children_joined=True)
+    owned=None;build_source=None;failure=None
     def save():(output/"progress.json").write_text(json.dumps(receipt,indent=2)+"\n")
     def run(name,command,bound,cwd=None):
         log=output/(name+".log");start=time.monotonic()
-        code,timed_out,joined=CORE.execute(command,cwd or source,env,log,bound)
+        executor=owned.execute if owned is not None else CORE.execute
+        code,timed_out,joined=executor(command,cwd or build_source or source,env,log,bound)
         receipt["phases"].append(dict(name=name,command=command,seconds=time.monotonic()-start,outer_seconds=bound,
             exit=code,timed_out=timed_out,process_group_joined=joined,log_sha256=sha_file(log)));save()
         if code!=0 or timed_out or not joined:raise ValueError("Original Apple SDK phase failed or did not join: "+name)
         return log.read_bytes()
     save()
     try:
+        owned=OwnedBuildCheckout(source,output)
+        receipt["build_checkout"]=str(owned.checkout);save()
+        build_source=owned.populate(source,sha,selected["source_tree"],before,run)
+        receipt["build_checkout_source_verified"]=True
+        receipt["build_checkout_sha"]=sha;receipt["build_checkout_tree"]=selected["source_tree"]
+        (output/"build-source-before.json").write_text(json.dumps(CORE.snapshot(build_source),sort_keys=True)+"\n")
+        app_root=build_source/"ios/RouterVPN";framework=app_root/".deps/Libbox.xcframework"
         receipt["xcode_version"]=run("xcode-version",["xcodebuild","-version"],30).decode("utf-8","strict").strip()
         receipt["swift_version"]=run("swift-version",["swiftc","--version"],30).decode("utf-8","strict").strip()
         if not re.search(r"Apple Swift version 6\.",receipt["swift_version"]):raise ValueError("Shipping Swift6 is required")
-        run("original-provenance-order",[sys.executable,str(source/"deploy/test_ios_provenance_order.py"),"--native"],300)
+        run("original-provenance-order",[sys.executable,str(build_source/"deploy/test_ios_provenance_order.py"),"--native"],300)
         run("original-wireguard-kit",["sh",str(app_root/"prepare-wireguard-kit.sh")],900)
         kit=app_root/".deps/wireguard-apple"
-        run("original-timer-preparation",[sys.executable,str(source/"deploy/test_apple_amnezia_timer_preparation.py"),"--kit",str(kit)],300)
+        run("original-timer-preparation",[sys.executable,str(build_source/"deploy/test_apple_amnezia_timer_preparation.py"),"--kit",str(kit)],300)
         run("original-gomobile-sdk",["bash",str(app_root/"prepare-libbox.sh")],SDK_SECONDS)
         framework_before=tree_snapshot(framework);slices=framework_slices(framework)
         receipt["generated_api"]=[];receipt["sdk_slices"]=[]
@@ -261,7 +329,7 @@ def validate(source,sha,output):
             if actual!=["arm64"]:raise ValueError("Shipping iOS executable has wrong architecture")
         if CORE.git(kit,"rev-parse","HEAD").decode().strip()!=WG_PIN or regular(kit/"Package.swift").read_text().splitlines()[0]!="// swift-tools-version:5.5" or regular(app_root/".deps/wireguard-apple.pin").read_text().strip()!=WG_PIN:
             raise ValueError("Original Apple WireGuardKit source changed")
-        run("original-timer-readback",[sys.executable,str(source/"deploy/prepare-apple-amnezia-timers.py"),str(kit),"--verify"],120)
+        run("original-timer-readback",[sys.executable,str(build_source/"deploy/prepare-apple-amnezia-timers.py"),str(kit),"--verify"],120)
         run("canonical-sdk-readback",["bash",str(app_root/"prepare-libbox.sh")],READBACK_SECONDS)
         if tree_snapshot(framework)!=framework_before or tree_snapshot(app)!=app_before:
             raise ValueError("SDK readback rebuilt or replaced the linked app/framework")
@@ -277,21 +345,50 @@ def validate(source,sha,output):
         run("original-ipa-container",["unzip","-tq",str(ipa)],120)
         run("original-mobile-provenance",[sys.executable,str(ROOT/"server/scripts/mobile-artifact-provenance.py"),"--name","router-vpn-ios.ipa","--path",str(ipa),"--sha",sha,"--repo","Eabusham2/router-vpn"],120)
         receipt["artifacts"]=[]
+        provenance=output/"provenance";provenance.mkdir()
         for path in (ipa,app_root/".deps/Libbox.xcframework.pin",app_root/".deps/Libbox.routervpn-openvpn.sha256",app_root/".deps/libbox-LICENSE.txt",app_root/".deps/xray-core-LICENSE.txt",app_root/".deps/native-amneziawg-LICENSE.txt",app_root/".deps/rosenpass-native/source.json"):
-            path=regular(path);receipt["artifacts"].append(dict(path=str(path),bytes=path.stat().st_size,sha256=sha_file(path)))
+            path=regular(path);preserved=path
+            if path!=ipa:
+                preserved=provenance/path.relative_to(app_root)
+                preserved.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(path,preserved)
+                if sha_file(preserved)!=sha_file(path):raise ValueError("Captured native provenance differs")
+            receipt["artifacts"].append(dict(path=str(preserved),original_path=str(path),bytes=path.stat().st_size,sha256=sha_file(path)))
         (output/"sdk-files.json").write_text(json.dumps(framework_before,sort_keys=True)+"\n")
         (output/"app-files.json").write_text(json.dumps(app_before,sort_keys=True)+"\n")
-        if CORE.snapshot(source)!=before or CORE.git(source,"status","--porcelain","--untracked-files=all"):
-            raise ValueError("Candidate source changed during the original SDK build")
+        require_checkout(build_source,sha,selected["source_tree"],before,generated=True)
+        require_checkout(source,sha,selected["source_tree"],before)
         if (output.parent/"selection.json").read_bytes()!=selection_bytes or selection(source,sha,output)[0]!=selected:
             raise ValueError("Original trusted iOS SDK selection changed")
         if tree_snapshot(framework)!=framework_before or tree_snapshot(app)!=app_before:
             raise ValueError("Original compiled app/SDK identity changed")
-        receipt.update(status="passed",generated_sdk_accepted=True,shipping_swift_compiled=True,packet_tunnel_build_accepted=True,ipa_verified=True)
-        (output/"receipt.json").write_text(json.dumps(receipt,indent=2)+"\n")
+        receipt["build_completed"]=True
     except BaseException as error:
-        receipt.update(status="failed",error=str(error));raise
-    finally:save()
+        failure=error;receipt.update(status="failed",error=str(error))
+    finally:
+        try:
+            require_checkout(source,sha,selected["source_tree"],before)
+            if (output.parent/"selection.json").read_bytes()!=selection_bytes:
+                raise ValueError("Original trusted iOS SDK selection changed")
+            if owned is not None and owned.verified:
+                require_checkout(owned.checkout,sha,selected["source_tree"],before,generated=True)
+            receipt["source_unchanged"]=True
+        except BaseException as error:
+            receipt.update(status="failed",identity_error=str(error))
+            if failure is None:failure=error
+        try:
+            if owned is not None:
+                receipt["build_children_joined"]=owned.joined
+                receipt["build_checkout_removed"]=owned.cleanup()
+                if not receipt["build_checkout_removed"]:
+                    raise ValueError("SDK build checkout retained because child join is unproved")
+        except BaseException as error:
+            receipt.update(status="failed",cleanup_error=str(error))
+            if failure is None:failure=error
+        save()
+    if failure is not None:raise failure
+    receipt.update(status="passed",generated_sdk_accepted=True,shipping_swift_compiled=True,packet_tunnel_build_accepted=True,ipa_verified=True)
+    save()
+    (output/"receipt.json").write_text(json.dumps(receipt,indent=2)+"\n")
     return receipt
 
 def self_test():
@@ -308,6 +405,31 @@ def self_test():
             libs.append(entry)
         (root/"Info.plist").write_bytes(plistlib.dumps({"AvailableLibraries":libs}))
         return libs
+
+    def git_fixture(parent):
+        source=parent/"candidate";source.mkdir()
+        subprocess.run(["git","init","-q",str(source)],check=True)
+        for key,value in (("user.name","SDK fixture"),("user.email","fixture@example.invalid")):
+            CORE.git(source,"config",key,value)
+        (source/".gitignore").write_text(".deps/\nbuild/\n*.xcodeproj/\n")
+        (source/"source.txt").write_text("original source\n")
+        script=source/"builder.sh";script.write_text("#!/bin/sh\nexit 0\n");script.chmod(0o755)
+        CORE.git(source,"add",".");CORE.git(source,"commit","-qm","original source")
+        (source/"source.txt").write_text("original exact candidate\n")
+        CORE.git(source,"commit","-qam","selected candidate")
+        sha=CORE.git(source,"rev-parse","HEAD").decode().strip()
+        tree=CORE.git(source,"rev-parse","HEAD^{tree}").decode().strip()
+        output=parent/"evidence/tests";output.mkdir(parents=True)
+        return source,sha,tree,CORE.snapshot(source),output
+
+    def original_runner(owner,output):
+        def run(name,command,bound,cwd):
+            log=output/(name+".log")
+            result=owner.execute(command,cwd,os.environ.copy(),log,bound)
+            if result!=(0,False,True):raise ValueError("Owned original command failed or did not join")
+            return log.read_bytes()
+        return run
+
     class Gate(unittest.TestCase):
         def test_actual_header_parser_requires_every_original_selector_and_factory(self):
             valid=header();self.assertEqual(len(require_headers(valid)["methods"]),15)
@@ -372,6 +494,112 @@ def self_test():
             self.assertEqual(actual["GITHUB_SHA"],source);self.assertEqual(actual["ROUTER_VPN_SOURCE_SHA"],source);self.assertEqual(actual["UNCHANGED"],"yes")
             self.assertEqual(actual["GOFLAGS"],"");self.assertEqual(actual["GOTOOLCHAIN"],"local")
             with self.assertRaises(ValueError):child_environment({},source.upper())
+
+        def test_independent_exact_git_clone_keeps_candidate_pristine(self):
+            with tempfile.TemporaryDirectory() as temporary:
+                parent=Path(temporary);source,sha,tree,before,output=git_fixture(parent)
+                owner=OwnedBuildCheckout(source,output,parent)
+                try:
+                    build=owner.populate(source,sha,tree,before,original_runner(owner,output))
+                    self.assertEqual(CORE.snapshot(build),before)
+                    self.assertEqual(CORE.git(build,"rev-list","--count","HEAD"),b"2\n")
+                    self.assertEqual((build/"builder.sh").stat().st_mode & 0o111,0o111)
+                    source_objects={(p.stat().st_dev,p.stat().st_ino) for p in (source/".git/objects").rglob("*") if p.is_file()}
+                    clone_objects={(p.stat().st_dev,p.stat().st_ino) for p in (build/".git/objects").rglob("*") if p.is_file()}
+                    self.assertTrue(source_objects and clone_objects)
+                    self.assertFalse(source_objects & clone_objects,"build shared original Git object inodes")
+                    require_checkout(source,sha,tree,before)
+                finally:self.assertTrue(owner.cleanup())
+                self.assertTrue((source/"source.txt").is_file())
+                self.assertTrue((output/"source-clone.log").is_file())
+
+        def test_generated_outputs_allowed_only_in_owned_clone(self):
+            with tempfile.TemporaryDirectory() as temporary:
+                parent=Path(temporary);source,sha,tree,before,output=git_fixture(parent)
+                owner=OwnedBuildCheckout(source,output,parent)
+                try:
+                    build=owner.populate(source,sha,tree,before,original_runner(owner,output))
+                    for name in (".deps","build","RouterVPN.xcodeproj"):
+                        (build/name).mkdir();(build/name/"generated").write_text("generated")
+                    require_checkout(build,sha,tree,before,generated=True)
+                    require_checkout(source,sha,tree,before)
+                    with self.assertRaises(ValueError):require_checkout(build,sha,tree,before)
+                    (source/".deps").mkdir();(source/".deps/generated").write_text("must reject")
+                    with self.assertRaises(ValueError):require_checkout(source,sha,tree,before)
+                    shutil.rmtree(source/".deps")
+                    require_checkout(source,sha,tree,before)
+                finally:self.assertTrue(owner.cleanup())
+
+        def test_clone_rejects_tracked_bytes_mode_index_and_head_changes(self):
+            for change in ("bytes","mode","index","head","symlink","untracked"):
+                with self.subTest(change=change),tempfile.TemporaryDirectory() as temporary:
+                    parent=Path(temporary);source,sha,tree,before,output=git_fixture(parent)
+                    owner=OwnedBuildCheckout(source,output,parent)
+                    try:
+                        build=owner.populate(source,sha,tree,before,original_runner(owner,output))
+                        if change=="bytes":(build/"source.txt").write_text("changed")
+                        elif change=="mode":
+                            CORE.git(build,"config","core.fileMode","false")
+                            (build/"builder.sh").chmod(0o644)
+                        elif change=="index":CORE.git(build,"update-index","--chmod=-x","builder.sh")
+                        elif change=="head":CORE.git(build,"checkout","--detach","HEAD~1")
+                        elif change=="symlink":
+                            (build/"source.txt").unlink();(build/"source.txt").symlink_to(source/"source.txt")
+                        else:(build/"unowned").write_text("unowned")
+                        with self.assertRaises((ValueError,subprocess.CalledProcessError)):
+                            require_checkout(build,sha,tree,before,generated=True)
+                        require_checkout(source,sha,tree,before)
+                    finally:self.assertTrue(owner.cleanup())
+
+        def test_joined_failed_build_retains_log_and_removes_only_owned_clone(self):
+            with tempfile.TemporaryDirectory() as temporary:
+                parent=Path(temporary);source,sha,tree,before,output=git_fixture(parent)
+                owner=OwnedBuildCheckout(source,output,parent)
+                build=owner.populate(source,sha,tree,before,original_runner(owner,output))
+                log=output/"failed-build.log"
+                result=owner.execute([sys.executable,"-c","print('original failure');raise SystemExit(17)"],
+                                     build,os.environ.copy(),log,10)
+                self.assertEqual(result,(17,False,True))
+                self.assertTrue(owner.cleanup())
+                self.assertEqual(log.read_text(),"original failure\n")
+                require_checkout(source,sha,tree,before)
+
+        def test_uncertain_join_and_replaced_directory_preserve_cleanup_owner(self):
+            with tempfile.TemporaryDirectory() as temporary:
+                parent=Path(temporary);source,sha,tree,before,output=git_fixture(parent)
+                owner=OwnedBuildCheckout(source,output,parent)
+                owner.populate(source,sha,tree,before,original_runner(owner,output))
+                owner.joined=False
+                self.assertFalse(owner.cleanup());self.assertTrue(owner.checkout.is_dir())
+                with self.assertRaises(ValueError):
+                    owner.execute([sys.executable,"-c","raise SystemExit(99)"],owner.checkout,os.environ.copy(),output/"never-started.log",10)
+                self.assertFalse((output/"never-started.log").exists())
+                # No actual child was acquired for this injected unknown-result branch.
+                owner.joined=True
+                original=owner.root.with_name(owner.root.name+"-original")
+                owner.root.rename(original);owner.root.mkdir();(owner.root/"replacement").write_text("preserve")
+                with self.assertRaises(ValueError):owner.cleanup()
+                self.assertTrue((owner.root/"replacement").is_file());self.assertTrue(original.is_dir())
+                shutil.rmtree(owner.root);original.rename(owner.root)
+                self.assertTrue(owner.cleanup())
+
+        def test_candidate_change_during_clone_and_inside_output_build_rejected(self):
+            with tempfile.TemporaryDirectory() as temporary:
+                parent=Path(temporary);source,sha,tree,before,output=git_fixture(parent)
+                for bad_parent in (source,output,output.parent):
+                    with self.subTest(parent=bad_parent),self.assertRaises(ValueError):
+                        OwnedBuildCheckout(source,output,bad_parent)
+                owner=OwnedBuildCheckout(source,output,parent)
+                run=original_runner(owner,output)
+                def altered(name,command,bound,cwd):
+                    value=run(name,command,bound,cwd)
+                    if name=="source-detach":(source/"source.txt").write_text("concurrent source change")
+                    return value
+                try:
+                    with self.assertRaises(ValueError):owner.populate(source,sha,tree,before,altered)
+                    self.assertFalse(owner.verified)
+                finally:self.assertTrue(owner.cleanup())
+
         def test_original_process_group_is_joined(self):
             with tempfile.TemporaryDirectory() as temporary:
                 directory=Path(temporary);log=directory/"child.log"
