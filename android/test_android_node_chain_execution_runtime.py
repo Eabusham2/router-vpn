@@ -70,6 +70,7 @@ final class AndroidNodeChainCapture {
   launchInput=new JSONObject().put("kind","routervpn-node-chain-launch-input").put("schema",1).put("execution","local").put("nodes",nodes).put("identity_sources",identities).put("source_sha256",sourceSHA256).put("config_sha256",configSHA256).toString();
  }
  static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture source)throws Exception{source.requireCurrent();return new AndroidNodeChainCapture(source);}
+ boolean ownsSource(AndroidNodeStore.ChainCapture original){return source==original;}
  void requireCurrent(){source.requireCurrent();}void close()throws Exception{plan.close();}
 }
 '''
@@ -235,7 +236,7 @@ public final class OrderedExecutionRuntimeTest {
  static void bindPending()throws Exception{
   try(Fixture f=new Fixture(3,"server")){
    AndroidNodeChainSession[] original={null};int started=CommandServer.started;RouterNodeChainExecution.configured=plan->plan.failBindBefore=1000;CommandServer.afterConstruction=()->original[0]=AndroidNodeChainSession.retained();
-   f.start();f.drain();await(()->RouterNodeChainExecution.latest!=null&&RouterNodeChainExecution.latest.binds>=2,"failed Bind never attempted original cleanup reservation");f.drain();var plan=RouterNodeChainExecution.latest;var server=(CommandServer)get(f.service,"commandServer");
+   f.start();f.drain();await(()->original[0]!=null&&original[0].execution!=null&&RouterNodeChainExecution.latest==original[0].execution.plan&&original[0].execution.plan.binds>=2,"failed Bind never attempted original cleanup reservation");f.drain();var plan=RouterNodeChainExecution.latest;var server=(CommandServer)get(f.service,"commandServer");
    check(original[0]!=null&&server!=null&&!server.closed&&!original[0].released()&&f.runtime.isActiveOrTransitioning()&&original[0].directory.exists(),"failed reservation destroyed original unstarted server before positive receipt");
    check(CommandServer.started==started&&plan.server==null&&!plan.nativeClosed(),"failed reservation fabricated native startup or empty receipt");
    plan.failBindBefore=0;f.stop();check(plan.server==server&&server.closed&&plan.nativeClosed()&&original[0].released(),"reservation retry failed to seal the same original server");
