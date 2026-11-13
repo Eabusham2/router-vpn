@@ -11,9 +11,27 @@ import (
 // source path prevents an ordinary node/full-chain/execution input from being
 // silently reinterpreted as this never-connected temporary purpose.
 func routerVPNNodeCandidatePrefixCommandCapture(files *routerVPNExternalFiles, session, config, source, capture, target string, restoredMTU int) (*mobilemultihop.DesktopNodeCandidatePreparationPolicy, error) {
+	if !routerVPNExternalSource.MatchString(capture) || target != "linux" && target != "windows" {
+		return nil, routerVPNExternalFailure
+	}
+	policy, err := routerVPNNodeCandidatePrefixCommandPhysicalCapture(files, session, config, source, target)
+	if err != nil || policy == nil {
+		return nil, routerVPNExternalFailure
+	}
+	meta := policy.Metadata()
+	if meta.CaptureSHA256 != capture || meta.RestoredMTU != restoredMTU {
+		return nil, routerVPNExternalFailure
+	}
+	return policy, nil
+}
+
+// The inherited Darwin protocol binds every input byte before this replay.
+// Its original sealed source supplies capture/MTU; foreign command-line
+// overrides are refused rather than treated as another source of authority.
+func routerVPNNodeCandidatePrefixCommandPhysicalCapture(files *routerVPNExternalFiles, session, config, source, target string) (*mobilemultihop.DesktopNodeCandidatePreparationPolicy, error) {
 	if files == nil || files.root == nil || !routerVPNExternalSession.MatchString(session) ||
 		!routerVPNExternalSource.MatchString(config) || !routerVPNExternalSource.MatchString(source) ||
-		!routerVPNExternalSource.MatchString(capture) || target != "linux" && target != "windows" {
+		target != "linux" && target != "windows" && target != "darwin" {
 		return nil, routerVPNExternalFailure
 	}
 	for _, name := range []string{"node-source.json", "node-chain-source.json", "imported-source.json", "node-chain-execution-source.json"} {
@@ -32,7 +50,7 @@ func routerVPNNodeCandidatePrefixCommandCapture(files *routerVPNExternalFiles, s
 	}
 	meta := policy.Metadata()
 	if meta.SessionID != session || meta.TargetOS != target || meta.SourceSHA256 != source ||
-		meta.ConfigSHA256 != config || meta.CaptureSHA256 != capture || meta.RestoredMTU != restoredMTU ||
+		meta.ConfigSHA256 != config ||
 		meta.ApplicationOpen || meta.DNSOpen {
 		return nil, routerVPNExternalFailure
 	}

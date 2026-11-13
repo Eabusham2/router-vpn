@@ -21,8 +21,8 @@ func desktopCandidatePrefixPhysicalPolicy(t *testing.T, target string) *mobilemu
 // Box/options and encrypted endpoint constructors are real. The explicit TUN
 // double remains unstarted: these cases cannot establish OS/native acceptance.
 func TestRouterVPNDesktopCandidatePrefixPhysicalCapturesClosedBox(t *testing.T) {
-	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
-		t.Skip("native prefix platform is not admitted")
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
+		t.Skip("prefix Box has no platform adapter")
 	}
 	policy := desktopCandidatePrefixPhysicalPolicy(t, runtime.GOOS)
 	instance, tun := desktopChainPhysicalBox(t, policy, nil)
@@ -45,8 +45,8 @@ func TestRouterVPNDesktopCandidatePrefixPhysicalCapturesClosedBox(t *testing.T) 
 }
 
 func TestRouterVPNDesktopCandidatePrefixPhysicalRejectsChangedBox(t *testing.T) {
-	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
-		t.Skip("native prefix platform is not admitted")
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
+		t.Skip("prefix Box has no platform adapter")
 	}
 	for _, fault := range []string{"prefix-key", "dns", "physical-source", "mtu", "application-gate"} {
 		t.Run(fault, func(t *testing.T) {
@@ -80,8 +80,8 @@ func TestRouterVPNDesktopCandidatePrefixPhysicalKeepsTypedTarget(t *testing.T) {
 	for _, target := range []string{"linux", "windows", "darwin"} {
 		t.Run(target, func(t *testing.T) {
 			policy := desktopCandidatePrefixPhysicalPolicy(t, target)
-			if routerVPNDesktopCandidatePrefixPhysicalTarget(policy, target) != (target != "darwin") {
-				t.Fatal("prefix changed accepted native platform boundary")
+			if !routerVPNDesktopCandidatePrefixPhysicalTarget(policy, target) {
+				t.Fatal("prefix lost its sealed physical adapter target")
 			}
 			for _, other := range []string{"linux", "windows", "darwin", "android"} {
 				if other != target && routerVPNDesktopCandidatePrefixPhysicalTarget(policy, other) {

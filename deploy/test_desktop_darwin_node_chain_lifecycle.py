@@ -59,6 +59,38 @@ PHASES = {
             "empty", "fixed", "missing-unit", "negative", "plus", "suffix", "unicode", "case", "newline"),
     },
 }
+# Prefix-only preparation has a separate captured family, private readiness
+# and full saved provenance. These are additional mandatory records; ordinary
+# chain, TUN and original retirement inventories above remain unchanged.
+PHASES["cmd/sing-box"].update({
+    "TestRouterVPNNodeCandidatePrefixDarwinCommandFlags": (
+        "prefix-capture-sha256", "physical-transfer-sha256", "physical-mtu", "journal-parent-handle", "journal-parent-image",
+        "journal-pipe", "journal-capture-sha256", "linux-parent-channel", "linux-parent-directory", "linux-parent-capture",
+        "exact-captured-arguments", "empty-family", "unknown-family"),
+    "TestRouterVPNNodeCandidatePrefixDarwinManifestReplay": (
+        "configured", "restored", "missing", "ordinary", "saved-suffix", "prefix", "source", "config", "session", "platform", "graph",
+        "ambiguous-node", "ambiguous-chain", "ambiguous-imported", "ambiguous-execution"),
+    "TestRouterVPNNodeCandidatePrefixDarwinOriginalControl": (
+        "exact", "policy-pointer", "replacement-root", "late-source", "missing-authority", "capture", "handshake", "retiring"),
+    "TestRouterVPNNodeCandidatePrefixDarwinSelectionBinding": (
+        "session", "source", "config", "uid", "device", "inode", "engine", "controller", "catalog", "inputs", "family"),
+    "TestRouterVPNNodeCandidatePrefixDarwinEarlyStop": ("receipt-before-acquisition", "authenticated-before-run"),
+    "TestRouterVPNNodeCandidatePrefixDarwinMeasurementStartup": (
+        "absent", "request-regular", "request-directory", "request-symlink", "live-regular", "live-directory", "live-symlink",
+        "cancel-regular", "cancel-directory", "cancel-symlink", "result-regular", "result-directory", "result-symlink"),
+    "TestRouterVPNNodeCandidatePrefixDarwinStoppedReceipt": (
+        "joined", "source-retry", "box-failure", "foreign-file", "foreign-workspace", "authenticated-ack"),
+    "TestRouterVPNNodeCandidatePrefixDarwinRuntimeClosedFifty": (),
+})
+PHASES["routervpn/desktoppt"] = {
+    "TestRouterVPNNodePhysicalUnixCandidatePrefixDarwinProjection": ("wg", "awg2-fast", "awg2-strong", "three-prefix"),
+    "TestRouterVPNNodePhysicalUnixCandidatePrefixDarwinCleanupRetainsOriginal": ("original-owner",),
+}
+PHASES["."] = {
+    "TestRouterVPNDesktopCandidatePrefixPhysicalCapturesClosedBox": (),
+    "TestRouterVPNDesktopCandidatePrefixPhysicalRejectsChangedBox": ("prefix-key", "dns", "physical-source", "mtu", "application-gate"),
+    "TestRouterVPNDesktopCandidatePrefixPhysicalKeepsTypedTarget": ("linux", "windows", "darwin"),
+}
 COPIES = {
     "mobile/mtu/manager.go.tmpl": "adapter/inbound/routervpn_mtu.go",
     "mobile/mtu/tun.go.tmpl": "protocol/tun/routervpn_mtu.go",
@@ -76,6 +108,25 @@ COPIES = {
     "internal/mobilemultihop/desktop_node_ready.go": "experimental/libbox/routervpn/mobilemultihop/desktop_node_ready.go",
     "internal/mobilemultihop/desktop_node_ready_darwin_chain_test.go": "experimental/libbox/routervpn/mobilemultihop/desktop_node_ready_darwin_chain_test.go",
 }
+for name in ("node_candidate_prefix_command", "node_candidate_prefix_dispatch", "node_candidate_prefix_control_darwin",
+             "node_candidate_prefix_control_darwin_other", "node_candidate_prefix_run_darwin", "node_candidate_prefix_retirement_darwin",
+             "node_candidate_prefix_runtime", "node_candidate_prefix_measurement", "node_candidate_prefix_command_test",
+             "node_candidate_prefix_control_command_test", "node_candidate_prefix_control_darwin_test",
+             "node_candidate_prefix_retirement_darwin_test", "node_candidate_prefix_runtime_test"):
+    COPIES["mobile/desktop/" + name + ".go.tmpl"] = "cmd/sing-box/routervpn_" + name + ".go"
+COPIES.update({
+    "mobile/desktop/node_candidate_prefix_box_darwin.go.tmpl": "routervpn_desktop_node_candidate_prefix_box_darwin.go",
+    "mobile/desktop/node_candidate_prefix_box_physical.go.tmpl": "routervpn_desktop_node_candidate_prefix_box_physical.go",
+    "mobile/desktop/node_candidate_prefix_physical_darwin.go.tmpl": "routervpn/desktoppt/node_candidate_prefix_physical_darwin.go",
+    "mobile/desktop/node_candidate_prefix_physical_darwin_test.go.tmpl": "routervpn/desktoppt/node_candidate_prefix_physical_darwin_test.go",
+    "mobile/desktop/node_chain_physical_darwin.go.tmpl": "routervpn/desktoppt/node_chain_physical_darwin.go",
+    "mobile/desktop/node_chain_physical_darwin_test.go.tmpl": "routervpn/desktoppt/node_chain_physical_darwin_test.go",
+    "mobile/desktop/node_candidate_prefix_box_physical_test.go.tmpl": "routervpn_desktop_node_candidate_prefix_box_physical_test.go",
+    "mobile/desktop/node_physical_darwin.go.tmpl": "routervpn/desktoppt/node_physical_darwin.go",
+    "internal/macosprocess/scope.go": "routervpn/macosprocess/scope.go",
+    "internal/macosprocess/protocol.go": "routervpn/macosprocess/protocol.go",
+    "internal/macosprocess/candidate_prefix_transfer.go": "routervpn/macosprocess/candidate_prefix_transfer.go",
+})
 MUTATIONS = (
     ("repeat-stack", "protocol/tun", "protocol/tun/routervpn_node_chain_retirement_darwin.go",
      "if *joined {", "if false {",
@@ -172,6 +223,43 @@ MUTATIONS = (
 )
 
 
+# Same original strict rejection parser and bounded compiled control execution.
+MUTATIONS += (
+    ("prefix-foreign-command-flag", "cmd/sing-box", "cmd/sing-box/routervpn_node_candidate_prefix_dispatch.go",
+     "if command.Flags().Changed(name) {", "if command.Flags().Changed(name) && false {",
+     "TestRouterVPNNodeCandidatePrefixDarwinCommandFlags/physical-mtu",
+     "explicit foreign flag reached inherited prefix dispatch"),
+    ("prefix-changed-inherited-selection", "cmd/sing-box", "cmd/sing-box/routervpn_node_candidate_prefix_control_darwin.go",
+     "owner.capture.Selection() != owner.selection", "false",
+     "TestRouterVPNNodeCandidatePrefixDarwinSelectionBinding/inputs",
+     "changed original inherited selection reached policy replay"),
+    ("prefix-foreign-cleanup-writer", "cmd/sing-box", "cmd/sing-box/routervpn_node_candidate_prefix_retirement_darwin.go",
+     "workspaceErr := control.workspace(files)", "workspaceErr := error(nil)",
+     "TestRouterVPNNodeCandidatePrefixDarwinStoppedReceipt/foreign-workspace",
+     "foreign workspace granted receipt authority or suppressed original native join"),
+    ("prefix-unpublished-stopped-ack", "cmd/sing-box", "cmd/sing-box/routervpn_node_candidate_prefix_retirement_darwin.go",
+     'if err := files.publish("stopped.json", closed); err != nil {\n\t\treturn err\n\t}',
+     'if err := files.publish("stopped.json", closed); err != nil {\n\t\t_ = err\n\t}',
+     "TestRouterVPNNodeCandidatePrefixDarwinStoppedReceipt/foreign-file",
+     "unjoined source/Box or foreign file produced stopped ACK"),
+    ("prefix-cancelled-admission-before-cleanup", "cmd/sing-box", "cmd/sing-box/routervpn_node_candidate_prefix_run_darwin.go",
+     "defer stopAdmission()\n\tfiles, err := routerVPNOpenExternalFiles(control.scope.Workspace)",
+     "defer stopAdmission()\n\tif err := control.original(admission); err != nil { return err }\n\tfiles, err := routerVPNOpenExternalFiles(control.scope.Workspace)",
+     "TestRouterVPNNodeCandidatePrefixDarwinEarlyStop/authenticated-before-run",
+     "early authenticated Stop omitted its original no-resource retirement"),
+    ("prefix-original-physical-owner", "routervpn/desktoppt", "routervpn/desktoppt/node_chain_physical_darwin.go",
+     "n.policy == policy || n.policy == nil && n.factory == nil && n.preparing == nil",
+     "n.policy != nil || n.policy == nil && n.factory == nil && n.preparing == nil",
+     "TestRouterVPNNodePhysicalUnixCandidatePrefixDarwinCleanupRetainsOriginal/original-owner",
+     "foreign policy pointer retired the original before cleanup"),
+)
+for mailbox in ("request", "live", "cancel", "result"):
+    MUTATIONS += (("prefix-preexisting-" + mailbox, "cmd/sing-box", "cmd/sing-box/routervpn_node_candidate_prefix_run_darwin.go",
+                   '"node-candidate-prefix-' + mailbox + '.json",', '',
+                   "TestRouterVPNNodeCandidatePrefixDarwinMeasurementStartup/" + mailbox + "-regular",
+                   "preexisting prefix measurement mailbox reached native preparation"),)
+
+
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, ROOT / "deploy" / path)
     module = importlib.util.module_from_spec(spec)
@@ -183,7 +271,7 @@ def receipt(package):
     # Reuse the independently tested strict run->terminal/package parser.
     # Each instance accepts exactly this compiled package, never a union.
     result = load("darwin_lifecycle_receipt", "test_desktop_darwin_retirement.py")
-    result.PACKAGE = "github.com/sagernet/sing-box/" + package
+    result.PACKAGE = "github.com/sagernet/sing-box" + ("/" + package if package != "." else "")
     return result
 
 

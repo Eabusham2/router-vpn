@@ -12,7 +12,7 @@ spec.loader.exec_module(RUNNER)
 
 
 def wire(package, cases):
-    name = "github.com/sagernet/sing-box/" + package
+    name = "github.com/sagernet/sing-box" + ("/" + package if package != "." else "")
     rows = [{"Package": name, "Action": "start"}]
     for root, leaves in cases.items():
         rows.append({"Package": name, "Test": root, "Action": "run"})
@@ -26,8 +26,9 @@ def wire(package, cases):
 
 class DarwinLifecycleRunnerTests(unittest.TestCase):
     def test_exact_required_inventory_and_bounds(self):
-        for package, count in (("protocol/tun", 18), ("adapter/inbound", 12), ("cmd/sing-box", 81),
-                               ("experimental/libbox/routervpn/mobilemultihop", 33)):
+        for package, count in (("protocol/tun", 18), ("adapter/inbound", 12), ("cmd/sing-box", 157),
+                               ("experimental/libbox/routervpn/mobilemultihop", 33),
+                               ("routervpn/desktoppt", 7), (".", 11)):
             validator = RUNNER.receipt(package)
             cases = RUNNER.PHASES[package]
             output = "\n".join(json.dumps(row) for row in wire(package, cases))
@@ -36,7 +37,7 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
             self.assertEqual(validator.PROCESS_TIMEOUT, RUNNER.PROCESS_TIMEOUT)
         self.assertEqual(RUNNER.TEST_TIMEOUT, "120s")
         self.assertEqual(RUNNER.PROCESS_TIMEOUT, 600)
-        self.assertEqual(len(RUNNER.MUTATIONS), 19)
+        self.assertEqual(len(RUNNER.MUTATIONS), 29)
 
     def test_each_measurement_mailbox_has_original_refusal_and_causal_omission(self):
         cases = RUNNER.PHASES["cmd/sing-box"]["TestRouterVPNNodeChainDarwinMeasurementStartup"]
@@ -51,6 +52,34 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
             control, = [control for control in selected if control[0] == "preexisting-measurement-" + name]
             self.assertIn('"node-chain-measure-' + name + '.json"', control[3])
             self.assertEqual(control[5], "TestRouterVPNNodeChainDarwinMeasurementStartup/" + name + "-regular")
+
+    def test_prefix_phase_keeps_original_lifecycle_and_distinct_native_source(self):
+        cases = RUNNER.PHASES["cmd/sing-box"]
+        prefix = {name: leaves for name, leaves in cases.items() if name.startswith("TestRouterVPNNodeCandidatePrefixDarwin")}
+        self.assertEqual(len(prefix), 8)
+        self.assertEqual(sum(1 + len(leaves) for leaves in prefix.values()), 76)
+        self.assertEqual(cases["TestRouterVPNNodeChainDarwinNativeRetirementOrder"], (
+            "exact-order", "proof-retry", "tun-retry", "source-retry", "ambiguous-box",
+            "cancel-after-source", "missing-manager", "partial-components"))
+        self.assertEqual(prefix["TestRouterVPNNodeCandidatePrefixDarwinRuntimeClosedFifty"], ())
+        for name in ("command", "dispatch", "control_darwin", "run_darwin", "retirement_darwin", "runtime", "measurement"):
+            relative = "mobile/desktop/node_candidate_prefix_" + name + ".go.tmpl"
+            self.assertEqual(RUNNER.COPIES[relative], "cmd/sing-box/routervpn_node_candidate_prefix_" + name + ".go")
+        self.assertEqual(RUNNER.COPIES["internal/macosprocess/candidate_prefix_transfer.go"], "routervpn/macosprocess/candidate_prefix_transfer.go")
+
+    def test_prefix_mailbox_refusals_have_causal_original_run_witnesses(self):
+        cases = RUNNER.PHASES["cmd/sing-box"]["TestRouterVPNNodeCandidatePrefixDarwinMeasurementStartup"]
+        self.assertEqual(set(cases), {"absent"} | {
+            name + "-" + kind for name in ("request", "live", "cancel", "result")
+            for kind in ("regular", "directory", "symlink")})
+        source = (ROOT / "mobile/desktop/node_candidate_prefix_control_darwin_test.go.tmpl").read_text()
+        self.assertIn("err := routerVPNRunDarwinNodeCandidatePrefix(context.Background(), control)", source)
+        controls = [control for control in RUNNER.MUTATIONS if control[0].startswith("prefix-")]
+        self.assertEqual(len(controls), 10)
+        for name in ("request", "live", "cancel", "result"):
+            control, = [control for control in controls if control[0] == "prefix-preexisting-" + name]
+            self.assertIn('"node-candidate-prefix-' + name + '.json"', control[3])
+            self.assertEqual(control[5], "TestRouterVPNNodeCandidatePrefixDarwinMeasurementStartup/" + name + "-regular")
 
     def test_missing_original_run_and_package_receipt(self):
         for package, cases in RUNNER.PHASES.items():

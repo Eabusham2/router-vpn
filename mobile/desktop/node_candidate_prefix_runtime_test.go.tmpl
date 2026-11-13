@@ -65,21 +65,29 @@ func (e *desktopCandidatePrefixEngineFixture) RetireContext(ctx context.Context)
 }
 
 type desktopCandidatePrefixRuntimeFixture struct {
-	owner  *routerVPNNodeCandidatePrefixRuntime
-	mtu    *routerVPNNodeMTU
-	native *desktopNodeMTUEngineFixture
-	engine *desktopCandidatePrefixEngineFixture
+	owner     *routerVPNNodeCandidatePrefixRuntime
+	mtu       *routerVPNNodeMTU
+	native    *desktopNodeMTUEngineFixture
+	engine    *desktopCandidatePrefixEngineFixture
+	pulseInfo os.FileInfo
 }
 
 func desktopCandidatePrefixRuntime(t *testing.T) *desktopCandidatePrefixRuntimeFixture {
+	return desktopCandidatePrefixRuntimeTarget(t, "linux")
+}
+
+func desktopCandidatePrefixRuntimeTarget(t *testing.T, target string) *desktopCandidatePrefixRuntimeFixture {
 	t.Helper()
-	policy := desktopCandidatePrefixCommandPolicy(t, "linux")
+	policy := desktopCandidatePrefixCommandPolicy(t, target)
 	meta := policy.Metadata()
 	files := desktopImportedCommandFiles(t, map[string]string{"node-candidate-prefix-source.json": policy.Source(), "sing-box.json": policy.Config()})
 	mtu, native, _ := desktopNodeMTUFixture(t)
 	mtu.record.Session, mtu.record.Config = meta.SessionID, meta.ConfigSHA256
 	tun := mtu.inbound.(*desktopMTUTUNFixture)
 	tun.tag, tun.name = "routervpn-chain-tun", "router-vpn"
+	if target == "darwin" {
+		tun.name = "utun7"
+	}
 	mtu.record.Interface = tun.name
 	f := &desktopCandidatePrefixRuntimeFixture{mtu: mtu, native: native}
 	peers := map[string]string{}
@@ -153,11 +161,72 @@ func (f *desktopCandidatePrefixRuntimeFixture) write(t *testing.T, name string, 
 }
 func (f *desktopCandidatePrefixRuntimeFixture) pulse(t *testing.T, q routerVPNNodeCandidatePrefixRequest) {
 	t.Helper()
-	f.write(t, "node-candidate-prefix-live.json", routerVPNNodeCandidatePrefixPulse{Schema: 1, Request: q.Request, CaptureSHA: q.CaptureSHA, Sequence: 1, ObservedAt: time.Now().UnixMilli()})
+	// The actual parent publishes a complete synced inode, then renames it.
+	// Truncating the live inode here races the real candidate worker's reader
+	// and correctly revokes the prefix on a transient malformed heartbeat.
+	const name = "node-candidate-prefix-live.json"
+	const temporary = ".node-candidate-prefix-live.json.fixture"
+	root := f.owner.files.root
+	current := func() {
+		actual, err := root.Lstat(name)
+		if f.pulseInfo == nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("fixture pulse acquired another host writer", err)
+			}
+		} else if err != nil || !os.SameFile(f.pulseInfo, actual) {
+			t.Fatal("fixture pulse replaced its original host writer", err)
+		}
+	}
+	current()
+	raw, err := json.Marshal(routerVPNNodeCandidatePrefixPulse{Schema: 1, Request: q.Request, CaptureSHA: q.CaptureSHA, Sequence: 1, ObservedAt: time.Now().UnixMilli()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := root.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := file.Stat()
+	defer func() {
+		_ = file.Close()
+		if actual, err := root.Lstat(temporary); err == nil && info != nil && os.SameFile(info, actual) {
+			_ = root.Remove(temporary)
+		}
+	}()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := file.Write(raw); err != nil || n != len(raw) {
+		t.Fatal("fixture pulse did not write its complete record", err)
+	}
+	if err := file.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	current()
+	if err := root.Rename(temporary, name); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := root.Lstat(name)
+	if err != nil || !os.SameFile(info, actual) {
+		t.Fatal("fixture pulse did not publish its original complete inode", err)
+	}
+	f.pulseInfo = actual
 }
 
 func TestRouterVPNDesktopCandidatePrefixRuntimeClosedFifty(t *testing.T) {
-	f := desktopCandidatePrefixRuntime(t)
+	desktopCandidatePrefixRuntimeClosedFifty(t, "linux")
+}
+
+func TestRouterVPNNodeCandidatePrefixDarwinRuntimeClosedFifty(t *testing.T) {
+	desktopCandidatePrefixRuntimeClosedFifty(t, "darwin")
+}
+
+func desktopCandidatePrefixRuntimeClosedFifty(t *testing.T, target string) {
+	t.Helper()
+	f := desktopCandidatePrefixRuntimeTarget(t, target)
 	f.start(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

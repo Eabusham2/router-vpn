@@ -1,0 +1,211 @@
+//go:build darwin
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/netip"
+	"reflect"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// Only the privileged socket-source factory is doubled. Original projected
+// prefix policy, saved provenance, native monitor observation, socket broker,
+// exact physical tuple refusal and retained source cleanup are shipping code.
+func nodeDarwinPrefixPolicy(t *testing.T, modes []string) *mobilemultihop.DesktopNodeCandidatePreparationPolicy {
+	t.Helper()
+	original := nodeDarwinOrderedPolicy(t, modes)
+	input, err := original.OriginalChain().LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(input), &source) != nil {
+		t.Fatal("fixture lost complete original saved source")
+	}
+	raw, err := json.Marshal(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := json.Marshal(mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-darwin-prefix-catalog", Inputs: []string{source.Nodes[len(source.Nodes)-1]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparation, err := mobilemultihop.NewNodeChainCandidatePreparation(string(raw), len(modes)-1, string(inventory))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodeCandidatePreparationPolicy(preparation, original.Metadata().SessionID, "darwin", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
+
+type nodeDarwinPrefixFixture struct {
+	policy   *mobilemultihop.DesktopNodeCandidatePreparationPolicy
+	network  *NodeNetworkOwner
+	physical *NodePhysicalOutbound
+	source   *nodeUnixFactorySource
+	selected *adapter.NetworkInterface
+}
+
+func newNodeDarwinPrefixFixture(t *testing.T, modes []string) *nodeDarwinPrefixFixture {
+	t.Helper()
+	native := newDesktopPTFixture(t)
+	manager := &desktopPTEntryManager{}
+	service.MustRegister[adapter.OutboundManager](native.ctx, manager)
+	policy := nodeDarwinPrefixPolicy(t, modes)
+	meta := policy.Metadata()
+	options := NodeCaptureOptions{meta.SessionID, meta.SourceSHA256}
+	raw, err := NewNodeNetworkOwner(native.ctx, nil, mobilemultihop.DesktopNodeNetworkTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower, err := NewNodePhysicalOutbound(native.ctx, nil, nil, mobilemultihop.DesktopNodePhysicalTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.replace(lower)
+	selected := externalPhysicalFactoryInterface(t)
+	network := &nodeUnixFactoryNetwork{externalPhysicalFactoryNetwork: &externalPhysicalFactoryNetwork{desktopPTNetwork: native.network}}
+	network.selected.Store(selected)
+	service.MustRegister[adapter.NetworkManager](native.ctx, network)
+	source := &nodeUnixFactorySource{physicalFactorySource: &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}}
+	f := &nodeDarwinPrefixFixture{policy, raw.(*NodeNetworkOwner), lower.(*NodePhysicalOutbound), source, selected}
+	t.Cleanup(func() {
+		source.failClose.Store(false)
+		if err := f.network.CloseCandidatePrefixPhysicalSource(context.Background(), policy); err != nil {
+			t.Error("captured ordered source did not join", err)
+		}
+		if err := f.physical.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return f
+}
+
+func TestRouterVPNNodePhysicalUnixCandidatePrefixDarwinProjection(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		modes []string
+	}{{"wg", []string{"wg"}}, {"awg2-fast", []string{"awg2-fast"}}, {"awg2-strong", []string{"awg2-strong"}}, {"three-prefix", []string{"wg", "awg2-fast", "awg2-strong"}}} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newNodeDarwinPrefixFixture(t, test.modes)
+			calls := 0
+			if err := f.network.prepareNodePhysicalDarwin(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopDarwinSocketOptions) (desktopDarwinPhysicalPolicy, error) {
+				calls++
+				wantInterfaces, err := desktopDarwinPhysicalInterfaces(f.selected, false)
+				wantPrivate := []mobiletor.DesktopDarwinSocketDestination{{Network: "udp", Address: netip.MustParseAddrPort("192.168.50.7:51820")}}
+				if err != nil || ctx.Err() != nil || capture != f.network.brokerCapture() ||
+					!reflect.DeepEqual(options.Interfaces, wantInterfaces) || !reflect.DeepEqual(options.PrivateDestinations, wantPrivate) || len(options.LANPrefixes) != 0 {
+					t.Error("ordered Darwin projection substituted its original physical scope", options, err)
+				}
+				return f.source, nil
+			}); err != nil || calls != 0 {
+				t.Fatal("ordered physical constructor entered before Initialize", err)
+			}
+			if err := f.network.Start(adapter.StartStateInitialize); err != nil || calls != 1 || !f.network.SocketCurrent() || f.network.Current() {
+				t.Fatal("ordered preparation lost its separate original handshake phase", err)
+			}
+			if _, err := f.physical.current(t.Context(), "udp", M.ParseSocksaddr("192.168.50.7:51820")); err != nil {
+				t.Fatal("original first encrypted prefix lost its captured physical tuple", err)
+			}
+			for _, network := range []string{"tcp", "udp"} {
+				for _, address := range []string{"192.168.50.8:51820", "192.168.50.9:8388", "192.168.50.133:53", "10.77.0.1:8787", "192.168.50.7:51821"} {
+					if _, err := f.physical.current(t.Context(), network, M.ParseSocksaddr(address)); err == nil {
+						t.Fatal("middle/final/DNS/proof or changed port acquired physical authority", network, address)
+					}
+				}
+			}
+			if _, err := f.physical.current(t.Context(), "tcp", M.ParseSocksaddr("192.168.50.7:51820")); err == nil {
+				t.Fatal("packet-only original prefix acquired TCP authority")
+			}
+			f.network.Cancel()
+			if _, err := f.physical.current(t.Context(), "udp", M.ParseSocksaddr("192.168.50.7:51820")); err == nil {
+				t.Fatal("retired ordered source retained its captured tuple")
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodePhysicalUnixCandidatePrefixDarwinCleanupRetainsOriginal(t *testing.T) {
+	t.Run("original-owner", nodeDarwinPrefixCleanupRetainsOriginal)
+}
+
+func nodeDarwinPrefixCleanupRetainsOriginal(t *testing.T) {
+	f := newNodeDarwinPrefixFixture(t, []string{"awg2-fast", "awg2-strong"})
+	entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	f.source.failClose.Store(true)
+	if err := f.network.prepareNodePhysicalDarwin(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopDarwinSocketOptions) (desktopDarwinPhysicalPolicy, error) {
+		close(entered)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+		return f.source, errors.New("fixture retains its original late Darwin source")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	other, err := mobilemultihop.ParseDesktopNodeCandidatePreparationPolicy(f.policy.Source())
+	if err != nil || other.Metadata().SourceSHA256 != f.policy.Metadata().SourceSHA256 {
+		t.Fatal("foreign cleanup control must be independently valid and identical", err)
+	}
+	if err := f.network.CloseCandidatePrefixPhysicalSource(t.Context(), other); err == nil || !f.network.Matches(f.policy.Metadata().SessionID, f.policy.Metadata().SourceSHA256) {
+		t.Fatal("foreign policy pointer retired the original before cleanup", err)
+	}
+	started, closed := make(chan error, 1), make(chan error, 1)
+	go func() { started <- f.network.Start(adapter.StartStateInitialize) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ordered Darwin source constructor did not enter")
+	}
+	go func() { closed <- f.network.CloseCandidatePrefixPhysicalSource(t.Context(), f.policy) }()
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ordered cleanup did not revoke its entered constructor")
+	}
+	select {
+	case err := <-closed:
+		t.Fatal("ordered cleanup acknowledged an unjoined native constructor", err)
+	default:
+	}
+	unblock()
+	select {
+	case err := <-started:
+		if err == nil {
+			t.Fatal("late ordered source acquired native admission")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("late ordered source did not join")
+	}
+	select {
+	case err := <-closed:
+		if err == nil {
+			t.Fatal("failed ordered source close was acknowledged")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("failed ordered cleanup did not return")
+	}
+	if f.network.source != f.source || f.network.closed || f.source.closed.Load() || !f.source.cancelled.Load() {
+		t.Fatal("ordered cleanup discarded the original failed source")
+	}
+	f.source.failClose.Store(false)
+	if err := f.network.CloseCandidatePrefixPhysicalSource(t.Context(), f.policy); err != nil || !f.source.closed.Load() || !f.network.closed {
+		t.Fatal("ordered cleanup retry did not join its original retained source", err)
+	}
+}

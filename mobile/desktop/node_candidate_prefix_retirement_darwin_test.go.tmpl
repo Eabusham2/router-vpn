@@ -1,0 +1,137 @@
+//go:build darwin
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"testing"
+	"time"
+)
+
+func TestRouterVPNNodeCandidatePrefixDarwinStoppedReceipt(t *testing.T) {
+	for _, kind := range []string{"joined", "source-retry", "box-failure", "foreign-file"} {
+		t.Run(kind, func(t *testing.T) {
+			native, parts, _ := routerVPNDarwinChainTestRetirement()
+			control, files, _, _ := routerVPNDarwinPrefixControlFixture(t)
+			control.native = native
+			for _, name := range []string{"node-candidate-prefix-ready.json"} {
+				if err := files.publish(name, map[string]any{"fixture": true}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch kind {
+			case "source-retry":
+				parts[2].failures = 1
+			case "box-failure":
+				parts[3].failures = 1
+			case "foreign-file":
+				file, err := files.root.OpenFile("stopped.json", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = file.WriteString("foreign"); err != nil {
+					t.Fatal(err)
+				}
+				if err := file.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx := routerVPNDarwinChainTestContext(t)
+			err := control.finish(ctx, files)
+			if kind != "joined" {
+				if err == nil || control.retired.Load() {
+					t.Fatal("unjoined source/Box or foreign file produced stopped ACK")
+				}
+				if kind == "foreign-file" {
+					raw, readErr := files.read("stopped.json", 1024)
+					if readErr != nil || string(raw) != "foreign" {
+						t.Fatal("cleanup replaced an unowned stopped file", readErr)
+					}
+				} else if _, statErr := files.root.Lstat("stopped.json"); !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatal("failed native cleanup published a stopped receipt")
+				}
+			} else if err != nil || !control.retired.Load() {
+				t.Fatal("joined original native cleanup omitted stopped receipt", err)
+			}
+			for _, name := range []string{"node-candidate-prefix-ready.json"} {
+				if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("retirement retained a published active proof", name, err)
+				}
+			}
+			if kind == "source-retry" {
+				if err := control.finish(ctx, files); err != nil || !control.retired.Load() || parts[2].calls != 2 || parts[1].calls != 1 {
+					t.Fatal("same original source retry failed to publish its joined receipt", err)
+				}
+			}
+			if control.retired.Load() {
+				raw, err := files.read("stopped.json", 1024)
+				var actual struct {
+					routerVPNExternalStop
+					Closed bool `json:"closed"`
+				}
+				if err != nil || json.Unmarshal(raw, &actual) != nil || actual.Schema != 1 ||
+					actual.Session != control.scope.Session || actual.SourceSHA256 != control.scope.Config || !actual.Closed {
+					t.Fatal("stopped receipt changed original MTU/config binding", err)
+				}
+			}
+		})
+	}
+
+	t.Run("foreign-workspace", func(t *testing.T) {
+		native, parts, _ := routerVPNDarwinChainTestRetirement()
+		control, original, _, _ := routerVPNDarwinPrefixControlFixture(t)
+		control.native = native
+		foreign := desktopImportedCommandFiles(t, map[string]string{"fixture-input": "foreign"})
+		if err := foreign.publish("node-candidate-prefix-ready.json", map[string]any{"foreign": true}); err != nil {
+			t.Fatal(err)
+		}
+		ctx := routerVPNDarwinChainTestContext(t)
+		if err := control.finish(ctx, foreign); err == nil || control.retired.Load() || !native.joined {
+			t.Fatal("foreign workspace granted receipt authority or suppressed original native join", err)
+		}
+		if _, err := foreign.root.Lstat("node-candidate-prefix-ready.json"); err != nil {
+			t.Fatal("retirement mutated foreign readiness", err)
+		}
+		for _, files := range []*routerVPNExternalFiles{original, foreign} {
+			if _, err := files.root.Lstat("stopped.json"); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("foreign writer produced a stopped receipt", err)
+			}
+		}
+		if err := control.finish(ctx, original); err != nil || control.retirementReceipt() != nil {
+			t.Fatal("original receipt retry lost joined native progress", err)
+		}
+		for _, part := range parts {
+			if part.calls != 1 {
+				t.Fatal("original receipt retry closed a joined component twice")
+			}
+		}
+	})
+	t.Run("authenticated-ack", func(t *testing.T) {
+		native, parts, _ := routerVPNDarwinChainTestRetirement()
+		parts[2].failures = 1
+		control, files, _, _ := routerVPNDarwinPrefixControlFixture(t)
+		control.native = native
+		started := make(chan struct{})
+		acknowledged := false
+		err := routerVPNExternalControlledLifetime(context.Background(), func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			return control.finish(cleanup, files)
+		}, func(ctx context.Context, retire func(context.Context) error) error {
+			<-started
+			if err := retire(ctx); err != nil {
+				return err
+			}
+			acknowledged = true
+			return nil
+		}, control.retirementReceipt, func() error { return nil })
+		if err == nil || acknowledged || control.retired.Load() || parts[3].calls != 0 {
+			t.Fatal("authenticated stop acknowledged an unjoined original physical source")
+		}
+	})
+}

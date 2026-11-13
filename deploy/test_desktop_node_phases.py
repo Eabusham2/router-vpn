@@ -191,12 +191,12 @@ class SourcePhases(unittest.TestCase):
         for name in ("node_candidate_prefix_runtime.go", "node_candidate_prefix_measurement.go"):
             (self.source / "cmd/sing-box" / ("routervpn_" + name)).write_bytes((ROOT / "mobile/desktop" / (name + ".tmpl")).read_bytes())
         controls = NODE.candidate_prefix_mutants(self.source)
-        self.assertEqual([control[0] for control in controls], ["candidate-prefix-capture", "candidate-prefix-darwin-admission", "candidate-prefix-original-pulse", "candidate-prefix-original-inode", "candidate-prefix-worker-before-gate"])
+        self.assertEqual([control[0] for control in controls], ["candidate-prefix-capture", "candidate-prefix-foreign-target", "candidate-prefix-original-pulse", "candidate-prefix-original-inode", "candidate-prefix-worker-before-gate"])
         self.assertEqual([control[4] for control in controls], ["capture", "darwin", "wrong-pulse", "source-inode", "retire"])
         self.assertNotIn("meta.CaptureSHA256 != capture", controls[0][-1])
         self.assertIn("meta.SourceSHA256 != source", controls[0][-1])
-        self.assertNotIn('target != "linux" && target != "windows"', controls[1][-1])
-        self.assertIn("meta.TargetOS != target", controls[1][-1])
+        self.assertIn('target != "linux" && target != "windows" && target != "darwin"', controls[1][-1])
+        self.assertNotIn("meta.TargetOS != target", controls[1][-1])
         command.write_text(command.read_text().replace("meta.CaptureSHA256 != capture || ", ""))
         with self.assertRaises(ValueError):
             NODE.candidate_prefix_mutants(self.source)

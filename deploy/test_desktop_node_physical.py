@@ -962,9 +962,9 @@ def candidate_prefix_mutants(source):
         ("candidate-prefix-capture", command, "./cmd/sing-box", CANDIDATE_PREFIX_COMMAND_ROOT + "RejectsSubstitution", "capture",
          "prefix child accepted foreign or ambiguous source", BOOT.IDENTITY.replace_once(
              (source / command).read_text(encoding="utf-8"), "meta.CaptureSHA256 != capture || ", "")),
-        ("candidate-prefix-darwin-admission", physical, ".", CANDIDATE_PREFIX_PHYSICAL_ROOT + "KeepsTypedTarget", "darwin",
-         "prefix changed accepted native platform boundary", BOOT.IDENTITY.replace_once(
-             (source / physical).read_text(encoding="utf-8"), ' || target != "linux" && target != "windows"', "")),
+        ("candidate-prefix-foreign-target", physical, ".", CANDIDATE_PREFIX_PHYSICAL_ROOT + "KeepsTypedTarget", "darwin",
+         "prefix borrowed another target's physical authority", BOOT.IDENTITY.replace_once(
+             (source / physical).read_text(encoding="utf-8"), 'meta.TargetOS != target || ', "")),
         ("candidate-prefix-original-pulse", measurement, "./cmd/sing-box", CANDIDATE_PREFIX_RUNTIME_ROOT + "RejectsSubstitution", "wrong-pulse",
          "prefix mailbox accepted a foreign captured owner", BOOT.IDENTITY.replace_once(
              (source / measurement).read_text(encoding="utf-8"), "pulse.Request != op.request.Request || ", "")),

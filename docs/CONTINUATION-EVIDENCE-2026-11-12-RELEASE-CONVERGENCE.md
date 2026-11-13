@@ -145,8 +145,9 @@ access:
   unreachable, now has the iOS app/provider/engine and Android helper/service/UI integration recorded below.
   Windows and Linux now have distinct parent/native-child and saved-prefix API
   integration and native Performance actions.
-  Darwin prefix process identity and PF journal foundation are published, while its child/host integration
-  and public native admission remain in progress. Ordinary WireGuard or Android
+  Darwin prefix process identity, PF journal foundation and generated native
+  child are published; its parent/installed-host integration and public native
+  admission remain in progress. Ordinary WireGuard or Android
   Network calls cannot substitute for the captured native owners. Native acceptance
   of each new platform flow must be recorded separately from these source tests.
 - Ordered graphs still cover a bounded set of WG/AWG prefixes and SS finals,
@@ -1638,6 +1639,49 @@ assertions. The complete gate exited successfully in 4.986 seconds, and all
 captured input hashes remained unchanged. This repairs the demonstrated Linux
 prerequisite; it does not establish installed networking acceptance. The
 Windows runtime lane does not invoke this Linux-only prerequisite.
+
+## Darwin prefix child retains its inherited native lifecycle
+
+The generated Darwin engine now has a distinct closed candidate-prefix
+command using the original inherited controller capture. It rejects mixed
+Linux/Windows controls and caller-supplied transfer/capture/MTU overrides.
+The original saved control and selected prefix remain separate identities;
+private prefix readiness cannot become ordinary Connected, application or
+DNS readiness. Its Box, physical-path guard, private measurement worker and
+retirement all retain that original owner. Stop must join the worker, engine
+and native cleanup before publishing the original stopped acknowledgment.
+Failed or ambiguous cleanup remains retained rather than authorizing a
+replacement owner to retire it.
+
+The 24 changed paths match an immutable source snapshot based on
+`cb5e66eccf5c46000bd00a76ecc9977cd7100bbf`. The portable shipping-capture
+projection passed 44 race-instrumented verdicts, with three separately
+compiled controls rejecting changed selection, a foreign acknowledgment
+writer and an unpublished Stop acknowledgment. The generated composition
+passed 111 additional recorded verdicts under the race detector across Box,
+command, runtime, dispatcher and Darwin control tests. These execute actual
+private HTTP and 50 loopback TCP samples with explicitly modeled TUN and
+physical routing boundaries.
+
+The existing 50-sample fixture had published its live pulse by truncating the
+current file, allowing a reader to observe an empty pulse. Only fixture
+publication changed to the shipping parent's atomic-inode pattern. Both
+Linux and Darwin 50-sample cases passed, including six additional executions
+of the already-built race image. A separately compiled torn-pulse control
+actually triggered the original heartbeat-during-worker failure and retired
+the prefix without Prepared authority. Production freshness and cancellation
+bounds were not widened.
+
+The lifecycle runner's ten tests and phase audit's nine tests passed. The
+required native lifecycle control inventory remains wired; this local unit
+does not claim that every hosted native control ran. The full 2,476-file
+generated source closure remained unchanged during validation. Actual command
+and physical-policy test images cross-compiled for both Darwin AMD64 and
+ARM64 with CGO disabled. These four compile results establish no execution of
+PF, utun or the installed macOS host. Later shared-source changes and the
+publication SHA still require their own exact-source hosted verification.
+The parent adapter, installed acceptance and public macOS admission remain
+separate unfinished work.
 
 ## Physical and private acceptance
 

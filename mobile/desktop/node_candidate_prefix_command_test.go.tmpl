@@ -10,6 +10,10 @@ import (
 )
 
 func desktopCandidatePrefixCommandPolicy(t *testing.T, target string) *mobilemultihop.DesktopNodeCandidatePreparationPolicy {
+	return desktopCandidatePrefixCommandPolicyWithMTU(t, target, 0)
+}
+
+func desktopCandidatePrefixCommandPolicyWithMTU(t *testing.T, target string, restored int) *mobilemultihop.DesktopNodeCandidatePreparationPolicy {
 	t.Helper()
 	original := desktopNodeChainCommandPolicy(t, 3, target, 0)
 	input, err := original.OriginalChain().LaunchInput()
@@ -32,7 +36,7 @@ func desktopCandidatePrefixCommandPolicy(t *testing.T, target string) *mobilemul
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy, err := mobilemultihop.NewDesktopNodeCandidatePreparationPolicy(base, desktopExternalSession, target, 0)
+	policy, err := mobilemultihop.NewDesktopNodeCandidatePreparationPolicy(base, desktopExternalSession, target, restored)
 	if err != nil {
 		t.Fatal(err)
 	}

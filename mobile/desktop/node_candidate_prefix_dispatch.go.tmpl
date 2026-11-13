@@ -16,6 +16,7 @@ import (
 // prefix. Original platform authentication precedes every private source read.
 type routerVPNNodeCandidatePrefixCommand struct {
 	directory, session, config, physical, capture, transfer string
+	darwin                                                  string
 	mtu                                                     int
 	windows                                                 routerVPNNodeJournalOptions
 	linux                                                   routerVPNNodeLinuxParentOptions
@@ -29,6 +30,16 @@ func routerVPNNewNodeCandidatePrefixCommand(run func(context.Context, routerVPNN
 	var capture routerVPNNodeCandidatePrefixCommand
 	command := &cobra.Command{Use: "routervpn-node-candidate-prefix", Short: "Run one captured closed candidate prefix", Args: cobra.NoArgs, SilenceUsage: true,
 		RunE: func(command *cobra.Command, _ []string) error {
+			if command.Flags().Changed("darwin-control") && capture.darwin != "inherited-v1" {
+				return routerVPNExternalFailure
+			}
+			if capture.darwin != "" {
+				for _, name := range []string{"prefix-capture-sha256", "physical-transfer-sha256", "physical-mtu", "journal-parent-handle", "journal-parent-image", "journal-pipe", "journal-capture-sha256", "linux-parent-channel", "linux-parent-directory", "linux-parent-capture"} {
+					if command.Flags().Changed(name) {
+						return routerVPNExternalFailure
+					}
+				}
+			}
 			if run == nil || capture.validate() != nil {
 				return routerVPNExternalFailure
 			}
@@ -46,6 +57,7 @@ func routerVPNNewNodeCandidatePrefixCommand(run func(context.Context, routerVPNN
 	command.Flags().StringVar(&capture.capture, "prefix-capture-sha256", "", "captured finite prefix candidate inventory")
 	command.Flags().StringVar(&capture.transfer, "physical-transfer-sha256", "", "captured protection predecessor")
 	command.Flags().IntVar(&capture.mtu, "physical-mtu", 0, "captured physical policy MTU")
+	command.Flags().StringVar(&capture.darwin, "darwin-control", "", "original inherited Darwin controller")
 	command.Flags().Uint64Var(&capture.windows.ParentHandle, "journal-parent-handle", 0, "inherited native controller capability")
 	command.Flags().StringVar(&capture.windows.ParentImage, "journal-parent-image", "", "retained native controller image")
 	command.Flags().StringVar(&capture.windows.Pipe, "journal-pipe", "", "native durable transaction rendezvous")
@@ -58,8 +70,17 @@ func routerVPNNewNodeCandidatePrefixCommand(run func(context.Context, routerVPNN
 
 func (capture routerVPNNodeCandidatePrefixCommand) validate() error {
 	if !filepath.IsAbs(capture.directory) || !routerVPNExternalSession.MatchString(capture.session) ||
-		!routerVPNExternalSource.MatchString(capture.config) || !routerVPNExternalSource.MatchString(capture.physical) ||
-		!routerVPNExternalSource.MatchString(capture.capture) || !routerVPNExternalSource.MatchString(capture.transfer) ||
+		!routerVPNExternalSource.MatchString(capture.config) || !routerVPNExternalSource.MatchString(capture.physical) {
+		return routerVPNExternalFailure
+	}
+	if capture.darwin != "" {
+		if capture.darwin != "inherited-v1" || capture.capture != "" || capture.transfer != "" || capture.mtu != 0 ||
+			capture.windows != (routerVPNNodeJournalOptions{}) || capture.linux != (routerVPNNodeLinuxParentOptions{}) {
+			return routerVPNExternalFailure
+		}
+		return nil
+	}
+	if !routerVPNExternalSource.MatchString(capture.capture) || !routerVPNExternalSource.MatchString(capture.transfer) ||
 		capture.mtu != 0 && (capture.mtu < 1280 || capture.mtu > 9000) ||
 		capture.windows != (routerVPNNodeJournalOptions{}) && capture.linux != (routerVPNNodeLinuxParentOptions{}) {
 		return routerVPNExternalFailure
@@ -70,6 +91,12 @@ func (capture routerVPNNodeCandidatePrefixCommand) validate() error {
 func routerVPNRunNodeCandidatePrefixCommand(parent context.Context, capture routerVPNNodeCandidatePrefixCommand) (failure error) {
 	if parent == nil || parent.Err() != nil || capture.validate() != nil {
 		return routerVPNExternalFailure
+	}
+	if capture.darwin != "" {
+		if runtime.GOOS != "darwin" {
+			return routerVPNExternalFailure
+		}
+		return routerVPNRunDarwinNodeCandidatePrefixControlled(parent, capture.directory, capture.session, capture.physical, capture.config)
 	}
 	if capture.linux != (routerVPNNodeLinuxParentOptions{}) {
 		return routerVPNRunLinuxNodeCandidatePrefixControlled(parent, capture)

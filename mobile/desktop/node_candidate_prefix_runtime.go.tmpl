@@ -69,7 +69,7 @@ func routerVPNNewNodeCandidatePrefixRuntimeFactory(ctx context.Context, files *r
 	if ctx == nil || ctx.Err() != nil || files == nil || files.root == nil || policy == nil || policy.Validate() != nil || factory == nil || !routerVPNExternalSource.MatchString(transfer) {
 		return nil, routerVPNExternalFailure
 	}
-	if target := policy.Metadata().TargetOS; target != "linux" && target != "windows" {
+	if target := policy.Metadata().TargetOS; target != "linux" && target != "windows" && target != "darwin" {
 		return nil, routerVPNExternalFailure
 	}
 	owner := &routerVPNNodeCandidatePrefixRuntime{ctx: ctx, files: files, policy: policy, preparation: policy.Preparation(), metadata: policy.Metadata(), input: policy.Source(), config: policy.Config(), transfer: transfer, factory: factory}

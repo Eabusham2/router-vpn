@@ -1,0 +1,142 @@
+package main
+
+import (
+	"context"
+	"io"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestRouterVPNNodeCandidatePrefixDarwinCommandFlags(t *testing.T) {
+	base := func(t *testing.T) []string {
+		return []string{"--runtime-dir=" + t.TempDir(), "--session=" + desktopExternalSession,
+			"--config-sha256=" + strings.Repeat("b", 64), "--physical-source-sha256=" + strings.Repeat("c", 64), "--darwin-control=inherited-v1"}
+	}
+	for _, flag := range []string{"prefix-capture-sha256", "physical-transfer-sha256", "physical-mtu", "journal-parent-handle",
+		"journal-parent-image", "journal-pipe", "journal-capture-sha256", "linux-parent-channel", "linux-parent-directory", "linux-parent-capture"} {
+		t.Run(flag, func(t *testing.T) {
+			calls := 0
+			command := routerVPNNewNodeCandidatePrefixCommand(func(context.Context, routerVPNNodeCandidatePrefixCommand) error { calls++; return nil })
+			value := ""
+			if flag == "physical-mtu" || flag == "journal-parent-handle" || flag == "linux-parent-channel" || flag == "linux-parent-directory" {
+				value = "0"
+			}
+			command.SetArgs(append(base(t), "--"+flag+"="+value))
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			if command.ExecuteContext(t.Context()) == nil || calls != 0 {
+				t.Fatal("explicit foreign flag reached inherited prefix dispatch")
+			}
+		})
+	}
+	t.Run("exact-captured-arguments", func(t *testing.T) {
+		args := base(t)
+		want := routerVPNNodeCandidatePrefixCommand{directory: strings.TrimPrefix(args[0], "--runtime-dir="), session: desktopExternalSession,
+			config: strings.Repeat("b", 64), physical: strings.Repeat("c", 64), darwin: "inherited-v1"}
+		calls := 0
+		command := routerVPNNewNodeCandidatePrefixCommand(func(ctx context.Context, actual routerVPNNodeCandidatePrefixCommand) error {
+			calls++
+			if actual != want || ctx.Err() != nil {
+				t.Fatal("prefix command replaced its original inherited arguments")
+			}
+			return nil
+		})
+		command.SetArgs(args)
+		if err := command.ExecuteContext(t.Context()); err != nil || calls != 1 {
+			t.Fatal("exact inherited prefix dispatch was not preserved", err)
+		}
+	})
+	for _, value := range []string{"", "foreign"} {
+		name := "empty-family"
+		if value != "" {
+			name = "unknown-family"
+		}
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			command := routerVPNNewNodeCandidatePrefixCommand(func(context.Context, routerVPNNodeCandidatePrefixCommand) error { calls++; return nil })
+			args := base(t)
+			args[len(args)-1] = "--darwin-control=" + value
+			command.SetArgs(args)
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			if command.ExecuteContext(t.Context()) == nil || calls != 0 {
+				t.Fatal("noncanonical inherited prefix family reached dispatch")
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeCandidatePrefixDarwinManifestReplay(t *testing.T) {
+	for _, restore := range []int{0, 1400} {
+		name := "configured"
+		if restore != 0 {
+			name = "restored"
+		}
+		t.Run(name, func(t *testing.T) {
+			policy := desktopCandidatePrefixCommandPolicyWithMTU(t, "darwin", restore)
+			files := desktopImportedCommandFiles(t, map[string]string{"node-candidate-prefix-source.json": policy.Source(), "sing-box.json": policy.Config()})
+			meta := policy.Metadata()
+			actual, err := routerVPNNodeCandidatePrefixCommandPhysicalCapture(files, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, "darwin")
+			if err != nil || actual == nil || actual == policy || actual.Preparation() == policy.Preparation() || actual.Source() != policy.Source() ||
+				actual.Config() != policy.Config() || !reflect.DeepEqual(actual.Metadata(), meta) || actual.Metadata().RestoredMTU != restore ||
+				actual.Metadata().ApplicationOpen || actual.Metadata().DNSOpen || len(actual.Preparation().ProofInventory()) != 2 ||
+				actual.Metadata().PolicyProfileID != "ordered-router-2" || actual.Metadata().ProfileID != "ordered-router-1" {
+				t.Fatal("Darwin prefix lost original provenance or closed restored source", err)
+			}
+			if _, err := routerVPNNodeCandidatePrefixCommandCapture(files, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, meta.CaptureSHA256, "darwin", restore); err == nil {
+				t.Fatal("legacy prefix target bypassed inherited Darwin authority")
+			}
+		})
+	}
+	policy := desktopCandidatePrefixCommandPolicy(t, "darwin")
+	for _, fault := range []string{"missing", "ordinary", "saved-suffix", "prefix", "source", "config", "session", "platform", "graph", "ambiguous-node", "ambiguous-chain", "ambiguous-imported", "ambiguous-execution"} {
+		t.Run(fault, func(t *testing.T) {
+			meta := policy.Metadata()
+			raw, graph, target := policy.Source(), policy.Config(), "darwin"
+			extra := map[string]string{}
+			switch fault {
+			case "missing":
+				raw = ""
+			case "ordinary":
+				raw, _ = desktopNodeChainCommandPolicy(t, 3, "darwin", 0).NodeChain().LaunchInput()
+			case "saved-suffix":
+				raw = strings.ReplaceAll(raw, "ordered-private-token-2", "foreign-saved-suffix")
+				if raw == policy.Source() {
+					t.Fatal("saved suffix control did not change original input")
+				}
+			case "prefix":
+				raw = strings.ReplaceAll(raw, "ordered-private-token-1", "foreign-selected-prefix")
+				if raw == policy.Source() {
+					t.Fatal("prefix control did not change original input")
+				}
+			case "source":
+				meta.SourceSHA256 = strings.Repeat("f", 64)
+			case "config":
+				meta.ConfigSHA256 = strings.Repeat("f", 64)
+			case "session":
+				meta.SessionID = strings.Repeat("b", 32)
+			case "platform":
+				target = "linux"
+			case "graph":
+				graph += " "
+			case "ambiguous-node":
+				extra["node-source.json"] = "{}"
+			case "ambiguous-chain":
+				extra["node-chain-source.json"] = "{}"
+			case "ambiguous-imported":
+				extra["imported-source.json"] = "{}"
+			case "ambiguous-execution":
+				extra["node-chain-execution-source.json"] = "{}"
+			}
+			extra["sing-box.json"] = graph
+			if raw != "" {
+				extra["node-candidate-prefix-source.json"] = raw
+			}
+			files := desktopImportedCommandFiles(t, extra)
+			if _, err := routerVPNNodeCandidatePrefixCommandPhysicalCapture(files, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, target); err == nil {
+				t.Fatal("Darwin prefix accepted a foreign or incomplete original source")
+			}
+		})
+	}
+}

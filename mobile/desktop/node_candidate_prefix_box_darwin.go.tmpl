@@ -1,0 +1,45 @@
+//go:build darwin
+
+package box
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+)
+
+// This separate preparation retains the exact closed prefix and original
+// native source through partial construction and failed cleanup. It confers
+// no ordinary readiness, selected DNS or public platform admission.
+type RouterVPNDesktopDarwinCandidatePrefixPreparation struct {
+	network *routervpndesktoppt.NodeNetworkOwner
+	policy  *mobilemultihop.DesktopNodeCandidatePreparationPolicy
+}
+
+func (s *Box) RouterVPNDesktopDarwinCandidatePrefixPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy) (*RouterVPNDesktopDarwinCandidatePrefixPreparation, error) {
+	if !routerVPNDesktopCandidatePrefixPhysicalTarget(policy, "darwin") {
+		return nil, errors.New("Darwin prefix preparation lost its original closed policy")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopDarwinCandidatePrefixPreparation{network: network, policy: policy}
+	return owner, network.PrepareCandidatePrefixPhysicalPolicy(policy)
+}
+
+func (p *RouterVPNDesktopDarwinCandidatePrefixPreparation) CloseSource(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil {
+		return errors.New("Darwin prefix cleanup lost its original native preparation")
+	}
+	return p.network.CloseCandidatePrefixPhysicalSource(ctx, p.policy)
+}
+
+func (s *Box) RouterVPNDesktopDarwinCandidatePrefixActivatePhysical(policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if !routerVPNDesktopCandidatePrefixPhysicalTarget(policy, "darwin") {
+		return nil, errors.New("Darwin prefix activation lost its original closed policy")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}

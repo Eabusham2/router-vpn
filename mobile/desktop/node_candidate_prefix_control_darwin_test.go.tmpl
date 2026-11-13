@@ -1,0 +1,369 @@
+//go:build darwin
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/macosprocess"
+)
+
+// Only native capture/handshake read observations are doubled. The manifest
+// is parsed by the shipping complete compiler and real private-root identity
+// is checked. This fixture makes no installed-image, PF, or utun claim.
+type routerVPNDarwinPrefixCaptureRead struct {
+	selection macosprocess.Selection
+	files     []*os.File
+	failure   bool
+	reads     int
+	after     func()
+}
+
+func (capture *routerVPNDarwinPrefixCaptureRead) Current(ctx context.Context) error {
+	capture.reads++
+	if capture.after != nil {
+		capture.after()
+	}
+	if capture.failure {
+		return errors.New("original capture retired")
+	}
+	return ctx.Err()
+}
+func (capture *routerVPNDarwinPrefixCaptureRead) Selection() macosprocess.Selection {
+	return capture.selection
+}
+func (capture *routerVPNDarwinPrefixCaptureRead) Files() []*os.File {
+	return append([]*os.File(nil), capture.files...)
+}
+
+type routerVPNDarwinPrefixBootstrapRead struct{ failure bool }
+
+func (bootstrap *routerVPNDarwinPrefixBootstrapRead) Current(ctx context.Context) error {
+	if bootstrap.failure {
+		return errors.New("original handshake retired")
+	}
+	return ctx.Err()
+}
+func routerVPNDarwinPrefixControlFixture(t *testing.T) (*routerVPNDarwinCandidatePrefixControl, *routerVPNExternalFiles,
+	*routerVPNDarwinPrefixCaptureRead, *routerVPNDarwinPrefixBootstrapRead) {
+	t.Helper()
+	policy := desktopCandidatePrefixCommandPolicyWithMTU(t, "darwin", 1400)
+	input := policy.Source()
+	files := desktopImportedCommandFiles(t, map[string]string{"node-candidate-prefix-source.json": input, "sing-box.json": policy.Config()})
+	root, err := files.root.Open(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	meta := policy.Metadata()
+	selection := macosprocess.Selection{Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256,
+		CallerUID: 501, WorkspaceDevice: 7, WorkspaceInode: 9, Family: macosprocess.CandidatePrefixFamily,
+		EngineSHA256: strings.Repeat("1", 64), ControllerSHA256: strings.Repeat("2", 64),
+		CatalogSHA256: strings.Repeat("3", 64), InputsSHA256: strings.Repeat("4", 64)}
+	capture := &routerVPNDarwinPrefixCaptureRead{selection: selection, files: make([]*os.File, 7)}
+	capture.files[0], capture.files[3], capture.files[4] = root, root, root
+	bootstrap := &routerVPNDarwinPrefixBootstrapRead{}
+	transfer, err := macosprocess.CandidatePrefixTransferSHA256(selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control := &routerVPNDarwinCandidatePrefixControl{capture: capture, bootstrap: bootstrap, selection: selection, transfer: transfer,
+		scope: macosprocess.Scope{Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, Workspace: files.root.Name(), Family: macosprocess.CandidatePrefixFamily}}
+	return control, files, capture, bootstrap
+}
+func routerVPNDarwinPrefixControlContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+func TestRouterVPNNodeCandidatePrefixDarwinOriginalControl(t *testing.T) {
+	t.Run("exact", func(t *testing.T) {
+		control, files, capture, _ := routerVPNDarwinPrefixControlFixture(t)
+		if policy, err := control.compile(nil, files); err == nil || policy != nil || control.policy != nil || capture.reads != 0 {
+			t.Fatal("missing caller reached original manifest replay")
+		}
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if policy, err := control.compile(cancelled, files); err == nil || policy != nil || control.policy != nil || capture.reads != 0 {
+			t.Fatal("cancelled caller reached original manifest replay")
+		}
+		ctx := routerVPNDarwinPrefixControlContext(t)
+		policy, err := control.compile(ctx, files)
+		if err != nil || policy == nil || control.policy != policy || capture.reads < 2 ||
+			policy.Metadata().RestoredMTU != 1400 || control.current(ctx) != nil {
+			t.Fatal("original native capture did not bind complete restored manifest", err)
+		}
+		if prepared, err := control.prepare(ctx, policy); err != nil || prepared == nil {
+			t.Fatal(err)
+		}
+		if again, err := control.compile(ctx, files); err == nil || again != nil {
+			t.Fatal("native capture compiled a second policy owner")
+		}
+	})
+	t.Run("policy-pointer", func(t *testing.T) {
+		control, files, _, _ := routerVPNDarwinPrefixControlFixture(t)
+		ctx := routerVPNDarwinPrefixControlContext(t)
+		policy, err := control.compile(ctx, files)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input := policy.Source()
+		foreign, err := mobilemultihop.ParseDesktopNodeCandidatePreparationPolicy(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if prepared, err := control.prepare(ctx, foreign); err == nil || prepared != nil {
+			t.Fatal("equal metadata replaced original policy pointer")
+		}
+	})
+	t.Run("replacement-root", func(t *testing.T) {
+		control, files, capture, _ := routerVPNDarwinPrefixControlFixture(t)
+		foreign, err := os.Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer foreign.Close()
+		capture.files[0] = foreign
+		if policy, err := control.compile(routerVPNDarwinPrefixControlContext(t), files); err == nil || policy != nil {
+			t.Fatal("replacement workspace inherited original command authority")
+		}
+	})
+	t.Run("late-source", func(t *testing.T) {
+		control, files, capture, _ := routerVPNDarwinPrefixControlFixture(t)
+		capture.after = func() {
+			if capture.reads == 2 {
+				capture.failure = true
+			}
+		}
+		if policy, err := control.compile(routerVPNDarwinPrefixControlContext(t), files); err == nil || policy != nil || control.policy != nil {
+			t.Fatal("source retired during replay was published as current")
+		}
+		control, files, capture, _ = routerVPNDarwinPrefixControlFixture(t)
+		ctx, cancel := context.WithCancel(routerVPNDarwinPrefixControlContext(t))
+		defer cancel()
+		capture.after = func() {
+			if capture.reads == 2 {
+				cancel()
+			}
+		}
+		if policy, err := control.compile(ctx, files); err == nil || policy != nil || control.policy != nil ||
+			capture.reads != 2 || !errors.Is(ctx.Err(), context.Canceled) {
+			t.Fatal("caller cancelled during replay was published as current")
+		}
+	})
+	t.Run("missing-authority", func(t *testing.T) {
+		control, files, capture, _ := routerVPNDarwinPrefixControlFixture(t)
+		ctx := routerVPNDarwinPrefixControlContext(t)
+		policy, err := control.compile(ctx, files)
+		if err != nil {
+			t.Fatal(err)
+		}
+		capture.files[4] = nil
+		if prepared, err := control.prepare(ctx, policy); err == nil || prepared != nil {
+			t.Fatal("missing original guardian lock description was replaced")
+		}
+	})
+	for _, kind := range []string{"capture", "handshake", "retiring"} {
+		t.Run(kind, func(t *testing.T) {
+			control, files, capture, bootstrap := routerVPNDarwinPrefixControlFixture(t)
+			ctx := routerVPNDarwinPrefixControlContext(t)
+			policy, err := control.compile(ctx, files)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "capture":
+				capture.failure = true
+			case "handshake":
+				bootstrap.failure = true
+			case "retiring":
+				control.retiring.Store(true)
+			}
+			if control.current(ctx) == nil {
+				t.Fatal("retired original authority stayed healthy")
+			}
+			if prepared, err := control.prepare(ctx, policy); err == nil || prepared != nil {
+				t.Fatal("retired original authority prepared another native source")
+			}
+		})
+	}
+}
+func TestRouterVPNNodeCandidatePrefixDarwinSelectionBinding(t *testing.T) {
+	for _, field := range []string{"session", "source", "config", "uid", "device", "inode", "engine", "controller", "catalog", "inputs", "family"} {
+		t.Run(field, func(t *testing.T) {
+			control, files, capture, _ := routerVPNDarwinPrefixControlFixture(t)
+			switch field {
+			case "session":
+				capture.selection.Session = strings.Repeat("b", 32)
+			case "source":
+				capture.selection.Source = strings.Repeat("a", 64)
+			case "config":
+				capture.selection.Config = strings.Repeat("a", 64)
+			case "uid":
+				capture.selection.CallerUID++
+			case "device":
+				capture.selection.WorkspaceDevice++
+			case "inode":
+				capture.selection.WorkspaceInode++
+			case "engine":
+				capture.selection.EngineSHA256 = strings.Repeat("a", 64)
+			case "controller":
+				capture.selection.ControllerSHA256 = strings.Repeat("a", 64)
+			case "catalog":
+				capture.selection.CatalogSHA256 = strings.Repeat("a", 64)
+			case "inputs":
+				capture.selection.InputsSHA256 = strings.Repeat("a", 64)
+			case "family":
+				capture.selection.Family = macosprocess.ExternalFamily
+			}
+			if capture.selection == control.selection {
+				t.Fatal("inherited selection mutation did not change original identity")
+			}
+			if policy, err := control.compile(routerVPNDarwinPrefixControlContext(t), files); err == nil || policy != nil {
+				t.Fatal("changed original inherited selection reached policy replay")
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeCandidatePrefixDarwinEarlyStop(t *testing.T) {
+	t.Run("receipt-before-acquisition", func(t *testing.T) {
+		control, _, _, _ := routerVPNDarwinPrefixControlFixture(t)
+		if control.native != nil || control.retirementReceipt() == nil {
+			t.Fatal("unpublished no-resource retirement acknowledged authenticated Stop")
+		}
+	})
+	t.Run("authenticated-before-run", func(t *testing.T) {
+		control, files, capture, _ := routerVPNDarwinPrefixControlFixture(t)
+		acknowledged := false
+		err := routerVPNExternalControlledLifetime(context.Background(), func(ctx context.Context) error {
+			// The actual joined command does not begin until authenticated
+			// Stop has cancelled it, before source parsing or native creation.
+			<-ctx.Done()
+			return routerVPNRunDarwinNodeCandidatePrefix(ctx, control)
+		}, func(ctx context.Context, retire func(context.Context) error) error {
+			if err := retire(ctx); err != nil {
+				return err
+			}
+			acknowledged = true
+			return nil
+		}, control.retirementReceipt, func() error { return nil })
+		if err != nil || !acknowledged || control.retirementReceipt() != nil ||
+			control.policy != nil || capture.reads != 0 || control.native == nil ||
+			!control.native.joined || control.native.manager != nil || control.native.source != nil ||
+			control.native.proof != nil || len(control.native.components) != 0 {
+			t.Fatal("early authenticated Stop omitted its original no-resource retirement", err)
+		}
+		raw, err := files.read("stopped.json", 1024)
+		var actual struct {
+			routerVPNExternalStop
+			Closed bool `json:"closed"`
+		}
+		if err != nil || json.Unmarshal(raw, &actual) != nil || actual.Schema != 1 ||
+			actual.Session != control.scope.Session || actual.SourceSHA256 != control.scope.Config || !actual.Closed {
+			t.Fatal("early stopped receipt lost original session/config authority", err)
+		}
+	})
+}
+
+// Run the shipping child admission and no-resource retirement, stopping only
+// at the inherited-capture observation before prepare can construct native
+// resources. A skipped mailbox guard therefore reaches a distinct observed
+// boundary; a later constructor failure cannot make the refusal test pass.
+func TestRouterVPNNodeCandidatePrefixDarwinMeasurementStartup(t *testing.T) {
+	cases := []struct{ name, mailbox, kind string }{{name: "absent"}}
+	for _, mailbox := range []string{"request", "live", "cancel", "result"} {
+		for _, kind := range []string{"regular", "directory", "symlink"} {
+			cases = append(cases, struct{ name, mailbox, kind string }{mailbox + "-" + kind, mailbox, kind})
+		}
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			control, files, capture, _ := routerVPNDarwinPrefixControlFixture(t)
+			var before os.FileInfo
+			var path, target string
+			const foreign = "foreign original measurement input\n"
+			if test.mailbox != "" {
+				path = filepath.Join(files.root.Name(), "node-candidate-prefix-"+test.mailbox+".json")
+				switch test.kind {
+				case "regular":
+					if err := os.WriteFile(path, []byte(foreign), 0600); err != nil {
+						t.Fatal(err)
+					}
+				case "directory":
+					if err := os.Mkdir(path, 0700); err != nil {
+						t.Fatal(err)
+					}
+				case "symlink":
+					target = filepath.Join(t.TempDir(), "original-foreign-input")
+					if err := os.WriteFile(target, []byte(foreign), 0600); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(target, path); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var err error
+				before, err = os.Lstat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			advanced := false
+			capture.after = func() {
+				// Admission reads the original capture once and complete manifest
+				// compilation reads it twice. The next read belongs to prepare.
+				if capture.reads > 3 {
+					advanced, capture.failure = true, true
+				}
+			}
+			err := routerVPNRunDarwinNodeCandidatePrefix(context.Background(), control)
+			if test.mailbox != "" && (advanced || capture.reads != 3) {
+				t.Fatal("preexisting prefix measurement mailbox reached native preparation")
+			}
+			if test.mailbox == "" && (!advanced || capture.reads != 4) {
+				t.Fatal("absent measurement mailboxes did not reach original preparation")
+			}
+			if err == nil || control.policy == nil || control.native == nil || !control.native.joined ||
+				control.native.manager != nil || control.native.source != nil || control.native.proof != nil ||
+				len(control.native.components) != 0 || control.retirementReceipt() != nil {
+				t.Fatal("measurement admission refusal lost original no-resource retirement", err)
+			}
+			if before != nil {
+				after, err := os.Lstat(path)
+				if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() {
+					t.Fatal("measurement admission replaced or removed foreign mailbox", err)
+				}
+				if test.kind != "directory" {
+					raw, err := os.ReadFile(path)
+					if err != nil || string(raw) != foreign {
+						t.Fatal("measurement admission changed foreign input bytes", err)
+					}
+				}
+				if target != "" {
+					if actual, err := os.Readlink(path); err != nil || actual != target {
+						t.Fatal("measurement admission relinked foreign input", err)
+					}
+				}
+			}
+			raw, err := files.read("stopped.json", 1024)
+			var stopped struct {
+				routerVPNExternalStop
+				Closed bool `json:"closed"`
+			}
+			if err != nil || json.Unmarshal(raw, &stopped) != nil || stopped.Schema != 1 || !stopped.Closed ||
+				stopped.Session != control.scope.Session || stopped.SourceSHA256 != control.scope.Config {
+				t.Fatal("measurement refusal omitted original stopped receipt", err)
+			}
+		})
+	}
+}

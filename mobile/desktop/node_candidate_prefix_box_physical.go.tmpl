@@ -12,7 +12,7 @@ import (
 // Darwin public admission gate stays closed; a derived source alone cannot
 // grant PF/utun ownership or claim that platform's accepted native lifecycle.
 func routerVPNDesktopCandidatePrefixPhysicalTarget(policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy, target string) bool {
-	if policy == nil || policy.Validate() != nil || target != "linux" && target != "windows" {
+	if policy == nil || policy.Validate() != nil || target != "linux" && target != "windows" && target != "darwin" {
 		return false
 	}
 	meta := policy.Metadata()
