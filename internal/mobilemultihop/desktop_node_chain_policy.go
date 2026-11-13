@@ -198,47 +198,59 @@ func captureDesktopNodeChain(base, projected *NodeChain) (DesktopPhysicalCapture
 		}
 		lan = lan && capture.HomeLANAccess
 	}
-	var graph map[string]any
-	if exactJSON([]byte(projected.config), &graph, 4<<20) != nil {
+	return captureDesktopNodeChainGraph(base.config, projected.config, projected.proofs, projected.dns, base.physical, finalCapture, kill, ipv6, lan)
+}
+
+// The original and typed SOCKS desktop families share this private traversal.
+// Neither a selected proof nor application DNS can add a physical tuple.
+func captureDesktopNodeChainGraph(originalConfig, projectedConfig string, proofs []NodeChainProof, dnsCapture NodeChainDNSCapture, physical []PhysicalEgress, finalCapture NodeDesktopCapture, kill, ipv6 string, lan bool) (DesktopPhysicalCapture, string, bool, error) {
+	bad := func() (DesktopPhysicalCapture, string, bool, error) {
+		return DesktopPhysicalCapture{}, "", false, desktopNodeChainPolicyError
+	}
+	if len(proofs) < 2 || len(proofs) > NodeChainMaximumNodes {
 		return bad()
 	}
-	graph["route"].(map[string]any)["final"] = projected.FinalTag()
+	var graph map[string]any
+	if exactJSON([]byte(projectedConfig), &graph, 4<<20) != nil {
+		return bad()
+	}
+	graph["route"].(map[string]any)["final"] = proofs[len(proofs)-1].Tag
 	projection, err := json.Marshal(graph)
 	if err != nil {
 		return bad()
 	}
 	collector := &externalDesktopRecorder{families: map[string]string{}, roots: map[string]*ExternalDesktopPhysicalRoot{}, bootstrap: map[string]ExternalDesktopDNS{}}
-	for _, proof := range projected.proofs {
+	for _, proof := range proofs {
 		tuples, err := compiledPhysicalEgressWithDesktopProof(string(projection), []string{"tcp", "udp"}, collector, proof.Tag)
-		if err != nil || !nodeChainSamePhysical(tuples, base.physical) {
+		if err != nil || !nodeChainSamePhysical(tuples, physical) {
 			return bad()
 		}
 	}
 	selectedFound := false
 	for _, raw := range graph["dns"].(map[string]any)["servers"].([]any) {
 		server := raw.(map[string]any)
-		if server["tag"] != projected.dns.ResolverTag {
+		if server["tag"] != dnsCapture.ResolverTag {
 			continue
 		}
-		if selectedFound || server["detour"] != projected.FinalTag() ||
-			desktopExternalObjectDigest(server) != projected.dns.ResolverSHA256 ||
+		if selectedFound || server["detour"] != proofs[len(proofs)-1].Tag ||
+			desktopExternalObjectDigest(server) != dnsCapture.ResolverSHA256 ||
 			collector.dns(ExternalDNSTag, server, false, false, finalCapture.SelectedDNS.Port) != nil {
 			return bad()
 		}
-		collector.selected.Tag, collector.selected.Mode, selectedFound = projected.dns.ResolverTag, finalCapture.SelectedDNS.Mode, true
+		collector.selected.Tag, collector.selected.Mode, selectedFound = dnsCapture.ResolverTag, finalCapture.SelectedDNS.Mode, true
 	}
 	if !selectedFound || len(collector.roots) == 0 || len(collector.roots) > 32 {
 		return bad()
 	}
 	var baseGraph map[string]any
-	if exactJSON([]byte(base.config), &baseGraph, 4<<20) != nil {
+	if exactJSON([]byte(originalConfig), &baseGraph, 4<<20) != nil {
 		return bad()
 	}
 	configured, err := mtuNumber(baseGraph["inbounds"].([]any)[0].(map[string]any)["mtu"])
 	if err != nil {
 		return bad()
 	}
-	result := DesktopPhysicalCapture{TUNTag: projected.dns.TUNTag, IPv6Mode: ipv6, ConfiguredMTU: configured, SelectedDNS: collector.selected}
+	result := DesktopPhysicalCapture{TUNTag: dnsCapture.TUNTag, IPv6Mode: ipv6, ConfiguredMTU: configured, SelectedDNS: collector.selected}
 	for _, bootstrap := range collector.bootstrap {
 		result.BootstrapDNS = append(result.BootstrapDNS, bootstrap)
 	}
@@ -254,7 +266,7 @@ func captureDesktopNodeChain(base, projected *NodeChain) (DesktopPhysicalCapture
 		}
 		return result.PhysicalRoots[i].Tag < result.PhysicalRoots[j].Tag
 	})
-	for _, tuple := range base.physical {
+	for _, tuple := range physical {
 		address, err := netip.ParseAddr(tuple.Host)
 		if err == nil && address.IsPrivate() {
 			result.PrivateDestinations = append(result.PrivateDestinations, tuple)

@@ -40,7 +40,7 @@ func NewNodeChainSOCKSRuntime(source *NodeChainSOCKSSource) (*NodeChainSOCKSRunt
 		sourceJSON: source.sourceJSON, sourceSHA: meta.SourceSHA256, config: config,
 		nodes: []*NodeProfile{source.pair.nodes[0], nil, source.pair.nodes[1]},
 		socksSource: source, proofs: meta.Proofs, dns: meta.DNS, physical: meta.Physical,
-		originalConfigSHA: meta.ConfigSHA256,
+		originalConfigSHA: source.originalConfigSHA256(), projection: source.runtimeProjection(),
 	}
 	if err := chain.refreshMetadata(); err != nil {
 		return nil, err
@@ -59,8 +59,8 @@ func (c *NodeChain) validateSOCKSSource() error {
 	source := c.socksSource
 	config, meta, err := source.ReadValidated()
 	if err != nil || c.sourceJSON != source.sourceJSON || c.sourceSHA != meta.SourceSHA256 ||
-		c.config != config || c.originalConfigSHA != meta.ConfigSHA256 ||
-		c.projection != (nodeChainProjection{}) || c.dns != meta.DNS ||
+		c.config != config || c.originalConfigSHA != source.originalConfigSHA256() ||
+		c.projection != source.runtimeProjection() || c.dns != meta.DNS ||
 		!reflect.DeepEqual(c.proofs, meta.Proofs) || !reflect.DeepEqual(c.physical, meta.Physical) ||
 		len(c.nodes) != 3 || c.nodes[0] != source.pair.nodes[0] ||
 		c.nodes[1] != nil || c.nodes[2] != source.pair.nodes[1] {

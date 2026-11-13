@@ -10,6 +10,7 @@ type NodeChainSOCKSSource struct {
 	pair                     *NodeChain
 	middle                   *nodeChainSOCKSMember
 	metadata                 NodeChainSOCKSSourceMetadata
+	desktop                  *nodeChainSOCKSDesktopBinding
 }
 
 type NodeChainSOCKSDevicePolicy struct {
@@ -149,9 +150,13 @@ func (p *NodeChainSOCKSSource) digest() string {
 	if p == nil || p.pair == nil || p.middle == nil {
 		return ""
 	}
-	raw, err := json.Marshal([]any{
+	values := []any{
 		"routervpn-node-chain-socks-compiler-v1", p.sourceJSON, p.config, p.metadata, p.pair.seal, p.middle.seal,
-	})
+	}
+	if p.desktop != nil {
+		values = append(values, p.desktop.currentSeal())
+	}
+	raw, err := json.Marshal(values)
 	if err != nil {
 		return ""
 	}
@@ -162,6 +167,9 @@ func (p *NodeChainSOCKSSource) validate() error {
 	if p == nil || p.seal == "" || p.digest() != p.seal || p.pair.validateCapture() != nil ||
 		p.middle.validate() != nil || p.metadata.Kind != "routervpn-node-chain-socks-source" ||
 		p.metadata.Schema != 1 || p.metadata.NativeAdmission != "closed" {
+		return nodeChainSOCKSSourceError
+	}
+	if p.desktop != nil && p.desktop.validate(p) != nil {
 		return nodeChainSOCKSSourceError
 	}
 	return nil

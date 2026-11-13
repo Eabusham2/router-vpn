@@ -53,25 +53,44 @@ func ProjectNodeChain(original *NodeChain, targetOS string, restoredMTU int) (*N
 	if err != nil {
 		return nil, err
 	}
+	config, err := projectNodeChainTUN(derived.config, derived.nodes[len(derived.nodes)-1].profile, targetOS, restoredMTU)
+	if err != nil {
+		return nil, err
+	}
+	derived.config = config
+	derived.projection = nodeChainProjection{TargetOS: targetOS, RestoredMTU: restoredMTU}
+	derived.dns.ConfigSHA256 = externalDigest([]byte(config))
+	if err := derived.refreshMetadata(); err != nil {
+		return nil, err
+	}
+	derived.seal = derived.captureSeal()
+	if _, err := derived.LaunchInput(); err != nil {
+		return nil, err
+	}
+	return derived, nil
+}
+
+// Derive only the system TUN naming/restore from the captured graph. Both
+// typed desktop families retain the same original Fixed/Jumbo restrictions.
+func projectNodeChainTUN(config string, finalProfile map[string]any, targetOS string, restoredMTU int) (string, error) {
 	var graph map[string]any
-	if exactJSON([]byte(derived.config), &graph, 4<<20) != nil {
-		return nil, nodeChainError
+	if exactJSON([]byte(config), &graph, 4<<20) != nil {
+		return "", nodeChainError
 	}
 	tun := graph["inbounds"].([]any)[0].(map[string]any)
 	if restoredMTU != 0 {
 		if _, err := mtuNumber(float64(restoredMTU)); err != nil {
-			return nil, nodeChainError
+			return "", nodeChainError
 		}
 		// Prefix packet Fixed values belong to their own endpoints and are not
 		// changed here. Only the final proxy's Fixed/Jumbo owns the shared TUN.
-		final := derived.nodes[len(derived.nodes)-1].profile
-		fixed, err := fixedMTU(final)
-		jumbo, jumboErr := externalJumboPreference(final)
+		fixed, err := fixedMTU(finalProfile)
+		jumbo, jumboErr := externalJumboPreference(finalProfile)
 		configured, mtuErr := mtuNumber(tun["mtu"])
 		if err != nil || jumboErr != nil || mtuErr != nil ||
 			fixed != 0 && restoredMTU != fixed ||
 			jumbo && (configured != 9000 || restoredMTU != configured) {
-			return nil, errors.New("ordered chain restore conflicts with original Fixed or Jumbo policy")
+			return "", errors.New("ordered chain restore conflicts with original Fixed or Jumbo policy")
 		}
 		tun["mtu"] = float64(restoredMTU)
 	}
@@ -83,19 +102,9 @@ func ProjectNodeChain(original *NodeChain, targetOS string, restoredMTU int) (*N
 	}
 	raw, err := json.Marshal(graph)
 	if err != nil || len(raw) > 4<<20 {
-		return nil, nodeChainError
+		return "", nodeChainError
 	}
-	derived.config = string(raw)
-	derived.projection = nodeChainProjection{TargetOS: targetOS, RestoredMTU: restoredMTU}
-	derived.dns.ConfigSHA256 = externalDigest(raw)
-	if err := derived.refreshMetadata(); err != nil {
-		return nil, err
-	}
-	derived.seal = derived.captureSeal()
-	if _, err := derived.LaunchInput(); err != nil {
-		return nil, err
-	}
-	return derived, nil
+	return string(raw), nil
 }
 
 func nodeChainMTUPlan(config string, proofs []NodeChainProof) (NodeChainMTUPlan, error) {

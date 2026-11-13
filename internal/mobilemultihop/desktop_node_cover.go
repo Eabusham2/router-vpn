@@ -51,6 +51,12 @@ func ReadDesktopPhysicalCoverPolicy(policy DesktopPhysicalPolicy) ([]DesktopNode
 			return nil, "", err
 		}
 		return desktopPhysicalCoverPolicy(config, meta.NodeID)
+	case *DesktopNodeChainSOCKSPolicy:
+		config, meta, _, err := original.ReadValidated()
+		if err != nil {
+			return nil, "", err
+		}
+		return desktopPhysicalCoverPolicy(config, meta.NodeID)
 	case *DesktopNodeChainExecutionPhysicalPolicy:
 		config, meta, _, err := original.PhysicalReadValidated()
 		if err != nil {
