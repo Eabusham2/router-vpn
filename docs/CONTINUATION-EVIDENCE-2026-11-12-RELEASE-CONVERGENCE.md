@@ -307,6 +307,36 @@ with portable results. Their actual current-SHA SDK execution remains pending.
 A separate full local runtime-selection invocation stopped at a later SIP003
 toolchain-path requirement; it is not reported as a completed aggregate.
 
+## Android temporary ordered-owner foundation
+
+The runtime can now reserve one initially idle, complete saved Local graph for
+candidate testing before asynchronous startup begins. The opaque operation
+handle retains the original source, selection, idle Home owner and caller guard.
+It starts the actual ordered session, service and MTU activation without writing
+Last history. Temporary sessions are excluded from ordinary Connected, active
+capture and restore APIs. This is a dormant foundation; the service, permission,
+measurement helper and UI integration are still required before exposing it.
+
+Cancellation, disconnect, close and physical-network change invalidate the same
+temporary operation. Candidate work must join before its graph can retire, and
+a failed native join retains the handle for retry. A stale cancel or drain cannot
+touch a replacement connection or reclaim its external lease. Saved Server
+execution is rejected; this unit does not independently prepare a prefix when
+the saved final node is unreachable.
+
+The executable fixture compiles the shipping runtime, session, Home state,
+selection, MTU platform and service, with explicit OS/native-handle and candidate
+guard doubles. Its durable final log contains 139 passing checks and all eight
+expected mutation rejections, including the final reservation/7 witness after
+which the script returns. The executor session was interrupted after output was
+written, so a separate process-exit record was not recoverable. The unchanged
+ordered runtime baseline passed 342 checks and all twenty-four controls. Seven
+workflow tests passed, including missing/duplicate preparation-gate refusal and
+the complete aggregate result matrix. Both Android shipping gate inventories
+invoke the new fixture; the workflow audit also retains the already-existing
+ordered execution and restore gates. Native service teardown, permission
+rotation and real-device candidate measurement remain separate acceptance.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

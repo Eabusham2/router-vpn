@@ -29,6 +29,7 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidSessionRevalidator.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java'
       - 'android/test_android_node_chain_runtime.py'
+      - 'android/test_android_node_candidate_preparation.py'
       - 'android/test_android_node_chain_mtu.py'
       - 'android/test_android_layered_service_compile.py'
       - 'android/test_android_mtu_session.py'
@@ -90,6 +91,7 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidSessionRevalidator.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java'
       - 'android/test_android_node_chain_runtime.py'
+      - 'android/test_android_node_candidate_preparation.py'
       - 'android/test_android_node_chain_mtu.py'
       - 'android/test_android_layered_service_compile.py'
       - 'android/test_android_mtu_session.py'
@@ -156,6 +158,7 @@ jobs:
           python3 android/test_android_node_candidates.py
           python3 android/test_android_ordered_presentation.py
           python3 android/test_android_node_chain_runtime.py
+          python3 android/test_android_node_candidate_preparation.py
           python3 android/test_android_node_chain_execution_runtime.py
           python3 android/test_android_node_chain_execution_restore.py
           python3 android/test_android_node_chain_mtu.py
