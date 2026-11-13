@@ -336,12 +336,9 @@ class StreamingNativeOutput(unittest.TestCase):
         child = '''import pathlib,sys,time
 ack=pathlib.Path(sys.argv[1])
 print("original native stage",flush=True)
-for _ in range(100):
- if ack.exists():
-  print("original command completed",flush=True)
-  sys.exit(0)
+while not ack.exists():
  time.sleep(0.01)
-sys.exit("native output stayed buffered before child exit")
+print("original command completed",flush=True)
 '''
         with tempfile.TemporaryDirectory() as directory:
             for mutated in (False, True):
@@ -360,9 +357,15 @@ sys.exit("native output stayed buffered before child exit")
                 sink = Sink()
                 with patch.object(G.sys, 'stdout', sink):
                     if mutated:
-                        with self.assertRaises(subprocess.CalledProcessError) as refused:
+                        # Withheld output cannot publish this exact child's ACK.
+                        # Its original outer deadline must join that process
+                        # group; no shorter child timer races a loaded runner.
+                        with self.assertRaisesRegex(RuntimeError, 'timed out after its process group was joined') as refused:
                             namespace['native_output']([sys.executable, '-c', child, str(ack)], timeout=3)
-                        self.assertIn(b'native output stayed buffered before child exit', refused.exception.output)
+                        self.assertIsInstance(refused.exception.__cause__, subprocess.TimeoutExpired)
+                        self.assertEqual(refused.exception.__cause__.output, b'original native stage\n')
+                        self.assertFalse(ack.exists())
+                        self.assertEqual(sink.buffer.getvalue(), b'')
                     else:
                         output = namespace['native_output']([sys.executable, '-c', child, str(ack)], timeout=3)
                         self.assertEqual(output, 'original native stage\noriginal command completed\n')

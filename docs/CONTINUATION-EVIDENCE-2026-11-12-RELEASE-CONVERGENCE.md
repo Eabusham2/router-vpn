@@ -1516,6 +1516,12 @@ The actual Windows Hysteria2 AES-GCM/XOR native gate at 07a426 failed its first 
 
 All original checks run in the same order with the same short-circuit behavior, context ownership and phase deadlines. No retry, resolver substitution, exit-proof bypass or wider timeout is added. Four explicit phase cases verify redaction, original cancellation, one DNS attempt, zero public-exit calls and no effect on a replacement owner. The full focused external-proof regression passed under the race detector: 14 root tests and 74 passing records in 6.135 seconds, including native observation budgets, cancellation, Compare ownership, selected-DNS/entry/exit order and bounded TLS responses. This is diagnostic work to locate the native failure; that Windows acceptance case remains unresolved until a fresh native execution establishes its cause and result.
 
+## Darwin streaming control uses its original acknowledgment boundary
+
+The actual Intel generated-child jobs at af77ec44 and 06456dc0 failed the Python prerequisite `test_actual_native_bytes_arrive_before_original_process_exit`. Their deliberate output-suppression mutation correctly reached the three-second outer deadline, but the test expected a shorter polling-loop child exit to win on a loaded host. These logged prerequisite failures do not identify the cause of the separately recorded 688be5d5 native runner loss.
+
+The fixture child now waits for the original output acknowledgment without an independent shorter timer. The positive shipping helper must deliver the exact output and acknowledgment before completion. The mutated helper must hit its unchanged three-second outer deadline, preserve the original captured stage in the timeout cause, publish neither acknowledgment nor output, and finish the original process-group join. The other streaming tests still require the exact child failure exit/output, only the captured group signal, and the original sudo negative-group delimiter. All four streaming tests passed in 3.305 seconds. The production helper, native deadlines, PF rules, utun logic and native acceptance criteria are unchanged.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
