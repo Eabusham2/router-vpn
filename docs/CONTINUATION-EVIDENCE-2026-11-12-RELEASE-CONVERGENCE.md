@@ -716,6 +716,30 @@ Windows text translation. Reintroducing the original text writer fails that
 new executable regression at the exact registry boundary. The strict ordered
 gate parser is unchanged; real Windows native build confirmation remains in CI.
 
+## Prefix-only candidate source foundation
+
+A separate sealed candidate-preparation source now derives only the selected
+paired WG/AWG prefix. The complete saved Local graph and candidate inventory
+remain immutable provenance for a future Save, while no old suffix endpoint or
+private final-node proof is included in the runnable prefix configuration. This
+removes the old final node from that configuration's network dependencies;
+native prefix proof and measurement ownership still have to bind the source.
+
+The source preserves the saved TUN and device restrictions, independent Start
+Layers, original physical egress and per-prefix configured MTU bounds. Its
+default-closed ingress policy and pending metadata grant no Connected, DNS or
+measured-MTU authority. Parsing reconstructs the graph from original inputs and
+rejects changed configuration, catalog, prefix or provenance.
+
+Focused race tests passed in 26.956 seconds: thirty-nine prefix projections
+across WG, AWG Fast and AWG Strong in two-, three-, four- and eight-node sources,
+nine Start Layer cases, suffix-independent configuration and source mutation
+checks. Three separately compiled controls rejected omitted closed ingress,
+reintroduced old suffix and erased original-source provenance. This is a
+socket-free shared source foundation. The dedicated native Box/ingress owner,
+prefix proofs, measurement lifecycle and Android activation are not yet supplied
+by this unit and remain in progress.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
