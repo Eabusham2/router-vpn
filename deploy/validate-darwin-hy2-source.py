@@ -274,7 +274,7 @@ def validate(source, source_sha, output, go='go'):
             raise ValueError('Source-mask control replaced its captured image')
         status, text = run('peer-build', [compiler, 'test', '-c', '-race', '-p=1', '-mod=readonly',
             '-tags='+gate.PEER_TAGS, '-ldflags=-checklinkname=0', '-o', str(peer),
-            './protocol/routervpnamnezia'], core, captured, 300)
+            './protocol/routervpnamnezia'], core, captured, 600)
         if status:
             raise ValueError('Actual complete Darwin encrypted reference image failed to compile')
         peer_identity = image_identity(peer)

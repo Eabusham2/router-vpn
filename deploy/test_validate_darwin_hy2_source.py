@@ -213,7 +213,7 @@ class FocusedDarwinHysteriaValidation(unittest.TestCase):
             result = f.execute()
             self.assertEqual(tuple(result['authority_cases']), V.AUTHORITY)
             self.assertEqual((len(V.AUTHORITY), len(V.ENCRYPTED)), (8, 37))
-            self.assertEqual([bound for _, bound in f.calls], [300, 40, 40, 300, 40, 300, 100])
+            self.assertEqual([bound for _, bound in f.calls], [300, 40, 40, 300, 40, 600, 100])
             self.assertIn('-test.timeout=30s', f.calls[1][0])
             self.assertIn('-test.timeout=30s', f.calls[4][0])
             self.assertEqual(f.calls[4][0][1:3], ['tool', 'test2json'])

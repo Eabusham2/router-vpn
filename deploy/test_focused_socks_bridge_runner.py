@@ -371,5 +371,23 @@ class TypedSOCKSBridgeValidator(unittest.TestCase):
                         self.assertEqual(owner_calls,[])
                         self.assertEqual(result["xray"],V.native_snapshot(xray))
 
+
+    def test_failed_source_closure_preserves_exact_changed_paths(self):
+        for fault,side,expected in (
+            ("source-change","candidate","original.go/sha256"),
+            ("native-change","native","mobile/core/changed.go"),
+            ("owner-native-change","native","desktop_owner/core/changed.go")):
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
+                value=Composition(Path(directory),fault)
+                with self.assertRaisesRegex(ValueError,"source changed during execution"):
+                    value.run()
+                difference=json.loads((value.output/"source-differences.json").read_text())
+                self.assertIn(expected,difference[side])
+                self.assertTrue((value.output/"native-after.json").is_file())
+                self.assertTrue((value.output/"source-after.json").is_file())
+                self.assertFalse((value.output/"receipt.json").exists())
+        self.assertEqual(V.closure_differences({"a":{"old":"hash"}},{"a":{"new":"hash"}}),["a/new","a/old"])
+        self.assertEqual(V.closure_differences({"a":"same"},{"a":"same"}),[])
+
 if __name__=="__main__":
     unittest.main(verbosity=2)

@@ -76,11 +76,15 @@ def child_environment(original, sha):
     if not HEX40.fullmatch(sha):
         raise ValueError("Exact source identity required")
     env=dict(original)
+    # The shipping AWG Makefile owns an older bootstrap Go and lets its
+    # pinned module select the required patch-level toolchain. A focused
+    # compiler fixture override must not leak into that original SDK build.
+    env.pop("GOTOOLCHAIN",None)
     for suffix in PRODUCTION_INPUTS:
         env.pop("ROUTERVPN_ANDROID_"+suffix,None)
     env.update(GITHUB_SHA=sha,ROUTER_VPN_SOURCE_SHA=sha,GITHUB_REPOSITORY="Eabusham2/router-vpn",
                ROUTERVPN_ANDROID_REQUIRE_PRODUCTION="false",PYTHONDONTWRITEBYTECODE="1",
-               CGO_ENABLED="1",GOWORK="off",GOTOOLCHAIN="local",GOFLAGS="")
+               CGO_ENABLED="1",GOWORK="off",GOFLAGS="")
     return env
 
 def require_signatures(raw, signatures, owner):
@@ -289,11 +293,12 @@ def self_test():
             raw=transcript("Libbox",STATIC_SIGNATURES).replace((PACKAGE+"RouterNodeChainSOCKS, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterMTUPlatform").encode(),(PACKAGE+"CommandServer, "+PACKAGE+"RouterMTUPlatform").encode())
             with self.assertRaises(ValueError):require_signatures(raw,STATIC_SIGNATURES,"Libbox")
         def test_candidate_environment_never_reuses_validator_sha_or_production_key(self):
-            original={"GITHUB_SHA":"b"*40,"ROUTERVPN_ANDROID_KEYSTORE":"private","ROUTERVPN_ANDROID_STORE_PASSWORD":"private","PATH":"/original"}
+            original={"GITHUB_SHA":"b"*40,"ROUTERVPN_ANDROID_KEYSTORE":"private","ROUTERVPN_ANDROID_STORE_PASSWORD":"private","PATH":"/original","GOTOOLCHAIN":"local"}
             env=child_environment(original,"a"*40)
             self.assertEqual(env["GITHUB_SHA"],"a"*40);self.assertEqual(env["ROUTER_VPN_SOURCE_SHA"],"a"*40)
             self.assertNotIn("ROUTERVPN_ANDROID_KEYSTORE",env);self.assertNotIn("ROUTERVPN_ANDROID_STORE_PASSWORD",env)
             self.assertEqual(original["GITHUB_SHA"],"b"*40);self.assertEqual(env["PATH"],"/original")
+            self.assertNotIn("GOTOOLCHAIN",env);self.assertEqual(original["GOTOOLCHAIN"],"local")
         def test_all_four_actual_archive_abi_slots_required(self):
             with tempfile.TemporaryDirectory() as directory:
                 root=Path(directory);aar,apk=fixture(root);rows,_=archive_shape(aar,apk);self.assertEqual(len(rows),24)

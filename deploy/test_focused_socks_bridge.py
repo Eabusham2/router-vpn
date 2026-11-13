@@ -178,6 +178,19 @@ def native_snapshot(root):
         raise ValueError("Native source closure is empty")
     return result
 
+def closure_differences(before,after,prefix=""):
+    """Report changed paths while retaining exact full-closure equality."""
+    if isinstance(before,dict) and isinstance(after,dict):
+        changed=[]
+        for key in sorted(set(before)|set(after)):
+            name=prefix+"/"+key if prefix else key
+            if key not in before or key not in after:
+                changed.append(name)
+            else:
+                changed.extend(closure_differences(before[key],after[key],name))
+        return changed
+    return [] if before==after else [prefix]
+
 def checked_sources(source,core,xray):
     prep=module("socks_bridge_candidate_projection",source/"deploy/prepare-mobile-node-chain.py")
     for name,relative in PROJECTIONS.items():
@@ -467,8 +480,16 @@ def validate(source,source_sha,output,go="go"):
                     mutated_sha256=hashlib.sha256(changed.encode()).hexdigest(),**result))
             native_after={"mobile":checked_sources(source,core,xray),
                           "desktop_owner":checked_owner_sources(source,owner_core,owner_xray)}
-            if native_after!=native_before or CORE.snapshot(source)!=before or COMMON.git(source,"status","--porcelain","--untracked-files=all"):
-                raise ValueError("Original native or candidate source changed during execution")
+            source_after=CORE.snapshot(source)
+            source_status=COMMON.git(source,"status","--porcelain","--untracked-files=all")
+            (output/"native-after.json").write_text(json.dumps(native_after,sort_keys=True)+"\n")
+            (output/"source-after.json").write_text(json.dumps(source_after,sort_keys=True)+"\n")
+            differences={"native":closure_differences(native_before,native_after),
+                         "candidate":closure_differences(before,source_after),"git_status":source_status}
+            (output/"source-differences.json").write_text(json.dumps(differences,indent=2,sort_keys=True)+"\n")
+            if native_after!=native_before or source_after!=before or source_status:
+                paths=differences["native"]+differences["candidate"]
+                raise ValueError("Original native or candidate source changed during execution: "+", ".join(paths[:12]))
             if (output.parent/"selection.json").read_bytes()!=raw_selection or selection(source,source_sha,output)[0]!=metadata:
                 raise ValueError("Original native source selection changed during execution")
             for image,identity in images.values():
