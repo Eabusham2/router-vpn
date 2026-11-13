@@ -33,10 +33,23 @@ def transcript(cases, package, control=None):
             value["Output"] = output
         events.append(value)
     names = set(cases)
+    physical_root = "TestRouterVPNDesktopNodeChainPhysicalAWGModesAndOriginalBox"
+    physical_modes = (
+        ("awg2-fast", "wg"), ("awg2-strong", "wg"),
+        ("wg", "awg2-fast"), ("wg", "awg2-strong"),
+        ("wg", "awg2-fast", "wg"), ("wg", "awg2-strong", "wg"),
+        ("awg2-fast", "awg2-strong", "wg"),
+        ("awg2-strong", "wg", "awg2-fast"),
+    )
+    siblings = {physical_root+"/"+"/".join(modes) for modes in physical_modes}
+    def parent(other):
+        if other in siblings:
+            return physical_root
+        candidates = [name for name in names if other.startswith(name+"/")]
+        return max(candidates, key=len) if candidates else None
     def emit(name):
         event("run", name)
-        children = [other for other in cases if other.startswith(name+"/") and not any(
-            other.startswith(parent+"/") for parent in names if parent != name and parent.startswith(name+"/"))]
+        children = [other for other in cases if parent(other) == name]
         if children:
             for child in children:
                 emit(child)
@@ -71,6 +84,66 @@ class ChildVerdictTests(unittest.TestCase):
                 package = G.PACKAGE[control["package"]]
                 G.require_verdict(raw(transcript(control["cases"], package, control)), 1,
                                   package, control["cases"], control=control)
+
+    def test_physical_slash_siblings_keep_real_nested_parent_authority(self):
+        root = "TestRouterVPNDesktopNodeChainPhysicalAWGModesAndOriginalBox"
+        first = root+"/awg2-strong/wg"
+        second = first+"/awg2-fast"
+        cases = [root, first, first+"/different-original-mode",
+                 second, second+"/different-original-mode"]
+        package = G.PACKAGE["box"]
+        valid = transcript(cases, package)
+        self.assertLess(
+            next(i for i,e in enumerate(valid) if e.get("Test")==first and e["Action"]=="pass"),
+            next(i for i,e in enumerate(valid) if e.get("Test")==second and e["Action"]=="run"))
+        G.require_verdict(raw(valid), 0, package, cases)
+        faults = {}
+        changed = copy.deepcopy(valid)
+        start = next(i for i,e in enumerate(changed) if e.get("Test")==second and e["Action"]=="run")
+        leaf = start+1
+        changed[start],changed[leaf] = changed[leaf],changed[start]
+        faults["real-nested-child-before-parent"] = changed
+        for name in (root, first, second):
+            changed = copy.deepcopy(valid)
+            terminal = next(i for i,e in enumerate(changed) if e.get("Test")==name and e["Action"]=="pass")
+            value = changed.pop(terminal)
+            start = next(i for i,e in enumerate(changed) if e.get("Test")==name and e["Action"]=="run")
+            changed.insert(start+1,value)
+            faults["parent-before-required-children-"+name] = changed
+        changed = copy.deepcopy(valid)
+        terminal = next(i for i,e in enumerate(changed) if e.get("Test")==second and e["Action"]=="pass")
+        changed.insert(terminal+1,dict(changed[terminal]))
+        faults["duplicate-sibling-terminal"] = changed
+        for omitted in cases:
+            faults["omitted-"+omitted] = [e for e in valid if e.get("Test")!=omitted]
+        changed = copy.deepcopy(valid)
+        next(e for e in changed if e.get("Test")==second)["Test"] += "/foreign"
+        faults["foreign-sibling"] = changed
+        for fault,events in faults.items():
+            with self.subTest(fault=fault),self.assertRaises(ValueError):
+                G.require_verdict(raw(events), 0, package, cases)
+        with self.assertRaises(ValueError):
+            G.require_verdict(raw(transcript(cases[1:], package)), 0, package, cases[1:])
+
+    def test_captured_hosted_physical_52_event_order(self):
+        # Run43468906436/job132035311992, artifact14060576462. Exact test2json
+        # start/run/terminal sequence; only timestamps/output are omitted here.
+        # The unmodified complete log is also replayed in the repair receipt.
+        cases = next(suite["cases"] for suite in G.REGRESSIONS if len(suite["cases"]) == 52)
+        order = (('start', None), ('run', 0), ('pass', 0), ('run', 1), ('run', 2), ('pass', 2), ('run', 3), ('pass', 3), ('run', 4), ('pass', 4), ('run', 5), ('pass', 5), ('run', 6), ('pass', 6), ('pass', 1), ('run', 7), ('run', 8), ('run', 9), ('pass', 9), ('pass', 8), ('run', 10), ('run', 11), ('pass', 11), ('pass', 10), ('run', 12), ('run', 13), ('pass', 13), ('pass', 12), ('run', 14), ('run', 15), ('pass', 15), ('pass', 14), ('run', 16), ('run', 17), ('pass', 17), ('pass', 16), ('run', 18), ('run', 19), ('pass', 19), ('pass', 18), ('run', 20), ('run', 21), ('pass', 21), ('pass', 20), ('run', 22), ('run', 23), ('pass', 23), ('pass', 22), ('pass', 7), ('run', 24), ('run', 25), ('pass', 25), ('run', 26), ('pass', 26), ('run', 27), ('pass', 27), ('run', 28), ('pass', 28), ('run', 29), ('pass', 29), ('run', 30), ('pass', 30), ('pass', 24), ('run', 31), ('run', 32), ('pass', 32), ('run', 33), ('pass', 33), ('run', 34), ('pass', 34), ('pass', 31), ('run', 35), ('run', 36), ('pass', 36), ('run', 37), ('pass', 37), ('run', 38), ('pass', 38), ('run', 39), ('pass', 39), ('run', 40), ('pass', 40), ('run', 41), ('pass', 41), ('run', 42), ('pass', 42), ('pass', 35), ('run', 43), ('run', 44), ('pass', 44), ('run', 45), ('pass', 45), ('run', 46), ('pass', 46), ('run', 47), ('pass', 47), ('run', 48), ('pass', 48), ('run', 49), ('pass', 49), ('run', 50), ('pass', 50), ('run', 51), ('pass', 51), ('pass', 43), ('pass', None))
+        package = G.PACKAGE["box"]
+        events = []
+        for action,index in order:
+            event = {"Action": action, "Package": package}
+            if index is not None:
+                event["Test"] = cases[index]
+            events.append(event)
+        self.assertEqual(sum(action=="run" for action,index in order), 52)
+        G.require_verdict(raw(events), 0, package, cases)
+        # Every captured required test remains mandatory.
+        for omitted in cases:
+            with self.subTest(omitted=omitted),self.assertRaises(ValueError):
+                G.require_verdict(raw([e for e in events if e.get("Test")!=omitted]), 0, package, cases)
 
     def test_control_rejects_unrelated_missing_duplicated_or_moved_evidence(self):
         control = G.CONTROLS[3]

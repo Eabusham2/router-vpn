@@ -494,12 +494,38 @@ def selection(source, source_sha, output):
     return receipt, raw
 
 
+def original_test_parents(cases):
+    # The physical fixture passes strings.Join(modes, "/") to one t.Run.
+    # These eight mode paths are siblings; only different-original-mode is
+    # nested. Bind that finite source hierarchy instead of inventing parents
+    # from a slash that belongs to a table entry's name.
+    root = "TestRouterVPNDesktopNodeChainPhysicalAWGModesAndOriginalBox"
+    mode_cases = (
+        "awg2-fast/wg", "awg2-strong/wg", "wg/awg2-fast", "wg/awg2-strong",
+        "wg/awg2-fast/wg", "wg/awg2-strong/wg",
+        "awg2-fast/awg2-strong/wg", "awg2-strong/wg/awg2-fast",
+    )
+    expected = set(cases)
+    parents = {}
+    for name in expected:
+        ancestors = [other for other in expected if name.startswith(other+"/")]
+        parents[name] = max(ancestors, key=len) if ancestors else None
+    for modes in mode_cases:
+        name = root+"/"+modes
+        if name in expected:
+            if root not in expected:
+                raise ValueError("Physical mode case lost its original root")
+            parents[name] = root
+    return parents
+
+
 def require_verdict(text, status, package, cases, *, control=None):
     expected = set(cases)
     if not expected or len(expected) != len(cases):
         raise ValueError("Child required inventory is empty or duplicated")
     failures = expected if control is not None else set()
-    leaves = {name for name in expected if not any(other.startswith(name+"/") for other in expected)}
+    parents = original_test_parents(cases)
+    leaves = expected-set(parents.values())
     wanted_status = 1 if control is not None else 0
     if status != wanted_status or any(word in text for word in FORBIDDEN):
         raise ValueError("Child verdict had an unrelated process, build, race or timeout failure")
@@ -527,10 +553,10 @@ def require_verdict(text, status, package, cases, *, control=None):
             if action == "run":
                 if test in started:
                     raise ValueError("Child verdict repeated an original test")
-                # Slash characters can be part of a single Go subtest name.
-                # Every declared ancestor, including its root, must be active.
-                ancestors = [name for name in expected if test.startswith(name+"/")]
-                if any(name not in started or name in ended for name in ancestors):
+                # The declared direct parent must still be active; its own
+                # start already required its original ancestor to be active.
+                parent = parents[test]
+                if parent is not None and (parent not in started or parent in ended):
                     raise ValueError("Child verdict lost an active original ancestor")
                 started.add(test)
             elif action == "output":
@@ -538,7 +564,7 @@ def require_verdict(text, status, package, cases, *, control=None):
                     raise ValueError("Child output lost its active original test")
                 outputs[test] = outputs.get(test, "") + event["Output"]
             elif action in ("pass", "fail"):
-                children = {name for name in expected if name.startswith(test+"/")}
+                children = {name for name, parent in parents.items() if parent == test}
                 if test not in started or test in ended or not children.issubset(ended) or action != ("fail" if test in failures else "pass"):
                     raise ValueError("Child verdict is wrong, repeated or precedes its children")
                 ended.add(test)
