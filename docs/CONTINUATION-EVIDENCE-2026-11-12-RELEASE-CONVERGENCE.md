@@ -1413,6 +1413,12 @@ The executable rerun also exposed a fixture scheduling race: its failed-binding 
 
 The Java 17 composition passed 327 actual shipping service/session/runtime checks, and all 16 compiled causal controls rejected their intended broken behavior, including omitted original native-binding drain. Native engine and Android OS operations remain explicit test boundaries; hosted aggregate and device acceptance are separate evidence.
 
+## iOS map labels distinguish the tested prefix from the saved suffix
+
+The main map and node list now label only the immutable members of the original temporary prefix as Testing. Other members of that saved path remain Saved; foreign models and retired preparations have no testing labels. Complete-path temporary testing still identifies its full captured path. The existing coordinates, entry/hop/exit roles, route geometry, Connected proof boundary and packet-animation admission are unchanged.
+
+The actual owner/controller composition passed 42 checks and six compiled controls. The shared-Go/shipping-Swift ordered map composition passed 139 checks and all eight controls, including deliberate defects that mark the unused suffix Testing or mislabel the node list. The vector map passed 298 geometry checks plus its existing shipping selection/access and short-route controls. The portable fixtures retain explicit SDK/IPC boundaries; actual Xcode/MapKit bitmap rendering and physical-device visual acceptance remain required.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

@@ -43,6 +43,10 @@ BOUNDARY=BOUNDARY.replace('static func reset(){','static func reset(){wrongScope
 TEST=F.TEST.replace('probe.start(model:model)','probe.startPrefix(model:model)').replace('view!.start(model:model)','view!.startPrefix(model:model)').replace('Apple complete candidate preparation/controller','Apple independent prefix preparation/controller')
 TEST=TEST.replace('Provider.closeCalls>0 || !probe.running','Provider.closeCalls>0 || IOSSpeedLabTunnel.stopEntered || !probe.running')
 TEST=TEST.replace('  let labels=ProductLabels(model)','  try check(!model.connected && model.activeSessionIdentity==nil,"prefix comparison advertised ordinary Connected")\n  let labels=ProductLabels(model)')
+TEST=TEST.replace('  let labels=ProductLabels(model)', '''  try check(model.iosCandidateTestingNodeIDs == Set(["entry"]),"prefix presentation marked unused suffix Testing")
+  try check(RouterVPNModel().iosCandidateTestingNodeIDs == nil,"foreign model borrowed prefix Testing markers")
+  let labels=ProductLabels(model)''')
+TEST=TEST.replace('  try check(labels.state()=="Disconnected"', '  try check(model.iosCandidateTestingNodeIDs == nil,"retired prefix retained Testing markers")\n  try check(labels.state()=="Disconnected"')
 TEST=TEST.replace(' static func main()async throws{', ''' static func incompleteReceipt()async throws {
   Provider.reset();Provider.samples=49;IOSSpeedLabTunnel.reset();IOSViaEntryNetwork.shared.current=1
   IOSNodeBundleStore.shared.records=["source":Data("original".utf8)]
@@ -75,6 +79,7 @@ def main():
                 assert result.returncode==0,result.stdout+result.stderr;print(result.stdout.strip(),flush=True)
         exercise()
         for path,before,after,witness in [
+            ('owner','let count = value.prefixCandidate.map { $0.prefix.position + 1 } ?? value.prefixes.count','let count = value.prefixes.count','prefix presentation marked unused suffix Testing'),
             ('controller','operation: "prefix-" + op','operation: op','prefix used ordinary candidate IPC'),
             ('owner','if let candidate { await candidate.close() }','if false, let candidate { await candidate.close() }','candidate choices escaped before actual candidate join'),
             ('owner','if retired { return }','if retired { return }; if let hold = outerHold { _ = IOSMTUMeasurementGate.release(hold) }','candidate choices escaped before actual candidate join'),

@@ -200,6 +200,7 @@ import Combine
 @MainActor final class RouterVPNModel: ObservableObject {
  @Published var connected = false
  @Published var iosCandidateTesting = false
+ var iosCandidateTestingNodeIDs: Set<String>?
  @Published var message = ""
  var bundle: ClientBundle?
  var activeSessionIdentity: IOSSessionIdentity?

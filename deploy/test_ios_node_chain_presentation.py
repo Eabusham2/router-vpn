@@ -25,12 +25,15 @@ import Libbox
 @MainActor final class RouterVPNModel {
  var bundle:ClientBundle?,allNodeProfiles:[RouterProfile]=[],activeSessionIdentity:IOSSessionIdentity?
  var connected=false,tunnelTransitioning=false,profileMutationBlocked=false,iosCandidateTesting=false
+ var iosCandidateTestingNodeIDs:Set<String>?
  var multihopProgressInFlight:UUID?,multihopProgressDeadline=Date.distantPast
  var multihopProgressGeneration=UUID(),iosConnectGeneration=UUID(),multihopProgressText=""
  var selectedNodeProfile:RouterProfile?{bundle?.routerProfiles.first(where:{$0.id==bundle?.selectedRouterID})}
  // SHIPPING_PROGRESS
 }
 struct CLLocationCoordinate2D:Equatable {var latitude:Double=0,longitude:Double=0}
+enum RouterVPNMapRole {case entry,exit,hop,selected,external,normal}
+// SHIPPING_NODE_LIST
 @MainActor class MKPointAnnotation {
  var coordinate=CLLocationCoordinate2D(),title:String?,subtitle:String?
 }
@@ -150,7 +153,18 @@ TESTS = r'''
    model.iosCandidateTesting=true
    view.updateUIView(map,context:.init(coordinator:coordinator))
    try check("temporary Testing uses saved path without live packet animation",model.iosVisibleOrderedNodePath?[1].latitude==1 && coordinator.packet==nil && map.annotations.count==count)
+   model.connected=false;model.activeSessionIdentity=nil
+   model.iosCandidateTestingNodeIDs=Set(path.prefix(1).map(\.id))
+   view.updateUIView(map,context:.init(coordinator:coordinator))
+   for (position,point) in path.enumerated() {
+    let phase=position==0 ? "Testing" : "Saved"
+    let marker=map.annotations.first{($0 as? IOSUnifiedMapAnnotation)?.profileID==point.id}
+    try check("prefix markers distinguish only tested members",marker?.subtitle?.hasPrefix(phase+" • ")==true)
+    try check("node list distinguishes unused saved suffix",routerVPNMapPoints(model:model).first{$0.id==point.id}?.location.hasPrefix(phase+" • ")==true)
+   }
+   try check("prefix labels never animate saved suffix",coordinator.packet==nil && map.overlays.count==count-1)
    model.iosCandidateTesting=false
+   model.iosCandidateTestingNodeIDs=nil
    model.connected=false
    view.updateUIView(map,context:.init(coordinator:coordinator))
    try check("idle route shows changed planned coordinate without animation",model.iosVisibleOrderedNodePath?[1].latitude==1 && coordinator.packet==nil && map.annotations.count==count)
@@ -259,6 +273,8 @@ def main(selected_mutations=None):
     network = S.BOUNDARIES[S.BOUNDARIES.index('enum NEVPNStatus'):S.BOUNDARIES.index('enum IOSRuntimeSelectionError')]
     network = network.replace('@MainActor final class NETunnelProviderSession:NEVPNConnection { weak var manager:NETunnelProviderManager? }', SESSION)
     body = BODY.replace('// NETWORK_BOUNDARY', network)
+    node_list=(APP/'NodeMapSheet.swift').read_text()
+    body=body.replace('// SHIPPING_NODE_LIST', '@MainActor\n'+S.member(node_list,'func routerVPNMapPoints(')+'\n'+S.member(node_list,'struct RouterVPNMapPoint:'))
     progress = S.member((APP / 'IOSMultihopProgress.swift').read_text(), '    func refreshIOSMultihopExecutionProgress(')
     ui = (APP / 'IOSUnifiedProductView.swift').read_text()
     annotation = ui[ui.index('private final class IOSUnifiedMapAnnotation:'):ui.index('struct IOSUnifiedMap:')]
@@ -283,6 +299,8 @@ def main(selected_mutations=None):
         subprocess.run(command, check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)
         mutants = (
+            ('prefix-suffix-testing', presentation.replace('return testing.contains(id) ? "Testing" : "Saved"','return "Testing"',1), body, 'FAIL prefix markers distinguish only tested members'),
+            ('prefix-list-scope', presentation, body.replace('location: IOSNodeChainPresentation.candidateLabel(id: profile.id, path: ordered, testing: model.iosCandidateTestingNodeIDs)', 'location: IOSNodeChainPresentation.candidateLabel(id: profile.id, path: ordered, testing: Set(ordered?.map(\\.id) ?? []))',1), 'FAIL node list distinguishes unused saved suffix'),
             ('testing-map-source', presentation.replace('if connected && !iosCandidateTesting {', 'if connected {', 1), body, 'FAIL temporary Testing uses saved path without live packet animation'),
             ('testing-map-animation', presentation, body.replace('if model.connected && !model.iosCandidateTesting { context.coordinator.ensurePacket(on: map) }', 'if model.connected { context.coordinator.ensurePacket(on: map) }', 1), 'FAIL temporary Testing uses saved path without live packet animation'),
             ('mutable-map-source', presentation.replace('if connected && !iosCandidateTesting { return IOSNodeChainPresentation.active(activeSessionIdentity) }', 'if false { return IOSNodeChainPresentation.active(activeSessionIdentity) }', 1), body, 'FAIL connected map keeps original middle source'),
@@ -302,5 +320,5 @@ def main(selected_mutations=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mutation', action='append', choices=['testing-map-source', 'testing-map-animation', 'mutable-map-source', 'middle-map-shortcut', 'stale-session', 'stale-provider-source'])
+    parser.add_argument('--mutation', action='append', choices=['prefix-suffix-testing', 'prefix-list-scope', 'testing-map-source', 'testing-map-animation', 'mutable-map-source', 'middle-map-shortcut', 'stale-session', 'stale-provider-source'])
     main(parser.parse_args().mutation)

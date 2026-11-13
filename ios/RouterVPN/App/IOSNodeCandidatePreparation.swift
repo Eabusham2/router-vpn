@@ -7,6 +7,11 @@ import Foundation
     private(set) static var retained: IOSNodeCandidatePreparation?
     static var busy: Bool { retained.map { !$0.retired } ?? false }
     static func testing(_ model: RouterVPNModel) -> Bool { retained.map { $0.model === model && !$0.retired } ?? false }
+    static func testingNodeIDs(_ model: RouterVPNModel) -> Set<String>? {
+        guard let value = retained, value.model === model, !value.retired else { return nil }
+        let count = value.prefixCandidate.map { $0.prefix.position + 1 } ?? value.prefixes.count
+        return Set(value.prefixes.prefix(count).map(\.profile_id))
+    }
     static func cancel(_ model: RouterVPNModel) { if retained?.model === model { retained?.cancel() } }
 
     let owner = UUID()
@@ -242,5 +247,6 @@ import Foundation
 
 @MainActor extension RouterVPNModel {
     var iosCandidateTesting: Bool { IOSNodeCandidatePreparation.testing(self) }
+    var iosCandidateTestingNodeIDs: Set<String>? { IOSNodeCandidatePreparation.testingNodeIDs(self) }
     func cancelCandidateTesting() { IOSNodeCandidatePreparation.cancel(self) }
 }

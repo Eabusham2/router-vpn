@@ -88,7 +88,8 @@ func routerVPNMapPoints(model: RouterVPNModel) -> [RouterVPNMapPoint] {
         return RouterVPNMapPoint(
             id: profile.id,
             name: profile.name,
-            location: profile.location,
+            location: IOSNodeChainPresentation.candidateLabel(id: profile.id, path: ordered, testing: model.iosCandidateTestingNodeIDs)
+                .map { $0 + " • " + profile.location } ?? profile.location,
             latitude: latitude,
             longitude: longitude,
             role: role

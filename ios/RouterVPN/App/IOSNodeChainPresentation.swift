@@ -29,6 +29,13 @@ struct IOSNodePathPoint: Equatable {
 }
 
 enum IOSNodeChainPresentation {
+    /// Testing identifies only the original prepared members. The remainder
+    /// of the displayed saved path has no test or ordinary proof authority.
+    static func candidateLabel(id: String, path: [IOSNodePathPoint]?, testing: Set<String>?) -> String? {
+        guard let testing, path?.contains(where: { $0.id == id }) == true else { return nil }
+        return testing.contains(id) ? "Testing" : "Saved"
+    }
+
     private static func boolean(_ value: Any?) -> Bool? {
         guard let value = value as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
         return value.boolValue

@@ -165,6 +165,9 @@ struct IOSUnifiedMap: UIViewRepresentable {
             let kind = profile.kind == "external" ? "Custom / external" : "Router node"
             let ms = latencyByID[profile.id] ?? profile.savedLatency ?? 0
             annotation.subtitle = ms > 0 ? String(format: "%@ • direct TCP %.1f ms", kind, ms) : kind
+            if let phase = IOSNodeChainPresentation.candidateLabel(id: profile.id, path: ordered, testing: model.iosCandidateTestingNodeIDs) {
+                annotation.subtitle = phase + " • " + (annotation.subtitle ?? kind)
+            }
             map.addAnnotation(annotation)
             coordinatesByID[profile.id] = annotation.coordinate
         }
