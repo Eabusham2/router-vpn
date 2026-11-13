@@ -160,10 +160,12 @@ access:
   published. Installed hostname-path acceptance remains in progress. Other explicitly requested protocols, positions, layers and graph families
   remain requirements. This is not an invented requirement for every theoretical
   protocol permutation. Safe rejection is not implementation.
-  The shared paired Local compiler now also captures an unlayered Hysteria2
-  final after 1–7 existing packet prefixes. Its encrypted witness and shipping
-  host/UI adoption remain in progress; this source extension does not expand
-  imported-middle or Server/Compare admission.
+  The paired Local compiler and Android, iOS, Windows and Linux shipping
+  source/editor paths now retain an unlayered Hysteria2 final after 1–7 existing
+  packet prefixes. Its actual three-node encrypted witness and Windows/Linux
+  physical factory are published below; installed/platform and packaged/device
+  acceptance remain separate. This does not expand imported-middle,
+  Server/Compare or public Darwin admission.
 - Public ordered macOS admission requires actual generated-child and installed
   host acceptance on Intel and Apple Silicon. The sealed native test-image
   admission bridge is not public application support.
@@ -2232,6 +2234,38 @@ repair. All original subprocess bounds and prior negative controls remain.
 The native proof/traffic boundary in these JVM tests is explicitly controlled;
 these passes do not establish an APK build, installed VPN, encrypted peer or
 physical Android acceptance. The current exact-SHA workflows must still pass.
+
+## Portable retained-owner type repairs the current Windows compile failure
+
+The authoritative `00622b16` release failed before ALL execution on both
+Windows AMD64 (job `131762026062`) and ARM64 (job `131762026086`): the shared
+`desktop_macos_parent.go` session field named a concrete candidate-prefix type
+that exists only in Linux/Darwin source files. The retained field now uses a
+private portable interface with the original platform contract and exact
+`captureStop` method. The concrete original owner, pointer-identity comparisons,
+authenticated Stop and native adapters are unchanged. No Windows implementation
+stub or public Darwin admission was added.
+
+The one-file patch was validated on immutable `00622b16` source. Its complete
+2,351-file compiled closure matches the subsequent `2137d952` tree plus the
+same patch, with SHA256
+`e7c8f5f78d61dee3a86d9264e9c18822a3ffe0e2aa804841c41e150bf721382c`.
+All four whole-controller test images crosscompiled successfully:
+
+| Target | Image SHA256 |
+| --- | --- |
+| Windows AMD64 | `52893675f0b65b6f0ec7db1d08805dc04ca377f70e40b0a6011db1103a912c86` |
+| Windows ARM64 | `b82d986f1e6bc09681a94057d1a57be4226c829df7afa8e80c8c69a9f255f760` |
+| Darwin AMD64 | `aabcd7ef36e1ee4165f7752d8c8ea2d8ae6375412570682262bbe90dd76c80d4` |
+| Darwin ARM64 | `7c7bcfc34d7a9ac9944f682f0f2b3a0e58797b3cf5b25016e07f77cf8ec9e254` |
+
+The original ten parent/session test roots then passed all 24 root/child
+verdicts on Linux under the race detector, retaining the existing 120-second
+test bound. These exercise cancellation, original authority, concurrent join,
+failed-dependent lock retention and borrowed-controller ownership. No new
+assertion inventory or deadline change was needed. Crosscompilation does not
+establish Windows or macOS native execution; exact-SHA hosted gates remain
+required for the new release.
 
 ## Physical and private acceptance
 

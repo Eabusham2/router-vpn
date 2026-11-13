@@ -17,6 +17,13 @@ type desktopMacOSParentWitness interface {
 	Close(context.Context) error
 }
 
+// The shared session retains only its original native adapter's contract.
+// Concrete platform runtime types remain in their own OS source files.
+type desktopMacOSCandidatePrefixRuntime interface {
+	desktopNodeCandidatePrefixPlatform
+	captureStop(context.Context, *app, *desktopMacOSParent, *desktopMacOSSession) (desktopRetainedStopCapture, error)
+}
+
 type desktopMacOSParent struct {
 	controller                      *ownedDesktopController
 	input, installLock, processLock *os.File // Borrowed; controller closes after join.
@@ -39,10 +46,10 @@ type desktopMacOSParent struct {
 type desktopMacOSSession struct {
 	parent           *desktopMacOSParent
 	dependents       map[ownedDesktopNodeParent]struct{}
-	external         desktopExternalRetainedRuntime             // Exact active ordinary host; protected by parent.gate.
-	nodeChain        *desktopNodeChainPlatformRuntime           // Exact active ordered host; protected by parent.gate.
-	candidatePrefix  *desktopNodeCandidatePrefixPlatformRuntime // Separate never-connected purpose; protected by parent.gate.
-	stopping, closed bool                                       // Protected by the original parent's gate.
+	external         desktopExternalRetainedRuntime     // Exact active ordinary host; protected by parent.gate.
+	nodeChain        *desktopNodeChainPlatformRuntime   // Exact active ordered host; protected by parent.gate.
+	candidatePrefix  desktopMacOSCandidatePrefixRuntime // Separate never-connected purpose; protected by parent.gate.
+	stopping, closed bool                               // Protected by the original parent's gate.
 }
 
 // Cleanup retains the original authority after admission is canceled. It does

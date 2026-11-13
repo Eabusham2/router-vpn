@@ -51,6 +51,16 @@ usage, presentation, statistics, comparison and scoped imported Naive H3 suites
 passed with their original ownership controls. Production policy and deadlines
 are unchanged; current APK and native/device acceptance remain separate.
 
+### Windows shared-controller compile repair
+
+The retained macOS session now names its private portable candidate-owner
+interface instead of an OS-specific concrete type. This fixes the actual
+Windows AMD64/ARM64 compile errors observed in the authoritative `00622b16`
+release. Full controller test images crosscompiled for both Windows and Darwin
+architectures; the original ten parent/session roots passed all 24 verdicts on
+Linux under race. Native adapters, Stop ownership and public Darwin admission
+are unchanged. Hosted execution and release publication remain separate.
+
 ### Latest verified native ownership additions
 
 The original-engine MTU guard (`b535a16`), mobile lifetime retirement
